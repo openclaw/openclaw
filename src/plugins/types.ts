@@ -1199,6 +1199,8 @@ export type ProviderDeferSyntheticProfileAuthContext = {
   provider: string;
   providerConfig?: ModelProviderConfig;
   resolvedApiKey?: string;
+  modelApi?: string;
+  modelBaseUrl?: string;
 };
 
 export type ProviderSystemPromptContributionContext = {

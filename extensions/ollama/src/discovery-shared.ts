@@ -184,6 +184,17 @@ export function shouldUseSyntheticOllamaAuth(
   return isLocalOllamaBaseUrl(readProviderBaseUrl(providerConfig));
 }
 
+export function shouldUseSyntheticOllamaAuthForSelectedModel(params: {
+  providerConfig: ModelProviderConfig | undefined;
+  modelBaseUrl?: string;
+}): boolean {
+  const modelBaseUrl = normalizeOptionalString(params.modelBaseUrl);
+  if (modelBaseUrl) {
+    return isLocalOllamaBaseUrl(modelBaseUrl);
+  }
+  return shouldUseSyntheticOllamaAuth(params.providerConfig);
+}
+
 function hasMeaningfulExplicitOllamaConfig(
   providerConfig: ModelProviderConfig | undefined,
 ): boolean {

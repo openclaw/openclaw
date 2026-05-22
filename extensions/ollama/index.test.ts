@@ -662,6 +662,26 @@ describe("ollama plugin", () => {
     });
   });
 
+  it("mints synthetic auth for a selected model with local Ollama baseUrl", () => {
+    const provider = registerProvider();
+
+    const auth = provider.resolveSyntheticAuth?.({
+      provider: "my-router",
+      modelBaseUrl: "http://localhost:11434",
+      providerConfig: {
+        baseUrl: "https://router.example.com/v1",
+        api: "openai-completions",
+        models: [],
+      },
+    } as never);
+
+    expect(auth).toEqual({
+      apiKey: "ollama-local",
+      source: "models.providers.my-router (synthetic local key)",
+      mode: "api-key",
+    });
+  });
+
   it("mints synthetic auth for non-default baseURL alias config", () => {
     const provider = registerProvider();
 

@@ -34,6 +34,7 @@ import {
   OLLAMA_PROVIDER_ID,
   resolveOllamaDiscoveryResult,
   shouldUseSyntheticOllamaAuth,
+  shouldUseSyntheticOllamaAuthForSelectedModel,
   type OllamaPluginConfig,
 } from "./src/discovery-shared.js";
 import {
@@ -259,8 +260,8 @@ export default definePluginEntry({
       matchesContextOverflowError: ({ errorMessage }) =>
         /\bollama\b.*(?:context length|too many tokens|context window)/i.test(errorMessage) ||
         /\btruncating input\b.*\btoo long\b/i.test(errorMessage),
-      resolveSyntheticAuth: ({ provider, providerConfig }) => {
-        if (!shouldUseSyntheticOllamaAuth(providerConfig)) {
+      resolveSyntheticAuth: ({ provider, providerConfig, modelBaseUrl }) => {
+        if (!shouldUseSyntheticOllamaAuthForSelectedModel({ providerConfig, modelBaseUrl })) {
           return undefined;
         }
         return {

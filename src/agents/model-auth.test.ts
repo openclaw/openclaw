@@ -74,7 +74,12 @@ vi.mock("../plugins/provider-runtime.js", async () => {
         };
       };
       modelApi?: string;
-      context: { providerConfig?: { api?: string; baseUrl?: string; models?: unknown[] } };
+      providerRefs?: string[];
+      context: {
+        providerConfig?: { api?: string; baseUrl?: string; models?: unknown[] };
+        modelApi?: string;
+        modelBaseUrl?: string;
+      };
     }) => {
       if (params.provider === "plugin-web") {
         if (
@@ -108,10 +113,14 @@ vi.mock("../plugins/provider-runtime.js", async () => {
           mode: "oauth" as const,
         };
       }
-      const effectiveApi = params.modelApi ?? params.context.providerConfig?.api;
+      const effectiveApi =
+        params.context.modelApi ?? params.modelApi ?? params.context.providerConfig?.api;
+      const effectiveBaseUrl =
+        params.context.modelBaseUrl ?? params.context.providerConfig?.baseUrl;
       if (
         effectiveApi === "ollama" &&
-        (params.context.providerConfig?.baseUrl?.startsWith("http://192.168.") ||
+        (effectiveBaseUrl?.startsWith("http://192.168.") ||
+          effectiveBaseUrl?.startsWith("http://localhost") ||
           params.modelApi === "ollama")
       ) {
         return {
@@ -1131,6 +1140,48 @@ describe("resolveApiKeyForProvider – synthetic local auth for custom providers
             },
           },
         },
+      },
+      store: { version: 1, profiles: {} },
+    });
+
+    expectAuthFields(auth, {
+      apiKey: "ollama-local",
+      source: "models.providers.my-router (synthetic local key)",
+      mode: "api-key",
+    });
+  });
+
+  it("uses resolved model runtime auth for provider auth when the selected model changes api", async () => {
+    const auth = await resolveApiKeyForProvider({
+      provider: "my-router",
+      cfg: {
+        models: {
+          providers: {
+            "my-router": {
+              baseUrl: "http://router.local/v1",
+              api: "openai-completions",
+              models: [
+                {
+                  id: "my-router/local-llama",
+                  name: "Local Llama",
+                  api: "ollama",
+                  baseUrl: "http://localhost:11434",
+                  reasoning: false,
+                  input: ["text"],
+                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                  contextWindow: 8192,
+                  maxTokens: 4096,
+                },
+              ],
+            },
+          },
+        },
+      },
+      modelRuntimeAuth: {
+        providerRefs: ["my-router", "ollama"],
+        preferredProvider: "ollama",
+        modelApi: "ollama",
+        modelBaseUrl: "http://localhost:11434",
       },
       store: { version: 1, profiles: {} },
     });

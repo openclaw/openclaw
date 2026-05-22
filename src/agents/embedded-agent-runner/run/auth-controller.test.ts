@@ -92,6 +92,12 @@ function createMutableEmbeddedRunAuthController(params: {
   setRuntimeApiKey: RuntimeApiKeySetter;
   profileCandidates?: string[];
   warn?: (message: string) => void;
+  modelRuntimeAuth?: {
+    providerRefs: string[];
+    preferredProvider?: string;
+    modelApi?: string;
+    modelBaseUrl?: string;
+  };
 }) {
   return createEmbeddedRunAuthController({
     config: undefined,
@@ -109,6 +115,16 @@ function createMutableEmbeddedRunAuthController(params: {
     allowTransientCooldownProbe: false,
     getProvider: () => "custom-openai",
     getModelId: () => "test-model",
+    getResolvedModelRuntime: () =>
+      params.modelRuntimeAuth
+        ? {
+            ref: { provider: "custom-openai", modelId: "test-model" },
+            model: params.harness.runtimeModel,
+            transport: {},
+            auth: params.modelRuntimeAuth,
+            source: {},
+          }
+        : undefined,
     getRuntimeModel: () => params.harness.runtimeModel,
     setRuntimeModel: (next) => {
       params.harness.runtimeModel = next;
@@ -196,6 +212,37 @@ describe("createEmbeddedRunAuthController", () => {
     expect(harness.runtimeAuthState?.sourceApiKey).toBe("source-api-key");
     expect(harness.runtimeAuthState?.authMode).toBe("api-key");
     expect(harness.runtimeAuthState?.profileId).toBe("default");
+  });
+
+  it("passes resolved model runtime auth facts into credential resolution", async () => {
+    const harness = createMutableAuthControllerHarness();
+    const setRuntimeApiKey = vi.fn<(provider: string, apiKey: string) => void>();
+    const modelRuntimeAuth = {
+      providerRefs: ["my-router", "anthropic-messages"],
+      preferredProvider: "anthropic-messages",
+      modelApi: "anthropic-messages",
+      modelBaseUrl: "http://router.local",
+    };
+
+    mocks.getApiKeyForModel.mockResolvedValue({
+      apiKey: "source-api-key",
+      mode: "api-key",
+      profileId: "default",
+      source: "env",
+    });
+    mocks.prepareProviderRuntimeAuth.mockResolvedValue(undefined);
+
+    const controller = createMutableEmbeddedRunAuthController({
+      harness,
+      setRuntimeApiKey,
+      modelRuntimeAuth,
+    });
+
+    await controller.initializeAuthProfile();
+
+    expect(mocks.getApiKeyForModel).toHaveBeenCalledWith(
+      expect.objectContaining({ modelRuntimeAuth }),
+    );
   });
 
   it("includes the checked credential source when an api key is missing", async () => {

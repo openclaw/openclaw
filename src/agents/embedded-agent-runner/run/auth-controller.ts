@@ -24,6 +24,7 @@ import {
   sanitizeRuntimeProviderRequestOverrides,
 } from "../../provider-request-config.js";
 import { clampRuntimeAuthRefreshDelayMs } from "../../runtime-auth-refresh.js";
+import type { ResolvedModelRuntime } from "../resolved-model-runtime.js";
 import {
   RUNTIME_AUTH_REFRESH_MARGIN_MS,
   RUNTIME_AUTH_REFRESH_MIN_DELAY_MS,
@@ -58,6 +59,7 @@ export function createEmbeddedRunAuthController(params: {
   allowTransientCooldownProbe: boolean;
   getProvider(): string;
   getModelId(): string;
+  getResolvedModelRuntime?(): ResolvedModelRuntime | undefined;
   getRuntimeModel(): Model;
   setRuntimeModel(next: Model): void;
   getEffectiveModel(): Model;
@@ -359,6 +361,7 @@ export function createEmbeddedRunAuthController(params: {
       agentDir: params.agentDir,
       workspaceDir: params.workspaceDir,
       lockedProfile: candidate != null && candidate === params.lockedProfileId,
+      modelRuntimeAuth: params.getResolvedModelRuntime?.()?.auth,
     });
   };
 

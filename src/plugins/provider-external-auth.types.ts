@@ -6,6 +6,8 @@ export type ProviderResolveSyntheticAuthContext = {
   config?: OpenClawConfig;
   provider: string;
   providerConfig?: ModelProviderConfig;
+  modelApi?: string;
+  modelBaseUrl?: string;
 };
 
 export type ProviderSyntheticAuthResult = {

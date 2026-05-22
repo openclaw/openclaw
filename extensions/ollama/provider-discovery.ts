@@ -4,7 +4,7 @@ import {
   OLLAMA_DEFAULT_API_KEY,
   OLLAMA_PROVIDER_ID,
   resolveOllamaDiscoveryResult,
-  shouldUseSyntheticOllamaAuth,
+  shouldUseSyntheticOllamaAuthForSelectedModel,
   type OllamaPluginConfig,
 } from "./src/discovery-shared.js";
 import { buildOllamaProvider } from "./src/provider-models.js";
@@ -15,7 +15,11 @@ type OllamaProviderPlugin = {
   docsPath: string;
   envVars: string[];
   auth: [];
-  resolveSyntheticAuth: (ctx: { provider?: string; providerConfig?: ModelProviderConfig }) =>
+  resolveSyntheticAuth: (ctx: {
+    provider?: string;
+    providerConfig?: ModelProviderConfig;
+    modelBaseUrl?: string;
+  }) =>
     | {
         apiKey: string;
         source: string;
@@ -50,8 +54,8 @@ export const ollamaProviderDiscovery: OllamaProviderPlugin = {
   docsPath: "/providers/ollama",
   envVars: ["OLLAMA_API_KEY"],
   auth: [],
-  resolveSyntheticAuth: ({ provider, providerConfig }) => {
-    if (!shouldUseSyntheticOllamaAuth(providerConfig)) {
+  resolveSyntheticAuth: ({ provider, providerConfig, modelBaseUrl }) => {
+    if (!shouldUseSyntheticOllamaAuthForSelectedModel({ providerConfig, modelBaseUrl })) {
       return undefined;
     }
     return {

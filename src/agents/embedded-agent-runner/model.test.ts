@@ -257,6 +257,16 @@ function expectResolvedModel(result: ResolveModelForTestResult) {
   return result.model;
 }
 
+function expectResolvedRuntime(result: ResolveModelForTestResult) {
+  if (result.error !== undefined) {
+    throw new Error(`expected model resolution to succeed, got error: ${result.error}`);
+  }
+  if (!result.runtime) {
+    throw new Error("expected model resolution to return runtime metadata");
+  }
+  return result.runtime;
+}
+
 function expectRecordFields(record: unknown, expected: Record<string, unknown>) {
   if (!record || typeof record !== "object") {
     throw new Error("Expected record");
@@ -911,13 +921,43 @@ describe("resolveModel", () => {
 
     const claude = resolveModelForTest("my-router", "my-router/claude", "/tmp/agent", cfg);
     const claudeModel = expectResolvedModel(claude);
+    const claudeRuntime = expectResolvedRuntime(claude);
     expect(claudeModel.api).toBe("anthropic-messages");
     expect(claudeModel.baseUrl).toBe("http://localhost:8080");
+    expect(claudeRuntime.ref).toEqual({
+      provider: "my-router",
+      modelId: "my-router/claude",
+    });
+    expect(claudeRuntime.transport).toMatchObject({
+      api: "anthropic-messages",
+      baseUrl: "http://localhost:8080",
+    });
+    expect(claudeRuntime.auth).toMatchObject({
+      providerRefs: ["my-router", "anthropic-messages"],
+      preferredProvider: "anthropic-messages",
+      modelApi: "anthropic-messages",
+      modelBaseUrl: "http://localhost:8080",
+    });
+    expect(claudeRuntime.source).toMatchObject({
+      providerConfigPath: "models.providers.my-router",
+      modelConfigPath: "models.providers.my-router.models[my-router/claude]",
+    });
 
     const gpt = resolveModelForTest("my-router", "my-router/gpt", "/tmp/agent", cfg);
     const gptModel = expectResolvedModel(gpt);
+    const gptRuntime = expectResolvedRuntime(gpt);
     expect(gptModel.api).toBe("openai-completions");
     expect(gptModel.baseUrl).toBe("http://localhost:8080/v1");
+    expect(gptRuntime.transport).toMatchObject({
+      api: "openai-completions",
+      baseUrl: "http://localhost:8080/v1",
+    });
+    expect(gptRuntime.auth).toMatchObject({
+      providerRefs: ["my-router", "openai-completions"],
+      preferredProvider: "openai-completions",
+      modelApi: "openai-completions",
+      modelBaseUrl: "http://localhost:8080/v1",
+    });
   });
 
   it("defaults baseUrl-only local custom fallback models to chat completions", () => {
