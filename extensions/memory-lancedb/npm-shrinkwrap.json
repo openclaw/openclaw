@@ -209,7 +209,6 @@
       "resolved": "https://registry.npmjs.org/apache-arrow/-/apache-arrow-18.1.0.tgz",
       "integrity": "sha512-v/ShMp57iBnBp4lDgV8Jx3d3Q5/Hac25FWmQ98eMahUiHPXcvwIMKJD0hBIgclm/FCG+LwPkAKtkRO1O/W0YGg==",
       "license": "Apache-2.0",
-      "peer": true,
       "dependencies": {
         "@swc/helpers": "^0.5.11",
         "@types/command-line-args": "^5.2.3",
