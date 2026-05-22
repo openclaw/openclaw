@@ -113,7 +113,7 @@ export function createRuntimeProviderAuthLookup(params: {
     workspaceDir: params.workspaceDir,
     env,
   };
-  const syntheticAuthProviderRefs = resolveRuntimeSyntheticAuthProviderRefState();
+  const syntheticAuthProviderRefs = resolveRuntimeSyntheticAuthProviderRefState(lookupParams);
   return {
     envApiKey: {
       aliasMap: resolveProviderAuthAliasMap(lookupParams),
