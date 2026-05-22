@@ -422,9 +422,11 @@ Exec lifecycle is surfaced as system messages:
 
 - `Exec running` (only if the command exceeds the running notice threshold).
 - `Exec finished`.
-- `Exec denied`.
 
 These are posted to the agent's session after the node reports the event.
+Denied exec approvals are terminal: OpenClaw can report the denial to the
+operator or direct chat route, but it does not post `Exec denied` back into the
+agent session or wake agent work.
 Gateway-host exec approvals emit the same lifecycle events when the
 command finishes (and optionally when running longer than the threshold).
 Approval-gated execs reuse the approval id as the `runId` in these
