@@ -582,6 +582,8 @@ async function agentCommandInternal(
       const startedAt = Date.now();
       registerAgentRunContext(runId, {
         sessionKey,
+        sourceReplyDeliveryMode: opts.sourceReplyDeliveryMode,
+        suppressPromptPersistence: opts.suppressPromptPersistence === true,
       });
       attemptExecutionRuntime.emitAcpLifecycleStart({ runId, startedAt });
 
@@ -726,6 +728,8 @@ async function agentCommandInternal(
       registerAgentRunContext(runId, {
         sessionKey,
         verboseLevel: resolvedVerboseLevel,
+        sourceReplyDeliveryMode: opts.sourceReplyDeliveryMode,
+        suppressPromptPersistence: opts.suppressPromptPersistence === true,
       });
     }
 

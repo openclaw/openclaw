@@ -2,7 +2,11 @@ import { resolveToolSearchCodeDisplayTarget } from "../agents/tool-display-commo
 import { DEFAULT_HEARTBEAT_ACK_MAX_CHARS, stripHeartbeatToken } from "../auto-reply/heartbeat.js";
 import { normalizeVerboseLevel } from "../auto-reply/thinking.js";
 import { getRuntimeConfig } from "../config/io.js";
-import { type AgentEventPayload, getAgentRunContext } from "../infra/agent-events.js";
+import {
+  type AgentEventPayload,
+  type AgentRunContext,
+  getAgentRunContext,
+} from "../infra/agent-events.js";
 import { detectErrorKind, type ErrorKind } from "../infra/errors.js";
 import { resolveHeartbeatVisibility } from "../infra/heartbeat-visibility.js";
 import { isAcpSessionKey, isSubagentSessionKey } from "../sessions/session-key-utils.js";
@@ -173,6 +177,79 @@ function readChatErrorKind(value: unknown): ErrorKind | undefined {
   return typeof value === "string" && CHAT_ERROR_KINDS.has(value as ErrorKind)
     ? (value as ErrorKind)
     : undefined;
+}
+
+function readString(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+type MessageToolOnlyLifecycleDiagnostic = {
+  text: string;
+  treatAsError: boolean;
+};
+
+function buildDiagnosticChatMessage(text: string) {
+  return {
+    role: "assistant",
+    content: [{ type: "text", text }],
+    timestamp: Date.now(),
+    stopReason: "error",
+  };
+}
+
+function appendDiagnosticMessage(errorMessage: string | undefined, diagnostic: string): string {
+  const trimmedError = errorMessage?.trim();
+  if (!trimmedError || trimmedError === diagnostic) {
+    return diagnostic;
+  }
+  return `${trimmedError}\n\n${diagnostic}`;
+}
+
+function resolveMessageToolOnlyLifecycleDiagnostic(params: {
+  runContext?: AgentRunContext;
+  lifecyclePhase: "end" | "error";
+  evt: AgentEventPayload;
+  stopReason?: string;
+}): MessageToolOnlyLifecycleDiagnostic | undefined {
+  if (params.runContext?.sourceReplyDeliveryMode !== "message_tool_only") {
+    return undefined;
+  }
+  const livenessState = readString(params.evt.data?.livenessState);
+  const inboundEventKind = readString(params.runContext.inboundEventKind);
+  const replayInvalid = params.evt.data?.replayInvalid === true;
+  const stopReason = params.stopReason ?? readString(params.evt.data?.stopReason);
+  const nonDeliverableEnd =
+    params.lifecyclePhase === "end" &&
+    (livenessState === "abandoned" || (replayInvalid && stopReason === "toolUse"));
+  if (params.lifecyclePhase !== "error" && !nonDeliverableEnd) {
+    return undefined;
+  }
+
+  const promptSuppressed =
+    params.runContext.suppressPromptPersistence === true || inboundEventKind === "room_event";
+  const outcome =
+    params.lifecyclePhase === "error"
+      ? "Message-tool-only turn failed."
+      : "Message-tool-only turn ended without a visible source reply.";
+  const promptVisibility = promptSuppressed
+    ? "The inbound prompt was not saved to chat history by design."
+    : "Automatic source delivery was suppressed by policy.";
+  const diagnostics = [
+    inboundEventKind ? `inbound=${inboundEventKind}` : null,
+    "mode=message_tool_only",
+    stopReason ? `stopReason=${stopReason}` : null,
+    livenessState ? `liveness=${livenessState}` : null,
+    replayInvalid ? "replayInvalid=true" : null,
+  ].filter((value): value is string => Boolean(value));
+  const diagnosticsText = diagnostics.length ? ` Diagnostics: ${diagnostics.join(", ")}.` : "";
+
+  return {
+    treatAsError: true,
+    text:
+      `OpenClaw diagnostic: ${outcome} ${promptVisibility} ` +
+      "A visible reply for this turn must be sent through the `message` tool in the originating client." +
+      diagnosticsText,
+  };
 }
 
 type BroadcastDelta = { deltaText: string; replace?: true };
@@ -377,7 +454,8 @@ export function createAgentEventHandler({
     const chatLink = chatRunState.registry.peek(evt.runId);
     const eventSessionKey =
       typeof evt.sessionKey === "string" && evt.sessionKey.trim() ? evt.sessionKey : undefined;
-    const isControlUiVisible = getAgentRunContext(evt.runId)?.isControlUiVisible ?? true;
+    const runContext = getAgentRunContext(evt.runId);
+    const isControlUiVisible = runContext?.isControlUiVisible ?? true;
     const sessionKey =
       chatLink?.sessionKey ?? eventSessionKey ?? resolveSessionKeyForRun(evt.runId);
     const clientRunId = chatLink?.clientRunId ?? evt.runId;
@@ -391,6 +469,16 @@ export function createAgentEventHandler({
           typeof evt.data?.stopReason === "string" ? evt.data.stopReason : undefined;
         const evtErrorKind =
           readChatErrorKind(evt.data?.errorKind) ?? detectErrorKind(evt.data?.error);
+        const sourceReplyDiagnostic = resolveMessageToolOnlyLifecycleDiagnostic({
+          runContext,
+          lifecyclePhase,
+          evt,
+          stopReason: evtStopReason,
+        });
+        const chatJobState =
+          lifecyclePhase === "error" || sourceReplyDiagnostic?.treatAsError === true
+            ? "error"
+            : "done";
         if (chatLink) {
           const finished = chatRunState.registry.shift(evt.runId);
           if (!finished) {
@@ -403,10 +491,11 @@ export function createAgentEventHandler({
               finished.clientRunId,
               evt.runId,
               evt.seq,
-              lifecyclePhase === "error" ? "error" : "done",
+              chatJobState,
               evt.data?.error,
               evtStopReason,
               evtErrorKind,
+              sourceReplyDiagnostic?.text,
             );
           }
         } else if (!(opts?.skipChatErrorFinal && lifecyclePhase === "error")) {
@@ -415,10 +504,11 @@ export function createAgentEventHandler({
             eventRunId,
             evt.runId,
             evt.seq,
-            lifecyclePhase === "error" ? "error" : "done",
+            chatJobState,
             evt.data?.error,
             evtStopReason,
             evtErrorKind,
+            sourceReplyDiagnostic?.text,
           );
         }
       } else {
@@ -609,6 +699,7 @@ export function createAgentEventHandler({
     error?: unknown,
     stopReason?: string,
     errorKind?: ErrorKind,
+    diagnosticMessage?: string,
   ) => {
     const { text, shouldSuppressSilent } = resolveBufferedChatTextState(clientRunId, sourceRunId, {
       suppressLeadFragments: false,
@@ -626,6 +717,8 @@ export function createAgentEventHandler({
     clearAgentTextThrottleState(clientRunId);
     const spawnedBy = resolveSpawnedBy(sessionKey);
     if (jobState === "done") {
+      const finalText =
+        diagnosticMessage && text ? `${text}\n\n${diagnosticMessage}` : diagnosticMessage || text;
       const payload = {
         runId: clientRunId,
         sessionKey,
@@ -634,11 +727,12 @@ export function createAgentEventHandler({
         state: "final" as const,
         ...(stopReason && { stopReason }),
         message:
-          text && !shouldSuppressSilent
+          finalText && !shouldSuppressSilent
             ? {
                 role: "assistant",
-                content: [{ type: "text", text }],
+                content: [{ type: "text", text: finalText }],
                 timestamp: Date.now(),
+                ...(diagnosticMessage ? { stopReason: "error" } : {}),
               }
             : undefined,
       };
@@ -646,14 +740,19 @@ export function createAgentEventHandler({
       nodeSendToSession(sessionKey, "chat", payload);
       return;
     }
+    const formattedError = error ? formatForLog(error) : undefined;
+    const errorMessage = diagnosticMessage
+      ? appendDiagnosticMessage(formattedError, diagnosticMessage)
+      : formattedError;
     const payload = {
       runId: clientRunId,
       sessionKey,
       ...(spawnedBy && { spawnedBy }),
       seq,
       state: "error" as const,
-      errorMessage: error ? formatForLog(error) : undefined,
+      errorMessage,
       ...(errorKind && { errorKind }),
+      ...(diagnosticMessage ? { message: buildDiagnosticChatMessage(diagnosticMessage) } : {}),
     };
     broadcast("chat", payload);
     nodeSendToSession(sessionKey, "chat", payload);

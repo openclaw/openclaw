@@ -2137,11 +2137,53 @@ export async function dispatchReplyFromConfig(
     let routedFinalCount = 0;
     let attemptedFinalDelivery = false;
     let finalDeliveryFailed = false;
+    let mirroredSuppressedSourceReplyFailure = false;
     const shouldDeliverDespiteSourceReplySuppression = (reply: ReplyPayload) =>
       suppressAutomaticSourceDelivery &&
       ctx.InboundEventKind !== "room_event" &&
       !sendPolicyDenied &&
       getReplyPayloadMetadata(reply)?.deliverDespiteSourceReplySuppression === true;
+    const mirrorSuppressedSourceReplyFailureToTranscript = async (reply: ReplyPayload) => {
+      const transcriptSessionKey = acpDispatchSessionKey ?? sessionKey;
+      if (
+        mirroredSuppressedSourceReplyFailure ||
+        !transcriptSessionKey ||
+        sourceReplyDeliveryMode !== "message_tool_only" ||
+        ctx.InboundEventKind !== "room_event" ||
+        reply.isError !== true ||
+        sendPolicyDenied
+      ) {
+        return;
+      }
+      mirroredSuppressedSourceReplyFailure = true;
+      const replyText = reply.text?.trim();
+      const diagnosticText = [
+        "OpenClaw diagnostic: Message-tool-only room event failed before a visible source reply was delivered.",
+        "The inbound prompt was not saved to chat history by design, and automatic room fallback delivery was suppressed.",
+        "A visible reply for this turn must be sent through the `message` tool in the originating client.",
+        replyText ? `Suppressed error: ${replyText}` : "",
+        "Diagnostics: inbound=room_event, mode=message_tool_only.",
+      ]
+        .filter(Boolean)
+        .join(" ");
+      const idempotencySource =
+        params.replyOptions?.runId ?? ctx.MessageSidFull ?? ctx.MessageSid ?? undefined;
+      const result = await appendAssistantMessageToSessionTranscript({
+        sessionKey: transcriptSessionKey,
+        agentId: sessionAgentId,
+        text: diagnosticText,
+        ...(idempotencySource
+          ? { idempotencyKey: `${idempotencySource}:message-tool-only-failure-diagnostic` }
+          : {}),
+        updateMode: "inline",
+        config: cfg,
+      });
+      if (!result.ok) {
+        logVerbose(
+          `dispatch-from-config: message-tool-only failure diagnostic mirror skipped: ${result.reason}`,
+        );
+      }
+    };
     for (const reply of replies) {
       throwIfDispatchOperationAborted();
       // Suppress reasoning payloads from channel delivery — channels using this
@@ -2164,6 +2206,7 @@ export async function dispatchReplyFromConfig(
             ].join(" "),
           );
         }
+        await mirrorSuppressedSourceReplyFailureToTranscript(reply);
         continue;
       }
       attemptedFinalDelivery = true;

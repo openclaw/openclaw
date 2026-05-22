@@ -242,9 +242,15 @@ vi.mock("../logging/subsystem.js", () => ({
 }));
 
 vi.mock("../routing/session-key.js", () => ({
+  classifySessionKeyShape: (key?: string | null) => (key?.trim() ? "legacy_or_alias" : "missing"),
   isSubagentSessionKey: () => false,
+  isUnscopedSessionKeySentinel: (key?: string | null) =>
+    ["global", "unknown"].includes(key?.trim().toLowerCase() ?? ""),
   normalizeAgentId: (id: string) => id,
   normalizeMainKey: (key?: string | null) => key?.trim() || "main",
+  resolveAgentIdFromSessionKey: () => "main",
+  scopeLegacySessionKeyToAgent: ({ sessionKey }: { sessionKey?: string | null }) =>
+    sessionKey?.trim() || undefined,
 }));
 
 vi.mock("../runtime.js", () => ({

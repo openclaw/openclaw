@@ -456,6 +456,40 @@ describe("handleChatEvent", () => {
     },
   );
 
+  it("appends diagnostic messages carried by chat error events", () => {
+    const state = createState({
+      sessionKey: "main",
+      chatRunId: "run-1",
+      chatStream: "",
+      chatStreamStartedAt: 100,
+    });
+    const diagnosticMessage = {
+      role: "assistant",
+      content: [
+        {
+          type: "text",
+          text: "OpenClaw diagnostic: message-tool-only turn failed.",
+        },
+      ],
+      stopReason: "error",
+    };
+
+    expect(
+      handleChatEvent(state, {
+        runId: "run-1",
+        sessionKey: "main",
+        state: "error",
+        errorMessage: "message-tool-only turn failed",
+        message: diagnosticMessage,
+      }),
+    ).toBe("error");
+
+    expect(state.chatMessages).toEqual([diagnosticMessage]);
+    expect(state.lastError).toBe("message-tool-only turn failed");
+    expect(state.chatRunId).toBeNull();
+    expect(state.chatStream).toBeNull();
+  });
+
   it("persists streamed text when final event carries no message", () => {
     const existingMessage = {
       role: "user",

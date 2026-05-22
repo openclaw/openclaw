@@ -2143,6 +2143,62 @@ describe("agent event handler", () => {
     expect(nodePayload.errorKind).toBe("rate_limit");
   });
 
+  it("surfaces message-tool-only non-deliverable ends as chat diagnostics", () => {
+    const { broadcast, nodeSendToSession, clearAgentRunContext, handler } = createHarness({
+      lifecycleErrorRetryGraceMs: 0,
+      resolveSessionKeyForRun: () => "session-room-event-hidden",
+    });
+    registerAgentRunContext("run-room-event-hidden", {
+      sessionKey: "session-room-event-hidden",
+      sourceReplyDeliveryMode: "message_tool_only",
+      suppressPromptPersistence: true,
+      inboundEventKind: "room_event",
+    });
+
+    handler({
+      runId: "run-room-event-hidden",
+      seq: 1,
+      stream: "lifecycle",
+      ts: Date.now(),
+      data: {
+        phase: "end",
+        stopReason: "toolUse",
+        livenessState: "abandoned",
+        replayInvalid: true,
+      },
+    });
+
+    const payload = requireRecord(
+      chatBroadcastCalls(broadcast).at(-1)?.[1],
+      "message-tool-only chat payload",
+    );
+    expect(payload.state).toBe("error");
+    expect(payload.sessionKey).toBe("session-room-event-hidden");
+    expect(payload.errorMessage).toContain(
+      "Message-tool-only turn ended without a visible source reply.",
+    );
+    expect(payload.errorMessage).toContain("The inbound prompt was not saved to chat history");
+    expect(payload.errorMessage).toContain("inbound=room_event");
+    expect(payload.errorMessage).toContain("stopReason=toolUse");
+
+    const message = requireRecord(payload.message, "message-tool-only diagnostic message");
+    expect(message.role).toBe("assistant");
+    expect(message.stopReason).toBe("error");
+    expect(message.content).toEqual([
+      {
+        type: "text",
+        text: payload.errorMessage,
+      },
+    ]);
+
+    const nodePayload = requireRecord(
+      sessionChatCalls(nodeSendToSession).at(-1)?.[2],
+      "message-tool-only node payload",
+    );
+    expect(nodePayload.errorMessage).toBe(payload.errorMessage);
+    expect(clearAgentRunContext).toHaveBeenCalledWith("run-room-event-hidden");
+  });
+
   it("suppresses delayed lifecycle chat errors for active chat.send runs while still cleaning up", () => {
     vi.useFakeTimers();
     const { broadcast, clearAgentRunContext, agentRunSeq, handler } = createHarness({

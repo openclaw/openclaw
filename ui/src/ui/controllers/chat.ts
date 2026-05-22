@@ -752,6 +752,10 @@ export function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
     }
     reconcileTerminalRun("interrupted", "killed");
   } else if (payload.state === "error") {
+    const diagnosticMessage = normalizeFinalAssistantMessage(payload.message);
+    if (diagnosticMessage && !shouldHideAssistantChatMessage(diagnosticMessage)) {
+      state.chatMessages = [...state.chatMessages, diagnosticMessage];
+    }
     reconcileTerminalRun("interrupted", "failed");
     state.lastError = payload.errorMessage ?? "chat error";
   }

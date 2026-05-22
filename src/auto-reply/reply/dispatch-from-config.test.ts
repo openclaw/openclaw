@@ -5491,6 +5491,63 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     expect(dispatcher.sendToolResult).not.toHaveBeenCalled();
   });
 
+  it("mirrors suppressed message-tool-only room event failures into the transcript", async () => {
+    setNoAbort();
+    sessionStoreMocks.currentEntry = {
+      sessionId: "s1",
+      updatedAt: 0,
+      sendPolicy: "allow",
+    };
+    const dispatcher = createDispatcher();
+    const failureReply = {
+      text: "agent failed before sending through message",
+      isError: true,
+    } satisfies ReplyPayload;
+    const replyResolver = vi.fn(async () => failureReply);
+    const ctx = buildTestCtx({
+      ChatType: "group",
+      InboundEventKind: "room_event",
+      MessageSid: "telegram-msg-1",
+      SessionKey: "test:session",
+    });
+
+    const result = await dispatchReplyFromConfig({
+      ctx,
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver,
+      replyOptions: {
+        runId: "run-1",
+        sourceReplyDeliveryMode: "message_tool_only",
+      },
+    });
+
+    expect(replyResolver).toHaveBeenCalledTimes(1);
+    expect(result.queuedFinal).toBe(false);
+    expect(result.sourceReplyDeliveryMode).toBe("message_tool_only");
+    expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
+    expect(transcriptMocks.appendAssistantMessageToSessionTranscript).toHaveBeenCalledWith({
+      sessionKey: "test:session",
+      agentId: "main",
+      text: expect.stringContaining(
+        "Message-tool-only room event failed before a visible source reply was delivered.",
+      ),
+      idempotencyKey: "run-1:message-tool-only-failure-diagnostic",
+      updateMode: "inline",
+      config: emptyConfig,
+    });
+    const transcriptText = (
+      transcriptMocks.appendAssistantMessageToSessionTranscript.mock.calls[0]?.[0] as {
+        text?: string;
+      }
+    )?.text;
+    expect(transcriptText).toContain("The inbound prompt was not saved to chat history by design");
+    expect(transcriptText).toContain(
+      "Suppressed error: agent failed before sending through message",
+    );
+    expect(transcriptText).toContain("Diagnostics: inbound=room_event, mode=message_tool_only.");
+  });
+
   it("mirrors internal source reply payloads into the active transcript", async () => {
     setNoAbort();
     sessionStoreMocks.currentEntry = {

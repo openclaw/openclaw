@@ -149,6 +149,9 @@ describe("agent-events sequencing", () => {
     registerAgentRunContext("run-ctx", {
       verboseLevel: "full",
       isHeartbeat: true,
+      sourceReplyDeliveryMode: "message_tool_only",
+      suppressPromptPersistence: true,
+      inboundEventKind: "room_event",
       lastActiveAt: 12_345,
     });
 
@@ -157,6 +160,9 @@ describe("agent-events sequencing", () => {
     expect(context?.verboseLevel).toBe("full");
     expect(context?.isHeartbeat).toBe(true);
     expect(context?.isControlUiVisible).toBe(true);
+    expect(context?.sourceReplyDeliveryMode).toBe("message_tool_only");
+    expect(context?.suppressPromptPersistence).toBe(true);
+    expect(context?.inboundEventKind).toBe("room_event");
     expect(context?.lastActiveAt).toBe(12_345);
   });
 

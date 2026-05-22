@@ -112,6 +112,12 @@ export type AgentRunContext = {
   sessionKey?: string;
   verboseLevel?: VerboseLevel;
   isHeartbeat?: boolean;
+  /** Source reply visibility contract active for this run. */
+  sourceReplyDeliveryMode?: "automatic" | "message_tool_only";
+  /** The current user prompt is runtime context only and should not appear in chat.history. */
+  suppressPromptPersistence?: boolean;
+  /** Channel inbound turn classification, when known. */
+  inboundEventKind?: "user_request" | "room_event" | (string & {});
   /** Whether control UI clients should receive chat/agent updates for this run. */
   isControlUiVisible?: boolean;
   /** Timestamp when this context was first registered (for TTL-based cleanup). */
@@ -160,6 +166,15 @@ export function registerAgentRunContext(runId: string, context: AgentRunContext)
   }
   if (context.isHeartbeat !== undefined && existing.isHeartbeat !== context.isHeartbeat) {
     existing.isHeartbeat = context.isHeartbeat;
+  }
+  if (context.sourceReplyDeliveryMode !== undefined) {
+    existing.sourceReplyDeliveryMode = context.sourceReplyDeliveryMode;
+  }
+  if (context.suppressPromptPersistence !== undefined) {
+    existing.suppressPromptPersistence = context.suppressPromptPersistence;
+  }
+  if (context.inboundEventKind !== undefined) {
+    existing.inboundEventKind = context.inboundEventKind;
   }
   if (context.registeredAt !== undefined) {
     existing.registeredAt = context.registeredAt;
