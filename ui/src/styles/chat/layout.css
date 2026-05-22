@@ -1450,19 +1450,13 @@
 .chat-controls__session-trigger-icon svg {
   width: 16px;
   height: 16px;
-}
-
-.chat-controls__session-actions {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  width: auto;
-  min-width: 0;
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 1.5px;
 }
 
 .chat-controls__session-search {
   position: relative;
-  flex: 1 1 220px;
   min-width: 160px;
   max-width: none;
 }
@@ -1501,8 +1495,8 @@
   stroke-linejoin: round;
 }
 
-.chat-controls__session-search-toggle {
-  flex: 0 0 auto;
+.chat-controls__session-actions {
+  min-width: 0;
 }
 
 .chat-session-picker {
@@ -1521,20 +1515,6 @@
   background: var(--card);
   box-shadow: 0 18px 48px rgba(0, 0, 0, 0.34);
   overflow: hidden;
-}
-
-.chat-session-picker .chat-session-picker__icon-button.btn--icon {
-  flex: 0 0 36px;
-  width: 36px;
-  min-width: 36px;
-  height: 36px;
-  padding: 0;
-  border-radius: var(--radius-md);
-}
-
-.chat-session-picker .chat-session-picker__icon-button.btn--icon svg {
-  width: 16px;
-  height: 16px;
 }
 
 .chat-session-picker__list {
@@ -1608,6 +1588,9 @@
 .chat-session-picker__option-check svg {
   width: 16px;
   height: 16px;
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 1.5px;
 }
 
 .chat-session-picker__status {
