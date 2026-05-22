@@ -240,7 +240,9 @@ def build_prompt(repo: Path, target: str, target_ref: str | None, bundle: str, e
         You are a senior code reviewer. Review the provided git change bundle only.
 
         Hard rules:
-        - Return JSON only, matching the supplied schema exactly.
+        - Return exactly one JSON object and nothing else. Do not wrap it in Markdown.
+        - The JSON object must match this schema exactly:
+        {json.dumps(SCHEMA, indent=2)}
         - Do not modify files.
         - Do not invoke nested reviewers or review tools.
         - Forbidden nested review commands include: codex review, autoreview, claude review, oracle review.
@@ -331,6 +333,69 @@ def run_claude(args: argparse.Namespace, repo: Path, prompt: str) -> str:
     return result.stdout
 
 
+def run_droid(args: argparse.Namespace, repo: Path, prompt: str) -> str:
+    prompt_path = Path(tempfile.NamedTemporaryFile("w", suffix=".txt", delete=False).name)
+    prompt_path.write_text(prompt)
+    cmd = [
+        args.droid_bin,
+        "exec",
+        "--cwd",
+        str(repo),
+        "--output-format",
+        "json",
+        "-f",
+        str(prompt_path),
+    ]
+    if args.model:
+        cmd.extend(["--model", args.model])
+    if not args.tools:
+        cmd.extend(["--disabled-tools", "*"])
+    result = run(cmd, repo, check=False)
+    prompt_path.unlink(missing_ok=True)
+    if result.returncode != 0:
+        raise SystemExit(f"droid engine failed ({result.returncode})\n{result.stderr or result.stdout}")
+    return result.stdout
+
+
+def run_copilot(args: argparse.Namespace, repo: Path, prompt: str) -> str:
+    if not args.tools:
+        raise SystemExit("--no-tools is not supported by the copilot engine; copilot requires a read-only file view tool to load the review bundle without exposing it in argv")
+    with tempfile.TemporaryDirectory(prefix="autoreview-copilot.") as tempdir:
+        prompt_path = Path(tempdir) / "prompt.txt"
+        prompt_path.write_text(prompt)
+        os.chmod(prompt_path, 0o600)
+        cmd = [
+            args.copilot_bin,
+            "-C",
+            tempdir,
+            "-p",
+            "Read ./prompt.txt and follow it exactly. Return only the requested JSON object.",
+            "--output-format",
+            "json",
+            "--stream",
+            "off",
+            "--no-ask-user",
+            "--disable-builtin-mcps",
+        ]
+        if args.model:
+            cmd.extend(["--model", args.model])
+        cmd.extend(
+            [
+                "--available-tools=read_agent,rg,view,web_fetch",
+                "--allow-tool=read_agent",
+                "--allow-tool=rg",
+                "--allow-tool=view",
+                "--allow-tool=web_fetch",
+            ]
+        )
+        if args.web_search:
+            cmd.append("--allow-all-urls")
+        result = run(cmd, Path(tempdir), check=False)
+    if result.returncode != 0:
+        raise SystemExit(f"copilot engine failed ({result.returncode})\n{result.stderr or result.stdout}")
+    return result.stdout
+
+
 def claude_allowed_tools(args: argparse.Namespace) -> str:
     tools = [tool.strip() for tool in args.claude_allowed_tools.split(",") if tool.strip()]
     if not args.web_search:
@@ -345,19 +410,69 @@ def extract_json(text: str) -> dict[str, Any]:
     try:
         parsed = json.loads(stripped)
     except json.JSONDecodeError as exc:
+        fenced_report = parse_json_candidate(stripped)
+        if isinstance(fenced_report, dict) and "findings" in fenced_report:
+            return fenced_report
+        jsonl_report = extract_json_from_jsonl(stripped)
+        if jsonl_report:
+            return jsonl_report
         raise SystemExit(f"review engine returned non-JSON output: {exc}\n{stripped[:2000]}")
     if isinstance(parsed, dict) and "findings" in parsed:
         return parsed
     if isinstance(parsed, dict) and isinstance(parsed.get("structured_output"), dict):
         return parsed["structured_output"]
     if isinstance(parsed, dict) and isinstance(parsed.get("result"), str):
-        try:
-            result_json = json.loads(parsed["result"])
-        except json.JSONDecodeError as exc:
-            raise SystemExit(f"review engine result was not structured JSON: {exc}\n{parsed['result'][:2000]}")
+        result_json = parse_json_candidate(parsed["result"])
         if isinstance(result_json, dict) and "findings" in result_json:
             return result_json
+        raise SystemExit(f"review engine result was not structured JSON:\n{parsed['result'][:2000]}")
+    jsonl_report = extract_json_from_jsonl(stripped)
+    if jsonl_report:
+        return jsonl_report
     raise SystemExit(f"review engine returned unexpected JSON shape:\n{json.dumps(parsed)[:2000]}")
+
+
+def extract_json_from_jsonl(text: str) -> dict[str, Any] | None:
+    candidates: list[str] = []
+    for line in text.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(event, dict):
+            continue
+        part = event.get("part")
+        if isinstance(part, dict) and isinstance(part.get("text"), str):
+            candidates.append(part["text"])
+        data = event.get("data")
+        if isinstance(data, dict) and isinstance(data.get("content"), str):
+            candidates.append(data["content"])
+        if isinstance(event.get("result"), str):
+            candidates.append(event["result"])
+    for candidate in reversed(candidates):
+        parsed = parse_json_candidate(candidate)
+        if isinstance(parsed, dict) and "findings" in parsed:
+            return parsed
+    return None
+
+
+def parse_json_candidate(text: str) -> Any | None:
+    stripped = text.strip()
+    if stripped.startswith("```"):
+        lines = stripped.splitlines()
+        if lines and lines[0].startswith("```") and lines[-1].strip() == "```":
+            stripped = "\n".join(lines[1:-1]).strip()
+    try:
+        parsed = json.loads(stripped)
+    except json.JSONDecodeError:
+        return None
+    if isinstance(parsed, str) and parsed != text:
+        nested = parse_json_candidate(parsed)
+        return nested if nested is not None else parsed
+    return parsed
 
 
 def validate_report(report: dict[str, Any], repo: Path, changed_paths: set[str], required: list[str]) -> None:
@@ -459,11 +574,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--mode", choices=["auto", "local", "branch", "commit"], default="auto")
     parser.add_argument("--base")
     parser.add_argument("--commit", default="HEAD")
-    parser.add_argument("--engine", choices=["codex", "claude"], default=os.environ.get("AUTOREVIEW_ENGINE", "codex"))
+    parser.add_argument("--engine", choices=["codex", "claude", "droid", "copilot"], default=os.environ.get("AUTOREVIEW_ENGINE", "codex"))
     parser.add_argument("--model")
     parser.add_argument("--codex-bin", default=os.environ.get("CODEX_BIN", "codex"))
     parser.add_argument("--claude-bin", default=os.environ.get("CLAUDE_BIN", "claude"))
-    parser.add_argument("--no-tools", dest="tools", action="store_false", default=True, help="Disable tools for engines that support it. Codex requires tools for review.")
+    parser.add_argument("--droid-bin", default=os.environ.get("DROID_BIN", "droid"))
+    parser.add_argument("--copilot-bin", default=os.environ.get("COPILOT_BIN", "copilot"))
+    parser.add_argument("--no-tools", dest="tools", action="store_false", default=True, help="Disable tools for engines that support it. Codex and copilot reject no-tools review.")
     parser.add_argument("--no-web-search", dest="web_search", action="store_false", default=True)
     parser.add_argument(
         "--claude-allowed-tools",
@@ -482,9 +599,21 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--expect-findings", action="store_true", help="Treat findings as success; for harness acceptance tests.")
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
-    if args.engine not in {"codex", "claude"}:
+    if args.engine not in {"codex", "claude", "droid", "copilot"}:
         raise SystemExit(f"invalid --engine/AUTOREVIEW_ENGINE: {args.engine}")
     return args
+
+
+def run_engine(args: argparse.Namespace, repo: Path, prompt: str) -> str:
+    if args.engine == "codex":
+        return run_codex(args, repo, prompt)
+    if args.engine == "claude":
+        return run_claude(args, repo, prompt)
+    if args.engine == "droid":
+        return run_droid(args, repo, prompt)
+    if args.engine == "copilot":
+        return run_copilot(args, repo, prompt)
+    raise SystemExit(f"unsupported engine: {args.engine}")
 
 
 def main() -> int:
@@ -518,7 +647,7 @@ def main() -> int:
     if args.parallel_tests:
         tests_proc = start_parallel_tests(args.parallel_tests, repo)
     try:
-        raw = run_codex(args, repo, prompt) if args.engine == "codex" else run_claude(args, repo, prompt)
+        raw = run_engine(args, repo, prompt)
         report = extract_json(raw)
         validate_report(report, repo, changed_paths, args.require_finding)
         if args.json_output:
