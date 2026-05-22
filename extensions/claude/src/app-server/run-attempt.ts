@@ -80,6 +80,7 @@ import type {
   TurnStartParams,
   UserInput,
 } from "./types.js";
+import { filterToolsForVisionInputs, modelSupportsVision } from "./vision-tools.js";
 
 const DEFAULT_APPROVAL_POLICY: ApprovalPolicy = "never";
 const DEFAULT_SANDBOX: SandboxPolicy = { type: "dangerFullAccess" };
@@ -509,7 +510,12 @@ async function buildTools(
   if (params.disableTools || !supportsModelTools(params.model)) {
     return [];
   }
-  const modelHasVision = params.model.input?.includes("image") ?? false;
+  // modelHasVision: prefer the declared input modalities. Fall back to a
+  // name-based check (modelSupportsVision) for cases where params.model.input
+  // isn't populated (manual model entries, legacy configs) so vision filtering
+  // still applies to well-known Claude vision models like claude-sonnet-4-6.
+  const modelHasVision =
+    params.model.input?.includes("image") ?? modelSupportsVision(params.modelId);
   const agentDir =
     params.agentDir ?? resolveAgentDir(params.config ?? {}, params.agentId ?? "default");
   // Session keys for sandbox/process-scope/subagent-envelope policy and the
@@ -607,14 +613,6 @@ async function buildTools(
 
 // ─── Local helpers replicated from codex's run-attempt (cannot cross-import
 // from another extension per the plugins boundary; logic is small) ─────────
-
-function filterToolsForVisionInputs<T extends { name?: string }>(
-  tools: T[],
-  params: { modelHasVision: boolean; hasInboundImages: boolean },
-): T[] {
-  if (!params.modelHasVision || !params.hasInboundImages) return tools;
-  return tools.filter((tool) => tool.name !== "image");
-}
 
 // Mirrors codex's normalizeCodexDynamicToolName (dynamic-tool-profile.ts:27).
 // Codex normalizes case + applies a small alias table; we replicate so
