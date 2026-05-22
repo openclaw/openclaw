@@ -298,6 +298,30 @@ describe("resolveSubagentToolPolicy depth awareness", () => {
     expect(isToolAllowedByPolicyName("memory_get", policy)).toBe(true);
   });
 
+  it("denies per-action cron_* tools alongside the legacy cron alias (WOR-317)", () => {
+    // Subagents previously bypassed the cron deny because the decomposed
+    // cron_add / cron_update / cron_remove / ... tools were not covered by
+    // the "cron" exact-match entry. Coverage holds for both leaf and
+    // orchestrator depths.
+    const leafPolicy = resolveSubagentToolPolicy(baseCfg, 2);
+    const orchestratorPolicy = resolveSubagentToolPolicy(baseCfg, 1);
+    for (const tool of [
+      "cron",
+      "cron_status",
+      "cron_list",
+      "cron_get",
+      "cron_add",
+      "cron_update",
+      "cron_remove",
+      "cron_run",
+      "cron_runs",
+      "cron_wake",
+    ]) {
+      expect(isToolAllowedByPolicyName(tool, leafPolicy)).toBe(false);
+      expect(isToolAllowedByPolicyName(tool, orchestratorPolicy)).toBe(false);
+    }
+  });
+
   it("depth-2 leaf denies sessions_spawn", () => {
     const policy = resolveSubagentToolPolicy(baseCfg, 2);
     expect(isToolAllowedByPolicyName("sessions_spawn", policy)).toBe(false);
