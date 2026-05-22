@@ -1047,6 +1047,17 @@ describe("cron webhook schema", () => {
     });
     expect(res.success).toBe(true);
   });
+
+  it("accepts isolated cron agent watchdog timeouts", () => {
+    const res = OpenClawSchema.safeParse({
+      cron: {
+        isolatedAgentSetupTimeoutMs: 180000,
+        isolatedAgentPreExecutionTimeoutMs: 180000,
+      },
+    });
+
+    expect(res.success).toBe(true);
+  });
 });
 
 describe("broadcast", () => {

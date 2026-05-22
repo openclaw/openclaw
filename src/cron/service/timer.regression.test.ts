@@ -1437,6 +1437,69 @@ describe("cron service timer regressions", () => {
     }
   });
 
+  it("honors the global isolated agent setup timeout override", async () => {
+    vi.useFakeTimers();
+    try {
+      const store = timerRegressionFixtures.makeStorePath();
+      const scheduledAt = Date.parse("2026-05-22T10:00:00.000Z");
+      const cronJob = createIsolatedRegressionJob({
+        id: "isolated-setup-timeout-configured",
+        name: "configured setup timeout",
+        scheduledAt,
+        schedule: { kind: "at", at: new Date(scheduledAt).toISOString() },
+        payload: { kind: "agentTurn", message: "work", timeoutSeconds: 300 },
+        state: { nextRunAtMs: scheduledAt },
+      });
+      await writeCronJobs(store.storePath, [cronJob]);
+
+      vi.setSystemTime(scheduledAt);
+      let now = scheduledAt;
+      const started = createDeferred<void>();
+      let abortObserved = false;
+      const cleanupTimedOutAgentRun = vi.fn(async () => {});
+      const state = createCronServiceState({
+        cronEnabled: true,
+        cronConfig: { isolatedAgentSetupTimeoutMs: 180_000 },
+        storePath: store.storePath,
+        log: noopLogger,
+        nowMs: () => now,
+        enqueueSystemEvent: vi.fn(),
+        requestHeartbeat: vi.fn(),
+        cleanupTimedOutAgentRun,
+        runIsolatedAgentJob: vi.fn(async ({ abortSignal }: { abortSignal?: AbortSignal }) => {
+          started.resolve();
+          abortSignal?.addEventListener(
+            "abort",
+            () => {
+              abortObserved = true;
+            },
+            { once: true },
+          );
+          return await new Promise<never>(() => {});
+        }),
+      });
+
+      const timerPromise = onTimer(state);
+      await started.promise;
+      await vi.advanceTimersByTimeAsync(60_100);
+      now += 60_100;
+      expect(abortObserved).toBe(false);
+      expect(cleanupTimedOutAgentRun).not.toHaveBeenCalled();
+
+      await vi.advanceTimersByTimeAsync(120_000);
+      now += 120_000;
+      await timerPromise;
+
+      const job = requireJob(state, "isolated-setup-timeout-configured");
+      expect(abortObserved).toBe(true);
+      expect(job.state.lastStatus).toBe("error");
+      expect(job.state.lastError).toContain("setup timed out before runner start");
+      expect(cleanupTimedOutAgentRun).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("times out isolated agent runs that stall before execution starts (#74803)", async () => {
     vi.useFakeTimers();
     try {
@@ -1520,6 +1583,81 @@ describe("cron service timer regressions", () => {
       const execution = requireRecord(cleanupArgs.execution);
       expect(execution.jobId).toBe("isolated-pre-model-timeout-74803");
       expect(execution.phase).toBe("context_engine");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("honors the global isolated agent pre-execution timeout override", async () => {
+    vi.useFakeTimers();
+    try {
+      const store = timerRegressionFixtures.makeStorePath();
+      const scheduledAt = Date.parse("2026-05-22T10:05:00.000Z");
+      const cronJob = createIsolatedRegressionJob({
+        id: "isolated-pre-execution-timeout-configured",
+        name: "configured pre-execution timeout",
+        scheduledAt,
+        schedule: { kind: "at", at: new Date(scheduledAt).toISOString() },
+        payload: { kind: "agentTurn", message: "work", timeoutSeconds: 600 },
+        state: { nextRunAtMs: scheduledAt },
+      });
+      await writeCronJobs(store.storePath, [cronJob]);
+
+      vi.setSystemTime(scheduledAt);
+      let now = scheduledAt;
+      const started = createDeferred<void>();
+      let abortObserved = false;
+      const cleanupTimedOutAgentRun = vi.fn(async () => {});
+      const state = createCronServiceState({
+        cronEnabled: true,
+        cronConfig: { isolatedAgentPreExecutionTimeoutMs: 180_000 },
+        storePath: store.storePath,
+        log: noopLogger,
+        nowMs: () => now,
+        enqueueSystemEvent: vi.fn(),
+        requestHeartbeat: vi.fn(),
+        cleanupTimedOutAgentRun,
+        runIsolatedAgentJob: vi.fn(
+          async ({
+            abortSignal,
+            onExecutionStarted,
+          }: {
+            abortSignal?: AbortSignal;
+            onExecutionStarted?: (info?: CronAgentExecutionStarted) => void;
+          }) => {
+            onExecutionStarted?.({
+              jobId: "isolated-pre-execution-timeout-configured",
+              phase: "runner_entered",
+            });
+            started.resolve();
+            abortSignal?.addEventListener(
+              "abort",
+              () => {
+                abortObserved = true;
+              },
+              { once: true },
+            );
+            return await new Promise<never>(() => {});
+          },
+        ),
+      });
+
+      const timerPromise = onTimer(state);
+      await started.promise;
+      await vi.advanceTimersByTimeAsync(60_100);
+      now += 60_100;
+      expect(abortObserved).toBe(false);
+      expect(cleanupTimedOutAgentRun).not.toHaveBeenCalled();
+
+      await vi.advanceTimersByTimeAsync(120_000);
+      now += 120_000;
+      await timerPromise;
+
+      const job = requireJob(state, "isolated-pre-execution-timeout-configured");
+      expect(abortObserved).toBe(true);
+      expect(job.state.lastStatus).toBe("error");
+      expect(job.state.lastError).toContain("stalled before execution start");
+      expect(cleanupTimedOutAgentRun).toHaveBeenCalledTimes(1);
     } finally {
       vi.useRealTimers();
     }

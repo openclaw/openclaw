@@ -32,6 +32,16 @@ export type CronConfig = {
   enabled?: boolean;
   store?: string;
   maxConcurrentRuns?: number;
+  /**
+   * Milliseconds an isolated cron agent turn may spend setting up before the
+   * runner reports that it started. Default: 60000.
+   */
+  isolatedAgentSetupTimeoutMs?: number;
+  /**
+   * Milliseconds an isolated cron agent turn may spend in pre-execution phases
+   * after the runner starts but before model/tool execution begins. Default: 60000.
+   */
+  isolatedAgentPreExecutionTimeoutMs?: number;
   /** Override default retry policy for one-shot jobs on transient errors. */
   retry?: CronRetryConfig;
   /**
