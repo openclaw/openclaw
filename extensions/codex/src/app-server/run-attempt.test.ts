@@ -9502,7 +9502,10 @@ describe("runCodexAppServerAttempt", () => {
 
     const result = await run;
     expect(result.aborted).toBe(false);
-    expect(requests).toEqual([["thread/resume"], ["thread/resume", "turn/start"]]);
+    expect(requests).toEqual([
+      ["thread/resume"],
+      ["thread/resume", "turn/start", "thread/unsubscribe"],
+    ]);
   });
 
   it("tolerates a second app-server close while retrying startup", async () => {
@@ -9554,7 +9557,7 @@ describe("runCodexAppServerAttempt", () => {
     expect(requests).toEqual([
       ["thread/resume"],
       ["thread/resume"],
-      ["thread/resume", "turn/start"],
+      ["thread/resume", "turn/start", "thread/unsubscribe"],
     ]);
   });
 

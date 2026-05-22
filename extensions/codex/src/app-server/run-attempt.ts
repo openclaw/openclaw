@@ -197,6 +197,7 @@ const CODEX_DYNAMIC_IMAGE_TOOL_TIMEOUT_MS = 60_000;
 const CODEX_APP_SERVER_STARTUP_CONNECTION_CLOSE_MAX_ATTEMPTS = 3;
 const CODEX_APP_SERVER_STARTUP_TIMEOUT_FLOOR_MS = 100;
 const CODEX_APP_SERVER_INTERRUPT_TIMEOUT_MS = 5_000;
+const CODEX_APP_SERVER_UNSUBSCRIBE_TIMEOUT_MS = 5_000;
 const CODEX_USAGE_LIMIT_RATE_LIMIT_REFRESH_TIMEOUT_MS = 5_000;
 const CODEX_TURN_COMPLETION_IDLE_TIMEOUT_MS = 60_000;
 const CODEX_TURN_ASSISTANT_COMPLETION_IDLE_TIMEOUT_MS = 10_000;
@@ -2589,6 +2590,12 @@ export async function runCodexAppServerAttempt(
         },
         ctx: hookContext,
       });
+      if (!timedOut) {
+        await unsubscribeCodexThreadBestEffort(client, {
+          threadId: thread.threadId,
+          timeoutMs: CODEX_APP_SERVER_UNSUBSCRIBE_TIMEOUT_MS,
+        });
+      }
       notificationCleanup();
       requestCleanup();
       nativeHookRelay?.unregister();
@@ -2933,6 +2940,12 @@ export async function runCodexAppServerAttempt(
     });
     if (!timedOut && !runAbortController.signal.aborted) {
       await steeringQueue?.flushPending();
+    }
+    if (!timedOut) {
+      await unsubscribeCodexThreadBestEffort(client, {
+        threadId: thread.threadId,
+        timeoutMs: CODEX_APP_SERVER_UNSUBSCRIBE_TIMEOUT_MS,
+      });
     }
     userInputBridge?.cancelPending();
     clearTurnAttemptIdleTimer();
@@ -3399,6 +3412,27 @@ function interruptCodexTurnBestEffort(
     });
   } catch (error) {
     embeddedAgentLog.debug("codex app-server turn interrupt failed during abort", { error });
+  }
+}
+
+async function unsubscribeCodexThreadBestEffort(
+  client: CodexAppServerClient,
+  params: {
+    threadId: string;
+    timeoutMs: number;
+  },
+): Promise<void> {
+  try {
+    await client.request(
+      "thread/unsubscribe",
+      { threadId: params.threadId },
+      { timeoutMs: params.timeoutMs },
+    );
+  } catch (error) {
+    embeddedAgentLog.debug("codex app-server thread unsubscribe cleanup failed", {
+      threadId: params.threadId,
+      error,
+    });
   }
 }
 
