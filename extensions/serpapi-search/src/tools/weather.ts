@@ -8,7 +8,7 @@ const ALLOWED_PARAMS = ["q", "gl", "hl", "google_domain", "zero_trace"] as const
 function extract(raw: Record<string, unknown>): Record<string, unknown> {
   const box = (raw.answer_box ?? null) as Record<string, unknown> | null;
   return {
-    engine: "google_light",
+    engine: "google",
     answer_box: box,
   };
 }
@@ -45,7 +45,7 @@ export function createSerpApiWeatherTool(api: OpenClawPluginApi, ctx?: SerpApiTo
       const cfg = resolveToolConfig(api, ctx);
       const raw = await callSerpApi({
         cfg,
-        engine: "google_light",
+        engine: "google",
         allowedParams: ALLOWED_PARAMS,
         params: {
           q: readStringParam(args, "query", { required: true }),
