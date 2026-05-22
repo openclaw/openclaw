@@ -2052,6 +2052,52 @@ export async function emulateChromeMcpPage(params: {
   }
 }
 
+export async function startChromeMcpPerformanceTrace(params: {
+  profileName: string;
+  profile?: ChromeMcpProfileOptions;
+  userDataDir?: string;
+  targetId: string;
+  reload?: boolean;
+  autoStop?: boolean;
+  filePath?: string;
+  timeoutMs?: number;
+}): Promise<string> {
+  const result = await callTool(
+    params.profileName,
+    chromeMcpProfileOptionsFromParams(params),
+    "performance_start_trace",
+    {
+      pageId: parsePageId(params.targetId),
+      reload: params.reload ?? false,
+      autoStop: params.autoStop ?? false,
+      ...(params.filePath ? { filePath: params.filePath } : {}),
+    },
+    { timeoutMs: params.timeoutMs },
+  );
+  return extractMessageText(result);
+}
+
+export async function stopChromeMcpPerformanceTrace(params: {
+  profileName: string;
+  profile?: ChromeMcpProfileOptions;
+  userDataDir?: string;
+  targetId: string;
+  filePath?: string;
+  timeoutMs?: number;
+}): Promise<string> {
+  const result = await callTool(
+    params.profileName,
+    chromeMcpProfileOptionsFromParams(params),
+    "performance_stop_trace",
+    {
+      pageId: parsePageId(params.targetId),
+      ...(params.filePath ? { filePath: params.filePath } : {}),
+    },
+    { timeoutMs: params.timeoutMs },
+  );
+  return extractMessageText(result);
+}
+
 /** Accept or dismiss a Chrome MCP browser dialog. */
 export async function handleChromeMcpDialog(params: {
   profileName: string;

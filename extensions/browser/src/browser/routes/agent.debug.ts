@@ -10,6 +10,8 @@ import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runti
 import {
   listChromeMcpConsoleMessages,
   listChromeMcpNetworkRequests,
+  startChromeMcpPerformanceTrace,
+  stopChromeMcpPerformanceTrace,
 } from "../chrome-mcp.js";
 import { getBrowserProfileCapabilities } from "../profile-capabilities.js";
 import type { PwAiModule } from "../pw-ai-module.js";
@@ -248,14 +250,38 @@ export function registerBrowserAgentDebugRoutes(
       const snapshots = toBoolean(body.snapshots) ?? undefined;
       const sources = toBoolean(body.sources) ?? undefined;
 
-      await withPlaywrightRouteContext({
+      await withRouteTabContext({
         req,
         res,
         ctx,
         targetId,
-        feature: "trace start",
         enforceCurrentUrlAllowed: true,
-        run: async ({ cdpUrl, tab, pw, resolveTabUrl }) => {
+        run: async ({ cdpUrl, tab, profileCtx, resolveTabUrl }) => {
+          if (getBrowserProfileCapabilities(profileCtx.profile).usesChromeMcp) {
+            const output = await startChromeMcpPerformanceTrace({
+              profileName: profileCtx.profile.name,
+              profile: profileCtx.profile,
+              targetId: tab.targetId,
+              reload: false,
+              autoStop: false,
+            });
+            const url = await resolveTabUrl(tab.url);
+            res.json({
+              ok: true,
+              targetId: tab.targetId,
+              ...(url ? { url } : {}),
+              traceFormat: "chrome-devtools",
+              ...(screenshots || snapshots || sources
+                ? { unsupportedPlaywrightTraceOptions: true }
+                : {}),
+              ...(output ? { output } : {}),
+            });
+            return;
+          }
+          const pw = await requirePwAi(res, "trace start");
+          if (!pw) {
+            return;
+          }
           await pw.traceStartViaPlaywright({
             cdpUrl,
             targetId: tab.targetId,
@@ -277,24 +303,48 @@ export function registerBrowserAgentDebugRoutes(
       const targetId = resolveTargetIdFromBody(body);
       const out = toStringOrEmpty(body.path) || "";
 
-      await withPlaywrightRouteContext({
+      await withRouteTabContext({
         req,
         res,
         ctx,
         targetId,
-        feature: "trace stop",
         enforceCurrentUrlAllowed: true,
-        run: async ({ cdpUrl, tab, pw, resolveTabUrl }) => {
+        run: async ({ cdpUrl, tab, profileCtx, resolveTabUrl }) => {
+          const usesChromeMcp = getBrowserProfileCapabilities(profileCtx.profile).usesChromeMcp;
           const id = crypto.randomUUID();
           const tracePath = await resolveWritableOutputPathOrRespond({
             res,
             rootDir: DEFAULT_TRACE_DIR,
             requestedPath: out,
             scopeLabel: "trace directory",
-            defaultFileName: `browser-trace-${id}.zip`,
+            defaultFileName: usesChromeMcp
+              ? `browser-trace-${id}.json.gz`
+              : `browser-trace-${id}.zip`,
             ensureRootDir: true,
           });
           if (!tracePath) {
+            return;
+          }
+          if (usesChromeMcp) {
+            const output = await stopChromeMcpPerformanceTrace({
+              profileName: profileCtx.profile.name,
+              profile: profileCtx.profile,
+              targetId: tab.targetId,
+              filePath: tracePath,
+            });
+            const url = await resolveTabUrl(tab.url);
+            res.json({
+              ok: true,
+              targetId: tab.targetId,
+              ...(url ? { url } : {}),
+              path: path.resolve(tracePath),
+              traceFormat: "chrome-devtools",
+              ...(output ? { output } : {}),
+            });
+            return;
+          }
+          const pw = await requirePwAi(res, "trace stop");
+          if (!pw) {
             return;
           }
           await pw.traceStopViaPlaywright({

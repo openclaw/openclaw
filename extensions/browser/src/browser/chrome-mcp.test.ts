@@ -24,6 +24,8 @@ import {
   resetChromeMcpSessionsForTest,
   setChromeMcpProcessCleanupDepsForTest,
   setChromeMcpSessionFactoryForTest,
+  startChromeMcpPerformanceTrace,
+  stopChromeMcpPerformanceTrace,
   takeChromeMcpScreenshot,
   takeChromeMcpSnapshot,
   waitForChromeMcpText,
@@ -109,6 +111,12 @@ function createFakeSession(): ChromeMcpSession {
     }
     if (name === "emulate") {
       return { content: [{ type: "text", text: "Emulation configured successfully" }] };
+    }
+    if (name === "performance_start_trace") {
+      return { content: [{ type: "text", text: "The performance trace is being recorded." }] };
+    }
+    if (name === "performance_stop_trace") {
+      return { content: [{ type: "text", text: "The performance trace has been stopped." }] };
     }
     if (name === "list_console_messages") {
       return {
@@ -384,6 +392,33 @@ describe("chrome MCP page parsing", () => {
         },
       },
     ]);
+  });
+
+  it("forwards Chrome MCP performance trace start and stop calls", async () => {
+    const session = createFakeSession();
+    const factory: ChromeMcpSessionFactory = async () => session;
+    setChromeMcpSessionFactoryForTest(factory);
+
+    await expect(
+      startChromeMcpPerformanceTrace({ profileName: "chrome-live", targetId: "2" }),
+    ).resolves.toContain("being recorded");
+    await expect(
+      stopChromeMcpPerformanceTrace({
+        profileName: "chrome-live",
+        targetId: "2",
+        filePath: "/tmp/openclaw/browser-trace.json.gz",
+      }),
+    ).resolves.toContain("stopped");
+
+    const calls = (session.client.callTool as unknown as ToolCallMock).mock.calls;
+    expect(calls.at(-2)?.[0]).toEqual({
+      name: "performance_start_trace",
+      arguments: { pageId: 2, reload: false, autoStop: false },
+    });
+    expect(calls.at(-1)?.[0]).toEqual({
+      name: "performance_stop_trace",
+      arguments: { pageId: 2, filePath: "/tmp/openclaw/browser-trace.json.gz" },
+    });
   });
 
   it("keeps evaluated clickCoords fallback when Chrome MCP click_at cannot preserve options", async () => {

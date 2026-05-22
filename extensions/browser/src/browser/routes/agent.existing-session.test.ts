@@ -21,6 +21,8 @@ const chromeMcpMocks = vi.hoisted(() => ({
     throw new Error("No open dialog found");
   }),
   navigateChromeMcpPage: vi.fn(async ({ url }: { url: string }) => ({ url })),
+  startChromeMcpPerformanceTrace: vi.fn(async () => "The performance trace is being recorded."),
+  stopChromeMcpPerformanceTrace: vi.fn(async () => "The performance trace has been stopped."),
   takeChromeMcpScreenshot: vi.fn(async () => Buffer.from("png")),
   takeChromeMcpSnapshot: vi.fn(async () => ({
     id: "root",
@@ -49,8 +51,10 @@ vi.mock("../chrome-mcp.js", () => ({
   handleChromeMcpDialog: chromeMcpMocks.handleChromeMcpDialog,
   hoverChromeMcpElement: vi.fn(async () => {}),
   navigateChromeMcpPage: chromeMcpMocks.navigateChromeMcpPage,
+  startChromeMcpPerformanceTrace: chromeMcpMocks.startChromeMcpPerformanceTrace,
   pressChromeMcpKey: vi.fn(async () => {}),
   resizeChromeMcpPage: vi.fn(async () => {}),
+  stopChromeMcpPerformanceTrace: chromeMcpMocks.stopChromeMcpPerformanceTrace,
   takeChromeMcpScreenshot: chromeMcpMocks.takeChromeMcpScreenshot,
   takeChromeMcpSnapshot: chromeMcpMocks.takeChromeMcpSnapshot,
   waitForChromeMcpText: chromeMcpMocks.waitForChromeMcpText,
@@ -85,6 +89,7 @@ vi.mock("./agent.shared.js", () => createExistingSessionAgentSharedModule());
 
 const { registerBrowserAgentActRoutes } = await import("./agent.act.js");
 const { registerBrowserAgentActHookRoutes } = await import("./agent.act.hooks.js");
+const { registerBrowserAgentDebugRoutes } = await import("./agent.debug.js");
 const { registerBrowserAgentSnapshotRoutes } = await import("./agent.snapshot.js");
 const { registerBrowserAgentStorageRoutes } = await import("./agent.storage.js");
 
@@ -138,6 +143,16 @@ function getStoragePostHandler(path: string) {
   return handler;
 }
 
+function getDebugPostHandler(path: string) {
+  const { app, postHandlers } = createBrowserRouteApp();
+  registerBrowserAgentDebugRoutes(app, {
+    state: () => ({ resolved: {} }),
+  } as never);
+  const handler = postHandlers.get(path);
+  expect(handler).toBeTypeOf("function");
+  return handler;
+}
+
 function requireRecord(value: unknown, label: string): Record<string, unknown> {
   if (!value || typeof value !== "object") {
     throw new Error(`expected ${label}`);
@@ -171,6 +186,8 @@ describe("existing-session browser routes", () => {
     chromeMcpMocks.fillChromeMcpElement.mockClear();
     chromeMcpMocks.handleChromeMcpDialog.mockReset().mockRejectedValue(new Error("No open dialog found"));
     chromeMcpMocks.navigateChromeMcpPage.mockClear();
+    chromeMcpMocks.startChromeMcpPerformanceTrace.mockClear();
+    chromeMcpMocks.stopChromeMcpPerformanceTrace.mockClear();
     chromeMcpMocks.takeChromeMcpScreenshot.mockClear();
     chromeMcpMocks.takeChromeMcpSnapshot.mockClear();
     chromeMcpMocks.waitForChromeMcpText.mockClear();
@@ -684,6 +701,59 @@ describe("existing-session browser routes", () => {
       targetId: "7",
       geolocation: { latitude: 49.2827, longitude: -123.1207 },
     });
+  });
+
+  it("routes existing-session trace start through Chrome MCP performance trace", async () => {
+    const handler = getDebugPostHandler("/trace/start");
+    const response = createBrowserRouteResponse();
+
+    await handler?.(
+      {
+        params: {},
+        query: {},
+        body: { screenshots: true, snapshots: true },
+      },
+      response.res,
+    );
+
+    expect(response.statusCode).toBe(200);
+    const body = requireRecord(response.body, "response body");
+    expect(body.traceFormat).toBe("chrome-devtools");
+    expect(body.unsupportedPlaywrightTraceOptions).toBe(true);
+    expect(chromeMcpMocks.startChromeMcpPerformanceTrace).toHaveBeenCalledWith({
+      profileName: "chrome-live",
+      profile: expect.objectContaining({ name: "chrome-live", driver: "existing-session" }),
+      targetId: "7",
+      reload: false,
+      autoStop: false,
+    });
+  });
+
+  it("routes existing-session trace stop through Chrome MCP performance trace", async () => {
+    const handler = getDebugPostHandler("/trace/stop");
+    const response = createBrowserRouteResponse();
+
+    await handler?.(
+      {
+        params: {},
+        query: {},
+        body: { path: "trace-output.json.gz" },
+      },
+      response.res,
+    );
+
+    expect(response.statusCode).toBe(200);
+    const body = requireRecord(response.body, "response body");
+    expect(body.traceFormat).toBe("chrome-devtools");
+    expect(String(body.path)).toMatch(/trace-output\.json\.gz$/);
+    const params = requireRecord(
+      callArg(chromeMcpMocks.stopChromeMcpPerformanceTrace, 0, 0, "trace stop params"),
+      "trace stop params",
+    );
+    expect(params.profileName).toBe("chrome-live");
+    expectExistingSessionProfile(params.profile);
+    expect(params.targetId).toBe("7");
+    expect(String(params.filePath)).toMatch(/trace-output\.json\.gz$/);
   });
 
   it("routes existing-session media color-scheme through Chrome MCP emulate", async () => {
