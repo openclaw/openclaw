@@ -24,7 +24,11 @@ export async function callGatewayCliRuntime(
         token: opts.token,
         method,
         params,
-        timeoutMs: callOpts?.transportTimeoutMs ?? Number(opts.timeout ?? 10_000),
+        // Forward an explicit numeric timeout only; let callGateway resolve
+        // its own default when --timeout is omitted (see src/gateway/call.ts).
+        timeoutMs:
+          callOpts?.transportTimeoutMs ??
+          (opts.timeout !== undefined ? Number(opts.timeout) : undefined),
         clientName: GATEWAY_CLIENT_NAMES.CLI,
         mode: GATEWAY_CLIENT_MODES.CLI,
       }),
@@ -54,7 +58,9 @@ export async function callNodePairApprovalGatewayCliRuntime(
         token: opts.token,
         method,
         params,
-        timeoutMs: callOpts.transportTimeoutMs ?? Number(opts.timeout ?? 10_000),
+        timeoutMs:
+          callOpts.transportTimeoutMs ??
+          (opts.timeout !== undefined ? Number(opts.timeout) : undefined),
         clientName: GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
         mode: GATEWAY_CLIENT_MODES.BACKEND,
         scopes: callOpts.scopes,

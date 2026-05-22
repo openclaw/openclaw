@@ -94,7 +94,6 @@ type ApprovePairingGatewayContext = {
 };
 
 const FALLBACK_NOTICE = "Direct scope access failed; using local fallback.";
-const DEFAULT_DEVICES_TIMEOUT_MS = 10_000;
 const FALLBACK_STATE_MISMATCH_MESSAGE =
   "Gateway requires device pairing, but local fallback pairing state does not contain the gateway request.";
 const OPERATOR_ROLE = "operator";
@@ -126,7 +125,11 @@ const callGatewayCli = async (
         password: opts.password,
         method,
         params,
-        timeoutMs: Number(opts.timeout ?? DEFAULT_DEVICES_TIMEOUT_MS),
+        // Forward an explicit numeric timeout only; let callGateway resolve
+        // its own default (DEFAULT_PREAUTH_HANDSHAKE_TIMEOUT_MS + env/config
+        // overrides) when --timeout is omitted, instead of capping at the
+        // old hardcoded 10 s.
+        timeoutMs: opts.timeout !== undefined ? Number(opts.timeout) : undefined,
         clientName: GATEWAY_CLIENT_NAMES.CLI,
         mode: GATEWAY_CLIENT_MODES.CLI,
         scopes: callOpts?.scopes,

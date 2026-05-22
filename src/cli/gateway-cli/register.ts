@@ -87,13 +87,22 @@ function loadDaemonStatusGatherModule() {
 }
 
 function gatewayCallOpts(cmd: Command): Command {
-  return cmd
-    .option("--url <url>", "Gateway WebSocket URL (defaults to gateway.remote.url when configured)")
-    .option("--token <token>", "Gateway token (if required)")
-    .option("--password <password>", "Gateway password (password auth)")
-    .option("--timeout <ms>", "Timeout in ms", "10000")
-    .option("--expect-final", "Wait for final response (agent)", false)
-    .option("--json", "Output JSON", false);
+  return (
+    cmd
+      .option(
+        "--url <url>",
+        "Gateway WebSocket URL (defaults to gateway.remote.url when configured)",
+      )
+      .option("--token <token>", "Gateway token (if required)")
+      .option("--password <password>", "Gateway password (password auth)")
+      // No default: see src/cli/gateway-cli/call.ts for rationale. When
+      // --timeout is omitted, callGateway resolves DEFAULT_PREAUTH_HANDSHAKE_TIMEOUT_MS
+      // (45 000 ms by default) and honors OPENCLAW_HANDSHAKE_TIMEOUT_MS /
+      // gateway.handshakeTimeoutMs.
+      .option("--timeout <ms>", "Timeout in ms (default: gateway handshake budget)")
+      .option("--expect-final", "Wait for final response (agent)", false)
+      .option("--json", "Output JSON", false)
+  );
 }
 
 async function callGatewayCli(method: string, opts: GatewayRpcOpts, params?: unknown) {

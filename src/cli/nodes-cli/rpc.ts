@@ -17,12 +17,22 @@ async function loadNodesCliRpcRuntime(): Promise<NodesCliRpcRuntimeModule> {
   return nodesCliRpcRuntimeLoader.load();
 }
 
-export const nodesCallOpts = (cmd: Command, defaults?: { timeoutMs?: number }) =>
-  cmd
+export const nodesCallOpts = (cmd: Command, defaults?: { timeoutMs?: number }) => {
+  const withCallOpts = cmd
     .option("--url <url>", "Gateway WebSocket URL (defaults to gateway.remote.url when configured)")
-    .option("--token <token>", "Gateway token (if required)")
-    .option("--timeout <ms>", "Timeout in ms", String(defaults?.timeoutMs ?? 10_000))
-    .option("--json", "Output JSON", false);
+    .option("--token <token>", "Gateway token (if required)");
+  // See src/cli/gateway-cli/call.ts for rationale. Per-subcommand
+  // `defaults.timeoutMs` (if supplied) is honored; otherwise leave --timeout
+  // without a default so the gateway handshake budget
+  // (DEFAULT_PREAUTH_HANDSHAKE_TIMEOUT_MS, OPENCLAW_HANDSHAKE_TIMEOUT_MS, or
+  // gateway.handshakeTimeoutMs) applies.
+  if (defaults?.timeoutMs !== undefined) {
+    withCallOpts.option("--timeout <ms>", "Timeout in ms", String(defaults.timeoutMs));
+  } else {
+    withCallOpts.option("--timeout <ms>", "Timeout in ms (default: gateway handshake budget)");
+  }
+  return withCallOpts.option("--json", "Output JSON", false);
+};
 
 export const callGatewayCli = async (
   method: string,

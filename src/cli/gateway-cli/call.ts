@@ -19,7 +19,12 @@ export const gatewayCallOpts = (cmd: Command) =>
     .option("--url <url>", "Gateway WebSocket URL (defaults to gateway.remote.url when configured)")
     .option("--token <token>", "Gateway token (if required)")
     .option("--password <password>", "Gateway password (password auth)")
-    .option("--timeout <ms>", "Timeout in ms", "10000")
+    // No default: when --timeout is omitted, defer to the gateway handshake
+    // budget resolved by callGateway (DEFAULT_PREAUTH_HANDSHAKE_TIMEOUT_MS,
+    // OPENCLAW_HANDSHAKE_TIMEOUT_MS, or gateway.handshakeTimeoutMs from
+    // openclaw.json). Hardcoding "10000" here defeated the configurable
+    // default and made the slow-startup workaround unreachable from the CLI.
+    .option("--timeout <ms>", "Timeout in ms (default: gateway handshake budget)")
     .option("--expect-final", "Wait for final response (agent)", false)
     .option("--json", "Output JSON", false);
 
@@ -39,7 +44,10 @@ export const callGatewayCli = async (method: string, opts: GatewayRpcOpts, param
         method,
         params,
         expectFinal: Boolean(opts.expectFinal),
-        timeoutMs: Number(opts.timeout ?? 10_000),
+        // Only forward an explicit numeric timeout. Passing undefined lets
+        // callGateway resolve the proper default (handshake budget +
+        // env/config overrides) instead of being capped at a hardcoded 10 s.
+        timeoutMs: opts.timeout !== undefined ? Number(opts.timeout) : undefined,
         clientName: GATEWAY_CLIENT_NAMES.CLI,
         mode: GATEWAY_CLIENT_MODES.CLI,
       }),

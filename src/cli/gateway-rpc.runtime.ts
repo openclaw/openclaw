@@ -34,7 +34,10 @@ export async function callGatewayFromCliRuntime(
         deviceIdentity: extra?.deviceIdentity,
         expectFinal: extra?.expectFinal ?? Boolean(opts.expectFinal),
         scopes: extra?.scopes,
-        timeoutMs: Number(opts.timeout ?? 10_000),
+        // Forward an explicit numeric timeout only; let callGateway resolve
+        // its own default (handshake budget + env/config overrides) when
+        // --timeout is omitted, instead of hardcoding 10 s here.
+        timeoutMs: opts.timeout !== undefined ? Number(opts.timeout) : undefined,
         clientName: extra?.clientName ?? GATEWAY_CLIENT_NAMES.CLI,
         mode: extra?.mode ?? GATEWAY_CLIENT_MODES.CLI,
       }),

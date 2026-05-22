@@ -15,19 +15,24 @@ type DevicesRpcOpts = {
   scope?: string[];
 };
 
-const DEFAULT_DEVICES_TIMEOUT_MS = 10_000;
-
-const devicesCallOpts = (cmd: Command, defaults?: { timeoutMs?: number }) =>
-  cmd
+const devicesCallOpts = (cmd: Command, defaults?: { timeoutMs?: number }) => {
+  const timeoutOpt = cmd
     .option("--url <url>", "Gateway WebSocket URL (defaults to gateway.remote.url when configured)")
     .option("--token <token>", "Gateway token (if required)")
-    .option("--password <password>", "Gateway password (password auth)")
-    .option(
-      "--timeout <ms>",
-      "Timeout in ms",
-      String(defaults?.timeoutMs ?? DEFAULT_DEVICES_TIMEOUT_MS),
-    )
-    .option("--json", "Output JSON", false);
+    .option("--password <password>", "Gateway password (password auth)");
+  // When a per-subcommand default is supplied via `defaults.timeoutMs`, keep
+  // it. Otherwise leave --timeout without a default so the underlying
+  // callGateway resolves DEFAULT_PREAUTH_HANDSHAKE_TIMEOUT_MS
+  // (45 000 ms) and honors OPENCLAW_HANDSHAKE_TIMEOUT_MS /
+  // gateway.handshakeTimeoutMs. The previous behavior — hardcoding 10 000 ms
+  // here — overrode the configurable default for every device-CLI call.
+  if (defaults?.timeoutMs !== undefined) {
+    timeoutOpt.option("--timeout <ms>", "Timeout in ms", String(defaults.timeoutMs));
+  } else {
+    timeoutOpt.option("--timeout <ms>", "Timeout in ms (default: gateway handshake budget)");
+  }
+  return timeoutOpt.option("--json", "Output JSON", false);
+};
 
 export function registerDevicesCli(program: Command) {
   const devices = program.command("devices").description("Device pairing and auth tokens");
