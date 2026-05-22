@@ -1235,6 +1235,54 @@ describe("matrix monitor handler pairing account scope", () => {
     expect(recordInboundSession).not.toHaveBeenCalled();
   });
 
+  it("drops in-thread replies when the thread session record is older than the configured idle window", async () => {
+    // Regression for the ClawSweeper rank-up note that the session-record
+    // bypass should respect threadBindings.idleHours. With a 1-hour idle bound,
+    // a thread session record whose last activity is two hours old must not
+    // satisfy the natural-continuation signal, even with the flag enabled.
+    const nowMs = 1_780_000_000_000;
+    const twoHoursAgoMs = nowMs - 2 * 60 * 60 * 1000;
+    const oneHourMs = 60 * 60 * 1000;
+
+    const { handler, recordInboundSession } = createMatrixHandlerTestHarness({
+      isDirectMessage: false,
+      threadReplies: "always",
+      bypassMentionInBoundThreads: true,
+      threadBindingIdleTimeoutMs: oneHourMs,
+      roomsConfig: {
+        "!room:example.org": { requireMention: true },
+      },
+      mentionRegexes: [/@bot/i],
+      readSessionUpdatedAt: () => twoHoursAgoMs,
+      client: {
+        getEvent: async () =>
+          createMatrixTextMessageEvent({
+            eventId: "$root",
+            sender: "@alice:example.org",
+            body: "@bot please help",
+            originServerTs: nowMs - 3 * 60 * 60 * 1000,
+          }),
+      },
+      getMemberDisplayName: async () => "sender",
+    });
+
+    await handler(
+      "!room:example.org",
+      createMatrixTextMessageEvent({
+        eventId: "$thread-reply-stale",
+        body: "follow up without mention",
+        originServerTs: nowMs,
+        relatesTo: {
+          rel_type: "m.thread",
+          event_id: "$root",
+          "m.in_reply_to": { event_id: "$root" },
+        },
+      }),
+    );
+
+    expect(recordInboundSession).not.toHaveBeenCalled();
+  });
+
   it("still drops m.thread-relation replies when threadReplies is off and only a room-level binding/session exists", async () => {
     // Regression for the discriminator bug ClawSweeper flagged on #85112: with
     // threadReplies "off", resolveMatrixThreadRouting returns threadId undefined

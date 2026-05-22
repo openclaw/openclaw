@@ -584,10 +584,19 @@ When enabled, the inbound mention gate is skipped for events that satisfy ALL of
 
 - The event is routed thread-scoped — i.e. a thread route was produced for it. That requires `threadReplies` to be `"inbound"` or `"always"` (`"off"` produces no thread route even when the event carries an `m.thread` relation) AND the message to be a reply inside an existing thread (the `m.thread` root is not the message itself — top-level messages that become new thread roots under `threadReplies: "always"` do **not** qualify).
 - EITHER of these thread-scoped signals exists:
-  - A persisted session record exists for the thread's session key — written by `recordInboundSession` the first time the bot processes a message in the thread. This is the natural-continuation path: it is set automatically once the bot has replied in the thread at least once.
-  - An explicit thread-scoped runtime binding exists — created by user-driven flows like `/focus` or `/acp bind` that bind the thread root to a session.
+  - A persisted session record exists for the thread's session key AND its last activity is within `threadBindings.idleHours` — written by `recordInboundSession` the first time the bot processes a message in the thread. This is the natural-continuation path: it is set automatically once the bot has replied in the thread at least once, then it auto-expires after the configured idle window so a long-dormant thread does not silently bypass `requireMention` forever.
+  - An explicit thread-scoped runtime binding exists — created by user-driven flows like `/focus` or `/acp bind` that bind the thread root to a session. The runtime binding service already enforces both `threadBindings.idleHours` and `threadBindings.maxAgeHours` on its records, so this signal is lifecycle-bounded by the existing thread-binding policy without any extra discriminator here.
 
 Room-level bindings, room-level flat sessions, and account-level sessions do **not** satisfy the bypass — both signals are evaluated against the thread-suffixed session key resolved by `resolveMatrixThreadRouting`, so a binding or session that exists only for the room (or only for the account) will not bypass the mention gate on a thread reply.
+
+Lifecycle policy resolution (matches the order other Matrix thread-bindings use):
+
+| Setting                      | Order                                                                                                                                                                |
+| ---------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `threadBindings.idleHours`   | per-account `channels.matrix.accounts.<id>.threadBindings.idleHours` → root `channels.matrix.threadBindings.idleHours` → fallback `session.threadBindings.idleHours` |
+| `threadBindings.maxAgeHours` | per-account → root → fallback `session.threadBindings.maxAgeHours` (runtime-binding path only)                                                                       |
+
+Set `threadBindings.idleHours: 0` to disable the idle bound for the session-record path entirely (any non-expired session record satisfies the bypass; the same setting also disables idle-based auto-unfocus for the runtime-binding path).
 
 Top-level mention enforcement is unchanged: a new conversation still requires an `@bot` to engage. Inside an already-engaged thread, follow-ups flow naturally. The legacy contract — "thread-binding existence alone does not bypass mention" — is preserved when this flag is absent or `false`.
 

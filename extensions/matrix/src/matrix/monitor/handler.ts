@@ -223,6 +223,13 @@ export type MatrixMonitorHandlerParams = {
   /** DM-specific threadReplies override. Falls back to threadReplies when absent. */
   dmThreadReplies?: "off" | "inbound" | "always";
   bypassMentionInBoundThreads?: boolean;
+  /**
+   * Idle window (in ms) the natural-continuation bypass honors. When >0, a
+   * thread session record is treated as fresh enough to satisfy the bypass
+   * only if its `updatedAt` timestamp is within this many ms of the current
+   * event. 0/undefined disables the idle bound (no expiry).
+   */
+  threadBindingIdleTimeoutMs?: number;
   /** DM session grouping behavior. */
   dmSessionScope?: "per-user" | "per-room";
   streaming: MatrixStreamingMode;
@@ -438,6 +445,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
     replyToMode,
     threadReplies,
     bypassMentionInBoundThreads = false,
+    threadBindingIdleTimeoutMs = 0,
     dmThreadReplies,
     dmSessionScope,
     streaming,
@@ -1049,8 +1057,20 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
               storePath: threadCheckStorePath,
               sessionKey: _route.sessionKey,
             });
-            threadSessionExists =
+            // The session record satisfies the bypass only when (a) it exists and
+            // (b) its last activity is inside the configured idle window. The
+            // runtime-binding path is already lifecycle-bounded by the binding
+            // service (resolveByConversation drops expired bindings), so the
+            // idle bound only needs to be enforced here, on the natural-
+            // continuation signal.
+            const sessionRecordPresent =
               threadSessionUpdatedAt !== undefined && threadSessionUpdatedAt !== null;
+            const idleBoundMs = Math.max(0, Math.floor(threadBindingIdleTimeoutMs));
+            const referenceTs = typeof eventTs === "number" ? eventTs : Date.now();
+            const sessionFresh =
+              idleBoundMs <= 0 ||
+              (sessionRecordPresent && referenceTs - (threadSessionUpdatedAt ?? 0) <= idleBoundMs);
+            threadSessionExists = sessionRecordPresent && sessionFresh;
           } catch {
             threadSessionExists = false;
           }

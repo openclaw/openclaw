@@ -421,6 +421,7 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
       threadReplies,
       dmThreadReplies,
       bypassMentionInBoundThreads,
+      threadBindingIdleTimeoutMs,
       dmSessionScope,
       streaming,
       previewToolProgressEnabled,
