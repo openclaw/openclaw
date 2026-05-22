@@ -95,6 +95,8 @@ type WorkerMessageListener = (message: TelegramIngressWorkerMessage) => void;
 type AsyncVoidFn = () => Promise<void>;
 type MockCallSource = { mock: { calls: Array<Array<unknown>> } };
 
+const POLLING_TEST_WATCHDOG_INTERVAL_MS = 30_000;
+
 function mockObjectArg(
   source: MockCallSource,
   label: string,
@@ -155,8 +157,10 @@ function makeBot() {
 
 function installPollingStallWatchdogHarness(dateNowSequence: readonly number[] = [0, 0]) {
   let watchdog: (() => void) | undefined;
-  const setIntervalSpy = vi.spyOn(globalThis, "setInterval").mockImplementation((fn) => {
-    watchdog = fn as () => void;
+  const setIntervalSpy = vi.spyOn(globalThis, "setInterval").mockImplementation((fn, delay) => {
+    if (delay === POLLING_TEST_WATCHDOG_INTERVAL_MS) {
+      watchdog = fn as () => void;
+    }
     return 1 as unknown as ReturnType<typeof setInterval>;
   });
   const clearIntervalSpy = vi.spyOn(globalThis, "clearInterval").mockImplementation(() => {});
@@ -173,7 +177,7 @@ function installPollingStallWatchdogHarness(dateNowSequence: readonly number[] =
 
   return {
     async waitForWatchdog() {
-      for (let attempt = 0; attempt < 20; attempt += 1) {
+      for (let attempt = 0; attempt < 200; attempt += 1) {
         if (watchdog) {
           break;
         }
