@@ -51,6 +51,8 @@ type SlackDeliverySuppressionInput = {
   };
 };
 
+const SLACK_DM_CHANNEL_ID_RE = /^D[A-Z0-9]{8,}$/i;
+
 function extractSlackSessionKind(
   sessionKey?: string | null,
 ): "direct" | "channel" | "group" | null {
@@ -75,6 +77,23 @@ function normalizeSlackThreadMatchKey(threadId?: string): string {
   return leadingEpoch ?? trimmed;
 }
 
+function normalizeSlackExactThreadMatchKey(threadId?: string): string {
+  return threadId?.trim() ?? "";
+}
+
+function resolveSlackTurnSourceDefaultKind(params: {
+  turnSourceTo: string;
+  sessionKind: "direct" | "channel" | "group" | null;
+}): "user" | "channel" {
+  // Slack app conversations arrive at Codex as the concrete D-channel plus the
+  // app thread root. That live channel target must not be reinterpreted as a
+  // user id just because the backing session is direct-message shaped.
+  if (SLACK_DM_CHANNEL_ID_RE.test(params.turnSourceTo)) {
+    return "channel";
+  }
+  return params.sessionKind === "direct" ? "user" : "channel";
+}
+
 function resolveTurnSourceSlackOriginTarget(request: ApprovalRequest): SlackOriginTarget | null {
   const turnSourceChannel = normalizeLowercaseStringOrEmpty(request.request.turnSourceChannel);
   const turnSourceTo = normalizeOptionalString(request.request.turnSourceTo) ?? "";
@@ -83,7 +102,7 @@ function resolveTurnSourceSlackOriginTarget(request: ApprovalRequest): SlackOrig
   }
   const sessionKind = extractSlackSessionKind(request.request.sessionKey ?? undefined);
   const parsed = parseSlackTarget(turnSourceTo, {
-    defaultKind: sessionKind === "direct" ? "user" : "channel",
+    defaultKind: resolveSlackTurnSourceDefaultKind({ turnSourceTo, sessionKind }),
   });
   if (!parsed) {
     return null;
@@ -133,8 +152,28 @@ function normalizeSlackOriginTarget(target: SlackOriginTarget): SlackOriginTarge
   };
 }
 
-function slackTargetsMatch(a: SlackOriginTarget, b: SlackOriginTarget): boolean {
+function parseComparableSlackTarget(target: SlackOriginTarget) {
+  return parseSlackTarget(target.to, { defaultKind: "channel" });
+}
+
+function isSlackDmChannelToUserRoutePair(a: SlackOriginTarget, b: SlackOriginTarget): boolean {
+  const left = parseComparableSlackTarget(a);
+  const right = parseComparableSlackTarget(b);
+  if (!left || !right) {
+    return false;
+  }
   return (
+    (left.kind === "channel" && SLACK_DM_CHANNEL_ID_RE.test(left.id) && right.kind === "user") ||
+    (right.kind === "channel" && SLACK_DM_CHANNEL_ID_RE.test(right.id) && left.kind === "user")
+  );
+}
+
+function slackTargetsMatch(a: SlackOriginTarget, b: SlackOriginTarget): boolean {
+  const threadKey = normalizeSlackThreadMatchKey(a.threadId);
+  if (threadKey !== normalizeSlackThreadMatchKey(b.threadId)) {
+    return false;
+  }
+  if (
     channelRouteTargetsMatchExact({
       left: {
         channel: "slack",
@@ -144,7 +183,15 @@ function slackTargetsMatch(a: SlackOriginTarget, b: SlackOriginTarget): boolean 
         channel: "slack",
         to: b.to,
       },
-    }) && normalizeSlackThreadMatchKey(a.threadId) === normalizeSlackThreadMatchKey(b.threadId)
+    })
+  ) {
+    return true;
+  }
+  const exactThreadKey = normalizeSlackExactThreadMatchKey(a.threadId);
+  return Boolean(
+    exactThreadKey &&
+    exactThreadKey === normalizeSlackExactThreadMatchKey(b.threadId) &&
+    isSlackDmChannelToUserRoutePair(a, b),
   );
 }
 
