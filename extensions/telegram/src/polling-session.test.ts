@@ -157,9 +157,16 @@ function makeBot() {
 
 function installPollingStallWatchdogHarness(dateNowSequence: readonly number[] = [0, 0]) {
   let watchdog: (() => void) | undefined;
+  let resolveWatchdog: ((fn: () => void) => void) | undefined;
+  const watchdogReady = new Promise<() => void>((resolve) => {
+    resolveWatchdog = resolve;
+  });
+  const realSetTimeout = globalThis.setTimeout;
+  const realClearTimeout = globalThis.clearTimeout;
   const setIntervalSpy = vi.spyOn(globalThis, "setInterval").mockImplementation((fn, delay) => {
     if (delay === POLLING_TEST_WATCHDOG_INTERVAL_MS) {
       watchdog = fn as () => void;
+      resolveWatchdog?.(watchdog);
     }
     return 1 as unknown as ReturnType<typeof setInterval>;
   });
@@ -177,15 +184,24 @@ function installPollingStallWatchdogHarness(dateNowSequence: readonly number[] =
 
   return {
     async waitForWatchdog() {
-      for (let attempt = 0; attempt < 200; attempt += 1) {
-        if (watchdog) {
-          break;
-        }
-        await Promise.resolve();
-        await new Promise<void>((resolve) => setImmediate(resolve));
+      if (watchdog) {
+        return watchdog;
       }
-      expect(watchdog).toBeTypeOf("function");
-      return watchdog;
+      return await new Promise<() => void>((resolve, reject) => {
+        const timeout = realSetTimeout(() => {
+          reject(new Error("Timed out waiting for polling watchdog interval registration"));
+        }, 5_000);
+        watchdogReady.then(
+          (fn) => {
+            realClearTimeout(timeout);
+            resolve(fn);
+          },
+          (error: unknown) => {
+            realClearTimeout(timeout);
+            reject(error);
+          },
+        );
+      });
     },
     setNow(now: number) {
       dateNowSpy.mockReset();
