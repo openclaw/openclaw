@@ -115,6 +115,7 @@ export type AppViewState = {
   chatModelCatalog: ModelCatalogEntry[];
   sessionSwitchNotice: { id: number; text: string } | null;
   sessionSwitchFlashKey: string | null;
+  chatSessionSearchOpen: boolean;
   chatSessionPickerOpen: boolean;
   chatSessionPickerSurface: "desktop" | "mobile" | null;
   chatSessionPickerQuery: string;

@@ -234,6 +234,7 @@ export class OpenClawApp extends LitElement {
   @state() chatModelCatalog: ModelCatalogEntry[] = [];
   @state() sessionSwitchNotice: { id: number; text: string } | null = null;
   @state() sessionSwitchFlashKey: string | null = null;
+  @state() chatSessionSearchOpen = false;
   @state() chatSessionPickerOpen = false;
   @state() chatSessionPickerSurface: "desktop" | "mobile" | null = null;
   @state() chatSessionPickerQuery = "";
