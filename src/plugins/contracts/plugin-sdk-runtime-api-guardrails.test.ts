@@ -380,4 +380,15 @@ describe("runtime api guardrails", () => {
       'export { setMatrixRuntime } from "./src/runtime.js";',
     ]);
   });
+
+  it("keeps WhatsApp's narrow runtime-setter entrypoint pinned to a single export", () => {
+    const setterFile = bundledPluginFile({
+      rootDir: ROOT_DIR,
+      pluginId: "whatsapp",
+      relativePath: "runtime-setter-api.ts",
+    });
+    expect(readExportStatements(setterFile)).toEqual([
+      'export { setWhatsAppRuntime } from "./src/runtime.js";',
+    ]);
+  });
 });
