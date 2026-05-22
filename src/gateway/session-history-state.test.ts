@@ -171,6 +171,81 @@ describe("SessionHistorySseState", () => {
     ).toBe(true);
   });
 
+  test("requests refresh when silent control reply completes multiple message-tool mirrors", () => {
+    const state = SessionHistorySseState.fromRawSnapshot({
+      target: { sessionId: "sess-main" },
+      rawMessages: [
+        {
+          role: "user",
+          content: [{ type: "text", text: "send both here" }],
+          __openclaw: { seq: 1 },
+        },
+      ],
+    });
+
+    state.appendInlineMessage({
+      message: {
+        role: "assistant",
+        content: [
+          {
+            type: "toolCall",
+            id: "call-message-first",
+            name: "message",
+            arguments: {
+              action: "send",
+              message: "First visible reply.",
+            },
+          },
+          {
+            type: "toolCall",
+            id: "call-message-second",
+            name: "message",
+            arguments: {
+              action: "send",
+              message: "Second visible reply.",
+            },
+          },
+        ],
+      },
+      messageSeq: 2,
+    });
+    state.appendInlineMessage({
+      message: {
+        role: "toolResult",
+        toolName: "message",
+        toolCallId: "call-message-first",
+        content: { ok: true, messageId: "first" },
+      },
+      messageSeq: 3,
+    });
+    state.appendInlineMessage({
+      message: {
+        role: "toolResult",
+        toolName: "message",
+        toolCallId: "call-message-second",
+        content: { ok: true, messageId: "second" },
+      },
+      messageSeq: 4,
+    });
+
+    const appended = state.appendInlineMessage({
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "NO_REPLY" }],
+      },
+      messageSeq: 5,
+    });
+
+    expect(appended).toEqual({ shouldRefresh: true });
+    expect(
+      state
+        .snapshot()
+        .messages.map(
+          (message) => (message as { content?: Array<{ text?: string }> }).content?.[0]?.text,
+        ),
+    ).toEqual(["send both here", "First visible reply.", "Second visible reply."]);
+  });
+
   test("does not emit a no-op hidden inline control reply", () => {
     const state = SessionHistorySseState.fromRawSnapshot({
       target: { sessionId: "sess-main" },

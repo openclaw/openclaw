@@ -841,6 +841,51 @@ describe("gateway server chat", () => {
     ).toBe(false);
   });
 
+  test("chat.history does not mirror message tool sends from unmatched results", async () => {
+    const historyMessages = await loadChatHistoryWithMessages([
+      {
+        role: "user",
+        content: [{ type: "text", text: "reply here" }],
+        timestamp: 1,
+      },
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "toolCall",
+            id: "call-message-expected",
+            name: "message",
+            arguments: {
+              action: "send",
+              message: "Should wait for matching result.",
+            },
+          },
+        ],
+        timestamp: 2,
+      },
+      {
+        role: "toolResult",
+        content: { ok: true, messageId: "wrong-result" },
+        timestamp: 3,
+      },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "NO_REPLY" }],
+        timestamp: 4,
+      },
+    ]);
+
+    expect(collectHistoryTextValues(historyMessages)).toEqual(["reply here"]);
+    expect(
+      historyMessages.some(
+        (message) =>
+          Boolean(message) &&
+          typeof message === "object" &&
+          Boolean((message as { openclawMessageToolMirror?: unknown }).openclawMessageToolMirror),
+      ),
+    ).toBe(false);
+  });
+
   test("chat.history does not mirror dry-run message tool sends", async () => {
     const historyMessages = await loadChatHistoryWithMessages([
       {

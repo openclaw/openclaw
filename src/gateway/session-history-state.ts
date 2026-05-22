@@ -254,8 +254,16 @@ export class SessionHistorySseState {
       }),
     );
     if (projectedMessages.length > this.sentHistory.messages.length) {
-      const projectedMessage = projectedMessages.at(-1);
-      if (projectedMessage) {
+      const addedMessages = projectedMessages.slice(this.sentHistory.messages.length);
+      if (addedMessages.length > 1) {
+        this.sentHistory = buildPaginatedSessionHistory({
+          messages: projectedMessages,
+          hasMore: false,
+        });
+        return { shouldRefresh: true };
+      }
+      const projectedMessage = addedMessages[0];
+      if (projectedMessage !== undefined) {
         const emittedMessage: SessionHistoryMessage =
           resolveMessageSeq(projectedMessage) === undefined
             ? (attachOpenClawTranscriptMeta(projectedMessage, {

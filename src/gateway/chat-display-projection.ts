@@ -717,9 +717,13 @@ function isSuccessfulMessageToolResult(
     return false;
   }
   const resultCallId = readMessageToolResultCallId(message);
-  if (pending.toolCallId && resultCallId && pending.toolCallId !== resultCallId) {
-    return false;
+  if (pending.toolCallId) {
+    return resultCallId === pending.toolCallId && isSuccessfulMessageToolResultPayload(message);
   }
+  return isSuccessfulMessageToolResultPayload(message);
+}
+
+function isSuccessfulMessageToolResultPayload(message: Record<string, unknown>): boolean {
   if (message.isError === true || (message.error != null && message.error !== false)) {
     return false;
   }
