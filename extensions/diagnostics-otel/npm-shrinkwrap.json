@@ -67,6 +67,7 @@
       "resolved": "https://registry.npmjs.org/@opentelemetry/api/-/api-1.9.1.tgz",
       "integrity": "sha512-gLyJlPHPZYdAk1JENA9LeHejZe1Ti77/pTeFm/nMXmQH/HFZlcS/O2XJB+L8fkbrNSqhdtlvjBVjxwUYanNH5Q==",
       "license": "Apache-2.0",
+      "peer": true,
       "engines": {
         "node": ">=8.0.0"
       }
@@ -580,6 +581,7 @@
       "resolved": "https://registry.npmjs.org/acorn/-/acorn-8.16.0.tgz",
       "integrity": "sha512-UVJyE9MttOsBQIDKw1skb9nAwQuR5wuGD3+82K6JgJlm/Y+KI92oNsMNGZCYdDsVtRHSak0pcV5Dno5+4jh9sw==",
       "license": "MIT",
+      "peer": true,
       "bin": {
         "acorn": "bin/acorn"
       },

@@ -60,4 +60,36 @@ describe("dreaming private store", () => {
       writeDreamingPrivateJson(workspaceDir, path.join("memory", "state.json"), {}),
     ).rejects.toThrow("memory/.dreams");
   });
+
+  it("rejects a symlinked memory directory before using the private store root", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const workspaceDir = await createTempWorkspace("dreaming-private-store-symlink-memory-");
+    const externalMemoryDir = await createTempWorkspace("dreaming-private-store-external-");
+    await fs.symlink(externalMemoryDir, path.join(workspaceDir, "memory"));
+
+    await expect(
+      writeDreamingPrivateJson(workspaceDir, path.join("memory", ".dreams", "state.json"), {
+        ok: true,
+      }),
+    ).rejects.toThrow("symlinked dreaming private store path");
+  });
+
+  it("rejects a symlinked .dreams directory before writing private artifacts", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const workspaceDir = await createTempWorkspace("dreaming-private-store-symlink-dreams-");
+    const memoryDir = path.join(workspaceDir, "memory");
+    const externalDreamsDir = await createTempWorkspace("dreaming-private-store-external-dreams-");
+    await fs.mkdir(memoryDir, { recursive: true });
+    await fs.symlink(externalDreamsDir, path.join(memoryDir, ".dreams"));
+
+    await expect(
+      writeDreamingPrivateJson(workspaceDir, path.join("memory", ".dreams", "state.json"), {
+        ok: true,
+      }),
+    ).rejects.toThrow("symlinked dreaming private store path");
+  });
 });
