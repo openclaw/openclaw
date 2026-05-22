@@ -252,7 +252,7 @@ function renderCronFilterIcon(hiddenCount: number) {
 }
 
 export function renderChatSessionSelect(state: AppViewState) {
-  return renderChatSessionSelectBase(state, switchChatSession);
+  return renderChatSessionSelectBase(state, switchChatSession, { surface: "desktop" });
 }
 
 function chatAutoScrollLabel(mode: ChatAutoScrollMode) {
@@ -556,7 +556,7 @@ export function renderChatMobileToggle(state: AppViewState) {
         }}
       >
         <div class="chat-controls">
-          ${renderChatSessionSelectBase(state, switchChatSession)}
+          ${renderChatSessionSelectBase(state, switchChatSession, { surface: "mobile" })}
           <div class="chat-controls__thinking">
             ${renderChatAutoScrollToggle(state)}
             <button
@@ -630,7 +630,9 @@ export function renderChatMobileToggle(state: AppViewState) {
 
 export function switchChatSession(state: AppViewState, nextSessionKey: string) {
   const previousSessionKey = state.sessionKey;
-  const nextSessionRow = state.sessionsResult?.sessions.find((row) => row.key === nextSessionKey);
+  const nextSessionRow =
+    state.sessionsResult?.sessions.find((row) => row.key === nextSessionKey) ??
+    state.chatSessionPickerResult?.sessions.find((row) => row.key === nextSessionKey);
   const nextSessionLabel = resolveSessionDisplayName(nextSessionKey, nextSessionRow);
   resetChatStateForSessionSwitch(state, nextSessionKey);
   if (previousSessionKey !== nextSessionKey) {

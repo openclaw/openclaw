@@ -228,8 +228,13 @@ export class OpenClawApp extends LitElement {
   @state() chatModelCatalog: ModelCatalogEntry[] = [];
   @state() sessionSwitchNotice: { id: number; text: string } | null = null;
   @state() sessionSwitchFlashKey: string | null = null;
-  @state() chatSessionSearchQuery = "";
-  @state() chatSessionSearchAppliedQuery = "";
+  @state() chatSessionPickerOpen = false;
+  @state() chatSessionPickerSurface: "desktop" | "mobile" | null = null;
+  @state() chatSessionPickerQuery = "";
+  @state() chatSessionPickerAppliedQuery = "";
+  @state() chatSessionPickerLoading = false;
+  @state() chatSessionPickerError: string | null = null;
+  @state() chatSessionPickerResult: SessionsListResult | null = null;
   private sessionSwitchNoticeSeq = 0;
   private sessionSwitchNoticeTimer: number | null = null;
   private sessionSwitchFlashTimer: number | null = null;
@@ -625,18 +630,37 @@ export class OpenClawApp extends LitElement {
     }
   };
   private chatMobileControlsKeydownHandler = (e: KeyboardEvent) => {
-    if (e.key !== "Escape" || !this.chatMobileControlsOpen) {
+    if (e.key !== "Escape") {
+      return;
+    }
+    if (this.chatSessionPickerOpen) {
+      e.preventDefault();
+      this.chatSessionPickerOpen = false;
+      this.chatSessionPickerSurface = null;
+      return;
+    }
+    if (!this.chatMobileControlsOpen) {
       return;
     }
     e.preventDefault();
     this.setChatMobileControlsOpen(false, { restoreFocus: true });
   };
   private chatMobileControlsPointerdownHandler = (e: Event) => {
+    const path = e.composedPath();
+    if (this.chatSessionPickerOpen) {
+      const insidePicker = Array.from(this.querySelectorAll(".chat-controls__session-picker")).some(
+        (node) => path.includes(node),
+      );
+      if (!insidePicker) {
+        this.chatSessionPickerOpen = false;
+        this.chatSessionPickerSurface = null;
+      }
+    }
     if (!this.chatMobileControlsOpen) {
       return;
     }
     const wrapper = this.querySelector(".chat-mobile-controls-wrapper");
-    if (wrapper && e.composedPath().includes(wrapper)) {
+    if (wrapper && path.includes(wrapper)) {
       return;
     }
     this.setChatMobileControlsOpen(false);
@@ -798,6 +822,10 @@ export class OpenClawApp extends LitElement {
 
     const focusTarget = options?.restoreFocus ? this.chatMobileControlsTrigger : null;
     this.chatMobileControlsOpen = false;
+    if (this.chatSessionPickerSurface === "mobile") {
+      this.chatSessionPickerOpen = false;
+      this.chatSessionPickerSurface = null;
+    }
     this.chatMobileControlsTrigger = null;
     if (!(focusTarget instanceof HTMLElement) || !focusTarget.isConnected) {
       return;

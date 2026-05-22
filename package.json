@@ -1445,6 +1445,7 @@
     "deps:transitive-risk:report": "node scripts/transitive-manifest-risk-report.mjs",
     "deps:vuln:gate": "node scripts/dependency-vulnerability-gate.mjs",
     "dev": "node scripts/run-node.mjs",
+    "dev:ui:mock": "node --import tsx scripts/control-ui-mock-dev.ts",
     "docs:bin": "node scripts/build-docs-list.mjs",
     "docs:check-i18n-glossary": "node scripts/check-docs-i18n-glossary.mjs",
     "docs:check-links": "node scripts/docs-link-audit.mjs",
