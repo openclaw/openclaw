@@ -319,6 +319,8 @@ type SandboxImageRepairPrompter = Pick<DoctorPrompter, "confirmRuntimeRepair"> &
   note?: (message: string, title: string) => void | Promise<void>;
 };
 
+type SandboxImageBuildResult = "built" | "skipped" | "failed";
+
 async function emitSandboxRepairNote(
   prompter: Pick<SandboxImageRepairPrompter, "note">,
   message: string,
@@ -335,10 +337,10 @@ async function handleMissingSandboxImage(
   params: SandboxImageCheck,
   runtime: RuntimeEnv,
   prompter: SandboxImageRepairPrompter,
-): Promise<boolean> {
+): Promise<SandboxImageBuildResult> {
   const exists = await dockerImageExists(params.image);
   if (exists) {
-    return false;
+    return "skipped";
   }
 
   const buildHint = params.buildScript
@@ -347,21 +349,17 @@ async function handleMissingSandboxImage(
   const message = `Sandbox ${params.kind} image missing: ${params.image}. ${buildHint}`;
   await emitSandboxRepairNote(prompter, message, "Sandbox");
 
-  let built = false;
   if (params.buildScript) {
     const build = await prompter.confirmRuntimeRepair({
       message: `Build ${params.kind} sandbox image now?`,
       initialValue: true,
     });
     if (build) {
-      built = await runSandboxScript(params.buildScript, runtime);
+      return (await runSandboxScript(params.buildScript, runtime)) ? "built" : "failed";
     }
   }
 
-  if (built) {
-    return true;
-  }
-  return false;
+  return "skipped";
 }
 
 export async function detectSandboxRegistryFileIssues(): Promise<
@@ -610,6 +608,7 @@ export async function repairSandboxImages(params: {
   const changes: string[] = [];
   const checked: string[] = [];
   const warnings: string[] = [];
+  const failures: string[] = [];
   const issues = params.issues ?? (await detectSandboxImageIssues(params.cfg));
   let repaired = 0;
 
@@ -618,7 +617,7 @@ export async function repairSandboxImages(params: {
       warnings.push(sandboxImageIssueWarning(issue));
       continue;
     }
-    const built = await handleMissingSandboxImage(
+    const buildResult = await handleMissingSandboxImage(
       {
         kind: issue.imageKind,
         image: issue.image,
@@ -636,10 +635,22 @@ export async function repairSandboxImages(params: {
       params.runtime,
       params.prompter,
     );
-    if (built) {
+    if (buildResult === "built") {
       repaired++;
       checked.push(`Checked sandbox ${issue.imageKind} image ${issue.image}.`);
+    } else if (buildResult === "failed") {
+      failures.push(`Failed to build sandbox ${issue.imageKind} image ${issue.image}.`);
     }
+  }
+
+  if (failures.length > 0) {
+    return {
+      status: "failed",
+      reason: "sandbox image repair failed to build an image",
+      config: next,
+      changes: [...changes, ...checked],
+      warnings: [...warnings, ...failures],
+    };
   }
 
   if (repaired === 0 && changes.length === 0) {

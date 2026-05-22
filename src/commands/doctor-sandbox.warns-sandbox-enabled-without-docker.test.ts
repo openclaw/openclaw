@@ -5,13 +5,14 @@ import type { DoctorPrompter } from "./doctor-prompter.js";
 import type { DoctorRepairMode } from "./doctor-repair-mode.js";
 
 const runExec = vi.fn();
+const runCommandWithTimeout = vi.fn();
 const note = vi.fn();
 const inspectLegacySandboxRegistryFiles = vi.fn();
 const migrateLegacySandboxRegistryFiles = vi.fn();
 
 vi.mock("../process/exec.js", () => ({
   runExec,
-  runCommandWithTimeout: vi.fn(),
+  runCommandWithTimeout,
 }));
 
 vi.mock("../agents/sandbox.js", () => ({
@@ -60,6 +61,8 @@ describe("maybeRepairSandboxImages", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    runExec.mockReset();
+    runCommandWithTimeout.mockReset();
     inspectLegacySandboxRegistryFiles.mockResolvedValue([]);
     migrateLegacySandboxRegistryFiles.mockResolvedValue([]);
   });
@@ -471,6 +474,58 @@ describe("maybeRepairSandboxImages", () => {
         status: "skipped",
         reason: "sandbox image repair did not build an image",
         changes: [],
+      }),
+    );
+  });
+
+  it("reports attempted sandbox image build failures as failed repairs", async () => {
+    const prompter = {
+      ...mockPrompter,
+      confirmRuntimeRepair: vi.fn().mockResolvedValue(true),
+    };
+    runExec
+      .mockResolvedValueOnce({ stdout: "24.0.0", stderr: "" })
+      .mockRejectedValueOnce({ stderr: "No such image: registry.example.com/sandbox:custom" });
+    runCommandWithTimeout.mockResolvedValueOnce({
+      code: 1,
+      stdout: "",
+      stderr: "build failed",
+    });
+
+    const result = await repairSandboxImages({
+      cfg: {
+        agents: {
+          defaults: {
+            sandbox: {
+              mode: "all",
+              docker: {
+                image: "registry.example.com/sandbox:custom",
+              },
+            },
+          },
+        },
+      },
+      runtime: mockRuntime,
+      prompter,
+      issues: [
+        {
+          kind: "missing-image",
+          imageKind: "base",
+          image: "registry.example.com/sandbox:custom",
+          path: "agents.defaults.sandbox.docker.image",
+          buildScript: "package.json",
+          message: "Sandbox base image missing: registry.example.com/sandbox:custom.",
+          fixHint: "Build it with package.json.",
+        },
+      ],
+    });
+
+    expect(result).toEqual(
+      expect.objectContaining({
+        status: "failed",
+        reason: "sandbox image repair failed to build an image",
+        changes: [],
+        warnings: ["Failed to build sandbox base image registry.example.com/sandbox:custom."],
       }),
     );
   });
