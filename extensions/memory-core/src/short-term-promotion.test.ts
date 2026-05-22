@@ -1165,6 +1165,8 @@ describe("short-term promotion", () => {
     );
     expect(testing.isUnpromotableShortTermSnippet("## Decision: Move backups to S3")).toBe(false);
     expect(testing.isUnpromotableShortTermSnippet("- ## Decision: Move backups to S3")).toBe(false);
+    expect(testing.isUnpromotableShortTermSnippet("## Decision move backups to S3")).toBe(false);
+    expect(testing.isUnpromotableShortTermSnippet("- ## Decision move backups to S3")).toBe(false);
   });
 
   it("does not record placeholder-only grounded candidates for promotion", async () => {
@@ -1207,7 +1209,7 @@ describe("short-term promotion", () => {
       await writeDailyMemoryNote(workspaceDir, "2026-04-18", [
         "## Tagesnotizen",
         "- ## Entscheidungen",
-        "- ## Decision: Move backups to S3",
+        "- ## Decision move backups to S3",
       ]);
       await fs.writeFile(
         resolveShortTermRecallStorePath(workspaceDir),
@@ -1217,7 +1219,7 @@ describe("short-term promotion", () => {
             updatedAt: "2026-04-18T10:00:00.000Z",
             entries: {
               placeholder: entry("- ## Entscheidungen", 2),
-              durable: entry("- ## Decision: Move backups to S3", 3),
+              durable: entry("- ## Decision move backups to S3", 3),
             },
           },
           null,
@@ -1233,7 +1235,7 @@ describe("short-term promotion", () => {
         minUniqueQueries: 0,
       });
       expect(ranked).toHaveLength(1);
-      expect(ranked[0]?.snippet).toBe("- ## Decision: Move backups to S3");
+      expect(ranked[0]?.snippet).toBe("- ## Decision move backups to S3");
 
       const applied = await applyShortTermPromotions({
         workspaceDir,
@@ -1245,7 +1247,7 @@ describe("short-term promotion", () => {
 
       expect(applied.applied).toBe(1);
       const memoryText = await fs.readFile(path.join(workspaceDir, "MEMORY.md"), "utf-8");
-      expect(memoryText).toContain("- ## Decision: Move backups to S3");
+      expect(memoryText).toContain("- ## Decision move backups to S3");
       expect(memoryText).not.toContain("- ## Entscheidungen");
     });
   });
