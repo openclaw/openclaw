@@ -14,6 +14,7 @@ import type { loadOpenClawPlugins } from "../plugins/loader.js";
 import { getPluginModuleLoaderStats } from "../plugins/plugin-module-loader-cache.js";
 import type { PluginRegistry } from "../plugins/registry.js";
 import type { PluginServicesHandle } from "../plugins/services.js";
+import { runTasksWithConcurrency } from "../utils/run-with-concurrency.js";
 import {
   GATEWAY_EVENT_UPDATE_AVAILABLE,
   type GatewayUpdateAvailableEventPayload,
@@ -28,6 +29,7 @@ const ACP_BACKEND_READY_POLL_MS = 50;
 const PRIMARY_MODEL_PREWARM_TIMEOUT_MS = 5_000;
 const STARTUP_PROVIDER_DISCOVERY_TIMEOUT_MS = 5_000;
 const PROVIDER_AUTH_PREWARM_START_DELAY_MS = 1_000;
+const STARTUP_SESSION_LOCK_DIR_CONCURRENCY = 4;
 const SKIP_STARTUP_MODEL_PREWARM_ENV = "OPENCLAW_SKIP_STARTUP_MODEL_PREWARM";
 const QMD_STARTUP_IDLE_DELAY_MS = 120_000;
 const RESTART_SENTINEL_FILENAME = "restart-sentinel.json";
@@ -67,6 +69,10 @@ async function measureStartup<T>(
   run: () => Awaitable<T>,
 ): Promise<T> {
   return startupTrace ? startupTrace.measure(name, run) : await run();
+}
+
+async function yieldToEventLoop(): Promise<void> {
+  await new Promise<void>((resolve) => setImmediate(resolve));
 }
 
 function shouldCheckRestartSentinel(env: NodeJS.ProcessEnv = process.env): boolean {
@@ -642,29 +648,39 @@ export async function startGatewaySidecars(params: {
     log: params.log,
     run: async () => {
       try {
-        const [{ resolveStateDir }, { resolveAgentSessionDirs }, { cleanStaleLockFiles }] =
-          await Promise.all([
-            import("../config/paths.js"),
-            import("../agents/session-dirs.js"),
-            import("../agents/session-write-lock.js"),
-          ]);
+        const [
+          { resolveStateDir },
+          { resolveAgentSessionDirs },
+          { cleanStaleLockFiles },
+          { markRestartAbortedMainSessionsFromLocks },
+        ] = await Promise.all([
+          import("../config/paths.js"),
+          import("../agents/session-dirs.js"),
+          import("../agents/session-write-lock.js"),
+          import("../agents/main-session-restart-recovery.js"),
+        ]);
         const stateDir = resolveStateDir(process.env);
         const sessionDirs = await resolveAgentSessionDirs(stateDir);
-        for (const sessionsDir of sessionDirs) {
-          const result = await cleanStaleLockFiles({
-            sessionsDir,
-            config: params.cfg,
-            removeStale: true,
-            log: { warn: (message) => params.log.warn(message) },
-          });
-          if (result.cleaned.length > 0) {
-            const { markRestartAbortedMainSessionsFromLocks } =
-              await import("../agents/main-session-restart-recovery.js");
-            await markRestartAbortedMainSessionsFromLocks({
+        const cleanup = await runTasksWithConcurrency({
+          limit: STARTUP_SESSION_LOCK_DIR_CONCURRENCY,
+          tasks: sessionDirs.map((sessionsDir) => async () => {
+            await yieldToEventLoop();
+            const result = await cleanStaleLockFiles({
               sessionsDir,
-              cleanedLocks: result.cleaned,
+              config: params.cfg,
+              removeStale: true,
+              log: { warn: (message) => params.log.warn(message) },
             });
-          }
+            if (result.cleaned.length > 0) {
+              await markRestartAbortedMainSessionsFromLocks({
+                sessionsDir,
+                cleanedLocks: result.cleaned,
+              });
+            }
+          }),
+        });
+        if (cleanup.hasError) {
+          throw cleanup.firstError;
         }
       } catch (err) {
         params.log.warn(`session lock cleanup failed on startup: ${String(err)}`);
@@ -1146,6 +1162,7 @@ export const testing = {
   resolveGatewayMemoryStartupPolicy,
   scheduleProviderAuthStatePrewarm,
   schedulePrimaryModelPrewarm,
+  STARTUP_SESSION_LOCK_DIR_CONCURRENCY,
   shouldSkipStartupModelPrewarm,
   stopPostReadySidecarsAfterCloseStarted,
 };

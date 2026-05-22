@@ -36,6 +36,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Gateway/startup: bound ACP identity reconcile and stale session-lock cleanup fanout so large persisted session sets no longer monopolize the event loop during sidecar startup. Fixes #85366. Thanks @NianJiuZst.
 - Gateway: defer provider auth-state prewarm until after startup readiness so early gateway tool/session requests are not blocked by provider auth discovery. (#85272) Thanks @dutifulbob.
 - Agents/Codex: show the first plan update as a transient chat status notice without counting it as final assistant content.
 - Gateway/LaunchAgent: wait for launchd reload bootout to finish and fall back to kickstart when bootstrap races, so reload handoff does not leave the service deregistered. Fixes #84630. (#84641) Thanks @NianJiuZst.

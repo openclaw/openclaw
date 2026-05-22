@@ -14,6 +14,7 @@ import {
 } from "../../tasks/detached-task-runtime.js";
 import { resolveRequiredCompletionTerminalResult } from "../../tasks/task-completion-contract.js";
 import type { DeliveryContext } from "../../utils/delivery-context.js";
+import { runTasksWithConcurrency } from "../../utils/run-with-concurrency.js";
 import {
   AcpRuntimeError,
   formatAcpErrorChain,
@@ -93,6 +94,11 @@ const ACP_TURN_TIMEOUT_CLEANUP_GRACE_MS = 2_000;
 const ACP_TURN_TIMEOUT_REASON = "turn-timeout";
 const ACP_BACKGROUND_TASK_TEXT_MAX_LENGTH = 160;
 const ACP_BACKGROUND_TASK_PROGRESS_MAX_LENGTH = 240;
+const ACP_STARTUP_IDENTITY_RECONCILE_CONCURRENCY = 4;
+
+async function yieldToEventLoop(): Promise<void> {
+  await new Promise<void>((resolve) => setImmediate(resolve));
+}
 
 function summarizeBackgroundTaskText(text: string): string {
   const normalized = normalizeText(text) ?? "ACP background task";
@@ -242,10 +248,6 @@ export class AcpSessionManager {
   async reconcilePendingSessionIdentities(params: {
     cfg: OpenClawConfig;
   }): Promise<AcpStartupIdentityReconcileResult> {
-    let checked = 0;
-    let resolved = 0;
-    let failed = 0;
-
     let acpSessions: Awaited<ReturnType<AcpSessionManagerDeps["listAcpSessions"]>>;
     try {
       acpSessions = await this.deps.listAcpSessions({
@@ -253,58 +255,76 @@ export class AcpSessionManager {
       });
     } catch (error) {
       logVerbose(`acp-manager: startup identity scan failed: ${String(error)}`);
-      return { checked, resolved, failed: failed + 1 };
+      return { checked: 0, resolved: 0, failed: 1 };
     }
 
-    for (const session of acpSessions) {
-      if (!session.acp || !session.sessionKey) {
-        continue;
-      }
-      const currentIdentity = resolveSessionIdentityFromMeta(session.acp);
-      if (
-        !isSessionIdentityPending(currentIdentity) ||
-        !identityHasStableSessionId(currentIdentity)
-      ) {
-        continue;
-      }
-
-      checked += 1;
-      try {
-        const becameResolved = await this.withSessionActor(session.sessionKey, async () => {
-          const resolution = this.resolveSession({
-            cfg: params.cfg,
-            sessionKey: session.sessionKey,
-          });
-          if (resolution.kind !== "ready") {
-            return false;
-          }
-          const { runtime, handle, meta } = await this.ensureRuntimeHandle({
-            cfg: params.cfg,
-            sessionKey: session.sessionKey,
-            meta: resolution.meta,
-          });
-          const reconciled = await this.reconcileRuntimeSessionIdentifiers({
-            cfg: params.cfg,
-            sessionKey: session.sessionKey,
-            runtime,
-            handle,
-            meta,
-            failOnStatusError: false,
-          });
-          return !isSessionIdentityPending(resolveSessionIdentityFromMeta(reconciled.meta));
-        });
-        if (becameResolved) {
-          resolved += 1;
+    const startupTasks = acpSessions.map(
+      (session) => async (): Promise<AcpStartupIdentityReconcileResult> => {
+        if (!session.acp || !session.sessionKey) {
+          return { checked: 0, resolved: 0, failed: 0 };
         }
-      } catch (error) {
-        failed += 1;
-        logVerbose(
-          `acp-manager: startup identity reconcile failed for ${session.sessionKey}: ${String(error)}`,
-        );
-      }
-    }
+        const currentIdentity = resolveSessionIdentityFromMeta(session.acp);
+        if (
+          !isSessionIdentityPending(currentIdentity) ||
+          !identityHasStableSessionId(currentIdentity)
+        ) {
+          return { checked: 0, resolved: 0, failed: 0 };
+        }
 
-    return { checked, resolved, failed };
+        // Let the gateway service other work between startup sweep items.
+        await yieldToEventLoop();
+
+        try {
+          const becameResolved = await this.withSessionActor(session.sessionKey, async () => {
+            const resolution = this.resolveSession({
+              cfg: params.cfg,
+              sessionKey: session.sessionKey,
+            });
+            if (resolution.kind !== "ready") {
+              return false;
+            }
+            const { runtime, handle, meta } = await this.ensureRuntimeHandle({
+              cfg: params.cfg,
+              sessionKey: session.sessionKey,
+              meta: resolution.meta,
+            });
+            const reconciled = await this.reconcileRuntimeSessionIdentifiers({
+              cfg: params.cfg,
+              sessionKey: session.sessionKey,
+              runtime,
+              handle,
+              meta,
+              failOnStatusError: false,
+            });
+            return !isSessionIdentityPending(resolveSessionIdentityFromMeta(reconciled.meta));
+          });
+          return {
+            checked: 1,
+            resolved: becameResolved ? 1 : 0,
+            failed: 0,
+          };
+        } catch (error) {
+          logVerbose(
+            `acp-manager: startup identity reconcile failed for ${session.sessionKey}: ${String(error)}`,
+          );
+          return { checked: 1, resolved: 0, failed: 1 };
+        }
+      },
+    );
+
+    const startup = await runTasksWithConcurrency({
+      tasks: startupTasks,
+      limit: ACP_STARTUP_IDENTITY_RECONCILE_CONCURRENCY,
+    });
+
+    return startup.results.reduce<AcpStartupIdentityReconcileResult>(
+      (totals, current) => ({
+        checked: totals.checked + (current?.checked ?? 0),
+        resolved: totals.resolved + (current?.resolved ?? 0),
+        failed: totals.failed + (current?.failed ?? 0),
+      }),
+      { checked: 0, resolved: 0, failed: 0 },
+    );
   }
 
   async initializeSession(input: AcpInitializeSessionInput): Promise<{
