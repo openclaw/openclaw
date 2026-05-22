@@ -86,6 +86,27 @@ describe("buildBootstrapContextFiles", () => {
     expect(warnings[0]).toContain("TOOLS.md");
     expect(warnings[0]).toContain("limit 200");
   });
+  it("derives a safe display name when malformed bootstrap entries omit name", () => {
+    const file = {
+      path: "/tmp/AGENTS.md",
+      content: [
+        "# Root policy",
+        "- Required scoped instruction: read scoped AGENTS.md before editing subtree work.",
+        "x".repeat(1_000),
+      ].join("\n"),
+      missing: false,
+    } as unknown as WorkspaceBootstrapFile;
+    const warnings: string[] = [];
+
+    const [result] = buildBootstrapContextFiles([file], {
+      maxChars: 300,
+      warn: (message) => warnings.push(message),
+    });
+
+    expect(result?.content).toContain("[Policy digest from AGENTS.md]");
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toContain("workspace bootstrap file AGENTS.md");
+  });
   it("fits the rendered truncation marker inside the per-file budget", () => {
     const maxChars = DEFAULT_BOOTSTRAP_MAX_CHARS;
     const files = [

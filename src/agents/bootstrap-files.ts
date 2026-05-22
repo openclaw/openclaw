@@ -6,6 +6,7 @@ import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { resolveUserPath } from "../utils.js";
 import { resolveAgentConfig, resolveSessionAgentIds } from "./agent-scope.js";
 import { getOrLoadBootstrapFiles } from "./bootstrap-cache.js";
+import { normalizeBootstrapFileName } from "./bootstrap-file-name.js";
 import { applyBootstrapHookOverrides } from "./bootstrap-hooks.js";
 import { shouldIncludeHeartbeatGuidanceForSystemPrompt } from "./heartbeat-system-prompt.js";
 import type { EmbeddedContextFile } from "./pi-embedded-helpers.js";
@@ -166,9 +167,10 @@ function sanitizeBootstrapFiles(
   const sanitized: WorkspaceBootstrapFile[] = [];
   for (const file of files) {
     const pathValue = normalizeOptionalString(file.path) ?? "";
+    const fileName = normalizeBootstrapFileName(file.name, pathValue);
     if (!pathValue) {
       warn?.(
-        `skipping bootstrap file "${file.name}" — missing or invalid "path" field (hook may have used "filePath" instead)`,
+        `skipping bootstrap file "${fileName}" — missing or invalid "path" field (hook may have used "filePath" instead)`,
       );
       continue;
     }
@@ -182,7 +184,11 @@ function sanitizeBootstrapFiles(
       continue;
     }
     seenPaths.add(dedupeKey);
-    sanitized.push({ ...file, path: resolvedPath });
+    sanitized.push({
+      ...file,
+      name: fileName as WorkspaceBootstrapFile["name"],
+      path: resolvedPath,
+    });
   }
   return sanitized;
 }

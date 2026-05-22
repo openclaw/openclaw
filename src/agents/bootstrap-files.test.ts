@@ -60,6 +60,20 @@ function registerMalformedBootstrapFileHook() {
   });
 }
 
+function registerUndefinedNameBootstrapFileHook() {
+  registerInternalHook("agent:bootstrap", (event) => {
+    const context = event.context as AgentBootstrapHookContext;
+    context.bootstrapFiles = [
+      ...context.bootstrapFiles,
+      {
+        path: path.join(context.workspaceDir, "EXTRA.md"),
+        content: "hook content",
+        missing: false,
+      } as unknown as WorkspaceBootstrapFile,
+    ];
+  });
+}
+
 function registerDuplicateBootstrapFileHook() {
   registerInternalHook("agent:bootstrap", (event) => {
     const context = event.context as AgentBootstrapHookContext;
@@ -163,6 +177,20 @@ describe("resolveBootstrapFilesForRun", () => {
     const agentsContextFiles = context.contextFiles.filter((file) => file.path === agentsPath);
     expect(agentsContextFiles).toHaveLength(1);
     expect(agentsContextFiles[0]?.content).toBe("workspace rules");
+  });
+
+  it("normalizes hook files with undefined names before context injection", async () => {
+    registerUndefinedNameBootstrapFileHook();
+
+    const workspaceDir = await makeTempWorkspace("openclaw-bootstrap-");
+    const extraPath = path.join(workspaceDir, "EXTRA.md");
+    const files = await resolveBootstrapFilesForRun({ workspaceDir });
+    const extraFile = files.find((file) => file.path === extraPath);
+
+    expect(extraFile?.name).toBe("EXTRA.md");
+    await expect(resolveBootstrapContextForRun({ workspaceDir })).resolves.toMatchObject({
+      contextFiles: expect.arrayContaining([expect.objectContaining({ path: extraPath })]),
+    });
   });
 
   it("ignores stale workspace BOOTSTRAP.md once setup is completed", async () => {
