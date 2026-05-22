@@ -252,6 +252,14 @@ describe("runEmbeddedPiAgent incomplete-turn safety", () => {
     ).toBe(true);
     expect(
       shouldPromoteTrailingToolResultPayload({
+        prompt:
+          "Use the exec tool to run this command: hostname. Reply with the exact stdout only (trim trailing newline).",
+        toolsAllow: ["exec"],
+        attempt: execAttempt,
+      }),
+    ).toBe(true);
+    expect(
+      shouldPromoteTrailingToolResultPayload({
         prompt: "Run this command and summarize it.",
         toolsAllow: ["bash"],
         attempt: execAttempt,

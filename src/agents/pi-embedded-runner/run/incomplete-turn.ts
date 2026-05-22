@@ -436,9 +436,17 @@ function promptRequestsStdoutFinalReply(prompt?: string): boolean {
   if (!normalized.includes("stdout")) {
     return false;
   }
+  const requestsReply =
+    normalized.includes("reply") ||
+    normalized.includes("respond") ||
+    normalized.includes("answer") ||
+    prompt.includes("回复");
+  const requestsExactStdoutOnly =
+    requestsReply && (normalized.includes("exact stdout") || normalized.includes("stdout only"));
   return (
     normalized.includes("final reply") ||
     normalized.includes("final response") ||
+    requestsExactStdoutOnly ||
     prompt.includes("最终回复") ||
     prompt.includes("原样")
   );
