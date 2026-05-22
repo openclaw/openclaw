@@ -100,6 +100,10 @@ vi.mock("../../agents/pi-embedded-helpers.js", () => ({
   isRateLimitErrorMessage: (message: string) =>
     /rate.limit|too many requests|429|usage limit/i.test(message),
   isTransientHttpError: () => false,
+  classifyProviderRuntimeFailureKind: (message: string) =>
+    /invalid_encrypted_content|encrypted content could not be decrypted or parsed/i.test(message)
+      ? "replay_invalid"
+      : "unclassified",
   sanitizeUserFacingText: (text?: string) => text ?? "",
 }));
 
@@ -4745,6 +4749,46 @@ describe("runAgentTurnWithFallback", () => {
     expect(result.kind).toBe("final");
     if (result.kind === "final") {
       expect(result.payload.text).toBe(PROVIDER_CONVERSATION_STATE_ERROR_USER_MESSAGE);
+    }
+  });
+
+  it("returns a session reset hint for OpenAI encrypted replay failures", async () => {
+    state.runEmbeddedPiAgentMock.mockRejectedValueOnce(
+      new Error(
+        "400 code=invalid_encrypted_content Encrypted content could not be decrypted or parsed.",
+      ),
+    );
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const result = await runAgentTurnWithFallback({
+      commandBody: "hello",
+      followupRun: createFollowupRun(),
+      sessionCtx: {
+        Provider: "telegram",
+        MessageSid: "msg",
+      } as unknown as TemplateContext,
+      opts: {},
+      typingSignals: createMockTypingSignaler(),
+      blockReplyPipeline: null,
+      blockStreamingEnabled: false,
+      resolvedBlockStreamingBreak: "message_end",
+      applyReplyToMode: (payload) => payload,
+      shouldEmitToolResult: () => true,
+      shouldEmitToolOutput: () => false,
+      pendingToolTasks: new Set(),
+      resetSessionAfterCompactionFailure: async () => false,
+      resetSessionAfterRoleOrderingConflict: async () => false,
+      isHeartbeat: false,
+      sessionKey: "main",
+      getActiveSessionEntry: () => undefined,
+      resolvedVerboseLevel: "off",
+    });
+
+    expect(result.kind).toBe("final");
+    if (result.kind === "final") {
+      expect(result.payload.text).toBe(
+        "⚠️ Session history got out of sync. Please try again, or use /new to start a fresh session.",
+      );
     }
   });
 

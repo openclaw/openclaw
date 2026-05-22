@@ -2028,7 +2028,10 @@ export function buildOpenAIResponsesParams(
     {
       includeSystemPrompt: !isCodexResponses,
       supportsDeveloperRole,
-      replayReasoningItems: true,
+      // Native Codex Responses encrypted reasoning is backend-bound and can be
+      // rejected as undecryptable on later turns; replay assistant text/tools,
+      // but do not resend stored encrypted reasoning blobs.
+      replayReasoningItems: !isNativeCodexResponses,
       replayResponsesItemIds: !isNativeCodexResponses,
       authProfileId: options?.authProfileId,
       sessionId: options?.sessionId,
