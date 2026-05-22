@@ -226,6 +226,64 @@ describe("meeting-notes plugin", () => {
     ).resolves.toContain("date-qualified selectors");
   });
 
+  it("finalizes an active session when the live provider stop fails", async () => {
+    const stateDir = await makeStateDir();
+    const start = vi.fn(async (request) => {
+      await request.onUtterance({
+        text: "Alex: Action item: publish the notes even after voice disconnects.",
+      });
+      return { ok: true, session: request.session };
+    });
+    const stop = vi.fn(async () => ({ ok: false, error: "Discord voice manager is unavailable" }));
+    getMeetingNotesSourceProviderMock.mockReturnValue({
+      id: "discord-voice",
+      name: "Discord Voice",
+      sourceKinds: ["live-audio"],
+      start,
+      stop,
+    });
+    const { tool } = await createHarness(stateDir);
+
+    await tool.execute(
+      "call-1",
+      {
+        action: "start",
+        providerId: "discord-voice",
+        sessionId: "standup",
+      },
+      undefined,
+      vi.fn(),
+    );
+    const result = await tool.execute(
+      "call-2",
+      {
+        action: "stop",
+        sessionId: "standup",
+      },
+      undefined,
+      vi.fn(),
+    );
+
+    expect(result).toMatchObject({
+      details: {
+        providerStopError: "Discord voice manager is unavailable",
+        sessionId: "standup",
+      },
+    });
+    await expect(
+      fs.readFile(
+        path.join(stateDir, "meeting-notes", currentDateDir(), "standup", "summary.md"),
+        "utf8",
+      ),
+    ).resolves.toContain("publish the notes");
+    await expect(
+      fs.readFile(
+        path.join(stateDir, "meeting-notes", currentDateDir(), "standup", "metadata.json"),
+        "utf8",
+      ),
+    ).resolves.toContain("providerStopError");
+  });
+
   it("does not stop a current active session when summarizing an older dated duplicate", async () => {
     const stateDir = await makeStateDir();
     const store = new MeetingNotesStore(path.join(stateDir, "meeting-notes"));

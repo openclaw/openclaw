@@ -28,7 +28,9 @@ Notes writes the artifacts and summary.
 
 ## Enable
 
-Meeting Notes is a bundled startup plugin. It is available by default unless
+Meeting Notes is an external source plugin in this repository. It is not part of
+the core OpenClaw npm package and becomes available only when the plugin is
+installed or loaded from source. Once loaded, it is enabled by default unless
 `plugins.enabled` is false, `plugins.deny` includes `meeting-notes`, or
 `plugins.entries.meeting-notes.enabled` is false.
 

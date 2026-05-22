@@ -201,6 +201,7 @@ async function stopMeetingNotes(params: {
   const sessionId = session.sessionId;
   const providerId = selectedActive?.providerId ?? session.source.providerId;
   const provider = resolveSourceProvider(providerId, params.api);
+  let providerStopError: string | undefined;
   if (selectedActive && provider?.stop) {
     const result = await provider.stop({
       cfg: params.api.config,
@@ -209,14 +210,26 @@ async function stopMeetingNotes(params: {
       reason: "tool-stop",
     });
     if (!result.ok) {
-      throw new Error(result.error);
+      providerStopError = result.error;
     }
   }
   const stoppedAt = new Date().toISOString();
   if (selectedActive) {
     activeSessions.delete(sessionId);
   }
-  const stoppedSession = { ...session, stoppedAt };
+  const stoppedSession: MeetingNotesSessionDescriptor = {
+    ...session,
+    stoppedAt,
+    ...(providerStopError
+      ? {
+          metadata: {
+            ...session.metadata,
+            providerStopError,
+            providerStopFailedAt: stoppedAt,
+          },
+        }
+      : {}),
+  };
   if (selectedActive) {
     await params.store.writeSession(stoppedSession);
   } else {
@@ -230,6 +243,7 @@ async function stopMeetingNotes(params: {
   });
   return toolText(`Meeting notes stopped: ${sessionId}\nSummary: ${summaryPath}`, {
     sessionId,
+    ...(providerStopError ? { providerStopError } : {}),
     summary,
     summaryPath,
   });

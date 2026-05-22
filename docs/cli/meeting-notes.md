@@ -9,8 +9,9 @@ title: "Meeting Notes CLI"
 
 # `openclaw meeting-notes`
 
-Inspect meeting notes written by the bundled `meeting-notes` plugin. This CLI is
-read-only: capture, import, and summarization are owned by the `meeting_notes`
+Inspect meeting notes written by the external `meeting-notes` plugin. This CLI
+is read-only and is available when that plugin is installed or loaded from
+source. Capture, import, and summarization are owned by the `meeting_notes`
 agent tool and by configured auto-start sources.
 
 Artifacts live under the OpenClaw state directory:

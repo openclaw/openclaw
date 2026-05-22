@@ -13,6 +13,9 @@
   "openclaw": {
     "extensions": [
       "./index.ts"
-    ]
+    ],
+    "build": {
+      "bundledDist": false
+    }
   }
 }
