@@ -652,7 +652,7 @@ else
 fi
 chrome_pid=$!
 qa_status=0
-{
+(
   set -e
   echo "remote pwd: $(pwd)"
   sudo corepack enable || sudo npm install -g pnpm@11
@@ -724,7 +724,17 @@ MANTIS_SLACK_PATCH
     fi
     disown "$gateway_pid" >/dev/null 2>&1 || true
   else
-    qa_args=(openclaw qa slack --repo-root . --output-dir "$out/slack-qa" --provider-mode "$provider_mode" --model "$primary_model" --alt-model "$alternate_model" --credential-source "$credential_source" --credential-role "$credential_role")
+    slack_qa_output_dir=".artifacts/qa-e2e/mantis/$(basename "$out")/slack-qa"
+    rm -rf "$slack_qa_output_dir" "$out/slack-qa"
+    mkdir -p "$(dirname "$slack_qa_output_dir")" "$out/slack-qa"
+    copy_slack_qa_artifacts() {
+      rm -rf "$out/slack-qa"
+      mkdir -p "$out/slack-qa"
+      if [ -d "$slack_qa_output_dir" ]; then
+        cp -a "$slack_qa_output_dir"/. "$out/slack-qa"/
+      fi
+    }
+    qa_args=(openclaw qa slack --repo-root . --output-dir "$slack_qa_output_dir" --provider-mode "$provider_mode" --model "$primary_model" --alt-model "$alternate_model" --credential-source "$credential_source" --credential-role "$credential_role")
     if [ "$fast_mode" = "1" ]; then
       qa_args+=(--fast)
     fi
@@ -847,6 +857,7 @@ MANTIS_APPROVAL_WATCHER
       else
         wait "$watcher_pid" || watcher_exit=$?
       fi
+      copy_slack_qa_artifacts
       if [ "$qa_exit" -ne 0 ]; then
         exit "$qa_exit"
       fi
@@ -854,10 +865,15 @@ MANTIS_APPROVAL_WATCHER
         exit "$watcher_exit"
       fi
     else
-      pnpm "\${qa_args[@]}" ${scenarioArgs}
+      qa_exit=0
+      pnpm "\${qa_args[@]}" ${scenarioArgs} || qa_exit=$?
+      copy_slack_qa_artifacts
+      if [ "$qa_exit" -ne 0 ]; then
+        exit "$qa_exit"
+      fi
     fi
   fi
-} >"$out/slack-desktop-command.log" 2>&1 || qa_status=$?
+) >"$out/slack-desktop-command.log" 2>&1 || qa_status=$?
 sleep 5
 scrot "$out/slack-desktop-smoke.png" || true
 if [ -n "$video_pid" ]; then
