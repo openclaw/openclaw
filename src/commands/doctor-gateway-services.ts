@@ -51,6 +51,61 @@ const EXECSTART_REPAIR_CODES = new Set<string>([
   SERVICE_AUDIT_CODES.gatewayEntrypointMismatch,
 ]);
 
+export interface GatewayServiceConfigIssue {
+  readonly code: string;
+  readonly message: string;
+  readonly detail?: string;
+  readonly level: "recommended" | "aggressive";
+}
+
+export interface GatewayServiceConfigDetection {
+  readonly status: "skipped" | "clean" | "issue";
+  readonly reason?: string;
+  readonly command?: GatewayServiceCommandConfig;
+  readonly serviceInstallEnv?: NodeJS.ProcessEnv;
+  readonly serviceWrapperPath?: string;
+  readonly serviceRewriteBlocked?: boolean;
+  readonly sourceCheckoutWarning?: string;
+  readonly showSourceCheckoutWarning?: boolean;
+  readonly tokenRefConfigured?: boolean;
+  readonly expectedGatewayToken?: string;
+  readonly runtimeChoice?: GatewayDaemonRuntime;
+  readonly needsNodeRuntime?: boolean;
+  readonly systemNodePath?: string | null;
+  readonly gatewayRuntimeWarning?: string;
+  readonly tokenWarning?: string;
+  readonly issues: GatewayServiceConfigIssue[];
+}
+
+export interface ExtraGatewayServicesDetection {
+  readonly services: readonly ExtraGatewayService[];
+  readonly legacyServices: readonly ExtraGatewayService[];
+  readonly cleanupHints: readonly string[];
+}
+
+export interface ExtraGatewayServicesRepairResult {
+  readonly removed: readonly string[];
+  readonly failed: readonly string[];
+}
+
+type GatewayServiceNoteSink = Partial<Pick<DoctorPrompter, "confirm">> & {
+  note?: (message: string, title?: string) => void | Promise<void>;
+};
+
+type GatewayServicePrompter = DoctorPrompter & GatewayServiceNoteSink;
+
+async function emitGatewayServiceNote(
+  prompter: GatewayServiceNoteSink | undefined,
+  message: string,
+  title: string,
+): Promise<void> {
+  if (typeof prompter?.note === "function") {
+    await prompter.note(message, title);
+    return;
+  }
+  note(message, title);
+}
+
 function detectGatewayRuntime(programArguments: string[] | undefined): GatewayDaemonRuntime {
   const first = programArguments?.[0];
   if (first) {
@@ -102,6 +157,7 @@ async function buildExpectedGatewayServicePlan(params: {
   port: number;
   runtime: GatewayDaemonRuntime;
   nodePath?: string;
+  warn?: (message: string, title?: string) => void;
 }) {
   return buildGatewayInstallPlan({
     env: params.serviceInstallEnv,
@@ -110,7 +166,7 @@ async function buildExpectedGatewayServicePlan(params: {
     nodePath: params.nodePath,
     existingEnvironment: params.command.environment,
     existingEnvironmentValueSources: params.command.environmentValueSources,
-    warn: (message, title) => note(message, title),
+    warn: params.warn ?? (() => {}),
     config: params.cfg,
   });
 }
@@ -136,7 +192,11 @@ async function buildGatewayServiceAuditInputs(params: {
 }
 
 async function normalizeExecutablePath(value: string): Promise<string> {
-  const resolvedPath = path.resolve(value);
+  const resolvedPath = value.startsWith("/")
+    ? path.posix.normalize(value)
+    : path.isAbsolute(value)
+      ? path.normalize(value)
+      : path.resolve(value);
   try {
     return await fs.realpath(resolvedPath);
   } catch {
@@ -184,6 +244,7 @@ function shouldDeferUpdateModeSystemdServiceRepair(params: {
 async function suppressRunningSystemdExecStartRepairs(params: {
   command: GatewayServiceCommandConfig;
   issues: { code: string }[];
+  emitNote?: boolean;
 }): Promise<boolean> {
   if (process.platform !== "linux") {
     return false;
@@ -202,7 +263,7 @@ async function suppressRunningSystemdExecStartRepairs(params: {
     params.issues.length,
     ...params.issues.filter((issue) => !isExecStartRepairIssue(issue)),
   );
-  if (params.issues.length !== before) {
+  if (params.issues.length !== before && params.emitNote !== false) {
     note(
       `Gateway service ${unitName} is running; skipped command/entrypoint rewrites for this doctor pass.`,
       "Gateway service config",
@@ -260,7 +321,7 @@ async function cleanupLegacyLaunchdService(params: {
   }
 }
 
-function classifyLegacyServices(legacyServices: ExtraGatewayService[]): {
+export function classifyLegacyServices(legacyServices: readonly ExtraGatewayService[]): {
   darwinUserServices: ExtraGatewayService[];
   linuxUserServices: ExtraGatewayService[];
   failed: string[];
@@ -349,20 +410,42 @@ async function cleanupLegacyLinuxUserServices(
   return { removed, failed };
 }
 
-export async function maybeRepairGatewayServiceConfig(
+export async function detectExtraGatewayServices(
+  options: Pick<DoctorOptions, "deep">,
+): Promise<ExtraGatewayServicesDetection> {
+  const detectedExtraServices = await findExtraGatewayServices(process.env, {
+    deep: options.deep,
+  });
+  const services = await filterInactiveExtraGatewayServices(detectedExtraServices);
+  return {
+    services,
+    legacyServices: services.filter((svc) => svc.legacy === true),
+    cleanupHints: renderGatewayServiceCleanupHints(),
+  };
+}
+
+function formatExtraGatewayServiceLine(svc: ExtraGatewayService): string {
+  return `${svc.label} (${svc.scope}, ${svc.detail})`;
+}
+
+export function formatExtraGatewayServiceFinding(svc: ExtraGatewayService): string {
+  return `Gateway-like service detected: ${formatExtraGatewayServiceLine(svc)}.`;
+}
+
+export async function detectGatewayServiceConfigIssues(
   cfg: OpenClawConfig,
   mode: "local" | "remote",
-  runtime: RuntimeEnv,
-  prompter: DoctorPrompter,
-) {
+): Promise<GatewayServiceConfigDetection> {
   if (resolveIsNixMode(process.env)) {
-    note("Nix mode detected; skip service updates.", "Gateway");
-    return;
+    return { status: "skipped", reason: "Nix mode detected; skip service updates.", issues: [] };
   }
 
   if (mode === "remote") {
-    note("Gateway mode is remote; skipped local service audit.", "Gateway");
-    return;
+    return {
+      status: "skipped",
+      reason: "Gateway mode is remote; skipped local service audit.",
+      issues: [],
+    };
   }
 
   const service = resolveGatewayService();
@@ -373,20 +456,17 @@ export async function maybeRepairGatewayServiceConfig(
     command = null;
   }
   if (!command) {
-    return;
+    return { status: "clean", issues: [] };
   }
   const serviceInstallEnv = buildGatewayServiceRepairEnv(command);
   const serviceWrapperPath = resolveGatewayServiceWrapperPath(command);
-  if (serviceWrapperPath) {
-    note(`Gateway service invokes ${OPENCLAW_WRAPPER_ENV_KEY}: ${serviceWrapperPath}`, "Gateway");
-  }
   const serviceLayout = await summarizeGatewayServiceLayout(command);
   const sourceCheckoutWarning = serviceLayout?.entrypointSourceCheckout
     ? [
         `Gateway service entrypoint resolves to a source checkout: ${serviceLayout.packageRootReal ?? serviceLayout.packageRoot ?? serviceLayout.entrypointReal ?? serviceLayout.entrypoint}.`,
         "Run `openclaw doctor --fix` from the intended package install, or reinstall the gateway service with `openclaw gateway install --force`.",
       ].join("\n")
-    : null;
+    : undefined;
 
   const tokenRefConfigured = Boolean(
     resolveSecretInputRef({
@@ -395,12 +475,9 @@ export async function maybeRepairGatewayServiceConfig(
     }).ref,
   );
   const gatewayTokenResolution = await resolveGatewayAuthTokenForService(cfg, process.env);
-  if (gatewayTokenResolution.unavailableReason) {
-    note(
-      `Unable to verify gateway service token drift: ${gatewayTokenResolution.unavailableReason}`,
-      "Gateway service config",
-    );
-  }
+  const tokenWarning = gatewayTokenResolution.unavailableReason
+    ? `Unable to verify gateway service token drift: ${gatewayTokenResolution.unavailableReason}`
+    : undefined;
   const expectedGatewayToken = tokenRefConfigured ? undefined : gatewayTokenResolution.token;
   const { expectedManagedServiceEnvKeys, expectedPlan, port, runtimeChoice } =
     await buildGatewayServiceAuditInputs({
@@ -415,9 +492,10 @@ export async function maybeRepairGatewayServiceConfig(
     expectedManagedServiceEnvKeys,
     expectedPort: port,
   });
+  const issues = audit.issues as GatewayServiceConfigIssue[];
   const serviceToken = readEmbeddedGatewayToken(command);
   if (tokenRefConfigured && serviceToken) {
-    audit.issues.push({
+    issues.push({
       code: SERVICE_AUDIT_CODES.gatewayTokenMismatch,
       message:
         "Gateway service OPENCLAW_GATEWAY_TOKEN should be unset when gateway.auth.token is SecretRef-managed",
@@ -425,22 +503,16 @@ export async function maybeRepairGatewayServiceConfig(
       level: "recommended",
     });
   }
-  const needsNodeRuntime = needsNodeRuntimeMigration(audit.issues);
+  const needsNodeRuntime = needsNodeRuntimeMigration(issues);
   const systemNodeInfo = needsNodeRuntime
     ? await resolveSystemNodeInfo({ env: process.env })
     : null;
   const systemNodePath = systemNodeInfo?.supported ? systemNodeInfo.path : null;
-  if (needsNodeRuntime && !systemNodePath && runtimeChoice !== "node") {
-    const warning = renderSystemNodeWarning(systemNodeInfo);
-    if (warning) {
-      note(warning, "Gateway runtime");
-    } else {
-      note(
-        "System Node 22 LTS (22.19+) or Node 24 not found. Install via Homebrew/apt/choco and rerun doctor to migrate off Bun/version managers.",
-        "Gateway runtime",
-      );
-    }
-  }
+  const gatewayRuntimeWarning =
+    needsNodeRuntime && !systemNodePath && runtimeChoice !== "node"
+      ? (renderSystemNodeWarning(systemNodeInfo) ??
+        "System Node 22 LTS (22.19+) or Node 24 not found. Install via Homebrew/apt/choco and rerun doctor to migrate off Bun/version managers.")
+      : undefined;
 
   const expectedRuntimePlan =
     needsNodeRuntime && systemNodePath
@@ -467,7 +539,7 @@ export async function maybeRepairGatewayServiceConfig(
     normalizedCurrentEntrypoint &&
     normalizedExpectedEntrypoint !== normalizedCurrentEntrypoint
   ) {
-    audit.issues.push({
+    issues.push({
       code: SERVICE_AUDIT_CODES.gatewayEntrypointMismatch,
       message: "Gateway service entrypoint does not match the current install.",
       detail: `${currentEntrypoint} -> ${expectedEntrypoint}`,
@@ -477,17 +549,102 @@ export async function maybeRepairGatewayServiceConfig(
 
   const serviceRewriteBlocked = await suppressRunningSystemdExecStartRepairs({
     command,
-    issues: audit.issues,
+    issues,
+    emitNote: false,
   });
 
-  const hasEntrypointMismatch = audit.issues.some(
+  const hasEntrypointMismatch = issues.some(
     (issue) => issue.code === SERVICE_AUDIT_CODES.gatewayEntrypointMismatch,
   );
-  const showSourceCheckoutWarning = sourceCheckoutWarning !== null && !hasEntrypointMismatch;
+  const showSourceCheckoutWarning = sourceCheckoutWarning !== undefined && !hasEntrypointMismatch;
 
-  if (audit.issues.length === 0) {
-    if (sourceCheckoutWarning !== null && !hasEntrypointMismatch) {
-      note(sourceCheckoutWarning, "Gateway service config");
+  return {
+    status:
+      issues.length > 0 ||
+      serviceRewriteBlocked ||
+      sourceCheckoutWarning ||
+      tokenWarning ||
+      gatewayRuntimeWarning
+        ? "issue"
+        : "clean",
+    command,
+    serviceInstallEnv,
+    serviceWrapperPath: serviceWrapperPath ?? undefined,
+    serviceRewriteBlocked,
+    sourceCheckoutWarning,
+    showSourceCheckoutWarning,
+    tokenRefConfigured,
+    expectedGatewayToken,
+    runtimeChoice,
+    needsNodeRuntime,
+    systemNodePath,
+    gatewayRuntimeWarning,
+    tokenWarning,
+    issues,
+  };
+}
+
+export async function repairGatewayServiceConfig(params: {
+  cfg: OpenClawConfig;
+  mode: "local" | "remote";
+  runtime: RuntimeEnv;
+  prompter: GatewayServicePrompter;
+}): Promise<void> {
+  const { cfg, mode, runtime, prompter } = params;
+  const detection = await detectGatewayServiceConfigIssues(cfg, mode);
+  if (detection.reason) {
+    await emitGatewayServiceNote(prompter, detection.reason, "Gateway");
+  }
+  if (detection.serviceWrapperPath) {
+    await emitGatewayServiceNote(
+      prompter,
+      `Gateway service invokes ${OPENCLAW_WRAPPER_ENV_KEY}: ${detection.serviceWrapperPath}`,
+      "Gateway",
+    );
+  }
+  if (detection.status === "skipped" || detection.status === "clean") {
+    if (detection.sourceCheckoutWarning && detection.showSourceCheckoutWarning) {
+      await emitGatewayServiceNote(
+        prompter,
+        detection.sourceCheckoutWarning,
+        "Gateway service config",
+      );
+    }
+    return;
+  }
+  const {
+    command,
+    expectedGatewayToken,
+    issues,
+    needsNodeRuntime,
+    runtimeChoice,
+    serviceInstallEnv,
+    serviceRewriteBlocked,
+    showSourceCheckoutWarning,
+    sourceCheckoutWarning,
+    systemNodePath,
+    tokenRefConfigured,
+  } = detection;
+  if (!command || !serviceInstallEnv || !runtimeChoice) {
+    return;
+  }
+  if (detection.tokenWarning) {
+    await emitGatewayServiceNote(prompter, detection.tokenWarning, "Gateway service config");
+  }
+  if (detection.gatewayRuntimeWarning) {
+    await emitGatewayServiceNote(prompter, detection.gatewayRuntimeWarning, "Gateway runtime");
+  }
+  if (serviceRewriteBlocked) {
+    await emitGatewayServiceNote(
+      prompter,
+      `Gateway service ${resolveSystemdUnitNameFromServicePath(command.sourcePath)} is running; skipped command/entrypoint rewrites for this doctor pass.`,
+      "Gateway service config",
+    );
+  }
+
+  if (issues.length === 0) {
+    if (sourceCheckoutWarning !== undefined && showSourceCheckoutWarning) {
+      await emitGatewayServiceNote(prompter, sourceCheckoutWarning, "Gateway service config");
     }
     return;
   }
@@ -497,35 +654,39 @@ export async function maybeRepairGatewayServiceConfig(
 
   const consolidatedLines: string[] = [];
   let emittedSourceCheckoutWarning = false;
-  if (sourceCheckoutWarning !== null && showSourceCheckoutWarning) {
+  if (sourceCheckoutWarning !== undefined && showSourceCheckoutWarning) {
     consolidatedLines.push(sourceCheckoutWarning);
     consolidatedLines.push("");
     emittedSourceCheckoutWarning = true;
   }
   consolidatedLines.push(
-    ...audit.issues.map((issue) =>
+    ...issues.map((issue) =>
       issue.detail ? `- ${issue.message} (${issue.detail})` : `- ${issue.message}`,
     ),
   );
-  note(consolidatedLines.join("\n"), "Gateway service config");
+  if (issues.length > 0) {
+    await emitGatewayServiceNote(prompter, consolidatedLines.join("\n"), "Gateway service config");
+  }
 
-  const aggressiveIssues = audit.issues.filter((issue) => issue.level === "aggressive");
+  const aggressiveIssues = issues.filter((issue) => issue.level === "aggressive");
   const needsAggressive = aggressiveIssues.length > 0;
 
   if (needsAggressive && !prompter.shouldForce) {
-    note(
+    await emitGatewayServiceNote(
+      prompter,
       "Custom or unexpected service edits detected. Rerun with --force to overwrite.",
       "Gateway service config",
     );
   }
 
   if (serviceRepairExternal) {
-    note(EXTERNAL_SERVICE_REPAIR_NOTE, "Gateway service config");
+    await emitGatewayServiceNote(prompter, EXTERNAL_SERVICE_REPAIR_NOTE, "Gateway service config");
     return;
   }
 
   if (serviceRewriteBlocked) {
-    note(
+    await emitGatewayServiceNote(
+      prompter,
       "Gateway service is running; leaving supervisor metadata unchanged. Stop the service first or use `openclaw gateway install --force` when you want to replace the active launcher.",
       "Gateway service config",
     );
@@ -539,7 +700,8 @@ export async function maybeRepairGatewayServiceConfig(
       shouldForce: prompter.shouldForce,
     })
   ) {
-    note(
+    await emitGatewayServiceNote(
+      prompter,
       "Update-mode doctor detected gateway service drift but left the live systemd unit unchanged. Review the service file and run `openclaw gateway install --force` when you want OpenClaw to replace operator-owned systemd directives.",
       "Gateway service config",
     );
@@ -566,7 +728,8 @@ export async function maybeRepairGatewayServiceConfig(
       });
   if (!repair) {
     if (!emittedSourceCheckoutWarning) {
-      note(
+      await emitGatewayServiceNote(
+        prompter,
         "Run `openclaw gateway install --force` when you want to replace the gateway service definition.",
         "Gateway service config",
       );
@@ -603,7 +766,8 @@ export async function maybeRepairGatewayServiceConfig(
         afterWrite: { mode: "auto" },
       });
       cfgForServiceInstall = nextCfg;
-      note(
+      await emitGatewayServiceNote(
+        prompter,
         expectedGatewayToken
           ? "Persisted gateway.auth.token from environment before reinstalling service."
           : "Persisted gateway.auth.token from existing service definition before reinstalling service.",
@@ -623,7 +787,11 @@ export async function maybeRepairGatewayServiceConfig(
     port: updatedPort,
     runtime: needsNodeRuntime && systemNodePath ? "node" : runtimeChoice,
     nodePath: systemNodePath ?? undefined,
+    warn: (message, title) => {
+      void emitGatewayServiceNote(prompter, message, title ?? "Gateway service config");
+    },
   });
+  const service = resolveGatewayService();
   try {
     await (updateRepairMode ? service.stage : service.install)({
       env: serviceInstallEnv,
@@ -638,30 +806,45 @@ export async function maybeRepairGatewayServiceConfig(
   }
 }
 
-export async function maybeScanExtraGatewayServices(
-  options: DoctorOptions,
+export async function maybeRepairGatewayServiceConfig(
+  cfg: OpenClawConfig,
+  mode: "local" | "remote",
   runtime: RuntimeEnv,
   prompter: DoctorPrompter,
 ) {
-  const detectedExtraServices = await findExtraGatewayServices(process.env, {
-    deep: options.deep,
-  });
-  const extraServices = await filterInactiveExtraGatewayServices(detectedExtraServices);
+  await repairGatewayServiceConfig({ cfg, mode, runtime, prompter });
+}
+
+export async function repairExtraGatewayServices(params: {
+  options: DoctorOptions;
+  runtime: RuntimeEnv;
+  prompter: DoctorPrompter;
+}): Promise<ExtraGatewayServicesRepairResult> {
+  const removed: string[] = [];
+  const failed: string[] = [];
+  const { options, runtime, prompter } = params;
+  const detection = await detectExtraGatewayServices(options);
+  const extraServices = [...detection.services];
   if (extraServices.length === 0) {
-    return;
+    return { removed, failed };
   }
 
-  note(
-    extraServices.map((svc) => `- ${svc.label} (${svc.scope}, ${svc.detail})`).join("\n"),
+  await emitGatewayServiceNote(
+    prompter,
+    extraServices.map((svc) => `- ${formatExtraGatewayServiceLine(svc)}`).join("\n"),
     "Other gateway-like services detected",
   );
 
-  const legacyServices = extraServices.filter((svc) => svc.legacy === true);
+  const legacyServices = [...detection.legacyServices];
   if (legacyServices.length > 0) {
     const serviceRepairPolicy = resolveServiceRepairPolicy();
     const serviceRepairExternal = isServiceRepairExternallyManaged(serviceRepairPolicy);
     if (serviceRepairExternal) {
-      note(EXTERNAL_SERVICE_REPAIR_NOTE, "Legacy gateway cleanup skipped");
+      await emitGatewayServiceNote(
+        prompter,
+        EXTERNAL_SERVICE_REPAIR_NOTE,
+        "Legacy gateway cleanup skipped",
+      );
     }
     const shouldRemove = serviceRepairExternal
       ? false
@@ -674,9 +857,12 @@ export async function maybeScanExtraGatewayServices(
           serviceRepairPolicy,
         );
     if (shouldRemove) {
-      const removed: string[] = [];
-      const { darwinUserServices, linuxUserServices, failed } =
-        classifyLegacyServices(legacyServices);
+      const {
+        darwinUserServices,
+        linuxUserServices,
+        failed: classifiedFailed,
+      } = classifyLegacyServices(legacyServices);
+      failed.push(...classifiedFailed);
 
       if (darwinUserServices.length > 0) {
         const result = await cleanupLegacyDarwinServices(darwinUserServices);
@@ -691,10 +877,18 @@ export async function maybeScanExtraGatewayServices(
       }
 
       if (removed.length > 0) {
-        note(removed.map((line) => `- ${line}`).join("\n"), "Legacy gateway removed");
+        await emitGatewayServiceNote(
+          prompter,
+          removed.map((line) => `- ${line}`).join("\n"),
+          "Legacy gateway removed",
+        );
       }
       if (failed.length > 0) {
-        note(failed.map((line) => `- ${line}`).join("\n"), "Legacy gateway cleanup skipped");
+        await emitGatewayServiceNote(
+          prompter,
+          failed.map((line) => `- ${line}`).join("\n"),
+          "Legacy gateway cleanup skipped",
+        );
       }
       if (removed.length > 0) {
         runtime.log("Legacy gateway services removed. Installing OpenClaw gateway next.");
@@ -702,12 +896,16 @@ export async function maybeScanExtraGatewayServices(
     }
   }
 
-  const cleanupHints = renderGatewayServiceCleanupHints();
-  if (cleanupHints.length > 0) {
-    note(cleanupHints.map((hint) => `- ${hint}`).join("\n"), "Cleanup hints");
+  if (detection.cleanupHints.length > 0) {
+    await emitGatewayServiceNote(
+      prompter,
+      detection.cleanupHints.map((hint) => `- ${hint}`).join("\n"),
+      "Cleanup hints",
+    );
   }
 
-  note(
+  await emitGatewayServiceNote(
+    prompter,
     [
       "Recommendation: run a single gateway per machine for most setups.",
       "One gateway supports multiple agents.",
@@ -715,4 +913,13 @@ export async function maybeScanExtraGatewayServices(
     ].join("\n"),
     "Gateway recommendation",
   );
+  return { removed, failed };
+}
+
+export async function maybeScanExtraGatewayServices(
+  options: DoctorOptions,
+  runtime: RuntimeEnv,
+  prompter: DoctorPrompter,
+) {
+  await repairExtraGatewayServices({ options, runtime, prompter });
 }

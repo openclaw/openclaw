@@ -129,6 +129,7 @@ function makeDoctorPrompts() {
     confirmAggressiveAutoFix: vi.fn().mockResolvedValue(true),
     confirmRuntimeRepair: vi.fn().mockResolvedValue(true),
     select: vi.fn().mockResolvedValue("node"),
+    note: mocks.note,
     shouldRepair: false,
     shouldForce: false,
     repairMode: {
@@ -1184,6 +1185,7 @@ describe("maybeScanExtraGatewayServices", () => {
       confirmAggressiveAutoFix: vi.fn(),
       confirmRuntimeRepair: vi.fn().mockResolvedValue(true),
       select: vi.fn(),
+      note: mocks.note,
       shouldRepair: false,
       shouldForce: false,
       repairMode: {

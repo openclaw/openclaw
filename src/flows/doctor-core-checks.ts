@@ -16,7 +16,7 @@ import { hasAmbiguousGatewayAuthModeConfig } from "../gateway/auth-mode-policy.j
 import { resolveGatewayAuth } from "../gateway/auth.js";
 import { defineSplitHealthCheck } from "./health-check-adapter.js";
 import { registerHealthCheck } from "./health-check-registry.js";
-import type { HealthFinding, RegisteredHealthCheck } from "./health-checks.js";
+import type { HealthFinding, HealthRepairContext, RegisteredHealthCheck } from "./health-checks.js";
 
 const BROWSER_CLAWD_PROFILE_RESIDUE_CHECK_ID = "core/doctor/browser-clawd-profile-residue";
 const FINAL_CONFIG_VALIDATION_CHECK_ID = "core/doctor/final-config-validation";
@@ -1259,6 +1259,281 @@ const gatewayPlatformNotesCheck: RegisteredHealthCheck = defineSplitHealthCheck(
   },
 });
 
+type HealthRepairNoteSink = {
+  note?: (message: string, title?: string) => void | Promise<void>;
+};
+
+function makeHealthRepairPrompter(ctx: {
+  readonly doctor?: HealthRepairContext["doctor"];
+}): DoctorPrompter & HealthRepairNoteSink {
+  const repairMode = ctx.doctor?.repairMode ?? {
+    shouldRepair: true,
+    shouldForce: ctx.doctor?.shouldForce === true,
+    nonInteractive: ctx.doctor?.options?.nonInteractive === true,
+    canPrompt: ctx.doctor?.options?.nonInteractive !== true,
+    updateInProgress: false,
+  };
+  const confirm = ctx.doctor?.confirm ?? (async () => false);
+  const confirmAutoFix = ctx.doctor?.confirmAutoFix ?? confirm;
+  const confirmAggressiveAutoFix = ctx.doctor?.confirmAggressiveAutoFix ?? confirm;
+  const confirmRuntimeRepair = ctx.doctor?.confirmRuntimeRepair ?? (async () => false);
+  return {
+    confirm,
+    confirmAutoFix,
+    confirmAggressiveAutoFix,
+    confirmRuntimeRepair,
+    select: async (_params, fallback) => fallback,
+    note: async (message: string, title?: string) => {
+      await ctx.doctor?.note?.(message, title);
+    },
+    shouldRepair: repairMode.shouldRepair,
+    shouldForce: repairMode.shouldForce,
+    repairMode,
+  };
+}
+
+const gatewayExtraServicesCheck: RegisteredHealthCheck = defineSplitHealthCheck({
+  id: "core/doctor/gateway-services/extra",
+  kind: "core",
+  description: "Extra gateway-like services are detected as structured findings.",
+  source: "doctor",
+  async detect(ctx) {
+    const { detectExtraGatewayServices, formatExtraGatewayServiceFinding } =
+      await import("../commands/doctor-gateway-services.js");
+    const detected = await detectExtraGatewayServices(ctx.doctor?.options ?? {});
+    return detected.services.map((svc) => ({
+      checkId: "core/doctor/gateway-services/extra",
+      severity: svc.legacy === true ? "warning" : "info",
+      message: formatExtraGatewayServiceFinding(svc),
+      path: svc.label,
+      fixHint:
+        svc.legacy === true
+          ? "Run `openclaw doctor --fix` to remove legacy gateway services when service repair policy permits it."
+          : "Run one gateway per machine for most setups, or isolate ports and config/state for intentional multi-gateway setups.",
+    }));
+  },
+  async repair(ctx) {
+    const { classifyLegacyServices, detectExtraGatewayServices, repairExtraGatewayServices } =
+      await import("../commands/doctor-gateway-services.js");
+    const {
+      EXTERNAL_SERVICE_REPAIR_NOTE,
+      isServiceRepairExternallyManaged,
+      resolveServiceRepairPolicy,
+    } = await import("../commands/doctor-service-repair-policy.js");
+    const detected = await detectExtraGatewayServices(ctx.doctor?.options ?? {});
+    if (detected.legacyServices.length === 0) {
+      return {
+        status: "skipped",
+        reason: "no legacy gateway services are repairable",
+        changes: [],
+        warnings: detected.services.map(
+          (svc) => `Extra gateway-like service remains: ${svc.label}`,
+        ),
+      };
+    }
+    const serviceRepairPolicy = resolveServiceRepairPolicy();
+    if (isServiceRepairExternallyManaged(serviceRepairPolicy)) {
+      return {
+        status: "skipped",
+        reason: "gateway service repair is externally managed",
+        changes: [],
+        warnings: [EXTERNAL_SERVICE_REPAIR_NOTE],
+      };
+    }
+    const { darwinUserServices, failed, linuxUserServices } = classifyLegacyServices(
+      detected.legacyServices,
+    );
+    const repairableServices = [...darwinUserServices, ...linuxUserServices];
+    if (ctx.dryRun === true) {
+      if (repairableServices.length === 0) {
+        return {
+          status: "skipped",
+          reason: "no legacy gateway services are repairable",
+          changes: [],
+          warnings: failed.map((line) => `Would skip legacy gateway service cleanup: ${line}.`),
+        };
+      }
+      return {
+        changes: repairableServices.map(
+          (svc) => `Would remove legacy gateway service ${svc.label}.`,
+        ),
+        warnings: failed.map((line) => `Would skip legacy gateway service cleanup: ${line}.`),
+        effects: repairableServices.map((svc) => ({
+          kind: "service",
+          action: "would-remove-legacy-gateway-service",
+          target: svc.label,
+          dryRunSafe: false,
+        })),
+      };
+    }
+    const repaired = await repairExtraGatewayServices({
+      options: ctx.doctor?.options ?? {},
+      runtime: ctx.runtime,
+      prompter: makeHealthRepairPrompter(ctx),
+    });
+    if (repaired.removed.length === 0) {
+      return {
+        status: "skipped",
+        reason: "no legacy gateway services were removed",
+        changes: detected.legacyServices.map(
+          (svc) => `Checked legacy gateway service ${svc.label} for removal.`,
+        ),
+        warnings: repaired.failed.map((line) => `Legacy gateway cleanup skipped: ${line}.`),
+        effects: [],
+      };
+    }
+    return {
+      changes: repaired.removed.map((line) => `Removed legacy gateway service ${line}.`),
+      warnings: repaired.failed.map((line) => `Legacy gateway cleanup skipped: ${line}.`),
+      effects: repaired.removed.map((line) => ({
+        kind: "service",
+        action: "remove-legacy-gateway-service",
+        target: line,
+        dryRunSafe: false,
+      })),
+    };
+  },
+});
+
+const gatewayServiceConfigCheck: RegisteredHealthCheck = defineSplitHealthCheck({
+  id: "core/doctor/gateway-services/config",
+  kind: "core",
+  description: "Gateway service config drift is detected as structured findings.",
+  source: "doctor",
+  async detect(ctx) {
+    const { detectGatewayServiceConfigIssues } =
+      await import("../commands/doctor-gateway-services.js");
+    const detection = await detectGatewayServiceConfigIssues(ctx.cfg, resolveDoctorMode(ctx.cfg));
+    const findings: HealthFinding[] = [];
+    if (detection.tokenWarning) {
+      findings.push({
+        checkId: "core/doctor/gateway-services/config",
+        severity: "warning",
+        message: detection.tokenWarning,
+        path: "gateway.auth.token",
+      });
+    }
+    if (detection.gatewayRuntimeWarning) {
+      findings.push({
+        checkId: "core/doctor/gateway-services/config",
+        severity: "warning",
+        message: detection.gatewayRuntimeWarning,
+        path: "gateway.runtime",
+      });
+    }
+    if (detection.sourceCheckoutWarning && detection.showSourceCheckoutWarning) {
+      findings.push(
+        noteTextToFinding({
+          checkId: "core/doctor/gateway-services/config",
+          severity: "warning",
+          text: detection.sourceCheckoutWarning,
+        }),
+      );
+    }
+    if (detection.serviceRewriteBlocked) {
+      findings.push({
+        checkId: "core/doctor/gateway-services/config",
+        severity: "warning",
+        message:
+          "Gateway service is running; command/entrypoint rewrites are blocked for this doctor pass.",
+        path: "gateway.service",
+        fixHint:
+          "Stop the service first or use `openclaw gateway install --force` when you want to replace the active launcher.",
+      });
+    }
+    findings.push(
+      ...detection.issues.map((issue) => ({
+        checkId: "core/doctor/gateway-services/config",
+        severity: "warning" as const,
+        message: issue.detail ? `${issue.message} (${issue.detail})` : issue.message,
+        path: "gateway.service",
+        fixHint:
+          "Run `openclaw doctor --fix` to update gateway service config when policy permits it.",
+      })),
+    );
+    return findings;
+  },
+  async repair(ctx) {
+    const { detectGatewayServiceConfigIssues, repairGatewayServiceConfig } =
+      await import("../commands/doctor-gateway-services.js");
+    const detection = await detectGatewayServiceConfigIssues(ctx.cfg, resolveDoctorMode(ctx.cfg));
+    if (detection.issues.length === 0) {
+      const warnings = [
+        detection.tokenWarning,
+        detection.gatewayRuntimeWarning,
+        detection.sourceCheckoutWarning,
+        detection.serviceRewriteBlocked
+          ? "Gateway service is running; leaving supervisor metadata unchanged."
+          : undefined,
+      ].filter((warning): warning is string => Boolean(warning));
+      return {
+        status: warnings.length > 0 ? "skipped" : "repaired",
+        reason:
+          warnings.length > 0 ? "gateway service config issue needs operator action" : undefined,
+        changes: [],
+        warnings,
+      };
+    }
+    if (ctx.dryRun === true) {
+      return {
+        changes: detection.issues.map((issue) =>
+          issue.detail
+            ? `Would update gateway service config for ${issue.message} (${issue.detail}).`
+            : `Would update gateway service config for ${issue.message}.`,
+        ),
+        warnings: [
+          ...(detection.serviceRewriteBlocked
+            ? [
+                "Gateway service is running; real repair would leave supervisor metadata unchanged unless the service is stopped or reinstalled with --force.",
+              ]
+            : []),
+          ...(detection.gatewayRuntimeWarning ? [detection.gatewayRuntimeWarning] : []),
+        ],
+        effects: [
+          {
+            kind: "service",
+            action: "would-update-gateway-service-config",
+            target: "openclaw-gateway",
+            dryRunSafe: false,
+          },
+        ],
+      };
+    }
+    if (detection.serviceRewriteBlocked) {
+      return {
+        status: "skipped",
+        reason: "gateway service rewrite is blocked while the service is running",
+        changes: [],
+        warnings: [
+          "Gateway service is running; leaving supervisor metadata unchanged. Stop the service first or use `openclaw gateway install --force` when you want to replace the active launcher.",
+          ...(detection.gatewayRuntimeWarning ? [detection.gatewayRuntimeWarning] : []),
+        ],
+        effects: [],
+      };
+    }
+    await repairGatewayServiceConfig({
+      cfg: ctx.cfg,
+      mode: resolveDoctorMode(ctx.cfg),
+      runtime: ctx.runtime,
+      prompter: makeHealthRepairPrompter(ctx),
+    });
+    return {
+      changes: ["Checked gateway service config repair path."],
+      warnings: detection.serviceRewriteBlocked
+        ? ["Gateway service was running; supervisor metadata may remain unchanged."]
+        : [],
+      effects: [
+        {
+          kind: "service",
+          action: "update-gateway-service-config",
+          target: "openclaw-gateway",
+          dryRunSafe: false,
+        },
+      ],
+    };
+  },
+});
+
 const browserCheck: RegisteredHealthCheck = defineSplitHealthCheck({
   id: "core/doctor/browser",
   kind: "core",
@@ -1670,6 +1945,8 @@ function createConvertedWorkflowChecks(deps: CoreHealthCheckDeps): readonly Regi
     sandboxImagesCheck,
     sandboxScopeCheck,
     legacyWhatsAppCrontabCheck,
+    gatewayExtraServicesCheck,
+    gatewayServiceConfigCheck,
     gatewayPlatformNotesCheck,
     startupChannelMaintenanceCheck,
     createSecurityCheck(deps),
