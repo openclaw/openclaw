@@ -1,7 +1,8 @@
 # @openclaw/claude
 
 OpenClaw harness plugin that delegates Anthropic-provider turns to a local
-`@openclaw/claude-app-server` process via the codex-shaped JSON-RPC protocol.
+`@zeroaltitude/claude-app-server` process via the codex-shaped JSON-RPC
+protocol.
 
 ## Architecture
 
@@ -12,34 +13,35 @@ Three pieces, two repos:
 | -------------------------------------------- | --------------------------- | ---------------------------------------- |
 | Client bridge (this package)                 | `openclaw/openclaw`         | `@openclaw/claude` (bundled extension)   |
 | Plugin manifest + harness wiring             | `openclaw/openclaw-plugins` | `@openclaw/claude` (plugin distribution) |
-| **JSON-RPC server** (spawned by this bridge) | `openclaw/openclaw-plugins` | `@openclaw/claude-app-server`            |
+| **JSON-RPC server** (spawned by this bridge) | `openclaw/openclaw-plugins` | `@zeroaltitude/claude-app-server`        |
 
 The directory name `src/app-server/` mirrors `extensions/codex/src/app-server/`
 for visual symmetry with the codex extension. In both cases the directory
 holds the **client side** of the codex-app-server protocol; the actual
 server is an external binary spawned over stdio. Codex's server is
-`@openai/codex` (third-party); ours is `@openclaw/claude-app-server`
-(ours).
+`@openai/codex` (third-party); ours is `@zeroaltitude/claude-app-server`
+(fork-preview publish path; will migrate to `@openclaw/claude-app-server`
+once the upstream PR lands and maintainers republish).
 
-## Runtime dependency on `@openclaw/claude-app-server`
+## Runtime dependency on the server
 
 This bridge spawns `openclaw-claude-app-server` (the binary published by
-`@openclaw/claude-app-server`) at turn-start. Without that binary on PATH
-or in `node_modules/.bin`, the harness cannot run.
+[`@zeroaltitude/claude-app-server`](https://www.npmjs.com/package/@zeroaltitude/claude-app-server))
+at turn-start. The server package is declared as a regular dependency in
+`extensions/claude/package.json`, so installing `@openclaw/claude` pulls
+the binary into `node_modules/.bin/openclaw-claude-app-server`
+automatically — no separate install step needed.
 
-**Pre-release status**: `@openclaw/claude-app-server` is not yet on the
-npm registry. Until 0.1.0 publishes, install it from
-`openclaw/openclaw-plugins/openclaw-claude/server/` (path or git install)
-and ensure `openclaw-claude-app-server` resolves on PATH. After publish,
-this package will declare `"@openclaw/claude-app-server": "0.1.0"` as a
-regular dependency and `npm install @openclaw/claude` will pull the
-binary in automatically. Tracked separately from the bundled-extension
-release cadence.
+The `@zeroaltitude` scope is a fork-preview publish path. Once the
+upstream OpenClaw PR lands and maintainers republish under
+`@openclaw/claude-app-server`, this dependency will switch to the
+`@openclaw` scope in a future patch.
 
 If a turn fails with `claude-app-server is not initialized` or
 `spawn openclaw-claude-app-server ENOENT`, the most likely cause is a
-missing server binary — confirm `which openclaw-claude-app-server`
-returns a path before debugging further.
+broken install — confirm `which openclaw-claude-app-server` (or
+`ls node_modules/.bin/openclaw-claude-app-server` from the OpenClaw
+checkout root) returns a path before debugging further.
 
 ## Slash commands
 
@@ -83,17 +85,17 @@ This extension registers `/claude` with subcommands:
   refreshable MCP registration. In practice catalog churn is rare for
   stable plugin sets, so this is most visible after plugin upgrades.
 
-- **`@openclaw/claude-app-server` not yet on npm**: see the dependency
-  section above. Until 0.1.0 publishes, install the server package
-  manually from `openclaw-plugins`. The bridge surfaces a clear
-  `spawn openclaw-claude-app-server ENOENT` error if the binary
-  isn't on PATH.
+- **Scope migration pending**: `@zeroaltitude/claude-app-server` is a
+  fork-preview publish path. Once the upstream OpenClaw PR lands and
+  maintainers republish under `@openclaw/claude-app-server`, this
+  package's dependency declaration will switch.
 
-- **Codex parity scope not yet covered**: event projection,
-  transcript mirroring, dynamic-tool middleware (toolResultMaxChars,
-  source-reply telemetry, namespace/deferLoading) are not yet
-  implemented at codex's level of depth. Architecturally the
-  scaffolding (`config.ts`, `protocol-validators.ts`,
-  `thread-lifecycle.ts`) is in place to absorb these in follow-up
-  passes without inflating `run-attempt.ts`. Tracked in beads
-  `openclaw-7w9`.
+- **Codex middleware — deferred items**: `toolResultMaxChars`
+  truncation is wired (`src/app-server/dynamic-tools.ts`), but a few
+  middleware items remain deferred:
+  `createAgentToolResultMiddlewareRunner({ runtime: "claude" })`
+  wiring (needs the middleware registry to support the "claude"
+  runtime label), `messagingToolSourceReplyPayloads` telemetry
+  (needs an equivalent reply-source pipeline on the claude side),
+  and namespace/deferLoading for searchable dynamic tools (needs
+  server-side support). Tracked in beads `openclaw-7w9`.
