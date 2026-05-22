@@ -291,11 +291,11 @@ describe("Dockerfile", () => {
     );
   });
 
-  it("pre-creates the OpenClaw home before switching to the node user", async () => {
+  it("pre-creates named-volume mount points before switching to the node user", async () => {
     const dockerfile = await readFile(dockerfilePath, "utf8");
     const runtimeStageIndex = dockerfile.lastIndexOf("FROM base-runtime");
     const stateDirIndex = dockerfile.indexOf(
-      "RUN install -d -m 0700 -o node -g node /home/node/.openclaw && \\",
+      "RUN install -d -m 0700 -o node -g node \\",
       runtimeStageIndex,
     );
     const userIndex = dockerfile.indexOf("USER node", runtimeStageIndex);
@@ -306,8 +306,16 @@ describe("Dockerfile", () => {
     expect(stateDirIndex).toBeGreaterThan(runtimeStageIndex);
     expect(stateDirIndex).toBeLessThan(userIndex);
     expect(dockerfile).not.toContain("mkdir -p /home/node/.openclaw");
+    expect(dockerfile).toContain("/home/node/.openclaw/workspace");
+    expect(dockerfile).toContain("/home/node/.config/openclaw");
     expect(dockerfile).toContain(
       "stat -c '%U:%G %a' /home/node/.openclaw | grep -qx 'node:node 700'",
+    );
+    expect(dockerfile).toContain(
+      "stat -c '%U:%G %a' /home/node/.openclaw/workspace | grep -qx 'node:node 700'",
+    );
+    expect(dockerfile).toContain(
+      "stat -c '%U:%G %a' /home/node/.config/openclaw | grep -qx 'node:node 700'",
     );
   });
 });
