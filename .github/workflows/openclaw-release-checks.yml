@@ -91,7 +91,6 @@ concurrency:
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
   NODE_VERSION: "24.15.0"
-  PNPM_VERSION: "11.0.8"
   OPENCLAW_CI_OPENAI_MODEL: ${{ vars.OPENCLAW_CI_OPENAI_MODEL || 'openai/gpt-5.5' }}
 
 jobs:
@@ -487,7 +486,6 @@ jobs:
         uses: ./.github/actions/setup-node-env
         with:
           node-version: ${{ env.NODE_VERSION }}
-          pnpm-version: ${{ env.PNPM_VERSION }}
           install-bun: "true"
           install-deps: "false"
 
@@ -773,7 +771,6 @@ jobs:
         uses: ./.github/actions/setup-node-env
         with:
           node-version: ${{ env.NODE_VERSION }}
-          pnpm-version: ${{ env.PNPM_VERSION }}
           install-bun: "true"
 
       - name: Build private QA runtime
@@ -845,7 +842,6 @@ jobs:
         uses: ./.github/actions/setup-node-env
         with:
           node-version: ${{ env.NODE_VERSION }}
-          pnpm-version: ${{ env.PNPM_VERSION }}
           install-bun: "true"
 
       - name: Download parity lane artifacts
@@ -911,7 +907,6 @@ jobs:
         uses: ./.github/actions/setup-node-env
         with:
           node-version: ${{ env.NODE_VERSION }}
-          pnpm-version: ${{ env.PNPM_VERSION }}
           install-bun: "true"
 
       - name: Build private QA runtime
@@ -1027,7 +1022,6 @@ jobs:
         uses: ./.github/actions/setup-node-env
         with:
           node-version: ${{ env.NODE_VERSION }}
-          pnpm-version: ${{ env.PNPM_VERSION }}
           install-bun: "true"
 
       - name: Download runtime parity artifacts
@@ -1080,7 +1074,6 @@ jobs:
         uses: ./.github/actions/setup-node-env
         with:
           node-version: ${{ env.NODE_VERSION }}
-          pnpm-version: ${{ env.PNPM_VERSION }}
           install-bun: "true"
 
       - name: Build private QA runtime
@@ -1160,7 +1153,6 @@ jobs:
         uses: ./.github/actions/setup-node-env
         with:
           node-version: ${{ env.NODE_VERSION }}
-          pnpm-version: ${{ env.PNPM_VERSION }}
           install-bun: "true"
 
       - name: Validate required QA credential env
@@ -1256,7 +1248,6 @@ jobs:
         uses: ./.github/actions/setup-node-env
         with:
           node-version: ${{ env.NODE_VERSION }}
-          pnpm-version: ${{ env.PNPM_VERSION }}
           install-bun: "true"
 
       - name: Validate required QA credential env
@@ -1355,7 +1346,6 @@ jobs:
         uses: ./.github/actions/setup-node-env
         with:
           node-version: ${{ env.NODE_VERSION }}
-          pnpm-version: ${{ env.PNPM_VERSION }}
           install-bun: "true"
 
       - name: Validate required QA credential env
@@ -1451,7 +1441,6 @@ jobs:
         uses: ./.github/actions/setup-node-env
         with:
           node-version: ${{ env.NODE_VERSION }}
-          pnpm-version: ${{ env.PNPM_VERSION }}
           install-bun: "true"
 
       - name: Validate required QA credential env
