@@ -2388,6 +2388,9 @@ describe("runCodexAppServerAttempt", () => {
       if (trigger) {
         params.trigger = trigger;
       }
+      if (trigger === "heartbeat") {
+        params.sourceReplyDeliveryMode = "message_tool_only";
+      }
       return params;
     };
 
