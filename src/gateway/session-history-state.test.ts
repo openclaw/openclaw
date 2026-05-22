@@ -102,6 +102,99 @@ describe("SessionHistorySseState", () => {
     expect(state.snapshot().messages.at(-1)?.["__openclaw"]?.seq).toBe(9);
   });
 
+  test("emits message-tool mirror when silent control reply completes inline append", () => {
+    const state = SessionHistorySseState.fromRawSnapshot({
+      target: { sessionId: "sess-main" },
+      rawMessages: [
+        {
+          role: "user",
+          content: [{ type: "text", text: "reply here" }],
+          __openclaw: { seq: 1 },
+        },
+      ],
+    });
+
+    expect(
+      state.appendInlineMessage({
+        message: {
+          role: "assistant",
+          content: [
+            {
+              type: "toolCall",
+              id: "call-message-channel-hint",
+              name: "message",
+              arguments: {
+                action: "send",
+                channel: "telegram",
+                message: "Still the current chat.",
+              },
+            },
+          ],
+        },
+        messageSeq: 2,
+      })?.messageSeq,
+    ).toBe(2);
+    expect(
+      state.appendInlineMessage({
+        message: {
+          role: "toolResult",
+          toolName: "message",
+          toolCallId: "call-message-channel-hint",
+          content: { ok: true, messageId: "24270", chatId: "current-run" },
+        },
+        messageSeq: 3,
+      })?.messageSeq,
+    ).toBe(3);
+
+    const appended = state.appendInlineMessage({
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "NO_REPLY" }],
+      },
+      messageSeq: 4,
+    });
+
+    expect(appended?.messageSeq).toBe(4);
+    expect(
+      (
+        appended?.message as {
+          content?: Array<{ text?: string }>;
+          openclawMessageToolMirror?: unknown;
+        }
+      )?.content?.[0]?.text,
+    ).toBe("Still the current chat.");
+    expect(
+      Boolean(
+        (appended?.message as { openclawMessageToolMirror?: unknown } | undefined)
+          ?.openclawMessageToolMirror,
+      ),
+    ).toBe(true);
+  });
+
+  test("does not emit a no-op hidden inline control reply", () => {
+    const state = SessionHistorySseState.fromRawSnapshot({
+      target: { sessionId: "sess-main" },
+      rawMessages: [
+        {
+          role: "user",
+          content: [{ type: "text", text: "reply here" }],
+          __openclaw: { seq: 1 },
+        },
+      ],
+    });
+
+    const appended = state.appendInlineMessage({
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "NO_REPLY" }],
+      },
+      messageSeq: 2,
+    });
+
+    expect(appended).toBeNull();
+    expect(state.snapshot().messages).toHaveLength(1);
+  });
+
   test("requests refresh when inline TTS supplement merges into an existing assistant message", () => {
     const visibleText = "Here is the answer.";
     const textSha256 = createHash("sha256").update(visibleText).digest("hex");

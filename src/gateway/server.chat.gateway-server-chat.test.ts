@@ -744,6 +744,55 @@ describe("gateway server chat", () => {
     ).toBe(true);
   });
 
+  test("chat.history mirrors current-session message tool sends with channel hints", async () => {
+    const replyText = "Still the current chat.";
+    const historyMessages = await loadChatHistoryWithMessages([
+      {
+        role: "user",
+        content: [{ type: "text", text: "reply here" }],
+        timestamp: 1,
+      },
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "toolCall",
+            id: "call-message-channel-hint",
+            name: "message",
+            arguments: {
+              action: "send",
+              channel: "telegram",
+              message: replyText,
+            },
+          },
+        ],
+        timestamp: 2,
+      },
+      {
+        role: "toolResult",
+        toolName: "message",
+        toolCallId: "call-message-channel-hint",
+        content: { ok: true, messageId: "24270", chatId: "current-run" },
+        timestamp: 3,
+      },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "NO_REPLY" }],
+        timestamp: 4,
+      },
+    ]);
+
+    expect(collectHistoryTextValues(historyMessages)).toEqual(["reply here", replyText]);
+    expect(
+      historyMessages.some(
+        (message) =>
+          Boolean(message) &&
+          typeof message === "object" &&
+          Boolean((message as { openclawMessageToolMirror?: unknown }).openclawMessageToolMirror),
+      ),
+    ).toBe(true);
+  });
+
   test("chat.history does not mirror explicitly routed message tool sends", async () => {
     const historyMessages = await loadChatHistoryWithMessages([
       {

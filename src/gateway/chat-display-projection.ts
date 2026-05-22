@@ -552,8 +552,6 @@ function hasExplicitMessageToolRoute(args: Record<string, unknown>): boolean {
     "room_id",
     "groupId",
     "group_id",
-    "provider",
-    "channel",
   ];
   return routeFields.some((field) => hasNonEmptyValue(args[field]));
 }
