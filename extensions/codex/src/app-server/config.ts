@@ -108,6 +108,7 @@ export type CodexAppServerRuntimeOptions = {
   codeModeOnly: boolean;
   requestTimeoutMs: number;
   turnCompletionIdleTimeoutMs: number;
+  postToolRawAssistantCompletionIdleTimeoutMs?: number;
   approvalPolicy: CodexAppServerEffectiveApprovalPolicy;
   sandbox: CodexAppServerSandboxMode;
   approvalsReviewer: CodexAppServerApprovalsReviewer;
@@ -135,6 +136,7 @@ export type CodexPluginConfig = {
     codeModeOnly?: boolean;
     requestTimeoutMs?: number;
     turnCompletionIdleTimeoutMs?: number;
+    postToolRawAssistantCompletionIdleTimeoutMs?: number;
     approvalPolicy?: CodexAppServerApprovalPolicy;
     sandbox?: CodexAppServerSandboxMode;
     approvalsReviewer?: CodexAppServerApprovalsReviewer;
@@ -156,6 +158,7 @@ export const CODEX_APP_SERVER_CONFIG_KEYS = [
   "codeModeOnly",
   "requestTimeoutMs",
   "turnCompletionIdleTimeoutMs",
+  "postToolRawAssistantCompletionIdleTimeoutMs",
   "approvalPolicy",
   "sandbox",
   "approvalsReviewer",
@@ -272,6 +275,7 @@ const codexPluginConfigSchema = z
         codeModeOnly: z.boolean().optional(),
         requestTimeoutMs: z.number().positive().optional(),
         turnCompletionIdleTimeoutMs: z.number().positive().optional(),
+        postToolRawAssistantCompletionIdleTimeoutMs: z.number().positive().optional(),
         approvalPolicy: codexAppServerApprovalPolicySchema.optional(),
         sandbox: codexAppServerSandboxSchema.optional(),
         approvalsReviewer: codexAppServerApprovalsReviewerSchema.optional(),
@@ -395,6 +399,14 @@ export function resolveCodexAppServerRuntimeOptions(
       config.turnCompletionIdleTimeoutMs,
       60_000,
     ),
+    ...(config.postToolRawAssistantCompletionIdleTimeoutMs !== undefined
+      ? {
+          postToolRawAssistantCompletionIdleTimeoutMs: normalizePositiveNumber(
+            config.postToolRawAssistantCompletionIdleTimeoutMs,
+            60_000,
+          ),
+        }
+      : {}),
     approvalPolicy:
       resolveApprovalPolicy(config.approvalPolicy) ??
       resolveApprovalPolicy(env.OPENCLAW_CODEX_APP_SERVER_APPROVAL_POLICY) ??
