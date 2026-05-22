@@ -3,6 +3,7 @@ import {
   assertContextEngineHostSupport,
   buildGenericCliContextEngineHostSupport,
   CODEX_APP_SERVER_CONTEXT_ENGINE_HOST,
+  evaluateContextEngineHostSupport,
   PI_EMBEDDED_CONTEXT_ENGINE_HOST,
 } from "./host-compat.js";
 import type { ContextEngine, ContextEngineHostCapability } from "./types.js";
@@ -51,6 +52,19 @@ describe("context engine host compatibility", () => {
     ).toThrow(
       'Context engine "lossless-claw" cannot run operation "agent-run" on CLI backend "claude-cli".',
     );
+  });
+
+  it("evaluates missing capabilities without throwing", () => {
+    const evaluation = evaluateContextEngineHostSupport({
+      contextEngineInfo: createEngine(["assemble-before-prompt"]).info,
+      operation: "agent-run",
+      host: buildGenericCliContextEngineHostSupport({ backendId: "claude-cli" }),
+    });
+
+    expect(evaluation).toMatchObject({
+      ok: false,
+      missingCapabilities: ["assemble-before-prompt"],
+    });
   });
 
   it("allows native Codex and Pi embedded hosts to satisfy pre-prompt assembly", () => {
