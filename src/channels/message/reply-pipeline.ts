@@ -30,6 +30,7 @@ export function resolveChannelSourceReplyDeliveryMode(params: {
   ctx: SourceReplyDeliveryModeContext;
   requested?: SourceReplyDeliveryMode;
   messageToolAvailable?: boolean;
+  defaultVisibleReplies?: "automatic" | "message_tool";
 }): SourceReplyDeliveryMode {
   return resolveSourceReplyDeliveryMode(params);
 }

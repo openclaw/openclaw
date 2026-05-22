@@ -10,33 +10,12 @@ import {
   resolveSessionAgentId,
 } from "../../agents/agent-scope.js";
 import {
-  isToolAllowedByPolicies,
-  resolveEffectiveToolPolicy,
-  resolveGroupToolPolicy,
-  resolveInheritedToolPolicyForSession,
-  resolveSubagentToolPolicyForSession,
-} from "../../agents/agent-tools.policy.js";
-import { selectAgentHarness } from "../../agents/harness/selection.js";
-import {
-  buildModelAliasIndex,
-  resolveDefaultModelForAgent,
-  resolveModelRefFromString,
-  type ModelAliasIndex,
-} from "../../agents/model-selection.js";
-import {
-  isSubagentEnvelopeSession,
-  resolveSubagentCapabilityStore,
-} from "../../agents/subagent-capabilities.js";
-import { mergeAlsoAllowPolicy, resolveToolProfilePolicy } from "../../agents/tool-policy.js";
-import {
   resolveConversationBindingRecord,
   touchConversationBindingRecord,
 } from "../../bindings/records.js";
 import { normalizeChatType } from "../../channels/chat-type.js";
-import { resolveChannelModelOverride } from "../../channels/model-overrides.js";
 import { shouldSuppressLocalExecApprovalPrompt } from "../../channels/plugins/exec-approval-local.js";
 import { applyMergePatch } from "../../config/merge-patch.js";
-import { resolveGroupSessionKey } from "../../config/sessions/group.js";
 import { appendAssistantMessageToSessionTranscript } from "../../config/sessions/transcript.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -110,7 +89,6 @@ import {
 } from "../reply-payload.js";
 import type { FinalizedMsgContext } from "../templating.js";
 import { normalizeVerboseLevel } from "../thinking.js";
-import { resolveSessionRuntimeOverrideForProvider } from "./agent-runner-execution.js";
 import { resolveConversationBindingContextFromMessage } from "./conversation-binding-input.js";
 import {
   createInternalHookEvent,
@@ -127,8 +105,8 @@ import type {
 } from "./dispatch-from-config.types.js";
 import { resolveEffectiveReplyRoute } from "./effective-reply-route.js";
 import { withFullRuntimeReplyConfig } from "./get-reply-fast-path.js";
+import { resolveHarnessSourceVisibleRepliesDefault } from "./harness-source-visible-replies.js";
 import { claimInboundDedupe, commitInboundDedupe, releaseInboundDedupe } from "./inbound-dedupe.js";
-import { resolveOriginMessageProvider } from "./origin-routing.js";
 import { waitForReplyDispatcherIdle } from "./reply-dispatcher.js";
 import type { ReplyDispatcher } from "./reply-dispatcher.types.js";
 import { replyRunRegistry, type ReplyOperation } from "./reply-run-registry.js";
@@ -140,7 +118,7 @@ import {
   isExplicitSourceReplyCommand,
   resolveSourceReplyVisibilityPolicy,
 } from "./source-reply-delivery-mode.js";
-import { resolveStoredModelOverride } from "./stored-model-override.js";
+import { resolveSourceReplyMessageToolAvailable } from "./source-reply-message-tool-availability.js";
 import { resolveRunTypingPolicy } from "./typing-policy.js";
 
 class DispatchReplyOperationAbortedError extends Error {
@@ -417,13 +395,6 @@ const createShouldEmitVerboseProgress = (params: {
   };
 };
 
-type HarnessSourceVisibleRepliesDefault = "automatic" | "message_tool";
-
-type HarnessDefaultCandidate = {
-  provider: string;
-  model?: string;
-};
-
 function createReplyDispatchEvent(
   params: Omit<PluginHookReplyDispatchEvent, "shouldSendToolSummaries"> & {
     shouldSendToolSummaries: () => boolean;
@@ -438,196 +409,6 @@ function createReplyDispatchEvent(
 
 export const testing = {
   createReplyDispatchEvent,
-};
-
-function resolveHarnessDefaultChannel(params: {
-  ctx: FinalizedMsgContext;
-  entry?: SessionEntry;
-}): string | undefined {
-  const originatingChannel =
-    typeof params.ctx.OriginatingChannel === "string" ? params.ctx.OriginatingChannel : undefined;
-
-  return (
-    params.entry?.channel ??
-    params.entry?.origin?.provider ??
-    originatingChannel ??
-    params.ctx.Provider ??
-    params.ctx.Surface
-  );
-}
-
-function resolveHarnessDefaultParentSessionKey(params: {
-  ctx: FinalizedMsgContext;
-  entry?: SessionEntry;
-}): string | undefined {
-  return (
-    params.entry?.parentSessionKey ??
-    params.ctx.ModelParentSessionKey ??
-    params.ctx.ParentSessionKey
-  );
-}
-
-function resolveTurnModelOverride(
-  replyOptions: DispatchFromConfigParams["replyOptions"],
-): string | undefined {
-  if (replyOptions?.isHeartbeat !== true) {
-    return undefined;
-  }
-  return normalizeOptionalString(replyOptions.heartbeatModelOverride);
-}
-
-function resolveChannelModelCandidate(params: {
-  aliasIndex: ModelAliasIndex;
-  cfg: OpenClawConfig;
-  ctx: FinalizedMsgContext;
-  defaultProvider: string;
-  entry?: SessionEntry;
-  parentSessionKey?: string;
-}): HarnessDefaultCandidate | undefined {
-  if (!params.cfg.channels?.modelByChannel) {
-    return undefined;
-  }
-
-  const channel = resolveHarnessDefaultChannel({
-    ctx: params.ctx,
-    entry: params.entry,
-  });
-  const channelModelOverride = resolveChannelModelOverride({
-    cfg: params.cfg,
-    channel,
-    groupId: params.entry?.groupId,
-    groupChatType: params.entry?.chatType ?? params.ctx.ChatType,
-    groupChannel: params.entry?.groupChannel ?? params.ctx.GroupChannel,
-    groupSubject: params.entry?.subject ?? params.ctx.GroupSubject,
-    parentSessionKey: params.parentSessionKey,
-  });
-  if (!channelModelOverride) {
-    return undefined;
-  }
-
-  return resolveModelRefFromString({
-    raw: channelModelOverride.model,
-    defaultProvider: params.defaultProvider,
-    aliasIndex: params.aliasIndex,
-  })?.ref;
-}
-
-function resolveStoredModelCandidate(params: {
-  defaultProvider: string;
-  entry?: SessionEntry;
-  parentSessionKey?: string;
-  sessionKey?: string;
-  sessionStore?: Record<string, SessionEntry>;
-}): HarnessDefaultCandidate | undefined {
-  const storedModelRef = resolveStoredModelOverride({
-    sessionEntry: params.entry,
-    sessionStore: params.sessionStore,
-    sessionKey: params.sessionKey,
-    parentSessionKey: params.parentSessionKey,
-    defaultProvider: params.defaultProvider,
-  });
-  if (!storedModelRef) {
-    return undefined;
-  }
-  return {
-    provider: storedModelRef.provider ?? params.defaultProvider,
-    model: storedModelRef.model,
-  };
-}
-
-function resolveModelOverrideCandidate(params: {
-  aliasIndex: ModelAliasIndex;
-  defaultProvider: string;
-  modelOverride?: string;
-}): HarnessDefaultCandidate | undefined {
-  if (!params.modelOverride) {
-    return undefined;
-  }
-  return resolveModelRefFromString({
-    raw: params.modelOverride,
-    defaultProvider: params.defaultProvider,
-    aliasIndex: params.aliasIndex,
-  })?.ref;
-}
-
-const resolveHarnessSourceVisibleRepliesDefault = (params: {
-  cfg: OpenClawConfig;
-  ctx: FinalizedMsgContext;
-  entry?: SessionEntry;
-  sessionAgentId: string;
-  sessionKey?: string;
-  sessionStore?: Record<string, SessionEntry>;
-  turnModelOverride?: string;
-}): HarnessSourceVisibleRepliesDefault | undefined => {
-  if (isNativeCommandTurn(resolveCommandTurnContext(params.ctx))) {
-    return undefined;
-  }
-  try {
-    const defaultModelRef = resolveDefaultModelForAgent({
-      cfg: params.cfg,
-      agentId: params.sessionAgentId,
-    });
-    const aliasIndex = buildModelAliasIndex({
-      cfg: params.cfg,
-      defaultProvider: defaultModelRef.provider,
-    });
-    const parentSessionKey = resolveHarnessDefaultParentSessionKey(params);
-    const channelModelCandidate = resolveChannelModelCandidate({
-      aliasIndex,
-      cfg: params.cfg,
-      ctx: params.ctx,
-      defaultProvider: defaultModelRef.provider,
-      entry: params.entry,
-      parentSessionKey,
-    });
-    const storedModelCandidate = resolveStoredModelCandidate({
-      defaultProvider: defaultModelRef.provider,
-      entry: params.entry,
-      parentSessionKey,
-      sessionKey: params.sessionKey,
-      sessionStore: params.sessionStore,
-    });
-    const turnModelCandidate = resolveModelOverrideCandidate({
-      aliasIndex,
-      defaultProvider: defaultModelRef.provider,
-      modelOverride: params.turnModelOverride,
-    });
-    const resolveCandidateDefault = (candidate: { provider: string; model?: string }) => {
-      const agentHarnessRuntimeOverride = resolveSessionRuntimeOverrideForProvider({
-        provider: candidate.provider,
-        entry: params.entry,
-      });
-      const harness = selectAgentHarness({
-        provider: candidate.provider,
-        modelId: candidate.model,
-        config: params.cfg,
-        agentId: params.sessionAgentId,
-        sessionKey: params.sessionKey,
-        agentHarnessRuntimeOverride,
-      });
-      return harness.deliveryDefaults?.sourceVisibleReplies;
-    };
-    const selectedModelCandidate =
-      turnModelCandidate ?? storedModelCandidate ?? channelModelCandidate;
-    if (selectedModelCandidate) {
-      return resolveCandidateDefault(selectedModelCandidate);
-    }
-    const sourceProvider = normalizeOptionalString(
-      params.entry?.origin?.provider ?? params.ctx.Provider ?? params.ctx.Surface,
-    );
-    if (sourceProvider) {
-      const sourceDefault = resolveCandidateDefault({ provider: sourceProvider });
-      if (sourceDefault) {
-        return sourceDefault;
-      }
-    }
-    return resolveCandidateDefault(defaultModelRef);
-  } catch (error) {
-    logVerbose(
-      `dispatch-from-config: could not resolve harness visible-reply defaults: ${formatErrorMessage(error)}`,
-    );
-    return undefined;
-  }
 };
 
 function shouldBypassPluginOwnedBindingForCommand(
@@ -1418,20 +1199,6 @@ export async function dispatchReplyFromConfig(
       undefined,
     chatType: sessionStoreEntry.entry?.chatType,
   });
-  const {
-    globalPolicy,
-    globalProviderPolicy,
-    agentPolicy,
-    agentProviderPolicy,
-    profile,
-    providerProfile,
-    profileAlsoAllow,
-    providerProfileAlsoAllow,
-  } = resolveEffectiveToolPolicy({
-    config: cfg,
-    sessionKey: acpDispatchSessionKey,
-    agentId: sessionAgentId,
-  });
   const chatType = normalizeChatType(ctx.ChatType);
   const configuredVisibleReplies =
     chatType === "group" || chatType === "channel"
@@ -1446,7 +1213,7 @@ export async function dispatchReplyFromConfig(
           sessionAgentId,
           sessionKey: acpDispatchSessionKey,
           sessionStore: sessionStoreEntry.store,
-          turnModelOverride: resolveTurnModelOverride(params.replyOptions),
+          replyOptions: params.replyOptions,
         })
       : undefined;
   const effectiveVisibleReplies = configuredVisibleReplies ?? harnessDefaultVisibleReplies;
@@ -1457,59 +1224,13 @@ export async function dispatchReplyFromConfig(
       !isExplicitSourceReplyCommand(ctx, cfg) &&
       (configuredVisibleReplies === "message_tool" ||
         (!isInternalWebchatTurn && effectiveVisibleReplies === "message_tool")));
-  const runtimeProfileAlsoAllow = prefersMessageToolDelivery ? ["message"] : [];
-  const profilePolicy = mergeAlsoAllowPolicy(resolveToolProfilePolicy(profile), [
-    ...(profileAlsoAllow ?? []),
-    ...runtimeProfileAlsoAllow,
-  ]);
-  const providerProfilePolicy = mergeAlsoAllowPolicy(resolveToolProfilePolicy(providerProfile), [
-    ...(providerProfileAlsoAllow ?? []),
-    ...runtimeProfileAlsoAllow,
-  ]);
-  const groupResolution = resolveGroupSessionKey(ctx);
-  const messageProvider = resolveOriginMessageProvider({
-    originatingChannel: ctx.OriginatingChannel,
-    provider: ctx.Provider ?? ctx.Surface,
-  });
-  const groupPolicy = resolveGroupToolPolicy({
-    config: cfg,
+  const messageToolAvailable = resolveSourceReplyMessageToolAvailable({
+    cfg,
+    ctx,
+    sessionAgentId,
     sessionKey: acpDispatchSessionKey,
-    messageProvider,
-    groupId: groupResolution?.id,
-    groupChannel:
-      normalizeOptionalString(ctx.GroupChannel) ?? normalizeOptionalString(ctx.GroupSubject),
-    groupSpace: normalizeOptionalString(ctx.GroupSpace),
-    accountId: ctx.AccountId,
-    senderId: normalizeOptionalString(ctx.SenderId),
-    senderName: normalizeOptionalString(ctx.SenderName),
-    senderUsername: normalizeOptionalString(ctx.SenderUsername),
-    senderE164: normalizeOptionalString(ctx.SenderE164),
+    prefersMessageToolDelivery,
   });
-  const subagentStore = resolveSubagentCapabilityStore(acpDispatchSessionKey, { cfg });
-  const subagentPolicy =
-    acpDispatchSessionKey &&
-    isSubagentEnvelopeSession(acpDispatchSessionKey, {
-      cfg,
-      store: subagentStore,
-    })
-      ? resolveSubagentToolPolicyForSession(cfg, acpDispatchSessionKey, {
-          store: subagentStore,
-        })
-      : undefined;
-  const inheritedToolPolicy = resolveInheritedToolPolicyForSession(cfg, acpDispatchSessionKey, {
-    store: subagentStore,
-  });
-  const messageToolAvailable = isToolAllowedByPolicies("message", [
-    profilePolicy,
-    providerProfilePolicy,
-    globalProviderPolicy,
-    agentProviderPolicy,
-    globalPolicy,
-    agentPolicy,
-    groupPolicy,
-    subagentPolicy,
-    inheritedToolPolicy,
-  ]);
   const sourceReplyPolicy = resolveSourceReplyVisibilityPolicy({
     cfg,
     ctx,
