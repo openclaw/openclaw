@@ -24,6 +24,7 @@ import type { TypingMode } from "../../config/types.js";
 import { logVerbose } from "../../globals.js";
 import { emitAgentEvent, registerAgentRunContext } from "../../infra/agent-events.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import type { ExecOutcomeClassification } from "../../infra/exec-outcome-classification-types.js";
 import { defaultRuntime } from "../../runtime.js";
 import { shouldPreserveUserFacingSessionStateForInputProvenance } from "../../sessions/input-provenance.js";
 import { readStringValue } from "../../shared/string-coerce.js";
@@ -63,6 +64,12 @@ type FollowupAgentEvent = { stream: string; data: Record<string, unknown> };
 
 function readApprovalScopeValue(value: unknown): "turn" | "session" | undefined {
   return value === "turn" || value === "session" ? value : undefined;
+}
+
+function readCommandOutputClassification(value: unknown): ExecOutcomeClassification | undefined {
+  return value === "success" || value === "benign_no_result" || value === "failure"
+    ? value
+    : undefined;
 }
 
 function filterStringArray(value: unknown): string[] | undefined {
@@ -187,6 +194,8 @@ async function forwardFollowupProgressEvent(params: {
       name: readStringValue(evt.data.name),
       output: readStringValue(evt.data.output),
       status: readStringValue(evt.data.status),
+      outcomeClassification: readCommandOutputClassification(evt.data.outcomeClassification),
+      statusLabel: readStringValue(evt.data.statusLabel),
       exitCode:
         typeof evt.data.exitCode === "number" || evt.data.exitCode === null
           ? evt.data.exitCode

@@ -69,6 +69,9 @@ function splitUnquotedPipes(command: string): string[] | null {
       continue;
     }
     if (!inSingle && !inDouble) {
+      if (char === "\n" || char === "\r" || char === "&") {
+        return null;
+      }
       if (char === ";") {
         return null;
       }
@@ -94,7 +97,7 @@ function splitUnquotedPipes(command: string): string[] | null {
   return segments;
 }
 
-function firstExecutable(command: string): string | undefined {
+function resolveExecutableArgv(command: string): string[] | null {
   let argv = splitShellArgs(command);
   for (let depth = 0; argv && depth < 4; depth += 1) {
     while (isEnvAssignmentToken(argv[0] ?? "")) {
@@ -102,11 +105,16 @@ function firstExecutable(command: string): string | undefined {
     }
     const carriedArgv = resolveCarrierCommandArgv(argv, 0, { includeExec: true });
     if (!carriedArgv) {
-      return normalizeExecutableToken(argv[0] ?? "");
+      return argv;
     }
     argv = carriedArgv;
   }
-  return undefined;
+  return null;
+}
+
+function firstExecutable(command: string): string | undefined {
+  const argv = resolveExecutableArgv(command);
+  return normalizeExecutableToken(argv?.[0] ?? "");
 }
 
 function isDirectRgNoMatch(params: { command: string; exitCode: number }): boolean {
@@ -128,19 +136,19 @@ function isXargsRgNoMatch(params: { command: string; exitCode: number }): boolea
     return false;
   }
 
-  return segments.some((segment) => xargsCommandLaunchesRg(splitShellArgs(segment)));
+  return segments.some((segment) => xargsCommandLaunchesRg(segment));
 }
 
-function xargsCommandLaunchesRg(words: string[] | null): boolean {
+function xargsCommandLaunchesRg(segment: string): boolean {
+  const words = resolveExecutableArgv(segment);
   if (!words) {
     return false;
   }
-  const xargsIndex = words.findIndex((word) => normalizeExecutableToken(word) === "xargs");
-  if (xargsIndex < 0) {
+  if (normalizeExecutableToken(words[0] ?? "") !== "xargs") {
     return false;
   }
 
-  for (let index = xargsIndex + 1; index < words.length; index += 1) {
+  for (let index = 1; index < words.length; index += 1) {
     const word = words[index];
     if (!word) {
       continue;

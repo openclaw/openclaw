@@ -55,6 +55,14 @@ describe("classifyExecOutcome", () => {
         aggregated: "\n\n(Command exited with code 123)",
       }),
     ).toBe("benign_no_result");
+    expect(
+      classifyExecOutcome({
+        command: "find docs -name '*.md' -print0 | env LC_ALL=C command xargs -0 rg 'missing phrase'",
+        status: "completed",
+        exitCode: 123,
+        aggregated: "\n\n(Command exited with code 123)",
+      }),
+    ).toBe("benign_no_result");
   });
 
   it("keeps successful commands successful", () => {
@@ -130,6 +138,22 @@ describe("classifyExecOutcome", () => {
         aggregated: "\n\n(Command exited with code 1)",
       }),
     ).toBe("failure");
+    expect(
+      classifyExecOutcome({
+        command: "rg 'missing phrase' docs\nfalse",
+        status: "completed",
+        exitCode: 1,
+        aggregated: "\n\n(Command exited with code 1)",
+      }),
+    ).toBe("failure");
+    expect(
+      classifyExecOutcome({
+        command: "rg 'missing phrase' docs & false",
+        status: "completed",
+        exitCode: 1,
+        aggregated: "\n\n(Command exited with code 1)",
+      }),
+    ).toBe("failure");
   });
 
   it("does not downgrade unrelated pipelines that mention rg before failing", () => {
@@ -158,6 +182,14 @@ describe("classifyExecOutcome", () => {
     expect(
       classifyExecOutcome({
         command: "printf 'rg\\n' | xargs false",
+        status: "completed",
+        exitCode: 123,
+        aggregated: "\n\n(Command exited with code 123)",
+      }),
+    ).toBe("failure");
+    expect(
+      classifyExecOutcome({
+        command: "bash -c 'exit 123' xargs rg",
         status: "completed",
         exitCode: 123,
         aggregated: "\n\n(Command exited with code 123)",
