@@ -4953,6 +4953,89 @@ describe("openai transport stream", () => {
     });
   });
 
+  it("omits tools from completions payload when model compat sets supportsTools to false", () => {
+    const params = buildOpenAICompletionsParams(
+      {
+        id: "chat-only-model",
+        name: "Chat Only Model",
+        api: "openai-completions",
+        provider: "venice",
+        baseUrl: "https://api.venice.ai/api/v1",
+        reasoning: false,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 128000,
+        maxTokens: 4096,
+        compat: {
+          supportsTools: false,
+        } as Record<string, unknown>,
+      } satisfies Model<"openai-completions">,
+      {
+        systemPrompt: "system",
+        messages: [],
+        tools: [
+          {
+            name: "noop",
+            description: "noop tool",
+            parameters: { type: "object", properties: {} },
+          },
+        ],
+      } as never,
+      undefined,
+    ) as { tools?: unknown; tool_choice?: unknown };
+
+    expect(params).not.toHaveProperty("tools");
+    expect(params).not.toHaveProperty("tool_choice");
+  });
+
+  it("omits tool-history tools:[] fallback when model compat sets supportsTools to false", () => {
+    const params = buildOpenAICompletionsParams(
+      {
+        id: "chat-only-model",
+        name: "Chat Only Model",
+        api: "openai-completions",
+        provider: "venice",
+        baseUrl: "https://api.venice.ai/api/v1",
+        reasoning: false,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 128000,
+        maxTokens: 4096,
+        compat: {
+          supportsTools: false,
+        } as Record<string, unknown>,
+      } satisfies Model<"openai-completions">,
+      {
+        systemPrompt: "system",
+        messages: [
+          {
+            role: "assistant",
+            content: [
+              {
+                type: "toolCall",
+                id: "call_abc",
+                name: "noop",
+                arguments: {},
+              },
+            ],
+            timestamp: Date.now(),
+          },
+          {
+            role: "toolResult",
+            toolCallId: "call_abc",
+            toolName: "noop",
+            content: [{ type: "text", text: "ok" }],
+            isError: false,
+            timestamp: Date.now(),
+          },
+        ],
+      } as never,
+      undefined,
+    ) as { tools?: unknown };
+
+    expect(params).not.toHaveProperty("tools");
+  });
+
   describe("Gemini thought_signature round-trip on OpenAI-compatible completions", () => {
     const geminiModel = {
       id: "gemini-3-flash-preview",

@@ -511,6 +511,15 @@
 
   .chat-mobile-controls-wrapper .chat-controls-dropdown .chat-controls__session-picker {
     grid-area: session;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 8px;
+  }
+
+  .chat-mobile-controls-wrapper
+    .chat-controls-dropdown
+    .chat-controls__session-row--session-search-open
+    .chat-controls__session-picker {
+    grid-template-columns: minmax(96px, 0.7fr) minmax(0, 1fr);
   }
 
   .chat-mobile-controls-wrapper .chat-controls-dropdown .chat-controls__session-trigger {
@@ -527,9 +536,14 @@
     box-shadow: none;
   }
 
-  .chat-mobile-controls-wrapper .chat-controls-dropdown .chat-session-picker__search input {
+  .chat-mobile-controls-wrapper .chat-controls-dropdown .chat-controls__session-search input {
     min-height: 44px;
+    padding-left: 42px;
     font-size: 14px;
+  }
+
+  .chat-controls__session-search input {
+    padding-left: 42px;
   }
 
   .chat-mobile-controls-wrapper
