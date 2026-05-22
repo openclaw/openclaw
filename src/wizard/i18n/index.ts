@@ -1,4 +1,5 @@
 import { en } from "./locales/en.js";
+import { tr } from "./locales/tr.js";
 import { zh_CN } from "./locales/zh-CN.js";
 import { zh_TW } from "./locales/zh-TW.js";
 import type {
@@ -14,12 +15,13 @@ export type SetupTranslator = (key: string, params?: WizardI18nParams) => string
 
 const LOCALES: Record<WizardLocale, WizardTranslationMap> = {
   en,
+  tr,
   "zh-CN": zh_CN,
   "zh-TW": zh_TW,
 };
 
 export const WIZARD_DEFAULT_LOCALE: WizardLocale = "en";
-export const WIZARD_SUPPORTED_LOCALES: readonly WizardLocale[] = ["en", "zh-CN", "zh-TW"];
+export const WIZARD_SUPPORTED_LOCALES: readonly WizardLocale[] = ["en", "tr", "zh-CN", "zh-TW"];
 
 function normalizeLocaleToken(raw: string | undefined): string {
   return (raw ?? "").trim().split(".")[0]?.split("@")[0]?.replaceAll("_", "-") ?? "";
@@ -40,6 +42,9 @@ export function resolveWizardLocale(value: string | undefined): WizardLocale {
   }
   if (lower === "zh" || lower === "zh-cn" || lower === "zh-sg" || lower.includes("hans")) {
     return "zh-CN";
+  }
+  if (lower === "tr" || lower.startsWith("tr-")) {
+    return "tr";
   }
   return WIZARD_DEFAULT_LOCALE;
 }
