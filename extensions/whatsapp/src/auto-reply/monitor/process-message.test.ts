@@ -8,6 +8,7 @@ const {
   isControlCommandMessageMock,
   runMessageReceivedMock,
   shouldComputeCommandAuthorizedMock,
+  traceWhatsAppQaEventMock,
   trackBackgroundTaskMock,
 } = vi.hoisted(() => ({
   resolvePolicyMock: vi.fn(),
@@ -15,6 +16,7 @@ const {
   isControlCommandMessageMock: vi.fn(() => false),
   runMessageReceivedMock: vi.fn(async () => undefined),
   shouldComputeCommandAuthorizedMock: vi.fn(() => false),
+  traceWhatsAppQaEventMock: vi.fn(),
   trackBackgroundTaskMock: vi.fn(),
 }));
 
@@ -119,6 +121,10 @@ vi.mock("./message-line.js", async (importOriginal) => {
   return { ...actual, buildInboundLine: () => "hi" };
 });
 
+vi.mock("../../qa-trace.js", () => ({
+  traceWhatsAppQaEvent: traceWhatsAppQaEventMock,
+}));
+
 vi.mock("./runtime-api.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./runtime-api.js")>();
   return {
@@ -202,11 +208,11 @@ const baseRoute = {
   matchedBy: "default",
 };
 
-function callProcessMessage(overrides: { cfg?: unknown; msg?: unknown } = {}) {
+function callProcessMessage(overrides: { cfg?: unknown; msg?: unknown; route?: unknown } = {}) {
   return processMessage({
     cfg: (overrides.cfg ?? {}) as never,
     msg: (overrides.msg ?? baseMsg) as never,
-    route: baseRoute as never,
+    route: (overrides.route ?? baseRoute) as never,
     groupHistoryKey: "whatsapp:default:group:123@g.us",
     groupHistories: new Map(),
     groupMemberNames: new Map(),
@@ -247,6 +253,7 @@ describe("processMessage group system prompt wiring", () => {
     runMessageReceivedMock.mockClear();
     shouldComputeCommandAuthorizedMock.mockReset();
     shouldComputeCommandAuthorizedMock.mockReturnValue(false);
+    traceWhatsAppQaEventMock.mockClear();
     trackBackgroundTaskMock.mockClear();
     clearInternalHooks();
     buildContextMock.mockImplementation(
@@ -452,6 +459,35 @@ describe("processMessage group system prompt wiring", () => {
 
     expect(runMessageReceivedMock).not.toHaveBeenCalled();
     expect(internalReceived).not.toHaveBeenCalled();
+  });
+
+  it("keeps raw session keys out of WhatsApp QA traces", async () => {
+    resolvePolicyMock.mockReturnValue(makePolicy(makeAccount()));
+    const directSessionKey = "agent:main:whatsapp:direct:+15550002222";
+
+    await callProcessMessage({
+      msg: {
+        ...baseMsg,
+        from: "15550002222@s.whatsapp.net",
+        conversationId: "15550002222@s.whatsapp.net",
+        chatId: "15550002222@s.whatsapp.net",
+        chatType: "direct",
+      },
+      route: {
+        ...baseRoute,
+        sessionKey: directSessionKey,
+        mainSessionKey: "agent:main:main",
+      },
+    });
+
+    expect(traceWhatsAppQaEventMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        phase: "process_message_start",
+        agentId: "main",
+      }),
+    );
+    expect(JSON.stringify(traceWhatsAppQaEventMock.mock.calls)).not.toContain(directSessionKey);
+    expect(JSON.stringify(traceWhatsAppQaEventMock.mock.calls)).not.toContain("+15550002222");
   });
 
   it("tracks session metadata writes as connection background tasks", async () => {

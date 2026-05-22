@@ -218,7 +218,7 @@ export async function processMessage(params: {
     phase: "process_message_start",
     accountId: params.route.accountId ?? params.msg.accountId,
     chatType: params.msg.chatType,
-    routeSessionKey: params.route.sessionKey,
+    agentId: params.route.agentId,
   });
   const conversationId = params.msg.conversationId ?? params.msg.from;
   const self = getSelfIdentity(params.msg);
