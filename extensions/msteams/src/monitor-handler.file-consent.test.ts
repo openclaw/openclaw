@@ -39,8 +39,11 @@ function createRuntimeStub(stateDir?: string): PluginRuntime {
         resolveInboundDebounceMs: () => 0,
         createInboundDebouncer: () => ({
           enqueue: async () => {},
-          flushKey: async () => {},
+          flushKey: async () => false,
+          flushKeyWithCount: async () => ({ flushed: 0 }),
           cancelKey: () => false,
+          flushAll: async () => 0,
+          unregister: () => {},
         }),
       },
     },
