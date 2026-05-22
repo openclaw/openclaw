@@ -87,4 +87,12 @@ describe("chat layout styles", () => {
     expect(css).toContain(".chat-loading-skeleton .chat-bubble");
     expect(css).toContain("width: 100%;");
   });
+
+  it("lets realtime Talk turns flow in the chat thread", () => {
+    const css = readLayoutCss();
+
+    expect(css).toContain(".agent-chat__voice-turns");
+    expect(css).toContain("background: transparent;");
+    expect(css).not.toContain("max-height: min(28vh, 220px);");
+  });
 });

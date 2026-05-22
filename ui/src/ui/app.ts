@@ -68,6 +68,12 @@ import type { AppViewState } from "./app-view-state.ts";
 import { normalizeAssistantIdentity } from "./assistant-identity.ts";
 import { exportChatMarkdown } from "./chat/export.ts";
 import {
+  createRealtimeTalkConversationState,
+  updateRealtimeTalkConversation,
+  type RealtimeTalkConversationEntry,
+  type RealtimeTalkConversationState,
+} from "./chat/realtime-talk-conversation.ts";
+import {
   RealtimeTalkSession,
   type RealtimeTalkLaunchOptions,
   type RealtimeTalkStatus,
@@ -245,6 +251,7 @@ export class OpenClawApp extends LitElement {
   @state() realtimeTalkStatus: RealtimeTalkStatus = "idle";
   @state() realtimeTalkDetail: string | null = null;
   @state() realtimeTalkTranscript: string | null = null;
+  @state() realtimeTalkConversation: RealtimeTalkConversationEntry[] = [];
   @state() realtimeTalkOptionsOpen = false;
   @state() realtimeTalkOptions = {
     provider: "",
@@ -257,6 +264,8 @@ export class OpenClawApp extends LitElement {
     reasoningEffort: "",
   };
   private realtimeTalkSession: RealtimeTalkSession | null = null;
+  private realtimeTalkConversationState: RealtimeTalkConversationState =
+    createRealtimeTalkConversationState();
   private nativeBridgeCleanup: (() => void) | null = null;
   @state() chatManualRefreshInFlight = false;
   @state() chatHeaderControlsHidden = false;
@@ -1067,6 +1076,7 @@ export class OpenClawApp extends LitElement {
         this.realtimeTalkStatus = "idle";
         this.realtimeTalkDetail = null;
         this.realtimeTalkTranscript = null;
+        this.resetRealtimeTalkConversation();
         return;
       }
     }
@@ -1078,6 +1088,7 @@ export class OpenClawApp extends LitElement {
     this.realtimeTalkStatus = "connecting";
     this.realtimeTalkDetail = null;
     this.realtimeTalkTranscript = null;
+    this.resetRealtimeTalkConversation();
     const session = new RealtimeTalkSession(
       this.client,
       this.sessionKey,
@@ -1091,6 +1102,11 @@ export class OpenClawApp extends LitElement {
         },
         onTranscript: (entry) => {
           this.realtimeTalkTranscript = `${entry.role === "user" ? "You" : "OpenClaw"}: ${entry.text}`;
+          this.realtimeTalkConversationState = updateRealtimeTalkConversation(
+            this.realtimeTalkConversationState,
+            entry,
+          );
+          this.realtimeTalkConversation = this.realtimeTalkConversationState.entries;
         },
       },
       this.buildRealtimeTalkLaunchOptions(),
@@ -1108,6 +1124,11 @@ export class OpenClawApp extends LitElement {
       this.realtimeTalkDetail = error instanceof Error ? error.message : String(error);
       this.lastError = this.realtimeTalkDetail;
     }
+  }
+
+  resetRealtimeTalkConversation() {
+    this.realtimeTalkConversationState = createRealtimeTalkConversationState();
+    this.realtimeTalkConversation = [];
   }
 
   async steerQueuedChatMessage(id: string) {

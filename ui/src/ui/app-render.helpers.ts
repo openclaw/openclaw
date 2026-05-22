@@ -139,6 +139,8 @@ function resetChatStateForSessionSwitch(state: AppViewState, sessionKey: string)
   state.chatAvatarSource = null;
   state.chatAvatarStatus = null;
   state.chatAvatarReason = null;
+  state.realtimeTalkTranscript = null;
+  state.resetRealtimeTalkConversation?.();
   state.chatQueue = restoreChatQueueForSession(state, sessionKey);
   host.resetChatInputHistoryNavigation();
   host.chatStreamStartedAt = null;
@@ -666,6 +668,7 @@ export function dismissChatError(state: AppViewState) {
     state.realtimeTalkStatus = "idle";
     state.realtimeTalkDetail = null;
     state.realtimeTalkTranscript = null;
+    state.resetRealtimeTalkConversation?.();
   }
 }
 
