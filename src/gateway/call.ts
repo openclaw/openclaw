@@ -20,7 +20,11 @@ import {
 import { resolveSafeTimeoutDelayMs } from "../utils/timer-delay.js";
 import { VERSION } from "../version.js";
 import { startGatewayClientWhenEventLoopReady } from "./client-start-readiness.js";
-import { GatewayClient, type GatewayClientOptions } from "./client.js";
+import {
+  GatewayClient,
+  isGatewayConnectAssemblyError,
+  type GatewayClientOptions,
+} from "./client.js";
 import {
   buildGatewayConnectionDetailsWithResolvers,
   type GatewayConnectionDetails,
@@ -738,6 +742,13 @@ async function executeGatewayRequestWithScopes<T>(params: {
             connectionDetails: params.connectionDetails,
           }),
         );
+      },
+      onConnectError: (err) => {
+        if (settled || !isGatewayConnectAssemblyError(err)) {
+          return;
+        }
+        ignoreClose = true;
+        stop(err);
       },
     });
 
