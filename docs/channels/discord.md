@@ -696,6 +696,7 @@ Default slash command settings:
           maxLines: 8,
           maxLineChars: 120,
           toolProgress: true,
+          commentary: false,
         },
       },
     },
@@ -708,6 +709,7 @@ Default slash command settings:
     - Media, error, and explicit-reply finals cancel pending preview edits.
     - `streaming.preview.toolProgress` (default `true`) controls whether tool/progress updates reuse the preview message.
     - Tool/progress rows render as compact emoji + title + detail when available, for example `🛠️ Bash: run tests` or `🔎 Web Search: for "query"`.
+    - `streaming.progress.commentary` (default `false`) opts into assistant commentary/preamble text in the temporary progress draft. Commentary is cleaned before display, stays transient, and does not change final answer delivery.
     - `streaming.progress.maxLineChars` controls the per-line progress preview budget. Prose is shortened on word boundaries; command and path details keep useful suffixes.
     - `streaming.preview.commandText` / `streaming.progress.commandText` controls command/exec detail in compact progress lines: `raw` (default) or `status` (tool label only).
 

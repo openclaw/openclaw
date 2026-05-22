@@ -856,6 +856,16 @@ export async function processDiscordMessage(
               );
             },
             onItemEvent: async (payload) => {
+              if (
+                draftPreview.commentaryProgressEnabled &&
+                payload.kind === "preamble" &&
+                payload.progressText
+              ) {
+                await draftPreview.pushCommentaryProgress(payload.progressText, {
+                  itemId: payload.itemId,
+                });
+                return;
+              }
               await draftPreview.pushToolProgress(
                 buildChannelProgressDraftLineForEntry(discordConfig, {
                   event: "item",

@@ -19,6 +19,7 @@ import {
   resolveChannelStreamingBlockEnabled,
   resolveChannelStreamingChunkMode,
   resolveChannelStreamingNativeTransport,
+  resolveChannelStreamingProgressCommentary,
   resolveChannelStreamingPreviewCommandText,
   resolveChannelStreamingPreviewChunk,
   resolveChannelStreamingSuppressDefaultToolProgressMessages,
@@ -94,6 +95,24 @@ describe("channel-streaming", () => {
           preview: { toolProgress: true },
           progress: { toolProgress: false },
         },
+      }),
+    ).toBe(false);
+  });
+
+  it("enables commentary progress only for progress-mode drafts", () => {
+    expect(
+      resolveChannelStreamingProgressCommentary({
+        streaming: { mode: "progress", progress: { commentary: true } },
+      }),
+    ).toBe(true);
+    expect(
+      resolveChannelStreamingProgressCommentary({
+        streaming: { mode: "partial", progress: { commentary: true } },
+      }),
+    ).toBe(false);
+    expect(
+      resolveChannelStreamingProgressCommentary({
+        streaming: { mode: "progress" },
       }),
     ).toBe(false);
   });
@@ -277,6 +296,19 @@ describe("channel-streaming", () => {
         lines: ["🛠️ Exec", "plain update"],
       }),
     ).toBe("🛠️ Exec\n• plain update");
+    expect(
+      formatChannelProgressDraftText({
+        entry: { streaming: { progress: { label: false } } },
+        lines: [
+          {
+            kind: "item",
+            text: "_Checking source data before summarizing._",
+            label: "Commentary",
+            prefix: false,
+          },
+        ],
+      }),
+    ).toBe("_Checking source data before summarizing._");
   });
 
   it("renders progress labels as rolling lines", () => {

@@ -48,6 +48,11 @@ export type ChannelStreamingProgressConfig = {
   render?: "text" | "rich";
   /** Include compact tool/task progress in the draft. Default: true. */
   toolProgress?: boolean;
+  /**
+   * Include assistant commentary/preamble text in the progress draft.
+   * Default: false, so interim assistant notes remain hidden unless a channel opts in.
+   */
+  commentary?: boolean;
   /** Command/exec progress detail in the draft. "raw" preserves released behavior; "status" shows only the tool label. Default: "raw". */
   commandText?: ChannelStreamingCommandTextMode;
 };
