@@ -58,4 +58,64 @@ describe("RealtimeTalkSession consult handoff", () => {
     expect(toolCall?.[1]?.args).toEqual({ question: "Are the basement lights off?" });
     expect(submit).toHaveBeenCalledWith("call-1", { result: "Basement lights are off." });
   });
+
+  it("speaks the internal source reply when message-tool-only delivery mirrors the visible answer", async () => {
+    let listener: ((event: { event: string; payload?: unknown }) => void) | undefined;
+    const request = vi.fn(async (method: string, _params: unknown) => {
+      if (method === "talk.client.toolCall") {
+        setImmediate(() => {
+          listener?.({
+            event: "agent",
+            payload: {
+              runId: "run-message-tool",
+              stream: "tool",
+              data: {
+                phase: "end",
+                result: {
+                  kind: "send",
+                  payload: {
+                    sourceReplyDeliveryMode: "message_tool_only",
+                    sourceReplySink: "internal-ui",
+                    sourceReply: { text: "The tool-backed status is green." },
+                  },
+                },
+              },
+            },
+          });
+          listener?.({
+            event: "chat",
+            payload: {
+              runId: "run-message-tool",
+              state: "final",
+              message: { text: "I could not get that information." },
+            },
+          });
+        });
+        return { runId: "run-message-tool" };
+      }
+      throw new Error(`unexpected request: ${method}`);
+    });
+    const addEventListener = vi.fn((callback: typeof listener) => {
+      listener = callback;
+      return () => {
+        listener = undefined;
+      };
+    });
+    const submit = vi.fn();
+
+    await submitRealtimeTalkConsult({
+      ctx: {
+        client: { request, addEventListener },
+        sessionKey: "agent:main:main",
+        callbacks: {},
+      } as never,
+      callId: "call-message-tool",
+      args: { question: "Check the status" },
+      submit,
+    });
+
+    expect(submit).toHaveBeenCalledWith("call-message-tool", {
+      result: "The tool-backed status is green.",
+    });
+  });
 });

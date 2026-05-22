@@ -187,6 +187,12 @@ type ChatPayload = {
   message?: unknown;
 };
 
+type AgentPayload = {
+  runId?: string;
+  stream?: string;
+  data?: unknown;
+};
+
 function extractTextFromMessage(message: unknown): string {
   if (!message || typeof message !== "object") {
     return "";
@@ -206,6 +212,46 @@ function extractTextFromMessage(message: unknown): string {
     })
     .filter(Boolean);
   return parts.join("\n\n").trim();
+}
+
+function extractCanonicalSourceReplyText(value: unknown): string {
+  if (typeof value === "string") {
+    try {
+      return extractCanonicalSourceReplyText(JSON.parse(value));
+    } catch {
+      return "";
+    }
+  }
+  if (!value || typeof value !== "object") {
+    return "";
+  }
+  const record = value as Record<string, unknown>;
+  const sourceReply = record.sourceReply;
+  if (sourceReply && typeof sourceReply === "object") {
+    const sourceReplyText = extractTextFromMessage(sourceReply);
+    if (sourceReplyText) {
+      return sourceReplyText;
+    }
+  }
+  const payload = record.payload;
+  if (payload && typeof payload === "object") {
+    const payloadText = extractCanonicalSourceReplyText(payload);
+    if (payloadText) {
+      return payloadText;
+    }
+  }
+  const result = record.result;
+  if (result !== undefined) {
+    return extractCanonicalSourceReplyText(result);
+  }
+  return "";
+}
+
+function extractTalkCanonicalTextFromAgentPayload(payload: AgentPayload | undefined): string {
+  if (!payload || payload.stream !== "tool") {
+    return "";
+  }
+  return extractCanonicalSourceReplyText(payload.data);
 }
 
 function waitForChatResult(params: {
@@ -229,7 +275,19 @@ function waitForChatResult(params: {
     };
     params.signal?.addEventListener("abort", onAbort, { once: true });
     let unsubscribe: () => void = () => undefined;
+    let canonicalSourceReplyText = "";
     unsubscribe = params.client.addEventListener((evt: GatewayEventFrame) => {
+      if (evt.event === "agent") {
+        const payload = evt.payload as AgentPayload | undefined;
+        if (payload?.runId !== params.runId) {
+          return;
+        }
+        const sourceReplyText = extractTalkCanonicalTextFromAgentPayload(payload);
+        if (sourceReplyText) {
+          canonicalSourceReplyText = sourceReplyText;
+        }
+        return;
+      }
       if (evt.event !== "chat") {
         return;
       }
@@ -239,7 +297,11 @@ function waitForChatResult(params: {
       }
       if (payload.state === "final") {
         cleanup();
-        resolve(extractTextFromMessage(payload.message) || "OpenClaw finished with no text.");
+        resolve(
+          canonicalSourceReplyText ||
+            extractTextFromMessage(payload.message) ||
+            "OpenClaw finished with no text.",
+        );
       } else if (payload.state === "aborted") {
         cleanup();
         reject(
