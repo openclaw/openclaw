@@ -34,6 +34,7 @@ import {
   resolveProviderRequestConfig,
   sanitizeConfiguredModelProviderRequest,
 } from "../provider-request-config.js";
+import { discoverCachedPiStores } from "./model-discovery-cache.js";
 import {
   buildInlineProviderModels,
   type InlineProviderConfig,
@@ -132,6 +133,19 @@ function resolveRuntimeHooks(params?: {
     return SKIP_PI_DISCOVERY_PROVIDER_RUNTIME_HOOKS;
   }
   return DEFAULT_PROVIDER_RUNTIME_HOOKS;
+}
+
+function discoverCachedPiStoresForAgent(
+  resolvedAgentDir: string,
+  cfg: OpenClawConfig | undefined,
+): {
+  authStorage: AuthStorage;
+  modelRegistry: ModelRegistry;
+} {
+  return discoverCachedPiStores({
+    agentDir: resolvedAgentDir,
+    inheritedAuthDir: resolveDefaultAgentDir(cfg ?? {}),
+  });
 }
 
 function canonicalizeLegacyResolvedModel(params: {
@@ -433,6 +447,21 @@ function findConfiguredProviderModel(
   );
 }
 
+function hasConfiguredFallbackSurface(params: {
+  providerConfig: InlineProviderConfig | undefined;
+  configuredModel: ReturnType<typeof findConfiguredProviderModel>;
+  modelId: string;
+}): boolean {
+  if (params.modelId.startsWith("mock-")) {
+    return true;
+  }
+  if (params.configuredModel) {
+    return true;
+  }
+  const baseUrl = params.providerConfig?.baseUrl?.trim();
+  return Boolean(baseUrl);
+}
+
 function readModelParams(value: unknown): Record<string, unknown> | undefined {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return undefined;
@@ -494,10 +523,12 @@ function mergeConfiguredRuntimeModelParams(params: {
   provider: string;
   modelId: string;
   discoveredParams?: unknown;
+  providerParams?: unknown;
   configuredParams?: unknown;
 }): Record<string, unknown> | undefined {
   return mergeModelParams(
     readModelParams(params.discoveredParams),
+    readModelParams(params.providerParams),
     findConfiguredAgentModelParams({
       cfg: params.cfg,
       provider: params.provider,
@@ -529,11 +560,22 @@ function applyConfiguredProviderOverrides(params: {
       readModelParams(discoveredModel.params),
       defaultModelParams,
     );
+    const discoveredHeaders = sanitizeModelHeaders(discoveredModel.headers, {
+      stripSecretRefMarkers: true,
+    });
+    const requestConfig = resolveProviderRequestConfig({
+      provider: params.provider,
+      api: discoveredModel.api,
+      baseUrl: discoveredModel.baseUrl,
+      discoveredHeaders,
+      capability: "llm",
+      transport: "stream",
+    });
     return {
       ...discoveredModel,
       ...(resolvedParams ? { params: resolvedParams } : {}),
       // Discovered models originate from models.json and may contain persistence markers.
-      headers: sanitizeModelHeaders(discoveredModel.headers, { stripSecretRefMarkers: true }),
+      headers: requestConfig.headers,
     };
   }
   const configuredModel =
@@ -555,6 +597,19 @@ function applyConfiguredProviderOverrides(params: {
   const configuredHeaders = sanitizeModelHeaders(configuredModel?.headers, {
     stripSecretRefMarkers: true,
   });
+  const providerParams = readModelParams(providerConfig.params);
+  const passthroughRequestConfig = resolveProviderRequestConfig({
+    provider: params.provider,
+    api: discoveredModel.api,
+    baseUrl: discoveredModel.baseUrl,
+    discoveredHeaders,
+    providerHeaders,
+    modelHeaders: configuredHeaders,
+    authHeader: providerConfig.authHeader,
+    request: providerRequest,
+    capability: "llm",
+    transport: "stream",
+  });
   if (
     !configuredModel &&
     !providerConfig.baseUrl &&
@@ -565,6 +620,7 @@ function applyConfiguredProviderOverrides(params: {
     requestTimeoutMs === undefined &&
     !providerHeaders &&
     !providerRequest &&
+    !providerParams &&
     !providerConfig.localService
   ) {
     const resolvedParams = mergeModelParams(
@@ -575,11 +631,12 @@ function applyConfiguredProviderOverrides(params: {
       ...discoveredModel,
       ...(resolvedParams ? { params: resolvedParams } : {}),
       ...(requestTimeoutMs !== undefined ? { requestTimeoutMs } : {}),
-      headers: discoveredHeaders,
+      headers: passthroughRequestConfig.headers,
     };
   }
   const resolvedParams = mergeModelParams(
     readModelParams(discoveredModel.params),
+    providerParams,
     defaultModelParams,
     readModelParams(configuredModel?.params),
   );
@@ -681,6 +738,7 @@ function resolveExplicitModelWithRegistry(params: {
       cfg,
       provider,
       modelId,
+      providerParams: providerConfig?.params,
       configuredParams: inlineMatch.params,
     });
     return {
@@ -744,6 +802,7 @@ function resolveExplicitModelWithRegistry(params: {
       cfg,
       provider,
       modelId,
+      providerParams: providerConfig?.params,
       configuredParams: fallbackInlineMatch.params,
     });
     return {
@@ -846,9 +905,10 @@ function resolveConfiguredFallbackModel(params: {
     cfg,
     provider,
     modelId,
+    providerParams: providerConfig?.params,
     configuredParams: configuredModel?.params,
   });
-  if (!providerConfig && !modelId.startsWith("mock-")) {
+  if (!hasConfiguredFallbackSurface({ providerConfig, configuredModel, modelId })) {
     return undefined;
   }
   const fallbackTransport = resolveProviderTransport({
@@ -1031,8 +1091,16 @@ export function resolveModel(
   };
   const resolvedAgentDir = agentDir ?? resolveDefaultAgentDir(cfg ?? {});
   const workspaceDir = options?.workspaceDir ?? cfg?.agents?.defaults?.workspace;
-  const authStorage = options?.authStorage ?? discoverAuthStorage(resolvedAgentDir);
-  const modelRegistry = options?.modelRegistry ?? discoverModels(authStorage, resolvedAgentDir);
+  const cachedStores =
+    !options?.authStorage && !options?.modelRegistry
+      ? discoverCachedPiStoresForAgent(resolvedAgentDir, cfg)
+      : undefined;
+  const authStorage =
+    options?.authStorage ?? cachedStores?.authStorage ?? discoverAuthStorage(resolvedAgentDir);
+  const modelRegistry =
+    options?.modelRegistry ??
+    cachedStores?.modelRegistry ??
+    discoverModels(authStorage, resolvedAgentDir);
   const runtimeHooks = resolveRuntimeHooks(options);
   const model = resolveModelWithRegistry({
     provider: normalizedRef.provider,
@@ -1092,13 +1160,19 @@ export async function resolveModelAsync(
     options?.skipPiDiscovery && (!options.authStorage || !options.modelRegistry)
       ? createEmptyPiDiscoveryStores()
       : undefined;
+  const cachedStores =
+    !emptyDiscoveryStores && !options?.authStorage && !options?.modelRegistry
+      ? discoverCachedPiStoresForAgent(resolvedAgentDir, cfg)
+      : undefined;
   const authStorage =
     options?.authStorage ??
     emptyDiscoveryStores?.authStorage ??
+    cachedStores?.authStorage ??
     discoverAuthStorage(resolvedAgentDir);
   const modelRegistry =
     options?.modelRegistry ??
     emptyDiscoveryStores?.modelRegistry ??
+    cachedStores?.modelRegistry ??
     discoverModels(authStorage, resolvedAgentDir);
   const runtimeHooks = resolveRuntimeHooks(options);
   const explicitModel = resolveExplicitModelWithRegistry({
@@ -1176,12 +1250,22 @@ export async function resolveModelAsync(
       workspaceDir,
     });
     if (staticCatalogModel) {
+      const overriddenStaticCatalogModel = applyConfiguredProviderOverrides({
+        provider: normalizedRef.provider,
+        discoveredModel: staticCatalogModel,
+        providerConfig,
+        modelId: normalizedRef.model,
+        cfg,
+        runtimeHooks,
+        workspaceDir,
+        preferDiscoveredModelMetadata: true,
+      });
       model = normalizeResolvedModel({
         provider: normalizedRef.provider,
         cfg,
         agentDir: resolvedAgentDir,
         workspaceDir,
-        model: staticCatalogModel,
+        model: overriddenStaticCatalogModel,
         runtimeHooks,
       });
     }

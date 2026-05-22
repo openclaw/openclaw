@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import {
+  buildTtsSupplementMediaPayload,
   countOutboundMedia,
   createNormalizedOutboundDeliverer,
   deliverFormattedTextWithAttachments,
@@ -7,8 +8,10 @@ import {
   hasOutboundMedia,
   hasOutboundReplyContent,
   hasOutboundText,
+  getReplyPayloadTtsSupplement,
   isReasoningReplyPayload,
   isNumericTargetId,
+  markReplyPayloadAsTtsSupplement,
   normalizeOutboundReplyPayload,
   resolveOutboundMediaUrls,
   resolveSendableOutboundReplyParts,
@@ -21,11 +24,32 @@ import {
 describe("isReasoningReplyPayload", () => {
   it.each([
     { name: "flagged", payload: { text: "Visible", isReasoning: true }, expected: true },
-    { name: "prefix", payload: { text: "  \n Reasoning:\n_hidden_" }, expected: true },
-    { name: "blockquote", payload: { text: "> Reasoning:\n> _hidden_" }, expected: true },
+    { name: "prefix", payload: { text: "  \n Thinking\n_hidden_" }, expected: true },
+    {
+      name: "legacy animated prefix",
+      payload: { text: "Thinking...\n\n_hidden_" },
+      expected: true,
+    },
+    { name: "legacy prefix", payload: { text: "  \n Reasoning:\n_hidden_" }, expected: true },
+    { name: "blockquote", payload: { text: "> Thinking\n> _hidden_" }, expected: true },
+    {
+      name: "visible prose starting with thinking",
+      payload: { text: "Thinking... this is the answer" },
+      expected: false,
+    },
+    {
+      name: "visible exact thinking label",
+      payload: { text: "Thinking..." },
+      expected: false,
+    },
+    {
+      name: "visible thinking status line",
+      payload: { text: "Thinking...\nI'll check that now" },
+      expected: false,
+    },
     {
       name: "mid-message mention",
-      payload: { text: "Intro\nReasoning: visible discussion" },
+      payload: { text: "Intro\nThinking: visible discussion" },
       expected: false,
     },
     { name: "missing text", payload: {}, expected: false },
@@ -206,6 +230,34 @@ describe("normalizeOutboundReplyPayload", () => {
     });
   });
 
+  it("preserves rich outbound fields from loose payload objects", () => {
+    const presentation = {
+      blocks: [{ type: "buttons", buttons: [{ label: "Approve", value: "approve" }] }],
+    };
+    const interactive = {
+      blocks: [{ type: "buttons", buttons: [{ label: "Open", value: "open" }] }],
+    };
+    const channelData = { webchat: { cardId: "card-1" } };
+
+    expect(
+      normalizeOutboundReplyPayload({
+        presentation,
+        interactive,
+        channelData,
+        trustedLocalMedia: true,
+      }),
+    ).toEqual({
+      text: undefined,
+      mediaUrls: undefined,
+      mediaUrl: undefined,
+      presentation,
+      interactive,
+      channelData,
+      sensitiveMedia: undefined,
+      replyToId: undefined,
+    });
+  });
+
   it("keeps the normalized deliverer from forwarding trustedLocalMedia", async () => {
     const handler = vi.fn(async () => {});
     const deliver = createNormalizedOutboundDeliverer(handler);
@@ -223,6 +275,48 @@ describe("normalizeOutboundReplyPayload", () => {
       sensitiveMedia: true,
       replyToId: undefined,
       mediaUrls: undefined,
+    });
+  });
+});
+
+describe("TTS supplement payload helpers", () => {
+  it("marks media payloads as TTS supplements without treating spokenText alone as enough", () => {
+    const explicitTtsCommandPayload = {
+      mediaUrl: "file:///tmp/tts.mp3",
+      spokenText: "read this",
+    };
+
+    expect(getReplyPayloadTtsSupplement(explicitTtsCommandPayload)).toBeUndefined();
+
+    const marked = markReplyPayloadAsTtsSupplement(explicitTtsCommandPayload, "read this");
+
+    expect(getReplyPayloadTtsSupplement(marked)).toEqual({ spokenText: "read this" });
+    expect(
+      getReplyPayloadTtsSupplement(
+        markReplyPayloadAsTtsSupplement(explicitTtsCommandPayload, "read this", {
+          visibleTextAlreadyDelivered: true,
+        }),
+      ),
+    ).toEqual({ spokenText: "read this", visibleTextAlreadyDelivered: true });
+  });
+
+  it("strips visible content while keeping TTS supplement media fallback text", () => {
+    expect(
+      buildTtsSupplementMediaPayload(
+        markReplyPayloadAsTtsSupplement({
+          text: "visible",
+          mediaUrl: "file:///tmp/tts.mp3",
+          audioAsVoice: true,
+          presentation: { title: "visible", blocks: [] },
+          interactive: { blocks: [] },
+          btw: { question: "side" },
+        }),
+      ),
+    ).toEqual({
+      mediaUrl: "file:///tmp/tts.mp3",
+      audioAsVoice: true,
+      spokenText: "visible",
+      ttsSupplement: { spokenText: "visible" },
     });
   });
 });
@@ -346,6 +440,39 @@ describe("hasOutboundReplyContent", () => {
       payload: { text: "   ", mediaUrls: ["https://example.com/a.png"] },
       options: { trimText: true },
       expected: true,
+    },
+    {
+      name: "detects presentation-only content",
+      payload: {
+        text: "   ",
+        presentation: {
+          blocks: [{ type: "buttons", buttons: [{ label: "Approve", value: "approve" }] }],
+        },
+      },
+      options: { trimText: true },
+      expected: true,
+    },
+    {
+      name: "detects interactive-only content",
+      payload: {
+        interactive: {
+          blocks: [{ type: "buttons", buttons: [{ label: "Open", value: "open" }] }],
+        },
+      },
+      options: undefined,
+      expected: true,
+    },
+    {
+      name: "detects channel data-only content",
+      payload: { channelData: { webchat: { cardId: "card-1" } } },
+      options: undefined,
+      expected: true,
+    },
+    {
+      name: "ignores empty rich payload fields",
+      payload: { presentation: { blocks: [] }, interactive: { blocks: [] }, channelData: {} },
+      options: undefined,
+      expected: false,
     },
   ])("$name", ({ payload, options, expected }) => {
     expect(hasOutboundReplyContent(payload, options)).toBe(expected);

@@ -90,11 +90,28 @@ describe("install.ps1 failure handling", () => {
     expect(npmInstallBody).toContain('$env:NPM_CONFIG_FUND = "false"');
     expect(npmInstallBody).toContain('$env:NPM_CONFIG_AUDIT = "false"');
     expect(npmInstallBody).toContain('$env:NPM_CONFIG_SCRIPT_SHELL = "cmd.exe"');
+    expect(npmInstallBody).toContain('$freshnessArgs = @("--min-release-age=0")');
+    expect(npmInstallBody).toContain("Remove-Item Env:NPM_CONFIG_BEFORE");
+    expect(npmInstallBody).toContain("Remove-Item Env:NPM_CONFIG_MIN_RELEASE_AGE");
     expect(npmInstallBody).toContain('$env:NODE_LLAMA_CPP_SKIP_DOWNLOAD = "1"');
+    expect(npmInstallBody).toContain(
+      '$npmOutput = & (Get-NpmCommandPath) install -g @freshnessArgs "$installSpec"',
+    );
     expect(npmInstallBody).toContain("$env:NPM_CONFIG_LOGLEVEL = $prevLogLevel");
+    expect(npmInstallBody).toContain("$env:NPM_CONFIG_BEFORE = $prevBefore");
     expect(npmInstallBody).toContain(
       "$env:NODE_LLAMA_CPP_SKIP_DOWNLOAD = $prevNodeLlamaSkipDownload",
     );
+  });
+
+  it("rejects OpenClaw GitHub source targets for npm installs", () => {
+    const npmInstallBody = extractFunctionBody(source, "Install-OpenClaw");
+    const sourceTargetBody = extractFunctionBody(source, "Test-OpenClawSourcePackageInstallSpec");
+    expect(sourceTargetBody).toContain('$normalizedTag -eq "main"');
+    expect(sourceTargetBody).toContain("^github:openclaw/openclaw");
+    expect(npmInstallBody).toContain("Test-OpenClawSourcePackageInstallSpec -RequestedTag $Tag");
+    expect(npmInstallBody).toContain("npm installs do not support OpenClaw GitHub source targets");
+    expect(npmInstallBody).toContain("-InstallMethod git -Tag main");
   });
 
   it("cleans legacy git submodules only from the selected git checkout", () => {
@@ -102,6 +119,17 @@ describe("install.ps1 failure handling", () => {
     const mainBody = extractFunctionBody(source, "Main");
     expect(gitInstallBody).toContain("Remove-LegacySubmodule -RepoDir $RepoDir");
     expect(mainBody).not.toContain("Remove-LegacySubmodule");
+  });
+
+  it("launches interactive onboarding outside Main's captured output", () => {
+    const interactiveCommandBody = extractFunctionBody(source, "Invoke-InteractiveOpenClawCommand");
+    const mainBody = extractFunctionBody(source, "Main");
+    expect(interactiveCommandBody).toContain("Start-Process");
+    expect(interactiveCommandBody).toContain("-NoNewWindow");
+    expect(interactiveCommandBody).toContain("-Wait");
+    expect(interactiveCommandBody).toContain("-PassThru");
+    expect(mainBody).toContain('Write-Host "Starting setup..." -ForegroundColor Cyan');
+    expect(mainBody).toContain("Invoke-InteractiveOpenClawCommand onboard");
   });
 
   runIfPowerShell("exits non-zero when run as a script file", () => {

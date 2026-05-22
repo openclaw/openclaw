@@ -57,8 +57,9 @@ async function handleAgentEndAndReadWarnMeta(ctx: EmbeddedPiSubscribeContext) {
 
   const warn = vi.mocked(ctx.log.warn);
   expect(warn).toHaveBeenCalledTimes(1);
-  expect(warn.mock.calls.at(0)?.[0]).toBe("embedded run agent end");
-  return readRecord(warn.mock.calls.at(0)?.[1]);
+  const [message, meta] = firstMockCall(warn);
+  expect(message).toBe("embedded run agent end");
+  return readRecord(meta);
 }
 
 function readRecord(value: unknown): Record<string, unknown> {
@@ -66,6 +67,18 @@ function readRecord(value: unknown): Record<string, unknown> {
     throw new Error("expected metadata record");
   }
   return value as Record<string, unknown>;
+}
+
+function firstMockCall(mock: { mock: { calls: ReadonlyArray<ReadonlyArray<unknown>> } }) {
+  const call = mock.mock.calls[0];
+  if (!call) {
+    throw new Error("expected first mock call");
+  }
+  return call;
+}
+
+function firstWarnMeta(ctx: EmbeddedPiSubscribeContext): Record<string, unknown> {
+  return readRecord(firstMockCall(vi.mocked(ctx.log.warn))[1]);
 }
 
 describe("handleAgentEnd", () => {
@@ -137,8 +150,7 @@ describe("handleAgentEnd", () => {
 
     await handleAgentEnd(ctx);
 
-    const warn = vi.mocked(ctx.log.warn);
-    const meta = readRecord(warn.mock.calls.at(0)?.[1]);
+    const meta = firstWarnMeta(ctx);
     expect(meta.consoleMessage).toBe(
       "embedded run agent end: runId=run-1 isError=true model=claude sonnet 4 provider=anthropic]8;;https://evil.test error=LLM request failed: connection refused by the provider endpoint. rawError=connection refused",
     );
@@ -162,8 +174,7 @@ describe("handleAgentEnd", () => {
 
     await handleAgentEnd(ctx);
 
-    const warn = vi.mocked(ctx.log.warn);
-    const meta = readRecord(warn.mock.calls.at(0)?.[1]);
+    const meta = firstWarnMeta(ctx);
     expect(meta.event).toBe("embedded_run_agent_end");
     expect(meta.error).toBe("x-api-key: ***");
     expect(meta.rawErrorPreview).toBe("x-api-key: ***");
@@ -189,35 +200,50 @@ describe("handleAgentEnd", () => {
 
     await handleAgentEnd(ctx);
 
-    const meta = readRecord(vi.mocked(ctx.log.warn).mock.calls.at(0)?.[1]);
+    const meta = firstWarnMeta(ctx);
     expect(meta.failoverReason).toBe("auth");
     expect(meta.providerRuntimeFailureKind).toBe("auth_scope");
     expect(meta.httpCode).toBe("401");
   });
 
-  it("omits raw HTML auth bodies from consoleMessage for HTML 403 auth failures", async () => {
-    const ctx = createContext({
-      role: "assistant",
-      stopReason: "error",
-      provider: "openai-codex",
-      model: "gpt-5.4",
+  it.each([
+    {
       errorMessage: "403 <!DOCTYPE html><html><body>Access denied</body></html>",
-      content: [{ type: "text", text: "" }],
-    });
+      expectedError:
+        "Authentication failed at the provider. Re-authenticate and verify your provider credentials and account access.",
+      expectedKind: "auth_html",
+      expectedPreview: "403 <!DOCTYPE html><html><body>Access denied</body></html>",
+    },
+    {
+      errorMessage: "401 <!DOCTYPE html><html><body>Unauthorized</body></html>",
+      expectedError:
+        "Authentication failed at the provider. Re-authenticate and verify your provider credentials and account access.",
+      expectedKind: "auth_html",
+      expectedPreview: "401 <!DOCTYPE html><html><body>Unauthorized</body></html>",
+    },
+  ])(
+    "omits raw HTML auth bodies from consoleMessage for $expectedKind failures",
+    async ({ errorMessage, expectedError, expectedKind, expectedPreview }) => {
+      const ctx = createContext({
+        role: "assistant",
+        stopReason: "error",
+        provider: "openai-codex",
+        model: "gpt-5.4",
+        errorMessage,
+        content: [{ type: "text", text: "" }],
+      });
 
-    await handleAgentEnd(ctx);
+      await handleAgentEnd(ctx);
 
-    const warnMeta = vi.mocked(ctx.log.warn).mock.calls.at(0)?.[1];
-    const meta = readRecord(warnMeta);
-    expect(meta.providerRuntimeFailureKind).toBe("auth_html_403");
-    expect(meta.rawErrorPreview).toBe("403 <!DOCTYPE html><html><body>Access denied</body></html>");
-    expect(meta.error).toBe(
-      "Authentication failed with an HTML 403 response from the provider. Re-authenticate and verify your provider account access.",
-    );
-    const consoleMsg = typeof meta.consoleMessage === "string" ? meta.consoleMessage : "";
-    expect(consoleMsg).not.toContain("rawError=");
-    expect(consoleMsg).not.toContain("<html>");
-  });
+      const meta = firstWarnMeta(ctx);
+      expect(meta.providerRuntimeFailureKind).toBe(expectedKind);
+      expect(meta.rawErrorPreview).toBe(expectedPreview);
+      expect(meta.error).toBe(expectedError);
+      const consoleMsg = typeof meta.consoleMessage === "string" ? meta.consoleMessage : "";
+      expect(consoleMsg).not.toContain("rawError=");
+      expect(consoleMsg).not.toContain("<html>");
+    },
+  );
 
   it("keeps non-error run-end logging on debug only", async () => {
     const ctx = createContext(undefined);
@@ -328,6 +354,31 @@ describe("handleAgentEnd", () => {
     ctx.state.livenessState = "working";
     ctx.state.assistantTexts = [];
     ctx.state.hadDeterministicSideEffect = true;
+
+    await handleAgentEnd(ctx);
+
+    expect(onAgentEvent).toHaveBeenCalledWith({
+      stream: "lifecycle",
+      data: {
+        phase: "end",
+        livenessState: "working",
+        replayInvalid: true,
+      },
+    });
+  });
+
+  it("keeps accepted session spawns from being marked abandoned", async () => {
+    const onAgentEvent = vi.fn();
+    const ctx = createContext(undefined, { onAgentEvent });
+    ctx.state.replayState = { ...ctx.state.replayState, replayInvalid: true };
+    ctx.state.livenessState = "working";
+    ctx.state.assistantTexts = [];
+    ctx.state.acceptedSessionSpawns = [
+      {
+        runId: "run-child",
+        childSessionKey: "agent:claude:subagent:child",
+      },
+    ];
 
     await handleAgentEnd(ctx);
 

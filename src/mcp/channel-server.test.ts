@@ -75,7 +75,7 @@ async function flushMcpNotifications() {
 }
 
 function requireFirstMockCall(mock: { mock: { calls: unknown[][] } }, label: string): unknown[] {
-  const call = mock.mock.calls.at(0);
+  const call = mock.mock.calls[0];
   if (!call) {
     throw new Error(`expected ${label} call`);
   }
@@ -207,7 +207,9 @@ describe("openclaw channel mcp server", () => {
         const messages = await bridge.readMessages(sessionKey, 5);
         expect(messages[0]?.role).toBe("assistant");
         expect(messages[0]?.content).toEqual([{ type: "text", text: "hello from transcript" }]);
-        expect((messages[1]?.__openclaw as { id?: string } | undefined)?.id).toBe("msg-attachment");
+        expect((messages[1]?.["__openclaw"] as { id?: string } | undefined)?.id).toBe(
+          "msg-attachment",
+        );
         expect(
           extractAttachmentsFromMessage(messages[1]).some(
             (entry) => (entry as { type?: unknown }).type === "image",

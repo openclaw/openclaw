@@ -17,6 +17,7 @@ import {
   type ChatInputHistoryKeyResult,
   type ChatInputHistoryState,
 } from "./chat/input-history.ts";
+import { reconcileChatRunLifecycle } from "./chat/run-lifecycle.ts";
 import type { ChatSideResult } from "./chat/side-result.ts";
 import { executeSlashCommand } from "./chat/slash-command-executor.ts";
 import { parseSlashCommand, refreshSlashCommands } from "./chat/slash-commands.ts";
@@ -34,6 +35,7 @@ import { loadSessions, type SessionsState } from "./controllers/sessions.ts";
 import type { GatewayBrowserClient, GatewayHelloOk } from "./gateway.ts";
 import { normalizeBasePath } from "./navigation.ts";
 import { parseAgentSessionKey } from "./session-key.ts";
+import { isSessionRunActive } from "./session-run-state.ts";
 import { normalizeLowercaseStringOrEmpty } from "./string-coerce.ts";
 import type { ChatModelOverride, ModelCatalogEntry } from "./types.ts";
 import type { SessionsListResult } from "./types.ts";
@@ -83,7 +85,8 @@ export type ChatAbortOptions = {
   preserveDraft?: boolean;
 };
 
-export const CHAT_SESSIONS_ACTIVE_MINUTES = 120;
+// Chat pickers need recency-free session rows so older channel chats remain selectable.
+export const CHAT_SESSIONS_ACTIVE_MINUTES = 0;
 export const CHAT_SESSIONS_REFRESH_LIMIT = 100;
 export {
   handleChatDraftChange,
@@ -107,7 +110,7 @@ export function hasAbortableSessionRun(host: {
   }
   return Boolean(
     host.sessionsResult?.sessions.some(
-      (session) => session.key === host.sessionKey && session.hasActiveRun === true,
+      (session) => session.key === host.sessionKey && isSessionRunActive(session),
     ),
   );
 }
@@ -731,13 +734,22 @@ async function clearChatHistory(host: ChatHost) {
   if (!host.client || !host.connected) {
     return;
   }
+  const hadActiveRun = hasAbortableSessionRun(host);
   try {
     await host.client.request("sessions.reset", { key: host.sessionKey });
     host.chatMessages = [];
     host.chatSideResult = null;
-    host.chatSideResultTerminalRuns?.clear();
-    host.chatStream = null;
-    host.chatRunId = null;
+    reconcileChatRunLifecycle(host as unknown as Parameters<typeof reconcileChatRunLifecycle>[0], {
+      outcome: hadActiveRun ? "interrupted" : undefined,
+      sessionStatus: "killed",
+      runId: host.chatRunId,
+      sessionKey: host.sessionKey,
+      clearLocalRun: true,
+      clearChatStream: true,
+      clearToolStream: true,
+      clearSideResultTerminalRuns: true,
+      clearRunStatus: !hadActiveRun,
+    });
     await loadChatHistory(host as unknown as ChatState);
   } catch (err) {
     host.lastError = String(err);
@@ -773,7 +785,6 @@ export async function refreshChat(
       limit: CHAT_SESSIONS_REFRESH_LIMIT,
       includeGlobal: true,
       includeUnknown: true,
-      agentId: resolveAgentIdForSession(host) ?? undefined,
     }),
     refreshChatAvatar(host),
     refreshChatModels(host),

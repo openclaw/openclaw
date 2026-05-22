@@ -93,7 +93,7 @@ On Discord, native command specs may include `descriptionLocalizations`, which O
   Enables `/restart` plus gateway restart tool actions.
 </ParamField>
 <ParamField path="commands.ownerAllowFrom" type="string[]">
-  Sets the explicit owner allowlist for owner-only command/tool surfaces. This is the human operator account that can approve dangerous actions and run commands such as `/diagnostics`, `/export-trajectory`, and `/config`. It is separate from `commands.allowFrom` and from DM pairing access.
+  Sets the explicit owner allowlist for owner-only command surfaces and owner-gated channel actions. This is the human operator account that can approve dangerous actions and run commands such as `/diagnostics`, `/export-trajectory`, and `/config`. It is separate from `commands.allowFrom` and from DM pairing access.
 </ParamField>
 <ParamField path="channels.<channel>.commands.enforceOwnerForCommands" type="boolean" default="false">
   Per-channel: makes owner-only commands require **owner identity** to run on that surface. When `true`, the sender must either match a resolved owner candidate (for example an entry in `commands.ownerAllowFrom` or provider-native owner metadata) or hold internal `operator.admin` scope on an internal message channel. A wildcard entry in channel `allowFrom`, or an empty/unresolved owner-candidate list, is **not** sufficient — owner-only commands fail closed on that channel. Leave this off if you want owner-only commands gated only by `ownerAllowFrom` and the standard command allowlists.
@@ -124,7 +124,7 @@ Current source-of-truth:
 
 <AccordionGroup>
   <Accordion title="Sessions and runs">
-    - `/new [model]` starts a new session; `/reset` is the reset alias.
+    - `/new [model]` archives the current session and starts a fresh one; `/reset` wipes the current session in place. They are not aliases.
     - Control UI intercepts typed `/new` to create and switch to a fresh dashboard session, except when `session.dmScope: "main"` is configured and the current parent is the agent's main session; in that case `/new` resets the main session in place. Typed `/reset` still runs the Gateway's in-place reset.
     - `/reset soft [message]` keeps the current transcript, drops reused CLI backend session ids, and reruns startup/system-prompt loading in-place.
     - `/compact [instructions]` compacts the session context. See [Compaction](/concepts/compaction).
@@ -144,8 +144,8 @@ Current source-of-truth:
     - `/exec host=<auto|sandbox|gateway|node> security=<deny|allowlist|full> ask=<off|on-miss|always> node=<id>` shows or sets exec defaults.
     - `/model [name|#|status]` shows or sets the model.
     - `/models [provider] [page] [limit=<n>|size=<n>|all]` lists configured/auth-available providers or models for a provider; add `all` to browse that provider's full catalog. `provider/*` entries in `agents.defaults.models` make `/model` and `/models` show discovered models only for those providers.
-    - `/queue <mode>` manages queue behavior (`steer`, legacy `queue`, `followup`, `collect`, `steer-backlog`, `interrupt`) plus options like `debounce:0.5s cap:25 drop:summarize`; `/queue default` or `/queue reset` clears the session override. See [Command queue](/concepts/queue) and [Steering queue](/concepts/queue-steering).
-    - `/steer <message>` injects guidance into the active run for the current session, independent of `/queue` mode. It does not start a new run when the session is idle. Alias: `/tell`. See [Steer](/tools/steer).
+    - `/queue <mode>` manages active-run queue behavior (`steer`, `followup`, `collect`, `interrupt`) plus options like `debounce:0.5s cap:25 drop:summarize`; `/queue default` or `/queue reset` clears the session override. Mid-run prompts steer by default without a queue directive. See [Command queue](/concepts/queue) and [Steering queue](/concepts/queue-steering).
+    - `/steer <message>` injects guidance into the active run for the current session, independent of `/queue` mode. If steering is unavailable or the session is idle, `<message>` continues as a normal prompt. Alias: `/tell`. See [Steer](/tools/steer).
 
   </Accordion>
   <Accordion title="Discovery and status">
@@ -164,7 +164,7 @@ Current source-of-truth:
   <Accordion title="Skills, allowlists, approvals">
     - `/skill <name> [input]` runs a skill by name.
     - `/allowlist [list|add|remove] ...` manages allowlist entries. Text-only.
-    - `/approve <id> <decision>` resolves exec approval prompts.
+    - `/approve <id> <decision>` resolves exec or plugin approval prompts.
     - `/btw <question>` asks a side question without changing future session context. Alias: `/side`. See [BTW](/tools/btw).
 
   </Accordion>
@@ -251,7 +251,7 @@ User-invocable skills are also exposed as slash commands:
     - In multi-account channels, config-targeted `/allowlist --account <id>` and `/config set channels.<provider>.accounts.<id>...` also honor the target account's `configWrites`.
     - `/usage` controls the per-response usage footer; `/usage cost` prints a local cost summary from OpenClaw session logs.
     - `/restart` is enabled by default; set `commands.restart: false` to disable it.
-    - `/plugins install <spec>` accepts the same plugin specs as `openclaw plugins install`: local path/archive, npm package, `git:<repo>`, or `clawhub:<pkg>`, then requests a Gateway restart because plugin source modules changed.
+    - `/plugins install <spec>` accepts the same plugin specs as `openclaw plugins install`: local path/archive, npm package, `git:<repo>`, or `clawhub:<pkg>`. Managed Gateways restart automatically because plugin source modules changed.
     - `/plugins enable|disable` updates plugin config and triggers Gateway plugin reload for new agent turns.
 
   </Accordion>
@@ -266,7 +266,7 @@ User-invocable skills are also exposed as slash commands:
     - `/trace` is narrower than `/verbose`: it only reveals plugin-owned trace/debug lines and keeps normal verbose tool chatter off.
     - `/fast on|off` persists a session override. Use the Sessions UI `inherit` option to clear it and fall back to config defaults.
     - `/fast` is provider-specific: OpenAI/OpenAI Codex map it to `service_tier=priority` on native Responses endpoints, while direct public Anthropic requests, including OAuth-authenticated traffic sent to `api.anthropic.com`, map it to `service_tier=auto` or `standard_only`. See [OpenAI](/providers/openai) and [Anthropic](/providers/anthropic).
-    - Tool failure summaries are still shown when relevant, but detailed failure text is only included when `/verbose` is `on` or `full`.
+    - Tool failure summaries are still shown when relevant, but detailed failure text is only included when `/verbose full` is enabled.
     - `/reasoning`, `/verbose`, and `/trace` are risky in group settings: they may reveal internal reasoning, tool output, or plugin diagnostics you did not intend to expose. Prefer leaving them off, especially in group chats.
 
   </Accordion>
@@ -432,7 +432,7 @@ Examples:
 - `/plugins list` and `/plugins show` use real plugin discovery against the current workspace plus on-disk config.
 - `/plugins install` installs from ClawHub, npm, git, local directories, and archives.
 - `/plugins enable|disable` updates plugin config only; it does not install or uninstall plugins.
-- Enable and disable changes hot-reload Gateway plugin runtime surfaces for new agent turns; install requests a Gateway restart because plugin source modules changed.
+- Enable and disable changes hot-reload Gateway plugin runtime surfaces for new agent turns; install restarts managed Gateways automatically because plugin source modules changed.
 
 </Note>
 

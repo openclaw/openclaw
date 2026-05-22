@@ -1,7 +1,7 @@
 import type { StreamFn } from "@earendil-works/pi-agent-core";
 import { createAssistantMessageEventStream } from "@earendil-works/pi-ai";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { __resetLmstudioPreloadCooldownForTest, wrapLmstudioInferencePreload } from "./stream.js";
+import { resetLmstudioPreloadCooldownForTest, wrapLmstudioInferencePreload } from "./stream.js";
 
 const ensureLmstudioModelLoadedMock = vi.hoisted(() => vi.fn());
 const resolveLmstudioProviderHeadersMock = vi.hoisted(() =>
@@ -55,7 +55,7 @@ function expectSingleDoneEvent(events: StreamEvent[]) {
 }
 
 function requireMockCallArg(mock: { mock: { calls: unknown[][] } }, label: string) {
-  const call = mock.mock.calls.at(0);
+  const call = mock.mock.calls[0];
   if (!call) {
     throw new Error(`expected ${label} call`);
   }
@@ -163,7 +163,7 @@ function runWrappedLmstudioStream(
 
 describe("lmstudio stream wrapper", () => {
   beforeEach(() => {
-    __resetLmstudioPreloadCooldownForTest();
+    resetLmstudioPreloadCooldownForTest();
   });
 
   afterEach(() => {
@@ -173,7 +173,7 @@ describe("lmstudio stream wrapper", () => {
     resolveLmstudioRuntimeApiKeyMock.mockReset();
     resolveLmstudioProviderHeadersMock.mockResolvedValue(undefined);
     resolveLmstudioRuntimeApiKeyMock.mockResolvedValue(undefined);
-    __resetLmstudioPreloadCooldownForTest();
+    resetLmstudioPreloadCooldownForTest();
   });
 
   it("preloads LM Studio model before inference using model context window", async () => {

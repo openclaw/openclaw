@@ -2,7 +2,7 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createOllamaWebSearchProvider as createContractOllamaWebSearchProvider } from "../web-search-contract-api.js";
 import {
-  __testing as testing,
+  testing,
   createOllamaWebSearchProvider,
   runOllamaWebSearch,
 } from "./web-search-provider.js";
@@ -389,6 +389,20 @@ describe("ollama web search provider", () => {
     await expect(runOllamaWebSearch({ query: "latest openclaw release" })).rejects.toThrow(
       "ollama signin",
     );
+  });
+
+  it("reports malformed Ollama web search JSON with a stable provider error", async () => {
+    fetchWithSsrFGuardMock.mockResolvedValueOnce({
+      response: new Response("{ nope", { status: 200 }),
+      release: vi.fn(async () => {}),
+    });
+
+    await expect(
+      runOllamaWebSearch({
+        config: createOllamaConfig(),
+        query: "openclaw",
+      }),
+    ).rejects.toThrow("Ollama web search returned malformed JSON");
   });
 
   it("warns when Ollama is not reachable during setup without cancelling", async () => {

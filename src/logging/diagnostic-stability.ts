@@ -146,8 +146,8 @@ function getDiagnosticStabilityState(): DiagnosticStabilityState {
   const globalStore = globalThis as typeof globalThis & {
     __openclawDiagnosticStabilityState?: DiagnosticStabilityState;
   };
-  globalStore.__openclawDiagnosticStabilityState ??= createState();
-  return globalStore.__openclawDiagnosticStabilityState;
+  globalStore["__openclawDiagnosticStabilityState"] ??= createState();
+  return globalStore["__openclawDiagnosticStabilityState"];
 }
 
 function copyMemory(memory: DiagnosticMemoryUsage): DiagnosticMemoryUsage {
@@ -217,6 +217,21 @@ function sanitizeDiagnosticEvent(event: DiagnosticEventPayload): DiagnosticStabi
       record.channel = event.channel;
       record.source = event.source;
       record.queueDepth = event.queueDepth;
+      break;
+    case "message.received":
+      record.channel = event.channel;
+      record.source = event.source;
+      break;
+    case "message.dispatch.started":
+      record.channel = event.channel;
+      record.source = event.source;
+      break;
+    case "message.dispatch.completed":
+      record.channel = event.channel;
+      record.source = event.source;
+      record.durationMs = event.durationMs;
+      record.outcome = event.outcome;
+      assignReasonCode(record, event.reason);
       break;
     case "message.processed":
       record.channel = event.channel;
@@ -294,6 +309,11 @@ function sanitizeDiagnosticEvent(event: DiagnosticEventPayload): DiagnosticStabi
         record.activeWorkKind = event.activeWorkKind;
       }
       assignReasonCode(record, event.outcomeReason ?? event.reason);
+      break;
+    case "session.turn.created":
+      record.source = event.agentId;
+      record.channel = event.channel;
+      record.outcome = event.trigger;
       break;
     case "queue.lane.enqueue":
       record.source = event.lane;
@@ -710,5 +730,5 @@ export function resetDiagnosticStabilityRecorderForTest(): void {
   const globalStore = globalThis as typeof globalThis & {
     __openclawDiagnosticStabilityState?: DiagnosticStabilityState;
   };
-  globalStore.__openclawDiagnosticStabilityState = next;
+  globalStore["__openclawDiagnosticStabilityState"] = next;
 }

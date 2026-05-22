@@ -1,6 +1,7 @@
 import type { AgentInternalEvent } from "../../agents/internal-events.js";
 import type { SpawnedRunMetadata } from "../../agents/spawned-context.js";
 import type { PromptMode } from "../../agents/system-prompt.types.js";
+import type { SourceReplyDeliveryMode } from "../../auto-reply/get-reply-options.types.js";
 import type { ChannelOutboundTargetMode } from "../../channels/plugins/types.public.js";
 import type { PromptImageOrderEntry } from "../../media/prompt-image-order.js";
 import type { InputProvenance } from "../../sessions/input-provenance.js";
@@ -82,7 +83,7 @@ export type AgentCommandOpts = {
   runContext?: AgentRunContext;
   /** Internal trusted exec approval follow-up elevated defaults. */
   bashElevated?: ExecElevatedDefaults;
-  /** Whether this caller is authorized for owner-only tools (defaults true for local CLI calls). */
+  /** Trusted sender identity bit for command/channel-action auth; defaults true for local CLI calls. */
   senderIsOwner?: boolean;
   /** Whether this caller is authorized to use provider/model per-run overrides. */
   allowModelOverride?: boolean;
@@ -105,6 +106,8 @@ export type AgentCommandOpts = {
   bootstrapContextRunKind?: "default" | "heartbeat" | "cron";
   internalEvents?: AgentInternalEvent[];
   inputProvenance?: InputProvenance;
+  /** Visible source replies must be sent through the message tool when set. */
+  sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
   /** Per-call stream param overrides (best-effort). */
   streamParams?: AgentStreamParams;
   /** Explicit workspace directory override (for subagents to inherit parent workspace). */
@@ -115,6 +118,8 @@ export type AgentCommandOpts = {
   cleanupCliLiveSessionOnRunEnd?: boolean;
   /** Internal local CLI callers can annotate result metadata before JSON/text output. */
   resultMetaOverrides?: AgentCommandResultMetaOverrides;
+  /** Called when the actual run model is selected, including fallback retries. */
+  onActiveModelSelected?: (ctx: { provider: string; model: string }) => void;
   /** Internal one-shot model probe mode: no tools, no workspace/chat prompt policy. */
   modelRun?: boolean;
   /** Internal prompt-mode override for trusted local/gateway callsites. */
@@ -129,8 +134,8 @@ export type AgentCommandIngressOpts = Omit<
   AgentCommandOpts,
   "senderIsOwner" | "allowModelOverride" | "resultMetaOverrides"
 > & {
-  /** Ingress callsites must always pass explicit owner-tool authorization state. */
-  senderIsOwner: boolean;
+  /** Trusted sender identity bit for command/channel-action auth; defaults false for ingress. */
+  senderIsOwner?: boolean;
   /** Ingress callsites must always pass explicit model-override authorization state. */
   allowModelOverride: boolean;
 };

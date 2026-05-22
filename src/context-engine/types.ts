@@ -24,6 +24,24 @@ export type AssembleResult = {
   promptAuthority?: "assembled" | "preassembly_may_overflow";
   /** Optional context-engine-provided instructions prepended to the runtime system prompt */
   systemPromptAddition?: string;
+  /**
+   * Optional projection lifecycle for hosts with persistent backend threads.
+   *
+   * Context engines that return `thread_bootstrap` ask the host to inject the
+   * assembled context once for the supplied epoch, then reuse the backend
+   * thread until the epoch changes. Engines that omit this field retain the
+   * legacy per-turn projection behavior.
+   */
+  contextProjection?: ContextEngineProjection;
+};
+
+export type ContextEngineProjection = {
+  /** How the assembled context should be projected into the backend runtime. */
+  mode: "per_turn" | "thread_bootstrap";
+  /** Stable context epoch. Changing this tells persistent backends to rotate. */
+  epoch?: string;
+  /** Optional diagnostic fingerprint for the projected context payload. */
+  fingerprint?: string;
 };
 
 export type CompactResult = {
@@ -280,6 +298,12 @@ export interface ContextEngine {
   /**
    * Compact context to reduce token usage.
    * May create summaries, prune old turns, etc.
+   *
+   * The host always bounds this call with a finite safety timeout (the same
+   * one that protects native runtime compaction). Engines that run long
+   * operations SHOULD additionally honor `abortSignal` so an in-flight
+   * compaction can be canceled promptly on run abort or host timeout instead
+   * of running to completion in the background.
    */
   compact(params: {
     sessionId: string;
@@ -295,6 +319,12 @@ export interface ContextEngine {
     customInstructions?: string;
     /** Optional runtime-owned context for engines that need caller state. */
     runtimeContext?: ContextEngineRuntimeContext;
+    /**
+     * Optional abort signal honored before and during compaction. The host
+     * aborts it on run-level abort or when its compaction safety timeout
+     * fires; engines should stop work and reject promptly when it aborts.
+     */
+    abortSignal?: AbortSignal;
   }): Promise<CompactResult>;
 
   /**

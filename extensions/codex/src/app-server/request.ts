@@ -6,6 +6,7 @@ import type {
   CodexAppServerRequestResult,
   JsonValue,
 } from "./protocol.js";
+import { resolveCodexAppServerDirectSandboxBypassBlock } from "./sandbox-guard.js";
 import {
   createIsolatedCodexAppServerClient,
   getSharedCodexAppServerClient,
@@ -17,8 +18,11 @@ export async function requestCodexAppServerJson<M extends CodexAppServerRequestM
   requestParams: CodexAppServerRequestParams<M>;
   timeoutMs?: number;
   startOptions?: CodexAppServerStartOptions;
-  authProfileId?: string;
+  authProfileId?: string | null;
+  agentDir?: string;
   config?: Parameters<typeof resolveCodexAppServerAuthProfileIdForAgent>[0]["config"];
+  sessionKey?: string;
+  sessionId?: string;
   isolated?: boolean;
 }): Promise<CodexAppServerRequestResult<M>>;
 export async function requestCodexAppServerJson<T = JsonValue | undefined>(params: {
@@ -26,8 +30,11 @@ export async function requestCodexAppServerJson<T = JsonValue | undefined>(param
   requestParams?: unknown;
   timeoutMs?: number;
   startOptions?: CodexAppServerStartOptions;
-  authProfileId?: string;
+  authProfileId?: string | null;
+  agentDir?: string;
   config?: Parameters<typeof resolveCodexAppServerAuthProfileIdForAgent>[0]["config"];
+  sessionKey?: string;
+  sessionId?: string;
   isolated?: boolean;
 }): Promise<T>;
 export async function requestCodexAppServerJson<T = JsonValue | undefined>(params: {
@@ -35,10 +42,23 @@ export async function requestCodexAppServerJson<T = JsonValue | undefined>(param
   requestParams?: unknown;
   timeoutMs?: number;
   startOptions?: CodexAppServerStartOptions;
-  authProfileId?: string;
+  authProfileId?: string | null;
+  agentDir?: string;
   config?: Parameters<typeof resolveCodexAppServerAuthProfileIdForAgent>[0]["config"];
+  sessionKey?: string;
+  sessionId?: string;
   isolated?: boolean;
 }): Promise<T> {
+  const sandboxBlock = resolveCodexAppServerDirectSandboxBypassBlock({
+    method: params.method,
+    requestParams: params.requestParams,
+    config: params.config,
+    sessionKey: params.sessionKey,
+    sessionId: params.sessionId,
+  });
+  if (sandboxBlock) {
+    throw new Error(sandboxBlock);
+  }
   const timeoutMs = params.timeoutMs ?? 60_000;
   return await withTimeout(
     (async () => {
@@ -48,13 +68,19 @@ export async function requestCodexAppServerJson<T = JsonValue | undefined>(param
         startOptions: params.startOptions,
         timeoutMs,
         authProfileId: params.authProfileId,
+        agentDir: params.agentDir,
         config: params.config,
       });
       try {
         return await client.request<T>(params.method, params.requestParams, { timeoutMs });
       } finally {
         if (params.isolated) {
-          client.close();
+          // Wait for the child to actually exit (with a SIGKILL fallback) so
+          // the parent process doesn't hang on an orphaned codex app-server.
+          // The stdio bin shim does not always propagate stdin EOF to the
+          // underlying codex binary, so the unref'd close() path can leave
+          // the child running and keep the parent's event loop alive.
+          await client.closeAndWait({ exitTimeoutMs: 2_000, forceKillDelayMs: 250 });
         }
       }
     })(),

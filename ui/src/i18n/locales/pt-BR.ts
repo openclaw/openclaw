@@ -348,6 +348,12 @@ export const pt_BR: TranslationMap = {
     eventLogSubtitle: "Latest gateway events.",
     noEvents: "No events yet.",
   },
+  quickSettings: {
+    security: {
+      browserEnabled: "Browser enabled",
+      toolProfile: "Tool profile",
+    },
+  },
   execApproval: {
     expiresIn: "expires in {time}",
     expired: "expired",
@@ -693,9 +699,6 @@ export const pt_BR: TranslationMap = {
     },
   },
   usage: {
-    page: {
-      subtitle: "Veja para onde vão os tokens, quando as sessões aumentam e o que gera custo.",
-    },
     common: {
       emptyValue: "—",
       unknown: "desconhecido",
@@ -1042,6 +1045,10 @@ export const pt_BR: TranslationMap = {
     settings: "Configurações do chat",
     thinkingToggle: "Alternar saída de pensamento/trabalho do assistente",
     toolCallsToggle: "Alternar chamadas de ferramenta e resultados de ferramenta",
+    autoScrollMode: "Modo de rolagem automática",
+    autoScrollAlways: "Sempre",
+    autoScrollNearBottom: "Próximo ao final",
+    autoScrollOff: "Desativado",
     focusToggle: "Alternar modo de foco (ocultar barra lateral + cabeçalho da página)",
     hideCronSessions: "Ocultar sessões de cron",
     showCronSessions: "Mostrar sessões de cron",
@@ -1203,6 +1210,9 @@ export const pt_BR: TranslationMap = {
       ascending: "Crescente",
       descending: "Decrescente",
       reset: "Redefinir",
+      emptyTitle: "No scheduled jobs yet.",
+      emptyHint: "Create one from a plain-language prompt; advanced fields can wait.",
+      emptyFilteredHint: "Clear or change filters to see scheduled jobs.",
       noMatching: "Nenhuma tarefa correspondente.",
       loading: "Carregando...",
       loadMore: "Carregar mais tarefas",
@@ -1238,6 +1248,7 @@ export const pt_BR: TranslationMap = {
     form: {
       editJob: "Editar tarefa",
       newJob: "Nova tarefa",
+      advancedJob: "Advanced job",
       updateSubtitle: "Atualize a tarefa agendada selecionada.",
       createSubtitle: "Crie um despertar agendado ou uma execução de agente.",
       required: "Obrigatório",

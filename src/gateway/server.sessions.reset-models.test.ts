@@ -10,6 +10,60 @@ import {
 
 const { createSessionStoreDir } = setupGatewaySessionsTestHarness();
 
+type ResetSessionEntry = {
+  sessionFile?: string;
+  chatType?: string;
+  channel?: string;
+  groupId?: string;
+  subject?: string;
+  groupChannel?: string;
+  space?: string;
+  spawnedBy?: string;
+  spawnedWorkspaceDir?: string;
+  parentSessionKey?: string;
+  forkedFromParent?: boolean;
+  spawnDepth?: number;
+  subagentRole?: string;
+  subagentControlScope?: string;
+  elevatedLevel?: string;
+  ttsAuto?: string;
+  providerOverride?: string;
+  modelOverride?: string;
+  authProfileOverride?: string;
+  authProfileOverrideSource?: string;
+  authProfileOverrideCompactionCount?: number;
+  sendPolicy?: string;
+  queueMode?: string;
+  queueDebounceMs?: number;
+  queueCap?: number;
+  queueDrop?: string;
+  groupActivation?: string;
+  groupActivationNeedsSystemIntro?: boolean;
+  execHost?: string;
+  execSecurity?: string;
+  execAsk?: string;
+  execNode?: string;
+  displayName?: string;
+  cliSessionBindings?: Record<
+    string,
+    {
+      sessionId?: string;
+      authProfileId?: string;
+      extraSystemPromptHash?: string;
+      mcpConfigHash?: string;
+    }
+  >;
+  cliSessionIds?: Record<string, string>;
+  claudeCliSessionId?: string;
+  deliveryContext?: {
+    channel?: string;
+    to?: string;
+    accountId?: string;
+    threadId?: string;
+  };
+  label?: string;
+};
+
 test("sessions.reset recomputes model from defaults instead of stale runtime model", async () => {
   await createSessionStoreDir();
   testState.agentConfig = {
@@ -91,6 +145,52 @@ test("sessions.reset drops cached skills snapshot so /new rebuilds visible skill
     { skillsSnapshot?: unknown }
   >;
   expect(store["agent:main:main"]?.skillsSnapshot).toBeUndefined();
+});
+
+test("sessions.reset rotates generated topic transcript files with the new session id", async () => {
+  const { dir, storePath } = await createSessionStoreDir();
+  const previousSessionId = "11111111-1111-4111-8111-111111111111";
+  const previousSessionFile = path.join(dir, `${previousSessionId}-topic-456.jsonl`);
+  await fs.writeFile(previousSessionFile, `${JSON.stringify({ role: "user", content: "old" })}\n`);
+
+  await writeSessionStore({
+    entries: {
+      "agent:main:telegram:group:123:topic:456": sessionStoreEntry(previousSessionId, {
+        sessionFile: previousSessionFile,
+      }),
+    },
+  });
+
+  const reset = await directSessionReq<{
+    ok: true;
+    key: string;
+    entry: {
+      sessionId: string;
+      sessionFile?: string;
+    };
+  }>("sessions.reset", {
+    key: "agent:main:telegram:group:123:topic:456",
+  });
+
+  expect(reset.ok).toBe(true);
+  const nextSessionId = reset.payload?.entry.sessionId;
+  const nextSessionFile = reset.payload?.entry.sessionFile;
+  if (!nextSessionId || !nextSessionFile) {
+    throw new Error("expected reset session id and file");
+  }
+  expect(nextSessionId).not.toBe(previousSessionId);
+  expect(path.basename(nextSessionFile)).toBe(`${nextSessionId}-topic-456.jsonl`);
+
+  const store = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
+    string,
+    {
+      sessionId?: string;
+      sessionFile?: string;
+    }
+  >;
+  const persistedEntry = store["agent:main:telegram:group:123:topic:456"];
+  expect(persistedEntry?.sessionId).toBe(nextSessionId);
+  expect(path.basename(persistedEntry?.sessionFile ?? "")).toBe(`${nextSessionId}-topic-456.jsonl`);
 });
 
 test("sessions.reset preserves legacy explicit model overrides without modelOverrideSource", async () => {
@@ -322,59 +422,7 @@ test("sessions.reset preserves spawned session ownership metadata", async () => 
   const reset = await directSessionReq<{
     ok: true;
     key: string;
-    entry: {
-      sessionFile?: string;
-      chatType?: string;
-      channel?: string;
-      groupId?: string;
-      subject?: string;
-      groupChannel?: string;
-      space?: string;
-      spawnedBy?: string;
-      spawnedWorkspaceDir?: string;
-      parentSessionKey?: string;
-      forkedFromParent?: boolean;
-      spawnDepth?: number;
-      subagentRole?: string;
-      subagentControlScope?: string;
-      elevatedLevel?: string;
-      ttsAuto?: string;
-      providerOverride?: string;
-      modelOverride?: string;
-      authProfileOverride?: string;
-      authProfileOverrideSource?: string;
-      authProfileOverrideCompactionCount?: number;
-      sendPolicy?: string;
-      queueMode?: string;
-      queueDebounceMs?: number;
-      queueCap?: number;
-      queueDrop?: string;
-      groupActivation?: string;
-      groupActivationNeedsSystemIntro?: boolean;
-      execHost?: string;
-      execSecurity?: string;
-      execAsk?: string;
-      execNode?: string;
-      displayName?: string;
-      cliSessionBindings?: Record<
-        string,
-        {
-          sessionId?: string;
-          authProfileId?: string;
-          extraSystemPromptHash?: string;
-          mcpConfigHash?: string;
-        }
-      >;
-      cliSessionIds?: Record<string, string>;
-      claudeCliSessionId?: string;
-      deliveryContext?: {
-        channel?: string;
-        to?: string;
-        accountId?: string;
-        threadId?: string;
-      };
-      label?: string;
-    };
+    entry: ResetSessionEntry;
   }>("sessions.reset", { key: "subagent:child" });
 
   expect(reset.ok).toBe(true);
@@ -432,59 +480,7 @@ test("sessions.reset preserves spawned session ownership metadata", async () => 
 
   const store = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
     string,
-    {
-      sessionFile?: string;
-      chatType?: string;
-      channel?: string;
-      groupId?: string;
-      subject?: string;
-      groupChannel?: string;
-      space?: string;
-      spawnedBy?: string;
-      spawnedWorkspaceDir?: string;
-      parentSessionKey?: string;
-      forkedFromParent?: boolean;
-      spawnDepth?: number;
-      subagentRole?: string;
-      subagentControlScope?: string;
-      elevatedLevel?: string;
-      ttsAuto?: string;
-      providerOverride?: string;
-      modelOverride?: string;
-      authProfileOverride?: string;
-      authProfileOverrideSource?: string;
-      authProfileOverrideCompactionCount?: number;
-      sendPolicy?: string;
-      queueMode?: string;
-      queueDebounceMs?: number;
-      queueCap?: number;
-      queueDrop?: string;
-      groupActivation?: string;
-      groupActivationNeedsSystemIntro?: boolean;
-      execHost?: string;
-      execSecurity?: string;
-      execAsk?: string;
-      execNode?: string;
-      displayName?: string;
-      cliSessionBindings?: Record<
-        string,
-        {
-          sessionId?: string;
-          authProfileId?: string;
-          extraSystemPromptHash?: string;
-          mcpConfigHash?: string;
-        }
-      >;
-      cliSessionIds?: Record<string, string>;
-      claudeCliSessionId?: string;
-      deliveryContext?: {
-        channel?: string;
-        to?: string;
-        accountId?: string;
-        threadId?: string;
-      };
-      label?: string;
-    }
+    ResetSessionEntry
   >;
   expect(store["agent:main:subagent:child"]?.sessionFile).toBe(customSessionFile);
   expect(store["agent:main:subagent:child"]?.chatType).toBe("group");

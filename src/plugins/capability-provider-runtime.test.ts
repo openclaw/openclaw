@@ -16,6 +16,7 @@ const mocks = vi.hoisted(() => ({
   createMockRegistry: () => ({
     plugins: [],
     diagnostics: [],
+    embeddingProviders: [],
     memoryEmbeddingProviders: [],
     speechProviders: [],
     realtimeTranscriptionProviders: [],
@@ -297,6 +298,7 @@ function expectCompatChainApplied(params: {
 
 describe("resolvePluginCapabilityProviders", () => {
   beforeAll(async () => {
+    vi.resetModules();
     ({
       resolveBundledCapabilityProviderIds,
       resolveManifestCapabilityProviderIds,

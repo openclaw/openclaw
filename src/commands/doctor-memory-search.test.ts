@@ -142,7 +142,7 @@ function resetMemoryRecallMocks() {
 }
 
 function firstNoteMessage(): string {
-  return String(note.mock.calls.at(0)?.[0] ?? "");
+  return String(note.mock.calls[0]?.[0] ?? "");
 }
 
 describe("noteMemorySearchHealth", () => {
@@ -274,6 +274,84 @@ describe("noteMemorySearchHealth", () => {
 
     expect(resolveApiKeyForProvider).not.toHaveBeenCalled();
     expect(checkQmdBinaryAvailability).not.toHaveBeenCalled();
+    expect(note).toHaveBeenCalledTimes(1);
+    expect(firstNoteMessage()).toContain("No active memory plugin is registered");
+  });
+
+  it("does not warn when an enabled alternate memory plugin owns the memory slot", async () => {
+    resolveActiveMemoryBackendConfig.mockReturnValue(null);
+    resolveMemorySearchConfig.mockReturnValue({
+      provider: "auto",
+      local: {},
+      remote: {},
+    });
+    const cfgWithLancedb = {
+      plugins: {
+        slots: { memory: "memory-lancedb" },
+        entries: { "memory-lancedb": { enabled: true, config: { dbPath: ".openclaw/memory" } } },
+      },
+    } as unknown as OpenClawConfig;
+
+    await noteMemorySearchHealth(cfgWithLancedb, {});
+
+    expect(resolveApiKeyForProvider).not.toHaveBeenCalled();
+    expect(checkQmdBinaryAvailability).not.toHaveBeenCalled();
+    expect(note).not.toHaveBeenCalled();
+  });
+
+  it("still warns when an alternate memory slot has no configured plugin entry", async () => {
+    resolveActiveMemoryBackendConfig.mockReturnValue(null);
+    resolveMemorySearchConfig.mockReturnValue({
+      provider: "auto",
+      local: {},
+      remote: {},
+    });
+    const cfgWithSlotOnly = {
+      plugins: { slots: { memory: "memory-lancedb" } },
+    } as unknown as OpenClawConfig;
+
+    await noteMemorySearchHealth(cfgWithSlotOnly, {});
+
+    expect(note).toHaveBeenCalledTimes(1);
+    expect(firstNoteMessage()).toContain("No active memory plugin is registered");
+  });
+
+  it("still warns when an alternate memory slot entry is disabled", async () => {
+    resolveActiveMemoryBackendConfig.mockReturnValue(null);
+    resolveMemorySearchConfig.mockReturnValue({
+      provider: "auto",
+      local: {},
+      remote: {},
+    });
+    const cfgWithDisabledLancedb = {
+      plugins: {
+        slots: { memory: "memory-lancedb" },
+        entries: { "memory-lancedb": { enabled: false } },
+      },
+    } as unknown as OpenClawConfig;
+
+    await noteMemorySearchHealth(cfgWithDisabledLancedb, {});
+
+    expect(note).toHaveBeenCalledTimes(1);
+    expect(firstNoteMessage()).toContain("No active memory plugin is registered");
+  });
+
+  it("still warns when an alternate memory slot entry is only a placeholder", async () => {
+    resolveActiveMemoryBackendConfig.mockReturnValue(null);
+    resolveMemorySearchConfig.mockReturnValue({
+      provider: "auto",
+      local: {},
+      remote: {},
+    });
+    const cfgWithPlaceholderEntry = {
+      plugins: {
+        slots: { memory: "memory-lancedb" },
+        entries: { "memory-lancedb": {} },
+      },
+    } as unknown as OpenClawConfig;
+
+    await noteMemorySearchHealth(cfgWithPlaceholderEntry, {});
+
     expect(note).toHaveBeenCalledTimes(1);
     expect(firstNoteMessage()).toContain("No active memory plugin is registered");
   });
@@ -852,7 +930,7 @@ describe("memory recall doctor integration", () => {
     expect(repairDreamingArtifacts).toHaveBeenCalledWith({
       workspaceDir: "/tmp/agent-default/workspace",
     });
-    const message = String(note.mock.calls.at(-1)?.[0] ?? "");
+    const message = String(note.mock.calls[note.mock.calls.length - 1]?.[0] ?? "");
     expect(message).toContain("Dreaming artifacts repaired:");
     expect(message).toContain("archived session corpus");
     expect(message).toContain("archived session-ingestion state");

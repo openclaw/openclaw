@@ -312,13 +312,15 @@ export function isValidOcPath(input: unknown): input is string {
 }
 
 /**
- * Positional token: `$last` resolves to the last index / last-declared
- * key. Picks exactly one element, so it doesn't trigger wildcard guards.
+ * Positional tokens: `$first` / `$last` resolve to the first / last
+ * index or declared key. They pick exactly one element, so they don't
+ * trigger wildcard guards.
  */
+export const POS_FIRST = "$first";
 export const POS_LAST = "$last";
 
 export function isPositionalSeg(seg: string): boolean {
-  return seg === POS_LAST;
+  return seg === POS_FIRST || seg === POS_LAST;
 }
 
 /**
@@ -342,15 +344,24 @@ export interface PositionalContainer {
   readonly keys?: readonly string[];
 }
 
-// Resolve `$last` against a container; null when empty.
+// Resolve `$first` / `$last` against a container; null when empty.
 export function resolvePositionalSeg(seg: string, container: PositionalContainer): string | null {
-  if (seg !== POS_LAST || container.size === 0) {
+  if (container.size === 0) {
     return null;
   }
-  if (!container.indexable) {
-    return container.keys?.[container.keys.length - 1] ?? null;
+  if (seg === POS_FIRST) {
+    if (!container.indexable) {
+      return container.keys?.[0] ?? null;
+    }
+    return "0";
   }
-  return String(container.size - 1);
+  if (seg === POS_LAST) {
+    if (!container.indexable) {
+      return container.keys?.[container.keys.length - 1] ?? null;
+    }
+    return String(container.size - 1);
+  }
+  return null;
 }
 
 /**

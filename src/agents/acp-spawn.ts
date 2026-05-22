@@ -16,6 +16,7 @@ import {
   resolveChannelDefaultBindingPlacement,
   resolveInboundConversationResolution,
 } from "../channels/conversation-resolution.js";
+import { routeFromBindingRecord, routeToDeliveryFields } from "../channels/route-projection.js";
 import {
   resolveThreadBindingIntroText,
   resolveThreadBindingThreadName,
@@ -63,14 +64,21 @@ import {
   deliveryContextFromSession,
   formatConversationTarget,
   normalizeDeliveryContext,
-  resolveConversationDeliveryTarget,
 } from "../utils/delivery-context.js";
 import {
   type AcpSpawnParentRelayHandle,
   resolveAcpSpawnStreamLogPath,
   startAcpSpawnParentStreamRelay,
 } from "./acp-spawn-parent-stream.js";
-import { resolveAgentConfig, resolveDefaultAgentId } from "./agent-scope.js";
+import { listAgentIds, resolveAgentConfig, resolveDefaultAgentId } from "./agent-scope.js";
+import {
+  findAcpUnsupportedInheritedToolAllow,
+  findAcpUnsupportedInheritedToolDeny,
+  formatAcpInheritedToolAllowError,
+  formatAcpInheritedToolDenyError,
+  inheritedToolAllowPatch,
+  inheritedToolDenyPatch,
+} from "./inherited-tool-deny.js";
 import { AGENT_LANE_SUBAGENT } from "./lanes.js";
 import { resolveSandboxRuntimeStatus } from "./sandbox/runtime-status.js";
 import { resolveRequesterOriginForChild } from "./spawn-requester-origin.js";
@@ -123,6 +131,8 @@ export type SpawnAcpContext = {
   /** Trusted provider role ids for the requester in this group turn. */
   agentMemberRoleIds?: string[];
   sandboxed?: boolean;
+  inheritedToolAllowlist?: string[];
+  inheritedToolDenylist?: string[];
 };
 
 export const ACP_SPAWN_ERROR_CODES = [
@@ -437,9 +447,39 @@ function resolveTargetAcpAgentId(params: {
 
 function isExplicitlyAllowedAcpAgent(cfg: OpenClawConfig, agentId: string): boolean {
   return (cfg.acp?.allowedAgents ?? []).some((entry) => {
+    if (entry.trim() === "*") {
+      return true;
+    }
     const normalized = normalizeOptionalAgentId(entry);
-    return normalized === "*" || normalized === agentId;
+    return normalized === agentId;
   });
+}
+
+function resolveConfiguredAcpSubagentTargetIds(cfg: OpenClawConfig): string[] {
+  const ids = new Set<string>(listAgentIds(cfg));
+  for (const agent of cfg.agents?.list ?? []) {
+    if (agent.runtime?.type !== "acp") {
+      continue;
+    }
+    const acpAgent = normalizeOptionalAgentId(agent.runtime.acp?.agent);
+    if (acpAgent) {
+      ids.add(acpAgent);
+    }
+  }
+  const defaultAgent = normalizeOptionalAgentId(cfg.acp?.defaultAgent);
+  if (defaultAgent) {
+    ids.add(defaultAgent);
+  }
+  for (const entry of cfg.acp?.allowedAgents ?? []) {
+    if (entry.trim() === "*") {
+      continue;
+    }
+    const id = normalizeOptionalAgentId(entry);
+    if (id) {
+      ids.add(id);
+    }
+  }
+  return Array.from(ids);
 }
 
 function normalizeOptionalAgentId(value: string | undefined | null): string | undefined {
@@ -791,6 +831,7 @@ function resolveAcpSubagentEnvelopeState(params: {
     allowAgents:
       resolveAgentConfig(params.cfg, requesterAgentId)?.subagents?.allowAgents ??
       params.cfg.agents?.defaults?.subagents?.allowAgents,
+    configuredAgentIds: resolveConfiguredAcpSubagentTargetIds(params.cfg),
   });
   if (!targetPolicy.ok) {
     return {
@@ -1081,11 +1122,7 @@ function resolveAcpSpawnBootstrapDeliveryPlan(params: {
     (params.binding?.conversation.parentConversationId ?? undefined) ===
       (requesterConversationRef.parentConversationId ?? undefined),
   );
-  const boundDeliveryTarget = resolveConversationDeliveryTarget({
-    channel: params.requester.origin?.channel ?? params.binding?.conversation.channel,
-    conversationId: params.binding?.conversation.conversationId,
-    parentConversationId: params.binding?.conversation.parentConversationId,
-  });
+  const boundDeliveryTarget = routeToDeliveryFields(routeFromBindingRecord(params.binding));
   const inferredDeliveryTo =
     (bindingMatchesRequesterConversation
       ? normalizeOptionalString(params.requester.origin?.to)
@@ -1113,7 +1150,10 @@ function resolveAcpSpawnBootstrapDeliveryPlan(params: {
     channel: useInlineDelivery ? params.requester.origin?.channel : undefined,
     accountId: useInlineDelivery ? requesterAccountId : undefined,
     to: useInlineDelivery ? inferredDeliveryTo : undefined,
-    threadId: useInlineDelivery ? resolvedDeliveryThreadId : undefined,
+    threadId:
+      useInlineDelivery && resolvedDeliveryThreadId != null
+        ? normalizeOptionalString(String(resolvedDeliveryThreadId))
+        : undefined,
   };
 }
 
@@ -1155,6 +1195,26 @@ export async function spawnAcpDirect(
       status: "forbidden",
       errorCode: "runtime_policy",
       error: runtimePolicyError,
+    });
+  }
+  const acpUnsupportedInheritedTool = findAcpUnsupportedInheritedToolDeny(
+    ctx.inheritedToolDenylist,
+  );
+  if (acpUnsupportedInheritedTool) {
+    return createAcpSpawnFailure({
+      status: "forbidden",
+      errorCode: "runtime_policy",
+      error: formatAcpInheritedToolDenyError(acpUnsupportedInheritedTool),
+    });
+  }
+  const acpUnsupportedInheritedAllow = findAcpUnsupportedInheritedToolAllow(
+    ctx.inheritedToolAllowlist,
+  );
+  if (acpUnsupportedInheritedAllow) {
+    return createAcpSpawnFailure({
+      status: "forbidden",
+      errorCode: "runtime_policy",
+      error: formatAcpInheritedToolAllowError(acpUnsupportedInheritedAllow),
     });
   }
 
@@ -1291,6 +1351,8 @@ export async function spawnAcpDirect(
         key: sessionKey,
         spawnedBy: requesterInternalKey,
         ...subagentEnvelopeState.childSessionPatch,
+        ...inheritedToolAllowPatch(ctx.inheritedToolAllowlist),
+        ...inheritedToolDenyPatch(ctx.inheritedToolDenylist),
         ...(params.label ? { label: params.label } : {}),
       },
       timeoutMs: 10_000,
@@ -1408,6 +1470,7 @@ export async function spawnAcpDirect(
       sessionKey,
       shouldDeleteSession: true,
       deleteTranscript: true,
+      runtimeCloseHandle: initializedRuntime,
     });
     return createAcpSpawnFailure({
       status: "error",

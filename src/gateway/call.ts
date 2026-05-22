@@ -9,6 +9,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { loadOrCreateDeviceIdentity, type DeviceIdentity } from "../infra/device-identity.js";
 import { loadGatewayTlsRuntime } from "../infra/tls/gateway.js";
 import { isLoopbackIpAddress } from "../shared/net/ip.js";
+import { redactSensitiveUrlLikeString } from "../shared/net/redact-sensitive-url.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import {
   GATEWAY_CLIENT_MODES,
@@ -19,7 +20,11 @@ import {
 import { resolveSafeTimeoutDelayMs } from "../utils/timer-delay.js";
 import { VERSION } from "../version.js";
 import { startGatewayClientWhenEventLoopReady } from "./client-start-readiness.js";
-import { GatewayClient, type GatewayClientOptions } from "./client.js";
+import {
+  GatewayClient,
+  isGatewayConnectAssemblyError,
+  type GatewayClientOptions,
+} from "./client.js";
 import {
   buildGatewayConnectionDetailsWithResolvers,
   type GatewayConnectionDetails,
@@ -59,6 +64,7 @@ type CallGatewayBaseOptions = {
   clientVersion?: string;
   platform?: string;
   mode?: GatewayClientMode;
+  approvalRuntimeToken?: string;
   deviceIdentity?: DeviceIdentity | null;
   instanceId?: string;
   minProtocol?: number;
@@ -114,6 +120,55 @@ export class GatewayTransportError extends Error {
       this.timeoutMs = params.timeoutMs;
     }
   }
+}
+
+export type GatewayTransportErrorJson = {
+  ok: false;
+  error: {
+    type: "gateway_transport_error";
+    kind: GatewayTransportErrorKind;
+    message: string;
+    code?: number;
+    reason?: string;
+    timeoutMs?: number;
+  };
+  gateway: {
+    url: string;
+    urlSource: string;
+    bindDetail?: string;
+    remoteFallbackNote?: string;
+  };
+};
+
+function firstGatewayErrorLine(message: string): string {
+  return message.split("\n", 1)[0]?.trim() || message;
+}
+
+export function formatGatewayTransportErrorJson(value: unknown): GatewayTransportErrorJson | null {
+  if (!isGatewayTransportError(value)) {
+    return null;
+  }
+  return {
+    ok: false,
+    error: {
+      type: "gateway_transport_error",
+      kind: value.kind,
+      message: firstGatewayErrorLine(value.message),
+      ...(value.code !== undefined ? { code: value.code } : {}),
+      ...(value.reason !== undefined ? { reason: value.reason } : {}),
+      ...(value.timeoutMs !== undefined ? { timeoutMs: value.timeoutMs } : {}),
+    },
+    gateway: {
+      url: redactSensitiveUrlLikeString(value.connectionDetails.url),
+      urlSource: value.connectionDetails.urlSource,
+      ...(value.connectionDetails.bindDetail
+        ? { bindDetail: value.connectionDetails.bindDetail }
+        : {}),
+      ...(value.connectionDetails.remoteFallbackNote
+        ? { remoteFallbackNote: value.connectionDetails.remoteFallbackNote }
+        : {}),
+    },
+  };
 }
 
 export function isGatewayTransportError(value: unknown): value is GatewayTransportError {
@@ -215,7 +270,7 @@ export function buildGatewayConnectionDetails(
   });
 }
 
-export const __testing = {
+export const testing = {
   setDepsForTests(deps: Partial<typeof defaultGatewayCallDeps> | undefined): void {
     gatewayCallDeps.createGatewayClient =
       deps?.createGatewayClient ?? defaultGatewayCallDeps.createGatewayClient;
@@ -648,6 +703,7 @@ async function executeGatewayRequestWithScopes<T>(params: {
       clientVersion: opts.clientVersion ?? VERSION,
       platform: opts.platform,
       mode: opts.mode ?? GATEWAY_CLIENT_MODES.CLI,
+      ...(opts.approvalRuntimeToken ? { approvalRuntimeToken: opts.approvalRuntimeToken } : {}),
       role: "operator",
       scopes,
       deviceIdentity:
@@ -686,6 +742,13 @@ async function executeGatewayRequestWithScopes<T>(params: {
             connectionDetails: params.connectionDetails,
           }),
         );
+      },
+      onConnectError: (err) => {
+        if (settled || !isGatewayConnectAssemblyError(err)) {
+          return;
+        }
+        ignoreClose = true;
+        stop(err);
       },
     });
 
@@ -819,3 +882,4 @@ export async function callGateway<T = Record<string, unknown>>(
 export function randomIdempotencyKey() {
   return randomUUID();
 }
+export { testing as __testing };

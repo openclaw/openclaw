@@ -183,8 +183,11 @@ export const telegramMessageActions: ChannelMessageActionAdapter = {
     cfg,
     accountId,
     mediaLocalRoots,
+    mediaReadFile,
     sessionKey,
+    inboundEventKind,
     toolContext,
+    gatewayClientScopes,
   }) => {
     const telegramAction = resolveTelegramMessageActionName(action);
     if (!telegramAction) {
@@ -202,7 +205,7 @@ export const telegramMessageActions: ChannelMessageActionAdapter = {
           : {}),
       },
       cfg,
-      { mediaLocalRoots, sessionKey },
+      { mediaLocalRoots, mediaReadFile, sessionKey, inboundEventKind, gatewayClientScopes },
     );
   },
 };

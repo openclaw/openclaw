@@ -7,6 +7,7 @@ import YAML from "yaml";
 
 const repoRoot = resolve(fileURLToPath(new URL(".", import.meta.url)), "..");
 const dockerfilePath = join(repoRoot, "Dockerfile");
+const dockerReleaseWorkflowPath = join(repoRoot, ".github/workflows/docker-release.yml");
 const dockerSetupDockerfilePaths = ["Dockerfile", "scripts/docker/sandbox/Dockerfile"] as const;
 const pnpmWorkspacePath = join(repoRoot, "pnpm-workspace.yaml");
 
@@ -90,9 +91,14 @@ describe("Dockerfile", () => {
 
   it("uses the Docker target platform for pnpm install and prune", async () => {
     const dockerfile = await readFile(dockerfilePath, "utf8");
+    const installIndex = dockerfile.indexOf("pnpm install --frozen-lockfile \\");
+    const storeAddIndex = dockerfile.indexOf("pnpm store add source-map@0.6.1");
+    const pruneIndex = dockerfile.indexOf("CI=true pnpm prune --prod \\");
 
-    expect(dockerfile).toContain("pnpm install --frozen-lockfile \\");
-    expect(dockerfile).toContain("CI=true pnpm prune --prod \\");
+    expect(installIndex).toBeGreaterThan(-1);
+    expect(storeAddIndex).toBeGreaterThan(installIndex);
+    expect(storeAddIndex).toBeLessThan(pruneIndex);
+    expect(pruneIndex).toBeGreaterThan(-1);
     expect(dockerfile).toContain("--config.offline=true");
     expect(dockerfile.split("--config.supportedArchitectures.os=linux").length - 1).toBe(2);
     expect(
@@ -156,7 +162,7 @@ describe("Dockerfile", () => {
     expect(dockerfile).toContain("pnpm_config_verify_deps_before_run=false pnpm qa:lab:build");
   });
 
-  it("prunes runtime dependencies after the build stage", async () => {
+  it("prunes runtime dependencies and omitted plugin packages after the build stage", async () => {
     const dockerfile = await readFile(dockerfilePath, "utf8");
     expect(dockerfile).toContain("FROM build AS runtime-assets");
     expect(dockerfile).toContain("ARG OPENCLAW_EXTENSIONS");
@@ -174,16 +180,23 @@ describe("Dockerfile", () => {
     expect(dockerfile).toContain(
       "COPY --from=workspace-deps /out/${OPENCLAW_BUNDLED_PLUGIN_DIR}/ ./${OPENCLAW_BUNDLED_PLUGIN_DIR}/",
     );
+    expect(dockerfile).toContain(
+      'OPENCLAW_EXTENSIONS="$OPENCLAW_EXTENSIONS" OPENCLAW_BUNDLED_PLUGIN_DIR="$OPENCLAW_BUNDLED_PLUGIN_DIR" node scripts/prune-docker-plugin-dist.mjs',
+    );
     expect(dockerfile).toContain("CI=true pnpm prune --prod \\");
+    expect(
+      dockerfile.indexOf("CI=true pnpm prune --prod \\"),
+    ).toBeLessThan(
+      dockerfile.indexOf(
+        'OPENCLAW_EXTENSIONS="$OPENCLAW_EXTENSIONS" OPENCLAW_BUNDLED_PLUGIN_DIR="$OPENCLAW_BUNDLED_PLUGIN_DIR" node scripts/prune-docker-plugin-dist.mjs',
+      ),
+    );
     expect(dockerfile).toContain("--config.offline=true");
     expect(dockerfile).toContain("--config.supportedArchitectures.os=linux");
     expect(dockerfile).toContain(
       "--config.supportedArchitectures.cpu=\"$(node -p 'process.arch')\"",
     );
     expect(dockerfile).toContain("--config.supportedArchitectures.libc=glibc");
-    expect(dockerfile).toContain(
-      'OPENCLAW_EXTENSIONS="$OPENCLAW_EXTENSIONS" node scripts/prune-docker-plugin-dist.mjs',
-    );
     expect(dockerfile).not.toContain("pnpm-workspace.runtime.yaml");
     expect(dockerfile).not.toContain("write-runtime-pnpm-workspace");
     expect(dockerfile).not.toContain(
@@ -221,6 +234,14 @@ describe("Dockerfile", () => {
     expect(dockerfile).toContain(
       "COPY --from=runtime-assets --chown=node:node /app/patches ./patches",
     );
+  });
+
+  it("keeps the Codex plugin in official Docker release images", async () => {
+    const workflow = await readFile(dockerReleaseWorkflowPath, "utf8");
+    const releaseKeepList = "OPENCLAW_EXTENSIONS=diagnostics-otel,codex";
+
+    expect(workflow.match(new RegExp(releaseKeepList, "g"))).toHaveLength(2);
+    expect(workflow).not.toContain("OPENCLAW_EXTENSIONS=diagnostics-otel\n");
   });
 
   it("does not override bundled plugin discovery in runtime images", async () => {

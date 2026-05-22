@@ -213,6 +213,182 @@ describe("tui-event-handlers: handleAgentEvent", () => {
     expect(tui.requestRender).toHaveBeenCalledTimes(1);
   });
 
+  it("updates the displayed model from fallback lifecycle steps", () => {
+    const { state, tui, handleAgentEvent } = createHandlersHarness({
+      state: {
+        activeChatRunId: "run-fallback",
+        sessionInfo: {
+          verboseLevel: "on",
+          modelProvider: "llamaforge",
+          model: "qwen/qwen3.5-9b",
+        },
+      },
+    });
+
+    handleAgentEvent({
+      runId: "run-fallback",
+      stream: "lifecycle",
+      data: {
+        phase: "fallback_step",
+        fallbackStepFinalOutcome: "next_fallback",
+        fallbackStepFromModel: "openai-codex/gpt-5.5",
+        fallbackStepToModel: "openrouter/meta-llama/llama-3.1-70b",
+      },
+    });
+
+    expect(state.sessionInfo.modelProvider).toBe("openrouter");
+    expect(state.sessionInfo.model).toBe("meta-llama/llama-3.1-70b");
+    expect(tui.requestRender).toHaveBeenCalled();
+  });
+
+  it("accepts fallback model updates for the pending run before chat registration", () => {
+    const { state, tui, handleAgentEvent } = createHandlersHarness({
+      state: {
+        activeChatRunId: null,
+        pendingChatRunId: "run-pending",
+        sessionInfo: {
+          verboseLevel: "on",
+          modelProvider: "llamaforge",
+          model: "qwen/qwen3.5-9b",
+        },
+      },
+    });
+
+    handleAgentEvent({
+      runId: "run-pending",
+      stream: "lifecycle",
+      data: {
+        phase: "fallback_step",
+        fallbackStepFinalOutcome: "succeeded",
+        fallbackStepFromModel: "openrouter/meta-llama/llama-3.1-70b",
+        fallbackStepToModel: "nvidia/deepseek-ai/deepseek-v3.2",
+      },
+    });
+
+    expect(state.sessionInfo.modelProvider).toBe("nvidia");
+    expect(state.sessionInfo.model).toBe("deepseek-ai/deepseek-v3.2");
+    expect(tui.requestRender).toHaveBeenCalled();
+  });
+
+  it("shows finishing context for a pending run before chat registration", () => {
+    const { state, tui, setActivityStatus, handleAgentEvent, isLocalRunId } = createHandlersHarness(
+      {
+        localMode: true,
+        state: {
+          activeChatRunId: null,
+          pendingChatRunId: "run-pending",
+          pendingOptimisticUserMessage: true,
+        },
+      },
+    );
+
+    handleAgentEvent({
+      runId: "run-pending",
+      stream: "lifecycle",
+      data: { phase: "finishing" },
+    });
+
+    expect(state.activeChatRunId).toBe("run-pending");
+    expect(state.pendingChatRunId).toBeNull();
+    expect(state.pendingOptimisticUserMessage).toBe(false);
+    expect(isLocalRunId("run-pending")).toBe(true);
+    expect(setActivityStatus).toHaveBeenCalledWith("finishing context");
+    expect(tui.requestRender).toHaveBeenCalled();
+  });
+
+  it("shows finishing context for a known run after assistant final", () => {
+    const { state, tui, setActivityStatus, handleChatEvent, handleAgentEvent } =
+      createHandlersHarness({
+        state: { activeChatRunId: null },
+      });
+
+    handleChatEvent({
+      runId: "run-final",
+      sessionKey: state.currentSessionKey,
+      state: "final",
+      message: { content: [{ type: "text", text: "done" }] },
+    });
+    setActivityStatus.mockClear();
+    tui.requestRender.mockClear();
+
+    handleAgentEvent({
+      runId: "run-final",
+      stream: "lifecycle",
+      data: { phase: "finishing" },
+    });
+
+    expect(setActivityStatus).toHaveBeenCalledWith("finishing context");
+    expect(tui.requestRender).toHaveBeenCalled();
+
+    setActivityStatus.mockClear();
+    tui.requestRender.mockClear();
+
+    handleAgentEvent({
+      runId: "run-final",
+      stream: "lifecycle",
+      data: { phase: "end" },
+    });
+
+    expect(setActivityStatus).toHaveBeenCalledWith("idle");
+    expect(tui.requestRender).toHaveBeenCalled();
+  });
+
+  it("does not let delayed finalized-run lifecycle clobber a newer active run", () => {
+    const { state, tui, setActivityStatus, handleChatEvent, handleAgentEvent } =
+      createHandlersHarness({
+        state: { activeChatRunId: null },
+      });
+
+    handleChatEvent({
+      runId: "run-old",
+      sessionKey: state.currentSessionKey,
+      state: "final",
+      message: { content: [{ type: "text", text: "old done" }] },
+    });
+    handleChatEvent({
+      runId: "run-new",
+      sessionKey: state.currentSessionKey,
+      state: "delta",
+      message: { content: "new running" },
+    });
+    setActivityStatus.mockClear();
+    tui.requestRender.mockClear();
+
+    handleAgentEvent({
+      runId: "run-old",
+      stream: "lifecycle",
+      data: { phase: "finishing" },
+    });
+    handleAgentEvent({
+      runId: "run-old",
+      stream: "lifecycle",
+      data: { phase: "end" },
+    });
+
+    expect(state.activeChatRunId).toBe("run-new");
+    expect(setActivityStatus).not.toHaveBeenCalled();
+    expect(tui.requestRender).not.toHaveBeenCalled();
+  });
+
+  it("ignores fallback model updates for unrelated runs", () => {
+    const { state, tui, handleAgentEvent } = createHandlersHarness({
+      state: {
+        activeChatRunId: "run-active",
+        sessionInfo: { verboseLevel: "on", modelProvider: "openai", model: "gpt-5.5" },
+      },
+    });
+
+    handleAgentEvent({
+      runId: "run-other",
+      stream: "lifecycle",
+      data: { phase: "fallback_step", fallbackStepToModel: "openrouter/other-model" },
+    });
+
+    expect(state.sessionInfo.modelProvider).toBe("openai");
+    expect(state.sessionInfo.model).toBe("gpt-5.5");
+    expect(tui.requestRender).not.toHaveBeenCalled();
+  });
+
   it("captures runId from chat events when activeChatRunId is unset", () => {
     const { state, chatLog, handleChatEvent, handleAgentEvent } = createHandlersHarness({
       state: { activeChatRunId: null },

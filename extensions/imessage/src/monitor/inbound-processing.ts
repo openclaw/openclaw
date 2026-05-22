@@ -11,6 +11,7 @@ import {
 import {
   createChannelIngressResolver,
   defineStableChannelIngressIdentity,
+  type ChannelIngressIdentityDescriptor,
 } from "openclaw/plugin-sdk/channel-ingress-runtime";
 import {
   resolveChannelGroupPolicy,
@@ -19,11 +20,7 @@ import {
 import { hasControlCommand } from "openclaw/plugin-sdk/command-auth-native";
 import type { DmPolicy, GroupPolicy, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { resolveChannelContextVisibilityMode } from "openclaw/plugin-sdk/context-visibility-runtime";
-import {
-  buildPendingHistoryContextFromMap,
-  recordPendingHistoryEntryIfEnabled,
-  type HistoryEntry,
-} from "openclaw/plugin-sdk/reply-history";
+import { createChannelHistoryWindow, type HistoryEntry } from "openclaw/plugin-sdk/reply-history";
 import { finalizeInboundContext } from "openclaw/plugin-sdk/reply-runtime";
 import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
 import { evaluateSupplementalContextVisibility } from "openclaw/plugin-sdk/security-runtime";
@@ -36,7 +33,7 @@ import {
 } from "../monitor-reply-cache.js";
 import {
   formatIMessageChatTarget,
-  isAllowedIMessageSender,
+  isAllowedIMessageReplyContextSender,
   normalizeIMessageHandle,
   parseIMessageAllowTarget,
 } from "../targets.js";
@@ -158,11 +155,52 @@ export function resolveIMessageReactionContext(
 
 const normalizeNonEmpty = (value: string) => value.trim() || null;
 
+const imessageConversationIdentityKinds = new Set([
+  "plugin:imessage-chat-id",
+  "plugin:imessage-chat-guid",
+  "plugin:imessage-chat-identifier",
+]);
+
+const matchIMessageIngressEntry: NonNullable<ChannelIngressIdentityDescriptor["matchEntry"]> = ({
+  entry,
+  context,
+}) => {
+  if (imessageConversationIdentityKinds.has(entry.kind) && context !== "group") {
+    return false;
+  }
+  return undefined;
+};
+
+function isIMessageConversationAllowTarget(entry: string): boolean {
+  const parsed = parseIMessageAllowTarget(entry);
+  return (
+    parsed.kind === "chat_id" || parsed.kind === "chat_guid" || parsed.kind === "chat_identifier"
+  );
+}
+
+function mergeIMessageGroupAllowFromWithLegacyChatTargets(params: {
+  groupAllowFrom: string[];
+  allowFrom: string[];
+  allowLegacyConversationTargets?: boolean;
+}): string[] {
+  if (params.groupAllowFrom.length > 0 || !params.allowLegacyConversationTargets) {
+    return params.groupAllowFrom;
+  }
+  const legacyChatTargets = params.allowFrom.filter((entry) =>
+    isIMessageConversationAllowTarget(entry),
+  );
+  if (legacyChatTargets.length === 0) {
+    return params.groupAllowFrom;
+  }
+  return Array.from(new Set([...params.groupAllowFrom, ...legacyChatTargets]));
+}
+
 const imessageIngressIdentity = defineStableChannelIngressIdentity({
   key: "imessage-sender",
   normalizeEntry: normalizeIMessageHandleEntry,
   normalizeSubject: normalizeIMessageHandle,
   sensitivity: "pii",
+  matchEntry: matchIMessageIngressEntry,
   aliases: (
     [
       ["imessage-chat-id", "plugin:imessage-chat-id", normalizeIMessageChatIdEntry],
@@ -392,6 +430,7 @@ export async function resolveIMessageInboundDecision(params: {
   bodyText: string;
   allowFrom: string[];
   groupAllowFrom: string[];
+  allowLegacyConversationAllowFromForGroup?: boolean;
   groupPolicy: string;
   dmPolicy: string;
   storeAllowFrom: string[];
@@ -425,12 +464,18 @@ export async function resolveIMessageInboundDecision(params: {
   const reactionContext = resolveIMessageReactionContext(params.message, bodyText || messageText);
 
   const groupIdCandidate = chatId !== undefined ? String(chatId) : undefined;
+  const groupAllowFromWithLegacyChatTargets = mergeIMessageGroupAllowFromWithLegacyChatTargets({
+    groupAllowFrom: params.groupAllowFrom,
+    allowFrom: params.allowFrom,
+    allowLegacyConversationTargets: params.allowLegacyConversationAllowFromForGroup,
+  });
   const groupListPolicy = groupIdCandidate
     ? resolveChannelGroupPolicy({
         cfg: params.cfg,
         channel: "imessage",
         accountId: params.accountId,
         groupId: groupIdCandidate,
+        hasGroupAllowFrom: groupAllowFromWithLegacyChatTargets.length > 0,
       })
     : {
         allowlistEnabled: false,
@@ -514,6 +559,9 @@ export async function resolveIMessageInboundDecision(params: {
 
   const groupId = isGroup ? groupIdCandidate : undefined;
   const hasControlCommandInMessage = hasControlCommand(messageText, params.cfg);
+  const groupAllowFromForAccess = isGroup
+    ? groupAllowFromWithLegacyChatTargets
+    : params.groupAllowFrom;
   const accessDecision = await createChannelIngressResolver({
     channelId: "imessage",
     accountId: params.accountId,
@@ -539,7 +587,7 @@ export async function resolveIMessageInboundDecision(params: {
     groupPolicy: normalizeGroupPolicy(params.groupPolicy),
     policy: { groupAllowFromFallbackToAllowFrom: false },
     allowFrom: params.allowFrom,
-    groupAllowFrom: params.groupAllowFrom,
+    groupAllowFrom: groupAllowFromForAccess,
     command: {
       allowTextCommands: isGroup,
       hasControlCommand: hasControlCommandInMessage,
@@ -718,12 +766,15 @@ export async function resolveIMessageInboundDecision(params: {
     channel: "imessage",
     accountId: params.accountId,
   });
+  const replyContextAllowFrom = Array.from(
+    new Set([...groupAllowFromForAccess, ...effectiveGroupAllowFrom]),
+  );
   const replySenderAllowed =
-    !isGroup || effectiveGroupAllowFrom.length === 0
+    !isGroup || replyContextAllowFrom.length === 0
       ? true
       : replyContext?.sender
-        ? isAllowedIMessageSender({
-            allowFrom: effectiveGroupAllowFrom,
+        ? isAllowedIMessageReplyContextSender({
+            allowFrom: replyContextAllowFrom,
             sender: replyContext.sender,
             chatId,
             chatGuid,
@@ -790,8 +841,7 @@ export async function resolveIMessageInboundDecision(params: {
   const effectiveWasMentioned = mentionDecision.effectiveWasMentioned;
   if (isGroup && requireMention && canDetectMention && mentionDecision.shouldSkip) {
     params.logVerbose?.(`imessage: skipping group message (no mention)`);
-    recordPendingHistoryEntryIfEnabled({
-      historyMap: params.groupHistories,
+    createChannelHistoryWindow({ historyMap: params.groupHistories }).record({
       historyKey: historyKey ?? "",
       limit: params.historyLimit,
       entry: historyKey
@@ -913,8 +963,8 @@ export function buildIMessageInboundContext(params: {
 
   let combinedBody = body;
   if (decision.isGroup && decision.historyKey) {
-    combinedBody = buildPendingHistoryContextFromMap({
-      historyMap: params.groupHistories,
+    const channelHistory = createChannelHistoryWindow({ historyMap: params.groupHistories });
+    combinedBody = channelHistory.buildPendingContext({
       historyKey: decision.historyKey,
       limit: params.historyLimit,
       currentMessage: combinedBody,
@@ -934,11 +984,10 @@ export function buildIMessageInboundContext(params: {
   const imessageTo = (decision.isGroup ? chatTarget : undefined) || `imessage:${decision.sender}`;
   const inboundHistory =
     decision.isGroup && decision.historyKey && params.historyLimit > 0
-      ? (params.groupHistories.get(decision.historyKey) ?? []).map((entry) => ({
-          sender: entry.sender,
-          body: entry.body,
-          timestamp: entry.timestamp,
-        }))
+      ? createChannelHistoryWindow({ historyMap: params.groupHistories }).buildInboundHistory({
+          historyKey: decision.historyKey,
+          limit: params.historyLimit,
+        })
       : undefined;
 
   const ctxPayload = finalizeInboundContext({

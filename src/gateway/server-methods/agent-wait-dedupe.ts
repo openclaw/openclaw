@@ -1,3 +1,4 @@
+import { normalizeBlockedLivenessWaitStatus } from "../../shared/agent-liveness.js";
 import { isNonTerminalAgentRunStatus } from "../../shared/agent-run-status.js";
 import { setSafeTimeout } from "../../utils/timer-delay.js";
 import type { DedupeEntry } from "../server-shared.js";
@@ -110,11 +111,21 @@ function readTerminalSnapshotFromDedupeEntry(entry: DedupeEntry): AgentWaitTermi
         : entry.error?.message;
 
   if (status === "ok" || status === "timeout") {
-    return {
+    const normalized = normalizeBlockedLivenessWaitStatus({
       status,
+      livenessState,
+      error: errorMessage,
+    });
+    return {
+      status: normalized.status,
       startedAt,
       endedAt,
-      error: status === "timeout" ? errorMessage : undefined,
+      error:
+        normalized.status === "error"
+          ? normalized.error
+          : normalized.status === "timeout"
+            ? errorMessage
+            : undefined,
       stopReason,
       livenessState,
       ...(yielded ? { yielded } : {}),
@@ -251,7 +262,7 @@ export function setGatewayDedupeEntry(params: {
   notifyWaiters(runId);
 }
 
-export const __testing = {
+export const testing = {
   getWaiterCount(runId?: string): number {
     if (runId) {
       return AGENT_WAITERS_BY_RUN_ID.get(runId)?.size ?? 0;
@@ -266,3 +277,4 @@ export const __testing = {
     AGENT_WAITERS_BY_RUN_ID.clear();
   },
 };
+export { testing as __testing };

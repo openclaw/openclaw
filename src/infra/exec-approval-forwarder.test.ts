@@ -96,7 +96,7 @@ function buildTelegramExecApprovalPendingPayloadForTest(params: {
 }): ReplyPayload {
   return {
     text: `Telegram exec approval ${params.request.id}`,
-    interactive: {
+    presentation: {
       blocks: [
         {
           type: "buttons",
@@ -210,11 +210,11 @@ function requireFirstCallArg(
   mock: ReturnType<typeof vi.fn>,
   label: string,
 ): Record<string, unknown> {
-  const firstCall = mock.mock.calls.at(0);
+  const firstCall = mock.mock.calls[0];
   if (!firstCall) {
     throw new Error(`expected ${label} call`);
   }
-  return requireRecord(firstCall.at(0), label);
+  return requireRecord(firstCall[0], label);
 }
 
 function requireFirstPayload(deliver: ReturnType<typeof vi.fn>): ReplyPayload {
@@ -512,7 +512,7 @@ describe("exec approval forwarder", () => {
     expect(deliver).not.toHaveBeenCalled();
   });
 
-  it("attaches shared interactive approval buttons in forwarded fallback payloads", async () => {
+  it("attaches shared presentation approval buttons in forwarded fallback payloads", async () => {
     vi.useFakeTimers();
     const { deliver, forwarder } = createForwarder({
       cfg: makeTargetsCfg([{ channel: "telegram", to: "123" }]),
@@ -535,7 +535,7 @@ describe("exec approval forwarder", () => {
     expect(delivery.to).toBe("123");
     const payload = requireFirstPayload(deliver);
     expect(payload.channelData?.execApproval).toEqual({ approvalId: "req-1" });
-    expect(payload.interactive).toEqual({
+    expect(payload.presentation).toEqual({
       blocks: [
         {
           type: "buttons",
@@ -559,6 +559,7 @@ describe("exec approval forwarder", () => {
         },
       ],
     });
+    expect(payload.interactive).toBeUndefined();
   });
 
   it("stores exec metadata on generic forwarded fallback payloads", async () => {

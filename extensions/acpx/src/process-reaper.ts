@@ -1,13 +1,28 @@
 import { execFile } from "node:child_process";
+import { createRequire } from "node:module";
+import path from "node:path";
 import { promisify } from "node:util";
+import { splitCommandParts } from "./command-line.js";
 import { OPENCLAW_ACPX_LEASE_ID_ARG, OPENCLAW_GATEWAY_INSTANCE_ID_ARG } from "./process-lease.js";
 
 const execFileAsync = promisify(execFile);
+const requireFromHere = createRequire(import.meta.url);
 const GENERATED_WRAPPER_BASENAMES = new Set([
   "codex-acp-wrapper.mjs",
   "claude-agent-acp-wrapper.mjs",
 ]);
 const OPENCLAW_PLUGIN_DEPS_MARKER = "/plugin-runtime-deps/";
+const OWNED_ACP_PACKAGE_NAMES = [
+  "@zed-industries/codex-acp",
+  "@zed-industries/codex-acp-darwin-arm64",
+  "@zed-industries/codex-acp-darwin-x64",
+  "@zed-industries/codex-acp-linux-arm64",
+  "@zed-industries/codex-acp-linux-x64",
+  "@zed-industries/codex-acp-win32-arm64",
+  "@zed-industries/codex-acp-win32-x64",
+  "@agentclientprotocol/claude-agent-acp",
+  "acpx",
+];
 const ACP_PACKAGE_MARKERS = [
   "/@zed-industries/codex-acp/",
   "/@agentclientprotocol/claude-agent-acp/",
@@ -42,6 +57,22 @@ function normalizePathLike(value: string): string {
   return value.replaceAll("\\", "/");
 }
 
+function resolvePackageRoot(packageName: string): string | undefined {
+  try {
+    return normalizePathLike(path.dirname(requireFromHere.resolve(`${packageName}/package.json`)));
+  } catch {
+    return undefined;
+  }
+}
+
+const OWNED_ACP_PACKAGE_ROOTS = OWNED_ACP_PACKAGE_NAMES.map(resolvePackageRoot).filter(
+  (root): root is string => Boolean(root),
+);
+
+function commandBelongsToResolvedAcpPackage(command: string): boolean {
+  return OWNED_ACP_PACKAGE_ROOTS.some((root) => command.includes(`${root}/`));
+}
+
 function commandMentionsGeneratedWrapper(command: string): boolean {
   return Array.from(GENERATED_WRAPPER_BASENAMES).some((basename) => command.includes(basename));
 }
@@ -57,58 +88,26 @@ function commandWrapperBelongsToRoot(command: string, wrapperRoot: string | unde
   );
 }
 
+export function isOpenClawLeaseAwareAcpxProcessCommand(params: {
+  command: string | undefined;
+  wrapperRoot?: string;
+}): boolean {
+  const command = params.command?.trim();
+  if (!command) {
+    return false;
+  }
+  const normalized = normalizePathLike(command);
+  return (
+    commandMentionsGeneratedWrapper(normalized) &&
+    commandWrapperBelongsToRoot(normalized, params.wrapperRoot)
+  );
+}
+
 function commandsReferToSameRootCommand(liveCommand: string, storedCommand: string | undefined) {
   if (!storedCommand?.trim()) {
     return true;
   }
   return normalizePathLike(liveCommand).trim() === normalizePathLike(storedCommand).trim();
-}
-
-function splitCommandParts(value: string): string[] {
-  const parts: string[] = [];
-  let current = "";
-  let quote: "'" | '"' | null = null;
-  let escaping = false;
-
-  for (const ch of value) {
-    if (escaping) {
-      current += ch;
-      escaping = false;
-      continue;
-    }
-    if (ch === "\\" && quote !== "'") {
-      escaping = true;
-      continue;
-    }
-    if (quote) {
-      if (ch === quote) {
-        quote = null;
-      } else {
-        current += ch;
-      }
-      continue;
-    }
-    if (ch === "'" || ch === '"') {
-      quote = ch;
-      continue;
-    }
-    if (/\s/.test(ch)) {
-      if (current) {
-        parts.push(current);
-        current = "";
-      }
-      continue;
-    }
-    current += ch;
-  }
-
-  if (escaping) {
-    current += "\\";
-  }
-  if (current) {
-    parts.push(current);
-  }
-  return parts;
 }
 
 function commandOptionEquals(
@@ -147,8 +146,16 @@ export function isOpenClawOwnedAcpxProcessCommand(params: {
     return false;
   }
   const normalized = normalizePathLike(command);
-  if (commandMentionsGeneratedWrapper(normalized)) {
-    return commandWrapperBelongsToRoot(normalized, params.wrapperRoot);
+  if (
+    isOpenClawLeaseAwareAcpxProcessCommand({
+      command: normalized,
+      wrapperRoot: params.wrapperRoot,
+    })
+  ) {
+    return true;
+  }
+  if (commandBelongsToResolvedAcpPackage(normalized)) {
+    return true;
   }
   if (!normalized.includes(OPENCLAW_PLUGIN_DEPS_MARKER)) {
     return false;

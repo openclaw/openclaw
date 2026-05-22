@@ -136,6 +136,90 @@ describe("cron store", () => {
     expect(loaded.jobs[0]?.enabled).toBe(true);
   });
 
+  it("loads legacy top-level array stores instead of treating them as empty", async () => {
+    const store = await makeStorePath();
+    const first = makeStore("legacy-array-1", true).jobs[0];
+    const second = makeStore("legacy-array-2", false).jobs[0];
+    await fs.mkdir(path.dirname(store.storePath), { recursive: true });
+    await fs.writeFile(
+      store.storePath,
+      JSON.stringify([first, "bad-row", null, second], null, 2),
+      "utf-8",
+    );
+
+    const loaded = await loadCronStore(store.storePath);
+
+    expect(loaded.version).toBe(1);
+    expect(loaded.jobs.map((job) => job.id)).toEqual(["legacy-array-1", "legacy-array-2"]);
+    expect(loaded.jobs[0]?.state).toStrictEqual(first.state);
+    expect(loaded.jobs[1]?.enabled).toBe(false);
+  });
+
+  it("loads legacy top-level array stores synchronously", async () => {
+    const store = await makeStorePath();
+    const job = makeStore("legacy-array-sync", true).jobs[0];
+    await fs.mkdir(path.dirname(store.storePath), { recursive: true });
+    await fs.writeFile(store.storePath, JSON.stringify([job], null, 2), "utf-8");
+
+    const loaded = loadCronStoreSync(store.storePath);
+
+    expect(loaded.jobs).toHaveLength(1);
+    expect(loaded.jobs[0]?.id).toBe("legacy-array-sync");
+    expect(loaded.jobs[0]?.state).toStrictEqual(job.state);
+  });
+
+  it("preserves legacy top-level array jobs through a load-add-save round trip", async () => {
+    const store = await makeStorePath();
+    const legacy = makeStore("legacy-array-preserved", true).jobs[0];
+    legacy.state = { nextRunAtMs: legacy.createdAtMs + 60_000 };
+    const added = makeStore("new-job", true).jobs[0];
+    await fs.mkdir(path.dirname(store.storePath), { recursive: true });
+    await fs.writeFile(store.storePath, JSON.stringify([legacy], null, 2), "utf-8");
+
+    const loaded = await loadCronStore(store.storePath);
+    loaded.jobs.push(added);
+    await saveCronStore(store.storePath, loaded);
+
+    const config = JSON.parse(await fs.readFile(store.storePath, "utf-8")) as {
+      version?: unknown;
+      jobs?: Array<Record<string, unknown>>;
+    };
+    const stateFile = JSON.parse(
+      await fs.readFile(store.storePath.replace(/\.json$/, "-state.json"), "utf-8"),
+    ) as { jobs: Record<string, { state?: Record<string, unknown> }> };
+
+    expect(config.version).toBe(1);
+    expect(config.jobs?.map((job) => job.id)).toEqual(["legacy-array-preserved", "new-job"]);
+    expect(config.jobs?.[0]?.state).toStrictEqual({});
+    expect(stateFile.jobs["legacy-array-preserved"]?.state?.nextRunAtMs).toBe(
+      legacy.createdAtMs + 60_000,
+    );
+  });
+
+  it("skips non-object persisted jobs instead of hydrating scalar rows", async () => {
+    const store = await makeStorePath();
+    const valid = makeStore("job-valid", true).jobs[0];
+    await fs.mkdir(path.dirname(store.storePath), { recursive: true });
+    await fs.writeFile(
+      store.storePath,
+      JSON.stringify(
+        {
+          version: 1,
+          jobs: ["bad-row", 7, null, false, valid],
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+
+    const loaded = await loadCronStore(store.storePath);
+
+    expect(loaded.jobs).toHaveLength(1);
+    expect(loaded.jobs[0]?.id).toBe("job-valid");
+    expect(loaded.jobs[0]?.state).toStrictEqual({});
+  });
+
   it("loads split cron state synchronously for task reconciliation", async () => {
     const { storePath } = await makeStorePath();
     await saveCronStore(storePath, makeStore("job-sync", true));
@@ -524,6 +608,48 @@ describe("cron store", () => {
 
     expect(loaded.jobs[0]?.updatedAtMs).toBe(job.createdAtMs);
     expect(loaded.jobs[0]?.state.nextRunAtMs).toBe(job.createdAtMs + 60_000);
+  });
+
+  it("drops non-object runtime state from split cron sidecars", async () => {
+    const store = await makeStorePath();
+    const first = makeStore("job-array-state", true).jobs[0];
+    const second = makeStore("job-scalar-entry", true).jobs[0];
+    const config = {
+      version: 1,
+      jobs: [
+        { ...first, state: {}, updatedAtMs: undefined },
+        { ...second, state: {}, updatedAtMs: undefined },
+      ],
+    };
+    const statePath = store.storePath.replace(/\.json$/, "-state.json");
+
+    await fs.mkdir(path.dirname(store.storePath), { recursive: true });
+    await fs.writeFile(store.storePath, JSON.stringify(config, null, 2), "utf-8");
+    await fs.writeFile(
+      statePath,
+      JSON.stringify(
+        {
+          version: 1,
+          jobs: {
+            [first.id]: {
+              updatedAtMs: first.createdAtMs + 60_000,
+              state: ["not", "state"],
+            },
+            [second.id]: "not-an-entry",
+          },
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+
+    const loaded = await loadCronStore(store.storePath);
+
+    expect(loaded.jobs[0]?.updatedAtMs).toBe(first.createdAtMs + 60_000);
+    expect(loaded.jobs[0]?.state).toStrictEqual({});
+    expect(loaded.jobs[1]?.updatedAtMs).toBe(second.createdAtMs);
+    expect(loaded.jobs[1]?.state).toStrictEqual({});
   });
 
   it.skipIf(process.platform === "win32")(

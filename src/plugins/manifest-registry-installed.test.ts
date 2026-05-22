@@ -221,6 +221,139 @@ describe("loadPluginManifestRegistryForInstalledIndex", () => {
     });
   });
 
+  it("hydrates package metadata from dot-prefixed package directories", () => {
+    const rootDir = makeTempDir();
+    writePlugin(rootDir, "installed", "installed-");
+    fs.mkdirSync(path.join(rootDir, "..meta"), { recursive: true });
+    fs.writeFileSync(
+      path.join(rootDir, "..meta", "package.json"),
+      JSON.stringify({
+        openclaw: {
+          channel: {
+            id: "installed",
+            label: "Installed",
+            commands: {
+              nativeCommandsAutoEnabled: true,
+              nativeSkillsAutoEnabled: false,
+            },
+          },
+        },
+      }),
+      "utf8",
+    );
+
+    const index = createIndex(rootDir);
+    const registry = loadPluginManifestRegistryForInstalledIndex({
+      index: {
+        ...index,
+        plugins: [
+          {
+            ...index.plugins[0],
+            packageJson: {
+              path: "..meta/package.json",
+              hash: "old-index-hash",
+            },
+          },
+        ],
+      },
+      env: {
+        OPENCLAW_VERSION: "2026.4.25",
+        VITEST: "true",
+      },
+      includeDisabled: true,
+    });
+
+    expect(registry.plugins[0]?.channelCatalogMeta?.commands).toEqual({
+      nativeCommandsAutoEnabled: true,
+      nativeSkillsAutoEnabled: false,
+    });
+  });
+
+  it.runIf(process.platform !== "win32")(
+    "does not hydrate package metadata through a symlink outside the plugin root",
+    () => {
+      const rootDir = makeTempDir();
+      const outsideDir = makeTempDir();
+      const packageJsonPath = path.join(rootDir, "package.json");
+      const outsidePackageJsonPath = path.join(outsideDir, "package.json");
+      writePlugin(rootDir, "installed", "installed-");
+      fs.writeFileSync(
+        outsidePackageJsonPath,
+        JSON.stringify({
+          openclaw: {
+            channel: {
+              id: "installed",
+              label: "Installed",
+              commands: {
+                nativeCommandsAutoEnabled: true,
+                nativeSkillsAutoEnabled: false,
+              },
+            },
+          },
+        }),
+        "utf8",
+      );
+      fs.symlinkSync(outsidePackageJsonPath, packageJsonPath);
+
+      const index = createIndex(rootDir);
+      const registry = loadPluginManifestRegistryForInstalledIndex({
+        index: {
+          ...index,
+          plugins: [
+            {
+              ...index.plugins[0],
+              packageJson: {
+                path: "package.json",
+                hash: "old-index-hash",
+              },
+            },
+          ],
+        },
+        env: {
+          OPENCLAW_VERSION: "2026.4.25",
+          VITEST: "true",
+        },
+        includeDisabled: true,
+      });
+
+      expect(registry.plugins[0]?.channelCatalogMeta?.commands).toBeUndefined();
+    },
+  );
+
+  it("ignores malformed persisted package channel metadata", () => {
+    const rootDir = makeTempDir();
+    writePlugin(rootDir, "installed", "installed-");
+
+    const index = createIndex(rootDir);
+    const registry = loadPluginManifestRegistryForInstalledIndex({
+      index: {
+        ...index,
+        plugins: [
+          {
+            ...index.plugins[0],
+            packageChannel: {
+              id: ["installed"],
+              label: 12,
+              blurb: { text: "bad" },
+              preferOver: "legacy",
+              commands: {
+                nativeCommandsAutoEnabled: "yes",
+              },
+            },
+          },
+        ],
+      } as unknown as InstalledPluginIndex,
+      env: {
+        OPENCLAW_VERSION: "2026.4.25",
+        VITEST: "true",
+      },
+      includeDisabled: true,
+    });
+
+    expect(registry.plugins[0]?.packageManifest).toBeUndefined();
+    expect(registry.plugins[0]?.channelCatalogMeta).toBeUndefined();
+  });
+
   it("round-trips bundle metadata through the persisted index before reconstruction", async () => {
     const stateDir = makeTempDir();
     const rootDir = makeTempDir();

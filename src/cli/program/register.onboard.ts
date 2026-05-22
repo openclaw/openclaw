@@ -11,9 +11,7 @@ import type {
   SecretInputMode,
   TailscaleMode,
 } from "../../commands/onboard-types.js";
-import { setupWizardCommand } from "../../commands/onboard.js";
 import { resolveManifestProviderOnboardAuthFlags } from "../../plugins/provider-auth-choices.js";
-import { defaultRuntime } from "../../runtime.js";
 import { formatDocsLink } from "../../terminal/links.js";
 import { theme } from "../../terminal/theme.js";
 import { runCommandWithRuntime } from "../cli-utils.js";
@@ -89,7 +87,7 @@ function pickOnboardProviderAuthOptionValues(
   );
 }
 
-export function registerOnboardCommand(program: Command) {
+export function registerOnboardCommand(program: Command): void {
   const command = program
     .command("onboard")
     .description("Guided setup for auth, models, Gateway, workspace, channels, and skills")
@@ -169,6 +167,7 @@ export function registerOnboardCommand(program: Command) {
     .option("--skip-search", "Skip search provider setup")
     .option("--skip-health", "Skip health check")
     .option("--skip-ui", "Skip Control UI/TUI prompts")
+    .option("--skip-hooks", "Skip hook setup")
     .option("--node-manager <name>", "Node manager for skills: npm|pnpm|bun")
     .option("--import-from <provider>", "Migration provider to run during onboarding")
     .option("--import-source <path>", "Source agent home for --import-from")
@@ -176,6 +175,7 @@ export function registerOnboardCommand(program: Command) {
     .option("--json", "Output JSON summary", false);
 
   command.action(async (opts, commandRuntime) => {
+    const { defaultRuntime } = await import("../../runtime.js");
     await runCommandWithRuntime(defaultRuntime, async () => {
       if (opts.modern) {
         const { runCrestodian } = await import("../../crestodian/crestodian.js");
@@ -195,6 +195,7 @@ export function registerOnboardCommand(program: Command) {
       const providerAuthOptionValues = pickOnboardProviderAuthOptionValues(
         opts as Record<string, unknown>,
       );
+      const { setupWizardCommand } = await import("../../commands/onboard.js");
       await setupWizardCommand(
         {
           workspace: opts.workspace as string | undefined,
@@ -245,6 +246,7 @@ export function registerOnboardCommand(program: Command) {
           skipSearch: Boolean(opts.skipSearch),
           skipHealth: Boolean(opts.skipHealth),
           skipUi: Boolean(opts.skipUi),
+          skipHooks: Boolean(opts.skipHooks),
           nodeManager: opts.nodeManager as NodeManagerChoice | undefined,
           importFrom: opts.importFrom as string | undefined,
           importSource: opts.importSource as string | undefined,

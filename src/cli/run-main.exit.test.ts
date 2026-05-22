@@ -1,6 +1,8 @@
 import process from "node:process";
 import { CommanderError } from "commander";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { loggingState } from "../logging/state.js";
+import type { RootHelpRenderOptions } from "./program/root-help.js";
 import { runCli, shouldStartProxyForCli } from "./run-main.js";
 
 const tryRouteCliMock = vi.hoisted(() => vi.fn());
@@ -17,6 +19,13 @@ const startTaskRegistryMaintenanceMock = vi.hoisted(() => vi.fn());
 const outputRootHelpMock = vi.hoisted(() => vi.fn());
 const outputPrecomputedRootHelpTextMock = vi.hoisted(() => vi.fn(() => false));
 const outputPrecomputedBrowserHelpTextMock = vi.hoisted(() => vi.fn(() => false));
+const outputPrecomputedSecretsHelpTextMock = vi.hoisted(() => vi.fn(() => false));
+const outputPrecomputedNodesHelpTextMock = vi.hoisted(() => vi.fn(() => false));
+const outputPrecomputedSubcommandHelpTextMock = vi.hoisted(() => vi.fn(() => false));
+const loadRootHelpRenderOptionsForConfigSensitivePluginsMock = vi.hoisted(() =>
+  vi.fn<() => Promise<RootHelpRenderOptions | null>>(async () => null),
+);
+const tryOutputSetupOnboardConfigureHelpMock = vi.hoisted(() => vi.fn(async () => true));
 const buildProgramMock = vi.hoisted(() => vi.fn());
 const getProgramContextMock = vi.hoisted(() => vi.fn(() => null));
 const registerCoreCliByNameMock = vi.hoisted(() => vi.fn());
@@ -54,12 +63,11 @@ const maybeRunCliInContainerMock = vi.hoisted(() =>
 );
 
 function requireRunCrestodianOptions(index = 0): { onReady?: unknown } {
-  const call = runCrestodianMock.mock.calls.at(index);
+  const call = runCrestodianMock.mock.calls[index];
   if (!call) {
     throw new Error(`expected runCrestodian call ${index}`);
   }
   expect(typeof call[0]).toBe("object");
-  expect(call[0]).not.toBeNull();
   if (typeof call[0] !== "object" || call[0] === null) {
     throw new Error(`expected runCrestodian call ${index} to receive options`);
   }
@@ -98,7 +106,7 @@ vi.mock("./route.js", () => ({
   tryRouteCli: tryRouteCliMock,
 }));
 
-vi.mock("./gateway-cli/run.js", () => ({
+vi.mock("./gateway-cli/run-command.js", () => ({
   addGatewayRunCommand: addGatewayRunCommandMock,
 }));
 
@@ -165,7 +173,19 @@ vi.mock("./program/root-help.js", () => ({
 
 vi.mock("./root-help-metadata.js", () => ({
   outputPrecomputedBrowserHelpText: outputPrecomputedBrowserHelpTextMock,
+  outputPrecomputedNodesHelpText: outputPrecomputedNodesHelpTextMock,
   outputPrecomputedRootHelpText: outputPrecomputedRootHelpTextMock,
+  outputPrecomputedSecretsHelpText: outputPrecomputedSecretsHelpTextMock,
+  outputPrecomputedSubcommandHelpText: outputPrecomputedSubcommandHelpTextMock,
+}));
+
+vi.mock("./root-help-live-config.js", () => ({
+  loadRootHelpRenderOptionsForConfigSensitivePlugins:
+    loadRootHelpRenderOptionsForConfigSensitivePluginsMock,
+}));
+
+vi.mock("./setup-onboard-configure-help-fast-path.js", () => ({
+  tryOutputSetupOnboardConfigureHelp: tryOutputSetupOnboardConfigureHelpMock,
 }));
 
 vi.mock("./program.js", () => ({
@@ -230,20 +250,6 @@ vi.mock("../infra/net/proxy/proxy-lifecycle.js", () => ({
 function makeProxyHandle() {
   return {
     proxyUrl: "http://127.0.0.1:19876",
-    injectedProxyUrl: "http://127.0.0.1:19876",
-    envSnapshot: {
-      http_proxy: undefined,
-      https_proxy: undefined,
-      HTTP_PROXY: undefined,
-      HTTPS_PROXY: undefined,
-      GLOBAL_AGENT_HTTP_PROXY: undefined,
-      GLOBAL_AGENT_HTTPS_PROXY: undefined,
-      GLOBAL_AGENT_FORCE_GLOBAL_AGENT: undefined,
-      no_proxy: undefined,
-      NO_PROXY: undefined,
-      GLOBAL_AGENT_NO_PROXY: undefined,
-      OPENCLAW_PROXY_ACTIVE: undefined,
-    },
     stop: vi.fn(async () => {}),
     kill: vi.fn(),
   };
@@ -255,7 +261,12 @@ describe("runCli exit behavior", () => {
     hasMemoryRuntimeMock.mockReturnValue(false);
     listAgentHarnessIdsMock.mockReturnValue([]);
     outputPrecomputedBrowserHelpTextMock.mockReturnValue(false);
+    outputPrecomputedNodesHelpTextMock.mockReturnValue(false);
     outputPrecomputedRootHelpTextMock.mockReturnValue(false);
+    outputPrecomputedSecretsHelpTextMock.mockReturnValue(false);
+    outputPrecomputedSubcommandHelpTextMock.mockReturnValue(false);
+    loadRootHelpRenderOptionsForConfigSensitivePluginsMock.mockResolvedValue(null);
+    tryOutputSetupOnboardConfigureHelpMock.mockResolvedValue(true);
     hasEnvHttpProxyAgentConfiguredMock.mockReturnValue(false);
     loadConfigMock.mockReturnValue({});
     startProxyMock.mockResolvedValue(null);
@@ -270,6 +281,7 @@ describe("runCli exit behavior", () => {
     resolveManifestCliCommandSurfaceOwnerMock.mockReturnValue(undefined);
     delete process.env.OPENCLAW_DISABLE_CLI_STARTUP_HELP_FAST_PATH;
     delete process.env.OPENCLAW_HIDE_BANNER;
+    loggingState.forceConsoleToStderr = false;
   });
 
   it("does not force process.exit after successful routed command", async () => {
@@ -303,6 +315,24 @@ describe("runCli exit behavior", () => {
 
     expect(parseAsync).toHaveBeenCalledWith(["node", "openclaw", "agent", "--local"]);
     expect(disposeRegisteredAgentHarnessesMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("shows the standard spinner while loading the full CLI", async () => {
+    tryRouteCliMock.mockResolvedValueOnce(false);
+    const parseAsync = vi.fn().mockResolvedValueOnce(undefined);
+    buildProgramMock.mockReturnValueOnce({
+      commands: [{ name: () => "config", aliases: () => [] }],
+      parseAsync,
+    });
+
+    await runCli(["node", "openclaw", "config"]);
+
+    expect(createCliProgressMock).toHaveBeenCalledWith({
+      label: "Loading OpenClaw CLI…",
+      indeterminate: true,
+      delayMs: 0,
+    });
+    expect(progressDoneMock).toHaveBeenCalledTimes(1);
   });
 
   it("pauses non-tty stdin after full CLI command completion", async () => {
@@ -391,15 +421,82 @@ describe("runCli exit behavior", () => {
     exitSpy.mockRestore();
   });
 
+  it("renders secrets help from startup metadata without building the full program", async () => {
+    outputPrecomputedSecretsHelpTextMock.mockReturnValueOnce(true);
+
+    await runCli(["node", "openclaw", "secrets", "--help"]);
+
+    expect(tryRouteCliMock).not.toHaveBeenCalled();
+    expect(outputPrecomputedSecretsHelpTextMock).toHaveBeenCalledTimes(1);
+    expect(buildProgramMock).not.toHaveBeenCalled();
+    expect(registerSubCliByNameMock).not.toHaveBeenCalled();
+  });
+
+  it("renders nodes help from startup metadata without building the full program", async () => {
+    outputPrecomputedNodesHelpTextMock.mockReturnValueOnce(true);
+
+    await runCli(["node", "openclaw", "nodes", "--help"]);
+
+    expect(tryRouteCliMock).not.toHaveBeenCalled();
+    expect(outputPrecomputedNodesHelpTextMock).toHaveBeenCalledTimes(1);
+    expect(buildProgramMock).not.toHaveBeenCalled();
+    expect(registerSubCliByNameMock).not.toHaveBeenCalled();
+  });
+
+  it("defers nodes help startup metadata when plugin config can change command metadata", async () => {
+    const argv = ["node", "openclaw", "nodes", "--help"];
+    const parseAsync = vi.fn().mockResolvedValueOnce(undefined);
+    const program = {
+      commands: [{ name: () => "nodes", aliases: () => [] }],
+      parseAsync,
+    };
+    loadRootHelpRenderOptionsForConfigSensitivePluginsMock.mockResolvedValueOnce({ env: {} });
+    outputPrecomputedNodesHelpTextMock.mockReturnValueOnce(true);
+    buildProgramMock.mockReturnValueOnce(program);
+
+    await runCli(argv);
+
+    expect(loadRootHelpRenderOptionsForConfigSensitivePluginsMock).toHaveBeenCalledTimes(1);
+    expect(outputPrecomputedNodesHelpTextMock).not.toHaveBeenCalled();
+    expect(registerSubCliByNameMock.mock.calls).toEqual([[program, "nodes", argv]]);
+    expect(parseAsync).toHaveBeenCalledWith(argv);
+  });
+
+  it("renders selected subcommand help from startup metadata without building the full program", async () => {
+    outputPrecomputedSubcommandHelpTextMock.mockReturnValueOnce(true);
+
+    await runCli(["node", "openclaw", "doctor", "--help"]);
+
+    expect(outputPrecomputedSubcommandHelpTextMock).toHaveBeenCalledWith("doctor");
+    expect(tryRouteCliMock).not.toHaveBeenCalled();
+    expect(buildProgramMock).not.toHaveBeenCalled();
+    expect(closeActiveMemorySearchManagersMock).not.toHaveBeenCalled();
+  });
+
   it("keeps root help on the precomputed path without proxy bootstrap", async () => {
     outputPrecomputedRootHelpTextMock.mockReturnValueOnce(true);
 
     await runCli(["node", "openclaw", "--help"]);
 
+    expect(loadRootHelpRenderOptionsForConfigSensitivePluginsMock).toHaveBeenCalledTimes(1);
     expect(outputPrecomputedRootHelpTextMock).toHaveBeenCalledTimes(1);
     expect(hasEnvHttpProxyAgentConfiguredMock).not.toHaveBeenCalled();
     expect(ensureGlobalUndiciEnvProxyDispatcherMock).not.toHaveBeenCalled();
     expect(runCrestodianMock).not.toHaveBeenCalled();
+  });
+
+  it("renders setup/onboard/configure help without building the full program", async () => {
+    await runCli(["node", "openclaw", "setup", "--help"]);
+
+    expect(tryOutputSetupOnboardConfigureHelpMock).toHaveBeenCalledWith([
+      "node",
+      "openclaw",
+      "setup",
+      "--help",
+    ]);
+    expect(tryRouteCliMock).not.toHaveBeenCalled();
+    expect(buildProgramMock).not.toHaveBeenCalled();
+    expect(registerPluginCliCommandsFromValidatedConfigMock).not.toHaveBeenCalled();
   });
 
   it("renders root help without building the full program", async () => {
@@ -411,12 +508,35 @@ describe("runCli exit behavior", () => {
 
     expect(maybeRunCliInContainerMock).toHaveBeenCalledWith(["node", "openclaw", "--help"]);
     expect(tryRouteCliMock).not.toHaveBeenCalled();
+    expect(loadRootHelpRenderOptionsForConfigSensitivePluginsMock).toHaveBeenCalledTimes(1);
     expect(outputPrecomputedRootHelpTextMock).toHaveBeenCalledTimes(1);
     expect(outputRootHelpMock).toHaveBeenCalledTimes(1);
     expect(buildProgramMock).not.toHaveBeenCalled();
     expect(closeActiveMemorySearchManagersMock).not.toHaveBeenCalled();
     expect(exitSpy).not.toHaveBeenCalled();
     exitSpy.mockRestore();
+  });
+
+  it("renders config-sensitive root help live instead of precomputed metadata", async () => {
+    const liveOptions: RootHelpRenderOptions = {
+      config: {
+        plugins: {
+          slots: {
+            memory: "memory-lancedb",
+          },
+        },
+      },
+      env: process.env,
+    };
+    loadRootHelpRenderOptionsForConfigSensitivePluginsMock.mockResolvedValueOnce(liveOptions);
+    outputPrecomputedRootHelpTextMock.mockReturnValueOnce(true);
+
+    await runCli(["node", "openclaw", "--help"]);
+
+    expect(loadRootHelpRenderOptionsForConfigSensitivePluginsMock).toHaveBeenCalledTimes(1);
+    expect(outputPrecomputedRootHelpTextMock).not.toHaveBeenCalled();
+    expect(outputRootHelpMock).toHaveBeenCalledWith(liveOptions);
+    expect(buildProgramMock).not.toHaveBeenCalled();
   });
 
   it("does not start the managed proxy for local gateway client commands", async () => {
@@ -595,6 +715,68 @@ describe("runCli exit behavior", () => {
     expect(registerSubCliByNameMock.mock.calls).toEqual([[program, argv[2], argv]]);
     expect(registerPluginCliCommandsFromValidatedConfigMock).not.toHaveBeenCalled();
     expect(parseAsync).toHaveBeenCalledWith(argv);
+  });
+
+  it("routes lazy plugin registration logs to stderr only during --json registration", async () => {
+    tryRouteCliMock.mockResolvedValueOnce(false);
+    resolvePluginCliRootOwnerIdsMock.mockImplementation(
+      ({ primaryCommand }: { primaryCommand?: string }) =>
+        primaryCommand === "memory" ? ["memory"] : [],
+    );
+    let stderrDuringPluginRegistration = false;
+    let stderrDuringParse = true;
+    registerPluginCliCommandsFromValidatedConfigMock.mockImplementationOnce(async () => {
+      stderrDuringPluginRegistration = loggingState.forceConsoleToStderr;
+      return {};
+    });
+    const parseAsync = vi.fn().mockImplementationOnce(async () => {
+      stderrDuringParse = loggingState.forceConsoleToStderr;
+    });
+    buildProgramMock.mockReturnValueOnce({
+      commands: [],
+      parseAsync,
+    });
+
+    await runCli(["node", "openclaw", "memory", "search", "query", "--json"]);
+
+    expect(registerPluginCliCommandsFromValidatedConfigMock).toHaveBeenCalledWith(
+      expect.anything(),
+      undefined,
+      undefined,
+      { mode: "lazy", primary: "memory" },
+    );
+    expect(stderrDuringPluginRegistration).toBe(true);
+    expect(stderrDuringParse).toBe(false);
+    expect(loggingState.forceConsoleToStderr).toBe(false);
+  });
+
+  it("does not route lazy plugin registration logs for pass-through --json after terminator", async () => {
+    tryRouteCliMock.mockResolvedValueOnce(false);
+    resolvePluginCliRootOwnerIdsMock.mockImplementation(
+      ({ primaryCommand }: { primaryCommand?: string }) =>
+        primaryCommand === "memory" ? ["memory"] : [],
+    );
+    let stderrDuringPluginRegistration = true;
+    registerPluginCliCommandsFromValidatedConfigMock.mockImplementationOnce(async () => {
+      stderrDuringPluginRegistration = loggingState.forceConsoleToStderr;
+      return {};
+    });
+    const parseAsync = vi.fn().mockResolvedValueOnce(undefined);
+    buildProgramMock.mockReturnValueOnce({
+      commands: [],
+      parseAsync,
+    });
+
+    await runCli(["node", "openclaw", "memory", "--", "--json"]);
+
+    expect(registerPluginCliCommandsFromValidatedConfigMock).toHaveBeenCalledWith(
+      expect.anything(),
+      undefined,
+      undefined,
+      { mode: "lazy", primary: "memory" },
+    );
+    expect(stderrDuringPluginRegistration).toBe(false);
+    expect(loggingState.forceConsoleToStderr).toBe(false);
   });
 
   it("fails protected commands when managed proxy activation fails", async () => {

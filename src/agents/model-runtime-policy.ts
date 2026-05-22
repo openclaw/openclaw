@@ -13,6 +13,8 @@ export type ResolvedModelRuntimePolicy = {
   source?: ModelRuntimePolicySource;
 };
 
+type ModelEntryMatchKind = "none" | "exact" | "provider-wildcard";
+
 function hasRuntimePolicy(value: AgentRuntimePolicyConfig | undefined): boolean {
   return Boolean(value?.id?.trim());
 }
@@ -63,30 +65,61 @@ function modelEntryMatches(params: {
   provider: string | undefined;
   modelId: string;
 }): boolean {
+  return modelEntryMatchKind(params) === "exact";
+}
+
+function modelEntryMatchKind(params: {
+  entry: Pick<ModelDefinitionConfig, "id">;
+  provider: string | undefined;
+  modelId: string;
+}): ModelEntryMatchKind {
   const entryId = params.entry.id.trim();
   if (entryId === params.modelId) {
-    return true;
+    return "exact";
   }
   const slash = entryId.indexOf("/");
   if (slash <= 0) {
-    return false;
+    return "none";
   }
-  return (
-    normalizeProviderId(entryId.slice(0, slash)) === normalizeProviderId(params.provider ?? "") &&
-    entryId.slice(slash + 1).trim() === params.modelId
-  );
+  if (normalizeProviderId(entryId.slice(0, slash)) !== normalizeProviderId(params.provider ?? "")) {
+    return "none";
+  }
+  const entryModelId = entryId.slice(slash + 1).trim();
+  if (entryModelId === params.modelId) {
+    return "exact";
+  }
+  if (entryModelId === "*") {
+    return "provider-wildcard";
+  }
+  return "none";
 }
 
-function modelKeyMatches(params: {
+function modelKeyMatchKind(params: {
   key: string;
   provider: string | undefined;
   modelId: string;
-}): boolean {
-  return modelEntryMatches({
+}): ModelEntryMatchKind {
+  return modelEntryMatchKind({
     entry: { id: params.key },
     provider: params.provider,
     modelId: params.modelId,
   });
+}
+
+function modelKeyIsProviderWildcard(params: {
+  key: string;
+  provider: string | undefined;
+}): boolean {
+  const slash = params.key.indexOf("/");
+  if (slash <= 0) {
+    return false;
+  }
+  if (
+    normalizeProviderId(params.key.slice(0, slash)) !== normalizeProviderId(params.provider ?? "")
+  ) {
+    return false;
+  }
+  return params.key.slice(slash + 1).trim() === "*";
 }
 
 function resolveAgentModelEntryRuntimePolicy(params: {
@@ -95,9 +128,10 @@ function resolveAgentModelEntryRuntimePolicy(params: {
   modelId?: string;
   agentId?: string;
   sessionKey?: string;
+  matchKind: Exclude<ModelEntryMatchKind, "none">;
 }): ResolvedModelRuntimePolicy {
   const modelId = normalizeModelIdForProvider(params.provider, params.modelId);
-  if (!params.config || !modelId) {
+  if (!params.config || (!modelId && params.matchKind !== "provider-wildcard")) {
     return {};
   }
   const { sessionAgentId } = resolveSessionAgentIds({
@@ -114,10 +148,10 @@ function resolveAgentModelEntryRuntimePolicy(params: {
   ];
   for (const models of modelMaps) {
     for (const [key, entry] of Object.entries(models ?? {})) {
-      if (
-        modelKeyMatches({ key, provider: params.provider, modelId }) &&
-        hasRuntimePolicy(entry?.agentRuntime)
-      ) {
+      const matches = modelId
+        ? modelKeyMatchKind({ key, provider: params.provider, modelId }) === params.matchKind
+        : modelKeyIsProviderWildcard({ key, provider: params.provider });
+      if (matches && hasRuntimePolicy(entry?.agentRuntime)) {
         return { policy: entry.agentRuntime, source: "model" };
       }
     }
@@ -146,7 +180,14 @@ export function resolveModelRuntimePolicy(params: {
   agentId?: string;
   sessionKey?: string;
 }): ResolvedModelRuntimePolicy {
-  const agentModelPolicy = resolveAgentModelEntryRuntimePolicy(params);
+  if (process.env.OPENCLAW_BUILD_PRIVATE_QA === "1") {
+    const forcedRuntime = process.env.OPENCLAW_QA_FORCE_RUNTIME?.trim().toLowerCase();
+    if (forcedRuntime === "pi" || forcedRuntime === "codex") {
+      return { policy: { id: forcedRuntime }, source: "model" };
+    }
+  }
+
+  const agentModelPolicy = resolveAgentModelEntryRuntimePolicy({ ...params, matchKind: "exact" });
   if (agentModelPolicy.policy) {
     return agentModelPolicy;
   }
@@ -158,6 +199,13 @@ export function resolveModelRuntimePolicy(params: {
   });
   if (hasRuntimePolicy(modelConfig?.agentRuntime)) {
     return { policy: modelConfig?.agentRuntime, source: "model" };
+  }
+  const agentWildcardModelPolicy = resolveAgentModelEntryRuntimePolicy({
+    ...params,
+    matchKind: "provider-wildcard",
+  });
+  if (agentWildcardModelPolicy.policy) {
+    return agentWildcardModelPolicy;
   }
   if (hasRuntimePolicy(providerConfig?.agentRuntime)) {
     return { policy: providerConfig?.agentRuntime, source: "provider" };

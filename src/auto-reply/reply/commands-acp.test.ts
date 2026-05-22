@@ -120,8 +120,8 @@ vi.mock("../../infra/outbound/session-binding-service.js", async () => {
 
 const { handleAcpCommand } = await import("./commands-acp.js");
 const { buildCommandTestParams } = await import("./commands-spawn.test-harness.js");
-const { __testing: acpManagerTesting } = await import("../../acp/control-plane/manager.js");
-const { __testing: acpResetTargetTesting, resolveEffectiveResetTargetSessionKey } =
+const { testing: acpManagerTesting } = await import("../../acp/control-plane/manager.js");
+const { testing: acpResetTargetTesting, resolveEffectiveResetTargetSessionKey } =
   await import("./acp-reset-target.js");
 const { createTaskRecord, resetTaskRegistryForTests } =
   await import("../../tasks/task-registry.js");
@@ -1144,7 +1144,7 @@ describe("/acp command", () => {
     expectBoundIntroTextToExclude("session ids: pending (available after the first reply)");
     expectGatewayMethodNotCalled("sessions.patch");
     expect(hoisted.upsertAcpSessionMetaMock).toHaveBeenCalledTimes(1);
-    const upsertArgs = hoisted.upsertAcpSessionMetaMock.mock.calls.at(0)?.[0] as
+    const upsertArgs = mockCallArg(hoisted.upsertAcpSessionMetaMock) as
       | {
           sessionKey: string;
           mutate: (
@@ -1632,7 +1632,7 @@ describe("/acp command", () => {
       reason: "manual",
     });
     expect(hoisted.upsertAcpSessionMetaMock).toHaveBeenCalledTimes(1);
-    const clearMetaArgs = hoisted.upsertAcpSessionMetaMock.mock.calls.at(0)?.[0] as
+    const clearMetaArgs = mockCallArg(hoisted.upsertAcpSessionMetaMock) as
       | {
           sessionKey: string;
           mutate: (current: unknown, entry: { sessionId: string; updatedAt: number }) => unknown;

@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { describe, expect, it, vi } from "vitest";
 import { createHostSandboxFsBridge } from "../../test-helpers/host-sandbox-fs-bridge.js";
 import { createUnsafeMountedSandbox } from "../../test-helpers/unsafe-mounted-sandbox.js";
@@ -103,8 +104,10 @@ describe("detectImageReferences", () => {
     expect(detectImageReferences("[Image: source: /tmp/second.jpg]")).toStrictEqual([
       { raw: "/tmp/second.jpg", type: "path", resolved: "/tmp/second.jpg" },
     ]);
-    expect(detectImageReferences("See file:///tmp/third.webp")).toStrictEqual([
-      { raw: "file:///tmp/third.webp", type: "path", resolved: "/tmp/third.webp" },
+    const thirdPath = path.join(os.tmpdir(), "third.webp");
+    const thirdUrl = pathToFileURL(thirdPath).href;
+    expect(detectImageReferences(`See ${thirdUrl}`)).toStrictEqual([
+      { raw: thirdUrl, type: "path", resolved: thirdPath },
     ]);
     expect(detectImageReferences("See ./fourth.jpeg")).toStrictEqual([
       { raw: "./fourth.jpeg", type: "path", resolved: "./fourth.jpeg" },
@@ -189,6 +192,18 @@ describe("detectImageReferences", () => {
       raw: "./screenshot.png",
       type: "path",
       resolved: "./screenshot.png",
+    });
+  });
+
+  it("detects Windows drive image paths in plain prompts", () => {
+    const ref = expectSingleImageReference(
+      String.raw`Look at C:\Users\Ada\Pictures\screenshot.png`,
+    );
+
+    expect(ref).toStrictEqual({
+      raw: String.raw`C:\Users\Ada\Pictures\screenshot.png`,
+      type: "path",
+      resolved: String.raw`C:\Users\Ada\Pictures\screenshot.png`,
     });
   });
 
@@ -405,6 +420,49 @@ describe("detectAndLoadPromptImages", () => {
 
     expect(result.images).toHaveLength(0);
     expect(result.detectedRefs).toHaveLength(0);
+  });
+
+  it("skips generated media-note refs already supplied inline", async () => {
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-native-image-dedupe-"));
+    const imagePath = path.join(stateDir, "photo.png");
+    const pngB64 =
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=";
+    await fs.writeFile(imagePath, Buffer.from(pngB64, "base64"));
+
+    try {
+      const result = await detectAndLoadPromptImages({
+        prompt: "[media attached: ./photo.png (image/png)]\ndescribe it",
+        workspaceDir: stateDir,
+        model: { input: ["text", "image"] },
+        existingImages: [{ type: "image", data: pngB64, mimeType: "image/png" }],
+        imageOrder: ["inline"],
+        workspaceOnly: true,
+      });
+
+      expect(result.detectedRefs).toHaveLength(1);
+      expect(result.loadedCount).toBe(0);
+      expect(result.skippedCount).toBe(0);
+      expect(result.images).toEqual([{ type: "image", data: pngB64, mimeType: "image/png" }]);
+    } finally {
+      await fs.rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps distinct inline attachments with identical bytes", async () => {
+    const pngB64 =
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=";
+    const image = { type: "image" as const, data: pngB64, mimeType: "image/png" };
+
+    const result = await detectAndLoadPromptImages({
+      prompt: "compare these attachments",
+      workspaceDir: "/tmp",
+      model: { input: ["text", "image"] },
+      existingImages: [image, image],
+      imageOrder: ["inline", "inline"],
+      workspaceOnly: true,
+    });
+
+    expect(result.images).toEqual([image, image]);
   });
 
   it("preserves attachment order when offloaded refs and inline images are mixed", () => {

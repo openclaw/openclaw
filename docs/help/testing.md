@@ -47,9 +47,9 @@ When debugging real providers/models (requires real creds):
 - Live suite (models + gateway tool/image probes): `pnpm test:live`
 - Target one live file quietly: `pnpm test:live -- src/agents/models.profiles.live.test.ts`
 - Runtime performance reports: dispatch `OpenClaw Performance` with
-  `live_gpt54=true` for a real `openai/gpt-5.4` agent turn or
+  `live_openai_candidate=true` for a real `openai/gpt-5.5` agent turn or
   `deep_profile=true` for Kova CPU/heap/trace artifacts. Daily scheduled runs
-  publish mock-provider, deep-profile, and GPT 5.4 lane artifacts to
+  publish mock-provider, deep-profile, and GPT 5.5 lane artifacts to
   `openclaw/clawgrit-reports` when `CLAWGRIT_REPORTS_TOKEN` is configured. The
   mock-provider report also includes source-level gateway boot, memory,
   plugin-pressure, repeated fake-model hello-loop, and CLI startup numbers.
@@ -335,9 +335,9 @@ start it from the Actions UI through `Mantis Scenario` (`scenario_id:
 telegram-live`) or directly from a pull request comment:
 
 ```text
-@Mantis telegram
-@Mantis telegram scenario=telegram-status-command
-@Mantis telegram scenarios=telegram-status-command,telegram-mentioned-message-reply
+@openclaw-mantis telegram
+@openclaw-mantis telegram scenario=telegram-status-command
+@openclaw-mantis telegram scenarios=telegram-status-command,telegram-mentioned-message-reply
 ```
 
 `Mantis Telegram Desktop Proof` is the agentic native Telegram Desktop
@@ -346,7 +346,7 @@ freeform `instructions`, through `Mantis Scenario` (`scenario_id:
 telegram-desktop-proof`), or from a PR comment:
 
 ```text
-@Mantis telegram desktop proof
+@openclaw-mantis telegram desktop proof
 ```
 
 The Mantis agent reads the PR, decides what Telegram-visible behavior proves the
@@ -450,70 +450,7 @@ Payload shape for Telegram real-user kind:
 - `{ groupId: string, sutToken: string, testerUserId: string, testerUsername: string, telegramApiId: string, telegramApiHash: string, tdlibDatabaseEncryptionKey: string, tdlibArchiveBase64: string, tdlibArchiveSha256: string, desktopTdataArchiveBase64: string, desktopTdataArchiveSha256: string }`
 - `groupId`, `testerUserId`, and `telegramApiId` must be numeric strings.
 - `tdlibArchiveSha256` and `desktopTdataArchiveSha256` must be SHA-256 hex strings.
-- `kind: "telegram-user"` represents one Telegram burner account. Treat the lease as account-wide: the TDLib CLI driver and Telegram Desktop visual witness restore from the same payload, and only one job should hold the lease at a time.
-
-Telegram real-user lease restore:
-
-```bash
-tmp=$(mktemp -d /tmp/openclaw-telegram-user.XXXXXX)
-node --import tsx scripts/e2e/telegram-user-credential.ts lease-restore \
-  --user-driver-dir "$tmp/user-driver" \
-  --desktop-workdir "$tmp/desktop" \
-  --lease-file "$tmp/lease.json"
-TELEGRAM_USER_DRIVER_STATE_DIR="$tmp/user-driver" \
-  uv run ~/.codex/skills/custom/telegram-e2e-bot-to-bot/scripts/user-driver.py status --json
-node --import tsx scripts/e2e/telegram-user-credential.ts release --lease-file "$tmp/lease.json"
-```
-
-Use the restored Desktop profile with `Telegram -workdir "$tmp/desktop"` when a visual recording is needed. In local operator environments, `scripts/e2e/telegram-user-credential.ts` reads `~/.codex/skills/custom/telegram-e2e-bot-to-bot/convex.local.env` by default if process env vars are absent.
-
-Agent-driven Crabbox session:
-
-```bash
-pnpm qa:telegram-user:crabbox -- start \
-  --tdlib-url http://artifacts.openclaw.ai/tdlib-v1.8.0-linux-x64.tgz \
-  --output-dir .artifacts/qa-e2e/telegram-user-crabbox/pr-review
-pnpm qa:telegram-user:crabbox -- send \
-  --session .artifacts/qa-e2e/telegram-user-crabbox/pr-review/session.json \
-  --text /status
-pnpm qa:telegram-user:crabbox -- finish \
-  --session .artifacts/qa-e2e/telegram-user-crabbox/pr-review/session.json
-```
-
-`start` leases the `telegram-user` credential, restores the same account into
-TDLib and Telegram Desktop on a Crabbox Linux desktop, starts a local mock SUT
-gateway from the current checkout, opens the visible Telegram chat, starts
-desktop recording, and writes a private `session.json`. While the session is
-alive, an agent can keep testing until satisfied:
-
-- `send --session <file> --text <message>` sends through the real TDLib user and waits for the SUT reply.
-- `run --session <file> -- <remote command>` runs an arbitrary command on the Crabbox and saves its output, for example `bash -lc 'source /tmp/openclaw-telegram-user-crabbox/env.sh && python3 /tmp/openclaw-telegram-user-crabbox/user-driver.py transcript --limit 20 --json'`.
-- `screenshot --session <file>` captures the current visible desktop.
-- `status --session <file>` prints the lease and WebVNC command.
-- `finish --session <file>` stops the recorder, captures screenshot/video/motion-trim artifacts, releases the Convex credential, stops local SUT processes, and stops the Crabbox lease unless `--keep-box` is passed.
-- `publish --session <file> --pr <number>` publishes a GIF-only PR comment by default. Pass `--full-artifacts` only when logs or JSON artifacts are intentionally needed.
-
-For deterministic visual repros, pass `--mock-response-file <path>` to `start`
-or to the one-command `probe` shorthand. The runner defaults to a standard
-Crabbox class, 24fps recording, 24fps motion GIF previews, and 1920px GIF
-width. Override with `--class`, `--record-fps`, `--preview-fps`, and
-`--preview-width` only when the proof needs different capture settings.
-
-One-command Crabbox proof:
-
-```bash
-pnpm qa:telegram-user:crabbox -- --text /status
-```
-
-The default `probe` command is shorthand for one start/send/finish cycle. Use
-it for a quick `/status` smoke. Use the session commands for PR review,
-bug-reproduction work, or any case where the agent needs minutes of arbitrary
-experimentation before deciding the proof is complete. Use `--id <cbx_...>` to
-reuse a warm desktop lease, `--keep-box` to keep VNC open after finish,
-`--desktop-chat-title <name>` to pick the visible chat, and `--tdlib-url <tgz>`
-when using a prebaked Linux `libtdjson.so` archive instead of building TDLib on
-a fresh box. The runner verifies `--tdlib-url` with `--tdlib-sha256 <hex>` or,
-by default, a sibling `<url>.sha256` file.
+- `kind: "telegram-user"` is reserved for the Mantis Telegram Desktop proof workflow. Generic QA Lab lanes must not acquire it.
 
 Broker-validated multi-channel payloads:
 
@@ -721,10 +658,10 @@ Native dependency policy:
   - Not CI-stable by design (real networks, real provider policies, quotas, outages)
   - Costs money / uses rate limits
   - Prefer running narrowed subsets instead of "everything"
-- Live runs source `~/.profile` to pick up missing API keys.
+- Live runs use already-exported API keys and staged auth profiles.
 - By default, live runs still isolate `HOME` and copy config/auth material into a temp test home so unit fixtures cannot mutate your real `~/.openclaw`.
 - Set `OPENCLAW_LIVE_USE_REAL_HOME=1` only when you intentionally need live tests to use your real home directory.
-- `pnpm test:live` now defaults to a quieter mode: it keeps `[live] ...` progress output, but suppresses the extra `~/.profile` notice and mutes gateway bootstrap logs/Bonjour chatter. Set `OPENCLAW_LIVE_TEST_QUIET=0` if you want the full startup logs back.
+- `pnpm test:live` defaults to a quieter mode: it keeps `[live] ...` progress output and mutes gateway bootstrap logs/Bonjour chatter. Set `OPENCLAW_LIVE_TEST_QUIET=0` if you want the full startup logs back.
 - API key rotation (provider-specific): set `*_API_KEYS` with comma/semicolon format or `*_API_KEY_1`, `*_API_KEY_2` (for example `OPENAI_API_KEYS`, `ANTHROPIC_API_KEYS`, `GEMINI_API_KEYS`) or per-live override via `OPENCLAW_LIVE_*_KEY`; tests retry on rate limit responses.
 - Progress/heartbeat output:
   - Live suites now emit progress lines to stderr so long provider calls are visibly active even when Vitest console capture is quiet.
@@ -753,7 +690,7 @@ plugin validation checklist, see
 
 These Docker runners split into two buckets:
 
-- Live-model runners: `test:docker:live-models` and `test:docker:live-gateway` run only their matching profile-key live file inside the repo Docker image (`src/agents/models.profiles.live.test.ts` and `src/gateway/gateway-models.profiles.live.test.ts`), mounting your local config dir and workspace (and sourcing `~/.profile` if mounted). The matching local entrypoints are `test:live:models-profiles` and `test:live:gateway-profiles`.
+- Live-model runners: `test:docker:live-models` and `test:docker:live-gateway` run only their matching profile-key live file inside the repo Docker image (`src/agents/models.profiles.live.test.ts` and `src/gateway/gateway-models.profiles.live.test.ts`), mounting your local config dir, workspace, and optional profile env file. The matching local entrypoints are `test:live:models-profiles` and `test:live:gateway-profiles`.
 - Docker live runners default to a smaller smoke cap so a full Docker sweep stays practical:
   `test:docker:live-models` defaults to `OPENCLAW_LIVE_MAX_MODELS=12`, and
   `test:docker:live-gateway` defaults to `OPENCLAW_LIVE_GATEWAY_SMOKE=1`,
@@ -765,7 +702,7 @@ These Docker runners split into two buckets:
 - `Package Acceptance` is the GitHub-native package gate for "does this installable tarball work as a product?" It resolves one candidate package from `source=npm`, `source=ref`, `source=url`, or `source=artifact`, uploads it as `package-under-test`, then runs the reusable Docker E2E lanes against that exact tarball instead of repacking the selected ref. Profiles are ordered by breadth: `smoke`, `package`, `product`, and `full`. See [Testing updates and plugins](/help/testing-updates-plugins) for the package/update/plugin contract, published-upgrade survivor matrix, release defaults, and failure triage.
 - Build and release checks run `scripts/check-cli-bootstrap-imports.mjs` after tsdown. The guard walks the static built graph from `dist/entry.js` and `dist/cli/run-main.js` and fails if pre-dispatch startup imports package dependencies such as Commander, prompt UI, undici, or logging before command dispatch; it also keeps the bundled gateway run chunk under budget and rejects static imports of known cold gateway paths. Packaged CLI smoke also covers root help, onboard help, doctor help, status, config schema, and a model-list command.
 - Package Acceptance legacy compatibility is capped at `2026.4.25` (`2026.4.25-beta.*` included). Through that cutoff, the harness tolerates only shipped-package metadata gaps: omitted private QA inventory entries, missing `gateway install --wrapper`, missing patch files in the tarball-derived git fixture, missing persisted `update.channel`, legacy plugin install-record locations, missing marketplace install-record persistence, and config metadata migration during `plugins update`. For packages after `2026.4.25`, those paths are strict failures.
-- Container smoke runners: `test:docker:openwebui`, `test:docker:onboard`, `test:docker:npm-onboard-channel-agent`, `test:docker:skill-install`, `test:docker:update-channel-switch`, `test:docker:upgrade-survivor`, `test:docker:published-upgrade-survivor`, `test:docker:session-runtime-context`, `test:docker:agents-delete-shared-workspace`, `test:docker:gateway-network`, `test:docker:browser-cdp-snapshot`, `test:docker:mcp-channels`, `test:docker:pi-bundle-mcp-tools`, `test:docker:cron-mcp-cleanup`, `test:docker:plugins`, `test:docker:plugin-update`, `test:docker:plugin-lifecycle-matrix`, and `test:docker:config-reload` boot one or more real containers and verify higher-level integration paths.
+- Container smoke runners: `test:docker:openwebui`, `test:docker:onboard`, `test:docker:npm-onboard-channel-agent`, `test:docker:release-user-journey`, `test:docker:release-typed-onboarding`, `test:docker:release-media-memory`, `test:docker:release-upgrade-user-journey`, `test:docker:release-plugin-marketplace`, `test:docker:skill-install`, `test:docker:update-channel-switch`, `test:docker:upgrade-survivor`, `test:docker:published-upgrade-survivor`, `test:docker:session-runtime-context`, `test:docker:agents-delete-shared-workspace`, `test:docker:gateway-network`, `test:docker:browser-cdp-snapshot`, `test:docker:mcp-channels`, `test:docker:pi-bundle-mcp-tools`, `test:docker:cron-mcp-cleanup`, `test:docker:plugins`, `test:docker:plugin-update`, `test:docker:plugin-lifecycle-matrix`, and `test:docker:config-reload` boot one or more real containers and verify higher-level integration paths.
 
 The live-model Docker runners also bind-mount only the needed CLI auth homes (or all supported ones when the run is not narrowed), then copy them into the container home before the run so external-CLI OAuth can refresh tokens without mutating the host auth store:
 
@@ -778,6 +715,12 @@ The live-model Docker runners also bind-mount only the needed CLI auth homes (or
 - Open WebUI live smoke: `pnpm test:docker:openwebui` (script: `scripts/e2e/openwebui-docker.sh`)
 - Onboarding wizard (TTY, full scaffolding): `pnpm test:docker:onboard` (script: `scripts/e2e/onboard-docker.sh`)
 - Npm tarball onboarding/channel/agent smoke: `pnpm test:docker:npm-onboard-channel-agent` installs the packed OpenClaw tarball globally in Docker, configures OpenAI via env-ref onboarding plus Telegram by default, runs doctor, and runs one mocked OpenAI agent turn. Reuse a prebuilt tarball with `OPENCLAW_CURRENT_PACKAGE_TGZ=/path/to/openclaw-*.tgz`, skip the host rebuild with `OPENCLAW_NPM_ONBOARD_HOST_BUILD=0`, or switch channel with `OPENCLAW_NPM_ONBOARD_CHANNEL=discord` or `OPENCLAW_NPM_ONBOARD_CHANNEL=slack`.
+
+- Release user journey smoke: `pnpm test:docker:release-user-journey` installs the packed OpenClaw tarball globally in a clean Docker home, runs onboarding, configures a mocked OpenAI provider, runs an agent turn, installs/uninstalls external plugins, configures ClickClack against a local fixture, verifies outbound/inbound messaging, restarts Gateway, and runs doctor.
+- Release typed onboarding smoke: `pnpm test:docker:release-typed-onboarding` installs the packed tarball, drives `openclaw onboard` through a real TTY, configures OpenAI as an env-ref provider, verifies no raw key persistence, and runs a mocked agent turn.
+- Release media/memory smoke: `pnpm test:docker:release-media-memory` installs the packed tarball, verifies image understanding from a PNG attachment, OpenAI-compatible image generation output, memory search recall, and recall survival across Gateway restart.
+- Release upgrade user journey smoke: `pnpm test:docker:release-upgrade-user-journey` installs `openclaw@latest` by default, configures provider/plugin/ClickClack state on the published package, upgrades to the candidate tarball, then reruns the core agent/plugin/channel journey. Override the baseline with `OPENCLAW_RELEASE_UPGRADE_BASELINE_SPEC=openclaw@<version>`.
+- Release plugin marketplace smoke: `pnpm test:docker:release-plugin-marketplace` installs from a local fixture marketplace, updates the installed plugin, uninstalls it, and verifies the plugin CLI disappears with install metadata pruned.
 - Skill install smoke: `pnpm test:docker:skill-install` installs the packed OpenClaw tarball globally in Docker, disables uploaded archive installs in config, resolves the current live ClawHub skill slug from search, installs it with `openclaw skills install`, and verifies the installed skill plus `.clawhub` origin/lock metadata.
 - Update channel switch smoke: `pnpm test:docker:update-channel-switch` installs the packed OpenClaw tarball globally in Docker, switches from package `stable` to git `dev`, verifies the persisted channel and plugin post-update work, then switches back to package `stable` and checks update status.
 - Upgrade survivor smoke: `pnpm test:docker:upgrade-survivor` installs the packed OpenClaw tarball over a dirty old-user fixture with agents, channel config, plugin allowlists, stale plugin dependency state, and existing workspace/session files. It runs package update plus non-interactive doctor without live provider or channel keys, then starts a loopback Gateway and checks config/state preservation plus startup/status budgets.
@@ -793,7 +736,7 @@ The live-model Docker runners also bind-mount only the needed CLI auth homes (or
 - MCP channel bridge (seeded Gateway + stdio bridge + raw Claude notification-frame smoke): `pnpm test:docker:mcp-channels` (script: `scripts/e2e/mcp-channels-docker.sh`)
 - Pi bundle MCP tools (real stdio MCP server + embedded Pi profile allow/deny smoke): `pnpm test:docker:pi-bundle-mcp-tools` (script: `scripts/e2e/pi-bundle-mcp-tools-docker.sh`)
 - Cron/subagent MCP cleanup (real Gateway + stdio MCP child teardown after isolated cron and one-shot subagent runs): `pnpm test:docker:cron-mcp-cleanup` (script: `scripts/e2e/cron-mcp-cleanup-docker.sh`)
-- Plugins (install/update smoke for local path, `file:`, npm registry with hoisted dependencies, git moving refs, ClawHub kitchen-sink, marketplace updates, and Claude-bundle enable/inspect): `pnpm test:docker:plugins` (script: `scripts/e2e/plugins-docker.sh`)
+- Plugins (install/update smoke for local path, `file:`, npm registry with hoisted dependencies, malformed npm package metadata, git moving refs, ClawHub kitchen-sink, marketplace updates, and Claude-bundle enable/inspect): `pnpm test:docker:plugins` (script: `scripts/e2e/plugins-docker.sh`)
   Set `OPENCLAW_PLUGINS_E2E_CLAWHUB=0` to skip the ClawHub block, or override the default kitchen-sink package/runtime pair with `OPENCLAW_PLUGINS_E2E_CLAWHUB_SPEC` and `OPENCLAW_PLUGINS_E2E_CLAWHUB_ID`. Without `OPENCLAW_CLAWHUB_URL`/`CLAWHUB_URL`, the test uses a hermetic local ClawHub fixture server.
 - Plugin update unchanged smoke: `pnpm test:docker:plugin-update` (script: `scripts/e2e/plugin-update-unchanged-docker.sh`)
 - Plugin lifecycle matrix smoke: `pnpm test:docker:plugin-lifecycle-matrix` installs the packed OpenClaw tarball in a bare container, installs an npm plugin, toggles enable/disable, upgrades and downgrades it through a local npm registry, deletes the installed code, then verifies uninstall still removes stale state while logging RSS/CPU metrics for each lifecycle phase.
@@ -831,8 +774,8 @@ after Open WebUI sign-in and model discovery, without waiting on a live model
 completion.
 The first run can be noticeably slower because Docker may need to pull the
 Open WebUI image and Open WebUI may need to finish its own cold-start setup.
-This lane expects a usable live model key, and `OPENCLAW_PROFILE_FILE`
-(`~/.profile` by default) is the primary way to provide it in Dockerized runs.
+This lane expects a usable live model key. Provide it through the process
+environment, staged auth profiles, or an explicit `OPENCLAW_PROFILE_FILE`.
 Successful runs print a small JSON payload like `{ "ok": true, "model":
 "openclaw/default", ... }`.
 `test:docker:mcp-channels` is intentionally deterministic and does not need a
@@ -862,7 +805,7 @@ Useful env vars:
 
 - `OPENCLAW_CONFIG_DIR=...` (default: `~/.openclaw`) mounted to `/home/node/.openclaw`
 - `OPENCLAW_WORKSPACE_DIR=...` (default: `~/.openclaw/workspace`) mounted to `/home/node/.openclaw/workspace`
-- `OPENCLAW_PROFILE_FILE=...` (default: `~/.profile`) mounted to `/home/node/.profile` and sourced before running tests
+- `OPENCLAW_PROFILE_FILE=...` mounted and sourced before running tests
 - `OPENCLAW_DOCKER_PROFILE_ENV_ONLY=1` to verify only env vars sourced from `OPENCLAW_PROFILE_FILE`, using temporary config/workspace dirs and no external CLI auth mounts
 - `OPENCLAW_DOCKER_CLI_TOOLS_DIR=...` (default: `~/.cache/openclaw/docker-cli-tools`) mounted to `/home/node/.npm-global` for cached CLI installs inside Docker
 - External CLI auth dirs/files under `$HOME` are mounted read-only under `/host-auth...`, then copied into `/home/node/...` before tests start

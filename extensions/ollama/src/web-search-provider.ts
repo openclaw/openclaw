@@ -65,6 +65,14 @@ type OllamaWebSearchAttempt = {
   apiKey?: string;
 };
 
+async function readOllamaWebSearchResponse(response: Response): Promise<OllamaWebSearchResponse> {
+  try {
+    return (await response.json()) as OllamaWebSearchResponse;
+  } catch (cause) {
+    throw new Error("Ollama web search returned malformed JSON", { cause });
+  }
+}
+
 function isOllamaCloudBaseUrl(baseUrl: string): boolean {
   try {
     const parsed = new URL(baseUrl);
@@ -211,7 +219,7 @@ export async function runOllamaWebSearch(params: {
         }
         throw new Error(message);
       }
-      payload = (await response.json()) as OllamaWebSearchResponse;
+      payload = await readOllamaWebSearchResponse(response);
       break;
     } catch (error) {
       if (error instanceof Error) {
@@ -328,7 +336,7 @@ export function createOllamaWebSearchProvider(): WebSearchProviderPlugin {
   };
 }
 
-export const __testing = {
+export const testing = {
   buildOllamaWebSearchAttempts,
   normalizeOllamaWebSearchResult,
   resolveConfiguredOllamaWebSearchApiKey,
@@ -336,5 +344,7 @@ export const __testing = {
   resolveOllamaWebSearchApiKey,
   resolveOllamaWebSearchBaseUrl,
   isOllamaCloudBaseUrl,
+  readOllamaWebSearchResponse,
   warnOllamaWebSearchPrereqs,
 };
+export { testing as __testing };

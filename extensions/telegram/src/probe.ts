@@ -2,8 +2,12 @@ import type { BaseProbeResult } from "openclaw/plugin-sdk/channel-contract";
 import type { TelegramNetworkConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { fetchWithTimeout } from "openclaw/plugin-sdk/text-utility-runtime";
-import type { TelegramBotInfo } from "./bot-info.js";
-import { resolveTelegramApiBase, resolveTelegramFetch } from "./fetch.js";
+import { normalizeTelegramBotInfo, type TelegramBotInfo } from "./bot-info.js";
+import {
+  resolveTelegramApiBase,
+  resolveTelegramTransport,
+  type TelegramTransport,
+} from "./fetch.js";
 import { makeProxyFetch } from "./proxy.js";
 
 export type TelegramProbe = BaseProbeResult & {
@@ -35,11 +39,11 @@ export type TelegramProbeOptions = {
   includeWebhookInfo?: boolean;
 };
 
-const probeFetcherCache = new Map<string, typeof fetch>();
-const MAX_PROBE_FETCHER_CACHE_SIZE = 64;
+const probeTransportCache = new Map<string, TelegramTransport>();
+const MAX_PROBE_TRANSPORT_CACHE_SIZE = 64;
 
 export function resetTelegramProbeFetcherCacheForTests(): void {
-  probeFetcherCache.clear();
+  probeTransportCache.clear();
 }
 
 function resolveProbeOptions(
@@ -54,11 +58,11 @@ function resolveProbeOptions(
   return proxyOrOptions;
 }
 
-function shouldUseProbeFetcherCache(): boolean {
+function shouldUseProbeTransportCache(): boolean {
   return !process.env.VITEST && process.env.NODE_ENV !== "test";
 }
 
-function buildProbeFetcherCacheKey(token: string, options?: TelegramProbeOptions): string {
+function buildProbeTransportCacheKey(token: string, options?: TelegramProbeOptions): string {
   const cacheIdentity = options?.accountId?.trim() || token;
   const cacheIdentityKind = options?.accountId?.trim() ? "account" : "token";
   const proxyKey = options?.proxyUrl?.trim() ?? "";
@@ -70,72 +74,44 @@ function buildProbeFetcherCacheKey(token: string, options?: TelegramProbeOptions
   return `${cacheIdentityKind}:${cacheIdentity}::${proxyKey}::${autoSelectFamilyKey}::${dnsResultOrderKey}::${apiRootKey}`;
 }
 
-function setCachedProbeFetcher(cacheKey: string, fetcher: typeof fetch): typeof fetch {
-  probeFetcherCache.set(cacheKey, fetcher);
-  if (probeFetcherCache.size > MAX_PROBE_FETCHER_CACHE_SIZE) {
-    const oldestKey = probeFetcherCache.keys().next().value;
+function setCachedProbeTransport(
+  cacheKey: string,
+  transport: TelegramTransport,
+): TelegramTransport {
+  probeTransportCache.set(cacheKey, transport);
+  if (probeTransportCache.size > MAX_PROBE_TRANSPORT_CACHE_SIZE) {
+    const oldestKey = probeTransportCache.keys().next().value;
     if (oldestKey !== undefined) {
-      probeFetcherCache.delete(oldestKey);
+      probeTransportCache.delete(oldestKey);
     }
   }
-  return fetcher;
+  return transport;
 }
 
-function resolveProbeFetcher(token: string, options?: TelegramProbeOptions): typeof fetch {
-  const cacheEnabled = shouldUseProbeFetcherCache();
-  const cacheKey = cacheEnabled ? buildProbeFetcherCacheKey(token, options) : null;
+function resolveProbeTransport(token: string, options?: TelegramProbeOptions): TelegramTransport {
+  const cacheEnabled = shouldUseProbeTransportCache();
+  const cacheKey = cacheEnabled ? buildProbeTransportCacheKey(token, options) : null;
   if (cacheKey) {
-    const cachedFetcher = probeFetcherCache.get(cacheKey);
-    if (cachedFetcher) {
-      return cachedFetcher;
+    const cached = probeTransportCache.get(cacheKey);
+    if (cached) {
+      return cached;
     }
   }
 
   const proxyUrl = options?.proxyUrl?.trim();
   const proxyFetch = proxyUrl ? makeProxyFetch(proxyUrl) : undefined;
-  const resolved = resolveTelegramFetch(proxyFetch, {
+  const transport = resolveTelegramTransport(proxyFetch, {
     network: options?.network,
   });
 
   if (cacheKey) {
-    return setCachedProbeFetcher(cacheKey, resolved);
+    return setCachedProbeTransport(cacheKey, transport);
   }
-  return resolved;
+  return transport;
 }
 
 function normalizeBoolean(value: unknown): boolean | null {
   return typeof value === "boolean" ? value : null;
-}
-
-function normalizeTelegramBotInfo(value: unknown): TelegramBotInfo | undefined {
-  if (!value || typeof value !== "object") {
-    return undefined;
-  }
-  const bot = value as Record<string, unknown>;
-  if (
-    typeof bot.id !== "number" ||
-    bot.is_bot !== true ||
-    typeof bot.first_name !== "string" ||
-    typeof bot.username !== "string"
-  ) {
-    return undefined;
-  }
-  return {
-    id: bot.id,
-    is_bot: true,
-    first_name: bot.first_name,
-    username: bot.username,
-    ...(typeof bot.last_name === "string" ? { last_name: bot.last_name } : {}),
-    ...(typeof bot.language_code === "string" ? { language_code: bot.language_code } : {}),
-    can_join_groups: normalizeBoolean(bot.can_join_groups) ?? false,
-    can_read_all_group_messages: normalizeBoolean(bot.can_read_all_group_messages) ?? false,
-    can_manage_bots: normalizeBoolean(bot.can_manage_bots) ?? false,
-    supports_inline_queries: normalizeBoolean(bot.supports_inline_queries) ?? false,
-    can_connect_to_business: normalizeBoolean(bot.can_connect_to_business) ?? false,
-    has_main_web_app: normalizeBoolean(bot.has_main_web_app) ?? false,
-    has_topics_enabled: normalizeBoolean(bot.has_topics_enabled) ?? false,
-    allows_users_to_create_topics: normalizeBoolean(bot.allows_users_to_create_topics) ?? false,
-  };
 }
 
 export async function probeTelegram(
@@ -148,7 +124,8 @@ export async function probeTelegram(
   const deadlineMs = started + timeoutBudgetMs;
   const options = resolveProbeOptions(proxyOrOptions);
   const includeWebhookInfo = options?.includeWebhookInfo !== false;
-  const fetcher = resolveProbeFetcher(token, options);
+  const transport = resolveProbeTransport(token, options);
+  const fetcher = transport.fetch;
   const apiBase = resolveTelegramApiBase(options?.apiRoot);
   const base = `${apiBase}/bot${token}`;
   const retryDelayMs = Math.max(50, Math.min(1000, Math.floor(timeoutBudgetMs / 5)));
@@ -181,6 +158,10 @@ export async function probeTelegram(
         break;
       } catch (err) {
         fetchError = err;
+        // On timeout or network error, promote the transport to its IPv4
+        // fallback dispatcher so the next retry (and all future probes
+        // sharing this cached transport) skip the stalled IPv6 path.
+        transport.forceFallback?.("probe timeout/network error");
         if (i < 2) {
           const remainingAfterAttemptMs = resolveRemainingBudgetMs();
           if (remainingAfterAttemptMs <= 0) {

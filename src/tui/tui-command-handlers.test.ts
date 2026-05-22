@@ -22,7 +22,8 @@ function expectSendChatFields(
   sendChat: ReturnType<typeof vi.fn>,
   expected: { message: string; sessionId?: string; sessionKey?: string },
 ) {
-  const call = sendChat.mock.calls.at(-1);
+  const calls = sendChat.mock.calls;
+  const call = calls[calls.length - 1];
   if (!call) {
     throw new Error("expected gateway sendChat call");
   }
@@ -39,7 +40,7 @@ function expectSendChatFields(
 type MockWithCalls = { mock: { calls: unknown[][] } };
 
 function firstMockArg(mock: MockWithCalls, label: string) {
-  const call = mock.mock.calls.at(0);
+  const call = mock.mock.calls[0];
   if (!call) {
     throw new Error(`expected ${label} call`);
   }
@@ -62,6 +63,7 @@ function createHarness(params?: {
   isConnected?: boolean;
   activeChatRunId?: string | null;
   pendingOptimisticUserMessage?: boolean;
+  activityStatus?: string;
   opts?: { local?: boolean };
   currentSessionId?: string | null;
 }) {
@@ -97,6 +99,7 @@ function createHarness(params?: {
     activeChatRunId: params?.activeChatRunId ?? null,
     pendingOptimisticUserMessage: params?.pendingOptimisticUserMessage ?? false,
     pendingChatRunId: null as string | null,
+    activityStatus: params?.activityStatus ?? "idle",
     isConnected: params?.isConnected ?? true,
     sessionInfo: {},
   };
@@ -333,6 +336,17 @@ describe("tui command handlers", () => {
     });
   });
 
+  it("handles /exit without sending through the gateway", async () => {
+    const { handleCommand, requestExit, sendChat, addUser, addSystem } = createHarness();
+
+    await handleCommand("/exit");
+
+    expect(requestExit).toHaveBeenCalledTimes(1);
+    expect(sendChat).not.toHaveBeenCalled();
+    expect(addUser).not.toHaveBeenCalled();
+    expect(addSystem).not.toHaveBeenCalled();
+  });
+
   it("leaves a Crestodian breadcrumb after switching agents", async () => {
     const { handleCommand, addSystem, setSession, state } = createHarness();
 
@@ -477,6 +491,53 @@ describe("tui command handlers", () => {
     expect(addUser).not.toHaveBeenCalled();
     expect(addSystem).toHaveBeenCalledWith("not connected to gateway — message not sent");
     expect(setActivityStatus).toHaveBeenLastCalledWith("disconnected");
+  });
+
+  it("rejects normal sends while a run is active", async () => {
+    const { handleCommand, sendChat, addUser, addSystem, requestRender, state } = createHarness({
+      activeChatRunId: "run-active",
+    });
+
+    await handleCommand("/context detail");
+
+    expect(sendChat).not.toHaveBeenCalled();
+    expect(addUser).not.toHaveBeenCalled();
+    expect(addSystem).toHaveBeenCalledWith(
+      "agent is busy — press Esc to abort before sending a new message",
+    );
+    expect(requestRender).toHaveBeenCalled();
+    expect(state.activeChatRunId).toBe("run-active");
+  });
+
+  it("allows local sends to queue while the current run is finishing", async () => {
+    const { handleCommand, sendChat, addUser, addSystem } = createHarness({
+      opts: { local: true },
+      activeChatRunId: "run-active",
+      activityStatus: "finishing context",
+    });
+
+    await handleCommand("/context detail");
+
+    expect(sendChat).toHaveBeenCalledTimes(1);
+    expect(addUser).toHaveBeenCalledWith("/context detail");
+    expect(addSystem).not.toHaveBeenCalledWith(
+      "agent is busy — press Esc to abort before sending a new message",
+    );
+  });
+
+  it("rejects gateway sends while the current run is finishing", async () => {
+    const { handleCommand, sendChat, addUser, addSystem } = createHarness({
+      activeChatRunId: "run-active",
+      activityStatus: "finishing context",
+    });
+
+    await handleCommand("/context detail");
+
+    expect(sendChat).not.toHaveBeenCalled();
+    expect(addUser).not.toHaveBeenCalled();
+    expect(addSystem).toHaveBeenCalledWith(
+      "agent is busy — press Esc to abort before sending a new message",
+    );
   });
 
   it("runs /auth through the local auth flow and refreshes session info", async () => {

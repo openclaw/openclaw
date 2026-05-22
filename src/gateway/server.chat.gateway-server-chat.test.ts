@@ -6,7 +6,7 @@ import { WebSocket } from "ws";
 import { emitAgentEvent, registerAgentRunContext } from "../infra/agent-events.js";
 import { extractFirstTextBlock } from "../shared/chat-message-content.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
-import { __testing as agentJobTesting } from "./server-methods/agent-job.js";
+import { testing as agentJobTesting } from "./server-methods/agent-job.js";
 import {
   connectOk,
   dispatchInboundMessageMock,
@@ -243,6 +243,37 @@ describe("gateway server chat", () => {
       expect(res.payload?.runId).toBe("idem-sessions-send-1");
       expect(res.payload?.messageSeq).toBe(1);
     } finally {
+      testState.sessionStorePath = undefined;
+      await removeTempDir(dir);
+    }
+  });
+
+  test("sessions.send creates a configured agent main session before sending", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-sessions-send-agent-"));
+    testState.sessionStorePath = path.join(dir, "sessions.json");
+    testState.agentsConfig = {
+      list: [{ id: "main", default: true }, { id: "orion" }],
+    };
+    try {
+      await writeSessionStore({ entries: {} });
+
+      const res = await rpcReq(ws, "sessions.send", {
+        key: "agent:orion:main",
+        message: "hello orion",
+        idempotencyKey: "idem-sessions-send-orion",
+      });
+      expect(res.ok).toBe(true);
+      expect(res.payload?.runId).toBe("idem-sessions-send-orion");
+
+      const rawStore = JSON.parse(await fs.readFile(testState.sessionStorePath, "utf-8")) as Record<
+        string,
+        {
+          sessionId?: string;
+        }
+      >;
+      expect(rawStore["agent:orion:main"]?.sessionId).toBeTypeOf("string");
+    } finally {
+      testState.agentsConfig = undefined;
       testState.sessionStorePath = undefined;
       await removeTempDir(dir);
     }

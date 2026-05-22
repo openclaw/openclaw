@@ -557,8 +557,8 @@ describe("getHealthSnapshot", () => {
     expect(telegram.probe?.ok).toBe(true);
     expect(telegram.probe?.bot?.username).toBe("bot");
     expect(telegram.probe?.webhook?.url).toMatch(/^https:/);
-    expect(calls.some((call) => call.includes("/getMe"))).toBe(true);
-    expect(calls.some((call) => call.includes("/getWebhookInfo"))).toBe(true);
+    expect(calls.join("\n")).toContain("/getMe");
+    expect(calls.join("\n")).toContain("/getWebhookInfo");
 
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-health-"));
     const tokenFile = path.join(tmpDir, "telegram-token");
@@ -570,7 +570,7 @@ describe("getHealthSnapshot", () => {
       );
       expect(tokenFileProbe.telegram.configured).toBe(true);
       expect(tokenFileProbe.telegram.probe?.ok).toBe(true);
-      expect(tokenFileProbe.calls.some((call) => call.includes("bott-file/getMe"))).toBe(true);
+      expect(tokenFileProbe.calls.join("\n")).toContain("bott-file/getMe");
     } finally {
       fs.rmSync(tmpDir, { recursive: true, force: true });
     }
@@ -816,13 +816,13 @@ describe("getHealthSnapshot", () => {
     };
 
     expect(imessage.configured).toBe(true);
-    expect(imessage.probe).toMatchObject({
+    expect(imessage.probe).toEqual({
       ok: false,
       error:
         "imsg cannot access ~/Library/Messages/chat.db. Grant Full Disk Access to the Gateway/launcher process and restart Gateway.",
     });
     expect(imessage.probe?.privateApi).toBeUndefined();
-    expect(imessage.accounts?.default?.probe).toMatchObject({
+    expect(imessage.accounts?.default?.probe).toEqual({
       ok: false,
       error:
         "imsg cannot access ~/Library/Messages/chat.db. Grant Full Disk Access to the Gateway/launcher process and restart Gateway.",

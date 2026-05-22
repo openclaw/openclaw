@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { buildCopilotDynamicHeaders } from "./stream.js";
 import {
   wrapCopilotAnthropicStream,
+  wrapCopilotOpenAICompletionsStream,
   wrapCopilotOpenAIResponsesStream,
   wrapCopilotProviderStream,
 } from "./stream.js";
@@ -63,6 +64,7 @@ describe("wrapCopilotAnthropicStream", () => {
       messages,
       hasImages: true,
     });
+    expect(expectedCopilotHeaders["Accept-Encoding"]).toBe("identity");
 
     void wrapped(
       {
@@ -116,14 +118,21 @@ describe("wrapCopilotAnthropicStream", () => {
     expect(baseStreamFn.mock.calls).toEqual([[model, context, options]]);
   });
 
-  it("adds Copilot headers, preserves reasoning IDs, and rewrites message IDs before payload send", () => {
+  it("adds Copilot headers, sanitizes reasoning replay, and rewrites message IDs before payload send", () => {
     const reasoningId = Buffer.from(`reasoning-${"x".repeat(24)}`).toString("base64");
+    const overlongReasoningId = `5PX6gLHXT5wE+Y2tPmUV4gn+${"B".repeat(384)}`;
     const messageId = Buffer.from(`message-${"y".repeat(24)}`).toString("base64");
     const payloads: Array<{ input: Array<Record<string, unknown>> }> = [];
     const baseStreamFn = vi.fn((_model, _context, options) => {
       const payload = {
         input: [
-          { id: reasoningId, type: "reasoning" },
+          { id: reasoningId, type: "reasoning", encrypted_content: "valid-encrypted-payload" },
+          {
+            id: overlongReasoningId,
+            type: "reasoning",
+            encrypted_content: "invalid-encrypted-payload",
+            summary: [],
+          },
           { id: messageId, type: "message" },
         ],
       };
@@ -172,6 +181,7 @@ describe("wrapCopilotAnthropicStream", () => {
       onPayload: options.onPayload,
     });
     expect(payloads[0]?.input[0]?.id).toBe(reasoningId);
+    expect(payloads[0]?.input.map((item) => item.type)).toEqual(["reasoning", "message"]);
     expect(payloads[0]?.input[1]?.id).toMatch(/^msg_[a-f0-9]{16}$/);
   });
 
@@ -202,6 +212,42 @@ describe("wrapCopilotAnthropicStream", () => {
     expect((returnedPayload as { input: Array<Record<string, unknown>> }).input[0]?.id).toMatch(
       /^msg_[a-f0-9]{16}$/,
     );
+  });
+
+  it("adds Copilot headers for Chat Completions models", () => {
+    const baseStreamFn = vi.fn(() => ({ async *[Symbol.asyncIterator]() {} }) as never);
+    const wrapped = requireStreamFn(wrapCopilotOpenAICompletionsStream(baseStreamFn));
+    const messages = [
+      {
+        role: "user",
+        content: [
+          { type: "text", text: "look" },
+          { type: "image", data: "abc", mimeType: "image/png" },
+        ],
+      },
+    ] as Parameters<typeof buildCopilotDynamicHeaders>[0]["messages"];
+    const expectedCopilotHeaders = buildCopilotDynamicHeaders({
+      messages,
+      hasImages: true,
+    });
+
+    void wrapped(
+      {
+        provider: "github-copilot",
+        api: "openai-completions",
+        id: "gemini-3.1-pro-preview",
+      } as never,
+      { messages } as never,
+      { headers: { "X-Test": "1" } },
+    );
+
+    const options = requireFirstStreamOptions(baseStreamFn, "Copilot Chat Completions stream");
+    expect(options).toEqual({
+      headers: {
+        ...expectedCopilotHeaders,
+        "X-Test": "1",
+      },
+    });
   });
 
   it("adapts provider stream context without changing wrapper behavior", () => {

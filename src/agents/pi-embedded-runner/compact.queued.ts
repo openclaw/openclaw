@@ -20,7 +20,11 @@ import { resolveUserPath } from "../../utils.js";
 import { resolveAgentDir, resolveSessionAgentIds } from "../agent-scope.js";
 import { resolveContextWindowInfo } from "../context-window-guard.js";
 import { DEFAULT_CONTEXT_TOKENS, DEFAULT_MODEL, DEFAULT_PROVIDER } from "../defaults.js";
-import { maybeCompactAgentHarnessSession } from "../harness/selection.js";
+import {
+  maybeCompactAgentHarnessSession,
+  resolveAgentHarnessPolicy,
+} from "../harness/selection.js";
+import { resolveContextConfigProviderForRuntime } from "../openai-codex-routing.js";
 import { ensureRuntimePluginsLoaded } from "../runtime-plugins.js";
 import type { CompactEmbeddedPiSessionParams } from "./compact.types.js";
 import { asCompactionHookRunner, runPostCompactionSideEffects } from "./compaction-hooks.js";
@@ -28,6 +32,10 @@ import {
   buildEmbeddedCompactionRuntimeContext,
   resolveEmbeddedCompactionTarget,
 } from "./compaction-runtime-context.js";
+import {
+  compactContextEngineWithSafetyTimeout,
+  resolveCompactionTimeoutMs,
+} from "./compaction-safety-timeout.js";
 import {
   rotateTranscriptFileAfterCompaction,
   shouldRotateCompactionTranscript,
@@ -39,6 +47,16 @@ import { log } from "./logger.js";
 import { readPiModelContextTokens } from "./model-context-tokens.js";
 import { resolveModelAsync } from "./model.js";
 import type { EmbeddedPiCompactResult } from "./types.js";
+
+function shouldFallbackAfterHarnessCompaction(
+  result: EmbeddedPiCompactResult | undefined,
+): boolean {
+  return (
+    result?.ok === false &&
+    (result.failure?.reason === "missing_thread_binding" ||
+      result.failure?.reason === "stale_thread_binding")
+  );
+}
 
 /**
  * Compacts a session with lane queueing (session lane + global lane).
@@ -83,9 +101,19 @@ export async function compactEmbeddedPiSession(
       params.config,
     );
     const ceRuntimeModel = ceModel as ProviderRuntimeModel | undefined;
+    const ceHarnessPolicy = resolveAgentHarnessPolicy({
+      provider: ceProvider,
+      modelId: ceModelId,
+      config: params.config,
+      agentId: agentIds.sessionAgentId,
+      sessionKey: params.sessionKey,
+    });
     contextTokenBudget = resolveContextWindowInfo({
       cfg: params.config,
-      provider: ceProvider,
+      provider: resolveContextConfigProviderForRuntime({
+        provider: ceProvider,
+        runtimeId: ceHarnessPolicy.runtime,
+      }),
       modelId: ceModelId,
       modelContextTokens: readPiModelContextTokens(ceModel),
       modelContextWindow: ceRuntimeModel?.contextWindow,
@@ -105,8 +133,13 @@ export async function compactEmbeddedPiSession(
     contextEngineRuntimeContext,
   });
   if (harnessResult) {
-    await contextEngine.dispose?.();
-    return harnessResult;
+    if (!shouldFallbackAfterHarnessCompaction(harnessResult)) {
+      await contextEngine.dispose?.();
+      return harnessResult;
+    }
+    log.warn(
+      `native harness compaction could not use its session binding; falling back to context engine: ${harnessResult.reason ?? "unknown"}`,
+    );
   }
   const sessionLane = resolveSessionLane(params.sessionKey?.trim() || params.sessionId);
   const globalLane = resolveGlobalLane(params.lane);
@@ -162,17 +195,41 @@ export async function compactEmbeddedPiSession(
             });
           }
         }
-        const result = await contextEngine.compact({
-          sessionId: params.sessionId,
-          sessionKey: params.sessionKey,
-          sessionFile: params.sessionFile,
-          tokenBudget: contextTokenBudget,
-          currentTokenCount: params.currentTokenCount,
-          compactionTarget: params.trigger === "manual" ? "threshold" : "budget",
-          customInstructions: params.customInstructions,
-          force: params.trigger === "manual",
-          runtimeContext,
-        });
+        // Bound the plugin-owned compaction with the same finite safety
+        // timeout that protects native runtime compaction, and thread the
+        // caller's abort signal through, so a slow/hung plugin compact()
+        // cannot hang the queued /compact lane indefinitely. A timeout/abort
+        // (or any thrown error) is surfaced as a clean { ok: false } result —
+        // matching how the run-loop overflow/timeout lanes handle it — instead
+        // of throwing a raw rejection at callers that only inspect result.ok.
+        let result: Awaited<ReturnType<typeof contextEngine.compact>>;
+        try {
+          result = await compactContextEngineWithSafetyTimeout(
+            contextEngine,
+            {
+              sessionId: params.sessionId,
+              sessionKey: params.sessionKey,
+              sessionFile: params.sessionFile,
+              tokenBudget: contextTokenBudget,
+              currentTokenCount: params.currentTokenCount,
+              compactionTarget: params.trigger === "manual" ? "threshold" : "budget",
+              customInstructions: params.customInstructions,
+              force: params.trigger === "manual",
+              runtimeContext,
+            },
+            resolveCompactionTimeoutMs(params.config),
+            params.abortSignal,
+          );
+        } catch (compactErr) {
+          log.warn("context-engine compaction failed", {
+            errorMessage: formatErrorMessage(compactErr),
+          });
+          result = {
+            ok: false,
+            compacted: false,
+            reason: formatErrorMessage(compactErr),
+          };
+        }
         const delegatedSessionId = result.result?.sessionId;
         const delegatedSessionFile = result.result?.sessionFile;
         const delegatedRotatedTranscript =

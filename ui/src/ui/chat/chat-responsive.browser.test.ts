@@ -68,6 +68,19 @@ function iconSvg() {
   return `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"></path></svg>`;
 }
 
+function chatBubbleActionsHtml() {
+  return `
+    <div class="chat-bubble-actions">
+      <button class="btn btn--xs chat-expand-btn" type="button" aria-label="Open in canvas">
+        <span class="chat-expand-btn__icon" aria-hidden="true">${iconSvg()}</span>
+      </button>
+      <button class="btn btn--xs chat-copy-btn" type="button" aria-label="Copy as markdown">
+        <span class="chat-copy-btn__icon" aria-hidden="true">${iconSvg()}</span>
+      </button>
+    </div>
+  `;
+}
+
 function chatControlsHtml(opts: { agent?: boolean } = {}) {
   const showAgent = opts.agent !== false;
   return `
@@ -168,6 +181,7 @@ function chatHtml(opts: { sideResult?: boolean; singleAgent?: boolean } = {}) {
                     <div class="chat-avatar assistant">A</div>
                     <div class="chat-group-messages">
                       <div class="chat-bubble has-copy">
+                        ${chatBubbleActionsHtml()}
                         <div class="chat-text">
                           <p>The chat shell should stay compact and readable.</p>
                           <pre><code>const importantLongIdentifier = "control-ui-chat-responsive-regression-fixture-keeps-code-scrollable"; console.log(importantLongIdentifier);</code></pre>
@@ -224,6 +238,41 @@ async function openFixture(
     `<!doctype html><html><head><style>${readUiCss()}</style></head><body>${chatHtml(opts)}</body></html>`,
   );
   return page;
+}
+
+async function getRect(page: Page, selector: string) {
+  const rect = await page.locator(selector).evaluate((node) => {
+    const bounds = (node as HTMLElement).getBoundingClientRect();
+    return {
+      left: bounds.left,
+      right: bounds.right,
+      top: bounds.top,
+      bottom: bounds.bottom,
+      width: bounds.width,
+      height: bounds.height,
+    };
+  });
+  expectFiniteRect({ x: rect.left, y: rect.top, width: rect.width, height: rect.height });
+  return rect;
+}
+
+async function getTextContentRect(page: Page, selector: string) {
+  const rect = await page.locator(selector).evaluate((node) => {
+    const range = document.createRange();
+    range.selectNodeContents(node);
+    const bounds = range.getBoundingClientRect();
+    range.detach();
+    return {
+      left: bounds.left,
+      right: bounds.right,
+      top: bounds.top,
+      bottom: bounds.bottom,
+      width: bounds.width,
+      height: bounds.height,
+    };
+  });
+  expectFiniteRect({ x: rect.left, y: rect.top, width: rect.width, height: rect.height });
+  return rect;
 }
 
 async function openHeaderFixture(width: number, height: number, opts: { hidden?: boolean } = {}) {
@@ -321,6 +370,76 @@ describeBrowserLayout("chat responsive browser layout", () => {
       await expectNoHorizontalOverflow(page);
       const code = await getBoundingBox(page, ".chat-text pre");
       expect(code.x + code.width).toBeLessThanOrEqual(width + 1);
+    } finally {
+      await page.close();
+    }
+  });
+
+  it.each([
+    [320, 568],
+    [1366, 900],
+  ] as const)(
+    "keeps short assistant text clear of bubble actions at %sx%s",
+    async (width, height) => {
+      const page = await browser.newPage({ viewport: { width, height } });
+      try {
+        await page.setContent(
+          `<!doctype html><html><head><style>${readUiCss()}</style></head><body>
+            <div class="chat-thread" role="log">
+              <div class="chat-thread-inner">
+                <div class="chat-group assistant">
+                  <div class="chat-avatar assistant">A</div>
+                  <div class="chat-group-messages">
+                    <div class="chat-bubble has-copy">
+                      ${chatBubbleActionsHtml()}
+                      <div class="chat-text"><p>Done.</p></div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </body></html>`,
+        );
+        await page.locator(".chat-bubble").hover();
+
+        const text = await getTextContentRect(page, ".chat-text p");
+        const actions = await getRect(page, ".chat-bubble-actions");
+        expect(text.right).toBeLessThanOrEqual(actions.left - 1);
+      } finally {
+        await page.close();
+      }
+    },
+  );
+
+  it.each([
+    [320, 568],
+    [1366, 900],
+  ] as const)("wraps long inline code without clipping at %sx%s", async (width, height) => {
+    const page = await browser.newPage({ viewport: { width, height } });
+    try {
+      await page.setContent(
+        `<!doctype html><html><head><style>${readUiCss()}</style></head><body>
+          <div class="chat-thread" role="log">
+            <div class="chat-thread-inner">
+              <div class="chat-group assistant">
+                <div class="chat-avatar assistant">A</div>
+                <div class="chat-group-messages">
+                  <div class="chat-bubble">
+                    <div class="chat-text">
+                      <p><code>openclaw_message_send_channel_webchat_target_example_com_thread_very_long_identifier_without_spaces_1234567890abcdefghijklmnopqrstuvwxyz</code></p>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </body></html>`,
+      );
+
+      await expectNoHorizontalOverflow(page);
+      const bubble = await getRect(page, ".chat-bubble");
+      const inlineCode = await getRect(page, ".chat-text p code");
+      expect(inlineCode.right).toBeLessThanOrEqual(bubble.right + 1);
     } finally {
       await page.close();
     }

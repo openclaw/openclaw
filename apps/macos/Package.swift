@@ -19,7 +19,7 @@ let package = Package(
         .package(url: "https://github.com/swiftlang/swift-subprocess.git", from: "0.4.0"),
         .package(url: "https://github.com/apple/swift-log.git", from: "1.10.1"),
         .package(url: "https://github.com/sparkle-project/Sparkle", from: "2.9.0"),
-        .package(url: "https://github.com/steipete/Peekaboo.git", exact: "3.0.0"),
+        .package(url: "https://github.com/steipete/Peekaboo.git", exact: "3.2.1"),
         .package(path: "../shared/OpenClawKit"),
         .package(path: "../swabble"),
     ],
@@ -81,6 +81,7 @@ let package = Package(
             dependencies: [
                 "OpenClawIPC",
                 "OpenClaw",
+                "OpenClawMacCLI",
                 "OpenClawDiscovery",
                 .product(name: "OpenClawProtocol", package: "OpenClawKit"),
                 .product(name: "SwabbleKit", package: "swabble"),

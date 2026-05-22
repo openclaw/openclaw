@@ -16,13 +16,15 @@ function normalizeTextList(values: string[] | undefined): string[] | undefined {
 }
 
 function normalizeOnboardingScopes(
-  values: Array<"text-inference" | "image-generation"> | undefined,
-): Array<"text-inference" | "image-generation"> | undefined {
+  values: Array<"text-inference" | "image-generation" | "music-generation"> | undefined,
+): Array<"text-inference" | "image-generation" | "music-generation"> | undefined {
   const normalized = Array.from(
     new Set(
       (values ?? []).filter(
-        (value): value is "text-inference" | "image-generation" =>
-          value === "text-inference" || value === "image-generation",
+        (value): value is "text-inference" | "image-generation" | "music-generation" =>
+          value === "text-inference" ||
+          value === "image-generation" ||
+          value === "music-generation",
       ),
     ),
   );
@@ -121,6 +123,7 @@ function buildNormalizedWizardSetup(params: {
     params.setup.assistantVisibility === "visible"
       ? { assistantVisibility: params.setup.assistantVisibility }
       : {}),
+    ...(params.setup.onboardingFeatured === true ? { onboardingFeatured: true } : {}),
     ...(groupId ? { groupId } : {}),
     ...(groupLabel ? { groupLabel } : {}),
     ...(groupHint ? { groupHint } : {}),

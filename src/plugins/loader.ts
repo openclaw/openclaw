@@ -50,7 +50,16 @@ import {
   type NormalizedPluginsConfig,
 } from "./config-state.js";
 import { isPluginEnabledByDefaultForPlatform } from "./default-enablement.js";
-import { discoverOpenClawPlugins, type PluginCandidate } from "./discovery.js";
+import {
+  discoverOpenClawPlugins,
+  type PluginCandidate,
+  type PluginDiscoveryResult,
+} from "./discovery.js";
+import {
+  clearEmbeddingProviders,
+  listRegisteredEmbeddingProviders,
+  restoreRegisteredEmbeddingProviders,
+} from "./embedding-providers.js";
 import { shouldRejectHardlinkedPluginFiles } from "./hardlink-policy.js";
 import { getGlobalHookRunner, initializeGlobalHookRunner } from "./hook-runner-global.js";
 import { toSafeImportPath } from "./import-specifier.js";
@@ -148,6 +157,7 @@ import {
   shouldPreferNativeModuleLoad,
 } from "./sdk-alias.js";
 import { hasKind, kindsEqual } from "./slots.js";
+import { encodeStartupTraceSegment } from "./startup-trace-segment.js";
 import type {
   OpenClawPluginApi,
   OpenClawPluginDefinition,
@@ -164,6 +174,7 @@ export type PluginLoadOptions = {
   activationSourceConfig?: OpenClawConfig;
   autoEnabledReasons?: Readonly<Record<string, string[]>>;
   workspaceDir?: string;
+  installRecords?: Record<string, PluginInstallRecord>;
   // Allows callers to resolve plugin roots and load paths against an explicit env
   // instead of the process-global environment.
   env?: NodeJS.ProcessEnv;
@@ -172,6 +183,9 @@ export type PluginLoadOptions = {
   coreGatewayMethodNames?: readonly string[];
   hostServices?: PluginRegistryParams["hostServices"];
   runtimeOptions?: CreatePluginRuntimeOptions;
+  startupTrace?: {
+    detail: (name: string, metrics: ReadonlyArray<readonly [string, number | string]>) => void;
+  };
   pluginSdkResolution?: PluginSdkResolutionPreference;
   cache?: boolean;
   mode?: "full" | "validate";
@@ -194,7 +208,19 @@ export type PluginLoadOptions = {
   loadModules?: boolean;
   throwOnLoadError?: boolean;
   manifestRegistry?: PluginManifestRegistry;
+  discovery?: PluginDiscoveryResult;
 };
+
+function detailPluginStartupTrace(
+  startupTrace: PluginLoadOptions["startupTrace"] | undefined,
+  pluginId: string,
+  metrics: ReadonlyArray<readonly [string, number | string]>,
+): void {
+  startupTrace?.detail(
+    `plugins.gateway-load.plugin.${encodeStartupTraceSegment(pluginId)}`,
+    metrics,
+  );
+}
 
 const CLI_METADATA_ENTRY_BASENAMES = [
   "cli-metadata.ts",
@@ -247,6 +273,7 @@ type CachedPluginState = {
   memoryCorpusSupplements: ReturnType<typeof listMemoryCorpusSupplements>;
   agentHarnesses: ReturnType<typeof listRegisteredAgentHarnesses>;
   compactionProviders: ReturnType<typeof listRegisteredCompactionProviders>;
+  embeddingProviders: ReturnType<typeof listRegisteredEmbeddingProviders>;
   memoryEmbeddingProviders: ReturnType<typeof listRegisteredMemoryEmbeddingProviders>;
   memoryPromptSupplements: ReturnType<typeof listMemoryPromptSupplements>;
 };
@@ -301,6 +328,7 @@ export function clearActivatedPluginRuntimeState(): void {
   clearCompactionProviders();
   clearDetachedTaskLifecycleRuntimeRegistration();
   clearPluginInteractiveHandlers();
+  clearEmbeddingProviders();
   clearMemoryEmbeddingProviders();
   clearMemoryPluginState();
 }
@@ -331,6 +359,7 @@ type PluginRegistrySnapshot = {
     modelCatalogProviders: PluginRegistry["modelCatalogProviders"];
     cliBackends: NonNullable<PluginRegistry["cliBackends"]>;
     textTransforms: PluginRegistry["textTransforms"];
+    embeddingProviders: PluginRegistry["embeddingProviders"];
     speechProviders: PluginRegistry["speechProviders"];
     realtimeTranscriptionProviders: PluginRegistry["realtimeTranscriptionProviders"];
     realtimeVoiceProviders: PluginRegistry["realtimeVoiceProviders"];
@@ -358,7 +387,7 @@ type PluginRegistrySnapshot = {
     diagnostics: PluginRegistry["diagnostics"];
   };
   gatewayHandlers: PluginRegistry["gatewayHandlers"];
-  gatewayMethodScopes: NonNullable<PluginRegistry["gatewayMethodScopes"]>;
+  gatewayMethodDescriptors: PluginRegistry["gatewayMethodDescriptors"];
   coreGatewayMethodNames: NonNullable<PluginRegistry["coreGatewayMethodNames"]>;
 };
 
@@ -374,6 +403,7 @@ function snapshotPluginRegistry(registry: PluginRegistry): PluginRegistrySnapsho
       modelCatalogProviders: [...registry.modelCatalogProviders],
       cliBackends: [...(registry.cliBackends ?? [])],
       textTransforms: [...registry.textTransforms],
+      embeddingProviders: [...registry.embeddingProviders],
       speechProviders: [...registry.speechProviders],
       realtimeTranscriptionProviders: [...registry.realtimeTranscriptionProviders],
       realtimeVoiceProviders: [...registry.realtimeVoiceProviders],
@@ -401,7 +431,7 @@ function snapshotPluginRegistry(registry: PluginRegistry): PluginRegistrySnapsho
       diagnostics: [...registry.diagnostics],
     },
     gatewayHandlers: { ...registry.gatewayHandlers },
-    gatewayMethodScopes: { ...registry.gatewayMethodScopes },
+    gatewayMethodDescriptors: [...registry.gatewayMethodDescriptors],
     coreGatewayMethodNames: [...(registry.coreGatewayMethodNames ?? [])],
   };
 }
@@ -416,6 +446,7 @@ function restorePluginRegistry(registry: PluginRegistry, snapshot: PluginRegistr
   registry.modelCatalogProviders = snapshot.arrays.modelCatalogProviders;
   registry.cliBackends = snapshot.arrays.cliBackends;
   registry.textTransforms = snapshot.arrays.textTransforms;
+  registry.embeddingProviders = snapshot.arrays.embeddingProviders;
   registry.speechProviders = snapshot.arrays.speechProviders;
   registry.realtimeTranscriptionProviders = snapshot.arrays.realtimeTranscriptionProviders;
   registry.realtimeVoiceProviders = snapshot.arrays.realtimeVoiceProviders;
@@ -443,7 +474,7 @@ function restorePluginRegistry(registry: PluginRegistry, snapshot: PluginRegistr
     snapshot.arrays.conversationBindingResolvedHandlers;
   registry.diagnostics = snapshot.arrays.diagnostics;
   registry.gatewayHandlers = snapshot.gatewayHandlers;
-  registry.gatewayMethodScopes = snapshot.gatewayMethodScopes;
+  registry.gatewayMethodDescriptors = snapshot.gatewayMethodDescriptors;
   registry.coreGatewayMethodNames = snapshot.coreGatewayMethodNames;
 }
 
@@ -574,7 +605,7 @@ function resolvePreferredBuiltBundledRuntimeArtifact(params: {
   return { source, rootDir };
 }
 
-export const __testing = {
+export const testing = {
   buildPluginLoaderJitiOptions,
   buildPluginLoaderAliasMap,
   listPluginSdkAliasCandidates,
@@ -1097,7 +1128,7 @@ function resolvePluginLoadCacheContext(options: PluginLoadOptions = {}) {
   const runtimeSubagentMode = resolveRuntimeSubagentMode(options.runtimeOptions);
   const coreGatewayMethodNames = resolveCoreGatewayMethodNames(options);
   const installRecords = {
-    ...loadInstalledPluginIndexInstallRecordsSync({ env }),
+    ...(options.installRecords ?? loadInstalledPluginIndexInstallRecordsSync({ env })),
     ...cfg.plugins?.installs,
   };
   const cacheKey = buildCacheKey({
@@ -1211,11 +1242,19 @@ function getCompatibleActivePluginRegistry(
       activeCacheKey,
     );
   };
+  const matchesCompatibleActiveRegistry = (candidate: PluginLoadOptions): boolean => {
+    if (matchesActiveCacheKey(candidate)) {
+      return true;
+    }
+    if (
+      scopedPluginLoadOptionsMatchWiderActiveCacheKey(candidate, activeCacheKey, activeRegistry)
+    ) {
+      return true;
+    }
+    return pluginToolDiscoveryOptionsMatchActiveCacheKey(candidate, activeCacheKey);
+  };
 
-  if (matchesActiveCacheKey(options)) {
-    return activeRegistry;
-  }
-  if (scopedPluginLoadOptionsMatchWiderActiveCacheKey(options, activeCacheKey, activeRegistry)) {
+  if (matchesCompatibleActiveRegistry(options)) {
     return activeRegistry;
   }
   if (!loadContext.shouldActivate) {
@@ -1223,50 +1262,47 @@ function getCompatibleActivePluginRegistry(
       ...options,
       activate: true,
     };
-    if (matchesActiveCacheKey(activatingOptions)) {
-      return activeRegistry;
-    }
-    if (
-      scopedPluginLoadOptionsMatchWiderActiveCacheKey(
-        activatingOptions,
-        activeCacheKey,
-        activeRegistry,
-      )
-    ) {
+    if (matchesCompatibleActiveRegistry(activatingOptions)) {
       return activeRegistry;
     }
   }
-  if (pluginToolDiscoveryOptionsMatchActiveCacheKey(options, activeCacheKey)) {
-    return activeRegistry;
+  const activeRuntimeSubagentMode = getActivePluginRuntimeSubagentMode();
+  if (activeRuntimeSubagentMode === "gateway-bindable") {
+    const gatewayStartupOptions: PluginLoadOptions = {
+      ...options,
+      preferBuiltPluginArtifacts: true,
+    };
+    if (matchesCompatibleActiveRegistry(gatewayStartupOptions)) {
+      return activeRegistry;
+    }
+    if (!loadContext.shouldActivate) {
+      const activatingGatewayStartupOptions: PluginLoadOptions = {
+        ...options,
+        activate: true,
+        preferBuiltPluginArtifacts: true,
+      };
+      if (matchesCompatibleActiveRegistry(activatingGatewayStartupOptions)) {
+        return activeRegistry;
+      }
+    }
   }
   if (
     loadContext.runtimeSubagentMode === "default" &&
-    getActivePluginRuntimeSubagentMode() === "gateway-bindable"
+    activeRuntimeSubagentMode === "gateway-bindable"
   ) {
-    const gatewayBindableOptions = {
+    const gatewayBindableOptions: PluginLoadOptions = {
       ...options,
       runtimeOptions: {
         ...options.runtimeOptions,
         allowGatewaySubagentBinding: true,
       },
     };
-    if (matchesActiveCacheKey(gatewayBindableOptions)) {
-      return activeRegistry;
-    }
-    if (
-      scopedPluginLoadOptionsMatchWiderActiveCacheKey(
-        gatewayBindableOptions,
-        activeCacheKey,
-        activeRegistry,
-      )
-    ) {
-      return activeRegistry;
-    }
-    if (pluginToolDiscoveryOptionsMatchActiveCacheKey(gatewayBindableOptions, activeCacheKey)) {
-      return activeRegistry;
-    }
+    const gatewayStartupOptions: PluginLoadOptions = {
+      ...gatewayBindableOptions,
+      preferBuiltPluginArtifacts: true,
+    };
     if (!loadContext.shouldActivate) {
-      const activatingGatewayBindableOptions = {
+      const activatingGatewayBindableOptions: PluginLoadOptions = {
         ...options,
         activate: true,
         runtimeOptions: {
@@ -1274,18 +1310,23 @@ function getCompatibleActivePluginRegistry(
           allowGatewaySubagentBinding: true,
         },
       };
-      if (matchesActiveCacheKey(activatingGatewayBindableOptions)) {
-        return activeRegistry;
-      }
+      const activatingGatewayStartupOptions: PluginLoadOptions = {
+        ...activatingGatewayBindableOptions,
+        preferBuiltPluginArtifacts: true,
+      };
       if (
-        scopedPluginLoadOptionsMatchWiderActiveCacheKey(
-          activatingGatewayBindableOptions,
-          activeCacheKey,
-          activeRegistry,
-        )
+        matchesCompatibleActiveRegistry(gatewayBindableOptions) ||
+        matchesCompatibleActiveRegistry(gatewayStartupOptions) ||
+        matchesCompatibleActiveRegistry(activatingGatewayBindableOptions) ||
+        matchesCompatibleActiveRegistry(activatingGatewayStartupOptions)
       ) {
         return activeRegistry;
       }
+    } else if (
+      matchesCompatibleActiveRegistry(gatewayBindableOptions) ||
+      matchesCompatibleActiveRegistry(gatewayStartupOptions)
+    ) {
+      return activeRegistry;
     }
   }
   return undefined;
@@ -1542,6 +1583,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
           cached.state.detachedTaskRuntimeRegistration,
         );
         restorePluginInteractiveHandlers(cached.state.interactiveHandlers ?? []);
+        restoreRegisteredEmbeddingProviders(cached.state.embeddingProviders);
         restoreRegisteredMemoryEmbeddingProviders(cached.state.memoryEmbeddingProviders);
         restoreMemoryPluginState({
           capability: cached.state.memoryCapability,
@@ -1675,12 +1717,13 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
           candidates: createPluginCandidatesFromManifestRegistry(suppliedManifestRegistry),
           diagnostics: [] as PluginDiagnostic[],
         }
-      : discoverOpenClawPlugins({
+      : (options.discovery ??
+        discoverOpenClawPlugins({
           workspaceDir: options.workspaceDir,
           extraPaths: normalized.loadPaths,
           env,
           installRecords,
-        });
+        }));
     const manifestRegistry =
       suppliedManifestRegistry ??
       loadPluginManifestRegistry({
@@ -1712,6 +1755,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
     const provenance = buildProvenanceIndex({
       normalizedLoadPaths: normalized.loadPaths,
       env,
+      installRecords,
     });
 
     const manifestByRoot = new Map(
@@ -2060,6 +2104,9 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
       fs.closeSync(opened.fd);
 
       let mod: OpenClawPluginModule | null = null;
+      let moduleLoadMs = 0;
+      let moduleLoadFailed = false;
+      const beforeModuleLoad = performance.now();
       try {
         // Track the plugin as imported once module evaluation begins. Top-level
         // code may have already executed even if evaluation later throws.
@@ -2084,7 +2131,14 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
           logPrefix: `[plugins] ${record.id} failed to load from ${record.source}: `,
           diagnosticMessagePrefix: "failed to load plugin: ",
         });
+        moduleLoadFailed = true;
         continue;
+      } finally {
+        moduleLoadMs = performance.now() - beforeModuleLoad;
+        detailPluginStartupTrace(options.startupTrace, record.id, [
+          ["loadMs", moduleLoadMs],
+          ["loadFailedCount", moduleLoadFailed ? 1 : 0],
+        ]);
       }
 
       if (registrationPlan.loadSetupEntry && manifestRecord.setupSource) {
@@ -2377,11 +2431,14 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
       const previousAgentHarnesses = listRegisteredAgentHarnesses();
       const previousCompactionProviders = listRegisteredCompactionProviders();
       const previousDetachedTaskRuntimeRegistration = getDetachedTaskLifecycleRuntimeRegistration();
+      const previousEmbeddingProviders = listRegisteredEmbeddingProviders();
       const previousMemoryCapability = getMemoryCapabilityRegistration();
       const previousMemoryEmbeddingProviders = listRegisteredMemoryEmbeddingProviders();
       const previousMemoryCorpusSupplements = listMemoryCorpusSupplements();
       const previousMemoryPromptSupplements = listMemoryPromptSupplements();
 
+      const beforeRegister = performance.now();
+      let registerFailed = false;
       try {
         withProfile(
           { pluginId: record.id, source: record.source },
@@ -2393,6 +2450,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
           restoreRegisteredAgentHarnesses(previousAgentHarnesses);
           restoreRegisteredCompactionProviders(previousCompactionProviders);
           restoreDetachedTaskLifecycleRuntimeRegistration(previousDetachedTaskRuntimeRegistration);
+          restoreRegisteredEmbeddingProviders(previousEmbeddingProviders);
           restoreRegisteredMemoryEmbeddingProviders(previousMemoryEmbeddingProviders);
           restoreMemoryPluginState({
             capability: previousMemoryCapability,
@@ -2408,6 +2466,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
         restoreRegisteredAgentHarnesses(previousAgentHarnesses);
         restoreRegisteredCompactionProviders(previousCompactionProviders);
         restoreDetachedTaskLifecycleRuntimeRegistration(previousDetachedTaskRuntimeRegistration);
+        restoreRegisteredEmbeddingProviders(previousEmbeddingProviders);
         restoreRegisteredMemoryEmbeddingProviders(previousMemoryEmbeddingProviders);
         restoreMemoryPluginState({
           capability: previousMemoryCapability,
@@ -2426,6 +2485,14 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
           logPrefix: `[plugins] ${record.id} failed during register from ${record.source}: `,
           diagnosticMessagePrefix: "plugin failed during register: ",
         });
+        registerFailed = true;
+      } finally {
+        const registerMs = performance.now() - beforeRegister;
+        detailPluginStartupTrace(options.startupTrace, record.id, [
+          ["registerMs", registerMs],
+          ["loadAndRegisterMs", moduleLoadMs + registerMs],
+          ["registerFailedCount", registerFailed ? 1 : 0],
+        ]);
       }
     }
 
@@ -2479,6 +2546,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
           registry,
           agentHarnesses: listRegisteredAgentHarnesses(),
           compactionProviders: listRegisteredCompactionProviders(),
+          embeddingProviders: listRegisteredEmbeddingProviders(),
           memoryEmbeddingProviders: listRegisteredMemoryEmbeddingProviders(),
           memoryPromptSupplements: listMemoryPromptSupplements(),
         },
@@ -2523,12 +2591,14 @@ export async function loadOpenClawPluginCliRegistry(
     activateGlobalSideEffects: false,
   });
 
-  const discovery = discoverOpenClawPlugins({
-    workspaceDir: options.workspaceDir,
-    extraPaths: normalized.loadPaths,
-    env,
-    installRecords,
-  });
+  const discovery =
+    options.discovery ??
+    discoverOpenClawPlugins({
+      workspaceDir: options.workspaceDir,
+      extraPaths: normalized.loadPaths,
+      env,
+      installRecords,
+    });
   const manifestRegistry = loadPluginManifestRegistry({
     config: cfg,
     workspaceDir: options.workspaceDir,
@@ -2556,6 +2626,7 @@ export async function loadOpenClawPluginCliRegistry(
   const provenance = buildProvenanceIndex({
     normalizedLoadPaths: normalized.loadPaths,
     env,
+    installRecords,
   });
   const manifestByRoot = new Map(
     manifestRegistry.plugins.map((record) => [record.rootDir, record]),
@@ -2890,3 +2961,4 @@ function resolveCliMetadataEntrySource(rootDir: string): string | null {
   }
   return null;
 }
+export { testing as __testing };

@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
-  __testing,
+  testing,
+  applySubagentWaitOutcome,
   buildChildCompletionFindings,
   readSubagentOutput,
 } from "./subagent-announce-output.js";
@@ -11,7 +12,7 @@ type ReadLatestAssistantReply = typeof import("./tools/agent-step.js").readLates
 function installOutputDeps(params: { messages: Array<unknown>; latestAssistantReply?: string }) {
   const callGateway = vi.fn(async () => ({ messages: params.messages }));
   const readLatestAssistantReply = vi.fn(async () => params.latestAssistantReply);
-  __testing.setDepsForTest({
+  testing.setDepsForTest({
     callGateway: callGateway as unknown as CallGateway,
     readLatestAssistantReply: readLatestAssistantReply as unknown as ReadLatestAssistantReply,
   });
@@ -50,7 +51,7 @@ function sessionsYieldTurn(message = "Waiting for subagent completion.") {
 
 describe("readSubagentOutput", () => {
   afterEach(() => {
-    __testing.setDepsForTest();
+    testing.setDepsForTest();
   });
 
   it("does not treat a sessions_yield wait turn as subagent completion output", async () => {
@@ -156,5 +157,28 @@ describe("buildChildCompletionFindings", () => {
 
     expect(findings).toContain("1. visible task");
     expect(findings).not.toContain("2. visible task");
+  });
+});
+
+describe("applySubagentWaitOutcome", () => {
+  it("treats blocked ok wait snapshots as errors", () => {
+    const applied = applySubagentWaitOutcome({
+      wait: {
+        status: "ok",
+        startedAt: 100,
+        endedAt: 150,
+        livenessState: "blocked",
+        error: "Context overflow: prompt too large for the model.",
+      },
+      outcome: undefined,
+    });
+
+    expect(applied.outcome).toEqual({
+      status: "error",
+      error: "Context overflow: prompt too large for the model.",
+      startedAt: 100,
+      endedAt: 150,
+      elapsedMs: 50,
+    });
   });
 });

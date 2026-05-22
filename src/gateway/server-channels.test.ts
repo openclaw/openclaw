@@ -125,7 +125,7 @@ async function waitForMicrotaskCondition(
 }
 
 function firstSleepWithAbortCall(): [number, AbortSignal | undefined] {
-  const call = hoisted.sleepWithAbort.mock.calls.at(0);
+  const call = hoisted.sleepWithAbort.mock.calls[0];
   if (!call) {
     throw new Error("expected sleepWithAbort call");
   }
@@ -135,7 +135,7 @@ function firstSleepWithAbortCall(): [number, AbortSignal | undefined] {
 function firstStartAccountContext(
   startAccount: ReturnType<typeof vi.fn>,
 ): ChannelGatewayContext<TestAccount> {
-  const ctx = startAccount.mock.calls.at(0)?.at(0);
+  const ctx = startAccount.mock.calls[0]?.[0];
   if (!ctx || typeof ctx !== "object") {
     throw new Error("expected channel start context");
   }
@@ -733,12 +733,74 @@ describe("server-channels auto restart", () => {
     const manager = createManager({ startupTrace });
 
     await manager.startChannels();
+    expect(startAccount).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(0);
+    await flushMicrotasks();
 
     const names = measureMock.mock.calls.map(([name]) => name);
     expect(names).toContain("channels.discord.start");
     expect(names).toContain("channels.discord.list-accounts");
     expect(names).toContain("channels.discord.runtime");
     expect(names).toContain("channels.discord.approval-bootstrap");
+    expect(names).toContain("channels.discord.start-account-handoff");
+    expect(startAccount).toHaveBeenCalledTimes(1);
+  });
+
+  it("ends startup trace spans before long-lived channel account tasks settle", async () => {
+    const activeNames = new Set<string>();
+    const measuredNames: string[] = [];
+    const startupTrace = {
+      measure: async <T>(name: string, run: () => T | Promise<T>) => {
+        activeNames.add(name);
+        measuredNames.push(name);
+        try {
+          return await run();
+        } finally {
+          activeNames.delete(name);
+        }
+      },
+    };
+    const channelTask = createDeferred();
+    const startAccount = vi.fn(() => channelTask.promise);
+
+    installTestRegistry(createTestPlugin({ startAccount }));
+    const manager = createManager({ startupTrace });
+
+    await manager.startChannels();
+    await vi.advanceTimersByTimeAsync(0);
+    await flushMicrotasks();
+
+    expect(startAccount).toHaveBeenCalledTimes(1);
+    expect(measuredNames).toContain("channels.discord.start-account-handoff");
+    expect(activeNames.has("channels.discord.start-account-handoff")).toBe(false);
+    expect(
+      manager.getRuntimeSnapshot().channelAccounts.discord?.[DEFAULT_ACCOUNT_ID]?.running,
+    ).toBe(true);
+
+    channelTask.resolve();
+    await flushMicrotasks();
+  });
+
+  it("does not start traced channel accounts after stop wins the handoff", async () => {
+    const startupTrace = {
+      measure: async <T>(_name: string, run: () => T | Promise<T>) => await run(),
+    };
+    const startAccount = vi.fn(async () => {});
+
+    installTestRegistry(createTestPlugin({ startAccount }));
+    const manager = createManager({ startupTrace });
+
+    await manager.startChannel("discord", DEFAULT_ACCOUNT_ID);
+    const stopTask = manager.stopChannel("discord", DEFAULT_ACCOUNT_ID);
+    await vi.advanceTimersByTimeAsync(0);
+    await stopTask;
+    await flushMicrotasks();
+
+    expect(startAccount).not.toHaveBeenCalled();
+    expect(
+      manager.getRuntimeSnapshot().channelAccounts.discord?.[DEFAULT_ACCOUNT_ID]?.running,
+    ).toBe(false);
   });
 
   it("limits whole-channel account startup fanout to four", async () => {

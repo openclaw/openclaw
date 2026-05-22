@@ -4,7 +4,7 @@ import {
   createAttachedChannelResultAdapter,
 } from "openclaw/plugin-sdk/channel-send-result";
 import {
-  presentationToInteractiveReply,
+  normalizeMessagePresentation,
   renderMessagePresentationFallbackText,
 } from "openclaw/plugin-sdk/interactive-runtime";
 import type { OutboundDeliveryFormattingOptions } from "openclaw/plugin-sdk/outbound-runtime";
@@ -116,14 +116,17 @@ export async function sendTelegramPayloadMessages(params: {
     | undefined;
   const quoteText =
     typeof telegramData?.quoteText === "string" ? telegramData.quoteText : undefined;
+  const presentation = normalizeMessagePresentation(params.payload.presentation);
   const text =
     resolveTelegramInteractiveTextFallback({
       text: params.payload.text,
       interactive: params.payload.interactive,
+      presentation,
     }) ?? "";
   const mediaUrls = resolvePayloadMediaUrls(params.payload);
   const buttons = resolveTelegramInlineButtons({
     buttons: telegramData?.buttons,
+    presentation,
     interactive: params.payload.interactive,
   });
   const payloadOpts = {
@@ -175,6 +178,21 @@ export function createTelegramOutboundAdapter(
       selects: true,
       context: true,
       divider: false,
+      limits: {
+        actions: {
+          maxActions: 100,
+          maxActionsPerRow: 3,
+          maxLabelLength: 64,
+          supportsStyles: false,
+        },
+        selects: {
+          maxOptions: 100,
+          maxLabelLength: 64,
+        },
+        text: {
+          markdownDialect: "html",
+        },
+      },
     },
     deliveryCapabilities: {
       pin: true,
@@ -190,11 +208,24 @@ export function createTelegramOutboundAdapter(
         batch: true,
       },
     },
-    renderPresentation: ({ payload, presentation }) => ({
-      ...payload,
-      text: renderMessagePresentationFallbackText({ text: payload.text, presentation }),
-      interactive: presentationToInteractiveReply(presentation),
-    }),
+    renderPresentation: ({ payload, presentation }) => {
+      const telegramData = payload.channelData?.telegram as Record<string, unknown> | undefined;
+      const hasExplicitButtons = (telegramData && "buttons" in telegramData) || payload.interactive;
+      const buttons = hasExplicitButtons
+        ? undefined
+        : resolveTelegramInlineButtons({ presentation });
+      return {
+        ...payload,
+        text: renderMessagePresentationFallbackText({ text: payload.text, presentation }),
+        channelData: {
+          ...payload.channelData,
+          telegram: {
+            ...telegramData,
+            ...(buttons ? { buttons } : {}),
+          },
+        },
+      };
+    },
     pinDeliveredMessage: async ({ cfg, target, messageId, pin }) => {
       const { pinMessageTelegram } = await loadSendModule();
       await pinMessageTelegram(target.to, messageId, {

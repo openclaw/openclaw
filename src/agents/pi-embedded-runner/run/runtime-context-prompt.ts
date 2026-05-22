@@ -4,7 +4,7 @@ import {
   OPENCLAW_RUNTIME_CONTEXT_NOTICE,
   OPENCLAW_RUNTIME_EVENT_HEADER,
 } from "../../internal-runtime-context.js";
-import type { CurrentTurnPromptContext } from "./params.js";
+import type { CurrentInboundPromptContext } from "./params.js";
 export { OPENCLAW_RUNTIME_CONTEXT_CUSTOM_TYPE };
 
 const OPENCLAW_RUNTIME_EVENT_USER_PROMPT = "Continue the OpenClaw runtime event.";
@@ -28,17 +28,19 @@ type RuntimeContextPromptParts = {
   runtimeSystemContext?: string;
 };
 
-export function buildCurrentTurnPromptContextPrefix(
-  context: CurrentTurnPromptContext | undefined,
+type EmptyTranscriptMode = "model-prompt" | "runtime-event";
+
+export function buildCurrentInboundPromptContextPrefix(
+  context: CurrentInboundPromptContext | undefined,
 ): string {
   return context?.text.trim() ?? "";
 }
 
-export function buildCurrentTurnPrompt(params: {
-  context: CurrentTurnPromptContext | undefined;
+export function buildCurrentInboundPrompt(params: {
+  context: CurrentInboundPromptContext | undefined;
   prompt: string;
 }): string {
-  const prefix = buildCurrentTurnPromptContextPrefix(params.context);
+  const prefix = buildCurrentInboundPromptContextPrefix(params.context);
   if (!prefix) {
     return params.prompt;
   }
@@ -64,6 +66,7 @@ function removeLastPromptOccurrence(text: string, prompt: string): string | null
 export function resolveRuntimeContextPromptParts(params: {
   effectivePrompt: string;
   transcriptPrompt?: string;
+  emptyTranscriptMode?: EmptyTranscriptMode;
 }): RuntimeContextPromptParts {
   const transcriptPrompt = params.transcriptPrompt;
   if (transcriptPrompt === undefined || transcriptPrompt === params.effectivePrompt) {
@@ -71,6 +74,9 @@ export function resolveRuntimeContextPromptParts(params: {
   }
 
   const prompt = transcriptPrompt.trim();
+  if (!prompt && params.emptyTranscriptMode === "model-prompt") {
+    return { prompt: params.effectivePrompt };
+  }
   const runtimeContext =
     removeLastPromptOccurrence(params.effectivePrompt, transcriptPrompt)?.trim() ||
     params.effectivePrompt.trim();

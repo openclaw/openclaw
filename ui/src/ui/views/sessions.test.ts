@@ -81,6 +81,26 @@ function readSessionDetailStats(container: ParentNode): Map<string, string> {
   );
 }
 
+function sessionTableHeaders(container: HTMLElement): Array<string | undefined> {
+  return Array.from(container.querySelectorAll("thead th")).map((cell) => cell.textContent?.trim());
+}
+
+const SESSION_TABLE_HEADERS = [
+  "",
+  "Key",
+  "Label",
+  "Kind",
+  "Status",
+  "Runtime",
+  "Updated",
+  "Tokens",
+  "Compaction",
+  "Thinking",
+  "Fast",
+  "Verbose",
+  "Reasoning",
+];
+
 describe("sessions view", () => {
   it("renders an explicit archived-session toggle", async () => {
     const container = document.createElement("div");
@@ -252,7 +272,7 @@ describe("sessions view", () => {
       Array.from(thinking?.options ?? [])
         .find((option) => option.value === "max")
         ?.textContent?.trim(),
-    ).toBe("Override: maximum");
+    ).toBe("Maximum");
 
     thinking!.value = "max";
     thinking!.dispatchEvent(new Event("change", { bubbles: true }));
@@ -283,12 +303,12 @@ describe("sessions view", () => {
 
     const thinking = container.querySelector("tbody select") as HTMLSelectElement | null;
     expect(thinking?.value).toBe("");
-    expect(thinking?.options[0]?.textContent?.trim()).toBe("Inherited: adaptive");
+    expect(thinking?.options[0]?.textContent?.trim()).toBe("Inherited: Adaptive");
     expect(
       Array.from(thinking?.options ?? [])
         .find((option) => option.value === "adaptive")
         ?.textContent?.trim(),
-    ).toBe("Override: adaptive");
+    ).toBe("Adaptive");
   });
 
   it("labels inherited thinking from list defaults when lightweight rows omit row defaults", async () => {
@@ -320,9 +340,9 @@ describe("sessions view", () => {
 
     const thinking = container.querySelector("tbody select") as HTMLSelectElement | null;
     expect(thinking?.value).toBe("");
-    expect(thinking?.options[0]?.textContent?.trim()).toBe("Inherited: high");
+    expect(thinking?.options[0]?.textContent?.trim()).toBe("Inherited: High");
     expect(Array.from(thinking?.options ?? []).map((option) => option.textContent?.trim())).toEqual(
-      ["Inherited: high", "Off", "Override: high"],
+      ["Inherited: High", "Off", "High"],
     );
   });
 
@@ -352,7 +372,7 @@ describe("sessions view", () => {
       Array.from(thinking?.options ?? [])
         .find((option) => option.value === "low")
         ?.textContent?.trim(),
-    ).toBe("Override: on");
+    ).toBe("On");
 
     thinking!.value = "low";
     thinking!.dispatchEvent(new Event("change", { bubbles: true }));
@@ -455,6 +475,13 @@ describe("sessions view", () => {
               updatedAt: 10,
               status: "failed",
             },
+            {
+              key: "agent:main:done",
+              kind: "direct",
+              updatedAt: 5,
+              hasActiveRun: true,
+              status: "done",
+            },
           ]),
         ),
       ),
@@ -462,20 +489,25 @@ describe("sessions view", () => {
     );
     await Promise.resolve();
 
-    expect(
-      Array.from(container.querySelectorAll("thead th")).map((cell) => cell.textContent?.trim()),
-    ).toContain("Status");
+    expect(sessionTableHeaders(container)).toEqual(SESSION_TABLE_HEADERS);
     const badges = Array.from(container.querySelectorAll(".session-status-badge"));
-    expect(badges.map((badge) => badge.textContent?.trim())).toEqual(["Live", "Idle", "Failed"]);
+    expect(badges.map((badge) => badge.textContent?.trim())).toEqual([
+      "Live",
+      "Idle",
+      "Failed",
+      "Done",
+    ]);
     expect(badges.map((badge) => [...badge.classList])).toEqual([
       ["session-status-badge", "session-status-badge--live"],
       ["session-status-badge", "session-status-badge--idle"],
       ["session-status-badge", "session-status-badge--failed"],
+      ["session-status-badge", "session-status-badge--done"],
     ]);
     expect(badges.map((badge) => badge.getAttribute("aria-label"))).toEqual([
       "Status: Live",
       "Status: Idle",
       "Status: Failed",
+      "Status: Done",
     ]);
   });
 
@@ -505,9 +537,7 @@ describe("sessions view", () => {
     );
     await Promise.resolve();
 
-    expect(
-      Array.from(container.querySelectorAll("thead th")).map((cell) => cell.textContent?.trim()),
-    ).toContain("Runtime");
+    expect(sessionTableHeaders(container)).toEqual(SESSION_TABLE_HEADERS);
     expect(container.querySelector(".session-runtime-cell")?.textContent?.trim()).toBe(
       "claude-cli (fallback none)",
     );
@@ -515,6 +545,41 @@ describe("sessions view", () => {
     expect(rows).toHaveLength(1);
     expect(rows[0]?.querySelector(".session-key-cell")?.textContent?.trim()).toBe(
       "agent:main:claude",
+    );
+  });
+
+  it("does not filter terminal sessions as live when active-run flags are stale", async () => {
+    const container = document.createElement("div");
+    render(
+      renderSessions({
+        ...buildProps(
+          buildMultiResult([
+            {
+              key: "agent:main:done",
+              kind: "direct",
+              updatedAt: 20,
+              hasActiveRun: true,
+              status: "done",
+            },
+            {
+              key: "agent:main:running",
+              kind: "direct",
+              updatedAt: 10,
+              hasActiveRun: true,
+              status: "running",
+            },
+          ]),
+        ),
+        searchQuery: "live",
+      }),
+      container,
+    );
+    await Promise.resolve();
+
+    const rows = container.querySelectorAll("tbody tr.session-data-row");
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.querySelector(".session-key-cell")?.textContent?.trim()).toBe(
+      "agent:main:running",
     );
   });
 
@@ -796,11 +861,20 @@ describe("sessions view", () => {
     const reasoning = selects[3] as HTMLSelectElement | undefined;
     expect(fast?.value).toBe("on");
     expect(verbose?.value).toBe("full");
-    expect(Array.from(verbose?.options ?? []).map((option) => option.value)).toContain("full");
+    expect(Array.from(verbose?.options ?? []).map((option) => option.value)).toEqual([
+      "",
+      "off",
+      "on",
+      "full",
+    ]);
     expect(reasoning?.value).toBe("custom-mode");
-    expect(Array.from(reasoning?.options ?? []).map((option) => option.value)).toContain(
+    expect(Array.from(reasoning?.options ?? []).map((option) => option.value)).toEqual([
+      "",
+      "off",
+      "on",
+      "stream",
       "custom-mode",
-    );
+    ]);
 
     const onSelectPage = vi.fn();
     const onDeselectPage = vi.fn();

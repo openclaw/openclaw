@@ -33,11 +33,11 @@ let summarizeTextCore: TtsCoreModule["summarizeText"];
 let resolveTtsConfig: TtsRuntimeModule["resolveTtsConfig"];
 let maybeApplyTtsToPayload: TtsRuntimeModule["maybeApplyTtsToPayload"];
 let getTtsProvider: TtsRuntimeModule["getTtsProvider"];
-let parseTtsDirectives: TtsRuntimeModule["_test"]["parseTtsDirectives"];
-let resolveModelOverridePolicy: TtsRuntimeModule["_test"]["resolveModelOverridePolicy"];
-let getResolvedSpeechProviderConfig: TtsRuntimeModule["_test"]["getResolvedSpeechProviderConfig"];
-let formatTtsProviderError: TtsRuntimeModule["_test"]["formatTtsProviderError"];
-let sanitizeTtsErrorForLog: TtsRuntimeModule["_test"]["sanitizeTtsErrorForLog"];
+let parseTtsDirectives: TtsRuntimeModule["testApi"]["parseTtsDirectives"];
+let resolveModelOverridePolicy: TtsRuntimeModule["testApi"]["resolveModelOverridePolicy"];
+let getResolvedSpeechProviderConfig: TtsRuntimeModule["testApi"]["getResolvedSpeechProviderConfig"];
+let formatTtsProviderError: TtsRuntimeModule["testApi"]["formatTtsProviderError"];
+let sanitizeTtsErrorForLog: TtsRuntimeModule["testApi"]["sanitizeTtsErrorForLog"];
 
 const SPEECH_PROVIDER_ENV_KEYS = [
   ...new Set(
@@ -116,6 +116,14 @@ function asLegacyTtsConfig(value: unknown): OpenClawConfig {
 
 function asLegacyOpenClawConfig(value: Record<string, unknown>): OpenClawConfig {
   return value as unknown as OpenClawConfig;
+}
+
+function mockCallAt(mock: { mock: { calls: Array<Array<unknown>> } }, index: number): unknown[] {
+  const call = mock.mock.calls[index];
+  if (!call) {
+    throw new Error(`expected mock call at index ${index}`);
+  }
+  return call;
 }
 
 const mockAssistantMessage = (content: AssistantMessage["content"]): AssistantMessage => ({
@@ -448,7 +456,7 @@ async function setupTtsRuntime() {
     getResolvedSpeechProviderConfig,
     formatTtsProviderError,
     sanitizeTtsErrorForLog,
-  } = ttsRuntime._test);
+  } = ttsRuntime.testApi);
   ttsRuntimeInitialized = true;
 }
 
@@ -900,10 +908,12 @@ export function describeTtsSummarizationContract() {
     it("calls the summary model with the expected parameters", async () => {
       await runSummarizeText();
 
-      const callArgs = vi.mocked(completeSimple).mock.calls.at(0);
-      expect(callArgs?.[1]?.messages?.[0]?.role).toBe("user");
-      expect(callArgs?.[2]?.maxTokens).toBe(250);
-      expect(callArgs?.[2]?.temperature).toBe(0.3);
+      const callArgs = mockCallAt(vi.mocked(completeSimple), 0);
+      expect(
+        (callArgs[1] as { messages?: Array<{ role?: string }> } | undefined)?.messages?.[0]?.role,
+      ).toBe("user");
+      expect((callArgs[2] as { maxTokens?: number } | undefined)?.maxTokens).toBe(250);
+      expect((callArgs[2] as { temperature?: number } | undefined)?.temperature).toBe(0.3);
       expect(getApiKeyForModelMock).toHaveBeenCalledTimes(1);
     });
 
@@ -928,7 +938,9 @@ export function describeTtsSummarizationContract() {
 
       await runSummarizeText();
 
-      expect(vi.mocked(completeSimple).mock.calls.at(0)?.[0]?.api).toBe("openai-completions");
+      expect(
+        (mockCallAt(vi.mocked(completeSimple), 0)[0] as { api?: string } | undefined)?.api,
+      ).toBe("openai-completions");
       expect(ensureCustomApiRegisteredMock).not.toHaveBeenCalled();
     });
 
@@ -1196,7 +1208,7 @@ export function describeTtsProviderRuntimeContract() {
 
           expect(result.success).toBe(true);
           expect(fetchMock).toHaveBeenCalledTimes(1);
-          const [, init] = fetchMock.mock.calls.at(0) as [string, RequestInit];
+          const [, init] = mockCallAt(fetchMock, 0) as [string, RequestInit];
           expect(typeof init.body).toBe("string");
           const body = JSON.parse(init.body as string) as Record<string, unknown>;
           expect(body.instructions).toBe(expectedInstructions);

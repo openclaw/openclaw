@@ -22,17 +22,11 @@ class ConnectionManager(
   private val readSmsAvailable: () -> Boolean,
   private val smsSearchPossible: () -> Boolean,
   private val callLogAvailable: () -> Boolean,
+  private val photosAvailable: () -> Boolean,
   private val hasRecordAudioPermission: () -> Boolean,
   private val manualTls: () -> Boolean,
 ) {
   companion object {
-    private val defaultOperatorScopes =
-      listOf(
-        "operator.read",
-        "operator.write",
-        "operator.talk.secrets",
-      )
-
     internal fun resolveTlsParamsForEndpoint(
       endpoint: GatewayEndpoint,
       storedFingerprint: String?,
@@ -103,6 +97,7 @@ class ConnectionManager(
       readSmsAvailable = readSmsAvailable(),
       smsSearchPossible = smsSearchPossible(),
       callLogAvailable = callLogAvailable(),
+      photosAvailable = photosAvailable(),
       voiceWakeEnabled = voiceWakeMode() != VoiceWakeMode.Off && hasRecordAudioPermission(),
       motionActivityAvailable = motionActivityAvailable(),
       motionPedometerAvailable = motionPedometerAvailable(),
@@ -164,23 +159,24 @@ class ConnectionManager(
       userAgent = buildUserAgent(),
     )
 
-  fun buildOperatorConnectOptions(scopes: List<String> = defaultOperatorScopes): GatewayConnectOptions {
-    val requestedScopes =
-      scopes
-        .map { it.trim() }
-        .filter { it.isNotEmpty() }
-        .distinct()
-        .sorted()
-    return GatewayConnectOptions(
+  fun buildOperatorConnectOptions(): GatewayConnectOptions =
+    GatewayConnectOptions(
       role = "operator",
-      scopes = requestedScopes,
+      // QR bootstrap hands Android a bounded operator token that includes approvals; keep the
+      // default operator reconnect request aligned so the post-bootstrap loop can approve work.
+      scopes =
+        listOf(
+          "operator.approvals",
+          "operator.pairing",
+          "operator.read",
+          "operator.write",
+        ),
       caps = emptyList(),
       commands = emptyList(),
       permissions = emptyMap(),
       client = buildClientInfo(clientId = "openclaw-android", clientMode = "ui"),
       userAgent = buildUserAgent(),
     )
-  }
 
   fun resolveTlsParams(endpoint: GatewayEndpoint): GatewayTlsParams? {
     val stored = prefs.loadGatewayTlsFingerprint(endpoint.stableId)

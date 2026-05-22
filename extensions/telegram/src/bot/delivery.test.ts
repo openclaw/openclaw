@@ -328,6 +328,33 @@ describe("deliverReplies", () => {
     });
   });
 
+  it("uses presentation button labels as fallback text for presentation-only replies", async () => {
+    const runtime = createRuntime(false);
+    const sendMessage = vi.fn().mockResolvedValue({ message_id: 4, chat: { id: "123" } });
+    const bot = createBot({ sendMessage });
+
+    await deliverWith({
+      replies: [
+        {
+          presentation: {
+            blocks: [{ type: "buttons", buttons: [{ label: "Retry", value: "cmd:retry" }] }],
+          },
+        },
+      ],
+      runtime,
+      bot,
+    });
+
+    expect(runtime.error).not.toHaveBeenCalled();
+    expect(firstMockCallArg(sendMessage, 0)).toBe("123");
+    expect(firstMockCallArg(sendMessage, 1)).toContain("Retry");
+    expectRecordFields(mockCallArg(sendMessage, 0, 2), {
+      reply_markup: {
+        inline_keyboard: [[{ text: "Retry", callback_data: "cmd:retry" }]],
+      },
+    });
+  });
+
   it("reports message_sent success=false when hooks blank out a text-only reply", async () => {
     messageHookRunner.hasHooks.mockImplementation(
       (name: string) => name === "message_sending" || name === "message_sent",
@@ -452,7 +479,7 @@ describe("deliverReplies", () => {
     expect(triggerInternalHook).not.toHaveBeenCalled();
   });
 
-  it("rewrites exact NO_REPLY for direct Telegram sessions", async () => {
+  it("suppresses exact NO_REPLY for direct Telegram sessions", async () => {
     const runtime = createRuntime(false);
     const sendMessage = vi.fn().mockResolvedValue({ message_id: 12, chat: { id: "123" } });
     const bot = createBot({ sendMessage });
@@ -464,13 +491,10 @@ describe("deliverReplies", () => {
       bot,
     });
 
-    expect(sendMessage).toHaveBeenCalledTimes(1);
-    const text = firstSendText(sendMessage);
-    expect(text).not.toBe("");
-    expect(text.trim()).not.toBe("NO_REPLY");
+    expect(sendMessage).not.toHaveBeenCalled();
   });
 
-  it("uses the policy session key for exact NO_REPLY policy", async () => {
+  it("uses the policy session key when suppressing exact NO_REPLY", async () => {
     const runtime = createRuntime(false);
     const sendMessage = vi.fn().mockResolvedValue({ message_id: 121, chat: { id: "123" } });
     const bot = createBot({ sendMessage });
@@ -483,10 +507,7 @@ describe("deliverReplies", () => {
       bot,
     });
 
-    expect(sendMessage).toHaveBeenCalledTimes(1);
-    const text = firstSendText(sendMessage);
-    expect(text).not.toBe("");
-    expect(text.trim()).not.toBe("NO_REPLY");
+    expect(sendMessage).not.toHaveBeenCalled();
   });
 
   it("suppresses exact NO_REPLY for group Telegram sessions", async () => {
@@ -1145,6 +1166,96 @@ describe("deliverReplies", () => {
     if (firstMockCallArg(sendMessage, 2) === undefined) {
       throw new Error("Expected Telegram fallback text options");
     }
+  });
+
+  it("uses spokenText only after voice rejection", async () => {
+    const { runtime, sendVoice, sendMessage, bot } = createVoiceFailureHarness({
+      voiceError: createVoiceMessagesForbiddenError(),
+      sendMessageResult: {
+        message_id: 5,
+        chat: { id: "123" },
+      },
+    });
+    const transcriptMirror = vi.fn();
+
+    mockMediaLoad("note.ogg", "audio/ogg", "voice");
+
+    await deliverWith({
+      replies: [
+        {
+          mediaUrl: "https://example.com/note.ogg",
+          audioAsVoice: true,
+          spokenText: "Hidden voice fallback",
+        },
+      ],
+      runtime,
+      bot,
+      transcriptMirror,
+    });
+
+    expect(sendVoice).toHaveBeenCalledTimes(1);
+    expect(sendMessage).toHaveBeenCalledTimes(1);
+    expect(firstMockCallArg(sendMessage, 1)).toContain("Hidden voice fallback");
+    expect(transcriptMirror).toHaveBeenCalledWith(
+      expect.objectContaining({ text: "Hidden voice fallback" }),
+    );
+  });
+
+  it("runs message_sending hooks over spokenText voice fallback content", async () => {
+    messageHookRunner.hasHooks.mockImplementation((name: string) => name === "message_sending");
+    messageHookRunner.runMessageSending.mockResolvedValue({ content: "Rewritten voice fallback" });
+    const { runtime, sendVoice, sendMessage, bot } = createVoiceFailureHarness({
+      voiceError: createVoiceMessagesForbiddenError(),
+      sendMessageResult: {
+        message_id: 5,
+        chat: { id: "123" },
+      },
+    });
+
+    mockMediaLoad("note.ogg", "audio/ogg", "voice");
+
+    await deliverWith({
+      replies: [
+        {
+          mediaUrl: "https://example.com/note.ogg",
+          audioAsVoice: true,
+          spokenText: "Hidden voice fallback",
+        },
+      ],
+      runtime,
+      bot,
+    });
+
+    expectRecordFields(mockCallArg(messageHookRunner.runMessageSending, 0, 0), {
+      content: "Hidden voice fallback",
+    });
+    expect(sendVoice).toHaveBeenCalledTimes(1);
+    expect((firstMockCallArg(sendVoice, 2) as { caption?: unknown }).caption).toBeUndefined();
+    expect(sendMessage).toHaveBeenCalledTimes(1);
+    expect(firstMockCallArg(sendMessage, 1)).toContain("Rewritten voice fallback");
+  });
+
+  it("does not render spokenText as a successful voice caption", async () => {
+    const runtime = createRuntime(false);
+    const sendVoice = vi.fn().mockResolvedValue({ message_id: 8, chat: { id: "123" } });
+    const bot = createBot({ sendVoice });
+
+    mockMediaLoad("note.ogg", "audio/ogg", "voice");
+
+    await deliverWith({
+      replies: [
+        {
+          mediaUrl: "https://example.com/note.ogg",
+          audioAsVoice: true,
+          spokenText: "Hidden voice fallback",
+        },
+      ],
+      runtime,
+      bot,
+    });
+
+    expect(sendVoice).toHaveBeenCalledTimes(1);
+    expect((firstMockCallArg(sendVoice, 2) as { caption?: unknown }).caption).toBeUndefined();
   });
 
   it("keeps disable_notification on voice fallback text when silent is true", async () => {

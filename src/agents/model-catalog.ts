@@ -5,8 +5,12 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { planManifestModelCatalogRows } from "../model-catalog/manifest-planner.js";
 import { getCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
-import { isManifestPluginAvailableForControlPlane } from "../plugins/manifest-contract-eligibility.js";
+import {
+  isManifestPluginAvailableForControlPlane,
+  loadManifestMetadataSnapshot,
+} from "../plugins/manifest-contract-eligibility.js";
 import { loadPluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
+import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import { augmentModelCatalogWithProviderPlugins } from "../plugins/provider-runtime.runtime.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import {
@@ -16,8 +20,14 @@ import {
 import { resolveDefaultAgentDir } from "./agent-scope.js";
 import { modelSupportsInput as modelCatalogEntrySupportsInput } from "./model-catalog-lookup.js";
 import type { ModelCatalogEntry, ModelInputType } from "./model-catalog.types.js";
-import { normalizeConfiguredProviderCatalogModelId } from "./model-ref-shared.js";
-import { buildConfiguredModelCatalog } from "./model-selection-shared.js";
+import {
+  normalizeConfiguredProviderCatalogModelId,
+  type ProviderModelIdNormalizationOptions,
+} from "./model-ref-shared.js";
+import {
+  buildConfiguredModelCatalog,
+  hasConfiguredProviderModelRows,
+} from "./model-selection-shared.js";
 import { ensureOpenClawModelsJson } from "./models-config.js";
 import { normalizeProviderId } from "./provider-id.js";
 
@@ -82,9 +92,12 @@ export function resetModelCatalogCacheForTest() {
 }
 
 // Test-only escape hatch: allow mocking the dynamic import to simulate transient failures.
-export function __setModelCatalogImportForTest(loader?: () => Promise<PiSdkModule>) {
+export function setModelCatalogImportForTest(loader?: () => Promise<PiSdkModule>) {
   importPiSdk = loader ?? defaultImportPiSdk;
 }
+
+/** @deprecated Use `setModelCatalogImportForTest`. */
+export { setModelCatalogImportForTest as __setModelCatalogImportForTest };
 
 function instantiatePiModelRegistry(
   piSdk: PiSdkModule,
@@ -122,13 +135,16 @@ export function loadManifestModelCatalog(params: {
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
   fallbackToMetadataScan?: boolean;
+  metadataSnapshot?: PluginMetadataSnapshot;
 }): ModelCatalogEntry[] {
-  const snapshot = getCurrentPluginMetadataSnapshot({
-    config: params.config,
-    env: params.env,
-    ...(params.workspaceDir !== undefined ? { workspaceDir: params.workspaceDir } : {}),
-    ...(params.workspaceDir === undefined ? { allowWorkspaceScopedSnapshot: true } : {}),
-  });
+  const snapshot =
+    params.metadataSnapshot ??
+    getCurrentPluginMetadataSnapshot({
+      config: params.config,
+      env: params.env,
+      ...(params.workspaceDir !== undefined ? { workspaceDir: params.workspaceDir } : {}),
+      ...(params.workspaceDir === undefined ? { allowWorkspaceScopedSnapshot: true } : {}),
+    });
   const resolvedSnapshot =
     snapshot ??
     (params.fallbackToMetadataScan === false
@@ -196,6 +212,9 @@ function normalizePersistedModelCatalogEntry(
     contextWindow?: number;
     contextTokens?: number;
   },
+  options: {
+    manifestPlugins?: ProviderModelIdNormalizationOptions["manifestPlugins"];
+  } = {},
 ): ModelCatalogEntry | undefined {
   const rawId = normalizeOptionalString(entry.id) ?? "";
   if (!rawId) {
@@ -205,7 +224,7 @@ function normalizePersistedModelCatalogEntry(
   if (!provider) {
     return undefined;
   }
-  const id = normalizeConfiguredProviderCatalogModelId(provider, rawId);
+  const id = normalizeConfiguredProviderCatalogModelId(provider, rawId, options);
   const name = normalizeOptionalString(entry.name ?? id) || id;
   const contextWindow =
     typeof entry?.contextWindow === "number" && entry.contextWindow > 0
@@ -244,6 +263,7 @@ function normalizePersistedModelCatalogEntry(
 
 async function loadReadOnlyPersistedModelCatalog(params?: {
   config?: OpenClawConfig;
+  metadataSnapshot?: PluginMetadataSnapshot;
 }): Promise<ModelCatalogEntry[]> {
   const cfg = params?.config ?? getRuntimeConfig();
   const agentDir = resolveDefaultAgentDir(cfg);
@@ -252,6 +272,16 @@ async function loadReadOnlyPersistedModelCatalog(params?: {
   const models: ModelCatalogEntry[] = [];
   const { buildShouldSuppressBuiltInModel } = await loadModelSuppression();
   const shouldSuppressBuiltInModel = buildShouldSuppressBuiltInModel({ config: cfg });
+  let manifestPlugins: ProviderModelIdNormalizationOptions["manifestPlugins"];
+  const getManifestPlugins = () => {
+    manifestPlugins ??=
+      params?.metadataSnapshot?.plugins ??
+      loadManifestMetadataSnapshot({
+        config: cfg,
+        env: process.env,
+      }).plugins;
+    return manifestPlugins;
+  };
   const providers =
     parsed?.providers && typeof parsed.providers === "object"
       ? (parsed.providers as Record<string, Record<string, unknown>>)
@@ -269,10 +299,15 @@ async function loadReadOnlyPersistedModelCatalog(params?: {
         ? providerConfig.contextTokens
         : undefined;
     for (const entry of providerConfig.models as Record<string, unknown>[]) {
-      const normalized = normalizePersistedModelCatalogEntry(providerRaw, entry, {
-        contextWindow: providerContextWindow,
-        contextTokens: providerContextTokens,
-      });
+      const normalized = normalizePersistedModelCatalogEntry(
+        providerRaw,
+        entry,
+        {
+          contextWindow: providerContextWindow,
+          contextTokens: providerContextTokens,
+        },
+        { manifestPlugins: getManifestPlugins() },
+      );
       if (normalized && !shouldSuppressBuiltInModel(normalized)) {
         models.push(normalized);
       }
@@ -281,14 +316,31 @@ async function loadReadOnlyPersistedModelCatalog(params?: {
   if (models.length === 0) {
     throw new Error("persisted model catalog has no usable model rows");
   }
-  const configuredModels = buildConfiguredModelCatalog({ cfg });
+  const configuredModels = buildConfiguredModelCatalog({
+    cfg,
+    manifestPlugins: hasConfiguredProviderModelRows(cfg) ? getManifestPlugins() : undefined,
+  });
   if (configuredModels.length > 0) {
     appendCatalogEntriesIfAbsent(models, configuredModels);
   }
   return sortModelCatalogEntries(models);
 }
 
-function loadReadOnlyStaticModelCatalog(params?: { config?: OpenClawConfig }): ModelCatalogEntry[] {
+function hasConfiguredProviderRowsNeedingManifestLookup(cfg: OpenClawConfig): boolean {
+  const providers = cfg.models?.providers;
+  if (!providers || typeof providers !== "object") {
+    return false;
+  }
+  return Object.entries(providers).some(
+    ([providerRaw, provider]) =>
+      Array.isArray(provider?.models) && normalizeProviderId(providerRaw) !== "openai",
+  );
+}
+
+function loadReadOnlyStaticModelCatalog(params?: {
+  config?: OpenClawConfig;
+  metadataSnapshot?: PluginMetadataSnapshot;
+}): ModelCatalogEntry[] {
   const cfg = params?.config ?? getRuntimeConfig();
   const models: ModelCatalogEntry[] = [];
   try {
@@ -298,6 +350,7 @@ function loadReadOnlyStaticModelCatalog(params?: { config?: OpenClawConfig }): M
         config: cfg,
         env: process.env,
         fallbackToMetadataScan: false,
+        metadataSnapshot: params?.metadataSnapshot,
       }),
     );
   } catch (error) {
@@ -307,7 +360,17 @@ function loadReadOnlyStaticModelCatalog(params?: { config?: OpenClawConfig }): M
     }
   }
 
-  const configuredModels = buildConfiguredModelCatalog({ cfg });
+  const configuredManifestPlugins = hasConfiguredProviderRowsNeedingManifestLookup(cfg)
+    ? (params?.metadataSnapshot?.plugins ??
+      loadPluginMetadataSnapshot({
+        config: cfg,
+        env: process.env,
+      }).plugins)
+    : [];
+  const configuredModels = buildConfiguredModelCatalog({
+    cfg,
+    manifestPlugins: configuredManifestPlugins,
+  });
   if (configuredModels.length > 0) {
     appendCatalogEntriesIfAbsent(models, configuredModels);
   }
@@ -318,6 +381,7 @@ export async function loadModelCatalog(params?: {
   config?: OpenClawConfig;
   useCache?: boolean;
   readOnly?: boolean;
+  metadataSnapshot?: PluginMetadataSnapshot;
 }): Promise<ModelCatalogEntry[]> {
   const readOnly = params?.readOnly === true;
   if (readOnly) {
@@ -332,7 +396,8 @@ export async function loadModelCatalog(params?: {
   if (!readOnly && params?.useCache === false) {
     modelCatalogPromise = null;
   }
-  if (!readOnly && modelCatalogPromise) {
+  const useSharedCache = !readOnly && !params?.metadataSnapshot;
+  if (useSharedCache && modelCatalogPromise) {
     return modelCatalogPromise;
   }
 
@@ -350,6 +415,16 @@ export async function loadModelCatalog(params?: {
     const sortModels = sortModelCatalogEntries;
     try {
       const cfg = params?.config ?? getRuntimeConfig();
+      let manifestPlugins: ProviderModelIdNormalizationOptions["manifestPlugins"];
+      const getManifestPlugins = () => {
+        manifestPlugins ??=
+          params?.metadataSnapshot?.plugins ??
+          loadManifestMetadataSnapshot({
+            config: cfg,
+            env: process.env,
+          }).plugins;
+        return manifestPlugins;
+      };
       if (!readOnly) {
         await ensureOpenClawModelsJson(cfg);
         logStage("models-json-ready");
@@ -389,7 +464,9 @@ export async function loadModelCatalog(params?: {
         if (!provider) {
           continue;
         }
-        const id = normalizeConfiguredProviderCatalogModelId(provider, rawId);
+        const id = normalizeConfiguredProviderCatalogModelId(provider, rawId, {
+          manifestPlugins: getManifestPlugins(),
+        });
         if (shouldSuppressBuiltInModel({ provider, id })) {
           continue;
         }
@@ -432,7 +509,9 @@ export async function loadModelCatalog(params?: {
           for (const entry of supplemental) {
             normalizedSupplemental.push({
               ...entry,
-              id: normalizeConfiguredProviderCatalogModelId(entry.provider, entry.id),
+              id: normalizeConfiguredProviderCatalogModelId(entry.provider, entry.id, {
+                manifestPlugins: getManifestPlugins(),
+              }),
             });
           }
           appendCatalogEntriesIfAbsent(models, normalizedSupplemental);
@@ -440,7 +519,10 @@ export async function loadModelCatalog(params?: {
       }
       logStage("plugin-models-merged", `entries=${models.length}`);
 
-      const configuredModels = buildConfiguredModelCatalog({ cfg });
+      const configuredModels = buildConfiguredModelCatalog({
+        cfg,
+        manifestPlugins: hasConfiguredProviderModelRows(cfg) ? getManifestPlugins() : undefined,
+      });
       if (configuredModels.length > 0) {
         appendCatalogEntriesIfAbsent(models, configuredModels);
       }
@@ -448,7 +530,7 @@ export async function loadModelCatalog(params?: {
 
       if (models.length === 0) {
         // If we found nothing, don't cache this result so we can try again.
-        if (!readOnly) {
+        if (useSharedCache) {
           modelCatalogPromise = null;
         }
       }
@@ -462,7 +544,7 @@ export async function loadModelCatalog(params?: {
         log.warn(`Failed to load model catalog: ${String(error)}`);
       }
       // Don't poison the cache on transient dependency/filesystem issues.
-      if (!readOnly) {
+      if (useSharedCache) {
         modelCatalogPromise = null;
       }
       if (models.length > 0) {
@@ -472,7 +554,7 @@ export async function loadModelCatalog(params?: {
     }
   };
 
-  if (readOnly) {
+  if (readOnly || params?.metadataSnapshot) {
     return loadCatalog();
   }
 

@@ -18,9 +18,6 @@ export function buildSubagentSystemPrompt(params: {
   /** Config value: max allowed spawn depth. */
   maxSpawnDepth?: number;
 }) {
-  const taskRaw = typeof params.task === "string" ? params.task : "";
-  const taskBody = taskRaw.trim();
-  const hasTask = taskBody !== "";
   const childDepth = typeof params.childDepth === "number" ? params.childDepth : 1;
   const maxSpawnDepth =
     typeof params.maxSpawnDepth === "number"
@@ -32,26 +29,13 @@ export function buildSubagentSystemPrompt(params: {
   );
   const canSpawn = childDepth < maxSpawnDepth;
   const parentLabel = childDepth >= 2 ? "parent orchestrator" : "main agent";
-  const roleLines =
-    hasTask && taskBody.includes("\n")
-      ? [
-          "## Your Role",
-          "- You were created to handle the following task (verbatim; line breaks preserved):",
-          "",
-          "```",
-          taskBody,
-          "```",
-          "- Complete this task. That's your entire purpose.",
-          `- You are NOT the ${parentLabel}. Don't try to be.`,
-          "",
-        ]
-      : [
-          "## Your Role",
-          `- You were created to handle: ${hasTask ? taskBody : "{{TASK_DESCRIPTION}}"}`,
-          "- Complete this task. That's your entire purpose.",
-          `- You are NOT the ${parentLabel}. Don't try to be.`,
-          "",
-        ];
+  const roleLines = [
+    "## Your Role",
+    "- You were created to handle the task in the first user-visible `[Subagent Task]` message.",
+    "- Complete that task. That's your entire purpose.",
+    `- You are NOT the ${parentLabel}. Don't try to be.`,
+    "",
+  ];
 
   const lines = [
     "# Subagent Context",
@@ -98,9 +82,9 @@ export function buildSubagentSystemPrompt(params: {
       "If a child completion event arrives AFTER you already sent your final answer, reply ONLY with NO_REPLY.",
       "Do NOT repeatedly poll `subagents list` in a loop unless you are actively debugging or intervening.",
       "Coordinate their work and synthesize results before reporting back.",
+      ...nativeCommandGuidanceLines,
       ...(acpEnabled
         ? [
-            ...nativeCommandGuidanceLines,
             'For ACP harness sessions (claudecode/gemini/opencode, or Codex only when explicit ACP/acpx), use `sessions_spawn` with `runtime: "acp"` (set `agentId` unless `acp.defaultAgent` is configured).',
             '`agents_list` and `subagents` apply to OpenClaw sub-agents (`runtime: "subagent"`); ACP harness ids are controlled by `acp.allowedAgents`.',
             "Do not ask users to run slash commands or CLI when `sessions_spawn` can do it directly.",

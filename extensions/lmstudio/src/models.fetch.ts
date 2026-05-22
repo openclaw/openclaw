@@ -1,4 +1,5 @@
 import { createSubsystemLogger } from "openclaw/plugin-sdk/logging-core";
+import { readProviderJsonArrayFieldResponse } from "openclaw/plugin-sdk/provider-http";
 import type { ModelDefinitionConfig } from "openclaw/plugin-sdk/provider-model-shared";
 import { SELF_HOSTED_DEFAULT_COST } from "openclaw/plugin-sdk/provider-setup";
 import { fetchWithSsrFGuard, type SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
@@ -23,10 +24,6 @@ type FetchLmstudioModelsResult = {
   status?: number;
   models: LmstudioModelWire[];
   error?: unknown;
-};
-
-type LmstudioModelsResponseWire = {
-  models?: LmstudioModelWire[];
 };
 
 type DiscoverLmstudioModelsParams = {
@@ -66,6 +63,13 @@ async function fetchLmstudioEndpoint(params: {
   };
 }
 
+function asLmstudioModelWire(value: unknown): LmstudioModelWire {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new Error("LM Studio model list: malformed JSON response");
+  }
+  return value as LmstudioModelWire;
+}
+
 /** Fetches /api/v1/models and reports transport reachability separately from HTTP status. */
 export async function fetchLmstudioModels(params: {
   baseUrl?: string;
@@ -100,12 +104,15 @@ export async function fetchLmstudioModels(params: {
           models: [],
         };
       }
-      // External service payload is untrusted JSON; parse with a permissive wire type.
-      const payload = (await response.json()) as LmstudioModelsResponseWire;
+      const models = await readProviderJsonArrayFieldResponse(
+        response,
+        "LM Studio model list",
+        "models",
+      );
       return {
         reachable: true,
         status: response.status,
-        models: Array.isArray(payload.models) ? payload.models : [],
+        models: models.map(asLmstudioModelWire),
       };
     } finally {
       await release();
@@ -255,7 +262,12 @@ export async function ensureLmstudioModelLoaded(params: {
       const body = await response.text();
       throw new Error(`LM Studio model load failed (${response.status})${body ? `: ${body}` : ""}`);
     }
-    const payload = (await response.json()) as LmstudioLoadResponse;
+    let payload: LmstudioLoadResponse;
+    try {
+      payload = (await response.json()) as LmstudioLoadResponse;
+    } catch (cause) {
+      throw new Error("LM Studio model load returned malformed JSON", { cause });
+    }
     if (typeof payload.status === "string" && payload.status.toLowerCase() !== "loaded") {
       throw new Error(`LM Studio model load returned unexpected status: ${payload.status}`);
     }

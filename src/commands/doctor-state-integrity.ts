@@ -34,6 +34,7 @@ import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
 import { note } from "../terminal/note.js";
 import { shortenHomePath } from "../utils.js";
 import { repairHeartbeatPoisonedMainSession } from "./doctor-heartbeat-main-session-repair.js";
+import { describeHeartbeatSessionTargetIssues } from "./doctor-heartbeat-session-target.js";
 import { runPluginSessionStateDoctorRepairs } from "./doctor-session-state-providers.js";
 
 type DoctorPrompterLike = {
@@ -955,6 +956,10 @@ export async function noteStateIntegrity(
       changes,
     });
 
+    for (const warning of describeHeartbeatSessionTargetIssues(cfg)) {
+      warnings.push(warning);
+    }
+
     const mainKey = resolveMainSessionKey(cfg);
     const mainEntry = store[mainKey];
     if (mainEntry?.sessionId) {
@@ -1048,20 +1053,24 @@ export async function noteStateIntegrity(
   }
 }
 
-export function noteWorkspaceBackupTip(workspaceDir: string) {
+export function collectWorkspaceBackupTip(workspaceDir: string): string | null {
   if (!existsDir(workspaceDir)) {
-    return;
+    return null;
   }
   const gitMarker = path.join(workspaceDir, ".git");
   if (fs.existsSync(gitMarker)) {
-    return;
+    return null;
   }
-  note(
-    [
-      "- Tip: back up the workspace in a private git repo (GitHub or GitLab).",
-      "- Keep ~/.openclaw out of git; it contains credentials and session history.",
-      "- Details: /concepts/agent-workspace#git-backup-recommended",
-    ].join("\n"),
-    "Workspace",
-  );
+  return [
+    "- Tip: back up the workspace in a private git repo (GitHub or GitLab).",
+    "- Keep ~/.openclaw out of git; it contains credentials and session history.",
+    "- Details: /concepts/agent-workspace#git-backup-recommended",
+  ].join("\n");
+}
+
+export function noteWorkspaceBackupTip(workspaceDir: string) {
+  const tip = collectWorkspaceBackupTip(workspaceDir);
+  if (tip) {
+    note(tip, "Workspace");
+  }
 }
