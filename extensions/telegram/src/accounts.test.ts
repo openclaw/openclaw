@@ -227,6 +227,30 @@ describe("resolveDefaultTelegramAccountId", () => {
     expectNoMissingDefaultWarning();
   });
 
+  it("does not warn when defaultAccount is set in a multi-account setup (#83948)", () => {
+    // Regression: previously, the warning fired any time the resolved
+    // account happened to equal `accountIds[0]` (alphabetical first),
+    // even when the user had explicitly set `defaultAccount` to that
+    // alphabetically-first value. In the reporter's config below,
+    // `defaultAccount: "charles"` was honored correctly but the warning
+    // still nagged because "charles" sorts before "hermes".
+    const cfg: OpenClawConfig = {
+      channels: {
+        telegram: {
+          defaultAccount: "charles",
+          accounts: {
+            hermes: { botToken: "tok-hermes" },
+            charles: { botToken: "tok-charles" },
+          },
+        },
+      },
+    };
+
+    const result = resolveDefaultTelegramAccountId(cfg);
+    expect(result).toBe("charles");
+    expectNoMissingDefaultWarning();
+  });
+
   it("does not warn when only one non-default account is configured", () => {
     const cfg: OpenClawConfig = {
       channels: {
