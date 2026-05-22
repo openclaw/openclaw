@@ -2110,6 +2110,117 @@ describe("agent event handler", () => {
     expect(agentRunSeq.has("run-terminal-error")).toBe(false);
   });
 
+  it("keeps deferred lifecycle-error cleanup across later non-terminal events", () => {
+    vi.useFakeTimers();
+    const { broadcast, clearAgentRunContext, agentRunSeq, handler } = createHarness({
+      resolveSessionKeyForRun: () => "session-terminal-error",
+      lifecycleErrorRetryGraceMs: 100,
+    });
+    registerAgentRunContext("run-terminal-late-tool", {
+      sessionKey: "session-terminal-error",
+    });
+
+    handler({
+      runId: "run-terminal-late-tool",
+      seq: 1,
+      stream: "lifecycle",
+      ts: Date.now(),
+      data: { phase: "start" },
+    });
+    handler({
+      runId: "run-terminal-late-tool",
+      seq: 2,
+      stream: "lifecycle",
+      ts: Date.now(),
+      data: { phase: "error", error: "request timed out" },
+    });
+    handler({
+      runId: "run-terminal-late-tool",
+      seq: 3,
+      stream: "tool",
+      ts: Date.now(),
+      data: { phase: "result", name: "exec" },
+    });
+
+    vi.advanceTimersByTime(99);
+
+    expect(clearAgentRunContext).not.toHaveBeenCalled();
+    expect(agentRunSeq.get("run-terminal-late-tool")).toBe(3);
+    expect(
+      chatBroadcastCalls(broadcast).some(
+        ([, payload]) => (payload as { state?: string }).state === "error",
+      ),
+    ).toBe(false);
+
+    vi.advanceTimersByTime(1);
+
+    const finalPayload = chatBroadcastCalls(broadcast).at(-1)?.[1] as {
+      state?: string;
+      runId?: string;
+      errorMessage?: string;
+    };
+    expect(finalPayload.state).toBe("error");
+    expect(finalPayload.runId).toBe("run-terminal-late-tool");
+    expect(finalPayload.errorMessage).toContain("request timed out");
+    expect(clearAgentRunContext).toHaveBeenCalledWith("run-terminal-late-tool");
+    expect(agentRunSeq.has("run-terminal-late-tool")).toBe(false);
+    expect(
+      persistGatewaySessionLifecycleEventMock.mock.calls.some(
+        ([params]) =>
+          (params as { event?: { data?: { phase?: string } } }).event?.data?.phase === "error",
+      ),
+    ).toBe(true);
+  });
+
+  it("cancels deferred lifecycle-error cleanup when the run restarts", () => {
+    vi.useFakeTimers();
+    const { broadcast, clearAgentRunContext, agentRunSeq, handler } = createHarness({
+      resolveSessionKeyForRun: () => "session-terminal-retry",
+      lifecycleErrorRetryGraceMs: 100,
+    });
+    registerAgentRunContext("run-terminal-retry", {
+      sessionKey: "session-terminal-retry",
+    });
+
+    handler({
+      runId: "run-terminal-retry",
+      seq: 1,
+      stream: "lifecycle",
+      ts: Date.now(),
+      data: { phase: "start" },
+    });
+    handler({
+      runId: "run-terminal-retry",
+      seq: 2,
+      stream: "lifecycle",
+      ts: Date.now(),
+      data: { phase: "error", error: "attempt failed" },
+    });
+    handler({
+      runId: "run-terminal-retry",
+      seq: 3,
+      stream: "lifecycle",
+      ts: Date.now(),
+      data: { phase: "start" },
+    });
+
+    vi.advanceTimersByTime(100);
+
+    expect(
+      chatBroadcastCalls(broadcast).some(
+        ([, payload]) => (payload as { state?: string }).state === "error",
+      ),
+    ).toBe(false);
+    expect(clearAgentRunContext).not.toHaveBeenCalled();
+    expect(agentRunSeq.get("run-terminal-retry")).toBe(3);
+    expect(
+      persistGatewaySessionLifecycleEventMock.mock.calls.filter(
+        ([params]) =>
+          (params as { event?: { data?: { phase?: string } } }).event?.data?.phase === "error",
+      ),
+    ).toHaveLength(0);
+  });
+
   it("adds detected errorKind to chat lifecycle error payloads", () => {
     const { broadcast, nodeSendToSession, handler } = createHarness({
       resolveSessionKeyForRun: () => "session-detected-error",
