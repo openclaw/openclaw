@@ -32,6 +32,7 @@ vi.mock("../config/config.js", () => ({
 }));
 
 import "./test-helpers/fast-openclaw-tools-sessions.js";
+import { OPENCLAW_REDACTED_MARKER, OPENCLAW_REDACTED_NOTICE } from "../logging/redact.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { testing as agentStepTesting } from "./tools/agent-step.js";
 import { createSessionsHistoryTool } from "./tools/sessions-history-tool.js";
@@ -775,14 +776,94 @@ describe("sessions tools", () => {
       truncated?: boolean;
       contentTruncated?: boolean;
       contentRedacted?: boolean;
+      notice?: string;
     };
     expect(details.contentRedacted).toBe(true);
     expect(details.contentTruncated).toBe(false);
     expect(details.truncated).toBe(false);
+    expect(details.notice).toBe(`${OPENCLAW_REDACTED_MARKER} ${OPENCLAW_REDACTED_NOTICE}`);
     const msg = details.messages?.[0] as { content?: Array<{ type?: string; text?: string }> };
     const textBlock = msg?.content?.find((b) => b.type === "text");
     expect(typeof textBlock?.text).toBe("string");
     expect(textBlock?.text).not.toContain("sk-1234567890abcdef1234");
+  });
+
+  it("sessions_history omits redaction notice when no returned content is redacted", async () => {
+    callGatewayMock.mockReset();
+    callGatewayMock.mockImplementation(async (opts: unknown) => {
+      const request = opts as { method?: string };
+      if (request.method === "chat.history") {
+        return {
+          messages: [
+            {
+              role: "assistant",
+              content: [{ type: "text", text: "regular content" }],
+            },
+          ],
+        };
+      }
+      return {};
+    });
+
+    const tool = createOpenClawTools().find((candidate) => candidate.name === "sessions_history");
+    if (!tool) {
+      throw new Error("missing sessions_history tool");
+    }
+
+    const result = await tool.execute("call-no-redact-1", { sessionKey: "main" });
+    const details = result.details as {
+      contentRedacted?: boolean;
+      notice?: string;
+    };
+    expect(details.contentRedacted).toBe(false);
+    expect(details.notice).toBeUndefined();
+  });
+
+  it("sessions_history derives redaction notice from the returned capped payload", async () => {
+    callGatewayMock.mockReset();
+    const padding = "y".repeat(8_000);
+    const oldMessages = Array.from({ length: 30 }, (_, idx) => ({
+      role: "assistant" as const,
+      content: [
+        {
+          type: "text",
+          text:
+            idx === 0
+              ? `leaking sk-1234567890abcdef1234 ${padding}`
+              : `safe message ${idx} ${padding}`,
+        },
+      ],
+    }));
+    callGatewayMock.mockImplementation(async (opts: unknown) => {
+      const request = opts as { method?: string };
+      if (request.method === "chat.history") {
+        return { messages: oldMessages };
+      }
+      return {};
+    });
+
+    const tool = createOpenClawTools().find((candidate) => candidate.name === "sessions_history");
+    if (!tool) {
+      throw new Error("missing sessions_history tool");
+    }
+
+    const result = await tool.execute("call-cap-drops-redacted", {
+      sessionKey: "main",
+      includeTools: true,
+    });
+    const details = result.details as {
+      messages?: Array<Record<string, unknown>>;
+      truncated?: boolean;
+      contentRedacted?: boolean;
+      notice?: string;
+    };
+
+    expect(details.truncated).toBe(true);
+    expect(details.contentRedacted).toBe(false);
+    expect(details.notice).toBeUndefined();
+    const keptText = JSON.stringify(details.messages ?? []);
+    expect(keptText).not.toContain("sk-1234567890abcdef1234");
+    expect(keptText).not.toContain("leaking");
   });
 
   it("sessions_history sets both contentRedacted and contentTruncated independently", async () => {

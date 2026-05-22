@@ -358,6 +358,11 @@ export function redactSecrets<T>(value: T): T {
   return redactStructuredSecretValue("", value, new WeakSet<object>(), options) as T;
 }
 
+export const OPENCLAW_REDACTED_MARKER = "[OPENCLAW-REDACTED]";
+
+export const OPENCLAW_REDACTED_NOTICE =
+  'OpenClaw redacted one or more secret-looking values in this output. Treat redacted placeholders such as "***" or "abc123…xyz" as opaque markers: do not write them back to config files, .env files, or on-disk secrets. Re-fetch the real value from the authoritative source when you need it.';
+
 export function getDefaultRedactPatterns(): string[] {
   return [...DEFAULT_REDACT_PATTERNS];
 }
