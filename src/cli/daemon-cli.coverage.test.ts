@@ -52,6 +52,7 @@ const buildGatewayInstallPlan = vi.fn(
     port: number;
     token?: string;
     env?: NodeJS.ProcessEnv;
+    runtimePath?: string;
     wrapperPath?: string;
     existingEnvironment?: Record<string, string>;
   }) => ({
@@ -59,6 +60,7 @@ const buildGatewayInstallPlan = vi.fn(
     workingDirectory: process.cwd(),
     environment: {
       OPENCLAW_GATEWAY_PORT: String(params.port),
+      ...(params.runtimePath ? { OPENCLAW_DAEMON_RUNTIME_PATH: params.runtimePath } : {}),
       ...(params.wrapperPath ? { OPENCLAW_WRAPPER: params.wrapperPath } : {}),
       ...(params.token ? { OPENCLAW_GATEWAY_TOKEN: params.token } : {}),
     },
@@ -82,8 +84,22 @@ vi.mock("../gateway/probe-auth.js", () => ({
 }));
 
 vi.mock("../daemon/program-args.js", () => ({
+  OPENCLAW_DAEMON_RUNTIME_PATH_ENV_KEY: "OPENCLAW_DAEMON_RUNTIME_PATH",
   OPENCLAW_WRAPPER_ENV_KEY: "OPENCLAW_WRAPPER",
   resolveGatewayProgramArguments: (opts: unknown) => resolveGatewayProgramArguments(opts),
+  resolveOpenClawRuntimePath: async (value: string | undefined, runtime = "auto") => {
+    const trimmed = value?.trim();
+    if (!trimmed) {
+      return undefined;
+    }
+    const kind = trimmed.endsWith("/bun") ? "bun" : "node";
+    if (runtime !== "auto" && runtime !== kind) {
+      throw new Error("runtime kind mismatch");
+    }
+    return trimmed;
+  },
+  resolveOpenClawRuntimePathKind: (value: string) =>
+    value.endsWith("/bun") ? "bun" : value.endsWith("/node") ? "node" : undefined,
   resolveOpenClawWrapperPath: async (value: string | undefined) => value?.trim() || undefined,
 }));
 
@@ -187,6 +203,7 @@ describe("daemon-cli coverage", () => {
     envSnapshot = captureEnv([
       "OPENCLAW_STATE_DIR",
       "OPENCLAW_CONFIG_PATH",
+      "OPENCLAW_DAEMON_RUNTIME_PATH",
       "OPENCLAW_GATEWAY_PORT",
       "OPENCLAW_PROFILE",
     ]);
@@ -194,6 +211,7 @@ describe("daemon-cli coverage", () => {
     process.env.OPENCLAW_CONFIG_PATH = path.join(tmpDir, "openclaw.json");
     delete process.env.OPENCLAW_GATEWAY_PORT;
     delete process.env.OPENCLAW_PROFILE;
+    delete process.env.OPENCLAW_DAEMON_RUNTIME_PATH;
     serviceReadCommand.mockResolvedValue(null);
     resolveGatewayProbeAuthSafeWithSecretInputs.mockClear();
     findExtraGatewayServices.mockClear();

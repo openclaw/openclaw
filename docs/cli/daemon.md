@@ -35,7 +35,7 @@ openclaw daemon uninstall
 ## Common options
 
 - `status`: `--url`, `--token`, `--password`, `--timeout`, `--no-probe`, `--require-rpc`, `--deep`, `--json`
-- `install`: `--port`, `--runtime <node|bun>`, `--token`, `--force`, `--json`
+- `install`: `--port`, `--runtime <node|bun>`, `--runtime-path <path>`, `--token`, `--force`, `--json`
 - `restart`: `--safe`, `--skip-deferral`, `--force`, `--wait <duration>`, `--json`
 - lifecycle (`uninstall|start|stop`): `--json`
 
@@ -52,6 +52,7 @@ Notes:
 - When token auth requires a token and `gateway.auth.token` is SecretRef-managed, `install` validates that the SecretRef is resolvable but does not persist the resolved token into service environment metadata.
 - If token auth requires a token and the configured token SecretRef is unresolved, install fails closed.
 - If both `gateway.auth.token` and `gateway.auth.password` are configured and `gateway.auth.mode` is unset, install is blocked until mode is set explicitly.
+- `install --runtime-path <path>` pins the managed service to an absolute Node or Bun executable for the selected `--runtime` and persists `OPENCLAW_DAEMON_RUNTIME_PATH` for later forced reinstalls, updates, and doctor repairs.
 - On macOS, `install` keeps LaunchAgent plists owner-only and loads managed service environment values through an owner-only file and wrapper instead of serializing API keys or auth-profile env refs into `EnvironmentVariables`.
 - If you intentionally run multiple gateways on one host, isolate ports, config/state, and workspaces; see [/gateway#multiple-gateways-same-host](/gateway#multiple-gateways-same-host).
 - `restart --safe` asks the running Gateway to preflight active work and schedule one coalesced restart after active work drains. Plain `restart` keeps the existing service-manager behavior; `--force` remains the immediate override path.

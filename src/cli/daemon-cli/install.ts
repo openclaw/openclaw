@@ -11,7 +11,13 @@ import { readConfigFileSnapshotForWrite } from "../../config/io.js";
 import { replaceConfigFile } from "../../config/mutate.js";
 import { resolveGatewayPort } from "../../config/paths.js";
 import type { OpenClawConfig } from "../../config/types.js";
-import { OPENCLAW_WRAPPER_ENV_KEY, resolveOpenClawWrapperPath } from "../../daemon/program-args.js";
+import {
+  OPENCLAW_DAEMON_RUNTIME_PATH_ENV_KEY,
+  OPENCLAW_WRAPPER_ENV_KEY,
+  resolveOpenClawRuntimePathKind,
+  resolveOpenClawRuntimePath,
+  resolveOpenClawWrapperPath,
+} from "../../daemon/program-args.js";
 import { readEmbeddedGatewayToken } from "../../daemon/service-audit.js";
 import { resolveGatewayService } from "../../daemon/service.js";
 import type { GatewayServiceCommandConfig } from "../../daemon/service.js";
@@ -47,6 +53,13 @@ export function mergeInstallInvocationEnv(params: {
       continue;
     }
     const upper = key.toUpperCase();
+    if (upper === OPENCLAW_DAEMON_RUNTIME_PATH_ENV_KEY) {
+      const value = rawValue.trim();
+      if (value) {
+        preservedServiceEnv[OPENCLAW_DAEMON_RUNTIME_PATH_ENV_KEY] = value;
+      }
+      continue;
+    }
     if (upper === OPENCLAW_WRAPPER_ENV_KEY) {
       const value = rawValue.trim();
       if (value) {
@@ -104,10 +117,24 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
     fail(formatInvalidConfigPort("gateway.port"));
     return;
   }
-  const runtimeRaw = opts.runtime ? opts.runtime : DEFAULT_GATEWAY_DAEMON_RUNTIME;
-  if (!isGatewayDaemonRuntime(runtimeRaw)) {
+  const runtimeCandidate = opts.runtime ? opts.runtime : DEFAULT_GATEWAY_DAEMON_RUNTIME;
+  if (!isGatewayDaemonRuntime(runtimeCandidate)) {
     fail('Invalid --runtime (use "node" or "bun")');
     return;
+  }
+  let runtimeRaw: GatewayDaemonRuntime = runtimeCandidate;
+  let runtimePath: string | undefined;
+  if (opts.runtimePath !== undefined) {
+    try {
+      runtimePath = await resolveOpenClawRuntimePath(opts.runtimePath, runtimeRaw);
+      if (!runtimePath) {
+        fail("Invalid --runtime-path");
+        return;
+      }
+    } catch (err) {
+      fail(`Invalid --runtime-path: ${String(err)}`);
+      return;
+    }
   }
   let wrapperPath: string | undefined;
   if (opts.wrapper !== undefined) {
@@ -168,15 +195,36 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
   }
   existingServiceCommand = await service.readCommand(process.env).catch(() => null);
   existingServiceEnv = existingServiceCommand?.environment;
-  const installEnv = mergeInstallInvocationEnv({
+  let installEnv = mergeInstallInvocationEnv({
     env: process.env,
     existingServiceEnv,
   });
+  if (opts.runtime && opts.runtimePath === undefined) {
+    installEnv = { ...installEnv };
+    delete installEnv[OPENCLAW_DAEMON_RUNTIME_PATH_ENV_KEY];
+  }
   if (!wrapperPath) {
     try {
       wrapperPath = await resolveOpenClawWrapperPath(installEnv[OPENCLAW_WRAPPER_ENV_KEY]);
     } catch (err) {
       fail(`Invalid ${OPENCLAW_WRAPPER_ENV_KEY}: ${String(err)}`);
+      return;
+    }
+  }
+  if (!runtimePath) {
+    try {
+      runtimePath = await resolveOpenClawRuntimePath(
+        installEnv[OPENCLAW_DAEMON_RUNTIME_PATH_ENV_KEY],
+        opts.runtime ? runtimeRaw : "auto",
+      );
+      const preservedRuntimeKind = runtimePath
+        ? resolveOpenClawRuntimePathKind(runtimePath)
+        : undefined;
+      if (!opts.runtime && preservedRuntimeKind) {
+        runtimeRaw = preservedRuntimeKind;
+      }
+    } catch (err) {
+      fail(`Invalid ${OPENCLAW_DAEMON_RUNTIME_PATH_ENV_KEY}: ${String(err)}`);
       return;
     }
   }
@@ -188,6 +236,7 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
         installEnv,
         port,
         runtime: runtimeRaw,
+        runtimePath,
         wrapperPath,
         existingEnvironment: existingServiceEnv,
         existingEnvironmentValueSources: existingServiceCommand?.environmentValueSources,
@@ -243,6 +292,7 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
       env: installEnv,
       port,
       runtime: runtimeRaw,
+      runtimePath,
       wrapperPath,
       existingEnvironment: existingServiceEnv,
       existingEnvironmentValueSources: existingServiceCommand?.environmentValueSources,
@@ -281,6 +331,7 @@ async function getGatewayServiceAutoRefreshMessage(params: {
   installEnv: NodeJS.ProcessEnv;
   port: number;
   runtime: GatewayDaemonRuntime;
+  runtimePath?: string;
   wrapperPath?: string;
   existingEnvironment?: Record<string, string | undefined>;
   existingEnvironmentValueSources?: GatewayServiceCommandConfig["environmentValueSources"];
@@ -297,6 +348,7 @@ async function getGatewayServiceAutoRefreshMessage(params: {
         env: params.installEnv,
         port: params.port,
         runtime: params.runtime,
+        runtimePath: params.runtimePath,
         wrapperPath: params.wrapperPath,
         existingEnvironment: params.existingEnvironment,
         existingEnvironmentValueSources: params.existingEnvironmentValueSources,
@@ -313,11 +365,16 @@ async function getGatewayServiceAutoRefreshMessage(params: {
     const wrapperRequested = Boolean(
       params.wrapperPath || normalizeOptionalString(params.installEnv[OPENCLAW_WRAPPER_ENV_KEY]),
     );
-    if (wrapperRequested) {
+    const runtimePathRequested = Boolean(
+      params.runtimePath ||
+      normalizeOptionalString(params.installEnv[OPENCLAW_DAEMON_RUNTIME_PATH_ENV_KEY]),
+    );
+    if (wrapperRequested || runtimePathRequested) {
       const plannedInstall = await buildGatewayInstallPlan({
         env: params.installEnv,
         port: params.port,
         runtime: params.runtime,
+        runtimePath: params.runtimePath,
         wrapperPath: params.wrapperPath,
         existingEnvironment: params.existingEnvironment,
         existingEnvironmentValueSources: params.existingEnvironmentValueSources,
@@ -328,7 +385,16 @@ async function getGatewayServiceAutoRefreshMessage(params: {
         plannedInstall.programArguments.join("\u0000") !==
         currentCommand.programArguments.join("\u0000")
       ) {
-        return "Gateway service command differs from the current wrapper install plan; refreshing the install.";
+        return "Gateway service command differs from the current runtime install plan; refreshing the install.";
+      }
+      const plannedRuntimePath = normalizeOptionalString(
+        plannedInstall.environment[OPENCLAW_DAEMON_RUNTIME_PATH_ENV_KEY],
+      );
+      const currentRuntimePath = normalizeOptionalString(
+        currentCommand.environment?.[OPENCLAW_DAEMON_RUNTIME_PATH_ENV_KEY],
+      );
+      if (plannedRuntimePath !== currentRuntimePath) {
+        return `Gateway service ${OPENCLAW_DAEMON_RUNTIME_PATH_ENV_KEY} differs from the current runtime install plan; refreshing the install.`;
       }
       const plannedWrapperPath = normalizeOptionalString(
         plannedInstall.environment[OPENCLAW_WRAPPER_ENV_KEY],

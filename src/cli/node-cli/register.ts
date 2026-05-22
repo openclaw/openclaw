@@ -92,6 +92,7 @@ export function registerNodeCli(program: Command) {
     .option("--node-id <id>", "Override node id (clears pairing token)")
     .option("--display-name <name>", "Override node display name")
     .option("--runtime <runtime>", "Service runtime (node|bun). Default: node")
+    .option("--runtime-path <path>", "Executable path for the selected service runtime")
     .option("--force", "Reinstall/overwrite if already installed", false)
     .option("--json", "Output JSON", false)
     .action(async (opts) => {

@@ -6,6 +6,7 @@ const mocks = vi.hoisted(() => ({
   resolveSystemNodeInfo: vi.fn(),
   renderSystemNodeWarning: vi.fn(),
   buildNodeServiceEnvironment: vi.fn(),
+  resolveOpenClawRuntimePath: vi.fn(),
 }));
 
 vi.mock("../daemon/runtime-paths.js", () => ({
@@ -15,7 +16,9 @@ vi.mock("../daemon/runtime-paths.js", () => ({
 }));
 
 vi.mock("../daemon/program-args.js", () => ({
+  OPENCLAW_DAEMON_RUNTIME_PATH_ENV_KEY: "OPENCLAW_DAEMON_RUNTIME_PATH",
   resolveNodeProgramArguments: mocks.resolveNodeProgramArguments,
+  resolveOpenClawRuntimePath: mocks.resolveOpenClawRuntimePath,
 }));
 
 vi.mock("../daemon/service-env.js", () => ({
@@ -28,28 +31,35 @@ afterEach(() => {
   vi.resetAllMocks();
 });
 
+function mockRuntimePlanFixture() {
+  mocks.resolveOpenClawRuntimePath.mockImplementation(async (value: string | undefined) =>
+    value?.trim() ? value.trim() : undefined,
+  );
+  mocks.resolveNodeProgramArguments.mockResolvedValue({
+    programArguments: ["node", "node-host"],
+    workingDirectory: "/Users/me",
+  });
+  mocks.resolveSystemNodeInfo.mockResolvedValue({
+    path: "/opt/node/bin/node",
+    version: "22.0.0",
+    supported: true,
+  });
+  mocks.renderSystemNodeWarning.mockReturnValue(undefined);
+  mocks.buildNodeServiceEnvironment.mockReturnValue({
+    OPENCLAW_SERVICE_VERSION: "2026.3.22",
+  });
+}
+
 describe("buildNodeInstallPlan", () => {
-  it("passes the selected node bin directory into the node service environment", async () => {
-    mocks.resolveNodeProgramArguments.mockResolvedValue({
-      programArguments: ["node", "node-host"],
-      workingDirectory: "/Users/me",
-    });
-    mocks.resolveSystemNodeInfo.mockResolvedValue({
-      path: "/opt/node/bin/node",
-      version: "22.0.0",
-      supported: true,
-    });
-    mocks.renderSystemNodeWarning.mockReturnValue(undefined);
-    mocks.buildNodeServiceEnvironment.mockReturnValue({
-      OPENCLAW_SERVICE_VERSION: "2026.3.22",
-    });
+  it("passes the selected runtime bin directory into the node service environment", async () => {
+    mockRuntimePlanFixture();
 
     const plan = await buildNodeInstallPlan({
       env: {},
       host: "127.0.0.1",
       port: 18789,
       runtime: "node",
-      nodePath: "/custom/node/bin/node",
+      runtimePath: "/custom/node/bin/node",
     });
 
     expect(plan.environment).toEqual({
@@ -60,25 +70,20 @@ describe("buildNodeInstallPlan", () => {
     });
     expect(mocks.resolvePreferredNodePath).not.toHaveBeenCalled();
     expect(mocks.buildNodeServiceEnvironment).toHaveBeenCalledWith({
-      env: {},
+      env: {
+        OPENCLAW_DAEMON_RUNTIME_PATH: "/custom/node/bin/node",
+      },
       extraPathDirs: ["/custom/node/bin"],
     });
+    expect(mocks.resolveNodeProgramArguments).toHaveBeenCalledWith(
+      expect.objectContaining({
+        runtimePath: "/custom/node/bin/node",
+      }),
+    );
   });
 
-  it("does not prepend '.' when nodePath is a bare executable name", async () => {
-    mocks.resolveNodeProgramArguments.mockResolvedValue({
-      programArguments: ["node", "node-host"],
-      workingDirectory: "/Users/me",
-    });
-    mocks.resolveSystemNodeInfo.mockResolvedValue({
-      path: "/usr/bin/node",
-      version: "22.0.0",
-      supported: true,
-    });
-    mocks.renderSystemNodeWarning.mockReturnValue(undefined);
-    mocks.buildNodeServiceEnvironment.mockReturnValue({
-      OPENCLAW_SERVICE_VERSION: "2026.3.22",
-    });
+  it("does not prepend '.' when nodePath is a bare legacy executable name", async () => {
+    mockRuntimePlanFixture();
 
     await buildNodeInstallPlan({
       env: {},
@@ -92,6 +97,12 @@ describe("buildNodeInstallPlan", () => {
       env: {},
       extraPathDirs: undefined,
     });
+    expect(mocks.resolveNodeProgramArguments).toHaveBeenCalledWith(
+      expect.objectContaining({
+        nodePath: "node",
+        runtimePath: undefined,
+      }),
+    );
   });
 
   it("marks node gateway tokens as file-backed service env", async () => {

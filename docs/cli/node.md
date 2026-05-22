@@ -100,7 +100,17 @@ Options:
 - `--node-id <id>`: Override node id (clears pairing token)
 - `--display-name <name>`: Override the node display name
 - `--runtime <runtime>`: Service runtime (`node` or `bun`)
+- `--runtime-path <path>`: Absolute executable path for the selected service runtime
 - `--force`: Reinstall/overwrite if already installed
+
+Use `--runtime-path` when a managed node host should run with a specific Node or Bun executable:
+
+```bash
+openclaw node install --runtime node --runtime-path "$(mise which node)" --force
+```
+
+The installer validates that the path matches the selected runtime and persists it in the service
+environment as `OPENCLAW_DAEMON_RUNTIME_PATH`.
 
 Manage the service:
 

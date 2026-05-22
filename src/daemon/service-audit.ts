@@ -3,6 +3,7 @@ import path from "node:path";
 import { normalizeEnvVarKey } from "../infra/host-env-security.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { resolveLaunchAgentPlistPath } from "./launchd.js";
+import { OPENCLAW_DAEMON_RUNTIME_PATH_ENV_KEY } from "./program-args.js";
 import { isBunRuntime, isNodeRuntime } from "./runtime-binary.js";
 import {
   isSystemNodePath,
@@ -470,6 +471,23 @@ function auditGatewayServicePath(
   }
 }
 
+function commandUsesExplicitRuntimePath(
+  command: GatewayServiceCommand,
+  execPath: string,
+  platform: NodeJS.Platform,
+): boolean {
+  const runtimePath = normalizeOptionalString(
+    command?.environment?.[OPENCLAW_DAEMON_RUNTIME_PATH_ENV_KEY],
+  );
+  if (!runtimePath) {
+    return false;
+  }
+  return (
+    normalizeServicePathEntry(runtimePath, platform) ===
+    normalizeServicePathEntry(execPath, platform)
+  );
+}
+
 async function auditGatewayRuntime(
   env: Record<string, string | undefined>,
   command: GatewayServiceCommand,
@@ -478,6 +496,10 @@ async function auditGatewayRuntime(
 ) {
   const execPath = command?.programArguments?.[0];
   if (!execPath) {
+    return;
+  }
+
+  if (commandUsesExplicitRuntimePath(command, execPath, platform)) {
     return;
   }
 

@@ -77,6 +77,22 @@ describe("auditGatewayServiceConfig", () => {
     expect(hasIssue(audit, SERVICE_AUDIT_CODES.gatewayRuntimeBun)).toBe(true);
   });
 
+  it("does not flag an explicitly pinned bun runtime for automatic migration", async () => {
+    const runtimePath = "/Users/test/.bun/bin/bun";
+    const audit = await auditGatewayServiceConfig({
+      env: { HOME: "/tmp" },
+      platform: "darwin",
+      command: {
+        programArguments: [runtimePath, "gateway"],
+        environment: {
+          OPENCLAW_DAEMON_RUNTIME_PATH: runtimePath,
+          PATH: "/usr/bin:/bin:/Users/test/.bun/bin",
+        },
+      },
+    });
+    expect(hasIssue(audit, SERVICE_AUDIT_CODES.gatewayRuntimeBun)).toBe(false);
+  });
+
   it("flags version-managed node paths", async () => {
     const audit = await auditGatewayServiceConfig({
       env: { HOME: "/tmp" },
@@ -99,6 +115,27 @@ describe("auditGatewayServiceConfig", () => {
     expect(
       audit.issues.some((issue) => issue.code === SERVICE_AUDIT_CODES.gatewayPathMissingDirs),
     ).toBe(true);
+  });
+
+  it("does not flag an explicitly pinned version-managed node path as runtime drift", async () => {
+    const runtimePath = "/Users/test/.local/share/mise/installs/node/24.14.0/bin/node";
+    const audit = await auditGatewayServiceConfig({
+      env: { HOME: "/tmp" },
+      platform: "darwin",
+      command: {
+        programArguments: [runtimePath, "gateway"],
+        environment: {
+          OPENCLAW_DAEMON_RUNTIME_PATH: runtimePath,
+          PATH: "/usr/bin:/bin:/Users/test/.local/share/mise/installs/node/24.14.0/bin",
+        },
+      },
+    });
+
+    expect(
+      audit.issues.some(
+        (issue) => issue.code === SERVICE_AUDIT_CODES.gatewayRuntimeNodeVersionManager,
+      ),
+    ).toBe(false);
   });
 
   it("accepts Linux minimal PATH with user directories", async () => {

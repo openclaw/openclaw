@@ -174,7 +174,7 @@ must be paired with `--lint`; regular doctor and repair runs reject them.
     - Codex route repair for legacy `openai-codex/*` model refs in primary models, fallbacks, heartbeat/subagent/compaction overrides, hooks, channel model overrides, and session route pins; `--fix` rewrites them to `openai/*`, removes stale session/whole-agent runtime pins, and leaves canonical OpenAI agent refs on the default Codex harness.
     - Supervisor config audit (launchd/systemd/schtasks) with optional repair.
     - Embedded proxy environment cleanup for gateway services that captured shell `HTTP_PROXY` / `HTTPS_PROXY` / `NO_PROXY` values during install or update.
-    - Gateway runtime best-practice checks (Node vs Bun, version-manager paths).
+    - Gateway runtime best-practice checks (Node vs Bun, version-manager paths). Services installed with an explicit `OPENCLAW_DAEMON_RUNTIME_PATH` keep that operator-selected executable during doctor repairs.
     - Gateway port collision diagnostics (default `18789`).
 
   </Accordion>

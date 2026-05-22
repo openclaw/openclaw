@@ -17,15 +17,17 @@ export async function resolveDaemonInstallRuntimeInputs(params: {
   runtime: GatewayDaemonRuntime;
   devMode?: boolean;
   nodePath?: string;
-}): Promise<{ devMode: boolean; nodePath?: string }> {
+  runtimePath?: string;
+}): Promise<{ devMode: boolean; runtimePath?: string }> {
   const devMode = params.devMode ?? resolveGatewayDevMode();
-  const nodePath =
+  const runtimePath =
+    params.runtimePath ??
     params.nodePath ??
     (await resolvePreferredNodePath({
       env: params.env,
       runtime: params.runtime,
     }));
-  return { devMode, nodePath };
+  return { devMode, runtimePath };
 }
 
 export async function emitDaemonInstallRuntimeWarning(params: {
@@ -44,10 +46,18 @@ export async function emitDaemonInstallRuntimeWarning(params: {
   });
 }
 
-export function resolveDaemonNodeBinDir(nodePath?: string): string[] | undefined {
-  const trimmed = nodePath?.trim();
-  if (!trimmed || !path.isAbsolute(trimmed)) {
+export function resolveDaemonRuntimeBinDir(runtimePath?: string): string[] | undefined {
+  const trimmed = runtimePath?.trim();
+  if (!trimmed || !isAbsoluteDaemonRuntimePath(trimmed)) {
     return undefined;
   }
-  return [path.dirname(trimmed)];
+  const pathModule = path.win32.isAbsolute(trimmed) ? path.win32 : path.posix;
+  return [pathModule.dirname(trimmed)];
+}
+
+export const resolveDaemonNodeBinDir = resolveDaemonRuntimeBinDir;
+
+export function isAbsoluteDaemonRuntimePath(runtimePath: string | undefined): boolean {
+  const trimmed = runtimePath?.trim();
+  return Boolean(trimmed && (path.isAbsolute(trimmed) || path.win32.isAbsolute(trimmed)));
 }

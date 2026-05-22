@@ -10,6 +10,11 @@ import {
 } from "../../daemon/constants.js";
 import { resolveNodeService } from "../../daemon/node-service.js";
 import {
+  OPENCLAW_DAEMON_RUNTIME_PATH_ENV_KEY,
+  resolveOpenClawRuntimePath,
+  resolveOpenClawRuntimePathKind,
+} from "../../daemon/program-args.js";
+import {
   buildPlatformRuntimeLogHints,
   buildPlatformServiceStartHints,
 } from "../../daemon/runtime-hints.js";
@@ -44,6 +49,7 @@ type NodeDaemonInstallOptions = {
   nodeId?: string;
   displayName?: string;
   runtime?: string;
+  runtimePath?: string;
   force?: boolean;
   json?: boolean;
 };
@@ -55,6 +61,20 @@ type NodeDaemonLifecycleOptions = {
 type NodeDaemonStatusOptions = {
   json?: boolean;
 };
+
+function mergeNodeInstallInvocationEnv(params: {
+  env: NodeJS.ProcessEnv;
+  existingServiceEnv?: Record<string, string>;
+}): NodeJS.ProcessEnv {
+  const runtimePath = params.existingServiceEnv?.[OPENCLAW_DAEMON_RUNTIME_PATH_ENV_KEY]?.trim();
+  if (!runtimePath || Object.hasOwn(params.env, OPENCLAW_DAEMON_RUNTIME_PATH_ENV_KEY)) {
+    return params.env;
+  }
+  return {
+    [OPENCLAW_DAEMON_RUNTIME_PATH_ENV_KEY]: runtimePath,
+    ...params.env,
+  };
+}
 
 function renderNodeServiceStartHints(): string[] {
   return buildPlatformServiceStartHints({
@@ -104,16 +124,57 @@ export async function runNodeDaemonInstall(opts: NodeDaemonInstallOptions) {
     return;
   }
 
-  const runtimeRaw = opts.runtime ? opts.runtime : DEFAULT_NODE_DAEMON_RUNTIME;
-  if (!isNodeDaemonRuntime(runtimeRaw)) {
+  const runtimeCandidate = opts.runtime ? opts.runtime : DEFAULT_NODE_DAEMON_RUNTIME;
+  if (!isNodeDaemonRuntime(runtimeCandidate)) {
     fail('Invalid --runtime (use "node" or "bun")');
     return;
+  }
+  let runtimeRaw = runtimeCandidate;
+  let runtimePath: string | undefined;
+  if (opts.runtimePath !== undefined) {
+    try {
+      runtimePath = await resolveOpenClawRuntimePath(opts.runtimePath, runtimeRaw);
+      if (!runtimePath) {
+        fail("Invalid --runtime-path");
+        return;
+      }
+    } catch (err) {
+      fail(`Invalid --runtime-path: ${String(err)}`);
+      return;
+    }
   }
 
   const service = resolveNodeService();
   let loaded = false;
+  const existingServiceCommand = await service.readCommand(process.env).catch(() => null);
+  const existingServiceEnv = existingServiceCommand?.environment;
+  let installEnv = mergeNodeInstallInvocationEnv({
+    env: process.env,
+    existingServiceEnv,
+  });
+  if (opts.runtime && opts.runtimePath === undefined) {
+    installEnv = { ...installEnv };
+    delete installEnv[OPENCLAW_DAEMON_RUNTIME_PATH_ENV_KEY];
+  }
+  if (!runtimePath) {
+    try {
+      runtimePath = await resolveOpenClawRuntimePath(
+        installEnv[OPENCLAW_DAEMON_RUNTIME_PATH_ENV_KEY],
+        opts.runtime ? runtimeRaw : "auto",
+      );
+      const preservedRuntimeKind = runtimePath
+        ? resolveOpenClawRuntimePathKind(runtimePath)
+        : undefined;
+      if (!opts.runtime && preservedRuntimeKind) {
+        runtimeRaw = preservedRuntimeKind;
+      }
+    } catch (err) {
+      fail(`Invalid ${OPENCLAW_DAEMON_RUNTIME_PATH_ENV_KEY}: ${String(err)}`);
+      return;
+    }
+  }
   try {
-    loaded = await service.isLoaded({ env: process.env });
+    loaded = await service.isLoaded({ env: installEnv });
   } catch (err) {
     fail(`Node service check failed: ${String(err)}`);
     return;
@@ -138,7 +199,7 @@ export async function runNodeDaemonInstall(opts: NodeDaemonInstallOptions) {
   const tls = Boolean(opts.tls) || Boolean(tlsFingerprint) || Boolean(config?.gateway?.tls);
   const { programArguments, workingDirectory, environment, environmentValueSources, description } =
     await buildNodeInstallPlan({
-      env: process.env,
+      env: installEnv,
       host,
       port: port ?? 18789,
       tls,
@@ -146,6 +207,7 @@ export async function runNodeDaemonInstall(opts: NodeDaemonInstallOptions) {
       nodeId: opts.nodeId,
       displayName: opts.displayName,
       runtime: runtimeRaw,
+      runtimePath,
       warn: (message) => {
         if (json) {
           warnings.push(message);
@@ -163,7 +225,7 @@ export async function runNodeDaemonInstall(opts: NodeDaemonInstallOptions) {
     fail,
     install: async () => {
       await service.install({
-        env: process.env,
+        env: installEnv,
         stdout,
         programArguments,
         workingDirectory,

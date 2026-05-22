@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   resolveDaemonInstallRuntimeInputs,
-  resolveDaemonNodeBinDir,
+  resolveDaemonRuntimeBinDir,
   resolveGatewayDevMode,
 } from "./daemon-install-plan.shared.js";
 
@@ -26,17 +26,17 @@ describe("resolveDaemonInstallRuntimeInputs", () => {
       }),
     ).resolves.toEqual({
       devMode: false,
-      nodePath: "/custom/node",
+      runtimePath: "/custom/node",
     });
   });
 });
 
-describe("resolveDaemonNodeBinDir", () => {
-  it("returns the absolute node bin directory", () => {
-    expect(resolveDaemonNodeBinDir("/custom/node/bin/node")).toEqual(["/custom/node/bin"]);
+describe("resolveDaemonRuntimeBinDir", () => {
+  it("returns the absolute runtime bin directory", () => {
+    expect(resolveDaemonRuntimeBinDir("/custom/node/bin/node")).toEqual(["/custom/node/bin"]);
   });
 
   it("ignores bare executable names", () => {
-    expect(resolveDaemonNodeBinDir("node")).toBeUndefined();
+    expect(resolveDaemonRuntimeBinDir("node")).toBeUndefined();
   });
 });

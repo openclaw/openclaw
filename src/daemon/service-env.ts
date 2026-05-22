@@ -22,6 +22,7 @@ import {
   resolveNodeWindowsTaskName,
 } from "./constants.js";
 import { resolveGatewayStateDir } from "./paths.js";
+import { OPENCLAW_DAEMON_RUNTIME_PATH_ENV_KEY } from "./program-args.js";
 
 export { isNodeVersionManagerRuntime, resolveLinuxSystemCaBundle };
 
@@ -408,6 +409,7 @@ export function buildServiceEnvironment(params: {
     params.execPath,
   );
   const profile = env.OPENCLAW_PROFILE;
+  const runtimePath = normalizeOptionalString(env[OPENCLAW_DAEMON_RUNTIME_PATH_ENV_KEY]);
   const wrapperPath = normalizeOptionalString(env.OPENCLAW_WRAPPER);
   const resolvedLaunchdLabel =
     launchdLabel || (platform === "darwin" ? resolveGatewayLaunchAgentLabel(profile) : undefined);
@@ -415,6 +417,7 @@ export function buildServiceEnvironment(params: {
   return {
     ...buildCommonServiceEnvironment(env, sharedEnv),
     OPENCLAW_PROFILE: profile,
+    [OPENCLAW_DAEMON_RUNTIME_PATH_ENV_KEY]: runtimePath,
     OPENCLAW_WRAPPER: wrapperPath,
     OPENCLAW_GATEWAY_PORT: String(port),
     OPENCLAW_LAUNCHD_LABEL: resolvedLaunchdLabel,
@@ -442,8 +445,10 @@ export function buildNodeServiceEnvironment(params: {
   );
   const gatewayToken = normalizeOptionalString(env.OPENCLAW_GATEWAY_TOKEN);
   const allowInsecurePrivateWs = normalizeOptionalString(env.OPENCLAW_ALLOW_INSECURE_PRIVATE_WS);
+  const runtimePath = normalizeOptionalString(env[OPENCLAW_DAEMON_RUNTIME_PATH_ENV_KEY]);
   return {
     ...buildCommonServiceEnvironment(env, sharedEnv),
+    [OPENCLAW_DAEMON_RUNTIME_PATH_ENV_KEY]: runtimePath,
     OPENCLAW_GATEWAY_TOKEN: gatewayToken,
     OPENCLAW_ALLOW_INSECURE_PRIVATE_WS: allowInsecurePrivateWs,
     OPENCLAW_LAUNCHD_LABEL: resolveNodeLaunchAgentLabel(),

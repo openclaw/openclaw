@@ -2,6 +2,7 @@ import { execFileSync } from "node:child_process";
 import { constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { isSupportedNodeVersion } from "../infra/runtime-guard.js";
 import {
   buildGatewayDistEntrypointCandidates,
   findFirstAccessibleGatewayEntrypoint,
@@ -17,6 +18,7 @@ type GatewayProgramArgs = {
 type GatewayRuntimePreference = "auto" | "node" | "bun";
 
 export const OPENCLAW_WRAPPER_ENV_KEY = "OPENCLAW_WRAPPER";
+export const OPENCLAW_DAEMON_RUNTIME_PATH_ENV_KEY = "OPENCLAW_DAEMON_RUNTIME_PATH";
 
 async function resolveCliEntrypointPathForService(): Promise<string> {
   const argv1 = process.argv[1];
@@ -204,11 +206,108 @@ export async function resolveOpenClawWrapperPath(
   return resolved;
 }
 
+function pathModuleFor(inputPath: string) {
+  return /^[A-Za-z]:[\\/]/.test(inputPath) || inputPath.includes("\\") ? path.win32 : path.posix;
+}
+
+function normalizeAbsoluteRuntimePath(inputPath: string): string {
+  const modulePath = pathModuleFor(inputPath);
+  if (!modulePath.isAbsolute(inputPath)) {
+    throw new Error(
+      `${OPENCLAW_DAEMON_RUNTIME_PATH_ENV_KEY} must be an absolute executable path: ${inputPath}`,
+    );
+  }
+  return modulePath.normalize(inputPath);
+}
+
+export function resolveOpenClawRuntimePathKind(runtimePath: string): "node" | "bun" | undefined {
+  if (isNodeRuntime(runtimePath)) {
+    return "node";
+  }
+  if (isBunRuntime(runtimePath)) {
+    return "bun";
+  }
+  return undefined;
+}
+
+function validateRuntimePathKind(
+  runtimePath: string,
+  runtime: GatewayRuntimePreference,
+): "node" | "bun" {
+  const runtimeKind = resolveOpenClawRuntimePathKind(runtimePath);
+  if (!runtimeKind) {
+    throw new Error(
+      `${OPENCLAW_DAEMON_RUNTIME_PATH_ENV_KEY} must point to a node or bun executable: ${runtimePath}`,
+    );
+  }
+  if (runtime !== "auto" && runtimeKind !== runtime) {
+    throw new Error(
+      `${OPENCLAW_DAEMON_RUNTIME_PATH_ENV_KEY} must point to a ${runtime} executable when --runtime ${runtime} is used: ${runtimePath}`,
+    );
+  }
+  return runtimeKind;
+}
+
+function validateNodeRuntimePathVersion(runtimePath: string): void {
+  let versionText = "";
+  try {
+    versionText = execFileSync(runtimePath, ["-p", "process.versions.node"], {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+    }).trim();
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    throw new Error(
+      `${OPENCLAW_DAEMON_RUNTIME_PATH_ENV_KEY} could not run node version check for ${runtimePath}: ${detail}`,
+      { cause: error },
+    );
+  }
+
+  if (!isSupportedNodeVersion(versionText)) {
+    throw new Error(
+      `${OPENCLAW_DAEMON_RUNTIME_PATH_ENV_KEY} points to unsupported Node ${versionText || "unknown"} at ${runtimePath}; OpenClaw requires Node 22.16 or newer.`,
+    );
+  }
+}
+
+export async function resolveOpenClawRuntimePath(
+  inputPath: string | undefined,
+  runtime: GatewayRuntimePreference,
+): Promise<string | undefined> {
+  const trimmed = inputPath?.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+
+  const resolved = normalizeAbsoluteRuntimePath(trimmed);
+  const runtimeKind = validateRuntimePathKind(resolved, runtime);
+  try {
+    const stat = await fs.stat(resolved);
+    if (!stat.isFile()) {
+      throw new Error("not a regular file");
+    }
+    await fs.access(resolved, fsConstants.X_OK);
+  } catch (error) {
+    const detail = error instanceof Error ? ` (${error.message})` : "";
+    throw new Error(
+      `${OPENCLAW_DAEMON_RUNTIME_PATH_ENV_KEY} must point to an executable file: ${resolved}${detail}`,
+      { cause: error },
+    );
+  }
+
+  if (runtimeKind === "node") {
+    validateNodeRuntimePathVersion(resolved);
+  }
+
+  return resolved;
+}
+
 async function resolveCliProgramArguments(params: {
   args: string[];
   dev?: boolean;
   runtime?: GatewayRuntimePreference;
   nodePath?: string;
+  runtimePath?: string;
   wrapperPath?: string;
 }): Promise<GatewayProgramArgs> {
   const wrapperPath = await resolveOpenClawWrapperPath(params.wrapperPath);
@@ -218,29 +317,38 @@ async function resolveCliProgramArguments(params: {
 
   const execPath = process.execPath;
   const runtime = params.runtime ?? "auto";
+  const explicitRuntimePath = await resolveOpenClawRuntimePath(params.runtimePath, runtime);
+  const effectiveRuntime =
+    runtime === "auto" && explicitRuntimePath
+      ? resolveOpenClawRuntimePathKind(explicitRuntimePath)
+      : runtime;
 
-  if (runtime === "node") {
+  if (effectiveRuntime === "node") {
     const nodePath =
-      params.nodePath ?? (isNodeRuntime(execPath) ? execPath : await resolveNodePath());
+      explicitRuntimePath ??
+      params.nodePath ??
+      (isNodeRuntime(execPath) ? execPath : await resolveNodePath());
     const cliEntrypointPath = await resolveCliEntrypointPathForService();
     return {
       programArguments: [nodePath, cliEntrypointPath, ...params.args],
     };
   }
 
-  if (runtime === "bun") {
+  if (effectiveRuntime === "bun") {
     if (params.dev) {
       const repoRoot = resolveRepoRootForDev();
       const devCliPath = path.join(repoRoot, "src", "entry.ts");
       await fs.access(devCliPath);
-      const bunPath = isBunRuntime(execPath) ? execPath : await resolveBunPath();
+      const bunPath =
+        explicitRuntimePath ?? (isBunRuntime(execPath) ? execPath : await resolveBunPath());
       return {
         programArguments: [bunPath, devCliPath, ...params.args],
         workingDirectory: repoRoot,
       };
     }
 
-    const bunPath = isBunRuntime(execPath) ? execPath : await resolveBunPath();
+    const bunPath =
+      explicitRuntimePath ?? (isBunRuntime(execPath) ? execPath : await resolveBunPath());
     const cliEntrypointPath = await resolveCliEntrypointPathForService();
     return {
       programArguments: [bunPath, cliEntrypointPath, ...params.args],
@@ -288,6 +396,7 @@ export async function resolveGatewayProgramArguments(params: {
   dev?: boolean;
   runtime?: GatewayRuntimePreference;
   nodePath?: string;
+  runtimePath?: string;
   wrapperPath?: string;
 }): Promise<GatewayProgramArgs> {
   const gatewayArgs = ["gateway", "--port", String(params.port)];
@@ -296,6 +405,7 @@ export async function resolveGatewayProgramArguments(params: {
     dev: params.dev,
     runtime: params.runtime,
     nodePath: params.nodePath,
+    runtimePath: params.runtimePath,
     wrapperPath: params.wrapperPath,
   });
 }
@@ -310,6 +420,7 @@ export async function resolveNodeProgramArguments(params: {
   dev?: boolean;
   runtime?: GatewayRuntimePreference;
   nodePath?: string;
+  runtimePath?: string;
 }): Promise<GatewayProgramArgs> {
   const args = ["node", "run", "--host", params.host, "--port", String(params.port)];
   if (params.tls || params.tlsFingerprint) {
@@ -329,5 +440,6 @@ export async function resolveNodeProgramArguments(params: {
     dev: params.dev,
     runtime: params.runtime,
     nodePath: params.nodePath,
+    runtimePath: params.runtimePath,
   });
 }

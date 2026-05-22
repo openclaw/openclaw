@@ -623,6 +623,95 @@ describe("maybeRepairGatewayServiceConfig", () => {
     expect(mocks.install).not.toHaveBeenCalled();
   });
 
+  it("keeps runtime-path-managed gateway services aligned during entrypoint drift checks", async () => {
+    const runtimePath = "/Users/test/.local/share/mise/installs/node/24.14.0/bin/node";
+    mocks.readCommand.mockResolvedValue({
+      programArguments: [runtimePath, "/usr/local/bin/openclaw", "gateway", "--port", "18789"],
+      environment: {
+        OPENCLAW_DAEMON_RUNTIME_PATH: runtimePath,
+      },
+    });
+    mocks.auditGatewayServiceConfig.mockResolvedValue({
+      ok: true,
+      issues: [],
+    });
+    mocks.buildGatewayInstallPlan.mockImplementation(async ({ env }) => ({
+      programArguments: [
+        env.OPENCLAW_DAEMON_RUNTIME_PATH,
+        "/usr/local/bin/openclaw",
+        "gateway",
+        "--port",
+        "18789",
+      ],
+      environment: {
+        OPENCLAW_DAEMON_RUNTIME_PATH: env.OPENCLAW_DAEMON_RUNTIME_PATH,
+      },
+    }));
+
+    await runRepair({ gateway: {} });
+
+    const installPlanOptions = requireRecord(
+      callArg(mocks.buildGatewayInstallPlan, 0, "buildGatewayInstallPlan call"),
+      "buildGatewayInstallPlan options",
+    );
+    expect(requireRecord(installPlanOptions.env, "install env").OPENCLAW_DAEMON_RUNTIME_PATH).toBe(
+      runtimePath,
+    );
+    expect(
+      requireRecord(installPlanOptions.existingEnvironment, "install existing environment")
+        .OPENCLAW_DAEMON_RUNTIME_PATH,
+    ).toBe(runtimePath);
+    expectNoNoteContaining(
+      "Gateway service entrypoint does not match the current install.",
+      "Gateway service config",
+    );
+    expect(mocks.note).toHaveBeenCalledWith(
+      `Gateway service pins OPENCLAW_DAEMON_RUNTIME_PATH: ${runtimePath}`,
+      "Gateway",
+    );
+    expect(mocks.stage).not.toHaveBeenCalled();
+    expect(mocks.install).not.toHaveBeenCalled();
+  });
+
+  it("uses preserved runtime path to detect wrapper-managed bun gateway runtime", async () => {
+    const runtimePath = "/Users/test/.bun/bin/bun";
+    const wrapperPath = "/usr/local/bin/openclaw-doppler";
+    mocks.readCommand.mockResolvedValue({
+      programArguments: [wrapperPath, "gateway", "--port", "18789"],
+      environment: {
+        OPENCLAW_DAEMON_RUNTIME_PATH: runtimePath,
+        OPENCLAW_WRAPPER: wrapperPath,
+      },
+    });
+    mocks.auditGatewayServiceConfig.mockResolvedValue({
+      ok: true,
+      issues: [],
+    });
+    mocks.buildGatewayInstallPlan.mockImplementation(async ({ env }) => ({
+      programArguments: [env.OPENCLAW_WRAPPER, "gateway", "--port", "18789"],
+      environment: {
+        OPENCLAW_DAEMON_RUNTIME_PATH: env.OPENCLAW_DAEMON_RUNTIME_PATH,
+        OPENCLAW_WRAPPER: env.OPENCLAW_WRAPPER,
+      },
+    }));
+
+    await runRepair({ gateway: {} });
+
+    const installPlanOptions = requireRecord(
+      callArg(mocks.buildGatewayInstallPlan, 0, "buildGatewayInstallPlan call"),
+      "buildGatewayInstallPlan options",
+    );
+    expect(installPlanOptions.runtime).toBe("bun");
+    expect(requireRecord(installPlanOptions.env, "install env").OPENCLAW_DAEMON_RUNTIME_PATH).toBe(
+      runtimePath,
+    );
+    expectNoNoteContaining(
+      "Gateway service entrypoint does not match the current install.",
+      "Gateway service config",
+    );
+    expect(mocks.install).not.toHaveBeenCalled();
+  });
+
   it("still flags entrypoint mismatch when canonicalized paths differ", async () => {
     setupGatewayEntrypointRepairScenario({
       currentEntrypoint:

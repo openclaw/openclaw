@@ -1,9 +1,16 @@
+import path from "node:path";
 import { buildGatewayInstallPlan } from "../../commands/daemon-install-helpers.js";
 import { DEFAULT_GATEWAY_DAEMON_RUNTIME } from "../../commands/daemon-runtime.js";
+import type { GatewayDaemonRuntime } from "../../commands/daemon-runtime.js";
 import { resolveGatewayInstallToken } from "../../commands/gateway-install-token.js";
 import { readConfigFileSnapshotForWrite } from "../../config/io.js";
 import { resolveGatewayPort } from "../../config/paths.js";
-import { OPENCLAW_WRAPPER_ENV_KEY, resolveOpenClawWrapperPath } from "../../daemon/program-args.js";
+import {
+  OPENCLAW_DAEMON_RUNTIME_PATH_ENV_KEY,
+  OPENCLAW_WRAPPER_ENV_KEY,
+  resolveOpenClawRuntimePath,
+  resolveOpenClawWrapperPath,
+} from "../../daemon/program-args.js";
 import type { GatewayServiceEnv } from "../../daemon/service-types.js";
 import type {
   GatewayService,
@@ -13,6 +20,11 @@ import type {
 import { formatGatewayServiceStartRepairIssues } from "../../daemon/service.js";
 import { defaultRuntime } from "../../runtime.js";
 import { mergeInstallInvocationEnv } from "./install.js";
+
+function detectRuntimePathRuntime(runtimePath: string | undefined): GatewayDaemonRuntime {
+  const base = path.basename(runtimePath ?? "").toLowerCase();
+  return base === "bun" || base === "bun.exe" ? "bun" : DEFAULT_GATEWAY_DAEMON_RUNTIME;
+}
 
 export async function repairLoadedGatewayServiceForStart(params: {
   service: GatewayService;
@@ -29,6 +41,11 @@ export async function repairLoadedGatewayServiceForStart(params: {
     env: process.env,
     existingServiceEnv: existingEnvironment,
   });
+  const runtimePath = await resolveOpenClawRuntimePath(
+    installEnv[OPENCLAW_DAEMON_RUNTIME_PATH_ENV_KEY],
+    "auto",
+  );
+  const runtime = detectRuntimePathRuntime(runtimePath);
   const wrapperPath = await resolveOpenClawWrapperPath(installEnv[OPENCLAW_WRAPPER_ENV_KEY]);
   const port = resolveGatewayPort(cfg);
 
@@ -58,7 +75,8 @@ export async function repairLoadedGatewayServiceForStart(params: {
   const { programArguments, workingDirectory, environment } = await buildGatewayInstallPlan({
     env: installEnv,
     port,
-    runtime: DEFAULT_GATEWAY_DAEMON_RUNTIME,
+    runtime,
+    runtimePath,
     wrapperPath,
     existingEnvironment,
     config: cfg,

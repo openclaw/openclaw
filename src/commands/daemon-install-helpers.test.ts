@@ -12,6 +12,7 @@ const mocks = vi.hoisted(() => ({
   resolveSystemNodeInfo: vi.fn(),
   renderSystemNodeWarning: vi.fn(),
   buildServiceEnvironment: vi.fn(),
+  resolveOpenClawRuntimePath: vi.fn(),
   resolveOpenClawWrapperPath: vi.fn(),
 }));
 
@@ -30,8 +31,10 @@ vi.mock("../daemon/runtime-paths.js", () => ({
 }));
 
 vi.mock("../daemon/program-args.js", () => ({
+  OPENCLAW_DAEMON_RUNTIME_PATH_ENV_KEY: "OPENCLAW_DAEMON_RUNTIME_PATH",
   OPENCLAW_WRAPPER_ENV_KEY: "OPENCLAW_WRAPPER",
   resolveGatewayProgramArguments: mocks.resolveGatewayProgramArguments,
+  resolveOpenClawRuntimePath: mocks.resolveOpenClawRuntimePath,
   resolveOpenClawWrapperPath: mocks.resolveOpenClawWrapperPath,
 }));
 
@@ -90,6 +93,9 @@ function mockNodeGatewayPlanFixture(
     ? params.workingDirectory
     : "/Users/me";
   mocks.resolvePreferredNodePath.mockResolvedValue("/opt/node");
+  mocks.resolveOpenClawRuntimePath.mockImplementation(async (value: string | undefined) =>
+    value?.trim() ? value.trim() : undefined,
+  );
   mocks.resolveOpenClawWrapperPath.mockImplementation(async (value: string | undefined) =>
     value?.trim() ? path.resolve(value) : undefined,
   );
@@ -125,14 +131,14 @@ describe("buildGatewayInstallPlan", () => {
     ...env,
   });
 
-  it("uses provided nodePath and returns plan", async () => {
+  it("uses provided runtimePath and returns plan", async () => {
     mockNodeGatewayPlanFixture();
 
     const plan = await buildGatewayInstallPlan({
       env: { HOME: isolatedHome },
       port: 3000,
       runtime: "node",
-      nodePath: "/custom/node",
+      runtimePath: "/custom/node",
     });
 
     expect(plan.programArguments).toEqual(["node", "gateway"]);
@@ -144,9 +150,16 @@ describe("buildGatewayInstallPlan", () => {
       mocks.buildServiceEnvironment,
       "buildServiceEnvironment",
     );
-    expect(serviceEnvRequest?.env).toStrictEqual({ HOME: isolatedHome });
+    expect(serviceEnvRequest?.env).toStrictEqual({
+      HOME: isolatedHome,
+      OPENCLAW_DAEMON_RUNTIME_PATH: "/custom/node",
+    });
     expect(serviceEnvRequest?.port).toBe(3000);
     expect(serviceEnvRequest?.extraPathDirs).toStrictEqual(["/custom"]);
+    expect(
+      firstMockArg(mocks.resolveGatewayProgramArguments, "resolveGatewayProgramArguments")
+        .runtimePath,
+    ).toBe("/custom/node");
   });
 
   it("does not prepend '.' when nodePath is a bare executable name", async () => {

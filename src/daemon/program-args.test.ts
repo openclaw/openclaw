@@ -193,6 +193,69 @@ describe("resolveGatewayProgramArguments", () => {
     expect(result.workingDirectory).toBeUndefined();
   });
 
+  it("uses an explicit node runtime path when provided", async () => {
+    const entryPath = path.resolve("/opt/openclaw/dist/entry.js");
+    const nodePath = path.resolve("/Users/me/.local/share/mise/installs/node/24.14.0/bin/node");
+    process.argv = ["node", entryPath];
+    fsMocks.realpath.mockResolvedValue(entryPath);
+    fsMocks.stat.mockResolvedValue({ isFile: () => true } as never);
+    fsMocks.access.mockResolvedValue(undefined);
+    childProcessMocks.execFileSync.mockReturnValue("24.14.0\n");
+
+    const result = await resolveGatewayProgramArguments({
+      port: 18789,
+      runtime: "node",
+      runtimePath: nodePath,
+    });
+
+    expect(result.programArguments).toEqual([
+      nodePath,
+      path.resolve("/opt/openclaw/dist/index.js"),
+      "gateway",
+      "--port",
+      "18789",
+    ]);
+    expect(childProcessMocks.execFileSync).toHaveBeenCalledWith(
+      nodePath,
+      ["-p", "process.versions.node"],
+      expect.any(Object),
+    );
+  });
+
+  it("uses an explicit bun runtime path when provided", async () => {
+    const repoIndexPath = path.resolve("/repo/src/index.ts");
+    const repoEntryPath = path.resolve("/repo/src/entry.ts");
+    const bunPath = path.resolve("/Users/me/.bun/bin/bun");
+    process.argv = ["/usr/local/bin/node", repoIndexPath];
+    fsMocks.realpath.mockResolvedValue(repoIndexPath);
+    fsMocks.stat.mockResolvedValue({ isFile: () => true } as never);
+    fsMocks.access.mockResolvedValue(undefined);
+
+    const result = await resolveGatewayProgramArguments({
+      dev: true,
+      port: 18789,
+      runtime: "bun",
+      runtimePath: bunPath,
+    });
+
+    expect(result.programArguments).toEqual([bunPath, repoEntryPath, "gateway", "--port", "18789"]);
+    expect(result.workingDirectory).toBe(path.resolve("/repo"));
+  });
+
+  it("rejects a runtime path that does not match the selected runtime", async () => {
+    const bunPath = path.resolve("/Users/me/.bun/bin/bun");
+    fsMocks.stat.mockResolvedValue({ isFile: () => true } as never);
+    fsMocks.access.mockResolvedValue(undefined);
+
+    await expect(
+      resolveGatewayProgramArguments({
+        port: 18789,
+        runtime: "node",
+        runtimePath: bunPath,
+      }),
+    ).rejects.toThrow("must point to a node executable when --runtime node is used");
+  });
+
   it("rejects a non-executable wrapper file", async () => {
     const wrapperPath = path.resolve("/usr/local/bin/openclaw-doppler");
     fsMocks.stat.mockResolvedValue({ isFile: () => true } as never);

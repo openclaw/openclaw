@@ -33,6 +33,7 @@ const resolveSecretRefValuesMock = vi.hoisted(() => vi.fn());
 const randomTokenMock = vi.hoisted(() => vi.fn(() => "generated-token"));
 const createInstallPlanFixture = vi.hoisted(() => {
   return async (params?: {
+    runtimePath?: string;
     wrapperPath?: string;
     env?: Record<string, string | undefined>;
   }): Promise<{
@@ -42,13 +43,19 @@ const createInstallPlanFixture = vi.hoisted(() => {
     environmentValueSources?: Record<string, string | undefined>;
   }> => {
     const environment: Record<string, string | undefined> = {};
+    if (params?.runtimePath || params?.env?.OPENCLAW_DAEMON_RUNTIME_PATH) {
+      environment.OPENCLAW_DAEMON_RUNTIME_PATH =
+        params.runtimePath ?? params.env?.OPENCLAW_DAEMON_RUNTIME_PATH;
+    }
     if (params?.wrapperPath || params?.env?.OPENCLAW_WRAPPER) {
       environment.OPENCLAW_WRAPPER = params.wrapperPath ?? params.env?.OPENCLAW_WRAPPER;
     }
     return {
-      programArguments: params?.wrapperPath
-        ? [params.wrapperPath, "gateway", "run"]
-        : ["openclaw", "gateway", "run"],
+      programArguments: params?.runtimePath
+        ? [params.runtimePath, "openclaw", "gateway", "run"]
+        : params?.wrapperPath
+          ? [params.wrapperPath, "gateway", "run"]
+          : ["openclaw", "gateway", "run"],
       workingDirectory: "/tmp",
       environment,
     };
@@ -131,7 +138,11 @@ vi.mock("../../commands/daemon-install-helpers.js", () => ({
 }));
 
 vi.mock("../../daemon/program-args.js", () => ({
+  OPENCLAW_DAEMON_RUNTIME_PATH_ENV_KEY: "OPENCLAW_DAEMON_RUNTIME_PATH",
   OPENCLAW_WRAPPER_ENV_KEY: "OPENCLAW_WRAPPER",
+  resolveOpenClawRuntimePathKind: (value: string) =>
+    value.endsWith("/bun") ? "bun" : value.endsWith("/node") ? "node" : undefined,
+  resolveOpenClawRuntimePath: async (value: string | undefined) => value?.trim() || undefined,
   resolveOpenClawWrapperPath: async (value: string | undefined) => value?.trim() || undefined,
 }));
 
@@ -581,6 +592,74 @@ describe("runDaemonInstall", () => {
     expect(installDaemonServiceAndEmitMock).toHaveBeenCalledTimes(1);
   });
 
+  it("preserves runtime path env from an installed but unloaded service during forced reinstall", async () => {
+    service.isLoaded.mockResolvedValue(false);
+    service.readCommand.mockResolvedValue({
+      programArguments: [
+        "/Users/me/.local/share/mise/installs/node/24.14.0/bin/node",
+        "dist/index.js",
+      ],
+      environment: {
+        OPENCLAW_DAEMON_RUNTIME_PATH: "/Users/me/.local/share/mise/installs/node/24.14.0/bin/node",
+      },
+    } as never);
+
+    await runDaemonInstall({ json: true, force: true });
+
+    expect(service.readCommand).toHaveBeenCalledTimes(1);
+    const installPlanArg = readFirstInstallPlanArg();
+    expectFields(installPlanArg, {
+      runtimePath: "/Users/me/.local/share/mise/installs/node/24.14.0/bin/node",
+    });
+    expectFields(installPlanArg.existingEnvironment, {
+      OPENCLAW_DAEMON_RUNTIME_PATH: "/Users/me/.local/share/mise/installs/node/24.14.0/bin/node",
+    });
+    expectFields(installPlanArg.env, {
+      OPENCLAW_DAEMON_RUNTIME_PATH: "/Users/me/.local/share/mise/installs/node/24.14.0/bin/node",
+    });
+    expect(installDaemonServiceAndEmitMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("infers bun runtime from preserved runtime path env during forced reinstall", async () => {
+    service.isLoaded.mockResolvedValue(false);
+    service.readCommand.mockResolvedValue({
+      programArguments: ["/Users/me/.bun/bin/bun", "dist/index.js"],
+      environment: {
+        OPENCLAW_DAEMON_RUNTIME_PATH: "/Users/me/.bun/bin/bun",
+      },
+    } as never);
+
+    await runDaemonInstall({ json: true, force: true });
+
+    const installPlanArg = readFirstInstallPlanArg();
+    expectFields(installPlanArg, {
+      runtime: "bun",
+      runtimePath: "/Users/me/.bun/bin/bun",
+    });
+    expectFields(installPlanArg.env, {
+      OPENCLAW_DAEMON_RUNTIME_PATH: "/Users/me/.bun/bin/bun",
+    });
+    expect(installDaemonServiceAndEmitMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("lets explicit runtime selection replace a preserved runtime path during forced reinstall", async () => {
+    service.isLoaded.mockResolvedValue(false);
+    service.readCommand.mockResolvedValue({
+      programArguments: ["/Users/me/.bun/bin/bun", "dist/index.js"],
+      environment: {
+        OPENCLAW_DAEMON_RUNTIME_PATH: "/Users/me/.bun/bin/bun",
+      },
+    } as never);
+
+    await runDaemonInstall({ json: true, force: true, runtime: "node" });
+
+    const installPlanArg = readFirstInstallPlanArg();
+    expectFields(installPlanArg, { runtime: "node" });
+    expect(installPlanArg.runtimePath).toBeUndefined();
+    expect(installPlanArg.env).not.toHaveProperty("OPENCLAW_DAEMON_RUNTIME_PATH");
+    expect(installDaemonServiceAndEmitMock).toHaveBeenCalledTimes(1);
+  });
+
   it("reinstalls when wrapper command matches but wrapper env is missing", async () => {
     service.isLoaded.mockResolvedValue(true);
     service.readCommand.mockResolvedValue({
@@ -596,6 +675,25 @@ describe("runDaemonInstall", () => {
     expect(installDaemonServiceAndEmitMock).toHaveBeenCalledTimes(1);
     expect(actionState.warnings).toContain(
       "Gateway service OPENCLAW_WRAPPER differs from the current wrapper install plan; refreshing the install.",
+    );
+  });
+
+  it("reinstalls when runtime command matches but runtime path env is missing", async () => {
+    const runtimePath = "/Users/me/.local/share/mise/installs/node/24.14.0/bin/node";
+    service.isLoaded.mockResolvedValue(true);
+    service.readCommand.mockResolvedValue({
+      programArguments: [runtimePath, "openclaw", "gateway", "run"],
+      environment: {},
+    } as never);
+
+    await runDaemonInstall({
+      json: true,
+      runtimePath,
+    });
+
+    expect(installDaemonServiceAndEmitMock).toHaveBeenCalledTimes(1);
+    expect(actionState.warnings).toContain(
+      "Gateway service OPENCLAW_DAEMON_RUNTIME_PATH differs from the current runtime install plan; refreshing the install.",
     );
   });
 

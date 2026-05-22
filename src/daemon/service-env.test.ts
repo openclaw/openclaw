@@ -618,6 +618,18 @@ describe("buildServiceEnvironment", () => {
     expect(env.OPENCLAW_WRAPPER).toBe("/usr/local/bin/openclaw-doppler");
   });
 
+  it("passes through OPENCLAW_DAEMON_RUNTIME_PATH for gateway services", () => {
+    const env = buildServiceEnvironment({
+      env: {
+        HOME: "/home/user",
+        OPENCLAW_DAEMON_RUNTIME_PATH: " /home/user/.local/share/mise/node/bin/node ",
+      },
+      port: 18789,
+    });
+
+    expect(env.OPENCLAW_DAEMON_RUNTIME_PATH).toBe("/home/user/.local/share/mise/node/bin/node");
+  });
+
   it("forwards TMPDIR from the host environment on Linux", () => {
     const env = buildServiceEnvironment({
       env: { HOME: "/home/user", TMPDIR: "/var/folders/xw/abc123/T/" },
@@ -768,6 +780,17 @@ describe("buildNodeServiceEnvironment", () => {
       env: { HOME: "/home/user", OPENCLAW_ALLOW_INSECURE_PRIVATE_WS: " 1 " },
     });
     expect(env.OPENCLAW_ALLOW_INSECURE_PRIVATE_WS).toBe("1");
+  });
+
+  it("passes through OPENCLAW_DAEMON_RUNTIME_PATH for node services", () => {
+    const env = buildNodeServiceEnvironment({
+      env: {
+        HOME: "/home/user",
+        OPENCLAW_DAEMON_RUNTIME_PATH: " /home/user/.bun/bin/bun ",
+      },
+    });
+
+    expect(env.OPENCLAW_DAEMON_RUNTIME_PATH).toBe("/home/user/.bun/bin/bun");
   });
 
   it("omits OPENCLAW_GATEWAY_TOKEN when the env var is empty", () => {

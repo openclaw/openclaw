@@ -451,6 +451,22 @@ openclaw gateway restart
 openclaw gateway uninstall
 ```
 
+### Install with a pinned runtime path
+
+Use `--runtime-path` when the managed service must run with a specific Node or Bun executable.
+This is useful for launchd/systemd/schtasks services because they do not load your interactive
+shell startup files.
+
+```bash
+openclaw gateway install --runtime node --runtime-path "$(mise which node)" --force
+openclaw gateway restart
+```
+
+`--runtime` selects the runtime family (`node` or `bun`). `--runtime-path` must point to an
+absolute executable path for that runtime. The installer validates the executable, writes it into
+the service command, and persists `OPENCLAW_DAEMON_RUNTIME_PATH` so forced reinstalls, updates, and
+doctor repairs keep the same operator-selected runtime path.
+
 ### Install with a wrapper
 
 Use `--wrapper` when the managed service must start through another executable, for example a
@@ -489,7 +505,7 @@ openclaw gateway restart
 <AccordionGroup>
   <Accordion title="Command options">
     - `gateway status`: `--url`, `--token`, `--password`, `--timeout`, `--no-probe`, `--require-rpc`, `--deep`, `--json`
-    - `gateway install`: `--port`, `--runtime <node|bun>`, `--token`, `--wrapper <path>`, `--force`, `--json`
+    - `gateway install`: `--port`, `--runtime <node|bun>`, `--runtime-path <path>`, `--token`, `--wrapper <path>`, `--force`, `--json`
     - `gateway restart`: `--safe`, `--skip-deferral`, `--force`, `--wait <duration>`, `--json`
     - `gateway uninstall|start`: `--json`
     - `gateway stop`: `--disable`, `--json`

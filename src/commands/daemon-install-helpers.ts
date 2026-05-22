@@ -9,8 +9,10 @@ import { resolveSecretInputRef } from "../config/types.secrets.js";
 import { resolveGatewayLaunchAgentLabel } from "../daemon/constants.js";
 import { resolveGatewayStateDir } from "../daemon/paths.js";
 import {
+  OPENCLAW_DAEMON_RUNTIME_PATH_ENV_KEY,
   OPENCLAW_WRAPPER_ENV_KEY,
   resolveGatewayProgramArguments,
+  resolveOpenClawRuntimePath,
   resolveOpenClawWrapperPath,
 } from "../daemon/program-args.js";
 import {
@@ -34,8 +36,9 @@ import {
 import { discoverConfigSecretTargets } from "../secrets/target-registry.js";
 import {
   emitDaemonInstallRuntimeWarning,
+  isAbsoluteDaemonRuntimePath,
   resolveDaemonInstallRuntimeInputs,
-  resolveDaemonNodeBinDir,
+  resolveDaemonRuntimeBinDir,
 } from "./daemon-install-plan.shared.js";
 import type { DaemonInstallWarnFn } from "./daemon-install-runtime-warning.js";
 import type { GatewayDaemonRuntime } from "./daemon-runtime.js";
@@ -501,6 +504,7 @@ export async function buildGatewayInstallPlan(params: {
   existingEnvironment?: Record<string, string | undefined>;
   devMode?: boolean;
   nodePath?: string;
+  runtimePath?: string;
   wrapperPath?: string;
   platform?: NodeJS.Platform;
   warn?: DaemonInstallWarnFn;
@@ -513,23 +517,36 @@ export async function buildGatewayInstallPlan(params: {
   >;
 }): Promise<GatewayInstallPlan> {
   const platform = params.platform ?? process.platform;
-  const { devMode, nodePath } = await resolveDaemonInstallRuntimeInputs({
+  const requestedRuntimePath =
+    params.runtimePath ?? params.env[OPENCLAW_DAEMON_RUNTIME_PATH_ENV_KEY];
+  const explicitRuntimePath = await resolveOpenClawRuntimePath(
+    requestedRuntimePath,
+    params.runtime,
+  );
+  const { devMode, runtimePath } = await resolveDaemonInstallRuntimeInputs({
     env: params.env,
     runtime: params.runtime,
     devMode: params.devMode,
-    nodePath: params.nodePath,
+    runtimePath: explicitRuntimePath ?? params.nodePath,
   });
   const wrapperPath = await resolveOpenClawWrapperPath(
     params.wrapperPath ?? params.env[OPENCLAW_WRAPPER_ENV_KEY],
   );
-  const serviceInputEnv: Record<string, string | undefined> = wrapperPath
-    ? { ...params.env, [OPENCLAW_WRAPPER_ENV_KEY]: wrapperPath }
-    : params.env;
+  const programRuntimePath = isAbsoluteDaemonRuntimePath(runtimePath) ? runtimePath : undefined;
+  const legacyNodePath = programRuntimePath ? undefined : runtimePath;
+  const serviceRuntimePath =
+    explicitRuntimePath && isAbsoluteDaemonRuntimePath(runtimePath) ? runtimePath : undefined;
+  const serviceInputEnv: Record<string, string | undefined> = {
+    ...params.env,
+    ...(serviceRuntimePath ? { [OPENCLAW_DAEMON_RUNTIME_PATH_ENV_KEY]: serviceRuntimePath } : {}),
+    ...(wrapperPath ? { [OPENCLAW_WRAPPER_ENV_KEY]: wrapperPath } : {}),
+  };
   const { programArguments, workingDirectory } = await resolveGatewayProgramArguments({
     port: params.port,
     dev: devMode,
     runtime: params.runtime,
-    nodePath,
+    nodePath: legacyNodePath,
+    runtimePath: programRuntimePath,
     wrapperPath,
   });
   await emitDaemonInstallRuntimeWarning({
@@ -547,7 +564,7 @@ export async function buildGatewayInstallPlan(params: {
         ? resolveGatewayLaunchAgentLabel(serviceInputEnv.OPENCLAW_PROFILE)
         : undefined,
     platform,
-    extraPathDirs: resolveDaemonNodeBinDir(nodePath),
+    extraPathDirs: resolveDaemonRuntimeBinDir(runtimePath),
   });
 
   const { environment, environmentValueSources } = await buildGatewayInstallEnvironment({

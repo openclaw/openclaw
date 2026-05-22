@@ -11,7 +11,11 @@ import {
   renderGatewayServiceCleanupHints,
   type ExtraGatewayService,
 } from "../daemon/inspect.js";
-import { OPENCLAW_WRAPPER_ENV_KEY } from "../daemon/program-args.js";
+import {
+  OPENCLAW_DAEMON_RUNTIME_PATH_ENV_KEY,
+  OPENCLAW_WRAPPER_ENV_KEY,
+  resolveOpenClawRuntimePathKind,
+} from "../daemon/program-args.js";
 import { renderSystemNodeWarning, resolveSystemNodeInfo } from "../daemon/runtime-paths.js";
 import {
   auditGatewayServiceConfig,
@@ -28,10 +32,7 @@ import {
   type SystemdUnitScope,
 } from "../daemon/systemd.js";
 import type { RuntimeEnv } from "../runtime.js";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalString,
-} from "../shared/string-coerce.js";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { note } from "../terminal/note.js";
 import { buildGatewayInstallPlan } from "./daemon-install-helpers.js";
 import { DEFAULT_GATEWAY_DAEMON_RUNTIME, type GatewayDaemonRuntime } from "./daemon-runtime.js";
@@ -51,18 +52,17 @@ const EXECSTART_REPAIR_CODES = new Set<string>([
   SERVICE_AUDIT_CODES.gatewayEntrypointMismatch,
 ]);
 
-function detectGatewayRuntime(programArguments: string[] | undefined): GatewayDaemonRuntime {
-  const first = programArguments?.[0];
-  if (first) {
-    const base = normalizeLowercaseStringOrEmpty(path.basename(first));
-    if (base === "bun" || base === "bun.exe") {
-      return "bun";
-    }
-    if (base === "node" || base === "node.exe") {
-      return "node";
-    }
+function detectGatewayRuntime(command: GatewayServiceCommandConfig | null): GatewayDaemonRuntime {
+  const runtimePathKind = resolveOpenClawRuntimePathKind(
+    command?.environment?.[OPENCLAW_DAEMON_RUNTIME_PATH_ENV_KEY] ?? "",
+  );
+  if (runtimePathKind) {
+    return runtimePathKind;
   }
-  return DEFAULT_GATEWAY_DAEMON_RUNTIME;
+  const firstKind = command?.programArguments?.[0]
+    ? resolveOpenClawRuntimePathKind(command.programArguments[0])
+    : undefined;
+  return firstKind ?? DEFAULT_GATEWAY_DAEMON_RUNTIME;
 }
 
 function findGatewayEntrypoint(programArguments?: string[]): string | null {
@@ -79,13 +79,21 @@ function findGatewayEntrypoint(programArguments?: string[]): string | null {
 function buildGatewayServiceRepairEnv(
   command: GatewayServiceCommandConfig | null,
 ): NodeJS.ProcessEnv {
+  const runtimePath = command?.environment?.[OPENCLAW_DAEMON_RUNTIME_PATH_ENV_KEY]?.trim();
   const wrapperPath = command?.environment?.[OPENCLAW_WRAPPER_ENV_KEY]?.trim();
-  if (!wrapperPath || Object.hasOwn(process.env, OPENCLAW_WRAPPER_ENV_KEY)) {
+  const preserved: NodeJS.ProcessEnv = {};
+  if (runtimePath && !Object.hasOwn(process.env, OPENCLAW_DAEMON_RUNTIME_PATH_ENV_KEY)) {
+    preserved[OPENCLAW_DAEMON_RUNTIME_PATH_ENV_KEY] = runtimePath;
+  }
+  if (wrapperPath && !Object.hasOwn(process.env, OPENCLAW_WRAPPER_ENV_KEY)) {
+    preserved[OPENCLAW_WRAPPER_ENV_KEY] = wrapperPath;
+  }
+  if (Object.keys(preserved).length === 0) {
     return process.env;
   }
   return {
     ...process.env,
-    [OPENCLAW_WRAPPER_ENV_KEY]: wrapperPath,
+    ...preserved,
   };
 }
 
@@ -95,19 +103,27 @@ function resolveGatewayServiceWrapperPath(
   return normalizeOptionalString(command?.environment?.[OPENCLAW_WRAPPER_ENV_KEY]) ?? null;
 }
 
+function resolveGatewayServiceRuntimePath(
+  command: GatewayServiceCommandConfig | null,
+): string | null {
+  return (
+    normalizeOptionalString(command?.environment?.[OPENCLAW_DAEMON_RUNTIME_PATH_ENV_KEY]) ?? null
+  );
+}
+
 async function buildExpectedGatewayServicePlan(params: {
   cfg: OpenClawConfig;
   command: GatewayServiceCommandConfig;
   serviceInstallEnv: NodeJS.ProcessEnv;
   port: number;
   runtime: GatewayDaemonRuntime;
-  nodePath?: string;
+  runtimePath?: string;
 }) {
   return buildGatewayInstallPlan({
     env: params.serviceInstallEnv,
     port: params.port,
     runtime: params.runtime,
-    nodePath: params.nodePath,
+    runtimePath: params.runtimePath,
     existingEnvironment: params.command.environment,
     existingEnvironmentValueSources: params.command.environmentValueSources,
     warn: (message, title) => note(message, title),
@@ -121,7 +137,7 @@ async function buildGatewayServiceAuditInputs(params: {
   serviceInstallEnv: NodeJS.ProcessEnv;
 }) {
   const port = resolveGatewayPort(params.cfg, process.env);
-  const runtimeChoice = detectGatewayRuntime(params.command.programArguments);
+  const runtimeChoice = detectGatewayRuntime(params.command);
   const expectedPlan = await buildExpectedGatewayServicePlan({
     cfg: params.cfg,
     command: params.command,
@@ -376,7 +392,14 @@ export async function maybeRepairGatewayServiceConfig(
     return;
   }
   const serviceInstallEnv = buildGatewayServiceRepairEnv(command);
+  const serviceRuntimePath = resolveGatewayServiceRuntimePath(command);
   const serviceWrapperPath = resolveGatewayServiceWrapperPath(command);
+  if (serviceRuntimePath) {
+    note(
+      `Gateway service pins ${OPENCLAW_DAEMON_RUNTIME_PATH_ENV_KEY}: ${serviceRuntimePath}`,
+      "Gateway",
+    );
+  }
   if (serviceWrapperPath) {
     note(`Gateway service invokes ${OPENCLAW_WRAPPER_ENV_KEY}: ${serviceWrapperPath}`, "Gateway");
   }
@@ -450,7 +473,7 @@ export async function maybeRepairGatewayServiceConfig(
           serviceInstallEnv,
           port,
           runtime: "node",
-          nodePath: systemNodePath,
+          runtimePath: systemNodePath,
         })
       : expectedPlan;
   const { programArguments } = expectedRuntimePlan;
@@ -622,7 +645,7 @@ export async function maybeRepairGatewayServiceConfig(
     serviceInstallEnv,
     port: updatedPort,
     runtime: needsNodeRuntime && systemNodePath ? "node" : runtimeChoice,
-    nodePath: systemNodePath ?? undefined,
+    runtimePath: systemNodePath ?? undefined,
   });
   try {
     await (updateRepairMode ? service.stage : service.install)({
