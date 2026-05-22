@@ -33,6 +33,7 @@ import {
 import { resolveAgentRuntimeLabel } from "../../status/agent-runtime-label.js";
 import type { ReplyPayload } from "../types.js";
 import { rejectUnauthorizedCommand } from "./command-gates.js";
+import { extractSlashCommandRest } from "./commands-slash-parse.js";
 import type { CommandHandler } from "./commands-types.js";
 
 const PAGE_SIZE_DEFAULT = 20;
@@ -476,11 +477,10 @@ export async function resolveModelsCommandReply(params: {
   sessionEntry?: ModelsCommandSessionEntry;
 }): Promise<ReplyPayload | null> {
   const body = params.commandBodyNormalized.trim();
-  if (!body.startsWith("/models")) {
+  const argText = extractSlashCommandRest(body, "/models");
+  if (argText === null) {
     return null;
   }
-
-  const argText = body.replace(/^\/models\b/i, "").trim();
   const parsed = parseModelsArgs(argText);
 
   const { byProvider, providers, modelNames } = await buildModelsProviderData(
@@ -643,10 +643,11 @@ export const handleModelsCommand: CommandHandler = async (params, allowTextComma
     return null;
   }
   const commandBodyNormalized = params.command.commandBodyNormalized.trim();
-  if (!commandBodyNormalized.startsWith("/models")) {
+  const modelsArgs = extractSlashCommandRest(commandBodyNormalized, "/models");
+  if (modelsArgs === null) {
     return null;
   }
-  const parsed = parseModelsArgs(commandBodyNormalized.replace(/^\/models\b/i, "").trim());
+  const parsed = parseModelsArgs(modelsArgs);
   const unauthorized = rejectUnauthorizedCommand(params, "/models");
   if (unauthorized) {
     return unauthorized;
