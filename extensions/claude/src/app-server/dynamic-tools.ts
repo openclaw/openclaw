@@ -33,6 +33,7 @@ import {
   type HeartbeatToolResponse,
   type MessagingToolSend,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { normalizeAgentId } from "openclaw/plugin-sdk/routing";
 import type {
   DynamicToolCallOutputContentItem,
   DynamicToolCallParams,
@@ -77,6 +78,7 @@ export function createClaudeDynamicToolBridge(params: {
 }): ClaudeDynamicToolBridge {
   const excluded = new Set([...(params.excludeNames ?? [])].map((n) => n.trim()).filter(Boolean));
   const hookContext = params.hookContext ?? {};
+  const toolResultMaxChars = resolveClaudeDynamicToolResultMaxChars(hookContext);
   // Wrap each tool so OpenClaw `BeforeToolCall` hooks fire around it. The
   // runtime's existing wrapping (if any) is preserved; we only attach when
   // missing.
@@ -134,7 +136,7 @@ export function createClaudeDynamicToolBridge(params: {
         startedAt,
       });
       return {
-        contentItems: projectContentItems(result),
+        contentItems: projectContentItems(result, toolResultMaxChars),
         success: !isError,
       };
     } catch (err) {
@@ -219,31 +221,90 @@ function collectTelemetry(params: {
 // ─── Result projection ──────────────────────────────────────────────────────
 
 /**
- * Cap for dynamic-tool inputText content sent back to the SDK. Mirrors
- * codex's DEFAULT_CODEX_DYNAMIC_TOOL_RESULT_MAX_CHARS. Without this cap,
- * a tool that returns a very large payload (e.g. file_fetch on a huge
- * file, vestige_search with a wide query) silently inflates the
- * model's input window — Anthropic's API rejects payloads exceeding
- * its limits with an opaque 400 instead.
+ * Default aggregate cap for dynamic-tool inputText content sent back to the
+ * SDK. Mirrors codex's DEFAULT_CODEX_DYNAMIC_TOOL_RESULT_MAX_CHARS. The
+ * configured value resolved from `agents.list[].contextLimits.toolResultMaxChars`
+ * (falling back to `agents.defaults.contextLimits.toolResultMaxChars`)
+ * overrides this default at the call site.
  *
- * Truncation is per-text-block, not aggregate. A single oversized block
- * is truncated and tagged with a "[truncated to N chars]" suffix so the
- * model can recognize and react to the elision.
+ * Without this cap, a tool that returns a very large payload (e.g.
+ * file_fetch on a huge file, vestige_search with a wide query) silently
+ * inflates the model's input window — Anthropic's API rejects payloads
+ * exceeding its limits with an opaque 400 instead.
+ *
+ * Budgeting is aggregate across all text items in a single tool result, not
+ * per-block: a multi-block result whose blocks individually fit but whose
+ * sum exceeds the cap still gets truncated.
  */
 export const DEFAULT_CLAUDE_DYNAMIC_TOOL_RESULT_MAX_CHARS = 16_000;
 
-function projectContentItems(
-  result: unknown,
-  maxChars: number = DEFAULT_CLAUDE_DYNAMIC_TOOL_RESULT_MAX_CHARS,
-): DynamicToolCallOutputContentItem[] {
+function normalizeToolResultMaxChars(maxChars: number): number {
+  return typeof maxChars === "number" && Number.isFinite(maxChars) && maxChars > 0
+    ? Math.floor(maxChars)
+    : DEFAULT_CLAUDE_DYNAMIC_TOOL_RESULT_MAX_CHARS;
+}
+
+export function resolveClaudeDynamicToolResultMaxChars(
+  ctx: ClaudeDynamicToolHookContext | undefined,
+): number {
+  const configured = resolveAgentContextLimitValue({
+    config: ctx?.config,
+    agentId: ctx?.agentId,
+    key: "toolResultMaxChars",
+  });
+  return configured ?? DEFAULT_CLAUDE_DYNAMIC_TOOL_RESULT_MAX_CHARS;
+}
+
+function resolveAgentContextLimitValue(params: {
+  config: EmbeddedRunAttemptParams["config"] | undefined;
+  agentId?: string;
+  key: string;
+}): number | undefined {
+  const agents = readRecord((params.config as Record<string, unknown> | undefined)?.agents);
+  const defaults = readRecord(readRecord(agents?.defaults)?.contextLimits);
+  const defaultValue = readPositiveInteger(defaults?.[params.key]);
+  if (!params.agentId) {
+    return defaultValue;
+  }
+  const list = agents?.list;
+  if (!Array.isArray(list)) {
+    return defaultValue;
+  }
+  const normalizedAgentId = normalizeAgentId(params.agentId);
+  const agent = list.find((entry) => {
+    const entryId = readRecord(entry)?.id;
+    return typeof entryId === "string" && normalizeAgentId(entryId) === normalizedAgentId;
+  });
+  const agentValue = readPositiveInteger(
+    readRecord(readRecord(agent)?.contextLimits)?.[params.key],
+  );
+  return agentValue ?? defaultValue;
+}
+
+function readRecord(value: unknown): Record<string, unknown> | undefined {
+  return value !== null && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : undefined;
+}
+
+function readPositiveInteger(value: unknown): number | undefined {
+  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
+    return undefined;
+  }
+  return Math.floor(value);
+}
+
+type UntruncatedContentItem = { type: "text"; text: string } | { type: "image"; imageUrl: string };
+
+function extractUntruncatedContentItems(result: unknown): UntruncatedContentItem[] {
   if (!result || typeof result !== "object" || Array.isArray(result)) {
-    return [{ type: "inputText", text: truncateForToolResult(String(result), maxChars) }];
+    return [{ type: "text", text: String(result) }];
   }
   const obj = result as Record<string, unknown>;
-  const items: DynamicToolCallOutputContentItem[] = [];
+  const items: UntruncatedContentItem[] = [];
   const content = obj.content;
   if (typeof content === "string") {
-    items.push({ type: "inputText", text: truncateForToolResult(content, maxChars) });
+    items.push({ type: "text", text: content });
   } else if (Array.isArray(content)) {
     for (const block of content) {
       if (!block || typeof block !== "object") {
@@ -251,24 +312,88 @@ function projectContentItems(
       }
       const b = block as Record<string, unknown>;
       if (b.type === "text" && typeof b.text === "string") {
-        items.push({ type: "inputText", text: truncateForToolResult(b.text, maxChars) });
+        items.push({ type: "text", text: b.text });
       } else if (b.type === "image_url" && typeof b.image_url === "string") {
-        items.push({ type: "inputImage", imageUrl: b.image_url });
+        items.push({ type: "image", imageUrl: b.image_url });
       } else if (b.type === "image" && typeof b.url === "string") {
-        items.push({ type: "inputImage", imageUrl: b.url });
+        items.push({ type: "image", imageUrl: b.url });
       }
     }
   }
   if (items.length === 0) {
     if (typeof obj.text === "string") {
-      items.push({ type: "inputText", text: truncateForToolResult(obj.text, maxChars) });
+      items.push({ type: "text", text: obj.text });
     } else {
-      items.push({ type: "inputText", text: truncateForToolResult(stringify(obj), maxChars) });
+      items.push({ type: "text", text: stringify(obj) });
     }
   }
   return items;
 }
 
+function projectContentItems(
+  result: unknown,
+  toolResultMaxChars: number = DEFAULT_CLAUDE_DYNAMIC_TOOL_RESULT_MAX_CHARS,
+): DynamicToolCallOutputContentItem[] {
+  const maxChars = normalizeToolResultMaxChars(toolResultMaxChars);
+  const items = extractUntruncatedContentItems(result);
+  const totalTextChars = items.reduce(
+    (sum, item) => sum + (item.type === "text" ? item.text.length : 0),
+    0,
+  );
+  if (totalTextChars <= maxChars) {
+    return items.map(toDynamicOutputItem);
+  }
+
+  const noticeText = `...(OpenClaw truncated dynamic tool result: original ${totalTextChars} chars, showing ${maxChars}; rerun with narrower args.)`;
+  const notice = `\n${noticeText}`;
+  const textBudget = Math.max(0, maxChars - notice.length);
+  let remainingTextBudget = textBudget;
+  let appendedNotice = false;
+  const output: DynamicToolCallOutputContentItem[] = [];
+
+  for (const item of items) {
+    if (item.type !== "text") {
+      output.push({ type: "inputImage", imageUrl: item.imageUrl });
+      continue;
+    }
+    if (appendedNotice) {
+      continue;
+    }
+    if (notice.length >= maxChars) {
+      output.push({ type: "inputText", text: noticeText.slice(0, maxChars) });
+      appendedNotice = true;
+      continue;
+    }
+    const sliceLength = Math.min(item.text.length, remainingTextBudget);
+    remainingTextBudget -= sliceLength;
+    const shouldAppendNotice = remainingTextBudget <= 0;
+    const text = item.text.slice(0, sliceLength);
+    if (shouldAppendNotice) {
+      output.push({ type: "inputText", text: `${text.trimEnd()}${notice}`.slice(0, maxChars) });
+      appendedNotice = true;
+    } else if (text.length > 0) {
+      output.push({ type: "inputText", text });
+    }
+  }
+
+  if (!appendedNotice) {
+    output.push({ type: "inputText", text: noticeText.slice(0, maxChars) });
+  }
+  return output;
+}
+
+function toDynamicOutputItem(item: UntruncatedContentItem): DynamicToolCallOutputContentItem {
+  return item.type === "text"
+    ? { type: "inputText", text: item.text }
+    : { type: "inputImage", imageUrl: item.imageUrl };
+}
+
+/**
+ * Per-string truncation helper retained for callers that hold a single
+ * string and want a tagged elision. The dynamic-tool result path uses
+ * aggregate budgeting via projectContentItems; this helper is only used
+ * by tests and one-off callers.
+ */
 export function truncateForToolResult(text: string, maxChars: number): string {
   if (maxChars <= 0 || text.length <= maxChars) {
     return text;

@@ -1,8 +1,20 @@
+import type { AnyAgentTool } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { describe, expect, it } from "vitest";
 import {
+  createClaudeDynamicToolBridge,
   DEFAULT_CLAUDE_DYNAMIC_TOOL_RESULT_MAX_CHARS,
+  resolveClaudeDynamicToolResultMaxChars,
   truncateForToolResult,
 } from "./dynamic-tools.js";
+
+function makeTool(name: string, result: unknown): AnyAgentTool {
+  return {
+    name,
+    description: `test tool ${name}`,
+    parameters: { type: "object", additionalProperties: true },
+    execute: async () => result,
+  } as unknown as AnyAgentTool;
+}
 
 describe("truncateForToolResult", () => {
   it("returns input unchanged when under the cap", () => {
@@ -43,5 +55,134 @@ describe("truncateForToolResult", () => {
     const result = truncateForToolResult(text, DEFAULT_CLAUDE_DYNAMIC_TOOL_RESULT_MAX_CHARS);
     expect(result.length).toBeLessThanOrEqual(DEFAULT_CLAUDE_DYNAMIC_TOOL_RESULT_MAX_CHARS);
     expect(result).toMatch(/\[truncated to 16000 chars\]$/);
+  });
+});
+
+describe("resolveClaudeDynamicToolResultMaxChars", () => {
+  it("returns the documented default when no config is supplied", () => {
+    expect(resolveClaudeDynamicToolResultMaxChars(undefined)).toBe(
+      DEFAULT_CLAUDE_DYNAMIC_TOOL_RESULT_MAX_CHARS,
+    );
+    expect(resolveClaudeDynamicToolResultMaxChars({})).toBe(
+      DEFAULT_CLAUDE_DYNAMIC_TOOL_RESULT_MAX_CHARS,
+    );
+  });
+
+  it("reads agents.defaults.contextLimits.toolResultMaxChars when no agentId", () => {
+    const config = { agents: { defaults: { contextLimits: { toolResultMaxChars: 4_000 } } } };
+    expect(resolveClaudeDynamicToolResultMaxChars({ config } as never)).toBe(4_000);
+  });
+
+  it("prefers the agent-specific value over defaults", () => {
+    const config = {
+      agents: {
+        defaults: { contextLimits: { toolResultMaxChars: 4_000 } },
+        list: [{ id: "alice", contextLimits: { toolResultMaxChars: 8_000 } }],
+      },
+    };
+    expect(resolveClaudeDynamicToolResultMaxChars({ config, agentId: "alice" } as never)).toBe(
+      8_000,
+    );
+  });
+
+  it("falls back to defaults when the named agent has no override", () => {
+    const config = {
+      agents: {
+        defaults: { contextLimits: { toolResultMaxChars: 4_000 } },
+        list: [{ id: "bob", contextLimits: { toolResultMaxChars: 2_000 } }],
+      },
+    };
+    expect(resolveClaudeDynamicToolResultMaxChars({ config, agentId: "alice" } as never)).toBe(
+      4_000,
+    );
+  });
+
+  it("ignores non-positive configured values and falls back to the default", () => {
+    const config = { agents: { defaults: { contextLimits: { toolResultMaxChars: 0 } } } };
+    expect(resolveClaudeDynamicToolResultMaxChars({ config } as never)).toBe(
+      DEFAULT_CLAUDE_DYNAMIC_TOOL_RESULT_MAX_CHARS,
+    );
+  });
+});
+
+describe("dynamic-tool result aggregate budgeting", () => {
+  it("passes a single-block result through unchanged when under the cap", async () => {
+    const bridge = createClaudeDynamicToolBridge({
+      tools: [makeTool("read", { content: [{ type: "text", text: "hello" }] })],
+      hookContext: {
+        config: { agents: { defaults: { contextLimits: { toolResultMaxChars: 1_000 } } } } as never,
+      },
+    });
+    const out = await bridge.handleToolCall({
+      tool: "read",
+      callId: "c1",
+      threadId: "thr",
+      turnId: "turn",
+      arguments: {},
+    });
+    expect(out.success).toBe(true);
+    expect(out.contentItems).toEqual([{ type: "inputText", text: "hello" }]);
+  });
+
+  it("aggregates across blocks so a multi-block result whose sum exceeds the cap is truncated", async () => {
+    // Two blocks, each 100 chars, cap 150 — sum (200) > cap, so the second
+    // block should be truncated (or absent) with a notice appended.
+    const block = "x".repeat(100);
+    const bridge = createClaudeDynamicToolBridge({
+      tools: [
+        makeTool("multi", {
+          content: [
+            { type: "text", text: block },
+            { type: "text", text: block },
+          ],
+        }),
+      ],
+      hookContext: {
+        config: { agents: { defaults: { contextLimits: { toolResultMaxChars: 150 } } } } as never,
+      },
+    });
+    const out = await bridge.handleToolCall({
+      tool: "multi",
+      callId: "c1",
+      threadId: "thr",
+      turnId: "turn",
+      arguments: {},
+    });
+    expect(out.success).toBe(true);
+    const totalText = out.contentItems
+      .filter((it): it is { type: "inputText"; text: string } => it.type === "inputText")
+      .map((it) => it.text)
+      .join("");
+    expect(totalText.length).toBeLessThanOrEqual(150);
+    expect(totalText).toMatch(/OpenClaw truncated dynamic tool result/);
+    expect(totalText).toContain("original 200 chars");
+  });
+
+  it("preserves image items when text gets truncated", async () => {
+    const bigText = "y".repeat(1_000);
+    const bridge = createClaudeDynamicToolBridge({
+      tools: [
+        makeTool("vision", {
+          content: [
+            { type: "text", text: bigText },
+            { type: "image", url: "https://example.test/img.png" },
+          ],
+        }),
+      ],
+      hookContext: {
+        config: { agents: { defaults: { contextLimits: { toolResultMaxChars: 200 } } } } as never,
+      },
+    });
+    const out = await bridge.handleToolCall({
+      tool: "vision",
+      callId: "c1",
+      threadId: "thr",
+      turnId: "turn",
+      arguments: {},
+    });
+    const hasImage = out.contentItems.some(
+      (it) => it.type === "inputImage" && it.imageUrl === "https://example.test/img.png",
+    );
+    expect(hasImage).toBe(true);
   });
 });

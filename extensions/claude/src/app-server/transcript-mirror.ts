@@ -21,6 +21,7 @@
  * thread — useful for replay tooling that wants to see transcript origin.
  */
 
+import fs from "node:fs/promises";
 import {
   acquireSessionWriteLock,
   appendSessionTranscriptMessage,
@@ -60,9 +61,14 @@ export async function mirrorClaudeAppServerTranscript(
     sessionFile: params.sessionFile,
     ...resolveSessionWriteLockOptions(params.config),
   });
+  let appended = 0;
   try {
+    const existingIdempotencyKeys = await readTranscriptIdempotencyKeys(params.sessionFile);
     for (const message of messages) {
       const idempotencyKey = (message as AgentMessage & { idempotencyKey?: string }).idempotencyKey;
+      if (idempotencyKey && existingIdempotencyKeys.has(idempotencyKey)) {
+        continue;
+      }
       const hooked = runAgentHarnessBeforeMessageWriteHook({
         message,
         agentId: params.agentId,
@@ -79,15 +85,52 @@ export async function mirrorClaudeAppServerTranscript(
       await appendSessionTranscriptMessage({
         transcriptPath: params.sessionFile,
         message: toAppend,
+        config: params.config,
       });
-      emitSessionTranscriptUpdate({
-        transcriptPath: params.sessionFile,
-        sessionKey: params.sessionKey,
-      });
+      if (idempotencyKey) {
+        existingIdempotencyKeys.add(idempotencyKey);
+      }
+      appended += 1;
     }
   } finally {
-    void lock.release();
+    await lock.release();
   }
+
+  if (appended === 0) {
+    return;
+  }
+  if (params.sessionKey) {
+    emitSessionTranscriptUpdate({ sessionFile: params.sessionFile, sessionKey: params.sessionKey });
+  } else {
+    emitSessionTranscriptUpdate(params.sessionFile);
+  }
+}
+
+async function readTranscriptIdempotencyKeys(sessionFile: string): Promise<Set<string>> {
+  const keys = new Set<string>();
+  let raw: string;
+  try {
+    raw = await fs.readFile(sessionFile, "utf8");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+      throw error;
+    }
+    return keys;
+  }
+  for (const line of raw.split(/\r?\n/)) {
+    if (!line.trim()) {
+      continue;
+    }
+    try {
+      const parsed = JSON.parse(line) as { message?: { idempotencyKey?: unknown } };
+      if (typeof parsed.message?.idempotencyKey === "string") {
+        keys.add(parsed.message.idempotencyKey);
+      }
+    } catch {
+      continue;
+    }
+  }
+  return keys;
 }
 
 // ── pure helpers (exported for testability) ────────────────────────────────

@@ -68,6 +68,19 @@ This extension registers `/claude` with subcommands:
   filtered out (`src/app-server/vision-tools.ts`).
 - **Doctor contract** (bridge-side): legacy-config rules and session-route
   ownership consumed by `openclaw doctor` (`doctor-contract-api.ts`).
+- **Event projection** (bridge-side): item/started/completed and
+  assistant/reasoning deltas are projected into the OpenClaw harness's
+  notification + accumulator surface via `src/app-server/event-projector.ts`,
+  decoupling the JSON-RPC event shape from `run-attempt.ts`.
+- **Transcript mirroring** (bridge-side): turn output is mirrored into the
+  OpenClaw session transcript with stable `claude/${threadId}/${turnId}/...`
+  idempotency keys; replays and crash recovery skip already-appended entries
+  (`src/app-server/transcript-mirror.ts`).
+- **Aggregate tool-result cap** (bridge-side): dynamic-tool output is
+  budgeted across all text blocks in a single result (not per-block); the
+  cap reads from `agents.list[].contextLimits.toolResultMaxChars` with
+  fallback to `agents.defaults.contextLimits.toolResultMaxChars` and then
+  to the 16 000-char default (`src/app-server/dynamic-tools.ts`).
 
 ## Known limitations
 
@@ -90,12 +103,18 @@ This extension registers `/claude` with subcommands:
   maintainers republish under `@openclaw/claude-app-server`, this
   package's dependency declaration will switch.
 
-- **Codex middleware — deferred items**: `toolResultMaxChars`
-  truncation is wired (`src/app-server/dynamic-tools.ts`), but a few
-  middleware items remain deferred:
-  `createAgentToolResultMiddlewareRunner({ runtime: "claude" })`
-  wiring (needs the middleware registry to support the "claude"
-  runtime label), `messagingToolSourceReplyPayloads` telemetry
-  (needs an equivalent reply-source pipeline on the claude side),
-  and namespace/deferLoading for searchable dynamic tools (needs
-  server-side support). Tracked in beads `openclaw-7w9`.
+- **Codex middleware — three deferred items**: the dynamic-tool path
+  here implements aggregate `toolResultMaxChars` budgeting (see
+  "Aggregate tool-result cap" above), but three pieces of codex's
+  middleware chain are not yet ported:
+  - `createAgentToolResultMiddlewareRunner({ runtime: "claude" })`
+    wiring — needs the middleware registry to recognize the "claude"
+    runtime label so reply/audit middlewares can target this bridge.
+  - `messagingToolSourceReplyPayloads` telemetry — needs an
+    equivalent reply-source pipeline on the claude side so messaging
+    tools can attribute outbound payloads back to a source message.
+  - Namespace / `deferLoading` for searchable dynamic tools — needs
+    server-side support before the bridge can declare a namespace
+    or mark tools as deferred-loaded.
+
+  Tracked in beads `openclaw-7w9`.
