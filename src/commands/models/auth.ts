@@ -92,6 +92,23 @@ const select = async <T>(params: Parameters<typeof clackSelect<T>>[0]) =>
     }),
   );
 
+async function readPastedSecret(message: string): Promise<string | undefined> {
+  if (process.stdin.isTTY) {
+    return normalizeOptionalString(
+      await text({
+        message,
+        validate: (value) => (value?.trim() ? undefined : "Required"),
+      }),
+    );
+  }
+  process.stdin.setEncoding("utf8");
+  let input = "";
+  for await (const chunk of process.stdin) {
+    input += String(chunk);
+  }
+  return normalizeOptionalString(input);
+}
+
 function resolveDefaultTokenProfileId(provider: string): string {
   return `${normalizeProviderId(provider)}:manual`;
 }
@@ -568,12 +585,7 @@ export async function modelsAuthPasteApiKeyCommand(
   const profileId =
     normalizeOptionalString(opts.profileId) || resolveDefaultTokenProfileId(provider);
 
-  const apiKey = normalizeOptionalString(
-    await text({
-      message: `Paste API key for ${provider}`,
-      validate: (value) => (value?.trim() ? undefined : "Required"),
-    }),
-  );
+  const apiKey = await readPastedSecret(`Paste API key for ${provider}`);
   if (!apiKey) {
     throw new Error("Missing API key.");
   }

@@ -21,9 +21,7 @@ type ResolvePluginProvidersCall = {
 type UpsertAuthProfileCall = {
   agentDir?: string;
   credential?: {
-    key?: string;
     provider?: string;
-    token?: string;
     type?: string;
   };
   profileId?: string;
@@ -286,6 +284,24 @@ function withInteractiveStdin() {
     } else if (!hadOwnIsTTY) {
       delete (stdin as { isTTY?: boolean }).isTTY;
     }
+  };
+}
+
+function withPipedStdin(input: string) {
+  const restoreInteractive = withInteractiveStdin();
+  const stdin = process.stdin as NodeJS.ReadStream & { isTTY?: boolean };
+  Object.defineProperty(stdin, "isTTY", { configurable: true, get: () => false });
+  const setEncoding = vi.spyOn(stdin, "setEncoding").mockReturnValue(stdin);
+  Object.defineProperty(stdin, Symbol.asyncIterator, {
+    configurable: true,
+    value: async function* () {
+      yield input;
+    },
+  });
+  return () => {
+    setEncoding.mockRestore();
+    Reflect.deleteProperty(stdin, Symbol.asyncIterator);
+    restoreInteractive();
   };
 }
 
@@ -1165,11 +1181,15 @@ describe("modelsAuthLoginCommand", () => {
     );
   });
 
-  it("writes pasted OpenAI Codex API keys as api_key profiles", async () => {
+  it("writes piped OpenAI Codex API keys as api_key profiles", async () => {
     const runtime = createRuntime();
-    mocks.clackText.mockResolvedValue("sk-openai-codex-demo");
+    const restorePipedStdin = withPipedStdin("sk-openai-codex-demo\n");
 
-    await modelsAuthPasteApiKeyCommand({ provider: "openai-codex" }, runtime);
+    try {
+      await modelsAuthPasteApiKeyCommand({ provider: "openai-codex" }, runtime);
+    } finally {
+      restorePipedStdin();
+    }
 
     expect(mocks.upsertAuthProfileWithLock).toHaveBeenCalledWith({
       profileId: "openai-codex:manual",
