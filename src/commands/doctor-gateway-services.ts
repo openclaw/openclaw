@@ -584,12 +584,17 @@ export async function detectGatewayServiceConfigIssues(
   };
 }
 
+export type GatewayServiceConfigRepairResult = {
+  status: "repaired" | "skipped" | "failed";
+  reason?: string;
+};
+
 export async function repairGatewayServiceConfig(params: {
   cfg: OpenClawConfig;
   mode: "local" | "remote";
   runtime: RuntimeEnv;
   prompter: GatewayServicePrompter;
-}): Promise<void> {
+}): Promise<GatewayServiceConfigRepairResult> {
   const { cfg, mode, runtime, prompter } = params;
   const detection = await detectGatewayServiceConfigIssues(cfg, mode);
   if (detection.reason) {
@@ -610,7 +615,13 @@ export async function repairGatewayServiceConfig(params: {
         "Gateway service config",
       );
     }
-    return;
+    return {
+      status: "skipped",
+      reason:
+        detection.status === "clean"
+          ? "gateway service config is already current"
+          : "gateway service config detection skipped",
+    };
   }
   const {
     command,
@@ -626,7 +637,10 @@ export async function repairGatewayServiceConfig(params: {
     tokenRefConfigured,
   } = detection;
   if (!command || !serviceInstallEnv || !runtimeChoice) {
-    return;
+    return {
+      status: "skipped",
+      reason: "gateway service config repair is missing service install context",
+    };
   }
   if (detection.tokenWarning) {
     await emitGatewayServiceNote(prompter, detection.tokenWarning, "Gateway service config");
@@ -646,7 +660,7 @@ export async function repairGatewayServiceConfig(params: {
     if (sourceCheckoutWarning !== undefined && showSourceCheckoutWarning) {
       await emitGatewayServiceNote(prompter, sourceCheckoutWarning, "Gateway service config");
     }
-    return;
+    return { status: "skipped", reason: "gateway service config has no repairable issues" };
   }
 
   const serviceRepairPolicy = resolveServiceRepairPolicy();
@@ -681,7 +695,7 @@ export async function repairGatewayServiceConfig(params: {
 
   if (serviceRepairExternal) {
     await emitGatewayServiceNote(prompter, EXTERNAL_SERVICE_REPAIR_NOTE, "Gateway service config");
-    return;
+    return { status: "skipped", reason: "gateway service repair is externally managed" };
   }
 
   if (serviceRewriteBlocked) {
@@ -690,7 +704,10 @@ export async function repairGatewayServiceConfig(params: {
       "Gateway service is running; leaving supervisor metadata unchanged. Stop the service first or use `openclaw gateway install --force` when you want to replace the active launcher.",
       "Gateway service config",
     );
-    return;
+    return {
+      status: "skipped",
+      reason: "gateway service rewrite is blocked while the service is running",
+    };
   }
 
   const updateRepairMode = isDoctorUpdateRepairMode(prompter.repairMode);
@@ -705,7 +722,7 @@ export async function repairGatewayServiceConfig(params: {
       "Update-mode doctor detected gateway service drift but left the live systemd unit unchanged. Review the service file and run `openclaw gateway install --force` when you want OpenClaw to replace operator-owned systemd directives.",
       "Gateway service config",
     );
-    return;
+    return { status: "skipped", reason: "update-mode gateway service repair was deferred" };
   }
 
   const repairMessage = needsAggressive
@@ -734,7 +751,7 @@ export async function repairGatewayServiceConfig(params: {
         "Gateway service config",
       );
     }
-    return;
+    return { status: "skipped", reason: "gateway service config repair was declined" };
   }
   const serviceEmbeddedToken = readEmbeddedGatewayToken(command);
   const gatewayTokenForRepair = expectedGatewayToken ?? serviceEmbeddedToken;
@@ -775,7 +792,7 @@ export async function repairGatewayServiceConfig(params: {
       );
     } catch (err) {
       runtime.error(`Failed to persist gateway.auth.token before service repair: ${String(err)}`);
-      return;
+      return { status: "failed", reason: "failed to persist gateway auth token" };
     }
   }
 
@@ -803,7 +820,9 @@ export async function repairGatewayServiceConfig(params: {
     });
   } catch (err) {
     runtime.error(`Gateway service update failed: ${String(err)}`);
+    return { status: "failed", reason: "gateway service update failed" };
   }
+  return { status: "repaired" };
 }
 
 export async function maybeRepairGatewayServiceConfig(

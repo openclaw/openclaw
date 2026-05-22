@@ -1511,12 +1511,21 @@ const gatewayServiceConfigCheck: RegisteredHealthCheck = defineSplitHealthCheck(
         effects: [],
       };
     }
-    await repairGatewayServiceConfig({
+    const repaired = await repairGatewayServiceConfig({
       cfg: ctx.cfg,
       mode: resolveDoctorMode(ctx.cfg),
       runtime: ctx.runtime,
       prompter: makeHealthRepairPrompter(ctx),
     });
+    if (repaired.status !== "repaired") {
+      return {
+        status: repaired.status,
+        reason: repaired.reason,
+        changes: [],
+        warnings: detection.gatewayRuntimeWarning ? [detection.gatewayRuntimeWarning] : [],
+        effects: [],
+      };
+    }
     return {
       changes: ["Checked gateway service config repair path."],
       warnings: detection.serviceRewriteBlocked
