@@ -670,7 +670,7 @@ jobs:
       pull-requests: read
     uses: ./.github/workflows/package-acceptance.yml
     with:
-      advisory: ${{ startsWith(github.ref, 'refs/heads/tideclaw/alpha/') }}
+      advisory: false
       workflow_ref: ${{ github.ref_name }}
       source: ${{ (needs.resolve_target.outputs.package_acceptance_package_spec != '' || needs.resolve_target.outputs.release_package_spec != '') && 'npm' || 'artifact' }}
       package_spec: ${{ needs.resolve_target.outputs.package_acceptance_package_spec || needs.resolve_target.outputs.release_package_spec || 'openclaw@beta' }}
@@ -1566,7 +1566,7 @@ jobs:
             if [[ "$result" != "success" && "$result" != "skipped" ]]; then
               if [[ "$tideclaw_alpha" == "true" ]]; then
                 case "$name" in
-                  prepare_release_package|install_smoke_release_checks) ;;
+                  prepare_release_package|install_smoke_release_checks|package_acceptance_release_checks) ;;
                   *)
                     echo "::warning::${name} ended with ${result}; Tideclaw alpha treats non-package-safety release-check lanes as advisory."
                     continue

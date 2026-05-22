@@ -679,6 +679,7 @@ describe("package artifact reuse", () => {
     expect(workflow).toContain("rerun_group:");
     expect(workflow).toContain("live_suite_filter:");
     expect(workflow).toContain("cross_os_suite_filter:");
+    expect(workflow).toContain("advisory: false");
     expect(workflow).toContain(
       "suite_filter: ${{ needs.resolve_target.outputs.cross_os_suite_filter }}",
     );
@@ -823,6 +824,12 @@ describe("package artifact reuse", () => {
       'case "$RERUN_GROUP" in',
       "release-checks|install-smoke|cross-os|live-e2e|package|qa|qa-parity|qa-live)",
       "cancel-in-progress: ${{ (inputs.ref == 'main' && inputs.rerun_group == 'all') || startsWith(inputs.ref, 'tideclaw/alpha/') }}",
+      "Verify release checks accepted Tideclaw alpha advisory lanes",
+      "release_checks_advisory_only",
+      "release_check_blocking_job",
+      "is a package-safety Tideclaw alpha release-check lane",
+      "package_acceptance_release_checks) ;;",
+      'check_child "release_checks" "$RELEASE_CHECKS_RUN_ID" 1 1',
       "gh run cancel",
       "NORMAL_CI_RESULT: ${{ needs.normal_ci.result }}",
     ]);
