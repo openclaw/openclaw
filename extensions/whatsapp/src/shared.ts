@@ -31,7 +31,6 @@ import {
   collectUnsupportedSecretRefConfigCandidates,
   unsupportedSecretRefSurfacePatterns,
 } from "./security-contract.js";
-import { applyWhatsAppSecurityConfigFixes } from "./security-fix.js";
 import {
   canonicalizeLegacySessionKey,
   deriveLegacySessionChatType,
@@ -241,7 +240,8 @@ export function createWhatsAppPluginBase(params: {
         }),
     },
     security: {
-      applyConfigFixes: applyWhatsAppSecurityConfigFixes,
+      applyConfigFixes: async (params) =>
+        await (await import("./security-fix.js")).applyWhatsAppSecurityConfigFixes(params),
       resolveDmPolicy: whatsappResolveDmPolicy,
       collectWarnings: collectWhatsAppSecurityWarnings,
     },
