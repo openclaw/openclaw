@@ -1,3 +1,5 @@
+import { hasAcceptedSessionSpawn } from "../accepted-session-spawn.js";
+
 type AgentPayloadLike = {
   text?: unknown;
   mediaUrl?: unknown;
@@ -19,6 +21,7 @@ export type AgentDeliveryEvidence = {
   messagingToolSentTexts?: unknown;
   messagingToolSentMediaUrls?: unknown;
   messagingToolSentTargets?: unknown;
+  acceptedSessionSpawns?: unknown;
   successfulCronAdds?: unknown;
   meta?: {
     toolSummary?: {
@@ -129,6 +132,7 @@ function hasAgentDeliveryEvidenceShape(value: object): boolean {
     "messagingToolSentTexts" in value ||
     "messagingToolSentMediaUrls" in value ||
     "messagingToolSentTargets" in value ||
+    "acceptedSessionSpawns" in value ||
     "successfulCronAdds" in value ||
     "meta" in value
   );
@@ -186,6 +190,8 @@ export function hasCommittedMessagingToolDeliveryEvidence(
 export function hasOutboundDeliveryEvidence(result: AgentDeliveryEvidence): boolean {
   return (
     hasMessagingToolDeliveryEvidence(result) ||
+    (Array.isArray(result.acceptedSessionSpawns) &&
+      hasAcceptedSessionSpawn(result.acceptedSessionSpawns)) ||
     hasPositiveNumber(result.successfulCronAdds) ||
     hasPositiveNumber(result.meta?.toolSummary?.calls)
   );

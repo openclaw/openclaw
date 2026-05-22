@@ -131,6 +131,7 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
   const state: EmbeddedPiSubscribeState = {
     assistantTexts: [],
     toolMetas: [],
+    acceptedSessionSpawns: [],
     toolMetaById: new Map(),
     toolSummaryById: new Set(),
     itemActiveIds: new Set(),
@@ -948,6 +949,7 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
         messagingToolSentTargets,
       }) ||
       state.successfulCronAdds > 0 ||
+      state.acceptedSessionSpawns.length > 0 ||
       state.visibleBlockReplyCount > 0;
     assistantTexts.length = 0;
     toolMetas.length = 0;
@@ -1061,6 +1063,7 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
   return {
     assistantTexts,
     toolMetas,
+    getAcceptedSessionSpawns: () => state.acceptedSessionSpawns.slice(),
     runToolLifecycle: async <T>(toolParams: {
       toolName: string;
       toolCallId: string;

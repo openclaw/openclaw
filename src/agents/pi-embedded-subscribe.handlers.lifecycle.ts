@@ -1,5 +1,6 @@
 import { emitAgentEvent } from "../infra/agent-events.js";
 import { createInlineCodeState } from "../markdown/code-spans.js";
+import { hasAcceptedSessionSpawn } from "./accepted-session-spawn.js";
 import {
   buildApiErrorObservationFields,
   buildTextObservationFields,
@@ -48,6 +49,7 @@ export function handleAgentEnd(ctx: EmbeddedPiSubscribeContext): void | Promise<
   const hadDeterministicSideEffect =
     ctx.state.hadDeterministicSideEffect === true ||
     hasCommittedMessagingToolDeliveryEvidence(ctx.state) ||
+    hasAcceptedSessionSpawn(ctx.state.acceptedSessionSpawns) ||
     (ctx.state.successfulCronAdds ?? 0) > 0;
   const incompleteTerminalAssistant = isIncompleteTerminalAssistantTurn({
     hasAssistantVisibleText,

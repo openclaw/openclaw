@@ -367,6 +367,31 @@ describe("handleAgentEnd", () => {
     });
   });
 
+  it("keeps accepted session spawns from being marked abandoned", async () => {
+    const onAgentEvent = vi.fn();
+    const ctx = createContext(undefined, { onAgentEvent });
+    ctx.state.replayState = { ...ctx.state.replayState, replayInvalid: true };
+    ctx.state.livenessState = "working";
+    ctx.state.assistantTexts = [];
+    ctx.state.acceptedSessionSpawns = [
+      {
+        runId: "run-child",
+        childSessionKey: "agent:claude:subagent:child",
+      },
+    ];
+
+    await handleAgentEnd(ctx);
+
+    expect(onAgentEvent).toHaveBeenCalledWith({
+      stream: "lifecycle",
+      data: {
+        phase: "end",
+        livenessState: "working",
+        replayInvalid: true,
+      },
+    });
+  });
+
   it("flushes orphaned tool media as a media-only block reply", async () => {
     const ctx = createContext(undefined);
     ctx.state.pendingToolMediaUrls = ["/tmp/reply.opus"];

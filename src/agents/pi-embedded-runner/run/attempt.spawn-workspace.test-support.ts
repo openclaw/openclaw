@@ -100,6 +100,7 @@ export function createSubscriptionMock(): SubscriptionMock {
     unsubscribe: () => {},
     setTerminalLifecycleMeta: () => {},
     waitForCompactionRetry: async () => {},
+    getAcceptedSessionSpawns: () => [],
     getMessagingToolSentTexts: () => [] as string[],
     getMessagingToolSentMediaUrls: () => [] as string[],
     getMessagingToolSentTargets: () => [] as MessagingToolSend[],
