@@ -1,5 +1,6 @@
 {
   "id": "workboard",
+  "enabledByDefault": false,
   "activation": {
     "onStartup": true
   },
