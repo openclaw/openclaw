@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { withTempDir } from "../test-helpers/temp-dir.js";
 import {
   downloadClawHubPackageArchive,
@@ -61,7 +61,12 @@ function createStalledBodyResponse(params: { headers: HeadersInit; firstChunk: U
 describe("clawhub helpers", () => {
   const originalHome = process.env.HOME;
 
+  beforeEach(() => {
+    vi.useRealTimers();
+  });
+
   afterEach(() => {
+    vi.useRealTimers();
     delete process.env.OPENCLAW_CLAWHUB_URL;
     delete process.env.OPENCLAW_CLAWHUB_TOKEN;
     delete process.env.CLAWHUB_TOKEN;
