@@ -235,8 +235,12 @@ function isSlackPluginForwardingFallbackHandledNatively(
     return false;
   }
   const request = input.request;
-  const originTarget =
-    resolveTurnSourceSlackOriginTarget(request) ?? resolveSlackFallbackOriginTarget(request);
+  const originTarget = resolveSlackOriginTarget({
+    cfg: input.cfg,
+    accountId: resolveSlackNativeSuppressionAccountId(input),
+    approvalKind: input.approvalKind,
+    request,
+  });
   if (originTarget && slackTargetsMatch(forwardingTarget, originTarget)) {
     return true;
   }

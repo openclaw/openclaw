@@ -884,6 +884,52 @@ describe("slack native approval adapter", () => {
     ).toBe(true);
   });
 
+  it("suppresses plugin forwarding fallback for the persisted native origin target", () => {
+    const shouldSuppress = slackNativeApprovalAdapter.delivery?.shouldSuppressForwardingFallback;
+    if (!shouldSuppress) {
+      throw new Error("slack native delivery suppression unavailable");
+    }
+
+    writeStore({
+      "agent:main:main": {
+        sessionId: "sess",
+        updatedAt: Date.now(),
+        deliveryContext: {
+          channel: "slack",
+          to: "channel:CSTORED",
+          accountId: "default",
+          threadId: "1712345678.123456",
+        },
+      },
+    });
+
+    expect(
+      shouldSuppress({
+        cfg: {
+          ...buildConfig({ allowFrom: ["U123OWNER"] }),
+          session: { store: STORE_PATH },
+        },
+        approvalKind: "plugin",
+        target: {
+          channel: "slack",
+          to: "channel:CSTORED",
+          accountId: "default",
+          threadId: "1712345678.123456",
+        },
+        request: {
+          id: "plugin:approval-1",
+          request: {
+            title: "Plugin approval",
+            description: "Allow access",
+            sessionKey: "agent:main:main",
+          },
+          createdAtMs: 0,
+          expiresAtMs: 1_000,
+        },
+      }),
+    ).toBe(true);
+  });
+
   it("suppresses explicit plugin forwarding targets when native Slack plugin delivery is active", () => {
     const shouldSuppress = slackNativeApprovalAdapter.delivery?.shouldSuppressForwardingFallback;
     if (!shouldSuppress) {
