@@ -20,8 +20,6 @@ import {
 } from "../infra/shell-env.js";
 import { logInfo } from "../logger.js";
 import { parseAgentSessionKey, resolveAgentIdFromSessionKey } from "../routing/session-key.js";
-import { getSkillBinsMap, matchSkillByCommand } from "./skill-bins.js";
-import { trackSkillUsage } from "./usage-tracker.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -1720,21 +1718,30 @@ export function createExecTool(
             if (yielded || run.session.backgrounded) {
               return;
             }
-            // Track successful skill invocation for telemetry
-            const command = params.command;
-            if (agentId && command) {
-              const binsMap = getSkillBinsMap();
-              const matchedSkill = matchSkillByCommand(command, binsMap);
-              if (matchedSkill) {
-                trackSkillUsage({
-                  agentId,
-                  skillName: matchedSkill,
-                  command,
-                  exitCode: outcome.exitCode ?? 0,
-                  durationMs: outcome.durationMs ?? 0,
-                  sessionKey: notifySessionKey ?? "",
-                });
-              }
+            // Real-time skill-usage telemetry (success path)
+            if (agentId && params.command) {
+              void Promise.resolve().then(async () => {
+                try {
+                  const [{ trackSkillUsage }, { matchSkillByCommand }, { getSkillBinsMap }] =
+                    await Promise.all([
+                      import("./skills/usage-tracker.js"),
+                      import("./skills/skill-bins.js"),
+                      import("./skills/workspace.js"),
+                    ]);
+                  const binsMap = getSkillBinsMap();
+                  const matched = matchSkillByCommand(params.command, binsMap);
+                  if (matched) {
+                    trackSkillUsage({
+                      agentId,
+                      skillName: matched,
+                      command: params.command,
+                      exitCode: outcome.exitCode ?? 0,
+                      durationMs: outcome.durationMs ?? 0,
+                      sessionKey: notifySessionKey ?? "",
+                    });
+                  }
+                } catch { /* telemetry failure is non-fatal */ }
+              });
             }
             resolve(
               buildExecForegroundResult({
@@ -1751,21 +1758,30 @@ export function createExecTool(
             if (yielded || run.session.backgrounded) {
               return;
             }
-            // Track failed skill invocation for telemetry
-            const command = params.command;
-            if (agentId && command) {
-              const binsMap = getSkillBinsMap();
-              const matchedSkill = matchSkillByCommand(command, binsMap);
-              if (matchedSkill) {
-                trackSkillUsage({
-                  agentId,
-                  skillName: matchedSkill,
-                  command,
-                  exitCode: -1,
-                  durationMs: 0,
-                  sessionKey: notifySessionKey ?? "",
-                });
-              }
+            // Real-time skill-usage telemetry (failure path)
+            if (agentId && params.command) {
+              void Promise.resolve().then(async () => {
+                try {
+                  const [{ trackSkillUsage }, { matchSkillByCommand }, { getSkillBinsMap }] =
+                    await Promise.all([
+                      import("./skills/usage-tracker.js"),
+                      import("./skills/skill-bins.js"),
+                      import("./skills/workspace.js"),
+                    ]);
+                  const binsMap = getSkillBinsMap();
+                  const matched = matchSkillByCommand(params.command, binsMap);
+                  if (matched) {
+                    trackSkillUsage({
+                      agentId,
+                      skillName: matched,
+                      command: params.command,
+                      exitCode: -1,
+                      durationMs: 0,
+                      sessionKey: notifySessionKey ?? "",
+                    });
+                  }
+                } catch { /* telemetry failure is non-fatal */ }
+              });
             }
             reject(err as Error);
           });

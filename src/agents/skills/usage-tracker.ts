@@ -11,7 +11,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
-import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 
 const trackerLogger = createSubsystemLogger("skill-usage");
 

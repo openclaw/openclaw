@@ -20,7 +20,6 @@ import { resolveOpenClawMetadata, resolveSkillInvocationPolicy } from "./frontma
 import { loadSkillsFromDirSafe, readSkillFrontmatterSafe } from "./local-loader.js";
 import { resolvePluginSkillDirs } from "./plugin-skills.js";
 import { serializeByKey } from "./serialize.js";
-import { buildSkillBinsMap, setSkillBinsMap } from "../skill-bins.js";
 import { formatSkillsForPrompt, type Skill } from "./skill-contract.js";
 import type {
   ParsedSkillFrontmatter,
@@ -949,10 +948,6 @@ function loadSkillEntries(
         },
       };
     });
-
-  // Phase 2 skill-usage telemetry: populate module-level bins map
-  setSkillBinsMap(buildSkillBinsMap(skillEntries));
-
   return skillEntries;
 }
 
@@ -970,6 +965,19 @@ function escapeXml(str: string): string {
  * Used as a fallback when the full format exceeds the char budget,
  * preserving awareness of all skills before resorting to dropping.
  */
+
+
+// ---------------------------------------------------------------------------
+// Skill→bins telemetry (real-time exec-to-skill tracking)
+// ---------------------------------------------------------------------------
+
+let _binsMap: Map<string, string[]> = new Map();
+
+/** Populated during skill loading. Called only from loadWorkspaceSkills. */
+export function getSkillBinsMap(): Map<string, string[]> {
+  return _binsMap;
+}
+
 export function formatSkillsCompact(skills: Skill[]): string {
   if (skills.length === 0) return "";
   const lines = [
@@ -1106,6 +1114,7 @@ function resolveWorkspaceSkillPromptState(
   resolvedSkills: Skill[];
 } {
   const skillEntries = opts?.entries ?? loadSkillEntries(workspaceDir, opts);
+  _binsMap = buildSkillBinsMap(skillEntries);
   const effectiveSkillFilter = resolveEffectiveWorkspaceSkillFilter(opts);
   const eligible = filterSkillEntries(
     skillEntries,
