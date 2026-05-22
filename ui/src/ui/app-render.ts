@@ -306,8 +306,31 @@ function renderSidebarSessions(state: AppViewState) {
       ${collapsed || recent.length === 0
         ? nothing
         : html`
-            <div class="sidebar-recent-sessions" aria-label=${t("overview.cards.recentSessions")}>
-              <div class="sidebar-recent-sessions__label">${t("usage.sessions.recentShort")}</div>
+            <div
+              class="sidebar-recent-sessions ${state.settings.recentSessionsCollapsed
+                ? "sidebar-recent-sessions--collapsed"
+                : ""}"
+              aria-label=${t("overview.cards.recentSessions")}
+            >
+              <button
+                class="sidebar-recent-sessions__label"
+                type="button"
+                aria-expanded=${String(!state.settings.recentSessionsCollapsed)}
+                title=${state.settings.recentSessionsCollapsed
+                  ? t("nav.recentSessionsExpand")
+                  : t("nav.recentSessionsCollapse")}
+                @click=${() => {
+                  state.applySettings({
+                    ...state.settings,
+                    recentSessionsCollapsed: !state.settings.recentSessionsCollapsed,
+                  });
+                }}
+              >
+                <span class="sidebar-recent-sessions__label-text"
+                  >${t("usage.sessions.recentShort")}</span
+                >
+                <span class="sidebar-recent-sessions__chevron"> ${icons.chevronDown} </span>
+              </button>
               <div class="sidebar-recent-sessions__list">
                 ${recent.map((row) => renderSidebarRecentSession(state, row))}
               </div>
