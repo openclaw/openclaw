@@ -192,6 +192,7 @@ export function releaseTelegramReplyFenceAbortController(
 
 export function shouldSupersedeTelegramReplyFence(ctxPayload: {
   Body?: string;
+  ChatType?: string;
   RawBody?: string;
   CommandBody?: string;
   CommandAuthorized: boolean;
@@ -204,6 +205,9 @@ export function shouldSupersedeTelegramReplyFence(ctxPayload: {
     isBtwRequestText(dispatchText) ||
     isTelegramReadOnlyControlLaneText({ rawText: dispatchText })
   ) {
+    return false;
+  }
+  if (ctxPayload.ChatType === "direct") {
     return false;
   }
   return true;
