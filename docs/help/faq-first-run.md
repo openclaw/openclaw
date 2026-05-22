@@ -753,7 +753,7 @@ and troubleshooting see the main [FAQ](/help/faq).
     ```
 
     If you run OpenClaw via systemd, ensure the service PATH includes `/home/linuxbrew/.linuxbrew/bin` (or your brew prefix) so `brew`-installed tools resolve in non-login shells.
-    Recent builds also prepend common user bin dirs on Linux systemd services (for example `~/.local/bin`, `~/.npm-global/bin`, `~/.local/share/pnpm`, `~/.bun/bin`) and honor `PNPM_HOME`, `NPM_CONFIG_PREFIX`, `BUN_INSTALL`, `VOLTA_HOME`, `ASDF_DATA_DIR`, `NVM_DIR`, and `FNM_DIR` when set.
+    Recent builds also prepend stable Linux user bin dirs on systemd services (for example `~/.local/bin`, `~/.npm-global/bin`, `~/bin`, `~/.local/share/pnpm`, and Nix profiles) and honor stable package-manager roots such as `PNPM_HOME` and `NPM_CONFIG_PREFIX`. Version-manager-specific roots such as `BUN_INSTALL`, `VOLTA_HOME`, `ASDF_DATA_DIR`, `NVM_DIR`, and `FNM_DIR` are intentionally left out of the durable Linux service PATH.
 
   </Accordion>
 
