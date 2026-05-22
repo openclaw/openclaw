@@ -21,6 +21,31 @@ import UIKit
 @Observable
 final class GatewayConnectionController {
     struct ManualAuthOverride: Equatable {
+        struct SetupAuth {
+            let token: String
+            let bootstrapToken: String
+            let password: String
+
+            var hasBootstrapToken: Bool {
+                !self.bootstrapToken.isEmpty
+            }
+
+            var shouldApplyTokenField: Bool {
+                !self.token.isEmpty || self.hasBootstrapToken
+            }
+
+            var shouldApplyPasswordField: Bool {
+                !self.password.isEmpty || self.hasBootstrapToken
+            }
+
+            var manualAuthOverride: ManualAuthOverride? {
+                ManualAuthOverride.normalized(
+                    token: self.token,
+                    bootstrapToken: self.bootstrapToken,
+                    password: self.password)
+            }
+        }
+
         let token: String?
         let bootstrapToken: String?
         let password: String?
@@ -65,6 +90,13 @@ final class GatewayConnectionController {
                 token: token,
                 bootstrapToken: pendingOverride.bootstrapToken,
                 password: password)
+        }
+
+        static func setupAuth(from link: GatewayConnectDeepLink) -> SetupAuth {
+            SetupAuth(
+                token: link.token?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "",
+                bootstrapToken: link.bootstrapToken?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "",
+                password: link.password?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "")
         }
     }
 

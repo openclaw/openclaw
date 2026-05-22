@@ -881,44 +881,28 @@ struct SettingsTab: View {
         self.manualGatewayTLS = link.tls
 
         let trimmedInstanceId = GatewaySettingsStore.currentInstanceID()
-        let trimmedBootstrapToken =
-            link.bootstrapToken?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        if !trimmedBootstrapToken.isEmpty {
+        let setupAuth = GatewayConnectionController.ManualAuthOverride.setupAuth(from: link)
+        if setupAuth.hasBootstrapToken {
             GatewayOnboardingReset.prepareForBootstrapPairing(
                 appModel: self.appModel,
                 instanceId: trimmedInstanceId)
         }
         if !trimmedInstanceId.isEmpty {
-            GatewaySettingsStore.saveGatewayBootstrapToken(trimmedBootstrapToken, instanceId: trimmedInstanceId)
+            GatewaySettingsStore.saveGatewayBootstrapToken(setupAuth.bootstrapToken, instanceId: trimmedInstanceId)
         }
-        let trimmedToken = link.token?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        let trimmedPassword = link.password?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        if !trimmedToken.isEmpty {
-            self.gatewayToken = trimmedToken
+        if setupAuth.shouldApplyTokenField {
+            self.gatewayToken = setupAuth.token
             if !trimmedInstanceId.isEmpty {
-                GatewaySettingsStore.saveGatewayToken(trimmedToken, instanceId: trimmedInstanceId)
-            }
-        } else if !trimmedBootstrapToken.isEmpty {
-            self.gatewayToken = ""
-            if !trimmedInstanceId.isEmpty {
-                GatewaySettingsStore.saveGatewayToken("", instanceId: trimmedInstanceId)
+                GatewaySettingsStore.saveGatewayToken(setupAuth.token, instanceId: trimmedInstanceId)
             }
         }
-        if !trimmedPassword.isEmpty {
-            self.gatewayPassword = trimmedPassword
+        if setupAuth.shouldApplyPasswordField {
+            self.gatewayPassword = setupAuth.password
             if !trimmedInstanceId.isEmpty {
-                GatewaySettingsStore.saveGatewayPassword(trimmedPassword, instanceId: trimmedInstanceId)
-            }
-        } else if !trimmedBootstrapToken.isEmpty {
-            self.gatewayPassword = ""
-            if !trimmedInstanceId.isEmpty {
-                GatewaySettingsStore.saveGatewayPassword("", instanceId: trimmedInstanceId)
+                GatewaySettingsStore.saveGatewayPassword(setupAuth.password, instanceId: trimmedInstanceId)
             }
         }
-        self.pendingManualAuthOverride = GatewayConnectionController.ManualAuthOverride.normalized(
-            token: trimmedToken,
-            bootstrapToken: trimmedBootstrapToken,
-            password: trimmedPassword)
+        self.pendingManualAuthOverride = setupAuth.manualAuthOverride
     }
 
     private func openGatewayQRScanner() {
