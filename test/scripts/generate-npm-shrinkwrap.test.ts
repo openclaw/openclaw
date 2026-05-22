@@ -1,0 +1,70 @@
+import { describe, expect, it } from "vitest";
+import {
+  collectOverrideViolations,
+  disableShrinkwrappedOverrideConflictSources,
+  exactOverrideRulesFromOverrides,
+  exactVersionFromOverrideSpec,
+  parseLockPackagePath,
+} from "../../scripts/generate-npm-shrinkwrap.mjs";
+
+describe("generate-npm-shrinkwrap", () => {
+  it("extracts exact versions from npm override specs", () => {
+    expect(exactVersionFromOverrideSpec("8.4.0")).toBe("8.4.0");
+    expect(exactVersionFromOverrideSpec("npm:@nolyfill/domexception@1.0.28")).toBe("1.0.28");
+    expect(exactVersionFromOverrideSpec("^8.4.0")).toBeNull();
+  });
+
+  it("parses nested scoped package paths", () => {
+    expect(
+      parseLockPackagePath(
+        "node_modules/@earendil-works/pi-coding-agent/node_modules/@anthropic-ai/sdk",
+      ),
+    ).toEqual([
+      {
+        name: "@earendil-works/pi-coding-agent",
+        path: "node_modules/@earendil-works/pi-coding-agent",
+      },
+      {
+        name: "@anthropic-ai/sdk",
+        path: "node_modules/@earendil-works/pi-coding-agent/node_modules/@anthropic-ai/sdk",
+      },
+    ]);
+  });
+
+  it("disables embedded shrinkwraps that hide workspace overrides", () => {
+    const lockfile = {
+      packages: {
+        "": {},
+        "node_modules/@earendil-works/pi-coding-agent": {
+          version: "0.75.4",
+          hasShrinkwrap: true,
+        },
+        "node_modules/@earendil-works/pi-coding-agent/node_modules/protobufjs": {
+          version: "7.5.9",
+        },
+        "node_modules/@earendil-works/pi-coding-agent/node_modules/fetch-blob": {
+          version: "4.0.0",
+        },
+        "node_modules/@earendil-works/pi-coding-agent/node_modules/fetch-blob/node_modules/node-domexception":
+          {
+            version: "1.0.0",
+          },
+      },
+    };
+    const overrideRules = exactOverrideRulesFromOverrides({
+      protobufjs: "8.4.0",
+      "node-domexception": "npm:@nolyfill/domexception@1.0.28",
+    });
+
+    expect(collectOverrideViolations(lockfile, overrideRules)).toHaveLength(2);
+    expect(disableShrinkwrappedOverrideConflictSources(lockfile, overrideRules)).toEqual([
+      "node_modules/@earendil-works/pi-coding-agent",
+    ]);
+    expect(lockfile.packages["node_modules/@earendil-works/pi-coding-agent"]).not.toHaveProperty(
+      "hasShrinkwrap",
+    );
+    expect(
+      lockfile.packages["node_modules/@earendil-works/pi-coding-agent/node_modules/protobufjs"],
+    ).toBeUndefined();
+  });
+});

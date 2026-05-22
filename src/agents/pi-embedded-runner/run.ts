@@ -106,7 +106,10 @@ import {
 } from "./compaction-safety-timeout.js";
 import { resolveContextEngineCapabilities } from "./context-engine-capabilities.js";
 import { runContextEngineMaintenance } from "./context-engine-maintenance.js";
-import { hasMessagingToolDeliveryEvidence } from "./delivery-evidence.js";
+import {
+  hasMessagingToolDeliveryEvidence,
+  hasOutboundDeliveryEvidence,
+} from "./delivery-evidence.js";
 import { resolveEmbeddedRunFailureSignal } from "./failure-signal.js";
 import { resolveGlobalLane, resolveSessionLane } from "./lanes.js";
 import { log } from "./logger.js";
@@ -128,6 +131,7 @@ import { forgetPromptBuildDrainCacheForRun } from "./run/attempt.prompt-helpers.
 import { createEmbeddedRunAuthController } from "./run/auth-controller.js";
 import { resolveAuthProfileFailureReason } from "./run/auth-profile-failure-policy.js";
 import { runEmbeddedAttemptWithBackend } from "./run/backend.js";
+import { resolveCodexAppServerClientCloseRetry } from "./run/codex-app-server-recovery.js";
 import { createFailoverDecisionLogger } from "./run/failover-observation.js";
 import { mergeRetryFailoverReason, resolveRunFailoverDecision } from "./run/failover-policy.js";
 import { hasEmbeddedRunConfiguredModelFallbacks } from "./run/fallbacks.js";
@@ -251,6 +255,7 @@ function normalizeEmbeddedRunAttemptResult(
   const raw = attempt as EmbeddedRunAttemptForRunner & {
     assistantTexts?: EmbeddedRunAttemptForRunner["assistantTexts"] | null;
     toolMetas?: EmbeddedRunAttemptForRunner["toolMetas"] | null;
+    acceptedSessionSpawns?: EmbeddedRunAttemptForRunner["acceptedSessionSpawns"] | null;
     messagesSnapshot?: EmbeddedRunAttemptForRunner["messagesSnapshot"] | null;
     messagingToolSentTexts?: EmbeddedRunAttemptForRunner["messagingToolSentTexts"] | null;
     messagingToolSentMediaUrls?: EmbeddedRunAttemptForRunner["messagingToolSentMediaUrls"] | null;
@@ -264,6 +269,7 @@ function normalizeEmbeddedRunAttemptResult(
     ...attempt,
     assistantTexts: raw.assistantTexts ?? [],
     toolMetas: raw.toolMetas ?? [],
+    acceptedSessionSpawns: raw.acceptedSessionSpawns ?? [],
     messagesSnapshot: raw.messagesSnapshot ?? [],
     messagingToolSentTexts: raw.messagingToolSentTexts ?? [],
     messagingToolSentMediaUrls: raw.messagingToolSentMediaUrls ?? [],
@@ -283,7 +289,7 @@ function hasCompletedModelProgressForIdleBreaker(attempt: EmbeddedRunAttemptForR
     attempt.assistantTexts.some((text) => text.trim().length > 0) ||
     attempt.toolMetas.length > 0 ||
     (attempt.clientToolCalls?.length ?? 0) > 0 ||
-    hasMessagingToolDeliveryEvidence(attempt) ||
+    hasOutboundDeliveryEvidence(attempt) ||
     attempt.itemLifecycle.completedCount > 0
   );
 }
@@ -1072,6 +1078,7 @@ export async function runEmbeddedPiAgent(
       });
       let rateLimitProfileRotations = 0;
       let timeoutCompactionAttempts = 0;
+      let codexAppServerClientCloseRetries = 0;
       // Silent-error retry: non-strict-agentic models (e.g. ollama/glm-5.1) can
       // end a turn with stopReason="error" + zero output tokens, producing no
       // user-visible text. This is an orthogonal, model-agnostic resubmission
@@ -1617,7 +1624,7 @@ export async function runEmbeddedPiAgent(
           if (
             typeof attempt.compactionTokensAfter === "number" &&
             Number.isFinite(attempt.compactionTokensAfter) &&
-            attempt.compactionTokensAfter > 0
+            attempt.compactionTokensAfter >= 0
           ) {
             lastCompactionTokensAfter = Math.floor(attempt.compactionTokensAfter);
           }
@@ -1652,7 +1659,7 @@ export async function runEmbeddedPiAgent(
               ? sessionLastAssistant.errorMessage?.trim() || formattedAssistantErrorText
               : undefined;
           const canRestartForLiveSwitch =
-            !hasMessagingToolDeliveryEvidence(attempt) &&
+            !hasOutboundDeliveryEvidence(attempt) &&
             !attempt.didSendDeterministicApprovalPrompt &&
             !attempt.lastToolError &&
             (attempt.toolMetas?.length ?? 0) === 0 &&
@@ -1802,7 +1809,7 @@ export async function runEmbeddedPiAgent(
                 if (
                   typeof timeoutCompactResult.result?.tokensAfter === "number" &&
                   Number.isFinite(timeoutCompactResult.result.tokensAfter) &&
-                  timeoutCompactResult.result.tokensAfter > 0
+                  timeoutCompactResult.result.tokensAfter >= 0
                 ) {
                   lastCompactionTokensAfter = Math.floor(timeoutCompactResult.result.tokensAfter);
                 }
@@ -1999,7 +2006,7 @@ export async function runEmbeddedPiAgent(
                 if (
                   typeof compactResult.result?.tokensAfter === "number" &&
                   Number.isFinite(compactResult.result.tokensAfter) &&
-                  compactResult.result.tokensAfter > 0
+                  compactResult.result.tokensAfter >= 0
                 ) {
                   lastCompactionTokensAfter = Math.floor(compactResult.result.tokensAfter);
                 }
@@ -2170,6 +2177,25 @@ export async function runEmbeddedPiAgent(
                 error: { kind: "hook_block", message: errorText },
               },
             };
+          }
+
+          if (promptError && !aborted && promptErrorSource !== "compaction") {
+            const codexClientCloseRetry = resolveCodexAppServerClientCloseRetry({
+              attempt,
+              alreadyRetried: codexAppServerClientCloseRetries > 0,
+            });
+            if (codexClientCloseRetry.retry) {
+              codexAppServerClientCloseRetries += 1;
+              suppressNextUserMessagePersistence = true;
+              log.warn(
+                `codex app-server stdio client closed before turn completion; retrying once ` +
+                  `runId=${params.runId} sessionId=${params.sessionId}`,
+              );
+              continue;
+            }
+            if (attempt.codexAppServerFailure) {
+              throw promptError;
+            }
           }
 
           if (promptError && !aborted && promptErrorSource !== "compaction") {
@@ -2664,6 +2690,35 @@ export async function runEmbeddedPiAgent(
           });
           const timedOutDuringPrompt =
             timedOut && !timedOutDuringCompaction && !timedOutDuringToolExecution;
+          const finalAssistantStopReason = (sessionLastAssistant?.stopReason ?? "")
+            .trim()
+            .toLowerCase();
+          const recoveredFinalAssistantTextAfterPromptTimeout =
+            timedOutDuringPrompt &&
+            ["completed", "end_turn", "stop"].includes(finalAssistantStopReason)
+              ? (finalAssistantVisibleText ?? finalAssistantRawText)?.trim()
+              : undefined;
+          const payloadAlreadyContainsRecoveredFinalAssistant =
+            recoveredFinalAssistantTextAfterPromptTimeout
+              ? (payloadsWithToolMedia ?? []).some(
+                  (payload) =>
+                    payload?.isError !== true &&
+                    payload?.isReasoning !== true &&
+                    typeof payload.text === "string" &&
+                    payload.text.trim() === recoveredFinalAssistantTextAfterPromptTimeout,
+                )
+              : false;
+          const recoveredFinalAssistantPayloadsAfterPromptTimeout =
+            recoveredFinalAssistantTextAfterPromptTimeout &&
+            !payloadAlreadyContainsRecoveredFinalAssistant
+              ? [{ text: recoveredFinalAssistantTextAfterPromptTimeout }]
+              : undefined;
+          const hasSuccessfulFinalAssistantAfterPromptTimeout =
+            timedOutDuringPrompt &&
+            Boolean(
+              payloadAlreadyContainsRecoveredFinalAssistant ||
+              recoveredFinalAssistantPayloadsAfterPromptTimeout?.length,
+            );
           const hasPartialAssistantTextAfterPromptTimeout =
             timedOutDuringPrompt &&
             (attempt.assistantTexts ?? []).some((text) => text.trim().length > 0) &&
@@ -2685,7 +2740,11 @@ export async function runEmbeddedPiAgent(
           // Timeout aborts can leave the run without payloads or with only a
           // partial assistant fragment. Emit an explicit timeout error instead,
           // preserving any tool payloads that succeeded before the timeout.
-          if (timedOutDuringPrompt && !hasMessagingToolDeliveryEvidence(attempt)) {
+          if (
+            timedOutDuringPrompt &&
+            !hasSuccessfulFinalAssistantAfterPromptTimeout &&
+            !hasMessagingToolDeliveryEvidence(attempt)
+          ) {
             const defaultTimeoutText = idleTimedOut
               ? "The model did not produce a response before the model idle timeout. " +
                 "Please try again, or increase `models.providers.<id>.timeoutSeconds` for slow local or self-hosted providers. " +
@@ -2739,6 +2798,7 @@ export async function runEmbeddedPiAgent(
               messagingToolSourceReplyPayloads: attempt.messagingToolSourceReplyPayloads,
               heartbeatToolResponse: attempt.heartbeatToolResponse,
               successfulCronAdds: attempt.successfulCronAdds,
+              acceptedSessionSpawns: attempt.acceptedSessionSpawns,
             };
           }
 
@@ -2749,11 +2809,13 @@ export async function runEmbeddedPiAgent(
             timedOut,
             attempt,
           });
-          const payloadsForTerminalPath = payloadsWithToolMedia?.length
-            ? payloadsWithToolMedia
-            : silentToolResultReplyPayload
-              ? [silentToolResultReplyPayload]
-              : payloadsWithToolMedia;
+          const payloadsForTerminalPath = recoveredFinalAssistantPayloadsAfterPromptTimeout
+            ? recoveredFinalAssistantPayloadsAfterPromptTimeout
+            : payloadsWithToolMedia?.length
+              ? payloadsWithToolMedia
+              : silentToolResultReplyPayload
+                ? [silentToolResultReplyPayload]
+                : payloadsWithToolMedia;
           const payloadCount = payloadsForTerminalPath?.length ?? 0;
           const emptyAssistantReplyIsSilent = shouldTreatEmptyAssistantReplyAsSilent({
             allowEmptyAssistantReplyAsSilent: params.allowEmptyAssistantReplyAsSilent,
@@ -2962,6 +3024,7 @@ export async function runEmbeddedPiAgent(
               messagingToolSourceReplyPayloads: attempt.messagingToolSourceReplyPayloads,
               heartbeatToolResponse: attempt.heartbeatToolResponse,
               successfulCronAdds: attempt.successfulCronAdds,
+              acceptedSessionSpawns: attempt.acceptedSessionSpawns,
             };
           }
           if (reasoningOnlyRetriesExhausted && !finalAssistantVisibleText) {
@@ -3014,6 +3077,7 @@ export async function runEmbeddedPiAgent(
               messagingToolSourceReplyPayloads: attempt.messagingToolSourceReplyPayloads,
               heartbeatToolResponse: attempt.heartbeatToolResponse,
               successfulCronAdds: attempt.successfulCronAdds,
+              acceptedSessionSpawns: attempt.acceptedSessionSpawns,
             };
           }
           if (
@@ -3125,6 +3189,7 @@ export async function runEmbeddedPiAgent(
               messagingToolSourceReplyPayloads: attempt.messagingToolSourceReplyPayloads,
               heartbeatToolResponse: attempt.heartbeatToolResponse,
               successfulCronAdds: attempt.successfulCronAdds,
+              acceptedSessionSpawns: attempt.acceptedSessionSpawns,
             };
           }
 
@@ -3241,6 +3306,7 @@ export async function runEmbeddedPiAgent(
             messagingToolSourceReplyPayloads: attempt.messagingToolSourceReplyPayloads,
             heartbeatToolResponse: attempt.heartbeatToolResponse,
             successfulCronAdds: attempt.successfulCronAdds,
+            acceptedSessionSpawns: attempt.acceptedSessionSpawns,
           };
         }
       } finally {

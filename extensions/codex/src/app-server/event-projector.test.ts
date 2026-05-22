@@ -252,11 +252,15 @@ function rateLimitsUpdated(resetsAt: number): ProjectorNotification {
 }
 
 function turnCompleted(items: unknown[] = []): ProjectorNotification {
+  return turnWithStatus("completed", items);
+}
+
+function turnWithStatus(status: string, items: unknown[] = []): ProjectorNotification {
   return {
     method: "turn/completed",
     params: {
       threadId: THREAD_ID,
-      turn: { id: TURN_ID, status: "completed", items },
+      turn: { id: TURN_ID, status, items },
     },
   } as ProjectorNotification;
 }
@@ -305,6 +309,22 @@ describe("CodexAppServerEventProjector", () => {
       total: 12,
     });
     expect(result.replayMetadata.replaySafe).toBe(true);
+  });
+
+  it("suppresses mirrored user prompt when the inbound message was already persisted", async () => {
+    const params = await createParams();
+    const projector = await createProjector({
+      ...params,
+      suppressNextUserMessagePersistence: true,
+    });
+    await projector.handleNotification(
+      turnCompleted([{ type: "agentMessage", id: "msg-1", text: "retry result" }]),
+    );
+
+    const result = projector.buildResult(buildEmptyToolTelemetry());
+
+    expect(result.messagesSnapshot.map((message) => message.role)).toEqual(["assistant"]);
+    expect(JSON.stringify(result.messagesSnapshot)).not.toContain(params.prompt);
   });
 
   it("records canonical OpenAI Codex app-server turns with Codex local attribution", async () => {
@@ -570,6 +590,79 @@ describe("CodexAppServerEventProjector", () => {
 
     expect(result.assistantTexts).toEqual([]);
     expect(result.lastAssistant).toBeUndefined();
+  });
+
+  it("does not treat app-server interrupted status as a user cancellation by itself", async () => {
+    const projector = await createProjector();
+
+    await projector.handleNotification(turnWithStatus("interrupted"));
+
+    const result = projector.buildResult(buildEmptyToolTelemetry());
+
+    expect(result.aborted).toBe(false);
+    expect(result.externalAbort).toBe(false);
+    expect(result.timedOut).toBe(false);
+    expect(result.promptError).toBeNull();
+    expect(result.assistantTexts).toEqual([]);
+    expect(result.lastAssistant).toBeUndefined();
+  });
+
+  it("keeps sparse successful bash output eligible for the no-visible-answer guard", async () => {
+    const projector = await createProjector();
+
+    await projector.handleNotification(
+      turnWithStatus("interrupted", [
+        {
+          type: "commandExecution",
+          id: "cmd-empty-output",
+          command:
+            "ps -eo pid,ppid,stat,cmd | rg 'venv-roadmap|pytest|run_security_contract_validation|validate_public_install|git push|apply_patch' || true",
+          cwd: "/workspace",
+          processId: null,
+          source: "agent",
+          status: "completed",
+          commandActions: [],
+          aggregatedOutput: "",
+          exitCode: 0,
+          durationMs: 42,
+        },
+      ]),
+    );
+
+    const result = projector.buildResult(buildEmptyToolTelemetry());
+
+    expect(result.aborted).toBe(false);
+    expect(result.assistantTexts).toEqual([]);
+    expect(result.toolMetas).toEqual([
+      expect.objectContaining({ toolName: "bash", meta: expect.stringContaining("workspace") }),
+    ]);
+  });
+
+  it("keeps explicit cancellation marked aborted for interrupted tool-only turns", async () => {
+    const projector = await createProjector();
+    projector.markAborted();
+
+    await projector.handleNotification(
+      turnWithStatus("interrupted", [
+        {
+          type: "commandExecution",
+          id: "cmd-cancelled",
+          command: "/bin/bash -lc true",
+          cwd: "/workspace",
+          processId: null,
+          source: "agent",
+          status: "completed",
+          commandActions: [],
+          aggregatedOutput: "",
+          exitCode: 0,
+          durationMs: 12,
+        },
+      ]),
+    );
+
+    const result = projector.buildResult(buildEmptyToolTelemetry());
+    expect(result.aborted).toBe(true);
+    expect(result.assistantTexts).toEqual([]);
   });
 
   it("does not fail a completed reply after a retryable app-server error notification", async () => {

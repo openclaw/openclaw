@@ -40,12 +40,18 @@ vi.mock("./workspace.js", () => ({
   resolveDefaultAgentWorkspaceDir: () => "/warm/default-workspace",
 }));
 
+vi.mock("./agent-scope-config.js", () => ({
+  listAgentIds: () => ["default"],
+  resolveAgentDir: () => "/warm/default-agent",
+  resolveAgentWorkspaceDir: () => "/warm/default-workspace",
+  resolveDefaultAgentId: () => "default",
+}));
+
 const { clearCurrentProviderAuthState, hasAuthForModelProvider, warmCurrentProviderAuthState } =
   await import("./model-provider-auth.js");
 
 describe("prepared provider auth state", () => {
   afterEach(() => {
-    vi.useRealTimers();
     clearCurrentProviderAuthState();
     vi.clearAllMocks();
   });
@@ -67,13 +73,13 @@ describe("prepared provider auth state", () => {
     // hasAuthForModelProvider returns the cached answers without re-running
     // the compute path.
     modelAuthMocks.hasRuntimeAvailableProviderAuth.mockReturnValue(true);
-    expect(hasAuthForModelProvider({ provider: "openai", cfg })).toBe(true);
-    expect(hasAuthForModelProvider({ provider: "anthropic", cfg })).toBe(false);
+    await expect(hasAuthForModelProvider({ provider: "openai", cfg })).resolves.toBe(true);
+    await expect(hasAuthForModelProvider({ provider: "anthropic", cfg })).resolves.toBe(false);
     expect(modelAuthMocks.hasRuntimeAvailableProviderAuth).toHaveBeenCalledTimes(2);
 
     // Clearing the prepared state forces the compute path on the next read.
     clearCurrentProviderAuthState();
-    expect(hasAuthForModelProvider({ provider: "anthropic", cfg })).toBe(true);
+    await expect(hasAuthForModelProvider({ provider: "anthropic", cfg })).resolves.toBe(true);
     expect(modelAuthMocks.hasRuntimeAvailableProviderAuth).toHaveBeenCalledTimes(3);
   });
 
@@ -92,18 +98,18 @@ describe("prepared provider auth state", () => {
     // runtimeAuthDiscovery: false maps to both flags false, and the answer
     // must reflect that narrower scope, not the prepared broad answer.
     modelAuthMocks.hasRuntimeAvailableProviderAuth.mockReturnValue(false);
-    expect(
+    await expect(
       hasAuthForModelProvider({
         provider: "openai",
         cfg,
         discoverExternalCliAuth: false,
         allowPluginSyntheticAuth: false,
       }),
-    ).toBe(false);
+    ).resolves.toBe(false);
     expect(modelAuthMocks.hasRuntimeAvailableProviderAuth).toHaveBeenCalledTimes(2);
 
     // Broad-scope caller (default flags) still hits the prepared map.
-    expect(hasAuthForModelProvider({ provider: "openai", cfg })).toBe(true);
+    await expect(hasAuthForModelProvider({ provider: "openai", cfg })).resolves.toBe(true);
     expect(modelAuthMocks.hasRuntimeAvailableProviderAuth).toHaveBeenCalledTimes(2);
   });
 
@@ -118,28 +124,10 @@ describe("prepared provider auth state", () => {
     expect(modelAuthMocks.hasRuntimeAvailableProviderAuth).toHaveBeenCalledTimes(1);
 
     modelAuthMocks.hasRuntimeAvailableProviderAuth.mockReturnValue(false);
-    expect(hasAuthForModelProvider({ provider: "openai", cfg: clonedCfg })).toBe(true);
+    await expect(hasAuthForModelProvider({ provider: "openai", cfg: clonedCfg })).resolves.toBe(
+      true,
+    );
     expect(modelAuthMocks.hasRuntimeAvailableProviderAuth).toHaveBeenCalledTimes(1);
-  });
-
-  it("hasAuthForModelProvider falls through after the prepared auth state TTL", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(0);
-    const cfg = {} as OpenClawConfig;
-    modelCatalogMocks.loadModelCatalog.mockResolvedValue([
-      { id: "gpt", name: "gpt", provider: "openai" },
-    ]);
-    modelAuthMocks.hasRuntimeAvailableProviderAuth.mockReturnValue(false);
-    await warmCurrentProviderAuthState(cfg);
-    expect(modelAuthMocks.hasRuntimeAvailableProviderAuth).toHaveBeenCalledTimes(1);
-
-    modelAuthMocks.hasRuntimeAvailableProviderAuth.mockReturnValue(true);
-    expect(hasAuthForModelProvider({ provider: "openai", cfg })).toBe(false);
-    expect(modelAuthMocks.hasRuntimeAvailableProviderAuth).toHaveBeenCalledTimes(1);
-
-    vi.setSystemTime(10_001);
-    expect(hasAuthForModelProvider({ provider: "openai", cfg })).toBe(true);
-    expect(modelAuthMocks.hasRuntimeAvailableProviderAuth).toHaveBeenCalledTimes(2);
   });
 
   it("hasAuthForModelProvider falls through to compute when the caller passes a non-default workspaceDir", async () => {
@@ -155,23 +143,23 @@ describe("prepared provider auth state", () => {
     // warmer did not cover; the prepared answer must not leak across
     // workspaces because env/plugin auth resolution depends on workspaceDir.
     modelAuthMocks.hasRuntimeAvailableProviderAuth.mockReturnValue(false);
-    expect(
+    await expect(
       hasAuthForModelProvider({
         provider: "openai",
         cfg,
         workspaceDir: "/different/agent-workspace",
       }),
-    ).toBe(false);
+    ).resolves.toBe(false);
     expect(modelAuthMocks.hasRuntimeAvailableProviderAuth).toHaveBeenCalledTimes(2);
 
     // Same workspaceDir as the warmer (the default) still hits the prepared map.
-    expect(
+    await expect(
       hasAuthForModelProvider({
         provider: "openai",
         cfg,
         workspaceDir: "/warm/default-workspace",
       }),
-    ).toBe(true);
+    ).resolves.toBe(true);
     expect(modelAuthMocks.hasRuntimeAvailableProviderAuth).toHaveBeenCalledTimes(2);
   });
 
@@ -207,9 +195,13 @@ describe("prepared provider auth state", () => {
     expect(modelAuthMocks.hasRuntimeAvailableProviderAuth).toHaveBeenCalledTimes(2);
 
     modelAuthMocks.hasRuntimeAvailableProviderAuth.mockReturnValue(true);
-    expect(hasAuthForModelProvider({ provider: "openai", cfg: secondCfg })).toBe(false);
+    await expect(hasAuthForModelProvider({ provider: "openai", cfg: secondCfg })).resolves.toBe(
+      false,
+    );
     expect(modelAuthMocks.hasRuntimeAvailableProviderAuth).toHaveBeenCalledTimes(2);
-    expect(hasAuthForModelProvider({ provider: "openai", cfg: firstCfg })).toBe(true);
+    await expect(hasAuthForModelProvider({ provider: "openai", cfg: firstCfg })).resolves.toBe(
+      true,
+    );
     expect(modelAuthMocks.hasRuntimeAvailableProviderAuth).toHaveBeenCalledTimes(3);
   });
 });

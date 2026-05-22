@@ -4,9 +4,8 @@ import {
 } from "../../../src/gateway/events.js";
 import { ConnectErrorDetailCodes } from "../../../src/gateway/protocol/connect-error-details.js";
 import {
-  CHAT_SESSIONS_ACTIVE_MINUTES,
-  CHAT_SESSIONS_REFRESH_LIMIT,
   clearPendingQueueItemsForRun,
+  createChatSessionsLoadOverrides,
   flushChatQueueForEvent,
   refreshChatAvatar,
 } from "./app-chat.ts";
@@ -110,6 +109,7 @@ type GatewayHost = {
   pendingUpdateExpectedVersion: string | null;
   updateStatusBanner: { tone: "danger" | "warn" | "info"; text: string } | null;
   sessionKey: string;
+  sessionsShowArchived: boolean;
   chatRunId: string | null;
   pendingAbort?: { runId?: string | null; sessionKey: string } | null;
   refreshSessionsAfterChat: Set<string>;
@@ -689,9 +689,7 @@ function handleTerminalChatEvent(
     host.refreshSessionsAfterChat.delete(runId);
     if (state === "final") {
       void loadSessions(host as unknown as SessionsState, {
-        activeMinutes: CHAT_SESSIONS_ACTIVE_MINUTES,
-        agentId: resolveChatEventSessionListAgentId(host, payload),
-        limit: CHAT_SESSIONS_REFRESH_LIMIT,
+        ...createChatSessionsLoadOverrides(host),
       });
     }
   }
@@ -718,27 +716,6 @@ function isEventForDifferentActiveRun(
   activeRunId: string | null,
 ): boolean {
   return Boolean(activeRunId && payload && payload.runId !== activeRunId);
-}
-
-function resolveChatEventSessionListAgentId(
-  host: GatewayHost,
-  payload: ChatEventPayload | undefined,
-): string {
-  return resolveSessionListAgentIdForSessionKey(
-    host,
-    payload?.sessionKey?.trim() || host.sessionKey,
-  );
-}
-
-function resolveSessionListAgentIdForSessionKey(host: GatewayHost, sessionKey: string): string {
-  const parsed = parseAgentSessionKey(sessionKey);
-  if (parsed?.agentId) {
-    return parsed.agentId;
-  }
-  const snapshot = host.hello?.snapshot as
-    | { sessionDefaults?: SessionDefaultsSnapshot }
-    | undefined;
-  return normalizeAgentId(snapshot?.sessionDefaults?.defaultAgentId);
 }
 
 function handleChatGatewayEvent(host: GatewayHost, payload: ChatEventPayload | undefined) {
@@ -860,9 +837,7 @@ function handleSessionMessageGatewayEvent(
     const refreshStartedAt = Date.now();
     const runIdBeforeRefresh = host.chatRunId;
     void loadSessions(host as unknown as SessionsState, {
-      activeMinutes: CHAT_SESSIONS_ACTIVE_MINUTES,
-      agentId: resolveSessionListAgentIdForSessionKey(host, sessionKey),
-      limit: CHAT_SESSIONS_REFRESH_LIMIT,
+      ...createChatSessionsLoadOverrides(host),
     }).finally(() =>
       replayDeferredSessionMessageReloadAfterSessionsRefresh(
         host,

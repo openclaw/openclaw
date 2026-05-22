@@ -1023,7 +1023,25 @@ export async function startGatewayPostAttachRuntime(
       if (params.minimalTestGateway) {
         return;
       }
-      const { warmCurrentProviderAuthState } = await import("../agents/model-provider-auth.js");
+      const { clearCurrentProviderAuthState, warmCurrentProviderAuthState } =
+        await import("../agents/model-provider-auth.js");
+      const { setAuthProfileFailureHook } = await import("../agents/auth-profiles.js");
+      const scheduleAuthMapRewarm = (reason: string) => {
+        const startMs = Date.now();
+        void warmCurrentProviderAuthState(params.cfgAtStart)
+          .then(() => {
+            params.log.info(
+              `provider auth state re-warmed (${reason}) in ${Date.now() - startMs}ms`,
+            );
+          })
+          .catch((err) => {
+            params.log.warn(`provider auth state rewarm failed: ${String(err)}`);
+          });
+      };
+      setAuthProfileFailureHook(() => {
+        clearCurrentProviderAuthState();
+        scheduleAuthMapRewarm("auth-profile-failure");
+      });
       const startMs = Date.now();
       await warmCurrentProviderAuthState(params.cfgAtStart);
       params.log.info(`provider auth state pre-warmed in ${Date.now() - startMs}ms`);

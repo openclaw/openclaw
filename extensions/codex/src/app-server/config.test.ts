@@ -70,6 +70,7 @@ describe("Codex app-server config", () => {
           serviceTier: "flex",
           codeModeOnly: true,
           turnCompletionIdleTimeoutMs: 120_000,
+          postToolRawAssistantCompletionIdleTimeoutMs: 180_000,
         },
       },
       env: {
@@ -85,6 +86,7 @@ describe("Codex app-server config", () => {
       serviceTier: "flex",
       codeModeOnly: true,
       turnCompletionIdleTimeoutMs: 120_000,
+      postToolRawAssistantCompletionIdleTimeoutMs: 180_000,
     });
     expectFields(runtime.start, "runtime start", {
       transport: "websocket",
@@ -162,6 +164,17 @@ describe("Codex app-server config", () => {
       readCodexPluginConfig({
         appServer: {
           approvalPolicy: "always",
+        },
+      }),
+    ).toStrictEqual({});
+  });
+
+  it("rejects unknown app-server fields", () => {
+    expect(
+      readCodexPluginConfig({
+        appServer: {
+          postToolRawAssistantCompletionIdleTimeoutMs: 180_000,
+          unknownTimeoutMs: 1,
         },
       }),
     ).toStrictEqual({});
@@ -604,6 +617,38 @@ allowed_sandbox_modes = ["read-only", "workspace-write"]
         commandSource: "env",
       },
     );
+  });
+
+  it("rejects Codex app-server command overrides that include inline arguments", () => {
+    expect(() =>
+      resolveRuntimeForTest({
+        pluginConfig: {
+          appServer: {
+            command: "node C:\\Users\\me\\.openclaw\\npm\\node_modules\\@openai\\codex\\bin\\codex.js",
+          },
+        },
+      }),
+    ).toThrow(
+      "plugins.entries.codex.config.appServer.command must be only the Codex app-server executable path",
+    );
+    expect(() =>
+      resolveRuntimeForTest({
+        pluginConfig: {},
+        env: {
+          OPENCLAW_CODEX_APP_SERVER_BIN:
+            "node C:\\Users\\me\\.openclaw\\npm\\node_modules\\@openai\\codex\\bin\\codex.js",
+        },
+      }),
+    ).toThrow("OPENCLAW_CODEX_APP_SERVER_BIN must be only the Codex app-server executable path");
+  });
+
+  it("preserves executable paths that contain spaces", () => {
+    const runtime = resolveRuntimeForTest({
+      pluginConfig: { appServer: { command: "C:\\Program Files\\OpenAI Codex\\codex.exe" } },
+      env: {},
+    });
+
+    expect(runtime.start.command).toBe("C:\\Program Files\\OpenAI Codex\\codex.exe");
   });
 
   it("resolves Computer Use setup from plugin config and environment fallbacks", () => {

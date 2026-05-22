@@ -364,6 +364,7 @@ describe("openai transport stream", () => {
               output_tokens: 5,
               total_tokens: 7,
               input_tokens_details: { cached_tokens: 4 },
+              output_tokens_details: { reasoning_tokens: 3 },
             },
           },
         },
@@ -377,6 +378,7 @@ describe("openai transport stream", () => {
       input: 0,
       output: 5,
       cacheRead: 4,
+      reasoningTokens: 3,
       totalTokens: 9,
     });
   });
@@ -1119,7 +1121,79 @@ describe("openai transport stream", () => {
     }
   });
 
-  it("does not double-count reasoning tokens and clamps uncached prompt usage at zero", () => {
+  it("preserves OpenAI-compatible error metadata on failed chat requests", async () => {
+    const server = createServer((req, res) => {
+      req.resume();
+      req.on("end", () => {
+        res.writeHead(429, {
+          "content-type": "application/json; charset=utf-8",
+          "x-request-id": "req_error_metadata",
+        });
+        res.end(
+          JSON.stringify({
+            error: {
+              message: "Quota exceeded for api_key=sk-secret1234567890abcd",
+              type: "rate_limit_error",
+              code: "insufficient_quota",
+            },
+          }),
+        );
+      });
+    });
+
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    try {
+      const address = server.address();
+      if (!address || typeof address === "string") {
+        throw new Error("Missing loopback server address");
+      }
+      const model = {
+        id: "gpt-5.4-mini",
+        name: "GPT-5.4 Mini",
+        api: "openai-completions",
+        provider: "openai",
+        baseUrl: `http://127.0.0.1:${address.port}/v1`,
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 200_000,
+        maxTokens: 8192,
+      } satisfies Model<"openai-completions">;
+      const stream = createOpenAICompletionsTransportStreamFn()(
+        model,
+        {
+          systemPrompt: "system",
+          messages: [{ role: "user", content: "Reply OK", timestamp: Date.now() }],
+          tools: [],
+        } as never,
+        { apiKey: "test-key" } as never,
+      );
+
+      let errorPayload: Record<string, unknown> | undefined;
+      for await (const event of stream as AsyncIterable<{
+        type: string;
+        error?: Record<string, unknown>;
+      }>) {
+        if (event.type === "error") {
+          errorPayload = event.error;
+        }
+      }
+
+      expect(errorPayload).toMatchObject({
+        stopReason: "error",
+        errorCode: "insufficient_quota",
+        errorType: "rate_limit_error",
+      });
+      expect(String(errorPayload?.errorBody)).toContain("Quota exceeded");
+      expect(String(errorPayload?.errorBody)).not.toContain("sk-secret1234567890abcd");
+    } finally {
+      await new Promise<void>((resolve, reject) => {
+        server.close((error) => (error ? reject(error) : resolve()));
+      });
+    }
+  });
+
+  it("preserves reasoning tokens without double-counting them", () => {
     const model = {
       id: "gpt-5",
       name: "GPT-5",
@@ -1148,9 +1222,25 @@ describe("openai transport stream", () => {
         input: 7,
         output: 20,
         cacheRead: 3,
+        reasoningTokens: 7,
         totalTokens: 30,
       },
     );
+  });
+
+  it("clamps uncached prompt usage at zero", () => {
+    const model = {
+      id: "gpt-5",
+      name: "GPT-5",
+      api: "openai-completions",
+      provider: "openai",
+      baseUrl: "https://api.openai.com/v1",
+      reasoning: true,
+      input: ["text"],
+      cost: { input: 1, output: 2, cacheRead: 0.5, cacheWrite: 0 },
+      contextWindow: 200000,
+      maxTokens: 8192,
+    } satisfies Model<"openai-completions">;
 
     expectRecordFields(
       parseTransportChunkUsage(
@@ -2381,6 +2471,67 @@ describe("openai transport stream", () => {
       id: "fc_prior",
       call_id: "call_abc",
     });
+  });
+
+  it("drops oversized GitHub Copilot Responses reasoning replay items before send", () => {
+    const model = {
+      id: "gpt-5.5",
+      name: "GPT-5.5",
+      api: "openai-responses",
+      provider: "github-copilot",
+      baseUrl: "https://api.githubcopilot.com",
+      reasoning: true,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 400000,
+      maxTokens: 8192,
+    } satisfies Model<"openai-responses">;
+    const longReasoningId = `rs_${"x".repeat(380)}`;
+
+    const params = buildOpenAIResponsesParams(
+      model,
+      {
+        systemPrompt: "system",
+        messages: [
+          {
+            role: "assistant",
+            api: "openai-responses",
+            provider: "github-copilot",
+            model: "gpt-5.5",
+            usage: {
+              input: 0,
+              output: 0,
+              cacheRead: 0,
+              cacheWrite: 0,
+              totalTokens: 0,
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+            },
+            stopReason: "toolUse",
+            timestamp: 1,
+            content: [
+              {
+                type: "thinking",
+                thinking: "Need a tool.",
+                thinkingSignature: JSON.stringify({
+                  type: "reasoning",
+                  id: longReasoningId,
+                  summary: [],
+                }),
+              },
+            ],
+          },
+        ],
+        tools: [],
+      } as never,
+      { sessionId: "session-123" },
+    ) as {
+      input?: Array<{
+        type?: string;
+        id?: string;
+      }>;
+    };
+
+    expect(params.input?.some((item) => item.type === "reasoning")).toBe(false);
   });
 
   it("strips encrypted reasoning replay when provenance does not match", () => {
