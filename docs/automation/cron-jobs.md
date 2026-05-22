@@ -99,6 +99,13 @@ This fires ~5–6 times per month instead of 0–1 times per month. OpenClaw use
 <AccordionGroup>
   <Accordion title="Main session vs isolated vs custom">
     **Main session** jobs enqueue a system event into a cron-owned run lane and optionally wake the heartbeat (`--wake now` or `--wake next-heartbeat`). They can use the target main session's last delivery context for replies, but they do not append routine cron turns to the human chat lane and do not extend daily/idle reset freshness for the target session. **Isolated** jobs run a dedicated agent turn with a fresh session. **Custom sessions** (`session:xxx`) persist context across runs, enabling workflows like daily standups that build on previous summaries.
+
+    Main-session cron events are self-contained system-event reminders. They do
+    not automatically include the default heartbeat prompt's "Read
+    HEARTBEAT.md" instruction. If a recurring reminder should consult
+    `HEARTBEAT.md`, say that explicitly in the cron event text or in the
+    agent's own instructions.
+
   </Accordion>
   <Accordion title="What 'fresh session' means for isolated jobs">
     For isolated jobs, "fresh session" means a new transcript/session id for each run. OpenClaw may carry safe preferences such as thinking/fast/verbose settings, labels, and explicit user-selected model/auth overrides, but it does not inherit ambient conversation context from an older cron row: channel/group routing, send or queue policy, elevation, origin, or ACP runtime binding. Use `current` or `session:<id>` when a recurring job should deliberately build on the same conversation context.
