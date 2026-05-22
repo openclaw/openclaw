@@ -92,6 +92,39 @@ describe("daily session reset scheduler", () => {
     expect(performReset).not.toHaveBeenCalled();
   });
 
+  it("does not use idle expiry to reset daily sessions before the daily boundary", async () => {
+    const sessionStartedAt = new Date(2026, 4, 19, 6, 0, 0, 0).getTime();
+    const lastInteractionAt = new Date(2026, 4, 19, 6, 30, 0, 0).getTime();
+    const beforeNoonReset = new Date(2026, 4, 19, 8, 0, 0, 0).getTime();
+    const sessionKey = "agent:main:telegram:direct:user-1";
+    const { cfg } = await makeStore({
+      [sessionKey]: {
+        sessionId: "idle-expired-session",
+        updatedAt: lastInteractionAt,
+        sessionStartedAt,
+        lastInteractionAt,
+      },
+    });
+    cfg.session = {
+      ...cfg.session,
+      reset: {
+        mode: "daily",
+        atHour: 12,
+        idleMinutes: 30,
+      },
+    };
+    const performReset = vi.fn(async () => ({ ok: true }));
+
+    const result = await resetStaleDailySessions({
+      cfg,
+      nowMs: beforeNoonReset,
+      performReset,
+    });
+
+    expect(result).toEqual({ checked: 1, reset: 0, errors: 0 });
+    expect(performReset).not.toHaveBeenCalled();
+  });
+
   it("evaluates duplicate session rows as one freshest alias group", async () => {
     const beforeReset = new Date(2026, 4, 18, 23, 0, 0, 0).getTime();
     const afterReset = new Date(2026, 4, 19, 8, 0, 0, 0).getTime();

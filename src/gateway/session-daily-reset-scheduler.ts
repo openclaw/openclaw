@@ -60,7 +60,7 @@ export async function resetStaleDailySessions(params: {
       ) {
         return { ok: false, skipped: true };
       }
-      return result;
+      return result.ok ? { ok: true } : { ok: false };
     });
   let checked = 0;
   let reset = 0;
@@ -123,17 +123,24 @@ export async function resetStaleDailySessions(params: {
         continue;
       }
       checked += 1;
+      const lifecycle = resolveSessionLifecycleTimestamps({
+        entry: resetEntry,
+        agentId: sessionTarget.agentId,
+        storePath: sessionTarget.storePath,
+      });
       const freshness = evaluateSessionFreshness({
         updatedAt: resetEntry.updatedAt,
-        ...resolveSessionLifecycleTimestamps({
-          entry: resetEntry,
-          agentId: sessionTarget.agentId,
-          storePath: sessionTarget.storePath,
-        }),
+        ...lifecycle,
         now,
         policy: resetPolicy,
       });
-      if (freshness.fresh) {
+      if (
+        !isDailyBoundaryStale({
+          entry: resetEntry,
+          dailyResetAt: freshness.dailyResetAt,
+          sessionStartedAt: lifecycle.sessionStartedAt,
+        })
+      ) {
         continue;
       }
       const latestStore = loadSessionStore(sessionTarget.storePath, { skipCache: true });
@@ -159,17 +166,24 @@ export async function resetStaleDailySessions(params: {
       ) {
         continue;
       }
+      const latestLifecycle = resolveSessionLifecycleTimestamps({
+        entry: latestEntry,
+        agentId: sessionTarget.agentId,
+        storePath: sessionTarget.storePath,
+      });
       const latestFreshness = evaluateSessionFreshness({
         updatedAt: latestEntry.updatedAt,
-        ...resolveSessionLifecycleTimestamps({
-          entry: latestEntry,
-          agentId: sessionTarget.agentId,
-          storePath: sessionTarget.storePath,
-        }),
+        ...latestLifecycle,
         now,
         policy: latestResetPolicy,
       });
-      if (latestFreshness.fresh) {
+      if (
+        !isDailyBoundaryStale({
+          entry: latestEntry,
+          dailyResetAt: latestFreshness.dailyResetAt,
+          sessionStartedAt: latestLifecycle.sessionStartedAt,
+        })
+      ) {
         continue;
       }
       const result = await performReset(resetSessionKey, {
@@ -178,13 +192,27 @@ export async function resetStaleDailySessions(params: {
       });
       if (result.ok) {
         reset += 1;
-      } else if (!result.skipped) {
+      } else if (!("skipped" in result && result.skipped)) {
         errors += 1;
       }
     }
   }
 
   return { checked, reset, errors };
+}
+
+function isDailyBoundaryStale(params: {
+  entry: SessionEntry;
+  dailyResetAt: number | undefined;
+  sessionStartedAt?: number;
+}): boolean {
+  const dailyResetAt = params.dailyResetAt;
+  if (dailyResetAt == null) {
+    return false;
+  }
+  const sessionStartedAt =
+    typeof params.sessionStartedAt === "number" ? params.sessionStartedAt : params.entry.updatedAt;
+  return sessionStartedAt < dailyResetAt;
 }
 
 function hasProviderOwnedSession(entry: SessionEntry | undefined, resetConfigured: boolean) {
