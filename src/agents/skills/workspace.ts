@@ -27,6 +27,7 @@ import type {
   SkillEntry,
   SkillSnapshot,
 } from "./types.js";
+import { buildSkillBinsMap } from "./skill-bins.js";
 
 const fsp = fs.promises;
 const skillsLogger = createSubsystemLogger("skills");
