@@ -1418,6 +1418,9 @@
 .chat-controls__session-trigger-icon svg {
   width: 16px;
   height: 16px;
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 1.5px;
 }
 
 .chat-session-picker {
@@ -1542,6 +1545,9 @@
 .chat-session-picker__option-check svg {
   width: 16px;
   height: 16px;
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 1.5px;
 }
 
 .chat-session-picker__status {
