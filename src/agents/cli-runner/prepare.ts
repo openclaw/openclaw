@@ -57,7 +57,9 @@ import { buildCliAgentSystemPrompt, normalizeCliModel } from "./helpers.js";
 import { cliBackendLog } from "./log.js";
 import {
   buildCliSessionHistoryPrompt,
+  cliReseedMessagesLookThin,
   hasCliSessionTranscript,
+  loadClaudeCliReseedMessages,
   loadCliSessionHistoryMessages,
   loadCliSessionReseedMessages,
 } from "./session-history.js";
@@ -77,6 +79,9 @@ const prepareDeps = {
   // Surfaced as a dep so tests can stub the on-disk Claude CLI transcript probe
   // without touching ~/.claude/projects.
   claudeCliSessionTranscriptHasContent,
+  // Surfaced as a dep so tests can stub the Claude CLI transcript reseed
+  // fallback without touching ~/.claude/projects.
+  loadClaudeCliReseedMessages,
 };
 
 export function setCliRunnerPrepareTestDeps(overrides: Partial<typeof prepareDeps>): void {
@@ -460,17 +465,37 @@ export async function prepareCliRunContext(
     : reusableCliSession.invalidatedReason;
   const shouldPrepareOpenClawHistoryPrompt =
     !reusableCliSession.sessionId || allowRawTranscriptReseed;
+  let reseedMessages = shouldPrepareOpenClawHistoryPrompt
+    ? await loadCliSessionReseedMessages({
+        sessionId: params.sessionId,
+        sessionFile: params.sessionFile,
+        sessionKey: params.sessionKey,
+        agentId: params.agentId,
+        config: params.config,
+        allowRawTranscriptReseed,
+        rawTranscriptReseedReason,
+      })
+    : [];
+  // The OpenClaw-side transcript for a claude-cli run often holds only
+  // assistant turns plus internal runtime-event prompts. When it is missing
+  // or one-sided, fall back to the Claude CLI's own on-disk transcript — the
+  // authoritative turn-by-turn record — so the fresh run keeps real context.
+  if (
+    shouldPrepareOpenClawHistoryPrompt &&
+    isClaudeCliProvider(params.provider) &&
+    candidateClaudeCliSessionId &&
+    cliReseedMessagesLookThin(reseedMessages)
+  ) {
+    const claudeReseedMessages = prepareDeps.loadClaudeCliReseedMessages({
+      claudeCliSessionId: candidateClaudeCliSessionId,
+    });
+    if (claudeReseedMessages.length > 0) {
+      reseedMessages = claudeReseedMessages;
+    }
+  }
   const openClawHistoryPrompt = shouldPrepareOpenClawHistoryPrompt
     ? buildCliSessionHistoryPrompt({
-        messages: await loadCliSessionReseedMessages({
-          sessionId: params.sessionId,
-          sessionFile: params.sessionFile,
-          sessionKey: params.sessionKey,
-          agentId: params.agentId,
-          config: params.config,
-          allowRawTranscriptReseed,
-          rawTranscriptReseedReason,
-        }),
+        messages: reseedMessages,
         prompt: preparedPrompt,
       })
     : undefined;

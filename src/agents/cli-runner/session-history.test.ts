@@ -5,6 +5,7 @@ import { CURRENT_SESSION_VERSION } from "@earendil-works/pi-coding-agent";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   buildCliSessionHistoryPrompt,
+  cliReseedMessagesLookThin,
   hasCliSessionTranscript,
   loadCliSessionContextEngineMessages,
   loadCliSessionHistoryMessages,
@@ -581,5 +582,39 @@ describe("buildCliSessionHistoryPrompt", () => {
     expect(prompt).toContain("RECENT_ANSWER_MARKER");
     expect(prompt).toContain("<next_user_message>\ncurrent ask must survive\n</next_user_message>");
     expect(prompt).not.toContain("stale opening");
+  });
+});
+
+describe("cliReseedMessagesLookThin", () => {
+  it("treats an empty reseed as thin", () => {
+    expect(cliReseedMessagesLookThin([])).toBe(true);
+  });
+
+  it("treats an assistant-only transcript as thin (one-sided)", () => {
+    expect(
+      cliReseedMessagesLookThin([
+        { role: "assistant", content: "a1" },
+        { role: "assistant", content: "a2" },
+      ]),
+    ).toBe(true);
+  });
+
+  it("treats a user-only transcript as thin (one-sided)", () => {
+    expect(cliReseedMessagesLookThin([{ role: "user", content: "u1" }])).toBe(true);
+  });
+
+  it("treats a two-sided transcript as not thin", () => {
+    expect(
+      cliReseedMessagesLookThin([
+        { role: "user", content: "u1" },
+        { role: "assistant", content: "a1" },
+      ]),
+    ).toBe(false);
+  });
+
+  it("treats a compaction summary as not thin even on its own", () => {
+    expect(
+      cliReseedMessagesLookThin([{ role: "compactionSummary", summary: "prior context" }]),
+    ).toBe(false);
   });
 });

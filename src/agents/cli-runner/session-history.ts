@@ -7,6 +7,7 @@ import {
   resolveSessionFilePathOptions,
 } from "../../config/sessions/paths.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { readClaudeCliFallbackSeed } from "../../gateway/cli-session-history.js";
 import { isPathInside } from "../../infra/path-guards.js";
 import { resolveSessionAgentIds } from "../agent-scope.js";
 import {
@@ -379,4 +380,63 @@ export async function loadCliSessionReseedMessages(params: {
     },
     ...limitAgentHookHistoryMessages(tailMessages, MAX_CLI_SESSION_HISTORY_MESSAGES - 1),
   ];
+}
+
+/**
+ * A reseed message set is "thin" when it cannot anchor a continued
+ * conversation: empty, or one-sided (only user OR only assistant turns).
+ * The OpenClaw session transcript for a claude-cli run frequently holds only
+ * assistant outputs plus internal runtime-event prompts, so a reseed built
+ * from it alone leaves the fresh CLI session without the real user turns.
+ */
+export function cliReseedMessagesLookThin(messages: unknown[]): boolean {
+  if (messages.length === 0) {
+    return true;
+  }
+  let hasUser = false;
+  let hasAssistant = false;
+  for (const message of messages) {
+    const role = (message as { role?: unknown } | null)?.role;
+    if (role === "compactionSummary") {
+      // A compaction summary already encodes both sides of the conversation.
+      return false;
+    }
+    if (role === "user") {
+      hasUser = true;
+    } else if (role === "assistant") {
+      hasAssistant = true;
+    }
+  }
+  return !(hasUser && hasAssistant);
+}
+
+/**
+ * Reseed history reconstructed from the Claude CLI's own on-disk transcript
+ * (`~/.claude/projects/<dir>/<cliSessionId>.jsonl`) — the authoritative
+ * turn-by-turn record. Used as a fallback when the OpenClaw-side transcript
+ * is missing or one-sided. Returns the shape `buildCliSessionHistoryPrompt`
+ * consumes, mirroring `loadCliSessionReseedMessages`.
+ */
+export function loadClaudeCliReseedMessages(params: {
+  claudeCliSessionId?: string;
+  homeDir?: string;
+}): unknown[] {
+  const cliSessionId = params.claudeCliSessionId?.trim();
+  if (!cliSessionId) {
+    return [];
+  }
+  const seed = readClaudeCliFallbackSeed({
+    cliSessionId,
+    ...(params.homeDir ? { homeDir: params.homeDir } : {}),
+  });
+  if (!seed) {
+    return [];
+  }
+  const tail = limitAgentHookHistoryMessages(
+    seed.recentTurns as unknown[],
+    seed.summaryText ? MAX_CLI_SESSION_HISTORY_MESSAGES - 1 : MAX_CLI_SESSION_HISTORY_MESSAGES,
+  );
+  return seed.summaryText
+    ? [{ role: "compactionSummary", summary: seed.summaryText }, ...tail]
+    : tail;
 }
