@@ -800,6 +800,7 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
       }),
     ).toEqual({
       FOO: "bar",
+      OPENCLAW_ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS: "1",
       NODE_DISABLE_COMPILE_CACHE: "1",
     });
   });
