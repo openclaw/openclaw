@@ -457,6 +457,19 @@ export class TelegramPollingSession {
     err: unknown;
     update: ClaimedTelegramSpooledUpdate;
   }): Promise<void> {
+    const { isMissingAgentHarnessError } = await import("openclaw/agents/harness/errors.js");
+    // Configuration errors that will never resolve on retry should be dead-lettered.
+    if (isMissingAgentHarnessError(params.err)) {
+      await failTelegramSpooledUpdateClaim({
+        update: params.update,
+        reason: "missing-agent-harness",
+        message: formatErrorMessage(params.err),
+      });
+      this.opts.log(
+        `[telegram][diag] spooled update ${params.update.updateId} failed with MissingAgentHarnessError; dead-lettered (will not retry): ${formatErrorMessage(params.err)}`,
+      );
+      return;
+    }
     try {
       await releaseTelegramSpooledUpdateClaim(params.update);
     } catch (releaseErr) {
