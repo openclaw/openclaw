@@ -314,15 +314,12 @@ function authorizeTrustedProxy(params: {
   const user = userHeaderValue.trim();
 
   const allowUsers = trustedProxyConfig.allowUsers ?? [];
-  if (allowUsers.length > 0) {
-    // Compare case-insensitively: proxy identity headers often go through
-    // middleware that normalises casing differently from what operators type
-    // in the allowlist config.  Using lowercase on both sides is consistent
-    // with how origin headers are handled elsewhere in the auth layer.
-    const userLower = user.toLowerCase();
-    if (!allowUsers.some((u) => u.toLowerCase() === userLower)) {
-      return { reason: "trusted_proxy_user_not_allowed" };
-    }
+  // Exact, case-sensitive match is the documented contract. Case-folding
+  // would broaden the access-control boundary by letting "Nick@example.com"
+  // satisfy an allowlist entry for "nick@example.com". Operators that need
+  // case-insensitive matching must normalise the values in their config.
+  if (allowUsers.length > 0 && !allowUsers.includes(user)) {
+    return { reason: "trusted_proxy_user_not_allowed" };
   }
 
   return { user };
