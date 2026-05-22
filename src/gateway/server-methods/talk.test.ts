@@ -539,7 +539,7 @@ describe("talk.session unified handlers", () => {
       "Additional realtime instructions:\nSpeak warmly.",
     );
     expect(relayCreateInput.forceAgentConsultOnFinalTranscript).toBe(true);
-    expect(relayCreateInput.instructions).toContain("device or home-control actions, lights");
+    expect(relayCreateInput.instructions).toContain("tool-backed actions");
     expect(relayCreateInput.instructions).toContain("Let me check that for you");
     expectRespondOk(createRespond, {
       sessionId: "relay-unified-1",
@@ -1260,7 +1260,7 @@ describe("talk.client.create handler", () => {
       reasoningEffort: "low",
     });
     expect(createInput.instructions).toContain("Additional realtime instructions:\nSpeak warmly.");
-    expect(createInput.instructions).toContain("device or home-control actions, lights");
+    expect(createInput.instructions).toContain("tool-backed actions");
     expect(createInput.instructions).toContain("Let me check that for you");
     expect(createInput).not.toHaveProperty("provider");
     expect(createInput).not.toHaveProperty("providers");
