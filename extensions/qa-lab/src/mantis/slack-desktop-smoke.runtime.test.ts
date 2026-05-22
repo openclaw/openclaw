@@ -712,6 +712,66 @@ describe("mantis Slack desktop smoke runtime", () => {
     expect(phaseStatus(summary.timings.phases, "crabbox.remote_run")).toBe("accepted");
   });
 
+  it("passes Slack QA when Crabbox returns non-zero after remote metadata proves QA success", async () => {
+    const expectedScenarios = ["slack-approval-exec-native", "slack-approval-plugin-native"];
+    const runner = vi.fn(async (command: string, args: readonly string[]) => {
+      if (command === "/tmp/crabbox" && args[0] === "warmup") {
+        return { stdout: "ready lease cbx_ba5eba11\n", stderr: "" };
+      }
+      if (command === "/tmp/crabbox" && args[0] === "inspect") {
+        return {
+          stdout: `${JSON.stringify({
+            host: "203.0.113.10",
+            id: "cbx_ba5eba11",
+            provider: "hetzner",
+            sshKey: "/tmp/key",
+            sshPort: "2222",
+            sshUser: "crabbox",
+            state: "active",
+          })}\n`,
+          stderr: "",
+        };
+      }
+      if (command === "/tmp/crabbox" && args[0] === "run") {
+        throw new Error("remote command exited 1");
+      }
+      if (command === "rsync") {
+        const outputDir = args.at(-1);
+        await fs.mkdir(outputDir as string, { recursive: true });
+        if (String(outputDir).endsWith("slack-qa/")) {
+          await fs.writeFile(path.join(outputDir as string, "slack-qa-report.md"), "# Slack\n");
+        } else {
+          await fs.writeFile(path.join(outputDir as string, "slack-desktop-smoke.png"), "png");
+          await fs.writeFile(
+            path.join(outputDir as string, "remote-metadata.json"),
+            `${JSON.stringify({ qaExitCode: 0 })}\n`,
+          );
+          await fs.writeFile(path.join(outputDir as string, "slack-desktop-command.log"), "qa\n");
+          await writeApprovalCheckpointArtifacts(outputDir as string, expectedScenarios);
+        }
+      }
+      return { stdout: "", stderr: "" };
+    });
+
+    const result = await runMantisSlackDesktopSmoke({
+      approvalCheckpoints: true,
+      commandRunner: runner,
+      crabboxBin: "/tmp/crabbox",
+      now: () => new Date("2026-05-04T14:45:00.000Z"),
+      outputDir: ".artifacts/qa-e2e/mantis/slack-desktop-qa-metadata",
+      repoRoot,
+    });
+
+    expect(result.status).toBe("pass");
+    expect(result.approvalCheckpointScreenshotPaths).toHaveLength(4);
+    const summary = JSON.parse(await fs.readFile(result.summaryPath, "utf8")) as {
+      status: string;
+      timings: { phases: { name: string; status: string }[] };
+    };
+    expect(summary.status).toBe("pass");
+    expect(phaseStatus(summary.timings.phases, "crabbox.remote_run")).toBe("accepted");
+  });
+
   it("copies the screenshot before reporting a failed remote Slack QA run", async () => {
     const runner = vi.fn(async (command: string, args: readonly string[]) => {
       if (command === "/tmp/crabbox" && args[0] === "inspect") {

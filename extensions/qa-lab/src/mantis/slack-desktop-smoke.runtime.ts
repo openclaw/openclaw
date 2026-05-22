@@ -1198,10 +1198,14 @@ export async function runMantisSlackDesktopSmoke(
     }
     const gatewaySetupCompleted =
       gatewaySetup && remoteMetadata?.qaExitCode === 0 && remoteMetadata.gatewayAlive === true;
+    const slackQaCompleted = !gatewaySetup && remoteMetadata?.qaExitCode === 0;
     if (remoteRunError && gatewaySetupCompleted) {
       timer.updatePhaseStatus("crabbox.remote_run", "accepted");
     }
-    if (remoteRunError && !gatewaySetupCompleted) {
+    if (remoteRunError && slackQaCompleted) {
+      timer.updatePhaseStatus("crabbox.remote_run", "accepted");
+    }
+    if (remoteRunError && !gatewaySetupCompleted && !slackQaCompleted) {
       throw remoteRunError;
     }
     if (gatewaySetup && !gatewaySetupCompleted) {
