@@ -288,6 +288,9 @@ describe("docker build helper", () => {
     expect(runner).toContain("scripts/e2e/lib/bundled-plugin-install-uninstall/sweep.sh");
     expect(probe).toContain('"openclaw.plugin.json"');
     expect(runtimeSmoke).toContain("process.env.OPENCLAW_BUNDLED_PLUGIN_RUNTIME_READY_MS");
+    expect(runtimeSmoke).toContain("process.env.OPENCLAW_BUNDLED_PLUGIN_RUNTIME_HTTP_READY_MS");
+    expect(runtimeSmoke).toContain("retryHttpProbe");
+    expect(runtimeSmoke).toContain("ECONNRESET");
     expect(runtimeSmoke).toContain("900000");
     expect(sweep).toContain("read -r plugin_id plugin_dir requires_config");
     expect(sweep).toContain('node "$OPENCLAW_ENTRY" plugins install "$plugin_id"');

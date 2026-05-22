@@ -16,6 +16,14 @@ const RPC_READY_TIMEOUT_MS = readPositiveInt(
   process.env.OPENCLAW_BUNDLED_PLUGIN_RUNTIME_RPC_READY_MS,
   210000,
 );
+const HTTP_PROBE_TIMEOUT_MS = readPositiveInt(
+  process.env.OPENCLAW_BUNDLED_PLUGIN_RUNTIME_HTTP_READY_MS,
+  60000,
+);
+const HTTP_PROBE_ATTEMPT_MS = readPositiveInt(
+  process.env.OPENCLAW_BUNDLED_PLUGIN_RUNTIME_HTTP_ATTEMPT_MS,
+  5000,
+);
 
 function readPositiveInt(raw, fallback) {
   const parsed = Number.parseInt(String(raw || ""), 10);
@@ -233,7 +241,9 @@ function logShowsGatewayReady(logPath) {
 
 async function httpOk(port, pathName) {
   try {
-    const res = await fetch(`http://127.0.0.1:${port}${pathName}`);
+    const res = await fetch(`http://127.0.0.1:${port}${pathName}`, {
+      signal: AbortSignal.timeout(HTTP_PROBE_ATTEMPT_MS),
+    });
     return res.ok;
   } catch {
     return false;
@@ -241,45 +251,48 @@ async function httpOk(port, pathName) {
 }
 
 async function assertHttpOk(port, pathName) {
-  const started = Date.now();
-  let lastError;
-  while (Date.now() - started < RPC_READY_TIMEOUT_MS) {
-    try {
-      const res = await fetch(`http://127.0.0.1:${port}${pathName}`);
-      if (res.ok) {
-        return;
-      }
-      lastError = new Error(`${pathName} returned HTTP ${res.status}`);
-    } catch (error) {
-      lastError = error;
-    }
-    await delay(500);
-  }
-  throw lastError ?? new Error(`${pathName} did not return HTTP 200`);
+  const result = await retryHttpProbe(port, pathName);
+  if (result.ok) return;
+  throw new Error(result.message);
 }
 
 async function assertReadyzProbe(options) {
-  const started = Date.now();
-  let lastError;
-  while (Date.now() - started < RPC_READY_TIMEOUT_MS) {
-    try {
-      const res = await fetch(`http://127.0.0.1:${options.port}/readyz`);
-      if (res.ok) {
-        return;
-      }
-      if (options.allowDegradedReadyz) {
-        console.log(
-          `Runtime readyz smoke degraded for ${options.pluginId}: /readyz returned HTTP ${res.status}`,
-        );
-        return;
-      }
-      lastError = new Error(`/readyz returned HTTP ${res.status}`);
-    } catch (error) {
-      lastError = error;
-    }
-    await delay(500);
+  const result = await retryHttpProbe(options.port, "/readyz", {
+    allowDegraded: options.allowDegradedReadyz,
+  });
+  if (result.ok) {
+    return;
   }
-  throw lastError ?? new Error("/readyz did not return HTTP 200");
+  if (!options.allowDegradedReadyz) {
+    throw new Error(result.message);
+  }
+  console.log(`Runtime readyz smoke degraded for ${options.pluginId}: ${result.message}`);
+}
+
+async function retryHttpProbe(port, pathName, options = {}) {
+  const started = Date.now();
+  let lastMessage = `${pathName} did not complete`;
+  while (Date.now() - started < HTTP_PROBE_TIMEOUT_MS) {
+    try {
+      const res = await fetch(`http://127.0.0.1:${port}${pathName}`, {
+        signal: AbortSignal.timeout(HTTP_PROBE_ATTEMPT_MS),
+      });
+      if (res.ok) {
+        return { ok: true, message: `${pathName} returned HTTP ${res.status}` };
+      }
+      lastMessage = `${pathName} returned HTTP ${res.status}`;
+      if (options.allowDegraded) {
+        return { ok: false, message: lastMessage };
+      }
+    } catch (error) {
+      lastMessage = error instanceof Error ? error.message : String(error);
+      if (!isRetryableGatewayCallError(error)) {
+        throw error;
+      }
+    }
+    await delay(250);
+  }
+  return { ok: false, message: lastMessage };
 }
 
 async function rpcCall(method, params, options) {
@@ -335,6 +348,7 @@ function isRetryableGatewayCallError(error) {
     text.includes("handshake timeout") ||
     text.includes("GatewayTransportError") ||
     text.includes("ECONNREFUSED") ||
+    text.includes("ECONNRESET") ||
     text.includes("fetch failed")
   );
 }
