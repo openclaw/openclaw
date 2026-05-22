@@ -56,7 +56,9 @@ jobs:
         run: |
           set -euo pipefail
 
-          git fetch --no-tags --depth=50 origin "+refs/heads/main:refs/remotes/origin/main"
+          if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+            git fetch --no-tags --depth=50 origin "+refs/heads/main:refs/remotes/origin/main"
+          fi
 
           node_bin="$(dirname "$(node -p 'process.execPath')")"
           pnpm_bin="$(command -v pnpm)"
