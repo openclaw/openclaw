@@ -131,7 +131,8 @@ The helper:
 - chooses dirty local changes first
 - otherwise uses current PR base if `gh pr view` works
 - otherwise uses `origin/main` for non-main branches
-- supports `--engine codex`, `claude`, `droid`, and `copilot`; default is `AUTOREVIEW_ENGINE` or `codex`; Codex should remain the default when nothing is set
+- supports `--engine codex`, `claude`, `droid`, `copilot`, `pi`, and `opencode`; default is `AUTOREVIEW_ENGINE` or `codex`; Codex should remain the default when nothing is set
+- `--engine pi` requires an explicit `--model` because the helper isolates Pi's config directory during review
 - use `--mode commit --commit <ref>` for already-committed work, especially clean `main` after landing
 - should be left in `--mode auto` or forced to `--mode branch` for PR/branch work; do not force `--mode local` after committing
 - writes only to stdout unless `--output` or `--json-output` is set

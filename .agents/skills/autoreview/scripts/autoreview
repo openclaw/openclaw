@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -67,11 +68,19 @@ SCHEMA: dict[str, Any] = {
 }
 
 
-def run(args: list[str], cwd: Path, *, input_text: str | None = None, check: bool = True) -> subprocess.CompletedProcess[str]:
+def run(
+    args: list[str],
+    cwd: Path,
+    *,
+    input_text: str | None = None,
+    env: dict[str, str] | None = None,
+    check: bool = True,
+) -> subprocess.CompletedProcess[str]:
     result = subprocess.run(
         args,
         cwd=cwd,
         input=input_text,
+        env=env,
         text=True,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
@@ -396,6 +405,127 @@ def run_copilot(args: argparse.Namespace, repo: Path, prompt: str) -> str:
     return result.stdout
 
 
+def run_pi(args: argparse.Namespace, repo: Path, prompt: str) -> str:
+    if not args.tools:
+        raise SystemExit("--no-tools is not supported by the pi engine; use --tools read-only allowlist for review")
+    if not args.model:
+        raise SystemExit("--engine pi requires --model because autoreview isolates PI_CODING_AGENT_DIR from user settings")
+    with tempfile.TemporaryDirectory(prefix="autoreview-pi.") as tempdir:
+        temp = Path(tempdir)
+        prompt_path = temp / "prompt.txt"
+        prompt_path.write_text(prompt)
+        os.chmod(prompt_path, 0o600)
+        env = os.environ.copy()
+        agent_dir = temp / "agent"
+        agent_dir.mkdir()
+        env["PI_CODING_AGENT_DIR"] = str(agent_dir)
+        env["PI_CODING_AGENT_SESSION_DIR"] = str(temp / "sessions")
+        env["PI_TELEMETRY"] = "0"
+        cmd = [
+            args.pi_bin,
+            "--no-session",
+            "--no-context-files",
+            "--no-extensions",
+            "--no-skills",
+            "--no-prompt-templates",
+            "--no-themes",
+            "--tools",
+            pi_readonly_tools(args),
+            "--mode",
+            "json",
+        ]
+        if args.model:
+            cmd.extend(["--model", args.model])
+        cmd.extend(["-p", f"@{prompt_path}", "Read the attached review prompt and follow it exactly."])
+        result = run(cmd, repo, env=env, check=False)
+    if result.returncode != 0:
+        raise SystemExit(f"pi engine failed ({result.returncode})\n{result.stderr or result.stdout}")
+    return result.stdout
+
+
+def run_opencode(args: argparse.Namespace, repo: Path, prompt: str) -> str:
+    if not args.tools:
+        raise SystemExit("--no-tools is not supported by the opencode engine; opencode requires read-only tools to load the review bundle")
+    with tempfile.TemporaryDirectory(prefix="autoreview-opencode.") as tempdir:
+        temp = Path(tempdir)
+        config_dir = temp / "config"
+        config_dir.mkdir()
+        prompt_path = temp / "prompt.txt"
+        prompt_path.write_text(prompt)
+        os.chmod(prompt_path, 0o600)
+        env = os.environ.copy()
+        env.update(
+            {
+                "OPENCODE_CONFIG_DIR": str(config_dir),
+                "OPENCODE_CONFIG_CONTENT": json.dumps(opencode_review_config(args)),
+                "OPENCODE_DISABLE_PROJECT_CONFIG": "1",
+                "OPENCODE_PURE": "1",
+                "OPENCODE_DISABLE_AUTOUPDATE": "1",
+                "OPENCODE_DISABLE_AUTOCOMPACT": "1",
+                "OPENCODE_DISABLE_MODELS_FETCH": "1",
+            }
+        )
+        cmd = [
+            args.opencode_bin,
+            "run",
+            "--pure",
+            "--format",
+            "json",
+            "--agent",
+            "autoreview",
+            "--dir",
+            str(repo),
+            "-f",
+            str(prompt_path),
+        ]
+        if args.model:
+            cmd.extend(["--model", args.model])
+        cmd.append("Read the attached review prompt and follow it exactly. Return only the requested JSON object.")
+        result = run(cmd, repo, env=env, check=False)
+    if result.returncode != 0:
+        raise SystemExit(f"opencode engine failed ({result.returncode})\n{result.stderr or result.stdout}")
+    return result.stdout
+
+
+def pi_readonly_tools(args: argparse.Namespace) -> str:
+    return "read,grep,find,ls"
+
+
+def opencode_review_config(args: argparse.Namespace) -> dict[str, Any]:
+    permission = {
+        "*": "deny",
+        "read": "allow",
+        "grep": "allow",
+        "glob": "allow",
+        "list": "allow",
+        "edit": "deny",
+        "bash": "deny",
+        "task": "deny",
+        "todowrite": "deny",
+        "question": "deny",
+        "repo_clone": "deny",
+        "repo_overview": "deny",
+        "skill": "deny",
+    }
+    if args.web_search:
+        permission.update(
+            {
+                "webfetch": "allow",
+                "websearch": "allow",
+            }
+        )
+    return {
+        "agent": {
+            "autoreview": {
+                "description": "Read-only structured code review agent",
+                "mode": "primary",
+                "steps": 8,
+                "permission": permission,
+            }
+        }
+    }
+
+
 def claude_allowed_tools(args: argparse.Namespace) -> str:
     tools = [tool.strip() for tool in args.claude_allowed_tools.split(",") if tool.strip()]
     if not args.web_search:
@@ -434,6 +564,7 @@ def extract_json(text: str) -> dict[str, Any]:
 
 def extract_json_from_jsonl(text: str) -> dict[str, Any] | None:
     candidates: list[str] = []
+    assistant_stream: list[str] = []
     for line in text.splitlines():
         line = line.strip()
         if not line:
@@ -444,19 +575,63 @@ def extract_json_from_jsonl(text: str) -> dict[str, Any] | None:
             continue
         if not isinstance(event, dict):
             continue
+        if isinstance(event.get("text"), str):
+            candidates.append(event["text"])
+            assistant_stream.append(event["text"])
+        if isinstance(event.get("delta"), str):
+            assistant_stream.append(event["delta"])
         part = event.get("part")
         if isinstance(part, dict) and isinstance(part.get("text"), str):
             candidates.append(part["text"])
+            assistant_stream.append(part["text"])
+        assistant_event = event.get("assistantMessageEvent")
+        if isinstance(assistant_event, dict):
+            if isinstance(assistant_event.get("content"), str):
+                candidates.append(assistant_event["content"])
+            if isinstance(assistant_event.get("delta"), str):
+                assistant_stream.append(assistant_event["delta"])
+            partial = assistant_event.get("partial")
+            if isinstance(partial, dict):
+                candidates.extend(extract_text_blocks(partial.get("content")))
         data = event.get("data")
         if isinstance(data, dict) and isinstance(data.get("content"), str):
             candidates.append(data["content"])
         if isinstance(event.get("result"), str):
             candidates.append(event["result"])
+        message = event.get("message")
+        if isinstance(message, dict):
+            texts = extract_text_blocks(message.get("content"))
+            candidates.extend(texts)
+            if message.get("role") == "assistant":
+                assistant_stream.extend(texts)
+        messages = event.get("messages")
+        if isinstance(messages, list):
+            for item in messages:
+                if not isinstance(item, dict):
+                    continue
+                texts = extract_text_blocks(item.get("content"))
+                candidates.extend(texts)
+                if item.get("role") == "assistant":
+                    assistant_stream.extend(texts)
+    if assistant_stream:
+        candidates.append("".join(assistant_stream))
     for candidate in reversed(candidates):
         parsed = parse_json_candidate(candidate)
         if isinstance(parsed, dict) and "findings" in parsed:
             return parsed
     return None
+
+
+def extract_text_blocks(value: Any) -> list[str]:
+    if isinstance(value, str):
+        return [value]
+    if not isinstance(value, list):
+        return []
+    result: list[str] = []
+    for item in value:
+        if isinstance(item, dict) and isinstance(item.get("text"), str):
+            result.append(item["text"])
+    return result
 
 
 def parse_json_candidate(text: str) -> Any | None:
@@ -468,14 +643,30 @@ def parse_json_candidate(text: str) -> Any | None:
     try:
         parsed = json.loads(stripped)
     except json.JSONDecodeError:
-        return None
+        repaired = repair_invalid_json_escapes(stripped)
+        if repaired == stripped:
+            return None
+        try:
+            parsed = json.loads(repaired)
+        except json.JSONDecodeError:
+            return None
     if isinstance(parsed, str) and parsed != text:
         nested = parse_json_candidate(parsed)
         return nested if nested is not None else parsed
     return parsed
 
 
-def validate_report(report: dict[str, Any], repo: Path, changed_paths: set[str], required: list[str]) -> None:
+def repair_invalid_json_escapes(text: str) -> str:
+    return re.sub(r'\\(?!["\\/bfnrtu])', "", text)
+
+
+def validate_report(
+    report: dict[str, Any],
+    repo: Path,
+    changed_paths: set[str],
+    required: list[str],
+    required_any: list[str],
+) -> None:
     allowed_top = {"findings", "overall_correctness", "overall_explanation", "overall_confidence"}
     extra_top = set(report) - allowed_top
     if extra_top:
@@ -534,6 +725,10 @@ def validate_report(report: dict[str, Any], repo: Path, changed_paths: set[str],
     for needle in required:
         if needle.lower() not in haystack:
             raise SystemExit(f"required finding text not found: {needle}")
+    for group in required_any:
+        needles = [needle.strip().lower() for needle in group.split(",") if needle.strip()]
+        if needles and not any(needle in haystack for needle in needles):
+            raise SystemExit(f"required finding text not found; need one of: {', '.join(needles)}")
 
 
 def number_in_range(value: Any) -> bool:
@@ -574,13 +769,15 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--mode", choices=["auto", "local", "branch", "commit"], default="auto")
     parser.add_argument("--base")
     parser.add_argument("--commit", default="HEAD")
-    parser.add_argument("--engine", choices=["codex", "claude", "droid", "copilot"], default=os.environ.get("AUTOREVIEW_ENGINE", "codex"))
+    parser.add_argument("--engine", choices=["codex", "claude", "droid", "copilot", "pi", "opencode"], default=os.environ.get("AUTOREVIEW_ENGINE", "codex"))
     parser.add_argument("--model")
     parser.add_argument("--codex-bin", default=os.environ.get("CODEX_BIN", "codex"))
     parser.add_argument("--claude-bin", default=os.environ.get("CLAUDE_BIN", "claude"))
     parser.add_argument("--droid-bin", default=os.environ.get("DROID_BIN", "droid"))
     parser.add_argument("--copilot-bin", default=os.environ.get("COPILOT_BIN", "copilot"))
-    parser.add_argument("--no-tools", dest="tools", action="store_false", default=True, help="Disable tools for engines that support it. Codex and copilot reject no-tools review.")
+    parser.add_argument("--pi-bin", default=os.environ.get("PI_BIN", "pi"))
+    parser.add_argument("--opencode-bin", default=os.environ.get("OPENCODE_BIN", "opencode"))
+    parser.add_argument("--no-tools", dest="tools", action="store_false", default=True, help="Disable tools for engines that support it. Codex, copilot, pi, and opencode reject no-tools review.")
     parser.add_argument("--no-web-search", dest="web_search", action="store_false", default=True)
     parser.add_argument(
         "--claude-allowed-tools",
@@ -596,10 +793,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--json-output", help="Write validated structured review JSON.")
     parser.add_argument("--parallel-tests", help="Run a test command concurrently with review; failure fails the helper.")
     parser.add_argument("--require-finding", action="append", default=[], help="Require finding text to contain this substring.")
+    parser.add_argument("--require-any-finding", action="append", default=[], help="Require finding text to contain at least one comma-separated substring.")
     parser.add_argument("--expect-findings", action="store_true", help="Treat findings as success; for harness acceptance tests.")
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
-    if args.engine not in {"codex", "claude", "droid", "copilot"}:
+    if args.engine not in {"codex", "claude", "droid", "copilot", "pi", "opencode"}:
         raise SystemExit(f"invalid --engine/AUTOREVIEW_ENGINE: {args.engine}")
     return args
 
@@ -613,6 +811,10 @@ def run_engine(args: argparse.Namespace, repo: Path, prompt: str) -> str:
         return run_droid(args, repo, prompt)
     if args.engine == "copilot":
         return run_copilot(args, repo, prompt)
+    if args.engine == "pi":
+        return run_pi(args, repo, prompt)
+    if args.engine == "opencode":
+        return run_opencode(args, repo, prompt)
     raise SystemExit(f"unsupported engine: {args.engine}")
 
 
@@ -649,7 +851,7 @@ def main() -> int:
     try:
         raw = run_engine(args, repo, prompt)
         report = extract_json(raw)
-        validate_report(report, repo, changed_paths, args.require_finding)
+        validate_report(report, repo, changed_paths, args.require_finding, args.require_any_finding)
         if args.json_output:
             Path(args.json_output).write_text(json.dumps(report, indent=2) + "\n")
 
