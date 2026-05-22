@@ -12,6 +12,7 @@ import {
   installPluginFromArchive,
   installPluginFromDir,
   installPluginFromInstalledPackageDir,
+  installPluginFromNpmSpec,
   PLUGIN_INSTALL_ERROR_CODE,
   resolvePluginInstallDir,
   shouldPreserveManagedDependencyAgainstDowngrade,
@@ -668,6 +669,143 @@ describe("shouldPreserveManagedDependencyAgainstDowngrade", () => {
     expect(guard({ mode: "update", installedVersion: "latest", incomingVersion: "0.10.0" })).toBe(false);
     expect(guard({ mode: "update", installedVersion: "0.11.2", incomingVersion: "^0.10.0" })).toBe(false);
     expect(guard({ mode: "update", installedVersion: "0.11.2", incomingVersion: undefined })).toBe(false);
+  });
+});
+
+describe("installPluginFromNpmSpec downgrade guard (#85184 integration)", () => {
+  function writeManagedRootAt(npmRoot: string, packageName: string, version: string) {
+    fs.mkdirSync(npmRoot, { recursive: true });
+    fs.writeFileSync(
+      path.join(npmRoot, "package.json"),
+      JSON.stringify({ private: true, dependencies: { [packageName]: version } }, null, 2),
+      "utf-8",
+    );
+    writePackageLock(npmRoot, packageName, version);
+    // The package is already installed (this is the `update` scenario), so the
+    // node_modules entry must exist for resolveEffectiveInstallMode to treat
+    // this as an update rather than a fresh install. Write a minimal but valid
+    // plugin package (manifest + dist entry) so plugin validation passes.
+    writeInstalledPluginPackage(npmRoot, packageName, version);
+  }
+
+  function writeInstalledPluginPackage(npmRoot: string, packageName: string, version: string) {
+    const depDir = path.join(npmRoot, "node_modules", packageName);
+    fs.mkdirSync(path.join(depDir, "dist"), { recursive: true });
+    fs.writeFileSync(
+      path.join(depDir, "package.json"),
+      JSON.stringify({
+        name: packageName,
+        version,
+        openclaw: { extensions: ["./dist/index.js"] },
+      }),
+      "utf-8",
+    );
+    fs.writeFileSync(
+      path.join(depDir, "dist", "index.js"),
+      "module.exports = {};\n",
+      "utf-8",
+    );
+  }
+
+  function writePackageLock(npmRoot: string, packageName: string, version: string) {
+    fs.mkdirSync(npmRoot, { recursive: true });
+    fs.writeFileSync(
+      path.join(npmRoot, "package-lock.json"),
+      JSON.stringify(
+        {
+          lockfileVersion: 3,
+          packages: {
+            [`node_modules/${packageName}`]: {
+              version,
+              resolved: `https://registry.npmjs.org/${packageName}/-/x-${version}.tgz`,
+              integrity: `sha512-${version}`,
+            },
+          },
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+  }
+
+  function mockNpmViewAndInstall(incomingVersion: string, installedVersion: string, packageName: string) {
+    const run = vi.mocked(runCommandWithTimeout);
+    run.mockReset();
+    run.mockImplementation(async (cmd, options) => {
+      const argv = Array.isArray(cmd) ? cmd : [];
+      if (argv.includes("view")) {
+        return {
+          code: 0,
+          stdout: JSON.stringify({
+            name: packageName,
+            version: incomingVersion,
+            dist: { integrity: `sha512-${incomingVersion}`, shasum: "abc" },
+          }),
+          stderr: "",
+          signal: null,
+          killed: false,
+          termination: "exit" as const,
+        };
+      }
+      // npm install materializes node_modules and rewrites package-lock to the
+      // resolved version. We model that here: write the plugin package and update
+      // the lockfile to `installedVersion` (the version actually on disk after
+      // install — equal to the preserved version in the downgrade-guard case).
+      if (options && typeof options !== "number" && options.cwd) {
+        writeInstalledPluginPackage(options.cwd, packageName, installedVersion);
+        writePackageLock(options.cwd, packageName, installedVersion);
+      }
+      return { code: 0, stdout: "", stderr: "", signal: null, killed: false, termination: "exit" as const };
+    });
+  }
+
+  it("preserves a newer installed managed dependency without rollback during update (#85184)", async () => {
+    const pkg = "lossless-claw-test";
+    const npmRoot = suiteTempRootTracker.makeTempDir();
+    const extensionsDir = path.join(suiteTempRootTracker.makeTempDir(), "extensions");
+    fs.mkdirSync(extensionsDir, { recursive: true });
+    writeManagedRootAt(npmRoot, pkg, "0.11.2");
+    mockNpmViewAndInstall("0.10.0", "0.11.2", pkg);
+
+    const result = await installPluginFromNpmSpec({
+      spec: `${pkg}@0.10.0`,
+      mode: "update",
+      npmDir: npmRoot,
+      extensionsDir,
+    });
+
+    // Must NOT rollback: the guard preserves the newer installed 0.11.2.
+    expect(result.ok).toBe(true);
+    // package.json must still pin the newer version (not rewritten to 0.10.0).
+    const manifest = JSON.parse(fs.readFileSync(path.join(npmRoot, "package.json"), "utf-8")) as {
+      dependencies?: Record<string, string>;
+    };
+    expect(manifest.dependencies?.[pkg]).toBe("0.11.2");
+  });
+
+  it("allows a normal upgrade to rewrite the managed dependency (no false preserve)", async () => {
+    const pkg = "lossless-claw-test-upgrade";
+    const npmRoot = suiteTempRootTracker.makeTempDir();
+    const extensionsDir = path.join(suiteTempRootTracker.makeTempDir(), "extensions");
+    fs.mkdirSync(extensionsDir, { recursive: true });
+    // Installed 0.11.0; update wants the newer 0.11.2 -> upgrade, must proceed.
+    writeManagedRootAt(npmRoot, pkg, "0.11.0");
+    mockNpmViewAndInstall("0.11.2", "0.11.2", pkg);
+
+    const result = await installPluginFromNpmSpec({
+      spec: `${pkg}@0.11.2`,
+      mode: "update",
+      npmDir: npmRoot,
+      extensionsDir,
+    });
+
+    expect(result.ok).toBe(true);
+    const manifest = JSON.parse(fs.readFileSync(path.join(npmRoot, "package.json"), "utf-8")) as {
+      dependencies?: Record<string, string>;
+    };
+    // Upgrade is allowed: the managed dependency is rewritten to the newer version.
+    expect(manifest.dependencies?.[pkg]).toBe("0.11.2");
   });
 });
 

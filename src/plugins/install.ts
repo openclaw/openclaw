@@ -909,9 +909,24 @@ async function installPluginFromManagedNpmRoot(
       error: `Failed to verify npm install metadata for ${params.packageName}: ${String(error)}`,
     };
   }
+  // #85184: when we deliberately preserved a newer installed dependency against
+  // a downgrade, the managed root still carries that newer version on purpose.
+  // Verify the install against the preserved version rather than the (older)
+  // incoming resolution, so the intentional skip does not look like a failed
+  // install and trigger a rollback that would remove the plugin.
+  const expectedNpmResolution: NpmSpecResolution =
+    preserveAgainstDowngrade && installedDependency?.version
+      ? {
+          ...params.npmResolution,
+          version: installedDependency.version,
+          ...(installedDependency.integrity
+            ? { integrity: installedDependency.integrity }
+            : { integrity: undefined }),
+        }
+      : params.npmResolution;
   const resolutionMismatch = resolveInstalledNpmResolutionMismatch({
     packageName: params.packageName,
-    expected: params.npmResolution,
+    expected: expectedNpmResolution,
     installed: installedDependency,
   });
   if (resolutionMismatch) {
