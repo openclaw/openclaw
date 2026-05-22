@@ -85,8 +85,9 @@ export type ChatAbortOptions = {
   preserveDraft?: boolean;
 };
 
-export const CHAT_SESSIONS_ACTIVE_MINUTES = 120;
-export const CHAT_SESSIONS_REFRESH_LIMIT = 100;
+// Chat pickers need the complete session index so older channel chats remain selectable.
+export const CHAT_SESSIONS_ACTIVE_MINUTES = 0;
+export const CHAT_SESSIONS_REFRESH_LIMIT = 0;
 export {
   handleChatDraftChange,
   handleChatInputHistoryKey,
@@ -784,7 +785,6 @@ export async function refreshChat(
       limit: CHAT_SESSIONS_REFRESH_LIMIT,
       includeGlobal: true,
       includeUnknown: true,
-      agentId: resolveAgentIdForSession(host) ?? undefined,
     }),
     refreshChatAvatar(host),
     refreshChatModels(host),
