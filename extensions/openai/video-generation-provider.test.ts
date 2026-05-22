@@ -98,6 +98,16 @@ describe("openai video generation provider", () => {
     expectExplicitVideoGenerationCapabilities(buildOpenAIVideoGenerationProvider());
   });
 
+  it("does not claim size or duration controls for OpenAI video edits", () => {
+    const provider = buildOpenAIVideoGenerationProvider();
+
+    expect(provider.capabilities.videoToVideo).toEqual({
+      enabled: true,
+      maxVideos: 1,
+      maxInputVideos: 1,
+    });
+  });
+
   it("uses JSON for text-only Sora requests", async () => {
     postJsonRequestMock.mockResolvedValue({
       response: {
@@ -440,7 +450,7 @@ describe("openai video generation provider", () => {
     expect(secondRelease).toHaveBeenCalledTimes(1);
   });
 
-  it("uses multipart input_reference for video-to-video uploads", async () => {
+  it("uses the video edits endpoint for video-to-video uploads", async () => {
     fetchWithTimeoutMock
       .mockResolvedValueOnce({
         ok: true,
@@ -473,8 +483,13 @@ describe("openai video generation provider", () => {
 
     expect(postJsonRequestMock).not.toHaveBeenCalled();
     const createRequest = postMultipartRequest();
-    expect(createRequest.url).toBe("https://api.openai.com/v1/videos");
+    expect(createRequest.url).toBe("https://api.openai.com/v1/videos/edits");
     expect(createRequest.body).toBeInstanceOf(FormData);
+    const form = createRequest.body as FormData;
+    expect(form.get("prompt")).toBe("Remix this clip");
+    expect(form.get("model")).toBe("sora-2");
+    expect(form.get("video")).toBeInstanceOf(File);
+    expect(form.get("input_reference")).toBeNull();
     expect(createRequest.timeoutMs).toBe(120000);
     expect(createRequest.fetchFn).toBe(fetch);
     expect(createRequest.allowPrivateNetwork).toBe(false);
@@ -523,7 +538,7 @@ describe("openai video generation provider", () => {
 
     expect(postJsonRequestMock).not.toHaveBeenCalled();
     const createRequest = postMultipartRequest();
-    expect(createRequest.url).toBe("http://127.0.0.1:44080/v1/videos");
+    expect(createRequest.url).toBe("http://127.0.0.1:44080/v1/videos/edits");
     expect(createRequest.body).toBeInstanceOf(FormData);
     expect(createRequest.allowPrivateNetwork).toBe(true);
     expect(pollProviderOperationRequest().allowPrivateNetwork).toBe(true);
