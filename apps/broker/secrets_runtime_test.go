@@ -161,6 +161,87 @@ func TestOwnedChildEnvDropsSecretsAndDerivesTenantTokenFromTenantID(t *testing.T
 	}
 }
 
+// TestOwnedChildEnvForwardsConnectionCredentials is the fleet-task #573
+// layer-2 regression: a user who connects GitHub / HuggingFace lands
+// GH_TOKEN / HF_TOKEN in the container PID-1 env (layer 1, Fly app
+// secrets). The broker must forward those two — and ONLY those two —
+// into the spawned agent env so `gh` / `hf` authenticate.
+func TestOwnedChildEnvForwardsConnectionCredentials(t *testing.T) {
+	t.Setenv("PATH", "/usr/bin")
+	t.Setenv("HOME", "/home/runtime")
+	t.Setenv("ROCKIELAB_TENANT_ID", "tenant-573")
+	t.Setenv("GH_TOKEN", "gho_connected_value")
+	t.Setenv("HF_TOKEN", "hf_connected_value")
+	env := ownedChildEnv()
+	for _, want := range []string{"GH_TOKEN=gho_connected_value", "HF_TOKEN=hf_connected_value"} {
+		found := false
+		for _, kv := range env {
+			if kv == want {
+				found = true
+			}
+		}
+		if !found {
+			t.Fatalf("owned child env must forward connection credential %q: %v", want, env)
+		}
+	}
+}
+
+// TestOwnedChildEnvStillBlocksPlatformSecretsAlongsideConnectionCreds
+// proves the forward-allowlist is exact-name-scoped — it forwards the
+// connection credentials WITHOUT widening to leak the broker's own auth
+// token or the platform API password, even though all of them match the
+// block regex.
+func TestOwnedChildEnvStillBlocksPlatformSecretsAlongsideConnectionCreds(t *testing.T) {
+	t.Setenv("PATH", "/usr/bin")
+	t.Setenv("HOME", "/home/runtime")
+	t.Setenv("ROCKIELAB_TENANT_ID", "tenant-573")
+	t.Setenv("GH_TOKEN", "gho_connected_value")
+	t.Setenv("BROKER_TENANT_TOKEN", "broker-secret")
+	t.Setenv("ROCKIELAB_API_PASSWORD", "api-pw-secret")
+	t.Setenv("CLAUDE_CODE_OAUTH_TOKEN", "claude-oauth-secret")
+	t.Setenv("OPENAI_API_KEY", "sk-secret")
+	env := ownedChildEnv()
+	if !envContainsName(env, "GH_TOKEN") {
+		t.Fatalf("connection credential GH_TOKEN must still be forwarded: %v", env)
+	}
+	for _, blocked := range []string{
+		"BROKER_TENANT_TOKEN",
+		"ROCKIELAB_API_PASSWORD",
+		"CLAUDE_CODE_OAUTH_TOKEN",
+		"OPENAI_API_KEY",
+	} {
+		if envContainsName(env, blocked) {
+			t.Fatalf("platform secret %q leaked into agent env: %v", blocked, env)
+		}
+	}
+}
+
+// TestIsEnvNameAllowedForChild pins the name-level decision directly so
+// a future regex tweak or allowlist edit can't silently change which
+// names reach the agent.
+func TestIsEnvNameAllowedForChild(t *testing.T) {
+	allowed := []string{"PATH", "HOME", "ROCKIELAB_TENANT_ID", "ROCKIELAB_TENANT_TOKEN", "GH_TOKEN", "HF_TOKEN"}
+	for _, name := range allowed {
+		if !isEnvNameAllowedForChild(name) {
+			t.Fatalf("%q must be allowed for the child env", name)
+		}
+	}
+	blocked := []string{
+		"BROKER_TENANT_TOKEN",
+		"ROCKIELAB_API_PASSWORD",
+		"CLAUDE_CODE_OAUTH_TOKEN",
+		"OPENAI_API_KEY",
+		"AWS_SECRET_ACCESS_KEY",
+		"SOME_PRIVATE_KEY",
+		"GITHUB_TOKEN", // NOT GH_TOKEN — not in the allowlist, must stay blocked
+	}
+	for _, name := range blocked {
+		if isEnvNameAllowedForChild(name) {
+			t.Fatalf("%q must be blocked from the child env", name)
+		}
+	}
+}
+
 func TestMetadataCacheIsTenantScoped(t *testing.T) {
 	t.Setenv("ROCKIELAB_TENANT_ID", "tenant-a")
 	withStubSecretsClient(t, stubSecretsClient{metadata: map[string]string{"DEPLOY_KEY": "ssh_key"}})
