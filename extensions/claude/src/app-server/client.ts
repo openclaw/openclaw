@@ -179,6 +179,23 @@ export class ClaudeAppServerClient {
     return this.child !== null && !this.stopped;
   }
 
+  /** Number of in-flight RPC requests awaiting a response. */
+  pendingRequestCount(): number {
+    return this.pending.size;
+  }
+
+  /** Resolved command path/argv string, for diagnostics. */
+  commandDescription(): string {
+    const cmd = this.opts.command ?? DEFAULT_COMMAND;
+    const args = this.opts.args ?? [];
+    return args.length > 0 ? `${cmd} ${args.join(" ")}` : cmd;
+  }
+
+  /** Last server-side error message captured from stderr or RPC, if any. */
+  lastErrorMessage(): string | undefined {
+    return this.stderrTail.length > 0 ? this.stderrTail.slice(-200).trim() : undefined;
+  }
+
   async request<T = JsonValue>(method: string, params?: unknown, signal?: AbortSignal): Promise<T> {
     if (method !== "initialize") {
       if (this.initializePromise) {
@@ -430,4 +447,24 @@ export async function clearSharedClaudeAppServerClient(): Promise<void> {
     sharedClient = null;
     sharedClientKey = "";
   }
+}
+
+/**
+ * Return a read-only snapshot of the current shared client's state WITHOUT
+ * forcing creation. Used by /claude status so the command stays cheap when
+ * no turn has run yet.
+ */
+export function peekSharedClaudeAppServerClient(): {
+  running: boolean;
+  command?: string;
+  pendingRequests: number;
+  lastError?: string;
+} | null {
+  if (!sharedClient) return null;
+  return {
+    running: sharedClient.isRunning(),
+    pendingRequests: sharedClient.pendingRequestCount(),
+    command: sharedClient.commandDescription(),
+    lastError: sharedClient.lastErrorMessage(),
+  };
 }
