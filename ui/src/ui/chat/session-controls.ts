@@ -56,8 +56,8 @@ export function renderChatSessionSelect(
   const pickerOpen = state.chatSessionPickerOpen && state.chatSessionPickerSurface === surface;
   const sessionSearchVisible =
     state.chatSessionSearchOpen ||
-    state.chatSessionPickerQuery.trim() !== "" ||
-    state.chatSessionPickerAppliedQuery.trim() !== "";
+    (state.chatSessionPickerQuery ?? "").trim() !== "" ||
+    (state.chatSessionPickerAppliedQuery ?? "").trim() !== "";
   const flashSession = state.sessionSwitchFlashKey === state.sessionKey;
   const rowClass = [
     "chat-controls__session-row",
@@ -370,7 +370,8 @@ function renderChatSessionPickerSearchControls(
   surface: ChatSessionSelectSurface,
 ) {
   const hasQuery =
-    state.chatSessionPickerQuery.trim() !== "" || state.chatSessionPickerAppliedQuery.trim() !== "";
+    (state.chatSessionPickerQuery ?? "").trim() !== "" ||
+    (state.chatSessionPickerAppliedQuery ?? "").trim() !== "";
   const searchVisible = state.chatSessionSearchOpen || hasQuery;
   const disabled = !state.connected || !state.client || state.chatSessionPickerLoading;
   if (!searchVisible) {
@@ -400,7 +401,7 @@ function renderChatSessionPickerSearchControls(
           type="search"
           placeholder=${t("chat.selectors.sessionSearch")}
           aria-label=${t("chat.selectors.sessionSearch")}
-          .value=${state.chatSessionPickerQuery}
+          .value=${state.chatSessionPickerQuery ?? ""}
           ?disabled=${disabled}
           @input=${(event: Event) => {
             state.chatSessionPickerQuery = (event.target as HTMLInputElement).value;
