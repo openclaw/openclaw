@@ -493,7 +493,7 @@ describe("createAgentToolResultMiddlewareRunner", () => {
     expect(sanitized.originalSizeBytes ?? 0).toBeGreaterThan(100_000);
   });
 
-  it("preserves delivered message.send results when middleware throws after delivery", async () => {
+  it("preserves delivered message.send results with safe fallback details when middleware throws", async () => {
     const runner = createAgentToolResultMiddlewareRunner({ runtime: "codex" }, [
       () => {
         throw new Error("post-processing failed");
@@ -505,18 +505,21 @@ describe("createAgentToolResultMiddlewareRunner", () => {
       toolName: "message.send",
       args: {},
       result: {
-        content: [{ type: "text", text: "delivered" }],
+        content: [{ type: "text", text: "raw body should not leak" }],
         details: {
           ok: true,
           messageId: "1700000000.000100",
           channelId: "C123",
           threadId: "1700000000.000000",
+          raw: "should not leak",
         },
       },
     });
 
-    expect(result.content).toEqual([{ type: "text", text: "delivered" }]);
-    expect(result.details).toMatchObject({
+    expect(result.content).toEqual([
+      { type: "text", text: "Message delivery preserved (1700000000.000100)." },
+    ]);
+    expect(result.details).toEqual({
       ok: true,
       messageId: "1700000000.000100",
       channelId: "C123",
@@ -525,7 +528,57 @@ describe("createAgentToolResultMiddlewareRunner", () => {
     });
   });
 
-  it("preserves delivered message.send results when middleware returns an invalid result", async () => {
+  it("preserves nested slack-shaped message.send delivery identifiers", async () => {
+    const runner = createAgentToolResultMiddlewareRunner({ runtime: "codex" }, [
+      () => ({ result: { content: "not an array" } as never }),
+    ]);
+
+    const result = await runner.applyToolResultMiddleware({
+      toolCallId: "call-1",
+      toolName: "message",
+      args: { action: "send" },
+      result: {
+        content: [{ type: "text", text: "raw body should not leak" }],
+        details: {
+          ok: true,
+          result: {
+            messageId: "1700000000.000100",
+            channelId: "C123",
+            threadId: "1700000000.000000",
+            ignored: "raw nested payload",
+          },
+        },
+      },
+    });
+
+    expect(result.details).toEqual({
+      ok: true,
+      messageId: "1700000000.000100",
+      channelId: "C123",
+      threadId: "1700000000.000000",
+      middlewareWarning: "tool-result middleware failed after message delivery",
+    });
+  });
+
+  it("fails closed for non-send message actions even when details include message-like ids", async () => {
+    const runner = createAgentToolResultMiddlewareRunner({ runtime: "codex" }, [
+      () => ({ result: { content: "not an array" } as never }),
+    ]);
+
+    const result = await runner.applyToolResultMiddleware({
+      toolCallId: "call-1",
+      toolName: "message",
+      args: { action: "list" },
+      result: {
+        content: [{ type: "text", text: "raw" }],
+        details: { ok: true, messageId: "old-message", channelId: "C123" },
+      },
+    });
+
+    expect(result.details).toEqual({ status: "error", middlewareError: true });
+  });
+
+  it("fails closed when message fallback only has routing context without delivery proof", async () => {
     const runner = createAgentToolResultMiddlewareRunner({ runtime: "codex" }, [
       () => ({ result: { content: "not an array" } as never }),
     ]);
@@ -535,21 +588,12 @@ describe("createAgentToolResultMiddlewareRunner", () => {
       toolName: "message.send",
       args: {},
       result: {
-        content: [{ type: "text", text: "delivered" }],
-        details: {
-          ok: true,
-          messageId: "1700000000.000100",
-          channelId: "C123",
-          threadId: "1700000000.000000",
-        },
+        content: [{ type: "text", text: "raw" }],
+        details: { ok: true, channelId: "C123", threadId: "1700000000.000000" },
       },
     });
 
-    expect(result.details).toMatchObject({
-      ok: true,
-      messageId: "1700000000.000100",
-      middlewareWarning: "tool-result middleware failed after message delivery",
-    });
+    expect(result.details).toEqual({ status: "error", middlewareError: true });
   });
 
   it("accepts well-formed middleware results", async () => {

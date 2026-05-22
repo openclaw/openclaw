@@ -407,42 +407,117 @@ function buildMiddlewareFailureResult(): OpenClawAgentToolResult {
   };
 }
 
-function cloneMiddlewareToolResult(result: OpenClawAgentToolResult): OpenClawAgentToolResult {
-  return {
-    ...result,
-    content: result.content.map((block) => ({ ...block })),
-    details: sanitizeMiddlewareDetailsValue(result.details),
-  };
+function readNonEmptyString(record: Record<string, unknown>, key: string): string | undefined {
+  const value = record[key];
+  return typeof value === "string" && value.trim().length > 0 ? value : undefined;
 }
 
-function isMessageSendToolName(toolName: string): boolean {
-  const normalized = toolName.trim().toLowerCase();
-  return normalized === "message" || normalized === "message.send" || normalized === "message_send";
+function readNestedResult(details: Record<string, unknown>): Record<string, unknown> | undefined {
+  return isRecord(details.result) ? details.result : undefined;
 }
 
-function hasMessageDeliveryIdentifier(details: unknown): details is Record<string, unknown> {
-  if (!isRecord(details)) {
-    return false;
+function isMessageSendEvent(event: AgentToolResultMiddlewareEvent): boolean {
+  const normalized = event.toolName.trim().toLowerCase();
+  if (normalized === "message.send") {
+    return true;
   }
-  return ["messageId", "channelId", "threadId", "ts", "thread_ts"].some(
-    (key) => typeof details[key] === "string" && details[key].trim().length > 0,
+  return normalized === "message" && isRecord(event.args) && event.args.action === "send";
+}
+
+type MessageDeliveryDetails = {
+  ok?: boolean;
+  status?: string;
+  messageId?: string;
+  channelId?: string;
+  threadId?: string;
+  ts?: string;
+  thread_ts?: string;
+  receipt?: {
+    primaryPlatformMessageId?: string;
+    platformMessageIds?: string[];
+  };
+  middlewareWarning: string;
+};
+
+function collectMessageDeliveryDetails(details: unknown): MessageDeliveryDetails | undefined {
+  if (!isRecord(details)) {
+    return undefined;
+  }
+
+  const nestedResult = readNestedResult(details);
+  const sources = nestedResult ? [details, nestedResult] : [details];
+  const readFirst = (key: string) => {
+    for (const source of sources) {
+      const value = readNonEmptyString(source, key);
+      if (value) {
+        return value;
+      }
+    }
+    return undefined;
+  };
+
+  const receiptSource = sources.map((source) => source.receipt).find(isRecord);
+  const receiptPrimary = receiptSource
+    ? readNonEmptyString(receiptSource, "primaryPlatformMessageId")
+    : undefined;
+  const receiptPlatformIds = Array.isArray(receiptSource?.platformMessageIds)
+    ? receiptSource.platformMessageIds.filter(
+        (value): value is string => typeof value === "string" && value.trim().length > 0,
+      )
+    : undefined;
+
+  const messageId = readFirst("messageId");
+  const ts = readFirst("ts");
+  const hasDeliveryProof = Boolean(
+    messageId || ts || receiptPrimary || (receiptPlatformIds && receiptPlatformIds.length > 0),
   );
+  if (!hasDeliveryProof) {
+    return undefined;
+  }
+
+  return {
+    ...(typeof details.ok === "boolean" ? { ok: details.ok } : {}),
+    ...(readFirst("status") ? { status: readFirst("status") } : {}),
+    ...(messageId ? { messageId } : {}),
+    ...(readFirst("channelId") ? { channelId: readFirst("channelId") } : {}),
+    ...(readFirst("threadId") ? { threadId: readFirst("threadId") } : {}),
+    ...(ts ? { ts } : {}),
+    ...(readFirst("thread_ts") ? { thread_ts: readFirst("thread_ts") } : {}),
+    ...(receiptPrimary || receiptPlatformIds?.length
+      ? {
+          receipt: {
+            ...(receiptPrimary ? { primaryPlatformMessageId: receiptPrimary } : {}),
+            ...(receiptPlatformIds?.length ? { platformMessageIds: receiptPlatformIds } : {}),
+          },
+        }
+      : {}),
+    middlewareWarning: "tool-result middleware failed after message delivery",
+  };
 }
 
 function buildSideEffectSuccessMiddlewareFallback(
   event: AgentToolResultMiddlewareEvent,
   result: OpenClawAgentToolResult,
 ): OpenClawAgentToolResult | undefined {
-  if (!isMessageSendToolName(event.toolName) || !hasMessageDeliveryIdentifier(result.details)) {
+  if (!isMessageSendEvent(event)) {
     return undefined;
   }
-  const fallback = cloneMiddlewareToolResult(result);
-  const details = isRecord(fallback.details) ? fallback.details : {};
-  fallback.details = {
-    ...details,
-    middlewareWarning: "tool-result middleware failed after message delivery",
+  const details = collectMessageDeliveryDetails(result.details);
+  if (!details) {
+    return undefined;
+  }
+  const deliveryId = details.messageId ?? details.ts ?? details.receipt?.primaryPlatformMessageId;
+  return {
+    content: [
+      {
+        type: "text",
+        text: deliveryId
+          ? `Message delivery preserved (${deliveryId}).`
+          : "Message delivery preserved.",
+      },
+    ],
+    details,
   };
-  return fallback;
 }
 
 export function createAgentToolResultMiddlewareRunner(
