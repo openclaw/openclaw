@@ -1059,8 +1059,8 @@ export const zh_TW: TranslationMap = {
       placeholderDisconnected: "Connect to the gateway to start chatting...",
       attachFile: "Attach file",
       startTalk: "Start Talk",
-      stillListening: "Still listening",
-      talkTranscript: "Talk transcript",
+      stillListening: "仍在聆聽",
+      talkTranscript: "語音逐字稿",
       stopTalk: "Stop Talk",
     },
     selectors: {

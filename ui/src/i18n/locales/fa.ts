@@ -1093,8 +1093,8 @@ export const fa: TranslationMap = {
       placeholderDisconnected: "Connect to the gateway to start chatting...",
       attachFile: "Attach file",
       startTalk: "Start Talk",
-      stillListening: "Still listening",
-      talkTranscript: "Talk transcript",
+      stillListening: "هنوز در حال گوش دادن",
+      talkTranscript: "رونوشت گفتار",
       stopTalk: "Stop Talk",
     },
     selectors: {

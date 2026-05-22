@@ -1061,8 +1061,8 @@ export const th: TranslationMap = {
       placeholderDisconnected: "Connect to the gateway to start chatting...",
       attachFile: "Attach file",
       startTalk: "Start Talk",
-      stillListening: "Still listening",
-      talkTranscript: "Talk transcript",
+      stillListening: "ยังฟังอยู่",
+      talkTranscript: "ข้อความถอดเสียงจากการพูด",
       stopTalk: "Stop Talk",
     },
     selectors: {

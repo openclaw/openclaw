@@ -1076,8 +1076,8 @@ export const ar: TranslationMap = {
       placeholderDisconnected: "Connect to the gateway to start chatting...",
       attachFile: "Attach file",
       startTalk: "Start Talk",
-      stillListening: "Still listening",
-      talkTranscript: "Talk transcript",
+      stillListening: "لا يزال يستمع",
+      talkTranscript: "نص الحديث",
       stopTalk: "Stop Talk",
     },
     selectors: {

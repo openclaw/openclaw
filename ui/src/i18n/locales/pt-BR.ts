@@ -1092,8 +1092,8 @@ export const pt_BR: TranslationMap = {
       placeholderDisconnected: "Connect to the gateway to start chatting...",
       attachFile: "Attach file",
       startTalk: "Start Talk",
-      stillListening: "Still listening",
-      talkTranscript: "Talk transcript",
+      stillListening: "Ainda ouvindo",
+      talkTranscript: "Transcrição da fala",
       stopTalk: "Stop Talk",
     },
     selectors: {
