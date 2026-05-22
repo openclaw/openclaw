@@ -1121,6 +1121,78 @@ describe("openai transport stream", () => {
     }
   });
 
+  it("preserves OpenAI-compatible error metadata on failed chat requests", async () => {
+    const server = createServer((req, res) => {
+      req.resume();
+      req.on("end", () => {
+        res.writeHead(429, {
+          "content-type": "application/json; charset=utf-8",
+          "x-request-id": "req_error_metadata",
+        });
+        res.end(
+          JSON.stringify({
+            error: {
+              message: "Quota exceeded for api_key=sk-secret1234567890abcd",
+              type: "rate_limit_error",
+              code: "insufficient_quota",
+            },
+          }),
+        );
+      });
+    });
+
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    try {
+      const address = server.address();
+      if (!address || typeof address === "string") {
+        throw new Error("Missing loopback server address");
+      }
+      const model = {
+        id: "gpt-5.4-mini",
+        name: "GPT-5.4 Mini",
+        api: "openai-completions",
+        provider: "openai",
+        baseUrl: `http://127.0.0.1:${address.port}/v1`,
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 200_000,
+        maxTokens: 8192,
+      } satisfies Model<"openai-completions">;
+      const stream = createOpenAICompletionsTransportStreamFn()(
+        model,
+        {
+          systemPrompt: "system",
+          messages: [{ role: "user", content: "Reply OK", timestamp: Date.now() }],
+          tools: [],
+        } as never,
+        { apiKey: "test-key" } as never,
+      );
+
+      let errorPayload: Record<string, unknown> | undefined;
+      for await (const event of stream as AsyncIterable<{
+        type: string;
+        error?: Record<string, unknown>;
+      }>) {
+        if (event.type === "error") {
+          errorPayload = event.error;
+        }
+      }
+
+      expect(errorPayload).toMatchObject({
+        stopReason: "error",
+        errorCode: "insufficient_quota",
+        errorType: "rate_limit_error",
+      });
+      expect(String(errorPayload?.errorBody)).toContain("Quota exceeded");
+      expect(String(errorPayload?.errorBody)).not.toContain("sk-secret1234567890abcd");
+    } finally {
+      await new Promise<void>((resolve, reject) => {
+        server.close((error) => (error ? reject(error) : resolve()));
+      });
+    }
+  });
+
   it("preserves reasoning tokens without double-counting them", () => {
     const model = {
       id: "gpt-5",
