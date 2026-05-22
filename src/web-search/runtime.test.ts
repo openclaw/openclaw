@@ -330,6 +330,59 @@ describe("web search runtime", () => {
     });
   });
 
+  it("auto-detects a provider from the active agent auth profile", async () => {
+    const defaultAgentDir = mkdtempSync(path.join(os.tmpdir(), "openclaw-web-search-default-"));
+    const activeAgentDir = mkdtempSync(path.join(os.tmpdir(), "openclaw-web-search-active-"));
+    tempDirs.push(defaultAgentDir, activeAgentDir);
+    mkdirSync(defaultAgentDir, { recursive: true });
+    mkdirSync(activeAgentDir, { recursive: true });
+    writeFileSync(
+      path.join(activeAgentDir, "auth-profiles.json"),
+      JSON.stringify({
+        version: 1,
+        profiles: {
+          "xai:active": {
+            type: "oauth",
+            provider: "xai",
+            access: "xai-active-oauth-token",
+            refresh: "xai-active-refresh-token",
+            expires: Date.now() + 3_600_000,
+          },
+        },
+      }),
+    );
+
+    const provider = createCustomSearchProvider({
+      pluginId: "xai",
+      id: "grok",
+      authProviderId: "xai",
+      credentialPath: "plugins.entries.xai.config.webSearch.apiKey",
+    });
+    resolveRuntimeWebSearchProvidersMock.mockReturnValue([provider]);
+    resolvePluginWebSearchProvidersMock.mockReturnValue([
+      provider,
+      createDuckDuckGoSearchProvider(),
+    ]);
+
+    await expect(
+      runWebSearch({
+        agentDir: activeAgentDir,
+        config: {
+          agents: {
+            list: [
+              { id: "main", default: true, agentDir: defaultAgentDir },
+              { id: "side", agentDir: activeAgentDir },
+            ],
+          },
+        },
+        args: { query: "active-agent oauth-backed web search" },
+      }),
+    ).resolves.toEqual({
+      provider: "grok",
+      result: { query: "active-agent oauth-backed web search", ok: true },
+    });
+  });
+
   it("uses the active resolved runtime config for matching source config callers", async () => {
     const provider = createCustomSearchProvider({
       createTool: ({ config }) => ({

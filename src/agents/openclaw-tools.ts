@@ -275,6 +275,7 @@ export function createOpenClawTools(
   options?.recordToolPrepStage?.("openclaw-tools:pdf-tool");
   const webSearchTool = createWebSearchTool({
     config: options?.config,
+    agentDir: options?.agentDir,
     sandboxed: options?.sandboxed,
     runtimeWebSearch: runtimeWebTools?.search,
     lateBindRuntimeConfig: true,
