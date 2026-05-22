@@ -16,6 +16,7 @@ import type {
 import {
   buildProviderRequestDispatcherPolicy,
   resolveProviderRequestPolicyConfig,
+  type ModelProviderRequestTransportOverrides,
   type ProviderRequestTransportOverrides,
   type ResolvedProviderRequestConfig,
 } from "../agents/provider-request-config.js";
@@ -269,7 +270,7 @@ export function resolveProviderHttpRequestConfig(params: {
   allowPrivateNetwork?: boolean;
   headers?: HeadersInit;
   defaultHeaders?: Record<string, string>;
-  request?: ProviderRequestTransportOverrides;
+  request?: ModelProviderRequestTransportOverrides;
   provider?: string;
   api?: string;
   capability?: ProviderRequestCapability;

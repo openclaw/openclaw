@@ -6,11 +6,12 @@ import {
   createProviderOperationDeadline,
   createProviderOperationTimeoutResolver,
   fetchProviderDownloadResponse,
-  fetchWithTimeout,
   pollProviderOperationJson,
   postJsonRequest,
+  postMultipartRequest,
   resolveProviderOperationTimeoutMs,
   resolveProviderHttpRequestConfig,
+  sanitizeConfiguredModelProviderRequest,
   type ProviderOperationTimeoutMs,
 } from "openclaw/plugin-sdk/provider-http";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -232,11 +233,12 @@ export function buildOpenAIVideoGenerationProvider(): VideoGenerationProvider {
         timeoutMs: req.timeoutMs,
         label: "OpenAI video generation",
       });
+      const providerConfig = req.cfg.models?.providers?.openai;
       const { baseUrl, allowPrivateNetwork, headers, dispatcherPolicy } =
         resolveProviderHttpRequestConfig({
           baseUrl: resolveConfiguredOpenAIBaseUrl(req.cfg),
           defaultBaseUrl: DEFAULT_OPENAI_VIDEO_BASE_URL,
-          allowPrivateNetwork: false,
+          request: sanitizeConfiguredModelProviderRequest(providerConfig?.request),
           defaultHeaders: {
             Authorization: `Bearer ${auth.apiKey}`,
           },
@@ -297,22 +299,18 @@ export function buildOpenAIVideoGenerationProvider(): VideoGenerationProvider {
               form.set("input_reference", referenceAsset);
               const multipartHeaders = new Headers(headers);
               multipartHeaders.delete("Content-Type");
-              return fetchWithTimeout(
-                requestUrl,
-                {
-                  method: "POST",
-                  headers: multipartHeaders,
-                  body: form,
-                },
-                resolveProviderOperationTimeoutMs({
+              return postMultipartRequest({
+                url: requestUrl,
+                headers: multipartHeaders,
+                body: form,
+                timeoutMs: resolveProviderOperationTimeoutMs({
                   deadline,
                   defaultTimeoutMs: DEFAULT_TIMEOUT_MS,
                 }),
                 fetchFn,
-              ).then((response) => ({
-                response,
-                release: async () => {},
-              }));
+                allowPrivateNetwork,
+                dispatcherPolicy,
+              });
             })()
         : await (() => {
             const jsonHeaders = new Headers(headers);
