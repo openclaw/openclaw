@@ -294,6 +294,21 @@ Look for:
 - Auth mode/token mismatch between client and gateway.
 - HTTP usage where device identity is required.
 
+If a local browser cannot connect to `127.0.0.1:18789` after an update, first
+recover the local Gateway service and confirm it is serving the dashboard:
+
+```bash
+openclaw gateway restart
+lsof -i :18789
+curl http://127.0.0.1:18789
+```
+
+If `curl` returns OpenClaw HTML, the Gateway is working and the remaining issue
+is likely browser cache, an old deep link, or stale tab state. Open
+`http://127.0.0.1:18789` directly and navigate from the dashboard. If restart
+does not leave the service running, run `openclaw gateway start` and recheck
+`openclaw gateway status`.
+
 <AccordionGroup>
   <Accordion title="Connect / auth signatures">
     - `device identity required` → non-secure context or missing device auth.
