@@ -891,6 +891,13 @@ describe("registerCoreHealthChecks", () => {
     );
     expect(result.checksRepaired).toBe(1);
     expect(result.checksValidated).toBe(1);
+    expect(result.effects).toContainEqual(
+      expect.objectContaining({
+        kind: "state",
+        action: "refresh-plugin-registry",
+        target: "installed plugin registry",
+      }),
+    );
     expect(result.warnings).toEqual([]);
     expect(result.remainingFindings).toEqual([]);
   });

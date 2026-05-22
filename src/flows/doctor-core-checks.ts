@@ -710,7 +710,7 @@ const pluginRegistryCheck: HealthCheck = {
       reason: result.reason,
       changes: result.changes,
       warnings: result.warnings,
-      effects: pluginRegistryRepairEffects(issues, false),
+      effects: pluginRegistryRepairEffects(previewIssues, false),
     };
   },
 };
