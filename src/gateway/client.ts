@@ -292,7 +292,7 @@ export class GatewayClient {
     this.connectSent = false;
     const url = this.opts.url ?? DEFAULT_GATEWAY_CLIENT_URL;
     if (this.opts.tlsFingerprint && !url.startsWith("wss://")) {
-      this.opts.onConnectError?.(new Error("gateway tls fingerprint requires wss:// gateway url"));
+      this.notifyConnectError(new Error("gateway tls fingerprint requires wss:// gateway url"));
       return;
     }
 
@@ -318,7 +318,7 @@ export class GatewayClient {
             : "Break-glass (trusted private networks only): set OPENCLAW_ALLOW_INSECURE_PRIVATE_WS=1. ") +
           "Run `openclaw doctor --fix` for guidance.",
       );
-      this.opts.onConnectError?.(error);
+      this.notifyConnectError(error);
       return;
     }
     // Allow node screen snapshots and other large responses.
@@ -367,7 +367,7 @@ export class GatewayClient {
       if (url.startsWith("wss://") && this.opts.tlsFingerprint) {
         const tlsError = this.validateTlsFingerprint();
         if (tlsError) {
-          this.opts.onConnectError?.(tlsError);
+          this.notifyConnectError(tlsError);
           this.ws?.close(1008, tlsError.message);
           return;
         }
@@ -432,7 +432,7 @@ export class GatewayClient {
     ws.on("error", (err) => {
       logDebug(`gateway client error: ${formatGatewayClientErrorForLog(err)}`);
       if (!this.connectSent) {
-        this.opts.onConnectError?.(err instanceof Error ? err : new Error(String(err)));
+        this.notifyConnectError(err instanceof Error ? err : new Error(String(err)));
       }
     });
   }
@@ -533,7 +533,7 @@ export class GatewayClient {
     }
     const nonce = normalizeOptionalString(this.connectNonce) ?? "";
     if (!nonce) {
-      this.opts.onConnectError?.(new Error("gateway connect challenge missing nonce"));
+      this.notifyConnectError(new Error("gateway connect challenge missing nonce"));
       this.ws?.close(1008, "connect challenge missing nonce");
       return;
     }
@@ -719,7 +719,7 @@ export class GatewayClient {
           this.ws?.close(1008, "connect retry");
           return;
         }
-        this.opts.onConnectError?.(err instanceof Error ? err : new Error(String(err)));
+        this.notifyConnectError(err instanceof Error ? err : new Error(String(err)));
         const msg = `gateway connect failed: ${formatGatewayClientErrorForLog(err)}`;
         if (this.opts.mode === GATEWAY_CLIENT_MODES.PROBE || isGatewayClientStoppedError(err)) {
           logDebug(msg);
@@ -734,7 +734,7 @@ export class GatewayClient {
     const error = err instanceof Error ? err : new Error(String(err));
     this.clearConnectChallengeTimeout();
     this.closed = true;
-    this.opts.onConnectError?.(markGatewayConnectAssemblyError(error));
+    this.notifyConnectError(markGatewayConnectAssemblyError(error));
     const msg = `gateway connect failed: ${formatGatewayClientErrorForLog(error)}`;
     if (this.opts.mode === GATEWAY_CLIENT_MODES.PROBE || isGatewayClientStoppedError(error)) {
       logDebug(msg);
@@ -742,6 +742,16 @@ export class GatewayClient {
       logError(msg);
     }
     this.ws?.close(1008, "connect failed");
+  }
+
+  private notifyConnectError(error: Error) {
+    try {
+      this.opts.onConnectError?.(error);
+    } catch (err) {
+      logDebug(
+        `gateway client connect error handler error: ${formatGatewayClientErrorForLog(err)}`,
+      );
+    }
   }
 
   private resolveConnectScopes(params: {
@@ -953,7 +963,7 @@ export class GatewayClient {
         const payload = evt.payload as { nonce?: unknown } | undefined;
         const nonce = payload && typeof payload.nonce === "string" ? payload.nonce : null;
         if (!nonce || nonce.trim().length === 0) {
-          this.opts.onConnectError?.(new Error("gateway connect challenge missing nonce"));
+          this.notifyConnectError(new Error("gateway connect challenge missing nonce"));
           this.ws?.close(1008, "connect challenge missing nonce");
           return;
         }
@@ -1047,7 +1057,7 @@ export class GatewayClient {
         return;
       }
       const elapsedMs = Date.now() - armedAt;
-      this.opts.onConnectError?.(
+      this.notifyConnectError(
         new Error(
           `gateway connect challenge timeout (waited ${elapsedMs}ms, limit ${connectChallengeTimeoutMs}ms)`,
         ),

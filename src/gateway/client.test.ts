@@ -253,8 +253,8 @@ function createClientWithIdentity(
   const { privateKey, publicKey } = generateKeyPairSync("ed25519");
   const identity: DeviceIdentity = {
     deviceId,
-    privateKeyPem: privateKey.export({ type: "pkcs8", format: "pem" }).toString(),
-    publicKeyPem: publicKey.export({ type: "spki", format: "pem" }).toString(),
+    privateKeyPem: privateKey.export({ type: "pkcs8", format: "pem" }),
+    publicKeyPem: publicKey.export({ type: "spki", format: "pem" }),
   };
   return new GatewayClient({
     url: "ws://127.0.0.1:18789",
@@ -1007,6 +1007,35 @@ describe("GatewayClient connect auth payload", () => {
     } finally {
       client?.stop();
       vi.useRealTimers();
+    }
+  });
+
+  it("keeps connect error callback throws inside challenge dispatch", () => {
+    const onConnectError = vi.fn(() => {
+      throw new Error("connect callback failed");
+    });
+    const client = new GatewayClient({
+      url: "ws://127.0.0.1:18789",
+      deviceIdentity: null,
+      onConnectError,
+    });
+
+    try {
+      client.start();
+      const ws = getLatestWs();
+      ws.emitOpen();
+
+      expect(() => emitConnectChallenge(ws, " ")).not.toThrow();
+      expect(onConnectError).toHaveBeenCalledOnce();
+      expect(ws.lastClose).toEqual({
+        code: 1008,
+        reason: "connect challenge missing nonce",
+      });
+      expect(logDebugMock).toHaveBeenCalledWith(
+        "gateway client connect error handler error: Error: connect callback failed",
+      );
+    } finally {
+      client.stop();
     }
   });
 
