@@ -89,39 +89,13 @@ function toNativeCommandSpec(command: ChatCommandDefinition, provider?: string):
   return spec;
 }
 
-function resolveNativeNames(command: ChatCommandDefinition, provider?: string): string[] {
-  const primary = resolveNativeName(command, provider);
-  return [primary, ...(command.nativeAliases ?? [])].filter((name): name is string =>
-    Boolean(name),
-  );
-}
-
 function listNativeSpecsFromCommands(
   commands: ChatCommandDefinition[],
   provider?: string,
 ): NativeCommandSpec[] {
   return commands
     .filter((command) => command.scope !== "text" && command.nativeName)
-    .flatMap((command) => {
-      const spec = toNativeCommandSpec(command, provider);
-      return resolveNativeNames(command, provider).map((name, index) => {
-        const nativeSpec: NativeCommandSpec = {
-          name,
-          description: spec.description,
-          acceptsArgs: spec.acceptsArgs,
-        };
-        if (index > 0) {
-          nativeSpec.isAlias = true;
-        }
-        if (spec.args) {
-          nativeSpec.args = spec.args;
-        }
-        if (spec.descriptionLocalizations) {
-          nativeSpec.descriptionLocalizations = spec.descriptionLocalizations;
-        }
-        return nativeSpec;
-      });
-    });
+    .map((command) => toNativeCommandSpec(command, provider));
 }
 
 export function listNativeCommandSpecs(params?: {
