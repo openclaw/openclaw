@@ -337,7 +337,7 @@ function renderRealtimeTalkConversation(props: ChatProps) {
     return nothing;
   }
   return html`
-    <div class="agent-chat__voice-turns" role="log" aria-label="Talk transcript">
+    <div class="agent-chat__voice-turns" role="log" aria-label=${t("chat.composer.talkTranscript")}>
       ${repeat(
         entries,
         (entry) => entry.id,
@@ -354,7 +354,7 @@ function renderRealtimeTalkConversation(props: ChatProps) {
               ${entry.isStreaming
                 ? html`<span
                     class="agent-chat__voice-turn-stream"
-                    aria-label="Still listening"
+                    aria-label=${t("chat.composer.stillListening")}
                   ></span>`
                 : nothing}
             </div>
