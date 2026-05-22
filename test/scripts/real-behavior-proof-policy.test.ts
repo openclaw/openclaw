@@ -116,6 +116,45 @@ describe("real-behavior-proof-policy", () => {
     expect(labelsForRealBehaviorProof(evaluation)).toEqual([PROOF_SUPPLIED_LABEL]);
   });
 
+  it("accepts source PR proof when explicit gaps live in out-of-scope follow-ups", () => {
+    const body = [
+      "## Real behavior proof",
+      "",
+      '- Behavior addressed: Cron/provider thinking validation no longer downgrades `google/gemini-3-flash-preview` `thinkingDefault: "low"` to `"off"` when cached catalog metadata says `reasoning:false` but the Google provider policy says Gemini 3 supports low thinking.',
+      "- Real environment tested: Local macOS source checkout, Node v24.8.0, OpenClaw 2026.5.21 (c8a35c4), local `openclaw` shim pointed at the freshly built checkout. No channel credentials or provider API keys were used.",
+      "- Exact steps or command run after this patch:",
+      "  1. Built the local checkout with `node scripts/build-all.mjs`.",
+      "  2. Updated `/Users/example/.local/bin/openclaw` to run this checkout's `openclaw.mjs` and verified `/Users/example/.local/bin/openclaw --version`.",
+      "  3. Ran a redacted behavior probe for the reported cron validation decision with `provider=google`, `model=gemini-3-flash-preview`, `configuredThinkingDefault=low`, and `catalogReasoning=false`.",
+      '- Evidence after fix: `.artifacts/behavior-85156/after-installed.json` from the local checkout recorded `lowSupported: true` and `fallbackFromLow: "low"`.',
+      "- Observed result after fix:",
+      "  - `levels: off, minimal, low, medium, adaptive, high`",
+      "  - `lowSupported: true`",
+      "  - `fallbackFromLow: low`",
+      "  - `local command version: OpenClaw 2026.5.21 (c8a35c4)`",
+      "",
+      "## Out-of-scope Follow-ups",
+      "- No live systemd cron schedule is added in this PR.",
+      "- No real Google provider request is sent in this PR.",
+      "- No catalog refresh or provider model-list behavior is changed in this PR.",
+      "- No channel, gateway allowlist, credential, or auth-profile behavior is changed in this PR.",
+    ].join("\n");
+    const evaluation = evaluateRealBehaviorProof({
+      pullRequest: externalPr(body),
+    });
+
+    expect(evaluation.status).toBe("passed");
+    expect(evaluation.fields?.notTested).toBe(
+      [
+        "- No live systemd cron schedule is added in this PR.",
+        "- No real Google provider request is sent in this PR.",
+        "- No catalog refresh or provider model-list behavior is changed in this PR.",
+        "- No channel, gateway allowlist, credential, or auth-profile behavior is changed in this PR.",
+      ].join("\n"),
+    );
+    expect(labelsForRealBehaviorProof(evaluation)).toEqual([PROOF_SUPPLIED_LABEL]);
+  });
+
   it("fails external PRs without a real behavior proof section", () => {
     const evaluation = evaluateRealBehaviorProof({
       pullRequest: externalPr("## Summary\n\n- Fixed startup."),
