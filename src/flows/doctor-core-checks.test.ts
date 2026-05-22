@@ -1237,6 +1237,9 @@ describe("registerCoreHealthChecks", () => {
     );
 
     expect(sandboxMocks.migrateLegacySandboxRegistryFiles).toHaveBeenCalledTimes(1);
+    expect(sandboxMocks.migrateLegacySandboxRegistryFiles).toHaveBeenCalledWith({
+      registryPaths: [issue.registryPath],
+    });
     expect(result.effects).toContainEqual(
       expect.objectContaining({
         kind: "state",
@@ -1287,10 +1290,27 @@ describe("registerCoreHealthChecks", () => {
       expect.objectContaining({
         cfg,
         prompter: expect.objectContaining({
+          confirmRuntimeRepair: expect.any(Function),
           note: expect.any(Function),
         }),
       }),
     );
+    const prompter = (
+      sandboxMocks.repairSandboxImages.mock.calls[0]?.[0] as {
+        prompter?: {
+          confirmRuntimeRepair(params: {
+            message: string;
+            initialValue?: boolean;
+          }): Promise<boolean>;
+        };
+      }
+    ).prompter;
+    await expect(
+      prompter?.confirmRuntimeRepair({
+        message: "Build sandbox image now?",
+        initialValue: true,
+      }),
+    ).resolves.toBe(false);
     expect(result.effects).toContainEqual(
       expect.objectContaining({
         kind: "process",

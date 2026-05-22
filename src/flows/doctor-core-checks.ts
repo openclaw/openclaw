@@ -853,7 +853,9 @@ const sandboxRegistryFilesCheck: RegisteredHealthCheck = {
     const { formatLegacySandboxRegistryMigrationLine } =
       await import("../commands/doctor-sandbox.js");
     const { migrateLegacySandboxRegistryFiles } = await import("../agents/sandbox/registry.js");
-    const changes = (await migrateLegacySandboxRegistryFiles())
+    const changes = (await migrateLegacySandboxRegistryFiles({
+      registryPaths: issues.map((issue) => issue.registryPath),
+    }))
       .filter((result) => result.status !== "missing")
       .map(formatLegacySandboxRegistryMigrationLine)
       .filter((line) => line.length > 0);
@@ -978,7 +980,7 @@ const sandboxImagesCheck: RegisteredHealthCheck = {
     }
     const prompter = {
       confirmRuntimeRepair: async (params: Parameters<DoctorPrompter["confirmRuntimeRepair"]>[0]) =>
-        ctx.doctor?.confirmRuntimeRepair?.(params) ?? ctx.doctor?.confirm?.(params) ?? true,
+        ctx.doctor?.confirmRuntimeRepair?.(params) ?? ctx.doctor?.confirm?.(params) ?? false,
       note: async (message: string, title: string) => {
         await ctx.doctor?.note?.(message, title);
       },
