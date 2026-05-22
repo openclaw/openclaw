@@ -334,7 +334,7 @@ const MARKDOWN_SKELETON_HEADING_BODIES = new Set([
 
 function normalizeMarkdownSkeletonHeadingBody(raw: string): string {
   return raw
-    .replace(/[-*+>`_[\](){}|~.,;!?]+/g, " ")
+    .replace(/[-*+>`_[\](){}|~.,;:!?]+/g, " ")
     .replace(/\s+/g, " ")
     .trim()
     .toLowerCase();

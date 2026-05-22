@@ -1153,6 +1153,7 @@ describe("short-term promotion", () => {
       "[]",
       "## Tagesnotizen",
       "## Notes",
+      "## Notes:",
       "## Tagesnotizen\n-\n\n## Entscheidungen\n-",
       "## Tagesnotizen\n## Entscheidungen",
       "## Tagesnotizen - ## Entscheidungen -",
@@ -1172,6 +1173,7 @@ describe("short-term promotion", () => {
     expect(testing.isUnpromotableShortTermSnippet("- ## Decision move backups to S3")).toBe(false);
     expect(testing.isUnpromotableShortTermSnippet("## API keys rotated")).toBe(false);
     expect(testing.isUnpromotableShortTermSnippet("- ## VPN outage fix")).toBe(false);
+    expect(testing.isUnpromotableShortTermSnippet("## Notes: VPN outage fix")).toBe(false);
     expect(testing.isUnpromotableShortTermSnippet("## Prod outage")).toBe(false);
     expect(testing.isUnpromotableShortTermSnippet("## 修复备份轮换")).toBe(false);
   });
