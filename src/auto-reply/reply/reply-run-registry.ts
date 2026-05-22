@@ -379,7 +379,7 @@ export function createReplyOperation(params: {
       abortWithReason("user_abort", createUserAbortError(), {
         abortedCode: "aborted_by_user",
       });
-      if (phaseBeforeAbort === "queued" || !getAttachedBackend(operation)) {
+      if (phaseBeforeAbort === "queued") {
         clearState();
       }
     },
@@ -388,7 +388,7 @@ export function createReplyOperation(params: {
       abortWithReason("restart", new Error("Reply operation aborted for restart"), {
         abortedCode: "aborted_for_restart",
       });
-      if (phaseBeforeAbort === "queued" || !getAttachedBackend(operation)) {
+      if (phaseBeforeAbort === "queued") {
         clearState();
       }
     },

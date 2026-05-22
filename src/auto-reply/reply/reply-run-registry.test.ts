@@ -155,23 +155,43 @@ describe("reply run registry", () => {
     }
   });
 
-  it("clears a running operation immediately when aborting without an attached backend", async () => {
+  it("keeps valid no-backend operations active after abort until explicit recovery clears them", async () => {
     vi.useFakeTimers();
     try {
-      const operation = createReplyOperation({
-        sessionKey: "agent:main:main",
-        sessionId: "session-orphaned-running",
-        resetTriggered: false,
-      });
-      operation.setPhase("running");
+      const cases = [
+        { phase: "running" as const, sessionKey: "agent:main:running", sessionId: "session-running" },
+        {
+          phase: "preflight_compacting" as const,
+          sessionKey: "agent:main:preflight",
+          sessionId: "session-preflight",
+        },
+        {
+          phase: "memory_flushing" as const,
+          sessionKey: "agent:main:memory",
+          sessionId: "session-memory",
+        },
+      ];
 
-      const waitPromise = waitForReplyRunEndBySessionId("session-orphaned-running", 1_000);
+      for (const testCase of cases) {
+        const operation = createReplyOperation({
+          sessionKey: testCase.sessionKey,
+          sessionId: testCase.sessionId,
+          resetTriggered: false,
+        });
+        operation.setPhase(testCase.phase);
 
-      expect(abortReplyRunBySessionId("session-orphaned-running")).toBe(true);
+        const waitPromise = waitForReplyRunEndBySessionId(testCase.sessionId, 1_000);
 
-      expect(operation.result).toEqual({ kind: "aborted", code: "aborted_by_user" });
-      expect(isReplyRunActiveForSessionId("session-orphaned-running")).toBe(false);
-      await expect(waitPromise).resolves.toBe(true);
+        expect(abortReplyRunBySessionId(testCase.sessionId)).toBe(true);
+
+        expect(operation.result).toEqual({ kind: "aborted", code: "aborted_by_user" });
+        expect(isReplyRunActiveForSessionId(testCase.sessionId)).toBe(true);
+
+        expect(forceClearReplyRunBySessionId(testCase.sessionId, new Error("stuck"))).toBe(true);
+
+        expect(isReplyRunActiveForSessionId(testCase.sessionId)).toBe(false);
+        await expect(waitPromise).resolves.toBe(true);
+      }
     } finally {
       await vi.runOnlyPendingTimersAsync();
       vi.useRealTimers();
