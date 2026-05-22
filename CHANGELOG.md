@@ -135,6 +135,7 @@ Docs: https://docs.openclaw.ai
 - Codex/ACP: mark required child-run completions that only report progress, omit a final deliverable, or fail requester delivery as blocked while preserving real final reports. (#85110) Thanks @IWhatsskill.
 - Channels: treat bare abort messages such as `stop`, `abort`, and `wait` as immediate control commands in inbound debounce paths so stop requests are not delayed behind pending message coalescing. (#83348) Thanks @IWhatsskill.
 - Channels/message tool: resolve configured external channel plugins during in-agent channel selection, so `openclaw agent --local` message-tool sends no longer report an available channel as unavailable. (#85022) Thanks @Kaspre.
+- Agents/heartbeat: honor group/channel `message_tool` visible-reply policy and model-specific Codex runtime config for scheduled heartbeat runs, so failed internal tool output stays private. Fixes #85310. (#85357) Thanks @neeravmakwana.
 - Gateway/ACP: close child ACP sessions spawned via `sessions_spawn` when their parent session is reset or deleted, instead of leaving orphaned `claude-agent-acp` processes that accumulate and exhaust memory. Fixes #68916. (#85190) Thanks @openperf.
 - Diagnostics: bound cleanup timeout detail logs, emit drop summaries when async diagnostic bursts exceed the queue cap, and surface async queue drops through diagnostic telemetry.
 - Agents/subagents: surface blocked child-run completions as errors instead of successful subagent finishes. (#80886) Thanks @TurboTheTurtle.
