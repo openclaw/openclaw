@@ -412,8 +412,17 @@ describe("update-cli", () => {
   const packagePackCommandCall = () =>
     commandCalls().find(([argv]) => argv[0] === "npm" && argv[1] === "pack");
 
-  const isNpmGitPackageSpec = (spec: string) =>
-    /^github:/i.test(spec) || /^git(?:\+|:)/i.test(spec);
+  const stripOpenClawPackageAlias = (spec: string) => {
+    const trimmed = spec.trim();
+    return trimmed.toLowerCase().startsWith("openclaw@")
+      ? trimmed.slice("openclaw@".length)
+      : trimmed;
+  };
+
+  const isNpmGitPackageSpec = (spec: string) => {
+    const target = stripOpenClawPackageAlias(spec);
+    return /^github:/i.test(target) || /^git(?:\+|:)/i.test(target);
+  };
 
   const doctorCommandCall = () =>
     commandCalls().find(
@@ -2143,6 +2152,30 @@ describe("update-cli", () => {
       expectedSpec: "openclaw@next",
     },
     {
+      name: "main shorthand",
+      run: async () => {
+        mockPackageInstallStatus(createCaseDir("openclaw-update"));
+        await updateCommand({ yes: true, tag: "main" });
+      },
+      expectedSpec: "github:openclaw/openclaw#main",
+    },
+    {
+      name: "explicit git package spec",
+      run: async () => {
+        mockPackageInstallStatus(createCaseDir("openclaw-update"));
+        await updateCommand({ yes: true, tag: "github:openclaw/openclaw#main" });
+      },
+      expectedSpec: "github:openclaw/openclaw#main",
+    },
+    {
+      name: "aliased git package spec",
+      run: async () => {
+        mockPackageInstallStatus(createCaseDir("openclaw-update"));
+        await updateCommand({ yes: true, tag: "OpenClaw@github:openclaw/openclaw#main" });
+      },
+      expectedSpec: "OpenClaw@github:openclaw/openclaw#main",
+    },
+    {
       name: "OPENCLAW_UPDATE_PACKAGE_SPEC override",
       run: async () => {
         mockPackageInstallStatus(createCaseDir("openclaw-update"));
@@ -2165,22 +2198,6 @@ describe("update-cli", () => {
       vi.mocked(resolveOpenClawPackageRoot).mockResolvedValue(process.cwd());
       await run();
       expectPackageInstallSpec(expectedSpec);
-    },
-  );
-
-  it.each(["main", "github:openclaw/openclaw#main", "openclaw@github:openclaw/openclaw#main"])(
-    "rejects OpenClaw GitHub source package updates: %s",
-    async (tag) => {
-      mockPackageInstallStatus(createCaseDir("openclaw-update"));
-
-      await updateCommand({ yes: true, tag });
-
-      expect(packageInstallCommandCall()).toBeUndefined();
-      expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
-      const errors = vi.mocked(defaultRuntime.error).mock.calls.map((call) => String(call[0]));
-      expect(errors.join("\n")).toContain("Unsupported package update target");
-      expect(errors.join("\n")).toContain("openclaw/openclaw");
-      expect(errors.join("\n")).toContain("openclaw update --channel dev");
     },
   );
 

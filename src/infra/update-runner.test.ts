@@ -294,7 +294,9 @@ describe("runGatewayUpdate", () => {
 
   const installCommandMatches = (expected: InstallCommandExpectation, argv: string[]) => {
     const normalizedArgv = normalizeNpmFreshnessArgs(argv);
-    return typeof expected === "string" ? normalizedArgv.join(" ") === expected : expected(normalizedArgv);
+    return typeof expected === "string"
+      ? normalizedArgv.join(" ") === expected
+      : expected(normalizedArgv);
   };
 
   const npmGlobalInstallCommand = (spec: string, extraArgs: string[] = []) =>
@@ -1745,11 +1747,11 @@ describe("runGatewayUpdate", () => {
       const prefixIndex = argv.indexOf("--prefix");
       const installPrefix = prefixIndex >= 0 ? argv[prefixIndex + 1] : undefined;
       if (installPrefix) {
-        const installCommandArgv = [
+        const normalizedInstallCommand = normalizeNpmFreshnessArgs([
           ...argv.slice(0, prefixIndex),
           ...argv.slice(prefixIndex + 2),
-        ];
-        if (installCommandMatches(params.installCommand, installCommandArgv)) {
+        ]);
+        if (installCommandMatches(params.installCommand, normalizedInstallCommand)) {
           const packageRoot =
             process.platform === "win32"
               ? path.join(installPrefix, "node_modules", "openclaw")

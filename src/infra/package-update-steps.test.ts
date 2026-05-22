@@ -249,6 +249,7 @@ describe("runGlobalPackageUpdateSteps", () => {
       const prefix = path.join(base, "prefix");
       const globalRoot = path.join(prefix, "lib", "node_modules");
       const packageRoot = path.join(globalRoot, "openclaw");
+      const sourceSpec = "OpenClaw@github:openclaw/openclaw#release/2026.5.12";
       await writePackageRoot(packageRoot, "1.0.0");
 
       let packDir: string | undefined;
@@ -257,7 +258,7 @@ describe("runGlobalPackageUpdateSteps", () => {
           expect(argv).toEqual([
             "npm",
             "pack",
-            "github:openclaw/openclaw#release/2026.5.12",
+            sourceSpec,
             "--pack-destination",
             expect.any(String),
             "--json",
@@ -314,7 +315,7 @@ describe("runGlobalPackageUpdateSteps", () => {
 
       const result = await runGlobalPackageUpdateSteps({
         installTarget: createNpmTarget(globalRoot),
-        installSpec: "github:openclaw/openclaw#release/2026.5.12",
+        installSpec: sourceSpec,
         packageName: "openclaw",
         packageRoot,
         runCommand: createRootRunner(globalRoot),

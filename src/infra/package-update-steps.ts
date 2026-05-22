@@ -117,7 +117,9 @@ function resolveStagedNpmTargetLayout(
 function stripPackageAlias(spec: string, packageName: string): string {
   const trimmed = spec.trim();
   const prefix = `${packageName.trim()}@`;
-  return trimmed.startsWith(prefix) ? trimmed.slice(prefix.length).trim() : trimmed;
+  return trimmed.toLowerCase().startsWith(prefix.toLowerCase())
+    ? trimmed.slice(prefix.length).trim()
+    : trimmed;
 }
 
 function isNpmGitSourceInstallSpec(spec: string, packageName: string): boolean {
