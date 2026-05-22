@@ -13,9 +13,14 @@ export type AuthProfilesWatcherHandle = {
   stop: () => Promise<void>;
 };
 
+type WatcherLog = {
+  warn: (msg: string) => void;
+};
+
 export function watchAuthProfilesForChanges(params: {
   cfg: OpenClawConfig;
   onChange: () => void;
+  log?: WatcherLog;
 }): AuthProfilesWatcherHandle {
   const watchPaths = listAgentIds(params.cfg).map((agentId) =>
     path.join(resolveAgentDir(params.cfg, agentId), "auth-profiles.json"),
@@ -25,6 +30,7 @@ export function watchAuthProfilesForChanges(params: {
     awaitWriteFinish: { stabilityThreshold: 200, pollInterval: 50 },
     usePolling: Boolean(process.env.VITEST),
   });
+  let closed = false;
   watcher.on("all", () => {
     try {
       params.onChange();
@@ -32,9 +38,18 @@ export function watchAuthProfilesForChanges(params: {
       // onChange errors must not crash the watcher.
     }
   });
+  watcher.on("error", (err) => {
+    if (closed) {
+      return;
+    }
+    closed = true;
+    params.log?.warn(`auth-profile watcher error: ${String(err)}`);
+    void watcher.close().catch(() => {});
+  });
   return {
     stop: async () => {
-      await watcher.close();
+      closed = true;
+      await watcher.close().catch(() => {});
     },
   };
 }
