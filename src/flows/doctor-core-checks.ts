@@ -722,13 +722,16 @@ const sessionLocksCheck: HealthCheck = {
   kind: "core",
   description: "Stale session write locks are detected and removed by doctor repair.",
   source: "doctor",
-  async detect(ctx) {
+  async detect(ctx, scope) {
     const { detectSessionLockHealthIssues } = await import("../commands/doctor-session-locks.js");
     const issues = await detectSessionLockHealthIssues({
       config: ctx.cfg,
       env: ctx.env ?? process.env,
     });
-    return issues.map(
+    const scopedPaths = new Set(scope?.paths ?? []);
+    const scopedIssues =
+      scopedPaths.size === 0 ? issues : issues.filter((issue) => scopedPaths.has(issue.lockPath));
+    return scopedIssues.map(
       (issue): HealthFinding => ({
         checkId: "core/doctor/session-locks",
         severity: "warning",
@@ -785,11 +788,14 @@ const sessionTranscriptsCheck: HealthCheck = {
   kind: "core",
   description: "Broken prompt-rewrite transcript branches are detected and repaired.",
   source: "doctor",
-  async detect(ctx) {
+  async detect(ctx, scope) {
     const { detectSessionTranscriptHealthIssues } =
       await import("../commands/doctor-session-transcripts.js");
     const issues = await detectSessionTranscriptHealthIssues({ env: ctx.env ?? process.env });
-    return issues.map(
+    const scopedPaths = new Set(scope?.paths ?? []);
+    const scopedIssues =
+      scopedPaths.size === 0 ? issues : issues.filter((issue) => scopedPaths.has(issue.filePath));
+    return scopedIssues.map(
       (issue): HealthFinding => ({
         checkId: "core/doctor/session-transcripts",
         severity: "warning",
