@@ -47,13 +47,74 @@ function readWorkspaceOverrides() {
   return normalizeOverrides(workspace?.overrides);
 }
 
-function mergeOverrides(packageOverrides, workspaceOverrides) {
+function parsePnpmPackageKey(packageKey) {
+  if (typeof packageKey !== "string") {
+    return null;
+  }
+  const versionSeparatorIndex = packageKey.startsWith("@")
+    ? packageKey.indexOf("@", 1)
+    : packageKey.indexOf("@");
+  if (versionSeparatorIndex <= 0) {
+    return null;
+  }
+  const name = packageKey.slice(0, versionSeparatorIndex);
+  const version = packageKey.slice(versionSeparatorIndex + 1).replace(/\(.*/u, "");
+  if (!name || !version) {
+    return null;
+  }
+  return { name, version };
+}
+
+function readPnpmLockPackages() {
+  const lockfile = parseYaml(readFileSync(path.join(ROOT_DIR, "pnpm-lock.yaml"), "utf8"));
+  const packages = lockfile?.packages;
+  if (!packages || typeof packages !== "object" || Array.isArray(packages)) {
+    throw new Error("pnpm-lock.yaml is missing package resolution data.");
+  }
+  return new Set(
+    Object.keys(packages)
+      .map((packageKey) => {
+        const parsed = parsePnpmPackageKey(packageKey);
+        return parsed ? `${parsed.name}@${parsed.version}` : null;
+      })
+      .filter((packageKey) => packageKey !== null),
+  );
+}
+
+function readPnpmLockSingleVersionOverrides() {
+  const lockfile = parseYaml(readFileSync(path.join(ROOT_DIR, "pnpm-lock.yaml"), "utf8"));
+  const packages = lockfile?.packages;
+  if (!packages || typeof packages !== "object" || Array.isArray(packages)) {
+    throw new Error("pnpm-lock.yaml is missing package resolution data.");
+  }
+  const versionsByName = new Map();
+  for (const packageKey of Object.keys(packages)) {
+    const parsed = parsePnpmPackageKey(packageKey);
+    if (!parsed) {
+      continue;
+    }
+    const versions = versionsByName.get(parsed.name) ?? new Set();
+    versions.add(parsed.version);
+    versionsByName.set(parsed.name, versions);
+  }
+  return Object.fromEntries(
+    [...versionsByName.entries()]
+      .filter(([, versions]) => versions.size === 1)
+      .map(([name, versions]) => [name, [...versions][0]])
+      .toSorted(([left], [right]) => left.localeCompare(right)),
+  );
+}
+
+function mergeOverrides(packageOverrides, workspaceOverrides, pnpmLockOverrides) {
   const merged = normalizeOverrides(packageOverrides);
-  for (const [name, spec] of Object.entries(workspaceOverrides)) {
+  for (const [name, spec] of [
+    ...Object.entries(workspaceOverrides),
+    ...Object.entries(pnpmLockOverrides),
+  ]) {
     const current = merged[name];
     if (current !== undefined && JSON.stringify(current) !== JSON.stringify(spec)) {
       throw new Error(
-        `package.json overrides.${name} conflicts with pnpm-workspace.yaml overrides.${name}`,
+        `package.json overrides.${name} conflicts with pnpm lock policy for ${name}`,
       );
     }
     merged[name] = spec;
@@ -61,10 +122,14 @@ function mergeOverrides(packageOverrides, workspaceOverrides) {
   return Object.keys(merged).length > 0 ? merged : undefined;
 }
 
-function packageJsonForShrinkwrap(packageJson) {
+function readShrinkwrapOverrides() {
+  return mergeOverrides(undefined, readWorkspaceOverrides(), readPnpmLockSingleVersionOverrides());
+}
+
+function packageJsonForShrinkwrap(packageJson, shrinkwrapOverrides) {
   const normalized = { ...packageJson };
   delete normalized.devDependencies;
-  normalized.overrides = mergeOverrides(packageJson.overrides, readWorkspaceOverrides());
+  normalized.overrides = mergeOverrides(packageJson.overrides, shrinkwrapOverrides, {});
   return normalized;
 }
 
@@ -187,9 +252,9 @@ function describeOverrideViolations(violations) {
     .join("; ");
 }
 
-function normalizeShrinkwrapOverrides(tempDir) {
+function normalizeShrinkwrapOverrides(tempDir, shrinkwrapOverrides) {
   const shrinkwrapPath = path.join(tempDir, "npm-shrinkwrap.json");
-  const overrideRules = exactOverrideRulesFromOverrides(readWorkspaceOverrides());
+  const overrideRules = exactOverrideRulesFromOverrides(shrinkwrapOverrides);
   if (Object.keys(overrideRules).length === 0) {
     return;
   }
@@ -228,20 +293,59 @@ function generateShrinkwrap(packageDir) {
   const tempDir = mkdtempSync(path.join(tmpdir(), "openclaw-shrinkwrap-"));
   try {
     const packageJson = JSON.parse(readFileSync(path.join(packageDir, "package.json"), "utf8"));
+    const shrinkwrapOverrides = readShrinkwrapOverrides();
     writeFileSync(
       path.join(tempDir, "package.json"),
-      `${JSON.stringify(packageJsonForShrinkwrap(packageJson), null, 2)}\n`,
+      `${JSON.stringify(packageJsonForShrinkwrap(packageJson, shrinkwrapOverrides), null, 2)}\n`,
     );
     runNpm(
       ["install", "--package-lock-only", "--ignore-scripts", "--no-audit", "--no-fund"],
       tempDir,
     );
     runNpm(["shrinkwrap", "--ignore-scripts", "--no-audit", "--no-fund"], tempDir);
-    normalizeShrinkwrapOverrides(tempDir);
-    return readFileSync(path.join(tempDir, "npm-shrinkwrap.json"), "utf8");
+    normalizeShrinkwrapOverrides(tempDir, shrinkwrapOverrides);
+    const generated = readFileSync(path.join(tempDir, "npm-shrinkwrap.json"), "utf8");
+    assertShrinkwrapMatchesPnpmLock(JSON.parse(generated));
+    return generated;
   } finally {
     rmSync(tempDir, { recursive: true, force: true });
   }
+}
+
+function collectPnpmLockViolations(shrinkwrap, pnpmLockPackages = readPnpmLockPackages()) {
+  const packages = shrinkwrap?.packages;
+  if (!packages || typeof packages !== "object") {
+    return [];
+  }
+  const violations = [];
+  for (const [lockPath, metadata] of Object.entries(packages)) {
+    if (lockPath === "" || !metadata || typeof metadata !== "object" || !metadata.version) {
+      continue;
+    }
+    const packageName = metadata.name ?? parseLockPackagePath(lockPath).at(-1)?.name;
+    if (!packageName) {
+      continue;
+    }
+    const packageKey = `${packageName}@${metadata.version}`;
+    if (!pnpmLockPackages.has(packageKey)) {
+      violations.push({ path: lockPath, packageKey });
+    }
+  }
+  return violations;
+}
+
+function assertShrinkwrapMatchesPnpmLock(shrinkwrap) {
+  const violations = collectPnpmLockViolations(shrinkwrap);
+  if (violations.length === 0) {
+    return;
+  }
+  const examples = violations
+    .slice(0, 5)
+    .map((violation) => `${violation.path} locked ${violation.packageKey}`)
+    .join("; ");
+  throw new Error(
+    `generated npm-shrinkwrap.json contains package versions absent from pnpm-lock.yaml: ${examples}`,
+  );
 }
 
 function packageLabel(packageDir) {
@@ -360,8 +464,10 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
 
 export {
   collectOverrideViolations,
+  collectPnpmLockViolations,
   disableShrinkwrappedOverrideConflictSources,
   exactOverrideRulesFromOverrides,
   exactVersionFromOverrideSpec,
+  parsePnpmPackageKey,
   parseLockPackagePath,
 };
