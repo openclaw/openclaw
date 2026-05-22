@@ -1026,7 +1026,12 @@ export async function startGatewayPostAttachRuntime(
       const { clearCurrentProviderAuthState, warmCurrentProviderAuthState } =
         await import("../agents/model-provider-auth.js");
       const { setAuthProfileFailureHook } = await import("../agents/auth-profiles.js");
+      const { watchAuthProfilesForChanges } = await import("../agents/auth-profiles-watcher.js");
       setAuthProfileFailureHook(() => clearCurrentProviderAuthState());
+      watchAuthProfilesForChanges({
+        cfg: params.cfgAtStart,
+        onChange: () => clearCurrentProviderAuthState(),
+      });
       const startMs = Date.now();
       await warmCurrentProviderAuthState(params.cfgAtStart);
       params.log.info(`provider auth state pre-warmed in ${Date.now() - startMs}ms`);
