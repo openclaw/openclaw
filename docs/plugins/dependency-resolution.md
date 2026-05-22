@@ -74,13 +74,16 @@ policy, and writes `extensions/<id>/npm-shrinkwrap.json` for each
 OpenClaw does not require it for community packages, but npm will respect it
 when present.
 
-OpenClaw-owned npm plugin packages also publish with explicit
+OpenClaw-owned npm plugin packages can also publish with explicit
 `bundledDependencies`. The npm publish path overlays the runtime dependency
 name list, removes dev-only workspace metadata from the published package
 manifest, runs a script-free npm install for package-local runtime
 dependencies, then packs or publishes the plugin tarball with those dependency
-files included. The root `openclaw` package does not bundle its full dependency
-tree.
+files included. Native-heavy packages can opt out with
+`openclaw.release.bundleRuntimeDependencies: false`; those packages still ship
+their shrinkwrap, but npm resolves runtime dependencies during install instead
+of embedding every platform binary in the plugin tarball. The root `openclaw`
+package does not bundle its full dependency tree.
 
 Plugins that import `openclaw/plugin-sdk/*` declare `openclaw` as a peer
 dependency. OpenClaw does not let npm install a separate registry copy of the

@@ -406,6 +406,69 @@ describe("plugin npm package manifest staging", () => {
     expect(existsSync(nodeModulesPath)).toBe(false);
   });
 
+  it("honors plugin package opt-out for bundled runtime dependencies", () => {
+    const repoDir = makeTempRepoRoot(tempDirs, "openclaw-plugin-npm-package-bundle-opt-out-");
+    const packageDir = writePublishablePluginPackage(repoDir);
+    writeFileText(join(packageDir, "dist", "index.js"), "export {};\n");
+    writeFileText(join(packageDir, "dist", "setup-entry.js"), "export {};\n");
+    writeLocalDependencyPackage(packageDir);
+    writeJsonFile(join(packageDir, "package.json"), {
+      name: "@openclaw/diffs",
+      version: "2026.5.3",
+      type: "module",
+      dependencies: {
+        "local-runtime-dep": "file:./deps/local-runtime-dep",
+      },
+      openclaw: {
+        extensions: ["./index.ts"],
+        setupEntry: "./setup-entry.ts",
+        compat: {
+          pluginApi: ">=2026.4.30",
+        },
+        release: {
+          publishToNpm: true,
+          bundleRuntimeDependencies: false,
+        },
+      },
+    });
+    writeJsonFile(join(packageDir, "npm-shrinkwrap.json"), {
+      name: "@openclaw/diffs",
+      version: "2026.5.3",
+      lockfileVersion: 3,
+      requires: true,
+      packages: {
+        "": {
+          name: "@openclaw/diffs",
+          version: "2026.5.3",
+          dependencies: {
+            "local-runtime-dep": "file:./deps/local-runtime-dep",
+          },
+        },
+      },
+    });
+
+    const resolved = resolveAugmentedPluginNpmPackageJson({
+      repoRoot: repoDir,
+      packageDir,
+      bundleDependencies: true,
+    });
+    expect(resolved.bundleDependencies).toBe(false);
+    expect(resolved.packageJson?.bundledDependencies).toBeUndefined();
+    expect(resolved.packageJson?.devDependencies).toBeUndefined();
+
+    const nodeModulesPath = join(packageDir, "node_modules");
+    withAugmentedPluginNpmManifestForPackage(
+      { repoRoot: repoDir, packageDir, bundleDependencies: true },
+      () => {
+        const stagedPackageJson = JSON.parse(
+          readFileSync(join(packageDir, "package.json"), "utf8"),
+        );
+        expect(stagedPackageJson.bundledDependencies).toBeUndefined();
+        expect(existsSync(nodeModulesPath)).toBe(false);
+      },
+    );
+  });
+
   it("refuses to pack publishable plugins before package-local runtime files exist", () => {
     const repoDir = makeTempRepoRoot(tempDirs, "openclaw-plugin-npm-package-runtime-missing-");
     const packageDir = writePublishablePluginPackage(repoDir);
