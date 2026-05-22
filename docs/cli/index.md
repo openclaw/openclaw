@@ -247,7 +247,7 @@ openclaw [--dev] [--profile <name>] <command>
     video generate|describe|providers
     web search|fetch|providers
     embedding create|providers
-    auth add|login|login-github-copilot|setup-token|paste-token
+    auth add|login|login-github-copilot|setup-token|paste-token|paste-api-key
     auth order get|set|clear
   sandbox
     list

@@ -171,6 +171,7 @@ openclaw models auth list [--provider <id>] [--json]
 openclaw models auth login --provider <id>
 openclaw models auth setup-token --provider <id>
 openclaw models auth paste-token
+openclaw models auth paste-api-key
 ```
 
 `models auth add` is the interactive auth helper. It can launch a provider auth
@@ -185,7 +186,7 @@ filter to one provider, such as `openai-codex`, and `--json` for scripting.
 `openclaw plugins list` to see which providers are installed.
 Use `openclaw models auth --agent <id> <subcommand>` to write auth results to a
 specific configured agent store. The parent `--agent` flag is honored by
-`add`, `list`, `login`, `setup-token`, `paste-token`, and
+`add`, `list`, `login`, `setup-token`, `paste-token`, `paste-api-key`, and
 `login-github-copilot`.
 
 For OpenAI models, `--provider openai` defaults to ChatGPT/Codex account login.
@@ -214,6 +215,12 @@ Notes:
   `--profile-id`.
 - `paste-token --expires-in <duration>` stores an absolute token expiry from a
   relative duration such as `365d` or `12h`.
+- `paste-api-key` accepts an API key generated elsewhere or from automation.
+- `paste-api-key` requires `--provider`, prompts for the API key with masked
+  terminal input, and writes it to the default profile id `<provider>:manual`
+  unless you pass `--profile-id`.
+- `paste-api-key` also accepts piped stdin, so automation can run a command such
+  as `printf "%s\n" "$OPENAI_API_KEY" | openclaw models auth paste-api-key --provider openai`.
 - Anthropic note: Anthropic staff told us OpenClaw-style Claude CLI usage is allowed again, so OpenClaw treats Claude CLI reuse and `claude -p` usage as sanctioned for this integration unless Anthropic publishes a new policy.
 - Anthropic `setup-token` / `paste-token` remain available as a supported OpenClaw token path, but OpenClaw now prefers Claude CLI reuse and `claude -p` when available.
 

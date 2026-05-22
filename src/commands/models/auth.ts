@@ -2,6 +2,7 @@ import {
   cancel,
   confirm as clackConfirm,
   isCancel,
+  password as clackPassword,
   select as clackSelect,
   text as clackText,
 } from "@clack/prompts";
@@ -81,6 +82,13 @@ const text = async (params: Parameters<typeof clackText>[0]) =>
       message: stylePromptMessage(params.message),
     }),
   );
+const password = async (params: Parameters<typeof clackPassword>[0]) =>
+  guardCancel(
+    await clackPassword({
+      ...params,
+      message: stylePromptMessage(params.message),
+    }),
+  );
 const select = async <T>(params: Parameters<typeof clackSelect<T>>[0]) =>
   guardCancel(
     await clackSelect({
@@ -95,7 +103,7 @@ const select = async <T>(params: Parameters<typeof clackSelect<T>>[0]) =>
 async function readPastedSecret(message: string): Promise<string | undefined> {
   if (process.stdin.isTTY) {
     return normalizeOptionalString(
-      await text({
+      await password({
         message,
         validate: (value) => (value?.trim() ? undefined : "Required"),
       }),

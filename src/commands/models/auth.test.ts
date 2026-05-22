@@ -39,6 +39,7 @@ const mocks = vi.hoisted(() => ({
   clackCancel: vi.fn(),
   clackConfirm: vi.fn(),
   clackIsCancel: vi.fn((value: unknown) => value === Symbol.for("clack:cancel")),
+  clackPassword: vi.fn(),
   clackSelect: vi.fn(),
   clackText: vi.fn(),
   resolveDefaultAgentId: vi.fn(),
@@ -108,6 +109,7 @@ vi.mock("@clack/prompts", () => ({
   cancel: mocks.clackCancel,
   confirm: mocks.clackConfirm,
   isCancel: mocks.clackIsCancel,
+  password: mocks.clackPassword,
   select: mocks.clackSelect,
   text: mocks.clackText,
 }));
@@ -339,6 +341,7 @@ describe("modelsAuthLoginCommand", () => {
     mocks.clackIsCancel.mockImplementation(
       (value: unknown) => value === Symbol.for("clack:cancel"),
     );
+    mocks.clackPassword.mockReset();
     mocks.clackSelect.mockReset();
     mocks.clackText.mockReset();
     mocks.upsertAuthProfileWithLock.mockReset();
@@ -1205,6 +1208,28 @@ describe("modelsAuthLoginCommand", () => {
     expect(runtime.log).toHaveBeenCalledWith(
       "Auth profile: openai-codex:manual (openai-codex/api_key)",
     );
+  });
+
+  it("masks interactive OpenAI Codex API key paste", async () => {
+    const runtime = createRuntime();
+    mocks.clackPassword.mockResolvedValue("sk-openai-codex-demo");
+
+    await modelsAuthPasteApiKeyCommand({ provider: "openai-codex" }, runtime);
+
+    expect(mocks.clackPassword).toHaveBeenCalledWith({
+      message: expect.stringContaining("Paste API key for openai-codex"),
+      validate: expect.any(Function),
+    });
+    expect(mocks.clackText).not.toHaveBeenCalled();
+    expect(mocks.upsertAuthProfileWithLock).toHaveBeenCalledWith({
+      profileId: "openai-codex:manual",
+      credential: {
+        type: "api_key",
+        provider: "openai-codex",
+        key: "sk-openai-codex-demo",
+      },
+      agentDir: "/tmp/openclaw/agents/main",
+    });
   });
 
   it("writes pasted tokens to the requested agent store", async () => {
