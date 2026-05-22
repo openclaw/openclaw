@@ -177,6 +177,21 @@ When an agent creates an isolated reminder from an active chat, OpenClaw stores 
 
 Implicit announce delivery uses configured channel allowlists to validate and reroute stale targets. DM pairing-store approvals are not fallback automation recipients; set `delivery.to` or configure the channel `allowFrom` entry when a scheduled job should proactively send to a DM.
 
+## Output language
+
+Cron jobs do not infer a reply language from channel, locale, or previous
+messages. Put the language rule in the scheduled message or template:
+
+```bash
+openclaw cron edit <jobId> \
+  --message "Summarize the updates. Respond in Chinese; keep URLs, code, and product names unchanged."
+```
+
+For template files, keep the language instruction in the rendered prompt and
+verify placeholders such as `{{language}}` are filled before the job runs. If
+the output mixes languages, make the rule explicit, for example: "Use Chinese
+for narrative text and keep technical terms in English."
+
 Failure notifications follow a separate destination path:
 
 - `cron.failureDestination` sets a global default for failure notifications.
