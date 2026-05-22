@@ -7,8 +7,9 @@ function hasFinding(
   checkId:
     | "sandbox.browser_container.hash_label_missing"
     | "sandbox.browser_container.hash_epoch_stale"
-    | "sandbox.browser_container.non_loopback_publish",
-  severity: "warn" | "critical",
+    | "sandbox.browser_container.non_loopback_publish"
+    | "sandbox.browser_container.docker_probe_timeout",
+  severity: "info" | "warn" | "critical",
   findings: Array<{ checkId: string; severity: string; detail: string }>,
 ) {
   return findings.some((finding) => finding.checkId === checkId && finding.severity === severity);
@@ -74,6 +75,30 @@ describe("security audit sandbox browser findings", () => {
       false,
     );
     expect(hasFinding("sandbox.browser_container.hash_epoch_stale", "warn", findings)).toBe(false);
+  });
+
+  it("times out the sandbox browser docker listing probe", async () => {
+    const findings = await collectSandboxBrowserHashLabelFindings({
+      timeoutMs: 1,
+      execDockerRawFn: async (_args, opts) =>
+        await new Promise<never>((_, reject) => {
+          opts?.signal?.addEventListener(
+            "abort",
+            () => {
+              const err = new Error("Aborted");
+              err.name = "AbortError";
+              reject(err);
+            },
+            { once: true },
+          );
+        }),
+    });
+
+    const timeoutFinding = findings.find(
+      (finding) => finding.checkId === "sandbox.browser_container.docker_probe_timeout",
+    );
+    expect(timeoutFinding?.severity).toBe("info");
+    expect(timeoutFinding?.detail).toContain("1ms");
   });
 
   it("flags sandbox browser containers with non-loopback published ports", async () => {

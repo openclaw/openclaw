@@ -39,6 +39,8 @@ type ExecDockerRawFn = (
   opts?: { allowFailure?: boolean; input?: Buffer | string; signal?: AbortSignal },
 ) => Promise<import("../agents/sandbox/docker.js").ExecDockerRawResult>;
 
+const DEFAULT_SANDBOX_BROWSER_DOCKER_AUDIT_TIMEOUT_MS = 5000;
+
 type CodeSafetySummaryCache = Map<string, Promise<unknown>>;
 let skillsModulePromise: Promise<typeof import("../agents/skills.js")> | undefined;
 let configModulePromise: Promise<typeof import("../config/config.js")> | undefined;
@@ -274,30 +276,77 @@ function normalizeDockerLabelValue(raw: string | undefined): string | null {
   return trimmed;
 }
 
+function isAbortError(error: unknown): boolean {
+  return (
+    error instanceof Error &&
+    (error.name === "AbortError" || normalizeOptionalString(error.message) === "Aborted")
+  );
+}
+
+function normalizeDockerAuditTimeoutMs(timeoutMs: number | undefined): number {
+  return typeof timeoutMs === "number" && Number.isFinite(timeoutMs) && timeoutMs > 0
+    ? timeoutMs
+    : DEFAULT_SANDBOX_BROWSER_DOCKER_AUDIT_TIMEOUT_MS;
+}
+
+function createDockerAuditAbortController(timeoutMs: number): {
+  signal: AbortSignal;
+  dispose: () => void;
+  didTimeout: () => boolean;
+} {
+  const controller = new AbortController();
+  let timedOut = false;
+  const timer = setTimeout(() => {
+    timedOut = true;
+    controller.abort();
+  }, timeoutMs);
+  return {
+    signal: controller.signal,
+    dispose: () => clearTimeout(timer),
+    didTimeout: () => timedOut,
+  };
+}
+
+function createDockerAuditTimeoutFinding(timeoutMs: number): SecurityAuditFinding {
+  return {
+    checkId: "sandbox.browser_container.docker_probe_timeout",
+    severity: "info",
+    title: "Sandbox browser Docker audit timed out",
+    detail:
+      `Docker did not respond within ${timeoutMs}ms while auditing sandbox browser containers. ` +
+      "Status continues with partial security audit results.",
+  };
+}
+
 async function listSandboxBrowserContainers(
   execDockerRawFn: ExecDockerRawFn,
-): Promise<string[] | null> {
+  signal?: AbortSignal,
+): Promise<{ containers: string[] | null; timedOut: boolean }> {
   try {
     const result = await execDockerRawFn(
       ["ps", "-a", "--filter", "label=openclaw.sandboxBrowser=1", "--format", "{{.Names}}"],
-      { allowFailure: true },
+      { allowFailure: true, signal },
     );
     if (result.code !== 0) {
-      return null;
+      return { containers: null, timedOut: false };
     }
-    return result.stdout
-      .toString("utf8")
-      .split(/\r?\n/)
-      .map((entry) => entry.trim())
-      .filter(Boolean);
-  } catch {
-    return null;
+    return {
+      containers: result.stdout
+        .toString("utf8")
+        .split(/\r?\n/)
+        .map((entry) => entry.trim())
+        .filter(Boolean),
+      timedOut: false,
+    };
+  } catch (err) {
+    return { containers: null, timedOut: isAbortError(err) };
   }
 }
 
 async function readSandboxBrowserHashLabels(params: {
   containerName: string;
   execDockerRawFn: ExecDockerRawFn;
+  signal?: AbortSignal;
 }): Promise<{ configHash: string | null; epoch: string | null } | null> {
   try {
     const result = await params.execDockerRawFn(
@@ -307,7 +356,7 @@ async function readSandboxBrowserHashLabels(params: {
         '{{ index .Config.Labels "openclaw.configHash" }}\t{{ index .Config.Labels "openclaw.browserConfigEpoch" }}',
         params.containerName,
       ],
-      { allowFailure: true },
+      { allowFailure: true, signal: params.signal },
     );
     if (result.code !== 0) {
       return null;
@@ -349,10 +398,12 @@ function isLoopbackPublishHost(host: string): boolean {
 async function readSandboxBrowserPortMappings(params: {
   containerName: string;
   execDockerRawFn: ExecDockerRawFn;
+  signal?: AbortSignal;
 }): Promise<string[] | null> {
   try {
     const result = await params.execDockerRawFn(["port", params.containerName], {
       allowFailure: true,
+      signal: params.signal,
     });
     if (result.code !== 0) {
       return null;
@@ -369,87 +420,109 @@ async function readSandboxBrowserPortMappings(params: {
 
 export async function collectSandboxBrowserHashLabelFindings(params?: {
   execDockerRawFn?: ExecDockerRawFn;
+  timeoutMs?: number;
 }): Promise<SecurityAuditFinding[]> {
   const findings: SecurityAuditFinding[] = [];
   const [execFn, browserHashEpoch] = await Promise.all([
     params?.execDockerRawFn ? Promise.resolve(params.execDockerRawFn) : loadExecDockerRaw(),
     loadSandboxBrowserSecurityHashEpoch(),
   ]);
-  const containers = await listSandboxBrowserContainers(execFn);
-  if (!containers || containers.length === 0) {
+  const timeoutMs = normalizeDockerAuditTimeoutMs(params?.timeoutMs);
+  const abortController = createDockerAuditAbortController(timeoutMs);
+  try {
+    const { containers, timedOut } = await listSandboxBrowserContainers(
+      execFn,
+      abortController.signal,
+    );
+    if (timedOut || abortController.didTimeout()) {
+      findings.push(createDockerAuditTimeoutFinding(timeoutMs));
+      return findings;
+    }
+    if (!containers || containers.length === 0) {
+      return findings;
+    }
+
+    const missingHash: string[] = [];
+    const staleEpoch: string[] = [];
+    const nonLoopbackPublished: string[] = [];
+
+    for (const containerName of containers) {
+      const labels = await readSandboxBrowserHashLabels({
+        containerName,
+        execDockerRawFn: execFn,
+        signal: abortController.signal,
+      });
+      if (!labels) {
+        continue;
+      }
+      if (!labels.configHash) {
+        missingHash.push(containerName);
+      }
+      if (labels.epoch !== browserHashEpoch) {
+        staleEpoch.push(containerName);
+      }
+      const portMappings = await readSandboxBrowserPortMappings({
+        containerName,
+        execDockerRawFn: execFn,
+        signal: abortController.signal,
+      });
+      if (!portMappings?.length) {
+        continue;
+      }
+      const exposedMappings = portMappings.filter((line) => {
+        const host = parsePublishedHostFromDockerPortLine(line);
+        return Boolean(host && !isLoopbackPublishHost(host));
+      });
+      if (exposedMappings.length > 0) {
+        nonLoopbackPublished.push(`${containerName} (${exposedMappings.join("; ")})`);
+      }
+    }
+    if (abortController.didTimeout()) {
+      findings.push(createDockerAuditTimeoutFinding(timeoutMs));
+    }
+
+    if (missingHash.length > 0) {
+      findings.push({
+        checkId: "sandbox.browser_container.hash_label_missing",
+        severity: "warn",
+        title: "Sandbox browser container missing config hash label",
+        detail:
+          `Containers: ${missingHash.join(", ")}. ` +
+          "These browser containers predate hash-based drift checks and may miss security remediations until recreated.",
+        remediation: `${formatCliCommand("openclaw sandbox recreate --browser --all")} (add --force to skip prompt).`,
+      });
+    }
+
+    if (staleEpoch.length > 0) {
+      findings.push({
+        checkId: "sandbox.browser_container.hash_epoch_stale",
+        severity: "warn",
+        title: "Sandbox browser container hash epoch is stale",
+        detail:
+          `Containers: ${staleEpoch.join(", ")}. ` +
+          `Expected openclaw.browserConfigEpoch=${browserHashEpoch}.`,
+        remediation: `${formatCliCommand("openclaw sandbox recreate --browser --all")} (add --force to skip prompt).`,
+      });
+    }
+
+    if (nonLoopbackPublished.length > 0) {
+      findings.push({
+        checkId: "sandbox.browser_container.non_loopback_publish",
+        severity: "critical",
+        title: "Sandbox browser container publishes ports on non-loopback interfaces",
+        detail:
+          `Containers: ${nonLoopbackPublished.join(", ")}. ` +
+          "Sandbox browser observer/control ports should stay loopback-only to avoid unintended remote access.",
+        remediation:
+          `${formatCliCommand("openclaw sandbox recreate --browser --all")} (add --force to skip prompt), ` +
+          "then verify published ports are bound to 127.0.0.1.",
+      });
+    }
+
     return findings;
+  } finally {
+    abortController.dispose();
   }
-
-  const missingHash: string[] = [];
-  const staleEpoch: string[] = [];
-  const nonLoopbackPublished: string[] = [];
-
-  for (const containerName of containers) {
-    const labels = await readSandboxBrowserHashLabels({ containerName, execDockerRawFn: execFn });
-    if (!labels) {
-      continue;
-    }
-    if (!labels.configHash) {
-      missingHash.push(containerName);
-    }
-    if (labels.epoch !== browserHashEpoch) {
-      staleEpoch.push(containerName);
-    }
-    const portMappings = await readSandboxBrowserPortMappings({
-      containerName,
-      execDockerRawFn: execFn,
-    });
-    if (!portMappings?.length) {
-      continue;
-    }
-    const exposedMappings = portMappings.filter((line) => {
-      const host = parsePublishedHostFromDockerPortLine(line);
-      return Boolean(host && !isLoopbackPublishHost(host));
-    });
-    if (exposedMappings.length > 0) {
-      nonLoopbackPublished.push(`${containerName} (${exposedMappings.join("; ")})`);
-    }
-  }
-
-  if (missingHash.length > 0) {
-    findings.push({
-      checkId: "sandbox.browser_container.hash_label_missing",
-      severity: "warn",
-      title: "Sandbox browser container missing config hash label",
-      detail:
-        `Containers: ${missingHash.join(", ")}. ` +
-        "These browser containers predate hash-based drift checks and may miss security remediations until recreated.",
-      remediation: `${formatCliCommand("openclaw sandbox recreate --browser --all")} (add --force to skip prompt).`,
-    });
-  }
-
-  if (staleEpoch.length > 0) {
-    findings.push({
-      checkId: "sandbox.browser_container.hash_epoch_stale",
-      severity: "warn",
-      title: "Sandbox browser container hash epoch is stale",
-      detail:
-        `Containers: ${staleEpoch.join(", ")}. ` +
-        `Expected openclaw.browserConfigEpoch=${browserHashEpoch}.`,
-      remediation: `${formatCliCommand("openclaw sandbox recreate --browser --all")} (add --force to skip prompt).`,
-    });
-  }
-
-  if (nonLoopbackPublished.length > 0) {
-    findings.push({
-      checkId: "sandbox.browser_container.non_loopback_publish",
-      severity: "critical",
-      title: "Sandbox browser container publishes ports on non-loopback interfaces",
-      detail:
-        `Containers: ${nonLoopbackPublished.join(", ")}. ` +
-        "Sandbox browser observer/control ports should stay loopback-only to avoid unintended remote access.",
-      remediation:
-        `${formatCliCommand("openclaw sandbox recreate --browser --all")} (add --force to skip prompt), ` +
-        "then verify published ports are bound to 127.0.0.1.",
-    });
-  }
-
-  return findings;
 }
 
 export async function collectIncludeFilePermFindings(params: {

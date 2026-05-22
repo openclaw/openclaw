@@ -56,7 +56,7 @@ export type SecurityAuditOptions = {
   stateDir?: string;
   /** Override config path check (default: resolveConfigPath()). */
   configPath?: string;
-  /** Time limit for deep gateway probe. */
+  /** Time limit for deep gateway and audit subprocess probes. */
   deepTimeoutMs?: number;
   /** Dependency injection for tests. */
   plugins?: ChannelPlugin[];
@@ -1096,6 +1096,7 @@ export async function runSecurityAudit(opts: SecurityAuditOptions): Promise<Secu
     findings.push(
       ...(await auditNonDeep.collectSandboxBrowserHashLabelFindings({
         execDockerRawFn: context.execDockerRawFn,
+        timeoutMs: context.deepTimeoutMs,
       })),
     );
     findings.push(...(await auditNonDeep.collectPluginsTrustFindings({ cfg, stateDir })));
