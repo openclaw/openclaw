@@ -559,11 +559,33 @@ Matrix inherits global defaults from `session.threadBindings`, and also supports
 - `threadBindings.maxAgeHours`
 - `threadBindings.spawnSessions`
 - `threadBindings.defaultSpawnContext`
+- `threadBindings.bypassMentionInBoundThreads` (default: `false`)
 
 Matrix thread-bound session spawns default on:
 
 - Set `threadBindings.spawnSessions: false` to block top-level `/focus` and `/acp spawn --thread auto|here` from creating/binding Matrix threads.
 - Set `threadBindings.defaultSpawnContext: "isolated"` when native subagent thread spawns should not fork the parent transcript.
+
+#### Bypass mention requirement inside bound threads
+
+By default, rooms configured with `requireMention: true` enforce the mention gate on every inbound event — including replies inside threads the bot already has an active per-thread session binding for. That breaks the natural "mention to open a thread, free-form continuation inside" UX in `requireMention` rooms, because every in-thread reply needs another `@bot` prefix or it is dropped as `skipping room message: no-mention`.
+
+Set `channels.matrix.threadBindings.bypassMentionInBoundThreads: true` to opt in:
+
+```yaml
+channels:
+  matrix:
+    threadBindings:
+      enabled: true
+      bypassMentionInBoundThreads: true
+```
+
+When enabled, the inbound mention gate is skipped for events that satisfy ALL of:
+
+- The message is a reply inside an existing thread (it carries an `m.thread` relation to a root that is not the message itself — top-level messages that become new thread roots under `threadReplies: "always"` do **not** qualify).
+- The bot already has a runtime session binding for that thread (created automatically by `threadBindings.enabled` when the bot first replied in the thread).
+
+Top-level mention enforcement is unchanged: a new conversation still requires an `@bot` to engage. Inside an already-engaged thread, follow-ups flow naturally. The legacy contract — "thread-binding existence alone does not bypass mention" — is preserved when this flag is absent or `false`.
 
 ## Reactions
 
