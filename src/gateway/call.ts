@@ -628,9 +628,9 @@ function formatGatewayTimeoutError(
     eventLoopMaxDriftMs >= EVENT_LOOP_BLOCK_HINT_THRESHOLD_MS
   ) {
     message +=
-      `\n\nNote: this CLI process's event loop was blocked for ` +
+      `\n\nNote: this process's event loop was blocked for ` +
       `${Math.round(eventLoopMaxDriftMs)}ms during the handshake, ` +
-      "which usually means the timeout fired because the CLI was busy " +
+      "which usually means the timeout fired because the caller was busy " +
       "(heavy module discovery, JIT compile, sync I/O) rather than because " +
       "the gateway is down. The gateway's response may have arrived just " +
       "after the timer fired. Try raising the budget with " +

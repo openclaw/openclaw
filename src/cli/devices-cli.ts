@@ -22,10 +22,10 @@ const devicesCallOpts = (cmd: Command, defaults?: { timeoutMs?: number }) => {
     .option("--password <password>", "Gateway password (password auth)");
   // When a per-subcommand default is supplied via `defaults.timeoutMs`, keep
   // it. Otherwise leave --timeout without a default so the underlying
-  // callGateway resolves DEFAULT_PREAUTH_HANDSHAKE_TIMEOUT_MS
-  // (45 000 ms) and honors OPENCLAW_HANDSHAKE_TIMEOUT_MS /
-  // gateway.handshakeTimeoutMs. The previous behavior — hardcoding 10 000 ms
-  // here — overrode the configurable default for every device-CLI call.
+  // callGateway resolves DEFAULT_PREAUTH_HANDSHAKE_TIMEOUT_MS and honors
+  // OPENCLAW_HANDSHAKE_TIMEOUT_MS / gateway.handshakeTimeoutMs. The previous
+  // behavior — hardcoding 10 000 ms here — overrode the configurable default
+  // for every device-CLI call.
   if (defaults?.timeoutMs !== undefined) {
     timeoutOpt.option("--timeout <ms>", "Timeout in ms", String(defaults.timeoutMs));
   } else {

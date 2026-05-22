@@ -97,8 +97,7 @@ function gatewayCallOpts(cmd: Command): Command {
       .option("--password <password>", "Gateway password (password auth)")
       // No default: see src/cli/gateway-cli/call.ts for rationale. When
       // --timeout is omitted, callGateway resolves DEFAULT_PREAUTH_HANDSHAKE_TIMEOUT_MS
-      // (45 000 ms by default) and honors OPENCLAW_HANDSHAKE_TIMEOUT_MS /
-      // gateway.handshakeTimeoutMs.
+      // and honors OPENCLAW_HANDSHAKE_TIMEOUT_MS / gateway.handshakeTimeoutMs.
       .option("--timeout <ms>", "Timeout in ms (default: gateway handshake budget)")
       .option("--expect-final", "Wait for final response (agent)", false)
       .option("--json", "Output JSON", false)
