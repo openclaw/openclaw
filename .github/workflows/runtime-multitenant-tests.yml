@@ -1,0 +1,60 @@
+name: runtime-multitenant-tests
+
+# Runs the pytest suite under overlay/multitenant/tests/ — the Rockie-specific
+# tests that protect the multitenant runtime overlay (entrypoint settings
+# render, Dockerfile git-credential handling, the rockie-gpu CLI).
+#
+# Why a standalone workflow instead of a job in ci.yml:
+#   ci.yml is upstream-synced from OpenClaw — its history is OpenClaw
+#   chore:/ci: commits and it carries `github.repository == 'openclaw/openclaw'`
+#   conditionals. A Rockie-specific job inside it would conflict on every
+#   /upstream-sync. The Rockie-specific overlay/ dir and build-runtime-image.yml
+#   already exist as separate files for exactly this reason, so a standalone
+#   workflow is the architecturally consistent home for these tests.
+#   See rockie-workspace#586.
+#
+# The suite needs only pytest + stdlib + git + bash (no pyyaml/ruff, unlike
+# ci.yml's skills-python job). ubuntu-24.04 ships git and bash.
+
+on:
+  pull_request:
+    paths:
+      - "overlay/multitenant/**"
+      - ".github/workflows/runtime-multitenant-tests.yml"
+  push:
+    branches: [main]
+    paths:
+      - "overlay/multitenant/**"
+      - ".github/workflows/runtime-multitenant-tests.yml"
+  # Manual re-run path (e.g. after a transient runner failure) without
+  # pushing a no-op commit — mirrors build-runtime-image.yml.
+  workflow_dispatch: {}
+
+concurrency:
+  group: runtime-multitenant-tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  pytest:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      # Default (non-sparse) checkout: test_dockerfile_git_credentials.py
+      # resolves REPO_ROOT via Path(__file__).resolve().parents[3] and reads
+      # Dockerfile.multitenant, so the whole repo tree must be present.
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Install pytest
+        run: python -m pip install --disable-pip-version-check pytest
+
+      - name: Run multitenant overlay tests
+        run: python -m pytest -q overlay/multitenant/tests/
