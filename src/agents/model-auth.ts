@@ -859,11 +859,7 @@ export async function resolveApiKeyForProvider(params: {
     return deferredAuthProfileResult;
   }
 
-  const syntheticLocalAuth = resolveSyntheticLocalProviderAuth({
-    cfg,
-    provider,
-    modelApi: params.modelApi,
-  });
+  const syntheticLocalAuth = resolveSyntheticLocalProviderAuth({ cfg, provider, modelApi: params.modelApi });
   if (syntheticLocalAuth) {
     return syntheticLocalAuth;
   }

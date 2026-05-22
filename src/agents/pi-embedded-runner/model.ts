@@ -941,10 +941,7 @@ function resolveConfiguredFallbackModel(params: {
   }
   const fallbackTransport = resolveProviderTransport({
     provider,
-    api:
-      normalizeResolvedTransportApi(configuredModel?.api) ??
-      resolveConfiguredProviderDefaultApi(providerConfig) ??
-      "openai-responses",
+    api: normalizeResolvedTransportApi(configuredModel?.api) ?? resolveConfiguredProviderDefaultApi(providerConfig) ?? "openai-responses",
     baseUrl: configuredModel?.baseUrl ?? providerConfig?.baseUrl,
     cfg,
     workspaceDir,

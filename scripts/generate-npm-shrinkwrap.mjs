@@ -123,7 +123,9 @@ function mergeOverrides(packageOverrides, workspaceOverrides, pnpmLockOverrides)
   ]) {
     const current = merged[name];
     if (current !== undefined && JSON.stringify(current) !== JSON.stringify(spec)) {
-      throw new Error(`package.json overrides.${name} conflicts with pnpm lock policy for ${name}`);
+      throw new Error(
+        `package.json overrides.${name} conflicts with pnpm lock policy for ${name}`,
+      );
     }
     merged[name] = spec;
   }

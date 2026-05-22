@@ -44,7 +44,8 @@ async function runHelperWithExistingSentinel(params: {
 }) {
   const { execFile } =
     await vi.importActual<typeof import("node:child_process")>("node:child_process");
-  const { startManagedServiceUpdateHandoff } = await import("./update-managed-service-handoff.js");
+  const { startManagedServiceUpdateHandoff } =
+    await import("./update-managed-service-handoff.js");
   const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-handoff-helper-test-"));
   tempDirs.add(tmpDir);
 
