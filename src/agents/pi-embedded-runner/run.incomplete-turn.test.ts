@@ -1883,6 +1883,20 @@ describe("runEmbeddedPiAgent incomplete-turn safety", () => {
     expect(hasOutboundDeliveryEvidence({ acceptedSessionSpawns })).toBe(true);
   });
 
+  it("ignores malformed accepted sessions_spawn delivery evidence", () => {
+    expect(
+      hasOutboundDeliveryEvidence({
+        acceptedSessionSpawns: [
+          null,
+          {
+            runId: "run-child",
+            childSessionKey: " ",
+          },
+        ],
+      }),
+    ).toBe(false);
+  });
+
   it("leaves committed delivery plus tool errors to the tool-error payload path", () => {
     const incompleteTurnText = resolveIncompleteTurnPayloadText({
       payloadCount: 0,

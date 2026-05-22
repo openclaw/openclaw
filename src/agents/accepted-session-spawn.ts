@@ -24,12 +24,14 @@ export function normalizeAcceptedSessionSpawnResult(result: unknown): AcceptedSe
   return { runId, childSessionKey };
 }
 
-export function hasAcceptedSessionSpawn(
-  acceptedSessionSpawns?: readonly AcceptedSessionSpawn[],
-): boolean {
+export function hasAcceptedSessionSpawn(acceptedSessionSpawns?: readonly unknown[]): boolean {
   return (acceptedSessionSpawns ?? []).some((spawn) => {
+    const record = asRecord(spawn);
+    if (!record) {
+      return false;
+    }
     return Boolean(
-      normalizeOptionalString(spawn.runId) && normalizeOptionalString(spawn.childSessionKey),
+      normalizeOptionalString(record.runId) && normalizeOptionalString(record.childSessionKey),
     );
   });
 }
