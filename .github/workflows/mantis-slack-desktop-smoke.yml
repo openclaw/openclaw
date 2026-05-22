@@ -373,7 +373,7 @@ jobs:
                 candidate: { sha: $candidate_sha, expected: $expected, status: $status, fixed: ($status == "pass") },
                 pass: ($status == "pass")
               },
-              artifacts: [
+              artifacts: ([
                 { kind: "desktopScreenshot", lane: "candidate", label: "Slack desktop/VNC browser", path: "slack-desktop-smoke.png", targetPath: "slack-desktop.png", alt: "Slack Web desktop screenshot from the Mantis VM", width: 720, inline: true, required: $screenshot_required },
                 { kind: "motionPreview", lane: "candidate", label: "Slack motion preview", path: "slack-desktop-smoke-preview.gif", targetPath: "slack-desktop-preview.gif", alt: "Animated Slack desktop preview", width: 720, inline: true, required: false },
                 { kind: "motionClip", lane: "candidate", label: "Slack change MP4", path: "slack-desktop-smoke-change.mp4", targetPath: "slack-desktop-change.mp4", required: false },
@@ -383,7 +383,7 @@ jobs:
                 { kind: "metadata", lane: "run", label: "Slack command log", path: "slack-desktop-command.log", targetPath: "slack-desktop-command.log", required: false },
                 { kind: "metadata", lane: "run", label: "Slack preview metadata", path: "slack-desktop-smoke-preview.json", targetPath: "slack-desktop-preview.json", required: false },
                 { kind: "metadata", lane: "run", label: "Slack error", path: "error.txt", targetPath: "error.txt", required: false }
-              ] + $checkpoint_artifacts
+              ] + $checkpoint_artifacts)
             }' > "$root/mantis-evidence.json"
 
           cat "$root/mantis-slack-desktop-smoke-report.md" >> "$GITHUB_STEP_SUMMARY"
