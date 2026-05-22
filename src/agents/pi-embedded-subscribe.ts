@@ -46,6 +46,7 @@ import {
 } from "./pi-embedded-subscribe.tools.js";
 import type { SubscribeEmbeddedPiSessionParams } from "./pi-embedded-subscribe.types.js";
 import { stripDowngradedToolCallText, THINKING_TAG_SCAN_RE } from "./pi-embedded-utils.js";
+import type { AgentRunTimeoutPhase } from "./run-timeout-attribution.js";
 import { hasNonzeroUsage, normalizeUsage, type UsageLike } from "./usage.js";
 
 const STREAM_STRIPPED_BLOCK_TAG_NAMES = [
@@ -131,6 +132,7 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
   const state: EmbeddedPiSubscribeState = {
     assistantTexts: [],
     toolMetas: [],
+    acceptedSessionSpawns: [],
     toolMetaById: new Map(),
     toolSummaryById: new Set(),
     itemActiveIds: new Set(),
@@ -200,6 +202,7 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     output: 0,
     cacheRead: 0,
     cacheWrite: 0,
+    reasoningTokens: 0,
     total: 0,
   };
   let compactionCount = 0;
@@ -469,6 +472,7 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     usageTotals.output += usage.output ?? 0;
     usageTotals.cacheRead += usage.cacheRead ?? 0;
     usageTotals.cacheWrite += usage.cacheWrite ?? 0;
+    usageTotals.reasoningTokens += usage.reasoningTokens ?? 0;
     const usageTotal =
       usage.total ??
       (usage.input ?? 0) + (usage.output ?? 0) + (usage.cacheRead ?? 0) + (usage.cacheWrite ?? 0);
@@ -491,6 +495,7 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
       usageTotals.output > 0 ||
       usageTotals.cacheRead > 0 ||
       usageTotals.cacheWrite > 0 ||
+      usageTotals.reasoningTokens > 0 ||
       usageTotals.total > 0;
     if (!hasUsage) {
       return undefined;
@@ -502,6 +507,7 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
       output: usageTotals.output || undefined,
       cacheRead: usageTotals.cacheRead || undefined,
       cacheWrite: usageTotals.cacheWrite || undefined,
+      ...(usageTotals.reasoningTokens > 0 ? { reasoningTokens: usageTotals.reasoningTokens } : {}),
       total: usageTotals.total || derivedTotal || undefined,
     };
   };
@@ -509,7 +515,7 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     compactionCount += 1;
   };
   const noteCompactionTokensAfter = (value: unknown) => {
-    if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
+    if (typeof value !== "number" || !Number.isFinite(value) || value < 0) {
       return;
     }
     state.lastCompactionTokensAfter = Math.floor(value);
@@ -553,6 +559,18 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
       result,
       params.builtinToolNames,
     );
+    if (
+      params.sourceReplyDeliveryMode === "message_tool_only" &&
+      cleanedText &&
+      filteredMediaUrls.length === 0 &&
+      hasCommittedMessagingToolDeliveryEvidence({
+        messagingToolSentTexts,
+        messagingToolSentMediaUrls,
+        messagingToolSentTargets,
+      })
+    ) {
+      return;
+    }
     if (!cleanedText && filteredMediaUrls.length === 0) {
       return;
     }
@@ -936,6 +954,7 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
         messagingToolSentTargets,
       }) ||
       state.successfulCronAdds > 0 ||
+      state.acceptedSessionSpawns.length > 0 ||
       state.visibleBlockReplyCount > 0;
     assistantTexts.length = 0;
     toolMetas.length = 0;
@@ -1049,6 +1068,7 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
   return {
     assistantTexts,
     toolMetas,
+    getAcceptedSessionSpawns: () => state.acceptedSessionSpawns.slice(),
     runToolLifecycle: async <T>(toolParams: {
       toolName: string;
       toolCallId: string;
@@ -1088,6 +1108,8 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
       livenessState?: EmbeddedRunLivenessState;
       stopReason?: string;
       yielded?: boolean;
+      timeoutPhase?: AgentRunTimeoutPhase;
+      providerStarted?: boolean;
     }) => {
       if (typeof meta.replayInvalid === "boolean") {
         state.replayState = { ...state.replayState, replayInvalid: meta.replayInvalid };
@@ -1100,6 +1122,12 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
       }
       if (typeof meta.yielded === "boolean") {
         state.yielded = meta.yielded;
+      }
+      if (meta.timeoutPhase) {
+        state.timeoutPhase = meta.timeoutPhase;
+      }
+      if (typeof meta.providerStarted === "boolean") {
+        state.providerStarted = meta.providerStarted;
       }
     },
     isCompacting: () => state.compactionInFlight || state.pendingCompactionRetry > 0,
