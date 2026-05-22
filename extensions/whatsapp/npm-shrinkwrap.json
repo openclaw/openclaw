@@ -75,7 +75,6 @@
       "integrity": "sha512-ewvYlk86xUoGI0zQRNq/mC+16R1QeDlKQy21Ki3oSYXNgLb45GV1P6A0M+/s6nyCuNDqe5VpaY84BzXGwVbwFA==",
       "license": "MIT",
       "optional": true,
-      "peer": true,
       "dependencies": {
         "tslib": "^2.4.0"
       }
@@ -106,7 +105,6 @@
       "resolved": "https://registry.npmjs.org/@img/colour/-/colour-1.1.0.tgz",
       "integrity": "sha512-Td76q7j57o/tLVdgS746cYARfSyxk8iEfRxewL9h4OMzYhbW4TAcppl0mT4eyqXddh6L/jwoM75mo7ixa/pCeQ==",
       "license": "MIT",
-      "peer": true,
       "engines": {
         "node": ">=18"
       }
@@ -123,7 +121,6 @@
       "os": [
         "darwin"
       ],
-      "peer": true,
       "engines": {
         "node": "^18.17.0 || ^20.3.0 || >=21.0.0"
       },
@@ -146,7 +143,6 @@
       "os": [
         "darwin"
       ],
-      "peer": true,
       "engines": {
         "node": "^18.17.0 || ^20.3.0 || >=21.0.0"
       },
@@ -169,7 +165,6 @@
       "os": [
         "darwin"
       ],
-      "peer": true,
       "funding": {
         "url": "https://opencollective.com/libvips"
       }
@@ -186,7 +181,6 @@
       "os": [
         "darwin"
       ],
-      "peer": true,
       "funding": {
         "url": "https://opencollective.com/libvips"
       }
@@ -198,15 +192,11 @@
       "cpu": [
         "arm"
       ],
-      "libc": [
-        "glibc"
-      ],
       "license": "LGPL-3.0-or-later",
       "optional": true,
       "os": [
         "linux"
       ],
-      "peer": true,
       "funding": {
         "url": "https://opencollective.com/libvips"
       }
@@ -218,15 +208,11 @@
       "cpu": [
         "arm64"
       ],
-      "libc": [
-        "glibc"
-      ],
       "license": "LGPL-3.0-or-later",
       "optional": true,
       "os": [
         "linux"
       ],
-      "peer": true,
       "funding": {
         "url": "https://opencollective.com/libvips"
       }
@@ -238,15 +224,11 @@
       "cpu": [
         "ppc64"
       ],
-      "libc": [
-        "glibc"
-      ],
       "license": "LGPL-3.0-or-later",
       "optional": true,
       "os": [
         "linux"
       ],
-      "peer": true,
       "funding": {
         "url": "https://opencollective.com/libvips"
       }
@@ -258,15 +240,11 @@
       "cpu": [
         "riscv64"
       ],
-      "libc": [
-        "glibc"
-      ],
       "license": "LGPL-3.0-or-later",
       "optional": true,
       "os": [
         "linux"
       ],
-      "peer": true,
       "funding": {
         "url": "https://opencollective.com/libvips"
       }
@@ -278,15 +256,11 @@
       "cpu": [
         "s390x"
       ],
-      "libc": [
-        "glibc"
-      ],
       "license": "LGPL-3.0-or-later",
       "optional": true,
       "os": [
         "linux"
       ],
-      "peer": true,
       "funding": {
         "url": "https://opencollective.com/libvips"
       }
@@ -298,15 +272,11 @@
       "cpu": [
         "x64"
       ],
-      "libc": [
-        "glibc"
-      ],
       "license": "LGPL-3.0-or-later",
       "optional": true,
       "os": [
         "linux"
       ],
-      "peer": true,
       "funding": {
         "url": "https://opencollective.com/libvips"
       }
@@ -318,15 +288,11 @@
       "cpu": [
         "arm64"
       ],
-      "libc": [
-        "musl"
-      ],
       "license": "LGPL-3.0-or-later",
       "optional": true,
       "os": [
         "linux"
       ],
-      "peer": true,
       "funding": {
         "url": "https://opencollective.com/libvips"
       }
@@ -338,15 +304,11 @@
       "cpu": [
         "x64"
       ],
-      "libc": [
-        "musl"
-      ],
       "license": "LGPL-3.0-or-later",
       "optional": true,
       "os": [
         "linux"
       ],
-      "peer": true,
       "funding": {
         "url": "https://opencollective.com/libvips"
       }
@@ -358,15 +320,11 @@
       "cpu": [
         "arm"
       ],
-      "libc": [
-        "glibc"
-      ],
       "license": "Apache-2.0",
       "optional": true,
       "os": [
         "linux"
       ],
-      "peer": true,
       "engines": {
         "node": "^18.17.0 || ^20.3.0 || >=21.0.0"
       },
@@ -384,15 +342,11 @@
       "cpu": [
         "arm64"
       ],
-      "libc": [
-        "glibc"
-      ],
       "license": "Apache-2.0",
       "optional": true,
       "os": [
         "linux"
       ],
-      "peer": true,
       "engines": {
         "node": "^18.17.0 || ^20.3.0 || >=21.0.0"
       },
@@ -410,15 +364,11 @@
       "cpu": [
         "ppc64"
       ],
-      "libc": [
-        "glibc"
-      ],
       "license": "Apache-2.0",
       "optional": true,
       "os": [
         "linux"
       ],
-      "peer": true,
       "engines": {
         "node": "^18.17.0 || ^20.3.0 || >=21.0.0"
       },
@@ -436,15 +386,11 @@
       "cpu": [
         "riscv64"
       ],
-      "libc": [
-        "glibc"
-      ],
       "license": "Apache-2.0",
       "optional": true,
       "os": [
         "linux"
       ],
-      "peer": true,
       "engines": {
         "node": "^18.17.0 || ^20.3.0 || >=21.0.0"
       },
@@ -462,15 +408,11 @@
       "cpu": [
         "s390x"
       ],
-      "libc": [
-        "glibc"
-      ],
       "license": "Apache-2.0",
       "optional": true,
       "os": [
         "linux"
       ],
-      "peer": true,
       "engines": {
         "node": "^18.17.0 || ^20.3.0 || >=21.0.0"
       },
@@ -488,15 +430,11 @@
       "cpu": [
         "x64"
       ],
-      "libc": [
-        "glibc"
-      ],
       "license": "Apache-2.0",
       "optional": true,
       "os": [
         "linux"
       ],
-      "peer": true,
       "engines": {
         "node": "^18.17.0 || ^20.3.0 || >=21.0.0"
       },
@@ -514,15 +452,11 @@
       "cpu": [
         "arm64"
       ],
-      "libc": [
-        "musl"
-      ],
       "license": "Apache-2.0",
       "optional": true,
       "os": [
         "linux"
       ],
-      "peer": true,
       "engines": {
         "node": "^18.17.0 || ^20.3.0 || >=21.0.0"
       },
@@ -540,15 +474,11 @@
       "cpu": [
         "x64"
       ],
-      "libc": [
-        "musl"
-      ],
       "license": "Apache-2.0",
       "optional": true,
       "os": [
         "linux"
       ],
-      "peer": true,
       "engines": {
         "node": "^18.17.0 || ^20.3.0 || >=21.0.0"
       },
@@ -568,7 +498,6 @@
       ],
       "license": "Apache-2.0 AND LGPL-3.0-or-later AND MIT",
       "optional": true,
-      "peer": true,
       "dependencies": {
         "@emnapi/runtime": "^1.7.0"
       },
@@ -591,7 +520,6 @@
       "os": [
         "win32"
       ],
-      "peer": true,
       "engines": {
         "node": "^18.17.0 || ^20.3.0 || >=21.0.0"
       },
@@ -611,7 +539,6 @@
       "os": [
         "win32"
       ],
-      "peer": true,
       "engines": {
         "node": "^18.17.0 || ^20.3.0 || >=21.0.0"
       },
@@ -631,7 +558,6 @@
       "os": [
         "win32"
       ],
-      "peer": true,
       "engines": {
         "node": "^18.17.0 || ^20.3.0 || >=21.0.0"
       },
@@ -1383,7 +1309,6 @@
       "resolved": "https://registry.npmjs.org/detect-libc/-/detect-libc-2.1.2.tgz",
       "integrity": "sha512-Btj2BOOO83o3WyH59e8MgXsxEQVcarkUOpEYrubB0urwnN10yQ364rsiByU11nZlqWYZm05i/of7io4mzihBtQ==",
       "license": "Apache-2.0",
-      "peer": true,
       "engines": {
         "node": ">=8"
       }
@@ -1906,7 +1831,6 @@
       "resolved": "https://registry.npmjs.org/semver/-/semver-7.8.0.tgz",
       "integrity": "sha512-AcM7dV/5ul4EekoQ29Agm5vri8JNqRyj39o0qpX6vDF2GZrtutZl5RwgD1XnZjiTAfncsJhMI48QQH3sN87YNA==",
       "license": "ISC",
-      "peer": true,
       "bin": {
         "semver": "bin/semver.js"
       },
@@ -1920,7 +1844,6 @@
       "integrity": "sha512-Ou9I5Ft9WNcCbXrU9cMgPBcCK8LiwLqcbywW3t4oDV37n1pzpuNLsYiAV8eODnjbtQlSDwZ2cUEeQz4E54Hltg==",
       "hasInstallScript": true,
       "license": "Apache-2.0",
-      "peer": true,
       "dependencies": {
         "@img/colour": "^1.0.0",
         "detect-libc": "^2.1.2",
