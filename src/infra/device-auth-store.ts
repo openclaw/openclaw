@@ -46,7 +46,7 @@ function readStore(filePath: string): DeviceAuthStore | null {
       return null;
     }
     const cached = storeReadCache.get(filePath);
-    if (storeCacheHit(cached, stat)) {
+    if (cached !== undefined && storeCacheHit(cached, stat)) {
       return cached.store;
     }
     const parsed = privateFileStoreSync(path.dirname(filePath)).readJsonIfExists(
