@@ -213,7 +213,10 @@ describe("mantis Slack desktop smoke runtime", () => {
     expect(remoteScript).not.toContain('--output-dir "$out/slack-qa"');
     expect(remoteScript).toContain("remote_command_timeout_seconds=");
     expect(remoteScript).toContain("remote-command-timeout.txt");
-    expect(remoteScript).toContain(') >"$out/slack-desktop-command.log" 2>&1 &');
+    expect(remoteScript).toContain(
+      'timeout --kill-after=15s "${remote_command_timeout_seconds}s" bash -c run_mantis_remote_body >"$out/slack-desktop-command.log" 2>&1 &',
+    );
+    expect(remoteScript).toContain("MANTIS_REMOTE_HEARTBEAT");
     expect(remoteScript).toContain("qa_status=$?");
     expect(remoteScript).toContain("MANTIS_REMOTE_FAILURE_DIAGNOSTICS_BEGIN");
     expect(remoteScript).toContain('tail -n 200 "$diagnostic_file"');

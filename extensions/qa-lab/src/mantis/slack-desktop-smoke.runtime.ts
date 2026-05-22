@@ -705,15 +705,7 @@ else
 fi
 chrome_pid=$!
 qa_status=0
-(
-  sleep "$remote_command_timeout_seconds"
-  echo "Remote command timed out after \${remote_command_timeout_seconds}s." >"$out/remote-command-timeout.txt"
-  if [ -n "\${remote_body_pid:-}" ] && kill -0 "$remote_body_pid" >/dev/null 2>&1; then
-    kill "$remote_body_pid" >/dev/null 2>&1 || true
-  fi
-) &
-watchdog_pid="$!"
-(
+run_mantis_remote_body() {
   set -e
   echo "remote pwd: $(pwd)"
   sudo corepack enable || sudo npm install -g pnpm@11
@@ -1030,15 +1022,32 @@ MANTIS_APPROVAL_WATCHER
       fi
     fi
   fi
-) >"$out/slack-desktop-command.log" 2>&1 &
-remote_body_pid="$!"
+}
+export -f run_mantis_remote_body
+export out credential_source credential_role provider_mode primary_model alternate_model
+export fast_mode hydrate_mode setup_gateway approval_checkpoints slack_channel_id
+export approval_checkpoint_scenarios_json browser_bin profile slack_url
 set +e
+if command -v timeout >/dev/null 2>&1; then
+  timeout --kill-after=15s "\${remote_command_timeout_seconds}s" bash -c run_mantis_remote_body >"$out/slack-desktop-command.log" 2>&1 &
+else
+  run_mantis_remote_body >"$out/slack-desktop-command.log" 2>&1 &
+fi
+remote_body_pid="$!"
+(
+  while kill -0 "$remote_body_pid" >/dev/null 2>&1; do
+    echo "MANTIS_REMOTE_HEARTBEAT $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    sleep 30
+  done
+) &
+heartbeat_pid="$!"
 wait "$remote_body_pid"
 qa_status=$?
+kill "$heartbeat_pid" >/dev/null 2>&1 || true
+wait "$heartbeat_pid" >/dev/null 2>&1 || true
 set -e
-kill "$watchdog_pid" >/dev/null 2>&1 || true
-wait "$watchdog_pid" >/dev/null 2>&1 || true
-if [ -f "$out/remote-command-timeout.txt" ]; then
+if [ "$qa_status" -eq 124 ] || [ "$qa_status" -eq 137 ]; then
+  echo "Remote command timed out after \${remote_command_timeout_seconds}s." >"$out/remote-command-timeout.txt"
   qa_status=124
 fi
 sleep 5
