@@ -162,6 +162,8 @@ mantis/
 !.agents/skills/security-triage/**
 !.agents/skills/tag-duplicate-prs-issues/
 !.agents/skills/tag-duplicate-prs-issues/**
+!.agents/skills/autoreview/
+!.agents/skills/autoreview/**
 
 # Agent credentials and memory (NEVER COMMIT)
 /memory/
