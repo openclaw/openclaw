@@ -577,12 +577,29 @@ export function registerBrowserAgentActRoutes(
               case "select":
                 await runExistingSessionActionWithNavigationGuard({
                   execute: () =>
-                    fillChromeMcpElement({
+                    evaluateChromeMcpScript({
                       profileName,
                       profile: profileCtx.profile,
                       targetId: tab.targetId,
-                      uid: action.ref!,
-                      value: action.values[0] ?? "",
+                      args: [action.ref!],
+                      fn: `(el) => {
+                      if (!(el instanceof HTMLSelectElement)) {
+                        throw new Error("select ref must resolve to a <select> element");
+                      }
+                      const requested = ${JSON.stringify(action.values[0] ?? "")};
+                      const option = Array.from(el.options).find((candidate) =>
+                        candidate.value === requested ||
+                        candidate.label === requested ||
+                        candidate.text === requested
+                      );
+                      if (!option) {
+                        throw new Error("select option not found: " + requested);
+                      }
+                      el.value = option.value;
+                      el.dispatchEvent(new Event("input", { bubbles: true }));
+                      el.dispatchEvent(new Event("change", { bubbles: true }));
+                      return { value: el.value };
+                    }`,
                     }),
                   guard: existingSessionNavigationGuard,
                 });

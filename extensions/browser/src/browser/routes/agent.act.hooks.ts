@@ -150,9 +150,6 @@ export function registerBrowserAgentActHookRoutes(
             if (dialogId) {
               return jsonError(res, 501, EXISTING_SESSION_LIMITS.hooks.dialogId);
             }
-            if (timeoutMs) {
-              return jsonError(res, 501, EXISTING_SESSION_LIMITS.hooks.dialogTimeout);
-            }
             await evaluateChromeMcpScript({
               profileName: profileCtx.profile.name,
               profile: profileCtx.profile,

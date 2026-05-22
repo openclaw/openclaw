@@ -358,6 +358,64 @@ describe("existing-session browser routes", () => {
     expect(chromeMcpMocks.fillChromeMcpElement).not.toHaveBeenCalled();
   });
 
+  it("selects existing-session <select> refs with an evaluate fallback", async () => {
+    chromeMcpMocks.evaluateChromeMcpScript.mockReset().mockResolvedValue(true as never);
+    const handler = getActPostHandler();
+    const response = createBrowserRouteResponse();
+
+    await handler?.(
+      {
+        params: {},
+        query: {},
+        body: { kind: "select", ref: "choice-1", values: ["beta"] },
+      },
+      response.res,
+    );
+
+    expect(response.statusCode).toBe(200);
+    const body = requireRecord(response.body, "response body");
+    expect(body.ok).toBe(true);
+    const evaluateParams = requireRecord(
+      callArg(chromeMcpMocks.evaluateChromeMcpScript, 0, 0, "evaluate params"),
+      "evaluate params",
+    );
+    expect(evaluateParams.profileName).toBe("chrome-live");
+    expectExistingSessionProfile(evaluateParams.profile);
+    expect(evaluateParams.targetId).toBe("7");
+    expect(evaluateParams.args).toEqual(["choice-1"]);
+    expect(String(evaluateParams.fn)).toContain("HTMLSelectElement");
+    expect(String(evaluateParams.fn)).toContain("beta");
+    expect(chromeMcpMocks.fillChromeMcpElement).not.toHaveBeenCalled();
+  });
+
+  it("ignores dialog timeout defaults for existing-session dialog hooks", async () => {
+    chromeMcpMocks.evaluateChromeMcpScript.mockReset().mockResolvedValue(true as never);
+    const handler = getDialogHookPostHandler();
+    const response = createBrowserRouteResponse();
+
+    await handler?.(
+      {
+        params: {},
+        query: {},
+        body: { accept: true, promptText: "approved", timeoutMs: 120000 },
+      },
+      response.res,
+    );
+
+    expect(response.statusCode).toBe(200);
+    const body = requireRecord(response.body, "response body");
+    expect(body.ok).toBe(true);
+    const evaluateParams = requireRecord(
+      callArg(chromeMcpMocks.evaluateChromeMcpScript, 0, 0, "dialog hook evaluate params"),
+      "dialog hook evaluate params",
+    );
+    expect(evaluateParams.profileName).toBe("chrome-live");
+    expectExistingSessionProfile(evaluateParams.profile);
+    expect(evaluateParams.targetId).toBe("7");
+    expect(String(evaluateParams.fn)).toContain("window.prompt");
+    expect(String(evaluateParams.fn)).toContain("approved");
+  });
+
   it("fails closed for existing-session dialogId responses", async () => {
     const handler = getDialogHookPostHandler();
     const response = createBrowserRouteResponse();
