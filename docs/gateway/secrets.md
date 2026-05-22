@@ -14,6 +14,14 @@ OpenClaw supports additive SecretRefs so supported credentials do not need to be
 Plaintext still works. SecretRefs are opt-in per credential.
 </Note>
 
+<Warning>
+Plaintext credentials remain agent-readable if they are stored in files the
+agent can inspect, including `openclaw.json`, `auth-profiles.json`, `.env`, or
+generated `agents/*/agent/models.json` files. SecretRefs reduce that local blast
+radius only after every supported credential has been migrated and
+`openclaw secrets audit --check` reports no plaintext secret residue.
+</Warning>
+
 ## Goals and runtime model
 
 Secrets are resolved into an in-memory runtime snapshot.
@@ -27,6 +35,33 @@ Secrets are resolved into an in-memory runtime snapshot.
 - Outbound delivery paths also read from that active snapshot (for example Discord reply/thread delivery and Telegram action sends); they do not re-resolve SecretRefs on each send.
 
 This keeps secret-provider outages off hot request paths.
+
+## Agent-access boundary
+
+SecretRefs protect credentials from being persisted in supported config and
+generated model surfaces, but they are not a process-isolation boundary. If a
+plaintext credential remains on disk in a path the agent can read, the agent can
+bypass API-level redaction by using file or shell tools to inspect that file.
+
+For production deployments where agent-accessible files are in scope, treat
+SecretRef migration as complete only when all of these are true:
+
+- supported credentials use SecretRefs instead of plaintext values
+- legacy plaintext residue has been scrubbed from `openclaw.json`,
+  `auth-profiles.json`, `.env`, and generated `models.json` files
+- `openclaw secrets audit --check` is clean after the migration
+- any remaining unsupported or rotating credentials are protected by operating
+  system isolation, container isolation, or an external credential proxy
+
+This is why the audit/configure/apply workflow is a security migration gate, not
+just a convenience helper.
+
+<Warning>
+SecretRefs do not make arbitrary readable files safe. Backups, copied configs,
+old generated model catalogs, and unsupported credential classes must be treated
+as production secrets until they are deleted, moved outside the agent trust
+boundary, or protected by a separate isolation layer.
+</Warning>
 
 ## Active-surface filtering
 
@@ -495,9 +530,9 @@ Default operator flow:
     openclaw secrets audit --check
     ```
   </Step>
-  <Step title="Configure SecretRefs">
+  <Step title="Configure and apply SecretRefs">
     ```bash
-    openclaw secrets configure
+    openclaw secrets configure --apply
     ```
   </Step>
   <Step title="Re-audit">
@@ -506,6 +541,13 @@ Default operator flow:
     ```
   </Step>
 </Steps>
+
+Do not treat the migration as complete until the re-audit is clean. If the audit
+still reports plaintext values at rest, the agent-access risk is still present
+even when runtime APIs return redacted values.
+
+If you save a plan instead of applying during `configure`, apply that saved plan
+with `openclaw secrets apply --from <plan-path>` before the re-audit.
 
 <AccordionGroup>
   <Accordion title="secrets audit">
