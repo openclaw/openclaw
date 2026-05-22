@@ -32,6 +32,7 @@ type AnyMock = Mock<(...args: unknown[]) => unknown>;
 
 interface ProviderHttpMocks {
   resolveApiKeyForProviderMock: Mock<() => Promise<{ apiKey: string }>>;
+  executeProviderOperationWithRetryMock: AnyMock;
   postJsonRequestMock: AnyMock;
   postMultipartRequestMock: AnyMock;
   fetchWithTimeoutMock: AnyMock;
@@ -51,6 +52,7 @@ interface ProviderHttpMocks {
 
 const providerHttpMocks = vi.hoisted(() => ({
   resolveApiKeyForProviderMock: vi.fn(async () => ({ apiKey: "provider-key" })),
+  executeProviderOperationWithRetryMock: vi.fn(),
   postJsonRequestMock: vi.fn(),
   postMultipartRequestMock: vi.fn(),
   fetchWithTimeoutMock: vi.fn(),
@@ -71,6 +73,36 @@ const providerHttpMocks = vi.hoisted(() => ({
     dispatcherPolicy: undefined,
   })),
 }));
+
+providerHttpMocks.executeProviderOperationWithRetryMock.mockImplementation(
+  async (params: {
+    stage?: string;
+    retry?: boolean | { attempts?: number; sleep?: (ms: number) => Promise<void> };
+    operation: () => Promise<unknown>;
+  }) => {
+    const attempts =
+      typeof params.retry === "object"
+        ? Math.max(1, Math.round(params.retry.attempts ?? 1))
+        : params.retry === false || params.stage === "create"
+          ? 1
+          : 2;
+    let lastError: unknown;
+    for (let attempt = 1; attempt <= attempts; attempt += 1) {
+      try {
+        return await params.operation();
+      } catch (error) {
+        lastError = error;
+        if (attempt >= attempts) {
+          throw error;
+        }
+        if (typeof params.retry === "object") {
+          await params.retry.sleep?.(0);
+        }
+      }
+    }
+    throw lastError;
+  },
+);
 
 providerHttpMocks.fetchWithTimeoutGuardedMock.mockImplementation(
   async (...args: FetchWithTimeoutGuardedParams) => {
@@ -189,8 +221,7 @@ vi.mock("openclaw/plugin-sdk/provider-http", () => ({
     ({ defaultTimeoutMs }: { defaultTimeoutMs: number }) =>
     () =>
       defaultTimeoutMs,
-  executeProviderOperationWithRetry: async ({ operation }: { operation: () => Promise<unknown> }) =>
-    await operation(),
+  executeProviderOperationWithRetry: providerHttpMocks.executeProviderOperationWithRetryMock,
   fetchProviderDownloadResponse: providerHttpMocks.fetchProviderDownloadResponseMock,
   fetchProviderOperationResponse: providerHttpMocks.fetchProviderOperationResponseMock,
   fetchWithTimeout: providerHttpMocks.fetchWithTimeoutMock,
@@ -214,6 +245,7 @@ export function getProviderHttpMocks(): ProviderHttpMocks {
 export function installProviderHttpMockCleanup(): void {
   afterEach(() => {
     providerHttpMocks.resolveApiKeyForProviderMock.mockClear();
+    providerHttpMocks.executeProviderOperationWithRetryMock.mockClear();
     providerHttpMocks.postJsonRequestMock.mockReset();
     providerHttpMocks.postMultipartRequestMock.mockClear();
     providerHttpMocks.fetchWithTimeoutMock.mockReset();
