@@ -1,6 +1,6 @@
 /* @vitest-environment jsdom */
 
-import { html, render } from "lit";
+import { render } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { i18n, t } from "../../i18n/index.ts";
 import type { AppViewState } from "../app-view-state.ts";
@@ -1302,7 +1302,7 @@ describe("chat session controls", () => {
     ).toEqual([t("chat.selectors.model"), t("chat.selectors.thinkingLevel")]);
   });
 
-  it("searches chat sessions from the inline picker search without replacing recent sessions", async () => {
+  it("searches chat sessions inside the picker without replacing recent sessions", async () => {
     const { state, request } = createChatHeaderState();
     state.sessionsIncludeGlobal = false;
     state.sessionsIncludeUnknown = false;
@@ -1310,15 +1310,20 @@ describe("chat session controls", () => {
     const container = document.createElement("div");
     render(renderChatSessionSelect(state), container);
 
+    container.querySelector<HTMLButtonElement>('button[data-chat-session-select="true"]')!.click();
+    render(renderChatSessionSelect(state), container);
     const input = container.querySelector<HTMLInputElement>(
       'input[data-chat-session-picker-search="true"]',
+    );
+    const submit = container.querySelector<HTMLButtonElement>(
+      'button[data-chat-session-search-submit="true"]',
     );
 
     input!.value = " telegram ";
     input!.dispatchEvent(new Event("input", { bubbles: true }));
     expect(state.chatSessionPickerQuery).toBe(" telegram ");
-    input!.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
-    expect(state.chatSessionPickerOpen).toBe(true);
+    expect(submit?.disabled).toBe(false);
+    submit!.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
     await vi.waitFor(() => expect(state.chatSessionPickerAppliedQuery).toBe("telegram"));
     render(renderChatSessionSelect(state), container);
 
@@ -1336,52 +1341,36 @@ describe("chat session controls", () => {
       search: "telegram",
     });
     expect(loadSessionsMock).not.toHaveBeenCalled();
-
-    const documentKeydown = vi.fn();
-    document.addEventListener("keydown", documentKeydown);
-    try {
-      input!.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
-      expect(state.chatSessionPickerOpen).toBe(false);
-      expect(documentKeydown).not.toHaveBeenCalled();
-    } finally {
-      document.removeEventListener("keydown", documentKeydown);
-    }
   });
 
-  it("keeps session trigger focus separate from inline search focus", async () => {
+  it("clears applied chat session picker search when the input is cleared", async () => {
     const { state } = createChatHeaderState();
-    const mobileContainer = document.createElement("div");
-    const desktopContainer = document.createElement("div");
-    document.body.append(mobileContainer, desktopContainer);
-    try {
-      render(renderChatSessionSelect(state, undefined, { surface: "mobile" }), mobileContainer);
-      render(renderChatSessionSelect(state), desktopContainer);
+    state.sessionsIncludeGlobal = false;
+    state.sessionsIncludeUnknown = false;
+    const container = document.createElement("div");
+    render(renderChatSessionSelect(state), container);
 
-      desktopContainer
-        .querySelector<HTMLButtonElement>('button[data-chat-session-select="true"]')!
-        .click();
-      render(renderChatSessionSelect(state, undefined, { surface: "mobile" }), mobileContainer);
-      render(renderChatSessionSelect(state), desktopContainer);
+    container.querySelector<HTMLButtonElement>('button[data-chat-session-select="true"]')!.click();
+    render(renderChatSessionSelect(state), container);
+    const input = container.querySelector<HTMLInputElement>(
+      'input[data-chat-session-picker-search="true"]',
+    );
+    const submit = container.querySelector<HTMLButtonElement>(
+      'button[data-chat-session-search-submit="true"]',
+    );
 
-      const desktopInput = desktopContainer.querySelector<HTMLInputElement>(
-        'input[data-chat-session-picker-search="true"]',
-      );
-      expect(
-        mobileContainer.querySelector('input[data-chat-session-picker-search="true"]'),
-      ).toBeTruthy();
-      expect(state.chatSessionPickerOpen).toBe(true);
-      expect(document.activeElement).not.toBe(desktopInput);
+    input!.value = "telegram";
+    input!.dispatchEvent(new Event("input", { bubbles: true }));
+    submit!.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+    await vi.waitFor(() => expect(state.chatSessionPickerAppliedQuery).toBe("telegram"));
+    expect(state.chatSessionPickerResult?.sessions).toHaveLength(2);
 
-      desktopInput!.focus();
-      await vi.waitFor(() => expect(document.activeElement).toBe(desktopInput));
-      expect(state.chatSessionPickerOpen).toBe(true);
-      expect(state.chatSessionPickerSurface).toBe("desktop");
-    } finally {
-      render(html``, mobileContainer);
-      render(html``, desktopContainer);
-      mobileContainer.remove();
-      desktopContainer.remove();
-    }
+    input!.value = "";
+    input!.dispatchEvent(new Event("input", { bubbles: true }));
+
+    expect(state.chatSessionPickerQuery).toBe("");
+    expect(state.chatSessionPickerAppliedQuery).toBe("");
+    expect(state.chatSessionPickerResult).toBeNull();
   });
 
   it("loads another chat session picker page using the server next offset", async () => {
