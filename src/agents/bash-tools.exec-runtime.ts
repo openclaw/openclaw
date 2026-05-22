@@ -594,7 +594,11 @@ export function buildExecRuntimeErrorOutcome(params: {
  * This ensures our paths take precedence even if user RC files (e.g. ~/.zshenv)
  * prepend their own entries to PATH during shell startup.
  */
-function wrapPosixCommandWithPathPrepend(command: string, env: Record<string, string>, pathPrepend?: string[]): string {
+function wrapPosixCommandWithPathPrepend(
+  command: string,
+  env: Record<string, string>,
+  pathPrepend?: string[],
+): string {
   if (process.platform === "win32") {
     return command;
   }
@@ -808,9 +812,13 @@ export async function runExecProcess(opts: {
       };
     }
     const { shell, args: shellArgs } = getShellConfig();
-    
+
     // Wrap the command to enforce PATH prepend precedence over shell RC overrides.
-    const commandWithPathPrepend = wrapPosixCommandWithPathPrepend(execCommand, shellRuntimeEnv, opts.pathPrepend);
+    const commandWithPathPrepend = wrapPosixCommandWithPathPrepend(
+      execCommand,
+      shellRuntimeEnv,
+      opts.pathPrepend,
+    );
 
     const childArgv = [shell, ...shellArgs, commandWithPathPrepend];
     if (opts.usePty) {

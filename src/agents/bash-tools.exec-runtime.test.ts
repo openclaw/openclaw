@@ -560,8 +560,6 @@ describe("emitExecSystemEvent", () => {
         channel: "telegram",
         to: "123",
       },
-      forceSenderIsOwnerFalse: true,
-      trusted: false,
     });
     expect(requestHeartbeatMock).toHaveBeenCalledTimes(1);
     const heartbeat = requireHeartbeatCall();
@@ -760,7 +758,9 @@ describe("runExecProcess POSIX command wrapper", () => {
     const spawnCall = supervisorMock.spawn.mock.calls[0][0];
 
     const commandStr = spawnCall.argv.join(" ");
-    expect(commandStr).toContain('export PATH="${OPENCLAW_PREPEND_PATH}${PATH:+:$PATH}"; unset OPENCLAW_PREPEND_PATH; echo test');
+    expect(commandStr).toContain(
+      'export PATH="${OPENCLAW_PREPEND_PATH}${PATH:+:$PATH}"; unset OPENCLAW_PREPEND_PATH; echo test',
+    );
   });
 
   it("does not wrap command on Windows", async () => {
