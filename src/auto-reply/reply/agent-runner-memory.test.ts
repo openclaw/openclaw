@@ -154,6 +154,10 @@ describe("runMemoryFlushIfNeeded", () => {
         ...previous,
         compactionCount: (previous.compactionCount ?? 0) + 1,
       };
+      if (typeof params.tokensAfter === "number" && Number.isFinite(params.tokensAfter)) {
+        nextEntry.totalTokens = params.tokensAfter;
+        nextEntry.totalTokensFresh = true;
+      }
       if (typeof params.newSessionId === "string" && params.newSessionId) {
         nextEntry.sessionId = params.newSessionId;
         if (typeof params.newSessionFile === "string" && params.newSessionFile) {
@@ -910,6 +914,67 @@ describe("runMemoryFlushIfNeeded", () => {
     expect(compactEmbeddedPiSessionMock).toHaveBeenCalledTimes(1);
     const compactCall = requireCompactEmbeddedPiSessionCall();
     expect(compactCall.currentTokenCount).toBe(347_000);
+  });
+
+  it("uses post-compaction token state to avoid repeated preflight compaction", async () => {
+    registerMemoryFlushPlanResolverForTest(() => ({
+      softThresholdTokens: 4_000,
+      forceFlushTranscriptBytes: 1_000_000_000,
+      reserveTokensFloor: 0,
+      prompt: "Pre-compaction memory flush.\nNO_REPLY",
+      systemPrompt: "Write memory to memory/YYYY-MM-DD.md.",
+      relativePath: "memory/2023-11-14.md",
+    }));
+    compactEmbeddedPiSessionMock.mockResolvedValueOnce({
+      ok: true,
+      compacted: true,
+      result: { tokensAfter: 42 },
+    });
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+      totalTokens: 347_000,
+      totalTokensFresh: true,
+      agentHarnessId: "codex",
+    };
+    const sessionStore = { main: sessionEntry };
+    const commonParams = {
+      cfg: {
+        models: {
+          providers: {
+            openai: { models: [{ id: "gpt-5.5", contextWindow: 1_000_000 }] },
+            "openai-codex": { models: [{ id: "gpt-5.5", contextWindow: 350_000 }] },
+          },
+        },
+        agents: { defaults: { compaction: { memoryFlush: {} } } },
+      } as never,
+      followupRun: createTestFollowupRun({
+        provider: "openai",
+        model: "gpt-5.5",
+        sessionId: "session",
+        sessionKey: "main",
+      }),
+      defaultModel: "gpt-5.5",
+      sessionStore,
+      sessionKey: "main",
+      storePath: path.join(rootDir, "sessions.json"),
+      isHeartbeat: false,
+    };
+
+    await runPreflightCompactionIfNeeded({
+      ...commonParams,
+      sessionEntry,
+      replyOperation: createReplyOperation(),
+    });
+    await runPreflightCompactionIfNeeded({
+      ...commonParams,
+      sessionEntry: sessionStore.main,
+      replyOperation: createReplyOperation(),
+    });
+
+    expect(compactEmbeddedPiSessionMock).toHaveBeenCalledTimes(1);
+    expect(sessionStore.main.totalTokens).toBe(42);
+    expect(sessionStore.main.totalTokensFresh).toBe(true);
   });
 
   it("keeps the OpenAI API context window for persisted PI runtime overrides", async () => {
