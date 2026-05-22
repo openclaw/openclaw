@@ -954,6 +954,14 @@ function normalizeResponsesReplayItemId(
   return `${prefix}_${shortHash(id)}`;
 }
 
+function isSafeResponsesReplayItemId(id: unknown): id is string {
+  return (
+    typeof id === "string" &&
+    id.length > 0 &&
+    id.length <= OPENAI_RESPONSES_REPLAY_ITEM_ID_MAX_LENGTH
+  );
+}
+
 function encodeTextSignatureV1(id: string, phase?: "commentary" | "final_answer"): string {
   return JSON.stringify({ v: 1, id, ...(phase ? { phase } : {}) });
 }
@@ -1104,6 +1112,12 @@ function convertResponsesMessages(
             );
             if (!shouldReplayResponsesItemIds) {
               delete replayableReasoningItem.id;
+            }
+            if (
+              model.provider === "github-copilot" &&
+              !isSafeResponsesReplayItemId(replayableReasoningItem.id)
+            ) {
+              continue;
             }
             output.push(replayableReasoningItem as ResponseInputItem);
           }

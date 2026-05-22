@@ -2383,7 +2383,7 @@ describe("openai transport stream", () => {
     });
   });
 
-  it("preserves oversized Responses reasoning replay item ids for provider boundary sanitizers", () => {
+  it("drops oversized GitHub Copilot Responses reasoning replay items before send", () => {
     const model = {
       id: "gpt-5.5",
       name: "GPT-5.5",
@@ -2441,9 +2441,7 @@ describe("openai transport stream", () => {
       }>;
     };
 
-    const reasoningItem = params.input?.find((item) => item.type === "reasoning");
-    expect(reasoningItem?.id).toBe(longReasoningId);
-    expect(reasoningItem?.id?.length).toBeGreaterThan(64);
+    expect(params.input?.some((item) => item.type === "reasoning")).toBe(false);
   });
 
   it("strips encrypted reasoning replay when provenance does not match", () => {
