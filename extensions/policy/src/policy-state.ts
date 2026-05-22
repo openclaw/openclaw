@@ -23,6 +23,7 @@ export type PolicyEvidence = {
   readonly modelProviders: readonly PolicyModelProviderEvidence[];
   readonly modelRefs: readonly PolicyModelRefEvidence[];
   readonly network: readonly PolicyNetworkEvidence[];
+  readonly gatewayExposure?: readonly PolicyGatewayExposureEvidence[];
   readonly secrets?: readonly PolicySecretEvidence[];
   readonly authProfiles?: readonly PolicyAuthProfileEvidence[];
 };
@@ -68,6 +69,25 @@ export type PolicyNetworkEvidence = {
   readonly id: string;
   readonly source: string;
   readonly value: boolean;
+};
+
+export type PolicyGatewayExposureEvidence = {
+  readonly id: string;
+  readonly kind:
+    | "auth"
+    | "authRateLimit"
+    | "bind"
+    | "controlUi"
+    | "httpEndpoint"
+    | "httpUrlFetch"
+    | "remote"
+    | "tailscale";
+  readonly source: string;
+  readonly value?: boolean | string;
+  readonly nonLoopback?: boolean;
+  readonly explicit?: boolean;
+  readonly endpoint?: string;
+  readonly hasAllowlist?: boolean;
 };
 
 export type PolicySecretEvidence = {
@@ -160,6 +180,7 @@ export function collectPolicyEvidence(
   cfg: Record<string, unknown>,
   options?: {
     readonly toolsRaw?: undefined;
+    readonly includeGatewayExposure?: boolean;
     readonly includeSecrets?: boolean;
     readonly includeAuthProfiles?: boolean;
   },
@@ -168,6 +189,7 @@ export function collectPolicyEvidence(
   cfg: Record<string, unknown>,
   options: {
     readonly toolsRaw: string;
+    readonly includeGatewayExposure?: boolean;
     readonly includeSecrets?: boolean;
     readonly includeAuthProfiles?: boolean;
   },
@@ -176,6 +198,7 @@ export function collectPolicyEvidence(
   cfg: Record<string, unknown>,
   options: {
     readonly toolsRaw?: string;
+    readonly includeGatewayExposure?: boolean;
     readonly includeSecrets?: boolean;
     readonly includeAuthProfiles?: boolean;
   } = {},
@@ -186,6 +209,9 @@ export function collectPolicyEvidence(
     modelProviders: scanPolicyModelProviders(cfg),
     modelRefs: scanPolicyModelRefs(cfg),
     network: scanPolicyNetwork(cfg),
+    ...(options.includeGatewayExposure === false
+      ? {}
+      : { gatewayExposure: scanPolicyGatewayExposure(cfg) }),
     ...(options.includeSecrets === false ? {} : { secrets: scanPolicySecrets(cfg) }),
     ...(options.includeAuthProfiles === false ? {} : { authProfiles: scanPolicyAuthProfiles(cfg) }),
   };
@@ -309,6 +335,128 @@ export function scanPolicyNetwork(cfg: Record<string, unknown>): readonly Policy
       "oc://openclaw.config/tools/web/fetch/ssrfPolicy/allowIpv6UniqueLocalRange",
     ),
   ].filter((entry): entry is PolicyNetworkEvidence => entry !== undefined);
+}
+
+export function scanPolicyGatewayExposure(
+  cfg: Record<string, unknown>,
+): readonly PolicyGatewayExposureEvidence[] {
+  const gateway = isRecord(cfg.gateway) ? cfg.gateway : {};
+  const entries: PolicyGatewayExposureEvidence[] = [];
+  const bind = typeof gateway.bind === "string" ? gateway.bind : undefined;
+  const customBindHost =
+    typeof gateway.customBindHost === "string" ? gateway.customBindHost : undefined;
+  const hasCustomBindHost = customBindHost !== undefined && customBindHost.trim() !== "";
+  const tailscale = isRecord(gateway.tailscale) ? gateway.tailscale : {};
+  const tailscaleForcesLoopback = tailscale.mode === "serve" || tailscale.mode === "funnel";
+  entries.push({
+    id: bind === undefined ? "gateway-bind-default" : "gateway-bind",
+    kind: "bind",
+    source: "oc://openclaw.config/gateway/bind",
+    value: bind ?? (tailscaleForcesLoopback ? "loopback" : "runtime-default"),
+    nonLoopback:
+      bind === undefined
+        ? !tailscaleForcesLoopback
+        : bind === "custom"
+          ? false
+          : isGatewayNonLoopbackBind(bind),
+    explicit: bind !== undefined,
+  });
+  if (bind === "custom" && hasCustomBindHost) {
+    entries.push({
+      id: "gateway-custom-bind-host",
+      kind: "bind",
+      source: "oc://openclaw.config/gateway/customBindHost",
+      value: customBindHost,
+      nonLoopback: isRuntimeNonLoopbackCustomBindHost(customBindHost),
+    });
+  }
+
+  const auth = isRecord(gateway.auth) ? gateway.auth : {};
+  entries.push({
+    id: "gateway-auth-mode",
+    kind: "auth",
+    source: "oc://openclaw.config/gateway/auth/mode",
+    value: typeof auth.mode === "string" ? auth.mode : "token",
+    explicit: typeof auth.mode === "string",
+  });
+  entries.push({
+    id: "gateway-auth-rate-limit",
+    kind: "authRateLimit",
+    source: "oc://openclaw.config/gateway/auth/rateLimit",
+    value: isRecord(auth.rateLimit),
+    explicit: isRecord(auth.rateLimit),
+  });
+
+  const controlUi = isRecord(gateway.controlUi) ? gateway.controlUi : {};
+  pushGatewayBooleanEvidence(
+    entries,
+    "gateway-control-ui-enabled",
+    "controlUi",
+    controlUi.enabled,
+    "oc://openclaw.config/gateway/controlUi/enabled",
+  );
+  pushGatewayBooleanEvidence(
+    entries,
+    "gateway-control-ui-insecure-auth",
+    "controlUi",
+    controlUi.allowInsecureAuth,
+    "oc://openclaw.config/gateway/controlUi/allowInsecureAuth",
+  );
+  pushGatewayBooleanEvidence(
+    entries,
+    "gateway-control-ui-device-auth-disabled",
+    "controlUi",
+    controlUi.dangerouslyDisableDeviceAuth,
+    "oc://openclaw.config/gateway/controlUi/dangerouslyDisableDeviceAuth",
+  );
+  pushGatewayBooleanEvidence(
+    entries,
+    "gateway-control-ui-host-origin-fallback",
+    "controlUi",
+    controlUi.dangerouslyAllowHostHeaderOriginFallback,
+    "oc://openclaw.config/gateway/controlUi/dangerouslyAllowHostHeaderOriginFallback",
+  );
+
+  if (typeof tailscale.mode === "string") {
+    entries.push({
+      id: "gateway-tailscale-mode",
+      kind: "tailscale",
+      source: "oc://openclaw.config/gateway/tailscale/mode",
+      value: tailscale.mode,
+    });
+  }
+  if (tailscale.mode === "serve" && tailscale.preserveFunnel === true) {
+    entries.push({
+      id: "gateway-tailscale-preserve-funnel",
+      kind: "tailscale",
+      source: "oc://openclaw.config/gateway/tailscale/preserveFunnel",
+      value: "funnel",
+    });
+  }
+
+  const remote = isRecord(gateway.remote) ? gateway.remote : {};
+  if (gateway.mode === "remote") {
+    entries.push({
+      id: "gateway-mode-remote",
+      kind: "remote",
+      source: "oc://openclaw.config/gateway/mode",
+      value: "remote",
+    });
+    if (typeof remote.url === "string" && remote.url.trim() !== "") {
+      entries.push({
+        id: "gateway-remote-url",
+        kind: "remote",
+        source: "oc://openclaw.config/gateway/remote/url",
+        value: true,
+      });
+    }
+  }
+
+  const http = isRecord(gateway.http) ? gateway.http : {};
+  const endpoints = isRecord(http.endpoints) ? http.endpoints : {};
+  pushGatewayHttpEndpointEvidence(entries, endpoints, "chatCompletions");
+  pushGatewayHttpEndpointEvidence(entries, endpoints, "responses");
+  return entries.toSorted((a, b) => a.source.localeCompare(b.source));
 }
 
 export function scanPolicySecrets(cfg: Record<string, unknown>): readonly PolicySecretEvidence[] {
@@ -784,6 +932,99 @@ function networkBooleanEvidence(
 ): PolicyNetworkEvidence | undefined {
   const value = readBooleanPath(cfg, path);
   return value === undefined ? undefined : { id, source, value };
+}
+
+function pushGatewayBooleanEvidence(
+  entries: PolicyGatewayExposureEvidence[],
+  id: string,
+  kind: PolicyGatewayExposureEvidence["kind"],
+  value: unknown,
+  source: string,
+): void {
+  if (typeof value !== "boolean") {
+    return;
+  }
+  entries.push({ id, kind, source, value });
+}
+
+function pushGatewayHttpEndpointEvidence(
+  entries: PolicyGatewayExposureEvidence[],
+  endpoints: Record<string, unknown>,
+  endpoint: "chatCompletions" | "responses",
+): void {
+  const config = endpoints[endpoint];
+  if (!isRecord(config)) {
+    return;
+  }
+  const source = `oc://openclaw.config/gateway/http/endpoints/${endpoint}`;
+  const enabled = config.enabled === true;
+  if (enabled) {
+    entries.push({
+      id: `gateway-http-${endpoint}`,
+      kind: "httpEndpoint",
+      source: `${source}/enabled`,
+      value: true,
+      endpoint,
+    });
+  }
+  if (!enabled) {
+    return;
+  }
+  if (endpoint === "chatCompletions") {
+    pushGatewayHttpUrlFetchEvidence(entries, source, endpoint, ["images"], config.images);
+    return;
+  }
+  pushGatewayHttpUrlFetchEvidence(entries, source, endpoint, ["files"], config.files);
+  pushGatewayHttpUrlFetchEvidence(entries, source, endpoint, ["images"], config.images);
+}
+
+function pushGatewayHttpUrlFetchEvidence(
+  entries: PolicyGatewayExposureEvidence[],
+  endpointSource: string,
+  endpoint: string,
+  path: readonly string[],
+  value: unknown,
+): void {
+  const allowUrl = isRecord(value) ? value.allowUrl : undefined;
+  if (allowUrl === false || (allowUrl !== true && endpoint !== "responses")) {
+    return;
+  }
+  const allowlist = isRecord(value) ? value.urlAllowlist : undefined;
+  const hasEffectiveAllowlist =
+    Array.isArray(allowlist) &&
+    allowlist.some((entry) => isEffectiveGatewayUrlAllowlistEntry(entry));
+  entries.push({
+    id: `gateway-http-${endpoint}-${path.join("-")}-url-fetch`,
+    kind: "httpUrlFetch",
+    source: `${endpointSource}/${path.map(ocPathSegment).join("/")}/allowUrl`,
+    value: true,
+    endpoint,
+    explicit: allowUrl === true,
+    hasAllowlist: hasEffectiveAllowlist,
+  });
+}
+
+function isEffectiveGatewayUrlAllowlistEntry(value: unknown): boolean {
+  if (typeof value !== "string") {
+    return false;
+  }
+  const normalized = value.trim().toLowerCase();
+  return normalized !== "" && normalized !== "*" && normalized !== "*.";
+}
+
+function isGatewayNonLoopbackBind(value: string): boolean {
+  return value === "auto" || value === "lan" || value === "custom" || value === "tailnet";
+}
+
+function isRuntimeNonLoopbackCustomBindHost(value: string): boolean {
+  const normalized = value.trim().toLowerCase();
+  return isCanonicalDottedDecimalIPv4(normalized) && !normalized.startsWith("127.");
+}
+
+function isCanonicalDottedDecimalIPv4(value: string): boolean {
+  return /^(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)(?:\.(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)){3}$/.test(
+    value,
+  );
 }
 
 function readBooleanPath(value: unknown, path: readonly string[]): boolean | undefined {

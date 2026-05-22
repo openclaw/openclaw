@@ -125,6 +125,14 @@ describe("registerPolicyDoctorChecks", () => {
       "policy/models-denied-provider",
       "policy/models-unapproved-provider",
       "policy/network-private-access-enabled",
+      "policy/gateway-non-loopback-bind",
+      "policy/gateway-auth-disabled",
+      "policy/gateway-rate-limit-missing",
+      "policy/gateway-control-ui-insecure",
+      "policy/gateway-tailscale-funnel",
+      "policy/gateway-remote-enabled",
+      "policy/gateway-http-endpoint-enabled",
+      "policy/gateway-http-url-fetch-unrestricted",
       "policy/secrets-unmanaged-provider",
       "policy/secrets-denied-provider-source",
       "policy/secrets-insecure-provider",
@@ -262,6 +270,38 @@ describe("registerPolicyDoctorChecks", () => {
       "network privateNetwork allow string",
       { network: { privateNetwork: { allow: "false" } } },
       "oc://policy.jsonc/network/privateNetwork/allow",
+    ],
+    ["gateway array", { gateway: [] }, "oc://policy.jsonc/gateway"],
+    ["gateway auth array", { gateway: { auth: [] } }, "oc://policy.jsonc/gateway/auth"],
+    [
+      "gateway requireAuth string",
+      { gateway: { auth: { requireAuth: "true" } } },
+      "oc://policy.jsonc/gateway/auth/requireAuth",
+    ],
+    [
+      "gateway requireExplicitRateLimit string",
+      { gateway: { auth: { requireExplicitRateLimit: "true" } } },
+      "oc://policy.jsonc/gateway/auth/requireExplicitRateLimit",
+    ],
+    [
+      "gateway denyEndpoints string",
+      { gateway: { http: { denyEndpoints: "responses" } } },
+      "oc://policy.jsonc/gateway/http/denyEndpoints",
+    ],
+    [
+      "gateway denyEndpoints blank entry",
+      { gateway: { http: { denyEndpoints: ["responses", " "] } } },
+      "oc://policy.jsonc/gateway/http/denyEndpoints/#1",
+    ],
+    [
+      "gateway denyEndpoints unknown entry",
+      { gateway: { http: { denyEndpoints: ["responses", "completions"] } } },
+      "oc://policy.jsonc/gateway/http/denyEndpoints/#1",
+    ],
+    [
+      "gateway requireUrlAllowlists string",
+      { gateway: { http: { requireUrlAllowlists: "true" } } },
+      "oc://policy.jsonc/gateway/http/requireUrlAllowlists",
     ],
     ["secrets array", { secrets: [] }, "oc://policy.jsonc/secrets"],
     ["auth array", { auth: [] }, "oc://policy.jsonc/auth"],
@@ -418,7 +458,10 @@ describe("registerPolicyDoctorChecks", () => {
       checkedAt: "2026-05-10T20:00:00.000Z",
       policyPath: "policy.jsonc",
       policyHash,
-      evidence: collectPolicyEvidence({}, { includeSecrets: false, includeAuthProfiles: false }),
+      evidence: collectPolicyEvidence(
+        {},
+        { includeGatewayExposure: false, includeSecrets: false, includeAuthProfiles: false },
+      ),
       findings: [],
     }).attestationHash;
     await fs.writeFile(configPath, "{}", "utf-8");
@@ -440,7 +483,10 @@ describe("registerPolicyDoctorChecks", () => {
       checkedAt: "2026-05-10T20:00:00.000Z",
       policyPath: "policy.jsonc",
       policyHash,
-      evidence: collectPolicyEvidence({}, { includeSecrets: false, includeAuthProfiles: false }),
+      evidence: collectPolicyEvidence(
+        {},
+        { includeGatewayExposure: false, includeSecrets: false, includeAuthProfiles: false },
+      ),
       findings: [],
     }).attestationHash;
     await fs.writeFile(configPath, "{}", "utf-8");
@@ -476,7 +522,7 @@ describe("registerPolicyDoctorChecks", () => {
             },
           },
         },
-        { includeSecrets: false, includeAuthProfiles: false },
+        { includeGatewayExposure: false, includeSecrets: false, includeAuthProfiles: false },
       ),
       findings: [],
     }).attestationHash;
@@ -500,9 +546,11 @@ describe("registerPolicyDoctorChecks", () => {
 
     expect(result.findings).toEqual([]);
     const evidence = collectPolicyEvidence(cfg as unknown as Record<string, unknown>, {
+      includeGatewayExposure: false,
       includeSecrets: false,
       includeAuthProfiles: false,
     });
+    expect(evidence).not.toHaveProperty("gatewayExposure");
     expect(evidence).not.toHaveProperty("secrets");
     expect(evidence).not.toHaveProperty("authProfiles");
   });
@@ -1962,6 +2010,596 @@ describe("registerPolicyDoctorChecks", () => {
         }),
       ]),
     );
+  });
+
+  it("reports gateway exposure settings denied by policy", async () => {
+    const configPath = join(workspaceDir, "openclaw.jsonc");
+    const cfg = {
+      ...cfgWithPolicy(),
+      gateway: {
+        bind: "lan",
+        auth: { mode: "none" },
+        controlUi: {
+          allowInsecureAuth: true,
+          dangerouslyDisableDeviceAuth: true,
+          dangerouslyAllowHostHeaderOriginFallback: true,
+        },
+        tailscale: { mode: "funnel" },
+        mode: "remote",
+        http: {
+          endpoints: {
+            chatCompletions: {
+              enabled: true,
+              images: { allowUrl: true },
+            },
+            responses: {
+              enabled: true,
+              files: { allowUrl: true },
+              images: { allowUrl: true, urlAllowlist: ["images.example.test"] },
+            },
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+    await fs.writeFile(configPath, "{}", "utf-8");
+    await fs.writeFile(
+      join(workspaceDir, "policy.jsonc"),
+      JSON.stringify({
+        gateway: {
+          exposure: {
+            allowNonLoopbackBind: false,
+            allowTailscaleFunnel: false,
+          },
+          auth: {
+            requireAuth: true,
+            requireExplicitRateLimit: true,
+          },
+          controlUi: {
+            allowInsecure: false,
+          },
+          remote: {
+            allow: false,
+          },
+          http: {
+            denyEndpoints: ["chatCompletions", "responses"],
+            requireUrlAllowlists: true,
+          },
+        },
+      }),
+      "utf-8",
+    );
+
+    registerPolicyDoctorChecks();
+    const result = await runDoctorLintChecks(ctx(configPath, cfg));
+
+    expect(result.findings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          checkId: "policy/gateway-non-loopback-bind",
+          severity: "error",
+          ocPath: "oc://openclaw.config/gateway/bind",
+          requirement: "oc://policy.jsonc/gateway/exposure/allowNonLoopbackBind",
+        }),
+        expect.objectContaining({
+          checkId: "policy/gateway-auth-disabled",
+          severity: "error",
+          ocPath: "oc://openclaw.config/gateway/auth/mode",
+          requirement: "oc://policy.jsonc/gateway/auth/requireAuth",
+        }),
+        expect.objectContaining({
+          checkId: "policy/gateway-rate-limit-missing",
+          severity: "error",
+          ocPath: "oc://openclaw.config/gateway/auth/rateLimit",
+          requirement: "oc://policy.jsonc/gateway/auth/requireExplicitRateLimit",
+        }),
+        expect.objectContaining({
+          checkId: "policy/gateway-control-ui-insecure",
+          severity: "error",
+          ocPath: "oc://openclaw.config/gateway/controlUi/allowInsecureAuth",
+          requirement: "oc://policy.jsonc/gateway/controlUi/allowInsecure",
+        }),
+        expect.objectContaining({
+          checkId: "policy/gateway-tailscale-funnel",
+          severity: "error",
+          ocPath: "oc://openclaw.config/gateway/tailscale/mode",
+          requirement: "oc://policy.jsonc/gateway/exposure/allowTailscaleFunnel",
+        }),
+        expect.objectContaining({
+          checkId: "policy/gateway-remote-enabled",
+          severity: "error",
+          ocPath: "oc://openclaw.config/gateway/mode",
+          requirement: "oc://policy.jsonc/gateway/remote/allow",
+        }),
+        expect.objectContaining({
+          checkId: "policy/gateway-http-endpoint-enabled",
+          severity: "error",
+          ocPath: "oc://openclaw.config/gateway/http/endpoints/chatCompletions/enabled",
+          requirement: "oc://policy.jsonc/gateway/http/denyEndpoints",
+        }),
+        expect.objectContaining({
+          checkId: "policy/gateway-http-url-fetch-unrestricted",
+          severity: "error",
+          ocPath: "oc://openclaw.config/gateway/http/endpoints/chatCompletions/images/allowUrl",
+          requirement: "oc://policy.jsonc/gateway/http/requireUrlAllowlists",
+        }),
+      ]),
+    );
+    expect(result.findings).toHaveLength(12);
+  });
+
+  it("reports omitted gateway bind when non-loopback exposure is denied", async () => {
+    const configPath = join(workspaceDir, "openclaw.jsonc");
+    const cfg = {
+      ...cfgWithPolicy(),
+      gateway: {},
+    } as unknown as OpenClawConfig;
+    await fs.writeFile(configPath, "{}", "utf-8");
+    await fs.writeFile(
+      join(workspaceDir, "policy.jsonc"),
+      JSON.stringify({
+        gateway: {
+          exposure: {
+            allowNonLoopbackBind: false,
+          },
+        },
+      }),
+      "utf-8",
+    );
+
+    registerPolicyDoctorChecks();
+    const result = await runDoctorLintChecks(ctx(configPath, cfg));
+
+    expect(result.findings).toEqual([
+      expect.objectContaining({
+        checkId: "policy/gateway-non-loopback-bind",
+        severity: "error",
+        ocPath: "oc://openclaw.config/gateway/bind",
+        requirement: "oc://policy.jsonc/gateway/exposure/allowNonLoopbackBind",
+      }),
+    ]);
+  });
+
+  it("does not report omitted gateway bind when Tailscale forces loopback", async () => {
+    const configPath = join(workspaceDir, "openclaw.jsonc");
+    const cfg = {
+      ...cfgWithPolicy(),
+      gateway: {
+        tailscale: { mode: "serve" },
+      },
+    } as unknown as OpenClawConfig;
+    await fs.writeFile(configPath, "{}", "utf-8");
+    await fs.writeFile(
+      join(workspaceDir, "policy.jsonc"),
+      JSON.stringify({
+        gateway: {
+          exposure: {
+            allowNonLoopbackBind: false,
+          },
+        },
+      }),
+      "utf-8",
+    );
+
+    registerPolicyDoctorChecks();
+    const result = await runDoctorLintChecks(ctx(configPath, cfg));
+
+    expect(result.findings).toEqual([]);
+  });
+
+  it("reports preserved Tailscale Funnel routes when policy denies Funnel exposure", async () => {
+    const configPath = join(workspaceDir, "openclaw.jsonc");
+    const cfg = {
+      ...cfgWithPolicy(),
+      gateway: {
+        tailscale: { mode: "serve", preserveFunnel: true },
+      },
+    } as unknown as OpenClawConfig;
+    await fs.writeFile(configPath, "{}", "utf-8");
+    await fs.writeFile(
+      join(workspaceDir, "policy.jsonc"),
+      JSON.stringify({
+        gateway: {
+          exposure: {
+            allowTailscaleFunnel: false,
+          },
+        },
+      }),
+      "utf-8",
+    );
+
+    registerPolicyDoctorChecks();
+    const result = await runDoctorLintChecks(ctx(configPath, cfg));
+
+    expect(result.findings).toEqual([
+      expect.objectContaining({
+        checkId: "policy/gateway-tailscale-funnel",
+        severity: "error",
+        ocPath: "oc://openclaw.config/gateway/tailscale/preserveFunnel",
+        requirement: "oc://policy.jsonc/gateway/exposure/allowTailscaleFunnel",
+      }),
+    ]);
+  });
+
+  it("reports missing gateway rate limits when gateway config is omitted", async () => {
+    const configPath = join(workspaceDir, "openclaw.jsonc");
+    await fs.writeFile(configPath, "{}", "utf-8");
+    await fs.writeFile(
+      join(workspaceDir, "policy.jsonc"),
+      JSON.stringify({
+        gateway: {
+          auth: {
+            requireExplicitRateLimit: true,
+          },
+        },
+      }),
+      "utf-8",
+    );
+
+    registerPolicyDoctorChecks();
+    const result = await runDoctorLintChecks(ctx(configPath, cfgWithPolicy()));
+
+    expect(result.findings).toEqual([
+      expect.objectContaining({
+        checkId: "policy/gateway-rate-limit-missing",
+        severity: "error",
+        ocPath: "oc://openclaw.config/gateway/auth/rateLimit",
+        requirement: "oc://policy.jsonc/gateway/auth/requireExplicitRateLimit",
+      }),
+    ]);
+  });
+
+  it("does not report inactive custom bind hosts", async () => {
+    const configPath = join(workspaceDir, "openclaw.jsonc");
+    const cfg = {
+      ...cfgWithPolicy(),
+      gateway: {
+        bind: "loopback",
+        customBindHost: "0.0.0.0",
+      },
+    } as unknown as OpenClawConfig;
+    await fs.writeFile(configPath, "{}", "utf-8");
+    await fs.writeFile(
+      join(workspaceDir, "policy.jsonc"),
+      JSON.stringify({
+        gateway: {
+          exposure: {
+            allowNonLoopbackBind: false,
+          },
+        },
+      }),
+      "utf-8",
+    );
+
+    registerPolicyDoctorChecks();
+    const result = await runDoctorLintChecks(ctx(configPath, cfg));
+
+    expect(result.findings).toEqual([]);
+  });
+
+  it("does not report loopback custom bind hosts", async () => {
+    const configPath = join(workspaceDir, "openclaw.jsonc");
+    const cfg = {
+      ...cfgWithPolicy(),
+      gateway: {
+        bind: "custom",
+        customBindHost: "127.0.0.1",
+      },
+    } as unknown as OpenClawConfig;
+    await fs.writeFile(configPath, "{}", "utf-8");
+    await fs.writeFile(
+      join(workspaceDir, "policy.jsonc"),
+      JSON.stringify({
+        gateway: {
+          exposure: {
+            allowNonLoopbackBind: false,
+          },
+        },
+      }),
+      "utf-8",
+    );
+
+    registerPolicyDoctorChecks();
+    const result = await runDoctorLintChecks(ctx(configPath, cfg));
+
+    expect(result.findings).toEqual([]);
+  });
+
+  it("reports valid non-loopback custom bind hosts", async () => {
+    const configPath = join(workspaceDir, "openclaw.jsonc");
+    const cfg = {
+      ...cfgWithPolicy(),
+      gateway: {
+        bind: "custom",
+        customBindHost: "192.168.1.20",
+      },
+    } as unknown as OpenClawConfig;
+    await fs.writeFile(configPath, "{}", "utf-8");
+    await fs.writeFile(
+      join(workspaceDir, "policy.jsonc"),
+      JSON.stringify({
+        gateway: {
+          exposure: {
+            allowNonLoopbackBind: false,
+          },
+        },
+      }),
+      "utf-8",
+    );
+
+    registerPolicyDoctorChecks();
+    const result = await runDoctorLintChecks(ctx(configPath, cfg));
+
+    expect(result.findings).toEqual([
+      expect.objectContaining({
+        checkId: "policy/gateway-non-loopback-bind",
+        severity: "error",
+        ocPath: "oc://openclaw.config/gateway/customBindHost",
+        requirement: "oc://policy.jsonc/gateway/exposure/allowNonLoopbackBind",
+      }),
+    ]);
+  });
+
+  it("does not report blank custom bind config as active non-loopback exposure", async () => {
+    const configPath = join(workspaceDir, "openclaw.jsonc");
+    const cfg = {
+      ...cfgWithPolicy(),
+      gateway: {
+        bind: "custom",
+        customBindHost: "   ",
+      },
+    } as unknown as OpenClawConfig;
+    await fs.writeFile(configPath, "{}", "utf-8");
+    await fs.writeFile(
+      join(workspaceDir, "policy.jsonc"),
+      JSON.stringify({
+        gateway: {
+          exposure: {
+            allowNonLoopbackBind: false,
+          },
+        },
+      }),
+      "utf-8",
+    );
+
+    registerPolicyDoctorChecks();
+    const result = await runDoctorLintChecks(ctx(configPath, cfg));
+
+    expect(result.findings).toEqual([]);
+  });
+
+  it.each(["localhost", "::1", "192.168.001.20"])(
+    "does not report invalid custom bind host %s as active non-loopback exposure",
+    async (customBindHost) => {
+      const configPath = join(workspaceDir, "openclaw.jsonc");
+      const cfg = {
+        ...cfgWithPolicy(),
+        gateway: {
+          bind: "custom",
+          customBindHost,
+        },
+      } as unknown as OpenClawConfig;
+      await fs.writeFile(configPath, "{}", "utf-8");
+      await fs.writeFile(
+        join(workspaceDir, "policy.jsonc"),
+        JSON.stringify({
+          gateway: {
+            exposure: {
+              allowNonLoopbackBind: false,
+            },
+          },
+        }),
+        "utf-8",
+      );
+
+      registerPolicyDoctorChecks();
+      const result = await runDoctorLintChecks(ctx(configPath, cfg));
+
+      expect(result.findings).toEqual([]);
+    },
+  );
+
+  it("reports configured gateway remote URLs when remote mode is active", async () => {
+    const configPath = join(workspaceDir, "openclaw.jsonc");
+    const cfg = {
+      ...cfgWithPolicy(),
+      gateway: {
+        mode: "remote",
+        remote: {
+          url: "wss://remote.example.test:18789",
+        },
+      },
+    } as unknown as OpenClawConfig;
+    await fs.writeFile(configPath, "{}", "utf-8");
+    await fs.writeFile(
+      join(workspaceDir, "policy.jsonc"),
+      JSON.stringify({
+        gateway: {
+          remote: {
+            allow: false,
+          },
+        },
+      }),
+      "utf-8",
+    );
+
+    registerPolicyDoctorChecks();
+    const result = await runDoctorLintChecks(ctx(configPath, cfg));
+
+    expect(result.findings).toEqual([
+      expect.objectContaining({
+        checkId: "policy/gateway-remote-enabled",
+        severity: "error",
+        ocPath: "oc://openclaw.config/gateway/mode",
+        requirement: "oc://policy.jsonc/gateway/remote/allow",
+      }),
+      expect.objectContaining({
+        checkId: "policy/gateway-remote-enabled",
+        severity: "error",
+        ocPath: "oc://openclaw.config/gateway/remote/url",
+        requirement: "oc://policy.jsonc/gateway/remote/allow",
+      }),
+    ]);
+  });
+
+  it("does not report inert remote config outside remote mode", async () => {
+    const configPath = join(workspaceDir, "openclaw.jsonc");
+    const cfg = {
+      ...cfgWithPolicy(),
+      gateway: {
+        remote: {
+          enabled: true,
+          url: "wss://remote.example.test:18789",
+        },
+      },
+    } as unknown as OpenClawConfig;
+    await fs.writeFile(configPath, "{}", "utf-8");
+    await fs.writeFile(
+      join(workspaceDir, "policy.jsonc"),
+      JSON.stringify({
+        gateway: {
+          remote: {
+            allow: false,
+          },
+        },
+      }),
+      "utf-8",
+    );
+
+    registerPolicyDoctorChecks();
+    const result = await runDoctorLintChecks(ctx(configPath, cfg));
+
+    expect(result.findings).toEqual([]);
+  });
+
+  it("reports default Responses URL fetching without allowlists", async () => {
+    const configPath = join(workspaceDir, "openclaw.jsonc");
+    const cfg = {
+      ...cfgWithPolicy(),
+      gateway: {
+        http: {
+          endpoints: {
+            responses: {
+              enabled: true,
+            },
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+    await fs.writeFile(configPath, "{}", "utf-8");
+    await fs.writeFile(
+      join(workspaceDir, "policy.jsonc"),
+      JSON.stringify({
+        gateway: {
+          http: {
+            requireUrlAllowlists: true,
+          },
+        },
+      }),
+      "utf-8",
+    );
+
+    registerPolicyDoctorChecks();
+    const result = await runDoctorLintChecks(ctx(configPath, cfg));
+
+    expect(result.findings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          checkId: "policy/gateway-http-url-fetch-unrestricted",
+          severity: "error",
+          ocPath: "oc://openclaw.config/gateway/http/endpoints/responses/files/allowUrl",
+          requirement: "oc://policy.jsonc/gateway/http/requireUrlAllowlists",
+        }),
+        expect.objectContaining({
+          checkId: "policy/gateway-http-url-fetch-unrestricted",
+          severity: "error",
+          ocPath: "oc://openclaw.config/gateway/http/endpoints/responses/images/allowUrl",
+          requirement: "oc://policy.jsonc/gateway/http/requireUrlAllowlists",
+        }),
+      ]),
+    );
+    expect(result.findings).toHaveLength(2);
+  });
+
+  it("reports wildcard Responses URL allowlists as unrestricted", async () => {
+    const configPath = join(workspaceDir, "openclaw.jsonc");
+    const cfg = {
+      ...cfgWithPolicy(),
+      gateway: {
+        http: {
+          endpoints: {
+            responses: {
+              enabled: true,
+              files: { urlAllowlist: ["*"] },
+              images: { urlAllowlist: ["*."] },
+            },
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+    await fs.writeFile(configPath, "{}", "utf-8");
+    await fs.writeFile(
+      join(workspaceDir, "policy.jsonc"),
+      JSON.stringify({
+        gateway: {
+          http: {
+            requireUrlAllowlists: true,
+          },
+        },
+      }),
+      "utf-8",
+    );
+
+    registerPolicyDoctorChecks();
+    const result = await runDoctorLintChecks(ctx(configPath, cfg));
+
+    expect(result.findings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          checkId: "policy/gateway-http-url-fetch-unrestricted",
+          ocPath: "oc://openclaw.config/gateway/http/endpoints/responses/files/allowUrl",
+        }),
+        expect.objectContaining({
+          checkId: "policy/gateway-http-url-fetch-unrestricted",
+          ocPath: "oc://openclaw.config/gateway/http/endpoints/responses/images/allowUrl",
+        }),
+      ]),
+    );
+    expect(result.findings).toHaveLength(2);
+  });
+
+  it("does not report Responses URL fetching when it is disabled", async () => {
+    const configPath = join(workspaceDir, "openclaw.jsonc");
+    const cfg = {
+      ...cfgWithPolicy(),
+      gateway: {
+        http: {
+          endpoints: {
+            responses: {
+              enabled: true,
+              files: { allowUrl: false },
+              images: { allowUrl: false },
+            },
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+    await fs.writeFile(configPath, "{}", "utf-8");
+    await fs.writeFile(
+      join(workspaceDir, "policy.jsonc"),
+      JSON.stringify({
+        gateway: {
+          http: {
+            requireUrlAllowlists: true,
+          },
+        },
+      }),
+      "utf-8",
+    );
+
+    registerPolicyDoctorChecks();
+    const result = await runDoctorLintChecks(ctx(configPath, cfg));
+
+    expect(result.findings).toEqual([]);
   });
 
   it("reports auth profiles missing required metadata or using unapproved modes", async () => {
