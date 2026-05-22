@@ -1058,7 +1058,7 @@ fi
 if [ ! -s "$out/slack-desktop-smoke.png" ]; then
   echo "Slack desktop screenshot is missing or empty: $out/slack-desktop-smoke.png" >&2
 fi
-exit "$qa_status"
+exit 0
 `;
 }
 
@@ -1348,6 +1348,13 @@ export async function runMantisSlackDesktopSmoke(
     }
     if (gatewaySetup && !gatewaySetupCompleted) {
       throw new Error("Slack desktop gateway setup did not report a live OpenClaw gateway.");
+    }
+    if (!gatewaySetup && !slackQaCompleted) {
+      const detail =
+        remoteMetadata?.qaExitCode === undefined
+          ? "Slack QA did not report an exit code."
+          : `Slack QA exited with code ${remoteMetadata.qaExitCode}.`;
+      throw new Error(`${detail} See slack-desktop-command.log for details.`);
     }
     approvalCheckpointArtifacts = await collectApprovalCheckpointArtifacts({
       enabled: approvalCheckpoints,

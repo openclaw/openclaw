@@ -344,17 +344,21 @@ jobs:
           evidence_summary="Mantis ran Slack QA inside a Crabbox Linux VNC desktop, started an OpenClaw Slack gateway in that VM, opened Slack Web in the visible browser, and captured screenshot/video evidence."
           expected_result="Slack QA and VM gateway setup pass"
           checkpoint_artifacts='[]'
+          checkpoint_required=false
           if [[ "$APPROVAL_CHECKPOINTS" == "true" ]]; then
             evidence_summary="Mantis ran Slack native approval QA inside a Crabbox Linux VNC desktop, rendered pending/resolved approval checkpoints from the Slack API messages, and stored Slack QA artifacts."
             expected_result="Slack native exec and plugin approval checkpoints pass"
             screenshot_required=false
             desktop_capture_inline=false
+            if [[ "$status" == "pass" ]]; then
+              checkpoint_required=true
+            fi
             checkpoint_artifacts="$(
-              jq -n '[
-                { kind: "desktopScreenshot", lane: "candidate", label: "Exec approval pending checkpoint", path: "approval-checkpoints/slack-approval-exec-native-pending.png", targetPath: "approval-checkpoints/slack-approval-exec-native-pending.png", alt: "Rendered Slack exec approval pending checkpoint", width: 720, inline: true, required: true },
-                { kind: "desktopScreenshot", lane: "candidate", label: "Exec approval resolved checkpoint", path: "approval-checkpoints/slack-approval-exec-native-resolved.png", targetPath: "approval-checkpoints/slack-approval-exec-native-resolved.png", alt: "Rendered Slack exec approval resolved checkpoint", width: 720, inline: true, required: true },
-                { kind: "desktopScreenshot", lane: "candidate", label: "Plugin approval pending checkpoint", path: "approval-checkpoints/slack-approval-plugin-native-pending.png", targetPath: "approval-checkpoints/slack-approval-plugin-native-pending.png", alt: "Rendered Slack plugin approval pending checkpoint", width: 720, inline: true, required: true },
-                { kind: "desktopScreenshot", lane: "candidate", label: "Plugin approval resolved checkpoint", path: "approval-checkpoints/slack-approval-plugin-native-resolved.png", targetPath: "approval-checkpoints/slack-approval-plugin-native-resolved.png", alt: "Rendered Slack plugin approval resolved checkpoint", width: 720, inline: true, required: true }
+              jq -n --argjson checkpoint_required "$checkpoint_required" '[
+                { kind: "desktopScreenshot", lane: "candidate", label: "Exec approval pending checkpoint", path: "approval-checkpoints/slack-approval-exec-native-pending.png", targetPath: "approval-checkpoints/slack-approval-exec-native-pending.png", alt: "Rendered Slack exec approval pending checkpoint", width: 720, inline: true, required: $checkpoint_required },
+                { kind: "desktopScreenshot", lane: "candidate", label: "Exec approval resolved checkpoint", path: "approval-checkpoints/slack-approval-exec-native-resolved.png", targetPath: "approval-checkpoints/slack-approval-exec-native-resolved.png", alt: "Rendered Slack exec approval resolved checkpoint", width: 720, inline: true, required: $checkpoint_required },
+                { kind: "desktopScreenshot", lane: "candidate", label: "Plugin approval pending checkpoint", path: "approval-checkpoints/slack-approval-plugin-native-pending.png", targetPath: "approval-checkpoints/slack-approval-plugin-native-pending.png", alt: "Rendered Slack plugin approval pending checkpoint", width: 720, inline: true, required: $checkpoint_required },
+                { kind: "desktopScreenshot", lane: "candidate", label: "Plugin approval resolved checkpoint", path: "approval-checkpoints/slack-approval-plugin-native-resolved.png", targetPath: "approval-checkpoints/slack-approval-plugin-native-resolved.png", alt: "Rendered Slack plugin approval resolved checkpoint", width: 720, inline: true, required: $checkpoint_required }
               ]'
             )"
           fi

@@ -145,7 +145,10 @@ describe("mantis Slack desktop smoke runtime", () => {
           } else {
             await fs.writeFile(path.join(outputDir as string, "slack-desktop-smoke.png"), "png");
             await fs.writeFile(path.join(outputDir as string, "slack-desktop-smoke.mp4"), "mp4");
-            await fs.writeFile(path.join(outputDir as string, "remote-metadata.json"), "{}\n");
+            await fs.writeFile(
+              path.join(outputDir as string, "remote-metadata.json"),
+              `${JSON.stringify({ qaExitCode: 0 })}\n`,
+            );
             await fs.writeFile(path.join(outputDir as string, "chrome.log"), "chrome\n");
             await fs.writeFile(path.join(outputDir as string, "ffmpeg.log"), "ffmpeg\n");
             await fs.writeFile(path.join(outputDir as string, "slack-desktop-command.log"), "qa\n");
@@ -850,6 +853,55 @@ describe("mantis Slack desktop smoke runtime", () => {
     expect(summary.artifacts.videoPath).toContain("slack-desktop-smoke.mp4");
   });
 
+  it("reports Slack QA failure from copied remote metadata when Crabbox run exits zero", async () => {
+    const runner = vi.fn(async (command: string, args: readonly string[]) => {
+      if (command === "/tmp/crabbox" && args[0] === "inspect") {
+        return {
+          stdout: `${JSON.stringify({
+            host: "203.0.113.10",
+            id: "cbx_existing",
+            provider: "hetzner",
+            sshKey: "/tmp/key",
+            sshPort: "2222",
+            sshUser: "crabbox",
+          })}\n`,
+          stderr: "",
+        };
+      }
+      if (command === "rsync") {
+        const outputDir = args.at(-1);
+        await fs.mkdir(outputDir as string, { recursive: true });
+        if (String(outputDir).endsWith("slack-qa/")) {
+          return { stdout: "", stderr: "" };
+        }
+        await fs.writeFile(path.join(outputDir as string, "slack-desktop-smoke.png"), "png");
+        await fs.writeFile(
+          path.join(outputDir as string, "remote-metadata.json"),
+          `${JSON.stringify({ qaExitCode: 7 })}\n`,
+        );
+      }
+      return { stdout: "", stderr: "" };
+    });
+
+    const result = await runMantisSlackDesktopSmoke({
+      commandRunner: runner,
+      crabboxBin: "/tmp/crabbox",
+      leaseId: "cbx_existing",
+      outputDir: ".artifacts/qa-e2e/mantis/slack-desktop-metadata-fail",
+      repoRoot,
+    });
+
+    expect(result.status).toBe("fail");
+    const summary = JSON.parse(await fs.readFile(result.summaryPath, "utf8")) as {
+      error?: string;
+      status: string;
+      timings: { phases: { name: string; status: string }[] };
+    };
+    expect(summary.status).toBe("fail");
+    expect(summary.error).toContain("Slack QA exited with code 7");
+    expect(phaseStatus(summary.timings.phases, "crabbox.remote_run")).toBe("pass");
+  });
+
   it("accepts Blacksmith Testbox lease ids from Crabbox warmup", async () => {
     const commands: { args: readonly string[]; command: string }[] = [];
     const runner = vi.fn(async (command: string, args: readonly string[]) => {
@@ -879,7 +931,10 @@ describe("mantis Slack desktop smoke runtime", () => {
         } else {
           await fs.writeFile(path.join(outputDir as string, "slack-desktop-smoke.png"), "png");
           await fs.writeFile(path.join(outputDir as string, "slack-desktop-smoke.mp4"), "mp4");
-          await fs.writeFile(path.join(outputDir as string, "remote-metadata.json"), "{}\n");
+          await fs.writeFile(
+            path.join(outputDir as string, "remote-metadata.json"),
+            `${JSON.stringify({ qaExitCode: 0 })}\n`,
+          );
           await fs.writeFile(path.join(outputDir as string, "chrome.log"), "chrome\n");
           await fs.writeFile(path.join(outputDir as string, "ffmpeg.log"), "ffmpeg\n");
           await fs.writeFile(path.join(outputDir as string, "slack-desktop-command.log"), "qa\n");
