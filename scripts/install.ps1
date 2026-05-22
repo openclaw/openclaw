@@ -222,7 +222,7 @@ function Install-PortableNode {
             throw "Node.js archive did not contain node.exe."
         }
 
-        Move-Item -LiteralPath $nodeDir.FullName -Destination $portableRoot -Force
+        Copy-Item -LiteralPath $nodeDir.FullName -Destination $portableRoot -Recurse -Force
     } finally {
         if (Test-Path $tmpZip) {
             Remove-Item -Force $tmpZip

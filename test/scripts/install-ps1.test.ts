@@ -129,7 +129,7 @@ describe("install.ps1 failure handling", () => {
     expect(portableNodeBody).toContain("portable-node");
     expect(portableNodeBody).toContain("Ensure-PortableNodeOnUserPath");
     expect(portableNodeBody).toContain(
-      "Move-Item -LiteralPath $nodeDir.FullName -Destination $portableRoot -Force",
+      "Copy-Item -LiteralPath $nodeDir.FullName -Destination $portableRoot -Recurse -Force",
     );
     expect(portableNodeBody).not.toContain('Join-Path $nodeDir.FullName "*"');
     expect(portableNodePathBody).toContain("Add-ToUserPath $nodeDir");
