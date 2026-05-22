@@ -248,9 +248,11 @@ async function resolveXaiProviderAuthCredential(params: {
 
 async function resolveXaiProviderApiKeyProfileFallback(params: {
   config?: Record<string, unknown>;
+  agentDir?: string;
 }): Promise<XaiResolvedWebSearchAuth | undefined> {
   const config = params.config as OpenClawConfig | undefined;
   const usableProfiles = listUsableProviderAuthProfileIds({
+    agentDir: params.agentDir,
     cfg: config,
     provider: XAI_PROVIDER_ID,
   });
@@ -280,11 +282,12 @@ async function resolveXaiProviderApiKeyProfileFallback(params: {
 }
 
 async function resolveXaiWebSearchAuth(
-  ctx: { config?: Record<string, unknown> },
+  ctx: { config?: Record<string, unknown>; agentDir?: string },
   searchConfig?: Record<string, unknown>,
   options?: { forceRefresh?: boolean; profileId?: string },
 ): Promise<XaiResolvedWebSearchAuth | undefined> {
   const providerAuth = await resolveXaiProviderAuthCredential({
+    agentDir: ctx.agentDir,
     config: ctx.config,
     forceRefresh: options?.forceRefresh,
     profileId: options?.profileId,
@@ -308,7 +311,7 @@ async function resolveXaiWebSearchAuth(
 }
 
 async function resolveXaiWebSearchApiKeyFallback(
-  ctx: { config?: Record<string, unknown> },
+  ctx: { config?: Record<string, unknown>; agentDir?: string },
   searchConfig?: Record<string, unknown>,
 ): Promise<XaiResolvedWebSearchAuth | undefined> {
   const configured = resolveConfiguredXaiWebSearchCredential(searchConfig);
@@ -323,6 +326,7 @@ async function resolveXaiWebSearchApiKeyFallback(
   }
 
   const providerAuth = await resolveXaiProviderAuthCredential({
+    agentDir: ctx.agentDir,
     config: ctx.config,
     credentialPrecedence: "env-first",
   });
@@ -330,7 +334,10 @@ async function resolveXaiWebSearchApiKeyFallback(
     return providerAuth;
   }
 
-  return await resolveXaiProviderApiKeyProfileFallback({ config: ctx.config });
+  return await resolveXaiProviderApiKeyProfileFallback({
+    agentDir: ctx.agentDir,
+    config: ctx.config,
+  });
 }
 
 function isXaiUnauthorizedError(error: unknown): boolean {
@@ -345,7 +352,11 @@ function resolveXaiWebSearchTimeoutSeconds(searchConfig?: Record<string, unknown
 }
 
 export async function executeXaiWebSearchProviderTool(
-  ctx: { config?: Record<string, unknown>; searchConfig?: Record<string, unknown> },
+  ctx: {
+    config?: Record<string, unknown>;
+    searchConfig?: Record<string, unknown>;
+    agentDir?: string;
+  },
   args: Record<string, unknown>,
 ): Promise<Record<string, unknown>> {
   const searchConfig = resolveXaiToolSearchConfig(ctx);

@@ -30,6 +30,7 @@ export type WebSearchProviderContext = {
   config?: OpenClawConfig;
   searchConfig?: Record<string, unknown>;
   runtimeMetadata?: RuntimeWebSearchMetadata;
+  agentDir?: string;
 };
 
 export type WebSearchProviderToolExecutionContext = {

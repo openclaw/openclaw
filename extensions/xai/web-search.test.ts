@@ -312,6 +312,41 @@ describe("xai web search config resolution", () => {
     expect(fetchCallHeader(mockFetch, 0, "Authorization")).toBe("Bearer oauth-web-search-token");
   });
 
+  it("uses the active agentDir for xAI OAuth web search auth", async () => {
+    providerAuthRuntimeMocks.resolveApiKeyForProvider.mockResolvedValue({
+      apiKey: "active-agent-oauth-token",
+      source: "profile:xai:active",
+      mode: "oauth",
+      profileId: "xai:active",
+    });
+    const mockFetch = installXaiWebSearchFetch();
+    const provider = createXaiWebSearchProvider();
+    const tool = provider.createTool({
+      agentDir: "/tmp/openclaw-xai-active-agent",
+      config: {
+        agents: {
+          list: [
+            { id: "main", default: true, agentDir: "/tmp/openclaw-xai-main-agent" },
+            { id: "side", agentDir: "/tmp/openclaw-xai-active-agent" },
+          ],
+        },
+      },
+    });
+    if (!tool) {
+      throw new Error("Expected xAI web search tool");
+    }
+
+    await tool.execute({ query: "OpenClaw Grok active agent OAuth web search" });
+
+    expect(providerAuthRuntimeMocks.resolveApiKeyForProvider).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: "xai",
+        agentDir: "/tmp/openclaw-xai-active-agent",
+      }),
+    );
+    expect(fetchCallHeader(mockFetch, 0, "Authorization")).toBe("Bearer active-agent-oauth-token");
+  });
+
   it("refreshes xAI OAuth auth and retries web search after a 401", async () => {
     providerAuthRuntimeMocks.resolveApiKeyForProvider
       .mockResolvedValueOnce({

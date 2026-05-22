@@ -92,6 +92,7 @@ function hasEntryCredential(
   >,
   config: OpenClawConfig | undefined,
   search: WebSearchConfig | undefined,
+  agentDir?: string,
 ): boolean {
   return hasWebProviderEntryCredential({
     provider,
@@ -107,7 +108,7 @@ function hasEntryCredential(
     resolveProviderAuthValue: (providerId) =>
       hasAuthProfileForProvider({
         provider: providerId,
-        agentDir: resolveDefaultAgentDir(config ?? {}),
+        agentDir: agentDir?.trim() || resolveDefaultAgentDir(config ?? {}),
       }),
   });
 }
@@ -153,6 +154,7 @@ export function listConfiguredWebSearchProviders(params?: {
 export function resolveWebSearchProviderId(params: {
   search?: WebSearchConfig;
   config?: OpenClawConfig;
+  agentDir?: string;
   providers?: PluginWebSearchProviderEntry[];
 }): string {
   const config = resolveWebSearchRuntimeConfig({ config: params.config });
@@ -181,7 +183,7 @@ export function resolveWebSearchProviderId(params: {
         keylessFallbackProviderId ||= provider.id;
         continue;
       }
-      if (!hasEntryCredential(provider, config, search)) {
+      if (!hasEntryCredential(provider, config, search, params.agentDir)) {
         continue;
       }
       logVerbose(
@@ -304,18 +306,21 @@ export function resolveWebSearchDefinition(
     resolveAutoProviderId: ({ config, toolConfig, providers }) =>
       resolveWebSearchProviderId({
         config,
+        agentDir: options?.agentDir,
         search: toolConfig as WebSearchConfig | undefined,
         providers,
       }),
     resolveFallbackProviderId: ({ config, toolConfig, providers }) =>
       resolveWebSearchProviderId({
         config,
+        agentDir: options?.agentDir,
         search: toolConfig as WebSearchConfig | undefined,
         providers,
       }) || providers[0]?.id,
     createTool: ({ provider, config, toolConfig, runtimeMetadata }) =>
       provider.createTool({
         config,
+        agentDir: options?.agentDir,
         searchConfig: toolConfig,
         runtimeMetadata,
       }),
@@ -363,7 +368,7 @@ function resolveWebSearchCandidates(
     options?.providerId,
     runtimeWebSearch?.selectedProvider,
     runtimeWebSearch?.providerConfigured,
-    resolveWebSearchProviderId({ config, search, providers }),
+    resolveWebSearchProviderId({ config, agentDir: options?.agentDir, search, providers }),
   ].filter(
     (value, index, array): value is string => Boolean(value) && array.indexOf(value) === index,
   );
