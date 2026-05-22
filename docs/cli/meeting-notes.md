@@ -34,7 +34,6 @@ openclaw meeting-notes show <session>
 openclaw meeting-notes show YYYY-MM-DD/<session>
 openclaw meeting-notes path <session>
 openclaw meeting-notes path YYYY-MM-DD/<session>
-openclaw meeting-notes path legacy/<session>
 openclaw meeting-notes path <session> --dir
 openclaw meeting-notes path <session> --transcript
 openclaw meeting-notes list --json
@@ -51,7 +50,6 @@ openclaw meeting-notes show <session> --json
 
 When a human session id repeats across days, use the date-qualified selector
 from `list`, for example `openclaw meeting-notes show 2026-05-22/standup`.
-Older flat-layout sessions are listed as `legacy/<session>` when needed.
 Default session ids include a timestamp and random suffix; configure fixed
 session ids only when they are unique within the day.
 

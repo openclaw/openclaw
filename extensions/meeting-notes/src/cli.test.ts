@@ -39,26 +39,6 @@ async function writeSession(
   return sessionDir;
 }
 
-async function writeLegacySession(stateDir: string, sessionId: string): Promise<string> {
-  const sessionDir = path.join(stateDir, "meeting-notes", sessionId);
-  await fs.mkdir(sessionDir, { recursive: true });
-  await fs.writeFile(
-    path.join(sessionDir, "metadata.json"),
-    `${JSON.stringify(
-      {
-        sessionId,
-        title: "Legacy standup",
-        source: { providerId: "manual-transcript" },
-        startedAt: "2026-05-20T10:00:00.000Z",
-      },
-      null,
-      2,
-    )}\n`,
-  );
-  await fs.writeFile(path.join(sessionDir, "summary.md"), "# Legacy standup\n");
-  return sessionDir;
-}
-
 async function runMeetingNotesCli(args: string[]): Promise<string> {
   let output = "";
   const writeSpy = vi.spyOn(process.stdout, "write").mockImplementation(((
@@ -144,16 +124,6 @@ describe("meeting-notes CLI", () => {
     const output = await runMeetingNotesCli(["path", "2026-05-21/standup"]);
 
     expect(output.trim()).toBe(path.join(olderSessionDir, "summary.md"));
-  });
-
-  it("keeps legacy flat sessions addressable when dated sessions reuse an id", async () => {
-    const legacySessionDir = await writeLegacySession(stateDir, "standup");
-    await writeSession(stateDir, "standup", "2026-05-22");
-
-    await expect(runMeetingNotesCli(["path", "standup"])).rejects.toThrow("legacy/standup");
-    const output = await runMeetingNotesCli(["path", "legacy/standup"]);
-
-    expect(output.trim()).toBe(path.join(legacySessionDir, "summary.md"));
   });
 
   it("prints the summary path by default", async () => {

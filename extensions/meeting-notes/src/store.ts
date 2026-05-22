@@ -56,10 +56,6 @@ export class MeetingNotesStore {
     return path.join(this.rootDir, dateSegment(session.startedAt), safeSegment(session.sessionId));
   }
 
-  private legacySessionDir(sessionId: string): string {
-    return path.join(this.rootDir, safeSegment(sessionId));
-  }
-
   private async hasSessionMetadata(dir: string): Promise<boolean> {
     return (await readJsonFile<unknown>(path.join(dir, "metadata.json"))) !== undefined;
   }
@@ -72,23 +68,10 @@ export class MeetingNotesStore {
     if (datedSession && sameSessionIdentity(datedSession, session)) {
       return datedDir;
     }
-    const legacyDir = this.legacySessionDir(session.sessionId);
-    const legacySession = await readJsonFile<MeetingNotesSessionDescriptor>(
-      path.join(legacyDir, "metadata.json"),
-    );
-    return legacySession?.sessionId === session.sessionId ? legacyDir : datedDir;
+    return datedDir;
   }
 
   private async findSessionDir(selector: string): Promise<string | undefined> {
-    const legacyQualified = selector.match(/^legacy\/(.+)$/);
-    if (legacyQualified?.[1]) {
-      const legacyDir = this.legacySessionDir(legacyQualified[1]);
-      const legacySession = await readJsonFile<MeetingNotesSessionDescriptor>(
-        path.join(legacyDir, "metadata.json"),
-      );
-      return legacySession?.sessionId === legacyQualified[1] ? legacyDir : undefined;
-    }
-
     const qualified = selector.match(/^(\d{4}-\d{2}-\d{2})\/(.+)$/);
     if (qualified?.[1] && qualified[2]) {
       const directDir = path.join(this.rootDir, qualified[1], safeSegment(qualified[2]));
@@ -126,29 +109,16 @@ export class MeetingNotesStore {
         matches.push(candidate);
       }
     }
-    const legacyDir = this.legacySessionDir(selector);
-    const legacySession = await readJsonFile<MeetingNotesSessionDescriptor>(
-      path.join(legacyDir, "metadata.json"),
-    );
-    if (legacySession?.sessionId === selector) {
-      matches.push(legacyDir);
-    }
     if (matches.length > 1) {
       throw new Error(
-        `multiple meeting notes sessions match ${selector}; use a YYYY-MM-DD/${selector} or legacy/${selector} selector`,
+        `multiple meeting notes sessions match ${selector}; use a YYYY-MM-DD/${selector} selector`,
       );
     }
     return matches[0];
   }
 
-  async writeSession(
-    session: MeetingNotesSessionDescriptor,
-    options: { preserveExisting?: boolean } = {},
-  ): Promise<void> {
-    const dir =
-      options.preserveExisting === true
-        ? ((await this.findSessionDir(session.sessionId)) ?? this.sessionDir(session))
-        : this.sessionDir(session);
+  async writeSession(session: MeetingNotesSessionDescriptor): Promise<void> {
+    const dir = this.sessionDir(session);
     await fs.mkdir(dir, { recursive: true });
     await fs.writeFile(path.join(dir, "metadata.json"), `${JSON.stringify(session, null, 2)}\n`);
   }
@@ -169,7 +139,9 @@ export class MeetingNotesStore {
   }
 
   async appendUtterance(sessionId: string, utterance: MeetingNotesUtterance): Promise<void> {
-    const dir = (await this.findSessionDir(sessionId)) ?? this.legacySessionDir(sessionId);
+    const dir =
+      (await this.findSessionDir(sessionId)) ??
+      path.join(this.rootDir, dateSegment(sessionId), safeSegment(sessionId));
     await this.appendUtteranceToDir(dir, sessionId, utterance);
   }
 
@@ -288,7 +260,7 @@ export class MeetingNotesStore {
       session !== undefined
         ? await this.findSessionDirForSession(session)
         : ((await this.findSessionDir(summary.sessionId)) ??
-          this.legacySessionDir(summary.sessionId));
+          path.join(this.rootDir, dateSegment(summary.sessionId), safeSegment(summary.sessionId)));
     return await this.writeSummaryToDir(summary, dir);
   }
 

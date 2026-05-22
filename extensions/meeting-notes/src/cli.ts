@@ -18,7 +18,7 @@ type MeetingNotesPathOptions = MeetingNotesCliOptions & {
 type StoredMeetingNotesSession = {
   session: MeetingNotesSessionDescriptor;
   sessionDir: string;
-  date: string | null;
+  date: string;
   summaryPath: string;
   hasSummary: boolean;
 };
@@ -44,15 +44,16 @@ function sessionDir(date: string, sessionId: string): string {
   return path.join(stateRootDir(), date, safeSegment(sessionId));
 }
 
-function readDateFromSessionDir(sessionDir: string): string | null {
+function readDateFromSessionDir(sessionDir: string): string {
   const candidate = path.basename(path.dirname(sessionDir));
-  return /^\d{4}-\d{2}-\d{2}$/.test(candidate) ? candidate : null;
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(candidate)) {
+    throw new Error(`invalid meeting notes date directory: ${candidate}`);
+  }
+  return candidate;
 }
 
 function formatSelector(entry: StoredMeetingNotesSession): string {
-  return entry.date
-    ? `${entry.date}/${entry.session.sessionId}`
-    : `legacy/${entry.session.sessionId}`;
+  return `${entry.date}/${entry.session.sessionId}`;
 }
 
 function parseQualifiedSelector(selector: string): { date: string; sessionId: string } | null {
@@ -61,11 +62,6 @@ function parseQualifiedSelector(selector: string): { date: string; sessionId: st
     return null;
   }
   return { date: match[1], sessionId: match[2] };
-}
-
-function parseLegacySelector(selector: string): { sessionId: string } | null {
-  const match = selector.match(/^legacy\/(.+)$/);
-  return match?.[1] ? { sessionId: match[1] } : null;
 }
 
 function writeLine(value: string): void {
@@ -148,7 +144,6 @@ async function listStoredSessionDirs(): Promise<string[]> {
     }
     const firstLevelDir = path.join(stateRootDir(), entry.name);
     if (!/^\d{4}-\d{2}-\d{2}$/.test(entry.name)) {
-      dirs.push(firstLevelDir);
       continue;
     }
     const nestedEntries = await fs.readdir(firstLevelDir, { withFileTypes: true });
@@ -174,17 +169,6 @@ function assertRequestedSession(
 }
 
 async function requireStoredSession(selector: string): Promise<StoredMeetingNotesSession> {
-  const legacy = parseLegacySelector(selector);
-  if (legacy) {
-    const session = await readStoredSession(
-      path.join(stateRootDir(), safeSegment(legacy.sessionId)),
-    );
-    if (!session) {
-      throw new Error(`meeting notes session not found: ${selector}`);
-    }
-    return assertRequestedSession(session, legacy.sessionId);
-  }
-
   const qualified = parseQualifiedSelector(selector);
   if (qualified) {
     const session = await readStoredSession(sessionDir(qualified.date, qualified.sessionId));
@@ -210,10 +194,6 @@ async function requireStoredSession(selector: string): Promise<StoredMeetingNote
         .map(formatSelector)
         .join(", ")}`,
     );
-  }
-  const legacySession = await readStoredSession(path.join(stateRootDir(), safeSegment(selector)));
-  if (legacySession) {
-    return assertRequestedSession(legacySession, selector);
   }
   throw new Error(`meeting notes session not found: ${selector}`);
 }
