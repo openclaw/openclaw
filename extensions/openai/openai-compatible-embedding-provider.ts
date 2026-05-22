@@ -5,6 +5,7 @@ import type {
   EmbeddingProviderCallOptions,
   EmbeddingProviderCreateOptions,
 } from "openclaw/plugin-sdk/embedding-providers";
+import { normalizeProviderId } from "openclaw/plugin-sdk/provider-model-shared";
 import {
   coerceSecretRef,
   normalizeResolvedSecretInputString,
@@ -17,6 +18,7 @@ import {
 } from "openclaw/plugin-sdk/ssrf-runtime";
 
 export const OPENAI_COMPATIBLE_EMBEDDING_PROVIDER_ID = "openai-compatible";
+const OPENAI_COMPATIBLE_MODEL_APIS = new Set(["openai-completions", "openai-responses"]);
 
 export type OpenAICompatibleEmbeddingClient = {
   baseUrl: string;
@@ -31,6 +33,13 @@ export type OpenAICompatibleEmbeddingClient = {
 
 type OpenAICompatibleEmbeddingResponse = {
   data?: unknown;
+};
+
+type ConfiguredEmbeddingProvider = {
+  api?: string;
+  baseUrl?: string;
+  apiKey?: unknown;
+  headers?: Record<string, unknown>;
 };
 
 function normalizeBaseUrl(value: string | undefined): string {
@@ -87,15 +96,19 @@ function normalizeHeaderName(name: string): string {
 
 function buildHeaders(params: {
   apiKey: string | undefined;
-  extra: Record<string, string> | undefined;
+  extra: Record<string, unknown> | undefined;
 }): Record<string, string> {
   const headers: Record<string, string> = {
     accept: "application/json",
     "content-type": "application/json",
   };
-  for (const [name, value] of Object.entries(params.extra ?? {})) {
+  for (const [name, rawValue] of Object.entries(params.extra ?? {})) {
     const normalizedName = normalizeHeaderName(name);
     if (!normalizedName || normalizedName === "authorization") {
+      continue;
+    }
+    const value = resolveSecretString(rawValue, `models.providers.*.headers.${normalizedName}`);
+    if (!value) {
       continue;
     }
     headers[normalizedName] = value;
@@ -123,13 +136,7 @@ function sanitizeCacheHeaders(headers: Record<string, string>): Record<string, s
   return Object.keys(safeHeaders).length > 0 ? safeHeaders : undefined;
 }
 
-function resolveRemoteApiKey(
-  value: NonNullable<EmbeddingProviderCreateOptions["remote"]>["apiKey"] | undefined,
-): string | undefined {
-  const inline = normalizeSecretInputString(value);
-  if (inline) {
-    return inline;
-  }
+function resolveSecretString(value: unknown, path: string): string | undefined {
   const ref = coerceSecretRef(value);
   if (ref?.source === "env") {
     const envValue = normalizeSecretInputString(process.env[ref.id]);
@@ -137,10 +144,44 @@ function resolveRemoteApiKey(
       return envValue;
     }
   }
-  return normalizeResolvedSecretInputString({
-    value,
-    path: "agents.*.memorySearch.remote.apiKey",
-  })?.trim();
+  if (ref) {
+    return normalizeResolvedSecretInputString({ value, path })?.trim();
+  }
+  return normalizeSecretInputString(value);
+}
+
+function resolveRemoteApiKey(value: unknown): string | undefined {
+  return resolveSecretString(value, "agents.*.memorySearch.remote.apiKey");
+}
+
+function isOpenAICompatibleProviderConfig(
+  id: string,
+  provider: ConfiguredEmbeddingProvider,
+): boolean {
+  return (
+    normalizeProviderId(id) === OPENAI_COMPATIBLE_EMBEDDING_PROVIDER_ID ||
+    normalizeProviderId(provider.api ?? "") === OPENAI_COMPATIBLE_EMBEDDING_PROVIDER_ID ||
+    OPENAI_COMPATIBLE_MODEL_APIS.has(normalizeProviderId(provider.api ?? ""))
+  );
+}
+
+function resolveConfiguredProvider(
+  options: EmbeddingProviderCreateOptions,
+): ConfiguredEmbeddingProvider | undefined {
+  const providers = options.config.models?.providers as
+    | Record<string, ConfiguredEmbeddingProvider>
+    | undefined;
+  if (!providers) {
+    return undefined;
+  }
+  const providerId = options.provider?.trim() || OPENAI_COMPATIBLE_EMBEDDING_PROVIDER_ID;
+  const normalizedProviderId = normalizeProviderId(providerId);
+  const entry =
+    providers[providerId] ??
+    Object.entries(providers).find(
+      ([candidateId]) => normalizeProviderId(candidateId) === normalizedProviderId,
+    )?.[1];
+  return entry && isOpenAICompatibleProviderConfig(providerId, entry) ? entry : undefined;
 }
 
 function embeddingInputToText(input: EmbeddingInput): string {
@@ -249,15 +290,22 @@ async function postEmbeddingRequest(params: {
 export function createOpenAICompatibleEmbeddingClient(
   options: EmbeddingProviderCreateOptions,
 ): OpenAICompatibleEmbeddingClient {
-  const baseUrl = normalizeBaseUrl(options.remote?.baseUrl);
+  const configuredProvider = resolveConfiguredProvider(options);
+  const baseUrl = normalizeBaseUrl(options.remote?.baseUrl ?? configuredProvider?.baseUrl);
   const model = normalizeModel(options.model);
-  const apiKey = resolveRemoteApiKey(options.remote?.apiKey);
+  const apiKey = resolveRemoteApiKey(options.remote?.apiKey ?? configuredProvider?.apiKey);
   const inputType = normalizeOptionalInputType(options.inputType);
   const queryInputType = normalizeOptionalInputType(options.queryInputType);
   const documentInputType = normalizeOptionalInputType(options.documentInputType);
   return {
     baseUrl,
-    headers: buildHeaders({ apiKey, extra: options.remote?.headers }),
+    headers: buildHeaders({
+      apiKey,
+      extra: {
+        ...configuredProvider?.headers,
+        ...options.remote?.headers,
+      },
+    }),
     ssrfPolicy: ssrfPolicyFromHttpBaseUrlAllowedHostname(baseUrl),
     model,
     ...(options.dimensions !== undefined

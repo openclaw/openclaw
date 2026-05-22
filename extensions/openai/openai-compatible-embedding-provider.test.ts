@@ -281,6 +281,61 @@ describe("openai-compatible generic embedding provider", () => {
     }
   });
 
+  it("resolves env-template API key strings before treating them as inline secrets", async () => {
+    const token = "env-template-token";
+    const envVar = "OPENCLAW_TEST_OPENAI_COMPATIBLE_EMBEDDING_TEMPLATE_KEY";
+    process.env[envVar] = token;
+    const server = await startEmbeddingServer({ token });
+
+    try {
+      const { provider } = createOpenAICompatibleEmbeddingProvider(
+        createOptions({
+          model: "text-embedding-bge-m3",
+          remote: {
+            baseUrl: server.baseUrl,
+            apiKey: `\${${envVar}}`,
+          },
+        }),
+      );
+
+      await expect(provider.embed("hello")).resolves.toEqual([0.1, 0.2, 0.3]);
+      expect(server.requests[0]?.headers.authorization).toBe(`Bearer ${token}`);
+    } finally {
+      delete process.env[envVar];
+    }
+  });
+
+  it("reads connection settings from configured OpenAI-compatible provider aliases", async () => {
+    const token = "alias-token";
+    const server = await startEmbeddingServer({ token });
+    const { provider, client } = createOpenAICompatibleEmbeddingProvider(
+      createOptions({
+        config: {
+          models: {
+            providers: {
+              "tenant-embeddings": {
+                api: "openai-completions",
+                baseUrl: server.baseUrl,
+                apiKey: token,
+                headers: {
+                  "x-tenant": "tenant-a",
+                },
+                models: [],
+              },
+            },
+          },
+        } as EmbeddingProviderCreateOptions["config"],
+        provider: "tenant-embeddings",
+        model: "text-embedding-bge-m3",
+      }),
+    );
+
+    expect(client.baseUrl).toBe(server.baseUrl);
+    await expect(provider.embed("hello")).resolves.toEqual([0.1, 0.2, 0.3]);
+    expect(server.requests[0]?.headers.authorization).toBe(`Bearer ${token}`);
+    expect(server.requests[0]?.headers["x-tenant"]).toBe("tenant-a");
+  });
+
   it("maps configured memory input_type labels onto query and document requests", async () => {
     const server = await startEmbeddingServer({
       respond: ({ body }) => {

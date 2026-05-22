@@ -10,6 +10,9 @@ import {
   type EmbeddingProviderAdapter,
 } from "./embedding-providers.js";
 
+const OPENAI_COMPATIBLE_EMBEDDING_PROVIDER_ID = "openai-compatible";
+const OPENAI_COMPATIBLE_MODEL_APIS = new Set(["openai-completions", "openai-responses"]);
+
 export { listRegisteredEmbeddingProviders };
 
 export function listRegisteredEmbeddingProviderAdapters(): EmbeddingProviderAdapter[] {
@@ -46,7 +49,12 @@ function readConfiguredProviderApiId(providerId: string, cfg?: OpenClawConfig): 
     return undefined;
   }
   const normalizedApi = normalizeProviderId(api);
-  return normalizedApi && normalizedApi !== normalized ? normalizedApi : undefined;
+  const embeddingProviderId = OPENAI_COMPATIBLE_MODEL_APIS.has(normalizedApi)
+    ? OPENAI_COMPATIBLE_EMBEDDING_PROVIDER_ID
+    : normalizedApi;
+  return embeddingProviderId && embeddingProviderId !== normalized
+    ? embeddingProviderId
+    : undefined;
 }
 
 function resolveEmbeddingProviderLookupIds(id: string, cfg?: OpenClawConfig): string[] {

@@ -83,7 +83,7 @@ describe("embedding provider runtime resolution", () => {
         models: {
           providers: {
             "tenant-embeddings": {
-              api: "openai-compatible",
+              api: "openai-completions",
               models: [],
             },
           },
@@ -103,7 +103,7 @@ describe("embedding provider runtime resolution", () => {
         models: {
           providers: {
             "tenant-embeddings": {
-              api: "openai-compatible",
+              api: "openai-completions",
               models: [],
             },
           },
