@@ -128,6 +128,12 @@ export async function runDoctorRepairSequence(params: {
   // Parallel I/O: dep cleanup and OAuth repairs are filesystem-only
   // operations independent of config state. Running them concurrently
   // reduces total wall-clock time from sum to max.
+  //
+  // Safety: each function catches I/O errors internally and returns a
+  // structured {changes, warnings} result — none of them throw on expected
+  // failure paths. Promise.all is safe here because every branch handles
+  // its own errors. If a future change adds an uncaught throw path, it will
+  // lose results from all 3 branches; add internal error handling instead.
   const [pluginDependencyCleanup, legacyOAuthSidecarRepair, staleOAuthShadowRepair] =
     await Promise.all([
       cleanupLegacyPluginDependencyState({ env }),
