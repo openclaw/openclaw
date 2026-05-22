@@ -518,6 +518,7 @@ describe("talk.session unified handlers", () => {
                 provider: "openai",
                 providers: { openai: { apiKey: "openai-key" } },
                 instructions: "Speak warmly.",
+                consultRouting: "force-agent-consult",
               },
             },
           }) as OpenClawConfig,
@@ -537,6 +538,7 @@ describe("talk.session unified handlers", () => {
     expect(relayCreateInput.instructions).toContain(
       "Additional realtime instructions:\nSpeak warmly.",
     );
+    expect(relayCreateInput.forceAgentConsultOnFinalTranscript).toBe(true);
     expect(relayCreateInput.instructions).toContain("device or home-control actions, lights");
     expect(relayCreateInput.instructions).toContain("Let me check that for you");
     expectRespondOk(createRespond, {

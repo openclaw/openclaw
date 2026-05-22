@@ -338,7 +338,7 @@ describe("talk realtime gateway relay", () => {
     stopTalkRealtimeRelaySession({ relaySessionId: session.relaySessionId, connId: "conn-1" });
 
     expect(bridge.sendAudio).toHaveBeenCalledWith(Buffer.from("audio-in"));
-    expect(bridge.sendUserMessage).not.toHaveBeenCalledWith("hello");
+    expect(bridge.sendUserMessage).toHaveBeenCalledWith("hello");
     expect(bridge.setMediaTimestamp).toHaveBeenCalledWith(123);
     expect(bridge.submitToolResult).toHaveBeenNthCalledWith(
       1,
@@ -439,7 +439,7 @@ describe("talk realtime gateway relay", () => {
     expectRecordFields(closePayload.talkEvent, { type: "session.closed", final: true });
   });
 
-  it("forces an agent consult when realtime transcript finalizes without a provider tool call", async () => {
+  it("preserves provider-direct replies unless forced consult routing is configured", async () => {
     vi.useFakeTimers();
 
     let bridgeRequest: RealtimeVoiceBridgeCreateRequest | undefined;
@@ -479,6 +479,67 @@ describe("talk realtime gateway relay", () => {
       providerConfig: {},
       instructions: "be brief",
       tools: [],
+    });
+    await Promise.resolve();
+
+    bridgeRequest?.onTranscript?.("user", "Can you answer directly?", true);
+    expect(bridge.sendUserMessage).toHaveBeenLastCalledWith("Can you answer directly?");
+    expect(
+      events.some((entry) => {
+        const payload = entry.payload;
+        return (
+          typeof payload === "object" &&
+          payload !== null &&
+          (payload as Record<string, unknown>).type === "toolCall" &&
+          (payload as Record<string, unknown>).forced === true
+        );
+      }),
+    ).toBe(false);
+
+    stopTalkRealtimeRelaySession({ relaySessionId: session.relaySessionId, connId: "conn-1" });
+  });
+
+  it("forces an agent consult when configured and realtime transcript finalizes without a provider tool call", async () => {
+    vi.useFakeTimers();
+
+    let bridgeRequest: RealtimeVoiceBridgeCreateRequest | undefined;
+    const bridge = {
+      supportsToolResultContinuation: true,
+      connect: vi.fn(async () => undefined),
+      sendAudio: vi.fn(),
+      setMediaTimestamp: vi.fn(),
+      sendUserMessage: vi.fn(),
+      triggerGreeting: vi.fn(),
+      handleBargeIn: vi.fn(),
+      submitToolResult: vi.fn(),
+      acknowledgeMark: vi.fn(),
+      close: vi.fn(),
+      isConnected: vi.fn(() => true),
+    };
+    const provider: RealtimeVoiceProviderPlugin = {
+      id: "relay-test",
+      label: "Relay Test",
+      isConfigured: () => true,
+      createBridge: (req) => {
+        bridgeRequest = req;
+        return bridge;
+      },
+    };
+    const events: Array<{ event: string; payload: unknown; connIds: string[] }> = [];
+    const context = {
+      broadcastToConnIds: (event: string, payload: unknown, connIds: ReadonlySet<string>) => {
+        events.push({ event, payload, connIds: [...connIds] });
+      },
+    } as never;
+
+    const session = createTalkRealtimeRelaySession({
+      context,
+      connId: "conn-1",
+      provider,
+      providerConfig: {},
+      instructions: "be brief",
+      tools: [],
+      forceAgentConsultOnFinalTranscript: true,
     });
     await Promise.resolve();
 
@@ -652,6 +713,7 @@ describe("talk realtime gateway relay", () => {
       providerConfig: {},
       instructions: "be brief",
       tools: [],
+      forceAgentConsultOnFinalTranscript: true,
     });
     await Promise.resolve();
     bridgeRequest?.onTranscript?.("user", "Can you check this?", true);
@@ -686,6 +748,7 @@ describe("talk realtime gateway relay", () => {
       providerConfig: {},
       instructions: "be brief",
       tools: [],
+      forceAgentConsultOnFinalTranscript: true,
     });
     await Promise.resolve();
     bridgeRequest?.onTranscript?.("user", "проверь статус", true);
@@ -719,6 +782,7 @@ describe("talk realtime gateway relay", () => {
       providerConfig: {},
       instructions: "be brief",
       tools: [],
+      forceAgentConsultOnFinalTranscript: true,
     });
     await Promise.resolve();
     bridgeRequest?.onTranscript?.("user", "Cancel this consult", true);

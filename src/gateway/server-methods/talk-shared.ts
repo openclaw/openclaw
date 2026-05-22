@@ -131,6 +131,7 @@ export function buildTalkRealtimeConfig(config: OpenClawConfig, requestedProvide
     mode: normalizeOptionalLowercaseString(talkRealtime?.mode),
     transport: normalizeOptionalLowercaseString(talkRealtime?.transport),
     brain: normalizeOptionalLowercaseString(talkRealtime?.brain),
+    consultRouting: normalizeOptionalLowercaseString(talkRealtime?.consultRouting),
   };
 }
 

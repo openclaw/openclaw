@@ -123,6 +123,7 @@ type CreateTalkRealtimeRelaySessionParams = {
   tools: RealtimeVoiceTool[];
   model?: string;
   voice?: string;
+  forceAgentConsultOnFinalTranscript?: boolean;
 };
 
 type TalkRealtimeRelaySessionResult = {
@@ -485,7 +486,11 @@ export function createTalkRealtimeRelaySession(
       );
       if (role === "user" && final && text.trim()) {
         const question = text.trim();
-        scheduleForcedAgentConsult(relay, question);
+        if (params.forceAgentConsultOnFinalTranscript) {
+          scheduleForcedAgentConsult(relay, question);
+        } else {
+          relay?.bridge.sendUserMessage(question);
+        }
       }
     },
     onToolCall: (toolCall) => {
