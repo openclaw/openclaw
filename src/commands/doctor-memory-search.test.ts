@@ -134,6 +134,7 @@ function resetMemoryRecallMocks() {
   repairShortTermPromotionArtifacts.mockResolvedValue({
     changed: false,
     removedInvalidEntries: 0,
+    removedTempFiles: 0,
     rewroteStore: false,
     removedStaleLock: false,
   });
@@ -875,6 +876,7 @@ describe("memory recall doctor integration", () => {
     repairShortTermPromotionArtifacts.mockResolvedValueOnce({
       changed: true,
       removedInvalidEntries: 1,
+      removedTempFiles: 0,
       rewroteStore: true,
       removedStaleLock: true,
     });
@@ -892,6 +894,44 @@ describe("memory recall doctor integration", () => {
     expect(message).toContain("Memory recall artifacts repaired:");
     expect(message).toContain("rewrote recall store");
     expect(message).toContain("removed stale promotion lock");
+  });
+
+  it("reports temp-only memory recall repair during doctor --fix", async () => {
+    auditShortTermPromotionArtifacts.mockResolvedValueOnce({
+      storePath: "/tmp/agent-default/workspace/memory/.dreams/short-term-recall.json",
+      lockPath: "/tmp/agent-default/workspace/memory/.dreams/short-term-promotion.lock",
+      exists: true,
+      entryCount: 12,
+      promotedCount: 4,
+      spacedEntryCount: 2,
+      conceptTaggedEntryCount: 10,
+      invalidEntryCount: 0,
+      issues: [
+        {
+          severity: "warn",
+          code: "recall-temp-stale",
+          message: "Short-term recall temp files are stale.",
+          fixable: true,
+        },
+      ],
+    });
+    repairShortTermPromotionArtifacts.mockResolvedValueOnce({
+      changed: true,
+      removedInvalidEntries: 0,
+      removedTempFiles: 3,
+      rewroteStore: false,
+      removedStaleLock: false,
+    });
+    const prompter = createPrompter();
+
+    await maybeRepairMemoryRecallHealth({ cfg, prompter });
+
+    expect(note).toHaveBeenCalledTimes(1);
+    const message = firstNoteMessage();
+    expect(message).toContain("Memory recall artifacts repaired:");
+    expect(message).toContain("removed 3 stale temp file(s)");
+    expect(message).not.toContain("rewrote recall store");
+    expect(message).not.toContain("removed stale promotion lock");
   });
 
   it("runs dreaming artifact repair during doctor --fix", async () => {

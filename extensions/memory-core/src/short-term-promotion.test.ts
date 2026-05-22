@@ -852,7 +852,9 @@ describe("short-term promotion", () => {
       await fs.writeFile(phaseStorePath, phaseStoreRaw, "utf-8");
 
       const actualFs = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises");
+      const reads: string[] = [];
       const readFile = vi.spyOn(fs, "readFile").mockImplementation(async (target, options) => {
+        reads.push(String(target));
         if (typeof target === "string" && target === phaseStorePath) {
           throw Object.assign(new Error("phase store unavailable"), { code: "EACCES" });
         }
@@ -872,6 +874,7 @@ describe("short-term promotion", () => {
         readFile.mockRestore();
       }
 
+      expect(reads).toContain(phaseStorePath);
       expect(await fs.readFile(phaseStorePath, "utf-8")).toBe(phaseStoreRaw);
     });
   });
