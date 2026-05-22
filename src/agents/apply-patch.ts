@@ -7,6 +7,13 @@ import { openRootFile, type RootFileOpenResult } from "../infra/boundary-file-re
 import { root as fsRoot } from "../infra/fs-safe.js";
 import { PATH_ALIAS_POLICIES, type PathAliasPolicy } from "../infra/path-alias-guards.js";
 import { applyUpdateHunk } from "./apply-patch-update.js";
+import {
+  buildSensitiveHostDenyMutations,
+  mkdirHostPathWithDenyMutations,
+  removeHostPathWithDenyMutations,
+  type SensitiveHostDenyMutationOptions,
+  writeHostFileWithDenyMutations,
+} from "./host-mutation-policy.js";
 import { toRelativeSandboxPath, resolvePathFromInput } from "./path-policy.js";
 import { assertSandboxPath } from "./sandbox-paths.js";
 import type { SandboxFsBridge } from "./sandbox/fs-bridge.js";
@@ -73,6 +80,7 @@ type ApplyPatchOptions = {
   sandbox?: SandboxApplyPatchConfig;
   /** Restrict patch paths to the workspace root (cwd). Default: true. Set false to opt out. */
   workspaceOnly?: boolean;
+  denyMutationAgentDirs?: readonly string[];
   signal?: AbortSignal;
 };
 
@@ -83,7 +91,12 @@ const applyPatchSchema = Type.Object({
 });
 
 export function createApplyPatchTool(
-  options: { cwd?: string; sandbox?: SandboxApplyPatchConfig; workspaceOnly?: boolean } = {},
+  options: {
+    cwd?: string;
+    sandbox?: SandboxApplyPatchConfig;
+    workspaceOnly?: boolean;
+    denyMutationAgentDirs?: readonly string[];
+  } = {},
 ): AgentTool<typeof applyPatchSchema, ApplyPatchToolDetails> {
   const cwd = options.cwd ?? process.cwd();
   const sandbox = options.sandbox;
@@ -111,6 +124,7 @@ export function createApplyPatchTool(
         cwd,
         sandbox,
         workspaceOnly,
+        denyMutationAgentDirs: options.denyMutationAgentDirs,
         signal,
       });
 
@@ -254,7 +268,14 @@ function resolvePatchFileOps(options: ApplyPatchOptions): PatchFileOps {
     };
   }
   const workspaceOnly = options.workspaceOnly !== false;
-  const rootPromise = workspaceOnly ? fsRoot(options.cwd) : undefined;
+  const denyMutationOptions: SensitiveHostDenyMutationOptions = {
+    agentDirs: options.denyMutationAgentDirs,
+  };
+  const rootPromise = workspaceOnly
+    ? fsRoot(options.cwd, {
+        denyMutations: buildSensitiveHostDenyMutations(process.env, denyMutationOptions),
+      })
+    : undefined;
   return {
     readFile: async (filePath) => {
       if (!workspaceOnly) {
@@ -274,7 +295,7 @@ function resolvePatchFileOps(options: ApplyPatchOptions): PatchFileOps {
     },
     writeFile: async (filePath, content) => {
       if (!workspaceOnly) {
-        await fs.writeFile(filePath, content, "utf8");
+        await writeHostFileWithDenyMutations(filePath, content, denyMutationOptions);
         return;
       }
       const relative = toRelativeSandboxPath(options.cwd, filePath);
@@ -282,7 +303,7 @@ function resolvePatchFileOps(options: ApplyPatchOptions): PatchFileOps {
     },
     remove: async (filePath) => {
       if (!workspaceOnly) {
-        await fs.rm(filePath);
+        await removeHostPathWithDenyMutations(filePath, denyMutationOptions);
         return;
       }
       const relative = toRelativeSandboxPath(options.cwd, filePath);
@@ -290,7 +311,7 @@ function resolvePatchFileOps(options: ApplyPatchOptions): PatchFileOps {
     },
     mkdirp: async (dir) => {
       if (!workspaceOnly) {
-        await fs.mkdir(dir, { recursive: true });
+        await mkdirHostPathWithDenyMutations(dir, denyMutationOptions);
         return;
       }
       const relative = toRelativeSandboxPath(options.cwd, dir, { allowRoot: true });

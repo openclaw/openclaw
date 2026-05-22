@@ -706,7 +706,10 @@ export function createOpenClawCodingTools(options?: {
         if (sandboxRoot) {
           continue;
         }
-        const wrapped = createHostWorkspaceWriteTool(workspaceRoot, { workspaceOnly });
+        const wrapped = createHostWorkspaceWriteTool(workspaceRoot, {
+          workspaceOnly,
+          denyMutationAgentDirs: options?.agentDir ? [options.agentDir] : undefined,
+        });
         base.push(workspaceOnly ? wrapToolWorkspaceRootGuard(wrapped, workspaceRoot) : wrapped);
         continue;
       }
@@ -714,7 +717,10 @@ export function createOpenClawCodingTools(options?: {
         if (sandboxRoot) {
           continue;
         }
-        const wrapped = createHostWorkspaceEditTool(workspaceRoot, { workspaceOnly });
+        const wrapped = createHostWorkspaceEditTool(workspaceRoot, {
+          workspaceOnly,
+          denyMutationAgentDirs: options?.agentDir ? [options.agentDir] : undefined,
+        });
         base.push(workspaceOnly ? wrapToolWorkspaceRootGuard(wrapped, workspaceRoot) : wrapped);
         continue;
       }
@@ -789,6 +795,7 @@ export function createOpenClawCodingTools(options?: {
               ? { root: sandboxRoot, bridge: sandboxFsBridge! }
               : undefined,
           workspaceOnly: applyPatchWorkspaceOnly,
+          denyMutationAgentDirs: options?.agentDir ? [options.agentDir] : undefined,
         });
   options?.recordToolPrepStage?.("shell-tools");
   const pluginToolAllowlist = collectExplicitAllowlist([
