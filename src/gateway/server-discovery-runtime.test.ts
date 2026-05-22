@@ -2,11 +2,13 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { PluginGatewayDiscoveryServiceRegistration } from "../plugins/registry-types.js";
 
 type WriteWideAreaGatewayZone = typeof import("../infra/widearea-dns.js").writeWideAreaGatewayZone;
+type ResolveWideAreaDiscoveryDomain =
+  typeof import("../infra/widearea-dns.js").resolveWideAreaDiscoveryDomain;
 
 const mocks = vi.hoisted(() => ({
   pickPrimaryTailnetIPv4: vi.fn(() => "100.64.0.10"),
   pickPrimaryTailnetIPv6: vi.fn(() => undefined as string | undefined),
-  resolveWideAreaDiscoveryDomain: vi.fn(() => "openclaw.internal."),
+  resolveWideAreaDiscoveryDomain: vi.fn<ResolveWideAreaDiscoveryDomain>(() => "openclaw.internal."),
   writeWideAreaGatewayZone: vi.fn<WriteWideAreaGatewayZone>(async () => ({
     changed: true,
     zonePath: "/tmp/openclaw.internal.db",
