@@ -513,6 +513,7 @@ async function compactEmbeddedPiSessionDirectOnce(
     agentId: earlyAgentIds.sessionAgentId,
     sessionKey: params.sessionKey,
   });
+  const selectedHarnessRuntime = params.agentHarnessId ?? runtimeHarnessPolicy.runtime;
   const provider = resolveSelectedOpenAIPiRuntimeProvider({
     provider: modelConfigProvider,
     harnessRuntime: runtimeHarnessPolicy.runtime,
@@ -689,7 +690,7 @@ async function compactEmbeddedPiSessionDirectOnce(
       cfg: params.config,
       provider: resolveContextConfigProviderForRuntime({
         provider: modelConfigProvider,
-        runtimeId: runtimeHarnessPolicy.runtime,
+        runtimeId: selectedHarnessRuntime,
       }),
       modelId,
       modelContextTokens: readPiModelContextTokens(runtimeModel),

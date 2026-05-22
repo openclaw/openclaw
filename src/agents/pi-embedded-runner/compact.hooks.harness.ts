@@ -114,6 +114,7 @@ export const resolveAgentHarnessPolicyMock = vi.fn(() => ({ runtime: "pi" }));
 export const resolveSandboxContextMock = vi.fn(async () => null);
 export const maybeCompactAgentHarnessSessionMock: Mock<(params?: unknown) => Promise<unknown>> =
   vi.fn(async () => undefined);
+export const resolveContextWindowInfoMock = vi.fn(() => ({ tokens: 128_000 }));
 export const rotateTranscriptAfterCompactionMock: Mock<
   (_params?: unknown) => Promise<CompactionTranscriptRotation>
 > = vi.fn(async () => ({
@@ -271,6 +272,8 @@ export function resetCompactSessionStateMocks(): void {
   resolveSandboxContextMock.mockResolvedValue(null);
   maybeCompactAgentHarnessSessionMock.mockReset();
   maybeCompactAgentHarnessSessionMock.mockResolvedValue(undefined);
+  resolveContextWindowInfoMock.mockReset();
+  resolveContextWindowInfoMock.mockReturnValue({ tokens: 128_000 });
   rotateTranscriptAfterCompactionMock.mockReset();
   rotateTranscriptAfterCompactionMock.mockResolvedValue({ rotated: false });
   listRegisteredPluginAgentPromptGuidanceMock.mockReset();
@@ -541,7 +544,7 @@ export async function loadCompactHooksHarness(): Promise<{
   }));
 
   vi.doMock("../context-window-guard.js", () => ({
-    resolveContextWindowInfo: vi.fn(() => ({ tokens: 128_000 })),
+    resolveContextWindowInfo: resolveContextWindowInfoMock,
   }));
 
   vi.doMock("../bootstrap-files.js", () => ({

@@ -92,6 +92,21 @@ function configuredOpenAIAuthOrderStartsWithCodexProfile(config: OpenClawConfig 
   return hasOpenAICodexAuthProfileOverride(firstProfile);
 }
 
+function configuredOpenAICodexAuthOrderHasProfile(config: OpenClawConfig | undefined) {
+  if (!openAIProviderUsesCodexRuntimeByDefault({ provider: OPENAI_PROVIDER_ID, config })) {
+    return false;
+  }
+  const configuredCodexOrder = findNormalizedProviderValue(
+    config?.auth?.order,
+    OPENAI_CODEX_PROVIDER_ID,
+  );
+  return (
+    configuredCodexOrder?.some(
+      (profileId) => typeof profileId === "string" && profileId.trim().length > 0,
+    ) === true
+  );
+}
+
 export function shouldRouteOpenAIPiThroughCodexAuthProvider(params: {
   provider: string;
   harnessRuntime?: string;
@@ -184,7 +199,12 @@ export function resolveSelectedOpenAIPiRuntimeProvider(params: {
   if (!isOpenAIProvider(params.provider)) {
     return params.provider;
   }
-  if (runtime === "codex") {
+  if (
+    runtime === "codex" &&
+    (hasOpenAICodexAuthProfileOverride(params.authProfileId) ||
+      configuredOpenAIAuthOrderStartsWithCodexProfile(params.config) ||
+      configuredOpenAICodexAuthOrderHasProfile(params.config))
+  ) {
     return OPENAI_CODEX_PROVIDER_ID;
   }
   return runtime === "pi" &&
