@@ -217,7 +217,7 @@ export function resolveCompletionProfilePath(
   shell: CompletionShell,
   options: CompletionProfilePathOptions = {},
 ): string {
-  return resolveCompletionProfilePathCandidates(shell, options)[0] as string;
+  return resolveCompletionProfilePathCandidates(shell, options)[0];
 }
 
 /**
@@ -236,7 +236,7 @@ async function resolveExistingCompletionProfilePath(
       return candidate;
     }
   }
-  return candidates[0] as string;
+  return candidates[0];
 }
 
 /** Returns whether a shell profile already contains an OpenClaw completion block or source line. */
