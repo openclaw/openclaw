@@ -55,13 +55,20 @@ export type NodeRuntimeDiagnostics = {
 
 /**
  * Well-known version manager directory markers and their display names.
- * Order matches VERSION_MANAGER_MARKERS in runtime-paths.ts.
+ * The marker set mirrors VERSION_MANAGER_MARKERS in daemon/runtime-paths.ts
+ * (which isVersionManagedNodePath consults) so the boolean "managed" check
+ * and the display name stay in sync; a runtime-paths.test assertion guards
+ * against drift. Some managers map from multiple markers (e.g. fnm has a
+ * classic, an XDG, and a macOS Application Support layout).
  */
 const VERSION_MANAGER_NAMES: ReadonlyArray<{ marker: string; name: string }> = [
   { marker: "/.nvm/", name: "nvm" },
   { marker: "/.fnm/", name: "fnm" },
+  { marker: "/.local/share/fnm/", name: "fnm" },
+  { marker: "/library/application support/fnm/", name: "fnm" },
   { marker: "/.volta/", name: "volta" },
   { marker: "/.asdf/", name: "asdf" },
+  { marker: "/.local/share/mise/", name: "mise" },
   { marker: "/.n/", name: "n" },
   { marker: "/.nodenv/", name: "nodenv" },
   { marker: "/.nodebrew/", name: "nodebrew" },
@@ -76,7 +83,10 @@ export function detectVersionManagerName(execPath: string | null): string | null
   if (!execPath) {
     return null;
   }
-  const normalized = execPath.replace(/\\/g, "/");
+  // Normalize separators and case to mirror isVersionManagedNodePath's
+  // comparison (daemon/runtime-paths.ts), so a macOS "Library/Application
+  // Support/fnm" path matches the lowercase marker.
+  const normalized = execPath.replace(/\\/g, "/").toLowerCase();
   for (const { marker, name } of VERSION_MANAGER_NAMES) {
     if (normalized.includes(marker)) {
       return name;

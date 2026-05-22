@@ -11,6 +11,7 @@
 
 import { describe, expect, it } from "vitest";
 import type { RuntimeDetails } from "../infra/runtime-guard.js";
+import { isVersionManagedNodePath } from "../daemon/runtime-paths.js";
 import {
   buildNodeRuntimeSummary,
   buildNodeRuntimeWarnings,
@@ -60,6 +61,23 @@ describe("detectVersionManagerName", () => {
   it("detects nvm", () => {
     expect(detectVersionManagerName("/home/user/.nvm/versions/node/v24.14.0/bin/node")).toBe("nvm");
   });
+  it("detects fnm via XDG data dir (.local/share/fnm)", () => {
+    expect(
+      detectVersionManagerName("/home/user/.local/share/fnm/node-versions/v24/installation/bin/node"),
+    ).toBe("fnm");
+  });
+  it("detects fnm via macOS Application Support (case-insensitive)", () => {
+    expect(
+      detectVersionManagerName(
+        "/Users/u/Library/Application Support/fnm/node-versions/v24/installation/bin/node",
+      ),
+    ).toBe("fnm");
+  });
+  it("detects mise (.local/share/mise)", () => {
+    expect(
+      detectVersionManagerName("/home/user/.local/share/mise/installs/node/24/bin/node"),
+    ).toBe("mise");
+  });
 
   it("detects fnm", () => {
     expect(detectVersionManagerName("/home/user/.fnm/node-versions/v24.14.0/bin/node")).toBe("fnm");
@@ -101,6 +119,31 @@ describe("detectVersionManagerName", () => {
 });
 
 // ─── collectNodeRuntimeDiagnostics ──────────────────────────────
+
+describe("version-manager marker contract (no drift vs runtime-paths)", () => {
+  // Every marker path that isVersionManagedNodePath treats as managed must
+  // also yield a specific manager name; otherwise Doctor would say only
+  // "via version manager". Guards against the two marker sets drifting.
+  const managedPaths = [
+    "/home/u/.nvm/versions/node/v24/bin/node",
+    "/home/u/.fnm/node-versions/v24/installation/bin/node",
+    "/home/u/.local/share/fnm/node-versions/v24/installation/bin/node",
+    "/Users/u/Library/Application Support/fnm/node-versions/v24/installation/bin/node",
+    "/home/u/.volta/tools/image/node/24/bin/node",
+    "/home/u/.asdf/installs/nodejs/24/bin/node",
+    "/home/u/.local/share/mise/installs/node/24/bin/node",
+    "/home/u/.n/bin/node",
+    "/home/u/.nodenv/versions/24/bin/node",
+    "/home/u/.nodebrew/node/v24/bin/node",
+    "/home/u/nvs/node/24/x64/bin/node",
+  ];
+  for (const p of managedPaths) {
+    it(`names the manager for a managed path: ${p}`, () => {
+      expect(isVersionManagedNodePath(p)).toBe(true);
+      expect(detectVersionManagerName(p)).not.toBeNull();
+    });
+  }
+});
 
 describe("collectNodeRuntimeDiagnostics", () => {
   it("collects diagnostics from injected runtime details", () => {
