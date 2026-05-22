@@ -286,6 +286,7 @@ export function listUsableProviderAuthProfileIds(params: {
   provider: string;
   cfg?: OpenClawConfig;
   agentDir?: string;
+  allowKeychainPrompt?: boolean;
 }): { agentDir: string; profileIds: string[] } {
   try {
     const agentDir = params.agentDir?.trim() || resolveDefaultAgentDir(params.cfg ?? {});
@@ -303,7 +304,7 @@ export function listUsableProviderAuthProfileIds(params: {
     }
 
     const refreshableStore = loadAuthProfileStoreWithoutExternalProfiles(agentDir, {
-      allowKeychainPrompt: true,
+      allowKeychainPrompt: params.allowKeychainPrompt ?? false,
       resolveLegacyOAuthSidecars: true,
     });
     return {
@@ -323,6 +324,7 @@ export function isProviderAuthProfileConfigured(params: {
   provider: string;
   cfg?: OpenClawConfig;
   agentDir?: string;
+  allowKeychainPrompt?: boolean;
 }): boolean {
   return listUsableProviderAuthProfileIds(params).profileIds.length > 0;
 }
@@ -331,6 +333,7 @@ export async function resolveProviderAuthProfileApiKey(params: {
   provider: string;
   cfg?: OpenClawConfig;
   agentDir?: string;
+  allowKeychainPrompt?: boolean;
 }): Promise<string | undefined> {
   const { agentDir, profileIds } = listUsableProviderAuthProfileIds(params);
   if (!agentDir || profileIds.length === 0) {

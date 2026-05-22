@@ -50,6 +50,7 @@ final class TalkModeManager: NSObject {
     var gatewayTalkDefaultVoiceId: String?
     var gatewayTalkProviderLabel: String = "Not loaded"
     var gatewayTalkTransportLabel: String = "Not loaded"
+    var gatewayTalkUsesRealtimeRelay: Bool = false
     var gatewayTalkRealtimeProviderLabel: String?
     var gatewayTalkRealtimeModelId: String?
     var gatewayTalkRealtimeVoiceId: String?
@@ -2188,6 +2189,7 @@ extension TalkModeManager {
             self.gatewayTalkProviderLabel = providerSelection == .gatewayDefault
                 ? Self.displayName(forProvider: activeProvider)
                 : providerSelection.label
+            self.gatewayTalkUsesRealtimeRelay = executionMode == .realtimeRelay
             self.gatewayTalkTransportLabel = executionMode == .realtimeRelay ? "Gateway relay" : "Native"
             self.gatewayTalkRealtimeProviderLabel = realtimeProvider.map { Self.displayName(forProvider: $0) }
             self.gatewayTalkRealtimeModelId = realtimeModelId
@@ -2212,6 +2214,7 @@ extension TalkModeManager {
             self.realtimeVoiceId = nil
             self.gatewayTalkProviderLabel = "Not loaded"
             self.gatewayTalkTransportLabel = "Not loaded"
+            self.gatewayTalkUsesRealtimeRelay = false
             self.gatewayTalkRealtimeProviderLabel = nil
             self.gatewayTalkRealtimeModelId = nil
             self.gatewayTalkRealtimeVoiceId = nil
