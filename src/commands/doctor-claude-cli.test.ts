@@ -237,6 +237,55 @@ describe("noteClaudeCliHealth", () => {
     });
   });
 
+  it("includes an actionable fix when the Claude project dir is readonly", async () => {
+    await withTempHome(({ homeDir, workspaceDir }) => {
+      const projectDir = resolveClaudeCliProjectDirForWorkspace({ workspaceDir, homeDir });
+      fs.mkdirSync(projectDir, { recursive: true });
+      const accessSync = fs.accessSync;
+      vi.spyOn(fs, "accessSync").mockImplementation((target, mode) => {
+        if (target === projectDir && mode === fs.constants.W_OK) {
+          throw new Error("readonly");
+        }
+        return accessSync(target, mode);
+      });
+
+      const noteFn = vi.fn();
+      noteClaudeCliHealth(
+        {
+          agents: {
+            defaults: {
+              model: { primary: "claude-cli/claude-sonnet-4-6" },
+            },
+          },
+        },
+        {
+          homeDir,
+          workspaceDir,
+          noteFn,
+          store: createStore({
+            [CLAUDE_CLI_PROFILE_ID]: {
+              type: "oauth",
+              provider: "claude-cli",
+              access: "token-a",
+              refresh: "token-r",
+              expires: Date.now() + 60_000,
+            },
+          }),
+          readClaudeCliCredentials: () => ({
+            type: "oauth",
+            expires: Date.now() + 60_000,
+          }),
+          resolveCommandPath: () => "/opt/homebrew/bin/claude",
+        },
+      );
+
+      const body = noteBody(noteFn);
+      expect(body).toContain("Claude project dir:");
+      expect(body).toContain("is not writable by this user.");
+      expect(body).toContain("- Fix: make the Claude project dir a readable, writable directory");
+    });
+  });
+
   it("warns when Claude auth is not readable headlessly", async () => {
     await withTempHome(({ homeDir, workspaceDir }) => {
       const noteFn = vi.fn();

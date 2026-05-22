@@ -334,11 +334,15 @@ export function noteClaudeCliHealth(
     }
 
     lines.push(formatProjectDirHealthLine(target.projectDir, target.projectDirHealth, agentLabel));
-    if (target.projectDirHealth === "unreadable" || target.projectDirHealth === "not_directory") {
+    if (
+      target.projectDirHealth === "readonly" ||
+      target.projectDirHealth === "unreadable" ||
+      target.projectDirHealth === "not_directory"
+    ) {
       fixHints.push(
         `- Fix: make ${
           agentLabel ? `agent ${agentLabel}'s Claude project dir` : "the Claude project dir"
-        } readable, or remove the broken path and let Claude recreate it.`,
+        } a readable, writable directory, or remove the broken path and let Claude recreate it.`,
       );
     }
   }
