@@ -101,7 +101,8 @@ describe("tool-catalog", () => {
   });
 
   it("registers every cron_* per-action tool in the openclaw tool group", () => {
-    const openclawGroup = CORE_TOOL_GROUPS["group:openclaw"];
+    const groups = CORE_TOOL_GROUPS as Record<string, string[] | undefined>;
+    const openclawGroup = groups["group:openclaw"];
     expect(openclawGroup).toBeDefined();
     for (const id of CRON_PER_ACTION_TOOL_IDS) {
       expect(openclawGroup).toContain(id);
@@ -109,7 +110,8 @@ describe("tool-catalog", () => {
   });
 
   it("registers every cron_* per-action tool in the automation section group", () => {
-    const automation = CORE_TOOL_GROUPS["group:automation"];
+    const groups = CORE_TOOL_GROUPS as Record<string, string[] | undefined>;
+    const automation = groups["group:automation"];
     expect(automation).toBeDefined();
     for (const id of CRON_PER_ACTION_TOOL_IDS) {
       expect(automation).toContain(id);
