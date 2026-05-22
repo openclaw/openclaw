@@ -97,15 +97,38 @@ function writePublishablePluginPackage(repoDir: string): string {
   return packageDir;
 }
 
-function writeLocalDependencyPackage(packageDir: string): void {
+function writeLocalDependencyPackage(
+  packageDir: string,
+  options: { optionalDependencySpec?: string } = {},
+): void {
   const dependencyDir = join(packageDir, "deps", "local-runtime-dep");
   mkdirSync(dependencyDir, { recursive: true });
   writeJsonFile(join(dependencyDir, "package.json"), {
     name: "local-runtime-dep",
     version: "1.0.0",
     main: "index.js",
+    ...(options.optionalDependencySpec
+      ? {
+          optionalDependencies: {
+            "optional-platform-dep": options.optionalDependencySpec,
+          },
+        }
+      : {}),
   });
   writeFileText(join(dependencyDir, "index.js"), "module.exports = 1;\n");
+}
+
+function writeOptionalPlatformDependencyPackage(packageDir: string): string {
+  const dependencyDir = join(packageDir, "deps", "optional-platform-dep");
+  mkdirSync(dependencyDir, { recursive: true });
+  writeJsonFile(join(dependencyDir, "package.json"), {
+    name: "optional-platform-dep",
+    version: "1.0.0",
+    main: "index.js",
+    os: [process.platform === "win32" ? "darwin" : "win32"],
+  });
+  writeFileText(join(dependencyDir, "index.js"), "module.exports = 2;\n");
+  return dependencyDir;
 }
 
 describe("plugin npm package manifest staging", () => {
@@ -313,6 +336,74 @@ describe("plugin npm package manifest staging", () => {
 
     expect(existsSync(nodeModulesPath)).toBe(false);
     expect(readFileSync(join(packageDir, "package.json"), "utf8")).toBe(originalText);
+  });
+
+  it("force-installs missing optional bundled dependencies for portable packs", () => {
+    const repoDir = makeTempRepoRoot(tempDirs, "openclaw-plugin-npm-package-portable-optional-");
+    const packageDir = writePublishablePluginPackage(repoDir);
+    writeFileText(join(packageDir, "dist", "index.js"), "export {};\n");
+    writeFileText(join(packageDir, "dist", "setup-entry.js"), "export {};\n");
+    const optionalDependencyDir = writeOptionalPlatformDependencyPackage(packageDir);
+    writeLocalDependencyPackage(packageDir, {
+      optionalDependencySpec: `file:${optionalDependencyDir}`,
+    });
+    writeJsonFile(join(packageDir, "package.json"), {
+      name: "@openclaw/diffs",
+      version: "2026.5.3",
+      type: "module",
+      dependencies: {
+        "local-runtime-dep": "file:./deps/local-runtime-dep",
+      },
+      openclaw: {
+        extensions: ["./index.ts"],
+        setupEntry: "./setup-entry.ts",
+        compat: {
+          pluginApi: ">=2026.4.30",
+        },
+        release: {
+          publishToNpm: true,
+        },
+      },
+    });
+    writeJsonFile(join(packageDir, "npm-shrinkwrap.json"), {
+      name: "@openclaw/diffs",
+      version: "2026.5.3",
+      lockfileVersion: 3,
+      requires: true,
+      packages: {
+        "": {
+          name: "@openclaw/diffs",
+          version: "2026.5.3",
+          dependencies: {
+            "local-runtime-dep": "file:./deps/local-runtime-dep",
+          },
+        },
+        "deps/local-runtime-dep": {
+          name: "local-runtime-dep",
+          version: "1.0.0",
+          optionalDependencies: {
+            "optional-platform-dep": `file:${optionalDependencyDir}`,
+          },
+        },
+        "node_modules/local-runtime-dep": {
+          resolved: "deps/local-runtime-dep",
+          link: true,
+        },
+      },
+    });
+
+    const nodeModulesPath = join(packageDir, "node_modules");
+    withAugmentedPluginNpmManifestForPackage(
+      { repoRoot: repoDir, packageDir, bundleDependencies: true },
+      () => {
+        expect(existsSync(join(nodeModulesPath, "local-runtime-dep", "package.json"))).toBe(true);
+        expect(existsSync(join(nodeModulesPath, "optional-platform-dep", "package.json"))).toBe(
+          true,
+        );
+      },
+    );
+
+    expect(existsSync(nodeModulesPath)).toBe(false);
   });
 
   it("refuses to pack publishable plugins before package-local runtime files exist", () => {

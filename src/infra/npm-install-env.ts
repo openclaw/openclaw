@@ -156,6 +156,9 @@ function resolveNpmFreshnessBypassMode(
   env: NodeJS.ProcessEnv,
   scope: NpmFreshnessConfigScope,
 ): NpmFreshnessBypassMode {
+  if (process.platform === "win32") {
+    return "before";
+  }
   if (hasRawNpmConfigKey(env, "min-release-age", scope)) {
     return "min-release-age";
   }
@@ -180,6 +183,10 @@ export function applyNpmFreshnessBypassEnv(
 ): void {
   const [arg] = createNpmFreshnessBypassArgs(env, now, scope);
   for (const key of NPM_FRESHNESS_BYPASS_KEYS) {
+    if (process.platform === "win32" && key.includes("-")) {
+      delete env[key];
+      continue;
+    }
     env[key] = "";
   }
   if (arg?.startsWith("--before=")) {
