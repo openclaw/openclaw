@@ -62,7 +62,7 @@ function collectLatestPreCompactionState(entries: SessionEntry[]): SessionEntry[
         latestByKey.set(entry.type, entry);
         break;
       case "custom":
-        latestByKey.set(`custom:${entry.customType}`, entry);
+        latestByKey.set(`custom:${resolveCustomType(entry)}`, entry);
         break;
       default:
         break;
@@ -74,9 +74,14 @@ function collectLatestPreCompactionState(entries: SessionEntry[]): SessionEntry[
 
 function stateEntryKey(entry: SessionEntry): string {
   if (entry.type === "custom") {
-    return `custom:${entry.customType}`;
+    return `custom:${resolveCustomType(entry)}`;
   }
   return entry.type;
+}
+
+function resolveCustomType(entry: SessionEntry): string {
+  const customType = (entry as { customType?: unknown }).customType;
+  return typeof customType === "string" && customType ? customType : "unknown";
 }
 
 function findLatestCompaction(entries: SessionEntry[]): CompactionEntry | undefined {

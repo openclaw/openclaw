@@ -28,7 +28,6 @@ import {
   projectOutboundPayloadPlanForMirror,
 } from "../../infra/outbound/payloads.js";
 import type { SourceDeliveryOutcome } from "../../infra/outbound/source-delivery-plan.js";
-import { normalizeTargetForProvider } from "../../infra/outbound/target-normalization.js";
 import { hasReplyPayloadContent } from "../../interactive/payload.js";
 import { isAudioFileName } from "../../media/mime.js";
 import { stringifyRouteThreadId } from "../../plugin-sdk/channel-route.js";
@@ -48,9 +47,8 @@ import { pickLastNonEmptyTextFromPayloads, pickSummaryFromOutput } from "./helpe
 import type { RunCronAgentTurnResult } from "./run.types.js";
 import { expectsSubagentFollowup, isLikelyInterimCronMessage } from "./subagent-followup-hints.js";
 
-function normalizeDeliveryTarget(channel: string, to: string): string {
-  const toTrimmed = to.trim();
-  return normalizeTargetForProvider(channel, toTrimmed) ?? toTrimmed;
+function normalizeDeliveryTarget(_channel: string, to: string): string {
+  return to.trim();
 }
 
 type NormalizedSilentReplyText = {
