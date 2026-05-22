@@ -18,7 +18,10 @@ vi.mock("../plugins/manifest-contract-eligibility.js", () => ({
   }),
 }));
 
-import { buildMediaUnderstandingManifestMetadataRegistry } from "./manifest-metadata.js";
+import {
+  buildMediaUnderstandingManifestMetadataRegistry,
+  hasAvailableMediaUnderstandingManifestMetadataGaps,
+} from "./manifest-metadata.js";
 
 describe("buildMediaUnderstandingManifestMetadataRegistry", () => {
   beforeEach(() => {
@@ -66,5 +69,78 @@ describe("buildMediaUnderstandingManifestMetadataRegistry", () => {
       buildMediaUnderstandingManifestMetadataRegistry({ plugins: { enabled: false } }),
     ).toEqual(new Map());
     expect(manifestMocks.isAvailable).not.toHaveBeenCalled();
+  });
+
+  it("does not report providers rejected by plugin activation policy", () => {
+    manifestMocks.isAvailable.mockReturnValue(false);
+    manifestMocks.plugins.push({
+      id: "senseaudio",
+      origin: "bundled",
+      contracts: { mediaUnderstandingProviders: ["senseaudio"] },
+      mediaUnderstandingProviderMetadata: {
+        senseaudio: {
+          capabilities: ["audio"],
+        },
+      },
+    });
+
+    expect(buildMediaUnderstandingManifestMetadataRegistry()).toEqual(new Map());
+  });
+
+  it("does not report bundled providers excluded by plugins.allow", () => {
+    manifestMocks.plugins.push({
+      id: "senseaudio",
+      origin: "bundled",
+      contracts: { mediaUnderstandingProviders: ["senseaudio"] },
+      mediaUnderstandingProviderMetadata: {
+        senseaudio: {
+          capabilities: ["audio"],
+        },
+      },
+    });
+
+    expect(
+      buildMediaUnderstandingManifestMetadataRegistry({ plugins: { allow: ["codex"] } }),
+    ).toEqual(new Map());
+  });
+
+  it("does not report bundled providers disabled by plugin entry config", () => {
+    manifestMocks.plugins.push({
+      id: "senseaudio",
+      origin: "bundled",
+      contracts: { mediaUnderstandingProviders: ["senseaudio"] },
+      mediaUnderstandingProviderMetadata: {
+        senseaudio: {
+          capabilities: ["audio"],
+        },
+      },
+    });
+
+    expect(
+      buildMediaUnderstandingManifestMetadataRegistry({
+        plugins: { entries: { senseaudio: { enabled: false } } },
+      }),
+    ).toEqual(new Map());
+  });
+
+  it("detects available providers that need runtime compatibility fallback", () => {
+    manifestMocks.plugins.push({
+      id: "external-audio",
+      origin: "global",
+      contracts: { mediaUnderstandingProviders: ["external-audio"] },
+    });
+
+    expect(hasAvailableMediaUnderstandingManifestMetadataGaps()).toBe(true);
+  });
+
+  it("does not trigger runtime fallback for unavailable metadata-less providers", () => {
+    manifestMocks.isAvailable.mockReturnValue(false);
+    manifestMocks.plugins.push({
+      id: "external-audio",
+      origin: "global",
+      contracts: { mediaUnderstandingProviders: ["external-audio"] },
+    });
+
+    expect(hasAvailableMediaUnderstandingManifestMetadataGaps()).toBe(false);
   });
 });

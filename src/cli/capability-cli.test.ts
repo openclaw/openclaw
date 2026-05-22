@@ -133,6 +133,7 @@ const mocks = vi.hoisted(() => ({
   registerBuiltInMemoryEmbeddingProviders: vi.fn(),
   buildMediaUnderstandingRegistry: vi.fn(() => new Map()),
   buildMediaUnderstandingManifestMetadataRegistry: vi.fn(() => new Map()),
+  hasAvailableMediaUnderstandingManifestMetadataGaps: vi.fn(() => false),
   convertHeicToJpeg: vi.fn(async () => Buffer.from("jpeg-normalized")),
   isWebSearchProviderConfigured: vi.fn(() => false),
   isWebFetchProviderConfigured: vi.fn(() => false),
@@ -246,6 +247,8 @@ vi.mock("../media-understanding/provider-registry.js", () => ({
 vi.mock("../media-understanding/manifest-metadata.js", () => ({
   buildMediaUnderstandingManifestMetadataRegistry:
     mocks.buildMediaUnderstandingManifestMetadataRegistry as typeof import("../media-understanding/manifest-metadata.js").buildMediaUnderstandingManifestMetadataRegistry,
+  hasAvailableMediaUnderstandingManifestMetadataGaps:
+    mocks.hasAvailableMediaUnderstandingManifestMetadataGaps as typeof import("../media-understanding/manifest-metadata.js").hasAvailableMediaUnderstandingManifestMetadataGaps,
 }));
 
 vi.mock("../media/media-services.js", async (importOriginal) => {
@@ -449,6 +452,7 @@ describe("capability cli", () => {
     mocks.resolveExplicitTtsOverrides.mockClear();
     mocks.buildMediaUnderstandingRegistry.mockReset().mockReturnValue(new Map());
     mocks.buildMediaUnderstandingManifestMetadataRegistry.mockReset().mockReturnValue(new Map());
+    mocks.hasAvailableMediaUnderstandingManifestMetadataGaps.mockReset().mockReturnValue(false);
     mocks.convertHeicToJpeg.mockClear();
     mocks.createEmbeddingProvider.mockClear();
     mocks.registerMemoryEmbeddingProvider.mockClear();
