@@ -132,6 +132,47 @@ describe("logs cli", () => {
     expect(stderrWrites.join("")).toContain("Log cursor reset");
   });
 
+  it("uses the passive local Gateway client for implicit loopback log reads", async () => {
+    callGatewayFromCli.mockResolvedValueOnce({
+      file: "/tmp/openclaw.log",
+      lines: ["raw line"],
+    });
+
+    captureStdoutWrites();
+
+    await runLogsCli(["logs"]);
+
+    expect(callGatewayFromCli).toHaveBeenCalledWith(
+      "logs.tail",
+      expect.any(Object),
+      { cursor: undefined, limit: 200, maxBytes: 250_000 },
+      {
+        progress: true,
+        clientName: "gateway-client",
+        mode: "backend",
+        deviceIdentity: null,
+      },
+    );
+  });
+
+  it("keeps explicit Gateway URLs on the normal CLI client identity", async () => {
+    callGatewayFromCli.mockResolvedValueOnce({
+      file: "/tmp/openclaw.log",
+      lines: ["raw line"],
+    });
+
+    captureStdoutWrites();
+
+    await runLogsCli(["logs", "--url", "ws://127.0.0.1:18789"]);
+
+    expect(callGatewayFromCli).toHaveBeenCalledWith(
+      "logs.tail",
+      expect.any(Object),
+      { cursor: undefined, limit: 200, maxBytes: 250_000 },
+      { progress: true },
+    );
+  });
+
   it("wires --local-time through CLI parsing and emits local timestamps", async () => {
     callGatewayFromCli.mockResolvedValueOnce({
       file: "/tmp/openclaw.log",
@@ -278,29 +319,21 @@ describe("logs cli", () => {
   });
 
   describe("--follow retry behavior", () => {
-    it("uses local fallback (not retry warning) for loopback close errors in --follow mode", async () => {
-      // Loopback close errors are absorbed by shouldUseLocalLogsFallback inside fetchLogs —
-      // they never reach the retry path, so no "gateway disconnected" warning is emitted.
-      callGatewayFromCli.mockRejectedValueOnce(
-        new GatewayTransportError({
-          kind: "closed",
-          code: 1006,
-          reason: "abnormal closure",
-          connectionDetails: {
-            url: "ws://127.0.0.1:18789",
-            urlSource: "local loopback",
-            message: "",
-          },
-          message: "gateway closed (1006 abnormal closure): abnormal closure",
-        }),
-      );
-      readConfiguredLogTail.mockResolvedValueOnce({
-        file: "/tmp/openclaw.log",
-        cursor: 5,
-        lines: ["local fallback line"],
-        truncated: false,
-        reset: false,
+    it("retries loopback close errors in --follow mode instead of tailing fallback files", async () => {
+      const closeError = new GatewayTransportError({
+        kind: "closed",
+        code: 1006,
+        reason: "abnormal closure",
+        connectionDetails: {
+          url: "ws://127.0.0.1:18789",
+          urlSource: "local loopback",
+          message: "",
+        },
+        message: "gateway closed (1006 abnormal closure): abnormal closure",
       });
+      for (let i = 0; i <= 8; i += 1) {
+        callGatewayFromCli.mockRejectedValueOnce(closeError);
+      }
 
       const stderrWrites = captureStderrWrites();
       const stdoutWrites = captureStdoutWrites();
@@ -308,9 +341,10 @@ describe("logs cli", () => {
 
       await runLogsCli(["logs", "--follow", "--interval", "1"]);
 
-      expect(stderrWrites.join("")).toContain("Local Gateway RPC unavailable");
-      expect(stderrWrites.join("")).not.toContain("gateway disconnected");
-      expect(stdoutWrites.join("")).toContain("local fallback line");
+      expect(readConfiguredLogTail).not.toHaveBeenCalled();
+      expect((stderrWrites.join("").match(/gateway disconnected/g) ?? []).length).toBe(8);
+      expect(stderrWrites.join("")).toContain("Gateway not reachable");
+      expect(stdoutWrites.join("")).not.toContain("local fallback line");
       expect(exitSpy).toHaveBeenCalledWith(1);
     });
 

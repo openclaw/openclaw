@@ -6,6 +6,7 @@ import {
   type GatewayConnectionDetails,
 } from "../gateway/call.js";
 import { isLoopbackHost } from "../gateway/net.js";
+import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../gateway/protocol/client-info.js";
 import { readConnectPairingRequiredMessage } from "../gateway/protocol/connect-error-details.js";
 import { computeBackoff } from "../infra/backoff.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -78,7 +79,7 @@ async function fetchLogs(
       "logs.tail",
       opts,
       { cursor, limit, maxBytes },
-      { progress: showProgress },
+      buildLogsTailGatewayExtra(opts, showProgress),
     );
     if (!payload || typeof payload !== "object") {
       throw new Error("Unexpected logs.tail response");
@@ -104,6 +105,9 @@ function normalizeErrorMessage(error: unknown): string {
 }
 
 function shouldUseLocalLogsFallback(opts: LogsCliOptions, error: unknown): boolean {
+  if (opts.follow) {
+    return false;
+  }
   if (!isLocalGatewayRpcUnavailableError(error)) {
     return false;
   }
@@ -114,6 +118,26 @@ function shouldUseLocalLogsFallback(opts: LogsCliOptions, error: unknown): boole
     ? error.connectionDetails
     : buildGatewayConnectionDetails();
   return isImplicitLoopbackGatewayConnection(connection);
+}
+
+function buildLogsTailGatewayExtra(opts: LogsCliOptions, showProgress: boolean) {
+  const base = { progress: showProgress };
+  if (!shouldUsePassiveLocalLogsClient(opts)) {
+    return base;
+  }
+  return {
+    ...base,
+    clientName: GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
+    mode: GATEWAY_CLIENT_MODES.BACKEND,
+    deviceIdentity: null,
+  };
+}
+
+function shouldUsePassiveLocalLogsClient(opts: LogsCliOptions): boolean {
+  if (typeof opts.url === "string" && opts.url.trim().length > 0) {
+    return false;
+  }
+  return isImplicitLoopbackGatewayConnection(buildGatewayConnectionDetails());
 }
 
 function isImplicitLoopbackGatewayConnection(connection: GatewayConnectionDetails): boolean {
