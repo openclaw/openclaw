@@ -749,6 +749,7 @@ async function repairPluginRegistry(
     };
   }
   const repairIssues = issues.length === 0 && shouldRunPositionalRepair ? undefined : issues;
+  const previewIssues = repairIssues ?? [{ kind: "migration" }];
   const result = await repairPluginRegistryState(params, repairIssues);
   return {
     config: result.config,
@@ -756,7 +757,7 @@ async function repairPluginRegistry(
     reason: result.reason,
     changes: result.changes,
     warnings: result.warnings,
-    effects: pluginRegistryRepairEffects(repairIssues ?? issues, false),
+    effects: pluginRegistryRepairEffects(previewIssues, false),
   };
 }
 
