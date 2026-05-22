@@ -257,6 +257,30 @@ describe("openai-compatible generic embedding provider", () => {
     });
   });
 
+  it("resolves env SecretRef API keys on the memory search secret surface", async () => {
+    const token = "env-secret-token";
+    const envVar = "OPENCLAW_TEST_OPENAI_COMPATIBLE_EMBEDDING_API_KEY";
+    process.env[envVar] = token;
+    const server = await startEmbeddingServer({ token });
+
+    try {
+      const { provider } = createOpenAICompatibleEmbeddingProvider(
+        createOptions({
+          model: "text-embedding-bge-m3",
+          remote: {
+            baseUrl: server.baseUrl,
+            apiKey: { source: "env", provider: "default", id: envVar },
+          },
+        }),
+      );
+
+      await expect(provider.embed("hello")).resolves.toEqual([0.1, 0.2, 0.3]);
+      expect(server.requests[0]?.headers.authorization).toBe(`Bearer ${token}`);
+    } finally {
+      delete process.env[envVar];
+    }
+  });
+
   it("maps configured memory input_type labels onto query and document requests", async () => {
     const server = await startEmbeddingServer({
       respond: ({ body }) => {

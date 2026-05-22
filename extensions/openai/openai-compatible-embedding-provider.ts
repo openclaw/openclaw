@@ -5,7 +5,11 @@ import type {
   EmbeddingProviderCallOptions,
   EmbeddingProviderCreateOptions,
 } from "openclaw/plugin-sdk/embedding-providers";
-import { normalizeResolvedSecretInputString } from "openclaw/plugin-sdk/secret-input";
+import {
+  coerceSecretRef,
+  normalizeResolvedSecretInputString,
+  normalizeSecretInputString,
+} from "openclaw/plugin-sdk/secret-input";
 import {
   fetchWithSsrFGuard,
   ssrfPolicyFromHttpBaseUrlAllowedHostname,
@@ -119,6 +123,26 @@ function sanitizeCacheHeaders(headers: Record<string, string>): Record<string, s
   return Object.keys(safeHeaders).length > 0 ? safeHeaders : undefined;
 }
 
+function resolveRemoteApiKey(
+  value: NonNullable<EmbeddingProviderCreateOptions["remote"]>["apiKey"] | undefined,
+): string | undefined {
+  const inline = normalizeSecretInputString(value);
+  if (inline) {
+    return inline;
+  }
+  const ref = coerceSecretRef(value);
+  if (ref?.source === "env") {
+    const envValue = normalizeSecretInputString(process.env[ref.id]);
+    if (envValue) {
+      return envValue;
+    }
+  }
+  return normalizeResolvedSecretInputString({
+    value,
+    path: "agents.*.memorySearch.remote.apiKey",
+  })?.trim();
+}
+
 function embeddingInputToText(input: EmbeddingInput): string {
   if (typeof input === "string") {
     return input;
@@ -227,10 +251,7 @@ export function createOpenAICompatibleEmbeddingClient(
 ): OpenAICompatibleEmbeddingClient {
   const baseUrl = normalizeBaseUrl(options.remote?.baseUrl);
   const model = normalizeModel(options.model);
-  const apiKey = normalizeResolvedSecretInputString({
-    value: options.remote?.apiKey,
-    path: "embeddingProviders.openai-compatible.remote.apiKey",
-  })?.trim();
+  const apiKey = resolveRemoteApiKey(options.remote?.apiKey);
   const inputType = normalizeOptionalInputType(options.inputType);
   const queryInputType = normalizeOptionalInputType(options.queryInputType);
   const documentInputType = normalizeOptionalInputType(options.documentInputType);
