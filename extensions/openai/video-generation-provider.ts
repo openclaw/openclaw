@@ -39,6 +39,13 @@ type OpenAIVideoRequestPolicy = {
 
 type OpenAIVideoStatus = "queued" | "in_progress" | "completed" | "failed";
 
+type OpenAIReferenceAsset = {
+  kind: "image" | "video";
+  file: File;
+  buffer: Buffer;
+  mimeType: string;
+};
+
 type OpenAIVideoResponse = {
   id?: string;
   model?: string;
@@ -99,7 +106,7 @@ function resolveSize(params: {
   return undefined;
 }
 
-function resolveReferenceAsset(req: VideoGenerationRequest) {
+function resolveReferenceAsset(req: VideoGenerationRequest): OpenAIReferenceAsset | null {
   const allAssets = [...(req.inputImages ?? []), ...(req.inputVideos ?? [])];
   if (allAssets.length === 0) {
     return null;
@@ -113,15 +120,20 @@ function resolveReferenceAsset(req: VideoGenerationRequest) {
       "OpenAI video generation currently requires local image/video uploads for reference assets.",
     );
   }
+  const kind = (req.inputVideos?.length ?? 0) > 0 ? "video" : "image";
   const mimeType =
-    normalizeOptionalString(asset.mimeType) ||
-    ((req.inputVideos?.length ?? 0) > 0 ? "video/mp4" : "image/png");
+    normalizeOptionalString(asset.mimeType) || (kind === "video" ? "video/mp4" : "image/png");
   const extension =
     extensionForMime(mimeType)?.slice(1) ?? (mimeType.startsWith("video/") ? "mp4" : "png");
   const fileName =
     normalizeOptionalString(asset.fileName) ||
-    `${(req.inputVideos?.length ?? 0) > 0 ? "reference-video" : "reference-image"}.${extension}`;
-  return new File([toBlobBytes(asset.buffer)], fileName, { type: mimeType });
+    `${kind === "video" ? "reference-video" : "reference-image"}.${extension}`;
+  return {
+    kind,
+    file: new File([toBlobBytes(asset.buffer)], fileName, { type: mimeType }),
+    buffer: asset.buffer,
+    mimeType,
+  };
 }
 
 async function pollOpenAIVideo(
@@ -285,10 +297,6 @@ export function buildOpenAIVideoGenerationProvider(): VideoGenerationProvider {
         enabled: true,
         maxVideos: 1,
         maxInputVideos: 1,
-        maxDurationSeconds: 12,
-        supportedDurationSeconds: OPENAI_VIDEO_SECONDS,
-        supportsSize: true,
-        sizes: OPENAI_VIDEO_SIZES,
       },
     },
     async generateVideo(req) {
@@ -328,16 +336,14 @@ export function buildOpenAIVideoGenerationProvider(): VideoGenerationProvider {
         aspectRatio: req.aspectRatio,
         resolution: req.resolution,
       });
-      const inputImage = req.inputImages?.[0];
       const referenceAsset = resolveReferenceAsset(req);
-      const requestUrl = `${baseUrl}/videos`;
       const requestResult = referenceAsset
-        ? inputImage?.buffer
+        ? referenceAsset.kind === "image"
           ? await (() => {
               const jsonHeaders = new Headers(headers);
               jsonHeaders.set("Content-Type", "application/json");
               return postJsonRequest({
-                url: requestUrl,
+                url: `${baseUrl}/videos`,
                 headers: jsonHeaders,
                 body: {
                   prompt: req.prompt,
@@ -345,10 +351,7 @@ export function buildOpenAIVideoGenerationProvider(): VideoGenerationProvider {
                   ...(seconds ? { seconds } : {}),
                   ...(size ? { size } : {}),
                   input_reference: {
-                    image_url: toOpenAIDataUrl(
-                      inputImage.buffer,
-                      normalizeOptionalString(inputImage.mimeType) ?? "image/png",
-                    ),
+                    image_url: toOpenAIDataUrl(referenceAsset.buffer, referenceAsset.mimeType),
                   },
                 },
                 timeoutMs: resolveProviderOperationTimeoutMs({
@@ -364,17 +367,11 @@ export function buildOpenAIVideoGenerationProvider(): VideoGenerationProvider {
               const form = new FormData();
               form.set("prompt", req.prompt);
               form.set("model", model);
-              if (seconds) {
-                form.set("seconds", seconds);
-              }
-              if (size) {
-                form.set("size", size);
-              }
-              form.set("input_reference", referenceAsset);
+              form.set("video", referenceAsset.file);
               const multipartHeaders = new Headers(headers);
               multipartHeaders.delete("Content-Type");
               return postMultipartRequest({
-                url: requestUrl,
+                url: `${baseUrl}/videos/edits`,
                 headers: multipartHeaders,
                 body: form,
                 timeoutMs: resolveProviderOperationTimeoutMs({
@@ -390,7 +387,7 @@ export function buildOpenAIVideoGenerationProvider(): VideoGenerationProvider {
             const jsonHeaders = new Headers(headers);
             jsonHeaders.set("Content-Type", "application/json");
             return postJsonRequest({
-              url: requestUrl,
+              url: `${baseUrl}/videos`,
               headers: jsonHeaders,
               body: {
                 prompt: req.prompt,
