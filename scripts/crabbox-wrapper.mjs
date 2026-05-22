@@ -266,15 +266,49 @@ function commandRuntimeEntrypoint(commandArgs) {
 
 const version = checkedOutput(binary, ["--version"]);
 const help = checkedOutput(binary, ["run", "--help"]);
-function parseProvidersFromHelp(text) {
-  const match = text.match(/provider:\s*([\w, -]+)(?:\s*\(default\b|\n|$)/u);
-  if (!match) {
-    return [];
+const providerAliases = new Map([
+  ["blacksmith", "blacksmith-testbox"],
+  ["container", "local-container"],
+  ["docker", "local-container"],
+  ["local-docker", "local-container"],
+]);
+
+function addProviderNames(names, text) {
+  for (const name of text
+    .replace(/\s+\(default\b.*$/u, "")
+    .split(/\s*(?:,|\||\bor\b)\s*/u)
+    .map((s) => s.trim())
+    .filter(Boolean)) {
+    if (/^[a-z0-9][a-z0-9-]*$/u.test(name)) {
+      names.add(name);
+    }
   }
-  return match[1]
-    .split(/,\s*|\s+or\s+/u)
-    .map((s) => s.replace(/^or\s+/u, "").trim())
-    .filter(Boolean);
+}
+
+function parseProvidersFromHelp(text) {
+  const names = new Set();
+  for (const line of text.split(/\r?\n/u)) {
+    const providerMatch = line.match(/provider:\s*([a-z0-9][a-z0-9, -]*)(?:\s*\(default\b|$)/u);
+    if (providerMatch) {
+      addProviderNames(names, providerMatch[1]);
+      continue;
+    }
+
+    const flagMatch = line.match(
+      /^\s+-{1,2}provider(?:[=\s]+)([a-z0-9][a-z0-9|, -]*)(?:\s{2,}|\s+\(|$)/u,
+    );
+    if (flagMatch && /[,|]|\bor\b/u.test(flagMatch[1])) {
+      addProviderNames(names, flagMatch[1]);
+    }
+  }
+  return [...names];
+}
+
+function isProviderAdvertised(provider, advertisedProviders) {
+  return (
+    advertisedProviders.includes(provider) ||
+    advertisedProviders.includes(providerAliases.get(provider) ?? "")
+  );
 }
 
 const providers = parseProvidersFromHelp(help.text);
@@ -291,7 +325,7 @@ if (version.status !== 0 || help.status !== 0) {
   process.exit(2);
 }
 
-if (provider && !providers.includes(provider)) {
+if (provider && !isProviderAdvertised(provider, providers)) {
   if (providers.length === 0) {
     console.error(
       "[crabbox] could not parse provider list from --help; refusing to run with --provider without validation",
