@@ -7,6 +7,7 @@ import {
   resolveSupportedThinkingLevel,
   type VerboseLevel,
 } from "../auto-reply/thinking.js";
+import { resolveChannelModelOverride } from "../channels/model-overrides.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import type { CliDeps } from "../cli/deps.types.js";
 import { getRuntimeConfig } from "../config/io.js";
@@ -875,6 +876,34 @@ async function agentCommandInternal(
         ...modelManifestContext,
       });
       allowedModelCatalog = visibilityPolicy.allowedCatalog;
+    }
+
+    const channelModelOverride = !hasExplicitRunOverride
+      ? resolveChannelModelOverride({
+          cfg,
+          channel:
+            sessionEntry?.channel ??
+            sessionEntry?.lastChannel ??
+            sessionEntry?.origin?.provider ??
+            opts.runContext?.messageChannel ??
+            opts.messageChannel ??
+            opts.channel,
+          groupId: sessionEntry?.groupId ?? opts.runContext?.groupId ?? opts.groupId,
+          groupChatType: sessionEntry?.chatType ?? sessionEntry?.origin?.chatType,
+          groupChannel:
+            sessionEntry?.groupChannel ?? opts.runContext?.groupChannel ?? opts.groupChannel,
+          groupSubject: sessionEntry?.subject,
+          parentSessionKey: sessionEntry?.parentSessionKey ?? sessionKey,
+        })
+      : null;
+    if (channelModelOverride) {
+      const channelRef = parseModelRef(
+        channelModelOverride.model,
+        defaultProvider,
+        modelManifestContext,
+      );
+      provider = channelRef.provider;
+      model = channelRef.model;
     }
 
     if (sessionEntry && sessionStore && sessionKey && hasStoredOverride) {
