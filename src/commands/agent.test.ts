@@ -938,6 +938,102 @@ describe("agentCommand", () => {
     });
   });
 
+  it("resolves modelByChannel aliases for ingress session runs", async () => {
+    await withTempHome(async (home) => {
+      const store = path.join(home, "sessions-channel-model-alias.json");
+      const sessionKey = "agent:main:discord:channel:1489110116304424990";
+      writeSessionStoreSeed(store, {
+        [sessionKey]: {
+          sessionId: "session-channel-model-alias",
+          updatedAt: Date.now(),
+          channel: "discord",
+          groupId: "1489110116304424990",
+          chatType: "channel",
+        },
+      });
+
+      const cfg = mockConfig(home, store, {
+        model: { primary: "openai/gpt-default" },
+        models: {
+          "anthropic/claude-opus-4-6": { alias: "opus-channel" },
+          "openai/gpt-default": {},
+        },
+      });
+      cfg.channels = {
+        ...cfg.channels,
+        modelByChannel: {
+          discord: {
+            "1489110116304424990": "opus-channel",
+          },
+        },
+      };
+
+      await agentCommandFromIngress(
+        {
+          message: "announce completion",
+          sessionKey,
+          channel: "discord",
+          messageChannel: "discord",
+          allowModelOverride: false,
+        },
+        runtime,
+      );
+
+      expectLastRunProviderModel("anthropic", "claude-opus-4-6");
+    });
+  });
+
+  it("uses modelByChannel as the primary for auto fallback probes", async () => {
+    await withTempHome(async (home) => {
+      const store = path.join(home, "sessions-channel-auto-fallback.json");
+      const sessionKey = "agent:main:discord:channel:1489110116304424990";
+      writeSessionStoreSeed(store, {
+        [sessionKey]: {
+          sessionId: "session-channel-auto-fallback",
+          updatedAt: Date.now(),
+          channel: "discord",
+          groupId: "1489110116304424990",
+          chatType: "channel",
+          providerOverride: "openai",
+          modelOverride: "gpt-fallback",
+          modelOverrideSource: "auto",
+          modelOverrideFallbackOriginProvider: "anthropic",
+          modelOverrideFallbackOriginModel: "claude-opus-4-6",
+        },
+      });
+
+      const cfg = mockConfig(home, store, {
+        model: { primary: "openai/gpt-default", fallbacks: ["openai/gpt-fallback"] },
+        models: {
+          "anthropic/claude-opus-4-6": {},
+          "openai/gpt-default": {},
+          "openai/gpt-fallback": {},
+        },
+      });
+      cfg.channels = {
+        ...cfg.channels,
+        modelByChannel: {
+          discord: {
+            "1489110116304424990": "anthropic/claude-opus-4-6",
+          },
+        },
+      };
+
+      await agentCommandFromIngress(
+        {
+          message: "announce completion",
+          sessionKey,
+          channel: "discord",
+          messageChannel: "discord",
+          allowModelOverride: false,
+        },
+        runtime,
+      );
+
+      expectLastRunProviderModel("anthropic", "claude-opus-4-6");
+    });
+  });
+
   it("keeps stored model overrides ahead of modelByChannel for ingress runs", async () => {
     await withTempHome(async (home) => {
       const store = path.join(home, "sessions-channel-stored-model.json");

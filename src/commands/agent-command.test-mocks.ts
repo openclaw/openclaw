@@ -64,6 +64,10 @@ vi.mock("../agents/model-selection.js", () => {
     };
   };
   type ModelRef = { provider: string; model: string };
+  type ModelAliasIndex = {
+    byAlias: Map<string, { alias: string; ref: ModelRef }>;
+    byKey: Map<string, string[]>;
+  };
   type CatalogEntry = { id?: string; model?: string; name?: string; reasoning?: boolean };
 
   const parseModelRefImpl = (raw: string, defaultProvider = "openai"): ModelRef | null => {
@@ -109,6 +113,59 @@ vi.mock("../agents/model-selection.js", () => {
     const models = cfg?.agents?.defaults?.models ?? {};
     return models[`${ref.provider}/${ref.model}`] ?? models[modelKey(ref.provider, ref.model)];
   };
+  const buildModelAliasIndexImpl = ({
+    cfg,
+    defaultProvider = "openai",
+  }: {
+    cfg?: ConfigWithModels;
+    defaultProvider?: string;
+  }): ModelAliasIndex => {
+    const byAlias = new Map<string, { alias: string; ref: ModelRef }>();
+    const byKey = new Map<string, string[]>();
+    const models = cfg?.agents?.defaults?.models ?? {};
+    for (const [rawKey, entry] of Object.entries(models)) {
+      if (rawKey.trim().endsWith("/*")) {
+        continue;
+      }
+      const alias = (entry as { alias?: string } | undefined)?.alias?.trim();
+      if (!alias) {
+        continue;
+      }
+      const parsed = parseModelRefImpl(rawKey, defaultProvider);
+      if (!parsed) {
+        continue;
+      }
+      const ref = normalizeModelRef(parsed.provider, parsed.model);
+      byAlias.set(alias.toLowerCase(), { alias, ref });
+      const key = modelKey(ref.provider, ref.model);
+      byKey.set(key, [...(byKey.get(key) ?? []), alias]);
+    }
+    return { byAlias, byKey };
+  };
+  const buildModelAliasIndex = vi.fn(buildModelAliasIndexImpl);
+  const resolveModelRefFromString = vi.fn(
+    ({
+      raw,
+      defaultProvider = "openai",
+      aliasIndex,
+    }: {
+      cfg?: ConfigWithModels;
+      raw: string;
+      defaultProvider?: string;
+      aliasIndex?: ModelAliasIndex;
+    }): { ref: ModelRef; alias?: string } | null => {
+      const value = raw.trim();
+      if (!value) {
+        return null;
+      }
+      const aliasMatch = aliasIndex?.byAlias.get(value.toLowerCase());
+      if (aliasMatch) {
+        return { ref: aliasMatch.ref, alias: aliasMatch.alias };
+      }
+      const parsed = parseModelRefImpl(value, defaultProvider);
+      return parsed ? { ref: normalizeModelRef(parsed.provider, parsed.model) } : null;
+    },
+  );
 
   return {
     buildAllowedModelSet: vi.fn(({ cfg }: { cfg?: ConfigWithModels; catalog?: CatalogEntry[] }) => {
@@ -180,6 +237,8 @@ vi.mock("../agents/model-selection.js", () => {
       },
     ),
     buildConfiguredModelCatalog: vi.fn(() => []),
+    buildModelAliasIndex,
+    resolveModelRefFromString,
     isModelKeyAllowedBySet,
     isCliProvider: vi.fn(() => false),
     modelKey,

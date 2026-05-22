@@ -82,11 +82,13 @@ import { runWithModelFallback } from "./model-fallback.js";
 import type { ModelManifestNormalizationContext } from "./model-selection-normalize.js";
 import {
   buildConfiguredModelCatalog,
+  buildModelAliasIndex,
   modelKey,
   normalizeModelRef,
   parseModelRef,
   resolveConfiguredModelRef,
   resolveDefaultModelForAgent,
+  resolveModelRefFromString,
   resolveThinkingDefault,
 } from "./model-selection.js";
 import {
@@ -833,6 +835,8 @@ async function agentCommandInternal(
     );
     let provider = defaultProvider;
     let model = defaultModel;
+    let primaryProvider = defaultProvider;
+    let primaryModel = defaultModel;
     const hasAllowlist = agentCfg?.models && Object.keys(agentCfg.models).length > 0;
     const hasStoredOverride = Boolean(
       sessionEntry?.modelOverride || sessionEntry?.providerOverride,
@@ -862,6 +866,11 @@ async function agentCommandInternal(
       catalog: [],
       defaultProvider,
       defaultModel,
+      ...modelManifestContext,
+    });
+    const modelAliasIndex = buildModelAliasIndex({
+      cfg,
+      defaultProvider,
       ...modelManifestContext,
     });
 
@@ -897,13 +906,19 @@ async function agentCommandInternal(
         })
       : null;
     if (channelModelOverride) {
-      const channelRef = parseModelRef(
-        channelModelOverride.model,
+      const channelRef = resolveModelRefFromString({
+        cfg,
+        raw: channelModelOverride.model,
         defaultProvider,
-        modelManifestContext,
-      );
-      provider = channelRef.provider;
-      model = channelRef.model;
+        aliasIndex: modelAliasIndex,
+        ...modelManifestContext,
+      })?.ref;
+      if (channelRef) {
+        provider = channelRef.provider;
+        model = channelRef.model;
+        primaryProvider = channelRef.provider;
+        primaryModel = channelRef.model;
+      }
     }
 
     if (sessionEntry && sessionStore && sessionKey && hasStoredOverride) {
@@ -966,8 +981,8 @@ async function agentCommandInternal(
       ? resolveAutoFallbackPrimaryProbe({
           entry: sessionEntry,
           sessionKey,
-          primaryProvider: defaultProvider,
-          primaryModel: defaultModel,
+          primaryProvider,
+          primaryModel,
         })
       : undefined;
     let autoFallbackPrimaryProbeSessionEntry: SessionEntry | undefined;
