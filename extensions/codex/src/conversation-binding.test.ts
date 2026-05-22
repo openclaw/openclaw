@@ -13,6 +13,18 @@ const agentRuntimeMocks = vi.hoisted(() => ({
   resolveApiKeyForProfile: vi.fn(),
   resolveAuthProfileOrder: vi.fn(),
   resolveDefaultAgentDir: vi.fn(() => "/agent"),
+  resolveRuntimeExecDefaults: vi.fn(
+    (params?: { cfg?: { tools?: { exec?: { host?: string } } } }) => {
+      const host = params?.cfg?.tools?.exec?.host ?? "auto";
+      return {
+        host,
+        effectiveHost: host === "node" ? "node" : "gateway",
+        security: "full",
+        ask: "off",
+        canRequestNode: host !== "gateway",
+      };
+    },
+  ),
   resolvePersistedAuthProfileOwnerAgentDir: vi.fn(),
   resolveProviderIdForAuth: vi.fn((provider: string) => provider),
   saveAuthProfileStore: vi.fn(),
@@ -351,6 +363,56 @@ describe("codex conversation binding", () => {
       reply: {
         text: expect.stringContaining(
           "Codex-native Codex app-server conversation binding is unavailable because OpenClaw sandboxing is active for this session.",
+        ),
+      },
+    });
+    expect(sharedClientMocks.getSharedCodexAppServerClient).not.toHaveBeenCalled();
+  });
+
+  it("blocks bound Codex app-server turns when exec host=node is active", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    await fs.writeFile(
+      `${sessionFile}.codex-app-server.json`,
+      JSON.stringify({ schemaVersion: 1, threadId: "thread-1", cwd: tempDir }),
+    );
+
+    const result = await handleCodexConversationInboundClaim(
+      {
+        content: "continue the task",
+        channel: "discord",
+        isGroup: true,
+        commandAuthorized: true,
+        sessionKey: "node-session",
+      },
+      {
+        channelId: "discord",
+        sessionKey: "node-session",
+        pluginBinding: {
+          bindingId: "binding-1",
+          pluginId: "codex",
+          pluginRoot: tempDir,
+          channel: "discord",
+          accountId: "default",
+          conversationId: "channel-1",
+          boundAt: Date.now(),
+          data: {
+            kind: "codex-app-server-session",
+            version: 1,
+            sessionFile,
+            workspaceDir: tempDir,
+          },
+        },
+      },
+      {
+        config: { tools: { exec: { host: "node", node: "worker-1" } } },
+      },
+    );
+
+    expect(result).toEqual({
+      handled: true,
+      reply: {
+        text: expect.stringContaining(
+          "Codex-native Codex app-server conversation binding is unavailable because OpenClaw exec host=node is active for this session.",
         ),
       },
     });

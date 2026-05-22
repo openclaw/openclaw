@@ -1,7 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionEntry } from "../config/sessions.js";
 import * as execApprovals from "../infra/exec-approvals.js";
-import { canExecRequestNode, resolveExecDefaults } from "./exec-defaults.js";
+import {
+  canExecRequestNode,
+  resolveExecDefaults,
+  resolveRuntimeExecDefaults,
+} from "./exec-defaults.js";
 
 describe("resolveExecDefaults", () => {
   beforeEach(() => {
@@ -78,6 +82,29 @@ describe("resolveExecDefaults", () => {
         sandboxAvailable: false,
       }).canRequestNode,
     ).toBe(true);
+  });
+
+  it("resolves runtime exec defaults from an explicit session entry", () => {
+    const sessionEntry = {
+      execHost: "node",
+      execNode: "worker-1",
+    } as SessionEntry;
+
+    const defaults = resolveRuntimeExecDefaults({
+      cfg: {
+        tools: {
+          exec: {
+            host: "gateway",
+          },
+        },
+      },
+      sessionEntry,
+      sandboxAvailable: false,
+    });
+
+    expect(defaults.host).toBe("node");
+    expect(defaults.effectiveHost).toBe("node");
+    expect(defaults.node).toBe("worker-1");
   });
 
   it("uses host approval defaults for gateway when exec policy is unset", () => {

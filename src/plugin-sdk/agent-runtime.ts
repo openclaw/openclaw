@@ -8,6 +8,7 @@ export { resolveOpenClawAgentDir } from "./agent-dir-compat.js";
 export * from "../agents/current-time.js";
 export * from "../agents/date-time.js";
 export * from "../agents/defaults.js";
+export { resolveRuntimeExecDefaults } from "../agents/exec-defaults.js";
 export * from "../agents/identity-avatar.js";
 export * from "../agents/identity.js";
 export * from "../agents/model-auth-markers.js";
