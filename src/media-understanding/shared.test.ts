@@ -188,6 +188,48 @@ describe("provider operation deadlines", () => {
     expect(release).toHaveBeenCalledTimes(1);
   });
 
+  it("retries guarded transient provider status failures while polling", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000);
+    const firstRelease = vi.fn(async () => {});
+    const secondRelease = vi.fn(async () => {});
+    fetchWithSsrFGuardMock
+      .mockResolvedValueOnce({
+        response: new Response("busy", { status: 503, statusText: "Service Unavailable" }),
+        finalUrl: "https://api.example.com/v1/videos/task-1",
+        release: firstRelease,
+      })
+      .mockResolvedValueOnce({
+        response: new Response(JSON.stringify({ status: "completed" })),
+        finalUrl: "https://api.example.com/v1/videos/task-1",
+        release: secondRelease,
+      });
+
+    const result = pollProviderOperationJson<{ status?: string }>({
+      url: "https://api.example.com/v1/videos/task-1",
+      headers: new Headers({ authorization: "Bearer test" }),
+      deadline: createProviderOperationDeadline({
+        label: "video generation task task-1",
+        timeoutMs: 10_000,
+      }),
+      defaultTimeoutMs: 5_000,
+      fetchFn: fetch,
+      maxAttempts: 3,
+      pollIntervalMs: 1_000,
+      requestFailedMessage: "status failed",
+      timeoutMessage: "task timed out",
+      allowPrivateNetwork: true,
+      isComplete: (payload) => payload.status === "completed",
+    });
+
+    await vi.advanceTimersByTimeAsync(250);
+
+    await expect(result).resolves.toEqual({ status: "completed" });
+    expect(fetchWithSsrFGuardMock).toHaveBeenCalledTimes(2);
+    expect(firstRelease).toHaveBeenCalledTimes(1);
+    expect(secondRelease).toHaveBeenCalledTimes(1);
+  });
+
   it("throws provider failure messages while polling status JSON", async () => {
     const fetchFn = vi
       .fn<typeof fetch>()
