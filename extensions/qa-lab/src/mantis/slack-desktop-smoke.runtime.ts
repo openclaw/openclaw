@@ -591,6 +591,17 @@ setup_gateway=${setupGateway}
 approval_checkpoints=${approvalCheckpoints}
 slack_channel_id=${slackChannelId}
 approval_checkpoint_scenarios_json=${checkpointScenarioJson}
+remote_command_timeout_seconds="\${OPENCLAW_MANTIS_REMOTE_COMMAND_TIMEOUT_SECONDS:-600}"
+case "$remote_command_timeout_seconds" in
+  ''|*[!0-9]*)
+    echo "OPENCLAW_MANTIS_REMOTE_COMMAND_TIMEOUT_SECONDS must be an integer number of seconds." >&2
+    exit 2
+    ;;
+esac
+if [ "$remote_command_timeout_seconds" -le 0 ]; then
+  echo "OPENCLAW_MANTIS_REMOTE_COMMAND_TIMEOUT_SECONDS must be greater than zero." >&2
+  exit 2
+fi
 rm -rf "$out"
 mkdir -p "$out"
 export DISPLAY="\${DISPLAY:-:99}"
@@ -694,6 +705,14 @@ else
 fi
 chrome_pid=$!
 qa_status=0
+(
+  sleep "$remote_command_timeout_seconds"
+  echo "Remote command timed out after \${remote_command_timeout_seconds}s." >"$out/remote-command-timeout.txt"
+  if [ -n "\${remote_body_pid:-}" ] && kill -0 "$remote_body_pid" >/dev/null 2>&1; then
+    kill "$remote_body_pid" >/dev/null 2>&1 || true
+  fi
+) &
+watchdog_pid="$!"
 (
   set -e
   echo "remote pwd: $(pwd)"
@@ -1011,7 +1030,17 @@ MANTIS_APPROVAL_WATCHER
       fi
     fi
   fi
-) >"$out/slack-desktop-command.log" 2>&1 || qa_status=$?
+) >"$out/slack-desktop-command.log" 2>&1 &
+remote_body_pid="$!"
+set +e
+wait "$remote_body_pid"
+qa_status=$?
+set -e
+kill "$watchdog_pid" >/dev/null 2>&1 || true
+wait "$watchdog_pid" >/dev/null 2>&1 || true
+if [ -f "$out/remote-command-timeout.txt" ]; then
+  qa_status=124
+fi
 sleep 5
 scrot "$out/slack-desktop-smoke.png" || true
 if [ -n "$video_pid" ]; then
@@ -1036,6 +1065,7 @@ cat >"$out/remote-metadata.json" <<MANTIS_REMOTE_METADATA
   "credentialRole": "$credential_role",
   "providerMode": "$provider_mode",
   "hydrateMode": "$hydrate_mode",
+  "remoteCommandTimedOut": $(if [ -f "$out/remote-command-timeout.txt" ]; then echo true; else echo false; fi),
   "capturedAt": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 }
 MANTIS_REMOTE_METADATA
@@ -1044,6 +1074,7 @@ if [ "$qa_status" -ne 0 ]; then
   find "$out" -maxdepth 3 -type f -printf "%p %s bytes\\n" | sort || true
   for diagnostic_file in \
     "$out/slack-desktop-command.log" \
+    "$out/remote-command-timeout.txt" \
     "$out/approval-checkpoint-watcher.log" \
     "$out/chrome.log" \
     "$out/ffmpeg.log" \

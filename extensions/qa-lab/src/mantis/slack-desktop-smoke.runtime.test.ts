@@ -211,7 +211,10 @@ describe("mantis Slack desktop smoke runtime", () => {
     expect(remoteScript).toContain('--output-dir "$slack_qa_output_dir"');
     expect(remoteScript).toContain("copy_slack_qa_artifacts");
     expect(remoteScript).not.toContain('--output-dir "$out/slack-qa"');
-    expect(remoteScript).toContain(') >"$out/slack-desktop-command.log" 2>&1 || qa_status=$?');
+    expect(remoteScript).toContain("remote_command_timeout_seconds=");
+    expect(remoteScript).toContain("remote-command-timeout.txt");
+    expect(remoteScript).toContain(') >"$out/slack-desktop-command.log" 2>&1 &');
+    expect(remoteScript).toContain("qa_status=$?");
     expect(remoteScript).toContain("MANTIS_REMOTE_FAILURE_DIAGNOSTICS_BEGIN");
     expect(remoteScript).toContain('tail -n 200 "$diagnostic_file"');
     expect(remoteScript).toContain("Slack desktop screenshot is missing or empty");
