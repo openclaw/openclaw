@@ -13,11 +13,18 @@ type LockOptions = {
   maxHoldMs: number;
 };
 
+type AgentWithProcessEvents = {
+  processEvents?: (event: unknown) => Promise<void>;
+  __openclawAgentProcessEventsLockInstalled?: boolean;
+};
+
 type SessionEventProcessor = {
   _processAgentEvent?: (event: unknown) => Promise<void>;
+  _handleAgentEvent?: (event: unknown) => Promise<void>;
   _extensionRunner?: {
     hasHandlers?: (eventType: string) => boolean;
   };
+  agent?: AgentWithProcessEvents;
   __openclawSessionEventWriteLockInstalled?: boolean;
 };
 
@@ -177,23 +184,37 @@ export function installSessionEventWriteLock(params: {
   withSessionWriteLock: <T>(run: () => Promise<T> | T) => Promise<T>;
 }): void {
   const session = params.session as SessionEventProcessor;
-  const original = session["_processAgentEvent"];
-  if (
-    typeof original !== "function" ||
-    session["__openclawSessionEventWriteLockInstalled"] === true
-  ) {
-    return;
-  }
-  session["__openclawSessionEventWriteLockInstalled"] = true;
-  session["_processAgentEvent"] = async function lockedProcessAgentEvent(
-    this: unknown,
-    event: unknown,
-  ) {
-    if (!eventMayReachTranscriptWriters(session, event)) {
-      return await original.call(this, event);
+  if (session["__openclawSessionEventWriteLockInstalled"] !== true) {
+    const original = session["_processAgentEvent"];
+    if (typeof original === "function") {
+      session["__openclawSessionEventWriteLockInstalled"] = true;
+      session["_processAgentEvent"] = async function lockedProcessAgentEvent(
+        this: unknown,
+        event: unknown,
+      ) {
+        if (!eventMayReachTranscriptWriters(session, event)) {
+          return await original.call(this, event);
+        }
+        return await params.withSessionWriteLock(async () => await original.call(this, event));
+      };
     }
-    return await params.withSessionWriteLock(async () => await original.call(this, event));
-  };
+  }
+
+  const agent = session.agent;
+  if (
+    agent &&
+    typeof agent.processEvents === "function" &&
+    agent["__openclawAgentProcessEventsLockInstalled"] !== true
+  ) {
+    const originalProcessEvents = agent.processEvents.bind(agent);
+    agent["__openclawAgentProcessEventsLockInstalled"] = true;
+    agent.processEvents = async function lockedProcessEvents(event: unknown) {
+      if (!eventMayReachTranscriptWriters(session, event)) {
+        return await originalProcessEvents(event);
+      }
+      return await params.withSessionWriteLock(async () => await originalProcessEvents(event));
+    };
+  }
 }
 
 export function installSessionExternalHookWriteLock(params: {
