@@ -72,6 +72,24 @@ describe("bot-native-command-menu", () => {
     });
   });
 
+  it("does not let aliases consume command slots before canonical commands", () => {
+    const canonicalCommands = Array.from({ length: 100 }, (_, i) => ({
+      command: `cmd_${i}`,
+      description: `Command ${i}`,
+    }));
+    const allCommands = [
+      ...canonicalCommands.slice(0, 99),
+      { command: "side", description: "Alias", isAlias: true },
+      canonicalCommands[99],
+    ];
+
+    const result = buildCappedTelegramMenuCommands({ allCommands });
+
+    expect(result.commandsToRegister).toEqual(canonicalCommands);
+    expect(result.totalCommands).toBe(100);
+    expect(result.overflowCount).toBe(0);
+  });
+
   it("shortens descriptions before dropping commands to fit Telegram payload budget", () => {
     const allCommands = Array.from({ length: 92 }, (_, i) => ({
       command: `cmd_${i}`,
