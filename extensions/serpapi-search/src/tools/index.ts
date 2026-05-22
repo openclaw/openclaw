@@ -12,6 +12,7 @@ export { createSerpApiFinanceTool } from "./finance.js";
 export { createSerpApiFlightsTool } from "./flights.js";
 export { createSerpApiHotelsTool } from "./hotels.js";
 export { createSerpApiImmersiveProductTool } from "./immersive-product.js";
+export { createSerpApiInstagramProfileTool } from "./instagram-profile.js";
 export { createSerpApiJobsTool } from "./jobs.js";
 export { createSerpApiLensTool } from "./lens.js";
 export { createSerpApiMapsTool } from "./maps.js";

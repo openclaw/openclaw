@@ -15,6 +15,7 @@ import {
   createSerpApiFlightsTool,
   createSerpApiHotelsTool,
   createSerpApiImmersiveProductTool,
+  createSerpApiInstagramProfileTool,
   createSerpApiJobsTool,
   createSerpApiLensTool,
   createSerpApiMapsTool,
@@ -83,6 +84,9 @@ export default definePluginEntry({
     api.registerTool((ctx) => createSerpApiEventsTool(api, ctx), { name: "serpapi_events" });
     api.registerTool((ctx) => createSerpApiFacebookProfileTool(api, ctx), {
       name: "serpapi_facebook_profile",
+    });
+    api.registerTool((ctx) => createSerpApiInstagramProfileTool(api, ctx), {
+      name: "serpapi_instagram_profile",
     });
     api.registerTool((ctx) => createSerpApiFinanceTool(api, ctx), { name: "serpapi_finance" });
     api.registerTool((ctx) => createSerpApiYahooTool(api, ctx), { name: "serpapi_yahoo" });

@@ -67,6 +67,7 @@ Set your API key and optional default language under `config.webSearch`:
 | Reverse image search             | `serpapi_lens`               |
 | Tripadvisor places / restaurants | `serpapi_tripadvisor`        |
 | Facebook public profile          | `serpapi_facebook_profile`   |
+| Instagram public profile         | `serpapi_instagram_profile`  |
 | Weather forecast                 | `serpapi_weather`            |
 
 ## web_search
@@ -524,6 +525,17 @@ Fetch a public Facebook profile.
 | `profile_id` | Profile slug or numeric ID (e.g. `Meta` or `100080376596424`). Required. |
 
 Response includes `profile`, `posts`, `photos`, `videos`, `about`.
+
+## serpapi_instagram_profile
+
+Fetch a public Instagram profile.
+
+| Parameter         | Description                                                                          |
+| ----------------- | ------------------------------------------------------------------------------------ |
+| `profile_id`      | Profile ID from the URL (e.g. `serpapicom` from instagram.com/serpapicom). Required. |
+| `next_page_token` | Pagination token from `serpapi_pagination.next_page_token` from a previous response. |
+
+Response includes `profile`, `posts`, `reels`, `highlights`, `related_profiles`, and `serpapi_pagination`.
 
 ## serpapi_weather
 
