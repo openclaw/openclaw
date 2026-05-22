@@ -1092,6 +1092,14 @@ export const registerTelegramNativeCommands = ({
               return undefined;
             }
           })();
+          const menuAgentCfg = resolveAgentConfig(runtimeCfg, route.agentId);
+          const currentVerboseLevel =
+            (menuSessionEntry?.verboseLevel as string | undefined) ??
+            (menuAgentCfg?.verboseDefault as string | undefined);
+          const currentReasoningLevel =
+            (menuSessionEntry?.reasoningLevel as string | undefined) ??
+            (menuAgentCfg?.reasoningDefault as string | undefined) ??
+            "off";
           const title = formatTelegramCommandArgMenuTitle({
             command: commandDefinition,
             menu,
@@ -1105,11 +1113,11 @@ export const registerTelegramNativeCommands = ({
                 : undefined,
             currentVerboseLevel:
               commandDefinition.key === "verbose"
-                ? (menuSessionEntry?.verboseLevel as string | undefined) ?? "off"
+                ? currentVerboseLevel
                 : undefined,
             currentReasoningLevel:
               commandDefinition.key === "reasoning"
-                ? (menuSessionEntry?.reasoningLevel as string | undefined) ?? "off"
+                ? currentReasoningLevel
                 : undefined,
           });
           const rows: Array<Array<{ text: string; callback_data: string }>> = [];
