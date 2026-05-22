@@ -26,6 +26,7 @@ Docs: https://docs.openclaw.ai
 
 - CLI/agents: allow `openclaw agent --session-key` to target explicit session keys, including agent-scoped legacy keys. (#85121) Thanks @Kaspre.
 - Auto-reply/ACP: wait for same-channel block reply delivery before starting tool work, while still honoring ACP dispatch aborts so stopped turns do not wait on slow channel sends. (#83722) Thanks @IWhatsskill.
+- Codex/ACP: mark required child-run completions that only report progress, omit a final deliverable, or fail requester delivery as blocked while preserving real final reports. (#85110) Thanks @IWhatsskill.
 - Agents/subagents: surface blocked child-run completions as errors instead of successful subagent finishes. (#80886) Thanks @TurboTheTurtle.
 - Agents/Pi: treat accepted embedded `sessions_spawn` child-session handoffs as terminal progress so parent turns no longer report false non-deliverable failures. (#85054) Thanks @samzong.
 - WhatsApp: update Baileys to `7.0.0-rc13` and drop the obsolete logger type patch.
