@@ -330,11 +330,16 @@ describe("compactEmbeddedPiSessionDirect hooks", () => {
       sessionAgentId: "main",
       effectiveWorkspace: "/tmp/workspace",
       agentDir: "/tmp/workspace",
+      runtimePlan: {
+        auth: { forwardedAuthProfileId: "openai:profile-1" },
+        transport: { resolveExtraParams: vi.fn(() => undefined) },
+      } as never,
     });
 
     const streamArg = mockCallArg(resolveEmbeddedAgentStreamFnMock) as Record<string, unknown>;
     expect(streamArg.currentStreamFn).toBeTypeOf("function");
     expect(streamArg.sessionId).toBe("session-1");
+    expect(streamArg.authProfileId).toBe("openai:profile-1");
     expect(applyExtraParamsToAgentMock).toHaveBeenCalledWith(
       expectRecordFields(mockCallArg(applyExtraParamsToAgentMock), { streamFn: resolvedStreamFn }),
       undefined,
@@ -1365,6 +1370,29 @@ describe("compactEmbeddedPiSession hooks (ownsCompaction engine)", () => {
       authProfileId: "openai:p1",
       currentTokenCount: 333,
     });
+  });
+
+  it("falls back to context-engine compaction when native harness binding is recoverable", async () => {
+    maybeCompactAgentHarnessSessionMock.mockResolvedValueOnce({
+      ok: false,
+      compacted: false,
+      reason: "no codex app-server thread binding",
+      failure: { reason: "missing_thread_binding" },
+    });
+
+    const result = await compactEmbeddedPiSession(
+      wrappedCompactionArgs({
+        provider: "openai-codex",
+        model: "gpt-5.4",
+        agentHarnessId: "codex",
+        currentTokenCount: 333,
+      }),
+    );
+
+    expect(result.ok).toBe(true);
+    expect(result.compacted).toBe(true);
+    expect(maybeCompactAgentHarnessSessionMock).toHaveBeenCalledTimes(1);
+    expect(contextEngineCompactMock).toHaveBeenCalledTimes(1);
   });
 
   it("does not fire after_compaction when compaction fails", async () => {
