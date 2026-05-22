@@ -94,6 +94,7 @@ describe("scripts/crabbox-wrapper", () => {
       "exe",
       "exedev",
       "google",
+      "google-cloud",
       "local-docker",
       "namespace",
       "rail",

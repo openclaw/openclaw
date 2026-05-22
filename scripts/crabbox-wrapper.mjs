@@ -274,6 +274,7 @@ const providerAliases = new Map([
   ["exe", "exe-dev"],
   ["exedev", "exe-dev"],
   ["google", "gcp"],
+  ["google-cloud", "gcp"],
   ["local-docker", "local-container"],
   ["namespace", "namespace-devbox"],
   ["rail", "railway"],
