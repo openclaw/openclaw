@@ -38,6 +38,7 @@ Docs: https://docs.openclaw.ai
 - CLI/update: preserve managed Gateway service environment during package cutovers so macOS LaunchAgent repair/restart reads the pre-update service state instead of caller shell state. (#83026)
 - Gateway/restart: eager-load the lifecycle runtime before in-place upgrade signal handling so package replacement does not deadlock restart imports. (#84890) Thanks @myps6415.
 - CLI/update: start managed Gateway update handoff helpers from a stable existing directory and tolerate deleted cwd/package roots during macOS LaunchAgent handoff. Fixes #83808. (#83875) Thanks @jason-allen-oneal.
+- Skills: watch each shared skill directory once across agent workspaces instead of once per agent, preventing file-descriptor exhaustion (`EMFILE`) that disposed bundle-mcp processes and stalled sessions on multi-agent gateways. Fixes #84968. (#85130) Thanks @openperf.
 - Cron: honor `cron.retry.retryOn: ["network"]` for common network error codes such as `EAI_AGAIN`, `EHOSTUNREACH`, and `ENETUNREACH`.
 - Gateway chat: broadcast returned agent-run error payloads after an agent starts so ACP/WebChat clients receive terminal idle-timeout errors. Fixes #84945.
 - Dashboard/CLI: allow macOS browser launching through `open` even when SSH environment variables are present, while preserving Linux SSH no-display protection. Fixes #67088. Thanks @theglove44.
