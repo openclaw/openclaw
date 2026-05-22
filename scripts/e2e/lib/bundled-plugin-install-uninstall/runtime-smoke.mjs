@@ -241,10 +241,21 @@ async function httpOk(port, pathName) {
 }
 
 async function assertHttpOk(port, pathName) {
-  const res = await fetch(`http://127.0.0.1:${port}${pathName}`);
-  if (!res.ok) {
-    throw new Error(`${pathName} returned HTTP ${res.status}`);
+  const started = Date.now();
+  let lastError;
+  while (Date.now() - started < RPC_READY_TIMEOUT_MS) {
+    try {
+      const res = await fetch(`http://127.0.0.1:${port}${pathName}`);
+      if (res.ok) {
+        return;
+      }
+      lastError = new Error(`${pathName} returned HTTP ${res.status}`);
+    } catch (error) {
+      lastError = error;
+    }
+    await delay(500);
   }
+  throw lastError ?? new Error(`${pathName} did not return HTTP 200`);
 }
 
 async function assertReadyzProbe(options) {

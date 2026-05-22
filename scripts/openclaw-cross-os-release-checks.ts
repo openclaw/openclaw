@@ -1517,6 +1517,7 @@ export function shouldSkipInstallerDaemonHealthCheck(platform = process.platform
 export function buildRealUpdateEnv(env) {
   const updateEnv = {
     ...env,
+    OPENCLAW_ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS: "1",
     NODE_DISABLE_COMPILE_CACHE: "1",
   };
   delete updateEnv.OPENCLAW_DISABLE_BUNDLED_PLUGIN_POSTINSTALL;

@@ -547,6 +547,9 @@ jobs:
           NODE_OPTIONS: --max-old-space-size=8192
         run: pnpm build
 
+      - name: Install Playwright Chromium
+        run: pnpm --dir ui exec playwright install --with-deps chromium
+
       - name: Run repo E2E suite
         run: pnpm test:e2e
 
