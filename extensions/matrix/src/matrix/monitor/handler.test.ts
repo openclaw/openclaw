@@ -1103,14 +1103,57 @@ describe("matrix monitor handler pairing account scope", () => {
     expectMockCallWithFields(recordInboundSession, { sessionKey: "agent:ops:main:thread:$root" });
   });
 
-  it("bypasses requireMention for in-thread replies when the bot has an active per-thread session binding", async () => {
-    // User mentions the bot at thread root → bot replies → user continues
-    // in the thread without re-mentioning. The bot's first reply created a
-    // per-thread session binding (sessionBindingService.resolveByConversation
-    // for conversationId === threadId returns a record). On the follow-up
-    // in-thread reply, requireMention: true should be bypassed because the
-    // thread relation + active binding mean the user is clearly continuing
-    // the conversation the bot is already in.
+  it("bypasses requireMention for in-thread replies when a session record already exists for the thread", async () => {
+    // Natural continuation path: user mentions the bot at thread root → bot
+    // replies → recordInboundSession persists the thread-suffixed session
+    // key → on the follow-up in-thread reply, readSessionUpdatedAt returns
+    // a timestamp, the bypass fires, and the message is processed without
+    // a re-mention. This is the dominant case in real deployments because
+    // the bot's natural threadBindings flow does NOT create a runtime
+    // binding — it just records the session via recordInboundSession.
+    const { handler, recordInboundSession } = createMatrixHandlerTestHarness({
+      isDirectMessage: false,
+      threadReplies: "always",
+      bypassMentionInBoundThreads: true,
+      roomsConfig: {
+        "!room:example.org": { requireMention: true },
+      },
+      mentionRegexes: [/@bot/i],
+      // The session store shows a prior recorded session for the thread
+      // sessionKey. Returning any number signals "bot has been here".
+      readSessionUpdatedAt: () => Date.now() - 5_000,
+      client: {
+        getEvent: async () =>
+          createMatrixTextMessageEvent({
+            eventId: "$root",
+            sender: "@alice:example.org",
+            body: "@bot please help",
+          }),
+      },
+      getMemberDisplayName: async () => "sender",
+    });
+
+    await handler(
+      "!room:example.org",
+      createMatrixTextMessageEvent({
+        eventId: "$thread-reply-1",
+        body: "follow up without mention",
+        relatesTo: {
+          rel_type: "m.thread",
+          event_id: "$root",
+          "m.in_reply_to": { event_id: "$root" },
+        },
+      }),
+    );
+
+    expect(recordInboundSession).toHaveBeenCalled();
+  });
+
+  it("bypasses requireMention for in-thread replies when an explicit runtime binding exists (e.g. /focus)", async () => {
+    // Companion path to the session-store case: explicit ACP/user-managed
+    // bindings (created by /focus, /acp bind, etc.) also signal that the
+    // bot is engaged in this thread. Either signal is sufficient for the
+    // bypass to fire.
     registerSessionBindingAdapter({
       channel: "matrix",
       accountId: "ops",
@@ -1128,7 +1171,7 @@ describe("matrix monitor handler pairing account scope", () => {
               },
               status: "active",
               boundAt: Date.now(),
-              metadata: { boundBy: "matrix-monitor" },
+              metadata: { boundBy: "focus-cmd" },
             }
           : null,
       touch: vi.fn(),
@@ -1142,6 +1185,9 @@ describe("matrix monitor handler pairing account scope", () => {
         "!room:example.org": { requireMention: true },
       },
       mentionRegexes: [/@bot/i],
+      // Important: no session record (default undefined) — exercises the
+      // runtime-binding-only branch of the OR.
+      readSessionUpdatedAt: () => undefined,
       client: {
         getEvent: async () =>
           createMatrixTextMessageEvent({
@@ -1156,7 +1202,7 @@ describe("matrix monitor handler pairing account scope", () => {
     await handler(
       "!room:example.org",
       createMatrixTextMessageEvent({
-        eventId: "$thread-reply-1",
+        eventId: "$thread-reply-2",
         body: "follow up without mention",
         relatesTo: {
           rel_type: "m.thread",

@@ -1045,10 +1045,8 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
                 ? roomConfig?.requireMention
                 : true
           : false;
-        // Thread-continuation bypass: when the user replies INSIDE an existing
-        // thread that the bot already has an active per-thread session binding
-        // for (typical when threadBindings.enabled creates per-thread sessions
-        // after the bot's first reply in the thread), skip the mention gate.
+        // Thread-continuation bypass: when the user replies INSIDE a thread
+        // the bot has prior activity in, skip the room-level mention gate.
         //
         // Without this, the common bot UX of "mention to open a thread, then
         // free conversation continues inside that thread" is broken on
@@ -1057,19 +1055,41 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
         // clearly addressing the bot via thread relation.
         //
         // Discriminators:
-        //  * threadRootId is set AND threadRootId !== messageId — this is an
-        //    in-thread reply (the message has an m.thread relation to a root
-        //    that is not itself), not a top-level message that would become
-        //    a new thread root under threadReplies: "always".
-        //  * _runtimeBindingId is non-null — resolveMatrixInboundRoute found
-        //    an existing per-thread session via sessionBindingService
-        //    (bindingConversationId = threadId), meaning the bot has prior
-        //    activity bound to this specific thread.
+        //   1. `threadRootId` is set AND `threadRootId !== messageId` — this
+        //      is an in-thread reply (the message has an m.thread relation
+        //      to a root that is not itself), not a top-level message that
+        //      becomes a thread root under threadReplies: "always".
+        //   2. EITHER an existing session record for `_route.sessionKey`
+        //      exists (the bot has previously processed a message in this
+        //      thread → recordInboundSession persisted the thread-suffixed
+        //      session key) OR `_runtimeBindingId` is non-null (an explicit
+        //      ACP/user binding via /focus or /acp bind exists for the
+        //      thread). Both signals mean the bot has been engaged here.
+        //
+        // The session-store check (signal #2a) is the natural-continuation
+        // path — bots that have just replied in a thread land here without
+        // needing any explicit /focus. The runtime-binding check (signal #2b)
+        // covers the explicit-binding case for parity with /focus flows.
+        const inThreadReply =
+          bypassMentionInBoundThreads && threadRootId !== undefined && threadRootId !== messageId;
+        let threadSessionExists = false;
+        if (inThreadReply) {
+          try {
+            const threadCheckStorePath = core.channel.session.resolveStorePath(cfg.session?.store, {
+              agentId: _route.agentId,
+            });
+            const threadSessionUpdatedAt = core.channel.session.readSessionUpdatedAt({
+              storePath: threadCheckStorePath,
+              sessionKey: _route.sessionKey,
+            });
+            threadSessionExists =
+              threadSessionUpdatedAt !== undefined && threadSessionUpdatedAt !== null;
+          } catch {
+            threadSessionExists = false;
+          }
+        }
         const inExistingBoundThread =
-          bypassMentionInBoundThreads &&
-          threadRootId !== undefined &&
-          threadRootId !== messageId &&
-          _runtimeBindingId !== null;
+          inThreadReply && (threadSessionExists || _runtimeBindingId !== null);
         const shouldBypassMention =
           isRoom &&
           shouldRequireMention &&
