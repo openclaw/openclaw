@@ -132,6 +132,8 @@ mantis/
 !.agents/skills/openclaw-debugging/**
 !.agents/skills/openclaw-ghsa-maintainer/
 !.agents/skills/openclaw-ghsa-maintainer/**
+!.agents/skills/openclaw-landable-bug-sweep/
+!.agents/skills/openclaw-landable-bug-sweep/**
 !.agents/skills/openclaw-parallels-smoke/
 !.agents/skills/openclaw-parallels-smoke/**
 !.agents/skills/openclaw-pr-maintainer/
