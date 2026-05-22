@@ -1186,25 +1186,6 @@ export async function deliverOutboundPayloads(
 export async function deliverOutboundPayloadsInternal(
   params: DeliverOutboundPayloadsParams,
 ): Promise<OutboundDeliveryResult[]> {
-  // TEMP DIAGNOSTIC (2026-05-21): trace which channel deliveries reach
-  // deliverOutboundPayloadsInternal, which is what fires
-  // applyMessageSendingHook (provenance footer attach). If a channel
-  // bypasses this entry point, its outbound messages won't carry the
-  // footer. Real callers (src/channels/message/send.ts:203,
-  // src/gateway/server-runtime-services.ts:165,
-  // src/plugin-sdk/delivery-queue-runtime.ts:23) call the Internal entry
-  // directly, not the exported wrapper. Remove after the slack-vs-
-  // discord footer asymmetry is resolved.
-  try {
-    log.info(
-      `[deliverOutboundPayloadsInternal] entry channel=${params.channel} to=${params.to} ` +
-        `payloads=${params.payloads.length} skipQueue=${params.skipQueue === true} ` +
-        `bestEffort=${params.bestEffort === true} ` +
-        `session=${params.session?.key ?? params.session?.policyKey ?? ""}`,
-    );
-  } catch {
-    // never throw from a diagnostic
-  }
   const { channel, to, payloads } = params;
   const queuePolicy = params.queuePolicy ?? "best_effort";
   const queuePayloads = payloads.map(stripInternalRuntimeScaffoldingFromPayload);
