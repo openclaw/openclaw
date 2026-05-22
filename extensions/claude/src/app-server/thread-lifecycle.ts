@@ -1,0 +1,309 @@
+/**
+ * Thread lifecycle for the Claude app-server bridge.
+ *
+ * Mirrors extensions/codex/src/app-server/thread-lifecycle.ts at smaller
+ * scope. Owns the decision tree for starting a fresh thread vs resuming an
+ * existing thread, the binding-compatibility checks that drive rotation,
+ * and the in-place resume patches the server can absorb without losing
+ * the SDK transcript.
+ *
+ * Pulled out of run-attempt.ts so future fixes (thread/fork support,
+ * server-side resume of dynamicTools/MCP catalog, additional rotation
+ * reasons) land here instead of inflating the turn runner.
+ *
+ * Resume semantics summary:
+ *
+ *   Patchable on resume (no transcript loss; server applies via
+ *   applyResumeOverrides in openclaw-claude/server/src/handlers/
+ *   thread-resume.ts):
+ *     - cwd                       (Tank #6)
+ *     - approvalPolicy            (Tank #7 P2)
+ *     - developerInstructions     (Tank #7 P2)
+ *
+ *   Rotation reasons (force thread/start; SDK transcript resets):
+ *     - dynamicToolsFingerprint changed
+ *       (the SDK's MCP server registration happens at thread/start and
+ *       isn't refreshable on resume — see KNOWN LIMITATION below)
+ *
+ *   KNOWN LIMITATION (carry forward to upstream PR notes): a
+ *   tool-catalog change mid-session resets conversation history.
+ *   Mitigations to consider:
+ *     (a) Implement thread/fork on the server side and use it here
+ *         instead of thread/start; fork copies the SDK transcript.
+ *     (b) Teach the server to refresh sdkOptions.mcpServers on resume
+ *         (probably requires SDK support — the SDK's MCP registration
+ *         isn't refreshable today).
+ *   In practice catalog churn is rare for stable plugin sets.
+ */
+
+import {
+  embeddedAgentLog,
+  type EmbeddedRunAttemptParams,
+} from "openclaw/plugin-sdk/agent-harness-runtime";
+import type { ClaudeAppServerClient } from "./client.js";
+import type { ResolvedClaudeAppServerConfig } from "./config.js";
+import type { ClaudeDynamicToolBridge } from "./dynamic-tools.js";
+import { assertThreadStartResponse } from "./protocol-validators.js";
+import {
+  readClaudeAppServerBinding,
+  writeClaudeAppServerBinding,
+  type ClaudeAppServerBinding,
+} from "./thread-store.js";
+import type { ThreadStartParams } from "./types.js";
+
+const THREAD_NOT_FOUND_RE = /thread not found/i;
+
+export type StartOrResumeClaudeThreadParams = {
+  client: ClaudeAppServerClient;
+  params: EmbeddedRunAttemptParams;
+  cfg: ResolvedClaudeAppServerConfig;
+  bridge: ClaudeDynamicToolBridge;
+  developerInstructions: string;
+  developerInstructionsFingerprint: string;
+  dynamicToolsFingerprint: string;
+  effectiveWorkspace: string;
+  /**
+   * Native (claude_code preset) tools to block at thread/start, computed
+   * from openclaw's tool-policy disableTools/toolsAllow upstream. Passed
+   * in rather than computed here to keep this module pure-policy-vs-server
+   * (the openclaw policy resolution lives in run-attempt.ts).
+   */
+  nativeDisallowedTools: readonly string[];
+};
+
+export type ThreadLifecycleOutcome = {
+  threadId: string;
+  /**
+   * "resumed" if the thread existed and was patched in-place;
+   * "started"  if a fresh thread/start was issued.
+   */
+  outcome: "resumed" | "started";
+  /**
+   * Populated when outcome="started" AND the rotation was driven by a
+   * binding-compatibility check (vs first-ever turn for this session).
+   */
+  rotationReason?: string;
+};
+
+/**
+ * Decide whether to resume or start a thread, then perform the chosen
+ * server call. Caller does not need to know the binding internals.
+ */
+export async function startOrResumeClaudeThread(
+  args: StartOrResumeClaudeThreadParams,
+): Promise<ThreadLifecycleOutcome> {
+  const {
+    client,
+    params,
+    cfg,
+    bridge,
+    developerInstructions,
+    developerInstructionsFingerprint,
+    dynamicToolsFingerprint,
+    effectiveWorkspace,
+    nativeDisallowedTools,
+  } = args;
+  const sessionFile = params.sessionFile;
+  const existing = sessionFile ? await readClaudeAppServerBinding(sessionFile) : null;
+
+  const rotationReason = classifyRotationReason(existing, dynamicToolsFingerprint);
+
+  if (existing && !rotationReason) {
+    try {
+      const threadId = await tryResumeWithPatch({
+        client,
+        existing,
+        sessionFile,
+        cfg,
+        effectiveWorkspace,
+        developerInstructions,
+        developerInstructionsFingerprint,
+      });
+      return { threadId, outcome: "resumed" };
+    } catch (err) {
+      if (!isThreadNotFound(err)) {
+        throw err;
+      }
+      embeddedAgentLog.warn("claude-app-server: thread not found on resume; starting fresh", {
+        sessionFile,
+        threadId: existing.threadId,
+      });
+    }
+  } else if (existing && rotationReason) {
+    embeddedAgentLog.info("claude-app-server: rotating thread (transcript will reset)", {
+      sessionFile,
+      previousThreadId: existing.threadId,
+      reason: rotationReason,
+    });
+  }
+
+  const threadId = await startFreshThread({
+    client,
+    params,
+    cfg,
+    bridge,
+    developerInstructions,
+    developerInstructionsFingerprint,
+    dynamicToolsFingerprint,
+    effectiveWorkspace,
+    nativeDisallowedTools,
+  });
+  return rotationReason
+    ? { threadId, outcome: "started", rotationReason }
+    : { threadId, outcome: "started" };
+}
+
+// ── decision: should we rotate? ─────────────────────────────────────────────
+
+function classifyRotationReason(
+  existing: ClaudeAppServerBinding | null,
+  dynamicToolsFingerprint: string,
+): string | undefined {
+  if (!existing) {
+    return undefined;
+  }
+  if (
+    existing.dynamicToolsFingerprint &&
+    existing.dynamicToolsFingerprint !== dynamicToolsFingerprint
+  ) {
+    return "dynamic tool catalog changed (plugin set, allowlist, or sandbox shifted)";
+  }
+  return undefined;
+}
+
+// ── resume path: send patches, update sidecar ───────────────────────────────
+
+async function tryResumeWithPatch(args: {
+  client: ClaudeAppServerClient;
+  existing: ClaudeAppServerBinding;
+  sessionFile: string | undefined;
+  cfg: ResolvedClaudeAppServerConfig;
+  effectiveWorkspace: string;
+  developerInstructions: string;
+  developerInstructionsFingerprint: string;
+}): Promise<string> {
+  const {
+    client,
+    existing,
+    sessionFile,
+    cfg,
+    effectiveWorkspace,
+    developerInstructions,
+    developerInstructionsFingerprint,
+  } = args;
+
+  // Compute the patch set. Each field would have triggered a rotation
+  // (with transcript loss) in the pre-Tank-#6/#7 code; the server's
+  // applyResumeOverrides handler can absorb them in place.
+  const cwdDiverged = existing.cwd !== effectiveWorkspace;
+  const approvalPolicyDiverged = existing.approvalPolicy !== cfg.appServer.approvalPolicy;
+  const developerInstructionsDiverged =
+    existing.developerInstructionsFingerprint != null &&
+    existing.developerInstructionsFingerprint !== developerInstructionsFingerprint;
+
+  await client.request("thread/resume", {
+    threadId: existing.threadId,
+    ...(cwdDiverged ? { cwd: effectiveWorkspace } : {}),
+    ...(approvalPolicyDiverged ? { approvalPolicy: cfg.appServer.approvalPolicy } : {}),
+    ...(developerInstructionsDiverged ? { developerInstructions } : {}),
+  });
+
+  // Persist the patched values so the next turn doesn't re-send the same
+  // patches.
+  if (sessionFile && (cwdDiverged || approvalPolicyDiverged || developerInstructionsDiverged)) {
+    await writeClaudeAppServerBinding(sessionFile, {
+      threadId: existing.threadId,
+      cwd: effectiveWorkspace,
+      model: existing.model,
+      modelProvider: existing.modelProvider,
+      approvalPolicy: cfg.appServer.approvalPolicy,
+      approvalsReviewer: existing.approvalsReviewer,
+      sandbox: existing.sandbox,
+      developerInstructionsFingerprint,
+      dynamicToolsFingerprint: existing.dynamicToolsFingerprint,
+      createdAt: existing.createdAt,
+    });
+  }
+  return existing.threadId;
+}
+
+// ── start path: fresh thread/start + binding persistence ────────────────────
+
+async function startFreshThread(args: {
+  client: ClaudeAppServerClient;
+  params: EmbeddedRunAttemptParams;
+  cfg: ResolvedClaudeAppServerConfig;
+  bridge: ClaudeDynamicToolBridge;
+  developerInstructions: string;
+  developerInstructionsFingerprint: string;
+  dynamicToolsFingerprint: string;
+  effectiveWorkspace: string;
+  nativeDisallowedTools: readonly string[];
+}): Promise<string> {
+  const {
+    client,
+    params,
+    cfg,
+    bridge,
+    developerInstructions,
+    developerInstructionsFingerprint,
+    dynamicToolsFingerprint,
+    effectiveWorkspace,
+    nativeDisallowedTools,
+  } = args;
+
+  const startParams: ThreadStartParams = {
+    // effectiveWorkspace, not raw workspaceDir, so when sandbox
+    // workspaceAccess is read-only/copy-on-write the SDK's native
+    // Read/Edit/Bash see the sandbox-isolated path. Mirrors codex's
+    // effectiveWorkspace passthrough.
+    cwd: effectiveWorkspace,
+    model: params.modelId,
+    modelProvider: "anthropic",
+    approvalPolicy: cfg.appServer.approvalPolicy,
+    approvalsReviewer: "user",
+    sandbox: cfg.appServer.sandbox,
+    dynamicTools: bridge.specs,
+    developerInstructions,
+    ...(nativeDisallowedTools.length > 0 ? { disallowedTools: [...nativeDisallowedTools] } : {}),
+  };
+
+  const rawResponse = await client.request<unknown>("thread/start", startParams);
+  const response = assertThreadStartResponse(rawResponse);
+  const threadId = response.thread.id;
+
+  if (params.sessionFile) {
+    const binding: Omit<ClaudeAppServerBinding, "schemaVersion" | "createdAt" | "updatedAt"> = {
+      threadId,
+      cwd: effectiveWorkspace,
+      model: params.modelId,
+      modelProvider: "anthropic",
+      approvalPolicy: cfg.appServer.approvalPolicy,
+      approvalsReviewer: "user",
+      sandbox: cfg.appServer.sandbox,
+      developerInstructionsFingerprint,
+      dynamicToolsFingerprint,
+    };
+    await writeClaudeAppServerBinding(params.sessionFile, binding);
+  }
+  return threadId;
+}
+
+// ── error classifiers ───────────────────────────────────────────────────────
+
+export function isThreadNotFound(err: unknown): boolean {
+  if (!err || typeof err !== "object") {
+    return false;
+  }
+  const e = err as { message?: unknown; data?: unknown };
+  if (typeof e.message === "string" && THREAD_NOT_FOUND_RE.test(e.message)) {
+    return true;
+  }
+  if (e.data && typeof e.data === "object" && !Array.isArray(e.data)) {
+    const m = (e.data as { message?: unknown }).message;
+    if (typeof m === "string" && THREAD_NOT_FOUND_RE.test(m)) {
+      return true;
+    }
+  }
+  return false;
+}

@@ -15,7 +15,7 @@
  *      (native tools through OpenClaw's BeforeToolCall policy chain).
  *   5. Build developerInstructions; compute developerInstructions +
  *      dynamicTools fingerprints for rotation detection.
- *   6. ensureThread — resume (and patch cwd in meta when divergent) or
+ *   6. startOrResumeClaudeThread — resume (and patch cwd in meta when divergent) or
  *      fresh thread/start with cwd=effectiveWorkspace + projected
  *      disallowedTools.
  *   7. runTurn — turn/start; stream item/started + item/completed + delta
@@ -66,6 +66,7 @@ import { getSharedClaudeAppServerClient, type ClaudeAppServerClient } from "./cl
 import { resolveClaudeAppServerConfig, type ResolvedClaudeAppServerConfig } from "./config.js";
 import { createClaudeDynamicToolBridge, type ClaudeDynamicToolBridge } from "./dynamic-tools.js";
 import { assertThreadStartResponse } from "./protocol-validators.js";
+import { startOrResumeClaudeThread } from "./thread-lifecycle.js";
 import {
   readClaudeAppServerBinding,
   writeClaudeAppServerBinding,
@@ -81,8 +82,6 @@ import type {
   UserInput,
 } from "./types.js";
 import { filterToolsForVisionInputs, modelSupportsVision } from "./vision-tools.js";
-
-const THREAD_NOT_FOUND_RE = /thread not found/i;
 
 export type RunClaudeAppServerAttemptOptions = {
   pluginConfig?: unknown;
@@ -175,7 +174,7 @@ export async function runClaudeAppServerAttempt(
     //    isCurrentThreadOptionalTurnRequestParams) so concurrent turns on
     //    the shared client don't cross-route tool calls / approvals. We
     //    use a mutable ref because handlers register here but threadId
-    //    isn't known until ensureThread runs (step 6). Tank P1 review.
+    //    isn't known until startOrResumeClaudeThread runs (step 6). Tank P1 review.
     const turnIdentity: { threadId?: string; turnId?: string } = {};
     const bridge = createClaudeDynamicToolBridge({
       tools,
@@ -211,7 +210,7 @@ export async function runClaudeAppServerAttempt(
 
     // 5. Build developerInstructions ONCE per turn (cheap; reads bootstrap
     //    files). Hash to detect SOUL.md / workspace changes; if the hash
-    //    differs from the existing binding, ensureThread rotates to a fresh
+    //    differs from the existing binding, the thread-lifecycle module rotates to a fresh
     //    thread so the new persona reaches the model. The SDK pins
     //    developerInstructions as the cached static-prefix of the
     //    Claude-Code-preset systemPrompt for the thread's lifetime.
@@ -269,8 +268,10 @@ export async function runClaudeAppServerAttempt(
     // toggled). Codex does the same at thread-lifecycle.ts:102/219.
     const dynamicToolsFingerprint = fingerprintDynamicTools(bridge.specs);
 
-    // 6. Ensure thread binding for this session.
-    const threadId = await ensureThread(
+    // 6. Resume or start the thread for this session. The lifecycle module
+    //    owns the rotation-vs-patch decision and the binding-sidecar reads
+    //    and writes. See thread-lifecycle.ts for the policy summary.
+    const lifecycle = await startOrResumeClaudeThread({
       client,
       params,
       cfg,
@@ -279,7 +280,9 @@ export async function runClaudeAppServerAttempt(
       developerInstructionsFingerprint,
       dynamicToolsFingerprint,
       effectiveWorkspace,
-    );
+      nativeDisallowedTools: computeNativeDisallowedTools(params),
+    });
+    const threadId = lifecycle.threadId;
     // Bind the threadId for this turn's handler filters now that it's
     // known. turnId comes later (set inside runTurn after turn/start
     // resolves) so concurrent turns can't grab each other's tool-call /
@@ -692,181 +695,8 @@ function registerToolCallHandler(
   });
 }
 
-// ─── Thread continuity ──────────────────────────────────────────────────────
-
-async function ensureThread(
-  client: ClaudeAppServerClient,
-  params: EmbeddedRunAttemptParams,
-  cfg: ResolvedClaudeAppServerConfig,
-  bridge: ClaudeDynamicToolBridge,
-  developerInstructions: string,
-  developerInstructionsFingerprint: string,
-  dynamicToolsFingerprint: string,
-  effectiveWorkspace: string,
-): Promise<string> {
-  const sessionFile = params.sessionFile;
-  const existing = sessionFile ? await readClaudeAppServerBinding(sessionFile) : null;
-
-  // Invalidation reasons (any of these forces a fresh thread):
-  //  - approvalPolicy changed (server pins it at thread/start)
-  //  - developerInstructions hash changed (SOUL.md edited, workspace files
-  //    changed, plugin guidance updated, etc.)
-  //  - dynamicToolsFingerprint changed (tool catalog changed: plugin
-  //    enabled/disabled/upgraded, allowlist edited, sandbox toggled).
-  //    Pre-rebuild bindings without the field are grandfathered (no
-  //    rotation) to avoid disrupting existing threads.
-  // Rotation reasons that the server CAN'T patch via applyResumeOverrides.
-  // Today the only such reason is a dynamicTools-catalog shift — the SDK's
-  // MCP server registration happens at thread/start and isn't refreshable
-  // on resume. Rotating for that case still drops the SDK transcript.
-  //
-  // KNOWN LIMITATION (tracked as a follow-up; surface in PR notes when
-  // upstreaming): a tool-catalog change mid-session resets conversation
-  // history. Mitigations to consider:
-  //   (a) Implement thread/fork on the server side and use it here, since
-  //       fork copies the SDK transcript across the new thread id.
-  //   (b) Teach the server to refresh sdkOptions.mcpServers on resume
-  //       (probably requires SDK support — the SDK's MCP registration
-  //       isn't refreshable today AFAICT).
-  // In practice the catalog churn is rare for stable plugin sets, but it
-  // should be called out.
-  //
-  // Reasons we used to rotate for but now patch in-place via resume:
-  //  - cwd (Tank-#6 fix; server applyResumeOverrides patches meta.cwd)
-  //  - approvalPolicy (server applyResumeOverrides supports it; Tank-#7 P2)
-  //  - developerInstructions (ditto; Tank-#7 P2)
-  //
-  // Rationale: rotation calls thread/start which creates a new thread_id +
-  // sessionId, and the SDK's session store keys messages.jsonl by that id —
-  // so rotation eats the conversation transcript. In-place resume keeps
-  // the same thread (and SDK session) alive and patches meta so subsequent
-  // turns see the new values.
-  let rotationReason: string | undefined;
-  if (existing) {
-    if (
-      existing.dynamicToolsFingerprint &&
-      existing.dynamicToolsFingerprint !== dynamicToolsFingerprint
-    ) {
-      rotationReason = "dynamic tool catalog changed (plugin set, allowlist, or sandbox shifted)";
-    }
-  }
-
-  if (existing && !rotationReason) {
-    try {
-      // Send any divergent fields the server can patch in-place
-      // (applyResumeOverrides at openclaw-claude/server/src/handlers/
-      // thread-resume.ts). Each one would have triggered a rotation +
-      // transcript loss in the old code — Tank-#6 (cwd) + Tank-#7 (the
-      // rest).
-      const cwdDiverged = existing.cwd !== effectiveWorkspace;
-      const approvalPolicyDiverged = existing.approvalPolicy !== cfg.appServer.approvalPolicy;
-      const developerInstructionsDiverged =
-        existing.developerInstructionsFingerprint != null &&
-        existing.developerInstructionsFingerprint !== developerInstructionsFingerprint;
-      await client.request("thread/resume", {
-        threadId: existing.threadId,
-        ...(cwdDiverged ? { cwd: effectiveWorkspace } : {}),
-        ...(approvalPolicyDiverged ? { approvalPolicy: cfg.appServer.approvalPolicy } : {}),
-        ...(developerInstructionsDiverged ? { developerInstructions } : {}),
-      });
-      // Persist the new values in our binding sidecar so future resumes
-      // don't re-send the same patches on every turn.
-      if (sessionFile && (cwdDiverged || approvalPolicyDiverged || developerInstructionsDiverged)) {
-        await writeClaudeAppServerBinding(sessionFile, {
-          threadId: existing.threadId,
-          cwd: effectiveWorkspace,
-          model: existing.model,
-          modelProvider: existing.modelProvider,
-          approvalPolicy: cfg.appServer.approvalPolicy,
-          approvalsReviewer: existing.approvalsReviewer,
-          sandbox: existing.sandbox,
-          developerInstructionsFingerprint,
-          dynamicToolsFingerprint: existing.dynamicToolsFingerprint,
-          createdAt: existing.createdAt,
-        });
-      }
-      return existing.threadId;
-    } catch (err) {
-      if (!isThreadNotFound(err)) {
-        throw err;
-      }
-      embeddedAgentLog.warn("claude-app-server: thread not found on resume; starting fresh", {
-        sessionFile,
-        threadId: existing.threadId,
-      });
-    }
-  } else if (existing && rotationReason) {
-    embeddedAgentLog.info("claude-app-server: rotating thread (transcript will reset)", {
-      sessionFile,
-      previousThreadId: existing.threadId,
-      reason: rotationReason,
-    });
-  }
-
-  // Project OpenClaw's tool policy onto the SDK's native (claude_code
-  // preset) tools that bypass the dynamic-tools bridge. When openclaw says
-  // disableTools, or restricts toolsAllow to a specific non-wildcard set,
-  // block all native tools so the model can only use the openclaw MCP
-  // surface. The server merges this with its env default
-  // (OPENCLAW_CLAUDE_APP_SERVER_DISALLOWED_TOOLS, typically "Agent,Task").
-  const nativeDisallowed = computeNativeDisallowedTools(params);
-  const startParams: ThreadStartParams = {
-    // effectiveWorkspace, not raw workspaceDir, so when sandbox
-    // workspaceAccess is read-only or copy-on-write the SDK's native
-    // Read/Edit/Bash see the sandbox-isolated path (server forwards this
-    // to sdkOptions.cwd). Mirrors codex's effectiveWorkspace passthrough.
-    cwd: effectiveWorkspace,
-    model: params.modelId,
-    modelProvider: "anthropic",
-    approvalPolicy: cfg.appServer.approvalPolicy,
-    approvalsReviewer: "user",
-    sandbox: cfg.appServer.sandbox,
-    dynamicTools: bridge.specs,
-    developerInstructions,
-    ...(nativeDisallowed.length > 0 ? { disallowedTools: nativeDisallowed } : {}),
-  };
-  const rawResponse = await client.request<unknown>("thread/start", startParams);
-  // assertThreadStartResponse throws ClaudeAppServerProtocolError with
-  // structured Zod issues if thread/start returns an unrecognized shape,
-  // replacing the previous one-off inline thread.id check.
-  const response = assertThreadStartResponse(rawResponse);
-  const threadId = response.thread.id;
-  if (sessionFile) {
-    const binding: Omit<ClaudeAppServerBinding, "schemaVersion" | "createdAt" | "updatedAt"> = {
-      threadId,
-      cwd: startParams.cwd!,
-      model: params.modelId,
-      modelProvider: "anthropic",
-      approvalPolicy: cfg.appServer.approvalPolicy,
-      approvalsReviewer: "user",
-      sandbox: cfg.appServer.sandbox,
-      developerInstructionsFingerprint,
-      dynamicToolsFingerprint,
-    };
-    await writeClaudeAppServerBinding(sessionFile, binding);
-  }
-  return threadId;
-}
-
 function fingerprintString(value: string): string {
   return createHash("sha256").update(value, "utf8").digest("hex");
-}
-
-function isThreadNotFound(err: unknown): boolean {
-  if (!err || typeof err !== "object") {
-    return false;
-  }
-  const e = err as { message?: unknown; data?: unknown };
-  if (typeof e.message === "string" && THREAD_NOT_FOUND_RE.test(e.message)) {
-    return true;
-  }
-  if (e.data && typeof e.data === "object" && !Array.isArray(e.data)) {
-    const m = (e.data as { message?: unknown }).message;
-    if (typeof m === "string" && THREAD_NOT_FOUND_RE.test(m)) {
-      return true;
-    }
-  }
-  return false;
 }
 
 // ─── Turn execution ─────────────────────────────────────────────────────────
@@ -925,7 +755,7 @@ async function runTurn(
   const turnParams: TurnStartParams = {
     threadId,
     input: buildInput(params, promptPrefix),
-    // effectiveWorkspace — see ensureThread cwd comment. Per-turn cwd lets
+    // effectiveWorkspace — see thread-lifecycle.ts cwd comment. Per-turn cwd lets
     // the server pin SDK cwd on the resume path too, in case the SDK reads
     // it from turn rather than thread-create.
     cwd: effectiveWorkspace,
