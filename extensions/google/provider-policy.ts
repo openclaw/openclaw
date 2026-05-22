@@ -184,12 +184,13 @@ export function resolveGoogleThinkingProfile({
   modelId,
   reasoning,
 }: ProviderDefaultThinkingPolicyContext): ProviderThinkingProfile | undefined {
-  const isGemini3ThinkingModel = isGoogleGemini3ThinkingLevelModel(modelId);
+  const normalizedModelId = normalizeGoogleModelId(modelId);
+  const isGemini3ThinkingModel = isGoogleGemini3ThinkingLevelModel(normalizedModelId);
   if (reasoning === false && !isGemini3ThinkingModel) {
     return undefined;
   }
 
-  const levels: ProviderThinkingProfile["levels"] = isGoogleGemini3ProModel(modelId)
+  const levels: ProviderThinkingProfile["levels"] = isGoogleGemini3ProModel(normalizedModelId)
     ? [{ id: "off" }, { id: "low" }, { id: "adaptive" }, { id: "high" }]
     : [
         { id: "off" },
