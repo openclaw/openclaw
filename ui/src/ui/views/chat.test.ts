@@ -1659,7 +1659,7 @@ describe("chat session controls", () => {
         },
       ],
     });
-    const session = state.sessionsResult!.sessions[0]!;
+    const session = state.sessionsResult!.sessions[0];
     state.sessionsResult = {
       ...state.sessionsResult!,
       defaults: {
