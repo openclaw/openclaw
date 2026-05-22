@@ -154,19 +154,19 @@ The script exits with code `2` for invalid method selection or invalid `--instal
 
   <Accordion title="Environment variables reference">
 
-| Variable                                                | Description                                   |
-| ------------------------------------------------------- | --------------------------------------------- |
-| `OPENCLAW_INSTALL_METHOD=git\|npm`                      | Install method                                |
+| Variable                                          | Description                                   |
+| ------------------------------------------------- | --------------------------------------------- |
+| `OPENCLAW_INSTALL_METHOD=git\|npm`                | Install method                                |
 | `OPENCLAW_VERSION=latest\|next\|<semver>\|<spec>` | npm version, dist-tag, or package spec        |
-| `OPENCLAW_BETA=0\|1`                                    | Use beta if available                         |
-| `OPENCLAW_GIT_DIR=<path>`                               | Checkout directory                            |
-| `OPENCLAW_GIT_UPDATE=0\|1`                              | Toggle git updates                            |
-| `OPENCLAW_NO_PROMPT=1`                                  | Disable prompts                               |
-| `OPENCLAW_NO_ONBOARD=1`                                 | Skip onboarding                               |
-| `OPENCLAW_DRY_RUN=1`                                    | Dry run mode                                  |
-| `OPENCLAW_VERBOSE=1`                                    | Debug mode                                    |
-| `OPENCLAW_NPM_LOGLEVEL=error\|warn\|notice`             | npm log level                                 |
-| `SHARP_IGNORE_GLOBAL_LIBVIPS=0\|1`                      | Control sharp/libvips behavior (default: `1`) |
+| `OPENCLAW_BETA=0\|1`                              | Use beta if available                         |
+| `OPENCLAW_GIT_DIR=<path>`                         | Checkout directory                            |
+| `OPENCLAW_GIT_UPDATE=0\|1`                        | Toggle git updates                            |
+| `OPENCLAW_NO_PROMPT=1`                            | Disable prompts                               |
+| `OPENCLAW_NO_ONBOARD=1`                           | Skip onboarding                               |
+| `OPENCLAW_DRY_RUN=1`                              | Dry run mode                                  |
+| `OPENCLAW_VERBOSE=1`                              | Debug mode                                    |
+| `OPENCLAW_NPM_LOGLEVEL=error\|warn\|notice`       | npm log level                                 |
+| `SHARP_IGNORE_GLOBAL_LIBVIPS=0\|1`                | Control sharp/libvips behavior (default: `1`) |
 
   </Accordion>
 </AccordionGroup>
