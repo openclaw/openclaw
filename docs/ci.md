@@ -45,6 +45,34 @@ GitHub may mark superseded jobs as `cancelled` when a newer push lands on the sa
 
 The `ci-timings-summary` job uploads a compact `ci-timings-summary` artifact for each non-draft CI run. It records wall time, queue time, slowest jobs, and failed jobs for the current run, so CI health checks do not need to scrape the full Actions payload repeatedly.
 
+## Real behavior proof
+
+External contributor PRs run a `Real behavior proof` gate from
+`.github/workflows/real-behavior-proof.yml`. The workflow checks out the trusted
+base commit and evaluates the PR body only; it does not execute code from the
+contributor branch.
+
+The gate applies to PR authors who are not repository owners, members,
+collaborators, or bots. It passes when the PR body contains a
+`Real behavior proof` section with filled values for:
+
+- `Behavior or issue addressed`
+- `Real environment tested`
+- `Exact steps or command run after this patch`
+- `Evidence after fix`
+- `Observed result after fix`
+- `What was not tested`
+
+The evidence must show the changed behavior after the patch in a real OpenClaw
+setup. Screenshots, recordings, terminal captures, console output, copied live
+output, redacted runtime logs, and linked artifacts all count. Unit tests, mocks,
+snapshots, lint, typechecks, and CI results are useful supporting verification,
+but they do not satisfy this gate by themselves.
+
+When the check fails, update the PR body instead of pushing another code commit.
+Maintainers can apply `proof: override` only when the proof gate should not
+apply to that PR.
+
 ## Scope and routing
 
 Scope logic lives in `scripts/ci-changed-scope.mjs` and is covered by unit tests in `src/scripts/ci-changed-scope.test.ts`. Manual dispatch skips changed-scope detection and makes the preflight manifest act as if every scoped area changed.

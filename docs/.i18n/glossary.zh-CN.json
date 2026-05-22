@@ -1022,5 +1022,13 @@
   {
     "source": "Per-user agent isolation",
     "target": "每用户 Agent 隔离"
+  },
+  {
+    "source": "Gateway exposure runbook",
+    "target": "Gateway 暴露运行手册"
+  },
+  {
+    "source": "Z.AI (GLM)",
+    "target": "Z.AI (GLM)"
   }
 ]

@@ -25,6 +25,10 @@ OpenClaw security guidance assumes a **personal assistant** deployment: one trus
 
 This page explains hardening **within that model**. It does not claim hostile multi-tenant isolation on one shared gateway.
 
+Before changing remote access, DM policy, reverse proxy, or public exposure,
+use the [Gateway exposure runbook](/gateway/security/exposure-runbook) as a
+pre-flight and rollback checklist.
+
 ## Quick check: `openclaw security audit`
 
 See also: [Formal Verification (Security Models)](/security/formal-verification)
