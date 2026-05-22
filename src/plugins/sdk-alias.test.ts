@@ -1071,6 +1071,92 @@ describe("plugin sdk alias helpers", () => {
     expect(shadowCodexAliases["openclaw/plugin-sdk/codex-native-task-runtime"]).toBeUndefined();
   });
 
+  it("aliases the Ollama SSRF internal helper only for the bundled Ollama plugin", () => {
+    const fixture = createPluginSdkAliasFixture({
+      packageExports: {
+        "./plugin-sdk/core": { default: "./dist/plugin-sdk/core.js" },
+      },
+    });
+    const sourceRootAlias = path.join(fixture.root, "src", "plugin-sdk", "root-alias.cjs");
+    const distRootAlias = path.join(fixture.root, "dist", "plugin-sdk", "root-alias.cjs");
+    const sourceSsrFInternalPath = path.join(
+      fixture.root,
+      "src",
+      "plugin-sdk",
+      "ssrf-runtime-internal.ts",
+    );
+    const distSsrFInternalPath = path.join(
+      fixture.root,
+      "dist",
+      "plugin-sdk",
+      "ssrf-runtime-internal.js",
+    );
+    fs.writeFileSync(sourceRootAlias, "module.exports = {};\n", "utf-8");
+    fs.writeFileSync(distRootAlias, "module.exports = {};\n", "utf-8");
+    fs.writeFileSync(
+      path.join(fixture.root, "scripts", "lib", "plugin-sdk-private-local-only-subpaths.json"),
+      JSON.stringify(["ssrf-runtime-internal"], null, 2),
+      "utf-8",
+    );
+    fs.writeFileSync(sourceSsrFInternalPath, "export const ssrfInternal = true;\n", "utf-8");
+    fs.writeFileSync(distSsrFInternalPath, "export const ssrfInternal = true;\n", "utf-8");
+    const sourceOllamaEntry = writePluginEntry(
+      fixture.root,
+      bundledPluginFile("ollama", "index.ts"),
+    );
+    const sourceOtherPluginEntry = writePluginEntry(
+      fixture.root,
+      bundledPluginFile("demo", "index.ts"),
+    );
+    const distOllamaEntry = writePluginEntry(
+      fixture.root,
+      bundledDistPluginFile("ollama", "index.js"),
+    );
+    const { packageRoot: installedOllamaRoot, pluginEntry: installedOllamaEntry } =
+      writeInstalledPluginEntry({
+        installRoot: path.join(makeTempDir(), ".openclaw", "npm"),
+        packageName: "@openclaw/ollama",
+      });
+
+    const sourceSubpaths = withEnv({ OPENCLAW_ENABLE_PRIVATE_QA_CLI: undefined }, () =>
+      listPluginSdkExportedSubpaths({
+        modulePath: sourceOllamaEntry,
+      }),
+    );
+    const sourceAliases = withEnv(
+      { OPENCLAW_ENABLE_PRIVATE_QA_CLI: undefined, NODE_ENV: undefined },
+      () => buildPluginLoaderAliasMap(sourceOllamaEntry),
+    );
+    const distAliases = withEnv(
+      { OPENCLAW_ENABLE_PRIVATE_QA_CLI: undefined, NODE_ENV: undefined },
+      () => buildPluginLoaderAliasMap(distOllamaEntry, undefined, undefined, "dist"),
+    );
+    const otherAliases = withEnv(
+      { OPENCLAW_ENABLE_PRIVATE_QA_CLI: undefined, NODE_ENV: undefined },
+      () => buildPluginLoaderAliasMap(sourceOtherPluginEntry),
+    );
+    const installedAliases = withCwd(installedOllamaRoot, () =>
+      withEnv({ OPENCLAW_ENABLE_PRIVATE_QA_CLI: undefined, NODE_ENV: undefined }, () =>
+        buildPluginLoaderAliasMap(
+          installedOllamaEntry,
+          path.join(fixture.root, "openclaw.mjs"),
+          undefined,
+          "dist",
+        ),
+      ),
+    );
+
+    expect(sourceSubpaths).toEqual(["core", "ssrf-runtime-internal"]);
+    expect(fs.realpathSync(sourceAliases["openclaw/plugin-sdk/ssrf-runtime-internal"] ?? "")).toBe(
+      fs.realpathSync(sourceSsrFInternalPath),
+    );
+    expect(fs.realpathSync(distAliases["openclaw/plugin-sdk/ssrf-runtime-internal"] ?? "")).toBe(
+      fs.realpathSync(distSsrFInternalPath),
+    );
+    expect(otherAliases["openclaw/plugin-sdk/ssrf-runtime-internal"]).toBeUndefined();
+    expect(installedAliases["openclaw/plugin-sdk/ssrf-runtime-internal"]).toBeUndefined();
+  });
+
   it("applies explicit dist resolution to plugin-sdk subpath aliases too", () => {
     const { fixture, distRootAlias, distChannelRuntimePath } = createPluginSdkAliasTargetFixture();
     const sourcePluginEntry = writePluginEntry(

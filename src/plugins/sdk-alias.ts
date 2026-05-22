@@ -271,9 +271,13 @@ const PLUGIN_SDK_PACKAGE_NAMES = ["openclaw/plugin-sdk", "@openclaw/plugin-sdk"]
 const OFFICIAL_CODEX_PLUGIN_PACKAGE_NAME = "@openclaw/codex";
 const CODEX_NATIVE_TASK_RUNTIME_PLUGIN_SDK_SUBPATH = "codex-native-task-runtime";
 const CODEX_MCP_PROJECTION_PLUGIN_SDK_SUBPATH = "codex-mcp-projection";
+const OLLAMA_CONFIGURED_LOCAL_ORIGIN_RUNTIME_PLUGIN_SDK_SUBPATH = "ssrf-runtime-internal";
 const BUNDLED_CODEX_PRIVATE_PLUGIN_SDK_SUBPATHS = new Set([
   CODEX_NATIVE_TASK_RUNTIME_PLUGIN_SDK_SUBPATH,
   CODEX_MCP_PROJECTION_PLUGIN_SDK_SUBPATH,
+]);
+const BUNDLED_OLLAMA_PRIVATE_PLUGIN_SDK_SUBPATHS = new Set([
+  OLLAMA_CONFIGURED_LOCAL_ORIGIN_RUNTIME_PLUGIN_SDK_SUBPATH,
 ]);
 const PLUGIN_SDK_SOURCE_CANDIDATE_EXTENSIONS = [
   ".ts",
@@ -488,6 +492,19 @@ function isBundledCodexPluginModulePath(params: { packageRoot: string; modulePat
   );
 }
 
+function isBundledOllamaPluginModulePath(params: { packageRoot: string; modulePath: string }) {
+  const normalizedModulePath = path.resolve(params.modulePath);
+  const roots = [
+    path.join(params.packageRoot, "extensions", "ollama"),
+    path.join(params.packageRoot, "dist", "extensions", "ollama"),
+    path.join(params.packageRoot, "dist-runtime", "extensions", "ollama"),
+  ];
+  return roots.some(
+    (root) =>
+      normalizedModulePath === root || normalizedModulePath.startsWith(`${root}${path.sep}`),
+  );
+}
+
 function isOfficialInstalledCodexPluginPackageRoot(packageRoot: string) {
   const segments = path.resolve(packageRoot).split(path.sep).filter(Boolean);
   const last = segments.at(-1);
@@ -522,6 +539,10 @@ function isTrustedCodexPluginModulePath(params: { packageRoot: string; modulePat
   );
 }
 
+function isTrustedOllamaPluginModulePath(params: { packageRoot: string; modulePath: string }) {
+  return isBundledOllamaPluginModulePath(params);
+}
+
 function shouldIncludePrivateLocalOnlyPluginSdkSubpath(params: {
   packageRoot: string;
   modulePath: string;
@@ -531,6 +552,11 @@ function shouldIncludePrivateLocalOnlyPluginSdkSubpath(params: {
     shouldIncludePrivateLocalOnlyPluginSdkSubpaths() ||
     (BUNDLED_CODEX_PRIVATE_PLUGIN_SDK_SUBPATHS.has(params.subpath) &&
       isTrustedCodexPluginModulePath({
+        packageRoot: params.packageRoot,
+        modulePath: params.modulePath,
+      })) ||
+    (BUNDLED_OLLAMA_PRIVATE_PLUGIN_SDK_SUBPATHS.has(params.subpath) &&
+      isTrustedOllamaPluginModulePath({
         packageRoot: params.packageRoot,
         modulePath: params.modulePath,
       }))
@@ -591,7 +617,8 @@ export function listPluginSdkExportedSubpaths(
     return [];
   }
   const includeCodexPrivateRuntime = isTrustedCodexPluginModulePath({ packageRoot, modulePath });
-  const cacheKey = `${packageRoot}::privateQa=${shouldIncludePrivateLocalOnlyPluginSdkSubpaths() ? "1" : "0"}::codexPrivate=${includeCodexPrivateRuntime ? "1" : "0"}`;
+  const includeOllamaPrivateRuntime = isTrustedOllamaPluginModulePath({ packageRoot, modulePath });
+  const cacheKey = `${packageRoot}::privateQa=${shouldIncludePrivateLocalOnlyPluginSdkSubpaths() ? "1" : "0"}::codexPrivate=${includeCodexPrivateRuntime ? "1" : "0"}::ollamaPrivate=${includeOllamaPrivateRuntime ? "1" : "0"}`;
   const cached = cachedPluginSdkExportedSubpaths.get(cacheKey);
   if (cached) {
     return cached;
@@ -629,7 +656,8 @@ export function resolvePluginSdkScopedAliasMap(
     pluginSdkResolution: params.pluginSdkResolution,
   });
   const includeCodexPrivateRuntime = isTrustedCodexPluginModulePath({ packageRoot, modulePath });
-  const cacheKey = `${packageRoot}::${orderedKinds.join(",")}::privateQa=${shouldIncludePrivateLocalOnlyPluginSdkSubpaths() ? "1" : "0"}::codexPrivate=${includeCodexPrivateRuntime ? "1" : "0"}`;
+  const includeOllamaPrivateRuntime = isTrustedOllamaPluginModulePath({ packageRoot, modulePath });
+  const cacheKey = `${packageRoot}::${orderedKinds.join(",")}::privateQa=${shouldIncludePrivateLocalOnlyPluginSdkSubpaths() ? "1" : "0"}::codexPrivate=${includeCodexPrivateRuntime ? "1" : "0"}::ollamaPrivate=${includeOllamaPrivateRuntime ? "1" : "0"}`;
   const cached = cachedPluginSdkScopedAliasMaps.get(cacheKey);
   if (cached) {
     return cached;
