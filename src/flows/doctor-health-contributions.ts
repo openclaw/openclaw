@@ -240,6 +240,13 @@ function formatDoctorRepairEffect(effect: HealthRepairEffect): string {
   return `- ${effect.kind}:${effect.action}${target}${safety}`;
 }
 
+function formatDoctorRepairFinding(finding: HealthFinding): string {
+  const location = finding.path ?? finding.ocPath ?? finding.target;
+  const suffix = location ? ` (${location})` : "";
+  const fixHint = finding.fixHint ? `\n  fix: ${finding.fixHint}` : "";
+  return `- ${finding.severity}:${finding.checkId}${suffix}: ${finding.message}${fixHint}`;
+}
+
 export function formatDoctorContributionPreviewUnsupportedWarning(
   contribution: DoctorHealthContributionPreviewInfo,
   mode: string,
@@ -491,6 +498,9 @@ async function runStructuredHealthRepairChecks(
     ctx.previewReport.warnings.push(...result.warnings);
     ctx.previewReport.effects.push(...result.effects);
     ctx.previewReport.diffs.push(...result.diffs);
+  }
+  if (ctx.options?.dryRun === true && result.findings.length > 0) {
+    note(result.findings.map(formatDoctorRepairFinding).join("\n"), "Doctor findings");
   }
   if (result.changes.length > 0) {
     note(result.changes.join("\n"), "Doctor changes");
