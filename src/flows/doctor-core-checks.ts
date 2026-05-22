@@ -1483,6 +1483,21 @@ const gatewayServiceConfigCheck: RegisteredHealthCheck = defineSplitHealthCheck(
         warnings,
       };
     }
+    if (detection.serviceRewriteBlocked) {
+      return {
+        status: "skipped",
+        reason: "gateway service rewrite is blocked while the service is running",
+        changes: [],
+        warnings: [
+          ctx.dryRun === true
+            ? "Gateway service is running; real repair would leave supervisor metadata unchanged unless the service is stopped or reinstalled with --force."
+            : "Gateway service is running; leaving supervisor metadata unchanged. Stop the service first or use `openclaw gateway install --force` when you want to replace the active launcher.",
+          ...(detection.gatewayRuntimeWarning ? [detection.gatewayRuntimeWarning] : []),
+          ...(detection.installPlanWarnings ?? []).map((warning) => warning.message),
+        ],
+        effects: [],
+      };
+    }
     if (ctx.dryRun === true) {
       return {
         changes: detection.issues.map((issue) =>
@@ -1491,11 +1506,6 @@ const gatewayServiceConfigCheck: RegisteredHealthCheck = defineSplitHealthCheck(
             : `Would update gateway service config for ${issue.message}.`,
         ),
         warnings: [
-          ...(detection.serviceRewriteBlocked
-            ? [
-                "Gateway service is running; real repair would leave supervisor metadata unchanged unless the service is stopped or reinstalled with --force.",
-              ]
-            : []),
           ...(detection.gatewayRuntimeWarning ? [detection.gatewayRuntimeWarning] : []),
           ...(detection.installPlanWarnings ?? []).map((warning) => warning.message),
         ],
@@ -1507,19 +1517,6 @@ const gatewayServiceConfigCheck: RegisteredHealthCheck = defineSplitHealthCheck(
             dryRunSafe: false,
           },
         ],
-      };
-    }
-    if (detection.serviceRewriteBlocked) {
-      return {
-        status: "skipped",
-        reason: "gateway service rewrite is blocked while the service is running",
-        changes: [],
-        warnings: [
-          "Gateway service is running; leaving supervisor metadata unchanged. Stop the service first or use `openclaw gateway install --force` when you want to replace the active launcher.",
-          ...(detection.gatewayRuntimeWarning ? [detection.gatewayRuntimeWarning] : []),
-          ...(detection.installPlanWarnings ?? []).map((warning) => warning.message),
-        ],
-        effects: [],
       };
     }
     const repaired = await repairGatewayServiceConfig({

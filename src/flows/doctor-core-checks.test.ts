@@ -988,12 +988,10 @@ describe("registerCoreHealthChecks", () => {
       ],
       cleanupHints: [],
     });
-    const check = CORE_HEALTH_CHECKS.find(
-      (entry) => entry.id === "core/doctor/gateway-services/extra",
-    );
+    const check = getCheck(CORE_HEALTH_CHECKS, "core/doctor/gateway-services/extra");
 
     await expect(
-      check?.detect({
+      check.detect({
         mode: "lint",
         runtime: { log() {}, error() {}, exit() {} },
         cfg: {},
@@ -1020,9 +1018,7 @@ describe("registerCoreHealthChecks", () => {
         },
       ],
     });
-    const check = CORE_HEALTH_CHECKS.find(
-      (entry) => entry.id === "core/doctor/gateway-services/config",
-    );
+    const check = getCheck(CORE_HEALTH_CHECKS, "core/doctor/gateway-services/config");
 
     const repaired = await check?.repair?.(
       {
@@ -1047,18 +1043,52 @@ describe("registerCoreHealthChecks", () => {
     );
   });
 
+  it("does not preview gateway service config updates while rewrites are blocked", async () => {
+    gatewayServiceMocks.detectGatewayServiceConfigIssues.mockResolvedValue({
+      status: "issue",
+      serviceRewriteBlocked: true,
+      issues: [
+        {
+          code: "gateway-port-mismatch",
+          message: "Gateway service port does not match current gateway config.",
+          detail: "18789 -> 18888",
+          level: "recommended",
+        },
+      ],
+    });
+    const check = getCheck(CORE_HEALTH_CHECKS, "core/doctor/gateway-services/config");
+
+    const repaired = await check.repair?.(
+      {
+        mode: "fix",
+        runtime: { log() {}, error() {}, exit() {} },
+        cfg: { gateway: { port: 18888 } },
+        dryRun: true,
+      },
+      [],
+    );
+
+    expect(repaired).toMatchObject({
+      status: "skipped",
+      reason: "gateway service rewrite is blocked while the service is running",
+      changes: [],
+      effects: [],
+    });
+    expect(repaired?.warnings).toContain(
+      "Gateway service is running; real repair would leave supervisor metadata unchanged unless the service is stopped or reinstalled with --force.",
+    );
+  });
+
   it("reports blocked gateway service rewrites as structured findings", async () => {
     gatewayServiceMocks.detectGatewayServiceConfigIssues.mockResolvedValue({
       status: "issue",
       serviceRewriteBlocked: true,
       issues: [],
     });
-    const check = CORE_HEALTH_CHECKS.find(
-      (entry) => entry.id === "core/doctor/gateway-services/config",
-    );
+    const check = getCheck(CORE_HEALTH_CHECKS, "core/doctor/gateway-services/config");
 
     await expect(
-      check?.detect({
+      check.detect({
         mode: "lint",
         runtime: { log() {}, error() {}, exit() {} },
         cfg: {},
@@ -1097,12 +1127,10 @@ describe("registerCoreHealthChecks", () => {
       ],
       issues: [],
     });
-    const check = CORE_HEALTH_CHECKS.find(
-      (entry) => entry.id === "core/doctor/gateway-services/config",
-    );
+    const check = getCheck(CORE_HEALTH_CHECKS, "core/doctor/gateway-services/config");
 
     await expect(
-      check?.detect({
+      check.detect({
         mode: "lint",
         runtime: { log() {}, error() {}, exit() {} },
         cfg: {},
@@ -1222,7 +1250,7 @@ describe("registerCoreHealthChecks", () => {
         runtime: { log() {}, error() {}, exit() {} },
         cfg: {},
       },
-      { checks: [check!] },
+      { checks: [check!], validate: true },
     );
 
     expect(gatewayServiceMocks.repairExtraGatewayServices).toHaveBeenCalledTimes(1);
@@ -1433,7 +1461,7 @@ describe("registerCoreHealthChecks", () => {
         runtime: { log() {}, error() {}, exit() {} },
         cfg: { gateway: { port: 18888 } },
       },
-      { checks: [check!] },
+      { checks: [check!], validate: true },
     );
 
     expect(gatewayServiceMocks.repairGatewayServiceConfig).toHaveBeenCalledTimes(1);
