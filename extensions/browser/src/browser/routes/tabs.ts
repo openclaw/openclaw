@@ -10,6 +10,7 @@ import {
   withBrowserNavigationPolicy,
 } from "../navigation-guard.js";
 import type { BrowserRouteContext, ProfileContext } from "../server-context.js";
+import { getBrowserProfileCapabilities } from "../profile-capabilities.js";
 import { resolveTargetIdFromTabs } from "../target-id.js";
 import type { BrowserRequest, BrowserResponse, BrowserRouteRegistrar } from "./types.js";
 import {
@@ -84,6 +85,18 @@ async function ensureBrowserRunning(profileCtx: ProfileContext, res: BrowserResp
     );
     return false;
   }
+  return true;
+}
+
+async function ensureBrowserReadyForTabList(profileCtx: ProfileContext): Promise<boolean> {
+  if (!getBrowserProfileCapabilities(profileCtx.profile).usesChromeMcp) {
+    return await profileCtx.isReachable(300);
+  }
+
+  // Existing-session Chrome MCP attach can be slower than the cheap 300ms CDP-style
+  // probe on a cold npx/server startup. Listing tabs is an explicit browser action,
+  // so use the normal attach path here instead of treating the cold attach as offline.
+  await profileCtx.ensureBrowserAvailable();
   return true;
 }
 
@@ -167,7 +180,7 @@ export function registerBrowserTabRoutes(app: BrowserRouteRegistrar, ctx: Browse
         res,
         ctx,
         run: async (profileCtx) => {
-          const reachable = await profileCtx.isReachable(300);
+          const reachable = await ensureBrowserReadyForTabList(profileCtx);
           if (!reachable) {
             return res.json({ running: false, tabs: [] as unknown[] });
           }
