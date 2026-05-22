@@ -70,13 +70,13 @@ describe("isIMessageAnchorless", () => {
     expect(isIMessageAnchorless(msg)).toBe(true);
   });
 
-  it("returns true for undefined fields", () => {
+  it("returns false for sender-only direct messages with undefined conversation fields", () => {
     const msg: IMessagePayload = {
       guid: "test",
       sender: "+15550001111",
       text: "hello",
     };
-    expect(isIMessageAnchorless(msg)).toBe(true);
+    expect(isIMessageAnchorless(msg)).toBe(false);
   });
 
   it("returns false for valid group message with positive chat_id", () => {
@@ -127,6 +127,22 @@ function mockClient(chats: Array<{ id: number; messages: Record<string, unknown>
 describe("repairIMessageConversationAnchor", () => {
   it("passes through non-anchorless messages unchanged", async () => {
     const msg = makeValidGroupMessage();
+    const client = mockClient([]);
+    const result = await repairIMessageConversationAnchor({
+      message: msg,
+      client: client as never,
+    });
+    expect(result).toBe(msg);
+    expect(client.calls).toHaveLength(0);
+  });
+
+  it("passes through sender-only direct messages without recovery RPCs", async () => {
+    const msg: IMessagePayload = {
+      guid: "sender-only-dm",
+      sender: "+15550001111",
+      is_from_me: false,
+      text: "hello dm",
+    };
     const client = mockClient([]);
     const result = await repairIMessageConversationAnchor({
       message: msg,

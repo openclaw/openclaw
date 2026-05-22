@@ -2,22 +2,21 @@ import type { IMessageRpcClient } from "../client.js";
 import type { IMessagePayload } from "./types.js";
 
 /**
- * An anchorless payload lacks every reliable conversation identifier: no valid
- * chat_id (positive integer), no non-empty chat_guid, and no non-empty
- * chat_identifier. When imsg watch.subscribe ships a group link-preview row
- * with chat_id=0 and empty string fields, the message passes type validation
- * but cannot be safely routed — it must not fall back to sender-DM routing.
+ * The malformed watch payload has explicit but unusable conversation fields:
+ * chat_id is non-positive/null and both chat_guid/chat_identifier are empty.
  */
 export function isIMessageAnchorless(message: IMessagePayload): boolean {
   const chatId = message.chat_id;
-  const chatGuid = message.chat_guid?.trim();
-  const chatIdentifier = message.chat_identifier?.trim();
+  const chatGuid = message.chat_guid;
+  const chatIdentifier = message.chat_identifier;
 
-  const hasValidChatId = typeof chatId === "number" && chatId > 0 && Number.isFinite(chatId);
-  const hasValidChatGuid = chatGuid !== undefined && chatGuid !== "";
-  const hasValidChatIdentifier = chatIdentifier !== undefined && chatIdentifier !== "";
+  const hasInvalidExplicitChatId =
+    chatId === null || (typeof chatId === "number" && (!Number.isFinite(chatId) || chatId <= 0));
+  const hasEmptyExplicitChatGuid = typeof chatGuid === "string" && chatGuid.trim() === "";
+  const hasEmptyExplicitChatIdentifier =
+    typeof chatIdentifier === "string" && chatIdentifier.trim() === "";
 
-  return !hasValidChatId && !hasValidChatGuid && !hasValidChatIdentifier;
+  return hasInvalidExplicitChatId && hasEmptyExplicitChatGuid && hasEmptyExplicitChatIdentifier;
 }
 
 type ChatsListEntry = {
