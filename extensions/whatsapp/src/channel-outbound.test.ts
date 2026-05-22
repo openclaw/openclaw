@@ -32,6 +32,7 @@ describe("whatsappChannelOutbound", () => {
   it("drops leading blank lines but preserves intentional indentation", () => {
     expect(
       whatsappChannelOutbound.normalizePayload?.({
+        cfg: {},
         payload: { text: "\n \n    indented" },
       }),
     ).toEqual({
@@ -58,8 +59,11 @@ describe("whatsappChannelOutbound", () => {
       "</function_calls>",
       "After",
     ].join("\n");
-    const once = whatsappChannelOutbound.normalizePayload?.({ payload: { text: raw } });
-    const twice = whatsappChannelOutbound.normalizePayload?.({ payload: { text: once?.text } });
+    const once = whatsappChannelOutbound.normalizePayload?.({ cfg: {}, payload: { text: raw } });
+    const twice = whatsappChannelOutbound.normalizePayload?.({
+      cfg: {},
+      payload: { text: once?.text },
+    });
 
     expect(once?.text).toBe("After");
     expect(twice?.text).toBe("After");
@@ -74,9 +78,11 @@ describe("whatsappChannelOutbound", () => {
       "  </function_calls>",
     ].join("\n");
 
-    expect(whatsappChannelOutbound.normalizePayload?.({ payload: { text: raw } })).toEqual({
-      text: "",
-    });
+    expect(whatsappChannelOutbound.normalizePayload?.({ cfg: {}, payload: { text: raw } })).toEqual(
+      {
+        text: "",
+      },
+    );
   });
 
   it("sanitizes XML tool payloads before plain HTML stripping", () => {

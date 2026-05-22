@@ -5,10 +5,7 @@ import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolvePreferredOpenClawTmpDir, withTempWorkspace } from "openclaw/plugin-sdk/temp-path";
 import { sleep } from "openclaw/plugin-sdk/text-utility-runtime";
 import { resolveWhatsAppDocumentFileName } from "./document-filename.js";
-import {
-  normalizeWhatsAppPayloadText,
-  normalizeWhatsAppPayloadTextPreservingIndentation,
-} from "./outbound-text.js";
+import { normalizeWhatsAppPayloadText } from "./outbound-text.js";
 import { formatError } from "./session-errors.js";
 
 export {
