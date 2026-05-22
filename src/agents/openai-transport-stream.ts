@@ -204,6 +204,7 @@ type MutableAssistantOutput = {
     output: number;
     cacheRead: number;
     cacheWrite: number;
+    reasoningTokens?: number;
     totalTokens: number;
     cost: { input: number; output: number; cacheRead: number; cacheWrite: number; total: number };
   };
@@ -1530,6 +1531,7 @@ async function processResponsesStream(
             output_tokens?: number;
             total_tokens?: number;
             input_tokens_details?: { cached_tokens?: number };
+            output_tokens_details?: { reasoning_tokens?: number };
             service_tier?: ResponseCreateParamsStreaming["service_tier"];
             status?: string;
           }
@@ -1538,12 +1540,16 @@ async function processResponsesStream(
         const cachedTokens = usage.input_tokens_details?.cached_tokens || 0;
         const inputTokens = usage.input_tokens || 0;
         const outputTokens = usage.output_tokens || 0;
+        const reasoningTokens = usage.output_tokens_details?.reasoning_tokens;
         const input = Math.max(0, inputTokens - cachedTokens);
         output.usage = {
           input,
           output: outputTokens,
           cacheRead: cachedTokens,
           cacheWrite: 0,
+          ...(typeof reasoningTokens === "number" && Number.isFinite(reasoningTokens)
+            ? { reasoningTokens }
+            : {}),
           totalTokens: input + outputTokens + cachedTokens,
           cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
         };
@@ -3436,11 +3442,15 @@ export function parseTransportChunkUsage(
   const promptTokens = rawUsage.prompt_tokens || 0;
   const input = Math.max(0, promptTokens - cachedTokens);
   const outputTokens = rawUsage.completion_tokens || 0;
+  const reasoningTokens = rawUsage.completion_tokens_details?.reasoning_tokens;
   const usage = {
     input,
     output: outputTokens,
     cacheRead: cachedTokens,
     cacheWrite: 0,
+    ...(typeof reasoningTokens === "number" && Number.isFinite(reasoningTokens)
+      ? { reasoningTokens }
+      : {}),
     totalTokens: input + outputTokens + cachedTokens,
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
   };

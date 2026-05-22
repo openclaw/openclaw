@@ -364,6 +364,7 @@ describe("openai transport stream", () => {
               output_tokens: 5,
               total_tokens: 7,
               input_tokens_details: { cached_tokens: 4 },
+              output_tokens_details: { reasoning_tokens: 3 },
             },
           },
         },
@@ -377,6 +378,7 @@ describe("openai transport stream", () => {
       input: 0,
       output: 5,
       cacheRead: 4,
+      reasoningTokens: 3,
       totalTokens: 9,
     });
   });
@@ -1119,7 +1121,7 @@ describe("openai transport stream", () => {
     }
   });
 
-  it("does not double-count reasoning tokens and clamps uncached prompt usage at zero", () => {
+  it("preserves reasoning tokens without double-counting them", () => {
     const model = {
       id: "gpt-5",
       name: "GPT-5",
@@ -1148,9 +1150,25 @@ describe("openai transport stream", () => {
         input: 7,
         output: 20,
         cacheRead: 3,
+        reasoningTokens: 7,
         totalTokens: 30,
       },
     );
+  });
+
+  it("clamps uncached prompt usage at zero", () => {
+    const model = {
+      id: "gpt-5",
+      name: "GPT-5",
+      api: "openai-completions",
+      provider: "openai",
+      baseUrl: "https://api.openai.com/v1",
+      reasoning: true,
+      input: ["text"],
+      cost: { input: 1, output: 2, cacheRead: 0.5, cacheWrite: 0 },
+      contextWindow: 200000,
+      maxTokens: 8192,
+    } satisfies Model<"openai-completions">;
 
     expectRecordFields(
       parseTransportChunkUsage(

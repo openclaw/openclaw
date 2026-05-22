@@ -35,6 +35,7 @@ export type EmbeddedPiAgentMeta = {
     output?: number;
     cacheRead?: number;
     cacheWrite?: number;
+    reasoningTokens?: number;
     total?: number;
   };
   /**
@@ -49,6 +50,7 @@ export type EmbeddedPiAgentMeta = {
     output?: number;
     cacheRead?: number;
     cacheWrite?: number;
+    reasoningTokens?: number;
     total?: number;
   };
 };
