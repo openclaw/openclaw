@@ -5,19 +5,21 @@ import type { DoctorPrompter } from "./doctor-prompter.js";
 import type { DoctorRepairMode } from "./doctor-repair-mode.js";
 
 const runExec = vi.fn();
+const runCommandWithTimeout = vi.fn();
 const note = vi.fn();
 const inspectLegacySandboxRegistryFiles = vi.fn();
 const migrateLegacySandboxRegistryFiles = vi.fn();
 
 vi.mock("../process/exec.js", () => ({
   runExec,
-  runCommandWithTimeout: vi.fn(),
+  runCommandWithTimeout,
 }));
 
 vi.mock("../agents/sandbox.js", () => ({
   DEFAULT_SANDBOX_BROWSER_IMAGE: "browser-image",
   DEFAULT_SANDBOX_COMMON_IMAGE: "common-image",
   DEFAULT_SANDBOX_IMAGE: "default-image",
+  isDockerDaemonUnavailable: vi.fn(() => false),
   resolveSandboxScope: vi.fn(() => "shared"),
 }));
 
@@ -30,8 +32,14 @@ vi.mock("../terminal/note.js", () => ({
   note,
 }));
 
-const { maybeRepairSandboxImages, maybeRepairSandboxRegistryFiles } =
-  await import("./doctor-sandbox.js");
+const {
+  collectSandboxScopeWarnings,
+  detectSandboxImageIssues,
+  detectSandboxRegistryFileIssues,
+  maybeRepairSandboxImages,
+  maybeRepairSandboxRegistryFiles,
+  repairSandboxImages,
+} = await import("./doctor-sandbox.js");
 
 describe("maybeRepairSandboxImages", () => {
   const mockRuntime: RuntimeEnv = {
@@ -53,6 +61,8 @@ describe("maybeRepairSandboxImages", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    runExec.mockReset();
+    runCommandWithTimeout.mockReset();
     inspectLegacySandboxRegistryFiles.mockResolvedValue([]);
     migrateLegacySandboxRegistryFiles.mockResolvedValue([]);
   });
@@ -177,6 +187,54 @@ describe("maybeRepairSandboxImages", () => {
     );
   });
 
+  it("does not offer the default browser setup script for custom browser images", async () => {
+    runExec.mockImplementation(async (command: string, args: string[]) => {
+      if (command === "docker" && args[0] === "version") {
+        return { stdout: "24.0.0", stderr: "" };
+      }
+      if (command === "unshare") {
+        return { stdout: "", stderr: "" };
+      }
+      if (command === "docker" && args.includes("default-image")) {
+        return { stdout: "base image exists", stderr: "" };
+      }
+      if (command === "docker" && args.includes("registry.example.com/browser:custom")) {
+        throw Object.assign(new Error("missing image"), {
+          stderr: "No such image: registry.example.com/browser:custom",
+        });
+      }
+      return { stdout: "", stderr: "" };
+    });
+
+    await maybeRepairSandboxImages(
+      {
+        agents: {
+          defaults: {
+            sandbox: {
+              mode: "all",
+              browser: {
+                enabled: true,
+                image: "registry.example.com/browser:custom",
+              },
+            },
+          },
+        },
+      },
+      mockRuntime,
+      mockPrompter,
+    );
+
+    expect(mockPrompter.confirmRuntimeRepair).not.toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: "Build browser sandbox image now?",
+      }),
+    );
+    expect(note).toHaveBeenCalledWith(
+      "Sandbox browser image missing: registry.example.com/browser:custom. Build or pull it first.",
+      "Sandbox",
+    );
+  });
+
   it("checks Codex bwrap network namespaces only when Docker sandbox egress is offline", async () => {
     const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("linux");
     runExec.mockImplementation(async (command: string, args: string[]) => {
@@ -238,6 +296,239 @@ describe("maybeRepairSandboxImages", () => {
       ),
     ).toBe(false);
   });
+
+  it("detects Codex bwrap namespace failures as structured sandbox issues", async () => {
+    const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("linux");
+    runExec.mockImplementation(async (command: string, args: string[]) => {
+      if (command === "docker" && args[0] === "version") {
+        return { stdout: "24.0.0", stderr: "" };
+      }
+      if (command === "unshare") {
+        throw Object.assign(new Error("unshare failed"), {
+          stderr: "unshare: write failed /proc/self/uid_map: Operation not permitted",
+        });
+      }
+      if (command === "docker") {
+        return { stdout: "image exists", stderr: "" };
+      }
+      return { stdout: "", stderr: "" };
+    });
+
+    try {
+      await expect(detectSandboxImageIssues(createSandboxConfig("all"))).resolves.toContainEqual(
+        expect.objectContaining({
+          kind: "codex-bwrap-namespace-unavailable",
+          message: expect.stringContaining("Codex bwrap user namespace probe failed"),
+          fixHint: expect.stringContaining("kernel.apparmor_restrict_unprivileged_userns=0"),
+        }),
+      );
+    } finally {
+      platformSpy.mockRestore();
+    }
+  });
+
+  it("detects Docker unavailable as a structured sandbox image issue", async () => {
+    runExec.mockRejectedValue(new Error("Docker not installed"));
+
+    await expect(detectSandboxImageIssues(createSandboxConfig("non-main"))).resolves.toContainEqual(
+      expect.objectContaining({
+        kind: "docker-unavailable",
+        path: "agents.defaults.sandbox.mode",
+        message: expect.stringContaining("Docker is not available"),
+      }),
+    );
+  });
+
+  it("detects missing base and browser sandbox images", async () => {
+    runExec.mockImplementation(async (command: string, args: string[]) => {
+      if (command === "docker" && args[0] === "version") {
+        return { stdout: "24.0.0", stderr: "" };
+      }
+      if (command === "unshare") {
+        return { stdout: "", stderr: "" };
+      }
+      if (command === "docker" && args.includes("default-image")) {
+        throw { stderr: "No such image: default-image" };
+      }
+      if (command === "docker" && args.includes("browser-image")) {
+        throw { stderr: "No such image: browser-image" };
+      }
+      return { stdout: "", stderr: "" };
+    });
+
+    await expect(
+      detectSandboxImageIssues({
+        agents: {
+          defaults: {
+            sandbox: {
+              mode: "all",
+              browser: { enabled: true },
+            },
+          },
+        },
+      }),
+    ).resolves.toEqual([
+      expect.objectContaining({
+        kind: "missing-image",
+        imageKind: "base",
+        image: "default-image",
+        path: "agents.defaults.sandbox.docker.image",
+        buildScript: "scripts/sandbox-setup.sh",
+      }),
+      expect.objectContaining({
+        kind: "missing-image",
+        imageKind: "browser",
+        image: "browser-image",
+        path: "agents.defaults.sandbox.browser.image",
+        buildScript: "scripts/sandbox-browser-setup.sh",
+      }),
+    ]);
+  });
+
+  it("leaves custom browser sandbox images operator-managed", async () => {
+    runExec.mockImplementation(async (command: string, args: string[]) => {
+      if (command === "docker" && args[0] === "version") {
+        return { stdout: "24.0.0", stderr: "" };
+      }
+      if (command === "unshare") {
+        return { stdout: "", stderr: "" };
+      }
+      if (command === "docker" && args.includes("default-image")) {
+        return { stdout: "base image exists", stderr: "" };
+      }
+      if (command === "docker" && args.includes("registry.example.com/browser:custom")) {
+        throw { stderr: "No such image: registry.example.com/browser:custom" };
+      }
+      return { stdout: "", stderr: "" };
+    });
+
+    await expect(
+      detectSandboxImageIssues({
+        agents: {
+          defaults: {
+            sandbox: {
+              mode: "all",
+              browser: {
+                enabled: true,
+                image: "registry.example.com/browser:custom",
+              },
+            },
+          },
+        },
+      }),
+    ).resolves.toEqual([
+      expect.objectContaining({
+        kind: "missing-image",
+        imageKind: "browser",
+        image: "registry.example.com/browser:custom",
+        path: "agents.defaults.sandbox.browser.image",
+        buildScript: undefined,
+      }),
+    ]);
+  });
+
+  it("routes structured sandbox repair guidance through repair notes", async () => {
+    const repairNote = vi.fn();
+    const prompter = {
+      ...mockPrompter,
+      note: repairNote,
+    };
+    runExec
+      .mockResolvedValueOnce({ stdout: "24.0.0", stderr: "" })
+      .mockRejectedValueOnce({ stderr: "No such image: registry.example.com/sandbox:custom" });
+
+    const result = await repairSandboxImages({
+      cfg: {
+        agents: {
+          defaults: {
+            sandbox: {
+              mode: "all",
+              docker: {
+                image: "registry.example.com/sandbox:custom",
+              },
+            },
+          },
+        },
+      },
+      runtime: mockRuntime,
+      prompter,
+      issues: [
+        {
+          kind: "missing-image",
+          imageKind: "base",
+          image: "registry.example.com/sandbox:custom",
+          path: "agents.defaults.sandbox.docker.image",
+          message: "Sandbox base image missing: registry.example.com/sandbox:custom.",
+          fixHint: "Build or pull it first.",
+        },
+      ],
+    });
+
+    expect(note).not.toHaveBeenCalled();
+    expect(repairNote).toHaveBeenCalledWith(
+      "Sandbox base image missing: registry.example.com/sandbox:custom. Build or pull it first.",
+      "Sandbox",
+    );
+    expect(result).toEqual(
+      expect.objectContaining({
+        status: "skipped",
+        reason: "sandbox image repair did not build an image",
+        changes: [],
+      }),
+    );
+  });
+
+  it("reports attempted sandbox image build failures as failed repairs", async () => {
+    const prompter = {
+      ...mockPrompter,
+      confirmRuntimeRepair: vi.fn().mockResolvedValue(true),
+    };
+    runExec
+      .mockResolvedValueOnce({ stdout: "24.0.0", stderr: "" })
+      .mockRejectedValueOnce({ stderr: "No such image: registry.example.com/sandbox:custom" });
+    runCommandWithTimeout.mockResolvedValueOnce({
+      code: 1,
+      stdout: "",
+      stderr: "build failed",
+    });
+
+    const result = await repairSandboxImages({
+      cfg: {
+        agents: {
+          defaults: {
+            sandbox: {
+              mode: "all",
+              docker: {
+                image: "registry.example.com/sandbox:custom",
+              },
+            },
+          },
+        },
+      },
+      runtime: mockRuntime,
+      prompter,
+      issues: [
+        {
+          kind: "missing-image",
+          imageKind: "base",
+          image: "registry.example.com/sandbox:custom",
+          path: "agents.defaults.sandbox.docker.image",
+          buildScript: "package.json",
+          message: "Sandbox base image missing: registry.example.com/sandbox:custom.",
+          fixHint: "Build it with package.json.",
+        },
+      ],
+    });
+
+    expect(result).toEqual(
+      expect.objectContaining({
+        status: "failed",
+        reason: "sandbox image repair failed to build an image",
+        changes: [],
+        warnings: ["Failed to build sandbox base image registry.example.com/sandbox:custom."],
+      }),
+    );
+  });
 });
 
 describe("maybeRepairSandboxRegistryFiles", () => {
@@ -276,6 +567,34 @@ describe("maybeRepairSandboxRegistryFiles", () => {
     );
   });
 
+  it("detects legacy registry files for structured lint", async () => {
+    inspectLegacySandboxRegistryFiles.mockResolvedValue([
+      {
+        kind: "containers",
+        registryPath: "/tmp/openclaw/sandbox/containers.json",
+        shardedDir: "/tmp/openclaw/sandbox/containers",
+        exists: true,
+        valid: true,
+        entries: 2,
+      },
+      {
+        kind: "browsers",
+        registryPath: "/tmp/openclaw/sandbox/browsers.json",
+        shardedDir: "/tmp/openclaw/sandbox/browsers",
+        exists: false,
+        valid: true,
+        entries: 0,
+      },
+    ]);
+
+    await expect(detectSandboxRegistryFileIssues()).resolves.toEqual([
+      expect.objectContaining({
+        kind: "containers",
+        registryPath: "/tmp/openclaw/sandbox/containers.json",
+      }),
+    ]);
+  });
+
   it("migrates legacy registry files during doctor --fix", async () => {
     inspectLegacySandboxRegistryFiles.mockResolvedValue([
       {
@@ -306,6 +625,47 @@ describe("maybeRepairSandboxRegistryFiles", () => {
     expect(note).toHaveBeenCalledWith(
       "- Migrated containers registry from /tmp/openclaw/sandbox/containers.json into 2 shards.",
       "Doctor changes",
+    );
+  });
+});
+
+describe("collectSandboxScopeWarnings", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("collects ignored per-agent sandbox overrides under shared scope", () => {
+    expect(
+      collectSandboxScopeWarnings({
+        agents: {
+          defaults: {
+            sandbox: {
+              mode: "all",
+              scope: "shared",
+            },
+          },
+          list: [
+            {
+              id: "work",
+              sandbox: {
+                scope: "shared",
+                docker: {
+                  setupCommand: "echo setup",
+                },
+                browser: {
+                  enabled: true,
+                },
+              },
+            },
+          ],
+        },
+      }),
+    ).toContainEqual(
+      expect.objectContaining({
+        agentId: "work",
+        path: "agents.list.work.sandbox",
+        message: 'agents.list (id "work") sandbox docker/browser overrides ignored.',
+      }),
     );
   });
 });

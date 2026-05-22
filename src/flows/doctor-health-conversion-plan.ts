@@ -52,10 +52,10 @@ export const doctorHealthConversionRules = [
     rule: "Keep as config-only owner finding.",
   },
   {
-    contributionId: "doctor:structured-health-repairs",
-    conversion: "terminal-side-effect",
-    target: ["doctor-health-repair-runner"],
-    rule: "Delete this bridge after converted checks are registered directly; repair orchestration belongs outside the contribution list.",
+    contributionId: "doctor:bundled-health-repairs",
+    conversion: "repair-backed-detect",
+    target: ["plugin/doctor/bundled-health-repairs"],
+    rule: "Run bundled plugin health repairs after core positional repairs are registered; keep plugin repair ownership outside core check ids.",
   },
   {
     contributionId: "doctor:legacy-state",
@@ -157,9 +157,9 @@ export const doctorHealthConversionRules = [
   },
   {
     contributionId: "doctor:browser",
-    conversion: "detect-only",
-    target: ["core/doctor/browser"],
-    rule: "Return Chrome/MCP readiness findings without launching or repairing browser state.",
+    conversion: "split-detect-repair",
+    target: ["core/doctor/browser", "core/doctor/browser-clawd-profile-residue"],
+    rule: "Return Chrome/MCP readiness findings without launching browser state; run legacy clawd residue repair at the browser contribution position.",
   },
   {
     contributionId: "doctor:oauth-tls",
@@ -187,9 +187,9 @@ export const doctorHealthConversionRules = [
   },
   {
     contributionId: "doctor:skills",
-    conversion: "already-detect",
+    conversion: "repair-backed-detect",
     target: ["core/doctor/skills-readiness"],
-    rule: "Keep unavailable skill detection/disable repair in the health registry.",
+    rule: "Keep unavailable skill detection in the health registry; disable repairs remain ordered at the skills contribution.",
   },
   {
     contributionId: "doctor:bootstrap-size",

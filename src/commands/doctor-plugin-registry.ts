@@ -71,7 +71,35 @@ function readStringMap(value: unknown): Record<string, string> {
   return result;
 }
 
-function resolveManagedPluginNpmRoot(params: PluginRegistryDoctorRepairParams): string {
+export type PluginRegistryStateIssue =
+  | {
+      kind: "migration";
+      filePath: string;
+      action: "migrate";
+    }
+  | {
+      kind: "disabled";
+      reason: string;
+    }
+  | {
+      kind: "stale-managed-npm-bundled-plugin";
+      pluginId: string;
+      packageName: string;
+      packageDir: string;
+      version?: string;
+    }
+  | {
+      kind: "stale-local-bundled-plugin-install-record";
+      pluginId: string;
+      stalePath: string;
+    }
+  | {
+      kind: "managed-npm-peer-link";
+      packageName: string;
+      reason: string;
+    };
+
+export function resolveManagedPluginNpmRoot(params: PluginRegistryDoctorRepairParams): string {
   return params.stateDir
     ? path.join(params.stateDir, "npm")
     : resolveDefaultPluginNpmDir(params.env);
@@ -97,7 +125,7 @@ function readPluginManifestId(packageDir: string): string | undefined {
   return typeof id === "string" && id.trim() ? id.trim() : undefined;
 }
 
-function listStaleManagedNpmBundledPlugins(
+export function listStaleManagedNpmBundledPlugins(
   params: PluginRegistryDoctorRepairParams,
 ): StaleManagedNpmBundledPlugin[] {
   const currentBundled = loadInstalledPluginIndex({
@@ -171,6 +199,55 @@ async function listStaleLocalBundledPluginInstallRecordShadows(
     env: params.env,
     bundled: loadCurrentBundledPluginSources(params),
   });
+}
+
+export async function detectPluginRegistryStateIssues(
+  params: PluginRegistryDoctorRepairParams,
+): Promise<PluginRegistryStateIssue[]> {
+  const preflight = preflightPluginRegistryInstallMigration(params);
+  if (preflight.action === "disabled") {
+    return [
+      {
+        kind: "disabled",
+        reason: `${DISABLE_PLUGIN_REGISTRY_MIGRATION_ENV} is set; skipping plugin registry repair.`,
+      },
+    ];
+  }
+  const issues: PluginRegistryStateIssue[] = [];
+  if (preflight.action === "migrate") {
+    issues.push({
+      kind: "migration",
+      action: "migrate",
+      filePath: preflight.filePath,
+    });
+  }
+  for (const plugin of listStaleManagedNpmBundledPlugins(params)) {
+    issues.push({
+      kind: "stale-managed-npm-bundled-plugin",
+      pluginId: plugin.pluginId,
+      packageName: plugin.packageName,
+      packageDir: plugin.packageDir,
+      ...(plugin.version ? { version: plugin.version } : {}),
+    });
+  }
+  for (const record of await listStaleLocalBundledPluginInstallRecordShadows(params)) {
+    issues.push({
+      kind: "stale-local-bundled-plugin-install-record",
+      pluginId: record.pluginId,
+      stalePath: record.stalePath,
+    });
+  }
+  const peerAudit = await auditOpenClawPeerDependenciesInManagedNpmRoot({
+    npmRoot: resolveManagedPluginNpmRoot(params),
+  });
+  for (const issue of peerAudit.issues) {
+    issues.push({
+      kind: "managed-npm-peer-link",
+      packageName: issue.packageName,
+      reason: issue.reason,
+    });
+  }
+  return issues;
 }
 
 function removeManagedNpmDependency(params: {
@@ -369,6 +446,200 @@ async function loadInstallRecordsWithoutPluginIds(
     delete records[pluginId];
   }
   return records;
+}
+
+export type PluginRegistryStateRepairResult = {
+  status?: "repaired" | "skipped" | "failed";
+  reason?: string;
+  config: OpenClawConfig;
+  changes: string[];
+  warnings: string[];
+};
+
+function staleManagedNpmPluginLine(plugin: StaleManagedNpmBundledPlugin): string {
+  return `${plugin.pluginId}: ${plugin.packageName}${plugin.version ? `@${plugin.version}` : ""}`;
+}
+
+function shouldRepairPluginRegistryMigration(
+  issues: readonly PluginRegistryStateIssue[] | undefined,
+): boolean {
+  return issues === undefined || issues.some((issue) => issue.kind === "migration");
+}
+
+function shouldRepairManagedNpmPeerLinks(
+  issues: readonly PluginRegistryStateIssue[] | undefined,
+): boolean {
+  return issues === undefined || issues.some((issue) => issue.kind === "managed-npm-peer-link");
+}
+
+function filterStaleManagedNpmBundledPluginsForIssues(
+  plugins: readonly StaleManagedNpmBundledPlugin[],
+  issues: readonly PluginRegistryStateIssue[] | undefined,
+): StaleManagedNpmBundledPlugin[] {
+  if (issues === undefined) {
+    return [...plugins];
+  }
+  const selected = issues.filter((issue) => issue.kind === "stale-managed-npm-bundled-plugin");
+  if (selected.length === 0) {
+    return [];
+  }
+  return plugins.filter((plugin) =>
+    selected.some(
+      (issue) =>
+        issue.pluginId === plugin.pluginId ||
+        issue.packageName === plugin.packageName ||
+        issue.packageDir === plugin.packageDir,
+    ),
+  );
+}
+
+function filterStaleLocalBundledPluginInstallRecordsForIssues(
+  records: readonly StaleLocalBundledPluginInstallRecord[],
+  issues: readonly PluginRegistryStateIssue[] | undefined,
+): StaleLocalBundledPluginInstallRecord[] {
+  if (issues === undefined) {
+    return [...records];
+  }
+  const selected = issues.filter(
+    (issue) => issue.kind === "stale-local-bundled-plugin-install-record",
+  );
+  if (selected.length === 0) {
+    return [];
+  }
+  return records.filter((record) =>
+    selected.some(
+      (issue) => issue.pluginId === record.pluginId || issue.stalePath === record.stalePath,
+    ),
+  );
+}
+
+export async function repairPluginRegistryState(
+  params: PluginRegistryDoctorRepairParams,
+  issues?: readonly PluginRegistryStateIssue[],
+): Promise<PluginRegistryStateRepairResult> {
+  const changes: string[] = [];
+  const warnings: string[] = [];
+  const preflight = preflightPluginRegistryInstallMigration(params);
+  warnings.push(...preflight.deprecationWarnings);
+  if (preflight.action === "disabled") {
+    const reason = `${DISABLE_PLUGIN_REGISTRY_MIGRATION_ENV} is set; skipping plugin registry repair.`;
+    warnings.push(reason);
+    return { status: "skipped", reason, config: params.config, changes, warnings };
+  }
+
+  if (!params.prompter.shouldRepair) {
+    return { config: params.config, changes, warnings };
+  }
+
+  const staleManagedNpmBundledPlugins = filterStaleManagedNpmBundledPluginsForIssues(
+    listStaleManagedNpmBundledPlugins(params),
+    issues,
+  );
+  for (const plugin of staleManagedNpmBundledPlugins) {
+    removeManagedNpmDependency(plugin);
+  }
+  if (staleManagedNpmBundledPlugins.length > 0) {
+    changes.push(
+      [
+        "Removed stale managed npm plugin package(s) shadowing bundled plugins:",
+        ...staleManagedNpmBundledPlugins.map((plugin) => `- ${staleManagedNpmPluginLine(plugin)}`),
+      ].join("\n"),
+    );
+  }
+  const staleLocalBundledPluginInstallRecords =
+    filterStaleLocalBundledPluginInstallRecordsForIssues(
+      await listStaleLocalBundledPluginInstallRecordShadows(params),
+      issues,
+    );
+  if (staleLocalBundledPluginInstallRecords.length > 0) {
+    changes.push(
+      [
+        "Removed stale local bundled plugin install record(s) shadowing bundled plugins:",
+        ...staleLocalBundledPluginInstallRecords.map(
+          (record) => `- ${record.pluginId}: ${shortenHomePath(record.stalePath)}`,
+        ),
+      ].join("\n"),
+    );
+  }
+
+  const messages: { level: "info" | "warn"; message: string }[] = [];
+  const result = shouldRepairManagedNpmPeerLinks(issues)
+    ? await relinkOpenClawPeerDependenciesInManagedNpmRoot({
+        npmRoot: resolveManagedPluginNpmRoot(params),
+        logger: {
+          info: (message) => messages.push({ level: "info", message }),
+          warn: (message) => messages.push({ level: "warn", message }),
+        },
+      })
+    : { repaired: 0 };
+  if (result.repaired > 0) {
+    changes.push(
+      `Repaired OpenClaw host peer link(s) for ${result.repaired} managed npm plugin package(s).`,
+    );
+  }
+  const peerWarnings = messages
+    .filter((message) => message.level === "warn")
+    .map((message) => `- ${message.message}`);
+  if (peerWarnings.length > 0) {
+    warnings.push(
+      ["Could not repair all managed npm OpenClaw host peer links:", ...peerWarnings].join("\n"),
+    );
+  }
+
+  const migrationParams = {
+    ...params,
+    config: params.config,
+  };
+  const stalePluginIdsToRemove = [
+    ...new Set([
+      ...staleManagedNpmBundledPlugins.map((plugin) => plugin.pluginId),
+      ...staleLocalBundledPluginInstallRecords.map((record) => record.pluginId),
+    ]),
+  ];
+  if (preflight.action === "migrate" && shouldRepairPluginRegistryMigration(issues)) {
+    const migrated = await migratePluginRegistryForInstall({
+      ...migrationParams,
+      ...(stalePluginIdsToRemove.length > 0
+        ? {
+            installRecords: await loadInstallRecordsWithoutPluginIds(
+              params,
+              stalePluginIdsToRemove,
+            ),
+          }
+        : {}),
+    });
+    if (migrated.migrated) {
+      const total = migrated.current.plugins.length;
+      const enabled = migrated.current.plugins.filter((plugin) => plugin.enabled).length;
+      changes.push(`Plugin registry rebuilt: ${enabled}/${total} enabled plugins indexed.`);
+    }
+    return { config: params.config, changes, warnings };
+  }
+
+  if (
+    preflight.action === "skip-existing" ||
+    staleManagedNpmBundledPlugins.length > 0 ||
+    staleLocalBundledPluginInstallRecords.length > 0 ||
+    result.repaired > 0
+  ) {
+    const index = await refreshPluginRegistry({
+      ...migrationParams,
+      reason: "migration",
+      ...(stalePluginIdsToRemove.length > 0
+        ? {
+            installRecords: await loadInstallRecordsWithoutPluginIds(
+              params,
+              stalePluginIdsToRemove,
+            ),
+          }
+        : {}),
+    });
+    const total = index.plugins.length;
+    const enabled = index.plugins.filter((plugin) => plugin.enabled).length;
+    changes.push(`Plugin registry refreshed: ${enabled}/${total} enabled plugins indexed.`);
+  }
+
+  return { config: params.config, changes, warnings };
 }
 
 export async function maybeRepairPluginRegistryState(

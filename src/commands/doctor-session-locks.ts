@@ -1,3 +1,4 @@
+import fs from "node:fs/promises";
 import { resolveAgentSessionDirs } from "../agents/session-dirs.js";
 import {
   cleanStaleLockFiles,
@@ -37,6 +38,66 @@ function formatLockLine(lock: SessionLockInspection): string {
     : "stale=no";
   const removedStatus = lock.removed ? " [removed]" : "";
   return `- ${shortenHomePath(lock.lockPath)} ${pidStatus} ${ageStatus} ${staleStatus}${removedStatus}`;
+}
+
+export type SessionLockHealthIssue = SessionLockInspection;
+
+export async function detectSessionLockHealthIssues(params?: {
+  config?: SessionWriteLockAcquireTimeoutConfig;
+  env?: NodeJS.ProcessEnv;
+  staleMs?: number;
+  readOwnerProcessArgs?: SessionLockOwnerProcessArgsReader;
+}): Promise<SessionLockHealthIssue[]> {
+  const staleMs = params?.staleMs ?? resolveSessionWriteLockStaleMs(params?.config, params?.env);
+  const sessionDirs = await resolveAgentSessionDirs(resolveStateDir(params?.env ?? process.env));
+  const allLocks: SessionLockInspection[] = [];
+  for (const sessionsDir of sessionDirs) {
+    const result = await cleanStaleLockFiles({
+      sessionsDir,
+      staleMs,
+      removeStale: false,
+      readOwnerProcessArgs: params?.readOwnerProcessArgs,
+    });
+    allLocks.push(...result.locks);
+  }
+  return allLocks
+    .filter((lock) => lock.stale)
+    .toSorted((a, b) => a.lockPath.localeCompare(b.lockPath));
+}
+
+export async function repairSessionLockHealthIssues(params?: {
+  config?: SessionWriteLockAcquireTimeoutConfig;
+  env?: NodeJS.ProcessEnv;
+  staleMs?: number;
+  lockPaths?: readonly string[];
+  readOwnerProcessArgs?: SessionLockOwnerProcessArgsReader;
+}): Promise<SessionLockHealthIssue[]> {
+  const staleMs = params?.staleMs ?? resolveSessionWriteLockStaleMs(params?.config, params?.env);
+  const sessionDirs = await resolveAgentSessionDirs(resolveStateDir(params?.env ?? process.env));
+  const scopedLockPaths =
+    params?.lockPaths === undefined
+      ? undefined
+      : new Set(params.lockPaths.map((lockPath) => lockPath.trim()));
+  const allLocks: SessionLockInspection[] = [];
+  for (const sessionsDir of sessionDirs) {
+    const result = await cleanStaleLockFiles({
+      sessionsDir,
+      staleMs,
+      removeStale: false,
+      readOwnerProcessArgs: params?.readOwnerProcessArgs,
+    });
+    for (const lock of result.locks) {
+      if (!lock.stale) {
+        continue;
+      }
+      if (scopedLockPaths !== undefined && !scopedLockPaths.has(lock.lockPath)) {
+        continue;
+      }
+      await fs.rm(lock.lockPath, { force: true });
+      allLocks.push({ ...lock, removed: true });
+    }
+  }
+  return allLocks.toSorted((a, b) => a.lockPath.localeCompare(b.lockPath));
 }
 
 export async function noteSessionLockHealth(params?: {

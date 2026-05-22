@@ -65,8 +65,11 @@ describe("browser clawd profile residue health check", () => {
     ]);
   });
 
-  it("archives legacy clawd profile residue through structured repair", async () => {
-    browserMocks.detectLegacyClawdBrowserProfileResidue.mockResolvedValue(residue);
+  it("archives legacy clawd profile residue through structured repair and clears detection", async () => {
+    browserMocks.detectLegacyClawdBrowserProfileResidue
+      .mockResolvedValueOnce(residue)
+      .mockResolvedValueOnce(residue)
+      .mockResolvedValueOnce(undefined);
     browserMocks.maybeArchiveLegacyClawdBrowserProfileResidue.mockResolvedValueOnce({
       changes: ["Archived legacy clawd managed browser profile residue."],
       warnings: [],
@@ -80,7 +83,9 @@ describe("browser clawd profile residue health check", () => {
       configPath: "/tmp/openclaw-home/openclaw.json",
     };
 
-    const result = await check.repair?.(ctx, []);
+    const findings = await check.detect(ctx);
+    const result = await check.repair?.(ctx, findings);
+    const remaining = await check.detect(ctx, { findings });
 
     expect(browserMocks.maybeArchiveLegacyClawdBrowserProfileResidue).toHaveBeenCalledWith(cfg, {
       configDir: "/tmp/openclaw-home",
@@ -96,6 +101,7 @@ describe("browser clawd profile residue health check", () => {
         },
       ],
     });
+    expect(remaining).toEqual([]);
   });
 
   it("supports dry-run repair without archiving the profile", async () => {
@@ -115,6 +121,7 @@ describe("browser clawd profile residue health check", () => {
 
     expect(browserMocks.maybeArchiveLegacyClawdBrowserProfileResidue).not.toHaveBeenCalled();
     expect(result?.changes.join("\n")).toContain("Would archive legacy clawd");
+    expect(result?.diffs ?? []).toEqual([]);
     expect(result?.effects).toEqual([
       expect.objectContaining({
         action: "would-archive-legacy-browser-profile-residue",

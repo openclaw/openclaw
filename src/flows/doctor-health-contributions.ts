@@ -8,9 +8,10 @@ import {
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { buildGatewayConnectionDetails } from "../gateway/call.js";
 import type { RuntimeEnv } from "../runtime.js";
+import { doctorHealthConversionRules } from "./doctor-health-conversion-plan.js";
+import type { HealthFinding, HealthRepairDiff, HealthRepairEffect } from "./health-checks.js";
 import type { FlowContribution } from "./types.js";
 export {
-  doctorHealthConversionRules,
   type DoctorHealthConversionKind,
   type DoctorHealthConversionRule,
 } from "./doctor-health-conversion-plan.js";
@@ -41,14 +42,86 @@ type DoctorHealthFlowContext = {
   healthOk?: boolean;
   gatewayStatus?: import("../commands/status.types.js").StatusSummary;
   gatewayMemoryProbe?: Awaited<ReturnType<typeof probeGatewayMemoryStatus>>;
+  previewReport?: DoctorRepairPreviewReport;
 };
 
 type DoctorHealthContribution = FlowContribution & {
   kind: "core";
   surface: "health";
   healthCheckIds: readonly string[];
+  previewSupport: "structured" | "readonly" | "unsupported";
+  previewWhen?: (ctx: DoctorHealthFlowContext) => boolean;
   run: (ctx: DoctorHealthFlowContext) => Promise<void>;
 };
+
+export type DoctorHealthContributionPreviewInfo = {
+  readonly id: string;
+  readonly option: {
+    readonly value?: string;
+    readonly label: string;
+  };
+  readonly healthCheckIds: readonly string[];
+};
+
+export type DoctorRepairPreviewSkippedItem = {
+  readonly id: string;
+  readonly label: string;
+  readonly healthCheckIds: readonly string[];
+  readonly targets: readonly string[];
+  readonly reason: string;
+};
+
+export type DoctorRepairPreviewReport = {
+  readonly mode: "dry-run";
+  readonly diff: boolean;
+  checksRun: number;
+  checksRepaired: number;
+  checksValidated: number;
+  readonly findings: HealthFinding[];
+  readonly changes: string[];
+  readonly warnings: string[];
+  readonly effects: HealthRepairEffect[];
+  readonly diffs: HealthRepairDiff[];
+  readonly skipped: DoctorRepairPreviewSkippedItem[];
+};
+
+export function createDoctorRepairPreviewReport(params: {
+  readonly diff: boolean;
+}): DoctorRepairPreviewReport {
+  return {
+    mode: "dry-run",
+    diff: params.diff,
+    checksRun: 0,
+    checksRepaired: 0,
+    checksValidated: 0,
+    findings: [],
+    changes: [],
+    warnings: [],
+    effects: [],
+    diffs: [],
+    skipped: [],
+  };
+}
+
+export function finalizeDoctorRepairPreviewReport(report: DoctorRepairPreviewReport) {
+  return {
+    ok:
+      report.warnings.length === 0 &&
+      report.skipped.length === 0 &&
+      report.findings.every((finding) => finding.severity === "info"),
+    mode: report.mode,
+    diff: report.diff,
+    checksRun: report.checksRun,
+    checksRepaired: report.checksRepaired,
+    checksValidated: report.checksValidated,
+    findings: report.findings,
+    changes: report.changes,
+    warnings: report.warnings,
+    effects: report.effects,
+    diffs: report.diffs,
+    skipped: report.skipped,
+  };
+}
 
 function isUpdateDoctorRun(env: NodeJS.ProcessEnv | Record<string, string | undefined>): boolean {
   const value = env.OPENCLAW_UPDATE_IN_PROGRESS;
@@ -84,6 +157,8 @@ function createDoctorHealthContribution(params: {
   label: string;
   healthCheckIds?: readonly string[];
   hint?: string;
+  previewSupport?: "structured" | "readonly" | "unsupported";
+  previewWhen?: (ctx: DoctorHealthFlowContext) => boolean;
   run: (ctx: DoctorHealthFlowContext) => Promise<void>;
 }): DoctorHealthContribution {
   return {
@@ -97,8 +172,133 @@ function createDoctorHealthContribution(params: {
     },
     source: "doctor",
     healthCheckIds: params.healthCheckIds ?? [],
+    previewSupport: params.previewSupport ?? "unsupported",
+    previewWhen: params.previewWhen,
     run: params.run,
   };
+}
+
+function isDoctorRepairPreview(ctx: DoctorHealthFlowContext): boolean {
+  return ctx.prompter.shouldRepair && (ctx.options.dryRun === true || ctx.options.diff === true);
+}
+
+function formatDoctorRepairPreviewMode(ctx: DoctorHealthFlowContext): string {
+  if (ctx.options.dryRun === true && ctx.options.diff === true) {
+    return "dry-run/diff";
+  }
+  if (ctx.options.diff === true) {
+    return "diff";
+  }
+  return "dry-run";
+}
+
+function conversionRuleForContribution(contributionId: string) {
+  return doctorHealthConversionRules.find((rule) => rule.contributionId === contributionId);
+}
+
+export function recordDoctorPreviewSkippedContribution(params: {
+  readonly report: DoctorRepairPreviewReport;
+  readonly id: string;
+  readonly label: string;
+  readonly healthCheckIds?: readonly string[];
+  readonly targets?: readonly string[];
+  readonly reason: string;
+}): void {
+  params.report.skipped.push({
+    id: params.id,
+    label: params.label,
+    healthCheckIds: params.healthCheckIds ?? [],
+    targets: params.targets ?? [],
+    reason: params.reason,
+  });
+}
+
+function formatOptionalDoctorRepairDiffValue(value: string | undefined): string {
+  return value === undefined ? "<unset>" : value;
+}
+
+function formatDoctorRepairDiff(diff: HealthRepairDiff): string {
+  const label = `${diff.kind}:${diff.path}`;
+  if (diff.unifiedDiff?.trim()) {
+    return [`- ${label}`, diff.unifiedDiff.trim()].join("\n");
+  }
+  return [
+    `- ${label}`,
+    `  before: ${formatOptionalDoctorRepairDiffValue(diff.before)}`,
+    `  after: ${formatOptionalDoctorRepairDiffValue(diff.after)}`,
+  ].join("\n");
+}
+
+function formatDoctorRepairEffect(effect: HealthRepairEffect): string {
+  const target = effect.target ? ` ${effect.target}` : "";
+  const safety =
+    effect.dryRunSafe === true
+      ? " (dry-run safe)"
+      : effect.dryRunSafe === false
+        ? " (requires mutation)"
+        : "";
+  return `- ${effect.kind}:${effect.action}${target}${safety}`;
+}
+
+function formatDoctorRepairFinding(finding: HealthFinding): string {
+  const location = finding.path ?? finding.ocPath ?? finding.target;
+  const suffix = location ? ` (${location})` : "";
+  const fixHint = finding.fixHint ? `\n  fix: ${finding.fixHint}` : "";
+  return `- ${finding.severity}:${finding.checkId}${suffix}: ${finding.message}${fixHint}`;
+}
+
+export function formatDoctorContributionPreviewUnsupportedWarning(
+  contribution: DoctorHealthContributionPreviewInfo,
+  mode: string,
+): string {
+  const rule = conversionRuleForContribution(contribution.id);
+  const label = contribution.option.label;
+  const targets = rule?.target.length ? rule.target.join(", ") : "no structured target yet";
+  return [
+    `Skipped ${label} during doctor ${mode}: ${contribution.id} has not been converted to structured dry-run/diff repair effects yet.`,
+    `Conversion target: ${targets}.`,
+    "Run `openclaw doctor --fix` without preview flags to execute the legacy repair path.",
+  ].join("\n");
+}
+
+export async function runDoctorHealthContribution(
+  ctx: DoctorHealthFlowContext,
+  contribution: DoctorHealthContribution,
+): Promise<void> {
+  if (isDoctorRepairPreview(ctx) && contribution.previewSupport === "unsupported") {
+    const rule = conversionRuleForContribution(contribution.id);
+    if (ctx.previewReport !== undefined) {
+      recordDoctorPreviewSkippedContribution({
+        report: ctx.previewReport,
+        id: contribution.id,
+        label: contribution.option.label,
+        healthCheckIds: contribution.healthCheckIds,
+        targets: rule?.target ?? [],
+        reason: "not-converted-to-structured-dry-run-diff",
+      });
+    }
+    const { note } = await import("../terminal/note.js");
+    note(
+      formatDoctorContributionPreviewUnsupportedWarning(
+        contribution,
+        formatDoctorRepairPreviewMode(ctx),
+      ),
+      "Doctor preview",
+    );
+    return;
+  }
+  if (
+    isDoctorRepairPreview(ctx) &&
+    contribution.previewSupport === "structured" &&
+    contribution.healthCheckIds.length > 0
+  ) {
+    if (contribution.previewWhen?.(ctx) === false) {
+      return;
+    }
+    await runStructuredHealthRepairChecks(ctx, contribution.healthCheckIds);
+    return;
+  }
+  await contribution.run(ctx);
 }
 
 async function runGatewayConfigHealth(ctx: DoctorHealthFlowContext): Promise<void> {
@@ -237,12 +437,16 @@ async function runCommandOwnerHealth(ctx: DoctorHealthFlowContext): Promise<void
   noteCommandOwnerHealth(ctx.cfg);
 }
 
-async function runStructuredHealthRepairs(ctx: DoctorHealthFlowContext): Promise<void> {
+async function runStructuredHealthRepairChecks(
+  ctx: DoctorHealthFlowContext,
+  checkIds: readonly string[],
+): Promise<void> {
   if (!ctx.prompter.shouldRepair) {
     return;
   }
   const { registerCoreHealthChecks } = await import("./doctor-core-checks.js");
   const { registerBundledHealthChecks } = await import("./bundled-health-checks.js");
+  const { listHealthChecks } = await import("./health-check-registry.js");
   const { runDoctorHealthRepairs } = await import("./doctor-repair-flow.js");
   const { resolveAgentWorkspaceDir, resolveDefaultAgentId } =
     await import("../agents/agent-scope.js");
@@ -250,14 +454,105 @@ async function runStructuredHealthRepairs(ctx: DoctorHealthFlowContext): Promise
 
   registerCoreHealthChecks();
   const workspaceDir = resolveAgentWorkspaceDir(ctx.cfg, resolveDefaultAgentId(ctx.cfg));
-  registerBundledHealthChecks({ cfg: ctx.cfg, cwd: workspaceDir });
-  const result = await runDoctorHealthRepairs({
-    mode: "fix",
-    runtime: ctx.runtime,
-    cfg: ctx.cfg,
-    cwd: workspaceDir,
-    configPath: ctx.configPath,
+  if (checkIds.includes("policy/*")) {
+    registerBundledHealthChecks({ cfg: ctx.cfg, cwd: workspaceDir });
+  }
+  const checks = listHealthChecks().filter((check) => {
+    return (
+      checkIds.includes(check.id) || (checkIds.includes("policy/*") && check.source === "policy")
+    );
   });
+  const result = await runDoctorHealthRepairs(
+    {
+      mode: "fix",
+      runtime: ctx.runtime,
+      cfg: ctx.cfg,
+      cwd: workspaceDir,
+      configPath: ctx.configPath,
+      env: ctx.env ?? process.env,
+      doctor: {
+        options: ctx.options,
+        sourceLastTouchedVersion: ctx.configResult.sourceLastTouchedVersion,
+        confirm: (params) => ctx.prompter.confirm(params),
+        confirmAutoFix: (params) => ctx.prompter.confirmAutoFix(params),
+        confirmAggressiveAutoFix: (params) => ctx.prompter.confirmAggressiveAutoFix(params),
+        confirmRuntimeRepair: (params) => ctx.prompter.confirmRuntimeRepair(params),
+        note,
+        repairMode: ctx.prompter.repairMode,
+        shouldForce: ctx.prompter.shouldForce,
+      },
+    },
+    {
+      checks,
+      dryRun: ctx.options?.dryRun === true,
+      diff: ctx.options?.diff === true,
+    },
+  );
+  ctx.cfg = result.config;
+  if (ctx.previewReport !== undefined) {
+    ctx.previewReport.checksRun += result.checksRun;
+    ctx.previewReport.checksRepaired += result.checksRepaired;
+    ctx.previewReport.checksValidated += result.checksValidated;
+    ctx.previewReport.findings.push(...result.findings);
+    ctx.previewReport.changes.push(...result.changes);
+    ctx.previewReport.warnings.push(...result.warnings);
+    ctx.previewReport.effects.push(...result.effects);
+    ctx.previewReport.diffs.push(...result.diffs);
+  }
+  if (ctx.options?.dryRun === true && result.findings.length > 0) {
+    note(result.findings.map(formatDoctorRepairFinding).join("\n"), "Doctor findings");
+  }
+  if (result.changes.length > 0) {
+    note(result.changes.join("\n"), "Doctor changes");
+  }
+  if (result.effects.length > 0) {
+    note(result.effects.map(formatDoctorRepairEffect).join("\n"), "Doctor effects");
+  }
+  if (result.diffs.length > 0) {
+    note(result.diffs.map(formatDoctorRepairDiff).join("\n\n"), "Doctor diffs");
+  }
+  if (result.warnings.length > 0) {
+    note(result.warnings.join("\n"), "Doctor warnings");
+  }
+}
+
+async function runBundledStructuredHealthRepairs(ctx: DoctorHealthFlowContext): Promise<void> {
+  if (!ctx.prompter.shouldRepair) {
+    return;
+  }
+  const { registerBundledHealthChecks } = await import("./bundled-health-checks.js");
+  const { listHealthChecks } = await import("./health-check-registry.js");
+  const { runDoctorHealthRepairs } = await import("./doctor-repair-flow.js");
+  const { resolveAgentWorkspaceDir, resolveDefaultAgentId } =
+    await import("../agents/agent-scope.js");
+  const { note } = await import("../terminal/note.js");
+
+  const workspaceDir = resolveAgentWorkspaceDir(ctx.cfg, resolveDefaultAgentId(ctx.cfg));
+  registerBundledHealthChecks({ cfg: ctx.cfg, cwd: workspaceDir });
+  const checks = listHealthChecks().filter((check) => check.kind !== "core");
+  if (checks.length === 0) {
+    return;
+  }
+  const result = await runDoctorHealthRepairs(
+    {
+      mode: "fix",
+      runtime: ctx.runtime,
+      cfg: ctx.cfg,
+      cwd: workspaceDir,
+      configPath: ctx.configPath,
+      env: ctx.env ?? process.env,
+      doctor: {
+        options: ctx.options,
+        confirm: (params) => ctx.prompter.confirm(params),
+        note,
+      },
+    },
+    {
+      checks,
+      dryRun: ctx.options.dryRun === true,
+      diff: ctx.options.diff === true,
+    },
+  );
   ctx.cfg = result.config;
   if (result.changes.length > 0) {
     note(result.changes.join("\n"), "Doctor changes");
@@ -265,6 +560,13 @@ async function runStructuredHealthRepairs(ctx: DoctorHealthFlowContext): Promise
   if (result.warnings.length > 0) {
     note(result.warnings.join("\n"), "Doctor warnings");
   }
+}
+
+async function runPositionalStructuredHealthRepair(
+  ctx: DoctorHealthFlowContext,
+  checkId: string,
+): Promise<void> {
+  await runStructuredHealthRepairChecks(ctx, [checkId]);
 }
 
 async function runClaudeCliHealth(ctx: DoctorHealthFlowContext): Promise<void> {
@@ -303,6 +605,10 @@ async function runLegacyStateHealth(ctx: DoctorHealthFlowContext): Promise<void>
 }
 
 async function runLegacyPluginManifestHealth(ctx: DoctorHealthFlowContext): Promise<void> {
+  if (ctx.prompter.shouldRepair) {
+    await runPositionalStructuredHealthRepair(ctx, "core/doctor/legacy-plugin-manifests");
+    return;
+  }
   const { maybeRepairLegacyPluginManifestContracts } =
     await import("../commands/doctor-plugin-manifests.js");
   await maybeRepairLegacyPluginManifestContracts({
@@ -314,6 +620,10 @@ async function runLegacyPluginManifestHealth(ctx: DoctorHealthFlowContext): Prom
 }
 
 async function runPluginRegistryHealth(ctx: DoctorHealthFlowContext): Promise<void> {
+  if (ctx.prompter.shouldRepair) {
+    await runPositionalStructuredHealthRepair(ctx, "core/doctor/plugin-registry");
+    return;
+  }
   const { maybeRepairPluginRegistryState } = await import("../commands/doctor-plugin-registry.js");
   ctx.cfg = await maybeRepairPluginRegistryState({
     config: ctx.cfg,
@@ -331,37 +641,7 @@ async function runReleaseConfiguredPluginInstallsHealth(
   if (!ctx.prompter.shouldRepair) {
     return;
   }
-  const { maybeRunConfiguredPluginInstallReleaseStep } =
-    await import("../commands/doctor/shared/release-configured-plugin-installs.js");
-  const { note } = await import("../terminal/note.js");
-  const { VERSION } = await import("../version.js");
-  const result = await maybeRunConfiguredPluginInstallReleaseStep({
-    cfg: ctx.cfg,
-    env: ctx.env ?? process.env,
-    touchedVersion: ctx.configResult.sourceLastTouchedVersion ?? ctx.cfg.meta?.lastTouchedVersion,
-  });
-  if (result.changes.length > 0) {
-    note(result.changes.join("\n"), "Doctor changes");
-  }
-  if (result.warnings.length > 0) {
-    note(result.warnings.join("\n"), "Doctor warnings");
-  }
-  if (!result.touchedConfig) {
-    return;
-  }
-  const lastTouchedVersion = isLegacyParentWritableUpdateDoctorPass(ctx.env ?? process.env)
-    ? ctx.configResult.sourceLastTouchedVersion?.trim() ||
-      ctx.cfg.meta?.lastTouchedVersion ||
-      VERSION
-    : VERSION;
-  ctx.cfg = {
-    ...ctx.cfg,
-    meta: {
-      ...ctx.cfg.meta,
-      lastTouchedVersion,
-      lastTouchedAt: new Date().toISOString(),
-    },
-  };
+  await runPositionalStructuredHealthRepair(ctx, "core/doctor/configured-plugin-installs");
 }
 
 async function runStateIntegrityHealth(ctx: DoctorHealthFlowContext): Promise<void> {
@@ -387,17 +667,26 @@ async function runCodexSessionRouteHealth(ctx: DoctorHealthFlowContext): Promise
 }
 
 async function runSessionLocksHealth(ctx: DoctorHealthFlowContext): Promise<void> {
-  const { noteSessionLockHealth } = await import("../commands/doctor-session-locks.js");
-  await noteSessionLockHealth({
-    shouldRepair: ctx.prompter.shouldRepair,
-    config: ctx.cfg,
-    env: ctx.env,
-  });
+  if (!ctx.prompter.shouldRepair) {
+    const { noteSessionLockHealth } = await import("../commands/doctor-session-locks.js");
+    await noteSessionLockHealth({
+      shouldRepair: false,
+      config: ctx.cfg,
+      env: ctx.env,
+    });
+    return;
+  }
+  await runPositionalStructuredHealthRepair(ctx, "core/doctor/session-locks");
 }
 
 async function runSessionTranscriptsHealth(ctx: DoctorHealthFlowContext): Promise<void> {
-  const { noteSessionTranscriptHealth } = await import("../commands/doctor-session-transcripts.js");
-  await noteSessionTranscriptHealth({ shouldRepair: ctx.prompter.shouldRepair });
+  if (!ctx.prompter.shouldRepair) {
+    const { noteSessionTranscriptHealth } =
+      await import("../commands/doctor-session-transcripts.js");
+    await noteSessionTranscriptHealth({ shouldRepair: false });
+    return;
+  }
+  await runPositionalStructuredHealthRepair(ctx, "core/doctor/session-transcripts");
 }
 
 async function runSessionSnapshotsHealth(ctx: DoctorHealthFlowContext): Promise<void> {
@@ -406,14 +695,29 @@ async function runSessionSnapshotsHealth(ctx: DoctorHealthFlowContext): Promise<
 }
 
 async function runConfigAuditScrubHealth(ctx: DoctorHealthFlowContext): Promise<void> {
+  if (ctx.prompter.shouldRepair) {
+    await runPositionalStructuredHealthRepair(ctx, "core/doctor/config-audit-scrub");
+    return;
+  }
   const { maybeScrubConfigAuditLog } = await import("../commands/doctor-config-audit-scrub.js");
-  await maybeScrubConfigAuditLog({ shouldRepair: ctx.prompter.shouldRepair });
+  await maybeScrubConfigAuditLog({
+    shouldRepair: false,
+    env: ctx.env ?? process.env,
+  });
 }
 
 async function runLegacyCronHealth(ctx: DoctorHealthFlowContext): Promise<void> {
-  const { maybeRepairLegacyCronStore, noteLegacyWhatsAppCrontabHealthCheck } =
-    await import("../commands/doctor-cron.js");
+  const {
+    maybeRepairLegacyCronStore,
+    noteCronModelOverrideDiagnostics,
+    noteLegacyWhatsAppCrontabHealthCheck,
+  } = await import("../commands/doctor-cron.js");
   await noteLegacyWhatsAppCrontabHealthCheck();
+  if (ctx.prompter.shouldRepair) {
+    await noteCronModelOverrideDiagnostics({ cfg: ctx.cfg });
+    await runPositionalStructuredHealthRepair(ctx, "core/doctor/legacy-cron-store");
+    return;
+  }
   await maybeRepairLegacyCronStore({
     cfg: ctx.cfg,
     options: ctx.options,
@@ -422,6 +726,15 @@ async function runLegacyCronHealth(ctx: DoctorHealthFlowContext): Promise<void> 
 }
 
 async function runSandboxHealth(ctx: DoctorHealthFlowContext): Promise<void> {
+  if (ctx.prompter.shouldRepair) {
+    await runStructuredHealthRepairChecks(ctx, [
+      "core/doctor/sandbox/registry-files",
+      "core/doctor/sandbox/images",
+    ]);
+    const { noteSandboxScopeWarnings } = await import("../commands/doctor-sandbox.js");
+    noteSandboxScopeWarnings(ctx.cfg);
+    return;
+  }
   const { maybeRepairSandboxImages, maybeRepairSandboxRegistryFiles, noteSandboxScopeWarnings } =
     await import("../commands/doctor-sandbox.js");
   await maybeRepairSandboxRegistryFiles(ctx.prompter);
@@ -430,13 +743,23 @@ async function runSandboxHealth(ctx: DoctorHealthFlowContext): Promise<void> {
 }
 
 async function runGatewayServicesHealth(ctx: DoctorHealthFlowContext): Promise<void> {
-  const { maybeRepairGatewayServiceConfig, maybeScanExtraGatewayServices } =
-    await import("../commands/doctor-gateway-services.js");
   const {
     noteMacLaunchAgentOverrides,
     noteMacLaunchctlGatewayEnvOverrides,
     noteMacStaleOpenClawUpdateLaunchdJobs,
   } = await import("../commands/doctor-platform-notes.js");
+  if (ctx.prompter.shouldRepair) {
+    await runStructuredHealthRepairChecks(ctx, [
+      "core/doctor/gateway-services/extra",
+      "core/doctor/gateway-services/config",
+    ]);
+    await noteMacLaunchAgentOverrides();
+    await noteMacStaleOpenClawUpdateLaunchdJobs();
+    await noteMacLaunchctlGatewayEnvOverrides(ctx.cfg);
+    return;
+  }
+  const { maybeRepairGatewayServiceConfig, maybeScanExtraGatewayServices } =
+    await import("../commands/doctor-gateway-services.js");
   await maybeScanExtraGatewayServices(ctx.options, ctx.runtime, ctx.prompter);
   await maybeRepairGatewayServiceConfig(
     ctx.cfg,
@@ -450,6 +773,10 @@ async function runGatewayServicesHealth(ctx: DoctorHealthFlowContext): Promise<v
 }
 
 async function runStartupChannelMaintenanceHealth(ctx: DoctorHealthFlowContext): Promise<void> {
+  if (ctx.prompter.shouldRepair) {
+    await runPositionalStructuredHealthRepair(ctx, "core/doctor/startup-channel-maintenance");
+    return;
+  }
   const { maybeRunDoctorStartupChannelMaintenance } =
     await import("./doctor-startup-channel-maintenance.js");
   await maybeRunDoctorStartupChannelMaintenance({
@@ -468,6 +795,9 @@ async function runSecurityHealth(ctx: DoctorHealthFlowContext): Promise<void> {
 async function runBrowserHealth(ctx: DoctorHealthFlowContext): Promise<void> {
   const { noteChromeMcpBrowserReadiness } = await import("../commands/doctor-browser.js");
   await noteChromeMcpBrowserReadiness(ctx.cfg);
+  if (ctx.prompter.shouldRepair) {
+    await runPositionalStructuredHealthRepair(ctx, "core/doctor/browser-clawd-profile-residue");
+  }
 }
 
 async function runOpenAIOAuthTlsHealth(ctx: DoctorHealthFlowContext): Promise<void> {
@@ -525,6 +855,10 @@ async function runHooksModelHealth(ctx: DoctorHealthFlowContext): Promise<void> 
 }
 
 async function runSystemdLingerHealth(ctx: DoctorHealthFlowContext): Promise<void> {
+  if (ctx.prompter.shouldRepair) {
+    await runPositionalStructuredHealthRepair(ctx, "core/doctor/systemd-linger");
+    return;
+  }
   if (
     ctx.options.nonInteractive === true ||
     process.platform !== "linux" ||
@@ -533,12 +867,13 @@ async function runSystemdLingerHealth(ctx: DoctorHealthFlowContext): Promise<voi
     return;
   }
   const { resolveGatewayService } = await import("../daemon/service.js");
-  const { ensureSystemdUserLingerInteractive } = await import("../commands/systemd-linger.js");
+  const { SYSTEMD_GATEWAY_LINGER_REASON, ensureSystemdUserLingerInteractive } =
+    await import("../commands/systemd-linger.js");
   const { note } = await import("../terminal/note.js");
   const service = resolveGatewayService();
   let loaded = false;
   try {
-    loaded = await service.isLoaded({ env: process.env });
+    loaded = await service.isLoaded({ env: ctx.env ?? process.env });
   } catch {
     loaded = false;
   }
@@ -551,8 +886,8 @@ async function runSystemdLingerHealth(ctx: DoctorHealthFlowContext): Promise<voi
       confirm: async (p) => ctx.prompter.confirm(p),
       note,
     },
-    reason:
-      "Gateway runs as a systemd user service. Without lingering, systemd stops the user session on logout/idle and kills the Gateway.",
+    env: ctx.env ?? process.env,
+    reason: SYSTEMD_GATEWAY_LINGER_REASON,
     requireConfirm: true,
   });
 }
@@ -576,6 +911,10 @@ async function runBootstrapSizeHealth(ctx: DoctorHealthFlowContext): Promise<voi
 }
 
 async function runShellCompletionHealth(ctx: DoctorHealthFlowContext): Promise<void> {
+  if (ctx.prompter.shouldRepair) {
+    await runPositionalStructuredHealthRepair(ctx, "core/doctor/shell-completion");
+    return;
+  }
   const { doctorShellCompletion } = await import("../commands/doctor-completion.js");
   await doctorShellCompletion(ctx.runtime, ctx.prompter, {
     nonInteractive: ctx.options.nonInteractive,
@@ -740,6 +1079,7 @@ export function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
       id: "doctor:gateway-config",
       label: "Gateway config",
       healthCheckIds: ["core/doctor/gateway-config"],
+      previewSupport: "structured",
       run: runGatewayConfigHealth,
     }),
     createDoctorHealthContribution({
@@ -751,6 +1091,7 @@ export function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
       id: "doctor:claude-cli",
       label: "Claude CLI",
       healthCheckIds: ["core/doctor/claude-cli"],
+      previewSupport: "structured",
       run: runClaudeCliHealth,
     }),
     createDoctorHealthContribution({
@@ -763,12 +1104,13 @@ export function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
       id: "doctor:command-owner",
       label: "Command owner",
       healthCheckIds: ["core/doctor/command-owner"],
+      previewSupport: "structured",
       run: runCommandOwnerHealth,
     }),
     createDoctorHealthContribution({
-      id: "doctor:structured-health-repairs",
-      label: "Structured health repairs",
-      run: runStructuredHealthRepairs,
+      id: "doctor:bundled-health-repairs",
+      label: "Bundled health repairs",
+      run: runBundledStructuredHealthRepairs,
     }),
     createDoctorHealthContribution({
       id: "doctor:legacy-state",
@@ -779,17 +1121,31 @@ export function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
     createDoctorHealthContribution({
       id: "doctor:legacy-plugin-manifests",
       label: "Legacy plugin manifests",
+      healthCheckIds: ["core/doctor/legacy-plugin-manifests"],
+      previewSupport: "structured",
       run: runLegacyPluginManifestHealth,
     }),
     createDoctorHealthContribution({
       id: "doctor:release-configured-plugin-installs",
       label: "Configured plugin repair",
+      healthCheckIds: ["core/doctor/configured-plugin-installs"],
+      previewSupport: "structured",
+      previewWhen: (ctx) => ctx.sourceConfigValid,
       run: runReleaseConfiguredPluginInstallsHealth,
     }),
     createDoctorHealthContribution({
       id: "doctor:plugin-registry",
       label: "Plugin registry",
+      healthCheckIds: ["core/doctor/plugin-registry"],
+      previewSupport: "structured",
       run: runPluginRegistryHealth,
+    }),
+    createDoctorHealthContribution({
+      id: "doctor:policy",
+      label: "Policy",
+      healthCheckIds: ["policy/*"],
+      previewSupport: "structured",
+      run: (ctx) => runStructuredHealthRepairChecks(ctx, ["policy/*"]),
     }),
     createDoctorHealthContribution({
       id: "doctor:state-integrity",
@@ -804,11 +1160,15 @@ export function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
     createDoctorHealthContribution({
       id: "doctor:session-locks",
       label: "Session locks",
+      healthCheckIds: ["core/doctor/session-locks"],
+      previewSupport: "structured",
       run: runSessionLocksHealth,
     }),
     createDoctorHealthContribution({
       id: "doctor:session-transcripts",
       label: "Session transcripts",
+      healthCheckIds: ["core/doctor/session-transcripts"],
+      previewSupport: "structured",
       run: runSessionTranscriptsHealth,
     }),
     createDoctorHealthContribution({
@@ -819,85 +1179,113 @@ export function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
     createDoctorHealthContribution({
       id: "doctor:config-audit-scrub",
       label: "Config audit",
+      healthCheckIds: ["core/doctor/config-audit-scrub"],
+      previewSupport: "structured",
       run: runConfigAuditScrubHealth,
     }),
     createDoctorHealthContribution({
       id: "doctor:legacy-cron",
       label: "Legacy cron",
-      healthCheckIds: ["core/doctor/legacy-whatsapp-crontab"],
+      healthCheckIds: ["core/doctor/legacy-cron-store", "core/doctor/legacy-whatsapp-crontab"],
+      previewSupport: "structured",
       run: runLegacyCronHealth,
     }),
     createDoctorHealthContribution({
       id: "doctor:sandbox",
       label: "Sandbox",
+      healthCheckIds: [
+        "core/doctor/sandbox/registry-files",
+        "core/doctor/sandbox/images",
+        "core/doctor/sandbox-scope",
+      ],
+      previewSupport: "structured",
       run: runSandboxHealth,
     }),
     createDoctorHealthContribution({
       id: "doctor:gateway-services",
       label: "Gateway services",
-      healthCheckIds: ["core/doctor/gateway-services/platform-notes"],
+      healthCheckIds: [
+        "core/doctor/gateway-services/extra",
+        "core/doctor/gateway-services/config",
+        "core/doctor/gateway-services/platform-notes",
+      ],
+      previewSupport: "structured",
       run: runGatewayServicesHealth,
     }),
     createDoctorHealthContribution({
       id: "doctor:startup-channel-maintenance",
       label: "Startup channel maintenance",
+      healthCheckIds: ["core/doctor/startup-channel-maintenance"],
+      previewSupport: "structured",
       run: runStartupChannelMaintenanceHealth,
     }),
     createDoctorHealthContribution({
       id: "doctor:security",
       label: "Security",
       healthCheckIds: ["core/doctor/security"],
+      previewSupport: "structured",
       run: runSecurityHealth,
     }),
     createDoctorHealthContribution({
       id: "doctor:browser",
       label: "Browser",
-      healthCheckIds: ["core/doctor/browser"],
+      healthCheckIds: ["core/doctor/browser", "core/doctor/browser-clawd-profile-residue"],
+      previewSupport: "structured",
       run: runBrowserHealth,
     }),
     createDoctorHealthContribution({
       id: "doctor:oauth-tls",
       label: "OAuth TLS",
       healthCheckIds: ["core/doctor/oauth-tls"],
+      previewSupport: "structured",
       run: runOpenAIOAuthTlsHealth,
     }),
     createDoctorHealthContribution({
       id: "doctor:hooks-model",
       label: "Hooks model",
       healthCheckIds: ["core/doctor/hooks-model"],
+      previewSupport: "structured",
       run: runHooksModelHealth,
     }),
     createDoctorHealthContribution({
       id: "doctor:systemd-linger",
       label: "systemd linger",
+      healthCheckIds: ["core/doctor/systemd-linger"],
+      previewSupport: "structured",
       run: runSystemdLingerHealth,
     }),
     createDoctorHealthContribution({
       id: "doctor:workspace-status",
       label: "Workspace status",
       healthCheckIds: ["core/doctor/workspace-status"],
+      previewSupport: "structured",
       run: runWorkspaceStatusHealth,
     }),
     createDoctorHealthContribution({
       id: "doctor:skills",
       label: "Skills",
       healthCheckIds: ["core/doctor/skills-readiness"],
+      previewSupport: "structured",
       run: runSkillsHealth,
     }),
     createDoctorHealthContribution({
       id: "doctor:bootstrap-size",
       label: "Bootstrap size",
       healthCheckIds: ["core/doctor/bootstrap-size"],
+      previewSupport: "structured",
       run: runBootstrapSizeHealth,
     }),
     createDoctorHealthContribution({
       id: "doctor:shell-completion",
       label: "Shell completion",
+      healthCheckIds: ["core/doctor/shell-completion"],
+      previewSupport: "structured",
       run: runShellCompletionHealth,
     }),
     createDoctorHealthContribution({
       id: "doctor:gateway-health",
       label: "Gateway health",
+      previewSupport: "readonly",
       run: runGatewayHealthChecks,
     }),
     createDoctorHealthContribution({
@@ -929,12 +1317,15 @@ export function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
       id: "doctor:workspace-suggestions",
       label: "Workspace suggestions",
       healthCheckIds: ["core/doctor/workspace-suggestions"],
+      previewSupport: "structured",
+      previewWhen: (ctx) => ctx.options.workspaceSuggestions !== false,
       run: runWorkspaceSuggestionsHealth,
     }),
     createDoctorHealthContribution({
       id: "doctor:final-config-validation",
       label: "Final config validation",
       healthCheckIds: ["core/doctor/final-config-validation"],
+      previewSupport: "structured",
       run: runFinalConfigValidationHealth,
     }),
   ];
@@ -942,6 +1333,6 @@ export function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
 
 export async function runDoctorHealthContributions(ctx: DoctorHealthFlowContext): Promise<void> {
   for (const contribution of resolveDoctorHealthContributions()) {
-    await contribution.run(ctx);
+    await runDoctorHealthContribution(ctx, contribution);
   }
 }

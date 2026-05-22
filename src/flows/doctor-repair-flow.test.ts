@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { runDoctorHealthRepairs } from "./doctor-repair-flow.js";
 import type { HealthCheck, HealthRepairContext } from "./health-checks.js";
@@ -55,6 +55,61 @@ describe("runDoctorHealthRepairs", () => {
     expect(result.checksValidated).toBe(1);
     expect(result.remainingFindings).toEqual([]);
     expect(scopes).toMatchObject([{ paths: ["gateway.mode"] }]);
+  });
+
+  it("validates effect-only repairs after non-dry-run mutation", async () => {
+    const scopes: unknown[] = [];
+    let cleaned = false;
+    const checks: HealthCheck[] = [
+      {
+        id: "test/effect-only",
+        kind: "core",
+        description: "effect only",
+        async detect(_ctx, scope) {
+          if (scope !== undefined) {
+            scopes.push(scope);
+          }
+          return cleaned
+            ? []
+            : [
+                {
+                  checkId: "test/effect-only",
+                  severity: "warning",
+                  message: "stale service remains",
+                  path: "openclaw-gateway-old.service",
+                },
+              ];
+        },
+        async repair() {
+          cleaned = true;
+          return {
+            changes: [],
+            effects: [
+              {
+                kind: "service",
+                action: "remove-legacy-gateway-service",
+                target: "openclaw-gateway-old.service",
+                dryRunSafe: false,
+              },
+            ],
+          };
+        },
+      },
+    ];
+
+    const result = await runDoctorHealthRepairs(ctx({}), { checks });
+
+    expect(result.effects).toMatchObject([
+      {
+        kind: "service",
+        action: "remove-legacy-gateway-service",
+        target: "openclaw-gateway-old.service",
+      },
+    ]);
+    expect(result.checksRepaired).toBe(1);
+    expect(result.checksValidated).toBe(1);
+    expect(result.remainingFindings).toEqual([]);
+    expect(scopes).toMatchObject([{ paths: ["openclaw-gateway-old.service"] }]);
   });
 
   it("leaves non-repairable checks for legacy doctor behavior", async () => {
@@ -219,5 +274,101 @@ describe("runDoctorHealthRepairs", () => {
     expect(result.checksValidated).toBe(0);
     expect(detectCalls).toBe(1);
     expect(repairContexts[0]).toMatchObject({ dryRun: true, diff: true });
+  });
+
+  it("passes diff false and true through the repair API", async () => {
+    const repairContexts: HealthRepairContext[] = [];
+    const checks: HealthCheck[] = [
+      {
+        id: "test/diff-preview",
+        kind: "core",
+        description: "diff preview",
+        async detect() {
+          return [
+            {
+              checkId: "test/diff-preview",
+              severity: "warning",
+              message: "config needs repair",
+              path: "gateway.mode",
+            },
+          ];
+        },
+        async repair(ctx) {
+          repairContexts.push(ctx);
+          return {
+            changes: ["Would set gateway.mode to local."],
+            diffs:
+              ctx.diff === true
+                ? [
+                    {
+                      kind: "config",
+                      path: "gateway.mode",
+                      before: undefined,
+                      after: "local",
+                    },
+                  ]
+                : [],
+          };
+        },
+      },
+    ];
+
+    const withoutDiff = await runDoctorHealthRepairs(ctx({}), {
+      checks,
+      dryRun: true,
+      diff: false,
+    });
+    const withDiff = await runDoctorHealthRepairs(ctx({}), {
+      checks,
+      dryRun: true,
+      diff: true,
+    });
+
+    expect(repairContexts[0]).toMatchObject({ dryRun: true, diff: false });
+    expect(withoutDiff.diffs).toEqual([]);
+    expect(repairContexts[1]).toMatchObject({ dryRun: true, diff: true });
+    expect(withDiff.diffs).toMatchObject([{ kind: "config", path: "gateway.mode" }]);
+  });
+
+  it("passes the doctor note sink through detect and repair without collecting notes", async () => {
+    const note = vi.fn();
+    const checks: HealthCheck[] = [
+      {
+        id: "test/notes",
+        kind: "core",
+        description: "notes",
+        async detect(ctx) {
+          await ctx.doctor?.note?.("Detect presentation note.", "Detect");
+          return [
+            {
+              checkId: "test/notes",
+              severity: "warning",
+              message: "needs repair",
+            },
+          ];
+        },
+        async repair(ctx) {
+          await ctx.doctor?.note?.("Repair presentation note.", "Repair");
+          return {
+            changes: ["Ran repair."],
+          };
+        },
+      },
+    ];
+
+    const result = await runDoctorHealthRepairs(
+      {
+        ...ctx({}),
+        doctor: {
+          note,
+        },
+      },
+      { checks },
+    );
+
+    expect(note).toHaveBeenCalledWith("Detect presentation note.", "Detect");
+    expect(note).toHaveBeenCalledWith("Repair presentation note.", "Repair");
+    expect(result.changes).toEqual(["Ran repair."]);
+    expect(result.findings).toHaveLength(1);
   });
 });

@@ -23,6 +23,21 @@ type CronDoctorOutcome = {
   warnings: string[];
 };
 
+export type LegacyCronStoreIssue = {
+  readonly storePath: string;
+  readonly previewLines: readonly string[];
+  readonly message: string;
+  readonly fixHint: string;
+};
+
+export type LegacyCronStoreRepairResult = {
+  readonly storePath: string;
+  readonly changed: boolean;
+  readonly dreamingRewrittenCount: number;
+  readonly changes: readonly string[];
+  readonly warnings: readonly string[];
+};
+
 type CrontabReader = () => Promise<{ stdout?: unknown; stderr?: unknown }>;
 
 const execFileAsync = promisify(execFile);
@@ -92,6 +107,145 @@ function formatLegacyIssuePreview(issues: Partial<Record<string, number>>): stri
     );
   }
   return lines;
+}
+
+function cloneCronJobs(jobs: Array<Record<string, unknown>>): Array<Record<string, unknown>> {
+  return structuredClone(jobs);
+}
+
+function formatLegacyCronStoreMessage(storePath: string, previewLines: readonly string[]): string {
+  return [
+    `Legacy cron job storage detected at ${shortenHomePath(storePath)}.`,
+    ...previewLines,
+  ].join("\n");
+}
+
+function formatLegacyCronStoreFixHint(): string {
+  return `Repair with ${formatCliCommand("openclaw doctor --fix")} to normalize the store before the next scheduler run.`;
+}
+
+async function inspectLegacyCronStore(params: { cfg: OpenClawConfig; mutate: boolean }): Promise<{
+  storePath: string;
+  rawJobs: Array<Record<string, unknown>>;
+  previewLines: string[];
+  legacyWebhook?: string;
+  normalizedMutated: boolean;
+} | null> {
+  const storePath = resolveCronStorePath(params.cfg.cron?.store);
+  const store = await loadCronStore(storePath);
+  const rawJobs = (store.jobs ?? []) as unknown as Array<Record<string, unknown>>;
+  if (rawJobs.length === 0) {
+    return null;
+  }
+
+  const jobsForNormalization = params.mutate ? rawJobs : cloneCronJobs(rawJobs);
+  const normalized = normalizeStoredCronJobs(jobsForNormalization);
+  const legacyWebhook = normalizeOptionalString(params.cfg.cron?.webhook);
+  const notifyCount = rawJobs.filter((job) => job.notify === true).length;
+  const dreamingStaleCount = countStaleDreamingJobs(rawJobs);
+  const previewLines = formatLegacyIssuePreview(normalized.issues);
+  if (notifyCount > 0) {
+    previewLines.push(
+      `- ${pluralize(notifyCount, "job")} still uses legacy \`notify: true\` webhook fallback`,
+    );
+  }
+  if (dreamingStaleCount > 0) {
+    previewLines.push(
+      `- ${pluralize(dreamingStaleCount, "managed dreaming job")} still has the legacy heartbeat-coupled shape`,
+    );
+  }
+  if (previewLines.length === 0) {
+    return null;
+  }
+  return {
+    storePath,
+    rawJobs,
+    previewLines,
+    legacyWebhook,
+    normalizedMutated: normalized.mutated,
+  };
+}
+
+export async function detectLegacyCronStoreIssues(params: {
+  cfg: OpenClawConfig;
+}): Promise<LegacyCronStoreIssue[]> {
+  const inspected = await inspectLegacyCronStore({ cfg: params.cfg, mutate: false });
+  if (!inspected) {
+    return [];
+  }
+  return [
+    {
+      storePath: inspected.storePath,
+      previewLines: inspected.previewLines,
+      message: formatLegacyCronStoreMessage(inspected.storePath, inspected.previewLines),
+      fixHint: formatLegacyCronStoreFixHint(),
+    },
+  ];
+}
+
+export async function repairLegacyCronStoreIssues(params: {
+  cfg: OpenClawConfig;
+  storePaths?: readonly string[];
+  dryRun?: boolean;
+}): Promise<LegacyCronStoreRepairResult[]> {
+  const inspected = await inspectLegacyCronStore({
+    cfg: params.cfg,
+    mutate: params.dryRun !== true,
+  });
+  if (!inspected) {
+    return [];
+  }
+  const selected = new Set(params.storePaths ?? [inspected.storePath]);
+  if (!selected.has(inspected.storePath)) {
+    return [];
+  }
+  if (params.dryRun === true) {
+    const notifyMigration = migrateLegacyNotifyFallback({
+      jobs: cloneCronJobs(inspected.rawJobs),
+      legacyWebhook: inspected.legacyWebhook,
+    });
+    return [
+      {
+        storePath: inspected.storePath,
+        changed: true,
+        dreamingRewrittenCount: 0,
+        changes: [`Would normalize legacy cron store at ${inspected.storePath}.`],
+        warnings: notifyMigration.warnings,
+      },
+    ];
+  }
+
+  const notifyMigration = migrateLegacyNotifyFallback({
+    jobs: inspected.rawJobs,
+    legacyWebhook: inspected.legacyWebhook,
+  });
+  const dreamingMigration = migrateLegacyDreamingPayloadShape(inspected.rawJobs);
+  const changed =
+    inspected.normalizedMutated || notifyMigration.changed || dreamingMigration.changed;
+  if (changed) {
+    await saveCronStore(inspected.storePath, {
+      version: 1,
+      jobs: inspected.rawJobs as unknown as CronJob[],
+    });
+  }
+  const changes: string[] = [];
+  if (changed) {
+    changes.push(`Cron store normalized at ${inspected.storePath}.`);
+  }
+  if (dreamingMigration.rewrittenCount > 0) {
+    changes.push(
+      `Rewrote ${pluralize(dreamingMigration.rewrittenCount, "managed dreaming job")} to run as an isolated agent turn so dreaming no longer requires heartbeat.`,
+    );
+  }
+  return [
+    {
+      storePath: inspected.storePath,
+      changed,
+      dreamingRewrittenCount: dreamingMigration.rewrittenCount,
+      changes,
+      warnings: notifyMigration.warnings,
+    },
+  ];
 }
 
 function normalizeModelProvider(value: unknown): string | undefined {
@@ -193,6 +347,17 @@ function noteCronModelOverrides(params: {
   );
 
   note(lines.join("\n"), "Cron");
+}
+
+export async function noteCronModelOverrideDiagnostics(params: {
+  cfg: OpenClawConfig;
+}): Promise<void> {
+  const storePath = resolveCronStorePath(params.cfg.cron?.store);
+  const store = await loadCronStore(storePath);
+  const rawJobs = (store.jobs ?? []) as unknown as Array<Record<string, unknown>>;
+  if (rawJobs.length > 0) {
+    noteCronModelOverrides({ cfg: params.cfg, jobs: rawJobs, storePath });
+  }
 }
 
 function migrateLegacyNotifyFallback(params: {
@@ -334,38 +499,17 @@ export async function maybeRepairLegacyCronStore(params: {
   options: DoctorOptions;
   prompter: Pick<DoctorPrompter, "confirm">;
 }) {
-  const storePath = resolveCronStorePath(params.cfg.cron?.store);
-  const store = await loadCronStore(storePath);
-  const rawJobs = (store.jobs ?? []) as unknown as Array<Record<string, unknown>>;
-  if (rawJobs.length === 0) {
-    return;
-  }
-  noteCronModelOverrides({ cfg: params.cfg, jobs: rawJobs, storePath });
+  await noteCronModelOverrideDiagnostics({ cfg: params.cfg });
 
-  const normalized = normalizeStoredCronJobs(rawJobs);
-  const legacyWebhook = normalizeOptionalString(params.cfg.cron?.webhook);
-  const notifyCount = rawJobs.filter((job) => job.notify === true).length;
-  const dreamingStaleCount = countStaleDreamingJobs(rawJobs);
-  const previewLines = formatLegacyIssuePreview(normalized.issues);
-  if (notifyCount > 0) {
-    previewLines.push(
-      `- ${pluralize(notifyCount, "job")} still uses legacy \`notify: true\` webhook fallback`,
-    );
-  }
-  if (dreamingStaleCount > 0) {
-    previewLines.push(
-      `- ${pluralize(dreamingStaleCount, "managed dreaming job")} still has the legacy heartbeat-coupled shape`,
-    );
-  }
-  if (previewLines.length === 0) {
+  const inspected = await inspectLegacyCronStore({ cfg: params.cfg, mutate: false });
+  if (!inspected) {
     return;
   }
 
   note(
     [
-      `Legacy cron job storage detected at ${shortenHomePath(storePath)}.`,
-      ...previewLines,
-      `Repair with ${formatCliCommand("openclaw doctor --fix")} to normalize the store before the next scheduler run.`,
+      formatLegacyCronStoreMessage(inspected.storePath, inspected.previewLines),
+      formatLegacyCronStoreFixHint(),
     ].join("\n"),
     "Cron",
   );
@@ -378,31 +522,25 @@ export async function maybeRepairLegacyCronStore(params: {
     return;
   }
 
-  const notifyMigration = migrateLegacyNotifyFallback({
-    jobs: rawJobs,
-    legacyWebhook,
+  const [result] = await repairLegacyCronStoreIssues({
+    cfg: params.cfg,
+    storePaths: [inspected.storePath],
   });
-  const dreamingMigration = migrateLegacyDreamingPayloadShape(rawJobs);
-  const changed = normalized.mutated || notifyMigration.changed || dreamingMigration.changed;
-  if (!changed && notifyMigration.warnings.length === 0) {
+  if (!result || (!result.changed && result.warnings.length === 0)) {
     return;
   }
 
-  if (changed) {
-    await saveCronStore(storePath, {
-      version: 1,
-      jobs: rawJobs as unknown as CronJob[],
-    });
-    note(`Cron store normalized at ${shortenHomePath(storePath)}.`, "Doctor changes");
-    if (dreamingMigration.rewrittenCount > 0) {
+  if (result.changed) {
+    note(`Cron store normalized at ${shortenHomePath(result.storePath)}.`, "Doctor changes");
+    if (result.dreamingRewrittenCount > 0) {
       note(
-        `Rewrote ${pluralize(dreamingMigration.rewrittenCount, "managed dreaming job")} to run as an isolated agent turn so dreaming no longer requires heartbeat.`,
+        `Rewrote ${pluralize(result.dreamingRewrittenCount, "managed dreaming job")} to run as an isolated agent turn so dreaming no longer requires heartbeat.`,
         "Doctor changes",
       );
     }
   }
 
-  if (notifyMigration.warnings.length > 0) {
-    note(notifyMigration.warnings.join("\n"), "Doctor warnings");
+  if (result.warnings.length > 0) {
+    note(result.warnings.join("\n"), "Doctor warnings");
   }
 }

@@ -178,6 +178,19 @@ const policyChannelsDeniedProviderCheck: HealthCheck = {
         changes: [],
       };
     }
+    if (ctx.dryRun === true) {
+      return {
+        changes: next.changed.map(
+          (id) => `Would disable channels.${id}.enabled for policy conformance.`,
+        ),
+        effects: next.changed.map((id) => ({
+          kind: "config" as const,
+          action: "would-disable-policy-denied-channel",
+          target: `channels.${id}.enabled`,
+          dryRunSafe: true,
+        })),
+      };
+    }
     return {
       config: next.config,
       changes: next.changed.map((id) => `Disabled channels.${id}.enabled for policy conformance.`),

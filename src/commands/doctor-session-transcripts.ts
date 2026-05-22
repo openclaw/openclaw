@@ -27,6 +27,10 @@ type TranscriptRepairResult = {
   reason?: string;
 };
 
+export type SessionTranscriptHealthIssue = TranscriptRepairResult & {
+  broken: true;
+};
+
 function parseTranscriptEntries(raw: string): TranscriptEntry[] {
   const entries: TranscriptEntry[] = [];
   for (const line of raw.split(/\r?\n/)) {
@@ -244,6 +248,48 @@ async function listSessionTranscriptFiles(sessionDirs: string[]): Promise<string
     }
   }
   return files.toSorted((a, b) => a.localeCompare(b));
+}
+
+export async function detectSessionTranscriptHealthIssues(params?: {
+  sessionDirs?: string[];
+  env?: NodeJS.ProcessEnv;
+}): Promise<SessionTranscriptHealthIssue[]> {
+  let sessionDirs = params?.sessionDirs;
+  sessionDirs ??= await resolveAgentSessionDirs(resolveStateDir(params?.env ?? process.env));
+  const files = await listSessionTranscriptFiles(sessionDirs);
+  const results: SessionTranscriptHealthIssue[] = [];
+  for (const filePath of files) {
+    const result = await repairBrokenSessionTranscriptFile({ filePath, shouldRepair: false });
+    if (result.broken) {
+      results.push(result as SessionTranscriptHealthIssue);
+    }
+  }
+  return results;
+}
+
+export async function repairSessionTranscriptHealthIssues(params?: {
+  sessionDirs?: string[];
+  env?: NodeJS.ProcessEnv;
+  filePaths?: readonly string[];
+}): Promise<SessionTranscriptHealthIssue[]> {
+  let sessionDirs = params?.sessionDirs;
+  const files =
+    params?.filePaths !== undefined
+      ? [...params.filePaths].toSorted((a, b) => a.localeCompare(b))
+      : await (async () => {
+          sessionDirs ??= await resolveAgentSessionDirs(
+            resolveStateDir(params?.env ?? process.env),
+          );
+          return listSessionTranscriptFiles(sessionDirs);
+        })();
+  const results: SessionTranscriptHealthIssue[] = [];
+  for (const filePath of files) {
+    const result = await repairBrokenSessionTranscriptFile({ filePath, shouldRepair: true });
+    if (result.broken) {
+      results.push(result as SessionTranscriptHealthIssue);
+    }
+  }
+  return results;
 }
 
 export async function noteSessionTranscriptHealth(params?: {
