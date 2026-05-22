@@ -314,7 +314,6 @@ describe("openai-compatible generic embedding provider", () => {
           models: {
             providers: {
               "tenant-embeddings": {
-                api: "openai-completions",
                 baseUrl: server.baseUrl,
                 apiKey: token,
                 headers: {

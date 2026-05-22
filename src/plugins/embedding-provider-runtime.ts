@@ -45,6 +45,9 @@ function readConfiguredProviderApiId(providerId: string, cfg?: OpenClawConfig): 
       ([candidateId]) => normalizeProviderId(candidateId) === normalized,
     )?.[1];
   const api = providerConfig?.api?.trim();
+  if (!api && providerConfig?.baseUrl?.trim()) {
+    return OPENAI_COMPATIBLE_EMBEDDING_PROVIDER_ID;
+  }
   if (!api) {
     return undefined;
   }

@@ -161,7 +161,8 @@ function isOpenAICompatibleProviderConfig(
   return (
     normalizeProviderId(id) === OPENAI_COMPATIBLE_EMBEDDING_PROVIDER_ID ||
     normalizeProviderId(provider.api ?? "") === OPENAI_COMPATIBLE_EMBEDDING_PROVIDER_ID ||
-    OPENAI_COMPATIBLE_MODEL_APIS.has(normalizeProviderId(provider.api ?? ""))
+    OPENAI_COMPATIBLE_MODEL_APIS.has(normalizeProviderId(provider.api ?? "")) ||
+    (!provider.api && typeof provider.baseUrl === "string" && provider.baseUrl.trim().length > 0)
   );
 }
 

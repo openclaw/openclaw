@@ -122,6 +122,26 @@ describe("embedding provider runtime resolution", () => {
     });
   });
 
+  it("maps baseUrl-only configured provider aliases to OpenAI-compatible embeddings", () => {
+    const adapter = createCapabilityAdapter("openai-compatible");
+    mocks.resolvePluginCapabilityProvider.mockImplementation(({ providerId }) =>
+      providerId === "openai-compatible" ? adapter : undefined,
+    );
+
+    expect(
+      runtimeModule.getEmbeddingProvider("tenant-embeddings", {
+        models: {
+          providers: {
+            "tenant-embeddings": {
+              baseUrl: "http://127.0.0.1:11434/v1",
+              models: [],
+            },
+          },
+        },
+      })?.id,
+    ).toBe("openai-compatible");
+  });
+
   it("prefers registered adapters over declared capability fallback adapters with the same id", () => {
     const registered = {
       id: "openai",

@@ -174,12 +174,12 @@ length errors from the local server.
 Some OpenAI-compatible embedding providers reject the `encoding_format`
 parameter, while others ignore it and always return `number[]` vectors.
 `memory-lancedb` therefore omits `encoding_format` on embedding requests and
-expects float-array responses.
+accepts either float-array responses or base64-encoded float32 responses.
 
 If you have a raw OpenAI-compatible embeddings endpoint that does not have a
-dedicated provider adapter, use the bundled `openai-compatible` embedding
-provider and set `embedding.baseUrl`, `embedding.model`, and optional
-`embedding.apiKey`. This path does not inherit global OpenAI chat credentials.
+bundled provider adapter, omit `embedding.provider` (or leave it as `openai`) and
+set `embedding.apiKey` plus `embedding.baseUrl`. This preserves the direct
+OpenAI-compatible client path.
 
 Set `embedding.dimensions` for providers whose model dimensions are not built
 in. For example, ZhiPu `embedding-3` uses `2048` dimensions:
@@ -192,7 +192,6 @@ in. For example, ZhiPu `embedding-3` uses `2048` dimensions:
         enabled: true,
         config: {
           embedding: {
-            provider: "openai-compatible",
             apiKey: "${ZHIPU_API_KEY}",
             baseUrl: "https://open.bigmodel.cn/api/paas/v4",
             model: "embedding-3",
