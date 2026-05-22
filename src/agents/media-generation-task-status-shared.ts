@@ -162,7 +162,7 @@ export function recordRecentMediaGenerationTaskStartForSession(params: {
   }
   const nowMs = params.nowMs ?? Date.now();
   pruneRecentMediaGenerationTaskStarts({ maxAgeMs: 2 * 60_000, nowMs, preserveKey: key });
-  const entry = {
+  const entry: RecentMediaGenerationTaskStart = {
     requestKey: normalizeOptionalString(params.requestKey),
     task: {
       taskId: params.taskId,
