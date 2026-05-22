@@ -118,6 +118,31 @@ describe("runMessageAction send validation", () => {
     });
   });
 
+  it("strips unsupported citation control markers from internal UI source replies", async () => {
+    const result = await runMessageAction({
+      cfg: emptyConfig,
+      action: "send",
+      params: {
+        message: "v2026.5.20 release note citeturn2view0",
+      },
+      toolContext: {
+        currentChannelProvider: "webchat",
+      },
+      sessionKey: "agent:main",
+      sourceReplyDeliveryMode: "message_tool_only",
+    });
+
+    expect(result).toMatchObject({
+      kind: "send",
+      payload: {
+        sourceReply: {
+          text: "v2026.5.20 release note",
+        },
+      },
+    });
+    expect(JSON.stringify(result.payload)).not.toContain("turn2view0");
+  });
+
   it("does not infer an internal UI sink outside message-tool-only source delivery", async () => {
     await expect(
       runMessageAction({
@@ -158,6 +183,48 @@ describe("runMessageAction send validation", () => {
       handledBy: "core",
       dryRun: true,
     });
+  });
+
+  it("strips unsupported citation control markers from normal channel sends", async () => {
+    const sentText: string[] = [];
+    const sendText: NonNullable<
+      NonNullable<typeof workspaceTestPlugin.outbound>["sendText"]
+    > = async (ctx) => {
+      sentText.push(ctx.text);
+      return { channel: "workspace", messageId: "workspace-test-message" };
+    };
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "workspace",
+          source: "test",
+          plugin: {
+            ...workspaceTestPlugin,
+            outbound: {
+              ...workspaceTestPlugin.outbound,
+              sendText,
+            },
+          },
+        },
+      ]),
+    );
+
+    const result = await runMessageAction({
+      cfg: workspaceConfig,
+      action: "send",
+      params: {
+        channel: "workspace",
+        target: "#C12345678",
+        message: "v2026.5.20 release note citeturn2view0",
+      },
+    });
+
+    expect(result).toMatchObject({
+      kind: "send",
+      channel: "workspace",
+    });
+    expect(sentText).toEqual(["v2026.5.20 release note"]);
+    expect(JSON.stringify(result.payload)).not.toContain("turn2view0");
   });
 
   it.each([

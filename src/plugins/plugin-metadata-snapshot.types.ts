@@ -1,5 +1,5 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import type { InstalledPluginIndex } from "./installed-plugin-index.js";
+import type { InstalledPluginIndex } from "./installed-plugin-index-types.js";
 import type { PluginManifestRecord, PluginManifestRegistry } from "./manifest-registry.js";
 import type { PluginDiagnostic } from "./manifest-types.js";
 import type { PluginRegistrySnapshotSource } from "./plugin-registry-snapshot.types.js";
