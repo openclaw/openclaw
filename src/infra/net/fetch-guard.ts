@@ -1,11 +1,13 @@
 import type { Dispatcher } from "undici";
 import { logWarn } from "../../logger.js";
+import { isLoopbackIpAddress } from "../../shared/net/ip.js";
 import { buildTimeoutAbortSignal } from "../../utils/fetch-timeout.js";
 import {
   normalizeHeadersInitForFetch,
   normalizeRequestInitHeadersForFetch,
 } from "../fetch-headers.js";
 import { hasProxyEnvConfigured, shouldUseEnvHttpProxyForUrl } from "./proxy-env.js";
+import { getActiveManagedProxyLoopbackMode } from "./proxy/active-proxy-state.js";
 import { retainSafeHeadersForCrossOriginRedirect as retainSafeRedirectHeaders } from "./redirect-headers.js";
 import {
   fetchWithRuntimeDispatcher,
@@ -16,7 +18,6 @@ import {
   assertHostnameAllowedWithPolicy,
   closeDispatcher,
   createPinnedDispatcher,
-  isPrivateIpAddress,
   resolveSsrFPolicyForUrl,
   resolvePinnedHostnameWithPolicy,
   type LookupFn,
@@ -24,7 +25,6 @@ import {
   SsrFBlockedError,
   type SsrFPolicy,
 } from "./ssrf.js";
-import { getActiveManagedProxyLoopbackMode } from "./proxy/active-proxy-state.js";
 import { globalUndiciStreamTimeoutMs } from "./undici-global-dispatcher.js";
 import {
   createHttp1Agent,
@@ -162,7 +162,7 @@ function isLoopbackManagedProxyBypassHost(hostname: string): boolean {
     .toLowerCase()
     .replace(/\.+$/, "")
     .replace(/^\[(.*)\]$/, "$1");
-  return normalized === "localhost" || normalized === "127.0.0.1" || normalized === "::1";
+  return normalized === "localhost" || isLoopbackIpAddress(normalized);
 }
 
 function isExactConfiguredLocalOriginBypass(params: {
@@ -176,11 +176,20 @@ function isExactConfiguredLocalOriginBypass(params: {
   if (!baseOrigin) {
     return false;
   }
+  let baseHostname: string;
+  try {
+    baseHostname = new URL(params.managedProxyBypass.baseUrl.trim()).hostname;
+  } catch {
+    return false;
+  }
+  if (!isLoopbackManagedProxyBypassHost(baseHostname)) {
+    return false;
+  }
   return resolveHttpOrigin(params.url.toString()) === baseOrigin;
 }
 
-function isPinnedLocalTarget(addresses: readonly string[]): boolean {
-  return addresses.length > 0 && addresses.every((address) => isPrivateIpAddress(address));
+function isPinnedLoopbackTarget(addresses: readonly string[]): boolean {
+  return addresses.length > 0 && addresses.every((address) => isLoopbackIpAddress(address));
 }
 
 function shouldUseManagedProxyDirectBypass(params: {
@@ -200,7 +209,7 @@ function shouldUseManagedProxyDirectBypass(params: {
       "proxy: configured local provider loopback connections are blocked by proxy.loopbackMode",
     );
   }
-  return isPinnedLocalTarget(params.resolvedAddresses);
+  return isPinnedLoopbackTarget(params.resolvedAddresses);
 }
 
 function assertExplicitProxySupportsPinnedDns(
