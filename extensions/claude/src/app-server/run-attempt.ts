@@ -63,7 +63,9 @@ import {
   type EmbeddedRunAttemptResult,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { getSharedClaudeAppServerClient, type ClaudeAppServerClient } from "./client.js";
+import { resolveClaudeAppServerConfig, type ResolvedClaudeAppServerConfig } from "./config.js";
 import { createClaudeDynamicToolBridge, type ClaudeDynamicToolBridge } from "./dynamic-tools.js";
+import { assertThreadStartResponse } from "./protocol-validators.js";
 import {
   readClaudeAppServerBinding,
   writeClaudeAppServerBinding,
@@ -73,39 +75,14 @@ import type {
   ApprovalPolicy,
   DynamicToolCallParams,
   JsonValue,
-  SandboxPolicy,
   ThreadStartParams,
-  ThreadStartResponse,
   Turn,
   TurnStartParams,
   UserInput,
 } from "./types.js";
 import { filterToolsForVisionInputs, modelSupportsVision } from "./vision-tools.js";
 
-const DEFAULT_APPROVAL_POLICY: ApprovalPolicy = "never";
-const DEFAULT_SANDBOX: SandboxPolicy = { type: "dangerFullAccess" };
-const DEFAULT_TURN_TIMEOUT_MS = 600_000;
-const DEFAULT_TURN_IDLE_TIMEOUT_MS = 90_000;
 const THREAD_NOT_FOUND_RE = /thread not found/i;
-
-type AppServerConfig = {
-  command?: string;
-  args?: string[];
-  env?: Record<string, string>;
-  approvalPolicy: ApprovalPolicy;
-  sandbox: SandboxPolicy;
-  turnTimeoutMs: number;
-  turnIdleTimeoutMs: number;
-};
-
-type DynamicToolsConfig = {
-  excludeNames: string[];
-};
-
-type ResolvedConfig = {
-  appServer: AppServerConfig;
-  dynamicTools: DynamicToolsConfig;
-};
 
 export type RunClaudeAppServerAttemptOptions = {
   pluginConfig?: unknown;
@@ -117,7 +94,7 @@ export async function runClaudeAppServerAttempt(
 ): Promise<EmbeddedRunAttemptResult> {
   const attemptStartedAt = Date.now();
   const result = emptyResult(params);
-  const cfg = resolveConfig(options.pluginConfig);
+  const cfg = resolveClaudeAppServerConfig(options.pluginConfig);
   const client = getSharedClaudeAppServerClient({
     command: cfg.appServer.command,
     args: cfg.appServer.args,
@@ -720,7 +697,7 @@ function registerToolCallHandler(
 async function ensureThread(
   client: ClaudeAppServerClient,
   params: EmbeddedRunAttemptParams,
-  cfg: ResolvedConfig,
+  cfg: ResolvedClaudeAppServerConfig,
   bridge: ClaudeDynamicToolBridge,
   developerInstructions: string,
   developerInstructionsFingerprint: string,
@@ -848,11 +825,12 @@ async function ensureThread(
     developerInstructions,
     ...(nativeDisallowed.length > 0 ? { disallowedTools: nativeDisallowed } : {}),
   };
-  const response = await client.request<ThreadStartResponse>("thread/start", startParams);
-  const threadId = response.thread?.id;
-  if (typeof threadId !== "string" || !threadId) {
-    throw new Error(`thread/start returned invalid thread.id: ${JSON.stringify(threadId)}`);
-  }
+  const rawResponse = await client.request<unknown>("thread/start", startParams);
+  // assertThreadStartResponse throws ClaudeAppServerProtocolError with
+  // structured Zod issues if thread/start returns an unrecognized shape,
+  // replacing the previous one-off inline thread.id check.
+  const response = assertThreadStartResponse(rawResponse);
+  const threadId = response.thread.id;
   if (sessionFile) {
     const binding: Omit<ClaudeAppServerBinding, "schemaVersion" | "createdAt" | "updatedAt"> = {
       threadId,
@@ -929,7 +907,7 @@ async function runTurn(
   client: ClaudeAppServerClient,
   params: EmbeddedRunAttemptParams,
   threadId: string,
-  cfg: ResolvedConfig,
+  cfg: ResolvedClaudeAppServerConfig,
   ac: AbortController,
   effectiveWorkspace: string,
   hookContext: {
@@ -1815,70 +1793,6 @@ function renderClaudeWorkspaceBootstrapPromptContext(
     lines.push(`## ${file.path}`, "", file.content, "");
   }
   return lines.join("\n").trim();
-}
-
-// ─── Config resolution ──────────────────────────────────────────────────────
-
-function resolveConfig(raw: unknown): ResolvedConfig {
-  const cfg = (raw ?? {}) as Record<string, unknown>;
-  const appServer = (cfg.appServer ?? {}) as Record<string, unknown>;
-  const dynamicTools = (cfg.dynamicTools ?? {}) as Record<string, unknown>;
-  return {
-    appServer: {
-      command: typeof appServer.command === "string" ? appServer.command : undefined,
-      args: Array.isArray(appServer.args) ? (appServer.args as string[]) : undefined,
-      env:
-        appServer.env && typeof appServer.env === "object" && !Array.isArray(appServer.env)
-          ? (appServer.env as Record<string, string>)
-          : undefined,
-      approvalPolicy: normalizeApprovalPolicy(appServer.approvalPolicy),
-      sandbox: normalizeSandbox(appServer.sandbox),
-      turnTimeoutMs:
-        typeof appServer.turnTimeoutMs === "number"
-          ? appServer.turnTimeoutMs
-          : DEFAULT_TURN_TIMEOUT_MS,
-      turnIdleTimeoutMs:
-        typeof appServer.turnIdleTimeoutMs === "number"
-          ? appServer.turnIdleTimeoutMs
-          : DEFAULT_TURN_IDLE_TIMEOUT_MS,
-    },
-    dynamicTools: {
-      excludeNames: Array.isArray(dynamicTools.exclude)
-        ? (dynamicTools.exclude as unknown[]).filter((x): x is string => typeof x === "string")
-        : [],
-    },
-  };
-}
-
-function normalizeApprovalPolicy(raw: unknown): ApprovalPolicy {
-  if (raw === "never" || raw === "untrusted" || raw === "on-failure" || raw === "on-request") {
-    return raw;
-  }
-  return DEFAULT_APPROVAL_POLICY;
-}
-
-function normalizeSandbox(raw: unknown): SandboxPolicy {
-  if (typeof raw === "string") {
-    // Codex-shaped sandbox strings — map to discriminated.
-    if (raw === "read-only") {
-      return { type: "readOnly" };
-    }
-    if (raw === "workspace-write") {
-      return { type: "workspaceWrite" };
-    }
-    if (raw === "danger-full-access") {
-      return { type: "dangerFullAccess" };
-    }
-  }
-  if (
-    raw &&
-    typeof raw === "object" &&
-    !Array.isArray(raw) &&
-    typeof (raw as { type?: unknown }).type === "string"
-  ) {
-    return raw as SandboxPolicy;
-  }
-  return DEFAULT_SANDBOX;
 }
 
 // ─── Result construction ────────────────────────────────────────────────────
