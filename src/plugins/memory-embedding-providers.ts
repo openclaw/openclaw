@@ -42,6 +42,7 @@ export type MemoryEmbeddingProvider = {
     inputs: EmbeddingInput[],
     options?: MemoryEmbeddingProviderCallOptions,
   ) => Promise<number[][]>;
+  close?: () => Promise<void> | void;
 };
 
 export type MemoryEmbeddingProviderCreateOptions = {

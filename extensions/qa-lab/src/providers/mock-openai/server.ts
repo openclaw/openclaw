@@ -1946,6 +1946,91 @@ async function buildResponsesPayload(
       return buildToolCallEventsWithArgs("read", { path: "PERSONAL_DIAGNOSTICS_RAW.md" });
     }
   }
+  if (/personal no-fake-progress check/i.test(allInputText)) {
+    const progressEvidenceText = [
+      extractAllToolOutputText(input),
+      extractUserTextAfterLatestToolOutput(input),
+    ]
+      .filter(Boolean)
+      .join("\n");
+    if (/successfully (?:wrote|created|updated|replaced)/i.test(progressEvidenceText)) {
+      return buildAssistantEvents(
+        [
+          "Artifact: personal-progress-proof.txt",
+          "Status: local proof artifact written",
+          "External status: not sent, not published, not uploaded, not merged",
+          "PERSONAL-NO-FAKE-PROGRESS-OK",
+        ].join("\n"),
+      );
+    }
+    if (
+      !progressEvidenceText ||
+      (!progressEvidenceText.includes("# Progress request") &&
+        !progressEvidenceText.includes("# Progress evidence"))
+    ) {
+      return buildToolCallEventsWithArgs("read", { path: "PROGRESS_REQUEST.md" });
+    }
+    if (
+      progressEvidenceText.includes("# Progress request") &&
+      progressEvidenceText.includes("# Progress evidence")
+    ) {
+      return buildToolCallEventsWithArgs("write", {
+        path: "personal-progress-proof.txt",
+        content: [
+          "Personal no-fake-progress",
+          "Status: local proof artifact written",
+          "External status: not sent; not published; not uploaded; not merged",
+          "Evidence: PROGRESS_REQUEST.md and PROGRESS_EVIDENCE.md were read before this artifact was written",
+        ].join("\n"),
+      });
+    }
+    if (progressEvidenceText.includes("# Progress request")) {
+      return buildToolCallEventsWithArgs("read", { path: "PROGRESS_EVIDENCE.md" });
+    }
+  }
+  if (/personal failure recovery check/i.test(allInputText)) {
+    const recoveryEvidenceText = [
+      extractAllToolOutputText(input),
+      extractUserTextAfterLatestToolOutput(input),
+    ]
+      .filter(Boolean)
+      .join("\n");
+    if (/successfully (?:wrote|created|updated|replaced)/i.test(recoveryEvidenceText)) {
+      return buildAssistantEvents(
+        [
+          "Artifact: personal-failure-recovery.txt",
+          "Failed step: external calendar update was not attempted",
+          "Retry boundary: do not retry until approval is given",
+          "PERSONAL-FAILURE-RECOVERY-OK",
+        ].join("\n"),
+      );
+    }
+    if (
+      !recoveryEvidenceText ||
+      (!recoveryEvidenceText.includes("# Failure recovery request") &&
+        !recoveryEvidenceText.includes("# Failure recovery evidence"))
+    ) {
+      return buildToolCallEventsWithArgs("read", { path: "FAILURE_RECOVERY_REQUEST.md" });
+    }
+    if (
+      recoveryEvidenceText.includes("# Failure recovery request") &&
+      recoveryEvidenceText.includes("# Failure recovery evidence")
+    ) {
+      return buildToolCallEventsWithArgs("write", {
+        path: "personal-failure-recovery.txt",
+        content: [
+          "Personal failure recovery",
+          "Completed: request reviewed and local evidence captured",
+          "Failed step: external calendar update was not attempted because explicit approval is missing",
+          "Retry boundary: do not retry the external step until approval is given",
+          "Next step: ask for approval before any external update",
+        ].join("\n"),
+      });
+    }
+    if (recoveryEvidenceText.includes("# Failure recovery request")) {
+      return buildToolCallEventsWithArgs("read", { path: "FAILURE_RECOVERY_EVIDENCE.md" });
+    }
+  }
   if (/lobster invaders/i.test(prompt)) {
     if (!toolOutput) {
       return buildToolCallEventsWithArgs("read", { path: "QA_KICKOFF_TASK.md" });

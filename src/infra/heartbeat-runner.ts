@@ -91,6 +91,7 @@ import { escapeRegExp } from "../utils.js";
 import { MAX_SAFE_TIMEOUT_DELAY_MS, resolveSafeTimeoutDelayMs } from "../utils/timer-delay.js";
 import { loadOrCreateDeviceIdentity } from "./device-identity.js";
 import { formatErrorMessage, hasErrnoCode } from "./errors.js";
+import { resolveMainScopedEventSessionKey } from "./event-session-routing.js";
 import { isWithinActiveHours, resolveActiveHoursTimezone } from "./heartbeat-active-hours.js";
 import { recordRunStart, shouldDeferWake, type DeferDecision } from "./heartbeat-cooldown.js";
 import {
@@ -556,11 +557,17 @@ function resolveHeartbeatSession(
       if (forcedCanonical !== "global" && !isSubagentSessionKey(forcedCanonical)) {
         const sessionAgentId = resolveAgentIdFromSessionKey(forcedCanonical);
         if (sessionAgentId === normalizeAgentId(resolvedAgentId)) {
+          const routedSessionKey =
+            resolveMainScopedEventSessionKey({
+              cfg,
+              sessionKey: forcedCanonical,
+              agentId: resolvedAgentId,
+            }) ?? forcedCanonical;
           return {
-            sessionKey: forcedCanonical,
+            sessionKey: routedSessionKey,
             storePath,
             store,
-            entry: store[forcedCanonical],
+            entry: store[routedSessionKey],
             suppressOriginatingContext: false,
           };
         }
@@ -700,12 +707,14 @@ function resolveHeartbeatReasoningPayloads(
   const reasoningPayloads: ReplyPayload[] = [];
   for (const payload of payloads) {
     const text = typeof payload.text === "string" ? payload.text : "";
-    const hasLegacyReasoningPrefix = text.trimStart().startsWith("Reasoning:");
-    if (payload.isReasoning !== true && !hasLegacyReasoningPrefix) {
+    const hasFormattedReasoningPrefix = /^(?:Reasoning:|Thinking\.{0,3}(?=\s*_))/u.test(
+      text.trimStart(),
+    );
+    if (payload.isReasoning !== true && !hasFormattedReasoningPrefix) {
       continue;
     }
 
-    const formattedText = hasLegacyReasoningPrefix ? text : formatReasoningMessage(text);
+    const formattedText = hasFormattedReasoningPrefix ? text : formatReasoningMessage(text);
     if (!formattedText.trim()) {
       continue;
     }
@@ -1556,19 +1565,6 @@ export async function runHeartbeatOnce(opts: {
     }
     runSessionKey = isolatedSessionKey;
   }
-  const activeSessionPendingEventEntries =
-    runSessionKey === sessionKey
-      ? preflight.pendingEventEntries
-      : peekSystemEventEntries(runSessionKey);
-  const hasInspectedOwnerDowngradeEvents =
-    preflight.shouldInspectPendingEvents &&
-    preflight.pendingEventEntries.some((event) => event.forceSenderIsOwnerFalse === true);
-  const hasActiveSessionOwnerDowngradeEvents = activeSessionPendingEventEntries.some(
-    (event) => event.forceSenderIsOwnerFalse === true,
-  );
-  const hasOwnerDowngradeSystemEvents =
-    hasInspectedOwnerDowngradeEvents || hasActiveSessionOwnerDowngradeEvents;
-
   // Update task last run times AFTER successful heartbeat completion
   const updateTaskTimestamps = async () => {
     if (!preflight.tasks || preflight.tasks.length === 0) {
@@ -1618,7 +1614,6 @@ export async function runHeartbeatOnce(opts: {
     MessageThreadId: delivery.threadId,
     Provider: hasExecCompletion ? "exec-event" : hasCronEvents ? "cron-event" : "heartbeat",
     SessionKey: runSessionKey,
-    ForceSenderIsOwnerFalse: hasExecCompletion || hasOwnerDowngradeSystemEvents,
   };
   if (!visibility.showAlerts && !visibility.showOk && !visibility.useIndicator) {
     emitHeartbeatEvent({

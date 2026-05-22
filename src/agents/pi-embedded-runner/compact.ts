@@ -207,6 +207,7 @@ function prepareCompactionSessionAgent(params: {
     signal: params.signal,
     model: params.effectiveModel,
     resolvedApiKey: params.resolvedApiKey,
+    authProfileId: params.runtimePlan?.auth.forwardedAuthProfileId,
     authStorage: params.authStorage as never,
   });
   const providerTextTransforms = resolveProviderTextTransforms({
@@ -741,7 +742,6 @@ async function compactEmbeddedPiSessionDirectOnce(
       senderName: params.senderName,
       senderUsername: params.senderUsername,
       senderE164: params.senderE164,
-      senderIsOwner: params.senderIsOwner,
       allowGatewaySubagentBinding: params.allowGatewaySubagentBinding,
       agentDir,
       workspaceDir: effectiveWorkspace,
@@ -808,10 +808,13 @@ async function compactEmbeddedPiSessionDirectOnce(
       senderName: params.senderName,
       senderUsername: params.senderUsername,
       senderE164: params.senderE164,
-      senderIsOwner: params.senderIsOwner,
       warn: (message) => log.warn(message),
     });
-    const effectiveTools = [...tools, ...filteredBundledTools];
+    const normalizedBundledTools =
+      filteredBundledTools.length > 0
+        ? runtimePlan.tools.normalize(filteredBundledTools, runtimePlanModelContext)
+        : filteredBundledTools;
+    const effectiveTools = [...tools, ...normalizedBundledTools];
     const allowedToolNames = collectAllowedToolNames({ tools: effectiveTools });
     runtimePlan.tools.logDiagnostics(effectiveTools, runtimePlanModelContext);
     const machineName = await getMachineDisplayName();
@@ -847,7 +850,6 @@ async function compactEmbeddedPiSessionDirectOnce(
             sessionId: params.sessionId,
             agentId: sessionAgentId,
             senderId: params.senderId,
-            senderIsOwner: params.senderIsOwner,
           }),
         )
       : undefined;

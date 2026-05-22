@@ -13,12 +13,14 @@ import {
   shouldDeferProviderSyntheticProfileAuthWithPlugin,
 } from "../plugins/provider-runtime.js";
 import { resolveOwningPluginIdsForProvider } from "../plugins/providers.js";
+import type { ProviderAuthEvidence } from "../secrets/provider-env-vars.js";
 import { resolveDefaultSecretProviderAlias } from "../secrets/ref-contract.js";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
 } from "../shared/string-coerce.js";
 import { normalizeOptionalSecretInput } from "../utils/normalize-secret-input.js";
+import { resolveDefaultAgentDir } from "./agent-scope-config.js";
 import {
   type AuthProfileCredential,
   type AuthProfileStore,
@@ -267,6 +269,9 @@ function isLocalBaseUrl(baseUrl: string): boolean {
       host === "::1" ||
       host === "::ffff:7f00:1" ||
       host === "::ffff:127.0.0.1" ||
+      host === "docker.orb.internal" ||
+      host === "host.docker.internal" ||
+      host === "host.orb.internal" ||
       host.endsWith(".local") ||
       isPrivateIpv4Host(host)
     );
@@ -345,6 +350,11 @@ export function hasRuntimeAvailableProviderAuth(params: {
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
   allowPluginSyntheticAuth?: boolean;
+  envAuthLookup?: {
+    aliasMap?: Readonly<Record<string, string>>;
+    candidateMap?: Readonly<Record<string, readonly string[]>>;
+    authEvidenceMap?: Readonly<Record<string, readonly ProviderAuthEvidence[]>>;
+  };
 }): boolean {
   const provider = normalizeProviderId(params.provider);
   const authOverride = resolveProviderAuthOverride(params.cfg, provider);
@@ -358,6 +368,9 @@ export function hasRuntimeAvailableProviderAuth(params: {
     resolveEnvApiKey(provider, params.env, {
       config: params.cfg,
       workspaceDir: params.workspaceDir,
+      aliasMap: params.envAuthLookup?.aliasMap,
+      candidateMap: params.envAuthLookup?.candidateMap,
+      authEvidenceMap: params.envAuthLookup?.authEvidenceMap,
     })
   ) {
     return true;
@@ -385,6 +398,7 @@ type SyntheticProviderAuthResolution = {
 function resolveProviderSyntheticRuntimeAuth(params: {
   cfg: OpenClawConfig | undefined;
   provider: string;
+  modelApi?: string;
 }): SyntheticProviderAuthResolution {
   const resolveFromConfig = (
     config: OpenClawConfig | undefined,
@@ -399,6 +413,7 @@ function resolveProviderSyntheticRuntimeAuth(params: {
           provider: params.provider,
           providerConfig,
         },
+        modelApi: params.modelApi,
       }) ?? undefined
     );
   };
@@ -429,6 +444,7 @@ function resolveProviderSyntheticRuntimeAuth(params: {
 function resolveSyntheticLocalProviderAuth(params: {
   cfg: OpenClawConfig | undefined;
   provider: string;
+  modelApi?: string;
 }): ResolvedProviderAuth | null {
   const syntheticProviderAuth = resolveProviderSyntheticRuntimeAuth(params);
   if (syntheticProviderAuth.auth) {
@@ -506,12 +522,14 @@ function shouldDeferSyntheticProfileAuth(params: {
   cfg: OpenClawConfig | undefined;
   provider: string;
   resolvedApiKey: string | undefined;
+  modelApi?: string;
 }): boolean {
   const providerConfig = resolveProviderConfig(params.cfg, params.provider);
   return (
     shouldDeferProviderSyntheticProfileAuthWithPlugin({
       provider: params.provider,
       config: params.cfg,
+      modelApi: params.modelApi,
       context: {
         config: params.cfg,
         provider: params.provider,
@@ -545,9 +563,12 @@ export async function resolveApiKeyForProvider(params: {
   /** When true, treat profileId as a user-locked selection that must not be
    *  silently overridden by env/config credentials. */
   lockedProfile?: boolean;
+  forceRefresh?: boolean;
   credentialPrecedence?: ProviderCredentialPrecedence;
+  modelApi?: string;
 }): Promise<ResolvedProviderAuth> {
   const { provider, cfg, profileId, preferredProfile } = params;
+  const agentDir = params.agentDir?.trim() || (cfg ? resolveDefaultAgentDir(cfg) : undefined);
   let scopedStore: AuthProfileStore | undefined = params.store;
 
   if (profileId) {
@@ -558,7 +579,7 @@ export async function resolveApiKeyForProvider(params: {
     const store =
       params.store ??
       resolveScopedAuthProfileStore({
-        agentDir: params.agentDir,
+        agentDir,
         cfg,
         provider,
         profileId,
@@ -568,7 +589,8 @@ export async function resolveApiKeyForProvider(params: {
       cfg,
       store,
       profileId,
-      agentDir: params.agentDir,
+      agentDir,
+      forceRefresh: params.forceRefresh,
     });
     if (!resolved) {
       throw new Error(`No credentials found for profile "${profileId}".`);
@@ -592,6 +614,7 @@ export async function resolveApiKeyForProvider(params: {
         cfg,
         provider,
         resolvedApiKey: resolved.apiKey,
+        modelApi: params.modelApi,
       })
     ) {
       return resolveApiKeyForProvider({ ...params, profileId: undefined, lockedProfile: true }) //
@@ -602,7 +625,7 @@ export async function resolveApiKeyForProvider(params: {
 
   if (cfg?.auth?.profiles || cfg?.auth?.order) {
     scopedStore ??= resolveScopedAuthProfileStore({
-      agentDir: params.agentDir,
+      agentDir,
       cfg,
       provider,
       preferredProfile,
@@ -678,7 +701,7 @@ export async function resolveApiKeyForProvider(params: {
   const store =
     scopedStore ??
     resolveScopedAuthProfileStore({
-      agentDir: params.agentDir,
+      agentDir,
       cfg,
       provider,
       preferredProfile,
@@ -704,7 +727,8 @@ export async function resolveApiKeyForProvider(params: {
         cfg,
         store,
         profileId: candidate,
-        agentDir: params.agentDir,
+        agentDir,
+        forceRefresh: params.forceRefresh,
       });
       if (resolved) {
         const resolvedProfileId = resolved.profileId ?? candidate;
@@ -723,6 +747,7 @@ export async function resolveApiKeyForProvider(params: {
             cfg,
             provider,
             resolvedApiKey: resolved.apiKey,
+            modelApi: params.modelApi,
           })
         ) {
           deferredAuthProfileResult ??= result;
@@ -758,7 +783,11 @@ export async function resolveApiKeyForProvider(params: {
     return deferredAuthProfileResult;
   }
 
-  const syntheticLocalAuth = resolveSyntheticLocalProviderAuth({ cfg, provider });
+  const syntheticLocalAuth = resolveSyntheticLocalProviderAuth({
+    cfg,
+    provider,
+    modelApi: params.modelApi,
+  });
   if (syntheticLocalAuth) {
     return syntheticLocalAuth;
   }
@@ -777,7 +806,7 @@ export async function resolveApiKeyForProvider(params: {
       config: cfg,
       context: {
         config: cfg,
-        agentDir: params.agentDir,
+        agentDir,
         env: process.env,
         provider,
         listProfileIds: (providerId) => listProfilesForProvider(store, providerId),
@@ -788,7 +817,7 @@ export async function resolveApiKeyForProvider(params: {
     }
   }
 
-  const authStorePath = resolveAuthStorePathForDisplay(params.agentDir);
+  const authStorePath = resolveAuthStorePathForDisplay(agentDir);
   const resolvedAgentDir = path.dirname(authStorePath);
   throw new Error(
     [
@@ -956,6 +985,7 @@ export async function getApiKeyForModel(params: {
     workspaceDir: params.workspaceDir,
     lockedProfile: params.lockedProfile,
     credentialPrecedence: params.credentialPrecedence,
+    modelApi: params.model.api,
   });
 }
 

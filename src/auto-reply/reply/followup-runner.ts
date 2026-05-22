@@ -419,7 +419,7 @@ export function createFollowupRunner(params: {
         sessionId: run.sessionId,
         sessionKey: replySessionKey ?? "",
         resetTriggered: false,
-        upstreamAbortSignal: queued.abortSignal ?? opts?.abortSignal,
+        upstreamAbortSignal: queued.abortSignal,
       });
       const runId = crypto.randomUUID();
       const shouldSurfaceToControlUi = isInternalMessageChannel(
@@ -569,7 +569,7 @@ export function createFollowupRunner(params: {
                 sessionKey: replySessionKey,
               });
             }
-            const authProfile = resolveRunAuthProfile(candidateRun, provider, {
+            const selectedAuthProfile = resolveRunAuthProfile(candidateRun, provider, {
               config: runtimeConfig,
             });
             const sessionRuntimeOverride = resolveSessionRuntimeOverrideForProvider({
@@ -587,6 +587,7 @@ export function createFollowupRunner(params: {
                     cfg: runtimeConfig,
                     agentId: run.agentId,
                     modelId: model,
+                    authProfileId: selectedAuthProfile.authProfileId,
                   }) ??
                   provider);
             let attemptCompactionCount = 0;
@@ -652,9 +653,8 @@ export function createFollowupRunner(params: {
                       provider: run.messageProvider,
                     }),
                     agentAccountId: run.agentAccountId,
-                    senderIsOwner: run.senderIsOwner,
                     disableTools: opts?.disableTools,
-                    abortSignal: queued.abortSignal ?? opts?.abortSignal,
+                    abortSignal: queued.abortSignal,
                   },
                   transformResult: (rawResult) =>
                     isRoomEventCliRun && rawResult.meta.agentMeta
@@ -704,7 +704,6 @@ export function createFollowupRunner(params: {
                 senderName: run.senderName,
                 senderUsername: run.senderUsername,
                 senderE164: run.senderE164,
-                senderIsOwner: run.senderIsOwner,
                 sessionFile: run.sessionFile,
                 agentDir: run.agentDir,
                 workspaceDir: run.workspaceDir,
@@ -733,7 +732,7 @@ export function createFollowupRunner(params: {
                 allowEmptyAssistantReplyAsSilent: run.allowEmptyAssistantReplyAsSilent,
                 provider,
                 model,
-                ...authProfile,
+                ...selectedAuthProfile,
                 thinkLevel: run.thinkLevel,
                 verboseLevel: run.verboseLevel,
                 reasoningLevel: run.reasoningLevel,
@@ -742,7 +741,7 @@ export function createFollowupRunner(params: {
                 bashElevated: run.bashElevated,
                 timeoutMs: run.timeoutMs,
                 runId,
-                abortSignal: queued.abortSignal ?? opts?.abortSignal,
+                abortSignal: queued.abortSignal,
                 images: queuedImages,
                 imageOrder: queuedImageOrder,
                 allowTransientCooldownProbe: runOptions?.allowTransientCooldownProbe,

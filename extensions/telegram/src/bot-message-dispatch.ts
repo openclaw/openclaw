@@ -634,9 +634,9 @@ export const dispatchTelegramMessage = async ({
     }
     activeAnswerDraftIsToolProgressOnly = true;
   }
-  const renderProgressDraft = async (options?: { flush?: boolean }) => {
+  const renderProgressDraft = async (options?: { flush?: boolean }): Promise<boolean> => {
     if (!answerLane.stream || streamMode !== "progress") {
-      return;
+      return false;
     }
     const streamText = formatChannelProgressDraftText({
       entry: telegramCfg,
@@ -645,7 +645,7 @@ export const dispatchTelegramMessage = async ({
       formatLine: formatProgressAsMarkdownCode,
     });
     if (!streamText || streamText === answerLane.lastPartialText) {
-      return;
+      return false;
     }
     await prepareAnswerLaneForToolProgress();
     answerLane.lastPartialText = streamText;
@@ -655,15 +655,23 @@ export const dispatchTelegramMessage = async ({
     if (options?.flush) {
       await answerLane.stream.flush();
     }
+    return true;
   };
   const progressDraftGate = createChannelProgressDraftGate({
-    onStart: () => renderProgressDraft({ flush: true }),
+    onStart: async () => {
+      await renderProgressDraft({ flush: true });
+    },
   });
+  let finalAnswerDeliveryStarted = false;
+  let finalAnswerDelivered = false;
   const pushStreamToolProgress = async (
     line?: string | ChannelProgressDraftLine,
     options?: { toolName?: string; startImmediately?: boolean },
   ) => {
     if (!answerLane.stream) {
+      return false;
+    }
+    if (answerLane.finalized || finalAnswerDeliveryStarted || finalAnswerDelivered) {
       return false;
     }
     if (options?.toolName !== undefined && !isChannelProgressDraftWorkToolName(options.toolName)) {
@@ -1240,8 +1248,12 @@ export const dispatchTelegramMessage = async ({
         resetDraftLaneState(answerLane);
       }
       const delivered = await sendPayload(applyTextToPayload(payload, text), { durable: true });
+      if (!delivered) {
+        return { kind: "skipped" };
+      }
       answerLane.finalized = true;
-      return delivered ? { kind: "sent" } : { kind: "skipped" };
+      finalAnswerDelivered = true;
+      return { kind: "sent" };
     };
     const resolveTranscriptBackedFinalText = async (text: string): Promise<string> =>
       await resolveTranscriptBackedChannelFinalText({
@@ -1341,9 +1353,6 @@ export const dispatchTelegramMessage = async ({
                     }
                     const effectivePayload = deduped;
 
-                    if (info.kind === "final") {
-                      await enqueueDraftLaneEvent(async () => {});
-                    }
                     if (
                       shouldSuppressLocalTelegramExecApprovalPrompt({
                         cfg,
@@ -1361,6 +1370,20 @@ export const dispatchTelegramMessage = async ({
                     );
                     const segments = split.segments;
                     const reply = resolveSendableOutboundReplyParts(effectivePayload);
+                    if (info.kind === "final" && (reply.text.length > 0 || reply.hasMedia)) {
+                      finalAnswerDeliveryStarted = true;
+                    }
+                    if (info.kind === "final") {
+                      await enqueueDraftLaneEvent(async () => {});
+                    }
+                    if (
+                      info.kind === "tool" &&
+                      (finalAnswerDeliveryStarted || finalAnswerDelivered) &&
+                      !reply.hasMedia &&
+                      !hasExecApprovalPayload(effectivePayload)
+                    ) {
+                      return;
+                    }
 
                     const deliverFinalAnswerText = async (
                       answerPayload: ReplyPayload,
@@ -1372,13 +1395,17 @@ export const dispatchTelegramMessage = async ({
                         return deliverProgressModeFinalAnswer(answerPayload, finalText);
                       }
                       await rotateAnswerLaneAfterToolProgress();
-                      return deliverLaneText({
+                      const result = await deliverLaneText({
                         laneName: "answer",
                         text: finalText,
                         payload: answerPayload,
                         infoKind: "final",
                         buttons,
                       });
+                      if (result.kind !== "skipped") {
+                        finalAnswerDelivered = true;
+                      }
+                      return result;
                     };
 
                     const flushBufferedFinalAnswer = async () => {
@@ -1481,6 +1508,9 @@ export const dispatchTelegramMessage = async ({
                           durable: info.kind === "final",
                         });
                       }
+                      if (info.kind === "final" && delivered) {
+                        finalAnswerDelivered = true;
+                      }
                       if (info.kind === "final") {
                         await flushBufferedFinalAnswer();
                       }
@@ -1504,6 +1534,9 @@ export const dispatchTelegramMessage = async ({
                     const delivered = await sendPayload(effectivePayload, {
                       durable: info.kind === "final",
                     });
+                    if (info.kind === "final" && delivered) {
+                      finalAnswerDelivered = true;
+                    }
                     if (info.kind === "final") {
                       await flushBufferedFinalAnswer();
                     }
@@ -1733,8 +1766,8 @@ export const dispatchTelegramMessage = async ({
       dispatchError = err;
       runtime.error?.(danger(`telegram dispatch failed: ${String(err)}`));
     } finally {
-      await draftLaneEventQueue;
       progressDraftGate.cancel();
+      await draftLaneEventQueue;
       nativeToolProgressDraft?.stop();
       const lanesToCleanup: Array<{ laneName: LaneName; lane: DraftLaneState }> = [
         { laneName: "answer", lane: answerLane },

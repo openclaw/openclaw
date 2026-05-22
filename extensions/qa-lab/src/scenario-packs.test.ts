@@ -39,6 +39,8 @@ describe("qa scenario packs", () => {
       "personal-approval-denial-stop",
       "personal-task-followthrough-status",
       "personal-share-safe-diagnostics-artifact",
+      "personal-no-fake-progress",
+      "personal-failure-recovery",
     ]);
 
     for (const scenarioId of personalPack?.scenarioIds ?? []) {
@@ -84,6 +86,10 @@ describe("qa scenario packs", () => {
     const taskFollowthroughFlow = JSON.stringify(taskFollowthroughScenario.execution.flow);
     const diagnosticsScenario = readQaScenarioById("personal-share-safe-diagnostics-artifact");
     const diagnosticsFlow = JSON.stringify(diagnosticsScenario.execution.flow);
+    const noFakeProgressScenario = readQaScenarioById("personal-no-fake-progress");
+    const noFakeProgressFlow = JSON.stringify(noFakeProgressScenario.execution.flow);
+    const failureRecoveryScenario = readQaScenarioById("personal-failure-recovery");
+    const failureRecoveryFlow = JSON.stringify(failureRecoveryScenario.execution.flow);
     const memoryScenario = readQaScenarioById("personal-memory-preference-recall");
     const memoryFlow = JSON.stringify(memoryScenario.execution.flow);
 
@@ -119,6 +125,32 @@ describe("qa scenario packs", () => {
     expect(diagnosticsFlow).toContain("readIndices[1] < firstWrite");
     expect(diagnosticsFlow).toContain("forbiddenNeedles");
     expect(diagnosticsScenario.successCriteria.join("\n").toLowerCase()).toContain("share-safe");
+
+    expect(noFakeProgressScenario.execution.config?.prompt).toContain(
+      "Personal no-fake-progress check",
+    );
+    expect(noFakeProgressScenario.execution.config?.artifactName).toBe(
+      "personal-progress-proof.txt",
+    );
+    expect(noFakeProgressFlow).toContain("plannedToolName === 'write'");
+    expect(noFakeProgressFlow).toContain("readIndices[1] < firstWrite");
+    expect(noFakeProgressFlow).toContain("forbiddenNeedles");
+    expect(noFakeProgressScenario.successCriteria.join("\n").toLowerCase()).toContain(
+      "local evidence",
+    );
+
+    expect(failureRecoveryScenario.execution.config?.prompt).toContain(
+      "Personal failure recovery check",
+    );
+    expect(failureRecoveryScenario.execution.config?.artifactName).toBe(
+      "personal-failure-recovery.txt",
+    );
+    expect(failureRecoveryFlow).toContain("plannedToolName === 'write'");
+    expect(failureRecoveryFlow).toContain("readIndices[1] < firstWrite");
+    expect(failureRecoveryFlow).toContain("length === 1");
+    expect(failureRecoveryScenario.successCriteria.join("\n").toLowerCase()).toContain(
+      "retry boundary",
+    );
 
     expect(memoryFlow).toContain("config.rememberPrompt");
     expect(memoryFlow).toContain("config.recallPrompt");

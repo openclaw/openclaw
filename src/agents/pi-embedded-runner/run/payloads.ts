@@ -101,7 +101,7 @@ function hasExplicitMutatingToolFailureAcknowledgement(text: string): boolean {
 }
 
 function isVerboseToolDetailEnabled(level?: VerboseLevel): boolean {
-  return level === "on" || level === "full";
+  return level === "full";
 }
 
 function resolveRawAssistantAnswerText(lastAssistant: AssistantMessage | undefined): string {
@@ -136,6 +136,10 @@ function shouldIncludeToolErrorDetails(params: {
   );
 }
 
+function shouldMarkNonTerminalToolErrorWarning(lastToolError: ToolErrorSummary): boolean {
+  return lastToolError.middlewareError === true;
+}
+
 function resolveToolErrorWarningPolicy(params: {
   lastToolError: ToolErrorSummary;
   hasUserFacingReply: boolean;
@@ -158,6 +162,9 @@ function resolveToolErrorWarningPolicy(params: {
   if (normalizedToolName === "sessions_send") {
     return { showWarning: false, includeDetails };
   }
+  if (params.suppressToolErrors) {
+    return { showWarning: false, includeDetails };
+  }
   const isMutatingToolError =
     params.lastToolError.mutatingAction ?? isLikelyMutatingToolName(params.lastToolError.toolName);
   if (isMutatingToolError) {
@@ -167,9 +174,6 @@ function resolveToolErrorWarningPolicy(params: {
     };
   }
   if (isExecLikeToolName(params.lastToolError.toolName) && !includeDetails) {
-    return { showWarning: false, includeDetails };
-  }
-  if (params.suppressToolErrors) {
     return { showWarning: false, includeDetails };
   }
   return {
@@ -221,6 +225,7 @@ export function buildEmbeddedRunPayloads(params: {
     presentation?: ReplyPayload["presentation"];
     interactive?: ReplyPayload["interactive"];
     channelData?: Record<string, unknown>;
+    nonTerminalToolErrorWarning?: boolean;
     sourceReplyMirror?: {
       idempotencyKey?: string;
     };
@@ -509,6 +514,9 @@ export function buildEmbeddedRunPayloads(params: {
         replyItems.push({
           text: warningText,
           isError: true,
+          nonTerminalToolErrorWarning:
+            hasUserFacingAssistantReply &&
+            shouldMarkNonTerminalToolErrorWarning(params.lastToolError),
         });
       }
     }
@@ -529,6 +537,11 @@ export function buildEmbeddedRunPayloads(params: {
       }
       if (item.isError !== undefined) {
         payload.isError = item.isError;
+      }
+      if (item.nonTerminalToolErrorWarning) {
+        setReplyPayloadMetadata(payload, {
+          nonTerminalToolErrorWarning: true,
+        });
       }
       if (item.replyToId) {
         payload.replyToId = item.replyToId;

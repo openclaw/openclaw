@@ -130,6 +130,7 @@ describe("gateway session utils", () => {
     expect(listed.count).toBe(100);
     expect(listed.totalCount).toBe(101);
     expect(listed.limitApplied).toBe(100);
+    expect(listed.nextOffset).toBe(100);
     expect(listed.hasMore).toBe(true);
     expect(listed.sessions[0]?.key).toBe("session-0");
     expect(listed.sessions.at(-1)?.key).toBe("session-99");
@@ -162,7 +163,63 @@ describe("gateway session utils", () => {
     expect(listed.count).toBe(3);
     expect(listed.totalCount).toBe(5);
     expect(listed.limitApplied).toBe(3);
+    expect(listed.nextOffset).toBe(3);
     expect(listed.hasMore).toBe(true);
+  });
+
+  test("session lists page from an offset after filtering and sorting", () => {
+    const cfg = createModelDefaultsConfig({ primary: "openai/gpt-5.4" });
+    const store = Object.fromEntries(
+      Array.from({ length: 6 }, (_value, index) => [
+        `session-${index}`,
+        {
+          sessionId: `session-${index}`,
+          updatedAt: 1_000 - index,
+          displayName: index === 5 ? "Different project" : `Project Alpha ${index}`,
+        } satisfies SessionEntry,
+      ]),
+    );
+
+    const listed = listSessionsFromStore({
+      cfg,
+      storePath: "",
+      store,
+      opts: { search: "alpha", limit: 2, offset: 2 },
+    });
+
+    expect(listed.sessions.map((session) => session.key)).toEqual(["session-2", "session-3"]);
+    expect(listed.count).toBe(2);
+    expect(listed.totalCount).toBe(5);
+    expect(listed.limitApplied).toBe(2);
+    expect(listed.offset).toBe(2);
+    expect(listed.nextOffset).toBe(4);
+    expect(listed.hasMore).toBe(true);
+  });
+
+  test("session lists mark the final offset page without hasMore", () => {
+    const cfg = createModelDefaultsConfig({ primary: "openai/gpt-5.4" });
+    const store = Object.fromEntries(
+      Array.from({ length: 5 }, (_value, index) => [
+        `session-${index}`,
+        {
+          sessionId: `session-${index}`,
+          updatedAt: 1_000 - index,
+        } satisfies SessionEntry,
+      ]),
+    );
+
+    const listed = listSessionsFromStore({
+      cfg,
+      storePath: "",
+      store,
+      opts: { limit: 2, offset: 4 },
+    });
+
+    expect(listed.sessions.map((session) => session.key)).toEqual(["session-4"]);
+    expect(listed.totalCount).toBe(5);
+    expect(listed.offset).toBe(4);
+    expect(listed.nextOffset).toBeNull();
+    expect(listed.hasMore).toBe(false);
   });
 
   test("parseGroupKey handles group keys", () => {
@@ -1119,6 +1176,64 @@ describe("gateway session utils", () => {
     expect(result.agents[0]?.identity?.avatarUrl).toBe(
       `data:image/png;base64,${Buffer.from("avatar").toString("base64")}`,
     );
+  });
+
+  test("listAgentsForGateway falls back to identity.name when name is unset", () => {
+    const cfg = {
+      session: { mainKey: "main" },
+      agents: {
+        list: [{ id: "main", default: true, identity: { name: "开发助手" } }],
+      },
+    } as OpenClawConfig;
+
+    const result = listAgentsForGateway(cfg);
+
+    expect(result.agents[0]).toMatchObject({
+      id: "main",
+      name: "开发助手",
+      identity: { name: "开发助手" },
+    });
+  });
+
+  test("listAgentsForGateway prefers explicit name over identity.name", () => {
+    const cfg = {
+      session: { mainKey: "main" },
+      agents: {
+        list: [
+          {
+            id: "main",
+            default: true,
+            name: "Ops",
+            identity: { name: "开发助手" },
+          },
+        ],
+      },
+    } as OpenClawConfig;
+
+    const result = listAgentsForGateway(cfg);
+
+    expect(result.agents[0]).toMatchObject({
+      id: "main",
+      name: "Ops",
+      identity: { name: "开发助手" },
+    });
+  });
+
+  test("listAgentsForGateway leaves name unset when both configured and identity names are absent", () => {
+    const cfg = {
+      session: { mainKey: "main" },
+      agents: {
+        list: [{ id: "main", default: true, identity: {} }],
+      },
+    } as OpenClawConfig;
+
+    const result = listAgentsForGateway(cfg);
+
+    expect(result.agents[0]).toMatchObject({
+      id: "main",
+      name: undefined,
+      identity: {},
+    });
   });
 
   test("listAgentsForGateway keeps explicit agents.list scope over disk-only agents (scope boundary)", async () => {

@@ -79,6 +79,7 @@ export type CliSessionBinding = {
   authEpoch?: string;
   authEpochVersion?: number;
   extraSystemPromptHash?: string;
+  promptToolNamesHash?: string;
   mcpConfigHash?: string;
   mcpResumeHash?: string;
 };
