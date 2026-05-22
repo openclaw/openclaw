@@ -549,6 +549,53 @@ export async function modelsAuthPasteTokenCommand(
   }
 }
 
+export async function modelsAuthPasteApiKeyCommand(
+  opts: {
+    provider?: string;
+    profileId?: string;
+    agent?: string;
+  },
+  runtime: RuntimeEnv,
+) {
+  const agentDir = await resolveModelsAuthAgentDir(opts.agent);
+  const rawProvider = normalizeOptionalString(opts.provider);
+  if (!rawProvider) {
+    throw new Error(
+      `Missing --provider. Run ${formatCliCommand("openclaw models status")} or ${formatCliCommand("openclaw plugins list")} to choose a provider.`,
+    );
+  }
+  const provider = normalizeProviderId(rawProvider);
+  const profileId =
+    normalizeOptionalString(opts.profileId) || resolveDefaultTokenProfileId(provider);
+
+  const apiKey = normalizeOptionalString(
+    await text({
+      message: `Paste API key for ${provider}`,
+      validate: (value) => (value?.trim() ? undefined : "Required"),
+    }),
+  );
+  if (!apiKey) {
+    throw new Error("Missing API key.");
+  }
+
+  await upsertAuthProfileWithLockOrThrow({
+    profileId,
+    credential: {
+      type: "api_key",
+      provider,
+      key: apiKey,
+    },
+    agentDir,
+  });
+
+  await updateConfig((cfg) =>
+    applyAuthProfileConfig(cfg, { profileId, provider, mode: "api_key" }),
+  );
+
+  logConfigUpdated(runtime);
+  runtime.log(`Auth profile: ${profileId} (${provider}/api_key)`);
+}
+
 async function upsertAuthProfileWithLockOrThrow(params: UpsertAuthProfileParams): Promise<void> {
   const updated = await upsertAuthProfileWithLock(params);
   if (!updated) {

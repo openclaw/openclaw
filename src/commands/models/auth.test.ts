@@ -21,7 +21,9 @@ type ResolvePluginProvidersCall = {
 type UpsertAuthProfileCall = {
   agentDir?: string;
   credential?: {
+    key?: string;
     provider?: string;
+    token?: string;
     type?: string;
   };
   profileId?: string;
@@ -256,6 +258,7 @@ vi.mock("../../plugins/provider-auth-choice-helpers.js", async (importOriginal) 
 const {
   modelsAuthAddCommand,
   modelsAuthLoginCommand,
+  modelsAuthPasteApiKeyCommand,
   modelsAuthPasteTokenCommand,
   modelsAuthSetupTokenCommand,
 } = await import("./auth.js");
@@ -1159,6 +1162,30 @@ describe("modelsAuthLoginCommand", () => {
     );
     expect(runtime.log).toHaveBeenCalledWith(
       "Anthropic staff told us this OpenClaw path is allowed again.",
+    );
+  });
+
+  it("writes pasted OpenAI Codex API keys as api_key profiles", async () => {
+    const runtime = createRuntime();
+    mocks.clackText.mockResolvedValue("sk-openai-codex-demo");
+
+    await modelsAuthPasteApiKeyCommand({ provider: "openai-codex" }, runtime);
+
+    expect(mocks.upsertAuthProfileWithLock).toHaveBeenCalledWith({
+      profileId: "openai-codex:manual",
+      credential: {
+        type: "api_key",
+        provider: "openai-codex",
+        key: "sk-openai-codex-demo",
+      },
+      agentDir: "/tmp/openclaw/agents/main",
+    });
+    expect(lastUpdatedConfig?.auth?.profiles?.["openai-codex:manual"]).toEqual({
+      provider: "openai-codex",
+      mode: "api_key",
+    });
+    expect(runtime.log).toHaveBeenCalledWith(
+      "Auth profile: openai-codex:manual (openai-codex/api_key)",
     );
   });
 
