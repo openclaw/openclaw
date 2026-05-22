@@ -187,6 +187,9 @@ describe("createVideoGenerateTool status actions", () => {
     const text = (result?.content?.[0] as { text: string } | undefined)?.text ?? "";
 
     expect(text).toContain("Video generation task task-recent-video recently succeeded");
+    expect(text).toContain(
+      "Do not call video_generate again for the same request; this recent video generation already completed.",
+    );
     expect(result?.details?.duplicateGuard).toBe(true);
     expect(result?.details?.active).toBe(false);
   });

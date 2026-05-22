@@ -403,7 +403,9 @@ export function buildMediaGenerationTaskStatusText(params: {
       : `${params.nounLabel} task ${params.task.taskId} recently ${params.task.status}${provider ? ` with ${provider}` : ""}.`,
     params.task.progressSummary ? `Progress: ${params.task.progressSummary}.` : null,
     params.duplicateGuard
-      ? `Do not call ${params.toolName} again for this request. Wait for the completion event; the completion agent will send the finished ${params.completionLabel} here.`
+      ? active
+        ? `Do not call ${params.toolName} again for this request. Wait for the completion event; the completion agent will send the finished ${params.completionLabel} here.`
+        : `Do not call ${params.toolName} again for the same request; this recent ${params.completionLabel} generation already completed.`
       : `Wait for the completion event; the completion agent will send the finished ${params.completionLabel} here when it's ready.`,
   ].filter((entry): entry is string => Boolean(entry));
   return lines.join("\n");

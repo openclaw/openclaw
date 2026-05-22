@@ -218,8 +218,12 @@ describe("image generation task status", () => {
     });
 
     expect(task?.taskId).toBe("task-completed");
-    expect(buildImageGenerationTaskStatusText(task!, { duplicateGuard: true })).toContain(
+    const statusText = buildImageGenerationTaskStatusText(task!, { duplicateGuard: true });
+    expect(statusText).toContain(
       "Image generation task task-completed recently succeeded with xai.",
+    );
+    expect(statusText).toContain(
+      "Do not call image_generate again for the same request; this recent image generation already completed.",
     );
   });
 
