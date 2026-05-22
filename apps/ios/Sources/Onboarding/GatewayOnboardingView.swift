@@ -264,34 +264,24 @@ private struct ManualEntryStep: View {
         self.manualPortText = String(link.port)
         self.manualUseTLS = link.tls
 
-        let trimmedToken = link.token?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        let trimmedPassword = link.password?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        let trimmedBootstrapToken =
-            link.bootstrapToken?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        if !trimmedToken.isEmpty {
-            self.manualToken = trimmedToken
-        } else if link.bootstrapToken?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false {
-            self.manualToken = ""
+        let setupAuth = GatewayConnectionController.ManualAuthOverride.setupAuth(from: link)
+        if setupAuth.shouldApplyTokenField {
+            self.manualToken = setupAuth.token
         }
-        if !trimmedPassword.isEmpty {
-            self.manualPassword = trimmedPassword
-        } else if link.bootstrapToken?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false {
-            self.manualPassword = ""
+        if setupAuth.shouldApplyPasswordField {
+            self.manualPassword = setupAuth.password
         }
 
         let trimmedInstanceId = GatewaySettingsStore.currentInstanceID()
         if !trimmedInstanceId.isEmpty {
-            if !trimmedBootstrapToken.isEmpty {
+            if setupAuth.hasBootstrapToken {
                 GatewayOnboardingReset.prepareForBootstrapPairing(
                     appModel: self.appModel,
                     instanceId: trimmedInstanceId)
             }
-            GatewaySettingsStore.saveGatewayBootstrapToken(trimmedBootstrapToken, instanceId: trimmedInstanceId)
+            GatewaySettingsStore.saveGatewayBootstrapToken(setupAuth.bootstrapToken, instanceId: trimmedInstanceId)
         }
-        self.pendingManualAuthOverride = GatewayConnectionController.ManualAuthOverride.normalized(
-            token: trimmedToken,
-            bootstrapToken: trimmedBootstrapToken,
-            password: trimmedPassword)
+        self.pendingManualAuthOverride = setupAuth.manualAuthOverride
 
         self.setupStatusText = "Setup code applied."
     }

@@ -745,29 +745,20 @@ struct OnboardingWizardView: View {
         self.manualHost = link.host
         self.manualPort = link.port
         self.manualTLS = link.tls
-        let trimmedBootstrapToken = link.bootstrapToken?.trimmingCharacters(in: .whitespacesAndNewlines)
-        if trimmedBootstrapToken?.isEmpty == false {
+        let setupAuth = GatewayConnectionController.ManualAuthOverride.setupAuth(from: link)
+        if setupAuth.hasBootstrapToken {
             GatewayOnboardingReset.prepareForBootstrapPairing(
                 appModel: self.appModel,
                 instanceId: GatewaySettingsStore.currentInstanceID())
         }
-        self.saveGatewayBootstrapToken(trimmedBootstrapToken)
-        let trimmedToken = link.token?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        let trimmedPassword = link.password?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        if !trimmedToken.isEmpty {
-            self.gatewayToken = trimmedToken
-        } else if trimmedBootstrapToken?.isEmpty == false {
-            self.gatewayToken = ""
+        self.saveGatewayBootstrapToken(setupAuth.bootstrapToken)
+        if setupAuth.shouldApplyTokenField {
+            self.gatewayToken = setupAuth.token
         }
-        if !trimmedPassword.isEmpty {
-            self.gatewayPassword = trimmedPassword
-        } else if trimmedBootstrapToken?.isEmpty == false {
-            self.gatewayPassword = ""
+        if setupAuth.shouldApplyPasswordField {
+            self.gatewayPassword = setupAuth.password
         }
-        self.pendingManualAuthOverride = GatewayConnectionController.ManualAuthOverride.normalized(
-            token: trimmedToken,
-            bootstrapToken: trimmedBootstrapToken,
-            password: trimmedPassword)
+        self.pendingManualAuthOverride = setupAuth.manualAuthOverride
         self.saveGatewayCredentials(token: self.gatewayToken, password: self.gatewayPassword)
         self.showQRScanner = false
         self.connectMessage = "Connecting via QR code…"
