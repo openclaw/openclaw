@@ -10,7 +10,7 @@ const resolveControlUiLinksMock = vi.hoisted(() =>
   vi.fn((_opts?: unknown) => ({ httpUrl: "http://127.0.0.1:18789" })),
 );
 const isSystemdUnavailableDetailMock = vi.hoisted(() => vi.fn(() => false));
-const renderSystemdUnavailableHintsMock = vi.hoisted(() => vi.fn(() => []));
+const renderSystemdUnavailableHintsMock = vi.hoisted(() => vi.fn<() => string[]>(() => []));
 
 vi.mock("../../runtime.js", () => ({
   defaultRuntime: runtime,
