@@ -16,6 +16,9 @@ const chromeMcpMocks = vi.hoisted(() => ({
     async (_params: { profileName: string; targetId: string; fn: string }) => true,
   ),
   fillChromeMcpElement: vi.fn(async () => {}),
+  handleChromeMcpDialog: vi.fn(async () => {
+    throw new Error("No open dialog found");
+  }),
   navigateChromeMcpPage: vi.fn(async ({ url }: { url: string }) => ({ url })),
   takeChromeMcpScreenshot: vi.fn(async () => Buffer.from("png")),
   takeChromeMcpSnapshot: vi.fn(async () => ({
@@ -41,6 +44,7 @@ vi.mock("../chrome-mcp.js", () => ({
   evaluateChromeMcpScript: chromeMcpMocks.evaluateChromeMcpScript,
   fillChromeMcpElement: chromeMcpMocks.fillChromeMcpElement,
   fillChromeMcpForm: vi.fn(async () => {}),
+  handleChromeMcpDialog: chromeMcpMocks.handleChromeMcpDialog,
   hoverChromeMcpElement: vi.fn(async () => {}),
   navigateChromeMcpPage: chromeMcpMocks.navigateChromeMcpPage,
   pressChromeMcpKey: vi.fn(async () => {}),
@@ -151,6 +155,7 @@ describe("existing-session browser routes", () => {
     chromeMcpMocks.clickChromeMcpElement.mockClear();
     chromeMcpMocks.evaluateChromeMcpScript.mockReset();
     chromeMcpMocks.fillChromeMcpElement.mockClear();
+    chromeMcpMocks.handleChromeMcpDialog.mockReset().mockRejectedValue(new Error("No open dialog found"));
     chromeMcpMocks.navigateChromeMcpPage.mockClear();
     chromeMcpMocks.takeChromeMcpScreenshot.mockClear();
     chromeMcpMocks.takeChromeMcpSnapshot.mockClear();
@@ -417,6 +422,41 @@ describe("existing-session browser routes", () => {
     expect(evaluateParams.targetId).toBe("7");
     expect(String(evaluateParams.fn)).toContain("window.prompt");
     expect(String(evaluateParams.fn)).toContain("approved");
+    expect(chromeMcpMocks.handleChromeMcpDialog).toHaveBeenCalledWith({
+      profileName: "chrome-live",
+      profile: expect.objectContaining({ name: "chrome-live", driver: "existing-session" }),
+      targetId: "7",
+      action: "accept",
+      promptText: "approved",
+    });
+  });
+
+  it("handles active existing-session dialogs with Chrome MCP handle_dialog before pre-arming", async () => {
+    chromeMcpMocks.evaluateChromeMcpScript.mockReset().mockResolvedValue(true as never);
+    chromeMcpMocks.handleChromeMcpDialog.mockReset().mockResolvedValue(undefined as never);
+    const handler = getDialogHookPostHandler();
+    const response = createBrowserRouteResponse();
+
+    await handler?.(
+      {
+        params: {},
+        query: {},
+        body: { accept: false },
+      },
+      response.res,
+    );
+
+    expect(response.statusCode).toBe(200);
+    const body = requireRecord(response.body, "response body");
+    expect(body.ok).toBe(true);
+    expect(chromeMcpMocks.handleChromeMcpDialog).toHaveBeenCalledWith({
+      profileName: "chrome-live",
+      profile: expect.objectContaining({ name: "chrome-live", driver: "existing-session" }),
+      targetId: "7",
+      action: "dismiss",
+      promptText: undefined,
+    });
+    expect(chromeMcpMocks.evaluateChromeMcpScript).not.toHaveBeenCalled();
   });
 
   it("fails closed for existing-session dialogId responses", async () => {
@@ -434,6 +474,7 @@ describe("existing-session browser routes", () => {
     expect(response.statusCode).toBe(501);
     const body = requireRecord(response.body, "response body");
     expect(String(body.error)).toContain("dialogId");
+    expect(chromeMcpMocks.handleChromeMcpDialog).not.toHaveBeenCalled();
     expect(chromeMcpMocks.evaluateChromeMcpScript).not.toHaveBeenCalled();
   });
 
