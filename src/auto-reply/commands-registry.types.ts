@@ -80,6 +80,8 @@ export type NativeCommandSpec = {
   descriptionLocalizations?: Record<string, string>;
   acceptsArgs: boolean;
   args?: CommandArgDefinition[];
+  /** Alternative names for this command (not shown in menus, but callable). */
+  aliases?: string[];
 };
 
 export type CommandNormalizeOptions = {

@@ -102,22 +102,26 @@ function listNativeSpecsFromCommands(
 ): NativeCommandSpec[] {
   return commands
     .filter((command) => command.scope !== "text" && command.nativeName)
-    .flatMap((command) => {
+    .map((command) => {
       const spec = toNativeCommandSpec(command, provider);
-      return resolveNativeNames(command, provider).map((name) => {
-        const nativeSpec: NativeCommandSpec = {
-          name,
-          description: spec.description,
-          acceptsArgs: spec.acceptsArgs,
-        };
-        if (spec.args) {
-          nativeSpec.args = spec.args;
-        }
-        if (spec.descriptionLocalizations) {
-          nativeSpec.descriptionLocalizations = spec.descriptionLocalizations;
-        }
-        return nativeSpec;
-      });
+      const names = resolveNativeNames(command, provider);
+      const primary = names[0];
+      const aliases = names.slice(1);
+      const nativeSpec: NativeCommandSpec = {
+        name: primary,
+        description: spec.description,
+        acceptsArgs: spec.acceptsArgs,
+      };
+      if (spec.args) {
+        nativeSpec.args = spec.args;
+      }
+      if (spec.descriptionLocalizations) {
+        nativeSpec.descriptionLocalizations = spec.descriptionLocalizations;
+      }
+      if (aliases.length > 0) {
+        nativeSpec.aliases = aliases;
+      }
+      return nativeSpec;
     });
 }
 
