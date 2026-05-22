@@ -744,13 +744,12 @@ describe("runCronIsolatedAgentTurn message tool policy", () => {
       sessionKey: "agent:default:cron:message-tool-policy",
       verboseLevel: "off",
     });
+    const currentSessionJob = makeMessageToolPolicyJob() as unknown as Record<string, unknown>;
+    currentSessionJob.sessionTarget = "current";
 
     await runCronIsolatedAgentTurn({
       ...makeParams(),
-      job: {
-        ...makeMessageToolPolicyJob(),
-        sessionTarget: "current",
-      } as never,
+      job: currentSessionJob as never,
     });
 
     expect(getAgentRunContext("test-session-id")).toMatchObject({
