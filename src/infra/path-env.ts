@@ -131,18 +131,28 @@ function candidateBinDirs(
   // This includes Brew/Homebrew dirs, which are useful for finding `openclaw`
   // in launchd/minimal environments but must not be treated as trusted.
   append.push(...resolvePathBootstrapBrewDirs({ homeDir, platform, existingPathParts }));
+  if (process.env.PNPM_HOME) {
+    append.push(process.env.PNPM_HOME);
+    append.push(path.join(process.env.PNPM_HOME, "bin"));
+  }
+  if (process.env.NPM_CONFIG_PREFIX) {
+    append.push(path.join(process.env.NPM_CONFIG_PREFIX, "bin"));
+  }
   const miseDataDir = process.env.MISE_DATA_DIR ?? path.join(homeDir, ".local", "share", "mise");
   const miseShims = path.join(miseDataDir, "shims");
   if (isKnownPathDir(existingPathParts, miseShims)) {
     append.push(miseShims);
   }
   if (platform === "darwin") {
+    append.push(path.join(homeDir, "Library", "pnpm", "bin"));
     append.push(path.join(homeDir, "Library", "pnpm"));
   }
   if (process.env.XDG_BIN_HOME) {
     append.push(process.env.XDG_BIN_HOME);
   }
   append.push(path.join(homeDir, ".local", "bin"));
+  append.push(path.join(homeDir, ".npm-global", "bin"));
+  append.push(path.join(homeDir, ".local", "share", "pnpm", "bin"));
   append.push(path.join(homeDir, ".local", "share", "pnpm"));
   append.push(path.join(homeDir, ".bun", "bin"));
   append.push(path.join(homeDir, ".yarn", "bin"));

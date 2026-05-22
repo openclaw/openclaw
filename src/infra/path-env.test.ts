@@ -51,6 +51,8 @@ describe("ensureOpenClawCliOnPath", () => {
     "OPENCLAW_PATH_BOOTSTRAPPED",
     "OPENCLAW_ALLOW_PROJECT_LOCAL_BIN",
     "MISE_DATA_DIR",
+    "PNPM_HOME",
+    "NPM_CONFIG_PREFIX",
     "HOMEBREW_PREFIX",
     "HOMEBREW_BREW_FILE",
     "XDG_BIN_HOME",
@@ -292,12 +294,17 @@ describe("ensureOpenClawCliOnPath", () => {
   it("places all user-writable home dirs after system dirs", () => {
     const { tmp, appCli } = setupAppCliRoot("case-user-writable-after-system");
     const localBin = path.join(tmp, ".local", "bin");
+    const npmGlobalBin = path.join(tmp, ".npm-global", "bin");
+    const pnpm11Bin = path.join(tmp, ".local", "share", "pnpm", "bin");
     const pnpmBin = path.join(tmp, ".local", "share", "pnpm");
     const bunBin = path.join(tmp, ".bun", "bin");
     const yarnBin = path.join(tmp, ".yarn", "bin");
     setDir(path.join(tmp, ".local"));
     setDir(localBin);
+    setDir(path.join(tmp, ".npm-global"));
+    setDir(npmGlobalBin);
     setDir(path.join(tmp, ".local", "share"));
+    setDir(pnpm11Bin);
     setDir(pnpmBin);
     setDir(path.join(tmp, ".bun"));
     setDir(bunBin);
@@ -312,7 +319,38 @@ describe("ensureOpenClawCliOnPath", () => {
       homeDir: tmp,
       platform: "linux",
     });
-    expectPathsAfter(updated, "/usr/bin", [localBin, pnpmBin, bunBin, yarnBin]);
+    expectPathsAfter(updated, "/usr/bin", [
+      localBin,
+      npmGlobalBin,
+      pnpm11Bin,
+      pnpmBin,
+      bunBin,
+      yarnBin,
+    ]);
+  });
+
+  it("appends package-manager env bin dirs after system dirs", () => {
+    const { tmp, appCli } = setupAppCliRoot("case-package-manager-env");
+    const pnpmHome = path.join(tmp, "pnpm-home");
+    const pnpmHomeBin = path.join(pnpmHome, "bin");
+    const npmPrefix = path.join(tmp, "npm-prefix");
+    const npmPrefixBin = path.join(npmPrefix, "bin");
+    setDir(pnpmHome);
+    setDir(pnpmHomeBin);
+    setDir(npmPrefix);
+    setDir(npmPrefixBin);
+
+    resetBootstrapEnv("/usr/bin:/bin");
+    process.env.PNPM_HOME = pnpmHome;
+    process.env.NPM_CONFIG_PREFIX = npmPrefix;
+
+    const updated = bootstrapPath({
+      execPath: appCli,
+      cwd: tmp,
+      homeDir: tmp,
+      platform: "linux",
+    });
+    expectPathsAfter(updated, "/usr/bin", [pnpmHome, pnpmHomeBin, npmPrefixBin]);
   });
 
   it.each([

@@ -36,6 +36,7 @@ describe("getMinimalServicePathParts - Linux user directories", () => {
     expect(result).toContain("/home/testuser/.fnm/current/bin");
     expect(result).toContain("/home/testuser/.volta/bin");
     expect(result).toContain("/home/testuser/.asdf/shims");
+    expect(result).toContain("/home/testuser/.local/share/pnpm/bin");
     expect(result).toContain("/home/testuser/.local/share/pnpm");
     expect(result).toContain("/home/testuser/.bun/bin");
   });
@@ -98,6 +99,7 @@ describe("getMinimalServicePathParts - Linux user directories", () => {
     });
 
     expect(result).toContain("/opt/pnpm");
+    expect(result).toContain("/opt/pnpm/bin");
     expect(result).toContain("/opt/npm/bin");
     expect(result).toContain("/opt/bun/bin");
     expect(result).toContain("/opt/volta/bin");
@@ -222,7 +224,9 @@ describe("getMinimalServicePathParts - Linux user directories", () => {
       "/Users/testuser/Library/Application Support/fnm/aliases/default/bin",
     );
     expect(result).not.toContain("/Users/testuser/.fnm/aliases/default/bin");
+    expect(result).not.toContain("/Users/testuser/Library/pnpm/bin");
     expect(result).not.toContain("/Users/testuser/Library/pnpm");
+    expect(result).not.toContain("/Users/testuser/.local/share/pnpm/bin");
     expect(result).not.toContain("/Users/testuser/.local/share/pnpm");
   });
 
@@ -256,6 +260,7 @@ describe("getMinimalServicePathParts - Linux user directories", () => {
     });
 
     expect(result).toContain("/opt/pnpm");
+    expect(result).toContain("/opt/pnpm/bin");
     expect(result).toContain("/opt/volta/bin");
     expect(result).toContain("/opt/bun/bin");
     expect(result).toContain("/opt/asdf/shims");
@@ -333,6 +338,7 @@ describe("getMinimalServicePathParts - Linux user directories", () => {
     });
 
     expect(result).toContain("/home/testuser/.local/share/pnpm");
+    expect(result).toContain("/home/testuser/.local/share/pnpm/bin");
     expect(result).toContain("/home/testuser/.local/share/fnm/aliases/default/bin");
     expect(result).toContain("/home/testuser/.local/share/fnm/current/bin");
   });
@@ -515,6 +521,7 @@ describe("buildMinimalServicePath", () => {
     // Verify user directories are included
     expect(parts).toContain("/home/alice/.local/bin");
     expect(parts).toContain("/home/alice/.npm-global/bin");
+    expect(parts).toContain("/home/alice/.local/share/pnpm/bin");
     expect(parts).toContain("/home/alice/.nvm/current/bin");
     expect(parts).toContain("/home/alice/.local/share/fnm/aliases/default/bin");
 
