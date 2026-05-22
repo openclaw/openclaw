@@ -479,7 +479,7 @@ function isConfiguredProviderRequestSecretPath(
   if (suffix.length === 2 && suffix[0] === "headers") {
     return true;
   }
-  if (suffix.length === 2 && suffix[0] === "auth" && suffix[1] === "value") {
+  if (suffix.length === 2 && suffix[0] === "auth" && isConfiguredProviderAuthSecretKey(suffix[1])) {
     return true;
   }
   if (suffix.length === 2 && suffix[0] === "tls" && isConfiguredProviderTlsSecretKey(suffix[1])) {
@@ -515,6 +515,10 @@ function matchesConfigPath(path: readonly string[], pattern: readonly string[]):
 
 function isConfiguredProviderTlsSecretKey(key: string | undefined): boolean {
   return key === "ca" || key === "cert" || key === "key" || key === "passphrase";
+}
+
+function isConfiguredProviderAuthSecretKey(key: string | undefined): boolean {
+  return key === "token" || key === "value";
 }
 
 function isSecretInputKey(key: string): boolean {
