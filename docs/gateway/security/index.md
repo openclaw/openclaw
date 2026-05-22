@@ -59,9 +59,10 @@ OpenClaw source checkouts use `pnpm-lock.yaml`. The published `openclaw` npm
 package and OpenClaw-owned npm plugin packages include `npm-shrinkwrap.json`,
 npm's publishable dependency lockfile, so package installs use the reviewed
 transitive dependency graph from the release instead of resolving a fresh graph
-at install time. OpenClaw-owned npm plugin packages also publish with explicit
-`bundledDependencies`, so their runtime dependency files are carried in the
-plugin tarball instead of depending only on install-time resolution.
+at install time. Suitable OpenClaw-owned npm plugin packages can also publish
+with explicit `bundledDependencies`, so their runtime dependency files are
+carried in the plugin tarball instead of depending only on install-time
+resolution.
 
 This is a supply-chain hardening measure:
 
@@ -69,7 +70,8 @@ This is a supply-chain hardening measure:
 - transitive dependency updates become visible review surfaces;
 - the package tarball contains the dependency graph that release validators
   checked;
-- OpenClaw-owned plugin tarballs contain the dependency files from that graph;
+- suitable OpenClaw-owned plugin tarballs contain the dependency files from
+  that graph;
 - `package-lock.json` stays out of the published package, because npm does not
   treat it as the publishable lock contract.
 
