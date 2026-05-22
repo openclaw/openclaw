@@ -1766,7 +1766,7 @@ describe("registerCoreHealthChecks", () => {
           OPENCLAW_STATE_DIR: tmp,
         },
       },
-      { checks: [check!] },
+      { checks: [check!], validate: true },
     );
 
     expect(result.effects).toContainEqual(
@@ -2279,7 +2279,7 @@ describe("registerCoreHealthChecks", () => {
         runtime: { log() {}, error() {}, exit() {} },
         cfg: { cron: { store: storePath, webhook: "https://example.invalid/hook" } },
       },
-      { checks: [check!] },
+      { checks: [check!], validate: true },
     );
 
     expect(result.effects).toContainEqual(
