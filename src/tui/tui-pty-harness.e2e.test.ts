@@ -27,7 +27,7 @@ const activeRuns: PtyRun[] = [];
 const STARTUP_TIMEOUT_MS = 10_000;
 const OUTPUT_TIMEOUT_MS = 2_000;
 const EXIT_TIMEOUT_MS = 4_000;
-const TEST_TIMEOUT_MS = 6_000;
+const TEST_TIMEOUT_MS = 5_000;
 const STARTUP_TEST_TIMEOUT_MS = 10_000;
 
 function waitFor<T>(params: {
