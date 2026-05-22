@@ -113,8 +113,9 @@ jobs:
       - name: Checkout harness ref
         uses: actions/checkout@v6
         with:
+          ref: ${{ inputs.candidate_ref }}
           persist-credentials: false
-          fetch-depth: 0
+          fetch-depth: 1
 
       - name: Validate ref is trusted
         id: validate
@@ -127,7 +128,7 @@ jobs:
 
           git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
 
-          revision="$(git rev-parse "${CANDIDATE_REF}^{commit}")"
+          revision="$(git rev-parse HEAD)"
           reason=""
           if git merge-base --is-ancestor "$revision" refs/remotes/origin/main; then
             reason="main-ancestor"
@@ -167,8 +168,9 @@ jobs:
       - name: Checkout harness ref
         uses: actions/checkout@v6
         with:
+          ref: ${{ needs.validate_ref.outputs.candidate_revision }}
           persist-credentials: false
-          fetch-depth: 0
+          fetch-depth: 1
 
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
@@ -178,16 +180,6 @@ jobs:
 
       - name: Build Mantis harness
         run: pnpm build
-
-      - name: Cache Mantis candidate pnpm store
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.local/share/pnpm/store
-            ~/.cache/pnpm
-          key: mantis-slack-pnpm-${{ runner.os }}-${{ env.NODE_VERSION }}-${{ hashFiles('pnpm-lock.yaml') }}
-          restore-keys: |
-            mantis-slack-pnpm-${{ runner.os }}-${{ env.NODE_VERSION }}-
 
       - name: Setup Go for Crabbox CLI
         uses: actions/setup-go@v6
@@ -211,18 +203,6 @@ jobs:
           "$HOME/.local/bin/crabbox" warmup --help > "$install_dir/warmup-help.txt" 2>&1
           grep -q -- "-desktop" "$install_dir/warmup-help.txt"
           "$HOME/.local/bin/crabbox" media preview --help >/dev/null
-
-      - name: Prepare candidate worktree
-        env:
-          CANDIDATE_SHA: ${{ needs.validate_ref.outputs.candidate_revision }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          worktree_root=".artifacts/qa-e2e/mantis/slack-desktop-smoke-worktrees"
-          mkdir -p "$worktree_root"
-          git worktree add --detach "$worktree_root/candidate" "$CANDIDATE_SHA"
-          pnpm --dir "$worktree_root/candidate" install --frozen-lockfile --prefer-offline
-          pnpm --dir "$worktree_root/candidate" build
 
       - name: Run Slack desktop scenario
         id: run_mantis
@@ -266,7 +246,7 @@ jobs:
           require_var OPENCLAW_QA_CONVEX_SECRET_CI
           require_var CRABBOX_COORDINATOR_TOKEN
 
-          candidate_repo="$(pwd)/.artifacts/qa-e2e/mantis/slack-desktop-smoke-worktrees/candidate"
+          candidate_repo="$(pwd)"
           output_rel=".artifacts/qa-e2e/mantis/slack-desktop-smoke"
           root="$candidate_repo/$output_rel"
           echo "output_dir=${root}" >> "$GITHUB_OUTPUT"
