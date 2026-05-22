@@ -2098,6 +2098,29 @@ export async function stopChromeMcpPerformanceTrace(params: {
   return extractMessageText(result);
 }
 
+export async function analyzeChromeMcpPerformanceInsight(params: {
+  profileName: string;
+  profile?: ChromeMcpProfileOptions;
+  userDataDir?: string;
+  targetId: string;
+  insightSetId: string;
+  insightName: string;
+  timeoutMs?: number;
+}): Promise<string> {
+  const result = await callTool(
+    params.profileName,
+    chromeMcpProfileOptionsFromParams(params),
+    "performance_analyze_insight",
+    {
+      pageId: parsePageId(params.targetId),
+      insightSetId: params.insightSetId,
+      insightName: params.insightName,
+    },
+    { timeoutMs: params.timeoutMs },
+  );
+  return extractMessageText(result);
+}
+
 /** Accept or dismiss a Chrome MCP browser dialog. */
 export async function handleChromeMcpDialog(params: {
   profileName: string;

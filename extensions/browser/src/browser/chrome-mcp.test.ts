@@ -5,10 +5,10 @@ import path from "node:path";
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  analyzeChromeMcpPerformanceInsight,
+  buildChromeMcpArgs,
   clickChromeMcpCoords,
   clickChromeMcpElement,
-  clickChromeMcpCoords,
-  buildChromeMcpArgs,
   decodeChromeMcpStderrTail,
   ensureChromeMcpAvailable,
   emulateChromeMcpPage,
@@ -117,6 +117,9 @@ function createFakeSession(): ChromeMcpSession {
     }
     if (name === "performance_stop_trace") {
       return { content: [{ type: "text", text: "The performance trace has been stopped." }] };
+    }
+    if (name === "performance_analyze_insight") {
+      return { content: [{ type: "text", text: `Insight ${args?.insightName} details.` }] };
     }
     if (name === "list_console_messages") {
       return {
@@ -418,6 +421,31 @@ describe("chrome MCP page parsing", () => {
     expect(calls.at(-1)?.[0]).toEqual({
       name: "performance_stop_trace",
       arguments: { pageId: 2, filePath: "/tmp/openclaw/browser-trace.json.gz" },
+    });
+  });
+
+  it("forwards Chrome MCP performance insight analysis", async () => {
+    const session = createFakeSession();
+    const factory: ChromeMcpSessionFactory = async () => session;
+    setChromeMcpSessionFactoryForTest(factory);
+
+    await expect(
+      analyzeChromeMcpPerformanceInsight({
+        profileName: "chrome-live",
+        targetId: "2",
+        insightSetId: "navigation-1",
+        insightName: "LCPBreakdown",
+      }),
+    ).resolves.toContain("LCPBreakdown");
+
+    const calls = (session.client.callTool as unknown as ToolCallMock).mock.calls;
+    expect(calls.at(-1)?.[0]).toEqual({
+      name: "performance_analyze_insight",
+      arguments: {
+        pageId: 2,
+        insightSetId: "navigation-1",
+        insightName: "LCPBreakdown",
+      },
     });
   });
 

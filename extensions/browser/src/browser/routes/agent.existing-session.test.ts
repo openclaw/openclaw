@@ -10,6 +10,7 @@ import { createBrowserRouteApp, createBrowserRouteResponse } from "./test-helper
 const routeState = existingSessionRouteState;
 
 const chromeMcpMocks = vi.hoisted(() => ({
+  analyzeChromeMcpPerformanceInsight: vi.fn(async () => "Insight details."),
   clickChromeMcpCoords: vi.fn(async () => {}),
   clickChromeMcpElement: vi.fn(async () => {}),
   emulateChromeMcpPage: vi.fn(async () => {}),
@@ -40,6 +41,7 @@ const navigationGuardMocks = vi.hoisted(() => ({
 }));
 
 vi.mock("../chrome-mcp.js", () => ({
+  analyzeChromeMcpPerformanceInsight: chromeMcpMocks.analyzeChromeMcpPerformanceInsight,
   clickChromeMcpCoords: chromeMcpMocks.clickChromeMcpCoords,
   clickChromeMcpElement: chromeMcpMocks.clickChromeMcpElement,
   closeChromeMcpTab: vi.fn(async () => {}),
@@ -178,6 +180,7 @@ function expectExistingSessionProfile(value: unknown) {
 describe("existing-session browser routes", () => {
   beforeEach(() => {
     routeState.profileCtx.ensureTabAvailable.mockClear();
+    chromeMcpMocks.analyzeChromeMcpPerformanceInsight.mockClear();
     routeState.profileCtx.listTabs.mockClear();
     chromeMcpMocks.clickChromeMcpCoords.mockClear();
     chromeMcpMocks.clickChromeMcpElement.mockClear();
@@ -700,6 +703,33 @@ describe("existing-session browser routes", () => {
       profile: expect.objectContaining({ name: "chrome-live", driver: "existing-session" }),
       targetId: "7",
       geolocation: { latitude: 49.2827, longitude: -123.1207 },
+    });
+  });
+
+  it("routes existing-session trace insight analysis through Chrome MCP", async () => {
+    const handler = getDebugPostHandler("/trace/insight");
+    const response = createBrowserRouteResponse();
+
+    await handler?.(
+      {
+        params: {},
+        query: {},
+        body: { insightSetId: "navigation-1", insightName: "LCPBreakdown" },
+      },
+      response.res,
+    );
+
+    expect(response.statusCode).toBe(200);
+    const body = requireRecord(response.body, "response body");
+    expect(body.traceFormat).toBe("chrome-devtools");
+    expect(body.insightSetId).toBe("navigation-1");
+    expect(body.insightName).toBe("LCPBreakdown");
+    expect(chromeMcpMocks.analyzeChromeMcpPerformanceInsight).toHaveBeenCalledWith({
+      profileName: "chrome-live",
+      profile: expect.objectContaining({ name: "chrome-live", driver: "existing-session" }),
+      targetId: "7",
+      insightSetId: "navigation-1",
+      insightName: "LCPBreakdown",
     });
   });
 

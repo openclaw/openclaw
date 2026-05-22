@@ -8,6 +8,7 @@ import crypto from "node:crypto";
 import path from "node:path";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
+  analyzeChromeMcpPerformanceInsight,
   listChromeMcpConsoleMessages,
   listChromeMcpNetworkRequests,
   startChromeMcpPerformanceTrace,
@@ -27,7 +28,7 @@ import {
 import { resolveWritableOutputPathOrRespond } from "./output-paths.js";
 import { DEFAULT_TRACE_DIR } from "./path-output.js";
 import type { BrowserRequest, BrowserResponse, BrowserRouteRegistrar } from "./types.js";
-import { asyncBrowserRoute, toBoolean, toStringOrEmpty } from "./utils.js";
+import { asyncBrowserRoute, jsonError, toBoolean, toStringOrEmpty } from "./utils.js";
 
 function browserDebugTargetPayload(
   targetId: string,
@@ -356,6 +357,56 @@ export function registerBrowserAgentDebugRoutes(
           res.json({
             ...browserDebugTargetPayload(tab.targetId, url),
             path: path.resolve(tracePath),
+          });
+        },
+      });
+    }),
+  );
+
+  app.post(
+    "/trace/insight",
+    asyncBrowserRoute(async (req, res) => {
+      const body = readBody(req);
+      const targetId = resolveTargetIdFromBody(body);
+      const insightSetId = toStringOrEmpty(body.insightSetId);
+      const insightName = toStringOrEmpty(body.insightName);
+      if (!insightSetId) {
+        return jsonError(res, 400, "insightSetId is required");
+      }
+      if (!insightName) {
+        return jsonError(res, 400, "insightName is required");
+      }
+
+      await withRouteTabContext({
+        req,
+        res,
+        ctx,
+        targetId,
+        enforceCurrentUrlAllowed: true,
+        run: async ({ tab, profileCtx, resolveTabUrl }) => {
+          if (!getBrowserProfileCapabilities(profileCtx.profile).usesChromeMcp) {
+            return jsonError(
+              res,
+              400,
+              "trace insight analysis is only supported for Chrome MCP profiles",
+            );
+          }
+          const output = await analyzeChromeMcpPerformanceInsight({
+            profileName: profileCtx.profile.name,
+            profile: profileCtx.profile,
+            targetId: tab.targetId,
+            insightSetId,
+            insightName,
+          });
+          const url = await resolveTabUrl(tab.url);
+          res.json({
+            ok: true,
+            targetId: tab.targetId,
+            ...(url ? { url } : {}),
+            traceFormat: "chrome-devtools",
+            insightSetId,
+            insightName,
+            ...(output ? { output } : {}),
           });
         },
       });
