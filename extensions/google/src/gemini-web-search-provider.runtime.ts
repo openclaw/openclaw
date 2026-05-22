@@ -206,7 +206,7 @@ async function runGeminiSearch(params: {
           "x-goog-api-key": params.apiKey,
         },
         body: JSON.stringify({
-          contents: [{ parts: [{ text: params.query }] }],
+          contents: [{ role: "user", parts: [{ text: params.query }] }],
           tools: [{ google_search: googleSearch }],
         }),
       },
