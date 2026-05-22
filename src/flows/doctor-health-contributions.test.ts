@@ -425,4 +425,62 @@ describe("doctor health contributions", () => {
       );
     });
   });
+
+  describe("update mode filtering", () => {
+    it("marks sandbox, skills, bootstrap-size, shell-completion, browser, hooks-model, systemd-linger, memory-search, device-pairing, workspace-suggestions as skip during update", () => {
+      const contributions = resolveDoctorHealthContributions();
+      const skipIds = new Set(
+        contributions.filter((c) => c.updateMode === "skip").map((c) => c.id),
+      );
+
+      expect(skipIds.has("doctor:sandbox")).toBe(true);
+      expect(skipIds.has("doctor:skills")).toBe(true);
+      expect(skipIds.has("doctor:bootstrap-size")).toBe(true);
+      expect(skipIds.has("doctor:shell-completion")).toBe(true);
+      expect(skipIds.has("doctor:browser")).toBe(true);
+      expect(skipIds.has("doctor:hooks-model")).toBe(true);
+      expect(skipIds.has("doctor:systemd-linger")).toBe(true);
+      expect(skipIds.has("doctor:memory-search")).toBe(true);
+      expect(skipIds.has("doctor:device-pairing")).toBe(true);
+      expect(skipIds.has("doctor:workspace-suggestions")).toBe(true);
+    });
+
+    it("does not skip critical contributions during update", () => {
+      const contributions = resolveDoctorHealthContributions();
+      const criticalIds = [
+        "doctor:gateway-config",
+        "doctor:gateway-auth",
+        "doctor:auth-profiles",
+        "doctor:structured-health-repairs",
+        "doctor:state-integrity",
+        "doctor:security",
+        "doctor:gateway-services",
+        "doctor:gateway-health",
+        "doctor:gateway-daemon",
+        "doctor:write-config",
+        "doctor:final-config-validation",
+      ];
+
+      for (const id of criticalIds) {
+        const contribution = contributions.find((c) => c.id === id);
+        expect(contribution?.updateMode).not.toBe("skip");
+      }
+    });
+
+    it("defaults updateMode to run for contributions without explicit flag", () => {
+      const contributions = resolveDoctorHealthContributions();
+      const unmarkedIds = [
+        "doctor:gateway-config",
+        "doctor:gateway-auth",
+        "doctor:state-integrity",
+        "doctor:security",
+        "doctor:write-config",
+      ];
+
+      for (const id of unmarkedIds) {
+        const contribution = contributions.find((c) => c.id === id);
+        expect(contribution?.updateMode).toBe("run");
+      }
+    });
+  });
 });

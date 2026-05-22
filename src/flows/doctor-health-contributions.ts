@@ -43,10 +43,13 @@ type DoctorHealthFlowContext = {
   gatewayMemoryProbe?: Awaited<ReturnType<typeof probeGatewayMemoryStatus>>;
 };
 
+type DoctorUpdateMode = "run" | "skip";
+
 type DoctorHealthContribution = FlowContribution & {
   kind: "core";
   surface: "health";
   healthCheckIds: readonly string[];
+  updateMode: DoctorUpdateMode;
   run: (ctx: DoctorHealthFlowContext) => Promise<void>;
 };
 
@@ -84,6 +87,7 @@ function createDoctorHealthContribution(params: {
   label: string;
   healthCheckIds?: readonly string[];
   hint?: string;
+  updateMode?: DoctorUpdateMode;
   run: (ctx: DoctorHealthFlowContext) => Promise<void>;
 }): DoctorHealthContribution {
   return {
@@ -97,6 +101,7 @@ function createDoctorHealthContribution(params: {
     },
     source: "doctor",
     healthCheckIds: params.healthCheckIds ?? [],
+    updateMode: params.updateMode ?? "run",
     run: params.run,
   };
 }
@@ -828,6 +833,7 @@ export function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
     createDoctorHealthContribution({
       id: "doctor:sandbox",
       label: "Sandbox",
+      updateMode: "skip",
       run: runSandboxHealth,
     }),
     createDoctorHealthContribution({
@@ -851,6 +857,7 @@ export function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
       id: "doctor:browser",
       label: "Browser",
       healthCheckIds: ["core/doctor/browser"],
+      updateMode: "skip",
       run: runBrowserHealth,
     }),
     createDoctorHealthContribution({
@@ -863,11 +870,13 @@ export function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
       id: "doctor:hooks-model",
       label: "Hooks model",
       healthCheckIds: ["core/doctor/hooks-model"],
+      updateMode: "skip",
       run: runHooksModelHealth,
     }),
     createDoctorHealthContribution({
       id: "doctor:systemd-linger",
       label: "systemd linger",
+      updateMode: "skip",
       run: runSystemdLingerHealth,
     }),
     createDoctorHealthContribution({
@@ -880,17 +889,20 @@ export function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
       id: "doctor:skills",
       label: "Skills",
       healthCheckIds: ["core/doctor/skills-readiness"],
+      updateMode: "skip",
       run: runSkillsHealth,
     }),
     createDoctorHealthContribution({
       id: "doctor:bootstrap-size",
       label: "Bootstrap size",
       healthCheckIds: ["core/doctor/bootstrap-size"],
+      updateMode: "skip",
       run: runBootstrapSizeHealth,
     }),
     createDoctorHealthContribution({
       id: "doctor:shell-completion",
       label: "Shell completion",
+      updateMode: "skip",
       run: runShellCompletionHealth,
     }),
     createDoctorHealthContribution({
@@ -906,11 +918,13 @@ export function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
     createDoctorHealthContribution({
       id: "doctor:memory-search",
       label: "Memory search",
+      updateMode: "skip",
       run: runMemorySearchHealthContribution,
     }),
     createDoctorHealthContribution({
       id: "doctor:device-pairing",
       label: "Device pairing",
+      updateMode: "skip",
       run: runDevicePairingHealth,
     }),
     createDoctorHealthContribution({
@@ -927,6 +941,7 @@ export function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
       id: "doctor:workspace-suggestions",
       label: "Workspace suggestions",
       healthCheckIds: ["core/doctor/workspace-suggestions"],
+      updateMode: "skip",
       run: runWorkspaceSuggestionsHealth,
     }),
     createDoctorHealthContribution({
@@ -939,7 +954,12 @@ export function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
 }
 
 export async function runDoctorHealthContributions(ctx: DoctorHealthFlowContext): Promise<void> {
+  const updateInProgress = isUpdateDoctorRun(ctx.env ?? process.env);
   for (const contribution of resolveDoctorHealthContributions()) {
+    if (updateInProgress && contribution.updateMode === "skip") {
+      ctx.runtime?.log(`Skipping ${contribution.id} during update mode.`);
+      continue;
+    }
     await contribution.run(ctx);
   }
 }
