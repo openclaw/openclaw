@@ -121,7 +121,11 @@ const gatewayServiceMocks = vi.hoisted(() => ({
     status: "clean",
     issues: [],
   })),
-  repairGatewayServiceConfig: vi.fn(async () => undefined),
+  repairGatewayServiceConfig: vi.fn(
+    async (): Promise<{ status: "repaired" | "skipped" | "failed"; reason?: string }> => ({
+      status: "repaired",
+    }),
+  ),
   repairExtraGatewayServices: vi.fn(
     async (): Promise<{ removed: string[]; failed: string[] }> => ({ removed: [], failed: [] }),
   ),
@@ -242,7 +246,7 @@ describe("registerCoreHealthChecks", () => {
       issues: [],
     });
     gatewayServiceMocks.repairGatewayServiceConfig.mockReset();
-    gatewayServiceMocks.repairGatewayServiceConfig.mockResolvedValue(undefined);
+    gatewayServiceMocks.repairGatewayServiceConfig.mockResolvedValue({ status: "repaired" });
     gatewayServiceMocks.repairExtraGatewayServices.mockReset();
     gatewayServiceMocks.repairExtraGatewayServices.mockResolvedValue({ removed: [], failed: [] });
     gatewayServiceMocks.classifyLegacyServices.mockClear();
@@ -1306,6 +1310,82 @@ describe("registerCoreHealthChecks", () => {
     expect(repaired).toMatchObject({
       status: "skipped",
       reason: "gateway service rewrite is blocked while the service is running",
+      changes: [],
+      effects: [],
+    });
+  });
+
+  it("reports skipped gateway service config helper outcomes without update effects", async () => {
+    gatewayServiceMocks.detectGatewayServiceConfigIssues.mockResolvedValueOnce({
+      status: "issue",
+      serviceRewriteBlocked: false,
+      issues: [
+        {
+          code: "gateway-entrypoint-mismatch",
+          message: "Gateway service entrypoint does not match the current install.",
+          detail: "/old/openclaw -> /new/openclaw",
+          level: "recommended",
+        },
+      ],
+    });
+    gatewayServiceMocks.repairGatewayServiceConfig.mockResolvedValueOnce({
+      status: "skipped",
+      reason: "gateway service config repair was declined",
+    });
+    const check = CORE_HEALTH_CHECKS.find(
+      (entry) => entry.id === "core/doctor/gateway-services/config",
+    );
+
+    const repaired = await check?.repair?.(
+      {
+        mode: "fix",
+        runtime: { log() {}, error() {}, exit() {} },
+        cfg: { gateway: {} },
+      },
+      [],
+    );
+
+    expect(repaired).toMatchObject({
+      status: "skipped",
+      reason: "gateway service config repair was declined",
+      changes: [],
+      effects: [],
+    });
+  });
+
+  it("reports failed gateway service config helper outcomes without update effects", async () => {
+    gatewayServiceMocks.detectGatewayServiceConfigIssues.mockResolvedValueOnce({
+      status: "issue",
+      serviceRewriteBlocked: false,
+      issues: [
+        {
+          code: "gateway-entrypoint-mismatch",
+          message: "Gateway service entrypoint does not match the current install.",
+          detail: "/old/openclaw -> /new/openclaw",
+          level: "recommended",
+        },
+      ],
+    });
+    gatewayServiceMocks.repairGatewayServiceConfig.mockResolvedValueOnce({
+      status: "failed",
+      reason: "gateway service update failed",
+    });
+    const check = CORE_HEALTH_CHECKS.find(
+      (entry) => entry.id === "core/doctor/gateway-services/config",
+    );
+
+    const repaired = await check?.repair?.(
+      {
+        mode: "fix",
+        runtime: { log() {}, error() {}, exit() {} },
+        cfg: { gateway: {} },
+      },
+      [],
+    );
+
+    expect(repaired).toMatchObject({
+      status: "failed",
+      reason: "gateway service update failed",
       changes: [],
       effects: [],
     });
