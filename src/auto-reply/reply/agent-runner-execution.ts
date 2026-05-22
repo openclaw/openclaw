@@ -875,15 +875,18 @@ function resolveHeartbeatBleedHint(params: {
 
 export function buildContextOverflowRecoveryText(params: {
   duringCompaction?: boolean;
+  preserveSessionMapping?: boolean;
   cfg: FollowupRun["run"]["config"];
   agentId?: string;
   primaryProvider?: string;
   primaryModel?: string;
   activeSessionEntry?: SessionEntry;
 }): string {
-  const prefix = params.duringCompaction
-    ? "⚠️ Context limit exceeded during compaction. I've reset our conversation to start fresh - please try again."
-    : "⚠️ Context limit exceeded. I've reset our conversation to start fresh - please try again.";
+  const prefix = params.preserveSessionMapping
+    ? "⚠️ Auto-compaction could not recover this turn. I kept this conversation mapped to the current session. Please try again, use /compact, or use /new to start a fresh session."
+    : params.duringCompaction
+      ? "⚠️ Context limit exceeded during compaction. I've reset our conversation to start fresh - please try again."
+      : "⚠️ Context limit exceeded. I've reset our conversation to start fresh - please try again.";
   return (
     prefix +
     (resolveHeartbeatBleedHint({
@@ -1134,7 +1137,6 @@ export async function runAgentTurnWithFallback(params: {
   shouldEmitToolResult: () => boolean;
   shouldEmitToolOutput: () => boolean;
   pendingToolTasks: Set<Promise<void>>;
-  resetSessionAfterCompactionFailure: (reason: string) => Promise<boolean>;
   resetSessionAfterRoleOrderingConflict: (reason: string) => Promise<boolean>;
   isHeartbeat: boolean;
   sessionKey?: string;
@@ -1315,7 +1317,6 @@ export async function runAgentTurnWithFallback(params: {
   let fallbackProvider = params.followupRun.run.provider;
   let fallbackModel = params.followupRun.run.model;
   let fallbackAttempts: RuntimeFallbackAttempt[] = [];
-  let didResetAfterCompactionFailure = false;
   let didRetryTransientHttpError = false;
   let liveModelSwitchRetries = 0;
   let bootstrapPromptWarningSignaturesSeen = resolveBootstrapWarningSignaturesSeen(
@@ -2231,20 +2232,19 @@ export async function runAgentTurnWithFallback(params: {
       });
 
       // Some embedded runs surface context overflow as an error payload instead of throwing.
-      // Treat those as a session-level failure and auto-recover by starting a fresh session.
+      // Preserve the active session mapping and surface explicit guidance instead
+      // of silently rotating the session key to a new session id.
       const embeddedError = runResult.meta?.error;
-      if (
-        embeddedError &&
-        isContextOverflowError(embeddedError.message) &&
-        !didResetAfterCompactionFailure &&
-        (await params.resetSessionAfterCompactionFailure(embeddedError.message))
-      ) {
-        didResetAfterCompactionFailure = true;
+      if (embeddedError && isContextOverflowError(embeddedError.message)) {
+        defaultRuntime.error(
+          `Auto-compaction failed (${embeddedError.message}). Preserving existing session mapping for ${params.sessionKey ?? params.followupRun.run.sessionId}.`,
+        );
         params.replyOperation?.fail("run_failed", embeddedError);
         return {
           kind: "final",
           payload: markAgentRunFailureReplyPayload({
             text: buildContextOverflowRecoveryText({
+              preserveSessionMapping: true,
               cfg: runtimeConfig,
               agentId: params.followupRun.run.agentId,
               primaryProvider: params.followupRun.run.provider,
@@ -2364,18 +2364,17 @@ export async function runAgentTurnWithFallback(params: {
         };
       }
 
-      if (
-        isCompactionFailure &&
-        !didResetAfterCompactionFailure &&
-        (await params.resetSessionAfterCompactionFailure(message))
-      ) {
-        didResetAfterCompactionFailure = true;
+      if (isCompactionFailure) {
+        defaultRuntime.error(
+          `Auto-compaction failed (${message}). Preserving existing session mapping for ${params.sessionKey ?? params.followupRun.run.sessionId}.`,
+        );
         params.replyOperation?.fail("run_failed", err);
         return {
           kind: "final",
           payload: markAgentRunFailureReplyPayload({
             text: buildContextOverflowRecoveryText({
               duringCompaction: true,
+              preserveSessionMapping: true,
               cfg: runtimeConfig,
               agentId: params.followupRun.run.agentId,
               primaryProvider: params.followupRun.run.provider,
