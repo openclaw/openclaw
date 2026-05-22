@@ -645,7 +645,7 @@ function buildExplicitApproveCommand(opts: DevicesRpcOpts, requestId: string): s
     args.push("--url", url);
   }
   const timeout = normalizeOptionalString(opts.timeout);
-  if (timeout && timeout !== String(DEFAULT_DEVICES_TIMEOUT_MS)) {
+  if (timeout) {
     args.push("--timeout", timeout);
   }
   if (opts.json === true) {
