@@ -28,12 +28,13 @@ function matchesProgressOnlyPrefix(value: string): boolean {
 }
 
 function hasNonProgressFollowupSentence(value: string): boolean {
-  const boundary = /[.!?]\s+\S/.exec(value);
+  const boundary = /(?:[.!?:]|\s[-\u2013\u2014])\s+\S/.exec(value);
   if (!boundary) {
     return false;
   }
-  const firstSentence = value.slice(0, boundary.index + 1).trim();
-  const rest = value.slice(boundary.index + 1).trim();
+  const separatorEnd = boundary.index + boundary[0].length - 1;
+  const firstSentence = value.slice(0, separatorEnd).trim();
+  const rest = value.slice(separatorEnd).trim();
   return matchesProgressOnlyPrefix(firstSentence) && !isProgressOnlyCompletionText(rest);
 }
 
