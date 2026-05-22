@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { normalizeConfig } from "./provider-policy-api.js";
+import { normalizeConfig, resolveThinkingProfile } from "./provider-policy-api.js";
 
 describe("google provider policy public artifact", () => {
   it("normalizes Google provider config without loading the full provider plugin", () => {
@@ -128,5 +128,22 @@ describe("google provider policy public artifact", () => {
         },
       ],
     });
+  });
+
+  it("preserves Gemini 3 thinking levels when catalog reasoning metadata is stale", () => {
+    expect(
+      resolveThinkingProfile({
+        provider: "google",
+        modelId: "gemini-3-flash-preview",
+        reasoning: false,
+      })?.levels,
+    ).toEqual([
+      { id: "off" },
+      { id: "minimal" },
+      { id: "low" },
+      { id: "medium" },
+      { id: "adaptive" },
+      { id: "high" },
+    ]);
   });
 });

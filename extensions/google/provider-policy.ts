@@ -1,5 +1,10 @@
+import type {
+  ProviderDefaultThinkingPolicyContext,
+  ProviderThinkingProfile,
+} from "openclaw/plugin-sdk/core";
 import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-types";
 import { normalizeAntigravityModelId, normalizeGoogleModelId } from "./model-id.js";
+import { isGoogleGemini3ProModel, isGoogleGemini3ThinkingLevelModel } from "./thinking-api.js";
 
 type GoogleApiCarrier = {
   api?: string | null;
@@ -173,4 +178,28 @@ export function normalizeGoogleProviderConfig(
   }
 
   return nextProvider;
+}
+
+export function resolveGoogleThinkingProfile({
+  modelId,
+  reasoning,
+}: ProviderDefaultThinkingPolicyContext): ProviderThinkingProfile | undefined {
+  const isGemini3ThinkingModel = isGoogleGemini3ThinkingLevelModel(modelId);
+  if (reasoning === false && !isGemini3ThinkingModel) {
+    return undefined;
+  }
+
+  return {
+    levels: isGoogleGemini3ProModel(modelId)
+      ? [{ id: "off" }, { id: "low" }, { id: "adaptive" }, { id: "high" }]
+      : [
+          { id: "off" },
+          { id: "minimal" },
+          { id: "low" },
+          { id: "medium" },
+          { id: "adaptive" },
+          { id: "high" },
+        ],
+    preserveWhenCatalogReasoningFalse: isGemini3ThinkingModel || undefined,
+  };
 }
