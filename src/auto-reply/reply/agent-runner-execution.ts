@@ -478,9 +478,9 @@ function fallbackSummaryHasUnavailableFallbackAttempt(err: unknown): boolean {
 function buildContextOverflowBeforeReplyText(params?: { fallbackUnavailable?: boolean }): string {
   return (
     "⚠️ Context limit exceeded before I could reply. The current thread is too large for the primary model. " +
-    "Use /compact or /new, then retry with a narrower request." +
+    "Start a fresh session or retry with a narrower request." +
     (params?.fallbackUnavailable
-      ? " A fallback model was also unavailable because of billing or rate-limit cooldown, so automatic recovery could not continue."
+      ? " One or more fallback models were also unavailable due to billing or rate-limit cooldown, so automatic recovery could not continue."
       : "")
   );
 }

@@ -3485,9 +3485,56 @@ describe("runAgentTurnWithFallback", () => {
     expect(result.kind).toBe("final");
     if (result.kind === "final") {
       expect(result.payload.text).toContain("Context limit exceeded");
-      expect(result.payload.text).toContain("fallback model was also unavailable");
+      expect(result.payload.text).toContain("One or more fallback models were also unavailable");
       expect(result.payload.text).not.toBe(GENERIC_RUN_FAILURE_TEXT);
       expect(result.payload.text).not.toContain("All models failed");
+    }
+  });
+
+  it("surfaces direct Codex context overflow before reply without raw provider text", async () => {
+    state.isLikelyContextOverflowErrorMock.mockImplementation(
+      (message?: string) => !!message && /ran out of room\b.*\bcontext window/i.test(message),
+    );
+    state.runWithModelFallbackMock.mockRejectedValueOnce(
+      new Error(
+        "Codex ran out of room in the model’s context window. Start a new thread or clear earlier history before retrying.",
+      ),
+    );
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const result = await runAgentTurnWithFallback({
+      commandBody: "hello",
+      followupRun: createFollowupRun(),
+      sessionCtx: {
+        Provider: "telegram",
+        MessageSid: "msg",
+      } as unknown as TemplateContext,
+      opts: {},
+      typingSignals: createMockTypingSignaler(),
+      blockReplyPipeline: null,
+      blockStreamingEnabled: false,
+      resolvedBlockStreamingBreak: "message_end",
+      applyReplyToMode: (payload) => payload,
+      shouldEmitToolResult: () => true,
+      shouldEmitToolOutput: () => false,
+      pendingToolTasks: new Set(),
+      resetSessionAfterCompactionFailure: async () => false,
+      resetSessionAfterRoleOrderingConflict: async () => false,
+      isHeartbeat: false,
+      sessionKey: "main",
+      getActiveSessionEntry: () => undefined,
+      resolvedVerboseLevel: "off",
+    });
+
+    expect(result.kind).toBe("final");
+    if (result.kind === "final") {
+      expect(result.payload.text).toContain("Context limit exceeded");
+      expect(result.payload.text).toContain(
+        "Start a fresh session or retry with a narrower request",
+      );
+      expect(result.payload.text).not.toBe(GENERIC_RUN_FAILURE_TEXT);
+      expect(result.payload.text).not.toContain("ran out of room");
+      expect(result.payload.text).not.toContain("/compact");
     }
   });
 

@@ -352,6 +352,8 @@ describe("isContextOverflowError", () => {
       "Maximum context length",
       "prompt is too long: 208423 tokens > 200000 maximum",
       "Codex ran out of room in the model's context window. Start a new thread or clear earlier history before retrying.",
+      "Codex ran out of room in the model’s context window. Start a new thread or clear earlier history before retrying.",
+      "Codex ran out of room in the model context window. Start a new thread or clear earlier history before retrying.",
       "Context overflow: Summarization failed",
       "413 Request Entity Too Large",
     ];
