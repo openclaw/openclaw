@@ -221,10 +221,22 @@ function fingerprintCliSessionId(sessionId?: string): string {
   return crypto.createHash("sha256").update(trimmed).digest("hex").slice(0, 12);
 }
 
+export function generateCliTurnId(): string {
+  return crypto.randomBytes(4).toString("hex");
+}
+
+export function summarizePromptForLog(prompt: string): { chars: number; hash: string } {
+  return {
+    chars: prompt.length,
+    hash: crypto.createHash("sha256").update(prompt, "utf8").digest("hex").slice(0, 8),
+  };
+}
+
 export function buildCliExecLogLine(params: {
   provider: string;
   model: string;
   promptChars: number;
+  turnId: string;
   trigger?: string;
   useResume: boolean;
   cliSessionId?: string;
@@ -241,6 +253,7 @@ export function buildCliExecLogLine(params: {
   return [
     `cli exec: provider=${params.provider}`,
     `model=${params.model}`,
+    `turnId=${params.turnId}`,
     `promptChars=${params.promptChars}`,
     `trigger=${params.trigger ?? "unknown"}`,
     `useResume=${params.useResume ? "true" : "false"}`,
@@ -295,6 +308,8 @@ export async function executePreparedCliRun(
   const basePrompt = cliSessionIdToUse
     ? params.prompt
     : (context.openClawHistoryPrompt ?? params.prompt);
+  const turnId = generateCliTurnId();
+  const basePromptSummary = summarizePromptForLog(basePrompt);
   let prompt = applyPluginTextReplacements(
     appendBootstrapPromptWarning(basePrompt, context.bootstrapPromptWarningLines, {
       preserveExactPrompt: context.heartbeatPrompt,
@@ -375,7 +390,8 @@ export async function executePreparedCliRun(
           buildCliExecLogLine({
             provider: params.provider,
             model: context.normalizedModel,
-            promptChars: basePrompt.length,
+            turnId,
+            promptChars: basePromptSummary.chars,
             trigger: params.trigger,
             useResume,
             cliSessionId: cliSessionIdToUse,
@@ -461,6 +477,11 @@ export async function executePreparedCliRun(
             args,
             env,
             prompt,
+            turnCorrelation: {
+              turnId,
+              promptChars: basePromptSummary.chars,
+              promptHash: basePromptSummary.hash,
+            },
             useResume,
             noOutputTimeoutMs,
             getProcessSupervisor: executeDeps.getProcessSupervisor,

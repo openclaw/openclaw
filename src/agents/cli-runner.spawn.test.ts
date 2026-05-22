@@ -207,6 +207,7 @@ describe("runCliAgent spawn path", () => {
     const logLine = buildCliExecLogLine({
       provider: "claude-cli",
       model: "claude-opus-4-7",
+      turnId: "abcd1234",
       promptChars: 42,
       trigger: "heartbeat",
       useResume: true,
@@ -221,6 +222,7 @@ describe("runCliAgent spawn path", () => {
     expect(logLine).toContain("session=present");
     expect(logLine).toContain("reuse=reusable");
     expect(logLine).toContain("historyPrompt=none");
+    expect(logLine).toContain("turnId=abcd1234");
     expect(logLine).not.toContain("claude-session-secret");
   });
 
@@ -1390,6 +1392,11 @@ describe("runCliAgent spawn path", () => {
           args: context.preparedBackend.backend.args ?? [],
           env: {},
           prompt: `prompt ${index}`,
+          turnCorrelation: {
+            turnId: `turn-${index.toString(16).padStart(8, "0")}`,
+            promptChars: `prompt ${index}`.length,
+            promptHash: "deadbeef",
+          },
           useResume: false,
           noOutputTimeoutMs: 1_000,
           getProcessSupervisor: () => ({
@@ -1528,6 +1535,11 @@ describe("runCliAgent spawn path", () => {
         args,
         env,
         prompt: "hi",
+        turnCorrelation: {
+          turnId: "abcd1234",
+          promptChars: 2,
+          promptHash: "abcd1234",
+        },
         useResume: args.some((entry) => entry.startsWith("--resume")),
         noOutputTimeoutMs: 1_000,
         getProcessSupervisor: () => ({

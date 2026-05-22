@@ -17,12 +17,16 @@ type ProcessSupervisor = ReturnType<
   typeof import("../../process/supervisor/index.js").getProcessSupervisor
 >;
 type ManagedRun = Awaited<ReturnType<ProcessSupervisor["spawn"]>>;
+export type ClaudeLiveTurnCorrelation = {
+  turnId: string;
+  promptChars: number;
+  promptHash: string;
+};
 type ClaudeLiveTurn = {
   backend: CliBackendConfig;
   outputLimits: ClaudeLiveOutputLimits;
   startedAtMs: number;
-  promptChars: number;
-  promptHash: string;
+  correlation: ClaudeLiveTurnCorrelation;
   rawLines: string[];
   rawChars: number;
   sessionId?: string;
@@ -330,18 +334,44 @@ function finishTurn(session: ClaudeLiveSession, output: CliOutput): void {
   scheduleIdleClose(session);
 }
 
+export function buildClaudeLiveTurnFailedLogLine(params: {
+  provider: string;
+  model: string;
+  durationMs: number;
+  errorKind: string;
+  correlation: ClaudeLiveTurnCorrelation;
+}): string {
+  return [
+    `claude live session turn failed: provider=${params.provider}`,
+    `model=${params.model}`,
+    `durationMs=${params.durationMs}`,
+    `error=${params.errorKind}`,
+    `turnId=${params.correlation.turnId}`,
+    `promptChars=${params.correlation.promptChars}`,
+    `promptHash=${params.correlation.promptHash}`,
+  ].join(" ");
+}
+
 function failTurn(session: ClaudeLiveSession, error: unknown): void {
   const turn = session.currentTurn;
   if (!turn) {
     return;
   }
   const errorKind = error instanceof Error ? error.name : typeof error;
-  // Without prompt metadata, an aborted turn leaves no trace of which user
-  // input was discarded — the prompt only lives in the CLI's stdin and is
-  // never persisted gateway-side. The hash lets an operator correlate this
-  // line with the matching `cli exec: ... promptChars=…` entry.
+  // The discarded prompt never lives anywhere except the CLI subprocess's
+  // stdin — gateway-side it is gone. `turnId` correlates this line with the
+  // matching `cli exec: ...` entry; promptChars/promptHash come from the same
+  // basePrompt that `cli exec` already logs, so the two lines stay aligned
+  // regardless of bootstrap warnings, text transforms, or image markers
+  // added downstream.
   cliBackendLog.warn(
-    `claude live session turn failed: provider=${session.providerId} model=${session.modelId} durationMs=${Date.now() - turn.startedAtMs} error=${errorKind} promptChars=${turn.promptChars} promptHash=${turn.promptHash}`,
+    buildClaudeLiveTurnFailedLogLine({
+      provider: session.providerId,
+      model: session.modelId,
+      durationMs: Date.now() - turn.startedAtMs,
+      errorKind,
+      correlation: turn.correlation,
+    }),
   );
   clearTurnTimers(turn);
   turn.streamingParser.finish();
@@ -761,29 +791,20 @@ async function createClaudeLiveSession(params: {
   return session;
 }
 
-export function summarizePromptForLog(prompt: string): { chars: number; hash: string } {
-  return {
-    chars: prompt.length,
-    hash: crypto.createHash("sha256").update(prompt, "utf8").digest("hex").slice(0, 8),
-  };
-}
-
 function createTurn(params: {
   context: PreparedCliRunContext;
   noOutputTimeoutMs: number;
   onAssistantDelta: (delta: CliStreamingDelta) => void;
   session: ClaudeLiveSession;
-  prompt: string;
+  correlation: ClaudeLiveTurnCorrelation;
   resolve: (output: CliOutput) => void;
   reject: (error: unknown) => void;
 }): ClaudeLiveTurn {
-  const { chars: promptChars, hash: promptHash } = summarizePromptForLog(params.prompt);
   const turn: ClaudeLiveTurn = {
     backend: params.context.preparedBackend.backend,
     outputLimits: resolveClaudeLiveOutputLimits(params.context.preparedBackend.backend),
     startedAtMs: Date.now(),
-    promptChars,
-    promptHash,
+    correlation: params.correlation,
     rawLines: [],
     rawChars: 0,
     noOutputTimer: null,
@@ -853,6 +874,7 @@ export async function runClaudeLiveSessionTurn(params: {
   args: string[];
   env: Record<string, string>;
   prompt: string;
+  turnCorrelation: ClaudeLiveTurnCorrelation;
   useResume: boolean;
   noOutputTimeoutMs: number;
   getProcessSupervisor: () => ProcessSupervisor;
@@ -969,7 +991,7 @@ export async function runClaudeLiveSessionTurn(params: {
       noOutputTimeoutMs: params.noOutputTimeoutMs,
       onAssistantDelta: params.onAssistantDelta,
       session: liveSession,
-      prompt: params.prompt,
+      correlation: params.turnCorrelation,
       resolve,
       reject,
     });
