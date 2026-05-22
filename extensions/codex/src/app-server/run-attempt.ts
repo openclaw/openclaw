@@ -217,6 +217,7 @@ const CODEX_NATIVE_SANDBOX_TOOL_REQUIREMENTS = [
   "edit",
   "apply_patch",
 ] as const;
+const CODEX_MEMORY_FLUSH_DYNAMIC_TOOL_ALLOW = new Set(["read", "write"]);
 const CODEX_NATIVE_PROJECT_DOC_BASENAMES = new Set(["agents.md"]);
 const CODEX_WORKSPACE_DEVELOPER_CONTEXT_BASENAMES = new Set([
   "identity.md",
@@ -3601,7 +3602,9 @@ async function buildDynamicTools(input: DynamicToolBuildParams) {
     },
   });
   const codexFilteredTools = addSandboxShellDynamicToolsIfAvailable(
-    filterCodexDynamicTools(allTools, input.pluginConfig),
+    isCodexMemoryFlushRun(params)
+      ? filterCodexMemoryFlushDynamicTools(allTools)
+      : filterCodexDynamicTools(allTools, input.pluginConfig),
     allTools,
     input,
   );
@@ -3647,6 +3650,9 @@ function shouldEnableCodexAppServerNativeToolSurface(
   sandbox?: OpenClawSandboxContext,
   options: { sandboxExecServerEnabled?: boolean } = {},
 ): boolean {
+  if (isCodexMemoryFlushRun(params)) {
+    return false;
+  }
   const toolsAllow = includeForcedMessageToolAllow(params.toolsAllow, params);
   if (toolsAllow === undefined) {
     return canCodexAppServerNativeToolSurfaceHonorSandbox(sandbox, options);
@@ -3686,6 +3692,18 @@ function canSandboxToolPolicyExposeCodexNativeToolSurface(sandbox: {
 }): boolean {
   return CODEX_NATIVE_SANDBOX_TOOL_REQUIREMENTS.every((toolName) =>
     isToolAllowed(sandbox.tools, toolName),
+  );
+}
+
+function isCodexMemoryFlushRun(
+  params?: Pick<EmbeddedRunAttemptParams, "trigger" | "memoryFlushWritePath">,
+): boolean {
+  return params?.trigger === "memory" && Boolean(params.memoryFlushWritePath?.trim());
+}
+
+function filterCodexMemoryFlushDynamicTools<T extends { name: string }>(tools: T[]): T[] {
+  return tools.filter((tool) =>
+    CODEX_MEMORY_FLUSH_DYNAMIC_TOOL_ALLOW.has(normalizeCodexDynamicToolName(tool.name)),
   );
 }
 
@@ -3796,6 +3814,9 @@ function addSandboxShellDynamicToolsIfAvailable(
 }
 
 function shouldExposeSandboxExecDynamicTool(input: DynamicToolBuildParams): boolean {
+  if (isCodexMemoryFlushRun(input.params)) {
+    return false;
+  }
   const backendId = input.sandbox?.enabled ? input.sandbox.backendId.trim().toLowerCase() : "";
   return Boolean(backendId && input.nativeToolSurfaceEnabled === false);
 }
