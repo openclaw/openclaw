@@ -29,6 +29,8 @@ type AcquireSessionWriteLockFn =
   typeof import("../../session-write-lock.js").acquireSessionWriteLock;
 type ShouldPreemptivelyCompactBeforePromptFn =
   typeof import("./preemptive-compaction.js").shouldPreemptivelyCompactBeforePrompt;
+type WaitForCompactionRetryWithAggregateTimeoutFn =
+  typeof import("./compaction-retry-aggregate-timeout.js").waitForCompactionRetryWithAggregateTimeout;
 
 type SubscriptionMock = ReturnType<SubscribeEmbeddedPiSessionFn>;
 type UnknownMock = Mock<(...args: unknown[]) => unknown>;
@@ -86,6 +88,7 @@ type AttemptSpawnWorkspaceHoisted = {
     (sessionKey: string | undefined, config: unknown) => number | undefined
   >;
   limitHistoryTurnsMock: Mock<<T>(messages: T, limit: number | undefined) => T>;
+  waitForCompactionRetryWithAggregateTimeoutMock: Mock<WaitForCompactionRetryWithAggregateTimeoutFn>;
   preemptiveCompactionCalls: Parameters<ShouldPreemptivelyCompactBeforePromptFn>[0][];
   systemPromptOverrideTexts: string[];
   sessionManager: SessionManagerMocks;
@@ -181,6 +184,10 @@ const hoisted = vi.hoisted((): AttemptSpawnWorkspaceHoisted => {
   const limitHistoryTurnsMock = vi.fn<<T>(messages: T, limit: number | undefined) => T>(
     (messages) => messages,
   );
+  const waitForCompactionRetryWithAggregateTimeoutMock =
+    vi.fn<WaitForCompactionRetryWithAggregateTimeoutFn>(async () => ({
+      timedOut: false,
+    }));
   const preemptiveCompactionCalls: Parameters<ShouldPreemptivelyCompactBeforePromptFn>[0][] = [];
   const systemPromptOverrideTexts: string[] = [];
   const sessionManager = {
@@ -221,6 +228,7 @@ const hoisted = vi.hoisted((): AttemptSpawnWorkspaceHoisted => {
     detectAndLoadPromptImagesMock,
     getHistoryLimitFromSessionKeyMock,
     limitHistoryTurnsMock,
+    waitForCompactionRetryWithAggregateTimeoutMock,
     preemptiveCompactionCalls,
     systemPromptOverrideTexts,
     sessionManager,
@@ -774,10 +782,9 @@ vi.mock("../utils.js", () => ({
 }));
 
 vi.mock("./compaction-retry-aggregate-timeout.js", () => ({
-  waitForCompactionRetryWithAggregateTimeout: async () => ({
-    timedOut: false,
-    aborted: false,
-  }),
+  waitForCompactionRetryWithAggregateTimeout: (
+    ...args: Parameters<WaitForCompactionRetryWithAggregateTimeoutFn>
+  ) => hoisted.waitForCompactionRetryWithAggregateTimeoutMock(...args),
 }));
 
 vi.mock("./compaction-timeout.js", () => ({
@@ -956,6 +963,9 @@ export function resetEmbeddedAttemptHarness(
   hoisted.runContextEngineMaintenanceMock.mockReset().mockResolvedValue(undefined);
   hoisted.getHistoryLimitFromSessionKeyMock.mockReset().mockReturnValue(undefined);
   hoisted.limitHistoryTurnsMock.mockReset().mockImplementation((messages) => messages);
+  hoisted.waitForCompactionRetryWithAggregateTimeoutMock
+    .mockReset()
+    .mockResolvedValue({ timedOut: false });
   hoisted.preemptiveCompactionCalls.length = 0;
   hoisted.systemPromptOverrideTexts.length = 0;
   hoisted.sessionManager.getLeafEntry.mockReset().mockReturnValue(null);
