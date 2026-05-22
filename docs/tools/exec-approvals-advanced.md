@@ -279,6 +279,10 @@ Generic model:
 - Slack plugin approvals can use Slack's native approval client when the request comes from Slack
   and Slack plugin approvers resolve; `approvals.plugin` can also route plugin approvals to Slack
   sessions or targets even when Slack exec approvals are disabled
+- WhatsApp is the exception to the channel-specific native-client field: it has no
+  `channels.whatsapp.execApprovals`; WhatsApp emoji approval delivery is gated by
+  `approvals.exec` and `approvals.plugin` plus the normal WhatsApp `allowFrom`/`defaultTo`
+  authorization config
 
 Native approval clients auto-enable DM-first delivery when all of these are true:
 
@@ -296,6 +300,8 @@ FAQ: [Why are there two exec approval configs for chat approvals?](/help/faq-fir
 - Discord: `channels.discord.execApprovals.*`
 - Slack: `channels.slack.execApprovals.*`
 - Telegram: `channels.telegram.execApprovals.*`
+- WhatsApp: no `channels.whatsapp.execApprovals`; use `approvals.exec` and
+  `approvals.plugin` to route approval prompts to WhatsApp
 
 These native approval clients add DM routing and optional channel fanout on top of the shared
 same-chat `/approve` flow and shared approval buttons.
@@ -313,6 +319,9 @@ Shared behavior:
   routing, not Slack exec approvers
 - Slack native buttons preserve approval id kind, so `plugin:` ids can resolve plugin approvals
   without a second Slack-local fallback layer
+- WhatsApp emoji approvals handle both exec and plugin prompts only when the matching top-level
+  forwarding family is enabled and routes to WhatsApp; target-only WhatsApp forwarding stays on
+  the shared forwarding path unless it matches the same native origin target
 - Matrix native DM/channel routing and reaction shortcuts handle both exec and plugin approvals;
   plugin authorization still comes from `channels.matrix.dm.allowFrom`
 - Matrix native prompts include `com.openclaw.approval` custom event content on the first prompt
