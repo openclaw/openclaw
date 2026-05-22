@@ -54,6 +54,7 @@ import { logVerbose } from "../../globals.js";
 import { emitAgentEvent, registerAgentRunContext } from "../../infra/agent-events.js";
 import { isDiagnosticsEnabled } from "../../infra/diagnostic-events.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import type { ExecOutcomeClassification } from "../../infra/exec-outcome-classification-types.js";
 import { logSessionTurnCreated } from "../../logging/diagnostic.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { CommandLaneClearedError, GatewayDrainingError } from "../../process/command-queue.js";
@@ -261,6 +262,12 @@ function createAgentTurnTimingTracker(options: { profilerEnabled?: boolean } = {
 
 function readApprovalScopeValue(value: unknown): "turn" | "session" | undefined {
   return value === "turn" || value === "session" ? value : undefined;
+}
+
+function readCommandOutputClassification(value: unknown): ExecOutcomeClassification | undefined {
+  return value === "success" || value === "benign_no_result" || value === "failure"
+    ? value
+    : undefined;
 }
 
 export type RuntimeFallbackAttempt = {

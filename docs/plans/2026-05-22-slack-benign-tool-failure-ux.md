@@ -32,6 +32,7 @@ Plan assumption: benign no-result notices should be suppressed in Slack by defau
 6. Do not downgrade missing paths, permission errors, command-not-found, syntax errors, or timeouts.
 7. Preserve raw exit/output data and expose the narrow classification in diagnostics/events.
 8. Keep the classifier conservative and command-pattern-specific.
+9. Do not classify a command as benign merely because the shell text mentions `rg`; the failing command shape must be a direct `rg` invocation or an `xargs` invocation that launches `rg`.
 
 ## Implementation Units
 
@@ -47,8 +48,8 @@ Approach:
 
 - Add a small pure classifier for completed exec outcomes, keyed by command text, exit code, timeout flag, and aggregate output.
 - Return one of `success`, `benign_no_result`, or `failure`.
-- Classify direct `rg` exit `1` with no error-looking output as `benign_no_result`.
-- Classify `xargs`-wrapped `rg` exit `123` with no error-looking output as `benign_no_result`.
+- Classify direct `rg` exit `1` with no error-looking output as `benign_no_result` only when the command shape itself is a direct `rg` command, optionally preceded by environment assignments or wrappers that immediately execute `rg`.
+- Classify `xargs`-wrapped `rg` exit `123` with no error-looking output as `benign_no_result` only when an `xargs` command segment visibly launches `rg`.
 - Treat exit `0` as `success`.
 - Treat timeout, shell failures, stderr/error-looking aggregate output, and unsupported commands as `failure` or unclassified.
 - Extend command output event data with an optional `outcomeClassification` field and optional human status label.
@@ -58,6 +59,9 @@ Verification:
 - Direct `rg` no-match exits classify as `benign_no_result`.
 - `find ... | xargs rg ...` no-match exits classify as `benign_no_result`.
 - Missing path, permission denied, command not found, syntax error, timeout, and unrelated exit `123` do not classify as benign.
+- Commands that merely mention `rg`, such as `echo rg >/dev/null; false`, do not classify as benign.
+- Pipelines that mention `rg` but fail somewhere else do not classify as benign.
+- `xargs` commands that do not launch `rg`, such as `printf rg | xargs false`, do not classify as benign.
 
 ### U2: Emit classification through command-output events
 

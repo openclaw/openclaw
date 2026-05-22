@@ -1,31 +1,167 @@
-export type ExecOutcomeClassification = "success" | "benign_no_result" | "failure";
+import { isEnvAssignmentToken, resolveCarrierCommandArgv } from "../infra/command-carriers.js";
+import type { ExecOutcomeClassification } from "../infra/exec-outcome-classification-types.js";
+import { normalizeExecutableToken } from "../infra/exec-wrapper-tokens.js";
+import { splitShellArgs } from "../utils/shell-argv.js";
+import type { ExecProcessOutcome } from "./bash-tools.exec-runtime.js";
+
+export type { ExecOutcomeClassification } from "../infra/exec-outcome-classification-types.js";
 
 export type ExecOutcomeClassificationInput = {
   command?: string;
-  status?: string;
+  status?: ExecProcessOutcome["status"];
   exitCode?: number | null;
   timedOut?: boolean;
   aggregated?: string;
 };
 
 const EXIT_FOOTER_RE = /\n*\(Command exited with code \d+\)\s*$/u;
-const RG_TOKEN_RE = /(?:^|[\s|;&()])rg(?:\s|$)/iu;
-const XARGS_TOKEN_RE = /(?:^|[\s|;&()])xargs(?:\s|$)/iu;
+
+const xargsOptionsWithValue = new Set([
+  "-a",
+  "--arg-file",
+  "-d",
+  "--delimiter",
+  "-E",
+  "-e",
+  "-I",
+  "-i",
+  "-L",
+  "-l",
+  "-n",
+  "--max-args",
+  "-P",
+  "--max-procs",
+  "-s",
+  "--max-chars",
+]);
 
 function cleanAggregateOutput(value: string | undefined): string {
   return (value ?? "").replace(EXIT_FOOTER_RE, "").trim();
 }
 
+function splitUnquotedPipes(command: string): string[] | null {
+  const segments: string[] = [];
+  let segment = "";
+  let inSingle = false;
+  let inDouble = false;
+  let escaped = false;
+
+  for (let index = 0; index < command.length; index += 1) {
+    const char = command[index];
+    if (escaped) {
+      segment += char;
+      escaped = false;
+      continue;
+    }
+    if (!inSingle && char === "\\") {
+      segment += char;
+      escaped = true;
+      continue;
+    }
+    if (!inDouble && char === "'") {
+      inSingle = !inSingle;
+      segment += char;
+      continue;
+    }
+    if (!inSingle && char === '"') {
+      inDouble = !inDouble;
+      segment += char;
+      continue;
+    }
+    if (!inSingle && !inDouble) {
+      if (char === ";") {
+        return null;
+      }
+      if (
+        (char === "&" && command[index + 1] === "&") ||
+        (char === "|" && command[index + 1] === "|")
+      ) {
+        return null;
+      }
+      if (char === "|") {
+        segments.push(segment);
+        segment = "";
+        continue;
+      }
+    }
+    segment += char;
+  }
+
+  if (escaped || inSingle || inDouble) {
+    return null;
+  }
+  segments.push(segment);
+  return segments;
+}
+
+function firstExecutable(command: string): string | undefined {
+  let argv = splitShellArgs(command);
+  for (let depth = 0; argv && depth < 4; depth += 1) {
+    while (isEnvAssignmentToken(argv[0] ?? "")) {
+      argv = argv.slice(1);
+    }
+    const carriedArgv = resolveCarrierCommandArgv(argv, 0, { includeExec: true });
+    if (!carriedArgv) {
+      return normalizeExecutableToken(argv[0] ?? "");
+    }
+    argv = carriedArgv;
+  }
+  return undefined;
+}
+
 function isDirectRgNoMatch(params: { command: string; exitCode: number }): boolean {
-  return params.exitCode === 1 && RG_TOKEN_RE.test(params.command);
+  const segments = splitUnquotedPipes(params.command);
+  if (params.exitCode !== 1 || !segments || segments.length !== 1) {
+    return false;
+  }
+  return firstExecutable(segments[0] ?? "") === "rg";
 }
 
 function isXargsRgNoMatch(params: { command: string; exitCode: number }): boolean {
-  return (
-    params.exitCode === 123 &&
-    XARGS_TOKEN_RE.test(params.command) &&
-    RG_TOKEN_RE.test(params.command)
-  );
+  const segments = splitUnquotedPipes(params.command);
+  if (
+    params.exitCode !== 123 ||
+    !params.command.includes("xargs") ||
+    !params.command.includes("rg") ||
+    !segments
+  ) {
+    return false;
+  }
+
+  return segments.some((segment) => xargsCommandLaunchesRg(splitShellArgs(segment)));
+}
+
+function xargsCommandLaunchesRg(words: string[] | null): boolean {
+  if (!words) {
+    return false;
+  }
+  const xargsIndex = words.findIndex((word) => normalizeExecutableToken(word) === "xargs");
+  if (xargsIndex < 0) {
+    return false;
+  }
+
+  for (let index = xargsIndex + 1; index < words.length; index += 1) {
+    const word = words[index];
+    if (!word) {
+      continue;
+    }
+    if (word === "--") {
+      return normalizeExecutableToken(words[index + 1] ?? "") === "rg";
+    }
+    if (xargsOptionsWithValue.has(word)) {
+      index += 1;
+      continue;
+    }
+    if (word.startsWith("--") && word.includes("=")) {
+      continue;
+    }
+    if (word.startsWith("-")) {
+      continue;
+    }
+    return normalizeExecutableToken(word) === "rg";
+  }
+
+  return false;
 }
 
 export function classifyExecOutcome(
@@ -42,7 +178,7 @@ export function classifyExecOutcome(
   }
 
   const command = params.command?.trim();
-  if (!command) {
+  if (!command || !command.includes("rg")) {
     return "failure";
   }
   if (cleanAggregateOutput(params.aggregated)) {

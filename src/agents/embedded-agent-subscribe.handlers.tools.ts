@@ -1395,7 +1395,10 @@ export async function handleToolExecutionEnd(
         execDetails?.status === "failed" || isToolError ? "failed" : "completed";
       const outcomeClassification = classifyExecOutcome({
         command: readExecCommandFromArgs(startArgs),
-        status: execDetails?.status,
+        status:
+          execDetails?.status === "completed" || execDetails?.status === "failed"
+            ? execDetails.status
+            : undefined,
         exitCode:
           execDetails && "exitCode" in execDetails && typeof execDetails.exitCode === "number"
             ? execDetails.exitCode

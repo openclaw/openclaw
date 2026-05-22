@@ -16,6 +16,36 @@ describe("classifyExecOutcome", () => {
     ).toBe("benign_no_result");
   });
 
+  it("classifies env-wrapped direct rg no-match exit 1 as benign", () => {
+    expect(
+      classifyExecOutcome({
+        command: "LC_ALL=C command rg 'missing phrase' docs",
+        status: "completed",
+        exitCode: 1,
+        aggregated: "\n\n(Command exited with code 1)",
+      }),
+    ).toBe("benign_no_result");
+  });
+
+  it("classifies direct rg no-match with quoted regex operators as benign", () => {
+    expect(
+      classifyExecOutcome({
+        command: "rg 'foo|bar' docs",
+        status: "completed",
+        exitCode: 1,
+        aggregated: "\n\n(Command exited with code 1)",
+      }),
+    ).toBe("benign_no_result");
+    expect(
+      classifyExecOutcome({
+        command: "rg ';' docs",
+        status: "completed",
+        exitCode: 1,
+        aggregated: "\n\n(Command exited with code 1)",
+      }),
+    ).toBe("benign_no_result");
+  });
+
   it("classifies xargs-wrapped rg no-match exit 123 as benign", () => {
     expect(
       classifyExecOutcome({
@@ -80,10 +110,54 @@ describe("classifyExecOutcome", () => {
     ).toBe("failure");
   });
 
+  it("does not downgrade commands that only mention rg before failing", () => {
+    expect(
+      classifyExecOutcome({
+        command: "echo rg >/dev/null; false",
+        status: "completed",
+        exitCode: 1,
+        aggregated: "\n\n(Command exited with code 1)",
+      }),
+    ).toBe("failure");
+  });
+
+  it("does not downgrade shell lists where rg is followed by another failing command", () => {
+    expect(
+      classifyExecOutcome({
+        command: "rg 'missing phrase' docs; false",
+        status: "completed",
+        exitCode: 1,
+        aggregated: "\n\n(Command exited with code 1)",
+      }),
+    ).toBe("failure");
+  });
+
+  it("does not downgrade unrelated pipelines that mention rg before failing", () => {
+    expect(
+      classifyExecOutcome({
+        command: "printf 'rg\\n' | false",
+        status: "completed",
+        exitCode: 1,
+        aggregated: "\n\n(Command exited with code 1)",
+      }),
+    ).toBe("failure");
+  });
+
   it("does not downgrade unrelated xargs exit 123", () => {
     expect(
       classifyExecOutcome({
         command: "find docs -type f | xargs false",
+        status: "completed",
+        exitCode: 123,
+        aggregated: "\n\n(Command exited with code 123)",
+      }),
+    ).toBe("failure");
+  });
+
+  it("does not downgrade xargs commands that receive rg text but launch another command", () => {
+    expect(
+      classifyExecOutcome({
+        command: "printf 'rg\\n' | xargs false",
         status: "completed",
         exitCode: 123,
         aggregated: "\n\n(Command exited with code 123)",
