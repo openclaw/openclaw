@@ -455,6 +455,36 @@ function isPureBillingSummary(err: unknown): boolean {
   );
 }
 
+function fallbackSummaryHasContextOverflowAttempt(err: unknown): boolean {
+  return (
+    isFallbackSummaryError(err) &&
+    err.attempts.some((attempt) => isLikelyContextOverflowError(formatErrorMessage(attempt.error)))
+  );
+}
+
+function fallbackSummaryHasUnavailableFallbackAttempt(err: unknown): boolean {
+  return (
+    isFallbackSummaryError(err) &&
+    err.attempts.some((attempt) => {
+      if (attempt.reason === "billing" || attempt.reason === "rate_limit") {
+        return true;
+      }
+      const message = formatErrorMessage(attempt.error);
+      return isBillingErrorMessage(message) || isRateLimitErrorMessage(message);
+    })
+  );
+}
+
+function buildContextOverflowBeforeReplyText(params?: { fallbackUnavailable?: boolean }): string {
+  return (
+    "⚠️ Context limit exceeded before I could reply. The current thread is too large for the primary model. " +
+    "Use /compact or /new, then retry with a narrower request." +
+    (params?.fallbackUnavailable
+      ? " A fallback model was also unavailable because of billing or rate-limit cooldown, so automatic recovery could not continue."
+      : "")
+  );
+}
+
 function collapseRepeatedFailureDetail(message: string): string {
   const parts = message
     .split(/\s+\|\s+/u)
@@ -630,6 +660,24 @@ export function buildKnownAgentRunFailureReplyPayload(params: {
     return markAgentRunFailureReplyPayload({
       text: resolveExternalRunFailureTextForConversation({
         text: BILLING_ERROR_USER_MESSAGE,
+        sessionCtx: params.sessionCtx,
+        isGenericRunnerFailure: false,
+        cfg: params.cfg,
+      }),
+    });
+  }
+
+  const hasFallbackContextOverflow = fallbackSummaryHasContextOverflowAttempt(params.err);
+  const isContextOverflow =
+    (isFallbackSummary && hasFallbackContextOverflow) ||
+    (!isFallbackSummary && isLikelyContextOverflowError(message));
+  if (isContextOverflow) {
+    return markAgentRunFailureReplyPayload({
+      text: resolveExternalRunFailureTextForConversation({
+        text: buildContextOverflowBeforeReplyText({
+          fallbackUnavailable:
+            isFallbackSummary && fallbackSummaryHasUnavailableFallbackAttempt(params.err),
+        }),
         sessionCtx: params.sessionCtx,
         isGenericRunnerFailure: false,
         cfg: params.cfg,
@@ -2213,10 +2261,15 @@ export async function runAgentTurnWithFallback(params: {
         continue;
       }
       const message = formatErrorMessage(err);
-      const isBilling = isFallbackSummaryError(err)
+      const isFallbackSummary = isFallbackSummaryError(err);
+      const isBilling = isFallbackSummary
         ? isPureBillingSummary(err)
         : isBillingErrorMessage(message);
-      const isContextOverflow = !isBilling && isLikelyContextOverflowError(message);
+      const hasFallbackContextOverflow = fallbackSummaryHasContextOverflowAttempt(err);
+      const isContextOverflow =
+        !isBilling &&
+        ((isFallbackSummary && hasFallbackContextOverflow) ||
+          (!isFallbackSummary && isLikelyContextOverflowError(message)));
       const isCompactionFailure = !isBilling && isCompactionFailureError(message);
       const providerRequestError =
         !isBilling && !shouldSurfaceToControlUi ? classifyProviderRequestError(err) : undefined;
@@ -2312,7 +2365,6 @@ export async function runAgentTurnWithFallback(params: {
       // underlying error. FallbackSummaryError messages embed per-attempt
       // reason labels like `(rate_limit)`, so string-matching the summary text
       // would misclassify mixed-cause exhaustion as a pure transient cooldown.
-      const isFallbackSummary = isFallbackSummaryError(err);
       const isPureTransientSummary = isFallbackSummary
         ? isPureTransientRateLimitSummary(err)
         : false;
@@ -2348,7 +2400,10 @@ export async function runAgentTurnWithFallback(params: {
           : rateLimitOrOverloadedCopy
             ? rateLimitOrOverloadedCopy
             : isContextOverflow
-              ? "⚠️ Context overflow — prompt too large for this model. Try a shorter message or a larger-context model."
+              ? buildContextOverflowBeforeReplyText({
+                  fallbackUnavailable:
+                    isFallbackSummary && fallbackSummaryHasUnavailableFallbackAttempt(err),
+                })
               : shouldSurfaceToControlUi
                 ? `⚠️ Agent failed before reply: ${trimmedMessage}.\nLogs: openclaw logs --follow`
                 : (externalRunFailureReply?.text ?? genericFallbackText);

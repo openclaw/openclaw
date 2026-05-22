@@ -24,6 +24,9 @@ const state = vi.hoisted(() => ({
   runWithModelFallbackMock: vi.fn(),
   isCliProviderMock: vi.fn((_: unknown) => false),
   isInternalMessageChannelMock: vi.fn((_: unknown) => false),
+  isBillingErrorMessageMock: vi.fn((_: string | undefined) => false),
+  isLikelyContextOverflowErrorMock: vi.fn((_: string | undefined) => false),
+  isRateLimitErrorMessageMock: vi.fn((_: string | undefined) => false),
   createBlockReplyDeliveryHandlerMock: vi.fn(),
 }));
 
@@ -89,11 +92,11 @@ vi.mock("../../agents/pi-embedded-helpers.js", () => ({
   },
   isCompactionFailureError: () => false,
   isContextOverflowError: () => false,
-  isBillingErrorMessage: () => false,
-  isLikelyContextOverflowError: () => false,
+  isBillingErrorMessage: (message?: string) => state.isBillingErrorMessageMock(message),
+  isLikelyContextOverflowError: (message?: string) =>
+    state.isLikelyContextOverflowErrorMock(message),
   isOverloadedErrorMessage: (message: string) => /overloaded|capacity/i.test(message),
-  isRateLimitErrorMessage: (message: string) =>
-    /rate.limit|too many requests|429|usage limit/i.test(message),
+  isRateLimitErrorMessage: (message?: string) => state.isRateLimitErrorMessageMock(message),
   isTransientHttpError: () => false,
   sanitizeUserFacingText: (text?: string) => text ?? "",
 }));
@@ -484,6 +487,15 @@ describe("runAgentTurnWithFallback", () => {
     state.isCliProviderMock.mockReturnValue(false);
     state.isInternalMessageChannelMock.mockReset();
     state.isInternalMessageChannelMock.mockReturnValue(false);
+    state.isBillingErrorMessageMock.mockReset();
+    state.isBillingErrorMessageMock.mockReturnValue(false);
+    state.isLikelyContextOverflowErrorMock.mockReset();
+    state.isLikelyContextOverflowErrorMock.mockReturnValue(false);
+    state.isRateLimitErrorMessageMock.mockReset();
+    state.isRateLimitErrorMessageMock.mockImplementation(
+      (message?: string) =>
+        !!message && /rate.limit|too many requests|429|usage limit/i.test(message),
+    );
     state.createBlockReplyDeliveryHandlerMock.mockReset();
     state.createBlockReplyDeliveryHandlerMock.mockReturnValue(undefined);
     state.runWithModelFallbackMock.mockImplementation(async (params: FallbackRunnerParams) => ({
@@ -3410,6 +3422,72 @@ describe("runAgentTurnWithFallback", () => {
       expect(result.payload.text).not.toContain("All models failed");
       expect(result.payload.text).not.toContain("402 (billing)");
       expect(result.payload.text).not.toContain("Rate-limited");
+    }
+  });
+
+  it("surfaces context overflow when fallback exhaustion mixes primary overflow with billing", async () => {
+    state.isLikelyContextOverflowErrorMock.mockImplementation(
+      (message?: string) =>
+        !!message && /ran out of room in the model'?s context window/i.test(message),
+    );
+    state.runWithModelFallbackMock.mockRejectedValueOnce(
+      Object.assign(
+        new Error(
+          "All models failed (2): openai/gpt-5.5: Codex ran out of room in the model's context window (unknown) | anthropic/claude-sonnet-4-6: Provider anthropic has billing issue (skipping all models) (billing)",
+        ),
+        {
+          name: "FallbackSummaryError",
+          attempts: [
+            {
+              provider: "openai",
+              model: "gpt-5.5",
+              error:
+                "Codex ran out of room in the model's context window. Start a new thread or clear earlier history before retrying.",
+              reason: "unknown",
+            },
+            {
+              provider: "anthropic",
+              model: "claude-sonnet-4-6",
+              error: "Provider anthropic has billing issue (skipping all models)",
+              reason: "billing",
+            },
+          ],
+          soonestCooldownExpiry: null,
+        },
+      ),
+    );
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const result = await runAgentTurnWithFallback({
+      commandBody: "hello",
+      followupRun: createFollowupRun(),
+      sessionCtx: {
+        Provider: "telegram",
+        MessageSid: "msg",
+      } as unknown as TemplateContext,
+      opts: {},
+      typingSignals: createMockTypingSignaler(),
+      blockReplyPipeline: null,
+      blockStreamingEnabled: false,
+      resolvedBlockStreamingBreak: "message_end",
+      applyReplyToMode: (payload) => payload,
+      shouldEmitToolResult: () => true,
+      shouldEmitToolOutput: () => false,
+      pendingToolTasks: new Set(),
+      resetSessionAfterCompactionFailure: async () => false,
+      resetSessionAfterRoleOrderingConflict: async () => false,
+      isHeartbeat: false,
+      sessionKey: "main",
+      getActiveSessionEntry: () => undefined,
+      resolvedVerboseLevel: "off",
+    });
+
+    expect(result.kind).toBe("final");
+    if (result.kind === "final") {
+      expect(result.payload.text).toContain("Context limit exceeded");
+      expect(result.payload.text).toContain("fallback model was also unavailable");
+      expect(result.payload.text).not.toBe(GENERIC_RUN_FAILURE_TEXT);
+      expect(result.payload.text).not.toContain("All models failed");
     }
   });
 
