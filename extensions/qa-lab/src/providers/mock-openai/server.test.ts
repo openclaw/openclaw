@@ -1238,6 +1238,93 @@ describe("qa mock openai server", () => {
     expect(finalBody).not.toContain("fully complete");
   });
 
+  it("writes personal redacted traceability artifacts without leaking raw source material", async () => {
+    const server = await startQaMockOpenAiServer({
+      host: "127.0.0.1",
+      port: 0,
+    });
+    cleanups.push(async () => {
+      await server.stop();
+    });
+
+    const prompt =
+      "Personal redacted traceability check. Read TRACEABILITY_REQUEST.md and PERSONAL_TRAJECTORY_RAW.md first. Then write ./personal-redacted-traceability.txt with Evidence map, Redactions applied, Unsupported claims, and Next step.";
+
+    const first = await fetch(`${server.baseUrl}/v1/responses`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        stream: true,
+        model: "gpt-5.5",
+        input: [{ role: "user", content: [{ type: "input_text", text: prompt }] }],
+      }),
+    });
+    expect(first.status).toBe(200);
+    const firstBody = await first.text();
+    expect(firstBody).toContain('"arguments":"{\\"path\\":\\"TRACEABILITY_REQUEST.md\\"}"');
+    expect(firstBody).not.toContain("QA_FAKE_TRACE_SECRET_62019");
+
+    const writePlan = await fetch(`${server.baseUrl}/v1/responses`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        stream: true,
+        model: "gpt-5.5",
+        input: [
+          { role: "user", content: [{ type: "input_text", text: prompt }] },
+          {
+            type: "function_call_output",
+            output:
+              "# Personal redacted traceability request\n\nRequired contract:\n1. Read TRACEABILITY_REQUEST.md.\n2. Read PERSONAL_TRAJECTORY_RAW.md.\n3. Write ./personal-redacted-traceability.txt.\n",
+          },
+          {
+            role: "user",
+            content: [
+              {
+                type: "input_text",
+                text: "# Raw personal trajectory fixture\n\nEvidence read: PR_BODY_DRAFT.md and local test output were inspected.\nExternal status: not sent, not published, not uploaded, not merged.\nRaw transcript text: please keep this private wording out of the export\nRaw tool output: RAW_TOOL_OUTPUT_DO_NOT_COPY_49201\nFake account id: qa-personal-account-554433\nFake message id: qa-personal-message-778899\nFake secret: QA_FAKE_TRACE_SECRET_62019\nPrivate contact: private-reviewer@example.invalid\n",
+              },
+            ],
+          },
+        ],
+      }),
+    });
+
+    expect(writePlan.status).toBe(200);
+    const writeBody = await writePlan.text();
+    expect(writeBody).toContain('"name":"write"');
+    expect(writeBody).toContain("personal-redacted-traceability.txt");
+    expect(writeBody).toContain("Evidence map:");
+    expect(writeBody).not.toContain("please keep this private wording");
+    expect(writeBody).not.toContain("RAW_TOOL_OUTPUT_DO_NOT_COPY_49201");
+    expect(writeBody).not.toContain("QA_FAKE_TRACE_SECRET_62019");
+    expect(writeBody).not.toContain("private-reviewer@example.invalid");
+
+    const final = await fetch(`${server.baseUrl}/v1/responses`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        stream: true,
+        model: "gpt-5.5",
+        input: [
+          { role: "user", content: [{ type: "input_text", text: prompt }] },
+          {
+            type: "function_call_output",
+            output:
+              "Successfully wrote personal-redacted-traceability.txt with evidence map and redactions applied.",
+          },
+        ],
+      }),
+    });
+
+    expect(final.status).toBe(200);
+    const finalBody = await final.text();
+    expect(finalBody).toContain("PERSONAL-REDACTED-TRACEABILITY-OK");
+    expect(finalBody).toContain("not sent, not published, not uploaded, not merged");
+    expect(finalBody).not.toContain("QA_FAKE_TRACE_SECRET_62019");
+    expect(finalBody).not.toContain("sent successfully");
+  });
+
   it("drives the compaction retry mutating tool parity flow", async () => {
     const server = await startQaMockOpenAiServer({
       host: "127.0.0.1",

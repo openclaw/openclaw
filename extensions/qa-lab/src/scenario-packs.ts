@@ -18,6 +18,7 @@ export const QA_PERSONAL_AGENT_SCENARIO_IDS = [
   "personal-share-safe-diagnostics-artifact",
   "personal-no-fake-progress",
   "personal-failure-recovery",
+  "personal-redacted-traceability",
 ] as const;
 
 export const QA_OBSERVABILITY_SCENARIO_IDS = [
@@ -30,7 +31,7 @@ export const QA_SCENARIO_PACKS = [
     id: "personal-agent",
     title: "Personal Agent Benchmark Pack",
     description:
-      "Local-only personal assistant workflow scenarios for reminders, channel replies, memory recall, redaction, safe tool followthrough, approval denial, task status honesty, share-safe diagnostics, proof-backed completion claims, and failure recovery.",
+      "Local-only personal assistant workflow scenarios for reminders, channel replies, memory recall, redaction, safe tool followthrough, approval denial, task status honesty, share-safe diagnostics, proof-backed completion claims, failure recovery, and redacted traceability.",
     scenarioIds: QA_PERSONAL_AGENT_SCENARIO_IDS,
   },
   {

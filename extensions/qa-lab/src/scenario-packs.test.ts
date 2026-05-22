@@ -42,6 +42,7 @@ describe("qa scenario packs", () => {
       "personal-share-safe-diagnostics-artifact",
       "personal-no-fake-progress",
       "personal-failure-recovery",
+      "personal-redacted-traceability",
     ]);
 
     for (const scenarioId of personalPack?.scenarioIds ?? []) {
@@ -97,6 +98,8 @@ describe("qa scenario packs", () => {
     const noFakeProgressFlow = JSON.stringify(noFakeProgressScenario.execution.flow);
     const failureRecoveryScenario = readQaScenarioById("personal-failure-recovery");
     const failureRecoveryFlow = JSON.stringify(failureRecoveryScenario.execution.flow);
+    const traceabilityScenario = readQaScenarioById("personal-redacted-traceability");
+    const traceabilityFlow = JSON.stringify(traceabilityScenario.execution.flow);
     const memoryScenario = readQaScenarioById("personal-memory-preference-recall");
     const memoryFlow = JSON.stringify(memoryScenario.execution.flow);
 
@@ -157,6 +160,19 @@ describe("qa scenario packs", () => {
     expect(failureRecoveryFlow).toContain("length === 1");
     expect(failureRecoveryScenario.successCriteria.join("\n").toLowerCase()).toContain(
       "retry boundary",
+    );
+
+    expect(traceabilityScenario.execution.config?.prompt).toContain(
+      "Personal redacted traceability check",
+    );
+    expect(traceabilityScenario.execution.config?.artifactName).toBe(
+      "personal-redacted-traceability.txt",
+    );
+    expect(traceabilityFlow).toContain("plannedToolName === 'write'");
+    expect(traceabilityFlow).toContain("readIndices[1] < firstWrite");
+    expect(traceabilityFlow).toContain("forbiddenNeedles");
+    expect(traceabilityScenario.successCriteria.join("\n").toLowerCase()).toContain(
+      "omit fake secrets",
     );
 
     expect(memoryFlow).toContain("config.rememberPrompt");

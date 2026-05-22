@@ -822,6 +822,7 @@ describe("qa cli runtime", () => {
         "personal-share-safe-diagnostics-artifact",
         "personal-no-fake-progress",
         "personal-failure-recovery",
+        "personal-redacted-traceability",
       ],
     });
   });

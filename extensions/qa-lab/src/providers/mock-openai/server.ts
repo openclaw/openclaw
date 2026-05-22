@@ -2220,6 +2220,49 @@ async function buildResponsesPayload(
       return buildToolCallEventsWithArgs("read", { path: "FAILURE_RECOVERY_EVIDENCE.md" });
     }
   }
+  if (/personal redacted\s+traceability check/i.test(allInputText)) {
+    const traceabilityEvidenceText = [
+      extractAllToolOutputText(input),
+      extractUserTextAfterLatestToolOutput(input),
+    ]
+      .filter(Boolean)
+      .join("\n");
+    if (/successfully (?:wrote|created|updated|replaced)/i.test(traceabilityEvidenceText)) {
+      return buildAssistantEvents(
+        [
+          "Artifact: personal-redacted-traceability.txt",
+          "External status: not sent, not published, not uploaded, not merged",
+          "PERSONAL-REDACTED-TRACEABILITY-OK",
+        ].join("\n"),
+      );
+    }
+    if (
+      !traceabilityEvidenceText ||
+      (!traceabilityEvidenceText.includes("# Personal redacted traceability request") &&
+        !traceabilityEvidenceText.includes("# Raw personal trajectory fixture"))
+    ) {
+      return buildToolCallEventsWithArgs("read", { path: "TRACEABILITY_REQUEST.md" });
+    }
+    if (
+      traceabilityEvidenceText.includes("# Personal redacted traceability request") &&
+      traceabilityEvidenceText.includes("# Raw personal trajectory fixture")
+    ) {
+      return buildToolCallEventsWithArgs("write", {
+        path: "personal-redacted-traceability.txt",
+        content: [
+          "Personal redacted traceability",
+          "Evidence map: PR_BODY_DRAFT.md and local test output were inspected before this artifact was written",
+          "Redactions applied: raw transcript text, raw tool output, account id, message id, fake secret, and private contact",
+          "Unsupported claims: external PR submission and approval are not evidenced",
+          "External status: not sent; not published; not uploaded; not merged",
+          "Next step: ask for approval before any external send or publication",
+        ].join("\n"),
+      });
+    }
+    if (traceabilityEvidenceText.includes("# Personal redacted traceability request")) {
+      return buildToolCallEventsWithArgs("read", { path: "PERSONAL_TRAJECTORY_RAW.md" });
+    }
+  }
   if (/lobster invaders/i.test(prompt)) {
     if (!toolOutput) {
       return buildToolCallEventsWithArgs("read", { path: "QA_KICKOFF_TASK.md" });
