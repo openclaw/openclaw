@@ -99,7 +99,7 @@ async function main(): Promise<void> {
       resolveVitestCliEntry(),
       "run",
       "--config",
-      "test/vitest/vitest.tui.config.ts",
+      "test/vitest/vitest.tui-pty.config.ts",
       ...MODE_TEST_FILES[options.mode],
       "--reporter=dot",
       ...options.vitestArgs,
@@ -179,7 +179,7 @@ async function main(): Promise<void> {
       stopChild();
     }
   };
-  const hadRawMode = Boolean(process.stdin.isTTY && process.stdin.isRaw);
+  const hadRawMode = process.stdin.isTTY && process.stdin.isRaw;
   if (useAltScreen && process.stdin.isTTY) {
     process.stdin.setRawMode(true);
     process.stdin.resume();
@@ -243,7 +243,10 @@ async function main(): Promise<void> {
   process.once("SIGINT", stopChild);
 
   try {
-    while (!childExit) {
+    for (;;) {
+      if (childExit) {
+        break;
+      }
       const result = await readNewMirrorData(options.mirrorPath, mirrorOffset);
       mirrorOffset = result.offset;
       if (result.chunk.byteLength > 0) {

@@ -79,7 +79,7 @@ Scope logic lives in `scripts/ci-changed-scope.mjs` and is covered by unit tests
 
 - **CI workflow edits** validate the Node CI graph plus workflow linting, but do not force Windows, Android, or macOS native builds by themselves; those platform lanes stay scoped to platform source changes.
 - **Docs on `main` pushes** are checked by the standalone `Docs` workflow with the same ClawHub docs mirror used by CI, so mixed code+docs pushes do not also queue the CI `check-docs` shard. Pull requests and manual CI still run `check-docs` from CI when docs changed.
-- **TUI PTY** is a focused workflow for TUI changes. It runs `node scripts/run-vitest.mjs src/tui/tui-pty-harness.test.ts src/tui/tui-pty-local.test.ts` on Linux Node 24 for `src/tui/**`, the watch harness, package script, lockfile, and workflow edits. The local lane runs `tui --local` and mocks only the external model endpoint; the fake-backend lane proves fast terminal-loop behavior against a deterministic `TuiBackend` fixture.
+- **TUI PTY** is a focused workflow for TUI changes. It runs `node scripts/run-vitest.mjs run --config test/vitest/vitest.tui-pty.config.ts` on Linux Node 24 for `src/tui/**`, the watch harness, package script, lockfile, and workflow edits. The local lane runs `tui --local` and mocks only the external model endpoint; the fake-backend lane proves fast terminal-loop behavior against a deterministic `TuiBackend` fixture.
 - **CI routing-only edits, selected cheap core-test fixture edits, and narrow plugin contract helper/test-routing edits** use a fast Node-only manifest path: `preflight`, security, and a single `checks-fast-core` task. That path skips build artifacts, Node 22 compatibility, channel contracts, full core shards, bundled-plugin shards, and additional guard matrices when the change is limited to the routing or helper surfaces the fast task exercises directly.
 - **Windows Node checks** are scoped to Windows-specific process/path wrappers, npm/pnpm/UI runner helpers, package manager config, and the CI workflow surfaces that execute that lane; unrelated source, plugin, install-smoke, and test-only changes stay on the Linux Node lanes.
 
@@ -143,7 +143,7 @@ pnpm check:timed                              # same gate with per-stage timings
 pnpm build:strict-smoke
 pnpm check:architecture
 pnpm test:gateway:watch-regression
-node scripts/run-vitest.mjs src/tui/tui-pty-harness.test.ts src/tui/tui-pty-local.test.ts
+node scripts/run-vitest.mjs run --config test/vitest/vitest.tui-pty.config.ts
 pnpm test                                     # vitest tests
 pnpm test:changed                             # cheap smart changed Vitest targets
 pnpm test:channels

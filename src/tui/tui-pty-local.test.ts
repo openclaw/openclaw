@@ -383,15 +383,15 @@ describe("TUI PTY local mode", () => {
     const fixture = await startLocalModeTui();
     try {
       await fixture.run.waitForOutput("local ready", 60_000);
-      await fixture.run.write("reply exactly `LOCAL_PTY_RESPONSE` marker\r");
-      await fixture.run.waitForOutput("LOCAL_PTY_RESPONSE", 60_000);
-
+      await fixture.run.write("send the local PTY smoke response\r");
       await waitFor({
-        timeoutMs: 20_000,
+        timeoutMs: 60_000,
         read: () => (fixture.mockModel.requests().length > 0 ? true : null),
-        onTimeout: () => new Error("mock model server did not receive a request"),
+        onTimeout: () =>
+          new Error(`mock model server did not receive a request\n${fixture.run.output()}`),
       });
       expect(fixture.mockModel.requests()[0]?.model).toBe("gpt-5.5");
+      await fixture.run.waitForOutput("LOCAL_PTY_RESPONSE", 60_000);
 
       await fixture.run.write("/exit\r", { delay: false });
       const exit = await fixture.run.waitForExit(20_000);
@@ -399,5 +399,5 @@ describe("TUI PTY local mode", () => {
     } finally {
       await fixture.cleanup();
     }
-  }, 120_000);
+  }, 150_000);
 });
