@@ -1269,6 +1269,145 @@ const openAIOAuthTlsCheck: HealthCheck = {
   },
 };
 
+const configAuditScrubCheck: HealthCheck = {
+  id: "core/doctor/config-audit-scrub",
+  kind: "core",
+  description: "Historical config audit argv values are redacted at rest.",
+  source: "doctor",
+  async detect(ctx) {
+    const { detectConfigAuditScrubIssues } =
+      await import("../commands/doctor-config-audit-scrub.js");
+    const issues = await detectConfigAuditScrubIssues({ env: ctx.env ?? process.env });
+    return issues.map(
+      (issue): HealthFinding => ({
+        checkId: "core/doctor/config-audit-scrub",
+        severity: "warning",
+        message: issue.message,
+        path: issue.auditPath,
+        fixHint: issue.fixHint,
+      }),
+    );
+  },
+  async repair(ctx, findings) {
+    const { detectConfigAuditScrubIssues, repairConfigAuditScrubIssues } =
+      await import("../commands/doctor-config-audit-scrub.js");
+    const findingPaths = new Set(
+      findings.map((finding) => finding.path).filter((path): path is string => path !== undefined),
+    );
+    const issues = (await detectConfigAuditScrubIssues({ env: ctx.env ?? process.env })).filter(
+      (issue) => findingPaths.has(issue.auditPath),
+    );
+    if (issues.length === 0) {
+      return { changes: [], effects: [] };
+    }
+    if (ctx.dryRun === true) {
+      return {
+        changes: issues.map(
+          (issue) =>
+            `Would scrub ${issue.rewritten} config audit log entr${
+              issue.rewritten === 1 ? "y" : "ies"
+            } in ${issue.auditPath}.`,
+        ),
+        effects: issues.map((issue) => ({
+          kind: "file" as const,
+          action: "would-scrub-config-audit-log",
+          target: issue.auditPath,
+          dryRunSafe: true,
+        })),
+      };
+    }
+    const result = await repairConfigAuditScrubIssues({ env: ctx.env ?? process.env });
+    return {
+      status: result.aborted ? ("skipped" as const) : ("repaired" as const),
+      reason: result.aborted ? "config audit log changed during rewrite" : undefined,
+      changes: result.changes,
+      warnings: result.warnings,
+      effects:
+        result.rewritten > 0 && !result.aborted
+          ? [
+              {
+                kind: "file" as const,
+                action: "scrub-config-audit-log",
+                target: result.auditPath,
+                dryRunSafe: true,
+              },
+            ]
+          : [],
+    };
+  },
+};
+
+const legacyCronStoreCheck: HealthCheck = {
+  id: "core/doctor/legacy-cron-store",
+  kind: "core",
+  description: "Legacy cron store jobs are detected and normalized.",
+  source: "doctor",
+  async detect(ctx) {
+    const { detectLegacyCronStoreIssues } = await import("../commands/doctor-cron.js");
+    const issues = await detectLegacyCronStoreIssues({ cfg: ctx.cfg });
+    return issues.map(
+      (issue): HealthFinding => ({
+        checkId: "core/doctor/legacy-cron-store",
+        severity: "warning",
+        message: issue.message,
+        path: issue.storePath,
+        fixHint: issue.fixHint,
+      }),
+    );
+  },
+  async repair(ctx, findings) {
+    const { detectLegacyCronStoreIssues, repairLegacyCronStoreIssues } =
+      await import("../commands/doctor-cron.js");
+    const findingPaths = new Set(
+      findings.map((finding) => finding.path).filter((path): path is string => path !== undefined),
+    );
+    const issues = (await detectLegacyCronStoreIssues({ cfg: ctx.cfg })).filter((issue) =>
+      findingPaths.has(issue.storePath),
+    );
+    if (issues.length === 0) {
+      return { changes: [], effects: [] };
+    }
+    if (ctx.dryRun === true) {
+      const previewed = await repairLegacyCronStoreIssues({
+        cfg: ctx.cfg,
+        storePaths: [...findingPaths],
+        dryRun: true,
+      });
+      return {
+        changes: previewed.flatMap((result) => result.changes),
+        warnings: previewed.flatMap((result) => result.warnings),
+        effects: previewed.map((result) => ({
+          kind: "file" as const,
+          action: "would-normalize-legacy-cron-store",
+          target: result.storePath,
+          dryRunSafe: true,
+        })),
+      };
+    }
+    const repaired = await repairLegacyCronStoreIssues({
+      cfg: ctx.cfg,
+      storePaths: [...findingPaths],
+    });
+    const changed = repaired.filter((result) => result.changed);
+    return {
+      status:
+        repaired.length > 0 && changed.length === 0 ? ("skipped" as const) : ("repaired" as const),
+      reason:
+        repaired.length > 0 && changed.length === 0
+          ? "legacy cron store issues require manual migration"
+          : undefined,
+      changes: repaired.flatMap((result) => result.changes),
+      warnings: repaired.flatMap((result) => result.warnings),
+      effects: changed.map((result) => ({
+        kind: "file" as const,
+        action: "normalize-legacy-cron-store",
+        target: result.storePath,
+        dryRunSafe: true,
+      })),
+    };
+  },
+};
+
 const legacyWhatsAppCrontabCheck: HealthCheck = {
   id: "core/doctor/legacy-whatsapp-crontab",
   kind: "core",
@@ -1996,6 +2135,8 @@ function createConvertedWorkflowChecks(deps: CoreHealthCheckDeps): readonly Heal
     pluginRegistryCheck,
     sessionLocksCheck,
     sessionTranscriptsCheck,
+    configAuditScrubCheck,
+    legacyCronStoreCheck,
     sandboxRegistryFilesCheck,
     sandboxImagesCheck,
     sandboxScopeCheck,

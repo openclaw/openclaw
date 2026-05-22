@@ -47,6 +47,14 @@ const mocks = vi.hoisted(() => ({
   noteChromeMcpBrowserReadiness: vi.fn(),
   detectLegacyClawdBrowserProfileResidue: vi.fn(),
   maybeArchiveLegacyClawdBrowserProfileResidue: vi.fn(),
+  maybeScrubConfigAuditLog: vi.fn(),
+  detectConfigAuditScrubIssues: vi.fn(),
+  repairConfigAuditScrubIssues: vi.fn(),
+  noteLegacyWhatsAppCrontabHealthCheck: vi.fn(),
+  noteCronModelOverrideDiagnostics: vi.fn(),
+  maybeRepairLegacyCronStore: vi.fn(),
+  detectLegacyCronStoreIssues: vi.fn(),
+  repairLegacyCronStoreIssues: vi.fn(),
 }));
 
 vi.mock(
@@ -142,6 +150,21 @@ vi.mock("../commands/doctor-browser.js", () => ({
   noteChromeMcpBrowserReadiness: mocks.noteChromeMcpBrowserReadiness,
   detectLegacyClawdBrowserProfileResidue: mocks.detectLegacyClawdBrowserProfileResidue,
   maybeArchiveLegacyClawdBrowserProfileResidue: mocks.maybeArchiveLegacyClawdBrowserProfileResidue,
+}));
+
+vi.mock("../commands/doctor-config-audit-scrub.js", () => ({
+  maybeScrubConfigAuditLog: mocks.maybeScrubConfigAuditLog,
+  detectConfigAuditScrubIssues: mocks.detectConfigAuditScrubIssues,
+  repairConfigAuditScrubIssues: mocks.repairConfigAuditScrubIssues,
+}));
+
+vi.mock("../commands/doctor-cron.js", () => ({
+  noteLegacyWhatsAppCrontabHealthCheck: mocks.noteLegacyWhatsAppCrontabHealthCheck,
+  noteCronModelOverrideDiagnostics: mocks.noteCronModelOverrideDiagnostics,
+  maybeRepairLegacyCronStore: mocks.maybeRepairLegacyCronStore,
+  detectLegacyCronStoreIssues: mocks.detectLegacyCronStoreIssues,
+  repairLegacyCronStoreIssues: mocks.repairLegacyCronStoreIssues,
+  collectLegacyWhatsAppCrontabHealthWarning: vi.fn(async () => null),
 }));
 
 vi.mock("../commands/doctor-gateway-services.js", () => ({
@@ -274,6 +297,30 @@ describe("doctor health contributions", () => {
       changes: ["Archived legacy clawd managed browser profile residue."],
       warnings: [],
     });
+    mocks.maybeScrubConfigAuditLog.mockReset();
+    mocks.maybeScrubConfigAuditLog.mockResolvedValue(undefined);
+    mocks.detectConfigAuditScrubIssues.mockReset();
+    mocks.detectConfigAuditScrubIssues.mockResolvedValue([]);
+    mocks.repairConfigAuditScrubIssues.mockReset();
+    mocks.repairConfigAuditScrubIssues.mockResolvedValue({
+      auditPath: "/tmp/openclaw/config-audit.jsonl",
+      scanned: 0,
+      rewritten: 0,
+      skipped: 0,
+      aborted: false,
+      changes: [],
+      warnings: [],
+    });
+    mocks.noteLegacyWhatsAppCrontabHealthCheck.mockReset();
+    mocks.noteLegacyWhatsAppCrontabHealthCheck.mockResolvedValue(undefined);
+    mocks.noteCronModelOverrideDiagnostics.mockReset();
+    mocks.noteCronModelOverrideDiagnostics.mockResolvedValue(undefined);
+    mocks.maybeRepairLegacyCronStore.mockReset();
+    mocks.maybeRepairLegacyCronStore.mockResolvedValue(undefined);
+    mocks.detectLegacyCronStoreIssues.mockReset();
+    mocks.detectLegacyCronStoreIssues.mockResolvedValue([]);
+    mocks.repairLegacyCronStoreIssues.mockReset();
+    mocks.repairLegacyCronStoreIssues.mockResolvedValue([]);
   });
 
   afterEach(() => {
@@ -397,6 +444,81 @@ describe("doctor health contributions", () => {
     );
     expect(ids.indexOf("doctor:sandbox")).toBeGreaterThan(ids.indexOf("doctor:legacy-cron"));
     expect(ids.indexOf("doctor:sandbox")).toBeLessThan(ids.indexOf("doctor:gateway-services"));
+  });
+
+  it("runs structured config audit scrub repairs at the config audit contribution position", async () => {
+    mocks.detectConfigAuditScrubIssues.mockResolvedValue([
+      {
+        auditPath: "/tmp/openclaw/logs/config-audit.jsonl",
+        scanned: 1,
+        rewritten: 1,
+        skipped: 0,
+        message: "1 entry in config-audit.jsonl still contains pre-redactor argv values.",
+        fixHint: "Run `openclaw doctor --fix`.",
+      },
+    ]);
+    const contribution = requireDoctorContribution("doctor:config-audit-scrub");
+    const ctx = {
+      cfg: {},
+      configResult: { cfg: {}, sourceLastTouchedVersion: "2026.5.2-test" },
+      sourceConfigValid: true,
+      prompter: buildDoctorPrompter(true),
+      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+      options: { dryRun: true },
+      env: {},
+      cfgForPersistence: {},
+      configPath: "/tmp/fake-openclaw.json",
+    } as Parameters<(typeof contribution)["run"]>[0];
+
+    await contribution.run(ctx);
+
+    expect(mocks.maybeScrubConfigAuditLog).not.toHaveBeenCalled();
+    expect(mocks.note).toHaveBeenCalledWith(
+      expect.stringContaining("Would scrub 1 config audit log entry"),
+      "Doctor changes",
+    );
+  });
+
+  it("runs structured legacy cron store repairs at the legacy cron contribution position", async () => {
+    mocks.detectLegacyCronStoreIssues.mockResolvedValue([
+      {
+        storePath: "/tmp/openclaw/cron/jobs.json",
+        previewLines: ["- 1 job still uses legacy `jobId`"],
+        message: "Legacy cron job storage detected.",
+        fixHint: "Repair with `openclaw doctor --fix`.",
+      },
+    ]);
+    mocks.repairLegacyCronStoreIssues.mockResolvedValue([
+      {
+        storePath: "/tmp/openclaw/cron/jobs.json",
+        changed: true,
+        dreamingRewrittenCount: 0,
+        changes: ["Would normalize legacy cron store at /tmp/openclaw/cron/jobs.json."],
+        warnings: [],
+      },
+    ]);
+    const contribution = requireDoctorContribution("doctor:legacy-cron");
+    const ctx = {
+      cfg: {},
+      configResult: { cfg: {}, sourceLastTouchedVersion: "2026.5.2-test" },
+      sourceConfigValid: true,
+      prompter: buildDoctorPrompter(true),
+      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+      options: { dryRun: true },
+      env: {},
+      cfgForPersistence: {},
+      configPath: "/tmp/fake-openclaw.json",
+    } as Parameters<(typeof contribution)["run"]>[0];
+
+    await contribution.run(ctx);
+
+    expect(mocks.noteLegacyWhatsAppCrontabHealthCheck).toHaveBeenCalledTimes(1);
+    expect(mocks.noteCronModelOverrideDiagnostics).toHaveBeenCalledWith({ cfg: ctx.cfg });
+    expect(mocks.maybeRepairLegacyCronStore).not.toHaveBeenCalled();
+    expect(mocks.note).toHaveBeenCalledWith(
+      expect.stringContaining("Would normalize legacy cron store"),
+      "Doctor changes",
+    );
   });
 
   it("runs structured sandbox registry and image repairs at the sandbox contribution position", async () => {

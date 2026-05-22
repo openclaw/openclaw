@@ -470,14 +470,29 @@ async function runSessionSnapshotsHealth(ctx: DoctorHealthFlowContext): Promise<
 }
 
 async function runConfigAuditScrubHealth(ctx: DoctorHealthFlowContext): Promise<void> {
+  if (ctx.prompter.shouldRepair) {
+    await runPositionalStructuredHealthRepair(ctx, "core/doctor/config-audit-scrub");
+    return;
+  }
   const { maybeScrubConfigAuditLog } = await import("../commands/doctor-config-audit-scrub.js");
-  await maybeScrubConfigAuditLog({ shouldRepair: ctx.prompter.shouldRepair });
+  await maybeScrubConfigAuditLog({
+    shouldRepair: false,
+    env: ctx.env ?? process.env,
+  });
 }
 
 async function runLegacyCronHealth(ctx: DoctorHealthFlowContext): Promise<void> {
-  const { maybeRepairLegacyCronStore, noteLegacyWhatsAppCrontabHealthCheck } =
-    await import("../commands/doctor-cron.js");
+  const {
+    maybeRepairLegacyCronStore,
+    noteCronModelOverrideDiagnostics,
+    noteLegacyWhatsAppCrontabHealthCheck,
+  } = await import("../commands/doctor-cron.js");
   await noteLegacyWhatsAppCrontabHealthCheck();
+  if (ctx.prompter.shouldRepair) {
+    await noteCronModelOverrideDiagnostics({ cfg: ctx.cfg });
+    await runPositionalStructuredHealthRepair(ctx, "core/doctor/legacy-cron-store");
+    return;
+  }
   await maybeRepairLegacyCronStore({
     cfg: ctx.cfg,
     options: ctx.options,
@@ -923,12 +938,13 @@ export function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
     createDoctorHealthContribution({
       id: "doctor:config-audit-scrub",
       label: "Config audit",
+      healthCheckIds: ["core/doctor/config-audit-scrub"],
       run: runConfigAuditScrubHealth,
     }),
     createDoctorHealthContribution({
       id: "doctor:legacy-cron",
       label: "Legacy cron",
-      healthCheckIds: ["core/doctor/legacy-whatsapp-crontab"],
+      healthCheckIds: ["core/doctor/legacy-cron-store", "core/doctor/legacy-whatsapp-crontab"],
       run: runLegacyCronHealth,
     }),
     createDoctorHealthContribution({
