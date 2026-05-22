@@ -54,6 +54,7 @@ export interface HealthCheckContext {
     readonly options?: {
       readonly nonInteractive?: boolean;
     };
+    readonly sourceLastTouchedVersion?: string;
     readonly confirm?: (params: { message: string; initialValue?: boolean }) => Promise<boolean>;
     readonly note?: (message: unknown, title?: string) => void | Promise<void>;
   };
