@@ -35,6 +35,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- CLI/update: preserve managed Gateway service environment during package cutovers so macOS LaunchAgent repair/restart reads the pre-update service state instead of caller shell state. (#83026)
 - Gateway/restart: eager-load the lifecycle runtime before in-place upgrade signal handling so package replacement does not deadlock restart imports. (#84890) Thanks @myps6415.
 - CLI/update: start managed Gateway update handoff helpers from a stable existing directory and tolerate deleted cwd/package roots during macOS LaunchAgent handoff. Fixes #83808. (#83875) Thanks @jason-allen-oneal.
 - Cron: honor `cron.retry.retryOn: ["network"]` for common network error codes such as `EAI_AGAIN`, `EHOSTUNREACH`, and `ENETUNREACH`.
