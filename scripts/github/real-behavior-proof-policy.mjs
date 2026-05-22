@@ -6,6 +6,7 @@ export const MOCK_ONLY_PROOF_LABEL = "triage: mock-only-proof";
 export const MAINTAINER_TEAM_SLUG = "maintainer";
 
 export const CLAWSWEEPER_PROOF_VERDICT_STATUS = "clawsweeper_exact_head_pass";
+const CLAWSWEEPER_BOT_LOGIN = "clawsweeper[bot]";
 
 const privilegedAuthorAssociations = new Set(["OWNER", "MEMBER", "COLLABORATOR"]);
 
@@ -246,7 +247,14 @@ function isTrustedClawSweeperComment(comment) {
   const appSlug = String(
     comment?.performed_via_github_app?.slug ?? comment?.performedViaGithubApp?.slug ?? "",
   ).toLowerCase();
-  return appSlug === "clawsweeper";
+  if (appSlug === "clawsweeper") {
+    return true;
+  }
+  // GitHub can omit performed_via_github_app on issue comments while still
+  // returning the reserved App bot identity.
+  const login = String(comment?.user?.login ?? "").toLowerCase();
+  const userType = String(comment?.user?.type ?? "");
+  return login === CLAWSWEEPER_BOT_LOGIN && userType === "Bot";
 }
 
 export function hasClawSweeperExactHeadProof({ pullRequest, comments = [] } = {}) {
