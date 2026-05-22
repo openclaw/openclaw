@@ -26,6 +26,15 @@ const authProfileUsageDeps = {
   updateAuthProfileStoreWithLock,
 };
 
+// Invoked once per recorded auth-profile failure. Gateway startup wires this
+// to clearCurrentProviderAuthState so the next model-listing call recomputes
+// against the real auth state.
+let onAuthProfileFailureHook: (() => void) | undefined;
+
+export function setAuthProfileFailureHook(hook: (() => void) | undefined): void {
+  onAuthProfileFailureHook = hook;
+}
+
 export const testing = {
   setDepsForTest(
     overrides: Partial<{
@@ -717,6 +726,11 @@ export async function markAuthProfileFailure(params: {
         now: updateTime,
       });
     }
+    try {
+      onAuthProfileFailureHook?.();
+    } catch {
+      // hook errors must not break failure recording
+    }
     return;
   }
   if (!store.profiles[profileId]) {
@@ -758,6 +772,11 @@ export async function markAuthProfileFailure(params: {
     next: nextStats,
     now,
   });
+  try {
+    onAuthProfileFailureHook?.();
+  } catch {
+    // hook errors must not break failure recording
+  }
 }
 
 export async function markAuthProfileBlockedUntil(params: {
