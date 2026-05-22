@@ -17,4 +17,4 @@ for (const root of roots) {
   visit(root);
 }
 
-process.stdout.write([...specs].sort().join("\n"));
+process.stdout.write([...specs].toSorted((a, b) => a.localeCompare(b)).join("\n"));
