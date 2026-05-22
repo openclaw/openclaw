@@ -41,7 +41,6 @@ import {
   loadWhatsAppChannelRuntime,
   whatsappSetupWizardProxy,
 } from "./shared.js";
-import { detectWhatsAppLegacyStateMigrations } from "./state-migrations.js";
 import { collectWhatsAppStatusIssues } from "./status-issues.js";
 
 const loadWhatsAppDirectoryConfig = createLazyRuntimeModule(() => import("./directory-config.js"));
@@ -191,8 +190,10 @@ export const whatsappPlugin: ChannelPlugin<ResolvedWhatsAppAccount> =
         },
       },
       lifecycle: {
-        detectLegacyStateMigrations: ({ oauthDir }) =>
-          detectWhatsAppLegacyStateMigrations({ oauthDir }),
+        detectLegacyStateMigrations: async ({ oauthDir }) =>
+          await (
+            await import("./state-migrations.js")
+          ).detectWhatsAppLegacyStateMigrations({ oauthDir }),
       },
       heartbeat: {
         checkReady: async ({ cfg, accountId, deps }) =>

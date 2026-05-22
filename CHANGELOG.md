@@ -765,6 +765,7 @@ Docs: https://docs.openclaw.ai
 - WhatsApp: keep channel outbound registration on a light descriptor and defer media, quote-cache, and send runtimes until outbound delivery.
 - WhatsApp: defer heartbeat readiness runtime from channel registration so the descriptor does not pull auth-state helpers until heartbeat checks run.
 - WhatsApp: lazy-load doctor-only security repair code so channel registration avoids config-repair imports on normal startup.
+- WhatsApp: lazy-load legacy state migration checks so channel registration avoids filesystem repair helpers until migration scanning runs.
 - Plugins: hash large SDK alias-map cache keys so plugin loader caches do not retain full alias-path JSON strings in memory.
 - Replies: skip provider thinking-catalog hydration when thinking is off so messaging replies avoid unnecessary model-runtime setup before dispatch.
 - Providers: reuse already-loaded provider runtime hooks for synthetic auth before falling back to provider discovery loads.

@@ -10,6 +10,15 @@ describe("whatsapp channel registration imports", () => {
     expect(source).toContain('import("./heartbeat.js")');
   });
 
+  it("defers legacy state migration filesystem helpers out of the channel descriptor", async () => {
+    const source = await import("node:fs/promises").then((fs) =>
+      fs.readFile(new URL("./channel.ts", import.meta.url), "utf8"),
+    );
+
+    expect(source).not.toContain('from "./state-migrations.js"');
+    expect(source).toContain('import("./state-migrations.js")');
+  });
+
   it("defers doctor-only security repair code out of the shared descriptor", async () => {
     const source = await import("node:fs/promises").then((fs) =>
       fs.readFile(new URL("./shared.ts", import.meta.url), "utf8"),
