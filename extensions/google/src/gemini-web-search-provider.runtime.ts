@@ -75,6 +75,10 @@ const GEMINI_FRESHNESS_DAYS: Record<GeminiFreshness, number> = {
   year: 365,
 };
 
+function toGeminiTimestamp(date: Date): string {
+  return date.toISOString().replace(/\.\d+Z$/, "Z");
+}
+
 function isoDateStart(value: string): string {
   return `${value}T00:00:00Z`;
 }
@@ -82,13 +86,13 @@ function isoDateStart(value: string): string {
 function isoDateExclusiveEnd(value: string): string {
   const end = new Date(`${value}T00:00:00Z`);
   end.setUTCDate(end.getUTCDate() + 1);
-  return end.toISOString();
+  return toGeminiTimestamp(end);
 }
 
 function freshnessStartTime(freshness: GeminiFreshness, now: Date): string {
   const start = new Date(now);
   start.setUTCDate(start.getUTCDate() - GEMINI_FRESHNESS_DAYS[freshness]);
-  return start.toISOString();
+  return toGeminiTimestamp(start);
 }
 
 function resolveGeminiTimeRangeFilter(
@@ -143,7 +147,7 @@ function resolveGeminiTimeRangeFilter(
     return {
       timeRangeFilter: {
         startTime: freshnessStartTime(freshness, now),
-        endTime: now.toISOString(),
+        endTime: toGeminiTimestamp(now),
       },
     };
   }
@@ -156,7 +160,7 @@ function resolveGeminiTimeRangeFilter(
   return {
     timeRangeFilter: {
       startTime: dateAfter ? isoDateStart(dateAfter) : "1970-01-01T00:00:00Z",
-      endTime: dateBefore ? isoDateExclusiveEnd(dateBefore) : now.toISOString(),
+      endTime: dateBefore ? isoDateExclusiveEnd(dateBefore) : toGeminiTimestamp(now),
     },
   };
 }
