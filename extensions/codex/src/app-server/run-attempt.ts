@@ -2090,6 +2090,7 @@ export async function runCodexAppServerAttempt(
     if (
       turnCompletionIdleWatchArmed &&
       !turnCompletionIdleWatchPinnedByTerminalError &&
+      notification.method !== "turn/started" &&
       notification.method !== "turn/completed" &&
       isCurrentTurnNotification &&
       !trackedDynamicToolCompletion &&

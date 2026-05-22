@@ -3739,6 +3739,39 @@ describe("runCodexAppServerAttempt", () => {
     ).toHaveLength(2);
   });
 
+  it("interrupts when the only current-turn progress is turn/started", async () => {
+    const harness = createStartedThreadHarness();
+    const params = createParams(
+      path.join(tempDir, "session.jsonl"),
+      path.join(tempDir, "workspace"),
+    );
+    params.timeoutMs = 200;
+
+    const run = runCodexAppServerAttempt(params, {
+      turnCompletionIdleTimeoutMs: 5,
+      turnAssistantCompletionIdleTimeoutMs: 1_000,
+      turnTerminalIdleTimeoutMs: 1_000,
+    });
+    await harness.waitForMethod("turn/start");
+    await harness.notify({
+      method: "turn/started",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        turn: { id: "turn-1", status: "inProgress" },
+      },
+    });
+
+    const result = await run;
+
+    expect(result.aborted).toBe(true);
+    expect(result.timedOut).toBe(true);
+    expect(result.promptError).toBe(
+      "codex app-server turn idle timed out waiting for turn/completed",
+    );
+    expect(harness.request.mock.calls.some(([method]) => method === "turn/interrupt")).toBe(true);
+  });
+
   it("does not count non-turn app-server requests as turn attempt progress", async () => {
     const harness = createStartedThreadHarness();
     const warn = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => undefined);
@@ -7636,11 +7669,16 @@ describe("runCodexAppServerAttempt", () => {
       }
       if (method === "turn/start") {
         await harness.notify({
-          method: "turn/started",
+          method: "item/started",
           params: {
             threadId: "thread-1",
             turnId: "turn-1",
-            turn: { id: "turn-1", status: "inProgress" },
+            item: {
+              id: "tool-1",
+              type: "commandExecution",
+              command: "sleep 1",
+              status: "inProgress",
+            },
           },
         });
         return turnStartResult("turn-1", "inProgress");
