@@ -194,7 +194,7 @@ function Expand-PortableNodeArchive {
     $tarCommand = Get-Command tar -ErrorAction SilentlyContinue
     if ($tarCommand -and $tarCommand.Source) {
         New-Item -ItemType Directory -Force -Path $DestinationPath | Out-Null
-        & $tarCommand.Source -xf $ZipPath -C $DestinationPath
+        & $tarCommand.Source -xf $ZipPath -C $DestinationPath --strip-components 1
         if ($LASTEXITCODE -eq 0) {
             return
         }
@@ -206,8 +206,23 @@ function Expand-PortableNodeArchive {
         Write-Host "[!] tar extraction failed with exit code $tarExitCode; trying .NET zip extraction." -ForegroundColor Yellow
     }
 
-    Add-Type -AssemblyName System.IO.Compression.FileSystem
-    [System.IO.Compression.ZipFile]::ExtractToDirectory($ZipPath, $DestinationPath)
+    $fallbackExtract = Join-Path (Split-Path -Parent $DestinationPath) ("portable-node-extract-" + [guid]::NewGuid().ToString("N"))
+    try {
+        Add-Type -AssemblyName System.IO.Compression.FileSystem
+        [System.IO.Compression.ZipFile]::ExtractToDirectory($ZipPath, $fallbackExtract)
+
+        $nodeDir = Get-ChildItem -Path $fallbackExtract -Directory |
+            Where-Object { Test-Path (Join-Path $_.FullName "node.exe") } |
+            Select-Object -First 1
+        if (-not $nodeDir) {
+            throw "Node.js archive did not contain node.exe."
+        }
+        Copy-Item -LiteralPath $nodeDir.FullName -Destination $DestinationPath -Recurse -Force
+    } finally {
+        if (Test-Path $fallbackExtract) {
+            Remove-Item -Recurse -Force $fallbackExtract
+        }
+    }
 }
 
 function Install-PortableNode {
@@ -226,35 +241,19 @@ function Install-PortableNode {
     $portableRoot = Get-PortableNodeRoot
     $portableParent = Split-Path -Parent $portableRoot
     $tmpZip = Join-Path $env:TEMP $download.Name
-    $tmpExtract = Join-Path $env:TEMP ("openclaw-portable-node-" + [guid]::NewGuid().ToString("N"))
 
     New-Item -ItemType Directory -Force -Path $portableParent | Out-Null
     if (Test-Path $portableRoot) {
         Remove-Item -Recurse -Force $portableRoot
     }
-    if (Test-Path $tmpExtract) {
-        Remove-Item -Recurse -Force $tmpExtract
-    }
 
     try {
         Write-Host "  Downloading Node.js $($download.Version)..." -ForegroundColor Gray
         Invoke-WebRequest -UseBasicParsing -Uri $download.Url -OutFile $tmpZip
-        Expand-PortableNodeArchive -ZipPath $tmpZip -DestinationPath $tmpExtract
-
-        $nodeDir = Get-ChildItem -Path $tmpExtract -Directory |
-            Where-Object { Test-Path (Join-Path $_.FullName "node.exe") } |
-            Select-Object -First 1
-        if (-not $nodeDir) {
-            throw "Node.js archive did not contain node.exe."
-        }
-
-        Copy-Item -LiteralPath $nodeDir.FullName -Destination $portableRoot -Recurse -Force
+        Expand-PortableNodeArchive -ZipPath $tmpZip -DestinationPath $portableRoot
     } finally {
         if (Test-Path $tmpZip) {
             Remove-Item -Force $tmpZip
-        }
-        if (Test-Path $tmpExtract) {
-            Remove-Item -Recurse -Force $tmpExtract
         }
     }
 

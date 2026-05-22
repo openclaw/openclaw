@@ -130,8 +130,9 @@ describe("install.ps1 failure handling", () => {
     expect(portableNodeBody).toContain("portable-node");
     expect(portableNodeBody).toContain("Ensure-PortableNodeOnUserPath");
     expect(portableNodeBody).toContain(
-      "Copy-Item -LiteralPath $nodeDir.FullName -Destination $portableRoot -Recurse -Force",
+      "Expand-PortableNodeArchive -ZipPath $tmpZip -DestinationPath $portableRoot",
     );
+    expect(portableNodeBody).not.toContain("Copy-Item");
     expect(portableNodeBody).not.toContain('Join-Path $nodeDir.FullName "*"');
     expect(portableNodePathBody).toContain("Add-ToUserPath $nodeDir");
     expect(userPathBody).toContain(
@@ -142,7 +143,10 @@ describe("install.ps1 failure handling", () => {
     expect(portableNodeBody).not.toContain("Expand-Archive");
     expect(portableNodeBody).not.toContain("New-Item -ItemType Directory -Force -Path $tmpExtract");
     expect(expandNodeBody).toContain("Get-Command tar");
-    expect(expandNodeBody).toContain("-xf $ZipPath -C $DestinationPath");
+    expect(expandNodeBody).toContain("-xf $ZipPath -C $DestinationPath --strip-components 1");
+    expect(expandNodeBody).toContain(
+      "Copy-Item -LiteralPath $nodeDir.FullName -Destination $DestinationPath -Recurse -Force",
+    );
     expect(expandNodeBody).toContain("System.IO.Compression.ZipFile");
     expect(resolveNodeBody).toContain("https://nodejs.org/dist/index.json");
     expect(resolveNodeBody).toContain("win-$architecture-zip");
