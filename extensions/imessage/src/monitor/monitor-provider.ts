@@ -52,7 +52,7 @@ import { sendMessageIMessage } from "../send.js";
 import { normalizeIMessageHandle } from "../targets.js";
 import { attachIMessageMonitorAbortHandler } from "./abort-handler.js";
 import { runIMessageCatchup } from "./catchup-bridge.js";
-import { resolveCatchupConfig } from "./catchup.js";
+import { advanceIMessageCatchupCursor, resolveCatchupConfig } from "./catchup.js";
 import { combineIMessagePayloads } from "./coalesce.js";
 import { createIMessageEchoCachingSend, deliverReplies } from "./deliver.js";
 import { createSentMessageCache } from "./echo-cache.js";
@@ -214,6 +214,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
     log: (message) => runtime.log?.(warn(message)),
   });
   const dmPolicy = imessageCfg.dmPolicy ?? "pairing";
+  const catchupCfg = resolveCatchupConfig(imessageCfg.catchup);
   const includeAttachments = opts.includeAttachments ?? imessageCfg.includeAttachments ?? false;
   const mediaMaxBytes = (opts.mediaMaxMb ?? imessageCfg.mediaMaxMb ?? 16) * 1024 * 1024;
   const cliPath = opts.cliPath ?? imessageCfg.cliPath ?? "imsg";
@@ -343,6 +344,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
 
   let client: IMessageRpcClient | undefined;
   let detachAbortHandler = () => {};
+  let liveCatchupCursorAdvanceEnabled = false;
   const getActiveClient = () => {
     if (!client) {
       throw new Error("imessage monitor client not initialized");
@@ -350,7 +352,38 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
     return client;
   };
 
-  async function handleMessageNow(message: IMessagePayload) {
+  async function maybeAdvanceLiveCatchupCursor(message: IMessagePayload): Promise<void> {
+    if (!catchupCfg.enabled || !liveCatchupCursorAdvanceEnabled) {
+      return;
+    }
+    const rowid = typeof message.id === "number" && Number.isFinite(message.id) ? message.id : null;
+    const dateMs =
+      typeof message.created_at === "string" ? Date.parse(message.created_at) : Number.NaN;
+    if (rowid === null || !Number.isFinite(dateMs)) {
+      return;
+    }
+    try {
+      await advanceIMessageCatchupCursor(
+        accountInfo.accountId,
+        { lastSeenMs: dateMs, lastSeenRowid: rowid },
+        catchupCfg,
+      );
+    } catch (err) {
+      runtime.error?.(`imessage catchup: failed to advance live cursor: ${String(err)}`);
+    }
+  }
+
+  async function handleMessageNow(
+    message: IMessagePayload,
+    options: { advanceCatchupCursor?: boolean } = {},
+  ) {
+    await handleMessageNowInner(message);
+    if (options.advanceCatchupCursor !== false) {
+      await maybeAdvanceLiveCatchupCursor(message);
+    }
+  }
+
+  async function handleMessageNowInner(message: IMessagePayload) {
     const messageText = (message.text ?? "").trim();
 
     const attachments = includeAttachments ? (message.attachments ?? []) : [];
@@ -907,10 +940,9 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
   // `handleMessage` -> `handleMessageNow`; the inbound-dedupe cache absorbs
   // any overlap with replayed rows. Disabled by default — opt-in via
   // `channels.imessage.catchup.enabled`. See issue #78649.
-  const catchupCfg = resolveCatchupConfig(imessageCfg.catchup);
   if (catchupCfg.enabled && !abort?.aborted) {
     try {
-      await runIMessageCatchup({
+      const catchupSummary = await runIMessageCatchup({
         client: activeClient,
         accountId: accountInfo.accountId,
         config: catchupCfg,
@@ -920,9 +952,10 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
         // from before the gateway gap therefore arrive as separate turns
         // rather than coalesced. Live notifications continue to flow through
         // the debouncer.
-        dispatchPayload: (message) => handleMessageNow(message),
+        dispatchPayload: (message) => handleMessageNow(message, { advanceCatchupCursor: false }),
         runtime,
       });
+      liveCatchupCursorAdvanceEnabled = catchupSummary.querySucceeded;
     } catch (err) {
       // Catchup is opt-in recovery — surface the error but do not block the
       // monitor. The live dispatch loop is already up and running.

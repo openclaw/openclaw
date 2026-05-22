@@ -273,6 +273,35 @@ export type PerformCatchupParams = {
   warn?: (message: string) => void;
 };
 
+export async function advanceIMessageCatchupCursor(
+  accountId: string,
+  next: { lastSeenMs: number; lastSeenRowid: number },
+  config: ResolvedCatchupConfig,
+): Promise<boolean> {
+  if (!Number.isFinite(next.lastSeenMs) || !Number.isFinite(next.lastSeenRowid)) {
+    return false;
+  }
+
+  const cursor = await loadIMessageCatchupCursor(accountId);
+  if (cursor && next.lastSeenRowid <= cursor.lastSeenRowid) {
+    return false;
+  }
+
+  const blockingFailure = Object.values(cursor?.failureRetries ?? {}).some(
+    (count) => count < config.maxFailureRetries,
+  );
+  if (blockingFailure) {
+    return false;
+  }
+
+  await saveIMessageCatchupCursor(accountId, {
+    lastSeenMs: Math.max(cursor?.lastSeenMs ?? next.lastSeenMs, next.lastSeenMs),
+    lastSeenRowid: next.lastSeenRowid,
+    failureRetries: cursor?.failureRetries,
+  });
+  return true;
+}
+
 /**
  * One catchup pass. Loads the cursor, fetches `messages.history`, replays
  * each row through `dispatch`, advances the cursor on success / give-up,
