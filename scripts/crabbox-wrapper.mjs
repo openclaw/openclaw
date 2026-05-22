@@ -277,12 +277,19 @@ const providerAliases = new Map([
   ["google-cloud", "gcp"],
   ["local-docker", "local-container"],
   ["namespace", "namespace-devbox"],
+  ["namespace-devboxes", "namespace-devbox"],
   ["rail", "railway"],
   ["railwayapp", "railway"],
+  ["run-pod", "runpod"],
+  ["runpodio", "runpod"],
   ["sem", "semaphore"],
   ["static", "ssh"],
   ["static-ssh", "ssh"],
+  ["tensorlake-sbx", "tensorlake"],
+  ["tl", "tensorlake"],
 ]);
+// Crabbox providerHelpAll can omit Tensorlake even when the binary accepts it.
+const providerHelpOmissions = new Set(["tensorlake"]);
 
 function addProviderNames(names, text) {
   for (const name of text
@@ -340,9 +347,11 @@ function parseProvidersFromHelp(text) {
 }
 
 function isProviderAdvertised(provider, advertisedProviders) {
+  const canonicalProvider = providerAliases.get(provider) ?? provider;
   return (
     advertisedProviders.includes(provider) ||
-    advertisedProviders.includes(providerAliases.get(provider) ?? "")
+    advertisedProviders.includes(canonicalProvider) ||
+    providerHelpOmissions.has(canonicalProvider)
   );
 }
 

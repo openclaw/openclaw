@@ -83,7 +83,7 @@ describe("scripts/crabbox-wrapper", () => {
   it("accepts Crabbox provider aliases when their canonical provider is advertised", () => {
     const helpText = [
       "provider: hetzner, aws, gcp, local-container, blacksmith-testbox,",
-      "  namespace-devbox, semaphore, cloudflare, railway, exe-dev, or ssh",
+      "  namespace-devbox, runpod, semaphore, cloudflare, railway, exe-dev, or ssh",
       "",
     ].join("\n");
     const aliases = [
@@ -97,8 +97,11 @@ describe("scripts/crabbox-wrapper", () => {
       "google-cloud",
       "local-docker",
       "namespace",
+      "namespace-devboxes",
       "rail",
       "railwayapp",
+      "run-pod",
+      "runpodio",
       "sem",
       "static",
       "static-ssh",
@@ -109,6 +112,21 @@ describe("scripts/crabbox-wrapper", () => {
 
       expect(result.status, alias).toBe(0);
       expect(result.stdout).toContain(`"${alias}"`);
+    }
+  });
+
+  it("accepts Crabbox provider aliases when upstream help omits Tensorlake", () => {
+    const helpText = [
+      "provider: hetzner, aws, gcp, local-container, blacksmith-testbox,",
+      "  namespace-devbox, runpod, semaphore, cloudflare, railway, exe-dev, or ssh",
+      "",
+    ].join("\n");
+
+    for (const provider of ["tensorlake", "tl", "tensorlake-sbx"]) {
+      const result = runWrapper(helpText, ["run", "--provider", provider, "--", "echo ok"]);
+
+      expect(result.status, provider).toBe(0);
+      expect(result.stdout).toContain(`"${provider}"`);
     }
   });
 
