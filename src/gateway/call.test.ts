@@ -42,6 +42,20 @@ const eventLoopReadyState = vi.hoisted(() => ({
   },
 }));
 
+const connectAssemblyErrorState = vi.hoisted(() => {
+  const errors = new WeakSet<Error>();
+  return {
+    create(message: string): Error {
+      const error = new Error(message);
+      errors.add(error);
+      return error;
+    },
+    has(value: unknown): value is Error {
+      return value instanceof Error && errors.has(value);
+    },
+  };
+});
+
 let lastClientOptions: {
   url?: string;
   token?: string;
@@ -56,13 +70,14 @@ let lastClientOptions: {
   deviceIdentity?: unknown;
   onHelloOk?: (hello: { features?: { methods?: string[] } }) => void | Promise<void>;
   onClose?: (code: number, reason: string) => void;
+  onConnectError?: (err: Error) => void;
 } | null = null;
 let lastRequestOptions: {
   method?: string;
   params?: unknown;
   opts?: { expectFinal?: boolean; timeoutMs?: number | null };
 } | null = null;
-type StartMode = "hello" | "close" | "silent" | "startup-retry-then-hello";
+type StartMode = "hello" | "close" | "connect-error" | "silent" | "startup-retry-then-hello";
 let startMode: StartMode = "hello";
 let startCalls = 0;
 let closeCode = 1006;
@@ -79,6 +94,7 @@ vi.mock("./client.js", () => ({
     }
     return undefined;
   },
+  isGatewayConnectAssemblyError: (value: unknown) => connectAssemblyErrorState.has(value),
   GatewayClient: class {
     constructor(opts: {
       url?: string;
@@ -92,6 +108,7 @@ vi.mock("./client.js", () => ({
       scopes?: string[];
       onHelloOk?: (hello: { features?: { methods?: string[] } }) => void | Promise<void>;
       onClose?: (code: number, reason: string) => void;
+      onConnectError?: (err: Error) => void;
     }) {
       lastClientOptions = opts;
     }
@@ -117,6 +134,10 @@ vi.mock("./client.js", () => ({
             methods: helloMethods,
           },
         });
+      } else if (startMode === "connect-error") {
+        lastClientOptions?.onConnectError?.(
+          connectAssemblyErrorState.create("device private key invalid"),
+        );
       } else if (startMode === "close") {
         lastClientOptions?.onClose?.(closeCode, closeReason);
       }
@@ -157,6 +178,7 @@ class StubGatewayClient {
     scopes?: string[];
     onHelloOk?: (hello: { features?: { methods?: string[] } }) => void | Promise<void>;
     onClose?: (code: number, reason: string) => void;
+    onConnectError?: (err: Error) => void;
   }) {
     lastClientOptions = opts;
   }
@@ -182,6 +204,10 @@ class StubGatewayClient {
           methods: helloMethods,
         },
       });
+    } else if (startMode === "connect-error") {
+      lastClientOptions?.onConnectError?.(
+        connectAssemblyErrorState.create("device private key invalid"),
+      );
     } else if (startMode === "close") {
       lastClientOptions?.onClose?.(closeCode, closeReason);
     }
@@ -964,6 +990,20 @@ describe("callGateway error details", () => {
     await expect(callGateway({ method: "health" })).resolves.toEqual({ ok: true });
 
     expect(lastRequestOptions?.method).toBe("health");
+  });
+
+  it("rejects immediately when the client reports a connect error", async () => {
+    startMode = "connect-error";
+    setLocalLoopbackGatewayConfig();
+
+    let err: unknown;
+    await callGateway({ method: "health", timeoutMs: 10_000 }).catch((caught) => {
+      err = caught;
+    });
+
+    expect(err).toBeInstanceOf(Error);
+    expect((err as Error).message).toBe("device private key invalid");
+    expect(lastRequestOptions).toBeNull();
   });
 
   it("includes connection details on timeout", async () => {
