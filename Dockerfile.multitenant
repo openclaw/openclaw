@@ -299,13 +299,48 @@ RUN chmod 755 /usr/local/bin/git-credential-rockie.sh && \
     git config --system credential.helper /usr/local/bin/git-credential-rockie.sh
 
 # Drop in the env-backed git credential helper for huggingface.co
-# (rockie-workspace#575). Unlike the rockie helper above this is NOT
-# registered here — entrypoint.sh wires it per-runtime, only when the
-# tenant connected Hugging Face (HF_TOKEN present). Baking the script in
-# at build time keeps the per-runtime cost to one cheap `git config`.
+# (rockie-workspace#575). The helper emits HF_TOKEN from env so plain
+# `git clone` / `git push` against huggingface.co authenticate without
+# the agent improvising a GIT_ASKPASS bridge. It is registered below.
 COPY --chown=root:root overlay/multitenant/runtime/git-credential-hf-env.sh \
   /usr/local/bin/git-credential-hf-env.sh
 RUN chmod 755 /usr/local/bin/git-credential-hf-env.sh
+
+# Pre-wire git credential helpers + default identity at BUILD TIME so a
+# tenant's agent can `git clone` / `commit` / `push` against github.com and
+# huggingface.co with no per-turn improvisation (rockie-workspace#575).
+#
+# Why build time, not entrypoint.sh: the broker `/spawn` + `/ws` PTY spawn
+# the agent shell as **root**, which reads /etc/gitconfig (the --system
+# scope), never /home/runtime/.gitconfig (the --global scope of the
+# unprivileged `runtime` user). `git config --system` is the right scope —
+# but the ENTRYPOINT runs AFTER `USER runtime`, so an entrypoint.sh
+# attempting `git config --system` runs as `runtime` and fails
+# "Permission denied" writing root-owned /etc/gitconfig. These RUN steps
+# run as root (they precede the `USER runtime` directive), so the writes
+# land in the image's /etc/gitconfig and persist for every spawned shell.
+#
+# The helpers are registered UNCONDITIONALLY. They read GH_TOKEN / HF_TOKEN
+# at git-invocation time and emit nothing when their token is absent, so a
+# BYOK / open-weights tenant that never connected GitHub or Hugging Face is
+# unaffected — git simply gets no credential and only fails if it actually
+# needs auth. There is no token visible at build time to gate on anyway.
+#
+# GitHub: replicate `gh auth setup-git`'s effect with explicit --system
+# writes for github.com AND gist.github.com — an empty-helper reset (so any
+# inherited helper for that host is cleared and ordering is deterministic)
+# followed by `!gh auth git-credential` (the bang prefix makes git run it
+# as a shell command; `gh` itself reads GH_TOKEN from env). `gh` is
+# resolved to an absolute path so the helper does not depend on the agent
+# shell's PATH.
+RUN for gh_host in github.com gist.github.com; do \
+      git config --system --replace-all "credential.https://${gh_host}.helper" "" && \
+      git config --system --add "credential.https://${gh_host}.helper" "!$(command -v gh) auth git-credential"; \
+    done && \
+    git config --system "credential.https://huggingface.co.helper" \
+      /usr/local/bin/git-credential-hf-env.sh && \
+    git config --system user.name "Rockie Agent" && \
+    git config --system user.email "agent@rockielab.com"
 
 # Drop in the PTY-WebSocket broker binary built in stage 4b.
 COPY --from=broker-build /out/broker /usr/local/bin/broker

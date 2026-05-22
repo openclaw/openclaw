@@ -97,115 +97,23 @@ render_settings_json() {
   log "settings.json rendered → ${output} (lab=${lab_id:-<empty>}, tenant=${tenant_id:-<empty>}, target=${target_dir:-<empty>})"
 }
 
-# Pre-wire git so the agent never has to improvise a GIT_ASKPASS bridge or
-# set git identity by hand on a fresh runtime (rockie-workspace#575).
+# NOTE — git credential + identity pre-wire moved to BUILD TIME
+# (rockie-workspace#575 rework). It previously lived here as
+# `prewire_git_credentials()`, but the ENTRYPOINT runs AFTER the
+# `USER runtime` directive in Dockerfile.multitenant, so this script
+# executes as the unprivileged `runtime` user — which cannot
+# `git config --system` (root-owned /etc/gitconfig → "Permission denied").
 #
-# fleet-task #573 lands GH_TOKEN / HF_TOKEN in the agent env, and the
-# `gh` / `hf` CLIs consume them automatically — but plain `git clone` /
-# `git push` against github.com / huggingface.co does NOT, so every agent
-# re-solves the same two papercuts. This wires them once at boot:
-#
-#   - GitHub:      a credential helper for github.com + gist.github.com
-#                  keyed off `gh auth git-credential` (`gh` itself reads
-#                  GH_TOKEN from env).
-#   - HuggingFace: `git-credential-hf-env.sh` emits HF_TOKEN for
-#                  huggingface.co (no `gh`-equivalent exists for HF).
-#   - Identity:    a default `user.name` / `user.email` so the first
-#                  commit in a fresh clone does not fail with
-#                  "Author identity unknown".
-#
-# SCOPE — must be --system, not --global (rockie-workspace#575 rework):
-# the broker `/spawn` + `/ws` PTY spawn the agent shell as **root**
-# (HOME=/root, PID-1 HOME=/), while `git config --global` run from this
-# entrypoint lands in the runtime user's ~/.gitconfig (/home/runtime/.gitconfig)
-# — a file the root-spawned agent never reads. `--system` writes
-# /etc/gitconfig, which is user-independent and IS visible to the agent's
-# git, exactly how the pre-existing `git-credential-rockie.sh` is wired
-# (Dockerfile.multitenant: `git config --system credential.helper ...`).
-# The entrypoint runs as root at boot, so it can write /etc/gitconfig.
-#
-# Every step is conditional / no-op when the tokens are absent (BYOK /
-# open-weights tenants, or pre-connection state) and never hard-fails the
-# entrypoint — a credential-helper hiccup must not stop the runtime.
-prewire_git_credentials() {
-  if ! command -v git >/dev/null 2>&1; then
-    log "WARN: git not on PATH; skipping git credential pre-wire"
-    return 0
-  fi
-
-  # Default identity — set unconditionally (it is harmless without tokens
-  # and lets ad-hoc local commits work). --system writes /etc/gitconfig so
-  # the root-spawned agent shell sees it; do not clobber an identity the
-  # tenant already set at any scope (--get with no --system reads the
-  # merged config: system + global + local).
-  if [ -z "$(git config user.name 2>/dev/null || true)" ]; then
-    if git config --system user.name "Rockie Agent"; then
-      log "git: default user.name set (Rockie Agent)"
-    else
-      log "WARN: git config user.name failed; continuing"
-    fi
-  fi
-  if [ -z "$(git config user.email 2>/dev/null || true)" ]; then
-    if git config --system user.email "agent@rockielab.com"; then
-      log "git: default user.email set (agent@rockielab.com)"
-    else
-      log "WARN: git config user.email failed; continuing"
-    fi
-  fi
-
-  # GitHub — register a credential helper that calls `gh auth git-credential`
-  # (`gh` is authenticated by GH_TOKEN in env). We do NOT use
-  # `gh auth setup-git`: it only writes --global, which the root-spawned
-  # agent never reads. Instead we replicate exactly what it would install,
-  # into --system: for each github host, an empty `helper` value first
-  # (resets any inherited helper for that host so ordering is
-  # deterministic), then `!gh auth git-credential`. The bang prefix makes
-  # git run it as a shell command; we resolve `gh` to an absolute path so
-  # the helper does not depend on the agent shell's PATH. Both github.com
-  # and gist.github.com are wired, matching `gh auth setup-git`.
-  if [ -n "${GH_TOKEN:-}" ]; then
-    local gh_bin
-    gh_bin="$(command -v gh 2>/dev/null || true)"
-    if [ -n "$gh_bin" ]; then
-      local gh_host gh_wired=1
-      for gh_host in github.com gist.github.com; do
-        if ! { git config --system --replace-all "credential.https://${gh_host}.helper" "" \
-               && git config --system --add "credential.https://${gh_host}.helper" "!${gh_bin} auth git-credential"; }; then
-          gh_wired=0
-        fi
-      done
-      if [ "$gh_wired" -eq 1 ]; then
-        log "git: github.com + gist.github.com credential helpers wired (--system, !${gh_bin} auth git-credential)"
-      else
-        log "WARN: git config of github credential helper failed; plain git push to github.com may prompt"
-      fi
-    else
-      log "WARN: GH_TOKEN set but gh CLI missing; skipping github.com credential wire"
-    fi
-  else
-    log "git: GH_TOKEN unset; github.com credential helper not wired (expected for BYOK/pre-connection)"
-  fi
-
-  # HuggingFace — register the static env-backed helper for huggingface.co.
-  # Only wire it when HF_TOKEN is present; the helper itself also fails
-  # silent without the token, but skipping the `git config` write keeps
-  # /etc/gitconfig clean for unconnected tenants. --system so the
-  # root-spawned agent shell sees it (see SCOPE note above).
-  if [ -n "${HF_TOKEN:-}" ]; then
-    local hf_helper="/usr/local/bin/git-credential-hf-env.sh"
-    if [ -x "$hf_helper" ]; then
-      if git config --system "credential.https://huggingface.co.helper" "$hf_helper"; then
-        log "git: huggingface.co credential helper wired (${hf_helper})"
-      else
-        log "WARN: git config of huggingface.co helper failed; plain git push to huggingface.co may prompt"
-      fi
-    else
-      log "WARN: HF_TOKEN set but ${hf_helper} not present; skipping huggingface.co credential wire"
-    fi
-  else
-    log "git: HF_TOKEN unset; huggingface.co credential helper not wired (expected for BYOK/pre-connection)"
-  fi
-}
+# The `--system` scope is required: the broker `/spawn` + `/ws` PTY spawn
+# the agent shell as **root**, which reads /etc/gitconfig, never the
+# `runtime` user's /home/runtime/.gitconfig (the --global scope). So the
+# credential helpers (github.com + gist.github.com via `gh auth
+# git-credential`, huggingface.co via git-credential-hf-env.sh) and the
+# default identity are registered by Dockerfile.multitenant RUN steps that
+# run as root *before* `USER runtime`. The helpers read GH_TOKEN / HF_TOKEN
+# at git-invocation time and emit nothing when their token is absent, so a
+# BYOK / open-weights tenant is unaffected. See the credential-helper block
+# in Dockerfile.multitenant.
 
 # If the caller passed a command (e.g. `docker run image claude --version`),
 # just run it. The mode router only kicks in when no command is given.
@@ -215,9 +123,6 @@ fi
 
 # --- settings.json render (must precede broker + any subscription CLI) -----
 render_settings_json
-
-# --- git credential + identity pre-wire (rockie-workspace#575) --------------
-prewire_git_credentials
 
 # --- broker (always-on) -----------------------------------------------------
 if [ -x /usr/local/bin/broker ]; then

@@ -7,10 +7,11 @@
 # `git clone` / `git push` against https://huggingface.co/... authenticate
 # transparently — no per-turn `GIT_ASKPASS` improvisation by the agent.
 #
-# Wired up by entrypoint.sh (NOT the Dockerfile) only when HF_TOKEN is
-# present, via:
-#   git config --global credential.https://huggingface.co.helper \
-#     '/usr/local/bin/git-credential-hf-env.sh'
+# Registered by Dockerfile.multitenant as a build-time `RUN` step (root,
+# before the `USER runtime` directive) so it lands in the image's
+# /etc/gitconfig — the file the root-spawned agent shell actually reads:
+#   git config --system credential.https://huggingface.co.helper \
+#     /usr/local/bin/git-credential-hf-env.sh
 #
 # HuggingFace has no `gh auth setup-git` equivalent and the `hf` CLI ships
 # no `git-credential` subcommand, so this tiny static helper is the HF-side
