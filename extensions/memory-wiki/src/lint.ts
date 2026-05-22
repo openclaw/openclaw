@@ -105,10 +105,12 @@ function collectBrokenLinkIssues(pages: WikiPageSummary[]): MemoryWikiLintIssue[
   for (const page of pages) {
     for (const linkTarget of page.linkTargets) {
       const looksLikePath = linkTargetLooksLikePath(linkTarget);
-      const matches = looksLikePath
-        ? validPathTargets.has(normalizeLintPathTarget(linkTarget))
-        : validTitleTargets.has(normalizeLintTitleTarget(linkTarget));
-      if (!matches) {
+      const normalizedPath = normalizeLintPathTarget(linkTarget);
+      const normalizedTitle = normalizeLintTitleTarget(linkTarget);
+      const matchesPath = looksLikePath && validPathTargets.has(normalizedPath);
+      const matchesTitle = validTitleTargets.has(normalizedTitle);
+      const isMatch = matchesPath || matchesTitle;
+      if (!isMatch) {
         issues.push({
           severity: "warning",
           category: "links",

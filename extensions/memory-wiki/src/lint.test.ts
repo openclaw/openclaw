@@ -97,6 +97,47 @@ describe("lintMemoryWikiVault", () => {
     expect(result.issues.some((issue) => issue.code === "broken-wikilink")).toBe(false);
   });
 
+  it("accepts Obsidian wikilinks that target slash-containing titles", async () => {
+    const { rootDir, config } = await createVault({
+      prefix: "memory-wiki-lint-title-with-slash-links-",
+      config: {
+        vault: { renderMode: "obsidian" },
+      },
+    });
+    await Promise.all(
+      ["sources"].map((dir) => fs.mkdir(path.join(rootDir, dir), { recursive: true })),
+    );
+
+    await fs.writeFile(
+      path.join(rootDir, "sources", "slash-title-page.md"),
+      renderWikiMarkdown({
+        frontmatter: {
+          pageType: "source",
+          id: "source.slash-title",
+          title: "Slash/Title Match",
+        },
+        body: "# Slash/Title Match\n",
+      }),
+      "utf8",
+    );
+    await fs.writeFile(
+      path.join(rootDir, "sources", "slash-title-plan.md"),
+      renderWikiMarkdown({
+        frontmatter: {
+          pageType: "source",
+          id: "source.slash-title-plan",
+          title: "Slash Title Plan",
+        },
+        body: "# Slash Title Plan\n\n[[Slash/Title Match]]\n",
+      }),
+      "utf8",
+    );
+
+    const result = await lintMemoryWikiVault(config);
+
+    expect(result.issues.some((issue) => issue.code === "broken-wikilink")).toBe(false);
+  });
+
   it("detects duplicate ids, provenance gaps, contradictions, and open questions", async () => {
     const { rootDir, config } = await createVault({
       prefix: "memory-wiki-lint-",
