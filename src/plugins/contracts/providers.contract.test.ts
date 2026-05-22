@@ -22,6 +22,7 @@ for (const providerId of [
   "google",
   "minimax",
   "moonshot",
+  "parallel",
   "perplexity",
   "tavily",
   "xai",
