@@ -40,6 +40,11 @@ export type CliToolResultDelta = {
   result?: unknown;
 };
 
+export type CliThinkingDelta = {
+  text: string;
+  delta: string;
+};
+
 function isClaudeCliProvider(providerId: string): boolean {
   return normalizeLowercaseStringOrEmpty(providerId) === "claude-cli";
 }
@@ -609,12 +614,121 @@ function dispatchClaudeCliStreamingToolEvent(params: {
   }
 }
 
+type PendingThinkingBlock = {
+  // Text accumulated from streaming thinking_delta chunks. Stays empty
+  // when the block is the single-block redacted shape and no chunks
+  // arrive between content_block_start and content_block_stop.
+  accumulated: string;
+  // Whether any thinking_delta event was observed for this index. Drives
+  // the single-block detection at content_block_stop time.
+  receivedDelta: boolean;
+  // Seed content captured from the content_block_start payload. On the
+  // adaptive single-block path the API returns the block fully-formed at
+  // start with the content under `text` or `thinking`; we surface it as
+  // one event at content_block_stop when no streaming delta arrived.
+  seedContent: string;
+};
+
+type ThinkingTracker = {
+  pendingByIndex: Map<number, PendingThinkingBlock>;
+};
+
+function createThinkingTracker(): ThinkingTracker {
+  return {
+    pendingByIndex: new Map(),
+  };
+}
+
+function readThinkingSeedContent(block: Record<string, unknown>): string {
+  if (typeof block.thinking === "string" && block.thinking) {
+    return block.thinking;
+  }
+  if (typeof block.text === "string" && block.text) {
+    return block.text;
+  }
+  return "";
+}
+
+function dispatchClaudeCliStreamingThinkingEvent(params: {
+  backend: CliBackendConfig;
+  providerId: string;
+  parsed: Record<string, unknown>;
+  tracker: ThinkingTracker;
+  onThinkingDelta?: (delta: CliThinkingDelta) => void;
+}): void {
+  if (!params.onThinkingDelta) {
+    return;
+  }
+  if (!usesClaudeStreamJsonDialect(params)) {
+    return;
+  }
+  if (params.parsed.type !== "stream_event" || !isRecord(params.parsed.event)) {
+    return;
+  }
+  const event = params.parsed.event;
+  const tracker = params.tracker;
+
+  if (
+    event.type === "content_block_start" &&
+    typeof event.index === "number" &&
+    isRecord(event.content_block) &&
+    event.content_block.type === "thinking"
+  ) {
+    tracker.pendingByIndex.set(event.index, {
+      accumulated: "",
+      receivedDelta: false,
+      seedContent: readThinkingSeedContent(event.content_block),
+    });
+    return;
+  }
+
+  if (
+    event.type === "content_block_delta" &&
+    typeof event.index === "number" &&
+    isRecord(event.delta) &&
+    event.delta.type === "thinking_delta" &&
+    typeof event.delta.thinking === "string"
+  ) {
+    const pending = tracker.pendingByIndex.get(event.index);
+    if (!pending) {
+      return;
+    }
+    const chunk = event.delta.thinking;
+    if (!chunk) {
+      return;
+    }
+    pending.receivedDelta = true;
+    pending.accumulated = `${pending.accumulated}${chunk}`;
+    params.onThinkingDelta({ text: pending.accumulated, delta: chunk });
+    return;
+  }
+
+  if (event.type === "content_block_stop" && typeof event.index === "number") {
+    const pending = tracker.pendingByIndex.get(event.index);
+    if (!pending) {
+      return;
+    }
+    tracker.pendingByIndex.delete(event.index);
+    if (pending.receivedDelta) {
+      return;
+    }
+    if (!pending.seedContent) {
+      // Redacted thinking with no surfaced content (encrypted-only blob,
+      // for example). Nothing useful to render; drop silently rather than
+      // emit an empty event.
+      return;
+    }
+    params.onThinkingDelta({ text: pending.seedContent, delta: pending.seedContent });
+  }
+}
+
 export function createCliJsonlStreamingParser(params: {
   backend: CliBackendConfig;
   providerId: string;
   onAssistantDelta: (delta: CliStreamingDelta) => void;
   onToolUseStart?: (delta: CliToolUseStartDelta) => void;
   onToolResult?: (delta: CliToolResultDelta) => void;
+  onThinkingDelta?: (delta: CliThinkingDelta) => void;
 }) {
   let lineBuffer = "";
   let assistantText = "";
@@ -623,6 +737,7 @@ export function createCliJsonlStreamingParser(params: {
   let output: CliOutput | null = null;
   const texts: string[] = [];
   const toolTracker = createToolUseTracker();
+  const thinkingTracker = createThinkingTracker();
 
   const handleParsedRecord = (parsed: Record<string, unknown>) => {
     sessionId = pickCliSessionId(parsed, params.backend) ?? sessionId;
@@ -668,6 +783,16 @@ export function createCliJsonlStreamingParser(params: {
         tracker: toolTracker,
         onToolUseStart: params.onToolUseStart,
         onToolResult: params.onToolResult,
+      });
+    }
+
+    if (params.onThinkingDelta) {
+      dispatchClaudeCliStreamingThinkingEvent({
+        backend: params.backend,
+        providerId: params.providerId,
+        parsed,
+        tracker: thinkingTracker,
+        onThinkingDelta: params.onThinkingDelta,
       });
     }
 
