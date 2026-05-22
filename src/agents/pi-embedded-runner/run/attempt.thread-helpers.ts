@@ -8,6 +8,19 @@ import {
 
 export const ATTEMPT_CACHE_TTL_CUSTOM_TYPE = "openclaw.cache-ttl";
 
+/**
+ * Compose the runtime system prompt with hook-provided prepend/append context.
+ *
+ * Hook system context (`prependSystemContext`, `appendSystemContext`) is placed
+ * BELOW the cache-boundary marker, in the dynamic-suffix region, so the bytes
+ * before the marker stay byte-stable across turns even when hook content varies.
+ * This is what lets Anthropic `cache_control` (placed on the stable prefix block
+ * by the provider adapter) and OpenAI auto prefix cache hit on turn 2+.
+ *
+ * If callers need static guidance to sit in the cache-prefix region (so the
+ * cache breakpoint covers it), that guidance must be embedded in
+ * `baseSystemPrompt` above the marker — not passed through hook context.
+ */
 export function composeSystemPromptWithHookContext(params: {
   baseSystemPrompt?: string;
   prependSystemContext?: string;

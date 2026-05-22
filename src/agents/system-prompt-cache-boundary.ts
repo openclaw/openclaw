@@ -21,6 +21,13 @@ export function splitSystemPromptCacheBoundary(
   };
 }
 
+/**
+ * Synthesize a cache-boundary marker at the end of `systemPrompt` when one is
+ * not already present. Idempotent: returns the input unchanged when a marker
+ * exists. Used by top-level prompt-assembly call sites that want to guarantee
+ * downstream marker-aware helpers can place additions in the dynamic-suffix
+ * region.
+ */
 export function ensureSystemPromptCacheBoundary(systemPrompt: string): string {
   if (systemPrompt.includes(SYSTEM_PROMPT_CACHE_BOUNDARY)) {
     return systemPrompt;
@@ -81,6 +88,14 @@ export function prependSystemPromptAdditionAfterCacheBoundary(params: {
   return `${split.stablePrefix}${SYSTEM_PROMPT_CACHE_BOUNDARY}${systemPromptAddition}\n\n${dynamicSuffix}`;
 }
 
+/**
+ * Append `systemPromptAddition` below the cache-boundary marker, in the
+ * dynamic-suffix region. When the input has no marker, falls back to a
+ * markerless `systemPrompt + "\n\n" + addition` join. Embedded marker
+ * substrings inside the addition are stripped (both the full marker and its
+ * trimmed comment form) so a smuggled sentinel cannot mislead downstream
+ * marker-aware splits that match only the first occurrence.
+ */
 export function appendSystemPromptAdditionAfterCacheBoundary(params: {
   systemPrompt: string;
   systemPromptAddition?: string;
