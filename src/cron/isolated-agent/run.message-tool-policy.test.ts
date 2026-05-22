@@ -5,6 +5,7 @@ import type { CronDeliveryMode } from "../types.js";
 import type { MutableCronSession } from "./run-session-state.js";
 import {
   clearFastTestEnv,
+  cleanupDirectCronSessionMock,
   dispatchCronDeliveryMock,
   getChannelPluginMock,
   isHeartbeatOnlyResponseMock,
@@ -757,11 +758,48 @@ describe("runCronIsolatedAgentTurn message tool policy", () => {
     expect(result.delivered).toBe(false);
     expect(result.deliveryAttempted).toBe(false);
     expect(dispatchCronDeliveryMock).not.toHaveBeenCalled();
+    expect(cleanupDirectCronSessionMock).toHaveBeenCalledWith({
+      job: expect.objectContaining({ id: "fatal-error-payload" }),
+      agentSessionKey: "agent:default:cron:message-tool-policy",
+      sessionId: "test-session-id",
+      retireReason: "cron-delete-after-run-fatal-error",
+    });
     expectDeliveryFields(result.delivery, {
       intended: { channel: "messagechat", to: "123", source: "explicit" },
       resolved: { ok: true, channel: "messagechat", to: "123", source: "explicit" },
       fallbackUsed: false,
       delivered: false,
+    });
+  });
+
+  it("cleans up deleteAfterRun sessions when suppressing fatal error announces", async () => {
+    mockRunCronFallbackPassthrough();
+    resolveCronDeliveryPlanMock.mockReturnValue(makeAnnounceDeliveryPlan());
+    runEmbeddedPiAgentMock.mockResolvedValue({
+      payloads: [{ text: "provider failed", isError: true }],
+      meta: { agentMeta: { usage: { input: 10, output: 20 } } },
+    });
+
+    await runCronIsolatedAgentTurn({
+      ...makeParams(),
+      job: {
+        ...makeAnnounceMessageToolJob({
+          id: "fatal-delete-after-run",
+          name: "Fatal Delete After Run",
+        }),
+        deleteAfterRun: true,
+      } as never,
+    });
+
+    expect(dispatchCronDeliveryMock).not.toHaveBeenCalled();
+    expect(cleanupDirectCronSessionMock).toHaveBeenCalledWith({
+      job: expect.objectContaining({
+        id: "fatal-delete-after-run",
+        deleteAfterRun: true,
+      }),
+      agentSessionKey: "agent:default:cron:message-tool-policy",
+      sessionId: "test-session-id",
+      retireReason: "cron-delete-after-run-fatal-error",
     });
   });
 

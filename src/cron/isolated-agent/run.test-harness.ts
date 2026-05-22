@@ -65,6 +65,7 @@ export const resolveCronPayloadOutcomeMock = createMock();
 export const resolveCronDeliveryPlanMock = createMock();
 export const resolveDeliveryTargetMock = createMock();
 export const dispatchCronDeliveryMock = createMock();
+export const cleanupDirectCronSessionMock = createMock();
 export const preflightCronModelProviderMock = createMock();
 export const isHeartbeatOnlyResponseMock = createMock();
 export const resolveHeartbeatAckMaxCharsMock = createMock();
@@ -241,6 +242,7 @@ vi.mock("./run-delivery.runtime.js", async () => {
   );
   return {
     ...actual,
+    cleanupDirectCronSession: cleanupDirectCronSessionMock,
     resolveDeliveryTarget: resolveDeliveryTargetMock,
     dispatchCronDelivery: dispatchCronDeliveryMock,
   };
@@ -495,7 +497,8 @@ function resetRunOutcomeMocks(): void {
         deliveryPayloadHasStructuredContent: false,
         hasFatalErrorPayload,
         hasFatalStructuredErrorPayload,
-        embeddedRunError: errorPayloadMessage ?? failureMessage ?? runLevelErrorMessage ?? undefined,
+        embeddedRunError:
+          errorPayloadMessage ?? failureMessage ?? runLevelErrorMessage ?? undefined,
       };
     },
   );
@@ -544,6 +547,8 @@ function resetRunOutcomeMocks(): void {
       deliveryPayloads,
     }),
   );
+  cleanupDirectCronSessionMock.mockReset();
+  cleanupDirectCronSessionMock.mockResolvedValue(undefined);
   preflightCronModelProviderMock.mockReset();
   preflightCronModelProviderMock.mockResolvedValue({ status: "available" });
   isHeartbeatOnlyResponseMock.mockReset();
