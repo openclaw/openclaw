@@ -13,7 +13,7 @@ import {
 import {
   fetchWithSsrFGuard,
   formatErrorMessage,
-  ssrfPolicyFromHttpBaseUrlAllowedHostname,
+  ssrfPolicyFromHttpBaseUrlAllowedOrigin,
   type SsrFPolicy,
 } from "openclaw/plugin-sdk/ssrf-runtime";
 import { OLLAMA_CLOUD_BASE_URL } from "./defaults.js";
@@ -92,6 +92,7 @@ async function withRemoteHttpResponse<T>(params: {
   init?: RequestInit;
   signal?: AbortSignal;
   ssrfPolicy?: SsrFPolicy;
+  managedProxyBypass?: { kind: "configured-local-origin"; baseUrl: string };
   onResponse: (response: Response) => Promise<T>;
 }): Promise<T> {
   const { response, release } = await fetchWithSsrFGuard({
@@ -99,6 +100,7 @@ async function withRemoteHttpResponse<T>(params: {
     init: params.init,
     signal: params.signal,
     policy: params.ssrfPolicy,
+    managedProxyBypass: params.managedProxyBypass,
     auditContext: "memory-remote",
   });
   try {
@@ -313,7 +315,7 @@ function resolveOllamaEmbeddingClient(
   return {
     baseUrl,
     headers,
-    ssrfPolicy: ssrfPolicyFromHttpBaseUrlAllowedHostname(baseUrl),
+    ssrfPolicy: ssrfPolicyFromHttpBaseUrlAllowedOrigin(baseUrl),
     model,
   };
 }
@@ -328,6 +330,7 @@ export async function createOllamaEmbeddingProvider(
     const json = await withRemoteHttpResponse({
       url: embedUrl,
       ssrfPolicy: client.ssrfPolicy,
+      managedProxyBypass: { kind: "configured-local-origin", baseUrl: client.baseUrl },
       signal,
       init: {
         method: "POST",

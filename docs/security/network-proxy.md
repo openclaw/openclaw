@@ -253,7 +253,7 @@ proxy:
 - Raw `net`, `tls`, and `http2` sockets, native addons, and non-OpenClaw child processes may bypass Node-level proxy routing unless they inherit and respect proxy environment variables. Forked OpenClaw child CLIs inherit the managed proxy URL and `proxy.loopbackMode` state.
 - IRC is a raw TCP/TLS channel outside operator-managed forward proxy routing. In deployments that require all egress through that forward proxy, set `channels.irc.enabled=false` unless direct IRC egress is explicitly approved.
 - The local debug proxy is diagnostic tooling and its direct upstream forwarding for proxy requests and CONNECT tunnels is disabled by default while managed proxy mode is active; enable direct forwarding only for approved local diagnostics.
-- User local WebUIs and local model servers should be allowlisted in the operator proxy policy when needed; OpenClaw does not expose a general local-network bypass for them.
+- User local WebUIs and local model servers should be allowlisted in the operator proxy policy when needed; OpenClaw does not expose a general local-network bypass for them. The bundled Ollama memory embedding provider is narrower: it can use a guarded direct path for the exact configured local/self-hosted embedding `baseUrl` so host-local embeddings keep working when the managed proxy cannot reach host loopback.
 - Gateway control-plane proxy bypass is intentionally limited to `localhost` and literal loopback IP URLs. Use `ws://127.0.0.1:18789`, `ws://[::1]:18789`, or `ws://localhost:18789` for local direct Gateway control-plane connections; other hostnames route like ordinary hostname-based traffic.
 - OpenClaw does not inspect, test, or certify your proxy policy.
 - Treat proxy policy changes as security-sensitive operational changes.

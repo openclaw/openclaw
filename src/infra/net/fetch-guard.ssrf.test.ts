@@ -195,6 +195,10 @@ describe("fetchWithSsrFGuard hardening", () => {
 
   const createPublicLookup = (): LookupFn =>
     vi.fn(async () => [{ address: "93.184.216.34", family: 4 }]) as unknown as LookupFn;
+  const createLoopbackLookup = (): LookupFn =>
+    vi.fn(async () => [{ address: "127.0.0.1", family: 4 }]) as unknown as LookupFn;
+  const createIpv6LoopbackLookup = (): LookupFn =>
+    vi.fn(async () => [{ address: "::1", family: 6 }]) as unknown as LookupFn;
 
   function clearProxyEnv(): void {
     for (const key of PROXY_ENV_KEYS) {
@@ -1281,6 +1285,159 @@ describe("fetchWithSsrFGuard hardening", () => {
       mode: GUARDED_FETCH_MODE.STRICT,
       expectEnvProxy: true,
     });
+  });
+
+  it("bypasses the managed proxy for an exact configured local provider origin", async () => {
+    clearProxyEnv();
+    vi.stubEnv("OPENCLAW_PROXY_ACTIVE", "1");
+    vi.stubEnv("OPENCLAW_PROXY_LOOPBACK_MODE", "gateway-only");
+    vi.stubEnv("http_proxy", "http://127.0.0.1:7890");
+    (globalThis as Record<string, unknown>)[TEST_UNDICI_RUNTIME_DEPS_KEY] = {
+      Agent: agentCtor,
+      EnvHttpProxyAgent: envHttpProxyAgentCtor,
+      ProxyAgent: proxyAgentCtor,
+      fetch: vi.fn(async () => okResponse()),
+    };
+    const fetchImpl = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      const requestInit = init as RequestInit & { dispatcher?: unknown };
+      expectDispatcherAttached(requestInit.dispatcher);
+      expect(getDispatcherClassName(requestInit.dispatcher)).not.toBe("EnvHttpProxyAgent");
+      return okResponse();
+    });
+
+    const result = await fetchWithSsrFGuard({
+      url: "http://127.0.0.1:11434/api/embed",
+      fetchImpl,
+      lookupFn: createLoopbackLookup(),
+      policy: { allowedOrigins: ["http://127.0.0.1:11434"] },
+      managedProxyBypass: {
+        kind: "configured-local-origin",
+        baseUrl: "http://127.0.0.1:11434",
+      },
+    });
+
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    expect(agentCtor).toHaveBeenCalledTimes(1);
+    expect(envHttpProxyAgentCtor).not.toHaveBeenCalled();
+    await result.release();
+  });
+
+  it("keeps public configured origins on the managed proxy path", async () => {
+    clearProxyEnv();
+    vi.stubEnv("OPENCLAW_PROXY_ACTIVE", "1");
+    vi.stubEnv("http_proxy", "http://127.0.0.1:7890");
+    (globalThis as Record<string, unknown>)[TEST_UNDICI_RUNTIME_DEPS_KEY] = {
+      Agent: agentCtor,
+      EnvHttpProxyAgent: envHttpProxyAgentCtor,
+      ProxyAgent: proxyAgentCtor,
+      fetch: vi.fn(async () => okResponse()),
+    };
+    const fetchImpl = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      const requestInit = init as RequestInit & { dispatcher?: unknown };
+      expectDispatcherAttached(requestInit.dispatcher);
+      expect(getDispatcherClassName(requestInit.dispatcher)).toBe("MockEnvHttpProxyAgent");
+      return okResponse();
+    });
+
+    const result = await fetchWithSsrFGuard({
+      url: "https://api.example.com/v1/embeddings",
+      fetchImpl,
+      lookupFn: createPublicLookup(),
+      policy: { allowedOrigins: ["https://api.example.com"] },
+      managedProxyBypass: {
+        kind: "configured-local-origin",
+        baseUrl: "https://api.example.com",
+      },
+    });
+
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    expect(envHttpProxyAgentCtor).toHaveBeenCalledTimes(1);
+    await result.release();
+  });
+
+  it("honors proxy.loopbackMode=proxy for exact local provider origins", async () => {
+    clearProxyEnv();
+    vi.stubEnv("OPENCLAW_PROXY_ACTIVE", "1");
+    vi.stubEnv("OPENCLAW_PROXY_LOOPBACK_MODE", "proxy");
+    vi.stubEnv("http_proxy", "http://127.0.0.1:7890");
+    (globalThis as Record<string, unknown>)[TEST_UNDICI_RUNTIME_DEPS_KEY] = {
+      Agent: agentCtor,
+      EnvHttpProxyAgent: envHttpProxyAgentCtor,
+      ProxyAgent: proxyAgentCtor,
+      fetch: vi.fn(async () => okResponse()),
+    };
+    const fetchImpl = vi.fn(async () => okResponse());
+
+    const result = await fetchWithSsrFGuard({
+      url: "http://127.0.0.1:11434/api/embed",
+      fetchImpl,
+      lookupFn: createLoopbackLookup(),
+      policy: { allowedOrigins: ["http://127.0.0.1:11434"] },
+      managedProxyBypass: {
+        kind: "configured-local-origin",
+        baseUrl: "http://127.0.0.1:11434",
+      },
+    });
+
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    expect(envHttpProxyAgentCtor).toHaveBeenCalledTimes(1);
+    await result.release();
+  });
+
+  it("honors proxy.loopbackMode=block for exact local provider origins", async () => {
+    clearProxyEnv();
+    vi.stubEnv("OPENCLAW_PROXY_ACTIVE", "1");
+    vi.stubEnv("OPENCLAW_PROXY_LOOPBACK_MODE", "block");
+    vi.stubEnv("http_proxy", "http://127.0.0.1:7890");
+    (globalThis as Record<string, unknown>)[TEST_UNDICI_RUNTIME_DEPS_KEY] = {
+      Agent: agentCtor,
+      EnvHttpProxyAgent: envHttpProxyAgentCtor,
+      ProxyAgent: proxyAgentCtor,
+      fetch: vi.fn(async () => okResponse()),
+    };
+    const fetchImpl = vi.fn(async () => okResponse());
+
+    await expect(
+      fetchWithSsrFGuard({
+        url: "http://127.0.0.1:11434/api/embed",
+        fetchImpl,
+        lookupFn: createLoopbackLookup(),
+        policy: { allowedOrigins: ["http://127.0.0.1:11434"] },
+        managedProxyBypass: {
+          kind: "configured-local-origin",
+          baseUrl: "http://127.0.0.1:11434",
+        },
+      }),
+    ).rejects.toThrow("blocked by proxy.loopbackMode");
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it("honors proxy.loopbackMode=block for bracketed IPv6 loopback provider origins", async () => {
+    clearProxyEnv();
+    vi.stubEnv("OPENCLAW_PROXY_ACTIVE", "1");
+    vi.stubEnv("OPENCLAW_PROXY_LOOPBACK_MODE", "block");
+    vi.stubEnv("http_proxy", "http://127.0.0.1:7890");
+    (globalThis as Record<string, unknown>)[TEST_UNDICI_RUNTIME_DEPS_KEY] = {
+      Agent: agentCtor,
+      EnvHttpProxyAgent: envHttpProxyAgentCtor,
+      ProxyAgent: proxyAgentCtor,
+      fetch: vi.fn(async () => okResponse()),
+    };
+    const fetchImpl = vi.fn(async () => okResponse());
+
+    await expect(
+      fetchWithSsrFGuard({
+        url: "http://[::1]:11434/api/embed",
+        fetchImpl,
+        lookupFn: createIpv6LoopbackLookup(),
+        policy: { allowedOrigins: ["http://[::1]:11434"] },
+        managedProxyBypass: {
+          kind: "configured-local-origin",
+          baseUrl: "http://[::1]:11434",
+        },
+      }),
+    ).rejects.toThrow("blocked by proxy.loopbackMode");
+    expect(fetchImpl).not.toHaveBeenCalled();
   });
 
   it("routes through env proxy when trusted proxy mode is explicitly enabled", async () => {
