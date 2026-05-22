@@ -19,6 +19,7 @@ import type {
   ImageGenerationResolution,
   ImageGenerationSourceImage,
 } from "../../image-generation/types.js";
+import { recordImageGeneration } from "../../infra/image-generation-usage.js";
 import type { SsrFPolicy } from "../../infra/net/ssrf.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import {
@@ -53,7 +54,6 @@ import {
   recordImageGenerationTaskProgress,
   type ImageGenerationTaskHandle,
 } from "./image-generate-background.js";
-import { recordImageGeneration } from "../../infra/image-generation-usage.js";
 import {
   createImageGenerateDuplicateGuardResult,
   createImageGenerateListActionResult,
@@ -963,35 +963,6 @@ export function createImageGenerateTool(options?: {
               taskHandle,
               autoProviderFallback: explicitModelConfig ? false : undefined,
             }),
-        });
-        const executedImgGen = await executeImageGenerationJob({
-          effectiveCfg,
-          prompt,
-          agentDir: options?.agentDir,
-          model,
-          size,
-          aspectRatio,
-          resolution,
-          quality,
-          outputFormat,
-          background,
-          count,
-          inputImages,
-          timeoutMs,
-          providerOptions,
-          ssrfPolicy: remoteMediaSsrfPolicy,
-          filename,
-          loadedReferenceImages,
-          taskHandle,
-          autoProviderFallback: explicitModelConfig ? false : undefined,
-        });
-        recordImageGeneration({
-          provider: executedImgGen.provider,
-          model: executedImgGen.model,
-          success: true,
-          count: executedImgGen.count,
-          outputUrls: executedImgGen.paths,
-          sessionKey: options?.agentSessionKey,
         });
 
         await notifyMediaGenerationAsyncTaskStarted({
