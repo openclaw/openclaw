@@ -52,6 +52,12 @@ export const doctorHealthConversionRules = [
     rule: "Keep as config-only owner finding.",
   },
   {
+    contributionId: "doctor:bundled-health-repairs",
+    conversion: "repair-backed-detect",
+    target: ["plugin/doctor/bundled-health-repairs"],
+    rule: "Run bundled plugin health repairs after core positional repairs are registered; keep plugin repair ownership outside core check ids.",
+  },
+  {
     contributionId: "doctor:legacy-state",
     conversion: "repair-backed-detect",
     target: ["core/doctor/legacy-state"],

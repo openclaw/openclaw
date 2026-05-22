@@ -5,6 +5,7 @@ import {
   resolveDoctorHealthContributions,
   shouldSkipLegacyUpdateDoctorConfigWrite,
 } from "./doctor-health-contributions.js";
+import { registerHealthCheck } from "./health-check-registry.js";
 
 const mocks = vi.hoisted(() => ({
   maybeRunConfiguredPluginInstallReleaseStep: vi.fn(),
@@ -293,6 +294,12 @@ describe("doctor health contributions", () => {
     const ids = resolveDoctorHealthContributions().map((entry) => entry.id);
 
     expect(ids).not.toContain("doctor:structured-health-repairs");
+    expect(ids.indexOf("doctor:bundled-health-repairs")).toBeGreaterThan(
+      ids.indexOf("doctor:command-owner"),
+    );
+    expect(ids.indexOf("doctor:bundled-health-repairs")).toBeLessThan(
+      ids.indexOf("doctor:legacy-state"),
+    );
     expect(ids.indexOf("doctor:startup-channel-maintenance")).toBeGreaterThan(
       ids.indexOf("doctor:gateway-services"),
     );
@@ -300,6 +307,63 @@ describe("doctor health contributions", () => {
     expect(ids.indexOf("doctor:shell-completion")).toBeGreaterThan(
       ids.indexOf("doctor:bootstrap-size"),
     );
+  });
+
+  it("keeps bundled structured repairs separate from positional core repairs", async () => {
+    const checkId = `plugin/test-bundled-repair-${process.pid}`;
+    registerHealthCheck({
+      id: checkId,
+      kind: "plugin",
+      source: "test",
+      description: "Test bundled repair.",
+      async detect() {
+        return [
+          {
+            checkId,
+            severity: "warning",
+            message: "Bundled repair needed.",
+          },
+        ];
+      },
+      async repair(ctx) {
+        return {
+          config: { ...ctx.cfg, repairedByBundledHealth: true },
+          changes: ["Ran bundled health repair."],
+        };
+      },
+    });
+
+    const contribution = requireDoctorContribution("doctor:bundled-health-repairs");
+    const originalCfg = {
+      plugins: {
+        entries: {
+          policy: {
+            enabled: true,
+            config: { enabled: true },
+          },
+        },
+      },
+    };
+    const ctx = {
+      cfg: originalCfg,
+      configResult: { cfg: {}, sourceLastTouchedVersion: "2026.5.2-test" },
+      sourceConfigValid: true,
+      prompter: buildDoctorPrompter(true),
+      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+      options: {},
+      env: { OPENCLAW_TEST: "1" },
+      cfgForPersistence: {},
+      configPath: "/tmp/fake-openclaw.json",
+    } as Parameters<(typeof contribution)["run"]>[0];
+
+    await contribution.run(ctx);
+
+    expect(mocks.registerBundledHealthChecks).toHaveBeenCalledWith({
+      cfg: originalCfg,
+      cwd: expect.any(String),
+    });
+    expect(ctx.cfg.repairedByBundledHealth).toBe(true);
+    expect(mocks.note).toHaveBeenCalledWith("Ran bundled health repair.", "Doctor changes");
   });
 
   it("runs multiple positional core repairs without registering bundled checks repeatedly", async () => {

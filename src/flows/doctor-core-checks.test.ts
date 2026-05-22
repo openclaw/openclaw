@@ -79,15 +79,30 @@ function getCheck(checks: readonly HealthCheck[], id: string): HealthCheck {
 }
 
 const detectShellCompletionHealth = vi.hoisted(() => vi.fn(async () => []));
+const doctorCoreCheckMocks = vi.hoisted(() => ({
+  loadBundledPluginPublicSurfaceModuleSync: vi.fn(),
+  noteClaudeCliHealth: vi.fn(),
+}));
 
 vi.mock("../commands/doctor-completion.js", () => ({
   detectShellCompletionHealth,
+}));
+
+vi.mock("../commands/doctor-claude-cli.js", () => ({
+  noteClaudeCliHealth: doctorCoreCheckMocks.noteClaudeCliHealth,
+}));
+
+vi.mock("../plugin-sdk/facade-loader.js", () => ({
+  loadBundledPluginPublicSurfaceModuleSync:
+    doctorCoreCheckMocks.loadBundledPluginPublicSurfaceModuleSync,
 }));
 
 describe("registerCoreHealthChecks", () => {
   beforeEach(() => {
     clearHealthChecksForTest();
     resetCoreHealthChecksForTest();
+    doctorCoreCheckMocks.loadBundledPluginPublicSurfaceModuleSync.mockReset();
+    doctorCoreCheckMocks.noteClaudeCliHealth.mockReset();
   });
 
   it("registers the built-in health checks once", () => {
@@ -275,6 +290,148 @@ describe("registerCoreHealthChecks", () => {
     );
   });
 
+  it("converts Claude CLI presentation notes into lint findings without a note sink", async () => {
+    doctorCoreCheckMocks.noteClaudeCliHealth.mockImplementation((_cfg, deps) => {
+      deps.noteFn("- Claude CLI is not ready.\n- Fix: run claude auth login.", "Claude CLI");
+    });
+    const check = getCheck(createCoreHealthChecks(createDeps()), "core/doctor/claude-cli");
+
+    const findings = await check.detect({
+      mode: "lint",
+      runtime,
+      cfg: {},
+      cwd: "/tmp/openclaw-test-workspace",
+    });
+
+    expect(findings).toEqual([
+      expect.objectContaining({
+        checkId: "core/doctor/claude-cli",
+        severity: "warning",
+        message: "Claude CLI is not ready.",
+        fixHint: "- Fix: run claude auth login.",
+      }),
+    ]);
+  });
+
+  it("emits Claude CLI presentation notes through the doctor note sink", async () => {
+    doctorCoreCheckMocks.noteClaudeCliHealth.mockImplementation((_cfg, deps) => {
+      deps.noteFn("- Claude CLI is not ready.", "Claude CLI");
+    });
+    const check = getCheck(createCoreHealthChecks(createDeps()), "core/doctor/claude-cli");
+    const note = vi.fn();
+
+    const findings = await check.detect({
+      mode: "doctor",
+      runtime,
+      cfg: {},
+      cwd: "/tmp/openclaw-test-workspace",
+      doctor: { note },
+    });
+
+    expect(findings).toEqual([]);
+    expect(note).toHaveBeenCalledWith("- Claude CLI is not ready.", "Claude CLI");
+  });
+
+  it("keeps healthy Claude CLI presentation notes out of lint findings", async () => {
+    doctorCoreCheckMocks.noteClaudeCliHealth.mockImplementation((_cfg, deps) => {
+      deps.noteFn(
+        [
+          "- Binary: /usr/local/bin/claude.",
+          "- Headless Claude auth: OK (oauth).",
+          "- OpenClaw auth profile: claude-cli (provider claude-cli).",
+        ].join("\n"),
+        "Claude CLI",
+      );
+    });
+    const check = getCheck(createCoreHealthChecks(createDeps()), "core/doctor/claude-cli");
+
+    await expect(
+      check.detect({
+        mode: "lint",
+        runtime,
+        cfg: {},
+        cwd: "/tmp/openclaw-test-workspace",
+      }),
+    ).resolves.toEqual([]);
+  });
+
+  it("converts browser presentation notes into lint findings without a note sink", async () => {
+    const noteChromeMcpBrowserReadiness = vi.fn(async (_cfg, deps) => {
+      deps.noteFn("- Browser health check is unavailable: missing facade.", "Browser");
+    });
+    doctorCoreCheckMocks.loadBundledPluginPublicSurfaceModuleSync.mockReturnValue({
+      noteChromeMcpBrowserReadiness,
+    });
+    const check = getCheck(createCoreHealthChecks(createDeps()), "core/doctor/browser");
+
+    const findings = await check.detect({
+      mode: "lint",
+      runtime,
+      cfg: {},
+      cwd: "/tmp/openclaw-test-workspace",
+    });
+
+    expect(findings).toEqual([
+      expect.objectContaining({
+        checkId: "core/doctor/browser",
+        severity: "warning",
+        message: "Browser health check is unavailable: missing facade.",
+      }),
+    ]);
+  });
+
+  it("emits browser presentation notes through the doctor note sink", async () => {
+    const noteChromeMcpBrowserReadiness = vi.fn(async (_cfg, deps) => {
+      deps.noteFn("- Browser health check is unavailable: missing facade.", "Browser");
+    });
+    doctorCoreCheckMocks.loadBundledPluginPublicSurfaceModuleSync.mockReturnValue({
+      noteChromeMcpBrowserReadiness,
+    });
+    const check = getCheck(createCoreHealthChecks(createDeps()), "core/doctor/browser");
+    const note = vi.fn();
+
+    const findings = await check.detect({
+      mode: "doctor",
+      runtime,
+      cfg: {},
+      cwd: "/tmp/openclaw-test-workspace",
+      doctor: { note },
+    });
+
+    expect(findings).toEqual([]);
+    expect(note).toHaveBeenCalledWith(
+      "- Browser health check is unavailable: missing facade.",
+      "Browser",
+    );
+  });
+
+  it("keeps browser guidance notes out of lint findings", async () => {
+    const noteChromeMcpBrowserReadiness = vi.fn(async (_cfg, deps) => {
+      deps.noteFn(
+        [
+          "- Chrome MCP existing-session is configured for profile(s): chromeLive.",
+          "- Chrome path: /usr/bin/google-chrome",
+          "- Detected Chrome Google Chrome 144.0.7534.0.",
+          "- Enable remote debugging in the browser inspect page (chrome://inspect/#devices).",
+        ].join("\n"),
+        "Browser",
+      );
+    });
+    doctorCoreCheckMocks.loadBundledPluginPublicSurfaceModuleSync.mockReturnValue({
+      noteChromeMcpBrowserReadiness,
+    });
+    const check = getCheck(createCoreHealthChecks(createDeps()), "core/doctor/browser");
+
+    await expect(
+      check.detect({
+        mode: "lint",
+        runtime,
+        cfg: {},
+        cwd: "/tmp/openclaw-test-workspace",
+      }),
+    ).resolves.toEqual([]);
+  });
+
   it("emits workspace suggestions as doctor notes, not lint findings", async () => {
     const check = getCheck(
       createCoreHealthChecks(
@@ -319,32 +476,50 @@ describe("registerCoreHealthChecks", () => {
     );
   });
 
-  it("suppresses workspace suggestion notes when no doctor note sink is provided", async () => {
+  it("returns workspace suggestions as info lint findings when no doctor note sink is provided", async () => {
     const check = getCheck(
       createCoreHealthChecks(
         createDeps({
           async collectWorkspaceSuggestionNotes(): Promise<readonly string[]> {
-            return ["Memory system not found in workspace."];
+            return [
+              [
+                "- Tip: back up the workspace in a private git repo (GitHub or GitLab).",
+                "- Keep ~/.openclaw out of git; it contains credentials and session history.",
+              ].join("\n"),
+              "Memory system not found in workspace.",
+            ];
           },
         }),
       ),
       "core/doctor/workspace-suggestions",
     );
 
-    await expect(
-      check.detect({
-        mode: "lint",
-        runtime: { log() {}, error() {}, exit() {} },
-        cfg: {
-          agents: {
-            defaults: {
-              workspace: "/tmp/openclaw-test-workspace",
-            },
+    const findings = await check.detect({
+      mode: "lint",
+      runtime: { log() {}, error() {}, exit() {} },
+      cfg: {
+        agents: {
+          defaults: {
+            workspace: "/tmp/openclaw-test-workspace",
           },
         },
-        cwd: "/tmp/openclaw-test-workspace",
+      },
+      cwd: "/tmp/openclaw-test-workspace",
+    });
+
+    expect(findings).toEqual([
+      expect.objectContaining({
+        checkId: "core/doctor/workspace-suggestions",
+        severity: "info",
+        message: "Tip: back up the workspace in a private git repo (GitHub or GitLab).",
+        fixHint: "- Keep ~/.openclaw out of git; it contains credentials and session history.",
       }),
-    ).resolves.toEqual([]);
+      expect.objectContaining({
+        checkId: "core/doctor/workspace-suggestions",
+        severity: "info",
+        message: "Memory system not found in workspace.",
+      }),
+    ]);
   });
 
   it("keeps optional shell completion installs out of doctor lint", async () => {

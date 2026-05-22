@@ -341,6 +341,53 @@ function noteTextToFinding(params: {
   };
 }
 
+async function runPresentationNoteHealthCheck(params: {
+  ctx: { doctor?: { note?: (message: unknown, title?: string) => void | Promise<void> } };
+  checkId: string;
+  severity: HealthFinding["severity"];
+  includeLintFinding?: (text: string) => boolean;
+  run: (noteFn: (message: unknown, title?: string) => void | Promise<void>) => void | Promise<void>;
+}): Promise<readonly HealthFinding[]> {
+  const findings: HealthFinding[] = [];
+  const noteFn = params.ctx.doctor?.note;
+  await params.run((message, title) => {
+    if (noteFn) {
+      void noteFn(message, title);
+      return;
+    }
+    const text = String(message);
+    if (params.includeLintFinding && !params.includeLintFinding(text)) {
+      return;
+    }
+    findings.push(
+      noteTextToFinding({
+        checkId: params.checkId,
+        severity: params.severity,
+        text,
+      }),
+    );
+  });
+  return findings;
+}
+
+function noteHasActionableFix(text: string): boolean {
+  return /(^|\n)- Fix:/.test(text);
+}
+
+function browserNoteIsLintFinding(text: string): boolean {
+  const lower = text.toLowerCase();
+  return (
+    lower.includes("browser health check is unavailable") ||
+    lower.includes("no chromium-based browser executable") ||
+    lower.includes("google chrome was not found") ||
+    lower.includes("too old") ||
+    lower.includes("could not determine the installed chrome version") ||
+    lower.includes("no display or wayland_display") ||
+    lower.includes("running as root") ||
+    lower.includes("legacy managed browser profile residue")
+  );
+}
+
 const claudeCliCheck: HealthCheck = {
   id: "core/doctor/claude-cli",
   kind: "core",
@@ -348,13 +395,18 @@ const claudeCliCheck: HealthCheck = {
   source: "doctor",
   async detect(ctx) {
     const { noteClaudeCliHealth } = await import("../commands/doctor-claude-cli.js");
-    noteClaudeCliHealth(ctx.cfg, {
-      noteFn: (message, title) => {
-        void ctx.doctor?.note?.(message, title);
+    return runPresentationNoteHealthCheck({
+      ctx,
+      checkId: "core/doctor/claude-cli",
+      severity: "warning",
+      includeLintFinding: noteHasActionableFix,
+      run(noteFn) {
+        noteClaudeCliHealth(ctx.cfg, {
+          noteFn,
+          ...(ctx.cwd ? { workspaceDir: ctx.cwd } : {}),
+        });
       },
-      ...(ctx.cwd ? { workspaceDir: ctx.cwd } : {}),
     });
-    return [];
   },
 };
 
@@ -454,12 +506,17 @@ const browserCheck: HealthCheck = {
   source: "doctor",
   async detect(ctx) {
     const { noteChromeMcpBrowserReadiness } = await import("../commands/doctor-browser.js");
-    await noteChromeMcpBrowserReadiness(ctx.cfg, {
-      noteFn: (message, title) => {
-        void ctx.doctor?.note?.(message, title);
+    return runPresentationNoteHealthCheck({
+      ctx,
+      checkId: "core/doctor/browser",
+      severity: "warning",
+      includeLintFinding: browserNoteIsLintFinding,
+      async run(noteFn) {
+        await noteChromeMcpBrowserReadiness(ctx.cfg, {
+          noteFn,
+        });
       },
     });
-    return [];
   },
 };
 
@@ -662,8 +719,18 @@ function createWorkspaceSuggestionsCheck(deps: CoreHealthCheckDeps): HealthCheck
     async detect(ctx) {
       const workspaceDir = resolveAgentWorkspaceDir(ctx.cfg, resolveDefaultAgentId(ctx.cfg));
       const notes = await deps.collectWorkspaceSuggestionNotes(workspaceDir);
+      const noteFn = ctx.doctor?.note;
+      if (!noteFn) {
+        return notes.map((note) =>
+          noteTextToFinding({
+            checkId: "core/doctor/workspace-suggestions",
+            severity: "info",
+            text: note,
+          }),
+        );
+      }
       for (const note of notes) {
-        await ctx.doctor?.note?.(note, "Workspace");
+        await noteFn(note, "Workspace");
       }
       return [];
     },

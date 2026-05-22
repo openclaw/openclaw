@@ -285,6 +285,52 @@ async function runStructuredHealthRepairChecks(
   }
 }
 
+async function runBundledStructuredHealthRepairs(ctx: DoctorHealthFlowContext): Promise<void> {
+  if (!ctx.prompter.shouldRepair) {
+    return;
+  }
+  const { registerBundledHealthChecks } = await import("./bundled-health-checks.js");
+  const { listHealthChecks } = await import("./health-check-registry.js");
+  const { runDoctorHealthRepairs } = await import("./doctor-repair-flow.js");
+  const { resolveAgentWorkspaceDir, resolveDefaultAgentId } =
+    await import("../agents/agent-scope.js");
+  const { note } = await import("../terminal/note.js");
+
+  const workspaceDir = resolveAgentWorkspaceDir(ctx.cfg, resolveDefaultAgentId(ctx.cfg));
+  registerBundledHealthChecks({ cfg: ctx.cfg, cwd: workspaceDir });
+  const checks = listHealthChecks().filter((check) => check.kind !== "core");
+  if (checks.length === 0) {
+    return;
+  }
+  const result = await runDoctorHealthRepairs(
+    {
+      mode: "fix",
+      runtime: ctx.runtime,
+      cfg: ctx.cfg,
+      cwd: workspaceDir,
+      configPath: ctx.configPath,
+      env: ctx.env ?? process.env,
+      doctor: {
+        options: ctx.options,
+        confirm: (params) => ctx.prompter.confirm(params),
+        note,
+      },
+    },
+    {
+      checks,
+      dryRun: ctx.options.dryRun === true,
+      diff: ctx.options.diff === true,
+    },
+  );
+  ctx.cfg = result.config;
+  if (result.changes.length > 0) {
+    note(result.changes.join("\n"), "Doctor changes");
+  }
+  if (result.warnings.length > 0) {
+    note(result.warnings.join("\n"), "Doctor warnings");
+  }
+}
+
 async function runPositionalStructuredHealthRepair(
   ctx: DoctorHealthFlowContext,
   checkId: string,
@@ -805,6 +851,11 @@ export function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
       label: "Command owner",
       healthCheckIds: ["core/doctor/command-owner"],
       run: runCommandOwnerHealth,
+    }),
+    createDoctorHealthContribution({
+      id: "doctor:bundled-health-repairs",
+      label: "Bundled health repairs",
+      run: runBundledStructuredHealthRepairs,
     }),
     createDoctorHealthContribution({
       id: "doctor:legacy-state",
