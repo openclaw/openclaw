@@ -424,7 +424,7 @@ describe("google web search provider", () => {
       searchConfig: { provider: "gemini" },
     });
 
-    await tool?.execute({ query: "latest ai news", freshness: "week" });
+    await tool?.execute({ query: "latest ai news timestamp precision", freshness: "week" });
 
     const body = parseGeminiFetchBody(mockFetch);
     expect(body.tools?.[0]?.google_search?.timeRangeFilter).toEqual({

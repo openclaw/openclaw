@@ -136,7 +136,9 @@ async function main() {
       env: { ...process.env, OPENCLAW_BUILD_ALL_NO_PNPM: "1" },
     });
     console.error("==> Building OpenClaw Control UI artifacts");
-    await run("node", ["scripts/ui.js", "build"], sourceDir);
+    await run("node", ["scripts/ui.js", "build"], sourceDir, {
+      env: { ...process.env, OPENCLAW_BUILD_ALL_NO_PNPM: "1" },
+    });
   }
 
   console.error("==> Writing OpenClaw package inventory");
