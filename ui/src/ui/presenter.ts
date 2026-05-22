@@ -60,10 +60,12 @@ export function formatCronSchedule(job: CronJob) {
   const s = job.schedule;
   if (s.kind === "at") {
     const atMs = Date.parse(s.at);
-    return Number.isFinite(atMs) ? `At ${formatMs(atMs)}` : `At ${s.at}`;
+    return Number.isFinite(atMs)
+      ? `${t("cron.presenter.at")} ${formatMs(atMs)}`
+      : `${t("cron.presenter.at")} ${s.at}`;
   }
   if (s.kind === "every") {
-    return `Every ${formatDurationHuman(s.everyMs)}`;
+    return `${t("cron.presenter.every")} ${formatDurationHuman(s.everyMs)}`;
   }
   return `Cron ${s.expr}${s.tz ? ` (${s.tz})` : ""}`;
 }

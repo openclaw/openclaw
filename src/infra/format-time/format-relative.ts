@@ -58,6 +58,8 @@ export type FormatRelativeTimestampOptions = {
   timezone?: string;
   /** Return value for invalid/null input. Default: "n/a" */
   fallback?: string;
+  /** Optional locale for localized output (e.g. "zh-CN"). Default: English. */
+  locale?: string;
 };
 
 /**
@@ -79,24 +81,32 @@ export function formatRelativeTimestamp(
   const absDiff = Math.abs(diff);
   const isPast = diff >= 0;
 
+  const isZh = options?.locale?.startsWith("zh") ?? false;
+
   const sec = Math.round(absDiff / 1000);
   if (sec < 60) {
-    return isPast ? "just now" : "in <1m";
+    return isPast ? (isZh ? "刚刚" : "just now") : isZh ? "不到 1 分钟后" : "in <1m";
   }
 
   const min = Math.round(sec / 60);
   if (min < 60) {
-    return isPast ? `${min}m ago` : `in ${min}m`;
+    return isPast
+      ? isZh
+        ? `${min} 分钟前`
+        : `${min}m ago`
+      : isZh
+        ? `${min} 分钟后`
+        : `in ${min}m`;
   }
 
   const hr = Math.round(min / 60);
   if (hr < 48) {
-    return isPast ? `${hr}h ago` : `in ${hr}h`;
+    return isPast ? (isZh ? `${hr} 小时前` : `${hr}h ago`) : isZh ? `${hr} 小时后` : `in ${hr}h`;
   }
 
   const day = Math.round(hr / 24);
   if (!options?.dateFallback || day <= 7) {
-    return isPast ? `${day}d ago` : `in ${day}d`;
+    return isPast ? (isZh ? `${day} 天前` : `${day}d ago`) : isZh ? `${day} 天后` : `in ${day}d`;
   }
 
   // Fall back to short date display for old timestamps

@@ -1603,14 +1603,18 @@ function renderJob(job: CronJob, props: CronProps) {
         </div>
         <div class="list-meta">${renderJobState(job)}</div>
       </div>
-      ${renderJobPayload(job)}
+      ${renderJobPayload(job, props)}
       <div class="cron-job-footer">
         <div class="chip-row cron-job-chips">
           <span class=${`chip ${job.enabled ? "chip-ok" : "chip-danger"}`}>
             ${job.enabled ? t("cron.jobList.enabled") : t("cron.jobList.disabled")}
           </span>
-          <span class="chip">${job.sessionTarget}</span>
-          <span class="chip">${job.wakeMode}</span>
+          <span class="chip"
+            >${job.sessionTarget === "main" ? t("cron.form.main") : t("cron.form.isolated")}</span
+          >
+          <span class="chip"
+            >${job.wakeMode === "now" ? t("cron.form.now") : t("cron.form.nextHeartbeat")}</span
+          >
         </div>
         <div class="row cron-job-actions">
           <button
@@ -1689,7 +1693,7 @@ function renderJob(job: CronJob, props: CronProps) {
   `;
 }
 
-function renderJobPayload(job: CronJob) {
+function renderJobPayload(job: CronJob, props: CronProps) {
   const payload = getCronJobPayload(job);
   if (!payload) {
     return html``;
@@ -1702,13 +1706,19 @@ function renderJobPayload(job: CronJob) {
   }
 
   const delivery = job.delivery;
+  const deliveryModeLabel =
+    delivery?.mode === "webhook"
+      ? t("cron.form.webhookPost")
+      : delivery?.mode === "announce"
+        ? t("cron.form.announceDefault")
+        : t("cron.form.noneInternal");
   const deliveryTarget =
     delivery?.mode === "webhook"
       ? delivery.to
         ? ` (${delivery.to})`
         : ""
       : delivery?.channel || delivery?.to
-        ? ` (${delivery.channel ?? "last"}${delivery.to ? ` -> ${delivery.to}` : ""})`
+        ? ` (${resolveChannelLabel(props, delivery.channel ?? "last")}${delivery.to ? ` -> ${delivery.to}` : ""})`
         : "";
 
   return html`
@@ -1722,7 +1732,7 @@ function renderJobPayload(job: CronJob) {
       ${delivery
         ? html`<div class="cron-job-detail-section">
             <span class="cron-job-detail-label">${t("cron.jobDetail.delivery")}</span>
-            <span class="muted cron-job-detail-value">${delivery.mode}${deliveryTarget}</span>
+            <span class="muted cron-job-detail-value">${deliveryModeLabel}${deliveryTarget}</span>
           </div>`
         : nothing}
     </div>
