@@ -348,6 +348,30 @@ describe("runGatewayUpdate", () => {
     expect(calls.filter((call) => call.includes("rebase"))).toEqual([]);
   });
 
+  it("uses the supplied update cwd when the process cwd disappeared", async () => {
+    await setupGitCheckout();
+    const cwdSpy = vi.spyOn(process, "cwd").mockImplementation(() => {
+      throw Object.assign(new Error("ENOENT: uv_cwd"), { code: "ENOENT" });
+    });
+    const { runner, calls } = createRunner({
+      ...buildGitWorktreeProbeResponses(),
+      [`git -C ${tempDir} rev-parse --abbrev-ref --symbolic-full-name @{upstream}`]: {
+        code: 1,
+        stderr: "no upstream configured",
+      },
+    });
+
+    try {
+      const result = await runWithRunner(runner);
+
+      expect(result.status).toBe("skipped");
+      expect(result.reason).toBe("no-upstream");
+      expect(calls).toContain(`git -C ${tempDir} rev-parse --show-toplevel`);
+    } finally {
+      cwdSpy.mockRestore();
+    }
+  });
+
   it.each([
     { name: "upstream", options: {} },
     { name: "target ref", options: { devTargetRef: "main" } },
@@ -396,6 +420,7 @@ describe("runGatewayUpdate", () => {
     const stableTag = "v1.0.1-1";
     const { runner, calls } = createRunner({
       ...buildStableTagResponses(stableTag),
+      [`git -C ${tempDir} rev-parse --abbrev-ref HEAD`]: { stdout: "main" },
       "pnpm install": { code: 1, stderr: "ERR_PNPM_NETWORK" },
     });
 
@@ -405,6 +430,12 @@ describe("runGatewayUpdate", () => {
     expect(result.reason).toBe("deps-install-failed");
     expect(calls).not.toContain("pnpm build");
     expect(calls).not.toContain("pnpm ui:build");
+    expect(calls).toContain(`git -C ${tempDir} reset --hard`);
+    expect(calls).toContain(`git -C ${tempDir} checkout --force main`);
+    expect(calls).toContain(`git -C ${tempDir} reset --hard abc123`);
+    expect(calls.indexOf(`git -C ${tempDir} reset --hard`)).toBeLessThan(
+      calls.indexOf(`git -C ${tempDir} checkout --force main`),
+    );
   });
 
   it("uses pnpm highest resolution mode for update installs", async () => {
@@ -567,6 +598,7 @@ describe("runGatewayUpdate", () => {
     const stableTag = "v1.0.1-1";
     const { runner, calls } = createRunner({
       ...buildStableTagResponses(stableTag),
+      [`git -C ${tempDir} rev-parse --abbrev-ref HEAD`]: { stdout: "main" },
       "pnpm install": { stdout: "" },
       "pnpm build": { code: 1, stderr: "tsc: error TS2345" },
     });
@@ -577,6 +609,9 @@ describe("runGatewayUpdate", () => {
     expect(result.reason).toBe("build-failed");
     expect(calls).toContain("pnpm install");
     expect(calls).not.toContain("pnpm ui:build");
+    expect(calls).toContain(`git -C ${tempDir} reset --hard`);
+    expect(calls).toContain(`git -C ${tempDir} checkout --force main`);
+    expect(calls).toContain(`git -C ${tempDir} reset --hard abc123`);
   });
 
   it("uses stable tag when beta tag is older than release", async () => {
@@ -1742,15 +1777,17 @@ describe("runGatewayUpdate", () => {
     expect(calls).toContain(expectedInstallCommand);
   });
 
-  it("updates global npm installs from the GitHub main package spec", async () => {
+  it("rejects global npm updates from the GitHub main package spec", async () => {
     const { calls, result } = await runNpmGlobalUpdateCase({
       expectedInstallCommand: npmGlobalInstallCommand("github:openclaw/openclaw#main"),
       tag: "main",
     });
 
-    expect(result.status).toBe("ok");
+    expect(result.status).toBe("error");
     expect(result.mode).toBe("npm");
-    expect(calls).toContain(npmGlobalInstallCommand("github:openclaw/openclaw#main"));
+    expect(result.reason).toBe("unsupported-package-target");
+    expect(result.steps[0]?.name).toBe("package target validation");
+    expect(calls).not.toContain(npmGlobalInstallCommand("github:openclaw/openclaw#main"));
   });
 
   it("runs doctor after global npm updates before reporting success", async () => {
@@ -2149,7 +2186,8 @@ describe("runGatewayUpdate", () => {
 
     expect(result.status).toBe("error");
     expect(result.reason).toBe("doctor-entry-missing");
-    expect(result.steps.at(-1)?.name).toBe("openclaw doctor entry");
+    expect(result.steps.some((step) => step.name === "openclaw doctor entry")).toBe(true);
+    expect(result.steps.at(-1)?.name).toMatch(/^git rollback/);
   });
 
   it("repairs UI assets when doctor run removes control-ui files", async () => {
@@ -2196,5 +2234,6 @@ describe("runGatewayUpdate", () => {
 
     expect(result.status).toBe("error");
     expect(result.reason).toBe("ui-assets-missing");
+    expect(result.steps.at(-1)?.name).toMatch(/^git rollback/);
   });
 });

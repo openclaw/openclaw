@@ -586,8 +586,6 @@ export async function startGatewayServer(
     enqueueSystemEvent(`[${code}] ${message}`, {
       sessionKey: resolveMainSessionKey(cfg),
       contextKey: code,
-      forceSenderIsOwnerFalse: true,
-      trusted: false,
     });
   };
   const { createRuntimeSecretsActivator } = await startupConfigModulePromise;
@@ -983,6 +981,13 @@ export async function startGatewayServer(
       postReadySidecar.stop();
     }
   };
+  const stopRegisteredGatewayLifetimeSidecars = () => {
+    const gatewayLifetimeSidecars = runtimeState.gatewayLifetimeSidecars;
+    runtimeState.gatewayLifetimeSidecars = [];
+    for (const gatewayLifetimeSidecar of gatewayLifetimeSidecars) {
+      gatewayLifetimeSidecar.stop();
+    }
+  };
   const createCloseHandler = () => async (opts?: GatewayCloseOptions) => {
     const channelIds = listLoadedChannelPlugins().map((plugin) => plugin.id as ChannelId);
     const { createGatewayCloseHandler, drainActiveSessionsForShutdown } =
@@ -1026,6 +1031,7 @@ export async function startGatewayServer(
   let clearFallbackGatewayContextForServer = () => {};
   const closeOnStartupFailure = async () => {
     try {
+      stopRegisteredGatewayLifetimeSidecars();
       stopRegisteredPostReadySidecars();
       await runClosePrelude();
       await createCloseHandler()({ reason: "gateway startup failed" });
@@ -1554,12 +1560,23 @@ export async function startGatewayServer(
                 runtimeState.postReadySidecars = [];
               }
             },
+            onGatewayLifetimeSidecars: (gatewayLifetimeSidecars) => {
+              runtimeState.gatewayLifetimeSidecars = gatewayLifetimeSidecars;
+              stopPostReadySidecarsAfterCloseStarted({
+                postReadySidecars: gatewayLifetimeSidecars,
+                closeStarted: closePreludeStarted,
+              });
+              if (closePreludeStarted) {
+                runtimeState.gatewayLifetimeSidecars = [];
+              }
+            },
             onSidecarsReady: () => {
               startupSidecarsReady = true;
               activateScheduledServicesWhenReady();
             },
             startupTrace,
             deferSidecars: opts.deferStartupSidecars === true,
+            providerAuthPrewarm: { getConfig: getRuntimeConfig },
           }),
       ),
     ));
@@ -1673,6 +1690,7 @@ export async function startGatewayServer(
     close: async (opts) => {
       try {
         markClosePreludeStarted();
+        stopRegisteredGatewayLifetimeSidecars();
         stopRegisteredPostReadySidecars();
         // Run gateway_stop plugin hook before shutdown
         const { runGlobalGatewayStopSafely } = await import("../plugins/hook-runner-global.js");

@@ -5,6 +5,7 @@ import type { ReplyDirectiveParseResult } from "../auto-reply/reply/reply-direct
 import type { ReasoningLevel } from "../auto-reply/thinking.js";
 import type { InlineCodeState } from "../markdown/code-spans.js";
 import type { HookRunner } from "../plugins/hooks.js";
+import type { AcceptedSessionSpawn } from "./accepted-session-spawn.js";
 import type { EmbeddedBlockChunker } from "./pi-embedded-block-chunker.js";
 import type { MessagingToolSend } from "./pi-embedded-messaging.types.js";
 import type { BlockReplyPayload } from "./pi-embedded-payloads.js";
@@ -14,6 +15,7 @@ import type {
   BlockReplyChunking,
   SubscribeEmbeddedPiSessionParams,
 } from "./pi-embedded-subscribe.types.js";
+import type { AgentRunTimeoutPhase } from "./run-timeout-attribution.js";
 import type { ToolErrorSummary } from "./tool-error-summary.js";
 import type { NormalizedUsage } from "./usage.js";
 
@@ -33,6 +35,7 @@ export type ToolCallSummary = {
 export type EmbeddedPiSubscribeState = {
   assistantTexts: string[];
   toolMetas: Array<{ toolName?: string; meta?: string }>;
+  acceptedSessionSpawns: AcceptedSessionSpawn[];
   toolMetaById: Map<string, ToolCallSummary>;
   toolSummaryById: Set<string>;
   execLiveUpdateStateById?: Map<string, { lastEmittedAtMs: number }>;
@@ -91,6 +94,8 @@ export type EmbeddedPiSubscribeState = {
   livenessState?: EmbeddedRunLivenessState;
   terminalStopReason?: string;
   yielded?: boolean;
+  timeoutPhase?: AgentRunTimeoutPhase;
+  providerStarted?: boolean;
   hadDeterministicSideEffect?: boolean;
 
   messagingToolSentTexts: string[];
@@ -201,6 +206,7 @@ type ToolHandlerState = Pick<
   EmbeddedPiSubscribeState,
   | "toolMetaById"
   | "toolMetas"
+  | "acceptedSessionSpawns"
   | "toolSummaryById"
   | "execLiveUpdateStateById"
   | "itemActiveIds"

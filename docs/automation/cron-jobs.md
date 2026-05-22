@@ -55,6 +55,7 @@ Cron is the Gateway's built-in scheduler. It persists jobs, wakes the agent at t
 - Isolated cron runs also treat run-level agent failures as job errors even when no reply payload is produced, so model/provider failures increment error counters and trigger failure notifications instead of clearing the job as successful.
 - When an isolated agent-turn job reaches `timeoutSeconds`, cron aborts the underlying agent run and gives it a short cleanup window. If the run does not drain, Gateway-owned cleanup force-clears that run's session ownership before cron records the timeout, so queued chat work is not left behind a stale processing session.
 - If an isolated agent-turn stalls before the runner starts or before the first model call, cron records a phase-specific timeout such as `setup timed out before runner start` or `stalled before first model call (last phase: context-engine)`. These watchdogs cover embedded providers and CLI-backed providers before their external CLI process is actually started, and are capped independently from long `timeoutSeconds` values so cold-start/auth/context failures surface quickly instead of waiting for the full job budget.
+- If you use system cron or another external scheduler to run `openclaw agent`, wrap it with a hard-kill escalation even though the CLI handles `SIGTERM`/`SIGINT`. Gateway-backed runs ask the Gateway to abort accepted runs; local and embedded fallback runs receive the same abort signal. For GNU `timeout`, prefer `timeout -k 60 600 openclaw agent ...` over plain `timeout 600 ...`; the `-k` value is the supervisor backstop if the process cannot drain. For systemd units, keep the same shape by using a `SIGTERM` stop signal plus a grace window such as `TimeoutStopSec` before any final kill. If a retry reuses a `--run-id` while the original Gateway run is still active, the duplicate is reported as in-flight instead of starting a second run.
 
 <a id="maintenance"></a>
 
@@ -90,14 +91,14 @@ This fires ~5–6 times per month instead of 0–1 times per month. OpenClaw use
 
 | Style           | `--session` value   | Runs in                  | Best for                        |
 | --------------- | ------------------- | ------------------------ | ------------------------------- |
-| Main session    | `main`              | Next heartbeat turn      | Reminders, system events        |
+| Main session    | `main`              | Dedicated cron wake lane | Reminders, system events        |
 | Isolated        | `isolated`          | Dedicated `cron:<jobId>` | Reports, background chores      |
 | Current session | `current`           | Bound at creation time   | Context-aware recurring work    |
 | Custom session  | `session:custom-id` | Persistent named session | Workflows that build on history |
 
 <AccordionGroup>
   <Accordion title="Main session vs isolated vs custom">
-    **Main session** jobs enqueue a system event and optionally wake the heartbeat (`--wake now` or `--wake next-heartbeat`). Those system events do not extend daily/idle reset freshness for the target session. **Isolated** jobs run a dedicated agent turn with a fresh session. **Custom sessions** (`session:xxx`) persist context across runs, enabling workflows like daily standups that build on previous summaries.
+    **Main session** jobs enqueue a system event into a cron-owned run lane and optionally wake the heartbeat (`--wake now` or `--wake next-heartbeat`). They can use the target main session's last delivery context for replies, but they do not append routine cron turns to the human chat lane and do not extend daily/idle reset freshness for the target session. **Isolated** jobs run a dedicated agent turn with a fresh session. **Custom sessions** (`session:xxx`) persist context across runs, enabling workflows like daily standups that build on previous summaries.
   </Accordion>
   <Accordion title="What 'fresh session' means for isolated jobs">
     For isolated jobs, "fresh session" means a new transcript/session id for each run. OpenClaw may carry safe preferences such as thinking/fast/verbose settings, labels, and explicit user-selected model/auth overrides, but it does not inherit ambient conversation context from an older cron row: channel/group routing, send or queue policy, elevation, origin, or ACP runtime binding. Use `current` or `session:<id>` when a recurring job should deliberately build on the same conversation context.

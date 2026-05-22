@@ -9,14 +9,14 @@ title: "Code execution"
 
 `code_execution` runs sandboxed remote Python analysis on xAI's Responses API. It is registered by the bundled `xai` plugin (under the `tools` contract) and dispatches to the same `https://api.x.ai/v1/responses` endpoint used by `x_search`.
 
-| Property           | Value                                                                                   |
-| ------------------ | --------------------------------------------------------------------------------------- |
-| Tool name          | `code_execution`                                                                        |
-| Provider plugin    | `xai` (bundled, `enabledByDefault: true`)                                               |
-| Auth               | xAI OAuth auth profile, `XAI_API_KEY`, or `plugins.entries.xai.config.webSearch.apiKey` |
-| Default model      | `grok-4-1-fast`                                                                         |
-| Default timeout    | 30 seconds                                                                              |
-| Default `maxTurns` | unset (xAI applies its own internal limit)                                              |
+| Property           | Value                                                                             |
+| ------------------ | --------------------------------------------------------------------------------- |
+| Tool name          | `code_execution`                                                                  |
+| Provider plugin    | `xai` (bundled, `enabledByDefault: true`)                                         |
+| Auth               | xAI auth profile, `XAI_API_KEY`, or `plugins.entries.xai.config.webSearch.apiKey` |
+| Default model      | `grok-4-1-fast`                                                                   |
+| Default timeout    | 30 seconds                                                                        |
+| Default `maxTurns` | unset (xAI applies its own internal limit)                                        |
 
 This is different from local [`exec`](/tools/exec):
 
@@ -143,7 +143,7 @@ When the tool runs without auth, it returns a structured `missing_xai_api_key` e
 ```json
 {
   "error": "missing_xai_api_key",
-  "message": "code_execution needs xAI credentials. Run `openclaw models auth login --provider xai --method oauth` to sign in with Grok, run `openclaw models auth login --provider xai --method api-key`, set `XAI_API_KEY` in the Gateway environment, or configure `plugins.entries.xai.config.webSearch.apiKey`.",
+  "message": "code_execution needs xAI credentials. Run `openclaw onboard --auth-choice xai-oauth` to sign in with Grok, run `openclaw onboard --auth-choice xai-api-key`, set `XAI_API_KEY` in the Gateway environment, or configure `plugins.entries.xai.config.webSearch.apiKey`.",
   "docs": "https://docs.openclaw.ai/tools/code-execution"
 }
 ```

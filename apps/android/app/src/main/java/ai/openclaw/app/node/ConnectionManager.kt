@@ -167,6 +167,7 @@ class ConnectionManager(
       scopes =
         listOf(
           "operator.approvals",
+          "operator.pairing",
           "operator.read",
           "operator.write",
         ),
