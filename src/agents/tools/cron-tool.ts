@@ -237,53 +237,57 @@ const CronFailureAlertSchema = Type.Optional(
   }),
 );
 
-const CronJobObjectSchema = Type.Optional(
-  Type.Object(
-    {
-      name: Type.Optional(Type.String({ description: "Job name" })),
-      schedule: CronScheduleSchema,
-      sessionTarget: Type.Optional(
-        Type.String({
-          description: "main | isolated | current | session:<id>",
-        }),
-      ),
-      wakeMode: optionalStringEnum(CRON_WAKE_MODES, { description: "Wake timing" }),
-      payload: CronPayloadSchema,
-      delivery: CronDeliverySchema,
-      agentId: nullableStringSchema("Agent id, or null to keep it unset"),
-      description: Type.Optional(Type.String({ description: "Human description" })),
-      enabled: Type.Optional(Type.Boolean()),
-      deleteAfterRun: Type.Optional(Type.Boolean({ description: "Delete after first run" })),
-      sessionKey: nullableStringSchema("Explicit session key, or null to clear it"),
-      failureAlert: CronFailureAlertSchema,
-    },
-    { additionalProperties: true },
-  ),
+// Inner (non-optional) variants are used by the per-action schemas where the
+// shape is required at the tool-call boundary. The Optional wrappers below
+// keep the legacy flat-union super-tool's CronToolSchema compatible. See
+// WOR-317.
+const CronJobObjectInnerSchema = Type.Object(
+  {
+    name: Type.Optional(Type.String({ description: "Job name" })),
+    schedule: CronScheduleSchema,
+    sessionTarget: Type.Optional(
+      Type.String({
+        description: "main | isolated | current | session:<id>",
+      }),
+    ),
+    wakeMode: optionalStringEnum(CRON_WAKE_MODES, { description: "Wake timing" }),
+    payload: CronPayloadSchema,
+    delivery: CronDeliverySchema,
+    agentId: nullableStringSchema("Agent id, or null to keep it unset"),
+    description: Type.Optional(Type.String({ description: "Human description" })),
+    enabled: Type.Optional(Type.Boolean()),
+    deleteAfterRun: Type.Optional(Type.Boolean({ description: "Delete after first run" })),
+    sessionKey: nullableStringSchema("Explicit session key, or null to clear it"),
+    failureAlert: CronFailureAlertSchema,
+  },
+  { additionalProperties: true },
 );
 
-const CronPatchObjectSchema = Type.Optional(
-  Type.Object(
-    {
-      name: Type.Optional(Type.String({ description: "Job name" })),
-      schedule: CronScheduleSchema,
-      sessionTarget: Type.Optional(Type.String({ description: "Session target" })),
-      wakeMode: optionalStringEnum(CRON_WAKE_MODES),
-      payload: Type.Optional(
-        cronPayloadObjectSchema({
-          toolsAllow: nullableStringArraySchema("Allowed tool ids, or null to clear"),
-        }),
-      ),
-      delivery: CronDeliverySchema,
-      description: Type.Optional(Type.String()),
-      enabled: Type.Optional(Type.Boolean()),
-      deleteAfterRun: Type.Optional(Type.Boolean()),
-      agentId: nullableStringSchema("Agent id, or null to clear it"),
-      sessionKey: nullableStringSchema("Explicit session key, or null to clear it"),
-      failureAlert: CronFailureAlertSchema,
-    },
-    { additionalProperties: true },
-  ),
+const CronJobObjectSchema = Type.Optional(CronJobObjectInnerSchema);
+
+const CronPatchObjectInnerSchema = Type.Object(
+  {
+    name: Type.Optional(Type.String({ description: "Job name" })),
+    schedule: CronScheduleSchema,
+    sessionTarget: Type.Optional(Type.String({ description: "Session target" })),
+    wakeMode: optionalStringEnum(CRON_WAKE_MODES),
+    payload: Type.Optional(
+      cronPayloadObjectSchema({
+        toolsAllow: nullableStringArraySchema("Allowed tool ids, or null to clear"),
+      }),
+    ),
+    delivery: CronDeliverySchema,
+    description: Type.Optional(Type.String()),
+    enabled: Type.Optional(Type.Boolean()),
+    deleteAfterRun: Type.Optional(Type.Boolean()),
+    agentId: nullableStringSchema("Agent id, or null to clear it"),
+    sessionKey: nullableStringSchema("Explicit session key, or null to clear it"),
+    failureAlert: CronFailureAlertSchema,
+  },
+  { additionalProperties: true },
 );
+
+const CronPatchObjectSchema = Type.Optional(CronPatchObjectInnerSchema);
 
 // Flattened schema: runtime validates per-action requirements.
 export const CronToolSchema = Type.Object(
@@ -348,7 +352,9 @@ export const CronGetSchema = Type.Object(
 export const CronAddSchema = Type.Object(
   {
     ...CronGatewayCommonSchema,
-    job: CronJobObjectSchema,
+    // Required: per-action add must carry the job object.  The legacy
+    // super-tool keeps the Optional wrapper for back-compat (WOR-317).
+    job: CronJobObjectInnerSchema,
     contextMessages: Type.Optional(
       Type.Number({ minimum: 0, maximum: REMINDER_CONTEXT_MESSAGES_MAX }),
     ),
@@ -361,7 +367,11 @@ export const CronUpdateSchema = Type.Object(
     ...CronGatewayCommonSchema,
     jobId: Type.Optional(Type.String()),
     id: Type.Optional(Type.String()),
-    patch: CronPatchObjectSchema,
+    // Required: per-action update must carry the patch object.  Without
+    // this, the model is told it may call cron_update with no patch at
+    // all and the executor will reject every such call, recreating a
+    // smaller WOR-316-style retry loop (WOR-317).
+    patch: CronPatchObjectInnerSchema,
   },
   { additionalProperties: true },
 );
