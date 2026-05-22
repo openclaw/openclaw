@@ -71,7 +71,7 @@ describe("runBootOnce", () => {
 
   const mockAgentUpdatesRequestedSession = (storePath: string) => {
     agentCommand.mockImplementation(async (opts: { sessionId?: string; sessionKey?: string }) => {
-      const sessionKey = String(opts.sessionKey ?? "");
+      const sessionKey = opts.sessionKey ?? "";
       if (!sessionKey) {
         throw new Error("expected sessionKey");
       }
