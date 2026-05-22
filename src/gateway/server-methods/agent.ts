@@ -1254,68 +1254,14 @@ export const agentHandlers: GatewayRequestHandlers = {
           request.bootstrapContextRunKind !== "cron" &&
           request.bootstrapContextRunKind !== "heartbeat" &&
           !request.internalEvents?.length;
-        const labelValue = normalizeOptionalString(request.label) || entry?.label;
-        const pluginOwnerId =
-          entry === undefined
-            ? normalizeOptionalString(client?.internal?.pluginRuntimeOwnerId)
-            : normalizeOptionalString(entry.pluginOwnerId);
         const sessionAgent = resolveAgentIdFromSessionKey(canonicalKey);
-        spawnedByValue = canonicalizeSpawnedByForAgent(cfg, sessionAgent, entry?.spawnedBy);
-        const storedGroup = normalizeTrustedGroupMetadata(entry);
-        let inheritedGroup: TrustedGroupMetadata | undefined;
-        if (
-          spawnedByValue &&
-          (!storedGroup.groupId || !storedGroup.groupChannel || !storedGroup.groupSpace)
-        ) {
-          try {
-            const parentEntry = loadSessionEntry(spawnedByValue)?.entry;
-            inheritedGroup = normalizeTrustedGroupMetadata({
-              groupId: parentEntry?.groupId,
-              groupChannel: parentEntry?.groupChannel,
-              groupSpace: parentEntry?.space,
-            });
-          } catch {
-            inheritedGroup = undefined;
-          }
-        }
-        const trustedGroup = resolveTrustedGroupMetadata({
-          sessionKey: canonicalKey,
-          spawnedBy: spawnedByValue,
-          stored: storedGroup,
-          inherited: inheritedGroup,
-        });
-        const validatedGroup = trustedGroup.groupId
-          ? resolveTrustedGroupId({
-              groupId: trustedGroup.groupId,
-              sessionKey: canonicalKey,
-              spawnedBy: spawnedByValue,
-            })
-          : undefined;
-        if (validatedGroup?.dropped) {
-          resolvedGroupId = undefined;
-          resolvedGroupChannel = undefined;
-          resolvedGroupSpace = undefined;
-        } else {
-          const trustRequestSelectors =
-            Boolean(trustedGroup.groupId) &&
-            requestGroupMatchesTrusted({
-              requestGroupId: normalizedSpawned.groupId,
-              trustedGroupId: trustedGroup.groupId,
-            });
-          resolvedGroupId = trustedGroup.groupId;
-          resolvedGroupChannel =
-            trustedGroup.groupChannel ??
-            (trustRequestSelectors ? normalizedSpawned.groupChannel : undefined);
-          resolvedGroupSpace =
-            trustedGroup.groupSpace ??
-            (trustRequestSelectors ? normalizedSpawned.groupSpace : undefined);
-        }
-        const deliveryFields = normalizeSessionDeliveryFields(entry);
-        // When the session has no delivery context yet (e.g. a freshly-spawned subagent
-        // with deliver: false), seed it from the request's channel/to/threadId params.
-        // Without this, subagent sessions end up with a channel-only deliveryContext
-        // and no `to`/`threadId`, which causes announce delivery to either target the
-        // wrong channel (when the parent's lastTo drifts) or fail entirely.
+        type AgentSessionPatchBuild = {
+          patch: Partial<SessionEntry>;
+          spawnedBy: string | undefined;
+          groupId: string | undefined;
+          groupChannel: string | undefined;
+          groupSpace: string | undefined;
+        };
         const requestDeliveryHint = normalizeDeliveryContext({
           channel: request.channel?.trim(),
           to: request.to?.trim(),
@@ -1324,93 +1270,139 @@ export const agentHandlers: GatewayRequestHandlers = {
           // string and numeric threadIds (e.g., Matrix uses integers).
           threadId: request.threadId,
         });
-        const effectiveDelivery = mergeDeliveryContext(
-          deliveryFields.deliveryContext,
-          requestDeliveryHint,
-        );
-        const effectiveDeliveryFields = normalizeSessionDeliveryFields({
-          route: deliveryFields.route,
-          deliveryContext: effectiveDelivery,
-        });
-        // Patch carries only fields derived from the current request. Fields
-        // read from the stale cached `entry` must NOT appear here — the patch
-        // is later merged via `{...freshStore, ...patch}` in updateSessionStore,
-        // so any stale value in the patch would clobber a fresh store value
-        // written concurrently (e.g. by sessions.patch setting modelOverride
-        // on a subagent between spawn and run — see #5369).
-        const nextEntryPatch: Partial<SessionEntry> = {
-          sessionId,
-          updatedAt: now,
-          // sessionStartedAt is only written for genuinely new sessions; the
-          // reuse path lets mergeSessionEntry preserve the freshStore value
-          // (and re-derive from updatedAt if absent). Reading entry?.sessionStartedAt
-          // here would re-introduce the #5369 stale-writeback class.
-          ...(isNewSession ? { sessionStartedAt: now } : {}),
-          // Same principle for lastInteractionAt: only write the request-derived
-          // value (now) when this run actually counts as user interaction; let
-          // mergeSessionEntry preserve freshStore otherwise.
-          ...(touchInteraction ? { lastInteractionAt: now } : {}),
-          route: effectiveDeliveryFields.route,
-          deliveryContext: effectiveDeliveryFields.deliveryContext,
-          lastChannel: effectiveDeliveryFields.lastChannel ?? entry?.lastChannel,
-          lastTo: effectiveDeliveryFields.lastTo ?? entry?.lastTo,
-          lastAccountId: effectiveDeliveryFields.lastAccountId ?? entry?.lastAccountId,
-          lastThreadId: effectiveDeliveryFields.lastThreadId ?? entry?.lastThreadId,
-          label: labelValue,
-          spawnedBy: spawnedByValue,
-          channel: entry?.channel ?? request.channel?.trim(),
-          // groupId/groupChannel/space carry the *validated* request-derived
-          // values; trust resolution against session key + spawnedBy happens
-          // upstream in resolveTrustedGroup (#73720). Falling back to entry?.X
-          // here would bypass that validation and let a forged groupId persist
-          // across reconnects.
-          groupId: resolvedGroupId,
-          groupChannel: resolvedGroupChannel,
-          space: resolvedGroupSpace,
-          // Only seed pluginOwnerId when the session is brand new (no cached
-          // entry) and the value comes from the connecting client. For existing
-          // entries pluginOwnerId is read from the stale cache, so writing it
-          // back into the patch would be the same #5369 stale-writeback bug.
-          ...(entry === undefined && pluginOwnerId ? { pluginOwnerId } : {}),
-          // On session rotation (failed-with-missing-transcript or sessionId
-          // change), explicitly clear the failed run's lifecycle state and
-          // transcript path. In the same-session case omit these fields so
-          // mergeSessionEntry preserves the freshStore values — falling back
-          // to `entry?.X` would re-introduce the #5369 stale-writeback class.
-          ...(rotatedSessionId
-            ? {
-                status: undefined,
-                startedAt: undefined,
-                endedAt: undefined,
-                runtimeMs: undefined,
-                abortedLastRun: undefined,
-                sessionFile: undefined,
-              }
-            : {}),
-          // cliSessionIds / cliSessionBindings / claudeCliSessionId are
-          // intentionally NOT carried via `entry?.X` writebacks here:
-          // mergeSessionEntry preserves them from the fresh store, and reading
-          // them from the stale cache would be the #5369 stale-writeback class.
-        };
-        sessionEntry = mergeSessionEntry(entry, nextEntryPatch);
-        if (request.deliver === true) {
-          const sendPolicy = resolveSendPolicy({
+        const buildSessionPatch = (
+          freshEntry: SessionEntry | undefined,
+        ): AgentSessionPatchBuild => {
+          const freshSpawnedBy = canonicalizeSpawnedByForAgent(
             cfg,
-            entry: sessionEntry,
-            sessionKey: canonicalKey,
-            channel: sessionEntry?.channel,
-            chatType: sessionEntry?.chatType,
-          });
-          if (sendPolicy === "deny") {
-            respond(
-              false,
-              undefined,
-              errorShape(ErrorCodes.INVALID_REQUEST, "send blocked by session policy"),
-            );
-            return;
+            sessionAgent,
+            freshEntry?.spawnedBy,
+          );
+          const storedGroup = normalizeTrustedGroupMetadata(freshEntry);
+          let inheritedGroup: TrustedGroupMetadata | undefined;
+          if (
+            freshSpawnedBy &&
+            (!storedGroup.groupId || !storedGroup.groupChannel || !storedGroup.groupSpace)
+          ) {
+            try {
+              const parentEntry = loadSessionEntry(freshSpawnedBy)?.entry;
+              inheritedGroup = normalizeTrustedGroupMetadata({
+                groupId: parentEntry?.groupId,
+                groupChannel: parentEntry?.groupChannel,
+                groupSpace: parentEntry?.space,
+              });
+            } catch {
+              inheritedGroup = undefined;
+            }
           }
-        }
-        resolvedSessionId = sessionId;
+          const trustedGroup = resolveTrustedGroupMetadata({
+            sessionKey: canonicalKey,
+            spawnedBy: freshSpawnedBy,
+            stored: storedGroup,
+            inherited: inheritedGroup,
+          });
+          const validatedGroup = trustedGroup.groupId
+            ? resolveTrustedGroupId({
+                groupId: trustedGroup.groupId,
+                sessionKey: canonicalKey,
+                spawnedBy: freshSpawnedBy,
+              })
+            : undefined;
+          const nextGroup =
+            validatedGroup?.dropped === true
+              ? {
+                  groupId: undefined,
+                  groupChannel: undefined,
+                  groupSpace: undefined,
+                }
+              : (() => {
+                  const trustRequestSelectors =
+                    Boolean(trustedGroup.groupId) &&
+                    requestGroupMatchesTrusted({
+                      requestGroupId: normalizedSpawned.groupId,
+                      trustedGroupId: trustedGroup.groupId,
+                    });
+                  return {
+                    groupId: trustedGroup.groupId,
+                    groupChannel:
+                      trustedGroup.groupChannel ??
+                      (trustRequestSelectors ? normalizedSpawned.groupChannel : undefined),
+                    groupSpace:
+                      trustedGroup.groupSpace ??
+                      (trustRequestSelectors ? normalizedSpawned.groupSpace : undefined),
+                  };
+                })();
+
+          const deliveryFields = normalizeSessionDeliveryFields(freshEntry);
+          // When the session has no delivery context yet (e.g. a freshly-spawned
+          // subagent with deliver: false), seed it from request channel/to/threadId.
+          const effectiveDelivery = mergeDeliveryContext(
+            deliveryFields.deliveryContext,
+            requestDeliveryHint,
+          );
+          const effectiveDeliveryFields = normalizeSessionDeliveryFields({
+            route: deliveryFields.route,
+            deliveryContext: effectiveDelivery,
+          });
+          const labelValue = normalizeOptionalString(request.label) || freshEntry?.label;
+          const channelValue = freshEntry?.channel ?? request.channel?.trim();
+          const pluginOwnerId =
+            freshEntry === undefined
+              ? normalizeOptionalString(client?.internal?.pluginRuntimeOwnerId)
+              : undefined;
+          const freshSessionRotatedSinceLoad = Boolean(
+            entry?.sessionId && freshEntry?.sessionId && freshEntry.sessionId !== entry.sessionId,
+          );
+          const patchSessionId = freshSessionRotatedSinceLoad ? freshEntry?.sessionId : sessionId;
+          const shouldClearRotatedState = rotatedSessionId && !freshSessionRotatedSinceLoad;
+          const patch: Partial<SessionEntry> = {
+            sessionId: patchSessionId,
+            updatedAt: now,
+            ...(isNewSession && !freshSessionRotatedSinceLoad ? { sessionStartedAt: now } : {}),
+            ...(touchInteraction ? { lastInteractionAt: now } : {}),
+            ...(effectiveDeliveryFields.route ? { route: effectiveDeliveryFields.route } : {}),
+            ...(effectiveDeliveryFields.deliveryContext
+              ? { deliveryContext: effectiveDeliveryFields.deliveryContext }
+              : {}),
+            ...(effectiveDeliveryFields.lastChannel
+              ? { lastChannel: effectiveDeliveryFields.lastChannel }
+              : {}),
+            ...(effectiveDeliveryFields.lastTo ? { lastTo: effectiveDeliveryFields.lastTo } : {}),
+            ...(effectiveDeliveryFields.lastAccountId
+              ? { lastAccountId: effectiveDeliveryFields.lastAccountId }
+              : {}),
+            ...(effectiveDeliveryFields.lastThreadId != null
+              ? { lastThreadId: effectiveDeliveryFields.lastThreadId }
+              : {}),
+            ...(labelValue ? { label: labelValue } : {}),
+            ...(freshSpawnedBy ? { spawnedBy: freshSpawnedBy } : {}),
+            ...(channelValue ? { channel: channelValue } : {}),
+            groupId: nextGroup.groupId,
+            groupChannel: nextGroup.groupChannel,
+            space: nextGroup.groupSpace,
+            ...(pluginOwnerId ? { pluginOwnerId } : {}),
+            ...(shouldClearRotatedState
+              ? {
+                  status: undefined,
+                  startedAt: undefined,
+                  endedAt: undefined,
+                  runtimeMs: undefined,
+                  abortedLastRun: undefined,
+                  sessionFile: undefined,
+                }
+              : {}),
+          };
+          return {
+            patch,
+            spawnedBy: freshSpawnedBy,
+            groupId: nextGroup.groupId,
+            groupChannel: nextGroup.groupChannel,
+            groupSpace: nextGroup.groupSpace,
+          };
+        };
+        let patchBuild = buildSessionPatch(entry);
+        sessionEntry = mergeSessionEntry(entry, patchBuild.patch);
+        resolvedSessionId = sessionEntry?.sessionId ?? sessionId;
         const canonicalSessionKey = canonicalKey;
         resolvedSessionKey = canonicalSessionKey;
         const agentId = resolveAgentIdFromSessionKey(canonicalSessionKey);
@@ -1430,22 +1422,72 @@ export const agentHandlers: GatewayRequestHandlers = {
             : undefined;
         if (storePath) {
           const requestedStoreKey = requestedSessionKey;
+          let deniedBySendPolicy = false;
           const persisted = await updateSessionStore(storePath, (store) => {
             const { primaryKey } = migrateAndPruneGatewaySessionStoreKey({
               cfg,
               key: requestedStoreKey,
               store,
             });
+            const freshEntry = store[primaryKey];
+            patchBuild = buildSessionPatch(freshEntry);
             const effectivePatch =
               recoveredSessionStartedAt !== undefined &&
-              store[primaryKey]?.sessionStartedAt === undefined
-                ? { ...nextEntryPatch, sessionStartedAt: recoveredSessionStartedAt }
-                : nextEntryPatch;
-            const merged = mergeSessionEntry(store[primaryKey], effectivePatch);
+              freshEntry?.sessionStartedAt === undefined &&
+              freshEntry?.sessionId === entry?.sessionId
+                ? { ...patchBuild.patch, sessionStartedAt: recoveredSessionStartedAt }
+                : patchBuild.patch;
+            const merged = mergeSessionEntry(freshEntry, effectivePatch);
+            const sendPolicy =
+              request.deliver === true
+                ? resolveSendPolicy({
+                    cfg,
+                    entry: merged,
+                    sessionKey: canonicalKey,
+                    channel: merged?.channel,
+                    chatType: merged?.chatType,
+                  })
+                : "allow";
+            if (sendPolicy === "deny") {
+              deniedBySendPolicy = true;
+              return merged;
+            }
             store[primaryKey] = merged;
             return merged;
           });
-          sessionEntry = persisted;
+          if (persisted) {
+            sessionEntry = persisted;
+            resolvedSessionId = sessionEntry.sessionId;
+          }
+          if (deniedBySendPolicy) {
+            respond(
+              false,
+              undefined,
+              errorShape(ErrorCodes.INVALID_REQUEST, "send blocked by session policy"),
+            );
+            return;
+          }
+        }
+        spawnedByValue = patchBuild.spawnedBy;
+        resolvedGroupId = patchBuild.groupId;
+        resolvedGroupChannel = patchBuild.groupChannel;
+        resolvedGroupSpace = patchBuild.groupSpace;
+        if (request.deliver === true) {
+          const sendPolicy = resolveSendPolicy({
+            cfg,
+            entry: sessionEntry,
+            sessionKey: canonicalKey,
+            channel: sessionEntry?.channel,
+            chatType: sessionEntry?.chatType,
+          });
+          if (sendPolicy === "deny") {
+            respond(
+              false,
+              undefined,
+              errorShape(ErrorCodes.INVALID_REQUEST, "send blocked by session policy"),
+            );
+            return;
+          }
         }
         if (canonicalSessionKey === mainSessionKey || canonicalSessionKey === "global") {
           context.addChatRun(idem, {
