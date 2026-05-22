@@ -83,6 +83,20 @@ export type ChromeMcpNetworkRequestsResult = {
   pagination?: ChromeMcpPagination;
 };
 
+export type ChromeMcpExtension = {
+  id?: string;
+  name?: string;
+  version?: string;
+  enabled?: boolean;
+  path?: string;
+  [key: string]: unknown;
+};
+
+export type ChromeMcpGenericToolResult = {
+  output: string;
+  structuredContent?: Record<string, unknown>;
+};
+
 type ChromeMcpToolResult = {
   structuredContent?: Record<string, unknown>;
   content?: Array<Record<string, unknown>>;
@@ -173,6 +187,11 @@ const DEFAULT_CHROME_MCP_FEATURE_ARGS = [
   "--experimentalMemory",
   // Enables Chrome DevTools MCP screencast_start/stop tools.
   "--experimentalScreencast",
+  // Enables Chrome DevTools MCP get_tab_id interoperability tool.
+  "--experimentalInteropTools",
+  // Enables Chrome DevTools MCP page-exposed tool listing/execution surfaces.
+  "--categoryExperimentalThirdParty",
+  "--categoryExperimentalWebmcp",
 ];
 const CHROME_MCP_USAGE_STATISTICS_FLAG_RE = /^--(?:no-)?usage-?statistics(?:=.*)?$/i;
 const CHROME_MCP_CONNECTION_FLAGS = new Set([
@@ -259,6 +278,22 @@ function toBrowserTabs(pages: ChromeMcpStructuredPage[]): BrowserTab[] {
 
 function extractStructuredContent(result: ChromeMcpToolResult): Record<string, unknown> {
   return asRecord(result.structuredContent) ?? {};
+}
+
+function toGenericToolResult(result: ChromeMcpToolResult): ChromeMcpGenericToolResult {
+  const structuredContent = extractStructuredContent(result);
+  return {
+    output: extractMessageText(result),
+    ...(Object.keys(structuredContent).length > 0 ? { structuredContent } : {}),
+  };
+}
+
+function extractExtensions(result: ChromeMcpToolResult): ChromeMcpExtension[] {
+  const extensions = extractStructuredContent(result).extensions;
+  if (!Array.isArray(extensions)) {
+    return [];
+  }
+  return extensions.map((entry) => asRecord(entry)).filter((entry): entry is ChromeMcpExtension => Boolean(entry));
 }
 
 function extractTextContent(result: ChromeMcpToolResult): string[] {
@@ -2321,6 +2356,197 @@ export async function stopChromeMcpScreencast(params: {
     { timeoutMs: params.timeoutMs },
   );
   return extractMessageText(result);
+}
+
+export async function listChromeMcpExtensions(params: {
+  profileName: string;
+  profile?: ChromeMcpProfileOptions;
+  userDataDir?: string;
+  timeoutMs?: number;
+}): Promise<ChromeMcpExtension[]> {
+  const result = await callTool(
+    params.profileName,
+    chromeMcpProfileOptionsFromParams(params),
+    "list_extensions",
+    {},
+    { timeoutMs: params.timeoutMs },
+  );
+  return extractExtensions(result);
+}
+
+export async function installChromeMcpExtension(params: {
+  profileName: string;
+  profile?: ChromeMcpProfileOptions;
+  userDataDir?: string;
+  path: string;
+  timeoutMs?: number;
+}): Promise<string> {
+  const result = await callTool(
+    params.profileName,
+    chromeMcpProfileOptionsFromParams(params),
+    "install_extension",
+    { path: params.path },
+    { timeoutMs: params.timeoutMs },
+  );
+  return extractMessageText(result);
+}
+
+export async function uninstallChromeMcpExtension(params: {
+  profileName: string;
+  profile?: ChromeMcpProfileOptions;
+  userDataDir?: string;
+  id: string;
+  timeoutMs?: number;
+}): Promise<string> {
+  const result = await callTool(
+    params.profileName,
+    chromeMcpProfileOptionsFromParams(params),
+    "uninstall_extension",
+    { id: params.id },
+    { timeoutMs: params.timeoutMs },
+  );
+  return extractMessageText(result);
+}
+
+export async function reloadChromeMcpExtension(params: {
+  profileName: string;
+  profile?: ChromeMcpProfileOptions;
+  userDataDir?: string;
+  id: string;
+  timeoutMs?: number;
+}): Promise<string> {
+  const result = await callTool(
+    params.profileName,
+    chromeMcpProfileOptionsFromParams(params),
+    "reload_extension",
+    { id: params.id },
+    { timeoutMs: params.timeoutMs },
+  );
+  return extractMessageText(result);
+}
+
+export async function triggerChromeMcpExtensionAction(params: {
+  profileName: string;
+  profile?: ChromeMcpProfileOptions;
+  userDataDir?: string;
+  id: string;
+  timeoutMs?: number;
+}): Promise<string> {
+  const result = await callTool(
+    params.profileName,
+    chromeMcpProfileOptionsFromParams(params),
+    "trigger_extension_action",
+    { id: params.id },
+    { timeoutMs: params.timeoutMs },
+  );
+  return extractMessageText(result);
+}
+
+export async function getChromeMcpTabId(params: {
+  profileName: string;
+  profile?: ChromeMcpProfileOptions;
+  userDataDir?: string;
+  targetId: string;
+  timeoutMs?: number;
+}): Promise<string | undefined> {
+  const result = await callTool(
+    params.profileName,
+    chromeMcpProfileOptionsFromParams(params),
+    "get_tab_id",
+    { pageId: parsePageId(params.targetId) },
+    { timeoutMs: params.timeoutMs },
+  );
+  return readStringValue(extractStructuredContent(result).tabId) ?? normalizeOptionalString(extractMessageText(result));
+}
+
+export async function listChromeMcpThirdPartyDeveloperTools(params: {
+  profileName: string;
+  profile?: ChromeMcpProfileOptions;
+  userDataDir?: string;
+  targetId: string;
+  timeoutMs?: number;
+}): Promise<ChromeMcpGenericToolResult> {
+  const result = await callTool(
+    params.profileName,
+    chromeMcpProfileOptionsFromParams(params),
+    "list_3p_developer_tools",
+    { pageId: parsePageId(params.targetId) },
+    { timeoutMs: params.timeoutMs },
+  );
+  return toGenericToolResult(result);
+}
+
+export async function executeChromeMcpThirdPartyDeveloperTool(params: {
+  profileName: string;
+  profile?: ChromeMcpProfileOptions;
+  userDataDir?: string;
+  targetId: string;
+  toolName: string;
+  paramsJson?: string;
+  toolParams?: Record<string, unknown>;
+  timeoutMs?: number;
+}): Promise<ChromeMcpGenericToolResult> {
+  const result = await callTool(
+    params.profileName,
+    chromeMcpProfileOptionsFromParams(params),
+    "execute_3p_developer_tool",
+    {
+      pageId: parsePageId(params.targetId),
+      toolName: params.toolName,
+      ...(params.paramsJson !== undefined
+        ? { params: params.paramsJson }
+        : params.toolParams !== undefined
+          ? { params: JSON.stringify(params.toolParams) }
+          : {}),
+    },
+    { timeoutMs: params.timeoutMs },
+  );
+  return toGenericToolResult(result);
+}
+
+export async function listChromeMcpWebMcpTools(params: {
+  profileName: string;
+  profile?: ChromeMcpProfileOptions;
+  userDataDir?: string;
+  targetId: string;
+  timeoutMs?: number;
+}): Promise<ChromeMcpGenericToolResult> {
+  const result = await callTool(
+    params.profileName,
+    chromeMcpProfileOptionsFromParams(params),
+    "list_webmcp_tools",
+    { pageId: parsePageId(params.targetId) },
+    { timeoutMs: params.timeoutMs },
+  );
+  return toGenericToolResult(result);
+}
+
+export async function executeChromeMcpWebMcpTool(params: {
+  profileName: string;
+  profile?: ChromeMcpProfileOptions;
+  userDataDir?: string;
+  targetId: string;
+  toolName: string;
+  inputJson?: string;
+  input?: Record<string, unknown>;
+  timeoutMs?: number;
+}): Promise<ChromeMcpGenericToolResult> {
+  const result = await callTool(
+    params.profileName,
+    chromeMcpProfileOptionsFromParams(params),
+    "execute_webmcp_tool",
+    {
+      pageId: parsePageId(params.targetId),
+      toolName: params.toolName,
+      ...(params.inputJson !== undefined
+        ? { input: params.inputJson }
+        : params.input !== undefined
+          ? { input: JSON.stringify(params.input) }
+          : {}),
+    },
+    { timeoutMs: params.timeoutMs },
+  );
+  return toGenericToolResult(result);
 }
 
 /** Accept or dismiss a Chrome MCP browser dialog. */
