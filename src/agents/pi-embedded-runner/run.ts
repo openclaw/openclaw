@@ -18,6 +18,7 @@ import { resolveProviderAuthProfileId } from "../../plugins/provider-runtime.js"
 import { enqueueCommandInLane } from "../../process/command-queue.js";
 import type { CommandQueueEnqueueOptions } from "../../process/command-queue.types.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
+import { createAgentHarnessTaskRuntimeScope } from "../../tasks/agent-harness-task-runtime-scope.js";
 import { sanitizeForLog } from "../../terminal/ansi.js";
 import { resolveUserPath } from "../../utils.js";
 import { isMarkdownCapableMessageChannel } from "../../utils/message-channel.js";
@@ -1438,6 +1439,13 @@ export async function runEmbeddedPiAgent(
             // attempt too. Otherwise plugin-owned transports can skip PI auth
             // bootstrap but drift back to PI when the attempt is created.
             agentHarnessId: agentHarness.id,
+            ...(params.sessionKey
+              ? {
+                  agentHarnessTaskRuntimeScope: createAgentHarnessTaskRuntimeScope({
+                    requesterSessionKey: params.sessionKey,
+                  }),
+                }
+              : {}),
             runtimePlan,
             model: applyAuthHeaderOverride(
               applyLocalNoAuthHeaderOverride(effectiveModel, apiKeyInfo),
