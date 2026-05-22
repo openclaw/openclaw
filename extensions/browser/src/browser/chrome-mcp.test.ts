@@ -11,6 +11,7 @@ import {
   buildChromeMcpArgs,
   decodeChromeMcpStderrTail,
   ensureChromeMcpAvailable,
+  emulateChromeMcpPage,
   evaluateChromeMcpScript,
   getChromeMcpConsoleMessage,
   getChromeMcpNetworkRequest,
@@ -105,6 +106,9 @@ function createFakeSession(): ChromeMcpSession {
     }
     if (name === "click_at") {
       return { content: [{ type: "text", text: "Successfully clicked at the coordinates" }] };
+    }
+    if (name === "emulate") {
+      return { content: [{ type: "text", text: "Emulation configured successfully" }] };
     }
     if (name === "list_console_messages") {
       return {
@@ -333,6 +337,53 @@ describe("chrome MCP page parsing", () => {
       name: "click_at",
       arguments: { pageId: 2, x: 25, y: 32, dblClick: true },
     });
+  });
+
+  it("preserves tracked Chrome MCP emulation state across partial updates", async () => {
+    const session = createFakeSession();
+    const factory: ChromeMcpSessionFactory = async () => session;
+    setChromeMcpSessionFactoryForTest(factory);
+
+    await emulateChromeMcpPage({
+      profileName: "chrome-live",
+      targetId: "2",
+      offline: true,
+    });
+    await emulateChromeMcpPage({
+      profileName: "chrome-live",
+      targetId: "2",
+      extraHttpHeaders: { "x-openclaw-test": "yes" },
+    });
+    await emulateChromeMcpPage({
+      profileName: "chrome-live",
+      targetId: "2",
+      offline: false,
+    });
+
+    const emulateCalls = (session.client.callTool as unknown as ToolCallMock).mock.calls
+      .map(([call]) => call)
+      .filter((call) => call.name === "emulate");
+    expect(emulateCalls).toEqual([
+      {
+        name: "emulate",
+        arguments: { pageId: 2, networkConditions: "Offline" },
+      },
+      {
+        name: "emulate",
+        arguments: {
+          pageId: 2,
+          networkConditions: "Offline",
+          extraHttpHeaders: JSON.stringify({ "x-openclaw-test": "yes" }),
+        },
+      },
+      {
+        name: "emulate",
+        arguments: {
+          pageId: 2,
+          extraHttpHeaders: JSON.stringify({ "x-openclaw-test": "yes" }),
+        },
+      },
+    ]);
   });
 
   it("keeps evaluated clickCoords fallback when Chrome MCP click_at cannot preserve options", async () => {

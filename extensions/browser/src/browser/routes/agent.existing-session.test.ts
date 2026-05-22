@@ -12,6 +12,7 @@ const routeState = existingSessionRouteState;
 const chromeMcpMocks = vi.hoisted(() => ({
   clickChromeMcpCoords: vi.fn(async () => {}),
   clickChromeMcpElement: vi.fn(async () => {}),
+  emulateChromeMcpPage: vi.fn(async () => {}),
   evaluateChromeMcpScript: vi.fn(
     async (_params: { profileName: string; targetId: string; fn: string }) => true,
   ),
@@ -41,6 +42,7 @@ vi.mock("../chrome-mcp.js", () => ({
   clickChromeMcpElement: chromeMcpMocks.clickChromeMcpElement,
   closeChromeMcpTab: vi.fn(async () => {}),
   dragChromeMcpElement: vi.fn(async () => {}),
+  emulateChromeMcpPage: chromeMcpMocks.emulateChromeMcpPage,
   evaluateChromeMcpScript: chromeMcpMocks.evaluateChromeMcpScript,
   fillChromeMcpElement: chromeMcpMocks.fillChromeMcpElement,
   fillChromeMcpForm: vi.fn(async () => {}),
@@ -84,6 +86,7 @@ vi.mock("./agent.shared.js", () => createExistingSessionAgentSharedModule());
 const { registerBrowserAgentActRoutes } = await import("./agent.act.js");
 const { registerBrowserAgentActHookRoutes } = await import("./agent.act.hooks.js");
 const { registerBrowserAgentSnapshotRoutes } = await import("./agent.snapshot.js");
+const { registerBrowserAgentStorageRoutes } = await import("./agent.storage.js");
 
 function getSnapshotGetHandler(ssrfPolicy?: unknown) {
   const { app, getHandlers } = createBrowserRouteApp();
@@ -125,6 +128,16 @@ function getDialogHookPostHandler() {
   return handler;
 }
 
+function getStoragePostHandler(path: string) {
+  const { app, postHandlers } = createBrowserRouteApp();
+  registerBrowserAgentStorageRoutes(app, {
+    state: () => ({ resolved: {} }),
+  } as never);
+  const handler = postHandlers.get(path);
+  expect(handler).toBeTypeOf("function");
+  return handler;
+}
+
 function requireRecord(value: unknown, label: string): Record<string, unknown> {
   if (!value || typeof value !== "object") {
     throw new Error(`expected ${label}`);
@@ -153,6 +166,7 @@ describe("existing-session browser routes", () => {
     routeState.profileCtx.listTabs.mockClear();
     chromeMcpMocks.clickChromeMcpCoords.mockClear();
     chromeMcpMocks.clickChromeMcpElement.mockClear();
+    chromeMcpMocks.emulateChromeMcpPage.mockClear();
     chromeMcpMocks.evaluateChromeMcpScript.mockReset();
     chromeMcpMocks.fillChromeMcpElement.mockClear();
     chromeMcpMocks.handleChromeMcpDialog.mockReset().mockRejectedValue(new Error("No open dialog found"));
@@ -599,5 +613,98 @@ describe("existing-session browser routes", () => {
     expect(clickParams.doubleClick).toBe(true);
     expect(clickParams.button).toBeUndefined();
     expect(clickParams.delayMs).toBe(5);
+  });
+
+  it("routes existing-session offline changes through Chrome MCP emulate", async () => {
+    const handler = getStoragePostHandler("/set/offline");
+    const response = createBrowserRouteResponse();
+
+    await handler?.(
+      {
+        params: {},
+        query: {},
+        body: { offline: true },
+      },
+      response.res,
+    );
+
+    expect(response.statusCode).toBe(200);
+    const body = requireRecord(response.body, "response body");
+    expect(body.ok).toBe(true);
+    expect(body.targetId).toBe("7");
+    expect(chromeMcpMocks.emulateChromeMcpPage).toHaveBeenCalledWith({
+      profileName: "chrome-live",
+      profile: expect.objectContaining({ name: "chrome-live", driver: "existing-session" }),
+      targetId: "7",
+      offline: true,
+    });
+  });
+
+  it("routes existing-session headers through Chrome MCP emulate", async () => {
+    const handler = getStoragePostHandler("/set/headers");
+    const response = createBrowserRouteResponse();
+
+    await handler?.(
+      {
+        params: {},
+        query: {},
+        body: { headers: { "x-openclaw-test": "yes", ignored: 7 } },
+      },
+      response.res,
+    );
+
+    expect(response.statusCode).toBe(200);
+    expect(chromeMcpMocks.emulateChromeMcpPage).toHaveBeenCalledWith({
+      profileName: "chrome-live",
+      profile: expect.objectContaining({ name: "chrome-live", driver: "existing-session" }),
+      targetId: "7",
+      extraHttpHeaders: { "x-openclaw-test": "yes" },
+    });
+  });
+
+  it("routes existing-session geolocation through Chrome MCP emulate", async () => {
+    const handler = getStoragePostHandler("/set/geolocation");
+    const response = createBrowserRouteResponse();
+
+    await handler?.(
+      {
+        params: {},
+        query: {},
+        body: { latitude: 49.2827, longitude: -123.1207, origin: "https://example.com" },
+      },
+      response.res,
+    );
+
+    expect(response.statusCode).toBe(200);
+    const body = requireRecord(response.body, "response body");
+    expect(body.permissionGrantUnsupported).toBe(true);
+    expect(chromeMcpMocks.emulateChromeMcpPage).toHaveBeenCalledWith({
+      profileName: "chrome-live",
+      profile: expect.objectContaining({ name: "chrome-live", driver: "existing-session" }),
+      targetId: "7",
+      geolocation: { latitude: 49.2827, longitude: -123.1207 },
+    });
+  });
+
+  it("routes existing-session media color-scheme through Chrome MCP emulate", async () => {
+    const handler = getStoragePostHandler("/set/media");
+    const response = createBrowserRouteResponse();
+
+    await handler?.(
+      {
+        params: {},
+        query: {},
+        body: { colorScheme: "no-preference" },
+      },
+      response.res,
+    );
+
+    expect(response.statusCode).toBe(200);
+    expect(chromeMcpMocks.emulateChromeMcpPage).toHaveBeenCalledWith({
+      profileName: "chrome-live",
+      profile: expect.objectContaining({ name: "chrome-live", driver: "existing-session" }),
+      targetId: "7",
+      colorScheme: "auto",
+    });
   });
 });
