@@ -52,6 +52,8 @@ openclaw meeting-notes show <session> --json
 When a human session id repeats across days, use the date-qualified selector
 from `list`, for example `openclaw meeting-notes show 2026-05-22/standup`.
 Older flat-layout sessions are listed as `legacy/<session>` when needed.
+Default session ids include a timestamp and random suffix; configure fixed
+session ids only when they are unique within the day.
 
 See [Meeting Notes](/plugins/meeting-notes) for configuration, auto-start, and
 source-provider details.

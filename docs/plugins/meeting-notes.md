@@ -120,6 +120,10 @@ date-qualified selector from `openclaw meeting-notes list`, such as
 `2026-05-22/standup`. Older flat-layout sessions remain readable and are listed
 as `legacy/<session>` when they conflict with dated sessions.
 
+By default, OpenClaw generates timestamped session ids, so many meetings on the
+same day get separate directories. Configure `sessionId` only when that id is
+unique for the day.
+
 Use the read-only CLI to find or print stored summaries:
 
 ```bash
