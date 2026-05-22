@@ -869,7 +869,7 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
       pendingFinalDeliveryLastAttemptAt: 3,
       pendingFinalDeliveryAttemptCount: 4,
       pendingFinalDeliveryLastError: "previous failure",
-      pendingFinalDeliveryContext: { source: "user-message" },
+      pendingFinalDeliveryContext: { channel: "tui" },
       pendingFinalDeliveryIntentId: "intent-1",
     };
     state.sessionEntryMock = sessionEntry;

@@ -268,7 +268,9 @@ describe("runCliTurnCompactionLifecycle", () => {
       compactAgentHarnessSession.mock.invocationCallOrder[0] ?? 0,
     );
     expect(compactAgentHarnessSession).toHaveBeenCalledTimes(1);
-    expect(compactAgentHarnessSession.mock.calls[0]?.[0]).toMatchObject({
+    const compactAgentHarnessSessionCalls = compactAgentHarnessSession.mock
+      .calls as unknown as Array<[Record<string, unknown>]>;
+    expect(compactAgentHarnessSessionCalls[0]?.[0]).toMatchObject({
       sessionId,
       sessionKey,
       sessionFile,
