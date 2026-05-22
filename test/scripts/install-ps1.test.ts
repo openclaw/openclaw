@@ -114,6 +114,28 @@ describe("install.ps1 failure handling", () => {
     expect(npmInstallBody).toContain("-InstallMethod git -Tag main");
   });
 
+  it("falls back to a user-local portable Node.js bootstrap when package managers are absent", () => {
+    const installNodeBody = extractFunctionBody(source, "Install-Node");
+    const portableNodeBody = extractFunctionBody(source, "Install-PortableNode");
+    const portableNodePathBody = extractFunctionBody(source, "Ensure-PortableNodeOnUserPath");
+    const userPathBody = extractFunctionBody(source, "Add-ToUserPath");
+    const depsRootBody = extractFunctionBody(source, "Get-OpenClawDepsRoot");
+    const resolveNodeBody = extractFunctionBody(source, "Resolve-PortableNodeDownload");
+
+    expect(installNodeBody).toContain("Install-PortableNode");
+    expect(installNodeBody).toContain("Portable Node.js bootstrap failed");
+    expect(installNodeBody).toContain("Error: Could not install Node.js automatically.");
+    expect(depsRootBody).toContain("OpenClaw\\deps");
+    expect(portableNodeBody).toContain("portable-node");
+    expect(portableNodeBody).toContain("Ensure-PortableNodeOnUserPath");
+    expect(portableNodePathBody).toContain("Add-ToUserPath $nodeDir");
+    expect(userPathBody).toContain('[Environment]::SetEnvironmentVariable("Path", $newUserPath, "User")');
+    expect(portableNodeBody).toContain("Invoke-WebRequest -UseBasicParsing");
+    expect(resolveNodeBody).toContain("https://nodejs.org/dist/index.json");
+    expect(resolveNodeBody).toContain("win-$architecture-zip");
+    expect(resolveNodeBody).toContain("node-$($release.version)-win-$architecture.zip");
+  });
+
   it("cleans legacy git submodules only from the selected git checkout", () => {
     const gitInstallBody = extractFunctionBody(source, "Install-OpenClawFromGit");
     const mainBody = extractFunctionBody(source, "Main");

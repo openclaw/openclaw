@@ -42,6 +42,7 @@ Docs: https://docs.openclaw.ai
 - OpenAI Codex: preserve image input support for sparse `openai-codex/gpt-5.5` catalog rows. (#85095) Thanks @sercada.
 - Plugins/discovery: strip `-plugin` package suffixes when deriving plugin id hints so package names line up with manifest ids. (#85170) Thanks @JulyanXu.
 - Telegram: preserve fenced code block languages through Markdown rendering so Telegram receives `language-*` code classes. (#85209) Thanks @leno23.
+- Windows installer: bootstrap a user-local portable Node.js when native Windows has no Node and no winget, Chocolatey, or Scoop, so first-run installs can continue on raw hosts.
 - fix(integrations): enforce channel read target allowlists [AI]. (#84982) Thanks @pgondhi987.
 - Agents/heartbeat: route single-owner `session.dmScope=main` direct-message exec and cron event wakes back to the agent main session so async completions no longer strand context in orphan direct-DM queues. Fixes #71581. (#83743) Thanks @Kaspre.
 - Agents/code-mode: expose outer code-mode `exec` source through the `command` hook alias with `toolKind`/`toolInputKind` discriminators so exec-shaped policies can distinguish code-mode cells. (#83483) Thanks @Kaspre.
