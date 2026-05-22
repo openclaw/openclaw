@@ -6084,12 +6084,11 @@ describe("runCodexAppServerAttempt", () => {
 
     await harness.waitForMethod("turn/start");
     await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
-    await new Promise<void>((resolve) => setImmediate(resolve));
 
-    expect(agentEnd).toHaveBeenCalledTimes(1);
+    await vi.waitFor(() => expect(agentEnd).toHaveBeenCalledTimes(1), fastWait);
     expect(settled).toBe(false);
     releaseAgentEnd();
-    await expect(run).resolves.toMatchObject({ promptError: undefined });
+    await expect(run).resolves.toMatchObject({ promptError: null });
     expect(settled).toBe(true);
   });
 
@@ -6114,7 +6113,7 @@ describe("runCodexAppServerAttempt", () => {
     await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
     const result = await run;
 
-    expect(result.promptError).toBeUndefined();
+    expect(result.promptError).toBeNull();
     expect(agentEnd).toHaveBeenCalledTimes(1);
     releaseAgentEnd();
   });

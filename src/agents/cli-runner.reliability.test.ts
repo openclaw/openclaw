@@ -950,9 +950,9 @@ describe("runCliAgent reliability", () => {
       }),
     );
 
-    const result = await runPreparedCliAgent(buildPreparedContext());
-
-    expect(result.payloads).toBeUndefined();
+    await expect(runPreparedCliAgent(buildPreparedContext())).rejects.toThrow(
+      "CLI backend returned an empty response.",
+    );
     expect(hookRunner.runLlmOutput).not.toHaveBeenCalled();
   });
 
