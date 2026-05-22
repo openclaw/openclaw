@@ -109,10 +109,16 @@ Import a transcript:
 
 Artifacts are stored under the OpenClaw state directory:
 
-- `meeting-notes/<session>/metadata.json`
-- `meeting-notes/<session>/transcript.jsonl`
-- `meeting-notes/<session>/summary.json`
-- `meeting-notes/<session>/summary.md`
+- `meeting-notes/YYYY-MM-DD/<session>/metadata.json`
+- `meeting-notes/YYYY-MM-DD/<session>/transcript.jsonl`
+- `meeting-notes/YYYY-MM-DD/<session>/summary.json`
+- `meeting-notes/YYYY-MM-DD/<session>/summary.md`
+
+The date directory comes from the session start time, so multiple meetings per
+day stay grouped. If a human session id repeats across days, use the
+date-qualified selector from `openclaw meeting-notes list`, such as
+`2026-05-22/standup`. Older flat-layout sessions remain readable and are listed
+as `legacy/<session>` when they conflict with dated sessions.
 
 Use the read-only CLI to find or print stored summaries:
 

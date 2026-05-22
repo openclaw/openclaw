@@ -15,7 +15,7 @@ import type {
 import { Type } from "typebox";
 import { type MeetingNotesAutoStartConfig, resolveMeetingNotesConfig } from "./config.js";
 import { manualTranscriptSourceProvider } from "./manual-source.js";
-import { MeetingNotesStore } from "./store.js";
+import { MeetingNotesStore, type MeetingNotesSessionEntry } from "./store.js";
 import { summarizeMeetingNotes } from "./summary.js";
 
 type ActiveMeetingNotesSession = {
@@ -26,6 +26,13 @@ type ActiveMeetingNotesSession = {
 const activeSessions = new Map<string, ActiveMeetingNotesSession>();
 const AUTO_START_RETRY_ATTEMPTS = 12;
 const AUTO_START_RETRY_MS = 5_000;
+
+function sameSessionIdentity(
+  left: MeetingNotesSessionDescriptor,
+  right: MeetingNotesSessionDescriptor,
+): boolean {
+  return left.sessionId === right.sessionId && left.startedAt === right.startedAt;
+}
 
 function asParamsRecord(params: unknown): Record<string, unknown> {
   return params && typeof params === "object" && !Array.isArray(params)
@@ -116,12 +123,21 @@ async function summarizeAndPersist(params: {
   config: ReturnType<typeof resolveMeetingNotesConfig>;
   store: MeetingNotesStore;
   session: MeetingNotesSessionDescriptor;
+  sessionDir?: string;
 }) {
-  const utterances = await params.store.readUtterances(params.session.sessionId, {
-    maxUtterances: params.config.maxUtterances,
-  });
+  const utterances =
+    params.sessionDir !== undefined
+      ? await params.store.readUtterancesFromSessionDir(params.sessionDir, {
+          maxUtterances: params.config.maxUtterances,
+        })
+      : await params.store.readUtterancesForSession(params.session, {
+          maxUtterances: params.config.maxUtterances,
+        });
   const summary = summarizeMeetingNotes({ session: params.session, utterances });
-  const summaryPath = await params.store.writeSummary(summary);
+  const summaryPath =
+    params.sessionDir !== undefined
+      ? await params.store.writeSummaryToDir(summary, params.sessionDir)
+      : await params.store.writeSummary(summary, params.session);
   return { summary, summaryPath };
 }
 
@@ -145,7 +161,7 @@ async function startMeetingNotes(params: {
   const result = await provider.start({
     cfg: params.api.config,
     session,
-    onUtterance: (utterance) => params.store.appendUtterance(session.sessionId, utterance),
+    onUtterance: (utterance) => params.store.appendUtteranceForSession(session, utterance),
   });
   if (!result.ok) {
     throw new Error(result.error);
@@ -162,17 +178,30 @@ async function stopMeetingNotes(params: {
   store: MeetingNotesStore;
   rawParams: Record<string, unknown>;
 }) {
-  const sessionId = readStringParam(params.rawParams, "sessionId", {
+  const sessionSelector = readStringParam(params.rawParams, "sessionId", {
     required: true,
     trim: true,
   });
-  const session = await params.store.readSession(sessionId);
+  const directActive = activeSessions.get(sessionSelector);
+  const resolvedEntry: MeetingNotesSessionEntry | undefined = directActive
+    ? { session: directActive.session, sessionDir: params.store.sessionDir(directActive.session) }
+    : await params.store.readSessionEntry(sessionSelector);
+  const resolvedSession = resolvedEntry?.session;
+  const activeCandidate =
+    resolvedSession !== undefined ? activeSessions.get(resolvedSession.sessionId) : undefined;
+  const activeMatchesResolved =
+    activeCandidate !== undefined &&
+    resolvedSession !== undefined &&
+    sameSessionIdentity(activeCandidate.session, resolvedSession);
+  const selectedActive = directActive ?? (activeMatchesResolved ? activeCandidate : undefined);
+  const session = selectedActive?.session ?? resolvedSession;
   if (!session) {
-    throw new Error(`meeting notes session not found: ${sessionId}`);
+    throw new Error(`meeting notes session not found: ${sessionSelector}`);
   }
-  const providerId = activeSessions.get(sessionId)?.providerId ?? session.source.providerId;
+  const sessionId = session.sessionId;
+  const providerId = selectedActive?.providerId ?? session.source.providerId;
   const provider = resolveSourceProvider(providerId, params.api);
-  if (provider?.stop) {
+  if (selectedActive && provider?.stop) {
     const result = await provider.stop({
       cfg: params.api.config,
       sessionId,
@@ -184,13 +213,20 @@ async function stopMeetingNotes(params: {
     }
   }
   const stoppedAt = new Date().toISOString();
-  await params.store.updateStopped(sessionId, stoppedAt);
-  activeSessions.delete(sessionId);
+  if (selectedActive) {
+    activeSessions.delete(sessionId);
+  }
   const stoppedSession = { ...session, stoppedAt };
+  if (selectedActive) {
+    await params.store.writeSession(stoppedSession);
+  } else {
+    await params.store.updateStopped(sessionSelector, stoppedAt);
+  }
   const { summaryPath, summary } = await summarizeAndPersist({
     config: resolveMeetingNotesConfig(params.api.pluginConfig),
     store: params.store,
     session: stoppedSession,
+    sessionDir: selectedActive ? undefined : resolvedEntry?.sessionDir,
   });
   return toolText(`Meeting notes stopped: ${sessionId}\nSummary: ${summaryPath}`, {
     sessionId,
@@ -228,7 +264,7 @@ async function importMeetingNotes(params: {
     speakerLabel: readStringParam(params.rawParams, "speakerLabel", { trim: true }),
   });
   for (const utterance of utterances) {
-    await params.store.appendUtterance(session.sessionId, utterance);
+    await params.store.appendUtteranceForSession(session, utterance);
   }
   const { summaryPath, summary } = await summarizeAndPersist({
     config: resolveMeetingNotesConfig(params.api.pluginConfig),
@@ -252,14 +288,15 @@ async function summarizeExisting(params: {
     required: true,
     trim: true,
   });
-  const session = await params.store.readSession(sessionId);
-  if (!session) {
+  const entry = await params.store.readSessionEntry(sessionId);
+  if (!entry) {
     throw new Error(`meeting notes session not found: ${sessionId}`);
   }
   const { summaryPath, summary } = await summarizeAndPersist({
     config: params.config,
     store: params.store,
-    session,
+    session: entry.session,
+    sessionDir: entry.sessionDir,
   });
   return toolText(`Meeting notes summarized: ${sessionId}\nSummary: ${summaryPath}`, {
     sessionId,

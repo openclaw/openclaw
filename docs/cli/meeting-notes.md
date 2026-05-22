@@ -16,7 +16,7 @@ agent tool and by configured auto-start sources.
 Artifacts live under the OpenClaw state directory:
 
 ```text
-$OPENCLAW_STATE_DIR/meeting-notes/<session>/
+$OPENCLAW_STATE_DIR/meeting-notes/YYYY-MM-DD/<session>/
   metadata.json
   transcript.jsonl
   summary.json
@@ -24,27 +24,34 @@ $OPENCLAW_STATE_DIR/meeting-notes/<session>/
 ```
 
 The default state directory is `~/.openclaw`; set `OPENCLAW_STATE_DIR` to use a
-different one.
+different one. The date directory comes from the session start time.
 
 ## Commands
 
 ```bash
 openclaw meeting-notes list
 openclaw meeting-notes show <session>
+openclaw meeting-notes show YYYY-MM-DD/<session>
 openclaw meeting-notes path <session>
+openclaw meeting-notes path YYYY-MM-DD/<session>
+openclaw meeting-notes path legacy/<session>
 openclaw meeting-notes path <session> --dir
 openclaw meeting-notes path <session> --transcript
 openclaw meeting-notes list --json
 openclaw meeting-notes show <session> --json
 ```
 
-- `list`: list stored sessions, start time, title, and `summary.md` path.
+- `list`: list stored sessions, date-qualified selector, start time, title, and `summary.md` path.
 - `show <session>`: print the stored `summary.md`.
 - `path <session>`: print the `summary.md` path.
 - `path <session> --dir`: print the session directory.
 - `path <session> --metadata`: print `metadata.json`.
 - `path <session> --transcript`: print `transcript.jsonl`.
 - `--json`: print machine-readable output.
+
+When a human session id repeats across days, use the date-qualified selector
+from `list`, for example `openclaw meeting-notes show 2026-05-22/standup`.
+Older flat-layout sessions are listed as `legacy/<session>` when needed.
 
 See [Meeting Notes](/plugins/meeting-notes) for configuration, auto-start, and
 source-provider details.
