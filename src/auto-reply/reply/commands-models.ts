@@ -5,6 +5,7 @@ import {
 } from "../../agents/agent-scope.js";
 import { resolveAgentHarnessPolicy } from "../../agents/harness/policy.js";
 import { resolveModelAuthLabel } from "../../agents/model-auth-label.js";
+import { loadModelCatalogForBrowse } from "../../agents/model-catalog-browse.js";
 import { resolveVisibleModelCatalog } from "../../agents/model-catalog-visibility.js";
 import { loadModelCatalog } from "../../agents/model-catalog.js";
 import { isModelPickerVisibleProvider } from "../../agents/model-picker-visibility.js";
@@ -13,7 +14,6 @@ import {
   isCliRuntimeProvider,
   listLegacyRuntimeModelProviderAliases,
 } from "../../agents/model-runtime-aliases.js";
-import { parseConfiguredModelVisibilityEntries } from "../../agents/model-selection-shared.js";
 import {
   buildModelAliasIndex,
   normalizeProviderId,
@@ -38,11 +38,8 @@ import type { CommandHandler } from "./commands-types.js";
 
 const PAGE_SIZE_DEFAULT = 20;
 const PAGE_SIZE_MAX = 100;
-const MODELS_COMMAND_CATALOG_TIMEOUT_MS = 750;
 const MODELS_ADD_DEPRECATED_TEXT =
   "⚠️ /models add is deprecated. Use /models to browse providers and /model to switch models.";
-
-type ModelsCommandCatalog = Awaited<ReturnType<typeof loadModelCatalog>>;
 
 type ModelsCommandSessionEntry = Partial<
   Pick<SessionEntry, "authProfileOverride" | "modelProvider" | "model">
@@ -143,39 +140,6 @@ function addRuntimeChoice(
   return choices;
 }
 
-async function loadModelsCommandCatalog(
-  cfg: OpenClawConfig,
-  view: "default" | "all",
-): Promise<ModelsCommandCatalog> {
-  if (view === "all") {
-    return await loadModelCatalog({ config: cfg, readOnly: false });
-  }
-  if (parseConfiguredModelVisibilityEntries({ cfg }).providerWildcards.size > 0) {
-    return await loadModelCatalog({ config: cfg, readOnly: false });
-  }
-
-  let timeout: NodeJS.Timeout | undefined;
-  const timedOut = Symbol("models-command-catalog-timeout");
-  const catalogPromise = loadModelCatalog({ config: cfg, readOnly: true });
-  const timeoutPromise = new Promise<typeof timedOut>((resolve) => {
-    timeout = setTimeout(() => resolve(timedOut), MODELS_COMMAND_CATALOG_TIMEOUT_MS);
-    timeout.unref?.();
-  });
-
-  try {
-    const result = await Promise.race([catalogPromise, timeoutPromise]);
-    if (result === timedOut) {
-      catalogPromise.catch(() => undefined);
-      return [];
-    }
-    return result;
-  } finally {
-    if (timeout) {
-      clearTimeout(timeout);
-    }
-  }
-}
-
 export async function buildModelsProviderData(
   cfg: OpenClawConfig,
   agentId?: string,
@@ -186,7 +150,11 @@ export async function buildModelsProviderData(
     agentId,
   });
 
-  const catalog = await loadModelsCommandCatalog(cfg, options.view ?? "default");
+  const catalog = await loadModelCatalogForBrowse({
+    cfg,
+    view: options.view ?? "default",
+    loadCatalog: ({ readOnly }) => loadModelCatalog({ config: cfg, readOnly }),
+  });
   const visibilityPolicy = createModelVisibilityPolicy({
     cfg,
     catalog,
