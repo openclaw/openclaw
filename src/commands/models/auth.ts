@@ -117,7 +117,7 @@ async function readPastedSecret(message: string): Promise<string | undefined> {
   return normalizeOptionalString(input);
 }
 
-function resolveDefaultTokenProfileId(provider: string): string {
+function resolveDefaultManualProfileId(provider: string): string {
   return `${normalizeProviderId(provider)}:manual`;
 }
 
@@ -525,7 +525,7 @@ export async function modelsAuthPasteTokenCommand(
   }
   const provider = normalizeProviderId(rawProvider);
   const profileId =
-    normalizeOptionalString(opts.profileId) || resolveDefaultTokenProfileId(provider);
+    normalizeOptionalString(opts.profileId) || resolveDefaultManualProfileId(provider);
 
   const tokenInput = await text({
     message: `Paste token for ${provider}`,
@@ -591,7 +591,7 @@ export async function modelsAuthPasteApiKeyCommand(
   }
   const provider = normalizeProviderId(rawProvider);
   const profileId =
-    normalizeOptionalString(opts.profileId) || resolveDefaultTokenProfileId(provider);
+    normalizeOptionalString(opts.profileId) || resolveDefaultManualProfileId(provider);
 
   const apiKey = await readPastedSecret(`Paste API key for ${provider}`);
   if (!apiKey) {
@@ -692,7 +692,7 @@ export async function modelsAuthAddCommand(opts: { agent?: string }, runtime: Ru
     }
   }
 
-  const profileIdDefault = resolveDefaultTokenProfileId(providerId);
+  const profileIdDefault = resolveDefaultManualProfileId(providerId);
   const profileId = (
     await text({
       message: "Profile id",

@@ -1232,6 +1232,36 @@ describe("modelsAuthLoginCommand", () => {
     });
   });
 
+  it("writes pasted API keys to the requested agent store and profile id", async () => {
+    const runtime = createRuntime();
+    useCoderAgentConfig();
+    mocks.clackPassword.mockResolvedValue("sk-openai-demo");
+
+    await modelsAuthPasteApiKeyCommand(
+      {
+        provider: "openai",
+        profileId: "openai:automation",
+        agent: "coder",
+      },
+      runtime,
+    );
+
+    expect(mocks.resolveDefaultAgentId).not.toHaveBeenCalled();
+    expect(mocks.upsertAuthProfileWithLock).toHaveBeenCalledWith({
+      profileId: "openai:automation",
+      credential: {
+        type: "api_key",
+        provider: "openai",
+        key: "sk-openai-demo",
+      },
+      agentDir: "/tmp/openclaw/agents/coder",
+    });
+    expect(lastUpdatedConfig?.auth?.profiles?.["openai:automation"]).toEqual({
+      provider: "openai",
+      mode: "api_key",
+    });
+  });
+
   it("writes pasted tokens to the requested agent store", async () => {
     const runtime = createRuntime();
     useCoderAgentConfig();
