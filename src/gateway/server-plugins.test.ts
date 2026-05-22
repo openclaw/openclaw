@@ -936,6 +936,73 @@ describe("loadGatewayPlugins", () => {
     expect(params.model).toBe("claude-haiku-4-5");
   });
 
+  test("dedupes provider-prefixed OpenRouter fallback deny diagnostics", async () => {
+    const serverPlugins = serverPluginsModule;
+    const runtime = await createSubagentRuntime(serverPlugins, {
+      plugins: {
+        entries: {
+          "voice-call": {
+            subagent: {
+              allowModelOverride: true,
+              allowedModels: ["openrouter/gpt-5.4-mini"],
+            },
+          },
+        },
+      },
+    });
+    serverPlugins.setFallbackGatewayContext(createTestContext("fallback-openrouter-deny"));
+
+    let rejectionMessage = "";
+    try {
+      await gatewayRequestScopeModule.withPluginRuntimePluginIdScope("voice-call", () =>
+        runtime.run({
+          sessionKey: "s-openrouter-deny",
+          message: "use disallowed OpenRouter override",
+          provider: "openrouter",
+          model: "openrouter/gpt-5.5",
+          deliver: false,
+        }),
+      );
+    } catch (error) {
+      rejectionMessage = error instanceof Error ? error.message : String(error);
+    }
+
+    expect(rejectionMessage).toContain('model override "openrouter/gpt-5.5"');
+    expect(rejectionMessage).not.toContain("openrouter/openrouter/");
+  });
+
+  test("allows matching provider-prefixed OpenRouter fallback overrides", async () => {
+    const serverPlugins = serverPluginsModule;
+    const runtime = await createSubagentRuntime(serverPlugins, {
+      plugins: {
+        entries: {
+          "voice-call": {
+            subagent: {
+              allowModelOverride: true,
+              allowedModels: ["openrouter/gpt-5.4-mini"],
+            },
+          },
+        },
+      },
+    });
+    serverPlugins.setFallbackGatewayContext(createTestContext("fallback-openrouter-allow"));
+
+    await gatewayRequestScopeModule.withPluginRuntimePluginIdScope("voice-call", () =>
+      runtime.run({
+        sessionKey: "s-openrouter-allow",
+        message: "use allowed OpenRouter override",
+        provider: "openrouter",
+        model: "openrouter/gpt-5.4-mini",
+        deliver: false,
+      }),
+    );
+
+    const params = getRequiredLastDispatchedParams();
+    expect(params.sessionKey).toBe("s-openrouter-allow");
+    expect(params.provider).toBe("openrouter");
+    expect(params.model).toBe("openrouter/gpt-5.4-mini");
+  });
+
   test("tags plugin fallback subagent runs with the creating plugin id", async () => {
     const serverPlugins = serverPluginsModule;
     const runtime = await createSubagentRuntime(serverPlugins);
