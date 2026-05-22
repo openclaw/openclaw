@@ -108,6 +108,42 @@ const sandboxMocks = vi.hoisted(() => ({
   }),
   collectSandboxScopeWarnings: vi.fn((): unknown[] => []),
 }));
+const gatewayServiceMocks = vi.hoisted(() => ({
+  detectExtraGatewayServices: vi.fn<() => Promise<unknown>>(async () => ({
+    services: [],
+    legacyServices: [],
+    cleanupHints: [],
+  })),
+  formatExtraGatewayServiceFinding: vi.fn((svc: { label: string }) => {
+    return `Gateway-like service detected: ${svc.label}.`;
+  }),
+  detectGatewayServiceConfigIssues: vi.fn<() => Promise<unknown>>(async () => ({
+    status: "clean",
+    issues: [],
+  })),
+  repairGatewayServiceConfig: vi.fn(async () => undefined),
+  repairExtraGatewayServices: vi.fn(
+    async (): Promise<{ removed: string[]; failed: string[] }> => ({ removed: [], failed: [] }),
+  ),
+  classifyLegacyServices: vi.fn(
+    (services: Array<{ label: string; platform: string; scope: string }>) => {
+      return {
+        darwinUserServices: services.filter(
+          (svc) => svc.platform === "darwin" && svc.scope === "user",
+        ),
+        linuxUserServices: services.filter(
+          (svc) => svc.platform === "linux" && svc.scope === "user",
+        ),
+        failed: services
+          .filter(
+            (svc) =>
+              !((svc.platform === "darwin" || svc.platform === "linux") && svc.scope === "user"),
+          )
+          .map((svc) => `${svc.label} (${svc.scope})`),
+      };
+    },
+  ),
+}));
 
 vi.mock("../commands/doctor-completion.js", () => ({
   detectShellCompletionHealth,
@@ -147,6 +183,15 @@ vi.mock("../agents/sandbox/registry.js", async (importOriginal) => {
   };
 });
 
+vi.mock("../commands/doctor-gateway-services.js", () => ({
+  detectExtraGatewayServices: gatewayServiceMocks.detectExtraGatewayServices,
+  formatExtraGatewayServiceFinding: gatewayServiceMocks.formatExtraGatewayServiceFinding,
+  detectGatewayServiceConfigIssues: gatewayServiceMocks.detectGatewayServiceConfigIssues,
+  repairGatewayServiceConfig: gatewayServiceMocks.repairGatewayServiceConfig,
+  repairExtraGatewayServices: gatewayServiceMocks.repairExtraGatewayServices,
+  classifyLegacyServices: gatewayServiceMocks.classifyLegacyServices,
+}));
+
 describe("registerCoreHealthChecks", () => {
   let tmp: string | undefined;
 
@@ -181,6 +226,26 @@ describe("registerCoreHealthChecks", () => {
     sandboxMocks.migrateLegacySandboxRegistryFiles.mockResolvedValue([]);
     sandboxMocks.collectSandboxScopeWarnings.mockReset();
     sandboxMocks.collectSandboxScopeWarnings.mockReturnValue([]);
+    gatewayServiceMocks.detectExtraGatewayServices.mockReset();
+    gatewayServiceMocks.detectExtraGatewayServices.mockResolvedValue({
+      services: [],
+      legacyServices: [],
+      cleanupHints: [],
+    });
+    gatewayServiceMocks.formatExtraGatewayServiceFinding.mockReset();
+    gatewayServiceMocks.formatExtraGatewayServiceFinding.mockImplementation(
+      (svc: { label: string }) => `Gateway-like service detected: ${svc.label}.`,
+    );
+    gatewayServiceMocks.detectGatewayServiceConfigIssues.mockReset();
+    gatewayServiceMocks.detectGatewayServiceConfigIssues.mockResolvedValue({
+      status: "clean",
+      issues: [],
+    });
+    gatewayServiceMocks.repairGatewayServiceConfig.mockReset();
+    gatewayServiceMocks.repairGatewayServiceConfig.mockResolvedValue(undefined);
+    gatewayServiceMocks.repairExtraGatewayServices.mockReset();
+    gatewayServiceMocks.repairExtraGatewayServices.mockResolvedValue({ removed: [], failed: [] });
+    gatewayServiceMocks.classifyLegacyServices.mockClear();
   });
 
   afterEach(async () => {
@@ -931,6 +996,365 @@ describe("registerCoreHealthChecks", () => {
         message: 'agents.list (id "work") sandbox docker overrides ignored.',
       }),
     );
+  });
+
+  it("detects extra gateway services as structured findings", async () => {
+    gatewayServiceMocks.detectExtraGatewayServices.mockResolvedValue({
+      services: [
+        {
+          label: "openclaw-gateway-old.service",
+          scope: "user",
+          detail: "systemd:user",
+          platform: "linux",
+          legacy: true,
+        },
+      ],
+      legacyServices: [
+        {
+          label: "openclaw-gateway-old.service",
+          scope: "user",
+          detail: "systemd:user",
+          platform: "linux",
+          legacy: true,
+        },
+      ],
+      cleanupHints: [],
+    });
+    const check = CORE_HEALTH_CHECKS.find(
+      (entry) => entry.id === "core/doctor/gateway-services/extra",
+    );
+
+    await expect(
+      check?.detect({
+        mode: "lint",
+        runtime: { log() {}, error() {}, exit() {} },
+        cfg: {},
+      }),
+    ).resolves.toContainEqual(
+      expect.objectContaining({
+        checkId: "core/doctor/gateway-services/extra",
+        severity: "warning",
+        path: "openclaw-gateway-old.service",
+      }),
+    );
+  });
+
+  it("previews gateway service config repairs as service effects", async () => {
+    gatewayServiceMocks.detectGatewayServiceConfigIssues.mockResolvedValue({
+      status: "issue",
+      serviceRewriteBlocked: false,
+      issues: [
+        {
+          code: "gateway-port-mismatch",
+          message: "Gateway service port does not match current gateway config.",
+          detail: "18789 -> 18888",
+          level: "recommended",
+        },
+      ],
+    });
+    const check = CORE_HEALTH_CHECKS.find(
+      (entry) => entry.id === "core/doctor/gateway-services/config",
+    );
+
+    const repaired = await check?.repair?.(
+      {
+        mode: "fix",
+        runtime: { log() {}, error() {}, exit() {} },
+        cfg: { gateway: { port: 18888 } },
+        dryRun: true,
+      },
+      [],
+    );
+
+    expect(repaired?.changes).toContain(
+      "Would update gateway service config for Gateway service port does not match current gateway config. (18789 -> 18888).",
+    );
+    expect(repaired?.effects).toContainEqual(
+      expect.objectContaining({
+        kind: "service",
+        action: "would-update-gateway-service-config",
+        target: "openclaw-gateway",
+        dryRunSafe: false,
+      }),
+    );
+  });
+
+  it("reports blocked gateway service rewrites as structured findings", async () => {
+    gatewayServiceMocks.detectGatewayServiceConfigIssues.mockResolvedValue({
+      status: "issue",
+      serviceRewriteBlocked: true,
+      issues: [],
+    });
+    const check = CORE_HEALTH_CHECKS.find(
+      (entry) => entry.id === "core/doctor/gateway-services/config",
+    );
+
+    await expect(
+      check?.detect({
+        mode: "lint",
+        runtime: { log() {}, error() {}, exit() {} },
+        cfg: {},
+      }),
+    ).resolves.toContainEqual(
+      expect.objectContaining({
+        checkId: "core/doctor/gateway-services/config",
+        message:
+          "Gateway service is running; command/entrypoint rewrites are blocked for this doctor pass.",
+      }),
+    );
+    await expect(
+      check?.repair?.(
+        {
+          mode: "fix",
+          runtime: { log() {}, error() {}, exit() {} },
+          cfg: {},
+        },
+        [],
+      ),
+    ).resolves.toMatchObject({
+      status: "skipped",
+      warnings: ["Gateway service is running; leaving supervisor metadata unchanged."],
+    });
+  });
+
+  it("does not promise unrepairable legacy gateway services during dry-run", async () => {
+    gatewayServiceMocks.detectExtraGatewayServices.mockResolvedValue({
+      services: [
+        {
+          label: "openclaw-gateway-system.service",
+          scope: "system",
+          detail: "systemd:system",
+          platform: "linux",
+          legacy: true,
+        },
+      ],
+      legacyServices: [
+        {
+          label: "openclaw-gateway-system.service",
+          scope: "system",
+          detail: "systemd:system",
+          platform: "linux",
+          legacy: true,
+        },
+      ],
+      cleanupHints: [],
+    });
+    const check = CORE_HEALTH_CHECKS.find(
+      (entry) => entry.id === "core/doctor/gateway-services/extra",
+    );
+
+    await expect(
+      check?.repair?.(
+        {
+          mode: "fix",
+          runtime: { log() {}, error() {}, exit() {} },
+          cfg: {},
+          dryRun: true,
+        },
+        [],
+      ),
+    ).resolves.toMatchObject({
+      status: "skipped",
+      changes: [],
+      warnings: [
+        "Would skip legacy gateway service cleanup: openclaw-gateway-system.service (system).",
+      ],
+    });
+  });
+
+  it("validates gateway extra-service cleanup with detect-after", async () => {
+    const detected = {
+      services: [
+        {
+          label: "openclaw-gateway-old.service",
+          scope: "user",
+          detail: "systemd:user",
+          platform: "linux",
+          legacy: true,
+        },
+      ],
+      legacyServices: [
+        {
+          label: "openclaw-gateway-old.service",
+          scope: "user",
+          detail: "systemd:user",
+          platform: "linux",
+          legacy: true,
+        },
+      ],
+      cleanupHints: [],
+    };
+    gatewayServiceMocks.detectExtraGatewayServices
+      .mockResolvedValueOnce(detected)
+      .mockResolvedValueOnce(detected)
+      .mockResolvedValueOnce({
+        services: [],
+        legacyServices: [],
+        cleanupHints: [],
+      });
+    gatewayServiceMocks.repairExtraGatewayServices.mockResolvedValueOnce({
+      removed: ["openclaw-gateway-old.service"],
+      failed: [],
+    });
+    const check = CORE_HEALTH_CHECKS.find(
+      (entry) => entry.id === "core/doctor/gateway-services/extra",
+    );
+
+    const result = await runDoctorHealthRepairs(
+      {
+        mode: "fix",
+        runtime: { log() {}, error() {}, exit() {} },
+        cfg: {},
+      },
+      { checks: [check!] },
+    );
+
+    expect(gatewayServiceMocks.repairExtraGatewayServices).toHaveBeenCalledTimes(1);
+    expect(result.effects).toContainEqual(
+      expect.objectContaining({
+        kind: "service",
+        action: "remove-legacy-gateway-service",
+        target: "openclaw-gateway-old.service",
+      }),
+    );
+    expect(result.checksRepaired).toBe(1);
+    expect(result.checksValidated).toBe(1);
+    expect(result.remainingFindings).toEqual([]);
+  });
+
+  it("does not report gateway removal effects when cleanup removes nothing", async () => {
+    const detected = {
+      services: [
+        {
+          label: "openclaw-gateway-old.service",
+          scope: "user",
+          detail: "systemd:user",
+          platform: "linux",
+          legacy: true,
+        },
+      ],
+      legacyServices: [
+        {
+          label: "openclaw-gateway-old.service",
+          scope: "user",
+          detail: "systemd:user",
+          platform: "linux",
+          legacy: true,
+        },
+      ],
+      cleanupHints: [],
+    };
+    gatewayServiceMocks.detectExtraGatewayServices.mockResolvedValue(detected);
+    gatewayServiceMocks.repairExtraGatewayServices.mockResolvedValueOnce({
+      removed: [],
+      failed: [],
+    });
+    const check = CORE_HEALTH_CHECKS.find(
+      (entry) => entry.id === "core/doctor/gateway-services/extra",
+    );
+
+    const repaired = await check?.repair?.(
+      {
+        mode: "fix",
+        runtime: { log() {}, error() {}, exit() {} },
+        cfg: {},
+      },
+      [
+        {
+          checkId: "core/doctor/gateway-services/extra",
+          severity: "warning",
+          message: "legacy service remains",
+        },
+      ],
+    );
+
+    expect(repaired?.changes).toEqual([
+      "Checked legacy gateway service openclaw-gateway-old.service for removal.",
+    ]);
+    expect(repaired?.status).toBe("skipped");
+    expect(repaired?.reason).toBe("no legacy gateway services were removed");
+    expect(repaired?.effects ?? []).toEqual([]);
+  });
+
+  it("reports blocked gateway service config repairs as skipped", async () => {
+    gatewayServiceMocks.detectGatewayServiceConfigIssues.mockResolvedValueOnce({
+      status: "issue",
+      serviceRewriteBlocked: true,
+      issues: [
+        {
+          code: "gateway-entrypoint-mismatch",
+          message: "Gateway service entrypoint does not match the current install.",
+          detail: "/old/openclaw -> /new/openclaw",
+          level: "recommended",
+        },
+      ],
+    });
+    const check = CORE_HEALTH_CHECKS.find(
+      (entry) => entry.id === "core/doctor/gateway-services/config",
+    );
+
+    const repaired = await check?.repair?.(
+      {
+        mode: "fix",
+        runtime: { log() {}, error() {}, exit() {} },
+        cfg: { gateway: {} },
+      },
+      [],
+    );
+
+    expect(gatewayServiceMocks.repairGatewayServiceConfig).not.toHaveBeenCalled();
+    expect(repaired).toMatchObject({
+      status: "skipped",
+      reason: "gateway service rewrite is blocked while the service is running",
+      changes: [],
+      effects: [],
+    });
+  });
+
+  it("validates gateway service config repair with detect-after", async () => {
+    const drift = {
+      status: "issue",
+      serviceRewriteBlocked: false,
+      issues: [
+        {
+          code: "gateway-port-mismatch",
+          message: "Gateway service port does not match current gateway config.",
+          detail: "18789 -> 18888",
+          level: "recommended",
+        },
+      ],
+    };
+    gatewayServiceMocks.detectGatewayServiceConfigIssues
+      .mockResolvedValueOnce(drift)
+      .mockResolvedValueOnce(drift)
+      .mockResolvedValueOnce({
+        status: "clean",
+        issues: [],
+      });
+    const check = CORE_HEALTH_CHECKS.find(
+      (entry) => entry.id === "core/doctor/gateway-services/config",
+    );
+
+    const result = await runDoctorHealthRepairs(
+      {
+        mode: "fix",
+        runtime: { log() {}, error() {}, exit() {} },
+        cfg: { gateway: { port: 18888 } },
+      },
+      { checks: [check!] },
+    );
+
+    expect(gatewayServiceMocks.repairGatewayServiceConfig).toHaveBeenCalledTimes(1);
+    expect(result.effects).toContainEqual(
+      expect.objectContaining({
+        kind: "service",
+        action: "update-gateway-service-config",
+        target: "openclaw-gateway",
+      }),
+    );
+    expect(result.checksRepaired).toBe(1);
+    expect(result.checksValidated).toBe(1);
+    expect(result.remainingFindings).toEqual([]);
   });
 
   it("validates configured plugin install repairs against repaired config metadata", async () => {

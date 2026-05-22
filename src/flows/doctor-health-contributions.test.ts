@@ -34,6 +34,16 @@ const mocks = vi.hoisted(() => ({
   noteSandboxScopeWarnings: vi.fn(),
   maybeRepairSandboxRegistryFiles: vi.fn(),
   maybeRepairSandboxImages: vi.fn(),
+  detectExtraGatewayServices: vi.fn(),
+  detectGatewayServiceConfigIssues: vi.fn(),
+  formatExtraGatewayServiceFinding: vi.fn(),
+  maybeScanExtraGatewayServices: vi.fn(),
+  maybeRepairGatewayServiceConfig: vi.fn(),
+  repairExtraGatewayServices: vi.fn(),
+  repairGatewayServiceConfig: vi.fn(),
+  noteMacLaunchAgentOverrides: vi.fn(),
+  noteMacLaunchctlGatewayEnvOverrides: vi.fn(),
+  noteMacStaleOpenClawUpdateLaunchdJobs: vi.fn(),
   noteChromeMcpBrowserReadiness: vi.fn(),
   detectLegacyClawdBrowserProfileResidue: vi.fn(),
   maybeArchiveLegacyClawdBrowserProfileResidue: vi.fn(),
@@ -134,6 +144,23 @@ vi.mock("../commands/doctor-browser.js", () => ({
   maybeArchiveLegacyClawdBrowserProfileResidue: mocks.maybeArchiveLegacyClawdBrowserProfileResidue,
 }));
 
+vi.mock("../commands/doctor-gateway-services.js", () => ({
+  detectExtraGatewayServices: mocks.detectExtraGatewayServices,
+  detectGatewayServiceConfigIssues: mocks.detectGatewayServiceConfigIssues,
+  formatExtraGatewayServiceFinding: mocks.formatExtraGatewayServiceFinding,
+  maybeScanExtraGatewayServices: mocks.maybeScanExtraGatewayServices,
+  maybeRepairGatewayServiceConfig: mocks.maybeRepairGatewayServiceConfig,
+  repairExtraGatewayServices: mocks.repairExtraGatewayServices,
+  repairGatewayServiceConfig: mocks.repairGatewayServiceConfig,
+}));
+
+vi.mock("../commands/doctor-platform-notes.js", () => ({
+  noteMacLaunchAgentOverrides: mocks.noteMacLaunchAgentOverrides,
+  noteMacLaunchctlGatewayEnvOverrides: mocks.noteMacLaunchctlGatewayEnvOverrides,
+  noteMacStaleOpenClawUpdateLaunchdJobs: mocks.noteMacStaleOpenClawUpdateLaunchdJobs,
+  collectMacGatewayPlatformWarnings: vi.fn(async () => []),
+}));
+
 function requireDoctorContribution(id: string) {
   const contribution = resolveDoctorHealthContributions().find((entry) => entry.id === id);
   if (!contribution) {
@@ -213,6 +240,31 @@ describe("doctor health contributions", () => {
     mocks.maybeRepairSandboxRegistryFiles.mockResolvedValue(undefined);
     mocks.maybeRepairSandboxImages.mockReset();
     mocks.maybeRepairSandboxImages.mockImplementation(async (cfg: unknown) => cfg);
+    mocks.detectExtraGatewayServices.mockReset();
+    mocks.detectExtraGatewayServices.mockResolvedValue({
+      services: [],
+      legacyServices: [],
+      cleanupHints: [],
+    });
+    mocks.detectGatewayServiceConfigIssues.mockReset();
+    mocks.detectGatewayServiceConfigIssues.mockResolvedValue({
+      status: "clean",
+      issues: [],
+    });
+    mocks.formatExtraGatewayServiceFinding.mockReset();
+    mocks.formatExtraGatewayServiceFinding.mockImplementation(
+      (svc: { label: string }) => `Gateway-like service detected: ${svc.label}.`,
+    );
+    mocks.maybeScanExtraGatewayServices.mockReset();
+    mocks.maybeScanExtraGatewayServices.mockResolvedValue(undefined);
+    mocks.maybeRepairGatewayServiceConfig.mockReset();
+    mocks.maybeRepairGatewayServiceConfig.mockResolvedValue(undefined);
+    mocks.noteMacLaunchAgentOverrides.mockReset();
+    mocks.noteMacLaunchAgentOverrides.mockResolvedValue(undefined);
+    mocks.noteMacLaunchctlGatewayEnvOverrides.mockReset();
+    mocks.noteMacLaunchctlGatewayEnvOverrides.mockResolvedValue(undefined);
+    mocks.noteMacStaleOpenClawUpdateLaunchdJobs.mockReset();
+    mocks.noteMacStaleOpenClawUpdateLaunchdJobs.mockResolvedValue(undefined);
     mocks.noteChromeMcpBrowserReadiness.mockReset();
     mocks.noteChromeMcpBrowserReadiness.mockResolvedValue(undefined);
     mocks.detectLegacyClawdBrowserProfileResidue.mockReset();
@@ -501,6 +553,43 @@ describe("doctor health contributions", () => {
     await requireDoctorContribution("doctor:shell-completion").run(ctx);
 
     expect(mocks.registerBundledHealthChecks).not.toHaveBeenCalled();
+  });
+
+  it("runs structured gateway service repairs at the gateway services contribution position", async () => {
+    mocks.detectGatewayServiceConfigIssues.mockResolvedValue({
+      status: "issue",
+      serviceRewriteBlocked: false,
+      issues: [
+        {
+          code: "gateway-port-mismatch",
+          message: "Gateway service port does not match current gateway config.",
+          detail: "18789 -> 18888",
+          level: "recommended",
+        },
+      ],
+    });
+    const contribution = requireDoctorContribution("doctor:gateway-services");
+    const ctx = {
+      cfg: { gateway: { port: 18888 } },
+      configResult: { cfg: {}, sourceLastTouchedVersion: "2026.4.29" },
+      sourceConfigValid: true,
+      prompter: buildDoctorPrompter(true),
+      options: { dryRun: true },
+      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+      env: {},
+      cfgForPersistence: { gateway: { port: 18888 } },
+      configPath: "/tmp/fake-openclaw.json",
+    } as Parameters<(typeof contribution)["run"]>[0];
+
+    await contribution.run(ctx);
+
+    expect(mocks.note).toHaveBeenCalledWith(
+      expect.stringContaining("Would update gateway service config"),
+      "Doctor changes",
+    );
+    expect(mocks.maybeScanExtraGatewayServices).not.toHaveBeenCalled();
+    expect(mocks.maybeRepairGatewayServiceConfig).not.toHaveBeenCalled();
+    expect(mocks.noteMacLaunchAgentOverrides).toHaveBeenCalledTimes(1);
   });
 
   it("runs structured systemd linger repair at the systemd contribution position", async () => {

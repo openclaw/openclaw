@@ -52,16 +52,35 @@ export interface HealthCheckContext {
   readonly env?: NodeJS.ProcessEnv;
   readonly doctor?: {
     readonly options?: {
+      readonly deep?: boolean;
+      readonly dryRun?: boolean;
+      readonly diff?: boolean;
       readonly nonInteractive?: boolean;
     };
     readonly sourceLastTouchedVersion?: string;
     readonly confirm?: (params: { message: string; initialValue?: boolean }) => Promise<boolean>;
+    readonly confirmAutoFix?: (params: {
+      message: string;
+      initialValue?: boolean;
+    }) => Promise<boolean>;
+    readonly confirmAggressiveAutoFix?: (params: {
+      message: string;
+      initialValue?: boolean;
+    }) => Promise<boolean>;
     readonly confirmRuntimeRepair?: (params: {
       message: string;
       initialValue?: boolean;
       requiresInteractiveConfirmation?: boolean;
     }) => Promise<boolean>;
     readonly note?: (message: unknown, title?: string) => void | Promise<void>;
+    readonly repairMode?: {
+      readonly shouldRepair: boolean;
+      readonly shouldForce: boolean;
+      readonly nonInteractive: boolean;
+      readonly canPrompt: boolean;
+      readonly updateInProgress: boolean;
+    };
+    readonly shouldForce?: boolean;
   };
 }
 

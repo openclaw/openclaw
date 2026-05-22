@@ -268,8 +268,12 @@ async function runStructuredHealthRepairChecks(
         options: ctx.options,
         sourceLastTouchedVersion: ctx.configResult.sourceLastTouchedVersion,
         confirm: (params) => ctx.prompter.confirm(params),
+        confirmAutoFix: (params) => ctx.prompter.confirmAutoFix(params),
+        confirmAggressiveAutoFix: (params) => ctx.prompter.confirmAggressiveAutoFix(params),
         confirmRuntimeRepair: (params) => ctx.prompter.confirmRuntimeRepair(params),
         note,
+        repairMode: ctx.prompter.repairMode,
+        shouldForce: ctx.prompter.shouldForce,
       },
     },
     {
@@ -490,13 +494,23 @@ async function runSandboxHealth(ctx: DoctorHealthFlowContext): Promise<void> {
 }
 
 async function runGatewayServicesHealth(ctx: DoctorHealthFlowContext): Promise<void> {
-  const { maybeRepairGatewayServiceConfig, maybeScanExtraGatewayServices } =
-    await import("../commands/doctor-gateway-services.js");
   const {
     noteMacLaunchAgentOverrides,
     noteMacLaunchctlGatewayEnvOverrides,
     noteMacStaleOpenClawUpdateLaunchdJobs,
   } = await import("../commands/doctor-platform-notes.js");
+  if (ctx.prompter.shouldRepair) {
+    await runStructuredHealthRepairChecks(ctx, [
+      "core/doctor/gateway-services/extra",
+      "core/doctor/gateway-services/config",
+    ]);
+    await noteMacLaunchAgentOverrides();
+    await noteMacStaleOpenClawUpdateLaunchdJobs();
+    await noteMacLaunchctlGatewayEnvOverrides(ctx.cfg);
+    return;
+  }
+  const { maybeRepairGatewayServiceConfig, maybeScanExtraGatewayServices } =
+    await import("../commands/doctor-gateway-services.js");
   await maybeScanExtraGatewayServices(ctx.options, ctx.runtime, ctx.prompter);
   await maybeRepairGatewayServiceConfig(
     ctx.cfg,
@@ -919,7 +933,11 @@ export function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
     createDoctorHealthContribution({
       id: "doctor:gateway-services",
       label: "Gateway services",
-      healthCheckIds: ["core/doctor/gateway-services/platform-notes"],
+      healthCheckIds: [
+        "core/doctor/gateway-services/extra",
+        "core/doctor/gateway-services/config",
+        "core/doctor/gateway-services/platform-notes",
+      ],
       run: runGatewayServicesHealth,
     }),
     createDoctorHealthContribution({
