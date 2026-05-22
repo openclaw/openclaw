@@ -335,6 +335,7 @@ function createPreparedSlackMessage(params?: {
     channelId: string;
     threadTs?: string;
     status: string;
+    loadingMessages?: string[];
   }) => Promise<void>;
   typingReaction?: string;
   ackReactionMessageTs?: string;
@@ -1738,7 +1739,13 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     expect(setSlackThreadStatus).toHaveBeenCalledWith({
       channelId: "C123",
       threadTs: THREAD_TS,
-      status: "is typing...",
+      status: "is thinking...",
+      loadingMessages: [
+        "Reading the thread...",
+        "Checking context...",
+        "Working through the request...",
+        "Putting it all together...",
+      ],
     });
     expect(setSlackThreadStatus).toHaveBeenCalledWith({
       channelId: "C123",

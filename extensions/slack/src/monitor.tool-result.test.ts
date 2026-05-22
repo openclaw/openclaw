@@ -442,7 +442,13 @@ describe("monitorSlackProvider tool results", () => {
       token: "bot-token",
       channel_id: "C1",
       thread_ts: "123",
-      status: "is typing...",
+      status: "is thinking...",
+      loading_messages: [
+        "Reading the thread...",
+        "Checking context...",
+        "Working through the request...",
+        "Putting it all together...",
+      ],
     });
     expect(setStatus).toHaveBeenNthCalledWith(2, {
       token: "bot-token",
