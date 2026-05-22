@@ -285,17 +285,3 @@ export function shouldHandleSlackNativeApprovalRequest(params: {
     sessionFilter: config?.sessionFilter,
   });
 }
-
-export function shouldDeliverSlackNativeApprovalRequest(params: {
-  cfg: OpenClawConfig;
-  accountId?: string | null;
-  approvalKind: SlackApprovalKind;
-  request: SlackNativeApprovalRequest;
-}): boolean {
-  return shouldHandleSlackNativeApprovalRequest({
-    cfg: params.cfg,
-    accountId: params.accountId,
-    approvalKind: params.approvalKind,
-    request: params.request,
-  });
-}

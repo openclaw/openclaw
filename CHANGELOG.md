@@ -76,6 +76,7 @@ Docs: https://docs.openclaw.ai
 - Telegram: honor `channels.telegram.pollingStallThresholdMs` in the default isolated polling path, restarting silent workers instead of leaving inbound updates wedged. Fixes #83950. (#84861) Thanks @joshavant.
 - Slack: suppress reasoning payloads before reply delivery and dispatch accounting, so Slack monitor, slash-command, fallback, and direct reply paths do not leak model reasoning. Fixes #84319. (#84322) Thanks @ffluk3 and @joshavant.
 - Slack: deliver native plugin approval prompts and updates when Slack native approvals are enabled, while keeping plugin approval authorization separate from exec approvers.
+- Slack: keep native plugin approval prompts in the originating app conversation thread when the live Slack turn source is a `D...` conversation.
 - Agents/Pi: disable the embedded pi-coding-agent runtime auto-retry so OpenClaw's own retry and failover loop does not replay failed tool calls through a nested SDK retry. Fixes #73781. (#74434) Thanks @yelog.
 - CLI/perf: keep `setup --help`, `onboard --help`, and `configure --help` out of the full wizard runtime while preserving the existing help output. (#84488) Thanks @frankekn.
 - CLI/perf: keep `agents --help` out of agents action/runtime imports so help, completion, and command discovery paths avoid loading the full agents runtime. (#84483) Thanks @frankekn.
