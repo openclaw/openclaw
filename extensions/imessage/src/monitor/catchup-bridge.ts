@@ -46,10 +46,10 @@ export type RunIMessageCatchupParams = {
   config: ResolvedCatchupConfig;
   includeAttachments: boolean;
   /**
-   * The same per-message handler the live `imsg watch` notification path
-   * runs (i.e. the post-debounce `handleMessageNow` in `monitor-provider`).
-   * Catchup feeds rows in oldest-first by rowid. Throws are recorded as
-   * dispatch failures; non-throw returns count as successful dispatch
+   * The same per-message dispatch/evaluation handler the live `imsg watch`
+   * notification path runs, excluding live cursor advancement. Catchup owns
+   * the cursor for replayed rows while this pass is active. Throws are recorded
+   * as dispatch failures; non-throw returns count as successful dispatch
    * (including non-error drops, which mirrors the live pipeline).
    */
   dispatchPayload: (message: IMessagePayload) => Promise<void>;
@@ -103,6 +103,7 @@ export async function runIMessageCatchup(
     const sinceISO = new Date(sinceMs).toISOString();
     const collected: IMessageCatchupRow[] = [];
     const perChatLimit = Math.min(limit, PER_CHAT_HISTORY_LIMIT_CAP);
+    let hitPerChatLimit = false;
     // Track the highest rowid / date the imsg bridge actually returned across
     // all chats, regardless of whether each row passed the parser. The catchup
     // loop uses this as a cursor-advance floor so an unparseable row (corrupt
@@ -145,6 +146,9 @@ export async function runIMessageCatchup(
       }
 
       const messages = Array.isArray(historyResult?.messages) ? historyResult.messages : [];
+      if (messages.length >= perChatLimit) {
+        hitPerChatLimit = true;
+      }
       for (const raw of messages) {
         // Best-effort raw-watermark probe BEFORE we run the parser, so even
         // rows we drop still let the cursor advance past them. We only trust
@@ -237,6 +241,7 @@ export async function runIMessageCatchup(
     return {
       resolved: true,
       rows: capped,
+      hasMoreRows: isCapTruncated || hitPerChatLimit,
       ...(Number.isFinite(effectiveWatermarkRowid)
         ? { highWatermarkRowid: effectiveWatermarkRowid }
         : {}),

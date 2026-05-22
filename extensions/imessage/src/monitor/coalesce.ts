@@ -23,6 +23,7 @@ export type CoalescedIMessagePayload = IMessagePayload & {
    * dedupe paths can still recognize them.
    */
   coalescedMessageGuids?: string[];
+  coalescedMessageIds?: number[];
 };
 
 /**
@@ -95,13 +96,18 @@ export function combineIMessagePayloads(payloads: IMessagePayload[]): CoalescedI
   // dropped by the cap are still remembered for downstream dedupe.
   const seenGuids = new Set<string>();
   const coalescedMessageGuids: string[] = [];
+  const seenIds = new Set<number>();
+  const coalescedMessageIds: number[] = [];
   for (const payload of payloads) {
     const guid = payload.guid?.trim();
-    if (!guid || seenGuids.has(guid)) {
-      continue;
+    if (guid && !seenGuids.has(guid)) {
+      seenGuids.add(guid);
+      coalescedMessageGuids.push(guid);
     }
-    seenGuids.add(guid);
-    coalescedMessageGuids.push(guid);
+    if (typeof payload.id === "number" && Number.isFinite(payload.id) && !seenIds.has(payload.id)) {
+      seenIds.add(payload.id);
+      coalescedMessageIds.push(payload.id);
+    }
   }
 
   // Reply context: prefer any entry that carries one; the last balloon in a
@@ -118,5 +124,6 @@ export function combineIMessagePayloads(payloads: IMessagePayload[]): CoalescedI
     reply_to_text: entryWithReply?.reply_to_text ?? first.reply_to_text ?? null,
     reply_to_sender: entryWithReply?.reply_to_sender ?? first.reply_to_sender ?? null,
     coalescedMessageGuids: coalescedMessageGuids.length > 0 ? coalescedMessageGuids : undefined,
+    coalescedMessageIds: coalescedMessageIds.length > 0 ? coalescedMessageIds : undefined,
   };
 }

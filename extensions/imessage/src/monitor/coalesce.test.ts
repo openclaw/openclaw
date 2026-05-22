@@ -34,8 +34,14 @@ describe("combineIMessagePayloads", () => {
   });
 
   it("merges Dump + URL split-send into one payload anchored on the first GUID", () => {
-    const text = makePayload({ text: "Dump", guid: "row-1", created_at: "2025-01-01T00:00:00Z" });
+    const text = makePayload({
+      id: 100,
+      text: "Dump",
+      guid: "row-1",
+      created_at: "2025-01-01T00:00:00Z",
+    });
     const balloon = makePayload({
+      id: 101,
       text: "https://example.com/article",
       guid: "row-2",
       created_at: "2025-01-01T00:00:01.500Z",
@@ -46,6 +52,7 @@ describe("combineIMessagePayloads", () => {
     expect(merged.guid).toBe("row-1");
     expect(merged.created_at).toBe("2025-01-01T00:00:01.500Z");
     expect(merged.coalescedMessageGuids).toEqual(["row-1", "row-2"]);
+    expect(merged.coalescedMessageIds).toEqual([100, 101]);
   });
 
   it("preserves attachments instead of dropping them on merge", () => {
@@ -137,6 +144,14 @@ describe("combineIMessagePayloads", () => {
     const merged = combineIMessagePayloads([a, b]);
 
     expect(merged.coalescedMessageGuids).toBeUndefined();
+  });
+
+  it("does not set coalescedMessageIds when no entry carries a numeric id", () => {
+    const a = makePayload({ id: null, text: "a", guid: "row-1" });
+    const b = makePayload({ id: null, text: "b", guid: "row-2" });
+    const merged = combineIMessagePayloads([a, b]);
+
+    expect(merged.coalescedMessageIds).toBeUndefined();
   });
 
   it("respects the documented entry cap value", () => {

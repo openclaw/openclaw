@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  advanceIMessageCatchupCursor,
   capFailureRetriesMap,
   loadIMessageCatchupCursor,
   performIMessageCatchup,
@@ -123,6 +124,96 @@ describe("loadIMessageCatchupCursor / saveIMessageCatchupCursor", () => {
     expect((await loadIMessageCatchupCursor("a"))?.lastSeenRowid).toBe(1);
     expect((await loadIMessageCatchupCursor("b"))?.lastSeenRowid).toBe(2);
   });
+
+  it("advances the cursor from a live-handled message", async () => {
+    const advanced = await advanceIMessageCatchupCursor("primary", {
+      lastSeenMs: 1_700_000_100_000,
+      lastSeenRowid: 100,
+    });
+
+    expect(advanced).toBe(true);
+    const cursor = await loadIMessageCatchupCursor("primary");
+    expect(cursor?.lastSeenMs).toBe(1_700_000_100_000);
+    expect(cursor?.lastSeenRowid).toBe(100);
+  });
+
+  it("does not regress the cursor from older live messages", async () => {
+    await saveIMessageCatchupCursor("primary", {
+      lastSeenMs: 1_700_000_100_000,
+      lastSeenRowid: 100,
+    });
+
+    const advanced = await advanceIMessageCatchupCursor("primary", {
+      lastSeenMs: 1_700_000_090_000,
+      lastSeenRowid: 90,
+    });
+
+    expect(advanced).toBe(false);
+    const cursor = await loadIMessageCatchupCursor("primary");
+    expect(cursor?.lastSeenMs).toBe(1_700_000_100_000);
+    expect(cursor?.lastSeenRowid).toBe(100);
+  });
+
+  it("does not rewrite the cursor for timestamp-only live movement", async () => {
+    await saveIMessageCatchupCursor("primary", {
+      lastSeenMs: 1_700_000_100_000,
+      lastSeenRowid: 100,
+      failureRetries: { "given-up-guid": 10 },
+    });
+
+    const advanced = await advanceIMessageCatchupCursor("primary", {
+      lastSeenMs: 1_700_000_200_000,
+      lastSeenRowid: 100,
+    });
+
+    expect(advanced).toBe(false);
+    const cursor = await loadIMessageCatchupCursor("primary");
+    expect(cursor?.lastSeenMs).toBe(1_700_000_100_000);
+    expect(cursor?.lastSeenRowid).toBe(100);
+    expect(cursor?.failureRetries).toEqual({ "given-up-guid": 10 });
+  });
+
+  it("does not advance past pending catchup failures", async () => {
+    await saveIMessageCatchupCursor("primary", {
+      lastSeenMs: 1_700_000_010_000,
+      lastSeenRowid: 10,
+      failureRetries: { "held-guid": 1 },
+    });
+
+    const advanced = await advanceIMessageCatchupCursor("primary", {
+      lastSeenMs: 1_700_000_200_000,
+      lastSeenRowid: 200,
+    });
+
+    expect(advanced).toBe(false);
+    const cursor = await loadIMessageCatchupCursor("primary");
+    expect(cursor?.lastSeenMs).toBe(1_700_000_010_000);
+    expect(cursor?.lastSeenRowid).toBe(10);
+    expect(cursor?.failureRetries).toEqual({ "held-guid": 1 });
+  });
+
+  it("advances past already-given-up catchup failures", async () => {
+    await saveIMessageCatchupCursor("primary", {
+      lastSeenMs: 1_700_000_010_000,
+      lastSeenRowid: 10,
+      failureRetries: { "given-up-guid": 10 },
+    });
+
+    const advanced = await advanceIMessageCatchupCursor(
+      "primary",
+      {
+        lastSeenMs: 1_700_000_200_000,
+        lastSeenRowid: 200,
+      },
+      { maxFailureRetries: 10 },
+    );
+
+    expect(advanced).toBe(true);
+    const cursor = await loadIMessageCatchupCursor("primary");
+    expect(cursor?.lastSeenMs).toBe(1_700_000_200_000);
+    expect(cursor?.lastSeenRowid).toBe(200);
+    expect(cursor?.failureRetries).toBeUndefined();
+  });
 });
 
 describe("capFailureRetriesMap", () => {
@@ -184,6 +275,40 @@ describe("performIMessageCatchup", () => {
 
     const cursor = await loadIMessageCatchupCursor("primary");
     expect(cursor?.lastSeenRowid).toBe(11);
+  });
+
+  it("serializes live cursor advances behind an active catchup pass", async () => {
+    const pendingAdvances: Promise<boolean>[] = [];
+    const dispatch: CatchupDispatchFn = vi.fn(async (dispatchedRow) => {
+      const advance = advanceIMessageCatchupCursor("primary", {
+        lastSeenMs: now + 5_000,
+        lastSeenRowid: 99,
+      });
+      pendingAdvances.push(advance);
+
+      let settled = false;
+      void advance.then(() => {
+        settled = true;
+      });
+      await Promise.resolve();
+      expect(settled).toBe(false);
+      expect(dispatchedRow.rowid).toBe(10);
+      return { ok: true };
+    });
+
+    const summary = await performIMessageCatchup({
+      accountId: "primary",
+      config,
+      now,
+      fetch: fetchOf([row({ guid: "A", rowid: 10, date: now - 30_000 })]),
+      dispatch,
+    });
+
+    expect(summary.cursorAfter.lastSeenRowid).toBe(10);
+    await expect(Promise.all(pendingAdvances)).resolves.toEqual([true]);
+    const cursor = await loadIMessageCatchupCursor("primary");
+    expect(cursor?.lastSeenMs).toBe(now + 5_000);
+    expect(cursor?.lastSeenRowid).toBe(99);
   });
 
   it("skips is_from_me rows but still advances the cursor past them", async () => {

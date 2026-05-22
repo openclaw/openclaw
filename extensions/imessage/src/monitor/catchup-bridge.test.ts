@@ -267,6 +267,7 @@ describe("runIMessageCatchup", () => {
     });
 
     expect(summary.fetchedCount).toBe(5);
+    expect(summary.hasMoreRows).toBe(true);
     expect(summary.replayed).toBe(5);
     // Oldest-first by rowid: 100, 101, 102, 103, 200 (chat 1's first 4, then chat 2's first).
     expect(dispatched).toEqual(["g-100", "g-101", "g-102", "g-103", "g-200"]);
@@ -279,6 +280,38 @@ describe("runIMessageCatchup", () => {
     // picks up the rest" warning would lie and those rows would be
     // permanently lost. Cursor must stop at the last dispatched rowid (200).
     expect(summary.cursorAfter.lastSeenRowid).toBe(200);
+  });
+
+  it("reports possible remaining rows when a per-chat history page is full", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-05-08T12:00:00Z"));
+    const { client } = makeFakeClient(({ method }) => {
+      if (method === "chats.list") {
+        return { chats: [{ id: 1, last_message_at: "2026-05-08T11:55:00.000Z" }] };
+      }
+      if (method === "messages.history") {
+        return {
+          messages: [
+            makeRow({ id: 100, guid: "g-100", chat_id: 1, created_at: "2026-05-08T11:55:00Z" }),
+            makeRow({ id: 101, guid: "g-101", chat_id: 1, created_at: "2026-05-08T11:56:00Z" }),
+          ],
+        };
+      }
+      throw new Error(`unexpected method ${method}`);
+    });
+
+    const summary = await runIMessageCatchup({
+      client: client as never,
+      accountId: "default",
+      config: resolveCatchupConfig({ enabled: true, perRunLimit: 2, maxAgeMinutes: 60 }),
+      includeAttachments: false,
+      dispatchPayload: async () => {},
+    });
+
+    expect(summary.querySucceeded).toBe(true);
+    expect(summary.fetchedCount).toBe(2);
+    expect(summary.hasMoreRows).toBe(true);
+    expect(summary.cursorAfter.lastSeenRowid).toBe(101);
   });
 
   it("treats a dispatch throw as a failure and holds the cursor", async () => {

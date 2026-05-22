@@ -27,6 +27,7 @@ const MAX_MAX_FAILURE_RETRIES = 1_000;
 // should not balloon the cursor file. When over the bound, keep only the
 // highest-count entries (closest to give-up) and drop the rest.
 const MAX_FAILURE_RETRY_MAP_SIZE = 5_000;
+const cursorAccountLocks = new Map<string, Promise<void>>();
 
 export type IMessageCatchupConfig = {
   enabled?: boolean;
@@ -58,6 +59,15 @@ export type IMessageCatchupCursor = {
   failureRetries?: Record<string, number>;
 };
 
+export type IMessageCatchupCursorAdvance = {
+  lastSeenMs: number;
+  lastSeenRowid: number;
+};
+
+export type IMessageCatchupCursorAdvanceOptions = {
+  maxFailureRetries?: number;
+};
+
 export type IMessageCatchupRow = {
   guid: string;
   rowid: number;
@@ -69,6 +79,8 @@ export type IMessageCatchupRow = {
 export type IMessageCatchupSummary = {
   querySucceeded: boolean;
   fetchedCount: number;
+  /** True when valid fetched rows were capped out of this pass and must remain for a later pass. */
+  hasMoreRows?: boolean;
   replayed: number;
   skippedFromMe: number;
   skippedPreCursor: number;
@@ -131,6 +143,34 @@ function sanitizeFailureRetriesInput(raw: unknown): Record<string, number> {
   return out;
 }
 
+async function withIMessageCatchupCursorLock<T>(
+  accountId: string,
+  callback: () => Promise<T>,
+): Promise<T> {
+  const prior = cursorAccountLocks.get(accountId) ?? Promise.resolve();
+  let release: () => void;
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const current = prior
+    .catch(() => {
+      // Keep the queue moving even if an earlier cursor operation failed.
+    })
+    .then(() => gate);
+  cursorAccountLocks.set(accountId, current);
+  await prior.catch(() => {
+    // The operation that owns `prior` has already surfaced its error.
+  });
+  try {
+    return await callback();
+  } finally {
+    release!();
+    if (cursorAccountLocks.get(accountId) === current) {
+      cursorAccountLocks.delete(accountId);
+    }
+  }
+}
+
 /**
  * Cursor file path: `<openclawStateDir>/imessage/catchup/<safePrefix>__<sha256[:12]>.json`.
  * `openclawStateDir` resolves through `OPENCLAW_STATE_DIR` (or the plugin-sdk default,
@@ -175,6 +215,43 @@ export async function saveIMessageCatchupCursor(
     ...(hasRetries ? { failureRetries: sanitized } : {}),
   };
   await writeJsonFileAtomically(filePath, cursor);
+}
+
+export async function advanceIMessageCatchupCursor(
+  accountId: string,
+  next: IMessageCatchupCursorAdvance,
+  options: IMessageCatchupCursorAdvanceOptions = {},
+): Promise<boolean> {
+  if (
+    !Number.isFinite(next.lastSeenMs) ||
+    !Number.isFinite(next.lastSeenRowid) ||
+    next.lastSeenRowid <= 0
+  ) {
+    return false;
+  }
+
+  return await withIMessageCatchupCursorLock(accountId, async () => {
+    const current = await loadIMessageCatchupCursor(accountId);
+    const maxFailureRetries = clampInt(
+      options.maxFailureRetries,
+      1,
+      MAX_MAX_FAILURE_RETRIES,
+      DEFAULT_MAX_FAILURE_RETRIES,
+    );
+    const hasHeldFailure =
+      current?.failureRetries &&
+      Object.values(current.failureRetries).some((count) => count < maxFailureRetries);
+    if (hasHeldFailure) {
+      return false;
+    }
+    const lastSeenMs = Math.max(current?.lastSeenMs ?? 0, Math.floor(next.lastSeenMs));
+    const lastSeenRowid = Math.max(current?.lastSeenRowid ?? 0, Math.floor(next.lastSeenRowid));
+    if (current !== null && lastSeenRowid <= current.lastSeenRowid) {
+      return false;
+    }
+    await saveIMessageCatchupCursor(accountId, { lastSeenMs, lastSeenRowid });
+    return true;
+  });
 }
 
 /**
@@ -246,6 +323,7 @@ export type CatchupFetchFn = (params: {
 }) => Promise<{
   resolved: boolean;
   rows: IMessageCatchupRow[];
+  hasMoreRows?: boolean;
   /**
    * Highest `rowid` the fetcher saw in the raw response, including rows it
    * dropped (parser failure, schema drift, missing fields). The replay loop
@@ -285,6 +363,14 @@ export type PerformCatchupParams = {
  * pipeline as `dispatch`.
  */
 export async function performIMessageCatchup(
+  params: PerformCatchupParams,
+): Promise<IMessageCatchupSummary> {
+  return await withIMessageCatchupCursorLock(params.accountId, () =>
+    performIMessageCatchupUnlocked(params),
+  );
+}
+
+async function performIMessageCatchupUnlocked(
   params: PerformCatchupParams,
 ): Promise<IMessageCatchupSummary> {
   const now = params.now ?? Date.now();
@@ -334,6 +420,7 @@ export async function performIMessageCatchup(
   }
   summary.querySucceeded = true;
   summary.fetchedCount = fetchResult.rows.length;
+  summary.hasMoreRows = fetchResult.hasMoreRows === true;
 
   // Stable order: process oldest-first so the cursor advances monotonically
   // and a mid-run failure leaves a usable lastSeenRowid for the next pass.

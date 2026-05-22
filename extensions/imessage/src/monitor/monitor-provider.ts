@@ -52,7 +52,7 @@ import { sendMessageIMessage } from "../send.js";
 import { normalizeIMessageHandle } from "../targets.js";
 import { attachIMessageMonitorAbortHandler } from "./abort-handler.js";
 import { runIMessageCatchup } from "./catchup-bridge.js";
-import { resolveCatchupConfig } from "./catchup.js";
+import { advanceIMessageCatchupCursor, resolveCatchupConfig } from "./catchup.js";
 import { combineIMessagePayloads } from "./coalesce.js";
 import { createIMessageEchoCachingSend, deliverReplies } from "./deliver.js";
 import { createSentMessageCache } from "./echo-cache.js";
@@ -76,6 +76,56 @@ import { sanitizeIMessageWatchErrorPayload } from "./watch-error-log.js";
 
 const WATCH_SUBSCRIBE_MAX_ATTEMPTS = 3;
 const WATCH_SUBSCRIBE_RETRY_DELAY_MS = 1_000;
+
+type IMessagePayloadWithCoalescedSources = IMessagePayload & {
+  coalescedMessageGuids?: string[];
+  coalescedMessageIds?: number[];
+};
+
+type StartupLiveResolution = {
+  promise: Promise<void>;
+  resolve: () => void;
+  reject: (err: unknown) => void;
+};
+
+type IMessageDebounceEntry = {
+  message: IMessagePayload;
+  startupLiveResolution?: StartupLiveResolution;
+};
+
+function resolveLiveCatchupRowids(message: IMessagePayloadWithCoalescedSources): number[] {
+  return [
+    message.id,
+    ...(Array.isArray(message.coalescedMessageIds) ? message.coalescedMessageIds : []),
+  ]
+    .filter((value): value is number => typeof value === "number" && Number.isFinite(value))
+    .map((value) => Math.floor(value))
+    .filter((value) => value > 0);
+}
+
+function resolveLiveCatchupGuids(message: IMessagePayloadWithCoalescedSources): string[] {
+  return [
+    message.guid,
+    ...(Array.isArray(message.coalescedMessageGuids) ? message.coalescedMessageGuids : []),
+  ]
+    .map((value) => (typeof value === "string" ? value.trim() : ""))
+    .filter((value) => value.length > 0);
+}
+
+function resolveLiveCatchupAdvance(message: IMessagePayloadWithCoalescedSources) {
+  const ids = resolveLiveCatchupRowids(message);
+  if (ids.length === 0 || typeof message.created_at !== "string") {
+    return null;
+  }
+  const lastSeenMs = Date.parse(message.created_at);
+  if (!Number.isFinite(lastSeenMs)) {
+    return null;
+  }
+  return {
+    lastSeenMs,
+    lastSeenRowid: Math.max(...ids),
+  };
+}
 
 function isIMessagePluginPayloadAttachment(attachment: {
   original_path?: string | null;
@@ -219,6 +269,118 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
   const cliPath = opts.cliPath ?? imessageCfg.cliPath ?? "imsg";
   const dbPath = opts.dbPath ?? imessageCfg.dbPath;
   const probeTimeoutMs = imessageCfg.probeTimeoutMs ?? DEFAULT_IMESSAGE_PROBE_TIMEOUT_MS;
+  const catchupCfg = resolveCatchupConfig(imessageCfg.catchup);
+  let releaseInitialCatchupCursorFence: (() => void) | null = null;
+  let initialCatchupCursorFenceReleased = !catchupCfg.enabled;
+  const initialCatchupCursorFence = catchupCfg.enabled
+    ? new Promise<void>((resolve) => {
+        releaseInitialCatchupCursorFence = resolve;
+      })
+    : null;
+  const startupLiveResolvedRowids = catchupCfg.enabled ? new Set<number>() : null;
+  const startupLiveResolvedGuids = catchupCfg.enabled ? new Set<string>() : null;
+  const startupLivePendingRowids = catchupCfg.enabled ? new Map<number, Promise<void>>() : null;
+  const startupLivePendingGuids = catchupCfg.enabled ? new Map<string, Promise<void>>() : null;
+  let startupCatchupAdvanceCeiling: { lastSeenMs: number; lastSeenRowid: number } | null = null;
+  let liveCatchupCursorAdvanceBlocked = false;
+  const releaseInitialCatchupCursorFenceOnce = () => {
+    const release = releaseInitialCatchupCursorFence;
+    releaseInitialCatchupCursorFence = null;
+    initialCatchupCursorFenceReleased = true;
+    startupLiveResolvedRowids?.clear();
+    startupLiveResolvedGuids?.clear();
+    startupLivePendingRowids?.clear();
+    startupLivePendingGuids?.clear();
+    if (release) {
+      release();
+    }
+  };
+  const trackStartupLiveResolution = (message: IMessagePayload, task: Promise<void>) => {
+    if (initialCatchupCursorFenceReleased) {
+      return;
+    }
+    const rowids = resolveLiveCatchupRowids(message);
+    const guids = resolveLiveCatchupGuids(message);
+    for (const rowid of rowids) {
+      startupLivePendingRowids?.set(rowid, task);
+    }
+    for (const guid of guids) {
+      startupLivePendingGuids?.set(guid, task);
+    }
+    void task
+      .then(() => {
+        if (initialCatchupCursorFenceReleased) {
+          return;
+        }
+        for (const rowid of rowids) {
+          startupLiveResolvedRowids?.add(rowid);
+        }
+        for (const guid of guids) {
+          startupLiveResolvedGuids?.add(guid);
+        }
+      })
+      .catch(() => {
+        // A failed live attempt must remain eligible for catchup replay.
+      })
+      .finally(() => {
+        for (const rowid of rowids) {
+          if (startupLivePendingRowids?.get(rowid) === task) {
+            startupLivePendingRowids.delete(rowid);
+          }
+        }
+        for (const guid of guids) {
+          if (startupLivePendingGuids?.get(guid) === task) {
+            startupLivePendingGuids.delete(guid);
+          }
+        }
+      });
+  };
+  const createStartupLiveResolution = (
+    message: IMessagePayload,
+  ): StartupLiveResolution | undefined => {
+    if (!catchupCfg.enabled || initialCatchupCursorFenceReleased) {
+      return undefined;
+    }
+    let resolve!: () => void;
+    let reject!: (err: unknown) => void;
+    const promise = new Promise<void>((promiseResolve, promiseReject) => {
+      resolve = promiseResolve;
+      reject = promiseReject;
+    });
+    trackStartupLiveResolution(message, promise);
+    return { promise, resolve, reject };
+  };
+  const wasStartupLiveResolvedMessage = async (message: IMessagePayload): Promise<boolean> => {
+    if (initialCatchupCursorFenceReleased) {
+      return false;
+    }
+    const rowids = resolveLiveCatchupRowids(message);
+    const guids = resolveLiveCatchupGuids(message);
+    const isResolved = () =>
+      rowids.some((rowid) => startupLiveResolvedRowids?.has(rowid)) ||
+      guids.some((guid) => startupLiveResolvedGuids?.has(guid));
+    if (isResolved()) {
+      return true;
+    }
+    const pending = new Set<Promise<void>>();
+    for (const rowid of rowids) {
+      const task = startupLivePendingRowids?.get(rowid);
+      if (task) {
+        pending.add(task);
+      }
+    }
+    for (const guid of guids) {
+      const task = startupLivePendingGuids?.get(guid);
+      if (task) {
+        pending.add(task);
+      }
+    }
+    if (pending.size === 0) {
+      return false;
+    }
+    await Promise.allSettled(pending);
+    return isResolved();
+  };
   const attachmentRoots = resolveIMessageAttachmentRoots({
     cfg,
     accountId: accountInfo.accountId,
@@ -261,9 +423,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
   const debounceMsOverride =
     coalesceSameSenderDms && !hasExplicitInboundDebounce ? 2500 : undefined;
 
-  const { debouncer: inboundDebouncer } = createChannelInboundDebouncer<{
-    message: IMessagePayload;
-  }>({
+  const { debouncer: inboundDebouncer } = createChannelInboundDebouncer<IMessageDebounceEntry>({
     cfg,
     channel: "imessage",
     debounceMsOverride,
@@ -322,8 +482,11 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
       if (entries.length === 0) {
         return;
       }
+      const startupLiveResolutions = entries
+        .map((entry) => entry.startupLiveResolution)
+        .filter((entry): entry is StartupLiveResolution => Boolean(entry));
       if (entries.length === 1) {
-        await handleMessageNow(entries[0].message);
+        await handleLiveMessage(entries[0].message, startupLiveResolutions);
         return;
       }
 
@@ -334,7 +497,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
         const ellipsis = text.length > 50 ? "..." : "";
         logVerbose(`[imessage] coalesced ${entries.length} messages: "${preview}${ellipsis}"`);
       }
-      await handleMessageNow(combined);
+      await handleLiveMessage(combined, startupLiveResolutions);
     },
     onError: (err) => {
       runtime.error?.(`imessage debounce flush failed: ${String(err)}`);
@@ -350,7 +513,46 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
     return client;
   };
 
-  async function handleMessageNow(message: IMessagePayload) {
+  async function handleLiveMessage(
+    message: IMessagePayload,
+    startupLiveResolutions: StartupLiveResolution[] = [],
+  ) {
+    try {
+      await handleMessageNowResolved(message);
+      for (const resolution of startupLiveResolutions) {
+        resolution.resolve();
+      }
+    } catch (err) {
+      for (const resolution of startupLiveResolutions) {
+        resolution.reject(err);
+      }
+      throw err;
+    }
+    if (!catchupCfg.enabled) {
+      return;
+    }
+    await initialCatchupCursorFence;
+    const advance = resolveLiveCatchupAdvance(message);
+    if (liveCatchupCursorAdvanceBlocked) {
+      return;
+    }
+    if (
+      startupCatchupAdvanceCeiling &&
+      advance &&
+      advance.lastSeenRowid > startupCatchupAdvanceCeiling.lastSeenRowid
+    ) {
+      return;
+    }
+    if (advance) {
+      await advanceIMessageCatchupCursor(accountInfo.accountId, advance, {
+        maxFailureRetries: catchupCfg.maxFailureRetries,
+      }).catch((err) => {
+        runtime.error?.(`imessage catchup: live cursor advance failed: ${String(err)}`);
+      });
+    }
+  }
+
+  async function handleMessageNowResolved(message: IMessagePayload) {
     const messageText = (message.text ?? "").trim();
 
     const attachments = includeAttachments ? (message.attachments ?? []) : [];
@@ -779,7 +981,13 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
       runtime.error?.(`imessage: dropping malformed RPC message payload (keys=${shape})`);
       return;
     }
-    await inboundDebouncer.enqueue({ message });
+    const startupLiveResolution = createStartupLiveResolution(message);
+    try {
+      await inboundDebouncer.enqueue({ message, startupLiveResolution });
+    } catch (err) {
+      startupLiveResolution?.reject(err);
+      throw err;
+    }
   };
 
   await waitForTransportReady({
@@ -803,6 +1011,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
   });
 
   if (opts.abortSignal?.aborted) {
+    releaseInitialCatchupCursorFenceOnce();
     return;
   }
   const abort = opts.abortSignal;
@@ -835,6 +1044,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
 
   for (let attempt = 1; attempt <= WATCH_SUBSCRIBE_MAX_ATTEMPTS; attempt++) {
     if (abort?.aborted) {
+      releaseInitialCatchupCursorFenceOnce();
       return;
     }
     let attemptClient: IMessageRpcClient | undefined;
@@ -863,12 +1073,14 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
       break;
     } catch (err) {
       if (abort?.aborted) {
+        releaseInitialCatchupCursorFenceOnce();
         return;
       }
       const shouldRetry =
         attempt < WATCH_SUBSCRIBE_MAX_ATTEMPTS && isRetriableWatchSubscribeStartupError(err);
       if (!shouldRetry) {
         runtime.error?.(danger(`imessage: monitor failed: ${String(err)}`));
+        releaseInitialCatchupCursorFenceOnce();
         throw err;
       }
       runtime.log?.(
@@ -887,6 +1099,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
         abortSignal: abort,
       });
       if (abort?.aborted) {
+        releaseInitialCatchupCursorFenceOnce();
         return;
       }
     } finally {
@@ -899,6 +1112,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
 
   const activeClient = client;
   if (!activeClient) {
+    releaseInitialCatchupCursorFenceOnce();
     return;
   }
 
@@ -907,10 +1121,9 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
   // `handleMessage` -> `handleMessageNow`; the inbound-dedupe cache absorbs
   // any overlap with replayed rows. Disabled by default — opt-in via
   // `channels.imessage.catchup.enabled`. See issue #78649.
-  const catchupCfg = resolveCatchupConfig(imessageCfg.catchup);
   if (catchupCfg.enabled && !abort?.aborted) {
     try {
-      await runIMessageCatchup({
+      const summary = await runIMessageCatchup({
         client: activeClient,
         accountId: accountInfo.accountId,
         config: catchupCfg,
@@ -920,14 +1133,29 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
         // from before the gateway gap therefore arrive as separate turns
         // rather than coalesced. Live notifications continue to flow through
         // the debouncer.
-        dispatchPayload: (message) => handleMessageNow(message),
+        dispatchPayload: async (message) => {
+          if (await wasStartupLiveResolvedMessage(message)) {
+            return;
+          }
+          await handleMessageNowResolved(message);
+        },
         runtime,
       });
+      if (!summary.querySucceeded) {
+        liveCatchupCursorAdvanceBlocked = true;
+      } else if (summary.hasMoreRows) {
+        startupCatchupAdvanceCeiling = summary.cursorAfter;
+      }
     } catch (err) {
       // Catchup is opt-in recovery — surface the error but do not block the
       // monitor. The live dispatch loop is already up and running.
       runtime.error?.(`imessage catchup: pass failed: ${String(err)}`);
+      liveCatchupCursorAdvanceBlocked = true;
+    } finally {
+      releaseInitialCatchupCursorFenceOnce();
     }
+  } else {
+    releaseInitialCatchupCursorFenceOnce();
   }
 
   try {
