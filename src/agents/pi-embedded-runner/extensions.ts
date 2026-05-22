@@ -184,7 +184,7 @@ export function resolveSafeguardRuntimeTarget(params: {
     : undefined;
   if (!model) {
     log.warn(
-      `Configured safeguard compaction model "${provider}/${modelId}" could not be resolved; falling back to the session model.`,
+      `Configured safeguard compaction model "${provider}/${modelId}" could not be resolved against the model registry; using the session model when available, otherwise compaction will be skipped.`,
     );
   }
   return { provider, modelId, model };
