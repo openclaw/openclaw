@@ -155,6 +155,39 @@ describe("provider operation deadlines", () => {
     expect(fetchFn).toHaveBeenCalledTimes(2);
   });
 
+  it("passes guarded request policy through provider status polling", async () => {
+    const release = vi.fn(async () => {});
+    fetchWithSsrFGuardMock.mockResolvedValueOnce({
+      response: new Response(JSON.stringify({ status: "completed" })),
+      finalUrl: "https://api.example.com/v1/videos/task-1",
+      release,
+    });
+
+    const result = await pollProviderOperationJson<{ status?: string }>({
+      url: "https://api.example.com/v1/videos/task-1",
+      headers: new Headers({ authorization: "Bearer test" }),
+      deadline: createProviderOperationDeadline({
+        label: "video generation task task-1",
+      }),
+      defaultTimeoutMs: 5_000,
+      fetchFn: fetch,
+      maxAttempts: 3,
+      pollIntervalMs: 1_000,
+      requestFailedMessage: "status failed",
+      timeoutMessage: "task timed out",
+      allowPrivateNetwork: true,
+      dispatcherPolicy: { mode: "direct" },
+      auditContext: "provider-video-status",
+      isComplete: (payload) => payload.status === "completed",
+    });
+
+    expect(result).toEqual({ status: "completed" });
+    expect(getFirstGuardedFetchCall().policy).toEqual({ allowPrivateNetwork: true });
+    expect(getFirstGuardedFetchCall().dispatcherPolicy).toEqual({ mode: "direct" });
+    expect(getFirstGuardedFetchCall().auditContext).toBe("provider-video-status");
+    expect(release).toHaveBeenCalledTimes(1);
+  });
+
   it("throws provider failure messages while polling status JSON", async () => {
     const fetchFn = vi
       .fn<typeof fetch>()
