@@ -74,6 +74,21 @@ function hasExplicitUnknownPollValue(key: string, value: unknown): boolean {
 }
 
 export function hasPollCreationParams(params: Record<string, unknown>): boolean {
+  // Require a non-empty pollQuestion as the semantic anchor for poll intent.
+  // GPT-5.4/5.5 sends all optional params with default values on every call
+  // (e.g. pollDurationHours:24, pollMulti:false). Without this guard those
+  // defaults trigger poll detection on plain message.send calls (#52757).
+  const pollQuestionRaw = readPollParamRaw(params, "pollQuestion");
+  const pollQuestionPresent =
+    typeof pollQuestionRaw === "string" && pollQuestionRaw.trim().length > 0;
+  const pollOptionsRaw = readPollParamRaw(params, "pollOption");
+  const pollOptionsPresent =
+    (Array.isArray(pollOptionsRaw) &&
+      pollOptionsRaw.some((e) => typeof e === "string" && e.trim())) ||
+    (typeof pollOptionsRaw === "string" && pollOptionsRaw.trim().length > 0);
+  if (!pollQuestionPresent && !pollOptionsPresent) {
+    return false;
+  }
   for (const key of SHARED_POLL_CREATION_PARAM_NAMES) {
     const def = POLL_CREATION_PARAM_DEFS[key];
     const value = readPollParamRaw(params, key);
