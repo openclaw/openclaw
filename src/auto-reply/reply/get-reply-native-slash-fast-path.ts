@@ -1,9 +1,9 @@
 import { loadModelCatalog } from "../../agents/model-catalog.js";
+import type { ModelManifestNormalizationContext } from "../../agents/model-selection-normalize.js";
 import {
   resolveThinkingDefaultWithRuntimeCatalog,
   type ModelAliasIndex,
 } from "../../agents/model-selection.js";
-import type { ModelManifestNormalizationContext } from "../../agents/model-selection-normalize.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
@@ -53,32 +53,39 @@ async function resolveNativeSlashDefaultThinkingLevel(params: {
   cfg: OpenClawConfig;
   provider: string;
   model: string;
+  pluginMetadataSnapshot?: ModelManifestNormalizationContext["pluginMetadataSnapshot"];
 }): Promise<ThinkLevel> {
   return resolveThinkingDefaultWithRuntimeCatalog({
     cfg: params.cfg,
     provider: params.provider,
     model: params.model,
-    loadModelCatalog: () => loadModelCatalog({ config: params.cfg }),
+    loadModelCatalog: () =>
+      loadModelCatalog({
+        config: params.cfg,
+        metadataSnapshot: params.pluginMetadataSnapshot,
+      }),
   });
 }
 
-export async function maybeResolveNativeSlashCommandFastReply(params: {
-  ctx: MsgContext;
-  cfg: OpenClawConfig;
-  agentId: string;
-  agentDir: string;
-  agentCfg: AgentDefaults;
-  commandAuthorized: boolean;
-  defaultProvider: string;
-  defaultModel: string;
-  aliasIndex: ModelAliasIndex;
-  provider: string;
-  model: string;
-  workspaceDir: string;
-  typing: ReturnType<typeof createTypingController>;
-  opts?: GetReplyOptions;
-  skillFilter?: string[];
-} & ModelManifestNormalizationContext): Promise<
+export async function maybeResolveNativeSlashCommandFastReply(
+  params: {
+    ctx: MsgContext;
+    cfg: OpenClawConfig;
+    agentId: string;
+    agentDir: string;
+    agentCfg: AgentDefaults;
+    commandAuthorized: boolean;
+    defaultProvider: string;
+    defaultModel: string;
+    aliasIndex: ModelAliasIndex;
+    provider: string;
+    model: string;
+    workspaceDir: string;
+    typing: ReturnType<typeof createTypingController>;
+    opts?: GetReplyOptions;
+    skillFilter?: string[];
+  } & ModelManifestNormalizationContext,
+): Promise<
   { handled: true; reply: ReplyPayload | ReplyPayload[] | undefined } | { handled: false }
 > {
   if (!shouldRunNativeSlashCommandFastPath(params.ctx)) {
@@ -110,6 +117,7 @@ export async function maybeResolveNativeSlashCommandFastReply(params: {
         cfg: params.cfg,
         provider: params.provider,
         model: params.model,
+        pluginMetadataSnapshot: params.pluginMetadataSnapshot,
       });
       return resolvedDefaultThinkingLevel;
     };

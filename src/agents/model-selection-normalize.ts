@@ -1,4 +1,5 @@
 import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
+import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { modelKey as sharedModelKey, normalizeStaticProviderModelId } from "./model-ref-shared.js";
 import {
@@ -16,6 +17,7 @@ export type ModelRef = {
 
 export type ModelManifestNormalizationContext = {
   manifestPlugins?: readonly Pick<PluginManifestRecord, "modelIdNormalization">[];
+  pluginMetadataSnapshot?: PluginMetadataSnapshot;
 };
 
 export function modelKey(provider: string, model: string) {

@@ -271,22 +271,25 @@ export async function getReplyFromConfig(
   const agentEntryForModel = resolveAgentConfig(cfg, agentId);
   const shouldPreloadModelManifestContext = Boolean(
     modelOverrideRaw ||
-      heartbeatModelRaw ||
-      agentEntryForModel?.model ||
-      cfg.agents?.defaults?.model ||
-      Object.keys(cfg.agents?.defaults?.models ?? {}).length > 0 ||
-      hasConfiguredProviderModels(cfg),
+    heartbeatModelRaw ||
+    agentEntryForModel?.model ||
+    cfg.agents?.defaults?.model ||
+    Object.keys(cfg.agents?.defaults?.models ?? {}).length > 0 ||
+    hasConfiguredProviderModels(cfg),
   );
-  const modelManifestContext: ModelManifestNormalizationContext =
-    shouldPreloadModelManifestContext
-      ? {
-          manifestPlugins: loadManifestMetadataSnapshot({
-            config: cfg,
-            workspaceDir: workspaceDirRaw,
-            env: process.env,
-          }).plugins,
-        }
-      : {};
+  const modelMetadataSnapshot = shouldPreloadModelManifestContext
+    ? loadManifestMetadataSnapshot({
+        config: cfg,
+        workspaceDir: workspaceDirRaw,
+        env: process.env,
+      })
+    : undefined;
+  const modelManifestContext: ModelManifestNormalizationContext = modelMetadataSnapshot
+    ? {
+        manifestPlugins: modelMetadataSnapshot.plugins,
+        pluginMetadataSnapshot: modelMetadataSnapshot,
+      }
+    : {};
   const { defaultProvider, defaultModel, aliasIndex } = resolveDefaultModel({
     cfg,
     agentId,

@@ -753,6 +753,7 @@ Docs: https://docs.openclaw.ai
 - Agents/QA-Lab: overlap reply auth-profile resolution, agent-runner loading, and system-prompt runtime facts, and reuse provider runtime handles and embedded tool-policy resolution during Pi dispatch so WhatsApp RTT probes avoid duplicate provider metadata scans.
 - Agents: emit embedded-run startup, prep, system-prompt, and resource-loader stage marks into diagnostics timelines so live RTT artifacts expose sub-second runner setup costs.
 - Replies: reuse per-turn manifest model-normalization metadata across reply default-model and model-selection paths to avoid repeated request-time plugin metadata scans.
+- Replies: reuse per-turn plugin metadata snapshots during reply model-catalog hydration so WhatsApp RTT turns avoid rescanning plugin metadata for thinking and reasoning defaults.
 - Plugins: reuse the Gateway's current metadata snapshot for agent workspaces without local plugins, avoiding repeated request-time manifest scans while preserving workspace plugin overrides.
 - QA-Lab: disable background agent heartbeats in WhatsApp live probes so RTT artifacts measure the canary reply lane without heartbeat contention.
 - QA-Lab: add an explicit `whatsapp-canary-rtt` live scenario id so repeated WhatsApp RTT proof runs can target the canary lane directly.

@@ -1264,6 +1264,33 @@ describe("createModelSelectionState auto-failover overrides", () => {
 });
 
 describe("createModelSelectionState resolveDefaultReasoningLevel", () => {
+  it("passes supplied plugin metadata snapshots into runtime catalog hydration", async () => {
+    const { loadModelCatalog } = await import("../../agents/model-catalog.runtime.js");
+    vi.mocked(loadModelCatalog).mockClear();
+    vi.mocked(loadModelCatalog).mockResolvedValueOnce([
+      { provider: "openrouter", id: "x-ai/grok-4.1-fast", name: "Grok", reasoning: true },
+    ]);
+    const metadataSnapshot = { plugins: [] } as NonNullable<
+      Parameters<typeof createModelSelectionState>[0]["pluginMetadataSnapshot"]
+    >;
+    const state = await createModelSelectionState({
+      cfg: {} as OpenClawConfig,
+      agentCfg: undefined,
+      defaultProvider: "openrouter",
+      defaultModel: "x-ai/grok-4.1-fast",
+      provider: "openrouter",
+      model: "x-ai/grok-4.1-fast",
+      hasModelDirective: false,
+      pluginMetadataSnapshot: metadataSnapshot,
+    });
+
+    await expect(state.resolveDefaultReasoningLevel()).resolves.toBe("on");
+    expect(loadModelCatalog).toHaveBeenCalledWith({
+      config: {},
+      metadataSnapshot,
+    });
+  });
+
   it("returns on when catalog model has reasoning true", async () => {
     const { loadModelCatalog } = await import("../../agents/model-catalog.runtime.js");
     vi.mocked(loadModelCatalog).mockResolvedValueOnce([

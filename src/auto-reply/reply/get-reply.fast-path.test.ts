@@ -60,9 +60,9 @@ vi.mock("../../agents/workspace.js", () => ({
 }));
 
 vi.mock("../../plugins/manifest-contract-eligibility.js", async () => {
-  const actual = await vi.importActual<typeof import("../../plugins/manifest-contract-eligibility.js")>(
-    "../../plugins/manifest-contract-eligibility.js",
-  );
+  const actual = await vi.importActual<
+    typeof import("../../plugins/manifest-contract-eligibility.js")
+  >("../../plugins/manifest-contract-eligibility.js");
   return {
     ...actual,
     loadManifestMetadataSnapshot: mocks.loadManifestMetadataSnapshot,
@@ -429,7 +429,10 @@ describe("getReplyFromConfig fast test bootstrap", () => {
     }
     expect(reply.text.includes("OpenClaw")).toBe(true);
     expect(reply.text.includes("Think: medium")).toBe(true);
-    expect(mocks.loadModelCatalog).toHaveBeenCalledWith({ config: cfg });
+    expect(mocks.loadModelCatalog).toHaveBeenCalledWith({
+      config: cfg,
+      metadataSnapshot: expect.objectContaining({ plugins: [] }),
+    });
     expect(mocks.ensureAgentWorkspace).not.toHaveBeenCalled();
     expect(mocks.initSessionState).not.toHaveBeenCalled();
     expect(mocks.resolveReplyDirectives).not.toHaveBeenCalled();
