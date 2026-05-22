@@ -2,6 +2,7 @@ import type { AssistantMessage, Model, ToolResultMessage } from "@earendil-works
 import { streamOpenAIResponses } from "@earendil-works/pi-ai";
 import { Type } from "typebox";
 import { describe, expect, it } from "vitest";
+import { buildOpenAIResponsesParams } from "./openai-transport-stream.js";
 
 function buildModel(): Model<"openai-responses"> {
   return {
@@ -14,6 +15,21 @@ function buildModel(): Model<"openai-responses"> {
     input: ["text"],
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
     contextWindow: 128_000,
+    maxTokens: 4096,
+  };
+}
+
+function buildNativeCodexModel(): Model<"openai-codex-responses"> {
+  return {
+    id: "gpt-5.5",
+    name: "gpt-5.5",
+    api: "openai-codex-responses",
+    provider: "openai-codex",
+    baseUrl: "https://chatgpt.com/backend-api/codex",
+    reasoning: true,
+    input: ["text"],
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow: 272_000,
     maxTokens: 4096,
   };
 }
@@ -189,6 +205,30 @@ describe("openai-responses reasoning replay", () => {
     });
 
     expect(types).toContain("reasoning");
+    expect(types).toContain("message");
+  });
+
+  it("does not replay encrypted reasoning items for native OpenAI Codex Responses", () => {
+    const assistantWithText = buildAssistantMessage({
+      stopReason: "stop",
+      content: [buildReasoningPart(), { type: "text", text: "hello", textSignature: "msg_test" }],
+    });
+    const params = buildOpenAIResponsesParams(
+      buildNativeCodexModel(),
+      {
+        systemPrompt: "system",
+        messages: [
+          { role: "user", content: "Hi", timestamp: Date.now() },
+          assistantWithText,
+          { role: "user", content: "Ok", timestamp: Date.now() },
+        ],
+      },
+      { sessionId: "session", reasoningEffort: "high" },
+    );
+    const input = extractInput(params as Record<string, unknown>);
+    const types = extractInputTypes(input);
+
+    expect(types).not.toContain("reasoning");
     expect(types).toContain("message");
   });
 

@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import {
   hasSessionAutoModelFallbackProvenance,
@@ -9,6 +10,7 @@ import { resolveContextTokensForModel } from "../../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
 import { resolveModelAuthMode } from "../../agents/model-auth.js";
 import { isCliProvider } from "../../agents/model-selection.js";
+import { classifyProviderRuntimeFailureKind } from "../../agents/pi-embedded-helpers.js";
 import {
   formatEmbeddedPiQueueFailureSummary,
   queueEmbeddedPiMessageWithOutcomeAsync,
@@ -33,6 +35,7 @@ import {
   freezeDiagnosticTraceContext,
 } from "../../infra/diagnostic-trace-context.js";
 import { measureDiagnosticsTimelineSpan } from "../../infra/diagnostics-timeline.js";
+import { formatErrorMessage } from "../../infra/errors.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
 import { CommandLaneClearedError, GatewayDrainingError } from "../../process/command-queue.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
@@ -100,12 +103,65 @@ import {
   type ReplyOperation,
 } from "./reply-run-registry.js";
 import { createReplyToModeFilterForChannel, resolveReplyToMode } from "./reply-threading.js";
+import { clearSessionResetRuntimeState } from "./session-reset-cleanup.js";
 import { incrementRunCompactionCount, persistRunSessionUsage } from "./session-run-accounting.js";
 import { resolveSourceReplyVisibilityPolicy } from "./source-reply-delivery-mode.js";
 import { createTypingSignaler } from "./typing-mode.js";
 import type { TypingController } from "./typing.js";
 
 const BLOCK_REPLY_SEND_TIMEOUT_MS = 15_000;
+
+function isReplayInvalidAgentRunError(error: unknown): boolean {
+  return classifyProviderRuntimeFailureKind(formatErrorMessage(error)) === "replay_invalid";
+}
+
+function buildReplayInvalidSessionResetPatch(now: number): Partial<SessionEntry> {
+  return {
+    sessionId: crypto.randomUUID(),
+    sessionFile: undefined,
+    updatedAt: now,
+    sessionStartedAt: now,
+    lastInteractionAt: now,
+    systemSent: false,
+    abortedLastRun: false,
+    status: undefined,
+    startedAt: undefined,
+    endedAt: undefined,
+    runtimeMs: undefined,
+    totalTokens: undefined,
+    inputTokens: undefined,
+    outputTokens: undefined,
+    totalTokensFresh: undefined,
+    estimatedCostUsd: undefined,
+    cacheRead: undefined,
+    cacheWrite: undefined,
+    contextTokens: undefined,
+    responseUsage: undefined,
+    modelProvider: undefined,
+    model: undefined,
+    agentHarnessId: undefined,
+    fallbackNoticeSelectedModel: undefined,
+    fallbackNoticeActiveModel: undefined,
+    fallbackNoticeReason: undefined,
+    compactionCount: 0,
+    memoryFlushAt: undefined,
+    memoryFlushCompactionCount: undefined,
+    memoryFlushContextHash: undefined,
+    pendingFinalDelivery: undefined,
+    pendingFinalDeliveryCreatedAt: undefined,
+    pendingFinalDeliveryLastAttemptAt: undefined,
+    pendingFinalDeliveryAttemptCount: undefined,
+    pendingFinalDeliveryLastError: undefined,
+    pendingFinalDeliveryText: undefined,
+    pendingFinalDeliveryContext: undefined,
+    pendingFinalDeliveryIntentId: undefined,
+    cliSessionIds: undefined,
+    cliSessionBindings: undefined,
+    claudeCliSessionId: undefined,
+    skillsSnapshot: undefined,
+    systemPromptReport: undefined,
+  };
+}
 
 function markBeforeAgentRunBlockedPayloads(payloads: ReplyPayload[]): ReplyPayload[] {
   return payloads.map((payload) =>
@@ -1153,6 +1209,52 @@ export async function runReplyAgent(params: {
       });
     }
   };
+  const resetSessionAfterReplayInvalid = async (reason: string): Promise<boolean> => {
+    if (!sessionKey) {
+      return false;
+    }
+    const oldSessionId = activeSessionEntry?.sessionId;
+    const patch = buildReplayInvalidSessionResetPatch(Date.now());
+    let didReset = false;
+    if (activeSessionStore && activeSessionEntry) {
+      const nextEntry = { ...activeSessionEntry, ...patch } as SessionEntry;
+      activeSessionStore[sessionKey] = nextEntry;
+      activeSessionEntry = nextEntry;
+      didReset = true;
+    }
+    if (storePath) {
+      try {
+        const updated = await updateSessionStoreEntry({
+          storePath,
+          sessionKey,
+          update: async () => patch,
+        });
+        if (updated) {
+          activeSessionEntry = updated;
+          if (activeSessionStore) {
+            activeSessionStore[sessionKey] = updated;
+          }
+          didReset = true;
+        }
+      } catch (resetError) {
+        logVerbose(
+          `failed to reset replay-invalid session ${sessionKey}: ${formatErrorMessage(resetError)}`,
+        );
+      }
+    }
+    if (!didReset) {
+      return false;
+    }
+    followupRun.run.sessionId = String(patch.sessionId);
+    activeIsNewSession = true;
+    clearSessionResetRuntimeState([sessionKey, oldSessionId]);
+    logVerbose(
+      `reset replay-invalid session ${sessionKey}` +
+        (oldSessionId ? ` (${oldSessionId} -> ${String(patch.sessionId)})` : "") +
+        ` after ${reason}`,
+    );
+    return true;
+  };
 
   if (effectiveShouldSteer && isStreaming) {
     const steerSessionId =
@@ -1466,6 +1568,7 @@ export async function runReplyAgent(params: {
         shouldEmitToolOutput,
         pendingToolTasks,
         resetSessionAfterRoleOrderingConflict,
+        resetSessionAfterReplayInvalid,
         isHeartbeat,
         sessionKey,
         runtimePolicySessionKey,
@@ -2189,6 +2292,9 @@ export async function runReplyAgent(params: {
           text: "⚠️ Gateway is restarting. Please wait a few seconds and try again.",
         }),
       );
+    }
+    if (isReplayInvalidAgentRunError(error) && sessionKey) {
+      await resetSessionAfterReplayInvalid(formatErrorMessage(error));
     }
     const knownFailurePayload = buildKnownAgentRunFailureReplyPayload({
       err: error,

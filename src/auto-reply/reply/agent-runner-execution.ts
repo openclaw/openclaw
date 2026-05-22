@@ -41,6 +41,7 @@ import {
   isOverloadedErrorMessage,
   isRateLimitErrorMessage,
   isTransientHttpError,
+  classifyProviderRuntimeFailureKind,
 } from "../../agents/pi-embedded-helpers.js";
 import { sanitizeUserFacingText } from "../../agents/pi-embedded-helpers/sanitize-user-facing-text.js";
 import { isMessagingToolSendAction } from "../../agents/pi-embedded-messaging.js";
@@ -465,6 +466,10 @@ function hasBillingAttemptSummary(err: unknown): boolean {
   );
 }
 
+function isReplayInvalidRunFailureError(message: string): boolean {
+  return classifyProviderRuntimeFailureKind(message) === "replay_invalid";
+}
+
 function collapseRepeatedFailureDetail(message: string): string {
   const parts = message
     .split(/\s+\|\s+/u)
@@ -600,6 +605,12 @@ function buildExternalRunFailureReply(
   if (providerRequestError) {
     return {
       text: providerRequestError.userMessage,
+      isGenericRunnerFailure: false,
+    };
+  }
+  if (isReplayInvalidRunFailureError(normalizedMessage)) {
+    return {
+      text: "⚠️ Session history got out of sync. Please try again, or use /new to start a fresh session.",
       isGenericRunnerFailure: false,
     };
   }
@@ -1157,6 +1168,7 @@ export async function runAgentTurnWithFallback(params: {
   shouldEmitToolOutput: () => boolean;
   pendingToolTasks: Set<Promise<void>>;
   resetSessionAfterRoleOrderingConflict: (reason: string) => Promise<boolean>;
+  resetSessionAfterReplayInvalid?: (reason: string) => Promise<boolean>;
   isHeartbeat: boolean;
   sessionKey?: string;
   runtimePolicySessionKey?: string;
@@ -2426,6 +2438,16 @@ export async function runAgentTurnWithFallback(params: {
           setTimeout(resolve, TRANSIENT_HTTP_RETRY_DELAY_MS);
         });
         continue;
+      }
+
+      if (isReplayInvalidRunFailureError(message)) {
+        try {
+          await params.resetSessionAfterReplayInvalid?.(message);
+        } catch (resetErr) {
+          defaultRuntime.error(
+            `Failed to reset replay-invalid session ${params.sessionKey}: ${String(resetErr)}`,
+          );
+        }
       }
 
       defaultRuntime.error(`Embedded agent failed before reply: ${message}`);
