@@ -27,6 +27,10 @@ inputs:
     description: Whether to use --frozen-lockfile for install.
     required: false
     default: "true"
+  use-actions-cache:
+    description: Whether to restore and save the pnpm store with actions/cache.
+    required: false
+    default: "true"
 runs:
   using: composite
   steps:
@@ -43,6 +47,7 @@ runs:
         node-version: ${{ inputs.node-version }}
         pnpm-version: ${{ inputs.pnpm-version }}
         cache-key-suffix: ${{ inputs.cache-key-suffix }}
+        use-actions-cache: ${{ inputs.use-actions-cache }}
 
     - name: Setup Bun
       if: inputs.install-bun == 'true'

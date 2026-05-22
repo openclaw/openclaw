@@ -50,6 +50,7 @@ jobs:
         uses: ./.github/actions/setup-node-env
         with:
           install-bun: "false"
+          use-actions-cache: "false"
 
       - name: Prepare Crabbox shell
         shell: bash
@@ -109,6 +110,16 @@ jobs:
           docker version
           docker buildx version
           docker compose version || true
+
+      - name: Ensure SSH is available
+        shell: bash
+        run: |
+          set -euo pipefail
+          if command -v systemctl >/dev/null 2>&1; then
+            sudo systemctl start ssh || sudo systemctl start sshd || true
+          elif command -v service >/dev/null 2>&1; then
+            sudo service ssh start || sudo service sshd start || true
+          fi
 
       - name: Hydrate provider env helper
         shell: bash
