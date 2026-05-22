@@ -24,6 +24,7 @@ import {
   setChromeMcpSessionFactoryForTest,
   takeChromeMcpScreenshot,
   takeChromeMcpSnapshot,
+  waitForChromeMcpText,
 } from "./chrome-mcp.js";
 
 type ToolCall = {
@@ -97,6 +98,9 @@ function createFakeSession(): ChromeMcpSession {
           },
         ],
       };
+    }
+    if (name === "wait_for") {
+      return { content: [{ type: "text", text: "Element matching one of [\"Ready\"] found." }] };
     }
     if (name === "list_console_messages") {
       return {
@@ -286,6 +290,25 @@ describe("chrome MCP page parsing", () => {
         format: "jpeg",
       }),
     ).resolves.toEqual(Buffer.from("screenshot:jpeg"));
+  });
+
+  it("forwards text waits to Chrome MCP wait_for with page routing", async () => {
+    const session = createFakeSession();
+    const factory: ChromeMcpSessionFactory = async () => session;
+    setChromeMcpSessionFactoryForTest(factory);
+
+    await waitForChromeMcpText({
+      profileName: "chrome-live",
+      targetId: "2",
+      text: ["Ready"],
+      timeoutMs: 1234,
+    });
+
+    const calls = (session.client.callTool as unknown as ToolCallMock).mock.calls;
+    expect(calls.at(-1)?.[0]).toEqual({
+      name: "wait_for",
+      arguments: { pageId: 2, text: ["Ready"], timeout: 1234 },
+    });
   });
 
   it("adds --userDataDir when an explicit Chromium profile path is configured", () => {

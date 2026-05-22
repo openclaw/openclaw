@@ -24,6 +24,7 @@ const chromeMcpMocks = vi.hoisted(() => ({
     name: "Example",
     children: [{ id: "btn-1", role: "button", name: "Continue" }],
   })),
+  waitForChromeMcpText: vi.fn(async () => {}),
 }));
 
 const navigationGuardMocks = vi.hoisted(() => ({
@@ -46,6 +47,7 @@ vi.mock("../chrome-mcp.js", () => ({
   resizeChromeMcpPage: vi.fn(async () => {}),
   takeChromeMcpScreenshot: chromeMcpMocks.takeChromeMcpScreenshot,
   takeChromeMcpSnapshot: chromeMcpMocks.takeChromeMcpSnapshot,
+  waitForChromeMcpText: chromeMcpMocks.waitForChromeMcpText,
 }));
 
 vi.mock("../cdp.js", () => ({
@@ -152,6 +154,7 @@ describe("existing-session browser routes", () => {
     chromeMcpMocks.navigateChromeMcpPage.mockClear();
     chromeMcpMocks.takeChromeMcpScreenshot.mockClear();
     chromeMcpMocks.takeChromeMcpSnapshot.mockClear();
+    chromeMcpMocks.waitForChromeMcpText.mockClear();
     navigationGuardMocks.assertBrowserNavigationAllowed.mockClear();
     navigationGuardMocks.assertBrowserNavigationResultAllowed.mockClear();
     navigationGuardMocks.withBrowserNavigationPolicy.mockClear();
@@ -465,6 +468,35 @@ describe("existing-session browser routes", () => {
     expect(evaluateParams.userDataDir).toBeUndefined();
     expect(evaluateParams.targetId).toBe("7");
     expect(evaluateParams.fn).toBe("() => window.location.href");
+  });
+
+  it("uses native Chrome MCP wait_for for text-only existing-session waits", async () => {
+    const handler = getActPostHandler();
+    const response = createBrowserRouteResponse();
+
+    await handler?.(
+      {
+        params: {},
+        query: {},
+        body: { kind: "wait", text: "Ready", timeoutMs: 1234 },
+      },
+      response.res,
+    );
+
+    expect(response.statusCode).toBe(200);
+    const body = requireRecord(response.body, "response body");
+    expect(body.ok).toBe(true);
+    expect(body.targetId).toBe("7");
+    const waitParams = requireRecord(
+      callArg(chromeMcpMocks.waitForChromeMcpText, 0, 0, "wait_for params"),
+      "wait_for params",
+    );
+    expect(waitParams.profileName).toBe("chrome-live");
+    expectExistingSessionProfile(waitParams.profile);
+    expect(waitParams.targetId).toBe("7");
+    expect(waitParams.text).toEqual(["Ready"]);
+    expect(waitParams.timeoutMs).toBe(1234);
+    expect(chromeMcpMocks.evaluateChromeMcpScript).not.toHaveBeenCalled();
   });
 
   it("forwards click timeoutMs to the existing-session click executor", async () => {

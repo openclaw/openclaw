@@ -16,6 +16,7 @@ import {
   hoverChromeMcpElement,
   pressChromeMcpKey,
   resizeChromeMcpPage,
+  waitForChromeMcpText,
   type ChromeMcpProfileOptions,
 } from "../chrome-mcp.js";
 import type { BrowserActRequest } from "../client-actions.types.js";
@@ -237,6 +238,24 @@ async function waitForExistingSessionCondition(params: {
 }): Promise<void> {
   if (params.timeMs && params.timeMs > 0) {
     await sleep(params.timeMs);
+  }
+  if (
+    params.text &&
+    !params.textGone &&
+    !params.selector &&
+    !params.url &&
+    !params.loadState &&
+    !params.fn
+  ) {
+    await waitForChromeMcpText({
+      profileName: params.profileName,
+      profile: params.profile,
+      userDataDir: params.userDataDir,
+      targetId: params.targetId,
+      text: [params.text],
+      timeoutMs: params.timeoutMs,
+    });
+    return;
   }
   const predicate = buildExistingSessionWaitPredicate(params);
   if (!predicate && !params.url) {
