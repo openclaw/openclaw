@@ -458,6 +458,12 @@ async function bootstrapLaunchAgentOrThrow(params: {
       actionHint: params.actionHint,
     });
   }
+  if (isLaunchctlOperationAlreadyInProgress(detail)) {
+    const state = await probeLaunchAgentState(params.serviceTarget);
+    if (state.state === "running" || state.state === "stopped") {
+      return;
+    }
+  }
   throw new Error(`launchctl bootstrap failed: ${detail}`);
 }
 
@@ -669,6 +675,14 @@ function isUnsupportedGuiDomain(detail: string): boolean {
   return (
     normalized.includes("domain does not support specified action") ||
     normalized.includes("bootstrap failed: 125")
+  );
+}
+
+function isLaunchctlOperationAlreadyInProgress(detail: string): boolean {
+  const normalized = normalizeLowercaseStringOrEmpty(detail);
+  return (
+    normalized.includes("operation already in progress") ||
+    normalized.includes("bootstrap failed: 37")
   );
 }
 
