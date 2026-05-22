@@ -100,6 +100,15 @@ async function runDeniedChannelRepair(repairCheckCtx: HealthRepairContext) {
   return { ...result, config, remainingFindings };
 }
 
+async function runDeniedChannelPreview(checkCtx: HealthCheckContext) {
+  const check = registerChecks().find((entry) => entry.id === "policy/channels-denied-provider");
+  if (check === undefined) {
+    throw new Error("policy channel repair check was not registered");
+  }
+  const rawResult = await check.run({ ...checkCtx, repair: false });
+  return Array.isArray(rawResult) ? { findings: rawResult } : rawResult;
+}
+
 describe("registerPolicyDoctorChecks", () => {
   beforeEach(async () => {
     resetPolicyDoctorChecksForTest();
@@ -547,9 +556,9 @@ describe("registerPolicyDoctorChecks", () => {
       "utf-8",
     );
 
-    const result = await runDeniedChannelRepair({ ...repairCtx(configPath, cfg), dryRun: true });
+    const result = await runDeniedChannelPreview(ctx(configPath, cfg));
 
-    expect(result.config.channels?.telegram).toEqual({ enabled: true });
+    expect(cfg.channels?.telegram).toEqual({ enabled: true });
     expect(result.changes).toEqual([
       "Would disable channels.telegram.enabled for policy conformance.",
     ]);

@@ -1331,7 +1331,12 @@ const openAIOAuthTlsCheck: RegisteredHealthCheck = defineSplitHealthCheck({
       runOpenAIOAuthTlsPreflight,
       shouldRunOpenAIOAuthTlsPrerequisites,
     } = await import("../commands/oauth-tls-preflight.js");
-    if (!shouldRunOpenAIOAuthTlsPrerequisites({ cfg: ctx.cfg, deep: ctx.mode === "doctor" })) {
+    if (
+      !shouldRunOpenAIOAuthTlsPrerequisites({
+        cfg: ctx.cfg,
+        deep: ctx.mode === "doctor" || ctx.doctor?.options?.deep === true,
+      })
+    ) {
       return [];
     }
     const result = await runOpenAIOAuthTlsPreflight({ timeoutMs: 4000 });

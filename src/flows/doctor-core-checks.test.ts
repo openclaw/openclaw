@@ -156,6 +156,11 @@ const gatewayServiceMocks = vi.hoisted(() => ({
     },
   ),
 }));
+const oauthTlsMocks = vi.hoisted(() => ({
+  shouldRunOpenAIOAuthTlsPrerequisites: vi.fn(() => false),
+  runOpenAIOAuthTlsPreflight: vi.fn(async (): Promise<unknown> => ({ ok: true })),
+  formatOpenAIOAuthTlsPreflightFix: vi.fn(() => "OpenAI OAuth TLS fix"),
+}));
 
 vi.mock("../commands/doctor-completion.js", () => ({
   detectShellCompletionHealth,
@@ -202,6 +207,12 @@ vi.mock("../commands/doctor-gateway-services.js", () => ({
   repairGatewayServiceConfig: gatewayServiceMocks.repairGatewayServiceConfig,
   repairExtraGatewayServices: gatewayServiceMocks.repairExtraGatewayServices,
   classifyLegacyServices: gatewayServiceMocks.classifyLegacyServices,
+}));
+
+vi.mock("../commands/oauth-tls-preflight.js", () => ({
+  shouldRunOpenAIOAuthTlsPrerequisites: oauthTlsMocks.shouldRunOpenAIOAuthTlsPrerequisites,
+  runOpenAIOAuthTlsPreflight: oauthTlsMocks.runOpenAIOAuthTlsPreflight,
+  formatOpenAIOAuthTlsPreflightFix: oauthTlsMocks.formatOpenAIOAuthTlsPreflightFix,
 }));
 
 describe("registerCoreHealthChecks", () => {
@@ -258,6 +269,12 @@ describe("registerCoreHealthChecks", () => {
     gatewayServiceMocks.repairExtraGatewayServices.mockReset();
     gatewayServiceMocks.repairExtraGatewayServices.mockResolvedValue({ removed: [], failed: [] });
     gatewayServiceMocks.classifyLegacyServices.mockClear();
+    oauthTlsMocks.shouldRunOpenAIOAuthTlsPrerequisites.mockReset();
+    oauthTlsMocks.shouldRunOpenAIOAuthTlsPrerequisites.mockReturnValue(false);
+    oauthTlsMocks.runOpenAIOAuthTlsPreflight.mockReset();
+    oauthTlsMocks.runOpenAIOAuthTlsPreflight.mockResolvedValue({ ok: true });
+    oauthTlsMocks.formatOpenAIOAuthTlsPreflightFix.mockReset();
+    oauthTlsMocks.formatOpenAIOAuthTlsPreflightFix.mockReturnValue("OpenAI OAuth TLS fix");
   });
 
   afterEach(async () => {
@@ -691,6 +708,38 @@ describe("registerCoreHealthChecks", () => {
     });
 
     expect(detectShellCompletionHealth).toHaveBeenCalledWith({ nonInteractive: true });
+  });
+
+  it("preserves deep OAuth TLS probing during repair previews", async () => {
+    oauthTlsMocks.shouldRunOpenAIOAuthTlsPrerequisites.mockReturnValue(true);
+    oauthTlsMocks.runOpenAIOAuthTlsPreflight.mockResolvedValue({
+      ok: false,
+      kind: "tls-cert",
+      message: "self-signed certificate",
+    });
+    oauthTlsMocks.formatOpenAIOAuthTlsPreflightFix.mockReturnValue(
+      "OpenAI OAuth TLS prerequisites failed.",
+    );
+    const check = getCheck(CORE_HEALTH_CHECKS, "core/doctor/oauth-tls");
+
+    const findings = await check.detect({
+      mode: "fix",
+      runtime,
+      cfg: {},
+      doctor: { options: { dryRun: true, deep: true } },
+    });
+
+    expect(oauthTlsMocks.shouldRunOpenAIOAuthTlsPrerequisites).toHaveBeenCalledWith({
+      cfg: {},
+      deep: true,
+    });
+    expect(findings).toEqual([
+      expect.objectContaining({
+        checkId: "core/doctor/oauth-tls",
+        severity: "warning",
+        message: "OpenAI OAuth TLS prerequisites failed.",
+      }),
+    ]);
   });
 
   it("previews configured plugin install repairs without installing packages", async () => {
