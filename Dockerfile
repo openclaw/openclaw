@@ -283,10 +283,15 @@ RUN --mount=type=cache,id=openclaw-bookworm-apt-cache,target=/var/cache/apt,shar
 RUN ln -sf /app/openclaw.mjs /usr/local/bin/openclaw \
  && chmod 755 /app/openclaw.mjs
 
-# Pre-create the default state dir so first-run Docker named volumes mounted
-# here inherit node ownership instead of root-owned state.
+# Pre-create default directories so first-run Docker named volumes mounted
+# here inherit node ownership instead of being root-owned.
+# See: https://github.com/openclaw/openclaw/issues/85076
 RUN install -d -m 0700 -o node -g node /home/node/.openclaw && \
-    stat -c '%U:%G %a' /home/node/.openclaw | grep -qx 'node:node 700'
+    install -d -m 0755 -o node -g node /home/node/.openclaw/workspace && \
+    install -d -m 0755 -o node -g node /home/node/.config/openclaw && \
+    stat -c '%U:%G %a' /home/node/.openclaw | grep -qx 'node:node 700' && \
+    stat -c '%U:%G %a' /home/node/.openclaw/workspace | grep -qx 'node:node 755' && \
+    stat -c '%U:%G %a' /home/node/.config/openclaw | grep -qx 'node:node 755'
 
 ENV NODE_ENV=production
 
