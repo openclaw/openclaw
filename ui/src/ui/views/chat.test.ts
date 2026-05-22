@@ -1310,24 +1310,15 @@ describe("chat session controls", () => {
     const container = document.createElement("div");
     render(renderChatSessionSelect(state), container);
 
-    expect(container.querySelector('input[data-chat-session-picker-search="true"]')).toBeNull();
-    container
-      .querySelector<HTMLButtonElement>('button[data-chat-session-search-toggle="true"]')!
-      .click();
-    render(renderChatSessionSelect(state), container);
     const input = container.querySelector<HTMLInputElement>(
       'input[data-chat-session-picker-search="true"]',
-    );
-    const submit = container.querySelector<HTMLButtonElement>(
-      'button[data-chat-session-search-submit="true"]',
     );
 
     input!.value = " telegram ";
     input!.dispatchEvent(new Event("input", { bubbles: true }));
     expect(state.chatSessionPickerQuery).toBe(" telegram ");
+    input!.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
     expect(state.chatSessionPickerOpen).toBe(true);
-    expect(submit?.disabled).toBe(false);
-    submit!.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
     await vi.waitFor(() => expect(state.chatSessionPickerAppliedQuery).toBe("telegram"));
     render(renderChatSessionSelect(state), container);
 
@@ -1357,7 +1348,7 @@ describe("chat session controls", () => {
     }
   });
 
-  it("focuses the inline search for the active picker surface", async () => {
+  it("keeps session trigger focus separate from inline search focus", async () => {
     const { state } = createChatHeaderState();
     const mobileContainer = document.createElement("div");
     const desktopContainer = document.createElement("div");
@@ -1367,7 +1358,7 @@ describe("chat session controls", () => {
       render(renderChatSessionSelect(state), desktopContainer);
 
       desktopContainer
-        .querySelector<HTMLButtonElement>('button[data-chat-session-search-toggle="true"]')!
+        .querySelector<HTMLButtonElement>('button[data-chat-session-select="true"]')!
         .click();
       render(renderChatSessionSelect(state, undefined, { surface: "mobile" }), mobileContainer);
       render(renderChatSessionSelect(state), desktopContainer);
@@ -1378,7 +1369,13 @@ describe("chat session controls", () => {
       expect(
         mobileContainer.querySelector('input[data-chat-session-picker-search="true"]'),
       ).toBeTruthy();
+      expect(state.chatSessionPickerOpen).toBe(true);
+      expect(document.activeElement).not.toBe(desktopInput);
+
+      desktopInput!.focus();
       await vi.waitFor(() => expect(document.activeElement).toBe(desktopInput));
+      expect(state.chatSessionPickerOpen).toBe(true);
+      expect(state.chatSessionPickerSurface).toBe("desktop");
     } finally {
       render(html``, mobileContainer);
       render(html``, desktopContainer);

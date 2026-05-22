@@ -47,13 +47,13 @@ describe("chat header responsive mobile styles", () => {
     expect(css).toContain("height: 44px;");
   });
 
-  it("keeps chat session picker search icons from stretching in mobile controls", () => {
+  it("keeps chat session picker search aligned in mobile controls", () => {
     const css = readMobileCss();
 
-    expect(css).toContain(".chat-session-picker__icon-button.btn--icon {");
-    expect(css).toContain("flex: 0 0 44px;");
-    expect(css).toContain("width: 44px;");
-    expect(css).toContain("min-width: 44px;");
+    expect(css).toContain(".chat-controls__session-row--session-search-open");
+    expect(css).toContain("grid-template-columns: minmax(96px, 0.7fr) minmax(0, 1fr);");
+    expect(css).toContain(".chat-controls__session-search input");
+    expect(css).toContain("padding-left: 42px;");
   });
 });
 

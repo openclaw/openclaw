@@ -219,6 +219,44 @@ describe("createCodexDynamicToolBridge", () => {
     expectNoNamespace(bridge.specs[0]);
   });
 
+  it("can register a durable tool schema while denying execution for the current turn", async () => {
+    const heartbeatExecute = vi.fn(async () => textToolResult("heartbeat recorded"));
+    const bridge = createCodexDynamicToolBridge({
+      tools: [createTool({ name: "message" })],
+      registeredTools: [
+        createTool({ name: "message" }),
+        createTool({ name: HEARTBEAT_RESPONSE_TOOL_NAME, execute: heartbeatExecute }),
+      ],
+      signal: new AbortController().signal,
+    });
+
+    expect(bridge.availableSpecs.map((tool) => tool.name)).toEqual(["message"]);
+    expect(bridge.specs.map((tool) => tool.name)).toEqual([
+      "message",
+      HEARTBEAT_RESPONSE_TOOL_NAME,
+    ]);
+
+    const result = await bridge.handleToolCall({
+      threadId: "thread-1",
+      turnId: "turn-1",
+      callId: "call-1",
+      namespace: null,
+      tool: HEARTBEAT_RESPONSE_TOOL_NAME,
+      arguments: {},
+    });
+
+    expect(result).toEqual({
+      success: false,
+      contentItems: [
+        {
+          type: "inputText",
+          text: `OpenClaw tool is not available for this turn: ${HEARTBEAT_RESPONSE_TOOL_NAME}`,
+        },
+      ],
+    });
+    expect(heartbeatExecute).not.toHaveBeenCalled();
+  });
+
   it("can expose all dynamic tools directly for compatibility", () => {
     const bridge = createCodexDynamicToolBridge({
       tools: [createTool({ name: "web_search" }), createTool({ name: "message" })],
