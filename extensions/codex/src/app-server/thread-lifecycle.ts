@@ -716,6 +716,7 @@ export function buildTurnStartParams(
     promptText?: string;
     sandboxPolicy?: CodexSandboxPolicy;
     environmentSelection?: CodexTurnEnvironmentParams[];
+    turnScopedDeveloperInstructions?: string;
     heartbeatCollaborationInstructions?: string;
   },
 ): CodexTurnStartParams {
@@ -732,6 +733,7 @@ export function buildTurnStartParams(
     effort: resolveReasoningEffort(params.thinkLevel, params.modelId),
     ...(options.environmentSelection ? { environments: options.environmentSelection } : {}),
     collaborationMode: buildTurnCollaborationMode(params, {
+      turnScopedDeveloperInstructions: options.turnScopedDeveloperInstructions,
       heartbeatCollaborationInstructions: options.heartbeatCollaborationInstructions,
     }),
   };
@@ -754,7 +756,10 @@ type CodexTurnCollaborationMode = NonNullable<CodexTurnStartParams["collaboratio
 
 export function buildTurnCollaborationMode(
   params: EmbeddedRunAttemptParams,
-  options: { heartbeatCollaborationInstructions?: string } = {},
+  options: {
+    turnScopedDeveloperInstructions?: string;
+    heartbeatCollaborationInstructions?: string;
+  } = {},
 ): CodexTurnCollaborationMode {
   return {
     mode: "default",
@@ -768,18 +773,25 @@ export function buildTurnCollaborationMode(
 
 function buildTurnScopedCollaborationInstructions(
   params: EmbeddedRunAttemptParams,
-  options: { heartbeatCollaborationInstructions?: string } = {},
+  options: {
+    turnScopedDeveloperInstructions?: string;
+    heartbeatCollaborationInstructions?: string;
+  } = {},
 ): string | null {
   if (params.trigger === "cron") {
-    return buildCronCollaborationInstructions();
+    return joinPresentSections(
+      buildCronCollaborationInstructions(),
+      options.turnScopedDeveloperInstructions,
+    );
   }
   if (params.trigger === "heartbeat") {
     return joinPresentSections(
       buildHeartbeatCollaborationInstructions(),
+      options.turnScopedDeveloperInstructions,
       options.heartbeatCollaborationInstructions,
     );
   }
-  return null;
+  return options.turnScopedDeveloperInstructions?.trim() || null;
 }
 
 function buildCronCollaborationInstructions(): string {
