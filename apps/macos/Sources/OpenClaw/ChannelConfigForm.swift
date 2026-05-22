@@ -230,8 +230,8 @@ struct ConfigSchemaForm: View {
         _ schema: ConfigSchemaNode,
         path: ConfigPath,
         label: String?,
-        help: String?
-    ) -> some View {
+        help: String?) -> some View
+    {
         let hint = hintForPath(path, hints: store.configUiHints)
         let placeholder = hint?.placeholder ?? ""
         let sensitive = hint?.sensitive ?? isSensitivePath(path)
@@ -248,8 +248,8 @@ struct ConfigSchemaForm: View {
             if let options = schema.enumValues {
                 Picker(
                     "",
-                    selection: self.enumBinding(path, options: options, defaultValue: schema.explicitDefault)
-                ) {
+                    selection: self.enumBinding(path, options: options, defaultValue: schema.explicitDefault))
+                {
                     Text("Select…").tag(-1)
                     ForEach(options.indices, id: \.self) { index in
                         Text(String(describing: options[index])).tag(index)
@@ -270,8 +270,8 @@ struct ConfigSchemaForm: View {
         _ schema: ConfigSchemaNode,
         path: ConfigPath,
         label: String?,
-        help: String?
-    ) -> some View {
+        help: String?) -> some View
+    {
         let defaultValue =
             (schema.explicitDefault as? Double)
             ?? (schema.explicitDefault as? Int).map(Double.init)
@@ -289,10 +289,8 @@ struct ConfigSchemaForm: View {
                 text: self.numberBinding(
                     path,
                     isInteger: schema.schemaType == "integer",
-                    defaultValue: defaultValue
-                )
-            )
-            .textFieldStyle(.roundedBorder)
+                    defaultValue: defaultValue))
+                .textFieldStyle(.roundedBorder)
         }
     }
 
@@ -301,8 +299,8 @@ struct ConfigSchemaForm: View {
         path: ConfigPath,
         value: Any?,
         label: String?,
-        help: String?
-    ) -> some View {
+        help: String?) -> some View
+    {
         let items = value as? [Any] ?? []
         let itemSchema = schema.items
         return VStack(alignment: .leading, spacing: 10) {
@@ -347,8 +345,8 @@ struct ConfigSchemaForm: View {
     private func renderAdditionalProperties(
         _ schema: ConfigSchemaNode,
         path: ConfigPath,
-        value: Any?,
-    ) -> some View {
+        value: Any?) -> some View
+    {
         Group {
             if let additionalSchema = schema.additionalProperties {
                 let dict = value as? [String: Any] ?? [:]
