@@ -174,7 +174,8 @@ Define providers under `secrets.providers`:
     - `mode: "json"` expects JSON object payload and resolves `id` as pointer.
     - `mode: "singleValue"` expects ref id `"value"` and returns file contents.
     - Path must pass ownership/permission checks.
-    - Windows fail-closed note: if ACL verification is unavailable for a path, resolution fails. For trusted paths only, set `allowInsecurePath: true` on that provider to bypass path security checks.
+    - On Linux/macOS, the file must be owned by the current user (uid match). System-package paths owned by root (for example `/usr/bin/op`, `/usr/bin/sops`) fail this check unless `allowInsecurePath: true` is set on the provider.
+    - Windows fail-closed note: if ACL verification is unavailable for a path, resolution fails. For trusted paths only, set `allowInsecurePath: true` on that provider to bypass path security checks (which on Linux also bypasses the uid-equality check above).
 
   </Accordion>
   <Accordion title="Exec provider">
@@ -183,7 +184,8 @@ Define providers under `secrets.providers`:
     - Set `allowSymlinkCommand: true` to allow symlink command paths (for example Homebrew shims). OpenClaw validates the resolved target path.
     - Pair `allowSymlinkCommand` with `trustedDirs` for package-manager paths (for example `["/opt/homebrew"]`).
     - Supports timeout, no-output timeout, output byte limits, env allowlist, and trusted dirs.
-    - Windows fail-closed note: if ACL verification is unavailable for the command path, resolution fails. For trusted paths only, set `allowInsecurePath: true` on that provider to bypass path security checks.
+    - On Linux/macOS, the resolved command must be owned by the current user (uid match). System-package binaries owned by root (`/usr/bin/op`, `/usr/bin/sops`, `/opt/homebrew/bin/<bin>` after symlink resolution, etc.) fail this check unless `allowInsecurePath: true` is set on the provider. For package-managed exec providers, set `allowInsecurePath: true` alongside `allowSymlinkCommand` / `trustedDirs`.
+    - Windows fail-closed note: if ACL verification is unavailable for the command path, resolution fails. For trusted paths only, set `allowInsecurePath: true` on that provider to bypass path security checks (which on Linux also bypasses the uid-equality check above).
 
     Request payload (stdin):
 
