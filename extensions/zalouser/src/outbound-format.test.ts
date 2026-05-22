@@ -166,6 +166,34 @@ describe("normalizeZalouserOutboundText", () => {
       // The --- inside the open fence stays intact.
       expect(out).toContain("foo\n---\nbar");
     });
+
+    it("does NOT close a backtick fence on a tilde line (opener-aware)", () => {
+      // Review finding P2: a different fence marker inside a code block
+      // must not flip the fence state. A ~~~ line inside a ``` block is
+      // code content, so a following --- must stay intact.
+      const input = "```\ncode\n~~~\n---\nstill code\n```\nDone.";
+      const out = normalizeZalouserOutboundText(input);
+      expect(out).toContain("code\n~~~\n---\nstill code");
+    });
+
+    it("does NOT close a fence on a shorter run of the same char", () => {
+      // CommonMark: the closer must be at least as long as the opener.
+      // A 3-backtick line inside a 4-backtick fence is content, so the
+      // ---  after it must remain intact.
+      const input = "````\ncode\n```\n---\nmore code\n````\nDone.";
+      const out = normalizeZalouserOutboundText(input);
+      expect(out).toContain("code\n```\n---\nmore code");
+    });
+
+    it("closes on a longer run of the same char (>= opener length)", () => {
+      // A 4-backtick closer validly closes a 3-backtick opener; prose
+      // after it is normalized again.
+      const input = "```\ncode\n````\n\n\n- a\n\n- b";
+      const out = normalizeZalouserOutboundText(input);
+      expect(out).toContain("code\n````");
+      // The list AFTER the closed fence is normalized (blank lines collapsed).
+      expect(out).toContain("- a\n- b");
+    });
   });
 
   describe("idempotency", () => {

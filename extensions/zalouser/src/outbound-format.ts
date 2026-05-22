@@ -31,10 +31,16 @@
  * them, so applying the function twice produces the same output as once.
  */
 
-// Matches a line that opens or closes a fenced code block: 3+ backticks
-// or 3+ tildes, with optional leading whitespace and optional info
-// string (e.g. ```typescript). We toggle inFence on every match.
-const FENCE_LINE_RE = /^[ \t]*(?:`{3,}|~{3,})[^\n]*$/;
+// Opening fence: 3+ backticks OR 3+ tildes with optional leading
+// whitespace and optional info string (e.g. ```typescript). Capture group 1
+// is the marker run so we can record its char + length for opener-aware
+// close matching.
+const FENCE_OPEN_RE = /^[ \t]*(`{3,}|~{3,})[^\n]*$/;
+// Closing fence per CommonMark: same fence character as the opener, length
+// at least the opener's, and NOTHING but the marker + trailing whitespace
+// (no info string). The char + length comparison is done by the caller so a
+// `~~~` line inside a ``` block does not prematurely close it.
+const FENCE_CLOSE_RE = /^[ \t]*(`{3,}|~{3,})[ \t]*$/;
 
 /**
  * Normalize agent-emitted markdown text for the Zalo personal-account
@@ -63,7 +69,9 @@ export function normalizeZalouserOutboundText(text: string): string {
   const lines = text.split("\n");
   const out: string[] = [];
   let proseBuf: string[] = [];
-  let inFence = false;
+  // null when outside a fence; otherwise the opener's char + length so we
+  // only close on a matching fence (opener-aware, mirrors text-styles.ts).
+  let openFence: { char: string; len: number } | null = null;
 
   const flushProse = (): void => {
     if (proseBuf.length === 0) {
@@ -74,21 +82,27 @@ export function normalizeZalouserOutboundText(text: string): string {
   };
 
   for (const line of lines) {
-    if (FENCE_LINE_RE.test(line)) {
-      // Fence boundary: flush any prose accumulated before this line,
-      // then emit the fence line itself and flip the in-fence flag.
-      flushProse();
+    if (openFence) {
+      // Inside a code fence: pass through verbatim, never normalize. Close
+      // only on a bare fence of the SAME char and >= the opener length, so
+      // a `~~~` line inside a ``` block (or a shorter run) stays code.
       out.push(line);
-      inFence = !inFence;
+      const close = line.match(FENCE_CLOSE_RE);
+      if (close && close[1][0] === openFence.char && close[1].length >= openFence.len) {
+        openFence = null;
+      }
       continue;
     }
-    if (inFence) {
-      // Inside a code fence: pass through verbatim. Crucially we do NOT
-      // append to proseBuf so the normalizer never sees this line.
+    const open = line.match(FENCE_OPEN_RE);
+    if (open) {
+      // Fence opens here: flush prose accumulated before it, emit the
+      // opener verbatim, and record its marker for close matching.
+      flushProse();
       out.push(line);
-    } else {
-      proseBuf.push(line);
+      openFence = { char: open[1][0], len: open[1].length };
+      continue;
     }
+    proseBuf.push(line);
   }
   flushProse();
 

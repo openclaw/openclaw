@@ -121,44 +121,53 @@ describe("zalouser send helpers", () => {
     expect(result.receipt.primaryPlatformMessageId).toBe("mid-1");
   });
 
-  it("normalizes outbound markdown so blank-lined lists collapse before send", async () => {
-    // Regression test for the Zalo client rendering: agent emits a list
-    // with blank lines between items, the normalizer collapses them so
-    // the client renders one tight group.
+  it("runs the outbound normalizer on the markdown path (HR stripped)", async () => {
+    // Prove normalization is wired into the markdown path using an HR line,
+    // which the normalizer strips. An HR signal is stable under the markdown
+    // style parser (no list markers for it to restructure), unlike a bullet
+    // list whose `- ` prefixes the parser rewrites into native Zalo styling.
     mockSendText.mockResolvedValueOnce(sendResult("mid-norm-1", "thread-norm-1"));
 
-    await sendMessageZalouser("thread-norm-1", "- item one\n\n- item two\n\n- item three");
+    await sendMessageZalouser("thread-norm-1", "hello\n\n---\n\nworld", {
+      textMode: "markdown",
+    });
 
-    expect(requireSendTextCall(0)[1]).toBe("- item one\n- item two\n- item three");
+    const sent = requireSendTextCall(0)[1] as string;
+    expect(sent).not.toContain("---");
+    expect(sent).toContain("hello");
+    expect(sent).toContain("world");
   });
 
-  it("preserves --- inside a fenced code block during outbound normalization", async () => {
-    // Regression test for review finding P1: the normalizer must skip
-    // fenced content so YAML frontmatter or any code snippet containing
-    // a `---` line keeps that line intact.
+  it("preserves --- inside a fenced code block on the markdown path", async () => {
+    // The fence-aware normalizer must skip fenced content so YAML
+    // frontmatter or any code snippet containing a `---` line is intact.
     mockSendText.mockResolvedValueOnce(sendResult("mid-norm-2", "thread-norm-2"));
 
     const input = "Config:\n```yaml\nfoo: bar\n---\nbaz: qux\n```";
-    await sendMessageZalouser("thread-norm-2", input);
+    await sendMessageZalouser("thread-norm-2", input, { textMode: "markdown" });
 
-    expect(requireSendTextCall(0)[1]).toBe(input);
+    // Code-fence body preserved; surrounding prose has nothing to collapse.
+    expect(requireSendTextCall(0)[1]).toContain("foo: bar\n---\nbaz: qux");
   });
 
-  it("skips outbound normalization when plain-mode caller supplies textStyles", async () => {
-    // Regression test for review finding P2: in non-markdown mode, the
-    // caller-supplied textStyles describe offsets into the ORIGINAL text.
-    // Normalization could remove characters and shift those offsets onto
-    // the wrong content. We skip normalization in that exact path.
-    mockSendText.mockResolvedValueOnce(sendResult("mid-norm-3", "thread-norm-3"));
+  it("does NOT normalize default / plain sends (literal contract)", async () => {
+    // Review finding P1: default sends (no textMode: markdown) are literal
+    // by contract. A tool that sends a bare `---` or deliberate blank-line
+    // spacing must reach Zalo byte-for-byte - the normalizer must not touch
+    // it. Covers both the with-textStyles and without-textStyles cases.
+    const literal = "Greeting\n\n\n---\n\n- bullet one\n\n- bullet two";
 
-    const original = "Greeting\n\n\n- bullet one\n\n- bullet two";
+    // (a) plain send, no styles: reaches transport unchanged.
+    mockSendText.mockResolvedValueOnce(sendResult("mid-norm-3a", "thread-norm-3"));
+    await sendMessageZalouser("thread-norm-3", literal);
+    expect(requireSendTextCall(0)[1]).toBe(literal);
+
+    // (b) plain send WITH caller styles: still literal, offsets stay aligned.
+    mockSendText.mockReset();
+    mockSendText.mockResolvedValueOnce(sendResult("mid-norm-3b", "thread-norm-3"));
     const callerStyles = [{ start: 0, len: 8, st: TextStyle.Bold }];
-    await sendMessageZalouser("thread-norm-3", original, {
-      textStyles: callerStyles,
-    });
-
-    // Text reaches the transport verbatim so style offsets stay aligned.
-    expect(requireSendTextCall(0)[1]).toBe(original);
+    await sendMessageZalouser("thread-norm-3", literal, { textStyles: callerStyles });
+    expect(requireSendTextCall(0)[1]).toBe(literal);
     expectSendTextOptions(0, { textStyles: callerStyles });
   });
 
