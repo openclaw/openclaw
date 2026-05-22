@@ -27,6 +27,10 @@ const hoisted = vi.hoisted(() => {
   const refreshLatestUpdateRestartSentinel = vi.fn<
     typeof import("./server-restart-sentinel.js").refreshLatestUpdateRestartSentinel
   >(async () => null);
+  const resolveAgentSessionDirs = vi.fn(async () => [] as string[]);
+  const cleanStaleLockFiles = vi.fn(async () => ({ locks: [], cleaned: [] }));
+  const markRestartAbortedMainSessionsFromLocks = vi.fn(async () => ({ marked: 0, skipped: 0 }));
+  const scheduleRestartAbortedMainSessionRecovery = vi.fn();
   const getAcpRuntimeBackend = vi.fn<(id?: string) => unknown>(() => null);
   const reconcilePendingSessionIdentities = vi.fn(async () => ({
     checked: 0,
@@ -70,6 +74,10 @@ const hoisted = vi.hoisted(() => {
     shouldWakeFromRestartSentinel,
     scheduleRestartSentinelWake,
     refreshLatestUpdateRestartSentinel,
+    resolveAgentSessionDirs,
+    cleanStaleLockFiles,
+    markRestartAbortedMainSessionsFromLocks,
+    scheduleRestartAbortedMainSessionRecovery,
     getAcpRuntimeBackend,
     reconcilePendingSessionIdentities,
     resolveAgentModelPrimaryValue,
@@ -89,11 +97,16 @@ const hoisted = vi.hoisted(() => {
 });
 
 vi.mock("../agents/session-dirs.js", () => ({
-  resolveAgentSessionDirs: vi.fn(async () => []),
+  resolveAgentSessionDirs: hoisted.resolveAgentSessionDirs,
 }));
 
 vi.mock("../agents/session-write-lock.js", () => ({
-  cleanStaleLockFiles: vi.fn(async () => {}),
+  cleanStaleLockFiles: hoisted.cleanStaleLockFiles,
+}));
+
+vi.mock("../agents/main-session-restart-recovery.js", () => ({
+  markRestartAbortedMainSessionsFromLocks: hoisted.markRestartAbortedMainSessionsFromLocks,
+  scheduleRestartAbortedMainSessionRecovery: hoisted.scheduleRestartAbortedMainSessionRecovery,
 }));
 
 vi.mock("../agents/subagent-registry.js", () => ({
@@ -321,6 +334,13 @@ describe("startGatewayPostAttachRuntime", () => {
     hoisted.scheduleSubagentOrphanRecovery.mockClear();
     hoisted.shouldWakeFromRestartSentinel.mockReturnValue(false);
     hoisted.scheduleRestartSentinelWake.mockClear();
+    hoisted.resolveAgentSessionDirs.mockReset();
+    hoisted.resolveAgentSessionDirs.mockResolvedValue([]);
+    hoisted.cleanStaleLockFiles.mockReset();
+    hoisted.cleanStaleLockFiles.mockResolvedValue({ locks: [], cleaned: [] });
+    hoisted.markRestartAbortedMainSessionsFromLocks.mockReset();
+    hoisted.markRestartAbortedMainSessionsFromLocks.mockResolvedValue({ marked: 0, skipped: 0 });
+    hoisted.scheduleRestartAbortedMainSessionRecovery.mockClear();
     hoisted.getAcpRuntimeBackend.mockReset();
     hoisted.getAcpRuntimeBackend.mockReturnValue(null);
     hoisted.reconcilePendingSessionIdentities.mockClear();
@@ -1688,6 +1708,75 @@ describe("startGatewayPostAttachRuntime", () => {
         ["backend", "acpx"],
       ],
     });
+  });
+
+  it("bounds post-ready session lock directory cleanup fanout", async () => {
+    const sessionDirs = Array.from(
+      { length: 9 },
+      (_value, index) => `/tmp/openclaw-state/agents/agent-${index + 1}/sessions`,
+    );
+    hoisted.resolveAgentSessionDirs.mockResolvedValueOnce(sessionDirs);
+
+    let inFlight = 0;
+    let maxInFlight = 0;
+    hoisted.cleanStaleLockFiles.mockImplementation(async (paramsUnknown: unknown) => {
+      const params = paramsUnknown as { sessionsDir: string };
+      inFlight += 1;
+      maxInFlight = Math.max(maxInFlight, inFlight);
+      try {
+        await new Promise<void>((resolve) => setTimeout(resolve, 5));
+        return {
+          locks: [],
+          cleaned: [
+            {
+              lockPath: `${params.sessionsDir}/stale.jsonl.lock`,
+              pid: null,
+              pidAlive: false,
+              createdAt: null,
+              ageMs: null,
+              stale: true,
+              staleReasons: ["dead-pid"],
+              removed: true,
+            },
+          ],
+        };
+      } finally {
+        inFlight -= 1;
+      }
+    });
+
+    const trace = createStartupTraceRecorder();
+    await startGatewaySidecars({
+      cfg: {
+        hooks: { internal: { enabled: false } },
+      } as never,
+      pluginRegistry: createPostAttachParams().pluginRegistry,
+      defaultWorkspaceDir: "/tmp/openclaw-workspace",
+      deps: {} as never,
+      startChannels: vi.fn(async () => {}),
+      log: { warn: vi.fn() },
+      logHooks: {
+        info: vi.fn(),
+        warn: vi.fn(),
+        error: vi.fn(),
+      },
+      logChannels: {
+        info: vi.fn(),
+        error: vi.fn(),
+      },
+      startupTrace: trace.startupTrace,
+    });
+
+    await vi.waitFor(() => {
+      expect(hoisted.cleanStaleLockFiles).toHaveBeenCalledTimes(sessionDirs.length);
+    });
+
+    expect(maxInFlight).toBeGreaterThan(1);
+    expect(maxInFlight).toBeLessThanOrEqual(testing.STARTUP_SESSION_LOCK_DIR_CONCURRENCY);
+    expect(hoisted.markRestartAbortedMainSessionsFromLocks).toHaveBeenCalledTimes(
+      sessionDirs.length,
+    );
+    expect(trace.measures).toContain("sidecars.session-locks");
   });
 
   it("passes typed gateway_start context with config, workspace dir, and a live cron getter", async () => {

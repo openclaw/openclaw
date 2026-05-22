@@ -552,6 +552,73 @@ describe("acquireSessionWriteLock", () => {
     }
   });
 
+  it("bounds stale lock cleanup fanout while yielding to other work", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-lock-fanout-"));
+    const sessionsDir = path.join(root, "sessions");
+    await fs.mkdir(sessionsDir, { recursive: true });
+
+    const nowMs = Date.now();
+    const lockNames = Array.from(
+      { length: 9 },
+      (_value, index) => `${String(index).padStart(2, "0")}.jsonl.lock`,
+    );
+
+    try {
+      await Promise.all(
+        lockNames.map((lockName) =>
+          fs.writeFile(
+            path.join(sessionsDir, lockName),
+            JSON.stringify({
+              pid: process.pid,
+              createdAt: new Date(nowMs).toISOString(),
+            }),
+            "utf8",
+          ),
+        ),
+      );
+
+      const readFileOriginal = fs.readFile.bind(fs);
+      const readFileSpy = vi.spyOn(fs, "readFile");
+      try {
+        let inFlight = 0;
+        let maxInFlight = 0;
+        readFileSpy.mockImplementation(async (...args: Parameters<typeof fs.readFile>) => {
+          const filePath = args[0];
+          if (typeof filePath !== "string" || !filePath.endsWith(".jsonl.lock")) {
+            return await readFileOriginal(...args);
+          }
+          inFlight += 1;
+          maxInFlight = Math.max(maxInFlight, inFlight);
+          try {
+            await new Promise<void>((resolve) => setTimeout(resolve, 5));
+            return await readFileOriginal(...args);
+          } finally {
+            inFlight -= 1;
+          }
+        });
+        const resultPromise = cleanStaleLockFiles({
+          sessionsDir,
+          staleMs: 30_000,
+          nowMs,
+          removeStale: true,
+          readOwnerProcessArgs: () => ["python", "worker.py"],
+        });
+
+        await new Promise<void>((resolve) => setImmediate(resolve));
+        const result = await resultPromise;
+
+        expect(result.cleaned).toHaveLength(lockNames.length);
+        expect(result.locks.map((lock) => path.basename(lock.lockPath))).toEqual(lockNames);
+        expect(maxInFlight).toBeGreaterThan(1);
+        expect(maxInFlight).toBeLessThanOrEqual(testing.SESSION_LOCK_CLEANUP_CONCURRENCY);
+      } finally {
+        readFileSpy.mockRestore();
+      }
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("cleans fresh live .jsonl lock files owned by a non-OpenClaw process", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-lock-"));
     const sessionsDir = path.join(root, "sessions");

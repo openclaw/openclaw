@@ -5,6 +5,7 @@ import path from "node:path";
 import { createFileLockManager } from "../infra/file-lock-manager.js";
 import { readGatewayProcessArgsSync as readProcessArgsSync } from "../infra/gateway-processes.js";
 import { getProcessStartTime, isPidAlive } from "../shared/pid-alive.js";
+import { runTasksWithConcurrency } from "../utils/run-with-concurrency.js";
 import { SessionWriteLockTimeoutError } from "./session-write-lock-error.js";
 
 type LockFilePayload = {
@@ -45,6 +46,11 @@ const DEFAULT_TIMEOUT_GRACE_MS = 2 * 60 * 1000;
 // and the owner metadata write. Keep the grace short so 10s callers recover.
 const ORPHAN_LOCK_PAYLOAD_GRACE_MS = 5_000;
 const MAX_LOCK_HOLD_MS = 2_147_000_000;
+const SESSION_LOCK_CLEANUP_CONCURRENCY = 4;
+
+async function yieldToEventLoop(): Promise<void> {
+  await new Promise<void>((resolve) => setImmediate(resolve));
+}
 
 type CleanupState = {
   registered: boolean;
@@ -681,33 +687,49 @@ export async function cleanStaleLockFiles(params: {
     .filter((entry) => entry.name.endsWith(".jsonl.lock"))
     .toSorted((a, b) => a.name.localeCompare(b.name));
 
-  for (const entry of lockEntries) {
-    const lockPath = path.join(sessionsDir, entry.name);
-    const payload = await readLockPayload(lockPath);
-    const inspected = inspectLockPayloadForSession({
-      payload,
-      staleMs,
-      nowMs,
-      heldByThisProcess: false,
-      reclaimLockWithoutStarttime: false,
-      readOwnerProcessArgs: ownerProcessArgsReader,
-    });
-    const lockInfo: SessionLockInspection = {
-      lockPath,
-      ...inspected,
-      removed: false,
-    };
+  const cleanup = await runTasksWithConcurrency({
+    limit: SESSION_LOCK_CLEANUP_CONCURRENCY,
+    tasks: lockEntries.map((entry) => async (): Promise<SessionLockInspection> => {
+      await yieldToEventLoop();
+      const lockPath = path.join(sessionsDir, entry.name);
+      const payload = await readLockPayload(lockPath);
+      const inspected = inspectLockPayloadForSession({
+        payload,
+        staleMs,
+        nowMs,
+        heldByThisProcess: false,
+        reclaimLockWithoutStarttime: false,
+        readOwnerProcessArgs: ownerProcessArgsReader,
+      });
+      const lockInfo: SessionLockInspection = {
+        lockPath,
+        ...inspected,
+        removed: false,
+      };
 
-    if (lockInfo.stale && removeStale) {
-      await fs.rm(lockPath, { force: true });
-      lockInfo.removed = true;
-      cleaned.push(lockInfo);
-      params.log?.warn?.(
-        `removed stale session lock: ${lockPath} (${lockInfo.staleReasons.join(", ") || "unknown"})`,
-      );
+      if (lockInfo.stale && removeStale) {
+        await fs.rm(lockPath, { force: true });
+        lockInfo.removed = true;
+        params.log?.warn?.(
+          `removed stale session lock: ${lockPath} (${lockInfo.staleReasons.join(", ") || "unknown"})`,
+        );
+      }
+
+      return lockInfo;
+    }),
+  });
+  if (cleanup.hasError) {
+    throw cleanup.firstError;
+  }
+
+  for (const lockInfo of cleanup.results) {
+    if (!lockInfo) {
+      continue;
     }
-
     locks.push(lockInfo);
+    if (lockInfo.removed) {
+      cleaned.push(lockInfo);
+    }
   }
 
   return { locks, cleaned };
@@ -794,6 +816,7 @@ export const testing = {
   handleTerminationSignal,
   releaseAllLocksSync,
   runLockWatchdogCheck,
+  SESSION_LOCK_CLEANUP_CONCURRENCY,
   setProcessStartTimeResolverForTest(resolver: ((pid: number) => number | null) | null): void {
     resolveProcessStartTimeForLock = resolver ?? getProcessStartTime;
   },
