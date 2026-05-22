@@ -325,7 +325,7 @@ describe("parseNpmPackJsonOutput", () => {
       'npm warn Unknown project config "node-linker".',
       "",
       "> openclaw@2026.3.23 prepack",
-      "> pnpm build && pnpm ui:build",
+      "> pnpm build",
       "",
       "[copy-hook-metadata] Copied 4 hook metadata files.",
       '[{"filename":"openclaw.tgz","files":[{"path":"dist/control-ui/index.html"}]}]',

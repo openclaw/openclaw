@@ -578,17 +578,17 @@ describe("resolveMissingPackBuildHint", () => {
     );
   });
 
-  it("points missing Control UI artifacts at pnpm ui:build", () => {
+  it("points missing Control UI artifacts at pnpm build", () => {
     expect(resolveMissingPackBuildHint(["dist/control-ui/index.html"])).toBe(
-      "release-check: Control UI artifacts are missing. Run `pnpm ui:build` before `pnpm release:check`.",
+      "release-check: Control UI artifacts are missing. Run `pnpm build` before `pnpm release:check`.",
     );
   });
 
-  it("points combined runtime and Control UI misses at both build commands", () => {
+  it("points combined runtime and Control UI misses at pnpm build", () => {
     expect(
       resolveMissingPackBuildHint(["dist/build-info.json", "dist/control-ui/index.html"]),
     ).toBe(
-      "release-check: build and Control UI artifacts are missing. Run `pnpm build && pnpm ui:build` before `pnpm release:check`.",
+      "release-check: build and Control UI artifacts are missing. Run `pnpm build` before `pnpm release:check`.",
     );
   });
 

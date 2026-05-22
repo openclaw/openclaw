@@ -25,6 +25,9 @@ export const BUILD_ALL_STEPS = [
     kind: "node",
     args: ["scripts/runtime-postbuild-stamp.mjs"],
   },
+  // Keep Control UI generation after tsdown/runtime postbuild: tsdown cleans dist,
+  // so running this earlier can leave a successful build with missing dashboard assets.
+  { label: "ui:build", kind: "pnpm", pnpmArgs: ["ui:build"] },
   {
     label: "build:plugin-sdk:dts",
     kind: "pnpm",
@@ -102,6 +105,7 @@ export const BUILD_ALL_PROFILES = {
     "runtime-postbuild",
     "build-stamp",
     "runtime-postbuild-stamp",
+    "ui:build",
     "build:plugin-sdk:dts",
     "write-plugin-sdk-entry-dts",
     "check-plugin-sdk-exports",

@@ -579,8 +579,9 @@ async function prepareCandidate(params) {
   });
 
   if (hasUiBuildScript) {
-    // pnpm build does not regenerate dist/control-ui, and checked-in bundles can
-    // otherwise leak into npm pack when a ref changes UI assets.
+    // Keep an explicit release UI rebuild even though pnpm build also generates
+    // dist/control-ui. This ensures fresh UI assets for older refs and catches
+    // stale checked-in bundles before npm pack.
     logPhase("prepare", "pnpm-ui-build");
     await runCommand(pnpmCommand(), ["ui:build"], {
       cwd: params.sourceDir,

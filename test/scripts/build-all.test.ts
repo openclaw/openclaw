@@ -147,6 +147,7 @@ describe("resolveBuildAllSteps", () => {
       "runtime-postbuild",
       "build-stamp",
       "runtime-postbuild-stamp",
+      "ui:build",
       "build:plugin-sdk:dts",
       "write-plugin-sdk-entry-dts",
       "check-plugin-sdk-exports",
@@ -167,6 +168,14 @@ describe("resolveBuildAllSteps", () => {
       "build-stamp",
       "runtime-postbuild-stamp",
     ]);
+  });
+
+  it("runs Control UI build after tsdown has finished cleaning dist", () => {
+    const labels = resolveBuildAllSteps("full").map((step) => step.label);
+
+    expect(labels).toContain("ui:build");
+    expect(labels.indexOf("ui:build")).toBeGreaterThan(labels.indexOf("tsdown"));
+    expect(labels.indexOf("ui:build")).toBeGreaterThan(labels.indexOf("runtime-postbuild-stamp"));
   });
 
   it("uses a CLI startup profile without generated plugin assets", () => {
