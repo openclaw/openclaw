@@ -117,6 +117,7 @@ type MantisSlackDesktopSmokeCommanderOptions = {
   keepLease?: boolean;
   leaseId?: string;
   machineClass?: string;
+  market?: string;
   model?: string;
   outputDir?: string;
   provider?: string;
@@ -317,6 +318,7 @@ export function registerMantisCli(qa: Command) {
     .option("--provider <provider>", "Crabbox provider")
     .option("--machine-class <class>", "Crabbox machine class")
     .option("--class <class>", "Alias for --machine-class")
+    .option("--market <market>", "Crabbox capacity market: spot or on-demand")
     .option("--lease-id <id>", "Reuse an existing Crabbox lease")
     .option("--idle-timeout <duration>", "Crabbox idle timeout")
     .option("--ttl <duration>", "Crabbox maximum lease lifetime")
@@ -359,6 +361,7 @@ export function registerMantisCli(qa: Command) {
         keepLease: opts.keepLease,
         leaseId: opts.leaseId,
         machineClass: opts.machineClass ?? opts.class,
+        market: opts.market,
         outputDir: opts.outputDir,
         primaryModel: opts.model,
         provider: opts.provider,

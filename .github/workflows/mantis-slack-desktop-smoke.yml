@@ -35,6 +35,14 @@ on:
         options:
           - aws
           - hetzner
+      crabbox_market:
+        description: Crabbox capacity market for AWS leases
+        required: false
+        default: on-demand
+        type: choice
+        options:
+          - on-demand
+          - spot
       crabbox_lease_id:
         description: Optional existing Crabbox desktop/browser lease id or slug to reuse
         required: false
@@ -232,6 +240,7 @@ jobs:
           CRABBOX_ACCESS_CLIENT_SECRET: ${{ secrets.CRABBOX_ACCESS_CLIENT_SECRET }}
           CRABBOX_LEASE_ID: ${{ inputs.crabbox_lease_id }}
           CRABBOX_PROVIDER: ${{ inputs.crabbox_provider }}
+          CRABBOX_MARKET: ${{ inputs.crabbox_market }}
           KEEP_VM: ${{ inputs.keep_vm }}
           HYDRATE_MODE: ${{ inputs.hydrate_mode }}
           SCENARIO_ID: ${{ inputs.scenario_id }}
@@ -288,6 +297,7 @@ jobs:
             --output-dir "$output_rel" \
             --provider "$CRABBOX_PROVIDER" \
             --class standard \
+            --market "$CRABBOX_MARKET" \
             --idle-timeout 45m \
             --ttl 120m \
             --credential-source convex \

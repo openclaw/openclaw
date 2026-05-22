@@ -834,6 +834,8 @@ describe("mantis Slack desktop smoke runtime", () => {
       "mantis",
       "slack-desktop-smoke",
       "--approval-checkpoints",
+      "--market",
+      "on-demand",
       "--scenario",
       "slack-approval-plugin-native",
     ]);
@@ -842,6 +844,7 @@ describe("mantis Slack desktop smoke runtime", () => {
       expect.objectContaining({
         approvalCheckpoints: true,
         gatewaySetup: undefined,
+        market: "on-demand",
         scenarioIds: ["slack-approval-plugin-native"],
       }),
     );

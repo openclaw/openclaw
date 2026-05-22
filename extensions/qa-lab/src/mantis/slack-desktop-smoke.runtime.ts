@@ -35,6 +35,7 @@ export type MantisSlackDesktopSmokeOptions = {
   keepLease?: boolean;
   leaseId?: string;
   machineClass?: string;
+  market?: string;
   now?: () => Date;
   outputDir?: string;
   primaryModel?: string;
@@ -153,6 +154,7 @@ const DEFAULT_APPROVAL_CHECKPOINT_SCENARIOS = [
 const CRABBOX_BIN_ENV = "OPENCLAW_MANTIS_CRABBOX_BIN";
 const CRABBOX_PROVIDER_ENV = "OPENCLAW_MANTIS_CRABBOX_PROVIDER";
 const CRABBOX_CLASS_ENV = "OPENCLAW_MANTIS_CRABBOX_CLASS";
+const CRABBOX_MARKET_ENV = "OPENCLAW_MANTIS_CRABBOX_MARKET";
 const CRABBOX_LEASE_ID_ENV = "OPENCLAW_MANTIS_CRABBOX_LEASE_ID";
 const CRABBOX_KEEP_ENV = "OPENCLAW_MANTIS_KEEP_VM";
 const CRABBOX_IDLE_TIMEOUT_ENV = "OPENCLAW_MANTIS_CRABBOX_IDLE_TIMEOUT";
@@ -1004,6 +1006,7 @@ export async function runMantisSlackDesktopSmoke(
     trimToValue(opts.provider) ?? trimToValue(env[CRABBOX_PROVIDER_ENV]) ?? DEFAULT_PROVIDER;
   const machineClass =
     trimToValue(opts.machineClass) ?? trimToValue(env[CRABBOX_CLASS_ENV]) ?? DEFAULT_CLASS;
+  const market = trimToValue(opts.market) ?? trimToValue(env[CRABBOX_MARKET_ENV]);
   const idleTimeout =
     trimToValue(opts.idleTimeout) ??
     trimToValue(env[CRABBOX_IDLE_TIMEOUT_ENV]) ??
@@ -1061,6 +1064,7 @@ export async function runMantisSlackDesktopSmoke(
           env,
           idleTimeout,
           machineClass,
+          market,
           provider,
           runner,
           ttl,
