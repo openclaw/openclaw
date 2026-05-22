@@ -1,6 +1,10 @@
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { joinPresentTextSegments } from "../../../shared/text/join-segments.js";
 import { normalizeStructuredPromptSection } from "../../prompt-cache-stability.js";
+import {
+  SYSTEM_PROMPT_CACHE_BOUNDARY,
+  prependSystemPromptAdditionAfterCacheBoundary,
+} from "../../system-prompt-cache-boundary.js";
 
 export const ATTEMPT_CACHE_TTL_CUSTOM_TYPE = "openclaw.cache-ttl";
 
@@ -20,7 +24,21 @@ export function composeSystemPromptWithHookContext(params: {
   if (!prependSystem && !appendSystem) {
     return undefined;
   }
-  return joinPresentTextSegments([prependSystem, params.baseSystemPrompt, appendSystem], {
+
+  const baseSystemPrompt = params.baseSystemPrompt;
+  const baseHasCacheBoundary =
+    typeof baseSystemPrompt === "string" && baseSystemPrompt.includes(SYSTEM_PROMPT_CACHE_BOUNDARY);
+  if (baseHasCacheBoundary) {
+    const promptWithPrependedContext = prependSystemPromptAdditionAfterCacheBoundary({
+      systemPrompt: baseSystemPrompt,
+      systemPromptAddition: prependSystem,
+    });
+    return joinPresentTextSegments([promptWithPrependedContext, appendSystem], {
+      trim: true,
+    });
+  }
+
+  return joinPresentTextSegments([prependSystem, baseSystemPrompt, appendSystem], {
     trim: true,
   });
 }

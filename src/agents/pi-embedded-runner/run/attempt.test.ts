@@ -668,6 +668,18 @@ describe("composeSystemPromptWithHookContext", () => {
     ).toBe("prepend line\nsecond line\n\nbase system\n\nappend");
   });
 
+  it("keeps hook system context after the cache boundary when the base prompt is split", () => {
+    const composedSystemPrompt = composeSystemPromptWithHookContext({
+      baseSystemPrompt: `stable prefix${SYSTEM_PROMPT_CACHE_BOUNDARY}dynamic suffix`,
+      prependSystemContext: "  prepended hook context  ",
+      appendSystemContext: "  appended hook context  ",
+    });
+
+    expect(composedSystemPrompt).toBe(
+      `stable prefix${SYSTEM_PROMPT_CACHE_BOUNDARY}prepended hook context\n\ndynamic suffix\n\nappended hook context`,
+    );
+  });
+
   it("avoids blank separators when base system prompt is empty", () => {
     expect(
       composeSystemPromptWithHookContext({
