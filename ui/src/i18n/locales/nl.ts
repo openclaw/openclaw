@@ -81,6 +81,9 @@ export const nl: TranslationMap = {
     logout: "Uitloggen",
   },
   channels: {
+    refreshingBackground:
+      "Refreshing channel status in the background; showing the last successful snapshot.",
+    partialChecks: "Some channel checks did not finish before the UI budget.",
     health: {
       title: "Kanaalstatus",
       subtitle: "Momentopnamen van kanaalstatus vanuit de Gateway.",
@@ -239,6 +242,15 @@ export const nl: TranslationMap = {
     noSummary: "Geen samenvatting vastgelegd.",
     branchFromCheckpoint: "Vertakken vanaf controlepunt",
     restoreCheckpoint: "Controlepunt herstellen",
+    pagination: {
+      of: "of {count}",
+    },
+    perPage: "{size} per page",
+    minutesSeconds: "{minutes}m {seconds}s",
+    seconds: "{count}s",
+    minutes: "{count}m",
+    hoursMinutes: "{hours}h {minutes}m",
+    hours: "{count}h",
   },
   agents: {
     noAgents: "Geen agents",
@@ -439,6 +451,7 @@ export const nl: TranslationMap = {
     access: {
       title: "Gateway-toegang",
       subtitle: "Waarmee het dashboard verbinding maakt en hoe het zich authenticeert.",
+      wsPlaceholder: "ws://100.x.y.z:18789",
       wsUrl: "WebSocket-URL",
       token: "Gateway-token",
       password: "Wachtwoord (niet opgeslagen)",
@@ -457,6 +470,7 @@ export const nl: TranslationMap = {
     snapshot: {
       title: "Momentopname",
       subtitle: "Nieuwste Gateway-handshake-informatie.",
+      tick: "{seconds}s",
       status: "Status",
       uptime: "Uptime",
       tickInterval: "Tick-interval",
@@ -488,6 +502,11 @@ export const nl: TranslationMap = {
         "Deze Gateway vereist auth. Voeg een token of wachtwoord toe en klik daarna op Verbinden.",
       failed:
         "Auth mislukt. Kopieer opnieuw een URL met token met {command}, of werk het token bij, en klik daarna op Verbinden.",
+      tokenizedUrl: "copies a tokenized URL",
+      setToken: "sets a reusable token",
+      tokenFragment: "Use the URL fragment",
+      queryParams: "or query params",
+      serverLogs: "Check server logs for details.",
     },
     pairing: {
       hint: "Dit apparaat heeft koppelingsgoedkeuring nodig van de Gateway-host.",
@@ -528,7 +547,13 @@ export const nl: TranslationMap = {
     },
     cards: {
       cost: "Kosten",
+      cronJobs: "{count} cron job",
+      cronJobs_plural: "{count} cron jobs",
+      cronFailed: "{count} failed",
+      costHint: "{tokens} tokens · {messages} messages",
       skills: "Skills",
+      skillsBlocked: "{count} blocked",
+      skillsActive: "{count} active",
       recentSessions: "Recente sessies",
       modelAuth: "Model-auth",
       modelAuthOk: "{count} ok",

@@ -81,6 +81,9 @@ export const vi: TranslationMap = {
     logout: "Đăng xuất",
   },
   channels: {
+    refreshingBackground:
+      "Refreshing channel status in the background; showing the last successful snapshot.",
+    partialChecks: "Some channel checks did not finish before the UI budget.",
     health: {
       title: "Tình trạng kênh",
       subtitle: "Ảnh chụp trạng thái kênh từ gateway.",
@@ -237,6 +240,15 @@ export const vi: TranslationMap = {
     noSummary: "Chưa ghi nhận bản tóm tắt.",
     branchFromCheckpoint: "Tạo nhánh từ điểm kiểm tra",
     restoreCheckpoint: "Khôi phục điểm kiểm tra",
+    pagination: {
+      of: "of {count}",
+    },
+    perPage: "{size} per page",
+    minutesSeconds: "{minutes}m {seconds}s",
+    seconds: "{count}s",
+    minutes: "{count}m",
+    hoursMinutes: "{hours}h {minutes}m",
+    hours: "{count}h",
   },
   agents: {
     noAgents: "Không có agent",
@@ -437,6 +449,7 @@ export const vi: TranslationMap = {
     access: {
       title: "Truy cập Gateway",
       subtitle: "Nơi bảng điều khiển kết nối và cách xác thực.",
+      wsPlaceholder: "ws://100.x.y.z:18789",
       wsUrl: "URL WebSocket",
       token: "Token Gateway",
       password: "Mật khẩu (không được lưu)",
@@ -455,6 +468,7 @@ export const vi: TranslationMap = {
     snapshot: {
       title: "Ảnh chụp",
       subtitle: "Thông tin bắt tay Gateway mới nhất.",
+      tick: "{seconds}s",
       status: "Trạng thái",
       uptime: "Thời gian hoạt động",
       tickInterval: "Khoảng thời gian tick",
@@ -483,6 +497,11 @@ export const vi: TranslationMap = {
       required: "Gateway này yêu cầu xác thực. Thêm token hoặc mật khẩu, rồi nhấp Kết nối.",
       failed:
         "Xác thực thất bại. Sao chép lại URL có token bằng {command}, hoặc cập nhật token, rồi nhấp Kết nối.",
+      tokenizedUrl: "copies a tokenized URL",
+      setToken: "sets a reusable token",
+      tokenFragment: "Use the URL fragment",
+      queryParams: "or query params",
+      serverLogs: "Check server logs for details.",
     },
     pairing: {
       hint: "Thiết bị này cần phê duyệt ghép nối từ máy chủ Gateway.",
@@ -523,7 +542,13 @@ export const vi: TranslationMap = {
     },
     cards: {
       cost: "Chi phí",
+      cronJobs: "{count} cron job",
+      cronJobs_plural: "{count} cron jobs",
+      cronFailed: "{count} failed",
+      costHint: "{tokens} tokens · {messages} messages",
       skills: "Skills",
+      skillsBlocked: "{count} blocked",
+      skillsActive: "{count} active",
       recentSessions: "Phiên gần đây",
       modelAuth: "Xác thực mô hình",
       modelAuthOk: "{count} ok",

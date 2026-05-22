@@ -81,6 +81,9 @@ export const zh_TW: TranslationMap = {
     logout: "登出",
   },
   channels: {
+    refreshingBackground:
+      "Refreshing channel status in the background; showing the last successful snapshot.",
+    partialChecks: "Some channel checks did not finish before the UI budget.",
     health: {
       title: "頻道健康狀態",
       subtitle: "來自 Gateway 的頻道狀態快照。",
@@ -235,6 +238,15 @@ export const zh_TW: TranslationMap = {
     noSummary: "未擷取摘要。",
     branchFromCheckpoint: "從檢查點建立分支",
     restoreCheckpoint: "還原檢查點",
+    pagination: {
+      of: "of {count}",
+    },
+    perPage: "{size} per page",
+    minutesSeconds: "{minutes}m {seconds}s",
+    seconds: "{count}s",
+    minutes: "{count}m",
+    hoursMinutes: "{hours}h {minutes}m",
+    hours: "{count}h",
   },
   agents: {
     noAgents: "No agents",
@@ -435,6 +447,7 @@ export const zh_TW: TranslationMap = {
     access: {
       title: "網關訪問",
       subtitle: "儀表板連接的位置及其身份驗證方式。",
+      wsPlaceholder: "ws://100.x.y.z:18789",
       wsUrl: "WebSocket URL",
       token: "網關令牌",
       password: "密碼 (不存儲)",
@@ -453,6 +466,7 @@ export const zh_TW: TranslationMap = {
     snapshot: {
       title: "快照",
       subtitle: "最新的網關握手信息。",
+      tick: "{seconds}s",
       status: "狀態",
       uptime: "運行時間",
       tickInterval: "刻度間隔",
@@ -480,6 +494,11 @@ export const zh_TW: TranslationMap = {
     auth: {
       required: "此網關需要身份驗證。添加令牌或密碼，然後點擊連接。",
       failed: "身份驗證失敗。請使用 {command} 重新複製令牌化 URL，或更新令牌，然後點擊連接。",
+      tokenizedUrl: "copies a tokenized URL",
+      setToken: "sets a reusable token",
+      tokenFragment: "Use the URL fragment",
+      queryParams: "or query params",
+      serverLogs: "Check server logs for details.",
     },
     pairing: {
       hint: "此裝置需要閘道主機的配對批准。",
@@ -517,7 +536,13 @@ export const zh_TW: TranslationMap = {
     },
     cards: {
       cost: "成本",
+      cronJobs: "{count} cron job",
+      cronJobs_plural: "{count} cron jobs",
+      cronFailed: "{count} failed",
+      costHint: "{tokens} tokens · {messages} messages",
       skills: "Skills",
+      skillsBlocked: "{count} blocked",
+      skillsActive: "{count} active",
       recentSessions: "最近會話",
       modelAuth: "模型驗證",
       modelAuthOk: "{count} 正常",

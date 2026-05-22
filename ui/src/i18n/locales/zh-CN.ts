@@ -81,6 +81,8 @@ export const zh_CN: TranslationMap = {
     logout: "退出登录",
   },
   channels: {
+    refreshingBackground: "正在后台刷新频道状态；显示上次成功的快照。",
+    partialChecks: "某些频道检查在 UI 预算之前未完成。",
     health: {
       title: "频道健康状态",
       subtitle: "来自 Gateway 的频道状态快照。",
@@ -235,6 +237,15 @@ export const zh_CN: TranslationMap = {
     noSummary: "未捕获摘要。",
     branchFromCheckpoint: "从检查点创建分支",
     restoreCheckpoint: "恢复检查点",
+    pagination: {
+      of: "共 {count} 条",
+    },
+    perPage: "每页 {size} 条",
+    minutesSeconds: "{minutes}分 {seconds}秒",
+    seconds: "{count}秒",
+    minutes: "{count}分",
+    hoursMinutes: "{hours}小时 {minutes}分",
+    hours: "{count}小时",
   },
   agents: {
     noAgents: "无代理",
@@ -435,6 +446,7 @@ export const zh_CN: TranslationMap = {
     access: {
       title: "网关访问",
       subtitle: "仪表板连接的位置及其身份验证方式。",
+      wsPlaceholder: "ws://100.x.y.z:18789",
       wsUrl: "WebSocket URL",
       token: "网关令牌",
       password: "密码 (不存储)",
@@ -453,6 +465,7 @@ export const zh_CN: TranslationMap = {
     snapshot: {
       title: "快照",
       subtitle: "最新的网关握手信息。",
+      tick: "{seconds} 秒",
       status: "状态",
       uptime: "运行时间",
       tickInterval: "刻度间隔",
@@ -480,6 +493,11 @@ export const zh_CN: TranslationMap = {
     auth: {
       required: "此网关需要身份验证。添加令牌或密码，然后点击连接。",
       failed: "身份验证失败。请使用 {command} 重新复制令牌化 URL，或更新令牌，然后点击连接。",
+      tokenizedUrl: "复制令牌化 URL",
+      setToken: "设置可重用令牌",
+      tokenFragment: "使用 URL 片段",
+      queryParams: "或查询参数",
+      serverLogs: "查看服务器日志了解详情。",
     },
     pairing: {
       hint: "此设备需要网关主机的配对批准。",
@@ -517,7 +535,13 @@ export const zh_CN: TranslationMap = {
     },
     cards: {
       cost: "成本",
+      cronJobs: "{count} 个定时任务",
+      cronJobs_plural: "{count} cron jobs",
+      cronFailed: "{count} 个失败",
+      costHint: "{tokens} 个令牌 · {messages} 条消息",
       skills: "技能",
+      skillsBlocked: "{count} 个被阻止",
+      skillsActive: "{count} 个活跃",
       recentSessions: "最近会话",
       modelAuth: "模型认证",
       modelAuthOk: "{count} 正常",

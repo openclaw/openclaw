@@ -88,14 +88,14 @@ export function renderChannels(props: ChannelsProps) {
       ${showingStaleSnapshot
         ? html`
             <div class="callout info" style="margin-top: 12px;">
-              Refreshing channel status in the background; showing the last successful snapshot.
+              ${t("channels.refreshingBackground")}
             </div>
           `
         : nothing}
       ${props.snapshot?.partial
         ? html`
             <div class="callout warn" style="margin-top: 12px;">
-              Some channel checks did not finish before the UI budget.
+              ${t("channels.partialChecks")}
               ${partialWarnings.length > 0 ? partialWarnings.slice(0, 3).join("; ") : ""}
             </div>
           `

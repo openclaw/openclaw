@@ -81,6 +81,9 @@ export const fr: TranslationMap = {
     logout: "Se déconnecter",
   },
   channels: {
+    refreshingBackground:
+      "Refreshing channel status in the background; showing the last successful snapshot.",
+    partialChecks: "Some channel checks did not finish before the UI budget.",
     health: {
       title: "Santé du canal",
       subtitle: "Instantanés de l’état du canal depuis le gateway.",
@@ -239,6 +242,15 @@ export const fr: TranslationMap = {
     noSummary: "Aucun résumé capturé.",
     branchFromCheckpoint: "Créer une branche à partir du point de contrôle",
     restoreCheckpoint: "Restaurer le point de contrôle",
+    pagination: {
+      of: "of {count}",
+    },
+    perPage: "{size} per page",
+    minutesSeconds: "{minutes}m {seconds}s",
+    seconds: "{count}s",
+    minutes: "{count}m",
+    hoursMinutes: "{hours}h {minutes}m",
+    hours: "{count}h",
   },
   agents: {
     noAgents: "No agents",
@@ -439,6 +451,7 @@ export const fr: TranslationMap = {
     access: {
       title: "Accès Gateway",
       subtitle: "Où le tableau de bord se connecte et comment il s’authentifie.",
+      wsPlaceholder: "ws://100.x.y.z:18789",
       wsUrl: "URL WebSocket",
       token: "Jeton Gateway",
       password: "Mot de passe (non enregistré)",
@@ -457,6 +470,7 @@ export const fr: TranslationMap = {
     snapshot: {
       title: "Capture",
       subtitle: "Dernières informations de handshake du Gateway.",
+      tick: "{seconds}s",
       status: "Statut",
       uptime: "Temps de fonctionnement",
       tickInterval: "Intervalle de tick",
@@ -487,6 +501,11 @@ export const fr: TranslationMap = {
         "Ce Gateway nécessite une authentification. Ajoutez un jeton ou un mot de passe, puis cliquez sur Connect.",
       failed:
         "Échec de l’authentification. Recopiez une URL avec jeton avec {command}, ou mettez à jour le jeton, puis cliquez sur Connect.",
+      tokenizedUrl: "copies a tokenized URL",
+      setToken: "sets a reusable token",
+      tokenFragment: "Use the URL fragment",
+      queryParams: "or query params",
+      serverLogs: "Check server logs for details.",
     },
     pairing: {
       hint: "Cet appareil nécessite une approbation d’appairage de l’hôte Gateway.",
@@ -529,7 +548,13 @@ export const fr: TranslationMap = {
     },
     cards: {
       cost: "Coût",
+      cronJobs: "{count} cron job",
+      cronJobs_plural: "{count} cron jobs",
+      cronFailed: "{count} failed",
+      costHint: "{tokens} tokens · {messages} messages",
       skills: "Skills",
+      skillsBlocked: "{count} blocked",
+      skillsActive: "{count} active",
       recentSessions: "Sessions récentes",
       modelAuth: "Authentification des modèles",
       modelAuthOk: "{count} ok",

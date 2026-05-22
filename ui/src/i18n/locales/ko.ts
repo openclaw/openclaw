@@ -81,6 +81,9 @@ export const ko: TranslationMap = {
     logout: "로그아웃",
   },
   channels: {
+    refreshingBackground:
+      "Refreshing channel status in the background; showing the last successful snapshot.",
+    partialChecks: "Some channel checks did not finish before the UI budget.",
     health: {
       title: "채널 상태",
       subtitle: "Gateway의 채널 상태 스냅샷입니다.",
@@ -236,6 +239,15 @@ export const ko: TranslationMap = {
     noSummary: "캡처된 요약이 없습니다.",
     branchFromCheckpoint: "체크포인트에서 브랜치 생성",
     restoreCheckpoint: "체크포인트 복원",
+    pagination: {
+      of: "of {count}",
+    },
+    perPage: "{size} per page",
+    minutesSeconds: "{minutes}m {seconds}s",
+    seconds: "{count}s",
+    minutes: "{count}m",
+    hoursMinutes: "{hours}h {minutes}m",
+    hours: "{count}h",
   },
   agents: {
     noAgents: "No agents",
@@ -436,6 +448,7 @@ export const ko: TranslationMap = {
     access: {
       title: "Gateway 액세스",
       subtitle: "대시보드가 연결되는 위치와 인증 방식입니다.",
+      wsPlaceholder: "ws://100.x.y.z:18789",
       wsUrl: "WebSocket URL",
       token: "Gateway 토큰",
       password: "비밀번호(저장되지 않음)",
@@ -454,6 +467,7 @@ export const ko: TranslationMap = {
     snapshot: {
       title: "스냅샷",
       subtitle: "최신 Gateway 핸드셰이크 정보입니다.",
+      tick: "{seconds}s",
       status: "상태",
       uptime: "가동 시간",
       tickInterval: "틱 간격",
@@ -484,6 +498,11 @@ export const ko: TranslationMap = {
         "이 Gateway에는 인증이 필요합니다. 토큰이나 비밀번호를 추가한 다음 Connect를 클릭하세요.",
       failed:
         "인증에 실패했습니다. {command}로 토큰이 포함된 URL을 다시 복사하거나 토큰을 업데이트한 다음 Connect를 클릭하세요.",
+      tokenizedUrl: "copies a tokenized URL",
+      setToken: "sets a reusable token",
+      tokenFragment: "Use the URL fragment",
+      queryParams: "or query params",
+      serverLogs: "Check server logs for details.",
     },
     pairing: {
       hint: "이 디바이스는 gateway host의 페어링 승인이 필요합니다.",
@@ -524,7 +543,13 @@ export const ko: TranslationMap = {
     },
     cards: {
       cost: "비용",
+      cronJobs: "{count} cron job",
+      cronJobs_plural: "{count} cron jobs",
+      cronFailed: "{count} failed",
+      costHint: "{tokens} tokens · {messages} messages",
       skills: "Skills",
+      skillsBlocked: "{count} blocked",
+      skillsActive: "{count} active",
       recentSessions: "최근 세션",
       modelAuth: "모델 인증",
       modelAuthOk: "{count}개 정상",

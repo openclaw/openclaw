@@ -81,6 +81,9 @@ export const ar: TranslationMap = {
     logout: "تسجيل الخروج",
   },
   channels: {
+    refreshingBackground:
+      "Refreshing channel status in the background; showing the last successful snapshot.",
+    partialChecks: "Some channel checks did not finish before the UI budget.",
     health: {
       title: "صحة القنوات",
       subtitle: "لقطات حالة القنوات من Gateway.",
@@ -236,6 +239,15 @@ export const ar: TranslationMap = {
     noSummary: "لم يتم التقاط أي ملخص.",
     branchFromCheckpoint: "إنشاء فرع من نقطة التحقق",
     restoreCheckpoint: "استعادة نقطة التحقق",
+    pagination: {
+      of: "of {count}",
+    },
+    perPage: "{size} per page",
+    minutesSeconds: "{minutes}m {seconds}s",
+    seconds: "{count}s",
+    minutes: "{count}m",
+    hoursMinutes: "{hours}h {minutes}m",
+    hours: "{count}h",
   },
   agents: {
     noAgents: "لا توجد وكلاء",
@@ -436,6 +448,7 @@ export const ar: TranslationMap = {
     access: {
       title: "الوصول إلى Gateway",
       subtitle: "مكان اتصال لوحة المعلومات وكيفية مصادقتها.",
+      wsPlaceholder: "ws://100.x.y.z:18789",
       wsUrl: "عنوان URL لـ WebSocket",
       token: "رمز Gateway",
       password: "كلمة المرور (غير مخزنة)",
@@ -454,6 +467,7 @@ export const ar: TranslationMap = {
     snapshot: {
       title: "لقطة",
       subtitle: "أحدث معلومات مصافحة Gateway.",
+      tick: "{seconds}s",
       status: "الحالة",
       uptime: "مدة التشغيل",
       tickInterval: "فاصل النبض",
@@ -482,6 +496,11 @@ export const ar: TranslationMap = {
       required: "يتطلب هذا Gateway مصادقة. أضف رمزًا أو كلمة مرور، ثم انقر على اتصال.",
       failed:
         "فشلت المصادقة. أعد نسخ عنوان URL مزود برمز باستخدام {command}، أو حدّث الرمز، ثم انقر على اتصال.",
+      tokenizedUrl: "copies a tokenized URL",
+      setToken: "sets a reusable token",
+      tokenFragment: "Use the URL fragment",
+      queryParams: "or query params",
+      serverLogs: "Check server logs for details.",
     },
     pairing: {
       hint: "يحتاج هذا الجهاز إلى موافقة الاقتران من مضيف Gateway.",
@@ -519,7 +538,13 @@ export const ar: TranslationMap = {
     },
     cards: {
       cost: "التكلفة",
+      cronJobs: "{count} cron job",
+      cronJobs_plural: "{count} cron jobs",
+      cronFailed: "{count} failed",
+      costHint: "{tokens} tokens · {messages} messages",
       skills: "Skills",
+      skillsBlocked: "{count} blocked",
+      skillsActive: "{count} active",
       recentSessions: "الجلسات الأخيرة",
       modelAuth: "مصادقة النموذج",
       modelAuthOk: "{count} سليم",

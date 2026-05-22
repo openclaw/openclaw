@@ -81,6 +81,9 @@ export const th: TranslationMap = {
     logout: "ออกจากระบบ",
   },
   channels: {
+    refreshingBackground:
+      "Refreshing channel status in the background; showing the last successful snapshot.",
+    partialChecks: "Some channel checks did not finish before the UI budget.",
     health: {
       title: "สถานะช่องทาง",
       subtitle: "ภาพรวมสถานะของช่องทางจากเกตเวย์",
@@ -235,6 +238,15 @@ export const th: TranslationMap = {
     noSummary: "ไม่มีสรุปที่บันทึกไว้",
     branchFromCheckpoint: "แตกแขนงจากเช็กพอยต์",
     restoreCheckpoint: "กู้คืนเช็กพอยต์",
+    pagination: {
+      of: "of {count}",
+    },
+    perPage: "{size} per page",
+    minutesSeconds: "{minutes}m {seconds}s",
+    seconds: "{count}s",
+    minutes: "{count}m",
+    hoursMinutes: "{hours}h {minutes}m",
+    hours: "{count}h",
   },
   agents: {
     noAgents: "No agents",
@@ -435,6 +447,7 @@ export const th: TranslationMap = {
     access: {
       title: "การเข้าถึงเกตเวย์",
       subtitle: "ตำแหน่งที่แดชบอร์ดเชื่อมต่อและวิธีการยืนยันตัวตน",
+      wsPlaceholder: "ws://100.x.y.z:18789",
       wsUrl: "WebSocket URL",
       token: "Gateway Token",
       password: "รหัสผ่าน (ไม่จัดเก็บ)",
@@ -453,6 +466,7 @@ export const th: TranslationMap = {
     snapshot: {
       title: "ภาพรวมสถานะ",
       subtitle: "ข้อมูลการจับมือกับเกตเวย์ล่าสุด",
+      tick: "{seconds}s",
       status: "สถานะ",
       uptime: "เวลาทำงาน",
       tickInterval: "ช่วงเวลา Tick",
@@ -480,6 +494,11 @@ export const th: TranslationMap = {
     auth: {
       required: "เกตเวย์นี้ต้องมีการยืนยันตัวตน เพิ่มโทเค็นหรือรหัสผ่าน แล้วคลิก Connect",
       failed: "การยืนยันตัวตนล้มเหลว คัดลอก URL ที่มีโทเค็นอีกครั้งด้วย {command} หรืออัปเดตโทเค็น แล้วคลิก Connect",
+      tokenizedUrl: "copies a tokenized URL",
+      setToken: "sets a reusable token",
+      tokenFragment: "Use the URL fragment",
+      queryParams: "or query params",
+      serverLogs: "Check server logs for details.",
     },
     pairing: {
       hint: "อุปกรณ์นี้ต้องได้รับการอนุมัติการจับคู่จากโฮสต์เกตเวย์",
@@ -517,7 +536,13 @@ export const th: TranslationMap = {
     },
     cards: {
       cost: "ค่าใช้จ่าย",
+      cronJobs: "{count} cron job",
+      cronJobs_plural: "{count} cron jobs",
+      cronFailed: "{count} failed",
+      costHint: "{tokens} tokens · {messages} messages",
       skills: "ทักษะ",
+      skillsBlocked: "{count} blocked",
+      skillsActive: "{count} active",
       recentSessions: "เซสชันล่าสุด",
       modelAuth: "การยืนยันตัวตนของโมเดล",
       modelAuthOk: "{count} ใช้งานได้",

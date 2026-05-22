@@ -1340,13 +1340,6 @@
     },
     {
       "count": 1,
-      "kind": "html-text",
-      "name": "text",
-      "path": "ui/src/ui/views/channels.ts",
-      "text": "Refreshing channel status in the background; showing the last successful snapshot."
-    },
-    {
-      "count": 1,
       "kind": "object-property",
       "name": "subtitle",
       "path": "ui/src/ui/views/channels.whatsapp.ts",
@@ -4231,13 +4224,6 @@
     },
     {
       "count": 1,
-      "kind": "html-attribute",
-      "name": "placeholder",
-      "path": "ui/src/ui/views/overview.ts",
-      "text": "ws://100.x.y.z:18789"
-    },
-    {
-      "count": 1,
       "kind": "html-text",
       "name": "text",
       "path": "ui/src/ui/views/overview.ts",
@@ -4248,42 +4234,7 @@
       "kind": "html-text",
       "name": "text",
       "path": "ui/src/ui/views/overview.ts",
-      "text": ". Query parameters ("
-    },
-    {
-      "count": 1,
-      "kind": "html-text",
-      "name": "text",
-      "path": "ui/src/ui/views/overview.ts",
-      "text": ") may appear in server logs."
-    },
-    {
-      "count": 1,
-      "kind": "html-text",
-      "name": "text",
-      "path": "ui/src/ui/views/overview.ts",
       "text": "#token=&lt;token&gt;"
-    },
-    {
-      "count": 1,
-      "kind": "html-text",
-      "name": "text",
-      "path": "ui/src/ui/views/overview.ts",
-      "text": "→ set token"
-    },
-    {
-      "count": 1,
-      "kind": "html-text",
-      "name": "text",
-      "path": "ui/src/ui/views/overview.ts",
-      "text": "→ tokenized URL"
-    },
-    {
-      "count": 1,
-      "kind": "html-text",
-      "name": "text",
-      "path": "ui/src/ui/views/overview.ts",
-      "text": "Auth token must be passed as a URL fragment:"
     },
     {
       "count": 1,
@@ -4305,20 +4256,6 @@
       "name": "text",
       "path": "ui/src/ui/views/overview.ts",
       "text": "openclaw doctor --generate-gateway-token"
-    },
-    {
-      "count": 1,
-      "kind": "html-attribute",
-      "name": "aria-label",
-      "path": "ui/src/ui/views/sessions.ts",
-      "text": "Session filters"
-    },
-    {
-      "count": 1,
-      "kind": "html-text",
-      "name": "text",
-      "path": "ui/src/ui/views/sessions.ts",
-      "text": "Previous"
     },
     {
       "count": 1,

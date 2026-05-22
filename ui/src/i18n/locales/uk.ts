@@ -81,6 +81,9 @@ export const uk: TranslationMap = {
     logout: "Вийти",
   },
   channels: {
+    refreshingBackground:
+      "Refreshing channel status in the background; showing the last successful snapshot.",
+    partialChecks: "Some channel checks did not finish before the UI budget.",
     health: {
       title: "Стан каналу",
       subtitle: "Знімки стану каналу з Gateway.",
@@ -238,6 +241,15 @@ export const uk: TranslationMap = {
     noSummary: "Підсумок не зафіксовано.",
     branchFromCheckpoint: "Створити гілку з контрольної точки",
     restoreCheckpoint: "Відновити контрольну точку",
+    pagination: {
+      of: "of {count}",
+    },
+    perPage: "{size} per page",
+    minutesSeconds: "{minutes}m {seconds}s",
+    seconds: "{count}s",
+    minutes: "{count}m",
+    hoursMinutes: "{hours}h {minutes}m",
+    hours: "{count}h",
   },
   agents: {
     noAgents: "No agents",
@@ -438,6 +450,7 @@ export const uk: TranslationMap = {
     access: {
       title: "Доступ до шлюзу",
       subtitle: "Куди підключається панель керування та як вона автентифікується.",
+      wsPlaceholder: "ws://100.x.y.z:18789",
       wsUrl: "URL WebSocket",
       token: "Токен шлюзу",
       password: "Пароль (не зберігається)",
@@ -456,6 +469,7 @@ export const uk: TranslationMap = {
     snapshot: {
       title: "Знімок",
       subtitle: "Остання інформація рукостискання шлюзу.",
+      tick: "{seconds}s",
       status: "Статус",
       uptime: "Час роботи",
       tickInterval: "Інтервал тіку",
@@ -487,6 +501,11 @@ export const uk: TranslationMap = {
         "Цей шлюз потребує автентифікації. Додайте токен або пароль, а потім натисніть «Підключити».",
       failed:
         "Автентифікація не вдалася. Знову скопіюйте URL з токеном за допомогою {command} або оновіть токен, а потім натисніть «Підключити».",
+      tokenizedUrl: "copies a tokenized URL",
+      setToken: "sets a reusable token",
+      tokenFragment: "Use the URL fragment",
+      queryParams: "or query params",
+      serverLogs: "Check server logs for details.",
     },
     pairing: {
       hint: "Цей пристрій потребує схвалення спарювання від хоста шлюзу.",
@@ -527,7 +546,13 @@ export const uk: TranslationMap = {
     },
     cards: {
       cost: "Вартість",
+      cronJobs: "{count} cron job",
+      cronJobs_plural: "{count} cron jobs",
+      cronFailed: "{count} failed",
+      costHint: "{tokens} tokens · {messages} messages",
       skills: "Навички",
+      skillsBlocked: "{count} blocked",
+      skillsActive: "{count} active",
       recentSessions: "Нещодавні сеанси",
       modelAuth: "Авторизація моделей",
       modelAuthOk: "{count} в нормі",

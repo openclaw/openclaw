@@ -81,6 +81,9 @@ export const ja_JP: TranslationMap = {
     logout: "ログアウト",
   },
   channels: {
+    refreshingBackground:
+      "Refreshing channel status in the background; showing the last successful snapshot.",
+    partialChecks: "Some channel checks did not finish before the UI budget.",
     health: {
       title: "チャネルの状態",
       subtitle: "Gateway からのチャネル状態スナップショット。",
@@ -240,6 +243,15 @@ export const ja_JP: TranslationMap = {
     noSummary: "要約は取得されていません。",
     branchFromCheckpoint: "チェックポイントからブランチ",
     restoreCheckpoint: "チェックポイントを復元",
+    pagination: {
+      of: "of {count}",
+    },
+    perPage: "{size} per page",
+    minutesSeconds: "{minutes}m {seconds}s",
+    seconds: "{count}s",
+    minutes: "{count}m",
+    hoursMinutes: "{hours}h {minutes}m",
+    hours: "{count}h",
   },
   agents: {
     noAgents: "No agents",
@@ -440,6 +452,7 @@ export const ja_JP: TranslationMap = {
     access: {
       title: "Gateway アクセス",
       subtitle: "ダッシュボードの接続先と認証方法。",
+      wsPlaceholder: "ws://100.x.y.z:18789",
       wsUrl: "WebSocket URL",
       token: "Gateway トークン",
       password: "パスワード（保存されません）",
@@ -458,6 +471,7 @@ export const ja_JP: TranslationMap = {
     snapshot: {
       title: "スナップショット",
       subtitle: "最新の Gateway ハンドシェイク情報。",
+      tick: "{seconds}s",
       status: "ステータス",
       uptime: "稼働時間",
       tickInterval: "Tick 間隔",
@@ -489,6 +503,11 @@ export const ja_JP: TranslationMap = {
         "この Gateway では認証が必要です。トークンまたはパスワードを追加してから、［Connect］をクリックしてください。",
       failed:
         "認証に失敗しました。{command} でトークン付き URL を再コピーするか、トークンを更新してから、［Connect］をクリックしてください。",
+      tokenizedUrl: "copies a tokenized URL",
+      setToken: "sets a reusable token",
+      tokenFragment: "Use the URL fragment",
+      queryParams: "or query params",
+      serverLogs: "Check server logs for details.",
     },
     pairing: {
       hint: "このデバイスは Gateway ホストからのペアリング承認が必要です。",
@@ -529,7 +548,13 @@ export const ja_JP: TranslationMap = {
     },
     cards: {
       cost: "コスト",
+      cronJobs: "{count} cron job",
+      cronJobs_plural: "{count} cron jobs",
+      cronFailed: "{count} failed",
+      costHint: "{tokens} tokens · {messages} messages",
       skills: "Skills",
+      skillsBlocked: "{count} blocked",
+      skillsActive: "{count} active",
       recentSessions: "最近のセッション",
       modelAuth: "モデル認証",
       modelAuthOk: "{count} 件が正常",

@@ -81,6 +81,9 @@ export const id: TranslationMap = {
     logout: "Keluar",
   },
   channels: {
+    refreshingBackground:
+      "Refreshing channel status in the background; showing the last successful snapshot.",
+    partialChecks: "Some channel checks did not finish before the UI budget.",
     health: {
       title: "Kesehatan saluran",
       subtitle: "Snapshot status saluran dari gateway.",
@@ -237,6 +240,15 @@ export const id: TranslationMap = {
     noSummary: "Tidak ada ringkasan yang direkam.",
     branchFromCheckpoint: "Buat cabang dari checkpoint",
     restoreCheckpoint: "Pulihkan checkpoint",
+    pagination: {
+      of: "of {count}",
+    },
+    perPage: "{size} per page",
+    minutesSeconds: "{minutes}m {seconds}s",
+    seconds: "{count}s",
+    minutes: "{count}m",
+    hoursMinutes: "{hours}h {minutes}m",
+    hours: "{count}h",
   },
   agents: {
     noAgents: "No agents",
@@ -437,6 +449,7 @@ export const id: TranslationMap = {
     access: {
       title: "Akses Gateway",
       subtitle: "Tempat dasbor terhubung dan cara autentikasinya.",
+      wsPlaceholder: "ws://100.x.y.z:18789",
       wsUrl: "URL WebSocket",
       token: "Token Gateway",
       password: "Kata sandi (tidak disimpan)",
@@ -455,6 +468,7 @@ export const id: TranslationMap = {
     snapshot: {
       title: "Snapshot",
       subtitle: "Informasi handshake Gateway terbaru.",
+      tick: "{seconds}s",
       status: "Status",
       uptime: "Waktu aktif",
       tickInterval: "Interval Tick",
@@ -485,6 +499,11 @@ export const id: TranslationMap = {
       required: "Gateway ini memerlukan auth. Tambahkan token atau kata sandi, lalu klik Connect.",
       failed:
         "Auth gagal. Salin ulang URL bertoken dengan {command}, atau perbarui token, lalu klik Connect.",
+      tokenizedUrl: "copies a tokenized URL",
+      setToken: "sets a reusable token",
+      tokenFragment: "Use the URL fragment",
+      queryParams: "or query params",
+      serverLogs: "Check server logs for details.",
     },
     pairing: {
       hint: "Perangkat ini memerlukan persetujuan pairing dari host gateway.",
@@ -525,7 +544,13 @@ export const id: TranslationMap = {
     },
     cards: {
       cost: "Biaya",
+      cronJobs: "{count} cron job",
+      cronJobs_plural: "{count} cron jobs",
+      cronFailed: "{count} failed",
+      costHint: "{tokens} tokens · {messages} messages",
       skills: "Skills",
+      skillsBlocked: "{count} blocked",
+      skillsActive: "{count} active",
       recentSessions: "Sesi Terbaru",
       modelAuth: "Autentikasi Model",
       modelAuthOk: "{count} ok",

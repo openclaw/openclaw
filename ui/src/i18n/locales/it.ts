@@ -81,6 +81,9 @@ export const it: TranslationMap = {
     logout: "Esci",
   },
   channels: {
+    refreshingBackground:
+      "Refreshing channel status in the background; showing the last successful snapshot.",
+    partialChecks: "Some channel checks did not finish before the UI budget.",
     health: {
       title: "Integrità canali",
       subtitle: "Snapshot dello stato dei canali dal gateway.",
@@ -237,6 +240,15 @@ export const it: TranslationMap = {
     noSummary: "Nessun riepilogo acquisito.",
     branchFromCheckpoint: "Crea ramo dal checkpoint",
     restoreCheckpoint: "Ripristina checkpoint",
+    pagination: {
+      of: "of {count}",
+    },
+    perPage: "{size} per page",
+    minutesSeconds: "{minutes}m {seconds}s",
+    seconds: "{count}s",
+    minutes: "{count}m",
+    hoursMinutes: "{hours}h {minutes}m",
+    hours: "{count}h",
   },
   agents: {
     noAgents: "Nessun agente",
@@ -439,6 +451,7 @@ export const it: TranslationMap = {
     access: {
       title: "Accesso Gateway",
       subtitle: "Dove si connette la dashboard e come si autentica.",
+      wsPlaceholder: "ws://100.x.y.z:18789",
       wsUrl: "URL WebSocket",
       token: "Token Gateway",
       password: "Password (non memorizzata)",
@@ -457,6 +470,7 @@ export const it: TranslationMap = {
     snapshot: {
       title: "Snapshot",
       subtitle: "Informazioni più recenti sull'handshake del gateway.",
+      tick: "{seconds}s",
       status: "Stato",
       uptime: "Tempo di attività",
       tickInterval: "Intervallo tick",
@@ -487,6 +501,11 @@ export const it: TranslationMap = {
         "Questo Gateway richiede l'autenticazione. Aggiungi un token o una password, quindi fai clic su Connetti.",
       failed:
         "Autenticazione non riuscita. Ricopia un URL con token usando {command}, oppure aggiorna il token, quindi fai clic su Connetti.",
+      tokenizedUrl: "copies a tokenized URL",
+      setToken: "sets a reusable token",
+      tokenFragment: "Use the URL fragment",
+      queryParams: "or query params",
+      serverLogs: "Check server logs for details.",
     },
     pairing: {
       hint: "Questo dispositivo richiede l'approvazione dell'abbinamento dall'host del Gateway.",
@@ -527,7 +546,13 @@ export const it: TranslationMap = {
     },
     cards: {
       cost: "Costo",
+      cronJobs: "{count} cron job",
+      cronJobs_plural: "{count} cron jobs",
+      cronFailed: "{count} failed",
+      costHint: "{tokens} tokens · {messages} messages",
       skills: "Skills",
+      skillsBlocked: "{count} blocked",
+      skillsActive: "{count} active",
       recentSessions: "Sessioni recenti",
       modelAuth: "Autenticazione modello",
       modelAuthOk: "{count} ok",

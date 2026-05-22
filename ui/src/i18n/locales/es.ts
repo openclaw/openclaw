@@ -81,6 +81,9 @@ export const es: TranslationMap = {
     logout: "Cerrar sesión",
   },
   channels: {
+    refreshingBackground:
+      "Refreshing channel status in the background; showing the last successful snapshot.",
+    partialChecks: "Some channel checks did not finish before the UI budget.",
     health: {
       title: "Estado del canal",
       subtitle: "Instantáneas del estado del canal desde el Gateway.",
@@ -237,6 +240,15 @@ export const es: TranslationMap = {
     noSummary: "No se capturó ningún resumen.",
     branchFromCheckpoint: "Crear rama desde el punto de control",
     restoreCheckpoint: "Restaurar punto de control",
+    pagination: {
+      of: "of {count}",
+    },
+    perPage: "{size} per page",
+    minutesSeconds: "{minutes}m {seconds}s",
+    seconds: "{count}s",
+    minutes: "{count}m",
+    hoursMinutes: "{hours}h {minutes}m",
+    hours: "{count}h",
   },
   agents: {
     noAgents: "No agents",
@@ -437,6 +449,7 @@ export const es: TranslationMap = {
     access: {
       title: "Acceso a la puerta de enlace",
       subtitle: "Dónde se conecta el panel y cómo se autentica.",
+      wsPlaceholder: "ws://100.x.y.z:18789",
       wsUrl: "URL de WebSocket",
       token: "Token de la puerta de enlace",
       password: "Contraseña (no se guarda)",
@@ -455,6 +468,7 @@ export const es: TranslationMap = {
     snapshot: {
       title: "Instantánea",
       subtitle: "Información más reciente del saludo con la puerta de enlace.",
+      tick: "{seconds}s",
       status: "Estado",
       uptime: "Tiempo de actividad",
       tickInterval: "Intervalo de tick",
@@ -485,6 +499,11 @@ export const es: TranslationMap = {
         "Esta puerta de enlace requiere autenticación. Añade un token o contraseña y haz clic en Conectar.",
       failed:
         "Autenticación fallida. Vuelve a copiar una URL con token mediante {command}, o actualiza el token y haz clic en Conectar.",
+      tokenizedUrl: "copies a tokenized URL",
+      setToken: "sets a reusable token",
+      tokenFragment: "Use the URL fragment",
+      queryParams: "or query params",
+      serverLogs: "Check server logs for details.",
     },
     pairing: {
       hint: "Este dispositivo necesita aprobación de emparejamiento del host de la puerta de enlace.",
@@ -525,7 +544,13 @@ export const es: TranslationMap = {
     },
     cards: {
       cost: "Costo",
+      cronJobs: "{count} cron job",
+      cronJobs_plural: "{count} cron jobs",
+      cronFailed: "{count} failed",
+      costHint: "{tokens} tokens · {messages} messages",
       skills: "Skills",
+      skillsBlocked: "{count} blocked",
+      skillsActive: "{count} active",
       recentSessions: "Sesiones recientes",
       modelAuth: "Autenticación del modelo",
       modelAuthOk: "{count} ok",
