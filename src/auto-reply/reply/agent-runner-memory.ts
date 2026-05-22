@@ -10,7 +10,6 @@ import { runWithModelFallback } from "../../agents/model-fallback.js";
 import { listLegacyRuntimeModelProviderAliases } from "../../agents/model-runtime-aliases.js";
 import { isCliProvider } from "../../agents/model-selection.js";
 import { resolveContextConfigProviderForRuntime } from "../../agents/openai-codex-routing.js";
-import { resolveExtraParams } from "../../agents/pi-embedded-runner/extra-params.js";
 import { resolveSandboxConfigForAgent, resolveSandboxRuntimeStatus } from "../../agents/sandbox.js";
 import {
   derivePromptTokens,
@@ -264,38 +263,6 @@ function resolveFollowupContextConfigProvider(params: {
     provider,
     runtimeId: harnessPolicy.runtime,
   });
-}
-
-function parsePositiveInteger(value: unknown): number | undefined {
-  if (typeof value === "number" && Number.isFinite(value) && value > 0) {
-    return Math.floor(value);
-  }
-  if (typeof value === "string") {
-    const parsed = Number.parseInt(value, 10);
-    return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined;
-  }
-  return undefined;
-}
-
-function resolveServerCompactionThresholdTokens(params: {
-  cfg: OpenClawConfig;
-  provider: string;
-  modelId?: string;
-  agentId?: string;
-}): number | undefined {
-  if (!params.modelId?.trim()) {
-    return undefined;
-  }
-  const extraParams = resolveExtraParams({
-    cfg: params.cfg,
-    provider: params.provider,
-    modelId: params.modelId,
-    agentId: params.agentId,
-  });
-  if (extraParams?.responsesServerCompaction !== true) {
-    return undefined;
-  }
-  return parsePositiveInteger(extraParams.responsesCompactThreshold);
 }
 
 function resolveVisibleMemoryFlushErrorPayloads(payloads?: ReplyPayload[]): ReplyPayload[] {
@@ -665,12 +632,6 @@ export async function runPreflightCompactionIfNeeded(params: {
     params.cfg.agents?.defaults?.compaction?.reserveTokensFloor ??
     20_000;
   const softThresholdTokens = memoryFlushPlan?.softThresholdTokens ?? 4_000;
-  const serverCompactionThresholdTokens = resolveServerCompactionThresholdTokens({
-    cfg: params.cfg,
-    provider: params.followupRun.run.provider,
-    modelId: params.followupRun.run.model ?? params.defaultModel,
-    agentId: params.followupRun.run.agentId,
-  });
   const freshPersistedTokens = resolveFreshSessionTotalTokens(entry);
   const persistedTotalTokens = entry.totalTokens;
   const hasPersistedTotalTokens =
@@ -732,9 +693,7 @@ export async function runPreflightCompactionIfNeeded(params: {
       ? projectedTokenCount
       : undefined;
 
-  const threshold =
-    serverCompactionThresholdTokens ??
-    contextWindowTokens - reserveTokensFloor - softThresholdTokens;
+  const threshold = contextWindowTokens - reserveTokensFloor - softThresholdTokens;
   logVerbose(
     `preflightCompaction check: sessionKey=${params.sessionKey} ` +
       `tokenCount=${tokenCountForCompaction ?? freshPersistedTokens ?? "undefined"} ` +
@@ -743,7 +702,6 @@ export async function runPreflightCompactionIfNeeded(params: {
       `persistedFresh=${entry?.totalTokensFresh === true} ` +
       `transcriptPromptTokens=${transcriptPromptTokens ?? "undefined"} ` +
       `promptTokensEst=${promptTokenEstimate ?? "undefined"} ` +
-      `serverCompactionThreshold=${serverCompactionThresholdTokens ?? "undefined"} ` +
       `activeTranscriptBytes=${activeTranscriptBytes ?? "undefined"} ` +
       `maxActiveTranscriptBytes=${maxActiveTranscriptBytes ?? "undefined"} ` +
       `sizeTrigger=${shouldCompactByTranscriptBytes}`,
@@ -755,7 +713,6 @@ export async function runPreflightCompactionIfNeeded(params: {
     contextWindowTokens,
     reserveTokensFloor,
     softThresholdTokens,
-    thresholdTokens: serverCompactionThresholdTokens,
   });
   const shouldCompact = shouldCompactByTokens || shouldCompactByTranscriptBytes;
   if (!shouldCompact) {
@@ -767,7 +724,6 @@ export async function runPreflightCompactionIfNeeded(params: {
     `preflightCompaction triggered: sessionKey=${params.sessionKey} ` +
       `tokenCount=${tokenCountForCompaction ?? freshPersistedTokens ?? "undefined"} ` +
       `threshold=${threshold} trigger=${compactionTrigger} ` +
-      `serverCompactionThreshold=${serverCompactionThresholdTokens ?? "undefined"} ` +
       `activeTranscriptBytes=${activeTranscriptBytes ?? "undefined"} ` +
       `maxActiveTranscriptBytes=${maxActiveTranscriptBytes ?? "undefined"}`,
   );
