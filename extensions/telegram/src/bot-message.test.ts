@@ -72,6 +72,7 @@ describe("telegram bot message processor", () => {
 
   async function processSampleMessage(
     processMessage: ReturnType<typeof createTelegramMessageProcessor>,
+    lifecycle?: import("./bot-message.js").TelegramMessageProcessorLifecycle,
   ) {
     return await processMessage(
       {
@@ -83,6 +84,10 @@ describe("telegram bot message processor", () => {
       [],
       [],
       {},
+      undefined,
+      undefined,
+      undefined,
+      lifecycle,
     );
   }
 
@@ -136,6 +141,40 @@ describe("telegram bot message processor", () => {
     expect(telegramInboundInfo).toHaveBeenCalledWith(
       "Inbound message telegram:123 -> @openclaw_bot (direct, 11 chars)",
     );
+  });
+
+  it("runs the dispatch-start lifecycle after context creation and before dispatch", async () => {
+    const sendTyping = vi.fn().mockResolvedValue(undefined);
+    const onDispatchStart = vi.fn(async () => undefined);
+    buildTelegramMessageContext.mockResolvedValue(
+      createMessageContext({
+        sendTyping,
+      }),
+    );
+
+    const processMessage = createTelegramMessageProcessor(baseDeps);
+    await expect(processSampleMessage(processMessage, { onDispatchStart })).resolves.toBe(true);
+
+    expect(sendTyping).toHaveBeenCalledTimes(1);
+    expect(onDispatchStart).toHaveBeenCalledTimes(1);
+    expect(dispatchTelegramMessage).toHaveBeenCalledTimes(1);
+    expect(sendTyping.mock.invocationCallOrder[0]).toBeLessThan(
+      onDispatchStart.mock.invocationCallOrder[0],
+    );
+    expect(onDispatchStart.mock.invocationCallOrder[0]).toBeLessThan(
+      dispatchTelegramMessage.mock.invocationCallOrder[0],
+    );
+  });
+
+  it("does not run the dispatch-start lifecycle when no context is produced", async () => {
+    const onDispatchStart = vi.fn(async () => undefined);
+    buildTelegramMessageContext.mockResolvedValue(null);
+
+    const processMessage = createTelegramMessageProcessor(baseDeps);
+    await expect(processSampleMessage(processMessage, { onDispatchStart })).resolves.toBe(false);
+
+    expect(onDispatchStart).not.toHaveBeenCalled();
+    expect(dispatchTelegramMessage).not.toHaveBeenCalled();
   });
 
   it("does not send early typing cues for room events", async () => {

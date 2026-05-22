@@ -1117,6 +1117,7 @@ export const registerTelegramHandlers = ({
     options?: TelegramMessageContextOptions;
     dispatchDedupeKeys?: string[];
   }) => {
+    let dispatchDedupeCommitted = false;
     try {
       const replyChainNodes = buildReplyChainForMessage(params.msg);
       const { replyMedia, replyChain } = await resolveReplyMediaForChain(
@@ -1136,14 +1137,20 @@ export const registerTelegramHandlers = ({
         replyMedia,
         replyChain,
         promptContext,
+        {
+          onDispatchStart: async () => {
+            await commitDispatchDedupeKeys(params.dispatchDedupeKeys ?? []);
+            dispatchDedupeCommitted = true;
+          },
+        },
       );
-      if (dispatched) {
-        await commitDispatchDedupeKeys(params.dispatchDedupeKeys ?? []);
-      } else {
+      if (!dispatched && !dispatchDedupeCommitted) {
         releaseDispatchDedupeKeys(params.dispatchDedupeKeys ?? []);
       }
     } catch (err) {
-      releaseDispatchDedupeKeys(params.dispatchDedupeKeys ?? [], err);
+      if (!dispatchDedupeCommitted) {
+        releaseDispatchDedupeKeys(params.dispatchDedupeKeys ?? [], err);
+      }
       throw err;
     }
   };
