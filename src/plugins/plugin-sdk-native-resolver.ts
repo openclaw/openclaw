@@ -48,7 +48,9 @@ function listPluginSdkNativeAliases(
       modulePath,
       options.argv1 ?? process.argv[1],
       options.moduleUrl,
-      options.pluginSdkResolution,
+      // Native require hooks must point at JavaScript artifacts, even when the
+      // plugin loader itself is configured to prefer source imports.
+      "dist",
     ),
   )
     .filter(([specifier]) => isPluginSdkAliasSpecifier(specifier))

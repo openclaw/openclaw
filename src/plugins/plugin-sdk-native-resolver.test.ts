@@ -51,6 +51,28 @@ function writeFakeOpenClawPackage(root: string): { distRoot: string; loaderModul
 }
 
 describe("installOpenClawPluginSdkNativeResolver", () => {
+  it("keeps native aliases on JS dist artifacts when source files exist", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-sdk-native-source-resolver-"));
+    const { loaderModulePath } = writeFakeOpenClawPackage(root);
+    const sourceDiscordPath = path.join(root, "src", "plugin-sdk", "discord.ts");
+    fs.mkdirSync(path.dirname(sourceDiscordPath), { recursive: true });
+    fs.writeFileSync(sourceDiscordPath, "export const sourceOnly = true;\n", "utf8");
+
+    const installedAliases = installOpenClawPluginSdkNativeResolver({
+      modulePath: loaderModulePath,
+      pluginSdkResolution: "src",
+    });
+
+    expect(installedAliases).toContain("openclaw/plugin-sdk/discord");
+    const externalPluginEntry = path.join(root, "external-plugin", "dist", "runtime-api.js");
+    fs.mkdirSync(path.dirname(externalPluginEntry), { recursive: true });
+    fs.writeFileSync(externalPluginEntry, "export default {};\n", "utf8");
+    const requireFromPlugin = createRequire(externalPluginEntry);
+    expect(fs.realpathSync(requireFromPlugin.resolve("openclaw/plugin-sdk/discord"))).toBe(
+      fs.realpathSync(path.join(root, "dist", "plugin-sdk", "discord.js")),
+    );
+  });
+
   it("lets built external plugins resolve OpenClaw SDK subpaths with createRequire", () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-sdk-native-resolver-"));
     const { distRoot, loaderModulePath } = writeFakeOpenClawPackage(root);
