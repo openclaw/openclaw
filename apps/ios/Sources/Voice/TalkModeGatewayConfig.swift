@@ -56,7 +56,7 @@ enum TalkModeRealtimeVoiceSelection {
     }
 
     static func label(for voice: String) -> String {
-        voice.prefix(1).uppercased() + voice.dropFirst()
+        voice.prefix(1).uppercased() + String(voice.dropFirst())
     }
 }
 
