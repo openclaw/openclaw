@@ -73,7 +73,7 @@ configured`.
       path: "models.providers.anthropic.apiKey",
       pathSegments: ["models", "providers", "anthropic", "apiKey"],
       providerId: "anthropic",
-      ref: { source: "exec", provider: "onepassword_anthropic" },
+      ref: { source: "exec", provider: "onepassword_anthropic", id: "credential" },
     },
   ],
 }
