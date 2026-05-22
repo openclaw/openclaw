@@ -26,6 +26,14 @@ const CHECK_IDS = {
   policyDeniedModelProvider: "policy/models-denied-provider",
   policyUnapprovedModelProvider: "policy/models-unapproved-provider",
   policyPrivateNetworkAccess: "policy/network-private-access-enabled",
+  policyGatewayNonLoopbackBind: "policy/gateway-non-loopback-bind",
+  policyGatewayAuthDisabled: "policy/gateway-auth-disabled",
+  policyGatewayRateLimitMissing: "policy/gateway-rate-limit-missing",
+  policyGatewayControlUiInsecure: "policy/gateway-control-ui-insecure",
+  policyGatewayTailscaleFunnel: "policy/gateway-tailscale-funnel",
+  policyGatewayRemoteEnabled: "policy/gateway-remote-enabled",
+  policyGatewayHttpEndpointEnabled: "policy/gateway-http-endpoint-enabled",
+  policyGatewayHttpUrlFetchUnrestricted: "policy/gateway-http-url-fetch-unrestricted",
   policySecretsUnmanagedProvider: "policy/secrets-unmanaged-provider",
   policySecretsDeniedProviderSource: "policy/secrets-denied-provider-source",
   policySecretsInsecureProvider: "policy/secrets-insecure-provider",
@@ -49,6 +57,14 @@ export const POLICY_CHECK_IDS = [
   CHECK_IDS.policyDeniedModelProvider,
   CHECK_IDS.policyUnapprovedModelProvider,
   CHECK_IDS.policyPrivateNetworkAccess,
+  CHECK_IDS.policyGatewayNonLoopbackBind,
+  CHECK_IDS.policyGatewayAuthDisabled,
+  CHECK_IDS.policyGatewayRateLimitMissing,
+  CHECK_IDS.policyGatewayControlUiInsecure,
+  CHECK_IDS.policyGatewayTailscaleFunnel,
+  CHECK_IDS.policyGatewayRemoteEnabled,
+  CHECK_IDS.policyGatewayHttpEndpointEnabled,
+  CHECK_IDS.policyGatewayHttpUrlFetchUnrestricted,
   CHECK_IDS.policySecretsUnmanagedProvider,
   CHECK_IDS.policySecretsDeniedProviderSource,
   CHECK_IDS.policySecretsInsecureProvider,
@@ -66,6 +82,7 @@ const KNOWN_SENSITIVITY_LEVELS = ["public", "internal", "confidential", "restric
 const SUPPORTED_TOOL_METADATA = ["risk", "sensitivity", "owner"] as const;
 const SUPPORTED_AUTH_PROFILE_METADATA = ["provider", "mode"] as const;
 const SUPPORTED_AUTH_PROFILE_MODES = ["api_key", "aws-sdk", "oauth", "token"] as const;
+const SUPPORTED_GATEWAY_HTTP_ENDPOINTS = ["chatCompletions", "responses"] as const;
 
 let registered = false;
 const policyEvaluationCache = new WeakMap<HealthCheckContext, Promise<PolicyEvaluation>>();
@@ -101,6 +118,14 @@ export function registerPolicyDoctorChecks(host?: PolicyDoctorRegistrationHost):
   registerHealthCheck(policyModelsDeniedProviderCheck);
   registerHealthCheck(policyModelsUnapprovedProviderCheck);
   registerHealthCheck(policyNetworkPrivateAccessCheck);
+  registerHealthCheck(policyGatewayNonLoopbackBindCheck);
+  registerHealthCheck(policyGatewayAuthDisabledCheck);
+  registerHealthCheck(policyGatewayRateLimitMissingCheck);
+  registerHealthCheck(policyGatewayControlUiInsecureCheck);
+  registerHealthCheck(policyGatewayTailscaleFunnelCheck);
+  registerHealthCheck(policyGatewayRemoteEnabledCheck);
+  registerHealthCheck(policyGatewayHttpEndpointEnabledCheck);
+  registerHealthCheck(policyGatewayHttpUrlFetchUnrestrictedCheck);
   registerHealthCheck(policySecretsUnmanagedProviderCheck);
   registerHealthCheck(policySecretsDeniedProviderSourceCheck);
   registerHealthCheck(policySecretsInsecureProviderCheck);
@@ -253,6 +278,89 @@ const policyNetworkPrivateAccessCheck: HealthCheck = {
   },
 };
 
+const policyGatewayNonLoopbackBindCheck: HealthCheck = {
+  id: CHECK_IDS.policyGatewayNonLoopbackBind,
+  kind: "plugin",
+  description: "Gateway bind posture matches policy exposure requirements.",
+  source: "policy",
+  async detect(ctx) {
+    return findingsForCheck(await evaluatePolicy(ctx), CHECK_IDS.policyGatewayNonLoopbackBind);
+  },
+};
+
+const policyGatewayAuthDisabledCheck: HealthCheck = {
+  id: CHECK_IDS.policyGatewayAuthDisabled,
+  kind: "plugin",
+  description: "Gateway authentication remains enabled when required by policy.",
+  source: "policy",
+  async detect(ctx) {
+    return findingsForCheck(await evaluatePolicy(ctx), CHECK_IDS.policyGatewayAuthDisabled);
+  },
+};
+
+const policyGatewayRateLimitMissingCheck: HealthCheck = {
+  id: CHECK_IDS.policyGatewayRateLimitMissing,
+  kind: "plugin",
+  description: "Gateway authentication rate-limit posture is explicit when required by policy.",
+  source: "policy",
+  async detect(ctx) {
+    return findingsForCheck(await evaluatePolicy(ctx), CHECK_IDS.policyGatewayRateLimitMissing);
+  },
+};
+
+const policyGatewayControlUiInsecureCheck: HealthCheck = {
+  id: CHECK_IDS.policyGatewayControlUiInsecure,
+  kind: "plugin",
+  description: "Gateway Control UI insecure exposure toggles remain disabled by policy.",
+  source: "policy",
+  async detect(ctx) {
+    return findingsForCheck(await evaluatePolicy(ctx), CHECK_IDS.policyGatewayControlUiInsecure);
+  },
+};
+
+const policyGatewayTailscaleFunnelCheck: HealthCheck = {
+  id: CHECK_IDS.policyGatewayTailscaleFunnel,
+  kind: "plugin",
+  description: "Gateway Tailscale Funnel exposure matches policy.",
+  source: "policy",
+  async detect(ctx) {
+    return findingsForCheck(await evaluatePolicy(ctx), CHECK_IDS.policyGatewayTailscaleFunnel);
+  },
+};
+
+const policyGatewayRemoteEnabledCheck: HealthCheck = {
+  id: CHECK_IDS.policyGatewayRemoteEnabled,
+  kind: "plugin",
+  description: "Remote gateway mode matches policy.",
+  source: "policy",
+  async detect(ctx) {
+    return findingsForCheck(await evaluatePolicy(ctx), CHECK_IDS.policyGatewayRemoteEnabled);
+  },
+};
+
+const policyGatewayHttpEndpointEnabledCheck: HealthCheck = {
+  id: CHECK_IDS.policyGatewayHttpEndpointEnabled,
+  kind: "plugin",
+  description: "Gateway HTTP API endpoints match policy.",
+  source: "policy",
+  async detect(ctx) {
+    return findingsForCheck(await evaluatePolicy(ctx), CHECK_IDS.policyGatewayHttpEndpointEnabled);
+  },
+};
+
+const policyGatewayHttpUrlFetchUnrestrictedCheck: HealthCheck = {
+  id: CHECK_IDS.policyGatewayHttpUrlFetchUnrestricted,
+  kind: "plugin",
+  description: "Gateway HTTP URL-fetch inputs have allowlists when required by policy.",
+  source: "policy",
+  async detect(ctx) {
+    return findingsForCheck(
+      await evaluatePolicy(ctx),
+      CHECK_IDS.policyGatewayHttpUrlFetchUnrestricted,
+    );
+  },
+};
+
 const policySecretsUnmanagedProviderCheck: HealthCheck = {
   id: CHECK_IDS.policySecretsUnmanagedProvider,
   kind: "plugin",
@@ -360,6 +468,7 @@ async function evaluatePolicyUncached(ctx: HealthCheckContext): Promise<PolicyEv
   const settings = policySettings(ctx);
   const policyPath = policyDisplayName(ctx);
   let evidence: PolicyEvidence = collectPolicyEvidence(ctx.cfg as Record<string, unknown>, {
+    includeGatewayExposure: false,
     includeSecrets: false,
     includeAuthProfiles: false,
   });
@@ -448,15 +557,18 @@ async function evaluatePolicyUncached(ctx: HealthCheckContext): Promise<PolicyEv
     metadataRequirementFindings.length === 0 ? requiredToolMetadata(policy) : new Set<string>();
   const includeSecrets = policyHasSecretRules(policy);
   const includeAuthProfiles = policyHasAuthProfileRules(policy);
+  const includeGatewayExposure = policyHasGatewayRules(policy);
   if (requiredMetadata.size > 0) {
     const toolsFile = await readWorkspaceFile(ctx, "TOOLS.md");
     evidence = await collectPolicyEvidence(ctx.cfg as Record<string, unknown>, {
       toolsRaw: toolsFile?.raw ?? "",
+      includeGatewayExposure,
       includeSecrets,
       includeAuthProfiles,
     });
   } else {
     evidence = collectPolicyEvidence(ctx.cfg as Record<string, unknown>, {
+      includeGatewayExposure,
       includeSecrets,
       includeAuthProfiles,
     });
@@ -468,6 +580,7 @@ async function evaluatePolicyUncached(ctx: HealthCheckContext): Promise<PolicyEv
     ...modelProviderFindings(policy, policyFile.ocDocName, evidence),
     ...networkFindings(policy, policyFile.ocDocName, evidence),
     ...secretAuthProvenanceFindings(policy, policyFile.displayName, policyFile.ocDocName, evidence),
+    ...gatewayExposureFindings(policy, policyFile.ocDocName, evidence),
     ...authMetadataRequirementFindings,
     ...metadataRequirementFindings,
   ];
@@ -840,7 +953,114 @@ function policyContainerShapeFindings(
       ),
     ];
   }
+  const gatewayFinding = gatewayPolicyShapeFinding(policy.gateway, {
+    policyDocName,
+    policyPath,
+  });
+  if (gatewayFinding !== undefined) {
+    return [gatewayFinding];
+  }
   return [];
+}
+
+function gatewayPolicyShapeFinding(
+  value: unknown,
+  params: {
+    readonly policyDocName: string;
+    readonly policyPath: string;
+  },
+): HealthFinding | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (!isRecord(value)) {
+    return policyShapeFinding(
+      params.policyPath,
+      `oc://${params.policyDocName}/gateway`,
+      `${params.policyPath} gateway must be an object.`,
+      `Fix ${params.policyPath} so gateway is an object.`,
+    );
+  }
+
+  for (const section of ["exposure", "auth", "controlUi", "remote", "http"] as const) {
+    if (value[section] !== undefined && !isRecord(value[section])) {
+      return policyShapeFinding(
+        params.policyPath,
+        `oc://${params.policyDocName}/gateway/${section}`,
+        `${params.policyPath} gateway.${section} must be an object.`,
+        `Fix ${params.policyPath} so gateway.${section} is an object.`,
+      );
+    }
+  }
+
+  const exposure = isRecord(value.exposure) ? value.exposure : {};
+  const auth = isRecord(value.auth) ? value.auth : {};
+  const controlUi = isRecord(value.controlUi) ? value.controlUi : {};
+  const remote = isRecord(value.remote) ? value.remote : {};
+  const http = isRecord(value.http) ? value.http : {};
+  const booleanRules = [
+    [
+      "gateway/exposure/allowNonLoopbackBind",
+      "gateway.exposure.allowNonLoopbackBind",
+      exposure.allowNonLoopbackBind,
+    ],
+    [
+      "gateway/exposure/allowTailscaleFunnel",
+      "gateway.exposure.allowTailscaleFunnel",
+      exposure.allowTailscaleFunnel,
+    ],
+    ["gateway/auth/requireAuth", "gateway.auth.requireAuth", auth.requireAuth],
+    [
+      "gateway/auth/requireExplicitRateLimit",
+      "gateway.auth.requireExplicitRateLimit",
+      auth.requireExplicitRateLimit,
+    ],
+    ["gateway/controlUi/allowInsecure", "gateway.controlUi.allowInsecure", controlUi.allowInsecure],
+    ["gateway/remote/allow", "gateway.remote.allow", remote.allow],
+    [
+      "gateway/http/requireUrlAllowlists",
+      "gateway.http.requireUrlAllowlists",
+      http.requireUrlAllowlists,
+    ],
+  ] as const;
+  for (const [target, property, ruleValue] of booleanRules) {
+    if (ruleValue !== undefined && typeof ruleValue !== "boolean") {
+      return policyShapeFinding(
+        params.policyPath,
+        `oc://${params.policyDocName}/${target}`,
+        `${params.policyPath} ${property} must be a boolean.`,
+        `Fix ${params.policyPath} so ${property} is true or false.`,
+      );
+    }
+  }
+
+  const denyEndpoints = http.denyEndpoints;
+  if (denyEndpoints !== undefined && !Array.isArray(denyEndpoints)) {
+    return policyShapeFinding(
+      params.policyPath,
+      `oc://${params.policyDocName}/gateway/http/denyEndpoints`,
+      `${params.policyPath} gateway.http.denyEndpoints must be an array.`,
+      'Use an array of endpoint ids such as ["responses"] or remove gateway.http.denyEndpoints.',
+    );
+  }
+  if (Array.isArray(denyEndpoints)) {
+    const invalidIndex = denyEndpoints.findIndex(
+      (entry) =>
+        typeof entry !== "string" ||
+        !SUPPORTED_GATEWAY_HTTP_ENDPOINTS.includes(
+          entry.trim() as (typeof SUPPORTED_GATEWAY_HTTP_ENDPOINTS)[number],
+        ),
+    );
+    if (invalidIndex >= 0) {
+      return policyShapeFinding(
+        params.policyPath,
+        `oc://${params.policyDocName}/gateway/http/denyEndpoints/#${invalidIndex}`,
+        `${params.policyPath} gateway.http.denyEndpoints[${invalidIndex}] must be a supported endpoint id.`,
+        `Use supported endpoint ids: ${SUPPORTED_GATEWAY_HTTP_ENDPOINTS.join(", ")}.`,
+      );
+    }
+  }
+  return undefined;
 }
 
 function policyStringArrayShapeFinding(
@@ -1162,6 +1382,239 @@ function networkFindings(
     });
 }
 
+function gatewayExposureFindings(
+  policy: unknown,
+  policyDocName: string,
+  evidence: PolicyEvidence,
+): readonly HealthFinding[] {
+  return [
+    ...gatewayNonLoopbackBindFindings(policy, policyDocName, evidence),
+    ...gatewayAuthFindings(policy, policyDocName, evidence),
+    ...gatewayControlUiFindings(policy, policyDocName, evidence),
+    ...gatewayTailscaleFindings(policy, policyDocName, evidence),
+    ...gatewayRemoteFindings(policy, policyDocName, evidence),
+    ...gatewayHttpEndpointFindings(policy, policyDocName, evidence),
+    ...gatewayHttpUrlFetchFindings(policy, policyDocName, evidence),
+  ];
+}
+
+function gatewayNonLoopbackBindFindings(
+  policy: unknown,
+  policyDocName: string,
+  evidence: PolicyEvidence,
+): readonly HealthFinding[] {
+  if (readPolicyBoolean(policy, ["gateway", "exposure", "allowNonLoopbackBind"]) !== false) {
+    return [];
+  }
+  return (evidence.gatewayExposure ?? [])
+    .filter((entry) => entry.kind === "bind" && entry.nonLoopback === true)
+    .map((entry): HealthFinding => {
+      return {
+        checkId: CHECK_IDS.policyGatewayNonLoopbackBind,
+        severity: "error",
+        message:
+          entry.explicit === false
+            ? "Gateway bind is omitted while the runtime default can permit non-loopback exposure."
+            : `Gateway bind setting '${entry.id}' permits non-loopback exposure.`,
+        source: "policy",
+        path: "openclaw config",
+        ocPath: entry.source,
+        target: entry.source,
+        requirement: `oc://${policyDocName}/gateway/exposure/allowNonLoopbackBind`,
+        fixHint: "Use gateway.bind=loopback or update policy after review.",
+      };
+    });
+}
+
+function gatewayAuthFindings(
+  policy: unknown,
+  policyDocName: string,
+  evidence: PolicyEvidence,
+): readonly HealthFinding[] {
+  const findings: HealthFinding[] = [];
+  if (readPolicyBoolean(policy, ["gateway", "auth", "requireAuth"]) === true) {
+    findings.push(
+      ...(evidence.gatewayExposure ?? [])
+        .filter((entry) => entry.kind === "auth" && entry.value === "none")
+        .map((entry): HealthFinding => {
+          return {
+            checkId: CHECK_IDS.policyGatewayAuthDisabled,
+            severity: "error",
+            message: "Gateway authentication is disabled.",
+            source: "policy",
+            path: "openclaw config",
+            ocPath: entry.source,
+            target: entry.source,
+            requirement: `oc://${policyDocName}/gateway/auth/requireAuth`,
+            fixHint: "Set gateway.auth.mode to token, password, or trusted-proxy.",
+          };
+        }),
+    );
+  }
+  if (readPolicyBoolean(policy, ["gateway", "auth", "requireExplicitRateLimit"]) === true) {
+    findings.push(
+      ...(evidence.gatewayExposure ?? [])
+        .filter((entry) => entry.kind === "authRateLimit" && entry.explicit !== true)
+        .map((entry): HealthFinding => {
+          return {
+            checkId: CHECK_IDS.policyGatewayRateLimitMissing,
+            severity: "error",
+            message: "Gateway authentication rate-limit posture is not explicit.",
+            source: "policy",
+            path: "openclaw config",
+            ocPath: entry.source,
+            target: entry.source,
+            requirement: `oc://${policyDocName}/gateway/auth/requireExplicitRateLimit`,
+            fixHint: "Configure gateway.auth.rateLimit or update policy after review.",
+          };
+        }),
+    );
+  }
+  return findings;
+}
+
+function gatewayControlUiFindings(
+  policy: unknown,
+  policyDocName: string,
+  evidence: PolicyEvidence,
+): readonly HealthFinding[] {
+  if (readPolicyBoolean(policy, ["gateway", "controlUi", "allowInsecure"]) !== false) {
+    return [];
+  }
+  return (evidence.gatewayExposure ?? [])
+    .filter(
+      (entry) =>
+        entry.kind === "controlUi" &&
+        entry.value === true &&
+        (entry.id === "gateway-control-ui-insecure-auth" ||
+          entry.id === "gateway-control-ui-device-auth-disabled" ||
+          entry.id === "gateway-control-ui-host-origin-fallback"),
+    )
+    .map((entry): HealthFinding => {
+      return {
+        checkId: CHECK_IDS.policyGatewayControlUiInsecure,
+        severity: "error",
+        message: `Gateway Control UI insecure toggle '${entry.id}' is enabled.`,
+        source: "policy",
+        path: "openclaw config",
+        ocPath: entry.source,
+        target: entry.source,
+        requirement: `oc://${policyDocName}/gateway/controlUi/allowInsecure`,
+        fixHint: "Disable the insecure Control UI toggle or update policy after review.",
+      };
+    });
+}
+
+function gatewayTailscaleFindings(
+  policy: unknown,
+  policyDocName: string,
+  evidence: PolicyEvidence,
+): readonly HealthFinding[] {
+  if (readPolicyBoolean(policy, ["gateway", "exposure", "allowTailscaleFunnel"]) !== false) {
+    return [];
+  }
+  return (evidence.gatewayExposure ?? [])
+    .filter((entry) => entry.kind === "tailscale" && entry.value === "funnel")
+    .map((entry): HealthFinding => {
+      return {
+        checkId: CHECK_IDS.policyGatewayTailscaleFunnel,
+        severity: "error",
+        message: "Gateway Tailscale Funnel exposure is enabled.",
+        source: "policy",
+        path: "openclaw config",
+        ocPath: entry.source,
+        target: entry.source,
+        requirement: `oc://${policyDocName}/gateway/exposure/allowTailscaleFunnel`,
+        fixHint: "Use tailscale serve/off or update policy after review.",
+      };
+    });
+}
+
+function gatewayRemoteFindings(
+  policy: unknown,
+  policyDocName: string,
+  evidence: PolicyEvidence,
+): readonly HealthFinding[] {
+  if (readPolicyBoolean(policy, ["gateway", "remote", "allow"]) !== false) {
+    return [];
+  }
+  return (evidence.gatewayExposure ?? [])
+    .filter((entry) => entry.kind === "remote")
+    .map((entry): HealthFinding => {
+      return {
+        checkId: CHECK_IDS.policyGatewayRemoteEnabled,
+        severity: "error",
+        message: `Gateway remote posture '${entry.id}' is enabled.`,
+        source: "policy",
+        path: "openclaw config",
+        ocPath: entry.source,
+        target: entry.source,
+        requirement: `oc://${policyDocName}/gateway/remote/allow`,
+        fixHint: "Disable remote gateway mode/config or update policy after review.",
+      };
+    });
+}
+
+function gatewayHttpEndpointFindings(
+  policy: unknown,
+  policyDocName: string,
+  evidence: PolicyEvidence,
+): readonly HealthFinding[] {
+  const denied = new Set(
+    readStringList(policy, ["gateway", "http", "denyEndpoints"]).map((endpoint) =>
+      endpoint.toLowerCase(),
+    ),
+  );
+  if (denied.size === 0) {
+    return [];
+  }
+  return (evidence.gatewayExposure ?? [])
+    .filter(
+      (entry) =>
+        entry.kind === "httpEndpoint" &&
+        entry.endpoint !== undefined &&
+        denied.has(entry.endpoint.toLowerCase()),
+    )
+    .map((entry): HealthFinding => {
+      return {
+        checkId: CHECK_IDS.policyGatewayHttpEndpointEnabled,
+        severity: "error",
+        message: `Gateway HTTP endpoint '${entry.endpoint ?? entry.id}' is denied by policy.`,
+        source: "policy",
+        path: "openclaw config",
+        ocPath: entry.source,
+        target: entry.source,
+        requirement: `oc://${policyDocName}/gateway/http/denyEndpoints`,
+        fixHint: "Disable the HTTP endpoint or update policy after review.",
+      };
+    });
+}
+
+function gatewayHttpUrlFetchFindings(
+  policy: unknown,
+  policyDocName: string,
+  evidence: PolicyEvidence,
+): readonly HealthFinding[] {
+  if (readPolicyBoolean(policy, ["gateway", "http", "requireUrlAllowlists"]) !== true) {
+    return [];
+  }
+  return (evidence.gatewayExposure ?? [])
+    .filter((entry) => entry.kind === "httpUrlFetch" && entry.hasAllowlist !== true)
+    .map((entry): HealthFinding => {
+      return {
+        checkId: CHECK_IDS.policyGatewayHttpUrlFetchUnrestricted,
+        severity: "error",
+        message: `Gateway HTTP URL-fetch input '${entry.id}' has no URL allowlist.`,
+        source: "policy",
+        path: "openclaw config",
+        ocPath: entry.source,
+        target: entry.source,
+        requirement: `oc://${policyDocName}/gateway/http/requireUrlAllowlists`,
+        fixHint: "Add a urlAllowlist for this URL-fetch input or update policy after review.",
+      };
+    });
+}
+
 function secretAuthProvenanceFindings(
   policy: unknown,
   policyPath: string,
@@ -1205,6 +1658,25 @@ function policyHasAuthProfileRules(policy: unknown): boolean {
     isRecord(policy.auth.profiles) &&
     (policy.auth.profiles.requireMetadata !== undefined ||
       policy.auth.profiles.allowModes !== undefined)
+  );
+}
+
+function policyHasGatewayRules(policy: unknown): boolean {
+  if (!isRecord(policy) || !isRecord(policy.gateway)) {
+    return false;
+  }
+  const gateway = policy.gateway;
+  return (
+    (isRecord(gateway.exposure) &&
+      (gateway.exposure.allowNonLoopbackBind !== undefined ||
+        gateway.exposure.allowTailscaleFunnel !== undefined)) ||
+    (isRecord(gateway.auth) &&
+      (gateway.auth.requireAuth !== undefined ||
+        gateway.auth.requireExplicitRateLimit !== undefined)) ||
+    (isRecord(gateway.controlUi) && gateway.controlUi.allowInsecure !== undefined) ||
+    (isRecord(gateway.remote) && gateway.remote.allow !== undefined) ||
+    (isRecord(gateway.http) &&
+      (gateway.http.denyEndpoints !== undefined || gateway.http.requireUrlAllowlists !== undefined))
   );
 }
 
