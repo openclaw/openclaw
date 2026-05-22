@@ -20,6 +20,37 @@ For the full cron reference, see [Scheduled tasks](/automation/cron-jobs). For A
 
 ## Install from source
 
+### One-command upgrade (recommended)
+
+```powershell
+# Windows — clone/pull, build, ui:build, npm link, refresh gateway.cmd
+irm https://raw.githubusercontent.com/lxf-lxf/openclaw/main/scripts/fork-upgrade.ps1 | iex
+
+# With gateway restart
+irm https://raw.githubusercontent.com/lxf-lxf/openclaw/main/scripts/fork-upgrade.ps1 | iex -RestartGateway
+```
+
+```bash
+# macOS / Linux
+curl -fsSL https://raw.githubusercontent.com/lxf-lxf/openclaw/main/scripts/fork-upgrade.sh | bash
+
+# Custom directory + restart gateway
+curl -fsSL https://raw.githubusercontent.com/lxf-lxf/openclaw/main/scripts/fork-upgrade.sh | bash -s -- \
+  --install-dir ~/Projects/openclaw --restart-gateway
+```
+
+From an existing checkout:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts/fork-upgrade.ps1 -RestartGateway
+```
+
+```bash
+./scripts/fork-upgrade.sh --restart-gateway
+```
+
+### Manual steps
+
 ```bash
 git clone https://github.com/lxf-lxf/openclaw.git
 cd openclaw
