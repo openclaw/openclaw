@@ -26,7 +26,7 @@ import {
   type LoadInstalledPluginIndexParams,
   type RefreshInstalledPluginIndexParams,
 } from "./installed-plugin-index.js";
-import type { PluginRegistrySnapshotSource } from "./plugin-metadata-snapshot.types.js";
+import type { PluginRegistrySnapshotSource } from "./plugin-registry-snapshot.types.js";
 
 export type PluginRegistrySnapshot = InstalledPluginIndex;
 export type PluginRegistryRecord = InstalledPluginIndexRecord;
