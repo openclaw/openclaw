@@ -1005,10 +1005,10 @@ describe("applyMediaUnderstanding", () => {
     const [command, args] = getRunExecCall(1);
     expect(command).toBe(path.join(binDir, "agy"));
     expect(args).toEqual([
-      "--print",
-      expect.stringContaining(realImagePath),
       "--add-dir",
       path.dirname(realImagePath),
+      "--print",
+      expect.stringContaining(realImagePath),
     ]);
   });
 

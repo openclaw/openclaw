@@ -541,10 +541,10 @@ async function resolveAntigravityCliEntry(
     type: "cli",
     command,
     args: [
-      "--print",
-      "{{Prompt}}\n\nInspect {{MediaPath}} and reply with only the requested media description.",
       "--add-dir",
       "{{MediaDir}}",
+      "--print",
+      "{{Prompt}}\n\nInspect {{MediaPath}} and reply with only the requested media description.",
     ],
   };
 }
