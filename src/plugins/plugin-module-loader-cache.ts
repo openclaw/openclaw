@@ -277,14 +277,10 @@ function createPluginModuleLoader(params: {
   });
   return ((target: string, ...rest: unknown[]) => {
     pluginModuleLoaderStats.calls += 1;
-    if (shouldForceSourceTransformForPluginSdkAlias({ target, aliasMap: params.aliasMap })) {
-      pluginModuleLoaderStats.sourceTransformForced += 1;
-      recordSourceTransformTarget(target);
-      return (getLoadWithAliasTransform() as (t: string, ...a: unknown[]) => unknown)(
-        target,
-        ...rest,
-      );
-    }
+    const needsPluginSdkAliasTransform = shouldForceSourceTransformForPluginSdkAlias({
+      target,
+      aliasMap: params.aliasMap,
+    });
     const native = tryNativeRequireJavaScriptModule(target, {
       allowWindows: true,
       aliasMap: params.aliasMap,
@@ -294,6 +290,15 @@ function createPluginModuleLoader(params: {
     if (native.ok) {
       pluginModuleLoaderStats.nativeHits += 1;
       return native.moduleExport;
+    }
+    if (needsPluginSdkAliasTransform) {
+      pluginModuleLoaderStats.nativeMisses += 1;
+      pluginModuleLoaderStats.sourceTransformFallbacks += 1;
+      recordSourceTransformTarget(target);
+      return (getLoadWithAliasTransform() as (t: string, ...a: unknown[]) => unknown)(
+        target,
+        ...rest,
+      );
     }
     pluginModuleLoaderStats.nativeMisses += 1;
     pluginModuleLoaderStats.sourceTransformFallbacks += 1;
