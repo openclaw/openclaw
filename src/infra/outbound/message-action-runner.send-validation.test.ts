@@ -239,16 +239,6 @@ describe("runMessageAction send validation", () => {
       },
     },
     {
-      name: "string-encoded poll params",
-      actionParams: {
-        channel: "workspace",
-        target: "#C12345678",
-        message: "hi",
-        pollDurationSeconds: "60",
-        pollPublic: "true",
-      },
-    },
-    {
       name: "snake_case poll params",
       actionParams: {
         channel: "workspace",
@@ -257,15 +247,6 @@ describe("runMessageAction send validation", () => {
         poll_question: "Ready?",
         poll_option: ["Yes", "No"],
         poll_public: "true",
-      },
-    },
-    {
-      name: "negative poll duration params",
-      actionParams: {
-        channel: "workspace",
-        target: "#C12345678",
-        message: "hi",
-        pollDurationSeconds: -5,
       },
     },
   ])("rejects send actions that include $name", async ({ actionParams }) => {
@@ -277,4 +258,41 @@ describe("runMessageAction send validation", () => {
       }),
     ).rejects.toThrow(/use action "poll" instead of "send"/i);
   });
+
+  // Per #52757 — GPT-5.4/5.5 default-filled poll-adjacent params (without a
+  // pollQuestion or pollOption anchor) are no longer treated as poll intent
+  // and must not block plain message.send. Previously these cases threw
+  // 'use action "poll" instead of "send"', which broke real send calls when
+  // GPT-5.4/5.5 emitted default values for optional poll fields.
+  it.each([
+    {
+      name: "string-encoded poll-adjacent defaults",
+      actionParams: {
+        channel: "workspace",
+        target: "#C12345678",
+        message: "hi",
+        pollDurationSeconds: "60",
+        pollPublic: "true",
+      },
+    },
+    {
+      name: "negative poll duration without question or options",
+      actionParams: {
+        channel: "workspace",
+        target: "#C12345678",
+        message: "hi",
+        pollDurationSeconds: -5,
+      },
+    },
+  ])(
+    "allows send when only $name are present (no pollQuestion/pollOption anchor)",
+    async ({ actionParams }) => {
+      const result = await runDrySend({
+        cfg: workspaceConfig,
+        actionParams,
+        toolContext: { currentChannelId: "C12345678" },
+      });
+      expect(result).toMatchObject({ kind: "send", channel: "workspace" });
+    },
+  );
 });

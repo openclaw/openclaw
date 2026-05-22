@@ -13,11 +13,21 @@ describe("poll params", () => {
   });
 
   it.each([{ key: "pollMulti" }, { key: "pollAnonymous" }, { key: "pollPublic" }])(
-    "treats $key=true as poll creation intent",
+    "treats $key=true as poll creation intent only when question or options are present",
     ({ key }) => {
+      // Boolean poll-config params alone are no longer sufficient — GPT-5.4/5.5
+      // sends these with default values on every call (#52757). A pollQuestion
+      // or pollOption is required as the semantic anchor for poll intent.
       expect(
         hasPollCreationParams({
           [key]: true,
+        }),
+      ).toBe(false);
+      // Paired with a real question, the boolean IS poll intent.
+      expect(
+        hasPollCreationParams({
+          [key]: true,
+          pollQuestion: "Ready?",
         }),
       ).toBe(true);
     },
