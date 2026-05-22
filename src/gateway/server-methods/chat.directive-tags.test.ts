@@ -801,6 +801,85 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     });
   });
 
+  it("falls through to the next deferred media payload when the first is unpersistable", async () => {
+    // Regression for #84165 ClawSweeper finding: preserve main's first-successful
+    // append semantics. During an active agent run we now defer media transcript
+    // writes to post-dispatch, but we must still walk all captured payloads in
+    // delivery order and try each one until an append succeeds — otherwise an
+    // earlier unpersistable payload (e.g. a remote-only image URL) silently
+    // suppresses a later valid one from chat history.
+    const transcriptDir = createTranscriptFixture("openclaw-chat-send-agent-defer-fallthrough-");
+    const remoteImageUrl = "https://example.com/remote.png";
+    const validDataImageUrl =
+      "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=";
+    mockState.config = {
+      agents: {
+        defaults: {
+          workspace: transcriptDir,
+        },
+      },
+    };
+    mockState.triggerAgentRunStart = true;
+    mockState.dispatchedReplies = [
+      {
+        kind: "block",
+        payload: {
+          mediaUrl: remoteImageUrl,
+          mediaUrls: [remoteImageUrl],
+        },
+      },
+      {
+        kind: "block",
+        payload: {
+          mediaUrl: validDataImageUrl,
+          mediaUrls: [validDataImageUrl],
+        },
+      },
+    ];
+    const respond = vi.fn();
+    const context = createChatContext();
+
+    await runNonStreamingChatSend({
+      context,
+      respond,
+      idempotencyKey: "idem-agent-defer-fallthrough",
+      expectBroadcast: false,
+      waitFor: "none",
+    });
+
+    await waitForAssertion(() => {
+      const assistantUpdate = findAssistantUpdateWithBlock((block) => block.type === "image_url");
+      const message = assistantUpdate?.message as Record<string, any> | undefined;
+      const content = Array.isArray(message?.content)
+        ? (message.content as Array<Record<string, any>>)
+        : [];
+      expect(message?.role).toBe("assistant");
+      expect(message?.idempotencyKey).toBe("idem-agent-defer-fallthrough:assistant-media");
+      // Exactly one assistant-media append should have landed — the data-URL one.
+      const imageBlocks = content.filter(
+        (block) => (block as { type?: string }).type === "image_url",
+      );
+      expect(imageBlocks).toHaveLength(1);
+      expect((imageBlocks[0] as { image_url?: { url?: string } }).image_url?.url).toBe(
+        validDataImageUrl,
+      );
+    });
+
+    // And the unpersistable remote URL must never appear in the persisted assistant
+    // message — neither as the image_url payload nor anywhere else in the content.
+    const assistantUpdatesWithImages = mockState.emittedTranscriptUpdates.filter(
+      (update) =>
+        typeof update.message === "object" &&
+        update.message !== null &&
+        (update.message as { role?: unknown }).role === "assistant",
+    );
+    const allAssistantContent = assistantUpdatesWithImages.flatMap((update) => {
+      const msg = update.message as Record<string, any>;
+      return Array.isArray(msg.content) ? msg.content : [];
+    });
+    expect(JSON.stringify(allAssistantContent)).not.toContain(remoteImageUrl);
+  });
+
   it("persists auto-TTS final media as audio-only so webchat does not duplicate assistant text", async () => {
     const transcriptDir = createTranscriptFixture("openclaw-chat-send-agent-tts-final-");
     const audioPath = path.join(transcriptDir, "tts.mp3");

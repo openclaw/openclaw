@@ -2724,23 +2724,29 @@ export const chatHandlers: GatewayRequestHandlers = {
       // state and cause premature run termination (the injected stopReason:"stop" is
       // misinterpreted as the run ending). Capture media payloads here and flush them
       // after the run completes in the post-dispatch phase.
-      let deferredMediaPayload: ReplyPayload | undefined;
+      //
+      // We collect every media-bearing payload (not just the first) so the post-dispatch
+      // flush can preserve current main's first-successful append semantics: if the
+      // earliest payload turns out to be unpersistable (remote-only media, oversized,
+      // etc.), the next payload still gets a chance to land in transcript history.
+      // `appendedWebchatAgentMedia` continues to gate the latch to a single append.
+      const deferredMediaPayloads: ReplyPayload[] = [];
       const appendWebchatAgentMediaTranscriptIfNeeded = async (payload: ReplyPayload) => {
         if (!agentRunStarted || appendedWebchatAgentMedia || !isMediaBearingPayload(payload)) {
           return;
         }
         // Defer the transcript append until after the agent run ends to avoid
         // the gateway-injected message interfering with the active run lifecycle.
-        // Only capture the first media payload to preserve single-append semantics.
-        if (!deferredMediaPayload) {
-          deferredMediaPayload = payload;
-        }
+        // Collect every media payload in delivery order; the flush below tries
+        // them sequentially and stops at the first successful append.
+        deferredMediaPayloads.push(payload);
       };
-      const flushDeferredWebchatAgentMediaTranscript = async () => {
-        const payload = deferredMediaPayload;
-        if (!payload || appendedWebchatAgentMedia) {
-          return;
-        }
+      // Attempt a single deferred media payload as the gateway-injected assistant
+      // transcript entry. Returns true if `appendAssistantTranscriptMessage` succeeded
+      // (in which case the caller-side latch `appendedWebchatAgentMedia` is also flipped),
+      // false otherwise. Mirrors the persist + content-build steps that lived in the
+      // single-payload flush prior to the array refactor.
+      const tryAppendDeferredMediaPayload = async (payload: ReplyPayload): Promise<boolean> => {
         const ttsSupplementMarker = buildTtsSupplementTranscriptMarker(payload);
         const [transcriptPayload] = await normalizeWebchatReplyMediaPathsForDisplay({
           cfg,
@@ -2750,7 +2756,7 @@ export const chatHandlers: GatewayRequestHandlers = {
           payloads: [stripVisibleTextFromTtsSupplement(payload)],
         });
         if (!transcriptPayload) {
-          return;
+          return false;
         }
         const { storePath: latestStorePath, entry: latestEntry } = loadSessionEntry(sessionKey);
         const sessionId = latestEntry?.sessionId ?? backingSessionId ?? clientRunId;
@@ -2790,14 +2796,14 @@ export const chatHandlers: GatewayRequestHandlers = {
           ? persistedAssistantContent
           : undefined;
         if (!persistedContentForAppend?.length) {
-          return;
+          return false;
         }
         const transcriptReply =
           mediaMessage?.transcriptText ??
           extractAssistantDisplayTextFromContent(assistantContent) ??
           buildTranscriptReplyText([transcriptPayload]);
         if (!transcriptReply && !persistedAssistantContent?.length && !assistantContent?.length) {
-          return;
+          return false;
         }
         const appended = await appendAssistantTranscriptMessage({
           message: transcriptReply,
@@ -2819,11 +2825,29 @@ export const chatHandlers: GatewayRequestHandlers = {
             });
           }
           appendedWebchatAgentMedia = true;
-          return;
+          return true;
         }
         context.logGateway.warn(
           `webchat transcript append failed for media reply: ${appended.error ?? "unknown error"}`,
         );
+        return false;
+      };
+      const flushDeferredWebchatAgentMediaTranscript = async () => {
+        if (appendedWebchatAgentMedia || deferredMediaPayloads.length === 0) {
+          return;
+        }
+        // Preserve main's first-successful append semantics: walk the captured
+        // payloads in delivery order and stop as soon as one append lands, so an
+        // earlier unpersistable payload (remote-only image, oversized, stale, ...)
+        // does not silently suppress a later valid one from chat history.
+        for (const payload of deferredMediaPayloads) {
+          if (appendedWebchatAgentMedia) {
+            return;
+          }
+          if (await tryAppendDeferredMediaPayload(payload)) {
+            return;
+          }
+        }
       };
       const dispatcher = createReplyDispatcher({
         ...replyPipeline,
