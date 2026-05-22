@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  fetchConfiguredLocalOriginWithSsrFGuard,
   fetchWithSsrFGuard,
   GUARDED_FETCH_MODE,
   retainSafeHeadersForCrossOriginRedirectHeaders,
@@ -1305,15 +1306,12 @@ describe("fetchWithSsrFGuard hardening", () => {
       return okResponse();
     });
 
-    const result = await fetchWithSsrFGuard({
+    const result = await fetchConfiguredLocalOriginWithSsrFGuard({
       url: "http://127.0.0.1:11434/api/embed",
       fetchImpl,
       lookupFn: createLoopbackLookup(),
       policy: { allowedOrigins: ["http://127.0.0.1:11434"] },
-      managedProxyBypass: {
-        kind: "configured-local-origin",
-        baseUrl: "http://127.0.0.1:11434",
-      },
+      configuredLocalOriginBaseUrl: "http://127.0.0.1:11434",
     });
 
     expect(fetchImpl).toHaveBeenCalledTimes(1);
@@ -1338,15 +1336,12 @@ describe("fetchWithSsrFGuard hardening", () => {
       return okResponse();
     });
 
-    const result = await fetchWithSsrFGuard({
+    const result = await fetchConfiguredLocalOriginWithSsrFGuard({
       url: "https://api.example.com/v1/embeddings",
       fetchImpl,
       lookupFn: createPublicLookup(),
       policy: { allowedOrigins: ["https://api.example.com"] },
-      managedProxyBypass: {
-        kind: "configured-local-origin",
-        baseUrl: "https://api.example.com",
-      },
+      configuredLocalOriginBaseUrl: "https://api.example.com",
     });
 
     expect(fetchImpl).toHaveBeenCalledTimes(1);
@@ -1371,15 +1366,12 @@ describe("fetchWithSsrFGuard hardening", () => {
       return okResponse();
     });
 
-    const result = await fetchWithSsrFGuard({
+    const result = await fetchConfiguredLocalOriginWithSsrFGuard({
       url: "https://api.example.com/v1/embeddings",
       fetchImpl,
       lookupFn: createLoopbackLookup(),
       policy: { allowedOrigins: ["https://api.example.com"] },
-      managedProxyBypass: {
-        kind: "configured-local-origin",
-        baseUrl: "https://api.example.com",
-      },
+      configuredLocalOriginBaseUrl: "https://api.example.com",
     });
 
     expect(fetchImpl).toHaveBeenCalledTimes(1);
@@ -1401,15 +1393,12 @@ describe("fetchWithSsrFGuard hardening", () => {
     };
     const fetchImpl = vi.fn(async () => okResponse());
 
-    const result = await fetchWithSsrFGuard({
+    const result = await fetchConfiguredLocalOriginWithSsrFGuard({
       url: "http://127.0.0.1:11434/api/embed",
       fetchImpl,
       lookupFn: createLoopbackLookup(),
       policy: { allowedOrigins: ["http://127.0.0.1:11434"] },
-      managedProxyBypass: {
-        kind: "configured-local-origin",
-        baseUrl: "http://127.0.0.1:11434",
-      },
+      configuredLocalOriginBaseUrl: "http://127.0.0.1:11434",
     });
 
     expect(fetchImpl).toHaveBeenCalledTimes(1);
@@ -1431,15 +1420,12 @@ describe("fetchWithSsrFGuard hardening", () => {
     const fetchImpl = vi.fn(async () => okResponse());
 
     await expect(
-      fetchWithSsrFGuard({
+      fetchConfiguredLocalOriginWithSsrFGuard({
         url: "http://127.0.0.1:11434/api/embed",
         fetchImpl,
         lookupFn: createLoopbackLookup(),
         policy: { allowedOrigins: ["http://127.0.0.1:11434"] },
-        managedProxyBypass: {
-          kind: "configured-local-origin",
-          baseUrl: "http://127.0.0.1:11434",
-        },
+        configuredLocalOriginBaseUrl: "http://127.0.0.1:11434",
       }),
     ).rejects.toThrow("blocked by proxy.loopbackMode");
     expect(fetchImpl).not.toHaveBeenCalled();
@@ -1459,15 +1445,12 @@ describe("fetchWithSsrFGuard hardening", () => {
     const fetchImpl = vi.fn(async () => okResponse());
 
     await expect(
-      fetchWithSsrFGuard({
+      fetchConfiguredLocalOriginWithSsrFGuard({
         url: "http://[::1]:11434/api/embed",
         fetchImpl,
         lookupFn: createIpv6LoopbackLookup(),
         policy: { allowedOrigins: ["http://[::1]:11434"] },
-        managedProxyBypass: {
-          kind: "configured-local-origin",
-          baseUrl: "http://[::1]:11434",
-        },
+        configuredLocalOriginBaseUrl: "http://[::1]:11434",
       }),
     ).rejects.toThrow("blocked by proxy.loopbackMode");
     expect(fetchImpl).not.toHaveBeenCalled();

@@ -1,20 +1,25 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/provider-auth";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
-const { fetchWithSsrFGuardMock } = vi.hoisted(() => ({
-  fetchWithSsrFGuardMock: vi.fn(async ({ init, url }: { init?: RequestInit; url: string }) => ({
-    response: await fetch(url, init),
-    release: async () => {},
-  })),
+const { fetchConfiguredLocalOriginWithSsrFGuardMock } = vi.hoisted(() => ({
+  fetchConfiguredLocalOriginWithSsrFGuardMock: vi.fn(
+    async ({ init, url }: { init?: RequestInit; url: string }) => ({
+      response: await fetch(url, init),
+      release: async () => {},
+    }),
+  ),
 }));
 
 vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
-  fetchWithSsrFGuard: fetchWithSsrFGuardMock,
   formatErrorMessage: (error: unknown) => (error instanceof Error ? error.message : String(error)),
   ssrfPolicyFromHttpBaseUrlAllowedOrigin: (baseUrl: string) => {
     const parsed = new URL(baseUrl);
     return { allowedOrigins: [parsed.origin] };
   },
+}));
+
+vi.mock("openclaw/plugin-sdk/ssrf-runtime-internal", () => ({
+  fetchConfiguredLocalOriginWithSsrFGuard: fetchConfiguredLocalOriginWithSsrFGuardMock,
 }));
 
 let createOllamaEmbeddingProvider: typeof import("./embedding-provider.js").createOllamaEmbeddingProvider;
@@ -26,7 +31,7 @@ beforeAll(async () => {
 });
 
 beforeEach(() => {
-  fetchWithSsrFGuardMock.mockClear();
+  fetchConfiguredLocalOriginWithSsrFGuardMock.mockClear();
 });
 
 afterEach(() => {
@@ -68,7 +73,7 @@ function readFirstEmbeddingInput(fetchMock: ReturnType<typeof mockEmbeddingFetch
 }
 
 function firstGuardedFetchCall(): Record<string, unknown> {
-  const call = fetchWithSsrFGuardMock.mock.calls[0]?.[0];
+  const call = fetchConfiguredLocalOriginWithSsrFGuardMock.mock.calls[0]?.[0];
   if (!call || typeof call !== "object") {
     throw new Error("expected guarded fetch call");
   }
@@ -134,10 +139,7 @@ describe("ollama embedding provider", () => {
     expect(firstGuardedFetchCall()).toMatchObject({
       url: "http://127.0.0.1:11434/api/embed",
       policy: { allowedOrigins: ["http://127.0.0.1:11434"] },
-      managedProxyBypass: {
-        kind: "configured-local-origin",
-        baseUrl: "http://127.0.0.1:11434",
-      },
+      configuredLocalOriginBaseUrl: "http://127.0.0.1:11434",
     });
   });
 
