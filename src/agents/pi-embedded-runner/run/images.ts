@@ -434,6 +434,25 @@ export async function loadImageFromRef(
   },
 ): Promise<ImageContent | null> {
   try {
+    // media-uri refs carry a media://inbound/<id> claim-check URI.
+    // loadWebMedia already resolves these via its internal resolveMediaStoreUriToPath()
+    // handler, so no path manipulation is needed here. Bypassing the sandbox-bridge
+    // and workspace-resolve blocks is intentional: neither understands the media://
+    // scheme, and the !path.isAbsolute() branch would mangle the URI into a garbage
+    // path (e.g. /workspace/media://inbound/uuid.jpg), silently dropping the image.
+    if (ref.type === "media-uri") {
+      const media = await loadWebMedia(ref.resolved, options?.maxBytes);
+      if (media.kind !== "image") {
+        log.debug(`Native image: not an image file: ${ref.resolved} (got ${media.kind})`);
+        return null;
+      }
+      return {
+        type: "image",
+        data: media.buffer.toString("base64"),
+        mimeType: media.contentType ?? "image/jpeg",
+      };
+    }
+
     let targetPath = ref.resolved;
 
     // Resolve paths relative to sandbox or workspace as needed

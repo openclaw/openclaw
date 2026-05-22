@@ -350,6 +350,52 @@ describe("modelSupportsImages", () => {
 });
 
 describe("loadImageFromRef", () => {
+  it("loads an image from the media store via a media-uri ref", async () => {
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-media-uri-load-"));
+    const inboundDir = path.join(stateDir, "media", "inbound");
+    await fs.mkdir(inboundDir, { recursive: true });
+    const id = "1c77ce17-20b9-4546-be64-6e36a9adcb2c.png";
+    const pngB64 =
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/woAAn8B9FD5fHAAAAAASUVORK5CYII=";
+    await fs.writeFile(path.join(inboundDir, id), Buffer.from(pngB64, "base64"));
+    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+
+    try {
+      const image = await loadImageFromRef(
+        { raw: `media://inbound/${id}`, type: "media-uri", resolved: `media://inbound/${id}` },
+        "/workspace-irrelevant",
+      );
+
+      expect(image?.type).toBe("image");
+      expect(image?.mimeType).toBe("image/png");
+    } finally {
+      vi.unstubAllEnvs();
+      await fs.rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("returns null when media-uri id does not exist in the store", async () => {
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-media-uri-miss-"));
+    await fs.mkdir(path.join(stateDir, "media", "inbound"), { recursive: true });
+    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+
+    try {
+      const image = await loadImageFromRef(
+        {
+          raw: "media://inbound/missing-00000000-0000-0000-0000-000000000000.png",
+          type: "media-uri",
+          resolved: "media://inbound/missing-00000000-0000-0000-0000-000000000000.png",
+        },
+        "/workspace-irrelevant",
+      );
+
+      expect(image).toBeNull();
+    } finally {
+      vi.unstubAllEnvs();
+      await fs.rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
   it("allows sandbox-validated host paths outside default media roots", async () => {
     const homeDir = os.homedir();
     await fs.mkdir(homeDir, { recursive: true });
