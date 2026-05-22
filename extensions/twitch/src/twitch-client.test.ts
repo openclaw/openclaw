@@ -309,6 +309,17 @@ describe("TwitchClientManager", () => {
       expect((manager as any).messageHandlers.get(key)).toBe(handler2);
     });
 
+    it("cleanup of an earlier registration does not remove a newer registration using the same handler", () => {
+      const handler = vi.fn();
+      const key = manager.getAccountKey(testAccount);
+
+      const cleanup1 = manager.onMessage(testAccount, handler);
+      manager.onMessage(testAccount, handler);
+      cleanup1();
+
+      expect((manager as any).messageHandlers.get(key)).toBe(handler);
+    });
+
     it("cleanup of the current handler removes it", () => {
       const handler = vi.fn();
       const key = manager.getAccountKey(testAccount);

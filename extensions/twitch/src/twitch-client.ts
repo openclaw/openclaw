@@ -14,6 +14,7 @@ const TWITCH_CHAT_AUTH_INTENTS = ["chat"];
 export class TwitchClientManager {
   private clients = new Map<string, ChatClient>();
   private messageHandlers = new Map<string, (message: TwitchChatMessage) => void>();
+  private messageHandlerTokens = new Map<string, symbol>();
 
   constructor(private logger: ChannelLogSink) {}
 
@@ -204,14 +205,15 @@ export class TwitchClientManager {
     handler: (message: TwitchChatMessage) => void,
   ): () => void {
     const key = this.getAccountKey(account);
+    const token = Symbol(key);
     this.messageHandlers.set(key, handler);
+    this.messageHandlerTokens.set(key, token);
     return () => {
-      // Only remove the handler if it is still the one this closure registered.
-      // A later onMessage() for the same account replaces the stored handler;
-      // an unconditional delete here would drop that newer handler and silently
-      // stop dispatching inbound messages (#83888).
-      if (this.messageHandlers.get(key) === handler) {
+      // Only remove the exact registration this cleanup closure owns. A later
+      // onMessage() may reuse the same callback function for the same account.
+      if (this.messageHandlerTokens.get(key) === token) {
         this.messageHandlers.delete(key);
+        this.messageHandlerTokens.delete(key);
       }
     };
   }
@@ -227,6 +229,7 @@ export class TwitchClientManager {
       client.quit();
       this.clients.delete(key);
       this.messageHandlers.delete(key);
+      this.messageHandlerTokens.delete(key);
       this.logger.info(`Disconnected ${key}`);
     }
   }
@@ -238,6 +241,7 @@ export class TwitchClientManager {
     this.clients.forEach((client) => client.quit());
     this.clients.clear();
     this.messageHandlers.clear();
+    this.messageHandlerTokens.clear();
     this.logger.info(" Disconnected all clients");
   }
 
