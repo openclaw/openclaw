@@ -215,6 +215,25 @@ describe("handleModelsCommand", () => {
     expect(authCheckerParams?.discoverExternalCliAuth).toBe(false);
   });
 
+  it("does not block default browse when read-only catalog loading is slow", async () => {
+    vi.useFakeTimers();
+    try {
+      modelCatalogMocks.loadModelCatalog.mockReturnValue(new Promise(() => undefined));
+
+      const resultPromise = handleModelsCommand(buildParams("/models"), true);
+      await vi.advanceTimersByTimeAsync(750);
+      const result = await resultPromise;
+
+      expect(modelCatalogMocks.loadModelCatalog).toHaveBeenCalledTimes(1);
+      expect(modelCatalogMocks.loadModelCatalog.mock.calls[0]?.[0]?.readOnly).toBe(true);
+      expect(result?.shouldContinue).toBe(false);
+      expect(result?.reply?.text).toContain("Providers:");
+      expect(result?.reply?.text).toContain("- anthropic (1)");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("keeps explicit all browse on the full catalog path", async () => {
     await handleModelsCommand(buildParams("/models openai all"), true);
 
@@ -263,6 +282,7 @@ describe("handleModelsCommand", () => {
       true,
     );
 
+    expect(modelCatalogMocks.loadModelCatalog.mock.calls[0]?.[0]?.readOnly).toBe(false);
     expect(result?.reply?.text).toContain("- openai-codex (2)");
     expect(result?.reply?.text).toContain("- vllm (2)");
     expect(result?.reply?.text).not.toContain("- anthropic");
