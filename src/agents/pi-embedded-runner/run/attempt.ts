@@ -3559,14 +3559,18 @@ export async function runEmbeddedAttempt(
               hookPrependSystemContext: hookResult?.prependSystemContext,
             }),
             appendSystemContext: hookResult?.appendSystemContext,
+            prependDynamicSystemContext: hookResult?.prependDynamicSystemContext,
+            appendDynamicSystemContext: hookResult?.appendDynamicSystemContext,
           });
           if (prependedOrAppendedSystemPrompt) {
             const prependSystemLen = hookResult?.prependSystemContext?.trim().length ?? 0;
             const appendSystemLen = hookResult?.appendSystemContext?.trim().length ?? 0;
+            const prependDynamicLen = hookResult?.prependDynamicSystemContext?.trim().length ?? 0;
+            const appendDynamicLen = hookResult?.appendDynamicSystemContext?.trim().length ?? 0;
             applySystemPromptOverrideToSession(activeSession, prependedOrAppendedSystemPrompt);
             systemPromptText = prependedOrAppendedSystemPrompt;
             log.debug(
-              `hooks: applied prependSystemContext/appendSystemContext (${prependSystemLen}+${appendSystemLen} chars)`,
+              `hooks: applied system context (${prependSystemLen}+${appendSystemLen} static, ${prependDynamicLen}+${appendDynamicLen} dynamic chars)`,
             );
           }
         }
@@ -3689,9 +3693,11 @@ export async function runEmbeddedAttempt(
           });
           const runtimeSystemContext = promptSubmission.runtimeSystemContext?.trim();
           if (promptSubmission.runtimeOnly && runtimeSystemContext) {
+            // Runtime context is per-turn volatile — route below the cache
+            // boundary via the dynamic field so the prefix stays byte-stable.
             const runtimeSystemPrompt = composeSystemPromptWithHookContext({
               baseSystemPrompt: systemPromptText,
-              appendSystemContext: runtimeSystemContext,
+              appendDynamicSystemContext: runtimeSystemContext,
             });
             if (runtimeSystemPrompt) {
               applySystemPromptOverrideToSession(activeSession, runtimeSystemPrompt);
@@ -3704,7 +3710,7 @@ export async function runEmbeddedAttempt(
           const runtimeSystemPromptForHook = runtimeContextForHook
             ? composeSystemPromptWithHookContext({
                 baseSystemPrompt: systemPromptText,
-                appendSystemContext: buildRuntimeContextSystemContext(runtimeContextForHook),
+                appendDynamicSystemContext: buildRuntimeContextSystemContext(runtimeContextForHook),
               })
             : undefined;
           if (systemPromptReport) {

@@ -1,4 +1,5 @@
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+import { joinPresentTextSegments } from "../../../shared/text/join-segments.js";
 import { normalizeStructuredPromptSection } from "../../prompt-cache-stability.js";
 import {
   appendSystemPromptAdditionAfterCacheBoundary,
@@ -11,20 +12,26 @@ export const ATTEMPT_CACHE_TTL_CUSTOM_TYPE = "openclaw.cache-ttl";
 /**
  * Compose the runtime system prompt with hook-provided prepend/append context.
  *
- * Hook system context (`prependSystemContext`, `appendSystemContext`) is placed
- * BELOW the cache-boundary marker, in the dynamic-suffix region, so the bytes
- * before the marker stay byte-stable across turns even when hook content varies.
- * This is what lets Anthropic `cache_control` (placed on the stable prefix block
- * by the provider adapter) and OpenAI auto prefix cache hit on turn 2+.
+ * Static hook system context (`prependSystemContext`, `appendSystemContext`)
+ * stays in the cacheable prefix region: prepended above and appended below the
+ * base system prompt, joined as a flat string. Bundled plugins (e.g.
+ * `extensions/diffs`, `extensions/skill-workshop`) pass static const guidance
+ * through these fields so providers (Anthropic `cache_control`, OpenAI auto
+ * prefix cache) can cache it; placing them in the prefix is the documented
+ * contract for these fields.
  *
- * If callers need static guidance to sit in the cache-prefix region (so the
- * cache breakpoint covers it), that guidance must be embedded in
- * `baseSystemPrompt` above the marker — not passed through hook context.
+ * Dynamic hook system context (`prependDynamicSystemContext`,
+ * `appendDynamicSystemContext`) routes through the cache-boundary helper to
+ * land BELOW the marker in the dynamic-suffix region. The bytes before the
+ * marker stay byte-stable across turns even when this content varies, so the
+ * provider prefix cache hits on turn 2+.
  */
 export function composeSystemPromptWithHookContext(params: {
   baseSystemPrompt?: string;
   prependSystemContext?: string;
   appendSystemContext?: string;
+  prependDynamicSystemContext?: string;
+  appendDynamicSystemContext?: string;
 }): string | undefined {
   const prependSystem =
     typeof params.prependSystemContext === "string"
@@ -34,20 +41,41 @@ export function composeSystemPromptWithHookContext(params: {
     typeof params.appendSystemContext === "string"
       ? normalizeStructuredPromptSection(params.appendSystemContext)
       : "";
-  if (!prependSystem && !appendSystem) {
+  const prependDynamic =
+    typeof params.prependDynamicSystemContext === "string"
+      ? normalizeStructuredPromptSection(params.prependDynamicSystemContext)
+      : "";
+  const appendDynamic =
+    typeof params.appendDynamicSystemContext === "string"
+      ? normalizeStructuredPromptSection(params.appendDynamicSystemContext)
+      : "";
+  if (!prependSystem && !appendSystem && !prependDynamic && !appendDynamic) {
     return undefined;
   }
-  let result = ensureSystemPromptCacheBoundary(params.baseSystemPrompt ?? "");
-  if (prependSystem) {
+
+  // Static fields stay in the cacheable prefix region (above the marker).
+  // Pre-V3 join semantics: prepend / base / append concatenated flat.
+  const staticResult =
+    prependSystem || appendSystem
+      ? joinPresentTextSegments([prependSystem, params.baseSystemPrompt, appendSystem], {
+          trim: true,
+        })
+      : params.baseSystemPrompt;
+  let result = staticResult ?? "";
+
+  // Dynamic fields route below the cache-boundary marker, in the
+  // dynamic-suffix region. Synthesize a marker when the upstream prompt does
+  // not already carry one so the helper has somewhere to land the addition.
+  if (prependDynamic) {
     result = prependSystemPromptAdditionAfterCacheBoundary({
-      systemPrompt: result,
-      systemPromptAddition: prependSystem,
+      systemPrompt: ensureSystemPromptCacheBoundary(result),
+      systemPromptAddition: prependDynamic,
     });
   }
-  if (appendSystem) {
+  if (appendDynamic) {
     result = appendSystemPromptAdditionAfterCacheBoundary({
-      systemPrompt: result,
-      systemPromptAddition: appendSystem,
+      systemPrompt: ensureSystemPromptCacheBoundary(result),
+      systemPromptAddition: appendDynamic,
     });
   }
   return result;

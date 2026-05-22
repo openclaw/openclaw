@@ -335,6 +335,14 @@ export function createHookRunner(
       left: acc?.appendSystemContext,
       right: next.appendSystemContext,
     }),
+    prependDynamicSystemContext: concatOptionalTextSegments({
+      left: acc?.prependDynamicSystemContext,
+      right: next.prependDynamicSystemContext,
+    }),
+    appendDynamicSystemContext: concatOptionalTextSegments({
+      left: acc?.appendDynamicSystemContext,
+      right: next.appendDynamicSystemContext,
+    }),
   });
 
   const mergeAgentTurnPrepare = <

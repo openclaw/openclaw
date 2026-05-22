@@ -204,6 +204,14 @@ export async function resolvePromptBuildHookResult(params: {
       promptBuildResult?.appendSystemContext,
       legacyResult?.appendSystemContext,
     ]),
+    prependDynamicSystemContext: joinPresentTextSegments([
+      promptBuildResult?.prependDynamicSystemContext,
+      legacyResult?.prependDynamicSystemContext,
+    ]),
+    appendDynamicSystemContext: joinPresentTextSegments([
+      promptBuildResult?.appendDynamicSystemContext,
+      legacyResult?.appendDynamicSystemContext,
+    ]),
   };
 }
 

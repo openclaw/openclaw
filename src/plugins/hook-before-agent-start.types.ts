@@ -30,15 +30,53 @@ export type PluginHookBeforePromptBuildResult = {
   prependContext?: string;
   appendContext?: string;
   /**
-   * Prepended to the agent system prompt so providers can cache it (e.g. prompt caching).
-   * Use for static plugin guidance instead of prependContext to avoid per-turn token cost.
+   * Prepended to the agent system prompt in the cacheable prefix region so
+   * providers (Anthropic `cache_control`, OpenAI auto prefix cache) can cache
+   * it across turns. Use for STATIC plugin guidance whose bytes do not change
+   * between turns.
+   *
+   * Do NOT pass per-turn volatile content through this field; varying bytes
+   * here invalidate the prefix cache on every turn. For volatile system-level
+   * content use `prependDynamicSystemContext` (routes below the cache
+   * boundary) or `prependContext` (routes into the per-turn user message).
    */
   prependSystemContext?: string;
   /**
-   * Appended to the agent system prompt so providers can cache it (e.g. prompt caching).
-   * Use for static plugin guidance instead of prependContext to avoid per-turn token cost.
+   * Appended to the agent system prompt in the cacheable prefix region so
+   * providers (Anthropic `cache_control`, OpenAI auto prefix cache) can cache
+   * it across turns. Use for STATIC plugin guidance whose bytes do not change
+   * between turns.
+   *
+   * Do NOT pass per-turn volatile content through this field; varying bytes
+   * here invalidate the prefix cache on every turn. For volatile system-level
+   * content use `appendDynamicSystemContext` (routes below the cache
+   * boundary) or `appendContext` (routes into the per-turn user message).
    */
   appendSystemContext?: string;
+  /**
+   * Prepended to the agent system prompt BELOW the cache-boundary marker, in
+   * the dynamic-suffix region. The bytes before the marker stay byte-stable
+   * across turns even when this content varies, so the provider prefix cache
+   * hits on turn 2+.
+   *
+   * Use for per-turn volatile content that semantically belongs in the system
+   * prompt rather than the user message (e.g. runtime context, current
+   * session state). For static guidance use `prependSystemContext`. For
+   * volatile content that belongs in the user turn use `prependContext`.
+   */
+  prependDynamicSystemContext?: string;
+  /**
+   * Appended to the agent system prompt BELOW the cache-boundary marker, in
+   * the dynamic-suffix region. The bytes before the marker stay byte-stable
+   * across turns even when this content varies, so the provider prefix cache
+   * hits on turn 2+.
+   *
+   * Use for per-turn volatile content that semantically belongs in the system
+   * prompt rather than the user message (e.g. runtime context appendix). For
+   * static guidance use `appendSystemContext`. For volatile content that
+   * belongs in the user turn use `appendContext`.
+   */
+  appendDynamicSystemContext?: string;
 };
 
 export const PLUGIN_PROMPT_MUTATION_RESULT_FIELDS = [
@@ -47,6 +85,8 @@ export const PLUGIN_PROMPT_MUTATION_RESULT_FIELDS = [
   "appendContext",
   "prependSystemContext",
   "appendSystemContext",
+  "prependDynamicSystemContext",
+  "appendDynamicSystemContext",
 ] as const satisfies readonly (keyof PluginHookBeforePromptBuildResult)[];
 
 type MissingPluginPromptMutationResultFields = Exclude<
