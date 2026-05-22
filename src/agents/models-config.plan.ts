@@ -117,6 +117,7 @@ function sanitizeProvidersForModelsJson(params: {
 }): Record<string, ProviderConfig> {
   let mutated = false;
   const next: Record<string, ProviderConfig> = {};
+  const sourceProvidersByKey = normalizeSourceProviderLookup(params.sourceProviders);
   for (const [providerKey, provider] of Object.entries(params.providers)) {
     const apiKey = typeof provider.apiKey === "string" ? provider.apiKey.trim() : "";
     const keepApiKey =
@@ -132,7 +133,7 @@ function sanitizeProvidersForModelsJson(params: {
         providerKey,
         apiKey,
         existingParsed: params.existingParsed,
-        sourceProviders: params.sourceProviders,
+        sourceProvidersByKey,
       })
     ) {
       next[providerKey] = provider;
@@ -150,9 +151,9 @@ function shouldKeepExistingModelsJsonApiKey(params: {
   providerKey: string;
   apiKey: string;
   existingParsed: unknown;
-  sourceProviders?: Record<string, ProviderConfig>;
+  sourceProvidersByKey: Readonly<Record<string, ProviderConfig>>;
 }): boolean {
-  if (params.sourceProviders?.[params.providerKey]?.apiKey !== undefined) {
+  if (params.sourceProvidersByKey[params.providerKey.trim()]?.apiKey !== undefined) {
     return false;
   }
   const existing = params.existingParsed;
@@ -164,6 +165,23 @@ function shouldKeepExistingModelsJsonApiKey(params: {
     return false;
   }
   return existingProvider.apiKey === params.apiKey;
+}
+
+function normalizeSourceProviderLookup(
+  providers: Record<string, ProviderConfig> | undefined,
+): Record<string, ProviderConfig> {
+  if (!providers) {
+    return {};
+  }
+  const out: Record<string, ProviderConfig> = {};
+  for (const [key, provider] of Object.entries(providers)) {
+    const normalizedKey = key.trim();
+    if (!normalizedKey || !isRecord(provider)) {
+      continue;
+    }
+    out[normalizedKey] = provider;
+  }
+  return out;
 }
 
 export async function planOpenClawModelsJsonWithDeps(
