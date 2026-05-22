@@ -165,6 +165,33 @@ describe("createChannelMessageAdapterFromOutbound", () => {
     expect(result?.receipt.parts[0]?.kind).toBe("poll");
   });
 
+  it("normalizes existing outbound poll receipts", async () => {
+    const receipt: MessageReceipt = {
+      primaryPlatformMessageId: "card-1",
+      platformMessageIds: ["card-1"],
+      parts: [{ platformMessageId: "card-1", kind: "card", index: 0 }],
+      sentAt: 123,
+    };
+    const adapter = createChannelMessageAdapterFromOutbound({
+      capabilities: { poll: true },
+      outbound: {
+        sendPoll: vi.fn(async () => ({ messageId: "card-1", receipt })),
+      },
+    });
+
+    const result = await adapter.send?.poll?.({
+      cfg,
+      to: "room-1",
+      poll: { question: "Ship?", options: ["Yes", "No"] },
+    });
+
+    expect(result?.messageId).toBe("card-1");
+    expect(result?.receipt.parts).toEqual([
+      { platformMessageId: "card-1", kind: "poll", index: 0 },
+    ]);
+    expect(receipt.parts[0]?.kind).toBe("card");
+  });
+
   it("exposes only send methods backed by outbound handlers", async () => {
     const adapter = createChannelMessageAdapterFromOutbound({
       outbound: {
