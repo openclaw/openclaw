@@ -2495,6 +2495,56 @@ describe("processDiscordMessage draft streaming", () => {
     ).toBe(true);
   });
 
+  it.each([
+    ["unset", undefined],
+    ["false", false],
+  ])("hides Discord commentary progress when commentary is %s", async (_label, commentary) => {
+    const draftStream = createMockDraftStreamForTest();
+
+    dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
+      await params?.replyOptions?.onToolStart?.({ name: "exec", phase: "start" });
+      await params?.replyOptions?.onItemEvent?.({
+        itemId: "preamble-1",
+        kind: "preamble",
+        progressText: "Checking private context before replying.",
+      });
+      await params?.replyOptions?.onItemEvent?.({
+        itemId: "tool-1",
+        kind: "tool",
+        name: "exec",
+        progressText: "curl weather api",
+      });
+      return createNoQueuedDispatchResult();
+    });
+
+    const progress =
+      commentary === undefined
+        ? {
+            label: false,
+            toolProgress: true,
+          }
+        : {
+            label: false,
+            toolProgress: true,
+            commentary,
+          };
+    const ctx = await createAutomaticSourceDeliveryContext({
+      discordConfig: {
+        streaming: {
+          mode: "progress",
+          progress,
+        },
+      },
+    });
+
+    await runProcessDiscordMessage(ctx);
+
+    const updates = draftStream.update.mock.calls.map((call) => call[0]).join("\n");
+    expect(updates).toContain("Exec");
+    expect(updates).toContain("curl weather api");
+    expect(updates).not.toContain("Checking private context");
+  });
+
   it("shows opt-in Discord commentary progress independently from tool progress", async () => {
     const draftStream = createMockDraftStreamForTest();
 
