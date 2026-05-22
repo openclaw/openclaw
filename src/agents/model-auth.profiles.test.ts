@@ -661,27 +661,27 @@ describe("getApiKeyForModel", () => {
 
     try {
       await withEnvAsync({ WORKSPACE_CLOUD_CREDENTIALS: credentialsPath }, async () => {
-        expect(
+        await expect(
           hasAuthForModelProvider({
             provider: "workspace-cloud",
             cfg: { plugins: { allow: ["workspace-cloud"] } },
             store,
           }),
-        ).toBe(true);
-        expect(
+        ).resolves.toBe(true);
+        await expect(
           hasAuthForModelProvider({
             provider: "workspace-cloud",
             cfg: { plugins: {} },
             store,
           }),
-        ).toBe(false);
+        ).resolves.toBe(false);
       });
     } finally {
       await fs.rm(tempDir, { recursive: true, force: true });
     }
   });
 
-  it("reuses runtime auth availability for provider auth checks", () => {
+  it("reuses runtime auth availability for provider auth checks", async () => {
     const store = { version: 1 as const, profiles: {} };
     const localNoKeyConfig = {
       models: {
@@ -700,30 +700,30 @@ describe("getApiKeyForModel", () => {
       },
     } as OpenClawConfig;
 
-    expect(
+    await expect(
       hasAuthForModelProvider({
         provider: "amazon-bedrock",
         cfg: {} as OpenClawConfig,
         env: {},
         store,
       }),
-    ).toBe(true);
-    expect(
+    ).resolves.toBe(true);
+    await expect(
       hasAuthForModelProvider({
         provider: "vllm",
         cfg: localNoKeyConfig,
         env: {},
         store,
       }),
-    ).toBe(true);
-    expect(
+    ).resolves.toBe(true);
+    await expect(
       hasAuthForModelProvider({
         provider: "remote",
         cfg: localNoKeyConfig,
         env: {},
         store,
       }),
-    ).toBe(false);
+    ).resolves.toBe(false);
   });
 
   it("hasAvailableAuthForProvider('google') accepts GOOGLE_API_KEY fallback", async () => {
