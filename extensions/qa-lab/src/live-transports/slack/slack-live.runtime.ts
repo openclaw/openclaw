@@ -1446,7 +1446,7 @@ async function runSlackApprovalScenario(params: {
     channelId: params.channelId,
     client: params.context.sutReadClient,
     decision: params.run.decision,
-    messageTs: pending.message.ts!,
+    messageTs: pending.message.ts,
     observedMessages: params.observedMessages,
     oldestTs,
     scenarioId: params.scenario.id,

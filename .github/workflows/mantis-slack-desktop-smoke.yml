@@ -243,7 +243,6 @@ jobs:
           CRABBOX_MARKET: ${{ inputs.crabbox_market }}
           KEEP_VM: ${{ inputs.keep_vm }}
           HYDRATE_MODE: ${{ inputs.hydrate_mode }}
-          PR_NUMBER: ${{ inputs.pr_number }}
           SCENARIO_ID: ${{ inputs.scenario_id }}
           APPROVAL_CHECKPOINTS: ${{ inputs.approval_checkpoints }}
         shell: bash
@@ -294,10 +293,6 @@ jobs:
           if [[ -n "${CRABBOX_MARKET:-}" ]]; then
             market_args=(--market "$CRABBOX_MARKET")
           fi
-          fresh_pr_args=()
-          if [[ -n "${PR_NUMBER:-}" ]]; then
-            fresh_pr_args=(--fresh-pr "${GITHUB_REPOSITORY}#${PR_NUMBER}")
-          fi
           gateway_args=(--gateway-setup)
           approval_args=()
           scenario_args=(--scenario "$SCENARIO_ID")
@@ -330,7 +325,6 @@ jobs:
             "${scenario_args[@]}" \
             "${approval_args[@]}" \
             "${market_args[@]}" \
-            "${fresh_pr_args[@]}" \
             "${keep_args[@]}" \
             "${lease_args[@]}"
           mantis_exit=$?
@@ -376,13 +370,41 @@ jobs:
             if [[ "$status" == "pass" ]]; then
               checkpoint_required=true
             fi
+            checkpoint_scenarios=()
+            if [[ "$scenario_label" == "approval-checkpoints" ]]; then
+              checkpoint_scenarios=("slack-approval-exec-native" "slack-approval-plugin-native")
+            else
+              checkpoint_scenarios=("$scenario_label")
+            fi
+            checkpoint_scenarios_json="$(printf '%s\n' "${checkpoint_scenarios[@]}" | jq -R . | jq -s .)"
             checkpoint_artifacts="$(
-              jq -n --argjson checkpoint_required "$checkpoint_required" '[
-                { kind: "desktopScreenshot", lane: "candidate", label: "Exec approval pending checkpoint", path: "approval-checkpoints/slack-approval-exec-native-pending.png", targetPath: "approval-checkpoints/slack-approval-exec-native-pending.png", alt: "Rendered Slack exec approval pending checkpoint", width: 720, inline: true, required: $checkpoint_required },
-                { kind: "desktopScreenshot", lane: "candidate", label: "Exec approval resolved checkpoint", path: "approval-checkpoints/slack-approval-exec-native-resolved.png", targetPath: "approval-checkpoints/slack-approval-exec-native-resolved.png", alt: "Rendered Slack exec approval resolved checkpoint", width: 720, inline: true, required: $checkpoint_required },
-                { kind: "desktopScreenshot", lane: "candidate", label: "Plugin approval pending checkpoint", path: "approval-checkpoints/slack-approval-plugin-native-pending.png", targetPath: "approval-checkpoints/slack-approval-plugin-native-pending.png", alt: "Rendered Slack plugin approval pending checkpoint", width: 720, inline: true, required: $checkpoint_required },
-                { kind: "desktopScreenshot", lane: "candidate", label: "Plugin approval resolved checkpoint", path: "approval-checkpoints/slack-approval-plugin-native-resolved.png", targetPath: "approval-checkpoints/slack-approval-plugin-native-resolved.png", alt: "Rendered Slack plugin approval resolved checkpoint", width: 720, inline: true, required: $checkpoint_required }
-              ]'
+              jq -n \
+                --argjson checkpoint_required "$checkpoint_required" \
+                --argjson scenario_ids "$checkpoint_scenarios_json" \
+                '
+                  def scenario_kind($id):
+                    if $id == "slack-approval-exec-native" then "exec"
+                    elif $id == "slack-approval-plugin-native" then "plugin"
+                    else error("unsupported approval checkpoint scenario: \($id)")
+                    end;
+                  def scenario_title($id):
+                    if scenario_kind($id) == "exec" then "Exec" else "Plugin" end;
+                  [
+                    $scenario_ids[] as $id
+                    | ["pending", "resolved"][] as $state
+                    | {
+                        kind: "desktopScreenshot",
+                        lane: "candidate",
+                        label: "\(scenario_title($id)) approval \($state) checkpoint",
+                        path: "approval-checkpoints/\($id)-\($state).png",
+                        targetPath: "approval-checkpoints/\($id)-\($state).png",
+                        alt: "Rendered Slack \(scenario_kind($id)) approval \($state) checkpoint",
+                        width: 720,
+                        inline: true,
+                        required: $checkpoint_required
+                      }
+                  ]
+                '
             )"
           fi
           jq -n \
