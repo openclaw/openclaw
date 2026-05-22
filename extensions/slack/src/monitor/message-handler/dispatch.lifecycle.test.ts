@@ -33,8 +33,8 @@ const runPreparedInboundReplyTurnMock = vi.fn();
 // ---------------------------------------------------------------------------
 
 const callOrder: string[] = [];
-let markRunCompleteMock: ReturnType<typeof vi.fn>;
-let markDispatchIdleMock: ReturnType<typeof vi.fn>;
+let markRunCompleteMock: vi.MockedFunction<() => void>;
+let markDispatchIdleMock: vi.MockedFunction<() => void>;
 
 // ---------------------------------------------------------------------------
 // vi.mock calls (hoisted — must be at top level)
