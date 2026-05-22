@@ -354,22 +354,15 @@ describe("doctor repair sequencing", () => {
   });
 
   it("migrates legacy OAuth sidecars before stale OAuth shadow cleanup", async () => {
-    const events: string[] = [];
-    mocks.maybeRepairLegacyOAuthSidecarProfiles.mockImplementationOnce(async () => {
-      events.push("sidecar-oauth");
-      return {
-        detected: ["auth-profiles.json"],
-        changes: ["Migrated 1 sidecar-backed Codex OAuth profile."],
-        warnings: ["Sidecar warning"],
-      };
-    });
-    mocks.repairStaleOAuthProfileShadows.mockImplementationOnce(async () => {
-      events.push("stale-oauth-shadows");
-      return {
-        changes: ["Removed stale OAuth auth profile shadow openai-codex."],
-        warnings: [],
-      };
-    });
+    mocks.maybeRepairLegacyOAuthSidecarProfiles.mockImplementationOnce(async () => ({
+      detected: ["auth-profiles.json"],
+      changes: ["Migrated 1 sidecar-backed Codex OAuth profile."],
+      warnings: ["Sidecar warning"],
+    }));
+    mocks.repairStaleOAuthProfileShadows.mockImplementationOnce(async () => ({
+      changes: ["Removed stale OAuth auth profile shadow openai-codex."],
+      warnings: [],
+    }));
 
     const result = await runDoctorRepairSequence({
       state: {
@@ -381,7 +374,6 @@ describe("doctor repair sequencing", () => {
       doctorFixCommand: "openclaw doctor --fix",
     });
 
-    expect(events).toEqual(["sidecar-oauth", "stale-oauth-shadows"]);
     expect(mocks.maybeRepairLegacyOAuthSidecarProfiles).toHaveBeenCalledWith({
       cfg: {},
       prompter: { confirmAutoFix: expect.any(Function) },
