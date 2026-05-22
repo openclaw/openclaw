@@ -5,6 +5,44 @@ import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { createModelSelectionState, resolveContextTokens } from "./model-selection.js";
 
+const subsystemLoggerMock = vi.hoisted(() => {
+  const logger = {
+    subsystem: "model-selection",
+    isEnabled: vi.fn(() => true),
+    trace: vi.fn(),
+    debug: vi.fn(),
+    info: vi.fn(),
+    warn: vi.fn(),
+    error: vi.fn(),
+    fatal: vi.fn(),
+    raw: vi.fn(),
+    child: vi.fn(),
+  };
+  logger.child.mockReturnValue(logger);
+  const createSubsystemLogger = vi.fn(() => logger);
+  return {
+    createSubsystemLogger,
+    logger,
+    reset() {
+      createSubsystemLogger.mockClear();
+      logger.isEnabled.mockClear();
+      logger.trace.mockClear();
+      logger.debug.mockClear();
+      logger.info.mockClear();
+      logger.warn.mockClear();
+      logger.error.mockClear();
+      logger.fatal.mockClear();
+      logger.raw.mockClear();
+      logger.child.mockClear();
+      logger.child.mockReturnValue(logger);
+    },
+  };
+});
+
+vi.mock("../../logging/subsystem.js", () => ({
+  createSubsystemLogger: subsystemLoggerMock.createSubsystemLogger,
+}));
+
 vi.mock("../../agents/model-catalog.runtime.js", () => ({
   loadModelCatalog: vi.fn(async () => [
     { provider: "anthropic", id: "claude-opus-4-6", name: "Claude Opus 4.5" },
@@ -54,6 +92,7 @@ vi.mock("../../agents/auth-profiles.runtime.js", () => ({
 afterEach(() => {
   MODEL_CONTEXT_TOKEN_CACHE.clear();
   authProfileStoreMock.reset();
+  subsystemLoggerMock.reset();
 });
 
 const makeConfiguredModel = (overrides: Record<string, unknown> = {}) => ({
@@ -68,6 +107,59 @@ const makeConfiguredModel = (overrides: Record<string, unknown> = {}) => ({
 });
 
 describe("createModelSelectionState catalog loading", () => {
+  it("routes ingress timing through the model-selection subsystem logger", async () => {
+    const previousTiming = process.env.OPENCLAW_DEBUG_INGRESS_TIMING;
+    process.env.OPENCLAW_DEBUG_INGRESS_TIMING = "1";
+    try {
+      const cfg = {
+        agents: {
+          defaults: {
+            thinkingDefault: "low",
+            models: {
+              "openai-codex/gpt-5.4": {},
+            },
+          },
+        },
+        models: {
+          providers: {
+            "openai-codex": {
+              baseUrl: "https://api.openai.com/v1",
+              models: [makeConfiguredModel()],
+            },
+          },
+        },
+      } as OpenClawConfig;
+
+      await createModelSelectionState({
+        cfg,
+        agentCfg: cfg.agents?.defaults,
+        defaultProvider: "openai-codex",
+        defaultModel: "gpt-5.4",
+        provider: "openai-codex",
+        model: "gpt-5.4",
+        hasModelDirective: false,
+        sessionKey: "discord:agent:user",
+      });
+
+      expect(subsystemLoggerMock.logger.info).toHaveBeenCalledWith(
+        expect.stringContaining(
+          "session=discord:agent:user stage=configured-allowlist-built elapsedMs=",
+        ),
+        expect.objectContaining({
+          sessionKey: "discord:agent:user",
+          stage: "configured-allowlist-built",
+          details: "allowed=1 keys=1",
+        }),
+      );
+    } finally {
+      if (previousTiming === undefined) {
+        delete process.env.OPENCLAW_DEBUG_INGRESS_TIMING;
+      } else {
+        process.env.OPENCLAW_DEBUG_INGRESS_TIMING = previousTiming;
+      }
+    }
+  });
+
   it("skips full catalog loading for ordinary allowlist-backed turns", async () => {
     vi.mocked(loadModelCatalog).mockClear();
     const cfg = {

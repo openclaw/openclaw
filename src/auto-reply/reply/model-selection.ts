@@ -21,6 +21,7 @@ import {
 import { listOpenAIAuthProfileProvidersForAgentRuntime } from "../../agents/openai-codex-routing.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { applyModelOverrideToSessionEntry } from "../../sessions/model-overrides.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import type { ThinkLevel } from "./directives.js";
@@ -72,6 +73,7 @@ function shouldLogModelSelectionTiming(): boolean {
   return process.env.OPENCLAW_DEBUG_INGRESS_TIMING === "1";
 }
 
+const modelSelectionTimingLog = createSubsystemLogger("model-selection");
 const modelCatalogRuntimeLoader = createLazyImportLoader(
   () => import("../../agents/model-catalog.runtime.js"),
 );
@@ -116,9 +118,16 @@ export async function createModelSelectionState(params: {
     if (!timingEnabled) {
       return;
     }
+    const elapsedMs = Date.now() - startMs;
     const suffix = extra ? ` ${extra}` : "";
-    console.log(
-      `[model-selection] session=${params.sessionKey ?? "(no-session)"} stage=${stage} elapsedMs=${Date.now() - startMs}${suffix}`,
+    const sessionKey = params.sessionKey ?? "(no-session)";
+    const meta: Record<string, unknown> = { sessionKey, stage, elapsedMs };
+    if (extra) {
+      meta.details = extra;
+    }
+    modelSelectionTimingLog.info(
+      `session=${sessionKey} stage=${stage} elapsedMs=${elapsedMs}${suffix}`,
+      meta,
     );
   };
   const {
