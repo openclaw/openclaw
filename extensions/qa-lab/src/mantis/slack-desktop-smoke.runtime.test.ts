@@ -310,6 +310,7 @@ describe("mantis Slack desktop smoke runtime", () => {
     expect(remoteScript).toContain("approval-checkpoint-watcher.mjs");
     expect(remoteScript).toContain("OPENCLAW_MANTIS_APPROVAL_BROWSER_BIN");
     expect(remoteScript).toContain("Rendered from the Slack API message observed by QA");
+    expect(remoteScript).toContain("class='wrap'");
     expect(remoteScript).toContain("--headless=new");
     expect(remoteScript).not.toContain('spawn("scrot", [screenshotPath]');
     expect(remoteScript).toContain("Slack QA exited before all expected approval checkpoints");

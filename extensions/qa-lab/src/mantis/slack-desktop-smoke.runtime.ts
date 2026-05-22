@@ -892,7 +892,7 @@ async function waitForCheckpoint(filePath) {
 	    "button{background:#2c2d30;color:#f8f8f8;border:1px solid #565856;border-radius:4px;font-weight:700;padding:8px 14px;font-size:15px;}" +
 	    ".resolution{display:inline-block;margin-top:16px;color:#2eb67d;border:1px solid #2eb67d;border-radius:4px;padding:7px 12px;font-weight:700;}" +
 	    ".evidence{margin-top:34px;color:#b9babd;font-size:13px;border-top:1px solid #3a3d42;padding-top:14px;}" +
-	    "</style></head><body><main class=\"wrap\">" +
+	    "</style></head><body><main class='wrap'>" +
 	    '<div class="channel"># Slack native approval checkpoint</div>' +
 	    '<section class="message"><div class="avatar">OC</div><div class="content">' +
 	    '<div class="meta"><span class="name">openclaw</span><span class="app">APP</span><span class="state">' +
