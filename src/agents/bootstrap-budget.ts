@@ -1,5 +1,6 @@
 import path from "node:path";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
+import { isAgentsBootstrapName, normalizeBootstrapFileName } from "./bootstrap-file-name.js";
 import type { EmbeddedContextFile } from "./pi-embedded-helpers.js";
 import type { WorkspaceBootstrapFile } from "./workspace.js";
 
@@ -66,10 +67,6 @@ function normalizePositiveLimit(value: number): number {
 
 function formatWarningCause(cause: BootstrapTruncationCause): string {
   return cause === "per-file-limit" ? "max/file" : "max/total";
-}
-
-function isAgentsBootstrapName(name: string | undefined): boolean {
-  return name?.toLowerCase() === "agents.md";
 }
 
 function normalizeSeenSignatures(signatures?: string[]): string[] {
@@ -148,16 +145,17 @@ export function buildBootstrapInjectionStats(params: {
   }
   return params.bootstrapFiles.map((file) => {
     const pathValue = normalizeOptionalString(file.path) ?? "";
+    const name = normalizeBootstrapFileName(file.name, pathValue);
     const rawChars = file.missing ? 0 : (file.content ?? "").trimEnd().length;
     const injected =
       (pathValue ? injectedByPath.get(pathValue) : undefined) ??
-      injectedByPath.get(file.name) ??
-      injectedByBaseName.get(file.name);
+      injectedByPath.get(name) ??
+      injectedByBaseName.get(name);
     const injectedChars = injected ? injected.length : 0;
     const truncated = !file.missing && injectedChars < rawChars;
     return {
-      name: file.name,
-      path: pathValue || file.name,
+      name,
+      path: pathValue || name,
       missing: file.missing,
       rawChars,
       injectedChars,

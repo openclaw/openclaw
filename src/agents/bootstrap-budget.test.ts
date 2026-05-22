@@ -47,6 +47,30 @@ describe("buildBootstrapInjectionStats", () => {
     expect(stats[1]?.injectedChars).toBe(20);
     expect(stats[1]?.truncated).toBe(true);
   });
+
+  it("normalizes malformed bootstrap names from paths for budget diagnostics", () => {
+    const bootstrapFiles = [
+      {
+        path: "/tmp/AGENTS.md",
+        content: "a".repeat(100),
+        missing: false,
+      } as unknown as WorkspaceBootstrapFile,
+    ];
+    const stats = buildBootstrapInjectionStats({
+      bootstrapFiles,
+      injectedFiles: [{ path: "/tmp/AGENTS.md", content: "a".repeat(20) }],
+    });
+    const analysis = analyzeBootstrapBudget({
+      files: stats,
+      bootstrapMaxChars: 50,
+      bootstrapTotalMaxChars: 200,
+    });
+
+    expect(stats[0]?.name).toBe("AGENTS.md");
+    expect(formatBootstrapTruncationWarningLines({ analysis })).toContain(
+      "AGENTS.md was truncated; read the full AGENTS.md before relying on scoped policy.",
+    );
+  });
 });
 
 describe("analyzeBootstrapBudget", () => {

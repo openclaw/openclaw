@@ -6,6 +6,11 @@ import { sanitizeGoogleAssistantFirstOrdering } from "../../shared/google-turn-o
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { truncateUtf16Safe } from "../../utils.js";
 import { resolveAgentConfig } from "../agent-scope.js";
+import {
+  AGENTS_BOOTSTRAP_FILENAME,
+  isAgentsBootstrapName,
+  normalizeBootstrapFileName,
+} from "../bootstrap-file-name.js";
 import type { WorkspaceBootstrapFile } from "../workspace.js";
 import type { EmbeddedContextFile } from "./types.js";
 
@@ -96,7 +101,6 @@ const MIN_BOOTSTRAP_FILE_BUDGET_CHARS = 64;
 const BOOTSTRAP_HEAD_RATIO = 0.75;
 const BOOTSTRAP_TAIL_RATIO = 0.25;
 const MIN_BOOTSTRAP_TRIMMED_CONTENT_CHARS = 16;
-const AGENTS_BOOTSTRAP_FILENAME = "AGENTS.md";
 const AGENTS_POLICY_DIGEST_RATIO = 0.35;
 const AGENTS_POLICY_HEAD_RATIO = 0.45;
 const AGENTS_POLICY_TAIL_RATIO = 0.15;
@@ -149,10 +153,6 @@ export function resolveBootstrapPromptTruncationWarningMode(
     return raw;
   }
   return DEFAULT_BOOTSTRAP_PROMPT_TRUNCATION_WARNING_MODE;
-}
-
-function isAgentsBootstrapFile(fileName: string | undefined): boolean {
-  return fileName?.toLowerCase() === AGENTS_BOOTSTRAP_FILENAME.toLowerCase();
 }
 
 function isPolicyDigestCandidate(line: string): boolean {
@@ -279,7 +279,7 @@ function trimBootstrapContent(
       originalLength: trimmed.length,
     };
   }
-  if (isAgentsBootstrapFile(fileName)) {
+  if (isAgentsBootstrapName(fileName)) {
     return trimAgentsBootstrapContent(content, maxChars);
   }
 
@@ -423,9 +423,10 @@ export function buildBootstrapContextFiles(
       break;
     }
     const pathValue = normalizeOptionalString(file.path) ?? "";
+    const fileName = normalizeBootstrapFileName(file.name, pathValue);
     if (!pathValue) {
       opts?.warn?.(
-        `skipping bootstrap file "${file.name}" — missing or invalid "path" field (hook may have used "filePath" instead)`,
+        `skipping bootstrap file "${fileName}" — missing or invalid "path" field (hook may have used "filePath" instead)`,
       );
       continue;
     }
@@ -449,14 +450,14 @@ export function buildBootstrapContextFiles(
       break;
     }
     const fileMaxChars = Math.max(1, Math.min(maxChars, remainingTotalChars));
-    const trimmed = trimBootstrapContent(file.content ?? "", file.name, fileMaxChars);
+    const trimmed = trimBootstrapContent(file.content ?? "", fileName, fileMaxChars);
     const contentWithinBudget = clampToBudget(trimmed.content, remainingTotalChars);
     if (!contentWithinBudget) {
       continue;
     }
     if (trimmed.truncated || contentWithinBudget.length < trimmed.content.length) {
       opts?.warn?.(
-        `workspace bootstrap file ${file.name} is ${trimmed.originalLength} chars (limit ${trimmed.maxChars}); truncating in injected context`,
+        `workspace bootstrap file ${fileName} is ${trimmed.originalLength} chars (limit ${trimmed.maxChars}); truncating in injected context`,
       );
     }
     remainingTotalChars = Math.max(0, remainingTotalChars - contentWithinBudget.length);
