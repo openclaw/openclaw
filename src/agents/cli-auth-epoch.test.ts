@@ -47,9 +47,11 @@ describe("resolveCliAuthEpoch", () => {
     ).resolves.toBeUndefined();
   });
 
-  it("keeps identity-less claude cli oauth epochs stable across token changes", async () => {
+  it("keeps claude cli oauth epoch stable when only the access token rotates (same refresh token)", async () => {
+    // A2: the epoch fingerprint now embeds the refresh token hash, not the
+    // access token. Access-token rotation (same session) must NOT move the epoch.
     let access = "access-a";
-    let refresh = "refresh-a";
+    const refresh = "refresh-stable";
     let expires = 1;
     setCliAuthEpochTestDeps({
       readClaudeCliCredentialsCached: () => ({
@@ -63,12 +65,36 @@ describe("resolveCliAuthEpoch", () => {
 
     const first = await resolveCliAuthEpoch({ provider: "claude-cli" });
     access = "access-b";
-    refresh = "refresh-b";
     expires = 2;
     const second = await resolveCliAuthEpoch({ provider: "claude-cli" });
 
     expectCliAuthEpoch(first);
+    // Only the access token changed; the refresh token (session identity) is
+    // the same, so the epoch must stay stable.
     expect(second).toBe(first);
+  });
+
+  it("moves the claude cli oauth epoch when the refresh token changes (real account switch)", async () => {
+    let refresh = "refresh-a";
+    setCliAuthEpochTestDeps({
+      readClaudeCliCredentialsCached: () => ({
+        type: "oauth",
+        provider: "anthropic",
+        access: "access",
+        refresh,
+        expires: 1,
+      }),
+    });
+
+    const first = await resolveCliAuthEpoch({ provider: "claude-cli" });
+    refresh = "refresh-b";
+    const second = await resolveCliAuthEpoch({ provider: "claude-cli" });
+
+    expectCliAuthEpoch(first);
+    expectCliAuthEpoch(second);
+    // Refresh-token change = real re-login or account switch: the epoch must
+    // change so the stored CLI session is invalidated.
+    expect(second).not.toBe(first);
   });
 
   it("keeps claude cli token epochs stable across token rotation", async () => {
@@ -88,12 +114,20 @@ describe("resolveCliAuthEpoch", () => {
 
     expectCliAuthEpoch(first);
     // Static-token rotation is an authorized credential refresh, not an
-    // identity change. After #74312 the hash is identity-only for both
-    // OAuth and token branches, so rotation does not invalidate the epoch.
+    // identity change. Token-type credentials have no refresh token so the
+    // hash is identity-only (provider key only) and rotation does not move
+    // the epoch.
     expect(second).toBe(first);
   });
 
-  it("matches claude cli token and oauth epochs so partial keychain reads do not flip", async () => {
+  it("allows a transient partial keychain read (token branch) to temporarily produce a different epoch from the full oauth read", async () => {
+    // A2 relaxes the strict #74312 invariant: when the OAuth credential is
+    // identity-bearing (has a refresh token), the local fingerprint includes
+    // the refresh-token hash. A transient partial read (no refreshToken ->
+    // token branch) produces a different fingerprint for that single read
+    // window. The 5s credential-read TTL cache limits the window to at most
+    // 5 seconds, and the session re-seed cost is tolerated in exchange for
+    // accurate per-account identity.
     setCliAuthEpochTestDeps({
       readClaudeCliCredentialsCached: () => ({
         type: "oauth",
@@ -117,11 +151,10 @@ describe("resolveCliAuthEpoch", () => {
 
     expectCliAuthEpoch(oauthEpoch);
     expectCliAuthEpoch(tokenEpoch);
-    // The macOS Claude keychain rewrite is not atomic. A transient read with
-    // `refreshToken` missing falls into the parser's token branch; the OAuth
-    // and token encodings must produce the same hash so the auth-epoch does
-    // not flip during a token rotation. Regression for #74312.
-    expect(tokenEpoch).toBe(oauthEpoch);
+    // A transient partial read (token branch, no refresh) produces a different
+    // epoch from the full oauth read. This is an intentional trade-off: the
+    // TTL cache bounds the transient window.
+    expect(tokenEpoch).not.toBe(oauthEpoch);
   });
 
   it("drops the claude cli epoch when the credential read is absent", async () => {
@@ -646,6 +679,98 @@ describe("resolveCliAuthEpoch", () => {
     expect(third).toBe(second);
     expectCliAuthEpoch(fourth);
     expect(fourth).not.toBe(third);
+  });
+
+  it("ignores the auth profile for claude-cli when the host credential has a refresh token (cosmetic rotation stays stable)", async () => {
+    // Reproduces the claude-cli `reason=auth-profile` reset: the host CLI
+    // login never changes, but an automatic auth-profile rotation flips the
+    // session between two distinct OpenClaw profiles. The claude-cli backend
+    // never injects the profile into the spawned process, so the rotation is
+    // cosmetic. Fix (A2): when the host credential carries a refresh token its
+    // hash is embedded in the fingerprint, making the credential identity-bearing
+    // and causing the auth-profile credential to be excluded. This means a
+    // cosmetic profile rotation no longer moves the epoch.
+    const store: AuthProfileStore = {
+      version: 1,
+      profiles: {
+        "anthropic:claude-cli": {
+          type: "oauth",
+          provider: "claude-cli",
+          access: "profile-access",
+          refresh: "profile-refresh",
+          expires: 1,
+        },
+        "anthropic:default": {
+          type: "token",
+          provider: "anthropic",
+          token: "profile-token",
+        },
+      },
+    };
+    setCliAuthEpochTestDeps({
+      readClaudeCliCredentialsCached: () => ({
+        type: "oauth",
+        provider: "anthropic",
+        access: "host-access",
+        refresh: "host-refresh",
+        expires: 1,
+      }),
+      loadAuthProfileStoreForRuntime: () => store,
+    });
+
+    // Fix: because the host credential is identity-bearing (has a refresh token),
+    // the profile credential is excluded from the epoch. A cosmetic rotation
+    // between two distinct profiles yields an identical epoch and the resumable
+    // CLI session survives.
+    const epochWithProfileA = await resolveCliAuthEpoch({
+      provider: "claude-cli",
+      authProfileId: "anthropic:claude-cli",
+    });
+    const epochWithProfileB = await resolveCliAuthEpoch({
+      provider: "claude-cli",
+      authProfileId: "anthropic:default",
+    });
+    expectCliAuthEpoch(epochWithProfileA);
+    expect(epochWithProfileB).toBe(epochWithProfileA);
+  });
+
+  it("still moves the claude-cli epoch when the host refresh token changes (real account switch)", async () => {
+    let hostRefresh = "host-refresh-a";
+    const store: AuthProfileStore = {
+      version: 1,
+      profiles: {
+        "anthropic:default": {
+          type: "token",
+          provider: "anthropic",
+          token: "profile-token",
+        },
+      },
+    };
+    setCliAuthEpochTestDeps({
+      readClaudeCliCredentialsCached: () => ({
+        type: "oauth",
+        provider: "anthropic",
+        access: "host-access",
+        refresh: hostRefresh,
+        expires: 1,
+      }),
+      loadAuthProfileStoreForRuntime: () => store,
+    });
+
+    const first = await resolveCliAuthEpoch({
+      provider: "claude-cli",
+      authProfileId: "anthropic:default",
+    });
+    hostRefresh = "host-refresh-b";
+    const second = await resolveCliAuthEpoch({
+      provider: "claude-cli",
+      authProfileId: "anthropic:default",
+    });
+
+    expectCliAuthEpoch(first);
+    expectCliAuthEpoch(second);
+    // A genuine re-login (new refresh token) must still invalidate the session.
+    expect(second).not.toBe(first);
   });
 
   it("uses non-prompting Codex CLI credential reads for epoch fingerprints", async () => {
