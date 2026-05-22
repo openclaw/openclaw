@@ -1944,6 +1944,7 @@ export async function runReplyAgent(params: {
         readPostCompactionContext(followupRun.run.workspaceDir, {
           cfg,
           agentId: resolveSessionAgentId({ sessionKey, config: cfg }),
+          sessionFile: followupRun.run.sessionFile,
         })
           .then((contextContent) => {
             if (contextContent) {
