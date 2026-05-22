@@ -618,6 +618,8 @@ const IMPORT_SPECIFIER_PATTERN =
 const BROAD_CHANGED_ENV_KEY = "OPENCLAW_TEST_CHANGED_BROAD";
 const VITEST_NO_OUTPUT_TIMEOUT_ENV_KEY = "OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS";
 const VITEST_NO_OUTPUT_RETRY_ENV_KEY = "OPENCLAW_VITEST_NO_OUTPUT_RETRY";
+const VITEST_SHARD_NAME_ENV_KEY = "OPENCLAW_VITEST_SHARD_NAME";
+const CORE_RUNTIME_INFRA_STATE_SHARD_NAME = "core-runtime-infra-state";
 export const DEFAULT_TEST_PROJECTS_VITEST_NO_OUTPUT_TIMEOUT_MS = String(
   DEFAULT_VITEST_NO_OUTPUT_TIMEOUT_MS,
 );
@@ -1710,6 +1712,22 @@ function shouldUseWholeConfigTarget(kind, targetArg, cwd) {
   return relative.startsWith("ui/src/") && !relative.startsWith("ui/src/ui/");
 }
 
+function hasExplicitReporterArg(args) {
+  return args.some((arg) => arg === "--reporter" || arg.startsWith("--reporter="));
+}
+
+function resolveVitestReporterArgs(params) {
+  if (
+    params.watchMode ||
+    params.config !== INFRA_VITEST_CONFIG ||
+    params.env?.[VITEST_SHARD_NAME_ENV_KEY] !== CORE_RUNTIME_INFRA_STATE_SHARD_NAME ||
+    hasExplicitReporterArg(params.forwardedArgs)
+  ) {
+    return [];
+  }
+  return ["--reporter=verbose"];
+}
+
 function createVitestArgs(params) {
   return [
     "exec",
@@ -1720,6 +1738,7 @@ function createVitestArgs(params) {
     "--config",
     params.config,
     ...(params.config === UI_E2E_VITEST_CONFIG ? ["--configLoader", "runner"] : []),
+    ...resolveVitestReporterArgs(params),
     ...params.forwardedArgs,
   ];
 }
@@ -2125,7 +2144,7 @@ export function createVitestRunSpecs(args, params = {}) {
         : baseEnv,
       includeFilePath,
       includePatterns: plan.includePatterns,
-      pnpmArgs: createVitestArgs(plan),
+      pnpmArgs: createVitestArgs({ ...plan, env: baseEnv }),
       watchMode: plan.watchMode,
     };
   });

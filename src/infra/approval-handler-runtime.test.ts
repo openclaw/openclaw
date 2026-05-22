@@ -371,8 +371,13 @@ describe("createLazyChannelApprovalNativeRuntimeAdapter", () => {
       bindGate.resolve = resolve;
     });
     bindGate.promise = bindPromise;
+    let bindStartedResolve!: () => void;
+    const bindStarted = new Promise<void>((resolve) => {
+      bindStartedResolve = resolve;
+    });
     const deliverPending = vi.fn().mockResolvedValue({ messageId: "in-flight" });
     const bindPending = vi.fn(async () => {
+      bindStartedResolve();
       await bindPromise;
       return { bindingId: "bound-in-flight" };
     });
@@ -389,11 +394,8 @@ describe("createLazyChannelApprovalNativeRuntimeAdapter", () => {
     const request = makeExecApprovalRequest("exec:in-flight");
 
     const inflight = approvalRuntime.handleRequested(request);
-    // Flush microtasks so deliverPending resolves and bindPending parks at the gate.
-    await new Promise((r) => setTimeout(r, 0));
-    await new Promise((r) => setTimeout(r, 0));
+    await bindStarted;
 
-    // stop() flips the stopped flag while bindPending is parked.
     await approvalRuntime.stop();
     bindGate.resolve();
     await inflight;
@@ -414,7 +416,12 @@ describe("createLazyChannelApprovalNativeRuntimeAdapter", () => {
     });
     deliverGate.promise = deliverPromise;
     const deliveredEntry = { messageId: "pre-bind" };
+    let deliverStartedResolve!: () => void;
+    const deliverStarted = new Promise<void>((resolve) => {
+      deliverStartedResolve = resolve;
+    });
     const deliverPending = vi.fn(async () => {
+      deliverStartedResolve();
       await deliverPromise;
       return deliveredEntry;
     });
@@ -434,11 +441,8 @@ describe("createLazyChannelApprovalNativeRuntimeAdapter", () => {
     const request = makeExecApprovalRequest("exec:pre-bind");
 
     const inflight = approvalRuntime.handleRequested(request);
-    // Flush microtasks so deliverPending is awaited and parked at the gate.
-    await new Promise((r) => setTimeout(r, 0));
-    await new Promise((r) => setTimeout(r, 0));
+    await deliverStarted;
 
-    // stop() flips the stopped flag while deliverPending is still pending.
     await approvalRuntime.stop();
     deliverGate.resolve();
     await inflight;
@@ -461,8 +465,13 @@ describe("createLazyChannelApprovalNativeRuntimeAdapter", () => {
     });
     bindGate.promise = bindPromise;
     const deliveredEntry = { messageId: "post-bind-null" };
+    let bindStartedResolve!: () => void;
+    const bindStarted = new Promise<void>((resolve) => {
+      bindStartedResolve = resolve;
+    });
     const deliverPending = vi.fn().mockResolvedValue(deliveredEntry);
     const bindPending = vi.fn(async () => {
+      bindStartedResolve();
       await bindPromise;
       return null;
     });
@@ -481,11 +490,8 @@ describe("createLazyChannelApprovalNativeRuntimeAdapter", () => {
     const request = makeExecApprovalRequest("exec:post-bind-null");
 
     const inflight = approvalRuntime.handleRequested(request);
-    // Flush microtasks so deliverPending resolves and bindPending awaits the gate.
-    await new Promise((r) => setTimeout(r, 0));
-    await new Promise((r) => setTimeout(r, 0));
+    await bindStarted;
 
-    // stop() flips the stopped flag while bindPending is parked; it then resolves to null.
     await approvalRuntime.stop();
     bindGate.resolve();
     await inflight;

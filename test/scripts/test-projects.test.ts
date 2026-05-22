@@ -12,6 +12,7 @@ import {
   buildFullSuiteVitestRunPlans,
   buildVitestArgs,
   buildVitestRunPlans,
+  createVitestRunSpecs,
   findUnmatchedExplicitTestTargets,
   formatFailedShardDigest,
   listFullExtensionVitestProjectConfigs,
@@ -1740,6 +1741,45 @@ describe("scripts/test-projects Vitest stall watchdog", () => {
     expect(shouldRetryVitestNoOutputTimeout({ OPENCLAW_VITEST_NO_OUTPUT_RETRY: "false" })).toBe(
       false,
     );
+  });
+
+  it("uses verbose output for the infra-state infra shard", () => {
+    const specs = createVitestRunSpecs(
+      [
+        "test/vitest/vitest.infra.config.ts",
+        "test/vitest/vitest.hooks.config.ts",
+        "test/vitest/vitest.secrets.config.ts",
+      ],
+      {
+        baseEnv: {
+          OPENCLAW_VITEST_SHARD_NAME: "core-runtime-infra-state",
+        },
+      },
+    );
+
+    const infraSpec = specs.find((spec) => spec.config === "test/vitest/vitest.infra.config.ts");
+    const hooksSpec = specs.find((spec) => spec.config === "test/vitest/vitest.hooks.config.ts");
+    const secretsSpec = specs.find(
+      (spec) => spec.config === "test/vitest/vitest.secrets.config.ts",
+    );
+
+    expect(infraSpec?.pnpmArgs).toContain("--reporter=verbose");
+    expect(hooksSpec?.pnpmArgs).not.toContain("--reporter=verbose");
+    expect(secretsSpec?.pnpmArgs).not.toContain("--reporter=verbose");
+  });
+
+  it("keeps explicit infra-state reporter arguments", () => {
+    const [spec] = createVitestRunSpecs(
+      ["test/vitest/vitest.infra.config.ts", "--reporter=default"],
+      {
+        baseEnv: {
+          OPENCLAW_VITEST_SHARD_NAME: "core-runtime-infra-state",
+        },
+      },
+    );
+
+    expect(spec?.pnpmArgs).toContain("--reporter=default");
+    expect(spec?.pnpmArgs).not.toContain("--reporter=verbose");
   });
 });
 
