@@ -7,7 +7,10 @@ vi.mock("../context-engine-capabilities.js", () => ({
 import type { OpenClawConfig } from "../../../config/config.js";
 import { addSession, resetProcessRegistryForTests } from "../../bash-process-registry.js";
 import { createProcessSessionFixture } from "../../bash-process-registry.test-helpers.js";
-import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "../../system-prompt-cache-boundary.js";
+import {
+  stripSystemPromptCacheBoundary,
+  SYSTEM_PROMPT_CACHE_BOUNDARY,
+} from "../../system-prompt-cache-boundary.js";
 import { buildAgentSystemPrompt } from "../../system-prompt.js";
 import { resolveBootstrapContextTargets } from "./attempt-bootstrap-routing.js";
 import {
@@ -733,6 +736,13 @@ describe("composeSystemPromptWithHookContext cache prefix stability (#85203)", (
     expect(result).toContain(SYSTEM_PROMPT_CACHE_BOUNDARY);
     const markerIdx = result!.indexOf(SYSTEM_PROMPT_CACHE_BOUNDARY);
     expect(result!.slice(0, markerIdx)).toContain("user-supplied system prompt override");
+
+    // Lock in the disclosed single-newline separator AFTER provider strip:
+    // markerless-base + append-only collapses the marker to "\n", so providers
+    // see exactly `${base}\n${appendContext}` — not the naive `\n\n` join.
+    const stripped = stripSystemPromptCacheBoundary(result!);
+    expect(stripped).toBe(`${base}\nruntimeContext=A`);
+    expect(stripped).not.toContain(`${base}\n\nruntimeContext=A`);
   });
 });
 

@@ -137,6 +137,16 @@ describe("buildAttemptSystemPrompt", () => {
     expect(markerIdx).toBeGreaterThan(-1);
     expect(subagentHeaderIdx).toBeGreaterThan(markerIdx);
     expect(result.systemPrompt.slice(0, markerIdx)).toContain("Custom override prompt.");
+
+    // Lock in the disclosed single-newline separator AFTER provider strip:
+    // override+extraSystemPrompt now joins through marker + helper, so the
+    // stripped byte sequence puts exactly one "\n" between the pre-marker
+    // content and "## Subagent Context" — not the previous "\n\n" gap.
+    const stripped = stripSystemPromptCacheBoundary(result.systemPrompt);
+    const strippedSubIdx = stripped.indexOf("## Subagent Context");
+    expect(strippedSubIdx).toBeGreaterThan(0);
+    expect(stripped[strippedSubIdx - 1]).toBe("\n");
+    expect(stripped[strippedSubIdx - 2]).not.toBe("\n");
   });
 
   it("strips marker substrings smuggled in via extraSystemPrompt so providers never see nested cache boundaries (#85203)", () => {
