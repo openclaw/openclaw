@@ -81,12 +81,34 @@ describe("scripts/crabbox-wrapper", () => {
   });
 
   it("accepts Crabbox provider aliases when their canonical provider is advertised", () => {
-    const helpText = "provider: hetzner, aws, local-container, blacksmith-testbox, or cloudflare\n";
+    const helpText = [
+      "provider: hetzner, aws, gcp, local-container, blacksmith-testbox,",
+      "  namespace-devbox, semaphore, cloudflare, railway, exe-dev, or ssh",
+      "",
+    ].join("\n");
+    const aliases = [
+      "blacksmith",
+      "cf",
+      "container",
+      "docker",
+      "exe",
+      "exedev",
+      "google",
+      "local-docker",
+      "namespace",
+      "rail",
+      "railwayapp",
+      "sem",
+      "static",
+      "static-ssh",
+    ];
 
-    expect(runWrapper(helpText, ["run", "--provider", "docker", "--", "echo ok"]).status).toBe(0);
-    expect(runWrapper(helpText, ["run", "--provider", "blacksmith", "--", "echo ok"]).status).toBe(
-      0,
-    );
+    for (const alias of aliases) {
+      const result = runWrapper(helpText, ["run", "--provider", alias, "--", "echo ok"]);
+
+      expect(result.status, alias).toBe(0);
+      expect(result.stdout).toContain(`"${alias}"`);
+    }
   });
 
   it("keeps unsupported provider selections rejected", () => {

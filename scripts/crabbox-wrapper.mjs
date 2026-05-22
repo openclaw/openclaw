@@ -268,9 +268,19 @@ const version = checkedOutput(binary, ["--version"]);
 const help = checkedOutput(binary, ["run", "--help"]);
 const providerAliases = new Map([
   ["blacksmith", "blacksmith-testbox"],
+  ["cf", "cloudflare"],
   ["container", "local-container"],
   ["docker", "local-container"],
+  ["exe", "exe-dev"],
+  ["exedev", "exe-dev"],
+  ["google", "gcp"],
   ["local-docker", "local-container"],
+  ["namespace", "namespace-devbox"],
+  ["rail", "railway"],
+  ["railwayapp", "railway"],
+  ["sem", "semaphore"],
+  ["static", "ssh"],
+  ["static-ssh", "ssh"],
 ]);
 
 function addProviderNames(names, text) {
