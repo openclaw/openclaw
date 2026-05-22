@@ -17,6 +17,11 @@ on:
         required: true
         default: slack-canary
         type: string
+      approval_checkpoints:
+        description: Run native Slack approval checkpoint mode instead of gateway setup
+        required: false
+        default: false
+        type: boolean
       keep_vm:
         description: Keep the desktop lease open after a passing run
         required: false
@@ -230,6 +235,7 @@ jobs:
           KEEP_VM: ${{ inputs.keep_vm }}
           HYDRATE_MODE: ${{ inputs.hydrate_mode }}
           SCENARIO_ID: ${{ inputs.scenario_id }}
+          APPROVAL_CHECKPOINTS: ${{ inputs.approval_checkpoints }}
         shell: bash
         run: |
           set -euo pipefail
@@ -265,6 +271,16 @@ jobs:
           else
             keep_args=(--no-keep-lease)
           fi
+          scenario_label="$SCENARIO_ID"
+          mode_args=(--gateway-setup --scenario "$SCENARIO_ID")
+          if [[ "$APPROVAL_CHECKPOINTS" == "true" ]]; then
+            mode_args=(--approval-checkpoints)
+            if [[ -n "${SCENARIO_ID:-}" && "$SCENARIO_ID" != "slack-canary" && "$SCENARIO_ID" != "approval-checkpoints" ]]; then
+              mode_args+=(--scenario "$SCENARIO_ID")
+            else
+              scenario_label="approval-checkpoints"
+            fi
+          fi
 
           set +e
           pnpm openclaw qa mantis slack-desktop-smoke \
@@ -274,7 +290,6 @@ jobs:
             --class standard \
             --idle-timeout 45m \
             --ttl 120m \
-            --gateway-setup \
             --credential-source convex \
             --credential-role ci \
             --provider-mode live-frontier \
@@ -282,7 +297,7 @@ jobs:
             --model openai/gpt-5.5 \
             --alt-model openai/gpt-5.5 \
             --fast \
-            --scenario "$SCENARIO_ID" \
+            "${mode_args[@]}" \
             "${keep_args[@]}" \
             "${lease_args[@]}"
           mantis_exit=$?
@@ -318,7 +333,7 @@ jobs:
           jq -n \
             --arg status "$status" \
             --arg candidate_sha "${{ needs.validate_ref.outputs.candidate_revision }}" \
-            --arg scenario "$SCENARIO_ID" \
+            --arg scenario "$scenario_label" \
             --argjson screenshot_required "$screenshot_required" \
             '{
               schemaVersion: 1,
