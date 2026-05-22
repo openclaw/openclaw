@@ -7,6 +7,7 @@ import type { ThinkLevel } from "../../auto-reply/thinking.js";
 import type { CliDeps } from "../../cli/outbound-send-deps.js";
 import type { AgentDefaultsConfig } from "../../config/types.agent-defaults.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { clearAgentRunContext } from "../../infra/agent-events.js";
 import {
   createSourceDeliveryPlan,
   resolveSourceDeliveryOutcome,
@@ -1104,6 +1105,30 @@ async function finalizeCronRun(params: {
   });
 }
 
+/**
+ * Release runtime references held by a completed isolated cron run.
+ *
+ * After the final durable write and delivery complete, the cron session store
+ * and run context are no longer needed in memory.  This shallow disposal prevents
+ * the heap-retention pattern described in #85019 where ~113k copies of the skill
+ * prompt string accumulated through cron run contexts that were never released.
+ *
+ * O(1) — nulls known large fields without deep traversal.  MUST run after the
+ * final `persistSessionEntry()` and delivery construction, never before.
+ */
+function disposeCronRunContext(params: {
+  sessionId: string;
+  cronSession: MutableCronSession;
+  ownsRunContext: boolean;
+}): void {
+  if (params.ownsRunContext) {
+    clearAgentRunContext(params.sessionId);
+  }
+  // Drop the in-memory store reference so GC can collect the session registry.
+  // The on-disk sessions.json is unaffected.
+  (params.cronSession as { store?: unknown }).store = undefined;
+}
+
 export async function runCronIsolatedAgentTurn(params: {
   cfg: OpenClawConfig;
   deps: CliDeps;
@@ -1154,6 +1179,10 @@ export async function runCronIsolatedAgentTurn(params: {
       ...info,
     });
   };
+
+  // Capture the sessionId before the try block so the finally block clears
+  // the correct context even if adoptCronRunSessionMetadata() rotates it.
+  const initialSessionId = prepared.context.cronSession.sessionEntry.sessionId;
 
   try {
     const { executeCronRun } = await loadCronExecutorRuntime();
@@ -1215,6 +1244,15 @@ export async function runCronIsolatedAgentTurn(params: {
         isCronLaneTimeout ? "cron-setup" : "agent-run",
         isCronLaneTimeout ? error : err,
       ),
+    });
+  } finally {
+    // Release runtime references after the run completes (success or failure).
+    // The session entry has already been persisted to disk by this point,
+    // so the in-memory store and run context can be safely dropped.
+    disposeCronRunContext({
+      sessionId: initialSessionId,
+      cronSession: prepared.context.cronSession,
+      ownsRunContext: params.job.sessionTarget === "isolated",
     });
   }
 }
