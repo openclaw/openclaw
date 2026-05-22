@@ -245,6 +245,15 @@ jobs:
           require_var OPENCLAW_QA_CONVEX_SITE_URL
           require_var OPENCLAW_QA_CONVEX_SECRET_CI
           require_var CRABBOX_COORDINATOR_TOKEN
+          if [[ -z "${CRABBOX_LEASE_ID:-}" && "$CRABBOX_PROVIDER" == "aws" ]]; then
+            runner_ip="$(curl -fsS https://checkip.amazonaws.com | tr -d '[:space:]')"
+            if [[ -z "$runner_ip" ]]; then
+              echo "Could not resolve GitHub runner public IPv4 for AWS SSH ingress." >&2
+              exit 1
+            fi
+            export CRABBOX_AWS_SSH_CIDRS="${runner_ip}/32"
+            echo "Using AWS SSH CIDR ${CRABBOX_AWS_SSH_CIDRS}"
+          fi
 
           candidate_repo="$(pwd)"
           output_rel=".artifacts/qa-e2e/mantis/slack-desktop-smoke"
