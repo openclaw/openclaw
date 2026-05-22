@@ -764,14 +764,10 @@ struct OnboardingWizardView: View {
         } else if trimmedBootstrapToken?.isEmpty == false {
             self.gatewayPassword = ""
         }
-        if trimmedBootstrapToken?.isEmpty == false || !trimmedToken.isEmpty || !trimmedPassword.isEmpty {
-            self.pendingManualAuthOverride = GatewayConnectionController.ManualAuthOverride.normalized(
-                token: trimmedToken,
-                bootstrapToken: trimmedBootstrapToken,
-                password: trimmedPassword)
-        } else {
-            self.pendingManualAuthOverride = nil
-        }
+        self.pendingManualAuthOverride = GatewayConnectionController.ManualAuthOverride.normalized(
+            token: trimmedToken,
+            bootstrapToken: trimmedBootstrapToken,
+            password: trimmedPassword)
         self.saveGatewayCredentials(token: self.gatewayToken, password: self.gatewayPassword)
         self.showQRScanner = false
         self.connectMessage = "Connecting via QR code…"
@@ -1017,14 +1013,9 @@ struct OnboardingWizardView: View {
         self.connectMessage = "Connecting to \(host)…"
         self.statusLine = "Connecting to \(host):\(self.manualPort)…"
         defer { self.connectingGatewayID = nil }
-        let authOverride = self.pendingManualAuthOverride.map { pending in
-            GatewayConnectionController.ManualAuthOverride.explicit(
-                token: self.gatewayToken,
-                bootstrapToken: pending.bootstrapToken,
-                password: self.gatewayPassword)
-        } ?? GatewayConnectionController.ManualAuthOverride.normalized(
+        let authOverride = GatewayConnectionController.ManualAuthOverride.currentManualInput(
             token: self.gatewayToken,
-            bootstrapToken: nil,
+            pendingOverride: self.pendingManualAuthOverride,
             password: self.gatewayPassword)
         self.pendingManualAuthOverride = nil
         await self.gatewayController.connectManual(
