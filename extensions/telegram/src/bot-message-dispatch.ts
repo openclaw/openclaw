@@ -12,6 +12,7 @@ import {
 } from "openclaw/plugin-sdk/channel-feedback";
 import {
   createChannelMessageReplyPipeline,
+  createPreviewMessageReceipt,
   deriveDurableFinalDeliveryRequirements,
 } from "openclaw/plugin-sdk/channel-message";
 import {
@@ -105,6 +106,7 @@ import {
   type LaneName,
 } from "./lane-delivery.js";
 import { createNativeTelegramToolProgressDraft } from "./native-tool-progress-draft.js";
+import { buildPreviewDedupeTextSet, isPreviewStreamedText } from "./preview-dedup.js";
 import {
   createTelegramReasoningStepState,
   splitTelegramReasoningText,
@@ -1352,6 +1354,67 @@ export const dispatchTelegramMessage = async ({
                       return;
                     }
                     const effectivePayload = deduped;
+                    const telegramButtons = resolvePayloadTelegramInlineButtons(effectivePayload);
+
+                    // Preview-streamed final dedup (channel-layer replacement
+                    // for the previous core-layer suppression introduced by
+                    // PR #82625 / commit bd51d8f2dd). When the answer lane has
+                    // already shown this text via partial-preview streaming,
+                    // sending it again as a final would duplicate. Skip the
+                    // send, but mark the lane as finalized so the
+                    // unfinalized-preview cleanup does not delete the preview
+                    // message — the regression reported in openclaw#80520.
+                    //
+                    // Scope:
+                    //  - Text-only finals (media payloads keep their existing
+                    //    lane-delivery-text-deliverer.ts hasMedia branch, which
+                    //    already strips duplicate captions while keeping media).
+                    //  - Only fires when the preview actually has an established
+                    //    Telegram message (messageId is a number). If the
+                    //    preview never landed, the final still needs to flow
+                    //    through sendPayload so the user receives something.
+                    if (info.kind === "final" && !effectivePayload.isError) {
+                      const reply = resolveSendableOutboundReplyParts(effectivePayload);
+                      const previewMessageId = answerLane.stream?.messageId();
+                      if (!reply.hasMedia && typeof previewMessageId === "number") {
+                        const previewDedupeText = buildPreviewDedupeTextSet(
+                          answerLane.lastPartialText,
+                        );
+                        if (isPreviewStreamedText(effectivePayload.text, previewDedupeText)) {
+                          if (telegramButtons) {
+                            try {
+                              await (telegramDeps.editMessageTelegram ?? editMessageTelegram)(
+                                chatId,
+                                previewMessageId,
+                                effectivePayload.text ?? answerLane.lastPartialText,
+                                {
+                                  api: bot.api,
+                                  cfg,
+                                  accountId: route.accountId,
+                                  linkPreview: telegramCfg.linkPreview,
+                                  buttons: telegramButtons,
+                                },
+                              );
+                            } catch (err) {
+                              logVerbose(
+                                `telegram: preview-finalized button edit failed: ${formatErrorMessage(err)}`,
+                              );
+                            }
+                          }
+                          answerLane.finalized = true;
+                          deliveryState.markDelivered();
+                          emitPreviewFinalizedHook({
+                            kind: "preview-finalized",
+                            delivery: {
+                              content: effectivePayload.text ?? "",
+                              messageId: previewMessageId,
+                              receipt: createPreviewMessageReceipt({ id: previewMessageId }),
+                            },
+                          });
+                          return;
+                        }
+                      }
+                    }
 
                     if (
                       shouldSuppressLocalTelegramExecApprovalPrompt({
@@ -1363,7 +1426,6 @@ export const dispatchTelegramMessage = async ({
                       queuedFinal = true;
                       return;
                     }
-                    const telegramButtons = resolvePayloadTelegramInlineButtons(effectivePayload);
                     const split = splitTextIntoLaneSegments(
                       { text: effectivePayload.text },
                       payload.isReasoning,

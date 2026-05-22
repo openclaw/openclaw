@@ -544,6 +544,143 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(draftStream.clear).toHaveBeenCalledTimes(1);
   });
 
+  it("dedups a text-only final whose content already streamed into the preview", async () => {
+    // Preview "Hello" is established (messageId set). Final "Hello" matches the
+    // preview content exactly, so it should be suppressed without producing a
+    // duplicate sendMessage and without deleting the preview message — the
+    // regression scenario from openclaw#80520.
+    const { answerDraftStream } = setupDraftStreams({ answerMessageId: 2001 });
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+      async ({ dispatcherOptions, replyOptions }) => {
+        await replyOptions?.onPartialReply?.({ text: "Hello" });
+        await dispatcherOptions.deliver({ text: "Hello" }, { kind: "final" });
+        return { queuedFinal: true };
+      },
+    );
+
+    await dispatchWithContext({ context: createContext() });
+
+    expect(answerDraftStream.update).toHaveBeenCalledWith("Hello");
+    expect(deliverReplies).not.toHaveBeenCalled();
+    expect(answerDraftStream.clear).not.toHaveBeenCalled();
+  });
+
+  it("attaches buttons before deduping a preview-streamed final", async () => {
+    const { answerDraftStream } = setupDraftStreams({ answerMessageId: 2001 });
+    const buttons = [[{ text: "OK", callback_data: "ok" }]];
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+      async ({ dispatcherOptions, replyOptions }) => {
+        await replyOptions?.onPartialReply?.({ text: "Choose" });
+        await dispatcherOptions.deliver(
+          { text: "Choose", channelData: { telegram: { buttons } } },
+          { kind: "final" },
+        );
+        return { queuedFinal: true };
+      },
+    );
+
+    await dispatchWithContext({ context: createContext() });
+
+    expect(answerDraftStream.update).toHaveBeenCalledWith("Choose");
+    expect(mockCallArg(editMessageTelegram)).toBe(123);
+    expect(mockCallArg(editMessageTelegram, 0, 1)).toBe(2001);
+    expect(mockCallArg(editMessageTelegram, 0, 2)).toBe("Choose");
+    expectRecordFields(mockCallArg(editMessageTelegram, 0, 3), { buttons });
+    expect(deliverReplies).not.toHaveBeenCalled();
+    expect(answerDraftStream.clear).not.toHaveBeenCalled();
+  });
+
+  it("dedups each per-block final against a multi-block preview", async () => {
+    // Preview streams "First block\n\nSecond block" once; the reply pipeline
+    // then emits two separate final payloads ("First block" and "Second block")
+    // for the paragraph-split delivery shape. Both should be suppressed.
+    const { answerDraftStream } = setupDraftStreams({ answerMessageId: 2001 });
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+      async ({ dispatcherOptions, replyOptions }) => {
+        await replyOptions?.onPartialReply?.({ text: "First block\n\nSecond block" });
+        await dispatcherOptions.deliver({ text: "First block" }, { kind: "final" });
+        await dispatcherOptions.deliver({ text: "Second block" }, { kind: "final" });
+        return { queuedFinal: true };
+      },
+    );
+
+    await dispatchWithContext({ context: createContext() });
+
+    expect(deliverReplies).not.toHaveBeenCalled();
+    expect(answerDraftStream.clear).not.toHaveBeenCalled();
+  });
+
+  it("mirrors deduped preview finals before returning", async () => {
+    setupDraftStreams({ answerMessageId: 2001 });
+    const context = createContext();
+    context.ctxPayload.SessionKey = "agent:default:telegram:direct:123";
+    loadSessionStore.mockReturnValue({
+      "agent:default:telegram:direct:123": { sessionId: "s1" },
+    });
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+      async ({ dispatcherOptions, replyOptions }) => {
+        await replyOptions?.onPartialReply?.({ text: "Final answer" });
+        await dispatcherOptions.deliver({ text: "Final answer" }, { kind: "final" });
+        return { queuedFinal: true };
+      },
+    );
+
+    await dispatchWithContext({ context });
+
+    expect(deliverReplies).not.toHaveBeenCalled();
+    expectRecordFields(mockCallArg(emitInternalMessageSentHook), {
+      content: "Final answer",
+      messageId: 2001,
+    });
+    const transcriptCall = expectRecordFields(mockCallArg(appendSessionTranscriptMessage), {
+      transcriptPath: "/tmp/session.jsonl",
+    });
+    expectRecordFields(transcriptCall.message, {
+      role: "assistant",
+      provider: "openclaw",
+      model: "delivery-mirror",
+      content: [{ type: "text", text: "Final answer" }],
+    });
+  });
+
+  it("does not dedup a final when the preview has no Telegram message id yet", async () => {
+    // setupDraftStreams without answerMessageId leaves stream.messageId()
+    // returning undefined, simulating a preview that never landed. The final
+    // is the user's only chance to see anything, so dedup must not fire.
+    const { answerDraftStream } = setupDraftStreams();
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+      async ({ dispatcherOptions, replyOptions }) => {
+        await replyOptions?.onPartialReply?.({ text: "Hello" });
+        await dispatcherOptions.deliver({ text: "Hello" }, { kind: "final" });
+        return { queuedFinal: true };
+      },
+    );
+
+    await dispatchWithContext({ context: createContext() });
+
+    expect(answerDraftStream.update).toHaveBeenCalledWith("Hello");
+    expect(deliverReplies).toHaveBeenCalled();
+  });
+
+  it("does not dedup error finals even when their text matches the preview", async () => {
+    const { answerDraftStream } = setupDraftStreams({ answerMessageId: 2001 });
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+      async ({ dispatcherOptions, replyOptions }) => {
+        await replyOptions?.onPartialReply?.({ text: "Agent failed." });
+        await dispatcherOptions.deliver(
+          { text: "Agent failed.", isError: true },
+          { kind: "final" },
+        );
+        return { queuedFinal: true };
+      },
+    );
+
+    await dispatchWithContext({ context: createContext() });
+
+    expect(answerDraftStream.update).toHaveBeenCalledWith("Agent failed.");
+    expect(deliverReplies).toHaveBeenCalled();
+  });
+
   it("keeps retained overflow draft previews", async () => {
     const draftStream = createDraftStream();
     const bot = createBot();
