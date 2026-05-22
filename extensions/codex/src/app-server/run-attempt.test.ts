@@ -3822,6 +3822,85 @@ describe("runCodexAppServerAttempt", () => {
     expect(result.promptError).toBeNull();
   });
 
+  it("keeps turn request activity active until elicitation handling resolves", async () => {
+    const harness = createStartedThreadHarness();
+    const bridgedResponse = {
+      action: "accept",
+      content: null,
+      _meta: null,
+    } as const;
+    let resolveBridge!: (value: typeof bridgedResponse) => void;
+    const bridgePromise = new Promise<typeof bridgedResponse>((resolve) => {
+      resolveBridge = resolve;
+    });
+    vi.spyOn(elicitationBridge, "handleCodexAppServerElicitationRequest").mockImplementation(
+      async () => await bridgePromise,
+    );
+    const params = createParams(
+      path.join(tempDir, "session.jsonl"),
+      path.join(tempDir, "workspace"),
+    );
+    params.timeoutMs = 500;
+    const onRunProgress = vi.fn();
+    params.onRunProgress = onRunProgress;
+
+    const run = runCodexAppServerAttempt(params, {
+      turnCompletionIdleTimeoutMs: 1_000,
+      turnAssistantCompletionIdleTimeoutMs: 1_000,
+      turnTerminalIdleTimeoutMs: 1_000,
+    });
+    await harness.waitForMethod("turn/start");
+
+    const response = harness.handleServerRequest({
+      id: "request-pending-elicitation",
+      method: "mcpServer/elicitation/request",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        mode: "form",
+        message: "Approve?",
+        requestedSchema: { type: "object", properties: {} },
+        serverName: "server-1",
+        _meta: null,
+      },
+    });
+    await vi.waitFor(
+      () =>
+        expect(onRunProgress).toHaveBeenCalledWith(
+          expect.objectContaining({
+            reason: "request:mcpServer/elicitation/request:start",
+          }),
+        ),
+      fastWait,
+    );
+    await new Promise((resolve) => setTimeout(resolve, 60));
+    expect(
+      onRunProgress.mock.calls.some(
+        ([event]) =>
+          (event as { reason?: string }).reason ===
+          "request:mcpServer/elicitation/request:response",
+      ),
+    ).toBe(false);
+
+    resolveBridge(bridgedResponse);
+    await expect(response).resolves.toEqual(bridgedResponse);
+    await vi.waitFor(
+      () =>
+        expect(onRunProgress).toHaveBeenCalledWith(
+          expect.objectContaining({
+            reason: "request:mcpServer/elicitation/request:response",
+          }),
+        ),
+      fastWait,
+    );
+    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+
+    const result = await run;
+    expect(result.aborted).toBe(false);
+    expect(result.timedOut).toBe(false);
+    expect(result.promptError).toBeNull();
+  });
+
   it("counts pending user input requests as turn attempt progress", async () => {
     const harness = createStartedThreadHarness();
     const params = createParams(
