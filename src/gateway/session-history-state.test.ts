@@ -171,6 +171,52 @@ describe("SessionHistorySseState", () => {
     ).toBe(true);
   });
 
+  test("keeps cursors when a paginated history page starts with a message-tool mirror", () => {
+    const snapshot = buildSessionHistorySnapshot({
+      rawMessages: [
+        {
+          role: "user",
+          content: [{ type: "text", text: "reply here" }],
+          __openclaw: { seq: 1 },
+        },
+        {
+          role: "assistant",
+          content: [
+            {
+              type: "toolCall",
+              id: "call-message-cursor",
+              name: "message",
+              arguments: {
+                action: "send",
+                message: "Cursor-visible reply.",
+              },
+            },
+          ],
+          __openclaw: { seq: 2 },
+        },
+        {
+          role: "toolResult",
+          toolName: "message",
+          toolCallId: "call-message-cursor",
+          content: { ok: true, messageId: "cursor" },
+          __openclaw: { seq: 3 },
+        },
+        {
+          role: "assistant",
+          content: [{ type: "text", text: "NO_REPLY" }],
+          __openclaw: { seq: 4 },
+        },
+      ],
+      limit: 1,
+    });
+
+    expect(snapshot.history.nextCursor).toBe("3");
+    expect(snapshot.history.messages[0]?.["__openclaw"]?.seq).toBe(3);
+    expect(
+      (snapshot.history.messages[0] as { content?: Array<{ text?: string }> }).content?.[0]?.text,
+    ).toBe("Cursor-visible reply.");
+  });
+
   test("requests refresh when silent control reply completes multiple message-tool mirrors", () => {
     const state = SessionHistorySseState.fromRawSnapshot({
       target: { sessionId: "sess-main" },

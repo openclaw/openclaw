@@ -92,6 +92,10 @@ function resolveMessageSeq(message: SessionHistoryMessage | undefined): number |
   return asPositiveSafeInteger(message?.["__openclaw"]?.seq);
 }
 
+function isMessageToolMirrorMessage(message: SessionHistoryMessage): boolean {
+  return message.openclawMessageToolMirror !== undefined;
+}
+
 function paginateSessionMessages(
   messages: SessionHistoryMessage[],
   limit: number | undefined,
@@ -265,6 +269,7 @@ export class SessionHistorySseState {
       const projectedMessage = addedMessages[0];
       if (projectedMessage !== undefined) {
         const emittedMessage: SessionHistoryMessage =
+          isMessageToolMirrorMessage(projectedMessage) ||
           resolveMessageSeq(projectedMessage) === undefined
             ? (attachOpenClawTranscriptMeta(projectedMessage, {
                 seq: this.rawTranscriptSeq,

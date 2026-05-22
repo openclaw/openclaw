@@ -25,6 +25,7 @@ type PendingMessageToolVisibleReply = {
   toolCallId?: string;
   text: string;
   anchor: Record<string, unknown>;
+  completionAnchor?: Record<string, unknown>;
   succeeded: boolean;
 };
 
@@ -759,6 +760,10 @@ function buildMessageToolVisibleReplyMirror(
       mirror[field] = pending.anchor[field];
     }
   }
+  const transcriptMeta = readRecord((pending.completionAnchor ?? pending.anchor).__openclaw);
+  if (transcriptMeta) {
+    mirror.__openclaw = { ...transcriptMeta };
+  }
   return mirror;
 }
 
@@ -821,6 +826,7 @@ function mirrorMessageToolVisibleReplies(messages: unknown[]): unknown[] {
       for (const item of pending) {
         if (!item.succeeded && isSuccessfulMessageToolResult(record, item)) {
           item.succeeded = true;
+          item.completionAnchor = record;
         }
       }
       if (isAssistantSilentControlReplyOnly(record)) {
