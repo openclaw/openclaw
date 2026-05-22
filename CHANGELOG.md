@@ -38,6 +38,7 @@ Docs: https://docs.openclaw.ai
 - Gateway/restart: eager-load the lifecycle runtime before in-place upgrade signal handling so package replacement does not deadlock restart imports. (#84890) Thanks @myps6415.
 - CLI/update: start managed Gateway update handoff helpers from a stable existing directory and tolerate deleted cwd/package roots during macOS LaunchAgent handoff. Fixes #83808. (#83875) Thanks @jason-allen-oneal.
 - Cron: honor `cron.retry.retryOn: ["network"]` for common network error codes such as `EAI_AGAIN`, `EHOSTUNREACH`, and `ENETUNREACH`.
+- Gateway chat: broadcast returned agent-run error payloads after an agent starts so ACP/WebChat clients receive terminal idle-timeout errors. Fixes #84945.
 - Agents/OpenAI: preserve structured provider error code, type, and redacted body metadata on boundary-aware transport failures.
 - Doctor/Codex: point native Codex asset warnings at the canonical `openclaw migrate plan codex` preview command. Fixes #84948. Thanks @markoa.
 - CLI/models: make `capability model auth logout --agent` remove auth profiles from the selected non-default agent store. Fixes #85092. Thanks @islandpreneur007.
