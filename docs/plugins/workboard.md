@@ -51,18 +51,40 @@ Each card stores:
 Cards are stored in the plugin's Gateway state. They are local to the Gateway
 state directory and move with the rest of that Gateway's OpenClaw state.
 
+## Session lifecycle sync
+
+Cards can be linked to existing dashboard sessions or to the session created
+when you start work from a card. Linked cards show the session lifecycle inline:
+running, linked idle, done, failed, or missing.
+
+Workboard follows the linked session while the card is still in an active work
+state:
+
+- active linked session -> `running`
+- completed linked session -> `review`
+- failed, killed, timed out, or aborted linked session -> `blocked`
+
+Manual review states win. If you move a card to `review`, `blocked`, or `done`,
+Workboard stops auto-moving that card until you move it back to `todo` or
+`running`.
+
 ## Dashboard workflow
 
 1. Open the Workboard tab in the Control UI.
-2. Create a card with a title, notes, priority, labels, and optional agent.
+2. Create a card with a title, notes, priority, labels, optional agent, and
+   optional linked session.
 3. Drag the card between columns or use the column controls.
 4. Start work from the card to create or reuse a dashboard session.
 5. Open the linked session from the card while the agent works.
-6. Move the card to review, blocked, or done as the work changes state.
+6. Let lifecycle sync move running work into review or blocked, then manually
+   move the card to done when accepted.
 
 Starting a card uses normal Gateway sessions. The Workboard plugin only stores
 card metadata and links; the conversation transcript, model selection, and run
 lifecycle stay owned by the regular session system.
+
+Use Stop on a live linked card to abort the active session run. Workboard marks
+that card `blocked` so it remains visible for follow-up.
 
 ## Permissions
 

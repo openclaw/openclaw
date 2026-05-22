@@ -34,6 +34,20 @@ export type WorkboardCard = {
   completedAt?: number;
 };
 
+export type WorkboardLifecycleState =
+  | "unlinked"
+  | "missing"
+  | "idle"
+  | "running"
+  | "succeeded"
+  | "failed";
+
+export type WorkboardLifecycle = {
+  session: GatewaySessionRow | null;
+  state: WorkboardLifecycleState;
+  targetStatus?: WorkboardStatus;
+};
+
 export type WorkboardUiState = {
   loading: boolean;
   loaded: boolean;
@@ -48,8 +62,10 @@ export type WorkboardUiState = {
   draftNotes: string;
   draftPriority: WorkboardPriority;
   draftAgentId: string;
+  draftSessionKey: string;
   busyCardId: string | null;
   draggedCardId: string | null;
+  syncingCardIds: Set<string>;
 };
 
 type WorkboardHost = object;
@@ -71,8 +87,10 @@ function createDefaultState(): WorkboardUiState {
     draftNotes: "",
     draftPriority: "normal",
     draftAgentId: "",
+    draftSessionKey: "",
     busyCardId: null,
     draggedCardId: null,
+    syncingCardIds: new Set(),
   };
 }
 
@@ -196,6 +214,109 @@ function replaceCard(state: WorkboardUiState, card: WorkboardCard) {
   state.cards = next.toSorted((left, right) => left.position - right.position);
 }
 
+function isFailedSessionStatus(status: GatewaySessionRow["status"]): boolean {
+  return status === "failed" || status === "killed" || status === "timeout";
+}
+
+export function getWorkboardLifecycle(
+  card: WorkboardCard,
+  sessions: readonly GatewaySessionRow[],
+): WorkboardLifecycle {
+  const session = findWorkboardSession(card, sessions);
+  if (!card.sessionKey) {
+    return { session: null, state: "unlinked" };
+  }
+  if (!session) {
+    return { session: null, state: "missing" };
+  }
+  if (session.hasActiveRun === true || session.status === "running") {
+    return { session, state: "running", targetStatus: "running" };
+  }
+  if (session.abortedLastRun || isFailedSessionStatus(session.status)) {
+    return { session, state: "failed", targetStatus: "blocked" };
+  }
+  if (session.status === "done") {
+    return { session, state: "succeeded", targetStatus: "review" };
+  }
+  return { session, state: "idle" };
+}
+
+function shouldSyncCardStatus(card: WorkboardCard, targetStatus: WorkboardStatus | undefined) {
+  if (!targetStatus || card.status === targetStatus) {
+    return false;
+  }
+  if (targetStatus === "running") {
+    return card.status === "backlog" || card.status === "todo";
+  }
+  if (targetStatus === "blocked" || targetStatus === "review") {
+    return card.status === "running" || card.status === "todo";
+  }
+  return false;
+}
+
+function lifecycleSyncKey(card: WorkboardCard, lifecycle: WorkboardLifecycle): string {
+  const session = lifecycle.session;
+  return [
+    card.id,
+    card.status,
+    card.updatedAt,
+    lifecycle.targetStatus ?? "",
+    session?.status ?? "",
+    session?.hasActiveRun === true ? "active" : "idle",
+    session?.updatedAt ?? "",
+  ].join(":");
+}
+
+const lifecycleSyncKeys = new WeakMap<WorkboardHost, Map<string, string>>();
+
+function getLifecycleSyncKeys(host: WorkboardHost): Map<string, string> {
+  let keys = lifecycleSyncKeys.get(host);
+  if (!keys) {
+    keys = new Map();
+    lifecycleSyncKeys.set(host, keys);
+  }
+  return keys;
+}
+
+export async function syncWorkboardLifecycle(params: {
+  host: WorkboardHost;
+  client: GatewayBrowserClient | null;
+  sessions: readonly GatewaySessionRow[];
+  requestUpdate?: () => void;
+}) {
+  const state = getWorkboardState(params.host);
+  if (!params.client || !state.loaded) {
+    return;
+  }
+  const syncKeys = getLifecycleSyncKeys(params.host);
+  for (const card of state.cards) {
+    const lifecycle = getWorkboardLifecycle(card, params.sessions);
+    if (!shouldSyncCardStatus(card, lifecycle.targetStatus)) {
+      continue;
+    }
+    const key = lifecycleSyncKey(card, lifecycle);
+    if (syncKeys.get(card.id) === key || state.syncingCardIds.has(card.id)) {
+      continue;
+    }
+    state.syncingCardIds.add(card.id);
+    params.requestUpdate?.();
+    try {
+      const payload = await params.client.request("workboard.cards.update", {
+        id: card.id,
+        patch: { status: lifecycle.targetStatus },
+      });
+      replaceCard(state, normalizeCardPayload(payload));
+      syncKeys.set(card.id, key);
+    } catch (error) {
+      state.error = formatError(error);
+      syncKeys.set(card.id, key);
+    } finally {
+      state.syncingCardIds.delete(card.id);
+      params.requestUpdate?.();
+    }
+  }
+}
+
 export async function createWorkboardCard(params: {
   host: WorkboardHost;
   client: GatewayBrowserClient | null;
@@ -214,6 +335,7 @@ export async function createWorkboardCard(params: {
       notes: state.draftNotes,
       priority: state.draftPriority,
       agentId: state.draftAgentId,
+      sessionKey: state.draftSessionKey,
     });
     replaceCard(state, normalizeCardPayload(payload));
     state.draftOpen = false;
@@ -221,6 +343,7 @@ export async function createWorkboardCard(params: {
     state.draftNotes = "";
     state.draftPriority = "normal";
     state.draftAgentId = "";
+    state.draftSessionKey = "";
   } catch (error) {
     state.error = formatError(error);
   } finally {
@@ -336,6 +459,43 @@ export async function startWorkboardCard(params: {
   } catch (error) {
     state.error = formatError(error);
     return null;
+  } finally {
+    state.busyCardId = null;
+    params.requestUpdate?.();
+  }
+}
+
+export async function stopWorkboardCard(params: {
+  host: WorkboardHost;
+  client: GatewayBrowserClient | null;
+  card: WorkboardCard;
+  requestUpdate?: () => void;
+}) {
+  const state = getWorkboardState(params.host);
+  if (!params.client || !params.card.sessionKey) {
+    return;
+  }
+  state.busyCardId = params.card.id;
+  state.error = null;
+  params.requestUpdate?.();
+  try {
+    const abortResult = await params.client.request("chat.abort", {
+      sessionKey: params.card.sessionKey,
+    });
+    const aborted =
+      isRecord(abortResult) &&
+      (abortResult.aborted === true ||
+        (Array.isArray(abortResult.runIds) && abortResult.runIds.length > 0));
+    if (!aborted) {
+      return;
+    }
+    const payload = await params.client.request("workboard.cards.update", {
+      id: params.card.id,
+      patch: { status: "blocked" },
+    });
+    replaceCard(state, normalizeCardPayload(payload));
+  } catch (error) {
+    state.error = formatError(error);
   } finally {
     state.busyCardId = null;
     params.requestUpdate?.();

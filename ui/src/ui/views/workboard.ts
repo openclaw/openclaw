@@ -4,12 +4,16 @@ import {
   createWorkboardCard,
   deleteWorkboardCard,
   findWorkboardSession,
+  getWorkboardLifecycle,
   getWorkboardState,
   loadWorkboard,
   moveWorkboardCard,
   startWorkboardCard,
+  stopWorkboardCard,
+  syncWorkboardLifecycle,
   WORKBOARD_PRIORITIES,
   type WorkboardCard,
+  type WorkboardLifecycle,
   type WorkboardPriority,
   type WorkboardStatus,
   type WorkboardUiState,
@@ -72,6 +76,7 @@ function nextPosition(cards: readonly WorkboardCard[], status: WorkboardStatus):
 function renderDraft(props: WorkboardProps) {
   const state = getWorkboardState(props.host);
   const agents = props.agentsList?.agents ?? [];
+  const sessions = props.sessions.filter((session) => !session.archived);
   if (!state.draftOpen) {
     return nothing;
   }
@@ -137,6 +142,22 @@ function renderDraft(props: WorkboardProps) {
               </option>`,
           )}
         </select>
+        <select
+          class="input"
+          .value=${state.draftSessionKey}
+          @change=${(event: Event) => {
+            state.draftSessionKey = (event.currentTarget as HTMLSelectElement).value;
+            props.onRequestUpdate?.();
+          }}
+        >
+          <option value="">${t("workboard.noLinkedSession")}</option>
+          ${sessions.map(
+            (session) =>
+              html`<option value=${session.key}>
+                ${session.displayName ?? session.label ?? session.key}
+              </option>`,
+          )}
+        </select>
         <button class="btn primary" ?disabled=${state.loading || !state.draftTitle.trim()}>
           ${t("common.create")}
         </button>
@@ -155,11 +176,74 @@ function renderDraft(props: WorkboardProps) {
   `;
 }
 
+function formatLifecycle(lifecycle: WorkboardLifecycle): {
+  label: string;
+  detail: string;
+  tone: "blocked" | "done" | "idle" | "live";
+} {
+  switch (lifecycle.state) {
+    case "running":
+      return {
+        label: t("workboard.lifecycleRunning"),
+        detail: t("workboard.lifecycleRunningDetail"),
+        tone: "live",
+      };
+    case "succeeded":
+      return {
+        label: t("workboard.lifecycleDone"),
+        detail: t("workboard.lifecycleDoneDetail"),
+        tone: "done",
+      };
+    case "failed":
+      return {
+        label: t("workboard.lifecycleNeedsReview"),
+        detail: t("workboard.lifecycleNeedsReviewDetail"),
+        tone: "blocked",
+      };
+    case "idle":
+      return {
+        label: t("workboard.lifecycleLinked"),
+        detail: t("workboard.lifecycleIdleDetail"),
+        tone: "idle",
+      };
+    case "missing":
+      return {
+        label: t("workboard.lifecycleMissing"),
+        detail: t("workboard.lifecycleMissingDetail"),
+        tone: "blocked",
+      };
+    case "unlinked":
+      return {
+        label: t("workboard.lifecycleUnlinked"),
+        detail: t("workboard.lifecycleUnlinkedDetail"),
+        tone: "idle",
+      };
+  }
+  throw new Error("Unknown workboard lifecycle state.");
+}
+
+function renderLifecycle(card: WorkboardCard, sessions: readonly GatewaySessionRow[]) {
+  const lifecycle = getWorkboardLifecycle(card, sessions);
+  const formatted = formatLifecycle(lifecycle);
+  const session = lifecycle.session;
+  return html`
+    <div class="workboard-card__lifecycle">
+      <span class="workboard-lifecycle workboard-lifecycle--${formatted.tone}">
+        ${formatted.label}
+      </span>
+      <span class="workboard-card__lifecycle-detail">
+        ${session?.displayName ?? session?.label ?? formatted.detail}
+      </span>
+    </div>
+  `;
+}
+
 function renderCard(props: WorkboardProps, card: WorkboardCard) {
   const state = getWorkboardState(props.host);
   const session = findWorkboardSession(card, props.sessions);
   const busy = state.busyCardId === card.id;
-  const live = session?.hasActiveRun === true || card.status === "running";
+  const syncing = state.syncingCardIds.has(card.id);
+  const live = session?.hasActiveRun === true;
   return html`
     <article
       class="workboard-card priority-${card.priority} ${busy ? "workboard-card--busy" : ""}"
@@ -178,9 +262,10 @@ function renderCard(props: WorkboardProps, card: WorkboardCard) {
       <div class="workboard-card__top">
         <span class="workboard-card__priority">${card.priority}</span>
         ${live ? html`<span class="workboard-live">live</span>` : nothing}
+        ${syncing ? html`<span class="workboard-live">${t("common.saving")}</span>` : nothing}
       </div>
       <h3>${card.title}</h3>
-      ${card.notes ? html`<p>${card.notes}</p>` : nothing}
+      ${card.notes ? html`<p>${card.notes}</p>` : nothing} ${renderLifecycle(card, props.sessions)}
       ${card.labels.length
         ? html`<div class="workboard-labels">
             ${card.labels.map((label) => html`<span>${label}</span>`)}
@@ -200,6 +285,24 @@ function renderCard(props: WorkboardProps, card: WorkboardCard) {
               >
                 ${icons.messageSquare}
               </button>
+              ${live
+                ? html`
+                    <button
+                      class="icon-btn"
+                      title=${t("workboard.stopSession")}
+                      ?disabled=${busy || !props.connected}
+                      @click=${() =>
+                        stopWorkboardCard({
+                          host: props.host,
+                          client: props.client,
+                          card,
+                          requestUpdate: props.onRequestUpdate,
+                        })}
+                    >
+                      ${icons.stop}
+                    </button>
+                  `
+                : nothing}
             `
           : html`
               <button
@@ -285,6 +388,12 @@ export function renderWorkboard(props: WorkboardProps) {
     void loadWorkboard({
       host: props.host,
       client: props.client,
+      requestUpdate: props.onRequestUpdate,
+    });
+    void syncWorkboardLifecycle({
+      host: props.host,
+      client: props.client,
+      sessions: props.sessions,
       requestUpdate: props.onRequestUpdate,
     });
   }

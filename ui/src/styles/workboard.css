@@ -154,8 +154,25 @@
   justify-content: flex-end;
 }
 
+.workboard-card__lifecycle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.workboard-card__lifecycle-detail {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--muted);
+  font-size: 0.76rem;
+}
+
 .workboard-card__priority,
 .workboard-live,
+.workboard-lifecycle,
 .workboard-labels span {
   border-radius: 999px;
   padding: 2px 7px;
@@ -178,6 +195,21 @@
 .workboard-live {
   background: color-mix(in srgb, var(--accent) 18%, transparent);
   color: var(--accent);
+}
+
+.workboard-lifecycle--live {
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+  color: var(--accent);
+}
+
+.workboard-lifecycle--done {
+  background: color-mix(in srgb, var(--ok) 16%, transparent);
+  color: var(--ok);
+}
+
+.workboard-lifecycle--blocked {
+  background: color-mix(in srgb, var(--danger) 16%, transparent);
+  color: var(--danger);
 }
 
 .workboard-empty {

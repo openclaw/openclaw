@@ -21,6 +21,7 @@ describe("renderWorkboard", () => {
         position: 1000,
         createdAt: 1,
         updatedAt: 1,
+        sessionKey: "agent:main:dashboard:1",
       },
     ];
     const container = document.createElement("div");
@@ -32,7 +33,16 @@ describe("renderWorkboard", () => {
         connected: true,
         pluginEnabled: true,
         agentsList: null,
-        sessions: [],
+        sessions: [
+          {
+            key: "agent:main:dashboard:1",
+            kind: "direct",
+            displayName: "Dashboard session",
+            updatedAt: 2,
+            hasActiveRun: true,
+            status: "running",
+          },
+        ],
         onOpenSession: () => undefined,
       }),
       container,
@@ -40,8 +50,41 @@ describe("renderWorkboard", () => {
 
     expect(container.textContent).toContain("Todo");
     expect(container.textContent).toContain("Wire dashboard tab");
+    expect(container.textContent).toContain("Running");
+    expect(container.textContent).toContain("Dashboard session");
     expect(container.querySelectorAll(".workboard-column")).toHaveLength(6);
     expect(container.querySelector(".workboard-card__priority")?.textContent).toContain("high");
+  });
+
+  it("offers existing sessions when creating a card", () => {
+    const host = {};
+    const state = getWorkboardState(host);
+    state.loaded = true;
+    state.draftOpen = true;
+    const container = document.createElement("div");
+
+    render(
+      renderWorkboard({
+        host,
+        client: null,
+        connected: true,
+        pluginEnabled: true,
+        agentsList: null,
+        sessions: [
+          {
+            key: "agent:main:dashboard:1",
+            kind: "direct",
+            displayName: "Existing session",
+            updatedAt: 2,
+          },
+        ],
+        onOpenSession: () => undefined,
+      }),
+      container,
+    );
+
+    expect(container.textContent).toContain("No linked session");
+    expect(container.textContent).toContain("Existing session");
   });
 
   it("shows an enablement message when the optional plugin is disabled", () => {

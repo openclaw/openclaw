@@ -389,13 +389,15 @@ describe("refreshActiveTab", () => {
     });
   });
 
-  it("loads config before rendering the Workboard tab", async () => {
+  it("loads config, sessions, and agents before rendering the Workboard tab", async () => {
     const host = createHost();
     host.tab = "workboard";
 
     await refreshActiveTab(host as never);
 
     expect(mocks.loadConfigMock).toHaveBeenCalledOnce();
+    expect(mocks.loadSessionsMock).toHaveBeenCalledOnce();
+    expect(mocks.loadAgentsMock).toHaveBeenCalledOnce();
     expect(mocks.loadConfigSchemaMock).not.toHaveBeenCalled();
   });
 
