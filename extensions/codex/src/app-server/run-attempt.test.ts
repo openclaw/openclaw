@@ -7811,6 +7811,33 @@ describe("runCodexAppServerAttempt", () => {
     expect(harness.request.mock.calls.some(([method]) => method === "turn/interrupt")).toBe(false);
   });
 
+  it("keeps upstream cancellation aborted when Codex completes the turn as interrupted", async () => {
+    const harness = createStartedThreadHarness();
+    const abortController = new AbortController();
+    const params = createParams(
+      path.join(tempDir, "session.jsonl"),
+      path.join(tempDir, "workspace"),
+    );
+    params.abortSignal = abortController.signal;
+    const run = runCodexAppServerAttempt(params, { turnTerminalIdleTimeoutMs: 60_000 });
+
+    await harness.waitForMethod("turn/start");
+    abortController.abort("user_cancelled");
+    await harness.notify({
+      method: "turn/completed",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        turn: { id: "turn-1", status: "interrupted" },
+      },
+    });
+
+    const result = await run;
+    expect(result.aborted).toBe(true);
+    expect(result.timedOut).toBe(false);
+    expect(result.promptError).toBeNull();
+  });
+
   it("releases completion when the app-server client closes during an active turn", async () => {
     const harness = createStartedThreadHarness();
     const run = runCodexAppServerAttempt(

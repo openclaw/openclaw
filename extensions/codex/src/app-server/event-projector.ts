@@ -313,7 +313,6 @@ export class CodexAppServerEventProjector {
       messagesSnapshot.push(attachCodexMirrorIdentity(lastAssistant, `${turnId}:assistant`));
     }
     const turnFailed = this.completedTurn?.status === "failed";
-    const turnInterrupted = this.completedTurn?.status === "interrupted";
     const promptError =
       this.promptError ??
       (turnFailed ? (this.completedTurn?.error?.message ?? "codex app-server turn failed") : null);
@@ -331,7 +330,7 @@ export class CodexAppServerEventProjector {
       this.sideEffectingToolItemIds.size > 0 ||
       this.sideEffectingDynamicToolCallIds.size > 0;
     return {
-      aborted: this.aborted || turnInterrupted,
+      aborted: this.aborted,
       externalAbort: false,
       timedOut: false,
       idleTimedOut: false,
@@ -660,9 +659,6 @@ export class CodexAppServerEventProjector {
       return;
     }
     this.completedTurn = turn;
-    if (turn.status === "interrupted") {
-      this.aborted = true;
-    }
     if (turn.status === "failed") {
       this.promptError =
         formatCodexUsageLimitErrorMessage({
