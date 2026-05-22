@@ -109,6 +109,8 @@ type GatewayHost = {
   pendingUpdateExpectedVersion: string | null;
   updateStatusBanner: { tone: "danger" | "warn" | "info"; text: string } | null;
   sessionKey: string;
+  chatSessionSearchAppliedQuery: string;
+  sessionsShowArchived: boolean;
   chatRunId: string | null;
   pendingAbort?: { runId?: string | null; sessionKey: string } | null;
   refreshSessionsAfterChat: Set<string>;
