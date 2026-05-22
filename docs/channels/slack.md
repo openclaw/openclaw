@@ -1288,13 +1288,15 @@ compact, redacted `Slack interaction: ...` system event. If the handler returns
 fields are included in that compact event so the agent can reference
 plugin-owned storage without seeing the complete form payload.
 
-## Exec approvals in Slack
+## Native approvals in Slack
 
 Slack can act as a native approval client with interactive buttons and interactions, instead of falling back to the Web UI or terminal.
 
-- Exec approvals use `channels.slack.execApprovals.*` for native DM/channel routing.
-- Plugin approvals can still resolve through the same Slack-native button surface when the request already lands in Slack and the approval id kind is `plugin:`.
-- Approver authorization is still enforced: only users identified as approvers can approve or deny requests through Slack.
+- Exec and plugin approvals can render as Slack-native Block Kit prompts.
+- `channels.slack.execApprovals.*` remains the native approval client enablement and DM/channel routing config.
+- Exec approval DMs use `channels.slack.execApprovals.approvers` or `commands.ownerAllowFrom`.
+- Plugin approval DMs use Slack plugin approvers from `channels.slack.allowFrom`, named-account `allowFrom`, or the account default route.
+- Approver authorization is still enforced: exec-only approvers cannot approve plugin requests unless they are also plugin approvers.
 
 This uses the same shared approval button surface as other channels. When `interactivity` is enabled in your Slack app settings, approval prompts render as Block Kit buttons directly in the conversation.
 When those buttons are present, they are the primary approval UX; OpenClaw
@@ -1341,8 +1343,8 @@ opt into origin-chat delivery:
 
 Shared `approvals.exec` forwarding is separate. Use it only when exec approval prompts must also
 route to other chats or explicit out-of-band targets. Shared `approvals.plugin` forwarding is also
-separate; Slack-native buttons can still resolve plugin approvals when those requests already land
-in Slack.
+separate; Slack native delivery suppresses that fallback only when Slack can handle the plugin
+approval request natively.
 
 Same-chat `/approve` also works in Slack channels and DMs that already support commands. See [Exec approvals](/tools/exec-approvals) for the full approval forwarding model.
 
