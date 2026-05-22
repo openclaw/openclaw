@@ -131,11 +131,18 @@ pnpm openclaw qa mantis slack-desktop-smoke \
 Approval checkpoint mode is mutually exclusive with `--gateway-setup`. It runs
 the opt-in `slack-approval-exec-native` and `slack-approval-plugin-native`
 scenarios unless you pass explicit approval checkpoint `--scenario` flags; other
-Slack scenarios are rejected before the VM starts. The remote watcher captures
+Slack scenarios are rejected before the VM starts. The Slack QA runner writes
+each checkpoint JSON file from the real Slack API message it observed, then the
+remote watcher renders that message snapshot into
 `approval-checkpoints/<scenario>-pending.png` and
-`approval-checkpoints/<scenario>-resolved.png` after the Slack QA runner writes
-each checkpoint JSON file. The run fails if any checkpoint JSON, ack JSON, or
-screenshot is missing or empty.
+`approval-checkpoints/<scenario>-resolved.png`. The run fails if any checkpoint
+JSON, message evidence, ack JSON, or rendered screenshot is missing or empty.
+
+Cold GitHub Actions leases do not have Slack Web cookies, so their browser
+capture can land on Slack sign-in. For approval checkpoint proof, trust the
+rendered checkpoint images and Slack QA artifacts rather than
+`slack-desktop-smoke.png`. Use a kept warm lease with a manually logged-in Slack
+Web profile only when the browser screenshot itself must show Slack Web.
 
 ## Hydrate modes
 
@@ -180,7 +187,8 @@ A good PR comment should show:
 - scenario id and candidate SHA;
 - GitHub Actions run URL;
 - artifact URL;
-- inline screenshot;
+- inline approval checkpoint screenshot, or a Slack Web screenshot from a
+  logged-in warm lease;
 - inline animated preview when available;
 - full MP4 and trimmed MP4 links;
 - pass/fail status;

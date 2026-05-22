@@ -281,7 +281,7 @@ async function readJsonObject(filePath: string, label: string): Promise<Record<s
   return parsed as Record<string, unknown>;
 }
 
-function assertApprovalCheckpointJson(params: {
+function assertApprovalCheckpointBaseJson(params: {
   filePath: string;
   label: string;
   record: Record<string, unknown>;
@@ -299,6 +299,48 @@ function assertApprovalCheckpointJson(params: {
   }
 }
 
+function assertApprovalCheckpointJson(params: {
+  filePath: string;
+  label: string;
+  record: Record<string, unknown>;
+  scenarioId: string;
+  state: MantisApprovalCheckpointState;
+}) {
+  assertApprovalCheckpointBaseJson(params);
+  const message = params.record.message;
+  if (!message || typeof message !== "object" || Array.isArray(message)) {
+    throw new Error(`${params.label} is missing Slack message evidence in ${params.filePath}`);
+  }
+  const candidate = message as Record<string, unknown>;
+  if (typeof candidate.text !== "string") {
+    throw new Error(`${params.label} message evidence is missing text in ${params.filePath}`);
+  }
+  if (
+    !Array.isArray(candidate.blockText) ||
+    !candidate.blockText.every((entry) => typeof entry === "string")
+  ) {
+    throw new Error(`${params.label} message evidence is missing blockText in ${params.filePath}`);
+  }
+  if (
+    !Array.isArray(candidate.actionLabels) ||
+    !candidate.actionLabels.every((entry) => typeof entry === "string")
+  ) {
+    throw new Error(
+      `${params.label} message evidence is missing actionLabels in ${params.filePath}`,
+    );
+  }
+  if (typeof candidate.hasNativeActions !== "boolean") {
+    throw new Error(
+      `${params.label} message evidence is missing hasNativeActions in ${params.filePath}`,
+    );
+  }
+  if (params.state === "pending" && candidate.actionLabels.length === 0) {
+    throw new Error(
+      `${params.label} pending message evidence has no native action labels in ${params.filePath}`,
+    );
+  }
+}
+
 function assertApprovalCheckpointAckJson(params: {
   filePath: string;
   label: string;
@@ -307,7 +349,7 @@ function assertApprovalCheckpointAckJson(params: {
   screenshotPath: string;
   state: MantisApprovalCheckpointState;
 }) {
-  assertApprovalCheckpointJson(params);
+  assertApprovalCheckpointBaseJson(params);
   if (typeof params.record.screenshotPath !== "string" || !params.record.screenshotPath.trim()) {
     throw new Error(`${params.label} is missing screenshotPath in ${params.filePath}`);
   }
@@ -744,19 +786,21 @@ MANTIS_SLACK_PATCH
       export OPENCLAW_QA_SLACK_APPROVAL_CHECKPOINT_DIR="$checkpoint_dir"
       export OPENCLAW_QA_SLACK_APPROVAL_CHECKPOINT_TIMEOUT_MS="\${OPENCLAW_QA_SLACK_APPROVAL_CHECKPOINT_TIMEOUT_MS:-120000}"
       export OPENCLAW_MANTIS_APPROVAL_CHECKPOINT_SCENARIOS_JSON="$approval_checkpoint_scenarios_json"
+      export OPENCLAW_MANTIS_APPROVAL_BROWSER_BIN="$browser_bin"
       cat >"$out/approval-checkpoint-watcher.mjs" <<'MANTIS_APPROVAL_WATCHER'
-import { spawn } from "node:child_process";
-import fs from "node:fs/promises";
-import path from "node:path";
+	import { spawn } from "node:child_process";
+	import fs from "node:fs/promises";
+	import path from "node:path";
 
 const checkpointDir = process.env.OPENCLAW_QA_SLACK_APPROVAL_CHECKPOINT_DIR;
 const timeoutMs = Number.parseInt(
   process.env.OPENCLAW_QA_SLACK_APPROVAL_CHECKPOINT_TIMEOUT_MS || "120000",
   10,
 );
-const scenarioIds = JSON.parse(
-  process.env.OPENCLAW_MANTIS_APPROVAL_CHECKPOINT_SCENARIOS_JSON || "[]",
-);
+	const scenarioIds = JSON.parse(
+	  process.env.OPENCLAW_MANTIS_APPROVAL_CHECKPOINT_SCENARIOS_JSON || "[]",
+	);
+	const browserBin = process.env.OPENCLAW_MANTIS_APPROVAL_BROWSER_BIN;
 
 if (!checkpointDir) {
   throw new Error("OPENCLAW_QA_SLACK_APPROVAL_CHECKPOINT_DIR is required.");
@@ -768,8 +812,19 @@ if (!Array.isArray(scenarioIds) || scenarioIds.length === 0) {
   throw new Error("At least one approval checkpoint scenario id is required.");
 }
 
-const states = ["pending", "resolved"];
-const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+	const states = ["pending", "resolved"];
+	const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+	const htmlEscape = (value) =>
+	  String(value ?? "")
+	    .replaceAll("&", "&amp;")
+	    .replaceAll("<", "&lt;")
+	    .replaceAll(">", "&gt;")
+	    .replaceAll('"', "&quot;")
+	    .replaceAll("'", "&#39;");
+
+	async function readJson(filePath) {
+	  return JSON.parse(await fs.readFile(filePath, "utf8"));
+	}
 
 async function waitForCheckpoint(filePath) {
   const deadline = Date.now() + timeoutMs;
@@ -787,18 +842,100 @@ async function waitForCheckpoint(filePath) {
   throw new Error(\`Timed out waiting for approval checkpoint: \${filePath}\`);
 }
 
-async function captureScreenshot(screenshotPath) {
-  await new Promise((resolve, reject) => {
-    const child = spawn("scrot", [screenshotPath], { stdio: "inherit" });
-    child.on("error", reject);
-    child.on("exit", (code) => {
-      if (code === 0) {
-        resolve();
-      } else {
-        reject(new Error(\`scrot exited with code \${code ?? "unknown"} for \${screenshotPath}\`));
-      }
-    });
-  });
+	function renderCheckpointHtml(checkpoint) {
+	  const message = checkpoint && typeof checkpoint.message === "object" ? checkpoint.message : {};
+	  const blockText = Array.isArray(message.blockText)
+	    ? message.blockText.filter((entry) => typeof entry === "string" && entry.trim().length > 0)
+	    : [];
+	  const actionLabels = Array.isArray(message.actionLabels)
+	    ? message.actionLabels.filter((entry) => typeof entry === "string" && entry.trim().length > 0)
+	    : [];
+	  const text = typeof message.text === "string" ? message.text : "";
+	  const lines = blockText.length > 0 ? blockText : text.split("\\n").filter(Boolean);
+	  const title =
+	    lines[0] ||
+	    (checkpoint.approvalKind === "plugin" ? "Plugin approval required" : "Exec approval required");
+	  const detailLines = lines.slice(1).filter((line) => !actionLabels.includes(line));
+	  const stateLabel = checkpoint.state === "resolved" ? "Resolved" : "Pending";
+	  const decision = typeof checkpoint.decision === "string" ? checkpoint.decision : "";
+	  const decisionLabel =
+	    decision === "allow-once"
+	      ? "Allowed once"
+	      : decision === "allow-always"
+	        ? "Allowed always"
+	        : decision === "deny"
+	          ? "Denied"
+	          : "";
+	  const detailHtml = detailLines
+	    .map((line) => '<p class="detail">' + htmlEscape(line) + "</p>")
+	    .join("");
+	  const buttonsHtml =
+	    checkpoint.state === "pending" && actionLabels.length > 0
+	      ? '<div class="actions">' +
+	        actionLabels.map((label) => '<button>' + htmlEscape(label) + "</button>").join("") +
+	        "</div>"
+	      : '<div class="resolution">' + htmlEscape(decisionLabel || stateLabel) + "</div>";
+	  return '<!doctype html><html><head><meta charset="utf-8">' +
+	    "<style>" +
+	    "body{margin:0;background:#1d1c1d;color:#d1d2d3;font:16px Arial,Helvetica,sans-serif;}" +
+	    ".wrap{width:920px;min-height:620px;padding:34px 40px;box-sizing:border-box;}" +
+	    ".channel{color:#f8f8f8;font-size:22px;font-weight:700;margin-bottom:28px;}" +
+	    ".message{display:flex;gap:14px;align-items:flex-start;}" +
+	    ".avatar{width:42px;height:42px;border-radius:8px;background:#36c5f0;display:flex;align-items:center;justify-content:center;color:#101214;font-weight:800;}" +
+	    ".content{max-width:760px;}" +
+	    ".meta{display:flex;gap:8px;align-items:center;margin-bottom:8px;}" +
+	    ".name{font-weight:800;color:#f8f8f8;}.app{font-size:12px;color:#d1d2d3;border:1px solid #55585d;border-radius:4px;padding:1px 4px;}" +
+	    ".state{color:#b9babd;font-size:13px;}" +
+	    ".title{font-size:20px;color:#f8f8f8;font-weight:800;margin:0 0 10px;}" +
+	    ".detail{margin:6px 0;color:#d1d2d3;line-height:1.35;}" +
+	    ".actions{display:flex;gap:10px;margin-top:16px;}" +
+	    "button{background:#2c2d30;color:#f8f8f8;border:1px solid #565856;border-radius:4px;font-weight:700;padding:8px 14px;font-size:15px;}" +
+	    ".resolution{display:inline-block;margin-top:16px;color:#2eb67d;border:1px solid #2eb67d;border-radius:4px;padding:7px 12px;font-weight:700;}" +
+	    ".evidence{margin-top:34px;color:#b9babd;font-size:13px;border-top:1px solid #3a3d42;padding-top:14px;}" +
+	    "</style></head><body><main class=\"wrap\">" +
+	    '<div class="channel"># Slack native approval checkpoint</div>' +
+	    '<section class="message"><div class="avatar">OC</div><div class="content">' +
+	    '<div class="meta"><span class="name">openclaw</span><span class="app">APP</span><span class="state">' +
+	    htmlEscape(stateLabel) +
+	    "</span></div>" +
+	    '<h1 class="title">' + htmlEscape(title) + "</h1>" +
+	    detailHtml +
+	    buttonsHtml +
+	    '<div class="evidence">Rendered from the Slack API message observed by QA at ' +
+	    htmlEscape(checkpoint.observedAt || "") +
+	    ".</div>" +
+	    "</div></section></main></body></html>";
+	}
+
+	async function captureScreenshot(screenshotPath, checkpoint) {
+	  if (!browserBin) {
+	    throw new Error("OPENCLAW_MANTIS_APPROVAL_BROWSER_BIN is required to render approval checkpoint screenshots.");
+	  }
+	  const htmlPath = screenshotPath + ".html";
+	  await fs.writeFile(htmlPath, renderCheckpointHtml(checkpoint), "utf8");
+	  await new Promise((resolve, reject) => {
+	    const child = spawn(
+	      browserBin,
+	      [
+	        "--headless=new",
+	        "--disable-gpu",
+	        "--no-sandbox",
+	        "--disable-dev-shm-usage",
+	        "--window-size=960,720",
+	        "--screenshot=" + screenshotPath,
+	        new URL("file://" + path.resolve(htmlPath)).href,
+	      ],
+	      { stdio: "inherit" },
+	    );
+	    child.on("error", reject);
+	    child.on("exit", (code) => {
+	      if (code === 0) {
+	        resolve();
+	      } else {
+	        reject(new Error(\`browser screenshot exited with code \${code ?? "unknown"} for \${screenshotPath}\`));
+	      }
+	    });
+	  });
   const stats = await fs.stat(screenshotPath);
   if (!stats.isFile() || stats.size <= 0) {
     throw new Error(\`Approval checkpoint screenshot is missing or empty: \${screenshotPath}\`);
@@ -817,11 +954,12 @@ for (const scenarioId of scenarioIds) {
     throw new Error("Approval checkpoint scenario ids must be non-empty strings.");
   }
   for (const state of states) {
-    const checkpointPath = path.join(checkpointDir, \`\${scenarioId}.\${state}.json\`);
-    const screenshotPath = path.join(checkpointDir, \`\${scenarioId}-\${state}.png\`);
-    const ackPath = path.join(checkpointDir, \`\${scenarioId}.\${state}.ack.json\`);
-    await waitForCheckpoint(checkpointPath);
-    await captureScreenshot(screenshotPath);
+	    const checkpointPath = path.join(checkpointDir, \`\${scenarioId}.\${state}.json\`);
+	    const screenshotPath = path.join(checkpointDir, \`\${scenarioId}-\${state}.png\`);
+	    const ackPath = path.join(checkpointDir, \`\${scenarioId}.\${state}.ack.json\`);
+	    await waitForCheckpoint(checkpointPath);
+	    const checkpoint = await readJson(checkpointPath);
+	    await captureScreenshot(screenshotPath, checkpoint);
     const acknowledgement = {
       version: 1,
       scenarioId,

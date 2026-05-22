@@ -177,9 +177,12 @@ pnpm openclaw qa mantis slack-desktop-smoke \
 
 This mode is mutually exclusive with `--gateway-setup`. It runs the Slack
 approval scenarios, rejects non-approval scenario ids, waits at each pending and
-resolved approval state, captures `approval-checkpoints/<scenario>-pending.png` and
+resolved approval state, renders the observed Slack API message into
+`approval-checkpoints/<scenario>-pending.png` and
 `approval-checkpoints/<scenario>-resolved.png`, then fails if any checkpoint,
-acknowledgement, or screenshot is missing or empty.
+message evidence, acknowledgement, or rendered screenshot is missing or empty.
+Cold CI leases may still show Slack sign-in in `slack-desktop-smoke.png`; the
+approval checkpoint images are the visual proof for this lane.
 
 The operator checklist, GitHub workflow dispatch command, evidence-comment
 contract, hydrate-mode decision table, timing interpretation, and failure

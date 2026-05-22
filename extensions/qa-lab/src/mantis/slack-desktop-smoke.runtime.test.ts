@@ -53,6 +53,16 @@ async function writeApprovalCheckpointArtifacts(outputDir: string, scenarioIds: 
           threadTs: null,
           decision: state === "resolved" ? "allow-once" : null,
           observedAt: "2026-05-04T13:00:29.000Z",
+          message: {
+            actionLabels: state === "pending" ? ["Allow Once", "Allow Always", "Deny"] : [],
+            blockText:
+              state === "pending"
+                ? ["Plugin approval required", "Slack plugin approval QA marker"]
+                : ["Plugin approval: Allowed once", "Slack plugin approval QA marker"],
+            hasNativeActions: state === "pending",
+            text:
+              state === "pending" ? "Plugin approval required" : "Plugin approval: Allowed once",
+          },
         })}\n`,
       );
       await fs.writeFile(
@@ -298,6 +308,10 @@ describe("mantis Slack desktop smoke runtime", () => {
     expect(remoteScript).toContain('cat >"$out/approval-checkpoint-watcher.mjs"');
     expect(remoteScript).not.toContain('node >"$out/approval-checkpoint-watcher.mjs"');
     expect(remoteScript).toContain("approval-checkpoint-watcher.mjs");
+    expect(remoteScript).toContain("OPENCLAW_MANTIS_APPROVAL_BROWSER_BIN");
+    expect(remoteScript).toContain("Rendered from the Slack API message observed by QA");
+    expect(remoteScript).toContain("--headless=new");
+    expect(remoteScript).not.toContain('spawn("scrot", [screenshotPath]');
     expect(remoteScript).toContain("Slack QA exited before all expected approval checkpoints");
     expect(remoteScript).toContain('if [ "$qa_exit" -eq 0 ]; then\n        wait "$watcher_pid"');
     const summary = JSON.parse(await fs.readFile(result.summaryPath, "utf8")) as {

@@ -123,6 +123,35 @@ describe("Slack live QA runtime helpers", () => {
     ).toEqual(["/approve plugin:abc allow-once"]);
   });
 
+  it("builds approval checkpoint message evidence from Slack blocks", () => {
+    expect(
+      testing.buildSlackApprovalCheckpointMessage({
+        blocks: [
+          {
+            type: "section",
+            text: { type: "mrkdwn", text: "Plugin approval required" },
+          },
+          {
+            type: "actions",
+            elements: [
+              {
+                type: "button",
+                text: { type: "plain_text", text: "Allow Once" },
+                value: "/approve plugin:abc allow-once",
+              },
+            ],
+          },
+        ],
+        text: "Plugin approval required",
+      }),
+    ).toEqual({
+      actionLabels: ["Allow Once"],
+      blockText: ["Plugin approval required", "Allow Once"],
+      hasNativeActions: true,
+      text: "Plugin approval required",
+    });
+  });
+
   it("resolves Slack approval checkpoint configuration from env", () => {
     expect(
       testing.resolveSlackApprovalCheckpointConfig({

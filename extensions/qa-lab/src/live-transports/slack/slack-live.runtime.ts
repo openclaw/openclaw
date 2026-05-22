@@ -184,6 +184,13 @@ type SlackApprovalCheckpointAck = {
   screenshotPath?: string;
 };
 
+type SlackApprovalCheckpointMessage = {
+  actionLabels: string[];
+  blockText: string[];
+  hasNativeActions: boolean;
+  text: string;
+};
+
 type SlackQaScenarioResult = {
   approval?: SlackApprovalArtifact;
   details: string;
@@ -787,6 +794,48 @@ function collectSlackActionValues(blocks?: unknown[]) {
   return collectSlackBlockStringFields(blocks ?? [], "value");
 }
 
+function collectSlackButtonLabels(blocks?: unknown[]) {
+  const labels: string[] = [];
+  function visit(value: unknown) {
+    if (Array.isArray(value)) {
+      for (const entry of value) {
+        visit(entry);
+      }
+      return;
+    }
+    if (!value || typeof value !== "object") {
+      return;
+    }
+    const candidate = value as Record<string, unknown>;
+    if (candidate.type === "button") {
+      const text = candidate.text;
+      if (text && typeof text === "object") {
+        const label = (text as { text?: unknown }).text;
+        if (typeof label === "string" && label.trim().length > 0) {
+          labels.push(label);
+        }
+      }
+    }
+    for (const entry of Object.values(candidate)) {
+      visit(entry);
+    }
+  }
+  visit(blocks ?? []);
+  return labels;
+}
+
+function buildSlackApprovalCheckpointMessage(
+  message: SlackMessage,
+): SlackApprovalCheckpointMessage {
+  const actionValues = collectSlackActionValues(message.blocks);
+  return {
+    actionLabels: collectSlackButtonLabels(message.blocks),
+    blockText: collectSlackBlockText(message.blocks),
+    hasNativeActions: actionValues.some((value) => value.includes("/approve")),
+    text: message.text ?? "",
+  };
+}
+
 function hasSlackNativeApprovalActions(params: {
   actionValues: string[];
   approvalId: string;
@@ -1209,6 +1258,7 @@ async function writeSlackApprovalCheckpoint(params: {
         threadTs: params.message.thread_ts ?? null,
         decision: params.decision ?? null,
         observedAt: params.observedAt,
+        message: buildSlackApprovalCheckpointMessage(params.message),
       },
       null,
       2,
@@ -1994,8 +2044,10 @@ export async function runSlackQaLive(params: {
 }
 
 export const testing = {
+  buildSlackApprovalCheckpointMessage,
   buildSlackQaConfig,
   collectSlackActionValues,
+  collectSlackButtonLabels,
   collectSlackBlockText,
   findScenario,
   parseSlackQaCredentialPayload,

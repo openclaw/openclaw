@@ -337,6 +337,7 @@ jobs:
 
           status="$(jq -r '.status' "$root/mantis-slack-desktop-smoke-summary.json")"
           screenshot_required=false
+          desktop_capture_inline=true
           if [[ "$status" == "pass" ]]; then
             screenshot_required=true
           fi
@@ -344,14 +345,16 @@ jobs:
           expected_result="Slack QA and VM gateway setup pass"
           checkpoint_artifacts='[]'
           if [[ "$APPROVAL_CHECKPOINTS" == "true" ]]; then
-            evidence_summary="Mantis ran Slack native approval QA inside a Crabbox Linux VNC desktop, captured pending/resolved approval checkpoints, and stored Slack QA artifacts."
+            evidence_summary="Mantis ran Slack native approval QA inside a Crabbox Linux VNC desktop, rendered pending/resolved approval checkpoints from the Slack API messages, and stored Slack QA artifacts."
             expected_result="Slack native exec and plugin approval checkpoints pass"
+            screenshot_required=false
+            desktop_capture_inline=false
             checkpoint_artifacts="$(
               jq -n '[
-                { kind: "desktopScreenshot", lane: "candidate", label: "Exec approval pending checkpoint", path: "approval-checkpoints/slack-approval-exec-native-pending.png", targetPath: "approval-checkpoints/slack-approval-exec-native-pending.png", alt: "Slack exec approval pending checkpoint screenshot", width: 720, inline: true, required: true },
-                { kind: "desktopScreenshot", lane: "candidate", label: "Exec approval resolved checkpoint", path: "approval-checkpoints/slack-approval-exec-native-resolved.png", targetPath: "approval-checkpoints/slack-approval-exec-native-resolved.png", alt: "Slack exec approval resolved checkpoint screenshot", width: 720, inline: true, required: true },
-                { kind: "desktopScreenshot", lane: "candidate", label: "Plugin approval pending checkpoint", path: "approval-checkpoints/slack-approval-plugin-native-pending.png", targetPath: "approval-checkpoints/slack-approval-plugin-native-pending.png", alt: "Slack plugin approval pending checkpoint screenshot", width: 720, inline: true, required: true },
-                { kind: "desktopScreenshot", lane: "candidate", label: "Plugin approval resolved checkpoint", path: "approval-checkpoints/slack-approval-plugin-native-resolved.png", targetPath: "approval-checkpoints/slack-approval-plugin-native-resolved.png", alt: "Slack plugin approval resolved checkpoint screenshot", width: 720, inline: true, required: true }
+                { kind: "desktopScreenshot", lane: "candidate", label: "Exec approval pending checkpoint", path: "approval-checkpoints/slack-approval-exec-native-pending.png", targetPath: "approval-checkpoints/slack-approval-exec-native-pending.png", alt: "Rendered Slack exec approval pending checkpoint", width: 720, inline: true, required: true },
+                { kind: "desktopScreenshot", lane: "candidate", label: "Exec approval resolved checkpoint", path: "approval-checkpoints/slack-approval-exec-native-resolved.png", targetPath: "approval-checkpoints/slack-approval-exec-native-resolved.png", alt: "Rendered Slack exec approval resolved checkpoint", width: 720, inline: true, required: true },
+                { kind: "desktopScreenshot", lane: "candidate", label: "Plugin approval pending checkpoint", path: "approval-checkpoints/slack-approval-plugin-native-pending.png", targetPath: "approval-checkpoints/slack-approval-plugin-native-pending.png", alt: "Rendered Slack plugin approval pending checkpoint", width: 720, inline: true, required: true },
+                { kind: "desktopScreenshot", lane: "candidate", label: "Plugin approval resolved checkpoint", path: "approval-checkpoints/slack-approval-plugin-native-resolved.png", targetPath: "approval-checkpoints/slack-approval-plugin-native-resolved.png", alt: "Rendered Slack plugin approval resolved checkpoint", width: 720, inline: true, required: true }
               ]'
             )"
           fi
@@ -363,6 +366,7 @@ jobs:
             --arg expected "$expected_result" \
             --argjson checkpoint_artifacts "$checkpoint_artifacts" \
             --argjson screenshot_required "$screenshot_required" \
+            --argjson desktop_capture_inline "$desktop_capture_inline" \
             '{
               schemaVersion: 1,
               id: "slack-desktop-smoke",
@@ -374,8 +378,8 @@ jobs:
                 pass: ($status == "pass")
               },
               artifacts: ([
-                { kind: "desktopScreenshot", lane: "candidate", label: "Slack desktop/VNC browser", path: "slack-desktop-smoke.png", targetPath: "slack-desktop.png", alt: "Slack Web desktop screenshot from the Mantis VM", width: 720, inline: true, required: $screenshot_required },
-                { kind: "motionPreview", lane: "candidate", label: "Slack motion preview", path: "slack-desktop-smoke-preview.gif", targetPath: "slack-desktop-preview.gif", alt: "Animated Slack desktop preview", width: 720, inline: true, required: false },
+                { kind: "desktopScreenshot", lane: "candidate", label: "Slack desktop/VNC browser", path: "slack-desktop-smoke.png", targetPath: "slack-desktop.png", alt: "Slack Web desktop screenshot from the Mantis VM", width: 720, inline: $desktop_capture_inline, required: $screenshot_required },
+                { kind: "motionPreview", lane: "candidate", label: "Slack motion preview", path: "slack-desktop-smoke-preview.gif", targetPath: "slack-desktop-preview.gif", alt: "Animated Slack desktop preview", width: 720, inline: $desktop_capture_inline, required: false },
                 { kind: "motionClip", lane: "candidate", label: "Slack change MP4", path: "slack-desktop-smoke-change.mp4", targetPath: "slack-desktop-change.mp4", required: false },
                 { kind: "fullVideo", lane: "candidate", label: "Slack desktop MP4", path: "slack-desktop-smoke.mp4", targetPath: "slack-desktop.mp4", required: false },
                 { kind: "metadata", lane: "run", label: "Slack desktop summary", path: "mantis-slack-desktop-smoke-summary.json", targetPath: "summary.json" },
