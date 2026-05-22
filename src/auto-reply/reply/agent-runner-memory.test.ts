@@ -22,6 +22,7 @@ const runEmbeddedPiAgentMock = vi.fn();
 const refreshQueuedFollowupSessionMock = vi.fn();
 const incrementCompactionCountMock = vi.fn();
 const ensureSelectedAgentHarnessPluginMock = vi.fn();
+const ensureMemoryFlushTargetFileMock = vi.fn();
 
 function registerMemoryFlushPlanResolverForTest(resolver: MemoryFlushPlanResolver): void {
   registerMemoryCapability("memory-core", { flushPlanResolver: resolver });
@@ -141,6 +142,7 @@ describe("runMemoryFlushIfNeeded", () => {
     });
     runEmbeddedPiAgentMock.mockReset().mockResolvedValue({ payloads: [], meta: {} });
     refreshQueuedFollowupSessionMock.mockReset();
+    ensureMemoryFlushTargetFileMock.mockReset().mockResolvedValue(undefined);
     ensureSelectedAgentHarnessPluginMock.mockReset().mockResolvedValue(undefined);
     incrementCompactionCountMock.mockReset().mockImplementation(async (params) => {
       const sessionKey = String(params.sessionKey ?? "");
@@ -174,6 +176,7 @@ describe("runMemoryFlushIfNeeded", () => {
       compactEmbeddedPiSession: compactEmbeddedPiSessionMock as never,
       runWithModelFallback: runWithModelFallbackMock as never,
       runEmbeddedPiAgent: runEmbeddedPiAgentMock as never,
+      ensureMemoryFlushTargetFile: ensureMemoryFlushTargetFileMock as never,
       refreshQueuedFollowupSession: refreshQueuedFollowupSessionMock as never,
       incrementCompactionCount: incrementCompactionCountMock as never,
       ensureSelectedAgentHarnessPlugin: ensureSelectedAgentHarnessPluginMock as never,
@@ -246,6 +249,13 @@ describe("runMemoryFlushIfNeeded", () => {
     expect(flushCall.prompt).not.toBe(flushCall.transcriptPrompt);
     expect(flushCall.memoryFlushWritePath).toMatch(/^memory\/\d{4}-\d{2}-\d{2}\.md$/);
     expect(flushCall.silentExpected).toBe(true);
+    expect(ensureMemoryFlushTargetFileMock).toHaveBeenCalledWith({
+      workspaceDir: followupRun.run.workspaceDir,
+      relativePath: flushCall.memoryFlushWritePath,
+    });
+    expect(ensureMemoryFlushTargetFileMock.mock.invocationCallOrder[0]).toBeLessThan(
+      runEmbeddedPiAgentMock.mock.invocationCallOrder[0] ?? 0,
+    );
     expect(refreshQueuedFollowupSessionMock).toHaveBeenCalledTimes(1);
     const refreshCall = requireRefreshQueuedFollowupSessionCall();
     expect(refreshCall.key).toBe(sessionKey);

@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
+import path from "node:path";
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import { resolveBootstrapWarningSignaturesSeen } from "../../agents/bootstrap-budget.js";
 import { estimateMessagesTokens } from "../../agents/compaction.js";
@@ -85,11 +86,36 @@ async function runEmbeddedPiAgentDefault(
   return await runEmbeddedPiAgent(...args);
 }
 
+async function ensureMemoryFlushTargetFile(params: {
+  workspaceDir: string;
+  relativePath: string;
+}): Promise<void> {
+  const workspaceDir = normalizeOptionalString(params.workspaceDir);
+  const relativePath = normalizeOptionalString(params.relativePath);
+  if (!workspaceDir || !relativePath || path.isAbsolute(relativePath)) {
+    throw new Error("Invalid memory flush target path");
+  }
+  const workspaceRoot = path.resolve(workspaceDir);
+  const targetPath = path.resolve(workspaceRoot, relativePath);
+  const targetRelativePath = path.relative(workspaceRoot, targetPath);
+  if (
+    !targetRelativePath ||
+    targetRelativePath.startsWith("..") ||
+    path.isAbsolute(targetRelativePath)
+  ) {
+    throw new Error("Memory flush target path must stay inside the workspace");
+  }
+  await fs.promises.mkdir(path.dirname(targetPath), { recursive: true });
+  const handle = await fs.promises.open(targetPath, "a");
+  await handle.close();
+}
+
 const memoryDeps = {
   compactEmbeddedPiSession: compactEmbeddedPiSessionDefault,
   runWithModelFallback,
   ensureSelectedAgentHarnessPlugin,
   runEmbeddedPiAgent: runEmbeddedPiAgentDefault,
+  ensureMemoryFlushTargetFile,
   registerAgentRunContext,
   refreshQueuedFollowupSession,
   incrementCompactionCount,
@@ -104,6 +130,7 @@ export function setAgentRunnerMemoryTestDeps(overrides?: Partial<typeof memoryDe
     ensureSelectedAgentHarnessPlugin,
     compactEmbeddedPiSession: compactEmbeddedPiSessionDefault,
     runEmbeddedPiAgent: runEmbeddedPiAgentDefault,
+    ensureMemoryFlushTargetFile,
     registerAgentRunContext,
     refreshQueuedFollowupSession,
     incrementCompactionCount,
@@ -1013,6 +1040,10 @@ export async function runMemoryFlushIfNeeded(params: {
       nowMs: memoryFlushNowMs,
     }) ?? memoryFlushPlan;
   const memoryFlushWritePath = activeMemoryFlushPlan.relativePath;
+  await memoryDeps.ensureMemoryFlushTargetFile({
+    workspaceDir: params.followupRun.run.workspaceDir,
+    relativePath: memoryFlushWritePath,
+  });
   const flushSystemPrompt = [
     params.followupRun.run.extraSystemPrompt,
     activeMemoryFlushPlan.systemPrompt,
