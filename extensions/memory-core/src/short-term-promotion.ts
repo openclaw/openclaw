@@ -319,6 +319,27 @@ function isContaminatedDreamingSnippet(raw: string): boolean {
   return hasNarrativeLead && hasConfidence && hasEvidence && hasStatus && hasRecalls;
 }
 
+// Known empty daily-note section headings; arbitrary single headings should remain promotable.
+const MARKDOWN_SKELETON_HEADING_BODIES = new Set([
+  "aufgaben",
+  "daily notes",
+  "decisions",
+  "entscheidungen",
+  "notes",
+  "tasks",
+  "tagesnotizen",
+  "todo",
+  "todos",
+]);
+
+function normalizeMarkdownSkeletonHeadingBody(raw: string): string {
+  return raw
+    .replace(/[-*+>`_[\](){}|~.,;!?]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLowerCase();
+}
+
 function isMarkdownSkeletonSnippet(raw: string): boolean {
   const nonEmptyLines = raw
     .split(/\r?\n/)
@@ -341,14 +362,11 @@ function isMarkdownSkeletonSnippet(raw: string): boolean {
         hasPlaceholderLine = true;
         continue;
       }
-      const headingWords =
-        headingBody.replace(/#{1,6}\s*/g, " ").match(/[\p{L}\p{N}][\p{L}\p{N}'-]*/gu) ?? [];
-      // Short single headings are usually template scaffolding; three or more words carry memory text.
-      if (/:\s*\S/.test(headingBody) || headingWords.length >= 3) {
-        return false;
+      if (MARKDOWN_SKELETON_HEADING_BODIES.has(normalizeMarkdownSkeletonHeadingBody(headingBody))) {
+        hasPlaceholderLine = true;
+        continue;
       }
-      hasPlaceholderLine = true;
-      continue;
+      return false;
     }
     return false;
   }

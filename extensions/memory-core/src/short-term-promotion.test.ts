@@ -1151,6 +1151,8 @@ describe("short-term promotion", () => {
       "```",
       "|",
       "[]",
+      "## Tagesnotizen",
+      "## Notes",
       "## Tagesnotizen\n-\n\n## Entscheidungen\n-",
       "## Tagesnotizen\n## Entscheidungen",
       "## Tagesnotizen - ## Entscheidungen -",
@@ -1170,6 +1172,8 @@ describe("short-term promotion", () => {
     expect(testing.isUnpromotableShortTermSnippet("- ## Decision move backups to S3")).toBe(false);
     expect(testing.isUnpromotableShortTermSnippet("## API keys rotated")).toBe(false);
     expect(testing.isUnpromotableShortTermSnippet("- ## VPN outage fix")).toBe(false);
+    expect(testing.isUnpromotableShortTermSnippet("## Prod outage")).toBe(false);
+    expect(testing.isUnpromotableShortTermSnippet("## 修复备份轮换")).toBe(false);
   });
 
   it("does not record placeholder-only grounded candidates for promotion", async () => {
@@ -1212,7 +1216,7 @@ describe("short-term promotion", () => {
       await writeDailyMemoryNote(workspaceDir, "2026-04-18", [
         "## Tagesnotizen",
         "- ## Entscheidungen",
-        "- ## VPN outage fix",
+        "- ## 修复备份轮换",
       ]);
       await fs.writeFile(
         resolveShortTermRecallStorePath(workspaceDir),
@@ -1222,7 +1226,7 @@ describe("short-term promotion", () => {
             updatedAt: "2026-04-18T10:00:00.000Z",
             entries: {
               placeholder: entry("- ## Entscheidungen", 2),
-              durable: entry("- ## VPN outage fix", 3),
+              durable: entry("- ## 修复备份轮换", 3),
             },
           },
           null,
@@ -1238,7 +1242,7 @@ describe("short-term promotion", () => {
         minUniqueQueries: 0,
       });
       expect(ranked).toHaveLength(1);
-      expect(ranked[0]?.snippet).toBe("- ## VPN outage fix");
+      expect(ranked[0]?.snippet).toBe("- ## 修复备份轮换");
 
       const applied = await applyShortTermPromotions({
         workspaceDir,
@@ -1250,7 +1254,7 @@ describe("short-term promotion", () => {
 
       expect(applied.applied).toBe(1);
       const memoryText = await fs.readFile(path.join(workspaceDir, "MEMORY.md"), "utf-8");
-      expect(memoryText).toContain("- ## VPN outage fix");
+      expect(memoryText).toContain("- ## 修复备份轮换");
       expect(memoryText).not.toContain("- ## Entscheidungen");
     });
   });
