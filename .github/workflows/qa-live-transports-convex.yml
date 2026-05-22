@@ -22,6 +22,14 @@ on:
         description: Optional comma-separated WhatsApp scenario ids
         required: false
         type: string
+      whatsapp_credential_role:
+        description: Convex credential role for the WhatsApp lane
+        required: false
+        default: ci
+        type: choice
+        options:
+          - ci
+          - maintainer
       slack_scenario:
         description: Optional comma-separated Slack scenario ids
         required: false
@@ -501,6 +509,8 @@ jobs:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           OPENCLAW_QA_CONVEX_SITE_URL: ${{ secrets.OPENCLAW_QA_CONVEX_SITE_URL }}
           OPENCLAW_QA_CONVEX_SECRET_CI: ${{ secrets.OPENCLAW_QA_CONVEX_SECRET_CI }}
+          OPENCLAW_QA_CONVEX_SECRET_MAINTAINER: ${{ secrets.OPENCLAW_QA_CONVEX_SECRET_MAINTAINER }}
+          INPUT_WHATSAPP_CREDENTIAL_ROLE: ${{ github.event_name == 'workflow_dispatch' && inputs.whatsapp_credential_role || 'ci' }}
         shell: bash
         run: |
           set -euo pipefail
@@ -515,7 +525,18 @@ jobs:
 
           require_var OPENAI_API_KEY
           require_var OPENCLAW_QA_CONVEX_SITE_URL
-          require_var OPENCLAW_QA_CONVEX_SECRET_CI
+          case "${INPUT_WHATSAPP_CREDENTIAL_ROLE}" in
+            ci)
+              require_var OPENCLAW_QA_CONVEX_SECRET_CI
+              ;;
+            maintainer)
+              require_var OPENCLAW_QA_CONVEX_SECRET_MAINTAINER
+              ;;
+            *)
+              echo "Unsupported WhatsApp credential role: ${INPUT_WHATSAPP_CREDENTIAL_ROLE}" >&2
+              exit 1
+              ;;
+          esac
 
       - name: Build private QA runtime
         env:
@@ -720,6 +741,7 @@ jobs:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           OPENCLAW_QA_CONVEX_SITE_URL: ${{ secrets.OPENCLAW_QA_CONVEX_SITE_URL }}
           OPENCLAW_QA_CONVEX_SECRET_CI: ${{ secrets.OPENCLAW_QA_CONVEX_SECRET_CI }}
+          OPENCLAW_QA_CONVEX_SECRET_MAINTAINER: ${{ secrets.OPENCLAW_QA_CONVEX_SECRET_MAINTAINER }}
           OPENCLAW_QA_CREDENTIAL_ACQUIRE_TIMEOUT_MS: "360000"
           OPENCLAW_QA_CREDENTIAL_LEASE_TTL_MS: "300000"
           OPENCLAW_QA_CREDENTIAL_OWNER_ID: qa-live-whatsapp-${{ github.run_id }}-${{ github.run_attempt }}
@@ -729,6 +751,7 @@ jobs:
           OPENCLAW_QA_WHATSAPP_MODEL_TRANSPORT_DEBUG: "1"
           OPENCLAW_QA_WHATSAPP_TRACE: "1"
           INPUT_SCENARIO: ${{ github.event_name == 'workflow_dispatch' && inputs.whatsapp_scenario || '' }}
+          INPUT_WHATSAPP_CREDENTIAL_ROLE: ${{ github.event_name == 'workflow_dispatch' && inputs.whatsapp_credential_role || 'ci' }}
         run: |
           set -euo pipefail
 
@@ -755,7 +778,7 @@ jobs:
             --alt-model "${OPENCLAW_CI_OPENAI_MODEL}" \
             --fast \
             --credential-source convex \
-            --credential-role ci \
+            --credential-role "${INPUT_WHATSAPP_CREDENTIAL_ROLE}" \
             "${scenario_args[@]}"
 
       - name: Upload WhatsApp QA artifacts
