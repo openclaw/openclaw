@@ -7,12 +7,12 @@
 import { pathToFileURL } from "node:url";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import type { AnyAgentTool } from "../agents/tools/common.js";
-import { createCronTool } from "../agents/tools/cron-tool.js";
+import { createCronTools } from "../agents/tools/cron-tool.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { connectToolsMcpServerToStdio, createToolsMcpServer } from "./tools-stdio-server.js";
 
 export function resolveOpenClawToolsForMcp(): AnyAgentTool[] {
-  return [createCronTool()];
+  return createCronTools();
 }
 
 function createOpenClawToolsMcpServer(

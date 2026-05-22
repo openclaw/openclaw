@@ -197,6 +197,7 @@ vi.mock("./agents-list-tool.js", () => ({
 }));
 vi.mock("./cron-tool.js", () => ({
   createCronTool: () => openClawToolsFactoryMocks.tool("cron"),
+  createCronTools: () => [openClawToolsFactoryMocks.tool("cron")],
 }));
 vi.mock("./gateway-tool.js", () => ({
   createGatewayTool: () => openClawToolsFactoryMocks.tool("gateway"),

@@ -16,7 +16,7 @@ const mocks = vi.hoisted(() => {
 
   return {
     stubTool,
-    createCronToolOptions: vi.fn(),
+    createCronToolsOptions: vi.fn(),
     textToSpeech: vi.fn(async () => ({
       success: true,
       audioPath: "/tmp/openclaw/tts-config-test.opus",
@@ -40,8 +40,12 @@ vi.mock("./tools/agents-list-tool.js", () => ({
 
 vi.mock("./tools/cron-tool.js", () => ({
   createCronTool: (options: unknown) => {
-    mocks.createCronToolOptions(options);
+    mocks.createCronToolsOptions(options);
     return mocks.stubTool("cron");
+  },
+  createCronTools: (options: unknown) => {
+    mocks.createCronToolsOptions(options);
+    return [mocks.stubTool("cron")];
   },
 }));
 
@@ -133,7 +137,7 @@ function getTextToSpeechParams() {
 
 describe("createOpenClawTools TTS config wiring", () => {
   beforeEach(() => {
-    mocks.createCronToolOptions.mockClear();
+    mocks.createCronToolsOptions.mockClear();
     mocks.textToSpeech.mockClear();
   });
 
@@ -268,7 +272,7 @@ describe("createOpenClawTools TTS config wiring", () => {
 
 describe("createOpenClawTools cron context wiring", () => {
   beforeEach(() => {
-    mocks.createCronToolOptions.mockClear();
+    mocks.createCronToolsOptions.mockClear();
   });
 
   it("passes preserved channel delivery context into the cron tool", async () => {
@@ -284,7 +288,7 @@ describe("createOpenClawTools cron context wiring", () => {
       disablePluginTools: true,
     });
 
-    expect(mocks.createCronToolOptions).toHaveBeenCalledWith({
+    expect(mocks.createCronToolsOptions).toHaveBeenCalledWith({
       agentSessionKey: "agent:main:matrix:channel:!abcdef1234567890:example.org",
       currentDeliveryContext: {
         channel: "matrix",
@@ -306,7 +310,7 @@ describe("createOpenClawTools cron context wiring", () => {
       disablePluginTools: true,
     });
 
-    expect(mocks.createCronToolOptions).toHaveBeenCalledWith({
+    expect(mocks.createCronToolsOptions).toHaveBeenCalledWith({
       agentSessionKey: "agent:main:matrix:channel:!abcdef1234567890:example.org",
       currentDeliveryContext: {
         channel: "matrix",
@@ -325,7 +329,7 @@ describe("createOpenClawTools cron context wiring", () => {
       disablePluginTools: true,
     });
 
-    expect(mocks.createCronToolOptions).toHaveBeenCalledWith({
+    expect(mocks.createCronToolsOptions).toHaveBeenCalledWith({
       agentSessionKey: "agent:main:cron:job-current",
       currentDeliveryContext: {
         channel: undefined,
