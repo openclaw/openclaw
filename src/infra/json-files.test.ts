@@ -249,17 +249,27 @@ describe("json file helpers", () => {
       return () => callCount;
     }
 
+    function runRetryDelaysImmediately(): void {
+      vi.spyOn(globalThis, "setTimeout").mockImplementation(((callback, _delay, ...args) => {
+        queueMicrotask(() => {
+          if (typeof callback === "function") {
+            callback(...args);
+          }
+        });
+        return 0 as ReturnType<typeof setTimeout>;
+      }) as typeof setTimeout);
+    }
+
     it("retries on transient File changed during read and succeeds", async () => {
       await withTempDir({ prefix: "openclaw-json-files-retry-" }, async (base) => {
         const filePath = path.join(base, "config.json");
         await fsPromises.writeFile(filePath, '{"ok":true}', "utf8");
 
-        // Only fail lstat once (first call) — retry should succeed on 2nd attempt
+        runRetryDelaysImmediately();
         const getCalls = setupLstatSpy(filePath, 1);
 
         const result = await readJson<{ ok: boolean }>(filePath);
         expect(result).toEqual({ ok: true });
-        // Should have at least 2 lstat calls: one failed, one successful
         expect(getCalls()).toBeGreaterThanOrEqual(2);
       });
     });
@@ -269,7 +279,7 @@ describe("json file helpers", () => {
         const filePath = path.join(base, "config.json");
         await fsPromises.writeFile(filePath, '{"ok":true}', "utf8");
 
-        // Always fail lstat — all 3 retries should exhaust
+        runRetryDelaysImmediately();
         setupLstatSpy(filePath, Infinity);
 
         await expect(readJson(filePath)).rejects.toThrow(JsonFileReadError);
@@ -281,7 +291,7 @@ describe("json file helpers", () => {
         const filePath = path.join(base, "config.json");
         await fsPromises.writeFile(filePath, '{"ok":true}', "utf8");
 
-        // Always fail lstat — tryReadJson catches and returns null
+        runRetryDelaysImmediately();
         setupLstatSpy(filePath, Infinity);
 
         const result = await tryReadJson(filePath);
