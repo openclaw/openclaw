@@ -191,6 +191,21 @@ function Expand-PortableNodeArchive {
         [string]$DestinationPath
     )
 
+    $tarCommand = Get-Command tar -ErrorAction SilentlyContinue
+    if ($tarCommand -and $tarCommand.Source) {
+        New-Item -ItemType Directory -Force -Path $DestinationPath | Out-Null
+        & $tarCommand.Source -xf $ZipPath -C $DestinationPath
+        if ($LASTEXITCODE -eq 0) {
+            return
+        }
+
+        $tarExitCode = $LASTEXITCODE
+        if (Test-Path $DestinationPath) {
+            Remove-Item -Recurse -Force $DestinationPath
+        }
+        Write-Host "[!] tar extraction failed with exit code $tarExitCode; trying .NET zip extraction." -ForegroundColor Yellow
+    }
+
     Add-Type -AssemblyName System.IO.Compression.FileSystem
     [System.IO.Compression.ZipFile]::ExtractToDirectory($ZipPath, $DestinationPath)
 }

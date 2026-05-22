@@ -141,6 +141,8 @@ describe("install.ps1 failure handling", () => {
     expect(portableNodeBody).toContain("Expand-PortableNodeArchive");
     expect(portableNodeBody).not.toContain("Expand-Archive");
     expect(portableNodeBody).not.toContain("New-Item -ItemType Directory -Force -Path $tmpExtract");
+    expect(expandNodeBody).toContain("Get-Command tar");
+    expect(expandNodeBody).toContain("-xf $ZipPath -C $DestinationPath");
     expect(expandNodeBody).toContain("System.IO.Compression.ZipFile");
     expect(resolveNodeBody).toContain("https://nodejs.org/dist/index.json");
     expect(resolveNodeBody).toContain("win-$architecture-zip");
