@@ -128,6 +128,22 @@ describe("cron per-action schemas (WOR-317)", () => {
     expect(topLevelKeys(CronWakeSchema)).not.toContain("patch");
   });
 
+  it("CronAddSchema marks job as required (WOR-317 follow-up #1)", () => {
+    // The legacy super-tool schema wraps the job object in Type.Optional so
+    // every action could share one flat union; the per-action schema must
+    // require it so models do not call cron_add with an empty payload.
+    expect(requiredKeys(CronAddSchema)).toContain("job");
+    expect(requiredKeys(CronToolSchema)).not.toContain("job");
+  });
+
+  it("CronUpdateSchema marks patch as required (WOR-317 follow-up #1)", () => {
+    // Same as add: without this, the model is told it may call cron_update
+    // with no patch at all and the executor will reject every such call,
+    // recreating a smaller WOR-316-style retry loop.
+    expect(requiredKeys(CronUpdateSchema)).toContain("patch");
+    expect(requiredKeys(CronToolSchema)).not.toContain("patch");
+  });
+
   it("no per-action schema includes the `action` enum from CronToolSchema", () => {
     const schemas = [
       CronStatusSchema,
