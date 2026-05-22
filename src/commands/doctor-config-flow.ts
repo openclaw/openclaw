@@ -85,9 +85,16 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
   confirm: (p: { message: string; initialValue: boolean }) => Promise<boolean>;
   runtime?: RuntimeEnv;
   prompter?: DoctorPrompter;
+  preflight?: {
+    migrateState?: boolean;
+    migrateLegacyConfig?: boolean;
+  };
 }) {
   const shouldRepair = params.options.repair === true || params.options.yes === true;
-  const preflight = await runDoctorConfigPreflight({ repairPrefixedConfig: shouldRepair });
+  const preflight = await runDoctorConfigPreflight({
+    ...params.preflight,
+    repairPrefixedConfig: shouldRepair,
+  });
   let snapshot = preflight.snapshot;
   const baseCfg = preflight.baseConfig;
   let cfg: OpenClawConfig = baseCfg;

@@ -24,11 +24,12 @@ wrong.
 
 Doctor has three postures:
 
-| Posture | Command                  | Behavior                                                                        |
-| ------- | ------------------------ | ------------------------------------------------------------------------------- |
-| Inspect | `openclaw doctor`        | Human-oriented checks and guided prompts.                                       |
-| Repair  | `openclaw doctor --fix`  | Applies supported repairs, using prompts unless non-interactive repair is safe. |
-| Lint    | `openclaw doctor --lint` | Read-only structured findings for CI, preflight, and review gates.              |
+| Posture | Command                           | Behavior                                                                        |
+| ------- | --------------------------------- | ------------------------------------------------------------------------------- |
+| Inspect | `openclaw doctor`                 | Human-oriented checks and guided prompts.                                       |
+| Repair  | `openclaw doctor --fix`           | Applies supported repairs, using prompts unless non-interactive repair is safe. |
+| Preview | `openclaw doctor --fix --dry-run` | Plans supported repairs without mutating config or state.                       |
+| Lint    | `openclaw doctor --lint`          | Read-only structured findings for CI, preflight, and review gates.              |
 
 Prefer `--lint` when automation needs a stable result. Prefer `--fix` when a
 human operator intentionally wants doctor to edit config or state.
@@ -42,6 +43,9 @@ openclaw doctor --lint --json
 openclaw doctor --lint --severity-min warning
 openclaw doctor --deep
 openclaw doctor --fix
+openclaw doctor --fix --dry-run
+openclaw doctor --fix --dry-run --diff
+openclaw doctor --fix --dry-run --json
 openclaw doctor --fix --non-interactive
 openclaw doctor --generate-gateway-token
 ```
@@ -65,8 +69,10 @@ The targeted Discord capabilities probe reports the bot's effective channel perm
 - `--non-interactive`: run without prompts; safe migrations and non-service repairs only
 - `--generate-gateway-token`: generate and configure a gateway token
 - `--deep`: scan system services for extra gateway installs and report recent Gateway supervisor restart handoffs
+- `--dry-run`: with `--fix` or `--repair`, preview supported repair actions without mutating state
+- `--diff`: with repair preview, include concrete repair diffs when converted checks can describe file or config edits
 - `--lint`: run modernized health checks in read-only mode and emit diagnostic findings
-- `--json`: with `--lint`, emit JSON findings instead of human output
+- `--json`: with `--lint` or repair preview, emit JSON instead of human output
 - `--severity-min <level>`: with `--lint`, drop findings below `info`, `warning`, or `error`
 - `--skip <id>`: with `--lint`, skip a check id; repeat to skip more than one
 - `--only <id>`: with `--lint`, run only a check id; repeat to run a small selected set
@@ -78,7 +84,8 @@ It uses the structured health-check path, does not prompt, and does not repair
 or rewrite config/state. Use it in CI, preflight scripts, and review workflows
 when you want machine-readable findings instead of guided repair prompts.
 Lint-output options such as `--json`, `--severity-min`, `--only`, and `--skip`
-are only accepted with `--lint`.
+are only accepted with `--lint`, except that `--json` also works with repair
+preview.
 
 ```bash
 openclaw doctor --lint
@@ -114,6 +121,81 @@ JSON output is the scripting surface for lint runs:
 }
 ```
 
+## Repair preview
+
+`openclaw doctor --fix --dry-run` uses the repair posture but stops before
+mutation. Converted checks can return the same repair plan they would use for a
+real fix: findings, planned changes, warnings, side effects, and optional diffs.
+Legacy repair slots that are not converted yet are reported as skipped instead
+of being treated as completed preview coverage.
+
+```bash
+openclaw doctor --fix --dry-run
+openclaw doctor --fix --dry-run --diff
+openclaw doctor --fix --dry-run --json
+```
+
+Human preview output shows the planned repair surface:
+
+```text
+Doctor repair preview:
+  [warning] core/doctor/gateway-config gateway.mode - gateway.mode is unset; gateway start will be blocked.
+    change: Set gateway.mode to local.
+    effect: config:set gateway.mode (dry-run safe)
+```
+
+JSON preview output is the machine-readable repair plan:
+
+```json
+{
+  "ok": false,
+  "mode": "dry-run",
+  "diff": true,
+  "checksRun": 8,
+  "checksRepaired": 1,
+  "checksValidated": 0,
+  "findings": [
+    {
+      "checkId": "core/doctor/gateway-config",
+      "severity": "warning",
+      "message": "gateway.mode is unset; gateway start will be blocked.",
+      "path": "gateway.mode"
+    }
+  ],
+  "changes": ["Set gateway.mode to local."],
+  "warnings": [],
+  "effects": [
+    {
+      "kind": "config",
+      "action": "set",
+      "target": "gateway.mode",
+      "dryRunSafe": true
+    }
+  ],
+  "diffs": [
+    {
+      "kind": "config",
+      "path": "gateway.mode",
+      "before": "<unset>",
+      "after": "local"
+    }
+  ],
+  "skipped": [
+    {
+      "id": "doctor:ui-freshness",
+      "label": "UI freshness",
+      "healthCheckIds": ["core/doctor/ui-freshness"],
+      "targets": ["core/doctor/ui-freshness"],
+      "reason": "legacy-preflight-repair-not-converted-to-structured-dry-run-diff"
+    }
+  ]
+}
+```
+
+Preview JSON suppresses presentation notes. If a repair check has an advisory
+note, the human preview can print it, but JSON consumers should use `findings`,
+`changes`, `warnings`, `effects`, `diffs`, and `skipped`.
+
 Exit behavior:
 
 - `0`: no findings at or above the selected severity threshold
@@ -124,35 +206,41 @@ Exit behavior:
 example, `openclaw doctor --lint --severity-min error` can print no findings and
 exit `0` even when lower-severity `info` or `warning` findings exist.
 
-## Structured Health Checks
+## Structured health checks
 
 Modern doctor checks use a small structured contract:
 
 ```ts
-detect(ctx, scope?) -> HealthFinding[]
-repair?(ctx, findings) -> HealthRepairResult
+run(ctx) -> HealthCheckRunResult
 ```
 
-`detect()` powers `doctor --lint`. `repair()` is optional and is only considered
-by `doctor --fix` / `doctor --repair`. Checks that have not migrated to this
-shape continue to use the legacy doctor contribution flow.
+The main branch in the contract is `ctx.repair`:
 
-The split is intentional: `detect()` owns diagnosis, while `repair()` owns
-reporting what it changed or would change. Repair contexts can carry
-`dryRun`/`diff` requests, and repair results can return structured `diffs` for
-config/file edits plus `effects` for service, process, package, state, or other
-side effects. That lets converted checks grow toward `doctor --fix --dry-run`
-and diff reporting without moving mutation planning into `detect()`.
+- `ctx.repair === false`: inspect state and return findings plus any repair
+  plan that can be computed without mutation.
+- `ctx.repair === true`: inspect the same state, return the same structured
+  plan, and apply the repair when possible.
 
-`repair()` reports whether it attempted the requested repair with `status:
-"repaired" | "skipped" | "failed"`. Omitted status means `repaired`, so simple
-repair checks only need to return changes. When repair returns `skipped` or
-`failed`, doctor reports the reason and does not run validation for that check.
+Checks that are naturally analysis-first can still use the split
+`detect(ctx)`/`repair(ctx, findings)` adapter. The registry normalizes both
+styles to the same `run(ctx)` shape before the runner presents lint, preview,
+diff, JSON, or fix output.
 
-After a successful structured repair, doctor re-runs `detect()` with the
-repaired findings as scope. Checks can use selected findings, paths, or `ocPath`
-values for focused validation. If the finding is still present, doctor reports a
-repair warning instead of treating the change as silently complete.
+Repair results can return structured `diffs` for config/file edits plus
+`effects` for service, process, package, state, or other side effects. Lint
+reads findings from the non-mutating run, repair preview reads the returned
+plan, and fix applies only when `ctx.repair` is true.
+
+A non-mutating repair plan returns `status: "repairable"`. Applied repair
+results use `"repaired"`, `"skipped"`, or `"failed"`. When a repair returns
+`skipped` or `failed`, doctor reports the reason and does not run validation for
+that check.
+
+Detect-after validation is opt-in for the repair runner. When enabled after a
+successful structured repair, doctor re-runs the check with the repaired
+findings as scope. Checks can use selected findings, paths, or `ocPath` values
+for focused validation. If the finding is still present, doctor reports a repair
+warning instead of treating the change as silently complete.
 
 A finding includes:
 
@@ -190,9 +278,9 @@ Notes:
 - In Nix mode (`OPENCLAW_NIX_MODE=1`), read-only doctor checks still work, but `doctor --fix`, `doctor --repair`, `doctor --yes`, and `doctor --generate-gateway-token` are disabled because `openclaw.json` is immutable. Edit the Nix source for this install instead; for nix-openclaw, use the agent-first [Quick Start](https://github.com/openclaw/nix-openclaw#quick-start).
 - Interactive prompts (like keychain/OAuth fixes) only run when stdin is a TTY and `--non-interactive` is **not** set. Headless runs (cron, Telegram, no terminal) will skip prompts.
 - Performance: non-interactive `doctor` runs skip eager plugin loading so headless health checks stay fast. Interactive doctor sessions still load the plugin surfaces needed by the legacy health and repair flow.
-- `--lint` is stricter than `--non-interactive`: it is always read-only, never prompts, and never applies safe migrations. Run `doctor --fix` or `doctor --repair` when you want doctor to make changes.
+- `--lint` is stricter than `--non-interactive`: it is always read-only, never prompts, and never applies safe migrations. Run `doctor --fix --dry-run` when you want a repair plan, or `doctor --fix` / `doctor --repair` when you want doctor to make changes.
 - `--fix` (alias for `--repair`) writes a backup to `~/.openclaw/openclaw.json.bak` and drops unknown config keys, listing each removal.
-- Modernized health checks can expose a `repair()` path for `doctor --fix`; checks that do not expose one continue through the existing doctor repair flow.
+- Modernized health checks can expose repair plans through `run(ctx)` for `doctor --fix`, `--dry-run`, and `--diff`; checks that do not expose one continue through the existing doctor repair flow.
 - `doctor --fix --non-interactive` reports missing or stale gateway service definitions but does not install or rewrite them outside update repair mode. Run `openclaw gateway install` for a missing service, or `openclaw gateway install --force` when you intentionally want to replace the launcher.
 - State integrity checks now detect orphan transcript files in the sessions directory. Archiving them as `.deleted.<timestamp>` requires an interactive confirmation; `--fix`, `--yes`, and headless runs leave them in place.
 - Doctor also scans `~/.openclaw/cron/jobs.json` (or `cron.store`) for legacy cron job shapes and can rewrite them in place before the scheduler has to auto-normalize them at runtime.

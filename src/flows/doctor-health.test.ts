@@ -139,6 +139,10 @@ describe("doctorCommand preview mode", () => {
           yes: false,
           generateGatewayToken: false,
         }),
+        preflight: {
+          migrateState: false,
+          migrateLegacyConfig: false,
+        },
       }),
     );
     expect(mocks.note).toHaveBeenCalledWith(
@@ -162,6 +166,10 @@ describe("doctorCommand preview mode", () => {
     expect(mocks.loadAndMaybeMigrateDoctorConfig).toHaveBeenCalledWith(
       expect.objectContaining({
         options: expect.objectContaining({ dryRun: true, diff: true, repair: false }),
+        preflight: {
+          migrateState: false,
+          migrateLegacyConfig: false,
+        },
       }),
     );
     expect(mocks.runDoctorHealthContributions).toHaveBeenCalledWith(
@@ -182,6 +190,14 @@ describe("doctorCommand preview mode", () => {
       },
     ];
     await expect(confirm({ message: "Apply?", initialValue: true })).resolves.toBe(false);
+    expect(mocks.loadAndMaybeMigrateDoctorConfig).toHaveBeenCalledWith(
+      expect.objectContaining({
+        preflight: {
+          migrateState: false,
+          migrateLegacyConfig: false,
+        },
+      }),
+    );
     expect(mocks.runDoctorHealthContributions).toHaveBeenCalledWith(
       expect.objectContaining({
         options: expect.objectContaining({
@@ -202,6 +218,9 @@ describe("doctorCommand preview mode", () => {
     expect(mocks.assertConfigWriteAllowedInCurrentMode).toHaveBeenCalledTimes(1);
     expect(mocks.maybeRepairUiProtocolFreshness).toHaveBeenCalledTimes(1);
     expect(mocks.note).not.toHaveBeenCalledWith(expect.any(String), "Doctor preview");
+    expect(mocks.loadAndMaybeMigrateDoctorConfig).toHaveBeenCalledWith(
+      expect.not.objectContaining({ preflight: expect.anything() }),
+    );
     expect(mocks.runDoctorHealthContributions).toHaveBeenCalledWith(
       expect.objectContaining({
         options: expect.objectContaining({ repair: true }),

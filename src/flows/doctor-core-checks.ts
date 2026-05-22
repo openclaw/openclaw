@@ -1901,9 +1901,10 @@ function createSkillsReadinessCheck(deps: CoreHealthCheckDeps): RegisteredHealth
         return { changes: [] };
       }
       const nextConfig = disableUnavailableSkillsInConfig(ctx.cfg, unavailable);
+      const changePrefix = ctx.dryRun === true ? "Would disable" : "Disabled";
       return {
         config: nextConfig,
-        changes: unavailable.map((skill) => `Disabled unavailable skill ${skill.name}.`),
+        changes: unavailable.map((skill) => `${changePrefix} unavailable skill ${skill.name}.`),
         effects: unavailable.map((skill) => ({
           kind: "config" as const,
           action: ctx.dryRun === true ? "would-disable-skill" : "disable-skill",

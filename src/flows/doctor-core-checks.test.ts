@@ -419,6 +419,25 @@ describe("registerCoreHealthChecks", () => {
         target: "skills.entries.missing-tool.enabled",
       }),
     );
+
+    const preview = await check.repair?.(
+      {
+        mode: "fix",
+        runtime,
+        cfg,
+        cwd: "/tmp/openclaw-test-workspace",
+        dryRun: true,
+      },
+      findings,
+    );
+    expect(preview?.changes).toContain("Would disable unavailable skill missing-tool.");
+    expect(preview?.effects).toContainEqual(
+      expect.objectContaining({
+        kind: "config",
+        action: "would-disable-skill",
+        target: "skills.entries.missing-tool.enabled",
+      }),
+    );
   });
 
   it("converts security doctor warnings into health findings", async () => {

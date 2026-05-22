@@ -133,6 +133,14 @@ async function runDoctorCommandBody(params: {
     confirm: previewOnly ? async () => false : (p) => prompter.confirm(p),
     runtime: effectiveRuntime,
     prompter,
+    ...(previewOnly
+      ? {
+          preflight: {
+            migrateState: false,
+            migrateLegacyConfig: false,
+          },
+        }
+      : {}),
   });
   if (previewReport !== undefined) {
     recordDoctorPreviewSkippedContribution({
