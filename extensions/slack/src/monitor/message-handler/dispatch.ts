@@ -116,6 +116,13 @@ const UNICODE_TO_SLACK: Record<string, string> = {
   "💻": "computer",
 };
 
+const SLACK_THREAD_LOADING_MESSAGES = [
+  "Reading the thread...",
+  "Checking context...",
+  "Working through the request...",
+  "Putting it all together...",
+];
+
 function resolveSlackMessageTimestampMs(message: SlackMessageEvent): number | undefined {
   const ts = message.event_ts ?? message.ts;
   if (!ts) {
@@ -502,7 +509,8 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
         await ctx.setSlackThreadStatus({
           channelId: message.channel,
           threadTs: statusThreadTs,
-          status: "is typing...",
+          status: "is thinking...",
+          loadingMessages: SLACK_THREAD_LOADING_MESSAGES,
         });
         if (typingReaction && message.ts) {
           await reactSlackMessage(message.channel, message.ts, typingReaction, {
