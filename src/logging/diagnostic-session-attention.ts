@@ -25,11 +25,25 @@ export type SessionAttentionClassification =
     };
 
 export function classifySessionAttention(params: {
+  state?: "idle" | "processing" | "waiting";
   queueDepth: number;
   activity: DiagnosticSessionActivitySnapshot;
   staleMs: number;
 }): SessionAttentionClassification {
   if (params.activity.activeWorkKind) {
+    if (
+      params.state === "idle" &&
+      params.queueDepth > 0 &&
+      params.activity.hasActiveEmbeddedRun !== true &&
+      (params.activity.lastProgressAgeMs ?? 0) > params.staleMs
+    ) {
+      return {
+        eventType: "session.stuck",
+        reason: "queued_work_without_active_run",
+        classification: "stale_session_state",
+        recoveryEligible: true,
+      };
+    }
     if (
       params.activity.activeWorkKind === "tool_call" &&
       (params.activity.activeToolAgeMs ?? 0) > params.staleMs &&

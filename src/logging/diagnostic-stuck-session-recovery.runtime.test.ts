@@ -422,6 +422,32 @@ describe("stuck session recovery", () => {
     ]);
   });
 
+  it("releases idle queued work without aborting when stale activity has no active owner", async () => {
+    mocks.resolveActiveEmbeddedRunHandleSessionId.mockReturnValue(undefined);
+    mocks.resolveActiveEmbeddedRunSessionId.mockReturnValue(undefined);
+    mocks.isEmbeddedPiRunActive.mockReturnValue(false);
+    mocks.resetCommandLane.mockReturnValue(0);
+
+    const outcome = await recoverStuckDiagnosticSession({
+      sessionId: "idle-stale-model-session",
+      sessionKey: "agent:main:main",
+      ageMs: 180_000,
+      queueDepth: 1,
+      expectedState: "idle",
+    });
+
+    expect(outcome).toMatchObject({
+      status: "released",
+      action: "release_lane",
+      sessionId: "idle-stale-model-session",
+      sessionKey: "agent:main:main",
+      released: 0,
+    });
+    expect(mocks.abortEmbeddedPiRun).not.toHaveBeenCalled();
+    expect(mocks.forceClearEmbeddedPiRun).not.toHaveBeenCalled();
+    expect(mocks.resetCommandLane).toHaveBeenCalledWith("session:agent:main:main");
+  });
+
   it("releases a stale session-id lane when no session key is available", async () => {
     mocks.isEmbeddedPiRunHandleActive.mockReturnValue(false);
     mocks.resetCommandLane.mockReturnValue(1);

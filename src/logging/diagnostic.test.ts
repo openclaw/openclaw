@@ -900,6 +900,75 @@ describe("stuck session diagnostics threshold", () => {
     );
   });
 
+  it("recovers idle queued work blocked by stale model activity without active ownership", async () => {
+    const events: DiagnosticEventPayload[] = [];
+    const recoverStuckSession = vi.fn().mockResolvedValue({
+      status: "released",
+      action: "release_lane",
+      sessionId: "s1",
+      sessionKey: "main",
+      released: 0,
+    });
+    const unsubscribe = onDiagnosticEvent((event) => {
+      events.push(event);
+    });
+    try {
+      startDiagnosticHeartbeat(
+        {
+          diagnostics: {
+            enabled: true,
+            stuckSessionWarnMs: 30_000,
+            stuckSessionAbortMs: 60_000,
+          },
+        },
+        { recoverStuckSession },
+      );
+      logSessionStateChange({ sessionId: "s1", sessionKey: "main", state: "processing" });
+      markDiagnosticModelStartedForTest({
+        sessionId: "s1",
+        sessionKey: "main",
+        runId: "run-1",
+        provider: "openai",
+        model: "gpt-5",
+      });
+      logSessionStateChange({ sessionId: "s1", sessionKey: "main", state: "idle" });
+
+      vi.advanceTimersByTime(59_000);
+      logMessageQueued({ sessionId: "s1", sessionKey: "main", source: "test-followup" });
+      vi.advanceTimersByTime(1_000);
+      await Promise.resolve();
+    } finally {
+      unsubscribe();
+    }
+
+    expectRecordFields(
+      requireRecord(
+        events.findLast((event) => event.type === "session.stuck"),
+        "idle stale model activity event",
+      ),
+      {
+        type: "session.stuck",
+        state: "idle",
+        classification: "stale_session_state",
+        reason: "queued_work_without_active_run",
+        queueDepth: 1,
+        lastProgressReason: "model_call:started",
+      },
+    );
+    expectRecoveryCall(
+      recoverStuckSession,
+      {
+        sessionId: "s1",
+        sessionKey: "main",
+        queueDepth: 1,
+        expectedState: "idle",
+      },
+      ["ageMs", "stateGeneration"],
+    );
+    const recoveryParams = requireFirstMockCallArg(recoverStuckSession, "recoverStuckSession");
+    expect(recoveryParams.allowActiveAbort).toBeUndefined();
+  });
+
   it("preserves queued idle work when abort reset releases active lane work", async () => {
     const events: DiagnosticEventPayload[] = [];
     const recoverStuckSession = vi.fn().mockResolvedValue({

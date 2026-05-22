@@ -26,6 +26,23 @@ describe("classifySessionAttention", () => {
       },
     },
     {
+      name: "idle queued stale model activity without active embedded run",
+      state: "idle" as const,
+      queueDepth: 1,
+      activity: {
+        activeWorkKind: "model_call" as const,
+        hasActiveEmbeddedRun: false,
+        lastProgressAgeMs: 31_000,
+        lastProgressReason: "model_call:started",
+      },
+      expected: {
+        eventType: "session.stuck",
+        reason: "queued_work_without_active_run",
+        classification: "stale_session_state",
+        recoveryEligible: true,
+      },
+    },
+    {
       name: "active embedded run making progress",
       queueDepth: 0,
       activity: {
@@ -102,9 +119,10 @@ describe("classifySessionAttention", () => {
         recoveryEligible: false,
       },
     },
-  ])("$name", ({ activity, expected, queueDepth }) => {
+  ])("$name", ({ activity, expected, queueDepth, state }) => {
     expect(
       classifySessionAttention({
+        state,
         queueDepth,
         activity,
         staleMs: 30_000,
