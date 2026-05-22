@@ -285,9 +285,18 @@ export function findActiveMediaGenerationTaskForSession(params: {
   sourcePrefix: string;
   taskLabel?: string;
 }): TaskRecord | undefined {
+  return listActiveMediaGenerationTasksForSession(params)[0];
+}
+
+export function listActiveMediaGenerationTasksForSession(params: {
+  sessionKey?: string;
+  taskKind: string;
+  sourcePrefix: string;
+  taskLabel?: string;
+}): TaskRecord[] {
   const sessionKey = normalizeOptionalString(params.sessionKey);
   if (!sessionKey) {
-    return undefined;
+    return [];
   }
   const taskLabel = normalizeOptionalString(params.taskLabel);
   const sourcePrefix = normalizeOptionalString(params.sourcePrefix);
@@ -308,7 +317,10 @@ export function findActiveMediaGenerationTaskForSession(params: {
     }
     return true;
   });
-  return matches.find((task) => task.status === "running") ?? matches[0];
+  return [
+    ...matches.filter((task) => task.status === "running"),
+    ...matches.filter((task) => task.status !== "running"),
+  ];
 }
 
 export function findDuplicateGuardMediaGenerationTaskForSession(params: {
@@ -343,6 +355,24 @@ export function buildMediaGenerationTaskStatusDetails(params: {
   };
 }
 
+export function buildMediaGenerationTaskStatusListDetails(params: {
+  tasks: TaskRecord[];
+  sourcePrefix: string;
+}): Record<string, unknown> {
+  return {
+    async: true,
+    active: true,
+    existingTask: true,
+    taskCount: params.tasks.length,
+    tasks: params.tasks.map((task) =>
+      buildMediaGenerationTaskStatusDetails({
+        task,
+        sourcePrefix: params.sourcePrefix,
+      }),
+    ),
+  };
+}
+
 export function buildMediaGenerationTaskStatusText(params: {
   task: TaskRecord;
   sourcePrefix: string;
@@ -365,6 +395,28 @@ export function buildMediaGenerationTaskStatusText(params: {
       ? `Do not call ${params.toolName} again for this request. Wait for the completion event; the completion agent will send the finished ${params.completionLabel} here.`
       : `Wait for the completion event; the completion agent will send the finished ${params.completionLabel} here when it's ready.`,
   ].filter((entry): entry is string => Boolean(entry));
+  return lines.join("\n");
+}
+
+export function buildMediaGenerationTaskStatusListText(params: {
+  tasks: TaskRecord[];
+  sourcePrefix: string;
+  nounLabel: string;
+  toolName: string;
+  completionLabel: string;
+}): string {
+  const nounLabel = normalizeLowercaseStringOrEmpty(params.nounLabel);
+  const lines = [
+    `${params.tasks.length} active ${nounLabel} tasks are queued or running for this session.`,
+    ...params.tasks.map((task) => {
+      const provider = getMediaGenerationTaskProviderId(task, params.sourcePrefix);
+      const runId = task.runId ? ` (run ${task.runId})` : "";
+      const progress = task.progressSummary ? ` Progress: ${task.progressSummary}.` : "";
+      return `- Task ${task.taskId}${runId} is ${task.status}${provider ? ` with ${provider}` : ""}.${progress}`;
+    }),
+    `Wait for the completion events; the completion agent will send the finished ${params.completionLabel} here when each is ready.`,
+    `Only start a new ${params.toolName} call if the user clearly asks for different/new ${params.completionLabel}.`,
+  ];
   return lines.join("\n");
 }
 

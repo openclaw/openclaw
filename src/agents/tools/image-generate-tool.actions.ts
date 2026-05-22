@@ -3,10 +3,13 @@ import { listRuntimeImageGenerationProviders } from "../../image-generation/runt
 import type { ImageGenerationProvider } from "../../image-generation/types.js";
 import type { AuthProfileStore } from "../auth-profiles/types.js";
 import {
+  buildImageGenerationTaskStatusListDetails,
+  buildImageGenerationTaskStatusListText,
   buildImageGenerationTaskStatusDetails,
   buildImageGenerationTaskStatusText,
   findActiveImageGenerationTaskForSession,
   findDuplicateGuardImageGenerationTaskForSession,
+  listActiveImageGenerationTasksForSession,
 } from "../image-generation-task-status.js";
 import {
   createMediaGenerateProviderListActionResult,
@@ -88,6 +91,16 @@ const imageGenerateTaskStatusActions = createMediaGenerateTaskStatusActions({
 export function createImageGenerateStatusActionResult(
   sessionKey?: string,
 ): ImageGenerateActionResult {
+  const activeTasks = listActiveImageGenerationTasksForSession(sessionKey);
+  if (activeTasks.length > 1) {
+    return {
+      content: [{ type: "text", text: buildImageGenerationTaskStatusListText(activeTasks) }],
+      details: {
+        action: "status",
+        ...buildImageGenerationTaskStatusListDetails(activeTasks),
+      },
+    };
+  }
   return imageGenerateTaskStatusActions.createStatusActionResult(sessionKey);
 }
 
