@@ -11,12 +11,12 @@ import {
 } from "@earendil-works/pi-ai";
 import { MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE } from "../shared/assistant-error-format.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
-import { parseJsonObjectPreservingUnsafeIntegers } from "./json-unsafe-integers.js";
 import {
   applyAnthropicPayloadPolicyToParams,
   resolveAnthropicPayloadPolicy,
 } from "./anthropic-payload-policy.js";
 import { buildCopilotDynamicHeaders, hasCopilotVisionInput } from "./copilot-dynamic-headers.js";
+import { parseJsonObjectPreservingUnsafeIntegers } from "./json-unsafe-integers.js";
 import { resolveProviderEndpoint } from "./provider-attribution.js";
 import { buildGuardedModelFetch } from "./provider-transport-fetch.js";
 import { transformTransportMessages } from "./transport-message-transform.js";
@@ -1272,8 +1272,9 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
               delta?.type === "input_json_delta" &&
               typeof delta.partial_json === "string"
             ) {
-              block.partialJson += delta.partial_json;
-              block.arguments = parseAnthropicToolCallArguments(block.partialJson);
+              const partialJson = `${block.partialJson ?? ""}${delta.partial_json}`;
+              block.partialJson = partialJson;
+              block.arguments = parseAnthropicToolCallArguments(partialJson);
               stream.push({
                 type: "toolcall_delta",
                 contentIndex: index,
