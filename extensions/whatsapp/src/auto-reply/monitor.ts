@@ -333,6 +333,8 @@ export async function monitorWebChannel(
               mediaMaxMb: account.mediaMaxMb,
               selfChatMode: account.selfChatMode,
               sendReadReceipts: account.sendReadReceipts,
+              replyToOfflineMessages: account.replyToOfflineMessages,
+              offlineMessageMaxAgeSeconds: account.offlineMessageMaxAgeSeconds,
               debounceMs: inboundDebounceMs,
               shouldDebounce,
               socketRef: controller.socketRef,
