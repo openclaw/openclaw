@@ -2031,6 +2031,40 @@ describe("CodexAppServerEventProjector", () => {
     expect(toolResultContent.content).toBe("opened");
   });
 
+  it("does not mirror Codex-native web searches into transcript snapshots", async () => {
+    const projector = await createProjector();
+
+    await projector.handleNotification(
+      forCurrentTurn("item/completed", {
+        item: {
+          type: "webSearch",
+          id: "search-observed",
+          status: "completed",
+          durationMs: 5,
+        },
+      }),
+    );
+
+    const result = projector.buildResult(buildEmptyToolTelemetry());
+
+    expect(
+      result.messagesSnapshot.some((message) => {
+        const record = message as unknown as Record<string, unknown>;
+        if (record.role === "toolResult") {
+          return true;
+        }
+        const content = Array.isArray(record.content) ? record.content : [];
+        return content.some((entry) => {
+          return (
+            typeof entry === "object" &&
+            entry !== null &&
+            (entry as Record<string, unknown>).type === "toolCall"
+          );
+        });
+      }),
+    ).toBe(false);
+  });
+
   it("emits verbose summaries for transcript-recorded dynamic tool calls", async () => {
     const onAgentEvent = vi.fn();
     const onToolResult = vi.fn();
