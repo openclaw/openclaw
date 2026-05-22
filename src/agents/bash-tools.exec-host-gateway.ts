@@ -52,6 +52,7 @@ export type ProcessGatewayAllowlistParams = {
   command: string;
   workdir: string;
   env: Record<string, string>;
+  pathPrepend?: string[];
   requestedEnv?: Record<string, string>;
   pty: boolean;
   timeoutSec?: number;
@@ -663,6 +664,7 @@ export async function processGatewayAllowlist(
           execCommand: enforcedCommand,
           workdir: params.workdir,
           env: params.env,
+          pathPrepend: params.pathPrepend,
           sandbox: undefined,
           containerWorkdir: null,
           usePty: params.pty,

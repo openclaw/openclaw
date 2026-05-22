@@ -2,12 +2,14 @@ import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../../agents/ag
 import { getRuntimeConfig } from "../../config/config.js";
 import { applyPluginAutoEnable } from "../../config/plugin-auto-enable.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { PluginInstallRecord } from "../../config/types.plugins.js";
 import { createSubsystemLogger } from "../../logging.js";
 import { resolvePluginActivationSourceConfig } from "../activation-source-config.js";
 import {
   getCurrentPluginMetadataSnapshot,
   setCurrentPluginMetadataSnapshot,
 } from "../current-plugin-metadata-snapshot.js";
+import { extractPluginInstallRecordsFromInstalledPluginIndex } from "../installed-plugin-index-install-records.js";
 import type { PluginLoadOptions } from "../loader.js";
 import type { PluginManifestRegistry } from "../manifest-registry.js";
 import { loadPluginMetadataSnapshot } from "../plugin-metadata-snapshot.js";
@@ -24,6 +26,7 @@ export type PluginRuntimeLoadContext = {
   env: NodeJS.ProcessEnv;
   logger: PluginLogger;
   manifestRegistry?: PluginManifestRegistry;
+  installRecords?: Record<string, PluginInstallRecord>;
 };
 
 export type PluginRuntimeResolvedLoadValues = Pick<
@@ -35,6 +38,7 @@ export type PluginRuntimeResolvedLoadValues = Pick<
   | "env"
   | "logger"
   | "manifestRegistry"
+  | "installRecords"
 >;
 
 export type PluginRuntimeLoadContextOptions = {
@@ -75,6 +79,9 @@ export function resolvePluginRuntimeLoadContext(
         workspaceDir: rawWorkspaceDir,
       }));
   const manifestRegistry = options?.manifestRegistry ?? metadataSnapshot?.manifestRegistry;
+  const installRecords = metadataSnapshot
+    ? extractPluginInstallRecordsFromInstalledPluginIndex(metadataSnapshot.index)
+    : undefined;
   const activationSourceConfig = resolvePluginActivationSourceConfig({
     config: rawConfig,
     activationSourceConfig: options?.activationSourceConfig,
@@ -104,6 +111,7 @@ export function resolvePluginRuntimeLoadContext(
     env,
     logger: options?.logger ?? createPluginRuntimeLoaderLogger(),
     ...(manifestRegistry ? { manifestRegistry } : {}),
+    installRecords,
   };
 }
 
@@ -126,6 +134,7 @@ export function buildPluginRuntimeLoadOptionsFromValues(
     env: values.env,
     logger: values.logger,
     ...(values.manifestRegistry ? { manifestRegistry: values.manifestRegistry } : {}),
+    installRecords: values.installRecords,
     ...overrides,
   };
 }

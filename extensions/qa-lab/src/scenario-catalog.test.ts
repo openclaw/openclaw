@@ -177,6 +177,9 @@ describe("qa scenario catalog", () => {
       "plugin-hook-health-sentinel",
       "plugin-manifest-contract-health",
       "webchat-direct-reply-routing",
+      "long-context-progress-watchdog",
+      "gateway-restart-inflight-run",
+      "streaming-final-integrity",
     ];
 
     for (const scenarioId of scenarioIds) {
@@ -188,6 +191,15 @@ describe("qa scenario catalog", () => {
     expect(readQaScenarioById("webchat-direct-reply-routing").sourcePath).toBe(
       "qa/scenarios/channels/webchat-direct-reply-routing.md",
     );
+    expect(readQaScenarioById("long-context-progress-watchdog").sourcePath).toBe(
+      "qa/scenarios/runtime/long-context-progress-watchdog.md",
+    );
+    expect(readQaScenarioExecutionConfig("long-context-progress-watchdog")).toMatchObject({
+      requiredProviderMode: "live-frontier",
+      harnessRuntime: "codex",
+    });
+    expect(readQaScenarioById("long-context-progress-watchdog").plugins).toBeUndefined();
+    expect(readQaScenarioById("long-context-progress-watchdog").gatewayConfigPatch).toBeUndefined();
   });
 
   it("loads the opt-in update.run package self-upgrade sentinel", () => {
@@ -231,7 +243,7 @@ describe("qa scenario catalog", () => {
     }
     expect(readQaScenarioExecutionConfig("codex-plugin-pinned-old")).toMatchObject({
       pluginVersion: "2026.5.19",
-      hostVersion: "2026.5.20",
+      hostVersion: "2026.5.21",
       pluginRelation: "older",
     });
     expect(readQaScenarioExecutionConfig("auth-profile-doctor-migration-safety")).toMatchObject({
