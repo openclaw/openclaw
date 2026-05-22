@@ -651,7 +651,10 @@ describe("buildAgentSystemPrompt", () => {
     });
 
     expect(prompt).toContain("## Model Aliases");
-    expect(prompt).toContain("Prefer aliases when specifying model overrides");
+    expect(prompt).toContain(
+      "Use exact provider/model strings verbatim when one is specified. Aliases are shortcuts for unqualified model requests.",
+    );
+    expect(prompt).not.toContain("Prefer aliases when specifying model overrides");
     expect(prompt).toContain("- Opus: anthropic/claude-opus-4-5");
   });
 

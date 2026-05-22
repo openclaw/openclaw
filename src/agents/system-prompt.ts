@@ -1116,7 +1116,7 @@ export function buildAgentSystemPrompt(params: {
         ? "## Model Aliases"
         : "",
       params.modelAliasLines && params.modelAliasLines.length > 0 && !isMinimal
-        ? "Prefer aliases when specifying model overrides; full provider/model is also accepted."
+        ? "Use exact provider/model strings verbatim when one is specified. Aliases are shortcuts for unqualified model requests."
         : "",
       params.modelAliasLines && params.modelAliasLines.length > 0 && !isMinimal
         ? params.modelAliasLines.join("\n")
