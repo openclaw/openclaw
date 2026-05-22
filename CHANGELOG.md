@@ -52,6 +52,7 @@ Docs: https://docs.openclaw.ai
 - Gateway/agents: return phase-aware `agent.wait` timeout attribution and only cool auth profiles on provider-started timeouts. Refs #65504. Thanks @100yenadmin.
 - Gateway: defer provider auth-state prewarm until after startup readiness so early gateway tool/session requests are not blocked by provider auth discovery. (#85272) Thanks @dutifulbob.
 - Gateway/models: coalesce provider auth-state rewarms after auth-profile failures and log event-loop delay for warm/rewarm work, so provider auth bursts no longer stack full auth sweeps behind channel replies.
+- Gateway/models: stop cancelled provider auth-state prewarms from continuing full provider sweeps, so reload and auth-failure bursts no longer keep startup busy.
 - Agents/Codex: show the first plan update as a transient chat status notice without counting it as final assistant content.
 - CLI/update: walk the macOS process ancestry and honor the inherited Gateway runtime PID before package updates stop the managed Gateway service, so nested in-band updater children can refuse instead of killing the LaunchAgent-supervised Gateway that owns them. Fixes #85120.
 - Gateway/LaunchAgent: wait for launchd reload bootout to finish and fall back to kickstart when bootstrap races, so reload handoff does not leave the service deregistered. Fixes #84630. (#84641) Thanks @NianJiuZst.
