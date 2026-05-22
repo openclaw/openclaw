@@ -1,5 +1,6 @@
 import { buildBuiltinChatCommands } from "../../../../src/auto-reply/commands-registry.shared.js";
 import type { CommandEntry, CommandsListResult } from "../../../../src/gateway/protocol/index.js";
+import { t } from "../../i18n/index.ts";
 import type { GatewayBrowserClient } from "../gateway.ts";
 import type { IconName } from "../icons.ts";
 import { normalizeLowercaseStringOrEmpty } from "../string-coerce.ts";
@@ -472,6 +473,25 @@ export const CATEGORY_LABELS: Record<SlashCommandCategory, string> = {
   agents: "Agents",
   tools: "Tools",
 };
+
+/** Return a localized description for a slash command, falling back to the original English. */
+export function getLocalizedCommandDescription(command: SlashCommandDef): string {
+  const translationKey = `chat.slashCommands.commandDescriptions.${command.key}`;
+  const translated = t(translationKey);
+  return translated !== translationKey ? translated : command.description;
+}
+
+/** Return a localized arg choice label, falling back to the original value. */
+export function getLocalizedArgChoice(commandKey: string, value: string): string {
+  const specificKey = `chat.slashCommands.argChoices.${commandKey}.${value}`;
+  const specific = t(specificKey);
+  if (specific !== specificKey) {
+    return specific;
+  }
+  const genericKey = `chat.slashCommands.argChoices.${value}`;
+  const generic = t(genericKey);
+  return generic !== genericKey ? generic : value;
+}
 
 const TIER_ORDER: Record<SlashCommandTier, number> = {
   essential: 0,

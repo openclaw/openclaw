@@ -1,8 +1,13 @@
 // @vitest-environment node
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
+import { i18n } from "../i18n/index.ts";
 import { getUsageCacheRefreshTitle } from "./usage-cache-status.ts";
 
 describe("getUsageCacheRefreshTitle", () => {
+  beforeEach(async () => {
+    await i18n.setLocale("en");
+  });
+
   it("formats non-fresh cache states for the Usage loading badge", () => {
     expect(
       getUsageCacheRefreshTitle({
