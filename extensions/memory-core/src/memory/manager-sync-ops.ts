@@ -338,6 +338,17 @@ export abstract class MemoryManagerSyncOps {
     return { sql: ` AND ${column} IN (${placeholders})`, params: sources };
   }
 
+  protected buildSenderIdFilter(
+    alias?: string,
+    senderId?: string,
+  ): { sql: string; params: string[] } {
+    if (!senderId) {
+      return { sql: "", params: [] };
+    }
+    const column = alias ? `${alias}.sender_id` : "sender_id";
+    return { sql: ` AND (${column} = ? OR ${column} IS NULL)`, params: [senderId] };
+  }
+
   protected openDatabase(): DatabaseSync {
     const dbPath = resolveUserPath(this.settings.store.path);
     return openMemoryDatabaseAtPath(dbPath, this.settings.store.vector.enabled);

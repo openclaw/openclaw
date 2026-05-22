@@ -312,6 +312,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       onDebug?: (debug: MemorySearchRuntimeDebug) => void;
       /** When set, only these chunk sources are considered (must be enabled for this manager). */
       sources?: MemorySource[];
+      senderId?: string;
     },
   ): Promise<MemorySearchResult[]> {
     opts?.onDebug?.({ backend: "builtin" });
@@ -362,6 +363,8 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       return [];
     }
     const sourceFilterList = searchSources ?? [...this.sources];
+    const vectorSenderIdFilter = this.buildSenderIdFilter("c", opts?.senderId);
+    const keywordSenderIdFilter = this.buildSenderIdFilter(undefined, opts?.senderId);
     const hybrid = this.settings.query.hybrid;
     const candidates = Math.min(
       200,
@@ -382,6 +385,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
           boostFallbackRanking: true,
         },
         sourceFilterList,
+        keywordSenderIdFilter,
       ).catch((err) => {
         log.warn(`memory search: FTS keyword query failed: ${formatErrorMessage(err)}`);
         return [];
@@ -403,6 +407,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
                     candidates,
                     { boostFallbackRanking: true },
                     sourceFilterList,
+                    keywordSenderIdFilter,
                   ).catch((err) => {
                     log.warn(
                       `memory search: FTS per-keyword query failed for "${term}": ${formatErrorMessage(err)}`,
@@ -442,6 +447,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
             candidates,
             { boostFallbackRanking: true },
             sourceFilterList,
+            keywordSenderIdFilter,
           ).catch((err) => {
             log.warn(`memory search: FTS hybrid keyword query failed: ${formatErrorMessage(err)}`);
             return [];
@@ -451,10 +457,12 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     const queryVec = await this.embedQueryWithTimeout(cleaned);
     const hasVector = queryVec.some((v) => v !== 0);
     const vectorResults = hasVector
-      ? await this.searchVector(queryVec, candidates, sourceFilterList).catch((err) => {
-          log.warn(`memory search: vector query failed: ${formatErrorMessage(err)}`);
-          return [];
-        })
+      ? await this.searchVector(queryVec, candidates, sourceFilterList, vectorSenderIdFilter).catch(
+          (err) => {
+            log.warn(`memory search: vector query failed: ${formatErrorMessage(err)}`);
+            return [];
+          },
+        )
       : [];
 
     if (!hybrid.enabled || !this.fts.enabled || !this.fts.available) {
@@ -530,6 +538,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     queryVec: number[],
     limit: number,
     sourceFilterList: MemorySource[],
+    senderIdFilter: { sql: string; params: string[] },
   ): Promise<Array<MemorySearchResult & { id: string }>> {
     // This method should never be called without a provider
     if (!this.provider) {
@@ -545,6 +554,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       ensureVectorReady: async (dimensions) => await this.ensureVectorReady(dimensions),
       sourceFilterVec: this.buildSourceFilter("c", sourceFilterList),
       sourceFilterChunks: this.buildSourceFilter(undefined, sourceFilterList),
+      senderIdFilter,
     });
     return results.map((entry) => entry as MemorySearchResult & { id: string });
   }
@@ -558,11 +568,13 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     limit: number,
     options?: { boostFallbackRanking?: boolean },
     sourceFilterList?: MemorySource[],
+    senderIdFilter?: { sql: string; params: string[] },
   ): Promise<Array<MemorySearchResult & { id: string; textScore: number }>> {
     if (!this.fts.enabled || !this.fts.available) {
       return [];
     }
     const sourceFilter = this.buildSourceFilter(undefined, sourceFilterList);
+    const effectiveSenderIdFilter = senderIdFilter ?? { sql: "", params: [] };
     // In FTS-only mode (no provider), search all models; otherwise filter by current provider's model
     const providerModel = this.provider?.model;
     const results = await searchKeyword({
@@ -574,6 +586,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       limit,
       snippetMaxChars: SNIPPET_MAX_CHARS,
       sourceFilter,
+      senderIdFilter: effectiveSenderIdFilter,
       buildFtsQuery: (raw) => this.buildFtsQuery(raw),
       bm25RankToScore,
       boostFallbackRanking: options?.boostFallbackRanking,

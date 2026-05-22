@@ -19,6 +19,7 @@ type MemoryToolOptions = {
   getConfig?: () => OpenClawConfig | undefined;
   agentId?: string;
   agentSessionKey?: string;
+  senderId?: string;
 };
 
 let memoryToolRuntimePromise: Promise<MemoryToolRuntime> | null = null;

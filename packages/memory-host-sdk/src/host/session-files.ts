@@ -41,11 +41,23 @@ export type SessionFileEntry = {
   lineMap: number[];
   /** Maps each content line (0-indexed) to epoch ms; 0 means unknown timestamp. */
   messageTimestampsMs: number[];
+  /** Maps each content line (0-indexed) to a sender_id or undefined for system messages. */
+  messageSenderIds?: (string | undefined)[];
   /** True when this transcript belongs to an internal dreaming narrative run. */
   generatedByDreamingNarrative?: boolean;
   /** True when this transcript belongs to an isolated cron run session. */
   generatedByCronRun?: boolean;
 };
+
+export function extractSenderId(messages: unknown[]): string | undefined {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const msg = messages[i] as Record<string, unknown> | undefined;
+    if (typeof msg?.role === "string" && msg.role === "user" && typeof msg.senderId === "string") {
+      return msg.senderId;
+    }
+  }
+  return undefined;
+}
 
 export type BuildSessionEntryOptions = {
   /** Optional preclassification from a caller-managed dreaming transcript lookup. */
@@ -568,6 +580,7 @@ export async function buildSessionEntry(
     const collected: string[] = [];
     const lineMap: number[] = [];
     const messageTimestampsMs: number[] = [];
+    const messageSenderIds: (string | undefined)[] = [];
     const parseYieldEveryLines = resolveSessionEntryParseYieldLines(opts);
     const sessionStoreClassification =
       opts.generatedByDreamingNarrative === undefined || opts.generatedByCronRun === undefined
@@ -608,6 +621,7 @@ export async function buildSessionEntry(
         collected.length = 0;
         lineMap.length = 0;
         messageTimestampsMs.length = 0;
+        messageSenderIds.length = 0;
       }
       if (
         !record ||
@@ -617,7 +631,7 @@ export async function buildSessionEntry(
         continue;
       }
       const message = (record as { message?: unknown }).message as
-        | { role?: unknown; content?: unknown; provenance?: unknown }
+        | { role?: unknown; content?: unknown; provenance?: unknown; senderId?: unknown }
         | undefined;
       if (!message || typeof message.role !== "string") {
         continue;
@@ -641,6 +655,7 @@ export async function buildSessionEntry(
         collected.length = 0;
         lineMap.length = 0;
         messageTimestampsMs.length = 0;
+        messageSenderIds.length = 0;
       }
       const text = sanitizeSessionText(rawText, message.role);
       if (!text) {
@@ -666,6 +681,8 @@ export async function buildSessionEntry(
       collected.push(...renderedLines);
       lineMap.push(...renderedLines.map(() => jsonlIdx + 1));
       messageTimestampsMs.push(...renderedLines.map(() => timestampMs));
+      const messageSenderId = (message as { senderId?: string })?.senderId;
+      messageSenderIds.push(...renderedLines.map(() => messageSenderId));
     }
     const content = collected.join("\n");
     return {
@@ -673,10 +690,19 @@ export async function buildSessionEntry(
       absPath,
       mtimeMs: stat.mtimeMs,
       size: stat.size,
-      hash: hashText(content + "\n" + lineMap.join(",") + "\n" + messageTimestampsMs.join(",")),
+      hash: hashText(
+        content +
+          "\n" +
+          lineMap.join(",") +
+          "\n" +
+          messageTimestampsMs.join(",") +
+          "\n" +
+          messageSenderIds.join(","),
+      ),
       content,
       lineMap,
       messageTimestampsMs,
+      messageSenderIds,
       ...(generatedByDreamingNarrative ? { generatedByDreamingNarrative: true } : {}),
       ...(generatedByCronRun ? { generatedByCronRun: true } : {}),
     };

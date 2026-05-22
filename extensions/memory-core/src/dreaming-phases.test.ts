@@ -29,7 +29,7 @@ const { createTempWorkspace } = createMemoryCoreTestHarness();
 const DREAMING_TEST_BASE_TIME = new Date("2026-04-05T10:00:00.000Z");
 const DREAMING_TEST_DAY = "2026-04-05";
 const EMPTY_SESSION_CONTENT_HASH =
-  "75a11da44c802486bc6f65640aa48a730f0f684c5c07a42ba3cd1735eb3fb070";
+  "6a3cf5192354f71615ac51034b3e97c20eda99643fcaf5bbe6d41ad59bd12167";
 const LIGHT_DREAMING_TEST_CONFIG: OpenClawConfig = {
   plugins: {
     entries: {

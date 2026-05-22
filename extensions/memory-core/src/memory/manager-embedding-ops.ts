@@ -62,7 +62,24 @@ type MemoryIndexEntry = {
   kind?: "markdown" | "multimodal";
   contentText?: string;
   lineMap?: number[];
+  messageSenderIds?: (string | undefined)[];
 };
+
+function resolveChunkSenderIds(
+  chunks: MemoryChunk[],
+  messageSenderIds?: (string | undefined)[],
+): (string | undefined)[] {
+  if (!messageSenderIds || messageSenderIds.length === 0) {
+    return chunks.map(() => undefined);
+  }
+  return chunks.map((chunk) => {
+    const midLine = Math.floor((chunk.startLine + chunk.endLine) / 2);
+    if (midLine < 0 || midLine >= messageSenderIds.length) {
+      return undefined;
+    }
+    return messageSenderIds[midLine];
+  });
+}
 
 export function resolveEmbeddingTimeoutMs(params: {
   kind: "query" | "batch";
@@ -611,6 +628,7 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
     chunks: MemoryChunk[],
     embeddings: number[][],
     vectorReady: boolean,
+    chunkSenderIds?: (string | undefined)[],
   ): void {
     const now = Date.now();
     this.clearIndexedFileData(entry.path, source);
@@ -622,13 +640,14 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
       );
       this.db
         .prepare(
-          `INSERT INTO chunks (id, path, source, start_line, end_line, hash, model, text, embedding, updated_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          `INSERT INTO chunks (id, path, source, start_line, end_line, hash, model, text, embedding, sender_id, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
            ON CONFLICT(id) DO UPDATE SET
              hash=excluded.hash,
              model=excluded.model,
              text=excluded.text,
              embedding=excluded.embedding,
+             sender_id=excluded.sender_id,
              updated_at=excluded.updated_at`,
         )
         .run(
@@ -641,6 +660,7 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
           model,
           chunk.text,
           JSON.stringify(embedding),
+          chunkSenderIds?.[i] ?? null,
           now,
         );
       if (vectorReady && embedding.length > 0) {
@@ -654,10 +674,19 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
       if (this.fts.enabled && this.fts.available) {
         this.db
           .prepare(
-            `INSERT INTO ${FTS_TABLE} (text, id, path, source, model, start_line, end_line)\n` +
-              ` VALUES (?, ?, ?, ?, ?, ?, ?)`,
+            `INSERT INTO ${FTS_TABLE} (text, id, path, source, model, start_line, end_line, sender_id)\n` +
+              ` VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
           )
-          .run(chunk.text, id, entry.path, source, model, chunk.startLine, chunk.endLine);
+          .run(
+            chunk.text,
+            id,
+            entry.path,
+            source,
+            model,
+            chunk.startLine,
+            chunk.endLine,
+            chunkSenderIds?.[i] ?? null,
+          );
       }
     }
     this.vectorDegradedWriteWarningShown = logMemoryVectorDegradedWrite({
@@ -683,15 +712,18 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
       }
       const content = options.content ?? (await fs.readFile(entry.absPath, "utf-8"));
       const chunks = filterNonEmptyMemoryChunks(chunkMarkdown(content, this.settings.chunking));
+      let chunkSenderIds: (string | undefined)[] | undefined;
       if (options.source === "sessions" && "lineMap" in entry) {
         remapChunkLines(chunks, entry.lineMap);
+        chunkSenderIds = resolveChunkSenderIds(chunks, entry.messageSenderIds);
       }
-      this.writeChunks(entry, options.source, "fts-only", chunks, [], false);
+      this.writeChunks(entry, options.source, "fts-only", chunks, [], false, chunkSenderIds);
       return;
     }
 
     let chunks: MemoryChunk[];
     let structuredInputBytes: number | undefined;
+    let chunkSenderIds: (string | undefined)[] | undefined;
     if ("kind" in entry && entry.kind === "multimodal") {
       if (!this.provider) {
         log.debug("Skipping multimodal indexing in FTS-only mode", {
@@ -718,10 +750,11 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
         : baseChunks;
       if (options.source === "sessions" && "lineMap" in entry) {
         remapChunkLines(chunks, entry.lineMap);
+        chunkSenderIds = resolveChunkSenderIds(chunks, entry.messageSenderIds);
       }
     }
     if (!this.provider) {
-      this.writeChunks(entry, options.source, "fts-only", chunks, [], false);
+      this.writeChunks(entry, options.source, "fts-only", chunks, [], false, chunkSenderIds);
       return;
     }
 
@@ -754,6 +787,14 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
     }
     const sample = embeddings.find((embedding) => embedding.length > 0);
     const vectorReady = sample ? await this.ensureVectorReady(sample.length) : false;
-    this.writeChunks(entry, options.source, this.provider.model, chunks, embeddings, vectorReady);
+    this.writeChunks(
+      entry,
+      options.source,
+      this.provider.model,
+      chunks,
+      embeddings,
+      vectorReady,
+      chunkSenderIds,
+    );
   }
 }

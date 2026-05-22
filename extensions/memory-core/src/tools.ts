@@ -230,6 +230,7 @@ export function createMemorySearchTool(options: {
   getConfig?: () => OpenClawConfig | undefined;
   agentId?: string;
   agentSessionKey?: string;
+  senderId?: string;
   sandboxed?: boolean;
 }) {
   return createMemoryTool({
@@ -298,6 +299,7 @@ export function createMemorySearchTool(options: {
               maxResults,
               minScore,
               sessionKey: options.agentSessionKey,
+              senderId: options.senderId,
               qmdSearchModeOverride,
               onDebug: (debug) => {
                 runtimeDebug.push(debug);

@@ -70,9 +70,16 @@ export function ensureMemoryIndexSchema(params: {
           `  source UNINDEXED,\n` +
           `  model UNINDEXED,\n` +
           `  start_line UNINDEXED,\n` +
-          `  end_line UNINDEXED\n` +
+          `  end_line UNINDEXED,\n` +
+          `  sender_id UNINDEXED\n` +
           `${tokenizeClause});`,
       );
+      // Migrate existing FTS tables that lack the sender_id column (pre-migration databases)
+      try {
+        params.db.exec(`ALTER TABLE ${params.ftsTable} ADD COLUMN sender_id TEXT UNINDEXED`);
+      } catch {
+        // Column already exists — this is the expected path after fresh creation
+      }
       ftsAvailable = true;
     } catch (err) {
       const message = formatErrorMessage(err);
@@ -83,8 +90,10 @@ export function ensureMemoryIndexSchema(params: {
 
   ensureColumn(params.db, "files", "source", "TEXT NOT NULL DEFAULT 'memory'");
   ensureColumn(params.db, "chunks", "source", "TEXT NOT NULL DEFAULT 'memory'");
+  ensureColumn(params.db, "chunks", "sender_id", "TEXT DEFAULT NULL");
   params.db.exec(`CREATE INDEX IF NOT EXISTS idx_chunks_path ON chunks(path);`);
   params.db.exec(`CREATE INDEX IF NOT EXISTS idx_chunks_source ON chunks(source);`);
+  params.db.exec(`CREATE INDEX IF NOT EXISTS idx_chunks_sender_id ON chunks(sender_id);`);
 
   return { ftsAvailable, ...(ftsError ? { ftsError } : {}) };
 }

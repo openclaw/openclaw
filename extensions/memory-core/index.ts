@@ -25,6 +25,7 @@ type MemoryToolOptions = {
   getConfig?: () => OpenClawConfig | undefined;
   agentId?: string;
   agentSessionKey?: string;
+  senderId?: string;
   sandboxed?: boolean;
 };
 
@@ -150,6 +151,7 @@ function resolveMemoryToolOptions(ctx: OpenClawPluginToolContext): MemoryToolOpt
     getConfig,
     agentId: ctx.agentId,
     agentSessionKey: ctx.sessionKey,
+    senderId: ctx.requesterSenderId,
     sandboxed: ctx.sandboxed,
   };
 }

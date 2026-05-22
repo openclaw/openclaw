@@ -321,6 +321,17 @@ function asRecord(value: unknown): Record<string, unknown> | undefined {
     ? (value as Record<string, unknown>)
     : undefined;
 }
+
+function extractSenderId(messages: unknown[]): string | undefined {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const msg = asRecord(messages[i]);
+    if (msg?.role === "user" && typeof msg.senderId === "string") {
+      return msg.senderId;
+    }
+  }
+  return undefined;
+}
+
 type ActiveMemoryThinkingLevel =
   | "off"
   | "minimal"
@@ -2446,6 +2457,7 @@ async function runRecallSubagent(params: {
   currentModelProviderId?: string;
   currentModelId?: string;
   modelRef?: { provider: string; model: string };
+  senderId?: string;
   abortSignal?: AbortSignal;
   onSessionFile?: (sessionFile: string) => void;
 }): Promise<RecallSubagentResult> {
@@ -2532,6 +2544,7 @@ async function runRecallSubagent(params: {
       timeoutMs: embeddedTimeoutMs,
       runId: subagentSessionId,
       trigger: "manual",
+      senderId: params.senderId,
       toolsAllow: [...params.config.toolsAllow],
       disableMessageTool: true,
       allowGatewaySubagentBinding: true,
@@ -2609,6 +2622,7 @@ async function maybeResolveActiveRecall(params: {
   searchQuery: string;
   currentModelProviderId?: string;
   currentModelId?: string;
+  senderId?: string;
 }): Promise<ActiveRecallResult> {
   const startedAt = Date.now();
   const cacheKey = buildCacheKey({
@@ -3102,6 +3116,7 @@ export default definePluginEntry({
             latestUserMessage: event.prompt,
             recentTurns,
           });
+          const senderId = extractSenderId(Array.isArray(event.messages) ? event.messages : []);
           const result = await maybeResolveActiveRecall({
             api,
             config,
@@ -3112,6 +3127,7 @@ export default definePluginEntry({
             channelId: ctx.channelId,
             query,
             searchQuery,
+            senderId,
             currentModelProviderId: ctx.modelProviderId,
             currentModelId: ctx.modelId,
           });

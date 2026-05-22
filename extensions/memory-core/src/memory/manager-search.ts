@@ -128,7 +128,9 @@ export async function searchVector(params: {
   ensureVectorReady: (dimensions: number) => Promise<boolean>;
   sourceFilterVec: { sql: string; params: SearchSource[] };
   sourceFilterChunks: { sql: string; params: SearchSource[] };
+  senderIdFilter?: { sql: string; params: string[] };
 }): Promise<SearchRowResult[]> {
+  const sf = params.senderIdFilter ?? { sql: "", params: [] };
   if (params.queryVec.length === 0 || params.limit <= 0) {
     return [];
   }
@@ -149,7 +151,7 @@ export async function searchVector(params: {
             `       vec_distance_cosine(v.embedding, ?) AS dist\n` +
             `  FROM ${params.vectorTable} v\n` +
             `  JOIN chunks c ON c.id = v.id\n` +
-            ` WHERE v.embedding MATCH ? AND k = ? AND c.model = ?${params.sourceFilterVec.sql}\n` +
+            ` WHERE v.embedding MATCH ? AND k = ? AND c.model = ?${params.sourceFilterVec.sql}${sf.sql}\n` +
             ` ORDER BY dist ASC\n` +
             ` LIMIT ?`,
         )
@@ -159,6 +161,7 @@ export async function searchVector(params: {
           candidateLimit,
           params.providerModel,
           ...params.sourceFilterVec.params,
+          ...sf.params,
           params.limit,
         ) as Array<{
         id: string;
@@ -176,9 +179,9 @@ export async function searchVector(params: {
       const matchingChunkCount = readCount(
         params.db
           .prepare(
-            `SELECT COUNT(*) AS count FROM chunks c WHERE c.model = ?${params.sourceFilterVec.sql}`,
+            `SELECT COUNT(*) AS count FROM chunks c WHERE c.model = ?${params.sourceFilterVec.sql}${sf.sql}`,
           )
-          .get(params.providerModel, ...params.sourceFilterVec.params) as
+          .get(params.providerModel, ...params.sourceFilterVec.params, ...sf.params) as
           | { count?: number | bigint }
           | undefined,
       );
@@ -209,6 +212,7 @@ export async function searchVector(params: {
     db: params.db,
     providerModel: params.providerModel,
     sourceFilter: params.sourceFilterChunks,
+    senderIdFilter: sf,
     queryVec: params.queryVec,
     limit: params.limit,
     snippetMaxChars: params.snippetMaxChars,
@@ -219,10 +223,12 @@ function searchChunksByEmbedding(params: {
   db: DatabaseSync;
   providerModel: string;
   sourceFilter: { sql: string; params: SearchSource[] };
+  senderIdFilter?: { sql: string; params: string[] };
   queryVec: number[];
   limit: number;
   snippetMaxChars: number;
 }): SearchRowResult[] {
+  const sf = params.senderIdFilter ?? { sql: "", params: [] };
   if (params.limit <= 0) {
     return [];
   }
@@ -230,9 +236,13 @@ function searchChunksByEmbedding(params: {
     .prepare(
       `SELECT id, path, start_line, end_line, text, embedding, source\n` +
         `  FROM chunks\n` +
-        ` WHERE model = ?${params.sourceFilter.sql}`,
+        ` WHERE model = ?${params.sourceFilter.sql}${sf.sql}`,
     )
-    .iterate(params.providerModel, ...params.sourceFilter.params) as IterableIterator<{
+    .iterate(
+      params.providerModel,
+      ...params.sourceFilter.params,
+      ...sf.params,
+    ) as IterableIterator<{
     id: string;
     path: string;
     start_line: number;
@@ -286,7 +296,9 @@ export async function searchKeyword(params: {
   buildFtsQuery: (raw: string) => string | null;
   bm25RankToScore: (rank: number) => number;
   boostFallbackRanking?: boolean;
+  senderIdFilter?: { sql: string; params: string[] };
 }): Promise<Array<SearchRowResult & { textScore: number }>> {
+  const sf = params.senderIdFilter ?? { sql: "", params: [] };
   if (params.limit <= 0) {
     return [];
   }
@@ -323,7 +335,7 @@ export async function searchKeyword(params: {
           `SELECT id, path, source, start_line, end_line, text,\n` +
             `       bm25(${params.ftsTable}) AS rank\n` +
             `  FROM ${params.ftsTable}\n` +
-            ` WHERE ${params.ftsTable} MATCH ?${substringClause}${modelClause}${params.sourceFilter.sql}\n` +
+            ` WHERE ${params.ftsTable} MATCH ?${substringClause}${modelClause}${params.sourceFilter.sql}${sf.sql}\n` +
             ` ORDER BY rank ASC\n` +
             ` LIMIT ?`,
         )
@@ -332,6 +344,7 @@ export async function searchKeyword(params: {
           ...substringParams,
           ...modelParams,
           ...params.sourceFilter.params,
+          ...sf.params,
           params.limit,
         ) as typeof rows;
       usedMatch = true;
@@ -354,13 +367,14 @@ export async function searchKeyword(params: {
           `SELECT id, path, source, start_line, end_line, text,\n` +
             `       0 AS rank\n` +
             `  FROM ${params.ftsTable}\n` +
-            ` WHERE 1=1${fallbackLikeClause}${modelClause}${params.sourceFilter.sql}\n` +
+            ` WHERE 1=1${fallbackLikeClause}${modelClause}${params.sourceFilter.sql}${sf.sql}\n` +
             ` LIMIT ?`,
         )
         .all(
           ...fallbackLikeParams,
           ...modelParams,
           ...params.sourceFilter.params,
+          ...sf.params,
           params.limit,
         ) as typeof rows;
     }
@@ -370,13 +384,14 @@ export async function searchKeyword(params: {
         `SELECT id, path, source, start_line, end_line, text,\n` +
           `       0 AS rank\n` +
           `  FROM ${params.ftsTable}\n` +
-          ` WHERE 1=1${substringClause}${modelClause}${params.sourceFilter.sql}\n` +
+          ` WHERE 1=1${substringClause}${modelClause}${params.sourceFilter.sql}${sf.sql}\n` +
           ` LIMIT ?`,
       )
       .all(
         ...substringParams,
         ...modelParams,
         ...params.sourceFilter.params,
+        ...sf.params,
         params.limit,
       ) as typeof rows;
   }

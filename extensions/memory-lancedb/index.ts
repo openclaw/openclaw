@@ -39,6 +39,7 @@ type MemoryEntry = {
   importance: number;
   category: MemoryCategory;
   createdAt: number;
+  senderId?: string;
 };
 
 type MemoryListEntry = Omit<MemoryEntry, "vector">;
@@ -141,6 +142,16 @@ export function normalizeRecallQuery(
   return normalized.length > limit ? truncateUtf16Safe(normalized, limit).trimEnd() : normalized;
 }
 
+function extractSenderId(messages: unknown[]): string | undefined {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const msg = asRecord(messages[i]);
+    if (msg?.role === "user" && typeof msg.senderId === "string") {
+      return msg.senderId;
+    }
+  }
+  return undefined;
+}
+
 function messageFingerprint(message: unknown): string {
   const msgObj = asRecord(message);
   if (!msgObj) {
@@ -240,6 +251,7 @@ class MemoryDB {
           importance: 0,
           category: "other",
           createdAt: 0,
+          senderId: "",
         },
       ]);
       await this.table.delete('id = "__schema__"');
@@ -259,7 +271,12 @@ class MemoryDB {
     return fullEntry;
   }
 
-  async search(vector: number[], limit = 5, minScore = 0.5): Promise<MemorySearchResult[]> {
+  async search(
+    vector: number[],
+    limit = 5,
+    minScore = 0.5,
+    senderId?: string,
+  ): Promise<MemorySearchResult[]> {
     await this.ensureInitialized();
 
     const results = await this.table!.vectorSearch(vector).limit(limit).toArray();
@@ -277,12 +294,16 @@ class MemoryDB {
           importance: row.importance as number,
           category: row.category as MemoryEntry["category"],
           createdAt: row.createdAt as number,
+          senderId: row.senderId as string | undefined,
         },
         score,
       };
     });
 
-    return mapped.filter((r) => r.score >= minScore);
+    const filtered = senderId
+      ? mapped.filter((r) => r.entry.senderId === senderId || !r.entry.senderId)
+      : mapped;
+    return filtered.filter((r) => r.score >= minScore);
   }
 
   async list(limit?: number, options: MemoryListOptions = {}): Promise<MemoryListEntry[]> {
@@ -1021,18 +1042,19 @@ export default definePluginEntry({
       }
 
       try {
+        const messages = Array.isArray(event.messages) ? event.messages : [];
         const recallQuery = normalizeRecallQuery(
-          extractLatestUserText(Array.isArray(event.messages) ? event.messages : []) ??
-            event.prompt,
+          extractLatestUserText(messages) ?? event.prompt,
           currentCfg.recallMaxChars,
         );
+        const senderId = extractSenderId(messages);
         const recall = await runWithTimeout({
           timeoutMs: DEFAULT_AUTO_RECALL_TIMEOUT_MS,
           task: async () => {
             const vector = await embeddings.embed(recallQuery, {
               timeoutMs: DEFAULT_AUTO_RECALL_TIMEOUT_MS,
             });
-            return await db.search(vector, 3, 0.3);
+            return await db.search(vector, 3, 0.3, senderId);
           },
         });
         if (recall.status === "timeout") {
@@ -1107,11 +1129,13 @@ export default definePluginEntry({
                 continue;
               }
 
+              const messageSenderId = (message as { senderId?: string })?.senderId;
               await db.store({
                 text,
                 vector,
                 importance: 0.7,
                 category,
+                ...(messageSenderId ? { senderId: messageSenderId } : {}),
               });
               stored++;
             }
