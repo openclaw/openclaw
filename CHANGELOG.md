@@ -6,6 +6,7 @@ Docs: https://docs.openclaw.ai
 
 ### Changes
 
+- Docs: clarify context-pruning ratio bounds, local dashboard recovery, CLI env markers, remote onboarding token behavior, and Peekaboo Bridge permissions for subprocess agents. Thanks @ayesha-aziz123, @dishraters, @hougangdev, and @brandonlipman.
 - Docs: clarify browser CDP diagnostics, Plugin SDK allowlist imports, status-reaction timing defaults, queue steering behavior, limited-tool troubleshooting, cron HEARTBEAT handling, Telegram multi-agent groups, Bitwarden SecretRef setup, and EasyRunner deployments. Thanks @Quratulain-bilal, @mbelinky, @Mickey-, @vancece, @xenouzik, @posigit, @surlymochan, @janaka, and @choiking.
 - Docs: clarify IPv4-only Gateway BYOH binding, trusted-proxy scope clearing, Android pairing approval, macOS Accessibility grants, Zalo profile env vars, password-store SecretRef setup, and Chinese memory navigation. Thanks @itskai-dev, @gwh7078, @longstoryscott, @MoeJaberr, and @yuaiccc.
 - Docs: consolidate GLM under Z.AI, add the Upstash Box install guide and Gateway exposure runbook, clarify MEDIA directives, Copilot and Voyage setup, config path quoting, real behavior proof, and memory-file write guidance. Thanks @BobDu, @alitariksahin, @Jefsky, @musaabhasan, @OmerZeyveli, @leno23, @WuKongAI-CMU, @luoyanglang, and @majin1102.
@@ -90,6 +91,7 @@ Docs: https://docs.openclaw.ai
 - Agents/OpenAI: preserve structured provider error code, type, and redacted body metadata on boundary-aware transport failures.
 - Doctor/Codex: point native Codex asset warnings at the canonical `openclaw migrate plan codex` preview command. Fixes #84948. Thanks @markoa.
 - CLI/models: make `capability model auth logout --agent` remove auth profiles from the selected non-default agent store. Fixes #85092. Thanks @islandpreneur007.
+- Gateway/models: reuse prepared provider auth metadata during model-listing auth checks so repeated lookups avoid broad plugin discovery while preserving synthetic local auth.
 - CLI/status: suppress systemd user-service setup hints when `openclaw status --deep` can already reach a running Gateway RPC service. Fixes #85094. Thanks @islandpreneur007.
 - CLI/devices: recover local approval when a same-device repair request replaces the request ID being approved.
 - CLI/agents: retry transient normal-close Gateway handshakes before falling back to embedded `openclaw agent` execution.
@@ -3131,6 +3133,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Skills/OpenAI Whisper: restore executable bits for bundled Whisper and video-frame shell helpers and add a release check for non-executable bundled skill shell scripts, so packaged installs no longer fail with permission-denied errors. Fixes #9303. Thanks @nikolasdehor.
 - Agents/tools: skip unavailable media generation and PDF tool factories from the live reply path when Gateway metadata and the active auth store prove no configured provider can back them, while keeping explicit config and auth-backed providers on the normal factory path. Thanks @shakkernerd.
 - Agents/runtime: reuse the Gateway metadata startup plan when ensuring reply runtime plugins are loaded, so live agent turns do not broad-load plugin runtimes after the Gateway already scoped startup activation. Thanks @shakkernerd.
 - Agents/runtime: delegate scoped reply runtime registry reuse to the plugin loader cache-key compatibility checks, so config changes with the same startup plugin ids cannot keep stale runtime hooks or tools active. Thanks @shakkernerd.
