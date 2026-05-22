@@ -36,12 +36,16 @@ import {
   buildCodexNativeHookRelayDisabledConfig,
   CODEX_NATIVE_HOOK_RELAY_EVENTS,
 } from "./native-hook-relay.js";
+import {
+  readCodexNotificationThreadId,
+  readCodexNotificationTurnId,
+} from "./notification-correlation.js";
 import { mergeCodexThreadConfigs } from "./plugin-thread-config.js";
 import {
   assertCodexThreadForkResponse,
   assertCodexTurnStartResponse,
   readCodexDynamicToolCallParams,
-  readCodexTurnCompletedNotification,
+  readCodexTurn,
 } from "./protocol-validators.js";
 import {
   isJsonObject,
@@ -55,6 +59,7 @@ import {
 } from "./protocol.js";
 import { rememberCodexRateLimits, readRecentCodexRateLimits } from "./rate-limit-cache.js";
 import { formatCodexUsageLimitErrorMessage } from "./rate-limits.js";
+import { resolveCodexNativeSandboxBlock } from "./sandbox-guard.js";
 import { readCodexAppServerBinding } from "./session-binding.js";
 import { getSharedCodexAppServerClient } from "./shared-client.js";
 import {
@@ -66,6 +71,7 @@ import { filterToolsForVisionInputs } from "./vision-tools.js";
 
 const CODEX_SIDE_DYNAMIC_TOOL_TIMEOUT_MS = 30_000;
 const CODEX_SIDE_DYNAMIC_TOOL_MAX_TIMEOUT_MS = 600_000;
+const CODEX_SIDE_DYNAMIC_IMAGE_GENERATION_TOOL_TIMEOUT_MS = 120_000;
 const CODEX_SIDE_DYNAMIC_IMAGE_TOOL_TIMEOUT_MS = 60_000;
 const SIDE_QUESTION_COMPLETION_TIMEOUT_MS = 600_000;
 const CODEX_SIDE_NATIVE_HOOK_RELAY_MIN_TTL_MS = 30 * 60_000;
@@ -119,6 +125,15 @@ export async function runCodexAppServerSideQuestion(
     throw new Error(
       "Codex /btw needs an active Codex thread. Send a normal message first, then try /btw again.",
     );
+  }
+  const sandboxBlock = resolveCodexNativeSandboxBlock({
+    config: params.cfg,
+    sessionKey: params.sessionKey,
+    sessionId: params.sessionId,
+    surface: "/btw side-question mode",
+  });
+  if (sandboxBlock) {
+    throw new Error(sandboxBlock);
   }
 
   const pluginConfig = readCodexPluginConfig(options.pluginConfig);
@@ -671,7 +686,8 @@ function resolveSideDynamicToolCallTimeoutMs(params: {
   const configured =
     readSideDynamicToolCallTimeoutMs(params.call.arguments) ??
     (params.call.tool === "image_generate"
-      ? readSideImageGenerationModelTimeoutMs(params.config)
+      ? (readSideImageGenerationModelTimeoutMs(params.config) ??
+        CODEX_SIDE_DYNAMIC_IMAGE_GENERATION_TOOL_TIMEOUT_MS)
       : undefined) ??
     (params.call.tool === "image"
       ? (readSideTimeoutSecondsAsMs(params.config?.tools?.media?.image?.timeoutSeconds) ??
@@ -911,8 +927,7 @@ class CodexSideQuestionCollector {
   }
 
   private completeFromTurn(params: JsonObject): void {
-    const notification = readCodexTurnCompletedNotification(params);
-    const turn = notification?.turn;
+    const turn = readCodexTurn(params.turn);
     if (!turn || turn.id !== this.turnId) {
       return;
     }
@@ -961,16 +976,13 @@ function collectAssistantText(turn: CodexTurn): string {
 }
 
 function isNotificationForTurn(params: JsonObject, threadId: string, turnId: string): boolean {
-  return readString(params, "threadId") === threadId && readNotificationTurnId(params) === turnId;
+  return (
+    readCodexNotificationThreadId(params) === threadId && readNotificationTurnId(params) === turnId
+  );
 }
 
 function readNotificationTurnId(record: JsonObject): string | undefined {
-  return readString(record, "turnId") ?? readNestedTurnId(record);
-}
-
-function readNestedTurnId(record: JsonObject): string | undefined {
-  const turn = record.turn;
-  return isJsonObject(turn) ? readString(turn, "id") : undefined;
+  return readCodexNotificationTurnId(record);
 }
 
 function readBooleanAlias(record: JsonObject, keys: readonly string[]): boolean | undefined {

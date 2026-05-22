@@ -33,6 +33,7 @@ const env = {
   NODE_ENV: "production",
 };
 const OUTPUT_SOURCE_MAPS = process.env.OUTPUT_SOURCE_MAPS === "1";
+const RUN_NODE_SKIP_DTS_BUILD = process.env.OPENCLAW_RUN_NODE_SKIP_DTS_BUILD === "1";
 
 const SUPPRESSED_EVAL_WARNING_PATHS = [
   "@protobufjs/inquire/index.js",
@@ -81,12 +82,21 @@ function buildInputOptions(options: InputOptionsArg): InputOptionsReturn {
     message?: string;
     id?: string;
     importer?: string;
+    plugin?: string;
   }) {
     if (log.code === "PLUGIN_TIMINGS") {
       return true;
     }
     if (log.code === "UNRESOLVED_IMPORT") {
       return normalizedLogHaystack(log).includes("extensions/");
+    }
+    if (
+      log.code === "PLUGIN_WARNING" &&
+      log.plugin === "rolldown-plugin-dts:fake-js" &&
+      typeof log.message === "string" &&
+      log.message.includes("uses CommonJS dts syntax")
+    ) {
+      return true;
     }
     if (log.code !== "EVAL") {
       return false;
@@ -325,6 +335,7 @@ export default defineConfig([
     // Build core entrypoints, plugin-sdk subpaths, bundled plugin entrypoints,
     // and bundled hooks in one graph so runtime singletons are emitted once.
     clean: true,
+    dts: RUN_NODE_SKIP_DTS_BUILD ? false : undefined,
     entry: buildUnifiedDistEntries(),
     deps: {
       alwaysBundle: shouldAlwaysBundleDependency,
