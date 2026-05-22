@@ -173,7 +173,9 @@ const RATE_LIMIT_HINT_RE =
  * It should be routed to the compact+retry path instead of the model fallback chain.
  */
 export function isAnthropicLongContextUsageError(errorMessage: string): boolean {
-  return errorMessage.toLowerCase().includes("extra usage is required for long context");
+  return normalizeLowercaseStringOrEmpty(errorMessage).includes(
+    "extra usage is required for long context",
+  );
 }
 
 export function isLikelyContextOverflowError(errorMessage?: string): boolean {
