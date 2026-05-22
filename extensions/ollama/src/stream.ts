@@ -103,13 +103,13 @@ export function resolveOllamaBaseUrlForRun(params: {
   modelBaseUrl?: string;
   providerBaseUrl?: string;
 }): string {
-  const providerBaseUrl = params.providerBaseUrl?.trim();
-  if (providerBaseUrl) {
-    return providerBaseUrl;
-  }
   const modelBaseUrl = params.modelBaseUrl?.trim();
   if (modelBaseUrl) {
     return modelBaseUrl;
+  }
+  const providerBaseUrl = params.providerBaseUrl?.trim();
+  if (providerBaseUrl) {
+    return providerBaseUrl;
   }
   return OLLAMA_NATIVE_BASE_URL;
 }

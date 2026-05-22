@@ -548,11 +548,30 @@ export function resolveProviderStreamFn(params: {
   allowRuntimePluginLoad?: boolean;
   context: ProviderCreateStreamFnContext;
 }) {
-  const plugin =
+  const resolvePlugin =
     params.allowRuntimePluginLoad === false
-      ? resolveLoadedProviderRuntimePlugin(params)
-      : resolveProviderRuntimePlugin(params);
-  return plugin?.createStreamFn?.(params.context) ?? undefined;
+      ? resolveLoadedProviderRuntimePlugin
+      : resolveProviderRuntimePlugin;
+  const plugin = resolvePlugin(params);
+  const streamFn = plugin?.createStreamFn?.(params.context);
+  if (streamFn) {
+    return streamFn;
+  }
+
+  const modelApi =
+    typeof params.context.model?.api === "string"
+      ? normalizeProviderId(params.context.model.api)
+      : "";
+  if (!modelApi || modelApi === normalizeProviderId(params.provider)) {
+    return undefined;
+  }
+
+  return (
+    resolvePlugin({
+      ...params,
+      provider: modelApi,
+    })?.createStreamFn?.(params.context) ?? undefined
+  );
 }
 
 export function resolveProviderTransportTurnStateWithPlugin(params: {
