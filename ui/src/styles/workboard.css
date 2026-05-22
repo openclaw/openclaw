@@ -314,7 +314,12 @@
   grid-area: left;
 }
 
-.workboard-game__controls .workboard-game__arrow:not(.workboard-game__arrow--up, .workboard-game__arrow--left, .workboard-game__arrow--right) {
+.workboard-game__controls
+  .workboard-game__arrow:not(
+    .workboard-game__arrow--up,
+    .workboard-game__arrow--left,
+    .workboard-game__arrow--right
+  ) {
   grid-area: down;
 }
 

@@ -359,7 +359,7 @@ function renderCardModal(props: WorkboardProps) {
         </div>
         <div class="workboard-draft__main">
           <label class="workboard-field">
-            <span>Title</span>
+            <span>${t("workboard.fieldTitle")}</span>
             <input
               class="input workboard-draft__title"
               placeholder="Card title"
@@ -371,7 +371,7 @@ function renderCardModal(props: WorkboardProps) {
             />
           </label>
           <label class="workboard-field">
-            <span>Notes</span>
+            <span>${t("workboard.fieldNotes")}</span>
             <textarea
               class="input workboard-draft__notes"
               placeholder="Notes, acceptance criteria, links"
@@ -385,7 +385,7 @@ function renderCardModal(props: WorkboardProps) {
         </div>
         <div class="workboard-draft__meta">
           <label class="workboard-field">
-            <span>Status</span>
+            <span>${t("workboard.fieldStatus")}</span>
             <select
               class="input"
               .value=${state.draftStatus}
@@ -401,7 +401,7 @@ function renderCardModal(props: WorkboardProps) {
             </select>
           </label>
           <label class="workboard-field">
-            <span>Priority</span>
+            <span>${t("workboard.fieldPriority")}</span>
             <select
               class="input"
               .value=${state.draftPriority}
@@ -417,7 +417,7 @@ function renderCardModal(props: WorkboardProps) {
             </select>
           </label>
           <label class="workboard-field">
-            <span>Agent</span>
+            <span>${t("workboard.fieldAgent")}</span>
             <select
               class="input"
               .value=${state.draftAgentId}
@@ -436,7 +436,7 @@ function renderCardModal(props: WorkboardProps) {
             </select>
           </label>
           <label class="workboard-field">
-            <span>Session</span>
+            <span>${t("workboard.fieldSession")}</span>
             <select
               class="input"
               .value=${state.draftSessionKey}
@@ -455,10 +455,10 @@ function renderCardModal(props: WorkboardProps) {
             </select>
           </label>
           <label class="workboard-field workboard-field--wide">
-            <span>Labels</span>
+            <span>${t("workboard.fieldLabels")}</span>
             <input
               class="input"
-              placeholder="ui, docs"
+              placeholder=${t("workboard.labelsPlaceholder")}
               .value=${state.draftLabels}
               @input=${(event: InputEvent) => {
                 state.draftLabels = (event.currentTarget as HTMLInputElement).value;
@@ -608,7 +608,7 @@ function renderCard(props: WorkboardProps, card: WorkboardCard) {
       <div class="workboard-card__actions">
         <button
           class="btn btn--icon workboard-card__icon"
-          title="Edit card"
+          title=${t("workboard.editCard")}
           @click=${() => {
             openEditModal(state, card);
             props.onRequestUpdate?.();
