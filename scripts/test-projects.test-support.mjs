@@ -220,6 +220,7 @@ const SHARED_CORE_VITEST_CONFIG = "test/vitest/vitest.shared-core.config.ts";
 const TASKS_VITEST_CONFIG = "test/vitest/vitest.tasks.config.ts";
 const TOOLING_VITEST_CONFIG = "test/vitest/vitest.tooling.config.ts";
 const TUI_VITEST_CONFIG = "test/vitest/vitest.tui.config.ts";
+const TUI_PTY_VITEST_CONFIG = "test/vitest/vitest.tui-pty.config.ts";
 const UI_VITEST_CONFIG = "test/vitest/vitest.ui.config.ts";
 const UI_E2E_VITEST_CONFIG = "test/vitest/vitest.ui-e2e.config.ts";
 const UTILS_VITEST_CONFIG = "test/vitest/vitest.utils.config.ts";
@@ -300,6 +301,7 @@ const VITEST_CONFIG_BY_KIND = {
   tasks: TASKS_VITEST_CONFIG,
   tooling: TOOLING_VITEST_CONFIG,
   tui: TUI_VITEST_CONFIG,
+  tuiPty: TUI_PTY_VITEST_CONFIG,
   ui: UI_VITEST_CONFIG,
   uiE2e: UI_E2E_VITEST_CONFIG,
   utils: UTILS_VITEST_CONFIG,
@@ -1276,6 +1278,9 @@ function classifyTarget(arg, cwd) {
   if (isControlUiE2eTarget(relative)) {
     return "uiE2e";
   }
+  if (relative.startsWith("src/tui/tui-pty-")) {
+    return "tuiPty";
+  }
   if (relative.endsWith(".e2e.test.ts")) {
     return "e2e";
   }
@@ -1602,6 +1607,7 @@ export function buildVitestRunPlans(
     "sharedCore",
     "tasks",
     "tui",
+    "tuiPty",
     "mediaUnderstanding",
     "acp",
     "cli",
