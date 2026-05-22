@@ -14,9 +14,11 @@ import {
   type WorkboardCard,
 } from "./workboard.ts";
 
-function createClient(responses: Record<string, unknown> | ((method: string) => unknown)) {
-  const request = vi.fn(async (method: string) =>
-    typeof responses === "function" ? responses(method) : responses[method],
+function createClient(
+  responses: Record<string, unknown> | ((method: string, params: unknown) => unknown),
+) {
+  const request = vi.fn(async (method: string, params: unknown) =>
+    typeof responses === "function" ? responses(method, params) : responses[method],
   );
   return { request };
 }
@@ -552,6 +554,36 @@ describe("workboard controller", () => {
     expect(getWorkboardState(host).cards[0]).toMatchObject({ status: "blocked" });
   });
 
+  it("falls back to the active session abort when the stored run id is stale", async () => {
+    const host = {};
+    const linked = { ...sampleCard, sessionKey: sampleSession.key, runId: "old-run" };
+    const blocked = { ...linked, status: "blocked" };
+    const client = createClient((method, params) => {
+      if (method === "chat.abort" && (params as { runId?: string }).runId === "old-run") {
+        return { aborted: false, runIds: [] };
+      }
+      if (method === "chat.abort") {
+        return { aborted: true, runIds: ["new-run"] };
+      }
+      return { card: blocked };
+    });
+
+    await stopWorkboardCard({ host, client: client as never, card: linked });
+
+    expect(client.request).toHaveBeenNthCalledWith(1, "chat.abort", {
+      sessionKey: sampleSession.key,
+      runId: "old-run",
+    });
+    expect(client.request).toHaveBeenNthCalledWith(2, "chat.abort", {
+      sessionKey: sampleSession.key,
+    });
+    expect(client.request).toHaveBeenNthCalledWith(3, "workboard.cards.update", {
+      id: "card-1",
+      patch: { status: "blocked" },
+    });
+    expect(getWorkboardState(host).cards[0]).toMatchObject({ status: "blocked" });
+  });
+
   it("leaves cards unchanged when stop does not abort an active run", async () => {
     const host = {};
     const linked = { ...sampleCard, sessionKey: sampleSession.key, runId: "stale-run" };
@@ -563,10 +595,13 @@ describe("workboard controller", () => {
 
     await stopWorkboardCard({ host, client: client as never, card: linked });
 
-    expect(client.request).toHaveBeenCalledOnce();
-    expect(client.request).toHaveBeenCalledWith("chat.abort", {
+    expect(client.request).toHaveBeenCalledTimes(2);
+    expect(client.request).toHaveBeenNthCalledWith(1, "chat.abort", {
       sessionKey: sampleSession.key,
       runId: "stale-run",
+    });
+    expect(client.request).toHaveBeenNthCalledWith(2, "chat.abort", {
+      sessionKey: sampleSession.key,
     });
     expect(state.cards).toEqual([linked]);
   });

@@ -782,14 +782,23 @@ export async function stopWorkboardCard(params: {
   state.error = null;
   params.requestUpdate?.();
   try {
-    const abortResult = await params.client.request("chat.abort", {
+    let abortResult = await params.client.request("chat.abort", {
       sessionKey: params.card.sessionKey,
       ...(params.card.runId ? { runId: params.card.runId } : {}),
     });
-    const aborted =
+    let aborted =
       isRecord(abortResult) &&
       (abortResult.aborted === true ||
         (Array.isArray(abortResult.runIds) && abortResult.runIds.length > 0));
+    if (!aborted && params.card.runId) {
+      abortResult = await params.client.request("chat.abort", {
+        sessionKey: params.card.sessionKey,
+      });
+      aborted =
+        isRecord(abortResult) &&
+        (abortResult.aborted === true ||
+          (Array.isArray(abortResult.runIds) && abortResult.runIds.length > 0));
+    }
     if (!aborted) {
       return;
     }
