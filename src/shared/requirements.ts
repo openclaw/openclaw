@@ -79,15 +79,15 @@ export function resolveMissingOs(params: {
     return [];
   }
   const localPlatform = normalizeOsRequirementPlatform(params.localPlatform);
-  const requiredPlatforms = params.required.map((platform) =>
-    normalizeOsRequirementPlatform(platform),
+  const requiredPlatforms = new Set(
+    params.required.map((platform) => normalizeOsRequirementPlatform(platform)),
   );
-  if (requiredPlatforms.includes(localPlatform)) {
+  if (requiredPlatforms.has(localPlatform)) {
     return [];
   }
   if (
     params.remotePlatforms?.some((platform) =>
-      requiredPlatforms.includes(normalizeOsRequirementPlatform(platform)),
+      requiredPlatforms.has(normalizeOsRequirementPlatform(platform)),
     )
   ) {
     return [];
