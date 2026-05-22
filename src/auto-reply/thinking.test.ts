@@ -160,6 +160,95 @@ describe("listThinkingLevels", () => {
     expect(listThinkingLevelLabels("demo", "demo-model")).toEqual(["off", "on"]);
   });
 
+  it("lets authoritative provider profiles override stale catalog reasoning=false", () => {
+    providerRuntimeMocks.resolveProviderThinkingProfile.mockImplementation(
+      ({ provider, context }) => {
+        if (provider !== "openai" && provider !== "openai-codex") {
+          return undefined;
+        }
+        const preserveWhenCatalogReasoningFalse =
+          context.modelId === "gpt-5.5" ||
+          context.modelId === "gpt-5.4" ||
+          context.modelId === "gpt-5.3";
+        return {
+          levels: [
+            { id: "off" },
+            { id: "minimal" },
+            { id: "low" },
+            { id: "medium" },
+            { id: "high" },
+            { id: "xhigh" },
+          ],
+          ...(preserveWhenCatalogReasoningFalse ? { preserveWhenCatalogReasoningFalse } : {}),
+          defaultLevel: "medium",
+        };
+      },
+    );
+    const staleCatalog = [
+      { provider: "openai", id: "gpt-5.5", name: "GPT-5.5", reasoning: false },
+      { provider: "openai", id: "gpt-5.4", name: "GPT-5.4", reasoning: false },
+      { provider: "openai-codex", id: "gpt-5.5", name: "GPT-5.5 (Codex)", reasoning: false },
+      { provider: "openai", id: "chat-latest", name: "Chat Latest", reasoning: false },
+    ];
+
+    // Issue #84880 acceptance: sessions_spawn must accept high/xhigh on gpt-5.5/5.4.
+    expect(
+      isThinkingLevelSupported({
+        provider: "openai",
+        model: "gpt-5.4",
+        level: "high",
+        catalog: staleCatalog,
+      }),
+    ).toBe(true);
+    expect(
+      isThinkingLevelSupported({
+        provider: "openai-codex",
+        model: "gpt-5.5",
+        level: "high",
+        catalog: staleCatalog,
+      }),
+    ).toBe(true);
+    expect(
+      isThinkingLevelSupported({
+        provider: "openai-codex",
+        model: "gpt-5.5",
+        level: "xhigh",
+        catalog: staleCatalog,
+      }),
+    ).toBe(true);
+    expect(formatThinkingLevels("openai-codex", "gpt-5.5", ", ", staleCatalog)).toBe(
+      "off, minimal, low, medium, high, xhigh",
+    );
+    // chat-latest is a non-reasoning OpenAI model — provider does NOT override,
+    // so stale catalog reasoning=false still wins.
+    expect(listThinkingLevels("openai", "chat-latest", staleCatalog)).toEqual(["off"]);
+  });
+
+  it("keeps non-authoritative provider profiles behind catalog reasoning=false", () => {
+    providerRuntimeMocks.resolveProviderThinkingProfile.mockReturnValue({
+      levels: [{ id: "off" }, { id: "low" }, { id: "medium" }, { id: "high" }],
+      defaultLevel: "medium",
+    });
+    const catalog = [
+      {
+        provider: "demo",
+        id: "demo-model",
+        name: "Demo",
+        reasoning: false,
+      },
+    ];
+
+    expect(listThinkingLevels("demo", "demo-model", catalog)).toEqual(["off"]);
+    expect(
+      isThinkingLevelSupported({
+        provider: "demo",
+        model: "demo-model",
+        level: "high",
+        catalog,
+      }),
+    ).toBe(false);
+  });
+
   it("treats catalog reasoning=false as an explicit thinking opt-out", () => {
     providerRuntimeMocks.resolveProviderThinkingProfile.mockReturnValue({
       levels: [{ id: "off" }, { id: "low" }, { id: "medium" }, { id: "high" }],

@@ -435,6 +435,56 @@ describe("buildOpenAIProvider", () => {
     expectNoCatalogEntry(entries, "chat-latest");
   });
 
+  it("flags reasoning model thinking profiles as authoritative over stale catalog reasoning=false", () => {
+    const provider = buildOpenAIProvider();
+
+    // Reasoning-capable models opt in to catalog override (issue #84880).
+    expect(
+      provider.resolveThinkingProfile?.({
+        provider: "openai",
+        modelId: "gpt-5.5",
+      } as never)?.preserveWhenCatalogReasoningFalse,
+    ).toBe(true);
+    expect(
+      provider.resolveThinkingProfile?.({
+        provider: "openai",
+        modelId: "gpt-5.4",
+      } as never)?.preserveWhenCatalogReasoningFalse,
+    ).toBe(true);
+    expect(
+      provider.resolveThinkingProfile?.({
+        provider: "openai",
+        modelId: "gpt-5.4-mini",
+      } as never)?.preserveWhenCatalogReasoningFalse,
+    ).toBe(true);
+    expect(
+      provider.resolveThinkingProfile?.({
+        provider: "openai",
+        modelId: "o3-mini",
+      } as never)?.preserveWhenCatalogReasoningFalse,
+    ).toBe(true);
+
+    // Non-reasoning chat models leave catalog reasoning=false authoritative.
+    expect(
+      provider.resolveThinkingProfile?.({
+        provider: "openai",
+        modelId: "chat-latest",
+      } as never)?.preserveWhenCatalogReasoningFalse,
+    ).toBeUndefined();
+    expect(
+      provider.resolveThinkingProfile?.({
+        provider: "openai",
+        modelId: "gpt-5-chat-latest",
+      } as never)?.preserveWhenCatalogReasoningFalse,
+    ).toBeUndefined();
+    expect(
+      provider.resolveThinkingProfile?.({
+        provider: "openai",
+        modelId: "gpt-4.1",
+      } as never)?.preserveWhenCatalogReasoningFalse,
+    ).toBeUndefined();
+  });
+
   it("keeps modern live selection on OpenAI 5.2+ and current Codex models", () => {
     const provider = buildOpenAIProvider();
     const codexProvider = buildOpenAICodexProviderPlugin();

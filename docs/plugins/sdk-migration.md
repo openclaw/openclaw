@@ -805,7 +805,10 @@ canonical replacement.
     **New**: a single `resolveThinkingProfile(ctx)` that returns a
     `ProviderThinkingProfile` with the canonical `id`, optional `label`, and
     ranked level list. OpenClaw downgrades stale stored values by profile
-    rank automatically.
+    rank automatically. Profiles can set `preserveWhenCatalogReasoningFalse: true`
+    when the provider is the authoritative source for a model's reasoning
+    capability, so stale catalog `reasoning: false` metadata does not force
+    the off-only path on subagent spawn or `/think` validation.
 
     Implement one hook instead of three. The legacy hooks keep working during
     the deprecation window but are not composed with the profile result.
