@@ -477,7 +477,7 @@ async function runStructuredHealthRepairChecks(
         confirmAutoFix: (params) => ctx.prompter.confirmAutoFix(params),
         confirmAggressiveAutoFix: (params) => ctx.prompter.confirmAggressiveAutoFix(params),
         confirmRuntimeRepair: (params) => ctx.prompter.confirmRuntimeRepair(params),
-        note,
+        ...(ctx.previewReport === undefined ? { note } : {}),
         repairMode: ctx.prompter.repairMode,
         shouldForce: ctx.prompter.shouldForce,
       },
@@ -560,6 +560,11 @@ async function runBundledStructuredHealthRepairs(ctx: DoctorHealthFlowContext): 
   if (result.warnings.length > 0) {
     note(result.warnings.join("\n"), "Doctor warnings");
   }
+}
+
+async function runPolicyHealth(): Promise<void> {
+  // Normal repair runs policy through doctor:bundled-health-repairs; dry-run/diff
+  // previews route this contribution through structured checks before run().
 }
 
 async function runPositionalStructuredHealthRepair(
@@ -1145,7 +1150,7 @@ export function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
       label: "Policy",
       healthCheckIds: ["policy/*"],
       previewSupport: "structured",
-      run: (ctx) => runStructuredHealthRepairChecks(ctx, ["policy/*"]),
+      run: runPolicyHealth,
     }),
     createDoctorHealthContribution({
       id: "doctor:state-integrity",

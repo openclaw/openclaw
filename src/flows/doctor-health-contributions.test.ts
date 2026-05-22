@@ -781,6 +781,44 @@ describe("doctor health contributions", () => {
     });
   });
 
+  it("records presentation-note findings in JSON dry-run previews", async () => {
+    mocks.noteChromeMcpBrowserReadiness.mockImplementation(async (_cfg, deps) => {
+      deps.noteFn(
+        "Browser health check is unavailable on this host.\n- Fix: install Google Chrome.",
+        "Browser",
+      );
+    });
+    const contribution = requireDoctorContribution("doctor:browser");
+    const previewReport = createDoctorRepairPreviewReport({ diff: false });
+    const ctx = {
+      cfg: {},
+      configResult: { cfg: {}, sourceLastTouchedVersion: "2026.5.2-test" },
+      sourceConfigValid: true,
+      prompter: buildDoctorPrompter(true),
+      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+      options: { dryRun: true, json: true },
+      env: {},
+      cfgForPersistence: {},
+      configPath: "/tmp/fake-openclaw.json",
+      previewReport,
+    } as Parameters<typeof runDoctorHealthContribution>[0];
+
+    await runDoctorHealthContribution(ctx, contribution);
+
+    expect(mocks.note).not.toHaveBeenCalledWith(expect.any(String), "Browser");
+    expect(finalizeDoctorRepairPreviewReport(previewReport)).toMatchObject({
+      ok: false,
+      findings: expect.arrayContaining([
+        expect.objectContaining({
+          checkId: "core/doctor/browser",
+          severity: "warning",
+          message: "Browser health check is unavailable on this host.",
+          fixHint: "- Fix: install Google Chrome.",
+        }),
+      ]),
+    });
+  });
+
   it("prints structured detect-only findings during human dry-run previews", async () => {
     const contribution = requireDoctorContribution("doctor:gateway-config");
     const ctx = {
@@ -1068,7 +1106,7 @@ describe("doctor health contributions", () => {
     expect(mocks.registerBundledHealthChecks).not.toHaveBeenCalled();
   });
 
-  it("runs bundled policy checks at the policy contribution position", async () => {
+  it("leaves normal policy repair to the bundled repair pass", async () => {
     const contribution = requireDoctorContribution("doctor:policy");
     const ctx = {
       cfg: {
@@ -1092,6 +1130,36 @@ describe("doctor health contributions", () => {
     } as Parameters<(typeof contribution)["run"]>[0];
 
     await contribution.run(ctx);
+
+    expect(mocks.registerBundledHealthChecks).not.toHaveBeenCalled();
+  });
+
+  it("runs policy checks at the policy contribution position during previews", async () => {
+    const contribution = requireDoctorContribution("doctor:policy");
+    const previewReport = createDoctorRepairPreviewReport({ diff: false });
+    const ctx = {
+      cfg: {
+        plugins: {
+          entries: {
+            policy: {
+              enabled: true,
+              config: { enabled: true },
+            },
+          },
+        },
+      },
+      configResult: { cfg: {}, sourceLastTouchedVersion: "2026.5.2-test" },
+      sourceConfigValid: true,
+      prompter: buildDoctorPrompter(true),
+      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+      options: { dryRun: true },
+      env: { OPENCLAW_TEST: "1" },
+      cfgForPersistence: {},
+      configPath: "/tmp/fake-openclaw.json",
+      previewReport,
+    } as Parameters<typeof runDoctorHealthContribution>[0];
+
+    await runDoctorHealthContribution(ctx, contribution);
 
     expect(mocks.registerBundledHealthChecks).toHaveBeenCalledWith(
       expect.objectContaining({ cfg: ctx.cfg }),
