@@ -204,6 +204,33 @@ function extractLeadingInlineAttachmentRefs(prompt: string, count: number): Dete
   return detectImageReferences(attachmentPrompt).slice(0, count);
 }
 
+function extractDeclaredAttachmentBlockRefs(prompt: string): DetectedImageRef[] {
+  const lines = prompt.split(/\r?\n/);
+  const refs: DetectedImageRef[] = [];
+  for (let index = 0; index < lines.length; index++) {
+    const header = lines[index]?.trim().match(/^\[media attached:\s*(\d+)\s+files?\]$/i);
+    if (!header?.[1]) {
+      continue;
+    }
+    const expectedCount = Number.parseInt(header[1], 10);
+    if (!Number.isFinite(expectedCount) || expectedCount <= 0) {
+      continue;
+    }
+    const blockLines: string[] = [];
+    for (let offset = 1; offset <= expectedCount; offset++) {
+      const line = lines[index + offset]?.trim();
+      if (!line || !/^\[media attached\s+\d+\/\d+:\s*[^\]]+\]$/i.test(line)) {
+        break;
+      }
+      blockLines.push(line);
+    }
+    if (blockLines.length === expectedCount) {
+      refs.push(...detectImageReferences(blockLines.join("\n")));
+    }
+  }
+  return refs;
+}
+
 function extractTrailingAttachmentMediaUris(prompt: string, count: number): string[] {
   if (count <= 0) {
     return [];
@@ -252,6 +279,9 @@ export function splitPromptAndAttachmentRefs(params: {
   const attachmentUris = new Set(
     offloadedCount > 0 ? extractTrailingAttachmentMediaUris(params.prompt, offloadedCount) : [],
   );
+  const declaredAttachmentRefs = createRefCountMap(
+    extractDeclaredAttachmentBlockRefs(params.prompt),
+  );
 
   const promptRefs: DetectedImageRef[] = [];
   const attachmentRefs: DetectedImageRef[] = [];
@@ -259,7 +289,10 @@ export function splitPromptAndAttachmentRefs(params: {
     if (consumeRefCount(inlineAttachmentRefs, ref)) {
       continue;
     }
-    if (ref.type === "media-uri" && attachmentUris.has(ref.resolved)) {
+    if (
+      (ref.type === "media-uri" && attachmentUris.has(ref.resolved)) ||
+      consumeRefCount(declaredAttachmentRefs, ref)
+    ) {
       attachmentRefs.push(ref);
       continue;
     }
@@ -519,6 +552,7 @@ export async function detectAndLoadPromptImages(params: {
   maxBytes?: number;
   maxDimensionPx?: number;
   workspaceOnly?: boolean;
+  includePromptRefImages?: boolean;
   sandbox?: { root: string; bridge: SandboxFsBridge };
 }): Promise<{
   /** Images for the current prompt (existingImages + detected in current prompt) */
@@ -561,25 +595,33 @@ export async function detectAndLoadPromptImages(params: {
     imageOrder: params.imageOrder,
     existingImageCount: params.existingImages?.length,
   });
+  const includePromptRefImages = params.includePromptRefImages ?? true;
   const promptRefImages: ImageContent[] = [];
   const offloadedImages: Array<ImageContent | null> = [];
 
   let loadedCount = 0;
   let skippedCount = 0;
 
-  for (const ref of promptRefs) {
-    const image = await loadImageFromRef(ref, params.workspaceDir, {
-      maxBytes: params.maxBytes,
-      workspaceOnly: params.workspaceOnly,
-      sandbox: params.sandbox,
-    });
-    if (image) {
-      promptRefImages.push(image);
-      loadedCount++;
-      log.debug(`Native image: loaded ${ref.type} ${ref.resolved}`);
-    } else {
-      skippedCount++;
+  if (includePromptRefImages) {
+    for (const ref of promptRefs) {
+      const image = await loadImageFromRef(ref, params.workspaceDir, {
+        maxBytes: params.maxBytes,
+        workspaceOnly: params.workspaceOnly,
+        sandbox: params.sandbox,
+      });
+      if (image) {
+        promptRefImages.push(image);
+        loadedCount++;
+        log.debug(`Native image: loaded ${ref.type} ${ref.resolved}`);
+      } else {
+        skippedCount++;
+      }
     }
+  } else if (promptRefs.length > 0) {
+    skippedCount += promptRefs.length;
+    log.debug(
+      `Native image: ignored ${promptRefs.length} historical prompt image ref(s) (includePromptRefImages=false)`,
+    );
   }
 
   for (const ref of attachmentRefs) {

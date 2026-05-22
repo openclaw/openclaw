@@ -171,6 +171,35 @@ describe("detectImageReferences", () => {
     expectNoImageReferences("Just some text without any image references");
   });
 
+  it("can skip historical prompt refs while keeping explicit attachments", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "images-skip-history-"));
+    const historyPath = path.join(dir, "history.png");
+    const attachedPath = path.join(dir, "attached.png");
+    const pngB64 =
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/woAAn8B9FD5fHAAAAAASUVORK5CYII=";
+    await fs.writeFile(historyPath, Buffer.from(pngB64, "base64"));
+    await fs.writeFile(attachedPath, Buffer.from(pngB64, "base64"));
+
+    const result = await detectAndLoadPromptImages({
+      prompt:
+        `[media attached: 1 files]\n` +
+        `[media attached 1/1: ${attachedPath} (image/png)]\n` +
+        `[Image: source: ${historyPath}]\n` +
+        "Please answer with text only",
+      workspaceDir: dir,
+      model: { input: ["text", "image"] },
+      includePromptRefImages: false,
+      workspaceOnly: true,
+    });
+
+    expect(result.detectedRefs).toHaveLength(2);
+    expect(result.images).toHaveLength(1);
+    expect(result.loadedCount).toBe(1);
+    expect(result.skippedCount).toBe(1);
+
+    await fs.rm(dir, { recursive: true, force: true });
+  });
+
   it("ignores non-image file extensions", () => {
     expectNoImageReferences("Check /path/to/document.pdf and /code/file.ts");
   });

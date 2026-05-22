@@ -3869,6 +3869,7 @@ export async function runEmbeddedAttempt(
                 maxBytes: MAX_IMAGE_BYTES,
                 maxDimensionPx: resolveImageSanitizationLimits(params.config).maxDimensionPx,
                 workspaceOnly: effectiveFsWorkspaceOnly,
+                includePromptRefImages: false,
                 // Enforce sandbox path restrictions when sandbox is enabled
                 sandbox:
                   sandbox?.enabled && sandbox?.fsBridge

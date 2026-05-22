@@ -77,6 +77,26 @@ export function resolveAttemptTrajectoryTerminal(
   if (params.promptError) {
     return { status: "error" };
   }
+
+  const externallyAbortedWithoutDelivery =
+    params.aborted &&
+    !params.timedOut &&
+    !hasNonEmptyAssistantText(params.assistantTexts) &&
+    !params.didSendDeterministicApprovalPrompt &&
+    !hasCommittedMessagingDeliveryEvidence(params) &&
+    !hasAcceptedSessionSpawn(params.acceptedSessionSpawns) &&
+    params.synthesizedPayloadCount <= 0 &&
+    params.heartbeatToolResponse === undefined &&
+    (params.clientToolCalls?.length ?? 0) === 0 &&
+    params.yieldDetected !== true &&
+    params.lastToolError === undefined;
+  if (externallyAbortedWithoutDelivery) {
+    return {
+      status: "error",
+      terminalError: NON_DELIVERABLE_TERMINAL_TURN_REASON,
+    };
+  }
+
   if (params.aborted || params.timedOut) {
     return { status: "interrupted" };
   }

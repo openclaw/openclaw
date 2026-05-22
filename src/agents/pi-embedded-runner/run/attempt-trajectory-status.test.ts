@@ -177,12 +177,24 @@ describe("attempt trajectory status", () => {
     ).toEqual({ status: "success" });
   });
 
-  it("preserves prompt errors and interrupts", () => {
+  it("treats external aborts with no delivery/progress as candidate failure", () => {
+    expect(resolveAttemptTrajectoryTerminal(baseParams({ aborted: true }))).toEqual({
+      status: "error",
+      terminalError: NON_DELIVERABLE_TERMINAL_TURN_REASON,
+    });
+  });
+
+  it("preserves prompt errors and true timeouts as interrupts", () => {
     expect(
       resolveAttemptTrajectoryTerminal(baseParams({ promptError: new Error("boom") })),
     ).toEqual({ status: "error" });
     expect(resolveAttemptTrajectoryTerminal(baseParams({ timedOut: true }))).toEqual({
       status: "interrupted",
     });
+    expect(resolveAttemptTrajectoryTerminal(baseParams({ aborted: true, timedOut: true }))).toEqual(
+      {
+        status: "interrupted",
+      },
+    );
   });
 });
