@@ -259,16 +259,27 @@ async function assertHttpOk(port, pathName) {
 }
 
 async function assertReadyzProbe(options) {
-  const res = await fetch(`http://127.0.0.1:${options.port}/readyz`);
-  if (res.ok) {
-    return;
+  const started = Date.now();
+  let lastError;
+  while (Date.now() - started < RPC_READY_TIMEOUT_MS) {
+    try {
+      const res = await fetch(`http://127.0.0.1:${options.port}/readyz`);
+      if (res.ok) {
+        return;
+      }
+      if (options.allowDegradedReadyz) {
+        console.log(
+          `Runtime readyz smoke degraded for ${options.pluginId}: /readyz returned HTTP ${res.status}`,
+        );
+        return;
+      }
+      lastError = new Error(`/readyz returned HTTP ${res.status}`);
+    } catch (error) {
+      lastError = error;
+    }
+    await delay(500);
   }
-  if (!options.allowDegradedReadyz) {
-    throw new Error(`/readyz returned HTTP ${res.status}`);
-  }
-  console.log(
-    `Runtime readyz smoke degraded for ${options.pluginId}: /readyz returned HTTP ${res.status}`,
-  );
+  throw lastError ?? new Error("/readyz did not return HTTP 200");
 }
 
 async function rpcCall(method, params, options) {
