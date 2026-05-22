@@ -50,6 +50,7 @@ jobs:
         uses: ./.github/actions/setup-node-env
         with:
           install-bun: "false"
+          use-actions-cache: "false"
 
       - name: Prepare Crabbox shell
         shell: bash
@@ -61,12 +62,15 @@ jobs:
           fi
 
           node_bin="$(dirname "$(node -p 'process.execPath')")"
-          pnpm_bin="$(command -v pnpm)"
           sudo ln -sf "$node_bin/node" /usr/local/bin/node
           sudo ln -sf "$node_bin/npm" /usr/local/bin/npm
           sudo ln -sf "$node_bin/npx" /usr/local/bin/npx
           sudo ln -sf "$node_bin/corepack" /usr/local/bin/corepack
-          sudo ln -sf "$pnpm_bin" /usr/local/bin/pnpm
+          sudo tee /usr/local/bin/pnpm >/dev/null <<'PNPM'
+          #!/usr/bin/env bash
+          exec /usr/local/bin/corepack pnpm "$@"
+          PNPM
+          sudo chmod 0755 /usr/local/bin/pnpm
 
       - name: Ensure Docker is running
         shell: bash
@@ -109,6 +113,16 @@ jobs:
           docker version
           docker buildx version
           docker compose version || true
+
+      - name: Ensure SSH is available
+        shell: bash
+        run: |
+          set -euo pipefail
+          if command -v systemctl >/dev/null 2>&1; then
+            sudo systemctl start ssh || sudo systemctl start sshd || true
+          elif command -v service >/dev/null 2>&1; then
+            sudo service ssh start || sudo service sshd start || true
+          fi
 
       - name: Hydrate provider env helper
         shell: bash
@@ -163,7 +177,7 @@ jobs:
             fi
           }
           {
-            for key in CI GITHUB_ACTIONS GITHUB_WORKSPACE GITHUB_REPOSITORY GITHUB_RUN_ID GITHUB_RUN_NUMBER GITHUB_RUN_ATTEMPT GITHUB_REF GITHUB_REF_NAME GITHUB_SHA GITHUB_EVENT_NAME GITHUB_ACTOR RUNNER_OS RUNNER_ARCH RUNNER_TEMP RUNNER_TOOL_CACHE; do
+            for key in CI GITHUB_ACTIONS GITHUB_WORKSPACE GITHUB_REPOSITORY GITHUB_RUN_ID GITHUB_RUN_NUMBER GITHUB_RUN_ATTEMPT GITHUB_REF GITHUB_REF_NAME GITHUB_SHA GITHUB_EVENT_NAME GITHUB_ACTOR RUNNER_OS RUNNER_ARCH RUNNER_TEMP RUNNER_TOOL_CACHE PNPM_CONFIG_CHILD_CONCURRENCY PNPM_CONFIG_MODULES_DIR PNPM_CONFIG_NETWORK_CONCURRENCY PNPM_CONFIG_VIRTUAL_STORE_DIR; do
               write_export "$key"
             done
           } > "${env_file}.tmp"

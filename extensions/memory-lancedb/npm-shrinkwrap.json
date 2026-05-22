@@ -70,9 +70,6 @@
       "cpu": [
         "arm64"
       ],
-      "libc": [
-        "glibc"
-      ],
       "license": "Apache-2.0",
       "optional": true,
       "os": [
@@ -88,9 +85,6 @@
       "integrity": "sha512-fZ8Y4pzm/xfkSKhgZ289puaShckAOwd8s1mt5mHNDC8IuAaBmA6YxpDEQCItiDX1CNgsN+L7BFZWu11x+gsDPQ==",
       "cpu": [
         "arm64"
-      ],
-      "libc": [
-        "musl"
       ],
       "license": "Apache-2.0",
       "optional": true,
@@ -108,9 +102,6 @@
       "cpu": [
         "x64"
       ],
-      "libc": [
-        "glibc"
-      ],
       "license": "Apache-2.0",
       "optional": true,
       "os": [
@@ -126,9 +117,6 @@
       "integrity": "sha512-OZ3X0Cksi0e5e0ILvH/mGvuP3rQ2Rj/csNScExM3lroxlnl359TGQod+o4Z1hjSjLbPAe7gRax5Xwmu0/fh7AQ==",
       "cpu": [
         "x64"
-      ],
-      "libc": [
-        "musl"
       ],
       "license": "Apache-2.0",
       "optional": true,

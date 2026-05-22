@@ -453,6 +453,32 @@ function chatAttachmentFromFile(file: File, dataUrl: string): ChatAttachment {
   return registerChatAttachmentPayload({ attachment, dataUrl, file });
 }
 
+function dataImageClipboardFile(dataUrl: string): { file: File; dataUrl: string } | null {
+  const match = /^\s*data:(image\/[a-z0-9.+-]+);base64,([a-z0-9+/=\s]+)\s*$/i.exec(dataUrl);
+  if (!match) {
+    return null;
+  }
+  const mimeType = match[1].toLowerCase();
+  if (!isSupportedChatAttachmentFile({ name: "pasted-image", type: mimeType })) {
+    return null;
+  }
+  const base64 = match[2].replace(/\s+/g, "");
+  try {
+    const binary = atob(base64);
+    const bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++) {
+      bytes[i] = binary.charCodeAt(i);
+    }
+    const extension = mimeType.split("/")[1]?.replace(/[^a-z0-9.+-]/gi, "") || "png";
+    return {
+      file: new File([bytes], `pasted-image.${extension}`, { type: mimeType }),
+      dataUrl: `data:${mimeType};base64,${base64}`,
+    };
+  } catch {
+    return null;
+  }
+}
+
 function isImageAttachment(att: ChatAttachment): boolean {
   return att.mimeType.startsWith("image/");
 }
@@ -470,6 +496,16 @@ function handlePaste(e: ClipboardEvent, props: ChatProps) {
     }
   }
   if (imageItems.length === 0) {
+    const text = e.clipboardData?.getData("text/plain");
+    const pasted = text ? dataImageClipboardFile(text) : null;
+    if (!pasted) {
+      return;
+    }
+    e.preventDefault();
+    props.onAttachmentsChange([
+      ...(props.attachments ?? []),
+      chatAttachmentFromFile(pasted.file, pasted.dataUrl),
+    ]);
     return;
   }
   e.preventDefault();
