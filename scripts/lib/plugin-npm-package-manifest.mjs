@@ -316,7 +316,14 @@ function installMissingOptionalBundledDependencies(params) {
   }
 }
 
-function shouldBundleDependencies(value) {
+function packageOptsOutOfBundledRuntimeDependencies(packageJson) {
+  return packageJson?.openclaw?.release?.bundleRuntimeDependencies === false;
+}
+
+function shouldBundleDependencies(value, packageJson) {
+  if (packageOptsOutOfBundledRuntimeDependencies(packageJson)) {
+    return false;
+  }
   return value === true || value === "1" || value === "true";
 }
 
@@ -415,7 +422,7 @@ export function resolveAugmentedPluginNpmPackageJson(params) {
       ...(plan.runtimeSetupEntry ? { runtimeSetupEntry: plan.runtimeSetupEntry } : {}),
     },
   };
-  if (shouldBundleDependencies(params.bundleDependencies)) {
+  if (shouldBundleDependencies(params.bundleDependencies, plan.packageJson)) {
     packageJson.bundledDependencies = listPackageRuntimeDependencyNames(packageJson);
     delete packageJson.bundleDependencies;
     delete packageJson.devDependencies;
@@ -428,7 +435,7 @@ export function resolveAugmentedPluginNpmPackageJson(params) {
     changed,
     packageJson,
     pluginDir: plan.pluginDir,
-    bundleDependencies: shouldBundleDependencies(params.bundleDependencies),
+    bundleDependencies: shouldBundleDependencies(params.bundleDependencies, plan.packageJson),
     reason: changed ? "package-local-runtime" : "unchanged",
   };
 }
@@ -564,7 +571,14 @@ export function resolveAugmentedPluginNpmManifest(params) {
 export function withAugmentedPluginNpmManifestForPackage(params, callback) {
   const repoRoot = path.resolve(params.repoRoot ?? ".");
   const packageDir = resolvePackageDir(repoRoot, params.packageDir);
-  const bundleDependencies = shouldBundleDependencies(params.bundleDependencies);
+  const packageJsonPath = resolvePackageJsonPath(packageDir);
+  const packageJsonForBundlePolicy = fs.existsSync(packageJsonPath)
+    ? readJsonFile(packageJsonPath)
+    : undefined;
+  const bundleDependencies = shouldBundleDependencies(
+    params.bundleDependencies,
+    packageJsonForBundlePolicy,
+  );
   const resolvedManifest = resolveAugmentedPluginNpmManifest({
     repoRoot,
     packageDir,
