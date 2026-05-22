@@ -2051,9 +2051,14 @@ export async function syncPluginsForUpdateChannel(params: {
       if (!pathsEqual(record.sourcePath, bundledInfo.localPath, env)) {
         continue;
       }
-      // Keep explicit bundled installs on release channels. Replacing them with
-      // npm installs can reintroduce duplicate-id shadowing and packaging drift.
-      loadHelpers.addPath(bundledInfo.localPath);
+      // Keep explicit bundled installs on release channels, but do NOT write
+      // the current bundled directory into plugins.load.paths. Bundled plugins
+      // are auto-loaded by OpenClaw's discovery layer, and an explicit load
+      // path entry triggers a circular warning in doctor (which removes it)
+      // followed by re-addition here on the next sync, creating a cycle.
+      //
+      // The install record itself is preserved below so that channel sync
+      // tracks the intentional path install and does not overwrite it.
       const alreadyBundled =
         record.source === "path" &&
         pathsEqual(record.sourcePath, bundledInfo.localPath, env) &&
