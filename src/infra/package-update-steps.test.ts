@@ -343,6 +343,14 @@ describe("runGlobalPackageUpdateSteps", () => {
       sourceSpec: "https://github.com/openclaw/openclaw.git#main",
     },
     {
+      name: "hosted GitHub URL without git suffix",
+      sourceSpec: "https://github.com/openclaw/openclaw#main",
+    },
+    {
+      name: "aliased hosted GitHub URL without git suffix",
+      sourceSpec: "openclaw@https://github.com/openclaw/openclaw#main",
+    },
+    {
       name: "GitHub shorthand",
       sourceSpec: "openclaw/openclaw#main",
     },

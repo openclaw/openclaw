@@ -128,7 +128,12 @@ function isHttpGitUrlSpec(spec: string): boolean {
     if (url.protocol !== "https:" && url.protocol !== "http:") {
       return false;
     }
-    return url.pathname.replace(/\/+$/u, "").endsWith(".git");
+    const pathname = url.pathname.replace(/\/+$/u, "");
+    if (pathname.endsWith(".git")) {
+      return true;
+    }
+    const parts = pathname.split("/").filter(Boolean);
+    return url.hostname.toLowerCase() === "github.com" && parts.length === 2;
   } catch {
     return false;
   }

@@ -432,9 +432,12 @@ describe("update-cli", () => {
     let isHttpGitUrl = false;
     try {
       const url = new URL(target);
+      const pathname = url.pathname.replace(/\/+$/u, "");
+      const pathParts = pathname.split("/").filter(Boolean);
       isHttpGitUrl =
         (url.protocol === "https:" || url.protocol === "http:") &&
-        url.pathname.replace(/\/+$/u, "").endsWith(".git");
+        (pathname.endsWith(".git") ||
+          (url.hostname.toLowerCase() === "github.com" && pathParts.length === 2));
     } catch {
       isHttpGitUrl = false;
     }
@@ -2206,6 +2209,25 @@ describe("update-cli", () => {
         await updateCommand({ yes: true, tag: "https://github.com/openclaw/openclaw.git#main" });
       },
       expectedSpec: "https://github.com/openclaw/openclaw.git#main",
+    },
+    {
+      name: "hosted GitHub URL package spec without git suffix",
+      run: async () => {
+        mockPackageInstallStatus(createCaseDir("openclaw-update"));
+        await updateCommand({ yes: true, tag: "https://github.com/openclaw/openclaw#main" });
+      },
+      expectedSpec: "https://github.com/openclaw/openclaw#main",
+    },
+    {
+      name: "aliased hosted GitHub URL package spec without git suffix",
+      run: async () => {
+        mockPackageInstallStatus(createCaseDir("openclaw-update"));
+        await updateCommand({
+          yes: true,
+          tag: "openclaw@https://github.com/openclaw/openclaw#main",
+        });
+      },
+      expectedSpec: "https://github.com/openclaw/openclaw#main",
     },
     {
       name: "GitHub shorthand package spec",
