@@ -162,6 +162,7 @@ function hasLinkCandidate(ctx: MsgContext): boolean {
 async function applyMediaUnderstandingIfNeeded(params: {
   ctx: MsgContext;
   cfg: OpenClawConfig;
+  agentId?: string;
   agentDir?: string;
   workspaceDir?: string;
   activeModel: { provider: string; model: string };
@@ -355,6 +356,7 @@ export async function getReplyFromConfig(
       applyMediaUnderstandingIfNeeded({
         ctx: finalized,
         cfg,
+        agentId,
         agentDir,
         workspaceDir,
         activeModel: { provider, model },
