@@ -35,7 +35,6 @@ import {
   normalizeWhatsAppTarget,
 } from "./normalize.js";
 import { getWhatsAppRuntime } from "./runtime.js";
-import { sendTypingWhatsApp } from "./send.js";
 import { resolveWhatsAppOutboundSessionRoute } from "./session-route.js";
 import { whatsappSetupAdapter } from "./setup-core.js";
 import {
@@ -50,6 +49,7 @@ const loadWhatsAppDirectoryConfig = createLazyRuntimeModule(() => import("./dire
 const loadWhatsAppChannelReactAction = createLazyRuntimeModule(
   () => import("./channel-react-action.js"),
 );
+const loadWhatsAppSend = createLazyRuntimeModule(() => import("./send.js"));
 
 function resolveWhatsAppTargetInfo(raw: string) {
   const normalized = normalizeWhatsAppTarget(raw);
@@ -198,7 +198,9 @@ export const whatsappPlugin: ChannelPlugin<ResolvedWhatsAppAccount> =
         checkReady: async ({ cfg, accountId, deps }) =>
           await checkWhatsAppHeartbeatReady({ cfg, accountId: accountId ?? undefined, deps }),
         sendTyping: async ({ cfg, to, accountId }) => {
-          await sendTypingWhatsApp(to, {
+          await (
+            await loadWhatsAppSend()
+          ).sendTypingWhatsApp(to, {
             cfg,
             ...(accountId ? { accountId } : {}),
           });

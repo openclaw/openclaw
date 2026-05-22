@@ -3,12 +3,14 @@ import {
   defineChannelMessageAdapter,
   type ChannelMessageSendResult,
 } from "openclaw/plugin-sdk/channel-message";
+import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { chunkText } from "openclaw/plugin-sdk/reply-chunking";
 import { createWhatsAppOutboundBase } from "./outbound-base.js";
 import { normalizeWhatsAppPayloadTextPreservingIndentation } from "./outbound-media-contract.js";
 import { resolveWhatsAppOutboundTarget } from "./resolve-outbound-target.js";
 import { getWhatsAppRuntime } from "./runtime.js";
-import { sendMessageWhatsApp, sendPollWhatsApp } from "./send.js";
+
+const loadWhatsAppSend = createLazyRuntimeModule(() => import("./send.js"));
 
 export function normalizeWhatsAppChannelPayloadText(text: string | undefined): string {
   return normalizeWhatsAppPayloadTextPreservingIndentation(text);
@@ -23,11 +25,14 @@ export const whatsappChannelOutbound = {
   ...createWhatsAppOutboundBase({
     chunker: chunkText,
     sendMessageWhatsApp: async (to, text, options) =>
-      await sendMessageWhatsApp(to, text, {
+      await (
+        await loadWhatsAppSend()
+      ).sendMessageWhatsApp(to, text, {
         ...options,
         preserveLeadingWhitespace: true,
       }),
-    sendPollWhatsApp,
+    sendPollWhatsApp: async (to, poll, options) =>
+      await (await loadWhatsAppSend()).sendPollWhatsApp(to, poll, options),
     shouldLogVerbose: () => getWhatsAppRuntime().logging.shouldLogVerbose(),
     resolveTarget: ({ to, allowFrom, mode }) =>
       resolveWhatsAppOutboundTarget({ to, allowFrom, mode }),
