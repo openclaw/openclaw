@@ -1,4 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import { statSync } from "node:fs";
 import fs from "node:fs/promises";
 import { isSessionWriteLockTimeoutError } from "../../session-write-lock-error.js";
 import type { acquireSessionWriteLock } from "../../session-write-lock.js";
@@ -147,6 +148,25 @@ async function readSessionFileFingerprint(sessionFile: string): Promise<SessionF
   }
 }
 
+function readSessionFileFingerprintSync(sessionFile: string): SessionFileFingerprint {
+  try {
+    const stat = statSync(sessionFile, { bigint: true });
+    return {
+      exists: true,
+      dev: stat.dev,
+      ino: stat.ino,
+      size: stat.size,
+      mtimeNs: stat.mtimeNs,
+      ctimeNs: stat.ctimeNs,
+    };
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+      return { exists: false };
+    }
+    throw err;
+  }
+}
+
 async function waitForSessionEventQueue(session: unknown): Promise<void> {
   const owner = session as SessionEventQueueOwner;
   for (let attempts = 0; attempts < 5; attempts += 1) {
@@ -241,12 +261,59 @@ export function installSessionExternalHookWriteLock(params: {
   });
 }
 
+type SessionManagerWithAppendMessage = {
+  appendMessage?: ((message: unknown) => string) & {
+    __openclawSessionFenceRefreshInstalled?: boolean;
+  };
+};
+
+/**
+ * Refresh the prompt-release fence after every synchronous Pi
+ * `SessionManager.appendMessage` write. Pi `_handleAgentEvent` calls
+ * `sessionManager.appendMessage(...)` synchronously during the model response,
+ * which triggers a deferred `appendFileSync` flush of the entire transcript on
+ * the first assistant message. Without this hook the runner's own flush looks
+ * like an external takeover to `assertSessionFileFence` and the next
+ * `withSessionWriteLock` throws `EmbeddedAttemptSessionTakeoverError`.
+ *
+ * Wrap after the tool-result guard has patched `appendMessage`; this helper
+ * is the outermost wrapper so the fence refresh observes the post-write file
+ * state.
+ */
+export function installSessionAppendMessageFenceRefresh(params: {
+  sessionManager: unknown;
+  refreshFingerprintAfterOwnWriteSync: () => void;
+}): void {
+  const owner = params.sessionManager as SessionManagerWithAppendMessage;
+  const current = owner.appendMessage;
+  if (typeof current !== "function" || current["__openclawSessionFenceRefreshInstalled"] === true) {
+    return;
+  }
+  const wrapped = function fenceRefreshAppendMessage(
+    this: unknown,
+    ...args: Parameters<NonNullable<SessionManagerWithAppendMessage["appendMessage"]>>
+  ): string {
+    const result = current.apply(this, args);
+    params.refreshFingerprintAfterOwnWriteSync();
+    return result;
+  } as NonNullable<SessionManagerWithAppendMessage["appendMessage"]>;
+  wrapped["__openclawSessionFenceRefreshInstalled"] = true;
+  owner.appendMessage = wrapped;
+}
+
 export type EmbeddedAttemptSessionLockController = {
   releaseForPrompt(): Promise<void>;
   waitForSessionEvents(session: unknown): Promise<void>;
   withSessionWriteLock<T>(run: () => Promise<T> | T): Promise<T>;
   acquireForCleanup(params?: { session?: unknown }): Promise<SessionLock>;
   hasSessionTakeover(): boolean;
+  /**
+   * Record that we just wrote to the session file via a synchronous own-write
+   * path (e.g. Pi `SessionManager.appendMessage` → `appendFileSync`). Refreshes
+   * the prompt-release fence fingerprint so the next `withSessionWriteLock`
+   * does not mistake our own append for an external takeover.
+   */
+  refreshFingerprintAfterOwnWriteSync(): void;
 };
 
 export async function createEmbeddedAttemptSessionLockController(params: {
@@ -368,6 +435,18 @@ export async function createEmbeddedAttemptSessionLockController(params: {
     },
     hasSessionTakeover(): boolean {
       return takeoverDetected;
+    },
+    refreshFingerprintAfterOwnWriteSync(): void {
+      if (!fenceActive || takeoverDetected) {
+        return;
+      }
+      try {
+        fenceFingerprint = readSessionFileFingerprintSync(params.lockOptions.sessionFile);
+      } catch {
+        // Best-effort: a stat failure here leaves the existing fingerprint in
+        // place. The next `withSessionWriteLock` will re-check via async stat
+        // and surface any real takeover at that point.
+      }
     },
   };
 }

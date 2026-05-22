@@ -328,6 +328,7 @@ import {
 import {
   createEmbeddedAttemptSessionLockController,
   installPromptSubmissionLockRelease,
+  installSessionAppendMessageFenceRefresh,
   installSessionExternalHookWriteLock,
   installSessionEventWriteLock,
 } from "./attempt.session-lock.js";
@@ -2389,6 +2390,19 @@ export async function runEmbeddedAttempt(
       installSessionExternalHookWriteLock({
         session: activeSession,
         withSessionWriteLock: (operation) => sessionLockController.withSessionWriteLock(operation),
+      });
+      // Current Pi (@earendil-works/pi-coding-agent) processes events via
+      // `_handleAgentEvent` (subscribed in its ctor) rather than the older
+      // `_processAgentEvent` that installSessionEventWriteLock patches, so the
+      // event-level wrap above is a no-op against the live SDK. The
+      // transcript path that actually trips the prompt fence is Pi's
+      // synchronous `SessionManager.appendMessage` flush. Refresh the fence
+      // after each own append so the runner does not detect itself as a
+      // session-takeover writer.
+      installSessionAppendMessageFenceRefresh({
+        sessionManager,
+        refreshFingerprintAfterOwnWriteSync: () =>
+          sessionLockController.refreshFingerprintAfterOwnWriteSync(),
       });
       installMessageToolOnlyTerminalHook({
         agent: activeSession.agent,

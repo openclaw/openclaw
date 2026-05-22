@@ -1,3 +1,4 @@
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -11,6 +12,7 @@ import {
   createEmbeddedAttemptSessionLockController,
   EmbeddedAttemptSessionTakeoverError,
   installPromptSubmissionLockRelease,
+  installSessionAppendMessageFenceRefresh,
   installSessionEventWriteLock,
   installSessionExternalHookWriteLock,
 } from "./attempt.session-lock.js";
@@ -493,5 +495,117 @@ describe("embedded attempt session lock lifecycle", () => {
     await hookPromise;
 
     expect(events).toEqual(["queue-drained", "lock", "hook-start", "hook-end"]);
+  });
+
+  it("keeps the prompt fence valid across Pi appendMessage own-writes", async () => {
+    const sessionFile = await createTempSessionFile();
+    const release = vi.fn(async () => {});
+    const acquireSessionWriteLock = vi.fn(async () => ({ release }));
+    const controller = await createEmbeddedAttemptSessionLockController({
+      acquireSessionWriteLock,
+      lockOptions: { ...lockOptions, sessionFile },
+    });
+
+    const sessionManager = {
+      appendMessage: vi.fn((entry: unknown) => {
+        // Mirror Pi `_persist` semantics: synchronous appendFileSync inside the
+        // sync appendMessage call.
+        fsSync.appendFileSync(sessionFile, `${JSON.stringify(entry)}\n`, "utf8");
+        return "entry-id";
+      }),
+    };
+    installSessionAppendMessageFenceRefresh({
+      sessionManager,
+      refreshFingerprintAfterOwnWriteSync: () => controller.refreshFingerprintAfterOwnWriteSync(),
+    });
+
+    await controller.releaseForPrompt();
+    sessionManager.appendMessage({ type: "message", id: "assistant-flush" });
+
+    await expect(controller.withSessionWriteLock(() => "finalize")).resolves.toBe("finalize");
+    expect(controller.hasSessionTakeover()).toBe(false);
+  });
+
+  it("still detects external takeover after an own appendMessage write", async () => {
+    const sessionFile = await createTempSessionFile();
+    const release = vi.fn(async () => {});
+    const acquireSessionWriteLock = vi.fn(async () => ({ release }));
+    const controller = await createEmbeddedAttemptSessionLockController({
+      acquireSessionWriteLock,
+      lockOptions: { ...lockOptions, sessionFile },
+    });
+
+    const sessionManager = {
+      appendMessage: vi.fn((entry: unknown) => {
+        fsSync.appendFileSync(sessionFile, `${JSON.stringify(entry)}\n`, "utf8");
+        return "entry-id";
+      }),
+    };
+    installSessionAppendMessageFenceRefresh({
+      sessionManager,
+      refreshFingerprintAfterOwnWriteSync: () => controller.refreshFingerprintAfterOwnWriteSync(),
+    });
+
+    await controller.releaseForPrompt();
+    sessionManager.appendMessage({ type: "message", id: "assistant-flush" });
+    await fs.appendFile(sessionFile, '{"type":"message","id":"external-takeover"}\n', "utf8");
+
+    await expect(controller.withSessionWriteLock(() => "late-write")).rejects.toBeInstanceOf(
+      EmbeddedAttemptSessionTakeoverError,
+    );
+    expect(controller.hasSessionTakeover()).toBe(true);
+  });
+
+  it("is idempotent and only wraps appendMessage once per sessionManager", async () => {
+    const sessionFile = await createTempSessionFile();
+    const release = vi.fn(async () => {});
+    const acquireSessionWriteLock = vi.fn(async () => ({ release }));
+    const controller = await createEmbeddedAttemptSessionLockController({
+      acquireSessionWriteLock,
+      lockOptions: { ...lockOptions, sessionFile },
+    });
+
+    const original = vi.fn(() => "entry-id");
+    const sessionManager: { appendMessage: (entry: unknown) => string } = {
+      appendMessage: original,
+    };
+    installSessionAppendMessageFenceRefresh({
+      sessionManager,
+      refreshFingerprintAfterOwnWriteSync: () => controller.refreshFingerprintAfterOwnWriteSync(),
+    });
+    const afterFirst = sessionManager.appendMessage;
+    installSessionAppendMessageFenceRefresh({
+      sessionManager,
+      refreshFingerprintAfterOwnWriteSync: () => controller.refreshFingerprintAfterOwnWriteSync(),
+    });
+
+    expect(sessionManager.appendMessage).toBe(afterFirst);
+    expect(sessionManager.appendMessage({ type: "message" })).toBe("entry-id");
+    expect(original).toHaveBeenCalledTimes(1);
+  });
+
+  it("tolerates appendMessage own-writes before any prompt release", async () => {
+    const sessionFile = await createTempSessionFile();
+    const release = vi.fn(async () => {});
+    const acquireSessionWriteLock = vi.fn(async () => ({ release }));
+    const controller = await createEmbeddedAttemptSessionLockController({
+      acquireSessionWriteLock,
+      lockOptions: { ...lockOptions, sessionFile },
+    });
+
+    const sessionManager = {
+      appendMessage: vi.fn((entry: unknown) => {
+        fsSync.appendFileSync(sessionFile, `${JSON.stringify(entry)}\n`, "utf8");
+        return "entry-id";
+      }),
+    };
+    installSessionAppendMessageFenceRefresh({
+      sessionManager,
+      refreshFingerprintAfterOwnWriteSync: () => controller.refreshFingerprintAfterOwnWriteSync(),
+    });
+
+    // No releaseForPrompt yet — fence is inactive; refresh is a no-op.
+    sessionManager.appendMessage({ type: "message", id: "pre-release" });
+    expect(controller.hasSessionTakeover()).toBe(false);
   });
 });
