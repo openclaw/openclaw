@@ -14,6 +14,10 @@ import {
   emulateChromeMcpPage,
   evaluateChromeMcpScript,
   getChromeMcpConsoleMessage,
+  getChromeMcpHeapSnapshotClassNodes,
+  getChromeMcpHeapSnapshotDetails,
+  getChromeMcpHeapSnapshotRetainers,
+  getChromeMcpHeapSnapshotSummary,
   getChromeMcpNetworkRequest,
   listChromeMcpTabs,
   listChromeMcpConsoleMessages,
@@ -26,6 +30,7 @@ import {
   setChromeMcpSessionFactoryForTest,
   startChromeMcpPerformanceTrace,
   stopChromeMcpPerformanceTrace,
+  takeChromeMcpHeapSnapshot,
   takeChromeMcpScreenshot,
   takeChromeMcpSnapshot,
   waitForChromeMcpText,
@@ -120,6 +125,24 @@ function createFakeSession(): ChromeMcpSession {
     }
     if (name === "performance_analyze_insight") {
       return { content: [{ type: "text", text: `Insight ${args?.insightName} details.` }] };
+    }
+    if (name === "take_heapsnapshot") {
+      return { content: [{ type: "text", text: `Heap snapshot saved to ${args?.filePath}` }] };
+    }
+    if (name === "get_heapsnapshot_summary") {
+      return {
+        content: [{ type: "text", text: "Heap snapshot summary." }],
+        structuredContent: { stats: { totalSize: 1024 } },
+      };
+    }
+    if (name === "get_heapsnapshot_details") {
+      return { content: [{ type: "text", text: "Heap snapshot details." }] };
+    }
+    if (name === "get_heapsnapshot_class_nodes") {
+      return { content: [{ type: "text", text: "Heap snapshot class nodes." }] };
+    }
+    if (name === "get_heapsnapshot_retainers") {
+      return { content: [{ type: "text", text: "Heap snapshot retainers." }] };
     }
     if (name === "list_console_messages") {
       return {
@@ -449,6 +472,73 @@ describe("chrome MCP page parsing", () => {
     });
   });
 
+  it("forwards Chrome MCP heap snapshot capture and inspection tools", async () => {
+    const session = createFakeSession();
+    const factory: ChromeMcpSessionFactory = async () => session;
+    setChromeMcpSessionFactoryForTest(factory);
+
+    await expect(
+      takeChromeMcpHeapSnapshot({
+        profileName: "chrome-live",
+        targetId: "2",
+        filePath: "/tmp/openclaw/page.heapsnapshot",
+      }),
+    ).resolves.toContain("page.heapsnapshot");
+    await expect(
+      getChromeMcpHeapSnapshotSummary({
+        profileName: "chrome-live",
+        filePath: "/tmp/openclaw/page.heapsnapshot",
+      }),
+    ).resolves.toEqual({
+      output: "Heap snapshot summary.",
+      structuredContent: { stats: { totalSize: 1024 } },
+    });
+    await getChromeMcpHeapSnapshotDetails({
+      profileName: "chrome-live",
+      filePath: "/tmp/openclaw/page.heapsnapshot",
+      pageIdx: 1,
+      pageSize: 25,
+    });
+    await getChromeMcpHeapSnapshotClassNodes({
+      profileName: "chrome-live",
+      filePath: "/tmp/openclaw/page.heapsnapshot",
+      id: 42,
+      pageIdx: 2,
+      pageSize: 10,
+    });
+    await getChromeMcpHeapSnapshotRetainers({
+      profileName: "chrome-live",
+      filePath: "/tmp/openclaw/page.heapsnapshot",
+      nodeId: 99,
+      pageIdx: 3,
+      pageSize: 5,
+    });
+
+    const calls = (session.client.callTool as unknown as ToolCallMock).mock.calls;
+    expect(calls.slice(-5).map(([call]) => call)).toEqual([
+      {
+        name: "take_heapsnapshot",
+        arguments: { pageId: 2, filePath: "/tmp/openclaw/page.heapsnapshot" },
+      },
+      {
+        name: "get_heapsnapshot_summary",
+        arguments: { filePath: "/tmp/openclaw/page.heapsnapshot" },
+      },
+      {
+        name: "get_heapsnapshot_details",
+        arguments: { filePath: "/tmp/openclaw/page.heapsnapshot", pageIdx: 1, pageSize: 25 },
+      },
+      {
+        name: "get_heapsnapshot_class_nodes",
+        arguments: { filePath: "/tmp/openclaw/page.heapsnapshot", id: 42, pageIdx: 2, pageSize: 10 },
+      },
+      {
+        name: "get_heapsnapshot_retainers",
+        arguments: { filePath: "/tmp/openclaw/page.heapsnapshot", nodeId: 99, pageIdx: 3, pageSize: 5 },
+      },
+    ]);
+  });
+
   it("keeps evaluated clickCoords fallback when Chrome MCP click_at cannot preserve options", async () => {
     const session = createFakeSession();
     const factory: ChromeMcpSessionFactory = async () => session;
@@ -478,6 +568,7 @@ describe("chrome MCP page parsing", () => {
       "--experimentalStructuredContent",
       "--experimental-page-id-routing",
       "--experimentalVision",
+      "--experimentalMemory",
       "--userDataDir",
       "/tmp/brave-profile",
     ]);
@@ -498,6 +589,7 @@ describe("chrome MCP page parsing", () => {
       "--experimentalStructuredContent",
       "--experimental-page-id-routing",
       "--experimentalVision",
+      "--experimentalMemory",
     ]);
   });
 
@@ -515,6 +607,7 @@ describe("chrome MCP page parsing", () => {
       "--experimentalStructuredContent",
       "--experimental-page-id-routing",
       "--experimentalVision",
+      "--experimentalMemory",
     ]);
   });
 
@@ -530,6 +623,7 @@ describe("chrome MCP page parsing", () => {
       "--experimentalStructuredContent",
       "--experimental-page-id-routing",
       "--experimentalVision",
+      "--experimentalMemory",
       "--browserUrl",
       "http://127.0.0.1:9222",
       "--no-usage-statistics",
@@ -579,6 +673,7 @@ describe("chrome MCP page parsing", () => {
       "--experimentalStructuredContent",
       "--experimental-page-id-routing",
       "--experimentalVision",
+      "--experimentalMemory",
     ]);
   });
 
