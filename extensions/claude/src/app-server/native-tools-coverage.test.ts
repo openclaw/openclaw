@@ -58,7 +58,9 @@ function findSdkToolsDts(): string {
       // continue walking up
     }
     const parent = path.dirname(dir);
-    if (parent === dir) break;
+    if (parent === dir) {
+      break;
+    }
     dir = parent;
   }
   throw new Error(
@@ -72,13 +74,17 @@ function extractSdkInputInterfaces(source: string): string[] {
   // Use a non-greedy match for safety.
   const matches = source.matchAll(/^export interface ([A-Z][A-Za-z0-9]*)Input\b/gm);
   const names: string[] = [];
-  for (const m of matches) names.push(m[1] as string);
-  return [...new Set(names)].sort();
+  for (const m of matches) {
+    names.push(m[1]);
+  }
+  return [...new Set(names)].toSorted();
 }
 
 function sdkInputToToolName(sdkInterfaceBase: string): string | null {
   const mapped = SDK_INPUT_TO_TOOL_NAME[sdkInterfaceBase];
-  if (mapped === "__omit__") return null;
+  if (mapped === "__omit__") {
+    return null;
+  }
   return mapped ?? sdkInterfaceBase;
 }
 
@@ -93,8 +99,12 @@ describe("native-tools coverage vs @anthropic-ai/claude-agent-sdk", () => {
     const missing: string[] = [];
     for (const base of sdkInputBases) {
       const toolName = sdkInputToToolName(base);
-      if (toolName === null) continue;
-      if (!known.has(toolName)) missing.push(`${base}Input → ${toolName}`);
+      if (toolName === null) {
+        continue;
+      }
+      if (!known.has(toolName)) {
+        missing.push(`${base}Input → ${toolName}`);
+      }
     }
 
     expect(

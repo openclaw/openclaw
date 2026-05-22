@@ -110,7 +110,9 @@ export function createClaudeDynamicToolBridge(params: {
     options?: { signal?: AbortSignal },
   ): Promise<DynamicToolCallResponse> {
     const tool = toolsByName.get(call.tool);
-    if (!tool) return errorResponse(`Unknown openclaw tool: ${call.tool}`);
+    if (!tool) {
+      return errorResponse(`Unknown openclaw tool: ${call.tool}`);
+    }
     const callerSignal = options?.signal ?? params.signal;
     const args = (call.arguments ?? {}) as Record<string, unknown>;
     const startedAt = Date.now();
@@ -170,7 +172,9 @@ function collectTelemetry(params: {
     const response = normalizeHeartbeatToolResponse(
       (params.result as { details?: unknown } | undefined)?.details,
     );
-    if (response) params.telemetry.heartbeatToolResponse = response;
+    if (response) {
+      params.telemetry.heartbeatToolResponse = response;
+    }
   }
   if (!params.isError && params.result) {
     const media = extractToolResultMediaArtifact(params.result);
@@ -183,14 +187,22 @@ function collectTelemetry(params: {
           params.telemetry.toolMediaUrls.push(url);
         }
       }
-      if (media.audioAsVoice) params.telemetry.toolAudioAsVoice = true;
+      if (media.audioAsVoice) {
+        params.telemetry.toolAudioAsVoice = true;
+      }
     }
   }
-  if (!isMessagingTool(params.toolName)) return;
-  if (!isMessagingToolSendAction(params.toolName, params.args)) return;
+  if (!isMessagingTool(params.toolName)) {
+    return;
+  }
+  if (!isMessagingToolSendAction(params.toolName, params.args)) {
+    return;
+  }
   params.telemetry.didSendViaMessagingTool = true;
   const text = readFirstString(params.args, ["text", "message", "body", "content"]);
-  if (text) params.telemetry.messagingToolSentTexts.push(text);
+  if (text) {
+    params.telemetry.messagingToolSentTexts.push(text);
+  }
   const mediaUrls = collectArgMediaUrls(params.args);
   params.telemetry.messagingToolSentMediaUrls.push(...mediaUrls);
   params.telemetry.messagingToolSentTargets.push({
@@ -217,14 +229,16 @@ function projectContentItems(result: unknown): DynamicToolCallOutputContentItem[
     items.push({ type: "inputText", text: content });
   } else if (Array.isArray(content)) {
     for (const block of content) {
-      if (!block || typeof block !== "object") continue;
+      if (!block || typeof block !== "object") {
+        continue;
+      }
       const b = block as Record<string, unknown>;
       if (b.type === "text" && typeof b.text === "string") {
         items.push({ type: "inputText", text: b.text });
       } else if (b.type === "image_url" && typeof b.image_url === "string") {
         items.push({ type: "inputImage", imageUrl: b.image_url });
       } else if (b.type === "image" && typeof b.url === "string") {
-        items.push({ type: "inputImage", imageUrl: b.url as string });
+        items.push({ type: "inputImage", imageUrl: b.url });
       }
     }
   }
@@ -241,7 +255,9 @@ function projectContentItems(result: unknown): DynamicToolCallOutputContentItem[
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
 function isResultError(result: unknown): boolean {
-  if (!result || typeof result !== "object" || Array.isArray(result)) return false;
+  if (!result || typeof result !== "object" || Array.isArray(result)) {
+    return false;
+  }
   const obj = result as Record<string, unknown>;
   return obj.isError === true || obj.is_error === true;
 }
@@ -252,7 +268,9 @@ function readFirstString(
 ): string | undefined {
   for (const key of keys) {
     const v = args[key];
-    if (typeof v === "string" && v.length > 0) return v;
+    if (typeof v === "string" && v.length > 0) {
+      return v;
+    }
   }
   return undefined;
 }
@@ -261,10 +279,13 @@ function collectArgMediaUrls(args: Record<string, unknown>): string[] {
   const urls: string[] = [];
   for (const key of ["mediaUrls", "mediaUrl", "imageUrls", "imageUrl", "url", "urls"]) {
     const v = args[key];
-    if (typeof v === "string") urls.push(v);
-    else if (Array.isArray(v)) {
+    if (typeof v === "string") {
+      urls.push(v);
+    } else if (Array.isArray(v)) {
       for (const item of v) {
-        if (typeof item === "string") urls.push(item);
+        if (typeof item === "string") {
+          urls.push(item);
+        }
       }
     }
   }

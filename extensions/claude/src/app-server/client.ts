@@ -91,7 +91,9 @@ export class ClaudeAppServerClient {
 
     this.stderrRl = createInterface({ input: this.child.stderr! });
     this.stderrRl.on("line", (line) => {
-      if (!line.trim()) return;
+      if (!line.trim()) {
+        return;
+      }
       this.stderrTail = appendBoundedTail(this.stderrTail, `${line}\n`, STDERR_TAIL_MAX);
       embeddedAgentLog.debug(`claude-app-server stderr: ${line}`);
     });
@@ -148,14 +150,18 @@ export class ClaudeAppServerClient {
   }
 
   stop(): void {
-    if (this.stopped) return;
+    if (this.stopped) {
+      return;
+    }
     this.stopped = true;
     const child = this.child;
     this.child = null;
     this.initialized = false;
     this.initializePromise = null;
     this.closeReaders();
-    if (!child) return;
+    if (!child) {
+      return;
+    }
     child.stdin?.end();
     child.stdin?.destroy();
     const forceKill = setTimeout(() => {
@@ -227,7 +233,9 @@ export class ClaudeAppServerClient {
   }
 
   private async sendRequest<T>(method: string, params: unknown, signal?: AbortSignal): Promise<T> {
-    if (!this.child) throw new Error("claude-app-server is not running");
+    if (!this.child) {
+      throw new Error("claude-app-server is not running");
+    }
     const id = this.nextId++;
     const msg: RpcRequest = { jsonrpc: "2.0", id, method, params };
 
@@ -270,13 +278,17 @@ export class ClaudeAppServerClient {
   }
 
   private writeLine(line: string): void {
-    if (!this.child?.stdin) throw new Error("stdin unavailable — server not running");
+    if (!this.child?.stdin) {
+      throw new Error("stdin unavailable — server not running");
+    }
     this.child.stdin.write(line + "\n");
   }
 
   private onLine(line: string): void {
     const trimmed = line.trim();
-    if (!trimmed) return;
+    if (!trimmed) {
+      return;
+    }
     let msg: RpcMessage;
     try {
       msg = JSON.parse(trimmed) as RpcMessage;
@@ -288,7 +300,7 @@ export class ClaudeAppServerClient {
     }
 
     if ("id" in msg && msg.id !== undefined && "method" in msg) {
-      void this.handleServerRequest(msg as RpcRequest);
+      void this.handleServerRequest(msg);
       return;
     }
     if ("id" in msg && msg.id !== undefined) {
@@ -355,7 +367,9 @@ export class ClaudeAppServerClient {
   }
 
   private handleChildExit(error: Error): void {
-    if (this.child === null) return;
+    if (this.child === null) {
+      return;
+    }
     this.rejectAll(error);
     this.closeReaders();
     this.child = null;
@@ -403,8 +417,12 @@ function appendBoundedTail(current: string, next: string, maxLength: number): st
 }
 
 function formatExitValue(value: unknown): string {
-  if (value === null || value === undefined) return "null";
-  if (typeof value === "string" || typeof value === "number") return String(value);
+  if (value === null || value === undefined) {
+    return "null";
+  }
+  if (typeof value === "string" || typeof value === "number") {
+    return String(value);
+  }
   return "unknown";
 }
 
@@ -460,7 +478,9 @@ export function peekSharedClaudeAppServerClient(): {
   pendingRequests: number;
   lastError?: string;
 } | null {
-  if (!sharedClient) return null;
+  if (!sharedClient) {
+    return null;
+  }
   return {
     running: sharedClient.isRunning(),
     pendingRequests: sharedClient.pendingRequestCount(),

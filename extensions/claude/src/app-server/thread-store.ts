@@ -54,7 +54,9 @@ export async function readClaudeAppServerBinding(
     }
     return parsed;
   } catch (err) {
-    if ((err as NodeJS.ErrnoException).code === "ENOENT") return null;
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+      return null;
+    }
     embeddedAgentLog.warn("claude-app-server: failed to read binding", {
       sessionFile,
       error: err instanceof Error ? err.message : String(err),
