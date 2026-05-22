@@ -160,9 +160,9 @@ uses `/var/cache/crabbox/pnpm` when present.
 - `artifacts.copy`: rsync back from the VM.
 
 `crabbox.remote_run` can be marked `accepted` when Crabbox returns a non-zero
-remote status after Mantis has copied metadata proving that the OpenClaw gateway
-is alive and the setup completed. Treat `accepted` as pass-with-explanation,
-not a failed scenario.
+remote status after Mantis has copied metadata proving that either the OpenClaw
+gateway setup completed or the Slack QA command itself exited successfully.
+Treat `accepted` as pass-with-explanation, not a failed scenario.
 
 If the run is slow:
 

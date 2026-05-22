@@ -917,7 +917,9 @@ if [ "$qa_status" -ne 0 ]; then
   done
   echo "MANTIS_REMOTE_FAILURE_DIAGNOSTICS_END"
 fi
-test -s "$out/slack-desktop-smoke.png"
+if [ ! -s "$out/slack-desktop-smoke.png" ]; then
+  echo "Slack desktop screenshot is missing or empty: $out/slack-desktop-smoke.png" >&2
+fi
 exit "$qa_status"
 `;
 }
@@ -1193,9 +1195,7 @@ export async function runMantisSlackDesktopSmoke(
     }
     remoteMetadata = await readRemoteMetadata(outputDir);
     slackQaDir = path.join(outputDir, "slack-qa");
-    if (!(await pathExists(screenshotPath))) {
-      throw new Error("Slack desktop screenshot was not copied back from Crabbox.");
-    }
+    await assertNonEmptyFile(screenshotPath, "Slack desktop screenshot");
     const gatewaySetupCompleted =
       gatewaySetup && remoteMetadata?.qaExitCode === 0 && remoteMetadata.gatewayAlive === true;
     const slackQaCompleted = !gatewaySetup && remoteMetadata?.qaExitCode === 0;

@@ -201,6 +201,8 @@ describe("mantis Slack desktop smoke runtime", () => {
     expect(remoteScript).toContain(') >"$out/slack-desktop-command.log" 2>&1 || qa_status=$?');
     expect(remoteScript).toContain("MANTIS_REMOTE_FAILURE_DIAGNOSTICS_BEGIN");
     expect(remoteScript).toContain('tail -n 200 "$diagnostic_file"');
+    expect(remoteScript).toContain("Slack desktop screenshot is missing or empty");
+    expect(remoteScript).not.toContain('test -s "$out/slack-desktop-smoke.png"');
     expect(remoteScript).toContain("OPENCLAW_MANTIS_SLACK_BROWSER_PROFILE_DIR");
     const rsyncArgs = commands
       .filter((entry) => entry.command === "rsync")
