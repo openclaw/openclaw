@@ -28,26 +28,17 @@ Notes writes the artifacts and summary.
 
 ## Enable
 
-```json5
-{
-  plugins: {
-    entries: {
-      "meeting-notes": {
-        enabled: true,
-        config: {
-          enabled: true,
-        },
-      },
-      discord: {
-        enabled: true,
-      },
-    },
-  },
-}
-```
+Meeting Notes is a bundled startup plugin. It is available by default unless
+`plugins.enabled` is false, `plugins.deny` includes `meeting-notes`, or
+`plugins.entries.meeting-notes.enabled` is false.
 
 Discord voice capture still needs normal Discord voice setup and permissions.
 See [Discord voice](/channels/discord#voice-mode).
+
+Transcription uses the normal audio understanding stack configured under
+`tools.media.audio`. If no explicit audio model is configured, OpenClaw tries
+configured provider keys first, then local audio engines such as `sherpa-onnx`,
+`whisper-cli`, or `whisper` when available.
 
 ## Tool
 
@@ -98,6 +89,11 @@ Artifacts are stored under the OpenClaw state directory:
 - `meeting-notes/<session>/transcript.jsonl`
 - `meeting-notes/<session>/summary.json`
 - `meeting-notes/<session>/summary.md`
+
+For long meetings, utterances are appended to `transcript.jsonl` as they arrive.
+Summary generation reads a bounded window controlled by
+`plugins.entries.meeting-notes.config.maxUtterances` (default: `2000`) so a
+multi-hour call does not require unbounded summary memory.
 
 ## Slack Huddles
 

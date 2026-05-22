@@ -110,10 +110,13 @@ function toolText(text: string, details?: Record<string, unknown>) {
 }
 
 async function summarizeAndPersist(params: {
+  config: ReturnType<typeof resolveMeetingNotesConfig>;
   store: MeetingNotesStore;
   session: MeetingNotesSessionDescriptor;
 }) {
-  const utterances = await params.store.readUtterances(params.session.sessionId);
+  const utterances = await params.store.readUtterances(params.session.sessionId, {
+    maxUtterances: params.config.maxUtterances,
+  });
   const summary = summarizeMeetingNotes({ session: params.session, utterances });
   const summaryPath = await params.store.writeSummary(summary);
   return { summary, summaryPath };
@@ -182,6 +185,7 @@ async function stopMeetingNotes(params: {
   activeSessions.delete(sessionId);
   const stoppedSession = { ...session, stoppedAt };
   const { summaryPath, summary } = await summarizeAndPersist({
+    config: resolveMeetingNotesConfig(params.api.pluginConfig),
     store: params.store,
     session: stoppedSession,
   });
@@ -223,7 +227,11 @@ async function importMeetingNotes(params: {
   for (const utterance of utterances) {
     await params.store.appendUtterance(session.sessionId, utterance);
   }
-  const { summaryPath, summary } = await summarizeAndPersist({ store: params.store, session });
+  const { summaryPath, summary } = await summarizeAndPersist({
+    config: resolveMeetingNotesConfig(params.api.pluginConfig),
+    store: params.store,
+    session,
+  });
   return toolText(`Meeting transcript imported: ${session.sessionId}\nSummary: ${summaryPath}`, {
     sessionId: session.sessionId,
     utteranceCount: utterances.length,
@@ -233,6 +241,7 @@ async function importMeetingNotes(params: {
 }
 
 async function summarizeExisting(params: {
+  config: ReturnType<typeof resolveMeetingNotesConfig>;
   store: MeetingNotesStore;
   rawParams: Record<string, unknown>;
 }) {
@@ -244,7 +253,11 @@ async function summarizeExisting(params: {
   if (!session) {
     throw new Error(`meeting notes session not found: ${sessionId}`);
   }
-  const { summaryPath, summary } = await summarizeAndPersist({ store: params.store, session });
+  const { summaryPath, summary } = await summarizeAndPersist({
+    config: params.config,
+    store: params.store,
+    session,
+  });
   return toolText(`Meeting notes summarized: ${sessionId}\nSummary: ${summaryPath}`, {
     sessionId,
     summary,
@@ -298,7 +311,7 @@ export function createMeetingNotesTool(
         case "import":
           return await importMeetingNotes({ api, store, rawParams: params });
         case "summarize":
-          return await summarizeExisting({ store, rawParams: params });
+          return await summarizeExisting({ config, store, rawParams: params });
         case "status":
           return await statusMeetingNotes(api);
         default:

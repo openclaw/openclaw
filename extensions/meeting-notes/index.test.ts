@@ -10,11 +10,11 @@ async function makeStateDir(): Promise<string> {
   return await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-meeting-notes-"));
 }
 
-function createHarness(stateDir: string) {
+function createHarness(stateDir: string, pluginConfig: Record<string, unknown> = {}) {
   const providers: unknown[] = [];
   const tools: AnyAgentTool[] = [];
   const api = createTestPluginApi({
-    pluginConfig: {},
+    pluginConfig,
     runtime: {
       state: {
         resolveStateDir: () => stateDir,
@@ -69,5 +69,37 @@ describe("meeting-notes plugin", () => {
         "utf8",
       ),
     ).resolves.toContain("Alex");
+  });
+
+  it("bounds summary input while retaining the full transcript", async () => {
+    const stateDir = await makeStateDir();
+    const { tool } = createHarness(stateDir, { maxUtterances: 1 });
+
+    await tool.execute(
+      "call-1",
+      {
+        action: "import",
+        providerId: "manual-transcript",
+        sessionId: "long-meeting",
+        title: "Long meeting",
+        transcript:
+          "Alex: Action item: write the first draft.\nSam: Decision: ship the final plan.",
+      },
+      undefined,
+      vi.fn(),
+    );
+
+    const summary = await fs.readFile(
+      path.join(stateDir, "meeting-notes", "long-meeting", "summary.md"),
+      "utf8",
+    );
+    expect(summary).toContain("Decision: ship the final plan.");
+    expect(summary).not.toContain("Action item: write the first draft.");
+    const transcript = await fs.readFile(
+      path.join(stateDir, "meeting-notes", "long-meeting", "transcript.jsonl"),
+      "utf8",
+    );
+    expect(transcript).toContain("Action item: write the first draft.");
+    expect(transcript).toContain("Decision: ship the final plan.");
   });
 });

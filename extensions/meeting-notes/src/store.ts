@@ -1,5 +1,7 @@
+import { createReadStream } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { createInterface } from "node:readline";
 import type {
   MeetingNotesSessionDescriptor,
   MeetingNotesUtterance,
@@ -20,6 +22,13 @@ async function readJsonFile<T>(filePath: string): Promise<T | undefined> {
     }
     throw err;
   }
+}
+
+function normalizeMaxUtterances(value: number | undefined): number | undefined {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return undefined;
+  }
+  return Math.max(1, Math.floor(value));
 }
 
 export class MeetingNotesStore {
@@ -50,8 +59,36 @@ export class MeetingNotesStore {
     );
   }
 
-  async readUtterances(sessionId: string): Promise<MeetingNotesUtterance[]> {
+  async readUtterances(
+    sessionId: string,
+    options: { maxUtterances?: number } = {},
+  ): Promise<MeetingNotesUtterance[]> {
     const transcriptPath = path.join(this.sessionDir(sessionId), "transcript.jsonl");
+    const maxUtterances = normalizeMaxUtterances(options.maxUtterances);
+    if (maxUtterances !== undefined) {
+      const utterances: MeetingNotesUtterance[] = [];
+      try {
+        const lines = createInterface({
+          input: createReadStream(transcriptPath, { encoding: "utf8" }),
+          crlfDelay: Infinity,
+        });
+        for await (const line of lines) {
+          if (!line) {
+            continue;
+          }
+          utterances.push(JSON.parse(line) as MeetingNotesUtterance);
+          if (utterances.length > maxUtterances) {
+            utterances.shift();
+          }
+        }
+      } catch (err) {
+        if (err && typeof err === "object" && "code" in err && err.code === "ENOENT") {
+          return [];
+        }
+        throw err;
+      }
+      return utterances;
+    }
     let raw: string;
     try {
       raw = await fs.readFile(transcriptPath, "utf8");
