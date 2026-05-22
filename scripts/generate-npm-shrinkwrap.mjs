@@ -289,6 +289,25 @@ function normalizeShrinkwrapOverrides(tempDir, shrinkwrapOverrides) {
   }
 }
 
+function normalizeNpmVersionDrift(lockfile) {
+  const packages = lockfile?.packages;
+  if (!packages || typeof packages !== "object") {
+    return lockfile;
+  }
+  for (const metadata of Object.values(packages)) {
+    if (!metadata || typeof metadata !== "object" || Array.isArray(metadata)) {
+      continue;
+    }
+    // npm 11 patch releases disagree on these package-lock v3 metadata fields.
+    // Keep the shrinkwrap stable across supported Node 24 patch versions.
+    delete metadata.libc;
+    if (metadata.peer === true) {
+      delete metadata.peer;
+    }
+  }
+  return lockfile;
+}
+
 function generateShrinkwrap(packageDir) {
   const tempDir = mkdtempSync(path.join(tmpdir(), "openclaw-shrinkwrap-"));
   try {
@@ -304,9 +323,11 @@ function generateShrinkwrap(packageDir) {
     );
     runNpm(["shrinkwrap", "--ignore-scripts", "--no-audit", "--no-fund"], tempDir);
     normalizeShrinkwrapOverrides(tempDir, shrinkwrapOverrides);
-    const generated = readFileSync(path.join(tempDir, "npm-shrinkwrap.json"), "utf8");
-    assertShrinkwrapMatchesPnpmLock(JSON.parse(generated));
-    return generated;
+    const generated = normalizeNpmVersionDrift(
+      JSON.parse(readFileSync(path.join(tempDir, "npm-shrinkwrap.json"), "utf8")),
+    );
+    assertShrinkwrapMatchesPnpmLock(generated);
+    return `${JSON.stringify(generated, null, 2)}\n`;
   } finally {
     rmSync(tempDir, { recursive: true, force: true });
   }
@@ -468,6 +489,7 @@ export {
   disableShrinkwrappedOverrideConflictSources,
   exactOverrideRulesFromOverrides,
   exactVersionFromOverrideSpec,
+  normalizeNpmVersionDrift,
   parsePnpmPackageKey,
   parseLockPackagePath,
 };

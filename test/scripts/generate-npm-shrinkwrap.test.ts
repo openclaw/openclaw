@@ -5,6 +5,7 @@ import {
   disableShrinkwrappedOverrideConflictSources,
   exactOverrideRulesFromOverrides,
   exactVersionFromOverrideSpec,
+  normalizeNpmVersionDrift,
   parsePnpmPackageKey,
   parseLockPackagePath,
 } from "../../scripts/generate-npm-shrinkwrap.mjs";
@@ -102,5 +103,45 @@ describe("generate-npm-shrinkwrap", () => {
         path: "node_modules/react",
       },
     ]);
+  });
+
+  it("normalizes npm patch-version metadata drift", () => {
+    expect(
+      normalizeNpmVersionDrift({
+        packages: {
+          "node_modules/@rollup/rollup-linux-x64-gnu": {
+            version: "4.53.5",
+            cpu: ["x64"],
+            libc: ["glibc"],
+            optional: true,
+            os: ["linux"],
+          },
+          "node_modules/zod": {
+            version: "4.4.3",
+            peer: true,
+          },
+          "node_modules/keeps-peer-false": {
+            version: "1.0.0",
+            peer: false,
+          },
+        },
+      }),
+    ).toEqual({
+      packages: {
+        "node_modules/@rollup/rollup-linux-x64-gnu": {
+          version: "4.53.5",
+          cpu: ["x64"],
+          optional: true,
+          os: ["linux"],
+        },
+        "node_modules/zod": {
+          version: "4.4.3",
+        },
+        "node_modules/keeps-peer-false": {
+          version: "1.0.0",
+          peer: false,
+        },
+      },
+    });
   });
 });
