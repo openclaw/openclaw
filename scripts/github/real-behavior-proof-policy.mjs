@@ -70,6 +70,9 @@ const evidenceDescriptorRegex =
 const liveCommandRegex =
   /\b(?:openclaw|node|docker|curl|gh|ssh|adb|xcrun|xcodebuild|open|npm\s+run|pnpm\s+openclaw)\b/i;
 
+const liveStepCommandRegex =
+  /\b(?:openclaw|pnpm\s+openclaw|node\s+(?:\S*\/)?(?:dist\/entry\.js|openclaw\.mjs)|docker|curl|gh|ssh|adb|xcrun|xcodebuild|open)\b/i;
+
 const mockOnlyEvidenceStripRegex =
   /\b(?:pnpm|npm|yarn|bun)\s+(?:run\s+)?(?:test|vitest|lint|typecheck|tsgo|build|check)\b|\b(?:vitest|unit tests?|mock(?:ed|s)?|snapshots?|lint|typechecks?|tsgo|ci(?:\s+passes?)?|tests?|passed|passes|green|success|succeeded|with|and|the|branch|only|output|transcript|capture|fenced)\b/gi;
 
@@ -147,6 +150,19 @@ export function extractRealBehaviorProofSection(body = "") {
   // bodies the same way as locally-authored Markdown.
   const normalizedBody = normalizeLineEndings(body);
   const headingRegex = /^#{2,6}\s+real behavior proof\b[^\n]*$/gim;
+  const match = headingRegex.exec(normalizedBody);
+  if (!match) {
+    return "";
+  }
+  const sectionStart = match.index + match[0].length;
+  const rest = normalizedBody.slice(sectionStart);
+  const nextHeading = rest.match(/\n#{1,6}\s+\S/);
+  return (nextHeading ? rest.slice(0, nextHeading.index) : rest).trim();
+}
+
+function extractMarkdownSection(body, heading) {
+  const normalizedBody = normalizeLineEndings(body ?? "");
+  const headingRegex = new RegExp(`^#{2,6}\\s+${escapeRegex(heading)}\\b[^\\n]*$`, "gim");
   const match = headingRegex.exec(normalizedBody);
   if (!match) {
     return "";
@@ -303,6 +319,9 @@ export function evaluateRealBehaviorProof({ pullRequest, labels } = {}) {
   const fields = Object.fromEntries(
     requiredProofFields.map((field) => [field.key, extractFieldValue(section, field)]),
   );
+  if (!fields.notTested) {
+    fields.notTested = extractMarkdownSection(pullRequest?.body ?? "", "Out Of Scope");
+  }
   const missingFields = requiredProofFields
     .filter((field) => isMissingValue(fields[field.key] ?? "", field))
     .map((field) => field.key);
@@ -328,6 +347,7 @@ export function evaluateRealBehaviorProof({ pullRequest, labels } = {}) {
   const hasArtifactEvidence = artifactEvidenceRegex.test(evidenceContent);
   const hasNonMockPayload = hasNonMockEvidencePayload(evidenceContent);
   const hasMockEvidenceSignal = mockOnlyEvidenceRegex.test(proofContentForMockDetection);
+  const hasLiveCommandStep = liveStepCommandRegex.test(fields.steps ?? "") && hasNonMockPayload;
   if (hasMockEvidenceSignal && !hasArtifactEvidence && !hasNonMockPayload) {
     return result(
       "mock_only",
@@ -339,7 +359,8 @@ export function evaluateRealBehaviorProof({ pullRequest, labels } = {}) {
   const hasRealEvidence =
     hasArtifactEvidence ||
     (evidenceDescriptorRegex.test(evidenceContent) && hasNonMockPayload) ||
-    liveCommandRegex.test(evidenceContent);
+    liveCommandRegex.test(evidenceContent) ||
+    hasLiveCommandStep;
   if (hasMockEvidenceSignal && !hasRealEvidence) {
     return result(
       "mock_only",

@@ -85,6 +85,54 @@ describe("real-behavior-proof-policy", () => {
     expect(labelsForRealBehaviorProof(evaluation)).toEqual([PROOF_SUPPLIED_LABEL]);
   });
 
+  it("accepts an Out Of Scope section as the not-tested field", () => {
+    const evaluation = evaluateRealBehaviorProof({
+      pullRequest: externalPr(
+        [
+          "## Real Behavior Proof",
+          "",
+          "Behavior addressed: Headless model API-key auth writes the API-key credential shape.",
+          "Real environment tested: local checkout with temporary OpenClaw state.",
+          "Exact steps or command run after this patch: printf fake-key | node dist/entry.js models auth paste-api-key --provider openai-codex",
+          "Evidence after fix: Terminal output showed the command exited 0 and the temp auth store contained an api_key profile.",
+          "Observed result after fix: The profile had type api_key, provider openai-codex, and a redacted key field.",
+          "",
+          "## Verification",
+          "",
+          "- pnpm check:changed",
+          "",
+          "## Out Of Scope",
+          "",
+          "- No changes to existing paste-token semantics.",
+          "- No broader provider auth migration.",
+        ].join("\n"),
+      ),
+    });
+
+    expect(evaluation.status).toBe("passed");
+    expect(evaluation.fields?.notTested).toContain("No changes to existing paste-token");
+    expect(labelsForRealBehaviorProof(evaluation)).toEqual([PROOF_SUPPLIED_LABEL]);
+  });
+
+  it("accepts live command steps with observed profile-shape evidence", () => {
+    const evaluation = evaluateRealBehaviorProof({
+      pullRequest: externalPr(
+        [
+          "## Real Behavior Proof",
+          "",
+          "Behavior addressed: API-key provider profiles can be saved from pasted input.",
+          "Real environment tested: local macOS checkout with a temporary OpenClaw home.",
+          "Exact steps or command run after this patch: printf <fake sk> | node dist/entry.js models auth paste-api-key --provider openai-codex --profile-id openai-codex:manual",
+          'Evidence after fix: CLI help lists paste-api-key. The temp auth store contains openai-codex:manual with type "api_key", provider "openai-codex", and redacted key; temp config contains mode api_key.',
+          "Observed result after fix: command exits 0 and produces the API-key profile shape required by the Codex app-server bridge.",
+          "What was not tested: No real credentials were used.",
+        ].join("\n"),
+      ),
+    });
+
+    expect(evaluation.status).toBe("passed");
+  });
+
   it("fails external PRs without a real behavior proof section", () => {
     const evaluation = evaluateRealBehaviorProof({
       pullRequest: externalPr("## Summary\n\n- Fixed startup."),
@@ -147,6 +195,20 @@ describe("real-behavior-proof-policy", () => {
             observedResult: "CI passes.",
           },
         ),
+      ),
+    });
+
+    expect(evaluation.status).toBe("mock_only");
+    expect(labelsForRealBehaviorProof(evaluation)).toEqual([MOCK_ONLY_PROOF_LABEL]);
+  });
+
+  it("does not count node-based test harness steps as live product commands", () => {
+    const evaluation = evaluateRealBehaviorProof({
+      pullRequest: externalPr(
+        proofBody("Test harness output showed all assertions passed.", {
+          steps: "node scripts/run-vitest.mjs src/commands/models/auth.test.ts",
+          observedResult: "All tests passed.",
+        }),
       ),
     });
 
