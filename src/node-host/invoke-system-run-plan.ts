@@ -21,6 +21,7 @@ import {
 } from "../infra/exec-wrapper-resolution.js";
 import { sameFileIdentity } from "../infra/fs-safe-advanced.js";
 import { parseInlineOptionToken } from "../infra/inline-option-token.js";
+import { resolveNodeExecCwd, resolveNodeShellCommand } from "../infra/node-shell.js";
 import {
   advancePosixInlineOptionScan,
   POSIX_INLINE_COMMAND_FLAGS,
@@ -1229,11 +1230,16 @@ export function hardenApprovedExecutionPaths(params: {
     }
   | { ok: false; message: string } {
   if (!params.approvedByAsk) {
+    // Non-approval execution skips canonical-cwd validation, so a forwarded cwd
+    // that is missing on the node host would otherwise reach spawn() and fail
+    // the pre-exec chdir as a misleading `spawn <shell> ENOENT`. Drop it so
+    // execution falls back to the node default directory. The approval branch
+    // below still fails closed on a missing cwd via resolveCanonicalApprovalCwdSync.
     return {
       ok: true,
       argv: params.argv,
       argvChanged: false,
-      cwd: params.cwd,
+      cwd: resolveNodeExecCwd(params.cwd).cwd,
       approvedCwdSnapshot: undefined,
     };
   }
@@ -1325,7 +1331,8 @@ export function buildSystemRunApprovalPlan(params: {
   if (command.argv.length === 0) {
     return { ok: false, message: "command required" };
   }
-  if (command.shellPayload === null && isBlockedShellWrapperCommand(command.argv)) {
+  const shellResolvedArgv = resolveNodeShellCommand(command.argv).argv;
+  if (command.shellPayload === null && isBlockedShellWrapperCommand(shellResolvedArgv)) {
     return {
       ok: false,
       message: "SYSTEM_RUN_DENIED: approval cannot safely bind this interpreter/runtime command",
@@ -1333,7 +1340,7 @@ export function buildSystemRunApprovalPlan(params: {
   }
   const hardening = hardenApprovedExecutionPaths({
     approvedByAsk: true,
-    argv: command.argv,
+    argv: shellResolvedArgv,
     shellCommand: command.shellPayload,
     cwd: normalizeNullableString(params.cwd) ?? undefined,
   });

@@ -40,6 +40,7 @@ import {
   inspectHostExecEnvOverrides,
   sanitizeSystemRunEnvOverrides,
 } from "../infra/host-env-security.js";
+import { resolveNodeShellCommand } from "../infra/node-shell.js";
 import { normalizeSystemRunApprovalPlan } from "../infra/system-run-approval-binding.js";
 import { formatExecCommand, resolveSystemRunCommandRequest } from "../infra/system-run-command.js";
 import { logWarn } from "../logger.js";
@@ -371,6 +372,28 @@ function argvArraysMatch(left: readonly string[] | undefined, right: readonly st
   );
 }
 
+function resolveSystemRunNodeShellPlan(
+  approvalPlan: SystemRunParsePhase["approvalPlan"],
+): SystemRunParsePhase["approvalPlan"] {
+  if (!approvalPlan) {
+    return approvalPlan;
+  }
+  const resolved = resolveNodeShellCommand(approvalPlan.argv);
+  if (!resolved.changed) {
+    return approvalPlan;
+  }
+  const commandText = formatExecCommand(resolved.argv);
+  return {
+    ...approvalPlan,
+    argv: resolved.argv,
+    commandText,
+    commandPreview:
+      approvalPlan.commandPreview && approvalPlan.commandPreview.trim() !== commandText
+        ? approvalPlan.commandPreview
+        : undefined,
+  };
+}
+
 export { buildSystemRunApprovalPlan } from "./invoke-system-run-plan.js";
 
 async function parseSystemRunPhase(
@@ -397,11 +420,12 @@ async function parseSystemRunPhase(
 
   const shellPayload = command.shellPayload;
   const shellWrapperInvocation = isShellWrapperInvocation(command.argv);
-  const commandText = command.commandText;
+  const shellResolvedArgv = resolveNodeShellCommand(command.argv).argv;
+  const commandText = formatExecCommand(shellResolvedArgv);
   const approvalPlan =
     opts.params.systemRunPlan === undefined
       ? null
-      : normalizeSystemRunApprovalPlan(opts.params.systemRunPlan);
+      : resolveSystemRunNodeShellPlan(normalizeSystemRunApprovalPlan(opts.params.systemRunPlan));
   if (opts.params.systemRunPlan !== undefined && !approvalPlan) {
     await opts.sendInvokeResult({
       ok: false,
@@ -467,7 +491,7 @@ async function parseSystemRunPhase(
     shellWrapper: shellWrapperInvocation,
   });
   return {
-    argv: command.argv,
+    argv: shellResolvedArgv,
     shellPayload,
     shellWrapperInvocation,
     commandText,

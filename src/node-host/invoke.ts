@@ -260,7 +260,16 @@ function requireExecApprovalsBaseHash(
   }
 }
 
-async function runCommand(
+export async function runCommand(
+  argv: string[],
+  cwd: string | undefined,
+  env: Record<string, string> | undefined,
+  timeoutMs: number | undefined,
+): Promise<RunResult> {
+  return await runCommandAttempt(argv, cwd, env, timeoutMs);
+}
+
+async function runCommandAttempt(
   argv: string[],
   cwd: string | undefined,
   env: Record<string, string> | undefined,

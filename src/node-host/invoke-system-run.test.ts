@@ -521,6 +521,107 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
     };
   }
 
+  async function withMissingBinSh<T>(run: () => Promise<T>): Promise<T> {
+    const realExistsSync = fs.existsSync.bind(fs);
+    const existsSpy = vi.spyOn(fs, "existsSync").mockImplementation((target) => {
+      const candidate = String(target);
+      if (candidate === "/bin/sh") {
+        return false;
+      }
+      if (candidate === "/usr/bin/sh") {
+        return true;
+      }
+      return realExistsSync(target);
+    });
+    try {
+      return await run();
+    } finally {
+      existsSpy.mockRestore();
+    }
+  }
+
+  it("binds /usr/bin/sh in prepared system.run plans when /bin/sh is missing", async () => {
+    await withMissingBinSh(async () => {
+      const prepared = buildSystemRunApprovalPlan({
+        command: ["/bin/sh", "-lc", "printf NODE_SHELL_FALLBACK_OK"],
+        rawCommand: '/bin/sh -lc "printf NODE_SHELL_FALLBACK_OK"',
+      });
+
+      expect(prepared.ok).toBe(true);
+      if (!prepared.ok) {
+        return;
+      }
+      expect(prepared.plan.argv).toEqual(["/usr/bin/sh", "-lc", "printf NODE_SHELL_FALLBACK_OK"]);
+      expect(prepared.plan.commandText).toBe('/usr/bin/sh -lc "printf NODE_SHELL_FALLBACK_OK"');
+    });
+  });
+
+  it("executes and audits the canonical shell fallback argv before runCommand", async () => {
+    await withMissingBinSh(async () => {
+      const legacyPlan: SystemRunApprovalPlan = {
+        argv: ["/bin/sh", "-lc", "printf NODE_SHELL_FALLBACK_OK"],
+        cwd: null,
+        commandText: '/bin/sh -lc "printf NODE_SHELL_FALLBACK_OK"',
+        commandPreview: "printf NODE_SHELL_FALLBACK_OK",
+        agentId: null,
+        sessionKey: "agent:main:main",
+      };
+
+      const invoke = await runSystemInvoke({
+        preferMacAppExecHost: false,
+        command: legacyPlan.argv,
+        rawCommand: legacyPlan.commandText,
+        systemRunPlan: legacyPlan,
+        security: "full",
+        ask: "off",
+      });
+
+      expect(invoke.runCommand).toHaveBeenCalledWith(
+        ["/usr/bin/sh", "-lc", "printf NODE_SHELL_FALLBACK_OK"],
+        undefined,
+        undefined,
+        undefined,
+      );
+      expect(invoke.sendExecFinishedEvent).toHaveBeenCalledWith(
+        expect.objectContaining({
+          commandText: '/usr/bin/sh -lc "printf NODE_SHELL_FALLBACK_OK"',
+        }),
+      );
+      expectInvokeOk(invoke.sendInvokeResult);
+    });
+  });
+
+  it("drops a forwarded cwd that does not exist on the node host (/bin/sh present)", async () => {
+    // Reproduces openclaw/openclaw#85202: /bin/sh exists, but a forwarded cwd
+    // that is missing on the node host makes Node fail the pre-exec chdir and
+    // report it as a misleading `spawn /bin/sh ENOENT`. The non-approval exec
+    // path must drop the phantom cwd and run in the node default directory.
+    const missingCwd = path.join(sharedFixtureRoot, "missing-gateway-forwarded-cwd");
+    expect(fs.existsSync(missingCwd)).toBe(false);
+
+    const invoke = await runSystemInvoke({
+      preferMacAppExecHost: false,
+      command: ["/bin/sh", "-lc", "printf NODE_SHELL_CWD_OK"],
+      rawCommand: '/bin/sh -lc "printf NODE_SHELL_CWD_OK"',
+      cwd: missingCwd,
+      security: "full",
+      ask: "off",
+    });
+
+    expect(invoke.runCommand).toHaveBeenCalledWith(
+      ["/bin/sh", "-lc", "printf NODE_SHELL_CWD_OK"],
+      undefined,
+      undefined,
+      undefined,
+    );
+    expect(invoke.sendExecFinishedEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        commandText: '/bin/sh -lc "printf NODE_SHELL_CWD_OK"',
+      }),
+    );
+    expectInvokeOk(invoke.sendInvokeResult);
+  });
+
   it("routes local, mac host, and canonical shell-wrapper requests", async () => {
     const localInvoke = await runSystemInvoke({
       preferMacAppExecHost: false,
