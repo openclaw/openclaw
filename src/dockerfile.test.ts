@@ -309,5 +309,17 @@ describe("Dockerfile", () => {
     expect(dockerfile).toContain(
       "stat -c '%U:%G %a' /home/node/.openclaw | grep -qx 'node:node 700'",
     );
+    expect(dockerfile).toContain(
+      "install -d -m 0755 -o node -g node /home/node/.openclaw/workspace",
+    );
+    expect(dockerfile).toContain(
+      "install -d -m 0755 -o node -g node /home/node/.config/openclaw",
+    );
+    expect(dockerfile).toContain(
+      "stat -c '%U:%G %a' /home/node/.openclaw/workspace | grep -qx 'node:node 755'",
+    );
+    expect(dockerfile).toContain(
+      "stat -c '%U:%G %a' /home/node/.config/openclaw | grep -qx 'node:node 755'",
+    );
   });
 });
