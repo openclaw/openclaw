@@ -22,15 +22,37 @@ const SENSITIVE_URL_QUERY_PARAM_NAMES = new Set([
   "pass",
   "passwd",
   "auth",
+  "jwt",
+  "session",
+  "id_token",
+  "code",
   "client_secret",
+  "app_secret",
   "hook_token",
   "refresh_token",
   "signature",
+  "x_amz_signature",
+  "x_amz_security_token",
+  "private_key",
+  "credential",
+  "authorization",
 ]);
+const URL_QUERY_NAME_SEPARATOR_RE = /[\p{C}\p{Z}+]/gu;
+
+function normalizeUrlQueryParamName(name: string): string {
+  const stripped = name.replace(URL_QUERY_NAME_SEPARATOR_RE, "");
+  try {
+    return normalizeLowercaseStringOrEmpty(
+      decodeURIComponent(stripped).replace(URL_QUERY_NAME_SEPARATOR_RE, ""),
+    ).replaceAll("-", "_");
+  } catch {
+    return normalizeLowercaseStringOrEmpty(stripped).replaceAll("-", "_");
+  }
+}
 
 /** True for auth-like URL query parameter names that should be redacted. */
 export function isSensitiveUrlQueryParamName(name: string): boolean {
-  const normalized = normalizeLowercaseStringOrEmpty(name).replaceAll("-", "_");
+  const normalized = normalizeUrlQueryParamName(name);
   return SENSITIVE_URL_QUERY_PARAM_NAMES.has(normalized);
 }
 
