@@ -253,4 +253,3 @@ describe("runCliAgent cron before_agent_reply seam", () => {
     expect(closeMcpLoopbackServerMock).toHaveBeenCalledTimes(1);
   });
 });
-

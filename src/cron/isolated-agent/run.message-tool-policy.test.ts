@@ -12,6 +12,7 @@ import {
   makeCronSession,
   mockRunCronFallbackPassthrough,
   resolveCronPayloadOutcomeMock,
+  resolveCronSessionMock,
   resetRunCronIsolatedAgentTurnHarness,
   resolveCronDeliveryPlanMock,
   resolveDeliveryTargetMock,
@@ -712,6 +713,24 @@ describe("runCronIsolatedAgentTurn message tool policy", () => {
 
     expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
     expectEmbeddedRunFields({ disableMessageTool: false });
+  });
+
+  it("releases cron run context references after completion", async () => {
+    const cronSession = makeCronSession({
+      store: { "agent:default:cron:message-tool-policy": { retained: true } },
+    });
+    resolveCronSessionMock.mockReturnValue(cronSession);
+    const { getAgentRunContext, registerAgentRunContext } =
+      await import("../../infra/agent-events.js");
+    registerAgentRunContext("test-session-id", {
+      sessionKey: "agent:default:cron:message-tool-policy",
+      verboseLevel: "off",
+    });
+
+    await runCronIsolatedAgentTurn(makeParams());
+
+    expect(getAgentRunContext("test-session-id")).toBeUndefined();
+    expect(cronSession.store).toBeUndefined();
   });
 
   it("skips cron delivery when output is heartbeat-only", async () => {
