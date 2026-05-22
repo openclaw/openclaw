@@ -20,6 +20,14 @@ export const MANAGED_MEMORY_DREAMING_CRON_NAME = "Memory Dreaming Promotion";
 export const MANAGED_MEMORY_DREAMING_CRON_TAG = "[managed-by=memory-core.short-term-promotion]";
 export const MEMORY_DREAMING_SYSTEM_EVENT_TEXT =
   "__openclaw_memory_core_short_term_promotion_dream__";
+export const DEFAULT_MEMORY_AUDIT_ENABLED = false;
+export const DEFAULT_MEMORY_AUDIT_DAILY_CRON_EXPR = "10 6 * * *";
+export const DEFAULT_MEMORY_AUDIT_WEEKLY_CRON_EXPR = "0 21 * * 0";
+export const DEFAULT_MEMORY_AUDIT_SESSION_TARGET = "session:memory-audit";
+export const MANAGED_MEMORY_AUDIT_DAILY_CRON_NAME = "Memory Daily Audit";
+export const MANAGED_MEMORY_AUDIT_DAILY_CRON_TAG = "[managed-by=memory-core.audit.daily]";
+export const MANAGED_MEMORY_AUDIT_WEEKLY_CRON_NAME = "Memory Weekly Audit";
+export const MANAGED_MEMORY_AUDIT_WEEKLY_CRON_TAG = "[managed-by=memory-core.audit.weekly]";
 export const LEGACY_MEMORY_LIGHT_DREAMING_CRON_NAME = "Memory Light Dreaming";
 export const LEGACY_MEMORY_LIGHT_DREAMING_CRON_TAG = "[managed-by=memory-core.dreaming.light]";
 export const LEGACY_MEMORY_LIGHT_DREAMING_EVENT_TEXT = "__openclaw_memory_core_light_sleep__";
@@ -61,6 +69,32 @@ export type MemoryDreamingSpeed = "fast" | "balanced" | "slow";
 export type MemoryDreamingThinking = "low" | "medium" | "high";
 export type MemoryDreamingBudget = "cheap" | "medium" | "expensive";
 export type MemoryDreamingStorageMode = "inline" | "separate" | "both";
+export type MemoryAuditCadence = "daily" | "weekly";
+export type MemoryAuditDeliveryConfig =
+  | { mode: "none" }
+  | {
+      mode: "announce" | "webhook";
+      channel?: string;
+      to?: string;
+      threadId?: string;
+      accountId?: string;
+    };
+
+export type MemoryAuditCadenceConfig = {
+  enabled: boolean;
+  cron: string;
+};
+
+export type MemoryAuditConfig = {
+  enabled: boolean;
+  agentId?: string;
+  sessionTarget: string;
+  timezone?: string;
+  model?: string;
+  daily: MemoryAuditCadenceConfig;
+  weekly: MemoryAuditCadenceConfig;
+  delivery: MemoryAuditDeliveryConfig;
+};
 
 export type MemoryLightDreamingSource = "daily" | "sessions" | "recall";
 export type MemoryDeepDreamingSource = "daily" | "memory" | "sessions" | "logs" | "recall";
@@ -270,6 +304,46 @@ function normalizeStorageMode(value: unknown): MemoryDreamingStorageMode {
     return normalized;
   }
   return DEFAULT_MEMORY_DREAMING_STORAGE_MODE;
+}
+
+function normalizeAuditDelivery(value: unknown): MemoryAuditDeliveryConfig {
+  const record = asNullableRecord(value);
+  const mode = normalizeOptionalLowercaseString(record?.mode);
+  if (mode === "announce" || mode === "webhook") {
+    return {
+      mode,
+      ...(normalizeTrimmedString(record?.channel)
+        ? { channel: normalizeTrimmedString(record?.channel) }
+        : {}),
+      ...(normalizeTrimmedString(record?.to) ? { to: normalizeTrimmedString(record?.to) } : {}),
+      ...(normalizeTrimmedString(record?.threadId)
+        ? { threadId: normalizeTrimmedString(record?.threadId) }
+        : {}),
+      ...(normalizeTrimmedString(record?.accountId)
+        ? { accountId: normalizeTrimmedString(record?.accountId) }
+        : {}),
+    };
+  }
+  return { mode: "none" };
+}
+
+function normalizeAuditSessionTarget(value: unknown): string {
+  const target = normalizeTrimmedString(value);
+  if (!target) {
+    return DEFAULT_MEMORY_AUDIT_SESSION_TARGET;
+  }
+  if (target === "main" || target === "isolated" || target.startsWith("session:")) {
+    return target;
+  }
+  return DEFAULT_MEMORY_AUDIT_SESSION_TARGET;
+}
+
+function resolveAuditCadence(value: unknown, fallbackCron: string): MemoryAuditCadenceConfig {
+  const record = asNullableRecord(value);
+  return {
+    enabled: normalizeBoolean(record?.enabled, true),
+    cron: normalizeTrimmedString(record?.cron) ?? fallbackCron,
+  };
 }
 
 function normalizeSpeed(value: unknown): MemoryDreamingSpeed | undefined {
@@ -521,6 +595,28 @@ export function resolveMemoryDreamingConfig(params: {
         }),
       },
     },
+  };
+}
+
+export function resolveMemoryAuditConfig(params: {
+  pluginConfig?: Record<string, unknown>;
+  cfg?: OpenClawConfig;
+}): MemoryAuditConfig {
+  const audit = asNullableRecord(params.pluginConfig?.memoryAudit);
+  const timezone =
+    normalizeTrimmedString(audit?.timezone) ??
+    normalizeTrimmedString(params.cfg?.agents?.defaults?.userTimezone);
+  const agentId = normalizeTrimmedString(audit?.agentId);
+  const model = normalizeTrimmedString(audit?.model);
+  return {
+    enabled: normalizeBoolean(audit?.enabled, DEFAULT_MEMORY_AUDIT_ENABLED),
+    ...(agentId ? { agentId } : {}),
+    sessionTarget: normalizeAuditSessionTarget(audit?.sessionTarget),
+    ...(timezone ? { timezone } : {}),
+    ...(model ? { model } : {}),
+    daily: resolveAuditCadence(audit?.daily, DEFAULT_MEMORY_AUDIT_DAILY_CRON_EXPR),
+    weekly: resolveAuditCadence(audit?.weekly, DEFAULT_MEMORY_AUDIT_WEEKLY_CRON_EXPR),
+    delivery: normalizeAuditDelivery(audit?.delivery),
   };
 }
 

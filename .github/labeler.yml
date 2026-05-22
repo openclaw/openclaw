@@ -47,6 +47,15 @@
           - "extensions/meeting-notes/**"
           - "docs/plugins/meeting-notes.md"
           - "src/meeting-notes/**"
+"plugin: memory-core":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/memory-core/**"
+          - "src/memory-host-sdk/**"
+          - "src/plugin-sdk/memory-core-*.ts"
+          - "docs/concepts/memory*.md"
+          - "docs/concepts/dreaming.md"
+          - "docs/cli/memory.md"
 "plugin: migrate-hermes":
   - changed-files:
       - any-glob-to-any-file:

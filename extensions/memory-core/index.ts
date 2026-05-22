@@ -7,6 +7,10 @@ import {
 } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 import { resolveMemoryBackendConfig } from "openclaw/plugin-sdk/memory-core-host-runtime-files";
 import {
+  resolveMemoryAuditConfig,
+  resolveMemoryCorePluginConfig,
+} from "openclaw/plugin-sdk/memory-core-host-status";
+import {
   definePluginEntry,
   type AnyAgentTool,
   type OpenClawPluginToolContext,
@@ -14,6 +18,7 @@ import {
 import type { TSchema } from "typebox";
 import { registerShortTermPromotionDreaming } from "./src/dreaming.js";
 import { buildMemoryFlushPlan } from "./src/flush-plan.js";
+import { registerMemoryAuditCron } from "./src/memory-audit-cron.js";
 import { registerBuiltInMemoryEmbeddingProviders } from "./src/memory/provider-adapters.js";
 import { buildPromptSection } from "./src/prompt-section.js";
 
@@ -58,6 +63,21 @@ function hasMemoryToolContext(options: MemoryToolOptions): boolean {
   return Boolean(resolveMemorySearchConfig(cfg, agentId));
 }
 
+function hasMemoryAuditToolContext(options: MemoryToolOptions): boolean {
+  const cfg = getToolConfig(options);
+  if (!cfg) {
+    return false;
+  }
+  const { defaultAgentId, sessionAgentId } = resolveSessionAgentIds({
+    sessionKey: options.agentSessionKey,
+    config: cfg,
+    agentId: options.agentId,
+  });
+  const pluginConfig = resolveMemoryCorePluginConfig(cfg);
+  const audit = resolveMemoryAuditConfig({ pluginConfig, cfg });
+  return audit.enabled && sessionAgentId === (audit.agentId ?? defaultAgentId);
+}
+
 const MemorySearchSchema = {
   type: "object",
   properties: {
@@ -82,15 +102,53 @@ const MemoryGetSchema = {
   additionalProperties: false,
 } as const satisfies TSchema;
 
+const MemoryAuditCollectSchema = {
+  type: "object",
+  properties: {
+    cadence: { type: "string", enum: ["daily", "weekly", "manual"] },
+    limit: { type: "number" },
+  },
+  additionalProperties: false,
+} as const satisfies TSchema;
+
+const MemoryAuditStageSchema = {
+  type: "object",
+  properties: {
+    action: { type: "string", enum: ["add", "edit", "delete", "move"] },
+    text: { type: "string" },
+    rationale: { type: "string" },
+    confidence: { type: "number" },
+    sourceSurfaceId: { type: "string" },
+    sourceStartLine: { type: "number" },
+    sourceEndLine: { type: "number" },
+    sourceHash: { type: "string" },
+    targetSurfaceId: { type: "string" },
+    targetKind: {
+      type: "string",
+      enum: ["agent-memory", "user-profile", "tool-notes", "shared-memory"],
+    },
+    targetAgentId: { type: "string" },
+    targetPath: { type: "string" },
+    targetWorkspaceDir: { type: "string" },
+  },
+  required: ["action"],
+  additionalProperties: false,
+} as const satisfies TSchema;
+
 function createLazyMemoryTool(params: {
   options: MemoryToolOptions;
   label: string;
-  name: "memory_search" | "memory_get";
+  name: "memory_search" | "memory_get" | "memory_audit_collect" | "memory_audit_stage";
   description: string;
-  parameters: typeof MemorySearchSchema | typeof MemoryGetSchema;
+  parameters:
+    | typeof MemorySearchSchema
+    | typeof MemoryGetSchema
+    | typeof MemoryAuditCollectSchema
+    | typeof MemoryAuditStageSchema;
   load: (module: MemoryToolsModule, options: MemoryToolOptions) => AnyAgentTool | null;
+  hasContext?: (options: MemoryToolOptions) => boolean;
 }): AnyAgentTool | null {
-  if (!hasMemoryToolContext(params.options)) {
+  if (!(params.hasContext ?? hasMemoryToolContext)(params.options)) {
     return null;
   }
 
@@ -111,7 +169,7 @@ function createLazyMemoryTool(params: {
         return jsonResult({
           disabled: true,
           unavailable: true,
-          error: "memory search unavailable",
+          error: `${params.name} unavailable`,
         });
       }
       return await tool.execute(toolCallId, toolParams, signal, onUpdate);
@@ -140,6 +198,32 @@ function createLazyMemoryGetTool(options: MemoryToolOptions): AnyAgentTool | nul
       "Safe exact excerpt read from MEMORY.md or memory/*.md. Defaults to a bounded excerpt when lines are omitted, includes truncation/continuation info when more content exists, and `corpus=wiki` reads from registered compiled-wiki supplements.",
     parameters: MemoryGetSchema,
     load: (module, loadOptions) => module.createMemoryGetTool(loadOptions),
+  });
+}
+
+function createLazyMemoryAuditCollectTool(options: MemoryToolOptions): AnyAgentTool | null {
+  return createLazyMemoryTool({
+    options,
+    label: "Memory Audit Collect",
+    name: "memory_audit_collect",
+    description:
+      "Collect durable memory surfaces for a human-approved memory quality audit. Use before staging add, edit, delete, or move recommendations.",
+    parameters: MemoryAuditCollectSchema,
+    load: (module, loadOptions) => module.createMemoryAuditCollectTool(loadOptions),
+    hasContext: hasMemoryAuditToolContext,
+  });
+}
+
+function createLazyMemoryAuditStageTool(options: MemoryToolOptions): AnyAgentTool | null {
+  return createLazyMemoryTool({
+    options,
+    label: "Memory Audit Stage",
+    name: "memory_audit_stage",
+    description:
+      "Stage one human-approved memory audit recommendation across durable memory surfaces.",
+    parameters: MemoryAuditStageSchema,
+    load: (module, loadOptions) => module.createMemoryAuditStageTool(loadOptions),
+    hasContext: hasMemoryAuditToolContext,
   });
 }
 
@@ -179,6 +263,7 @@ export default definePluginEntry({
   register(api) {
     registerBuiltInMemoryEmbeddingProviders(api);
     registerShortTermPromotionDreaming(api);
+    registerMemoryAuditCron(api);
     api.registerMemoryCapability({
       promptBuilder: buildPromptSection,
       flushPlanResolver: buildMemoryFlushPlan,
@@ -197,6 +282,14 @@ export default definePluginEntry({
 
     api.registerTool((ctx) => createLazyMemoryGetTool(resolveMemoryToolOptions(ctx)), {
       names: ["memory_get"],
+    });
+
+    api.registerTool((ctx) => createLazyMemoryAuditCollectTool(resolveMemoryToolOptions(ctx)), {
+      names: ["memory_audit_collect"],
+    });
+
+    api.registerTool((ctx) => createLazyMemoryAuditStageTool(resolveMemoryToolOptions(ctx)), {
+      names: ["memory_audit_stage"],
     });
 
     api.registerCommand({

@@ -6,6 +6,7 @@ import {
   readFiniteNumberParam,
   readPositiveIntegerParam,
   readStringParam,
+  resolveSessionAgentIds,
   type MemoryCorpusSearchResult,
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
@@ -15,9 +16,18 @@ import type {
 } from "openclaw/plugin-sdk/memory-core-host-runtime-files";
 import {
   resolveMemoryCorePluginConfig,
+  resolveMemoryAuditConfig,
   resolveMemoryDreamingConfig,
   resolveMemoryDeepDreamingConfig,
 } from "openclaw/plugin-sdk/memory-core-host-status";
+import type { AnyAgentTool } from "openclaw/plugin-sdk/plugin-entry";
+import { Type } from "typebox";
+import {
+  collectMemoryAuditContext,
+  stageMemoryAuditSuggestions,
+  type MemoryAuditAction,
+  type MemoryAuditSurfaceKind,
+} from "./memory-audit.js";
 import { filterMemorySearchHitsBySessionVisibility } from "./session-search-visibility.js";
 import { recordShortTermRecalls } from "./short-term-promotion.js";
 import {
@@ -41,6 +51,54 @@ import {
 type MemorySearchToolResult =
   | (MemorySearchResult & { corpus: MemorySource })
   | MemoryCorpusSearchResult;
+
+const MemoryAuditCollectSchema = Type.Object({
+  cadence: Type.Optional(Type.String()),
+  limit: Type.Optional(Type.Number()),
+});
+
+const MemoryAuditStageSchema = Type.Object({
+  action: Type.String(),
+  text: Type.Optional(Type.String()),
+  rationale: Type.Optional(Type.String()),
+  confidence: Type.Optional(Type.Number()),
+  sourceSurfaceId: Type.Optional(Type.String()),
+  sourceStartLine: Type.Optional(Type.Number()),
+  sourceEndLine: Type.Optional(Type.Number()),
+  sourceHash: Type.Optional(Type.String()),
+  targetSurfaceId: Type.Optional(Type.String()),
+  targetKind: Type.Optional(Type.String()),
+  targetAgentId: Type.Optional(Type.String()),
+  targetPath: Type.Optional(Type.String()),
+  targetWorkspaceDir: Type.Optional(Type.String()),
+});
+
+function resolveAuditToolContext(options: {
+  config?: OpenClawConfig;
+  getConfig?: () => OpenClawConfig | undefined;
+  agentId?: string;
+  agentSessionKey?: string;
+}) {
+  const cfg = options.getConfig?.() ?? options.config;
+  if (!cfg) {
+    return null;
+  }
+  const pluginConfig = resolveMemoryCorePluginConfig(cfg);
+  const audit = resolveMemoryAuditConfig({ pluginConfig, cfg });
+  if (!audit.enabled) {
+    return null;
+  }
+  const { defaultAgentId, sessionAgentId } = resolveSessionAgentIds({
+    sessionKey: options.agentSessionKey,
+    config: cfg,
+    agentId: options.agentId,
+  });
+  const auditAgentId = audit.agentId ?? defaultAgentId;
+  if (sessionAgentId !== auditAgentId) {
+    return null;
+  }
+  return { cfg, audit, auditAgentId };
+}
 
 function sortMemorySearchToolResults<T extends { score: number; path: string }>(results: T[]): T[] {
   return results.toSorted((left, right) => {
@@ -510,4 +568,115 @@ export function createMemoryGetTool(options: {
         });
       },
   });
+}
+
+export function createMemoryAuditCollectTool(options: {
+  config?: OpenClawConfig;
+  getConfig?: () => OpenClawConfig | undefined;
+  agentId?: string;
+  agentSessionKey?: string;
+}): AnyAgentTool | null {
+  const ctx = resolveAuditToolContext(options);
+  if (!ctx) {
+    return null;
+  }
+  return {
+    label: "Memory Audit Collect",
+    name: "memory_audit_collect",
+    description:
+      "Collect durable memory surfaces for a human-approved memory quality audit. Use this before staging add, edit, delete, or move recommendations.",
+    parameters: MemoryAuditCollectSchema,
+    execute: async (_toolCallId, params) => {
+      const latestCtx = resolveAuditToolContext(options) ?? ctx;
+      const rawParams = asToolParamsRecord(params);
+      const cadenceRaw = readStringParam(rawParams, "cadence");
+      const cadence =
+        cadenceRaw === "daily" || cadenceRaw === "weekly" || cadenceRaw === "manual"
+          ? cadenceRaw
+          : "manual";
+      const limit = readNumberParam(rawParams, "limit", { integer: true });
+      return jsonResult(
+        await collectMemoryAuditContext({
+          cfg: latestCtx.cfg,
+          auditAgentId: latestCtx.auditAgentId,
+          cadence,
+          limit: limit ?? undefined,
+        }),
+      );
+    },
+  };
+}
+
+export function createMemoryAuditStageTool(options: {
+  config?: OpenClawConfig;
+  getConfig?: () => OpenClawConfig | undefined;
+  agentId?: string;
+  agentSessionKey?: string;
+}): AnyAgentTool | null {
+  const ctx = resolveAuditToolContext(options);
+  if (!ctx) {
+    return null;
+  }
+  return {
+    label: "Memory Audit Stage",
+    name: "memory_audit_stage",
+    description:
+      "Stage one human-approved memory audit recommendation. Supports add, edit, delete, and move actions across MEMORY.md, USER.md, TOOLS.md, and shared memory.",
+    parameters: MemoryAuditStageSchema,
+    execute: async (_toolCallId, params) => {
+      const latestCtx = resolveAuditToolContext(options) ?? ctx;
+      const rawParams = asToolParamsRecord(params);
+      const action = readStringParam(rawParams, "action", { required: true }) as MemoryAuditAction;
+      const text = readStringParam(rawParams, "text");
+      const rationale = readStringParam(rawParams, "rationale");
+      const confidence = readNumberParam(rawParams, "confidence");
+      const sourceSurfaceId = readStringParam(rawParams, "sourceSurfaceId");
+      const sourceStartLine = readNumberParam(rawParams, "sourceStartLine", { integer: true });
+      const sourceEndLine = readNumberParam(rawParams, "sourceEndLine", { integer: true });
+      const sourceHash = readStringParam(rawParams, "sourceHash");
+      const targetSurfaceId = readStringParam(rawParams, "targetSurfaceId");
+      const targetKind = readStringParam(rawParams, "targetKind") as
+        | MemoryAuditSurfaceKind
+        | undefined;
+      const targetAgentId = readStringParam(rawParams, "targetAgentId");
+      const targetPath = readStringParam(rawParams, "targetPath");
+      const targetWorkspaceDir = readStringParam(rawParams, "targetWorkspaceDir");
+      const summary = await stageMemoryAuditSuggestions({
+        cfg: latestCtx.cfg,
+        reviewerAgentId: latestCtx.auditAgentId,
+        suggestions: [
+          {
+            action,
+            ...(text ? { text } : {}),
+            ...(rationale ? { rationale } : {}),
+            ...(typeof confidence === "number" ? { confidence } : {}),
+            ...(sourceSurfaceId &&
+            typeof sourceStartLine === "number" &&
+            typeof sourceEndLine === "number"
+              ? {
+                  source: {
+                    surfaceId: sourceSurfaceId,
+                    startLine: sourceStartLine,
+                    endLine: sourceEndLine,
+                    ...(sourceHash ? { hash: sourceHash } : {}),
+                  },
+                }
+              : {}),
+            target: {
+              ...(targetSurfaceId ? { surfaceId: targetSurfaceId } : {}),
+              ...(targetKind ? { kind: targetKind } : {}),
+              ...(targetAgentId ? { agentId: targetAgentId } : {}),
+              ...(targetPath ? { path: targetPath } : {}),
+              ...(targetWorkspaceDir ? { workspaceDir: targetWorkspaceDir } : {}),
+            },
+          },
+        ],
+      });
+      return jsonResult({
+        pending: summary.pending,
+        total: summary.total,
+        suggestions: summary.suggestions.slice(0, 20),
+      });
+    },
+  };
 }
