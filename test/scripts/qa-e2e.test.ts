@@ -1,5 +1,4 @@
 import { describe, expect, it } from "vitest";
-
 import { enablePrivateQaScriptEnv, resolveQaE2eOutputPath } from "../../scripts/qa-e2e.js";
 
 describe("qa-e2e script", () => {

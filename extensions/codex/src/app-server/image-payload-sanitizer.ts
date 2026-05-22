@@ -105,8 +105,7 @@ function parseImageDataUrl(value: string):
 
 function metadataAllowsImageBase64(metadata: string[]): boolean {
   const [mimeType, ...options] = metadata;
-  const isImageMimeType =
-    mimeType !== undefined && mimeType.toLowerCase().startsWith("image/");
+  const isImageMimeType = mimeType !== undefined && mimeType.toLowerCase().startsWith("image/");
   return isImageMimeType && options.some((part) => part.toLowerCase() === "base64");
 }
 

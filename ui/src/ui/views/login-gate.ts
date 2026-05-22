@@ -1,6 +1,6 @@
 import { html } from "lit";
 import { ConnectErrorDetailCodes } from "../../../../src/gateway/protocol/connect-error-details.js";
-import { t } from "../../i18n/index.ts";
+import { i18n, isSupportedLocale, SUPPORTED_LOCALES, t, type Locale } from "../../i18n/index.ts";
 import type { AppViewState } from "../app-view-state.ts";
 import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../external-link.ts";
 import { icons } from "../icons.ts";
@@ -279,6 +279,9 @@ export function renderLoginGate(state: AppViewState) {
     hasToken: Boolean(state.settings.token.trim()),
     hasPassword: Boolean(state.password.trim()),
   });
+  const currentLocale = isSupportedLocale(state.settings.locale)
+    ? state.settings.locale
+    : i18n.getLocale();
 
   return html`
     <div class="login-gate">
@@ -367,6 +370,24 @@ export function renderLoginGate(state: AppViewState) {
                 ${state.loginShowGatewayPassword ? icons.eye : icons.eyeOff}
               </button>
             </div>
+          </label>
+          <label class="field">
+            <span>${t("overview.access.language")}</span>
+            <select
+              .value=${currentLocale}
+              @change=${(e: Event) => {
+                const v = (e.target as HTMLSelectElement).value as Locale;
+                void i18n.setLocale(v);
+                state.applySettings({ ...state.settings, locale: v });
+              }}
+            >
+              ${SUPPORTED_LOCALES.map((loc) => {
+                const key = loc.replace(/-([a-zA-Z])/g, (_, c) => c.toUpperCase());
+                return html`<option value=${loc} ?selected=${currentLocale === loc}>
+                  ${t(`languages.${key}`)}
+                </option>`;
+              })}
+            </select>
           </label>
           <button class="btn primary login-gate__connect" @click=${() => state.connect()}>
             ${t("common.connect")}

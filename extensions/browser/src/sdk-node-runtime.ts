@@ -38,7 +38,10 @@ function createTimeoutAbortSignal(timeoutMs: number, label: string | undefined) 
   return { controller, error, timer };
 }
 
-function waitForAbort(signal: AbortSignal, fallback: Error): {
+function waitForAbort(
+  signal: AbortSignal,
+  fallback: Error,
+): {
   promise: Promise<never>;
   cleanup: () => void;
 } {

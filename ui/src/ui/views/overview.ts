@@ -16,6 +16,7 @@ import type {
   SessionsUsageResult,
   SkillStatusReport,
 } from "../types.ts";
+import { viDashboardText as uiText } from "../vi-dashboard-text.ts";
 import { renderConnectCommand } from "./connect-command.ts";
 import { renderOverviewAttention } from "./overview-attention.ts";
 import { renderOverviewCards } from "./overview-cards.ts";
@@ -155,8 +156,10 @@ export function renderOverview(props: OverviewProps) {
         <div class="muted" style="margin-top: 8px">
           ${t("overview.auth.required")}
           <div style="margin-top: 6px">
-            <span class="mono">openclaw dashboard --no-open</span> → tokenized URL<br />
-            <span class="mono">openclaw doctor --generate-gateway-token</span> → set token
+            <span class="mono">openclaw dashboard --no-open</span> →
+            ${uiText("tokenized URL", "URL có token")}<br />
+            <span class="mono">openclaw doctor --generate-gateway-token</span> →
+            ${uiText("set token", "đặt token")}
           </div>
           <div style="margin-top: 6px">
             <a
@@ -241,10 +244,13 @@ export function renderOverview(props: OverviewProps) {
     }
     return html`
       <div class="muted" style="margin-top: 8px">
-        Auth token must be passed as a URL fragment:
-        <span class="mono">#token=&lt;token&gt;</span>. Query parameters (<span class="mono"
-          >?token=</span
-        >) may appear in server logs.
+        ${uiText(
+          "Auth token must be passed as a URL fragment:",
+          "Token xác thực phải được truyền qua URL fragment:",
+        )}
+        <span class="mono">#token=&lt;token&gt;</span>.
+        ${uiText("Query parameters", "Tham số query")} (<span class="mono">?token=</span>)
+        ${uiText("may appear in server logs.", "có thể xuất hiện trong log server.")}
       </div>
     `;
   })();

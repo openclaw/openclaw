@@ -3,6 +3,7 @@ import { formatDurationCompact } from "../../../../src/infra/format-time/format-
 import { t } from "../../i18n/index.ts";
 import { normalizeLowercaseStringOrEmpty } from "../string-coerce.ts";
 import { parseToolSummary } from "../usage-helpers.ts";
+import { viDashboardText as uiText } from "../vi-dashboard-text.ts";
 import { charsToTokens, formatCost, formatTokens } from "./usage-metrics.ts";
 import { renderInsightList } from "./usage-render-overview.ts";
 import {
@@ -1117,7 +1118,7 @@ function renderSessionLogsCompact(
         <select
           multiple
           size="4"
-          aria-label="Filter by role"
+          aria-label=${uiText("Filter by role", "Lọc theo vai trò")}
           @change=${(event: Event) =>
             onFilterRolesChange(
               Array.from((event.target as HTMLSelectElement).selectedOptions).map(
@@ -1141,7 +1142,7 @@ function renderSessionLogsCompact(
         <select
           multiple
           size="4"
-          aria-label="Filter by tool"
+          aria-label=${uiText("Filter by tool", "Lọc theo công cụ")}
           @change=${(event: Event) =>
             onFilterToolsChange(
               Array.from((event.target as HTMLSelectElement).selectedOptions).map(

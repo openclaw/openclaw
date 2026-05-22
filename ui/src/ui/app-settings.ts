@@ -76,6 +76,7 @@ import { startThemeTransition, type ThemeTransitionContext } from "./theme-trans
 import { resolveTheme, type ResolvedTheme, type ThemeMode, type ThemeName } from "./theme.ts";
 import type { AgentsListResult, AttentionItem } from "./types.ts";
 import { normalizeLocalUserIdentity } from "./user-identity.ts";
+import { viDashboardText as uiText } from "./vi-dashboard-text.ts";
 import { resetChatViewState } from "./views/chat.ts";
 
 export { setLastActiveSessionKey } from "./app-last-active-session.ts";
@@ -818,7 +819,7 @@ function buildAttentionItems(host: SettingsAppHost) {
     items.push({
       severity: "error",
       icon: "x",
-      title: "Gateway Error",
+      title: uiText("Gateway Error", "Lỗi Gateway"),
       description: host.lastError,
     });
   }
@@ -829,9 +830,11 @@ function buildAttentionItems(host: SettingsAppHost) {
     items.push({
       severity: "warning",
       icon: "key",
-      title: "Missing operator.read scope",
-      description:
+      title: uiText("Missing operator.read scope", "Thiếu quyền operator.read"),
+      description: uiText(
         "This connection does not have the operator.read scope. Some features may be unavailable.",
+        "Kết nối này chưa có quyền operator.read. Một số tính năng có thể không khả dụng.",
+      ),
       href: "https://docs.openclaw.ai/web/dashboard",
       external: true,
     });
@@ -841,11 +844,14 @@ function buildAttentionItems(host: SettingsAppHost) {
   const missingDeps = skills.filter((s) => !s.disabled && hasMissingSkillDependencies(s.missing));
   if (missingDeps.length > 0) {
     const names = missingDeps.slice(0, 3).map((s) => s.name);
-    const more = missingDeps.length > 3 ? ` +${missingDeps.length - 3} more` : "";
+    const more =
+      missingDeps.length > 3
+        ? uiText(` +${missingDeps.length - 3} more`, ` +${missingDeps.length - 3} mục nữa`)
+        : "";
     items.push({
       severity: "warning",
       icon: "zap",
-      title: "Skills with missing dependencies",
+      title: uiText("Skills with missing dependencies", "Kỹ năng thiếu phụ thuộc"),
       description: `${names.join(", ")}${more}`,
     });
   }
@@ -855,7 +861,10 @@ function buildAttentionItems(host: SettingsAppHost) {
     items.push({
       severity: "warning",
       icon: "shield",
-      title: `${blocked.length} skill${blocked.length > 1 ? "s" : ""} blocked`,
+      title: uiText(
+        `${blocked.length} skill${blocked.length > 1 ? "s" : ""} blocked`,
+        `${blocked.length} kỹ năng bị chặn`,
+      ),
       description: blocked.map((s) => s.name).join(", "),
     });
   }
@@ -866,7 +875,10 @@ function buildAttentionItems(host: SettingsAppHost) {
     items.push({
       severity: "error",
       icon: "clock",
-      title: `${failedCron.length} cron job${failedCron.length > 1 ? "s" : ""} failed`,
+      title: uiText(
+        `${failedCron.length} cron job${failedCron.length > 1 ? "s" : ""} failed`,
+        `${failedCron.length} cron job lỗi`,
+      ),
       description: failedCron.map((j) => j.name).join(", "),
     });
   }
@@ -879,7 +891,10 @@ function buildAttentionItems(host: SettingsAppHost) {
     items.push({
       severity: "warning",
       icon: "clock",
-      title: `${overdue.length} overdue job${overdue.length > 1 ? "s" : ""}`,
+      title: uiText(
+        `${overdue.length} overdue job${overdue.length > 1 ? "s" : ""}`,
+        `${overdue.length} job quá hạn`,
+      ),
       description: overdue.map((j) => j.name).join(", "),
     });
   }

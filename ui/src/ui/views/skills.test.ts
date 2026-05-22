@@ -2,6 +2,7 @@
 
 import { render } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { i18n } from "../../i18n/index.ts";
 import type { SkillStatusEntry, SkillStatusReport } from "../types.ts";
 import { renderSkills, type SkillsProps } from "./skills.ts";
 
@@ -15,7 +16,7 @@ function createSkill(overrides: Partial<SkillStatusEntry> = {}): SkillStatusEntr
   return {
     name: "Repo Skill",
     description: "Skill description",
-    source: "workspace",
+    source: "openclaw-workspace",
     filePath: "/tmp/skill",
     baseDir: "/tmp",
     skillKey: "repo-skill",
@@ -91,11 +92,30 @@ function createProps(overrides: Partial<SkillsProps> = {}): SkillsProps {
 }
 
 describe("renderSkills", () => {
-  afterEach(() => {
+  afterEach(async () => {
     vi.restoreAllMocks();
     while (dialogRestores.length > 0) {
       dialogRestores.pop()?.();
     }
+    await i18n.setLocale("en");
+  });
+
+  it("resolves grouped labels from the active locale at render time", async () => {
+    const container = document.createElement("div");
+
+    await i18n.setLocale("vi");
+    render(renderSkills(createProps()), container);
+
+    expect(normalizeText(container)).toContain("Kỹ năng workspace");
+    expect(normalizeText(container)).toContain("Tất cả1");
+    expect(normalizeText(container)).toContain("Sẵn sàng1");
+
+    await i18n.setLocale("en");
+    render(renderSkills(createProps()), container);
+
+    expect(normalizeText(container)).toContain("Workspace Skills");
+    expect(normalizeText(container)).toContain("All1");
+    expect(normalizeText(container)).not.toContain("Kỹ năng workspace");
   });
 
   it("defers detail dialog opening until the dialog is connected", async () => {

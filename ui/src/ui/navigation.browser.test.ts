@@ -408,6 +408,7 @@ describe("control UI routing", () => {
     expect(topShell.firstElementChild).toBe(toggle);
     expect(topShell.querySelector(".topbar-nav-toggle")).toBe(toggle);
     expectElement(actions, ".topbar-search", HTMLElement);
+    expectElement(actions, ".topbar-locale__select", HTMLSelectElement);
     expect(toggle.getAttribute("aria-label")).toBe("Expand sidebar");
 
     const nav = expectElement(app, ".shell-nav", HTMLElement);

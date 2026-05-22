@@ -21,10 +21,7 @@ import {
   previewTaskFlowRegistryMaintenance,
   runTaskFlowRegistryMaintenance,
 } from "../tasks/task-flow-registry.maintenance.js";
-import {
-  listTaskAuditFindings,
-  summarizeTaskAuditFindings,
-} from "../tasks/task-registry.audit.js";
+import { listTaskAuditFindings, summarizeTaskAuditFindings } from "../tasks/task-registry.audit.js";
 import {
   getInspectableTaskAuditSummary,
   getInspectableTaskRegistrySummary,

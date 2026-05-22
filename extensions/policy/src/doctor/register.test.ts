@@ -233,11 +233,7 @@ describe("registerPolicyDoctorChecks", () => {
       "oc://policy.jsonc/mcp/servers/deny/#1",
     ],
     ["models array", { models: [] }, "oc://policy.jsonc/models"],
-    [
-      "models providers array",
-      { models: { providers: [] } },
-      "oc://policy.jsonc/models/providers",
-    ],
+    ["models providers array", { models: { providers: [] } }, "oc://policy.jsonc/models/providers"],
     [
       "models providers allow string",
       { models: { providers: { allow: "openai" } } },
@@ -1217,7 +1213,9 @@ describe("registerPolicyDoctorChecks", () => {
     );
     await fs.writeFile(join(workspaceDir, "TOOLS.md"), "## Tools\n\n### deploy\n", "utf-8");
 
-    const result = await runPolicyDoctorLint(ctx(configPath, cfgWithPolicy({ enabled: undefined })));
+    const result = await runPolicyDoctorLint(
+      ctx(configPath, cfgWithPolicy({ enabled: undefined })),
+    );
 
     expect(result.findings).toEqual([]);
   });

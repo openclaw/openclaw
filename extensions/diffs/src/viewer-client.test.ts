@@ -1,10 +1,7 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
-const VIEWER_CLIENT_SRC = readFileSync(
-  new URL("./viewer-client.ts", import.meta.url),
-  "utf8",
-);
+const VIEWER_CLIENT_SRC = readFileSync(new URL("./viewer-client.ts", import.meta.url), "utf8");
 
 const XSS_PATTERNS = ["onerror", "<script", "onclick", "javascript:", "onload"];
 
@@ -38,10 +35,9 @@ describe("createToolbarButton icon safety", () => {
 
   it("SVG strings in toolbarIconSvg contain no XSS patterns", () => {
     for (const pattern of XSS_PATTERNS) {
-      expect(
-        VIEWER_CLIENT_SRC.includes(pattern),
-        `source must not contain "${pattern}"`,
-      ).toBe(false);
+      expect(VIEWER_CLIENT_SRC.includes(pattern), `source must not contain "${pattern}"`).toBe(
+        false,
+      );
     }
   });
 

@@ -1,6 +1,7 @@
 /* @vitest-environment jsdom */
 import { render } from "lit";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
+import { i18n } from "../../i18n/index.ts";
 import { renderNodes, type NodesProps } from "./nodes.ts";
 
 function baseProps(overrides: Partial<NodesProps> = {}): NodesProps {
@@ -75,6 +76,35 @@ function getPendingDeviceDetails(container: Element): string[] {
 }
 
 describe("nodes devices pending rendering", () => {
+  afterEach(async () => {
+    await i18n.setLocale("en");
+  });
+
+  it("resolves exec approval option labels from the active locale at render time", async () => {
+    await i18n.setLocale("vi");
+    const container = renderNodesContainer({
+      execApprovalsForm: {
+        defaults: {
+          security: "deny",
+          ask: "on-miss",
+          askFallback: "deny",
+          autoAllowSkills: false,
+        },
+        agents: {},
+      },
+    });
+
+    const optionLabels = Array.from(container.querySelectorAll("option")).map((option) =>
+      option.textContent?.trim(),
+    );
+
+    expect(optionLabels).toContain("Từ chối");
+    expect(optionLabels).toContain("Danh sách cho phép");
+    expect(optionLabels).toContain("Khi thiếu");
+    expect(optionLabels).toContain("Luôn hỏi");
+    expect(optionLabels).not.toContain("Deny");
+  });
+
   it("shows requested and approved access for a scope upgrade", () => {
     const container = renderNodesContainer({
       devicesList: {

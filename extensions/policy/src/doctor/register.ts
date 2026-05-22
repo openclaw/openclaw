@@ -1,12 +1,12 @@
 import { basename, isAbsolute, resolve } from "node:path";
 import JSON5 from "json5";
-import { normalizeProviderId } from "openclaw/plugin-sdk/provider-model-shared";
 import {
   registerHealthCheck as registerPluginHealthCheck,
   type HealthCheck,
   type HealthCheckContext,
   type HealthFinding,
 } from "openclaw/plugin-sdk/health";
+import { normalizeProviderId } from "openclaw/plugin-sdk/provider-model-shared";
 import {
   collectPolicyEvidence,
   createPolicyAttestation,

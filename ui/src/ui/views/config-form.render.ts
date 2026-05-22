@@ -2,8 +2,16 @@ import { html, nothing } from "lit";
 import { icons } from "../icons.ts";
 import { normalizeLowercaseStringOrEmpty } from "../string-coerce.ts";
 import type { ConfigUiHints } from "../types.ts";
+import { viDashboardText } from "../vi-dashboard-text.ts";
 import { matchesNodeSearch, parseConfigSearchQuery, renderNode } from "./config-form.node.ts";
-import { hintForPath, humanize, schemaType, type JsonSchema } from "./config-form.shared.ts";
+import {
+  hintForPath,
+  humanize,
+  schemaType,
+  translateConfigHelp,
+  translateConfigLabel,
+  type JsonSchema,
+} from "./config-form.shared.ts";
 
 export type ConfigFormProps = {
   schema: JsonSchema | null;
@@ -301,13 +309,24 @@ export const SECTION_META: Record<string, { label: string; description: string }
   browser: { label: "Browser", description: "Browser automation settings" },
   ui: { label: "UI", description: "User interface preferences" },
   models: { label: "Models", description: "AI model configurations and providers" },
-  bindings: { label: "Bindings", description: "Key bindings and shortcuts" },
+  bindings: {
+    label: "Bindings",
+    description:
+      "Top-level binding rules for routing and persistent ACP conversation ownership. Use type=route for normal routing and type=acp for persistent ACP harness bindings.",
+  },
   broadcast: { label: "Broadcast", description: "Broadcast and notification settings" },
   audio: { label: "Audio", description: "Audio input/output settings" },
   session: { label: "Session", description: "Session management and persistence" },
   cron: { label: "Cron", description: "Scheduled tasks and automation" },
+  approvals: { label: "Approvals", description: "Approval routing and forwarding controls" },
   web: { label: "Web", description: "Web server and API settings" },
+  nodeHost: {
+    label: "Node Host",
+    description: "Node host controls and exposed local capabilities",
+  },
   discovery: { label: "Discovery", description: "Service discovery and networking" },
+  memory: { label: "Memory", description: "Memory indexing, recall, and persistence" },
+  media: { label: "Media", description: "Media generation and processing settings" },
   canvasHost: { label: "Canvas Host", description: "Canvas rendering and display" },
   talk: { label: "Talk", description: "Voice and speech settings" },
   plugins: { label: "Plugins", description: "Plugin management and extensions" },
@@ -362,12 +381,21 @@ function matchesSearch(params: {
 
 export function renderConfigForm(props: ConfigFormProps) {
   if (!props.schema) {
-    return html` <div class="muted">Schema unavailable.</div> `;
+    return html`
+      <div class="muted">${viDashboardText("Schema unavailable.", "Không có schema.")}</div>
+    `;
   }
   const schema = props.schema;
   const value = props.value ?? {};
   if (schemaType(schema) !== "object" || !schema.properties) {
-    return html` <div class="callout danger">Unsupported schema. Use Raw.</div> `;
+    return html`
+      <div class="callout danger">
+        ${viDashboardText(
+          "Unsupported schema. Use Raw.",
+          "Schema không được hỗ trợ. Hãy dùng chế độ thô.",
+        )}
+      </div>
+    `;
   }
   const unsupported = new Set(props.unsupportedPaths ?? []);
   const properties = schema.properties;
@@ -427,7 +455,12 @@ export function renderConfigForm(props: ConfigFormProps) {
       <div class="config-empty">
         <div class="config-empty__icon">${icons.search}</div>
         <div class="config-empty__text">
-          ${searchQuery ? `No settings match "${searchQuery}"` : "No settings in this section"}
+          ${searchQuery
+            ? viDashboardText(
+                `No settings match "${searchQuery}"`,
+                `Không có cài đặt nào khớp "${searchQuery}"`,
+              )
+            : viDashboardText("No settings in this section", "Không có cài đặt trong mục này")}
         </div>
       </div>
     `;
@@ -483,8 +516,9 @@ export function renderConfigForm(props: ConfigFormProps) {
         ? (() => {
             const { sectionKey, subsectionKey, schema: node } = subsectionContext;
             const hint = hintForPath([sectionKey, subsectionKey], props.uiHints);
-            const label = hint?.label ?? node.title ?? humanize(subsectionKey);
-            const description = hint?.help ?? node.description ?? "";
+            const label =
+              translateConfigLabel(hint?.label ?? node.title ?? humanize(subsectionKey)) ?? "";
+            const description = translateConfigHelp(hint?.help ?? node.description) ?? "";
             const sectionValue = value[sectionKey];
             const scopedValue =
               sectionValue && typeof sectionValue === "object"
@@ -503,15 +537,15 @@ export function renderConfigForm(props: ConfigFormProps) {
           })()
         : filteredEntries.map(([key, node]) => {
             const meta = SECTION_META[key] ?? {
-              label: key.charAt(0).toUpperCase() + key.slice(1),
-              description: node.description ?? "",
+              label: translateConfigLabel(key.charAt(0).toUpperCase() + key.slice(1)) ?? key,
+              description: translateConfigHelp(node.description) ?? "",
             };
 
             return renderSectionCard({
               id: `config-section-${key}`,
               sectionKey: key,
-              label: meta.label,
-              description: meta.description,
+              label: translateConfigLabel(meta.label) ?? meta.label,
+              description: translateConfigHelp(meta.description) ?? meta.description,
               showHeader: activeSection == null,
               node,
               nodeValue: value[key],

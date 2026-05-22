@@ -2,6 +2,7 @@ import { html, nothing } from "lit";
 import { t } from "../../i18n/index.ts";
 import { normalizeLowercaseStringOrEmpty } from "../string-coerce.ts";
 import type { LogEntry, LogLevel } from "../types.ts";
+import { viDashboardText as uiText } from "../vi-dashboard-text.ts";
 
 const LEVELS: LogLevel[] = ["trace", "debug", "info", "warn", "error", "fatal"];
 
@@ -58,8 +59,10 @@ export function renderLogs(props: LogsProps) {
     <section class="card">
       <div class="row" style="justify-content: space-between;">
         <div>
-          <div class="card-title">Logs</div>
-          <div class="card-sub">Gateway file logs (JSONL).</div>
+          <div class="card-title">${uiText("Logs", "Nhật ký")}</div>
+          <div class="card-sub">
+            ${uiText("Gateway file logs (JSONL).", "Nhật ký file Gateway (JSONL).")}
+          </div>
         </div>
         <div class="row" style="gap: 8px;">
           <button class="btn" ?disabled=${props.loading} @click=${props.onRefresh}>
@@ -74,22 +77,22 @@ export function renderLogs(props: LogsProps) {
                 exportLabel,
               )}
           >
-            Export ${exportLabel}
+            ${uiText(`Export ${exportLabel}`, `Xuất ${exportLabel}`)}
           </button>
         </div>
       </div>
 
       <div class="filters" style="margin-top: 14px;">
         <label class="field" style="min-width: 220px;">
-          <span>Filter</span>
+          <span>${uiText("Filter", "Bộ lọc")}</span>
           <input
             .value=${props.filterText}
             @input=${(e: Event) => props.onFilterTextChange((e.target as HTMLInputElement).value)}
-            placeholder="Search logs"
+            placeholder=${uiText("Search logs", "Tìm nhật ký")}
           />
         </label>
         <label class="field checkbox">
-          <span>Auto-follow</span>
+          <span>${uiText("Auto-follow", "Tự theo dõi")}</span>
           <input
             type="checkbox"
             .checked=${props.autoFollow}
@@ -121,7 +124,10 @@ export function renderLogs(props: LogsProps) {
       ${props.truncated
         ? html`
             <div class="callout" style="margin-top: 10px">
-              Log output truncated; showing latest chunk.
+              ${uiText(
+                "Log output truncated; showing latest chunk.",
+                "Đầu ra nhật ký đã bị cắt; đang hiển thị phần mới nhất.",
+              )}
             </div>
           `
         : nothing}
@@ -131,7 +137,11 @@ export function renderLogs(props: LogsProps) {
 
       <div class="log-stream" style="margin-top: 12px;" @scroll=${props.onScroll}>
         ${filtered.length === 0
-          ? html` <div class="muted" style="padding: 12px">No log entries.</div> `
+          ? html`
+              <div class="muted" style="padding: 12px">
+                ${uiText("No log entries.", "Không có mục nhật ký.")}
+              </div>
+            `
           : filtered.map(
               (entry) => html`
                 <div class="log-row">

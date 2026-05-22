@@ -5,6 +5,7 @@ import { resolveEmbedSandbox, type EmbedSandboxMode } from "../embed-sandbox.ts"
 import { icons } from "../icons.ts";
 import { toSanitizedMarkdownHtml } from "../markdown.ts";
 import type { SidebarContent } from "../sidebar-content.ts";
+import { viDashboardText as uiText } from "../vi-dashboard-text.ts";
 
 function resolveSidebarCanvasSandbox(
   content: SidebarContent,
@@ -30,17 +31,17 @@ export function renderMarkdownSidebar(props: MarkdownSidebarProps) {
       <div class="sidebar-header">
         <div class="sidebar-title">
           ${content?.kind === "canvas"
-            ? content.title?.trim() || "Render Preview"
+            ? content.title?.trim() || uiText("Render Preview", "Xem trước render")
             : content?.kind === "markdown"
-              ? "Markdown Preview"
-              : "Tool Details"}
+              ? uiText("Markdown Preview", "Xem trước Markdown")
+              : uiText("Tool Details", "Chi tiết công cụ")}
         </div>
         <button
           @click=${props.onClose}
           class="btn"
           type="button"
-          title="Close sidebar"
-          aria-label="Close sidebar"
+          title=${uiText("Close sidebar", "Đóng thanh bên")}
+          aria-label=${uiText("Close sidebar", "Đóng thanh bên")}
         >
           ${icons.x}
         </button>
@@ -55,7 +56,7 @@ export function renderMarkdownSidebar(props: MarkdownSidebarProps) {
                 type="button"
                 style="margin-top: 12px;"
               >
-                View Raw Text
+                ${uiText("View Raw Text", "Xem văn bản thô")}
               </button>
             `
           : content
@@ -65,7 +66,8 @@ export function renderMarkdownSidebar(props: MarkdownSidebarProps) {
                     <div class="chat-tool-card__preview-panel" data-side="front">
                       <iframe
                         class="chat-tool-card__preview-frame"
-                        title=${content.title?.trim() || "Render preview"}
+                        title=${content.title?.trim() ||
+                        uiText("Render preview", "Xem trước render")}
                         sandbox=${resolveSidebarCanvasSandbox(
                           content,
                           props.embedSandboxMode ?? "scripts",
@@ -84,7 +86,7 @@ export function renderMarkdownSidebar(props: MarkdownSidebarProps) {
                       ? html`
                           <div style="margin-top: 12px;">
                             <button @click=${props.onViewRawText} class="btn" type="button">
-                              View Raw Text
+                              ${uiText("View Raw Text", "Xem văn bản thô")}
                             </button>
                           </div>
                         `
@@ -97,14 +99,17 @@ export function renderMarkdownSidebar(props: MarkdownSidebarProps) {
                       <div class="sidebar-markdown-shell__intro">
                         <div class="sidebar-markdown-shell__eyebrow">
                           ${icons.scrollText}
-                          <span>Rendered Markdown</span>
+                          <span>${uiText("Rendered Markdown", "Markdown đã render")}</span>
                         </div>
                         <div class="sidebar-markdown-shell__hint">
-                          Sanitized rich-text preview for quick reading.
+                          ${uiText(
+                            "Sanitized rich-text preview for quick reading.",
+                            "Bản xem trước rich-text đã làm sạch để đọc nhanh.",
+                          )}
                         </div>
                       </div>
                       <button @click=${props.onViewRawText} class="btn btn--sm" type="button">
-                        View Raw Text
+                        ${uiText("View Raw Text", "Xem văn bản thô")}
                       </button>
                     </div>
                     <article class="sidebar-markdown-reader sidebar-markdown">
@@ -112,7 +117,9 @@ export function renderMarkdownSidebar(props: MarkdownSidebarProps) {
                     </article>
                   </section>
                 `
-            : html` <div class="muted">No content available</div> `}
+            : html`
+                <div class="muted">${uiText("No content available", "Không có nội dung")}</div>
+              `}
       </div>
     </div>
   `;
