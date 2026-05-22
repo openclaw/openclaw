@@ -77,6 +77,7 @@ import {
   writeClaudeAppServerBinding,
   type ClaudeAppServerBinding,
 } from "./thread-store.js";
+import { mirrorClaudeAppServerTranscript } from "./transcript-mirror.js";
 import type {
   ApprovalPolicy,
   DynamicToolCallParams,
@@ -350,6 +351,31 @@ export async function runClaudeAppServerAttempt(
             error: err,
           });
         }
+      }
+    }
+
+    // 7c. Mirror the turn's assistant + tool-result messages into the OpenClaw
+    //     session transcript so plugins (provenance/vestige/etc.) that hook
+    //     before_message_write get fired on Claude turns the same way they
+    //     fire on codex turns. Idempotency keys are derived from
+    //     threadId/turnId/role/index so replay or recovery doesn't
+    //     duplicate entries. Fire-and-forget: a mirror failure shouldn't
+    //     abort the turn result.
+    if (params.sessionFile && turnIdentity.turnId && !ac.signal.aborted) {
+      const sessionFileForMirror = params.sessionFile;
+      const turnIdForMirror = turnIdentity.turnId;
+      try {
+        await mirrorClaudeAppServerTranscript({
+          sessionFile: sessionFileForMirror,
+          sessionKey: sharedHookContext.sessionKey,
+          agentId: sharedHookContext.agentId,
+          threadId,
+          turnId: turnIdForMirror,
+          lifecycleOutcome: lifecycle.outcome,
+          acc: accumulated,
+        });
+      } catch (err) {
+        embeddedAgentLog.warn("claude-app-server: transcript mirror failed", { error: err });
       }
     }
 
