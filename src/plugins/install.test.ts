@@ -14,6 +14,7 @@ import {
   installPluginFromInstalledPackageDir,
   PLUGIN_INSTALL_ERROR_CODE,
   resolvePluginInstallDir,
+  shouldPreserveManagedDependencyAgainstDowngrade,
 } from "./install.js";
 import { packToArchive } from "./test-helpers/archive-fixtures.js";
 import { createSuiteTempRootTracker } from "./test-helpers/fs-fixtures.js";
@@ -633,6 +634,41 @@ beforeEach(() => {
   mockSuccessfulCommandRun(run);
   vi.unstubAllEnvs();
   resolveCompatibilityHostVersionMock.mockReturnValue("2026.3.28-beta.1");
+});
+
+describe("shouldPreserveManagedDependencyAgainstDowngrade", () => {
+  const guard = shouldPreserveManagedDependencyAgainstDowngrade;
+
+  it("preserves a newer installed dependency when update would downgrade it (#85184)", () => {
+    expect(guard({ mode: "update", installedVersion: "0.11.2", incomingVersion: "0.10.0" })).toBe(true);
+  });
+
+  it("catches patch-level downgrades", () => {
+    expect(guard({ mode: "update", installedVersion: "0.11.2", incomingVersion: "0.11.1" })).toBe(true);
+  });
+
+  it("allows a normal upgrade", () => {
+    expect(guard({ mode: "update", installedVersion: "0.11.2", incomingVersion: "0.12.0" })).toBe(false);
+  });
+
+  it("allows reinstalling the same version", () => {
+    expect(guard({ mode: "update", installedVersion: "0.11.2", incomingVersion: "0.11.2" })).toBe(false);
+  });
+
+  it("never guards outside update mode", () => {
+    expect(guard({ mode: "install", installedVersion: "0.11.2", incomingVersion: "0.10.0" })).toBe(false);
+    expect(guard({ mode: undefined, installedVersion: "0.11.2", incomingVersion: "0.10.0" })).toBe(false);
+  });
+
+  it("does not guard when there is no installed version", () => {
+    expect(guard({ mode: "update", installedVersion: undefined, incomingVersion: "0.10.0" })).toBe(false);
+  });
+
+  it("does not guard when either version is unparseable (preserves original behavior)", () => {
+    expect(guard({ mode: "update", installedVersion: "latest", incomingVersion: "0.10.0" })).toBe(false);
+    expect(guard({ mode: "update", installedVersion: "0.11.2", incomingVersion: "^0.10.0" })).toBe(false);
+    expect(guard({ mode: "update", installedVersion: "0.11.2", incomingVersion: undefined })).toBe(false);
+  });
 });
 
 describe("installPluginFromArchive", () => {
