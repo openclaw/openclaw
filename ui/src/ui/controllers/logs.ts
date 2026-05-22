@@ -1,3 +1,4 @@
+import { stripAnsi } from "../../../../src/terminal/ansi.js";
 import type { GatewayBrowserClient } from "../gateway.ts";
 import { normalizeLowercaseStringOrEmpty } from "../string-coerce.ts";
 import type { LogEntry, LogLevel } from "../types.ts";
@@ -22,10 +23,9 @@ export type LogsState = {
 
 const LOG_BUFFER_LIMIT = 2000;
 const LEVELS = new Set<LogLevel>(["trace", "debug", "info", "warn", "error", "fatal"]);
-const ANSI_SEQUENCE_RE = /\u001b(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])/g;
 
 function stripAnsiSequences(value: string): string {
-  return value.replace(ANSI_SEQUENCE_RE, "");
+  return stripAnsi(value);
 }
 
 function parseMaybeJsonString(value: unknown) {

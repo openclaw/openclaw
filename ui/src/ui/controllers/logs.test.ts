@@ -19,4 +19,10 @@ describe("parseLogLine", () => {
   it("strips ANSI escape sequences from plain log lines", () => {
     expect(parseLogLine("\u001b[33mwarning\u001b[39m").message).toBe("warning");
   });
+
+  it("strips OSC hyperlink escape payloads from displayed log fields", () => {
+    const link = "\u001b]8;;https://example.test\u0007docs\u001b]8;;\u0007";
+
+    expect(parseLogLine(`${link} ready`).message).toBe("docs ready");
+  });
 });
