@@ -1019,14 +1019,13 @@ export async function startGatewayPostAttachRuntime(
     });
 
   void sidecarsPromise
-    .then(async (sidecarsResult) => {
+    .then(async () => {
       if (params.minimalTestGateway) {
         return;
       }
       const { clearCurrentProviderAuthState, warmCurrentProviderAuthState } =
         await import("../agents/model-provider-auth.js");
       const { setAuthProfileFailureHook } = await import("../agents/auth-profiles.js");
-      const { watchAuthProfilesForChanges } = await import("../agents/auth-profiles-watcher.js");
       const scheduleAuthMapRewarm = (reason: string) => {
         const startMs = Date.now();
         void warmCurrentProviderAuthState(params.cfgAtStart)
@@ -1042,19 +1041,6 @@ export async function startGatewayPostAttachRuntime(
       setAuthProfileFailureHook(() => {
         clearCurrentProviderAuthState();
         scheduleAuthMapRewarm("auth-profile-failure");
-      });
-      const authProfilesWatcher = watchAuthProfilesForChanges({
-        cfg: params.cfgAtStart,
-        onChange: () => {
-          clearCurrentProviderAuthState();
-          scheduleAuthMapRewarm("auth-profiles.json change");
-        },
-        log: params.log,
-      });
-      sidecarsResult.postReadySidecars.push({
-        stop: () => {
-          void authProfilesWatcher.stop();
-        },
       });
       const startMs = Date.now();
       await warmCurrentProviderAuthState(params.cfgAtStart);
