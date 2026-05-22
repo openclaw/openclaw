@@ -29,6 +29,7 @@ import {
   normalizeThinkingOptionValue,
 } from "../thinking-labels.ts";
 import {
+  type ThinkingCatalogEntry,
   listThinkingLevelLabels,
   normalizeThinkLevel,
   resolveThinkingDefaultForModel,
@@ -673,26 +674,51 @@ function buildThinkingOptions(
   return options;
 }
 
+function isOffThinkingOption(value: string | null | undefined): boolean {
+  return normalizeThinkingOptionValue(value ?? "") === "off";
+}
+
+function isOffOnlyThinkingLevels(levels: readonly GatewayThinkingLevelOption[]): boolean {
+  return levels.every((level) => isOffThinkingOption(level.id || level.label));
+}
+
 function resolveThinkingLevelOptions(
   activeRow: SessionsListResult["sessions"][number] | undefined,
   defaults: SessionsListResult["defaults"] | undefined,
   provider: string | null,
   model: string | null,
+  catalog: readonly ThinkingCatalogEntry[],
 ): GatewayThinkingLevelOption[] {
-  if (activeRow?.thinkingLevels?.length) {
-    return activeRow.thinkingLevels;
-  }
   const sessionModelMatchesDefaults =
     (!activeRow?.modelProvider || activeRow.modelProvider === defaults?.modelProvider) &&
     (!activeRow?.model || activeRow.model === defaults?.model);
-  if (sessionModelMatchesDefaults && defaults?.thinkingLevels?.length) {
-    return defaults.thinkingLevels;
+  const catalogEntry =
+    provider && model
+      ? catalog.find((entry) => entry.provider === provider && entry.id === model)
+      : undefined;
+  const explicitLevels =
+    (activeRow?.thinkingLevels?.length ? activeRow.thinkingLevels : null) ??
+    (sessionModelMatchesDefaults && defaults?.thinkingLevels?.length
+      ? defaults.thinkingLevels
+      : null);
+  if (explicitLevels) {
+    if (catalogEntry?.reasoning === false && isOffOnlyThinkingLevels(explicitLevels)) {
+      return [];
+    }
+    return explicitLevels;
   }
-  const labels =
+  const explicitLabels =
     (activeRow?.thinkingOptions?.length ? activeRow.thinkingOptions : null) ??
     (sessionModelMatchesDefaults && defaults?.thinkingOptions?.length
       ? defaults.thinkingOptions
-      : null) ??
+      : null);
+  if (catalogEntry?.reasoning === false) {
+    if (!explicitLabels || explicitLabels.every(isOffThinkingOption)) {
+      return [];
+    }
+  }
+  const labels =
+    explicitLabels ??
     (provider && model ? listThinkingLevelLabels(provider, model) : listThinkingLevelLabels());
   return labels.map((label) => ({
     id: normalizeThinkLevel(label) ?? normalizeLowercaseStringOrEmpty(label),
@@ -713,6 +739,7 @@ export function resolveChatThinkingSelectState(state: AppViewState): ChatThinkin
     state.sessionsResult?.defaults,
     provider,
     model,
+    state.chatModelCatalog ?? [],
   );
   const defaultLevel =
     activeRow?.thinkingDefault ??
@@ -724,10 +751,11 @@ export function resolveChatThinkingSelectState(state: AppViewState): ChatThinkin
           catalog: state.chatModelCatalog ?? [],
         })
       : "off");
+  const effectiveOverride = levels.length === 0 && currentOverride === "off" ? "" : currentOverride;
   return {
-    currentOverride,
+    currentOverride: effectiveOverride,
     defaultLabel: formatInheritedThinkingLabel(defaultLevel),
-    options: buildThinkingOptions(levels, currentOverride),
+    options: buildThinkingOptions(levels, effectiveOverride),
   };
 }
 
@@ -735,7 +763,8 @@ export function renderChatThinkingSelect(state: AppViewState) {
   const { currentOverride, defaultLabel, options } = resolveChatThinkingSelectState(state);
   const busy =
     state.chatLoading || state.chatSending || Boolean(state.chatRunId) || state.chatStream !== null;
-  const disabled = !state.connected || busy || !state.client;
+  const disabled =
+    !state.connected || busy || !state.client || (options.length === 0 && currentOverride === "");
   const selectedLabel =
     currentOverride === ""
       ? defaultLabel

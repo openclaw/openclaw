@@ -46,6 +46,7 @@ import {
 } from "./pi-embedded-subscribe.tools.js";
 import type { SubscribeEmbeddedPiSessionParams } from "./pi-embedded-subscribe.types.js";
 import { stripDowngradedToolCallText, THINKING_TAG_SCAN_RE } from "./pi-embedded-utils.js";
+import type { AgentRunTimeoutPhase } from "./run-timeout-attribution.js";
 import { hasNonzeroUsage, normalizeUsage, type UsageLike } from "./usage.js";
 
 const STREAM_STRIPPED_BLOCK_TAG_NAMES = [
@@ -1107,6 +1108,8 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
       livenessState?: EmbeddedRunLivenessState;
       stopReason?: string;
       yielded?: boolean;
+      timeoutPhase?: AgentRunTimeoutPhase;
+      providerStarted?: boolean;
     }) => {
       if (typeof meta.replayInvalid === "boolean") {
         state.replayState = { ...state.replayState, replayInvalid: meta.replayInvalid };
@@ -1119,6 +1122,12 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
       }
       if (typeof meta.yielded === "boolean") {
         state.yielded = meta.yielded;
+      }
+      if (meta.timeoutPhase) {
+        state.timeoutPhase = meta.timeoutPhase;
+      }
+      if (typeof meta.providerStarted === "boolean") {
+        state.providerStarted = meta.providerStarted;
       }
     },
     isCompacting: () => state.compactionInFlight || state.pendingCompactionRetry > 0,

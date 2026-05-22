@@ -6,6 +6,8 @@ Docs: https://docs.openclaw.ai
 
 ### Changes
 
+- Docs: clarify media provider credentials, Codex/OpenClaw code-mode boundaries, Slack and Telegram ack reactions, Feishu dynamic agents, secrets plaintext boundaries, memory guidance, and Chinese glossary terms. Thanks @nielskaspers, @cosmopolitan033, @drclaw-iq, @alexgduarte, @zccyman, @chengoak, and @cassthebandit.
+- Packaging: exclude documentation images and assets from the npm tarball, reducing published package size without affecting runtime docs search or CLI behavior. Thanks @SebTardif.
 - Agents/subagents: limit default sub-agent bootstrap context to `AGENTS.md` and `TOOLS.md`, keeping persona, identity, user, memory, heartbeat, and setup files out of delegated workers by default. (#85283) Thanks @100yenadmin.
 - Maintainer skills: exclude plugin SDK/API boundary work from `openclaw-landable-bug-sweep` so bugbash sweeps stay focused on small paper-cut fixes.
 - Plugin SDK: add a generic channel-message poll sender so channel plugins can expose poll delivery without depending on channel-specific SDK facades.
@@ -37,13 +39,27 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Gateway/agents: preserve fresh session overrides and metadata when stale cached agent-session entries race with store updates, so subagent model/provider overrides and routing policy survive concurrent writes. (#19328) Thanks @CodeReclaimers.
+- Restore Control UI gateway token pairing [AI]. (#85459) Thanks @pgondhi987.
+- CLI/update: repair managed npm plugin `openclaw` peer links during post-core convergence and reject stale or wrong-target peer links before restart. (#83794) Thanks @fuller-stack-dev.
+- CLI/agents: default new omitted-account bindings to all accounts when the channel has multiple configured accounts, and clarify account-scope docs. (#49769) Thanks @Gcaufy.
+- Codex app-server: let authorized `/codex` control commands such as `/codex detach` escape plugin-owned conversation bindings while keeping unknown or unauthorized slash text routed to the bound plugin. Fixes #85157. (#85188) Thanks @TurboTheTurtle.
+- Auto-reply/models: keep `/models` browse replies fast by sharing the bounded read-only catalog path with Gateway model listing. (#84735) Thanks @safrano9999.
 - Codex app-server: disable native Code Mode when the effective exec host is `node` and keep OpenClaw `exec`/`process` available, so `/exec host=node` routes shell commands through the selected node instead of the gateway. Fixes #85012. (#85090) Thanks @sahilsatralkar.
+- Agents: bound embedded auto-compaction session write-lock watchdogs to the compaction timeout instead of the full run timeout, so stuck compaction cannot hold the live session lock for the whole run window. (#84949) Thanks @luoyanglang.
+- Gateway/agents: return phase-aware `agent.wait` timeout attribution and only cool auth profiles on provider-started timeouts. Refs #65504. Thanks @100yenadmin.
 - Gateway: defer provider auth-state prewarm until after startup readiness so early gateway tool/session requests are not blocked by provider auth discovery. (#85272) Thanks @dutifulbob.
 - Agents/Codex: show the first plan update as a transient chat status notice without counting it as final assistant content.
 - CLI/update: walk the macOS process ancestry and honor the inherited Gateway runtime PID before package updates stop the managed Gateway service, so nested in-band updater children can refuse instead of killing the LaunchAgent-supervised Gateway that owns them. Fixes #85120.
 - Gateway/LaunchAgent: wait for launchd reload bootout to finish and fall back to kickstart when bootstrap races, so reload handoff does not leave the service deregistered. Fixes #84630. (#84641) Thanks @NianJiuZst.
 - Gateway/LaunchAgent: treat a concurrent launchd bootstrap as a successful restart when the service is already loaded, avoiding false macOS Gateway restart failures. Fixes #84721. (#84722) Thanks @googlerest.
 - Gateway/service: include the active `openclaw` command bin directory in managed service PATH generation and doctor audit expectations for npm-global macOS installs. Fixes #84201. (#84475) Thanks @jbetala7.
+- Control UI/chat: disable the thinking selector for known non-reasoning models instead of showing duplicate Off choices. Fixes #84069. Thanks @DrippingMellow.
+- Memory: expand `~` in configured extra memory paths before resolving them, so home-relative folders are not treated as workspace-relative. Fixes #58026. Thanks @stadman.
+- Skills: treat `openclaw.os: macos` as Darwin when checking skill requirements, so macOS-only skills no longer report as missing on macOS hosts. Fixes #61338. Thanks @Jessecq1995.
+- Control UI/logs: strip ANSI escape sequences from displayed Gateway log messages so color codes no longer appear as raw text. Fixes #64399. Thanks @guguangxin-eng.
+- Docker: pre-create the workspace and auth-profile config mount points with `node` ownership so first-run named volumes do not start root-owned. Fixes #85076. Thanks @Noerr.
+- Telegram: pass configured markdown table mode through outbound markdown chunking so chunked sends render tables consistently. Fixes #85085. Thanks @ShuaiHui.
 - CLI/update: preserve managed Gateway service environment during package cutovers so macOS LaunchAgent repair/restart reads the pre-update service state instead of caller shell state. (#83026)
 - Agents/providers: honor per-model `api` and `baseUrl` overrides in custom provider auth hooks and transport selection. Fixes #80487. (#80488) Thanks @huveewomg.
 - Gateway/restart: eager-load the lifecycle runtime before in-place upgrade signal handling so package replacement does not deadlock restart imports. (#84890) Thanks @myps6415.
@@ -52,8 +68,11 @@ Docs: https://docs.openclaw.ai
 - Release/security: keep generated npm shrinkwrap package versions inside the pnpm lock graph so published package locks cannot bypass pnpm dependency age and override policy.
 - Cron: honor `cron.retry.retryOn: ["network"]` for common network error codes such as `EAI_AGAIN`, `EHOSTUNREACH`, and `ENETUNREACH`.
 - Gateway chat: broadcast returned agent-run error payloads after an agent starts so ACP/WebChat clients receive terminal idle-timeout errors. Fixes #84945.
+- Gateway chat display: preserve OpenAI-compatible `prompt_tokens`, `completion_tokens`, and `total_tokens` usage fields in sanitized chat history so llama.cpp sessions keep context counts. Fixes #77992. Thanks @MarTT79.
 - Dashboard/CLI: allow macOS browser launching through `open` even when SSH environment variables are present, while preserving Linux SSH no-display protection. Fixes #67088. Thanks @theglove44.
 - Codex app-server: keep native web search observations out of mirrored chat transcripts while preserving tool progress telemetry. Fixes #85109. Thanks @ugitmebaby.
+- OpenCode Go: strip unsupported Kimi reasoning replay fields before provider requests so repeated `kimi-k2.6` turns do not fail schema validation. Fixes #83812. Thanks @Sleeck.
+- Browser/CDP: add a WSL2 portproxy self-loop hint when Chrome DevTools endpoints accept connections but return an empty HTTP reply. Fixes #59209. Thanks @Owlock.
 - Agents/OpenAI: preserve structured provider error code, type, and redacted body metadata on boundary-aware transport failures.
 - Doctor/Codex: point native Codex asset warnings at the canonical `openclaw migrate plan codex` preview command. Fixes #84948. Thanks @markoa.
 - CLI/models: make `capability model auth logout --agent` remove auth profiles from the selected non-default agent store. Fixes #85092. Thanks @islandpreneur007.
@@ -63,11 +82,14 @@ Docs: https://docs.openclaw.ai
 - CLI/update: keep managed Gateway service stop/restart status lines out of `openclaw update --json` stdout so package-update automation can parse the JSON payload.
 - Plugins: resolve OpenClaw plugin SDK subpaths for native external plugin runtimes without mutating package installs or broadening process-wide module resolution.
 - Agents/OpenAI: preserve Responses and Chat Completions `reasoning_tokens` usage metadata without double-counting it in aggregate output tokens. (#85319)
+- Control UI/chat: convert pasted `data:image/...;base64,...` clipboard text into an image attachment instead of dumping the payload into the composer. Fixes #62604. Thanks @cpwilhelmi.
 - Providers/Gemini: strip fractional seconds from web-search time range filters so Gemini accepts freshness-bound search requests. (#85071) Thanks @Noerr.
 - OpenAI Codex: preserve image input support for sparse `openai-codex/gpt-5.5` catalog rows. (#85095) Thanks @sercada.
 - Plugins/discovery: strip `-plugin` package suffixes when deriving plugin id hints so package names line up with manifest ids. (#85170) Thanks @JulyanXu.
 - Tlon: stop advertising a non-existent agent tool contract in the plugin manifest.
 - Telegram: preserve fenced code block languages through Markdown rendering so Telegram receives `language-*` code classes. (#85209) Thanks @leno23.
+- Windows updates: roll back git-backed updates to the previous checkout when dependency install, build, UI build, or doctor repair fails.
+- Windows installer: persist user-local portable Git on PATH and activate the repo-pinned pnpm version for git-backed installs and updates.
 - Windows installer: bootstrap a user-local portable Node.js when native Windows has no Node and no winget, Chocolatey, or Scoop, so first-run installs can continue on raw hosts.
 - Windows installer: extract the downloaded portable Node.js directory with native `tar` before falling back to .NET zip extraction, avoiding PowerShell 5.1 archive and path-length failures.
 - fix(integrations): enforce channel read target allowlists [AI]. (#84982) Thanks @pgondhi987.
