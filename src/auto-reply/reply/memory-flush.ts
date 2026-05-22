@@ -4,7 +4,8 @@ import { parseNonNegativeByteSize } from "../../config/byte-size.js";
 import { resolveFreshSessionTotalTokens, type SessionEntry } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 
-const PREFLIGHT_COMPACTION_MAX_THRESHOLD_TOKENS = 65_000;
+const PREFLIGHT_COMPACTION_PROACTIVE_THRESHOLD_TOKENS = 65_000;
+const PREFLIGHT_COMPACTION_PROACTIVE_CONTEXT_WINDOW_MAX_TOKENS = 400_000;
 
 export function resolveMemoryFlushContextWindowTokens(params: {
   modelId?: string;
@@ -57,10 +58,13 @@ export function resolvePreflightCompactionThresholdTokens(params: {
 }): number {
   const contextWindow = Math.max(1, Math.floor(params.contextWindowTokens));
   const configuredThreshold = resolveConfiguredCompactionThresholdTokens(params);
-  const proactiveThreshold = Math.max(
-    1,
-    Math.min(PREFLIGHT_COMPACTION_MAX_THRESHOLD_TOKENS, Math.floor(contextWindow * 0.25)),
-  );
+  if (
+    typeof configuredThreshold === "number" &&
+    contextWindow > PREFLIGHT_COMPACTION_PROACTIVE_CONTEXT_WINDOW_MAX_TOKENS
+  ) {
+    return configuredThreshold;
+  }
+  const proactiveThreshold = Math.max(1, PREFLIGHT_COMPACTION_PROACTIVE_THRESHOLD_TOKENS);
   return Math.min(configuredThreshold ?? proactiveThreshold, proactiveThreshold);
 }
 

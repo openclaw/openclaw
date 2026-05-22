@@ -30,6 +30,7 @@ let dispatchReplyFromConfig: typeof import("./dispatch-from-config.js").dispatch
 let tryDispatchAcpReplyHook: typeof import("../../plugin-sdk/acp-runtime.js").tryDispatchAcpReplyHook;
 let resetInboundDedupe: typeof import("./inbound-dedupe.js").resetInboundDedupe;
 let replyRunRegistry: typeof import("./reply-run-registry.js").replyRunRegistry;
+let replyRunRegistryTesting: typeof import("./reply-run-registry.js").__testing;
 let getActiveReplyRunCount: typeof import("./reply-run-registry.js").getActiveReplyRunCount;
 let createReplyOperation: typeof import("./reply-run-registry.js").createReplyOperation;
 
@@ -155,11 +156,16 @@ describe("dispatchReplyFromConfig ACP abort", () => {
     ({ dispatchReplyFromConfig } = await import("./dispatch-from-config.js"));
     ({ tryDispatchAcpReplyHook } = await import("../../plugin-sdk/acp-runtime.js"));
     ({ resetInboundDedupe } = await import("./inbound-dedupe.js"));
-    ({ replyRunRegistry, getActiveReplyRunCount, createReplyOperation } =
-      await import("./reply-run-registry.js"));
+    ({
+      replyRunRegistry,
+      __testing: replyRunRegistryTesting,
+      getActiveReplyRunCount,
+      createReplyOperation,
+    } = await import("./reply-run-registry.js"));
   });
 
   beforeEach(() => {
+    replyRunRegistryTesting.resetReplyRunRegistry();
     setDiscordTestRegistry();
     resetInboundDedupe();
     acpManagerRuntimeMocks.getAcpSessionManager.mockReset();

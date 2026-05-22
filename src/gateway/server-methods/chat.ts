@@ -2140,7 +2140,7 @@ export const chatHandlers: GatewayRequestHandlers = {
       runIds: res.aborted ? [runId] : [],
     });
   },
-  "chat.send": async ({ params, respond, context, client }) => {
+  "chat.send": async ({ params, respond, context, client, isWebchatConnect }) => {
     if (!validateChatSendParams(params)) {
       respond(
         false,
@@ -2514,12 +2514,14 @@ export const chatHandlers: GatewayRequestHandlers = {
         status: "started" as const,
       };
       respond(true, ackPayload, undefined, { runId: clientRunId });
-      broadcastWebchatPreflightAcknowledgement({
-        context,
-        runId: clientRunId,
-        sessionKey,
-        message: parsedMessage,
-      });
+      if (client?.connect && isWebchatConnect(client.connect)) {
+        broadcastWebchatPreflightAcknowledgement({
+          context,
+          runId: clientRunId,
+          sessionKey,
+          message: parsedMessage,
+        });
+      }
       const persistedImagesPromise = persistChatSendImages({
         images: parsedImages,
         imageOrder,
