@@ -477,6 +477,11 @@ export const tr: TranslationMap = {
       minutes: "{minutes} dk {seconds} sn",
     },
   },
+  workboard: {
+    disabledHelpStart: "Workboard devre dışı. Etkinleştirin",
+    enableConfigKey: "plugins.entries.workboard.enabled = true",
+    disabledHelpEnd: ", ardından bu sekmeyi yeniden yükleyin.",
+  },
   overview: {
     access: {
       title: "Gateway Erişimi",

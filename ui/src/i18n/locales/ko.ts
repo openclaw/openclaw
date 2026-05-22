@@ -474,6 +474,11 @@ export const ko: TranslationMap = {
       minutes: "{minutes}m {seconds}s",
     },
   },
+  workboard: {
+    disabledHelpStart: "Workboard가 비활성화되어 있습니다. 활성화하려면",
+    enableConfigKey: "plugins.entries.workboard.enabled = true",
+    disabledHelpEnd: ", 그런 다음 이 탭을 새로고침하세요.",
+  },
   overview: {
     access: {
       title: "Gateway 액세스",

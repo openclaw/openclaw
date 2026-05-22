@@ -473,6 +473,11 @@ export const th: TranslationMap = {
       minutes: "{minutes}m {seconds}s",
     },
   },
+  workboard: {
+    disabledHelpStart: "Workboard ถูกปิดใช้งาน เปิดใช้งาน",
+    enableConfigKey: "plugins.entries.workboard.enabled = true",
+    disabledHelpEnd: " แล้วโหลดแท็บนี้ใหม่",
+  },
   overview: {
     access: {
       title: "การเข้าถึงเกตเวย์",

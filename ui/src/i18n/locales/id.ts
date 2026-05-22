@@ -475,6 +475,11 @@ export const id: TranslationMap = {
       minutes: "{minutes}m {seconds}dtk",
     },
   },
+  workboard: {
+    disabledHelpStart: "Workboard dinonaktifkan. Aktifkan",
+    enableConfigKey: "plugins.entries.workboard.enabled = true",
+    disabledHelpEnd: ", lalu muat ulang tab ini.",
+  },
   overview: {
     access: {
       title: "Akses Gateway",

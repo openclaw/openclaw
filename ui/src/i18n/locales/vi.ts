@@ -475,6 +475,11 @@ export const vi: TranslationMap = {
       minutes: "{minutes}m {seconds}s",
     },
   },
+  workboard: {
+    disabledHelpStart: "Workboard đã bị tắt. Bật",
+    enableConfigKey: "plugins.entries.workboard.enabled = true",
+    disabledHelpEnd: ", rồi tải lại tab này.",
+  },
   overview: {
     access: {
       title: "Truy cập Gateway",

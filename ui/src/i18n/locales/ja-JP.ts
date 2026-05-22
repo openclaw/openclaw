@@ -478,6 +478,11 @@ export const ja_JP: TranslationMap = {
       minutes: "{minutes}m {seconds}s",
     },
   },
+  workboard: {
+    disabledHelpStart: "Workboard は無効になっています。有効にするには",
+    enableConfigKey: "plugins.entries.workboard.enabled = true",
+    disabledHelpEnd: "を設定してから、このタブを再読み込みしてください。",
+  },
   overview: {
     access: {
       title: "Gateway アクセス",

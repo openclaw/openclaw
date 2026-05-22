@@ -475,6 +475,11 @@ export const pt_BR: TranslationMap = {
       minutes: "{minutes}m {seconds}s",
     },
   },
+  workboard: {
+    disabledHelpStart: "O Workboard está desativado. Ative",
+    enableConfigKey: "plugins.entries.workboard.enabled = true",
+    disabledHelpEnd: ", depois recarregue esta aba.",
+  },
   overview: {
     access: {
       title: "Acesso ao Gateway",

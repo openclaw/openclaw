@@ -476,6 +476,11 @@ export const fa: TranslationMap = {
       minutes: "{minutes}m {seconds}s",
     },
   },
+  workboard: {
+    disabledHelpStart: "Workboard غیرفعال است. فعال کنید",
+    enableConfigKey: "plugins.entries.workboard.enabled = true",
+    disabledHelpEnd: "، سپس این زبانه را دوباره بارگذاری کنید.",
+  },
   overview: {
     access: {
       title: "دسترسی Gateway",

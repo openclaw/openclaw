@@ -477,6 +477,11 @@ export const nl: TranslationMap = {
       minutes: "{minutes}m {seconds}s",
     },
   },
+  workboard: {
+    disabledHelpStart: "Workboard is uitgeschakeld. Schakel",
+    enableConfigKey: "plugins.entries.workboard.enabled = true",
+    disabledHelpEnd: "in en laad dit tabblad opnieuw.",
+  },
   overview: {
     access: {
       title: "Gateway-toegang",

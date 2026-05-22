@@ -477,6 +477,11 @@ export const it: TranslationMap = {
       minutes: "{minutes}m {seconds}s",
     },
   },
+  workboard: {
+    disabledHelpStart: "Workboard è disabilitata. Abilita",
+    enableConfigKey: "plugins.entries.workboard.enabled = true",
+    disabledHelpEnd: ", quindi ricarica questa scheda.",
+  },
   overview: {
     access: {
       title: "Accesso Gateway",

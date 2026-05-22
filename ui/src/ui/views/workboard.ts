@@ -293,8 +293,8 @@ export function renderWorkboard(props: WorkboardProps) {
     return html`
       <section class="workboard">
         <div class="callout">
-          Workboard is disabled. Enable <code>plugins.entries.workboard.enabled = true</code>, then
-          reload this tab.
+          ${t("workboard.disabledHelpStart")}
+          <code>${t("workboard.enableConfigKey")}</code>${t("workboard.disabledHelpEnd")}
         </div>
       </section>
     `;

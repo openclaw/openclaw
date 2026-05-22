@@ -475,6 +475,11 @@ export const es: TranslationMap = {
       minutes: "{minutes}m {seconds}s",
     },
   },
+  workboard: {
+    disabledHelpStart: "Workboard está desactivado. Activa",
+    enableConfigKey: "plugins.entries.workboard.enabled = true",
+    disabledHelpEnd: ", luego vuelve a cargar esta pestaña.",
+  },
   overview: {
     access: {
       title: "Acceso a la puerta de enlace",

@@ -474,6 +474,11 @@ export const ar: TranslationMap = {
       minutes: "{minutes}m {seconds}s",
     },
   },
+  workboard: {
+    disabledHelpStart: "لوحة العمل معطّلة. فعّل",
+    enableConfigKey: "plugins.entries.workboard.enabled = true",
+    disabledHelpEnd: "، ثم أعد تحميل علامة التبويب هذه.",
+  },
   overview: {
     access: {
       title: "الوصول إلى Gateway",

@@ -472,6 +472,11 @@ export const zh_CN: TranslationMap = {
       minutes: "{minutes}m {seconds}s",
     },
   },
+  workboard: {
+    disabledHelpStart: "Workboard 已禁用。启用",
+    enableConfigKey: "plugins.entries.workboard.enabled = true",
+    disabledHelpEnd: "，然后重新加载此标签页。",
+  },
   overview: {
     access: {
       title: "网关访问",
