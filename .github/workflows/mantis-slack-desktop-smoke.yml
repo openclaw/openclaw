@@ -70,7 +70,7 @@ env:
   NODE_VERSION: "24.x"
   OPENCLAW_BUILD_PRIVATE_QA: "1"
   OPENCLAW_ENABLE_PRIVATE_QA_CLI: "1"
-  CRABBOX_VERSION: v0.17.0
+  CRABBOX_REF: main
 
 jobs:
   authorize_actor:
@@ -113,9 +113,8 @@ jobs:
       - name: Checkout harness ref
         uses: actions/checkout@v6
         with:
-          ref: ${{ inputs.candidate_ref }}
           persist-credentials: false
-          fetch-depth: 1
+          fetch-depth: 0
 
       - name: Validate ref is trusted
         id: validate
@@ -128,7 +127,7 @@ jobs:
 
           git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
 
-          revision="$(git rev-parse HEAD)"
+          revision="$(git rev-parse "${CANDIDATE_REF}^{commit}")"
           reason=""
           if git merge-base --is-ancestor "$revision" refs/remotes/origin/main; then
             reason="main-ancestor"
@@ -168,9 +167,8 @@ jobs:
       - name: Checkout harness ref
         uses: actions/checkout@v6
         with:
-          ref: ${{ needs.validate_ref.outputs.candidate_revision }}
           persist-credentials: false
-          fetch-depth: 1
+          fetch-depth: 0
 
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
@@ -178,27 +176,53 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
           install-bun: "true"
 
+      - name: Build Mantis harness
+        run: pnpm build
+
+      - name: Cache Mantis candidate pnpm store
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.local/share/pnpm/store
+            ~/.cache/pnpm
+          key: mantis-slack-pnpm-${{ runner.os }}-${{ env.NODE_VERSION }}-${{ hashFiles('pnpm-lock.yaml') }}
+          restore-keys: |
+            mantis-slack-pnpm-${{ runner.os }}-${{ env.NODE_VERSION }}-
+
+      - name: Setup Go for Crabbox CLI
+        uses: actions/setup-go@v6
+        with:
+          go-version: "1.26.x"
+          cache: false
+
       - name: Install Crabbox CLI
         shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           install_dir="${RUNNER_TEMP}/crabbox"
           mkdir -p "$install_dir" "$HOME/.local/bin"
-          version="${CRABBOX_VERSION#v}"
-          asset="crabbox_${version}_linux_amd64.tar.gz"
-          gh release download "v${version}" \
-            --repo openclaw/crabbox \
-            --pattern "$asset" \
-            --dir "$install_dir"
-          tar -xzf "$install_dir/$asset" -C "$install_dir"
-          install -m 0755 "$install_dir/crabbox" "$HOME/.local/bin/crabbox"
+          git init "$install_dir/src"
+          git -C "$install_dir/src" remote add origin https://github.com/openclaw/crabbox.git
+          git -C "$install_dir/src" fetch --depth 1 origin "$CRABBOX_REF"
+          git -C "$install_dir/src" checkout --detach FETCH_HEAD
+          go build -C "$install_dir/src" -o "$HOME/.local/bin/crabbox" ./cmd/crabbox
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
           "$HOME/.local/bin/crabbox" --version
           "$HOME/.local/bin/crabbox" warmup --help > "$install_dir/warmup-help.txt" 2>&1
           grep -q -- "-desktop" "$install_dir/warmup-help.txt"
           "$HOME/.local/bin/crabbox" media preview --help >/dev/null
+
+      - name: Prepare candidate worktree
+        env:
+          CANDIDATE_SHA: ${{ needs.validate_ref.outputs.candidate_revision }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          worktree_root=".artifacts/qa-e2e/mantis/slack-desktop-smoke-worktrees"
+          mkdir -p "$worktree_root"
+          git worktree add --detach "$worktree_root/candidate" "$CANDIDATE_SHA"
+          pnpm --dir "$worktree_root/candidate" install --frozen-lockfile --prefer-offline
+          pnpm --dir "$worktree_root/candidate" build
 
       - name: Run Slack desktop scenario
         id: run_mantis
@@ -252,64 +276,63 @@ jobs:
             echo "Using AWS SSH CIDR ${CRABBOX_AWS_SSH_CIDRS}"
           fi
 
-          candidate_repo="$(pwd)"
+          candidate_repo="$(pwd)/.artifacts/qa-e2e/mantis/slack-desktop-smoke-worktrees/candidate"
           output_rel=".artifacts/qa-e2e/mantis/slack-desktop-smoke"
           root="$candidate_repo/$output_rel"
           echo "output_dir=${root}" >> "$GITHUB_OUTPUT"
-          export CANDIDATE_REPO="$candidate_repo"
-          export OUTPUT_REL="$output_rel"
-          export MANTIS_FRESH_PR_SPEC=""
-          if [[ -n "${PR_NUMBER:-}" ]]; then
-            MANTIS_FRESH_PR_SPEC="${GITHUB_REPOSITORY}#${PR_NUMBER}"
+          lease_args=()
+          if [[ -n "${CRABBOX_LEASE_ID:-}" ]]; then
+            lease_args=(--lease-id "$CRABBOX_LEASE_ID")
           fi
+          keep_args=()
+          if [[ "$KEEP_VM" == "true" ]]; then
+            keep_args=(--keep-lease)
+          else
+            keep_args=(--no-keep-lease)
+          fi
+          market_args=()
+          if [[ -n "${CRABBOX_MARKET:-}" ]]; then
+            market_args=(--market "$CRABBOX_MARKET")
+          fi
+          fresh_pr_args=()
+          if [[ -n "${PR_NUMBER:-}" ]]; then
+            fresh_pr_args=(--fresh-pr "${GITHUB_REPOSITORY}#${PR_NUMBER}")
+          fi
+          gateway_args=(--gateway-setup)
+          approval_args=()
+          scenario_args=(--scenario "$SCENARIO_ID")
           scenario_label="$SCENARIO_ID"
           if [[ "$APPROVAL_CHECKPOINTS" == "true" ]]; then
+            approval_args=(--approval-checkpoints)
+            gateway_args=()
             if [[ -z "${SCENARIO_ID:-}" || "$SCENARIO_ID" == "slack-canary" || "$SCENARIO_ID" == "approval-checkpoints" ]]; then
+              scenario_args=()
               scenario_label="approval-checkpoints"
             fi
           fi
 
           set +e
-          node --import tsx --input-type=module <<'MANTIS_SOURCE_RUNNER'
-          import { runMantisSlackDesktopSmokeCommand } from "./extensions/qa-lab/src/mantis/cli.runtime.ts";
-
-          const clean = (value) => {
-            const trimmed = value?.trim();
-            return trimmed ? trimmed : undefined;
-          };
-          const env = process.env;
-          const approvalCheckpoints = env.APPROVAL_CHECKPOINTS === "true";
-          const scenarioId = clean(env.SCENARIO_ID);
-          const scenarioIds =
-            approvalCheckpoints && (!scenarioId || scenarioId === "slack-canary" || scenarioId === "approval-checkpoints")
-              ? undefined
-              : scenarioId
-                ? [scenarioId]
-                : undefined;
-
-          await runMantisSlackDesktopSmokeCommand({
-            alternateModel: "openai/gpt-5.5",
-            approvalCheckpoints,
-            credentialRole: "ci",
-            credentialSource: "convex",
-            fastMode: true,
-            freshPr: clean(env.MANTIS_FRESH_PR_SPEC),
-            gatewaySetup: approvalCheckpoints ? undefined : true,
-            hydrateMode: env.HYDRATE_MODE,
-            idleTimeout: "45m",
-            keepLease: env.KEEP_VM === "true",
-            leaseId: clean(env.CRABBOX_LEASE_ID),
-            machineClass: "standard",
-            market: env.CRABBOX_MARKET,
-            outputDir: env.OUTPUT_REL,
-            primaryModel: "openai/gpt-5.5",
-            provider: env.CRABBOX_PROVIDER,
-            providerMode: "live-frontier",
-            repoRoot: env.CANDIDATE_REPO,
-            scenarioIds,
-            ttl: "120m",
-          });
-          MANTIS_SOURCE_RUNNER
+          pnpm openclaw qa mantis slack-desktop-smoke \
+            --repo-root "$candidate_repo" \
+            --output-dir "$output_rel" \
+            --provider "$CRABBOX_PROVIDER" \
+            --class standard \
+            --idle-timeout 45m \
+            --ttl 120m \
+            "${gateway_args[@]}" \
+            --credential-source convex \
+            --credential-role ci \
+            --provider-mode live-frontier \
+            --hydrate-mode "$HYDRATE_MODE" \
+            --model openai/gpt-5.5 \
+            --alt-model openai/gpt-5.5 \
+            --fast \
+            "${scenario_args[@]}" \
+            "${approval_args[@]}" \
+            "${market_args[@]}" \
+            "${fresh_pr_args[@]}" \
+            "${keep_args[@]}" \
+            "${lease_args[@]}"
           mantis_exit=$?
           set -e
 
