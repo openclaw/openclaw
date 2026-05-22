@@ -293,6 +293,8 @@ describe("mantis Slack desktop smoke runtime", () => {
     expect(remoteScript).toContain("--scenario 'slack-approval-plugin-native'");
     expect(remoteScript).toContain("OPENCLAW_QA_SLACK_APPROVAL_CHECKPOINT_DIR");
     expect(remoteScript).toContain("OPENCLAW_QA_SLACK_APPROVAL_CHECKPOINT_TIMEOUT_MS");
+    expect(remoteScript).toContain('cat >"$out/approval-checkpoint-watcher.mjs"');
+    expect(remoteScript).not.toContain('node >"$out/approval-checkpoint-watcher.mjs"');
     expect(remoteScript).toContain("approval-checkpoint-watcher.mjs");
     expect(remoteScript).toContain("Slack QA exited before all expected approval checkpoints");
     expect(remoteScript).toContain('if [ "$qa_exit" -eq 0 ]; then\n        wait "$watcher_pid"');
