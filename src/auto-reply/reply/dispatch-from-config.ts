@@ -73,6 +73,8 @@ import {
   toPluginConversationBinding,
 } from "../../plugins/conversation-binding.js";
 import { getGlobalHookRunner, getGlobalPluginRegistry } from "../../plugins/hook-runner-global.js";
+import { normalizeAccountId } from "../../routing/account-id.js";
+import { resolveAccountEntry } from "../../routing/account-lookup.js";
 import { isAcpSessionKey } from "../../routing/session-key.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
@@ -120,6 +122,7 @@ import type {
 } from "./dispatch-from-config.types.js";
 import { resolveEffectiveReplyRoute } from "./effective-reply-route.js";
 import { withFullRuntimeReplyConfig } from "./get-reply-fast-path.js";
+import { extractExplicitGroupId } from "./group-id.js";
 import { claimInboundDedupe, commitInboundDedupe, releaseInboundDedupe } from "./inbound-dedupe.js";
 import { resolveOriginMessageProvider } from "./origin-routing.js";
 import { waitForReplyDispatcherIdle } from "./reply-dispatcher.js";
@@ -185,6 +188,110 @@ function loadRuntimePlugins() {
 
 function loadReplyMediaPathsRuntime() {
   return replyMediaPathsRuntimeLoader.load();
+}
+
+type TelegramVerboseGroupConfig = {
+  verboseToolSummaries?: boolean;
+};
+
+type TelegramVerboseAccountConfig = {
+  groups?: Record<string, TelegramVerboseGroupConfig | undefined>;
+};
+
+type TelegramVerboseConfig = TelegramVerboseAccountConfig & {
+  accounts?: Record<string, TelegramVerboseAccountConfig | undefined>;
+};
+
+function normalizeGroupConfigCandidate(raw?: string | null): string | undefined {
+  const trimmed = normalizeOptionalString(raw);
+  if (!trimmed) {
+    return undefined;
+  }
+  const withoutTopic = trimmed.replace(/:topic:.*$/, "");
+  const parts = withoutTopic.split(":").filter(Boolean);
+  const first = normalizeLowercaseStringOrEmpty(parts[0]);
+  const second = normalizeLowercaseStringOrEmpty(parts[1]);
+  if ((first === "telegram" || first === "tg") && (second === "group" || second === "channel")) {
+    return parts.slice(2).join(":") || undefined;
+  }
+  if (first === "telegram" || first === "tg") {
+    const target = parts[1];
+    return target?.startsWith("-") || target?.startsWith("@") ? target : undefined;
+  }
+  if ((first === "group" || first === "channel") && parts[1]) {
+    return parts.slice(1).join(":") || undefined;
+  }
+  return withoutTopic;
+}
+
+function hasConfiguredTelegramGroups(
+  groups?: Record<string, TelegramVerboseGroupConfig | undefined>,
+): boolean {
+  return Boolean(groups && Object.keys(groups).length > 0);
+}
+
+function resolveTelegramGroupsForVerboseSummaries(
+  telegram: TelegramVerboseConfig,
+  accountId?: string | null,
+): Record<string, TelegramVerboseGroupConfig | undefined> | undefined {
+  const accountIds = Object.keys(telegram.accounts ?? {});
+  const account = resolveAccountEntry(telegram.accounts, normalizeAccountId(accountId)) as
+    | TelegramVerboseAccountConfig
+    | undefined;
+
+  if (accountIds.length > 1) {
+    return account?.groups;
+  }
+  return hasConfiguredTelegramGroups(account?.groups) ? account?.groups : telegram.groups;
+}
+
+function resolveTelegramGroupConfigBoolean(params: {
+  cfg: OpenClawConfig;
+  ctx: FinalizedMsgContext;
+  entry?: SessionEntry | null;
+  groupId?: string | null;
+  key: keyof TelegramVerboseGroupConfig;
+}): boolean | undefined {
+  const channels = [params.ctx.Provider, params.ctx.Surface, params.ctx.OriginatingChannel].map(
+    normalizeLowercaseStringOrEmpty,
+  );
+  if (!channels.includes("telegram")) {
+    return undefined;
+  }
+  const telegram = params.cfg.channels?.telegram as TelegramVerboseConfig | undefined;
+  if (!telegram || typeof telegram !== "object") {
+    return undefined;
+  }
+
+  const candidates = [
+    params.groupId,
+    params.entry?.groupId,
+    extractExplicitGroupId(params.ctx.From),
+    extractExplicitGroupId(params.ctx.OriginatingTo),
+    params.ctx.From,
+    params.ctx.OriginatingTo,
+  ]
+    .map(normalizeGroupConfigCandidate)
+    .filter((value): value is string => Boolean(value));
+  if (candidates.length === 0) {
+    return undefined;
+  }
+
+  const groups = resolveTelegramGroupsForVerboseSummaries(
+    telegram,
+    params.ctx.AccountId ?? params.entry?.lastAccountId,
+  );
+  if (!groups || typeof groups !== "object") {
+    return undefined;
+  }
+  for (const candidate of candidates) {
+    const value = groups[candidate]?.[params.key];
+    if (typeof value === "boolean") {
+      return value;
+    }
+  }
+  const wildcardValue = groups["*"]?.[params.key];
+  return typeof wildcardValue === "boolean" ? wildcardValue : undefined;
 }
 
 function formatSuppressedReplyPayloadForLog(reply: ReplyPayload): string {
@@ -1434,8 +1541,17 @@ export async function dispatchReplyFromConfig(
 
     const isSlackNonDirectSurface =
       (ctx.Surface === "slack" || ctx.Provider === "slack") && ctx.ChatType !== "direct";
+    const allowTelegramGroupVerboseToolSummaries =
+      resolveTelegramGroupConfigBoolean({
+        cfg,
+        ctx,
+        entry: sessionStoreEntry.entry,
+        groupId: groupResolution?.id,
+        key: "verboseToolSummaries",
+      }) === true;
     const shouldSendVerboseProgressMessages =
-      !isSlackNonDirectSurface && (ctx.ChatType !== "group" || ctx.IsForum === true);
+      (!isSlackNonDirectSurface || allowTelegramGroupVerboseToolSummaries) &&
+      (ctx.ChatType !== "group" || ctx.IsForum === true || allowTelegramGroupVerboseToolSummaries);
     const shouldSendToolSummaries = shouldSendVerboseProgressMessages;
     const shouldSendToolStartStatuses = false;
     const shouldDeliverVerboseProgressDespiteSourceSuppression = () =>
@@ -1783,7 +1899,9 @@ export async function dispatchReplyFromConfig(
     const suppressDefaultToolProgressMessages =
       params.replyOptions?.suppressDefaultToolProgressMessages === true;
     const shouldSuppressDefaultToolProgressMessages = () =>
-      suppressDefaultToolProgressMessages && !shouldEmitVerboseProgress();
+      suppressDefaultToolProgressMessages &&
+      !allowTelegramGroupVerboseToolSummaries &&
+      !shouldEmitVerboseProgress();
     const shouldSuppressProgressDelivery = () =>
       sendPolicyDenied ||
       (suppressDelivery && !shouldDeliverVerboseProgressDespiteSourceSuppression());

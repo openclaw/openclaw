@@ -1517,6 +1517,194 @@ describe("dispatchReplyFromConfig", () => {
     expect(dispatcher.sendFinalReply).toHaveBeenCalledTimes(1);
   });
 
+  it("allows Telegram group tool summaries when the group opts in despite preview suppression", async () => {
+    setNoAbort();
+    const cfg = {
+      ...automaticGroupReplyConfig,
+      channels: {
+        telegram: {
+          groups: {
+            "-1001234567890": {
+              verboseToolSummaries: true,
+            },
+          },
+        },
+      },
+    } as const satisfies OpenClawConfig;
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "telegram",
+      Surface: "telegram",
+      ChatType: "group",
+      From: "telegram:group:-1001234567890",
+    });
+
+    const replyResolver = async (
+      _ctx: MsgContext,
+      opts?: GetReplyOptions,
+      _cfg?: OpenClawConfig,
+    ) => {
+      const onToolResult = requireToolResultHandler(opts?.onToolResult);
+      await onToolResult({ text: "🔧 exec: ls" });
+      return { text: "hi" } satisfies ReplyPayload;
+    };
+
+    await dispatchReplyFromConfig({
+      ctx,
+      cfg,
+      dispatcher,
+      replyResolver,
+      replyOptions: { suppressDefaultToolProgressMessages: true },
+    });
+
+    expect(dispatcher.sendToolResult).toHaveBeenCalledTimes(1);
+    expect(firstToolResultPayload(dispatcher)?.text).toBe("🔧 exec: ls");
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledTimes(1);
+  });
+
+  it("allows Telegram account-scoped group tool summaries when the group opts in", async () => {
+    setNoAbort();
+    const cfg = {
+      ...automaticGroupReplyConfig,
+      channels: {
+        telegram: {
+          accounts: {
+            qa: {
+              groups: {
+                "-1002234567890": {
+                  verboseToolSummaries: true,
+                },
+              },
+            },
+          },
+        },
+      },
+    } as const satisfies OpenClawConfig;
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "telegram",
+      Surface: "telegram",
+      AccountId: "qa",
+      ChatType: "group",
+      From: "telegram:group:-1002234567890",
+    });
+
+    const replyResolver = async (
+      _ctx: MsgContext,
+      opts?: GetReplyOptions,
+      _cfg?: OpenClawConfig,
+    ) => {
+      const onToolResult = requireToolResultHandler(opts?.onToolResult);
+      await onToolResult({ text: "🔧 exec: pwd" });
+      return { text: "hi" } satisfies ReplyPayload;
+    };
+
+    await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
+
+    expect(dispatcher.sendToolResult).toHaveBeenCalledTimes(1);
+    expect(firstToolResultPayload(dispatcher)?.text).toBe("🔧 exec: pwd");
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not inherit root Telegram group verbose summaries into scoped account groups", async () => {
+    setNoAbort();
+    const cfg = {
+      ...automaticGroupReplyConfig,
+      channels: {
+        telegram: {
+          groups: {
+            "*": {
+              verboseToolSummaries: true,
+            },
+          },
+          accounts: {
+            qa: {
+              groups: {
+                "-1003234567890": {
+                  requireMention: false,
+                },
+              },
+            },
+            prod: {
+              groups: {
+                "-1004234567890": {
+                  requireMention: false,
+                },
+              },
+            },
+          },
+        },
+      },
+    } as const satisfies OpenClawConfig;
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "telegram",
+      Surface: "telegram",
+      AccountId: "qa",
+      ChatType: "group",
+      From: "telegram:group:-1005234567890",
+    });
+
+    const replyResolver = async (
+      _ctx: MsgContext,
+      opts?: GetReplyOptions,
+      _cfg?: OpenClawConfig,
+    ) => {
+      const onToolResult = requireToolResultHandler(opts?.onToolResult);
+      await onToolResult({ text: "🔧 exec: ls" });
+      return { text: "hi" } satisfies ReplyPayload;
+    };
+
+    await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
+
+    expect(dispatcher.sendToolResult).not.toHaveBeenCalled();
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledTimes(1);
+  });
+
+  it("allows routed Telegram group tool summaries when the origin group opts in", async () => {
+    setNoAbort();
+    mocks.routeReply.mockClear();
+    const cfg = {
+      ...automaticGroupReplyConfig,
+      channels: {
+        telegram: {
+          groups: {
+            "-1006234567890": {
+              verboseToolSummaries: true,
+            },
+          },
+        },
+      },
+    } as const satisfies OpenClawConfig;
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "slack",
+      Surface: "slack",
+      ChatType: "group",
+      From: "slack:channel:C1",
+      OriginatingChannel: "telegram",
+      OriginatingTo: "telegram:-1006234567890",
+    });
+
+    const replyResolver = async (
+      _ctx: MsgContext,
+      opts?: GetReplyOptions,
+      _cfg?: OpenClawConfig,
+    ) => {
+      const onToolResult = requireToolResultHandler(opts?.onToolResult);
+      await onToolResult({ text: "🔧 exec: whoami" });
+      return undefined;
+    };
+
+    await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
+
+    expect(dispatcher.sendToolResult).not.toHaveBeenCalled();
+    expect(mocks.routeReply).toHaveBeenCalledTimes(1);
+    const routed = firstRouteReplyCall() as { channel?: unknown; payload?: ReplyPayload };
+    expect(routed.channel).toBe("telegram");
+    expect(routed.payload?.text).toBe("🔧 exec: whoami");
+  });
+
   it("normalizes tool-result media before delivery and drops blocked file URLs", async () => {
     setNoAbort();
     replyMediaPathMocks.createReplyMediaPathNormalizer.mockReturnValue(

@@ -200,6 +200,26 @@ curl "https://api.telegram.org/bot<bot_token>/getUpdates"
 
     Test it from the group with `@<bot_username> ping`. Plain group messages do not trigger the bot while `requireMention: true`.
 
+    For private developer/QA groups where you want DM-like debugging visibility, set
+    `verboseToolSummaries: true` on that group. This allows verbose tool/progress
+    summary messages to appear in a normal Telegram group; leave it off for ordinary
+    shared groups.
+
+```json5
+{
+  channels: {
+    telegram: {
+      groups: {
+        "<PRIVATE_QA_GROUP_CHAT_ID>": {
+          requireMention: false,
+          verboseToolSummaries: true,
+        },
+      },
+    },
+  },
+}
+```
+
     Example: allow any member in one specific group:
 
 ```json5

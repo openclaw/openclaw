@@ -267,6 +267,12 @@ export type TelegramTopicConfig = {
 
 export type TelegramGroupConfig = {
   requireMention?: boolean;
+  /**
+   * If true, normal Telegram groups may receive verbose tool/progress summary
+   * messages that are otherwise limited to DMs and forum topics.
+   * Intended for private developer/QA groups.
+   */
+  verboseToolSummaries?: boolean;
   /** Emit internal message hooks for mention-skipped group messages. */
   ingest?: boolean;
   /** Per-group override for group message policy (open|disabled|allowlist). */
