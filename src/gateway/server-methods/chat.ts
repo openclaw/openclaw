@@ -2794,7 +2794,9 @@ export const chatHandlers: GatewayRequestHandlers = {
         );
         const persistedContentForAppend = hasAssistantDisplayMediaContent(persistedAssistantContent)
           ? persistedAssistantContent
-          : undefined;
+          : hasAssistantDisplayMediaContent(mediaMessage?.content)
+            ? mediaMessage?.content
+            : undefined;
         if (!persistedContentForAppend?.length) {
           return false;
         }
