@@ -19,7 +19,6 @@ import {
   resolveModelAuthMode,
 } from "../model-auth.js";
 import { resolveConfiguredModelRef } from "../model-selection.js";
-import { findNormalizedProviderValue } from "../provider-id.js";
 
 export type ToolModelConfig = { primary?: string; fallbacks?: string[]; timeoutMs?: number };
 
@@ -72,13 +71,6 @@ export function hasProviderAuthForTool(params: {
   agentDir?: string;
   authStore?: AuthProfileStore;
 }): boolean {
-  const providerConfig = findNormalizedProviderValue(
-    params.cfg?.models?.providers,
-    params.provider,
-  );
-  if (providerConfig?.auth === "aws-sdk") {
-    return false;
-  }
   if (
     hasAuthForProvider({
       provider: params.provider,

@@ -110,7 +110,7 @@ describe("hasProviderAuthForTool", () => {
     });
   });
 
-  it("still rejects explicit amazon-bedrock aws-sdk auth for tool preflight", async () => {
+  it("keeps agent-local API key profiles even when amazon-bedrock config defaults to aws-sdk", async () => {
     await withTempAgentDir(async (agentDir) => {
       await writeAuthProfiles(agentDir, {
         version: 1,
@@ -135,7 +135,7 @@ describe("hasProviderAuthForTool", () => {
         },
       } as OpenClawConfig;
 
-      expect(hasProviderAuthForTool({ provider: "amazon-bedrock", cfg, agentDir })).toBe(false);
+      expect(hasProviderAuthForTool({ provider: "amazon-bedrock", cfg, agentDir })).toBe(true);
     });
   });
 
