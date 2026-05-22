@@ -97,7 +97,7 @@ import {
   resolveInternalEventTranscriptBody,
 } from "./command/attempt-execution.shared.js";
 import { resolveAgentRunContext } from "./command/run-context.js";
-import { resolveSession } from "./command/session.js";
+import { resolveSessionWithReservation } from "./command/session-resolution-reservation.js";
 import type { AgentCommandIngressOpts, AgentCommandOpts } from "./command/types.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "./defaults.js";
 import {
@@ -715,13 +715,14 @@ async function prepareAgentCommandExecution(opts: AgentCommandOpts, runtime: Run
   const commandOpts = toSessionKey
     ? { ...opts, to: undefined, sessionKey: explicitSessionKey }
     : opts;
-  const sessionResolution = resolveSession({
+  const sessionResolution = await resolveSessionWithReservation({
     cfg,
     to: commandOpts.to,
     sessionId: commandOpts.sessionId,
     sessionKey: explicitSessionKey,
     agentId: agentIdOverride,
     clone: false,
+    suppressVisibleSessionEffects: opts.sessionEffects === "internal",
   });
 
   const { sessionId, sessionKey, storePath, isNewSession, persistedThinking, persistedVerbose } =
