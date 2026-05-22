@@ -81,6 +81,7 @@ const RESPONSE_FAILED_NO_DETAILS_MESSAGE = "Unknown error (no error details in r
 const MAX_OPENAI_STRICT_TOOL_DOWNGRADE_DIAGNOSTIC_KEYS = 256;
 const OPENAI_RESPONSES_REASONING_REPLAY_META_KEY = "__openclaw_replay";
 const OPENAI_RESPONSES_REASONING_REPLAY_BLOCK_META_KEY = "openclawReasoningReplay";
+const OPENAI_RESPONSES_REPLAY_ITEM_ID_MAX_LENGTH = 64;
 const log = createSubsystemLogger("openai-transport");
 const loggedOpenAIStrictToolDowngradeDiagnosticKeys = new Set<string>();
 
@@ -940,6 +941,19 @@ function shortHash(value: string): string {
   return createHash("sha256").update(value).digest("hex").slice(0, 16);
 }
 
+function normalizeResponsesReplayItemId(
+  id: string | undefined,
+  prefix: string,
+): string | undefined {
+  if (!id) {
+    return undefined;
+  }
+  if (id.length <= OPENAI_RESPONSES_REPLAY_ITEM_ID_MAX_LENGTH) {
+    return id;
+  }
+  return `${prefix}_${shortHash(id)}`;
+}
+
 function encodeTextSignatureV1(id: string, phase?: "commentary" | "final_answer"): string {
   return JSON.stringify({ v: 1, id, ...(phase ? { phase } : {}) });
 }
@@ -1098,9 +1112,7 @@ function convertResponsesMessages(
           let msgId = shouldReplayResponsesItemIds
             ? (textSignature?.id ?? `msg_${msgIndex}`)
             : undefined;
-          if (msgId && msgId.length > 64) {
-            msgId = `msg_${shortHash(msgId)}`;
-          }
+          msgId = normalizeResponsesReplayItemId(msgId, "msg");
           const messageItem: ReplayableResponseOutputMessage = {
             type: "message",
             role: "assistant",
