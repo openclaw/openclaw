@@ -1,4 +1,5 @@
-import { accessSync, constants } from "node:fs";
+import { accessSync, chmodSync, constants, mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
 import {
@@ -27,6 +28,7 @@ const LIVE_DOCKER_AUTH_SHELL_TARGETS = [
 ];
 const SHRINKWRAP_POLICY_PATH_RE =
   /^(?:npm-shrinkwrap\.json|package\.json|pnpm-lock\.yaml|pnpm-workspace\.yaml|scripts\/generate-npm-shrinkwrap\.mjs|extensions\/[^/]+\/(?:package\.json|npm-shrinkwrap\.json))$/u;
+let corepackPnpmShimDir;
 
 export function createChangedCheckChildEnv(baseEnv = process.env) {
   const resolvedBaseEnv = resolveLocalHeavyCheckEnv(baseEnv);
@@ -115,6 +117,7 @@ export function buildChangedCheckCrabboxArgs(argv = []) {
     "OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS=900000",
     "OPENCLAW_TESTBOX=1",
     "OPENCLAW_TESTBOX_REMOTE_RUN=1",
+    "corepack",
     "pnpm",
     "check:changed",
     ...argv,
@@ -330,7 +333,7 @@ function printPlan(result, plan, options) {
 }
 
 async function runPnpm(command, timings) {
-  return await runCommand({ ...command, bin: "pnpm" }, timings);
+  return await runCommand(createPnpmManagedCommand(command), timings);
 }
 
 async function runPlanCommand(command, timings) {
@@ -338,6 +341,45 @@ async function runPlanCommand(command, timings) {
     return await runCommand(command, timings);
   }
   return await runPnpm(command, timings);
+}
+
+export function createPnpmManagedCommand(command, env = process.env) {
+  const commandEnv = command.env ?? resolveLocalHeavyCheckEnv(env);
+  if (
+    isTruthyEnvFlag(commandEnv.OPENCLAW_TESTBOX_REMOTE_RUN) ||
+    isTruthyEnvFlag(commandEnv.CI) ||
+    isTruthyEnvFlag(commandEnv.GITHUB_ACTIONS)
+  ) {
+    const shimmedEnv = prependCorepackPnpmShim(commandEnv);
+    return {
+      ...command,
+      bin: "corepack",
+      args: ["pnpm", ...command.args],
+      env: shimmedEnv,
+    };
+  }
+  return { ...command, bin: "pnpm", env: commandEnv };
+}
+
+function prependCorepackPnpmShim(env) {
+  const shimDir = ensureCorepackPnpmShimDir();
+  return {
+    ...env,
+    PATH: [shimDir, env.PATH ?? env.Path ?? ""].filter(Boolean).join(path.delimiter),
+  };
+}
+
+function ensureCorepackPnpmShimDir() {
+  if (corepackPnpmShimDir) {
+    return corepackPnpmShimDir;
+  }
+  const dir = mkdtempSync(path.join(tmpdir(), "openclaw-corepack-pnpm-"));
+  const pnpmPath = path.join(dir, "pnpm");
+  writeFileSync(pnpmPath, "#!/bin/sh\nexec corepack pnpm \"$@\"\n", "utf8");
+  chmodSync(pnpmPath, 0o755);
+  writeFileSync(path.join(dir, "pnpm.cmd"), "@echo off\r\ncorepack pnpm %*\r\n", "utf8");
+  corepackPnpmShimDir = dir;
+  return dir;
 }
 
 async function runCommand(command, timings) {

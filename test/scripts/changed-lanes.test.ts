@@ -12,6 +12,7 @@ import {
   buildChangedCheckCrabboxArgs,
   createChangedCheckChildEnv,
   createChangedCheckPlan,
+  createPnpmManagedCommand,
   shouldDelegateChangedCheckToCrabbox,
   shouldRunShrinkwrapGuard,
 } from "../../scripts/check-changed.mjs";
@@ -279,6 +280,38 @@ describe("scripts/changed-lanes", () => {
     });
   });
 
+  it("runs remote Testbox changed-check children through Corepack pnpm", () => {
+    const command = createPnpmManagedCommand(
+      { name: "conflict markers", args: ["check:no-conflict-markers"] },
+      { OPENCLAW_TESTBOX_REMOTE_RUN: "1", PATH: "/usr/bin" },
+    );
+
+    expect(command.bin).toBe("corepack");
+    expect(command.args).toEqual(["pnpm", "check:no-conflict-markers"]);
+    expect(command.env?.PATH).not.toBe("/usr/bin");
+    expect(command.env?.PATH).toContain("/usr/bin");
+  });
+
+  it("runs CI changed-check children through Corepack pnpm", () => {
+    const command = createPnpmManagedCommand(
+      { name: "conflict markers", args: ["check:no-conflict-markers"] },
+      { CI: "1", PATH: "/usr/bin" },
+    );
+
+    expect(command.bin).toBe("corepack");
+    expect(command.args).toEqual(["pnpm", "check:no-conflict-markers"]);
+  });
+
+  it("keeps local changed-check children on the repo pnpm shim", () => {
+    const command = createPnpmManagedCommand(
+      { name: "conflict markers", args: ["check:no-conflict-markers"] },
+      { PATH: "/usr/bin" },
+    );
+
+    expect(command.bin).toBe("pnpm");
+    expect(command.args).toEqual(["check:no-conflict-markers"]);
+  });
+
   it("delegates local Testbox-mode changed gates before running locally", () => {
     expect(
       shouldDelegateChangedCheckToCrabbox(["--base", "origin/main"], {
@@ -313,6 +346,7 @@ describe("scripts/changed-lanes", () => {
       "OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS=900000",
       "OPENCLAW_TESTBOX=1",
       "OPENCLAW_TESTBOX_REMOTE_RUN=1",
+      "corepack",
       "pnpm",
       "check:changed",
       "--base",
