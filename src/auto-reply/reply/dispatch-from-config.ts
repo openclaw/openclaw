@@ -1474,11 +1474,17 @@ export async function dispatchReplyFromConfig(
     // so /stop can abort pre-run and in-run stalls through the same session lane.
     ensureDispatchReplyOperation();
 
+    const chatType = normalizeChatType(ctx.ChatType);
     const isSlackNonDirectSurface =
-      (ctx.Surface === "slack" || ctx.Provider === "slack") && ctx.ChatType !== "direct";
-    const shouldSendVerboseProgressMessages =
-      !isSlackNonDirectSurface && (ctx.ChatType !== "group" || ctx.IsForum === true);
-    const shouldSendToolSummaries = shouldSendVerboseProgressMessages;
+      (ctx.Surface === "slack" || ctx.Provider === "slack") && chatType !== "direct";
+    const isGroupChat = chatType === "group";
+    const isForumTopic = ctx.IsForum === true;
+    const shouldAllowGroupVerboseProgress = () =>
+      isGroupChat && !isForumTopic && shouldEmitVerboseProgress();
+    const shouldSendVerboseProgressMessages = () =>
+      !isSlackNonDirectSurface &&
+      (!isGroupChat || isForumTopic || shouldAllowGroupVerboseProgress());
+    const shouldSendToolSummaries = () => shouldSendVerboseProgressMessages();
     const shouldSendToolStartStatuses = false;
     const shouldDeliverVerboseProgressDespiteSourceSuppression = () =>
       suppressAutomaticSourceDelivery &&
@@ -1486,7 +1492,7 @@ export async function dispatchReplyFromConfig(
       ctx.InboundEventKind !== "room_event" &&
       !sendPolicyDenied &&
       shouldEmitVerboseProgress() &&
-      shouldSendVerboseProgressMessages;
+      shouldSendVerboseProgressMessages();
     let finalReplyDeliveryStarted = false;
     const hasExecApprovalPayload = (payload: ReplyPayload) => {
       const execApproval =
@@ -1635,7 +1641,8 @@ export async function dispatchReplyFromConfig(
               shouldRouteToOriginating,
               originatingChannel: routeReplyChannel,
               originatingTo: routeReplyTo,
-              shouldSendToolSummaries,
+              shouldSendToolSummaries: shouldSendToolSummaries(),
+              shouldSendToolSummariesNow: shouldSendToolSummaries,
               sendPolicy,
             },
             {
@@ -1720,7 +1727,7 @@ export async function dispatchReplyFromConfig(
     }): Promise<void> => {
       if (
         shouldSuppressProgressDelivery() ||
-        !shouldSendVerboseProgressMessages ||
+        !shouldSendVerboseProgressMessages() ||
         didSendPlanStatusNotice
       ) {
         return;
@@ -1796,7 +1803,7 @@ export async function dispatchReplyFromConfig(
       ) {
         return null;
       }
-      if (shouldSendToolSummaries) {
+      if (shouldSendToolSummaries()) {
         return payload;
       }
       const execApproval =
@@ -1832,7 +1839,7 @@ export async function dispatchReplyFromConfig(
     const hasVisibleRegularVerboseToolProgress =
       shouldEmitVerboseProgress() &&
       !shouldEmitFullVerboseProgress() &&
-      shouldSendVerboseProgressMessages &&
+      shouldSendVerboseProgressMessages() &&
       ctx.InboundEventKind !== "room_event" &&
       !shouldSuppressProgressDelivery();
     const suppressToolErrorWarnings =
@@ -2145,7 +2152,8 @@ export async function dispatchReplyFromConfig(
               shouldRouteToOriginating,
               originatingChannel: routeReplyChannel,
               originatingTo: routeReplyTo,
-              shouldSendToolSummaries,
+              shouldSendToolSummaries: shouldSendToolSummaries(),
+              shouldSendToolSummariesNow: shouldSendToolSummaries,
               sendPolicy,
               isTailDispatch: true,
             },

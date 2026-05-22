@@ -99,6 +99,7 @@ export async function tryDispatchAcpReplyHook(
     originatingChannel: event.originatingChannel,
     originatingTo: event.originatingTo,
     shouldSendToolSummaries: event.shouldSendToolSummaries,
+    shouldSendToolSummariesNow: event.shouldSendToolSummariesNow,
     bypassForCommand,
     onReplyStart: ctx.onReplyStart,
     recordProcessed: ctx.recordProcessed,

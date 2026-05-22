@@ -114,6 +114,22 @@ describe("tryDispatchAcpReplyHook", () => {
     });
   });
 
+  it("passes the dynamic tool-summary predicate through to ACP runtime", async () => {
+    bypassMock.mockResolvedValue(false);
+    dispatchMock.mockResolvedValue({
+      queuedFinal: false,
+      counts: { tool: 0, block: 0, final: 0 },
+    });
+    const shouldSendToolSummariesNow = vi.fn(() => true);
+
+    await tryDispatchAcpReplyHook({ ...event, shouldSendToolSummariesNow }, ctx);
+
+    expectDispatchPayloadFields({
+      shouldSendToolSummaries: true,
+      shouldSendToolSummariesNow,
+    });
+  });
+
   it("returns unhandled when ACP dispatcher declines the turn", async () => {
     bypassMock.mockResolvedValue(false);
     dispatchMock.mockResolvedValue(undefined);
