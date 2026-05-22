@@ -54,7 +54,7 @@ export const GUARDED_FETCH_MODE = {
 
 export type GuardedFetchMode = (typeof GUARDED_FETCH_MODE)[keyof typeof GUARDED_FETCH_MODE];
 
-export type GuardedFetchManagedProxyBypass = {
+type GuardedFetchManagedProxyBypass = {
   kind: "configured-local-origin";
   baseUrl: string;
 };
@@ -83,7 +83,6 @@ export type GuardedFetchOptions = {
   lookupFn?: LookupFn;
   dispatcherPolicy?: PinnedDispatcherPolicy;
   mode?: GuardedFetchMode;
-  managedProxyBypass?: GuardedFetchManagedProxyBypass;
   pinDns?: boolean;
   /** @deprecated use `mode: "trusted_env_proxy"` for trusted/operator-controlled URLs. */
   proxy?: "env";
@@ -99,6 +98,14 @@ export type GuardedFetchResult = {
   finalUrl: string;
   release: () => Promise<void>;
   refreshTimeout?: () => void;
+};
+
+type GuardedFetchInternalOptions = GuardedFetchOptions & {
+  managedProxyBypass?: GuardedFetchManagedProxyBypass;
+};
+
+export type GuardedFetchConfiguredLocalOriginOptions = GuardedFetchOptions & {
+  configuredLocalOriginBaseUrl: string;
 };
 
 type GuardedFetchPresetOptions = Omit<
@@ -420,6 +427,25 @@ function rewriteRedirectInitForCrossOrigin(params: {
 export { fetchWithRuntimeDispatcher } from "./runtime-fetch.js";
 
 export async function fetchWithSsrFGuard(params: GuardedFetchOptions): Promise<GuardedFetchResult> {
+  return await fetchWithSsrFGuardInternal(params);
+}
+
+export async function fetchConfiguredLocalOriginWithSsrFGuard({
+  configuredLocalOriginBaseUrl,
+  ...params
+}: GuardedFetchConfiguredLocalOriginOptions): Promise<GuardedFetchResult> {
+  return await fetchWithSsrFGuardInternal({
+    ...params,
+    managedProxyBypass: {
+      kind: "configured-local-origin",
+      baseUrl: configuredLocalOriginBaseUrl,
+    },
+  });
+}
+
+async function fetchWithSsrFGuardInternal(
+  params: GuardedFetchInternalOptions,
+): Promise<GuardedFetchResult> {
   const defaultFetch: FetchLike | undefined = params.fetchImpl ?? globalThis.fetch;
   if (!defaultFetch) {
     throw new Error("fetch is not available");
