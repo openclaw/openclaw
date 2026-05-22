@@ -19,8 +19,8 @@ successCriteria:
 docsRefs:
   - docs/cli/doctor.md
 codeRefs:
-  - extensions/qa-lab/src/auth-profile-fixture.ts
-  - extensions/qa-lab/src/codex-plugin-fixture.ts
+  - extensions/qa-lab/src/auth-profile.fixture.ts
+  - extensions/qa-lab/src/codex-plugin.fixture.ts
   - extensions/qa-lab/src/codex-plugin-lifecycle.test.ts
 execution:
   kind: flow
@@ -39,10 +39,10 @@ steps:
     actions:
       - set: auth
         value:
-          expr: await qaImport("./auth-profile-fixture.js")
+          expr: await qaImport("./auth-profile.fixture.js")
       - set: plugin
         value:
-          expr: await qaImport("./codex-plugin-fixture.js")
+          expr: await qaImport("./codex-plugin.fixture.js")
       - forEach:
           items:
             ref: config.matrixCells
