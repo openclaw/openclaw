@@ -18,15 +18,8 @@ export type {
 export type { ChannelPlugin } from "openclaw/plugin-sdk/channel-core";
 export { logTypingFailure } from "openclaw/plugin-sdk/channel-logging";
 export { createChannelPairingController } from "openclaw/plugin-sdk/channel-pairing";
-export {
-  evaluateSenderGroupAccessForPolicy,
-  readStoreAllowFromForDmPolicy,
-  resolveDmGroupAccessWithLists,
-  resolveEffectiveAllowFromLists,
-  resolveSenderScopedGroupPolicy,
-  resolveToolsBySender,
-} from "openclaw/plugin-sdk/channel-policy";
-export { createChannelReplyPipeline } from "openclaw/plugin-sdk/channel-reply-pipeline";
+export { resolveToolsBySender } from "openclaw/plugin-sdk/channel-policy";
+export { createChannelMessageReplyPipeline } from "openclaw/plugin-sdk/channel-message";
 export {
   PAIRING_APPROVED_MESSAGE,
   buildProbeChannelStatusSummary,
@@ -47,7 +40,7 @@ export type {
   MSTeamsTeamConfig,
   MarkdownTableMode,
   OpenClawConfig,
-} from "openclaw/plugin-sdk/config-types";
+} from "openclaw/plugin-sdk/config-contracts";
 export { isDangerousNameMatchingEnabled } from "openclaw/plugin-sdk/dangerous-name-runtime";
 export { resolveDefaultGroupPolicy } from "openclaw/plugin-sdk/runtime-group-policy";
 export { withFileLock } from "openclaw/plugin-sdk/file-lock";

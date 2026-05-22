@@ -1,14 +1,27 @@
+import type { CommandTurnKind } from "../../auto-reply/command-turn-context.js";
 import type { GetReplyOptions } from "../../auto-reply/get-reply-options.types.js";
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import type { DispatchFromConfigResult } from "../../auto-reply/reply/dispatch-from-config.types.js";
 import type { GetReplyFromConfig } from "../../auto-reply/reply/get-reply.types.js";
+import type { HistoryEntry, HistoryMediaEntry } from "../../auto-reply/reply/history.types.js";
 import type { DispatchReplyWithBufferedBlockDispatcher } from "../../auto-reply/reply/provider-dispatcher.types.js";
 import type { ReplyDispatcherWithTypingOptions } from "../../auto-reply/reply/reply-dispatcher.js";
 import type { ReplyDispatchKind } from "../../auto-reply/reply/reply-dispatcher.types.js";
 import type { FinalizedMsgContext, MsgContext } from "../../auto-reply/templating.js";
 import type { GroupKeyResolution } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type {
+  DeliverOutboundPayloadsParams,
+  DurableFinalDeliveryRequirements,
+  OutboundDeliveryQueuePolicy,
+} from "../../infra/outbound/deliver.js";
+import type { InboundEventKind } from "../inbound-event/kind.js";
+import type { CreateChannelReplyPipelineParams } from "../message/reply-pipeline.js";
+import type { MessageReceipt } from "../message/types.js";
 import type { InboundLastRouteUpdate, RecordInboundSession } from "../session.types.js";
+import type { ChannelBotLoopProtectionFacts } from "./bot-loop-protection.js";
+
+export type { InboundEventKind } from "../inbound-event/kind.js";
 
 export type ChannelTurnAdmission =
   | { kind: "dispatch"; reason?: string }
@@ -32,7 +45,7 @@ export type NormalizedTurnInput = {
 };
 
 export type SenderFacts = {
-  id: string;
+  id?: string;
   name?: string;
   username?: string;
   tag?: string;
@@ -76,38 +89,96 @@ export type ReplyPlanFacts = {
   deliveryTarget?: string;
   replyToId?: string;
   replyToIdFull?: string;
-  messageThreadId?: string;
+  messageThreadId?: string | number;
   threadParentId?: string;
   sourceReplyDeliveryMode?: "thread" | "reply" | "channel" | "direct" | "none";
+};
+
+export type ProjectedAllowlistAccessFacts = {
+  configured: boolean;
+  matched: boolean;
+  reasonCode?: string;
+  matchedEntryIds: string[];
+  invalidEntryCount: number;
+  disabledEntryCount: number;
+  accessGroups: {
+    referenced: string[];
+    matched: string[];
+    missing: string[];
+    unsupported: string[];
+    failed: string[];
+  };
+};
+
+export type ProjectedEventAccessFacts = {
+  kind:
+    | "message"
+    | "reaction"
+    | "button"
+    | "postback"
+    | "native-command"
+    | "slash-command"
+    | "system";
+  authMode: "inbound" | "command" | "origin-subject" | "route-only" | "none";
+  mayPair: boolean;
+  authorized: boolean;
+  reasonCode?: string;
+  hasOriginSubject: boolean;
+  originSubjectMatched: boolean;
 };
 
 export type AccessFacts = {
   dm?: {
     decision: "allow" | "pairing" | "deny";
     reason?: string;
+    /**
+     * @deprecated Shared ingress projections redact allowlist entries and return an empty compat list.
+     * Use allowlist diagnostics instead.
+     */
     allowFrom: string[];
+    allowlist?: ProjectedAllowlistAccessFacts;
   };
   group?: {
     policy: "open" | "allowlist" | "disabled";
     routeAllowed: boolean;
     senderAllowed: boolean;
+    /**
+     * @deprecated Shared ingress projections redact allowlist entries and return an empty compat list.
+     * Use allowlist diagnostics instead.
+     */
     allowFrom: string[];
     requireMention: boolean;
+    allowlist?: ProjectedAllowlistAccessFacts;
   };
   commands?: {
+    authorized?: boolean;
+    shouldBlockControlCommand?: boolean;
+    reasonCode?: string;
     useAccessGroups: boolean;
     allowTextCommands: boolean;
+    modeWhenAccessGroupsOff?: "allow" | "deny" | "configured";
+    /**
+     * @deprecated Shared ingress projections do not expose raw authorizer lists.
+     * Use authorized and reasonCode instead.
+     */
     authorizers: Array<{ configured: boolean; allowed: boolean }>;
   };
+  event?: ProjectedEventAccessFacts;
   mentions?: {
     canDetectMention: boolean;
     wasMentioned: boolean;
     hasAnyMention?: boolean;
-    implicitMentionKinds?: Array<"reply_to_bot" | "bot_thread_participant" | "native">;
+    implicitMentionKinds?: Array<
+      "reply_to_bot" | "quoted_bot" | "bot_thread_participant" | "native"
+    >;
+    requireMention?: boolean;
+    effectiveWasMentioned?: boolean;
+    shouldSkip?: boolean;
   };
 };
 
 export type MessageFacts = {
+  inboundEventKind?: InboundEventKind;
   body?: string;
   rawBody: string;
   bodyForAgent?: string;
@@ -115,7 +186,14 @@ export type MessageFacts = {
   envelopeFrom: string;
   senderLabel?: string;
   preview?: string;
-  inboundHistory?: Array<{ sender: string; body: string; timestamp?: number }>;
+  inboundHistory?: HistoryEntry[];
+};
+
+export type CommandFacts = {
+  kind: CommandTurnKind;
+  body?: string;
+  name?: string;
+  authorized?: boolean;
 };
 
 export type SupplementalContextFacts = {
@@ -133,6 +211,7 @@ export type SupplementalContextFacts = {
     fromType?: string;
     fromId?: string;
     date?: number;
+    senderAllowed?: boolean;
   };
   thread?: {
     id?: string;
@@ -143,7 +222,7 @@ export type SupplementalContextFacts = {
     modelParentSessionKey?: string;
     senderAllowed?: boolean;
   };
-  untrustedContext?: unknown[];
+  untrustedContext?: Array<{ label: string; source?: string; type?: string; payload: unknown }>;
   groupSystemPrompt?: string;
 };
 
@@ -153,31 +232,76 @@ export type InboundMediaFacts = {
   contentType?: string;
   kind?: "image" | "video" | "audio" | "document" | "unknown";
   transcribed?: boolean;
+  messageId?: string;
 };
+
+type MaybePromise<T> = T | Promise<T>;
 
 export type PreflightFacts = {
   admission?: ChannelTurnAdmission;
+  command?: CommandFacts;
   message?: Partial<MessageFacts>;
-  media?: InboundMediaFacts[];
+  media?:
+    | readonly InboundMediaFacts[]
+    | (() => MaybePromise<
+        readonly InboundMediaFacts[] | readonly HistoryMediaEntry[] | null | undefined
+      >);
   supplemental?: SupplementalContextFacts;
+  history?: ChannelTurnDroppedHistoryOptions;
 };
 
 export type ChannelDeliveryInfo = {
   kind: ReplyDispatchKind;
 };
 
+export type ChannelDeliveryIntent = {
+  id: string;
+  kind: "outbound_queue";
+  queuePolicy: OutboundDeliveryQueuePolicy;
+};
+
 export type ChannelDeliveryResult = {
   messageIds?: string[];
+  receipt?: MessageReceipt;
   threadId?: string;
   replyToId?: string;
   visibleReplySent?: boolean;
+  deliveryIntent?: ChannelDeliveryIntent;
 };
 
-export type ChannelTurnDeliveryAdapter = {
+export type ChannelTurnDurableDeliveryOptions = Pick<
+  DeliverOutboundPayloadsParams,
+  "deps" | "formatting" | "identity" | "mediaAccess" | "replyToMode" | "silent" | "threadId"
+> & {
+  to?: string | null;
+  replyToId?: string | null;
+  requiredCapabilities?: DurableFinalDeliveryRequirements;
+};
+
+export type ChannelEventDeliveryAdapter = {
+  preparePayload?: (
+    payload: ReplyPayload,
+    info: ChannelDeliveryInfo,
+  ) => Promise<ReplyPayload> | ReplyPayload;
   deliver: (
     payload: ReplyPayload,
     info: ChannelDeliveryInfo,
   ) => Promise<ChannelDeliveryResult | void>;
+  durable?:
+    | false
+    | ChannelTurnDurableDeliveryOptions
+    | ((
+        payload: ReplyPayload,
+        info: ChannelDeliveryInfo,
+      ) =>
+        | false
+        | ChannelTurnDurableDeliveryOptions
+        | Promise<false | ChannelTurnDurableDeliveryOptions>);
+  onDelivered?: (
+    payload: ReplyPayload,
+    info: ChannelDeliveryInfo,
+    result: ChannelDeliveryResult | void,
+  ) => Promise<void> | void;
   onError?: (err: unknown, info: { kind: string }) => void;
 };
 
@@ -189,9 +313,30 @@ export type ChannelTurnRecordOptions = {
   trackSessionMetaTask?: (task: Promise<unknown>) => void;
 };
 
+export type ChannelTurnHistoryFinalizeOptions = {
+  isGroup?: boolean;
+  historyKey?: string;
+  historyMap?: Map<string, HistoryEntry[]>;
+  limit?: number;
+};
+
+export type ChannelTurnDroppedHistoryOptions = {
+  key: string;
+  limit: number;
+  historyMap: Map<string, HistoryEntry[]>;
+  recordOnDrop?: boolean;
+  mediaLimit?: number;
+  shouldRecord?: () => boolean;
+};
+
 export type ChannelTurnDispatcherOptions = Omit<
   ReplyDispatcherWithTypingOptions,
   "deliver" | "onError"
+>;
+
+export type ChannelTurnReplyPipelineOptions = Omit<
+  CreateChannelReplyPipelineParams,
+  "cfg" | "agentId" | "channel" | "accountId"
 >;
 
 export type AssembledChannelTurn = {
@@ -204,11 +349,17 @@ export type AssembledChannelTurn = {
   ctxPayload: FinalizedMsgContext;
   recordInboundSession: RecordInboundSession;
   dispatchReplyWithBufferedBlockDispatcher: DispatchReplyWithBufferedBlockDispatcher;
-  delivery: ChannelTurnDeliveryAdapter;
+  delivery: ChannelEventDeliveryAdapter;
+  replyPipeline?: ChannelTurnReplyPipelineOptions;
   dispatcherOptions?: ChannelTurnDispatcherOptions;
   replyOptions?: Omit<GetReplyOptions, "onBlockReply">;
   replyResolver?: GetReplyFromConfig;
   record?: ChannelTurnRecordOptions;
+  history?: ChannelTurnHistoryFinalizeOptions;
+  admission?: Extract<ChannelTurnAdmission, { kind: "dispatch" | "observeOnly" }>;
+  botLoopProtection?: ChannelBotLoopProtectionFacts;
+  log?: (event: ChannelTurnLogEvent) => void;
+  messageId?: string;
 };
 
 export type PreparedChannelTurn<TDispatchResult = DispatchFromConfigResult> = {
@@ -219,13 +370,23 @@ export type PreparedChannelTurn<TDispatchResult = DispatchFromConfigResult> = {
   ctxPayload: FinalizedMsgContext;
   recordInboundSession: RecordInboundSession;
   record?: ChannelTurnRecordOptions;
+  history?: ChannelTurnHistoryFinalizeOptions;
   onPreDispatchFailure?: (err: unknown) => void | Promise<void>;
   runDispatch: () => Promise<TDispatchResult>;
+  observeOnlyDispatchResult?: TDispatchResult;
+  admission?: Extract<ChannelTurnAdmission, { kind: "dispatch" | "observeOnly" }>;
+  botLoopProtection?: ChannelBotLoopProtectionFacts;
+  log?: (event: ChannelTurnLogEvent) => void;
+  messageId?: string;
 };
 
-export type ChannelTurnResolved = AssembledChannelTurn & {
-  admission?: Extract<ChannelTurnAdmission, { kind: "dispatch" | "observeOnly" }>;
-};
+export type ChannelTurnResolved<TDispatchResult = DispatchFromConfigResult> =
+  | (AssembledChannelTurn & {
+      admission?: Extract<ChannelTurnAdmission, { kind: "dispatch" | "observeOnly" }>;
+    })
+  | (PreparedChannelTurn<TDispatchResult> & {
+      admission?: Extract<ChannelTurnAdmission, { kind: "dispatch" | "observeOnly" }>;
+    });
 
 export type ChannelTurnStage =
   | "ingest"
@@ -250,23 +411,24 @@ export type ChannelTurnLogEvent = {
   error?: unknown;
 };
 
-export type ChannelTurnResult = {
-  admission: ChannelTurnAdmission;
-  dispatched: boolean;
-  ctxPayload?: MsgContext;
-  routeSessionKey?: string;
-  dispatchResult?: DispatchFromConfigResult;
-};
+export type ChannelTurnResult<TDispatchResult = DispatchFromConfigResult> =
+  | DispatchedChannelTurnResult<TDispatchResult>
+  | {
+      admission: ChannelTurnAdmission;
+      dispatched: false;
+      ctxPayload?: MsgContext;
+      routeSessionKey?: string;
+    };
 
 export type DispatchedChannelTurnResult<TDispatchResult = DispatchFromConfigResult> = {
-  admission: Extract<ChannelTurnAdmission, { kind: "dispatch" }>;
+  admission: Extract<ChannelTurnAdmission, { kind: "dispatch" | "observeOnly" }>;
   dispatched: true;
   ctxPayload: MsgContext;
   routeSessionKey: string;
   dispatchResult: TDispatchResult;
 };
 
-export type ChannelTurnAdapter<TRaw> = {
+export type ChannelTurnAdapter<TRaw, TDispatchResult = DispatchFromConfigResult> = {
   ingest: (raw: TRaw) => Promise<NormalizedTurnInput | null> | NormalizedTurnInput | null;
   classify?: (input: NormalizedTurnInput) => Promise<ChannelEventClass> | ChannelEventClass;
   preflight?: (
@@ -282,19 +444,19 @@ export type ChannelTurnAdapter<TRaw> = {
     input: NormalizedTurnInput,
     eventClass: ChannelEventClass,
     preflight: PreflightFacts,
-  ) => Promise<ChannelTurnResolved> | ChannelTurnResolved;
-  onFinalize?: (result: ChannelTurnResult) => Promise<void> | void;
+  ) => Promise<ChannelTurnResolved<TDispatchResult>> | ChannelTurnResolved<TDispatchResult>;
+  onFinalize?: (result: ChannelTurnResult<TDispatchResult>) => Promise<void> | void;
 };
 
-export type RunChannelTurnParams<TRaw> = {
+export type RunChannelTurnParams<TRaw, TDispatchResult = DispatchFromConfigResult> = {
   channel: string;
   accountId?: string;
   raw: TRaw;
-  adapter: ChannelTurnAdapter<TRaw>;
+  adapter: ChannelTurnAdapter<TRaw, TDispatchResult>;
   log?: (event: ChannelTurnLogEvent) => void;
 };
 
-export type RunResolvedChannelTurnParams<TRaw> = {
+export type RunResolvedChannelTurnParams<TRaw, TDispatchResult = DispatchFromConfigResult> = {
   channel: string;
   accountId?: string;
   raw: TRaw;
@@ -305,6 +467,6 @@ export type RunResolvedChannelTurnParams<TRaw> = {
     input: NormalizedTurnInput,
     eventClass: ChannelEventClass,
     preflight: PreflightFacts,
-  ) => Promise<ChannelTurnResolved> | ChannelTurnResolved;
+  ) => Promise<ChannelTurnResolved<TDispatchResult>> | ChannelTurnResolved<TDispatchResult>;
   log?: (event: ChannelTurnLogEvent) => void;
 };

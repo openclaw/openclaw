@@ -11,6 +11,7 @@ function resolveBuiltInModelSuppressionFromManifest(params: {
   id?: string | null;
   baseUrl?: string | null;
   config?: OpenClawConfig;
+  unconditionalOnly?: boolean;
 }) {
   const provider = normalizeProviderId(params.provider ?? "");
   const modelId = normalizeLowercaseStringOrEmpty(params.id);
@@ -22,6 +23,7 @@ function resolveBuiltInModelSuppressionFromManifest(params: {
     id: modelId,
     ...(params.config ? { config: params.config } : {}),
     ...(params.baseUrl ? { baseUrl: params.baseUrl } : {}),
+    unconditionalOnly: params.unconditionalOnly,
     env: process.env,
   });
 }
@@ -59,6 +61,20 @@ export function shouldSuppressBuiltInModel(params: {
   config?: OpenClawConfig;
 }) {
   return resolveBuiltInModelSuppression(params)?.suppress ?? false;
+}
+
+// Checks only unconditional suppressions (no `when` clause). Used for inline
+// model entries where user configuration may override conditional suppressions
+// (e.g. custom endpoint overrides) but not absolute provider capability blocks.
+export function shouldUnconditionallySuppress(params: {
+  provider?: string | null;
+  id?: string | null;
+  config?: OpenClawConfig;
+}): boolean {
+  return (
+    resolveBuiltInModelSuppressionFromManifest({ ...params, unconditionalOnly: true })?.suppress ??
+    false
+  );
 }
 
 export function buildSuppressedBuiltInModelError(params: {

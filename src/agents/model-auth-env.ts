@@ -18,12 +18,13 @@ export type EnvApiKeyResult = {
   source: string;
 };
 
-export type EnvApiKeyLookupOptions = {
+type EnvApiKeyLookupOptions = {
   config?: OpenClawConfig;
   workspaceDir?: string;
   aliasMap?: Readonly<Record<string, string>>;
   candidateMap?: Readonly<Record<string, readonly string[]>>;
   authEvidenceMap?: Readonly<Record<string, readonly ProviderAuthEvidence[]>>;
+  skipSetupProviderFallback?: boolean;
 };
 
 function expandAuthEvidencePath(rawPath: string, env: NodeJS.ProcessEnv): string | undefined {
@@ -31,8 +32,20 @@ function expandAuthEvidencePath(rawPath: string, env: NodeJS.ProcessEnv): string
   if (!trimmed) {
     return undefined;
   }
-  const homeDir = normalizeOptionalSecretInput(env.HOME) ?? os.homedir();
-  return trimmed.replaceAll("${HOME}", homeDir);
+  const homeDir = normalizeOptionalPathInput(env.HOME) ?? os.homedir();
+  const appDataDir = normalizeOptionalPathInput(env.APPDATA);
+  if (trimmed.includes("${APPDATA}") && !appDataDir) {
+    return undefined;
+  }
+  return trimmed.replaceAll("${HOME}", homeDir).replaceAll("${APPDATA}", appDataDir ?? "");
+}
+
+function normalizeOptionalPathInput(value: unknown): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const trimmed = value.trim();
+  return trimmed ? trimmed : undefined;
 }
 
 function hasRequiredAuthEvidenceEnv(
@@ -51,7 +64,7 @@ function hasRequiredAuthEvidenceEnv(
 
 function hasLocalFileAuthEvidence(evidence: ProviderAuthEvidence, env: NodeJS.ProcessEnv): boolean {
   if (evidence.fileEnvVar) {
-    const explicitPath = normalizeOptionalSecretInput(env[evidence.fileEnvVar]);
+    const explicitPath = normalizeOptionalPathInput(env[evidence.fileEnvVar]);
     if (explicitPath) {
       return fs.existsSync(explicitPath);
     }
@@ -90,14 +103,14 @@ export function resolveEnvApiKey(
   options: EnvApiKeyLookupOptions = {},
 ): EnvApiKeyResult | null {
   const normalizedProvider = normalizeProviderIdForAuth(provider);
-  const normalized = options.aliasMap
-    ? (options.aliasMap[normalizedProvider] ?? normalizedProvider)
-    : resolveProviderIdForAuth(provider, { env });
   const lookupParams = {
     config: options.config,
     workspaceDir: options.workspaceDir,
     env,
   };
+  const normalized = options.aliasMap
+    ? (options.aliasMap[normalizedProvider] ?? normalizedProvider)
+    : resolveProviderIdForAuth(provider, lookupParams);
   const candidateMap = options.candidateMap ?? resolveProviderEnvApiKeyCandidates(lookupParams);
   const authEvidenceMap = options.authEvidenceMap ?? resolveProviderEnvAuthEvidence(lookupParams);
   const applied = new Set(getShellEnvAppliedKeys());
@@ -120,12 +133,18 @@ export function resolveEnvApiKey(
     }
   }
 
-  const authEvidence = resolveAuthEvidence(authEvidenceMap[normalized], env);
+  const evidence = Object.hasOwn(authEvidenceMap, normalized)
+    ? authEvidenceMap[normalized]
+    : undefined;
+  const authEvidence = resolveAuthEvidence(evidence, env);
   if (authEvidence) {
     return authEvidence;
   }
 
   if (Array.isArray(candidates)) {
+    return null;
+  }
+  if (options.skipSetupProviderFallback === true) {
     return null;
   }
 

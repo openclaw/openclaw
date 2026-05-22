@@ -1,11 +1,7 @@
 import { getChannelPlugin } from "../../channels/plugins/index.js";
 import type { ChannelId } from "../../channels/plugins/types.public.js";
 import { normalizeChannelId } from "../../channels/registry.js";
-import {
-  readConfigFileSnapshot,
-  replaceConfigFile,
-  validateConfigObjectWithPlugins,
-} from "../../config/config.js";
+import { readConfigFileSnapshot } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   addChannelAllowFromStoreEntry,
@@ -22,9 +18,10 @@ import {
   rejectNonOwnerCommand,
   rejectUnauthorizedCommand,
   requireCommandFlagEnabled,
-  requireGatewayClientScopeForInternalChannel,
+  requireGatewayClientScope,
 } from "./command-gates.js";
 import type { CommandHandler } from "./commands-types.js";
+import { applyAllowlistConfigMutation, AutoReplyConfigMutationError } from "./config-mutations.js";
 import { resolveConfigWriteDeniedText } from "./config-write-authorization.js";
 
 type AllowlistScope = "dm" | "group" | "all";
@@ -421,7 +418,7 @@ export const handleAllowlistCommand: CommandHandler = async (params, allowTextCo
     return { shouldContinue: false, reply: { text: lines.join("\n") } };
   }
 
-  const missingAdminScope = requireGatewayClientScopeForInternalChannel(params, {
+  const missingAdminScope = requireGatewayClientScope(params, {
     label: "/allowlist write",
     allowedScopes: ["operator.admin"],
     missingText: "❌ /allowlist add|remove requires operator.admin for gateway clients.",
@@ -457,6 +454,8 @@ export const handleAllowlistCommand: CommandHandler = async (params, allowTextCo
         },
       };
     }
+    const applyConfigEdit = plugin.allowlist.applyConfigEdit;
+    const editScope = parsed.scope;
 
     const snapshot = await readConfigFileSnapshot();
     if (!snapshot.valid || !snapshot.parsed || typeof snapshot.parsed !== "object") {
@@ -507,18 +506,21 @@ export const handleAllowlistCommand: CommandHandler = async (params, allowTextCo
     const configChanged = editResult.changed;
 
     if (configChanged) {
-      const validated = validateConfigObjectWithPlugins(parsedConfig);
-      if (!validated.ok) {
-        const issue = validated.issues[0];
-        return {
-          shouldContinue: false,
-          reply: { text: `⚠️ Config invalid after update (${issue.path}: ${issue.message}).` },
-        };
+      try {
+        await applyAllowlistConfigMutation({
+          cfg: params.cfg,
+          accountId,
+          scope: editScope,
+          action: parsed.action,
+          entry: parsed.entry,
+          applyConfigEdit,
+        });
+      } catch (error) {
+        if (error instanceof AutoReplyConfigMutationError) {
+          return { shouldContinue: false, reply: { text: `⚠️ ${error.message}` } };
+        }
+        throw error;
       }
-      await replaceConfigFile({
-        nextConfig: validated.config,
-        afterWrite: { mode: "auto" },
-      });
     }
 
     if (!configChanged && !shouldTouchStore) {

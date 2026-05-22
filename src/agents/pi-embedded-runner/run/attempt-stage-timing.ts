@@ -14,8 +14,15 @@ export type EmbeddedRunStageTracker = {
   snapshot: () => EmbeddedRunStageSummary;
 };
 
-export const EMBEDDED_RUN_STAGE_WARN_TOTAL_MS = 10_000;
-export const EMBEDDED_RUN_STAGE_WARN_STAGE_MS = 5_000;
+export const EMBEDDED_RUN_ATTEMPT_DISPATCH_STAGE = {
+  workspace: "attempt-workspace",
+  prompt: "attempt-prompt",
+  runtimePlan: "attempt-runtime-plan",
+  dispatch: "attempt-dispatch",
+} as const;
+
+const EMBEDDED_RUN_STAGE_WARN_TOTAL_MS = 10_000;
+const EMBEDDED_RUN_STAGE_WARN_STAGE_MS = 5_000;
 
 export function createEmbeddedRunStageTracker(options?: {
   now?: () => number;

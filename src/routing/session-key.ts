@@ -1,7 +1,12 @@
 import type { ChatType } from "../channels/chat-type.js";
-import { parseAgentSessionKey, type ParsedAgentSessionKey } from "../sessions/session-key-utils.js";
+import {
+  isCronRunSessionKey,
+  normalizeSessionPeerId,
+  normalizeSessionKeyPreservingOpaquePeerIds,
+  parseAgentSessionKey,
+} from "../sessions/session-key-utils.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
-import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "./account-id.js";
+import { normalizeAccountId } from "./account-id.js";
 
 export {
   getSubagentDepth,
@@ -35,8 +40,44 @@ function normalizeToken(value: string | undefined | null): string {
 export function scopedHeartbeatWakeOptions<T extends object>(
   sessionKey: string,
   wakeOptions: T,
-): T | (T & { sessionKey: string }) {
-  return parseAgentSessionKey(sessionKey) ? { ...wakeOptions, sessionKey } : wakeOptions;
+  mainKey?: string,
+  scope?: "per-sender" | "global",
+): T | (T & { sessionKey: string }) | (T & { agentId: string }) {
+  const parsed = parseAgentSessionKey(sessionKey);
+  if (!parsed) {
+    return wakeOptions;
+  }
+  if (isCronRunSessionKey(sessionKey)) {
+    // Global-scope agents drain the literal "global" queue, not agent-main;
+    // a targeted wake on agent:<id>:main would be unresolvable. Drop the
+    // sessionKey but carry the agent target so multi-agent global-scope
+    // setups still wake the originating agent's heartbeat.
+    if (scope === "global") {
+      return { ...wakeOptions, agentId: parsed.agentId };
+    }
+    return {
+      ...wakeOptions,
+      sessionKey: buildAgentMainSessionKey({ agentId: parsed.agentId, mainKey }),
+    };
+  }
+  return { ...wakeOptions, sessionKey };
+}
+
+export function resolveEventSessionKey(
+  sessionKey: string,
+  mainKey?: string,
+  scope?: "per-sender" | "global",
+): string {
+  const parsed = parseAgentSessionKey(sessionKey);
+  if (!parsed || !isCronRunSessionKey(sessionKey)) {
+    return sessionKey;
+  }
+  // Global-scope agents enqueue/drain via the literal "global" queue; agent-main
+  // would strand the event in a queue the heartbeat never peeks.
+  if (scope === "global") {
+    return "global";
+  }
+  return buildAgentMainSessionKey({ agentId: parsed.agentId, mainKey });
 }
 
 export function normalizeMainKey(value: string | undefined | null): string {
@@ -65,10 +106,11 @@ export function toAgentStoreSessionKey(params: {
   if (parsed) {
     return `agent:${parsed.agentId}:${parsed.rest}`;
   }
+  const normalized = normalizeSessionKeyPreservingOpaquePeerIds(raw);
   if (lowered.startsWith("agent:")) {
-    return lowered;
+    return normalized;
   }
-  return `agent:${normalizeAgentId(params.agentId)}:${lowered}`;
+  return `agent:${normalizeAgentId(params.agentId)}:${normalized}`;
 }
 
 export function resolveAgentIdFromSessionKey(sessionKey: string | undefined | null): string {
@@ -87,6 +129,31 @@ export function classifySessionKeyShape(sessionKey: string | undefined | null): 
   return normalizeLowercaseStringOrEmpty(raw).startsWith("agent:")
     ? "malformed_agent"
     : "legacy_or_alias";
+}
+
+export function isUnscopedSessionKeySentinel(sessionKey: string | undefined | null): boolean {
+  const lowered = normalizeLowercaseStringOrEmpty(sessionKey);
+  return lowered === "global" || lowered === "unknown";
+}
+
+export function scopeLegacySessionKeyToAgent(params: {
+  agentId?: string | undefined;
+  sessionKey?: string | undefined;
+  mainKey?: string | undefined;
+}): string | undefined {
+  const raw = (params.sessionKey ?? "").trim();
+  if (!raw) {
+    return undefined;
+  }
+  const agentId = params.agentId?.trim();
+  if (!agentId || classifySessionKeyShape(raw) !== "legacy_or_alias") {
+    return raw;
+  }
+  return toAgentStoreSessionKey({
+    agentId,
+    requestKey: raw,
+    mainKey: params.mainKey,
+  });
 }
 
 export function normalizeAgentId(value: string | undefined | null): string {
@@ -172,7 +239,12 @@ export function buildAgentPeerSessionKey(params: {
     });
   }
   const channel = normalizeLowercaseStringOrEmpty(params.channel) || "unknown";
-  const peerId = normalizeLowercaseStringOrEmpty(params.peerId) || "unknown";
+  const peerId =
+    normalizeSessionPeerId({
+      channel: params.channel,
+      peerKind,
+      peerId: params.peerId,
+    }) || "unknown";
   return `agent:${normalizeAgentId(params.agentId)}:${channel}:${peerKind}:${peerId}`;
 }
 
@@ -230,7 +302,12 @@ export function buildGroupHistoryKey(params: {
 }): string {
   const channel = normalizeToken(params.channel) || "unknown";
   const accountId = normalizeAccountId(params.accountId);
-  const peerId = normalizeLowercaseStringOrEmpty(params.peerId) || "unknown";
+  const peerId =
+    normalizeSessionPeerId({
+      channel,
+      peerKind: params.peerKind,
+      peerId: params.peerId,
+    }) || "unknown";
   return `${channel}:${accountId}:${params.peerKind}:${peerId}`;
 }
 

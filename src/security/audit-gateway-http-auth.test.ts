@@ -5,6 +5,17 @@ import {
   collectGatewayHttpSessionKeyOverrideFindings,
 } from "./audit-extra.sync.js";
 
+function requireFinding(
+  findings: Array<{ checkId: string; detail: string; severity?: string }>,
+  checkId: string,
+) {
+  const finding = findings.find((entry) => entry.checkId === checkId);
+  if (!finding) {
+    throw new Error(`Expected ${checkId} finding`);
+  }
+  return finding;
+}
+
 describe("security audit gateway HTTP auth findings", () => {
   it.each([
     {
@@ -28,8 +39,10 @@ describe("security audit gateway HTTP auth findings", () => {
           auth: { mode: "none" },
           http: { endpoints: { responses: { enabled: true } } },
         },
+        plugins: { entries: { "admin-http-rpc": { enabled: true } } },
       } satisfies OpenClawConfig,
       expectedFinding: { checkId: "gateway.http.no_auth", severity: "critical" as const },
+      detailIncludes: ["/api/v1/admin/rpc"],
       env: {} as NodeJS.ProcessEnv,
     },
     {
@@ -73,16 +86,16 @@ describe("security audit gateway HTTP auth findings", () => {
     ];
 
     if (expectedFinding) {
-      expect(findings).toEqual(expect.arrayContaining([expect.objectContaining(expectedFinding)]));
+      const finding = requireFinding(findings, expectedFinding.checkId);
+      expect(finding.severity).toBe(expectedFinding.severity);
       if (detailIncludes) {
-        const finding = findings.find((entry) => entry.checkId === expectedFinding.checkId);
         for (const text of detailIncludes) {
-          expect(finding?.detail, `${expectedFinding.checkId}:${text}`).toContain(text);
+          expect(finding.detail, `${expectedFinding.checkId}:${text}`).toContain(text);
         }
       }
     }
     if (expectedNoFinding) {
-      expect(findings.some((entry) => entry.checkId === expectedNoFinding)).toBe(false);
+      expect(findings.map((entry) => entry.checkId)).not.toContain(expectedNoFinding);
     }
   });
 });

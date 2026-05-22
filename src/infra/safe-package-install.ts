@@ -1,17 +1,21 @@
 import type { NpmProjectInstallEnvOptions } from "./npm-install-env.js";
 import { createNpmProjectInstallEnv } from "./npm-install-env.js";
 
-export type SafeNpmInstallEnvOptions = NpmProjectInstallEnvOptions & {
+type SafeNpmInstallEnvOptions = NpmProjectInstallEnvOptions & {
+  ignoreWorkspaces?: boolean;
   legacyPeerDeps?: boolean;
   packageLock?: boolean;
   quiet?: boolean;
 };
 
-export type SafeNpmInstallArgsOptions = {
+type SafeNpmInstallArgsOptions = {
+  ignoreWorkspaces?: boolean;
+  legacyPeerDeps?: boolean;
   loglevel?: "error" | "silent";
   noAudit?: boolean;
   noFund?: boolean;
   omitDev?: boolean;
+  omitPeer?: boolean;
 };
 
 export function createSafeNpmInstallEnv(
@@ -24,8 +28,12 @@ export function createSafeNpmInstallEnv(
     NPM_CONFIG_IGNORE_SCRIPTS: "true",
     npm_config_audit: "false",
     npm_config_fund: "false",
+    npm_config_ignore_scripts: "true",
+    npm_config_legacy_peer_deps: options.legacyPeerDeps ? "true" : "false",
     npm_config_package_lock: options.packageLock === true ? "true" : "false",
-    ...(options.legacyPeerDeps ? { npm_config_legacy_peer_deps: "true" } : {}),
+    npm_config_strict_peer_deps: "false",
+    ...(options.packageLock === true ? { npm_config_save: "true" } : {}),
+    ...(options.ignoreWorkspaces ? { npm_config_workspaces: "false" } : {}),
   };
   if (options.quiet) {
     Object.assign(nextEnv, {
@@ -41,8 +49,11 @@ export function createSafeNpmInstallArgs(options: SafeNpmInstallArgsOptions = {}
   return [
     "install",
     ...(options.omitDev ? ["--omit=dev"] : []),
+    ...(options.omitPeer ? ["--omit=peer"] : []),
+    ...(options.legacyPeerDeps ? ["--legacy-peer-deps"] : []),
     ...(options.loglevel ? [`--loglevel=${options.loglevel}`] : []),
     "--ignore-scripts",
+    ...(options.ignoreWorkspaces ? ["--workspaces=false"] : []),
     ...(options.noAudit ? ["--no-audit"] : []),
     ...(options.noFund ? ["--no-fund"] : []),
   ];

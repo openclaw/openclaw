@@ -32,8 +32,8 @@ title: "Features"
 
 **Channels:**
 
-- Built-in channels include Discord, Google Chat, iMessage (legacy), IRC, Signal, Slack, Telegram, WebChat, and WhatsApp
-- Bundled plugin channels include BlueBubbles for iMessage, Feishu, LINE, Matrix, Mattermost, Microsoft Teams, Nextcloud Talk, Nostr, QQ Bot, Synology Chat, Tlon, Twitch, Zalo, and Zalo Personal
+- Built-in channels include Discord, Google Chat, iMessage, IRC, Signal, Slack, Telegram, WebChat, and WhatsApp
+- Bundled plugin channels include Feishu, LINE, Matrix, Mattermost, Microsoft Teams, Nextcloud Talk, Nostr, QQ Bot, Synology Chat, Tlon, Twitch, Zalo, and Zalo Personal
 - Optional separately installed channel plugins include Voice Call and third-party packages such as WeChat
 - Third-party channel plugins can extend the Gateway further, such as WeChat
 - Group chat support with mention-based activation
@@ -75,5 +75,17 @@ title: "Features"
 
 ## Related
 
-- [Experimental features](/concepts/experimental-features)
-- [Agent runtime](/concepts/agent)
+<CardGroup cols={2}>
+  <Card title="Experimental features" href="/concepts/experimental-features" icon="flask">
+    Opt-in features that have not yet shipped to the default surface.
+  </Card>
+  <Card title="Agent runtime" href="/concepts/agent" icon="robot">
+    Agent runtime model and how runs are dispatched.
+  </Card>
+  <Card title="Channels" href="/channels" icon="message-square">
+    Connect Telegram, WhatsApp, Discord, Slack, and more from one Gateway.
+  </Card>
+  <Card title="Plugins" href="/tools/plugin" icon="plug">
+    Bundled and third-party plugins that extend OpenClaw.
+  </Card>
+</CardGroup>

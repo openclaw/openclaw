@@ -7,11 +7,6 @@ const registryJitiMocks = vi.hoisted(() => ({
   loadPluginRegistrySnapshot: vi.fn(),
 }));
 
-vi.mock("jiti", () => ({
-  createJiti: (...args: Parameters<typeof registryJitiMocks.createJiti>) =>
-    registryJitiMocks.createJiti(...args),
-}));
-
 vi.mock("../discovery.js", () => ({
   discoverOpenClawPlugins: (
     ...args: Parameters<typeof registryJitiMocks.discoverOpenClawPlugins>

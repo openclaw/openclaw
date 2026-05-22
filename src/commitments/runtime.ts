@@ -1,7 +1,6 @@
 import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
-import { runEmbeddedPiAgent, type EmbeddedPiRunResult } from "../agents/pi-embedded.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveStateDir } from "../config/paths.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -20,8 +19,10 @@ import type {
 } from "./types.js";
 
 type TimerHandle = ReturnType<typeof setTimeout>;
+type ModelRef = { provider: string; model: string };
+type EmbeddedPiPayloadResult = { payloads?: Array<{ text?: string }> };
 
-export type CommitmentExtractionEnqueueInput = CommitmentScope & {
+type CommitmentExtractionEnqueueInput = CommitmentScope & {
   cfg?: OpenClawConfig;
   nowMs?: number;
   userText: string;
@@ -30,22 +31,26 @@ export type CommitmentExtractionEnqueueInput = CommitmentScope & {
   sourceRunId?: string;
 };
 
-export type CommitmentExtractionRuntime = {
+type CommitmentExtractionRuntime = {
   extractBatch?: (params: {
     cfg?: OpenClawConfig;
     items: CommitmentExtractionItem[];
   }) => Promise<CommitmentExtractionBatchResult>;
+  resolveDefaultModel?: (params: { cfg: OpenClawConfig; agentId?: string }) => ModelRef;
   setTimer?: (callback: () => void, delayMs: number) => TimerHandle;
   clearTimer?: (timer: TimerHandle) => void;
   forceInTests?: boolean;
 };
 
 const log = createSubsystemLogger("commitments");
+const TERMINAL_EXTRACTION_FAILURE_COOLDOWN_MS = 15 * 60_000;
 
 let runtime: CommitmentExtractionRuntime = {};
 let queue: Array<Omit<CommitmentExtractionItem, "existingPending"> & { cfg?: OpenClawConfig }> = [];
 let timer: TimerHandle | null = null;
 let draining = false;
+let queueOverflowWarned = false;
+let terminalFailureCooldownUntilByAgent = new Map<string, number>();
 
 function shouldDisableBackgroundExtractionForTests(): boolean {
   if (runtime.forceInTests) {
@@ -80,6 +85,8 @@ export function resetCommitmentExtractionRuntimeForTests(): void {
   queue = [];
   timer = null;
   draining = false;
+  queueOverflowWarned = false;
+  terminalFailureCooldownUntilByAgent = new Map();
 }
 
 function buildItemId(params: CommitmentExtractionEnqueueInput, nowMs: number): string {
@@ -93,25 +100,39 @@ function isUsefulText(value: string | undefined): boolean {
 
 export function enqueueCommitmentExtraction(input: CommitmentExtractionEnqueueInput): boolean {
   const resolved = resolveCommitmentsConfig(input.cfg);
+  const nowMs = input.nowMs ?? Date.now();
+  const agentId = normalizeOptionalString(input.agentId) ?? "";
+  const sessionKey = normalizeOptionalString(input.sessionKey) ?? "";
+  const channel = normalizeOptionalString(input.channel) ?? "";
   if (
     !resolved.enabled ||
     shouldDisableBackgroundExtractionForTests() ||
+    (agentId ? nowMs < (terminalFailureCooldownUntilByAgent.get(agentId) ?? 0) : false) ||
     !isUsefulText(input.userText) ||
     !isUsefulText(input.assistantText) ||
-    !input.agentId.trim() ||
-    !input.sessionKey.trim() ||
-    !input.channel.trim()
+    !agentId ||
+    !sessionKey ||
+    !channel
   ) {
     return false;
   }
-  const nowMs = input.nowMs ?? Date.now();
+  if (queue.length >= resolved.extraction.queueMaxItems) {
+    if (!queueOverflowWarned) {
+      log.warn("commitment extraction queue full; dropping hidden extraction request", {
+        queued: queue.length,
+        max: resolved.extraction.queueMaxItems,
+      });
+      queueOverflowWarned = true;
+    }
+    return false;
+  }
   queue.push({
     itemId: buildItemId(input, nowMs),
     nowMs,
     timezone: resolveCommitmentTimezone(input.cfg),
-    agentId: input.agentId.trim(),
-    sessionKey: input.sessionKey.trim(),
-    channel: input.channel.trim(),
+    agentId,
+    sessionKey,
+    channel,
     ...(input.accountId?.trim() ? { accountId: input.accountId.trim() } : {}),
     ...(input.to?.trim() ? { to: input.to.trim() } : {}),
     ...(input.threadId?.trim() ? { threadId: input.threadId.trim() } : {}),
@@ -133,6 +154,33 @@ export function enqueueCommitmentExtraction(input: CommitmentExtractionEnqueueIn
   return true;
 }
 
+function isTerminalExtractionError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return (
+    /\bNo API key found\b/i.test(message) ||
+    /\bUnknown model\b/i.test(message) ||
+    /\bAuth profile credentials are missing or expired\b/i.test(message) ||
+    /\bOAuth token refresh failed\b/i.test(message) ||
+    /\bmissing credential\b/i.test(message) ||
+    /\bmissing credentials\b/i.test(message) ||
+    /\bmissing_api_key\b/i.test(message) ||
+    /\binvalid_grant\b/i.test(message)
+  );
+}
+
+function openTerminalFailureCooldown(agentId: string, error: unknown): void {
+  terminalFailureCooldownUntilByAgent.set(
+    agentId,
+    Date.now() + TERMINAL_EXTRACTION_FAILURE_COOLDOWN_MS,
+  );
+  queue = queue.filter((item) => item.agentId !== agentId);
+  log.warn("commitment extraction disabled temporarily after terminal model/auth failure", {
+    agentId,
+    cooldownMs: TERMINAL_EXTRACTION_FAILURE_COOLDOWN_MS,
+    error: String(error),
+  });
+}
+
 function resolveExtractionSessionFile(agentId: string, runId: string): string {
   return path.join(
     resolveStateDir(),
@@ -143,7 +191,7 @@ function resolveExtractionSessionFile(agentId: string, runId: string): string {
   );
 }
 
-function joinPayloadText(result: EmbeddedPiRunResult): string {
+function joinPayloadText(result: EmbeddedPiPayloadResult): string {
   return (
     result.payloads
       ?.map((payload) => payload.text)
@@ -151,6 +199,17 @@ function joinPayloadText(result: EmbeddedPiRunResult): string {
       .join("\n")
       .trim() ?? ""
   );
+}
+
+async function resolveDefaultModel(params: {
+  cfg: OpenClawConfig;
+  agentId?: string;
+}): Promise<ModelRef> {
+  if (runtime.resolveDefaultModel) {
+    return runtime.resolveDefaultModel(params);
+  }
+  const { resolveCommitmentDefaultModelRef } = await import("./model-selection.runtime.js");
+  return resolveCommitmentDefaultModelRef(params);
 }
 
 async function defaultExtractBatch(params: {
@@ -164,6 +223,8 @@ async function defaultExtractBatch(params: {
   }
   const resolved = resolveCommitmentsConfig(cfg);
   const runId = `commitments-${randomUUID()}`;
+  const modelRef = await resolveDefaultModel({ cfg, agentId: first.agentId });
+  const { runEmbeddedPiAgent } = await import("../agents/pi-embedded.js");
   const result = await runEmbeddedPiAgent({
     sessionId: runId,
     sessionKey: `agent:${first.agentId}:commitments:${runId}`,
@@ -172,6 +233,8 @@ async function defaultExtractBatch(params: {
     sessionFile: resolveExtractionSessionFile(first.agentId, runId),
     workspaceDir: resolveAgentWorkspaceDir(cfg, first.agentId),
     config: cfg,
+    provider: modelRef.provider,
+    model: modelRef.model,
     prompt: buildCommitmentExtractionPrompt({ cfg, items: params.items }),
     disableTools: true,
     thinkLevel: "off",
@@ -213,7 +276,15 @@ export async function drainCommitmentExtractionQueue(): Promise<number> {
       const batch = queue.splice(0, resolved.extraction.batchMaxItems);
       const items = await hydrateBatch(batch);
       const extractor = runtime.extractBatch ?? defaultExtractBatch;
-      const result = await extractor({ cfg: firstCfg, items });
+      let result: CommitmentExtractionBatchResult;
+      try {
+        result = await extractor({ cfg: firstCfg, items });
+      } catch (error) {
+        if (isTerminalExtractionError(error)) {
+          openTerminalFailureCooldown(items[0]?.agentId ?? "", error);
+        }
+        throw error;
+      }
       await persistCommitmentExtractionResult({
         cfg: firstCfg,
         items,

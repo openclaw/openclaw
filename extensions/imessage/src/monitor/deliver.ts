@@ -1,11 +1,11 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   deliverTextOrMediaReply,
   resolveSendableOutboundReplyParts,
 } from "openclaw/plugin-sdk/reply-payload";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
-import type { createIMessageRpcClient } from "../client.js";
+import type { IMessageRpcClient } from "../client.js";
 import { sendMessageIMessage } from "../send.js";
 import {
   chunkTextWithMode,
@@ -20,7 +20,7 @@ export async function deliverReplies(params: {
   cfg: OpenClawConfig;
   replies: ReplyPayload[];
   target: string;
-  client: Awaited<ReturnType<typeof createIMessageRpcClient>>;
+  client: IMessageRpcClient;
   accountId?: string;
   runtime: RuntimeEnv;
   maxBytes: number;
@@ -58,7 +58,10 @@ export async function deliverReplies(params: {
         // not before. The window between send completion and cache write is sub-millisecond;
         // the next SQLite inbound poll is 1-2s away, so no echo can arrive before the
         // cache entry exists.
-        sentMessageCache?.remember(scope, { text: sent.sentText, messageId: sent.messageId });
+        sentMessageCache?.remember(scope, {
+          text: sent.echoText ?? sent.sentText,
+          messageId: sent.messageId,
+        });
       },
       sendMedia: async ({ mediaUrl, caption }) => {
         const sent = await sendMessageIMessage(target, caption ?? "", {
@@ -70,7 +73,7 @@ export async function deliverReplies(params: {
           replyToId: payload.replyToId,
         });
         sentMessageCache?.remember(scope, {
-          text: sent.sentText || undefined,
+          text: sent.echoText ?? (sent.sentText || undefined),
           messageId: sent.messageId,
         });
       },
@@ -79,4 +82,24 @@ export async function deliverReplies(params: {
       runtime.log?.(`imessage: delivered reply to ${target}`);
     }
   }
+}
+
+export function createIMessageEchoCachingSend(params: {
+  client: IMessageRpcClient;
+  accountId?: string;
+  sentMessageCache?: Pick<SentMessageCache, "remember">;
+}): typeof sendMessageIMessage {
+  return async (target, text, opts) => {
+    const sanitizedText = sanitizeOutboundText(text);
+    const sent = await sendMessageIMessage(target, sanitizedText, {
+      ...opts,
+      client: params.client,
+    });
+    const scope = `${params.accountId ?? opts.accountId ?? ""}:${target}`;
+    params.sentMessageCache?.remember(scope, {
+      text: sent.echoText ?? (sent.sentText || undefined),
+      messageId: sent.messageId,
+    });
+    return sent;
+  };
 }

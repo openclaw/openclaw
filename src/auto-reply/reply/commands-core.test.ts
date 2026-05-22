@@ -36,6 +36,16 @@ vi.mock("../../plugins/hook-runner-global.js", () => ({
 
 const { emitResetCommandHooks } = await import("./commands-reset-hooks.js");
 
+function firstBeforeResetCall() {
+  const call = hookRunnerMocks.runBeforeReset.mock.calls[0] as
+    | [Record<string, unknown>, Record<string, unknown>]
+    | undefined;
+  if (!call) {
+    throw new Error("expected before reset hook call");
+  }
+  return call;
+}
+
 describe("emitResetCommandHooks", () => {
   async function runBeforeResetContext(sessionKey?: string) {
     const command = {
@@ -60,7 +70,7 @@ describe("emitResetCommandHooks", () => {
     });
 
     expect(hookRunnerMocks.runBeforeReset).toHaveBeenCalledTimes(1);
-    const [, ctx] = hookRunnerMocks.runBeforeReset.mock.calls[0] ?? [];
+    const [, ctx] = firstBeforeResetCall();
     return ctx;
   }
 
@@ -81,32 +91,26 @@ describe("emitResetCommandHooks", () => {
 
   it("passes the bound agent id to before_reset hooks for multi-agent session keys", async () => {
     const ctx = await runBeforeResetContext("agent:navi:main");
-    expect(ctx).toMatchObject({
-      agentId: "navi",
-      sessionKey: "agent:navi:main",
-      sessionId: "prev-session",
-      workspaceDir: "/tmp/openclaw-workspace",
-    });
+    expect(ctx?.agentId).toBe("navi");
+    expect(ctx?.sessionKey).toBe("agent:navi:main");
+    expect(ctx?.sessionId).toBe("prev-session");
+    expect(ctx?.workspaceDir).toBe("/tmp/openclaw-workspace");
   });
 
   it("falls back to main when the reset hook has no session key", async () => {
     const ctx = await runBeforeResetContext(undefined);
-    expect(ctx).toMatchObject({
-      agentId: "main",
-      sessionKey: undefined,
-      sessionId: "prev-session",
-      workspaceDir: "/tmp/openclaw-workspace",
-    });
+    expect(ctx?.agentId).toBe("main");
+    expect(ctx?.sessionKey).toBeUndefined();
+    expect(ctx?.sessionId).toBe("prev-session");
+    expect(ctx?.workspaceDir).toBe("/tmp/openclaw-workspace");
   });
 
   it("keeps the main-agent path on the main agent workspace", async () => {
     const ctx = await runBeforeResetContext("agent:main:main");
-    expect(ctx).toMatchObject({
-      agentId: "main",
-      sessionKey: "agent:main:main",
-      sessionId: "prev-session",
-      workspaceDir: "/tmp/openclaw-workspace",
-    });
+    expect(ctx?.agentId).toBe("main");
+    expect(ctx?.sessionKey).toBe("agent:main:main");
+    expect(ctx?.sessionId).toBe("prev-session");
+    expect(ctx?.workspaceDir).toBe("/tmp/openclaw-workspace");
   });
 
   it("recovers the archived transcript when the original reset transcript path is gone", async () => {
@@ -142,15 +146,10 @@ describe("emitResetCommandHooks", () => {
     });
 
     await vi.waitFor(() => expect(hookRunnerMocks.runBeforeReset).toHaveBeenCalledTimes(1));
-    expect(hookRunnerMocks.runBeforeReset).toHaveBeenCalledWith(
-      expect.objectContaining({
-        sessionFile: "/tmp/prev-session.jsonl.reset.2026-02-16T22-26-33.000Z",
-        messages: [{ role: "user", content: "Recovered from archive" }],
-        reason: "new",
-      }),
-      expect.objectContaining({
-        sessionId: "prev-session",
-      }),
-    );
+    const [event, ctx] = firstBeforeResetCall();
+    expect(event.sessionFile).toBe("/tmp/prev-session.jsonl.reset.2026-02-16T22-26-33.000Z");
+    expect(event.messages).toEqual([{ role: "user", content: "Recovered from archive" }]);
+    expect(event.reason).toBe("new");
+    expect(ctx.sessionId).toBe("prev-session");
   });
 });

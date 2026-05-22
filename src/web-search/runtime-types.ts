@@ -17,10 +17,12 @@ export type ResolveWebSearchDefinitionParams = {
   runtimeWebSearch?: RuntimeWebSearchMetadata;
   providerId?: string;
   preferRuntimeProviders?: boolean;
+  preferInputConfig?: boolean;
 };
 
 export type RunWebSearchParams = ResolveWebSearchDefinitionParams & {
   args: Record<string, unknown>;
+  signal?: AbortSignal;
 };
 
 export type RunWebSearchResult = {

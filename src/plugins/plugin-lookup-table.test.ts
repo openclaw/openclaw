@@ -99,6 +99,62 @@ const manifestDiagnostic = {
   message: "manifest warning",
 } as const;
 
+async function expectStaleMetadataSnapshotRebuild(params: {
+  config: OpenClawConfig;
+  snapshotPlugins: readonly PluginManifestRecord[];
+  requestedPlugins?: readonly PluginManifestRecord[];
+  snapshotEnv?: NodeJS.ProcessEnv;
+  requestedEnv?: NodeJS.ProcessEnv;
+}) {
+  const requestedPlugins = params.requestedPlugins ?? params.snapshotPlugins;
+  const snapshotEnv = params.snapshotEnv ?? {};
+  const requestedEnv = params.requestedEnv ?? {};
+  const policyHash = resolveInstalledPluginIndexPolicyHash(params.config);
+  const snapshotIndex = createIndex(params.snapshotPlugins, { policyHash });
+  const requestedIndex = createIndex(requestedPlugins, { policyHash });
+  const snapshotRegistry: PluginManifestRegistry = {
+    plugins: [...params.snapshotPlugins],
+    diagnostics: [],
+  };
+  const requestedRegistry: PluginManifestRegistry = {
+    plugins: [...requestedPlugins],
+    diagnostics: [],
+  };
+  loadPluginManifestRegistryForInstalledIndex
+    .mockReturnValueOnce(snapshotRegistry)
+    .mockReturnValue(requestedRegistry);
+  const { loadPluginMetadataSnapshot } = await import("./plugin-metadata-snapshot.js");
+  const { loadPluginLookUpTable } = await import("./plugin-lookup-table.js");
+
+  const metadataSnapshot = loadPluginMetadataSnapshot({
+    config: params.config,
+    env: snapshotEnv,
+    index: snapshotIndex,
+  });
+  loadPluginManifestRegistryForInstalledIndex.mockClear();
+
+  const table = loadPluginLookUpTable({
+    config: params.config,
+    env: requestedEnv,
+    index: requestedIndex,
+    metadataSnapshot,
+  });
+
+  expect(loadPluginManifestRegistryForInstalledIndex).toHaveBeenCalledOnce();
+  expect(loadPluginManifestRegistryForInstalledIndex.mock.calls).toEqual([
+    [
+      {
+        index: requestedIndex,
+        config: params.config,
+        workspaceDir: undefined,
+        env: requestedEnv,
+        includeDisabled: true,
+      },
+    ],
+  ]);
+  return { table, requestedRegistry };
+}
+
 describe("loadPluginLookUpTable", () => {
   beforeEach(() => {
     listPotentialConfiguredChannelIds
@@ -140,7 +196,7 @@ describe("loadPluginLookUpTable", () => {
             },
           },
         },
-        cliBackends: ["codex-cli"],
+        cliBackends: [],
         setup: {
           providers: [{ id: "openai" }],
         },
@@ -172,17 +228,19 @@ describe("loadPluginLookUpTable", () => {
 
     expect(table.manifestRegistry).toBe(manifestRegistry);
     expect(table.diagnostics).toEqual([indexDiagnostic, manifestDiagnostic]);
-    expect(table.metrics).toMatchObject({
-      registrySnapshotMs: expect.any(Number),
-      manifestRegistryMs: expect.any(Number),
-      startupPlanMs: expect.any(Number),
-      ownerMapsMs: expect.any(Number),
-      totalMs: expect.any(Number),
-      indexPluginCount: 2,
-      manifestPluginCount: 2,
-      startupPluginCount: 1,
-      deferredChannelPluginCount: 0,
-    });
+    expect(table.metrics.indexPluginCount).toBe(2);
+    expect(table.metrics.manifestPluginCount).toBe(2);
+    expect(table.metrics.startupPluginCount).toBe(1);
+    expect(table.metrics.deferredChannelPluginCount).toBe(0);
+    for (const metricName of [
+      "registrySnapshotMs",
+      "manifestRegistryMs",
+      "startupPlanMs",
+      "ownerMapsMs",
+      "totalMs",
+    ] as const) {
+      expect(table.metrics[metricName]).toBeGreaterThanOrEqual(0);
+    }
     expect(table.byPluginId.get("telegram")?.id).toBe("telegram");
     expect(table.normalizePluginId("openai-codex")).toBe("openai");
     expect(table.owners.channels.get("telegram")).toEqual(["telegram"]);
@@ -190,12 +248,12 @@ describe("loadPluginLookUpTable", () => {
     expect(table.owners.providers.get("openai")).toEqual(["openai"]);
     expect(table.owners.modelCatalogProviders.get("openai")).toEqual(["openai"]);
     expect(table.owners.modelCatalogProviders.get("azure-openai-responses")).toEqual(["openai"]);
-    expect(table.owners.cliBackends.get("codex-cli")).toEqual(["openai"]);
+    expect(table.owners.cliBackends.get("codex-cli")).toBeUndefined();
     expect(table.owners.setupProviders.get("openai")).toEqual(["openai"]);
     expect(table.owners.commandAliases.get("telegram-send")).toEqual(["telegram"]);
     expect(table.owners.contracts.get("tools")).toEqual(["telegram"]);
     expect(table.startup.channelPluginIds).toEqual(["telegram"]);
-    expect(table.startup.configuredDeferredChannelPluginIds).toEqual([]);
+    expect(table.startup.configuredDeferredChannelPluginIds).toStrictEqual([]);
     expect(table.startup.pluginIds).toEqual(["telegram"]);
   });
 
@@ -295,12 +353,127 @@ describe("loadPluginLookUpTable", () => {
     });
 
     expect(loadPluginManifestRegistryForInstalledIndex).toHaveBeenCalledOnce();
-    expect(loadPluginManifestRegistryForInstalledIndex).toHaveBeenCalledWith(
-      expect.objectContaining({
-        index: requestedIndex,
-        config: requestedConfig,
+    expect(loadPluginManifestRegistryForInstalledIndex.mock.calls).toEqual([
+      [
+        {
+          index: requestedIndex,
+          config: requestedConfig,
+          workspaceDir: undefined,
+          env: {},
+          includeDisabled: true,
+        },
+      ],
+    ]);
+  });
+
+  it("rebuilds when a provided metadata snapshot has stale plugin load paths", async () => {
+    const plugins = [
+      createManifestRecord({
+        id: "telegram",
+        origin: "bundled",
+        channels: ["telegram"],
       }),
-    );
+    ];
+    const snapshotConfig = {
+      plugins: {
+        load: { paths: ["/plugins/one"] },
+      },
+    } as OpenClawConfig;
+    const requestedConfig = {
+      plugins: {
+        load: { paths: ["/plugins/two"] },
+      },
+    } as OpenClawConfig;
+    const policyHash = resolveInstalledPluginIndexPolicyHash(snapshotConfig);
+    const index = createIndex(plugins, { policyHash });
+    const manifestRegistry: PluginManifestRegistry = {
+      plugins,
+      diagnostics: [],
+    };
+    loadPluginManifestRegistryForInstalledIndex.mockReturnValue(manifestRegistry);
+    const { loadPluginMetadataSnapshot } = await import("./plugin-metadata-snapshot.js");
+    const { loadPluginLookUpTable } = await import("./plugin-lookup-table.js");
+
+    const metadataSnapshot = loadPluginMetadataSnapshot({
+      config: snapshotConfig,
+      env: {},
+      index,
+    });
+    loadPluginManifestRegistryForInstalledIndex.mockClear();
+
+    loadPluginLookUpTable({
+      config: requestedConfig,
+      env: {},
+      index,
+      metadataSnapshot,
+    });
+
+    expect(loadPluginManifestRegistryForInstalledIndex).toHaveBeenCalledOnce();
+    expect(loadPluginManifestRegistryForInstalledIndex.mock.calls).toEqual([
+      [
+        {
+          index,
+          config: requestedConfig,
+          workspaceDir: undefined,
+          env: {},
+          includeDisabled: true,
+        },
+      ],
+    ]);
+  });
+
+  it("rebuilds when a provided metadata snapshot has stale env-resolved plugin load paths", async () => {
+    const plugins = [
+      createManifestRecord({
+        id: "telegram",
+        origin: "bundled",
+        channels: ["telegram"],
+      }),
+    ];
+    const config = {
+      plugins: {
+        load: { paths: ["~/plugins"] },
+      },
+    } as OpenClawConfig;
+    const snapshotEnv = {
+      HOME: "/home/snapshot",
+      OPENCLAW_HOME: undefined,
+    } as NodeJS.ProcessEnv;
+    const requestedEnv = {
+      HOME: "/home/requested",
+      OPENCLAW_HOME: undefined,
+    } as NodeJS.ProcessEnv;
+    await expectStaleMetadataSnapshotRebuild({
+      config,
+      snapshotPlugins: plugins,
+      snapshotEnv,
+      requestedEnv,
+    });
+  });
+
+  it("rebuilds when a provided metadata snapshot has stale env-resolved plugin roots", async () => {
+    const plugins = [
+      createManifestRecord({
+        id: "telegram",
+        origin: "bundled",
+        channels: ["telegram"],
+      }),
+    ];
+    const config = {} as OpenClawConfig;
+    const snapshotEnv = {
+      HOME: "/home/snapshot",
+      OPENCLAW_HOME: undefined,
+    } as NodeJS.ProcessEnv;
+    const requestedEnv = {
+      HOME: "/home/requested",
+      OPENCLAW_HOME: undefined,
+    } as NodeJS.ProcessEnv;
+    await expectStaleMetadataSnapshotRebuild({
+      config,
+      snapshotPlugins: plugins,
+      snapshotEnv,
+      requestedEnv,
+    });
   });
 
   it("rebuilds when a provided metadata snapshot has stale plugin inventory", async () => {
@@ -328,44 +501,12 @@ describe("loadPluginLookUpTable", () => {
         telegram: { token: "configured" },
       },
     } as OpenClawConfig;
-    const policyHash = resolveInstalledPluginIndexPolicyHash(config);
-    const snapshotIndex = createIndex(snapshotPlugins, { policyHash });
-    const requestedIndex = createIndex(requestedPlugins, { policyHash });
-    const snapshotRegistry: PluginManifestRegistry = {
-      plugins: snapshotPlugins,
-      diagnostics: [],
-    };
-    const requestedRegistry: PluginManifestRegistry = {
-      plugins: requestedPlugins,
-      diagnostics: [],
-    };
-    loadPluginManifestRegistryForInstalledIndex
-      .mockReturnValueOnce(snapshotRegistry)
-      .mockReturnValueOnce(requestedRegistry);
-    const { loadPluginMetadataSnapshot } = await import("./plugin-metadata-snapshot.js");
-    const { loadPluginLookUpTable } = await import("./plugin-lookup-table.js");
-
-    const metadataSnapshot = loadPluginMetadataSnapshot({
+    const { table, requestedRegistry } = await expectStaleMetadataSnapshotRebuild({
       config,
-      env: {},
-      index: snapshotIndex,
-    });
-    loadPluginManifestRegistryForInstalledIndex.mockClear();
-
-    const table = loadPluginLookUpTable({
-      config,
-      env: {},
-      index: requestedIndex,
-      metadataSnapshot,
+      snapshotPlugins,
+      requestedPlugins,
     });
 
-    expect(loadPluginManifestRegistryForInstalledIndex).toHaveBeenCalledOnce();
-    expect(loadPluginManifestRegistryForInstalledIndex).toHaveBeenCalledWith(
-      expect.objectContaining({
-        index: requestedIndex,
-        config,
-      }),
-    );
     expect(table.manifestRegistry).toBe(requestedRegistry);
   });
 
@@ -392,44 +533,12 @@ describe("loadPluginLookUpTable", () => {
         telegram: { token: "configured" },
       },
     } as OpenClawConfig;
-    const policyHash = resolveInstalledPluginIndexPolicyHash(config);
-    const snapshotIndex = createIndex(snapshotPlugins, { policyHash });
-    const requestedIndex = createIndex(requestedPlugins, { policyHash });
-    const snapshotRegistry: PluginManifestRegistry = {
-      plugins: snapshotPlugins,
-      diagnostics: [],
-    };
-    const requestedRegistry: PluginManifestRegistry = {
-      plugins: requestedPlugins,
-      diagnostics: [],
-    };
-    loadPluginManifestRegistryForInstalledIndex
-      .mockReturnValueOnce(snapshotRegistry)
-      .mockReturnValueOnce(requestedRegistry);
-    const { loadPluginMetadataSnapshot } = await import("./plugin-metadata-snapshot.js");
-    const { loadPluginLookUpTable } = await import("./plugin-lookup-table.js");
-
-    const metadataSnapshot = loadPluginMetadataSnapshot({
+    const { table, requestedRegistry } = await expectStaleMetadataSnapshotRebuild({
       config,
-      env: {},
-      index: snapshotIndex,
-    });
-    loadPluginManifestRegistryForInstalledIndex.mockClear();
-
-    const table = loadPluginLookUpTable({
-      config,
-      env: {},
-      index: requestedIndex,
-      metadataSnapshot,
+      snapshotPlugins,
+      requestedPlugins,
     });
 
-    expect(loadPluginManifestRegistryForInstalledIndex).toHaveBeenCalledOnce();
-    expect(loadPluginManifestRegistryForInstalledIndex).toHaveBeenCalledWith(
-      expect.objectContaining({
-        index: requestedIndex,
-        config,
-      }),
-    );
     expect(table.manifestRegistry).toBe(requestedRegistry);
   });
 });

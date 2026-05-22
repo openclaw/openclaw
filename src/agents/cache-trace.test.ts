@@ -53,7 +53,7 @@ describe("createCacheTrace", () => {
       },
     });
 
-    expect(trace).not.toBeNull();
+    expect(typeof trace?.recordStage).toBe("function");
     expect(trace?.filePath).toBe(resolveUserPath("~/.openclaw/logs/cache-trace.jsonl"));
 
     trace?.recordStage("session:loaded", {
@@ -250,11 +250,9 @@ describe("createCacheTrace", () => {
     const firstMessage = ((event.messages as Array<Record<string, unknown>> | undefined) ?? [])[0];
     expect(firstMessage).not.toHaveProperty("token");
     expect(firstMessage).not.toHaveProperty("metadata.secretKey");
-    expect(firstMessage).toMatchObject({
-      role: "user",
-      metadata: {
-        label: "preserve-me",
-      },
+    expect(firstMessage?.role).toBe("user");
+    expect(firstMessage?.metadata).toEqual({
+      label: "preserve-me",
     });
     const source = (((firstMessage?.content as Array<Record<string, unknown>> | undefined) ?? [])[0]
       ?.source ?? {}) as Record<string, unknown>;
@@ -275,8 +273,20 @@ describe("createCacheTrace", () => {
     });
 
     expect(lines.length).toBe(1);
+    const fingerprint = crypto
+      .createHash("sha256")
+      .update('{"child":{"ref":"[Circular]"},"content":"hello","role":"user"}')
+      .digest("hex");
     const event = JSON.parse(lines[0]?.trim() ?? "{}") as Record<string, unknown>;
-    expect(event.messageCount).toBe(1);
-    expect(event.messageFingerprints).toHaveLength(1);
+    expect(event).toStrictEqual({
+      ts: expect.any(String),
+      seq: 1,
+      stage: "prompt:images",
+      messageCount: 1,
+      messageRoles: ["user"],
+      messageFingerprints: [fingerprint],
+      messagesDigest: crypto.createHash("sha256").update(JSON.stringify(fingerprint)).digest("hex"),
+      messages: [{ role: "user", content: "hello", child: { ref: "[Circular]" } }],
+    });
   });
 });

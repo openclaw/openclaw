@@ -40,8 +40,8 @@ export type {
   ContextVisibilityMode,
   DmPolicy,
   GroupPolicy,
-} from "openclaw/plugin-sdk/config-types";
-export type { GroupToolPolicyConfig } from "openclaw/plugin-sdk/config-types";
+} from "openclaw/plugin-sdk/config-contracts";
+export type { GroupToolPolicyConfig } from "openclaw/plugin-sdk/config-contracts";
 export type { WizardPrompter } from "openclaw/plugin-sdk/setup";
 export type { SecretInput } from "openclaw/plugin-sdk/secret-input";
 export {
@@ -90,7 +90,7 @@ export {
 export { resolveOutboundSendDep } from "openclaw/plugin-sdk/outbound-send-deps";
 export { resolveAgentIdFromSessionKey } from "openclaw/plugin-sdk/routing";
 export { chunkTextForOutbound } from "openclaw/plugin-sdk/text-chunking";
-export { createChannelReplyPipeline } from "openclaw/plugin-sdk/channel-reply-pipeline";
+export { createChannelMessageReplyPipeline } from "openclaw/plugin-sdk/channel-message";
 export { loadOutboundMediaFromUrl } from "openclaw/plugin-sdk/outbound-media";
 export { normalizePollInput, type PollInput } from "openclaw/plugin-sdk/poll-runtime";
 export { writeJsonFileAtomically } from "openclaw/plugin-sdk/json-store";
@@ -98,13 +98,9 @@ export {
   buildChannelKeyCandidates,
   resolveChannelEntryMatch,
 } from "openclaw/plugin-sdk/channel-targets";
-export {
-  evaluateGroupRouteAccessForPolicy,
-  resolveSenderScopedGroupPolicy,
-} from "openclaw/plugin-sdk/channel-policy";
 export { buildTimeoutAbortSignal } from "./matrix/sdk/timeout-abort-signal.js";
 export { formatZonedTimestamp } from "openclaw/plugin-sdk/time-runtime";
 export type { PluginRuntime, RuntimeLogger } from "openclaw/plugin-sdk/plugin-runtime";
 export type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 // resolveMatrixAccountStringValues already comes from the Matrix API barrel.
-// Re-exporting auth-precedence here makes Jiti try to define the same export twice.
+// Re-exporting auth-precedence here makes TS source loaders define the export twice.

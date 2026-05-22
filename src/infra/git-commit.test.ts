@@ -54,26 +54,26 @@ async function makeFakeGitRepo(
 describe("git commit resolution", () => {
   const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
   let resolveCommitHash: (typeof import("./git-commit.js"))["resolveCommitHash"];
-  let __testing: (typeof import("./git-commit.js"))["__testing"];
+  let testing: (typeof import("./git-commit.js"))["testing"];
 
   beforeAll(async () => {
     vi.doUnmock("node:fs");
     vi.doUnmock("node:module");
-    ({ resolveCommitHash, __testing } = await import("./git-commit.js"));
+    ({ resolveCommitHash, testing } = await import("./git-commit.js"));
   });
 
   beforeEach(() => {
     vi.restoreAllMocks();
     vi.doUnmock("node:fs");
     vi.doUnmock("node:module");
-    __testing.clearCachedGitCommits();
+    testing.clearCachedGitCommits();
   });
 
   afterEach(async () => {
     vi.restoreAllMocks();
     vi.doUnmock("node:fs");
     vi.doUnmock("node:module");
-    __testing.clearCachedGitCommits();
+    testing.clearCachedGitCommits();
     await tempDirs.cleanup();
   });
 
@@ -110,7 +110,7 @@ describe("git commit resolution", () => {
     expect(resolveCommitHash({ moduleUrl: entryModuleUrl })).not.toBe(otherHead);
   });
 
-  it("prefers live git metadata over stale build info in a real checkout", async () => {
+  it("prefers live git metadata over stale build info in a real checkout", () => {
     const repoHead = execFileSync("git", ["rev-parse", "--short=7", "HEAD"], {
       cwd: repoRoot,
       encoding: "utf-8",
@@ -175,7 +175,7 @@ describe("git commit resolution", () => {
     expect(readPackageJsonCommit.mock.calls.length).toBe(firstCallRequires);
   });
 
-  it("treats invalid moduleUrl inputs as a fallback hint instead of throwing", async () => {
+  it("treats invalid moduleUrl inputs as a fallback hint instead of throwing", () => {
     const repoHead = execFileSync("git", ["rev-parse", "--short=7", "HEAD"], {
       cwd: repoRoot,
       encoding: "utf-8",
@@ -183,9 +183,6 @@ describe("git commit resolution", () => {
       .trim()
       .slice(0, 7);
 
-    expect(() =>
-      resolveCommitHash({ moduleUrl: "not-a-file-url", cwd: repoRoot, env: {} }),
-    ).not.toThrow();
     expect(resolveCommitHash({ moduleUrl: "not-a-file-url", cwd: repoRoot, env: {} })).toBe(
       repoHead,
     );

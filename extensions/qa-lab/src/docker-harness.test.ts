@@ -30,35 +30,35 @@ describe("qa docker harness", () => {
       bindUiDist: true,
     });
 
-    expect(result.files).toEqual(
-      expect.arrayContaining([
-        path.join(outputDir, ".env.example"),
-        path.join(outputDir, "README.md"),
-        path.join(outputDir, "docker-compose.qa.yml"),
-        path.join(outputDir, "state", "openclaw.json"),
-        path.join(outputDir, "state", "seed-workspace", "QA_KICKOFF_TASK.md"),
-        path.join(outputDir, "state", "seed-workspace", "QA_SCENARIO_PLAN.md"),
-        path.join(outputDir, "state", "seed-workspace", "QA_SCENARIOS.md"),
-        path.join(outputDir, "state", "seed-workspace", "IDENTITY.md"),
-      ]),
-    );
+    for (const expectedFile of [
+      path.join(outputDir, ".env.example"),
+      path.join(outputDir, "README.md"),
+      path.join(outputDir, "docker-compose.qa.yml"),
+      path.join(outputDir, "state", "openclaw.json"),
+      path.join(outputDir, "state", "seed-workspace", "QA_KICKOFF_TASK.md"),
+      path.join(outputDir, "state", "seed-workspace", "QA_SCENARIO_PLAN.md"),
+      path.join(outputDir, "state", "seed-workspace", "QA_SCENARIOS.md"),
+      path.join(outputDir, "state", "seed-workspace", "IDENTITY.md"),
+    ]) {
+      expect(result.files).toContain(expectedFile);
+    }
 
     const compose = await readFile(path.join(outputDir, "docker-compose.qa.yml"), "utf8");
     expect(compose).toContain("image: openclaw:qa-local-prebaked");
     expect(compose).toContain("qa-mock-openai:");
-    expect(compose).toContain("18889:18789");
-    expect(compose).toContain('      - "43124:43123"');
+    expect(compose).toContain('      - "127.0.0.1:18889:18789"');
+    expect(compose).toContain('      - "127.0.0.1:43124:43123"');
     expect(compose).toContain(":/opt/openclaw-qa-lab-ui:ro");
     expect(compose).toContain("      - sh");
     expect(compose).toContain("      - -lc");
     expect(compose).toContain(
       '        - fetch("http://127.0.0.1:18789/healthz").then((r)=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))',
     );
-    expect(compose).toContain("      - --control-ui-proxy-target");
-    expect(compose).toContain('      - "http://openclaw-qa-gateway:18789/"');
-    expect(compose).toContain("      - --send-kickoff-on-start");
-    expect(compose).toContain("      - --ui-dist-dir");
-    expect(compose).toContain('      - "/opt/openclaw-qa-lab-ui"');
+    expect(compose).toContain("--control-ui-proxy-target http://openclaw-qa-gateway:18789/");
+    expect(compose).not.toContain("--control-ui-token");
+    expect(compose).not.toContain("qa-token");
+    expect(compose).toContain("--send-kickoff-on-start");
+    expect(compose).toContain("--ui-dist-dir /opt/openclaw-qa-lab-ui");
     expect(compose).toContain(":/opt/openclaw-repo:ro");
     expect(compose).toContain("./state:/opt/openclaw-scaffold:ro");
     expect(compose).toContain(
@@ -117,9 +117,7 @@ describe("qa docker harness", () => {
 
     expect(result.imageName).toBe("openclaw:qa-local-prebaked");
     expect(calls).toEqual([
-      expect.stringContaining(
-        "docker build -t openclaw:qa-local-prebaked --build-arg OPENCLAW_EXTENSIONS=qa-channel qa-lab -f Dockerfile . @/repo/openclaw",
-      ),
+      "docker build -t openclaw:qa-local-prebaked --build-arg OPENCLAW_EXTENSIONS=qa-channel qa-lab -f Dockerfile . @/repo/openclaw",
     ]);
   });
 });

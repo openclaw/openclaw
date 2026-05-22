@@ -5,11 +5,10 @@
  * resolves agent routes, and handles replies.
  */
 
-import { createChannelReplyPipeline } from "openclaw/plugin-sdk/channel-reply-pipeline";
-import type { MarkdownTableMode, OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import type { MarkdownTableMode, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { checkTwitchAccessControl } from "./access-control.js";
 import { getOrCreateClientManager } from "./client-manager-registry.js";
 import { getTwitchRuntime } from "./runtime.js";
@@ -51,126 +50,126 @@ async function processTwitchMessage(params: {
   const { message, account, accountId, config, runtime, core, statusSink } = params;
   const cfg = config as OpenClawConfig;
 
-  await core.channel.turn.runResolved({
+  await core.channel.turn.run({
     channel: "twitch",
     accountId,
     raw: message,
-    input: (incoming) => ({
-      id: incoming.id ?? `${incoming.channel}:${incoming.timestamp?.getTime() ?? Date.now()}`,
-      timestamp: incoming.timestamp?.getTime(),
-      rawText: incoming.message,
-      textForAgent: incoming.message,
-      textForCommands: incoming.message,
-      raw: incoming,
-    }),
-    resolveTurn: (input) => {
-      const route = core.channel.routing.resolveAgentRoute({
-        cfg,
-        channel: "twitch",
-        accountId,
-        peer: {
-          kind: "group",
-          id: message.channel,
-        },
-      });
-      const senderId = message.userId ?? message.username;
-      const fromLabel = message.displayName ?? message.username;
-      const body = core.channel.reply.formatAgentEnvelope({
-        channel: "Twitch",
-        from: fromLabel,
-        timestamp: input.timestamp,
-        envelope: core.channel.reply.resolveEnvelopeFormatOptions(cfg),
-        body: input.rawText,
-      });
-      const ctxPayload = core.channel.turn.buildContext({
-        channel: "twitch",
-        accountId,
-        messageId: input.id,
-        timestamp: input.timestamp,
-        from: `twitch:user:${senderId}`,
-        sender: {
-          id: senderId,
-          name: fromLabel,
-          username: message.username,
-        },
-        conversation: {
-          kind: "group",
-          id: message.channel,
-          label: message.channel,
-          routePeer: {
+    adapter: {
+      ingest: (incoming) => ({
+        id: incoming.id ?? `${incoming.channel}:${incoming.timestamp?.getTime() ?? Date.now()}`,
+        timestamp: incoming.timestamp?.getTime(),
+        rawText: incoming.message,
+        textForAgent: incoming.message,
+        textForCommands: incoming.message,
+        raw: incoming,
+      }),
+      resolveTurn: (input) => {
+        const route = core.channel.routing.resolveAgentRoute({
+          cfg,
+          channel: "twitch",
+          accountId,
+          peer: {
             kind: "group",
             id: message.channel,
           },
-        },
-        route: {
+        });
+        const senderId = message.userId ?? message.username;
+        const fromLabel = message.displayName ?? message.username;
+        const body = core.channel.reply.formatAgentEnvelope({
+          channel: "Twitch",
+          from: fromLabel,
+          timestamp: input.timestamp,
+          envelope: core.channel.reply.resolveEnvelopeFormatOptions(cfg),
+          body: input.rawText,
+        });
+        const ctxPayload = core.channel.turn.buildContext({
+          channel: "twitch",
+          accountId,
+          messageId: input.id,
+          timestamp: input.timestamp,
+          from: `twitch:user:${senderId}`,
+          sender: {
+            id: senderId,
+            name: fromLabel,
+            username: message.username,
+          },
+          conversation: {
+            kind: "group",
+            id: message.channel,
+            label: message.channel,
+            routePeer: {
+              kind: "group",
+              id: message.channel,
+            },
+          },
+          route: {
+            agentId: route.agentId,
+            accountId: route.accountId,
+            routeSessionKey: route.sessionKey,
+          },
+          reply: {
+            to: `twitch:channel:${message.channel}`,
+            originatingTo: `twitch:channel:${message.channel}`,
+          },
+          message: {
+            body,
+            rawBody: input.rawText,
+            bodyForAgent: input.textForAgent,
+            commandBody: input.textForCommands,
+            envelopeFrom: fromLabel,
+          },
+        });
+        const storePath = core.channel.session.resolveStorePath(cfg.session?.store, {
           agentId: route.agentId,
-          accountId: route.accountId,
+        });
+        const tableMode = core.channel.text.resolveMarkdownTableMode({
+          cfg,
+          channel: "twitch",
+          accountId,
+        });
+        return {
+          cfg,
+          channel: "twitch",
+          accountId,
+          agentId: route.agentId,
           routeSessionKey: route.sessionKey,
-        },
-        reply: {
-          to: `twitch:channel:${message.channel}`,
-          originatingTo: `twitch:channel:${message.channel}`,
-        },
-        message: {
-          body,
-          rawBody: input.rawText,
-          bodyForAgent: input.textForAgent,
-          commandBody: input.textForCommands,
-          envelopeFrom: fromLabel,
-        },
-      });
-      const storePath = core.channel.session.resolveStorePath(cfg.session?.store, {
-        agentId: route.agentId,
-      });
-      const tableMode = core.channel.text.resolveMarkdownTableMode({
-        cfg,
-        channel: "twitch",
-        accountId,
-      });
-      const { onModelSelected, ...replyPipeline } = createChannelReplyPipeline({
-        cfg,
-        agentId: route.agentId,
-        channel: "twitch",
-        accountId,
-      });
-      return {
-        cfg,
-        channel: "twitch",
-        accountId,
-        agentId: route.agentId,
-        routeSessionKey: route.sessionKey,
-        storePath,
-        ctxPayload,
-        recordInboundSession: core.channel.session.recordInboundSession,
-        dispatchReplyWithBufferedBlockDispatcher:
-          core.channel.reply.dispatchReplyWithBufferedBlockDispatcher,
-        delivery: {
-          deliver: async (payload) => {
-            await deliverTwitchReply({
-              payload,
-              channel: message.channel,
-              account,
-              accountId,
-              config,
-              tableMode,
-              runtime,
-              statusSink,
-            });
+          storePath,
+          ctxPayload,
+          recordInboundSession: core.channel.session.recordInboundSession,
+          dispatchReplyWithBufferedBlockDispatcher:
+            core.channel.reply.dispatchReplyWithBufferedBlockDispatcher,
+          delivery: {
+            durable: () => ({
+              to: `twitch:channel:${message.channel}`,
+            }),
+            deliver: async (payload) => {
+              return await deliverTwitchReply({
+                payload,
+                channel: message.channel,
+                account,
+                accountId,
+                config,
+                tableMode,
+                runtime,
+              });
+            },
+            onDelivered: (_payload, _info, result) => {
+              if (result?.visibleReplySent !== false) {
+                statusSink?.({ lastOutboundAt: Date.now() });
+              }
+            },
+            onError: (err, info) => {
+              runtime.error?.(`Twitch ${info.kind} reply failed: ${String(err)}`);
+            },
           },
-          onError: (err, info) => {
-            runtime.error?.(`Twitch ${info.kind} reply failed: ${String(err)}`);
+          replyPipeline: {},
+          record: {
+            onRecordError: (err) => {
+              runtime.error?.(`Failed updating session meta: ${String(err)}`);
+            },
           },
-        },
-        dispatcherOptions: replyPipeline,
-        replyOptions: {
-          onModelSelected,
-        },
-        record: {
-          onRecordError: (err) => {
-            runtime.error?.(`Failed updating session meta: ${String(err)}`);
-          },
-        },
-      };
+        };
+      },
     },
   });
 }
@@ -186,9 +185,8 @@ async function deliverTwitchReply(params: {
   config: unknown;
   tableMode: MarkdownTableMode;
   runtime: TwitchRuntimeEnv;
-  statusSink?: (patch: { lastInboundAt?: number; lastOutboundAt?: number }) => void;
-}): Promise<void> {
-  const { payload, channel, account, accountId, config, runtime, statusSink } = params;
+}): Promise<{ visibleReplySent: boolean }> {
+  const { payload, channel, account, accountId, config, runtime } = params;
 
   try {
     const clientManager = getOrCreateClientManager(accountId, {
@@ -205,21 +203,22 @@ async function deliverTwitchReply(params: {
     );
     if (!client) {
       runtime.error?.(`No client available for sending reply`);
-      return;
+      return { visibleReplySent: false };
     }
 
     // Send the reply
     if (!payload.text) {
       runtime.error?.(`No text to send in reply payload`);
-      return;
+      return { visibleReplySent: false };
     }
 
     const textToSend = stripMarkdownForTwitch(payload.text);
 
     await client.say(channel, textToSend);
-    statusSink?.({ lastOutboundAt: Date.now() });
+    return { visibleReplySent: true };
   } catch (err) {
     runtime.error?.(`Failed to send reply: ${String(err)}`);
+    return { visibleReplySent: false };
   }
 }
 
@@ -269,34 +268,34 @@ export async function monitorTwitchProvider(
       return;
     }
 
-    // Access control check
-    const botUsername = normalizeLowercaseStringOrEmpty(account.username);
-    if (normalizeLowercaseStringOrEmpty(message.username) === botUsername) {
-      return; // Ignore own messages
-    }
+    void (async () => {
+      const botUsername = normalizeLowercaseStringOrEmpty(account.username);
+      if (normalizeLowercaseStringOrEmpty(message.username) === botUsername) {
+        return;
+      }
 
-    const access = checkTwitchAccessControl({
-      message,
-      account,
-      botUsername,
-    });
+      const access = await checkTwitchAccessControl({
+        message,
+        account,
+        botUsername,
+      });
 
-    if (!access.allowed) {
-      return;
-    }
+      if (stopped || !access.allowed) {
+        return;
+      }
 
-    statusSink?.({ lastInboundAt: Date.now() });
+      statusSink?.({ lastInboundAt: Date.now() });
 
-    // Fire-and-forget: process message without blocking
-    void processTwitchMessage({
-      message,
-      account,
-      accountId,
-      config,
-      runtime,
-      core,
-      statusSink,
-    }).catch((err) => {
+      await processTwitchMessage({
+        message,
+        account,
+        accountId,
+        config,
+        runtime,
+        core,
+        statusSink,
+      });
+    })().catch((err) => {
       runtime.error?.(`Message processing failed: ${String(err)}`);
     });
   });

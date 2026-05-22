@@ -14,6 +14,12 @@ type MSTeamsTestRuntimeOptions = {
   upsertPairingRequest?: ReturnType<typeof vi.fn>;
   recordInboundSession?: ReturnType<typeof vi.fn>;
   resolveAgentRoute?: (params: RuntimeRoutePeer) => unknown;
+  hasControlCommand?: PluginRuntime["channel"]["text"]["hasControlCommand"];
+  isControlCommandMessage?: PluginRuntime["channel"]["commands"]["isControlCommandMessage"];
+  shouldComputeCommandAuthorized?: PluginRuntime["channel"]["commands"]["shouldComputeCommandAuthorized"];
+  shouldHandleTextCommands?: PluginRuntime["channel"]["commands"]["shouldHandleTextCommands"];
+  createInboundDebouncer?: PluginRuntime["channel"]["debounce"]["createInboundDebouncer"];
+  resolveInboundDebounceMs?: PluginRuntime["channel"]["debounce"]["resolveInboundDebounceMs"];
   resolveTextChunkLimit?: () => number;
   resolveStorePath?: () => string;
 };
@@ -40,26 +46,57 @@ export function installMSTeamsTestRuntime(options: MSTeamsTestRuntimeOptions = {
       };
     },
   );
+  const run = vi.fn(async (params: Parameters<PluginRuntime["channel"]["turn"]["run"]>[0]) => {
+    const input = await params.adapter.ingest(params.raw);
+    if (!input) {
+      return { admission: { kind: "drop" as const, reason: "ingest-null" }, dispatched: false };
+    }
+    const eventClass = (await params.adapter.classify?.(input)) ?? {
+      kind: "message" as const,
+      canStartAgentTurn: true,
+    };
+    const preflightResult = await params.adapter.preflight?.(input, eventClass);
+    const preflight =
+      preflightResult && "kind" in preflightResult
+        ? { admission: preflightResult }
+        : (preflightResult ?? {});
+    const turn = await params.adapter.resolveTurn(input, eventClass, preflight);
+    if ("runDispatch" in turn) {
+      return await runPrepared(turn);
+    }
+    throw new Error("msteams test runtime only supports prepared turn dispatch");
+  });
   setMSTeamsRuntime({
     logging: { shouldLogVerbose: () => false },
     system: { enqueueSystemEvent: options.enqueueSystemEvent ?? vi.fn() },
     channel: {
       debounce: {
-        resolveInboundDebounceMs: () => 0,
-        createInboundDebouncer: <T>(params: {
-          onFlush: (entries: T[]) => Promise<void>;
-        }): { enqueue: (entry: T) => Promise<void> } => ({
-          enqueue: async (entry: T) => {
-            await params.onFlush([entry]);
-          },
-        }),
+        resolveInboundDebounceMs:
+          options.resolveInboundDebounceMs ??
+          ((() => 0) as PluginRuntime["channel"]["debounce"]["resolveInboundDebounceMs"]),
+        createInboundDebouncer:
+          options.createInboundDebouncer ??
+          (<T>(params: {
+            onFlush: (entries: T[]) => Promise<void>;
+          }): { enqueue: (entry: T) => Promise<void> } => ({
+            enqueue: async (entry: T) => {
+              await params.onFlush([entry]);
+            },
+          })),
       },
       pairing: {
         readAllowFromStore: options.readAllowFromStore ?? vi.fn(async () => []),
         upsertPairingRequest: options.upsertPairingRequest ?? vi.fn(async () => null),
       },
+      commands: {
+        isControlCommandMessage:
+          options.isControlCommandMessage ?? options.hasControlCommand ?? (() => false),
+        shouldComputeCommandAuthorized:
+          options.shouldComputeCommandAuthorized ?? options.hasControlCommand ?? (() => false),
+        shouldHandleTextCommands: options.shouldHandleTextCommands ?? (() => true),
+      },
       text: {
-        hasControlCommand: () => false,
+        hasControlCommand: options.hasControlCommand ?? (() => false),
         resolveChunkMode: () => "length",
         resolveMarkdownTableMode: () => "code",
         ...(options.resolveTextChunkLimit
@@ -90,9 +127,8 @@ export function installMSTeamsTestRuntime(options: MSTeamsTestRuntimeOptions = {
         ...(options.resolveStorePath ? { resolveStorePath: options.resolveStorePath } : {}),
       },
       turn: {
+        run: run as unknown as PluginRuntime["channel"]["turn"]["run"],
         runPrepared: runPrepared as unknown as PluginRuntime["channel"]["turn"]["runPrepared"],
-        dispatchAssembled:
-          vi.fn() as unknown as PluginRuntime["channel"]["turn"]["dispatchAssembled"],
       },
     },
   } as unknown as PluginRuntime);

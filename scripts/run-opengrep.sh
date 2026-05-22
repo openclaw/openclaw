@@ -112,14 +112,28 @@ fi
 # Default scan paths match CI. Override by passing `-- <paths...>`.
 if (( PATHS_PASSED == 0 )); then
   if (( CHANGED_ONLY )); then
-    mapfile -t SCAN_PATHS < <(
+    SCAN_PATHS=()
+    while IFS= read -r path; do
+      # OpenGrep errors when an explicit changed path is a symlink; scan the
+      # real target content, not duplicate guide aliases such as CLAUDE.md.
+      if [[ -L "$path" ]]; then
+        continue
+      fi
+      if [[ ! -f "$path" && ! -d "$path" ]]; then
+        continue
+      fi
+      SCAN_PATHS+=( "$path" )
+    done < <(
       {
         git diff --name-only --diff-filter=ACMRTUXB "${OPENCLAW_OPENGREP_BASE_REF:-origin/main...HEAD}" 2>/dev/null || true
         git diff --name-only --diff-filter=ACMRTUXB -- 2>/dev/null || true
         git ls-files --others --exclude-standard
       } | awk '/^(src|extensions|apps|packages|scripts)\// { print }' | sort -u
     )
-    mapfile -t RULEPACK_CHANGED_PATHS < <(
+    RULEPACK_CHANGED_PATHS=()
+    while IFS= read -r path; do
+      RULEPACK_CHANGED_PATHS+=( "$path" )
+    done < <(
       {
         git diff --name-only --diff-filter=ACMRTUXB "${OPENCLAW_OPENGREP_BASE_REF:-origin/main...HEAD}" 2>/dev/null || true
         git diff --name-only --diff-filter=ACMRTUXB -- 2>/dev/null || true
@@ -127,7 +141,9 @@ if (( PATHS_PASSED == 0 )); then
       } | awk '/^(security\/opengrep\/|scripts\/run-opengrep\.sh$|\.semgrepignore$|\.github\/workflows\/opengrep-)/ { print }' | sort -u
     )
     if (( ${#SCAN_PATHS[@]} == 0 && ${#RULEPACK_CHANGED_PATHS[@]} > 0 )); then
-      SCAN_PATHS=( "security/opengrep/precise.yml" )
+      # Exercise rulepack loading without scanning the compiled YAML, which contains
+      # rule pattern literals that can match themselves.
+      SCAN_PATHS=( "scripts/run-opengrep.sh" )
     fi
     if (( ${#SCAN_PATHS[@]} == 0 )); then
       echo "→ No changed first-party paths for opengrep." >&2
@@ -146,9 +162,11 @@ fi
 
 echo "→ Running opengrep ($BUCKET) against $(IFS=' '; echo "${SCAN_PATHS[*]:-overridden}")" >&2
 echo "  Using exclusions from .semgrepignore" >&2
-exec opengrep scan \
-  --no-strict \
-  --config "$CONFIG" \
-  --no-git-ignore \
-  "${EXTRA_ARGS[@]}" \
-  "${SCAN_PATHS[@]}"
+OPENGREP_ARGS=( scan --no-strict --config "$CONFIG" --no-git-ignore )
+if (( ${#EXTRA_ARGS[@]} > 0 )); then
+  OPENGREP_ARGS+=( "${EXTRA_ARGS[@]}" )
+fi
+if (( ${#SCAN_PATHS[@]} > 0 )); then
+  OPENGREP_ARGS+=( "${SCAN_PATHS[@]}" )
+fi
+exec opengrep "${OPENGREP_ARGS[@]}"

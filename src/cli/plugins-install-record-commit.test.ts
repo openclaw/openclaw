@@ -32,7 +32,15 @@ describe("commitConfigWithPendingPluginInstalls", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.loadInstalledPluginIndexInstallRecords.mockResolvedValue({});
-    mocks.replaceConfigFile.mockResolvedValue(undefined);
+    mocks.replaceConfigFile.mockImplementation(async (params: { nextConfig: OpenClawConfig }) => ({
+      path: "/tmp/openclaw.json",
+      previousHash: null,
+      snapshot: {} as never,
+      nextConfig: params.nextConfig,
+      persistedHash: "test-config-hash",
+      afterWrite: { mode: "auto" },
+      followUp: { mode: "auto", requiresRestart: false },
+    }));
     mocks.writePersistedInstalledPluginIndexInstallRecords.mockResolvedValue(undefined);
   });
 
@@ -78,6 +86,7 @@ describe("commitConfigWithPendingPluginInstalls", () => {
       },
       baseHash: "config-1",
       writeOptions: {
+        afterWrite: { mode: "restart", reason: "plugin source changed" },
         unsetPaths: [["plugins", "installs"]],
       },
     });
@@ -94,6 +103,34 @@ describe("commitConfigWithPendingPluginInstalls", () => {
         ...pendingRecords,
       },
       movedInstallRecords: true,
+      persistedHash: "test-config-hash",
+    });
+  });
+
+  it("does not add restart intent when pending records match the plugin index", async () => {
+    const existingRecords: Record<string, PluginInstallRecord> = {
+      demo: {
+        source: "npm",
+        spec: "demo@1.0.0",
+      },
+    };
+    mocks.loadInstalledPluginIndexInstallRecords.mockResolvedValue(existingRecords);
+
+    await commitConfigWithPendingPluginInstalls({
+      nextConfig: {
+        plugins: {
+          installs: existingRecords,
+        },
+      },
+      baseHash: "config-1",
+    });
+
+    expect(mocks.replaceConfigFile).toHaveBeenCalledWith({
+      nextConfig: {},
+      baseHash: "config-1",
+      writeOptions: {
+        unsetPaths: [["plugins", "installs"]],
+      },
     });
   });
 
@@ -156,6 +193,7 @@ describe("commitConfigWithPendingPluginInstalls", () => {
       config: nextConfig,
       installRecords: {},
       movedInstallRecords: false,
+      persistedHash: "test-config-hash",
     });
   });
 
@@ -177,6 +215,7 @@ describe("commitConfigWithPendingPluginInstalls", () => {
       config: nextConfig,
       installRecords: {},
       movedInstallRecords: false,
+      persistedHash: null,
     });
   });
 });

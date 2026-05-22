@@ -1,4 +1,4 @@
-import { spawn } from "node:child_process";
+import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
 import { mkdir, readFile, readdir, stat, writeFile } from "node:fs/promises";
@@ -12,6 +12,8 @@ import { formatErrorMessage } from "../src/infra/errors.ts";
 interface TranslationMap {
   [key: string]: string | TranslationMap;
 }
+
+type TranslationValue = string | { [key: string]: TranslationValue };
 
 type LocaleEntry = {
   exportName: string;
@@ -83,7 +85,8 @@ const CONTROL_UI_I18N_WORKFLOW = 1;
 const DEFAULT_OPENAI_MODEL = "gpt-5.5";
 const DEFAULT_ANTHROPIC_MODEL = "claude-opus-4-6";
 const DEFAULT_PROVIDER = "openai";
-const DEFAULT_PI_PACKAGE_VERSION = "0.58.3";
+export const DEFAULT_PI_PACKAGE_VERSION = "0.75.4";
+const PI_PACKAGE_NAME = "@earendil-works/pi-coding-agent";
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(HERE, "..");
 const LOCALES_DIR = path.join(ROOT, "ui", "src", "i18n", "locales");
@@ -107,6 +110,7 @@ const ENV_PI_ARGS = "OPENCLAW_CONTROL_UI_I18N_PI_ARGS";
 const ENV_PI_PACKAGE_VERSION = "OPENCLAW_CONTROL_UI_I18N_PI_PACKAGE_VERSION";
 const ENV_BATCH_CHAR_BUDGET = "OPENCLAW_CONTROL_UI_I18N_BATCH_CHAR_BUDGET";
 const ENV_PROMPT_TIMEOUT = "OPENCLAW_CONTROL_UI_I18N_PROMPT_TIMEOUT";
+const ENV_AUTH_OPTIONAL = "OPENCLAW_CONTROL_UI_I18N_AUTH_OPTIONAL";
 
 const LOCALE_ENTRIES: readonly LocaleEntry[] = [
   { locale: "zh-CN", fileName: "zh-CN.ts", exportName: "zh_CN", languageKey: "zhCN" },
@@ -355,6 +359,68 @@ function compareStringArrays(left: string[], right: string[]) {
     return false;
   }
   return left.every((value, index) => value === right[index]);
+}
+
+export type PlaceholderMismatch = {
+  key: string;
+  locale: string;
+  sourcePlaceholders: string[];
+  translatedPlaceholders: string[];
+};
+
+function extractTranslationPlaceholders(text: string): string[] {
+  return [...new Set([...text.matchAll(/\{(\w+)\}/g)].map((match) => match[1] ?? ""))]
+    .filter(Boolean)
+    .toSorted((left, right) => left.localeCompare(right));
+}
+
+export function findPlaceholderMismatches(
+  sourceFlat: ReadonlyMap<string, string>,
+  translatedFlat: ReadonlyMap<string, string>,
+  locale: string,
+): PlaceholderMismatch[] {
+  const mismatches: PlaceholderMismatch[] = [];
+  for (const [key, sourceText] of sourceFlat.entries()) {
+    const sourcePlaceholders = extractTranslationPlaceholders(sourceText);
+    const translatedPlaceholders = extractTranslationPlaceholders(translatedFlat.get(key) ?? "");
+    if (!compareStringArrays(sourcePlaceholders, translatedPlaceholders)) {
+      mismatches.push({
+        key,
+        locale,
+        sourcePlaceholders,
+        translatedPlaceholders,
+      });
+    }
+  }
+  return mismatches;
+}
+
+function assertPlaceholderParity(
+  sourceFlat: ReadonlyMap<string, string>,
+  translatedFlat: ReadonlyMap<string, string>,
+  locale: string,
+) {
+  const mismatches = findPlaceholderMismatches(sourceFlat, translatedFlat, locale);
+  if (mismatches.length === 0) {
+    return;
+  }
+
+  const details = mismatches
+    .slice(0, 20)
+    .map(
+      (mismatch) =>
+        `${mismatch.locale}:${mismatch.key} expected {${mismatch.sourcePlaceholders.join("},{")}} got {${mismatch.translatedPlaceholders.join("},{")}}`,
+    )
+    .join("\n");
+  throw new Error(
+    [
+      `control-ui-i18n placeholder mismatch detected for ${locale}.`,
+      details,
+      mismatches.length > 20 ? `...and ${mismatches.length - 20} more` : "",
+    ]
+      .filter(Boolean)
+      .join("\n"),
+  );
 }
 
 function isIdentifier(value: string): boolean {
@@ -808,6 +874,21 @@ function isPromptTimeoutError(error: Error): boolean {
   return error.message.toLowerCase().includes("timed out");
 }
 
+export function isProviderAuthError(error: Error): boolean {
+  const message = error.message.toLowerCase();
+  return (
+    message.includes("401") ||
+    message.includes("authentication_error") ||
+    message.includes("incorrect api key") ||
+    message.includes("invalid x-api-key")
+  );
+}
+
+function isProviderAuthOptional(): boolean {
+  const raw = process.env[ENV_AUTH_OPTIONAL]?.trim().toLowerCase();
+  return raw === "1" || raw === "true" || raw === "yes";
+}
+
 function resolvePromptTimeoutMs(): number {
   const raw = process.env[ENV_PROMPT_TIMEOUT]?.trim();
   if (!raw) {
@@ -854,6 +935,14 @@ function getPiRuntimeDir() {
   );
 }
 
+export function resolveLocalPiCommand(root = ROOT): PiCommand | null {
+  const cliPath = path.join(root, "node_modules", ...PI_PACKAGE_NAME.split("/"), "dist", "cli.js");
+  if (!existsSync(cliPath)) {
+    return null;
+  }
+  return { executable: "node", args: [cliPath] };
+}
+
 async function resolvePiCommand(): Promise<PiCommand> {
   const explicitExecutable = process.env[ENV_PI_EXECUTABLE]?.trim();
   if (explicitExecutable) {
@@ -871,12 +960,16 @@ async function resolvePiCommand(): Promise<PiCommand> {
     }
   }
 
+  const localCommand = resolveLocalPiCommand();
+  if (localCommand) {
+    return localCommand;
+  }
+
   const runtimeDir = getPiRuntimeDir();
   const cliPath = path.join(
     runtimeDir,
     "node_modules",
-    "@mariozechner",
-    "pi-coding-agent",
+    ...PI_PACKAGE_NAME.split("/"),
     "dist",
     "cli.js",
   );
@@ -889,7 +982,7 @@ async function resolvePiCommand(): Promise<PiCommand> {
         "--silent",
         "--no-audit",
         "--no-fund",
-        `@mariozechner/pi-coding-agent@${resolvePiPackageVersion()}`,
+        `${PI_PACKAGE_NAME}@${resolvePiPackageVersion()}`,
       ],
       {
         cwd: runtimeDir,
@@ -953,7 +1046,35 @@ async function formatGeneratedTypeScript(filePath: string, source: string): Prom
       rejectOnFailure: true,
     },
   );
-  return result.stdout;
+  return restoreReplacementCorruptedStringLiterals(source, result.stdout);
+}
+
+function restoreReplacementCorruptedStringLiterals(source: string, formatted: string): string {
+  if (!formatted.includes("\uFFFD") || source.includes("\uFFFD")) {
+    return formatted;
+  }
+
+  const stringLiteralPattern = /"(?:\\.|[^"\\])*"/gu;
+  const sourceLiterals = [...source.matchAll(stringLiteralPattern)];
+  const formattedLiterals = [...formatted.matchAll(stringLiteralPattern)];
+  if (sourceLiterals.length !== formattedLiterals.length) {
+    return formatted;
+  }
+
+  let output = "";
+  let cursor = 0;
+  for (const [index, formattedLiteral] of formattedLiterals.entries()) {
+    const replacement = sourceLiterals[index]?.[0];
+    const literal = formattedLiteral[0];
+    const start = formattedLiteral.index;
+    if (replacement === undefined || start === undefined) {
+      return formatted;
+    }
+    output += formatted.slice(cursor, start);
+    output += literal.includes("\uFFFD") && !replacement.includes("\uFFFD") ? replacement : literal;
+    cursor = start + literal.length;
+  }
+  return `${output}${formatted.slice(cursor)}`;
 }
 
 type PendingPrompt = {
@@ -1020,12 +1141,12 @@ class PiRpcClient {
   private readonly stderrChunks: string[] = [];
   private closed = false;
   private pending: PendingPrompt | null = null;
-  private readonly process;
-  private readonly stdin;
+  private readonly process: ChildProcessWithoutNullStreams;
+  private readonly stdin: ChildProcessWithoutNullStreams["stdin"];
   private requestCount = 0;
-  private sequence = Promise.resolve();
+  private sequence: Promise<unknown> = Promise.resolve();
 
-  private constructor(processHandle: ReturnType<typeof spawn>) {
+  private constructor(processHandle: ChildProcessWithoutNullStreams) {
     this.process = processHandle;
     this.stdin = processHandle.stdin;
   }
@@ -1146,7 +1267,7 @@ class PiRpcClient {
   }
 
   async prompt(message: string, label: string): Promise<string> {
-    this.sequence = this.sequence.then(async () => {
+    const result = this.sequence.then(async () => {
       if (this.closed) {
         throw new Error(`pi process unavailable${this.stderr() ? ` (${this.stderr()})` : ""}`);
       }
@@ -1208,7 +1329,8 @@ class PiRpcClient {
       });
     });
 
-    return (await this.sequence) as string;
+    this.sequence = result.catch(() => undefined);
+    return await result;
   }
 
   async close() {
@@ -1447,6 +1569,18 @@ async function syncLocale(
           });
         }
       }
+    } catch (error) {
+      const failure = error instanceof Error ? error : new Error(String(error));
+      if (isProviderAuthOptional() && isProviderAuthError(failure)) {
+        logProgress(`${localeLabel}: translation provider auth failed; skipping refresh`);
+        return {
+          changed: false,
+          fallbackCount: previousMeta?.fallbackKeys.length ?? 0,
+          locale: entry.locale,
+          wrote: false,
+        } satisfies SyncOutcome;
+      }
+      throw failure;
     } finally {
       await clientAccess.resetClient();
     }
@@ -1478,6 +1612,8 @@ async function syncLocale(
   // Product names, config keys, and other intentional carry-through strings may
   // legitimately stay identical to English. Track fallback keys from actual
   // fallback decisions and previous fallback metadata instead.
+
+  assertPlaceholderParity(sourceFlat, nextFlat, entry.locale);
 
   const nextMap: TranslationMap = {};
   for (const [key, value] of sourceFlat.entries()) {
@@ -1670,7 +1806,14 @@ async function main() {
   }
 }
 
-await main().catch((error) => {
-  console.error(formatErrorMessage(error));
-  process.exit(1);
-});
+function isCliEntrypoint() {
+  const entrypoint = process.argv[1];
+  return Boolean(entrypoint && import.meta.url === pathToFileURL(path.resolve(entrypoint)).href);
+}
+
+if (isCliEntrypoint()) {
+  await main().catch((error) => {
+    console.error(formatErrorMessage(error));
+    process.exit(1);
+  });
+}

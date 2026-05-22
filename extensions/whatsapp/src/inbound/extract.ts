@@ -1,9 +1,5 @@
-import type { proto } from "@whiskeysockets/baileys";
-import {
-  extractMessageContent,
-  getContentType,
-  normalizeMessageContent,
-} from "@whiskeysockets/baileys";
+import type { proto } from "baileys";
+import { extractMessageContent, getContentType, normalizeMessageContent } from "baileys";
 import { formatLocationText, type NormalizedLocation } from "openclaw/plugin-sdk/channel-inbound";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { resolveComparableIdentity, type WhatsAppReplyContext } from "../identity.js";
@@ -197,7 +193,9 @@ function extractContextInfoFromMessage(message: proto.IMessage): proto.IContextI
   return undefined;
 }
 
-function extractContextInfo(message: proto.IMessage | undefined): proto.IContextInfo | undefined {
+export function extractContextInfo(
+  message: proto.IMessage | undefined,
+): proto.IContextInfo | undefined {
   for (const candidate of buildMessageChain(message)) {
     const contextInfo = extractContextInfoFromMessage(candidate);
     if (contextInfo) {

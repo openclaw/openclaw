@@ -1,3 +1,4 @@
+import { areRuntimeModelRefsEquivalent } from "../agents/model-runtime-aliases.js";
 import { formatRawAssistantErrorForUi } from "../agents/pi-embedded-helpers.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import type { FallbackNoticeState } from "../status/fallback-notice-state.js";
@@ -49,7 +50,7 @@ function formatFallbackAttemptErrorPreview(attempt: RuntimeFallbackAttempt): str
   return formatted;
 }
 
-export function formatFallbackAttemptReason(attempt: RuntimeFallbackAttempt): string {
+function formatFallbackAttemptReason(attempt: RuntimeFallbackAttempt): string {
   const errorPreview = formatFallbackAttemptErrorPreview(attempt);
   if (errorPreview) {
     return errorPreview;
@@ -72,7 +73,7 @@ function formatFallbackAttemptSummary(attempt: RuntimeFallbackAttempt): string {
   return `${formatProviderModelRef(attempt.provider, attempt.model)} ${formatFallbackAttemptReason(attempt)}`;
 }
 
-export function buildFallbackReasonSummary(attempts: RuntimeFallbackAttempt[]): string {
+function buildFallbackReasonSummary(attempts: RuntimeFallbackAttempt[]): string {
   const firstAttempt = attempts[0];
   const firstReason = firstAttempt
     ? formatFallbackAttemptReason(firstAttempt)
@@ -81,7 +82,7 @@ export function buildFallbackReasonSummary(attempts: RuntimeFallbackAttempt[]): 
   return `${truncateFallbackReasonPart(firstReason)}${moreAttempts}`;
 }
 
-export function buildFallbackAttemptSummaries(attempts: RuntimeFallbackAttempt[]): string[] {
+function buildFallbackAttemptSummaries(attempts: RuntimeFallbackAttempt[]): string[] {
   return attempts.map((attempt) =>
     truncateFallbackReasonPart(formatFallbackAttemptSummary(attempt)),
   );
@@ -96,7 +97,7 @@ export function buildFallbackNotice(params: {
 }): string | null {
   const selected = formatProviderModelRef(params.selectedProvider, params.selectedModel);
   const active = formatProviderModelRef(params.activeProvider, params.activeModel);
-  if (selected === active) {
+  if (areRuntimeModelRefsEquivalent(selected, active)) {
     return null;
   }
   const reasonSummary = buildFallbackReasonSummary(params.attempts);
@@ -116,7 +117,7 @@ export function buildFallbackClearedNotice(params: {
   return `↪️ Model Fallback cleared: ${selected}`;
 }
 
-export type ResolvedFallbackTransition = {
+type ResolvedFallbackTransition = {
   selectedModelRef: string;
   activeModelRef: string;
   fallbackActive: boolean;
@@ -152,13 +153,17 @@ export function resolveFallbackTransition(params: {
     activeModel: normalizeOptionalString(params.state?.fallbackNoticeActiveModel),
     reason: normalizeOptionalString(params.state?.fallbackNoticeReason),
   };
-  const fallbackActive = selectedModelRef !== activeModelRef;
+  const fallbackActive = !areRuntimeModelRefsEquivalent(selectedModelRef, activeModelRef);
   const fallbackTransitioned =
     fallbackActive &&
     (previousState.selectedModel !== selectedModelRef ||
       previousState.activeModel !== activeModelRef);
-  const fallbackCleared =
-    !fallbackActive && Boolean(previousState.selectedModel || previousState.activeModel);
+  const previousStateWasRealFallback = Boolean(
+    previousState.selectedModel &&
+    previousState.activeModel &&
+    !areRuntimeModelRefsEquivalent(previousState.selectedModel, previousState.activeModel),
+  );
+  const fallbackCleared = !fallbackActive && previousStateWasRealFallback;
   const reasonSummary = buildFallbackReasonSummary(params.attempts);
   const attemptSummaries = buildFallbackAttemptSummaries(params.attempts);
   const nextState = fallbackActive

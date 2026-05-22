@@ -12,6 +12,16 @@ import { createTestFollowupRun, writeTestSessionStore } from "./agent-runner.tes
 const refreshQueuedFollowupSessionMock = vi.fn();
 const errorMock = vi.fn();
 
+async function expectPathMissing(targetPath: string): Promise<void> {
+  let accessError: NodeJS.ErrnoException | undefined;
+  try {
+    await fs.access(targetPath);
+  } catch (error) {
+    accessError = error as NodeJS.ErrnoException;
+  }
+  expect(accessError?.code).toBe("ENOENT");
+}
+
 describe("resetReplyRunSession", () => {
   let rootDir = "";
 
@@ -131,6 +141,6 @@ describe("resetReplyRunSession", () => {
       onNewSession: () => {},
     });
 
-    await expect(fs.access(oldTranscriptPath)).rejects.toThrow();
+    await expectPathMissing(oldTranscriptPath);
   });
 });

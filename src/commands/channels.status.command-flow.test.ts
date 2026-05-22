@@ -12,6 +12,7 @@ const mocks = vi.hoisted(() => ({
   requireValidConfigSnapshot: vi.fn(),
   listChannelPlugins: vi.fn(),
   listConfiguredChannelIdsForReadOnlyScope: vi.fn((_params: unknown) => ["discord"]),
+  missingOfficialExternalChannels: new Set<string>(),
   withProgress: vi.fn(async (_opts: unknown, run: () => Promise<unknown>) => await run()),
 }));
 
@@ -36,8 +37,26 @@ vi.mock("../config/config.js", () => ({
 }));
 
 vi.mock("../plugins/channel-plugin-ids.js", () => ({
+  listExplicitConfiguredChannelIdsForConfig: (config: { channels?: Record<string, unknown> }) =>
+    Object.keys(config.channels ?? {}),
   listConfiguredChannelIdsForReadOnlyScope: (params: unknown) =>
     mocks.listConfiguredChannelIdsForReadOnlyScope(params),
+}));
+
+vi.mock("../plugins/official-external-plugin-repair-hints.js", () => ({
+  resolveMissingOfficialExternalChannelPluginRepairHint: ({ channelId }: { channelId: string }) =>
+    mocks.missingOfficialExternalChannels.has(channelId)
+      ? {
+          pluginId: channelId,
+          channelId,
+          label: "Feishu",
+          installSpec: "@openclaw/feishu",
+          installCommand: "openclaw plugins install @openclaw/feishu",
+          doctorFixCommand: "openclaw doctor --fix",
+          repairHint:
+            "Install the official external plugin with: openclaw plugins install @openclaw/feishu, or run: openclaw doctor --fix.",
+        }
+      : null,
 }));
 
 vi.mock("./channels/shared.js", () => ({
@@ -87,6 +106,7 @@ vi.mock("../channels/plugins/index.js", () => ({
   listChannelPlugins: () => mocks.listChannelPlugins(),
   getChannelPlugin: (channel: string) =>
     (mocks.listChannelPlugins() as Array<{ id: string }>).find((plugin) => plugin.id === channel),
+  normalizeChannelId: (channel: string) => (channel === "imsg" ? "imessage" : channel),
 }));
 
 vi.mock("../channels/plugins/read-only.js", () => ({
@@ -184,10 +204,27 @@ describe("channelsStatusCommand SecretRef fallback flow", () => {
     mocks.readConfigFileSnapshot.mockClear();
     mocks.requireValidConfigSnapshot.mockReset();
     mocks.listChannelPlugins.mockReset();
+    mocks.missingOfficialExternalChannels.clear();
     mocks.listConfiguredChannelIdsForReadOnlyScope.mockClear();
     mocks.listConfiguredChannelIdsForReadOnlyScope.mockReturnValue(["discord"]);
     mocks.withProgress.mockClear();
     mocks.listChannelPlugins.mockReturnValue([createTokenOnlyPlugin()]);
+  });
+
+  it("passes a channel filter to the gateway status request", async () => {
+    mocks.callGateway.mockResolvedValue({
+      channelAccounts: { imessage: [] },
+      channels: { imessage: {} },
+    });
+    const { runtime } = createCapturingTestRuntime();
+
+    await channelsStatusCommand({ channel: "imsg", json: true, probe: true }, runtime as never);
+
+    expect(mocks.callGateway).toHaveBeenCalledWith({
+      method: "channels.status",
+      params: { channel: "imsg", probe: true, timeoutMs: 30000 },
+      timeoutMs: 30000,
+    });
   });
 
   it("keeps read-only fallback output when SecretRefs are unresolved", async () => {
@@ -204,13 +241,11 @@ describe("channelsStatusCommand SecretRef fallback flow", () => {
 
     await channelsStatusCommand({ probe: false }, runtime as never);
 
-    expect(errors.some((line) => line.includes("Gateway not reachable"))).toBe(true);
-    expect(mocks.resolveCommandConfigWithSecrets).toHaveBeenCalledWith(
-      expect.objectContaining({
-        commandName: "channels status",
-        mode: "read_only_status",
-      }),
-    );
+    expect(errors.join("\n")).toContain("Gateway not reachable");
+    expect(mocks.resolveCommandConfigWithSecrets).toHaveBeenCalledOnce();
+    const configResolutionRequest = mocks.resolveCommandConfigWithSecrets.mock.calls[0]?.[0];
+    expect(configResolutionRequest?.commandName).toBe("channels status");
+    expect(configResolutionRequest?.mode).toBe("read_only_status");
     expect(
       logs.some((line) =>
         line.includes("[secrets] channels status: channels.discord.token is unavailable"),
@@ -240,6 +275,29 @@ describe("channelsStatusCommand SecretRef fallback flow", () => {
     expect(joined).not.toContain("token:config (unavailable)");
   });
 
+  it("shows missing official external plugin repair hints in config-only output", async () => {
+    mocks.callGateway.mockRejectedValue(new Error("gateway closed"));
+    mocks.requireValidConfigSnapshot.mockResolvedValue({
+      channels: { feishu: { appId: "cli_xxx" } },
+    });
+    mocks.resolveCommandConfigWithSecrets.mockResolvedValue({
+      resolvedConfig: { channels: { feishu: { appId: "cli_xxx" } } },
+      effectiveConfig: { channels: { feishu: { appId: "cli_xxx" } } },
+      diagnostics: [],
+    });
+    mocks.missingOfficialExternalChannels.add("feishu");
+    mocks.listChannelPlugins.mockReturnValue([]);
+    const { runtime, logs } = createCapturingTestRuntime();
+
+    await channelsStatusCommand({ probe: false }, runtime as never);
+
+    const joined = logs.join("\n");
+    expect(joined).toContain("Missing official external plugins:");
+    expect(joined).toContain(
+      "Feishu: Install the official external plugin with: openclaw plugins install @openclaw/feishu, or run: openclaw doctor --fix.",
+    );
+  });
+
   it("keeps JSON fallback structured without rendering config-only text", async () => {
     mocks.callGateway.mockRejectedValue(
       new Error(
@@ -259,15 +317,16 @@ describe("channelsStatusCommand SecretRef fallback flow", () => {
     });
     const { runtime, logs, errors } = createCapturingTestRuntime();
 
-    await channelsStatusCommand({ json: true, probe: false }, runtime as never);
+    await channelsStatusCommand({ channel: "imsg", json: true, probe: false }, runtime as never);
 
     expect(mocks.listChannelPlugins).not.toHaveBeenCalled();
-    expect(mocks.listConfiguredChannelIdsForReadOnlyScope).toHaveBeenCalledWith(
-      expect.objectContaining({
-        config: expect.objectContaining({ secretResolved: true }),
-        includePersistedAuthState: false,
-      }),
-    );
+    expect(mocks.listConfiguredChannelIdsForReadOnlyScope).toHaveBeenCalledOnce();
+    const readOnlyScopeRequest = mocks.listConfiguredChannelIdsForReadOnlyScope.mock
+      .calls[0]?.[0] as
+      | { config?: { secretResolved?: unknown }; includePersistedAuthState?: unknown }
+      | undefined;
+    expect(readOnlyScopeRequest?.config?.secretResolved).toBe(true);
+    expect(readOnlyScopeRequest?.includePersistedAuthState).toBe(false);
     const payload = JSON.parse(logs.at(-1) ?? "{}");
     expect(errors.join("\n")).not.toContain("user:pass");
     expect(errors.join("\n")).not.toContain("secret-token");
@@ -278,12 +337,8 @@ describe("channelsStatusCommand SecretRef fallback flow", () => {
     expect(payload.error).not.toContain("secret-token");
     expect(payload.error).not.toContain("fallback-user:fallback-pass");
     expect(payload.error).not.toContain("fallback-secret");
-    expect(payload).toEqual(
-      expect.objectContaining({
-        gatewayReachable: false,
-        configOnly: true,
-        configuredChannels: ["discord"],
-      }),
-    );
+    expect(payload.gatewayReachable).toBe(false);
+    expect(payload.configOnly).toBe(true);
+    expect(payload.configuredChannels).toStrictEqual([]);
   });
 });

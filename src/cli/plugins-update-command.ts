@@ -1,4 +1,9 @@
-import { getRuntimeConfig, readConfigFileSnapshot, replaceConfigFile } from "../config/config.js";
+import {
+  assertConfigWriteAllowedInCurrentMode,
+  getRuntimeConfig,
+  readConfigFileSnapshot,
+  replaceConfigFile,
+} from "../config/config.js";
 import { updateNpmInstalledHookPacks } from "../hooks/update.js";
 import {
   loadInstalledPluginIndexInstallRecords,
@@ -21,6 +26,8 @@ export async function runPluginUpdateCommand(params: {
   id?: string;
   opts: { all?: boolean; dryRun?: boolean; dangerouslyForceUnsafeInstall?: boolean };
 }) {
+  assertConfigWriteAllowedInCurrentMode();
+
   const sourceSnapshotPromise = readConfigFileSnapshot().catch(() => null);
   const cfg = getRuntimeConfig();
   const pluginInstallRecords = await loadInstalledPluginIndexInstallRecords();
@@ -111,6 +118,9 @@ export async function runPluginUpdateCommand(params: {
         nextInstallRecords: nextPluginInstallRecords,
         nextConfig,
         baseHash: (await sourceSnapshotPromise)?.hash,
+        writeOptions: {
+          afterWrite: { mode: "restart", reason: "plugin source changed" },
+        },
       });
     } else {
       await replaceConfigFile({

@@ -19,10 +19,10 @@ type DiscordMessageRunQueueParams = {
   setStatus?: DiscordMonitorStatusSink;
   abortSignal?: AbortSignal;
   replayGuard?: ClaimableDedupe;
-  __testing?: DiscordMessageRunQueueTestingHooks;
+  testing?: DiscordMessageRunQueueTestingHooks;
 };
 
-export type DiscordMessageRunQueue = {
+type DiscordMessageRunQueue = {
   enqueue: (job: DiscordInboundJob) => void;
   deactivate: () => void;
 };
@@ -92,7 +92,7 @@ export function createDiscordMessageRunQueue(
           job,
           lifecycleSignal,
           replayGuard,
-          testing: params.__testing,
+          testing: params.testing,
         });
       });
     },

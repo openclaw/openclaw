@@ -1,6 +1,8 @@
-import type { StreamFn } from "@mariozechner/pi-agent-core";
-import type { Api, Context, Model } from "@mariozechner/pi-ai";
+import type { StreamFn } from "@earendil-works/pi-agent-core";
+import type { Api, Context, Model } from "@earendil-works/pi-ai";
+import { streamSimpleOpenAIResponses } from "@earendil-works/pi-ai/openai-responses";
 import { describe, expect, it } from "vitest";
+import { applyXaiRuntimeModelCompat } from "./runtime-model-compat.js";
 import {
   createXaiFastModeWrapper,
   createXaiToolPayloadCompatibilityWrapper,
@@ -58,11 +60,50 @@ function runXaiToolPayloadWrapper(params: {
       id:
         params.modelId ??
         (api === "openai-completions" ? "grok-4-1-fast-reasoning" : "grok-4-fast"),
+      reasoning: params.modelId ? !params.modelId.includes("non-reasoning") : true,
       ...(params.input ? { input: params.input } : {}),
     } as Model<XaiStreamApi>,
     { messages: [] } as Context,
     {},
   );
+}
+
+async function captureXaiResponsesPayloadWithThinking(): Promise<Record<string, unknown>> {
+  const model = applyXaiRuntimeModelCompat({
+    api: "openai-responses",
+    provider: "xai",
+    id: "grok-4.3",
+    baseUrl: "https://api.x.ai/v1",
+    reasoning: true,
+    input: ["text", "image"],
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow: 1_000_000,
+    maxTokens: 64_000,
+  } as Model<"openai-responses">);
+
+  const payloadPromise = new Promise<Record<string, unknown>>((resolve, reject) => {
+    const timeout = setTimeout(
+      () => reject(new Error("provider payload callback was not invoked")),
+      1_000,
+    );
+    const stream = streamSimpleOpenAIResponses(
+      model,
+      { messages: [{ role: "user", content: "hello", timestamp: 0 }] },
+      {
+        apiKey: "test-api-key",
+        cacheRetention: "none",
+        reasoning: "low",
+        onPayload: (payload) => {
+          clearTimeout(timeout);
+          resolve(structuredClone(payload as Record<string, unknown>));
+          throw new Error("stop after payload capture");
+        },
+      },
+    );
+    void stream.result();
+  });
+
+  return await payloadPromise;
 }
 
 describe("xai stream wrappers", () => {
@@ -118,7 +159,11 @@ describe("xai stream wrappers", () => {
         },
       ],
     };
-    runXaiToolPayloadWrapper({ payload, api: "openai-completions" });
+    runXaiToolPayloadWrapper({
+      payload,
+      api: "openai-completions",
+      modelId: "grok-4-fast-non-reasoning",
+    });
 
     expect(payload).not.toHaveProperty("reasoning");
     expect(payload).not.toHaveProperty("reasoningEffort");
@@ -126,17 +171,66 @@ describe("xai stream wrappers", () => {
     expect(payload.tools[0]?.function).not.toHaveProperty("strict");
   });
 
-  it("strips unsupported reasoning controls from xai payloads", () => {
+  it("strips unsupported reasoning controls from non-reasoning xai payloads", () => {
     const payload: Record<string, unknown> = {
       reasoning: { effort: "high" },
       reasoningEffort: "high",
       reasoning_effort: "high",
     };
-    runXaiToolPayloadWrapper({ payload });
+    runXaiToolPayloadWrapper({ payload, modelId: "grok-4-fast-non-reasoning" });
 
     expect(payload).not.toHaveProperty("reasoning");
     expect(payload).not.toHaveProperty("reasoningEffort");
     expect(payload).not.toHaveProperty("reasoning_effort");
+  });
+
+  it("passes reasoning controls through for reasoning-capable xai payloads", () => {
+    const payload: Record<string, unknown> = {
+      reasoning: { effort: "high" },
+      reasoningEffort: "high",
+      reasoning_effort: "high",
+    };
+    runXaiToolPayloadWrapper({ payload, modelId: "grok-4.3" });
+
+    expect(payload.reasoning).toEqual({ effort: "high" });
+    expect(payload.reasoningEffort).toBe("high");
+    expect(payload.reasoning_effort).toBe("high");
+  });
+
+  it("strips reasoning controls when compat disables reasoning effort", () => {
+    const payload: Record<string, unknown> = {
+      reasoning: { effort: "high" },
+      reasoningEffort: "high",
+      reasoning_effort: "high",
+    };
+    const baseStreamFn: StreamFn = (model, _context, options) => {
+      options?.onPayload?.(payload, model);
+      return {} as ReturnType<StreamFn>;
+    };
+    const wrapped = createXaiToolPayloadCompatibilityWrapper(baseStreamFn);
+
+    void wrapped(
+      {
+        api: "openai-responses",
+        provider: "xai",
+        id: "grok-4.20-beta-latest-reasoning",
+        reasoning: true,
+        compat: { supportsReasoningEffort: false },
+      } as unknown as Model<"openai-responses">,
+      { messages: [] } as Context,
+      {},
+    );
+
+    expect(payload).not.toHaveProperty("reasoning");
+    expect(payload).not.toHaveProperty("reasoningEffort");
+    expect(payload).not.toHaveProperty("reasoning_effort");
+  });
+
+  it("keeps native xAI Responses thinking efforts before pi-ai dispatches payloads", async () => {
+    const payload = await captureXaiResponsesPayloadWithThinking();
+
+    expect(payload.reasoning).toEqual({ effort: "low", summary: "auto" });
+    expect(payload.include).toEqual(["reasoning.encrypted_content"]);
   });
 
   it("moves image-bearing tool results out of function_call_output payloads", () => {

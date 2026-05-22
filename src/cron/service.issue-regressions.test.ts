@@ -82,7 +82,7 @@ describe("Cron issue regressions", () => {
       storePath: store.storePath,
       log: noopLogger,
       enqueueSystemEvent: vi.fn(),
-      requestHeartbeatNow: vi.fn(),
+      requestHeartbeat: vi.fn(),
       runIsolatedAgentJob: vi.fn().mockResolvedValue({ status: "ok", summary: "ok" }),
     });
     await cron.start();
@@ -213,7 +213,8 @@ describe("Cron issue regressions", () => {
     const cron = await startCronForStore({ storePath: store.storePath, cronEnabled: false });
 
     const listed = await cron.list();
-    expect(listed.some((job) => job.id === "missing-enabled-update")).toBe(true);
+    const listedJobIds = listed.map((job) => job.id);
+    expect(listedJobIds).toContain("missing-enabled-update");
 
     const updated = await cron.update("missing-enabled-update", {
       schedule: { kind: "cron", expr: "0 */3 * * *", tz: "UTC" },
@@ -252,11 +253,71 @@ describe("Cron issue regressions", () => {
 
     const result = await cron.run("missing-enabled-due", "due");
     expect(result).toEqual({ ok: true, ran: true });
-    expect(enqueueSystemEvent).toHaveBeenCalledWith(
-      "missing-enabled-due",
-      expect.objectContaining({ agentId: undefined }),
+    const enqueueCall = enqueueSystemEvent.mock.calls[0];
+    if (!enqueueCall) {
+      throw new Error("Expected due cron job to enqueue a system event");
+    }
+    expect(enqueueCall[0]).toBe("missing-enabled-due");
+    expect(enqueueCall[1]?.agentId).toBeUndefined();
+
+    cron.stop();
+  });
+
+  it("rejects invalid cron schedule updates without mutating disabled jobs", async () => {
+    const store = cronIssueRegressionFixtures.makeStorePath();
+    const cron = await startCronForStore({ storePath: store.storePath, cronEnabled: false });
+
+    const disabledJob = await cron.add({
+      name: "disabled-cron",
+      enabled: false,
+      schedule: { kind: "cron", expr: "0 * * * *", tz: "UTC" },
+      sessionTarget: "main",
+      wakeMode: "next-heartbeat",
+      payload: { kind: "systemEvent", text: "tick" },
+    });
+
+    await expect(
+      cron.update(disabledJob.id, {
+        schedule: { kind: "cron", expr: "* * * 13 *", tz: "UTC" },
+      }),
+    ).rejects.toThrow("CronPattern");
+
+    let persisted = await loadCronStore(store.storePath);
+    let storedJob = persisted.jobs.find((job) => job.id === disabledJob.id);
+    expect(storedJob?.enabled).toBe(false);
+    expect(storedJob?.schedule.kind).toBe("cron");
+    if (storedJob?.schedule.kind !== "cron") {
+      throw new Error("expected stored cron schedule");
+    }
+    expect(storedJob.schedule.expr).toBe("0 * * * *");
+    expect(storedJob.schedule.tz).toBe("UTC");
+
+    await writeCronStoreSnapshot(store.storePath, [
+      {
+        id: "invalid-disabled-job",
+        name: "invalid disabled job",
+        createdAtMs: Date.parse("2026-02-06T10:00:00.000Z"),
+        updatedAtMs: Date.parse("2026-02-06T10:00:00.000Z"),
+        enabled: false,
+        schedule: { kind: "cron", expr: "* * * 13 *", tz: "UTC" },
+        sessionTarget: "main",
+        wakeMode: "next-heartbeat",
+        payload: { kind: "systemEvent", text: "tick" },
+        state: {},
+      },
+    ]);
+
+    const invalidCron = await startCronForStore({ storePath: store.storePath, cronEnabled: false });
+    await expect(invalidCron.update("invalid-disabled-job", { enabled: true })).rejects.toThrow(
+      "CronPattern",
     );
 
+    persisted = await loadCronStore(store.storePath);
+    storedJob = persisted.jobs.find((job) => job.id === "invalid-disabled-job");
+    expect(storedJob?.enabled).toBe(false);
+    expect(storedJob?.state.nextRunAtMs).toBeUndefined();
+
+    invalidCron.stop();
     cron.stop();
   });
 

@@ -4,6 +4,7 @@ import {
   registerMemoryCapability,
   registerMemoryPromptSection,
 } from "../plugins/memory-state.js";
+import * as memoryCoreAlias from "./memory-core.js";
 import {
   buildActiveMemoryPromptSection,
   listActiveMemoryPublicArtifacts,
@@ -57,5 +58,10 @@ describe("memory-host-core helpers", () => {
         contentType: "markdown",
       },
     ]);
+  });
+
+  it("keeps the deprecated memory-core alias wired to memory-host-core", () => {
+    expect(memoryCoreAlias.buildActiveMemoryPromptSection).toBe(buildActiveMemoryPromptSection);
+    expect(memoryCoreAlias.listActiveMemoryPublicArtifacts).toBe(listActiveMemoryPublicArtifacts);
   });
 });

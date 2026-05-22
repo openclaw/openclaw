@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -11,6 +12,7 @@ export const RELEASE_LIVE_TEST_SHARDS = Object.freeze([
   "native-live-src-gateway-core",
   "native-live-src-gateway-profiles",
   "native-live-src-gateway-backends",
+  "native-live-src-infra",
   "native-live-test",
   "native-live-extensions-a-k",
   "native-live-extensions-l-n",
@@ -63,10 +65,80 @@ function walkFiles(rootDir) {
 }
 
 export function collectAllLiveTestFiles(repoRoot = process.cwd()) {
+  const externalFiles = listExternalLiveTestFiles(repoRoot);
+  if (externalFiles) {
+    return externalFiles;
+  }
   return ["src", "test", "extensions"]
     .flatMap((dir) => walkFiles(path.join(repoRoot, dir)))
     .map((file) => path.relative(repoRoot, file).split(path.sep).join("/"))
     .filter((file) => file.endsWith(LIVE_TEST_SUFFIX))
+    .toSorted((a, b) => a.localeCompare(b));
+}
+
+function listExternalLiveTestFiles(repoRoot) {
+  return listGitLiveTestFiles(repoRoot) ?? listFindLiveTestFiles(repoRoot);
+}
+
+function listGitLiveTestFiles(repoRoot) {
+  const result = spawnSync("git", ["ls-files", "--", "src", "test", "extensions"], {
+    cwd: repoRoot,
+    encoding: "utf8",
+    maxBuffer: 1024 * 1024 * 4,
+    stdio: ["ignore", "pipe", "ignore"],
+  });
+  if (result.status !== 0) {
+    return null;
+  }
+  return result.stdout
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((file) => file.endsWith(LIVE_TEST_SUFFIX))
+    .toSorted((a, b) => a.localeCompare(b));
+}
+
+function listFindLiveTestFiles(repoRoot) {
+  const roots = ["src", "test", "extensions"].map((dir) => path.join(repoRoot, dir));
+  const result = spawnSync(
+    "find",
+    [
+      ...roots,
+      "(",
+      "-name",
+      "node_modules",
+      "-o",
+      "-name",
+      "dist",
+      "-o",
+      "-name",
+      "vendor",
+      "-o",
+      "-name",
+      "fixtures",
+      ")",
+      "-prune",
+      "-o",
+      "-type",
+      "f",
+      "-name",
+      `*${LIVE_TEST_SUFFIX}`,
+      "-print",
+    ],
+    {
+      cwd: repoRoot,
+      encoding: "utf8",
+      maxBuffer: 1024 * 1024 * 4,
+      stdio: ["ignore", "pipe", "ignore"],
+    },
+  );
+  if (result.status !== 0) {
+    return null;
+  }
+  return result.stdout
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((file) => file.length > 0)
+    .map((file) => path.relative(repoRoot, file).split(path.sep).join("/"))
     .toSorted((a, b) => a.localeCompare(b));
 }
 
@@ -154,6 +226,8 @@ export function selectLiveShardFiles(shard, files = collectAllLiveTestFiles()) {
       return files.filter(isGatewayProfilesLiveTest);
     case "native-live-src-gateway-backends":
       return files.filter(isGatewayBackendLiveTest);
+    case "native-live-src-infra":
+      return files.filter((file) => file.startsWith("src/infra/"));
     case "native-live-test":
       return files.filter((file) => file.startsWith("test/"));
     case "native-live-extensions-a-k":

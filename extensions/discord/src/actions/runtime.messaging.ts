@@ -1,4 +1,4 @@
-import type { AgentToolResult } from "@mariozechner/pi-agent-core";
+import type { AgentToolResult } from "@earendil-works/pi-agent-core";
 import type { ActionGate, DiscordActionConfig, OpenClawConfig } from "../runtime-api.js";
 import { handleDiscordMessageManagementAction } from "./runtime.messaging.messages.js";
 import { handleDiscordReactionMessagingAction } from "./runtime.messaging.reactions.js";
@@ -7,10 +7,7 @@ import {
   createDiscordMessagingActionContext,
   type DiscordMessagingActionOptions,
 } from "./runtime.messaging.shared.js";
-export {
-  discordMessagingActionRuntime,
-  resolveDiscordReactionTargetChannelId,
-} from "./runtime.messaging.runtime.js";
+export { discordMessagingActionRuntime } from "./runtime.messaging.runtime.js";
 
 export async function handleDiscordMessagingAction(
   action: string,

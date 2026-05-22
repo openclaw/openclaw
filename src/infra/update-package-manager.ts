@@ -4,9 +4,9 @@ import path from "node:path";
 import { detectPackageManager as detectPackageManagerImpl } from "./detect-package-manager.js";
 import { applyPathPrepend } from "./path-prepend.js";
 
-export type BuildManager = "pnpm" | "bun" | "npm";
+type BuildManager = "pnpm" | "bun" | "npm";
 
-export type UpdatePackageManagerRequirement = "allow-fallback" | "require-preferred";
+type UpdatePackageManagerRequirement = "allow-fallback" | "require-preferred";
 
 export type UpdatePackageManagerFailureReason =
   | "preferred-manager-unavailable"
@@ -19,7 +19,7 @@ export type PackageManagerCommandRunner = (
   options: { timeoutMs: number; env?: NodeJS.ProcessEnv },
 ) => Promise<{ stdout: string; stderr: string; code: number | null }>;
 
-export type ResolvedBuildManager =
+type ResolvedBuildManager =
   | {
       kind: "resolved";
       manager: BuildManager;
@@ -34,7 +34,9 @@ export type ResolvedBuildManager =
       reason: UpdatePackageManagerFailureReason;
     };
 
-export async function detectBuildManager(root: string): Promise<BuildManager> {
+const PNPM_NPM_FALLBACK_SPEC = "pnpm@11";
+
+async function detectBuildManager(root: string): Promise<BuildManager> {
   return (await detectPackageManagerImpl(root)) ?? "npm";
 }
 
@@ -124,7 +126,7 @@ async function bootstrapPnpmViaNpm(params: {
   };
   try {
     const installResult = await params.runCommand(
-      ["npm", "install", "--prefix", tempRoot, "pnpm@10"],
+      ["npm", "install", "--prefix", tempRoot, PNPM_NPM_FALLBACK_SPEC],
       {
         timeoutMs: params.timeoutMs,
         env: params.baseEnv,

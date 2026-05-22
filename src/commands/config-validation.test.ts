@@ -45,6 +45,18 @@ describe("requireValidConfigSnapshot", () => {
     };
   }
 
+  function requireFirstLog(runtime: ReturnType<typeof createRuntime>): string {
+    const [call] = runtime.log.mock.calls;
+    if (!call) {
+      throw new Error("expected runtime log message");
+    }
+    const [message] = call;
+    if (message === undefined) {
+      throw new Error("expected runtime log message");
+    }
+    return String(message);
+  }
+
   it("returns config without emitting compatibility advice by default", async () => {
     createValidSnapshot();
     const runtime = createRuntime();
@@ -69,9 +81,12 @@ describe("requireValidConfigSnapshot", () => {
     expect(config).toEqual({ plugins: {} });
     expect(runtime.error).not.toHaveBeenCalled();
     expect(runtime.exit).not.toHaveBeenCalled();
-    expect(String(runtime.log.mock.calls[0]?.[0])).toContain("Plugin compatibility: 1 notice.");
-    expect(String(runtime.log.mock.calls[0]?.[0])).toContain(
-      "legacy-plugin still uses legacy before_agent_start",
+    expect(requireFirstLog(runtime)).toBe(
+      [
+        "Plugin compatibility: 1 notice.",
+        "- legacy-plugin still uses legacy before_agent_start; keep regression coverage on this plugin, and prefer before_model_resolve/before_prompt_build for new work.",
+        "Review: openclaw doctor",
+      ].join("\n"),
     );
   });
 

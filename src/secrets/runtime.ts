@@ -1,70 +1,41 @@
-import { resolveOpenClawAgentDir } from "../agents/agent-paths.js";
-import {
-  listAgentIds,
-  resolveAgentDir,
-  resolveAgentWorkspaceDir,
-  resolveDefaultAgentId,
-} from "../agents/agent-scope.js";
+import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope-config.js";
 import {
   clearRuntimeAuthProfileStoreSnapshots,
   loadAuthProfileStoreForSecretsRuntime,
   loadAuthProfileStoreWithoutExternalProfiles,
-  replaceRuntimeAuthProfileStoreSnapshots,
 } from "../agents/auth-profiles.js";
 import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
-import {
-  clearRuntimeConfigSnapshot,
-  setRuntimeConfigSnapshotRefreshHandler,
-  setRuntimeConfigSnapshot,
-  type OpenClawConfig,
-} from "../config/config.js";
-import { coerceSecretRef } from "../config/types.secrets.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginOrigin } from "../plugins/plugin-origin.types.js";
 import { resolveUserPath } from "../utils.js";
-import { type SecretResolverWarning } from "./runtime-shared.js";
 import {
-  clearActiveRuntimeWebToolsMetadata,
-  getActiveRuntimeWebToolsMetadata as getActiveRuntimeWebToolsMetadataFromState,
-  setActiveRuntimeWebToolsMetadata,
-} from "./runtime-web-tools-state.js";
-import type { RuntimeWebToolsMetadata } from "./runtime-web-tools.js";
+  canUseSecretsRuntimeFastPath,
+  collectCandidateAgentDirs,
+  createEmptyRuntimeWebToolsMetadata,
+  mergeSecretsRuntimeEnv,
+  resolveRefreshAgentDirs,
+} from "./runtime-fast-path.js";
+import {
+  activateSecretsRuntimeSnapshotState,
+  clearSecretsRuntimeSnapshot as clearSecretsRuntimeSnapshotState,
+  getActiveSecretsRuntimeEnv as getActiveSecretsRuntimeEnvState,
+  getActiveSecretsRuntimeRefreshContext,
+  getActiveSecretsRuntimeSnapshot as getActiveSecretsRuntimeSnapshotState,
+  getLiveSecretsRuntimeAuthStores,
+  getPreparedSecretsRuntimeSnapshotRefreshContext,
+  registerSecretsRuntimeStateClearHook,
+  setPreparedSecretsRuntimeSnapshotRefreshContext,
+  type PreparedSecretsRuntimeSnapshot,
+  type SecretsRuntimeRefreshContext,
+} from "./runtime-state.js";
+import { getActiveRuntimeWebToolsMetadata as getActiveRuntimeWebToolsMetadataFromState } from "./runtime-web-tools-state.js";
+import type { RuntimeWebToolsMetadata } from "./runtime-web-tools.types.js";
 
 export type { SecretResolverWarning } from "./runtime-shared.js";
+export type { PreparedSecretsRuntimeSnapshot } from "./runtime-state.js";
 
-export type PreparedSecretsRuntimeSnapshot = {
-  sourceConfig: OpenClawConfig;
-  config: OpenClawConfig;
-  authStores: Array<{ agentDir: string; store: AuthProfileStore }>;
-  warnings: SecretResolverWarning[];
-  webTools: RuntimeWebToolsMetadata;
-};
+registerSecretsRuntimeStateClearHook(clearRuntimeAuthProfileStoreSnapshots);
 
-type SecretsRuntimeRefreshContext = {
-  env: Record<string, string | undefined>;
-  explicitAgentDirs: string[] | null;
-  loadAuthStore: (agentDir?: string) => AuthProfileStore;
-  loadablePluginOrigins: ReadonlyMap<string, PluginOrigin>;
-};
-
-const RUNTIME_PATH_ENV_KEYS = [
-  "HOME",
-  "USERPROFILE",
-  "HOMEDRIVE",
-  "HOMEPATH",
-  "OPENCLAW_HOME",
-  "OPENCLAW_STATE_DIR",
-  "OPENCLAW_CONFIG_PATH",
-  "OPENCLAW_AGENT_DIR",
-  "PI_CODING_AGENT_DIR",
-  "OPENCLAW_TEST_FAST",
-] as const;
-
-let activeSnapshot: PreparedSecretsRuntimeSnapshot | null = null;
-let activeRefreshContext: SecretsRuntimeRefreshContext | null = null;
-const preparedSnapshotRefreshContext = new WeakMap<
-  PreparedSecretsRuntimeSnapshot,
-  SecretsRuntimeRefreshContext
->();
 let runtimeManifestPromise: Promise<typeof import("./runtime-manifest.runtime.js")> | null = null;
 let runtimePreparePromise: Promise<typeof import("./runtime-prepare.runtime.js")> | null = null;
 
@@ -78,60 +49,6 @@ function loadRuntimePrepareHelpers() {
   return runtimePreparePromise;
 }
 
-function cloneSnapshot(snapshot: PreparedSecretsRuntimeSnapshot): PreparedSecretsRuntimeSnapshot {
-  return {
-    sourceConfig: structuredClone(snapshot.sourceConfig),
-    config: structuredClone(snapshot.config),
-    authStores: snapshot.authStores.map((entry) => ({
-      agentDir: entry.agentDir,
-      store: structuredClone(entry.store),
-    })),
-    warnings: snapshot.warnings.map((warning) => ({ ...warning })),
-    webTools: structuredClone(snapshot.webTools),
-  };
-}
-
-function cloneRefreshContext(context: SecretsRuntimeRefreshContext): SecretsRuntimeRefreshContext {
-  return {
-    env: { ...context.env },
-    explicitAgentDirs: context.explicitAgentDirs ? [...context.explicitAgentDirs] : null,
-    loadAuthStore: context.loadAuthStore,
-    loadablePluginOrigins: new Map(context.loadablePluginOrigins),
-  };
-}
-
-function clearActiveSecretsRuntimeState(): void {
-  activeSnapshot = null;
-  activeRefreshContext = null;
-  clearActiveRuntimeWebToolsMetadata();
-  setRuntimeConfigSnapshotRefreshHandler(null);
-  clearRuntimeConfigSnapshot();
-  clearRuntimeAuthProfileStoreSnapshots();
-}
-
-function collectCandidateAgentDirs(
-  config: OpenClawConfig,
-  env: NodeJS.ProcessEnv = process.env,
-): string[] {
-  const dirs = new Set<string>();
-  dirs.add(resolveUserPath(resolveOpenClawAgentDir(env), env));
-  for (const agentId of listAgentIds(config)) {
-    dirs.add(resolveUserPath(resolveAgentDir(config, agentId, env), env));
-  }
-  return [...dirs];
-}
-
-function resolveRefreshAgentDirs(
-  config: OpenClawConfig,
-  context: SecretsRuntimeRefreshContext,
-): string[] {
-  const configDerived = collectCandidateAgentDirs(config, context.env);
-  if (!context.explicitAgentDirs || context.explicitAgentDirs.length === 0) {
-    return configDerived;
-  }
-  return [...new Set([...context.explicitAgentDirs, ...configDerived])];
-}
-
 async function resolveLoadablePluginOrigins(params: {
   config: OpenClawConfig;
   env: NodeJS.ProcessEnv;
@@ -140,37 +57,14 @@ async function resolveLoadablePluginOrigins(params: {
     params.config,
     resolveDefaultAgentId(params.config),
   );
-  const { loadPluginManifestRegistryForInstalledIndex, loadPluginRegistrySnapshot } =
+  const { listPluginOriginsFromMetadataSnapshot, loadPluginMetadataSnapshot } =
     await loadRuntimeManifestHelpers();
-  const index = loadPluginRegistrySnapshot({
+  const snapshot = loadPluginMetadataSnapshot({
     config: params.config,
     workspaceDir,
     env: params.env,
   });
-  const manifestRegistry = loadPluginManifestRegistryForInstalledIndex({
-    index,
-    config: params.config,
-    workspaceDir,
-    env: params.env,
-    includeDisabled: true,
-  });
-  return new Map(manifestRegistry.plugins.map((record) => [record.id, record.origin]));
-}
-
-function mergeSecretsRuntimeEnv(
-  env: NodeJS.ProcessEnv | Record<string, string | undefined> | undefined,
-): Record<string, string | undefined> {
-  const merged = { ...(env ?? process.env) } as Record<string, string | undefined>;
-  for (const key of RUNTIME_PATH_ENV_KEYS) {
-    if (merged[key] !== undefined) {
-      continue;
-    }
-    const processValue = process.env[key];
-    if (processValue !== undefined) {
-      merged[key] = processValue;
-    }
-  }
-  return merged;
+  return listPluginOriginsFromMetadataSnapshot(snapshot);
 }
 
 function hasConfiguredPluginEntries(config: OpenClawConfig): boolean {
@@ -183,78 +77,14 @@ function hasConfiguredPluginEntries(config: OpenClawConfig): boolean {
   );
 }
 
-function createEmptyRuntimeWebToolsMetadata(): RuntimeWebToolsMetadata {
-  return {
-    search: {
-      providerSource: "none",
-      diagnostics: [],
-    },
-    fetch: {
-      providerSource: "none",
-      diagnostics: [],
-    },
-    diagnostics: [],
-  };
-}
-
-function hasRuntimeWebToolConfigSurface(config: OpenClawConfig): boolean {
-  const web = config.tools?.web;
-  if (web && typeof web === "object" && ("search" in web || "fetch" in web || "x_search" in web)) {
-    return true;
-  }
-  const entries = config.plugins?.entries;
-  if (!entries || typeof entries !== "object" || Array.isArray(entries)) {
-    return false;
-  }
-  return Object.values(entries).some((entry) => {
-    if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
-      return false;
-    }
-    const pluginConfig = (entry as { config?: unknown }).config;
-    return (
-      !!pluginConfig &&
-      typeof pluginConfig === "object" &&
-      !Array.isArray(pluginConfig) &&
-      ("webSearch" in pluginConfig || "webFetch" in pluginConfig)
-    );
-  });
-}
-
-function hasSecretRefCandidate(
-  value: unknown,
-  defaults: Parameters<typeof coerceSecretRef>[1],
-  seen = new WeakSet<object>(),
-): boolean {
-  if (coerceSecretRef(value, defaults)) {
-    return true;
-  }
-  if (!value || typeof value !== "object") {
-    return false;
-  }
-  if (seen.has(value)) {
-    return false;
-  }
-  seen.add(value);
-  if (Array.isArray(value)) {
-    return value.some((entry) => hasSecretRefCandidate(entry, defaults, seen));
-  }
-  return Object.values(value as Record<string, unknown>).some((entry) =>
-    hasSecretRefCandidate(entry, defaults, seen),
+function hasConfiguredChannelEntries(config: OpenClawConfig): boolean {
+  const channels = config.channels;
+  return (
+    !!channels &&
+    typeof channels === "object" &&
+    !Array.isArray(channels) &&
+    Object.keys(channels).some((channelId) => channelId !== "defaults")
   );
-}
-
-function canUseSecretsRuntimeFastPath(params: {
-  sourceConfig: OpenClawConfig;
-  authStores: Array<{ agentDir: string; store: AuthProfileStore }>;
-}): boolean {
-  if (hasRuntimeWebToolConfigSurface(params.sourceConfig)) {
-    return false;
-  }
-  const defaults = params.sourceConfig.secrets?.defaults;
-  if (hasSecretRefCandidate(params.sourceConfig, defaults)) {
-    return false;
-  }
-  return !params.authStores.some((entry) => hasSecretRefCandidate(entry.store, defaults));
 }
 
 export async function prepareSecretsRuntimeSnapshot(params: {
@@ -291,9 +121,10 @@ export async function prepareSecretsRuntimeSnapshot(params: {
       warnings: [],
       webTools: createEmptyRuntimeWebToolsMetadata(),
     };
-    preparedSnapshotRefreshContext.set(snapshot, {
+    setPreparedSecretsRuntimeSnapshotRefreshContext(snapshot, {
       env: runtimeEnv,
       explicitAgentDirs: params.agentDirs?.length ? [...candidateDirs] : null,
+      includeAuthStoreRefs,
       loadAuthStore: fastPathLoadAuthStore,
       loadablePluginOrigins: params.loadablePluginOrigins ?? new Map<string, PluginOrigin>(),
     });
@@ -310,7 +141,7 @@ export async function prepareSecretsRuntimeSnapshot(params: {
   } = await loadRuntimePrepareHelpers();
   const loadablePluginOrigins =
     params.loadablePluginOrigins ??
-    (hasConfiguredPluginEntries(sourceConfig)
+    (hasConfiguredPluginEntries(sourceConfig) || hasConfiguredChannelEntries(sourceConfig)
       ? await resolveLoadablePluginOrigins({ config: sourceConfig, env: runtimeEnv })
       : new Map<string, PluginOrigin>());
   const context = createResolverContext({
@@ -365,9 +196,10 @@ export async function prepareSecretsRuntimeSnapshot(params: {
       context,
     }),
   };
-  preparedSnapshotRefreshContext.set(snapshot, {
+  setPreparedSecretsRuntimeSnapshotRefreshContext(snapshot, {
     env: runtimeEnv,
     explicitAgentDirs: params.agentDirs?.length ? [...candidateDirs] : null,
+    includeAuthStoreRefs,
     loadAuthStore: params.loadAuthStore ?? loadAuthProfileStoreForSecretsRuntime,
     loadablePluginOrigins,
   });
@@ -375,48 +207,75 @@ export async function prepareSecretsRuntimeSnapshot(params: {
 }
 
 export function activateSecretsRuntimeSnapshot(snapshot: PreparedSecretsRuntimeSnapshot): void {
-  const next = cloneSnapshot(snapshot);
   const refreshContext =
-    preparedSnapshotRefreshContext.get(snapshot) ??
-    activeRefreshContext ??
+    getPreparedSecretsRuntimeSnapshotRefreshContext(snapshot) ??
+    getActiveSecretsRuntimeRefreshContext() ??
     ({
       env: { ...process.env } as Record<string, string | undefined>,
       explicitAgentDirs: null,
+      includeAuthStoreRefs: snapshot.authStores.length > 0,
       loadAuthStore: loadAuthProfileStoreForSecretsRuntime,
       loadablePluginOrigins: new Map<string, PluginOrigin>(),
     } satisfies SecretsRuntimeRefreshContext);
-  setRuntimeConfigSnapshot(next.config, next.sourceConfig);
-  replaceRuntimeAuthProfileStoreSnapshots(next.authStores);
-  activeSnapshot = next;
-  activeRefreshContext = cloneRefreshContext(refreshContext);
-  setActiveRuntimeWebToolsMetadata(next.webTools);
-  setRuntimeConfigSnapshotRefreshHandler({
-    refresh: async ({ sourceConfig }) => {
-      if (!activeSnapshot || !activeRefreshContext) {
-        return false;
-      }
-      const refreshed = await prepareSecretsRuntimeSnapshot({
-        config: sourceConfig,
-        env: activeRefreshContext.env,
-        agentDirs: resolveRefreshAgentDirs(sourceConfig, activeRefreshContext),
-        loadAuthStore: activeRefreshContext.loadAuthStore,
-        loadablePluginOrigins: activeRefreshContext.loadablePluginOrigins,
-      });
-      activateSecretsRuntimeSnapshot(refreshed);
-      return true;
+  activateSecretsRuntimeSnapshotState({
+    snapshot,
+    refreshContext,
+    refreshHandler: {
+      refresh: async ({ sourceConfig, includeAuthStoreRefs }) => {
+        const activeRefreshContext = getActiveSecretsRuntimeRefreshContext();
+        const activeSnapshot = getActiveSecretsRuntimeSnapshotState();
+        if (!activeSnapshot || !activeRefreshContext) {
+          return false;
+        }
+        const oneShotSkipAuthStoreRefs =
+          includeAuthStoreRefs === false && activeRefreshContext.includeAuthStoreRefs;
+        const refreshed = await prepareSecretsRuntimeSnapshot({
+          config: sourceConfig,
+          env: activeRefreshContext.env,
+          agentDirs: resolveRefreshAgentDirs(sourceConfig, activeRefreshContext),
+          includeAuthStoreRefs: includeAuthStoreRefs ?? activeRefreshContext.includeAuthStoreRefs,
+          loadablePluginOrigins: activeRefreshContext.loadablePluginOrigins,
+          ...(activeRefreshContext.loadAuthStore
+            ? { loadAuthStore: activeRefreshContext.loadAuthStore }
+            : {}),
+        });
+        if (oneShotSkipAuthStoreRefs) {
+          refreshed.authStores = getLiveSecretsRuntimeAuthStores();
+          setPreparedSecretsRuntimeSnapshotRefreshContext(refreshed, activeRefreshContext);
+        }
+        activateSecretsRuntimeSnapshot(refreshed);
+        return true;
+      },
     },
   });
 }
 
+export async function refreshActiveSecretsRuntimeSnapshot(): Promise<boolean> {
+  const activeSnapshot = getActiveSecretsRuntimeSnapshotState();
+  const activeRefreshContext = getActiveSecretsRuntimeRefreshContext();
+  if (!activeSnapshot || !activeRefreshContext) {
+    return false;
+  }
+  const refreshed = await prepareSecretsRuntimeSnapshot({
+    config: activeSnapshot.sourceConfig,
+    env: activeRefreshContext.env,
+    agentDirs: resolveRefreshAgentDirs(activeSnapshot.sourceConfig, activeRefreshContext),
+    includeAuthStoreRefs: activeRefreshContext.includeAuthStoreRefs,
+    loadablePluginOrigins: activeRefreshContext.loadablePluginOrigins,
+    ...(activeRefreshContext.loadAuthStore
+      ? { loadAuthStore: activeRefreshContext.loadAuthStore }
+      : {}),
+  });
+  activateSecretsRuntimeSnapshot(refreshed);
+  return true;
+}
+
 export function getActiveSecretsRuntimeSnapshot(): PreparedSecretsRuntimeSnapshot | null {
-  if (!activeSnapshot) {
-    return null;
-  }
-  const snapshot = cloneSnapshot(activeSnapshot);
-  if (activeRefreshContext) {
-    preparedSnapshotRefreshContext.set(snapshot, cloneRefreshContext(activeRefreshContext));
-  }
-  return snapshot;
+  return getActiveSecretsRuntimeSnapshotState();
+}
+
+export function getActiveSecretsRuntimeEnv(): NodeJS.ProcessEnv {
+  return getActiveSecretsRuntimeEnvState();
 }
 
 export function getActiveRuntimeWebToolsMetadata(): RuntimeWebToolsMetadata | null {
@@ -424,5 +283,5 @@ export function getActiveRuntimeWebToolsMetadata(): RuntimeWebToolsMetadata | nu
 }
 
 export function clearSecretsRuntimeSnapshot(): void {
-  clearActiveSecretsRuntimeState();
+  clearSecretsRuntimeSnapshotState();
 }

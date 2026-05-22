@@ -38,7 +38,7 @@ import {
   isLegacyGroupSessionKey,
 } from "./session-contract.js";
 
-export const WHATSAPP_CHANNEL = "whatsapp" as const;
+const WHATSAPP_CHANNEL = "whatsapp" as const;
 
 const WHATSAPP_GROUP_SCOPE_FIELDS = ["groupPolicy", "groupAllowFrom", "groups"] as const;
 
@@ -123,7 +123,7 @@ const whatsappResolveDmPolicy = createScopedDmSecurityResolver<ResolvedWhatsAppA
   inheritSharedDefaultsFromDefaultAccount: true,
 });
 
-export function createWhatsAppSetupWizardProxy(
+function createWhatsAppSetupWizardProxy(
   loadWizard: () => Promise<ChannelSetupWizard>,
 ): ChannelSetupWizard {
   return createDelegatedSetupWizardProxy({
@@ -208,7 +208,7 @@ export function createWhatsAppPluginBase(params: {
     },
     setupWizard: params.setupWizard,
     capabilities: {
-      chatTypes: ["direct", "group"],
+      chatTypes: ["direct", "group", "channel"],
       polls: true,
       reactions: true,
       media: true,
@@ -220,7 +220,7 @@ export function createWhatsAppPluginBase(params: {
       },
     },
     reload: { configPrefixes: ["web"], noopPrefixes: ["channels.whatsapp"] },
-    gatewayMethods: ["web.login.start", "web.login.wait"],
+    gatewayMethodDescriptors: [{ name: "web.login.start" }, { name: "web.login.wait" }],
     configSchema: WhatsAppChannelConfigSchema,
     config: {
       ...whatsappConfigAdapter,
@@ -254,7 +254,7 @@ export function createWhatsAppPluginBase(params: {
     setupWizard: base.setupWizard!,
     capabilities: base.capabilities!,
     reload: base.reload!,
-    gatewayMethods: base.gatewayMethods!,
+    gatewayMethodDescriptors: base.gatewayMethodDescriptors!,
     configSchema: base.configSchema!,
     config: base.config!,
     messaging: {
@@ -278,7 +278,7 @@ export function createWhatsAppPluginBase(params: {
     | "setupWizard"
     | "capabilities"
     | "reload"
-    | "gatewayMethods"
+    | "gatewayMethodDescriptors"
     | "configSchema"
     | "config"
     | "messaging"

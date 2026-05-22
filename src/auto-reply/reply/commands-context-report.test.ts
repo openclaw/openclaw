@@ -1,3 +1,4 @@
+import { readFile, unlink } from "node:fs/promises";
 import { describe, expect, it } from "vitest";
 import type { SessionEntry } from "../../config/sessions.js";
 import { buildContextReply } from "./commands-context-report.js";
@@ -11,6 +12,10 @@ function makeParams(
     contextTokens?: number | null;
     totalTokens?: number | null;
     totalTokensFresh?: boolean;
+    cfg?: Record<string, unknown>;
+    sessionKey?: string;
+    agentId?: string;
+    currentTurn?: NonNullable<SessionEntry["systemPromptReport"]>["currentTurn"];
   },
 ): HandleCommandsParams {
   return {
@@ -19,7 +24,7 @@ function makeParams(
       channel: "forum",
       senderIsOwner: true,
     },
-    sessionKey: "agent:default:main",
+    sessionKey: options?.sessionKey ?? "agent:default:main",
     workspaceDir: "/tmp/workspace",
     contextTokens: options?.contextTokens ?? null,
     provider: "openai",
@@ -44,6 +49,7 @@ function makeParams(
           projectContextChars: 500,
           nonProjectContextChars: 500,
         },
+        ...(options?.currentTurn ? { currentTurn: options.currentTurn } : {}),
         injectedWorkspaceFiles: [
           {
             name: "AGENTS.md",
@@ -65,7 +71,8 @@ function makeParams(
         },
       },
     },
-    cfg: {},
+    cfg: options?.cfg ?? {},
+    agentId: options?.agentId,
     ctx: {},
     commandBody: "",
     commandArgs: [],
@@ -79,6 +86,8 @@ describe("buildContextReply", () => {
     expect(result.text).toContain("Bootstrap max/total: 60,000 chars");
     expect(result.text).toContain("⚠ Bootstrap context is over configured limits");
     expect(result.text).toContain("Causes: 1 file(s) exceeded max/file.");
+    expect(result.text).toContain("agents.list[].bootstrapMaxChars");
+    expect(result.text).toContain("agents.defaults.*");
   });
 
   it("does not show bootstrap truncation warning when there is no truncation", async () => {
@@ -95,6 +104,32 @@ describe("buildContextReply", () => {
     expect(result.text).toContain("Bootstrap max/file: 12,000 chars");
     expect(result.text).toContain("Bootstrap max/total: 60,000 chars");
     expect(result.text).not.toContain("Bootstrap max/file: ? chars");
+  });
+
+  it("uses the session agent profile when legacy reports are missing bootstrap limits", async () => {
+    const result = await buildContextReply(
+      makeParams("/context list", false, {
+        omitBootstrapLimits: true,
+        sessionKey: "agent:scout:main",
+        cfg: {
+          agents: {
+            defaults: {
+              bootstrapMaxChars: 12_000,
+              bootstrapTotalMaxChars: 60_000,
+            },
+            list: [
+              {
+                id: "scout",
+                bootstrapMaxChars: 32_000,
+                bootstrapTotalMaxChars: 96_000,
+              },
+            ],
+          },
+        },
+      }),
+    );
+    expect(result.text).toContain("Bootstrap max/file: 32,000 chars");
+    expect(result.text).toContain("Bootstrap max/total: 96,000 chars");
   });
 
   it("shows tracked estimate and cached context delta in detail output", async () => {
@@ -154,5 +189,75 @@ describe("buildContextReply", () => {
     expect(result.text).toContain("Actual context usage (cached): 900 tok");
     expect(result.text).toContain("Session tokens (cached): 900 total / ctx=8,192");
     expect(result.text).not.toContain("Actual context usage (cached): 111 tok");
+  });
+
+  it("renders context map as sensitive local PNG media", async () => {
+    const result = await buildContextReply(
+      makeParams("/context map", false, {
+        contextTokens: 8_192,
+        totalTokens: 900,
+      }),
+    );
+    if (!result.mediaUrl) {
+      throw new Error("missing context map media path");
+    }
+    try {
+      const png = await readFile(result.mediaUrl);
+      expect(result.text).toContain("Context treemap");
+      expect(result.text).toContain("Source: run");
+      expect(result.text).toContain("Actual cached context: 900 tok");
+      expect(result.trustedLocalMedia).toBe(true);
+      expect(result.sensitiveMedia).toBe(true);
+      expect(png.subarray(0, 8)).toEqual(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]));
+      expect(png.subarray(12, 16).toString("ascii")).toBe("IHDR");
+      expect(png.readUInt32BE(16)).toBe(1280);
+      expect(png.readUInt32BE(20)).toBe(860);
+    } finally {
+      await unlink(result.mediaUrl);
+    }
+  });
+
+  it("counts room events as event context in context maps", async () => {
+    const result = await buildContextReply(
+      makeParams("/context map", false, {
+        contextTokens: 8_192,
+        totalTokens: 900,
+        currentTurn: {
+          kind: "room_event",
+          promptChars: 11,
+          runtimeContextChars: 17,
+        },
+      }),
+    );
+    if (!result.mediaUrl) {
+      throw new Error("missing context map media path");
+    }
+    try {
+      expect(result.text).toContain("Tracked: 10,548 chars");
+    } finally {
+      await unlink(result.mediaUrl);
+    }
+  });
+
+  it("does not render context map from an estimated report", async () => {
+    const params = makeParams("/context map", false);
+    const report = params.sessionEntry?.systemPromptReport;
+    if (!report) {
+      throw new Error("missing context report");
+    }
+    params.sessionEntry = {
+      ...params.sessionEntry,
+      systemPromptReport: {
+        ...report,
+        source: "estimate",
+      },
+    } as SessionEntry;
+
+    const result = await buildContextReply(params);
+
+    expect(result.text).toContain("Context treemap unavailable.");
+    expect(result.text).toContain("No actual run context is cached for this session yet.");
+    expect(result.text).not.toContain("Source: estimate");
+    expect(result.mediaUrl).toBeUndefined();
   });
 });

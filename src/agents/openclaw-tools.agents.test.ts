@@ -44,10 +44,9 @@ describe("agents_list", () => {
     };
     const tool = createTool();
     const result = await tool.execute("call1", {});
-    expect(result.details).toMatchObject({
-      requester: "main",
-      allowAny: false,
-    });
+    const details = result.details as { requester?: string; allowAny?: boolean };
+    expect(details.requester).toBe("main");
+    expect(details.allowAny).toBe(false);
     const agents = readAgentList(result);
     expect(agents?.map((agent) => agent.id)).toEqual(["main"]);
   });
@@ -121,14 +120,13 @@ describe("agents_list", () => {
 
     const tool = createTool();
     const result = await tool.execute("call3", {});
-    expect(result.details).toMatchObject({
-      allowAny: true,
-    });
+    const details = result.details as { allowAny?: boolean };
+    expect(details.allowAny).toBe(true);
     const agents = readAgentList(result);
     expect(agents?.map((agent) => agent.id)).toEqual(["main", "coder", "research"]);
   });
 
-  it("marks allowlisted-but-unconfigured agents", async () => {
+  it("omits allowlisted-but-unconfigured agents", async () => {
     setConfigWithAgentList([
       {
         id: "main",
@@ -141,8 +139,6 @@ describe("agents_list", () => {
     const tool = createTool();
     const result = await tool.execute("call4", {});
     const agents = readAgentList(result);
-    expect(agents?.map((agent) => agent.id)).toEqual(["research"]);
-    const research = agents?.find((agent) => agent.id === "research");
-    expect(research?.configured).toBe(false);
+    expect(agents?.map((agent) => agent.id)).toEqual([]);
   });
 });

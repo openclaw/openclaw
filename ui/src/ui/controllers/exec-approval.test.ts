@@ -9,9 +9,8 @@ describe("parseExecApprovalRequested", () => {
       createdAtMs: 1000,
       expiresAtMs: 2000,
     });
-    expect(result).not.toBeNull();
-    expect(result!.kind).toBe("exec");
-    expect(result!.request.command).toBe("rm -rf /");
+    expect(result?.kind).toBe("exec");
+    expect(result?.request.command).toBe("rm -rf /");
   });
 });
 
@@ -34,17 +33,16 @@ describe("parsePluginApprovalRequested", () => {
 
   it("parses a valid payload", () => {
     const result = parsePluginApprovalRequested(validPayload);
-    expect(result).not.toBeNull();
-    expect(result!.kind).toBe("plugin");
-    expect(result!.pluginTitle).toBe("Dangerous command detected");
-    expect(result!.pluginDescription).toBe("chmod 777 script.sh modifies file permissions");
-    expect(result!.pluginSeverity).toBe("high");
-    expect(result!.pluginId).toBe("sage");
-    expect(result!.request.command).toBe("Dangerous command detected");
-    expect(result!.request.agentId).toBe("agent-1");
-    expect(result!.request.sessionKey).toBe("sess-1");
-    expect(result!.createdAtMs).toBe(1000);
-    expect(result!.expiresAtMs).toBe(120_000);
+    expect(result?.kind).toBe("plugin");
+    expect(result?.pluginTitle).toBe("Dangerous command detected");
+    expect(result?.pluginDescription).toBe("chmod 777 script.sh modifies file permissions");
+    expect(result?.pluginSeverity).toBe("high");
+    expect(result?.pluginId).toBe("sage");
+    expect(result?.request.command).toBe("Dangerous command detected");
+    expect(result?.request.agentId).toBe("agent-1");
+    expect(result?.request.sessionKey).toBe("sess-1");
+    expect(result?.createdAtMs).toBe(1000);
+    expect(result?.expiresAtMs).toBe(120_000);
   });
 
   it("returns null when title is missing from request", () => {
@@ -86,13 +84,61 @@ describe("parsePluginApprovalRequested", () => {
       request: { title: "Alert" },
     };
     const result = parsePluginApprovalRequested(minimal);
-    expect(result).not.toBeNull();
-    expect(result!.kind).toBe("plugin");
-    expect(result!.pluginTitle).toBe("Alert");
-    expect(result!.pluginDescription).toBeNull();
-    expect(result!.pluginSeverity).toBeNull();
-    expect(result!.pluginId).toBeNull();
-    expect(result!.request.agentId).toBeNull();
-    expect(result!.request.sessionKey).toBeNull();
+    expect(result?.kind).toBe("plugin");
+    expect(result?.pluginTitle).toBe("Alert");
+    expect(result?.pluginDescription).toBeNull();
+    expect(result?.pluginSeverity).toBeNull();
+    expect(result?.pluginId).toBeNull();
+    expect(result?.request.agentId).toBeNull();
+    expect(result?.request.sessionKey).toBeNull();
+  });
+});
+
+describe("parseExecApprovalRequested command spans", () => {
+  it("preserves command text spacing for span offsets", () => {
+    const parsed = parseExecApprovalRequested({
+      id: "approval-spaces-1",
+      request: { command: "  python -c 'print(1)'" },
+      createdAtMs: 1,
+      expiresAtMs: 2,
+    });
+
+    expect(parsed?.request.command).toBe("  python -c 'print(1)'");
+  });
+
+  it("rejects whitespace-only command text", () => {
+    expect(
+      parseExecApprovalRequested({
+        id: "approval-blank-1",
+        request: { command: "   " },
+        createdAtMs: 1,
+        expiresAtMs: 2,
+      }),
+    ).toBeNull();
+  });
+
+  it("preserves valid command spans from exec approval events", () => {
+    const parsed = parseExecApprovalRequested({
+      id: "approval-explain-1",
+      request: {
+        command: "ls | grep stuff",
+        commandSpans: [
+          { startIndex: 0, endIndex: 2 },
+          { startIndex: 5, endIndex: 9 },
+          { startIndex: 10, endIndex: 15 },
+          { startIndex: 16, endIndex: 20 },
+          { startIndex: -1, endIndex: 2 },
+          { startIndex: 8, endIndex: 8 },
+        ],
+      },
+      createdAtMs: 1,
+      expiresAtMs: 2,
+    });
+
+    expect(parsed?.request.commandSpans).toEqual([
+      { startIndex: 0, endIndex: 2 },
+      { startIndex: 5, endIndex: 9 },
+      { startIndex: 10, endIndex: 15 },
+    ]);
   });
 });

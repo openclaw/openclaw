@@ -1,10 +1,10 @@
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { WikiClaim, WikiPageSummary } from "./markdown.js";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
 export const WIKI_AGING_DAYS = 30;
-export const WIKI_STALE_DAYS = 90;
+const WIKI_STALE_DAYS = 90;
 
 const CONTESTED_CLAIM_STATUSES = new Set(["contested", "contradicted", "refuted", "superseded"]);
 
@@ -143,7 +143,7 @@ export function assessClaimFreshness(params: {
   return buildFreshnessFromTimestamp({ timestamp: latestTimestamp, now: params.now });
 }
 
-export function buildWikiClaimHealth(params: {
+function buildWikiClaimHealth(params: {
   page: WikiPageSummary;
   claim: WikiClaim;
   index: number;

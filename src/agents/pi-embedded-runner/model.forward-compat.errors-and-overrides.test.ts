@@ -219,12 +219,12 @@ describe("resolveModel forward-compat errors and overrides", () => {
 
     const result = resolveModelForTest("openai-codex", "gpt-5.4", "/tmp/agent", cfg);
     expect(result.error).toBeUndefined();
-    expect(result.model).toMatchObject({
-      api: "openai-codex-responses",
-      baseUrl: "https://custom.example.com",
-      headers: { "X-Custom-Auth": "token-123" },
-      id: "gpt-5.4",
-      provider: "openai-codex",
+    expect(result.model?.api).toBe("openai-codex-responses");
+    expect(result.model?.baseUrl).toBe("https://custom.example.com");
+    expect(result.model?.id).toBe("gpt-5.4");
+    expect(result.model?.provider).toBe("openai-codex");
+    expect((result.model as unknown as { headers?: Record<string, string> }).headers).toEqual({
+      "X-Custom-Auth": "token-123",
     });
   });
 
@@ -364,10 +364,10 @@ describe("resolveModel forward-compat errors and overrides", () => {
   it("does not override when no provider config exists", () => {
     mockDiscoveredModel(discoverModels, {
       provider: "anthropic",
-      modelId: "claude-sonnet-4-5",
+      modelId: "claude-sonnet-4-6",
       templateModel: {
-        id: "claude-sonnet-4-5",
-        name: "Claude Sonnet 4.5",
+        id: "claude-sonnet-4-6",
+        name: "Claude Sonnet 4.6",
         provider: "anthropic",
         api: "anthropic-messages",
         baseUrl: "https://api.anthropic.com",
@@ -379,7 +379,7 @@ describe("resolveModel forward-compat errors and overrides", () => {
       },
     });
 
-    const result = resolveModelForTest("anthropic", "claude-sonnet-4-5", "/tmp/agent");
+    const result = resolveModelForTest("anthropic", "claude-sonnet-4-6", "/tmp/agent");
     expect(result.error).toBeUndefined();
     expect(result.model?.baseUrl).toBe("https://api.anthropic.com");
   });

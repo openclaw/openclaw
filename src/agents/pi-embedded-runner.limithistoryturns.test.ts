@@ -1,4 +1,4 @@
-import type { AgentMessage } from "@mariozechner/pi-agent-core";
+import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import { describe, expect, it } from "vitest";
 import { limitHistoryTurns } from "./pi-embedded-runner/history.js";
 
@@ -82,7 +82,7 @@ describe("limitHistoryTurns", () => {
   });
 
   it("returns empty array when messages is empty", () => {
-    expect(limitHistoryTurns([], 5)).toEqual([]);
+    expect(limitHistoryTurns([], 5)).toStrictEqual([]);
   });
 
   it("keeps all messages when fewer user turns than limit", () => {

@@ -14,7 +14,7 @@ export type GatewayAgentModel = {
 export type GatewayAgentRuntime = {
   id: string;
   fallback?: "pi" | "none";
-  source: "env" | "agent" | "defaults" | "implicit";
+  source: "env" | "agent" | "defaults" | "model" | "provider" | "implicit" | "session-key";
 };
 
 export type GatewayAgentRow = {
@@ -30,6 +30,9 @@ export type SessionsListResultBase<TDefaults, TRow> = {
   ts: number;
   path: string;
   count: number;
+  totalCount?: number;
+  limitApplied?: number;
+  hasMore?: boolean;
   defaults: TDefaults;
   sessions: TRow[];
 };

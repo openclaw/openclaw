@@ -17,7 +17,10 @@ function expectValidationIssue(
   path: string,
 ) {
   const issue = result.errors.find((entry) => entry.path === path);
-  expect(issue).toBeDefined();
+  if (!issue) {
+    expect(result.errors.map((entry) => entry.path)).toContain(path);
+    throw new Error(`expected validation issue at ${path}`);
+  }
   return issue;
 }
 
@@ -25,9 +28,9 @@ function expectIssueMessageIncludes(
   issue: ReturnType<typeof expectValidationIssue>,
   fragments: readonly string[],
 ) {
-  expect(issue?.message).toEqual(expect.stringContaining(fragments[0] ?? ""));
+  expect(issue.message).toContain(fragments[0] ?? "");
   fragments.slice(1).forEach((fragment) => {
-    expect(issue?.message).toContain(fragment);
+    expect(issue.message).toContain(fragment);
   });
 }
 
@@ -60,11 +63,34 @@ function expectUriValidationCase(params: {
 
   const result = expectValidationFailure(params.input);
   const issue = expectValidationIssue(result, params.expectedPath ?? "");
-  expect(issue?.message).toContain(params.expectedMessage ?? "");
+  expect(issue.message).toContain(params.expectedMessage ?? "");
 }
 
 describe("schema validator", () => {
   it("can apply JSON Schema defaults while validating", () => {
+    const value = {};
+    const result = validateJsonSchemaValue({
+      cacheKey: "schema-validator.test.defaults.clone",
+      schema: {
+        type: "object",
+        properties: {
+          mode: {
+            type: "string",
+            default: "auto",
+          },
+        },
+        additionalProperties: false,
+      },
+      value,
+      applyDefaults: true,
+    });
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.value).toEqual({ mode: "auto" });
+      expect(result.value).not.toBe(value);
+    }
+    expect(value).toStrictEqual({});
+
     expectSuccessfulValidationValue({
       input: {
         cacheKey: "schema-validator.test.defaults",
@@ -83,6 +109,74 @@ describe("schema validator", () => {
       },
       expectedValue: { mode: "auto" },
     });
+  });
+
+  it("does not clone values when default application has no defaults to inject", () => {
+    const value = { mode: "manual" };
+    const result = validateJsonSchemaValue({
+      cacheKey: "schema-validator.test.defaults.no-clone",
+      schema: {
+        type: "object",
+        properties: {
+          mode: {
+            type: "string",
+          },
+        },
+        additionalProperties: false,
+      },
+      value,
+      applyDefaults: true,
+    });
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.value).toBe(value);
+    }
+  });
+
+  it("recompiles when a stable cache key receives a different schema shape", () => {
+    const cacheKey = "schema-validator.test.cache-key-drift";
+    expectValidationSuccess({
+      cacheKey,
+      schema: { type: "string" },
+      value: "ok",
+    });
+
+    const result = expectValidationFailure({
+      cacheKey,
+      schema: { type: "number" },
+      value: "not-a-number",
+    });
+    expectValidationIssue(result, "<root>");
+  });
+
+  it("can isolate caller schemas that reuse the same $id with different shapes", () => {
+    const first = validateJsonSchemaValue({
+      cacheKey: "schema-validator.test.same-id.uncached",
+      schema: {
+        $id: "https://example.test/shared-schema",
+        type: "object",
+        properties: { foo: { type: "string" } },
+        required: ["foo"],
+        additionalProperties: false,
+      },
+      value: { foo: "ok" },
+      cache: false,
+    });
+    expect(first.ok).toBe(true);
+
+    const second = validateJsonSchemaValue({
+      cacheKey: "schema-validator.test.same-id.uncached",
+      schema: {
+        $id: "https://example.test/shared-schema",
+        type: "object",
+        properties: { bar: { type: "number" } },
+        required: ["bar"],
+        additionalProperties: false,
+      },
+      value: { bar: 1 },
+      cache: false,
+    });
+    expect(second.ok).toBe(true);
   });
 
   it.each([
@@ -253,14 +347,16 @@ describe("schema validator", () => {
     });
 
     const issue = result.errors[0];
-    expect(issue).toBeDefined();
-    expect(issue?.path).toContain("\n");
-    expect(issue?.message).toContain("\n");
-    expect(issue?.text).toContain("\\n");
-    expect(issue?.text).toContain("\\t");
-    expect(issue?.text).not.toContain("\n");
-    expect(issue?.text).not.toContain("\t");
-    expect(issue?.text).not.toContain("\x1b");
+    if (!issue) {
+      throw new Error("expected terminal sanitization validation issue");
+    }
+    expect(issue.path).toContain("\n");
+    expect(issue.message).toContain("\n");
+    expect(issue.text).toContain("\\n");
+    expect(issue.text).toContain("\\t");
+    expect(issue.text).not.toContain("\n");
+    expect(issue.text).not.toContain("\t");
+    expect(issue.text).not.toContain("\x1b");
   });
 
   it.each([

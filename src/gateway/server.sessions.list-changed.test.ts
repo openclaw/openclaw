@@ -12,7 +12,74 @@ import {
 
 const { createSessionStoreDir, openClient } = setupGatewaySessionsTestHarness();
 
-test("sessions.list surfaces transcript usage and model fallbacks from the transcript", async () => {
+type MockCalls = {
+  mock: { calls: unknown[][] };
+};
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
+function requireRecord(value: unknown, label: string): Record<string, unknown> {
+  expect(isRecord(value), `${label} should be an object`).toBe(true);
+  if (!isRecord(value)) {
+    throw new Error(`${label} should be an object`);
+  }
+  return value;
+}
+
+function requireArray(value: unknown, label: string): unknown[] {
+  expect(Array.isArray(value), `${label} should be an array`).toBe(true);
+  if (!Array.isArray(value)) {
+    throw new Error(`${label} should be an array`);
+  }
+  return value;
+}
+
+function expectFields(record: Record<string, unknown>, expected: Record<string, unknown>) {
+  for (const [key, value] of Object.entries(expected)) {
+    expect(record[key], key).toEqual(value);
+  }
+}
+
+function expectRespondPayload(respond: MockCalls): Record<string, unknown> {
+  expect(respond.mock.calls).toHaveLength(1);
+  const [ok, payload, error] = respond.mock.calls[0] ?? [];
+  expect(ok).toBe(true);
+  expect(error).toBeUndefined();
+  return requireRecord(payload, "response payload");
+}
+
+function findSession(
+  payload: Record<string, unknown>,
+  sessionKey: string,
+): Record<string, unknown> {
+  const sessions = requireArray(payload.sessions, "response sessions");
+  const session = sessions.find(
+    (candidate): candidate is Record<string, unknown> =>
+      isRecord(candidate) && candidate.key === sessionKey,
+  );
+  if (!session) {
+    throw new Error(`Missing session ${sessionKey}`);
+  }
+  return session;
+}
+
+function expectChangedBroadcast(
+  broadcastToConnIds: MockCalls,
+  expected: Record<string, unknown>,
+): Record<string, unknown> {
+  expect(broadcastToConnIds.mock.calls).toHaveLength(1);
+  const [event, payload, connIds, options] = broadcastToConnIds.mock.calls[0] ?? [];
+  expect(event).toBe("sessions.changed");
+  expect(connIds).toEqual(new Set(["conn-1"]));
+  expect(options).toEqual({ dropIfSlow: true });
+  const payloadRecord = requireRecord(payload, "broadcast payload");
+  expectFields(payloadRecord, expected);
+  return payloadRecord;
+}
+
+test("sessions.list keeps bulk rows lightweight and uses persisted model fields", async () => {
   const { dir } = await createSessionStoreDir();
   testState.agentConfig = {
     models: {
@@ -92,10 +159,10 @@ test("sessions.list surfaces transcript usage and model fallbacks from the trans
   );
   expect(parent?.childSessions).toEqual(["agent:main:dashboard:child"]);
   expect(child?.parentSessionKey).toBe("agent:main:main");
-  expect(child?.totalTokens).toBe(3_000);
-  expect(child?.totalTokensFresh).toBe(true);
-  expect(child?.contextTokens).toBe(1_048_576);
-  expect(child?.estimatedCostUsd).toBe(0.0042);
+  expect(child?.totalTokens).toBeUndefined();
+  expect(child?.totalTokensFresh).toBe(false);
+  expect(child?.contextTokens).toBeUndefined();
+  expect(child?.estimatedCostUsd).toBeUndefined();
   expect(child?.modelProvider).toBe("anthropic");
   expect(child?.model).toBe("claude-sonnet-4-6");
 
@@ -143,18 +210,111 @@ test("sessions.list uses the gateway model catalog for effective thinking defaul
     } as never,
   });
 
-  expect(respond).toHaveBeenCalledWith(
-    true,
-    expect.objectContaining({
-      sessions: expect.arrayContaining([
-        expect.objectContaining({
-          key: "agent:main:main",
-          thinkingDefault: "medium",
-        }),
-      ]),
-    }),
-    undefined,
-  );
+  const payload = expectRespondPayload(respond);
+  const defaults = requireRecord(payload.defaults, "response defaults");
+  expect(defaults.thinkingDefault).toBe("medium");
+  const session = findSession(payload, "agent:main:main");
+  expectFields(session, {
+    thinkingDefault: "medium",
+    thinkingOptions: ["off", "minimal", "low", "medium", "high"],
+  });
+});
+
+test("sessions.list marks sessions with active abortable runs", async () => {
+  await createSessionStoreDir();
+  await writeSessionStore({
+    entries: {
+      main: sessionStoreEntry("sess-main"),
+    },
+  });
+
+  const respond = vi.fn();
+  const sessionsHandlers = await getSessionsHandlers();
+  const { getRuntimeConfig } = await getGatewayConfigModule();
+  await sessionsHandlers["sessions.list"]({
+    req: {
+      type: "req",
+      id: "req-sessions-list-active-run",
+      method: "sessions.list",
+      params: {},
+    },
+    params: {},
+    respond,
+    client: null,
+    isWebchatConnect: () => false,
+    context: {
+      getRuntimeConfig,
+      loadGatewayModelCatalog: async () => [],
+      chatAbortControllers: new Map([["run-1", { sessionKey: "agent:main:main" }]]),
+    } as never,
+  });
+
+  const payload = expectRespondPayload(respond);
+  const session = findSession(payload, "agent:main:main");
+  expect(session.hasActiveRun).toBe(true);
+});
+
+test("sessions.list yields before responding during bulk transcript hydration", async () => {
+  const { dir } = await createSessionStoreDir();
+  const entries: Record<string, ReturnType<typeof sessionStoreEntry>> = {};
+  const now = Date.now();
+  for (let i = 0; i < 11; i += 1) {
+    const sessionId = `sess-list-yield-${i}`;
+    entries[`bulk-${i}`] = sessionStoreEntry(sessionId, { updatedAt: now - i });
+    await fs.writeFile(
+      path.join(dir, `${sessionId}.jsonl`),
+      [
+        JSON.stringify({ type: "session", version: 1, id: sessionId }),
+        JSON.stringify({ message: { role: "user", content: `title ${i}` } }),
+        JSON.stringify({ message: { role: "assistant", content: `last ${i}` } }),
+      ].join("\n"),
+      "utf-8",
+    );
+  }
+  await writeSessionStore({ entries });
+
+  const respond = vi.fn();
+  const sessionsHandlers = await getSessionsHandlers();
+  const { getRuntimeConfig } = await getGatewayConfigModule();
+  const request = sessionsHandlers["sessions.list"]({
+    req: {
+      type: "req",
+      id: "req-sessions-list-yield",
+      method: "sessions.list",
+      params: {
+        includeDerivedTitles: true,
+        includeLastMessage: true,
+        limit: 11,
+      },
+    },
+    params: {
+      includeDerivedTitles: true,
+      includeLastMessage: true,
+      limit: 11,
+    },
+    respond,
+    client: null,
+    isWebchatConnect: () => false,
+    context: {
+      getRuntimeConfig,
+      loadGatewayModelCatalog: async () => [],
+      logGateway: {
+        debug: vi.fn(),
+      },
+    } as never,
+  });
+
+  await Promise.resolve();
+  await Promise.resolve();
+
+  expect(respond).not.toHaveBeenCalled();
+  await request;
+  const payload = expectRespondPayload(respond);
+  const session = findSession(payload, "agent:main:bulk-0");
+  expectFields(session, {
+    derivedTitle: "title 0",
+    lastMessagePreview: "last 0",
+  });
 });
 
 test("sessions.list does not block on slow model catalog discovery", async () => {
@@ -194,13 +354,8 @@ test("sessions.list does not block on slow model catalog discovery", async () =>
     await vi.advanceTimersByTimeAsync(800);
     await request;
 
-    expect(respond).toHaveBeenCalledWith(
-      true,
-      expect.objectContaining({
-        sessions: expect.arrayContaining([expect.objectContaining({ key: "agent:main:main" })]),
-      }),
-      undefined,
-    );
+    const payload = expectRespondPayload(respond);
+    findSession(payload, "agent:main:main");
   } finally {
     vi.useRealTimers();
   }
@@ -264,26 +419,18 @@ test("sessions.changed mutation events include live usage metadata", async () =>
     isWebchatConnect: () => false,
   });
 
-  expect(respond).toHaveBeenCalledWith(
-    true,
-    expect.objectContaining({ ok: true, key: "agent:main:main" }),
-    undefined,
-  );
-  expect(broadcastToConnIds).toHaveBeenCalledWith(
-    "sessions.changed",
-    expect.objectContaining({
-      sessionKey: "agent:main:main",
-      reason: "patch",
-      totalTokens: 6_643,
-      totalTokensFresh: true,
-      contextTokens: 123_456,
-      estimatedCostUsd: 0,
-      modelProvider: "openai-codex",
-      model: "gpt-5.3-codex-spark",
-    }),
-    new Set(["conn-1"]),
-    { dropIfSlow: true },
-  );
+  const responsePayload = expectRespondPayload(respond);
+  expectFields(responsePayload, { ok: true, key: "agent:main:main" });
+  expectChangedBroadcast(broadcastToConnIds, {
+    sessionKey: "agent:main:main",
+    reason: "patch",
+    totalTokens: 6_643,
+    totalTokensFresh: true,
+    contextTokens: 123_456,
+    estimatedCostUsd: 0,
+    modelProvider: "openai-codex",
+    model: "gpt-5.3-codex-spark",
+  });
 });
 
 test("sessions.changed mutation events include live session setting metadata", async () => {
@@ -323,27 +470,19 @@ test("sessions.changed mutation events include live session setting metadata", a
     isWebchatConnect: () => false,
   });
 
-  expect(respond).toHaveBeenCalledWith(
-    true,
-    expect.objectContaining({ ok: true, key: "agent:main:main" }),
-    undefined,
-  );
-  expect(broadcastToConnIds).toHaveBeenCalledWith(
-    "sessions.changed",
-    expect.objectContaining({
-      sessionKey: "agent:main:main",
-      reason: "patch",
-      verboseLevel: "on",
-      responseUsage: "full",
-      fastMode: true,
-      lastChannel: "telegram",
-      lastTo: "-100123",
-      lastAccountId: "acct-1",
-      lastThreadId: 42,
-    }),
-    new Set(["conn-1"]),
-    { dropIfSlow: true },
-  );
+  const responsePayload = expectRespondPayload(respond);
+  expectFields(responsePayload, { ok: true, key: "agent:main:main" });
+  expectChangedBroadcast(broadcastToConnIds, {
+    sessionKey: "agent:main:main",
+    reason: "patch",
+    verboseLevel: "on",
+    responseUsage: "full",
+    fastMode: true,
+    lastChannel: "telegram",
+    lastTo: "-100123",
+    lastAccountId: "acct-1",
+    lastThreadId: 42,
+  });
 });
 
 test("sessions.changed mutation events include sendPolicy metadata", async () => {
@@ -377,21 +516,13 @@ test("sessions.changed mutation events include sendPolicy metadata", async () =>
     isWebchatConnect: () => false,
   });
 
-  expect(respond).toHaveBeenCalledWith(
-    true,
-    expect.objectContaining({ ok: true, key: "agent:main:main" }),
-    undefined,
-  );
-  expect(broadcastToConnIds).toHaveBeenCalledWith(
-    "sessions.changed",
-    expect.objectContaining({
-      sessionKey: "agent:main:main",
-      reason: "patch",
-      sendPolicy: "deny",
-    }),
-    new Set(["conn-1"]),
-    { dropIfSlow: true },
-  );
+  const responsePayload = expectRespondPayload(respond);
+  expectFields(responsePayload, { ok: true, key: "agent:main:main" });
+  expectChangedBroadcast(broadcastToConnIds, {
+    sessionKey: "agent:main:main",
+    reason: "patch",
+    sendPolicy: "deny",
+  });
 });
 
 test("sessions.changed mutation events include subagent ownership metadata", async () => {
@@ -430,24 +561,16 @@ test("sessions.changed mutation events include subagent ownership metadata", asy
     isWebchatConnect: () => false,
   });
 
-  expect(respond).toHaveBeenCalledWith(
-    true,
-    expect.objectContaining({ ok: true, key: "agent:main:subagent:child" }),
-    undefined,
-  );
-  expect(broadcastToConnIds).toHaveBeenCalledWith(
-    "sessions.changed",
-    expect.objectContaining({
-      sessionKey: "agent:main:subagent:child",
-      reason: "patch",
-      spawnedBy: "agent:main:main",
-      spawnedWorkspaceDir: "/tmp/subagent-workspace",
-      forkedFromParent: true,
-      spawnDepth: 2,
-      subagentRole: "orchestrator",
-      subagentControlScope: "children",
-    }),
-    new Set(["conn-1"]),
-    { dropIfSlow: true },
-  );
+  const responsePayload = expectRespondPayload(respond);
+  expectFields(responsePayload, { ok: true, key: "agent:main:subagent:child" });
+  expectChangedBroadcast(broadcastToConnIds, {
+    sessionKey: "agent:main:subagent:child",
+    reason: "patch",
+    spawnedBy: "agent:main:main",
+    spawnedWorkspaceDir: "/tmp/subagent-workspace",
+    forkedFromParent: true,
+    spawnDepth: 2,
+    subagentRole: "orchestrator",
+    subagentControlScope: "children",
+  });
 });

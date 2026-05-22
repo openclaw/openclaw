@@ -1,5 +1,6 @@
 import type { SessionLifecycleEvent } from "../sessions/session-lifecycle-events.js";
 import type { SessionTranscriptUpdate } from "../sessions/transcript-events.js";
+import { asPositiveSafeInteger } from "../shared/number-coercion.js";
 import { projectChatDisplayMessage } from "./chat-display-projection.js";
 import type { GatewayBroadcastToConnIdsFn } from "./server-broadcast-types.js";
 import type {
@@ -11,7 +12,7 @@ import {
   attachOpenClawTranscriptMeta,
   loadGatewaySessionRow,
   loadSessionEntry,
-  readSessionMessages,
+  readSessionMessageCountAsync,
   type GatewaySessionRow,
 } from "./session-utils.js";
 
@@ -88,67 +89,86 @@ export function createTranscriptUpdateBroadcastHandler(params: {
   sessionEventSubscribers: SessionEventSubscribers;
   sessionMessageSubscribers: SessionMessageSubscribers;
 }) {
+  let broadcastQueue = Promise.resolve();
   return (update: SessionTranscriptUpdate): void => {
-    const sessionKey = update.sessionKey ?? resolveSessionKeyForTranscriptFile(update.sessionFile);
-    if (!sessionKey || update.message === undefined) {
-      return;
-    }
-    const connIds = new Set<string>();
-    for (const connId of params.sessionEventSubscribers.getAll()) {
-      connIds.add(connId);
-    }
-    for (const connId of params.sessionMessageSubscribers.get(sessionKey)) {
-      connIds.add(connId);
-    }
-    if (connIds.size === 0) {
-      return;
-    }
-    const { entry, storePath } = loadSessionEntry(sessionKey);
-    const messageSeq = entry?.sessionId
-      ? readSessionMessages(entry.sessionId, storePath, entry.sessionFile).length
-      : undefined;
-    const sessionSnapshot = buildGatewaySessionSnapshot({
-      sessionRow: loadGatewaySessionRow(sessionKey),
-      includeSession: true,
-    });
-    const rawMessage = attachOpenClawTranscriptMeta(update.message, {
-      ...(typeof update.messageId === "string" ? { id: update.messageId } : {}),
-      ...(typeof messageSeq === "number" ? { seq: messageSeq } : {}),
-    });
-    const message = projectChatDisplayMessage(rawMessage);
-    if (message) {
-      params.broadcastToConnIds(
-        "session.message",
-        {
-          sessionKey,
-          message,
-          ...(typeof update.messageId === "string" ? { messageId: update.messageId } : {}),
-          ...(typeof messageSeq === "number" ? { messageSeq } : {}),
-          ...sessionSnapshot,
-        },
-        connIds,
-        { dropIfSlow: true },
-      );
-    }
+    broadcastQueue = broadcastQueue
+      .then(() => handleTranscriptUpdateBroadcast(params, update))
+      .catch(() => undefined);
+  };
+}
 
-    const sessionEventConnIds = params.sessionEventSubscribers.getAll();
-    if (sessionEventConnIds.size === 0) {
-      return;
-    }
+async function handleTranscriptUpdateBroadcast(
+  params: {
+    broadcastToConnIds: GatewayBroadcastToConnIdsFn;
+    sessionEventSubscribers: SessionEventSubscribers;
+    sessionMessageSubscribers: SessionMessageSubscribers;
+  },
+  update: SessionTranscriptUpdate,
+): Promise<void> {
+  const sessionKey = update.sessionKey ?? resolveSessionKeyForTranscriptFile(update.sessionFile);
+  if (!sessionKey || update.message === undefined) {
+    return;
+  }
+  const connIds = new Set<string>();
+  for (const connId of params.sessionEventSubscribers.getAll()) {
+    connIds.add(connId);
+  }
+  for (const connId of params.sessionMessageSubscribers.get(sessionKey)) {
+    connIds.add(connId);
+  }
+  if (connIds.size === 0) {
+    return;
+  }
+  let messageSeq = asPositiveSafeInteger(update.messageSeq);
+  if (messageSeq === undefined) {
+    const { entry, storePath } = loadSessionEntry(sessionKey);
+    messageSeq = entry?.sessionId
+      ? asPositiveSafeInteger(
+          await readSessionMessageCountAsync(entry.sessionId, storePath, entry.sessionFile),
+        )
+      : undefined;
+  }
+  const sessionSnapshot = buildGatewaySessionSnapshot({
+    sessionRow: loadGatewaySessionRow(sessionKey, { transcriptUsageMaxBytes: 64 * 1024 }),
+    includeSession: true,
+  });
+  const rawMessage = attachOpenClawTranscriptMeta(update.message, {
+    ...(typeof update.messageId === "string" ? { id: update.messageId } : {}),
+    ...(messageSeq !== undefined ? { seq: messageSeq } : {}),
+  });
+  const message = projectChatDisplayMessage(rawMessage);
+  if (message) {
     params.broadcastToConnIds(
-      "sessions.changed",
+      "session.message",
       {
         sessionKey,
-        phase: "message",
-        ts: Date.now(),
+        message,
         ...(typeof update.messageId === "string" ? { messageId: update.messageId } : {}),
-        ...(typeof messageSeq === "number" ? { messageSeq } : {}),
+        ...(messageSeq !== undefined ? { messageSeq } : {}),
         ...sessionSnapshot,
       },
-      sessionEventConnIds,
+      connIds,
       { dropIfSlow: true },
     );
-  };
+  }
+
+  const sessionEventConnIds = params.sessionEventSubscribers.getAll();
+  if (sessionEventConnIds.size === 0) {
+    return;
+  }
+  params.broadcastToConnIds(
+    "sessions.changed",
+    {
+      sessionKey,
+      phase: "message",
+      ts: Date.now(),
+      ...(typeof update.messageId === "string" ? { messageId: update.messageId } : {}),
+      ...(messageSeq !== undefined ? { messageSeq } : {}),
+      ...sessionSnapshot,
+    },
+    sessionEventConnIds,
+    { dropIfSlow: true },
+  );
 }
 
 export function createLifecycleEventBroadcastHandler(params: {

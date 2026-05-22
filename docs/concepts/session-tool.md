@@ -93,13 +93,19 @@ the response:
   immediately.
 - **Wait for reply:** set a timeout and get the response inline.
 
+Thread-scoped chat sessions, such as Slack or Discord keys ending in
+`:thread:<id>`, are not valid `sessions_send` targets. Use the parent channel
+session key for inter-agent coordination so tool-routed messages do not appear
+inside an active human-facing thread.
+
 Messages and A2A follow-up replies are marked as inter-session data in the
 receiving prompt (`[Inter-session message ... isUser=false]`) and in transcript
 provenance. The receiving agent should treat them as tool-routed data, not as a
 direct end-user-authored instruction.
 
 After the target responds, OpenClaw can run a **reply-back loop** where the
-agents alternate messages (up to 5 turns). The target agent can reply
+agents alternate messages (up to `session.agentToAgent.maxPingPongTurns`, range
+0-20, default 5). The target agent can reply
 `REPLY_SKIP` to stop early.
 
 ## Status and orchestration helpers
@@ -128,7 +134,9 @@ sub-agents. It supports:
 
 `sessions_spawn` creates an isolated session for a background task by default.
 It is always non-blocking -- it returns immediately with a `runId` and
-`childSessionKey`.
+`childSessionKey`. Native sub-agent runs receive the delegated task in the
+child session's first visible `[Subagent Task]` message, while the system
+prompt carries only sub-agent runtime rules and routing context.
 
 Key options:
 
@@ -138,6 +146,8 @@ Key options:
 - `sandbox: "require"` to enforce sandboxing on the child.
 - `context: "fork"` for native sub-agents when the child needs the current
   requester transcript; omit it or use `context: "isolated"` for a clean child.
+  Thread-bound native sub-agents default to `context: "fork"` unless
+  `threadBindings.defaultSpawnContext` says otherwise.
 
 Default leaf sub-agents do not get session tools. When
 `maxSpawnDepth >= 2`, depth-1 orchestrator sub-agents additionally receive

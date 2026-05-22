@@ -14,16 +14,22 @@ host configuration.
 ## Key terms
 
 - **Channel**: `telegram`, `whatsapp`, `discord`, `irc`, `googlechat`, `slack`, `signal`, `imessage`, `line`, plus plugin channels. `webchat` is the internal WebChat UI channel and is not a configurable outbound channel.
-- **AccountId**: per‑channel account instance (when supported).
+- **AccountId**: per-channel account instance (when supported).
 - Optional channel default account: `channels.<channel>.defaultAccount` chooses
   which account is used when an outbound path does not specify `accountId`.
   - In multi-account setups, set an explicit default (`defaultAccount` or `accounts.default`) when two or more accounts are configured. Without it, fallback routing may pick the first normalized account ID.
-- **AgentId**: an isolated workspace + session store (“brain”).
+- **AgentId**: an isolated workspace + session store ("brain").
 - **SessionKey**: the bucket key used to store context and control concurrency.
+
+## Outbound target prefixes
+
+Explicit outbound targets may include a provider prefix, such as `telegram:123` or `tg:123`. Core treats that prefix as a channel-selection hint only when the selected channel is `last` or otherwise unresolved, and only when the loaded plugin advertises that prefix. If the caller already selected an explicit channel, the provider prefix must match that channel; cross-channel combinations such as WhatsApp delivery to `telegram:123` fail before plugin-specific target normalization.
+
+Target-kind and service prefixes such as `channel:<id>`, `user:<id>`, `room:<id>`, `thread:<id>`, `imessage:<handle>`, and `sms:<number>` stay inside the selected channel's grammar. They do not select the provider by themselves.
 
 ## Session key shapes (examples)
 
-Direct messages collapse to the agent’s **main** session by default:
+Direct messages collapse to the agent's **main** session by default:
 
 - `agent:<agentId>:<mainKey>` (default: `agent:main:main`)
 
@@ -49,7 +55,7 @@ Examples:
 ## Main DM route pinning
 
 When `session.dmScope` is `main`, direct messages may share one main session.
-To prevent the session’s `lastRoute` from being overwritten by non-owner DMs,
+To prevent the session's `lastRoute` from being overwritten by non-owner DMs,
 OpenClaw infers a pinned owner from `allowFrom` when all of these are true:
 
 - `allowFrom` has exactly one non-wildcard entry.
@@ -136,8 +142,8 @@ stores must stay inside that resolved agent root and use a regular
 
 ## WebChat behavior
 
-WebChat attaches to the **selected agent** and defaults to the agent’s main
-session. Because of this, WebChat lets you see cross‑channel context for that
+WebChat attaches to the **selected agent** and defaults to the agent's main
+session. Because of this, WebChat lets you see cross-channel context for that
 agent in one place.
 
 ## Reply context

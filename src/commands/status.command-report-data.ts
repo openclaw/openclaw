@@ -15,6 +15,7 @@ import type { AgentLocalStatus } from "./status.agent-local.js";
 import {
   buildStatusFooterLines,
   buildStatusHealthRows,
+  buildStatusModelSelectionLines,
   buildStatusPairingRecoveryLines,
   buildStatusPluginCompatibilityLines,
   buildStatusSecurityAuditLines,
@@ -82,6 +83,7 @@ export async function buildStatusCommandReportData(
     formatUpdateAvailableHint: (update: StatusOverviewSurface["update"]) => string | null;
     accentDim: (value: string) => string;
     updateValue?: string;
+    updateRestartValue?: string | null;
     theme: {
       heading: (value: string) => string;
       muted: (value: string) => string;
@@ -111,6 +113,7 @@ export async function buildStatusCommandReportData(
     resolveMemoryFtsState: params.resolveMemoryFtsState,
     resolveMemoryCacheSummary: params.resolveMemoryCacheSummary,
     updateValue: params.updateValue,
+    updateRestartValue: params.updateRestartValue,
   });
 
   const sessionsColumns = [
@@ -118,6 +121,7 @@ export async function buildStatusCommandReportData(
     { key: "Kind", header: "Kind", minWidth: 6 },
     { key: "Age", header: "Age", minWidth: 9 },
     { key: "Model", header: "Model", minWidth: 14 },
+    { key: "Runtime", header: "Runtime", minWidth: 14 },
     { key: "Tokens", header: "Tokens", minWidth: 16 },
     ...(params.opts.verbose ? [{ key: "Cache", header: "Cache", minWidth: 16, flex: true }] : []),
   ] satisfies TableColumn[];
@@ -154,6 +158,12 @@ export async function buildStatusCommandReportData(
       warn: params.theme.warn,
       muted: params.theme.muted,
       formatCliCommand: params.formatCliCommand,
+    }),
+    modelSelectionLines: buildStatusModelSelectionLines({
+      recent: params.summary.sessions.recent,
+      shortenText: params.shortenText,
+      warn: params.theme.warn,
+      muted: params.theme.muted,
     }),
     securityAuditLines,
     channelsColumns: statusChannelsTableColumns,

@@ -9,7 +9,7 @@ import { normalizeResolvedSecretInputString } from "openclaw/plugin-sdk/secret-i
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
-} from "openclaw/plugin-sdk/text-runtime";
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { CoreConfig, IrcAccountConfig, IrcNickServConfig } from "./types.js";
 
 const TRUTHY_ENV = new Set(["true", "1", "yes", "on"]);
@@ -49,7 +49,14 @@ function parseIntEnv(value?: string): number | undefined {
 }
 
 const { listAccountIds: listIrcAccountIds, resolveDefaultAccountId: resolveDefaultIrcAccountId } =
-  createAccountListHelpers("irc", { normalizeAccountId });
+  createAccountListHelpers("irc", {
+    normalizeAccountId,
+    hasImplicitDefaultAccount: (cfg) =>
+      Boolean(
+        (cfg.channels?.irc?.host?.trim() || process.env.IRC_HOST?.trim()) &&
+        (cfg.channels?.irc?.nick?.trim() || process.env.IRC_NICK?.trim()),
+      ),
+  });
 export { listIrcAccountIds, resolveDefaultIrcAccountId };
 
 function mergeIrcAccountConfig(cfg: CoreConfig, accountId: string): IrcAccountConfig {

@@ -33,8 +33,9 @@ For multi-endpoint setups, `provider` can also be a custom
 `models.providers.<id>` entry, such as `ollama-5080`, when that provider sets
 `api: "ollama"` or another embedding adapter owner.
 
-For local embeddings with no API key, install the optional `node-llama-cpp`
-runtime package next to OpenClaw and use `provider: "local"`.
+For local embeddings with no API key, set `provider: "local"`. Source checkouts
+may still require native build approval: `pnpm approve-builds` then
+`pnpm rebuild node-llama-cpp`.
 
 Some OpenAI-compatible embedding endpoints require asymmetric labels such as
 `input_type: "query"` for searches and `input_type: "document"` or `"passage"`

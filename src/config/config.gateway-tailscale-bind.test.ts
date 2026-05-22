@@ -41,7 +41,7 @@ describe("gateway tailscale bind validation", () => {
     });
     expect(res.ok).toBe(false);
     if (!res.ok) {
-      expect(res.issues.some((issue) => issue.path === "gateway.bind")).toBe(true);
+      expect(res.issues.map((issue) => issue.path)).toContain("gateway.bind");
     }
   });
 
@@ -54,14 +54,13 @@ describe("gateway tailscale bind validation", () => {
     });
     expect(lanRes.ok).toBe(false);
     if (!lanRes.ok) {
-      expect(lanRes.issues).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({
-            path: "gateway.bind",
-            message: expect.stringContaining("gateway.bind must resolve to loopback"),
-          }),
-        ]),
-      );
+      expect(lanRes.issues).toEqual([
+        {
+          path: "gateway.bind",
+          message:
+            'gateway.bind must resolve to loopback when gateway.tailscale.mode=serve (use gateway.bind="loopback" or gateway.bind="custom" with gateway.customBindHost="127.0.0.1")',
+        },
+      ]);
     }
 
     const customRes = validateConfigObject({
@@ -73,7 +72,7 @@ describe("gateway tailscale bind validation", () => {
     });
     expect(customRes.ok).toBe(false);
     if (!customRes.ok) {
-      expect(customRes.issues.some((issue) => issue.path === "gateway.bind")).toBe(true);
+      expect(customRes.issues.map((issue) => issue.path)).toContain("gateway.bind");
     }
   });
 });

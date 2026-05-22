@@ -15,6 +15,14 @@ beforeAll(async () => {
 
 installProviderHttpMockCleanup();
 
+function requireFirstPostJsonRequest(): unknown {
+  const [call] = postJsonRequestMock.mock.calls;
+  if (!call) {
+    throw new Error("expected DeepInfra video request");
+  }
+  return call[0];
+}
+
 describe("deepinfra video generation provider", () => {
   it("declares explicit mode capabilities", () => {
     expectExplicitVideoGenerationCapabilities(buildDeepInfraVideoGenerationProvider());
@@ -49,26 +57,46 @@ describe("deepinfra video generation provider", () => {
       },
     });
 
-    expect(resolveProviderHttpRequestConfigMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        provider: "deepinfra",
-        capability: "video",
-        baseUrl: "https://api.deepinfra.com/v1/inference",
-      }),
-    );
-    expect(postJsonRequestMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        url: "https://api.deepinfra.com/v1/inference/Pixverse/Pixverse-T2V",
-        body: {
-          prompt: "A bicycle weaving through a rainy neon street",
-          aspect_ratio: "16:9",
-          duration: 8,
-          seed: 42,
-          negative_prompt: "blur",
-          style: "anime",
+    expect(resolveProviderHttpRequestConfigMock.mock.calls).toEqual([
+      [
+        {
+          baseUrl: "https://api.deepinfra.com/v1/inference",
+          defaultBaseUrl: "https://api.deepinfra.com/v1/inference",
+          allowPrivateNetwork: false,
+          defaultHeaders: {
+            Authorization: "Bearer provider-key",
+            "Content-Type": "application/json",
+          },
+          provider: "deepinfra",
+          capability: "video",
+          transport: "http",
         },
-      }),
-    );
+      ],
+    ]);
+    expect(postJsonRequestMock).toHaveBeenCalledOnce();
+    const postRequest = requireFirstPostJsonRequest();
+    const postRequestHeaders = Reflect.get(postRequest ?? {}, "headers");
+    expect(postRequestHeaders).toBeInstanceOf(Headers);
+    expect(Object.fromEntries((postRequestHeaders as Headers).entries())).toEqual({
+      authorization: "Bearer provider-key",
+      "content-type": "application/json",
+    });
+    expect(postRequest).toEqual({
+      url: "https://api.deepinfra.com/v1/inference/Pixverse/Pixverse-T2V",
+      headers: postRequestHeaders,
+      body: {
+        prompt: "A bicycle weaving through a rainy neon street",
+        aspect_ratio: "16:9",
+        duration: 8,
+        seed: 42,
+        negative_prompt: "blur",
+        style: "anime",
+      },
+      timeoutMs: undefined,
+      fetchFn: fetch,
+      allowPrivateNetwork: false,
+      dispatcherPolicy: undefined,
+    });
     expect(result.videos).toEqual([
       {
         url: "https://api.deepinfra.com/generated/video.mp4",
@@ -81,6 +109,86 @@ describe("deepinfra video generation provider", () => {
       seed: 42,
       status: "succeeded",
     });
+    expect(release).toHaveBeenCalledOnce();
+  });
+
+  it("reports malformed native video JSON as a provider error", async () => {
+    const release = vi.fn(async () => {});
+    postJsonRequestMock.mockResolvedValue({
+      response: {
+        json: async () => {
+          throw new SyntaxError("Unexpected token");
+        },
+      },
+      release,
+    });
+
+    const provider = buildDeepInfraVideoGenerationProvider();
+    await expect(
+      provider.generateVideo({
+        provider: "deepinfra",
+        model: "deepinfra/Pixverse/Pixverse-T2V",
+        prompt: "A bicycle weaving through a rainy neon street",
+        cfg: {},
+      }),
+    ).rejects.toThrow("DeepInfra video generation failed: malformed JSON response");
+    expect(release).toHaveBeenCalledOnce();
+  });
+
+  it("names base64 WebM data URL outputs from the MIME type", async () => {
+    postJsonRequestMock.mockResolvedValue({
+      response: {
+        json: async () => ({
+          video_url: `data:video/webm;base64,${Buffer.from("webm-data").toString("base64")}`,
+          request_id: "req_webm",
+          inference_status: { status: "succeeded" },
+        }),
+      },
+      release: vi.fn(async () => {}),
+    });
+
+    const provider = buildDeepInfraVideoGenerationProvider();
+    const result = await provider.generateVideo({
+      provider: "deepinfra",
+      model: "deepinfra/Pixverse/Pixverse-T2V",
+      prompt: "A WebM data URL",
+      cfg: {},
+    });
+
+    expect(result.videos).toHaveLength(1);
+    const [video] = result.videos;
+    if (!video) {
+      throw new Error("Expected generated DeepInfra video");
+    }
+    expect(video).toEqual({
+      buffer: Buffer.from("webm-data"),
+      mimeType: "video/webm",
+      fileName: "video-1.webm",
+    });
+  });
+
+  it("rejects malformed base64 data URL video outputs", async () => {
+    const release = vi.fn(async () => undefined);
+    postJsonRequestMock.mockResolvedValue({
+      response: {
+        json: async () => ({
+          video_url: "data:video/webm;base64,not-base64!",
+          request_id: "req_bad_base64",
+          inference_status: { status: "succeeded" },
+        }),
+      },
+      release,
+    });
+
+    const provider = buildDeepInfraVideoGenerationProvider();
+    await expect(
+      provider.generateVideo({
+        provider: "deepinfra",
+        model: "deepinfra/Pixverse/Pixverse-T2V",
+        prompt: "A malformed WebM data URL",
+        cfg: {},
+      }),
+    ).rejects.toThrow("DeepInfra video response returned malformed data URL base64");
     expect(release).toHaveBeenCalledOnce();
   });
 });

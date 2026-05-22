@@ -7,7 +7,7 @@ title: "Onboard"
 
 # `openclaw onboard`
 
-Interactive onboarding for local or remote Gateway setup.
+Full guided onboarding for local or remote Gateway setup. Use this when you want OpenClaw to walk through model auth, workspace, gateway, channels, skills, and health in one flow.
 
 ## Related guides
 
@@ -47,10 +47,31 @@ openclaw onboard --mode remote --remote-url wss://gateway-host:18789
 `--modern` starts the Crestodian conversational onboarding preview. Without
 `--modern`, `openclaw onboard` keeps the classic onboarding flow.
 
-For plaintext private-network `ws://` targets (trusted networks only), set
+Plaintext `ws://` is accepted for loopback, private IP literals, `.local`, and
+Tailnet `*.ts.net` gateway URLs. For other trusted private-DNS names, set
 `OPENCLAW_ALLOW_INSECURE_PRIVATE_WS=1` in the onboarding process environment.
-There is no `openclaw.json` equivalent for this client-side transport
-break-glass.
+
+## Locale
+
+Interactive onboarding uses the CLI wizard locale for fixed setup copy. Resolve
+order is:
+
+1. `OPENCLAW_LOCALE`
+2. `LC_ALL`
+3. `LC_MESSAGES`
+4. `LANG`
+5. English fallback
+
+Supported wizard locales are `en`, `zh-CN`, and `zh-TW`. Locale values may use
+underscore or POSIX suffix forms such as `zh_CN.UTF-8`. Product names, command
+names, config keys, URLs, provider IDs, model IDs, and plugin/channel labels
+remain literal.
+
+Example:
+
+```bash
+OPENCLAW_LOCALE=zh-CN openclaw onboard
+```
 
 Non-interactive custom provider:
 
@@ -119,6 +140,8 @@ Gateway token options in non-interactive mode:
 - With `--install-daemon`, if token mode requires a token and the configured token SecretRef is unresolved, onboarding fails closed with remediation guidance.
 - With `--install-daemon`, if both `gateway.auth.token` and `gateway.auth.password` are configured and `gateway.auth.mode` is unset, onboarding blocks install until mode is set explicitly.
 - Local onboarding writes `gateway.mode="local"` into the config. If a later config file is missing `gateway.mode`, treat that as config damage or an incomplete manual edit, not as a valid local-mode shortcut.
+- Local onboarding installs selected downloadable plugins when the chosen setup path requires them.
+- Remote onboarding only writes connection info for the remote Gateway and does not install local plugin packages.
 - `--allow-unconfigured` is a separate gateway runtime escape hatch. It does not mean onboarding may omit `gateway.mode`.
 
 Example:
@@ -210,9 +233,12 @@ openclaw onboard --non-interactive \
 ## Common follow-up commands
 
 ```bash
+openclaw channels add
 openclaw configure
 openclaw agents add <name>
 ```
+
+Use `openclaw setup` instead when you only need the baseline config/workspace. Use `openclaw configure` later for targeted changes and `openclaw channels add` for channel-only setup.
 
 <Note>
 `--json` does not imply non-interactive mode. Use `--non-interactive` for scripts.

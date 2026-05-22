@@ -9,9 +9,9 @@ import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vites
 
 type WatchIgnoredFn = (watchPath: string, stats?: { isDirectory?: () => boolean }) => boolean;
 
-const { createdWatchers, watchMock } = vi.hoisted(() => {
-  type WatchEvent = "add" | "change" | "unlink" | "unlinkDir";
-  type WatchCallback = () => void;
+const { createdWatchers, memoryLoggerWarn, watchMock } = vi.hoisted(() => {
+  type WatchEvent = "add" | "change" | "unlink" | "unlinkDir" | "error";
+  type WatchCallback = (...args: unknown[]) => void;
   function createMockWatcher() {
     const handlers = new Map<WatchEvent, WatchCallback[]>();
     const watcher = {
@@ -20,9 +20,9 @@ const { createdWatchers, watchMock } = vi.hoisted(() => {
         return watcher;
       }),
       close: vi.fn(async () => undefined),
-      emit: (event: WatchEvent) => {
+      emit: (event: WatchEvent, ...args: unknown[]) => {
         for (const callback of handlers.get(event) ?? []) {
-          callback();
+          callback(...args);
         }
       },
     };
@@ -31,6 +31,7 @@ const { createdWatchers, watchMock } = vi.hoisted(() => {
   const watchers: Array<ReturnType<typeof createMockWatcher>> = [];
   const result = {
     createdWatchers: watchers,
+    memoryLoggerWarn: vi.fn(),
     watchMock: vi.fn(() => {
       const watcher = createMockWatcher();
       watchers.push(watcher);
@@ -40,6 +41,18 @@ const { createdWatchers, watchMock } = vi.hoisted(() => {
   (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.test.memoryWatchFactory")] =
     result.watchMock;
   return result;
+});
+
+vi.mock("openclaw/plugin-sdk/memory-core-host-engine-foundation", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("openclaw/plugin-sdk/memory-core-host-engine-foundation")>();
+  return {
+    ...actual,
+    createSubsystemLogger: (subsystem: string) => ({
+      ...actual.createSubsystemLogger(subsystem),
+      warn: memoryLoggerWarn,
+    }),
+  };
 });
 
 vi.mock("./sqlite-vec.js", () => ({
@@ -133,7 +146,6 @@ describe("memory watcher config", () => {
 
   async function expectWatcherManager(cfg: OpenClawConfig) {
     const result = await getMemorySearchManager({ cfg, agentId: "main" });
-    expect(result.manager).not.toBeNull();
     if (!result.manager) {
       throw new Error("manager missing");
     }
@@ -153,16 +165,14 @@ describe("memory watcher config", () => {
       string[],
       Record<string, unknown>,
     ];
-    expect(watchedPaths).toEqual(
-      expect.arrayContaining([
-        path.join(workspaceDir, "MEMORY.md"),
-        path.join(workspaceDir, "memory"),
-        extraDir,
-      ]),
-    );
-    expect(watchedPaths.every((watchPath) => !watchPath.includes("*"))).toBe(true);
+    expect(watchedPaths).toStrictEqual([
+      path.join(workspaceDir, "MEMORY.md"),
+      path.join(workspaceDir, "memory"),
+      extraDir,
+    ]);
+    expect(watchedPaths.filter((watchedPath) => watchedPath.includes("*"))).toEqual([]);
     expect(options.ignoreInitial).toBe(true);
-    expect(options.awaitWriteFinish).toEqual({ stabilityThreshold: 25, pollInterval: 100 });
+    expect(options).not.toHaveProperty("awaitWriteFinish");
 
     const ignored = options.ignored as WatchIgnoredFn | undefined;
     expect(ignored).toBeTypeOf("function");
@@ -187,7 +197,9 @@ describe("memory watcher config", () => {
     const cfg = createWatcherConfig();
 
     const result = await getMemorySearchManager({ cfg, agentId: "main", purpose: "cli" });
-    expect(result.manager).not.toBeNull();
+    if (!result.manager) {
+      throw new Error("manager missing");
+    }
     manager = result.manager as unknown as MemoryIndexManager;
 
     expect(watchMock).not.toHaveBeenCalled();
@@ -209,10 +221,12 @@ describe("memory watcher config", () => {
       string[],
       Record<string, unknown>,
     ];
-    expect(watchedPaths).toEqual(
-      expect.arrayContaining([path.join(workspaceDir, "MEMORY.md"), path.join(extraDir)]),
-    );
-    expect(watchedPaths.every((watchPath) => !watchPath.includes("*"))).toBe(true);
+    expect(watchedPaths).toStrictEqual([
+      path.join(workspaceDir, "MEMORY.md"),
+      path.join(workspaceDir, "memory"),
+      extraDir,
+    ]);
+    expect(watchedPaths.filter((watchedPath) => watchedPath.includes("*"))).toEqual([]);
 
     const ignored = options.ignored as WatchIgnoredFn | undefined;
     expect(ignored).toBeTypeOf("function");
@@ -246,4 +260,49 @@ describe("memory watcher config", () => {
       expect(syncSpy).toHaveBeenCalledWith({ reason: "watch" });
     },
   );
+
+  it("settles changed file stats before running watch sync", async () => {
+    await setupWatcherWorkspace({ name: "notes.md", contents: "hello" });
+    const cfg = createWatcherConfig();
+
+    await expectWatcherManager(cfg);
+    vi.useFakeTimers();
+    const notesPath = path.join(extraDir, "notes.md");
+    const initialStats = await fs.stat(notesPath);
+    const syncSpy = vi
+      .spyOn(
+        manager as unknown as {
+          sync: (params?: { reason?: string }) => Promise<void>;
+        },
+        "sync",
+      )
+      .mockResolvedValue(undefined);
+
+    createdWatchers[0]?.emit("change", notesPath, {
+      size: initialStats.size,
+      mtimeMs: initialStats.mtimeMs,
+      isDirectory: () => false,
+    });
+    await fs.writeFile(notesPath, "hello updated");
+
+    await vi.advanceTimersByTimeAsync(25);
+    expect(syncSpy).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(25);
+    expect(syncSpy).toHaveBeenCalledWith({ reason: "watch" });
+  });
+
+  it("attaches a logging non-throwing watcher error listener", async () => {
+    await setupWatcherWorkspace({ name: "notes.md", contents: "hello" });
+    const cfg = createWatcherConfig();
+
+    await expectWatcherManager(cfg);
+
+    const watcher = createdWatchers[0];
+    const errorRegistration = watcher?.on.mock.calls.find(([event]) => event === "error");
+    expect(errorRegistration?.[0]).toBe("error");
+    expect(errorRegistration?.[1]).toBeTypeOf("function");
+    expect(watcher?.emit("error", new Error("watcher error: ENOSPC"))).toBeUndefined();
+    expect(memoryLoggerWarn).toHaveBeenCalledWith("memory watcher error: watcher error: ENOSPC");
+  });
 });

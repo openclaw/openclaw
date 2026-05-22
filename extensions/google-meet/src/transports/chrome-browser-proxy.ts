@@ -35,7 +35,7 @@ export function isSameMeetUrlForReuse(a: string | undefined, b: string | undefin
   return Boolean(normalizedA && normalizedB && normalizedA === normalizedB);
 }
 
-export type GoogleMeetNodeInfo = {
+type GoogleMeetNodeInfo = {
   caps?: string[];
   commands?: string[];
   connected?: boolean;
@@ -148,7 +148,13 @@ export async function resolveChromeNode(params: {
 function unwrapNodeInvokePayload(raw: unknown): unknown {
   const record = raw && typeof raw === "object" ? (raw as Record<string, unknown>) : {};
   if (typeof record.payloadJSON === "string" && record.payloadJSON.trim()) {
-    return JSON.parse(record.payloadJSON);
+    try {
+      return JSON.parse(record.payloadJSON);
+    } catch (error) {
+      throw new Error("Google Meet browser proxy returned malformed payloadJSON.", {
+        cause: error,
+      });
+    }
   }
   if ("payload" in record) {
     return record.payload;

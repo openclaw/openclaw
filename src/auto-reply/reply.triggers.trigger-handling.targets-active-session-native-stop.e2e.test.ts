@@ -92,10 +92,19 @@ vi.mock("./reply/agent-runner.runtime.js", () => ({
   },
 }));
 
-let getReplyFromConfig!: GetReplyFromConfig;
+let capturedGetReplyFromConfig: GetReplyFromConfig | undefined;
 installTriggerHandlingReplyHarness((impl) => {
-  getReplyFromConfig = impl;
+  capturedGetReplyFromConfig = impl;
 });
+
+function getReplyFromConfig(
+  ...args: Parameters<GetReplyFromConfig>
+): ReturnType<GetReplyFromConfig> {
+  if (!capturedGetReplyFromConfig) {
+    throw new Error("Expected trigger handling reply harness to install getReplyFromConfig");
+  }
+  return capturedGetReplyFromConfig(...args);
+}
 
 const BASE_MESSAGE = {
   Body: "hello",
@@ -207,6 +216,21 @@ async function runAuthorizedSmsCommand(body: string, cfg: ReturnType<typeof make
   return await getReplyFromConfig(makeAuthorizedSmsCommandMessage(body), {}, cfg);
 }
 
+function firstMockCallArg(
+  mock: { mock: { calls: unknown[][] } },
+  label: string,
+): Record<string, unknown> {
+  const call = mock.mock.calls[0];
+  if (!call) {
+    throw new Error(`expected ${label} call params`);
+  }
+  const arg = call[0];
+  if (!arg || typeof arg !== "object") {
+    throw new Error(`expected ${label} first argument`);
+  }
+  return arg as Record<string, unknown>;
+}
+
 async function expectNextRunUsesTargetSession(
   params: {
     cfg: ReturnType<typeof makeCfg>;
@@ -224,9 +248,10 @@ async function expectNextRunUsesTargetSession(
   );
 
   expect(params.runEmbeddedPiAgentMock).toHaveBeenCalledOnce();
-  expect(params.runEmbeddedPiAgentMock.mock.calls[0]?.[0]).toEqual(
-    expect.objectContaining(expected),
-  );
+  const runParams = firstMockCallArg(params.runEmbeddedPiAgentMock, "embedded PI agent");
+  for (const [key, value] of Object.entries(expected)) {
+    expect(runParams[key]).toEqual(value);
+  }
 }
 
 async function writeStoredModelOverride(cfg: ReturnType<typeof makeCfg>): Promise<void> {
@@ -458,7 +483,7 @@ describe("trigger handling", () => {
         expect(text, testCase.label).not.toMatch(/Thinking level set/i);
         expect(runEmbeddedPiAgentMock, testCase.label).toHaveBeenCalledOnce();
         if (testCase.assertPrompt) {
-          const prompt = runEmbeddedPiAgentMock.mock.calls[0]?.[0]?.prompt ?? "";
+          const prompt = firstMockCallArg(runEmbeddedPiAgentMock, "embedded PI agent").prompt ?? "";
           expect(prompt).toContain("Give me the status");
           expect(prompt).not.toContain("/thinking high");
           expect(prompt).not.toContain("/think high");
@@ -500,7 +525,7 @@ describe("trigger handling", () => {
         testCase.setup(cfg);
         await getReplyFromConfig(BASE_MESSAGE, { isHeartbeat: true }, cfg);
 
-        const call = runEmbeddedPiAgentMock.mock.calls[0]?.[0];
+        const call = firstMockCallArg(runEmbeddedPiAgentMock, "embedded PI agent");
         expect(call?.provider).toBe(testCase.expected.provider);
         expect(call?.model).toBe(testCase.expected.model);
       }
@@ -558,9 +583,9 @@ describe("trigger handling", () => {
       const text = maybeReplyText(res);
       expect(text?.startsWith("⚙️ Compacted")).toBe(true);
       expect(getCompactEmbeddedPiSessionMock()).toHaveBeenCalledOnce();
-      expect(getCompactEmbeddedPiSessionMock().mock.calls[0]?.[0]?.sessionFile).toContain(
-        join("agents", "worker1", "sessions"),
-      );
+      expect(
+        firstMockCallArg(getCompactEmbeddedPiSessionMock(), "embedded PI compaction").sessionFile,
+      ).toContain(join("agents", "worker1", "sessions"));
     });
   });
 

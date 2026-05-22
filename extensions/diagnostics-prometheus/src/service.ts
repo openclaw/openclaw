@@ -276,6 +276,7 @@ function renderPrometheusMetrics(store: PrometheusMetricStore): string {
 }
 
 function runLabels(evt: {
+  blockedBy?: string;
   channel?: string;
   model?: string;
   outcome?: string;
@@ -283,6 +284,7 @@ function runLabels(evt: {
   trigger?: string;
 }): LabelSet {
   return {
+    ...(evt.blockedBy ? { blocked_by: lowCardinalityLabel(evt.blockedBy) } : {}),
     channel: lowCardinalityLabel(evt.channel),
     model: lowCardinalityLabel(evt.model),
     outcome: lowCardinalityLabel(evt.outcome, "unknown"),
@@ -348,6 +350,35 @@ function harnessLabels(evt: {
     phase: evt.type === "harness.run.error" ? lowCardinalityLabel(evt.phase) : "none",
     plugin: lowCardinalityLabel(evt.pluginId),
     provider: lowCardinalityLabel(evt.provider),
+  };
+}
+
+function sessionRecoveryLabels(
+  evt: Extract<
+    DiagnosticEventPayload,
+    { type: "session.recovery.requested" | "session.recovery.completed" }
+  >,
+): LabelSet {
+  return {
+    action:
+      evt.type === "session.recovery.completed"
+        ? lowCardinalityLabel(evt.action, "unknown")
+        : evt.allowActiveAbort
+          ? "abort"
+          : "recover",
+    active_work_kind: lowCardinalityLabel(evt.activeWorkKind, "none"),
+    state: evt.state,
+    status: evt.type === "session.recovery.completed" ? evt.status : "requested",
+  };
+}
+
+function talkLabels(evt: Extract<DiagnosticEventPayload, { type: "talk.event" }>): LabelSet {
+  return {
+    brain: lowCardinalityLabel(evt.brain),
+    event_type: lowCardinalityLabel(evt.talkEventType),
+    mode: lowCardinalityLabel(evt.mode),
+    provider: lowCardinalityLabel(evt.provider),
+    transport: lowCardinalityLabel(evt.transport),
   };
 }
 
@@ -497,6 +528,55 @@ function recordDiagnosticEvent(
         seconds(evt.durationMs),
       );
       return;
+    case "message.delivery.started":
+      store.counter(
+        "openclaw_message_delivery_started_total",
+        "Outbound message delivery attempts started.",
+        {
+          channel: lowCardinalityLabel(evt.channel),
+          delivery_kind: lowCardinalityLabel(evt.deliveryKind, "other"),
+        },
+      );
+      return;
+    case "message.received":
+      store.counter("openclaw_message_received_total", "Inbound messages received by channel.", {
+        channel: lowCardinalityLabel(evt.channel),
+        source: lowCardinalityLabel(evt.source),
+      });
+      return;
+    case "message.dispatch.started":
+      store.counter(
+        "openclaw_message_dispatch_started_total",
+        "Inbound message dispatch attempts started by channel.",
+        {
+          channel: lowCardinalityLabel(evt.channel),
+          source: lowCardinalityLabel(evt.source),
+        },
+      );
+      return;
+    case "message.dispatch.completed":
+      store.counter(
+        "openclaw_message_dispatch_completed_total",
+        "Inbound message dispatch attempts completed by outcome.",
+        {
+          channel: lowCardinalityLabel(evt.channel),
+          outcome: evt.outcome,
+          reason: lowCardinalityLabel(evt.reason, "none"),
+          source: lowCardinalityLabel(evt.source),
+        },
+      );
+      store.histogram(
+        "openclaw_message_dispatch_duration_seconds",
+        "Inbound message dispatch duration in seconds.",
+        {
+          channel: lowCardinalityLabel(evt.channel),
+          outcome: evt.outcome,
+          reason: lowCardinalityLabel(evt.reason, "none"),
+          source: lowCardinalityLabel(evt.source),
+        },
+        seconds(evt.durationMs),
+      );
+      return;
     case "message.delivery.completed":
     case "message.delivery.error":
       store.counter(
@@ -504,7 +584,7 @@ function recordDiagnosticEvent(
         "Outbound message delivery attempts by outcome.",
         {
           channel: lowCardinalityLabel(evt.channel),
-          delivery_kind: evt.deliveryKind,
+          delivery_kind: lowCardinalityLabel(evt.deliveryKind, "other"),
           error_category:
             evt.type === "message.delivery.error"
               ? lowCardinalityLabel(evt.errorCategory, "other")
@@ -517,7 +597,7 @@ function recordDiagnosticEvent(
         "Outbound message delivery duration in seconds.",
         {
           channel: lowCardinalityLabel(evt.channel),
-          delivery_kind: evt.deliveryKind,
+          delivery_kind: lowCardinalityLabel(evt.deliveryKind, "other"),
           error_category:
             evt.type === "message.delivery.error"
               ? lowCardinalityLabel(evt.errorCategory, "other")
@@ -525,6 +605,36 @@ function recordDiagnosticEvent(
           outcome: evt.type === "message.delivery.error" ? "error" : "completed",
         },
         seconds(evt.durationMs),
+      );
+      return;
+    case "talk.event":
+      store.counter("openclaw_talk_event_total", "Talk events emitted by type.", talkLabels(evt));
+      store.histogram(
+        "openclaw_talk_event_duration_seconds",
+        "Talk event duration in seconds when reported.",
+        talkLabels(evt),
+        seconds(evt.durationMs),
+      );
+      store.histogram(
+        "openclaw_talk_audio_bytes",
+        "Talk audio frame byte lengths.",
+        talkLabels(evt),
+        numericValue(evt.byteLength),
+        BYTE_BUCKETS,
+      );
+      return;
+    case "session.recovery.requested":
+    case "session.recovery.completed":
+      store.counter(
+        "openclaw_session_recovery_total",
+        "Session recovery observations by status and action.",
+        sessionRecoveryLabels(evt),
+      );
+      store.histogram(
+        "openclaw_session_recovery_age_seconds",
+        "Age of sessions selected for recovery in seconds.",
+        sessionRecoveryLabels(evt),
+        seconds(evt.ageMs),
       );
       return;
     case "queue.lane.enqueue":
@@ -561,6 +671,13 @@ function recordDiagnosticEvent(
           numericValue(evt.queueDepth),
         );
       }
+      return;
+    case "session.turn.created":
+      store.counter("openclaw_session_turn_created_total", "Agent session turns created.", {
+        agent: lowCardinalityLabel(evt.agentId),
+        channel: lowCardinalityLabel(evt.channel),
+        trigger: evt.trigger,
+      });
       return;
     case "diagnostic.memory.sample":
       store.gauge(
@@ -680,8 +797,9 @@ export function createDiagnosticsPrometheusExporter() {
   };
 }
 
-export const __test__ = {
+export const testApi = {
   createPrometheusMetricStore,
   recordDiagnosticEvent,
   renderPrometheusMetrics,
 };
+export { testApi as __test__ };

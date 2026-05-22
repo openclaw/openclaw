@@ -5,11 +5,10 @@ import {
   resolveChannelMatchConfig,
   type ChannelMatchSource,
 } from "openclaw/plugin-sdk/channel-targets";
-import { evaluateGroupRouteAccessForPolicy } from "openclaw/plugin-sdk/group-access";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
-} from "openclaw/plugin-sdk/text-runtime";
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { Guild, User } from "../internal/discord.js";
 import { formatDiscordUserTag } from "./format.js";
 
@@ -19,7 +18,7 @@ export type DiscordAllowList = {
   names: Set<string>;
 };
 
-export type DiscordAllowListMatch = AllowlistMatch<"wildcard" | "id" | "name" | "tag">;
+type DiscordAllowListMatch = AllowlistMatch<"wildcard" | "id" | "name" | "tag">;
 
 const DISCORD_OWNER_ALLOWLIST_PREFIXES = ["discord:", "user:", "pk:"];
 
@@ -94,6 +93,16 @@ export function normalizeDiscordSlug(value: string) {
     .replace(/^-+|-+$/g, "");
 }
 
+export function normalizeDiscordDisplaySlug(value: string) {
+  return normalizeLowercaseStringOrEmpty(value)
+    .normalize("NFC")
+    .replace(/^#/, "")
+    .replace(/[\s_]+/g, "-")
+    .replace(/[^\p{L}\p{M}\p{N}-]+/gu, "-")
+    .replace(/-{2,}/g, "-")
+    .replace(/^-+|-+$/g, "");
+}
+
 function resolveDiscordAllowListNameMatch(
   list: DiscordAllowList,
   candidate: { name?: string; tag?: string },
@@ -149,7 +158,7 @@ export function resolveDiscordAllowListMatch(params: {
   return { allowed: false };
 }
 
-export function resolveDiscordUserAllowed(params: {
+function resolveDiscordUserAllowed(params: {
   allowList?: string[];
   userId: string;
   userName?: string;
@@ -500,7 +509,7 @@ export function resolveDiscordShouldRequireMention(params: {
   return params.channelConfig?.requireMention ?? params.guildInfo?.requireMention ?? true;
 }
 
-export function isDiscordAutoThreadOwnedByBot(params: {
+function isDiscordAutoThreadOwnedByBot(params: {
   isThread: boolean;
   channelConfig?: DiscordChannelConfigResolved | null;
   botId?: string | null;
@@ -526,15 +535,14 @@ export function isDiscordGroupAllowedByPolicy(params: {
   if (params.groupPolicy === "allowlist" && !params.guildAllowlisted) {
     return false;
   }
-
-  return evaluateGroupRouteAccessForPolicy({
-    groupPolicy:
-      params.groupPolicy === "allowlist" && !params.channelAllowlistConfigured
-        ? "open"
-        : params.groupPolicy,
-    routeAllowlistConfigured: params.channelAllowlistConfigured,
-    routeMatched: params.channelAllowed,
-  }).allowed;
+  if (params.groupPolicy === "disabled") {
+    return false;
+  }
+  return (
+    params.groupPolicy !== "allowlist" ||
+    !params.channelAllowlistConfigured ||
+    params.channelAllowed
+  );
 }
 
 export function resolveDiscordChannelPolicyCommandAuthorizer(params: {

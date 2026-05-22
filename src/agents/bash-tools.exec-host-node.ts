@@ -1,4 +1,5 @@
-import type { AgentToolResult } from "@mariozechner/pi-agent-core";
+import type { AgentToolResult } from "@earendil-works/pi-agent-core";
+import { APPROVALS_SCOPE, WRITE_SCOPE } from "../gateway/operator-scopes.js";
 import {
   requiresExecApproval,
   resolveExecApprovalAllowedDecisions,
@@ -28,6 +29,8 @@ import type { ExecToolDetails } from "./bash-tools.exec-types.js";
 import { callGatewayTool } from "./tools/gateway.js";
 
 export type { ExecuteNodeHostCommandParams } from "./bash-tools.exec-host-node.types.js";
+
+const APPROVED_NODE_INVOKE_SCOPES = [WRITE_SCOPE, APPROVALS_SCOPE];
 
 export async function executeNodeHostCommand(
   params: ExecuteNodeHostCommandParams,
@@ -89,6 +92,7 @@ export async function executeNodeHostCommand(
         nodeId: target.nodeId,
         security: hostSecurity,
         ask: hostAsk,
+        commandHighlighting: params.commandHighlighting,
         ...buildExecApprovalRequesterContext({
           agentId: prepared.agentId,
           sessionKey: prepared.sessionKey,
@@ -144,6 +148,7 @@ export async function executeNodeHostCommand(
       const followupTarget = execHostShared.buildExecApprovalFollowupTarget({
         approvalId,
         sessionKey: params.notifySessionKey ?? params.sessionKey,
+        bashElevated: params.bashElevated,
         turnSourceChannel: params.turnSourceChannel,
         turnSourceTo: params.turnSourceTo,
         turnSourceAccountId: params.turnSourceAccountId,
@@ -215,6 +220,10 @@ export async function executeNodeHostCommand(
               cwd: prepared.cwd,
               agentId: prepared.agentId,
               sessionKey: prepared.sessionKey,
+              turnSourceChannel: params.turnSourceChannel,
+              turnSourceTo: params.turnSourceTo,
+              turnSourceAccountId: params.turnSourceAccountId,
+              turnSourceThreadId: params.turnSourceThreadId,
               approved: approvedByAsk,
               approvalDecision:
                 approvalDecision === "allow-always" && inlineEvalHit !== null
@@ -225,6 +234,7 @@ export async function executeNodeHostCommand(
               notifyOnExit: params.notifyOnExit,
               systemRunPlan: prepared.plan,
             }),
+            { scopes: APPROVED_NODE_INVOKE_SCOPES },
           );
           const payload =
             raw?.payload && typeof raw.payload === "object"
@@ -271,22 +281,24 @@ export async function executeNodeHostCommand(
   }
 
   const startedAt = Date.now();
-  const raw = await callGatewayTool(
-    "node.invoke",
-    { timeoutMs: target.invokeTimeoutMs },
-    buildNodeSystemRunInvoke({
-      target,
-      command: prepared.argv,
-      rawCommand: prepared.rawCommand,
-      cwd: prepared.cwd,
-      agentId: prepared.agentId,
-      sessionKey: prepared.sessionKey,
-      approved: inlineApprovedByAsk,
-      approvalDecision: inlineApprovalDecision,
-      runId: inlineApprovalId,
-      notifyOnExit: params.notifyOnExit,
-      systemRunPlan: prepared.plan,
-    }),
-  );
+  const invoke = buildNodeSystemRunInvoke({
+    target,
+    command: prepared.argv,
+    rawCommand: prepared.rawCommand,
+    cwd: prepared.cwd,
+    agentId: prepared.agentId,
+    sessionKey: prepared.sessionKey,
+    approved: inlineApprovedByAsk,
+    approvalDecision: inlineApprovalDecision,
+    runId: inlineApprovalId,
+    notifyOnExit: params.notifyOnExit,
+    systemRunPlan: prepared.plan,
+  });
+  const raw =
+    inlineApprovedByAsk && inlineApprovalId
+      ? await callGatewayTool("node.invoke", { timeoutMs: target.invokeTimeoutMs }, invoke, {
+          scopes: APPROVED_NODE_INVOKE_SCOPES,
+        })
+      : await callGatewayTool("node.invoke", { timeoutMs: target.invokeTimeoutMs }, invoke);
   return formatNodeRunToolResult({ raw, startedAt, cwd: params.workdir });
 }

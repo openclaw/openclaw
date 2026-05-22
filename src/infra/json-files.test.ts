@@ -1,13 +1,15 @@
-import fs from "node:fs/promises";
+import fs from "node:fs";
+import fsPromises from "node:fs/promises";
 import path from "node:path";
-import { setTimeout as sleep } from "node:timers/promises";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { withTempDir } from "../test-helpers/temp-dir.js";
 import {
   JsonFileReadError,
   createAsyncLock,
   readDurableJsonFile,
+  readJson,
   readJsonFile,
+  tryReadJson,
   writeJsonAtomic,
   writeTextAtomic,
 } from "./json-files.js";
@@ -27,7 +29,7 @@ describe("json file helpers", () => {
       name: "reads valid json",
       setup: async (base: string) => {
         const filePath = path.join(base, "valid.json");
-        await fs.writeFile(filePath, '{"ok":true}', "utf8");
+        await fsPromises.writeFile(filePath, '{"ok":true}', "utf8");
         return filePath;
       },
       expected: { ok: true },
@@ -36,7 +38,7 @@ describe("json file helpers", () => {
       name: "returns null for invalid files",
       setup: async (base: string) => {
         const filePath = path.join(base, "invalid.json");
-        await fs.writeFile(filePath, "{not-json}", "utf8");
+        await fsPromises.writeFile(filePath, "{not-json}", "utf8");
         return filePath;
       },
       expected: null,
@@ -57,15 +59,19 @@ describe("json file helpers", () => {
       const validPath = path.join(base, "valid.json");
       const invalidPath = path.join(base, "invalid.json");
       const missingPath = path.join(base, "missing.json");
-      await fs.writeFile(validPath, '{"ok":true}', "utf8");
-      await fs.writeFile(invalidPath, "{not-json}", "utf8");
+      await fsPromises.writeFile(validPath, '{"ok":true}', "utf8");
+      await fsPromises.writeFile(invalidPath, "{not-json}", "utf8");
 
       await expect(readDurableJsonFile(validPath)).resolves.toEqual({ ok: true });
       await expect(readDurableJsonFile(missingPath)).resolves.toBeNull();
-      await expect(readDurableJsonFile(invalidPath)).rejects.toMatchObject({
-        filePath: invalidPath,
-        reason: "parse",
-      } satisfies Partial<JsonFileReadError>);
+      let readError: unknown;
+      try {
+        await readDurableJsonFile(invalidPath);
+      } catch (error) {
+        readError = error;
+      }
+      expect((readError as JsonFileReadError | undefined)?.filePath).toBe(invalidPath);
+      expect((readError as JsonFileReadError | undefined)?.reason).toBe("parse");
     });
   });
 
@@ -76,10 +82,10 @@ describe("json file helpers", () => {
       await writeJsonAtomic(
         filePath,
         { ok: true, nested: { value: 1 } },
-        { trailingNewline: true, ensureDirMode: 0o755 },
+        { trailingNewline: true, dirMode: 0o755 },
       );
 
-      await expect(fs.readFile(filePath, "utf8")).resolves.toBe(
+      await expect(fsPromises.readFile(filePath, "utf8")).resolves.toBe(
         '{\n  "ok": true,\n  "nested": {\n    "value": 1\n  }\n}\n',
       );
     });
@@ -91,45 +97,57 @@ describe("json file helpers", () => {
   ])("writes text atomically for %j", async ({ input, expected }) => {
     await withTempDir({ prefix: "openclaw-json-files-" }, async (base) => {
       const filePath = path.join(base, "nested", "note.txt");
-      await writeTextAtomic(filePath, input, { appendTrailingNewline: true });
-      await expect(fs.readFile(filePath, "utf8")).resolves.toBe(expected);
+      await writeTextAtomic(filePath, input, { trailingNewline: true });
+      await expect(fsPromises.readFile(filePath, "utf8")).resolves.toBe(expected);
     });
   });
 
-  it("falls back to copy-on-replace for Windows rename EPERM", async () => {
+  it("can skip durable fsync work for hot state writes", async () => {
     await withTempDir({ prefix: "openclaw-json-files-" }, async (base) => {
       const filePath = path.join(base, "state.json");
-      await fs.writeFile(filePath, "old", "utf8");
+      const openSpy = vi.spyOn(fsPromises, "open");
+
+      await writeTextAtomic(filePath, "new", { durable: false });
+
+      expect(openSpy).not.toHaveBeenCalled();
+      await expect(fsPromises.readFile(filePath, "utf8")).resolves.toBe("new");
+    });
+  });
+
+  it("preserves text when Windows rename reports EPERM", async () => {
+    await withTempDir({ prefix: "openclaw-json-files-" }, async (base) => {
+      const filePath = path.join(base, "state.json");
+      await fsPromises.writeFile(filePath, "old", "utf8");
 
       Object.defineProperty(process, "platform", { value: "win32", configurable: true });
       const renameError = Object.assign(new Error("EPERM"), { code: "EPERM" });
-      const renameSpy = vi.spyOn(fs, "rename").mockRejectedValueOnce(renameError);
-      const copySpy = vi.spyOn(fs, "copyFile");
+      const renameSpy = vi.spyOn(fsPromises, "rename").mockRejectedValueOnce(renameError);
 
       await writeTextAtomic(filePath, "new");
 
       expect(renameSpy).toHaveBeenCalledOnce();
-      expect(copySpy).toHaveBeenCalledOnce();
-      await expect(fs.readFile(filePath, "utf8")).resolves.toBe("new");
+      await expect(fsPromises.readFile(filePath, "utf8")).resolves.toBe("new");
     });
   });
 
-  it("replaces symlink targets instead of writing through them on Windows rename fallback", async () => {
+  it("refuses Windows copy fallback through symlink destinations", async () => {
     await withTempDir({ prefix: "openclaw-json-files-" }, async (base) => {
       const filePath = path.join(base, "state.json");
       const outsidePath = path.join(base, "outside.json");
-      await fs.writeFile(outsidePath, "outside", "utf8");
-      await fs.symlink(outsidePath, filePath);
+      await fsPromises.writeFile(outsidePath, "outside", "utf8");
+      await fsPromises.symlink(outsidePath, filePath);
 
       Object.defineProperty(process, "platform", { value: "win32", configurable: true });
       const renameError = Object.assign(new Error("EPERM"), { code: "EPERM" });
-      vi.spyOn(fs, "rename").mockRejectedValueOnce(renameError);
+      vi.spyOn(fsPromises, "rename").mockRejectedValueOnce(renameError);
 
-      await writeTextAtomic(filePath, "new");
+      await expect(writeTextAtomic(filePath, "new")).rejects.toThrow(
+        "Refusing copy fallback through symlink destination",
+      );
 
-      await expect(fs.lstat(filePath)).resolves.toSatisfy((stat) => !stat.isSymbolicLink());
-      await expect(fs.readFile(filePath, "utf8")).resolves.toBe("new");
-      await expect(fs.readFile(outsidePath, "utf8")).resolves.toBe("outside");
+      const fileStat = await fsPromises.lstat(filePath);
+      expect(fileStat.isSymbolicLink()).toBe(true);
+      await expect(fsPromises.readFile(outsidePath, "utf8")).resolves.toBe("outside");
     });
   });
 
@@ -138,7 +156,7 @@ describe("json file helpers", () => {
       name: "serializes async lock callers even across rejections",
       firstTask: async (events: string[]) => {
         events.push("first:start");
-        await sleep(20);
+        await Promise.resolve();
         events.push("first:end");
         throw new Error("boom");
       },
@@ -169,5 +187,78 @@ describe("json file helpers", () => {
     await expect(first).rejects.toThrow(expectedFirstError);
     await expect(second).resolves.toBe("ok");
     expect(events).toEqual(expectedEvents);
+  });
+
+  describe("retry behaviors on 'File changed during read'", () => {
+    /**
+     * Helper: spy on fsPromises.lstat for our target file path.
+     * Returns a real Stats object with a modified ino to trigger
+     * verifyStableReadTarget in @openclaw/fs-safe.
+     * Object.assign + Object.create preserves the Stats prototype.
+     */
+    function setupLstatSpy(targetPath: string, targetCallCount: number): () => number {
+      const origLstat = fsPromises.lstat.bind(fsPromises);
+      let callCount = 0;
+
+      vi.spyOn(fsPromises, "lstat").mockImplementation(async (p, ...args) => {
+        const stat = await origLstat(p, ...args);
+        const pathStr = typeof p === "string" ? p : String(p);
+        if (pathStr === targetPath) {
+          callCount++;
+          if (callCount <= targetCallCount) {
+            // Modify ino: for BigInt ino add 100n, for number ino add 100
+            const modifiedIno = typeof stat.ino === "bigint" ? stat.ino + 100n : stat.ino + 100;
+
+            // Clone stat preserving prototype, override ino
+            return Object.assign(Object.create(Object.getPrototypeOf(stat)), stat, {
+              ino: modifiedIno,
+            });
+          }
+        }
+        return stat;
+      });
+
+      return () => callCount;
+    }
+
+    it("retries on transient File changed during read and succeeds", async () => {
+      await withTempDir({ prefix: "openclaw-json-files-retry-" }, async (base) => {
+        const filePath = path.join(base, "config.json");
+        await fsPromises.writeFile(filePath, '{"ok":true}', "utf8");
+
+        // Only fail lstat once (first call) — retry should succeed on 2nd attempt
+        const getCalls = setupLstatSpy(filePath, 1);
+
+        const result = await readJson<{ ok: boolean }>(filePath);
+        expect(result).toEqual({ ok: true });
+        // Should have at least 2 lstat calls: one failed, one successful
+        expect(getCalls()).toBeGreaterThanOrEqual(2);
+      });
+    });
+
+    it("throws JsonFileReadError after exhausting retries on persistent race", async () => {
+      await withTempDir({ prefix: "openclaw-json-files-exhaust-" }, async (base) => {
+        const filePath = path.join(base, "config.json");
+        await fsPromises.writeFile(filePath, '{"ok":true}', "utf8");
+
+        // Always fail lstat — all 3 retries should exhaust
+        setupLstatSpy(filePath, Infinity);
+
+        await expect(readJson(filePath)).rejects.toThrow(JsonFileReadError);
+      });
+    });
+
+    it("tryReadJson returns null after exhausting retries", async () => {
+      await withTempDir({ prefix: "openclaw-json-files-try-" }, async (base) => {
+        const filePath = path.join(base, "config.json");
+        await fsPromises.writeFile(filePath, '{"ok":true}', "utf8");
+
+        // Always fail lstat — tryReadJson catches and returns null
+        setupLstatSpy(filePath, Infinity);
+
+        const result = await tryReadJson(filePath);
+        expect(result).toBeNull();
+      });
+    });
   });
 });

@@ -6,7 +6,11 @@ import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { loadSessionStore } from "../../config/sessions.js";
 import type { EmbeddedPiRunResult } from "../pi-embedded.js";
-import { clearCliSessionInStore, updateSessionStoreAfterAgentRun } from "./session-store.js";
+import {
+  clearCliSessionInStore,
+  recordCliCompactionInStore,
+  updateSessionStoreAfterAgentRun,
+} from "./session-store.js";
 import { resolveSession } from "./session.js";
 
 vi.mock("../model-selection.js", () => ({
@@ -118,6 +122,15 @@ vi.mock("../../config/sessions.js", async () => {
         return {};
       }
     },
+    canonicalizeAbsoluteSessionFilePath: (filePath: string) => path.resolve(filePath),
+    rewriteSessionFileForNewSessionId: (params: {
+      sessionFile?: string;
+      previousSessionId: string;
+      nextSessionId: string;
+    }) => params.sessionFile?.replace(params.previousSessionId, params.nextSessionId),
+    resolveSessionFilePathOptions: (params: unknown) => params,
+    resolveSessionFilePath: (sessionId: string, entry?: SessionEntry) =>
+      entry?.sessionFile ?? path.join("/tmp", `${sessionId}.jsonl`),
   };
 });
 
@@ -383,8 +396,67 @@ describe("updateSessionStoreAfterAgentRun", () => {
       });
 
       const persisted = loadSessionStore(storePath, { skipCache: true })[sessionKey];
-      expect(persisted?.acp).toBeDefined();
-      expect(staleInMemory[sessionKey]?.acp).toBeDefined();
+      expect(persisted?.acp?.backend).toBe("acpx");
+      expect(persisted?.acp?.agent).toBe("codex");
+      expect(persisted?.acp?.runtimeSessionName).toBe("runtime-1");
+      expect(persisted?.acp?.mode).toBe("persistent");
+      expect(persisted?.acp?.state).toBe("idle");
+      expect(staleInMemory[sessionKey]?.acp).toEqual(persisted?.acp);
+    });
+  });
+
+  it("preserves terminal lifecycle state when caller has a stale running snapshot", async () => {
+    await withTempSessionStore(async ({ storePath }) => {
+      const cfg = {} as OpenClawConfig;
+      const sessionKey = "agent:main:explicit:test-lifecycle-preserve";
+      const sessionId = "test-lifecycle-preserve-session";
+      const terminalEntry: SessionEntry = {
+        sessionId,
+        updatedAt: 2_000,
+        status: "done",
+        startedAt: 1_000,
+        endedAt: 1_900,
+        runtimeMs: 900,
+      };
+      await fs.writeFile(storePath, JSON.stringify({ [sessionKey]: terminalEntry }, null, 2));
+
+      const staleInMemory: Record<string, SessionEntry> = {
+        [sessionKey]: {
+          sessionId,
+          updatedAt: 1_100,
+          status: "running",
+          startedAt: 1_000,
+        },
+      };
+
+      await updateSessionStoreAfterAgentRun({
+        cfg,
+        sessionId,
+        sessionKey,
+        storePath,
+        sessionStore: staleInMemory,
+        defaultProvider: "openai",
+        defaultModel: "gpt-5.4",
+        result: {
+          payloads: [],
+          meta: {
+            aborted: false,
+            agentMeta: {
+              provider: "openai",
+              model: "gpt-5.4",
+            },
+          },
+        } as never,
+      });
+
+      const persisted = loadSessionStore(storePath, { skipCache: true })[sessionKey];
+      expect(persisted?.status).toBe("done");
+      expect(persisted?.startedAt).toBe(1_000);
+      expect(persisted?.endedAt).toBe(1_900);
+      expect(persisted?.runtimeMs).toBe(900);
+      expect(persisted?.modelProvider).toBe("openai");
+      expect(persisted?.model).toBe("gpt-5.4");
+      expect(staleInMemory[sessionKey]?.status).toBe("done");
     });
   });
 
@@ -621,6 +693,68 @@ describe("updateSessionStoreAfterAgentRun", () => {
     });
   });
 
+  it("persists CLI lastCallUsage as the context snapshot (totalTokens)", async () => {
+    await withTempSessionStore(async ({ storePath }) => {
+      const cfg = {
+        agents: {
+          defaults: {
+            cliBackends: {
+              "claude-cli": { command: "claude" },
+            },
+          },
+        },
+      } as OpenClawConfig;
+      const sessionKey = "agent:main:explicit:test-cli-last-call-usage";
+      const sessionId = "test-cli-last-call-usage-session";
+      const sessionStore: Record<string, SessionEntry> = {
+        [sessionKey]: {
+          sessionId,
+          updatedAt: 1,
+        },
+      };
+      await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2));
+
+      await updateSessionStoreAfterAgentRun({
+        cfg,
+        contextTokensOverride: 1_000_000,
+        sessionId,
+        sessionKey,
+        storePath,
+        sessionStore,
+        defaultProvider: "claude-cli",
+        defaultModel: "claude-opus-4-7",
+        result: {
+          meta: {
+            durationMs: 1,
+            executionTrace: { runner: "cli" },
+            agentMeta: {
+              sessionId,
+              provider: "claude-cli",
+              model: "claude-opus-4-7",
+              usage: {
+                input: 6,
+                output: 25,
+                cacheRead: 50_000,
+                cacheWrite: 0,
+              },
+              lastCallUsage: {
+                input: 6,
+                output: 25,
+                cacheRead: 50_000,
+                cacheWrite: 0,
+              },
+            },
+          },
+        },
+      });
+
+      expect(sessionStore[sessionKey]?.totalTokens).toBe(50_006);
+      expect(sessionStore[sessionKey]?.totalTokensFresh).toBe(true);
+      expect(loadSessionStore(storePath)[sessionKey]?.totalTokens).toBe(50_006);
+      expect(loadSessionStore(storePath)[sessionKey]?.totalTokensFresh).toBe(true);
+    });
+  });
+
   it("persists compaction tokensAfter when provider usage is unavailable", async () => {
     await withTempSessionStore(async ({ storePath }) => {
       const cfg = {} as OpenClawConfig;
@@ -665,6 +799,49 @@ describe("updateSessionStoreAfterAgentRun", () => {
       const persisted = loadSessionStore(storePath);
       expect(persisted[sessionKey]?.totalTokens).toBe(21_225);
       expect(persisted[sessionKey]?.totalTokensFresh).toBe(true);
+    });
+  });
+
+  it("accepts zero compaction tokensAfter when provider usage is unavailable", async () => {
+    await withTempSessionStore(async ({ storePath }) => {
+      const cfg = {} as OpenClawConfig;
+      const sessionKey = "agent:main:explicit:test-zero-compaction-tokens-after";
+      const sessionId = "test-zero-compaction-tokens-after-session";
+      const sessionStore: Record<string, SessionEntry> = {
+        [sessionKey]: {
+          sessionId,
+          updatedAt: 1,
+          totalTokens: 12_000,
+          totalTokensFresh: true,
+        },
+      };
+      await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2));
+
+      await updateSessionStoreAfterAgentRun({
+        cfg,
+        sessionId,
+        sessionKey,
+        storePath,
+        sessionStore,
+        defaultProvider: "minimax",
+        defaultModel: "MiniMax-M2.7",
+        result: {
+          meta: {
+            durationMs: 500,
+            agentMeta: {
+              sessionId,
+              provider: "minimax",
+              model: "MiniMax-M2.7",
+              compactionCount: 1,
+              compactionTokensAfter: 0,
+            },
+          },
+        } as EmbeddedPiRunResult,
+      });
+
+      expect(sessionStore[sessionKey]?.totalTokens).toBe(0);
+      expect(sessionStore[sessionKey]?.totalTokensFresh).toBe(true);
+      expect(sessionStore[sessionKey]?.compactionCount).toBe(1);
     });
   });
 
@@ -875,6 +1052,372 @@ describe("updateSessionStoreAfterAgentRun", () => {
       });
 
       expect(sessionStore[sessionKey]?.lastInteractionAt).toBeGreaterThan(lastInteractionAt);
+    });
+  });
+
+  it("preserves runtime model and contextTokens when preserveRuntimeModel is true (heartbeat bleed fix)", async () => {
+    await withTempSessionStore(async ({ storePath }) => {
+      const cfg = {} as OpenClawConfig;
+      const sessionKey = "agent:main:explicit:test-heartbeat-bleed";
+      const sessionId = "test-heartbeat-bleed-session";
+      const sessionStore: Record<string, SessionEntry> = {
+        [sessionKey]: {
+          sessionId,
+          updatedAt: 1,
+          modelProvider: "anthropic",
+          model: "claude-opus-4-6",
+          contextTokens: 1_000_000,
+        },
+      };
+      await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2));
+
+      // Heartbeat turn uses a different model
+      const result: EmbeddedPiRunResult = {
+        meta: {
+          durationMs: 500,
+          agentMeta: {
+            sessionId,
+            provider: "ollama",
+            model: "llama3.2:1b",
+            contextTokens: 128_000,
+          },
+        },
+      };
+
+      await updateSessionStoreAfterAgentRun({
+        cfg,
+        sessionId,
+        sessionKey,
+        storePath,
+        sessionStore,
+        defaultProvider: "anthropic",
+        defaultModel: "claude-opus-4-6",
+        result,
+        preserveRuntimeModel: true,
+      });
+
+      // Runtime model and contextTokens should be preserved from the original entry
+      expect(sessionStore[sessionKey]?.model).toBe("claude-opus-4-6");
+      expect(sessionStore[sessionKey]?.modelProvider).toBe("anthropic");
+      expect(sessionStore[sessionKey]?.contextTokens).toBe(1_000_000);
+
+      const persisted = loadSessionStore(storePath);
+      expect(persisted[sessionKey]?.model).toBe("claude-opus-4-6");
+      expect(persisted[sessionKey]?.modelProvider).toBe("anthropic");
+      expect(persisted[sessionKey]?.contextTokens).toBe(1_000_000);
+    });
+  });
+
+  it("leaves contextTokens unset when entry has prior model but no contextTokens (heartbeat bleed guard)", async () => {
+    await withTempSessionStore(async ({ storePath }) => {
+      const cfg = {} as OpenClawConfig;
+      const sessionKey = "agent:main:explicit:test-heartbeat-no-context-tokens";
+      const sessionId = "test-heartbeat-no-context-tokens-session";
+      const sessionStore: Record<string, SessionEntry> = {
+        [sessionKey]: {
+          sessionId,
+          updatedAt: 1,
+          modelProvider: "anthropic",
+          model: "claude-opus-4-6",
+          // contextTokens intentionally missing — older session without cached context
+        },
+      };
+      await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2));
+
+      // Heartbeat turn uses a different, smaller model
+      const result: EmbeddedPiRunResult = {
+        meta: {
+          durationMs: 500,
+          agentMeta: {
+            sessionId,
+            provider: "ollama",
+            model: "llama3.2:1b",
+            contextTokens: 128_000,
+          },
+        },
+      };
+
+      await updateSessionStoreAfterAgentRun({
+        cfg,
+        sessionId,
+        sessionKey,
+        storePath,
+        sessionStore,
+        defaultProvider: "anthropic",
+        defaultModel: "claude-opus-4-6",
+        result,
+        preserveRuntimeModel: true,
+      });
+
+      // Runtime model should be preserved
+      expect(sessionStore[sessionKey]?.model).toBe("claude-opus-4-6");
+      expect(sessionStore[sessionKey]?.modelProvider).toBe("anthropic");
+      // contextTokens should NOT bleed from the heartbeat run's smaller window
+      expect(sessionStore[sessionKey]?.contextTokens).toBeUndefined();
+    });
+  });
+
+  it("does not set runtime model when preserveRuntimeModel is true and entry has no prior runtime model", async () => {
+    await withTempSessionStore(async ({ storePath }) => {
+      const cfg = {} as OpenClawConfig;
+      const sessionKey = "agent:main:explicit:test-heartbeat-new-session";
+      const sessionId = "test-heartbeat-new-session-id";
+      const sessionStore: Record<string, SessionEntry> = {
+        [sessionKey]: {
+          sessionId,
+          updatedAt: 1,
+        },
+      };
+      await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2));
+
+      const result: EmbeddedPiRunResult = {
+        meta: {
+          durationMs: 500,
+          agentMeta: {
+            sessionId,
+            provider: "ollama",
+            model: "llama3.2:1b",
+            contextTokens: 128_000,
+          },
+        },
+      };
+
+      await updateSessionStoreAfterAgentRun({
+        cfg,
+        sessionId,
+        sessionKey,
+        storePath,
+        sessionStore,
+        defaultProvider: "ollama",
+        defaultModel: "llama3.2:1b",
+        result,
+        preserveRuntimeModel: true,
+      });
+
+      // Heartbeat should NOT establish initial model state on an empty session
+      expect(sessionStore[sessionKey]?.model).toBeUndefined();
+      expect(sessionStore[sessionKey]?.modelProvider).toBeUndefined();
+      expect(sessionStore[sessionKey]?.contextTokens).toBeUndefined();
+    });
+  });
+
+  it("preserves model without borrowing heartbeat provider when entry has model but no modelProvider", async () => {
+    await withTempSessionStore(async ({ storePath }) => {
+      const cfg = {} as OpenClawConfig;
+      const sessionKey = "agent:main:explicit:test-heartbeat-model-no-provider";
+      const sessionId = "test-heartbeat-model-no-provider-session";
+      const sessionStore: Record<string, SessionEntry> = {
+        [sessionKey]: {
+          sessionId,
+          updatedAt: 1,
+          model: "claude-opus-4-6",
+          // modelProvider intentionally missing
+        },
+      };
+      await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2));
+
+      // Heartbeat turn uses a different provider
+      const result: EmbeddedPiRunResult = {
+        meta: {
+          durationMs: 500,
+          agentMeta: {
+            sessionId,
+            provider: "ollama",
+            model: "llama3.2:1b",
+            contextTokens: 128_000,
+          },
+        },
+      };
+
+      await updateSessionStoreAfterAgentRun({
+        cfg,
+        sessionId,
+        sessionKey,
+        storePath,
+        sessionStore,
+        defaultProvider: "anthropic",
+        defaultModel: "claude-opus-4-6",
+        result,
+        preserveRuntimeModel: true,
+      });
+
+      // Model preserved, provider NOT borrowed from heartbeat
+      expect(sessionStore[sessionKey]?.model).toBe("claude-opus-4-6");
+      expect(sessionStore[sessionKey]?.modelProvider).toBeUndefined();
+
+      const persisted = loadSessionStore(storePath);
+      expect(persisted[sessionKey]?.model).toBe("claude-opus-4-6");
+      expect(persisted[sessionKey]?.modelProvider).toBeUndefined();
+    });
+  });
+
+  it("overwrites runtime model when preserveRuntimeModel is false (default behavior)", async () => {
+    await withTempSessionStore(async ({ storePath }) => {
+      const cfg = {} as OpenClawConfig;
+      const sessionKey = "agent:main:explicit:test-normal-overwrite";
+      const sessionId = "test-normal-overwrite-session";
+      const sessionStore: Record<string, SessionEntry> = {
+        [sessionKey]: {
+          sessionId,
+          updatedAt: 1,
+          modelProvider: "anthropic",
+          model: "claude-opus-4-6",
+          contextTokens: 1_000_000,
+        },
+      };
+      await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2));
+
+      const result: EmbeddedPiRunResult = {
+        meta: {
+          durationMs: 500,
+          agentMeta: {
+            sessionId,
+            provider: "openai",
+            model: "gpt-5.4",
+            contextTokens: 400_000,
+          },
+        },
+      };
+
+      await updateSessionStoreAfterAgentRun({
+        cfg,
+        sessionId,
+        sessionKey,
+        storePath,
+        sessionStore,
+        defaultProvider: "openai",
+        defaultModel: "gpt-5.4",
+        result,
+      });
+
+      // Normal turn: runtime model is updated
+      expect(sessionStore[sessionKey]?.model).toBe("gpt-5.4");
+      expect(sessionStore[sessionKey]?.modelProvider).toBe("openai");
+      expect(sessionStore[sessionKey]?.contextTokens).toBe(400_000);
+    });
+  });
+});
+
+describe("recordCliCompactionInStore", () => {
+  it("persists native compaction token counts and clears stale CLI usage breakdown", async () => {
+    await withTempSessionStore(async ({ storePath }) => {
+      const sessionKey = "agent:main:explicit:test-record-cli-compaction";
+      const sessionId = "test-record-cli-compaction-session";
+      const sessionStore: Record<string, SessionEntry> = {
+        [sessionKey]: {
+          sessionId,
+          updatedAt: 1,
+          totalTokens: 12_000,
+          totalTokensFresh: true,
+          inputTokens: 9_000,
+          outputTokens: 100,
+          cacheRead: 2_900,
+          cacheWrite: 0,
+          cliSessionBindings: {
+            codex: {
+              sessionId: "stale-cli-session",
+            },
+          },
+          cliSessionIds: {
+            codex: "stale-cli-session",
+          },
+        },
+      };
+      await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2));
+
+      await recordCliCompactionInStore({
+        provider: "codex",
+        sessionKey,
+        sessionStore,
+        storePath,
+        tokensAfter: 0,
+      });
+
+      const persisted = loadSessionStore(storePath);
+      expect(sessionStore[sessionKey]?.compactionCount).toBe(1);
+      expect(sessionStore[sessionKey]?.totalTokens).toBe(0);
+      expect(sessionStore[sessionKey]?.totalTokensFresh).toBe(true);
+      expect(sessionStore[sessionKey]?.inputTokens).toBeUndefined();
+      expect(sessionStore[sessionKey]?.outputTokens).toBeUndefined();
+      expect(sessionStore[sessionKey]?.cacheRead).toBeUndefined();
+      expect(sessionStore[sessionKey]?.cacheWrite).toBeUndefined();
+      expect(sessionStore[sessionKey]?.cliSessionBindings?.codex).toBeUndefined();
+      expect(sessionStore[sessionKey]?.cliSessionIds?.codex).toBeUndefined();
+      expect(persisted[sessionKey]?.totalTokens).toBe(0);
+      expect(persisted[sessionKey]?.totalTokensFresh).toBe(true);
+    });
+  });
+
+  it("marks CLI token counts stale when native compaction returns no token count", async () => {
+    await withTempSessionStore(async ({ storePath }) => {
+      const sessionKey = "agent:main:explicit:test-record-cli-compaction-unknown";
+      const sessionId = "test-record-cli-compaction-unknown-session";
+      const sessionStore: Record<string, SessionEntry> = {
+        [sessionKey]: {
+          sessionId,
+          updatedAt: 1,
+          totalTokens: 37_000,
+          totalTokensFresh: true,
+          inputTokens: 30_000,
+          outputTokens: 100,
+          cacheRead: 6_900,
+          cacheWrite: 0,
+        },
+      };
+      await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2));
+
+      await recordCliCompactionInStore({
+        provider: "codex",
+        sessionKey,
+        sessionStore,
+        storePath,
+      });
+
+      const persisted = loadSessionStore(storePath);
+      expect(sessionStore[sessionKey]?.compactionCount).toBe(1);
+      expect(sessionStore[sessionKey]?.totalTokens).toBe(37_000);
+      expect(sessionStore[sessionKey]?.totalTokensFresh).toBe(false);
+      expect(sessionStore[sessionKey]?.inputTokens).toBeUndefined();
+      expect(sessionStore[sessionKey]?.outputTokens).toBeUndefined();
+      expect(sessionStore[sessionKey]?.cacheRead).toBeUndefined();
+      expect(sessionStore[sessionKey]?.cacheWrite).toBeUndefined();
+      expect(persisted[sessionKey]?.totalTokens).toBe(37_000);
+      expect(persisted[sessionKey]?.totalTokensFresh).toBe(false);
+    });
+  });
+
+  it("persists successor session handles from native CLI compaction", async () => {
+    await withTempSessionStore(async ({ dir, storePath }) => {
+      const sessionKey = "agent:main:explicit:test-record-cli-compaction-rotate";
+      const sessionId = "test-record-cli-compaction-rotate-session";
+      const nextSessionId = "test-record-cli-compaction-rotate-next";
+      const nextSessionFile = path.join(dir, `${nextSessionId}.jsonl`);
+      const sessionStore: Record<string, SessionEntry> = {
+        [sessionKey]: {
+          sessionId,
+          updatedAt: 1,
+          sessionFile: path.join(dir, `${sessionId}.jsonl`),
+        },
+      };
+      await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2));
+
+      await recordCliCompactionInStore({
+        provider: "codex",
+        sessionKey,
+        sessionStore,
+        storePath,
+        newSessionId: nextSessionId,
+        newSessionFile: nextSessionFile,
+      });
+
+      expect(sessionStore[sessionKey]?.sessionId).toBe(nextSessionId);
+      expect(sessionStore[sessionKey]?.sessionFile).toBe(nextSessionFile);
+      expect(sessionStore[sessionKey]?.usageFamilyKey).toBe(sessionKey);
+      expect(sessionStore[sessionKey]?.usageFamilySessionIds).toEqual([sessionId, nextSessionId]);
+
+      const persisted = loadSessionStore(storePath);
+      expect(persisted[sessionKey]?.sessionId).toBe(nextSessionId);
+      expect(persisted[sessionKey]?.sessionFile).toBe(nextSessionFile);
     });
   });
 });

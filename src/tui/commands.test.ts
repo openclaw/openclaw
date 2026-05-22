@@ -55,6 +55,37 @@ describe("getSlashCommands", () => {
       { value: "max", label: "max" },
     ]);
   });
+
+  it("falls back to provider-resolved levels when thinkingLevels is empty (#76482)", async () => {
+    const commands = getSlashCommands({
+      provider: "anthropic",
+      model: "claude-sonnet-4-6",
+      thinkingLevels: [], // empty from lightweight session row
+    });
+    const think = commands.find((command) => command.name === "think");
+    // Should fall back to listThinkingLevelLabels, not return empty completions
+    const completions = await think?.getArgumentCompletions?.("");
+    expect(completions?.length).toBeGreaterThan(0);
+  });
+
+  it("merges dynamic gateway commands", () => {
+    const commands = getSlashCommands({
+      dynamicCommands: [
+        {
+          name: "dreaming",
+          textAliases: ["/dreaming"],
+          description: "Enable or disable memory dreaming.",
+          source: "plugin",
+          scope: "both",
+          acceptsArgs: true,
+        },
+      ],
+    });
+
+    expect(commands.find((command) => command.name === "dreaming")?.description).toBe(
+      "Enable or disable memory dreaming.",
+    );
+  });
 });
 
 describe("helpText", () => {

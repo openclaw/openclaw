@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type { StreamFn } from "@mariozechner/pi-agent-core";
+import type { StreamFn } from "@earendil-works/pi-agent-core";
 import type {
   AssistantMessage,
   StopReason,
@@ -8,8 +8,8 @@ import type {
   ToolCall,
   Tool,
   Usage,
-} from "@mariozechner/pi-ai";
-import { createAssistantMessageEventStream, streamSimple } from "@mariozechner/pi-ai";
+} from "@earendil-works/pi-ai";
+import { createAssistantMessageEventStream, streamSimple } from "@earendil-works/pi-ai";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type {
   OpenClawConfig,
@@ -28,7 +28,10 @@ import {
 } from "openclaw/plugin-sdk/provider-stream-shared";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
-import { normalizeLowercaseStringOrEmpty, readStringValue } from "openclaw/plugin-sdk/text-runtime";
+import {
+  normalizeLowercaseStringOrEmpty,
+  readStringValue,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { OLLAMA_DEFAULT_BASE_URL } from "./defaults.js";
 import { normalizeOllamaWireModelId } from "./model-id.js";
 import {
@@ -275,6 +278,15 @@ function resolveOllamaThinkParamValue(
   return undefined;
 }
 
+function shouldForwardNativeOllamaThink(
+  model: ProviderRuntimeModel | undefined,
+  think: OllamaThinkValue,
+): boolean {
+  // Ollama accepts top-level `think` as the native chat contract, but rejects
+  // truthy values for models known not to expose thinking support.
+  return think === false || model?.reasoning !== false;
+}
+
 function resolveOllamaConfiguredNumCtx(model: ProviderRuntimeModel): number | undefined {
   const raw = model.params?.num_ctx;
   if (typeof raw !== "number" || !Number.isFinite(raw) || raw <= 0) {
@@ -290,6 +302,21 @@ function resolveOllamaNumCtx(model: ProviderRuntimeModel): number {
   );
 }
 
+/**
+ * Resolves num_ctx for native /api/chat requests:
+ *  1. explicit `params.num_ctx` set on the model wins,
+ *  2. otherwise return undefined so Ollama's model, OLLAMA_CONTEXT_LENGTH,
+ *     VRAM, or Modelfile policy decides.
+ *
+ * This intentionally differs from `resolveOllamaNumCtx` by not falling back
+ * to `DEFAULT_CONTEXT_TOKENS`: that constant is a sane wrapper-side guess for
+ * the OpenAI-compat path, but native `/api/chat` should not force the full
+ * advertised catalog context for local models unless the operator opted in.
+ */
+function resolveOllamaNativeNumCtx(model: ProviderRuntimeModel): number | undefined {
+  return resolveOllamaConfiguredNumCtx(model);
+}
+
 function resolveOllamaModelOptions(model: ProviderRuntimeModel): Record<string, unknown> {
   const options: Record<string, unknown> = {};
   const params = model.params;
@@ -303,7 +330,7 @@ function resolveOllamaModelOptions(model: ProviderRuntimeModel): Record<string, 
       }
     }
   }
-  const numCtx = resolveOllamaConfiguredNumCtx(model);
+  const numCtx = resolveOllamaNativeNumCtx(model);
   if (numCtx !== undefined) {
     options.num_ctx = numCtx;
   }
@@ -323,7 +350,7 @@ function resolveOllamaTopLevelParams(
     }
   }
   const think = resolveOllamaThinkParamValue(params);
-  if (think !== undefined) {
+  if (think !== undefined && shouldForwardNativeOllamaThink(model, think)) {
     requestParams.think = think;
   }
   return Object.keys(requestParams).length > 0 ? requestParams : undefined;
@@ -372,7 +399,7 @@ export function createConfiguredOllamaCompatStreamWrapper(
     runtimeThinkValue === false && configuredThinkValue !== undefined
       ? undefined
       : runtimeThinkValue;
-  if (ollamaThinkValue !== undefined) {
+  if (ollamaThinkValue !== undefined && shouldForwardNativeOllamaThink(model, ollamaThinkValue)) {
     streamFn = createOllamaThinkingWrapper(streamFn, ollamaThinkValue);
   }
 
@@ -507,6 +534,7 @@ interface OllamaTool {
 }
 
 interface OllamaToolCall {
+  id?: string;
   function: {
     name: string;
     arguments: Record<string, unknown> | string;
@@ -762,6 +790,10 @@ type OllamaToolCallNameOptions = {
   availableToolNames?: ReadonlySet<string>;
 };
 
+function readOllamaToolCallId(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
+}
+
 function extractToolCalls(
   content: unknown,
   options: OllamaToolCallNameOptions = {},
@@ -773,14 +805,18 @@ function extractToolCalls(
   const result: OllamaToolCall[] = [];
   for (const part of parts) {
     if (part.type === "toolCall") {
+      const id = readOllamaToolCallId(part.id);
       result.push({
+        ...(id ? { id } : {}),
         function: {
           name: normalizeOllamaToolCallName(part.name, options),
           arguments: ensureArgsObject(part.arguments),
         },
       });
     } else if (part.type === "tool_use") {
+      const id = readOllamaToolCallId(part.id);
       result.push({
+        ...(id ? { id } : {}),
         function: {
           name: normalizeOllamaToolCallName(part.name, options),
           arguments: ensureArgsObject(part.input),
@@ -925,7 +961,7 @@ export function buildAssistantMessage(
     for (const toolCall of toolCalls) {
       content.push({
         type: "toolCall",
-        id: `ollama_call_${randomUUID()}`,
+        id: readOllamaToolCallId(toolCall.id) ?? `ollama_call_${randomUUID()}`,
         name: normalizeOllamaToolCallName(toolCall.function.name, options),
         arguments: normalizeOllamaToolCallArguments(toolCall.function.arguments),
       });

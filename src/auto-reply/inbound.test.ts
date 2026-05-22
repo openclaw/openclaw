@@ -118,8 +118,79 @@ describe("finalizeInboundContext", () => {
     expect(out.BodyForAgent).toBe("raw\nline");
     expect(out.BodyForCommands).toBe("raw\nline");
     expect(out.CommandAuthorized).toBe(false);
+    expect(out.CommandTurn).toMatchObject({
+      kind: "normal",
+      source: "message",
+      authorized: false,
+    });
     expect(out.ChatType).toBe("channel");
     expect(out.ConversationLabel).toContain("Test");
+  });
+
+  it("normalizes structured command turn context and legacy command fields together", () => {
+    const out = finalizeInboundContext({
+      Body: "/status",
+      CommandBody: "/status",
+      CommandAuthorized: false,
+      CommandTurn: {
+        kind: "text-slash" as const,
+        source: "text" as const,
+        authorized: true,
+      },
+    });
+
+    expect(out.CommandTurn).toMatchObject({
+      kind: "text-slash",
+      source: "text",
+      authorized: true,
+      commandName: "status",
+      body: "/status",
+    });
+    expect(out.CommandSource).toBe("text");
+    expect(out.CommandAuthorized).toBe(true);
+  });
+
+  it("clears stale legacy command source without dropping normal-turn command auth", () => {
+    const out = finalizeInboundContext({
+      Body: "hello",
+      CommandSource: "native",
+      CommandAuthorized: true,
+      CommandTurn: {
+        kind: "normal" as const,
+        source: "message" as const,
+        authorized: false,
+      },
+    });
+
+    expect(out.CommandTurn).toMatchObject({
+      kind: "normal",
+      source: "message",
+      authorized: false,
+    });
+    expect(out.CommandSource).toBeUndefined();
+    expect(out.CommandAuthorized).toBe(true);
+  });
+
+  it("keeps normal command authorization stable across repeated finalization", () => {
+    const out = finalizeInboundContext({
+      Body: "please inspect `/tmp/foo`",
+      CommandAuthorized: true,
+      CommandTurn: {
+        kind: "normal" as const,
+        source: "message" as const,
+        authorized: false,
+      },
+    });
+
+    const refinalized = finalizeInboundContext(out);
+
+    expect(refinalized.CommandTurn).toMatchObject({
+      kind: "normal",
+      source: "message",
+      authorized: false,
+    });
+    expect(refinalized.CommandSource).toBeUndefined();
+    expect(refinalized.CommandAuthorized).toBe(true);
   });
 
   it("sanitizes spoofed system markers in user-controlled text fields", () => {
@@ -309,9 +380,36 @@ describe("createInboundDebouncer", () => {
     await debouncer.enqueue({ key: "a", id: "1" });
     await debouncer.enqueue({ key: "a", id: "2" });
 
-    expect(calls).toEqual([]);
+    expect(calls).toStrictEqual([]);
     await vi.advanceTimersByTimeAsync(10);
     expect(calls).toEqual([["1", "2"]]);
+
+    vi.useRealTimers();
+  });
+
+  it("reports buffered items when cancelling a key", async () => {
+    vi.useFakeTimers();
+    const calls: Array<string[]> = [];
+    const canceled: Array<string[]> = [];
+
+    const debouncer = createInboundDebouncer<{ key: string; id: string }>({
+      debounceMs: 10,
+      buildKey: (item) => item.key,
+      onFlush: async (items) => {
+        calls.push(items.map((entry) => entry.id));
+      },
+      onCancel: (items) => {
+        canceled.push(items.map((entry) => entry.id));
+      },
+    });
+
+    await debouncer.enqueue({ key: "a", id: "1" });
+    await debouncer.enqueue({ key: "a", id: "2" });
+    expect(debouncer.cancelKey("a")).toBe(true);
+    await vi.advanceTimersByTimeAsync(10);
+
+    expect(canceled).toEqual([["1", "2"]]);
+    expect(calls).toEqual([]);
 
     vi.useRealTimers();
   });
@@ -353,7 +451,7 @@ describe("createInboundDebouncer", () => {
     await debouncer.enqueue({ key: "forward", id: "1", windowMs: 30 });
     await debouncer.enqueue({ key: "forward", id: "2", windowMs: 30 });
 
-    expect(calls).toEqual([]);
+    expect(calls).toStrictEqual([]);
     await vi.advanceTimersByTimeAsync(30);
     expect(calls).toEqual([["1", "2"]]);
 
@@ -363,7 +461,7 @@ describe("createInboundDebouncer", () => {
   it("keeps later same-key work behind a timer-backed flush that already started", async () => {
     const started: string[] = [];
     const finished: string[] = [];
-    let releaseFirst!: () => void;
+    let releaseFirst: (() => void) | undefined;
     const firstGate = new Promise<void>((resolve) => {
       releaseFirst = resolve;
     });
@@ -402,8 +500,11 @@ describe("createInboundDebouncer", () => {
       await Promise.resolve();
 
       expect(started).toEqual(["1"]);
-      expect(finished).toEqual([]);
+      expect(finished).toStrictEqual([]);
 
+      if (!releaseFirst) {
+        throw new Error("Expected first inbound debounce release callback to be initialized");
+      }
       releaseFirst();
       await Promise.all([firstFlush, secondEnqueue]);
 
@@ -417,7 +518,7 @@ describe("createInboundDebouncer", () => {
   it("keeps fire-and-forget keyed work ahead of a later buffered item", async () => {
     const started: string[] = [];
     const finished: string[] = [];
-    let releaseFirst!: () => void;
+    let releaseFirst: (() => void) | undefined;
     const firstGate = new Promise<void>((resolve) => {
       releaseFirst = resolve;
     });
@@ -470,8 +571,11 @@ describe("createInboundDebouncer", () => {
       await Promise.resolve();
 
       expect(started).toEqual(["1"]);
-      expect(finished).toEqual([]);
+      expect(finished).toStrictEqual([]);
 
+      if (!releaseFirst) {
+        throw new Error("Expected first inbound debounce release callback to be initialized");
+      }
       releaseFirst();
       await Promise.all([firstFlush, secondEnqueue, thirdFlush, thirdEnqueue]);
 
@@ -482,9 +586,9 @@ describe("createInboundDebouncer", () => {
     }
   });
 
-  it("does not serialize keyed turns when debounce is disabled and no keyed chain exists", async () => {
+  it("does not serialize keyed turns by default when debounce is disabled", async () => {
     const started: string[] = [];
-    let releaseFirst!: () => void;
+    let releaseFirst: (() => void) | undefined;
     const firstGate = new Promise<void>((resolve) => {
       releaseFirst = resolve;
     });
@@ -508,8 +612,46 @@ describe("createInboundDebouncer", () => {
 
     expect(started).toEqual(["1", "2"]);
 
+    if (!releaseFirst) {
+      throw new Error("Expected first inbound debounce release callback to be initialized");
+    }
     releaseFirst();
     await Promise.all([first, second]);
+  });
+
+  it("serializes keyed turns when immediate serialization is enabled", async () => {
+    const started: string[] = [];
+    let releaseFirst: (() => void) | undefined;
+    const firstGate = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+
+    const debouncer = createInboundDebouncer<{ key: string; id: string }>({
+      debounceMs: 0,
+      serializeImmediate: true,
+      buildKey: (item) => item.key,
+      onFlush: async (items) => {
+        const id = items[0]?.id ?? "";
+        started.push(id);
+        if (id === "1") {
+          await firstGate;
+        }
+      },
+    });
+
+    const first = debouncer.enqueue({ key: "a", id: "1" });
+    await Promise.resolve();
+    const second = debouncer.enqueue({ key: "a", id: "2" });
+    await Promise.resolve();
+
+    expect(started).toEqual(["1"]);
+
+    if (!releaseFirst) {
+      throw new Error("Expected first inbound debounce release callback to be initialized");
+    }
+    releaseFirst();
+    await Promise.all([first, second]);
+    expect(started).toEqual(["1", "2"]);
   });
 
   it("swallows onError failures so keyed chains still complete", async () => {
@@ -548,8 +690,8 @@ describe("createInboundDebouncer", () => {
 
     try {
       await expect(debouncer.enqueue({ key: "a", id: "1" })).resolves.toBeUndefined();
-      await new Promise((resolve) => setTimeout(resolve, 0));
-      expect(unhandled).toEqual([]);
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(unhandled).toStrictEqual([]);
     } finally {
       process.off("unhandledRejection", onUnhandledRejection);
     }
@@ -582,7 +724,7 @@ describe("createInboundDebouncer", () => {
   it("keeps same-key overflow work ordered after falling back to immediate flushes", async () => {
     const started: string[] = [];
     const finished: string[] = [];
-    let releaseOverflow!: () => void;
+    let releaseOverflow: (() => void) | undefined;
     const overflowGate = new Promise<void>((resolve) => {
       releaseOverflow = resolve;
     });
@@ -630,8 +772,11 @@ describe("createInboundDebouncer", () => {
 
       await Promise.resolve();
       expect(started).toEqual(["2"]);
-      expect(finished).toEqual([]);
+      expect(finished).toStrictEqual([]);
 
+      if (!releaseOverflow) {
+        throw new Error("Expected inbound overflow release callback to be initialized");
+      }
       releaseOverflow();
       await Promise.all([overflowEnqueue, bufferedEnqueue, bufferedFlush]);
 
@@ -645,7 +790,7 @@ describe("createInboundDebouncer", () => {
   it("counts tracked debounce keys by union of buffers and active chains", async () => {
     const started: string[] = [];
     const finished: string[] = [];
-    let releaseChainOnly!: () => void;
+    let releaseChainOnly: (() => void) | undefined;
     const chainOnlyGate = new Promise<void>((resolve) => {
       releaseChainOnly = resolve;
     });
@@ -707,6 +852,9 @@ describe("createInboundDebouncer", () => {
         expect(finished).toEqual(["4"]);
       });
 
+      if (!releaseChainOnly) {
+        throw new Error("Expected inbound chain-only release callback to be initialized");
+      }
       releaseChainOnly();
       await Promise.all([secondFlush, overflowEnqueue]);
       expect(finished).toEqual(["4", "2"]);
@@ -781,6 +929,18 @@ describe("mention helpers", () => {
       messages: { groupChat: { mentionPatterns: ["\\bopenclaw\\b"] } },
     });
     expect(matchesMentionPatterns("OPENCLAW: hi", regexes)).toBe(true);
+  });
+
+  it("lets catch-all mention patterns match empty text", () => {
+    const catchAllRegexes = buildMentionRegexes({
+      messages: { groupChat: { mentionPatterns: [".*"] } },
+    });
+    const specificRegexes = buildMentionRegexes({
+      messages: { groupChat: { mentionPatterns: ["\\bopenclaw\\b"] } },
+    });
+
+    expect(matchesMentionPatterns("", catchAllRegexes)).toBe(true);
+    expect(matchesMentionPatterns("", specificRegexes)).toBe(false);
   });
 
   it("uses per-agent mention patterns when configured", () => {
@@ -1027,7 +1187,7 @@ describe("resolveGroupRequireMention", () => {
   it("preserves plugin-backed channel requireMention resolution", async () => {
     const cfg: OpenClawConfig = {
       channels: {
-        bluebubbles: {
+        imessage: {
           groups: {
             "chat:primary": { requireMention: false },
           },
@@ -1035,12 +1195,12 @@ describe("resolveGroupRequireMention", () => {
       },
     };
     const ctx: TemplateContext = {
-      Provider: "bluebubbles",
-      From: "bluebubbles:group:chat:primary",
+      Provider: "imessage",
+      From: "imessage:group:chat:primary",
     };
     const groupResolution: GroupKeyResolution = {
-      key: "bluebubbles:group:chat:primary",
-      channel: "bluebubbles",
+      key: "imessage:group:chat:primary",
+      channel: "imessage",
       id: "chat:primary",
       chatType: "group",
     };

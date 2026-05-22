@@ -38,7 +38,7 @@ Skill Workshop is useful when the agent learns a procedure such as:
 
 It is not intended for:
 
-- facts like “the user likes blue”
+- facts like "the user likes blue"
 - broad autobiographical memory
 - raw transcript archiving
 - secrets, credentials, or hidden prompt text
@@ -217,7 +217,7 @@ The reviewer has no tools:
 - `toolsAllow: []`
 - `disableMessageTool: true`
 
-The reviewer returns either `{ "action": "none" }` or one proposal. The `action` field is `create`, `append`, or `replace` — prefer `append`/`replace` when a relevant skill already exists; use `create` only when no existing skill fits.
+The reviewer returns either `{ "action": "none" }` or one proposal. The `action` field is `create`, `append`, or `replace` - prefer `append`/`replace` when a relevant skill already exists; use `create` only when no existing skill fits.
 
 Example `create`:
 
@@ -357,7 +357,7 @@ Create a proposal. With `approvalPolicy: "pending"` (default), this queues inste
 ```
 
 <AccordionGroup>
-  <Accordion title="Force a safe write (apply: true)">
+  <Accordion title="Request immediate write in auto mode (apply: true)">
 
 ```json
 {
@@ -368,6 +368,9 @@ Create a proposal. With `approvalPolicy: "pending"` (default), this queues inste
   "body": "## Workflow\n\n- Verify true animation.\n- Record attribution."
 }
 ```
+
+With `approvalPolicy: "pending"`, `apply: true` still queues the proposal. Review it, then use
+the `apply` action after approval.
 
   </Accordion>
 
@@ -416,6 +419,9 @@ Create a proposal. With `approvalPolicy: "pending"` (default), this queues inste
 ### `apply`
 
 Apply a pending proposal.
+
+With `approvalPolicy: "pending"`, this action asks for operator approval before writing the
+workspace skill.
 
 ```json
 {
@@ -551,8 +557,8 @@ The guidance emphasizes:
 
 The write mode text changes with `approvalPolicy`:
 
-- pending mode: queue suggestions; apply only after explicit approval
-- auto mode: apply safe workspace-skill updates when clearly reusable
+- pending mode: queue suggestions; use `apply` after explicit approval
+- auto mode: apply safe workspace-skill updates unless `apply: false` queues instead
 
 ## Costs and runtime behavior
 
@@ -579,12 +585,12 @@ warning/debug message and skips that review pass.
 
 Use Skill Workshop when the user says:
 
-- “next time, do X”
-- “from now on, prefer Y”
-- “make sure to verify Z”
-- “save this as a workflow”
-- “this took a while; remember the process”
-- “update the local skill for this”
+- "next time, do X"
+- "from now on, prefer Y"
+- "make sure to verify Z"
+- "save this as a workflow"
+- "this took a while; remember the process"
+- "update the local skill for this"
 
 Good skill text:
 

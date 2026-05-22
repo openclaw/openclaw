@@ -325,7 +325,14 @@ async function getBuiltinMemorySearchManager(params: {
 }
 
 class BorrowedMemoryManager implements MemorySearchManager {
-  constructor(private readonly inner: MemorySearchManager) {}
+  readonly probeVectorStoreAvailability?: () => Promise<boolean>;
+
+  constructor(private readonly inner: MemorySearchManager) {
+    if (inner.probeVectorStoreAvailability) {
+      const probeVectorStoreAvailability = inner.probeVectorStoreAvailability.bind(inner);
+      this.probeVectorStoreAvailability = async () => await probeVectorStoreAvailability();
+    }
+  }
 
   async search(
     query: string,
@@ -390,6 +397,32 @@ export async function closeAllMemorySearchManagers(): Promise<void> {
   if (managerRuntimePromise !== null) {
     const { closeAllMemoryIndexManagers } = await loadManagerRuntime();
     await closeAllMemoryIndexManagers();
+  }
+}
+
+export async function closeMemorySearchManager(params: {
+  cfg: OpenClawConfig;
+  agentId: string;
+}): Promise<void> {
+  const normalizedAgentId = normalizeAgentId(params.agentId);
+  const scopeKey = buildQmdManagerScopeKey(normalizedAgentId);
+  const pending = PENDING_QMD_MANAGER_CREATES.get(scopeKey);
+  if (pending) {
+    await Promise.allSettled([pending.promise]);
+  }
+  const cached = QMD_MANAGER_CACHE.get(scopeKey);
+  if (cached) {
+    QMD_MANAGER_CACHE.delete(scopeKey);
+    QMD_MANAGER_OPEN_FAILURES.delete(scopeKey);
+    try {
+      await cached.manager.close?.();
+    } catch (err) {
+      log.warn(`failed to close qmd memory manager for agent ${normalizedAgentId}: ${String(err)}`);
+    }
+  }
+  if (managerRuntimePromise !== null) {
+    const { closeMemoryIndexManagersForAgent } = await loadManagerRuntime();
+    await closeMemoryIndexManagersForAgent({ cfg: params.cfg, agentId: normalizedAgentId });
   }
 }
 
@@ -515,6 +548,19 @@ class FallbackMemoryManager implements MemorySearchManager {
       return this.deps.primary.getCachedEmbeddingAvailability?.() ?? null;
     }
     return this.fallback?.getCachedEmbeddingAvailability?.() ?? null;
+  }
+
+  async probeVectorStoreAvailability() {
+    this.ensureOpen();
+    if (!this.primaryFailed) {
+      return await (this.deps.primary.probeVectorStoreAvailability?.() ??
+        this.deps.primary.probeVectorAvailability());
+    }
+    const fallback = await this.ensureFallback();
+    return (
+      (await (fallback?.probeVectorStoreAvailability?.() ?? fallback?.probeVectorAvailability())) ??
+      false
+    );
   }
 
   async probeVectorAvailability() {

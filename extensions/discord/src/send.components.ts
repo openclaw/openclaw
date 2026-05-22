@@ -1,6 +1,7 @@
 import { ChannelType } from "discord-api-types/v10";
 import { recordChannelActivity } from "openclaw/plugin-sdk/channel-activity-runtime";
-import type { MarkdownTableMode, OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import type { MarkdownTableMode, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import type { OutboundMediaAccess } from "openclaw/plugin-sdk/media-runtime";
 import { requireRuntimeConfig } from "openclaw/plugin-sdk/plugin-config-runtime";
 import type { ChunkMode } from "openclaw/plugin-sdk/reply-chunking";
 import { resolveDiscordAccount } from "./accounts.js";
@@ -23,6 +24,7 @@ import {
 import { parseAndResolveRecipient } from "./recipient-resolution.js";
 import { loadOutboundMediaFromUrl } from "./runtime-api.js";
 import { sendMessageDiscord } from "./send.outbound.js";
+import { createDiscordSendResult } from "./send.receipt.js";
 import {
   buildDiscordSendError,
   createDiscordClient,
@@ -154,10 +156,7 @@ type DiscordComponentSendOpts = {
   sessionKey?: string;
   agentId?: string;
   mediaUrl?: string;
-  mediaAccess?: {
-    localRoots?: readonly string[];
-    readFile?: (filePath: string) => Promise<Buffer>;
-  };
+  mediaAccess?: OutboundMediaAccess;
   mediaLocalRoots?: readonly string[];
   mediaReadFile?: (filePath: string) => Promise<Buffer>;
   filename?: string;
@@ -165,17 +164,29 @@ type DiscordComponentSendOpts = {
   maxLinesPerMessage?: number;
   tableMode?: MarkdownTableMode;
   chunkMode?: ChunkMode;
+  suppressEmbeds?: boolean;
 };
 
 export function registerBuiltDiscordComponentMessage(params: {
   buildResult: DiscordComponentBuildResult;
   messageId: string;
+  ttlMs?: number;
 }): void {
   registerDiscordComponentEntries({
     entries: params.buildResult.entries,
     modals: params.buildResult.modals,
     messageId: params.messageId,
+    ttlMs: params.ttlMs,
   });
+}
+
+function resolveDiscordComponentRegistryTtlMs(
+  accountConfig: { agentComponents?: { ttlMs?: number } } | undefined,
+): number | undefined {
+  const ttlMs = accountConfig?.agentComponents?.ttlMs;
+  return typeof ttlMs === "number" && Number.isFinite(ttlMs) && ttlMs > 0
+    ? Math.floor(ttlMs)
+    : undefined;
 }
 
 async function buildDiscordComponentPayload(params: {
@@ -272,6 +283,7 @@ export async function sendDiscordComponentMessage(
       maxLinesPerMessage: opts.maxLinesPerMessage,
       tableMode: opts.tableMode,
       chunkMode: opts.chunkMode,
+      ...(opts.suppressEmbeds === undefined ? {} : { suppressEmbeds: opts.suppressEmbeds }),
     });
   }
 
@@ -315,6 +327,7 @@ export async function sendDiscordComponentMessage(
   registerBuiltDiscordComponentMessage({
     buildResult,
     messageId: result.id,
+    ttlMs: resolveDiscordComponentRegistryTtlMs(accountInfo.config),
   });
 
   recordChannelActivity({
@@ -323,10 +336,12 @@ export async function sendDiscordComponentMessage(
     direction: "outbound",
   });
 
-  return {
-    messageId: result.id ?? "unknown",
-    channelId: result.channel_id ?? channelId,
-  };
+  return createDiscordSendResult({
+    result,
+    fallbackChannelId: channelId,
+    kind: "card",
+    ...(opts.replyTo ? { replyToId: opts.replyTo } : {}),
+  });
 }
 
 export async function editDiscordComponentMessage(
@@ -368,6 +383,7 @@ export async function editDiscordComponentMessage(
   registerBuiltDiscordComponentMessage({
     buildResult,
     messageId: result.id ?? messageId,
+    ttlMs: resolveDiscordComponentRegistryTtlMs(accountInfo.config),
   });
 
   recordChannelActivity({
@@ -376,8 +392,13 @@ export async function editDiscordComponentMessage(
     direction: "outbound",
   });
 
-  return {
-    messageId: result.id ?? messageId,
-    channelId: result.channel_id ?? channelId,
-  };
+  return createDiscordSendResult({
+    result: {
+      id: result.id ?? messageId,
+      channel_id: result.channel_id,
+    },
+    fallbackChannelId: channelId,
+    kind: "card",
+    ...(opts.replyTo ? { replyToId: opts.replyTo } : {}),
+  });
 }

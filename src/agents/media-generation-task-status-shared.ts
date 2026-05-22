@@ -33,11 +33,13 @@ export function findActiveMediaGenerationTaskForSession(params: {
   sessionKey?: string;
   taskKind: string;
   sourcePrefix: string;
+  taskLabel?: string;
 }): TaskRecord | undefined {
   return findActiveSessionTask({
     sessionKey: params.sessionKey,
     runtime: "cli",
     taskKind: params.taskKind,
+    task: params.taskLabel,
     sourceIdPrefix: params.sourcePrefix,
   });
 }
@@ -66,8 +68,8 @@ export function buildMediaGenerationTaskStatusText(params: {
     `${params.nounLabel} task ${params.task.taskId} is already ${params.task.status}${provider ? ` with ${provider}` : ""}.`,
     params.task.progressSummary ? `Progress: ${params.task.progressSummary}.` : null,
     params.duplicateGuard
-      ? `Do not call ${params.toolName} again for this request. Wait for the completion event; I will post the finished ${params.completionLabel} here.`
-      : `Wait for the completion event; I will post the finished ${params.completionLabel} here when it's ready.`,
+      ? `Do not call ${params.toolName} again for this request. Wait for the completion event; the completion agent will send the finished ${params.completionLabel} here.`
+      : `Wait for the completion event; the completion agent will send the finished ${params.completionLabel} here when it's ready.`,
   ].filter((entry): entry is string => Boolean(entry));
   return lines.join("\n");
 }

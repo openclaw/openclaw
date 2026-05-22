@@ -1,5 +1,5 @@
-import { ChannelType } from "discord-api-types/v10";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import { ApplicationCommandType, ChannelType, InteractionContextType } from "discord-api-types/v10";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const { logVerboseMock } = vi.hoisted(() => ({
@@ -196,11 +196,12 @@ describe("createDiscordNativeCommand option wiring", () => {
     const choices = readChoices(action);
 
     expect(readAutocomplete(action)).toBeUndefined();
-    expect(choices).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ name: expect.any(String), value: expect.any(String) }),
-      ]),
-    );
+    expect(choices).toEqual([
+      { name: "show", value: "show" },
+      { name: "get", value: "get" },
+      { name: "set", value: "set" },
+      { name: "unset", value: "unset" },
+    ]);
   });
 
   it("returns no autocomplete choices for unauthorized users", async () => {
@@ -332,5 +333,47 @@ describe("createDiscordNativeCommand option wiring", () => {
     expect(command.description).toBe("x".repeat(100));
     expect(requireOption(command, "input").description).toHaveLength(100);
     expect(requireOption(command, "input").description).toBe("x".repeat(100));
+  });
+
+  it("serializes localized command descriptions", () => {
+    const longDescription = "k".repeat(140);
+    const command = createDiscordNativeCommand({
+      command: {
+        name: "localized",
+        description: "Default description",
+        descriptionLocalizations: {
+          ko: "현지화된 설명",
+          "en-GB": longDescription,
+        },
+        acceptsArgs: false,
+      },
+      cfg: {} as OpenClawConfig,
+      discordConfig: {},
+      accountId: "default",
+      sessionPrefix: "discord:slash",
+      ephemeralDefault: true,
+      threadBindings: createNoopThreadBindingManager("default"),
+    });
+
+    expect(command.descriptionLocalizations).toEqual({
+      ko: "현지화된 설명",
+      "en-GB": "k".repeat(100),
+    });
+    expect(command.serialize()).toEqual({
+      name: "localized",
+      description: "Default description",
+      description_localizations: {
+        ko: "현지화된 설명",
+        "en-GB": "k".repeat(100),
+      },
+      type: ApplicationCommandType.ChatInput,
+      integration_types: [0, 1],
+      contexts: [
+        InteractionContextType.Guild,
+        InteractionContextType.BotDM,
+        InteractionContextType.PrivateChannel,
+      ],
+      default_member_permissions: null,
+    });
   });
 });

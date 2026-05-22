@@ -11,8 +11,6 @@ import { logDebug, logWarn } from "../logger.js";
 import { handleMcpJsonRpc } from "./mcp-http.handlers.js";
 import {
   clearActiveMcpLoopbackRuntimeByOwnerToken,
-  createMcpLoopbackServerConfig,
-  getActiveMcpLoopbackRuntime,
   setActiveMcpLoopbackRuntime,
 } from "./mcp-http.loopback-runtime.js";
 import { jsonRpcError, type JsonRpcRequest } from "./mcp-http.protocol.js";
@@ -112,6 +110,7 @@ export async function startMcpLoopbackServer(port = 0): Promise<{
           sessionKey: requestContext.sessionKey,
           messageProvider: requestContext.messageProvider,
           accountId: requestContext.accountId,
+          inboundEventKind: requestContext.inboundEventKind,
           senderIsOwner: requestContext.senderIsOwner,
         });
 
@@ -120,7 +119,8 @@ export async function startMcpLoopbackServer(port = 0): Promise<{
           batchSize: messages.length,
           methods: messages.map((message) => message.method),
           sessionKey: requestContext.sessionKey,
-          senderIsOwner: requestContext.senderIsOwner,
+          inboundEventKind: requestContext.inboundEventKind,
+          senderIsOwner: requestContext.senderIsOwner === true,
           toolCount: scopedTools.toolSchema.length,
           cronVisible: scopedTools.toolSchema.some((tool) => tool.name === "cron"),
         });
@@ -132,6 +132,7 @@ export async function startMcpLoopbackServer(port = 0): Promise<{
             toolSchema: scopedTools.toolSchema,
             hookContext: {
               agentId: scopedTools.agentId,
+              config: cfg,
               sessionKey: requestContext.sessionKey,
             },
             signal: requestAbort.signal,

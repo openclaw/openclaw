@@ -24,6 +24,22 @@ export const PLUGIN_COMPAT_RECORDS = [
       "Legacy `before_agent_start` hook compatibility remains wired while plugins migrate to modern hook stages.",
   },
   {
+    code: "legacy-deactivate-hook-alias",
+    status: "deprecated",
+    owner: "sdk",
+    introduced: "2026-05-16",
+    deprecated: "2026-05-16",
+    warningStarts: "2026-05-16",
+    removeAfter: "2026-08-16",
+    replacement: "`gateway_stop` hook",
+    docsPath: "/plugins/hooks#upcoming-deprecations",
+    surfaces: ["api.on(\"deactivate\", ...)", "plugin typed hook registration"],
+    diagnostics: ["plugin runtime compatibility warning"],
+    tests: ["src/plugins/loader.test.ts"],
+    releaseNote:
+      "`api.on(\"deactivate\", ...)` remains wired as a deprecated compatibility alias while plugins migrate to `gateway_stop`.",
+  },
+  {
     code: "hook-only-plugin-shape",
     status: "active",
     owner: "sdk",
@@ -48,6 +64,7 @@ export const PLUGIN_COMPAT_RECORDS = [
     diagnostics: ["OPENCLAW_PLUGIN_SDK_COMPAT_DEPRECATED"],
     tests: [
       "src/plugins/contracts/plugin-sdk-index.test.ts",
+      "src/plugins/contracts/plugin-sdk-root-alias.test.ts",
       "src/plugins/contracts/plugin-sdk-subpaths.test.ts",
     ],
   },
@@ -275,21 +292,6 @@ export const PLUGIN_COMPAT_RECORDS = [
     surfaces: ["activation.onAgentHarnesses", "activation planner"],
     diagnostics: ["activation plan compat reason"],
     tests: ["src/plugins/activation-planner.test.ts"],
-  },
-  {
-    code: "legacy-implicit-startup-sidecar",
-    status: "deprecated",
-    owner: "plugin-execution",
-    introduced: "2026-04-28",
-    deprecated: "2026-04-28",
-    warningStarts: "2026-04-28",
-    removeAfter: "2026-07-28",
-    replacement:
-      "`activation.onStartup: true` for startup work or `activation.onStartup: false` for inert plugins",
-    docsPath: "/plugins/manifest",
-    surfaces: ["Gateway startup plugin planning", "openclaw.plugin.json activation"],
-    diagnostics: ["plugin compatibility notice"],
-    tests: ["src/plugins/channel-plugin-ids.test.ts", "src/plugins/installed-plugin-index.test.ts"],
   },
   {
     code: "activation-provider-hint",
@@ -772,7 +774,7 @@ export const PLUGIN_COMPAT_RECORDS = [
     surfaces: ["api.runtime.config.loadConfig", "api.runtime.config.writeConfigFile"],
     diagnostics: [
       "plugin runtime compatibility warning",
-      "deprecated internal config API guard",
+      "deprecated API usage guard",
       "runtime channel config boundary guard",
     ],
     tests: [

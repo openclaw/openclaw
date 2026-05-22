@@ -42,17 +42,21 @@ describe("process supervisor run registry", () => {
       exitSignal: null,
     });
 
-    expect(first).not.toBeNull();
-    expect(first?.firstFinalize).toBe(true);
-    expect(first?.record.terminationReason).toBe("overall-timeout");
-    expect(first?.record.exitCode).toBeNull();
-    expect(first?.record.exitSignal).toBe("SIGKILL");
+    if (!first) {
+      throw new Error("missing first finalize result");
+    }
+    expect(first.firstFinalize).toBe(true);
+    expect(first.record.terminationReason).toBe("overall-timeout");
+    expect(first.record.exitCode).toBeNull();
+    expect(first.record.exitSignal).toBe("SIGKILL");
 
-    expect(second).not.toBeNull();
-    expect(second?.firstFinalize).toBe(false);
-    expect(second?.record.terminationReason).toBe("overall-timeout");
-    expect(second?.record.exitCode).toBeNull();
-    expect(second?.record.exitSignal).toBe("SIGKILL");
+    if (!second) {
+      throw new Error("missing second finalize result");
+    }
+    expect(second.firstFinalize).toBe(false);
+    expect(second.record.terminationReason).toBe("overall-timeout");
+    expect(second.record.exitCode).toBeNull();
+    expect(second.record.exitSignal).toBe("SIGKILL");
   });
 
   it("prunes oldest exited records once retention cap is exceeded", () => {
@@ -85,7 +89,7 @@ describe("process supervisor run registry", () => {
       startedAtMs: 2,
     });
 
-    expect(registry.listByScope("   ")).toEqual([]);
+    expect(registry.listByScope("   ")).toStrictEqual([]);
     const scoped = registry.listByScope("scope:a");
     expect(scoped).toHaveLength(1);
     const [firstScoped] = scoped;

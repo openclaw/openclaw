@@ -19,6 +19,7 @@ import {
   readEmbeddedGatewayToken,
   SERVICE_AUDIT_CODES,
 } from "../daemon/service-audit.js";
+import { summarizeGatewayServiceLayout } from "../daemon/service-layout.js";
 import { readManagedServiceEnvKeysFromEnvironment } from "../daemon/service-managed-env.js";
 import { resolveGatewayService, type GatewayServiceCommandConfig } from "../daemon/service.js";
 import {
@@ -108,6 +109,7 @@ async function buildExpectedGatewayServicePlan(params: {
     runtime: params.runtime,
     nodePath: params.nodePath,
     existingEnvironment: params.command.environment,
+    existingEnvironmentValueSources: params.command.environmentValueSources,
     warn: (message, title) => note(message, title),
     config: params.cfg,
   });
@@ -166,6 +168,17 @@ function resolveSystemdScopeFromServicePath(sourcePath: string | undefined): Sys
 function resolveSystemdUnitNameFromServicePath(sourcePath: string | undefined): string {
   const base = sourcePath ? path.posix.basename(sourcePath.replaceAll("\\", "/")) : "";
   return base.endsWith(".service") ? base : "openclaw-gateway.service";
+}
+
+function shouldDeferUpdateModeSystemdServiceRepair(params: {
+  repairMode: DoctorPrompter["repairMode"];
+  shouldForce: boolean;
+}): boolean {
+  return (
+    process.platform === "linux" &&
+    isDoctorUpdateRepairMode(params.repairMode) &&
+    !params.shouldForce
+  );
 }
 
 async function suppressRunningSystemdExecStartRepairs(params: {
@@ -367,6 +380,13 @@ export async function maybeRepairGatewayServiceConfig(
   if (serviceWrapperPath) {
     note(`Gateway service invokes ${OPENCLAW_WRAPPER_ENV_KEY}: ${serviceWrapperPath}`, "Gateway");
   }
+  const serviceLayout = await summarizeGatewayServiceLayout(command);
+  const sourceCheckoutWarning = serviceLayout?.entrypointSourceCheckout
+    ? [
+        `Gateway service entrypoint resolves to a source checkout: ${serviceLayout.packageRootReal ?? serviceLayout.packageRoot ?? serviceLayout.entrypointReal ?? serviceLayout.entrypoint}.`,
+        "Run `openclaw doctor --fix` from the intended package install, or reinstall the gateway service with `openclaw gateway install --force`.",
+      ].join("\n")
+    : null;
 
   const tokenRefConfigured = Boolean(
     resolveSecretInputRef({
@@ -410,15 +430,16 @@ export async function maybeRepairGatewayServiceConfig(
     ? await resolveSystemNodeInfo({ env: process.env })
     : null;
   const systemNodePath = systemNodeInfo?.supported ? systemNodeInfo.path : null;
-  if (needsNodeRuntime && !systemNodePath) {
+  if (needsNodeRuntime && !systemNodePath && runtimeChoice !== "node") {
     const warning = renderSystemNodeWarning(systemNodeInfo);
     if (warning) {
       note(warning, "Gateway runtime");
+    } else {
+      note(
+        "System Node 22 LTS (22.19+) or Node 24 not found. Install via Homebrew/apt/choco and rerun doctor to migrate off Bun/version managers.",
+        "Gateway runtime",
+      );
     }
-    note(
-      "System Node 22 LTS (22.14+) or Node 24 not found. Install via Homebrew/apt/choco and rerun doctor to migrate off Bun/version managers.",
-      "Gateway runtime",
-    );
   }
 
   const expectedRuntimePlan =
@@ -459,21 +480,34 @@ export async function maybeRepairGatewayServiceConfig(
     issues: audit.issues,
   });
 
+  const hasEntrypointMismatch = audit.issues.some(
+    (issue) => issue.code === SERVICE_AUDIT_CODES.gatewayEntrypointMismatch,
+  );
+  const showSourceCheckoutWarning = sourceCheckoutWarning !== null && !hasEntrypointMismatch;
+
   if (audit.issues.length === 0) {
+    if (sourceCheckoutWarning !== null && !hasEntrypointMismatch) {
+      note(sourceCheckoutWarning, "Gateway service config");
+    }
     return;
   }
 
   const serviceRepairPolicy = resolveServiceRepairPolicy();
   const serviceRepairExternal = isServiceRepairExternallyManaged(serviceRepairPolicy);
 
-  note(
-    audit.issues
-      .map((issue) =>
-        issue.detail ? `- ${issue.message} (${issue.detail})` : `- ${issue.message}`,
-      )
-      .join("\n"),
-    "Gateway service config",
+  const consolidatedLines: string[] = [];
+  let emittedSourceCheckoutWarning = false;
+  if (sourceCheckoutWarning !== null && showSourceCheckoutWarning) {
+    consolidatedLines.push(sourceCheckoutWarning);
+    consolidatedLines.push("");
+    emittedSourceCheckoutWarning = true;
+  }
+  consolidatedLines.push(
+    ...audit.issues.map((issue) =>
+      issue.detail ? `- ${issue.message} (${issue.detail})` : `- ${issue.message}`,
+    ),
   );
+  note(consolidatedLines.join("\n"), "Gateway service config");
 
   const aggressiveIssues = audit.issues.filter((issue) => issue.level === "aggressive");
   const needsAggressive = aggressiveIssues.length > 0;
@@ -498,19 +532,47 @@ export async function maybeRepairGatewayServiceConfig(
     return;
   }
 
-  const repair = needsAggressive
-    ? await prompter.confirmAggressiveAutoFix({
-        message: "Overwrite gateway service config with current defaults now?",
-        initialValue: prompter.shouldForce,
-      })
-    : await prompter.confirmAutoFix({
-        message: "Update gateway service config to the recommended defaults now?",
-        initialValue: true,
-      });
-  if (!repair) {
+  const updateRepairMode = isDoctorUpdateRepairMode(prompter.repairMode);
+  if (
+    shouldDeferUpdateModeSystemdServiceRepair({
+      repairMode: prompter.repairMode,
+      shouldForce: prompter.shouldForce,
+    })
+  ) {
+    note(
+      "Update-mode doctor detected gateway service drift but left the live systemd unit unchanged. Review the service file and run `openclaw gateway install --force` when you want OpenClaw to replace operator-owned systemd directives.",
+      "Gateway service config",
+    );
     return;
   }
-  const updateRepairMode = isDoctorUpdateRepairMode(prompter.repairMode);
+
+  const repairMessage = needsAggressive
+    ? "Overwrite gateway service config with current defaults now?"
+    : "Update gateway service config to the recommended defaults now?";
+  const repair = updateRepairMode
+    ? needsAggressive
+      ? await prompter.confirmAggressiveAutoFix({
+          message: repairMessage,
+          initialValue: prompter.shouldForce,
+        })
+      : await prompter.confirmAutoFix({
+          message: repairMessage,
+          initialValue: true,
+        })
+    : await prompter.confirmRuntimeRepair({
+        message: repairMessage,
+        initialValue: needsAggressive ? prompter.shouldForce : true,
+        requiresInteractiveConfirmation: true,
+      });
+  if (!repair) {
+    if (!emittedSourceCheckoutWarning) {
+      note(
+        "Run `openclaw gateway install --force` when you want to replace the gateway service definition.",
+        "Gateway service config",
+      );
+    }
+    return;
+  }
   const serviceEmbeddedToken = readEmbeddedGatewayToken(command);
   const gatewayTokenForRepair = expectedGatewayToken ?? serviceEmbeddedToken;
   const configuredGatewayToken =
@@ -569,6 +631,7 @@ export async function maybeRepairGatewayServiceConfig(
       programArguments: updatedPlan.programArguments,
       workingDirectory: updatedPlan.workingDirectory,
       environment: updatedPlan.environment,
+      environmentValueSources: updatedPlan.environmentValueSources,
     });
   } catch (err) {
     runtime.error(`Gateway service update failed: ${String(err)}`);

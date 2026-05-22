@@ -1,4 +1,5 @@
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { resolveDefaultAgentId } from "openclaw/plugin-sdk/memory-host-core";
 import type { OpenClawConfig, OpenClawPluginApi } from "../api.js";
 import { applyMemoryWikiMutation, normalizeMemoryWikiMutationInput } from "./apply.js";
 import { compileMemoryWikiVault } from "./compile.js";
@@ -26,6 +27,8 @@ import { initializeMemoryWikiVault } from "./vault.js";
 
 const READ_SCOPE = "operator.read" as const;
 const WRITE_SCOPE = "operator.write" as const;
+const ADMIN_SCOPE = "operator.admin" as const;
+const LOCAL_FILE_INGEST_SCOPE = ADMIN_SCOPE;
 type GatewayMethodContext = Parameters<
   Parameters<OpenClawPluginApi["registerGatewayMethod"]>[1]
 >[0];
@@ -84,6 +87,16 @@ function readEnumParam<T extends string>(
 function respondError(respond: GatewayRespond, error: unknown) {
   const message = formatErrorMessage(error);
   respond(false, undefined, { code: "internal_error", message });
+}
+
+function resolveGatewayAgentId(
+  requestParams: Record<string, unknown>,
+  appConfig: OpenClawConfig | undefined,
+): string | undefined {
+  return (
+    readStringParam(requestParams, "agentId") ??
+    (appConfig ? resolveDefaultAgentId(appConfig) : undefined)
+  );
 }
 
 async function syncImportedSourcesIfNeeded(
@@ -216,7 +229,7 @@ export function registerMemoryWikiGatewayMethods(params: {
         respondError(respond, error);
       }
     },
-    { scope: WRITE_SCOPE },
+    { scope: LOCAL_FILE_INGEST_SCOPE },
   );
 
   api.registerGatewayMethod(
@@ -278,11 +291,13 @@ export function registerMemoryWikiGatewayMethods(params: {
         const searchBackend = readEnumParam(requestParams, "backend", WIKI_SEARCH_BACKENDS);
         const searchCorpus = readEnumParam(requestParams, "corpus", WIKI_SEARCH_CORPORA);
         const mode = readEnumParam(requestParams, "mode", WIKI_SEARCH_MODES);
+        const agentId = resolveGatewayAgentId(requestParams, appConfig);
         respond(
           true,
           await searchMemoryWiki({
             config,
             appConfig,
+            ...(agentId ? { agentId } : {}),
             query,
             maxResults,
             searchBackend,
@@ -326,11 +341,13 @@ export function registerMemoryWikiGatewayMethods(params: {
         const lineCount = readNumberParam(requestParams, "lineCount");
         const searchBackend = readEnumParam(requestParams, "backend", WIKI_SEARCH_BACKENDS);
         const searchCorpus = readEnumParam(requestParams, "corpus", WIKI_SEARCH_CORPORA);
+        const agentId = resolveGatewayAgentId(requestParams, appConfig);
         respond(
           true,
           await getMemoryWikiPage({
             config,
             appConfig,
+            ...(agentId ? { agentId } : {}),
             lookup,
             fromLine,
             lineCount,
@@ -367,7 +384,7 @@ export function registerMemoryWikiGatewayMethods(params: {
         respondError(respond, error);
       }
     },
-    { scope: READ_SCOPE },
+    { scope: WRITE_SCOPE },
   );
 
   api.registerGatewayMethod(

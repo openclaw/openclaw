@@ -1,7 +1,9 @@
-import type { Api, Model } from "@mariozechner/pi-ai";
-import type { ModelRegistry } from "@mariozechner/pi-coding-agent";
+import type { Api, Model } from "@earendil-works/pi-ai";
+import type { ModelRegistry } from "@earendil-works/pi-coding-agent";
 import { parseModelRef } from "../../agents/model-selection.js";
+import { loadManifestMetadataSnapshot } from "../../plugins/manifest-contract-eligibility.js";
 import type { RuntimeEnv } from "../../runtime.js";
+import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
 import { createModelListAuthIndex } from "./list.auth-index.js";
 import { resolveConfiguredEntries } from "./list.configured.js";
@@ -17,23 +19,26 @@ type RegistryLoadModule = typeof import("./list.registry-load.js");
 type RowSourcesModule = typeof import("./list.row-sources.js");
 type SourcePlanModule = typeof import("./list.source-plan.js");
 
-let registryLoadModulePromise: Promise<RegistryLoadModule> | undefined;
-let rowSourcesModulePromise: Promise<RowSourcesModule> | undefined;
-let sourcePlanModulePromise: Promise<SourcePlanModule> | undefined;
+const registryLoadModuleLoader = createLazyImportLoader<RegistryLoadModule>(
+  () => import("./list.registry-load.js"),
+);
+const rowSourcesModuleLoader = createLazyImportLoader<RowSourcesModule>(
+  () => import("./list.row-sources.js"),
+);
+const sourcePlanModuleLoader = createLazyImportLoader<SourcePlanModule>(
+  () => import("./list.source-plan.js"),
+);
 
 function loadRegistryLoadModule(): Promise<RegistryLoadModule> {
-  registryLoadModulePromise ??= import("./list.registry-load.js");
-  return registryLoadModulePromise;
+  return registryLoadModuleLoader.load();
 }
 
 function loadRowSourcesModule(): Promise<RowSourcesModule> {
-  rowSourcesModulePromise ??= import("./list.row-sources.js");
-  return rowSourcesModulePromise;
+  return rowSourcesModuleLoader.load();
 }
 
 function loadSourcePlanModule(): Promise<SourcePlanModule> {
-  sourcePlanModulePromise ??= import("./list.source-plan.js");
-  return sourcePlanModulePromise;
+  return sourcePlanModuleLoader.load();
 }
 
 export async function modelsListCommand(
@@ -67,12 +72,10 @@ export async function modelsListCommand(
   }
   const [
     { loadAuthProfileStoreWithoutExternalProfiles },
-    { resolveOpenClawAgentDir },
-    { resolveAgentWorkspaceDir, resolveDefaultAgentId },
+    { resolveAgentWorkspaceDir, resolveDefaultAgentDir, resolveDefaultAgentId },
     { resolveDefaultAgentWorkspaceDir },
   ] = await Promise.all([
     import("../../agents/auth-profiles/store.js"),
-    import("../../agents/agent-paths.js"),
     import("../../agents/agent-scope.js"),
     import("../../agents/workspace.js"),
   ]);
@@ -80,11 +83,21 @@ export async function modelsListCommand(
     commandName: "models list",
     runtime,
   });
-  const authStore = loadAuthProfileStoreWithoutExternalProfiles();
-  const agentDir = resolveOpenClawAgentDir();
+  const agentDir = resolveDefaultAgentDir(cfg);
+  const authStore = loadAuthProfileStoreWithoutExternalProfiles(agentDir);
   const workspaceDir =
     resolveAgentWorkspaceDir(cfg, resolveDefaultAgentId(cfg)) ?? resolveDefaultAgentWorkspaceDir();
-  const authIndex = createModelListAuthIndex({ cfg, authStore, workspaceDir });
+  const metadataSnapshot = loadManifestMetadataSnapshot({
+    config: cfg,
+    workspaceDir,
+    env: process.env,
+  });
+  const authIndex = createModelListAuthIndex({
+    cfg,
+    authStore,
+    workspaceDir,
+    metadataSnapshot,
+  });
 
   let modelRegistry: ModelRegistry | undefined;
   let registryModels: Model<Api>[] = [];
@@ -93,12 +106,15 @@ export async function modelsListCommand(
   let availabilityErrorMessage: string | undefined;
   const { entries } = resolveConfiguredEntries(cfg);
   const configuredByKey = new Map(entries.map((entry) => [entry.key, entry]));
-  const sourcePlanModule = opts.all ? await loadSourcePlanModule() : undefined;
+  const enableSourcePlanCascade = Boolean(opts.all) || Boolean(providerFilter);
+  const sourcePlanModule = enableSourcePlanCascade ? await loadSourcePlanModule() : undefined;
   const sourcePlan = sourcePlanModule
     ? await sourcePlanModule.planAllModelListSources({
         all: opts.all,
+        enableCascade: enableSourcePlanCascade,
         providerFilter,
         cfg,
+        metadataSnapshot,
       })
     : undefined;
   const shouldLoadRegistry = sourcePlan?.requiresInitialRegistry ?? false;
@@ -149,10 +165,12 @@ export async function modelsListCommand(
       local: opts.local,
     },
     skipRuntimeModelSuppression,
+    metadataSnapshot,
+    workspaceDir,
   });
   const rows: ModelRow[] = [];
 
-  if (opts.all) {
+  if (enableSourcePlanCascade) {
     const { appendAllModelRowSources } = await loadRowSourcesModule();
     if (!sourcePlan || !sourcePlanModule) {
       throw new Error("models list source plan was not initialized");
@@ -160,6 +178,7 @@ export async function modelsListCommand(
     let rowContext = buildRowContext(sourcePlan.skipRuntimeModelSuppression);
     const initialAppend = await appendAllModelRowSources({
       rows,
+      entries,
       context: rowContext,
       modelRegistry,
       registryModels,
@@ -185,6 +204,7 @@ export async function modelsListCommand(
       rowContext = buildRowContext(useScopedRegistryFallback);
       await appendAllModelRowSources({
         rows,
+        entries,
         context: rowContext,
         modelRegistry,
         registryModels,

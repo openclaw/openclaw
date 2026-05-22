@@ -1,6 +1,7 @@
 import {
   createAccountListHelpers,
   DEFAULT_ACCOUNT_ID,
+  hasConfiguredAccountValue,
   normalizeAccountId,
   resolveMergedAccountConfig,
   type OpenClawConfig,
@@ -13,7 +14,7 @@ import {
   type ChannelDmPolicy,
 } from "openclaw/plugin-sdk/channel-config-helpers";
 import { resolveAccountEntry } from "openclaw/plugin-sdk/routing";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { SlackAccountSurfaceFields } from "./account-surface-fields.js";
 import type { SlackAccountConfig } from "./runtime-api.js";
 import { resolveSlackAppToken, resolveSlackBotToken, resolveSlackUserToken } from "./token.js";
@@ -35,11 +36,33 @@ export type ResolvedSlackAccount = {
   config: SlackAccountConfig;
 } & SlackAccountSurfaceFields;
 
-const { listAccountIds, resolveDefaultAccountId } = createAccountListHelpers("slack");
+export type SlackConfigAccessorAccount = {
+  allowFrom: string[] | undefined;
+  defaultTo: string | undefined;
+};
+
+const { listAccountIds, resolveDefaultAccountId } = createAccountListHelpers("slack", {
+  hasImplicitDefaultAccount: (cfg) => {
+    const slack = cfg.channels?.slack;
+    const hasBotToken =
+      hasConfiguredAccountValue(slack?.botToken) ||
+      hasConfiguredAccountValue(process.env.SLACK_BOT_TOKEN);
+    if (!hasBotToken) {
+      return false;
+    }
+    if (slack?.mode === "http") {
+      return hasConfiguredAccountValue(slack.signingSecret);
+    }
+    return (
+      hasConfiguredAccountValue(slack?.appToken) ||
+      hasConfiguredAccountValue(process.env.SLACK_APP_TOKEN)
+    );
+  },
+});
 export const listSlackAccountIds = listAccountIds;
 export const resolveDefaultSlackAccountId = resolveDefaultAccountId;
 
-export function resolveSlackAccountConfig(
+function resolveSlackAccountConfig(
   cfg: OpenClawConfig,
   accountId: string,
 ): SlackAccountConfig | undefined {
@@ -54,6 +77,7 @@ export function mergeSlackAccountConfig(
     channelConfig: cfg.channels?.slack as SlackAccountConfig,
     accounts: cfg.channels?.slack?.accounts as Record<string, Partial<SlackAccountConfig>>,
     accountId,
+    nestedObjectKeys: ["botLoopProtection"],
   });
 }
 
@@ -71,6 +95,20 @@ export function resolveSlackAccountAllowFrom(params: {
     parent: rootConfig as Record<string, unknown> | undefined,
   });
   return allowFrom ? mapAllowFromEntries(allowFrom) : undefined;
+}
+
+export function resolveSlackConfigAccessorAccount(params: {
+  cfg: OpenClawConfig;
+  accountId?: string | null;
+}): SlackConfigAccessorAccount {
+  const accountId = normalizeAccountId(
+    params.accountId ?? resolveDefaultSlackAccountId(params.cfg),
+  );
+  const config = mergeSlackAccountConfig(params.cfg, accountId);
+  return {
+    allowFrom: resolveSlackAccountAllowFrom({ cfg: params.cfg, accountId }),
+    defaultTo: config.defaultTo,
+  };
 }
 
 export function resolveSlackAccountDmPolicy(params: {

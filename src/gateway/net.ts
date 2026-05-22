@@ -2,14 +2,16 @@ import type { IncomingMessage } from "node:http";
 import net from "node:net";
 import type { GatewayBindMode } from "../config/types.gateway.js";
 import {
-  __resetContainerEnvironmentCacheForTest,
+  resetContainerEnvironmentCacheForTest,
   isContainerEnvironment,
 } from "../infra/container-environment.js";
 import {
   pickMatchingExternalInterfaceAddress,
   readNetworkInterfaces,
+  safeNetworkInterfaces,
+  type NetworkInterfacesSnapshot,
 } from "../infra/network-interfaces.js";
-import { pickPrimaryTailnetIPv4, pickPrimaryTailnetIPv6 } from "../infra/tailnet.js";
+import { pickPrimaryTailnetIPv4 } from "../infra/tailnet.js";
 import {
   isCanonicalDottedDecimalIPv4,
   isIpInCidr,
@@ -55,6 +57,40 @@ export function resolveHostName(hostHeader?: string): string {
 
 export function isLoopbackAddress(ip: string | undefined): boolean {
   return isLoopbackIpAddress(ip);
+}
+
+export function isLocalInterfaceAddress(
+  ip: string | undefined,
+  snapshot?: NetworkInterfacesSnapshot,
+): boolean {
+  return (
+    (arguments.length >= 2
+      ? resolveLocalInterfaceAddressMatch(ip, snapshot)
+      : resolveLocalInterfaceAddressMatch(ip)) === true
+  );
+}
+
+export function resolveLocalInterfaceAddressMatch(
+  ip: string | undefined,
+  snapshot?: NetworkInterfacesSnapshot,
+): boolean | undefined {
+  const normalized = normalizeIp(ip);
+  if (!normalized) {
+    return false;
+  }
+  const effectiveSnapshot = arguments.length >= 2 ? snapshot : safeNetworkInterfaces();
+  if (!effectiveSnapshot) {
+    return undefined;
+  }
+
+  for (const entries of Object.values(effectiveSnapshot)) {
+    for (const entry of entries ?? []) {
+      if (normalizeIp(entry.address) === normalized) {
+        return true;
+      }
+    }
+  }
+  return false;
 }
 
 /**
@@ -206,34 +242,9 @@ export function resolveRequestClientIp(
   });
 }
 
-export function isLocalGatewayAddress(ip: string | undefined): boolean {
-  if (isLoopbackAddress(ip)) {
-    return true;
-  }
-  if (!ip) {
-    return false;
-  }
-  const normalized = normalizeIp(ip);
-  if (!normalized) {
-    return false;
-  }
-  const tailnetIPv4 = pickPrimaryTailnetIPv4();
-  if (tailnetIPv4 && normalized === normalizeLowercaseStringOrEmpty(tailnetIPv4)) {
-    return true;
-  }
-  const tailnetIPv6 = pickPrimaryTailnetIPv6();
-  if (
-    tailnetIPv6 &&
-    normalizeLowercaseStringOrEmpty(ip) === normalizeLowercaseStringOrEmpty(tailnetIPv6)
-  ) {
-    return true;
-  }
-  return false;
-}
-
 export {
   isContainerEnvironment,
-  __resetContainerEnvironmentCacheForTest as __resetContainerCacheForTest,
+  resetContainerEnvironmentCacheForTest as __resetContainerCacheForTest,
 };
 
 /**
@@ -333,7 +344,7 @@ export function defaultGatewayBindMode(tailscaleMode?: string): GatewayBindMode 
  * @param host - The host address to test
  * @returns True if we can successfully bind to this address
  */
-export async function canBindToHost(host: string): Promise<boolean> {
+async function canBindToHost(host: string): Promise<boolean> {
   return new Promise((resolve) => {
     const testServer = net.createServer();
     testServer.once("error", () => {
@@ -353,6 +364,12 @@ export async function resolveGatewayListenHosts(
   opts?: { canBindToHost?: (host: string) => Promise<boolean> },
 ): Promise<string[]> {
   if (bindHost !== "127.0.0.1") {
+    return [bindHost];
+  }
+  // Windows: uv_tcp_bind6 creates a dual-stack socket (no UV_TCP_IPV6ONLY), which
+  // also accepts ::ffff:127.0.0.1 connections. Binding both ::1 and 127.0.0.1 on
+  // the same port causes non-deterministic TCP routing → HTTP requests hang silently.
+  if (process.platform === "win32") {
     return [bindHost];
   }
   const canBind = opts?.canBindToHost ?? canBindToHost;
@@ -459,8 +476,8 @@ function parseHostForAddressChecks(
  *
  * Returns true if the URL is secure for transmitting data:
  * - wss:// (TLS) is always secure
- * - ws:// is secure only for loopback addresses by default
- * - optional break-glass: private ws:// can be enabled for trusted networks
+ * - ws:// is secure for loopback, private IP literals, .local, and Tailnet hosts
+ * - optional break-glass: other private-DNS ws:// hostnames can be enabled for trusted networks
  *
  * All other ws:// URLs are considered insecure because both credentials
  * AND chat/conversation data would be exposed to network interception.
@@ -492,11 +509,15 @@ export function isSecureWebSocketUrl(
     return false;
   }
 
-  // Default policy stays strict: loopback-only plaintext ws://.
+  // Default policy allows local/Tailnet endpoints that cannot be given public TLS
+  // without extra operator setup. Public DNS hostnames still require wss://.
   if (isLoopbackHost(parsed.hostname)) {
     return true;
   }
-  // Optional break-glass for trusted private-network overlays.
+  if (isTrustedPlaintextWebSocketHost(parsed.hostname)) {
+    return true;
+  }
+  // Optional break-glass for trusted private-DNS overlays.
   if (opts?.allowPrivateWs) {
     if (isPrivateOrLoopbackHost(parsed.hostname)) {
       return true;
@@ -510,4 +531,12 @@ export function isSecureWebSocketUrl(
     return net.isIP(hostForIpCheck) === 0;
   }
   return false;
+}
+
+function isTrustedPlaintextWebSocketHost(hostname: string): boolean {
+  if (isPrivateOrLoopbackHost(hostname)) {
+    return true;
+  }
+  const normalized = normalizeLowercaseStringOrEmpty(hostname).replace(/\.+$/, "");
+  return normalized.endsWith(".local") || normalized.endsWith(".ts.net");
 }

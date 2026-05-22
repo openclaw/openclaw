@@ -1,6 +1,11 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import { normalizeAccountId } from "./bus-queries.js";
+import {
+  isRequestBodyLimitError,
+  readRequestBodyWithLimit,
+  requestBodyErrorToText,
+} from "openclaw/plugin-sdk/webhook-ingress";
+import { normalizeAccountId, resolveQaBusPollStartCursor } from "./bus-queries.js";
 import type { QaBusState } from "./bus-state.js";
 import type {
   QaBusCreateThreadInput,
@@ -15,12 +20,16 @@ import type {
   QaBusWaitForInput,
 } from "./runtime-api.js";
 
-async function readJson(req: IncomingMessage): Promise<unknown> {
-  const chunks: Buffer[] = [];
-  for await (const chunk of req) {
-    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
-  }
-  const text = Buffer.concat(chunks).toString("utf8").trim();
+const QA_HTTP_JSON_MAX_BODY_BYTES = 1024 * 1024;
+const QA_HTTP_JSON_BODY_TIMEOUT_MS = 5_000;
+
+export async function readQaJsonBody(req: IncomingMessage): Promise<unknown> {
+  const text = (
+    await readRequestBodyWithLimit(req, {
+      maxBytes: QA_HTTP_JSON_MAX_BODY_BYTES,
+      timeoutMs: QA_HTTP_JSON_BODY_TIMEOUT_MS,
+    })
+  ).trim();
   return text ? (JSON.parse(text) as unknown) : {};
 }
 
@@ -37,6 +46,14 @@ export function writeError(res: ServerResponse, statusCode: number, error: unkno
   writeJson(res, statusCode, {
     error: formatErrorMessage(error),
   });
+}
+
+export function writeQaRequestBodyLimitError(res: ServerResponse, error: unknown): boolean {
+  if (!isRequestBodyLimitError(error)) {
+    return false;
+  }
+  writeError(res, error.statusCode, requestBodyErrorToText(error.code));
+  return true;
 }
 
 export async function closeQaHttpServer(server: Server): Promise<void> {
@@ -84,9 +101,8 @@ export async function handleQaBusRequest(params: {
     return true;
   }
 
-  const body = (await readJson(params.req)) as Record<string, unknown>;
-
   try {
+    const body = (await readQaJsonBody(params.req)) as Record<string, unknown>;
     switch (url.pathname) {
       case "/v1/reset":
         params.state.reset();
@@ -137,14 +153,18 @@ export async function handleQaBusRequest(params: {
         const timeoutMs = Math.max(0, Math.min(input.timeoutMs ?? 0, 30_000));
         const accountId = normalizeAccountId(input.accountId);
         const initial = params.state.poll(input);
+        const effectiveStartCursor = resolveQaBusPollStartCursor({
+          currentCursor: initial.cursor,
+          requestedCursor: input.cursor,
+        });
         if (initial.events.length > 0 || timeoutMs === 0) {
           writeJson(params.res, 200, initial);
           return true;
         }
         try {
-          await params.state.waitForCursorAdvance(input.cursor ?? 0, timeoutMs, (snapshot) => {
+          await params.state.waitForCursorAdvance(effectiveStartCursor, timeoutMs, (snapshot) => {
             return snapshot.events.some(
-              (event) => event.accountId === accountId && event.cursor > (input.cursor ?? 0),
+              (event) => event.accountId === accountId && event.cursor > effectiveStartCursor,
             );
           });
         } catch {
@@ -163,6 +183,9 @@ export async function handleQaBusRequest(params: {
         return true;
     }
   } catch (error) {
+    if (writeQaRequestBodyLimitError(params.res, error)) {
+      return true;
+    }
     writeError(params.res, 400, error);
     return true;
   }

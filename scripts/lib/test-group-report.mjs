@@ -8,11 +8,11 @@ export function formatBytesAsMb(valueBytes) {
     : `${(valueBytes / 1024 / 1024).toFixed(1)}MB`;
 }
 
-export function formatSignedMs(value, digits = 1) {
+function formatSignedMs(value, digits = 1) {
   return `${value > 0 ? "+" : ""}${formatMs(value, digits)}`;
 }
 
-export function formatSignedBytesAsMb(valueBytes) {
+function formatSignedBytesAsMb(valueBytes) {
   return valueBytes === null || valueBytes === undefined
     ? "n/a"
     : `${valueBytes > 0 ? "+" : ""}${formatBytesAsMb(valueBytes)}`;
@@ -46,7 +46,7 @@ export function resolveTestArea(file) {
   return parts[0] || normalized;
 }
 
-export function resolveTestFolder(file, depth = 2) {
+function resolveTestFolder(file, depth = 2) {
   const normalized = normalizeTrackedRepoPath(file);
   const dir = path.posix.dirname(normalized);
   if (dir === ".") {
@@ -251,6 +251,9 @@ function compareFiles(beforeFiles = [], afterFiles = []) {
 }
 
 function runKey(run) {
+  if (typeof run.label === "string" && run.label.trim().length > 0) {
+    return normalizeConfigLabel(run.label);
+  }
   return normalizeConfigLabel(run.config);
 }
 

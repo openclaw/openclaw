@@ -14,7 +14,7 @@ export type GeneratedVideoAsset = {
   metadata?: Record<string, unknown>;
 };
 
-export type VideoGenerationResolution = "480P" | "720P" | "768P" | "1080P";
+export type VideoGenerationResolution = "480P" | "720P" | "768P" | "1080P" | (string & {});
 
 /**
  * Canonical semantic role hints for reference assets. The list covers the
@@ -72,6 +72,15 @@ export type VideoGenerationRequest = {
   inputAudios?: VideoGenerationSourceAsset[];
   /** Arbitrary provider-specific options forwarded as-is to provider.generateVideo. Core does not validate or log the contents. */
   providerOptions?: Record<string, unknown>;
+};
+
+export type VideoGenerationModelCapabilitiesContext = {
+  provider: string;
+  model: string;
+  cfg: OpenClawConfig;
+  agentDir?: string;
+  authStore?: AuthProfileStore;
+  timeoutMs?: number;
 };
 
 export type VideoGenerationResult = {
@@ -154,5 +163,11 @@ export type VideoGenerationProvider = {
   models?: string[];
   capabilities: VideoGenerationProviderCapabilities;
   isConfigured?: (ctx: VideoGenerationProviderConfiguredContext) => boolean;
+  resolveModelCapabilities?: (
+    ctx: VideoGenerationModelCapabilitiesContext,
+  ) =>
+    | VideoGenerationProviderCapabilities
+    | undefined
+    | Promise<VideoGenerationProviderCapabilities | undefined>;
   generateVideo: (req: VideoGenerationRequest) => Promise<VideoGenerationResult>;
 };

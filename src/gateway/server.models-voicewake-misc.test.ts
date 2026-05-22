@@ -3,14 +3,13 @@ import { createServer } from "node:net";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
 import { WebSocket } from "ws";
-import { resetModelCatalogCacheForTest } from "../agents/model-catalog.js";
 import type { ChannelOutboundAdapter } from "../channels/plugins/types.js";
 import { clearConfigCache, clearRuntimeConfigSnapshot } from "../config/config.js";
-import { resolveCanvasHostUrl } from "../infra/canvas-host-url.js";
 import { createOutboundTestPlugin } from "../test-utils/channel-plugins.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { createTempHomeEnv } from "../test-utils/temp-home.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
+import { resetModelCatalogCacheForTest as resetGatewayModelCatalogCacheForTest } from "./server-model-catalog.js";
 import { createRegistry } from "./server.e2e-registry-helpers.js";
 import {
   connectOk,
@@ -24,8 +23,6 @@ import {
   startConnectedServerWithClient,
   startGatewayServer,
   startServerWithClient,
-  testState,
-  testTailnetIPv4,
   trackConnectChallengeNonce,
 } from "./test-helpers.js";
 
@@ -89,6 +86,8 @@ type ModelCatalogRpcEntry = {
   provider: string;
   alias?: string;
   contextWindow?: number;
+  input?: string[];
+  reasoning?: boolean;
 };
 
 type PiCatalogFixtureEntry = {
@@ -154,14 +153,14 @@ describe("gateway server models + voicewake", () => {
         : await rpcReq<{ models: ModelCatalogRpcEntry[] }>(ws, "models.list"),
     );
 
-  const setPiCatalog = (entries: PiCatalogFixtureEntry[]) => {
+  const setPiCatalog = async (entries: PiCatalogFixtureEntry[]) => {
     piSdkMock.enabled = true;
     piSdkMock.models = entries;
-    resetModelCatalogCacheForTest();
+    await resetGatewayModelCatalogCacheForTest();
   };
 
-  const seedPiCatalog = () => {
-    setPiCatalog(buildPiCatalogFixture());
+  const seedPiCatalog = async () => {
+    await setPiCatalog(buildPiCatalogFixture());
   };
 
   const withModelsConfig = async <T>(config: unknown, run: () => Promise<T>): Promise<T> => {
@@ -220,7 +219,7 @@ describe("gateway server models + voicewake", () => {
         },
       },
       async () => {
-        seedPiCatalog();
+        await seedPiCatalog();
         const res = await listModels();
         expect(res.ok).toBe(true);
         expect(res.payload?.models).toEqual(options.expected);
@@ -323,7 +322,7 @@ describe("gateway server models + voicewake", () => {
       expect(initial.ok).toBe(true);
       expect(initial.payload?.config?.version).toBe(1);
       expect(initial.payload?.config?.defaultTarget).toEqual({ mode: "current" });
-      expect(initial.payload?.config?.routes).toEqual([]);
+      expect(initial.payload?.config?.routes).toStrictEqual([]);
 
       const changedP = onceMessage<{
         type: "event";
@@ -445,7 +444,7 @@ describe("gateway server models + voicewake", () => {
       expect(first.event).toBe("voicewake.routing.changed");
       expect(
         (first.payload as { config?: { routes?: unknown[] } } | undefined)?.config?.routes,
-      ).toEqual([]);
+      ).toStrictEqual([]);
 
       const broadcastP = onceMessage<{
         type: "event";
@@ -472,7 +471,7 @@ describe("gateway server models + voicewake", () => {
   });
 
   test("models.list all view returns model catalog", async () => {
-    seedPiCatalog();
+    await seedPiCatalog();
 
     const res1 = await listModels({ view: "all" });
     const res2 = await listModels({ view: "all" });
@@ -499,24 +498,22 @@ describe("gateway server models + voicewake", () => {
         },
       },
       async () => {
-        setPiCatalog([
+        await setPiCatalog([
           { id: "remote-a", provider: "unauth-a", name: "Remote A" },
           { id: "remote-b", provider: "unauth-b", name: "Remote B" },
         ]);
         const res = await listModels();
         expect(res.ok).toBe(true);
-        expect(res.payload?.models).toEqual([
-          {
-            id: "MiniMax-M2.7-highspeed",
-            name: "MiniMax M2.7 Highspeed",
-            provider: "minimax",
-          },
-        ]);
+        const models = res.payload?.models ?? [];
+        expect(models).toHaveLength(1);
+        expect(models[0]?.id).toBe("MiniMax-M2.7-highspeed");
+        expect(models[0]?.name).toBe("MiniMax M2.7 Highspeed");
+        expect(models[0]?.provider).toBe("minimax");
       },
     );
   });
 
-  test("models.list configured view includes auth-backed provider catalog entries", async () => {
+  test("models.list configured view does not run runtime discovery without a read-only catalog", async () => {
     await withEnvAsync(
       {
         ANTHROPIC_API_KEY: undefined,
@@ -525,22 +522,12 @@ describe("gateway server models + voicewake", () => {
       },
       async () => {
         await withModelsConfig({}, async () => {
-          seedPiCatalog();
+          await seedPiCatalog();
+          const discoverCallsBefore = piSdkMock.discoverCalls;
           const res = await listModels({ view: "configured" });
           expect(res.ok).toBe(true);
-          expect(res.payload?.models).toEqual([
-            {
-              id: "gpt-test-a",
-              name: "A-Model",
-              provider: "openai",
-              contextWindow: 8000,
-            },
-            {
-              id: "gpt-test-z",
-              name: "gpt-test-z",
-              provider: "openai",
-            },
-          ]);
+          expect(res.payload?.models).toStrictEqual([]);
+          expect(piSdkMock.discoverCalls).toBe(discoverCallsBefore);
         });
       },
     );
@@ -563,25 +550,21 @@ describe("gateway server models + voicewake", () => {
         },
       },
       async () => {
-        setPiCatalog([
+        await setPiCatalog([
           { id: "remote-a", provider: "unauth-a", name: "Remote A" },
           { id: "remote-b", provider: "unauth-b", name: "Remote B" },
         ]);
         const res = await listModels({ view: "configured" });
         expect(res.ok).toBe(true);
-        expect(res.payload?.models).toEqual([
-          {
-            id: "MiniMax-M2.7-highspeed",
-            name: "MiniMax M2.7 Highspeed",
-            provider: "minimax",
-          },
-          {
-            id: "glm-4.5-air",
-            name: "GLM 4.5 Air",
-            provider: "zhipu",
-            reasoning: true,
-          },
-        ]);
+        const models = res.payload?.models ?? [];
+        expect(models).toHaveLength(2);
+        expect(models[0]?.id).toBe("MiniMax-M2.7-highspeed");
+        expect(models[0]?.name).toBe("MiniMax M2.7 Highspeed");
+        expect(models[0]?.provider).toBe("minimax");
+        expect(models[1]?.id).toBe("glm-4.5-air");
+        expect(models[1]?.name).toBe("GLM 4.5 Air");
+        expect(models[1]?.provider).toBe("zhipu");
+        expect(models[1]?.reasoning).toBe(true);
       },
     );
   });
@@ -607,7 +590,7 @@ describe("gateway server models + voicewake", () => {
         },
       },
       async () => {
-        seedPiCatalog();
+        await seedPiCatalog();
         const res = await listModels({ view: "configured" });
         expect(res.ok).toBe(true);
         expect(res.payload?.models).toEqual([
@@ -634,7 +617,7 @@ describe("gateway server models + voicewake", () => {
         },
       },
       async () => {
-        seedPiCatalog();
+        await seedPiCatalog();
         const res = await listModels({ view: "all" });
         expect(res.ok).toBe(true);
         expect(res.payload?.models).toEqual(expectedSortedCatalog());
@@ -652,9 +635,8 @@ describe("gateway server models + voicewake", () => {
       expected: [
         {
           id: "claude-test-a",
-          name: "A-Model",
+          name: "claude-test-a",
           provider: "anthropic",
-          contextWindow: 200_000,
         },
         {
           id: "gpt-test-z",
@@ -708,18 +690,16 @@ describe("gateway server models + voicewake", () => {
         },
       },
       async () => {
-        seedPiCatalog();
+        await seedPiCatalog();
         const res = await listModels();
         expect(res.ok).toBe(true);
-        expect(res.payload?.models).toEqual([
-          {
-            id: "moonshotai/kimi-k2.5",
-            name: "Kimi K2.5 (Configured)",
-            alias: "Kimi K2.5 (NVIDIA)",
-            provider: "nvidia",
-            contextWindow: 32_000,
-          },
-        ]);
+        const models = res.payload?.models ?? [];
+        expect(models).toHaveLength(1);
+        expect(models[0]?.id).toBe("moonshotai/kimi-k2.5");
+        expect(models[0]?.name).toBe("Kimi K2.5 (Configured)");
+        expect(models[0]?.alias).toBe("Kimi K2.5 (NVIDIA)");
+        expect(models[0]?.provider).toBe("nvidia");
+        expect(models[0]?.contextWindow).toBe(32_000);
       },
     );
   });
@@ -751,18 +731,16 @@ describe("gateway server models + voicewake", () => {
         },
       },
       async () => {
-        seedPiCatalog();
+        await seedPiCatalog();
         const res = await listModels();
         expect(res.ok).toBe(true);
-        expect(res.payload?.models).toEqual([
-          {
-            id: "gpt-test-z",
-            name: "Configured GPT Test Z",
-            alias: "GPT Test Z Alias",
-            provider: "openai",
-            contextWindow: 64_000,
-          },
-        ]);
+        const models = res.payload?.models ?? [];
+        expect(models).toHaveLength(1);
+        expect(models[0]?.id).toBe("gpt-test-z");
+        expect(models[0]?.name).toBe("Configured GPT Test Z");
+        expect(models[0]?.alias).toBe("GPT Test Z Alias");
+        expect(models[0]?.provider).toBe("openai");
+        expect(models[0]?.contextWindow).toBe(64_000);
       },
     );
   });
@@ -778,24 +756,6 @@ describe("gateway server models + voicewake", () => {
 });
 
 describe("gateway server misc", () => {
-  test("hello-ok advertises the gateway port for canvas host", async () => {
-    await withEnvAsync({ OPENCLAW_GATEWAY_TOKEN: "secret" }, async () => {
-      testTailnetIPv4.value = "100.64.0.1";
-      testState.gatewayBind = "lan";
-      const canvasPort = await getFreePort();
-      testState.canvasHostPort = canvasPort;
-      await withEnvAsync({ OPENCLAW_CANVAS_HOST_PORT: String(canvasPort) }, async () => {
-        const testPort = await getFreePort();
-        const canvasHostUrl = resolveCanvasHostUrl({
-          canvasPort,
-          requestHost: `100.64.0.1:${testPort}`,
-          localAddress: "127.0.0.1",
-        });
-        expect(canvasHostUrl).toBe(`http://100.64.0.1:${canvasPort}`);
-      });
-    });
-  });
-
   test("send dedupes by idempotencyKey", { timeout: 15_000 }, async () => {
     let dedicatedServer: Awaited<ReturnType<typeof startServerWithClient>>["server"] | undefined;
     let dedicatedWs: WebSocket | undefined;
@@ -843,50 +803,6 @@ describe("gateway server misc", () => {
     }
   });
 
-  test("auto-enables configured channel plugins on startup", async () => {
-    const configPath = process.env.OPENCLAW_CONFIG_PATH;
-    if (!configPath) {
-      throw new Error("Missing OPENCLAW_CONFIG_PATH");
-    }
-    await fs.mkdir(path.dirname(configPath), { recursive: true });
-    await fs.writeFile(
-      configPath,
-      JSON.stringify(
-        {
-          channels: {
-            discord: {
-              token: "token-123",
-            },
-          },
-        },
-        null,
-        2,
-      ),
-      "utf-8",
-    );
-
-    await withEnvAsync(
-      {
-        OPENCLAW_TEST_MINIMAL_GATEWAY: undefined,
-        OPENCLAW_DISABLE_BUNDLED_PLUGINS: undefined,
-        OPENCLAW_BUNDLED_PLUGINS_DIR: path.resolve("extensions"),
-      },
-      async () => {
-        const autoPort = await getFreePort();
-        const autoServer = await startGatewayServer(autoPort);
-        await autoServer.close();
-      },
-    );
-
-    const updated = JSON.parse(await fs.readFile(configPath, "utf-8")) as Record<string, unknown>;
-    const channels = updated.channels as Record<string, unknown> | undefined;
-    const discord = channels?.discord as Record<string, unknown> | undefined;
-    expect(discord).toMatchObject({
-      token: "token-123",
-      enabled: true,
-    });
-  });
-
   test("releases port after close", async () => {
     const releasePort = await getFreePort();
     const releaseServer = await startGatewayServer(releasePort);
@@ -897,6 +813,7 @@ describe("gateway server misc", () => {
       probe.once("error", reject);
       probe.listen(releasePort, "127.0.0.1", () => resolve());
     });
+    expect(probe.listening).toBe(true);
     await new Promise<void>((resolve, reject) =>
       probe.close((err) => (err ? reject(err) : resolve())),
     );

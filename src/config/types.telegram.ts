@@ -1,5 +1,6 @@
 import type {
   ChannelPreviewStreamingConfig,
+  ChannelStreamingPreviewConfig,
   ContextVisibilityMode,
   DmPolicy,
   GroupPolicy,
@@ -11,7 +12,7 @@ import type {
 import type {
   ChannelHealthMonitorConfig,
   ChannelHeartbeatVisibilityConfig,
-} from "./types.channels.js";
+} from "./types.channel-health.js";
 import type { DmConfig, ProviderCommandsConfig } from "./types.messages.js";
 import type { GroupToolPolicyBySenderConfig, GroupToolPolicyConfig } from "./types.tools.js";
 
@@ -32,13 +33,11 @@ export type TelegramActionConfig = {
 
 export type TelegramThreadBindingsConfig = SessionThreadBindingsConfig & {
   /**
-   * Allow `sessions_spawn({ thread: true })` to auto-create + bind Telegram
-   * topics for subagent sessions. Default: false (opt-in).
+   * @deprecated Use spawnSessions instead.
    */
   spawnSubagentSessions?: boolean;
   /**
-   * Allow `/acp spawn` to auto-create + bind Telegram topics for ACP
-   * sessions. Default: false (opt-in).
+   * @deprecated Use spawnSessions instead.
    */
   spawnAcpSessions?: boolean;
 };
@@ -63,6 +62,17 @@ export type TelegramNetworkConfig = {
 export type TelegramInlineButtonsScope = "off" | "dm" | "group" | "all" | "allowlist";
 export type TelegramStreamingMode = "off" | "partial" | "block" | "progress";
 export type TelegramExecApprovalTarget = "dm" | "channel" | "both";
+
+export type TelegramStreamingPreviewConfig = ChannelStreamingPreviewConfig & {
+  /** Use Telegram-native ephemeral draft UI for DM preview tool progress. */
+  nativeToolProgress?: boolean;
+  /** Telegram sender/user IDs allowed to use native DM preview tool progress. */
+  nativeToolProgressAllowFrom?: Array<string | number>;
+};
+
+export type TelegramPreviewStreamingConfig = Omit<ChannelPreviewStreamingConfig, "preview"> & {
+  preview?: TelegramStreamingPreviewConfig;
+};
 
 export type TelegramExecApprovalConfig = {
   /** Enable mode for Telegram exec approvals on this account. Default: auto when approvers can be resolved; false disables. */
@@ -121,6 +131,8 @@ export type TelegramAccountConfig = {
   tokenFile?: string;
   /** Control reply threading when reply tags are present (off|first|all|batched). */
   replyToMode?: ReplyToMode;
+  /** Direct-message threading behavior. Defaults to flat DM sessions. */
+  dm?: TelegramDmConfig;
   groups?: Record<string, TelegramGroupConfig>;
   /** Per-DM configuration for Telegram DM topics (key is chat ID). */
   direct?: Record<string, TelegramDirectConfig>;
@@ -148,10 +160,12 @@ export type TelegramAccountConfig = {
   /** Outbound text chunk size (chars). Default: 4000. */
   textChunkLimit?: number;
   /** Streaming + chunking settings. Prefer this nested shape over legacy flat keys. */
-  streaming?: ChannelPreviewStreamingConfig;
+  streaming?: TelegramPreviewStreamingConfig;
   mediaMaxMb?: number;
   /** Telegram API client timeout in seconds (grammY ApiClientOptions). */
   timeoutSeconds?: number;
+  /** Buffer window for Telegram media groups/albums before dispatching them as one inbound message. Default: 500ms. */
+  mediaGroupFlushMs?: number;
   /** Telegram polling watchdog threshold in milliseconds. Default: 120000. */
   pollingStallThresholdMs?: number;
   /** Retry policy for outbound Telegram API calls. */
@@ -220,6 +234,13 @@ export type TelegramAccountConfig = {
   autoTopicLabel?: AutoTopicLabelConfig;
 };
 
+export type TelegramDmThreadReplies = "off" | "inbound" | "always";
+
+export type TelegramDmConfig = {
+  /** DM-only session threading override for message_thread_id (off|inbound|always). Default: off. */
+  threadReplies?: TelegramDmThreadReplies;
+};
+
 export type TelegramTopicConfig = {
   requireMention?: boolean;
   /** Emit internal message hooks for mention-skipped topic messages. */
@@ -283,6 +304,8 @@ export type AutoTopicLabelConfig =
 export type TelegramDirectConfig = {
   /** Per-DM override for DM message policy (open|disabled|allowlist). */
   dmPolicy?: DmPolicy;
+  /** Controls whether Telegram DM message_thread_id values split sessions. Default: off unless topic config requires it. */
+  threadReplies?: "off" | "inbound" | "always";
   /** Optional tool policy overrides for this DM. */
   tools?: GroupToolPolicyConfig;
   toolsBySender?: GroupToolPolicyBySenderConfig;
@@ -312,9 +335,3 @@ export type TelegramConfig = {
   /** Optional default account id when multiple accounts are configured. */
   defaultAccount?: string;
 } & TelegramAccountConfig;
-
-declare module "./types.channels.js" {
-  interface ChannelsConfig {
-    telegram?: TelegramConfig;
-  }
-}

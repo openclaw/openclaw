@@ -16,6 +16,7 @@ export type OpenAiEmbeddingClient = {
   inputType?: string;
   queryInputType?: string;
   documentInputType?: string;
+  outputDimensionality?: number;
 };
 
 const DEFAULT_OPENAI_BASE_URL = "https://api.openai.com/v1";
@@ -26,7 +27,7 @@ const OPENAI_MAX_INPUT_TOKENS: Record<string, number> = {
   "text-embedding-ada-002": 8191,
 };
 
-export function normalizeOpenAiModel(model: string): string {
+function normalizeOpenAiModel(model: string): string {
   const trimmed = model.trim();
   if (!trimmed) {
     return DEFAULT_OPENAI_EMBEDDING_MODEL;
@@ -46,7 +47,11 @@ export async function createOpenAiEmbeddingProvider(
     return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
   };
 
-  const embed = async (input: string[], kind: "query" | "document"): Promise<number[][]> => {
+  const embed = async (
+    input: string[],
+    kind: "query" | "document",
+    signal?: AbortSignal,
+  ): Promise<number[][]> => {
     if (input.length === 0) {
       return [];
     }
@@ -56,9 +61,13 @@ export async function createOpenAiEmbeddingProvider(
       headers: client.headers,
       ssrfPolicy: client.ssrfPolicy,
       fetchImpl: client.fetchImpl,
+      signal,
       body: {
         model: client.model,
         input,
+        ...(typeof client.outputDimensionality === "number"
+          ? { dimensions: client.outputDimensionality }
+          : {}),
         ...(inputType ? { input_type: inputType } : {}),
       },
       errorPrefix: "openai embeddings failed",
@@ -72,17 +81,17 @@ export async function createOpenAiEmbeddingProvider(
       ...(typeof OPENAI_MAX_INPUT_TOKENS[client.model] === "number"
         ? { maxInputTokens: OPENAI_MAX_INPUT_TOKENS[client.model] }
         : {}),
-      embedQuery: async (text) => {
-        const [vec] = await embed([text], "query");
+      embedQuery: async (text, options) => {
+        const [vec] = await embed([text], "query", options?.signal);
         return vec ?? [];
       },
-      embedBatch: async (texts) => await embed(texts, "document"),
+      embedBatch: async (texts, options) => await embed(texts, "document", options?.signal),
     },
     client,
   };
 }
 
-export async function resolveOpenAiEmbeddingClient(
+async function resolveOpenAiEmbeddingClient(
   options: MemoryEmbeddingProviderCreateOptions,
 ): Promise<OpenAiEmbeddingClient> {
   const client = await resolveRemoteEmbeddingClient({
@@ -96,5 +105,6 @@ export async function resolveOpenAiEmbeddingClient(
     inputType: options.inputType,
     queryInputType: options.queryInputType,
     documentInputType: options.documentInputType,
+    outputDimensionality: options.outputDimensionality,
   };
 }

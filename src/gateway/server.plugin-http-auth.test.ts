@@ -168,10 +168,11 @@ describe("gateway plugin HTTP auth boundary", () => {
         "nosniff",
       );
       expect(withoutHstsResponse.setHeader).toHaveBeenCalledWith("Referrer-Policy", "no-referrer");
-      expect(withoutHstsResponse.setHeader).not.toHaveBeenCalledWith(
-        "Strict-Transport-Security",
-        expect.any(String),
-      );
+      expect(
+        withoutHstsResponse.setHeader.mock.calls.some(
+          ([headerName]) => headerName === "Strict-Transport-Security",
+        ),
+      ).toBe(false);
 
       const withHsts = createTestGatewayServer({
         resolvedAuth: AUTH_NONE,
@@ -420,9 +421,9 @@ describe("gateway plugin HTTP auth boundary", () => {
     });
 
     expect(observedRuntimeScopes).toHaveLength(1);
-    expect(observedRuntimeScopes[0]).toEqual(
-      expect.arrayContaining(["operator.admin", "operator.read", "operator.write"]),
-    );
+    expect(observedRuntimeScopes[0]).toContain("operator.admin");
+    expect(observedRuntimeScopes[0]).toContain("operator.read");
+    expect(observedRuntimeScopes[0]).toContain("operator.write");
     expect(adminAllowedResults).toEqual([true]);
   });
 
@@ -623,7 +624,7 @@ describe("gateway plugin HTTP auth boundary", () => {
   test("passes POST webhook routes through root-mounted control ui to plugins", async () => {
     const handlePluginRequest = vi.fn(async (req: IncomingMessage, res: ServerResponse) => {
       const pathname = new URL(req.url ?? "/", "http://localhost").pathname;
-      if (req.method !== "POST" || pathname !== "/bluebubbles-webhook") {
+      if (req.method !== "POST" || pathname !== "/imessage-webhook") {
         return false;
       }
       res.statusCode = 200;
@@ -637,7 +638,7 @@ describe("gateway plugin HTTP auth boundary", () => {
       handlePluginRequest,
       run: async (server) => {
         const response = await sendRequest(server, {
-          path: "/bluebubbles-webhook",
+          path: "/imessage-webhook",
           method: "POST",
         });
 

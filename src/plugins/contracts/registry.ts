@@ -1,6 +1,7 @@
 import { normalizeProviderId } from "../../agents/provider-id.js";
 import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
 import { loadBundledCapabilityRuntimeRegistry } from "../bundled-capability-runtime.js";
+import { discoverOpenClawPlugins } from "../discovery.js";
 import { loadPluginManifestRegistry } from "../manifest-registry.js";
 import { resolveManifestContractPluginIds } from "../plugin-registry.js";
 import { resolveBundledExplicitProviderContractsFromPublicArtifacts } from "../provider-contract-public-artifacts.js";
@@ -58,6 +59,7 @@ type MusicGenerationProviderContractEntry = CapabilityContractEntry<MusicGenerat
 type PluginRegistrationContractEntry = BundledPluginContractSnapshot;
 
 type ManifestContractKey =
+  | "embeddingProviders"
   | "speechProviders"
   | "realtimeTranscriptionProviders"
   | "realtimeVoiceProviders"
@@ -92,6 +94,7 @@ function resolveBundledManifestContracts(): PluginRegistrationContractEntry[] {
       cliBackendIds: [...entry.cliBackendIds],
       providerIds: [...entry.providerIds],
       providerAuthEnvVars: normalizeProviderAuthEnvVars(entry.providerAuthEnvVars),
+      embeddingProviderIds: [...entry.embeddingProviderIds],
       speechProviderIds: [...entry.speechProviderIds],
       realtimeTranscriptionProviderIds: [...entry.realtimeTranscriptionProviderIds],
       realtimeVoiceProviderIds: [...entry.realtimeVoiceProviderIds],
@@ -113,6 +116,7 @@ function resolveBundledManifestContracts(): PluginRegistrationContractEntry[] {
         plugin.origin === "bundled" &&
         (plugin.cliBackends.length > 0 ||
           plugin.providers.length > 0 ||
+          (plugin.contracts?.embeddingProviders?.length ?? 0) > 0 ||
           (plugin.contracts?.speechProviders?.length ?? 0) > 0 ||
           (plugin.contracts?.realtimeTranscriptionProviders?.length ?? 0) > 0 ||
           (plugin.contracts?.realtimeVoiceProviders?.length ?? 0) > 0 ||
@@ -132,6 +136,7 @@ function resolveBundledManifestContracts(): PluginRegistrationContractEntry[] {
       cliBackendIds: uniqueStrings(plugin.cliBackends),
       providerIds: uniqueStrings(plugin.providers),
       providerAuthEnvVars: normalizeProviderAuthEnvVars(plugin.providerAuthEnvVars),
+      embeddingProviderIds: uniqueStrings(plugin.contracts?.embeddingProviders ?? []),
       speechProviderIds: uniqueStrings(plugin.contracts?.speechProviders ?? []),
       realtimeTranscriptionProviderIds: uniqueStrings(
         plugin.contracts?.realtimeTranscriptionProviders ?? [],
@@ -186,6 +191,8 @@ function resolveBundledManifestPluginIdsForContract(contract: ManifestContractKe
     resolveBundledManifestContracts()
       .filter((entry) => {
         switch (contract) {
+          case "embeddingProviders":
+            return entry.embeddingProviderIds.length > 0;
           case "speechProviders":
             return entry.speechProviderIds.length > 0;
           case "realtimeTranscriptionProviders":
@@ -255,12 +262,14 @@ function loadScopedCapabilityRuntimeRegistryEntries<T>(params: {
     plugin: BundledCapabilityRuntimeRegistry["plugins"][number],
   ) => readonly string[];
 }): T[] {
+  const discovery = discoverOpenClawPlugins({});
   let lastFailure: Error | undefined;
 
   for (let attempt = 0; attempt < 2; attempt += 1) {
     const registry = loadBundledCapabilityRuntimeRegistry({
       pluginIds: [params.pluginId],
       pluginSdkResolution: "dist",
+      discovery,
     });
     const entries = params.loadEntries(registry);
     if (entries.length > 0) {

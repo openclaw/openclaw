@@ -27,6 +27,16 @@ describe("resolveOpenAICompletionsCompatDefaults", () => {
     ).toBe(true);
   });
 
+  it("keeps streaming usage enabled for local OpenAI-compatible endpoints", () => {
+    expect(
+      resolveOpenAICompletionsCompatDefaults({
+        provider: "llama-cpp",
+        endpointClass: "local",
+        knownProviderFamily: "llama-cpp",
+      }).supportsUsageInStreaming,
+    ).toBe(true);
+  });
+
   it("does not broaden streaming usage for generic custom providers", () => {
     expect(
       resolveOpenAICompletionsCompatDefaults({
@@ -60,6 +70,18 @@ describe("resolveOpenAICompletionsCompatDefaults", () => {
       }).supportsUsageInStreaming,
     ).toBe(false);
   });
+
+  it("uses Together reasoning payload format for Together-family providers", () => {
+    const defaults = resolveOpenAICompletionsCompatDefaults({
+      provider: "together",
+      endpointClass: "custom",
+      knownProviderFamily: "together",
+    });
+
+    expect(defaults.thinkingFormat).toBe("together");
+    expect(defaults.supportsReasoningEffort).toBe(false);
+    expect(defaults.maxTokensField).toBe("max_tokens");
+  });
 });
 
 describe("detectOpenAICompletionsCompat", () => {
@@ -71,5 +93,57 @@ describe("detectOpenAICompletionsCompat", () => {
     });
 
     expect(detected.defaults.supportsUsageInStreaming).toBe(true);
+  });
+});
+
+describe("xiaomi compat detection", () => {
+  it("sets thinkingFormat to deepseek for xiaomi-native endpoint", () => {
+    expect(
+      resolveOpenAICompletionsCompatDefaults({
+        provider: "xiaomi",
+        endpointClass: "xiaomi-native",
+        knownProviderFamily: "xiaomi",
+      }).thinkingFormat,
+    ).toBe("deepseek");
+  });
+
+  it("sets requiresReasoningContentOnAssistantMessages for xiaomi-native endpoint", () => {
+    expect(
+      resolveOpenAICompletionsCompatDefaults({
+        provider: "xiaomi",
+        endpointClass: "xiaomi-native",
+        knownProviderFamily: "xiaomi",
+      }).requiresReasoningContentOnAssistantMessages,
+    ).toBe(true);
+  });
+
+  it("sets thinkingFormat to deepseek for default-route xiaomi provider", () => {
+    expect(
+      resolveOpenAICompletionsCompatDefaults({
+        provider: "xiaomi",
+        endpointClass: "default",
+        knownProviderFamily: "xiaomi",
+      }).thinkingFormat,
+    ).toBe("deepseek");
+  });
+
+  it("sets requiresReasoningContentOnAssistantMessages for default-route xiaomi provider", () => {
+    expect(
+      resolveOpenAICompletionsCompatDefaults({
+        provider: "xiaomi",
+        endpointClass: "default",
+        knownProviderFamily: "xiaomi",
+      }).requiresReasoningContentOnAssistantMessages,
+    ).toBe(true);
+  });
+
+  it("does not set requiresReasoningContentOnAssistantMessages for unrelated custom provider", () => {
+    expect(
+      resolveOpenAICompletionsCompatDefaults({
+        provider: "other-provider",
+        endpointClass: "custom",
+        knownProviderFamily: "other-provider",
+      }).requiresReasoningContentOnAssistantMessages,
+    ).toBe(false);
   });
 });

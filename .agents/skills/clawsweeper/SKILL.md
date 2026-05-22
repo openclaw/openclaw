@@ -7,7 +7,7 @@ description: "Use for all ClawSweeper work: OpenClaw issue/PR sweep reports, com
 
 ClawSweeper lives at `~/Projects/clawsweeper`. It is the one OpenClaw
 maintenance bot for sweeping, commit review, repair jobs, and guarded fix PRs.
-Use this skill whenever Peter asks about reports, findings, dispatch health,
+Use this skill whenever asked about reports, findings, dispatch health,
 repair/cloud PR creation, comment commands, automerge, permissions, or gates.
 
 ## Start
@@ -20,7 +20,7 @@ pnpm run build:all
 ```
 
 Do not overwrite unrelated edits. If the tree is dirty, inspect first and keep
-read-only report work read-only unless Peter asked to commit.
+read-only report work read-only unless the requester asked to commit.
 
 ## One Bot, One App
 
@@ -79,7 +79,7 @@ gh workflow run commit-review.yml --repo openclaw/clawsweeper \
   -f enabled=true
 ```
 
-Use `create_checks=true` only when Peter explicitly wants target commit Check
+Use `create_checks=true` only when the requester explicitly wants target commit Check
 Runs. Add `-f additional_prompt="..."` for focused one-off review instructions.
 
 ## Sweep Reports
@@ -175,7 +175,7 @@ gh variable set CLAWSWEEPER_ALLOW_MERGE --repo openclaw/clawsweeper --body 1
 gh variable set CLAWSWEEPER_ALLOW_AUTOMERGE --repo openclaw/clawsweeper --body 1
 ```
 
-Reset gates only when Peter asks; the active maintainer window may intentionally
+Reset gates only when explicitly requested; the active maintainer window may intentionally
 leave them at `1`.
 
 Important gates:
@@ -257,9 +257,25 @@ loop. The router:
   checks are green, GitHub says mergeable, no human-review label is present,
   the PR is not draft, and both merge gates are open.
 
+Missing changelog is not a review finding or merge blocker. If repairing a user-facing change, add/update changelog automatically when practical; never ask or block solely on it.
+
 If ClawSweeper passes while merge gates are closed, it labels
 `clawsweeper:merge-ready` and comments instead of merging. `@clawsweeper stop`
 adds `clawsweeper:human-review`.
+
+When asked to create a PR and enable ClawSweeper automerge, do not
+leave the local OpenClaw checkout on the PR branch. After the PR is created,
+pushed, and the `@clawsweeper automerge` request is posted or otherwise
+confirmed, return the local checkout to `main` and fast-forward it when the
+working tree is clean:
+
+```bash
+git switch main
+git pull --ff-only
+```
+
+If unrelated local edits or an in-progress rebase prevent switching, report the
+blocker instead of stashing, deleting, or overwriting work.
 
 Repair caps:
 
@@ -270,13 +286,17 @@ CLAWSWEEPER_MAX_REPAIRS_PER_HEAD=1
 
 ## Security Boundary
 
-Do not stage security-sensitive work for ClawSweeper Repair. Route vulnerability
-reports, CVE/GHSA/advisory work, leaked secrets/tokens/keys, plaintext secret
-storage, SSRF, XSS, CSRF, RCE, auth bypass, privilege escalation, and sensitive
-data exposure to central OpenClaw security handling.
+Do not stage unapproved security-sensitive work for ClawSweeper Repair. Route
+vulnerability reports, CVE/GHSA/advisory work, leaked secrets/tokens/keys,
+plaintext secret storage, SSRF, XSS, CSRF, RCE, auth bypass, privilege
+escalation, and sensitive data exposure to central OpenClaw security handling.
 
-For adopted automerge jobs, trust deterministic ClawSweeper security markers,
-labels, and job frontmatter; do not infer security handling from vague prose.
+For PRs explicitly opted into `clawsweeper:autofix` or
+`clawsweeper:automerge`, security-sensitive review findings may dispatch
+bounded repair, but merge remains blocked until a later exact-head review is
+clean and the normal merge gates pass. Trust deterministic ClawSweeper security
+markers, labels, and job frontmatter; do not infer security handling from vague
+prose.
 
 ## Monitoring
 

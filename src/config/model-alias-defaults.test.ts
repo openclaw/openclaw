@@ -127,6 +127,156 @@ describe("applyModelDefaults", () => {
     );
   });
 
+  it("normalizes retired Gemini model keys before applying aliases", () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          models: {
+            "google/gemini-3-pro-preview": {},
+          },
+        },
+      },
+    } satisfies OpenClawConfig;
+
+    const next = applyModelDefaults(cfg);
+
+    expect(next.agents?.defaults?.models).toEqual({
+      "google/gemini-3.1-pro-preview": { alias: "gemini" },
+    });
+  });
+
+  it("normalizes retired Gemini primary and fallback refs", () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          model: {
+            primary: "google/gemini-3-pro-preview",
+            fallbacks: ["google/gemini-3-pro-preview", "openai/gpt-5.5"],
+          },
+        },
+      },
+    } satisfies OpenClawConfig;
+
+    const next = applyModelDefaults(cfg);
+
+    expect(next.agents?.defaults?.model).toEqual({
+      primary: "google/gemini-3.1-pro-preview",
+      fallbacks: ["google/gemini-3.1-pro-preview", "openai/gpt-5.5"],
+    });
+  });
+
+  it("normalizes retired Gemini per-agent model refs", () => {
+    const cfg = {
+      agents: {
+        list: [
+          {
+            id: "ops",
+            model: {
+              primary: "google/gemini-3-pro-preview",
+              fallbacks: ["google/gemini-3-pro-preview"],
+            },
+            models: {
+              "google/gemini-3-pro-preview": {},
+            },
+          },
+        ],
+      },
+    } satisfies OpenClawConfig;
+
+    const next = applyModelDefaults(cfg);
+
+    expect(next.agents?.list?.[0]?.model).toEqual({
+      primary: "google/gemini-3.1-pro-preview",
+      fallbacks: ["google/gemini-3.1-pro-preview"],
+    });
+    expect(next.agents?.list?.[0]?.models).toEqual({
+      "google/gemini-3.1-pro-preview": {},
+    });
+  });
+
+  it("normalizes provider-prefixed Gemini ids in configured Google provider rows", () => {
+    const cfg = {
+      models: {
+        providers: {
+          google: {
+            baseUrl: "https://generativelanguage.googleapis.com/v1beta",
+            api: "google-generative-ai",
+            apiKey: "GOOGLE_API_KEY",
+            models: [
+              {
+                id: "google/gemini-3-pro-preview",
+                name: "Gemini 3 Pro",
+                input: ["text", "image"],
+                reasoning: true,
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                contextWindow: 1_048_576,
+                maxTokens: 65_536,
+              },
+            ],
+          },
+        },
+      },
+    } satisfies OpenClawConfig;
+
+    const next = applyModelDefaults(cfg);
+
+    expect(next.models?.providers?.google?.models?.[0]?.id).toBe("google/gemini-3.1-pro-preview");
+  });
+
+  it("normalizes provider-prefixed Gemini ids for OpenAI-compatible Google provider rows", () => {
+    const cfg = {
+      models: {
+        providers: {
+          google: {
+            baseUrl: "https://generativelanguage.googleapis.com/v1beta/openai",
+            api: "openai-completions",
+            apiKey: "GOOGLE_API_KEY",
+            models: [
+              {
+                id: "google/gemini-3-pro-preview",
+                name: "Gemini 3 Pro",
+                input: ["text", "image"],
+                reasoning: true,
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                contextWindow: 1_048_576,
+                maxTokens: 65_536,
+              },
+            ],
+          },
+        },
+      },
+    } satisfies OpenClawConfig;
+
+    const next = applyModelDefaults(cfg);
+
+    expect(next.models?.providers?.google?.api).toBe("openai-completions");
+    expect(next.models?.providers?.google?.models?.[0]?.id).toBe("google/gemini-3.1-pro-preview");
+  });
+
+  it("normalizes nested retired Gemini ids in proxy provider rows", () => {
+    const cfg = buildProxyProviderConfig();
+    const model = cfg.models.providers.myproxy.models[0];
+    model.id = "google/gemini-3-pro-preview";
+    model.name = "Gemini via proxy";
+
+    const next = applyModelDefaults(cfg);
+
+    expect(next.models?.providers?.myproxy?.models?.[0]?.id).toBe("google/gemini-3.1-pro-preview");
+  });
+
+  it("normalizes provider-prefixed nested retired Gemini ids in proxy provider rows", () => {
+    const cfg = buildProxyProviderConfig();
+    const model = cfg.models.providers.myproxy.models[0];
+    model.id = "myproxy/google/gemini-3-pro-preview";
+    model.name = "Gemini via proxy";
+
+    const next = applyModelDefaults(cfg);
+
+    expect(next.models?.providers?.myproxy?.models?.[0]?.id).toBe(
+      "myproxy/google/gemini-3.1-pro-preview",
+    );
+  });
+
   it("fills missing model provider defaults", () => {
     const cfg = buildProxyProviderConfig();
 

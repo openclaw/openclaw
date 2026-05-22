@@ -7,6 +7,7 @@ import {
   resolveClosestAspectRatio,
   resolveClosestResolution,
   resolveClosestSize,
+  throwCapabilityGenerationFailure,
 } from "./runtime-shared.js";
 
 function parseModelRef(raw?: string) {
@@ -130,6 +131,7 @@ describe("media-generation runtime shared candidates", () => {
   });
 
   it("disables implicit provider expansion when mediaGenerationAutoProviderFallback=false", () => {
+    let listProviderCalls = 0;
     const candidates = resolveCapabilityModelCandidates({
       cfg: {
         agents: {
@@ -142,16 +144,20 @@ describe("media-generation runtime shared candidates", () => {
         primary: "google/gemini-3.1-flash-image-preview",
       },
       parseModelRef,
-      listProviders: () => [
-        {
-          id: "openai",
-          defaultModel: "gpt-image-1",
-          isConfigured: () => true,
-        },
-      ],
+      listProviders: () => {
+        listProviderCalls += 1;
+        return [
+          {
+            id: "openai",
+            defaultModel: "gpt-image-1",
+            isConfigured: () => true,
+          },
+        ];
+      },
     });
 
     expect(candidates).toEqual([{ provider: "google", model: "gemini-3.1-flash-image-preview" }]);
+    expect(listProviderCalls).toBe(0);
   });
 
   it("treats an explicit model override as exact-only", () => {
@@ -179,6 +185,53 @@ describe("media-generation runtime shared candidates", () => {
     });
 
     expect(candidates).toEqual([{ provider: "openai", model: "gpt-image-2" }]);
+  });
+
+  it("resolves slash-containing provider model IDs from registered provider models", () => {
+    const candidates = resolveCapabilityModelCandidates({
+      cfg: {} as OpenClawConfig,
+      modelConfig: {
+        primary: "openai/gpt-image-2",
+      },
+      modelOverride: "fal-ai/flux/dev",
+      parseModelRef,
+      listProviders: () => [
+        {
+          id: "fal",
+          defaultModel: "fal-ai/flux/dev",
+          models: ["fal-ai/flux/dev", "fal-ai/flux/dev/image-to-image"],
+          isConfigured: () => true,
+        },
+      ],
+    });
+
+    expect(candidates).toEqual([{ provider: "fal", model: "fal-ai/flux/dev" }]);
+  });
+
+  it("prefers explicit provider refs over colliding slash-containing model IDs", () => {
+    const candidates = resolveCapabilityModelCandidates({
+      cfg: {} as OpenClawConfig,
+      modelConfig: {
+        primary: "google/lyria-3-pro-preview",
+      },
+      parseModelRef,
+      listProviders: () => [
+        {
+          id: "google",
+          defaultModel: "lyria-3-clip-preview",
+          models: ["lyria-3-clip-preview", "lyria-3-pro-preview"],
+          isConfigured: () => true,
+        },
+        {
+          id: "openrouter",
+          defaultModel: "google/lyria-3-clip-preview",
+          models: ["google/lyria-3-clip-preview", "google/lyria-3-pro-preview"],
+          isConfigured: () => true,
+        },
+      ],
+    });
+
+    expect(candidates[0]).toEqual({ provider: "google", model: "lyria-3-pro-preview" });
   });
 });
 
@@ -218,5 +271,58 @@ describe("media-generation runtime shared normalization", () => {
   it("clamps durations to the closest supported max", () => {
     expect(normalizeDurationToClosestMax(12, 8)).toBe(8);
     expect(normalizeDurationToClosestMax(6, 8)).toBe(6);
+  });
+});
+
+describe("media-generation runtime shared failure summaries", () => {
+  it("collapses abort cascades behind the non-abort failure", () => {
+    expect(() =>
+      throwCapabilityGenerationFailure({
+        capabilityLabel: "music generation",
+        attempts: [
+          {
+            provider: "google",
+            model: "lyria-3-clip-preview",
+            error: "Manually set deadline 1s is too short. Minimum allowed deadline is 10s.",
+          },
+          {
+            provider: "minimax",
+            model: "music-2.6",
+            error: "This operation was aborted",
+          },
+          {
+            provider: "minimax-portal",
+            model: "music-2.6",
+            error: "This operation was aborted",
+          },
+        ],
+        lastError: new Error("This operation was aborted"),
+      }),
+    ).toThrow(
+      "All music generation models failed (3): google/lyria-3-clip-preview: Manually set deadline 1s is too short. Minimum allowed deadline is 10s. | 2 fallback(s) aborted after the request was cancelled or timed out: minimax/music-2.6, minimax-portal/music-2.6",
+    );
+  });
+
+  it("summarizes all-aborted attempts once", () => {
+    expect(() =>
+      throwCapabilityGenerationFailure({
+        capabilityLabel: "music generation",
+        attempts: [
+          {
+            provider: "minimax",
+            model: "music-2.6",
+            error: "This operation was aborted",
+          },
+          {
+            provider: "minimax-portal",
+            model: "music-2.6",
+            error: "This operation was aborted",
+          },
+        ],
+        lastError: new Error("This operation was aborted"),
+      }),
+    ).toThrow(
+      "All music generation models failed (2): 2 fallback(s) aborted after the request was cancelled or timed out: minimax/music-2.6, minimax-portal/music-2.6",
+    );
   });
 });

@@ -1,8 +1,13 @@
 import type { BaseProbeResult } from "openclaw/plugin-sdk/channel-contract";
-import type { TelegramNetworkConfig } from "openclaw/plugin-sdk/config-types";
+import type { TelegramNetworkConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import { fetchWithTimeout } from "openclaw/plugin-sdk/text-runtime";
-import { resolveTelegramApiBase, resolveTelegramFetch } from "./fetch.js";
+import { fetchWithTimeout } from "openclaw/plugin-sdk/text-utility-runtime";
+import { normalizeTelegramBotInfo, type TelegramBotInfo } from "./bot-info.js";
+import {
+  resolveTelegramApiBase,
+  resolveTelegramTransport,
+  type TelegramTransport,
+} from "./fetch.js";
 import { makeProxyFetch } from "./proxy.js";
 
 export type TelegramProbe = BaseProbeResult & {
@@ -10,11 +15,19 @@ export type TelegramProbe = BaseProbeResult & {
   elapsedMs: number;
   bot?: {
     id?: number | null;
+    isBot?: boolean | null;
+    firstName?: string | null;
     username?: string | null;
     canJoinGroups?: boolean | null;
     canReadAllGroupMessages?: boolean | null;
+    canManageBots?: boolean | null;
     supportsInlineQueries?: boolean | null;
+    canConnectToBusiness?: boolean | null;
+    hasMainWebApp?: boolean | null;
+    hasTopicsEnabled?: boolean | null;
+    allowsUsersToCreateTopics?: boolean | null;
   };
+  botInfo?: TelegramBotInfo;
   webhook?: { url?: string | null; hasCustomCert?: boolean | null };
 };
 
@@ -26,11 +39,11 @@ export type TelegramProbeOptions = {
   includeWebhookInfo?: boolean;
 };
 
-const probeFetcherCache = new Map<string, typeof fetch>();
-const MAX_PROBE_FETCHER_CACHE_SIZE = 64;
+const probeTransportCache = new Map<string, TelegramTransport>();
+const MAX_PROBE_TRANSPORT_CACHE_SIZE = 64;
 
 export function resetTelegramProbeFetcherCacheForTests(): void {
-  probeFetcherCache.clear();
+  probeTransportCache.clear();
 }
 
 function resolveProbeOptions(
@@ -45,11 +58,11 @@ function resolveProbeOptions(
   return proxyOrOptions;
 }
 
-function shouldUseProbeFetcherCache(): boolean {
+function shouldUseProbeTransportCache(): boolean {
   return !process.env.VITEST && process.env.NODE_ENV !== "test";
 }
 
-function buildProbeFetcherCacheKey(token: string, options?: TelegramProbeOptions): string {
+function buildProbeTransportCacheKey(token: string, options?: TelegramProbeOptions): string {
   const cacheIdentity = options?.accountId?.trim() || token;
   const cacheIdentityKind = options?.accountId?.trim() ? "account" : "token";
   const proxyKey = options?.proxyUrl?.trim() ?? "";
@@ -61,37 +74,44 @@ function buildProbeFetcherCacheKey(token: string, options?: TelegramProbeOptions
   return `${cacheIdentityKind}:${cacheIdentity}::${proxyKey}::${autoSelectFamilyKey}::${dnsResultOrderKey}::${apiRootKey}`;
 }
 
-function setCachedProbeFetcher(cacheKey: string, fetcher: typeof fetch): typeof fetch {
-  probeFetcherCache.set(cacheKey, fetcher);
-  if (probeFetcherCache.size > MAX_PROBE_FETCHER_CACHE_SIZE) {
-    const oldestKey = probeFetcherCache.keys().next().value;
+function setCachedProbeTransport(
+  cacheKey: string,
+  transport: TelegramTransport,
+): TelegramTransport {
+  probeTransportCache.set(cacheKey, transport);
+  if (probeTransportCache.size > MAX_PROBE_TRANSPORT_CACHE_SIZE) {
+    const oldestKey = probeTransportCache.keys().next().value;
     if (oldestKey !== undefined) {
-      probeFetcherCache.delete(oldestKey);
+      probeTransportCache.delete(oldestKey);
     }
   }
-  return fetcher;
+  return transport;
 }
 
-function resolveProbeFetcher(token: string, options?: TelegramProbeOptions): typeof fetch {
-  const cacheEnabled = shouldUseProbeFetcherCache();
-  const cacheKey = cacheEnabled ? buildProbeFetcherCacheKey(token, options) : null;
+function resolveProbeTransport(token: string, options?: TelegramProbeOptions): TelegramTransport {
+  const cacheEnabled = shouldUseProbeTransportCache();
+  const cacheKey = cacheEnabled ? buildProbeTransportCacheKey(token, options) : null;
   if (cacheKey) {
-    const cachedFetcher = probeFetcherCache.get(cacheKey);
-    if (cachedFetcher) {
-      return cachedFetcher;
+    const cached = probeTransportCache.get(cacheKey);
+    if (cached) {
+      return cached;
     }
   }
 
   const proxyUrl = options?.proxyUrl?.trim();
   const proxyFetch = proxyUrl ? makeProxyFetch(proxyUrl) : undefined;
-  const resolved = resolveTelegramFetch(proxyFetch, {
+  const transport = resolveTelegramTransport(proxyFetch, {
     network: options?.network,
   });
 
   if (cacheKey) {
-    return setCachedProbeFetcher(cacheKey, resolved);
+    return setCachedProbeTransport(cacheKey, transport);
   }
-  return resolved;
+  return transport;
+}
+
+function normalizeBoolean(value: unknown): boolean | null {
+  return typeof value === "boolean" ? value : null;
 }
 
 export async function probeTelegram(
@@ -104,7 +124,8 @@ export async function probeTelegram(
   const deadlineMs = started + timeoutBudgetMs;
   const options = resolveProbeOptions(proxyOrOptions);
   const includeWebhookInfo = options?.includeWebhookInfo !== false;
-  const fetcher = resolveProbeFetcher(token, options);
+  const transport = resolveProbeTransport(token, options);
+  const fetcher = transport.fetch;
   const apiBase = resolveTelegramApiBase(options?.apiRoot);
   const base = `${apiBase}/bot${token}`;
   const retryDelayMs = Math.max(50, Math.min(1000, Math.floor(timeoutBudgetMs / 5)));
@@ -137,6 +158,10 @@ export async function probeTelegram(
         break;
       } catch (err) {
         fetchError = err;
+        // On timeout or network error, promote the transport to its IPv4
+        // fallback dispatcher so the next retry (and all future probes
+        // sharing this cached transport) skip the stalled IPv6 path.
+        transport.forceFallback?.("probe timeout/network error");
         if (i < 2) {
           const remainingAfterAttemptMs = resolveRemainingBudgetMs();
           if (remainingAfterAttemptMs <= 0) {
@@ -157,13 +182,7 @@ export async function probeTelegram(
     const meJson = (await meRes.json()) as {
       ok?: boolean;
       description?: string;
-      result?: {
-        id?: number;
-        username?: string;
-        can_join_groups?: boolean;
-        can_read_all_group_messages?: boolean;
-        supports_inline_queries?: boolean;
-      };
+      result?: unknown;
     };
     if (!meRes.ok || !meJson?.ok) {
       result.status = meRes.status;
@@ -171,19 +190,25 @@ export async function probeTelegram(
       return { ...result, elapsedMs: Date.now() - started };
     }
 
+    const botInfo = normalizeTelegramBotInfo(meJson.result);
+    const rawBot = meJson.result && typeof meJson.result === "object" ? meJson.result : {};
+    const bot = rawBot as Record<string, unknown>;
+    if (botInfo) {
+      result.botInfo = botInfo;
+    }
     result.bot = {
-      id: meJson.result?.id ?? null,
-      username: meJson.result?.username ?? null,
-      canJoinGroups:
-        typeof meJson.result?.can_join_groups === "boolean" ? meJson.result?.can_join_groups : null,
-      canReadAllGroupMessages:
-        typeof meJson.result?.can_read_all_group_messages === "boolean"
-          ? meJson.result?.can_read_all_group_messages
-          : null,
-      supportsInlineQueries:
-        typeof meJson.result?.supports_inline_queries === "boolean"
-          ? meJson.result?.supports_inline_queries
-          : null,
+      id: typeof bot.id === "number" ? bot.id : null,
+      isBot: normalizeBoolean(bot.is_bot),
+      firstName: typeof bot.first_name === "string" ? bot.first_name : null,
+      username: typeof bot.username === "string" ? bot.username : null,
+      canJoinGroups: normalizeBoolean(bot.can_join_groups),
+      canReadAllGroupMessages: normalizeBoolean(bot.can_read_all_group_messages),
+      canManageBots: normalizeBoolean(bot.can_manage_bots),
+      supportsInlineQueries: normalizeBoolean(bot.supports_inline_queries),
+      canConnectToBusiness: normalizeBoolean(bot.can_connect_to_business),
+      hasMainWebApp: normalizeBoolean(bot.has_main_web_app),
+      hasTopicsEnabled: normalizeBoolean(bot.has_topics_enabled),
+      allowsUsersToCreateTopics: normalizeBoolean(bot.allows_users_to_create_topics),
     };
 
     if (includeWebhookInfo) {

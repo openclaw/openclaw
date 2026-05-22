@@ -352,6 +352,8 @@ export async function handleBashChatCommand(params: {
       allowBackground: true,
       timeoutSec,
       sessionKey: params.sessionKey,
+      mainKey: params.cfg.session?.mainKey,
+      sessionScope: params.cfg.session?.scope,
       notifyOnExit,
       notifyOnExitEmptySuccess,
       elevated: {
@@ -406,8 +408,4 @@ export async function handleBashChatCommand(params: {
       text: [`⚠️ bash failed: ${commandText}`, formatOutputBlock(message)].join("\n"),
     };
   }
-}
-
-export function resetBashChatCommandForTests() {
-  activeJob = null;
 }

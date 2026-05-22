@@ -33,6 +33,10 @@ import {
 } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { TtsAutoMode } from "../../config/types.tts.js";
+import {
+  forgetActiveSessionForShutdown,
+  noteActiveSessionForShutdown,
+} from "../../gateway/active-sessions-shutdown-tracker.js";
 import { getSessionBindingService } from "../../infra/outbound/session-binding-service.js";
 import { deliverSessionMaintenanceWarning } from "../../infra/session-maintenance-warning.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
@@ -41,12 +45,17 @@ import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import type { PluginHookSessionEndReason } from "../../plugins/hook-types.js";
 import { isAcpSessionKey, normalizeMainKey } from "../../routing/session-key.js";
 import { isInterSessionInputProvenance } from "../../sessions/input-provenance.js";
+import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "../../shared/string-coerce.js";
-import { normalizeSessionDeliveryFields } from "../../utils/delivery-context.shared.js";
+import {
+  normalizeDeliveryChannelRoute,
+  normalizeSessionDeliveryFields,
+} from "../../utils/delivery-context.shared.js";
+import { resolveCommandTurnTargetSessionKey } from "../command-turn-context.js";
 import { normalizeCommandBody } from "../commands-registry.js";
 import type { MsgContext, TemplateContext } from "../templating.js";
 import { resolveEffectiveResetTargetSessionKey } from "./acp-reset-target.js";
@@ -60,23 +69,32 @@ import {
   resolveLastChannelRaw,
   resolveLastToRaw,
 } from "./session-delivery.js";
-import {
-  forkSessionFromParent,
-  resolveParentForkMaxTokens,
-  resolveParentForkTokenCount,
-} from "./session-fork.js";
+import { forkSessionFromParent, resolveParentForkDecision } from "./session-fork.js";
 import { buildSessionEndHookPayload, buildSessionStartHookPayload } from "./session-hooks.js";
 import { clearSessionResetRuntimeState } from "./session-reset-cleanup.js";
 
 const log = createSubsystemLogger("session-init");
-let sessionArchiveRuntimePromise: Promise<
-  typeof import("../../gateway/session-archive.runtime.js")
-> | null = null;
+const sessionArchiveRuntimeLoader = createLazyImportLoader(
+  () => import("../../gateway/session-archive.runtime.js"),
+);
 
 function loadSessionArchiveRuntime() {
-  sessionArchiveRuntimePromise ??= import("../../gateway/session-archive.runtime.js");
-  return sessionArchiveRuntimePromise;
+  return sessionArchiveRuntimeLoader.load();
 }
+
+function stripThreadFromSessionRoute(route: SessionEntry["route"]): SessionEntry["route"] {
+  const normalized = normalizeDeliveryChannelRoute(route);
+  if (!normalized?.thread) {
+    return normalized;
+  }
+  const { thread: _drop, ...withoutThread } = normalized;
+  return Object.keys(withoutThread).length > 0 ? withoutThread : undefined;
+}
+
+type ReplySessionEndReason = Extract<
+  PluginHookSessionEndReason,
+  "new" | "reset" | "idle" | "daily" | "unknown"
+>;
 
 function stripThreadIdFromDeliveryContext(
   context: SessionEntry["deliveryContext"],
@@ -96,9 +114,7 @@ function stripThreadIdFromOrigin(origin: SessionEntry["origin"]): SessionEntry["
   return Object.keys(rest).length > 0 ? rest : undefined;
 }
 
-function resolveExplicitSessionEndReason(
-  matchedResetTriggerLower?: string,
-): PluginHookSessionEndReason {
+function resolveExplicitSessionEndReason(matchedResetTriggerLower?: string): ReplySessionEndReason {
   return matchedResetTriggerLower === "/reset" ? "reset" : "new";
 }
 
@@ -129,7 +145,7 @@ function resolveStaleSessionEndReason(params: {
   entry: SessionEntry | undefined;
   freshness?: SessionFreshness;
   now: number;
-}): PluginHookSessionEndReason | undefined {
+}): ReplySessionEndReason | undefined {
   if (!params.entry || !params.freshness) {
     return undefined;
   }
@@ -245,10 +261,7 @@ export async function initSessionState(params: {
     : resolveSessionConversationBindingContext(cfg, ctx);
   // Native slash commands (Telegram/Discord/Slack) are delivered on a separate
   // "slash session" key, but should mutate the target chat session.
-  const commandTargetSessionKey =
-    ctx.CommandSource === "native"
-      ? normalizeOptionalString(ctx.CommandTargetSessionKey)
-      : undefined;
+  const commandTargetSessionKey = resolveCommandTurnTargetSessionKey(ctx);
   // Native slash/menu commands can arrive on a transport-specific "slash session"
   // while explicitly targeting an existing chat session. Honor that explicit target
   // before any binding lookup so command-side mutations land on the intended session.
@@ -274,7 +287,6 @@ export async function initSessionState(params: {
   const resetTriggers = sessionCfg?.resetTriggers?.length
     ? sessionCfg.resetTriggers
     : DEFAULT_RESET_TRIGGERS;
-  const parentForkMaxTokens = resolveParentForkMaxTokens(cfg);
   const sessionScope = sessionCfg?.scope ?? "per-sender";
   const storePath = resolveStorePath(sessionCfg?.store, { agentId });
   const ingressTimingEnabled = process.env.OPENCLAW_DEBUG_INGRESS_TIMING === "1";
@@ -549,6 +561,18 @@ export async function initSessionState(params: {
   }
 
   const baseEntry = !isNewSession && freshEntry ? entry : undefined;
+  const usageFamilyKey = previousSessionEntry
+    ? (previousSessionEntry.usageFamilyKey ?? sessionKey)
+    : baseEntry?.usageFamilyKey;
+  const usageFamilySessionIds = previousSessionEntry
+    ? Array.from(
+        new Set([
+          ...(previousSessionEntry.usageFamilySessionIds ?? []),
+          previousSessionEntry.sessionId,
+          sessionId,
+        ]),
+      )
+    : baseEntry?.usageFamilySessionIds;
   // Track the originating channel/to for announce routing (subagent announce-back).
   const originatingChannelRaw = ctx.OriginatingChannel as string | undefined;
   const isInterSession = isInterSessionInputProvenance(ctx.InputProvenance);
@@ -589,9 +613,12 @@ export async function initSessionState(params: {
   // previous interaction that happened inside a topic/thread.
   const lastThreadIdRaw = isSystemEvent
     ? baseEntry?.lastThreadId
-    : ctx.MessageThreadId || (isThread ? baseEntry?.lastThreadId : undefined);
+    : (ctx.MessageThreadId ??
+      ctx.TransportThreadId ??
+      (isThread ? baseEntry?.lastThreadId : undefined));
   const deliveryFields = isSystemEvent
     ? normalizeSessionDeliveryFields({
+        route: isThread ? baseEntry?.route : stripThreadFromSessionRoute(baseEntry?.route),
         channel: baseEntry?.channel,
         lastChannel: baseEntry?.lastChannel,
         lastTo: baseEntry?.lastTo,
@@ -631,6 +658,8 @@ export async function initSessionState(params: {
     reasoningLevel: persistedReasoning ?? baseEntry?.reasoningLevel,
     ttsAuto: persistedTtsAuto ?? baseEntry?.ttsAuto,
     responseUsage: baseEntry?.responseUsage,
+    usageFamilyKey,
+    usageFamilySessionIds,
     modelOverride: persistedModelOverride ?? baseEntry?.modelOverride,
     providerOverride: persistedProviderOverride ?? baseEntry?.providerOverride,
     modelOverrideSource: persistedModelOverrideSource ?? baseEntry?.modelOverrideSource,
@@ -664,6 +693,7 @@ export async function initSessionState(params: {
     space: baseEntry?.space,
     groupActivation: entry?.groupActivation,
     groupActivationNeedsSystemIntro: entry?.groupActivationNeedsSystemIntro,
+    route: deliveryFields.route,
     deliveryContext: deliveryFields.deliveryContext,
     // Track originating channel for subagent announce routing.
     lastChannel,
@@ -684,6 +714,7 @@ export async function initSessionState(params: {
   if (isSystemEvent && !isThread) {
     sessionEntry = {
       ...sessionEntry,
+      route: stripThreadFromSessionRoute(sessionEntry.route),
       lastThreadId: undefined,
       deliveryContext: stripThreadIdFromDeliveryContext(sessionEntry.deliveryContext),
       origin: stripThreadIdFromOrigin(sessionEntry.origin),
@@ -705,30 +736,22 @@ export async function initSessionState(params: {
     !alreadyForked
   ) {
     const parentEntry = sessionStore[parentSessionKey];
-    const parentTokens =
-      parentForkMaxTokens > 0
-        ? await resolveParentForkTokenCount({
-            parentEntry,
-            storePath,
-          })
-        : undefined;
-    if (
-      parentForkMaxTokens > 0 &&
-      typeof parentTokens === "number" &&
-      parentTokens > parentForkMaxTokens
-    ) {
-      // Parent context is too large — forking would create a thread session
-      // that immediately overflows the model's context window. Start fresh
-      // instead and mark as forked to prevent re-attempts. See #26905.
+    const forkDecision = await resolveParentForkDecision({
+      parentEntry,
+      storePath,
+    });
+    if (forkDecision.status === "skip") {
+      // The parent branch is too large to inherit usefully. Start fresh and
+      // mark as handled so the thread does not retry this decision every turn.
       log.warn(
         `skipping parent fork (parent too large): parentKey=${parentSessionKey} → sessionKey=${sessionKey} ` +
-          `parentTokens=${parentTokens} maxTokens=${parentForkMaxTokens}`,
+          `parentTokens=${forkDecision.parentTokens} maxTokens=${forkDecision.maxTokens}`,
       );
       sessionEntry.forkedFromParent = true;
     } else {
       log.warn(
         `forking from parent session: parentKey=${parentSessionKey} → sessionKey=${sessionKey} ` +
-          `parentTokens=${parentTokens ?? "unknown"}`,
+          `parentTokens=${forkDecision.parentTokens ?? "unknown"}`,
       );
       const forked = await forkSessionFromParent({
         parentEntry,
@@ -781,6 +804,9 @@ export async function initSessionState(params: {
     sessionEntry.outputTokens = undefined;
     sessionEntry.estimatedCostUsd = undefined;
     sessionEntry.contextTokens = undefined;
+    // Skills snapshots are prompt/runtime caches. Do not preserve a stale
+    // snapshot through /new; the next turn must rebuild the visible skill list.
+    sessionEntry.skillsSnapshot = undefined;
   }
   // Preserve per-session overrides while resetting compaction state on /new.
   sessionStore[sessionKey] = { ...sessionStore[sessionKey], ...sessionEntry };
@@ -875,6 +901,10 @@ export async function initSessionState(params: {
 
     // If replacing an existing session, fire session_end for the old one
     if (previousSessionEntry?.sessionId && previousSessionEntry.sessionId !== effectiveSessionId) {
+      // The shutdown finalizer must not re-fire session_end for a session
+      // that is being replaced here; forget unconditionally so the next drain
+      // skips this id even when no `session_end` plugin is currently attached.
+      forgetActiveSessionForShutdown(previousSessionEntry.sessionId);
       if (hookRunner.hasHooks("session_end")) {
         const payload = buildSessionEndHookPayload({
           sessionId: previousSessionEntry.sessionId,
@@ -890,6 +920,19 @@ export async function initSessionState(params: {
     }
 
     // Fire session_start for the new session
+    if (effectiveSessionId) {
+      // Track the new session so the shutdown finalizer fires a typed
+      // session_end with reason="shutdown"/"restart" if the gateway stops
+      // while this session is still active (see #57790).
+      noteActiveSessionForShutdown({
+        cfg,
+        sessionKey,
+        sessionId: effectiveSessionId,
+        storePath,
+        sessionFile: sessionEntry?.sessionFile,
+        agentId,
+      });
+    }
     if (hookRunner.hasHooks("session_start")) {
       const payload = buildSessionStartHookPayload({
         sessionId: effectiveSessionId,

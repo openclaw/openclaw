@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { Agent } from "node:http";
 import process from "node:process";
-import { HttpsProxyAgent } from "https-proxy-agent";
+import { createAmbientNodeProxyAgent } from "@openclaw/proxyline";
 import {
   resolveDebugProxyBlobDir,
   resolveDebugProxyCertDir,
@@ -80,7 +80,19 @@ export function createDebugProxyWebSocketAgent(settings: DebugProxySettings): Ag
   if (!settings.enabled || !settings.proxyUrl) {
     return undefined;
   }
-  return new HttpsProxyAgent(settings.proxyUrl);
+  return createAmbientNodeProxyAgent({
+    protocol: "https",
+    env: {
+      HTTP_PROXY: settings.proxyUrl,
+      HTTPS_PROXY: settings.proxyUrl,
+      ALL_PROXY: undefined,
+      NO_PROXY: undefined,
+      http_proxy: undefined,
+      https_proxy: undefined,
+      all_proxy: undefined,
+      no_proxy: undefined,
+    },
+  }) as Agent | undefined;
 }
 
 export function resolveEffectiveDebugProxyUrl(configuredProxyUrl?: string): string | undefined {

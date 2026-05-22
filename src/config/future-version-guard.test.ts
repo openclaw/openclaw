@@ -4,6 +4,7 @@ import {
   formatFutureConfigActionBlock,
   resolveFutureConfigActionBlock,
 } from "./future-version-guard.js";
+import type { FutureConfigActionBlock } from "./future-version-guard.js";
 import type { ConfigFileSnapshot } from "./types.js";
 
 function snapshotWithTouchedVersion(
@@ -15,6 +16,13 @@ function snapshotWithTouchedVersion(
   };
 }
 
+function expectFutureActionBlock(block: FutureConfigActionBlock | null): FutureConfigActionBlock {
+  if (block === null) {
+    throw new Error("Expected destructive action to be blocked by future config version");
+  }
+  return block;
+}
+
 describe("resolveFutureConfigActionBlock", () => {
   it("blocks destructive actions from older binaries", () => {
     const block = resolveFutureConfigActionBlock({
@@ -24,10 +32,11 @@ describe("resolveFutureConfigActionBlock", () => {
       env: {},
     });
 
-    expect(block?.message).toContain("Refusing to restart the gateway service");
-    expect(block?.message).toContain("2026.4.5");
-    expect(block?.message).toContain("2026.4.23");
-    expect(formatFutureConfigActionBlock(block!)).toContain(
+    const actionBlock = expectFutureActionBlock(block);
+    expect(actionBlock.message).toContain("Refusing to restart the gateway service");
+    expect(actionBlock.message).toContain("2026.4.5");
+    expect(actionBlock.message).toContain("2026.4.23");
+    expect(formatFutureConfigActionBlock(actionBlock)).toContain(
       ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS_ENV,
     );
   });
@@ -46,6 +55,17 @@ describe("resolveFutureConfigActionBlock", () => {
         action: "restart the gateway service",
         currentVersion: "2026.4.23",
         snapshot: snapshotWithTouchedVersion("2026.4.5"),
+        env: {},
+      }),
+    ).toBeNull();
+  });
+
+  it("allows beta binaries to refresh services written by the same stable release", () => {
+    expect(
+      resolveFutureConfigActionBlock({
+        action: "install or rewrite the gateway service",
+        currentVersion: "2026.5.2-beta.3",
+        snapshot: snapshotWithTouchedVersion("2026.5.2"),
         env: {},
       }),
     ).toBeNull();

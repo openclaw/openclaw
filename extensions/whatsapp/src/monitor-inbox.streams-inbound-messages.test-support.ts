@@ -38,6 +38,12 @@ function createSocketRef(): NonNullable<InboxMonitorOptions["socketRef"]> {
   return { current: null };
 }
 
+function inboundMessage(onMessage: ReturnType<typeof vi.fn>, index = 0): Record<string, unknown> {
+  const msg = onMessage.mock.calls[index]?.[0];
+  expect(msg).toBeDefined();
+  return msg as Record<string, unknown>;
+}
+
 async function primeInboundReplyHandle(params: {
   onMessage: ReturnType<typeof vi.fn>;
   socketRef: NonNullable<InboxMonitorOptions["socketRef"]>;
@@ -63,12 +69,9 @@ async function primeInboundReplyHandle(params: {
   );
   await waitForMessageCalls(params.onMessage, 1);
 
-  const inbound = params.onMessage.mock.calls.at(0)?.at(0) as
-    | {
-        reply: (text: string) => Promise<void>;
-      }
-    | undefined;
-  expect(inbound).toBeDefined();
+  const inbound = inboundMessage(params.onMessage) as {
+    reply: (text: string) => Promise<void>;
+  };
 
   return { listener, sock, inbound };
 }
@@ -115,30 +118,26 @@ describe("web monitor inbox", () => {
     sock.ev.emit("messages.upsert", upsert);
     await waitForMessageCalls(onMessage, 1);
 
-    expect(onMessage).toHaveBeenCalledWith(
-      expect.objectContaining({
-        replyToId: "q1",
-        replyToBody: "original",
-        replyToSender: "+111",
-        sender: expect.objectContaining({
-          e164: "+999",
-          name: "Tester",
-        }),
-        replyTo: expect.objectContaining({
-          id: "q1",
-          body: "original",
-          sender: expect.objectContaining({
-            jid: "111@s.whatsapp.net",
-            e164: "+111",
-            label: "+111",
-          }),
-        }),
-        self: expect.objectContaining({
-          jid: "123@s.whatsapp.net",
-          e164: "+123",
-        }),
-      }),
-    );
+    const inbound = inboundMessage(onMessage);
+    expect(inbound.replyToId).toBe("q1");
+    expect(inbound.replyToBody).toBe("original");
+    expect(inbound.replyToSender).toBe("+111");
+    const sender = inbound.sender as { e164?: string; name?: string };
+    expect(sender.e164).toBe("+999");
+    expect(sender.name).toBe("Tester");
+    const replyTo = inbound.replyTo as {
+      body?: string;
+      id?: string;
+      sender?: { e164?: string; jid?: string; label?: string };
+    };
+    expect(replyTo.id).toBe("q1");
+    expect(replyTo.body).toBe("original");
+    expect(replyTo.sender?.jid).toBe("111@s.whatsapp.net");
+    expect(replyTo.sender?.e164).toBe("+111");
+    expect(replyTo.sender?.label).toBe("+111");
+    const self = inbound.self as { e164?: string; jid?: string };
+    expect(self.jid).toBe("123@s.whatsapp.net");
+    expect(self.e164).toBe("+123");
     expect(sock.sendMessage).toHaveBeenCalledWith("999@s.whatsapp.net", {
       text: "pong",
     });
@@ -166,9 +165,10 @@ describe("web monitor inbox", () => {
     sock.ev.emit("messages.upsert", upsert);
     await waitForMessageCalls(onMessage, 1);
 
-    expect(onMessage).toHaveBeenCalledWith(
-      expect.objectContaining({ body: "ping", from: "+999", to: "+123" }),
-    );
+    const inbound = inboundMessage(onMessage);
+    expect(inbound.body).toBe("ping");
+    expect(inbound.from).toBe("+999");
+    expect(inbound.to).toBe("+123");
     expect(sock.readMessages).toHaveBeenCalledWith([
       {
         remoteJid: "999@s.whatsapp.net",
@@ -258,16 +258,13 @@ describe("web monitor inbox", () => {
     );
 
     await waitForMessageCalls(onMessage, 1);
-    expect(onMessage).toHaveBeenCalledWith(
-      expect.objectContaining({
-        body: "ping",
-        from: "123@g.us",
-        groupSubject: "Recovered Group",
-        senderE164: "+444",
-        chatType: "group",
-      }),
-    );
-    expect(onMessage.mock.calls[0]?.[0].groupParticipants).toBeUndefined();
+    const inbound = inboundMessage(onMessage);
+    expect(inbound.body).toBe("ping");
+    expect(inbound.from).toBe("123@g.us");
+    expect(inbound.groupSubject).toBe("Recovered Group");
+    expect(inbound.senderE164).toBe("+444");
+    expect(inbound.chatType).toBe("group");
+    expect(inbound.groupParticipants).toBeUndefined();
 
     await second.listener.close();
   });
@@ -348,14 +345,11 @@ describe("web monitor inbox", () => {
     );
     await waitForMessageCalls(onMessage, 1);
 
-    const inbound = onMessage.mock.calls.at(0)?.at(0) as
-      | {
-          reply: (text: string) => Promise<void>;
-          sendMedia: (payload: Record<string, unknown>) => Promise<void>;
-          sendComposing: () => Promise<void>;
-        }
-      | undefined;
-    expect(inbound).toBeDefined();
+    const inbound = inboundMessage(onMessage) as {
+      reply: (text: string) => Promise<void>;
+      sendMedia: (payload: Record<string, unknown>) => Promise<void>;
+      sendComposing: () => Promise<void>;
+    };
 
     const replacementSock = {
       sendMessage: vi.fn(async () => undefined),
@@ -365,9 +359,9 @@ describe("web monitor inbox", () => {
       InboxMonitorOptions["socketRef"]
     >["current"];
 
-    await inbound?.reply("pong");
-    await inbound?.sendMedia({ text: "after-reconnect" });
-    await inbound?.sendComposing();
+    await inbound.reply("pong");
+    await inbound.sendMedia({ text: "after-reconnect" });
+    await inbound.sendComposing();
 
     expect(replacementSock.sendMessage).toHaveBeenNthCalledWith(1, "999@s.whatsapp.net", {
       text: "pong",
@@ -453,10 +447,112 @@ describe("web monitor inbox", () => {
       await listener.close();
       await vi.advanceTimersByTimeAsync(50);
       await waitForMessageCalls(onMessage, 1);
-      expect(onMessage).toHaveBeenCalledWith(
-        expect.objectContaining({
-          body: "first\nsecond",
+      expect(inboundMessage(onMessage).body).toBe("first\nsecond");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("lets a drained debounced inbound reply before closing the socket", async () => {
+    vi.useFakeTimers();
+    try {
+      const onMessage = vi.fn(async (msg) => {
+        await msg.reply("pong");
+        await msg.sendMedia({ text: "media" });
+      });
+      const { listener, sock } = await startInboxMonitor(onMessage as InboxOnMessage, {
+        debounceMs: 50,
+      });
+      sock.ev.emit(
+        "messages.upsert",
+        buildNotifyMessageUpsert({
+          id: nextMessageId("debounce-close-reply-1"),
+          remoteJid: "999@s.whatsapp.net",
+          text: "first",
+          timestamp: 1_700_000_000,
+          pushName: "Tester",
         }),
+      );
+      sock.ev.emit(
+        "messages.upsert",
+        buildNotifyMessageUpsert({
+          id: nextMessageId("debounce-close-reply-2"),
+          remoteJid: "999@s.whatsapp.net",
+          text: "second",
+          timestamp: 1_700_000_001,
+          pushName: "Tester",
+        }),
+      );
+
+      await listener.close();
+
+      expect(onMessage).toHaveBeenCalledTimes(1);
+      expect(inboundMessage(onMessage).body).toBe("first\nsecond");
+      expect(sock.sendMessage).toHaveBeenNthCalledWith(1, "999@s.whatsapp.net", {
+        text: "pong",
+      });
+      expect(sock.sendMessage).toHaveBeenNthCalledWith(2, "999@s.whatsapp.net", {
+        text: "media",
+      });
+      expect(sock.end).toHaveBeenCalledTimes(1);
+      expect(sock.sendMessage.mock.invocationCallOrder.at(-1)).toBeLessThan(
+        sock.end.mock.invocationCallOrder.at(0),
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("waits for in-flight inbound handlers before draining on close", async () => {
+    vi.useFakeTimers();
+    try {
+      const onMessage = vi.fn(async (msg) => {
+        await msg.reply("pong");
+      });
+      const { listener, sock } = await startInboxMonitor(onMessage as InboxOnMessage, {
+        debounceMs: 50,
+      });
+      let releaseRead: (() => void) | undefined;
+      const readGate = new Promise<void>((resolve) => {
+        releaseRead = resolve;
+      });
+      const readStarted = new Promise<void>((resolve) => {
+        sock.readMessages.mockImplementationOnce(async () => {
+          resolve();
+          await readGate;
+        });
+      });
+
+      sock.ev.emit(
+        "messages.upsert",
+        buildNotifyMessageUpsert({
+          id: nextMessageId("debounce-close-inflight"),
+          remoteJid: "999@s.whatsapp.net",
+          text: "first",
+          timestamp: 1_700_000_000,
+          pushName: "Tester",
+        }),
+      );
+
+      await readStarted;
+      const closePromise = listener.close();
+      await Promise.resolve();
+
+      expect(sock.end).not.toHaveBeenCalled();
+
+      if (!releaseRead) {
+        throw new Error("Expected read receipt release callback to be initialized");
+      }
+      releaseRead();
+      await closePromise;
+
+      expect(onMessage).toHaveBeenCalledTimes(1);
+      expect(sock.sendMessage).toHaveBeenCalledWith("999@s.whatsapp.net", {
+        text: "pong",
+      });
+      expect(sock.end).toHaveBeenCalledTimes(1);
+      expect(sock.sendMessage.mock.invocationCallOrder.at(0)).toBeLessThan(
+        sock.end.mock.invocationCallOrder.at(0),
       );
     } finally {
       vi.useRealTimers();
@@ -594,9 +690,10 @@ describe("web monitor inbox", () => {
     await waitForMessageCalls(onMessage, 1);
 
     expect(getPNForLID).toHaveBeenCalledWith("999@lid");
-    expect(onMessage).toHaveBeenCalledWith(
-      expect.objectContaining({ body: "ping", from: "+999", to: "+123" }),
-    );
+    const inbound = inboundMessage(onMessage);
+    expect(inbound.body).toBe("ping");
+    expect(inbound.from).toBe("+999");
+    expect(inbound.to).toBe("+123");
 
     await listener.close();
   });
@@ -623,9 +720,10 @@ describe("web monitor inbox", () => {
     sock.ev.emit("messages.upsert", upsert);
     await waitForMessageCalls(onMessage, 1);
 
-    expect(onMessage).toHaveBeenCalledWith(
-      expect.objectContaining({ body: "ping", from: "+1555", to: "+123" }),
-    );
+    const inbound = inboundMessage(onMessage);
+    expect(inbound.body).toBe("ping");
+    expect(inbound.from).toBe("+1555");
+    expect(inbound.to).toBe("+123");
     expect(getPNForLID).not.toHaveBeenCalled();
 
     await listener.close();
@@ -651,14 +749,11 @@ describe("web monitor inbox", () => {
     await waitForMessageCalls(onMessage, 1);
 
     expect(getPNForLID).toHaveBeenCalledWith("444@lid");
-    expect(onMessage).toHaveBeenCalledWith(
-      expect.objectContaining({
-        body: "ping",
-        from: "123@g.us",
-        senderE164: "+444",
-        chatType: "group",
-      }),
-    );
+    const inbound = inboundMessage(onMessage);
+    expect(inbound.body).toBe("ping");
+    expect(inbound.from).toBe("123@g.us");
+    expect(inbound.senderE164).toBe("+444");
+    expect(inbound.chatType).toBe("group");
 
     await listener.close();
   });

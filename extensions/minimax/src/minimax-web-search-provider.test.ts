@@ -7,26 +7,38 @@ const {
   resolveMiniMaxApiKey,
   resolveMiniMaxEndpoint,
   resolveMiniMaxRegion,
+  readMiniMaxSearchJsonResponse,
 } = minimaxWebSearchTesting;
+
+function restoreEnvValue(key: string, value: string | undefined) {
+  if (value === undefined) {
+    delete process.env[key];
+  } else {
+    process.env[key] = value;
+  }
+}
 
 describe("minimax web search provider", () => {
   const originalApiHost = process.env.MINIMAX_API_HOST;
   const originalCodePlanKey = process.env.MINIMAX_CODE_PLAN_KEY;
   const originalCodingApiKey = process.env.MINIMAX_CODING_API_KEY;
+  const originalOauthToken = process.env.MINIMAX_OAUTH_TOKEN;
   const originalApiKey = process.env.MINIMAX_API_KEY;
 
   beforeEach(() => {
     delete process.env.MINIMAX_API_HOST;
     delete process.env.MINIMAX_CODE_PLAN_KEY;
     delete process.env.MINIMAX_CODING_API_KEY;
+    delete process.env.MINIMAX_OAUTH_TOKEN;
     delete process.env.MINIMAX_API_KEY;
   });
 
   afterEach(() => {
-    process.env.MINIMAX_API_HOST = originalApiHost;
-    process.env.MINIMAX_CODE_PLAN_KEY = originalCodePlanKey;
-    process.env.MINIMAX_CODING_API_KEY = originalCodingApiKey;
-    process.env.MINIMAX_API_KEY = originalApiKey;
+    restoreEnvValue("MINIMAX_API_HOST", originalApiHost);
+    restoreEnvValue("MINIMAX_CODE_PLAN_KEY", originalCodePlanKey);
+    restoreEnvValue("MINIMAX_CODING_API_KEY", originalCodingApiKey);
+    restoreEnvValue("MINIMAX_OAUTH_TOKEN", originalOauthToken);
+    restoreEnvValue("MINIMAX_API_KEY", originalApiKey);
   });
 
   describe("resolveMiniMaxRegion", () => {
@@ -130,7 +142,7 @@ describe("minimax web search provider", () => {
       expect(resolveMiniMaxApiKey({ apiKey: "configured-key" })).toBe("configured-key");
     });
 
-    it("accepts MINIMAX_CODING_API_KEY as a coding-plan alias", () => {
+    it("accepts MINIMAX_CODING_API_KEY as a token-plan alias", () => {
       process.env.MINIMAX_CODING_API_KEY = "coding-key";
       expect(resolveMiniMaxApiKey()).toBe("coding-key");
     });
@@ -138,6 +150,12 @@ describe("minimax web search provider", () => {
     it("falls back to MINIMAX_API_KEY last", () => {
       process.env.MINIMAX_API_KEY = "plain-key";
       expect(resolveMiniMaxApiKey()).toBe("plain-key");
+    });
+
+    it("accepts MINIMAX_OAUTH_TOKEN before the legacy API-key fallback", () => {
+      process.env.MINIMAX_OAUTH_TOKEN = "oauth-token";
+      process.env.MINIMAX_API_KEY = "plain-key";
+      expect(resolveMiniMaxApiKey()).toBe("oauth-token");
     });
   });
 
@@ -149,5 +167,11 @@ describe("minimax web search provider", () => {
     it("uses correct CN endpoint", () => {
       expect(MINIMAX_SEARCH_ENDPOINT_CN).toBe("https://api.minimaxi.com/v1/coding_plan/search");
     });
+  });
+
+  it("reports malformed Search API JSON with a stable provider error", async () => {
+    await expect(
+      readMiniMaxSearchJsonResponse(new Response("{ nope"), "MiniMax Search API error"),
+    ).rejects.toThrow("MiniMax Search API error: malformed JSON response");
   });
 });

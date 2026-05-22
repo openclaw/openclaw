@@ -33,9 +33,50 @@ describe("loadExtraBootstrapFiles", () => {
 
     const files = await loadExtraBootstrapFiles(workspaceDir, ["packages/*/*"]);
 
-    expect(files).toHaveLength(1);
-    expect(files[0]?.name).toBe("TOOLS.md");
-    expect(files[0]?.content).toBe("tools");
+    expect(files).toStrictEqual([
+      {
+        name: "TOOLS.md",
+        path: path.join(packageDir, "TOOLS.md"),
+        content: "tools",
+        missing: false,
+      },
+    ]);
+  });
+
+  it("loads glob patterns with explicit current-directory prefixes", async () => {
+    const workspaceDir = await createWorkspaceDir("glob-current-dir");
+    const packageDir = path.join(workspaceDir, "packages", "core");
+    await fs.mkdir(packageDir, { recursive: true });
+    await fs.writeFile(path.join(packageDir, "AGENTS.md"), "agents", "utf-8");
+
+    const files = await loadExtraBootstrapFiles(workspaceDir, ["./packages/*/AGENTS.md"]);
+
+    expect(files).toStrictEqual([
+      {
+        name: "AGENTS.md",
+        path: path.join(packageDir, "AGENTS.md"),
+        content: "agents",
+        missing: false,
+      },
+    ]);
+  });
+
+  it("loads literal bootstrap paths with square brackets", async () => {
+    const workspaceDir = await createWorkspaceDir("literal-brackets");
+    const packageDir = path.join(workspaceDir, "pkg[1]");
+    await fs.mkdir(packageDir, { recursive: true });
+    await fs.writeFile(path.join(packageDir, "AGENTS.md"), "literal agents", "utf-8");
+
+    const files = await loadExtraBootstrapFiles(workspaceDir, ["pkg[1]/AGENTS.md"]);
+
+    expect(files).toStrictEqual([
+      {
+        name: "AGENTS.md",
+        path: path.join(packageDir, "AGENTS.md"),
+        content: "literal agents",
+        missing: false,
+      },
+    ]);
   });
 
   it("keeps path-traversal attempts outside workspace excluded", async () => {
@@ -65,9 +106,14 @@ describe("loadExtraBootstrapFiles", () => {
 
     const files = await loadExtraBootstrapFiles(linkedWorkspace, ["AGENTS.md"]);
 
-    expect(files).toHaveLength(1);
-    expect(files[0]?.name).toBe("AGENTS.md");
-    expect(files[0]?.content).toBe("linked agents");
+    expect(files).toStrictEqual([
+      {
+        name: "AGENTS.md",
+        path: path.join(linkedWorkspace, "AGENTS.md"),
+        content: "linked agents",
+        missing: false,
+      },
+    ]);
   });
 
   it("rejects hardlinked aliases to files outside workspace", async () => {
@@ -106,6 +152,6 @@ describe("loadExtraBootstrapFiles", () => {
     ]);
 
     expect(files).toHaveLength(0);
-    expect(diagnostics.some((d) => d.reason === "security")).toBe(true);
+    expect(diagnostics.map((diagnostic) => diagnostic.reason)).toContain("security");
   });
 });

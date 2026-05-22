@@ -5,7 +5,7 @@ import { ensureUrbitChannelOpen, pokeUrbitChannel, scryUrbitPath } from "./chann
 import { getUrbitContext, normalizeUrbitCookie } from "./context.js";
 import { urbitFetch } from "./fetch.js";
 
-export type UrbitSseLogger = {
+type UrbitSseLogger = {
   log?: (message: string) => void;
   error?: (message: string) => void;
 };
@@ -22,6 +22,14 @@ type UrbitSseOptions = {
   maxReconnectDelay?: number;
   logger?: UrbitSseLogger;
 };
+
+function parseUrbitSsePayload(data: string): { id?: number; json?: unknown; response?: string } {
+  try {
+    return JSON.parse(data) as { id?: number; json?: unknown; response?: string };
+  } catch (cause) {
+    throw new Error("Tlon Urbit SSE event was malformed JSON", { cause });
+  }
+}
 
 export class UrbitSSEClient {
   url: string;
@@ -276,7 +284,7 @@ export class UrbitSSEClient {
     }
 
     try {
-      const parsed = JSON.parse(data) as { id?: number; json?: unknown; response?: string };
+      const parsed = parseUrbitSsePayload(data);
 
       if (parsed.response === "quit") {
         if (parsed.id) {

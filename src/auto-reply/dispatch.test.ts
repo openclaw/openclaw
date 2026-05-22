@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import { onDiagnosticEvent, resetDiagnosticEventsForTest } from "../infra/diagnostic-events.js";
 import type { ReplyDispatcher } from "./reply/reply-dispatcher.js";
 import { buildTestCtx } from "./reply/test-ctx.js";
 
@@ -87,6 +88,23 @@ function createDispatcher(record: string[]): ReplyDispatcher {
   };
 }
 
+function lastTypingDispatcherOptions(): Parameters<CreateReplyDispatcherWithTypingFn>[0] {
+  const calls = hoisted.createReplyDispatcherWithTypingMock.mock.calls;
+  const [options] = calls[calls.length - 1] ?? [];
+  if (!options) {
+    throw new Error("expected createReplyDispatcherWithTyping call");
+  }
+  return options as Parameters<CreateReplyDispatcherWithTypingFn>[0];
+}
+
+function requireReplyDispatcherOptions(index = 0): Parameters<CreateReplyDispatcherFn>[0] {
+  const call = hoisted.createReplyDispatcherMock.mock.calls[index];
+  if (!call) {
+    throw new Error(`expected createReplyDispatcher call ${index}`);
+  }
+  return call[0] as Parameters<CreateReplyDispatcherFn>[0];
+}
+
 describe("withReplyDispatcher", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -135,6 +153,41 @@ describe("withReplyDispatcher", () => {
     });
 
     expect(order).toEqual(["sendFinalReply", "markComplete", "waitForIdle"]);
+  });
+
+  it("emits message.received diagnostics before dispatch", async () => {
+    const events: Array<{ type: string; channel?: string; sessionKey?: string; source?: string }> =
+      [];
+    const stop = onDiagnosticEvent((event) => events.push(event));
+    const dispatcher = createDispatcher([]);
+    hoisted.dispatchReplyFromConfigMock.mockResolvedValueOnce({
+      queuedFinal: false,
+      counts: { tool: 0, block: 0, final: 0 },
+    });
+
+    try {
+      await dispatchInboundMessage({
+        ctx: buildTestCtx({
+          Provider: "signal",
+          Surface: "signal",
+          SessionKey: "agent:main:signal:direct:u1",
+        }),
+        cfg: {} as OpenClawConfig,
+        dispatcher,
+      });
+    } finally {
+      stop();
+      resetDiagnosticEventsForTest();
+    }
+
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        type: "message.received",
+        channel: "signal",
+        sessionKey: "agent:main:signal:direct:u1",
+        source: "dispatchInboundMessage",
+      }),
+    );
   });
 
   it("always marks complete and waits for idle after success", async () => {
@@ -210,7 +263,7 @@ describe("withReplyDispatcher", () => {
     });
 
     expect(typing.markRunComplete).toHaveBeenCalledTimes(1);
-    expect(typing.markDispatchIdle).toHaveBeenCalled();
+    expect(typing.markDispatchIdle).toHaveBeenCalledTimes(1);
   });
 
   it("runs message_sending hooks before inbound dispatcher delivery", async () => {
@@ -235,8 +288,10 @@ describe("withReplyDispatcher", () => {
       replyResolver: async () => ({ text: "ok" }),
     });
 
-    const dispatcherOptions = hoisted.createReplyDispatcherMock.mock.calls[0]?.[0];
-    expect(dispatcherOptions?.beforeDeliver).toEqual(expect.any(Function));
+    const dispatcherOptions = requireReplyDispatcherOptions();
+    if (!dispatcherOptions?.beforeDeliver) {
+      throw new Error("expected beforeDeliver hook");
+    }
 
     const payload = await dispatcherOptions.beforeDeliver(
       { text: "original reply" },
@@ -283,6 +338,36 @@ describe("withReplyDispatcher", () => {
     });
   });
 
+  it("reconciles queuedFinal and counts after dispatcher-side delivery failure", async () => {
+    const dispatcher = {
+      sendToolResult: () => true,
+      sendBlockReply: () => true,
+      sendFinalReply: () => true,
+      getQueuedCounts: () => ({ tool: 0, block: 0, final: 0 }),
+      getCancelledCounts: () => ({ tool: 0, block: 0, final: 0 }),
+      getFailedCounts: () => ({ tool: 0, block: 0, final: 1 }),
+      markComplete: () => undefined,
+      waitForIdle: async () => undefined,
+    } satisfies ReplyDispatcher;
+    hoisted.dispatchReplyFromConfigMock.mockResolvedValueOnce({
+      queuedFinal: true,
+      counts: { tool: 0, block: 0, final: 1 },
+    });
+
+    const result = await dispatchInboundMessage({
+      ctx: buildTestCtx(),
+      cfg: {} as OpenClawConfig,
+      dispatcher,
+      replyResolver: async () => ({ text: "ok" }),
+    });
+
+    expect(result).toEqual({
+      queuedFinal: false,
+      counts: { tool: 0, block: 0, final: 0 },
+      failedCounts: { tool: 0, block: 0, final: 1 },
+    });
+  });
+
   it("uses CommandTargetSessionKey for silent-reply policy on native command turns", async () => {
     hoisted.createReplyDispatcherWithTypingMock.mockReturnValueOnce({
       dispatcher: createDispatcher([]),
@@ -306,14 +391,11 @@ describe("withReplyDispatcher", () => {
       replyResolver: async () => ({ text: "ok" }),
     });
 
-    expect(hoisted.createReplyDispatcherWithTypingMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        silentReplyContext: expect.objectContaining({
-          sessionKey: "agent:test:telegram:direct:8231046597",
-          surface: "telegram",
-        }),
-      }),
+    const dispatcherOptions = lastTypingDispatcherOptions();
+    expect(dispatcherOptions.silentReplyContext?.sessionKey).toBe(
+      "agent:test:telegram:direct:8231046597",
     );
+    expect(dispatcherOptions.silentReplyContext?.surface).toBe("telegram");
   });
 
   it("passes explicit direct conversation type for generic silent-reply policy keys", async () => {
@@ -338,15 +420,10 @@ describe("withReplyDispatcher", () => {
       replyResolver: async () => ({ text: "ok" }),
     });
 
-    expect(hoisted.createReplyDispatcherWithTypingMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        silentReplyContext: expect.objectContaining({
-          sessionKey: "agent:test:main",
-          surface: "discord",
-          conversationType: "direct",
-        }),
-      }),
-    );
+    const dispatcherOptions = lastTypingDispatcherOptions();
+    expect(dispatcherOptions.silentReplyContext?.sessionKey).toBe("agent:test:main");
+    expect(dispatcherOptions.silentReplyContext?.surface).toBe("discord");
+    expect(dispatcherOptions.silentReplyContext?.conversationType).toBe("direct");
   });
 
   it("does not copy source conversation type onto cross-session native silent-reply targets", async () => {
@@ -373,14 +450,9 @@ describe("withReplyDispatcher", () => {
       replyResolver: async () => ({ text: "ok" }),
     });
 
-    const silentReplyContext =
-      hoisted.createReplyDispatcherWithTypingMock.mock.calls.at(-1)?.[0]?.silentReplyContext;
-    expect(silentReplyContext).toEqual(
-      expect.objectContaining({
-        sessionKey: "agent:test:direct:user",
-        surface: "telegram",
-      }),
-    );
-    expect(silentReplyContext).not.toEqual(expect.objectContaining({ conversationType: "group" }));
+    const dispatcherOptions = lastTypingDispatcherOptions();
+    expect(dispatcherOptions.silentReplyContext?.sessionKey).toBe("agent:test:direct:user");
+    expect(dispatcherOptions.silentReplyContext?.surface).toBe("telegram");
+    expect(dispatcherOptions.silentReplyContext?.conversationType).not.toBe("group");
   });
 });

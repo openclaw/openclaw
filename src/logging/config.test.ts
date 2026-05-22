@@ -31,7 +31,7 @@ describe("readLoggingConfig", () => {
     tempDirs = [];
   });
 
-  it("skips mutating config loads for config schema", async () => {
+  it("skips mutating config loads for config schema", () => {
     process.argv = ["node", "openclaw", "config", "schema"];
     const configPath = writeConfig(`{ logging: { file: "/tmp/should-not-read.log" } }`);
     fs.rmSync(configPath);
@@ -48,7 +48,7 @@ describe("readLoggingConfig", () => {
       },
     }`);
 
-    expect(readLoggingConfig()).toMatchObject({
+    expect(readLoggingConfig()).toStrictEqual({
       level: "debug",
       file: "/tmp/openclaw-custom.log",
       maxFileBytes: 1234,
@@ -63,7 +63,7 @@ describe("readLoggingConfig", () => {
       },
     }`);
 
-    expect(readLoggingConfig()).toMatchObject({
+    expect(readLoggingConfig()).toStrictEqual({
       consoleLevel: "warn",
     });
   });

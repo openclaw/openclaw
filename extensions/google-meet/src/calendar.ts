@@ -18,7 +18,7 @@ type GoogleCalendarConferenceEntryPoint = {
   label?: string;
 };
 
-export type GoogleMeetCalendarEvent = {
+type GoogleMeetCalendarEvent = {
   id?: string;
   summary?: string;
   description?: string;
@@ -44,7 +44,7 @@ export type GoogleMeetCalendarLookupResult = {
   meetingUri: string;
 };
 
-export type GoogleMeetCalendarEventsResult = {
+type GoogleMeetCalendarEventsResult = {
   calendarId: string;
   events: Array<{
     event: GoogleMeetCalendarEvent;
@@ -138,10 +138,19 @@ function chooseBestMeetCalendarEvent(
   now: Date,
 ): GoogleMeetCalendarLookupResult["event"] | undefined {
   const nowMs = now.getTime();
-  return events
-    .filter((event) => event.status !== "cancelled")
-    .filter((event) => extractGoogleMeetUriFromCalendarEvent(event))
-    .toSorted((left, right) => rankCalendarEvent(left, nowMs) - rankCalendarEvent(right, nowMs))[0];
+  let selected: GoogleMeetCalendarEvent | undefined;
+  let selectedRank = Number.POSITIVE_INFINITY;
+  for (const event of events) {
+    if (event.status === "cancelled" || !extractGoogleMeetUriFromCalendarEvent(event)) {
+      continue;
+    }
+    const rank = rankCalendarEvent(event, nowMs);
+    if (!selected || rank < selectedRank) {
+      selected = event;
+      selectedRank = rank;
+    }
+  }
+  return selected;
 }
 
 async function fetchGoogleCalendarEvents(params: {

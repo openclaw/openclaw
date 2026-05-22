@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { withTempHome } from "openclaw/plugin-sdk/test-env";
 import { describe, expect, it } from "vitest";
 import { autoMigrateLegacyMatrixState, detectLegacyMatrixState } from "./legacy-state.js";
@@ -35,7 +35,7 @@ describe("matrix legacy state migration", () => {
 
       const result = await autoMigrateLegacyMatrixState({ cfg, env: process.env });
       expect(result.migrated).toBe(true);
-      expect(result.warnings).toEqual([]);
+      expect(result.warnings).toStrictEqual([]);
       expect(fs.existsSync(path.join(stateDir, "matrix", "bot-storage.json"))).toBe(false);
       expect(fs.existsSync(path.join(stateDir, "matrix", "crypto"))).toBe(false);
       expect(fs.existsSync(detection.targetStoragePath)).toBe(true);

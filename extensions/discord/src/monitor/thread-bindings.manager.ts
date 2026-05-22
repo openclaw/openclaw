@@ -8,7 +8,7 @@ import {
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { createDiscordRestClient } from "../client.js";
 import { getChannel } from "../internal/discord.js";
 import {
@@ -451,7 +451,7 @@ export function createThreadBindingManager(params: {
           }),
         });
         // Use bot send path for farewell messages so unbound threads don't process
-        // webhook echoes as fresh inbound turns when allowBots is enabled.
+        // webhook echoes as fresh inbound events when allowBots is enabled.
         if (cfg) {
           void maybeSendBindingMessage({
             cfg,
@@ -540,7 +540,7 @@ export function getThreadBindingManager(accountId?: string): ThreadBindingManage
   return MANAGERS_BY_ACCOUNT_ID.get(normalized) ?? null;
 }
 
-export const __testing = {
+export const testing = {
   resolveThreadBindingsPath,
   resolveThreadBindingThreadName,
   resetThreadBindingsForTests,
@@ -551,3 +551,4 @@ export const __testing = {
     }
   },
 };
+export { testing as __testing };

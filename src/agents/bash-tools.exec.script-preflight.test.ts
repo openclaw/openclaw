@@ -1,10 +1,10 @@
 import { constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { __setFsSafeTestHooksForTest } from "@openclaw/fs-safe/test-hooks";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { __setFsSafeTestHooksForTest } from "../infra/fs-safe.js";
 import { withTempDir } from "../test-utils/temp-dir.js";
-import { __testing, createExecTool } from "./bash-tools.exec.js";
+import { testing, createExecTool } from "./bash-tools.exec.js";
 
 vi.mock("./bash-tools.exec-host-gateway.js", () => ({
   processGatewayAllowlist: async () => ({ allowWithoutEnforcedCommand: true }),
@@ -24,8 +24,8 @@ const isWin = process.platform === "win32";
 
 const describeNonWin = isWin ? describe.skip : describe;
 const describeWin = isWin ? describe : describe.skip;
-const parseOpenClawChannelsLoginShellCommand = __testing.parseOpenClawChannelsLoginShellCommand;
-const validateExecScriptPreflight = __testing.validateScriptFileForShellBleed;
+const parseOpenClawChannelsLoginShellCommand = testing.parseOpenClawChannelsLoginShellCommand;
+const validateExecScriptPreflight = testing.validateScriptFileForShellBleed;
 const createPreflightTool = () =>
   createExecTool({ host: "gateway", security: "full", ask: "on-miss" });
 
@@ -91,6 +91,21 @@ describe("exec interactive OpenClaw channel login guard", () => {
     await expect(
       tool.execute("call-wrapped-openclaw-channel-login", {
         command: "sudo -u openclaw bash -lc 'openclaw channels login --channel whatsapp'",
+      }),
+    ).rejects.toThrow(/exec cannot run interactive OpenClaw channel login commands/);
+    await expect(
+      tool.execute("call-clustered-sudo-channel-login", {
+        command: "sudo -EH bash -lc 'openclaw channels login --channel whatsapp'",
+      }),
+    ).rejects.toThrow(/exec cannot run interactive OpenClaw channel login commands/);
+    await expect(
+      tool.execute("call-deep-env-channel-login", {
+        command: "env env env env env env openclaw channels login --channel whatsapp",
+      }),
+    ).rejects.toThrow(/exec cannot run interactive OpenClaw channel login commands/);
+    await expect(
+      tool.execute("call-env-s-trailing-channel-login", {
+        command: "env -S 'openclaw channels' login --channel whatsapp",
       }),
     ).rejects.toThrow(/exec cannot run interactive OpenClaw channel login commands/);
   });
@@ -403,9 +418,7 @@ describeNonWin("exec script preflight", () => {
       const text = result.content.find((c) => c.type === "text")?.text ?? "";
 
       expect(text).not.toMatch(/exec preflight:/);
-      expect(result.details).toMatchObject({
-        status: expect.stringMatching(/completed|failed/),
-      });
+      expect((result.details as { status?: string }).status).toMatch(/completed|failed/);
     });
   });
 
@@ -421,7 +434,7 @@ describeNonWin("exec script preflight", () => {
     });
     const text = result.content.find((c) => c.type === "text")?.text?.trim();
 
-    expect(result.details).toMatchObject({ status: "completed" });
+    expect((result.details as { status?: string }).status).toBe("completed");
     expect(text).toBe("ok");
   });
 
@@ -474,8 +487,8 @@ describeNonWin("exec script preflight", () => {
           workdir: tmp,
         }),
       ).resolves.toBeUndefined();
-      expect(scriptOpenFlags.length).toBeGreaterThan(0);
-      expect(scriptOpenFlags.some((flags) => (flags & fsConstants.O_NONBLOCK) !== 0)).toBe(true);
+      expect(scriptOpenFlags).not.toStrictEqual([]);
+      expect(scriptOpenFlags.every((flags) => (flags & fsConstants.O_NONBLOCK) !== 0)).toBe(true);
     });
   });
 

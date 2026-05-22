@@ -105,7 +105,7 @@ describe("buildWorkspaceSkillSnapshot", () => {
     const snapshot = buildSnapshot(workspaceDir);
 
     expect(snapshot.prompt).toBe("");
-    expect(snapshot.skills).toEqual([]);
+    expect(snapshot.skills).toStrictEqual([]);
   });
 
   it("omits disable-model-invocation skills from the prompt", async () => {
@@ -246,10 +246,17 @@ describe("buildWorkspaceSkillSnapshot", () => {
       }),
     );
 
-    // We should only have loaded a small subset.
-    expect(snapshot.skills.length).toBeLessThanOrEqual(5);
-    expect(snapshot.prompt).toContain("repo-skill-00");
-    expect(snapshot.prompt).not.toContain("repo-skill-07");
+    const skillNames = snapshot.skills.map((skill) => skill.name);
+    expect(skillNames).toStrictEqual([
+      "repo-skill-00",
+      "repo-skill-01",
+      "repo-skill-02",
+      "repo-skill-03",
+      "repo-skill-04",
+    ]);
+    for (const name of skillNames) {
+      expect(snapshot.prompt).toContain(name);
+    }
   });
 
   it("skips skills whose SKILL.md exceeds maxSkillFileBytes", async () => {

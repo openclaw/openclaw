@@ -1,4 +1,4 @@
-import type { Api, Context, Model } from "@mariozechner/pi-ai";
+import type { Api, Context, Model } from "@earendil-works/pi-ai";
 import { repairToolUseResultPairing } from "./session-transcript-repair.js";
 
 const SYNTHETIC_TOOL_RESULT_APIS = new Set<string>([
@@ -45,6 +45,10 @@ export function transformTransportMessages(
     targetModel: Model<Api>,
     source: { provider: string; api: Api; model: string },
   ) => string,
+  options?: {
+    normalizeSameModelToolCallIds?: boolean;
+    preserveCrossModelToolCallThoughtSignature?: boolean;
+  },
 ): Context["messages"] {
   const allowSyntheticToolResults = defaultAllowSyntheticToolResults(model.api);
   const syntheticToolResultText = CODEX_STYLE_ABORTED_OUTPUT_APIS.has(model.api)
@@ -66,8 +70,13 @@ export function transformTransportMessages(
     }
     const isSameModel =
       msg.provider === model.provider && msg.api === model.api && msg.model === model.id;
+    const sourceContent = Array.isArray(msg.content)
+      ? msg.content
+      : msg.content != null && typeof msg.content === "object"
+        ? ([msg.content] as typeof msg.content)
+        : [];
     const content: typeof msg.content = [];
-    for (const block of msg.content) {
+    for (const block of sourceContent) {
       if (block.type === "thinking") {
         if (block.redacted) {
           if (isSameModel) {
@@ -94,11 +103,18 @@ export function transformTransportMessages(
         continue;
       }
       let normalizedToolCall = block;
-      if (!isSameModel && block.thoughtSignature) {
+      if (
+        !isSameModel &&
+        block.thoughtSignature &&
+        options?.preserveCrossModelToolCallThoughtSignature !== true
+      ) {
         normalizedToolCall = { ...normalizedToolCall };
         delete normalizedToolCall.thoughtSignature;
       }
-      if (!isSameModel && normalizeToolCallId) {
+      if (
+        (!isSameModel || options?.normalizeSameModelToolCallIds === true) &&
+        normalizeToolCallId
+      ) {
         const normalizedId = normalizeToolCallId(block.id, model, msg);
         if (normalizedId !== block.id) {
           toolCallIdMap.set(block.id, normalizedId);

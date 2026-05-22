@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveBrewExecutable as defaultResolveBrewExecutable } from "../infra/brew.js";
+import { isContainerEnvironment as defaultIsContainerEnvironment } from "../infra/container-environment.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import {
   type InstallSafetyOverrides,
@@ -38,6 +39,7 @@ type SkillsInstallDeps = {
   loadWorkspaceSkillEntries: typeof defaultLoadWorkspaceSkillEntries;
   resolveNodeInstallStateDir: () => string;
   resolveBrewExecutable: () => string | undefined;
+  isContainerEnvironment: () => boolean;
   resolveSkillsInstallPreferences: typeof defaultResolveSkillsInstallPreferences;
 };
 
@@ -46,6 +48,7 @@ const defaultSkillsInstallDeps: SkillsInstallDeps = {
   loadWorkspaceSkillEntries: defaultLoadWorkspaceSkillEntries,
   resolveNodeInstallStateDir: resolveDefaultNodeInstallStateDir,
   resolveBrewExecutable: defaultResolveBrewExecutable,
+  isContainerEnvironment: defaultIsContainerEnvironment,
   resolveSkillsInstallPreferences: defaultResolveSkillsInstallPreferences,
 };
 
@@ -234,11 +237,6 @@ async function resolveBrewBinDir(timeoutMs: number, brewExe?: string): Promise<s
     }
   }
 
-  const envPrefix = process.env.HOMEBREW_PREFIX?.trim();
-  if (envPrefix) {
-    return path.join(envPrefix, "bin");
-  }
-
   for (const candidate of ["/opt/homebrew/bin", "/usr/local/bin"]) {
     try {
       if (fs.existsSync(candidate)) {
@@ -311,6 +309,11 @@ async function runBestEffortCommand(
 
 function resolveBrewMissingFailure(spec: SkillInstallSpec): SkillInstallResult {
   const formula = spec.formula ?? "this package";
+  if (process.platform === "linux" && getSkillsInstallDeps().isContainerEnvironment()) {
+    return createInstallFailure({
+      message: `brew not installed — Homebrew is not installed in this Linux container. Build a custom image with Homebrew or install "${formula}" manually using a supported system package before enabling this skill.`,
+    });
+  }
   const hint =
     process.platform === "linux"
       ? `Homebrew is not installed. Install it from https://brew.sh or install "${formula}" manually using your system package manager (e.g. apt, dnf, pacman).`
@@ -572,7 +575,7 @@ export async function installSkill(params: SkillInstallRequest): Promise<SkillIn
   return withWarnings(await executeInstallCommand({ argv, timeoutMs, env }), warnings);
 }
 
-export const __testing = {
+export const testing = {
   resolveDefaultNodeInstallStateDir,
   setDepsForTest(overrides?: Partial<SkillsInstallDeps>): void {
     skillsInstallDeps = {
@@ -581,3 +584,4 @@ export const __testing = {
     };
   },
 };
+export { testing as __testing };

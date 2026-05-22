@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.js";
+import { getDefaultMediaLocalRoots } from "./local-roots.js";
 import { resolveAgentScopedOutboundMediaAccess } from "./read-capability.js";
 
 vi.mock("../channels/plugins/index.js", () => ({
@@ -17,7 +18,10 @@ describe("resolveAgentScopedOutboundMediaAccess", () => {
       mediaAccess: { workspaceDir: "/tmp/media-workspace" },
     });
 
-    expect(result).toMatchObject({ workspaceDir: "/tmp/media-workspace" });
+    expect(Object.keys(result)).toStrictEqual(["localRoots", "readFile", "workspaceDir"]);
+    expect(result.localRoots).toStrictEqual([...getDefaultMediaLocalRoots()]);
+    expect(typeof result.readFile).toBe("function");
+    expect(result.workspaceDir).toBe("/tmp/media-workspace");
   });
 
   it("prefers explicit workspaceDir over mediaAccess.workspaceDir", () => {
@@ -27,7 +31,10 @@ describe("resolveAgentScopedOutboundMediaAccess", () => {
       mediaAccess: { workspaceDir: "/tmp/media-workspace" },
     });
 
-    expect(result).toMatchObject({ workspaceDir: "/tmp/explicit-workspace" });
+    expect(Object.keys(result)).toStrictEqual(["localRoots", "readFile", "workspaceDir"]);
+    expect(result.localRoots).toStrictEqual([...getDefaultMediaLocalRoots()]);
+    expect(typeof result.readFile).toBe("function");
+    expect(result.workspaceDir).toBe("/tmp/explicit-workspace");
   });
 
   it("does not enable host reads when sender group policy denies read", () => {

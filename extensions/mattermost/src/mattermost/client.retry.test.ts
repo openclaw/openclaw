@@ -93,10 +93,13 @@ describe("createMattermostDirectChannelWithRetry", () => {
     expect(result.id).toBe("dm-channel-456");
     expect(mockFetch).toHaveBeenCalledTimes(2);
     expect(onRetry).toHaveBeenCalledTimes(1);
-    expect(onRetry).toHaveBeenCalledWith(
-      1,
-      expect.any(Number),
-      expect.objectContaining({ message: expect.stringContaining("429") }),
+    const retryCall = onRetry.mock.calls[0];
+    expect(retryCall?.[0]).toBe(1);
+    expect(retryCall?.[1]).toBeGreaterThanOrEqual(10);
+    expect(retryCall?.[1]).toBeLessThanOrEqual(20);
+    expect(retryCall?.[2]).toBeInstanceOf(Error);
+    expect((retryCall?.[2] as Error | undefined)?.message).toBe(
+      "Mattermost API 429 undefined: Too many requests",
     );
   });
 
@@ -144,7 +147,7 @@ describe("createMattermostDirectChannelWithRetry", () => {
         initialDelayMs: 10,
       }),
     );
-    await expect(resolveRetryRun(run)).rejects.toThrow();
+    await expect(resolveRetryRun(run)).rejects.toThrow("Mattermost API 400");
 
     // Should not retry - only called once (400 is a client error, even though message contains "429")
     expect(mockFetch).toHaveBeenCalledTimes(1);
@@ -299,7 +302,7 @@ describe("createMattermostDirectChannelWithRetry", () => {
         initialDelayMs: 10,
       }),
     );
-    await expect(resolveRetryRun(run)).rejects.toThrow();
+    await expect(resolveRetryRun(run)).rejects.toThrow("Mattermost API 503");
 
     expect(mockFetch).toHaveBeenCalledTimes(3); // initial + 2 retries
   });
@@ -339,10 +342,11 @@ describe("createMattermostDirectChannelWithRetry", () => {
         initialDelayMs: 10,
       }),
     );
-    await expect(resolveRetryRun(run)).rejects.toThrow();
+    await expect(resolveRetryRun(run)).rejects.toThrow("AbortError");
 
     expect(mockFetch).toHaveBeenCalledTimes(1);
-    expect(abortSignal).toBeDefined();
+    expect(abortSignal).toBeInstanceOf(AbortSignal);
+    expect(abortSignal?.aborted).toBe(true);
     expect(abortListenerCalled).toBe(true);
   });
 
@@ -480,8 +484,8 @@ describe("createMattermostDirectChannelWithRetry", () => {
       }),
     );
 
-    expect(capturedSignal).toBeDefined();
     expect(capturedSignal).toBeInstanceOf(AbortSignal);
+    expect(capturedSignal?.aborted).toBe(false);
   });
 
   it("retries on 5xx even if error message contains 4xx substring", async () => {

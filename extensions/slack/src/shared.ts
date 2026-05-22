@@ -7,26 +7,21 @@ import {
 import { inspectSlackAccount } from "./account-inspect.js";
 import {
   listSlackAccountIds,
+  resolveSlackConfigAccessorAccount,
   resolveDefaultSlackAccountId,
   resolveSlackAccount,
-  resolveSlackAccountAllowFrom,
+  type SlackConfigAccessorAccount,
   type ResolvedSlackAccount,
 } from "./accounts.js";
 import { getChatChannelMeta, type ChannelPlugin } from "./channel-api.js";
 import { SlackChannelConfigSchema } from "./config-schema.js";
 import { slackDoctor } from "./doctor.js";
 import { isSlackInteractiveRepliesEnabled } from "./interactive-replies.js";
-import type { OpenClawConfig } from "./runtime-api.js";
 import { collectRuntimeConfigAssignments, secretTargetRegistryEntries } from "./secret-contract.js";
 import { slackSecurityAdapter } from "./security.js";
 import { SLACK_CHANNEL } from "./setup-shared.js";
 
-export {
-  buildSlackSetupLines,
-  isSlackSetupAccountConfigured,
-  setSlackChannelAllowlist,
-  SLACK_CHANNEL,
-} from "./setup-shared.js";
+export { setSlackChannelAllowlist, SLACK_CHANNEL } from "./setup-shared.js";
 
 export function isSlackPluginAccountConfigured(account: ResolvedSlackAccount): boolean {
   const mode = account.config.mode ?? "socket";
@@ -38,22 +33,6 @@ export function isSlackPluginAccountConfigured(account: ResolvedSlackAccount): b
     return Boolean(account.config.signingSecret?.trim());
   }
   return Boolean(account.appToken?.trim());
-}
-
-type SlackConfigAccessorAccount = {
-  allowFrom: string[] | undefined;
-  defaultTo: string | undefined;
-};
-
-function resolveSlackConfigAccessorAccount(params: {
-  cfg: OpenClawConfig;
-  accountId?: string | null;
-}): SlackConfigAccessorAccount {
-  const account = resolveSlackAccount(params);
-  return {
-    allowFrom: resolveSlackAccountAllowFrom({ cfg: params.cfg, accountId: account.accountId }),
-    defaultTo: account.config.defaultTo,
-  };
 }
 
 export const slackConfigAdapter = createScopedChannelConfigAdapter<
@@ -125,7 +104,7 @@ export function createSlackPluginBase(params: {
         ],
       }),
       messageToolHints: ({ cfg, accountId }) =>
-        isSlackInteractiveRepliesEnabled({ cfg, accountId })
+        (isSlackInteractiveRepliesEnabled({ cfg, accountId })
           ? [
               "- Prefer Slack buttons/selects for 2-5 discrete choices or parameter picks instead of asking the user to type one.",
               "- Slack interactive replies: use `[[slack_buttons: Label:value, Other:other]]` to add action buttons that route clicks back as Slack interaction system events.",
@@ -133,7 +112,12 @@ export function createSlackPluginBase(params: {
             ]
           : [
               "- Slack interactive replies are disabled. If needed, ask to set `channels.slack.capabilities.interactiveReplies=true` (or the same under `channels.slack.accounts.<account>.capabilities`).",
-            ],
+            ]
+        ).concat([
+          "- Slack plain text sends: write standard Markdown; OpenClaw converts it to Slack mrkdwn, including `**bold**`, headings, lists, and `[label](url)` links.",
+          "- When mentioning Slack users, use the stable `<@USER_ID>` token from Slack context instead of plain `@name` text so Slack notifies and links the user.",
+          "- Slack Block Kit or presentation text fields are sent as Slack mrkdwn directly; use `*bold*`, `_italic_`, `~strike~`, `<url|label>` links, and avoid Markdown headings or pipe tables there.",
+        ]),
     },
     streaming: {
       blockStreamingCoalesceDefaults: { minChars: 1500, idleMs: 1000 },

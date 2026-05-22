@@ -65,6 +65,7 @@ export async function generateImage(
     parseModelRef: parseImageGenerationModelRef,
     agentDir: params.agentDir,
     listProviders,
+    autoProviderFallback: params.autoProviderFallback,
   });
   if (candidates.length === 0) {
     throw new Error(buildNoImageGenerationModelConfiguredMessage(params.cfg, deps));
@@ -117,6 +118,7 @@ export async function generateImage(
         inputImages: params.inputImages,
         ...(timeoutMs !== undefined ? { timeoutMs } : {}),
         providerOptions: params.providerOptions,
+        ssrfPolicy: params.ssrfPolicy,
       });
       if (!Array.isArray(result.images) || result.images.length === 0) {
         throw new Error("Image generation provider returned no images.");

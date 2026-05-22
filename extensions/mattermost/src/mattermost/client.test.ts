@@ -246,9 +246,10 @@ describe("createMattermostPost", () => {
     });
 
     const body = parseRequestJson(calls[0].init);
-    expect(body.props).toEqual(props);
-    expect(body.props).toMatchObject({
-      attachments: [{ actions: [{ type: "button" }] }],
+    expect(body).toEqual({
+      channel_id: "ch123",
+      message: "Pick an option",
+      props,
     });
   });
 
@@ -276,8 +277,15 @@ describe("updateMattermostPost", () => {
   it("sends PUT to /posts/{id}", async () => {
     const { calls } = await updatePostAndCapture({ message: "Updated" });
 
-    expect(calls[0].url).toContain("/posts/post1");
-    expect(calls[0].init?.method).toBe("PUT");
+    const firstCall = calls[0];
+    if (!firstCall) {
+      throw new Error("expected Mattermost update post request");
+    }
+    expect(firstCall.url).toContain("/posts/post1");
+    if (!firstCall.init) {
+      throw new Error("expected Mattermost update post request init");
+    }
+    expect(firstCall.init.method).toBe("PUT");
   });
 
   it("includes post id in the body", async () => {
@@ -293,12 +301,12 @@ describe("updateMattermostPost", () => {
         attachments: [{ text: "✓ **do_now** selected by @tony" }],
       },
     });
-    expect(body.message).toBe("Original message");
-    expect(body.props).toMatchObject({
-      attachments: [{ text: expect.stringContaining("✓") }],
-    });
-    expect(body.props).toMatchObject({
-      attachments: [{ text: expect.stringContaining("do_now") }],
+    expect(body).toEqual({
+      id: "post1",
+      message: "Original message",
+      props: {
+        attachments: [{ text: "✓ **do_now** selected by @tony" }],
+      },
     });
   });
 

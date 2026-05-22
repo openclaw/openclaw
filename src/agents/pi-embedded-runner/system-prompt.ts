@@ -1,16 +1,23 @@
-import type { AgentTool } from "@mariozechner/pi-agent-core";
-import type { AgentSession } from "@mariozechner/pi-coding-agent";
+import type { AgentTool } from "@earendil-works/pi-agent-core";
+import type { AgentSession } from "@earendil-works/pi-coding-agent";
 import type { SourceReplyDeliveryMode } from "../../auto-reply/get-reply-options.types.js";
+import type { SubagentDelegationMode } from "../../config/types.agent-defaults.js";
 import type { MemoryCitationsMode } from "../../config/types.memory.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { AgentPromptSurfaceKind } from "../../plugins/types.js";
+import type { ActiveProcessSessionReference } from "../bash-process-references.js";
+import type { BootstrapMode } from "../bootstrap-mode.js";
 import type { ResolvedTimeFormat } from "../date-time.js";
 import type { EmbeddedContextFile } from "../pi-embedded-helpers.js";
+import { buildConfiguredAgentSystemPrompt } from "../system-prompt-config.js";
 import type { ProviderSystemPromptContribution } from "../system-prompt-contribution.js";
-import { buildAgentSystemPrompt } from "../system-prompt.js";
 import type { PromptMode, SilentReplyPromptMode } from "../system-prompt.types.js";
 import type { EmbeddedSandboxInfo } from "./types.js";
 import type { ReasoningLevel, ThinkLevel } from "./utils.js";
 
 export function buildEmbeddedSystemPrompt(params: {
+  config?: OpenClawConfig;
+  agentId?: string;
   workspaceDir: string;
   defaultThinkLevel?: ThinkLevel;
   reasoningLevel?: ReasoningLevel;
@@ -34,8 +41,12 @@ export function buildEmbeddedSystemPrompt(params: {
   /** Controls the generic silent-reply section. Channel-aware prompts can set "none". */
   silentReplyPromptMode?: SilentReplyPromptMode;
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
+  /** Prompt-only strength for delegating non-trivial work through sub-agents. */
+  subagentDelegationMode?: SubagentDelegationMode;
   /** Whether ACP-specific routing guidance should be included. Defaults to true. */
   acpEnabled?: boolean;
+  /** Prompt surface controls runtime-specific fallback fragments. Defaults to PI main. */
+  promptSurface?: AgentPromptSurfaceKind;
   /** Registered runtime slash/native command names such as `codex`. */
   nativeCommandNames?: string[];
   /** Plugin-owned prompt guidance for registered native slash commands. */
@@ -52,21 +63,25 @@ export function buildEmbeddedSystemPrompt(params: {
     channel?: string;
     /** Supported message actions for the current channel (e.g., react, edit, unsend) */
     channelActions?: string[];
-    canvasRootDir?: string;
+    activeProcessSessions?: ActiveProcessSessionReference[];
   };
   messageToolHints?: string[];
   sandboxInfo?: EmbeddedSandboxInfo;
   tools: AgentTool[];
-  modelAliasLines: string[];
+  modelAliasLines?: string[];
   userTimezone: string;
   userTime?: string;
   userTimeFormat?: ResolvedTimeFormat;
   contextFiles?: EmbeddedContextFile[];
+  bootstrapMode?: BootstrapMode;
+  bootstrapTruncationNotice?: string;
   includeMemorySection?: boolean;
   memoryCitationsMode?: MemoryCitationsMode;
   promptContribution?: ProviderSystemPromptContribution;
 }): string {
-  return buildAgentSystemPrompt({
+  return buildConfiguredAgentSystemPrompt({
+    config: params.config,
+    agentId: params.agentId ?? params.runtimeInfo.agentId,
     workspaceDir: params.workspaceDir,
     defaultThinkLevel: params.defaultThinkLevel,
     reasoningLevel: params.reasoningLevel,
@@ -85,7 +100,9 @@ export function buildEmbeddedSystemPrompt(params: {
     promptMode: params.promptMode,
     silentReplyPromptMode: params.silentReplyPromptMode,
     sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
+    subagentDelegationMode: params.subagentDelegationMode,
     acpEnabled: params.acpEnabled,
+    promptSurface: params.promptSurface,
     nativeCommandNames: params.nativeCommandNames,
     nativeCommandGuidanceLines: params.nativeCommandGuidanceLines,
     runtimeInfo: params.runtimeInfo,
@@ -97,6 +114,8 @@ export function buildEmbeddedSystemPrompt(params: {
     userTime: params.userTime,
     userTimeFormat: params.userTimeFormat,
     contextFiles: params.contextFiles,
+    bootstrapMode: params.bootstrapMode,
+    bootstrapTruncationNotice: params.bootstrapTruncationNotice,
     includeMemorySection: params.includeMemorySection,
     memoryCitationsMode: params.memoryCitationsMode,
     promptContribution: params.promptContribution,
@@ -120,6 +139,6 @@ export function applySystemPromptOverrideToSession(
     _baseSystemPrompt?: string;
     _rebuildSystemPrompt?: (toolNames: string[]) => string;
   };
-  mutableSession._baseSystemPrompt = prompt;
-  mutableSession._rebuildSystemPrompt = () => prompt;
+  mutableSession["_baseSystemPrompt"] = prompt;
+  mutableSession["_rebuildSystemPrompt"] = () => prompt;
 }

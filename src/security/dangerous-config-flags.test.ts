@@ -64,58 +64,70 @@ describe("collectEnabledInsecureOrDangerousFlags", () => {
           ]),
         },
       ),
-    ).toEqual([]);
+    ).toStrictEqual([]);
   });
 
   it("collects dangerous sandbox, hook, browser, and fs flags", () => {
+    const flags = collectEnabledInsecureOrDangerousFlagsFromContracts(
+      asConfig({
+        agents: {
+          defaults: {
+            sandbox: {
+              docker: {
+                dangerouslyAllowReservedContainerTargets: true,
+                dangerouslyAllowContainerNamespaceJoin: true,
+              },
+            },
+          },
+          list: [
+            {
+              id: "worker",
+              sandbox: {
+                docker: {
+                  dangerouslyAllowExternalBindSources: true,
+                },
+              },
+            },
+          ],
+        },
+        hooks: {
+          allowRequestSessionKey: true,
+        },
+        browser: {
+          ssrfPolicy: {
+            dangerouslyAllowPrivateNetwork: true,
+          },
+        },
+        tools: {
+          fs: {
+            workspaceOnly: false,
+          },
+        },
+      }),
+    );
+
+    expect(flags).toStrictEqual([
+      "hooks.allowRequestSessionKey=true",
+      "browser.ssrfPolicy.dangerouslyAllowPrivateNetwork=true",
+      "tools.fs.workspaceOnly=false",
+      "agents.defaults.sandbox.docker.dangerouslyAllowReservedContainerTargets=true",
+      "agents.defaults.sandbox.docker.dangerouslyAllowContainerNamespaceJoin=true",
+      'agents.list[id="worker"].sandbox.docker.dangerouslyAllowExternalBindSources=true',
+    ]);
+  });
+
+  it("collects configured security audit suppressions as a dangerous flag", () => {
     expect(
       collectEnabledInsecureOrDangerousFlagsFromContracts(
         asConfig({
-          agents: {
-            defaults: {
-              sandbox: {
-                docker: {
-                  dangerouslyAllowReservedContainerTargets: true,
-                  dangerouslyAllowContainerNamespaceJoin: true,
-                },
-              },
-            },
-            list: [
-              {
-                id: "worker",
-                sandbox: {
-                  docker: {
-                    dangerouslyAllowExternalBindSources: true,
-                  },
-                },
-              },
-            ],
-          },
-          hooks: {
-            allowRequestSessionKey: true,
-          },
-          browser: {
-            ssrfPolicy: {
-              dangerouslyAllowPrivateNetwork: true,
-            },
-          },
-          tools: {
-            fs: {
-              workspaceOnly: false,
+          security: {
+            audit: {
+              suppressions: [{ checkId: "plugins.code_safety" }],
             },
           },
         }),
       ),
-    ).toEqual(
-      expect.arrayContaining([
-        "agents.defaults.sandbox.docker.dangerouslyAllowReservedContainerTargets=true",
-        "agents.defaults.sandbox.docker.dangerouslyAllowContainerNamespaceJoin=true",
-        'agents.list[id="worker"].sandbox.docker.dangerouslyAllowExternalBindSources=true',
-        "hooks.allowRequestSessionKey=true",
-        "browser.ssrfPolicy.dangerouslyAllowPrivateNetwork=true",
-        "tools.fs.workspaceOnly=false",
-      ]),
-    );
+    ).toContain("security.audit.suppressions configured (1)");
   });
 
   it("uses stable agent ids for per-agent dangerous sandbox flags", () => {

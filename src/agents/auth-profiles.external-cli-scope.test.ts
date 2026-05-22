@@ -37,7 +37,7 @@ describe("external CLI auth scope", () => {
     expect(scope?.providerIds).not.toContain("minimax-portal");
   });
 
-  it("collects model, auth order, media model, and runtime signals", () => {
+  it("collects active model, auth order, media model, and runtime signals", () => {
     const cfg = {
       auth: {
         order: {
@@ -54,12 +54,17 @@ describe("external CLI auth scope", () => {
           cliBackends: {
             "claude-cli": { command: "claude" },
           },
+          models: {
+            "claude-cli/claude-opus-4-7": { alias: "opus" },
+          },
         },
         list: [
           {
             id: "worker",
             model: "opencode-go/kimi-k2.6",
-            agentRuntime: { id: "codex-app-server" },
+            models: {
+              "opencode-go/kimi-k2.6": { agentRuntime: { id: "codex-app-server" } },
+            },
             subagents: { model: { primary: "z.ai/glm-4.7" } },
           },
         ],
@@ -68,19 +73,35 @@ describe("external CLI auth scope", () => {
 
     const scope = resolveExternalCliAuthScopeFromConfig(cfg);
 
-    expect(scope?.providerIds).toEqual(
-      expect.arrayContaining([
-        "anthropic",
-        "openai",
-        "openai-codex",
-        "minimax-portal",
-        "claude-cli",
-        "codex-app-server",
-        "opencode-go",
-        "z.ai",
-        "zai",
-      ]),
-    );
+    expect(scope?.providerIds).toEqual([
+      "anthropic",
+      "codex-app-server",
+      "minimax-portal",
+      "openai",
+      "openai-codex",
+      "opencode-go",
+      "z.ai",
+      "zai",
+    ]);
+    expect(scope?.providerIds).not.toContain("claude-cli");
     expect(scope?.profileIds).toContain("openai-codex:default");
+  });
+
+  it("includes a CLI provider only when it is the active runtime", () => {
+    const scope = resolveExternalCliAuthScopeFromConfig({
+      agents: {
+        defaults: {
+          model: "openai/gpt-5.5",
+          cliBackends: {
+            "claude-cli": { command: "claude" },
+          },
+          models: {
+            "openai/gpt-5.5": { agentRuntime: { id: "claude-cli" } },
+          },
+        },
+      },
+    });
+
+    expect(scope?.providerIds).toContain("claude-cli");
   });
 });

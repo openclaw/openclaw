@@ -106,7 +106,7 @@ automatically.
 | ---------------- | ------------------------------------------------------ | ---------------------------------------------------------------------------------- |
 | Goal             | Auto-allow narrow stdin filters                        | Explicitly trust specific executables                                              |
 | Match type       | Executable name + safe-bin argv policy                 | Resolved executable path glob, or bare command-name glob for PATH-invoked commands |
-| Argument scope   | Restricted by safe-bin profile and literal-token rules | Path match only; arguments are otherwise your responsibility                       |
+| Argument scope   | Restricted by safe-bin profile and literal-token rules | Path match by default; optional `argPattern` can restrict parsed argv              |
 | Typical examples | `head`, `tail`, `tr`, `wc`                             | `jq`, `python3`, `node`, `ffmpeg`, custom CLIs                                     |
 | Best use         | Low-risk text transforms in pipelines                  | Any tool with broader behavior or side effects                                     |
 
@@ -233,6 +233,8 @@ The config shape is identical to `approvals.exec`: `enabled`, `mode`, `agentFilt
 Channels that support shared interactive replies render the same approval buttons for both exec and
 plugin approvals. Channels without shared interactive UI fall back to plain text with `/approve`
 instructions.
+Plugin approval requests may restrict the available decisions. Approval surfaces use the request's
+declared decision set, and the Gateway rejects attempts to submit a decision that was not offered.
 
 ### Same-chat approvals on any channel
 
@@ -273,6 +275,9 @@ Generic model:
 - host exec policy still decides whether exec approval is required
 - `approvals.exec` controls forwarding approval prompts to other chat destinations
 - `channels.<channel>.execApprovals` controls whether that channel acts as a native approval client
+- Slack plugin approvals can use Slack's native approval client when the request comes from Slack
+  and Slack plugin approvers resolve; `approvals.plugin` can also route plugin approvals to Slack
+  sessions or targets even when Slack exec approvals are disabled
 
 Native approval clients auto-enable DM-first delivery when all of these are true:
 
@@ -303,6 +308,8 @@ Shared behavior:
 - Discord approvers can be explicit (`execApprovals.approvers`) or inferred from `commands.ownerAllowFrom`
 - Telegram approvers can be explicit (`execApprovals.approvers`) or inferred from `commands.ownerAllowFrom`
 - Slack approvers can be explicit (`execApprovals.approvers`) or inferred from `commands.ownerAllowFrom`
+- Slack plugin approval DMs use Slack plugin approvers from `allowFrom` and account default
+  routing, not Slack exec approvers
 - Slack native buttons preserve approval id kind, so `plugin:` ids can resolve plugin approvals
   without a second Slack-local fallback layer
 - Matrix native DM/channel routing and reaction shortcuts handle both exec and plugin approvals;

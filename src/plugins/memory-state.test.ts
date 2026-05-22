@@ -1,11 +1,9 @@
 import { afterEach, describe, expect, it } from "vitest";
 import {
-  _resetMemoryPluginState,
+  resetMemoryPluginState,
   buildMemoryPromptSection,
   clearMemoryPluginState,
   getMemoryCapabilityRegistration,
-  getMemoryFlushPlanResolver,
-  getMemoryPromptSectionBuilder,
   getMemoryRuntime,
   hasMemoryRuntime,
   listMemoryCorpusSupplements,
@@ -45,8 +43,10 @@ function createMemoryFlushPlan(relativePath: string) {
 
 function expectClearedMemoryState() {
   expect(resolveMemoryFlushPlan({})).toBeNull();
-  expect(buildMemoryPromptSection({ availableTools: new Set(["memory_search"]) })).toEqual([]);
-  expect(listMemoryCorpusSupplements()).toEqual([]);
+  expect(buildMemoryPromptSection({ availableTools: new Set(["memory_search"]) })).toStrictEqual(
+    [],
+  );
+  expect(listMemoryCorpusSupplements()).toStrictEqual([]);
   expect(getMemoryRuntime()).toBeUndefined();
 }
 
@@ -54,10 +54,7 @@ function createMemoryStateSnapshot() {
   return {
     capability: getMemoryCapabilityRegistration(),
     corpusSupplements: listMemoryCorpusSupplements(),
-    promptBuilder: getMemoryPromptSectionBuilder(),
     promptSupplements: listMemoryPromptSupplements(),
-    flushPlanResolver: getMemoryFlushPlanResolver(),
-    runtime: getMemoryRuntime(),
   };
 }
 
@@ -66,16 +63,13 @@ function registerMemoryState(params: {
   relativePath?: string;
   runtime?: ReturnType<typeof createMemoryRuntime>;
 }) {
-  if (params.promptSection) {
-    registerMemoryPromptSection(() => params.promptSection ?? []);
-  }
-  if (params.relativePath) {
-    const relativePath = params.relativePath;
-    registerMemoryFlushPlanResolver(() => createMemoryFlushPlan(relativePath));
-  }
-  if (params.runtime) {
-    registerMemoryRuntime(params.runtime);
-  }
+  registerMemoryCapability("memory-core", {
+    ...(params.promptSection ? { promptBuilder: () => params.promptSection ?? [] } : {}),
+    ...(params.relativePath
+      ? { flushPlanResolver: () => createMemoryFlushPlan(params.relativePath ?? "") }
+      : {}),
+    ...(params.runtime ? { runtime: params.runtime } : {}),
+  });
 }
 
 describe("memory plugin state", () => {
@@ -102,8 +96,32 @@ describe("memory plugin state", () => {
     ]);
   });
 
-  it("prefers the registered memory capability over legacy split state", async () => {
+  it("adapts deprecated split registration to the unified memory capability", () => {
     const runtime = createMemoryRuntime();
+    const promptBuilder = () => ["legacy prompt"];
+    const flushPlanResolver = () => createMemoryFlushPlan("memory/legacy.md");
+
+    registerMemoryPromptSection(promptBuilder);
+    registerMemoryFlushPlanResolver(flushPlanResolver);
+    registerMemoryRuntime(runtime);
+
+    expect(buildMemoryPromptSection({ availableTools: new Set() })).toEqual(["legacy prompt"]);
+    expect(resolveMemoryFlushPlan({})?.relativePath).toBe("memory/legacy.md");
+    expect(getMemoryRuntime()).toBe(runtime);
+    expect(getMemoryCapabilityRegistration()).toStrictEqual({
+      pluginId: "legacy-memory-v1",
+      capability: {
+        promptBuilder,
+        flushPlanResolver,
+        runtime,
+      },
+    });
+  });
+
+  it("prefers the registered memory capability over earlier legacy split state", async () => {
+    const runtime = createMemoryRuntime();
+    const promptBuilder = () => ["capability prompt"];
+    const flushPlanResolver = () => createMemoryFlushPlan("memory/capability.md");
 
     registerMemoryPromptSection(() => ["legacy prompt"]);
     registerMemoryFlushPlanResolver(() => createMemoryFlushPlan("memory/legacy.md"));
@@ -116,8 +134,8 @@ describe("memory plugin state", () => {
       },
     });
     registerMemoryCapability("memory-core", {
-      promptBuilder: () => ["capability prompt"],
-      flushPlanResolver: () => createMemoryFlushPlan("memory/capability.md"),
+      promptBuilder,
+      flushPlanResolver,
       runtime,
     });
 
@@ -130,8 +148,13 @@ describe("memory plugin state", () => {
       }),
     ).resolves.toEqual({ manager: null, error: "missing" });
     expect(hasMemoryRuntime()).toBe(true);
-    expect(getMemoryCapabilityRegistration()).toMatchObject({
+    expect(getMemoryCapabilityRegistration()).toStrictEqual({
       pluginId: "memory-core",
+      capability: {
+        promptBuilder,
+        flushPlanResolver,
+        runtime,
+      },
     });
   });
 
@@ -269,7 +292,7 @@ describe("memory plugin state", () => {
     });
     const snapshot = createMemoryStateSnapshot();
 
-    _resetMemoryPluginState();
+    resetMemoryPluginState();
     expectClearedMemoryState();
 
     restoreMemoryPluginState(snapshot);

@@ -11,7 +11,7 @@ describe("createChannelTestPluginBase", () => {
     expect(base.meta.docsPath).toBe("/channels/demo-channel");
     expect(base.capabilities.chatTypes).toEqual(["direct"]);
     expect(base.config.listAccountIds(cfg)).toEqual(["default"]);
-    expect(base.config.resolveAccount(cfg)).toEqual({});
+    expect(base.config.resolveAccount(cfg)).toStrictEqual({});
   });
 
   it("honors config and metadata overrides", async () => {
@@ -45,6 +45,6 @@ describe("createOutboundTestPlugin", () => {
         sendText: async () => ({ channel: "demo-outbound", messageId: "m1" }),
       },
     });
-    expect(plugin.config.listAccountIds(cfg)).toEqual([]);
+    expect(plugin.config.listAccountIds(cfg)).toStrictEqual([]);
   });
 });

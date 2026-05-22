@@ -26,6 +26,16 @@ vi.mock("../plugins/provider-runtime.js", () => ({
 let clearRuntimeAuthProfileStoreSnapshots: typeof import("./auth-profiles.js").clearRuntimeAuthProfileStoreSnapshots;
 let loadAuthProfileStoreForRuntime: typeof import("./auth-profiles.js").loadAuthProfileStoreForRuntime;
 
+type MockWithCalls = { mock: { calls: unknown[][] } };
+
+function firstMockArg(mock: MockWithCalls, label: string) {
+  const call = mock.mock.calls[0];
+  if (!call) {
+    throw new Error(`expected ${label} call`);
+  }
+  return call[0];
+}
+
 describe("auth profiles read-only external auth overlay", () => {
   beforeEach(async () => {
     vi.resetModules();
@@ -58,19 +68,37 @@ describe("auth profiles read-only external auth overlay", () => {
 
       const loaded = loadAuthProfileStoreForRuntime(agentDir, { readOnly: true });
 
-      expect(resolveExternalAuthProfilesWithPluginsMock).toHaveBeenCalled();
-      expect(loaded.profiles["minimax-portal:default"]).toMatchObject({
-        type: "oauth",
-        provider: "minimax-portal",
-      });
+      expect(resolveExternalAuthProfilesWithPluginsMock).toHaveBeenCalledTimes(1);
+      const externalAuthCall = firstMockArg(
+        resolveExternalAuthProfilesWithPluginsMock,
+        "resolveExternalAuthProfilesWithPlugins",
+      ) as
+        | {
+            config?: unknown;
+            context?: {
+              agentDir?: string;
+              store?: AuthProfileStore;
+              workspaceDir?: string;
+            };
+          }
+        | undefined;
+      expect(externalAuthCall?.config).toBeUndefined();
+      expect(externalAuthCall?.context?.agentDir).toBe(agentDir);
+      expect(externalAuthCall?.context?.workspaceDir).toBeUndefined();
+      expect(externalAuthCall?.context?.store?.version).toBe(AUTH_STORE_VERSION);
+      expect(externalAuthCall?.context?.store?.profiles).toStrictEqual(baseline.profiles);
+      expect(loaded.profiles["minimax-portal:default"]?.type).toBe("oauth");
+      expect(loaded.profiles["minimax-portal:default"]?.provider).toBe("minimax-portal");
 
       const persisted = JSON.parse(fs.readFileSync(authPath, "utf8")) as AuthProfileStore;
       expect(persisted.profiles["minimax-portal:default"]).toBeUndefined();
-      expect(persisted.profiles["openai:default"]).toMatchObject({
-        type: "api_key",
-        provider: "openai",
-        key: "sk-test",
-      });
+      const persistedOpenAiProfile = persisted.profiles["openai:default"];
+      expect(persistedOpenAiProfile?.type).toBe("api_key");
+      if (persistedOpenAiProfile?.type !== "api_key") {
+        throw new Error("expected persisted OpenAI API key profile");
+      }
+      expect(persistedOpenAiProfile.provider).toBe("openai");
+      expect(persistedOpenAiProfile.key).toBe("sk-test");
     } finally {
       fs.rmSync(agentDir, { recursive: true, force: true });
     }

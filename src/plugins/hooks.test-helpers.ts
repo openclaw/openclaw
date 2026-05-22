@@ -35,6 +35,7 @@ export function createMockPluginRegistry(
     channels: [],
     channelSetups: [],
     providers: [],
+    embeddingProviders: [],
     speechProviders: [],
     mediaUnderstandingProviders: [],
     imageGenerationProviders: [],
@@ -49,7 +50,6 @@ export function createMockPluginRegistry(
     agentHarnesses: [],
     httpRoutes: [],
     gatewayHandlers: {},
-    gatewayMethodScopes: {},
     cliRegistrars: [],
     textTransforms: [],
     reloads: [],
@@ -90,7 +90,7 @@ export function addTestHook(params: {
   } as PluginHookRegistration);
 }
 
-export function addTestHooks(
+function addTestHooks(
   registry: PluginRegistry,
   hooks: ReadonlyArray<{
     pluginId: string;

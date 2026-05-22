@@ -1,5 +1,6 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isRecord } from "../utils.js";
+import { externalCliDiscoveryForProviderAuth } from "./auth-profiles/external-cli-discovery.js";
 import { listProfilesForProvider } from "./auth-profiles/profile-list.js";
 import { ensureAuthProfileStore } from "./auth-profiles/store.js";
 import {
@@ -7,7 +8,7 @@ import {
   resolveCodexNativeWebSearchConfig,
 } from "./codex-native-web-search.shared.js";
 
-export type CodexNativeSearchActivation = {
+type CodexNativeSearchActivation = {
   globalWebSearchEnabled: boolean;
   codexNativeEnabled: boolean;
   codexMode: CodexNativeSearchMode;
@@ -21,7 +22,7 @@ export type CodexNativeSearchActivation = {
     | "codex_auth_missing";
 };
 
-export type CodexNativeSearchPayloadPatchResult = {
+type CodexNativeSearchPayloadPatchResult = {
   status: "payload_not_object" | "native_tool_already_present" | "injected";
 };
 
@@ -32,7 +33,7 @@ export function isCodexNativeSearchEligibleModel(params: {
   return params.modelProvider === "openai-codex" || params.modelApi === "openai-codex-responses";
 }
 
-export function hasCodexNativeWebSearchTool(tools: unknown): boolean {
+function hasCodexNativeWebSearchTool(tools: unknown): boolean {
   if (!Array.isArray(tools)) {
     return false;
   }
@@ -56,7 +57,15 @@ export function hasAvailableCodexAuth(params: {
   if (params.agentDir) {
     try {
       if (
-        listProfilesForProvider(ensureAuthProfileStore(params.agentDir), "openai-codex").length > 0
+        listProfilesForProvider(
+          ensureAuthProfileStore(params.agentDir, {
+            externalCli: externalCliDiscoveryForProviderAuth({
+              cfg: params.config,
+              provider: "openai-codex",
+            }),
+          }),
+          "openai-codex",
+        ).length > 0
       ) {
         return true;
       }

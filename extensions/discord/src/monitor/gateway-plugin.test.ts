@@ -44,7 +44,7 @@ const { GatewayIntents, GatewayPlugin } = vi.hoisted(() => {
       this.options = options;
     }
 
-    async registerClient(_client: unknown): Promise<void> {}
+    async registerClient(clientForTest: unknown): Promise<void> {}
 
     connect(_resume = false): void {
       if (this.isConnecting) {
@@ -88,7 +88,7 @@ describe("createDiscordGatewayPlugin", () => {
   });
 
   function createPlugin(
-    testing?: NonNullable<Parameters<typeof createDiscordGatewayPlugin>[0]["__testing"]>,
+    testing?: NonNullable<Parameters<typeof createDiscordGatewayPlugin>[0]["testing"]>,
     discordConfig: Parameters<typeof createDiscordGatewayPlugin>[0]["discordConfig"] = {},
   ) {
     return createDiscordGatewayPlugin({
@@ -98,14 +98,18 @@ describe("createDiscordGatewayPlugin", () => {
         error: vi.fn(),
         exit: vi.fn(),
       },
-      ...(testing ? { __testing: testing } : {}),
+      ...(testing ? { testing: testing } : {}),
     });
   }
 
-  it("includes GuildVoiceStates when voice is enabled by default", () => {
-    expect(resolveDiscordGatewayIntents() & GatewayIntents.GuildVoiceStates).toBe(
-      GatewayIntents.GuildVoiceStates,
-    );
+  it("omits GuildVoiceStates by default for text-only Discord configs", () => {
+    expect(resolveDiscordGatewayIntents() & GatewayIntents.GuildVoiceStates).toBe(0);
+  });
+
+  it("includes GuildVoiceStates when voice is enabled", () => {
+    const intents = resolveDiscordGatewayIntents({ voiceEnabled: true });
+
+    expect(intents & GatewayIntents.GuildVoiceStates).toBe(GatewayIntents.GuildVoiceStates);
   });
 
   it("omits GuildVoiceStates when voice is disabled", () => {
@@ -197,12 +201,46 @@ describe("createDiscordGatewayPlugin", () => {
     expect((options?.intents ?? 0) & GatewayIntents.GuildVoiceStates).toBe(0);
   });
 
+  it("omits voice states when Discord voice config is absent", () => {
+    const plugin = createPlugin(undefined, {});
+    const options = (plugin as unknown as { options?: { intents?: number } }).options;
+
+    expect((options?.intents ?? 0) & GatewayIntents.GuildVoiceStates).toBe(0);
+  });
+
+  it("keeps voice states for existing Discord voice config blocks", () => {
+    const plugin = createPlugin(undefined, { voice: {} });
+    const options = (plugin as unknown as { options?: { intents?: number } }).options;
+
+    expect((options?.intents ?? 0) & GatewayIntents.GuildVoiceStates).toBe(
+      GatewayIntents.GuildVoiceStates,
+    );
+  });
+
   it("leaves autoInteractions disabled so OpenClaw owns interaction handoff", () => {
     const plugin = createPlugin();
 
-    expect((plugin as unknown as { options?: { autoInteractions?: boolean } }).options).toEqual(
-      expect.objectContaining({ autoInteractions: false }),
-    );
+    expect(
+      (
+        plugin as unknown as {
+          options?: {
+            autoInteractions: boolean;
+            intents: number;
+            reconnect: { maxAttempts: number };
+          };
+        }
+      ).options,
+    ).toEqual({
+      autoInteractions: false,
+      intents:
+        GatewayIntents.Guilds |
+        GatewayIntents.GuildMessages |
+        GatewayIntents.MessageContent |
+        GatewayIntents.DirectMessages |
+        GatewayIntents.GuildMessageReactions |
+        GatewayIntents.DirectMessageReactions,
+      reconnect: { maxAttempts: 50 },
+    });
   });
 
   it("keeps OpenClaw metadata timeout out of gateway options", () => {
@@ -223,11 +261,12 @@ describe("createDiscordGatewayPlugin", () => {
 
   it("emits transport activity for current gateway socket messages", () => {
     const socket = new EventEmitter() as EventEmitter & { binaryType?: string };
+    const dateNowSpy = vi.spyOn(Date, "now").mockReturnValue(1_700_000_000_000);
     const plugin = createPlugin({
       webSocketCtor: function WebSocketCtor() {
         return socket;
       } as unknown as NonNullable<
-        Parameters<typeof createDiscordGatewayPlugin>[0]["__testing"]
+        Parameters<typeof createDiscordGatewayPlugin>[0]["testing"]
       >["webSocketCtor"],
     });
     const activitySpy = vi.fn();
@@ -242,9 +281,13 @@ describe("createDiscordGatewayPlugin", () => {
     ).createWebSocket("wss://gateway.discord.gg");
     (plugin as unknown as { ws: unknown }).ws = createdSocket;
 
-    createdSocket.emit("message", Buffer.from("{}"));
+    try {
+      createdSocket.emit("message", Buffer.from("{}"));
 
-    expect(activitySpy).toHaveBeenCalledWith({ at: expect.any(Number) });
+      expect(activitySpy).toHaveBeenCalledWith({ at: 1_700_000_000_000 });
+    } finally {
+      dateNowSpy.mockRestore();
+    }
   });
 
   it("ignores messages from stale gateway sockets", () => {
@@ -254,7 +297,7 @@ describe("createDiscordGatewayPlugin", () => {
       webSocketCtor: function WebSocketCtor() {
         return staleSocket;
       } as unknown as NonNullable<
-        Parameters<typeof createDiscordGatewayPlugin>[0]["__testing"]
+        Parameters<typeof createDiscordGatewayPlugin>[0]["testing"]
       >["webSocketCtor"],
     });
     const activitySpy = vi.fn();

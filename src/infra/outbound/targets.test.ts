@@ -79,6 +79,27 @@ describe("resolveOutboundTarget defaultTo config fallback", () => {
     expect(res).toEqual({ ok: true, to: "default-room" });
   });
 
+  it("passes bootstrap opt-in to channel plugin resolution", () => {
+    const cfg: OpenClawConfig = {
+      channels: { alpha: { defaultTo: "Alpha:Room One" } },
+    };
+
+    const res = resolveOutboundTarget({
+      channel: "alpha",
+      to: "Alpha:Override Room",
+      cfg,
+      mode: "explicit",
+      allowBootstrap: true,
+    });
+
+    expect(res).toEqual({ ok: true, to: "override-room" });
+    expect(mocks.resolveOutboundChannelPlugin).toHaveBeenCalledWith({
+      channel: "alpha",
+      cfg,
+      allowBootstrap: true,
+    });
+  });
+
   it("explicit --reply-to overrides defaultTo", () => {
     const res = resolveOutboundTarget({
       channel: "alpha",
@@ -203,6 +224,39 @@ describe("resolveSessionDeliveryTarget", () => {
       lastChannel: "alpha",
       lastTo: "room-one",
     });
+  });
+
+  it("uses an explicit provider-prefixed target before last-session channel fallback", () => {
+    const resolved = resolveSessionDeliveryTarget({
+      entry: {
+        sessionId: "sess-prefixed",
+        updatedAt: 1,
+        lastChannel: "alpha",
+        lastTo: "room-one",
+      },
+      requestedChannel: "last",
+      explicitTo: "beta:room-two",
+    });
+
+    expect(resolved.channel).toBe("beta");
+    expect(resolved.to).toBe("beta:room-two");
+    expect(resolved.lastChannel).toBe("alpha");
+  });
+
+  it("keeps target-kind prefixes on the selected last-session channel", () => {
+    const resolved = resolveSessionDeliveryTarget({
+      entry: {
+        sessionId: "sess-target-kind",
+        updatedAt: 1,
+        lastChannel: "alpha",
+        lastTo: "room-one",
+      },
+      requestedChannel: "last",
+      explicitTo: "channel:room-two",
+    });
+
+    expect(resolved.channel).toBe("alpha");
+    expect(resolved.to).toBe("channel:room-two");
   });
 
   it("allows mismatched lastTo when configured", () => {

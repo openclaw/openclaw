@@ -15,12 +15,15 @@ type Deferred<T> = {
 };
 
 function createDeferred<T>(): Deferred<T> {
-  let resolve!: (value: T) => void;
-  let reject!: (error: unknown) => void;
+  let resolve: ((value: T) => void) | undefined;
+  let reject: ((error: unknown) => void) | undefined;
   const promise = new Promise<T>((resolvePromise, rejectPromise) => {
     resolve = resolvePromise;
     reject = rejectPromise;
   });
+  if (!resolve || !reject) {
+    throw new Error("Expected deferred callbacks to be initialized");
+  }
   return { promise, resolve, reject };
 }
 
@@ -166,6 +169,31 @@ describe("createExecApprovalIosPushDelivery", () => {
     expect(accepted).toBe(true);
     expect(loadApnsRegistrationMock).toHaveBeenCalledWith("ios-device-1");
     expect(sendApnsExecApprovalAlertMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not target iOS devices rejected by the approval visibility filter", async () => {
+    mockPairedIosOperator(["operator.approvals", "operator.read"]);
+    const isTargetVisible = vi.fn(() => false);
+
+    const delivery = createExecApprovalIosPushDelivery({ log: {} });
+
+    const accepted = await delivery.handleRequested(
+      {
+        id: "approval-filtered",
+        request: { command: "echo ok", host: "gateway", allowedDecisions: ["allow-once"] },
+        createdAtMs: 1,
+        expiresAtMs: 2,
+      },
+      { isTargetVisible },
+    );
+
+    expect(accepted).toBe(false);
+    expect(isTargetVisible).toHaveBeenCalledWith({
+      deviceId: "ios-device-1",
+      scopes: ["operator.approvals", "operator.read"],
+    });
+    expect(loadApnsRegistrationMock).not.toHaveBeenCalled();
+    expect(sendApnsExecApprovalAlertMock).not.toHaveBeenCalled();
   });
 
   it("does not treat iOS as a live approval route when every push fails", async () => {

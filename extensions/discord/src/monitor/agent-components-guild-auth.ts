@@ -32,7 +32,7 @@ function resolveComponentRuntimeGroupPolicy(ctx: AgentComponentContext) {
   }).groupPolicy;
 }
 
-export async function ensureGuildComponentMemberAllowed(params: {
+async function ensureGuildComponentMemberAllowed(params: {
   interaction: AgentComponentInteraction;
   guildInfo: ReturnType<typeof resolveDiscordGuildEntry>;
   channelId: string;
@@ -253,7 +253,7 @@ export async function resolveAuthorizedComponentInteraction(params: {
     return null;
   }
 
-  const commandAuthorized = resolveComponentCommandAuthorized({
+  const commandAuthorized = await resolveComponentCommandAuthorized({
     ctx: params.ctx,
     interactionCtx,
     channelConfig,
@@ -273,7 +273,7 @@ export async function resolveAuthorizedComponentInteraction(params: {
   };
 }
 
-export function resolveComponentCommandAuthorized(params: {
+export async function resolveComponentCommandAuthorized(params: {
   ctx: AgentComponentContext;
   interactionCtx: ComponentInteractionContext;
   channelConfig: ReturnType<typeof resolveDiscordChannelConfigWithFallback>;

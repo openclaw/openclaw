@@ -1,13 +1,15 @@
 import type { Bot } from "grammy";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type {
   DmPolicy,
   TelegramDirectConfig,
   TelegramGroupConfig,
   TelegramTopicConfig,
-} from "openclaw/plugin-sdk/config-types";
+} from "openclaw/plugin-sdk/config-contracts";
 import type { HistoryEntry } from "openclaw/plugin-sdk/reply-history";
+import type { MsgContext } from "openclaw/plugin-sdk/reply-runtime";
 import type { StickerMetadata, TelegramContext } from "./bot/types.js";
+import type { TelegramReplyChainEntry } from "./message-cache.js";
 
 export type TelegramMediaRef = {
   path: string;
@@ -21,13 +23,18 @@ export type TelegramMessageContextOptions = {
   messageIdOverride?: string;
   receivedAtMs?: number;
   ingressBuffer?: "inbound-debounce" | "text-fragment";
+  promptContextMinTimestampMs?: number;
 };
+
+export type TelegramPromptContextEntry = NonNullable<
+  MsgContext["UntrustedStructuredContext"]
+>[number];
 
 export type TelegramLogger = {
   info: (obj: Record<string, unknown>, msg: string) => void;
 };
 
-export type ResolveTelegramGroupConfig = (
+type ResolveTelegramGroupConfig = (
   chatId: string | number,
   messageThreadId?: number,
 ) => {
@@ -35,16 +42,16 @@ export type ResolveTelegramGroupConfig = (
   topicConfig?: TelegramTopicConfig;
 };
 
-export type ResolveGroupActivation = (params: {
+type ResolveGroupActivation = (params: {
   chatId: string | number;
   agentId?: string;
   messageThreadId?: number;
   sessionKey?: string;
 }) => boolean | undefined;
 
-export type ResolveGroupRequireMention = (chatId: string | number) => boolean;
+type ResolveGroupRequireMention = (chatId: string | number) => boolean;
 
-export type TelegramMessageContextRuntimeOverrides = Partial<
+type TelegramMessageContextRuntimeOverrides = Partial<
   Pick<
     typeof import("./bot-message-context.runtime.js"),
     | "createStatusReactionController"
@@ -57,7 +64,7 @@ export type TelegramMessageContextRuntimeOverrides = Partial<
 export type TelegramMessageContextSessionRuntimeOverrides = Partial<
   Pick<
     typeof import("./bot-message-context.session.runtime.js"),
-    | "finalizeInboundContext"
+    | "buildChannelInboundEventContext"
     | "readSessionUpdatedAt"
     | "recordInboundSession"
     | "resolveInboundLastRouteSessionKey"
@@ -70,6 +77,8 @@ export type BuildTelegramMessageContextParams = {
   primaryCtx: TelegramContext;
   allMedia: TelegramMediaRef[];
   replyMedia?: TelegramMediaRef[];
+  replyChain?: TelegramReplyChainEntry[];
+  promptContext?: TelegramPromptContextEntry[];
   storeAllowFrom: string[];
   options?: TelegramMessageContextOptions;
   bot: Bot;

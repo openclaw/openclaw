@@ -1,5 +1,5 @@
-import { resolveOpenClawAgentDir } from "openclaw/plugin-sdk/agent-runtime";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import { resolveDefaultAgentDir } from "openclaw/plugin-sdk/agent-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { isLiveTestEnabled } from "openclaw/plugin-sdk/test-env";
@@ -31,6 +31,14 @@ function withPluginsEnabled<T>(cfg: T): T {
   } as T;
 }
 
+function requireProvider<T extends { id: string }>(providers: T[], id: string): T {
+  const provider = providers.find((entry) => entry.id === id);
+  if (!provider) {
+    throw new Error(`expected ${id} provider to be registered`);
+  }
+  return provider;
+}
+
 describeLive("comfy live", () => {
   let cfg = {} as OpenClawConfig;
   let agentDir = "";
@@ -42,7 +50,7 @@ describeLive("comfy live", () => {
 
   beforeAll(async () => {
     cfg = withPluginsEnabled(getRuntimeConfig());
-    agentDir = resolveOpenClawAgentDir();
+    agentDir = resolveDefaultAgentDir(cfg as never);
     plugin.register(
       createTestPluginApi({
         config: cfg as never,
@@ -62,9 +70,8 @@ describeLive("comfy live", () => {
   it.skipIf(!isComfyCapabilityConfigured({ cfg: cfg as never, agentDir, capability: "image" }))(
     "runs an image workflow",
     async () => {
-      const provider = imageProviders.find((entry) => entry.id === "comfy");
-      expect(provider).toBeDefined();
-      const result = await provider!.generateImage({
+      const provider = requireProvider(imageProviders, "comfy");
+      const result = await provider.generateImage({
         provider: "comfy",
         model: "workflow",
         prompt: "A tiny orange lobster icon on a clean background.",
@@ -81,9 +88,8 @@ describeLive("comfy live", () => {
   it.skipIf(!isComfyCapabilityConfigured({ cfg: cfg as never, agentDir, capability: "video" }))(
     "runs a video workflow",
     async () => {
-      const provider = videoProviders.find((entry) => entry.id === "comfy");
-      expect(provider).toBeDefined();
-      const result = await provider!.generateVideo({
+      const provider = requireProvider(videoProviders, "comfy");
+      const result = await provider.generateVideo({
         provider: "comfy",
         model: "workflow",
         prompt: "A tiny paper lobster gently waving, cinematic motion.",
@@ -100,9 +106,8 @@ describeLive("comfy live", () => {
   it.skipIf(!isComfyCapabilityConfigured({ cfg: cfg as never, agentDir, capability: "music" }))(
     "runs a music workflow",
     async () => {
-      const provider = musicProviders.find((entry) => entry.id === "comfy");
-      expect(provider).toBeDefined();
-      const result = await provider!.generateMusic({
+      const provider = requireProvider(musicProviders, "comfy");
+      const result = await provider.generateMusic({
         provider: "comfy",
         model: "workflow",
         prompt: "A gentle ambient synth loop with warm analog pads.",

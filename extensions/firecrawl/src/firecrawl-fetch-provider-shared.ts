@@ -1,10 +1,5 @@
 import type { WebFetchProviderPlugin } from "openclaw/plugin-sdk/provider-web-fetch-contract";
 
-type FirecrawlWebFetchProviderSharedFields = Omit<
-  WebFetchProviderPlugin,
-  "applySelectionConfig" | "createTool"
->;
-
 function ensureRecord(target: Record<string, unknown>, key: string): Record<string, unknown> {
   const current = target[key];
   if (current && typeof current === "object" && !Array.isArray(current)) {
@@ -49,6 +44,19 @@ export const FIRECRAWL_WEB_FETCH_PROVIDER_SHARED = {
   getConfiguredCredentialValue: (config) =>
     (config?.plugins?.entries?.firecrawl?.config as { webFetch?: { apiKey?: unknown } } | undefined)
       ?.webFetch?.apiKey,
+  getConfiguredCredentialFallback: (config) => {
+    const apiKey = (
+      config?.plugins?.entries?.firecrawl?.config as
+        | { webSearch?: { apiKey?: unknown } }
+        | undefined
+    )?.webSearch?.apiKey;
+    return apiKey === undefined
+      ? undefined
+      : {
+          path: "plugins.entries.firecrawl.config.webSearch.apiKey",
+          value: apiKey,
+        };
+  },
   setConfiguredCredentialValue: (configTarget, value) => {
     const plugins = ensureRecord(configTarget as unknown as Record<string, unknown>, "plugins");
     const entries = ensureRecord(plugins, "entries");
@@ -57,4 +65,4 @@ export const FIRECRAWL_WEB_FETCH_PROVIDER_SHARED = {
     const webFetch = ensureRecord(pluginConfig, "webFetch");
     webFetch.apiKey = value;
   },
-} satisfies FirecrawlWebFetchProviderSharedFields;
+} satisfies Omit<WebFetchProviderPlugin, "applySelectionConfig" | "createTool">;

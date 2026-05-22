@@ -1,9 +1,10 @@
+import fs from "node:fs/promises";
 import path from "node:path";
 import { safeFileURLToPath } from "../infra/local-file-access.js";
 import { resolveUserPath } from "../utils.js";
 import { getMediaDir, resolveMediaBufferPath } from "./store.js";
 
-export type MediaReferenceErrorCode = "invalid-path" | "path-not-allowed";
+type MediaReferenceErrorCode = "invalid-path" | "path-not-allowed";
 
 export class MediaReferenceError extends Error {
   code: MediaReferenceErrorCode;
@@ -15,7 +16,7 @@ export class MediaReferenceError extends Error {
   }
 }
 
-export type InboundMediaReference = {
+type InboundMediaReference = {
   id: string;
   normalizedSource: string;
   physicalPath: string;
@@ -30,7 +31,7 @@ export function normalizeMediaReferenceSource(source: string): string {
   return trimmed.replace(/^\s*MEDIA\s*:\s*/i, "").trim();
 }
 
-export type MediaReferenceSourceInfo = {
+type MediaReferenceSourceInfo = {
   hasScheme: boolean;
   hasUnsupportedScheme: boolean;
   isDataUrl: boolean;
@@ -84,6 +85,23 @@ function maybeLocalPathFromSource(source: string): string | null {
     return source;
   }
   return null;
+}
+
+function relativePathEscapesBase(relativePath: string): boolean {
+  return (
+    relativePath === ".." ||
+    relativePath.startsWith("../") ||
+    relativePath.startsWith("..\\") ||
+    path.isAbsolute(relativePath)
+  );
+}
+
+async function resolvePathForContainment(candidate: string): Promise<string> {
+  try {
+    return await fs.realpath(candidate);
+  } catch {
+    return path.resolve(candidate);
+  }
 }
 
 async function resolveInboundMediaUri(
@@ -148,10 +166,17 @@ export async function resolveInboundMediaReference(
     return null;
   }
 
-  const inboundDir = path.resolve(getMediaDir(), "inbound");
-  const resolvedPath = path.resolve(localPath);
-  const rel = path.relative(inboundDir, resolvedPath);
-  if (!rel || rel.startsWith("..") || path.isAbsolute(rel) || rel.includes(path.sep)) {
+  const rawInboundDir = path.resolve(getMediaDir(), "inbound");
+  const rawResolvedPath = path.resolve(localPath);
+  const rawRel = path.relative(rawInboundDir, rawResolvedPath);
+  const rel =
+    rawRel && !relativePathEscapesBase(rawRel)
+      ? rawRel
+      : path.relative(
+          await resolvePathForContainment(rawInboundDir),
+          await resolvePathForContainment(localPath),
+        );
+  if (!rel || relativePathEscapesBase(rel) || rel.includes(path.sep)) {
     return null;
   }
 

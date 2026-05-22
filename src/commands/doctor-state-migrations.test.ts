@@ -164,13 +164,13 @@ vi.mock("../infra/json-files.js", async () => {
     writeTextAtomic: async (
       filePath: string,
       content: string,
-      options?: { mode?: number; ensureDirMode?: number; appendTrailingNewline?: boolean },
+      options?: { mode?: number; dirMode?: number; trailingNewline?: boolean },
     ) => {
       const payload =
-        options?.appendTrailingNewline && !content.endsWith("\n") ? `${content}\n` : content;
+        options?.trailingNewline && !content.endsWith("\n") ? `${content}\n` : content;
       await fs.promises.mkdir(path.dirname(filePath), {
         recursive: true,
-        ...(typeof options?.ensureDirMode === "number" ? { mode: options.ensureDirMode } : {}),
+        ...(typeof options?.dirMode === "number" ? { mode: options.dirMode } : {}),
       });
       await fs.promises.writeFile(filePath, payload, {
         encoding: "utf8",
@@ -333,7 +333,7 @@ function expectTargetAlreadyExistsWarning(result: StateDirMigrationResult, targe
 
 function expectUnmigratedWithoutWarnings(result: StateDirMigrationResult) {
   expect(result.migrated).toBe(false);
-  expect(result.warnings).toEqual([]);
+  expect(result.warnings).toStrictEqual([]);
 }
 
 function writeLegacyAgentFiles(root: string, files: Record<string, string>) {
@@ -379,7 +379,7 @@ describe("doctor legacy state migrations", () => {
       now: () => 123,
     });
 
-    expect(result.warnings).toEqual([]);
+    expect(result.warnings).toStrictEqual([]);
     const targetDir = path.join(root, "agents", "main", "sessions");
     expect(fs.existsSync(path.join(targetDir, "a.jsonl"))).toBe(true);
     expect(fs.existsSync(path.join(targetDir, "b.jsonl"))).toBe(true);
@@ -502,7 +502,7 @@ describe("doctor legacy state migrations", () => {
     expect(detected.channelPlans.plans.map((plan) => path.basename(plan.targetPath))).toEqual([
       "telegram-default-allowFrom.json",
     ]);
-    expect(result.warnings).toEqual([]);
+    expect(result.warnings).toStrictEqual([]);
 
     const target = path.join(oauthDir, "telegram-default-allowFrom.json");
     expect(fs.existsSync(target)).toBe(true);
@@ -530,7 +530,7 @@ describe("doctor legacy state migrations", () => {
     expect(detected.channelPlans.plans.map((plan) => path.basename(plan.targetPath))).toEqual([
       "telegram-bot2-allowFrom.json",
     ]);
-    expect(result.warnings).toEqual([]);
+    expect(result.warnings).toStrictEqual([]);
 
     const bot1Target = path.join(oauthDir, "telegram-bot1-allowFrom.json");
     const bot2Target = path.join(oauthDir, "telegram-bot2-allowFrom.json");
@@ -566,7 +566,7 @@ describe("doctor legacy state migrations", () => {
     expect(detected.channelPlans.plans.map((plan) => path.basename(plan.targetPath))).toEqual([
       "telegram-alerts-allowFrom.json",
     ]);
-    expect(result.warnings).toEqual([]);
+    expect(result.warnings).toStrictEqual([]);
 
     const alertsTarget = path.join(oauthDir, "telegram-alerts-allowFrom.json");
     const backupTarget = path.join(oauthDir, "telegram-backup-allowFrom.json");
@@ -588,7 +588,7 @@ describe("doctor legacy state migrations", () => {
       env: { OPENCLAW_STATE_DIR: root } as NodeJS.ProcessEnv,
     });
     const result = await runLegacyStateMigrations({ detected });
-    expect(result.changes).toEqual([]);
+    expect(result.changes).toStrictEqual([]);
   });
 
   it("routes legacy state to the default agent entry", async () => {

@@ -26,6 +26,11 @@ When enabled, the plugin prepends concise usage guidance into system-prompt spac
 ## Quick start
 
 <Steps>
+  <Step title="Install the plugin">
+    ```bash
+    openclaw plugins install diffs
+    ```
+  </Step>
   <Step title="Enable the plugin">
     ```json5
     {
@@ -283,6 +288,7 @@ Set plugin-wide defaults in `~/.openclaw/openclaw.json`:
             fileScale: 2,
             fileMaxWidth: 960,
             mode: "both",
+            ttlSeconds: 21600,
           },
         },
       },
@@ -307,6 +313,7 @@ Supported defaults:
 - `fileScale`
 - `fileMaxWidth`
 - `mode`
+- `ttlSeconds`
 
 Explicit tool parameters override these defaults.
 

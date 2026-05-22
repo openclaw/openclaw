@@ -18,8 +18,12 @@ import { loadGatewayRuntimeConfigSchema } from "../../config/runtime-schema.js";
 import { lookupConfigSchema, type ConfigSchemaResponse } from "../../config/schema.js";
 import type { ConfigValidationIssue, OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
-import { prepareSecretsRuntimeSnapshot } from "../../secrets/runtime.js";
-import { diffConfigPaths } from "../config-reload.js";
+import {
+  prepareSecretsRuntimeSnapshot,
+  type PreparedSecretsRuntimeSnapshot,
+} from "../../secrets/runtime.js";
+import { diffConfigPaths } from "../config-diff.js";
+import { resolveConfigReloadMetadata } from "../config-reload-plan.js";
 import {
   formatControlPlaneActor,
   resolveControlPlaneActor,
@@ -40,6 +44,7 @@ import {
 import { resolveBaseHashParam } from "./base-hash.js";
 import {
   commitGatewayConfigWrite,
+  didActiveSharedGatewayAuthChange,
   didSharedGatewayAuthChange,
   resolveGatewayConfigPath,
   resolveGatewayConfigRestartWriteResult,
@@ -48,6 +53,12 @@ import type { GatewayRequestHandlers, RespondFn } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
 const MAX_CONFIG_ISSUES_IN_ERROR_MESSAGE = 3;
+const CONFIG_SCHEMA_RESPONSE_CACHE_TTL_MS = 5_000;
+
+let configSchemaResponseCache: {
+  expiresAtMs: number;
+  response: ConfigSchemaResponse;
+} | null = null;
 
 type ConfigOpenCommand = {
   command: string;
@@ -234,13 +245,12 @@ function summarizeConfigValidationIssues(issues: ReadonlyArray<ConfigValidationI
 async function ensureResolvableSecretRefsOrRespond(params: {
   config: OpenClawConfig;
   respond: RespondFn;
-}): Promise<boolean> {
+}): Promise<PreparedSecretsRuntimeSnapshot | null> {
   try {
-    await prepareSecretsRuntimeSnapshot({
+    return await prepareSecretsRuntimeSnapshot({
       config: params.config,
       includeAuthStoreRefs: false,
     });
-    return true;
   } catch (error) {
     const details = formatErrorMessage(error);
     params.respond(
@@ -251,16 +261,34 @@ async function ensureResolvableSecretRefsOrRespond(params: {
         `invalid config: active SecretRef resolution failed (${details})`,
       ),
     );
-    return false;
+    return null;
   }
 }
 
+export function clearConfigSchemaResponseCacheForTests() {
+  configSchemaResponseCache = null;
+}
+
+export function loadConfigSchemaResponseForTests(): ConfigSchemaResponse {
+  return loadSchemaWithPlugins();
+}
+
+function clearConfigSchemaResponseCache() {
+  configSchemaResponseCache = null;
+}
+
 function loadSchemaWithPlugins(): ConfigSchemaResponse {
-  // Note: We can't easily cache this, as there are no callback that can invalidate
-  // our cache. However, getRuntimeConfig() and loadOpenClawPlugins() (called inside
-  // loadGatewayRuntimeConfigSchema) already cache their results, and buildConfigSchema()
-  // is just a cheap transformation.
-  return loadGatewayRuntimeConfigSchema();
+  const now = Date.now();
+  if (configSchemaResponseCache && configSchemaResponseCache.expiresAtMs > now) {
+    return configSchemaResponseCache.response;
+  }
+
+  const response = loadGatewayRuntimeConfigSchema();
+  configSchemaResponseCache = {
+    expiresAtMs: Date.now() + CONFIG_SCHEMA_RESPONSE_CACHE_TTL_MS,
+    response,
+  };
+  return response;
 }
 
 export const configHandlers: GatewayRequestHandlers = {
@@ -286,7 +314,7 @@ export const configHandlers: GatewayRequestHandlers = {
     }
     const path = (params as { path: string }).path;
     const schema = loadSchemaWithPlugins();
-    const result = lookupConfigSchema(schema, path);
+    const result = lookupConfigSchema(schema, path, resolveConfigReloadMetadata);
     if (!result) {
       respond(
         false,
@@ -332,12 +360,13 @@ export const configHandlers: GatewayRequestHandlers = {
       nextConfig: parsed.config,
       context,
     });
+    clearConfigSchemaResponseCache();
     respond(
       true,
       {
         ok: true,
         path: writeResult.path,
-        config: redactConfigObject(parsed.config, parsed.schema.uiHints),
+        config: redactConfigObject(writeResult.config, parsed.schema.uiHints),
       },
       undefined,
     );
@@ -404,6 +433,24 @@ export const configHandlers: GatewayRequestHandlers = {
       );
       return;
     }
+    const restoredChangedPaths = diffConfigPaths(snapshot.config, restoredMerge.result);
+    const actor = resolveControlPlaneActor(client);
+    if (restoredChangedPaths.length === 0) {
+      context?.logGateway?.info(
+        `config.patch noop ${formatControlPlaneActor(actor)} (no changed paths)`,
+      );
+      respond(
+        true,
+        {
+          ok: true,
+          noop: true,
+          path: resolveGatewayConfigPath(snapshot),
+          config: redactConfigObject(snapshot.config, schemaPatch.uiHints),
+        },
+        undefined,
+      );
+      return;
+    }
     const validated = validateConfigObjectWithPlugins(restoredMerge.result);
     if (!validated.ok) {
       respond(
@@ -415,11 +462,14 @@ export const configHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    if (!(await ensureResolvableSecretRefsOrRespond({ config: validated.config, respond }))) {
+    const preparedSecretsSnapshot = await ensureResolvableSecretRefsOrRespond({
+      config: validated.config,
+      respond,
+    });
+    if (!preparedSecretsSnapshot) {
       return;
     }
     const changedPaths = diffConfigPaths(snapshot.config, validated.config);
-    const actor = resolveControlPlaneActor(client);
 
     // No-op: if the validated config is identical to the current config,
     // skip the file write and SIGUSR1 restart entirely. This avoids a full
@@ -447,10 +497,12 @@ export const configHandlers: GatewayRequestHandlers = {
     );
     // Compare before the write so we invalidate clients authenticated against the
     // previous shared secret immediately after the config update succeeds.
-    const disconnectSharedAuthClients = didSharedGatewayAuthChange(
-      snapshot.config,
-      validated.config,
-    );
+    const disconnectSharedAuthClients =
+      didSharedGatewayAuthChange(snapshot.config, validated.config) ||
+      didActiveSharedGatewayAuthChange({
+        fallbackPrev: snapshot.config,
+        next: preparedSecretsSnapshot.config,
+      });
     const writeResult = await commitGatewayConfigWrite({
       snapshot,
       writeOptions,
@@ -458,6 +510,7 @@ export const configHandlers: GatewayRequestHandlers = {
       context,
       disconnectSharedAuthClients,
     });
+    clearConfigSchemaResponseCache();
 
     const { payload, sentinelPath, restart } = await resolveGatewayConfigRestartWriteResult({
       requestParams: params,
@@ -465,7 +518,7 @@ export const configHandlers: GatewayRequestHandlers = {
       mode: "config.patch",
       configPath: writeResult.path,
       changedPaths,
-      nextConfig: validated.config,
+      nextConfig: writeResult.config,
       actor,
       context,
     });
@@ -474,7 +527,7 @@ export const configHandlers: GatewayRequestHandlers = {
       {
         ok: true,
         path: writeResult.path,
-        config: redactConfigObject(validated.config, schemaPatch.uiHints),
+        config: redactConfigObject(writeResult.config, schemaPatch.uiHints),
         restart,
         sentinel: {
           path: sentinelPath,
@@ -497,7 +550,11 @@ export const configHandlers: GatewayRequestHandlers = {
     if (!parsed) {
       return;
     }
-    if (!(await ensureResolvableSecretRefsOrRespond({ config: parsed.config, respond }))) {
+    const preparedSecretsSnapshot = await ensureResolvableSecretRefsOrRespond({
+      config: parsed.config,
+      respond,
+    });
+    if (!preparedSecretsSnapshot) {
       return;
     }
     const changedPaths = diffConfigPaths(snapshot.config, parsed.config);
@@ -507,7 +564,12 @@ export const configHandlers: GatewayRequestHandlers = {
     );
     // Compare before the write so we invalidate clients authenticated against the
     // previous shared secret immediately after the config update succeeds.
-    const disconnectSharedAuthClients = didSharedGatewayAuthChange(snapshot.config, parsed.config);
+    const disconnectSharedAuthClients =
+      didSharedGatewayAuthChange(snapshot.config, parsed.config) ||
+      didActiveSharedGatewayAuthChange({
+        fallbackPrev: snapshot.config,
+        next: preparedSecretsSnapshot.config,
+      });
     const writeResult = await commitGatewayConfigWrite({
       snapshot,
       writeOptions,
@@ -515,6 +577,7 @@ export const configHandlers: GatewayRequestHandlers = {
       context,
       disconnectSharedAuthClients,
     });
+    clearConfigSchemaResponseCache();
 
     const { payload, sentinelPath, restart } = await resolveGatewayConfigRestartWriteResult({
       requestParams: params,
@@ -522,7 +585,7 @@ export const configHandlers: GatewayRequestHandlers = {
       mode: "config.apply",
       configPath: writeResult.path,
       changedPaths,
-      nextConfig: parsed.config,
+      nextConfig: writeResult.config,
       actor,
       context,
     });
@@ -531,7 +594,7 @@ export const configHandlers: GatewayRequestHandlers = {
       {
         ok: true,
         path: writeResult.path,
-        config: redactConfigObject(parsed.config, parsed.schema.uiHints),
+        config: redactConfigObject(writeResult.config, parsed.schema.uiHints),
         restart,
         sentinel: {
           path: sentinelPath,

@@ -1,161 +1,137 @@
-import { randomUUID } from "node:crypto";
-import { readFileSync } from "node:fs";
-import fs from "node:fs/promises";
-import path from "node:path";
+import "./fs-safe-defaults.js";
+import {
+  JsonFileReadError,
+  readJson as readJsonImpl,
+  readJsonIfExists as readJsonIfExistsImpl,
+} from "@openclaw/fs-safe/json";
+import { replaceFileAtomic } from "./replace-file.js";
 
-function getErrorCode(err: unknown): string | undefined {
-  return err instanceof Error ? (err as NodeJS.ErrnoException).code : undefined;
-}
+export {
+  JsonFileReadError,
+  readJsonSync,
+  readRootJsonObjectSync,
+  readRootJsonSync,
+  readRootStructuredFileSync,
+  tryReadJsonSync,
+  tryReadJsonSync as readJsonFileSync,
+  writeJson,
+  writeJson as writeJsonAtomic,
+  writeJsonSync,
+} from "@openclaw/fs-safe/json";
 
-export class JsonFileReadError extends Error {
-  readonly filePath: string;
-  readonly reason: "read" | "parse";
+const RETRY_MAX_ATTEMPTS = 3;
+const RETRY_BASE_DELAY_MS = 50;
 
-  constructor(filePath: string, reason: "read" | "parse", cause: unknown) {
-    super(`Failed to ${reason} JSON file: ${filePath}`, { cause });
-    this.name = "JsonFileReadError";
-    this.filePath = filePath;
-    this.reason = reason;
+/**
+ * Recursively walks the error cause chain to detect
+ * "File changed during read" errors wrapped inside
+ * JsonFileReadError by @openclaw/fs-safe.
+ */
+function isFileChangedDuringRead(err: unknown): boolean {
+  let current: unknown = err;
+  while (current) {
+    if (current instanceof Error) {
+      if (
+        typeof current.message === "string" &&
+        current.message.includes("File changed during read")
+      ) {
+        return true;
+      }
+      current = (current as Error & { cause?: unknown }).cause;
+    } else {
+      break;
+    }
   }
+  return false;
 }
 
-async function replaceFileWithWindowsFallback(tempPath: string, filePath: string, mode: number) {
-  try {
-    await fs.rename(tempPath, filePath);
-    return;
-  } catch (err) {
-    const code = getErrorCode(err);
-    if (process.platform !== "win32" || (code !== "EPERM" && code !== "EEXIST")) {
+async function withRetryOnFileChanged<T>(fn: () => Promise<T>): Promise<T> {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return await fn();
+    } catch (err) {
+      if (isFileChangedDuringRead(err) && attempt < RETRY_MAX_ATTEMPTS - 1) {
+        await new Promise((r) => setTimeout(r, RETRY_BASE_DELAY_MS * 2 ** attempt));
+        continue;
+      }
       throw err;
     }
   }
-
-  const existing = await fs.lstat(filePath).catch(() => null);
-  if (existing?.isSymbolicLink()) {
-    await fs.rm(filePath, { force: true });
-    await fs.rename(tempPath, filePath);
-    return;
-  }
-
-  await fs.copyFile(tempPath, filePath);
-  try {
-    await fs.chmod(filePath, mode);
-  } catch {
-    // best-effort; ignore on platforms without chmod
-  }
-  await fs.rm(tempPath, { force: true }).catch(() => undefined);
 }
 
-export async function readJsonFile<T>(filePath: string): Promise<T | null> {
+export async function readJson<T>(filePath: string): Promise<T> {
   try {
-    const raw = await fs.readFile(filePath, "utf8");
-    return JSON.parse(raw) as T;
-  } catch {
-    return null;
+    return await withRetryOnFileChanged(() => readJsonImpl<T>(filePath));
+  } catch (err) {
+    throw err instanceof JsonFileReadError ? err : new JsonFileReadError(filePath, "read", err);
+  }
+}
+
+export async function readJsonFileStrict<T>(filePath: string): Promise<T> {
+  return readJson<T>(filePath);
+}
+
+export async function readJsonIfExists<T>(filePath: string): Promise<T | null> {
+  try {
+    return await withRetryOnFileChanged(() => readJsonIfExistsImpl<T>(filePath));
+  } catch (err) {
+    if (err instanceof JsonFileReadError) {
+      throw err;
+    }
+    throw new JsonFileReadError(filePath, "read", err);
   }
 }
 
 export async function readDurableJsonFile<T>(filePath: string): Promise<T | null> {
-  let raw: string;
-  try {
-    raw = await fs.readFile(filePath, "utf8");
-  } catch (err) {
-    if (getErrorCode(err) === "ENOENT") {
-      return null;
-    }
-    throw new JsonFileReadError(filePath, "read", err);
-  }
-  try {
-    return JSON.parse(raw) as T;
-  } catch (err) {
-    throw new JsonFileReadError(filePath, "parse", err);
-  }
+  return readJsonIfExists<T>(filePath);
 }
 
-export function readJsonFileSync(filePath: string): unknown {
+/**
+ * tryReadJson delegates to readJsonIfExists instead of the internal
+ * tryReadJsonImpl from @openclaw/fs-safe. The fs-safe implementation
+ * swallows all errors internally and returns null, which prevents
+ * the retry wrapper from detecting transient "File changed during read"
+ * race conditions.
+ *
+ * By routing through readJsonIfExists, fs-safe propagates errors on
+ * race conditions, our retry wrapper intercepts and retries them,
+ * and the outer try-catch still handles parse errors / file-not-found
+ * gracefully.
+ */
+export async function tryReadJson<T>(filePath: string): Promise<T | null> {
   try {
-    const raw = readFileSync(filePath, "utf8");
-    return JSON.parse(raw) as unknown;
+    return await readJsonIfExists<T>(filePath);
   } catch {
     return null;
   }
 }
 
-export async function writeJsonAtomic(
-  filePath: string,
-  value: unknown,
-  options?: { mode?: number; trailingNewline?: boolean; ensureDirMode?: number },
-) {
-  const text = JSON.stringify(value, null, 2);
-  await writeTextAtomic(filePath, text, {
-    mode: options?.mode,
-    ensureDirMode: options?.ensureDirMode,
-    appendTrailingNewline: options?.trailingNewline,
-  });
+export async function readJsonFile<T>(filePath: string): Promise<T | null> {
+  return tryReadJson<T>(filePath);
 }
+
+export { createAsyncLock } from "@openclaw/fs-safe/advanced";
+
+export type WriteTextAtomicOptions = {
+  mode?: number;
+  dirMode?: number;
+  trailingNewline?: boolean;
+  durable?: boolean;
+};
 
 export async function writeTextAtomic(
   filePath: string,
   content: string,
-  options?: { mode?: number; ensureDirMode?: number; appendTrailingNewline?: boolean },
-) {
-  const mode = options?.mode ?? 0o600;
-  const payload =
-    options?.appendTrailingNewline && !content.endsWith("\n") ? `${content}\n` : content;
-  const mkdirOptions: { recursive: true; mode?: number } = { recursive: true };
-  if (typeof options?.ensureDirMode === "number") {
-    mkdirOptions.mode = options.ensureDirMode;
-  }
-  await fs.mkdir(path.dirname(filePath), mkdirOptions);
-  const parentDir = path.dirname(filePath);
-  const tmp = `${filePath}.${randomUUID()}.tmp`;
-  try {
-    const tmpHandle = await fs.open(tmp, "w", mode);
-    try {
-      await tmpHandle.writeFile(payload, { encoding: "utf8" });
-      await tmpHandle.sync();
-    } finally {
-      await tmpHandle.close().catch(() => undefined);
-    }
-    try {
-      await fs.chmod(tmp, mode);
-    } catch {
-      // best-effort; ignore on platforms without chmod
-    }
-    await replaceFileWithWindowsFallback(tmp, filePath, mode);
-    try {
-      const dirHandle = await fs.open(parentDir, "r");
-      try {
-        await dirHandle.sync();
-      } finally {
-        await dirHandle.close().catch(() => undefined);
-      }
-    } catch {
-      // best-effort; some platforms/filesystems do not support syncing directories.
-    }
-    try {
-      await fs.chmod(filePath, mode);
-    } catch {
-      // best-effort; ignore on platforms without chmod
-    }
-  } finally {
-    await fs.rm(tmp, { force: true }).catch(() => undefined);
-  }
-}
-
-export function createAsyncLock() {
-  let lock: Promise<void> = Promise.resolve();
-  return async function withLock<T>(fn: () => Promise<T>): Promise<T> {
-    const prev = lock;
-    let release: (() => void) | undefined;
-    lock = new Promise<void>((resolve) => {
-      release = resolve;
-    });
-    await prev;
-    try {
-      return await fn();
-    } finally {
-      release?.();
-    }
-  };
+  options?: WriteTextAtomicOptions,
+): Promise<void> {
+  const payload = options?.trailingNewline && !content.endsWith("\n") ? `${content}\n` : content;
+  await replaceFileAtomic({
+    filePath,
+    content: payload,
+    mode: options?.mode ?? 0o600,
+    dirMode: options?.dirMode ?? 0o777 & ~process.umask(),
+    copyFallbackOnPermissionError: true,
+    syncTempFile: options?.durable !== false,
+    syncParentDir: options?.durable !== false,
+  });
 }

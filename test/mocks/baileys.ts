@@ -1,7 +1,7 @@
 import { EventEmitter } from "node:events";
 import { vi } from "vitest";
 
-type BaileysExports = typeof import("@whiskeysockets/baileys");
+type BaileysExports = typeof import("baileys");
 type FetchLatestBaileysVersionFn = BaileysExports["fetchLatestBaileysVersion"];
 type MakeCacheableSignalKeyStoreFn = BaileysExports["makeCacheableSignalKeyStore"];
 type MakeWASocketFn = BaileysExports["makeWASocket"];
@@ -25,7 +25,7 @@ export type MockBaileysSocket = {
   user?: { id?: string };
 };
 
-export type MockBaileysModule = {
+type MockBaileysModule = {
   BufferJSON: {
     replacer: (key: string, value: unknown) => unknown;
     reviver: (key: string, value: unknown) => unknown;

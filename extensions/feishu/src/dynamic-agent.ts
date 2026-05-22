@@ -4,7 +4,7 @@ import path from "node:path";
 import type { OpenClawConfig, PluginRuntime } from "../runtime-api.js";
 import type { DynamicAgentCreationConfig } from "./types.js";
 
-export type MaybeCreateDynamicAgentResult = {
+type MaybeCreateDynamicAgentResult = {
   created: boolean;
   updatedCfg: OpenClawConfig;
   agentId?: string;
@@ -19,9 +19,15 @@ export async function maybeCreateDynamicAgent(params: {
   runtime: PluginRuntime;
   senderOpenId: string;
   dynamicCfg: DynamicAgentCreationConfig;
+  configWritesAllowed: boolean;
   log: (msg: string) => void;
 }): Promise<MaybeCreateDynamicAgentResult> {
-  const { cfg, runtime, senderOpenId, dynamicCfg, log } = params;
+  const { cfg, runtime, senderOpenId, dynamicCfg, configWritesAllowed, log } = params;
+
+  if (!configWritesAllowed) {
+    log(`feishu: config writes disabled, not creating agent for ${senderOpenId}`);
+    return { created: false, updatedCfg: cfg };
+  }
 
   // Check if there's already a binding for this user
   const existingBindings = cfg.bindings ?? [];

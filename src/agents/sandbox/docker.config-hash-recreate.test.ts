@@ -1,7 +1,10 @@
 import { EventEmitter } from "node:events";
 import { Readable } from "node:stream";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { computeSandboxConfigHash } from "./config-hash.js";
+import {
+  computeSandboxConfigHash,
+  SANDBOX_DOCKER_EXPLICIT_ENV_POLICY_EPOCH,
+} from "./config-hash.js";
 import { collectDockerFlagValues } from "./test-args.js";
 import type { SandboxConfig } from "./types.js";
 import { SANDBOX_MOUNT_FORMAT_VERSION } from "./workspace-mounts.js";
@@ -25,12 +28,12 @@ const spawnState = vi.hoisted(() => ({
 }));
 
 const registryMocks = vi.hoisted(() => ({
-  readRegistry: vi.fn(),
+  readRegistryEntry: vi.fn(),
   updateRegistry: vi.fn(),
 }));
 
 vi.mock("./registry.js", () => ({
-  readRegistry: registryMocks.readRegistry,
+  readRegistryEntry: registryMocks.readRegistryEntry,
   updateRegistry: registryMocks.updateRegistry,
 }));
 
@@ -100,7 +103,7 @@ let ensureSandboxContainer: typeof import("./docker.js").ensureSandboxContainer;
 async function loadFreshDockerModuleForTest() {
   vi.resetModules();
   vi.doMock("./registry.js", () => ({
-    readRegistry: registryMocks.readRegistry,
+    readRegistryEntry: registryMocks.readRegistryEntry,
     updateRegistry: registryMocks.updateRegistry,
   }));
   vi.doMock("node:child_process", async () => createChildProcessMock());
@@ -111,6 +114,7 @@ function createSandboxConfig(
   dns: string[],
   binds?: string[],
   workspaceAccess: "rw" | "ro" | "none" = "rw",
+  env: Record<string, string> = { LANG: "C.UTF-8" },
 ): SandboxConfig {
   return {
     mode: "all",
@@ -126,7 +130,7 @@ function createSandboxConfig(
       tmpfs: ["/tmp", "/var/tmp", "/run"],
       network: "none",
       capDrop: ["ALL"],
-      env: { LANG: "C.UTF-8" },
+      env,
       dns,
       extraHosts: ["host.docker.internal:host-gateway"],
       binds: binds ?? ["/tmp/workspace:/workspace:rw"],
@@ -173,7 +177,6 @@ async function ensureSandboxCreateCallForTest(params: {
   const createCall = spawnState.calls.find(
     (call) => call.command === "docker" && call.args[0] === "create",
   );
-  expect(createCall).toBeDefined();
   if (!createCall) {
     throw new Error("expected docker create call");
   }
@@ -185,7 +188,7 @@ describe("ensureSandboxContainer config-hash recreation", () => {
     spawnState.calls.length = 0;
     spawnState.inspectRunning = true;
     spawnState.labelHash = "";
-    registryMocks.readRegistry.mockClear();
+    registryMocks.readRegistryEntry.mockClear();
     registryMocks.updateRegistry.mockClear();
     registryMocks.updateRegistry.mockResolvedValue(undefined);
     await loadFreshDockerModuleForTest();
@@ -213,17 +216,13 @@ describe("ensureSandboxContainer config-hash recreation", () => {
     expect(newHash).not.toBe(oldHash);
 
     spawnState.labelHash = oldHash;
-    registryMocks.readRegistry.mockResolvedValue({
-      entries: [
-        {
-          containerName: "oc-test-shared",
-          sessionKey: "shared",
-          createdAtMs: 1,
-          lastUsedAtMs: 0,
-          image: newCfg.docker.image,
-          configHash: oldHash,
-        },
-      ],
+    registryMocks.readRegistryEntry.mockResolvedValue({
+      containerName: "oc-test-shared",
+      sessionKey: "shared",
+      createdAtMs: 1,
+      lastUsedAtMs: 0,
+      image: newCfg.docker.image,
+      configHash: oldHash,
     });
 
     const containerName = await ensureSandboxContainer({
@@ -242,14 +241,57 @@ describe("ensureSandboxContainer config-hash recreation", () => {
       ),
     ).toBe(true);
     const createCall = dockerCalls.find((call) => call.args[0] === "create");
-    expect(createCall).toBeDefined();
-    expect(createCall?.args).toContain(`openclaw.configHash=${newHash}`);
-    expect(registryMocks.updateRegistry).toHaveBeenCalledWith(
-      expect.objectContaining({
-        containerName: "oc-test-shared",
-        configHash: newHash,
-      }),
+    if (!createCall) {
+      throw new Error("expected recreated docker create call");
+    }
+    expect(createCall.args).toContain(`openclaw.configHash=${newHash}`);
+    const registryUpdate = registryMocks.updateRegistry.mock.calls.at(-1)?.[0];
+    expect(registryUpdate?.containerName).toBe("oc-test-shared");
+    expect(registryUpdate?.configHash).toBe(newHash);
+  });
+
+  it("recreates shared container when previously filtered explicit env becomes allowed", async () => {
+    const workspaceDir = "/tmp/workspace";
+    const cfg = createSandboxConfig(["1.1.1.1"], undefined, "rw", {
+      LANG: "C.UTF-8",
+      GEMINI_API_KEY: "dummy-gemini",
+    });
+
+    const oldHash = computeSandboxConfigHash({
+      docker: cfg.docker,
+      workspaceAccess: cfg.workspaceAccess,
+      workspaceDir,
+      agentWorkspaceDir: workspaceDir,
+      mountFormatVersion: SANDBOX_MOUNT_FORMAT_VERSION,
+    });
+    const newHash = computeSandboxConfigHash({
+      docker: cfg.docker,
+      dockerEnvPolicyEpoch: SANDBOX_DOCKER_EXPLICIT_ENV_POLICY_EPOCH,
+      workspaceAccess: cfg.workspaceAccess,
+      workspaceDir,
+      agentWorkspaceDir: workspaceDir,
+      mountFormatVersion: SANDBOX_MOUNT_FORMAT_VERSION,
+    });
+    expect(newHash).not.toBe(oldHash);
+
+    spawnState.labelHash = oldHash;
+    registryMocks.readRegistryEntry.mockResolvedValue({
+      containerName: "oc-test-shared",
+      sessionKey: "shared",
+      createdAtMs: 1,
+      lastUsedAtMs: 0,
+      image: cfg.docker.image,
+      configHash: oldHash,
+    });
+
+    const createCall = await ensureSandboxCreateCallForTest({ cfg, workspaceDir });
+    expect(createCall.args).toContain(`openclaw.configHash=${newHash}`);
+    expect(collectDockerFlagValues(createCall.args, "--env")).toEqual(
+      expect.arrayContaining(["LANG=C.UTF-8", "GEMINI_API_KEY=dummy-gemini"]),
     );
+
+    const registryUpdate = registryMocks.updateRegistry.mock.calls.at(-1)?.[0];
+    expect(registryUpdate?.configHash).toBe(newHash);
   });
 
   it("applies custom binds after workspace mounts so overlapping binds can override", async () => {
@@ -269,17 +311,13 @@ describe("ensureSandboxContainer config-hash recreation", () => {
 
     spawnState.inspectRunning = false;
     spawnState.labelHash = "stale-hash";
-    registryMocks.readRegistry.mockResolvedValue({
-      entries: [
-        {
-          containerName: "oc-test-shared",
-          sessionKey: "shared",
-          createdAtMs: 1,
-          lastUsedAtMs: 0,
-          image: cfg.docker.image,
-          configHash: "stale-hash",
-        },
-      ],
+    registryMocks.readRegistryEntry.mockResolvedValue({
+      containerName: "oc-test-shared",
+      sessionKey: "shared",
+      createdAtMs: 1,
+      lastUsedAtMs: 0,
+      image: cfg.docker.image,
+      configHash: "stale-hash",
     });
 
     const createCall = await ensureSandboxCreateCallForTest({ cfg, workspaceDir });
@@ -304,7 +342,7 @@ describe("ensureSandboxContainer config-hash recreation", () => {
 
       spawnState.inspectRunning = false;
       spawnState.labelHash = "";
-      registryMocks.readRegistry.mockResolvedValue({ entries: [] });
+      registryMocks.readRegistryEntry.mockResolvedValue(null);
       registryMocks.updateRegistry.mockResolvedValue(undefined);
 
       const createCall = await ensureSandboxCreateCallForTest({ cfg, workspaceDir });
@@ -320,7 +358,7 @@ describe("ensureSandboxContainer config-hash recreation", () => {
 
     spawnState.inspectRunning = false;
     spawnState.labelHash = "";
-    registryMocks.readRegistry.mockResolvedValue({ entries: [] });
+    registryMocks.readRegistryEntry.mockResolvedValue(null);
 
     const createCall = await ensureSandboxCreateCallForTest({ cfg, workspaceDir });
     expect(createCall.args).toContain(

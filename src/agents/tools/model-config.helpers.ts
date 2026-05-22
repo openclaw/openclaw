@@ -3,13 +3,15 @@ import {
   resolveAgentModelPrimaryValue,
   resolveAgentModelTimeoutMsValue,
 } from "../../config/model-input.js";
-import type { AgentModelConfig } from "../../config/types.agents-shared.js";
+import type { AgentToolModelConfig } from "../../config/types.agents-shared.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
+  externalCliDiscoveryForProviderAuth,
   ensureAuthProfileStore,
   hasAnyAuthProfileStoreSource,
   listProfilesForProvider,
 } from "../auth-profiles.js";
+import type { AuthProfileStore } from "../auth-profiles/types.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../defaults.js";
 import { resolveEnvApiKey } from "../model-auth.js";
 import { resolveConfiguredModelRef } from "../model-selection.js";
@@ -34,9 +36,16 @@ export function resolveDefaultModelRef(cfg?: OpenClawConfig): { provider: string
   return { provider: DEFAULT_PROVIDER, model: DEFAULT_MODEL };
 }
 
-export function hasAuthForProvider(params: { provider: string; agentDir?: string }): boolean {
+export function hasAuthForProvider(params: {
+  provider: string;
+  agentDir?: string;
+  authStore?: AuthProfileStore;
+}): boolean {
   if (resolveEnvApiKey(params.provider)?.apiKey) {
     return true;
+  }
+  if (params.authStore) {
+    return listProfilesForProvider(params.authStore, params.provider).length > 0;
   }
   const agentDir = params.agentDir?.trim();
   if (!agentDir) {
@@ -46,12 +55,12 @@ export function hasAuthForProvider(params: { provider: string; agentDir?: string
     return false;
   }
   const store = ensureAuthProfileStore(agentDir, {
-    allowKeychainPrompt: false,
+    externalCli: externalCliDiscoveryForProviderAuth({ provider: params.provider }),
   });
   return listProfilesForProvider(store, params.provider).length > 0;
 }
 
-export function coerceToolModelConfig(model?: AgentModelConfig): ToolModelConfig {
+export function coerceToolModelConfig(model?: AgentToolModelConfig): ToolModelConfig {
   const primary = resolveAgentModelPrimaryValue(model);
   const fallbacks = resolveAgentModelFallbackValues(model);
   const timeoutMs = resolveAgentModelTimeoutMsValue(model);
@@ -65,6 +74,7 @@ export function coerceToolModelConfig(model?: AgentModelConfig): ToolModelConfig
 export function buildToolModelConfigFromCandidates(params: {
   explicit: ToolModelConfig;
   agentDir?: string;
+  authStore?: AuthProfileStore;
   candidates: Array<string | null | undefined>;
   isProviderConfigured?: (provider: string) => boolean;
 }): ToolModelConfig | null {
@@ -81,7 +91,11 @@ export function buildToolModelConfigFromCandidates(params: {
     const provider = trimmed.slice(0, trimmed.indexOf("/")).trim();
     const providerConfigured =
       params.isProviderConfigured?.(provider) ??
-      hasAuthForProvider({ provider, agentDir: params.agentDir });
+      hasAuthForProvider({
+        provider,
+        agentDir: params.agentDir,
+        authStore: params.authStore,
+      });
     if (!provider || !providerConfigured) {
       continue;
     }

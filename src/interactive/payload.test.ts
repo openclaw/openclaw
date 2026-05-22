@@ -4,6 +4,8 @@ import {
   hasReplyContent,
   hasReplyPayloadContent,
   normalizeInteractiveReply,
+  normalizeMessagePresentation,
+  presentationToInteractiveControlsReply,
   presentationToInteractiveReply,
   renderMessagePresentationFallbackText,
   resolveInteractiveTextFallback,
@@ -129,5 +131,106 @@ describe("interactive payload helpers", () => {
     expect(renderMessagePresentationFallbackText({ presentation })).toBe(
       "- Docs: https://example.com/docs",
     );
+  });
+
+  it("preserves web app presentation buttons for channel-native renderers", () => {
+    const presentation = {
+      blocks: [
+        {
+          type: "buttons" as const,
+          buttons: [{ label: "Launch", web_app: { url: "https://example.com/app" } }],
+        },
+      ],
+    };
+    const normalized = normalizeMessagePresentation(presentation);
+
+    expect(normalized).toEqual({
+      blocks: [
+        {
+          type: "buttons",
+          buttons: [{ label: "Launch", webApp: { url: "https://example.com/app" } }],
+        },
+      ],
+    });
+    expect(presentationToInteractiveReply(normalized!)).toEqual({
+      blocks: [
+        {
+          type: "buttons",
+          buttons: [{ label: "Launch", webApp: { url: "https://example.com/app" } }],
+        },
+      ],
+    });
+    expect(renderMessagePresentationFallbackText({ presentation: normalized })).toBe(
+      "- Launch: https://example.com/app",
+    );
+  });
+
+  it("converts only presentation controls for native component renderers", () => {
+    const presentation = {
+      title: "Deploy approval",
+      blocks: [
+        { type: "text" as const, text: "Canary is ready." },
+        { type: "divider" as const },
+        {
+          type: "buttons" as const,
+          buttons: [
+            {
+              label: "Approve",
+              value: "approve",
+              style: "success" as const,
+              reusable: true,
+            },
+          ],
+        },
+        {
+          type: "select" as const,
+          placeholder: "Rollback target",
+          options: [{ label: "Previous", value: "previous" }],
+        },
+      ],
+    };
+
+    expect(presentationToInteractiveReply(presentation)).toEqual({
+      blocks: [
+        { type: "text", text: "Deploy approval" },
+        { type: "text", text: "Canary is ready." },
+        {
+          type: "buttons",
+          buttons: [{ label: "Approve", value: "approve", style: "success", reusable: true }],
+        },
+        {
+          type: "select",
+          placeholder: "Rollback target",
+          options: [{ label: "Previous", value: "previous" }],
+        },
+      ],
+    });
+    expect(presentationToInteractiveControlsReply(presentation)).toEqual({
+      blocks: [
+        {
+          type: "buttons",
+          buttons: [{ label: "Approve", value: "approve", style: "success", reusable: true }],
+        },
+        {
+          type: "select",
+          placeholder: "Rollback target",
+          options: [{ label: "Previous", value: "previous" }],
+        },
+      ],
+    });
+  });
+
+  it("keeps divider-only fallback empty unless a send transport fallback is requested", () => {
+    const presentation = {
+      blocks: [{ type: "divider" as const }],
+    };
+
+    expect(renderMessagePresentationFallbackText({ presentation })).toBe("");
+    expect(
+      renderMessagePresentationFallbackText({
+        presentation,
+        emptyFallback: "---",
+      }),
+    ).toBe("---");
   });
 });

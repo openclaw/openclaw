@@ -1,4 +1,4 @@
-import type { AgentTool } from "@mariozechner/pi-agent-core";
+import type { AgentTool } from "@earendil-works/pi-agent-core";
 import type { ClientToolDefinition } from "./run/params.js";
 
 /**
@@ -37,6 +37,20 @@ export function collectAllowedToolNames(params: {
 export function collectRegisteredToolNames(tools: Array<{ name?: string }>): Set<string> {
   const names = new Set<string>();
   for (const tool of tools) {
+    addName(names, tool.name);
+  }
+  return names;
+}
+
+export function collectCoreBuiltinToolNames(
+  tools: Array<{ name?: string }>,
+  options?: { isPluginTool?: (tool: { name?: string }) => boolean },
+): Set<string> {
+  const names = new Set<string>();
+  for (const tool of tools) {
+    if (options?.isPluginTool?.(tool)) {
+      continue;
+    }
     addName(names, tool.name);
   }
   return names;

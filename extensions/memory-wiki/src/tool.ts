@@ -1,3 +1,4 @@
+import path from "node:path";
 import { Type } from "typebox";
 import type { AnyAgentTool, OpenClawConfig } from "../api.js";
 import { applyMemoryWikiMutation, normalizeMemoryWikiMutationInput } from "./apply.js";
@@ -10,6 +11,20 @@ import { lintMemoryWikiVault } from "./lint.js";
 import { getMemoryWikiPage, searchMemoryWiki, WIKI_SEARCH_MODES } from "./query.js";
 import { syncMemoryWikiImportedSources } from "./source-sync.js";
 import { renderMemoryWikiStatus, resolveMemoryWikiStatus } from "./status.js";
+
+function formatWikiToolReportPath(config: ResolvedMemoryWikiConfig, reportPath: string): string {
+  const vaultRoot = path.resolve(config.vault.path);
+  const resolvedReportPath = path.resolve(reportPath);
+  const relativeReportPath = path.relative(vaultRoot, resolvedReportPath);
+  if (
+    !relativeReportPath ||
+    relativeReportPath.startsWith("..") ||
+    path.isAbsolute(relativeReportPath)
+  ) {
+    return reportPath;
+  }
+  return relativeReportPath.replace(/\\/g, "/");
+}
 
 const WikiStatusSchema = Type.Object({}, { additionalProperties: false });
 const WikiLintSchema = Type.Object({}, { additionalProperties: false });
@@ -89,6 +104,7 @@ async function syncImportedSourcesIfNeeded(
 type WikiToolMemoryContext = {
   agentId?: string;
   agentSessionKey?: string;
+  sandboxed?: boolean;
 };
 
 export function createWikiStatusTool(
@@ -139,6 +155,7 @@ export function createWikiSearchTool(
         appConfig,
         agentId: memoryContext.agentId,
         agentSessionKey: memoryContext.agentSessionKey,
+        sandboxed: memoryContext.sandboxed,
         query: params.query,
         maxResults: params.maxResults,
         ...(params.backend ? { searchBackend: params.backend } : {}),
@@ -180,6 +197,7 @@ export function createWikiLintTool(
       const provenance = result.issuesByCategory.provenance.length;
       const errors = result.issues.filter((issue) => issue.severity === "error").length;
       const warnings = result.issues.filter((issue) => issue.severity === "warning").length;
+      const reportPath = formatWikiToolReportPath(config, result.reportPath);
       const summary =
         result.issueCount === 0
           ? "No wiki lint issues."
@@ -188,11 +206,16 @@ export function createWikiLintTool(
               `Contradictions: ${contradictions}`,
               `Open questions: ${openQuestions}`,
               `Provenance gaps: ${provenance}`,
-              `Report: ${result.reportPath}`,
+              `Report: ${reportPath}`,
             ].join("\n");
       return {
         content: [{ type: "text", text: summary }],
-        details: result,
+        details: {
+          issueCount: result.issueCount,
+          issues: result.issues,
+          issuesByCategory: result.issuesByCategory,
+          reportPath,
+        },
       };
     },
   };
@@ -255,6 +278,7 @@ export function createWikiGetTool(
         appConfig,
         agentId: memoryContext.agentId,
         agentSessionKey: memoryContext.agentSessionKey,
+        sandboxed: memoryContext.sandboxed,
         lookup: params.lookup,
         fromLine: params.fromLine,
         lineCount: params.lineCount,

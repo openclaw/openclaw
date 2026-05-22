@@ -16,6 +16,36 @@ beforeAll(async () => {
 
 installProviderHttpMockCleanup();
 
+function postJsonRequest(index = 0): Record<string, unknown> {
+  const request = postJsonRequestMock.mock.calls[index]?.[0] as Record<string, unknown> | undefined;
+  if (!request) {
+    throw new Error(`expected postJsonRequest call ${index}`);
+  }
+  return request;
+}
+
+function fetchWithTimeoutCall(index: number): [string, RequestInit | undefined, number, unknown] {
+  const call = fetchWithTimeoutMock.mock.calls[index] as
+    | [string, RequestInit | undefined, number, unknown]
+    | undefined;
+  if (!call) {
+    throw new Error(`expected fetchWithTimeout call ${index}`);
+  }
+  return call;
+}
+
+function providerHttpConfigRequest(): Record<string, unknown> {
+  const [call] = resolveProviderHttpRequestConfigMock.mock.calls;
+  if (!call) {
+    throw new Error("expected provider HTTP config request");
+  }
+  const [request] = call;
+  if (!request || typeof request !== "object" || Array.isArray(request)) {
+    throw new Error("expected provider HTTP config request");
+  }
+  return request as Record<string, unknown>;
+}
+
 describe("openai video generation provider", () => {
   it("declares the openai-codex alias for default-model ordering", () => {
     const provider = buildOpenAIVideoGenerationProvider();
@@ -49,8 +79,8 @@ describe("openai video generation provider", () => {
         }),
       })
       .mockResolvedValueOnce({
-        headers: new Headers({ "content-type": "video/mp4" }),
-        arrayBuffer: async () => Buffer.from("mp4-bytes"),
+        headers: new Headers({ "content-type": "video/webm" }),
+        arrayBuffer: async () => Buffer.from("webm-bytes"),
       });
 
     const provider = buildOpenAIVideoGenerationProvider();
@@ -62,26 +92,17 @@ describe("openai video generation provider", () => {
       durationSeconds: 4,
     });
 
-    expect(postJsonRequestMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        url: "https://api.openai.com/v1/videos",
-      }),
-    );
-    expect(fetchWithTimeoutMock).toHaveBeenNthCalledWith(
-      1,
-      "https://api.openai.com/v1/videos/vid_123",
-      expect.objectContaining({ method: "GET" }),
-      120000,
-      fetch,
-    );
+    expect(postJsonRequest().url).toBe("https://api.openai.com/v1/videos");
+    const [pollUrl, pollInit, pollTimeout, pollFetch] = fetchWithTimeoutCall(0);
+    expect(pollUrl).toBe("https://api.openai.com/v1/videos/vid_123");
+    expect(pollInit?.method).toBe("GET");
+    expect(pollTimeout).toBe(120000);
+    expect(pollFetch).toBe(fetch);
     expect(result.videos).toHaveLength(1);
-    expect(result.videos[0]?.mimeType).toBe("video/mp4");
-    expect(result.metadata).toEqual(
-      expect.objectContaining({
-        videoId: "vid_123",
-        status: "completed",
-      }),
-    );
+    expect(result.videos[0]?.mimeType).toBe("video/webm");
+    expect(result.videos[0]?.fileName).toBe("video-1.webm");
+    expect(result.metadata?.videoId).toBe("vid_123");
+    expect(result.metadata?.status).toBe("completed");
   });
 
   it("uses JSON input_reference.image_url for image-to-video requests", async () => {
@@ -117,25 +138,16 @@ describe("openai video generation provider", () => {
       inputImages: [{ buffer: Buffer.from("png-bytes"), mimeType: "image/png" }],
     });
 
-    expect(postJsonRequestMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        url: "https://api.openai.com/v1/videos",
-        body: expect.objectContaining({
-          input_reference: {
-            image_url: "data:image/png;base64,cG5nLWJ5dGVz",
-          },
-        }),
-      }),
-    );
-    expect(fetchWithTimeoutMock).toHaveBeenNthCalledWith(
-      1,
-      "https://api.openai.com/v1/videos/vid_456",
-      expect.objectContaining({
-        method: "GET",
-      }),
-      120000,
-      fetch,
-    );
+    const createRequest = postJsonRequest();
+    expect(createRequest.url).toBe("https://api.openai.com/v1/videos");
+    expect((createRequest.body as Record<string, unknown>).input_reference).toEqual({
+      image_url: "data:image/png;base64,cG5nLWJ5dGVz",
+    });
+    const [pollUrl, pollInit, pollTimeout, pollFetch] = fetchWithTimeoutCall(0);
+    expect(pollUrl).toBe("https://api.openai.com/v1/videos/vid_456");
+    expect(pollInit?.method).toBe("GET");
+    expect(pollTimeout).toBe(120000);
+    expect(pollFetch).toBe(fetch);
   });
 
   it("honors configured baseUrl for video requests", async () => {
@@ -179,17 +191,10 @@ describe("openai video generation provider", () => {
       },
     });
 
-    expect(resolveProviderHttpRequestConfigMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        baseUrl: "http://127.0.0.1:44080/v1",
-      }),
-    );
-    expect(postJsonRequestMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        url: "http://127.0.0.1:44080/v1/videos",
-        allowPrivateNetwork: false,
-      }),
-    );
+    expect(providerHttpConfigRequest().baseUrl).toBe("http://127.0.0.1:44080/v1");
+    const createRequest = postJsonRequest();
+    expect(createRequest.url).toBe("http://127.0.0.1:44080/v1/videos");
+    expect(createRequest.allowPrivateNetwork).toBe(false);
   });
 
   it("uses multipart input_reference for video-to-video uploads", async () => {
@@ -224,16 +229,12 @@ describe("openai video generation provider", () => {
     });
 
     expect(postJsonRequestMock).not.toHaveBeenCalled();
-    expect(fetchWithTimeoutMock).toHaveBeenNthCalledWith(
-      1,
-      "https://api.openai.com/v1/videos",
-      expect.objectContaining({
-        method: "POST",
-        body: expect.any(FormData),
-      }),
-      120000,
-      fetch,
-    );
+    const [createUrl, createInit, createTimeout, createFetch] = fetchWithTimeoutCall(0);
+    expect(createUrl).toBe("https://api.openai.com/v1/videos");
+    expect(createInit?.method).toBe("POST");
+    expect(createInit?.body).toBeInstanceOf(FormData);
+    expect(createTimeout).toBe(120000);
+    expect(createFetch).toBe(fetch);
   });
 
   it("rejects multiple reference assets", async () => {

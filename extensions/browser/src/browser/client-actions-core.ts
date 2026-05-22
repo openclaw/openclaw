@@ -4,30 +4,24 @@ import type {
   BrowserActionTabResult,
 } from "./client-actions-types.js";
 import { buildProfileQuery, withBaseUrl } from "./client-actions-url.js";
-import type { BrowserActRequest, BrowserFormField } from "./client-actions.types.js";
+import type { BrowserActRequest } from "./client-actions.types.js";
 import { fetchBrowserJson } from "./client-fetch.js";
 import {
   DEFAULT_BROWSER_ACTION_TIMEOUT_MS,
   DEFAULT_BROWSER_SCREENSHOT_TIMEOUT_MS,
 } from "./constants.js";
 
-export type { BrowserActRequest, BrowserFormField } from "./client-actions.types.js";
+export type { BrowserFormField } from "./client-actions.types.js";
 
-export type BrowserActResponse = {
+type BrowserActResponse = {
   ok: true;
   targetId: string;
   url?: string;
   result?: unknown;
   results?: Array<{ ok: boolean; error?: string }>;
+  blockedByDialog?: boolean;
+  browserState?: unknown;
 };
-
-export type BrowserDownloadPayload = {
-  url: string;
-  suggestedFilename: string;
-  path: string;
-};
-
-type BrowserDownloadResult = { ok: true; targetId: string; download: BrowserDownloadPayload };
 
 const BROWSER_ACT_REQUEST_TIMEOUT_SLACK_MS = 5_000;
 
@@ -52,21 +46,6 @@ function resolveBrowserActRequestTimeoutMs(req: BrowserActRequest): number {
   return Math.max(...candidateTimeouts);
 }
 
-async function postDownloadRequest(
-  baseUrl: string | undefined,
-  route: "/wait/download" | "/download",
-  body: Record<string, unknown>,
-  profile?: string,
-): Promise<BrowserDownloadResult> {
-  const q = buildProfileQuery(profile);
-  return await fetchBrowserJson<BrowserDownloadResult>(withBaseUrl(baseUrl, `${route}${q}`), {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
-    timeoutMs: 20000,
-  });
-}
-
 export async function browserNavigate(
   baseUrl: string | undefined,
   opts: {
@@ -89,6 +68,7 @@ export async function browserArmDialog(
   opts: {
     accept: boolean;
     promptText?: string;
+    dialogId?: string;
     targetId?: string;
     timeoutMs?: number;
     profile?: string;
@@ -101,6 +81,7 @@ export async function browserArmDialog(
     body: JSON.stringify({
       accept: opts.accept,
       promptText: opts.promptText,
+      dialogId: opts.dialogId,
       targetId: opts.targetId,
       timeoutMs: opts.timeoutMs,
     }),
@@ -134,50 +115,6 @@ export async function browserArmFileChooser(
     }),
     timeoutMs: 20000,
   });
-}
-
-export async function browserWaitForDownload(
-  baseUrl: string | undefined,
-  opts: {
-    path?: string;
-    targetId?: string;
-    timeoutMs?: number;
-    profile?: string;
-  },
-): Promise<BrowserDownloadResult> {
-  return await postDownloadRequest(
-    baseUrl,
-    "/wait/download",
-    {
-      targetId: opts.targetId,
-      path: opts.path,
-      timeoutMs: opts.timeoutMs,
-    },
-    opts.profile,
-  );
-}
-
-export async function browserDownload(
-  baseUrl: string | undefined,
-  opts: {
-    ref: string;
-    path: string;
-    targetId?: string;
-    timeoutMs?: number;
-    profile?: string;
-  },
-): Promise<BrowserDownloadResult> {
-  return await postDownloadRequest(
-    baseUrl,
-    "/download",
-    {
-      targetId: opts.targetId,
-      ref: opts.ref,
-      path: opts.path,
-      timeoutMs: opts.timeoutMs,
-    },
-    opts.profile,
-  );
 }
 
 export async function browserAct(

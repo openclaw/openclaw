@@ -62,6 +62,7 @@ export function createSessionConversationTestRegistry() {
           selectionLabel: "Discord",
           docsPath: "/channels/discord",
           blurb: "Discord test stub.",
+          preferSessionLookupForAnnounceTarget: true,
         },
         capabilities: { chatTypes: ["direct", "channel", "thread"] },
         messaging: {
@@ -134,6 +135,8 @@ export function createSessionConversationTestRegistry() {
         },
         capabilities: { chatTypes: ["direct", "group", "thread"] },
         messaging: {
+          resolveSessionTarget: ({ kind, id }: { kind: string; id: string }) =>
+            kind === "group" ? id : `channel:${id}`,
           normalizeTarget: (raw: string) => raw.replace(/^group:/, ""),
           resolveSessionConversation: resolveTelegramSessionConversation,
         },

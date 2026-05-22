@@ -1,5 +1,6 @@
 import { callGateway } from "../gateway/call.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import { normalizeBlockedLivenessWaitStatus } from "../shared/agent-liveness.js";
 import { extractAssistantText, stripToolMessages } from "./tools/chat-history-text.js";
 
 type GatewayCaller = typeof callGateway;
@@ -47,9 +48,14 @@ function normalizeAgentWaitResult(
   status: AgentWaitResult["status"],
   wait?: RawAgentWaitResponse,
 ): AgentWaitResult {
-  return {
+  const normalized = normalizeBlockedLivenessWaitStatus({
     status,
-    error: typeof wait?.error === "string" ? wait.error : undefined,
+    livenessState: wait?.livenessState,
+    error: wait?.error,
+  });
+  return {
+    status: normalized.status,
+    error: normalized.error,
     startedAt: typeof wait?.startedAt === "number" ? wait.startedAt : undefined,
     endedAt: typeof wait?.endedAt === "number" ? wait.endedAt : undefined,
     stopReason: typeof wait?.stopReason === "string" ? wait.stopReason : undefined,
@@ -249,7 +255,7 @@ export async function waitForAgentRunsToDrain(params: {
   };
 }
 
-export const __testing = {
+export const testing = {
   setDepsForTest(overrides?: Partial<{ callGateway: GatewayCaller }>) {
     runWaitDeps = overrides
       ? {
@@ -259,3 +265,4 @@ export const __testing = {
       : defaultRunWaitDeps;
   },
 };
+export { testing as __testing };

@@ -35,7 +35,7 @@ function expectSuspiciousPatternDetection(content: string, expected: boolean) {
     expect(patterns.length).toBeGreaterThan(0);
     return;
   }
-  expect(patterns).toEqual([]);
+  expect(patterns).toStrictEqual([]);
 }
 
 describe("external-content security", () => {
@@ -496,8 +496,10 @@ describe("external-content security", () => {
 
       // The malicious tags are contained within the safe boundaries
       const startMatch = result.match(/<<<EXTERNAL_UNTRUSTED_CONTENT id="[a-f0-9]{16}">>>/);
-      expect(startMatch).not.toBeNull();
-      expect(result.indexOf(startMatch![0])).toBeLessThan(result.indexOf("</user>"));
+      if (startMatch === null) {
+        throw new Error("Expected external content start marker");
+      }
+      expect(result.indexOf(startMatch[0])).toBeLessThan(result.indexOf("</user>"));
     });
   });
 });

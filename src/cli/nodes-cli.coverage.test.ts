@@ -1,5 +1,5 @@
 import { Command } from "commander";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { registerNodesCli } from "./nodes-cli.js";
 
 type NodeInvokeCall = {
@@ -90,10 +90,13 @@ describe("nodes-cli coverage", () => {
     return getNodeInvokeCall();
   };
 
-  if (sharedProgram.commands.length === 0) {
+  beforeAll(async () => {
+    if (sharedProgram.commands.length > 0) {
+      return;
+    }
     sharedProgram.exitOverride();
-    registerNodesCli(sharedProgram);
-  }
+    await registerNodesCli(sharedProgram);
+  });
 
   beforeEach(() => {
     runtimeErrors.length = 0;
@@ -109,11 +112,13 @@ describe("nodes-cli coverage", () => {
 
   it("does not register the removed run wrapper", async () => {
     await withSuppressedStderr(async () => {
-      await expect(
-        sharedProgram.parseAsync(["nodes", "run", "--node", "mac-1"], { from: "user" }),
-      ).rejects.toMatchObject({
-        code: "commander.unknownCommand",
-      });
+      let error: { code?: unknown } | undefined;
+      try {
+        await sharedProgram.parseAsync(["nodes", "run", "--node", "mac-1"], { from: "user" });
+      } catch (err) {
+        error = err as { code?: unknown };
+      }
+      expect(error?.code).toBe("commander.unknownCommand");
     });
   });
 
@@ -140,9 +145,11 @@ describe("nodes-cli coverage", () => {
       "overlay",
     ]);
 
-    expect(invoke).toBeTruthy();
-    expect(invoke?.params?.command).toBe("system.notify");
-    expect(invoke?.params?.params).toEqual({
+    if (!invoke) {
+      throw new Error("expected system.notify invocation");
+    }
+    expect(invoke.params?.command).toBe("system.notify");
+    expect(invoke.params?.params).toEqual({
       title: "Ping",
       body: "Gateway ready",
       sound: undefined,
@@ -168,13 +175,15 @@ describe("nodes-cli coverage", () => {
       "6000",
     ]);
 
-    expect(invoke).toBeTruthy();
-    expect(invoke?.params?.command).toBe("location.get");
-    expect(invoke?.params?.params).toEqual({
+    if (!invoke) {
+      throw new Error("expected location.get invocation");
+    }
+    expect(invoke.params?.command).toBe("location.get");
+    expect(invoke.params?.params).toEqual({
       maxAgeMs: 1000,
       desiredAccuracy: "precise",
       timeoutMs: 5000,
     });
-    expect(invoke?.params?.timeoutMs).toBe(6000);
+    expect(invoke.params?.timeoutMs).toBe(6000);
   });
 });

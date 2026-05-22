@@ -5,6 +5,7 @@ import { coerceFormValues } from "./form-coerce.ts";
 import {
   cloneConfigObject,
   removePathValue,
+  sanitizeRedactedFormForSubmit,
   serializeConfigForm,
   setPathValue,
 } from "./form-utils.ts";
@@ -135,6 +136,134 @@ describe("form-utils preserves numeric types", () => {
   });
 });
 
+describe("sanitizeRedactedFormForSubmit", () => {
+  it("drops loaded redacted placeholders for paths missing from original raw config", () => {
+    const form = {
+      gateway: {
+        mode: "remote",
+        remote: {
+          token: "__OPENCLAW_REDACTED__",
+        },
+      },
+    };
+    const originalForm = {
+      gateway: {
+        mode: "remote",
+        remote: {
+          token: "__OPENCLAW_REDACTED__",
+        },
+      },
+    };
+
+    expect(
+      sanitizeRedactedFormForSubmit(
+        form,
+        originalForm,
+        '{\n  gateway: {\n    mode: "remote"\n  }\n}\n',
+      ),
+    ).toEqual({
+      gateway: {
+        mode: "remote",
+      },
+    });
+  });
+
+  it("preserves loaded redacted placeholders that exist in original raw config", () => {
+    const form = {
+      gateway: {
+        mode: "remote",
+        remote: {
+          token: "__OPENCLAW_REDACTED__",
+        },
+      },
+    };
+    const originalForm = cloneConfigObject(form);
+
+    expect(
+      sanitizeRedactedFormForSubmit(
+        form,
+        originalForm,
+        '{\n  gateway: {\n    mode: "remote",\n    remote: {\n      token: "__OPENCLAW_REDACTED__"\n    }\n  }\n}\n',
+      ),
+    ).toEqual(form);
+  });
+
+  it("keeps newly entered sentinel literals so gateway validation rejects them", () => {
+    const form = {
+      gateway: {
+        remote: {
+          token: "__OPENCLAW_REDACTED__",
+        },
+      },
+    };
+    const originalForm = {
+      gateway: {
+        remote: {},
+      },
+    };
+
+    expect(
+      sanitizeRedactedFormForSubmit(
+        form,
+        originalForm,
+        "{\n  gateway: {\n    remote: {}\n  }\n}\n",
+      ),
+    ).toEqual(form);
+  });
+
+  it("prunes empty object parents when they are absent from original raw config", () => {
+    const form = {
+      gateway: {
+        remote: {
+          nested: {
+            token: "__OPENCLAW_REDACTED__",
+          },
+        },
+      },
+      ui: { theme: "dark" },
+    };
+    const originalForm = cloneConfigObject(form);
+
+    expect(
+      sanitizeRedactedFormForSubmit(form, originalForm, '{\n  ui: { theme: "dark" }\n}\n'),
+    ).toEqual({
+      ui: { theme: "dark" },
+    });
+  });
+
+  it("does not reindex arrays when a loaded scalar array sentinel is unrestorable", () => {
+    const form = {
+      channels: {
+        slack: {
+          tokens: ["__OPENCLAW_REDACTED__", "second-token"],
+        },
+      },
+    };
+    const originalForm = cloneConfigObject(form);
+
+    expect(
+      sanitizeRedactedFormForSubmit(
+        form,
+        originalForm,
+        '{\n  channels: { slack: { tokens: ["second-token"] } }\n}\n',
+      ),
+    ).toEqual(form);
+  });
+
+  it("leaves the form unchanged when original raw config cannot be parsed", () => {
+    const form = {
+      gateway: {
+        remote: {
+          token: "__OPENCLAW_REDACTED__",
+        },
+      },
+    };
+    const originalForm = cloneConfigObject(form);
+
+    expect(sanitizeRedactedFormForSubmit(form, originalForm, "{")).toEqual(form);
+  });
+});
+
 describe("prototype pollution prevention", () => {
   it("setPathValue rejects __proto__ in path", () => {
     const obj: Record<string, unknown> = {};
@@ -152,7 +281,7 @@ describe("prototype pollution prevention", () => {
   it("setPathValue rejects prototype in path", () => {
     const obj: Record<string, unknown> = {};
     setPathValue(obj, ["prototype", "bad"], true);
-    expect(obj).toEqual({});
+    expect(obj).toStrictEqual({});
   });
 
   it("removePathValue rejects __proto__ in path", () => {

@@ -3,6 +3,7 @@ import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 const statusSummaryMocks = vi.hoisted(() => ({
   hasConfiguredChannelsForReadOnlyScope: vi.fn(() => true),
   buildChannelSummary: vi.fn(async () => ["ok"]),
+  readSessionStoreReadOnly: vi.fn(() => ({})),
 }));
 
 vi.mock("../plugins/channel-plugin-ids.js", () => ({
@@ -20,6 +21,7 @@ vi.mock("./status.summary.runtime.js", () => ({
       provider: "openai",
       model: "gpt-5.5",
     })),
+    resolveSessionRuntimeLabel: vi.fn(() => "OpenClaw Pi Default"),
     resolveContextTokensForModel: vi.fn(() => 200_000),
   },
 }));
@@ -36,6 +38,14 @@ vi.mock("../config/io.js", () => ({
 
 vi.mock("../config/config.js", () => ({
   getRuntimeConfig: vi.fn(() => ({})),
+}));
+
+vi.mock("../config/sessions/paths.js", () => ({
+  resolveStorePath: vi.fn(() => "/tmp/sessions.json"),
+}));
+
+vi.mock("../config/sessions/store-read.js", () => ({
+  readSessionStoreReadOnly: statusSummaryMocks.readSessionStoreReadOnly,
 }));
 
 vi.mock("../gateway/agent-list.js", () => ({
@@ -132,6 +142,7 @@ describe("getStatusSummary", () => {
     vi.clearAllMocks();
     statusSummaryMocks.hasConfiguredChannelsForReadOnlyScope.mockReturnValue(true);
     statusSummaryMocks.buildChannelSummary.mockResolvedValue(["ok"]);
+    statusSummaryMocks.readSessionStoreReadOnly.mockReturnValue({});
   });
 
   it("includes runtimeVersion in the status payload", async () => {
@@ -149,7 +160,7 @@ describe("getStatusSummary", () => {
 
     const summary = await getStatusSummary();
 
-    expect(summary.channelSummary).toEqual([]);
+    expect(summary.channelSummary).toStrictEqual([]);
     expect(summary.linkChannel).toBeUndefined();
     expect(statusSummaryMocks.hasConfiguredChannelsForReadOnlyScope).toHaveBeenCalledWith({
       config: {},
@@ -161,7 +172,7 @@ describe("getStatusSummary", () => {
   it("skips channel summary imports when explicitly disabled", async () => {
     const summary = await getStatusSummary({ includeChannelSummary: false });
 
-    expect(summary.channelSummary).toEqual([]);
+    expect(summary.channelSummary).toStrictEqual([]);
     expect(summary.linkChannel).toBeUndefined();
     expect(statusSummaryMocks.hasConfiguredChannelsForReadOnlyScope).not.toHaveBeenCalled();
     expect(buildChannelSummary).not.toHaveBeenCalled();
@@ -171,8 +182,127 @@ describe("getStatusSummary", () => {
   it("does not trigger async context warmup while building status summaries", async () => {
     await getStatusSummary();
 
-    expect(vi.mocked(statusSummaryRuntime.resolveContextTokensForModel)).toHaveBeenCalledWith(
-      expect.objectContaining({ allowAsyncLoad: false }),
-    );
+    const contextCall = vi.mocked(statusSummaryRuntime.resolveContextTokensForModel).mock
+      .calls[0]?.[0];
+    expect(contextCall?.allowAsyncLoad).toBe(false);
+  });
+
+  it("includes the selected agent runtime on recent sessions", async () => {
+    vi.mocked(statusSummaryRuntime.resolveSessionRuntimeLabel).mockReturnValue("OpenAI Codex");
+    statusSummaryMocks.readSessionStoreReadOnly.mockReturnValue({
+      "agent:main:main": {
+        sessionId: "session-1",
+        updatedAt: Date.now(),
+      },
+    });
+
+    const summary = await getStatusSummary();
+
+    expect(summary.sessions.recent[0]?.runtime).toBe("OpenAI Codex");
+  });
+
+  it("includes configured and selected model labels for pinned sessions", async () => {
+    vi.mocked(statusSummaryRuntime.resolveConfiguredStatusModelRef).mockReturnValue({
+      provider: "zhipu",
+      model: "glm-4.5-air",
+    });
+    vi.mocked(statusSummaryRuntime.resolveSessionModelRef).mockReturnValue({
+      provider: "deepseek",
+      model: "deepseek-v4-flash",
+    });
+    statusSummaryMocks.readSessionStoreReadOnly.mockReturnValue({
+      "agent:main:main": {
+        sessionId: "session-1",
+        updatedAt: Date.now(),
+        providerOverride: "deepseek",
+        modelOverride: "deepseek-v4-flash",
+        modelOverrideSource: "user",
+      },
+    });
+
+    const summary = await getStatusSummary();
+
+    expect(summary.sessions.recent[0]?.configuredModel).toBe("zhipu/glm-4.5-air");
+    expect(summary.sessions.recent[0]?.selectedModel).toBe("deepseek/deepseek-v4-flash");
+    expect(summary.sessions.recent[0]?.modelSelectionReason).toBe("session override");
+  });
+
+  it("does not mark runtime-only model snapshots as pinned session selections", async () => {
+    vi.mocked(statusSummaryRuntime.resolveConfiguredStatusModelRef).mockReturnValue({
+      provider: "zhipu",
+      model: "glm-4.5-air",
+    });
+    vi.mocked(statusSummaryRuntime.resolveSessionModelRef).mockReturnValue({
+      provider: "deepseek",
+      model: "deepseek-v4-flash",
+    });
+    statusSummaryMocks.readSessionStoreReadOnly.mockReturnValue({
+      "agent:main:main": {
+        sessionId: "session-1",
+        updatedAt: Date.now(),
+        modelProvider: "deepseek",
+        model: "deepseek-v4-flash",
+      },
+    });
+
+    const summary = await getStatusSummary();
+
+    expect(summary.sessions.recent[0]?.configuredModel).toBe("zhipu/glm-4.5-air");
+    expect(summary.sessions.recent[0]?.selectedModel).toBe("deepseek/deepseek-v4-flash");
+    expect(summary.sessions.recent[0]?.modelSelectionReason).toBeNull();
+  });
+
+  it("does not mark auto fallback model overrides as pinned session selections", async () => {
+    vi.mocked(statusSummaryRuntime.resolveConfiguredStatusModelRef).mockReturnValue({
+      provider: "zhipu",
+      model: "glm-4.5-air",
+    });
+    vi.mocked(statusSummaryRuntime.resolveSessionModelRef).mockReturnValue({
+      provider: "deepseek",
+      model: "deepseek-v4-flash",
+    });
+    statusSummaryMocks.readSessionStoreReadOnly.mockReturnValue({
+      "agent:main:main": {
+        sessionId: "session-1",
+        updatedAt: Date.now(),
+        providerOverride: "deepseek",
+        modelOverride: "deepseek-v4-flash",
+        modelOverrideSource: "auto",
+        modelOverrideFallbackOriginProvider: "zhipu",
+        modelOverrideFallbackOriginModel: "glm-4.5-air",
+      },
+    });
+
+    const summary = await getStatusSummary();
+
+    expect(summary.sessions.recent[0]?.configuredModel).toBe("zhipu/glm-4.5-air");
+    expect(summary.sessions.recent[0]?.selectedModel).toBe("deepseek/deepseek-v4-flash");
+    expect(summary.sessions.recent[0]?.modelSelectionReason).toBeNull();
+  });
+
+  it("does not mark runtime-equivalent provider aliases as pinned mismatches", async () => {
+    vi.mocked(statusSummaryRuntime.resolveConfiguredStatusModelRef).mockReturnValue({
+      provider: "openai",
+      model: "gpt-5.5-codex",
+    });
+    vi.mocked(statusSummaryRuntime.resolveSessionModelRef).mockReturnValue({
+      provider: "openai-codex",
+      model: "gpt-5.5-codex",
+    });
+    statusSummaryMocks.readSessionStoreReadOnly.mockReturnValue({
+      "agent:main:main": {
+        sessionId: "session-1",
+        updatedAt: Date.now(),
+        providerOverride: "openai-codex",
+        modelOverride: "gpt-5.5-codex",
+        modelOverrideSource: "user",
+      },
+    });
+
+    const summary = await getStatusSummary();
+
+    expect(summary.sessions.recent[0]?.configuredModel).toBe("openai/gpt-5.5-codex");
+    expect(summary.sessions.recent[0]?.selectedModel).toBe("openai-codex/gpt-5.5-codex");
+    expect(summary.sessions.recent[0]?.modelSelectionReason).toBeNull();
   });
 });

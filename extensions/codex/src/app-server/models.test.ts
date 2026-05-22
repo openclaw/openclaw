@@ -5,6 +5,7 @@ import { createClientHarness } from "./test-support.js";
 const mocks = vi.hoisted(() => {
   const authBridge = {
     applyAuthProfile: vi.fn(async () => undefined),
+    authProfileId: vi.fn((params?: { authProfileId?: string }) => params?.authProfileId),
     startOptions: vi.fn(async ({ startOptions }) => startOptions),
   };
   const managedBinary = {
@@ -19,14 +20,15 @@ const mocks = vi.hoisted(() => {
 vi.mock("./auth-bridge.js", () => ({
   applyCodexAppServerAuthProfile: mocks.authBridge.applyAuthProfile,
   bridgeCodexAppServerStartOptions: mocks.authBridge.startOptions,
+  resolveCodexAppServerAuthProfileIdForAgent: mocks.authBridge.authProfileId,
 }));
 
 vi.mock("./managed-binary.js", () => ({
   resolveManagedCodexAppServerStartOptions: mocks.managedBinary.startOptions,
 }));
 
-vi.mock("openclaw/plugin-sdk/provider-auth", () => ({
-  resolveOpenClawAgentDir: mocks.providerAuth.agentDir,
+vi.mock("openclaw/plugin-sdk/agent-runtime", () => ({
+  resolveDefaultAgentDir: mocks.providerAuth.agentDir,
 }));
 
 let listCodexAppServerModels: typeof import("./models.js").listCodexAppServerModels;
@@ -44,6 +46,10 @@ describe("listCodexAppServerModels", () => {
     resetSharedCodexAppServerClientForTests();
     vi.restoreAllMocks();
     mocks.authBridge.applyAuthProfile.mockClear();
+    mocks.authBridge.authProfileId.mockClear();
+    mocks.authBridge.authProfileId.mockImplementation(
+      (params?: { authProfileId?: string }) => params?.authProfileId,
+    );
     mocks.authBridge.startOptions.mockClear();
     mocks.managedBinary.startOptions.mockClear();
     mocks.managedBinary.startOptions.mockImplementation(async (startOptions) => startOptions);
@@ -186,9 +192,8 @@ describe("listCodexAppServerModels", () => {
       },
     });
 
-    await expect(listPromise).resolves.toMatchObject({
-      models: [{ id: "gpt-5.4" }, { id: "gpt-5.2" }],
-    });
+    const list = await listPromise;
+    expect(list.models.map((model) => model.id)).toEqual(["gpt-5.4", "gpt-5.2"]);
     harness.client.close();
     startSpy.mockRestore();
   });
@@ -231,11 +236,10 @@ describe("listCodexAppServerModels", () => {
       },
     });
 
-    await expect(listPromise).resolves.toMatchObject({
-      models: [{ id: "gpt-5.4" }],
-      nextCursor: "page-2",
-      truncated: true,
-    });
+    const list = await listPromise;
+    expect(list.models.map((model) => model.id)).toEqual(["gpt-5.4"]);
+    expect(list.nextCursor).toBe("page-2");
+    expect(list.truncated).toBe(true);
     harness.client.close();
     startSpy.mockRestore();
   });

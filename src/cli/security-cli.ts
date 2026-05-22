@@ -41,7 +41,10 @@ export function registerSecurityCli(program: Command) {
       () =>
         `\n${theme.heading("Examples:")}\n${formatHelpExamples([
           ["openclaw security audit", "Run a local security audit."],
-          ["openclaw security audit --deep", "Include best-effort live Gateway probe checks."],
+          [
+            "openclaw security audit --deep",
+            "Include best-effort live Gateway probes and plugin-owned security audit collectors.",
+          ],
           ["openclaw security audit --deep --token <token>", "Use explicit token for deep probe."],
           [
             "openclaw security audit --deep --password <password>",
@@ -55,7 +58,7 @@ export function registerSecurityCli(program: Command) {
   security
     .command("audit")
     .description("Audit config + local state for common security foot-guns")
-    .option("--deep", "Attempt live Gateway probe (best-effort)", false)
+    .option("--deep", "Attempt live Gateway probes and plugin-owned collector checks", false)
     .option("--token <token>", "Use explicit gateway token for deep probe auth")
     .option("--password <password>", "Use explicit gateway password for deep probe auth")
     .option("--fix", "Apply safe fixes (tighten defaults + chmod state/config)", false)
@@ -101,6 +104,9 @@ export function registerSecurityCli(program: Command) {
       const lines: string[] = [];
       lines.push(heading("OpenClaw security audit"));
       lines.push(muted(`Summary: ${formatSummary(report.summary)}`));
+      if ((report.suppressedFindings?.length ?? 0) > 0) {
+        lines.push(muted(`Suppressed: ${report.suppressedFindings?.length ?? 0} configured`));
+      }
       lines.push(muted(`Run deeper: ${formatCliCommand("openclaw security audit --deep")}`));
       for (const diagnostic of secretDiagnostics) {
         lines.push(muted(`[secrets] ${diagnostic}`));
