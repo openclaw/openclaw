@@ -1,13 +1,4 @@
-// Raised from 15_000 to absorb slow-startup CLI environments where event-loop
-// blocking from module discovery and JIT compilation (observed: 28 s+ on x86_64
-// Linux with 45+ gateway plugins installed) defers the connect-response message
-// callback past the previous 15 s budget. The timeout never fires on healthy
-// systems (handshakes complete in tens of milliseconds), so raising the default
-// trades a small worst-case failure-detection latency for a large reduction in
-// spurious "gateway timeout after Xms" errors. Operators can still tighten this
-// via `OPENCLAW_HANDSHAKE_TIMEOUT_MS` or `gateway.handshakeTimeoutMs` in
-// openclaw.json.
-export const DEFAULT_PREAUTH_HANDSHAKE_TIMEOUT_MS = 45_000;
+export const DEFAULT_PREAUTH_HANDSHAKE_TIMEOUT_MS = 15_000;
 export const MIN_CONNECT_CHALLENGE_TIMEOUT_MS = 250;
 export const MAX_CONNECT_CHALLENGE_TIMEOUT_MS = DEFAULT_PREAUTH_HANDSHAKE_TIMEOUT_MS;
 
