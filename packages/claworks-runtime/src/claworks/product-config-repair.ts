@@ -1,0 +1,465 @@
+import { copyFileSync, existsSync, mkdirSync, readdirSync, symlinkSync } from "node:fs";
+import { homedir } from "node:os";
+import { join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+import type { ClaworksRobotConfig } from "./config-types.js";
+import {
+  isPersonalWorkProfile,
+  repairPersonalEnterpriseProfile,
+} from "./personal-enterprise-repair.js";
+
+/** OpenClaw personal install default; ClaWorks product must not bind here. */
+export const OPENCLAW_RESERVED_GATEWAY_PORT = 18_789;
+export const CLAWORKS_STANDARD_GATEWAY_PORT = 18_800;
+
+export const DEFAULT_CLAWORKS_PACK_IDS = [
+  "base",
+  "process-industry",
+  "enterprise-general",
+  "enterprise-commercial",
+] as const;
+
+export type ProductConfigRepairResult = {
+  changed: boolean;
+  actions: string[];
+  warnings: string[];
+};
+
+export function discoverPackSourceDir(cwd = process.cwd()): string | null {
+  const env = process.env.CLAWORKS_PACKS_DIR?.trim();
+  if (env && existsSync(env)) {
+    return resolve(env);
+  }
+  const candidates = [
+    join(cwd, "claworks-packs"),
+    join(cwd, "..", "claworks-packs"),
+    join(fileURLToPath(new URL("../../../..", import.meta.url)), "..", "claworks-packs"),
+  ];
+  for (const dir of candidates) {
+    const manifest = join(dir, "base", "claworks.pack.json");
+    if (existsSync(manifest)) {
+      return resolve(dir);
+    }
+  }
+  return null;
+}
+
+/** True when sibling claworks-packs or ~/.claworks/packs has at least one pack. */
+export function hasPackSourcesAvailable(opts?: { cwd?: string; stateDir?: string }): boolean {
+  if (discoverPackSourceDir(opts?.cwd)) {
+    return true;
+  }
+  const stateDir = opts?.stateDir?.trim() || join(homedir(), ".claworks");
+  const packsRoot = join(stateDir, "packs");
+  if (!existsSync(packsRoot)) {
+    return false;
+  }
+  for (const name of readdirSync(packsRoot)) {
+    const manifest = join(packsRoot, name, "claworks.pack.json");
+    if (existsSync(manifest)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function resolvePackSourcePath(packId: string, primaryDir: string | null): string | null {
+  if (!primaryDir) {
+    return null;
+  }
+  const primary = join(primaryDir, packId);
+  if (existsSync(primary)) {
+    return primary;
+  }
+  return null;
+}
+
+export function seedPacksToStateDir(opts?: {
+  stateDir?: string;
+  sourceDir?: string;
+  packIds?: readonly string[];
+}): { linked: string[]; missing: string[]; warnings: string[] } {
+  const stateDir = opts?.stateDir?.trim() || join(homedir(), ".claworks");
+  const destRoot = join(stateDir, "packs");
+  const primaryDir = opts?.sourceDir?.trim() || discoverPackSourceDir();
+  const packIds = opts?.packIds ?? DEFAULT_CLAWORKS_PACK_IDS;
+  const linked: string[] = [];
+  const missing: string[] = [];
+  const warnings: string[] = [];
+
+  mkdirSync(destRoot, { recursive: true });
+
+  if (!primaryDir) {
+    warnings.push(
+      "No claworks-packs source found — clone sibling repo or set CLAWORKS_PACKS_DIR to a directory containing base/, process-industry/, etc.",
+    );
+    return { linked, missing: [...packIds], warnings };
+  }
+
+  for (const packId of packIds) {
+    const src = resolvePackSourcePath(packId, primaryDir);
+    const dest = join(destRoot, packId);
+    if (!src) {
+      missing.push(packId);
+      continue;
+    }
+    if (existsSync(dest)) {
+      linked.push(packId);
+      continue;
+    }
+    try {
+      symlinkSync(src, dest, "dir");
+      linked.push(packId);
+    } catch (err) {
+      warnings.push(
+        `Could not symlink ${packId}: ${err instanceof Error ? err.message : String(err)}`,
+      );
+      missing.push(packId);
+    }
+  }
+
+  return { linked, missing, warnings };
+}
+
+const VECTOR_KB_PLUGIN_IDS = ["memory-core", "memory-lancedb"] as const;
+
+/** Wire OpenClaw memory-core + LanceDB for semantic KB (vector search). */
+export function repairVectorKnowledgeBase(
+  config: Record<string, unknown>,
+  opts?: { force?: boolean },
+): ProductConfigRepairResult {
+  const actions: string[] = [];
+  const warnings: string[] = [];
+  let changed = false;
+
+  const plugins = (config.plugins ?? {}) as Record<string, unknown>;
+  config.plugins = plugins;
+
+  const allow = new Set(Array.isArray(plugins.allow) ? (plugins.allow as string[]) : []);
+  for (const id of VECTOR_KB_PLUGIN_IDS) {
+    if (!allow.has(id)) {
+      allow.add(id);
+      actions.push(`plugins.allow: added ${id}`);
+      changed = true;
+    }
+  }
+  plugins.allow = [...allow];
+
+  const entries = (plugins.entries ?? {}) as Record<string, Record<string, unknown>>;
+  plugins.entries = entries;
+
+  const memoryCore = entries["memory-core"];
+  if (memoryCore !== undefined) {
+    delete entries["memory-core"];
+    actions.push("plugins.entries.memory-core: removed (memory slot uses memory-lancedb)");
+    changed = true;
+  }
+
+  const memoryLance = entries["memory-lancedb"] ?? {};
+  if (memoryLance.enabled === false) {
+    warnings.push("memory-lancedb disabled — vector store slot may fail");
+  } else {
+    const prev = JSON.stringify(memoryLance);
+    entries["memory-lancedb"] = { ...memoryLance, enabled: true };
+    if (prev !== JSON.stringify(entries["memory-lancedb"])) {
+      actions.push("plugins.entries.memory-lancedb: enabled");
+      changed = true;
+    }
+  }
+
+  const slots = (plugins.slots ?? {}) as Record<string, string>;
+  if (slots.memory !== "memory-lancedb") {
+    plugins.slots = { ...slots, memory: "memory-lancedb" };
+    actions.push("plugins.slots.memory = memory-lancedb");
+    changed = true;
+  }
+
+  const robotEntry = entries["claworks-robot"] ?? {};
+  entries["claworks-robot"] = robotEntry;
+  const robotConfig = (robotEntry.config ?? {}) as ClaworksRobotConfig;
+  robotEntry.config = robotConfig;
+  robotConfig.data ??= {};
+
+  const stateDir = defaultClaworksStateDir();
+  const kbPath = join(stateDir, "kb", "lancedb");
+  if (!robotConfig.data.kb_path || opts?.force) {
+    robotConfig.data.kb_path = kbPath;
+    actions.push(`data.kb_path -> ${kbPath}`);
+    changed = true;
+  }
+  if (robotConfig.data.kb_provider !== "memory-core") {
+    robotConfig.data.kb_provider = "memory-core";
+    actions.push("data.kb_provider = memory-core");
+    changed = true;
+  }
+  const embedModel =
+    robotConfig.data.kb_embed_model?.trim() ||
+    robotConfig.model_router?.embed?.trim() ||
+    "text-embedding-3-small";
+  if (!robotConfig.data.kb_embed_model) {
+    robotConfig.data.kb_embed_model = embedModel;
+    actions.push(`data.kb_embed_model = ${embedModel}`);
+    changed = true;
+  }
+
+  const lanceEntry = entries["memory-lancedb"] ?? {};
+  const lanceCfg = (lanceEntry.config ?? {}) as Record<string, unknown>;
+  const embedding = (lanceCfg.embedding ?? {}) as Record<string, unknown>;
+  if (embedding.model !== embedModel) {
+    entries["memory-lancedb"] = {
+      ...lanceEntry,
+      enabled: lanceEntry.enabled !== false,
+      config: {
+        ...lanceCfg,
+        embedding: { ...embedding, model: embedModel },
+      },
+    };
+    actions.push(`plugins.entries.memory-lancedb.embedding.model = ${embedModel}`);
+    changed = true;
+  }
+
+  return { changed, actions, warnings };
+}
+
+export function repairClaworksRobotPluginConfig(
+  config: Record<string, unknown>,
+  opts?: { packSourceDir?: string | null; enableEchoConnector?: boolean },
+): ProductConfigRepairResult {
+  const actions: string[] = [];
+  const warnings: string[] = [];
+  let changed = false;
+
+  const plugins = (config.plugins ?? {}) as Record<string, unknown>;
+  config.plugins = plugins;
+
+  const allow = Array.isArray(plugins.allow) ? [...(plugins.allow as string[])] : [];
+  if (!allow.includes("claworks-robot")) {
+    allow.unshift("claworks-robot");
+    plugins.allow = allow;
+    actions.push("plugins.allow: added claworks-robot");
+    changed = true;
+  }
+
+  const entries = (plugins.entries ?? {}) as Record<string, Record<string, unknown>>;
+  plugins.entries = entries;
+
+  const entry = entries["claworks-robot"] ?? {};
+  entries["claworks-robot"] = entry;
+  if (entry.enabled === false) {
+    entry.enabled = true;
+    actions.push("plugins.entries.claworks-robot.enabled: true");
+    changed = true;
+  } else if (entry.enabled !== true) {
+    entry.enabled = true;
+    actions.push("plugins.entries.claworks-robot: created/enabled");
+    changed = true;
+  }
+
+  const pluginConfig = (entry.config ?? {}) as ClaworksRobotConfig & Record<string, unknown>;
+  entry.config = pluginConfig;
+
+  pluginConfig.robot ??= {
+    name: "local-robot",
+    role: "monolith",
+    host: "127.0.0.1",
+    port: Number(process.env.CLAWORKS_GATEWAY_PORT || 18_800),
+  };
+
+  pluginConfig.data ??= {
+    database_url: `sqlite://${join(homedir(), ".claworks", "robot.db")}`,
+  };
+
+  const packs = pluginConfig.packs ?? {};
+  pluginConfig.packs = packs;
+
+  const statePacks = join(homedir(), ".claworks", "packs");
+  const sourceDir = opts?.packSourceDir ?? discoverPackSourceDir();
+  const paths = new Set(
+    [...(packs.paths ?? []), statePacks, sourceDir].filter(
+      (p): p is string => typeof p === "string" && p.length > 0,
+    ),
+  );
+  if (paths.size > (packs.paths?.length ?? 0)) {
+    packs.paths = [...paths];
+    actions.push(`packs.paths: ${[...paths].join(", ")}`);
+    changed = true;
+  }
+
+  const installed = new Set([...(packs.installed ?? []), ...DEFAULT_CLAWORKS_PACK_IDS]);
+  if (installed.size > (packs.installed?.length ?? 0)) {
+    packs.installed = [...installed];
+    actions.push(`packs.installed: ${[...installed].join(", ")}`);
+    changed = true;
+  }
+
+  const connectors = (pluginConfig.connectors ?? {}) as Record<string, unknown>;
+  if (opts?.enableEchoConnector !== false && !connectors.echo) {
+    pluginConfig.connectors = {
+      ...connectors,
+      echo: { preset: "echo", enabled: true },
+    };
+    actions.push("connectors.echo: enabled (demo OT/events)");
+    changed = true;
+  }
+
+  const seed = seedPacksToStateDir({
+    sourceDir: sourceDir ?? undefined,
+    packIds: packs.installed,
+  });
+  if (seed.linked.length > 0) {
+    actions.push(`~/.claworks/packs linked: ${seed.linked.join(", ")}`);
+    changed = true;
+  }
+  warnings.push(...seed.warnings);
+  if (seed.missing.length > 0) {
+    warnings.push(`Pack sources missing on disk: ${seed.missing.join(", ")}`);
+  }
+
+  return { changed, actions, warnings };
+}
+
+export function isClaworksRobotConfigPresent(config: Record<string, unknown>): boolean {
+  const entry = (config.plugins as { entries?: Record<string, { enabled?: boolean }> } | undefined)
+    ?.entries?.["claworks-robot"];
+  return entry?.enabled !== false;
+}
+
+export function defaultClaworksStateDir(): string {
+  return process.env.OPENCLAW_STATE_DIR?.trim() || join(homedir(), ".claworks");
+}
+
+export function discoverRobotMdExamplePath(cwd = process.cwd()): string | null {
+  const candidates = [
+    join(cwd, "contrib/examples/robot.md"),
+    join(cwd, "..", "claworks", "contrib/examples/robot.md"),
+    join(fileURLToPath(new URL("../../../..", import.meta.url)), "contrib/examples/robot.md"),
+  ];
+  for (const p of candidates) {
+    if (existsSync(p)) {
+      return resolve(p);
+    }
+  }
+  return null;
+}
+
+/** Seed ~/.claworks/robot.md from contrib/examples when missing. */
+export function seedRobotMdFromExample(opts?: { stateDir?: string; examplePath?: string }): {
+  seeded: boolean;
+  path: string;
+  message: string | null;
+} {
+  const stateDir = opts?.stateDir?.trim() || defaultClaworksStateDir();
+  const dest = join(stateDir, "robot.md");
+  if (existsSync(dest)) {
+    return { seeded: false, path: dest, message: null };
+  }
+  const example = opts?.examplePath?.trim() || discoverRobotMdExamplePath();
+  if (!example || !existsSync(example)) {
+    return {
+      seeded: false,
+      path: dest,
+      message: "robot.md example not found — copy contrib/examples/robot.md manually",
+    };
+  }
+  mkdirSync(stateDir, { recursive: true });
+  copyFileSync(example, dest);
+  return { seeded: true, path: dest, message: `robot.md seeded from ${example}` };
+}
+
+/**
+ * Full claworks.json repair: gateway port, plugins/packs/connectors, kb_provider, robot.md seed.
+ * Mutates `config` in place (same object returned).
+ */
+export function repairClaworksJsonConfig(
+  config: Record<string, unknown>,
+  opts?: {
+    packSourceDir?: string | null;
+    stateDir?: string;
+    seedRobotMd?: boolean;
+    enableEchoConnector?: boolean;
+  },
+): ProductConfigRepairResult & { robotMd?: ReturnType<typeof seedRobotMdFromExample> } {
+  const actions: string[] = [];
+  const warnings: string[] = [];
+  let changed = false;
+
+  const gateway = (config.gateway ?? {}) as Record<string, unknown>;
+  config.gateway = gateway;
+  const gwPort = gateway.port;
+  if (
+    typeof gwPort !== "number" ||
+    gwPort === OPENCLAW_RESERVED_GATEWAY_PORT ||
+    !Number.isFinite(gwPort) ||
+    gwPort <= 0
+  ) {
+    gateway.port = CLAWORKS_STANDARD_GATEWAY_PORT;
+    actions.push(
+      `gateway.port -> ${CLAWORKS_STANDARD_GATEWAY_PORT} (OpenClaw reserves ${OPENCLAW_RESERVED_GATEWAY_PORT})`,
+    );
+    changed = true;
+  }
+
+  const pluginRepair = repairClaworksRobotPluginConfig(config, {
+    packSourceDir: opts?.packSourceDir,
+    enableEchoConnector: opts?.enableEchoConnector,
+  });
+  actions.push(...pluginRepair.actions);
+  warnings.push(...pluginRepair.warnings);
+  if (pluginRepair.changed) {
+    changed = true;
+  }
+
+  const plugins = config.plugins as {
+    allow?: string[];
+    entries?: Record<string, { config?: ClaworksRobotConfig }>;
+  };
+  const entry = plugins?.entries?.["claworks-robot"];
+  const robotConfig = entry?.config;
+  if (robotConfig?.robot?.port === OPENCLAW_RESERVED_GATEWAY_PORT) {
+    robotConfig.robot.port = CLAWORKS_STANDARD_GATEWAY_PORT;
+    actions.push(`robot.port -> ${CLAWORKS_STANDARD_GATEWAY_PORT}`);
+    changed = true;
+  }
+
+  if (isPersonalWorkProfile()) {
+    const personal = repairPersonalEnterpriseProfile(config);
+    actions.push(...personal.actions);
+    warnings.push(...personal.warnings);
+    if (personal.changed) {
+      changed = true;
+    }
+  }
+
+  const enableVectorKb =
+    process.env.CLAWORKS_VECTOR_KB === "1" ||
+    process.env.CLAWORKS_PRODUCT_PROFILE?.trim() === "personal_work" ||
+    (plugins?.allow ?? []).includes("memory-core") ||
+    (plugins?.allow ?? []).includes("memory-lancedb");
+  if (enableVectorKb) {
+    const vectorRepair = repairVectorKnowledgeBase(config);
+    actions.push(...vectorRepair.actions);
+    warnings.push(...vectorRepair.warnings);
+    if (vectorRepair.changed) {
+      changed = true;
+    }
+  } else if ((plugins?.allow ?? []).includes("memory-core") && robotConfig?.data) {
+    if (!robotConfig.data.kb_provider) {
+      robotConfig.data.kb_provider = "memory-core";
+      actions.push("data.kb_provider = memory-core");
+      changed = true;
+    }
+  }
+
+  let robotMd: ReturnType<typeof seedRobotMdFromExample> | undefined;
+  if (opts?.seedRobotMd !== false) {
+    robotMd = seedRobotMdFromExample({ stateDir: opts?.stateDir });
+    if (robotMd.seeded) {
+      actions.push(robotMd.message ?? "robot.md seeded");
+      changed = true;
+    } else if (robotMd.message) {
+      warnings.push(robotMd.message);
+    }
+  }
+
+  return { changed, actions, warnings, robotMd };
+}
