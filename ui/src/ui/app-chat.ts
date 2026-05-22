@@ -85,9 +85,9 @@ export type ChatAbortOptions = {
   preserveDraft?: boolean;
 };
 
-// Chat pickers need the complete session index so older channel chats remain selectable.
+// Chat pickers need recency-free session rows so older channel chats remain selectable.
 export const CHAT_SESSIONS_ACTIVE_MINUTES = 0;
-export const CHAT_SESSIONS_REFRESH_LIMIT = 0;
+export const CHAT_SESSIONS_REFRESH_LIMIT = 100;
 export {
   handleChatDraftChange,
   handleChatInputHistoryKey,
