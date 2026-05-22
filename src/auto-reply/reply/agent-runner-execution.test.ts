@@ -4103,6 +4103,35 @@ describe("runAgentTurnWithFallback", () => {
     },
   );
 
+  it.each([
+    {
+      rejection: new Error("codex app-server client closed before turn completed"),
+      expected: "connection closed",
+    },
+    {
+      rejection: new Error("codex app-server turn idle timed out waiting for turn/completed"),
+      expected: "did not replay the turn automatically",
+    },
+  ])(
+    "surfaces Codex app-server bridge failures instead of generic copy",
+    async ({ rejection, expected }) => {
+      state.runWithModelFallbackMock.mockRejectedValueOnce(rejection);
+
+      const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+      const result = await runAgentTurnWithFallback({
+        ...createMinimalRunAgentTurnParams(),
+      });
+
+      expect(result.kind).toBe("final");
+      if (result.kind !== "final") {
+        throw new Error("expected final reply");
+      }
+      expect(result.payload.text).not.toBe(GENERIC_RUN_FAILURE_TEXT);
+      expect(result.payload.text).toContain("Codex app-server");
+      expect(result.payload.text).toContain(expected);
+    },
+  );
+
   it("forwards sanitized generic errors on external chat channels when verbose is on", async () => {
     state.runEmbeddedPiAgentMock.mockRejectedValueOnce(
       new Error("INVALID_ARGUMENT: some other failure"),

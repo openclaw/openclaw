@@ -307,6 +307,22 @@ describe("CodexAppServerEventProjector", () => {
     expect(result.replayMetadata.replaySafe).toBe(true);
   });
 
+  it("suppresses mirrored user prompt when the inbound message was already persisted", async () => {
+    const params = await createParams();
+    const projector = await createProjector({
+      ...params,
+      suppressNextUserMessagePersistence: true,
+    });
+    await projector.handleNotification(
+      turnCompleted([{ type: "agentMessage", id: "msg-1", text: "retry result" }]),
+    );
+
+    const result = projector.buildResult(buildEmptyToolTelemetry());
+
+    expect(result.messagesSnapshot.map((message) => message.role)).toEqual(["assistant"]);
+    expect(JSON.stringify(result.messagesSnapshot)).not.toContain(params.prompt);
+  });
+
   it("records canonical OpenAI Codex app-server turns with Codex local attribution", async () => {
     const params = await createParams();
     const projector = await createProjector({

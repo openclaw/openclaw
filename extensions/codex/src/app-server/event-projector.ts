@@ -287,9 +287,9 @@ export class CodexAppServerEventProjector {
     //   - Two distinct turns where the user repeats verbatim content →
     //     distinct turnIds → distinct identities → both kept.
     const turnId = this.turnId;
-    const messagesSnapshot: AgentMessage[] = [
-      attachCodexMirrorIdentity(buildCodexUserPromptMessage(this.params), `${turnId}:prompt`),
-    ];
+    const messagesSnapshot: AgentMessage[] = this.params.suppressNextUserMessagePersistence
+      ? []
+      : [attachCodexMirrorIdentity(buildCodexUserPromptMessage(this.params), `${turnId}:prompt`)];
     // Codex owns the canonical thread. These mirror records keep enough local
     // context for OpenClaw history, search, and future harness switching.
     if (reasoningText) {
