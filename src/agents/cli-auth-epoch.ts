@@ -85,10 +85,32 @@ function encodeClaudeCredential(credential: ClaudeCliCredential): string {
   // `encodeOAuthIdentity` collapses partial reads and rotations onto the
   // same provider-keyed identity hash, while a real account switch would
   // still surface as different identity fields. Fixes #74312.
+  //
+  // A2: When an OAuth refresh token is present, embed its hash to make the
+  // fingerprint identity-bearing. The refresh token is long-lived and survives
+  // access-token rotation, so it reliably distinguishes real account switches
+  // without introducing transient-read flapping. This is internal claude-cli
+  // logic and does not surface as a public plugin-SDK configuration option.
+  if (credential.type === "oauth" && credential.refresh) {
+    return JSON.stringify([
+      "oauth-refresh",
+      credential.provider,
+      hashCliAuthEpochPart(credential.refresh),
+    ]);
+  }
   return encodeOAuthIdentity({
     type: "oauth",
     provider: credential.provider,
   });
+}
+
+/** Returns true when the claude-cli credential has a refresh token and can
+ * serve as a standalone account identity for the epoch fingerprint. When true,
+ * the profile credential should be excluded from the epoch so that a cosmetic
+ * auth-profile rotation (which never alters the spawned process's auth) does
+ * not needlessly reset a resumable CLI session. */
+function isClaudeCliCredentialIdentityBearing(credential: ClaudeCliCredential): boolean {
+  return credential.type === "oauth" && Boolean(credential.refresh);
 }
 
 function encodeCodexCredential(credential: CodexCliCredential): string {
@@ -165,7 +187,19 @@ function encodeAuthProfileEpochPart(
   return `profile:${authProfileId}:${credentialHash}`;
 }
 
-function getLocalCliCredentialFingerprint(provider: string): string | undefined {
+type LocalCliCredentialResult = {
+  fingerprint: string;
+  /** True when the local credential embeds a stable account identity (e.g. a
+   * refresh token) and can serve as the sole auth epoch owner. When true,
+   * the auth-profile credential should be excluded from the epoch for
+   * claude-cli sessions so that cosmetic profile rotations do not reset
+   * resumable CLI sessions. */
+  identityBearing: boolean;
+};
+
+function getLocalCliCredentialFingerprint(
+  provider: string,
+): LocalCliCredentialResult | undefined {
   switch (provider) {
     case "claude-cli": {
       const credential = cliAuthEpochDeps.readClaudeCliCredentialsCached({
@@ -175,20 +209,30 @@ function getLocalCliCredentialFingerprint(provider: string): string | undefined 
       // Keep true credential absence absent so logout/removal invalidates
       // reusable sessions. The 5s credential cache still masks transient
       // null reads immediately after a successful read.
-      return credential ? hashCliAuthEpochPart(encodeClaudeCredential(credential)) : undefined;
+      if (!credential) {
+        return undefined;
+      }
+      return {
+        fingerprint: hashCliAuthEpochPart(encodeClaudeCredential(credential)),
+        identityBearing: isClaudeCliCredentialIdentityBearing(credential),
+      };
     }
     case "codex-cli": {
       const credential = cliAuthEpochDeps.readCodexCliCredentialsCached({
         ttlMs: 5000,
         allowKeychainPrompt: false,
       });
-      return credential ? hashCliAuthEpochPart(encodeCodexCredential(credential)) : undefined;
+      return credential
+        ? { fingerprint: hashCliAuthEpochPart(encodeCodexCredential(credential)), identityBearing: false }
+        : undefined;
     }
     case "google-gemini-cli": {
       const credential = cliAuthEpochDeps.readGeminiCliCredentialsCached({
         ttlMs: 5000,
       });
-      return credential ? hashCliAuthEpochPart(encodeGeminiCredential(credential)) : undefined;
+      return credential
+        ? { fingerprint: hashCliAuthEpochPart(encodeGeminiCredential(credential)), identityBearing: false }
+        : undefined;
     }
     default:
       return undefined;
@@ -214,15 +258,22 @@ export async function resolveCliAuthEpoch(params: {
   const provider = params.provider.trim();
   const authProfileId = normalizeOptionalString(params.authProfileId);
   const parts: string[] = [];
+  let localIdentityBearing = false;
 
   if (params.skipLocalCredential !== true) {
-    const localFingerprint = getLocalCliCredentialFingerprint(provider);
-    if (localFingerprint) {
-      parts.push(`local:${provider}:${localFingerprint}`);
+    const localResult = getLocalCliCredentialFingerprint(provider);
+    if (localResult) {
+      parts.push(`local:${provider}:${localResult.fingerprint}`);
+      localIdentityBearing = localResult.identityBearing;
     }
   }
 
-  if (authProfileId) {
+  // When the local host credential is identity-bearing (e.g. it embeds a
+  // refresh-token hash for claude-cli), the auth-profile credential adds no
+  // extra identity signal — the profile is never injected into the spawned
+  // process anyway. Skip it so a cosmetic profile rotation does not move the
+  // epoch and needlessly reset a resumable CLI session.
+  if (authProfileId && !localIdentityBearing) {
     const store = cliAuthEpochDeps.loadAuthProfileStoreForRuntime(undefined, {
       readOnly: true,
       allowKeychainPrompt: false,
