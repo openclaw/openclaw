@@ -2178,11 +2178,12 @@ export function createConfigIO(
       const nextStable = hashConfigRaw(stripVolatileMeta(json));
       const prevStable = hashConfigRaw(stripVolatileMeta(snapshot.raw ?? ""));
       if (nextStable === prevStable) {
-        return { persistedHash: previousHash };
+        // Skip the write: the on-disk config is the canonical persisted value.
+        return { persistedHash: previousHash, persistedConfig: snapshot.sourceConfig };
       }
     } else if (snapshot.exists && previousHash !== null && nextHash === previousHash) {
-      // Byte-identical — trivial no-op.
-      return { persistedHash: nextHash };
+      // Byte-identical — trivial no-op.  On-disk content is canonical.
+      return { persistedHash: nextHash, persistedConfig: snapshot.sourceConfig };
     }
 
     const changedPathCount = changedPaths?.size;
