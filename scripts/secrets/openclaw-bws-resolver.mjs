@@ -16,7 +16,7 @@ const parseRequest = (input) => {
   try {
     return JSON.parse(input || "{}");
   } catch (error) {
-    throw new Error(`Failed to parse request JSON: ${error.message}`);
+    throw new Error(`Failed to parse request JSON: ${error.message}`, { cause: error });
   }
 };
 
@@ -60,7 +60,7 @@ const main = async () => {
   try {
     secrets = JSON.parse(raw);
   } catch (error) {
-    throw new Error(`Failed to parse bws output: ${error.message}`);
+    throw new Error(`Failed to parse bws output: ${error.message}`, { cause: error });
   }
 
   const byKey = new Map();
