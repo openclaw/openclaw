@@ -117,6 +117,7 @@ describe("install.ps1 failure handling", () => {
   it("falls back to a user-local portable Node.js bootstrap when package managers are absent", () => {
     const installNodeBody = extractFunctionBody(source, "Install-Node");
     const portableNodeBody = extractFunctionBody(source, "Install-PortableNode");
+    const portableNodeRootBody = extractFunctionBody(source, "Get-PortableNodeRoot");
     const portableNodePathBody = extractFunctionBody(source, "Ensure-PortableNodeOnUserPath");
     const userPathBody = extractFunctionBody(source, "Add-ToUserPath");
     const depsRootBody = extractFunctionBody(source, "Get-OpenClawDepsRoot");
@@ -127,7 +128,7 @@ describe("install.ps1 failure handling", () => {
     expect(installNodeBody).toContain("Portable Node.js bootstrap failed");
     expect(installNodeBody).toContain("Error: Could not install Node.js automatically.");
     expect(depsRootBody).toContain("OpenClaw\\deps");
-    expect(portableNodeBody).toContain("portable-node");
+    expect(portableNodeRootBody).toContain("portable-node");
     expect(portableNodeBody).toContain("Ensure-PortableNodeOnUserPath");
     expect(portableNodeBody).toContain(
       "Expand-PortableNodeArchive -ZipPath $tmpZip -DestinationPath $portableRoot",
