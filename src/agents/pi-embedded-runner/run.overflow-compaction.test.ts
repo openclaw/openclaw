@@ -23,6 +23,7 @@ import {
   mockedExtractObservedOverflowTokenCount,
   mockedGlobalHookRunner,
   mockedGetApiKeyForModel,
+  mockedIsLikelyContextOverflowError,
   mockedMarkAuthProfileSuccess,
   mockedPickFallbackThinkingLevel,
   mockedResolveAuthProfileOrder,
@@ -1541,6 +1542,39 @@ describe("runEmbeddedPiAgent overflow compaction trigger routing", () => {
       currentTokenCount: 200001,
     });
     expect(result.meta.error).toBeUndefined();
+  });
+
+  it("surfaces a visible blocked payload for Codex promptError overflow without assistant text", async () => {
+    const promptError = new Error(
+      "Codex ran out of room in the model's context window. Start a new thread or clear earlier history before retrying.",
+    );
+    const terminalLifecycleMeta: Array<Record<string, unknown>> = [];
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({
+        promptError,
+        promptErrorSource: "prompt",
+        assistantTexts: [],
+        attemptUsage: { input: 0, output: 0, total: 0 },
+        setTerminalLifecycleMeta: (meta) => {
+          terminalLifecycleMeta.push(meta);
+        },
+      }),
+    );
+
+    const result = await runEmbeddedPiAgent(overflowBaseRunParams);
+
+    expect(mockedIsLikelyContextOverflowError).toHaveBeenCalledWith(promptError.message);
+    expect(mockedCompactDirect).toHaveBeenCalledTimes(1);
+    expect(result.payloads?.[0]).toMatchObject({
+      isError: true,
+      text: expect.stringContaining("Context overflow"),
+    });
+    expect(result.payloads?.[0]?.text).toContain("/reset");
+    expect(result.payloads?.[0]?.text).toContain("/new");
+    expect(result.meta.error?.kind).toBe("context_overflow");
+    expect(result.meta.livenessState).toBe("blocked");
+    expect(result.meta.finalAssistantVisibleText).toBe(result.payloads?.[0]?.text);
+    expect(terminalLifecycleMeta.at(-1)).toMatchObject({ livenessState: "blocked" });
   });
 
   it("does not reset compaction attempt budget after successful tool-result truncation", async () => {

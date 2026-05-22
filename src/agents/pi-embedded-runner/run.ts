@@ -2149,6 +2149,13 @@ export async function runEmbeddedPiAgent(
               );
             }
             const kind = isCompactionFailure ? "compaction_failure" : "context_overflow";
+            const overflowRecoveryText =
+              "Context overflow: prompt too large for the model. " +
+              "Try /reset (or /new) to start a fresh session, or use a larger-context model.";
+            log.warn(
+              `[context-overflow-recovery] exhausted provider overflow recovery for ${provider}/${modelId}; ` +
+                `livenessState=blocked suggestedAction=reset_or_new kind=${kind}`,
+            );
             attempt.setTerminalLifecycleMeta?.({
               replayInvalid: resolveReplayInvalidForAttempt(),
               livenessState: "blocked",
@@ -2156,9 +2163,7 @@ export async function runEmbeddedPiAgent(
             return {
               payloads: [
                 {
-                  text:
-                    "Context overflow: prompt too large for the model. " +
-                    "Try /reset (or /new) to start a fresh session, or use a larger-context model.",
+                  text: overflowRecoveryText,
                   isError: true,
                 },
               ],
@@ -2176,6 +2181,8 @@ export async function runEmbeddedPiAgent(
                   lastTurnTotal,
                 }),
                 systemPromptReport: attempt.systemPromptReport,
+                finalAssistantVisibleText: overflowRecoveryText,
+                finalAssistantRawText: overflowRecoveryText,
                 finalPromptText: attempt.finalPromptText,
                 replayInvalid: resolveReplayInvalidForAttempt(),
                 livenessState: "blocked",
