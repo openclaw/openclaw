@@ -1234,7 +1234,7 @@ export class CodexAppServerEventProjector {
   }
 
   private recordNativeToolTranscriptCall(item: CodexThreadItem | undefined): void {
-    if (!item || !shouldSynthesizeToolProgressForItem(item)) {
+    if (!item || !shouldRecordNativeToolTranscript(item)) {
       return;
     }
     const name = itemName(item);
@@ -1249,7 +1249,7 @@ export class CodexAppServerEventProjector {
   }
 
   private recordNativeToolTranscriptResult(item: CodexThreadItem | undefined): void {
-    if (!item || !shouldSynthesizeToolProgressForItem(item)) {
+    if (!item || !shouldRecordNativeToolTranscript(item)) {
       return;
     }
     const name = itemName(item);
@@ -1774,6 +1774,10 @@ function shouldSynthesizeToolProgressForItem(item: CodexThreadItem): boolean {
     default:
       return false;
   }
+}
+
+function shouldRecordNativeToolTranscript(item: CodexThreadItem): boolean {
+  return shouldSynthesizeToolProgressForItem(item) && item.type !== "webSearch";
 }
 
 function isMutatingNativeToolItem(item: CodexThreadItem): boolean {
