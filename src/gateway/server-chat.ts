@@ -814,7 +814,7 @@ export function createAgentEventHandler({
   return (evt: AgentEventPayload) => {
     const lifecyclePhase =
       evt.stream === "lifecycle" && typeof evt.data?.phase === "string" ? evt.data.phase : null;
-    if (lifecyclePhase === "start") {
+    if (lifecyclePhase !== null && lifecyclePhase !== "error") {
       clearPendingTerminalLifecycleError(evt.runId);
     }
 
