@@ -2049,7 +2049,7 @@ describe("CodexAppServerEventProjector", () => {
 
     expect(
       result.messagesSnapshot.some((message) => {
-        const record = message as Record<string, unknown>;
+        const record = message as unknown as Record<string, unknown>;
         if (record.role === "toolResult") {
           return true;
         }
