@@ -1,9 +1,10 @@
 import { execFile } from "node:child_process";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { access, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
+  downloadUrl,
   parseArgs,
   readArtifactPackageCandidateMetadata,
   readPackageBuildSourceSha,
@@ -11,6 +12,23 @@ import {
 } from "../../scripts/resolve-openclaw-package-candidate.mjs";
 
 const tempDirs: string[] = [];
+
+type LookupAddress = { address: string; family: number };
+
+function lookupAddresses(addresses: LookupAddress[]) {
+  return async () => addresses;
+}
+
+function unexpectedFetch(): never {
+  throw new Error("downloadUrl should reject before fetching");
+}
+
+async function missing(file: string): Promise<boolean> {
+  return await access(file).then(
+    () => false,
+    () => true,
+  );
+}
 
 afterEach(async () => {
   await Promise.all(tempDirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
@@ -77,6 +95,90 @@ describe("resolve-openclaw-package-candidate", () => {
       packageUrl: "",
       source: "npm",
     });
+  });
+
+  it("rejects unsafe package_url downloads before fetching private targets", async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), "openclaw-package-download-"));
+    tempDirs.push(dir);
+    const target = path.join(dir, "openclaw.tgz");
+
+    await expect(
+      downloadUrl("http://packages.example/openclaw.tgz", target, {
+        fetchImpl: unexpectedFetch,
+        lookupHost: lookupAddresses([{ address: "93.184.216.34", family: 4 }]),
+      }),
+    ).rejects.toThrow("package_url must use https");
+    await expect(
+      downloadUrl("https://user@packages.example/openclaw.tgz", target, {
+        fetchImpl: unexpectedFetch,
+        lookupHost: lookupAddresses([{ address: "93.184.216.34", family: 4 }]),
+      }),
+    ).rejects.toThrow("package_url must not include credentials");
+    await expect(
+      downloadUrl("https://localhost/openclaw.tgz", target, {
+        fetchImpl: unexpectedFetch,
+        lookupHost: lookupAddresses([{ address: "127.0.0.1", family: 4 }]),
+      }),
+    ).rejects.toThrow(/private\/internal\/special-use/iu);
+    await expect(
+      downloadUrl("https://packages.example/openclaw.tgz", target, {
+        fetchImpl: unexpectedFetch,
+        lookupHost: lookupAddresses([{ address: "10.0.0.8", family: 4 }]),
+      }),
+    ).rejects.toThrow(/resolves to private\/internal\/special-use/iu);
+  });
+
+  it("validates redirects for package_url downloads", async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), "openclaw-package-download-"));
+    tempDirs.push(dir);
+    const target = path.join(dir, "openclaw.tgz");
+    const requestedUrls: string[] = [];
+
+    await expect(
+      downloadUrl("https://packages.example/openclaw.tgz", target, {
+        fetchImpl: async (url: URL) => {
+          requestedUrls.push(url.toString());
+          return new Response(null, {
+            headers: { location: "https://169.254.169.254/latest/meta-data" },
+            status: 302,
+          });
+        },
+        lookupHost: lookupAddresses([{ address: "93.184.216.34", family: 4 }]),
+      }),
+    ).rejects.toThrow(/private\/internal\/special-use/iu);
+    expect(requestedUrls).toEqual(["https://packages.example/openclaw.tgz"]);
+  });
+
+  it("bounds package_url downloads and writes completed files atomically", async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), "openclaw-package-download-"));
+    tempDirs.push(dir);
+    const target = path.join(dir, "openclaw.tgz");
+
+    await expect(
+      downloadUrl("https://packages.example/openclaw.tgz", target, {
+        fetchImpl: async () =>
+          new Response(new Uint8Array([1, 2, 3, 4]), {
+            headers: { "content-length": "4" },
+            status: 200,
+          }),
+        lookupHost: lookupAddresses([{ address: "93.184.216.34", family: 4 }]),
+        maxBytes: 3,
+      }),
+    ).rejects.toThrow("package_url exceeds maximum download size");
+    await expect(missing(target)).resolves.toBe(true);
+    await expect(missing(`${target}.tmp`)).resolves.toBe(true);
+
+    await downloadUrl("https://packages.example/openclaw.tgz", target, {
+      fetchImpl: async () =>
+        new Response(new Uint8Array([1, 2, 3]), {
+          headers: { "content-length": "3" },
+          status: 200,
+        }),
+      lookupHost: lookupAddresses([{ address: "93.184.216.34", family: 4 }]),
+      maxBytes: 3,
+    });
+    await expect(readFile(target)).resolves.toEqual(Buffer.from([1, 2, 3]));
+    await expect(missing(`${target}.tmp`)).resolves.toBe(true);
   });
 
   it("reads package source metadata from package artifacts", async () => {
