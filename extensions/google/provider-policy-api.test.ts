@@ -136,14 +136,27 @@ describe("google provider policy public artifact", () => {
         provider: "google",
         modelId: "gemini-3-flash-preview",
         reasoning: false,
-      })?.levels,
-    ).toEqual([
-      { id: "off" },
-      { id: "minimal" },
-      { id: "low" },
-      { id: "medium" },
-      { id: "adaptive" },
-      { id: "high" },
-    ]);
+      }),
+    ).toEqual({
+      levels: [
+        { id: "off" },
+        { id: "minimal" },
+        { id: "low" },
+        { id: "medium" },
+        { id: "adaptive" },
+        { id: "high" },
+      ],
+      preserveWhenCatalogReasoningFalse: true,
+    });
+  });
+
+  it("honors catalog reasoning=false for non-Gemini 3 Google models", () => {
+    expect(
+      resolveThinkingProfile({
+        provider: "google",
+        modelId: "gemma-4-26b-a4b-it",
+        reasoning: false,
+      }),
+    ).toBeUndefined();
   });
 });
