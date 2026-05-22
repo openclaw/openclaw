@@ -52,12 +52,26 @@ function normalizeBaseUrl(value: string | undefined): string {
   return baseUrl.replace(/\/+$/u, "");
 }
 
-function normalizeModel(value: string | undefined): string {
+function normalizeModel(value: string | undefined, providerId: string | undefined): string {
   const model = value?.trim();
   if (!model) {
     throw new Error(
       "openai-compatible embeddings: missing model. Set it to the embedding model id your server expects.",
     );
+  }
+  const prefixes = new Set(
+    [
+      providerId?.trim(),
+      normalizeProviderId(providerId ?? ""),
+      OPENAI_COMPATIBLE_EMBEDDING_PROVIDER_ID,
+    ]
+      .filter((prefix): prefix is string => Boolean(prefix))
+      .map((prefix) => `${prefix}/`),
+  );
+  for (const prefix of prefixes) {
+    if (model.startsWith(prefix)) {
+      return model.slice(prefix.length);
+    }
   }
   return model;
 }
@@ -293,7 +307,7 @@ export function createOpenAICompatibleEmbeddingClient(
 ): OpenAICompatibleEmbeddingClient {
   const configuredProvider = resolveConfiguredProvider(options);
   const baseUrl = normalizeBaseUrl(options.remote?.baseUrl ?? configuredProvider?.baseUrl);
-  const model = normalizeModel(options.model);
+  const model = normalizeModel(options.model, options.provider);
   const apiKey = resolveRemoteApiKey(options.remote?.apiKey ?? configuredProvider?.apiKey);
   const inputType = normalizeOptionalInputType(options.inputType);
   const queryInputType = normalizeOptionalInputType(options.queryInputType);

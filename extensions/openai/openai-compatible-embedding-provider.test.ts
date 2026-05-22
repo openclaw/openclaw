@@ -335,6 +335,31 @@ describe("openai-compatible generic embedding provider", () => {
     expect(server.requests[0]?.headers["x-tenant"]).toBe("tenant-a");
   });
 
+  it("strips the active configured provider alias from model ids", async () => {
+    const server = await startEmbeddingServer();
+    const { provider } = createOpenAICompatibleEmbeddingProvider(
+      createOptions({
+        config: {
+          models: {
+            providers: {
+              "ollama-local": {
+                api: "openai-completions",
+                baseUrl: server.baseUrl,
+                models: [],
+              },
+            },
+          },
+        } as EmbeddingProviderCreateOptions["config"],
+        provider: "ollama-local",
+        model: "ollama-local/qwen2.5:3b",
+      }),
+    );
+
+    expect(provider.model).toBe("qwen2.5:3b");
+    await expect(provider.embed("hello")).resolves.toEqual([0.1, 0.2, 0.3]);
+    expect(server.requests[0]?.body.model).toBe("qwen2.5:3b");
+  });
+
   it("maps configured memory input_type labels onto query and document requests", async () => {
     const server = await startEmbeddingServer({
       respond: ({ body }) => {
