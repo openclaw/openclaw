@@ -410,7 +410,10 @@ export class DiscordVoiceManager {
 
   async join(
     params: { guildId: string; channelId: string },
-    options?: { preserveFollowState?: boolean },
+    options?: {
+      preserveFollowState?: boolean;
+      meetingNotes?: VoiceSessionEntry["meetingNotes"];
+    },
   ): Promise<VoiceOperationResult> {
     if (this.destroyed) {
       return {
@@ -640,6 +643,7 @@ export class DiscordVoiceManager {
       playbackQueue: Promise.resolve(),
       processingQueue: Promise.resolve(),
       capture: createVoiceCaptureState(),
+      meetingNotes: options?.meetingNotes,
       receiveRecovery: createVoiceReceiveRecoveryState(),
       stop: () => {
         stopEntry(entry, {
@@ -649,7 +653,7 @@ export class DiscordVoiceManager {
       },
     };
 
-    if (voiceMode !== "stt-tts") {
+    if (!options?.meetingNotes && voiceMode !== "stt-tts") {
       const bootstrapContextInstructions = await resolveDiscordVoiceRealtimeBootstrapContext({
         entry,
         cfg: this.params.cfg,
@@ -1533,6 +1537,7 @@ export class DiscordVoiceManager {
       ownerAllowFrom: this.ownerAllowFrom,
       runtime: this.params.runtime,
       speakerContext: this.speakerContext,
+      meetingNotes: params.entry.meetingNotes,
       fetchGuildName: async (guildId) => {
         const guild = await this.params.client.fetchGuild(guildId).catch(() => null);
         return guild && typeof guild.name === "string" && guild.name.trim()

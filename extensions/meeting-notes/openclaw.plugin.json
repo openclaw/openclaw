@@ -1,0 +1,28 @@
+{
+  "id": "meeting-notes",
+  "activation": {
+    "onStartup": true
+  },
+  "name": "Meeting Notes",
+  "description": "Capture meeting transcripts from channel-owned sources and write summaries.",
+  "contracts": {
+    "meetingNotesSourceProviders": ["manual-transcript"],
+    "tools": ["meeting_notes"]
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "enabled": {
+        "type": "boolean",
+        "default": true
+      },
+      "maxUtterances": {
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 10000,
+        "default": 2000
+      }
+    }
+  }
+}
