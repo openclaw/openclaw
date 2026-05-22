@@ -40,26 +40,62 @@ vi.mock("../../../plugins/host-hook-state.js", () => hostHookStateMocks);
 import {
   forgetPromptBuildDrainCacheForRun,
   resolvePromptSubmissionSkipReason,
+  resolveAttemptPrependDynamicSystemContext,
   resolveAttemptPrependSystemContext,
   resolvePromptBuildHookResult,
 } from "./attempt.prompt-helpers.js";
 
 describe("resolveAttemptPrependSystemContext", () => {
-  it("prepends active video task guidance ahead of hook system context", () => {
+  it("keeps hook static system context separate from active media task hints", () => {
+    imageGenerationTaskStatusMocks.buildActiveImageGenerationTaskPromptContextForSession.mockReset();
+    imageGenerationTaskStatusMocks.buildActiveImageGenerationTaskPromptContextForSession.mockReturnValue(
+      "Should stay dynamic",
+    );
+    videoGenerationTaskStatusMocks.buildActiveVideoGenerationTaskPromptContextForSession.mockReset();
+    videoGenerationTaskStatusMocks.buildActiveVideoGenerationTaskPromptContextForSession.mockReturnValue(
+      "Should stay dynamic",
+    );
+    musicGenerationTaskStatusMocks.buildActiveMusicGenerationTaskPromptContextForSession.mockReset();
+    musicGenerationTaskStatusMocks.buildActiveMusicGenerationTaskPromptContextForSession.mockReturnValue(
+      "Should stay dynamic",
+    );
+
+    const result = resolveAttemptPrependSystemContext({
+      hookPrependSystemContext: "Hook static system context",
+    });
+
+    expect(
+      imageGenerationTaskStatusMocks.buildActiveImageGenerationTaskPromptContextForSession,
+    ).not.toHaveBeenCalled();
+    expect(
+      videoGenerationTaskStatusMocks.buildActiveVideoGenerationTaskPromptContextForSession,
+    ).not.toHaveBeenCalled();
+    expect(
+      musicGenerationTaskStatusMocks.buildActiveMusicGenerationTaskPromptContextForSession,
+    ).not.toHaveBeenCalled();
+    expect(result).toBe("Hook static system context");
+  });
+});
+
+describe("resolveAttemptPrependDynamicSystemContext", () => {
+  it("prepends active media task guidance ahead of hook dynamic system context", () => {
+    imageGenerationTaskStatusMocks.buildActiveImageGenerationTaskPromptContextForSession.mockReset();
     imageGenerationTaskStatusMocks.buildActiveImageGenerationTaskPromptContextForSession.mockReturnValue(
       "Image task hint",
     );
+    videoGenerationTaskStatusMocks.buildActiveVideoGenerationTaskPromptContextForSession.mockReset();
     videoGenerationTaskStatusMocks.buildActiveVideoGenerationTaskPromptContextForSession.mockReturnValue(
       "Active task hint",
     );
+    musicGenerationTaskStatusMocks.buildActiveMusicGenerationTaskPromptContextForSession.mockReset();
     musicGenerationTaskStatusMocks.buildActiveMusicGenerationTaskPromptContextForSession.mockReturnValue(
       "Music task hint",
     );
 
-    const result = resolveAttemptPrependSystemContext({
+    const result = resolveAttemptPrependDynamicSystemContext({
       sessionKey: "agent:main:discord:direct:123",
       trigger: "user",
-      hookPrependSystemContext: "Hook system context",
+      hookPrependDynamicSystemContext: "Hook dynamic system context",
     });
 
     expect(
@@ -72,11 +108,11 @@ describe("resolveAttemptPrependSystemContext", () => {
       musicGenerationTaskStatusMocks.buildActiveMusicGenerationTaskPromptContextForSession,
     ).toHaveBeenCalledWith("agent:main:discord:direct:123");
     expect(result).toBe(
-      "Image task hint\n\nActive task hint\n\nMusic task hint\n\nHook system context",
+      "Image task hint\n\nActive task hint\n\nMusic task hint\n\nHook dynamic system context",
     );
   });
 
-  it("skips active video task guidance for non-user triggers", () => {
+  it("skips active media task guidance for non-user triggers", () => {
     imageGenerationTaskStatusMocks.buildActiveImageGenerationTaskPromptContextForSession.mockReset();
     imageGenerationTaskStatusMocks.buildActiveImageGenerationTaskPromptContextForSession.mockReturnValue(
       "Should not be used",
@@ -90,10 +126,10 @@ describe("resolveAttemptPrependSystemContext", () => {
       "Should not be used",
     );
 
-    const result = resolveAttemptPrependSystemContext({
+    const result = resolveAttemptPrependDynamicSystemContext({
       sessionKey: "agent:main:discord:direct:123",
       trigger: "heartbeat",
-      hookPrependSystemContext: "Hook system context",
+      hookPrependDynamicSystemContext: "Hook dynamic system context",
     });
 
     expect(
@@ -105,7 +141,7 @@ describe("resolveAttemptPrependSystemContext", () => {
     expect(
       musicGenerationTaskStatusMocks.buildActiveMusicGenerationTaskPromptContextForSession,
     ).not.toHaveBeenCalled();
-    expect(result).toBe("Hook system context");
+    expect(result).toBe("Hook dynamic system context");
   });
 });
 

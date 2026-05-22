@@ -16,6 +16,7 @@ import { testing as cliBackendsTesting } from "../cli-backends.js";
 import { hashCliSessionText } from "../cli-session.js";
 import { buildActiveImageGenerationTaskPromptContextForSession } from "../image-generation-task-status.js";
 import { buildActiveMusicGenerationTaskPromptContextForSession } from "../music-generation-task-status.js";
+import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "../system-prompt-cache-boundary.js";
 import { buildActiveVideoGenerationTaskPromptContextForSession } from "../video-generation-task-status.js";
 import {
   prepareCliRunContext,
@@ -965,6 +966,8 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
         runBeforePromptBuild: vi.fn(async () => ({
           systemPrompt: "hook system",
           prependSystemContext: "hook prepend system",
+          prependDynamicSystemContext: "hook dynamic prepend",
+          appendDynamicSystemContext: "hook dynamic append",
         })),
         runBeforeAgentStart: vi.fn(),
       };
@@ -985,7 +988,9 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
       });
 
       expect(context.systemPrompt).toBe(
-        "active image task\n\nactive video task\n\nhook prepend system\n\nhook system\n\nCurrent model identity: test-cli/test-model. If asked what model you are, answer with this value for the current run.",
+        "hook prepend system\n\nhook system" +
+          SYSTEM_PROMPT_CACHE_BOUNDARY +
+          "active image task\n\nactive video task\n\nhook dynamic prepend\n\nhook dynamic append\n\nCurrent model identity: test-cli/test-model. If asked what model you are, answer with this value for the current run.",
       );
       expect(mockBuildActiveImageGenerationTaskPromptContextForSession).toHaveBeenCalledWith(
         "agent:main:test",

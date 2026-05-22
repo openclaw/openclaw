@@ -325,6 +325,7 @@ import {
   buildAfterTurnRuntimeContextFromUsage,
   prependSystemPromptAddition,
   resolveAttemptFsWorkspaceOnly,
+  resolveAttemptPrependDynamicSystemContext,
   resolveAttemptPrependSystemContext,
   resolvePromptBuildHookResult,
   resolvePromptModeForSession,
@@ -419,6 +420,7 @@ export {
   mergeOrphanedTrailingUserPrompt,
   prependSystemPromptAddition,
   resolveAttemptFsWorkspaceOnly,
+  resolveAttemptPrependDynamicSystemContext,
   resolveAttemptPrependSystemContext,
   resolvePromptBuildHookResult,
   resolvePromptModeForSession,
@@ -3562,21 +3564,25 @@ export async function runEmbeddedAttempt(
             systemPromptText = legacySystemPrompt;
             log.debug(`hooks: applied systemPrompt override (${legacySystemPrompt.length} chars)`);
           }
+          const prependSystemContext = resolveAttemptPrependSystemContext({
+            hookPrependSystemContext: hookResult?.prependSystemContext,
+          });
+          const prependDynamicSystemContext = resolveAttemptPrependDynamicSystemContext({
+            sessionKey: params.sessionKey,
+            trigger: params.trigger,
+            hookPrependDynamicSystemContext: hookResult?.prependDynamicSystemContext,
+          });
           const prependedOrAppendedSystemPrompt = composeSystemPromptWithHookContext({
             baseSystemPrompt: systemPromptText,
-            prependSystemContext: resolveAttemptPrependSystemContext({
-              sessionKey: params.sessionKey,
-              trigger: params.trigger,
-              hookPrependSystemContext: hookResult?.prependSystemContext,
-            }),
+            prependSystemContext,
             appendSystemContext: hookResult?.appendSystemContext,
-            prependDynamicSystemContext: hookResult?.prependDynamicSystemContext,
+            prependDynamicSystemContext,
             appendDynamicSystemContext: hookResult?.appendDynamicSystemContext,
           });
           if (prependedOrAppendedSystemPrompt) {
-            const prependSystemLen = hookResult?.prependSystemContext?.trim().length ?? 0;
+            const prependSystemLen = prependSystemContext?.trim().length ?? 0;
             const appendSystemLen = hookResult?.appendSystemContext?.trim().length ?? 0;
-            const prependDynamicLen = hookResult?.prependDynamicSystemContext?.trim().length ?? 0;
+            const prependDynamicLen = prependDynamicSystemContext?.trim().length ?? 0;
             const appendDynamicLen = hookResult?.appendDynamicSystemContext?.trim().length ?? 0;
             applySystemPromptOverrideToSession(activeSession, prependedOrAppendedSystemPrompt);
             systemPromptText = prependedOrAppendedSystemPrompt;

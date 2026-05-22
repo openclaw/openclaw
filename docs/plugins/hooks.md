@@ -248,7 +248,11 @@ Use the phase-specific hooks for new plugins:
   `prependContext` or `appendContext`.
 - `before_prompt_build`: receives the current prompt and session messages.
   Return `prependContext`, `appendContext`, `systemPrompt`,
-  `prependSystemContext`, or `appendSystemContext`.
+  `prependSystemContext`, `appendSystemContext`,
+  `prependDynamicSystemContext`, or `appendDynamicSystemContext`. Use static
+  system-context fields for cacheable guidance whose bytes stay stable across
+  turns, and dynamic system-context fields for volatile system-level text that
+  must stay below the cache boundary.
 - `heartbeat_prompt_contribution`: runs only for heartbeat turns and returns
   `prependContext` or `appendContext`. It is intended for background monitors
   that need to summarize current state without changing user-initiated turns.

@@ -5,9 +5,47 @@ import {
   appendSystemPromptAdditionAfterCacheBoundary,
   ensureSystemPromptCacheBoundary,
   prependSystemPromptAdditionAfterCacheBoundary,
+  splitSystemPromptCacheBoundary,
+  SYSTEM_PROMPT_CACHE_BOUNDARY,
 } from "../../system-prompt-cache-boundary.js";
 
 export const ATTEMPT_CACHE_TTL_CUSTOM_TYPE = "openclaw.cache-ttl";
+
+function composeStaticSystemPromptWithHookContext(params: {
+  baseSystemPrompt?: string;
+  prependSystem: string;
+  appendSystem: string;
+}): string | undefined {
+  if (!params.prependSystem && !params.appendSystem) {
+    return params.baseSystemPrompt;
+  }
+
+  const split =
+    typeof params.baseSystemPrompt === "string"
+      ? splitSystemPromptCacheBoundary(params.baseSystemPrompt)
+      : undefined;
+  if (!split) {
+    return joinPresentTextSegments(
+      [params.prependSystem, params.baseSystemPrompt, params.appendSystem],
+      {
+        trim: true,
+      },
+    );
+  }
+
+  const stablePrefix =
+    joinPresentTextSegments([params.prependSystem, split.stablePrefix, params.appendSystem], {
+      trim: true,
+    }) ?? "";
+  const dynamicSuffix = split.dynamicSuffix
+    ? normalizeStructuredPromptSection(split.dynamicSuffix)
+    : "";
+
+  if (!dynamicSuffix) {
+    return `${stablePrefix}${SYSTEM_PROMPT_CACHE_BOUNDARY}`;
+  }
+  return `${stablePrefix}${SYSTEM_PROMPT_CACHE_BOUNDARY}${dynamicSuffix}`;
+}
 
 /**
  * Compose the runtime system prompt with hook-provided prepend/append context.
@@ -54,13 +92,13 @@ export function composeSystemPromptWithHookContext(params: {
   }
 
   // Static fields stay in the cacheable prefix region (above the marker).
-  // Pre-V3 join semantics: prepend / base / append concatenated flat.
-  const staticResult =
-    prependSystem || appendSystem
-      ? joinPresentTextSegments([prependSystem, params.baseSystemPrompt, appendSystem], {
-          trim: true,
-        })
-      : params.baseSystemPrompt;
+  // For marker-bearing base prompts, append static context before the marker
+  // instead of flat-joining below the dynamic suffix.
+  const staticResult = composeStaticSystemPromptWithHookContext({
+    baseSystemPrompt: params.baseSystemPrompt,
+    prependSystem,
+    appendSystem,
+  });
   let result = staticResult ?? "";
 
   // Dynamic fields route below the cache-boundary marker, in the

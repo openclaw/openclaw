@@ -480,22 +480,34 @@ export function prependSystemPromptAddition(params: {
   return prependSystemPromptAdditionAfterCacheBoundary(params);
 }
 
-export function resolveAttemptPrependSystemContext(params: {
+function resolveActiveMediaTaskPromptContexts(params: {
   sessionKey?: string;
   trigger?: EmbeddedRunAttemptParams["trigger"];
+}): Array<string | undefined> {
+  if (params.trigger !== "user" && params.trigger !== "manual") {
+    return [];
+  }
+  return [
+    buildActiveImageGenerationTaskPromptContextForSession(params.sessionKey),
+    buildActiveVideoGenerationTaskPromptContextForSession(params.sessionKey),
+    buildActiveMusicGenerationTaskPromptContextForSession(params.sessionKey),
+  ];
+}
+
+export function resolveAttemptPrependSystemContext(params: {
   hookPrependSystemContext?: string;
 }): string | undefined {
-  const activeMediaTaskPromptContexts =
-    params.trigger === "user" || params.trigger === "manual"
-      ? [
-          buildActiveImageGenerationTaskPromptContextForSession(params.sessionKey),
-          buildActiveVideoGenerationTaskPromptContextForSession(params.sessionKey),
-          buildActiveMusicGenerationTaskPromptContextForSession(params.sessionKey),
-        ]
-      : [];
+  return joinPresentTextSegments([params.hookPrependSystemContext]);
+}
+
+export function resolveAttemptPrependDynamicSystemContext(params: {
+  sessionKey?: string;
+  trigger?: EmbeddedRunAttemptParams["trigger"];
+  hookPrependDynamicSystemContext?: string;
+}): string | undefined {
   return joinPresentTextSegments([
-    ...activeMediaTaskPromptContexts,
-    params.hookPrependSystemContext,
+    ...resolveActiveMediaTaskPromptContexts(params),
+    params.hookPrependDynamicSystemContext,
   ]);
 }
 

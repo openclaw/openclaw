@@ -674,6 +674,28 @@ describe("composeSystemPromptWithHookContext", () => {
     ).toBe("prepend line\nsecond line\n\nbase system\n\nappend");
   });
 
+  it("keeps appendSystemContext above the cache boundary when base prompt has marker", () => {
+    const stablePrefix = "agent system role + tool list + workspace";
+    const dynamicSuffix = "existing dynamic content";
+    const base = `${stablePrefix}${SYSTEM_PROMPT_CACHE_BOUNDARY}${dynamicSuffix}`;
+
+    const result = composeSystemPromptWithHookContext({
+      baseSystemPrompt: base,
+      prependSystemContext: "static prepend",
+      appendSystemContext: "static append",
+    });
+
+    expect(result).toBeDefined();
+    const markerIdx = result!.indexOf(SYSTEM_PROMPT_CACHE_BOUNDARY);
+    expect(markerIdx).toBeGreaterThan(-1);
+    const cacheablePrefix = result!.slice(0, markerIdx);
+    expect(cacheablePrefix).toContain("static prepend");
+    expect(cacheablePrefix).toContain(stablePrefix);
+    expect(cacheablePrefix).toContain("static append");
+    expect(result!.indexOf("static append")).toBeLessThan(markerIdx);
+    expect(result!.indexOf(dynamicSuffix)).toBeGreaterThan(markerIdx);
+  });
+
   it("avoids blank separators when base system prompt is empty", () => {
     expect(
       composeSystemPromptWithHookContext({

@@ -47,7 +47,10 @@ import {
   resolveBootstrapTotalMaxChars,
 } from "../pi-embedded-helpers.js";
 import { resolvePromptBuildHookResult } from "../pi-embedded-runner/run/attempt.prompt-helpers.js";
-import { resolveAttemptPrependSystemContext } from "../pi-embedded-runner/run/attempt.prompt-helpers.js";
+import {
+  resolveAttemptPrependDynamicSystemContext,
+  resolveAttemptPrependSystemContext,
+} from "../pi-embedded-runner/run/attempt.prompt-helpers.js";
 import { composeSystemPromptWithHookContext } from "../pi-embedded-runner/run/attempt.thread-helpers.js";
 import { buildCurrentInboundPrompt } from "../pi-embedded-runner/run/runtime-context-prompt.js";
 import { applyPluginTextReplacements } from "../plugin-text-transforms.js";
@@ -436,11 +439,15 @@ export async function prepareCliRunContext(
       composeSystemPromptWithHookContext({
         baseSystemPrompt: systemPrompt,
         prependSystemContext: resolveAttemptPrependSystemContext({
-          sessionKey: params.sessionKey,
-          trigger: params.trigger,
           hookPrependSystemContext: hookResult.prependSystemContext,
         }),
         appendSystemContext: hookResult.appendSystemContext,
+        prependDynamicSystemContext: resolveAttemptPrependDynamicSystemContext({
+          sessionKey: params.sessionKey,
+          trigger: params.trigger,
+          hookPrependDynamicSystemContext: hookResult.prependDynamicSystemContext,
+        }),
+        appendDynamicSystemContext: hookResult.appendDynamicSystemContext,
       }) ?? systemPrompt;
   } catch (error) {
     cliBackendLog.warn(`cli prompt-build hook preparation failed: ${String(error)}`);

@@ -6,6 +6,7 @@ import type {
   PluginHookBeforePromptBuildResult,
 } from "../../plugins/types.js";
 import { joinPresentTextSegments } from "../../shared/text/join-segments.js";
+import { composeSystemPromptWithHookContext } from "../pi-embedded-runner/run/attempt.thread-helpers.js";
 import { buildAgentHookContext, type AgentHarnessHookContext } from "./hook-context.js";
 
 const log = createSubsystemLogger("agents/harness");
@@ -52,6 +53,22 @@ export async function resolveAgentHarnessBeforePromptBuildResult(params: {
     promptBuildResult,
     legacyResult,
   });
+  const prependSystemContext = joinPresentTextSegments([
+    promptBuildResult?.prependSystemContext,
+    legacyResult?.prependSystemContext,
+  ]);
+  const appendSystemContext = joinPresentTextSegments([
+    promptBuildResult?.appendSystemContext,
+    legacyResult?.appendSystemContext,
+  ]);
+  const prependDynamicSystemContext = joinPresentTextSegments([
+    promptBuildResult?.prependDynamicSystemContext,
+    legacyResult?.prependDynamicSystemContext,
+  ]);
+  const appendDynamicSystemContext = joinPresentTextSegments([
+    promptBuildResult?.appendDynamicSystemContext,
+    legacyResult?.appendDynamicSystemContext,
+  ]);
   return {
     prompt:
       joinPresentTextSegments([
@@ -60,13 +77,13 @@ export async function resolveAgentHarnessBeforePromptBuildResult(params: {
         params.prompt,
       ]) ?? params.prompt,
     developerInstructions:
-      joinPresentTextSegments([
-        promptBuildResult?.prependSystemContext,
-        legacyResult?.prependSystemContext,
-        systemPrompt,
-        promptBuildResult?.appendSystemContext,
-        legacyResult?.appendSystemContext,
-      ]) ?? systemPrompt,
+      composeSystemPromptWithHookContext({
+        baseSystemPrompt: systemPrompt,
+        prependSystemContext,
+        appendSystemContext,
+        prependDynamicSystemContext,
+        appendDynamicSystemContext,
+      }) ?? systemPrompt,
   };
 }
 
