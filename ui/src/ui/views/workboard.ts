@@ -33,18 +33,13 @@ type WorkboardProps = {
   onRequestUpdate?: () => void;
 };
 
-const STATUS_LABELS: Record<WorkboardStatus, string> = {
-  backlog: "Backlog",
-  todo: "Todo",
-  running: "Running",
-  review: "Review",
-  blocked: "Blocked",
-  done: "Done",
-};
-
 const WORKBOARD_GAME_SIZE = 5;
 const WORKBOARD_GAME_GOAL = WORKBOARD_GAME_SIZE * WORKBOARD_GAME_SIZE - 1;
 const WORKBOARD_GAME_BLOCKERS = new Set([6, 8, 12, 16, 18]);
+
+function formatStatusLabel(status: WorkboardStatus): string {
+  return t(`workboard.status.${status}`);
+}
 
 function formatTime(value: number | undefined): string {
   if (!value) {
@@ -396,7 +391,7 @@ function renderCardModal(props: WorkboardProps) {
               }}
             >
               ${state.statuses.map(
-                (status) => html`<option value=${status}>${STATUS_LABELS[status]}</option>`,
+                (status) => html`<option value=${status}>${formatStatusLabel(status)}</option>`,
               )}
             </select>
           </label>
@@ -710,7 +705,7 @@ function renderColumn(props: WorkboardProps, status: WorkboardStatus, cards: Wor
       }}
     >
       <div class="workboard-column__header">
-        <h2>${STATUS_LABELS[status]}</h2>
+        <h2>${formatStatusLabel(status)}</h2>
         <span>${cards.length}</span>
       </div>
       <div class="workboard-column__cards">
