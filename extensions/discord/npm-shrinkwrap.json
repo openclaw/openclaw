@@ -432,7 +432,8 @@
       "version": "0.1.1",
       "resolved": "https://registry.npmjs.org/opusscript/-/opusscript-0.1.1.tgz",
       "integrity": "sha512-mL0fZZOUnXdZ78woRXp18lApwpp0lF5tozJOD1Wut0dgrA9WuQTgSels/CSmFleaAZrJi/nci5KOVtbuxeWoQA==",
-      "license": "MIT"
+      "license": "MIT",
+      "peer": true
     },
     "node_modules/prism-media": {
       "version": "1.3.5",

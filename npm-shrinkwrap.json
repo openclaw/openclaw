@@ -1567,6 +1567,7 @@
       "resolved": "https://registry.npmjs.org/@modelcontextprotocol/sdk/-/sdk-1.29.0.tgz",
       "integrity": "sha512-zo37mZA9hJWpULgkRpowewez1y6ML5GsXJPY8FI0tBBCd77HEvza4jDqRKOXgHNn867PVGCyTdzqpz0izu5ZjQ==",
       "license": "MIT",
+      "peer": true,
       "dependencies": {
         "@hono/node-server": "^1.19.9",
         "ajv": "^8.17.1",
@@ -2813,6 +2814,7 @@
       "resolved": "https://registry.npmjs.org/express/-/express-5.2.1.tgz",
       "integrity": "sha512-hIS4idWWai69NezIdRt2xFVofaF4j+6INOpJlVOLDO8zXGpUVEVzIYk12UUi2JzjEzWL3IOAxcTubgz9Po0yXw==",
       "license": "MIT",
+      "peer": true,
       "dependencies": {
         "accepts": "^2.0.0",
         "body-parser": "^2.2.1",
@@ -3230,6 +3232,7 @@
       "resolved": "https://registry.npmjs.org/grammy/-/grammy-1.43.0.tgz",
       "integrity": "sha512-7dYm06A945mXuIk/5HUlSjeyIYChW8vCEiU2dkOKKqJJzwAWxTkCc91Eqbz7TgODh2rtFFKWI/fekowWHOkmjQ==",
       "license": "MIT",
+      "peer": true,
       "dependencies": {
         "@grammyjs/types": "3.27.3",
         "abort-controller": "^3.0.0",
@@ -3298,6 +3301,7 @@
       "resolved": "https://registry.npmjs.org/hono/-/hono-4.12.18.tgz",
       "integrity": "sha512-RWzP96k/yv0PQfyXnWjs6zot20TqfpfsNXhOnev8d1InAxubW93L11/oNUc3tQqn2G0bSdAOBpX+2uDFHV7kdQ==",
       "license": "MIT",
+      "peer": true,
       "engines": {
         "node": ">=16.9.0"
       }
@@ -5064,6 +5068,7 @@
       "resolved": "https://registry.npmjs.org/undici/-/undici-8.3.0.tgz",
       "integrity": "sha512-TkUDgb6tl7KOGZ+7e8E3d2FYgUQgF6z5YypqjWmixVQSQERFcVrVg0ySADm2LVLRh5ljAaHTCR5Fmz3Q34rB7Q==",
       "license": "MIT",
+      "peer": true,
       "engines": {
         "node": ">=22.19.0"
       }
@@ -5287,6 +5292,7 @@
       "resolved": "https://registry.npmjs.org/zod/-/zod-4.4.3.tgz",
       "integrity": "sha512-ytENFjIJFl2UwYglde2jchW2Hwm4GJFLDiSXWdTrJQBIN9Fcyp7n4DhxJEiWNAJMV1/BqWfW/kkg71UDcHJyTQ==",
       "license": "MIT",
+      "peer": true,
       "funding": {
         "url": "https://github.com/sponsors/colinhacks"
       }
