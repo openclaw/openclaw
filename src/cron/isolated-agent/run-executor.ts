@@ -5,7 +5,10 @@ import { resolveCliRuntimeExecutionProvider } from "../../agents/model-runtime-a
 import type { ThinkLevel, VerboseLevel } from "../../auto-reply/thinking.js";
 import type { AgentDefaultsConfig } from "../../config/types.agent-defaults.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import type { SourceDeliveryPlan } from "../../infra/outbound/source-delivery-plan.js";
+import {
+  createSourceDeliveryPlan,
+  type SourceDeliveryPlan,
+} from "../../infra/outbound/source-delivery-plan.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import type { SkillSnapshot } from "../../skills/types.js";
 import type { CronAgentExecutionPhaseUpdate, CronJob } from "../types.js";
@@ -142,7 +145,7 @@ export function createCronPromptExecutor(params: {
     threadId?: string | number;
   };
   deliveryRequested?: boolean;
-  sourceDelivery: SourceDeliveryPlan;
+  sourceDelivery?: SourceDeliveryPlan;
   skillsSnapshot: SkillSnapshot;
   agentPayload: AgentTurnPayload;
   useSubagentFallbacks: boolean;
@@ -183,8 +186,41 @@ export function createCronPromptExecutor(params: {
     params.cronSession.sessionEntry.systemPromptReport,
   );
   const bootstrapContextMode = resolveCronBootstrapContextMode(params.agentPayload);
-  const sourceReplyDeliveryMode = params.sourceDelivery.sourceReplyDeliveryMode;
-  const messageChannel = params.sourceDelivery.target.channel ?? params.resolvedDelivery.channel;
+  const sourceDelivery =
+    params.sourceDelivery ??
+    (() => {
+      // Version-skew compatibility: stale callers from before 4c613fbfe0
+      // may pass legacy fields instead of sourceDelivery.
+      const legacy = params as Record<string, unknown>;
+      const legacyToolPolicy = legacy.toolPolicy as
+        | {
+            requireExplicitMessageTarget?: boolean;
+            disableMessageTool?: boolean;
+            forceMessageTool?: boolean;
+          }
+        | undefined;
+      const legacyMessageChannel = legacy.messageChannel as string | undefined;
+
+      return createSourceDeliveryPlan({
+        owner: "none",
+        reason: "cron_none",
+        target: {
+          channel: legacyMessageChannel ?? params.resolvedDelivery.channel,
+          to: params.resolvedDelivery.to,
+          accountId: params.resolvedDelivery.accountId,
+          threadId: params.resolvedDelivery.threadId,
+        },
+        messageToolEnabled: legacyToolPolicy ? !legacyToolPolicy.disableMessageTool : true,
+        messageToolForced: legacyToolPolicy?.forceMessageTool ?? true,
+        requireExplicitMessageTarget: legacyToolPolicy?.requireExplicitMessageTarget ?? false,
+        directFallback: false,
+      });
+    })();
+  const legacyMode = (params as Record<string, unknown>).sourceReplyDeliveryMode as
+    | string
+    | undefined;
+  const sourceReplyDeliveryMode = legacyMode ?? sourceDelivery.sourceReplyDeliveryMode;
+  const messageChannel = sourceDelivery.target.channel ?? params.resolvedDelivery.channel;
 
   const runPrompt = async (promptText: string) => {
     const fallbackResult = await runWithModelFallback({
@@ -330,9 +366,9 @@ export function createCronPromptExecutor(params: {
             : undefined,
           sourceReplyDeliveryMode,
           runId: params.cronSession.sessionEntry.sessionId,
-          requireExplicitMessageTarget: params.sourceDelivery.messageTool.requireExplicitTarget,
-          disableMessageTool: !params.sourceDelivery.messageTool.enabled,
-          forceMessageTool: params.sourceDelivery.messageTool.force,
+          requireExplicitMessageTarget: sourceDelivery.messageTool.requireExplicitTarget,
+          disableMessageTool: !sourceDelivery.messageTool.enabled,
+          forceMessageTool: sourceDelivery.messageTool.force,
           allowTransientCooldownProbe: runOptions?.allowTransientCooldownProbe,
           abortSignal: params.abortSignal,
           onExecutionStarted: params.onExecutionStarted,
@@ -385,7 +421,7 @@ export async function executeCronRun(params: {
     threadId?: string | number;
   };
   deliveryRequested?: boolean;
-  sourceDelivery: SourceDeliveryPlan;
+  sourceDelivery?: SourceDeliveryPlan;
   skillsSnapshot: SkillSnapshot;
   agentPayload: AgentTurnPayload;
   useSubagentFallbacks: boolean;
@@ -421,6 +457,41 @@ export async function executeCronRun(params: {
     sessionId: params.cronSession.sessionEntry.sessionId,
     verboseLevel: resolvedVerboseLevel,
   });
+  if (!params.sourceDelivery) {
+    logWarn(
+      `[cron:${params.job.id}] sourceDelivery is undefined; using fallback — possible build artifact mismatch`,
+    );
+  }
+  const sourceDelivery =
+    params.sourceDelivery ??
+    (() => {
+      const legacy = params as Record<string, unknown>;
+      const legacyToolPolicy = legacy.toolPolicy as
+        | {
+            requireExplicitMessageTarget?: boolean;
+            disableMessageTool?: boolean;
+            forceMessageTool?: boolean;
+          }
+        | undefined;
+      const legacyMessageChannel = legacy.messageChannel as string | undefined;
+      const legacyReplyMode = legacy.sourceReplyDeliveryMode as string | undefined;
+      const owner = legacyReplyMode === "message_tool_only" ? "message_tool" : "none";
+
+      return createSourceDeliveryPlan({
+        owner,
+        reason: owner === "message_tool" ? "cron_announce" : "cron_none",
+        target: {
+          channel: legacyMessageChannel ?? params.resolvedDelivery.channel,
+          to: params.resolvedDelivery.to,
+          accountId: params.resolvedDelivery.accountId,
+          threadId: params.resolvedDelivery.threadId,
+        },
+        messageToolEnabled: legacyToolPolicy ? !legacyToolPolicy.disableMessageTool : true,
+        messageToolForced: legacyToolPolicy?.forceMessageTool ?? true,
+        requireExplicitMessageTarget: legacyToolPolicy?.requireExplicitMessageTarget ?? false,
+        directFallback: false,
+      });
+    })();
   const executor = createCronPromptExecutor({
     cfg: params.cfg,
     cfgWithAgentDefaults: params.cfgWithAgentDefaults,
@@ -438,7 +509,7 @@ export async function executeCronRun(params: {
     suppressExecNotifyOnExit: params.suppressExecNotifyOnExit,
     resolvedDelivery: params.resolvedDelivery,
     deliveryRequested: params.deliveryRequested,
-    sourceDelivery: params.sourceDelivery,
+    sourceDelivery,
     skillsSnapshot: params.skillsSnapshot,
     agentPayload: params.agentPayload,
     useSubagentFallbacks: params.useSubagentFallbacks,
