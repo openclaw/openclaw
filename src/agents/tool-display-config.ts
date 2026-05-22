@@ -249,6 +249,53 @@ export const TOOL_DISPLAY_CONFIG: ToolDisplayConfig = {
         },
       },
     },
+    // WOR-317 round 4: per-action cron tools. Each tool name already encodes
+    // its action, so args carry no `action` key for the cron.actions sub-record
+    // lookup to match on. Each gets its own top-level spec mirroring the
+    // legacy cron.actions.<action> entry so detailKeys keep working.
+    cron_status: {
+      emoji: "⏰",
+      title: "Cron / status",
+    },
+    cron_list: {
+      emoji: "⏰",
+      title: "Cron / list",
+    },
+    cron_get: {
+      emoji: "⏰",
+      title: "Cron / get",
+      detailKeys: ["id"],
+    },
+    cron_add: {
+      emoji: "⏰",
+      title: "Cron / add",
+      detailKeys: ["job.name", "job.id", "job.schedule", "job.cron"],
+    },
+    cron_update: {
+      emoji: "⏰",
+      title: "Cron / update",
+      detailKeys: ["id"],
+    },
+    cron_remove: {
+      emoji: "⏰",
+      title: "Cron / remove",
+      detailKeys: ["id"],
+    },
+    cron_run: {
+      emoji: "⏰",
+      title: "Cron / run",
+      detailKeys: ["id"],
+    },
+    cron_runs: {
+      emoji: "⏰",
+      title: "Cron / runs",
+      detailKeys: ["id"],
+    },
+    cron_wake: {
+      emoji: "⏰",
+      title: "Cron / wake",
+      detailKeys: ["text", "mode"],
+    },
     update_plan: {
       emoji: "🗺️",
       title: "Update Plan",
