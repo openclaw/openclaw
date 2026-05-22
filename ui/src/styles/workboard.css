@@ -1,16 +1,28 @@
 .workboard {
   display: flex;
   flex-direction: column;
-  gap: 16px;
+  gap: 14px;
+  flex: 1;
   min-height: 0;
+  --workboard-control-height: 34px;
+  --workboard-control-radius: 7px;
+  --workboard-control-bg: color-mix(in srgb, var(--bg-elevated) 72%, var(--bg) 28%);
+  --workboard-control-border: color-mix(in srgb, var(--border-strong) 78%, transparent);
+  --workboard-control-border-hover: color-mix(in srgb, var(--accent) 36%, var(--border-strong));
 }
 
-.workboard-toolbar,
-.workboard-draft {
+.workboard-toolbar {
   display: flex;
   justify-content: space-between;
-  gap: 12px;
-  align-items: flex-start;
+  gap: 10px;
+  align-items: center;
+}
+
+.workboard-toolbar {
+  padding: 8px;
+  border: 1px solid color-mix(in srgb, var(--border) 86%, transparent);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--panel) 84%, transparent);
 }
 
 .workboard-toolbar__filters,
@@ -28,55 +40,193 @@
 
 .workboard-toolbar__filters {
   flex: 1;
+  min-width: 260px;
+}
+
+.workboard .input {
+  min-height: var(--workboard-control-height);
+  border: 1px solid var(--workboard-control-border);
+  border-radius: var(--workboard-control-radius);
+  background-color: var(--workboard-control-bg);
+  color: var(--text);
+  font-size: 13px;
+  line-height: 1.25;
+  box-shadow: inset 0 1px 0 color-mix(in srgb, white 4%, transparent);
+  transition:
+    border-color var(--duration-fast) var(--ease-out),
+    background-color var(--duration-fast) var(--ease-out),
+    box-shadow var(--duration-fast) var(--ease-out);
+}
+
+.workboard .input:hover {
+  border-color: var(--workboard-control-border-hover);
+}
+
+.workboard .input:focus {
+  border-color: color-mix(in srgb, var(--accent) 70%, var(--border-strong));
+  outline: none;
+  box-shadow:
+    inset 0 1px 0 color-mix(in srgb, white 5%, transparent),
+    0 0 0 2px color-mix(in srgb, var(--accent) 16%, transparent);
+}
+
+.workboard input.input,
+.workboard select.input {
+  height: var(--workboard-control-height);
+  padding: 0 10px;
+}
+
+.workboard select.input {
+  max-width: 220px;
+  padding-right: 28px;
+  appearance: none;
+  background-image:
+    linear-gradient(45deg, transparent 50%, var(--muted) 50%),
+    linear-gradient(135deg, var(--muted) 50%, transparent 50%);
+  background-position:
+    calc(100% - 14px) 50%,
+    calc(100% - 9px) 50%;
+  background-size:
+    5px 5px,
+    5px 5px;
+  background-repeat: no-repeat;
+}
+
+.workboard input.input::placeholder,
+.workboard textarea.input::placeholder {
+  color: color-mix(in srgb, var(--muted) 76%, transparent);
+  opacity: 1;
 }
 
 .workboard-toolbar__filters .input[type="search"] {
-  min-width: min(340px, 100%);
+  width: min(360px, 100%);
+  min-width: min(260px, 100%);
+}
+
+.workboard-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: grid;
+  place-items: center;
+  padding: 28px;
+  background: color-mix(in srgb, #000 60%, transparent);
+  backdrop-filter: blur(8px);
 }
 
 .workboard-draft {
-  padding: 14px;
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  background: var(--panel);
+  display: grid;
+  gap: 14px;
+  width: min(760px, calc(100vw - 44px));
+  max-height: min(820px, calc(100vh - 56px));
+  overflow: auto;
+  padding: 16px;
+  border: 1px solid color-mix(in srgb, var(--border) 86%, transparent);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--panel) 96%, var(--bg) 4%);
+  box-shadow: var(--shadow-xl);
+}
+
+.workboard-modal__header {
+  display: flex;
+  justify-content: space-between;
+  gap: 14px;
+  align-items: flex-start;
+}
+
+.workboard-modal__header h2 {
+  margin: 0;
+  font-size: 1rem;
+  line-height: 1.25;
+}
+
+.workboard-modal__header p {
+  margin: 3px 0 0;
+  color: var(--muted);
+  font-size: 0.82rem;
 }
 
 .workboard-draft__main {
   display: grid;
-  gap: 8px;
-  flex: 1;
-  min-width: 220px;
+  gap: 10px;
+  min-width: 0;
 }
 
 .workboard-draft__title {
   font-weight: 650;
+  width: 100%;
 }
 
-.workboard-draft__notes {
-  min-height: 76px;
+.workboard textarea.input.workboard-draft__notes {
+  width: 100%;
+  height: 156px;
+  min-height: 156px;
+  padding: 9px 10px;
   resize: vertical;
 }
 
 .workboard-draft__meta {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(180px, 1fr));
+  gap: 10px;
+}
+
+.workboard-field {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+}
+
+.workboard-field span {
+  color: var(--muted);
+  font-size: 0.72rem;
+  font-weight: 650;
+  line-height: 1.2;
+  text-transform: uppercase;
+}
+
+.workboard-field .input {
+  width: 100%;
+  max-width: none;
+}
+
+.workboard-field--wide {
+  grid-column: 1 / -1;
+}
+
+.workboard-modal__actions {
+  display: flex;
   justify-content: flex-end;
+  gap: 8px;
+}
+
+.workboard-toolbar .btn,
+.workboard-draft .btn {
+  min-height: var(--workboard-control-height);
+  padding: 0 12px;
+  border-radius: var(--workboard-control-radius);
 }
 
 .workboard-board {
   display: grid;
   grid-template-columns: repeat(6, minmax(220px, 1fr));
   gap: 12px;
+  flex: 1;
+  min-height: 0;
   overflow-x: auto;
+  overflow-y: hidden;
   padding-bottom: 8px;
 }
 
 .workboard-column {
-  min-height: 440px;
+  min-height: 0;
   background: color-mix(in srgb, var(--panel) 78%, transparent);
   border: 1px solid color-mix(in srgb, var(--border) 80%, transparent);
   border-radius: 8px;
   display: flex;
   flex-direction: column;
   min-width: 220px;
+  overflow: hidden;
 }
 
 .workboard-column--drop {
@@ -105,11 +255,13 @@
 }
 
 .workboard-column__cards {
+  flex: 1;
+  min-height: 0;
   padding: 10px;
   display: grid;
   gap: 10px;
   align-content: start;
-  min-height: 100%;
+  overflow-y: auto;
 }
 
 .workboard-card {
@@ -120,6 +272,25 @@
   display: grid;
   gap: 8px;
   box-shadow: 0 1px 0 color-mix(in srgb, var(--border) 60%, transparent);
+  transition:
+    border-color var(--duration-fast) var(--ease-out),
+    background var(--duration-fast) var(--ease-out),
+    box-shadow var(--duration-fast) var(--ease-out);
+}
+
+.workboard-card--openable {
+  cursor: pointer;
+}
+
+.workboard-card--openable:hover {
+  border-color: color-mix(in srgb, var(--accent) 34%, var(--border-strong));
+  background: color-mix(in srgb, var(--bg-elevated) 54%, var(--bg) 46%);
+}
+
+.workboard-card--openable:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--accent) 56%, transparent);
+  outline-offset: 2px;
+  border-color: var(--accent);
 }
 
 .workboard-card--busy {
@@ -154,6 +325,32 @@
   justify-content: flex-end;
 }
 
+.workboard-card__icon {
+  width: 28px;
+  min-width: 28px;
+  height: 28px;
+  padding: 0;
+  border-radius: 6px;
+  color: var(--muted);
+}
+
+.workboard-card__icon svg {
+  width: 15px;
+  height: 15px;
+}
+
+.workboard-card__delete:hover {
+  border-color: color-mix(in srgb, var(--danger) 34%, var(--border));
+  background: color-mix(in srgb, var(--danger) 14%, transparent);
+  color: var(--danger);
+}
+
+.workboard-card__start {
+  min-height: 28px;
+  padding: 4px 9px;
+  border-radius: 6px;
+}
+
 .workboard-card__lifecycle {
   display: flex;
   align-items: center;
@@ -174,11 +371,22 @@
 .workboard-live,
 .workboard-lifecycle,
 .workboard-labels span {
+  display: inline-flex;
+  align-items: center;
+  min-height: 20px;
   border-radius: 999px;
   padding: 2px 7px;
   background: color-mix(in srgb, var(--border) 60%, transparent);
   color: var(--muted);
   font-size: 0.72rem;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.workboard-lifecycle {
+  flex: 0 0 auto;
+  border-radius: 6px;
+  padding-inline: 8px;
 }
 
 .priority-high .workboard-card__priority,
@@ -222,15 +430,28 @@
 }
 
 @media (max-width: 860px) {
-  .workboard-toolbar,
-  .workboard-draft {
+  .workboard-toolbar {
+    display: flex;
     flex-direction: column;
+    align-items: stretch;
   }
 
+  .workboard-toolbar__filters,
   .workboard-toolbar__actions,
   .workboard-draft__meta {
     width: 100%;
     justify-content: flex-start;
+  }
+
+  .workboard-toolbar__filters .input[type="search"],
+  .workboard-toolbar__filters .input,
+  .workboard-draft__meta .input {
+    width: 100%;
+    max-width: none;
+  }
+
+  .workboard-draft__meta {
+    grid-template-columns: 1fr;
   }
 
   .workboard-board {

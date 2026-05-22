@@ -1,13 +1,13 @@
 import { html, nothing } from "lit";
 import { t } from "../../i18n/index.ts";
 import {
-  createWorkboardCard,
   deleteWorkboardCard,
   findWorkboardSession,
   getWorkboardLifecycle,
   getWorkboardState,
   loadWorkboard,
   moveWorkboardCard,
+  saveWorkboardCardDraft,
   startWorkboardCard,
   stopWorkboardCard,
   syncWorkboardLifecycle,
@@ -73,106 +73,244 @@ function nextPosition(cards: readonly WorkboardCard[], status: WorkboardStatus):
   return (positions.length ? Math.max(...positions) : 0) + 1000;
 }
 
-function renderDraft(props: WorkboardProps) {
+function isWorkboardSessionChoice(session: GatewaySessionRow): boolean {
+  if (session.archived || session.kind === "global") {
+    return false;
+  }
+  const raw = [session.key, session.label, session.displayName]
+    .filter((value): value is string => typeof value === "string")
+    .join(":")
+    .toLowerCase();
+  return !/(^|:)heartbeat(:|$)/.test(raw);
+}
+
+function isCardActionTarget(event: Event): boolean {
+  return event.target instanceof Element
+    ? Boolean(event.target.closest("button, a, input, select, textarea"))
+    : false;
+}
+
+function openCardSession(
+  props: Pick<WorkboardProps, "onOpenSession">,
+  card: WorkboardCard,
+): boolean {
+  if (!card.sessionKey) {
+    return false;
+  }
+  props.onOpenSession(card.sessionKey);
+  return true;
+}
+
+function resetDraft(state: WorkboardUiState) {
+  state.draftOpen = false;
+  state.editingCardId = null;
+  state.draftTitle = "";
+  state.draftNotes = "";
+  state.draftStatus = "todo";
+  state.draftPriority = "normal";
+  state.draftLabels = "";
+  state.draftAgentId = "";
+  state.draftSessionKey = "";
+}
+
+function openCreateModal(state: WorkboardUiState) {
+  resetDraft(state);
+  state.draftOpen = true;
+}
+
+function openEditModal(state: WorkboardUiState, card: WorkboardCard) {
+  state.draftOpen = true;
+  state.editingCardId = card.id;
+  state.draftTitle = card.title;
+  state.draftNotes = card.notes ?? "";
+  state.draftStatus = card.status;
+  state.draftPriority = card.priority;
+  state.draftLabels = card.labels.join(", ");
+  state.draftAgentId = card.agentId ?? "";
+  state.draftSessionKey = card.sessionKey ?? "";
+}
+
+function renderCardModal(props: WorkboardProps) {
   const state = getWorkboardState(props.host);
   const agents = props.agentsList?.agents ?? [];
-  const sessions = props.sessions.filter((session) => !session.archived);
+  const sessions = props.sessions.filter(isWorkboardSessionChoice);
   if (!state.draftOpen) {
     return nothing;
   }
+  const editing = Boolean(state.editingCardId);
   return html`
-    <form
-      class="workboard-draft"
-      @submit=${(event: SubmitEvent) => {
-        event.preventDefault();
-        void createWorkboardCard({
-          host: props.host,
-          client: props.client,
-          requestUpdate: props.onRequestUpdate,
-        });
+    <div
+      class="workboard-modal"
+      role="presentation"
+      @click=${(event: MouseEvent) => {
+        if (event.target === event.currentTarget) {
+          resetDraft(state);
+          props.onRequestUpdate?.();
+        }
       }}
     >
-      <div class="workboard-draft__main">
-        <input
-          class="input workboard-draft__title"
-          placeholder="Card title"
-          .value=${state.draftTitle}
-          @input=${(event: InputEvent) => {
-            state.draftTitle = (event.currentTarget as HTMLInputElement).value;
-            props.onRequestUpdate?.();
-          }}
-        />
-        <textarea
-          class="input workboard-draft__notes"
-          placeholder="Notes, acceptance criteria, links"
-          .value=${state.draftNotes}
-          @input=${(event: InputEvent) => {
-            state.draftNotes = (event.currentTarget as HTMLTextAreaElement).value;
-            props.onRequestUpdate?.();
-          }}
-        ></textarea>
-      </div>
-      <div class="workboard-draft__meta">
-        <select
-          class="input"
-          .value=${state.draftPriority}
-          @change=${(event: Event) => {
-            state.draftPriority = (event.currentTarget as HTMLSelectElement)
-              .value as WorkboardPriority;
-            props.onRequestUpdate?.();
-          }}
-        >
-          ${WORKBOARD_PRIORITIES.map(
-            (priority) => html`<option value=${priority}>${priority}</option>`,
-          )}
-        </select>
-        <select
-          class="input"
-          .value=${state.draftAgentId}
-          @change=${(event: Event) => {
-            state.draftAgentId = (event.currentTarget as HTMLSelectElement).value;
-            props.onRequestUpdate?.();
-          }}
-        >
-          <option value="">Default agent</option>
-          ${agents.map(
-            (agent) =>
-              html`<option value=${agent.id}>
-                ${agent.name ?? agent.identity?.name ?? agent.id}
-              </option>`,
-          )}
-        </select>
-        <select
-          class="input"
-          .value=${state.draftSessionKey}
-          @change=${(event: Event) => {
-            state.draftSessionKey = (event.currentTarget as HTMLSelectElement).value;
-            props.onRequestUpdate?.();
-          }}
-        >
-          <option value="">${t("workboard.noLinkedSession")}</option>
-          ${sessions.map(
-            (session) =>
-              html`<option value=${session.key}>
-                ${session.displayName ?? session.label ?? session.key}
-              </option>`,
-          )}
-        </select>
-        <button class="btn primary" ?disabled=${state.loading || !state.draftTitle.trim()}>
-          ${t("common.create")}
-        </button>
-        <button
-          class="btn"
-          type="button"
-          @click=${() => {
-            state.draftOpen = false;
-            props.onRequestUpdate?.();
-          }}
-        >
-          ${t("common.cancel")}
-        </button>
-      </div>
-    </form>
+      <form
+        class="workboard-draft"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="workboard-card-modal-title"
+        @submit=${(event: SubmitEvent) => {
+          event.preventDefault();
+          void saveWorkboardCardDraft({
+            host: props.host,
+            client: props.client,
+            requestUpdate: props.onRequestUpdate,
+          });
+        }}
+      >
+        <div class="workboard-modal__header">
+          <div>
+            <h2 id="workboard-card-modal-title">${editing ? "Edit card" : "New card"}</h2>
+            <p>
+              ${editing
+                ? "Update queue metadata and session handoff."
+                : "Queue work for an agent session."}
+            </p>
+          </div>
+          <button
+            class="btn btn--icon workboard-card__icon"
+            type="button"
+            title=${t("common.cancel")}
+            @click=${() => {
+              resetDraft(state);
+              props.onRequestUpdate?.();
+            }}
+          >
+            ${icons.x}
+          </button>
+        </div>
+        <div class="workboard-draft__main">
+          <label class="workboard-field">
+            <span>Title</span>
+            <input
+              class="input workboard-draft__title"
+              placeholder="Card title"
+              .value=${state.draftTitle}
+              @input=${(event: InputEvent) => {
+                state.draftTitle = (event.currentTarget as HTMLInputElement).value;
+                props.onRequestUpdate?.();
+              }}
+            />
+          </label>
+          <label class="workboard-field">
+            <span>Notes</span>
+            <textarea
+              class="input workboard-draft__notes"
+              placeholder="Notes, acceptance criteria, links"
+              .value=${state.draftNotes}
+              @input=${(event: InputEvent) => {
+                state.draftNotes = (event.currentTarget as HTMLTextAreaElement).value;
+                props.onRequestUpdate?.();
+              }}
+            ></textarea>
+          </label>
+        </div>
+        <div class="workboard-draft__meta">
+          <label class="workboard-field">
+            <span>Status</span>
+            <select
+              class="input"
+              .value=${state.draftStatus}
+              @change=${(event: Event) => {
+                state.draftStatus = (event.currentTarget as HTMLSelectElement)
+                  .value as WorkboardStatus;
+                props.onRequestUpdate?.();
+              }}
+            >
+              ${state.statuses.map(
+                (status) => html`<option value=${status}>${STATUS_LABELS[status]}</option>`,
+              )}
+            </select>
+          </label>
+          <label class="workboard-field">
+            <span>Priority</span>
+            <select
+              class="input"
+              .value=${state.draftPriority}
+              @change=${(event: Event) => {
+                state.draftPriority = (event.currentTarget as HTMLSelectElement)
+                  .value as WorkboardPriority;
+                props.onRequestUpdate?.();
+              }}
+            >
+              ${WORKBOARD_PRIORITIES.map(
+                (priority) => html`<option value=${priority}>${priority}</option>`,
+              )}
+            </select>
+          </label>
+          <label class="workboard-field">
+            <span>Agent</span>
+            <select
+              class="input"
+              .value=${state.draftAgentId}
+              @change=${(event: Event) => {
+                state.draftAgentId = (event.currentTarget as HTMLSelectElement).value;
+                props.onRequestUpdate?.();
+              }}
+            >
+              <option value="">Default agent</option>
+              ${agents.map(
+                (agent) =>
+                  html`<option value=${agent.id}>
+                    ${agent.name ?? agent.identity?.name ?? agent.id}
+                  </option>`,
+              )}
+            </select>
+          </label>
+          <label class="workboard-field">
+            <span>Session</span>
+            <select
+              class="input"
+              .value=${state.draftSessionKey}
+              @change=${(event: Event) => {
+                state.draftSessionKey = (event.currentTarget as HTMLSelectElement).value;
+                props.onRequestUpdate?.();
+              }}
+            >
+              <option value="">${t("workboard.noLinkedSession")}</option>
+              ${sessions.map(
+                (session) =>
+                  html`<option value=${session.key}>
+                    ${session.displayName ?? session.label ?? session.key}
+                  </option>`,
+              )}
+            </select>
+          </label>
+          <label class="workboard-field workboard-field--wide">
+            <span>Labels</span>
+            <input
+              class="input"
+              placeholder="ui, docs"
+              .value=${state.draftLabels}
+              @input=${(event: InputEvent) => {
+                state.draftLabels = (event.currentTarget as HTMLInputElement).value;
+                props.onRequestUpdate?.();
+              }}
+            />
+          </label>
+        </div>
+        <div class="workboard-modal__actions">
+          <button class="btn primary" ?disabled=${state.loading || !state.draftTitle.trim()}>
+            ${editing ? t("common.save") : t("common.create")}
+          </button>
+          <button
+            class="btn"
+            type="button"
+            @click=${() => {
+              resetDraft(state);
+              props.onRequestUpdate?.();
+            }}
+          >
+            ${t("common.cancel")}
+          </button>
+        </div>
+      </form>
+    </div>
   `;
 }
 
@@ -244,10 +382,29 @@ function renderCard(props: WorkboardProps, card: WorkboardCard) {
   const busy = state.busyCardId === card.id;
   const syncing = state.syncingCardIds.has(card.id);
   const live = session?.hasActiveRun === true;
+  const linked = Boolean(card.sessionKey);
   return html`
     <article
-      class="workboard-card priority-${card.priority} ${busy ? "workboard-card--busy" : ""}"
+      class="workboard-card priority-${card.priority} ${busy ? "workboard-card--busy" : ""} ${linked
+        ? "workboard-card--openable"
+        : ""}"
+      role=${linked ? "button" : nothing}
+      tabindex=${linked ? 0 : nothing}
+      title=${linked ? "Open linked session" : nothing}
       draggable="true"
+      @click=${(event: MouseEvent) => {
+        if (!isCardActionTarget(event)) {
+          openCardSession(props, card);
+        }
+      }}
+      @keydown=${(event: KeyboardEvent) => {
+        if (isCardActionTarget(event) || (event.key !== "Enter" && event.key !== " ")) {
+          return;
+        }
+        if (openCardSession(props, card)) {
+          event.preventDefault();
+        }
+      }}
       @dragstart=${(event: DragEvent) => {
         state.draggedCardId = card.id;
         event.dataTransfer?.setData("text/plain", card.id);
@@ -276,10 +433,20 @@ function renderCard(props: WorkboardProps, card: WorkboardCard) {
         <span>${formatTime(card.updatedAt)}</span>
       </div>
       <div class="workboard-card__actions">
+        <button
+          class="btn btn--icon workboard-card__icon"
+          title="Edit card"
+          @click=${() => {
+            openEditModal(state, card);
+            props.onRequestUpdate?.();
+          }}
+        >
+          ${icons.edit}
+        </button>
         ${card.sessionKey
           ? html`
               <button
-                class="icon-btn"
+                class="btn btn--icon workboard-card__icon"
                 title="Open session"
                 @click=${() => props.onOpenSession(card.sessionKey!)}
               >
@@ -288,7 +455,7 @@ function renderCard(props: WorkboardProps, card: WorkboardCard) {
               ${live
                 ? html`
                     <button
-                      class="icon-btn"
+                      class="btn btn--icon workboard-card__icon"
                       title=${t("workboard.stopSession")}
                       ?disabled=${busy || !props.connected}
                       @click=${() =>
@@ -306,7 +473,7 @@ function renderCard(props: WorkboardProps, card: WorkboardCard) {
             `
           : html`
               <button
-                class="icon-btn"
+                class="btn btn--xs workboard-card__start"
                 title="Start session"
                 ?disabled=${busy || !props.connected}
                 @click=${async () => {
@@ -321,11 +488,11 @@ function renderCard(props: WorkboardProps, card: WorkboardCard) {
                   }
                 }}
               >
-                ${icons.play}
+                ${icons.play} Start
               </button>
             `}
         <button
-          class="icon-btn"
+          class="btn btn--icon workboard-card__icon workboard-card__delete"
           title="Delete card"
           ?disabled=${busy}
           @click=${() =>
@@ -466,7 +633,7 @@ export function renderWorkboard(props: WorkboardProps) {
           <button
             class="btn primary"
             @click=${() => {
-              state.draftOpen = true;
+              openCreateModal(state);
               props.onRequestUpdate?.();
             }}
           >
@@ -475,7 +642,7 @@ export function renderWorkboard(props: WorkboardProps) {
         </div>
       </div>
       ${state.error ? html`<div class="callout danger">${state.error}</div>` : nothing}
-      ${renderDraft(props)}
+      ${renderCardModal(props)}
       <div class="workboard-board">
         ${state.statuses.map((status) => renderColumn(props, status, byStatus.get(status) ?? []))}
       </div>

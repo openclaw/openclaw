@@ -58,9 +58,12 @@ export type WorkboardUiState = {
   query: string;
   priorityFilter: "all" | WorkboardPriority;
   draftOpen: boolean;
+  editingCardId: string | null;
   draftTitle: string;
   draftNotes: string;
+  draftStatus: WorkboardStatus;
   draftPriority: WorkboardPriority;
+  draftLabels: string;
   draftAgentId: string;
   draftSessionKey: string;
   busyCardId: string | null;
@@ -77,6 +80,7 @@ const SESSION_CAPTURE_HISTORY_LIMIT = 40;
 const SESSION_CAPTURE_HISTORY_MAX_CHARS = 6000;
 const SESSION_CAPTURE_TEXT_MAX_CHARS = 700;
 const WORKBOARD_CAPTURE_TITLE_MAX_CHARS = 180;
+const WORKBOARD_SESSION_LABEL_MAX_CHARS = 512;
 
 function createDefaultState(): WorkboardUiState {
   return {
@@ -89,9 +93,12 @@ function createDefaultState(): WorkboardUiState {
     query: "",
     priorityFilter: "all",
     draftOpen: false,
+    editingCardId: null,
     draftTitle: "",
     draftNotes: "",
+    draftStatus: "todo",
     draftPriority: "normal",
+    draftLabels: "",
     draftAgentId: "",
     draftSessionKey: "",
     busyCardId: null,
@@ -230,6 +237,44 @@ function replaceCard(state: WorkboardUiState, card: WorkboardCard) {
   const next = state.cards.filter((existing) => existing.id !== card.id);
   next.push(card);
   state.cards = next.toSorted((left, right) => left.position - right.position);
+}
+
+function resetDraftState(state: WorkboardUiState) {
+  state.draftOpen = false;
+  state.editingCardId = null;
+  state.draftTitle = "";
+  state.draftNotes = "";
+  state.draftStatus = "todo";
+  state.draftPriority = "normal";
+  state.draftLabels = "";
+  state.draftAgentId = "";
+  state.draftSessionKey = "";
+}
+
+function normalizeDraftLabels(value: string): string[] {
+  const labels: string[] = [];
+  for (const label of value.split(",")) {
+    const trimmed = label.trim();
+    if (trimmed && !labels.includes(trimmed)) {
+      labels.push(trimmed);
+    }
+    if (labels.length >= 12) {
+      break;
+    }
+  }
+  return labels;
+}
+
+function draftPayload(state: WorkboardUiState) {
+  return {
+    title: state.draftTitle,
+    notes: state.draftNotes,
+    status: state.draftStatus,
+    priority: state.draftPriority,
+    labels: normalizeDraftLabels(state.draftLabels),
+    agentId: state.draftAgentId,
+    sessionKey: state.draftSessionKey,
+  };
 }
 
 function isFailedSessionStatus(status: GatewaySessionRow["status"]): boolean {
@@ -526,20 +571,40 @@ export async function createWorkboardCard(params: {
   state.error = null;
   params.requestUpdate?.();
   try {
-    const payload = await params.client.request("workboard.cards.create", {
-      title: state.draftTitle,
-      notes: state.draftNotes,
-      priority: state.draftPriority,
-      agentId: state.draftAgentId,
-      sessionKey: state.draftSessionKey,
+    const payload = await params.client.request("workboard.cards.create", draftPayload(state));
+    replaceCard(state, normalizeCardPayload(payload));
+    resetDraftState(state);
+  } catch (error) {
+    state.error = formatError(error);
+  } finally {
+    state.loading = false;
+    params.requestUpdate?.();
+  }
+}
+
+export async function saveWorkboardCardDraft(params: {
+  host: WorkboardHost;
+  client: GatewayBrowserClient | null;
+  requestUpdate?: () => void;
+}) {
+  const state = getWorkboardState(params.host);
+  if (!state.editingCardId) {
+    await createWorkboardCard(params);
+    return;
+  }
+  if (!params.client || !state.draftTitle.trim()) {
+    return;
+  }
+  state.loading = true;
+  state.error = null;
+  params.requestUpdate?.();
+  try {
+    const payload = await params.client.request("workboard.cards.update", {
+      id: state.editingCardId,
+      patch: draftPayload(state),
     });
     replaceCard(state, normalizeCardPayload(payload));
-    state.draftOpen = false;
-    state.draftTitle = "";
-    state.draftNotes = "";
-    state.draftPriority = "normal";
-    state.draftAgentId = "";
-    state.draftSessionKey = "";
+    resetDraftState(state);
   } catch (error) {
     state.error = formatError(error);
   } finally {
@@ -615,6 +680,17 @@ function buildCardPrompt(card: WorkboardCard): string {
   return lines.join("\n");
 }
 
+function buildCardSessionLabel(card: WorkboardCard): string {
+  const suffix = card.id.trim().slice(0, 8) || "card";
+  const title = card.title.trim() || "Workboard card";
+  const suffixText = ` (${suffix})`;
+  if (title.length + suffixText.length <= WORKBOARD_SESSION_LABEL_MAX_CHARS) {
+    return `${title}${suffixText}`;
+  }
+  const titleMax = WORKBOARD_SESSION_LABEL_MAX_CHARS - suffixText.length;
+  return `${title.slice(0, titleMax - 3).trimEnd()}...${suffixText}`;
+}
+
 export async function startWorkboardCard(params: {
   host: WorkboardHost;
   client: GatewayBrowserClient | null;
@@ -631,7 +707,7 @@ export async function startWorkboardCard(params: {
   try {
     const created = await params.client.request("sessions.create", {
       ...(params.card.agentId ? { agentId: params.card.agentId } : {}),
-      label: params.card.title,
+      label: buildCardSessionLabel(params.card),
       message: buildCardPrompt(params.card),
     });
     const sessionKey =

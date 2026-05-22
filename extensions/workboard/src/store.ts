@@ -88,18 +88,13 @@ function normalizeLabels(value: unknown, fallback: string[] = []): string[] {
   if (value == null) {
     return fallback;
   }
-  if (typeof value === "string") {
-    return value
-      .split(",")
-      .map((item) => item.trim())
-      .filter(Boolean)
-      .slice(0, 12);
-  }
-  if (!Array.isArray(value)) {
+  const entries =
+    typeof value === "string" ? value.split(",") : Array.isArray(value) ? value : undefined;
+  if (!entries) {
     throw new Error("labels must be an array or comma-separated string.");
   }
   const labels: string[] = [];
-  for (const entry of value) {
+  for (const entry of entries) {
     const label = normalizeOptionalString(entry);
     if (!label || labels.includes(label)) {
       continue;

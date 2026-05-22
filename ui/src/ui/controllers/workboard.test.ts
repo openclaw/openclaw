@@ -7,6 +7,7 @@ import {
   getWorkboardState,
   loadWorkboard,
   moveWorkboardCard,
+  saveWorkboardCardDraft,
   startWorkboardCard,
   stopWorkboardCard,
   syncWorkboardLifecycle,
@@ -83,13 +84,59 @@ describe("workboard controller", () => {
     expect(client.request).toHaveBeenCalledWith("workboard.cards.create", {
       title: "Write tests",
       notes: "Cover the happy path",
+      status: "todo",
       priority: "normal",
+      labels: [],
       agentId: "",
       sessionKey: "agent:main:dashboard:1",
     });
     expect(state.cards[0]).toMatchObject({ id: "card-2", title: "Write tests" });
     expect(state.draftOpen).toBe(false);
     expect(state.draftSessionKey).toBe("");
+  });
+
+  it("updates cards from draft state when editing", async () => {
+    const host = {};
+    const state = getWorkboardState(host);
+    state.cards = [sampleCard];
+    state.draftOpen = true;
+    state.editingCardId = sampleCard.id;
+    state.draftTitle = "Updated board";
+    state.draftNotes = "New notes";
+    state.draftStatus = "review";
+    state.draftPriority = "high";
+    state.draftLabels = "ui, polish";
+    state.draftAgentId = "dev";
+    state.draftSessionKey = sampleSession.key;
+    const updated = {
+      ...sampleCard,
+      title: "Updated board",
+      notes: "New notes",
+      status: "review",
+      priority: "high",
+      labels: ["ui", "polish"],
+      agentId: "dev",
+      sessionKey: sampleSession.key,
+    };
+    const client = createClient({ "workboard.cards.update": { card: updated } });
+
+    await saveWorkboardCardDraft({ host, client: client as never });
+
+    expect(client.request).toHaveBeenCalledWith("workboard.cards.update", {
+      id: "card-1",
+      patch: {
+        title: "Updated board",
+        notes: "New notes",
+        status: "review",
+        priority: "high",
+        labels: ["ui", "polish"],
+        agentId: "dev",
+        sessionKey: sampleSession.key,
+      },
+    });
+    expect(state.cards[0]).toMatchObject({ title: "Updated board", status: "review" });
+    expect(state.draftOpen).toBe(false);
+    expect(state.editingCardId).toBeNull();
   });
 
   it("captures existing sessions as linked workboard cards", async () => {
@@ -285,6 +332,14 @@ describe("workboard controller", () => {
     });
 
     expect(sessionKey).toBe("agent:main:dashboard:1");
+    expect(client.request).toHaveBeenNthCalledWith(
+      1,
+      "sessions.create",
+      expect.objectContaining({
+        label: "Build board (card-1)",
+        message: expect.stringContaining("Work on this OpenClaw Workboard card: Build board"),
+      }),
+    );
     expect(client.request).toHaveBeenNthCalledWith(
       2,
       "workboard.cards.update",

@@ -68,4 +68,38 @@ describe("workboard gateway methods", () => {
       cards: [expect.objectContaining({ title: "Investigate queue drift" })],
     });
   });
+
+  it("validates labels from comma-separated gateway input", async () => {
+    type RegisteredMethod = {
+      handler: Parameters<OpenClawPluginApi["registerGatewayMethod"]>[1];
+      opts: Parameters<OpenClawPluginApi["registerGatewayMethod"]>[2];
+    };
+    const methods = new Map<string, RegisteredMethod>();
+    const api = {
+      runtime: {
+        state: {
+          openKeyedStore: vi.fn(() => createMemoryStore()),
+        },
+      },
+      registerGatewayMethod: vi.fn(
+        (method: string, handler: RegisteredMethod["handler"], opts: RegisteredMethod["opts"]) => {
+          methods.set(method, { handler, opts });
+        },
+      ),
+    } as unknown as OpenClawPluginApi;
+
+    registerWorkboardGatewayMethods({ api });
+
+    const createHandler = methods.get("workboard.cards.create")?.handler;
+    const respond = vi.fn();
+    await createHandler?.({
+      params: { title: "Check labels", labels: `valid, ${"x".repeat(41)}` },
+      respond,
+    } as never);
+
+    expect(respond.mock.calls[0]?.[0]).toBe(false);
+    expect(respond.mock.calls[0]?.[2]).toMatchObject({
+      message: "labels must be 40 characters or fewer.",
+    });
+  });
 });
