@@ -1,3 +1,5 @@
+import { resolveDefaultAgentDir } from "../agents/agent-scope-config.js";
+import { hasAuthProfileForProvider } from "../agents/tools/model-config.helpers.js";
 import {
   getRuntimeConfigSnapshot,
   getRuntimeConfigSourceSnapshot,
@@ -81,6 +83,7 @@ function hasEntryCredential(
     PluginWebSearchProviderEntry,
     | "credentialPath"
     | "id"
+    | "authProviderId"
     | "envVars"
     | "getConfiguredCredentialValue"
     | "getConfiguredCredentialFallback"
@@ -101,6 +104,11 @@ function hasEntryCredential(
     resolveEnvValue: ({ provider: currentProvider, configuredEnvVarId }) =>
       (configuredEnvVarId ? readWebProviderEnvValue([configuredEnvVarId]) : undefined) ??
       readWebProviderEnvValue(currentProvider.envVars),
+    resolveProviderAuthValue: (providerId) =>
+      hasAuthProfileForProvider({
+        provider: providerId,
+        agentDir: resolveDefaultAgentDir(config ?? {}),
+      }),
   });
 }
 
@@ -109,6 +117,7 @@ export function isWebSearchProviderConfigured(params: {
     PluginWebSearchProviderEntry,
     | "credentialPath"
     | "id"
+    | "authProviderId"
     | "envVars"
     | "getConfiguredCredentialValue"
     | "getConfiguredCredentialFallback"
@@ -176,7 +185,7 @@ export function resolveWebSearchProviderId(params: {
         continue;
       }
       logVerbose(
-        `web_search: no provider configured, auto-detected "${provider.id}" from available API keys`,
+        `web_search: no provider configured, auto-detected "${provider.id}" from available credentials`,
       );
       return provider.id;
     }

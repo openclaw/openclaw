@@ -1830,6 +1830,8 @@ export type SpeechProviderPlugin = {
   label: string;
   aliases?: string[];
   autoSelectOrder?: number;
+  /** Default provider operation timeout in milliseconds when caller/config omit timeoutMs. */
+  defaultTimeoutMs?: number;
   models?: readonly string[];
   voices?: readonly string[];
   resolveConfig?: (ctx: SpeechProviderResolveConfigContext) => SpeechProviderConfig;
