@@ -169,14 +169,24 @@ export async function planOpenClawModelsJsonWithDeps(
     secretRefManagedProviders,
   });
   const normalizedMergedProviders =
-    normalizeProviderCatalogModelsForConfig(mergedProviders) ?? mergedProviders;
-  const secretEnforcedProviders =
-    enforceSourceManagedProviderSecrets({
-      providers: normalizedMergedProviders,
+    normalizeProviders({
+      providers: mergedProviders,
+      agentDir,
+      env,
+      secretDefaults: cfg.secrets?.defaults,
       sourceProviders: params.sourceConfigForSecrets?.models?.providers,
       sourceSecretDefaults: params.sourceConfigForSecrets?.secrets?.defaults,
       secretRefManagedProviders,
-    }) ?? normalizedMergedProviders;
+    }) ?? mergedProviders;
+  const normalizedCatalogProviders =
+    normalizeProviderCatalogModelsForConfig(normalizedMergedProviders) ?? normalizedMergedProviders;
+  const secretEnforcedProviders =
+    enforceSourceManagedProviderSecrets({
+      providers: normalizedCatalogProviders,
+      sourceProviders: params.sourceConfigForSecrets?.models?.providers,
+      sourceSecretDefaults: params.sourceConfigForSecrets?.secrets?.defaults,
+      secretRefManagedProviders,
+    }) ?? normalizedCatalogProviders;
   const finalProviders = applyNativeStreamingUsageCompat(secretEnforcedProviders);
   const nextContents = `${JSON.stringify({ providers: finalProviders }, null, 2)}\n`;
 
