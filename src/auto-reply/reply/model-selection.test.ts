@@ -1270,7 +1270,7 @@ describe("createModelSelectionState resolveDefaultReasoningLevel", () => {
     vi.mocked(loadModelCatalog).mockResolvedValueOnce([
       { provider: "openrouter", id: "x-ai/grok-4.1-fast", name: "Grok", reasoning: true },
     ]);
-    const metadataSnapshot = { plugins: [] } as NonNullable<
+    const metadataSnapshot = { plugins: [] } as unknown as NonNullable<
       Parameters<typeof createModelSelectionState>[0]["pluginMetadataSnapshot"]
     >;
     const state = await createModelSelectionState({
