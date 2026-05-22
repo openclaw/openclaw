@@ -174,15 +174,16 @@ export async function pollProviderOperationJson<TPayload>(
     const guardedOptions = resolveGuardedRequestOptions(params);
     const payload = guardedOptions
       ? await (async () => {
-          const result = await fetchWithTimeoutGuarded(
-            params.url,
+          const result = await fetchGuardedProviderOperationResponse({
+            stage: "poll",
+            url: params.url,
             init,
-            timeoutMs(),
-            params.fetchFn,
+            timeoutMs,
+            fetchFn: params.fetchFn,
+            requestFailedMessage: params.requestFailedMessage,
             guardedOptions,
-          );
+          });
           try {
-            await assertOkOrThrowHttpError(result.response, params.requestFailedMessage);
             return (await readProviderJsonObjectResponse(
               result.response,
               params.requestFailedMessage,
@@ -471,6 +472,42 @@ function resolveGuardedRequestOptions(
     ...(params.auditContext ? { auditContext: params.auditContext } : {}),
     ...(params.mode !== undefined ? { mode: params.mode } : {}),
   };
+}
+
+async function fetchGuardedProviderOperationResponse(params: {
+  stage: ProviderOperationRetryStage;
+  url: string;
+  init: RequestInit;
+  timeoutMs?: ProviderOperationTimeoutMs;
+  fetchFn: typeof fetch;
+  provider?: string;
+  requestFailedMessage?: string;
+  retry?: TransientProviderRetryConfig;
+  guardedOptions: GuardedProviderRequestOptions;
+}): Promise<GuardedFetchResult> {
+  return await executeProviderOperationWithRetry({
+    provider: params.provider ?? "provider-http",
+    stage: params.stage,
+    retry: params.retry,
+    operation: async () => {
+      const result = await fetchWithTimeoutGuarded(
+        params.url,
+        params.init,
+        resolveProviderOperationRequestTimeoutMs(params.timeoutMs),
+        params.fetchFn,
+        params.guardedOptions,
+      );
+      try {
+        if (params.requestFailedMessage) {
+          await assertOkOrThrowHttpError(result.response, params.requestFailedMessage);
+        }
+        return result;
+      } catch (error) {
+        await result.release();
+        throw error;
+      }
+    },
+  });
 }
 
 type GuardedPostRequestRetryOptions = {

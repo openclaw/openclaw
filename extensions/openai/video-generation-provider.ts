@@ -198,8 +198,13 @@ async function fetchOpenAIVideoDownload(
       auditContext: "openai-video-download",
     },
   );
-  await assertOkOrThrowHttpError(result.response, "OpenAI video download failed");
-  return result;
+  try {
+    await assertOkOrThrowHttpError(result.response, "OpenAI video download failed");
+    return result;
+  } catch (error) {
+    await result.release();
+    throw error;
+  }
 }
 
 async function downloadOpenAIVideo(

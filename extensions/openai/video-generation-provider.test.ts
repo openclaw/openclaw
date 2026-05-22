@@ -11,6 +11,7 @@ const {
   fetchWithTimeoutMock,
   fetchWithTimeoutGuardedMock,
   pollProviderOperationJsonMock,
+  assertOkOrThrowHttpErrorMock,
   resolveProviderHttpRequestConfigMock,
   sanitizeConfiguredModelProviderRequestMock,
 } = getProviderHttpMocks();
@@ -301,6 +302,60 @@ describe("openai video generation provider", () => {
       ssrfPolicy: { allowPrivateNetwork: true },
       auditContext: "openai-video-download",
     });
+  });
+
+  it("releases guarded local video download requests when HTTP errors throw", async () => {
+    const release = vi.fn(async () => {});
+    assertOkOrThrowHttpErrorMock
+      .mockImplementationOnce(async () => {})
+      .mockImplementationOnce(async () => {})
+      .mockImplementationOnce(async (_response, label) => {
+        throw new Error(label);
+      });
+    postJsonRequestMock.mockResolvedValue({
+      response: {
+        json: async () => ({
+          id: "vid_local",
+          model: "sora-2",
+          status: "queued",
+        }),
+      },
+      release: vi.fn(async () => {}),
+    });
+    fetchWithTimeoutMock.mockResolvedValueOnce({
+      json: async () => ({
+        id: "vid_local",
+        model: "sora-2",
+        status: "completed",
+      }),
+    });
+    fetchWithTimeoutGuardedMock.mockResolvedValueOnce({
+      response: new Response("busy", { status: 503, statusText: "Service Unavailable" }),
+      finalUrl: "http://127.0.0.1:44080/v1/videos/vid_local/content?variant=video",
+      release,
+    });
+
+    const provider = buildOpenAIVideoGenerationProvider();
+    await expect(
+      provider.generateVideo({
+        provider: "openai",
+        model: "sora-2",
+        prompt: "Render via local relay",
+        cfg: {
+          models: {
+            providers: {
+              openai: {
+                baseUrl: "http://127.0.0.1:44080/v1",
+                request: { allowPrivateNetwork: true },
+                models: [],
+              },
+            },
+          },
+        },
+      }),
+    ).rejects.toThrow("OpenAI video download failed");
+
+    expect(release).toHaveBeenCalledTimes(1);
   });
 
   it("uses multipart input_reference for video-to-video uploads", async () => {
