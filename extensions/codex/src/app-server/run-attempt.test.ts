@@ -2555,6 +2555,22 @@ describe("runCodexAppServerAttempt", () => {
     ).toBe(testing.CODEX_DYNAMIC_IMAGE_TOOL_TIMEOUT_MS);
   });
 
+  it("keeps Codex message dynamic tool calls above slow channel send deadlines", () => {
+    expect(
+      testing.resolveDynamicToolCallTimeoutMs({
+        call: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          callId: "call-message",
+          namespace: null,
+          tool: "message",
+          arguments: { action: "send", message: "long outbound update" },
+        },
+        config: undefined,
+      }),
+    ).toBe(testing.CODEX_DYNAMIC_MESSAGE_TOOL_TIMEOUT_MS);
+  });
+
   it("caps dynamic tool timeouts at the bridge maximum", () => {
     expect(
       testing.resolveDynamicToolCallTimeoutMs({
