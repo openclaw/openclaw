@@ -3578,6 +3578,8 @@ describe("runAgentTurnWithFallback", () => {
           title: "command ls",
           toolCallId: "exec-1",
           output: "README.md",
+          outcomeClassification: "benign_no_result",
+          statusLabel: "No matches found",
         },
       });
       await params.onAgentEvent?.({
@@ -3656,6 +3658,8 @@ describe("runAgentTurnWithFallback", () => {
       name: undefined,
       output: "README.md",
       status: undefined,
+      outcomeClassification: "benign_no_result",
+      statusLabel: "No matches found",
       exitCode: undefined,
       durationMs: undefined,
       cwd: undefined,

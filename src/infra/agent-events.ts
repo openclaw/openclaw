@@ -82,6 +82,8 @@ export type AgentCommandOutputEventData = {
   name?: string;
   output?: string;
   status?: AgentItemEventStatus | "running";
+  outcomeClassification?: "success" | "benign_no_result" | "failure";
+  statusLabel?: string;
   exitCode?: number | null;
   durationMs?: number;
   cwd?: string;

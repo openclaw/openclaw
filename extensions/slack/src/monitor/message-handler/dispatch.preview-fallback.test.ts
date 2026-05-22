@@ -50,6 +50,15 @@ let capturedReplyOptions:
         status?: string;
         meta?: string;
       }) => Promise<void> | void;
+      onCommandOutput?: (payload: {
+        phase?: string;
+        title?: string;
+        name?: string;
+        status?: string;
+        outcomeClassification?: "success" | "benign_no_result" | "failure";
+        statusLabel?: string;
+        exitCode?: number | null;
+      }) => Promise<void> | void;
       onPartialReply?: (payload: { text: string }) => Promise<void> | void;
     }
   | undefined;
@@ -104,6 +113,16 @@ let mockedReplyOptionEvents: Array<
       phase?: string;
       status?: string;
       meta?: string;
+    }
+  | {
+      kind: "command";
+      phase?: string;
+      title?: string;
+      name?: string;
+      status?: string;
+      outcomeClassification?: "success" | "benign_no_result" | "failure";
+      statusLabel?: string;
+      exitCode?: number | null;
     }
   | { kind: "partial"; text: string }
 > = [];
@@ -347,8 +366,15 @@ vi.mock("openclaw/plugin-sdk/channel-outbound", async (importOriginal) => {
       summary?: string;
       title?: string;
       name?: string;
+      status?: string;
+      statusLabel?: string;
+      exitCode?: number | null;
+      outcomeClassification?: "success" | "benign_no_result" | "failure";
     }) => {
-      const text = params.progressText ?? params.summary ?? params.title ?? params.name;
+      const text =
+        params.outcomeClassification === "benign_no_result"
+          ? (params.statusLabel ?? "No matches found")
+          : (params.progressText ?? params.summary ?? params.title ?? params.name);
       return text
         ? {
             kind: "item",
@@ -370,8 +396,19 @@ vi.mock("openclaw/plugin-sdk/channel-outbound", async (importOriginal) => {
         summary?: string;
         title?: string;
         name?: string;
+        status?: string;
+        statusLabel?: string;
+        exitCode?: number | null;
+        outcomeClassification?: "success" | "benign_no_result" | "failure";
       },
     ) => {
+      if (params.outcomeClassification === "benign_no_result") {
+        return {
+          kind: "command-output",
+          text: params.statusLabel ?? "No matches found",
+          label: "Exec",
+        };
+      }
       if (
         (entry.streaming?.progress?.commandText ?? entry.streaming?.preview?.commandText) ===
           "status" &&
@@ -450,7 +487,12 @@ vi.mock("openclaw/plugin-sdk/channel-outbound", async (importOriginal) => {
       summary?: string;
       title?: string;
       name?: string;
-    }) => params.progressText ?? params.summary ?? params.title ?? params.name,
+      statusLabel?: string;
+      outcomeClassification?: "success" | "benign_no_result" | "failure";
+    }) =>
+      params.outcomeClassification === "benign_no_result"
+        ? (params.statusLabel ?? "No matches found")
+        : (params.progressText ?? params.summary ?? params.title ?? params.name),
     formatChannelProgressDraftLineForEntry: (
       _entry: unknown,
       params: {
@@ -458,8 +500,13 @@ vi.mock("openclaw/plugin-sdk/channel-outbound", async (importOriginal) => {
         summary?: string;
         title?: string;
         name?: string;
+        statusLabel?: string;
+        outcomeClassification?: "success" | "benign_no_result" | "failure";
       },
-    ) => params.progressText ?? params.summary ?? params.title ?? params.name,
+    ) =>
+      params.outcomeClassification === "benign_no_result"
+        ? (params.statusLabel ?? "No matches found")
+        : (params.progressText ?? params.summary ?? params.title ?? params.name),
     resolveChannelProgressDraftMaxLines: (entry?: {
       streaming?: { progress?: { maxLines?: number } };
     }) => entry?.streaming?.progress?.maxLines ?? 8,
@@ -730,6 +777,15 @@ vi.mock("../reply.runtime.js", () => ({
         status?: string;
         meta?: string;
       }) => Promise<void> | void;
+      onCommandOutput?: (payload: {
+        phase?: string;
+        title?: string;
+        name?: string;
+        status?: string;
+        outcomeClassification?: "success" | "benign_no_result" | "failure";
+        statusLabel?: string;
+        exitCode?: number | null;
+      }) => Promise<void> | void;
       onPartialReply?: (payload: { text: string }) => Promise<void> | void;
     };
   }) => {
@@ -746,6 +802,16 @@ vi.mock("../reply.runtime.js", () => ({
             phase: entry.phase,
             status: entry.status,
             meta: entry.meta,
+          });
+        } else if (entry.kind === "command") {
+          await params.replyOptions?.onCommandOutput?.({
+            phase: entry.phase,
+            title: entry.title,
+            name: entry.name,
+            status: entry.status,
+            outcomeClassification: entry.outcomeClassification,
+            statusLabel: entry.statusLabel,
+            exitCode: entry.exitCode,
           });
         } else {
           await params.replyOptions?.onPartialReply?.({ text: entry.text });
@@ -791,6 +857,15 @@ vi.mock("../reply.runtime.js", () => ({
         status?: string;
         meta?: string;
       }) => Promise<void> | void;
+      onCommandOutput?: (payload: {
+        phase?: string;
+        title?: string;
+        name?: string;
+        status?: string;
+        outcomeClassification?: "success" | "benign_no_result" | "failure";
+        statusLabel?: string;
+        exitCode?: number | null;
+      }) => Promise<void> | void;
       onPartialReply?: (payload: { text: string }) => Promise<void> | void;
     };
     dispatcher: {
@@ -810,6 +885,16 @@ vi.mock("../reply.runtime.js", () => ({
             phase: entry.phase,
             status: entry.status,
             meta: entry.meta,
+          });
+        } else if (entry.kind === "command") {
+          await params.replyOptions?.onCommandOutput?.({
+            phase: entry.phase,
+            title: entry.title,
+            name: entry.name,
+            status: entry.status,
+            outcomeClassification: entry.outcomeClassification,
+            statusLabel: entry.statusLabel,
+            exitCode: entry.exitCode,
           });
         } else {
           await params.replyOptions?.onPartialReply?.({ text: entry.text });
@@ -1406,6 +1491,50 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
 
     expect(draftStream.update).toHaveBeenCalledWith("Shelling\n🛠️ Exec\n• done");
     expect(draftStream.update.mock.calls.flat().join("\n")).not.toContain("pnpm test");
+  });
+
+  it("renders benign Slack no-results when command item and command-output events both arrive", async () => {
+    const draftStream = createDraftStreamStub();
+    createSlackDraftStreamMock.mockReturnValueOnce(draftStream);
+    mockedSlackStreamingMode = "progress";
+    mockedSlackDraftMode = "status_final";
+    mockedDispatchSequence = [];
+    mockedReplyOptionEvents = [
+      {
+        kind: "item",
+        itemKind: "command",
+        name: "exec",
+        phase: "end",
+        status: "completed",
+        title: "command find docs -name '*.md' -print0 | xargs -0 rg 'missing phrase'",
+        summary: "No matches found",
+      },
+      {
+        kind: "command",
+        phase: "end",
+        name: "exec",
+        status: "completed",
+        title: "command find docs -name '*.md' -print0 | xargs -0 rg 'missing phrase'",
+        outcomeClassification: "benign_no_result",
+        statusLabel: "No matches found",
+        exitCode: 123,
+      },
+      { kind: "item", progressText: "done" },
+    ];
+
+    await dispatchPreparedSlackMessage(
+      createPreparedSlackMessage({
+        accountConfig: { streaming: { progress: { label: "Shelling" } } },
+      }),
+    );
+
+    const renderedUpdates = draftStream.update.mock.calls.flat().join("\n");
+
+    expect(renderedUpdates).toContain("No matches found");
+    expect(renderedUpdates).not.toContain("Command exited with code 123");
+    expect(renderedUpdates).not.toContain("exit 123");
+    expect(renderedUpdates).not.toContain("failed");
+    expect(draftStream.update).toHaveBeenLastCalledWith("Shelling\n• No matches found\n• done");
   });
 
   it("suppresses standalone Slack tool progress when progress lines are disabled", async () => {

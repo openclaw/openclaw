@@ -157,6 +157,8 @@ export type GetReplyOptions = {
     name?: string;
     output?: string;
     status?: string;
+    outcomeClassification?: "success" | "benign_no_result" | "failure";
+    statusLabel?: string;
     exitCode?: number | null;
     durationMs?: number;
     cwd?: string;

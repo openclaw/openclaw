@@ -1289,6 +1289,68 @@ describe("handleToolExecutionEnd derived tool events", () => {
     });
   });
 
+  it("classifies rg no-match command output as benign while preserving exit code", async () => {
+    const { ctx, onAgentEvent } = createTestContext();
+
+    await handleToolExecutionStart(
+      ctx as never,
+      {
+        type: "tool_execution_start",
+        toolName: "exec",
+        toolCallId: "tool-exec-rg-no-match",
+        args: { command: "find docs -name '*.md' -print0 | xargs -0 rg 'missing phrase'" },
+      } as never,
+    );
+
+    await handleToolExecutionEnd(
+      ctx as never,
+      {
+        type: "tool_execution_end",
+        toolName: "exec",
+        toolCallId: "tool-exec-rg-no-match",
+        isError: false,
+        result: {
+          details: {
+            status: "completed",
+            aggregated: "\n\n(Command exited with code 123)",
+            exitCode: 123,
+            durationMs: 10,
+            cwd: "/tmp/work",
+          },
+        },
+      } as never,
+    );
+
+    const commandOutputEvent = requireRecord(
+      onAgentEvent.mock.calls
+        .map((call) => call[0])
+        .find((event) => (event as { stream?: string })?.stream === "command_output"),
+      "command output event",
+    );
+    const commandItemEndEvent = requireRecord(
+      onAgentEvent.mock.calls
+        .map((call) => call[0])
+        .find(
+          (event) =>
+            (event as { stream?: string })?.stream === "item" &&
+            (event as { data?: { itemId?: string; phase?: string } }).data?.itemId ===
+              "command:tool-exec-rg-no-match" &&
+            (event as { data?: { phase?: string } }).data?.phase === "end",
+        ),
+      "command item end event",
+    );
+    expectRecordFields(commandItemEndEvent.data, "command item end event data", {
+      summary: "No matches found",
+    });
+    expect(JSON.stringify(commandItemEndEvent.data)).not.toContain("Command exited with code 123");
+    expectRecordFields(commandOutputEvent.data, "command output event data", {
+      status: "completed",
+      outcomeClassification: "benign_no_result",
+      statusLabel: "No matches found",
+      exitCode: 123,
+    });
+  });
+
   it("emits patch summary events for apply_patch results", async () => {
     const { ctx, onAgentEvent } = createTestContext();
 
