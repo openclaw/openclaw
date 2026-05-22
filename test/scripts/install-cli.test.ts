@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, mkdirSync, readFileSync, rmSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -127,8 +127,71 @@ describe("install-cli.sh", () => {
 
   it("clears npm freshness filters for package installs", () => {
     expect(script).toContain('freshness_flag="--min-release-age=0"');
+    expect(script).toContain('npm_raw_config_has_key "min-release-age"');
     expect(script).toContain('freshness_flag="--before=$(date -u');
     expect(script).toContain("env -u NPM_CONFIG_BEFORE -u npm_config_before");
+  });
+
+  it("does not emit --before when raw user npmrc config contains min-release-age", () => {
+    const tmp = mkdtempSync(join(tmpdir(), "openclaw-install-cli-npmrc-"));
+    const bin = join(tmp, "bin");
+    const npmrc = join(tmp, "user.npmrc");
+    const installArgs = join(tmp, "npm-install-args.txt");
+    const prefix = join(tmp, "prefix");
+    const nodeDir = join(tmp, "node");
+    mkdirSync(bin, { recursive: true });
+    mkdirSync(nodeDir, { recursive: true });
+    writeFileSync(npmrc, "min-release-age=7\n");
+    const fakeNpm = join(bin, "npm");
+    writeFileSync(
+      fakeNpm,
+      [
+        "#!/usr/bin/env bash",
+        'if [[ "$1" == "config" && "$2" == "get" ]]; then',
+        '  if [[ "$3" == "min-release-age" ]]; then',
+        "    printf 'null\\n'",
+        "    exit 0",
+        "  fi",
+        '  if [[ "$3" == "before" ]]; then',
+        "    printf '2026-01-01T00:00:00.000Z\\n'",
+        "    exit 0",
+        "  fi",
+        "fi",
+        'printf "%s\\n" "$@" > "$NPM_FAKE_INSTALL_ARGS"',
+        "exit 0",
+        "",
+      ].join("\n"),
+    );
+    chmodSync(fakeNpm, 0o755);
+
+    try {
+      const result = runInstallCliShell(
+        [
+          "set -euo pipefail",
+          `cd ${JSON.stringify(process.cwd())}`,
+          `source ${JSON.stringify(SCRIPT_PATH)}`,
+          `npm_bin() { printf '%s\\n' ${JSON.stringify(fakeNpm)}; }`,
+          `node_dir() { printf '%s\\n' ${JSON.stringify(nodeDir)}; }`,
+          "emit_json() { :; }",
+          "log() { :; }",
+          `PREFIX=${JSON.stringify(prefix)}`,
+          "SET_NPM_PREFIX=0",
+          "OPENCLAW_VERSION=1.2.3",
+          "install_openclaw",
+        ].join("\n"),
+        {
+          NPM_CONFIG_USERCONFIG: npmrc,
+          NPM_FAKE_INSTALL_ARGS: installArgs,
+          PATH: `${bin}:${process.env.PATH}`,
+        },
+      );
+
+      expect(result.status).toBe(0);
+      expect(readFileSync(installArgs, "utf8")).toContain("--min-release-age=0\n");
+      expect(readFileSync(installArgs, "utf8")).not.toContain("--before=");
+    } finally {
+      rmSync(tmp, { force: true, recursive: true });
+    }
   });
 
   it("rejects OpenClaw GitHub source targets for npm installs", () => {
