@@ -111,6 +111,8 @@ function resolveWatchDebounceMs(config?: OpenClawConfig): number {
   return typeof raw === "number" && Number.isFinite(raw) ? Math.max(0, raw) : 250;
 }
 
+// Requires resolveWatchTargets to produce a stable-order result (it returns a
+// sorted array); positional comparison is intentional for hot-path efficiency.
 function sameWatchTargets(a: string[], b: string[]): boolean {
   if (a.length !== b.length) {
     return false;
@@ -188,7 +190,10 @@ function subscribeWorkspaceToPath(
   }
   if (existing) {
     // Debounce changed (config reload): rebuild the shared watcher while
-    // preserving existing subscribers.
+    // preserving existing subscribers. Debounce is a gateway-global config
+    // value, so all workspaces normally request the same value and this branch
+    // does not fire; if it does, the most recent requested debounce wins for
+    // every subscriber of the shared path (last-writer-wins).
     const next = createSkillsPathWatcher(watchPath, debounceMs);
     for (const subscriber of existing.subscribers) {
       next.subscribers.add(subscriber);
@@ -237,6 +242,7 @@ export function ensureSkillsWatcher(params: { workspaceDir: string; config?: Ope
   const watchTargets = resolveWatchTargets(workspaceDir, params.config);
   const targetsUnchanged = sameWatchTargets(previousTargets, watchTargets);
   const debounceUnchanged = watchTargets.every(
+    // undefined for paths not yet watched -> false -> fall through to subscribe.
     (watchPath) => pathWatchers.get(watchPath)?.debounceMs === debounceMs,
   );
   if (targetsUnchanged && debounceUnchanged) {
