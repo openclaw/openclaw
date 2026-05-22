@@ -153,6 +153,7 @@ type CronAgentWatchdog = {
   noteRunnerStarted: (info?: CronAgentExecutionStarted) => void;
   notePhase: (info: CronAgentExecutionPhaseUpdate) => void;
   activeExecution: () => CronAgentExecutionStarted | undefined;
+  watchdogState: () => CronAgentWatchdogState;
   dispose: () => void;
 };
 
@@ -167,6 +168,7 @@ export async function executeJobCoreWithTimeout(
 
   const runAbortController = new AbortController();
   let timeoutReason: string | undefined;
+  const runStartedAtMs = state.deps.nowMs();
   const timeoutMarker = Symbol("cron-timeout");
   let resolveTimeout: ((value: typeof timeoutMarker) => void) | undefined;
   const timeoutPromise = new Promise<typeof timeoutMarker>((resolve) => {
@@ -187,6 +189,8 @@ export async function executeJobCoreWithTimeout(
     deferUntilRunner: deferTimeoutUntilExecutionStart,
     jobTimeoutMs,
     triggerTimeout,
+    nowMs: state.deps.nowMs,
+    runStartedAtMs,
   });
   const corePromise = executeJobCore(state, job, runAbortController.signal, {
     onExecutionStarted: deferTimeoutUntilExecutionStart ? watchdog.noteRunnerStarted : undefined,
@@ -207,8 +211,25 @@ export async function executeJobCoreWithTimeout(
       return first;
     }
     const activeExecution = watchdog.activeExecution();
+    const elapsedMs = state.deps.nowMs() - runStartedAtMs;
+    const watchdogState = watchdog.watchdogState();
+    state.deps.log.warn(
+      {
+        jobId: job.id,
+        jobName: job.name,
+        elapsedMs,
+        timeoutMs: jobTimeoutMs,
+        lastPhase: activeExecution?.phase,
+        provider: activeExecution?.provider,
+        model: activeExecution?.model,
+        backend: activeExecution?.backend,
+        runnerStarted: watchdogState !== "waiting_for_runner",
+        executionStarted: watchdogState === "executing",
+      },
+      "cron: job timed out; logging execution state for diagnostics",
+    );
     await cleanupTimedOutCronAgentRun(state, job, jobTimeoutMs, activeExecution);
-    const error = timeoutReason ?? timeoutErrorMessage(activeExecution);
+    const error = timeoutReason ?? timeoutErrorMessage(activeExecution, { elapsedMs });
     return {
       status: "error",
       error,
@@ -225,6 +246,8 @@ function createCronAgentWatchdog(params: {
   deferUntilRunner: boolean;
   jobTimeoutMs: number;
   triggerTimeout: (reason: string) => void;
+  nowMs: () => number;
+  runStartedAtMs: number;
 }): CronAgentWatchdog {
   let state: CronAgentWatchdogState = params.deferUntilRunner ? "waiting_for_runner" : "executing";
   let timeoutId: NodeJS.Timeout | undefined;
@@ -244,7 +267,8 @@ function createCronAgentWatchdog(params: {
       return;
     }
     timeoutId = setTimeout(() => {
-      setTimedOut(timeoutErrorMessage(activeExecution));
+      const elapsedMs = params.nowMs() - params.runStartedAtMs;
+      setTimedOut(timeoutErrorMessage(activeExecution, { elapsedMs }));
     }, params.jobTimeoutMs);
   };
   const clearSetupTimeout = () => {
@@ -324,6 +348,7 @@ function createCronAgentWatchdog(params: {
       noteExecutionProgress(info);
     },
     activeExecution: () => activeExecution,
+    watchdogState: () => state,
     dispose: () => {
       state = "disposed";
       if (timeoutId) {
@@ -370,12 +395,18 @@ function resolveRunConcurrency(state: CronServiceState): number {
   }
   return Math.max(1, Math.floor(raw));
 }
-function timeoutErrorMessage(execution?: CronAgentExecutionStarted): string {
+function timeoutErrorMessage(
+  execution?: CronAgentExecutionStarted,
+  opts?: { elapsedMs?: number },
+): string {
   const phase = formatCronAgentExecutionPhase(execution);
+  const detail = formatTimeoutDetail(execution, opts?.elapsedMs);
   if (!phase) {
-    return "cron: job execution timed out";
+    return detail ? `cron: job execution timed out (${detail})` : "cron: job execution timed out";
   }
-  return `cron: job execution timed out (last phase: ${phase})`;
+  return detail
+    ? `cron: job execution timed out (last phase: ${phase}, ${detail})`
+    : `cron: job execution timed out (last phase: ${phase})`;
 }
 
 function setupTimeoutErrorMessage(execution?: CronAgentExecutionStarted): string {
@@ -396,6 +427,26 @@ function preExecutionTimeoutErrorMessage(execution?: CronAgentExecutionStarted):
 
 function formatCronAgentExecutionPhase(execution?: CronAgentExecutionStarted): string | undefined {
   return formatEmbeddedAgentExecutionPhase(execution?.phase);
+}
+
+/** Build a compact detail string for timeout errors (e.g. "elapsed: 60m, model: claude-4"). */
+function formatTimeoutDetail(
+  execution?: CronAgentExecutionStarted,
+  elapsedMs?: number,
+): string | undefined {
+  const parts: string[] = [];
+  if (typeof elapsedMs === "number" && Number.isFinite(elapsedMs) && elapsedMs > 0) {
+    const minutes = Math.round(elapsedMs / 60_000);
+    parts.push(`elapsed: ${minutes}m`);
+  }
+  const provider = execution?.provider?.trim();
+  const model = execution?.model?.trim();
+  if (provider && model) {
+    parts.push(`model: ${provider}/${model}`);
+  } else if (model) {
+    parts.push(`model: ${model}`);
+  }
+  return parts.length > 0 ? parts.join(", ") : undefined;
 }
 
 function resolveCronAgentPreExecutionWatchdogMs(jobTimeoutMs: number): number {

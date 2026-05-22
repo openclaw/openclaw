@@ -100,6 +100,7 @@ import {
   type ErrorShape,
   errorShape,
   formatValidationErrors,
+  MIN_CLIENT_PROTOCOL_VERSION,
   MIN_PROBE_PROTOCOL_VERSION,
   PROTOCOL_VERSION,
   validateConnectParams,
@@ -579,7 +580,7 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
         // protocol negotiation
         const { minProtocol, maxProtocol } = connectParams;
         const supportsCurrentProtocol =
-          maxProtocol >= PROTOCOL_VERSION && minProtocol <= PROTOCOL_VERSION;
+          maxProtocol >= MIN_CLIENT_PROTOCOL_VERSION && minProtocol <= PROTOCOL_VERSION;
         const supportsProbeRestartProtocol =
           connectParams.client.mode === GATEWAY_CLIENT_MODES.PROBE &&
           maxProtocol >= MIN_PROBE_PROTOCOL_VERSION &&

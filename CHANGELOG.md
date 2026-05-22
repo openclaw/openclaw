@@ -1,4 +1,4 @@
-﻿# Changelog
+# Changelog
 
 Docs: https://docs.openclaw.ai
 
@@ -38,6 +38,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Providers/Google OAuth: allow trusted fake-IP/TUN DNS answers for Google OAuth token and project-discovery requests while keeping the SSRF guard scoped to Google OAuth/API hostnames, so Gemini CLI OAuth login works in Clash/Mihomo/Surge-style environments.
 - CLI/update: repair managed npm plugin `openclaw` peer links during post-core convergence and reject stale or wrong-target peer links before restart. (#83794) Thanks @fuller-stack-dev.
 - CLI/agents: default new omitted-account bindings to all accounts when the channel has multiple configured accounts, and clarify account-scope docs. (#49769) Thanks @Gcaufy.
 - Codex app-server: disable native Code Mode when the effective exec host is `node` and keep OpenClaw `exec`/`process` available, so `/exec host=node` routes shell commands through the selected node instead of the gateway. Fixes #85012. (#85090) Thanks @sahilsatralkar.

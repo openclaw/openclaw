@@ -14,6 +14,7 @@ export const CODEX_CLI_PROFILE_ID = "openai-codex:codex-cli";
 export const OPENAI_CODEX_DEFAULT_PROFILE_ID = "openai-codex:default";
 /** @deprecated MiniMax provider-owned CLI profile id; do not use from third-party plugins. */
 export const MINIMAX_CLI_PROFILE_ID = "minimax-portal:minimax-cli";
+export const GEMINI_CLI_PROFILE_ID = "google-gemini-cli:default";
 
 export const AUTH_STORE_LOCK_OPTIONS = {
   retries: {

@@ -338,9 +338,10 @@ beforeEach(() => {
       bundleMcpMode: "gemini-system-settings",
       config: {
         command: "gemini",
-        args: ["--skip-trust", "--output-format", "json", "--prompt", "{prompt}"],
+        args: ["--approval-mode", "yolo", "--output-format", "json", "--prompt", "{prompt}"],
         resumeArgs: [
-          "--skip-trust",
+          "--approval-mode",
+          "yolo",
           "--resume",
           "{sessionId}",
           "--output-format",
@@ -929,14 +930,16 @@ describe("resolveCliBackendConfig google-gemini-cli defaults", () => {
     expect(resolved?.bundleMcp).toBe(true);
     expect(resolved?.bundleMcpMode).toBe("gemini-system-settings");
     expect(resolved?.config.args).toEqual([
-      "--skip-trust",
+      "--approval-mode",
+      "yolo",
       "--output-format",
       "json",
       "--prompt",
       "{prompt}",
     ]);
     expect(resolved?.config.resumeArgs).toEqual([
-      "--skip-trust",
+      "--approval-mode",
+      "yolo",
       "--resume",
       "{sessionId}",
       "--output-format",
