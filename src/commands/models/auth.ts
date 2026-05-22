@@ -100,6 +100,32 @@ const select = async <T>(params: Parameters<typeof clackSelect<T>>[0]) =>
     }),
   );
 
+async function readPipedStdin(): Promise<string> {
+  process.stdin.setEncoding("utf8");
+  let input = "";
+  for await (const chunk of process.stdin) {
+    input += String(chunk);
+  }
+  return input;
+}
+
+async function readPastedSecret(params: {
+  message: string;
+  masked: boolean;
+  validate?: (value: string) => string | undefined;
+}): Promise<string> {
+  const promptParams = { message: params.message, validate: params.validate };
+  const input = process.stdin.isTTY
+    ? await (params.masked ? password(promptParams) : text(promptParams))
+    : await readPipedStdin();
+  const trimmed = input.trim();
+  const validationMessage = params.validate?.(trimmed);
+  if (validationMessage) {
+    throw new Error(validationMessage);
+  }
+  return trimmed;
+}
+
 function resolveDefaultTokenProfileId(provider: string): string {
   return `${normalizeProviderId(provider)}:manual`;
 }
@@ -550,8 +576,9 @@ export async function modelsAuthPasteTokenCommand(
   const profileId =
     normalizeOptionalString(opts.profileId) || resolveDefaultTokenProfileId(provider);
 
-  const tokenInput = await text({
+  const tokenInput = await readPastedSecret({
     message: `Paste token for ${provider}`,
+    masked: false,
     validate: (value) => {
       const trimmed = value?.trim();
       if (!trimmed) {
@@ -619,8 +646,9 @@ export async function modelsAuthPasteApiKeyCommand(
   const profileId =
     normalizeOptionalString(opts.profileId) || resolveDefaultTokenProfileId(provider);
 
-  const keyInput = await password({
+  const key = await readPastedSecret({
     message: `Paste API key for ${provider}`,
+    masked: true,
     validate: (value) => {
       const trimmed = value?.trim();
       if (!trimmed) {
@@ -632,7 +660,6 @@ export async function modelsAuthPasteApiKeyCommand(
       return undefined;
     },
   });
-  const key = normalizeOptionalString(keyInput) ?? "";
 
   await upsertAuthProfileWithLockOrThrow({
     profileId,

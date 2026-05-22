@@ -289,6 +289,34 @@ function withInteractiveStdin() {
   };
 }
 
+function withPipedStdin(input: string) {
+  const stdin = process.stdin as NodeJS.ReadStream & { isTTY?: boolean };
+  const restoreInteractive = withInteractiveStdin();
+  const previousAsyncIteratorDescriptor = Object.getOwnPropertyDescriptor(
+    stdin,
+    Symbol.asyncIterator,
+  );
+  Object.defineProperty(stdin, "isTTY", {
+    configurable: true,
+    enumerable: true,
+    get: () => false,
+  });
+  Object.defineProperty(stdin, Symbol.asyncIterator, {
+    configurable: true,
+    value: async function* () {
+      yield input;
+    },
+  });
+  return () => {
+    if (previousAsyncIteratorDescriptor) {
+      Object.defineProperty(stdin, Symbol.asyncIterator, previousAsyncIteratorDescriptor);
+    } else {
+      Reflect.deleteProperty(stdin, Symbol.asyncIterator);
+    }
+    restoreInteractive();
+  };
+}
+
 function createProvider(params: {
   id: string;
   label?: string;
@@ -1210,6 +1238,20 @@ describe("modelsAuthLoginCommand", () => {
     expect(mocks.updateConfig).not.toHaveBeenCalled();
   });
 
+  it("rejects piped OpenAI API keys as OpenAI Codex token material", async () => {
+    const runtime = createRuntime();
+    restoreStdin?.();
+    restoreStdin = withPipedStdin("sk-openai-codex-api-key-value\n");
+
+    await expect(
+      modelsAuthPasteTokenCommand({ provider: "openai-codex" }, runtime),
+    ).rejects.toThrow("paste-api-key --provider openai-codex");
+
+    expect(mocks.clackText).not.toHaveBeenCalled();
+    expect(mocks.upsertAuthProfileWithLock).not.toHaveBeenCalled();
+    expect(mocks.updateConfig).not.toHaveBeenCalled();
+  });
+
   it("writes pasted API keys to the requested agent store", async () => {
     const runtime = createRuntime();
     useCoderAgentConfig();
@@ -1234,6 +1276,29 @@ describe("modelsAuthLoginCommand", () => {
     expect(runtime.log).toHaveBeenCalledWith(
       "Auth profile: openai-codex:manual (openai-codex/api_key)",
     );
+  });
+
+  it("writes piped OpenAI Codex API keys to API-key profiles", async () => {
+    const runtime = createRuntime();
+    restoreStdin?.();
+    restoreStdin = withPipedStdin("sk-openai-codex-api-key-value\n");
+
+    await modelsAuthPasteApiKeyCommand({ provider: "openai-codex" }, runtime);
+
+    expect(mocks.clackPassword).not.toHaveBeenCalled();
+    expect(mocks.upsertAuthProfileWithLock).toHaveBeenCalledWith({
+      profileId: "openai-codex:manual",
+      credential: {
+        type: "api_key",
+        provider: "openai-codex",
+        key: "sk-openai-codex-api-key-value",
+      },
+      agentDir: "/tmp/openclaw/agents/main",
+    });
+    expect(lastUpdatedConfig?.auth?.profiles?.["openai-codex:manual"]).toEqual({
+      provider: "openai-codex",
+      mode: "api_key",
+    });
   });
 
   it("rejects token material pasted into the OpenAI Codex API-key command", async () => {

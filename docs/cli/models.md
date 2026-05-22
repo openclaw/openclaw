@@ -207,7 +207,8 @@ Notes:
 
 - `paste-api-key` accepts API keys generated elsewhere, prompts for the key
   value, and writes it to the default profile id `<provider>:manual` unless you
-  pass `--profile-id`.
+  pass `--profile-id`. In automation, pipe the key on stdin, for example
+  `printf "%s\n" "$OPENAI_API_KEY" | openclaw models auth paste-api-key --provider openai-codex`.
 - `setup-token` and `paste-token` remain generic token commands for providers
   that expose token auth methods.
 - `setup-token` requires an interactive TTY and runs the provider's token-auth
