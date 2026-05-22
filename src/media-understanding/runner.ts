@@ -26,7 +26,6 @@ import type { ActiveMediaModel } from "./active-model.types.js";
 import { MediaAttachmentCache, selectAttachments } from "./attachments.js";
 import { isMediaUnderstandingSkipError } from "./errors.js";
 import { fileExists } from "./fs.js";
-import { extractGeminiResponse } from "./output-extract.js";
 import { normalizeMediaExecutionProviderId, normalizeMediaProviderId } from "./provider-id.js";
 import {
   buildMediaUnderstandingRegistry,
@@ -304,11 +303,11 @@ export function resolveMediaAttachmentLocalRoots(params: {
 }
 
 const binaryCache = new Map<string, Promise<string | null>>();
-const geminiProbeCache = new Map<string, Promise<boolean>>();
+const antigravityCliCache = new Map<string, Promise<string | null>>();
 
 export function clearMediaUnderstandingBinaryCacheForTests(): void {
   binaryCache.clear();
-  geminiProbeCache.clear();
+  antigravityCliCache.clear();
 }
 
 function expandHomeDir(value: string): string {
@@ -406,27 +405,38 @@ async function hasBinary(name: string): Promise<boolean> {
   return Boolean(await findBinary(name));
 }
 
-async function probeGeminiCli(): Promise<boolean> {
-  const cached = geminiProbeCache.get("gemini");
+async function probeAntigravityCliCandidate(command: string): Promise<string | null> {
+  const resolved = await findBinary(command);
+  if (!resolved) {
+    return null;
+  }
+  try {
+    const { stdout } = await runExec(resolved, ["--help"], { timeoutMs: 3000 });
+    return stdout.includes("--print") && stdout.includes("--add-dir") ? resolved : null;
+  } catch {
+    return null;
+  }
+}
+
+async function resolveAntigravityCliBinary(): Promise<string | null> {
+  const cached = antigravityCliCache.get("agy");
   if (cached) {
     return cached;
   }
   const resolved = (async () => {
-    if (!(await hasBinary("gemini"))) {
-      return false;
+    const configured = process.env.OPENCLAW_ANTIGRAVITY_CLI?.trim();
+    const candidates = [configured, "agy", "antigravity"].filter((value): value is string =>
+      Boolean(value),
+    );
+    for (const candidate of candidates) {
+      const command = await probeAntigravityCliCandidate(candidate);
+      if (command) {
+        return command;
+      }
     }
-    try {
-      const { stdout } = await runExec("gemini", ["--output-format", "json", "ok"], {
-        timeoutMs: 8000,
-      });
-      return Boolean(
-        extractGeminiResponse(stdout) ?? normalizeLowercaseStringOrEmpty(stdout).includes("ok"),
-      );
-    } catch {
-      return false;
-    }
+    return null;
   })();
-  geminiProbeCache.set("gemini", resolved);
+  antigravityCliCache.set("agy", resolved);
   return resolved;
 }
 
@@ -517,24 +527,24 @@ async function resolveLocalAudioEntry(): Promise<MediaUnderstandingModelConfig |
   return await resolveLocalWhisperEntry();
 }
 
-async function resolveGeminiCliEntry(
-  _capability: MediaUnderstandingCapability,
+async function resolveAntigravityCliEntry(
+  capability: MediaUnderstandingCapability,
 ): Promise<MediaUnderstandingModelConfig | null> {
-  if (!(await probeGeminiCli())) {
+  if (capability === "audio") {
+    return null;
+  }
+  const command = await resolveAntigravityCliBinary();
+  if (!command) {
     return null;
   }
   return {
     type: "cli",
-    command: "gemini",
+    command,
     args: [
-      "--output-format",
-      "json",
-      "--allowed-tools",
-      "read_many_files",
-      "--include-directories",
+      "--print",
+      "{{Prompt}}\n\nInspect {{MediaPath}} and reply with only the requested media description.",
+      "--add-dir",
       "{{MediaDir}}",
-      "{{Prompt}}",
-      "Use read_many_files to read {{MediaPath}} and respond with only the text output.",
     ],
   };
 }
@@ -682,13 +692,13 @@ async function resolveAutoEntries(params: {
       return [localAudio];
     }
   }
-  const gemini = await resolveGeminiCliEntry(params.capability);
-  if (gemini) {
-    return [gemini];
-  }
   const keys = await resolveKeyEntry(params);
   if (keys) {
     return [keys];
+  }
+  const antigravity = await resolveAntigravityCliEntry(params.capability);
+  if (antigravity) {
+    return [antigravity];
   }
   return [];
 }
