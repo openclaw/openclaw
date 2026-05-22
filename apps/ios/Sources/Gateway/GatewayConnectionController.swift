@@ -52,6 +52,20 @@ final class GatewayConnectionController {
             else { return nil }
             return override
         }
+
+        static func currentManualInput(
+            token: String?,
+            pendingOverride: ManualAuthOverride?,
+            password: String?) -> ManualAuthOverride?
+        {
+            guard let pendingOverride else {
+                return ManualAuthOverride.normalized(token: token, bootstrapToken: nil, password: password)
+            }
+            return ManualAuthOverride.explicit(
+                token: token,
+                bootstrapToken: pendingOverride.bootstrapToken,
+                password: password)
+        }
     }
 
     private struct PendingTrustConnect {
