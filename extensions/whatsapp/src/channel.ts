@@ -25,7 +25,6 @@ import {
   resolveWhatsAppGroupRequireMention,
   resolveWhatsAppGroupToolPolicy,
 } from "./group-policy.js";
-import { checkWhatsAppHeartbeatReady } from "./heartbeat.js";
 import {
   isWhatsAppGroupJid,
   isWhatsAppNewsletterJid,
@@ -49,6 +48,7 @@ const loadWhatsAppDirectoryConfig = createLazyRuntimeModule(() => import("./dire
 const loadWhatsAppChannelReactAction = createLazyRuntimeModule(
   () => import("./channel-react-action.js"),
 );
+const loadWhatsAppHeartbeat = createLazyRuntimeModule(() => import("./heartbeat.js"));
 const loadWhatsAppSend = createLazyRuntimeModule(() => import("./send.js"));
 
 function resolveWhatsAppTargetInfo(raw: string) {
@@ -196,7 +196,13 @@ export const whatsappPlugin: ChannelPlugin<ResolvedWhatsAppAccount> =
       },
       heartbeat: {
         checkReady: async ({ cfg, accountId, deps }) =>
-          await checkWhatsAppHeartbeatReady({ cfg, accountId: accountId ?? undefined, deps }),
+          await (
+            await loadWhatsAppHeartbeat()
+          ).checkWhatsAppHeartbeatReady({
+            cfg,
+            accountId: accountId ?? undefined,
+            deps,
+          }),
         sendTyping: async ({ cfg, to, accountId }) => {
           await (
             await loadWhatsAppSend()
