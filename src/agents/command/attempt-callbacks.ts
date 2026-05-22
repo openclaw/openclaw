@@ -2,6 +2,7 @@ import type { AgentMessage } from "@earendil-works/pi-agent-core";
 
 export type AgentAttemptLifecycleState = {
   currentTurnUserMessagePersisted: boolean;
+  lifecycleFinishing: boolean;
   lifecycleEnded: boolean;
 };
 
@@ -20,11 +21,14 @@ export function createAgentAttemptLifecycleCallbacks(state: AgentAttemptLifecycl
       state.currentTurnUserMessagePersisted = true;
     },
     onAgentEvent: (evt) => {
-      if (
-        evt.stream === "lifecycle" &&
-        typeof evt.data?.phase === "string" &&
-        (evt.data.phase === "end" || evt.data.phase === "error")
-      ) {
+      if (evt.stream !== "lifecycle" || typeof evt.data?.phase !== "string") {
+        return;
+      }
+      if (evt.data.phase === "finishing") {
+        state.lifecycleFinishing = true;
+        return;
+      }
+      if (evt.data.phase === "end" || evt.data.phase === "error") {
         state.lifecycleEnded = true;
       }
     },
