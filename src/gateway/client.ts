@@ -89,6 +89,14 @@ type StoredDeviceAuth = {
   scopes?: string[];
 };
 
+type AssembledConnect = {
+  params: ConnectParams;
+  authApprovalRuntimeToken: string | undefined;
+  resolvedDeviceToken: string | undefined;
+  storedToken: string | undefined;
+  usingStoredDeviceToken: boolean | undefined;
+};
+
 type FingerprintCheckingClientOptions = Omit<ClientOptions, "checkServerIdentity"> & {
   checkServerIdentity?: (servername: string, cert: CertMeta) => Error | undefined;
 };
@@ -538,100 +546,9 @@ export class GatewayClient {
       return;
     }
     const role = this.opts.role ?? "operator";
-    let authApprovalRuntimeToken: string | undefined;
-    let resolvedDeviceToken: string | undefined;
-    let storedToken: string | undefined;
-    let usingStoredDeviceToken: boolean | undefined;
-    let params: ConnectParams;
+    let assembled: AssembledConnect;
     try {
-      const {
-        authToken,
-        authBootstrapToken,
-        authDeviceToken,
-        authPassword,
-        authApprovalRuntimeToken: selectedAuthApprovalRuntimeToken,
-        signatureToken,
-        resolvedDeviceToken: selectedResolvedDeviceToken,
-        storedToken: selectedStoredToken,
-        storedScopes,
-        usingStoredDeviceToken: selectedUsingStoredDeviceToken,
-      } = this.selectConnectAuth(role);
-      authApprovalRuntimeToken = selectedAuthApprovalRuntimeToken;
-      resolvedDeviceToken = selectedResolvedDeviceToken;
-      storedToken = selectedStoredToken;
-      usingStoredDeviceToken = selectedUsingStoredDeviceToken;
-      if (this.pendingDeviceTokenRetry && authDeviceToken) {
-        this.pendingDeviceTokenRetry = false;
-      }
-      const auth =
-        authToken ||
-        authBootstrapToken ||
-        authPassword ||
-        resolvedDeviceToken ||
-        authApprovalRuntimeToken
-          ? {
-              token: authToken,
-              bootstrapToken: authBootstrapToken,
-              deviceToken: authDeviceToken ?? resolvedDeviceToken,
-              password: authPassword,
-              approvalRuntimeToken: authApprovalRuntimeToken,
-            }
-          : undefined;
-      const signedAtMs = Date.now();
-      const scopes = this.resolveConnectScopes({
-        usingStoredDeviceToken,
-        storedScopes,
-      });
-      const platform = this.opts.platform ?? process.platform;
-      const device = (() => {
-        if (!this.opts.deviceIdentity) {
-          return undefined;
-        }
-        const payload = buildDeviceAuthPayloadV3({
-          deviceId: this.opts.deviceIdentity.deviceId,
-          clientId: this.opts.clientName ?? GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
-          clientMode: this.opts.mode ?? GATEWAY_CLIENT_MODES.BACKEND,
-          role,
-          scopes,
-          signedAtMs,
-          token: signatureToken ?? null,
-          nonce,
-          platform,
-          deviceFamily: this.opts.deviceFamily,
-        });
-        const signature = signDevicePayload(this.opts.deviceIdentity.privateKeyPem, payload);
-        return {
-          id: this.opts.deviceIdentity.deviceId,
-          publicKey: publicKeyRawBase64UrlFromPem(this.opts.deviceIdentity.publicKeyPem),
-          signature,
-          signedAt: signedAtMs,
-          nonce,
-        };
-      })();
-      params = {
-        minProtocol: this.opts.minProtocol ?? MIN_CLIENT_PROTOCOL_VERSION,
-        maxProtocol: this.opts.maxProtocol ?? PROTOCOL_VERSION,
-        client: {
-          id: this.opts.clientName ?? GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
-          displayName: this.opts.clientDisplayName,
-          version: this.opts.clientVersion ?? VERSION,
-          platform,
-          deviceFamily: this.opts.deviceFamily,
-          mode: this.opts.mode ?? GATEWAY_CLIENT_MODES.BACKEND,
-          instanceId: this.opts.instanceId,
-        },
-        caps: Array.isArray(this.opts.caps) ? this.opts.caps : [],
-        commands: Array.isArray(this.opts.commands) ? this.opts.commands : undefined,
-        permissions:
-          this.opts.permissions && typeof this.opts.permissions === "object"
-            ? this.opts.permissions
-            : undefined,
-        pathEnv: this.opts.pathEnv,
-        auth,
-        role,
-        scopes,
-        device,
-      };
+      assembled = this.assembleConnectParams({ role, nonce });
     } catch (err) {
       this.handleConnectFailure(err);
       return;
@@ -640,7 +557,7 @@ export class GatewayClient {
     this.connectSent = true;
     this.clearConnectChallengeTimeout();
 
-    void this.request<HelloOk>("connect", params)
+    void this.request<HelloOk>("connect", assembled.params)
       .then((helloOk) => {
         this.pendingDeviceTokenRetry = false;
         this.deviceTokenRetryBudgetUsed = false;
@@ -674,12 +591,12 @@ export class GatewayClient {
         const shouldRetryWithDeviceToken = this.shouldRetryWithStoredDeviceToken({
           error: err,
           explicitGatewayToken: normalizeOptionalString(this.opts.token),
-          resolvedDeviceToken,
-          storedToken: storedToken ?? undefined,
+          resolvedDeviceToken: assembled.resolvedDeviceToken,
+          storedToken: assembled.storedToken,
         });
         if (
           this.opts.deviceIdentity &&
-          usingStoredDeviceToken &&
+          assembled.usingStoredDeviceToken &&
           err instanceof GatewayClientRequestError &&
           readConnectErrorDetailCode(err.details) ===
             ConnectErrorDetailCodes.AUTH_DEVICE_TOKEN_MISMATCH
@@ -709,7 +626,7 @@ export class GatewayClient {
         if (
           this.shouldRetryWithoutApprovalRuntimeToken({
             error: err,
-            authApprovalRuntimeToken,
+            authApprovalRuntimeToken: assembled.authApprovalRuntimeToken,
           })
         ) {
           this.approvalRuntimeTokenCompatibilityDisabled = true;
@@ -728,6 +645,120 @@ export class GatewayClient {
         }
         this.ws?.close(1008, "connect failed");
       });
+  }
+
+  private assembleConnectParams(params: { role: string; nonce: string }): AssembledConnect {
+    const { role, nonce } = params;
+    const selectedAuth = this.selectConnectAuth(role);
+    const {
+      authToken,
+      authBootstrapToken,
+      authDeviceToken,
+      authPassword,
+      authApprovalRuntimeToken,
+      signatureToken,
+      resolvedDeviceToken,
+      storedToken,
+      storedScopes,
+      usingStoredDeviceToken,
+    } = selectedAuth;
+
+    if (this.pendingDeviceTokenRetry && authDeviceToken) {
+      this.pendingDeviceTokenRetry = false;
+    }
+
+    const auth =
+      authToken ||
+      authBootstrapToken ||
+      authPassword ||
+      resolvedDeviceToken ||
+      authApprovalRuntimeToken
+        ? {
+            token: authToken,
+            bootstrapToken: authBootstrapToken,
+            deviceToken: authDeviceToken ?? resolvedDeviceToken,
+            password: authPassword,
+            approvalRuntimeToken: authApprovalRuntimeToken,
+          }
+        : undefined;
+    const signedAtMs = Date.now();
+    const scopes = this.resolveConnectScopes({
+      usingStoredDeviceToken,
+      storedScopes,
+    });
+    const platform = this.opts.platform ?? process.platform;
+
+    return {
+      params: {
+        minProtocol: this.opts.minProtocol ?? MIN_CLIENT_PROTOCOL_VERSION,
+        maxProtocol: this.opts.maxProtocol ?? PROTOCOL_VERSION,
+        client: {
+          id: this.opts.clientName ?? GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
+          displayName: this.opts.clientDisplayName,
+          version: this.opts.clientVersion ?? VERSION,
+          platform,
+          deviceFamily: this.opts.deviceFamily,
+          mode: this.opts.mode ?? GATEWAY_CLIENT_MODES.BACKEND,
+          instanceId: this.opts.instanceId,
+        },
+        caps: Array.isArray(this.opts.caps) ? this.opts.caps : [],
+        commands: Array.isArray(this.opts.commands) ? this.opts.commands : undefined,
+        permissions:
+          this.opts.permissions && typeof this.opts.permissions === "object"
+            ? this.opts.permissions
+            : undefined,
+        pathEnv: this.opts.pathEnv,
+        auth,
+        role,
+        scopes,
+        device: this.buildDeviceConnectParams({
+          nonce,
+          role,
+          scopes,
+          signatureToken,
+          signedAtMs,
+          platform,
+        }),
+      },
+      authApprovalRuntimeToken,
+      resolvedDeviceToken,
+      storedToken,
+      usingStoredDeviceToken,
+    };
+  }
+
+  private buildDeviceConnectParams(params: {
+    nonce: string;
+    role: string;
+    scopes: string[];
+    signatureToken: string | undefined;
+    signedAtMs: number;
+    platform: string;
+  }): ConnectParams["device"] {
+    if (!this.opts.deviceIdentity) {
+      return undefined;
+    }
+    const { nonce, role, scopes, signatureToken, signedAtMs, platform } = params;
+    const payload = buildDeviceAuthPayloadV3({
+      deviceId: this.opts.deviceIdentity.deviceId,
+      clientId: this.opts.clientName ?? GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
+      clientMode: this.opts.mode ?? GATEWAY_CLIENT_MODES.BACKEND,
+      role,
+      scopes,
+      signedAtMs,
+      token: signatureToken ?? null,
+      nonce,
+      platform,
+      deviceFamily: this.opts.deviceFamily,
+    });
+    const signature = signDevicePayload(this.opts.deviceIdentity.privateKeyPem, payload);
+    return {
+      id: this.opts.deviceIdentity.deviceId,
+      publicKey: publicKeyRawBase64UrlFromPem(this.opts.deviceIdentity.publicKeyPem),
+      signature,
+      signedAt: signedAtMs,
+      nonce,
+    };
   }
 
   private handleConnectFailure(err: unknown) {
