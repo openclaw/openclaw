@@ -397,7 +397,7 @@ export function createSessionActions(context: SessionActionContext) {
   const abortActive = async () => {
     const runId = state.activeChatRunId ?? state.pendingChatRunId ?? null;
     if (!runId) {
-      chatLog.addSystem("no active run");
+      chatLog.addSystem("no active run", { coalesceConsecutive: true });
       tui.requestRender();
       return;
     }
