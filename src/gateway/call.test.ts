@@ -14,6 +14,7 @@ import {
   pickPrimaryTailnetIPv4Mock as pickPrimaryTailnetIPv4,
   resolveGatewayPortMock as resolveGatewayPort,
 } from "./gateway-connection.test-mocks.js";
+import { DEFAULT_PREAUTH_HANDSHAKE_TIMEOUT_MS } from "./handshake-timeouts.js";
 
 const deviceIdentityState = vi.hoisted(() => ({
   value: {
@@ -733,7 +734,10 @@ describe("callGateway url resolution", () => {
     await vi.waitFor(() => {
       expect(eventLoopReadyState.calls).toHaveLength(1);
     });
-    expect(eventLoopReadyState.calls[0]?.maxWaitMs).toBe(10_000);
+    // Was hard-coded to 10_000 before the resolveGatewayCallTimeout fix that
+    // made DEFAULT_PREAUTH_HANDSHAKE_TIMEOUT_MS actually reachable when nothing
+    // is configured. Now the default is whatever handshake-timeouts.ts ships.
+    expect(eventLoopReadyState.calls[0]?.maxWaitMs).toBe(DEFAULT_PREAUTH_HANDSHAKE_TIMEOUT_MS);
     expect(lastClientOptions?.clientName).toBe(GATEWAY_CLIENT_NAMES.CLI);
     expect(startCalls).toBe(0);
 
@@ -1152,6 +1156,96 @@ describe("callGateway error details", () => {
     expect(eventLoopReadyState.calls[0]?.maxWaitMs).toBe(5);
     expect(lastClientOptions?.url).toBe("ws://127.0.0.1:18789");
     expect(startCalls).toBe(0);
+  });
+
+  it("uses DEFAULT_PREAUTH_HANDSHAKE_TIMEOUT_MS as the wrapper timeout when nothing is configured", async () => {
+    // Regression test for the slow-startup CLI failure mode: before this fix,
+    // resolveGatewayCallTimeout silently clamped the default to 10_000 unless
+    // OPENCLAW_HANDSHAKE_TIMEOUT_MS or gateway.handshakeTimeoutMs was set,
+    // which made the documented DEFAULT_PREAUTH_HANDSHAKE_TIMEOUT_MS constant
+    // unreachable in this code path and produced misleading "gateway timeout
+    // after 10000ms" errors on hosts where the CLI's own event loop took
+    // longer than 10 s to settle (heavy module discovery / JIT compile during
+    // gateway-plugin loading). The fix lets the proper default actually apply.
+    startMode = "silent";
+    setLocalLoopbackGatewayConfig();
+
+    vi.useFakeTimers();
+    let errMessage = "";
+    const promise = callGateway({ method: "health" }).catch((caught) => {
+      errMessage = caught instanceof Error ? caught.message : String(caught);
+    });
+
+    await vi.advanceTimersByTimeAsync(10_000);
+    // The pre-fix behavior would have already errored by now.
+    expect(errMessage).toBe("");
+    await vi.advanceTimersByTimeAsync(DEFAULT_PREAUTH_HANDSHAKE_TIMEOUT_MS - 10_000);
+    await promise;
+
+    expect(errMessage).toContain(`gateway timeout after ${DEFAULT_PREAUTH_HANDSHAKE_TIMEOUT_MS}ms`);
+  });
+
+  it("annotates the timeout error with eventLoopMaxDriftMs when readiness reports drift", async () => {
+    // When the readiness watchdog detected a meaningful event-loop block, the
+    // timeout error must carry the measured drift so callers can attribute the
+    // failure to the local process rather than to an unreachable gateway.
+    startMode = "silent";
+    setLocalLoopbackGatewayConfig();
+    eventLoopReadyState.result = {
+      ready: false,
+      elapsedMs: 5,
+      maxDriftMs: 4_500,
+      checks: 1,
+      aborted: false,
+    };
+
+    let err: unknown;
+    await callGateway({ method: "health", timeoutMs: 5 }).catch((caught) => {
+      err = caught;
+    });
+    expect(isGatewayTransportError(err)).toBe(true);
+    const transportError = err as {
+      kind?: string;
+      timeoutMs?: number;
+      eventLoopMaxDriftMs?: number;
+      message?: string;
+    };
+    expect(transportError.kind).toBe("timeout");
+    expect(transportError.timeoutMs).toBe(5);
+    expect(transportError.eventLoopMaxDriftMs).toBe(4_500);
+    // And the human message mentions the wedge so operators don't blame the
+    // gateway when the cause was their own CLI process.
+    expect(transportError.message).toMatch(/event loop was blocked for 4500ms/);
+    expect(transportError.message).toMatch(/OPENCLAW_HANDSHAKE_TIMEOUT_MS/);
+  });
+
+  it("does not annotate the timeout error when readiness measured low drift", async () => {
+    // The opposite case: a healthy event loop. The drift hint must stay out of
+    // the error so we don't suggest the user has a startup problem when they
+    // don't.
+    startMode = "silent";
+    setLocalLoopbackGatewayConfig();
+    eventLoopReadyState.result = {
+      ready: false,
+      elapsedMs: 5,
+      maxDriftMs: 12, // well below the 1 000 ms hint threshold
+      checks: 1,
+      aborted: false,
+    };
+
+    let err: unknown;
+    await callGateway({ method: "health", timeoutMs: 5 }).catch((caught) => {
+      err = caught;
+    });
+    expect(isGatewayTransportError(err)).toBe(true);
+    const transportError = err as {
+      eventLoopMaxDriftMs?: number;
+      message?: string;
+    };
+    // The numeric field is still attached (useful for telemetry) ...
+    expect(transportError.eventLoopMaxDriftMs).toBe(12);
+    // ... but the human message stays terse.
+    expect(transportError.message).not.toMatch(/event loop was blocked/);
   });
 
   it("keeps the default wrapper timeout aligned with configured handshake timeout", async () => {

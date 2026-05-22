@@ -18,7 +18,12 @@ describe("gateway handshake timeouts", () => {
   test("clamps connect challenge timeouts into the supported range", () => {
     expect(clampConnectChallengeTimeoutMs(0)).toBe(MIN_CONNECT_CHALLENGE_TIMEOUT_MS);
     expect(clampConnectChallengeTimeoutMs(2_000)).toBe(2_000);
-    expect(clampConnectChallengeTimeoutMs(20_000)).toBe(MAX_CONNECT_CHALLENGE_TIMEOUT_MS);
+    // Anything above MAX_CONNECT_CHALLENGE_TIMEOUT_MS (= DEFAULT_PREAUTH_HANDSHAKE_TIMEOUT_MS)
+    // clamps down to MAX. Use a value that is unambiguously above whatever the
+    // default ships as so this assertion stays meaningful through future bumps.
+    expect(clampConnectChallengeTimeoutMs(MAX_CONNECT_CHALLENGE_TIMEOUT_MS + 30_000)).toBe(
+      MAX_CONNECT_CHALLENGE_TIMEOUT_MS,
+    );
     expect(clampConnectChallengeTimeoutMs(30_000, 30_000)).toBe(30_000);
   });
 
@@ -132,14 +137,28 @@ describe("gateway handshake timeouts", () => {
   });
 
   test("resolveConnectChallengeTimeoutMs follows configured preauth timeout", () => {
+    // With nothing supplied as the explicit value, the configured preauth
+    // timeout becomes the resolved value — but only when it is larger than the
+    // default (the cap is `max(default, configured)`). Pick a configured value
+    // that is unambiguously above the default so this assertion remains stable
+    // through future bumps of DEFAULT_PREAUTH_HANDSHAKE_TIMEOUT_MS.
+    const configuredAboveDefault = DEFAULT_PREAUTH_HANDSHAKE_TIMEOUT_MS + 30_000;
     expect(
-      resolveConnectChallengeTimeoutMs(undefined, { env: {}, configuredTimeoutMs: 30_000 }),
-    ).toBe(30_000);
-    expect(resolveConnectChallengeTimeoutMs(45_000, { env: {}, configuredTimeoutMs: 30_000 })).toBe(
-      30_000,
-    );
-    expect(resolveConnectChallengeTimeoutMs(0, { env: {}, configuredTimeoutMs: 30_000 })).toBe(
-      MIN_CONNECT_CHALLENGE_TIMEOUT_MS,
-    );
+      resolveConnectChallengeTimeoutMs(undefined, {
+        env: {},
+        configuredTimeoutMs: configuredAboveDefault,
+      }),
+    ).toBe(configuredAboveDefault);
+    // An explicit value bigger than configured is clamped to configured (since
+    // the configured value is above the default, configured acts as the cap).
+    expect(
+      resolveConnectChallengeTimeoutMs(configuredAboveDefault + 5_000, {
+        env: {},
+        configuredTimeoutMs: configuredAboveDefault,
+      }),
+    ).toBe(configuredAboveDefault);
+    expect(
+      resolveConnectChallengeTimeoutMs(0, { env: {}, configuredTimeoutMs: configuredAboveDefault }),
+    ).toBe(MIN_CONNECT_CHALLENGE_TIMEOUT_MS);
   });
 });

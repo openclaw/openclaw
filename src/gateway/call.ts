@@ -107,6 +107,14 @@ export class GatewayTransportError extends Error {
   readonly code?: number;
   readonly reason?: string;
   readonly timeoutMs?: number;
+  // For `kind: "timeout"` errors: the largest measured 1 ms-setTimeout drift
+  // recorded by `waitForEventLoopReady` during the handshake. When this is
+  // significantly larger than zero, the failure was caused by the *caller's*
+  // event loop being blocked (heavy module discovery, JIT compile, sync
+  // I/O), not by the gateway being unreachable. Operators chasing intermittent
+  // "gateway timeout" errors should suspect their own process before the
+  // gateway when this value is large.
+  readonly eventLoopMaxDriftMs?: number;
 
   constructor(params: {
     kind: GatewayTransportErrorKind;
@@ -115,6 +123,7 @@ export class GatewayTransportError extends Error {
     code?: number;
     reason?: string;
     timeoutMs?: number;
+    eventLoopMaxDriftMs?: number;
   }) {
     super(params.message);
     this.name = "GatewayTransportError";
@@ -129,6 +138,9 @@ export class GatewayTransportError extends Error {
     if (params.timeoutMs !== undefined) {
       this.timeoutMs = params.timeoutMs;
     }
+    if (params.eventLoopMaxDriftMs !== undefined) {
+      this.eventLoopMaxDriftMs = params.eventLoopMaxDriftMs;
+    }
   }
 }
 
@@ -141,6 +153,7 @@ export type GatewayTransportErrorJson = {
     code?: number;
     reason?: string;
     timeoutMs?: number;
+    eventLoopMaxDriftMs?: number;
   };
   gateway: {
     url: string;
@@ -167,6 +180,9 @@ export function formatGatewayTransportErrorJson(value: unknown): GatewayTranspor
       ...(value.code !== undefined ? { code: value.code } : {}),
       ...(value.reason !== undefined ? { reason: value.reason } : {}),
       ...(value.timeoutMs !== undefined ? { timeoutMs: value.timeoutMs } : {}),
+      ...(value.eventLoopMaxDriftMs !== undefined
+        ? { eventLoopMaxDriftMs: value.eventLoopMaxDriftMs }
+        : {}),
     },
     gateway: {
       url: redactSensitiveUrlLikeString(value.connectionDetails.url),
@@ -440,23 +456,21 @@ function resolveGatewayCallTimeout(
   timeoutMs: number;
   safeTimerTimeoutMs: number;
 } {
-  const hasConfiguredHandshakeTimeout =
-    typeof configuredHandshakeTimeoutMs === "number" &&
-    Number.isFinite(configuredHandshakeTimeoutMs) &&
-    configuredHandshakeTimeoutMs > 0;
-  const hasEnvHandshakeTimeout =
-    Boolean(process.env.OPENCLAW_HANDSHAKE_TIMEOUT_MS) ||
-    Boolean(process.env.VITEST && process.env.OPENCLAW_TEST_HANDSHAKE_TIMEOUT_MS);
-  const resolvedHandshakeTimeoutMs =
-    hasConfiguredHandshakeTimeout || hasEnvHandshakeTimeout
-      ? resolvePreauthHandshakeTimeoutMs({ configuredTimeoutMs: configuredHandshakeTimeoutMs })
-      : undefined;
+  // Always defer to resolvePreauthHandshakeTimeoutMs for the default — it
+  // already returns DEFAULT_PREAUTH_HANDSHAKE_TIMEOUT_MS when nothing is
+  // configured. The previous gate (only honor the resolved value when env or
+  // config was set AND the result was > 10 s) silently capped the default at
+  // 10 s and made DEFAULT_PREAUTH_HANDSHAKE_TIMEOUT_MS unreachable in this
+  // path, which caused "gateway timeout after 10000ms" errors on slow-startup
+  // CLI environments where the gateway was healthy but the CLI's own event
+  // loop was briefly starved by module discovery / JIT compile work.
+  const defaultHandshakeTimeoutMs = resolvePreauthHandshakeTimeoutMs({
+    configuredTimeoutMs: configuredHandshakeTimeoutMs,
+  });
   const timeoutMs =
     typeof timeoutValue === "number" && Number.isFinite(timeoutValue)
       ? timeoutValue
-      : typeof resolvedHandshakeTimeoutMs === "number" && resolvedHandshakeTimeoutMs > 10_000
-        ? resolvedHandshakeTimeoutMs
-        : 10_000;
+      : defaultHandshakeTimeoutMs;
   const safeTimerTimeoutMs = resolveSafeTimeoutDelayMs(timeoutMs);
   return { timeoutMs, safeTimerTimeoutMs };
 }
@@ -595,11 +609,35 @@ function formatGatewayCloseError(
   return message;
 }
 
+// Threshold above which we attribute a timeout to caller-side event-loop
+// blocking rather than to the gateway. Chosen well above the
+// DEFAULT_DRIFT_THRESHOLD_MS used by `waitForEventLoopReady` (200 ms) so a
+// single GC pause or quick disk I/O burst doesn't trigger the warning, but
+// well below any timeout we ship by default so a wedge that actually consumed
+// most of the budget is always called out.
+const EVENT_LOOP_BLOCK_HINT_THRESHOLD_MS = 1_000;
+
 function formatGatewayTimeoutError(
   timeoutMs: number,
   connectionDetails: GatewayConnectionDetails,
+  eventLoopMaxDriftMs?: number,
 ): string {
-  return `gateway timeout after ${timeoutMs}ms\n${connectionDetails.message}`;
+  let message = `gateway timeout after ${timeoutMs}ms\n${connectionDetails.message}`;
+  if (
+    eventLoopMaxDriftMs !== undefined &&
+    eventLoopMaxDriftMs >= EVENT_LOOP_BLOCK_HINT_THRESHOLD_MS
+  ) {
+    message +=
+      `\n\nNote: this CLI process's event loop was blocked for ` +
+      `${Math.round(eventLoopMaxDriftMs)}ms during the handshake, ` +
+      "which usually means the timeout fired because the CLI was busy " +
+      "(heavy module discovery, JIT compile, sync I/O) rather than because " +
+      "the gateway is down. The gateway's response may have arrived just " +
+      "after the timer fired. Try raising the budget with " +
+      "`OPENCLAW_HANDSHAKE_TIMEOUT_MS=<ms>` or by setting " +
+      "`gateway.handshakeTimeoutMs` in openclaw.json.";
+  }
+  return message;
 }
 
 function createGatewayCloseTransportError(params: {
@@ -620,12 +658,20 @@ function createGatewayCloseTransportError(params: {
 function createGatewayTimeoutTransportError(params: {
   timeoutMs: number;
   connectionDetails: GatewayConnectionDetails;
+  eventLoopMaxDriftMs?: number;
 }): GatewayTransportError {
   return new GatewayTransportError({
     kind: "timeout",
     timeoutMs: params.timeoutMs,
     connectionDetails: params.connectionDetails,
-    message: formatGatewayTimeoutError(params.timeoutMs, params.connectionDetails),
+    ...(params.eventLoopMaxDriftMs !== undefined
+      ? { eventLoopMaxDriftMs: params.eventLoopMaxDriftMs }
+      : {}),
+    message: formatGatewayTimeoutError(
+      params.timeoutMs,
+      params.connectionDetails,
+      params.eventLoopMaxDriftMs,
+    ),
   });
 }
 
@@ -824,12 +870,22 @@ async function executeGatewayRequestWithScopes<T>(params: {
       },
     });
 
+    // Track the largest 1 ms-setTimeout drift observed by
+    // `waitForEventLoopReady`. Both the wall-clock timer and the readiness
+    // promise can fire the timeout error; either of them includes this value
+    // in the resulting error so operators can tell "the gateway is down"
+    // apart from "my CLI was wedged for N ms during the handshake."
+    let readinessMaxDriftMs: number | undefined;
+
     timer = setTimeout(() => {
       ignoreClose = true;
       stop(
         createGatewayTimeoutTransportError({
           timeoutMs,
           connectionDetails: params.connectionDetails,
+          ...(readinessMaxDriftMs !== undefined
+            ? { eventLoopMaxDriftMs: readinessMaxDriftMs }
+            : {}),
         }),
       );
     }, safeTimerTimeoutMs);
@@ -839,6 +895,7 @@ async function executeGatewayRequestWithScopes<T>(params: {
       signal: startAbort.signal,
     })
       .then((readiness) => {
+        readinessMaxDriftMs = readiness.maxDriftMs;
         if (settled || readiness.ready || readiness.aborted) {
           return;
         }
@@ -847,6 +904,7 @@ async function executeGatewayRequestWithScopes<T>(params: {
           createGatewayTimeoutTransportError({
             timeoutMs,
             connectionDetails: params.connectionDetails,
+            eventLoopMaxDriftMs: readiness.maxDriftMs,
           }),
         );
       })

@@ -16,7 +16,13 @@ type EventLoopReadyOptions = {
   signal?: AbortSignal;
 };
 
-const DEFAULT_MAX_WAIT_MS = 10_000;
+// Aligned with DEFAULT_PREAUTH_HANDSHAKE_TIMEOUT_MS so the readiness wait and
+// the outer handshake timer give up on roughly the same deadline. A 10 s wait
+// is not long enough to ride out a slow CLI startup on lower-end x86_64 hosts
+// with many gateway plugins installed (observed: ~30 s of event-loop blocking
+// from module discovery / JIT compile during the first `openclaw devices list`
+// after a cold launcher start). See handshake-timeouts.ts for the discussion.
+const DEFAULT_MAX_WAIT_MS = 45_000;
 const DEFAULT_INTERVAL_MS = 1;
 const DEFAULT_DRIFT_THRESHOLD_MS = 200;
 const DEFAULT_CONSECUTIVE_READY_CHECKS = 2;
