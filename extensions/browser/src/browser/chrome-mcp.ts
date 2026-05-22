@@ -167,6 +167,8 @@ const DEFAULT_CHROME_MCP_FEATURE_ARGS = [
   // Direct chrome-devtools-mcp launches do not enable structuredContent by default.
   "--experimentalStructuredContent",
   "--experimental-page-id-routing",
+  // Enables Chrome DevTools MCP's coordinate-based click_at tool for OpenClaw clickCoords.
+  "--experimentalVision",
 ];
 const CHROME_MCP_USAGE_STATISTICS_FLAG_RE = /^--(?:no-)?usage-?statistics(?:=.*)?$/i;
 const CHROME_MCP_CONNECTION_FLAGS = new Set([
@@ -1769,11 +1771,22 @@ export async function clickChromeMcpCoords(params: {
   delayMs?: number;
 }): Promise<void> {
   const button = params.button ?? "left";
+  const delayMsValue = resolveNonNegativeIntegerOption(params.delayMs, 0);
+  if (button === "left" && delayMsValue === 0) {
+    await callTool(params.profileName, chromeMcpProfileOptionsFromParams(params), "click_at", {
+      pageId: parsePageId(params.targetId),
+      x: params.x,
+      y: params.y,
+      ...(params.doubleClick ? { dblClick: true } : {}),
+    });
+    return;
+  }
+
   const buttonCode = button === "middle" ? 1 : button === "right" ? 2 : 0;
   const pressedButtons = button === "middle" ? 4 : button === "right" ? 2 : 1;
   const x = JSON.stringify(params.x);
   const y = JSON.stringify(params.y);
-  const delayMs = JSON.stringify(resolveNonNegativeIntegerOption(params.delayMs, 0));
+  const delayMs = JSON.stringify(delayMsValue);
   const doubleClick = params.doubleClick ? "true" : "false";
   await evaluateChromeMcpScript({
     profileName: params.profileName,

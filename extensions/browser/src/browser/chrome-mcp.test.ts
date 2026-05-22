@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   clickChromeMcpCoords,
   clickChromeMcpElement,
+  clickChromeMcpCoords,
   buildChromeMcpArgs,
   decodeChromeMcpStderrTail,
   ensureChromeMcpAvailable,
@@ -101,6 +102,9 @@ function createFakeSession(): ChromeMcpSession {
     }
     if (name === "wait_for") {
       return { content: [{ type: "text", text: "Element matching one of [\"Ready\"] found." }] };
+    }
+    if (name === "click_at") {
+      return { content: [{ type: "text", text: "Successfully clicked at the coordinates" }] };
     }
     if (name === "list_console_messages") {
       return {
@@ -311,6 +315,46 @@ describe("chrome MCP page parsing", () => {
     });
   });
 
+  it("forwards left coordinate clicks to Chrome MCP click_at with page routing", async () => {
+    const session = createFakeSession();
+    const factory: ChromeMcpSessionFactory = async () => session;
+    setChromeMcpSessionFactoryForTest(factory);
+
+    await clickChromeMcpCoords({
+      profileName: "chrome-live",
+      targetId: "2",
+      x: 25,
+      y: 32,
+      doubleClick: true,
+    });
+
+    const calls = (session.client.callTool as unknown as ToolCallMock).mock.calls;
+    expect(calls.at(-1)?.[0]).toEqual({
+      name: "click_at",
+      arguments: { pageId: 2, x: 25, y: 32, dblClick: true },
+    });
+  });
+
+  it("keeps evaluated clickCoords fallback when Chrome MCP click_at cannot preserve options", async () => {
+    const session = createFakeSession();
+    const factory: ChromeMcpSessionFactory = async () => session;
+    setChromeMcpSessionFactoryForTest(factory);
+
+    await clickChromeMcpCoords({
+      profileName: "chrome-live",
+      targetId: "2",
+      x: 25,
+      y: 32,
+      button: "right",
+      delayMs: 5,
+    });
+
+    const calls = (session.client.callTool as unknown as ToolCallMock).mock.calls;
+    expect(calls.at(-1)?.[0].name).toBe("evaluate_script");
+    expect(calls.at(-1)?.[0].arguments?.pageId).toBe(2);
+    expect(calls.at(-1)?.[0].arguments?.function).toContain('dispatch("mousedown", pressedButtons, 1)');
+  });
+
   it("adds --userDataDir when an explicit Chromium profile path is configured", () => {
     expect(buildChromeMcpArgs("/tmp/brave-profile")).toEqual([
       "-y",
@@ -319,6 +363,7 @@ describe("chrome MCP page parsing", () => {
       "--no-usage-statistics",
       "--experimentalStructuredContent",
       "--experimental-page-id-routing",
+      "--experimentalVision",
       "--userDataDir",
       "/tmp/brave-profile",
     ]);
@@ -338,6 +383,7 @@ describe("chrome MCP page parsing", () => {
       "--no-usage-statistics",
       "--experimentalStructuredContent",
       "--experimental-page-id-routing",
+      "--experimentalVision",
     ]);
   });
 
@@ -354,6 +400,7 @@ describe("chrome MCP page parsing", () => {
       "--no-usage-statistics",
       "--experimentalStructuredContent",
       "--experimental-page-id-routing",
+      "--experimentalVision",
     ]);
   });
 
@@ -368,6 +415,7 @@ describe("chrome MCP page parsing", () => {
       "chrome-devtools-mcp@latest",
       "--experimentalStructuredContent",
       "--experimental-page-id-routing",
+      "--experimentalVision",
       "--browserUrl",
       "http://127.0.0.1:9222",
       "--no-usage-statistics",
@@ -416,6 +464,7 @@ describe("chrome MCP page parsing", () => {
       "--no-usage-statistics",
       "--experimentalStructuredContent",
       "--experimental-page-id-routing",
+      "--experimentalVision",
     ]);
   });
 
