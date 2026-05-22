@@ -20,6 +20,7 @@ import {
   mockedEvaluateContextWindowGuard,
   mockedEnsureAuthProfileStore,
   mockedEnsureAuthProfileStoreWithoutExternalProfiles,
+  mockedExtractObservedOverflowTokenCount,
   mockedGlobalHookRunner,
   mockedGetApiKeyForModel,
   mockedMarkAuthProfileSuccess,
@@ -1507,6 +1508,37 @@ describe("runEmbeddedPiAgent overflow compaction trigger routing", () => {
 
     expectMockCallFields(mockedCompactDirect, {
       currentTokenCount: 277403,
+    });
+    expect(result.meta.error).toBeUndefined();
+  });
+
+  it("passes minimally over-budget count when overflow text is confirmed but unparseable", async () => {
+    mockedExtractObservedOverflowTokenCount.mockReturnValueOnce(undefined);
+    mockedRunEmbeddedAttempt
+      .mockResolvedValueOnce(
+        makeAttemptResult({
+          lastAssistant: {
+            role: "assistant",
+            content: [],
+            stopReason: "error",
+            errorMessage: "Context window exceeded for this request.",
+            usage: { totalTokens: 0 },
+          } as never,
+        }),
+      )
+      .mockResolvedValueOnce(makeAttemptResult({ promptError: null }));
+    mockedCompactDirect.mockResolvedValueOnce(
+      makeCompactionSuccess({
+        summary: "Compacted session",
+        firstKeptEntryId: "entry-9",
+        tokensBefore: 200001,
+      }),
+    );
+
+    const result = await runEmbeddedPiAgent(overflowBaseRunParams);
+
+    expectMockCallFields(mockedCompactDirect, {
+      currentTokenCount: 200001,
     });
     expect(result.meta.error).toBeUndefined();
   });
