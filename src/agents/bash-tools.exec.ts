@@ -1593,6 +1593,9 @@ export function createExecTool(
         if (gatewayResult.pendingResult) {
           return gatewayResult.pendingResult;
         }
+        if (gatewayResult.deniedResult) {
+          return gatewayResult.deniedResult;
+        }
         execCommandOverride = gatewayResult.execCommandOverride;
         if (gatewayResult.allowWithoutEnforcedCommand) {
           execCommandOverride = undefined;
