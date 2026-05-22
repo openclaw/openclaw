@@ -337,6 +337,11 @@ export const TOOL_DISPLAY_CONFIG: ToolDisplayConfig = {
       title: "Agents",
       detailKeys: [],
     },
+    local_skill_route: {
+      emoji: "🧭",
+      title: "Skill Route",
+      detailKeys: ["query", "limit"],
+    },
     memory_search: {
       emoji: "🧠",
       title: "Memory Search",

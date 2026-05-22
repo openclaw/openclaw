@@ -685,6 +685,28 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain("If several apply, choose the most specific.");
   });
 
+  it("mentions skill routing only when the tool is available", () => {
+    const skillsPrompt =
+      "<available_skills>\n  <skill>\n    <name>demo</name>\n  </skill>\n</available_skills>";
+    const withoutTool = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      skillsPrompt,
+    });
+    const withTool = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      skillsPrompt,
+      toolNames: ["read", "local_skill_route"],
+    });
+
+    expect(withoutTool).not.toContain("call `local_skill_route`");
+    expect(withTool).toContain(
+      "If skill choice is unclear, call `local_skill_route` with the user request before reading any SKILL.md.",
+    );
+    expect(withTool).toContain(
+      "- local_skill_route: Find likely local skills for the current task",
+    );
+  });
+
   it("appends available skills when provided", () => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",

@@ -21,15 +21,15 @@ group membership, provider restrictions, and configuration fields, use
 For most agents, start with the built-in tool categories, then adjust policy
 only when the agent should see fewer tools or needs explicit host access.
 
-| If you need to...                           | Use this first                                 | Then read                                                               |
-| ------------------------------------------- | ---------------------------------------------- | ----------------------------------------------------------------------- |
-| Let an agent act with existing capabilities | [Built-in tools](#built-in-tool-categories)    | [Tool categories](#built-in-tool-categories)                            |
-| Control what an agent can call              | [Tool policy](#configure-access-and-approvals) | [Tools and custom providers](/gateway/config-tools)                     |
-| Teach an agent a workflow                   | [Skills](#choose-tools-skills-or-plugins)      | [Skills](/tools/skills) and [Creating skills](/tools/creating-skills)   |
-| Add a new integration or runtime surface    | [Plugins](#extend-capabilities)                | [Plugins](/tools/plugin) and [Build plugins](/plugins/building-plugins) |
-| Run work later or in the background         | [Automation](/automation)                      | [Automation overview](/automation)                                      |
-| Coordinate multiple agents or harnesses     | [Sub-agents](/tools/subagents)                 | [ACP agents](/tools/acp-agents) and [Agent send](/tools/agent-send)     |
-| Search a large PI tool catalog              | [Tool Search](/tools/tool-search)              | [Tool Search](/tools/tool-search)                                       |
+| If you need to...                           | Use this first                                 | Then read                                                                                                     |
+| ------------------------------------------- | ---------------------------------------------- | ------------------------------------------------------------------------------------------------------------- |
+| Let an agent act with existing capabilities | [Built-in tools](#built-in-tool-categories)    | [Tool categories](#built-in-tool-categories)                                                                  |
+| Control what an agent can call              | [Tool policy](#configure-access-and-approvals) | [Tools and custom providers](/gateway/config-tools)                                                           |
+| Teach an agent a workflow                   | [Skills](#choose-tools-skills-or-plugins)      | [Skills](/tools/skills), [Skill routing](/tools/skill-routing), and [Creating skills](/tools/creating-skills) |
+| Add a new integration or runtime surface    | [Plugins](#extend-capabilities)                | [Plugins](/tools/plugin) and [Build plugins](/plugins/building-plugins)                                       |
+| Run work later or in the background         | [Automation](/automation)                      | [Automation overview](/automation)                                                                            |
+| Coordinate multiple agents or harnesses     | [Sub-agents](/tools/subagents)                 | [ACP agents](/tools/acp-agents) and [Agent send](/tools/agent-send)                                           |
+| Search a large PI tool catalog              | [Tool Search](/tools/tool-search)              | [Tool Search](/tools/tool-search)                                                                             |
 
 ## Choose tools, skills, or plugins
 
@@ -143,6 +143,8 @@ Choose the extension path by the job you need OpenClaw to do:
   [Build plugins](/plugins/building-plugins).
 - Add or tune reusable agent instructions with [Skills](/tools/skills) and
   [Creating skills](/tools/creating-skills).
+- Use [Skill routing](/tools/skill-routing) when a workspace exposes enough
+  skills that the agent needs a local shortlist before reading `SKILL.md`.
 - Package reusable workflow material with
   [Skill workshop](/plugins/skill-workshop) when the workflow belongs in a
   plugin-distributed skill bundle.

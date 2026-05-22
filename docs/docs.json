@@ -1233,6 +1233,7 @@
                 "group": "Skills",
                 "pages": [
                   "tools/skills",
+                  "tools/skill-routing",
                   "tools/creating-skills",
                   "tools/skills-config",
                   "tools/slash-commands",

@@ -14,6 +14,11 @@ containing a `SKILL.md` with YAML frontmatter and instructions. OpenClaw
 loads bundled skills plus optional local overrides, and filters them at
 load time based on environment, config, and binary presence.
 
+When a run has many visible skills, the agent can use
+[`local_skill_route`](/tools/skill-routing) to shortlist likely matches before
+reading a `SKILL.md`. Routing does not change skill visibility or allowlists; it
+only helps the agent choose which visible skill to read.
+
 ## Locations and precedence
 
 OpenClaw loads skills from these sources, **highest precedence first**:

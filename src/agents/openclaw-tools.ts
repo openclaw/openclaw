@@ -28,6 +28,7 @@ import {
   wrapToolWithBeforeToolCallHook,
 } from "./pi-tools.before-tool-call.js";
 import type { SandboxFsBridge } from "./sandbox/fs-bridge.js";
+import type { SkillSnapshot } from "./skills/types.js";
 import type { SpawnedToolContext } from "./spawned-context.js";
 import type { ToolFsPolicy } from "./tool-fs-policy.js";
 import { resolveToolLoopDetectionConfig } from "./tool-loop-detection-config.js";
@@ -49,6 +50,7 @@ import { createSessionsListTool } from "./tools/sessions-list-tool.js";
 import { createSessionsSendTool } from "./tools/sessions-send-tool.js";
 import { createSessionsSpawnTool } from "./tools/sessions-spawn-tool.js";
 import { createSessionsYieldTool } from "./tools/sessions-yield-tool.js";
+import { createSkillRouteTool } from "./tools/skill-route-tool.js";
 import { createSubagentsTool } from "./tools/subagents-tool.js";
 import { createTtsTool } from "./tools/tts-tool.js";
 import { createUpdatePlanTool } from "./tools/update-plan-tool.js";
@@ -145,6 +147,8 @@ export function createOpenClawTools(
     requesterSenderId?: string | null;
     /** Auth profiles already loaded for this run; used for prompt-time tool availability. */
     authProfileStore?: AuthProfileStore;
+    /** Skills available to this run; used by the local skill router. */
+    skillsSnapshot?: SkillSnapshot;
     /** Ephemeral session UUID — regenerated on /new and /reset. */
     sessionId?: string;
     /**
@@ -316,6 +320,7 @@ export function createOpenClawTools(
         senderIsOwner: options?.senderIsOwner,
       });
   const heartbeatTool = options?.enableHeartbeatTool ? createHeartbeatResponseTool() : null;
+  const skillRouteTool = createSkillRouteTool({ skillsSnapshot: options?.skillsSnapshot });
   options?.recordToolPrepStage?.("openclaw-tools:message-tool");
   const nodesToolBase = createNodesTool({
     agentSessionKey: options?.agentSessionKey,
@@ -389,7 +394,7 @@ export function createOpenClawTools(
           }),
         ]),
     ...(messageTool && includeMessageTool ? [messageTool] : []),
-    ...collectPresentOpenClawTools([heartbeatTool]),
+    ...collectPresentOpenClawTools([heartbeatTool, skillRouteTool]),
     createTtsTool({
       agentChannel: options?.agentChannel,
       config: resolvedConfig,

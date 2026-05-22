@@ -240,7 +240,11 @@ function buildExecApprovalPromptGuidance(params: {
   return 'If exec returns approval-pending, send the exact /approve command from "Reply with:"; do not ask for another code.';
 }
 
-function buildSkillsSection(params: { skillsPrompt?: string; readToolName: string }) {
+function buildSkillsSection(params: {
+  skillsPrompt?: string;
+  readToolName: string;
+  hasSkillRouteTool: boolean;
+}) {
   const trimmed = params.skillsPrompt?.trim();
   if (!trimmed) {
     return [];
@@ -248,12 +252,15 @@ function buildSkillsSection(params: { skillsPrompt?: string; readToolName: strin
   return [
     "## Skills",
     `Scan <available_skills>. If one clearly applies, read its SKILL.md at exact <location> with \`${params.readToolName}\`, then follow it.`,
+    params.hasSkillRouteTool
+      ? "If skill choice is unclear, call `local_skill_route` with the user request before reading any SKILL.md."
+      : "",
     "If several apply, choose the most specific. If none clearly apply, read none.",
     "One skill up front max. Never guess/fabricate skill paths.",
     "External API writes: batch when safe, avoid tight loops, respect 429/Retry-After.",
     trimmed,
     "",
-  ];
+  ].filter(Boolean);
 }
 
 function buildMemorySection(params: {
@@ -770,6 +777,7 @@ export function buildAgentSystemPrompt(params: {
       "Show a /status-equivalent status card (usage + time + Reasoning/Verbose/Elevated); use for model-use questions (📊 session_status); optional per-session model override",
     image: "Analyze an image with the configured image model",
     image_generate: "Generate images with the configured image-generation model",
+    local_skill_route: "Find likely local skills for the current task",
   };
 
   const toolOrder = [
@@ -800,6 +808,7 @@ export function buildAgentSystemPrompt(params: {
     "session_status",
     "image",
     "image_generate",
+    "local_skill_route",
   ];
 
   const rawToolNames = (params.toolNames ?? []).map((tool) => tool.trim());
@@ -934,6 +943,7 @@ export function buildAgentSystemPrompt(params: {
   const skillsSection = buildSkillsSection({
     skillsPrompt,
     readToolName,
+    hasSkillRouteTool: availableTools.has("local_skill_route"),
   });
   const memorySection = buildMemorySection({
     isMinimal,

@@ -963,6 +963,7 @@ export function createOpenClawCodingTools(options?: {
           requesterSenderId: options?.senderId,
           senderIsOwner: options?.senderIsOwner,
           authProfileStore: options?.authProfileStore,
+          skillsSnapshot: options?.skillsSnapshot,
           sessionId: options?.sessionId,
           inheritedToolAllowlist,
           inheritedToolDenylist,
