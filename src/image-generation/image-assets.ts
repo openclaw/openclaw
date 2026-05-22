@@ -21,6 +21,7 @@ export type OpenAiCompatibleImageResponseEntry = {
 
 export type OpenAiCompatibleImageResponsePayload = {
   data?: unknown;
+  usage?: unknown;
 };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
