@@ -43,6 +43,7 @@ type CodexDynamicToolHookContext = {
 type CodexToolResultHookContext = Omit<CodexDynamicToolHookContext, "config">;
 
 export type CodexDynamicToolBridge = {
+  availableSpecs: CodexDynamicToolSpec[];
   specs: CodexDynamicToolSpec[];
   handleToolCall: (
     params: CodexDynamicToolCallParams,
@@ -70,6 +71,7 @@ const DEFAULT_CODEX_DYNAMIC_TOOL_RESULT_MAX_CHARS = 16_000;
 
 export function createCodexDynamicToolBridge(params: {
   tools: AnyAgentTool[];
+  registeredTools?: AnyAgentTool[];
   signal: AbortSignal;
   hookContext?: CodexDynamicToolHookContext;
   loading?: CodexDynamicToolsLoading;
@@ -85,6 +87,8 @@ export function createCodexDynamicToolBridge(params: {
     return wrapToolWithBeforeToolCallHook(tool, params.hookContext, { emitDiagnostics: false });
   });
   const toolMap = new Map(tools.map((tool) => [tool.name, tool]));
+  const registeredTools = params.registeredTools ?? tools;
+  const registeredToolNames = new Set(registeredTools.map((tool) => tool.name));
   const telemetry: CodexDynamicToolBridge["telemetry"] = {
     didSendViaMessagingTool: false,
     messagingToolSentTexts: [],
@@ -106,7 +110,14 @@ export function createCodexDynamicToolBridge(params: {
   ]);
 
   return {
-    specs: tools.map((tool) =>
+    availableSpecs: tools.map((tool) =>
+      createCodexDynamicToolSpec({
+        tool,
+        loading: params.loading ?? "searchable",
+        directToolNames,
+      }),
+    ),
+    specs: registeredTools.map((tool) =>
       createCodexDynamicToolSpec({
         tool,
         loading: params.loading ?? "searchable",
@@ -117,6 +128,17 @@ export function createCodexDynamicToolBridge(params: {
     handleToolCall: async (call, options) => {
       const tool = toolMap.get(call.tool);
       if (!tool) {
+        if (registeredToolNames.has(call.tool)) {
+          return {
+            contentItems: [
+              {
+                type: "inputText",
+                text: `OpenClaw tool is not available for this turn: ${call.tool}`,
+              },
+            ],
+            success: false,
+          };
+        }
         return {
           contentItems: [{ type: "inputText", text: `Unknown OpenClaw tool: ${call.tool}` }],
           success: false,
