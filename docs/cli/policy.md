@@ -133,10 +133,12 @@ provider and SecretRef provenance, config auth profile metadata, and `TOOLS.md`
 declarations as evidence, then reports observed state that does not conform. If
 a policy denies non-loopback Gateway binds, omit `gateway.bind` only when you
 are willing to review the runtime default; set `gateway.bind=loopback` for
-strict config conformance. For read-only agent posture,
-`agents.workspace.denyTools` supports `exec`, `process`, `write`, `edit`, and
-`apply_patch`; OpenClaw config `group:fs` covers file mutation tools and
-`group:runtime` covers shell/process tools. Secret evidence records
+strict config conformance. For read-only agent posture, configure sandbox mode
+on the applicable defaults or agent and set `workspaceAccess` to `none` or
+`ro`; omitted or `off` sandbox mode does not satisfy a read-only/no-write
+policy. `agents.workspace.denyTools` supports `exec`, `process`, `write`,
+`edit`, and `apply_patch`; OpenClaw config `group:fs` covers file mutation tools
+and `group:runtime` covers shell/process tools. Secret evidence records
 provider/source posture and SecretRef metadata, never raw secret values. Policy
 does not read or attest per-agent credential stores such as `auth-profiles.json`;
 those stores remain owned by the existing auth and credential flows.
@@ -289,6 +291,9 @@ Example JSON output:
         "source": "oc://openclaw.config/agents/defaults/sandbox/workspaceAccess",
         "scope": "defaults",
         "value": "ro",
+        "sandboxMode": "all",
+        "sandboxModeSource": "oc://openclaw.config/agents/defaults/sandbox/mode",
+        "sandboxEnabled": true,
         "explicit": true
       },
       {
@@ -409,7 +414,7 @@ Policy currently verifies:
 | `policy/gateway-remote-enabled`              | Gateway remote mode is active when policy denies it.                             |
 | `policy/gateway-http-endpoint-enabled`       | A Gateway HTTP API endpoint is enabled while denied by policy.                   |
 | `policy/gateway-http-url-fetch-unrestricted` | Gateway HTTP URL-fetch input lacks a required URL allowlist.                     |
-| `policy/agents-workspace-access-denied`      | Agent sandbox workspace access is outside the policy allowlist.                  |
+| `policy/agents-workspace-access-denied`      | Agent sandbox mode or workspace access is outside the policy allowlist.          |
 | `policy/agents-tool-not-denied`              | An agent or default config does not deny a tool required by policy.              |
 | `policy/secrets-unmanaged-provider`          | A config SecretRef references a provider not declared under `secrets.providers`. |
 | `policy/secrets-denied-provider-source`      | A config secret provider or SecretRef uses a source denied by policy.            |

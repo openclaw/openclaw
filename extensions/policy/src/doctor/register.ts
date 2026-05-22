@@ -1770,20 +1770,27 @@ function agentWorkspaceAccessFindings(
   return (evidence.agentWorkspace ?? [])
     .filter(
       (entry) =>
-        entry.kind === "workspaceAccess" && entry.value !== undefined && !allowed.has(entry.value),
+        entry.kind === "workspaceAccess" &&
+        entry.value !== undefined &&
+        (entry.sandboxEnabled !== true || !allowed.has(entry.value)),
     )
     .map((entry): HealthFinding => {
       const label = entry.agentId === undefined ? "agents.defaults" : `agent '${entry.agentId}'`;
+      const sandboxDisabled = entry.sandboxEnabled !== true;
+      const observed = sandboxDisabled
+        ? `sandbox mode '${entry.sandboxMode ?? "off"}'`
+        : `sandbox workspaceAccess '${entry.value ?? ""}'`;
+      const ocPath = sandboxDisabled ? (entry.sandboxModeSource ?? entry.source) : entry.source;
       return {
         checkId: CHECK_IDS.policyAgentsWorkspaceAccessDenied,
         severity: "error",
-        message: `${label} sandbox workspaceAccess '${entry.value ?? ""}' is not allowed by policy.`,
+        message: `${label} ${observed} is not allowed by policy.`,
         source: "policy",
         path: "openclaw config",
-        ocPath: entry.source,
-        target: entry.source,
+        ocPath,
+        target: ocPath,
         requirement: `oc://${policyDocName}/agents/workspace/allowedAccess`,
-        fixHint: "Use sandbox workspaceAccess none/ro or update policy after review.",
+        fixHint: "Enable sandbox mode with workspaceAccess none/ro or update policy after review.",
       };
     });
 }

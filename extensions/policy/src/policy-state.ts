@@ -98,6 +98,9 @@ export type PolicyAgentWorkspaceEvidence = {
   readonly scope: "defaults" | "agent";
   readonly agentId?: string;
   readonly value?: string;
+  readonly sandboxMode?: string;
+  readonly sandboxModeSource?: string;
+  readonly sandboxEnabled?: boolean;
   readonly tool?: string;
   readonly denied?: boolean;
   readonly explicit?: boolean;
@@ -691,6 +694,15 @@ function pushAgentWorkspaceEvidence(
     readonly inheritedToolsSourceBase: string;
   },
 ): void {
+  const explicitSandboxMode = readString(params.sandbox.mode);
+  const inheritedSandboxMode = readString(params.inheritedSandbox.mode);
+  const sandboxMode = explicitSandboxMode ?? inheritedSandboxMode ?? "off";
+  const sandboxModeSource =
+    explicitSandboxMode !== undefined
+      ? `${params.workspaceSourceBase}/sandbox/mode`
+      : inheritedSandboxMode !== undefined
+        ? `${params.inheritedWorkspaceSourceBase}/sandbox/mode`
+        : "oc://openclaw.config/agents/defaults/sandbox/mode";
   const explicitWorkspaceAccess = readString(params.sandbox.workspaceAccess);
   const inheritedWorkspaceAccess = readString(params.inheritedSandbox.workspaceAccess);
   entries.push({
@@ -705,6 +717,9 @@ function pushAgentWorkspaceEvidence(
     scope: params.scope,
     ...(params.agentId === undefined ? {} : { agentId: params.agentId }),
     value: explicitWorkspaceAccess ?? inheritedWorkspaceAccess ?? "none",
+    sandboxMode,
+    sandboxModeSource,
+    sandboxEnabled: sandboxMode !== "off",
     explicit: explicitWorkspaceAccess !== undefined,
   });
 

@@ -2062,7 +2062,7 @@ describe("registerPolicyDoctorChecks", () => {
       },
       agents: {
         defaults: {
-          sandbox: { workspaceAccess: "rw" },
+          sandbox: { mode: "all", workspaceAccess: "rw" },
         },
         list: [
           {
@@ -2097,6 +2097,8 @@ describe("registerPolicyDoctorChecks", () => {
           id: "agents-defaults-workspace-access",
           kind: "workspaceAccess",
           value: "rw",
+          sandboxMode: "all",
+          sandboxEnabled: true,
           source: "oc://openclaw.config/agents/defaults/sandbox/workspaceAccess",
         }),
         expect.objectContaining({
@@ -2142,7 +2144,7 @@ describe("registerPolicyDoctorChecks", () => {
       },
       agents: {
         defaults: {
-          sandbox: { workspaceAccess: "ro" },
+          sandbox: { mode: "all", workspaceAccess: "ro" },
         },
         list: [
           {
@@ -2170,6 +2172,46 @@ describe("registerPolicyDoctorChecks", () => {
     const result = await runDoctorLintChecks(ctx(configPath, cfg));
 
     expect(result.findings).toEqual([]);
+  });
+
+  it("reports read-only workspace policy when sandbox mode is disabled", async () => {
+    const configPath = join(workspaceDir, "openclaw.jsonc");
+    const cfg = {
+      ...cfgWithPolicy(),
+      tools: {
+        deny: ["group:runtime", "group:fs"],
+      },
+      agents: {
+        defaults: {
+          sandbox: { workspaceAccess: "ro" },
+        },
+      },
+    } as unknown as OpenClawConfig;
+    await fs.writeFile(configPath, "{}", "utf-8");
+    await fs.writeFile(
+      join(workspaceDir, "policy.jsonc"),
+      JSON.stringify({
+        agents: {
+          workspace: {
+            allowedAccess: ["none", "ro"],
+            denyTools: ["exec", "process", "write", "edit", "apply_patch"],
+          },
+        },
+      }),
+      "utf-8",
+    );
+
+    registerPolicyDoctorChecks();
+    const result = await runDoctorLintChecks(ctx(configPath, cfg));
+
+    expect(result.findings).toEqual([
+      expect.objectContaining({
+        checkId: "policy/agents-workspace-access-denied",
+        message: "agents.defaults sandbox mode 'off' is not allowed by policy.",
+        ocPath: "oc://openclaw.config/agents/defaults/sandbox/mode",
+        requirement: "oc://policy.jsonc/agents/workspace/allowedAccess",
+      }),
+    ]);
   });
 
   it("reports gateway exposure settings denied by policy", async () => {
