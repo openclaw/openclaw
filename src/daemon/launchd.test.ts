@@ -726,6 +726,63 @@ describe("launchd install", () => {
     expect(command?.environmentValueSources?.OPENAI_API_KEY).toBe("file");
   });
 
+  it("repairs a mangled label-derived service-env wrapper path on restart", async () => {
+    const callerEnv = createDefaultLaunchdEnv();
+    const serviceEnv = {
+      ...callerEnv,
+      OPENCLAW_STATE_DIR: "/Users/test/service-env/custom-state",
+    };
+    await installLaunchAgent({
+      env: serviceEnv,
+      stdout: new PassThrough(),
+      programArguments: defaultProgramArguments,
+      environment: {
+        OPENCLAW_GATEWAY_PORT: "18789",
+        OPENCLAW_STATE_DIR: serviceEnv.OPENCLAW_STATE_DIR,
+      },
+    });
+
+    const plistPath = resolveLaunchAgentPlistPath(callerEnv);
+    const envFilePath = "/Users/test/service-env/custom-state/service-env/ai.openclaw.gateway.env";
+    const wrapperPath =
+      "/Users/test/service-env/custom-state/service-env/ai.openclaw.gateway-env-wrapper.sh";
+    const callerEnvFilePath = "/Users/test/.openclaw/service-env/ai.openclaw.gateway.env";
+    const callerWrapperPath =
+      "/Users/test/.openclaw/service-env/ai.openclaw.gateway-env-wrapper.sh";
+    const mangledEnvFilePath =
+      "/Users/test/service-env/custom-state/service-env/[ai.openclaw.gateway.env](http:/ai.openclaw.gateway.env)";
+    const mangledWrapperPath =
+      "/Users/test/service-env/custom-state/service-env/[ai.openclaw.gateway-env-wrapper.sh](http:/ai.openclaw.gateway-env-wrapper.sh)";
+    state.files.set(
+      plistPath,
+      (state.files.get(plistPath) ?? "")
+        .replace(wrapperPath, mangledWrapperPath)
+        .replace(envFilePath, mangledEnvFilePath),
+    );
+
+    const command = await readLaunchAgentProgramArguments(callerEnv);
+    expect(command?.programArguments).toEqual(defaultProgramArguments);
+    expect(command?.environment?.OPENCLAW_GATEWAY_PORT).toBe("18789");
+    expect(command?.environment?.OPENCLAW_STATE_DIR).toBe(serviceEnv.OPENCLAW_STATE_DIR);
+    expect(command?.environmentValueSources?.OPENCLAW_GATEWAY_PORT).toBe("file");
+
+    await restartLaunchAgent({
+      env: callerEnv,
+      stdout: new PassThrough(),
+    });
+
+    const rewritten = state.files.get(plistPath) ?? "";
+    expect(rewritten).toContain(`<string>${callerWrapperPath}</string>`);
+    expect(rewritten).toContain(`<string>${callerEnvFilePath}</string>`);
+    expect(rewritten).not.toContain(mangledEnvFilePath);
+    expect(rewritten).not.toContain(mangledWrapperPath);
+    const rewrittenEnv = state.files.get(callerEnvFilePath) ?? "";
+    expect(rewrittenEnv).toContain("export OPENCLAW_GATEWAY_PORT='18789'");
+    expect(rewrittenEnv).toContain(
+      "export OPENCLAW_STATE_DIR='/Users/test/service-env/custom-state'",
+    );
+  });
+
   it("creates the LaunchAgent TMPDIR before bootstrap", async () => {
     const env = createDefaultLaunchdEnv();
     const tmpDir = "/Users/test/.openclaw/tmp";

@@ -232,11 +232,23 @@ export function resolveLaunchAgentPlistPath(env: GatewayServiceEnv): string {
   return resolveLaunchAgentPlistPathForLabel(env, label);
 }
 
+function resolveLaunchAgentEnvironmentReadOptions(env: GatewayServiceEnv, label: string) {
+  return {
+    expectedEnvironmentWrapperPath: resolveLaunchAgentEnvWrapperPath(env, label),
+    expectedEnvironmentFilePath: resolveLaunchAgentEnvFilePath(env, label),
+    generatedEnvironmentLabel: label,
+  };
+}
+
 export async function readLaunchAgentProgramArguments(
   env: GatewayServiceEnv,
 ): Promise<GatewayServiceCommandConfig | null> {
+  const label = resolveLaunchAgentLabel({ env });
   const plistPath = resolveLaunchAgentPlistPath(env);
-  return readLaunchAgentProgramArgumentsFromFile(plistPath);
+  return readLaunchAgentProgramArgumentsFromFile(
+    plistPath,
+    resolveLaunchAgentEnvironmentReadOptions(env, label),
+  );
 }
 
 function buildLaunchAgentPlist({
@@ -926,7 +938,10 @@ async function rewriteLaunchAgentPlistForRestart({
   label: string;
   plistPath: string;
 }): Promise<boolean> {
-  const existing = await readLaunchAgentProgramArgumentsFromFile(plistPath);
+  const existing = await readLaunchAgentProgramArgumentsFromFile(
+    plistPath,
+    resolveLaunchAgentEnvironmentReadOptions(env, label),
+  );
   if (!existing?.programArguments.length) {
     return false;
   }
