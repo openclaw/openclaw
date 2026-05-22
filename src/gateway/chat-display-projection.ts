@@ -761,9 +761,9 @@ function buildMessageToolVisibleReplyMirror(
       mirror[field] = pending.anchor[field];
     }
   }
-  const transcriptMeta = readRecord((pending.completionAnchor ?? pending.anchor).__openclaw);
+  const transcriptMeta = readRecord((pending.completionAnchor ?? pending.anchor)["__openclaw"]);
   if (transcriptMeta) {
-    mirror.__openclaw = { ...transcriptMeta };
+    mirror["__openclaw"] = { ...transcriptMeta };
   }
   return mirror;
 }
