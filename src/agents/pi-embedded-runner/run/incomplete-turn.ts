@@ -337,8 +337,51 @@ function readToolResultAggregatedText(message: AgentMessage): string | undefined
   return trimmed || undefined;
 }
 
+function readToolResultBlockText(block: unknown): string | undefined {
+  if (!block || typeof block !== "object") {
+    return undefined;
+  }
+  const rec = block as { type?: unknown; text?: unknown; content?: unknown };
+  if (rec.type !== "toolResult") {
+    return undefined;
+  }
+  if (typeof rec.text === "string") {
+    const text = rec.text.trim();
+    if (text.length > 0) {
+      return text;
+    }
+  }
+  if (typeof rec.content === "string") {
+    const text = rec.content.trim();
+    if (text.length > 0) {
+      return text;
+    }
+  }
+  const text = collectTextContentBlocks(rec.content)
+    .map((item) => item.trim())
+    .filter((item) => item.length > 0)
+    .join("\n");
+  return text || undefined;
+}
+
+function readToolResultContentText(message: AgentMessage): string | undefined {
+  const content = (message as { content?: unknown }).content;
+  if (!Array.isArray(content)) {
+    return undefined;
+  }
+  const text = content
+    .map((block) => readToolResultBlockText(block))
+    .filter((item): item is string => typeof item === "string" && item.length > 0)
+    .join("\n");
+  return text || undefined;
+}
+
 function readToolResultText(message: AgentMessage): string | undefined {
-  return readMessageTextContent(message) ?? readToolResultAggregatedText(message);
+  return (
+    readMessageTextContent(message) ??
+    readToolResultContentText(message) ??
+    readToolResultAggregatedText(message)
+  );
 }
 
 function readTrailingSuccessfulToolResultText(

@@ -158,7 +158,7 @@ describe("runEmbeddedPiAgent incomplete-turn safety", () => {
     expect(payload).toEqual({ text: "NO_REPLY" });
   });
 
-  it("promotes a trailing exec stdout tool result when explicitly allowed", () => {
+  it("promotes a trailing app-server exec stdout tool result when explicitly allowed", () => {
     const payload = resolveSilentToolResultReplyPayload({
       isCronTrigger: false,
       allowTrailingToolResultPayload: true,
@@ -171,8 +171,14 @@ describe("runEmbeddedPiAgent incomplete-turn safety", () => {
         messagesSnapshot: [
           {
             role: "toolResult",
-            content: [{ type: "text", text: "STDOUT_OK" }],
-            details: { aggregated: "STDOUT_OK" },
+            content: [
+              {
+                type: "toolResult",
+                toolCallId: "call-1",
+                content: "STDOUT_OK",
+                text: "STDOUT_OK",
+              },
+            ],
           } as unknown as EmbeddedRunAttemptResult["messagesSnapshot"][number],
           {
             role: "assistant",
