@@ -5,6 +5,7 @@ export {
   configValidationIssuesToHealthFindings,
   registerCoreHealthChecks,
 } from "../flows/doctor-core-checks.js";
+export { defineSplitHealthCheck } from "../flows/health-check-adapter.js";
 export {
   exitCodeFromFindings,
   runDoctorLintChecks,
@@ -15,9 +16,12 @@ export {
   parseHealthFindingSeverity,
   type HealthCheck,
   type HealthCheckContext,
+  type HealthCheckRunContext,
+  type HealthCheckRunResult,
   type HealthCheckScope,
   type HealthFinding,
   type HealthFindingSeverity,
+  type RegisteredHealthCheck,
   type HealthRepairDiff,
   type HealthRepairEffect,
   type HealthRepairContext,

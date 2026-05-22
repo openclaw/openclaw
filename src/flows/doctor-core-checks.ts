@@ -12,8 +12,9 @@ import type { ConfigValidationIssue, OpenClawConfig } from "../config/types.open
 import { resolveSecretInputRef } from "../config/types.secrets.js";
 import { hasAmbiguousGatewayAuthModeConfig } from "../gateway/auth-mode-policy.js";
 import { resolveGatewayAuth } from "../gateway/auth.js";
+import { defineSplitHealthCheck } from "./health-check-adapter.js";
 import { registerHealthCheck } from "./health-check-registry.js";
-import type { HealthCheck, HealthFinding } from "./health-checks.js";
+import type { HealthFinding, RegisteredHealthCheck } from "./health-checks.js";
 
 const BROWSER_CLAWD_PROFILE_RESIDUE_CHECK_ID = "core/doctor/browser-clawd-profile-residue";
 const FINAL_CONFIG_VALIDATION_CHECK_ID = "core/doctor/final-config-validation";
@@ -72,7 +73,7 @@ export function configValidationIssuesToHealthFindings(
   );
 }
 
-const gatewayConfigCheck: HealthCheck = {
+const gatewayConfigCheck: RegisteredHealthCheck = defineSplitHealthCheck({
   id: "core/doctor/gateway-config",
   kind: "core",
   description: "openclaw.jsonc gateway block is set and unambiguous.",
@@ -102,9 +103,9 @@ const gatewayConfigCheck: HealthCheck = {
     }
     return findings;
   },
-};
+});
 
-const commandOwnerCheck: HealthCheck = {
+const commandOwnerCheck: RegisteredHealthCheck = defineSplitHealthCheck({
   id: "core/doctor/command-owner",
   kind: "core",
   description: "An owner account is configured for owner-only commands.",
@@ -125,13 +126,13 @@ const commandOwnerCheck: HealthCheck = {
       },
     ];
   },
-};
+});
 
 function resolveDoctorMode(cfg: OpenClawConfig): "local" | "remote" {
   return cfg.gateway?.mode === "remote" ? "remote" : "local";
 }
 
-const gatewayAuthCheck: HealthCheck = {
+const gatewayAuthCheck: RegisteredHealthCheck = defineSplitHealthCheck({
   id: "core/doctor/gateway-auth",
   kind: "core",
   description: "Local Gateway auth mode has a usable token or another explicit auth mode.",
@@ -177,9 +178,9 @@ const gatewayAuthCheck: HealthCheck = {
       },
     ];
   },
-};
+});
 
-const hooksModelCheck: HealthCheck = {
+const hooksModelCheck: RegisteredHealthCheck = defineSplitHealthCheck({
   id: "core/doctor/hooks-model",
   kind: "core",
   description: "hooks.gmail.model resolves to an allowed catalog model.",
@@ -240,9 +241,9 @@ const hooksModelCheck: HealthCheck = {
     }
     return findings;
   },
-};
+});
 
-const legacyStateCheck: HealthCheck = {
+const legacyStateCheck: RegisteredHealthCheck = defineSplitHealthCheck({
   id: "core/doctor/legacy-state",
   kind: "core",
   description: "Legacy sessions, agent state, and channel auth paths have been migrated.",
@@ -260,9 +261,9 @@ const legacyStateCheck: HealthCheck = {
       }),
     );
   },
-};
+});
 
-const bootstrapSizeCheck: HealthCheck = {
+const bootstrapSizeCheck: RegisteredHealthCheck = defineSplitHealthCheck({
   id: "core/doctor/bootstrap-size",
   kind: "core",
   description: "Workspace bootstrap files fit within configured injection limits.",
@@ -319,7 +320,7 @@ const bootstrapSizeCheck: HealthCheck = {
     }
     return findings;
   },
-};
+});
 
 function normalizeDoctorNoteLine(line: string): string {
   return line.replace(/^- /, "").trim();
@@ -388,7 +389,7 @@ function browserNoteIsLintFinding(text: string): boolean {
   );
 }
 
-const claudeCliCheck: HealthCheck = {
+const claudeCliCheck: RegisteredHealthCheck = defineSplitHealthCheck({
   id: "core/doctor/claude-cli",
   kind: "core",
   description: "Claude CLI readiness is reported through doctor presentation notes.",
@@ -408,10 +409,10 @@ const claudeCliCheck: HealthCheck = {
       },
     });
   },
-};
+});
 
-function createSecurityCheck(deps: CoreHealthCheckDeps): HealthCheck {
-  return {
+function createSecurityCheck(deps: CoreHealthCheckDeps): RegisteredHealthCheck {
+  return defineSplitHealthCheck({
     id: "core/doctor/security",
     kind: "core",
     description: "Security posture checks produce structured findings.",
@@ -426,10 +427,10 @@ function createSecurityCheck(deps: CoreHealthCheckDeps): HealthCheck {
         }),
       );
     },
-  };
+  });
 }
 
-const openAIOAuthTlsCheck: HealthCheck = {
+const openAIOAuthTlsCheck: RegisteredHealthCheck = defineSplitHealthCheck({
   id: "core/doctor/oauth-tls",
   kind: "core",
   description: "OpenAI OAuth TLS prerequisites are satisfied before browser auth.",
@@ -456,9 +457,9 @@ const openAIOAuthTlsCheck: HealthCheck = {
       }),
     ];
   },
-};
+});
 
-const legacyWhatsAppCrontabCheck: HealthCheck = {
+const legacyWhatsAppCrontabCheck: RegisteredHealthCheck = defineSplitHealthCheck({
   id: "core/doctor/legacy-whatsapp-crontab",
   kind: "core",
   description: "Legacy WhatsApp crontab health entries are detected as structured findings.",
@@ -478,9 +479,9 @@ const legacyWhatsAppCrontabCheck: HealthCheck = {
       }),
     ];
   },
-};
+});
 
-const gatewayPlatformNotesCheck: HealthCheck = {
+const gatewayPlatformNotesCheck: RegisteredHealthCheck = defineSplitHealthCheck({
   id: "core/doctor/gateway-services/platform-notes",
   kind: "core",
   description: "Gateway platform notes are captured as structured findings.",
@@ -497,9 +498,9 @@ const gatewayPlatformNotesCheck: HealthCheck = {
       }),
     );
   },
-};
+});
 
-const browserCheck: HealthCheck = {
+const browserCheck: RegisteredHealthCheck = defineSplitHealthCheck({
   id: "core/doctor/browser",
   kind: "core",
   description: "Browser readiness is reported through doctor presentation notes.",
@@ -518,9 +519,9 @@ const browserCheck: HealthCheck = {
       },
     });
   },
-};
+});
 
-const workspaceStatusCheck: HealthCheck = {
+const workspaceStatusCheck: RegisteredHealthCheck = defineSplitHealthCheck({
   id: "core/doctor/workspace-status",
   kind: "core",
   description: "Workspace directory exists and has no legacy duplicates.",
@@ -545,10 +546,10 @@ const workspaceStatusCheck: HealthCheck = {
       },
     ];
   },
-};
+});
 
-function createSkillsReadinessCheck(deps: CoreHealthCheckDeps): HealthCheck {
-  return {
+function createSkillsReadinessCheck(deps: CoreHealthCheckDeps): RegisteredHealthCheck {
+  return defineSplitHealthCheck({
     id: "core/doctor/skills-readiness",
     kind: "core",
     description: "Allowed skills are usable in the current runtime environment.",
@@ -580,7 +581,7 @@ function createSkillsReadinessCheck(deps: CoreHealthCheckDeps): HealthCheck {
         })),
       };
     },
-  };
+  });
 }
 
 function unavailableSkillToFinding(skill: SkillStatusEntry): HealthFinding {
@@ -633,7 +634,7 @@ function formatWouldArchiveBrowserResidue(residue: LegacyClawdBrowserProfileResi
   ].join("\n");
 }
 
-const browserClawdProfileResidueCheck: HealthCheck = {
+const browserClawdProfileResidueCheck: RegisteredHealthCheck = defineSplitHealthCheck({
   id: BROWSER_CLAWD_PROFILE_RESIDUE_CHECK_ID,
   kind: "core",
   description:
@@ -693,9 +694,9 @@ const browserClawdProfileResidueCheck: HealthCheck = {
       effects: result.changes.length > 0 ? [effect] : [],
     };
   },
-};
+});
 
-const finalConfigValidationCheck: HealthCheck = {
+const finalConfigValidationCheck: RegisteredHealthCheck = defineSplitHealthCheck({
   id: FINAL_CONFIG_VALIDATION_CHECK_ID,
   kind: "core",
   description: "Active openclaw.jsonc parses and conforms to the config schema.",
@@ -708,10 +709,10 @@ const finalConfigValidationCheck: HealthCheck = {
     }
     return configValidationIssuesToHealthFindings(snap.issues);
   },
-};
+});
 
-function createWorkspaceSuggestionsCheck(deps: CoreHealthCheckDeps): HealthCheck {
-  return {
+function createWorkspaceSuggestionsCheck(deps: CoreHealthCheckDeps): RegisteredHealthCheck {
+  return defineSplitHealthCheck({
     id: "core/doctor/workspace-suggestions",
     kind: "core",
     description: "Workspace backup and memory-system suggestions are reported as doctor notes.",
@@ -734,23 +735,26 @@ function createWorkspaceSuggestionsCheck(deps: CoreHealthCheckDeps): HealthCheck
       }
       return [];
     },
-  };
+  });
 }
 
-const shellCompletionCheck: HealthCheck = {
+const shellCompletionCheck: RegisteredHealthCheck = {
   id: "core/doctor/shell-completion",
   kind: "core",
   description: "Shell completion status is detected and repairable through cached completion.",
   source: "doctor",
-  async detect(ctx) {
+  async run(ctx) {
     const { detectShellCompletionHealth } = await import("../commands/doctor-completion.js");
     const options =
       ctx.mode === "lint" ? { ...ctx.doctor?.options, nonInteractive: true } : ctx.doctor?.options;
-    return detectShellCompletionHealth(options);
-  },
-  async repair(ctx) {
-    if (ctx.dryRun === true) {
+    const findings = await detectShellCompletionHealth(options);
+    if (findings.length === 0) {
+      return { findings };
+    }
+    if (!ctx.repair) {
       return {
+        findings,
+        status: "repairable",
         changes: ["Would repair shell completion setup."],
         effects: [
           {
@@ -770,6 +774,7 @@ const shellCompletionCheck: HealthCheck = {
       },
     });
     return {
+      findings,
       status: result.status,
       changes: result.changes,
       warnings: result.warnings,
@@ -777,26 +782,29 @@ const shellCompletionCheck: HealthCheck = {
   },
 };
 
-const startupChannelMaintenanceCheck: HealthCheck = {
+const startupChannelMaintenanceCheck: RegisteredHealthCheck = {
   id: "core/doctor/startup-channel-maintenance",
   kind: "core",
   description: "Channel plugin startup maintenance runs through structured doctor repair.",
   source: "doctor",
-  async detect(ctx, scope) {
-    if (ctx.mode !== "fix" || scope?.findings !== undefined) {
-      return [];
+  async run(ctx, scope) {
+    if (ctx.mode !== "fix") {
+      return { findings: [] };
     }
-    return [
+    if (scope?.findings !== undefined) {
+      return { findings: [] };
+    }
+    const findings: HealthFinding[] = [
       {
         checkId: "core/doctor/startup-channel-maintenance",
         severity: "info",
         message: "Channel plugin startup maintenance should run during doctor repair.",
       },
     ];
-  },
-  async repair(ctx) {
-    if (ctx.dryRun === true) {
+    if (!ctx.repair) {
       return {
+        findings,
+        status: "repairable",
         changes: ["Would run channel plugin startup maintenance."],
         effects: [
           {
@@ -816,11 +824,11 @@ const startupChannelMaintenanceCheck: HealthCheck = {
       runtime: ctx.runtime,
       shouldRepair: true,
     });
-    return { changes: [] };
+    return { findings, changes: [] };
   },
 };
 
-const systemdLingerCheck: HealthCheck = {
+const systemdLingerCheck: RegisteredHealthCheck = defineSplitHealthCheck({
   id: "core/doctor/systemd-linger",
   kind: "core",
   description: "systemd user linger status is detected and repairable for local Gateway.",
@@ -889,9 +897,9 @@ const systemdLingerCheck: HealthCheck = {
       warnings: result.warnings,
     };
   },
-};
+});
 
-function createConvertedWorkflowChecks(deps: CoreHealthCheckDeps): readonly HealthCheck[] {
+function createConvertedWorkflowChecks(deps: CoreHealthCheckDeps): readonly RegisteredHealthCheck[] {
   return [
     claudeCliCheck,
     gatewayAuthCheck,
@@ -928,7 +936,7 @@ export function resetCoreHealthChecksForTest(): void {
 
 export function createCoreHealthChecks(
   deps: CoreHealthCheckDeps = defaultCoreHealthCheckDeps,
-): readonly HealthCheck[] {
+): readonly RegisteredHealthCheck[] {
   return [
     gatewayConfigCheck,
     ...createConvertedWorkflowChecks(deps),
@@ -940,7 +948,7 @@ export function createCoreHealthChecks(
   ];
 }
 
-export const CORE_HEALTH_CHECKS: readonly HealthCheck[] = createCoreHealthChecks();
+export const CORE_HEALTH_CHECKS: readonly RegisteredHealthCheck[] = createCoreHealthChecks();
 
 function formatMissingSkillSummary(skill: SkillStatusEntry): string {
   const missing: string[] = [];

@@ -2,6 +2,7 @@ import { basename, isAbsolute, resolve } from "node:path";
 import JSON5 from "json5";
 import { normalizeProviderId } from "openclaw/plugin-sdk/provider-model-shared";
 import {
+  defineSplitHealthCheck,
   registerHealthCheck as registerPluginHealthCheck,
   type HealthCheck,
   type HealthCheckContext,
@@ -110,7 +111,7 @@ export function evaluatePolicy(ctx: HealthCheckContext): Promise<PolicyEvaluatio
   return next;
 }
 
-const policyMissingFileCheck: HealthCheck = {
+const policyMissingFileCheck: HealthCheck = defineSplitHealthCheck({
   id: CHECK_IDS.policyMissingFile,
   kind: "plugin",
   description: "The enabled Policy plugin has a policy file to verify.",
@@ -118,9 +119,9 @@ const policyMissingFileCheck: HealthCheck = {
   async detect(ctx) {
     return findingsForCheck(await evaluatePolicy(ctx), CHECK_IDS.policyMissingFile);
   },
-};
+});
 
-const policyHashMismatchCheck: HealthCheck = {
+const policyHashMismatchCheck: HealthCheck = defineSplitHealthCheck({
   id: CHECK_IDS.policyHashMismatch,
   kind: "plugin",
   description: "The policy file matches the configured expected hash.",
@@ -128,9 +129,9 @@ const policyHashMismatchCheck: HealthCheck = {
   async detect(ctx) {
     return findingsForCheck(await evaluatePolicy(ctx), CHECK_IDS.policyHashMismatch);
   },
-};
+});
 
-const policyAttestationMismatchCheck: HealthCheck = {
+const policyAttestationMismatchCheck = defineSplitHealthCheck({
   id: CHECK_IDS.policyAttestationMismatch,
   kind: "plugin",
   description: "The current policy check matches the accepted attestation.",
@@ -138,9 +139,9 @@ const policyAttestationMismatchCheck: HealthCheck = {
   async detect(ctx) {
     return findingsForCheck(await evaluatePolicy(ctx), CHECK_IDS.policyAttestationMismatch);
   },
-};
+});
 
-const policyInvalidFileCheck: HealthCheck = {
+const policyInvalidFileCheck: HealthCheck = defineSplitHealthCheck({
   id: CHECK_IDS.policyInvalidFile,
   kind: "plugin",
   description: "The enabled policy file parses before policy checks run.",
@@ -148,44 +149,67 @@ const policyInvalidFileCheck: HealthCheck = {
   async detect(ctx) {
     return findingsForCheck(await evaluatePolicy(ctx), CHECK_IDS.policyInvalidFile);
   },
-};
+});
 
 const policyChannelsDeniedProviderCheck: HealthCheck = {
   id: CHECK_IDS.policyDeniedChannelProvider,
   kind: "plugin",
   description: "Configured channels satisfy policy deny rules.",
   source: "policy",
-  async detect(ctx) {
-    return findingsForCheck(await evaluatePolicy(ctx), CHECK_IDS.policyDeniedChannelProvider);
-  },
-  async repair(ctx, findings) {
+  async run(ctx) {
+    const findings = findingsForCheck(
+      await evaluatePolicy(ctx),
+      CHECK_IDS.policyDeniedChannelProvider,
+    );
+    if (findings.length === 0) {
+      return { findings };
+    }
     if (!workspaceRepairsEnabled(ctx)) {
-      return workspaceRepairsDisabledResult("channel config");
+      return { findings, ...workspaceRepairsDisabledResult("channel config") };
     }
     const channelIds = channelIdsFromFindings(findings);
     if (channelIds.length === 0) {
       return {
+        findings,
         status: "skipped",
         reason: "no channel findings matched a configurable channel",
         changes: [],
       };
     }
     const next = disableChannels(ctx.cfg, channelIds);
+    const changes = next.changed.map((id) => `Disabled channels.${id}.enabled for policy conformance.`);
+    const effects = next.changed.map((id) => ({
+      kind: "config" as const,
+      action: "disable-policy-denied-channel",
+      target: `channels.${id}.enabled`,
+      dryRunSafe: true,
+    }));
     if (next.changed.length === 0) {
       return {
+        findings,
         status: "skipped",
         reason: "matching channels were already disabled or missing",
         changes: [],
       };
     }
+    if (!ctx.repair) {
+      return {
+        findings,
+        status: "repairable",
+        changes,
+        effects,
+      };
+    }
     return {
+      findings,
       config: next.config,
-      changes: next.changed.map((id) => `Disabled channels.${id}.enabled for policy conformance.`),
+      changes,
+      effects,
     };
   },
 };
 
-const policyMcpDeniedServerCheck: HealthCheck = {
+const policyMcpDeniedServerCheck: HealthCheck = defineSplitHealthCheck({
   id: CHECK_IDS.policyDeniedMcpServer,
   kind: "plugin",
   description: "Configured MCP servers do not match policy deny rules.",
@@ -193,9 +217,9 @@ const policyMcpDeniedServerCheck: HealthCheck = {
   async detect(ctx) {
     return findingsForCheck(await evaluatePolicy(ctx), CHECK_IDS.policyDeniedMcpServer);
   },
-};
+});
 
-const policyMcpUnapprovedServerCheck: HealthCheck = {
+const policyMcpUnapprovedServerCheck: HealthCheck = defineSplitHealthCheck({
   id: CHECK_IDS.policyUnapprovedMcpServer,
   kind: "plugin",
   description: "Configured MCP servers do not match policy allow rules.",
@@ -203,9 +227,9 @@ const policyMcpUnapprovedServerCheck: HealthCheck = {
   async detect(ctx) {
     return findingsForCheck(await evaluatePolicy(ctx), CHECK_IDS.policyUnapprovedMcpServer);
   },
-};
+});
 
-const policyModelsDeniedProviderCheck: HealthCheck = {
+const policyModelsDeniedProviderCheck: HealthCheck = defineSplitHealthCheck({
   id: CHECK_IDS.policyDeniedModelProvider,
   kind: "plugin",
   description: "Configured model providers do not match policy deny rules.",
@@ -213,9 +237,9 @@ const policyModelsDeniedProviderCheck: HealthCheck = {
   async detect(ctx) {
     return findingsForCheck(await evaluatePolicy(ctx), CHECK_IDS.policyDeniedModelProvider);
   },
-};
+});
 
-const policyModelsUnapprovedProviderCheck: HealthCheck = {
+const policyModelsUnapprovedProviderCheck: HealthCheck = defineSplitHealthCheck({
   id: CHECK_IDS.policyUnapprovedModelProvider,
   kind: "plugin",
   description: "Configured model providers do not match policy allow rules.",
@@ -223,9 +247,9 @@ const policyModelsUnapprovedProviderCheck: HealthCheck = {
   async detect(ctx) {
     return findingsForCheck(await evaluatePolicy(ctx), CHECK_IDS.policyUnapprovedModelProvider);
   },
-};
+});
 
-const policyNetworkPrivateAccessCheck: HealthCheck = {
+const policyNetworkPrivateAccessCheck: HealthCheck = defineSplitHealthCheck({
   id: CHECK_IDS.policyPrivateNetworkAccess,
   kind: "plugin",
   description: "Network SSRF policy settings match private-network requirements.",
@@ -233,9 +257,9 @@ const policyNetworkPrivateAccessCheck: HealthCheck = {
   async detect(ctx) {
     return findingsForCheck(await evaluatePolicy(ctx), CHECK_IDS.policyPrivateNetworkAccess);
   },
-};
+});
 
-const policyToolsMissingRiskCheck: HealthCheck = {
+const policyToolsMissingRiskCheck: HealthCheck = defineSplitHealthCheck({
   id: CHECK_IDS.policyMissingToolRisk,
   kind: "plugin",
   description: "TOOLS.md policy entries declare explicit risk levels.",
@@ -243,9 +267,9 @@ const policyToolsMissingRiskCheck: HealthCheck = {
   async detect(ctx) {
     return findingsForCheck(await evaluatePolicy(ctx), CHECK_IDS.policyMissingToolRisk);
   },
-};
+});
 
-const policyToolsUnknownRiskCheck: HealthCheck = {
+const policyToolsUnknownRiskCheck: HealthCheck = defineSplitHealthCheck({
   id: CHECK_IDS.policyUnknownToolRisk,
   kind: "plugin",
   description: "TOOLS.md policy entries use known risk levels.",
@@ -253,9 +277,9 @@ const policyToolsUnknownRiskCheck: HealthCheck = {
   async detect(ctx) {
     return findingsForCheck(await evaluatePolicy(ctx), CHECK_IDS.policyUnknownToolRisk);
   },
-};
+});
 
-const policyToolsMissingSensitivityCheck: HealthCheck = {
+const policyToolsMissingSensitivityCheck: HealthCheck = defineSplitHealthCheck({
   id: CHECK_IDS.policyMissingToolSensitivity,
   kind: "plugin",
   description: "TOOLS.md policy entries declare default artifact sensitivity.",
@@ -263,9 +287,9 @@ const policyToolsMissingSensitivityCheck: HealthCheck = {
   async detect(ctx) {
     return findingsForCheck(await evaluatePolicy(ctx), CHECK_IDS.policyMissingToolSensitivity);
   },
-};
+});
 
-const policyToolsUnknownSensitivityCheck: HealthCheck = {
+const policyToolsUnknownSensitivityCheck: HealthCheck = defineSplitHealthCheck({
   id: CHECK_IDS.policyUnknownToolSensitivity,
   kind: "plugin",
   description: "TOOLS.md policy entries use known sensitivity levels.",
@@ -273,9 +297,9 @@ const policyToolsUnknownSensitivityCheck: HealthCheck = {
   async detect(ctx) {
     return findingsForCheck(await evaluatePolicy(ctx), CHECK_IDS.policyUnknownToolSensitivity);
   },
-};
+});
 
-const policyToolsMissingOwnerCheck: HealthCheck = {
+const policyToolsMissingOwnerCheck: HealthCheck = defineSplitHealthCheck({
   id: CHECK_IDS.policyMissingToolOwner,
   kind: "plugin",
   description: "TOOLS.md policy entries declare an accountable owner.",
@@ -283,7 +307,7 @@ const policyToolsMissingOwnerCheck: HealthCheck = {
   async detect(ctx) {
     return findingsForCheck(await evaluatePolicy(ctx), CHECK_IDS.policyMissingToolOwner);
   },
-};
+});
 
 async function evaluatePolicyUncached(ctx: HealthCheckContext): Promise<PolicyEvaluation> {
   const settings = policySettings(ctx);

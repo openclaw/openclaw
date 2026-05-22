@@ -59,6 +59,12 @@ export interface HealthCheckContext {
   };
 }
 
+export interface HealthCheckRunContext extends HealthCheckContext {
+  readonly repair: boolean;
+  readonly diff?: boolean;
+  readonly previewRepair?: boolean;
+}
+
 export interface HealthRepairContext extends Omit<HealthCheckContext, "mode"> {
   readonly mode: "fix";
   readonly dryRun?: boolean;
@@ -81,7 +87,7 @@ export interface HealthRepairEffect {
 }
 
 export interface HealthRepairResult {
-  readonly status?: "repaired" | "skipped" | "failed";
+  readonly status?: "repairable" | "repaired" | "skipped" | "failed";
   readonly reason?: string;
   readonly config?: OpenClawConfig;
   readonly changes: readonly string[];
@@ -90,20 +96,42 @@ export interface HealthRepairResult {
   readonly effects?: readonly HealthRepairEffect[];
 }
 
+export interface HealthCheckRunResult extends Omit<HealthRepairResult, "changes"> {
+  readonly findings?: readonly HealthFinding[];
+  readonly changes?: readonly string[];
+}
+
 export interface HealthCheckScope {
   readonly findings?: readonly HealthFinding[];
   readonly paths?: readonly string[];
   readonly ocPaths?: readonly string[];
 }
 
-export interface HealthCheck {
+export interface HealthCheckBase {
   readonly id: string;
   readonly kind: "core" | "plugin";
   readonly description: string;
   readonly source?: string;
+}
+
+export interface SplitHealthCheck extends HealthCheckBase {
   detect(ctx: HealthCheckContext, scope?: HealthCheckScope): Promise<readonly HealthFinding[]>;
   repair?(
     ctx: HealthRepairContext,
     findings: readonly HealthFinding[],
   ): Promise<HealthRepairResult>;
+}
+
+export interface RunnableHealthCheck extends HealthCheckBase {
+  run(
+    ctx: HealthCheckRunContext,
+    scope?: HealthCheckScope,
+  ): Promise<HealthCheckRunResult>;
+}
+
+export type HealthCheck = SplitHealthCheck | RunnableHealthCheck;
+
+export interface RegisteredHealthCheck extends RunnableHealthCheck {
+  detect?: SplitHealthCheck["detect"];
+  repair?: SplitHealthCheck["repair"];
 }

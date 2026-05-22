@@ -70,7 +70,8 @@ async function runPolicyChecks(checkCtx: HealthCheckContext): Promise<{
   const checks = registerChecks();
   const findings: HealthFinding[] = [];
   for (const check of checks) {
-    findings.push(...(check.detect === undefined ? [] : await check.detect(checkCtx)));
+    const result = await check.run({ ...checkCtx, repair: false });
+    findings.push(...(Array.isArray(result) ? result : (result.findings ?? [])));
   }
   return { findings };
 }
@@ -81,13 +82,21 @@ async function runPolicyDoctorLint(checkCtx: HealthCheckContext) {
 
 async function runDeniedChannelRepair(repairCheckCtx: HealthRepairContext) {
   const check = registerChecks().find((entry) => entry.id === "policy/channels-denied-provider");
-  if (check?.detect === undefined || check.repair === undefined) {
+  if (check === undefined) {
     throw new Error("policy channel repair check was not registered");
   }
-  const findings = await check.detect(repairCheckCtx);
-  const result = await check.repair(repairCheckCtx, findings);
+  const rawResult = await check.run({ ...repairCheckCtx, repair: true });
+  const result = Array.isArray(rawResult) ? { findings: rawResult } : rawResult;
   const config = result.config ?? repairCheckCtx.cfg;
-  const remainingFindings = await check.detect({ ...repairCheckCtx, cfg: config });
+  const validation = await check.run({
+    ...repairCheckCtx,
+    mode: "lint",
+    cfg: config,
+    repair: false,
+  });
+  const remainingFindings = Array.isArray(validation)
+    ? validation
+    : (validation.findings ?? []);
   return { ...result, config, remainingFindings };
 }
 

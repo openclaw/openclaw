@@ -1,12 +1,15 @@
 import { listHealthChecks } from "./health-check-registry.js";
 import { scrubDoctorErrorMessage } from "./doctor-error-message.js";
+import { normalizeHealthCheck } from "./health-check-adapter.js";
 import {
   HEALTH_FINDING_SEVERITY_RANK,
   healthFindingMeetsSeverity,
   type HealthCheck,
   type HealthCheckContext,
+  type HealthCheckRunContext,
   type HealthFinding,
   type HealthFindingSeverity,
+  type RegisteredHealthCheck,
 } from "./health-checks.js";
 
 export interface DoctorLintRunOptions {
@@ -25,7 +28,9 @@ export async function runDoctorLintChecks(
   ctx: HealthCheckContext,
   opts: DoctorLintRunOptions = {},
 ): Promise<DoctorLintRunResult> {
-  const all = opts.checks ?? listHealthChecks();
+  const all: readonly RegisteredHealthCheck[] = (opts.checks ?? listHealthChecks()).map(
+    normalizeHealthCheck,
+  );
   const skip = opts.skipIds instanceof Set ? opts.skipIds : new Set(opts.skipIds ?? []);
   const only = opts.onlyIds instanceof Set ? opts.onlyIds : new Set(opts.onlyIds ?? []);
   const allIds = new Set(all.map((check) => check.id));
@@ -51,9 +56,13 @@ export async function runDoctorLintChecks(
       });
     }
   }
+  const runCtx: HealthCheckRunContext = {
+    ...ctx,
+    repair: false,
+  };
   for (const check of selected) {
     try {
-      const out = await check.detect(ctx);
+      const out = await runHealthCheckForFindings(check, runCtx);
       for (const f of out) {
         findings.push(f);
       }
@@ -73,6 +82,14 @@ export async function runDoctorLintChecks(
     checksRun: selected.length,
     checksSkipped: all.length - selected.length,
   };
+}
+
+async function runHealthCheckForFindings(
+  check: RegisteredHealthCheck,
+  ctx: HealthCheckRunContext,
+): Promise<readonly HealthFinding[]> {
+  const result = await check.run(ctx);
+  return result.findings ?? [];
 }
 
 function compareFindings(a: HealthFinding, b: HealthFinding): number {

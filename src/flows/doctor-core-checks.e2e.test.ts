@@ -4,16 +4,20 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { CORE_HEALTH_CHECKS } from "./doctor-core-checks.js";
-import type { HealthCheck } from "./health-checks.js";
+import type { RegisteredHealthCheck } from "./health-checks.js";
 
 const runtime = { log() {}, error() {}, exit() {} };
+type SplitCompatHealthCheck = RegisteredHealthCheck & {
+  detect: NonNullable<RegisteredHealthCheck["detect"]>;
+  repair?: NonNullable<RegisteredHealthCheck["repair"]>;
+};
 
-function getCheck(id: string): HealthCheck {
+function getCheck(id: string): SplitCompatHealthCheck {
   const check = CORE_HEALTH_CHECKS.find((entry) => entry.id === id);
-  if (!check) {
+  if (!check?.detect) {
     throw new Error(`Missing health check ${id}`);
   }
-  return check;
+  return check as SplitCompatHealthCheck;
 }
 
 describe("doctor core skills readiness smoke", () => {

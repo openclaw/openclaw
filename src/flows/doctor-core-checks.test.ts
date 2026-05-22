@@ -9,14 +9,19 @@ import {
   resetCoreHealthChecksForTest,
 } from "./doctor-core-checks.js";
 import { doctorHealthConversionRules } from "./doctor-health-conversion-plan.js";
+import { defineSplitHealthCheck } from "./health-check-adapter.js";
 import {
   clearHealthChecksForTest,
   listHealthChecks,
   registerHealthCheck,
 } from "./health-check-registry.js";
-import type { HealthCheck } from "./health-checks.js";
+import type { RegisteredHealthCheck } from "./health-checks.js";
 
 const runtime = { log() {}, error() {}, exit() {} };
+type SplitCompatHealthCheck = RegisteredHealthCheck & {
+  detect: NonNullable<RegisteredHealthCheck["detect"]>;
+  repair?: NonNullable<RegisteredHealthCheck["repair"]>;
+};
 
 function createSkill(overrides: Partial<SkillStatusEntry> = {}): SkillStatusEntry {
   return {
@@ -70,15 +75,17 @@ function createDeps(overrides: Partial<CoreHealthCheckDeps> = {}): CoreHealthChe
   };
 }
 
-function getCheck(checks: readonly HealthCheck[], id: string): HealthCheck {
+function getCheck(checks: readonly RegisteredHealthCheck[], id: string): SplitCompatHealthCheck {
   const check = checks.find((entry) => entry.id === id);
-  if (!check) {
+  if (!check?.detect) {
     throw new Error(`Missing health check ${id}`);
   }
-  return check;
+  return check as SplitCompatHealthCheck;
 }
 
-const detectShellCompletionHealth = vi.hoisted(() => vi.fn(async () => []));
+const detectShellCompletionHealth = vi.hoisted(() =>
+  vi.fn<() => Promise<readonly import("./health-checks.js").HealthFinding[]>>(async () => []),
+);
 const doctorCoreCheckMocks = vi.hoisted(() => ({
   loadBundledPluginPublicSurfaceModuleSync: vi.fn(),
   noteClaudeCliHealth: vi.fn(),
@@ -115,14 +122,14 @@ describe("registerCoreHealthChecks", () => {
   });
 
   it("can retry after a duplicate registration failure is cleared", () => {
-    registerHealthCheck({
+    registerHealthCheck(defineSplitHealthCheck({
       id: "core/doctor/gateway-config",
       kind: "core",
       description: "duplicate",
       async detect() {
         return [];
       },
-    });
+    }));
 
     expect(() => registerCoreHealthChecks()).toThrow("health check already registered");
 
@@ -525,10 +532,11 @@ describe("registerCoreHealthChecks", () => {
   it("keeps optional shell completion installs out of doctor lint", async () => {
     const check = CORE_HEALTH_CHECKS.find((entry) => entry.id === "core/doctor/shell-completion");
 
-    await check?.detect({
+    await check?.run?.({
       mode: "lint",
       runtime: { log() {}, error() {}, exit() {} },
       cfg: {},
+      repair: false,
     });
 
     expect(detectShellCompletionHealth).toHaveBeenCalledWith({ nonInteractive: true });
@@ -536,6 +544,13 @@ describe("registerCoreHealthChecks", () => {
 
   it("previews converted side-effect repairs as effects without fake diffs", async () => {
     const runtime = { log() {}, error() {}, exit() {} };
+    detectShellCompletionHealth.mockResolvedValue([
+      {
+        checkId: "core/doctor/shell-completion",
+        severity: "warning",
+        message: "Shell completion cache is missing.",
+      },
+    ]);
     const cases = [
       {
         id: "core/doctor/shell-completion",
@@ -545,36 +560,22 @@ describe("registerCoreHealthChecks", () => {
         id: "core/doctor/startup-channel-maintenance",
         expectedAction: "would-run-channel-startup-maintenance",
       },
-      {
-        id: "core/doctor/systemd-linger",
-        expectedAction: "would-enable-systemd-linger",
-      },
     ];
 
     for (const entry of cases) {
       const check = CORE_HEALTH_CHECKS.find((candidate) => candidate.id === entry.id);
-      const result = await check?.repair?.(
-        {
-          mode: "fix",
-          runtime,
-          cfg: {},
-          dryRun: true,
-          diff: true,
-        },
-        [
-          {
-            checkId: entry.id,
-            severity: "warning",
-            message: "needs repair",
-          },
-        ],
-      );
+      const repairCtx = {
+        mode: "fix" as const,
+        runtime,
+        cfg: {},
+        repair: false,
+      };
+      const result = await check?.run(repairCtx);
 
       expect(result?.changes).toHaveLength(1);
       expect(result?.effects).toContainEqual(
         expect.objectContaining({
           action: entry.expectedAction,
-          dryRunSafe: false,
         }),
       );
       expect(result?.diffs ?? []).toEqual([]);

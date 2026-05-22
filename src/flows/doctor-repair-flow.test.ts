@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { runDoctorHealthRepairs } from "./doctor-repair-flow.js";
+import { defineSplitHealthCheck } from "./health-check-adapter.js";
 import type { HealthCheck, HealthRepairContext } from "./health-checks.js";
 
 function ctx(cfg: OpenClawConfig): HealthRepairContext {
@@ -16,10 +17,57 @@ function ctx(cfg: OpenClawConfig): HealthRepairContext {
 }
 
 describe("runDoctorHealthRepairs", () => {
-  it("repairs modern checks and threads updated config", async () => {
+  it("repairs single-run checks and validates through lint mode", async () => {
+    const runModes: string[] = [];
     const scopes: unknown[] = [];
     const checks: HealthCheck[] = [
       {
+        id: "test/run-repairable",
+        kind: "core",
+        description: "run repairable",
+        async run(ctx, scope) {
+          runModes.push(ctx.mode);
+          if (scope !== undefined) {
+            scopes.push(scope);
+          }
+          const findings =
+            ctx.cfg.gateway?.mode === "local"
+              ? []
+              : [
+                  {
+                    checkId: "test/run-repairable",
+                    severity: "warning" as const,
+                    message: "gateway mode missing",
+                    path: "gateway.mode",
+                  },
+                ];
+          if (!ctx.repair || findings.length === 0) {
+            return { findings };
+          }
+          return {
+            findings,
+            config: { ...ctx.cfg, gateway: { ...ctx.cfg.gateway, mode: "local" } },
+            changes: ["Set gateway.mode to local."],
+          };
+        },
+      },
+    ];
+
+    const result = await runDoctorHealthRepairs(ctx({}), { checks, validate: true });
+
+    expect(result.config.gateway?.mode).toBe("local");
+    expect(result.changes).toEqual(["Set gateway.mode to local."]);
+    expect(result.checksRepaired).toBe(1);
+    expect(result.checksValidated).toBe(1);
+    expect(result.remainingFindings).toEqual([]);
+    expect(runModes).toEqual(["fix", "lint"]);
+    expect(scopes).toMatchObject([{ paths: ["gateway.mode"] }]);
+  });
+
+  it("repairs modern checks and threads updated config", async () => {
+    const scopes: unknown[] = [];
+    const checks: HealthCheck[] = [
+      defineSplitHealthCheck({
         id: "test/repairable",
         kind: "core",
         description: "repairable",
@@ -44,10 +92,10 @@ describe("runDoctorHealthRepairs", () => {
             changes: ["Set gateway.mode to local."],
           };
         },
-      },
+      }),
     ];
 
-    const result = await runDoctorHealthRepairs(ctx({}), { checks });
+    const result = await runDoctorHealthRepairs(ctx({}), { checks, validate: true });
 
     expect(result.config.gateway?.mode).toBe("local");
     expect(result.changes).toEqual(["Set gateway.mode to local."]);
@@ -59,7 +107,7 @@ describe("runDoctorHealthRepairs", () => {
 
   it("leaves non-repairable checks for legacy doctor behavior", async () => {
     const checks: HealthCheck[] = [
-      {
+      defineSplitHealthCheck({
         id: "test/legacy-only",
         kind: "core",
         description: "legacy only",
@@ -72,10 +120,10 @@ describe("runDoctorHealthRepairs", () => {
             },
           ];
         },
-      },
+      }),
     ];
 
-    const result = await runDoctorHealthRepairs(ctx({}), { checks });
+    const result = await runDoctorHealthRepairs(ctx({}), { checks, validate: true });
 
     expect(result.config).toEqual({});
     expect(result.findings).toHaveLength(1);
@@ -87,7 +135,7 @@ describe("runDoctorHealthRepairs", () => {
 
   it("reports repair validation findings that remain after repair", async () => {
     const checks: HealthCheck[] = [
-      {
+      defineSplitHealthCheck({
         id: "test/not-fixed",
         kind: "core",
         description: "not fixed",
@@ -106,10 +154,10 @@ describe("runDoctorHealthRepairs", () => {
             changes: ["Tried repair."],
           };
         },
-      },
+      }),
     ];
 
-    const result = await runDoctorHealthRepairs(ctx({}), { checks });
+    const result = await runDoctorHealthRepairs(ctx({}), { checks, validate: true });
 
     expect(result.checksRepaired).toBe(1);
     expect(result.checksValidated).toBe(1);
@@ -122,10 +170,43 @@ describe("runDoctorHealthRepairs", () => {
     expect(result.warnings).toEqual(["test/not-fixed repair left 1 finding(s)"]);
   });
 
+  it("does not validate successful repairs unless validation is requested", async () => {
+    let detectCalls = 0;
+    const checks: HealthCheck[] = [
+      defineSplitHealthCheck({
+        id: "test/no-default-validation",
+        kind: "core",
+        description: "no default validation",
+        async detect() {
+          detectCalls++;
+          return [
+            {
+              checkId: "test/no-default-validation",
+              severity: "warning",
+              message: "needs repair",
+            },
+          ];
+        },
+        async repair() {
+          return {
+            changes: ["Ran repair."],
+          };
+        },
+      }),
+    ];
+
+    const result = await runDoctorHealthRepairs(ctx({}), { checks });
+
+    expect(detectCalls).toBe(1);
+    expect(result.checksRepaired).toBe(1);
+    expect(result.checksValidated).toBe(0);
+    expect(result.remainingFindings).toEqual([]);
+  });
+
   it("does not validate skipped or failed repair results", async () => {
     let validationCalls = 0;
     const checks: HealthCheck[] = [
-      {
+      defineSplitHealthCheck({
         id: "test/skipped",
         kind: "core",
         description: "skipped",
@@ -146,7 +227,7 @@ describe("runDoctorHealthRepairs", () => {
             changes: [],
           };
         },
-      },
+      }),
     ];
 
     const result = await runDoctorHealthRepairs(ctx({}), { checks });
@@ -162,7 +243,7 @@ describe("runDoctorHealthRepairs", () => {
     const repairContexts: HealthRepairContext[] = [];
     let detectCalls = 0;
     const checks: HealthCheck[] = [
-      {
+      defineSplitHealthCheck({
         id: "test/dry-run",
         kind: "core",
         description: "dry run",
@@ -202,7 +283,7 @@ describe("runDoctorHealthRepairs", () => {
             ],
           };
         },
-      },
+      }),
     ];
 
     const result = await runDoctorHealthRepairs(ctx({}), {
@@ -224,7 +305,7 @@ describe("runDoctorHealthRepairs", () => {
   it("passes diff false and true through the repair API", async () => {
     const repairContexts: HealthRepairContext[] = [];
     const checks: HealthCheck[] = [
-      {
+      defineSplitHealthCheck({
         id: "test/diff-preview",
         kind: "core",
         description: "diff preview",
@@ -255,7 +336,7 @@ describe("runDoctorHealthRepairs", () => {
                 : [],
           };
         },
-      },
+      }),
     ];
 
     const withoutDiff = await runDoctorHealthRepairs(ctx({}), {
@@ -278,7 +359,7 @@ describe("runDoctorHealthRepairs", () => {
   it("passes the doctor note sink through detect and repair without collecting notes", async () => {
     const note = vi.fn();
     const checks: HealthCheck[] = [
-      {
+      defineSplitHealthCheck({
         id: "test/notes",
         kind: "core",
         description: "notes",
@@ -298,7 +379,7 @@ describe("runDoctorHealthRepairs", () => {
             changes: ["Ran repair."],
           };
         },
-      },
+      }),
     ];
 
     const result = await runDoctorHealthRepairs(

@@ -99,40 +99,33 @@ describe("doctor startup channel maintenance", () => {
       },
     };
     const env = { OPENCLAW_TEST: "1" };
-    const findings = await check?.detect({
+    const result = await check?.run?.({
       mode: "fix",
       runtime,
       cfg,
       env,
+      repair: true,
     });
+    const findings = Array.isArray(result) ? result : (result?.findings ?? []);
 
     expect(findings).toContainEqual(
       expect.objectContaining({
         checkId: "core/doctor/startup-channel-maintenance",
       }),
     );
+    expect(result).toMatchObject({ changes: [] });
     await expect(
-      check?.repair?.(
+      check?.run?.(
         {
           mode: "fix",
           runtime,
           cfg,
           env,
-        },
-        findings ?? [],
-      ),
-    ).resolves.toEqual({ changes: [] });
-    await expect(
-      check?.detect(
-        {
-          mode: "fix",
-          runtime,
-          cfg,
-          env,
+          repair: false,
         },
         { findings },
       ),
-    ).resolves.toEqual([]);
+    ).resolves.toMatchObject({ findings: [] });
     expect(startupMaintenanceMocks.runChannelPluginStartupMaintenance).toHaveBeenCalledWith(
       expect.objectContaining({
         cfg,

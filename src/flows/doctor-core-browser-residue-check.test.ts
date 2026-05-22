@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { CORE_HEALTH_CHECKS } from "./doctor-core-checks.js";
-import type { HealthRepairContext } from "./health-checks.js";
+import type { HealthRepairContext, RegisteredHealthCheck } from "./health-checks.js";
 
 const browserMocks = vi.hoisted(() => ({
   detectLegacyClawdBrowserProfileResidue: vi.fn(),
@@ -24,14 +24,19 @@ function runtime() {
   return { log() {}, error() {}, exit() {} };
 }
 
-function requireBrowserResidueCheck() {
+type SplitCompatHealthCheck = RegisteredHealthCheck & {
+  detect: NonNullable<RegisteredHealthCheck["detect"]>;
+  repair: NonNullable<RegisteredHealthCheck["repair"]>;
+};
+
+function requireBrowserResidueCheck(): SplitCompatHealthCheck {
   const check = CORE_HEALTH_CHECKS.find(
     (entry) => entry.id === "core/doctor/browser-clawd-profile-residue",
   );
-  if (!check) {
+  if (!check?.detect || !check.repair) {
     throw new Error("expected browser clawd profile residue health check");
   }
-  return check;
+  return check as SplitCompatHealthCheck;
 }
 
 describe("browser clawd profile residue health check", () => {
