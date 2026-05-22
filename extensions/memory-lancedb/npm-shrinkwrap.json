@@ -1,12 +1,12 @@
 {
   "name": "@openclaw/memory-lancedb",
-  "version": "2026.5.20",
+  "version": "2026.5.21",
   "lockfileVersion": 3,
   "requires": true,
   "packages": {
     "": {
       "name": "@openclaw/memory-lancedb",
-      "version": "2026.5.20",
+      "version": "2026.5.21",
       "dependencies": {
         "@lancedb/lancedb": "0.29.0",
         "apache-arrow": "18.1.0",

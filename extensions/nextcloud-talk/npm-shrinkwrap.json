@@ -1,17 +1,17 @@
 {
   "name": "@openclaw/nextcloud-talk",
-  "version": "2026.5.20",
+  "version": "2026.5.21",
   "lockfileVersion": 3,
   "requires": true,
   "packages": {
     "": {
       "name": "@openclaw/nextcloud-talk",
-      "version": "2026.5.20",
+      "version": "2026.5.21",
       "dependencies": {
         "zod": "4.4.3"
       },
       "peerDependencies": {
-        "openclaw": ">=2026.5.20"
+        "openclaw": ">=2026.5.21"
       },
       "peerDependenciesMeta": {
         "openclaw": {
