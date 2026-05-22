@@ -12,6 +12,7 @@ import {
   resolveMemoryRemDreamingConfig,
 } from "../../memory-host-sdk/dreaming.js";
 import { getActiveMemorySearchManager } from "../../plugins/memory-runtime.js";
+import { ErrorCodes, errorShape, type ErrorShape } from "../protocol/index.js";
 import { formatError } from "../server-utils.js";
 import {
   applyMemoryAuditSuggestion,
@@ -966,6 +967,17 @@ function normalizeMemoryAuditSuggestionId(params: unknown): string {
   return id;
 }
 
+function memoryAuditGatewayError(err: unknown): ErrorShape {
+  const message = formatError(err);
+  const code =
+    message === "memory audit workspace is not configured" ||
+    message === "memory audit suggestion id is required" ||
+    message.startsWith("memory audit suggestion not found:")
+      ? ErrorCodes.INVALID_REQUEST
+      : ErrorCodes.UNAVAILABLE;
+  return errorShape(code, message);
+}
+
 const SKIPPED_MEMORY_EMBEDDING_PROBE = {
   ok: false,
   checked: false,
@@ -1112,7 +1124,7 @@ export const doctorHandlers: GatewayRequestHandlers = {
       };
       respond(true, payload, undefined);
     } catch (err) {
-      respond(false, undefined, formatError(err));
+      respond(false, undefined, memoryAuditGatewayError(err));
     }
   },
   "doctor.memory.auditReject": async ({ respond, context, params }) => {
@@ -1134,7 +1146,7 @@ export const doctorHandlers: GatewayRequestHandlers = {
       };
       respond(true, payload, undefined);
     } catch (err) {
-      respond(false, undefined, formatError(err));
+      respond(false, undefined, memoryAuditGatewayError(err));
     }
   },
   "doctor.memory.dreamDiary": async ({ respond, context }) => {

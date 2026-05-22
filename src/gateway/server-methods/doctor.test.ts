@@ -1103,11 +1103,10 @@ describe("doctor.memory audit actions", () => {
     });
 
     expect(rejectMemoryAuditSuggestion).not.toHaveBeenCalled();
-    expect(respond).toHaveBeenCalledWith(
-      false,
-      undefined,
-      "memory audit workspace is not configured",
-    );
+    expect(respond).toHaveBeenCalledWith(false, undefined, {
+      code: "INVALID_REQUEST",
+      message: "memory audit workspace is not configured",
+    });
   });
 });
 
