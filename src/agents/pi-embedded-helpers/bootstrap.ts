@@ -151,8 +151,23 @@ export function resolveBootstrapPromptTruncationWarningMode(
   return DEFAULT_BOOTSTRAP_PROMPT_TRUNCATION_WARNING_MODE;
 }
 
-function isAgentsBootstrapFile(fileName: string | undefined): boolean {
-  return fileName?.toLowerCase() === AGENTS_BOOTSTRAP_FILENAME.toLowerCase();
+function resolveBootstrapFileDisplayName(fileName: unknown, filePath?: unknown): string {
+  const name = normalizeOptionalString(fileName);
+  if (name) {
+    return name;
+  }
+  const pathValue = normalizeOptionalString(filePath);
+  if (pathValue) {
+    return path.basename(pathValue) || "bootstrap file";
+  }
+  return "bootstrap file";
+}
+
+function isAgentsBootstrapFile(fileName: unknown): boolean {
+  return (
+    typeof fileName === "string" &&
+    fileName.toLowerCase() === AGENTS_BOOTSTRAP_FILENAME.toLowerCase()
+  );
 }
 
 function isPolicyDigestCandidate(line: string): boolean {
@@ -448,15 +463,16 @@ export function buildBootstrapContextFiles(
       );
       break;
     }
+    const fileName = resolveBootstrapFileDisplayName(file.name, file.path);
     const fileMaxChars = Math.max(1, Math.min(maxChars, remainingTotalChars));
-    const trimmed = trimBootstrapContent(file.content ?? "", file.name, fileMaxChars);
+    const trimmed = trimBootstrapContent(file.content ?? "", fileName, fileMaxChars);
     const contentWithinBudget = clampToBudget(trimmed.content, remainingTotalChars);
     if (!contentWithinBudget) {
       continue;
     }
     if (trimmed.truncated || contentWithinBudget.length < trimmed.content.length) {
       opts?.warn?.(
-        `workspace bootstrap file ${file.name} is ${trimmed.originalLength} chars (limit ${trimmed.maxChars}); truncating in injected context`,
+        `workspace bootstrap file ${fileName} is ${trimmed.originalLength} chars (limit ${trimmed.maxChars}); truncating in injected context`,
       );
     }
     remainingTotalChars = Math.max(0, remainingTotalChars - contentWithinBudget.length);

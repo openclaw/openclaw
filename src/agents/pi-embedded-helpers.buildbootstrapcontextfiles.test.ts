@@ -86,6 +86,24 @@ describe("buildBootstrapContextFiles", () => {
     expect(warnings[0]).toContain("TOOLS.md");
     expect(warnings[0]).toContain("limit 200");
   });
+  it("falls back to the file path when malformed metadata omits the bootstrap name", () => {
+    const malformedName = {
+      path: "/tmp/HOOK.md",
+      content: "a".repeat(1_000),
+      missing: false,
+    } as unknown as WorkspaceBootstrapFile;
+    const warnings: string[] = [];
+    const [result] = buildBootstrapContextFiles([malformedName], {
+      maxChars: 120,
+      warn: (message) => warnings.push(message),
+    });
+
+    expect(result?.path).toBe("/tmp/HOOK.md");
+    expect(result?.content).toContain("[...truncated, read HOOK.md for full content...]");
+    expect(warnings).toStrictEqual([
+      "workspace bootstrap file HOOK.md is 1000 chars (limit 120); truncating in injected context",
+    ]);
+  });
   it("fits the rendered truncation marker inside the per-file budget", () => {
     const maxChars = DEFAULT_BOOTSTRAP_MAX_CHARS;
     const files = [

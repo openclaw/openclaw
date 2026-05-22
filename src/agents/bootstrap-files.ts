@@ -22,6 +22,7 @@ import {
   isWorkspaceBootstrapPending,
   loadWorkspaceBootstrapFiles,
   type WorkspaceBootstrapFile,
+  type WorkspaceBootstrapFileName,
 } from "./workspace.js";
 
 export type BootstrapContextMode = "full" | "lightweight";
@@ -177,12 +178,17 @@ function sanitizeBootstrapFiles(
       : pathValue.startsWith("~")
         ? resolveUserPath(pathValue)
         : path.resolve(workspaceRoot, pathValue);
+    const nameValue = normalizeOptionalString(file.name) ?? path.basename(resolvedPath);
+    if (!nameValue) {
+      warn?.(`skipping bootstrap file at "${resolvedPath}" — missing or invalid "name" field`);
+      continue;
+    }
     const dedupeKey = path.normalize(path.relative(workspaceRoot, resolvedPath));
     if (seenPaths.has(dedupeKey)) {
       continue;
     }
     seenPaths.add(dedupeKey);
-    sanitized.push({ ...file, path: resolvedPath });
+    sanitized.push({ ...file, name: nameValue as WorkspaceBootstrapFileName, path: resolvedPath });
   }
   return sanitized;
 }

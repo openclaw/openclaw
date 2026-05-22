@@ -60,6 +60,20 @@ function registerMalformedBootstrapFileHook() {
   });
 }
 
+function registerMissingNameBootstrapFileHook() {
+  registerInternalHook("agent:bootstrap", (event) => {
+    const context = event.context as AgentBootstrapHookContext;
+    context.bootstrapFiles = [
+      ...context.bootstrapFiles,
+      {
+        path: path.join(context.workspaceDir, "HOOK.md"),
+        content: "hook content",
+        missing: false,
+      } as unknown as WorkspaceBootstrapFile,
+    ];
+  });
+}
+
 function registerDuplicateBootstrapFileHook() {
   registerInternalHook("agent:bootstrap", (event) => {
     const context = event.context as AgentBootstrapHookContext;
@@ -144,6 +158,21 @@ describe("resolveBootstrapFilesForRun", () => {
     ]);
     expect(warnings).toHaveLength(3);
     expect(warnings[0]).toContain('missing or invalid "path" field');
+  });
+
+  it("derives a safe bootstrap file name from valid hook paths", async () => {
+    registerMissingNameBootstrapFileHook();
+
+    const workspaceDir = await makeTempWorkspace("openclaw-bootstrap-");
+    const files = await resolveBootstrapFilesForRun({ workspaceDir });
+    const hookFile = files.find((file) => file.path === path.join(workspaceDir, "HOOK.md"));
+
+    expect(hookFile).toMatchObject({
+      name: "HOOK.md",
+      path: path.join(workspaceDir, "HOOK.md"),
+      content: "hook content",
+      missing: false,
+    });
   });
 
   it("dedupes hook-injected bootstrap paths relative to the workspace", async () => {

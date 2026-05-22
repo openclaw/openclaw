@@ -90,7 +90,7 @@ Docs: https://docs.openclaw.ai
 - Secrets: show the irreversible apply warning after interactive `secrets configure` confirmation so confirmed migrations still get the final safety prompt. (#85638) Thanks @alkor2000.
 - Agents/CLI output: ignore cumulative Claude `stream-json` result usage when assistant usage events are present, preventing inflated cache-read accounting. (#85625) Thanks @zhouhe-xydt.
 - CLI: keep `waitForever()` alive by leaving its keep-alive interval ref'd so the public helper no longer exits immediately with Node's unsettled-await code. (#85694) Thanks @m1qaweb.
-- Agents/bootstrap: guard bootstrap name checks against missing file names so malformed bootstrap entries warn and truncate instead of crashing. Fixes #85523. (#85615) Thanks @zhouhe-xydt.
+- Agents/bootstrap: derive bootstrap file names from valid paths and guard name checks when hook metadata omits `name`, so malformed bootstrap entries warn and truncate instead of crashing. (#85535, #85615, fixes #85523) Thanks @luoyanglang and @zhouhe-xydt.
 - CLI/tasks: reject partially numeric `openclaw tasks audit --limit` values so audit limits must be real positive integers instead of accepting strings like `5abc`. (#84901) Thanks @jbetala7.
 - Status/diagnostics: bound deep Docker audit probes so `openclaw status --deep` reports slow container checks instead of hanging behind unbounded inspection. (#85476) Thanks @giodl73-repo.
 - Providers/Anthropic: migrate 1M context handling to GA-capable Claude 4.x models by sizing eligible models at 1M without the retired `context-1m-2025-08-07` beta, ignoring that retired beta in older configs, and preserving OAuth-required Anthropic beta headers. (#45613) Thanks @haoyu-haoyu.

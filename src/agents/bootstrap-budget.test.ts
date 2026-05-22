@@ -47,6 +47,32 @@ describe("buildBootstrapInjectionStats", () => {
     expect(stats[1]?.injectedChars).toBe(20);
     expect(stats[1]?.truncated).toBe(true);
   });
+
+  it("derives names from paths for malformed bootstrap file metadata", () => {
+    const bootstrapFiles = [
+      {
+        path: "/tmp/HOOK.md",
+        content: "a".repeat(100),
+        missing: false,
+      },
+    ] as unknown as WorkspaceBootstrapFile[];
+    const injectedFiles = [{ path: "/tmp/HOOK.md", content: "a".repeat(20) }];
+    const stats = buildBootstrapInjectionStats({
+      bootstrapFiles,
+      injectedFiles,
+    });
+
+    expect(stats).toStrictEqual([
+      {
+        name: "HOOK.md",
+        path: "/tmp/HOOK.md",
+        missing: false,
+        rawChars: 100,
+        injectedChars: 20,
+        truncated: true,
+      },
+    ]);
+  });
 });
 
 describe("analyzeBootstrapBudget", () => {
@@ -367,6 +393,29 @@ describe("bootstrap prompt warnings", () => {
     const lines = formatBootstrapTruncationWarningLines({ analysis });
 
     expect(lines).toContain(
+      "AGENTS.md was truncated; read the full AGENTS.md before relying on scoped policy.",
+    );
+  });
+
+  it("does not crash when truncation metadata has a malformed file name", () => {
+    const analysis = analyzeBootstrapBudget({
+      files: [
+        {
+          name: undefined,
+          path: "/tmp/HOOK.md",
+          missing: false,
+          rawChars: 150,
+          injectedChars: 100,
+          truncated: true,
+        } as unknown as Parameters<typeof analyzeBootstrapBudget>[0]["files"][number],
+      ],
+      bootstrapMaxChars: 120,
+      bootstrapTotalMaxChars: 200,
+    });
+    const lines = formatBootstrapTruncationWarningLines({ analysis });
+
+    expect(lines).toContain("HOOK.md: 150 raw -> 100 injected (~33% removed; max/file).");
+    expect(lines).not.toContain(
       "AGENTS.md was truncated; read the full AGENTS.md before relying on scoped policy.",
     );
   });

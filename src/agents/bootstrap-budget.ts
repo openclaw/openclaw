@@ -68,8 +68,20 @@ function formatWarningCause(cause: BootstrapTruncationCause): string {
   return cause === "per-file-limit" ? "max/file" : "max/total";
 }
 
-function isAgentsBootstrapName(name: string | undefined): boolean {
-  return name?.toLowerCase() === "agents.md";
+function resolveBootstrapFileDisplayName(name: unknown, filePath?: unknown): string {
+  const nameValue = normalizeOptionalString(name);
+  if (nameValue) {
+    return nameValue;
+  }
+  const pathValue = normalizeOptionalString(filePath);
+  if (pathValue) {
+    return path.basename(pathValue) || "bootstrap file";
+  }
+  return "bootstrap file";
+}
+
+function isAgentsBootstrapName(name: unknown, filePath?: unknown): boolean {
+  return resolveBootstrapFileDisplayName(name, filePath).toLowerCase() === "agents.md";
 }
 
 function normalizeSeenSignatures(signatures?: string[]): string[] {
@@ -148,16 +160,17 @@ export function buildBootstrapInjectionStats(params: {
   }
   return params.bootstrapFiles.map((file) => {
     const pathValue = normalizeOptionalString(file.path) ?? "";
+    const name = resolveBootstrapFileDisplayName(file.name, pathValue);
     const rawChars = file.missing ? 0 : (file.content ?? "").trimEnd().length;
     const injected =
       (pathValue ? injectedByPath.get(pathValue) : undefined) ??
-      injectedByPath.get(file.name) ??
-      injectedByBaseName.get(file.name);
+      injectedByPath.get(name) ??
+      injectedByBaseName.get(name);
     const injectedChars = injected ? injected.length : 0;
     const truncated = !file.missing && injectedChars < rawChars;
     return {
-      name: file.name,
-      path: pathValue || file.name,
+      name,
+      path: pathValue || name,
       missing: file.missing,
       rawChars,
       injectedChars,
@@ -271,11 +284,14 @@ export function formatBootstrapTruncationWarningLines(params: {
       : DEFAULT_BOOTSTRAP_PROMPT_WARNING_MAX_FILES;
   const lines: string[] = [];
   const duplicateNameCounts = params.analysis.truncatedFiles.reduce((acc, file) => {
-    acc.set(file.name, (acc.get(file.name) ?? 0) + 1);
+    const name = resolveBootstrapFileDisplayName(file.name, file.path);
+    acc.set(name, (acc.get(name) ?? 0) + 1);
     return acc;
   }, new Map<string, number>());
   const topFiles = params.analysis.truncatedFiles.slice(0, maxFiles);
   for (const file of topFiles) {
+    const fileName = resolveBootstrapFileDisplayName(file.name, file.path);
+    const filePath = normalizeOptionalString(file.path) ?? "";
     const pct =
       file.rawChars > 0
         ? Math.round(((file.rawChars - file.injectedChars) / file.rawChars) * 100)
@@ -285,9 +301,9 @@ export function formatBootstrapTruncationWarningLines(params: {
         ? file.causes.map((cause) => formatWarningCause(cause)).join(", ")
         : "";
     const nameLabel =
-      (duplicateNameCounts.get(file.name) ?? 0) > 1 && file.path.trim().length > 0
-        ? `${file.name} (${file.path})`
-        : file.name;
+      (duplicateNameCounts.get(fileName) ?? 0) > 1 && filePath.length > 0
+        ? `${fileName} (${filePath})`
+        : fileName;
     lines.push(
       `${nameLabel}: ${file.rawChars} raw -> ${file.injectedChars} injected (~${Math.max(0, pct)}% removed${causeText ? `; ${causeText}` : ""}).`,
     );
@@ -297,7 +313,7 @@ export function formatBootstrapTruncationWarningLines(params: {
       `+${params.analysis.truncatedFiles.length - topFiles.length} more truncated file(s).`,
     );
   }
-  if (params.analysis.truncatedFiles.some((file) => isAgentsBootstrapName(file.name))) {
+  if (params.analysis.truncatedFiles.some((file) => isAgentsBootstrapName(file.name, file.path))) {
     lines.push("AGENTS.md was truncated; read the full AGENTS.md before relying on scoped policy.");
   }
   lines.push(
