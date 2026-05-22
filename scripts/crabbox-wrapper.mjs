@@ -266,26 +266,18 @@ function commandRuntimeEntrypoint(commandArgs) {
 
 const version = checkedOutput(binary, ["--version"]);
 const help = checkedOutput(binary, ["run", "--help"]);
-const knownProviders = [
-  "hetzner",
-  "aws",
-  "azure",
-  "gcp",
-  "proxmox",
-  "ssh",
-  "blacksmith-testbox",
-  "namespace-devbox",
-  "semaphore",
-  "daytona",
-  "islo",
-  "e2b",
-  "modal",
-  "sprites",
-  "cloudflare",
-];
-const providers = knownProviders.filter((provider) =>
-  new RegExp(`\\b${provider.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`).test(help.text),
-);
+function parseProvidersFromHelp(text) {
+  const match = text.match(/provider:\s*([\w, -]+)(?:\s*\(default\b|\n|$)/u);
+  if (!match) {
+    return [];
+  }
+  return match[1]
+    .split(/,\s*|\s+or\s+/u)
+    .map((s) => s.replace(/^or\s+/u, "").trim())
+    .filter(Boolean);
+}
+
+const providers = parseProvidersFromHelp(help.text);
 const displayBinary = binary === "crabbox" ? "crabbox" : relative(repoRoot, binary);
 const provider = selectedProvider(args);
 const commandProviderValue = commandProvider(args);
@@ -299,7 +291,13 @@ if (version.status !== 0 || help.status !== 0) {
   process.exit(2);
 }
 
-if (provider && knownProviders.includes(provider) && !providers.includes(provider)) {
+if (provider && !providers.includes(provider)) {
+  if (providers.length === 0) {
+    console.error(
+      "[crabbox] could not parse provider list from --help; refusing to run with --provider without validation",
+    );
+    process.exit(2);
+  }
   console.error(
     `[crabbox] selected binary does not advertise provider ${provider}; update Crabbox or choose a supported provider`,
   );
