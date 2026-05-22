@@ -58,6 +58,24 @@ function createStalledBodyResponse(params: { headers: HeadersInit; firstChunk: U
   };
 }
 
+async function expectStalledBodyReadTimeout(params: {
+  download: () => Promise<unknown>;
+  expectedError: RegExp;
+  cancel: ReturnType<typeof vi.fn>;
+  timeoutMs: number;
+}): Promise<void> {
+  vi.useFakeTimers();
+  const downloadPromise = params.download();
+  const rejection = expect(downloadPromise).rejects.toThrow(params.expectedError);
+
+  await vi.advanceTimersByTimeAsync(0);
+  await vi.advanceTimersByTimeAsync(params.timeoutMs);
+  await rejection;
+
+  expect(params.cancel).toHaveBeenCalledTimes(1);
+  expect(params.cancel.mock.calls[0]?.[0]).toBeInstanceOf(Error);
+}
+
 describe("clawhub helpers", () => {
   const originalHome = process.env.HOME;
 
@@ -788,16 +806,18 @@ describe("clawhub helpers", () => {
       headers: { "content-type": "application/zip" },
     });
 
-    await expect(
-      downloadClawHubSkillArchive({
-        slug: "agentreceipt",
-        version: "1.0.0",
-        timeoutMs: 5,
-        fetchImpl: async () => stalled.response,
-      }),
-    ).rejects.toThrow(/skill archive download for agentreceipt body stalled after 5ms/i);
-    expect(stalled.cancel).toHaveBeenCalledTimes(1);
-    expect(stalled.cancel.mock.calls[0]?.[0]).toBeInstanceOf(Error);
+    await expectStalledBodyReadTimeout({
+      download: () =>
+        downloadClawHubSkillArchive({
+          slug: "agentreceipt",
+          version: "1.0.0",
+          timeoutMs: 5,
+          fetchImpl: async () => stalled.response,
+        }),
+      expectedError: /skill archive download for agentreceipt body stalled after 5ms/i,
+      cancel: stalled.cancel,
+      timeoutMs: 5,
+    });
   });
 
   it("times out and cancels stalled package archive body reads", async () => {
@@ -806,18 +826,19 @@ describe("clawhub helpers", () => {
       headers: { "content-type": "application/zip" },
     });
 
-    await expect(
-      downloadClawHubPackageArchive({
-        name: "@hyf/zai-external-alpha",
-        version: "0.0.1",
-        timeoutMs: 5,
-        fetchImpl: async () => stalled.response,
-      }),
-    ).rejects.toThrow(
-      /package archive download for @hyf\/zai-external-alpha body stalled after 5ms/i,
-    );
-    expect(stalled.cancel).toHaveBeenCalledTimes(1);
-    expect(stalled.cancel.mock.calls[0]?.[0]).toBeInstanceOf(Error);
+    await expectStalledBodyReadTimeout({
+      download: () =>
+        downloadClawHubPackageArchive({
+          name: "@hyf/zai-external-alpha",
+          version: "0.0.1",
+          timeoutMs: 5,
+          fetchImpl: async () => stalled.response,
+        }),
+      expectedError:
+        /package archive download for @hyf\/zai-external-alpha body stalled after 5ms/i,
+      cancel: stalled.cancel,
+      timeoutMs: 5,
+    });
   });
 
   it("times out and cancels stalled ClawPack artifact body reads", async () => {
@@ -826,17 +847,19 @@ describe("clawhub helpers", () => {
       headers: { "content-type": "application/octet-stream" },
     });
 
-    await expect(
-      downloadClawHubPackageArchive({
-        name: "demo",
-        version: "1.2.3",
-        artifact: "clawpack",
-        timeoutMs: 5,
-        fetchImpl: async () => stalled.response,
-      }),
-    ).rejects.toThrow(/ClawPack download for demo@1.2.3 body stalled after 5ms/i);
-    expect(stalled.cancel).toHaveBeenCalledTimes(1);
-    expect(stalled.cancel.mock.calls[0]?.[0]).toBeInstanceOf(Error);
+    await expectStalledBodyReadTimeout({
+      download: () =>
+        downloadClawHubPackageArchive({
+          name: "demo",
+          version: "1.2.3",
+          artifact: "clawpack",
+          timeoutMs: 5,
+          fetchImpl: async () => stalled.response,
+        }),
+      expectedError: /ClawPack download for demo@1.2.3 body stalled after 5ms/i,
+      cancel: stalled.cancel,
+      timeoutMs: 5,
+    });
   });
 
   it("downloads skill archives to sanitized temp paths and cleans them up", async () => {
