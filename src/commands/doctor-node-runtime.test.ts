@@ -204,10 +204,38 @@ describe("buildNodeRuntimeWarnings", () => {
   });
 
   it("handles future Node major with no schedule entry", () => {
-    const diag = makeDiag({ version: "26.0.0", major: 26 });
+    const diag = makeDiag({ version: "99.0.0", major: 99 });
     const warnings = buildNodeRuntimeWarnings(diag);
-    // No schedule entry for Node 26, and 26 >= RECOMMENDED_NODE_MAJOR (24)
+    // No schedule entry for Node 99, and 99 >= RECOMMENDED_NODE_MAJOR (24)
     expect(warnings).toEqual([]);
+  });
+
+  it("warns for Node 25 in maintenance and does not suggest a downgrade", () => {
+    // Node 25 (odd line) is in maintenance from 2026-04-01, EOL 2026-06-01.
+    const diag = makeDiag({ version: "25.6.1", major: 25 });
+    const duringMaint = new Date("2026-05-22");
+    const warnings = buildNodeRuntimeWarnings(diag, duringMaint);
+    expect(warnings.length).toBe(2);
+    expect(warnings[0]).toContain("Node 25 is in maintenance mode");
+    expect(warnings[0]).toContain("2026-06-01");
+    // Must NOT tell a Node 25 user to "upgrade to Node 24" (a downgrade).
+    expect(warnings[1]).not.toContain("Node 24");
+    expect(warnings[1]).toContain("Active LTS");
+  });
+
+  it("shows no warning for Node 24 still in Active LTS", () => {
+    // Node 24 maintenance starts 2026-10-20; before that there is no warning.
+    const diag = makeDiag({ version: "24.14.0", major: 24 });
+    const warnings = buildNodeRuntimeWarnings(diag, new Date("2026-05-22"));
+    expect(warnings).toEqual([]);
+  });
+
+  it("uses singular 'month' when one month remains", () => {
+    // Node 25 EOL 2026-06-01; one month before is 2026-05-01.
+    const diag = makeDiag({ version: "25.6.1", major: 25 });
+    const warnings = buildNodeRuntimeWarnings(diag, new Date("2026-05-15"));
+    expect(warnings[0]).toContain("1 month remaining");
+    expect(warnings[0]).not.toContain("1 months");
   });
 
   it("does not label unknown non-LTS majors as supported (e.g. Node 23)", () => {

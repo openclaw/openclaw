@@ -134,6 +134,25 @@ const NODE_RELEASE_SCHEDULE: ReadonlyArray<{
     eol: "2027-04-30",
     label: "Node 22 LTS",
   },
+  {
+    major: 24,
+    maintenanceStart: "2026-10-20",
+    eol: "2028-04-30",
+    label: "Node 24 LTS",
+  },
+  {
+    // Odd-numbered line: no Active LTS phase.
+    major: 25,
+    maintenanceStart: "2026-04-01",
+    eol: "2026-06-01",
+    label: "Node 25",
+  },
+  {
+    major: 26,
+    maintenanceStart: "2027-10-20",
+    eol: "2029-04-30",
+    label: "Node 26 LTS",
+  },
 ];
 
 /** The recommended Node.js major version for new installs. */
@@ -145,6 +164,26 @@ const RECOMMENDED_NODE_MAJOR = 24;
  * when deciding whether to show an upgrade nudge.
  */
 const KNOWN_RELEASE_MAJORS = new Set(NODE_RELEASE_SCHEDULE.map((s) => s.major));
+
+/**
+ * Phrase the upgrade suggestion for an end-of-life / maintenance line.
+ *
+ * For a runtime older than the recommended major, point at the
+ * recommended LTS by number. For a runtime that is already at or newer
+ * than the recommended major (e.g. an odd-numbered line entering
+ * maintenance), suggesting an older numbered release would be wrong, so
+ * recommend a current Active LTS line without naming an older number.
+ */
+function upgradeTargetPhrase(major: number): string {
+  return major < RECOMMENDED_NODE_MAJOR
+    ? `Node ${RECOMMENDED_NODE_MAJOR}`
+    : "a current Active LTS release";
+}
+
+/** Pluralize a month count: "1 month" vs "3 months". */
+function monthsLabel(n: number): string {
+  return n === 1 ? "1 month" : `${n} months`;
+}
 
 /**
  * Build user-facing diagnostic notes from Node.js runtime diagnostics.
@@ -185,7 +224,7 @@ export function buildNodeRuntimeWarnings(
           `${schedule.label} reached end-of-life on ${schedule.eol} and no longer receives security updates.`,
         );
         warnings.push(
-          `Upgrade to Node ${RECOMMENDED_NODE_MAJOR} (recommended): https://nodejs.org/en/download`,
+          `Upgrade to ${upgradeTargetPhrase(diag.major)} (recommended): https://nodejs.org/en/download`,
         );
       } else if (nowMs >= maintenanceDate.getTime()) {
         // In maintenance phase — still supported but winding down
@@ -194,10 +233,10 @@ export function buildNodeRuntimeWarnings(
           Math.round((eolDate.getTime() - nowMs) / (30 * 24 * 60 * 60 * 1000)),
         );
         warnings.push(
-          `${schedule.label} is in maintenance mode (EOL ${schedule.eol}, ~${monthsLeft} months remaining).`,
+          `${schedule.label} is in maintenance mode (EOL ${schedule.eol}, ~${monthsLabel(monthsLeft)} remaining).`,
         );
         warnings.push(
-          `Consider upgrading to Node ${RECOMMENDED_NODE_MAJOR} for the latest features and longer support.`,
+          `Consider upgrading to ${upgradeTargetPhrase(diag.major)} for the latest features and longer support.`,
         );
       }
     }
