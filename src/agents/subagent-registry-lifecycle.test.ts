@@ -445,6 +445,35 @@ describe("subagent registry lifecycle hardening", () => {
     expect(finalArg.terminalOutcome).toBeUndefined();
   });
 
+  it("keeps required completions blocked when progress text only adds follow-up planning", async () => {
+    const entry = createRunEntry({
+      expectsCompletionMessage: true,
+    });
+
+    await createLifecycleController({
+      entry,
+      captureSubagentCompletionReply: vi.fn(
+        async () => "I'll inspect the repo now. Then I'll run tests and report back.",
+      ),
+    }).completeSubagentRun({
+      runId: entry.runId,
+      endedAt: 4_000,
+      outcome: { status: "ok" },
+      reason: SUBAGENT_ENDED_REASON_COMPLETE,
+      triggerCleanup: false,
+    });
+
+    expectFields(firstCallArg(taskExecutorMocks.completeTaskRunByRunId), {
+      runId: entry.runId,
+      runtime: "subagent",
+      sessionKey: entry.childSessionKey,
+      progressSummary: "I'll inspect the repo now. Then I'll run tests and report back.",
+      terminalOutcome: "blocked",
+      terminalSummary:
+        "Required completion ended with progress-only text, not a final deliverable.",
+    });
+  });
+
   it("does not reject cleanup give-up when task delivery status update throws", async () => {
     const persist = vi.fn();
     const warn = vi.fn();

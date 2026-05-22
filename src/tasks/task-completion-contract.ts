@@ -9,7 +9,10 @@ const PROGRESS_ONLY_PATTERN =
   /^(?:i(?:'|\u2019)ll|i will|i(?:'|\u2019)m|i am|i(?:'|\u2019)m going to|i am going to|let me|i need to)\s+(?:now\s+)?(?:analyz(?:e|ing)|apply|check(?:ing)?|continue|debug(?:ging)?|follow(?:ing)?\s+up|inspect(?:ing)?|investigat(?:e|ing)|look(?:ing)?(?:\s+into)?|map(?:ping)?|open(?:ing)?|read(?:ing)?|report(?:ing)?(?:\s+back)?|review(?:ing)?|run(?:ning)?|start(?:ing)?|test(?:ing)?|trace|trac(?:e|ing)|try(?:ing)?|update|verify(?:ing)?|work(?:ing)?)/i;
 
 const BARE_PROGRESS_ONLY_PATTERN =
-  /^(?:analyz(?:e|ing)|checking|debugging|inspecting|investigating|looking\s+into|mapping|reading|reviewing|running|testing|tracing|verifying|working\s+on)\b/i;
+  /^(?:analyz(?:e|ing)|check(?:ing)?|debug(?:ging)?|inspect(?:ing)?|investigat(?:e|ing)|look(?:ing)?\s+into|map(?:ping)?|read(?:ing)?|report(?:ing)?\s+back|review(?:ing)?|run(?:ning)?|test(?:ing)?|trac(?:e|ing)|verify(?:ing)?|work(?:ing)?\s+on)\b/i;
+
+const FOLLOW_UP_PLANNING_PREFIX_PATTERN =
+  /^(?:after(?:wards|\s+that)?|from\s+there|next|once\s+(?:done|that(?:'|\u2019)?s\s+done|that\s+is\s+done)|then)[,.\s]+/i;
 
 function normalizeCompletionText(value: string | null | undefined): string {
   return value?.replace(/\s+/g, " ").trim() ?? "";
@@ -24,7 +27,14 @@ function normalizeCompletionFailureReason(value: string | null | undefined): str
 }
 
 function matchesProgressOnlyPrefix(value: string): boolean {
-  return PROGRESS_ONLY_PATTERN.test(value) || BARE_PROGRESS_ONLY_PATTERN.test(value);
+  if (PROGRESS_ONLY_PATTERN.test(value) || BARE_PROGRESS_ONLY_PATTERN.test(value)) {
+    return true;
+  }
+  const followup = value.replace(FOLLOW_UP_PLANNING_PREFIX_PATTERN, "").trim();
+  return (
+    followup !== value &&
+    (PROGRESS_ONLY_PATTERN.test(followup) || BARE_PROGRESS_ONLY_PATTERN.test(followup))
+  );
 }
 
 function hasNonProgressFollowupSentence(value: string): boolean {
