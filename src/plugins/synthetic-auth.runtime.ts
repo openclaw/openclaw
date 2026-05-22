@@ -19,22 +19,25 @@ function uniqueProviderRefs(values: readonly string[]): string[] {
   return next;
 }
 
-function resolveManifestSyntheticAuthProviderRefs(
+function resolveManifestSyntheticAuthProviderRefState(
   params: {
     index?: PluginRegistrySnapshot;
     registryDiagnostics?: readonly unknown[];
   } = {},
-): string[] {
+): { refs: string[]; complete: boolean } {
   if (params.index && (params.registryDiagnostics?.length ?? 0) > 0) {
-    return [];
+    return { refs: [], complete: false };
   }
   const result = loadPluginRegistrySnapshotWithMetadata({ index: params.index });
   if (result.source !== "persisted" && result.source !== "provided") {
-    return [];
+    return { refs: [], complete: false };
   }
-  return uniqueProviderRefs(
-    result.snapshot.plugins.flatMap((plugin) => plugin.syntheticAuthRefs ?? []),
-  );
+  return {
+    refs: uniqueProviderRefs(
+      result.snapshot.plugins.flatMap((plugin) => plugin.syntheticAuthRefs ?? []),
+    ),
+    complete: true,
+  };
 }
 
 function resolveManifestExternalAuthProviderRefs(
@@ -64,26 +67,39 @@ export function resolveRuntimeSyntheticAuthProviderRefs(
     registryDiagnostics?: readonly unknown[];
   } = {},
 ): string[] {
+  return resolveRuntimeSyntheticAuthProviderRefState(params).refs;
+}
+
+export function resolveRuntimeSyntheticAuthProviderRefState(
+  params: {
+    index?: PluginRegistrySnapshot;
+    registryDiagnostics?: readonly unknown[];
+  } = {},
+): { refs: string[]; complete: boolean } {
   const registry = getPluginRegistryState()?.activeRegistry;
   if (registry) {
-    return uniqueProviderRefs([
-      ...(registry.providers ?? [])
-        .filter(
-          (entry) =>
-            "resolveSyntheticAuth" in entry.provider &&
-            typeof entry.provider.resolveSyntheticAuth === "function",
-        )
-        .map((entry) => entry.provider.id),
-      ...(registry.cliBackends ?? [])
-        .filter(
-          (entry) =>
-            "resolveSyntheticAuth" in entry.backend &&
-            typeof entry.backend.resolveSyntheticAuth === "function",
-        )
-        .map((entry) => entry.backend.id),
-    ]);
+    return {
+      refs: uniqueProviderRefs([
+        ...registry.plugins.flatMap((plugin) => plugin.syntheticAuthRefs ?? []),
+        ...(registry.providers ?? [])
+          .filter(
+            (entry) =>
+              "resolveSyntheticAuth" in entry.provider &&
+              typeof entry.provider.resolveSyntheticAuth === "function",
+          )
+          .map((entry) => entry.provider.id),
+        ...(registry.cliBackends ?? [])
+          .filter(
+            (entry) =>
+              "resolveSyntheticAuth" in entry.backend &&
+              typeof entry.backend.resolveSyntheticAuth === "function",
+          )
+          .map((entry) => entry.backend.id),
+      ]),
+      complete: true,
+    };
   }
-  return resolveManifestSyntheticAuthProviderRefs({
+  return resolveManifestSyntheticAuthProviderRefState({
     index: params.index,
     registryDiagnostics: params.registryDiagnostics,
   });
