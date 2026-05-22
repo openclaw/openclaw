@@ -134,6 +134,10 @@ Lossless remains supported as a context engine. Configure it through
 `compaction.provider: "lossless-claw"` shape to the Lossless context-engine slot
 when Codex is the active runtime.
 
+The native Codex app-server harness supports context engines that require
+pre-prompt assembly. Generic CLI backends, including `codex-cli`, do not provide
+that host capability.
+
 When the active context engine reports `ownsCompaction: true`, `/compact` runs
 that engine's compaction lifecycle and invalidates the bound Codex app-server
 thread. The next Codex turn starts a fresh backend thread and rehydrates it from
