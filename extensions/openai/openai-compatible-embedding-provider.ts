@@ -41,6 +41,7 @@ type ConfiguredEmbeddingProvider = {
   apiKey?: unknown;
   headers?: Record<string, unknown>;
 };
+type SecretRef = NonNullable<ReturnType<typeof coerceSecretRef>>;
 
 function normalizeBaseUrl(value: string | undefined): string {
   const baseUrl = value?.trim();
@@ -150,6 +151,16 @@ function sanitizeCacheHeaders(headers: Record<string, string>): Record<string, s
   return Object.keys(safeHeaders).length > 0 ? safeHeaders : undefined;
 }
 
+function formatSecretRefLabel(ref: SecretRef): string {
+  return `${ref.source}:${ref.provider}:${ref.id}`;
+}
+
+function createUnresolvedSecretInputError(path: string, ref: SecretRef): Error {
+  return new Error(
+    `${path}: unresolved SecretRef "${formatSecretRefLabel(ref)}". Resolve this command against an active gateway runtime snapshot before reading it.`,
+  );
+}
+
 function resolveSecretString(value: unknown, path: string): string | undefined {
   const ref = coerceSecretRef(value);
   if (ref?.source === "env") {
@@ -157,6 +168,7 @@ function resolveSecretString(value: unknown, path: string): string | undefined {
     if (envValue) {
       return envValue;
     }
+    throw createUnresolvedSecretInputError(path, ref);
   }
   if (ref) {
     return normalizeResolvedSecretInputString({ value, path })?.trim();

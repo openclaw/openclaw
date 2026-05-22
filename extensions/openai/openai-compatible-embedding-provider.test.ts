@@ -305,6 +305,25 @@ describe("openai-compatible generic embedding provider", () => {
     }
   });
 
+  it("does not treat missing env-template API key strings as inline secrets", async () => {
+    const envVar = "OPENCLAW_TEST_OPENAI_COMPATIBLE_EMBEDDING_MISSING_TEMPLATE_KEY";
+    delete process.env[envVar];
+    const server = await startEmbeddingServer();
+
+    expect(() =>
+      createOpenAICompatibleEmbeddingProvider(
+        createOptions({
+          model: "text-embedding-bge-m3",
+          remote: {
+            baseUrl: server.baseUrl,
+            apiKey: `\${${envVar}}`,
+          },
+        }),
+      ),
+    ).toThrow(`unresolved SecretRef "env:default:${envVar}"`);
+    expect(server.requests).toHaveLength(0);
+  });
+
   it("reads connection settings from configured OpenAI-compatible provider aliases", async () => {
     const token = "alias-token";
     const server = await startEmbeddingServer({ token });
