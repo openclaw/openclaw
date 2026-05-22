@@ -218,15 +218,32 @@ function collectTelemetry(params: {
 
 // ─── Result projection ──────────────────────────────────────────────────────
 
-function projectContentItems(result: unknown): DynamicToolCallOutputContentItem[] {
+/**
+ * Cap for dynamic-tool inputText content sent back to the SDK. Mirrors
+ * codex's DEFAULT_CODEX_DYNAMIC_TOOL_RESULT_MAX_CHARS. Without this cap,
+ * a tool that returns a very large payload (e.g. file_fetch on a huge
+ * file, vestige_search with a wide query) silently inflates the
+ * model's input window — Anthropic's API rejects payloads exceeding
+ * its limits with an opaque 400 instead.
+ *
+ * Truncation is per-text-block, not aggregate. A single oversized block
+ * is truncated and tagged with a "[truncated to N chars]" suffix so the
+ * model can recognize and react to the elision.
+ */
+export const DEFAULT_CLAUDE_DYNAMIC_TOOL_RESULT_MAX_CHARS = 16_000;
+
+function projectContentItems(
+  result: unknown,
+  maxChars: number = DEFAULT_CLAUDE_DYNAMIC_TOOL_RESULT_MAX_CHARS,
+): DynamicToolCallOutputContentItem[] {
   if (!result || typeof result !== "object" || Array.isArray(result)) {
-    return [{ type: "inputText", text: String(result) }];
+    return [{ type: "inputText", text: truncateForToolResult(String(result), maxChars) }];
   }
   const obj = result as Record<string, unknown>;
   const items: DynamicToolCallOutputContentItem[] = [];
   const content = obj.content;
   if (typeof content === "string") {
-    items.push({ type: "inputText", text: content });
+    items.push({ type: "inputText", text: truncateForToolResult(content, maxChars) });
   } else if (Array.isArray(content)) {
     for (const block of content) {
       if (!block || typeof block !== "object") {
@@ -234,7 +251,7 @@ function projectContentItems(result: unknown): DynamicToolCallOutputContentItem[
       }
       const b = block as Record<string, unknown>;
       if (b.type === "text" && typeof b.text === "string") {
-        items.push({ type: "inputText", text: b.text });
+        items.push({ type: "inputText", text: truncateForToolResult(b.text, maxChars) });
       } else if (b.type === "image_url" && typeof b.image_url === "string") {
         items.push({ type: "inputImage", imageUrl: b.image_url });
       } else if (b.type === "image" && typeof b.url === "string") {
@@ -244,12 +261,21 @@ function projectContentItems(result: unknown): DynamicToolCallOutputContentItem[
   }
   if (items.length === 0) {
     if (typeof obj.text === "string") {
-      items.push({ type: "inputText", text: obj.text });
+      items.push({ type: "inputText", text: truncateForToolResult(obj.text, maxChars) });
     } else {
-      items.push({ type: "inputText", text: stringify(obj) });
+      items.push({ type: "inputText", text: truncateForToolResult(stringify(obj), maxChars) });
     }
   }
   return items;
+}
+
+export function truncateForToolResult(text: string, maxChars: number): string {
+  if (maxChars <= 0 || text.length <= maxChars) {
+    return text;
+  }
+  const reserve = ` [truncated to ${maxChars} chars]`;
+  const sliceLen = Math.max(0, maxChars - reserve.length);
+  return `${text.slice(0, sliceLen)}${reserve}`;
 }
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
