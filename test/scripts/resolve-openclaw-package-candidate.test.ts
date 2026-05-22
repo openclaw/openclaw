@@ -158,16 +158,24 @@ describe("resolve-openclaw-package-candidate", () => {
     await expect(
       downloadUrl("https://packages.example/openclaw.tgz", target, {
         fetchImpl: async (url: URL) => {
+          let cancelled = false;
           const body = new ReadableStream({
             start(controller) {
-              // Simulate a slow/never-ending body that would hang if not cancelled
               const timer = setInterval(() => {
-                controller.enqueue(new Uint8Array([0]));
+                if (cancelled) {
+                  clearInterval(timer);
+                  return;
+                }
+                try {
+                  controller.enqueue(new Uint8Array([0]));
+                } catch {
+                  // Controller may already be closed after cancel.
+                  clearInterval(timer);
+                }
               }, 100);
-              // Keep the stream open indefinitely
-              return () => clearInterval(timer);
             },
-            cancel(reason) {
+            cancel() {
+              cancelled = true;
               bodyCancelled.push(url.toString());
             },
           });
