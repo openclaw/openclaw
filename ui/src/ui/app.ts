@@ -75,10 +75,15 @@ import {
 import type { ChatRunUiStatus } from "./chat/run-lifecycle.ts";
 import type { ChatSideResult } from "./chat/side-result.ts";
 import {
+  createIdleClaworksHealthSnapshot,
+  type ClaworksHealthSnapshot,
+} from "./claworks-health.ts";
+import {
   loadToolsEffective as loadToolsEffectiveInternal,
   refreshVisibleToolsEffectiveForCurrentSession as refreshVisibleToolsEffectiveForCurrentSessionInternal,
 } from "./controllers/agents.ts";
 import { loadAssistantIdentity as loadAssistantIdentityInternal } from "./controllers/assistant-identity.ts";
+import { loadClaworksHealthState } from "./controllers/claworks-health.ts";
 import type { DevicePairingList } from "./controllers/devices.ts";
 import type {
   DreamingStatus,
@@ -200,6 +205,7 @@ export class OpenClawApp extends LitElement {
   @state() allowExternalEmbedUrls = false;
   @state() chatMessageMaxWidth: string | null = null;
   @state() serverVersion: string | null = null;
+  @state() productDisplayName = "OpenClaw";
 
   @state() sessionKey = this.settings.sessionKey;
   currentSessionId: string | null = null;
@@ -522,6 +528,7 @@ export class OpenClawApp extends LitElement {
 
   // Overview dashboard state
   @state() attentionItems: import("./types.js").AttentionItem[] = [];
+  @state() claworksHealth: ClaworksHealthSnapshot = createIdleClaworksHealthSnapshot();
   @state() paletteOpen = false;
   @state() paletteQuery = "";
   @state() paletteActiveIndex = 0;
@@ -939,6 +946,10 @@ export class OpenClawApp extends LitElement {
     await loadOverviewInternal(this as unknown as Parameters<typeof loadOverviewInternal>[0], opts);
   }
 
+  async loadClaworksHealth() {
+    await loadClaworksHealthState(this as unknown as Parameters<typeof loadClaworksHealthState>[0]);
+  }
+
   async loadCron() {
     await loadCronInternal(this as unknown as Parameters<typeof loadCronInternal>[0]);
   }
@@ -1060,7 +1071,7 @@ export class OpenClawApp extends LitElement {
           }
         },
         onTranscript: (entry) => {
-          this.realtimeTalkTranscript = `${entry.role === "user" ? "You" : "OpenClaw"}: ${entry.text}`;
+          this.realtimeTalkTranscript = `${entry.role === "user" ? "You" : this.productDisplayName}: ${entry.text}`;
         },
       },
       this.buildRealtimeTalkLaunchOptions(),

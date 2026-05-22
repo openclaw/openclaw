@@ -16,7 +16,7 @@ export function createChannelNotifier(
 ): NotifyFn {
   const staticTargets = config?.targets ?? [];
 
-  return async ({ message, channels }) => {
+  return async ({ message, channels, cards }) => {
     const channelIds =
       channels && channels.length > 0
         ? channels
@@ -45,6 +45,31 @@ export function createChannelNotifier(
       const adapter = await api.runtime.channel.outbound.loadAdapter(
         channelId as Parameters<typeof api.runtime.channel.outbound.loadAdapter>[0],
       );
+
+      // 尝试渠道原生富卡片发送（duck-typing：检查 adapter 是否提供 sendCard 扩展）
+      const channelCard = cards?.[channelId];
+      const adapterExt = adapter as
+        | (typeof adapter & { sendCard?: (params: Record<string, unknown>) => Promise<void> })
+        | undefined;
+      if (channelCard && typeof adapterExt?.sendCard === "function") {
+        try {
+          await adapterExt.sendCard({
+            cfg: api.config,
+            to: target.to,
+            card: channelCard,
+            ...(target.accountId ? { accountId: target.accountId } : {}),
+            ...(target.threadId != null ? { threadId: target.threadId } : {}),
+          });
+          api.logger.info?.(`[claworks:notify] sent rich card to ${channelId}:${target.to}`);
+          continue;
+        } catch (err) {
+          api.logger.warn?.(
+            `[claworks:notify] sendCard failed for ${channelId}, falling back to text: ${err instanceof Error ? err.message : String(err)}`,
+          );
+        }
+      }
+
+      // 纯文本降级
       const send = adapter?.sendText;
       if (!send) {
         api.logger.warn?.(`[claworks:notify] outbound adapter unavailable: ${channelId}`);

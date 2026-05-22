@@ -10,6 +10,7 @@ import {
 import { isRich, theme } from "../terminal/theme.js";
 import { hasRootVersionAlias } from "./argv.js";
 import { parseTaglineMode, readCliBannerTaglineMode } from "./banner-config-lite.js";
+import { resolveProductDisplayName, resolveProductEmoji } from "./product-surface.js";
 import { pickTagline, type TaglineMode, type TaglineOptions } from "./tagline.js";
 
 type BannerOptions = TaglineOptions & {
@@ -71,8 +72,10 @@ export function formatCliBannerLine(version: string, options: BannerOptions = {}
     emojiOptions,
   );
   const rich = options.richTty ?? isRich();
-  const title = decorativePrefix("🦞", "OpenClaw", emojiOptions);
-  const prefix = decorativeEmoji("🦞", emojiOptions);
+  const productEmoji = resolveProductEmoji(options.env);
+  const productName = resolveProductDisplayName(options.env);
+  const title = decorativePrefix(productEmoji, productName, emojiOptions);
+  const prefix = decorativeEmoji(productEmoji, emojiOptions);
   const indent = prefix ? `${prefix} ` : "";
   const columns = options.columns ?? process.stdout.columns ?? 120;
   const plainBaseLine = `${title} ${version} (${commitLabel})`;

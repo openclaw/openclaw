@@ -489,25 +489,74 @@
       // ─── Knowledge Base ───────────────────────────────────────────────
       async function renderKb() {
         actionBar.style.display = "block";
-        actionBar.innerHTML = `<div class="row">
-          <input id="kbQuery" placeholder="搜索关键词" style="width:240px" />
+        actionBar.innerHTML = `<div class="row" style="flex-wrap:wrap;gap:0.5rem">
+          <input id="kbNamespace" placeholder="namespace（可选）" style="width:140px" />
+          <input id="kbQuery" placeholder="搜索关键词" style="width:200px" />
           <button class="btn btn-primary btn-sm" id="kbSearch">搜索</button>
+          <button class="btn btn-sm" id="kbRefreshStatus">刷新状态</button>
+          <button class="btn btn-sm" id="kbFlush">同步索引</button>
         </div>
-        <div class="row" style="margin-top:0.5rem">
-          <textarea id="kbIngestText" placeholder="录入知识文本…" style="min-height:60px"></textarea>
-          <button class="btn btn-sm" id="kbIngest">录入</button>
+        <div class="row" style="margin-top:0.5rem;flex-wrap:wrap;gap:0.5rem">
+          <textarea id="kbIngestText" placeholder="录入知识文本…" style="min-height:60px;flex:1;min-width:240px"></textarea>
+          <button class="btn btn-sm" id="kbIngest">单条录入</button>
+        </div>
+        <div class="row" style="margin-top:0.5rem;flex-wrap:wrap;gap:0.5rem">
+          <input id="kbFolderPath" placeholder="本地文件夹路径（批量入库）" style="flex:1;min-width:240px" />
+          <button class="btn btn-sm" id="kbIngestFolder">文件夹入库</button>
         </div>`;
+        const showStatus = async () => {
+          const r = await api("/v1/kb/status");
+          const s = r.data ?? {};
+          const vec = s.vector ? badge("vector") : badge("substring");
+          out.innerHTML = `<div class="panel"><div class="panel-title">知识库状态</div>
+            <table><tr><th>项</th><th>值</th></tr>
+            <tr><td>provider</td><td>${html(s.provider ?? "—")} ${vec}</td></tr>
+            <tr><td>embed</td><td>${html(s.kb_embed_model ?? "—")}</td></tr>
+            <tr><td>memory slot</td><td>${html(s.memory_slot ?? "—")}</td></tr>
+            <tr><td>kb-drop</td><td><code>${html(s.kb_drop_dir ?? "—")}</code></td></tr>
+            <tr><td>documents</td><td>${html(String(s.document_count ?? "—"))}</td></tr>
+            <tr><td>note</td><td>${html(s.note ?? "")}</td></tr>
+            </table></div><div id="kbResults" class="panel" style="margin-top:0.75rem"></div>`;
+        };
+        document.getElementById("kbRefreshStatus").onclick = showStatus;
+        document.getElementById("kbFlush").onclick = async () => {
+          const r = await api("/v1/kb/flush", { method: "POST", body: "{}" });
+          alert(r.ok ? (r.data?.flushed ? "索引已同步" : (r.data?.note ?? JSON.stringify(r.data))) : JSON.stringify(r.data));
+          await showStatus();
+        };
         document.getElementById("kbSearch").onclick = async () => {
           const q = document.getElementById("kbQuery").value.trim();
-          const r = await api(`/v1/kb/search?q=${encodeURIComponent(q)}&limit=10`);
-          out.innerHTML = json(r.data);
+          const ns = document.getElementById("kbNamespace").value.trim();
+          let url = `/v1/kb/search?q=${encodeURIComponent(q)}&limit=10`;
+          if (ns) url += `&namespace=${encodeURIComponent(ns)}`;
+          const r = await api(url);
+          const box = document.getElementById("kbResults") ?? out;
+          box.innerHTML = `<div class="panel-title">检索结果</div>${json(r.data)}`;
         };
         document.getElementById("kbIngest").onclick = async () => {
           const text = document.getElementById("kbIngestText").value.trim();
           if (!text) return;
-          const r = await api("/v1/kb/ingest", { method: "POST", body: JSON.stringify({ text, source: "studio" }) });
+          const ns = document.getElementById("kbNamespace").value.trim();
+          const r = await api("/v1/kb/ingest", {
+            method: "POST",
+            body: JSON.stringify({ text, source: "studio", namespace: ns || undefined }),
+          });
           alert(r.ok ? "已录入" : JSON.stringify(r.data));
+          await showStatus();
         };
+        document.getElementById("kbIngestFolder").onclick = async () => {
+          const folder_path = document.getElementById("kbFolderPath").value.trim();
+          if (!folder_path) return alert("请填写文件夹路径");
+          const ns = document.getElementById("kbNamespace").value.trim();
+          const r = await api("/v1/kb/ingest/folder", {
+            method: "POST",
+            body: JSON.stringify({ folder_path, namespace: ns || undefined, recursive: true }),
+          });
+          const box = document.getElementById("kbResults") ?? out;
+          box.innerHTML = `<div class="panel-title">批量入库</div>${json(r.data)}`;
+          await showStatus();
+        };
+        await showStatus();
       }
 
       // ─── Metrics ──────────────────────────────────────────────────────

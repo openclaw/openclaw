@@ -965,12 +965,13 @@ describe("bundled channel entry shape guards", () => {
       "extensions/matrix/src/doctor.ts",
       "extensions/slack/src/doctor.ts",
       "extensions/telegram/src/doctor.ts",
-      "extensions/zalouser/src/doctor.ts",
-    ].filter((filePath) =>
-      fs
-        .readFileSync(path.resolve(filePath), "utf8")
-        .includes('from "openclaw/plugin-sdk/runtime"'),
-    );
+    ]
+      .filter((filePath) => fs.existsSync(path.resolve(filePath)))
+      .filter((filePath) =>
+        fs
+          .readFileSync(path.resolve(filePath), "utf8")
+          .includes('from "openclaw/plugin-sdk/runtime"'),
+      );
 
     expect(offenders).toStrictEqual([]);
   });

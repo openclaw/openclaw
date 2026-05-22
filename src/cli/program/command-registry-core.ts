@@ -109,8 +109,13 @@ const coreEntrySpecs: readonly CommandGroupDescriptorSpec<
       },
       {
         commandNames: ["packs"],
-        loadModule: () => import("@claworks/runtime"),
-        exportName: "registerClaworksPacksCli",
+        loadModule: () => import("../product/register-claworks-packs-cli.js"),
+        exportName: "registerClaworksPacksCliIfProduct",
+      },
+      {
+        commandNames: ["start", "up"],
+        loadModule: () => import("../product/register-claworks-start-cli.js"),
+        exportName: "registerClaworksStartCliIfProduct",
       },
     ]),
   ),

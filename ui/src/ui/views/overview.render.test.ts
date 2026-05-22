@@ -4,6 +4,7 @@ import { render } from "lit";
 import { describe, expect, it } from "vitest";
 import { i18n } from "../../i18n/index.ts";
 import { getSafeLocalStorage } from "../../local-storage.ts";
+import { createIdleClaworksHealthSnapshot } from "../claworks-health.ts";
 import { renderOverview, type OverviewProps } from "./overview.ts";
 
 function createOverviewProps(overrides: Partial<OverviewProps> = {}): OverviewProps {
@@ -56,6 +57,7 @@ function createOverviewProps(overrides: Partial<OverviewProps> = {}): OverviewPr
     onRefresh: () => undefined,
     onNavigate: () => undefined,
     onRefreshLogs: () => undefined,
+    claworksHealth: createIdleClaworksHealthSnapshot(),
     ...overrides,
   };
 }

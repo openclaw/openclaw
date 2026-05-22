@@ -42,12 +42,16 @@ function listTrackedExtensionPackageDirs(rootDir, fsImpl) {
         return [];
       }
       const packageDir = path.join(rootDir, "extensions", match[1]);
+      const packageJsonPath = path.join(packageDir, "package.json");
+      if (!fs.existsSync(packageJsonPath)) {
+        return [];
+      }
       return [
         {
           dirName: match[1],
           hasPackageJson: true,
           packageDir,
-          packageJsonPath: path.join(packageDir, "package.json"),
+          packageJsonPath,
         },
       ];
     })

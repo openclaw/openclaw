@@ -10,6 +10,7 @@ import {
   stopDebugPolling,
 } from "./app-polling.ts";
 import { scheduleChatScroll, scheduleLogsScroll } from "./app-scroll.ts";
+import { summarizeClaworksAttention } from "./claworks-health.ts";
 import {
   beginControlUiRefresh,
   controlUiNowMs,
@@ -27,6 +28,7 @@ import {
 import { loadAgentSkills, type AgentSkillsState } from "./controllers/agent-skills.ts";
 import { loadAgents, type AgentsState } from "./controllers/agents.ts";
 import { loadChannels, type ChannelsState } from "./controllers/channels.ts";
+import { loadClaworksHealthState } from "./controllers/claworks-health.ts";
 import { loadConfig, loadConfigSchema, type ConfigState } from "./controllers/config.ts";
 import {
   loadCronJobsPage,
@@ -147,6 +149,7 @@ type SettingsAppHost = SettingsHost &
     overviewLogCursor: number | null;
     overviewLogLines: string[];
     attentionItems: AttentionItem[];
+    claworksHealth: import("./claworks-health.ts").ClaworksHealthSnapshot;
     hello: { auth?: { role?: string; scopes?: string[] } } | null;
   };
 
@@ -730,8 +733,10 @@ export async function loadOverview(host: SettingsHost, opts?: { refresh?: boolea
     loadSessions(app),
     loadCronStatus(app),
     loadCronJobsPage(app),
+    loadConfig(app),
   ]);
   if (isCurrentOverviewRefresh()) {
+    await loadClaworksHealthState(app);
     buildAttentionItems(app);
   }
 
@@ -744,6 +749,7 @@ export async function loadOverview(host: SettingsHost, opts?: { refresh?: boolea
     // `refresh: true` bypasses the gateway's 60s auth-status cache so a
     // user-initiated refresh surfaces post-re-auth state immediately.
     loadModelAuthStatusState(app, { refresh: opts?.refresh }),
+    loadClaworksHealthState(app),
   ]).then((results) => {
     if (!isCurrentOverviewRefresh()) {
       return;
@@ -919,6 +925,16 @@ function buildAttentionItems(host: SettingsAppHost) {
           .join(", "),
       });
     }
+  }
+
+  const claworksAttention = summarizeClaworksAttention(host.claworksHealth);
+  if (claworksAttention) {
+    items.push({
+      severity: claworksAttention.severity,
+      icon: claworksAttention.severity === "error" ? "x" : "zap",
+      title: claworksAttention.title,
+      description: claworksAttention.description,
+    });
   }
 
   host.attentionItems = items;

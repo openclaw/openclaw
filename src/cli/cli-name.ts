@@ -2,8 +2,28 @@ import path from "node:path";
 
 const DEFAULT_CLI_NAME = "openclaw";
 
-const KNOWN_CLI_NAMES = new Set([DEFAULT_CLI_NAME]);
-const CLI_PREFIX_RE = /^(?:((?:pnpm|npm|bunx|npx)\s+))?(openclaw)\b/;
+/** ClaWorks CLI binary name */
+export const CLAWORKS_CLI_NAME = "claworks";
+/** OpenClaw CLI binary name */
+export const OPENCLAW_CLI_NAME = "openclaw";
+
+/** Detect ClaWorks product mode via environment variable */
+export function isClaworksCliProduct(env: NodeJS.ProcessEnv = process.env): boolean {
+  return env.CLAWORKS_PRODUCT === "1" || env.CLAWORKS_PRODUCT === "true";
+}
+
+/** Resolve display title for the given CLI name */
+export function resolveCliProductTitle(cliName: string): string {
+  return cliName === CLAWORKS_CLI_NAME ? "ClaWorks" : "OpenClaw";
+}
+
+/** Resolve emoji for the given CLI name */
+export function resolveCliProductEmoji(cliName: string): string {
+  return cliName === CLAWORKS_CLI_NAME ? "🦅" : "🦞";
+}
+
+const KNOWN_CLI_NAMES = new Set([DEFAULT_CLI_NAME, CLAWORKS_CLI_NAME]);
+const CLI_PREFIX_RE = /^(?:((?:pnpm|npm|bunx|npx)\s+))?(openclaw|claworks)\b/;
 
 export function resolveCliName(argv: string[] = process.argv): string {
   const argv1 = argv[1];

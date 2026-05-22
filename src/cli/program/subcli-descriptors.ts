@@ -177,6 +177,11 @@ const subCliCommandCatalog = defineCommandDescriptorCatalog([
     description: "Generate shell completion script",
     hasSubcommands: false,
   },
+  {
+    name: "evolution",
+    description: "ClaWorks 离线进化同步管道（导出数据 / 导入改进包 / 查看状态）",
+    hasSubcommands: true,
+  },
 ] as const satisfies ReadonlyArray<SubCliDescriptor>);
 
 export const SUB_CLI_DESCRIPTORS = subCliCommandCatalog.descriptors;

@@ -6,7 +6,6 @@ export const mediaExtensionTestRoots = [
   "extensions/image-generation-core",
   "extensions/runway",
   "extensions/talk-voice",
-  "extensions/video-generation-core",
   "extensions/vydra",
   "extensions/xiaomi",
 ];

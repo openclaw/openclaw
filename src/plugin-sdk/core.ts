@@ -261,6 +261,7 @@ export {
   readReactionParams,
   readStringArrayParam,
   readStringParam,
+  ToolInputError,
 } from "../agents/tools/common.js";
 export { parseStrictPositiveInteger } from "../infra/parse-finite-number.js";
 export { isTrustedProxyAddress, resolveClientIp } from "../gateway/net.js";

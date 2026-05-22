@@ -697,17 +697,6 @@ describe("test-projects args", () => {
     ]);
   });
 
-  it("routes zalo extension tests to the zalo config", () => {
-    expect(buildVitestRunPlans(["extensions/zalo/src/channel.test.ts"])).toEqual([
-      {
-        config: "test/vitest/vitest.extension-zalo.config.ts",
-        forwardedArgs: [],
-        includePatterns: ["extensions/zalo/src/channel.test.ts"],
-        watchMode: false,
-      },
-    ]);
-  });
-
   it("routes matrix extension tests to the matrix config", () => {
     expect(buildVitestRunPlans(["extensions/matrix/src/channel.test.ts"])).toEqual([
       {
@@ -826,17 +815,6 @@ describe("test-projects args", () => {
         config: "test/vitest/vitest.extension-browser.config.ts",
         forwardedArgs: [],
         includePatterns: ["extensions/browser/index.test.ts"],
-        watchMode: false,
-      },
-    ]);
-  });
-
-  it("routes line extension targets to the line config", () => {
-    expect(buildVitestRunPlans(["extensions/line/src/send.test.ts"])).toEqual([
-      {
-        config: "test/vitest/vitest.extension-line.config.ts",
-        forwardedArgs: [],
-        includePatterns: ["extensions/line/src/send.test.ts"],
         watchMode: false,
       },
     ]);

@@ -177,6 +177,9 @@ export function collectBundledPluginBuildEntries(params = {}) {
 
   for (const candidate of collectBundledPluginCandidates(cwd, extensionsRoot)) {
     const { dirName, pluginDir, relativeFiles, topLevelPublicSurfaceEntries } = candidate;
+    if (!fs.existsSync(pluginDir)) {
+      continue;
+    }
     const manifestPath = path.join(pluginDir, "openclaw.plugin.json");
     const hasManifest =
       relativeFiles?.includes("openclaw.plugin.json") ?? fs.existsSync(manifestPath);

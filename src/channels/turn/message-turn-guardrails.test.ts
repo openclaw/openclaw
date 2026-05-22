@@ -7,13 +7,10 @@ import { listGitTrackedFiles } from "../../test-utils/repo-files.js";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
 
-const migratedMessageTurnFiles = [
+const migratedMessageTurnCandidates = [
   "extensions/discord/src/monitor/message-handler.context.ts",
   "extensions/discord/src/monitor/message-handler.preflight.ts",
   "extensions/feishu/src/bot.ts",
-  "extensions/imessage/src/monitor/inbound-processing.ts",
-  "extensions/line/src/bot-handlers.ts",
-  "extensions/line/src/bot-message-context.ts",
   "extensions/mattermost/src/mattermost/monitor.ts",
   "extensions/msteams/src/monitor-handler/message-handler.ts",
   "extensions/signal/src/monitor/event-handler.ts",
@@ -22,26 +19,27 @@ const migratedMessageTurnFiles = [
   "extensions/telegram/src/bot-message-context.session.ts",
   "extensions/telegram/src/bot-message-dispatch.ts",
   "extensions/whatsapp/src/auto-reply/monitor/group-gating.ts",
-  "extensions/zalouser/src/monitor.ts",
 ];
 
-const historyWindowFiles = [
+const historyWindowCandidates = [
   "extensions/discord/src/monitor/message-handler.context.ts",
   "extensions/feishu/src/bot.ts",
-  "extensions/imessage/src/monitor/inbound-processing.ts",
-  "extensions/line/src/bot-handlers.ts",
-  "extensions/line/src/bot-message-context.ts",
   "extensions/mattermost/src/mattermost/monitor.ts",
   "extensions/msteams/src/monitor-handler/message-handler.ts",
-  "extensions/qqbot/src/bridge/sdk-adapter.ts",
   "extensions/signal/src/monitor/event-handler.ts",
   "extensions/slack/src/monitor/message-handler/prepare.ts",
   "extensions/telegram/src/bot-message-context.body.ts",
   "extensions/telegram/src/bot-message-context.session.ts",
   "extensions/telegram/src/bot-message-dispatch.ts",
   "extensions/whatsapp/src/auto-reply/monitor/group-gating.ts",
-  "extensions/zalouser/src/monitor.ts",
 ];
+
+function repoFileExists(relativePath: string): boolean {
+  return fs.existsSync(path.join(repoRoot, ...relativePath.split("/")));
+}
+
+const migratedMessageTurnFiles = migratedMessageTurnCandidates.filter(repoFileExists);
+const historyWindowFiles = historyWindowCandidates.filter(repoFileExists);
 
 const lowLevelHistoryHelpers = [
   "buildInboundHistoryFromMap",
@@ -136,6 +134,7 @@ describe("message turn migration guardrails", () => {
   });
 
   it("keeps migrated message paths off low-level reply-history helpers", () => {
+    expect(migratedMessageTurnFiles.length).toBeGreaterThan(0);
     for (const file of migratedMessageTurnFiles) {
       const source = readRepoFile(file);
       for (const helper of lowLevelHistoryHelpers) {
@@ -147,6 +146,7 @@ describe("message turn migration guardrails", () => {
   });
 
   it("keeps migrated history users on the channel history window facade", () => {
+    expect(historyWindowFiles.length).toBeGreaterThan(0);
     for (const file of historyWindowFiles) {
       expect(readRepoFile(file), `${file} should keep using createChannelHistoryWindow`).toContain(
         "createChannelHistoryWindow",

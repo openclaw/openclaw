@@ -211,6 +211,21 @@ function listBundledPluginEntrySources(
   );
 }
 
+function optionalBundledPluginEntries(
+  pluginId: string,
+  relativeEntries: Record<string, string>,
+): Record<string, string> {
+  const pluginRoot = path.join(process.cwd(), "extensions", pluginId);
+  if (!fs.existsSync(pluginRoot)) {
+    return {};
+  }
+  return Object.fromEntries(
+    Object.entries(relativeEntries).filter(([, relativePath]) =>
+      fs.existsSync(path.join(process.cwd(), relativePath)),
+    ),
+  );
+}
+
 function buildCoreDistEntries(): Record<string, string> {
   return {
     index: "src/index.ts",
@@ -250,12 +265,14 @@ function buildCoreDistEntries(): Record<string, string> {
     "facade-activation-check.runtime": "src/plugin-sdk/facade-activation-check.runtime.ts",
     extensionAPI: "src/extensionAPI.ts",
     "infra/warning-filter": "src/infra/warning-filter.ts",
-    "telegram-ingress-worker.runtime": bundledPluginFile(
-      "telegram",
-      "src/telegram-ingress-worker.runtime.ts",
-    ),
-    "telegram/audit": bundledPluginFile("telegram", "src/audit.ts"),
-    "telegram/token": bundledPluginFile("telegram", "src/token.ts"),
+    ...optionalBundledPluginEntries("telegram", {
+      "telegram-ingress-worker.runtime": bundledPluginFile(
+        "telegram",
+        "src/telegram-ingress-worker.runtime.ts",
+      ),
+      "telegram/audit": bundledPluginFile("telegram", "src/audit.ts"),
+      "telegram/token": bundledPluginFile("telegram", "src/token.ts"),
+    }),
     "plugins/build-smoke-entry": "src/plugins/build-smoke-entry.ts",
     "plugins/runtime/index": "src/plugins/runtime/index.ts",
     "llm-slug-generator": "src/hooks/llm-slug-generator.ts",

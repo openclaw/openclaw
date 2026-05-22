@@ -13,10 +13,12 @@ import {
 } from "@claworks/runtime";
 import { definePluginEntry, type OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { createClaworksBridge } from "./bridge.js";
+import { registerClaworksOpsTools } from "./cw-tools-ops.js";
 import { registerClaworksAgentTools } from "./cw-tools.js";
 import { createMemoryKnowledgeBase } from "./memory-kb.js";
 
 let runtime: ClaworksRuntime | null = null;
+let activeBridge: import("./bridge.js").ClaworksBridge | null = null;
 
 function resolveRobotConfig(api: OpenClawPluginApi): ClaworksRobotConfig {
   const raw = api.pluginConfig as ClaworksRobotConfig | undefined;
@@ -99,11 +101,12 @@ export default definePluginEntry({
                 agentId: robotConfig.data?.memory_agent_id,
               })
             : undefined;
-        const bridge = createClaworksBridge({
+        activeBridge = createClaworksBridge({
           api,
           robotConfig,
           getRuntime: () => runtime,
         });
+        const bridge = activeBridge;
         runtime = await createClaworksRuntime(robotConfig, {
           version: "2026.5.0-alpha.1",
           logger: (msg) => api.logger.info?.(`[claworks-robot] ${msg}`),
@@ -124,10 +127,19 @@ export default definePluginEntry({
           await stopClaworksRuntime(runtime);
           runtime = null;
         }
+        activeBridge = null;
       },
     });
     registerRoutes(api);
+    if (api.registrationMode !== "full") {
+      return;
+    }
     registerClaworksAgentTools(api, () => runtime);
+    registerClaworksOpsTools(
+      api,
+      () => runtime,
+      () => activeBridge,
+    );
 
     const autoImBridge = resolveRobotConfig(api).im_bridge?.auto_on_message_received === true;
     if (autoImBridge) {

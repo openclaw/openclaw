@@ -10,6 +10,45 @@ import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 
 const HITL_CONTROLLER = "claworks-playbook-hitl";
 
+/**
+ * createOpenClawSkillRunner — 桥接 OpenClaw ClawHub Skill（AI 推理能力）。
+ *
+ * 调用路径：Playbook kind:skill → deps.skillRun → runEmbeddedAgent
+ *
+ * @note 与 ScriptLibrary（ClaWorks 内置 TS 脚本）完全不同：
+ *   - 本函数调用的是 OpenClaw 的 AI 能力（SKILL.md 驱动，有 LLM 推理）
+ *   - ScriptLibrary 调用的是确定性 TS 函数（无 LLM），见 script-library.ts
+ */
+export function createOpenClawSkillRunner(
+  api: OpenClawPluginApi,
+  sessionKey: string,
+): SkillRunFn | undefined {
+  const runEmbedded = api.runtime.agent?.runEmbeddedAgent;
+  if (!runEmbedded) {
+    return undefined;
+  }
+  return async ({ skillId, input }) => {
+    const message =
+      input && Object.keys(input).length > 0
+        ? `Execute skill ${skillId} with input: ${JSON.stringify(input)}`
+        : `Execute skill ${skillId}`;
+    const result = await runEmbedded({
+      sessionKey,
+      message,
+      deliver: false,
+    } as Parameters<NonNullable<typeof runEmbedded>>[0]);
+    return {
+      status: "ok",
+      skillId,
+      text: result.payloads?.map((p) => ("text" in p ? p.text : "")).join("\n") ?? "",
+      result,
+    };
+  };
+}
+
+/** @deprecated 使用 createOpenClawSkillRunner */
+export const createSkillRunner = createOpenClawSkillRunner;
+
 export function resolveClaworksSessionKey(
   config: ClaworksRobotConfig,
   api: OpenClawPluginApi,
@@ -47,33 +86,6 @@ export function createSubagentRunner(
     const session = await subagent.getSessionMessages({ sessionKey, limit: 20 });
     const text = extractAssistantText(session.messages);
     return { text };
-  };
-}
-
-export function createSkillRunner(
-  api: OpenClawPluginApi,
-  sessionKey: string,
-): SkillRunFn | undefined {
-  const runEmbedded = api.runtime.agent?.runEmbeddedAgent;
-  if (!runEmbedded) {
-    return undefined;
-  }
-  return async ({ skillId, input }) => {
-    const message =
-      input && Object.keys(input).length > 0
-        ? `Execute skill ${skillId} with input: ${JSON.stringify(input)}`
-        : `Execute skill ${skillId}`;
-    const result = await runEmbedded({
-      sessionKey,
-      message,
-      deliver: false,
-    } as Parameters<NonNullable<typeof runEmbedded>>[0]);
-    return {
-      status: "ok",
-      skillId,
-      text: result.payloads?.map((p) => ("text" in p ? p.text : "")).join("\n") ?? "",
-      result,
-    };
   };
 }
 

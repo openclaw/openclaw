@@ -419,6 +419,8 @@ export type AppViewState = {
     logsAtBottom: boolean;
     updateAvailable: import("./types.js").UpdateAvailable | null;
     attentionItems: AttentionItem[];
+    claworksHealth: import("./claworks-health.js").ClaworksHealthSnapshot;
+    loadClaworksHealth: () => Promise<void>;
     paletteOpen: boolean;
     paletteQuery: string;
     paletteActiveIndex: number;

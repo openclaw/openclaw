@@ -1,3 +1,4 @@
+import { applyProductSurfaceCopy } from "../product-surface.js";
 import { defineCommandDescriptorCatalog } from "./command-descriptor-utils.js";
 import type { NamedCommandDescriptor } from "./command-group-descriptors.js";
 
@@ -77,6 +78,16 @@ const coreCliCommandCatalog = defineCommandDescriptorCatalog([
     hasSubcommands: true,
   },
   {
+    name: "start",
+    description: "Bootstrap config and run the ClaWorks Gateway",
+    hasSubcommands: false,
+  },
+  {
+    name: "up",
+    description: "Alias for claworks start",
+    hasSubcommands: false,
+  },
+  {
     name: "agent",
     description: "Run one agent turn via the Gateway",
     hasSubcommands: false,
@@ -116,7 +127,10 @@ const coreCliCommandCatalog = defineCommandDescriptorCatalog([
 export const CORE_CLI_COMMAND_DESCRIPTORS = coreCliCommandCatalog.descriptors;
 
 export function getCoreCliCommandDescriptors(): ReadonlyArray<CoreCliCommandDescriptor> {
-  return coreCliCommandCatalog.getDescriptors();
+  return coreCliCommandCatalog.getDescriptors().map((descriptor) => ({
+    ...descriptor,
+    description: applyProductSurfaceCopy(descriptor.description),
+  }));
 }
 
 export function getCoreCliCommandNames(): string[] {

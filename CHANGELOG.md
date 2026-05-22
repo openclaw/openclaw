@@ -6,12 +6,35 @@ Docs: https://docs.openclaw.ai
 
 ### Changes
 
+- ClaWorks: add `CW_EVENTS` constant map in `src/kernel/event-names.ts` covering all published/subscribed event names, eliminating hardcoded string literals across playbook triggers and kernel publishes.
+- ClaWorks: add `skill.run` kernel capability so Playbook `kind: action` steps can invoke OpenClaw ClawHub Skills (AI reasoning via `runEmbeddedAgent`) in addition to the existing `kind: skill` step type.
+- ClaWorks: add `system.has_skill` and `system.list_skills` kernel capabilities to inspect available OpenClaw Skills and built-in ClaWorks scripts at runtime.
+- ClaWorks: store injected `skillRun` bridge function on the `ClaworksRuntime` object so `skill.run` capability and runtime introspection can reach it without casting.
+- ClaWorks: add `demo_alarm_to_resolution.yaml` industrial pack Playbook demonstrating the full layered architecture: `skill.run` (AI Skill) → `llm.scaffold` fallback → `call_playbook` escalation → learning record.
+- ClaWorks: add generic process framework — 12 `process.*` Playbook templates (`collect_and_report`, `detect_and_escalate`, `collect_user_input`, `notify_and_track`, `request_and_approve`, `search_and_reply`, `health_check_and_alert`, `batch_process`, `feedback_and_learn`, `scheduled_broadcast`, `sync_and_diff`, `validate_and_store`) as reusable building blocks for enterprise automation patterns.
+- ClaWorks: add `call_playbook` step type so Playbooks can compose and reuse other Playbooks with result passing.
+- ClaWorks: add `llm.scaffold` capability and `kind: scaffold` YAML step type for weak-model-friendly structured LLM output via named prompt templates.
+- ClaWorks: add Pack declarative interface — `actionHandlers`, `scripts`, `scaffolds`, and `ontologyTypes` are auto-registered from `PackContribution` without modifying the runtime core.
+- ClaWorks: add `script.run`, `memory.store`/`memory.get`, and `object.create` Playbook primitives.
+- ClaWorks: add offline evolution sync pipeline — `claworks evolution export/import/status` commands for air-gapped continuous improvement.
+- ClaWorks: add `MetricsCollector` and expose `/v1/metrics` Prometheus endpoint for observability.
+- ClaWorks: add `UserProfileStore` with SQLite persistence for per-user learned preferences.
+- ClaWorks: add self-consistency multi-vote in `StructuredOutputEngine.completeWithVoting` for higher-confidence LLM outputs.
+- ClaWorks: add Pack action registry (`ActionRegistry`) so Packs can register custom capabilities without modifying step-executor core.
+- ClaWorks: add slow-step monitoring — steps exceeding 5 s publish `playbook.step_slow` event for in-flight progress notifications.
+- ClaWorks: add RBAC enforcement on REST write operations with `rbac.denied` event publication for Playbook-level audit response.
+- ClaWorks: add `docs/capability-reference.md` documenting all built-in capabilities with YAML usage examples.
+- ClaWorks: update `README.md` with Playbook step types table, generic process template catalogue, and evolution workflow.
 - Dependencies: bump the bundled Codex harness to `@openai/codex` `0.132.0` and refresh the app-server model-list docs for the new catalog.
 - Agents/config: allow `agents.list[].experimental.localModelLean` so lean local-model mode can be enabled for one configured agent instead of globally.
 - Providers/xAI: add device-code OAuth login so remote and headless setups can authorize xAI without a localhost browser callback. (#84005) Thanks @fuller-stack-dev.
 
 ### Fixes
 
+- ClaWorks: fix `contextEngine` initialization so multi-turn conversation memory persists correctly across Playbook steps.
+- ClaWorks: fix parallel branch variable isolation — deep-copy `ctx.variables` before each branch to prevent data pollution between concurrent branches.
+- ClaWorks: unify event naming across kernel using `CW_EVENTS` constants (`work_order.status_changed`, `alarm.triggered`, etc.) to eliminate silent typo bugs.
+- ClaWorks: complete `cw_*` tool manifest contracts for all 6 MCP tools (`cw_query_objects`, `cw_create_object`, `cw_kb_search`, `cw_kb_ingest`, `cw_trigger_playbook`, `cw_get_run_status`).
 - fix(mattermost): fail closed on missing channel type [AI]. (#84091) Thanks @pgondhi987.
 - Recheck rebuilt system.run argv [AI]. (#84090) Thanks @pgondhi987.
 - CLI/cron: bound `openclaw cron show` job lookup pagination so non-advancing or unbounded `cron.list` responses fail instead of hanging the command. Fixes #83856. (#83989)

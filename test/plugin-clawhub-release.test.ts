@@ -35,12 +35,12 @@ describe("resolveChangedClawHubPublishablePluginPackages", () => {
       publishTag: "latest",
     },
     {
-      extensionId: "zalo",
-      packageDir: "extensions/zalo",
-      packageName: "@openclaw/zalo",
-      version: "2026.4.1-beta.1",
-      channel: "beta",
-      publishTag: "beta",
+      extensionId: "telegram",
+      packageDir: "extensions/telegram",
+      packageName: "@openclaw/telegram",
+      version: "2026.4.1",
+      channel: "stable",
+      publishTag: "latest",
     },
   ];
 

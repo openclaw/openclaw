@@ -13,3 +13,5 @@ export { previewGroundedRemMarkdown } from "./src/rem-evidence.js";
 export { filterRecallEntriesWithinLookback } from "./src/dreaming-phases.js";
 export { previewRemHarness } from "./src/rem-harness.js";
 export type { PreviewRemHarnessOptions, PreviewRemHarnessResult } from "./src/rem-harness.js";
+/** Public seam for host plugins (e.g. claworks-robot) — do not import from `src/tools.shared.js` directly. */
+export { getMemoryManagerContext } from "./src/tools.shared.js";

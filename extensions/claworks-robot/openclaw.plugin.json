@@ -1,86 +1,543 @@
 {
-  "id": "claworks-robot",
-  "name": "ClaWorks Robot",
-  "description": "ClaWorks industrial robot runtime — EventKernel · DataPlane · OrchPlane · A2A",
-  "version": "0.1.0-alpha",
-  "activation": {
-    "onStartup": true
-  },
-  "provides": ["service", "tools"],
-  "configSchema": {
-    "type": "object",
-    "additionalProperties": false,
-    "properties": {
-      "robot": {
-        "type": "object",
-        "additionalProperties": true,
-        "properties": {
-          "name": { "type": "string" },
-          "role": { "type": "string", "enum": ["monolith", "twin", "ops", "nexus"] },
-          "port": { "type": "number" },
-          "host": { "type": "string" }
-        }
-      },
-      "data": {
-        "type": "object",
-        "additionalProperties": true,
-        "properties": {
-          "database_url": { "type": "string" },
-          "kb_path": { "type": "string" },
-          "kb_provider": { "type": "string", "enum": ["stub", "memory-core"] },
-          "memory_agent_id": { "type": "string" }
-        }
-      },
-      "packs": {
-        "type": "object",
-        "additionalProperties": true
-      },
-      "notify": {
+    "id": "claworks-robot",
+    "name": "ClaWorks Robot",
+    "description": "ClaWorks industrial robot runtime — EventKernel · DataPlane · OrchPlane · A2A",
+    "version": "0.1.0-alpha",
+    "activation": {
+        "onStartup": true
+    },
+    "provides": [
+        "service",
+        "tools"
+    ],
+    "configSchema": {
         "type": "object",
         "additionalProperties": false,
         "properties": {
-          "default_channel": { "type": "string" },
-          "targets": {
-            "type": "array",
-            "items": {
-              "type": "object",
-              "additionalProperties": false,
-              "properties": {
-                "channel": { "type": "string" },
-                "to": { "type": "string" },
-                "accountId": { "type": "string" },
-                "threadId": {}
-              },
-              "required": ["channel", "to"]
-            }
-          }
-        }
-      },
-      "connectors": {
-        "type": "object",
-        "additionalProperties": {
-          "type": "object",
-          "additionalProperties": false,
-          "properties": {
-            "preset": {
-              "type": "string",
-              "enum": ["echo", "rest-poll", "mqtt", "opcua", "modbus"]
+            "robot": {
+                "type": "object",
+                "additionalProperties": true,
+                "properties": {
+                    "name": {
+                        "type": "string"
+                    },
+                    "role": {
+                        "type": "string",
+                        "enum": [
+                            "monolith",
+                            "twin",
+                            "ops",
+                            "nexus"
+                        ]
+                    },
+                    "port": {
+                        "type": "number"
+                    },
+                    "host": {
+                        "type": "string"
+                    }
+                }
             },
-            "enabled": { "type": "boolean" },
-            "command": { "type": "string" },
-            "args": { "type": "array", "items": { "type": "string" } },
-            "cwd": { "type": "string" },
-            "env": { "type": "object", "additionalProperties": { "type": "string" } }
-          },
-          "required": ["command"]
+            "data": {
+                "type": "object",
+                "additionalProperties": true,
+                "properties": {
+                    "database_url": {
+                        "type": "string"
+                    },
+                    "kb_path": {
+                        "type": "string"
+                    },
+                    "kb_provider": {
+                        "type": "string",
+                        "enum": [
+                            "stub",
+                            "memory-core"
+                        ]
+                    },
+                    "memory_agent_id": {
+                        "type": "string"
+                    }
+                }
+            },
+            "packs": {
+                "type": "object",
+                "additionalProperties": true
+            },
+            "notify": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                    "default_channel": {
+                        "type": "string"
+                    },
+                    "targets": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "additionalProperties": false,
+                            "properties": {
+                                "channel": {
+                                    "type": "string"
+                                },
+                                "to": {
+                                    "type": "string"
+                                },
+                                "accountId": {
+                                    "type": "string"
+                                },
+                                "threadId": {}
+                            },
+                            "required": [
+                                "channel",
+                                "to"
+                            ]
+                        }
+                    }
+                }
+            },
+            "connectors": {
+                "type": "object",
+                "additionalProperties": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "properties": {
+                        "preset": {
+                            "type": "string",
+                            "enum": [
+                                "echo",
+                                "rest-poll",
+                                "mqtt",
+                                "opcua",
+                                "modbus"
+                            ]
+                        },
+                        "enabled": {
+                            "type": "boolean"
+                        },
+                        "command": {
+                            "type": "string"
+                        },
+                        "args": {
+                            "type": "array",
+                            "items": {
+                                "type": "string"
+                            }
+                        },
+                        "cwd": {
+                            "type": "string"
+                        },
+                        "env": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "required": [
+                        "command"
+                    ]
+                }
+            }
         }
-      }
+    },
+    "services": [
+        {
+            "id": "claworks-kernel",
+            "description": "ClaWorks EventKernel — autonomous event loop and playbook execution"
+        }
+    ],
+    "skills": [
+        "./skills"
+    ],
+    "contracts": {
+        "tools": [
+            "cw_agent_chat",
+            "cw_alarm_summary",
+            "cw_bridge_im_message",
+            "cw_create_object",
+            "cw_define_object_type",
+            "cw_doctor_run",
+            "cw_get_identity",
+            "cw_get_object",
+            "cw_hitl_approve",
+            "cw_hitl_pending",
+            "cw_hitl_reject",
+            "cw_import_objects",
+            "cw_instances",
+            "cw_install_pack",
+            "cw_kb_create_ingest_job",
+            "cw_kb_flush",
+            "cw_kb_get_document",
+            "cw_kb_ingest",
+            "cw_kb_ingest_document",
+            "cw_kb_ingest_folder",
+            "cw_kb_lint_document",
+            "cw_kb_list_documents",
+            "cw_kb_process_ingest_job",
+            "cw_kb_publish",
+            "cw_kb_search",
+            "cw_kb_status",
+            "cw_list_playbooks",
+            "cw_list_types",
+            "cw_playbook_runs",
+            "cw_playbooks_list",
+            "cw_publish_event",
+            "cw_query_objects",
+            "cw_delete_object",
+            "cw_invoke_connector",
+            "cw_list_connectors",
+            "cw_list_events",
+            "cw_list_packs",
+            "cw_reload_packs",
+            "cw_reload_playbooks",
+            "cw_send_message",
+            "cw_status",
+            "cw_trigger_playbook",
+            "cw_update_config",
+            "cw_update_object",
+            "cw_write_playbook",
+            "cw_evolution_export",
+            "cw_evolution_import",
+            "cw_evolution_status"
+        ]
+    },
+    "toolMetadata": {
+        "cw_agent_chat": {
+            "configSignals": [
+                {
+                    "rootPath": "plugins.entries.claworks-robot.config"
+                }
+            ]
+        },
+        "cw_alarm_summary": {
+            "configSignals": [
+                {
+                    "rootPath": "plugins.entries.claworks-robot.config"
+                }
+            ]
+        },
+        "cw_bridge_im_message": {
+            "configSignals": [
+                {
+                    "rootPath": "plugins.entries.claworks-robot.config"
+                }
+            ]
+        },
+        "cw_create_object": {
+            "configSignals": [
+                {
+                    "rootPath": "plugins.entries.claworks-robot.config"
+                }
+            ]
+        },
+        "cw_define_object_type": {
+            "configSignals": [
+                {
+                    "rootPath": "plugins.entries.claworks-robot.config"
+                }
+            ]
+        },
+        "cw_doctor_run": {
+            "configSignals": [
+                {
+                    "rootPath": "plugins.entries.claworks-robot.config"
+                }
+            ]
+        },
+        "cw_get_identity": {
+            "configSignals": [
+                {
+                    "rootPath": "plugins.entries.claworks-robot.config"
+                }
+            ]
+        },
+        "cw_get_object": {
+            "configSignals": [
+                {
+                    "rootPath": "plugins.entries.claworks-robot.config"
+                }
+            ]
+        },
+        "cw_hitl_approve": {
+            "configSignals": [
+                {
+                    "rootPath": "plugins.entries.claworks-robot.config"
+                }
+            ]
+        },
+        "cw_hitl_pending": {
+            "configSignals": [
+                {
+                    "rootPath": "plugins.entries.claworks-robot.config"
+                }
+            ]
+        },
+        "cw_hitl_reject": {
+            "configSignals": [
+                {
+                    "rootPath": "plugins.entries.claworks-robot.config"
+                }
+            ]
+        },
+        "cw_import_objects": {
+            "configSignals": [
+                {
+                    "rootPath": "plugins.entries.claworks-robot.config"
+                }
+            ]
+        },
+        "cw_instances": {
+            "configSignals": [
+                {
+                    "rootPath": "plugins.entries.claworks-robot.config"
+                }
+            ]
+        },
+        "cw_install_pack": {
+            "configSignals": [
+                {
+                    "rootPath": "plugins.entries.claworks-robot.config"
+                }
+            ]
+        },
+        "cw_kb_create_ingest_job": {
+            "configSignals": [
+                {
+                    "rootPath": "plugins.entries.claworks-robot.config"
+                }
+            ]
+        },
+        "cw_kb_flush": {
+            "configSignals": [
+                {
+                    "rootPath": "plugins.entries.claworks-robot.config"
+                }
+            ]
+        },
+        "cw_kb_get_document": {
+            "configSignals": [
+                {
+                    "rootPath": "plugins.entries.claworks-robot.config"
+                }
+            ]
+        },
+        "cw_kb_ingest": {
+            "configSignals": [
+                {
+                    "rootPath": "plugins.entries.claworks-robot.config"
+                }
+            ]
+        },
+        "cw_kb_ingest_document": {
+            "configSignals": [
+                {
+                    "rootPath": "plugins.entries.claworks-robot.config"
+                }
+            ]
+        },
+        "cw_kb_ingest_folder": {
+            "configSignals": [
+                {
+                    "rootPath": "plugins.entries.claworks-robot.config"
+                }
+            ]
+        },
+        "cw_kb_lint_document": {
+            "configSignals": [
+                {
+                    "rootPath": "plugins.entries.claworks-robot.config"
+                }
+            ]
+        },
+        "cw_kb_list_documents": {
+            "configSignals": [
+                {
+                    "rootPath": "plugins.entries.claworks-robot.config"
+                }
+            ]
+        },
+        "cw_kb_process_ingest_job": {
+            "configSignals": [
+                {
+                    "rootPath": "plugins.entries.claworks-robot.config"
+                }
+            ]
+        },
+        "cw_kb_publish": {
+            "configSignals": [
+                {
+                    "rootPath": "plugins.entries.claworks-robot.config"
+                }
+            ]
+        },
+        "cw_kb_search": {
+            "configSignals": [
+                {
+                    "rootPath": "plugins.entries.claworks-robot.config"
+                }
+            ]
+        },
+        "cw_kb_status": {
+            "configSignals": [
+                {
+                    "rootPath": "plugins.entries.claworks-robot.config"
+                }
+            ]
+        },
+        "cw_list_playbooks": {
+            "configSignals": [
+                {
+                    "rootPath": "plugins.entries.claworks-robot.config"
+                }
+            ]
+        },
+        "cw_list_types": {
+            "configSignals": [
+                {
+                    "rootPath": "plugins.entries.claworks-robot.config"
+                }
+            ]
+        },
+        "cw_playbook_runs": {
+            "configSignals": [
+                {
+                    "rootPath": "plugins.entries.claworks-robot.config"
+                }
+            ]
+        },
+        "cw_playbooks_list": {
+            "configSignals": [
+                {
+                    "rootPath": "plugins.entries.claworks-robot.config"
+                }
+            ]
+        },
+        "cw_publish_event": {
+            "configSignals": [
+                {
+                    "rootPath": "plugins.entries.claworks-robot.config"
+                }
+            ]
+        },
+        "cw_query_objects": {
+            "configSignals": [
+                {
+                    "rootPath": "plugins.entries.claworks-robot.config"
+                }
+            ]
+        },
+        "cw_reload_packs": {
+            "configSignals": [
+                {
+                    "rootPath": "plugins.entries.claworks-robot.config"
+                }
+            ]
+        },
+        "cw_reload_playbooks": {
+            "configSignals": [
+                {
+                    "rootPath": "plugins.entries.claworks-robot.config"
+                }
+            ]
+        },
+        "cw_status": {
+            "configSignals": [
+                {
+                    "rootPath": "plugins.entries.claworks-robot.config"
+                }
+            ]
+        },
+        "cw_trigger_playbook": {
+            "configSignals": [
+                {
+                    "rootPath": "plugins.entries.claworks-robot.config"
+                }
+            ]
+        },
+        "cw_write_playbook": {
+            "configSignals": [
+                {
+                    "rootPath": "plugins.entries.claworks-robot.config"
+                }
+            ]
+        },
+        "cw_delete_object": {
+            "configSignals": [
+                {
+                    "rootPath": "plugins.entries.claworks-robot.config"
+                }
+            ]
+        },
+        "cw_invoke_connector": {
+            "configSignals": [
+                {
+                    "rootPath": "plugins.entries.claworks-robot.config"
+                }
+            ]
+        },
+        "cw_list_connectors": {
+            "configSignals": [
+                {
+                    "rootPath": "plugins.entries.claworks-robot.config"
+                }
+            ]
+        },
+        "cw_list_events": {
+            "configSignals": [
+                {
+                    "rootPath": "plugins.entries.claworks-robot.config"
+                }
+            ]
+        },
+        "cw_list_packs": {
+            "configSignals": [
+                {
+                    "rootPath": "plugins.entries.claworks-robot.config"
+                }
+            ]
+        },
+        "cw_update_config": {
+            "configSignals": [
+                {
+                    "rootPath": "plugins.entries.claworks-robot.config"
+                }
+            ]
+        },
+        "cw_update_object": {
+            "configSignals": [
+                {
+                    "rootPath": "plugins.entries.claworks-robot.config"
+                }
+            ]
+        },
+        "cw_send_message": {
+            "configSignals": [
+                {
+                    "rootPath": "plugins.entries.claworks-robot.config"
+                }
+            ]
+        },
+        "cw_evolution_export": {
+            "configSignals": [
+                {
+                    "rootPath": "plugins.entries.claworks-robot.config"
+                }
+            ]
+        },
+        "cw_evolution_import": {
+            "configSignals": [
+                {
+                    "rootPath": "plugins.entries.claworks-robot.config"
+                }
+            ]
+        },
+        "cw_evolution_status": {
+            "configSignals": [
+                {
+                    "rootPath": "plugins.entries.claworks-robot.config"
+                }
+            ]
+        }
     }
-  },
-  "services": [
-    {
-      "id": "claworks-kernel",
-      "description": "ClaWorks EventKernel — autonomous event loop and playbook execution"
-    }
-  ]
 }

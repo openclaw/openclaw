@@ -1,10 +1,12 @@
 import fs from "node:fs";
+import { runClaworksProductDoctorHealth } from "../cli/product/doctor-health-claworks.js";
 import type { probeGatewayMemoryStatus } from "../commands/doctor-gateway-health.js";
 import type { DoctorOptions, DoctorPrompter } from "../commands/doctor-prompter.js";
 import {
   isLegacyParentWritableUpdateDoctorPass,
   UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE_ENV,
 } from "../commands/doctor/shared/update-phase.js";
+import { isClaworksProduct } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { buildGatewayConnectionDetails } from "../gateway/call.js";
 import type { RuntimeEnv } from "../runtime.js";
@@ -27,7 +29,7 @@ type DoctorConfigResult = {
   preservedLegacyRootKeys?: readonly string[];
 };
 
-type DoctorHealthFlowContext = {
+export type DoctorHealthFlowContext = {
   runtime: RuntimeEnv;
   options: DoctorOptions;
   prompter: DoctorPrompter;
@@ -935,6 +937,17 @@ export function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
       healthCheckIds: ["core/doctor/final-config-validation"],
       run: runFinalConfigValidationHealth,
     }),
+    ...(isClaworksProduct()
+      ? [
+          createDoctorHealthContribution({
+            id: "doctor:claworks-product",
+            label: "ClaWorks product",
+            hint: "claworks-robot plugin, packs, and robot.md",
+            healthCheckIds: ["product/claworks/robot-plugin"],
+            run: runClaworksProductDoctorHealth,
+          }),
+        ]
+      : []),
   ];
 }
 

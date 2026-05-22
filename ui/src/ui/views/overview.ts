@@ -1,10 +1,17 @@
 import { html, nothing } from "lit";
 import { t, i18n, SUPPORTED_LOCALES, type Locale, isSupportedLocale } from "../../i18n/index.ts";
 import type { EventLogEntry } from "../app-events.ts";
+import type { ClaworksHealthSnapshot } from "../claworks-health.ts";
 import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../external-link.ts";
 import { formatRelativeTimestamp, formatDurationHuman } from "../format.ts";
 import type { GatewayHelloOk } from "../gateway.ts";
 import { icons } from "../icons.ts";
+import {
+  formatControlUiCliCommand,
+  getControlUiProductContext,
+  CLAWORKS_DEFAULT_GATEWAY_PORT,
+  OPENCLAW_DEFAULT_GATEWAY_PORT,
+} from "../product-surface.ts";
 import type { UiSettings } from "../storage.ts";
 import { normalizeLowercaseStringOrEmpty } from "../string-coerce.ts";
 import type {
@@ -16,6 +23,7 @@ import type {
   SessionsUsageResult,
   SkillStatusReport,
 } from "../types.ts";
+import { renderClaworksOverviewCard } from "./claworks-overview.ts";
 import { renderConnectCommand } from "./connect-command.ts";
 import { renderOverviewAttention } from "./overview-attention.ts";
 import { renderOverviewCards } from "./overview-cards.ts";
@@ -62,7 +70,18 @@ export type OverviewProps = {
   onRefresh: () => void;
   onNavigate: (tab: string) => void;
   onRefreshLogs: () => void;
+  claworksHealth: ClaworksHealthSnapshot;
+  onRefreshClaworksHealth?: () => void;
+  onOpenClaworksPluginConfig?: () => void;
 };
+
+function defaultRemoteGatewayPlaceholder(): string {
+  const port =
+    getControlUiProductContext().productId === "claworks"
+      ? CLAWORKS_DEFAULT_GATEWAY_PORT
+      : OPENCLAW_DEFAULT_GATEWAY_PORT;
+  return `ws://100.x.y.z:${port}`;
+}
 
 const PAIRING_HINT_COPY: Record<
   PairingHint["kind"],
@@ -119,10 +138,13 @@ export function renderOverview(props: OverviewProps) {
           : nothing}
         <div style="margin-top: 6px">
           ${pairingState.requestId
-            ? html`<span class="mono">openclaw devices approve ${pairingState.requestId}</span
+            ? html`<span class="mono"
+                  >${formatControlUiCliCommand(
+                    `openclaw devices approve ${pairingState.requestId}`,
+                  )}</span
                 ><br />`
             : nothing}
-          <span class="mono">openclaw devices list</span>
+          <span class="mono">${formatControlUiCliCommand("openclaw devices list")}</span>
         </div>
         <div style="margin-top: 6px; font-size: 12px;">${t("overview.pairing.mobileHint")}</div>
         <div style="margin-top: 6px">
@@ -155,8 +177,12 @@ export function renderOverview(props: OverviewProps) {
         <div class="muted" style="margin-top: 8px">
           ${t("overview.auth.required")}
           <div style="margin-top: 6px">
-            <span class="mono">openclaw dashboard --no-open</span> → tokenized URL<br />
-            <span class="mono">openclaw doctor --generate-gateway-token</span> → set token
+            <span class="mono">${formatControlUiCliCommand("openclaw dashboard --no-open")}</span> →
+            tokenized URL<br />
+            <span class="mono"
+              >${formatControlUiCliCommand("openclaw doctor --generate-gateway-token")}</span
+            >
+            → set token
           </div>
           <div style="margin-top: 6px">
             <a
@@ -173,7 +199,9 @@ export function renderOverview(props: OverviewProps) {
     }
     return html`
       <div class="muted" style="margin-top: 8px">
-        ${t("overview.auth.failed", { command: "openclaw dashboard --no-open" })}
+        ${t("overview.auth.failed", {
+          command: formatControlUiCliCommand("openclaw dashboard --no-open"),
+        })}
         <div style="margin-top: 6px">
           <a
             class="session-link"
@@ -271,7 +299,7 @@ export function renderOverview(props: OverviewProps) {
                   token: v.trim() === props.settings.gatewayUrl.trim() ? props.settings.token : "",
                 });
               }}
-              placeholder="ws://100.x.y.z:18789"
+              placeholder=${defaultRemoteGatewayPlaceholder()}
             />
           </label>
           ${isTrustedProxy
@@ -381,15 +409,18 @@ export function renderOverview(props: OverviewProps) {
                 <ol class="login-gate__steps">
                   <li>
                     ${t("overview.connection.step1")}
-                    ${renderConnectCommand("openclaw gateway run")}
+                    ${renderConnectCommand(formatControlUiCliCommand("openclaw gateway run"))}
                   </li>
                   <li>
-                    ${t("overview.connection.step2")} ${renderConnectCommand("openclaw dashboard")}
+                    ${t("overview.connection.step2")}
+                    ${renderConnectCommand(formatControlUiCliCommand("openclaw dashboard"))}
                   </li>
                   <li>${t("overview.connection.step3")}</li>
                   <li>
                     ${t("overview.connection.step4")}<code
-                      >openclaw doctor --generate-gateway-token</code
+                      >${formatControlUiCliCommand(
+                        "openclaw doctor --generate-gateway-token",
+                      )}</code
                     >
                   </li>
                 </ol>
@@ -451,6 +482,11 @@ export function renderOverview(props: OverviewProps) {
 
     <div class="ov-section-divider"></div>
 
+    ${renderClaworksOverviewCard({
+      snapshot: props.claworksHealth,
+      onRefresh: props.onRefreshClaworksHealth,
+      onOpenPluginConfig: props.onOpenClaworksPluginConfig,
+    })}
     ${renderOverviewCards({
       usageResult: props.usageResult,
       sessionsResult: props.sessionsResult,

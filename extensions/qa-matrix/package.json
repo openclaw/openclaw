@@ -8,7 +8,6 @@
     "undici": "8.3.0"
   },
   "devDependencies": {
-    "@openclaw/matrix": "workspace:*",
     "@openclaw/plugin-sdk": "workspace:*",
     "openclaw": "workspace:*"
   },

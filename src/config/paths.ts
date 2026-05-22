@@ -74,15 +74,18 @@ export function resolveNewStateDir(
 
 /**
  * State directory for mutable data (sessions, logs, caches).
- * Can be overridden via OPENCLAW_STATE_DIR.
- * Default: ~/.openclaw
+ * Override precedence (ClaWorks mode): CLAWORKS_STATE_DIR → OPENCLAW_STATE_DIR → default ~/.claworks
+ * Override precedence (OpenClaw mode): OPENCLAW_STATE_DIR → default ~/.openclaw
  */
 export function resolveStateDir(
   env: NodeJS.ProcessEnv = process.env,
   homedir: () => string = envHomedir(env),
 ): string {
   const effectiveHomedir = () => resolveRequiredHomeDir(env, homedir);
-  const override = env.OPENCLAW_STATE_DIR?.trim();
+  // In ClaWorks product mode, honour CLAWORKS_STATE_DIR as the first-class override.
+  const override =
+    (isClaworksProduct(env) ? env.CLAWORKS_STATE_DIR?.trim() : undefined) ||
+    env.OPENCLAW_STATE_DIR?.trim();
   if (override) {
     return resolveUserPath(override, env, effectiveHomedir);
   }
@@ -160,14 +163,16 @@ export const STATE_DIR = resolveStateDir();
 
 /**
  * Config file path (JSON or JSON5).
- * Can be overridden via OPENCLAW_CONFIG_PATH.
- * Default: ~/.openclaw/openclaw.json (or $OPENCLAW_STATE_DIR/openclaw.json)
+ * Override precedence (ClaWorks mode): CLAWORKS_CONFIG → OPENCLAW_CONFIG_PATH → default claworks.json
+ * Override precedence (OpenClaw mode): OPENCLAW_CONFIG_PATH → default openclaw.json
  */
 export function resolveCanonicalConfigPath(
   env: NodeJS.ProcessEnv = process.env,
   stateDir: string = resolveStateDir(env, envHomedir(env)),
 ): string {
-  const override = env.OPENCLAW_CONFIG_PATH?.trim();
+  const override =
+    (isClaworksProduct(env) ? env.CLAWORKS_CONFIG?.trim() : undefined) ||
+    env.OPENCLAW_CONFIG_PATH?.trim();
   if (override) {
     return resolveUserPath(override, env, envHomedir(env));
   }
@@ -207,7 +212,9 @@ export function resolveConfigPath(
   stateDir: string = resolveStateDir(env, envHomedir(env)),
   homedir: () => string = envHomedir(env),
 ): string {
-  const override = env.OPENCLAW_CONFIG_PATH?.trim();
+  const override =
+    (isClaworksProduct(env) ? env.CLAWORKS_CONFIG?.trim() : undefined) ||
+    env.OPENCLAW_CONFIG_PATH?.trim();
   if (override) {
     return resolveUserPath(override, env, homedir);
   }
@@ -251,13 +258,17 @@ export function resolveDefaultConfigCandidates(
   homedir: () => string = envHomedir(env),
 ): string[] {
   const effectiveHomedir = () => resolveRequiredHomeDir(env, homedir);
-  const explicit = env.OPENCLAW_CONFIG_PATH?.trim();
+  const explicit =
+    (isClaworksProduct(env) ? env.CLAWORKS_CONFIG?.trim() : undefined) ||
+    env.OPENCLAW_CONFIG_PATH?.trim();
   if (explicit) {
     return [resolveUserPath(explicit, env, effectiveHomedir)];
   }
 
   const candidates: string[] = [];
-  const openclawStateDir = env.OPENCLAW_STATE_DIR?.trim();
+  const openclawStateDir =
+    (isClaworksProduct(env) ? env.CLAWORKS_STATE_DIR?.trim() : undefined) ||
+    env.OPENCLAW_STATE_DIR?.trim();
   const configFilename = resolveProductConfigFilename(env);
   if (openclawStateDir) {
     const resolved = resolveUserPath(openclawStateDir, env, effectiveHomedir);

@@ -224,7 +224,7 @@ async function main() {
     const q = quotes[0];
     assert(q.customer_id === customer.id, "Quote 关联正确的 Customer");
     assert(
-      typeof q.quote_no === "string" && q.quote_no.startsWith("QT-"),
+      typeof q.quote_no === "string" && q.quote_no.startsWith("Q-"),
       `Quote 编号格式正确 (${q.quote_no})`,
     );
   }

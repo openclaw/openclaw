@@ -1285,18 +1285,9 @@ importers:
         specifier: 4.4.3
         version: 4.4.3
     devDependencies:
-      '@openclaw/discord':
-        specifier: workspace:*
-        version: link:../discord
       '@openclaw/plugin-sdk':
         specifier: workspace:*
         version: link:../../packages/plugin-sdk
-      '@openclaw/slack':
-        specifier: workspace:*
-        version: link:../slack
-      '@openclaw/whatsapp':
-        specifier: workspace:*
-        version: link:../whatsapp
       openclaw:
         specifier: workspace:*
         version: link:../..
@@ -1307,9 +1298,6 @@ importers:
         specifier: 8.3.0
         version: 8.3.0
     devDependencies:
-      '@openclaw/matrix':
-        specifier: workspace:*
-        version: link:../matrix
       '@openclaw/plugin-sdk':
         specifier: workspace:*
         version: link:../../packages/plugin-sdk
@@ -1732,6 +1720,8 @@ importers:
       openclaw:
         specifier: workspace:*
         version: link:../..
+
+  packages/claworks-client: {}
 
   packages/claworks-runtime:
     dependencies:

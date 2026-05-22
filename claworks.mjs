@@ -10,14 +10,28 @@ import { fileURLToPath } from "node:url";
 
 const root = path.dirname(fileURLToPath(import.meta.url));
 const home = os.homedir();
-const stateDir = process.env.OPENCLAW_STATE_DIR?.trim() || path.join(home, ".claworks");
+
+// CLAWORKS_STATE_DIR takes precedence over the legacy OPENCLAW_STATE_DIR alias.
+const stateDir =
+  process.env.CLAWORKS_STATE_DIR?.trim() ||
+  process.env.OPENCLAW_STATE_DIR?.trim() ||
+  path.join(home, ".claworks");
+
+// CLAWORKS_CONFIG takes precedence over OPENCLAW_CONFIG_PATH.
+const configPath =
+  process.env.CLAWORKS_CONFIG?.trim() ||
+  process.env.OPENCLAW_CONFIG_PATH?.trim() ||
+  path.join(stateDir, "claworks.json");
 
 const env = {
   ...process.env,
   CLAWORKS_PRODUCT: "1",
+  // Keep both names consistent so the underlying engine (which reads OPENCLAW_*)
+  // and future ClaWorks-native readers (which read CLAWORKS_*) agree.
+  CLAWORKS_STATE_DIR: stateDir,
   OPENCLAW_STATE_DIR: stateDir,
-  OPENCLAW_CONFIG_PATH:
-    process.env.OPENCLAW_CONFIG_PATH?.trim() || path.join(stateDir, "claworks.json"),
+  CLAWORKS_CONFIG: configPath,
+  OPENCLAW_CONFIG_PATH: configPath,
   CLAWORKS_GATEWAY_PORT: process.env.CLAWORKS_GATEWAY_PORT || "18800",
 };
 

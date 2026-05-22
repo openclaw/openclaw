@@ -579,6 +579,22 @@ export const en: TranslationMap = {
       },
     },
   },
+  claworks: {
+    overview: {
+      title: "ClaWorks",
+      subtitle: "Robot runtime health from GET /v1/health.",
+      configure: "Plugin config",
+      status: "Doctor status",
+      robot: "Robot",
+      role: "Role",
+      kb: "Knowledge base",
+      kbEmbed: "KB embed model",
+      missingApiKey: "Set plugins.entries.claworks-robot.config.api.api_key (pnpm claworks:init).",
+      authHint:
+        "Probe uses the robot plugin API key, or the gateway token as Bearer when no API key is set.",
+      probeUrl: "Probe URL",
+    },
+  },
   dreaming: {
     tabs: {
       scene: "Scene",

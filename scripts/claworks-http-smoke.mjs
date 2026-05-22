@@ -31,6 +31,7 @@ async function main() {
     stopClaworksRuntime,
     createClaworksRestHandler,
     createA2aHttpHandler,
+    createMcpHttpHandler,
   } = await import("../packages/claworks-runtime/src/index.ts");
 
   const stateDir = mkdtempSync(path.join(tmpdir(), "claworks-http-"));
@@ -55,6 +56,7 @@ async function main() {
 
   const rest = createClaworksRestHandler(runtime);
   const a2a = createA2aHttpHandler({ runtime });
+  const mcp = createMcpHttpHandler(() => runtime);
 
   const server = createServer(async (req, res) => {
     try {
@@ -62,6 +64,12 @@ async function main() {
       if (url.pathname.startsWith("/a2a")) {
         req.url = url.pathname + url.search;
         if (await a2a(req, res)) {
+          return;
+        }
+      }
+      if (url.pathname.startsWith("/mcp")) {
+        req.url = url.pathname + url.search;
+        if (await mcp(req, res)) {
           return;
         }
       }
@@ -186,6 +194,33 @@ async function main() {
     }
     await new Promise((r) => setTimeout(r, 25));
   }
+
+  const kbStatus = await jfetch("/v1/kb/status");
+  assert(kbStatus.provider === "stub", `kb status provider=${kbStatus.provider}`);
+  log(`GET /v1/kb/status OK provider=${kbStatus.provider}`);
+
+  await jfetch("/v1/kb/ingest", {
+    method: "POST",
+    body: JSON.stringify({
+      text: "HTTP smoke KB document about centrifugal pumps",
+      namespace: "http-smoke",
+      source: "http-smoke",
+    }),
+  });
+  const kbHits = await jfetch("/v1/kb/search?q=centrifugal&limit=5&namespace=http-smoke");
+  assert(kbHits.results?.length > 0, "kb search returned no hits");
+  log(`KB ingest/search OK hits=${kbHits.results.length}`);
+
+  const kbFlush = await jfetch("/v1/kb/flush", { method: "POST", body: "{}" });
+  assert(kbFlush.flushed === false || kbFlush.flushed === true, "kb flush unexpected body");
+  log(`POST /v1/kb/flush OK flushed=${kbFlush.flushed}`);
+
+  const mcpList = await jfetch("/mcp", {
+    method: "POST",
+    body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list", params: {} }),
+  });
+  assert(Array.isArray(mcpList.result?.tools), "MCP JSON-RPC tools/list missing tools");
+  log(`MCP JSON-RPC tools/list OK (${mcpList.result.tools.length} tools)`);
 
   await stopClaworksRuntime(runtime);
   server.close();

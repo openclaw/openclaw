@@ -1733,11 +1733,11 @@ export function renderApp(state: AppViewState) {
                       <img
                         class="sidebar-brand__logo"
                         src="${agentLogoUrl(basePath)}"
-                        alt="OpenClaw"
+                        alt="${state.productDisplayName}"
                       />
                       <span class="sidebar-brand__copy">
                         <span class="sidebar-brand__eyebrow">${t("nav.control")}</span>
-                        <span class="sidebar-brand__title">OpenClaw</span>
+                        <span class="sidebar-brand__title">${state.productDisplayName}</span>
                       </span>
                     `}
               </div>
@@ -1958,6 +1958,13 @@ export function renderApp(state: AppViewState) {
               onRefresh: () => state.loadOverview({ refresh: true }),
               onNavigate: (tab) => state.setTab(tab as import("./navigation.ts").Tab),
               onRefreshLogs: () => state.loadOverview({ refresh: true }),
+              claworksHealth: state.claworksHealth,
+              onRefreshClaworksHealth: () => state.loadClaworksHealth(),
+              onOpenClaworksPluginConfig: () => {
+                state.setTab("automation");
+                state.automationActiveSection = "plugins";
+                state.automationSearchQuery = "claworks-robot";
+              },
             })
           : nothing}
         ${state.tab === "instances"

@@ -47,11 +47,6 @@ const INDIRECT_RUNTIME_DEPENDENCIES = new Map<string, Set<string>>([
     // Packaged memory tools run through generated OpenClaw runtime chunks that parse JSON5 config.
     new Set(["json5"]),
   ],
-  [
-    "extensions/tlon",
-    // The Tlon plugin manifest exposes the bundled skill from this package path.
-    new Set(["@tloncorp/tlon-skill"]),
-  ],
 ]);
 
 type PackageManifest = {
