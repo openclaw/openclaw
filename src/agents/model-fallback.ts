@@ -30,6 +30,7 @@ import {
 import { MissingAgentHarnessError, isMissingAgentHarnessError } from "./harness/errors.js";
 import { resolveAgentHarnessPolicy } from "./harness/policy.js";
 import { getRegisteredAgentHarness } from "./harness/registry.js";
+import { selectAgentHarness } from "./harness/selection.js";
 import { LiveSessionModelSwitchError } from "./live-model-switch-error.js";
 import {
   isModelFallbackDecisionLogEnabled,
@@ -355,6 +356,40 @@ function isCliAgentRuntime(runtime: string | undefined, cfg: OpenClawConfig | un
   return isCliRuntimeAlias(normalized) || isCliProvider(normalized, cfg);
 }
 
+function isRegisteredNonCodexPluginHarness(runtime: string | undefined): boolean {
+  return Boolean(
+    runtime &&
+    runtime !== "auto" &&
+    runtime !== "pi" &&
+    runtime !== "codex" &&
+    getRegisteredAgentHarness(runtime),
+  );
+}
+
+function resolvesToRegisteredNonCodexPluginHarness(
+  params: ModelFallbackRuntimeContext &
+    ModelCandidate & {
+      agentRuntime?: string;
+      agentHarnessRuntimeOverride?: string;
+    },
+): boolean {
+  if (isRegisteredNonCodexPluginHarness(params.agentRuntime)) {
+    return true;
+  }
+  if (params.agentRuntime !== "auto" || !params.cfg) {
+    return false;
+  }
+  const selectedHarness = selectAgentHarness({
+    provider: params.provider,
+    modelId: params.model,
+    config: params.cfg,
+    agentId: params.agentId,
+    sessionKey: params.sessionKey,
+    agentHarnessRuntimeOverride: params.agentHarnessRuntimeOverride,
+  });
+  return isRegisteredNonCodexPluginHarness(selectedHarness.id);
+}
+
 function resolveModelFallbackCandidateHarnessInfo(
   params: ModelFallbackRuntimeContext & ModelCandidate,
 ): ModelFallbackCandidateHarnessInfo {
@@ -382,12 +417,11 @@ function resolveModelFallbackCandidateHarnessInfo(
     agentRuntime,
     agentRuntimeSource,
     agentHarnessRuntimeOverride,
-    registeredPluginHarness: Boolean(
-      agentRuntime &&
-      agentRuntime !== "auto" &&
-      agentRuntime !== "pi" &&
-      getRegisteredAgentHarness(agentRuntime),
-    ),
+    registeredPluginHarness: resolvesToRegisteredNonCodexPluginHarness({
+      ...params,
+      agentRuntime,
+      agentHarnessRuntimeOverride,
+    }),
   };
 }
 
@@ -421,22 +455,16 @@ async function assertModelFallbackCandidateHarnessAvailable(
   }
   return {
     ...info,
-    registeredPluginHarness: Boolean(
-      agentRuntime &&
-      agentRuntime !== "auto" &&
-      agentRuntime !== "pi" &&
-      getRegisteredAgentHarness(agentRuntime),
-    ),
+    registeredPluginHarness: resolvesToRegisteredNonCodexPluginHarness({
+      ...params,
+      agentRuntime,
+      agentHarnessRuntimeOverride,
+    }),
   };
 }
 
 function shouldBypassModelFallbackAuthCooldown(info: ModelFallbackCandidateHarnessInfo): boolean {
-  return Boolean(
-    info.registeredPluginHarness &&
-    info.agentRuntime &&
-    info.agentRuntime !== "codex" &&
-    info.agentRuntime !== "pi",
-  );
+  return info.registeredPluginHarness;
 }
 
 function recordFailedCandidateAttempt(params: {
