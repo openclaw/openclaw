@@ -594,6 +594,74 @@ describe("xai web search config resolution", () => {
     expect(fetchCallHeader(mockFetch, 1, "Authorization")).toBe("Bearer xai-profile-api-key");
   });
 
+  it("falls back to env auth after a stale xAI API-key auth profile returns unauthorized", async () => {
+    providerAuthRuntimeMocks.resolveApiKeyForProvider
+      .mockResolvedValueOnce({
+        apiKey: "stale-profile-key",
+        source: "profile:xai:default",
+        mode: "api-key",
+        profileId: "xai:default",
+      })
+      .mockResolvedValueOnce({
+        apiKey: "xai-env-fallback-key",
+        source: "XAI_API_KEY",
+        mode: "api-key",
+      });
+    const mockFetch = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ok: false,
+        status: 401,
+        statusText: "Unauthorized",
+        text: () => Promise.resolve("stale api key"),
+      } as Response)
+      .mockResolvedValueOnce({
+        ok: true,
+        json: () =>
+          Promise.resolve({
+            output: [
+              {
+                type: "message",
+                content: [{ type: "output_text", text: "Env fallback Grok answer" }],
+              },
+            ],
+          }),
+      } as Response);
+    global.fetch = withFetchPreconnect(mockFetch);
+    const provider = createXaiWebSearchProvider();
+    const tool = provider.createTool({
+      config: {
+        agents: {
+          list: [{ id: "main", default: true, agentDir: "/tmp/openclaw-xai-main-agent" }],
+        },
+        tools: {
+          web: {
+            search: {
+              provider: "grok",
+            },
+          },
+        },
+      },
+    });
+    if (!tool) {
+      throw new Error("Expected xAI web search tool");
+    }
+
+    const result = await tool.execute({ query: "OpenClaw Grok API-key fallback test" });
+
+    expect(result.content).toContain("Env fallback Grok answer");
+    expect(providerAuthRuntimeMocks.resolveApiKeyForProvider).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        provider: "xai",
+        agentDir: "/tmp/openclaw-xai-main-agent",
+        credentialPrecedence: "env-first",
+      }),
+    );
+    expect(fetchCallHeader(mockFetch, 0, "Authorization")).toBe("Bearer stale-profile-key");
+    expect(fetchCallHeader(mockFetch, 1, "Authorization")).toBe("Bearer xai-env-fallback-key");
+  });
+
   it("offers plugin-owned xSearch setup after Grok is selected", async () => {
     const provider = createXaiWebSearchProvider();
     const select = vi.fn().mockResolvedValueOnce("yes").mockResolvedValueOnce("grok-4-1-fast");
