@@ -2450,8 +2450,30 @@ export async function runEmbeddedPiAgent(
           }
 
           const assistantForFailover = currentAttemptAssistant ?? sessionLastAssistant;
+          const codexResponsesEmptyVisibleOutputFailure =
+            activeErrorContext.provider === OPENAI_CODEX_PROVIDER_ID &&
+            effectiveModel.api === "openai-codex-responses" &&
+            (attempt.attemptUsage?.output ?? 0) > 0 &&
+            (attempt.assistantTexts ?? []).every((text) => text.trim().length === 0) &&
+            !(attempt.messagesSnapshot ?? []).some(
+              (message) => normalizeOptionalString(message.role)?.toLowerCase() === "assistant",
+            );
+          const codexResponsesEmptyVisibleOutputError =
+            "openai-codex-responses returned no visible assistant output despite nonzero output tokens.";
+          const assistantForFailoverWithSyntheticEmptyResponse =
+            assistantForFailover ??
+            (codexResponsesEmptyVisibleOutputFailure
+              ? ({
+                  role: "assistant",
+                  stopReason: "error",
+                  provider: activeErrorContext.provider,
+                  model: activeErrorContext.model,
+                  errorMessage: codexResponsesEmptyVisibleOutputError,
+                  content: [],
+                } as NonNullable<typeof assistantForFailover>)
+              : undefined);
           const fallbackThinking = pickFallbackThinkingLevel({
-            message: assistantForFailover?.errorMessage,
+            message: assistantForFailoverWithSyntheticEmptyResponse?.errorMessage,
             attempted: attemptedThinking,
           });
           if (fallbackThinking && !aborted) {
@@ -2462,34 +2484,43 @@ export async function runEmbeddedPiAgent(
             continue;
           }
 
-          const authFailure = isAuthAssistantError(assistantForFailover);
-          const rateLimitFailure = isRateLimitAssistantError(assistantForFailover);
-          const billingFailure = isBillingAssistantError(assistantForFailover);
-          const failoverFailure = isFailoverAssistantError(assistantForFailover);
-          const assistantFailoverReason = classifyFailoverReason(
-            assistantForFailover?.errorMessage ?? "",
-            {
-              provider: assistantForFailover?.provider,
-            },
+          const authFailure = isAuthAssistantError(assistantForFailoverWithSyntheticEmptyResponse);
+          const rateLimitFailure = isRateLimitAssistantError(
+            assistantForFailoverWithSyntheticEmptyResponse,
           );
+          const billingFailure = isBillingAssistantError(
+            assistantForFailoverWithSyntheticEmptyResponse,
+          );
+          const failoverFailure =
+            codexResponsesEmptyVisibleOutputFailure ||
+            isFailoverAssistantError(assistantForFailoverWithSyntheticEmptyResponse);
+          const assistantFailoverReason: FailoverReason | null =
+            codexResponsesEmptyVisibleOutputFailure
+              ? "empty_response"
+              : classifyFailoverReason(
+                  assistantForFailoverWithSyntheticEmptyResponse?.errorMessage ?? "",
+                  {
+                    provider: assistantForFailoverWithSyntheticEmptyResponse?.provider,
+                  },
+                );
           const assistantProfileFailureReason =
             resolveRunAuthProfileFailureReason(assistantFailoverReason);
           const cloudCodeAssistFormatError = attempt.cloudCodeAssistFormatError;
           const imageDimensionError = parseImageDimensionError(
-            assistantForFailover?.errorMessage ?? "",
+            assistantForFailoverWithSyntheticEmptyResponse?.errorMessage ?? "",
           );
           // Capture the failing profile before auth-profile rotation mutates `lastProfileId`.
           const failedAssistantProfileId = lastProfileId;
           const logAssistantFailoverDecision = createFailoverDecisionLogger({
             stage: "assistant",
             runId: params.runId,
-            rawError: assistantForFailover?.errorMessage?.trim(),
+            rawError: assistantForFailoverWithSyntheticEmptyResponse?.errorMessage?.trim(),
             failoverReason: assistantFailoverReason,
             profileFailureReason: assistantProfileFailureReason,
             provider: activeErrorContext.provider,
             model: activeErrorContext.model,
-            sourceProvider: assistantForFailover?.provider ?? provider,
-            sourceModel: assistantForFailover?.model ?? modelId,
+            sourceProvider: assistantForFailoverWithSyntheticEmptyResponse?.provider ?? provider,
+            sourceModel: assistantForFailoverWithSyntheticEmptyResponse?.model ?? modelId,
             profileId: failedAssistantProfileId,
             fallbackConfigured,
             timedOut,
@@ -2499,7 +2530,7 @@ export async function runEmbeddedPiAgent(
           if (
             authFailure &&
             (await maybeRefreshRuntimeAuthForAuthError(
-              assistantForFailover?.errorMessage ?? "",
+              assistantForFailoverWithSyntheticEmptyResponse?.errorMessage ?? "",
               runtimeAuthRetry,
             ))
           ) {
@@ -2562,7 +2593,7 @@ export async function runEmbeddedPiAgent(
             modelId,
             provider,
             activeErrorContext,
-            lastAssistant: assistantForFailover,
+            lastAssistant: assistantForFailoverWithSyntheticEmptyResponse,
             config: params.config,
             sessionKey: params.sessionKey ?? params.sessionId,
             authFailure,
