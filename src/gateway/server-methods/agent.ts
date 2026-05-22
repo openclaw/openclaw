@@ -18,6 +18,10 @@ import { AGENT_INTERNAL_EVENT_TYPE_TASK_COMPLETION } from "../../agents/internal
 import type { AgentInternalEvent } from "../../agents/internal-events.js";
 import { resolveTrustedGroupId } from "../../agents/pi-tools.policy.js";
 import { resolveProviderIdForAuth } from "../../agents/provider-auth-aliases.js";
+import {
+  normalizeAgentRunTimeoutPhase,
+  normalizeProviderStarted,
+} from "../../agents/run-timeout-attribution.js";
 import { resolveSandboxConfigForAgent } from "../../agents/sandbox/config.js";
 import {
   normalizeSpawnedRunMetadata,
@@ -543,9 +547,22 @@ function setAbortedAgentDedupeEntries(params: {
         status: "timeout" as const,
         summary: "aborted",
         stopReason: params.stopReason,
+        timeoutPhase: "queue",
+        providerStarted: false,
       },
     },
   });
+}
+
+function readAgentRunTimeoutAttribution(meta: unknown) {
+  const record =
+    meta && typeof meta === "object" && !Array.isArray(meta)
+      ? (meta as Record<string, unknown>)
+      : undefined;
+  return {
+    timeoutPhase: normalizeAgentRunTimeoutPhase(record?.timeoutPhase),
+    providerStarted: normalizeProviderStarted(record?.providerStarted),
+  };
 }
 
 function resolveAbortedAgentStopReason(entry?: ChatAbortControllerEntry): string {
@@ -603,6 +620,7 @@ function dispatchAgentRunFromGateway(params: {
   void agentCommandFromIngress(params.ingressOpts, defaultRuntime, params.context.deps)
     .then((result) => {
       const aborted = result?.meta?.aborted === true;
+      const timeoutAttribution = readAgentRunTimeoutAttribution(result?.meta);
       if (shouldTrackTask) {
         tryFinalizeTrackedAgentTask({
           runId: params.runId,
@@ -615,6 +633,12 @@ function dispatchAgentRunFromGateway(params: {
         status: aborted ? ("timeout" as const) : ("ok" as const),
         summary: aborted ? "aborted" : "completed",
         ...(aborted ? { stopReason: result?.meta?.stopReason ?? "rpc" } : {}),
+        ...(aborted && timeoutAttribution.timeoutPhase
+          ? { timeoutPhase: timeoutAttribution.timeoutPhase }
+          : {}),
+        ...(aborted && timeoutAttribution.providerStarted !== undefined
+          ? { providerStarted: timeoutAttribution.providerStarted }
+          : {}),
         result,
       };
       setGatewayDedupeEntries({
@@ -646,7 +670,7 @@ function dispatchAgentRunFromGateway(params: {
         runId: params.runId,
         status: aborted ? ("timeout" as const) : ("error" as const),
         summary: aborted ? "aborted" : renderedErr,
-        ...(aborted ? { stopReason: "rpc" } : {}),
+        ...(aborted ? { stopReason: "rpc", timeoutPhase: "gateway_draining" as const } : {}),
       };
       setGatewayDedupeEntries({
         dedupe: params.context.dedupe,
@@ -1688,6 +1712,8 @@ export const agentHandlers: GatewayRequestHandlers = {
                 status: "timeout" as const,
                 summary: "aborted",
                 stopReason,
+                timeoutPhase: "queue" as const,
+                providerStarted: false,
               },
               undefined,
               { runId },
@@ -1985,6 +2011,8 @@ export const agentHandlers: GatewayRequestHandlers = {
         stopReason: cachedGatewaySnapshot.stopReason,
         livenessState: cachedGatewaySnapshot.livenessState,
         yielded: cachedGatewaySnapshot.yielded,
+        timeoutPhase: cachedGatewaySnapshot.timeoutPhase,
+        providerStarted: cachedGatewaySnapshot.providerStarted,
       });
       return;
     }
@@ -2027,9 +2055,12 @@ export const agentHandlers: GatewayRequestHandlers = {
     }
 
     if (!snapshot) {
+      const activeRunRegistered = activeChatEntry !== undefined;
       respond(true, {
         runId,
         status: "timeout",
+        timeoutPhase: activeRunRegistered ? "gateway_draining" : "queue",
+        ...(activeRunRegistered ? {} : { providerStarted: false }),
       });
       return;
     }
@@ -2042,6 +2073,8 @@ export const agentHandlers: GatewayRequestHandlers = {
       stopReason: snapshot.stopReason,
       livenessState: snapshot.livenessState,
       yielded: snapshot.yielded,
+      timeoutPhase: snapshot.timeoutPhase,
+      providerStarted: snapshot.providerStarted,
     });
   },
 };

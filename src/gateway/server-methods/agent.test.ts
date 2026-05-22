@@ -3685,6 +3685,8 @@ describe("gateway agent handler chat.abort integration", () => {
       status: "timeout",
       summary: "aborted",
       stopReason: "rpc",
+      timeoutPhase: "queue",
+      providerStarted: false,
     });
     const finalResponse = respond.mock.calls.find(
       (call: unknown[]) => (call[1] as { status?: unknown } | undefined)?.status === "timeout",
@@ -3693,6 +3695,8 @@ describe("gateway agent handler chat.abort integration", () => {
       runId,
       status: "timeout",
       stopReason: "rpc",
+      timeoutPhase: "queue",
+      providerStarted: false,
     });
   });
 

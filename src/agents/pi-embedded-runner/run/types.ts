@@ -15,6 +15,7 @@ import type {
   MessagingToolSourceReplyPayload,
 } from "../../pi-embedded-messaging.types.js";
 import type { ToolOutcomeObserver } from "../../pi-tools.before-tool-call.js";
+import type { AgentRunTimeoutPhase } from "../../run-timeout-attribution.js";
 import type { AgentRuntimePlan } from "../../runtime-plan/types.js";
 import type { ToolErrorSummary } from "../../tool-error-summary.js";
 import type { NormalizedUsage } from "../../usage.js";
@@ -116,6 +117,8 @@ export type EmbeddedRunAttemptResult = {
     message?: string;
     replayInvalid?: boolean;
     livenessState?: EmbeddedRunLivenessState;
+    timeoutPhase?: AgentRunTimeoutPhase;
+    providerStarted?: boolean;
   };
   codexAppServerFailure?: {
     kind: "client_closed_before_turn_completed" | "turn_completion_idle_timeout";
@@ -177,5 +180,7 @@ export type EmbeddedRunAttemptResult = {
     livenessState?: EmbeddedRunLivenessState;
     stopReason?: string;
     yielded?: boolean;
+    timeoutPhase?: AgentRunTimeoutPhase;
+    providerStarted?: boolean;
   }) => void;
 };

@@ -1143,7 +1143,7 @@ export async function runEmbeddedPiAgent(
         modelId?: string;
       }) => {
         const { profileId, reason } = failure;
-        if (!profileId || !reason || reason === "timeout") {
+        if (!profileId || !reason) {
           return;
         }
         await markAuthProfileFailure({
@@ -1156,9 +1156,13 @@ export async function runEmbeddedPiAgent(
           modelId: failure.modelId,
         });
       };
-      const resolveRunAuthProfileFailureReason = (failoverReason: FailoverReason | null) =>
+      const resolveRunAuthProfileFailureReason = (
+        failoverReason: FailoverReason | null,
+        opts?: { providerStarted?: boolean },
+      ) =>
         resolveAuthProfileFailureReason({
           failoverReason,
+          providerStarted: opts?.providerStarted,
           policy: params.authProfileFailurePolicy,
         });
       const maybeBackoffBeforeOverloadFailover = async (reason: FailoverReason | null) => {
@@ -2318,8 +2322,12 @@ export async function runEmbeddedPiAgent(
             }
             const promptFailoverReason =
               promptErrorDetails.reason ?? classifyFailoverReason(errorText, { provider });
-            const promptProfileFailureReason =
-              resolveRunAuthProfileFailureReason(promptFailoverReason);
+            const promptProfileFailureReason = resolveRunAuthProfileFailureReason(
+              promptFailoverReason,
+              {
+                providerStarted: promptErrorSource === "prompt",
+              },
+            );
             const promptFailoverFailure =
               promptFailoverReason !== null || isFailoverErrorMessage(errorText, { provider });
             // Capture the failing profile before auth-profile rotation mutates `lastProfileId`.
@@ -2480,8 +2488,19 @@ export async function runEmbeddedPiAgent(
               provider: assistantForFailover?.provider,
             },
           );
-          const assistantProfileFailureReason =
-            resolveRunAuthProfileFailureReason(assistantFailoverReason);
+          const assistantProviderStarted =
+            Boolean(currentAttemptAssistant?.provider) ||
+            idleTimedOut ||
+            (timedOut && !timedOutDuringCompaction && !timedOutDuringToolExecution);
+          const assistantProfileFailoverReason =
+            assistantFailoverReason ??
+            (assistantProviderStarted && (timedOut || idleTimedOut) ? "timeout" : null);
+          const assistantProfileFailureReason = resolveRunAuthProfileFailureReason(
+            assistantProfileFailoverReason,
+            {
+              providerStarted: assistantProviderStarted,
+            },
+          );
           const cloudCodeAssistFormatError = attempt.cloudCodeAssistFormatError;
           const imageDimensionError = parseImageDimensionError(
             assistantForFailover?.errorMessage ?? "",
@@ -2772,9 +2791,13 @@ export async function runEmbeddedPiAgent(
                 attempt,
                 incompleteTurnText: null,
               });
+            const timeoutPhase = attempt.promptTimeoutOutcome?.timeoutPhase ?? "provider";
+            const providerStarted = attempt.promptTimeoutOutcome?.providerStarted ?? true;
             attempt.setTerminalLifecycleMeta?.({
               replayInvalid,
               livenessState,
+              timeoutPhase,
+              providerStarted,
             });
             return {
               payloads: [
@@ -2794,6 +2817,8 @@ export async function runEmbeddedPiAgent(
                 finalAssistantRawText,
                 replayInvalid,
                 livenessState,
+                timeoutPhase,
+                providerStarted,
                 toolSummary: attemptToolSummary,
                 ...(failureSignal ? { failureSignal } : {}),
                 agentHarnessResultClassification: attempt.agentHarnessResultClassification,
@@ -3053,7 +3078,7 @@ export async function runEmbeddedPiAgent(
             if (lastProfileId) {
               await maybeMarkAuthProfileFailure({
                 profileId: lastProfileId,
-                reason: resolveRunAuthProfileFailureReason(assistantFailoverReason),
+                reason: assistantProfileFailureReason,
               });
             }
             return {
@@ -3164,7 +3189,7 @@ export async function runEmbeddedPiAgent(
             if (lastProfileId) {
               await maybeMarkAuthProfileFailure({
                 profileId: lastProfileId,
-                reason: resolveRunAuthProfileFailureReason(assistantFailoverReason),
+                reason: assistantProfileFailureReason,
               });
             }
 
