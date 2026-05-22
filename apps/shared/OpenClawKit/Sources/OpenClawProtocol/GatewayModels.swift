@@ -4502,15 +4502,19 @@ public struct ModelChoice: Codable, Sendable {
 
 public struct ModelsListParams: Codable, Sendable {
     public let view: AnyCodable?
+    public let agentid: String?
 
     public init(
-        view: AnyCodable?)
+        view: AnyCodable?,
+        agentid: String?)
     {
         self.view = view
+        self.agentid = agentid
     }
 
     private enum CodingKeys: String, CodingKey {
         case view
+        case agentid = "agentId"
     }
 }
 

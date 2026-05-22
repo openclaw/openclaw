@@ -196,7 +196,7 @@ async function executeModel(
     try {
       const [sessions, models] = await Promise.all([
         client.request<SessionsListResult>("sessions.list", {}),
-        modelCatalog ? Promise.resolve(modelCatalog) : loadModelCatalog(client),
+        modelCatalog ? Promise.resolve(modelCatalog) : loadModelCatalog(client, { sessionKey }),
       ]);
       const session = resolveCurrentSession(sessions, sessionKey);
       const model = session?.model || sessions?.defaults?.model || "default";
@@ -225,7 +225,7 @@ async function executeModel(
       }),
       modelCatalog
         ? Promise.resolve(modelCatalog)
-        : loadModelCatalog(client, { allowFailure: true }),
+        : loadModelCatalog(client, { allowFailure: true, sessionKey }),
     ]);
     const resolvedModel = patched.resolved?.model ?? requestedModel;
     let resolvedValue = resolvePreferredServerChatModelValue(
@@ -757,7 +757,7 @@ function resolveCurrentSession(
 async function loadThinkingCommandState(client: GatewayBrowserClient, sessionKey: string) {
   const [sessions, models] = await Promise.all([
     client.request<SessionsListResult>("sessions.list", {}),
-    loadModelCatalog(client),
+    loadModelCatalog(client, { sessionKey }),
   ]);
   return {
     session: resolveCurrentSession(sessions, sessionKey),
@@ -768,12 +768,17 @@ async function loadThinkingCommandState(client: GatewayBrowserClient, sessionKey
 
 async function loadModelCatalog(
   client: GatewayBrowserClient,
-  opts?: { allowFailure?: boolean },
+  opts?: { allowFailure?: boolean; sessionKey?: string },
 ): Promise<ModelCatalogEntry[]> {
   try {
-    const result = await client.request<{ models: ModelCatalogEntry[] }>("models.list", {
-      view: "configured",
-    });
+    const params: { view: "configured"; agentId?: string } = { view: "configured" };
+    const agentId = opts?.sessionKey
+      ? parseAgentSessionKey(opts.sessionKey)?.agentId?.trim()
+      : undefined;
+    if (agentId) {
+      params.agentId = agentId;
+    }
+    const result = await client.request<{ models: ModelCatalogEntry[] }>("models.list", params);
     return result?.models ?? [];
   } catch (err) {
     if (opts?.allowFailure) {

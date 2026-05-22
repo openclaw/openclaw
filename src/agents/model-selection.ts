@@ -394,6 +394,7 @@ export function buildAllowedModelSet(
     catalog: params.catalog,
     defaultProvider: params.defaultProvider,
     defaultModel: params.defaultModel,
+    agentId: params.agentId,
     fallbackModels: resolveAllowedFallbacks({
       cfg: params.cfg,
       agentId: params.agentId,
@@ -409,6 +410,7 @@ export function getModelRefStatus(
     ref: ModelRef;
     defaultProvider: string;
     defaultModel?: string;
+    agentId?: string;
   } & ModelManifestNormalizationContext,
 ): ModelRefStatus {
   return getModelRefStatusWithFallbackModels({
@@ -417,8 +419,10 @@ export function getModelRefStatus(
     ref: params.ref,
     defaultProvider: params.defaultProvider,
     defaultModel: params.defaultModel,
+    agentId: params.agentId,
     fallbackModels: resolveAllowedFallbacks({
       cfg: params.cfg,
+      agentId: params.agentId,
     }),
     manifestPlugins: params.manifestPlugins,
   });

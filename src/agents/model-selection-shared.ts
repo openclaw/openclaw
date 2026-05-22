@@ -38,6 +38,63 @@ function getLog(): ReturnType<typeof createSubsystemLogger> {
 const OPENROUTER_COMPAT_FREE_ALIAS = "openrouter:free";
 type ModelManifestPlugins = ModelManifestNormalizationContext["manifestPlugins"];
 
+type ConfiguredModelsRecord = NonNullable<
+  NonNullable<NonNullable<OpenClawConfig["agents"]>["defaults"]>["models"]
+>;
+
+function findAgentEntryModelVisibilityAllowlist(
+  cfg: OpenClawConfig | undefined,
+  agentId: string | undefined,
+): ConfiguredModelsRecord | undefined {
+  if (!cfg || !agentId) {
+    return undefined;
+  }
+  const target = agentId.trim();
+  if (!target) {
+    return undefined;
+  }
+  const list = cfg.agents?.list;
+  if (!Array.isArray(list)) {
+    return undefined;
+  }
+  for (const entry of list) {
+    if (!entry || typeof entry !== "object") {
+      continue;
+    }
+    const id = typeof entry.id === "string" ? entry.id.trim() : "";
+    if (id && id === target) {
+      const allowlist = (entry as { modelAllowlist?: ConfiguredModelsRecord }).modelAllowlist;
+      if (
+        allowlist &&
+        typeof allowlist === "object" &&
+        !Array.isArray(allowlist) &&
+        Object.keys(allowlist).length > 0
+      ) {
+        return allowlist;
+      }
+      return undefined;
+    }
+  }
+  return undefined;
+}
+
+/**
+ * Resolve the models record that drives visibility. `agents.defaults.models` is
+ * the global allowlist. Per-agent scoping is opt-in through
+ * `agents.list[].modelAllowlist` so existing `agents.list[].models` runtime
+ * metadata does not become a visibility restriction by accident.
+ */
+export function resolveConfiguredAllowlistModelsRecord(params: {
+  cfg: OpenClawConfig | undefined;
+  agentId?: string;
+}): ConfiguredModelsRecord {
+  const perAgent = findAgentEntryModelVisibilityAllowlist(params.cfg, params.agentId);
+  if (perAgent) {
+    return perAgent;
+  }
+  return params.cfg?.agents?.defaults?.models ?? ({} as ConfiguredModelsRecord);
+}
+
 export type ModelAliasIndex = {
   byAlias: Map<string, { alias: string; ref: ModelRef }>;
   byKey: Map<string, string[]>;
@@ -365,9 +422,13 @@ export function buildConfiguredAllowlistKeys(
   params: {
     cfg: OpenClawConfig | undefined;
     defaultProvider: string;
+    agentId?: string;
   } & ModelManifestNormalizationContext,
 ): Set<string> | null {
-  const visibility = parseConfiguredModelVisibilityEntries({ cfg: params.cfg });
+  const visibility = parseConfiguredModelVisibilityEntries({
+    cfg: params.cfg,
+    agentId: params.agentId,
+  });
   if (visibility.exactModelRefs.length === 0) {
     return null;
   }
@@ -655,6 +716,12 @@ export function buildAllowedModelSetWithFallbacks(
     fallbackModels: readonly string[];
     allowManifestNormalization?: boolean;
     allowPluginNormalization?: boolean;
+    /**
+     * When provided, the per-agent `agents.list[<agentId>].modelAllowlist`
+     * visibility allowlist takes precedence over `agents.defaults.models`. Falls
+     * back to defaults when the agent does not define its own allowlist.
+     */
+    agentId?: string;
   } & ModelManifestNormalizationContext,
 ): {
   allowAny: boolean;
@@ -674,7 +741,10 @@ export function buildAllowedModelSetWithFallbacks(
     primary: params.catalog,
     secondary: configuredCatalog,
   }).map((entry) => applyModelCatalogMetadata({ entry, metadata }));
-  const visibility = parseConfiguredModelVisibilityEntries({ cfg: params.cfg });
+  const visibility = parseConfiguredModelVisibilityEntries({
+    cfg: params.cfg,
+    agentId: params.agentId,
+  });
   const allowAny = !visibility.hasEntries;
   const defaultModel = params.defaultModel?.trim();
   const defaultRef =
@@ -854,6 +924,9 @@ export function getModelRefStatusWithFallbackModels(
     defaultProvider: string;
     defaultModel?: string;
     fallbackModels: readonly string[];
+    allowManifestNormalization?: boolean;
+    allowPluginNormalization?: boolean;
+    agentId?: string;
   } & ModelManifestNormalizationContext,
 ): ModelRefStatus {
   const allowed = buildAllowedModelSetWithFallbacks({
@@ -862,7 +935,10 @@ export function getModelRefStatusWithFallbackModels(
     defaultProvider: params.defaultProvider,
     defaultModel: params.defaultModel,
     fallbackModels: params.fallbackModels,
+    agentId: params.agentId,
     manifestPlugins: params.manifestPlugins,
+    allowManifestNormalization: params.allowManifestNormalization,
+    allowPluginNormalization: params.allowPluginNormalization,
   });
   return getModelRefStatusFromAllowedSet({
     catalog: params.catalog,
@@ -1043,12 +1119,24 @@ export function normalizeModelSelection(value: unknown): string | undefined {
   return undefined;
 }
 
-export function parseConfiguredModelVisibilityEntries(params: { cfg?: OpenClawConfig }): {
+export function parseConfiguredModelVisibilityEntries(params: {
+  cfg?: OpenClawConfig;
+  /**
+   * When provided, prefer `agents.list[<agentId>].modelAllowlist` over
+   * `agents.defaults.models`. Falls back to defaults when the per-agent
+   * allowlist is missing or empty.
+   */
+  agentId?: string;
+}): {
   exactModelRefs: string[];
   providerWildcards: Set<string>;
   hasEntries: boolean;
 } {
-  const rawModels = Object.keys(params.cfg?.agents?.defaults?.models ?? {});
+  const sourceModels = resolveConfiguredAllowlistModelsRecord({
+    cfg: params.cfg,
+    agentId: params.agentId,
+  });
+  const rawModels = Object.keys(sourceModels);
   const exactModelRefs: string[] = [];
   const providerWildcards = new Set<string>();
 
@@ -1155,9 +1243,13 @@ export function createModelVisibilityPolicyWithFallbacks(
     defaultProvider: string;
     defaultModel?: string;
     fallbackModels: readonly string[];
+    agentId?: string;
   } & ModelManifestNormalizationContext,
 ): ModelVisibilityPolicy {
-  const visibility = parseConfiguredModelVisibilityEntries({ cfg: params.cfg });
+  const visibility = parseConfiguredModelVisibilityEntries({
+    cfg: params.cfg,
+    agentId: params.agentId,
+  });
   const allowed = buildAllowedModelSetWithFallbacks(params);
   const allowsKey = (key: string): boolean =>
     allowed.allowAny || isModelKeyAllowedBySet(allowed.allowedKeys, key);

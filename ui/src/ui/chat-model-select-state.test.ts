@@ -11,6 +11,7 @@ import {
 } from "./chat-model.test-helpers.ts";
 
 type ChatModelStateInput = Parameters<typeof resolveChatModelSelectState>[0];
+type ResolvedChatModelState = ReturnType<typeof resolveChatModelSelectState>;
 
 function createChatModelState(
   params: Partial<Omit<ChatModelStateInput, "sessionKey">> = {},
@@ -22,6 +23,19 @@ function createChatModelState(
     sessionsResult: createSessionsListResult({ model: null, modelProvider: null }),
     ...params,
   };
+}
+
+function expectOptionValues(
+  resolved: ResolvedChatModelState,
+  params: { include?: string[]; exclude?: string[] },
+) {
+  const values = resolved.options.map((option) => option.value);
+  for (const value of params.include ?? []) {
+    expect(values).toContain(value);
+  }
+  for (const value of params.exclude ?? []) {
+    expect(values).not.toContain(value);
+  }
 }
 
 describe("chat-model-select-state", () => {
@@ -88,6 +102,42 @@ describe("chat-model-select-state", () => {
       { value: "openai/gpt-5-mini", label: "gpt-5-mini · openai" },
       { value: "openai/gpt-5", label: "gpt-5 · openai" },
     ]);
+  });
+
+  it("does not add active-session models outside the scoped catalog", () => {
+    const state = createChatModelState({
+      chatModelCatalog: createModelCatalog(DEEPSEEK_CHAT_MODEL),
+      sessionsResult: createSessionsListResult({
+        model: "openai/gpt-5-mini",
+        modelProvider: "openai",
+      }),
+    });
+
+    const resolved = resolveChatModelSelectState(state);
+    expect(resolved.currentOverride).toBe("openai/gpt-5-mini");
+    expectOptionValues(resolved, {
+      include: ["deepseek/deepseek-chat"],
+      exclude: ["openai/gpt-5-mini"],
+    });
+  });
+
+  it("does not add the global default outside the scoped catalog", () => {
+    const state = createChatModelState({
+      chatModelCatalog: createModelCatalog(DEEPSEEK_CHAT_MODEL),
+      sessionsResult: createSessionsListResult({
+        model: null,
+        modelProvider: null,
+        defaultsModel: "gpt-5.5",
+        defaultsProvider: "openai",
+      }),
+    });
+
+    const resolved = resolveChatModelSelectState(state);
+    expect(resolved.defaultModel).toBe("openai/gpt-5.5");
+    expectOptionValues(resolved, {
+      include: ["deepseek/deepseek-chat"],
+      exclude: ["openai/gpt-5.5"],
+    });
   });
 
   it("builds picker options without introducing a bare duplicate", () => {

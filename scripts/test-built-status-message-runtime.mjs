@@ -8,15 +8,14 @@ import { parsePackageRootArg } from "./lib/package-root-args.mjs";
 const STATUS_MESSAGE_RUNTIME_RE = /^status-message\.runtime(?:-[A-Za-z0-9_-]+)?\.js$/u;
 
 export function findBuiltStatusMessageRuntimePath(distDir) {
-  const candidates = listBuiltStatusMessageRuntimeFiles(distDir)
-    .toSorted((left, right) => {
-      const leftHasHash = left !== "status-message.runtime.js";
-      const rightHasHash = right !== "status-message.runtime.js";
-      if (leftHasHash !== rightHasHash) {
-        return leftHasHash ? -1 : 1;
-      }
-      return left.localeCompare(right);
-    });
+  const candidates = listBuiltStatusMessageRuntimeFiles(distDir).toSorted((left, right) => {
+    const leftHasHash = left !== "status-message.runtime.js";
+    const rightHasHash = right !== "status-message.runtime.js";
+    if (leftHasHash !== rightHasHash) {
+      return leftHasHash ? -1 : 1;
+    }
+    return left.localeCompare(right);
+  });
 
   assert.ok(candidates.length > 0, `missing built status-message runtime bundle under ${distDir}`);
 

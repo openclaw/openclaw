@@ -92,6 +92,8 @@ export type AgentConfig = {
   model?: AgentModelConfig;
   /** Per-model metadata overrides for this agent. */
   models?: Record<string, AgentModelEntryConfig>;
+  /** Optional per-agent model visibility allowlist. Falls back to agents.defaults.models when omitted or empty. */
+  modelAllowlist?: Record<string, AgentModelEntryConfig>;
   /** @deprecated Legacy per-agent compaction config is kept for raw doctor migration/repair. */
   compaction?: AgentDefaultsConfig["compaction"];
   /** Optional per-agent default thinking level (overrides agents.defaults.thinkingDefault). */
