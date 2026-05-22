@@ -23,6 +23,17 @@ export type ControlUiMockGatewayScenario = {
   sessionKey?: string;
 };
 
+export type ControlUiMockGatewayMethodResponseCase = {
+  match?: Record<string, unknown>;
+  response: unknown;
+};
+
+export type ControlUiMockGatewayMethodResponseCases = {
+  cases: ControlUiMockGatewayMethodResponseCase[];
+};
+
+type NormalizedControlUiMockGatewayScenario = Required<ControlUiMockGatewayScenario>;
+
 export type ControlUiE2eServer = {
   baseUrl: string;
   close: () => Promise<void>;
@@ -106,7 +117,7 @@ function resolveServerBaseUrl(server: ViteDevServer): string {
 
 function normalizeScenario(
   scenario: ControlUiMockGatewayScenario,
-): Required<ControlUiMockGatewayScenario> {
+): NormalizedControlUiMockGatewayScenario {
   const defaultAgentId = scenario.defaultAgentId?.trim() || "main";
   const sessionKey = scenario.sessionKey?.trim() || "main";
   return {
@@ -120,6 +131,355 @@ function normalizeScenario(
   };
 }
 
+export function createControlUiMockBootstrapConfig(scenario: ControlUiMockGatewayScenario = {}) {
+  const normalizedScenario = normalizeScenario(scenario);
+  return {
+    allowExternalEmbedUrls: false,
+    assistantAgentId: normalizedScenario.assistantAgentId,
+    assistantAvatar: "",
+    assistantName: normalizedScenario.assistantName,
+    basePath: "/",
+    embedSandbox: "scripts",
+    localMediaPreviewRoots: [],
+    serverVersion: "e2e",
+  };
+}
+
+export function createControlUiMockGatewayInitScript(
+  scenario: ControlUiMockGatewayScenario = {},
+): string {
+  const input = {
+    protocolVersion: PROTOCOL_VERSION,
+    scenario: normalizeScenario(scenario),
+  };
+  return `(() => { const __name = (target) => target; (${installControlUiMockGateway.toString()})(${JSON.stringify(input)}); })();`;
+}
+
+function installControlUiMockGateway(input: {
+  protocolVersion: number;
+  scenario: NormalizedControlUiMockGatewayScenario;
+}) {
+  type BrowserRequest = { id: string; method: string; params?: unknown };
+  type BrowserFrame = {
+    id?: unknown;
+    method?: unknown;
+    params?: unknown;
+    type?: unknown;
+  };
+  type BrowserScenario = NormalizedControlUiMockGatewayScenario;
+  type BrowserMethodResponseCase = {
+    match?: Record<string, unknown>;
+    response?: unknown;
+  };
+  type BrowserMethodResponseCases = {
+    cases?: BrowserMethodResponseCase[];
+  };
+  type ExposedGateway = {
+    emit: (event: string, payload?: unknown) => void;
+    findRequests: (method?: string) => BrowserRequest[];
+    requests: BrowserRequest[];
+  };
+  type WindowWithGateway = Window & {
+    openclawControlUiE2eGateway?: ExposedGateway;
+  };
+
+  const scenario: BrowserScenario = input.scenario;
+  const protocolVersion = input.protocolVersion;
+  const requests: BrowserRequest[] = [];
+  let seq = 0;
+
+  function isRecord(value: unknown): value is Record<string, unknown> {
+    return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+  }
+
+  function hasOwn(record: Record<string, unknown>, key: string): boolean {
+    return Object.prototype.hasOwnProperty.call(record, key);
+  }
+
+  function valuesEqual(actual: unknown, expected: unknown): boolean {
+    if (Object.is(actual, expected)) {
+      return true;
+    }
+    if ((actual && typeof actual === "object") || (expected && typeof expected === "object")) {
+      try {
+        return JSON.stringify(actual) === JSON.stringify(expected);
+      } catch {
+        return false;
+      }
+    }
+    return false;
+  }
+
+  function paramsMatch(params: unknown, match: Record<string, unknown> | undefined): boolean {
+    if (!match) {
+      return true;
+    }
+    const entries = Object.entries(match);
+    if (entries.length === 0) {
+      return true;
+    }
+    if (!isRecord(params)) {
+      return false;
+    }
+    return entries.every(
+      ([key, expected]) => hasOwn(params, key) && valuesEqual(params[key], expected),
+    );
+  }
+
+  function responseCases(value: unknown): BrowserMethodResponseCase[] | null {
+    if (!isRecord(value)) {
+      return null;
+    }
+    const maybeCases = (value as BrowserMethodResponseCases).cases;
+    return Array.isArray(maybeCases) ? maybeCases : null;
+  }
+
+  function configuredResponse(
+    method: string,
+    params: unknown,
+  ): { found: boolean; value?: unknown } {
+    if (!hasOwn(scenario.methodResponses, method)) {
+      return { found: false };
+    }
+    const configured = scenario.methodResponses[method];
+    const cases = responseCases(configured);
+    if (!cases) {
+      return { found: true, value: configured };
+    }
+    const matchingCase = cases.find((candidate) => paramsMatch(params, candidate.match));
+    if (!matchingCase) {
+      return { found: false };
+    }
+    return { found: true, value: matchingCase.response };
+  }
+
+  function sessionRow() {
+    return {
+      contextTokens: null,
+      displayName: "Main",
+      hasActiveRun: false,
+      key: scenario.sessionKey,
+      kind: "direct",
+      label: "Main",
+      model: "gpt-5.5",
+      modelProvider: "openai",
+      status: "done",
+      totalTokens: 0,
+      updatedAt: Date.now(),
+    };
+  }
+
+  function buildResponse(method: string, params: unknown): unknown {
+    const configured = configuredResponse(method, params);
+    if (configured.found) {
+      return configured.value;
+    }
+    switch (method) {
+      case "connect":
+        return {
+          auth: {
+            deviceToken: "e2e-device-token",
+            role: "operator",
+            scopes: [
+              "operator.admin",
+              "operator.read",
+              "operator.write",
+              "operator.approvals",
+              "operator.pairing",
+            ],
+          },
+          features: { events: [], methods: [] },
+          protocol: protocolVersion,
+          server: { connId: "control-ui-e2e", version: "e2e" },
+          snapshot: {
+            sessionDefaults: {
+              defaultAgentId: scenario.defaultAgentId,
+              mainKey: "main",
+              mainSessionKey: scenario.sessionKey,
+              scope: "agent",
+            },
+          },
+          type: "hello-ok",
+        };
+      case "agent.identity.get":
+        return {
+          agentId: scenario.assistantAgentId,
+          avatar: "",
+          avatarStatus: "none",
+          name: scenario.assistantName,
+        };
+      case "agents.list":
+        return {
+          agents: [
+            {
+              id: scenario.defaultAgentId,
+              identity: { name: scenario.assistantName },
+              name: scenario.assistantName,
+            },
+          ],
+          defaultId: scenario.defaultAgentId,
+          mainKey: "main",
+          scope: "agent",
+        };
+      case "chat.history":
+        return {
+          messages: scenario.historyMessages,
+          sessionId: "control-ui-e2e-session",
+          thinkingLevel: null,
+        };
+      case "chat.send":
+        return { ok: true, queued: false, params };
+      case "commands.list":
+        return { commands: [] };
+      case "health":
+        return {
+          agents: [],
+          defaultAgentId: scenario.defaultAgentId,
+          durationMs: 0,
+          heartbeatSeconds: 0,
+          ok: true,
+          sessions: { count: 1, path: "", recent: [] },
+          ts: Date.now(),
+        };
+      case "models.list":
+        return { models: scenario.models };
+      case "sessions.list":
+        return {
+          count: 1,
+          defaults: {
+            contextTokens: null,
+            model: "gpt-5.5",
+            modelProvider: "openai",
+          },
+          path: "",
+          sessions: [sessionRow()],
+          ts: Date.now(),
+        };
+      case "sessions.subscribe":
+        return { ok: true };
+      default:
+        return {};
+    }
+  }
+
+  function parseFrame(raw: string | ArrayBufferLike | Blob | ArrayBufferView): BrowserFrame | null {
+    if (typeof raw !== "string") {
+      return null;
+    }
+    try {
+      const parsed = JSON.parse(raw) as BrowserFrame;
+      return parsed && typeof parsed === "object" ? parsed : null;
+    } catch {
+      return null;
+    }
+  }
+
+  class MockWebSocket extends EventTarget {
+    static readonly CLOSED = 3;
+    static readonly CLOSING = 2;
+    static readonly CONNECTING = 0;
+    static readonly OPEN = 1;
+    static latest: MockWebSocket | null = null;
+
+    binaryType: BinaryType = "blob";
+    readonly bufferedAmount = 0;
+    readonly extensions = "";
+    onclose: ((event: CloseEvent) => void) | null = null;
+    onerror: ((event: Event) => void) | null = null;
+    onmessage: ((event: MessageEvent) => void) | null = null;
+    onopen: ((event: Event) => void) | null = null;
+    readonly protocol = "";
+    readyState = MockWebSocket.CONNECTING;
+    readonly url: string;
+
+    constructor(url: string | URL) {
+      super();
+      this.url = String(url);
+      MockWebSocket.latest = this;
+      window.setTimeout(() => {
+        if (this.readyState !== MockWebSocket.CONNECTING) {
+          return;
+        }
+        this.readyState = MockWebSocket.OPEN;
+        this.dispatchEvent(new Event("open"));
+        this.deliver({
+          event: "connect.challenge",
+          payload: { nonce: "control-ui-e2e-nonce" },
+          type: "event",
+        });
+      }, 0);
+    }
+
+    override dispatchEvent(event: Event): boolean {
+      const dispatched = super.dispatchEvent(event);
+      if (event.type === "open") {
+        this.onopen?.(event);
+      } else if (event.type === "message") {
+        this.onmessage?.(event as MessageEvent);
+      } else if (event.type === "close") {
+        this.onclose?.(event as CloseEvent);
+      } else if (event.type === "error") {
+        this.onerror?.(event);
+      }
+      return dispatched;
+    }
+
+    close(code = 1000, reason = ""): void {
+      if (this.readyState === MockWebSocket.CLOSED) {
+        return;
+      }
+      this.readyState = MockWebSocket.CLOSED;
+      this.dispatchEvent(new CloseEvent("close", { code, reason }));
+    }
+
+    send(raw: string | ArrayBufferLike | Blob | ArrayBufferView): void {
+      const frame = parseFrame(raw);
+      if (!frame || frame.type !== "req") {
+        return;
+      }
+      const id = typeof frame.id === "string" ? frame.id : "";
+      const method = typeof frame.method === "string" ? frame.method : "";
+      if (!id || !method) {
+        return;
+      }
+      requests.push({ id, method, params: frame.params });
+      window.setTimeout(() => {
+        this.deliver({
+          id,
+          ok: true,
+          payload: buildResponse(method, frame.params),
+          type: "res",
+        });
+      }, 0);
+    }
+
+    deliver(frame: unknown): void {
+      if (this.readyState !== MockWebSocket.OPEN) {
+        return;
+      }
+      this.dispatchEvent(new MessageEvent("message", { data: JSON.stringify(frame) }));
+    }
+  }
+
+  const exposed: ExposedGateway = {
+    emit(event, payload) {
+      MockWebSocket.latest?.deliver({
+        event,
+        payload,
+        seq: ++seq,
+        type: "event",
+      });
+    },
+    findRequests(method) {
+      return method ? requests.filter((request) => request.method === method) : [...requests];
+    },
+    requests,
+  };
+
+  (window as WindowWithGateway).openclawControlUiE2eGateway = exposed;
+  window.WebSocket = MockWebSocket as unknown as typeof WebSocket;
+}
+
 export async function installMockGateway(
   page: Page,
   scenario: ControlUiMockGatewayScenario = {},
@@ -127,273 +487,12 @@ export async function installMockGateway(
   const normalizedScenario = normalizeScenario(scenario);
   await page.route(`**${CONTROL_UI_BOOTSTRAP_CONFIG_PATH}`, (route) =>
     route.fulfill({
-      body: JSON.stringify({
-        allowExternalEmbedUrls: false,
-        assistantAgentId: normalizedScenario.assistantAgentId,
-        assistantAvatar: "",
-        assistantName: normalizedScenario.assistantName,
-        basePath: "/",
-        embedSandbox: "scripts",
-        localMediaPreviewRoots: [],
-        serverVersion: "e2e",
-      }),
+      body: JSON.stringify(createControlUiMockBootstrapConfig(normalizedScenario)),
       contentType: "application/json",
       status: 200,
     }),
   );
-  await page.addInitScript(
-    (input: { protocolVersion: number; scenario: Required<ControlUiMockGatewayScenario> }) => {
-      type BrowserRequest = { id: string; method: string; params?: unknown };
-      type BrowserFrame = {
-        id?: unknown;
-        method?: unknown;
-        params?: unknown;
-        type?: unknown;
-      };
-      type BrowserScenario = Required<ControlUiMockGatewayScenario>;
-      type ExposedGateway = {
-        emit: (event: string, payload?: unknown) => void;
-        findRequests: (method?: string) => BrowserRequest[];
-        requests: BrowserRequest[];
-      };
-      type WindowWithGateway = Window & {
-        openclawControlUiE2eGateway?: ExposedGateway;
-      };
-
-      const scenario: BrowserScenario = input.scenario;
-      const protocolVersion = input.protocolVersion;
-      const requests: BrowserRequest[] = [];
-      let seq = 0;
-
-      function sessionRow() {
-        return {
-          contextTokens: null,
-          displayName: "Main",
-          hasActiveRun: false,
-          key: scenario.sessionKey,
-          kind: "direct",
-          label: "Main",
-          model: "gpt-5.5",
-          modelProvider: "openai",
-          status: "done",
-          totalTokens: 0,
-          updatedAt: Date.now(),
-        };
-      }
-
-      function buildResponse(method: string, params: unknown): unknown {
-        if (Object.prototype.hasOwnProperty.call(scenario.methodResponses, method)) {
-          return scenario.methodResponses[method];
-        }
-        switch (method) {
-          case "connect":
-            return {
-              auth: {
-                deviceToken: "e2e-device-token",
-                role: "operator",
-                scopes: [
-                  "operator.admin",
-                  "operator.read",
-                  "operator.write",
-                  "operator.approvals",
-                  "operator.pairing",
-                ],
-              },
-              features: { events: [], methods: [] },
-              protocol: protocolVersion,
-              server: { connId: "control-ui-e2e", version: "e2e" },
-              snapshot: {
-                sessionDefaults: {
-                  defaultAgentId: scenario.defaultAgentId,
-                  mainKey: "main",
-                  mainSessionKey: scenario.sessionKey,
-                  scope: "agent",
-                },
-              },
-              type: "hello-ok",
-            };
-          case "agent.identity.get":
-            return {
-              agentId: scenario.assistantAgentId,
-              avatar: "",
-              avatarStatus: "none",
-              name: scenario.assistantName,
-            };
-          case "agents.list":
-            return {
-              agents: [
-                {
-                  id: scenario.defaultAgentId,
-                  identity: { name: scenario.assistantName },
-                  name: scenario.assistantName,
-                },
-              ],
-              defaultId: scenario.defaultAgentId,
-              mainKey: "main",
-              scope: "agent",
-            };
-          case "chat.history":
-            return {
-              messages: scenario.historyMessages,
-              sessionId: "control-ui-e2e-session",
-              thinkingLevel: null,
-            };
-          case "chat.send":
-            return { ok: true, queued: false, params };
-          case "commands.list":
-            return { commands: [] };
-          case "health":
-            return {
-              agents: [],
-              defaultAgentId: scenario.defaultAgentId,
-              durationMs: 0,
-              heartbeatSeconds: 0,
-              ok: true,
-              sessions: { count: 1, path: "", recent: [] },
-              ts: Date.now(),
-            };
-          case "models.list":
-            return { models: scenario.models };
-          case "sessions.list":
-            return {
-              count: 1,
-              defaults: {
-                contextTokens: null,
-                model: "gpt-5.5",
-                modelProvider: "openai",
-              },
-              path: "",
-              sessions: [sessionRow()],
-              ts: Date.now(),
-            };
-          case "sessions.subscribe":
-            return { ok: true };
-          default:
-            return {};
-        }
-      }
-
-      function parseFrame(
-        raw: string | ArrayBufferLike | Blob | ArrayBufferView,
-      ): BrowserFrame | null {
-        if (typeof raw !== "string") {
-          return null;
-        }
-        try {
-          const parsed = JSON.parse(raw) as BrowserFrame;
-          return parsed && typeof parsed === "object" ? parsed : null;
-        } catch {
-          return null;
-        }
-      }
-
-      class MockWebSocket extends EventTarget {
-        static readonly CLOSED = 3;
-        static readonly CLOSING = 2;
-        static readonly CONNECTING = 0;
-        static readonly OPEN = 1;
-        static latest: MockWebSocket | null = null;
-
-        binaryType: BinaryType = "blob";
-        readonly bufferedAmount = 0;
-        readonly extensions = "";
-        onclose: ((event: CloseEvent) => void) | null = null;
-        onerror: ((event: Event) => void) | null = null;
-        onmessage: ((event: MessageEvent) => void) | null = null;
-        onopen: ((event: Event) => void) | null = null;
-        readonly protocol = "";
-        readyState = MockWebSocket.CONNECTING;
-        readonly url: string;
-
-        constructor(url: string | URL) {
-          super();
-          this.url = String(url);
-          MockWebSocket.latest = this;
-          window.setTimeout(() => {
-            if (this.readyState !== MockWebSocket.CONNECTING) {
-              return;
-            }
-            this.readyState = MockWebSocket.OPEN;
-            this.dispatchEvent(new Event("open"));
-            this.deliver({
-              event: "connect.challenge",
-              payload: { nonce: "control-ui-e2e-nonce" },
-              type: "event",
-            });
-          }, 0);
-        }
-
-        override dispatchEvent(event: Event): boolean {
-          const dispatched = super.dispatchEvent(event);
-          if (event.type === "open") {
-            this.onopen?.(event);
-          } else if (event.type === "message") {
-            this.onmessage?.(event as MessageEvent);
-          } else if (event.type === "close") {
-            this.onclose?.(event as CloseEvent);
-          } else if (event.type === "error") {
-            this.onerror?.(event);
-          }
-          return dispatched;
-        }
-
-        close(code = 1000, reason = ""): void {
-          if (this.readyState === MockWebSocket.CLOSED) {
-            return;
-          }
-          this.readyState = MockWebSocket.CLOSED;
-          this.dispatchEvent(new CloseEvent("close", { code, reason }));
-        }
-
-        send(raw: string | ArrayBufferLike | Blob | ArrayBufferView): void {
-          const frame = parseFrame(raw);
-          if (!frame || frame.type !== "req") {
-            return;
-          }
-          const id = typeof frame.id === "string" ? frame.id : "";
-          const method = typeof frame.method === "string" ? frame.method : "";
-          if (!id || !method) {
-            return;
-          }
-          requests.push({ id, method, params: frame.params });
-          window.setTimeout(() => {
-            this.deliver({
-              id,
-              ok: true,
-              payload: buildResponse(method, frame.params),
-              type: "res",
-            });
-          }, 0);
-        }
-
-        deliver(frame: unknown): void {
-          if (this.readyState !== MockWebSocket.OPEN) {
-            return;
-          }
-          this.dispatchEvent(new MessageEvent("message", { data: JSON.stringify(frame) }));
-        }
-      }
-
-      const exposed: ExposedGateway = {
-        emit(event, payload) {
-          MockWebSocket.latest?.deliver({
-            event,
-            payload,
-            seq: ++seq,
-            type: "event",
-          });
-        },
-        findRequests(method) {
-          return method ? requests.filter((request) => request.method === method) : [...requests];
-        },
-        requests,
-      };
-
-      (window as WindowWithGateway).openclawControlUiE2eGateway = exposed;
-      window.WebSocket = MockWebSocket as unknown as typeof WebSocket;
-    },
-    { protocolVersion: PROTOCOL_VERSION, scenario: normalizedScenario },
-  );
+  await page.addInitScript({ content: createControlUiMockGatewayInitScript(normalizedScenario) });
   return createMockGatewayControls(page, normalizedScenario.sessionKey);
 }
 

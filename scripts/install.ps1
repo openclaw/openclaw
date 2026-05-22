@@ -104,6 +104,144 @@ function Check-Node {
     return $false
 }
 
+function Get-WindowsNodeArchitecture {
+    foreach ($architecture in @($env:PROCESSOR_ARCHITEW6432, $env:PROCESSOR_ARCHITECTURE)) {
+        if ($architecture -match "ARM64") {
+            return "arm64"
+        }
+    }
+    return "x64"
+}
+
+function Get-OpenClawDepsRoot {
+    $localAppData = $env:LOCALAPPDATA
+    if ([string]::IsNullOrWhiteSpace($localAppData)) {
+        $localAppData = [Environment]::GetFolderPath("LocalApplicationData")
+    }
+    if ([string]::IsNullOrWhiteSpace($localAppData)) {
+        $localAppData = Join-Path ([Environment]::GetFolderPath("UserProfile")) "AppData\Local"
+    }
+    return (Join-Path $localAppData "OpenClaw\deps")
+}
+
+function Get-PortableNodeRoot {
+    return (Join-Path (Get-OpenClawDepsRoot) "portable-node")
+}
+
+function Get-PortableNodeCommandPath {
+    $root = Get-PortableNodeRoot
+    $candidate = Join-Path $root "node.exe"
+    if (Test-Path $candidate) {
+        return $candidate
+    }
+    return $null
+}
+
+function Use-PortableNodeIfPresent {
+    $nodeExe = Get-PortableNodeCommandPath
+    if (-not $nodeExe) {
+        return $false
+    }
+
+    Add-ToProcessPath (Split-Path -Parent $nodeExe)
+    return (Check-Node)
+}
+
+function Ensure-PortableNodeOnUserPath {
+    $nodeExe = Get-PortableNodeCommandPath
+    if (-not $nodeExe) {
+        return
+    }
+
+    $nodeDir = Split-Path -Parent $nodeExe
+    if (Add-ToUserPath $nodeDir) {
+        Write-Host "[!] Added $nodeDir to user PATH (restart terminal if node or openclaw is not found)" -ForegroundColor Yellow
+    }
+}
+
+function Resolve-PortableNodeDownload {
+    $architecture = Get-WindowsNodeArchitecture
+    $index = Invoke-RestMethod -Uri "https://nodejs.org/dist/index.json"
+    $release = $index |
+        Where-Object { $_.version -match '^v24\.' } |
+        Select-Object -First 1
+
+    if (-not $release -or -not $release.version) {
+        throw "Could not resolve latest Node.js 24 release metadata."
+    }
+
+    $fileKey = "win-$architecture-zip"
+    if ($release.files -and -not ($release.files -contains $fileKey)) {
+        throw "Node.js $($release.version) does not publish $fileKey."
+    }
+
+    $name = "node-$($release.version)-win-$architecture.zip"
+    return @{
+        Version = $release.version
+        Name = $name
+        Url = "https://nodejs.org/dist/$($release.version)/$name"
+    }
+}
+
+function Install-PortableNode {
+    if (Use-PortableNodeIfPresent) {
+        Ensure-PortableNodeOnUserPath
+        $nodeVersion = (& node -v 2>$null)
+        if ($nodeVersion) {
+            Write-Host "[OK] User-local Node.js already available: $nodeVersion" -ForegroundColor Green
+        }
+        return
+    }
+
+    Write-Host "  No package manager found; bootstrapping user-local portable Node.js..." -ForegroundColor Gray
+
+    $download = Resolve-PortableNodeDownload
+    $portableRoot = Get-PortableNodeRoot
+    $portableParent = Split-Path -Parent $portableRoot
+    $tmpZip = Join-Path $env:TEMP $download.Name
+    $tmpExtract = Join-Path $env:TEMP ("openclaw-portable-node-" + [guid]::NewGuid().ToString("N"))
+
+    New-Item -ItemType Directory -Force -Path $portableParent | Out-Null
+    if (Test-Path $portableRoot) {
+        Remove-Item -Recurse -Force $portableRoot
+    }
+    if (Test-Path $tmpExtract) {
+        Remove-Item -Recurse -Force $tmpExtract
+    }
+    New-Item -ItemType Directory -Force -Path $tmpExtract | Out-Null
+
+    try {
+        Write-Host "  Downloading Node.js $($download.Version)..." -ForegroundColor Gray
+        Invoke-WebRequest -UseBasicParsing -Uri $download.Url -OutFile $tmpZip
+        Expand-Archive -Path $tmpZip -DestinationPath $tmpExtract -Force
+
+        $nodeDir = Get-ChildItem -Path $tmpExtract -Directory |
+            Where-Object { Test-Path (Join-Path $_.FullName "node.exe") } |
+            Select-Object -First 1
+        if (-not $nodeDir) {
+            throw "Node.js archive did not contain node.exe."
+        }
+
+        New-Item -ItemType Directory -Force -Path $portableRoot | Out-Null
+        Move-Item -Path (Join-Path $nodeDir.FullName "*") -Destination $portableRoot -Force
+    } finally {
+        if (Test-Path $tmpZip) {
+            Remove-Item -Force $tmpZip
+        }
+        if (Test-Path $tmpExtract) {
+            Remove-Item -Recurse -Force $tmpExtract
+        }
+    }
+
+    if (-not (Use-PortableNodeIfPresent)) {
+        throw "Portable Node.js bootstrap completed, but node is still unavailable."
+    }
+    Ensure-PortableNodeOnUserPath
+
+    $nodeVersion = (& node -v 2>$null)
+    Write-Host "[OK] User-local Node.js ready: $nodeVersion" -ForegroundColor Green
+}
+
 # Install Node.js
 function Install-Node {
     Write-Host "[*] Installing Node.js..." -ForegroundColor Yellow
@@ -143,9 +281,18 @@ function Install-Node {
         return $true
     }
 
+    try {
+        Install-PortableNode
+        if (Check-Node) {
+            return $true
+        }
+    } catch {
+        Write-Host "[!] Portable Node.js bootstrap failed: $($_.Exception.Message)" -ForegroundColor Yellow
+    }
+
     # Manual download fallback
     Write-Host ""
-    Write-Host "Error: Could not find a package manager (winget, choco, or scoop)" -ForegroundColor Red
+    Write-Host "Error: Could not install Node.js automatically." -ForegroundColor Red
     Write-Host ""
     Write-Host "Please install Node.js 22+ manually:" -ForegroundColor Yellow
     Write-Host "  https://nodejs.org/en/download/" -ForegroundColor Cyan
@@ -188,6 +335,33 @@ function Add-ToProcessPath {
     }
 
     $env:Path = "$PathEntry;$env:Path"
+}
+
+function Add-ToUserPath {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$PathEntry
+    )
+
+    if ([string]::IsNullOrWhiteSpace($PathEntry)) {
+        return $false
+    }
+
+    Add-ToProcessPath $PathEntry
+
+    $userPath = [Environment]::GetEnvironmentVariable("Path", "User")
+    $userEntries = @($userPath -split ";" | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+    if ($userEntries | Where-Object { $_ -ieq $PathEntry }) {
+        return $false
+    }
+
+    $newUserPath = if ([string]::IsNullOrWhiteSpace($userPath)) {
+        $PathEntry
+    } else {
+        "$userPath;$PathEntry"
+    }
+    [Environment]::SetEnvironmentVariable("Path", $newUserPath, "User")
+    return $true
 }
 
 function Get-PortableGitRoot {
