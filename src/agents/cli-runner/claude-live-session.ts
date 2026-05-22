@@ -21,6 +21,8 @@ type ClaudeLiveTurn = {
   backend: CliBackendConfig;
   outputLimits: ClaudeLiveOutputLimits;
   startedAtMs: number;
+  promptChars: number;
+  promptHash: string;
   rawLines: string[];
   rawChars: number;
   sessionId?: string;
@@ -334,8 +336,12 @@ function failTurn(session: ClaudeLiveSession, error: unknown): void {
     return;
   }
   const errorKind = error instanceof Error ? error.name : typeof error;
+  // Without prompt metadata, an aborted turn leaves no trace of which user
+  // input was discarded — the prompt only lives in the CLI's stdin and is
+  // never persisted gateway-side. The hash lets an operator correlate this
+  // line with the matching `cli exec: ... promptChars=…` entry.
   cliBackendLog.warn(
-    `claude live session turn failed: provider=${session.providerId} model=${session.modelId} durationMs=${Date.now() - turn.startedAtMs} error=${errorKind}`,
+    `claude live session turn failed: provider=${session.providerId} model=${session.modelId} durationMs=${Date.now() - turn.startedAtMs} error=${errorKind} promptChars=${turn.promptChars} promptHash=${turn.promptHash}`,
   );
   clearTurnTimers(turn);
   turn.streamingParser.finish();
@@ -755,18 +761,29 @@ async function createClaudeLiveSession(params: {
   return session;
 }
 
+export function summarizePromptForLog(prompt: string): { chars: number; hash: string } {
+  return {
+    chars: prompt.length,
+    hash: crypto.createHash("sha256").update(prompt, "utf8").digest("hex").slice(0, 8),
+  };
+}
+
 function createTurn(params: {
   context: PreparedCliRunContext;
   noOutputTimeoutMs: number;
   onAssistantDelta: (delta: CliStreamingDelta) => void;
   session: ClaudeLiveSession;
+  prompt: string;
   resolve: (output: CliOutput) => void;
   reject: (error: unknown) => void;
 }): ClaudeLiveTurn {
+  const { chars: promptChars, hash: promptHash } = summarizePromptForLog(params.prompt);
   const turn: ClaudeLiveTurn = {
     backend: params.context.preparedBackend.backend,
     outputLimits: resolveClaudeLiveOutputLimits(params.context.preparedBackend.backend),
     startedAtMs: Date.now(),
+    promptChars,
+    promptHash,
     rawLines: [],
     rawChars: 0,
     noOutputTimer: null,
@@ -952,6 +969,7 @@ export async function runClaudeLiveSessionTurn(params: {
       noOutputTimeoutMs: params.noOutputTimeoutMs,
       onAssistantDelta: params.onAssistantDelta,
       session: liveSession,
+      prompt: params.prompt,
       resolve,
       reject,
     });
