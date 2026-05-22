@@ -35,6 +35,7 @@ Docs: https://docs.openclaw.ai
 - fix(integrations): enforce channel read target allowlists [AI]. (#84982) Thanks @pgondhi987.
 - Agents/heartbeat: route single-owner `session.dmScope=main` direct-message exec and cron event wakes back to the agent main session so async completions no longer strand context in orphan direct-DM queues. Fixes #71581. (#83743) Thanks @Kaspre.
 - Agents/code-mode: expose outer code-mode `exec` source through the `command` hook alias with `toolKind`/`toolInputKind` discriminators so exec-shaped policies can distinguish code-mode cells. (#83483) Thanks @Kaspre.
+- Agents/code mode: return structured timeout and runtime-unavailable error codes for known worker failures. Fixes #83389. (#83444) Thanks @Kaspre.
 - QA-Lab: isolate multi-scenario suite workers when scenarios need startup config patches, preventing message-routing config from leaking into unrelated scenarios.
 - QA-Lab: make the commitments heartbeat-target-none scenario request an immediate heartbeat instead of waiting for the next scheduled heartbeat.
 - Gateway CLI: surface local post-challenge connect assembly failures immediately instead of waiting for the wrapper timeout. Fixes #68944. (#85253) Thanks @samzong.
