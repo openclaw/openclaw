@@ -15,6 +15,7 @@ import { describe, expect, it } from "vitest";
 import { LOCAL_BUILD_METADATA_DIST_PATHS } from "../../scripts/lib/local-build-metadata-paths.mjs";
 import {
   agentOutputHasExpectedOkMarker,
+  agentTurnUsedEmbeddedFallback,
   buildCrossOsReleaseSmokePluginAllowlist,
   buildPackagedUpgradeUpdateArgs,
   buildReleaseOnboardArgs,
@@ -163,6 +164,40 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
         new Error("Command timed out and could not be terminated cleanly"),
       ),
     ).toBe(true);
+    expect(
+      shouldRetryCrossOsAgentTurnError(
+        new Error("Agent turn used embedded fallback instead of gateway."),
+      ),
+    ).toBe(true);
+  });
+
+  it("detects embedded fallback agent turns as non-gateway proof", () => {
+    const dir = mkdtempSync(join(tmpdir(), "openclaw-cross-os-agent-fallback-"));
+    const logPath = join(dir, "agent.log");
+    expect(
+      agentTurnUsedEmbeddedFallback({
+        stdout: JSON.stringify({ payloads: [{ text: "OK" }] }),
+        stderr: "EMBEDDED FALLBACK: Gateway agent failed; running embedded agent: gateway closed",
+      }),
+    ).toBe(true);
+    expect(
+      agentTurnUsedEmbeddedFallback({
+        stdout: JSON.stringify({ payloads: [{ text: "OK" }] }),
+        stderr: "",
+      }),
+    ).toBe(false);
+    expect(
+      agentTurnUsedEmbeddedFallback(
+        { stdout: "", stderr: "" },
+        { logText: 'EMBEDDED FALLBACK: Gateway agent failed\n{"payloads":[{"text":"OK"}]}' },
+      ),
+    ).toBe(true);
+    try {
+      writeFileSync(logPath, "EMBEDDED FALLBACK: Gateway agent failed\n");
+      expect(agentTurnUsedEmbeddedFallback({ stdout: "", stderr: "" }, { logPath })).toBe(true);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it("skips optional live agent turns only for model availability failures", () => {

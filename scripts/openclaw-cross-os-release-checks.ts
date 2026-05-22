@@ -13,6 +13,7 @@ import {
   readdirSync,
   realpathSync,
   rmSync,
+  statSync,
   writeFileSync,
 } from "node:fs";
 import { mkdtempSync } from "node:fs";
@@ -2215,6 +2216,7 @@ async function runInstalledAgentTurn(params) {
   for (let attempt = 1; attempt <= 2; attempt += 1) {
     const sessionId = `cross-os-release-check-${params.label}-${Date.now()}-${attempt}`;
     try {
+      const logOffset = readLogFileSize(params.logPath);
       const result = await runInstalledCli({
         cliPath: params.cliPath,
         args: buildReleaseAgentTurnArgs(sessionId),
@@ -2223,8 +2225,12 @@ async function runInstalledAgentTurn(params) {
         logPath: params.logPath,
         timeoutMs: (CROSS_OS_AGENT_TURN_TIMEOUT_SECONDS + 60) * 1000,
       });
-      if (!agentOutputHasExpectedOkMarker(result.stdout, { logPath: params.logPath })) {
+      const logText = readLogTextSince(params.logPath, logOffset);
+      if (!agentOutputHasExpectedOkMarker(result.stdout, { logText })) {
         throw new Error("Agent output did not contain the expected OK marker.");
+      }
+      if (agentTurnUsedEmbeddedFallback(result, { logText })) {
+        throw new Error("Agent turn used embedded fallback instead of gateway.");
       }
       return result;
     } catch (error) {
@@ -3027,6 +3033,7 @@ async function runAgentTurn(params) {
   for (let attempt = 1; attempt <= 2; attempt += 1) {
     const sessionId = `cross-os-release-check-${params.label}-${Date.now()}-${attempt}`;
     try {
+      const logOffset = readLogFileSize(params.logPath);
       const result = await runOpenClaw({
         lane: params.lane,
         env: params.env,
@@ -3034,8 +3041,12 @@ async function runAgentTurn(params) {
         logPath: params.logPath,
         timeoutMs: (CROSS_OS_AGENT_TURN_TIMEOUT_SECONDS + 60) * 1000,
       });
-      if (!agentOutputHasExpectedOkMarker(result.stdout, { logPath: params.logPath })) {
+      const logText = readLogTextSince(params.logPath, logOffset);
+      if (!agentOutputHasExpectedOkMarker(result.stdout, { logText })) {
         throw new Error("Agent output did not contain the expected OK marker.");
+      }
+      if (agentTurnUsedEmbeddedFallback(result, { logText })) {
+        throw new Error("Agent turn used embedded fallback instead of gateway.");
       }
       return result;
     } catch (error) {
@@ -3116,15 +3127,29 @@ function buildReleaseAgentTurnArgs(sessionId) {
 
 export function shouldRetryCrossOsAgentTurnError(error) {
   const message = error instanceof Error ? error.message : String(error);
-  return /Agent output did not contain the expected OK marker|model idle timeout|did not produce a response before the model idle timeout|gateway request timeout for agent|Command timed out|timed out and could not be terminated cleanly/u.test(
+  return /Agent output did not contain the expected OK marker|Agent turn used embedded fallback instead of gateway|model idle timeout|did not produce a response before the model idle timeout|gateway request timeout for agent|Command timed out|timed out and could not be terminated cleanly/u.test(
     message,
   );
+}
+
+export function agentTurnUsedEmbeddedFallback(result, options = {}) {
+  const logText =
+    typeof options.logText === "string"
+      ? options.logText
+      : typeof options.logPath === "string"
+        ? safeReadTextFile(options.logPath)
+        : "";
+  return /EMBEDDED FALLBACK:/u.test(`${result.stdout ?? ""}\n${result.stderr ?? ""}\n${logText}`);
 }
 
 export function agentOutputHasExpectedOkMarker(stdout, options = {}) {
   const payloadTexts = parseAgentPayloadTexts(stdout);
   if (payloadTexts.some((text) => text.trim() === "OK")) {
     return true;
+  }
+  if (typeof options.logText === "string") {
+    const logTexts = parseAgentPayloadTexts(options.logText);
+    return logTexts.some((text) => text.trim() === "OK");
   }
   if (typeof options.logPath !== "string") {
     return false;
@@ -3134,6 +3159,30 @@ export function agentOutputHasExpectedOkMarker(stdout, options = {}) {
     return logTexts.some((text) => text.trim() === "OK");
   } catch {
     return false;
+  }
+}
+
+function readLogFileSize(logPath) {
+  try {
+    return statSync(logPath).size;
+  } catch {
+    return 0;
+  }
+}
+
+function readLogTextSince(logPath, offsetBytes) {
+  try {
+    return readFileSync(logPath).subarray(offsetBytes).toString("utf8");
+  } catch {
+    return "";
+  }
+}
+
+function safeReadTextFile(logPath) {
+  try {
+    return readFileSync(logPath, "utf8");
+  } catch {
+    return "";
   }
 }
 
