@@ -58,11 +58,23 @@ type NormalizedSilentReplyText = {
   strippedTrailingSilentToken: boolean;
 };
 
+const CRON_SUPPRESSED_CONTROL_REPLY_TOKENS = [
+  SILENT_REPLY_TOKEN,
+  "ANNOUNCE_SKIP",
+  "REPLY_SKIP",
+] as const;
+
+function isSuppressedCronControlReplyText(text: string | undefined): boolean {
+  return CRON_SUPPRESSED_CONTROL_REPLY_TOKENS.some((token) =>
+    isSilentReplyText(text, token),
+  );
+}
+
 function normalizeSilentReplyText(text: string | undefined): NormalizedSilentReplyText {
   if (!text) {
     return { text, strippedTrailingSilentToken: false };
   }
-  if (isSilentReplyText(text, SILENT_REPLY_TOKEN)) {
+  if (isSuppressedCronControlReplyText(text)) {
     return { text: undefined, strippedTrailingSilentToken: false };
   }
 
@@ -1162,7 +1174,7 @@ export async function dispatchCronDelivery(
       hadDescendants &&
       synthesizedText.trim() === initialSynthesizedText &&
       isLikelyInterimCronMessage(initialSynthesizedText) &&
-      !isSilentReplyText(initialSynthesizedText, SILENT_REPLY_TOKEN)
+      !isSuppressedCronControlReplyText(initialSynthesizedText)
     ) {
       // Descendants existed but no post-orchestration synthesis arrived AND
       // no descendant fallback reply was available. Suppress stale parent

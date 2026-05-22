@@ -320,6 +320,34 @@ describe("runCronIsolatedAgentTurn core-channel direct delivery", () => {
       });
     });
 
+    it.each(["REPLY_SKIP", "ANNOUNCE_SKIP"])(
+      `suppresses %s cron announce delivery for ${testCase.name}`,
+      async (controlReply) => {
+        await withTempCronHome(async (home) => {
+          const storePath = await writeSessionStore(home, {
+            lastProvider: "webchat",
+            lastTo: "",
+          });
+          const cfg = makeCfg(home, storePath);
+          const deps = createCliDeps();
+          mockAgentPayloads([{ text: controlReply }]);
+
+          const res = await runExplicitAnnounceTurn({
+            cfg,
+            deps,
+            channel: testCase.channel,
+            to: testCase.to,
+          });
+
+          expect(res.status).toBe("ok");
+          expect(res.delivered).toBe(false);
+          expect(res.deliveryAttempted).toBe(true);
+          expect(deps[testCase.sendKey]).not.toHaveBeenCalled();
+          expect(runSubagentAnnounceFlow).not.toHaveBeenCalled();
+        });
+      },
+    );
+
     if (testCase.channel === "discord") {
       it("keeps isolated Discord delivery on the active runtime snapshot after agent-default derivation", async () => {
         await withTempCronHome(async (home) => {
