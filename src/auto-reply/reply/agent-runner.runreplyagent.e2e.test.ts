@@ -196,6 +196,7 @@ function createMinimalRun(params?: {
   return {
     typing,
     opts,
+    followupRun,
     run: async () => {
       const runReplyAgent = await getRunReplyAgent();
       return runReplyAgent({
@@ -373,7 +374,7 @@ describe("runReplyAgent pending final delivery capture", () => {
       ),
     );
 
-    const { run } = createMinimalRun({
+    const { followupRun, run } = createMinimalRun({
       sessionEntry,
       sessionStore,
       sessionKey: "main",
@@ -391,10 +392,18 @@ describe("runReplyAgent pending final delivery capture", () => {
       text: "⚠️ Session history got out of sync. Please try again, or use /new to start a fresh session.",
     });
     expect(stored.sessionId).not.toBe("poisoned-session");
+    expect(stored.sessionFile).toEqual(expect.any(String));
+    expect(stored.sessionFile).not.toBe("/tmp/poisoned-session.jsonl");
+    expect(followupRun.run.sessionId).toBe(stored.sessionId);
+    expect(followupRun.run.sessionFile).toBe(stored.sessionFile);
+    expect(vi.mocked(refreshQueuedFollowupSession)).toHaveBeenCalledWith({
+      key: "main",
+      previousSessionId: "poisoned-session",
+      nextSessionId: stored.sessionId,
+      nextSessionFile: stored.sessionFile,
+    });
     expect(stored.systemSent).toBe(false);
-    expect(stored.status).toBeUndefined();
     expect(stored.contextTokens).toBeUndefined();
-    expect(stored.cliSessionBindings).toBeUndefined();
   });
 
   it("does not persist message-tool-only final replies for heartbeat replay", async () => {

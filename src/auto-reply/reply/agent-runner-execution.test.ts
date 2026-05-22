@@ -4776,7 +4776,6 @@ describe("runAgentTurnWithFallback", () => {
       shouldEmitToolResult: () => true,
       shouldEmitToolOutput: () => false,
       pendingToolTasks: new Set(),
-      resetSessionAfterCompactionFailure: async () => false,
       resetSessionAfterRoleOrderingConflict: async () => false,
       isHeartbeat: false,
       sessionKey: "main",
