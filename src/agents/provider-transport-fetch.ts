@@ -24,6 +24,12 @@ import {
   type ProviderLocalServiceLease,
 } from "./provider-local-service.js";
 import {
+  estimateProviderRequestTokens,
+  observeProviderLimiterResponse,
+  resolveProviderLimiterPolicy,
+  waitForProviderLimiter,
+} from "./provider-rate-limiter.js";
+import {
   buildProviderRequestDispatcherPolicy,
   getModelProviderRequestTransport,
   mergeModelProviderRequestOverrides,
@@ -570,6 +576,26 @@ export function buildGuardedModelFetch(
       ...(policy ? { policy } : {}),
     };
     let result: Awaited<ReturnType<typeof fetchWithSsrFGuard>>;
+    const limiterPolicy = resolveProviderLimiterPolicy({
+      provider: model.provider,
+      model: model.id,
+    });
+    const limiterKey = {
+      provider: model.provider,
+      model: model.id,
+      profile: (model as { authProfileId?: unknown; profileId?: unknown }).authProfileId as
+        | string
+        | undefined,
+      capability: "llm",
+    };
+    if (limiterPolicy) {
+      await waitForProviderLimiter({
+        key: limiterKey,
+        policy: limiterPolicy,
+        tokens: estimateProviderRequestTokens((requestInit ?? init)?.body),
+        signal: (requestInit ?? init)?.signal ?? undefined,
+      });
+    }
     const fetchStartedAt = Date.now();
     const useEnvProxy = !dispatcherPolicy && shouldUseEnvHttpProxyForUrl(url);
     emitModelTransportDebug(
@@ -605,6 +631,14 @@ export function buildGuardedModelFetch(
         `status=${response.status} elapsedMs=${Date.now() - fetchStartedAt} ` +
         `contentType=${response.headers.get("content-type") ?? ""}`,
     );
+    if (limiterPolicy) {
+      observeProviderLimiterResponse({
+        key: limiterKey,
+        policy: limiterPolicy,
+        status: response.status,
+        headers: response.headers,
+      });
+    }
     if (shouldBypassLongSdkRetry(response)) {
       const headers = new Headers(response.headers);
       headers.set("x-should-retry", "false");

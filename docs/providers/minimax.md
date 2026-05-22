@@ -503,3 +503,40 @@ More help: [Troubleshooting](/help/troubleshooting) and [FAQ](/help/faq).
     General troubleshooting and FAQ.
   </Card>
 </CardGroup>
+
+## Provider-aware limiter
+
+OpenClaw applies a proactive provider-aware limiter to MiniMax text models on the
+shared model transport path. The limiter is keyed by provider, auth profile when
+known, capability, and model so MiniMax throttling does not slow unrelated
+providers.
+
+Defaults follow MiniMax's published text limits for `MiniMax-M2.7` and
+`MiniMax-M2.7-highspeed`: 500 RPM and 20,000,000 TPM. OpenClaw uses 85% headroom
+by default to avoid running exactly at the provider edge. The limiter also tracks
+MiniMax's documented weekly allowance as `10 × the 5-hour usage quota`, derived
+as:
+
+- weekly requests: `RPM × 60 × 5 × 10`
+- weekly tokens: `TPM × 60 × 5 × 10`
+
+The limiter still observes response headers when providers send them. Standard
+`Retry-After`, `x-ratelimit-limit`, `x-ratelimit-remaining`, and
+`x-ratelimit-reset` variants can adjust the in-memory bucket/cooldown state for
+future requests.
+
+Environment overrides are intentionally narrow and optional:
+
+- `OPENCLAW_PROVIDER_LIMITER_ENABLED=0` disables the proactive limiter.
+- `OPENCLAW_PROVIDER_LIMITER_HEADROOM=0.9` changes the global limiter headroom.
+- `OPENCLAW_PROVIDER_LIMITER_MINIMAX_RPM=500` overrides MiniMax RPM.
+- `OPENCLAW_PROVIDER_LIMITER_MINIMAX_TPM=20000000` overrides MiniMax TPM.
+- `OPENCLAW_PROVIDER_LIMITER_MINIMAX_WEEKLY=0` disables weekly accounting.
+- `OPENCLAW_PROVIDER_LIMITER_MINIMAX_WEEKLY_REQUESTS=1500000` overrides the
+  derived weekly request allowance.
+- `OPENCLAW_PROVIDER_LIMITER_MINIMAX_WEEKLY_TOKENS=60000000000` overrides the
+  derived weekly token allowance.
+
+This complements, rather than replaces, `auth.cooldowns`: proactive limiting
+slows requests before provider limits are hit, while cooldowns/fallbacks still
+handle provider-side 429s, overloads, and account-specific failures.
