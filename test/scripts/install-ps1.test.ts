@@ -121,6 +121,7 @@ describe("install.ps1 failure handling", () => {
     const userPathBody = extractFunctionBody(source, "Add-ToUserPath");
     const depsRootBody = extractFunctionBody(source, "Get-OpenClawDepsRoot");
     const resolveNodeBody = extractFunctionBody(source, "Resolve-PortableNodeDownload");
+    const expandNodeBody = extractFunctionBody(source, "Expand-PortableNodeArchive");
 
     expect(installNodeBody).toContain("Install-PortableNode");
     expect(installNodeBody).toContain("Portable Node.js bootstrap failed");
@@ -137,6 +138,10 @@ describe("install.ps1 failure handling", () => {
       '[Environment]::SetEnvironmentVariable("Path", $newUserPath, "User")',
     );
     expect(portableNodeBody).toContain("Invoke-WebRequest -UseBasicParsing");
+    expect(portableNodeBody).toContain("Expand-PortableNodeArchive");
+    expect(portableNodeBody).not.toContain("Expand-Archive");
+    expect(portableNodeBody).not.toContain("New-Item -ItemType Directory -Force -Path $tmpExtract");
+    expect(expandNodeBody).toContain("System.IO.Compression.ZipFile");
     expect(resolveNodeBody).toContain("https://nodejs.org/dist/index.json");
     expect(resolveNodeBody).toContain("win-$architecture-zip");
     expect(resolveNodeBody).toContain("node-$($release.version)-win-$architecture.zip");

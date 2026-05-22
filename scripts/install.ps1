@@ -183,6 +183,18 @@ function Resolve-PortableNodeDownload {
     }
 }
 
+function Expand-PortableNodeArchive {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$ZipPath,
+        [Parameter(Mandatory = $true)]
+        [string]$DestinationPath
+    )
+
+    Add-Type -AssemblyName System.IO.Compression.FileSystem
+    [System.IO.Compression.ZipFile]::ExtractToDirectory($ZipPath, $DestinationPath)
+}
+
 function Install-PortableNode {
     if (Use-PortableNodeIfPresent) {
         Ensure-PortableNodeOnUserPath
@@ -208,12 +220,11 @@ function Install-PortableNode {
     if (Test-Path $tmpExtract) {
         Remove-Item -Recurse -Force $tmpExtract
     }
-    New-Item -ItemType Directory -Force -Path $tmpExtract | Out-Null
 
     try {
         Write-Host "  Downloading Node.js $($download.Version)..." -ForegroundColor Gray
         Invoke-WebRequest -UseBasicParsing -Uri $download.Url -OutFile $tmpZip
-        Expand-Archive -Path $tmpZip -DestinationPath $tmpExtract -Force
+        Expand-PortableNodeArchive -ZipPath $tmpZip -DestinationPath $tmpExtract
 
         $nodeDir = Get-ChildItem -Path $tmpExtract -Directory |
             Where-Object { Test-Path (Join-Path $_.FullName "node.exe") } |
