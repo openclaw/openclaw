@@ -40,6 +40,8 @@ import {
   normalizeInheritedToolAllowlist,
   normalizeInheritedToolDenylist,
 } from "./inherited-tool-deny.js";
+import { resolveDefaultModelForAgent } from "./model-selection.js";
+import { resolveThinkingDefault } from "./model-thinking-default.js";
 import {
   mapToolContextToSpawnedRunMetadata,
   normalizeSpawnedRunMetadata,
@@ -371,6 +373,7 @@ function resolveStoreEntryByKeys(
 function readRequesterThinkingLevel(params: {
   cfg: OpenClawConfig;
   requesterInternalKey: string;
+  requesterAgentId?: string;
 }): string | undefined {
   try {
     const target = resolveGatewaySessionStoreTarget({
@@ -379,9 +382,24 @@ function readRequesterThinkingLevel(params: {
     });
     const store = loadSessionStore(target.storePath, { clone: false });
     const entry = resolveStoreEntryByKeys(store, target.storeKeys);
-    return typeof entry?.thinkingLevel === "string" && entry.thinkingLevel.trim()
-      ? entry.thinkingLevel.trim()
+    if (typeof entry?.thinkingLevel === "string" && entry.thinkingLevel.trim()) {
+      return entry.thinkingLevel.trim();
+    }
+    const requesterAgentThinking = params.requesterAgentId
+      ? resolveAgentConfig(params.cfg, params.requesterAgentId)?.thinkingDefault
       : undefined;
+    if (requesterAgentThinking) {
+      return requesterAgentThinking;
+    }
+    const defaultModel = resolveDefaultModelForAgent({
+      cfg: params.cfg,
+      agentId: params.requesterAgentId,
+    });
+    return resolveThinkingDefault({
+      cfg: params.cfg,
+      provider: defaultModel.provider,
+      model: defaultModel.model,
+    });
   } catch {
     return undefined;
   }
@@ -1213,6 +1231,7 @@ export async function spawnSubagentDirect(
   const callerThinkingRaw = readRequesterThinkingLevel({
     cfg,
     requesterInternalKey,
+    requesterAgentId,
   });
   const plan = resolveSubagentModelAndThinkingPlan({
     cfg,
