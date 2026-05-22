@@ -5,8 +5,13 @@ import {
 import { expectExplicitVideoGenerationCapabilities } from "openclaw/plugin-sdk/provider-test-contracts";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 
-const { postJsonRequestMock, fetchWithTimeoutMock, resolveProviderHttpRequestConfigMock } =
-  getProviderHttpMocks();
+const {
+  postJsonRequestMock,
+  postMultipartRequestMock,
+  fetchWithTimeoutMock,
+  resolveProviderHttpRequestConfigMock,
+  sanitizeConfiguredModelProviderRequestMock,
+} = getProviderHttpMocks();
 
 let buildOpenAIVideoGenerationProvider: typeof import("./video-generation-provider.js").buildOpenAIVideoGenerationProvider;
 
@@ -20,6 +25,16 @@ function postJsonRequest(index = 0): Record<string, unknown> {
   const request = postJsonRequestMock.mock.calls[index]?.[0] as Record<string, unknown> | undefined;
   if (!request) {
     throw new Error(`expected postJsonRequest call ${index}`);
+  }
+  return request;
+}
+
+function postMultipartRequest(index = 0): Record<string, unknown> {
+  const request = postMultipartRequestMock.mock.calls[index]?.[0] as
+    | Record<string, unknown>
+    | undefined;
+  if (!request) {
+    throw new Error(`expected postMultipartRequest call ${index}`);
   }
   return request;
 }
@@ -150,7 +165,7 @@ describe("openai video generation provider", () => {
     expect(pollFetch).toBe(fetch);
   });
 
-  it("honors configured baseUrl for video requests", async () => {
+  it("keeps configured local baseUrl private-network blocked unless explicitly enabled", async () => {
     postJsonRequestMock.mockResolvedValue({
       response: {
         json: async () => ({
@@ -192,9 +207,62 @@ describe("openai video generation provider", () => {
     });
 
     expect(providerHttpConfigRequest().baseUrl).toBe("http://127.0.0.1:44080/v1");
+    expect(providerHttpConfigRequest().request).toBeUndefined();
     const createRequest = postJsonRequest();
     expect(createRequest.url).toBe("http://127.0.0.1:44080/v1/videos");
     expect(createRequest.allowPrivateNetwork).toBe(false);
+  });
+
+  it("honors configured request allowPrivateNetwork for local video providers", async () => {
+    postJsonRequestMock.mockResolvedValue({
+      response: {
+        json: async () => ({
+          id: "vid_local",
+          model: "sora-2",
+          status: "queued",
+        }),
+      },
+      release: vi.fn(async () => {}),
+    });
+    fetchWithTimeoutMock
+      .mockResolvedValueOnce({
+        json: async () => ({
+          id: "vid_local",
+          model: "sora-2",
+          status: "completed",
+        }),
+      })
+      .mockResolvedValueOnce({
+        headers: new Headers({ "content-type": "video/mp4" }),
+        arrayBuffer: async () => Buffer.from("mp4-bytes"),
+      });
+
+    const provider = buildOpenAIVideoGenerationProvider();
+    await provider.generateVideo({
+      provider: "openai",
+      model: "sora-2",
+      prompt: "Render via local relay",
+      cfg: {
+        models: {
+          providers: {
+            openai: {
+              baseUrl: "http://127.0.0.1:44080/v1",
+              request: { allowPrivateNetwork: true },
+              models: [],
+            },
+          },
+        },
+      },
+    });
+
+    expect(sanitizeConfiguredModelProviderRequestMock).toHaveBeenCalledWith({
+      allowPrivateNetwork: true,
+    });
+    expect(providerHttpConfigRequest().baseUrl).toBe("http://127.0.0.1:44080/v1");
+    expect(providerHttpConfigRequest().request).toEqual({ allowPrivateNetwork: true });
+    const createRequest = postJsonRequest();
+    expect(createRequest.url).toBe("http://127.0.0.1:44080/v1/videos");
+    expect(createRequest.allowPrivateNetwork).toBe(true);
   });
 
   it("uses multipart input_reference for video-to-video uploads", async () => {
@@ -229,12 +297,12 @@ describe("openai video generation provider", () => {
     });
 
     expect(postJsonRequestMock).not.toHaveBeenCalled();
-    const [createUrl, createInit, createTimeout, createFetch] = fetchWithTimeoutCall(0);
-    expect(createUrl).toBe("https://api.openai.com/v1/videos");
-    expect(createInit?.method).toBe("POST");
-    expect(createInit?.body).toBeInstanceOf(FormData);
-    expect(createTimeout).toBe(120000);
-    expect(createFetch).toBe(fetch);
+    const createRequest = postMultipartRequest();
+    expect(createRequest.url).toBe("https://api.openai.com/v1/videos");
+    expect(createRequest.body).toBeInstanceOf(FormData);
+    expect(createRequest.timeoutMs).toBe(120000);
+    expect(createRequest.fetchFn).toBe(fetch);
+    expect(createRequest.allowPrivateNetwork).toBe(false);
   });
 
   it("rejects multiple reference assets", async () => {

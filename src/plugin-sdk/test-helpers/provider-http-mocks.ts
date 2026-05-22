@@ -3,6 +3,7 @@ import type {
   fetchProviderDownloadResponse,
   fetchProviderOperationResponse,
   pollProviderOperationJson,
+  postMultipartRequest,
   resolveProviderHttpRequestConfig,
   sanitizeConfiguredModelProviderRequest,
 } from "../provider-http.js";
@@ -11,6 +12,7 @@ type ResolveProviderHttpRequestConfigParams = Parameters<
   typeof resolveProviderHttpRequestConfig
 >[0];
 type PollProviderOperationJsonParams = Parameters<typeof pollProviderOperationJson>[0];
+type PostMultipartRequestParams = Parameters<typeof postMultipartRequest>[0];
 type FetchProviderOperationResponseParams = Parameters<typeof fetchProviderOperationResponse>[0];
 type FetchProviderDownloadResponseParams = Parameters<typeof fetchProviderDownloadResponse>[0];
 type SanitizeConfiguredModelProviderRequestParams = Parameters<
@@ -29,6 +31,7 @@ type AnyMock = Mock<(...args: unknown[]) => unknown>;
 interface ProviderHttpMocks {
   resolveApiKeyForProviderMock: Mock<() => Promise<{ apiKey: string }>>;
   postJsonRequestMock: AnyMock;
+  postMultipartRequestMock: AnyMock;
   fetchWithTimeoutMock: AnyMock;
   pollProviderOperationJsonMock: AnyMock;
   assertOkOrThrowHttpErrorMock: Mock<(response: Response, label: string) => Promise<void>>;
@@ -46,6 +49,7 @@ interface ProviderHttpMocks {
 const providerHttpMocks = vi.hoisted(() => ({
   resolveApiKeyForProviderMock: vi.fn(async () => ({ apiKey: "provider-key" })),
   postJsonRequestMock: vi.fn(),
+  postMultipartRequestMock: vi.fn(),
   fetchWithTimeoutMock: vi.fn(),
   fetchProviderOperationResponseMock: vi.fn(),
   fetchProviderDownloadResponseMock: vi.fn(),
@@ -57,11 +61,31 @@ const providerHttpMocks = vi.hoisted(() => ({
   ),
   resolveProviderHttpRequestConfigMock: vi.fn((params: ResolveProviderHttpRequestConfigParams) => ({
     baseUrl: params.baseUrl ?? params.defaultBaseUrl,
-    allowPrivateNetwork: params.allowPrivateNetwork === true,
+    allowPrivateNetwork:
+      (params.allowPrivateNetwork ?? params.request?.allowPrivateNetwork) === true,
     headers: new Headers(params.defaultHeaders),
     dispatcherPolicy: undefined,
   })),
 }));
+
+providerHttpMocks.postMultipartRequestMock.mockImplementation(
+  async (params: PostMultipartRequestParams) => {
+    const response = await providerHttpMocks.fetchWithTimeoutMock(
+      params.url,
+      {
+        method: "POST",
+        headers: params.headers,
+        body: params.body,
+      },
+      params.timeoutMs ?? 60_000,
+      params.fetchFn,
+    );
+    return {
+      response,
+      release: async () => {},
+    };
+  },
+);
 
 function resolveMockProviderTimeoutMs(
   timeoutMs: FetchProviderOperationResponseParams["timeoutMs"],
@@ -151,6 +175,7 @@ vi.mock("openclaw/plugin-sdk/provider-http", () => ({
   fetchWithTimeout: providerHttpMocks.fetchWithTimeoutMock,
   pollProviderOperationJson: providerHttpMocks.pollProviderOperationJsonMock,
   postJsonRequest: providerHttpMocks.postJsonRequestMock,
+  postMultipartRequest: providerHttpMocks.postMultipartRequestMock,
   providerOperationRetryConfig: (_stage: string) => true,
   resolveProviderOperationTimeoutMs: ({ defaultTimeoutMs }: { defaultTimeoutMs: number }) =>
     defaultTimeoutMs,
@@ -168,6 +193,7 @@ export function installProviderHttpMockCleanup(): void {
   afterEach(() => {
     providerHttpMocks.resolveApiKeyForProviderMock.mockClear();
     providerHttpMocks.postJsonRequestMock.mockReset();
+    providerHttpMocks.postMultipartRequestMock.mockClear();
     providerHttpMocks.fetchWithTimeoutMock.mockReset();
     providerHttpMocks.fetchProviderOperationResponseMock.mockClear();
     providerHttpMocks.fetchProviderDownloadResponseMock.mockClear();
