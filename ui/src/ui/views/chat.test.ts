@@ -1659,17 +1659,20 @@ describe("chat session controls", () => {
         },
       ],
     });
+    const session = state.sessionsResult!.sessions[0]!;
     state.sessionsResult = {
       ...state.sessionsResult!,
       defaults: {
         ...state.sessionsResult!.defaults,
         thinkingLevels: [{ id: "off", label: "off" }],
       },
-      sessions: state.sessionsResult!.sessions.map((session) => ({
-        ...session,
-        thinkingLevel: "off",
-        thinkingLevels: [{ id: "off", label: "off" }],
-      })),
+      sessions: [
+        {
+          ...session,
+          thinkingLevel: "off",
+          thinkingLevels: [{ id: "off", label: "off" }],
+        },
+      ],
     };
     const container = document.createElement("div");
     render(renderChatSessionSelect(state), container);
