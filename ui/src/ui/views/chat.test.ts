@@ -1039,6 +1039,35 @@ describe("chat slash menu accessibility", () => {
 });
 
 describe("chat attachment picker", () => {
+  it("converts pasted data image text into an attachment", () => {
+    const onAttachmentsChange = vi.fn();
+    const container = renderChatView({ onAttachmentsChange });
+    const textarea = requireElement(
+      container,
+      ".agent-chat__composer-combobox > textarea",
+      "composer textarea",
+    );
+    const base64 = btoa("png");
+    const dataUrl = ` data:image/PNG;base64,${base64.slice(0, 2)}\n${base64.slice(2)} `;
+    const event = new Event("paste", { bubbles: true, cancelable: true });
+    Object.defineProperty(event, "clipboardData", {
+      value: {
+        items: { length: 0 },
+        getData: (type: string) => (type === "text/plain" ? dataUrl : ""),
+      },
+    });
+
+    const allowed = textarea.dispatchEvent(event);
+
+    expect(allowed).toBe(false);
+    const attachments = requireFirstAttachmentsChange(onAttachmentsChange);
+    expect(attachments).toHaveLength(1);
+    expect(attachments[0]?.fileName).toBe("pasted-image.png");
+    expect(attachments[0]?.mimeType).toBe("image/png");
+    expect(attachments[0]?.sizeBytes).toBe(3);
+    expect(getChatAttachmentDataUrl(attachments[0])).toBe(`data:image/png;base64,${base64}`);
+  });
+
   it("accepts and previews non-video file attachments", async () => {
     const onAttachmentsChange = vi.fn();
     const container = renderChatView({ onAttachmentsChange });
