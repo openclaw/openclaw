@@ -1675,6 +1675,48 @@ describe("chat session controls", () => {
     expect(thinkingSelect?.title).toBe("Inherited: Adaptive");
   });
 
+  it("disables thinking for known non-reasoning models without duplicate off options", () => {
+    const { state } = createChatHeaderState({
+      model: "mistral:v0.3",
+      modelProvider: "ollama",
+      models: [
+        {
+          id: "mistral:v0.3",
+          name: "Mistral",
+          provider: "ollama",
+          reasoning: false,
+        },
+      ],
+    });
+    const session = state.sessionsResult!.sessions[0];
+    state.sessionsResult = {
+      ...state.sessionsResult!,
+      defaults: {
+        ...state.sessionsResult!.defaults,
+        thinkingLevels: [{ id: "off", label: "off" }],
+      },
+      sessions: [
+        {
+          ...session,
+          thinkingLevel: "off",
+          thinkingLevels: [{ id: "off", label: "off" }],
+        },
+      ],
+    };
+    const container = document.createElement("div");
+    render(renderChatSessionSelect(state), container);
+
+    const thinkingSelect = container.querySelector<HTMLSelectElement>(
+      'select[data-chat-thinking-select="true"]',
+    );
+
+    expect(thinkingSelect?.disabled).toBe(true);
+    expect([...(thinkingSelect?.options ?? [])].map((option) => option.value)).toEqual([""]);
+    expect(
+      [...(thinkingSelect?.options ?? [])].map((option) => option.textContent?.trim()),
+    ).toEqual(["Inherited: Off"]);
+  });
+
   it("always renders full thinking labels", () => {
     const { state } = createChatHeaderState({
       model: "gpt-5.5",

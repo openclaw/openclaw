@@ -1178,6 +1178,7 @@
       "resolved": "https://registry.npmjs.org/audio-decode/-/audio-decode-2.2.3.tgz",
       "integrity": "sha512-Z0lHvMayR/Pad9+O9ddzaBJE0DrhZkQlStrC1RwcAHF3AhQAsdwKHeLGK8fYKyp2DDU6xHxzGb4CLMui12yVrg==",
       "license": "MIT",
+      "peer": true,
       "dependencies": {
         "@wasm-audio-decoders/flac": "^0.2.4",
         "@wasm-audio-decoders/ogg-vorbis": "^0.1.15",
@@ -1417,6 +1418,7 @@
       "resolved": "https://registry.npmjs.org/jimp/-/jimp-1.6.1.tgz",
       "integrity": "sha512-hNQh6rZtWfSVWSNVmvq87N5BPJsNH7k7I7qyrXf9DOma9xATQk3fsyHazCQe51nCjdkoWdTmh0vD7bjVSLoxxw==",
       "license": "MIT",
+      "peer": true,
       "dependencies": {
         "@jimp/core": "1.6.1",
         "@jimp/diff": "1.6.1",
@@ -1461,6 +1463,7 @@
       "resolved": "https://registry.npmjs.org/keyv/-/keyv-5.6.0.tgz",
       "integrity": "sha512-CYDD3SOtsHtyXeEORYRx2qBtpDJFjRTGXUtmNEMGyzYOKj1TE3tycdlho7kA1Ufx9OYWZzg52QFBGALTirzDSw==",
       "license": "MIT",
+      "peer": true,
       "dependencies": {
         "@keyv/serialize": "^1.1.1"
       }
