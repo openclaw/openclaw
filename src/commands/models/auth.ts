@@ -112,7 +112,7 @@ async function readPipedStdin(): Promise<string> {
 async function readPastedSecret(params: {
   message: string;
   masked: boolean;
-  validate?: (value: string) => string | undefined;
+  validate?: (value: string | undefined) => string | undefined;
 }): Promise<string> {
   const promptParams = { message: params.message, validate: params.validate };
   const input = process.stdin.isTTY
