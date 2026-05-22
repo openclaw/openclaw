@@ -183,6 +183,39 @@ describe("renderWorkboard", () => {
     expect(container.querySelector(".workboard-board")).toBeTruthy();
   });
 
+  it("opens and plays the mini game", () => {
+    const host = {};
+    const state = getWorkboardState(host);
+    state.loaded = true;
+    const container = document.createElement("div");
+    const props = {
+      host,
+      client: null,
+      connected: true,
+      pluginEnabled: true,
+      agentsList: null,
+      sessions: [],
+      onOpenSession: () => undefined,
+      onRequestUpdate: () => undefined,
+    };
+
+    render(renderWorkboard(props), container);
+    [...container.querySelectorAll<HTMLButtonElement>(".workboard-toolbar__actions .btn")]
+      .find((button) => button.textContent?.includes("Mini game"))
+      ?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    render(renderWorkboard(props), container);
+
+    expect(container.querySelector('[role="dialog"]')?.textContent).toContain("Card Chase");
+    const controls = container.querySelector<HTMLElement>(".workboard-game__controls");
+    controls
+      ?.querySelector<HTMLButtonElement>('button[aria-label="Move right"]')
+      ?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    render(renderWorkboard(props), container);
+
+    expect(state.gamePlayerIndex).toBe(1);
+    expect(container.querySelector(".workboard-game__stats")?.textContent).toContain("Moves 1");
+  });
+
   it("opens an edit modal and submits card updates", async () => {
     const host = {};
     const state = getWorkboardState(host);

@@ -42,6 +42,10 @@ const STATUS_LABELS: Record<WorkboardStatus, string> = {
   done: "Done",
 };
 
+const WORKBOARD_GAME_SIZE = 5;
+const WORKBOARD_GAME_GOAL = WORKBOARD_GAME_SIZE * WORKBOARD_GAME_SIZE - 1;
+const WORKBOARD_GAME_BLOCKERS = new Set([6, 8, 12, 16, 18]);
+
 function formatTime(value: number | undefined): string {
   if (!value) {
     return "";
@@ -118,6 +122,41 @@ function openCreateModal(state: WorkboardUiState) {
   state.draftOpen = true;
 }
 
+function resetGame(state: WorkboardUiState) {
+  state.gamePlayerIndex = 0;
+  state.gameMoves = 0;
+  state.gameMessage = "workboard.gameStart";
+}
+
+function moveGamePlayer(state: WorkboardUiState, delta: number) {
+  if (state.gamePlayerIndex === WORKBOARD_GAME_GOAL) {
+    resetGame(state);
+  }
+  const currentRow = Math.floor(state.gamePlayerIndex / WORKBOARD_GAME_SIZE);
+  const nextIndex = state.gamePlayerIndex + delta;
+  const nextRow = Math.floor(nextIndex / WORKBOARD_GAME_SIZE);
+  if (
+    nextIndex < 0 ||
+    nextIndex > WORKBOARD_GAME_GOAL ||
+    (delta === -1 && nextRow !== currentRow) ||
+    (delta === 1 && nextRow !== currentRow)
+  ) {
+    state.gameMessage = "workboard.gameBoundary";
+    return;
+  }
+  if (WORKBOARD_GAME_BLOCKERS.has(nextIndex)) {
+    state.gameMessage = "workboard.gameBlocked";
+    return;
+  }
+  state.gamePlayerIndex = nextIndex;
+  state.gameMoves += 1;
+  state.gameMessage =
+    nextIndex === WORKBOARD_GAME_GOAL ? "workboard.gameWin" : "workboard.gameContinue";
+  if (nextIndex === WORKBOARD_GAME_GOAL) {
+    state.gameWins += 1;
+  }
+}
+
 function openEditModal(state: WorkboardUiState, card: WorkboardCard) {
   state.draftOpen = true;
   state.editingCardId = card.id;
@@ -128,6 +167,140 @@ function openEditModal(state: WorkboardUiState, card: WorkboardCard) {
   state.draftLabels = card.labels.join(", ");
   state.draftAgentId = card.agentId ?? "";
   state.draftSessionKey = card.sessionKey ?? "";
+}
+
+function renderGameArrow(
+  label: string,
+  className: string,
+  delta: number,
+  props: Pick<WorkboardProps, "host" | "onRequestUpdate">,
+) {
+  const state = getWorkboardState(props.host);
+  return html`
+    <button
+      class="btn btn--icon workboard-game__arrow ${className}"
+      type="button"
+      title=${label}
+      aria-label=${label}
+      @click=${() => {
+        moveGamePlayer(state, delta);
+        props.onRequestUpdate?.();
+      }}
+    >
+      ${icons.arrowDown}
+    </button>
+  `;
+}
+
+function renderGameModal(props: WorkboardProps) {
+  const state = getWorkboardState(props.host);
+  if (!state.gameOpen) {
+    return nothing;
+  }
+  return html`
+    <div
+      class="workboard-modal"
+      role="presentation"
+      @click=${(event: MouseEvent) => {
+        if (event.target === event.currentTarget) {
+          state.gameOpen = false;
+          props.onRequestUpdate?.();
+        }
+      }}
+    >
+      <div
+        class="workboard-game"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="workboard-game-title"
+        tabindex="0"
+        @keydown=${(event: KeyboardEvent) => {
+          const moves: Record<string, number> = {
+            ArrowDown: WORKBOARD_GAME_SIZE,
+            ArrowLeft: -1,
+            ArrowRight: 1,
+            ArrowUp: -WORKBOARD_GAME_SIZE,
+          };
+          const delta = moves[event.key];
+          if (typeof delta !== "number") {
+            return;
+          }
+          event.preventDefault();
+          moveGamePlayer(state, delta);
+          props.onRequestUpdate?.();
+        }}
+      >
+        <div class="workboard-modal__header">
+          <div>
+            <h2 id="workboard-game-title">${t("workboard.gameTitle")}</h2>
+            <p>${t(state.gameMessage)}</p>
+          </div>
+          <button
+            class="btn btn--icon workboard-card__icon"
+            type="button"
+            title=${t("common.cancel")}
+            @click=${() => {
+              state.gameOpen = false;
+              props.onRequestUpdate?.();
+            }}
+          >
+            ${icons.x}
+          </button>
+        </div>
+        <div class="workboard-game__stats">
+          <span>${t("workboard.gameMoves", { count: String(state.gameMoves) })}</span>
+          <span>${t("workboard.gameWins", { count: String(state.gameWins) })}</span>
+        </div>
+        <div class="workboard-game__grid" role="grid" aria-label=${t("workboard.gameBoard")}>
+          ${Array.from({ length: WORKBOARD_GAME_SIZE * WORKBOARD_GAME_SIZE }, (_, index) => {
+            const player = index === state.gamePlayerIndex;
+            const goal = index === WORKBOARD_GAME_GOAL;
+            const blocker = WORKBOARD_GAME_BLOCKERS.has(index);
+            return html`
+              <div
+                class="workboard-game__cell ${player ? "workboard-game__cell--player" : ""} ${goal
+                  ? "workboard-game__cell--goal"
+                  : ""} ${blocker ? "workboard-game__cell--blocker" : ""}"
+                role="gridcell"
+                aria-label=${player
+                  ? t("workboard.gameAgent")
+                  : goal
+                    ? t("workboard.gameLaunch")
+                    : blocker
+                      ? t("workboard.gameBlockedCell")
+                      : t("workboard.gameOpenCell")}
+              >
+                ${player ? "A" : goal ? "L" : blocker ? "" : ""}
+              </div>
+            `;
+          })}
+        </div>
+        <div class="workboard-game__controls" aria-label=${t("workboard.gameControls")}>
+          ${renderGameArrow(
+            t("workboard.gameMoveUp"),
+            "workboard-game__arrow--up",
+            -WORKBOARD_GAME_SIZE,
+            props,
+          )}
+          ${renderGameArrow(t("workboard.gameMoveLeft"), "workboard-game__arrow--left", -1, props)}
+          ${renderGameArrow(t("workboard.gameMoveDown"), "", WORKBOARD_GAME_SIZE, props)}
+          ${renderGameArrow(t("workboard.gameMoveRight"), "workboard-game__arrow--right", 1, props)}
+        </div>
+        <div class="workboard-modal__actions">
+          <button
+            class="btn"
+            type="button"
+            @click=${() => {
+              resetGame(state);
+              props.onRequestUpdate?.();
+            }}
+          >
+            ${t("common.reset")}
+          </button>
+        </div>
+      </div>
+    </div>
+  `;
 }
 
 function renderCardModal(props: WorkboardProps) {
@@ -631,6 +804,15 @@ export function renderWorkboard(props: WorkboardProps) {
             ${state.loading ? t("common.refreshing") : t("common.refresh")}
           </button>
           <button
+            class="btn"
+            @click=${() => {
+              state.gameOpen = true;
+              props.onRequestUpdate?.();
+            }}
+          >
+            ${icons.play} ${t("workboard.gameButton")}
+          </button>
+          <button
             class="btn primary"
             @click=${() => {
               openCreateModal(state);
@@ -642,7 +824,7 @@ export function renderWorkboard(props: WorkboardProps) {
         </div>
       </div>
       ${state.error ? html`<div class="callout danger">${state.error}</div>` : nothing}
-      ${renderCardModal(props)}
+      ${renderGameModal(props)} ${renderCardModal(props)}
       <div class="workboard-board">
         ${state.statuses.map((status) => renderColumn(props, status, byStatus.get(status) ?? []))}
       </div>

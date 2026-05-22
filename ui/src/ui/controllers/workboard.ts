@@ -70,6 +70,11 @@ export type WorkboardUiState = {
   draggedCardId: string | null;
   syncingCardIds: Set<string>;
   capturingSessionKeys: Set<string>;
+  gameOpen: boolean;
+  gamePlayerIndex: number;
+  gameMoves: number;
+  gameWins: number;
+  gameMessage: string;
 };
 
 type WorkboardHost = object;
@@ -105,6 +110,11 @@ function createDefaultState(): WorkboardUiState {
     draggedCardId: null,
     syncingCardIds: new Set(),
     capturingSessionKeys: new Set(),
+    gameOpen: false,
+    gamePlayerIndex: 0,
+    gameMoves: 0,
+    gameWins: 0,
+    gameMessage: "workboard.gameStart",
   };
 }
 
@@ -123,6 +133,9 @@ function formatError(error: unknown): string {
   }
   if (typeof error === "string" && error.trim()) {
     return error.trim();
+  }
+  if (isRecord(error) && typeof error.message === "string" && error.message.trim()) {
+    return error.message.trim();
   }
   return "Unknown workboard error.";
 }
@@ -718,6 +731,24 @@ export async function startWorkboardCard(params: {
       isRecord(created) && typeof created.runId === "string" && created.runId.trim()
         ? created.runId.trim()
         : undefined;
+    const initialRunFailed = isRecord(created) && created.runStarted === false;
+    if (initialRunFailed) {
+      const payload = await params.client.request("workboard.cards.update", {
+        id: params.card.id,
+        patch: {
+          status: "blocked",
+          ...(sessionKey ? { sessionKey } : {}),
+        },
+      });
+      replaceCard(state, normalizeCardPayload(payload));
+      const errorText =
+        isRecord(created) && "runError" in created ? formatError(created.runError) : "";
+      state.error =
+        errorText && errorText !== "Unknown workboard error."
+          ? `Agent run did not start: ${errorText}`
+          : "Agent run did not start.";
+      return sessionKey;
+    }
     const payload = await params.client.request("workboard.cards.update", {
       id: params.card.id,
       patch: {

@@ -127,6 +127,21 @@
   box-shadow: var(--shadow-xl);
 }
 
+.workboard-game {
+  display: grid;
+  gap: 14px;
+  width: min(420px, calc(100vw - 44px));
+  padding: 16px;
+  border: 1px solid color-mix(in srgb, var(--border) 86%, transparent);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--panel) 96%, var(--bg) 4%);
+  box-shadow: var(--shadow-xl);
+}
+
+.workboard-game:focus {
+  outline: none;
+}
+
 .workboard-modal__header {
   display: flex;
   justify-content: space-between;
@@ -201,10 +216,122 @@
 }
 
 .workboard-toolbar .btn,
-.workboard-draft .btn {
+.workboard-draft .btn,
+.workboard-game .btn {
   min-height: var(--workboard-control-height);
   padding: 0 12px;
   border-radius: var(--workboard-control-radius);
+}
+
+.workboard-game__stats {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.workboard-game__stats span {
+  display: inline-flex;
+  align-items: center;
+  min-height: 24px;
+  border-radius: 6px;
+  padding: 2px 8px;
+  background: color-mix(in srgb, var(--border) 58%, transparent);
+  color: var(--muted);
+  font-size: 0.76rem;
+  line-height: 1;
+}
+
+.workboard-game__grid {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 6px;
+  aspect-ratio: 1;
+  min-width: 0;
+}
+
+.workboard-game__cell {
+  display: grid;
+  place-items: center;
+  min-width: 0;
+  border: 1px solid color-mix(in srgb, var(--border) 82%, transparent);
+  border-radius: 7px;
+  background: color-mix(in srgb, var(--bg) 84%, var(--panel) 16%);
+  color: var(--muted);
+  font-size: 0.84rem;
+  font-weight: 750;
+  line-height: 1;
+}
+
+.workboard-game__cell--player {
+  border-color: color-mix(in srgb, var(--accent) 54%, var(--border));
+  background: color-mix(in srgb, var(--accent) 18%, var(--bg));
+  color: var(--accent);
+}
+
+.workboard-game__cell--goal {
+  border-color: color-mix(in srgb, var(--ok) 48%, var(--border));
+  background: color-mix(in srgb, var(--ok) 14%, var(--bg));
+  color: var(--ok);
+}
+
+.workboard-game__cell--blocker {
+  background:
+    linear-gradient(
+      135deg,
+      transparent 0 45%,
+      color-mix(in srgb, var(--danger) 46%, transparent) 45% 55%,
+      transparent 55% 100%
+    ),
+    color-mix(in srgb, var(--danger) 10%, var(--bg));
+}
+
+.workboard-game__controls {
+  display: grid;
+  grid-template-columns: repeat(3, 38px);
+  grid-template-areas:
+    ". up ."
+    "left down right";
+  justify-content: center;
+  gap: 8px;
+}
+
+.workboard-game__arrow {
+  width: 38px;
+  height: 38px;
+  padding: 0;
+}
+
+.workboard-game__arrow svg {
+  width: 16px;
+  height: 16px;
+}
+
+.workboard-game__arrow--up {
+  grid-area: up;
+}
+
+.workboard-game__arrow--left {
+  grid-area: left;
+}
+
+.workboard-game__controls .workboard-game__arrow:not(.workboard-game__arrow--up, .workboard-game__arrow--left, .workboard-game__arrow--right) {
+  grid-area: down;
+}
+
+.workboard-game__arrow--right {
+  grid-area: right;
+}
+
+.workboard-game__arrow--up svg {
+  transform: rotate(180deg);
+}
+
+.workboard-game__arrow--left svg {
+  transform: rotate(90deg);
+}
+
+.workboard-game__arrow--right svg {
+  transform: rotate(-90deg);
 }
 
 .workboard-board {

@@ -350,6 +350,36 @@ describe("workboard controller", () => {
     );
   });
 
+  it("blocks a card when the initial session run fails to start", async () => {
+    const host = {};
+    const blocked = { ...sampleCard, status: "blocked", sessionKey: "agent:main:dashboard:1" };
+    const client = createClient({
+      "sessions.create": {
+        key: "agent:main:dashboard:1",
+        runStarted: false,
+        runError: { message: "provider unavailable" },
+      },
+      "workboard.cards.update": { card: blocked },
+    });
+
+    const sessionKey = await startWorkboardCard({
+      host,
+      client: client as never,
+      card: sampleCard,
+    });
+
+    expect(sessionKey).toBe("agent:main:dashboard:1");
+    expect(client.request).toHaveBeenNthCalledWith(
+      2,
+      "workboard.cards.update",
+      expect.objectContaining({
+        id: "card-1",
+        patch: { status: "blocked", sessionKey: "agent:main:dashboard:1" },
+      }),
+    );
+    expect(getWorkboardState(host).error).toBe("Agent run did not start: provider unavailable");
+  });
+
   it("moves cards through the plugin gateway method", async () => {
     const host = {};
     const moved = { ...sampleCard, status: "blocked", position: 2000 };
