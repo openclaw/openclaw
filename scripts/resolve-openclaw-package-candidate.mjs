@@ -610,6 +610,7 @@ export async function downloadUrl(url, target, options = {}) {
     throw error;
   } finally {
     clearTimeout(timeout);
+    response.body?.cancel();
     await dispatcher.close();
     await fs.rm(tempTarget, { force: true });
   }

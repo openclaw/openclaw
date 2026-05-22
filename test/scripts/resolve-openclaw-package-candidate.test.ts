@@ -192,6 +192,74 @@ describe("resolve-openclaw-package-candidate", () => {
     expect(bodyCancelled.length).toBeGreaterThan(0);
   });
 
+  it("cancels response body on HTTP error before closing dispatcher", async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), "openclaw-package-download-"));
+    tempDirs.push(dir);
+    const target = path.join(dir, "openclaw.tgz");
+    let bodyCancelled = false;
+
+    await expect(
+      downloadUrl("https://packages.example/openclaw.tgz", target, {
+        fetchImpl: async () => {
+          const body = new ReadableStream({
+            start(controller) {
+              const timer = setInterval(() => {
+                try {
+                  controller.enqueue(new Uint8Array([0]));
+                } catch {
+                  clearInterval(timer);
+                }
+              }, 100);
+            },
+            cancel() {
+              bodyCancelled = true;
+            },
+          });
+          return new Response(body, { status: 500 });
+        },
+        lookupHost: lookupAddresses([{ address: "93.184.216.34", family: 4 }]),
+        timeoutMs: 5000,
+      }),
+    ).rejects.toThrow(/failed to download package_url: HTTP 500/u);
+    expect(bodyCancelled).toBe(true);
+  });
+
+  it("cancels response body on declared oversize before closing dispatcher", async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), "openclaw-package-download-"));
+    tempDirs.push(dir);
+    const target = path.join(dir, "openclaw.tgz");
+    let bodyCancelled = false;
+
+    await expect(
+      downloadUrl("https://packages.example/openclaw.tgz", target, {
+        fetchImpl: async () => {
+          const body = new ReadableStream({
+            start(controller) {
+              const timer = setInterval(() => {
+                try {
+                  controller.enqueue(new Uint8Array([0]));
+                } catch {
+                  clearInterval(timer);
+                }
+              }, 100);
+            },
+            cancel() {
+              bodyCancelled = true;
+            },
+          });
+          return new Response(body, {
+            headers: { "content-length": String(1024 * 1024 * 100) },
+            status: 200,
+          });
+        },
+        lookupHost: lookupAddresses([{ address: "93.184.216.34", family: 4 }]),
+        maxBytes: 1024,
+        timeoutMs: 5000,
+      }),
+    ).rejects.toThrow(/exceeds maximum download size/u);
+    expect(bodyCancelled).toBe(true);
+  });
+
   it("bounds package_url downloads and writes completed files atomically", async () => {
     const dir = await mkdtemp(path.join(tmpdir(), "openclaw-package-download-"));
     tempDirs.push(dir);
