@@ -8,7 +8,7 @@ title: "Browserbase search"
 
 OpenClaw supports [Browserbase Search](https://docs.browserbase.com/platform/search/overview) as a native `web_search` provider.
 
-Browserbase Search is a lightweight structured search API that pairs well with Browserbase browser automation when you need fast web results before deciding whether to open a live page.
+Browserbase Search is a lightweight structured search API that pairs well with Browserbase browser agents and automations when you need fast web results before deciding whether to open a live page.
 
 ## Get an API key
 
