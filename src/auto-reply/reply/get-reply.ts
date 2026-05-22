@@ -7,7 +7,11 @@ import {
   resolveSessionAgentId,
   resolveAgentSkillsFilter,
 } from "../../agents/agent-scope.js";
-import { modelKey, resolveModelRefFromString } from "../../agents/model-selection.js";
+import {
+  buildModelAliasIndex,
+  modelKey,
+  resolveModelRefFromString,
+} from "../../agents/model-selection.js";
 import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
 import { DEFAULT_AGENT_WORKSPACE_DIR, ensureAgentWorkspace } from "../../agents/workspace.js";
 import { resolveChannelModelOverride } from "../../channels/model-overrides.js";
@@ -254,7 +258,7 @@ export async function getReplyFromConfig(
   const resolvedDefaults = resolveDefaultModel({ cfg, agentId });
   let defaultProvider = resolvedDefaults.defaultProvider;
   let defaultModel = resolvedDefaults.defaultModel;
-  const aliasIndex = resolvedDefaults.aliasIndex;
+  let aliasIndex = resolvedDefaults.aliasIndex;
   let provider = defaultProvider;
   let model = defaultModel;
   let hasResolvedHeartbeatModelOverride = false;
@@ -498,6 +502,11 @@ export async function getReplyFromConfig(
       defaultModel = subagentDefault.model;
       provider = subagentDefault.provider;
       model = subagentDefault.model;
+      // Rebuild the alias index against the subagent provider so downstream
+      // bare-alias resolution (channel overrides, stored overrides, reset
+      // overrides, dispatch) resolves under the subagent provider instead of
+      // the now-stale parent provider.
+      aliasIndex = buildModelAliasIndex({ cfg, defaultProvider });
     }
   }
   if (resetTriggered && normalizeOptionalString(bodyStripped)) {
