@@ -85,6 +85,37 @@ describe("real-behavior-proof-policy", () => {
     expect(labelsForRealBehaviorProof(evaluation)).toEqual([PROOF_SUPPLIED_LABEL]);
   });
 
+  it("accepts out-of-scope follow-ups as not-tested proof detail", () => {
+    const body = [
+      "## Real behavior proof",
+      "",
+      "- Behavior addressed: Cron validation keeps Google Gemini 3 low thinking.",
+      "- Real environment tested: Local macOS source checkout, Node 24.",
+      "- Exact steps or command run after this patch:",
+      "  1. Built the local checkout with `node scripts/build-all.mjs`.",
+      "  2. Ran a redacted behavior probe for `provider=google`, `model=gemini-3-flash-preview`, and `catalogReasoning=false`.",
+      '- Evidence after fix: `.artifacts/behavior-85156/after-installed.json` recorded `lowSupported: true` and `fallbackFromLow: "low"`.',
+      "- Observed result after fix:",
+      "  - `levels: off, minimal, low, medium, adaptive, high`",
+      "  - `lowSupported: true`",
+      "  - `fallbackFromLow: low`",
+      "  - `local command version: OpenClaw 2026.5.21`",
+      "",
+      "## Out-of-scope Follow-ups",
+      "- No live systemd cron schedule was tested.",
+      "- No real Google provider request was sent.",
+    ].join("\n");
+    const evaluation = evaluateRealBehaviorProof({
+      pullRequest: externalPr(body),
+    });
+
+    expect(evaluation.status).toBe("passed");
+    expect(evaluation.fields?.notTested).toBe(
+      "- No live systemd cron schedule was tested.\n- No real Google provider request was sent.",
+    );
+    expect(labelsForRealBehaviorProof(evaluation)).toEqual([PROOF_SUPPLIED_LABEL]);
+  });
+
   it("fails external PRs without a real behavior proof section", () => {
     const evaluation = evaluateRealBehaviorProof({
       pullRequest: externalPr("## Summary\n\n- Fixed startup."),

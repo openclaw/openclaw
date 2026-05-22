@@ -143,11 +143,10 @@ export async function isMaintainerTeamMember({
   return body?.state === "active";
 }
 
-export function extractRealBehaviorProofSection(body = "") {
+function extractMarkdownSection(headingRegex, body = "") {
   // Normalize CRLF → LF so regexes and section slicing see GitHub web-editor PR
   // bodies the same way as locally-authored Markdown.
   const normalizedBody = normalizeLineEndings(body);
-  const headingRegex = /^#{2,6}\s+real behavior proof\b[^\n]*$/gim;
   const match = headingRegex.exec(normalizedBody);
   if (!match) {
     return "";
@@ -156,6 +155,14 @@ export function extractRealBehaviorProofSection(body = "") {
   const rest = normalizedBody.slice(sectionStart);
   const nextHeading = rest.match(/\n#{1,6}\s+\S/);
   return (nextHeading ? rest.slice(0, nextHeading.index) : rest).trim();
+}
+
+export function extractRealBehaviorProofSection(body = "") {
+  return extractMarkdownSection(/^#{2,6}\s+real behavior proof\b[^\n]*$/im, body);
+}
+
+function extractOutOfScopeFollowUpsSection(body = "") {
+  return extractMarkdownSection(/^#{2,6}\s+out-of-scope follow-ups\b[^\n]*$/im, body);
 }
 
 function fieldLineRegex(name) {
@@ -300,7 +307,8 @@ export function evaluateRealBehaviorProof({ pullRequest, labels } = {}) {
     return result("skipped", "Maintainer, collaborator, or bot PRs do not require this gate.");
   }
 
-  const section = extractRealBehaviorProofSection(pullRequest?.body ?? "");
+  const body = pullRequest?.body ?? "";
+  const section = extractRealBehaviorProofSection(body);
   if (!section) {
     return result(
       "missing",
@@ -311,6 +319,9 @@ export function evaluateRealBehaviorProof({ pullRequest, labels } = {}) {
   const fields = Object.fromEntries(
     requiredProofFields.map((field) => [field.key, extractFieldValue(section, field)]),
   );
+  if (!fields.notTested) {
+    fields.notTested = extractOutOfScopeFollowUpsSection(body);
+  }
   const missingFields = requiredProofFields
     .filter((field) => isMissingValue(fields[field.key] ?? "", field))
     .map((field) => field.key);
