@@ -786,78 +786,90 @@ async function runFreshLane(params) {
   const cleanup = [];
   try {
     const env = buildLaneEnv(lane, params.providerConfig, params.providerSecretValue);
-    logLanePhase(lane, "install-candidate");
-    await installTarballPackage({
-      lane,
-      env,
-      tgzPath: params.build.candidateTgz,
-      logPath: join(params.logsDir, "fresh-install.log"),
-      restoreBundledPluginPostinstall: false,
+    await runTimedLanePhase(lane, "install-candidate", async () => {
+      await installTarballPackage({
+        lane,
+        env,
+        tgzPath: params.build.candidateTgz,
+        logPath: join(params.logsDir, "fresh-install.log"),
+        restoreBundledPluginPostinstall: false,
+      });
     });
     const installed = readInstalledMetadata(lane.prefixDir);
     verifyInstalledCandidate(installed, params.build);
-    logLanePhase(lane, "run-bundled-plugin-postinstall");
-    await runBundledPluginPostinstall({
-      lane,
-      env,
-      logPath: join(params.logsDir, "fresh-install.log"),
+    await runTimedLanePhase(lane, "run-bundled-plugin-postinstall", async () => {
+      await runBundledPluginPostinstall({
+        lane,
+        env,
+        logPath: join(params.logsDir, "fresh-install.log"),
+      });
     });
 
     let browserOverrideImportStatus = "skipped";
     if (shouldRunWindowsInstalledBrowserOverrideImportSmoke()) {
-      logLanePhase(lane, "windows-browser-override-import");
-      browserOverrideImportStatus = await runInstalledBrowserOverrideImportSmoke({
+      browserOverrideImportStatus = await runTimedLanePhase(
         lane,
-        env,
-        prefixDir: lane.prefixDir,
-        logPath: join(params.logsDir, "fresh-windows-browser-override-import.log"),
-      });
+        "windows-browser-override-import",
+        async () =>
+          runInstalledBrowserOverrideImportSmoke({
+            lane,
+            env,
+            prefixDir: lane.prefixDir,
+            logPath: join(params.logsDir, "fresh-windows-browser-override-import.log"),
+          }),
+      );
     }
 
-    logLanePhase(lane, "onboard");
-    await runOnboard({
-      lane,
-      env,
-      providerConfig: params.providerConfig,
-      logPath: join(params.logsDir, "fresh-onboard.log"),
+    await runTimedLanePhase(lane, "onboard", async () => {
+      await runOnboard({
+        lane,
+        env,
+        providerConfig: params.providerConfig,
+        logPath: join(params.logsDir, "fresh-onboard.log"),
+      });
     });
 
-    logLanePhase(lane, "models-set");
-    await runModelsSet({
-      lane,
-      env,
-      providerConfig: params.providerConfig,
-      logPath: join(params.logsDir, "fresh-models-set.log"),
+    await runTimedLanePhase(lane, "models-set", async () => {
+      await runModelsSet({
+        lane,
+        env,
+        providerConfig: params.providerConfig,
+        logPath: join(params.logsDir, "fresh-models-set.log"),
+      });
     });
 
-    logLanePhase(lane, "start-gateway");
-    const gateway = await startGateway({
-      lane,
-      env,
-      logPath: join(params.logsDir, "fresh-gateway.log"),
-    });
+    const gateway = await runTimedLanePhase(lane, "start-gateway", async () =>
+      startGateway({
+        lane,
+        env,
+        logPath: join(params.logsDir, "fresh-gateway.log"),
+      }),
+    );
     cleanup.push(() => stopGateway(gateway));
 
-    logLanePhase(lane, "wait-gateway");
-    await waitForGateway({
-      lane,
-      env,
-      logPath: join(params.logsDir, "fresh-gateway-status.log"),
+    await runTimedLanePhase(lane, "wait-gateway", async () => {
+      await waitForGateway({
+        lane,
+        env,
+        logPath: join(params.logsDir, "fresh-gateway-status.log"),
+      });
     });
 
-    logLanePhase(lane, "dashboard");
-    await runDashboardSmoke({
-      lane,
-      logPath: join(params.logsDir, "fresh-dashboard.log"),
+    await runTimedLanePhase(lane, "dashboard", async () => {
+      await runDashboardSmoke({
+        lane,
+        logPath: join(params.logsDir, "fresh-dashboard.log"),
+      });
     });
 
-    logLanePhase(lane, "agent-turn");
-    const agent = await runAgentTurn({
-      lane,
-      env,
-      label: "fresh",
-      logPath: join(params.logsDir, "fresh-agent.log"),
-    });
+    const agent = await runTimedLanePhase(lane, "agent-turn", async () =>
+      runAgentTurn({
+        lane,
+        env,
+        label: "fresh",
+        logPath: join(params.logsDir, "fresh-agent.log"),
+      }),
+    );
 
     return {
       status: "pass",
@@ -867,6 +879,7 @@ async function runFreshLane(params) {
       gatewayPort: lane.gatewayPort,
       browserOverrideImportStatus,
       agentOutput: trimForSummary(agent.stdout),
+      phaseTimings: lane.phaseTimings,
     };
   } finally {
     await runCleanup(cleanup);
