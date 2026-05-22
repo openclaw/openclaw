@@ -265,6 +265,38 @@ Check the server logs
 `;
     expect(isHeartbeatContentEffectivelyEmpty(content)).toBe(true);
   });
+
+  it("returns true for default HEARTBEAT.md with Related doc-link footer (#84675)", () => {
+    // The Related section in the default template includes a doc-link that
+    // should not be treated as actionable content.
+    const content = `# Keep this file empty (or with only comments) to skip heartbeat API calls.
+
+# Add tasks below when you want the agent to check something periodically.
+
+
+## Related
+
+- [Heartbeat config](/gateway/config-agents)
+`;
+    expect(isHeartbeatContentEffectivelyEmpty(content)).toBe(true);
+  });
+
+  it("returns false for a link-only user task outside Related section (#84675)", () => {
+    // A user-authored link-only heartbeat task (not in a Related section)
+    // should remain actionable so periodic checks still fire.
+    const content = `# Heartbeat tasks
+
+- [Status page](https://status.example.com)
+`;
+    expect(isHeartbeatContentEffectivelyEmpty(content)).toBe(false);
+  });
+
+  it("returns false for a bare markdown link outside Related section", () => {
+    // Bare markdown links outside a Related section should be treated as content.
+    expect(isHeartbeatContentEffectivelyEmpty("[Runbook](https://runbook.example.com)")).toBe(
+      false,
+    );
+  });
 });
 
 describe("resolveHeartbeatPromptForResponseTool", () => {
