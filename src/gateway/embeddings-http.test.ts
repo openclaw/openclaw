@@ -1,7 +1,10 @@
+import fs from "node:fs/promises";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { resolveAgentDir } from "../agents/agent-scope.js";
+import { resetConfigRuntimeState } from "../config/config.js";
+import type { EmbeddingProviderAdapter } from "../plugins/embedding-providers.js";
 import type { MemoryEmbeddingProviderAdapter } from "../plugins/memory-embedding-providers.js";
-import { getFreePort, installGatewayTestHooks } from "./test-helpers.js";
+import { getFreePort, installGatewayTestHooks, testState } from "./test-helpers.js";
 
 installGatewayTestHooks({ scope: "suite" });
 
@@ -22,12 +25,35 @@ let createEmbeddingProviderMock: ReturnType<
 >;
 let clearMemoryEmbeddingProviders: typeof import("../plugins/memory-embedding-providers.js").clearMemoryEmbeddingProviders;
 let registerMemoryEmbeddingProvider: typeof import("../plugins/memory-embedding-providers.js").registerMemoryEmbeddingProvider;
+let clearEmbeddingProviders: typeof import("../plugins/embedding-providers.js").clearEmbeddingProviders;
+let registerEmbeddingProvider: typeof import("../plugins/embedding-providers.js").registerEmbeddingProvider;
+let createGenericEmbeddingProviderMock: ReturnType<
+  typeof vi.fn<
+    (options: {
+      provider?: string;
+      model: string;
+      dimensions?: number;
+      inputType?: string;
+      queryInputType?: string;
+      documentInputType?: string;
+    }) => Promise<{
+      provider: {
+        id: string;
+        model: string;
+        embed: (input: unknown) => Promise<number[]>;
+        embedBatch: (texts: unknown[], options?: { inputType?: string }) => Promise<number[][]>;
+      };
+    }>
+  >
+>;
 let enabledServer: Awaited<ReturnType<typeof startServer>>;
 let enabledPort: number;
 
 beforeAll(async () => {
   ({ clearMemoryEmbeddingProviders, registerMemoryEmbeddingProvider } =
     await import("../plugins/memory-embedding-providers.js"));
+  ({ clearEmbeddingProviders, registerEmbeddingProvider } =
+    await import("../plugins/embedding-providers.js"));
   createEmbeddingProviderMock = vi.fn(
     async (options: { provider: string; model: string; agentDir?: string }) => ({
       provider: {
@@ -39,7 +65,29 @@ beforeAll(async () => {
       },
     }),
   );
+  createGenericEmbeddingProviderMock = vi.fn(
+    async (options: {
+      provider?: string;
+      model: string;
+      dimensions?: number;
+      inputType?: string;
+      queryInputType?: string;
+      documentInputType?: string;
+    }) => ({
+      provider: {
+        id: options.provider ?? "openai-compatible",
+        model: options.model,
+        embed: async () => [9.1, 9.2],
+        embedBatch: async (texts: unknown[], callOptions?: { inputType?: string }) =>
+          texts.map((_text, index) => [
+            index + 9.1,
+            callOptions?.inputType === "document" ? 9.2 : 0,
+          ]),
+      },
+    }),
+  );
   clearMemoryEmbeddingProviders();
+  clearEmbeddingProviders();
   const openAiAdapter: MemoryEmbeddingProviderAdapter = {
     id: "openai",
     defaultModel: "text-embedding-3-small",
@@ -56,6 +104,21 @@ beforeAll(async () => {
     },
   };
   registerMemoryEmbeddingProvider(openAiAdapter);
+  const openAiCompatibleAdapter: EmbeddingProviderAdapter = {
+    id: "openai-compatible",
+    defaultModel: "text-embedding-3-small",
+    transport: "remote",
+    create: async (options) =>
+      await createGenericEmbeddingProviderMock({
+        provider: options.provider,
+        model: options.model,
+        dimensions: options.dimensions,
+        inputType: options.inputType,
+        queryInputType: options.queryInputType,
+        documentInputType: options.documentInputType,
+      }),
+  };
+  registerEmbeddingProvider(openAiCompatibleAdapter);
   ({ startGatewayServer } = await import("./server.js"));
   enabledPort = await getFreePort();
   enabledServer = await startServer(enabledPort, { openAiChatCompletionsEnabled: true });
@@ -64,6 +127,7 @@ beforeAll(async () => {
 afterAll(async () => {
   await enabledServer.close({ reason: "embeddings http enabled suite done" });
   clearMemoryEmbeddingProviders();
+  clearEmbeddingProviders();
   vi.resetModules();
 });
 
@@ -98,6 +162,22 @@ function latestCreateEmbeddingProviderOptions(): {
   const call = calls[calls.length - 1];
   if (!call) {
     throw new Error("expected embedding provider create call");
+  }
+  return call[0];
+}
+
+function latestCreateGenericEmbeddingProviderOptions(): {
+  provider?: string;
+  model?: string;
+  dimensions?: number;
+  inputType?: string;
+  queryInputType?: string;
+  documentInputType?: string;
+} {
+  const calls = createGenericEmbeddingProviderMock.mock.calls;
+  const call = calls[calls.length - 1];
+  if (!call) {
+    throw new Error("expected generic embedding provider create call");
   }
   return call[0];
 }
@@ -229,6 +309,92 @@ describe("OpenAI-compatible embeddings HTTP API (e2e)", () => {
     expect(json.object).toBe("list");
     expect(json.data?.[0]?.object).toBe("embedding");
     expect(json.data?.[0]?.embedding).toEqual([0.1, 0.2]);
+  });
+
+  it("routes explicit OpenAI-compatible embeddings through generic providers", async () => {
+    testState.agentConfig = {
+      memorySearch: {
+        provider: "openai-compatible",
+        model: "nomic-embed-text",
+        inputType: "default",
+        queryInputType: "query",
+        documentInputType: "document",
+        outputDimensionality: 768,
+        remote: {
+          baseUrl: "http://127.0.0.1:11434/v1",
+          apiKey: { type: "env", env: "OLLAMA_API_KEY" },
+        },
+      },
+    };
+    resetConfigRuntimeState();
+
+    const res = await postEmbeddings({
+      model: "openclaw/default",
+      input: ["a", "b"],
+    });
+    expect(res.status).toBe(200);
+    const json = (await res.json()) as {
+      data?: Array<{ embedding?: number[]; index?: number }>;
+    };
+    expect(json.data).toEqual([
+      { object: "embedding", index: 0, embedding: [9.1, 9.2] },
+      { object: "embedding", index: 1, embedding: [10.1, 9.2] },
+    ]);
+    const lastCall = latestCreateGenericEmbeddingProviderOptions();
+    expect(lastCall).toMatchObject({
+      provider: "openai-compatible",
+      model: "nomic-embed-text",
+      dimensions: 768,
+      inputType: "default",
+      queryInputType: "query",
+      documentInputType: "document",
+    });
+  });
+
+  it("routes configured provider aliases through the generic embeddings provider", async () => {
+    if (!process.env.OPENCLAW_CONFIG_PATH) {
+      throw new Error("OPENCLAW_CONFIG_PATH must be set for gateway tests");
+    }
+    await fs.writeFile(
+      process.env.OPENCLAW_CONFIG_PATH,
+      `${JSON.stringify(
+        {
+          models: {
+            providers: {
+              "ollama-local": {
+                api: "openai-completions",
+                baseUrl: "http://127.0.0.1:11434/v1",
+              },
+            },
+          },
+        },
+        null,
+        2,
+      )}\n`,
+      "utf-8",
+    );
+    testState.agentConfig = {
+      memorySearch: {
+        provider: "ollama-local",
+        model: "qwen2.5:3b",
+        remote: {
+          baseUrl: "http://127.0.0.1:11434/v1",
+        },
+      },
+    };
+    resetConfigRuntimeState();
+
+    const res = await postEmbeddings(
+      {
+        model: "openclaw/default",
+        input: "hello",
+      },
+      { "x-openclaw-model": "ollama-local/qwen2.5:3b" },
+    );
+    expect(res.status).toBe(200);
+    const lastCall = latestCreateGenericEmbeddingProviderOptions();
+    expect(lastCall.provider).toBe("ollama-local");
+    expect(lastCall.model).toBe("qwen2.5:3b");
   });
 
   it("rejects invalid agent targets", async () => {

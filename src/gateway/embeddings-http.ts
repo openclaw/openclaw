@@ -7,6 +7,11 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { logWarn } from "../logger.js";
 import {
+  getEmbeddingProvider as getGenericEmbeddingProvider,
+  type EmbeddingProvider as GenericEmbeddingProvider,
+  type EmbeddingProviderAdapter as GenericEmbeddingProviderAdapter,
+} from "../plugins/embedding-provider-runtime.js";
+import {
   getMemoryEmbeddingProvider,
   listMemoryEmbeddingProviders,
 } from "../plugins/memory-embedding-provider-runtime.js";
@@ -113,7 +118,12 @@ async function createConfiguredEmbeddingProvider(params: {
   model: string;
   memorySearch?: Pick<
     NonNullable<ReturnType<typeof resolveMemorySearchConfig>>,
-    "local" | "remote" | "outputDimensionality"
+    | "local"
+    | "remote"
+    | "outputDimensionality"
+    | "inputType"
+    | "queryInputType"
+    | "documentInputType"
   >;
 }): Promise<MemoryEmbeddingProvider> {
   const createWithAdapter = async (adapter: MemoryEmbeddingProviderAdapter) => {
@@ -132,6 +142,27 @@ async function createConfiguredEmbeddingProvider(params: {
       outputDimensionality: params.memorySearch?.outputDimensionality,
     });
     return result.provider;
+  };
+  const createWithGenericAdapter = async (adapter: GenericEmbeddingProviderAdapter) => {
+    const result = await adapter.create({
+      config: params.cfg,
+      agentDir: params.agentDir,
+      provider: params.provider,
+      model: params.model || adapter.defaultModel || "",
+      local: params.memorySearch?.local,
+      remote: params.memorySearch?.remote
+        ? {
+            baseUrl: params.memorySearch?.remote.baseUrl,
+            apiKey: params.memorySearch?.remote.apiKey,
+            headers: params.memorySearch?.remote.headers,
+          }
+        : undefined,
+      dimensions: params.memorySearch?.outputDimensionality,
+      inputType: params.memorySearch?.inputType,
+      queryInputType: params.memorySearch?.queryInputType,
+      documentInputType: params.memorySearch?.documentInputType,
+    });
+    return result.provider ? adaptGenericEmbeddingProvider(result.provider) : null;
   };
 
   if (params.provider === "auto") {
@@ -159,14 +190,46 @@ async function createConfiguredEmbeddingProvider(params: {
   }
 
   const adapter = getMemoryEmbeddingProvider(params.provider, params.cfg);
-  if (!adapter) {
+  if (adapter) {
+    const provider = await createWithAdapter(adapter);
+    if (!provider) {
+      throw new Error(`Memory embedding provider ${params.provider} is unavailable.`);
+    }
+    return provider;
+  }
+
+  const genericAdapter = getGenericEmbeddingProvider(params.provider, params.cfg);
+  if (!genericAdapter) {
     throw new Error(`Unknown memory embedding provider: ${params.provider}`);
   }
-  const provider = await createWithAdapter(adapter);
+  const provider = await createWithGenericAdapter(genericAdapter);
   if (!provider) {
-    throw new Error(`Memory embedding provider ${params.provider} is unavailable.`);
+    throw new Error(`Embedding provider ${params.provider} is unavailable.`);
   }
   return provider;
+}
+
+function adaptGenericEmbeddingProvider(
+  provider: GenericEmbeddingProvider,
+): MemoryEmbeddingProvider {
+  return {
+    id: provider.id,
+    model: provider.model,
+    ...(typeof provider.maxInputTokens === "number"
+      ? { maxInputTokens: provider.maxInputTokens }
+      : {}),
+    embedQuery: async (text, options) =>
+      await provider.embed(text, {
+        ...options,
+        inputType: "query",
+      }),
+    embedBatch: async (texts, options) =>
+      await provider.embedBatch(texts, {
+        ...options,
+        inputType: "document",
+      }),
+    ...(provider.close ? { close: provider.close } : {}),
+  };
 }
 
 function resolveEmbeddingsTarget(params: {
