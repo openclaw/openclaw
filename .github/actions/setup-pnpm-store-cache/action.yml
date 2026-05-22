@@ -9,6 +9,10 @@ inputs:
     description: pnpm lockfile used to key the store cache.
     required: false
     default: "pnpm-lock.yaml"
+  node-version:
+    description: Expected Node.js version already installed by actions/setup-node.
+    required: false
+    default: "24.x"
   use-actions-cache:
     description: Whether pnpm/action-setup should cache the pnpm store.
     required: false
@@ -28,6 +32,7 @@ runs:
       shell: bash
       env:
         PACKAGE_MANAGER_FILE: ${{ inputs.package-manager-file }}
+        REQUESTED_NODE_VERSION: ${{ inputs.node-version }}
       run: |
         set -euo pipefail
         project_dir="$(dirname "$PACKAGE_MANAGER_FILE")"
@@ -36,6 +41,10 @@ runs:
           exit 1
         fi
         echo "project-dir=$project_dir" >> "$GITHUB_OUTPUT"
+
+        requested_node="${REQUESTED_NODE_VERSION:-${NODE_VERSION:-}}"
+        source "$GITHUB_ACTION_PATH/ensure-node.sh"
+        openclaw_ensure_node "$requested_node"
 
     - name: Setup pnpm from packageManager
       uses: pnpm/action-setup@0e279bb959325dab635dd2c09392533439d90093

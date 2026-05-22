@@ -35,6 +35,7 @@ runs:
     - name: Setup pnpm
       uses: ./.github/actions/setup-pnpm-store-cache
       with:
+        node-version: ${{ inputs.node-version }}
         use-actions-cache: ${{ inputs.use-actions-cache }}
 
     - name: Setup Bun
