@@ -30,6 +30,15 @@ import {
   WhatsAppRetryableInboundError,
 } from "./dedupe.js";
 import {
+  acceptDurableInboundMessage,
+  completeDurableInboundMessage,
+  loadPendingDurableInboundMessages,
+  recordDurableInboundRetry,
+  type DurableInboundReadReceiptTarget,
+  type DurableInboundRecord,
+  type DurableInboundUpsertType,
+} from "./durable-queue.js";
+import {
   describeReplyContext,
   extractLocationData,
   extractContactContext,
@@ -225,6 +234,13 @@ export async function attachWebInboxToSocket(
   type QueuedInboundMessage = WebInboundMessage & {
     dedupeKey?: string;
     debounceKey?: string;
+    durableInboundRecord?: DurableInboundRecord;
+    readReceiptTarget?: InboundReadReceiptTarget;
+  };
+  type InboundReadReceiptTarget = DurableInboundReadReceiptTarget;
+  type DurableInboundCompletion = {
+    record: DurableInboundRecord;
+    readReceiptTarget?: InboundReadReceiptTarget;
   };
   const inboundDebounceMs = Math.max(0, Math.trunc(options.debounceMs ?? 0));
   const pendingDebounceKeys = new Set<string>();
@@ -247,22 +263,63 @@ export async function attachWebInboxToSocket(
   };
   const shouldDebounceInboundMessage = (msg: WebInboundMessage): boolean =>
     options.shouldDebounce?.(msg) ?? true;
+  const retryDurableInboundRecords = async (records: DurableInboundRecord[]): Promise<void> => {
+    for (const record of records) {
+      await recordDurableInboundRetry({
+        authDir: options.authDir,
+        record,
+      });
+    }
+  };
+  const completeDurableInboundCompletions = async (
+    completions: DurableInboundCompletion[],
+  ): Promise<void> => {
+    for (const completion of completions) {
+      await completeDurableInboundMessage({
+        authDir: options.authDir,
+        record: completion.record,
+        readReceiptTarget: completion.readReceiptTarget,
+      });
+    }
+  };
 
-  const finalizeInboundDedupe = async (
+  const finalizeInboundEntries = async (
     entries: QueuedInboundMessage[],
     error?: unknown,
   ): Promise<void> => {
     const dedupeKeys = [
       ...new Set(entries.map((entry) => entry.dedupeKey).filter(isNonEmptyString)),
     ];
-    if (dedupeKeys.length === 0) {
+    const durableCompletions = entries
+      .filter(
+        (entry): entry is QueuedInboundMessage & { durableInboundRecord: DurableInboundRecord } =>
+          Boolean(entry.durableInboundRecord),
+      )
+      .map((entry) => ({
+        record: entry.durableInboundRecord,
+        readReceiptTarget: entry.readReceiptTarget,
+      }));
+    const durableRecords = durableCompletions.map((completion) => completion.record);
+    const readReceiptTargets = entries
+      .map((entry) => entry.readReceiptTarget)
+      .filter((target): target is InboundReadReceiptTarget => Boolean(target));
+
+    if (error) {
+      if (error instanceof WhatsAppRetryableInboundError) {
+        dedupeKeys.forEach((dedupeKey) => releaseRecentInboundMessage(dedupeKey, error));
+        await retryDurableInboundRecords(durableRecords);
+        return;
+      }
+      await completeDurableInboundCompletions(durableCompletions);
+      await Promise.all(dedupeKeys.map((dedupeKey) => commitRecentInboundMessage(dedupeKey)));
+      await Promise.all(readReceiptTargets.map((target) => maybeMarkInboundAsRead(target)));
       return;
     }
-    if (error instanceof WhatsAppRetryableInboundError) {
-      dedupeKeys.forEach((dedupeKey) => releaseRecentInboundMessage(dedupeKey, error));
-      return;
-    }
+
+    await completeDurableInboundCompletions(durableCompletions);
+
     await Promise.all(dedupeKeys.map((dedupeKey) => commitRecentInboundMessage(dedupeKey)));
+    await Promise.all(readReceiptTargets.map((target) => maybeMarkInboundAsRead(target)));
   };
 
   const debouncer = createInboundDebouncer<QueuedInboundMessage>({
@@ -283,7 +340,7 @@ export async function attachWebInboxToSocket(
         try {
           if (entries.length === 1) {
             await options.onMessage(last);
-            await finalizeInboundDedupe(entries);
+            await finalizeInboundEntries(entries);
             return;
           }
           const mentioned = new Set<string>();
@@ -304,9 +361,9 @@ export async function attachWebInboxToSocket(
             isBatched: true,
           };
           await options.onMessage(combinedMessage);
-          await finalizeInboundDedupe(entries);
+          await finalizeInboundEntries(entries);
         } catch (error) {
-          await finalizeInboundDedupe(entries, error);
+          await finalizeInboundEntries(entries, error);
           throw error;
         }
       } finally {
@@ -608,11 +665,13 @@ export async function attachWebInboxToSocket(
     };
   };
 
-  const maybeMarkInboundAsRead = async (inbound: NormalizedInboundMessage) => {
-    const { id, remoteJid, participantJid, access } = inbound;
-    if (id && !access.isSelfChat && options.sendReadReceipts !== false) {
+  const maybeMarkInboundAsRead = async (target: InboundReadReceiptTarget) => {
+    const { id, remoteJid, participantJid, isSelfChat } = target;
+    if (!isSelfChat && options.sendReadReceipts !== false) {
       try {
-        await sock.readMessages([{ remoteJid, id, participant: participantJid, fromMe: false }]);
+        await (getCurrentSock() ?? sock).readMessages([
+          { remoteJid, id, participant: participantJid, fromMe: false },
+        ]);
         const suffix = participantJid ? ` (participant ${participantJid})` : "";
         logWhatsAppVerbose(
           options.verbose,
@@ -621,11 +680,23 @@ export async function attachWebInboxToSocket(
       } catch (err) {
         logWhatsAppVerbose(options.verbose, `Failed to mark message ${id} read: ${String(err)}`);
       }
-    } else if (id && access.isSelfChat && options.verbose) {
+    } else if (isSelfChat && options.verbose) {
       // Self-chat mode: never auto-send read receipts (blue ticks) on behalf of the owner.
       logWhatsAppVerbose(options.verbose, `Self-chat mode: skipping read receipt for ${id}`);
     }
   };
+
+  const buildReadReceiptTarget = (
+    inbound: NormalizedInboundMessage,
+  ): InboundReadReceiptTarget | undefined =>
+    inbound.id
+      ? {
+          id: inbound.id,
+          remoteJid: inbound.remoteJid,
+          participantJid: inbound.participantJid,
+          isSelfChat: inbound.access.isSelfChat,
+        }
+      : undefined;
 
   type EnrichedInboundMessage = {
     body: string;
@@ -696,6 +767,7 @@ export async function attachWebInboxToSocket(
     msg: WAMessage,
     inbound: NormalizedInboundMessage,
     enriched: EnrichedInboundMessage,
+    durableInboundRecord?: DurableInboundRecord,
   ) => {
     const chatJid = inbound.remoteJid;
     const sendComposing = async () => {
@@ -798,6 +870,8 @@ export async function attachWebInboxToSocket(
       mediaType: enriched.mediaType,
       mediaFileName: enriched.mediaFileName,
       dedupeKey: inbound.id ? `${options.accountId}:${inbound.remoteJid}:${inbound.id}` : undefined,
+      durableInboundRecord,
+      readReceiptTarget: buildReadReceiptTarget(inbound),
     };
     const debounceKey = buildInboundDebounceKey(inboundMessage);
     if (debounceKey) {
@@ -828,58 +902,218 @@ export async function attachWebInboxToSocket(
   };
 
   const pendingMessageHandlers = new Set<Promise<void>>();
+  const pendingReadReceiptRetries = new Set<Promise<void>>();
+  let inboundProcessingChain: Promise<void> = Promise.resolve();
+  const completeTerminalDurableRecord = async (record: DurableInboundRecord): Promise<void> =>
+    await completeDurableInboundMessage({
+      authDir: options.authDir,
+      record,
+    });
+  const trackPendingTask = (tasks: Set<Promise<void>>, task: Promise<void>) => {
+    tasks.add(task);
+    void task.finally(() => {
+      tasks.delete(task);
+    });
+  };
+  const trackPendingMessageHandler = (task: Promise<void>) =>
+    trackPendingTask(pendingMessageHandlers, task);
+  const trackPendingReadReceiptRetry = (task: Promise<void>) =>
+    trackPendingTask(pendingReadReceiptRetries, task);
+
+  const maybeMarkInboundMessageAsRead = async (msg: WAMessage): Promise<void> => {
+    const inbound = await normalizeInboundMessage(msg);
+    const readReceiptTarget = inbound ? buildReadReceiptTarget(inbound) : undefined;
+    if (readReceiptTarget) {
+      await maybeMarkInboundAsRead(readReceiptTarget);
+    }
+  };
+
+  const isStaleAppendMessage = (msg: WAMessage): boolean => {
+    const APPEND_RECENT_GRACE_MS = 60_000;
+    const msgTsRaw = msg.messageTimestamp;
+    const msgTsNum = msgTsRaw != null ? Number(msgTsRaw) : Number.NaN;
+    const msgTsMs = Number.isFinite(msgTsNum) ? msgTsNum * 1000 : 0;
+    return msgTsMs < connectedAtMs - APPEND_RECENT_GRACE_MS;
+  };
+
+  const isTrackedOutboundEcho = (msg: WAMessage): boolean => {
+    const id = msg.key?.id;
+    const remoteJid = msg.key?.remoteJid;
+    return Boolean(
+      msg.key?.fromMe &&
+      id &&
+      remoteJid &&
+      isRecentOutboundMessage({
+        accountId: options.accountId,
+        remoteJid,
+        messageId: id,
+      }),
+    );
+  };
+
+  const processInboundMessage = async (params: {
+    msg: WAMessage;
+    upsertType: DurableInboundUpsertType;
+    durableInboundRecord?: DurableInboundRecord;
+  }) => {
+    if (
+      !params.durableInboundRecord &&
+      params.upsertType === "append" &&
+      isStaleAppendMessage(params.msg)
+    ) {
+      await maybeMarkInboundMessageAsRead(params.msg);
+      return;
+    }
+
+    const durableInboundRecord = params.durableInboundRecord;
+
+    const inbound = await normalizeInboundMessage(params.msg);
+    if (!inbound) {
+      if (durableInboundRecord) {
+        await completeTerminalDurableRecord(durableInboundRecord);
+      }
+      return;
+    }
+
+    const enriched = await enrichInboundMessage(params.msg);
+    if (!enriched) {
+      if (durableInboundRecord) {
+        await completeTerminalDurableRecord(durableInboundRecord);
+      }
+      return;
+    }
+
+    const dedupeKey = inbound.id ? `${options.accountId}:${inbound.remoteJid}:${inbound.id}` : "";
+    if (dedupeKey && !(await claimRecentInboundMessage(dedupeKey))) {
+      return;
+    }
+
+    recordAcceptedInboundActivity(options.accountId);
+    await enqueueInboundMessage(params.msg, inbound, enriched, durableInboundRecord);
+  };
+
+  type AcceptedLiveInboundMessage = {
+    msg: WAMessage;
+    upsertType: DurableInboundUpsertType;
+    durableInboundRecord?: DurableInboundRecord;
+  };
+  type LiveInboundAcceptance =
+    | { kind: "accepted"; value: AcceptedLiveInboundMessage }
+    | { kind: "duplicate"; readReceiptTarget: InboundReadReceiptTarget }
+    | { kind: "ignored" };
+
+  const acceptLiveInboundMessage = async (params: {
+    msg: WAMessage;
+    upsertType: DurableInboundUpsertType;
+  }): Promise<LiveInboundAcceptance> => {
+    if (params.upsertType === "append" && isStaleAppendMessage(params.msg)) {
+      return { kind: "accepted", value: params };
+    }
+
+    if (isTrackedOutboundEcho(params.msg)) {
+      logWhatsAppVerbose(
+        options.verbose,
+        `Skipping recent outbound WhatsApp echo ${params.msg.key?.id ?? "unknown"} for ${params.msg.key?.remoteJid ?? "unknown"}`,
+      );
+      return { kind: "ignored" };
+    }
+
+    const accepted = await acceptDurableInboundMessage({
+      authDir: options.authDir,
+      accountId: options.accountId,
+      upsertType: params.upsertType,
+      message: params.msg,
+    });
+    if (accepted.kind === "duplicate") {
+      return accepted.readReceiptTarget
+        ? { kind: "duplicate", readReceiptTarget: accepted.readReceiptTarget }
+        : { kind: "ignored" };
+    }
+    return {
+      kind: "accepted",
+      value: {
+        ...params,
+        durableInboundRecord: accepted.kind === "accepted" ? accepted.record : undefined,
+      },
+    };
+  };
+
+  const replayPendingDurableInboundMessages = async () => {
+    const records = await loadPendingDurableInboundMessages({
+      authDir: options.authDir,
+      accountId: options.accountId,
+    });
+    for (const record of records) {
+      await processInboundMessage({
+        msg: record.message,
+        upsertType: record.upsertType,
+        durableInboundRecord: record,
+      });
+    }
+  };
+
   const handleMessagesUpsert = async (upsert: { type?: string; messages?: Array<WAMessage> }) => {
     if (upsert.type !== "notify" && upsert.type !== "append") {
       return;
     }
+    const upsertType = upsert.type;
+    const acceptedMessages: AcceptedLiveInboundMessage[] = [];
+    const duplicateReadRetryTargets: InboundReadReceiptTarget[] = [];
     for (const msg of upsert.messages ?? []) {
-      const inbound = await normalizeInboundMessage(msg);
-      if (!inbound) {
-        continue;
+      const accepted = await acceptLiveInboundMessage({ msg, upsertType });
+      if (accepted.kind === "accepted") {
+        acceptedMessages.push(accepted.value);
+      } else if (accepted.kind === "duplicate") {
+        duplicateReadRetryTargets.push(accepted.readReceiptTarget);
       }
-
-      await maybeMarkInboundAsRead(inbound);
-
-      // If this is history/offline catch-up, mark read above but skip auto-reply.
-      if (upsert.type === "append") {
-        const APPEND_RECENT_GRACE_MS = 60_000;
-        const msgTsRaw = msg.messageTimestamp;
-        const msgTsNum = msgTsRaw != null ? Number(msgTsRaw) : Number.NaN;
-        const msgTsMs = Number.isFinite(msgTsNum) ? msgTsNum * 1000 : 0;
-        if (msgTsMs < connectedAtMs - APPEND_RECENT_GRACE_MS) {
-          continue;
-        }
-      }
-
-      const enriched = await enrichInboundMessage(msg);
-      if (!enriched) {
-        continue;
-      }
-
-      const dedupeKey = inbound.id ? `${options.accountId}:${inbound.remoteJid}:${inbound.id}` : "";
-      if (dedupeKey && !(await claimRecentInboundMessage(dedupeKey))) {
-        continue;
-      }
-
-      recordAcceptedInboundActivity(options.accountId);
-      await enqueueInboundMessage(msg, inbound, enriched);
     }
+    for (const accepted of acceptedMessages) {
+      await processInboundMessage(accepted);
+    }
+    if (duplicateReadRetryTargets.length > 0) {
+      const retryTask = Promise.all(
+        duplicateReadRetryTargets.map((target) => maybeMarkInboundAsRead(target)),
+      )
+        .then(() => undefined)
+        .catch((err) => {
+          logWhatsAppVerbose(
+            options.verbose,
+            `Failed to retry duplicate read receipt: ${String(err)}`,
+          );
+        });
+      trackPendingReadReceiptRetry(retryTask);
+    }
+  };
+  const enqueueInboundProcessing = (
+    taskFactory: () => Promise<void>,
+    onError: (err: unknown) => void,
+  ) => {
+    // Keep replay, live accept, and finalization ordered around the durable queue.
+    const task = inboundProcessingChain
+      .catch(() => undefined)
+      .then(taskFactory)
+      .catch(onError);
+    inboundProcessingChain = task.catch(() => undefined);
+    trackPendingMessageHandler(task);
   };
   const handleMessagesUpsertEvent = (upsert: { type?: string; messages?: Array<WAMessage> }) => {
-    const task = handleMessagesUpsert(upsert).catch((err) => {
-      inboundLogger.error({ error: String(err) }, "messages.upsert handler error");
-      inboundConsoleLog.error(`Messages upsert handler error: ${String(err)}`);
-    });
-    pendingMessageHandlers.add(task);
-    void task.finally(() => {
-      pendingMessageHandlers.delete(task);
-    });
+    enqueueInboundProcessing(
+      () => handleMessagesUpsert(upsert),
+      (err) => {
+        inboundLogger.error({ error: String(err) }, "messages.upsert handler error");
+        inboundConsoleLog.error(`Messages upsert handler error: ${String(err)}`);
+      },
+    );
   };
-  const waitForPendingMessageHandlers = async () => {
-    while (pendingMessageHandlers.size > 0) {
-      await Promise.all(Array.from(pendingMessageHandlers));
+  const waitForPendingTasks = async (tasks: Set<Promise<void>>) => {
+    while (tasks.size > 0) {
+      await Promise.all(Array.from(tasks));
     }
   };
+  const waitForPendingMessageHandlers = async () =>
+    await waitForPendingTasks(pendingMessageHandlers);
+  const waitForPendingReadReceiptRetries = async () =>
+    await waitForPendingTasks(pendingReadReceiptRetries);
   const drainDebouncedInboundMessages = async () => {
     while (pendingDebounceKeys.size > 0 || activeInboundFlushes.size > 0) {
       const debounceKeys = Array.from(pendingDebounceKeys);
@@ -898,6 +1132,7 @@ export async function attachWebInboxToSocket(
   const drainInboundBeforeSocketClose = async () => {
     await waitForPendingMessageHandlers();
     await drainDebouncedInboundMessages();
+    await waitForPendingReadReceiptRetries();
   };
   const drainInboundBeforeSocketCloseWithTimeout = async () => {
     let timeout: ReturnType<typeof setTimeout> | null = null;
@@ -956,6 +1191,13 @@ export async function attachWebInboxToSocket(
     },
     "connection.update",
     handleConnectionUpdate as unknown as (...args: unknown[]) => void,
+  );
+  enqueueInboundProcessing(
+    () => replayPendingDurableInboundMessages(),
+    (err) => {
+      inboundLogger.error({ error: String(err) }, "durable inbound replay error");
+      inboundConsoleLog.error(`Durable inbound replay error: ${String(err)}`);
+    },
   );
 
   void (async () => {

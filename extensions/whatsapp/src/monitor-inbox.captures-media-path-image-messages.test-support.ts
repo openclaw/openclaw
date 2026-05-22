@@ -7,6 +7,7 @@ import {
   getSock,
   installWebMonitorInboxUnitTestHooks,
   mockLoadConfig,
+  waitForMessageCalls,
 } from "./monitor-inbox.test-harness.js";
 let monitorWebInbox: typeof import("./inbound.js").monitorWebInbox;
 const inboundLoggerInfoMock = vi.hoisted(() => vi.fn());
@@ -49,7 +50,7 @@ describe("web monitor inbox", () => {
     const listener = await openMonitor(onMessage);
     const sock = getSock();
     sock.ev.emit("messages.upsert", upsert);
-    await new Promise((resolve) => setTimeout(resolve, 25));
+    await waitForMessageCalls(onMessage, 1);
     return { onMessage, listener, sock };
   }
 
@@ -81,14 +82,16 @@ describe("web monitor inbox", () => {
 
     expect(onMessage).toHaveBeenCalledTimes(1);
     expect(onMessage.mock.calls[0]?.[0]?.body).toBe("<media:image>");
-    expect(sock.readMessages).toHaveBeenCalledWith([
-      {
-        remoteJid: "888@s.whatsapp.net",
-        id: "med1",
-        participant: undefined,
-        fromMe: false,
-      },
-    ]);
+    await vi.waitFor(() => {
+      expect(sock.readMessages).toHaveBeenCalledWith([
+        {
+          remoteJid: "888@s.whatsapp.net",
+          id: "med1",
+          participant: undefined,
+          fromMe: false,
+        },
+      ]);
+    });
     expect(sock.sendPresenceUpdate).toHaveBeenNthCalledWith(1, "available");
     await listener.close();
   });
@@ -183,14 +186,16 @@ describe("web monitor inbox", () => {
       ],
     });
 
-    expect(sock.readMessages).toHaveBeenCalledWith([
-      {
-        remoteJid: "12345-67890@g.us",
-        id: "grp1",
-        participant: "111@s.whatsapp.net",
-        fromMe: false,
-      },
-    ]);
+    await vi.waitFor(() => {
+      expect(sock.readMessages).toHaveBeenCalledWith([
+        {
+          remoteJid: "12345-67890@g.us",
+          id: "grp1",
+          participant: "111@s.whatsapp.net",
+          fromMe: false,
+        },
+      ]);
+    });
     await listener.close();
   });
 

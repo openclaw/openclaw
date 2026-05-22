@@ -257,7 +257,7 @@ describe("web monitor inbox", () => {
         }),
       ),
     );
-    await settleInboundWork();
+    await waitForMessageCalls(onMessage, 1);
 
     expect(onMessage).toHaveBeenCalledTimes(1);
     const payload = firstInboundPayload(onMessage);
@@ -344,7 +344,7 @@ describe("web monitor inbox", () => {
         }),
       ),
     );
-    await settleInboundWork();
+    await waitForMessageCalls(onMessage, 1);
 
     // Should call onMessage because sender is in groupAllowFrom
     expect(onMessage).toHaveBeenCalledTimes(1);
@@ -378,7 +378,7 @@ describe("web monitor inbox", () => {
         }),
       ),
     );
-    await settleInboundWork();
+    await waitForMessageCalls(onMessage, 1);
 
     // Should call onMessage because wildcard allows all senders
     expect(onMessage).toHaveBeenCalledTimes(1);

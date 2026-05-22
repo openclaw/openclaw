@@ -5,12 +5,14 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { WhatsAppRetryableInboundError } from "./inbound/dedupe.js";
 import { WHATSAPP_GROUP_METADATA_CACHE_MAX_ENTRIES } from "./inbound/monitor.js";
 import {
+  DEFAULT_WEB_INBOX_CONFIG,
   type InboxMonitorOptions,
   InboxOnMessage,
   buildNotifyMessageUpsert,
   getAuthDir,
   getSock,
   installWebMonitorInboxUnitTestHooks,
+  settleInboundWork,
   startInboxMonitor,
   waitForMessageCalls,
 } from "./monitor-inbox.test-harness.js";
@@ -164,19 +166,21 @@ describe("web monitor inbox", () => {
 
     sock.ev.emit("messages.upsert", upsert);
     await waitForMessageCalls(onMessage, 1);
+    await vi.waitFor(() => {
+      expect(sock.readMessages).toHaveBeenCalledWith([
+        {
+          remoteJid: "999@s.whatsapp.net",
+          id: messageId,
+          participant: undefined,
+          fromMe: false,
+        },
+      ]);
+    });
 
     const inbound = inboundMessage(onMessage);
     expect(inbound.body).toBe("ping");
     expect(inbound.from).toBe("+999");
     expect(inbound.to).toBe("+123");
-    expect(sock.readMessages).toHaveBeenCalledWith([
-      {
-        remoteJid: "999@s.whatsapp.net",
-        id: messageId,
-        participant: undefined,
-        fromMe: false,
-      },
-    ]);
     expect(sock.sendPresenceUpdate).toHaveBeenCalledWith("available");
     expect(sock.sendPresenceUpdate).toHaveBeenCalledWith("composing", "999@s.whatsapp.net");
     expect(sock.sendMessage).toHaveBeenCalledWith("999@s.whatsapp.net", {
@@ -417,7 +421,6 @@ describe("web monitor inbox", () => {
   });
 
   it("flushes pending debounced inbound batches after close", async () => {
-    vi.useFakeTimers();
     try {
       const onMessage = vi.fn(async () => undefined);
       const { listener, sock } = await startInboxMonitor(onMessage as InboxOnMessage, {
@@ -444,8 +447,8 @@ describe("web monitor inbox", () => {
         }),
       );
 
-      await listener.close();
-      await vi.advanceTimersByTimeAsync(50);
+      const closePromise = listener.close();
+      await closePromise;
       await waitForMessageCalls(onMessage, 1);
       expect(inboundMessage(onMessage).body).toBe("first\nsecond");
     } finally {
@@ -454,7 +457,6 @@ describe("web monitor inbox", () => {
   });
 
   it("lets a drained debounced inbound reply before closing the socket", async () => {
-    vi.useFakeTimers();
     try {
       const onMessage = vi.fn(async (msg) => {
         await msg.reply("pong");
@@ -484,7 +486,8 @@ describe("web monitor inbox", () => {
         }),
       );
 
-      await listener.close();
+      const closePromise = listener.close();
+      await closePromise;
 
       expect(onMessage).toHaveBeenCalledTimes(1);
       expect(inboundMessage(onMessage).body).toBe("first\nsecond");
@@ -504,25 +507,18 @@ describe("web monitor inbox", () => {
   });
 
   it("waits for in-flight inbound handlers before draining on close", async () => {
-    vi.useFakeTimers();
     try {
+      let releaseHandler: (() => void) | undefined;
+      const handlerGate = new Promise<void>((resolve) => {
+        releaseHandler = resolve;
+      });
       const onMessage = vi.fn(async (msg) => {
+        await handlerGate;
         await msg.reply("pong");
       });
       const { listener, sock } = await startInboxMonitor(onMessage as InboxOnMessage, {
         debounceMs: 50,
       });
-      let releaseRead: (() => void) | undefined;
-      const readGate = new Promise<void>((resolve) => {
-        releaseRead = resolve;
-      });
-      const readStarted = new Promise<void>((resolve) => {
-        sock.readMessages.mockImplementationOnce(async () => {
-          resolve();
-          await readGate;
-        });
-      });
-
       sock.ev.emit(
         "messages.upsert",
         buildNotifyMessageUpsert({
@@ -534,19 +530,17 @@ describe("web monitor inbox", () => {
         }),
       );
 
-      await readStarted;
       const closePromise = listener.close();
-      await Promise.resolve();
+      await waitForMessageCalls(onMessage, 1);
 
       expect(sock.end).not.toHaveBeenCalled();
 
-      if (!releaseRead) {
-        throw new Error("Expected read receipt release callback to be initialized");
+      if (!releaseHandler) {
+        throw new Error("Expected handler release callback to be initialized");
       }
-      releaseRead();
+      releaseHandler();
       await closePromise;
 
-      expect(onMessage).toHaveBeenCalledTimes(1);
       expect(sock.sendMessage).toHaveBeenCalledWith("999@s.whatsapp.net", {
         text: "pong",
       });
@@ -641,6 +635,196 @@ describe("web monitor inbox", () => {
     expect(onMessage).toHaveBeenCalledTimes(1);
 
     await listener.close();
+  });
+
+  it("retries read receipts for durable duplicate deliveries", async () => {
+    const onMessage = vi.fn(async () => {
+      return;
+    });
+    let currentConfig: unknown = DEFAULT_WEB_INBOX_CONFIG;
+
+    const { listener, sock } = await startInboxMonitor(onMessage as InboxOnMessage, {
+      loadConfig: () => currentConfig as never,
+    });
+    sock.readMessages.mockRejectedValueOnce(new Error("receipt temporarily unavailable"));
+    const messageId = nextMessageId("read-retry-duplicate");
+    const upsert = buildNotifyMessageUpsert({
+      id: messageId,
+      remoteJid: "999@s.whatsapp.net",
+      text: "ping",
+      timestamp: 1_700_000_000,
+      pushName: "Tester",
+    });
+
+    sock.ev.emit("messages.upsert", upsert);
+    await waitForMessageCalls(onMessage, 1);
+    await vi.waitFor(() => {
+      expect(sock.readMessages).toHaveBeenCalledTimes(1);
+    });
+
+    sock.ev.emit("messages.upsert", upsert);
+    await vi.waitFor(() => {
+      expect(sock.readMessages).toHaveBeenCalledTimes(2);
+    });
+
+    expect(onMessage).toHaveBeenCalledTimes(1);
+    expect(sock.readMessages).toHaveBeenNthCalledWith(2, [
+      {
+        remoteJid: "999@s.whatsapp.net",
+        id: messageId,
+        participant: undefined,
+        fromMe: false,
+      },
+    ]);
+
+    const terminalDropId = nextMessageId("read-retry-terminal-drop");
+    const terminalDropUpsert = {
+      type: "notify",
+      messages: [
+        {
+          key: { id: terminalDropId, fromMe: false, remoteJid: "999@s.whatsapp.net" },
+          message: {
+            buttonsResponseMessage: { selectedButtonId: "ok", selectedDisplayText: "OK" },
+          },
+          messageTimestamp: 1_700_000_001,
+          pushName: "Tester",
+        },
+      ],
+    };
+    sock.ev.emit("messages.upsert", terminalDropUpsert);
+    await vi.waitFor(() => {
+      const store = JSON.parse(
+        fsSync.readFileSync(path.join(getAuthDir(), "inbound-queue.json"), "utf8"),
+      );
+      expect(Object.keys(store.completed ?? {})).toHaveLength(2);
+    });
+    sock.ev.emit("messages.upsert", terminalDropUpsert);
+    await settleInboundWork();
+    expect(sock.readMessages).toHaveBeenCalledTimes(2);
+
+    currentConfig = {
+      channels: { whatsapp: { allowFrom: ["+111"] } },
+      messages: DEFAULT_WEB_INBOX_CONFIG.messages,
+    };
+    const blockedId = nextMessageId("read-retry-blocked");
+    const blockedUpsert = buildNotifyMessageUpsert({
+      id: blockedId,
+      remoteJid: "999@s.whatsapp.net",
+      text: "blocked first",
+      timestamp: 1_700_000_002,
+      pushName: "Tester",
+    });
+    sock.ev.emit("messages.upsert", blockedUpsert);
+    await vi.waitFor(() => {
+      const store = JSON.parse(
+        fsSync.readFileSync(path.join(getAuthDir(), "inbound-queue.json"), "utf8"),
+      );
+      expect(Object.keys(store.completed ?? {})).toHaveLength(3);
+    });
+    currentConfig = DEFAULT_WEB_INBOX_CONFIG;
+    sock.ev.emit("messages.upsert", blockedUpsert);
+    await settleInboundWork();
+    expect(sock.readMessages).toHaveBeenCalledTimes(2);
+
+    await listener.close();
+  });
+
+  it("does not block later batch messages while retrying duplicate read receipts", async () => {
+    const onMessage = vi.fn(async () => {
+      return;
+    });
+
+    const { listener, sock } = await startInboxMonitor(onMessage as InboxOnMessage, {
+      debounceMs: 60_000,
+      shouldDebounce: (msg) => msg.body === "debounced",
+    });
+    const duplicateId = nextMessageId("batch-read-retry-duplicate");
+    const duplicateUpsert = buildNotifyMessageUpsert({
+      id: duplicateId,
+      remoteJid: "999@s.whatsapp.net",
+      text: "first",
+      timestamp: 1_700_000_000,
+      pushName: "Tester",
+    });
+    let blockDuplicateRead = false;
+    let closeAttempt: Promise<void> | undefined;
+    let closeSettled = false;
+    let duplicateReadReleased = false;
+    let releaseDuplicateRead!: () => void;
+    const duplicateReadAttempt = new Promise<void>((resolve) => {
+      releaseDuplicateRead = () => {
+        duplicateReadReleased = true;
+        resolve();
+      };
+    });
+    sock.readMessages.mockImplementation(async (keys: Array<{ id?: string }>) => {
+      if (blockDuplicateRead && keys.at(0)?.id === duplicateId) {
+        await duplicateReadAttempt;
+      }
+    });
+
+    try {
+      sock.ev.emit("messages.upsert", duplicateUpsert);
+      await waitForMessageCalls(onMessage, 1);
+      await vi.waitFor(() => {
+        expect(sock.readMessages).toHaveBeenCalledTimes(1);
+      });
+      blockDuplicateRead = true;
+
+      const freshId = nextMessageId("batch-read-retry-fresh");
+      const freshUpsert = buildNotifyMessageUpsert({
+        id: freshId,
+        remoteJid: "999@s.whatsapp.net",
+        text: "second",
+        timestamp: 1_700_000_001,
+        pushName: "Tester",
+      });
+      sock.ev.emit("messages.upsert", {
+        type: "notify",
+        messages: [...duplicateUpsert.messages, ...freshUpsert.messages],
+      });
+
+      await vi.waitFor(
+        () => {
+          expect(onMessage).toHaveBeenCalledTimes(2);
+        },
+        { timeout: 500, interval: 5 },
+      );
+      await vi.waitFor(() => {
+        expect(sock.readMessages).toHaveBeenCalledTimes(3);
+      });
+
+      const debouncedId = nextMessageId("batch-read-retry-debounced");
+      sock.ev.emit(
+        "messages.upsert",
+        buildNotifyMessageUpsert({
+          id: debouncedId,
+          remoteJid: "999@s.whatsapp.net",
+          text: "debounced",
+          timestamp: 1_700_000_002,
+          pushName: "Tester",
+        }),
+      );
+      await settleInboundWork();
+      expect(onMessage).toHaveBeenCalledTimes(2);
+
+      closeAttempt = listener.close().then(() => {
+        closeSettled = true;
+      });
+      await vi.waitFor(
+        () => {
+          expect(onMessage).toHaveBeenCalledTimes(3);
+        },
+        { timeout: 500, interval: 5 },
+      );
+      await settleInboundWork();
+      expect(closeSettled).toBe(false);
+    } finally {
+      if (!duplicateReadReleased) {
+        releaseDuplicateRead();
+      }
+      await (closeAttempt ?? listener.close());
+    }
   });
 
   it("retries redelivered messages after an explicit retryable inbound failure", async () => {
