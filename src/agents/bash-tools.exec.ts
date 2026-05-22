@@ -20,8 +20,7 @@ import {
 } from "../infra/shell-env.js";
 import { logInfo } from "../logger.js";
 import { parseAgentSessionKey, resolveAgentIdFromSessionKey } from "../routing/session-key.js";
-import { matchSkillByCommand } from "./skill-bins.js";
-import { getSkillBinsMap } from "./skills/workspace.js";
+import { getSkillBinsMap, matchSkillByCommand } from "./skill-bins.js";
 import { trackSkillUsage } from "./usage-tracker.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import {

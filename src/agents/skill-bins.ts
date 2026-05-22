@@ -5,6 +5,29 @@
 
 import type { SkillEntry } from "./types.js";
 
+
+// ---------------------------------------------------------------------------
+// Module-level bins map (populated by workspace.ts during skill loading)
+// ---------------------------------------------------------------------------
+
+let skillBinsMap: SkillBinsMap = new Map();
+
+/**
+ * Return the current skill→bins map (populated during skill loading).
+ * Used by the exec-tool execution path for real-time skill-usage telemetry.
+ */
+export function getSkillBinsMap(): SkillBinsMap {
+  return skillBinsMap;
+}
+
+/**
+ * Update the module-level skill→bins map.
+ * Called by workspace.ts during skill loading.
+ */
+export function setSkillBinsMap(map: SkillBinsMap): void {
+  skillBinsMap = map;
+}
+
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------

@@ -20,7 +20,7 @@ import { resolveOpenClawMetadata, resolveSkillInvocationPolicy } from "./frontma
 import { loadSkillsFromDirSafe, readSkillFrontmatterSafe } from "./local-loader.js";
 import { resolvePluginSkillDirs } from "./plugin-skills.js";
 import { serializeByKey } from "./serialize.js";
-import { buildSkillBinsMap, type SkillBinsMap } from "./skill-bins.js";
+import { buildSkillBinsMap, setSkillBinsMap } from "../skill-bins.js";
 import { formatSkillsForPrompt, type Skill } from "./skill-contract.js";
 import type {
   ParsedSkillFrontmatter,
@@ -31,12 +31,6 @@ import type {
 
 const fsp = fs.promises;
 const skillsLogger = createSubsystemLogger("skills");
-
-/**
- * Module-level skill→bins map.  Populated during skill loading and read
- * by the exec-tool execution path for real-time skill-usage telemetry.
- */
-let skillBinsMap: SkillBinsMap = new Map();
 
 /**
  * Replace the user's home directory prefix with `~` in skill file paths
@@ -957,7 +951,7 @@ function loadSkillEntries(
     });
 
   // Phase 2 skill-usage telemetry: populate module-level bins map
-  skillBinsMap = buildSkillBinsMap(skillEntries);
+  setSkillBinsMap(buildSkillBinsMap(skillEntries));
 
   return skillEntries;
 }
@@ -1147,14 +1141,6 @@ function resolveWorkspaceSkillPromptState(
     .filter(Boolean)
     .join("\n");
   return { eligible, prompt, resolvedSkills };
-}
-
-/**
- * Return the current skill→bins map (populated during skill loading).
- * Used by the exec-tool execution path for real-time skill-usage telemetry.
- */
-export function getSkillBinsMap(): SkillBinsMap {
-  return skillBinsMap;
 }
 
 export function resolveSkillsPromptForRun(params: {
