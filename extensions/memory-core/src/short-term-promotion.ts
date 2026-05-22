@@ -339,12 +339,7 @@ function isMarkdownSkeletonSnippet(raw: string): boolean {
       if (/^#{1,6}\s+.+:\s*\S/.test(withoutLeadingMarkers)) {
         return false;
       }
-      if (withoutLeadingMarkers !== line) {
-        hasPlaceholderLine = true;
-      }
-      if (/(?:^|\s)[-*+>]\s*$/.test(line)) {
-        hasPlaceholderLine = true;
-      }
+      hasPlaceholderLine = true;
       continue;
     }
     return false;

@@ -1152,7 +1152,9 @@ describe("short-term promotion", () => {
       "|",
       "[]",
       "## Tagesnotizen\n-\n\n## Entscheidungen\n-",
+      "## Tagesnotizen\n## Entscheidungen",
       "## Tagesnotizen - ## Entscheidungen -",
+      "## Tagesnotizen ## Entscheidungen",
       "- ## Entscheidungen",
     ]) {
       expect(testing.isUnpromotableShortTermSnippet(snippet)).toBe(true);
@@ -1161,6 +1163,7 @@ describe("short-term promotion", () => {
     expect(testing.isUnpromotableShortTermSnippet("- Keep gateway restarts supervised.")).toBe(
       false,
     );
+    expect(testing.isUnpromotableShortTermSnippet("## Decision: Move backups to S3")).toBe(false);
     expect(testing.isUnpromotableShortTermSnippet("- ## Decision: Move backups to S3")).toBe(false);
   });
 
