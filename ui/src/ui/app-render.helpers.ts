@@ -791,14 +791,16 @@ export function renderTopbarThemeModeToggle(state: AppViewState) {
     <div class="topbar-theme-mode" role="group" aria-label=${t("common.colorMode")}>
       ${THEME_MODE_OPTIONS.map((opt) => {
         const label = t(opt.labelKey);
+        const tooltip = t("common.colorModeOption", { mode: label });
         return html`
           <button
             type="button"
             class="topbar-theme-mode__btn ${opt.id === state.themeMode
               ? "topbar-theme-mode__btn--active"
               : ""}"
-            title=${label}
-            aria-label=${t("common.colorModeOption", { mode: label })}
+            title=${tooltip}
+            aria-label=${tooltip}
+            data-tooltip=${tooltip}
             aria-pressed=${opt.id === state.themeMode}
             @click=${(e: Event) => applyMode(opt.id, e)}
           >

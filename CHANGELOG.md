@@ -25,6 +25,7 @@ Docs: https://docs.openclaw.ai
 ### Fixes
 
 - Agents/Copilot: drop unsafe GitHub Copilot Responses reasoning replay items before send so Telegram direct sessions no longer fail on overlong replay IDs. Fixes #85197. (#85198) Thanks @galiniliev.
+- UI: add accessible tooltips to the topbar color-mode buttons so System, Light, and Dark choices are labeled on hover and focus. (#85227) Thanks @amknight.
 - fix: constrain Windows task script names [AI]. (#85064) Thanks @pgondhi987.
 - Control UI: keep the chat session picker from hiding older or cross-agent configured conversations while preserving the bounded configured-agent refresh. (#85211) Thanks @amknight.
 - Agents/Anthropic: preserve unsafe integer tool-call input values in streamed Anthropic tool-use JSON, preventing Discord-style IDs from being rounded before dispatch. Fixes #47229. (#83063) Thanks @leno23.
