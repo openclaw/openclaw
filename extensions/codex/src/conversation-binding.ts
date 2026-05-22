@@ -45,6 +45,7 @@ import { buildCodexConversationTurnInput } from "./conversation-turn-input.js";
 import { resumeCodexCliSessionOnNode } from "./node-cli-sessions.js";
 
 const DEFAULT_BOUND_TURN_TIMEOUT_MS = 20 * 60_000;
+const CODEX_CONVERSATION_UNSUBSCRIBE_TIMEOUT_MS = 60_000;
 
 export {
   createCodexCliNodeConversationBindingData,
@@ -487,6 +488,22 @@ async function runBoundTurn(params: {
   } finally {
     notificationCleanup();
     requestCleanup();
+    await unsubscribeCodexConversationThreadBestEffort(client, threadId);
+  }
+}
+
+async function unsubscribeCodexConversationThreadBestEffort(
+  client: Awaited<ReturnType<typeof getSharedCodexAppServerClient>>,
+  threadId: string,
+): Promise<void> {
+  try {
+    await client.request(
+      "thread/unsubscribe",
+      { threadId },
+      { timeoutMs: CODEX_CONVERSATION_UNSUBSCRIBE_TIMEOUT_MS },
+    );
+  } catch {
+    // Best effort only: preserve the user-facing turn result even if cleanup fails.
   }
 }
 

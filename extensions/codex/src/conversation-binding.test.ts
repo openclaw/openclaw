@@ -469,6 +469,9 @@ describe("codex conversation binding", () => {
           });
           return { turn: { id: "turn-new" } };
         }
+        if (method === "thread/unsubscribe") {
+          return {};
+        }
         throw new Error(`unexpected method: ${method}`);
       }),
       addNotificationHandler: vi.fn((handler) => {
@@ -510,21 +513,24 @@ describe("codex conversation binding", () => {
     expect(result).toEqual({ handled: true, reply: { text: "Recovered" } });
     expect(requests.map((request) => request.method)).toEqual([
       "turn/start",
+      "thread/unsubscribe",
       "thread/start",
       "turn/start",
+      "thread/unsubscribe",
     ]);
     const sharedClientParams = mockCallArg(sharedClientMocks.getSharedCodexAppServerClient) as {
       authProfileId?: unknown;
     };
     expect(sharedClientParams?.authProfileId).toBe("work");
-    expect(requests[1]?.params.model).toBe("gpt-5.4-mini");
-    expect(requests[1]?.params.approvalPolicy).toBe("on-request");
-    expect(requests[1]?.params.sandbox).toBe("workspace-write");
-    expect(requests[1]?.params.serviceTier).toBe("priority");
-    expect(requests[1]?.params).not.toHaveProperty("modelProvider");
-    expect(requests[2]?.params.threadId).toBe("thread-new");
+    expect(requests[2]?.params.model).toBe("gpt-5.4-mini");
     expect(requests[2]?.params.approvalPolicy).toBe("on-request");
+    expect(requests[2]?.params.sandbox).toBe("workspace-write");
     expect(requests[2]?.params.serviceTier).toBe("priority");
+    expect(requests[2]?.params).not.toHaveProperty("modelProvider");
+    expect(requests[3]?.params.threadId).toBe("thread-new");
+    expect(requests[3]?.params.approvalPolicy).toBe("on-request");
+    expect(requests[3]?.params.serviceTier).toBe("priority");
+    expect(requests[4]?.params.threadId).toBe("thread-new");
     const savedBinding = JSON.parse(
       await fs.readFile(`${sessionFile}.codex-app-server.json`, "utf8"),
     );
@@ -534,6 +540,89 @@ describe("codex conversation binding", () => {
     expect(savedBinding.sandbox).toBe("workspace-write");
     expect(savedBinding.serviceTier).toBe("priority");
     expect(savedBinding).not.toHaveProperty("modelProvider");
+  });
+
+  it("unsubscribes a recreated bound thread when the recovery retry rejects", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    await fs.writeFile(
+      `${sessionFile}.codex-app-server.json`,
+      JSON.stringify({
+        schemaVersion: 1,
+        threadId: "thread-old",
+        cwd: tempDir,
+      }),
+    );
+    const requests: Array<{ method: string; params: Record<string, unknown> }> = [];
+    sharedClientMocks.getSharedCodexAppServerClient.mockResolvedValue({
+      request: vi.fn(async (method: string, requestParams: Record<string, unknown>) => {
+        requests.push({ method, params: requestParams });
+        if (method === "turn/start" && requestParams.threadId === "thread-old") {
+          throw new Error("thread not found: thread-old");
+        }
+        if (method === "thread/start") {
+          return {
+            thread: { id: "thread-new", sessionId: "session-1", cwd: tempDir },
+            model: "gpt-5.4-mini",
+          };
+        }
+        if (method === "turn/start" && requestParams.threadId === "thread-new") {
+          throw new Error("retry failed after recovery");
+        }
+        if (method === "thread/unsubscribe") {
+          return {};
+        }
+        throw new Error(`unexpected method: ${method}`);
+      }),
+      addNotificationHandler: vi.fn(() => () => undefined),
+      addRequestHandler: vi.fn(() => () => undefined),
+    });
+
+    const result = await handleCodexConversationInboundClaim(
+      {
+        content: "hi again",
+        bodyForAgent: "hi again",
+        channel: "telegram",
+        isGroup: false,
+        commandAuthorized: true,
+      },
+      {
+        channelId: "telegram",
+        pluginBinding: {
+          bindingId: "binding-1",
+          pluginId: "codex",
+          pluginRoot: tempDir,
+          channel: "telegram",
+          accountId: "default",
+          conversationId: "5185575566",
+          boundAt: Date.now(),
+          data: {
+            kind: "codex-app-server-session",
+            version: 1,
+            sessionFile,
+            workspaceDir: tempDir,
+          },
+        },
+      },
+      { timeoutMs: 50 },
+    );
+
+    expect(result).toEqual({
+      handled: true,
+      reply: { text: "Codex app-server turn failed: retry failed after recovery" },
+    });
+    expect(requests.map((request) => request.method)).toEqual([
+      "turn/start",
+      "thread/unsubscribe",
+      "thread/start",
+      "turn/start",
+      "thread/unsubscribe",
+    ]);
+    expect(requests[1]?.params.threadId).toBe("thread-old");
+    expect(requests[4]?.params.threadId).toBe("thread-new");
+    const savedBinding = JSON.parse(
+      await fs.readFile(`${sessionFile}.codex-app-server.json`, "utf8"),
+    );
+    expect(savedBinding.threadId).toBe("thread-new");
   });
 
   it("returns a clean failure reply when app-server turn start rejects", async () => {
