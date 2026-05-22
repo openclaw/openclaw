@@ -73,7 +73,7 @@ describe("telegram bot message processor", () => {
   async function processSampleMessage(
     processMessage: ReturnType<typeof createTelegramMessageProcessor>,
   ) {
-    await processMessage(
+    return await processMessage(
       {
         message: {
           chat: { id: 123, type: "private", title: "chat" },
@@ -126,7 +126,7 @@ describe("telegram bot message processor", () => {
     );
 
     const processMessage = createTelegramMessageProcessor(baseDeps);
-    await processSampleMessage(processMessage);
+    await expect(processSampleMessage(processMessage)).resolves.toBe(true);
 
     expect(sendTyping).toHaveBeenCalledTimes(1);
     expect(dispatchTelegramMessage).toHaveBeenCalledTimes(1);
@@ -154,7 +154,7 @@ describe("telegram bot message processor", () => {
     );
 
     const processMessage = createTelegramMessageProcessor(baseDeps);
-    await processSampleMessage(processMessage);
+    await expect(processSampleMessage(processMessage)).resolves.toBe(true);
 
     expect(sendTyping).not.toHaveBeenCalled();
     expect(dispatchTelegramMessage).toHaveBeenCalledTimes(1);
@@ -163,7 +163,7 @@ describe("telegram bot message processor", () => {
   it("skips dispatch when no context is produced", async () => {
     buildTelegramMessageContext.mockResolvedValue(null);
     const processMessage = createTelegramMessageProcessor(baseDeps);
-    await processSampleMessage(processMessage);
+    await expect(processSampleMessage(processMessage)).resolves.toBe(false);
     expect(dispatchTelegramMessage).not.toHaveBeenCalled();
     expect(telegramInboundInfo).not.toHaveBeenCalled();
   });
@@ -197,7 +197,7 @@ describe("telegram bot message processor", () => {
     );
 
     const processMessage = createTelegramMessageProcessor(baseDeps);
-    await processSampleMessage(processMessage);
+    await expect(processSampleMessage(processMessage)).resolves.toBe(true);
 
     expect(sendTyping).toHaveBeenCalledTimes(1);
     expect(dispatchTelegramMessage).toHaveBeenCalledTimes(1);
@@ -213,7 +213,7 @@ describe("telegram bot message processor", () => {
       },
       sendMessage,
     );
-    await expect(processSampleMessage(processMessage)).resolves.toBeUndefined();
+    await expect(processSampleMessage(processMessage)).resolves.toBe(true);
 
     expect(sendMessage).toHaveBeenCalledWith(
       123,
@@ -235,7 +235,7 @@ describe("telegram bot message processor", () => {
       },
       sendMessage,
     );
-    await expect(processSampleMessage(processMessage)).resolves.toBeUndefined();
+    await expect(processSampleMessage(processMessage)).resolves.toBe(true);
 
     expect(sendMessage).toHaveBeenCalledWith(
       123,
@@ -253,7 +253,7 @@ describe("telegram bot message processor", () => {
       },
       sendMessage,
     );
-    await expect(processSampleMessage(processMessage)).resolves.toBeUndefined();
+    await expect(processSampleMessage(processMessage)).resolves.toBe(true);
 
     expect(sendMessage).toHaveBeenCalledWith(
       123,

@@ -146,7 +146,7 @@ export const createTelegramMessageProcessor = (deps: TelegramMessageProcessorDep
             (options?.ingressBuffer ? ` buffer=${options.ingressBuffer}` : ""),
         );
       }
-      return;
+      return false;
     }
     if (ingressDebugEnabled && ingressReceivedAtMs && ingressContextStartMs) {
       logVerbose(
@@ -200,5 +200,6 @@ export const createTelegramMessageProcessor = (deps: TelegramMessageProcessorDep
         );
       } catch {}
     }
+    return true;
   };
 };

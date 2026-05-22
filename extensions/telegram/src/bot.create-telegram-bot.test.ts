@@ -796,6 +796,27 @@ describe("createTelegramBot", () => {
         expect(sendMessageSpy.mock.calls.map((call) => String(call[1])).join("\n")).not.toContain(
           "reply:first",
         );
+
+        await runTelegramMiddlewareChain({
+          ctx: {
+            update: { update_id: 103 },
+            message: {
+              chat: { id: 7, type: "private" },
+              text: "first",
+              date: 1736380800,
+              message_id: 101,
+              from: { id: 42, first_name: "Ada" },
+            },
+            me: { username: "openclaw_bot" },
+            getFile: async () => ({}),
+          },
+          finalHandler: messageHandler,
+        });
+
+        const flushReplay = extractLatestDebounceFlush();
+        await flushReplay?.();
+        expect(startedBodies).toHaveLength(2);
+        expect(startedBodies[1]).toContain("first");
       } finally {
         setTimeoutSpy.mockRestore();
       }
@@ -1660,6 +1681,39 @@ describe("createTelegramBot", () => {
       me: { username: "openclaw_bot" },
       getFile: async () => ({}),
     });
+    expect(replySpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("dedupes a replayed Telegram message after handler recreation", async () => {
+    loadConfig.mockReturnValue({
+      channels: { telegram: { dmPolicy: "open", allowFrom: ["*"] } },
+    });
+
+    const replayedCtx = () => ({
+      update: { update_id: 8488601 },
+      message: {
+        chat: { id: 123, type: "private" },
+        from: { id: 456, username: "testuser" },
+        text: "replay me once",
+        date: 1736380800,
+        message_id: 42,
+      },
+      me: { username: "openclaw_bot" },
+      getFile: async () => ({ download: async () => new Uint8Array() }),
+    });
+
+    createTelegramBot({ token: "tok" });
+    await (getOnHandler("message") as (ctx: Record<string, unknown>) => Promise<void>)(
+      replayedCtx(),
+    );
+    expect(replySpy).toHaveBeenCalledTimes(1);
+
+    onSpy.mockClear();
+    createTelegramBot({ token: "tok" });
+    await (getOnHandler("message") as (ctx: Record<string, unknown>) => Promise<void>)(
+      replayedCtx(),
+    );
+
     expect(replySpy).toHaveBeenCalledTimes(1);
   });
 
