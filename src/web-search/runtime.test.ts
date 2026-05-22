@@ -383,6 +383,36 @@ describe("web search runtime", () => {
     });
   });
 
+  it("passes the active agentDir into selected provider tools", async () => {
+    const activeAgentDir = mkdtempSync(path.join(os.tmpdir(), "openclaw-web-search-tool-agent-"));
+    tempDirs.push(activeAgentDir);
+    const provider = createCustomSearchProvider({
+      credentialPath: "",
+      requiresCredential: false,
+      createTool: ({ agentDir }) => ({
+        description: "custom",
+        parameters: {},
+        execute: async (args) => ({
+          ...args,
+          agentDir,
+        }),
+      }),
+    });
+    resolveRuntimeWebSearchProvidersMock.mockReturnValue([provider]);
+    resolvePluginWebSearchProvidersMock.mockReturnValue([provider]);
+
+    await expect(
+      runWebSearch({
+        agentDir: activeAgentDir,
+        config: {},
+        args: { query: "active-agent tool context" },
+      }),
+    ).resolves.toEqual({
+      provider: "custom",
+      result: { query: "active-agent tool context", agentDir: activeAgentDir },
+    });
+  });
+
   it("uses the active resolved runtime config for matching source config callers", async () => {
     const provider = createCustomSearchProvider({
       createTool: ({ config }) => ({
