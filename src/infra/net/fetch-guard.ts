@@ -16,6 +16,7 @@ import {
   assertHostnameAllowedWithPolicy,
   closeDispatcher,
   createPinnedDispatcher,
+  isPrivateIpAddress,
   resolveSsrFPolicyForUrl,
   resolvePinnedHostnameWithPolicy,
   type LookupFn,
@@ -23,6 +24,7 @@ import {
   SsrFBlockedError,
   type SsrFPolicy,
 } from "./ssrf.js";
+import { getActiveManagedProxyLoopbackMode } from "./proxy/active-proxy-state.js";
 import { globalUndiciStreamTimeoutMs } from "./undici-global-dispatcher.js";
 import {
   createHttp1Agent,
@@ -52,6 +54,11 @@ export const GUARDED_FETCH_MODE = {
 
 export type GuardedFetchMode = (typeof GUARDED_FETCH_MODE)[keyof typeof GUARDED_FETCH_MODE];
 
+export type GuardedFetchManagedProxyBypass = {
+  kind: "configured-local-origin";
+  baseUrl: string;
+};
+
 export type GuardedFetchOptions = {
   url: string;
   fetchImpl?: FetchLike;
@@ -76,6 +83,7 @@ export type GuardedFetchOptions = {
   lookupFn?: LookupFn;
   dispatcherPolicy?: PinnedDispatcherPolicy;
   mode?: GuardedFetchMode;
+  managedProxyBypass?: GuardedFetchManagedProxyBypass;
   pinDns?: boolean;
   /** @deprecated use `mode: "trusted_env_proxy"` for trusted/operator-controlled URLs. */
   proxy?: "env";
@@ -133,6 +141,66 @@ function resolveGuardedFetchMode(params: GuardedFetchOptions): GuardedFetchMode 
 
 function isManagedProxyActive(): boolean {
   return process.env["OPENCLAW_PROXY_ACTIVE"] === "1";
+}
+
+function resolveHttpOrigin(value: string): string | undefined {
+  try {
+    const parsed = new URL(value.trim());
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+      return undefined;
+    }
+    parsed.hostname = parsed.hostname.replace(/\.+$/, "");
+    return parsed.origin.toLowerCase();
+  } catch {
+    return undefined;
+  }
+}
+
+function isLoopbackManagedProxyBypassHost(hostname: string): boolean {
+  const normalized = hostname
+    .trim()
+    .toLowerCase()
+    .replace(/\.+$/, "")
+    .replace(/^\[(.*)\]$/, "$1");
+  return normalized === "localhost" || normalized === "127.0.0.1" || normalized === "::1";
+}
+
+function isExactConfiguredLocalOriginBypass(params: {
+  url: URL;
+  managedProxyBypass: GuardedFetchManagedProxyBypass | undefined;
+}): boolean {
+  if (params.managedProxyBypass?.kind !== "configured-local-origin") {
+    return false;
+  }
+  const baseOrigin = resolveHttpOrigin(params.managedProxyBypass.baseUrl);
+  if (!baseOrigin) {
+    return false;
+  }
+  return resolveHttpOrigin(params.url.toString()) === baseOrigin;
+}
+
+function isPinnedLocalTarget(addresses: readonly string[]): boolean {
+  return addresses.length > 0 && addresses.every((address) => isPrivateIpAddress(address));
+}
+
+function shouldUseManagedProxyDirectBypass(params: {
+  url: URL;
+  managedProxyBypass: GuardedFetchManagedProxyBypass | undefined;
+  resolvedAddresses: readonly string[];
+}): boolean {
+  if (!isExactConfiguredLocalOriginBypass(params)) {
+    return false;
+  }
+  const loopbackMode = getActiveManagedProxyLoopbackMode();
+  if (loopbackMode === "proxy") {
+    return false;
+  }
+  if (loopbackMode === "block" && isLoopbackManagedProxyBypassHost(params.url.hostname)) {
+    throw new Error(
+      "proxy: configured local provider loopback connections are blocked by proxy.loopbackMode",
+    );
+  }
+  return isPinnedLocalTarget(params.resolvedAddresses);
 }
 
 function assertExplicitProxySupportsPinnedDns(
@@ -432,11 +500,17 @@ export async function fetchWithSsrFGuard(params: GuardedFetchOptions): Promise<G
       if (canUseTrustedEnvProxy) {
         dispatcher = createHttp1EnvHttpProxyAgent(undefined, timeoutMs);
       } else if (canUseManagedProxy) {
-        await resolvePinnedHostnameWithPolicy(parsedUrl.hostname, {
+        const pinned = await resolvePinnedHostnameWithPolicy(parsedUrl.hostname, {
           lookupFn: params.lookupFn,
           policy: policyForUrl,
         });
-        dispatcher = createHttp1EnvHttpProxyAgent(undefined, timeoutMs);
+        dispatcher = shouldUseManagedProxyDirectBypass({
+          url: parsedUrl,
+          managedProxyBypass: params.managedProxyBypass,
+          resolvedAddresses: pinned.addresses,
+        })
+          ? createPinnedDispatcher(pinned, params.dispatcherPolicy, policyForUrl, timeoutMs)
+          : createHttp1EnvHttpProxyAgent(undefined, timeoutMs);
       } else if (usesTrustedExplicitProxyMode) {
         // Explicit proxy targets are still checked against the caller's hostname
         // policy, but the proxy does the DNS resolution for the final target.

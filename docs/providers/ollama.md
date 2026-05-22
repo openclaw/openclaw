@@ -916,6 +916,14 @@ For the full setup and behavior details, see [Ollama Web Search](/tools/ollama-s
     and API key, calls Ollama's current `/api/embed` endpoint, and batches
     multiple memory chunks into one `input` request when possible.
 
+    When `proxy.enabled=true`, Ollama memory embedding requests to the exact
+    configured local/self-hosted `baseUrl` use OpenClaw's guarded direct path
+    instead of the managed forward proxy. This is limited to that configured
+    origin; redirects to another host or port do not inherit trust. Operators
+    can still set `proxy.loopbackMode: "proxy"` to send loopback Ollama
+    embedding traffic through the proxy, or `proxy.loopbackMode: "block"` to
+    deny loopback Ollama embedding traffic before opening a connection.
+
     | Property      | Value               |
     | ------------- | ------------------- |
     | Default model | `nomic-embed-text`  |

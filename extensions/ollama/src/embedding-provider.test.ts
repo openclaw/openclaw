@@ -11,9 +11,9 @@ const { fetchWithSsrFGuardMock } = vi.hoisted(() => ({
 vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
   fetchWithSsrFGuard: fetchWithSsrFGuardMock,
   formatErrorMessage: (error: unknown) => (error instanceof Error ? error.message : String(error)),
-  ssrfPolicyFromHttpBaseUrlAllowedHostname: (baseUrl: string) => {
+  ssrfPolicyFromHttpBaseUrlAllowedOrigin: (baseUrl: string) => {
     const parsed = new URL(baseUrl);
-    return { allowedHostnames: [parsed.hostname] };
+    return { allowedOrigins: [parsed.origin] };
   },
 }));
 
@@ -67,6 +67,14 @@ function readFirstEmbeddingInput(fetchMock: ReturnType<typeof mockEmbeddingFetch
   return body.input;
 }
 
+function firstGuardedFetchCall(): Record<string, unknown> {
+  const call = fetchWithSsrFGuardMock.mock.calls[0]?.[0];
+  if (!call || typeof call !== "object") {
+    throw new Error("expected guarded fetch call");
+  }
+  return call as Record<string, unknown>;
+}
+
 function expectEmbeddingFetch(
   fetchMock: ReturnType<typeof mockEmbeddingFetch>,
   url: string,
@@ -107,6 +115,30 @@ describe("ollama embedding provider", () => {
     });
     expect(vector[0]).toBeCloseTo(0.6, 5);
     expect(vector[1]).toBeCloseTo(0.8, 5);
+  });
+
+  it("marks the configured Ollama origin for managed-proxy direct routing", async () => {
+    const fetchMock = mockEmbeddingFetch([1, 0]);
+
+    const { provider } = await createOllamaEmbeddingProvider({
+      config: {} as OpenClawConfig,
+      provider: "ollama",
+      model: "nomic-embed-text",
+      fallback: "none",
+      remote: { baseUrl: "http://127.0.0.1:11434/v1" },
+    });
+
+    await provider.embedQuery("hello");
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(firstGuardedFetchCall()).toMatchObject({
+      url: "http://127.0.0.1:11434/api/embed",
+      policy: { allowedOrigins: ["http://127.0.0.1:11434"] },
+      managedProxyBypass: {
+        kind: "configured-local-origin",
+        baseUrl: "http://127.0.0.1:11434",
+      },
+    });
   });
 
   it("resolves configured base URL and headers without sending local marker auth", async () => {
