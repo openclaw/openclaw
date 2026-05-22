@@ -20,6 +20,7 @@ const runtimeMock = vi.hoisted(() => ({
 
 const loadNodeHostConfigMock = vi.hoisted(() => vi.fn());
 const buildNodeInstallPlanMock = vi.hoisted(() => vi.fn());
+const resolveIsNixModeMock = vi.hoisted(() => vi.fn(() => false));
 
 vi.mock("../../runtime.js", () => ({
   defaultRuntime: runtimeMock,
@@ -31,6 +32,10 @@ vi.mock("../../node-host/config.js", () => ({
 
 vi.mock("../../commands/node-daemon-install-helpers.js", () => ({
   buildNodeInstallPlan: buildNodeInstallPlanMock,
+}));
+
+vi.mock("../../config/paths.js", () => ({
+  resolveIsNixMode: resolveIsNixModeMock,
 }));
 
 vi.mock("../../daemon/node-service.js", () => ({
@@ -45,6 +50,7 @@ vi.mock("../../daemon/node-service.js", () => ({
 describe("node daemon CLI", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    resolveIsNixModeMock.mockReturnValue(false);
     loadNodeHostConfigMock.mockResolvedValue(null);
     buildNodeInstallPlanMock.mockResolvedValue({
       description: "OpenClaw Node",
