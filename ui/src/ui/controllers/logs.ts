@@ -22,6 +22,11 @@ export type LogsState = {
 
 const LOG_BUFFER_LIMIT = 2000;
 const LEVELS = new Set<LogLevel>(["trace", "debug", "info", "warn", "error", "fatal"]);
+const ANSI_SEQUENCE_RE = /\u001b(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])/g;
+
+function stripAnsiSequences(value: string): string {
+  return value.replace(ANSI_SEQUENCE_RE, "");
+}
 
 function parseMaybeJsonString(value: unknown) {
   if (typeof value !== "string") {
@@ -89,12 +94,12 @@ export function parseLogLine(line: string): LogEntry {
       raw: line,
       time,
       level,
-      subsystem,
-      message,
+      subsystem: subsystem ? stripAnsiSequences(subsystem) : subsystem,
+      message: stripAnsiSequences(message),
       meta: meta ?? undefined,
     };
   } catch {
-    return { raw: line, message: line };
+    return { raw: line, message: stripAnsiSequences(line) };
   }
 }
 

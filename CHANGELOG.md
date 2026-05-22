@@ -47,6 +47,7 @@ Docs: https://docs.openclaw.ai
 - Control UI/chat: disable the thinking selector for known non-reasoning models instead of showing duplicate Off choices. Fixes #84069. Thanks @DrippingMellow.
 - Memory: expand `~` in configured extra memory paths before resolving them, so home-relative folders are not treated as workspace-relative. Fixes #58026. Thanks @stadman.
 - Skills: treat `openclaw.os: macos` as Darwin when checking skill requirements, so macOS-only skills no longer report as missing on macOS hosts. Fixes #61338. Thanks @Jessecq1995.
+- Control UI/logs: strip ANSI escape sequences from displayed Gateway log messages so color codes no longer appear as raw text. Fixes #64399. Thanks @guguangxin-eng.
 - CLI/update: preserve managed Gateway service environment during package cutovers so macOS LaunchAgent repair/restart reads the pre-update service state instead of caller shell state. (#83026)
 - Agents/providers: honor per-model `api` and `baseUrl` overrides in custom provider auth hooks and transport selection. Fixes #80487. (#80488) Thanks @huveewomg.
 - Gateway/restart: eager-load the lifecycle runtime before in-place upgrade signal handling so package replacement does not deadlock restart imports. (#84890) Thanks @myps6415.
