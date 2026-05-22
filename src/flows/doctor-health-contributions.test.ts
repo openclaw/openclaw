@@ -327,7 +327,18 @@ describe("doctor health contributions", () => {
       },
       async repair(ctx) {
         return {
-          config: { ...ctx.cfg, repairedByBundledHealth: true },
+          config: {
+            ...ctx.cfg,
+            plugins: {
+              entries: {
+                ...ctx.cfg.plugins?.entries,
+                policy: {
+                  enabled: false,
+                  config: { enabled: false },
+                },
+              },
+            },
+          },
           changes: ["Ran bundled health repair."],
         };
       },
@@ -362,7 +373,7 @@ describe("doctor health contributions", () => {
       cfg: originalCfg,
       cwd: expect.any(String),
     });
-    expect(ctx.cfg.repairedByBundledHealth).toBe(true);
+    expect(ctx.cfg.plugins?.entries?.policy?.enabled).toBe(false);
     expect(mocks.note).toHaveBeenCalledWith("Ran bundled health repair.", "Doctor changes");
   });
 
