@@ -1,10 +1,11 @@
 # ClaWorks 配置模式
 
 > ClaWorks 继承 OpenClaw 的配置体系（`~/.openclaw/agents/<agentId>/agent.json`）。
-> ClaWorks 特有的配置通过插件 `claworks-robot` 的 `config` 节注入，路径为：
+> ClaWorks 特有配置通过插件 `claworks-robot` 的 `config` 节注入：
 > `plugins.entries.claworks-robot.config.*`
 >
-> 单独运行 ClaWorks 时，配置文件位于 `~/.claworks/robots/<robotId>/robot.json`（格式兼容）。
+> 单独运行（`CLAWORKS_PRODUCT=1`）时，配置文件为 `~/.claworks/claworks.json`（`pnpm claworks:init` 生成）。
+> JSON Schema 权威源：`extensions/claworks-robot/openclaw.plugin.json`。
 
 ---
 
@@ -136,11 +137,12 @@
 
 ### `data.*` — 数据存储
 
-| 字段             | 类型   | 默认值                          | 说明                                    |
-| ---------------- | ------ | ------------------------------- | --------------------------------------- |
-| `database_url`   | string | `"sqlite:///.claworks/data.db"` | ObjectStore 数据库（sqlite/postgresql） |
-| `kb_path`        | string | `".claworks/kb"`                | 知识库向量存储路径                      |
-| `kb_embed_model` | string | `"text-embedding-3-small"`      | KB 嵌入模型                             |
+| 字段             | 类型   | 默认值                          | 说明                                                                          |
+| ---------------- | ------ | ------------------------------- | ----------------------------------------------------------------------------- |
+| `database_url`   | string | `"sqlite:///.claworks/data.db"` | ObjectStore 数据库（sqlite/postgresql）                                       |
+| `kb_provider`    | enum   | `"stub"`                        | `stub`（内存子串）\| `memory-core`（向量，经 OpenClaw memory-core + LanceDB） |
+| `kb_path`        | string | `".claworks/kb"`                | 向量存储路径提示；`memory-core` 时由 repair 写入 LanceDB 目录                 |
+| `kb_embed_model` | string | `"text-embedding-3-small"`      | KB 嵌入模型；repair 会同步到 `plugins.entries.memory-lancedb.embedding.model` |
 
 ### `packs.*` — 扩展包
 

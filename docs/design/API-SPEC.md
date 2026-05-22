@@ -9,11 +9,12 @@
 ## 基础约定
 
 ```
-Base URL:   http://{host}:{port}
-Port:       8000 (monolith/twin), 8001 (ops-only split)
-Auth:       Bearer token via Authorization header (可选，由 claworks.apiKey 配置)
+Base URL:   http://127.0.0.1:{port}
+Port:       18800 (claworks.mjs 产品入口), 8000 (robot 内部默认)
+Auth:       Bearer token via Authorization header (可选，由 api.api_key 配置)
 Format:     JSON, Content-Type: application/json
 Errors:     { "error": "...", "code": "SNAKE_CASE_CODE" }
+RBAC:       写操作需通过 RBAC 守卫；失败返回 403 + { "code": "RBAC_DENIED" }
 ```
 
 ---
@@ -197,18 +198,61 @@ Errors:     { "error": "...", "code": "SNAKE_CASE_CODE" }
 }
 ```
 
-### `POST /v1/playbooks/runs/{runId}/hitl`
+### `POST /v1/playbooks/{id}/runs/{runId}/hitl`
 
-向 HITL 节点提交人工决策。
+向 HITL 节点提交人工决策（需 `step_id` 和 `decision`）。
 
 ```json
 // request
-{ "decision": "approve", "comment": "确认需要立即处理", "operator": "zhang-san" }
+{ "step_id": "confirm_step", "decision": "立即派人", "comment": "现场已确认" }
+```
+
+### `PUT /v1/playbooks/{id}/yaml`
+
+热写入 Playbook YAML 到 custom pack 并自动重载（`rest.write` 权限）。
+
+```json
+// request
+{ "yaml": "id: my_playbook\nname: ...\ntrigger:\n  kind: manual\nsteps: []" }
 ```
 
 ---
 
-## 五、EventKernel
+## 五、HITL（人工审批）
+
+### `GET /v1/hitl/pending`
+
+列出所有等待人工审批的 Playbook 运行。
+
+```json
+{
+  "pending": [
+    {
+      "run_id": "run-abc123",
+      "playbook_id": "on_alarm_received",
+      "started_at": "2026-05-19T20:00:00Z",
+      "waiting_step_id": "confirm_dispatch",
+      "steps": [...]
+    }
+  ]
+}
+```
+
+### `POST /v1/hitl/{runId}/resolve`
+
+通过 run_id 提交 HITL 决策（自动找等待步骤，或显式提供 `step_id`）。
+
+```json
+// request
+{ "decision": "立即派人处理", "comment": "工程师张三已到场", "step_id": "confirm_dispatch" }
+
+// response — 更新后的完整 PlaybookRun
+{ "id": "run-abc123", "status": "running", "steps": [...] }
+```
+
+---
+
+## 六、EventKernel
 
 ### `POST /v1/events`
 
@@ -268,7 +312,36 @@ IM 消息经 Ingress（默认 `intent_route`）进入分类 Playbook，不泛洪
 
 ---
 
-## 六、扩展包（Pack）
+## 七、Connector（外部系统连接器）
+
+### `GET /v1/connectors`
+
+列出所有已注册的 Connector 及其运行状态。
+
+```json
+{
+  "connectors": [
+    { "id": "opc-ua-plc", "running": true, "pid": 12345, "ready": true, "lastError": null },
+    { "id": "mes-bridge", "running": false, "ready": false, "lastError": "connection refused" }
+  ]
+}
+```
+
+### `POST /v1/connectors/{id}/invoke`
+
+调用 Connector 的指定方法（写操作需 RBAC `rest.write`）。
+
+```json
+// request
+{ "method": "get_status", "params": { "tag": "PUMP-001.VIB" } }
+
+// response
+{ "ok": true, "result": { "value": 12.5, "unit": "mm/s", "quality": "good" } }
+```
+
+---
+
+## 八、扩展包（Pack）
 
 ### `GET /v1/packs`
 
@@ -300,7 +373,7 @@ IM 消息经 Ingress（默认 `intent_route`）进入分类 Playbook，不泛洪
 
 ---
 
-## 七、A2A（Robot-to-Robot）
+## 九、A2A（Robot-to-Robot）
 
 ClaWorks 实现 [Google A2A 协议](https://google.github.io/A2A/)。
 
@@ -341,7 +414,7 @@ ClaWorks 实现 [Google A2A 协议](https://google.github.io/A2A/)。
 
 ---
 
-## 八、诊断/可观测性
+## 十、诊断/可观测性
 
 ### `GET /v1/metrics`
 
@@ -359,10 +432,49 @@ LLM 决策日志（每次 LLM 参与的仲裁记录）。
 
 ## 端口规范
 
-| 角色         | 端口         | 说明                                    |
-| ------------ | ------------ | --------------------------------------- |
-| monolith     | 8000         | 所有 API                                |
-| twin (split) | 8000         | 数据面 API（/v1/objects, /v1/kb）       |
-| ops (split)  | 8001         | 编排面 API（/v1/playbooks, /v1/events） |
-| nexus        | 8080         | Pack 目录服务                           |
-| A2A          | 同 main port | 共享端口，路由区分                      |
+| 入口                           | 端口         | 说明                               |
+| ------------------------------ | ------------ | ---------------------------------- |
+| `claworks.mjs` (产品 CLI)      | **18800**    | ClaWorks 全量 API，默认绑 loopback |
+| `openclaw.mjs` (上游 OpenClaw) | **18789**    | 与 ClaWorks 并存时的独立端口       |
+| robot 内部（monolith/twin）    | 8000         | `@claworks/runtime` 默认           |
+| nexus Pack 服务                | 8080         | `createNexusServer()` 默认         |
+| A2A                            | 同 main port | `/a2a/*` 共享端口路由              |
+
+## 完整端点速查
+
+| 方法   | 路径                                   | 分类        | 权限  |
+| ------ | -------------------------------------- | ----------- | ----- |
+| GET    | `/v1/health`                           | 系统        | 公开  |
+| POST   | `/v1/doctor`                           | 系统        | write |
+| GET    | `/v1/identity`                         | 系统        | 认证  |
+| GET    | `/v1/metrics`                          | 可观测      | 认证  |
+| GET    | `/v1/decision-log`                     | 可观测      | 认证  |
+| GET    | `/v1/observation-events`               | 可观测      | 认证  |
+| POST   | `/v1/rbac/reload`                      | 系统        | write |
+| GET    | `/v1/objects/{type}`                   | ObjectStore | 认证  |
+| GET    | `/v1/objects/{type}/{id}`              | ObjectStore | 认证  |
+| POST   | `/v1/objects/{type}`                   | ObjectStore | write |
+| PATCH  | `/v1/objects/{type}/{id}`              | ObjectStore | write |
+| GET    | `/v1/kb/search`                        | KB          | 认证  |
+| POST   | `/v1/kb/ingest`                        | KB          | write |
+| POST   | `/v1/kb/ingest/folder`                 | KB          | write |
+| GET    | `/v1/playbooks`                        | Playbook    | 认证  |
+| POST   | `/v1/playbooks/{id}/runs`              | Playbook    | write |
+| GET    | `/v1/playbooks/{id}/runs`              | Playbook    | 认证  |
+| GET    | `/v1/playbooks/{id}/runs/{runId}`      | Playbook    | 认证  |
+| POST   | `/v1/playbooks/{id}/runs/{runId}/hitl` | HITL        | write |
+| PUT    | `/v1/playbooks/{id}/yaml`              | Playbook    | write |
+| GET    | `/v1/hitl/pending`                     | HITL        | 认证  |
+| POST   | `/v1/hitl/{runId}/resolve`             | HITL        | write |
+| POST   | `/v1/events`                           | EventKernel | write |
+| GET    | `/v1/events`                           | EventKernel | 认证  |
+| POST   | `/v1/bridge/im`                        | IM 桥       | write |
+| POST   | `/v1/bridge/webhook`                   | Webhook 桥  | write |
+| GET    | `/v1/connectors`                       | Connector   | 认证  |
+| POST   | `/v1/connectors/{id}/invoke`           | Connector   | write |
+| GET    | `/v1/packs`                            | Pack        | 认证  |
+| POST   | `/v1/packs/install`                    | Pack        | write |
+| DELETE | `/v1/packs/{id}`                       | Pack        | write |
+| POST   | `/v1/packs/reload`                     | Pack        | write |
+| GET    | `/.well-known/agent.json`              | A2A         | 公开  |
+| POST   | `/a2a/tasks/send`                      | A2A         | 认证  |
