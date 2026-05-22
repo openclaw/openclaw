@@ -23,8 +23,8 @@ export type PolicyEvidence = {
   readonly modelProviders: readonly PolicyModelProviderEvidence[];
   readonly modelRefs: readonly PolicyModelRefEvidence[];
   readonly network: readonly PolicyNetworkEvidence[];
-  readonly secrets: readonly PolicySecretEvidence[];
-  readonly authProfiles: readonly PolicyAuthProfileEvidence[];
+  readonly secrets?: readonly PolicySecretEvidence[];
+  readonly authProfiles?: readonly PolicyAuthProfileEvidence[];
 };
 
 export type PolicyChannelEvidence = {
@@ -74,7 +74,7 @@ export type PolicySecretEvidence = {
   readonly id: string;
   readonly kind: "input" | "provider";
   readonly source: string;
-  readonly provenance?: "inline" | "secretRef";
+  readonly provenance?: "secretRef";
   readonly refSource?: "env" | "file" | "exec";
   readonly refProvider?: string;
   readonly providerSource?: string;
@@ -158,24 +158,36 @@ export function createPolicyAttestation(input: {
 
 export function collectPolicyEvidence(
   cfg: Record<string, unknown>,
-  options?: { readonly toolsRaw?: undefined; readonly secretsConfig?: Record<string, unknown> },
+  options?: {
+    readonly toolsRaw?: undefined;
+    readonly includeSecrets?: boolean;
+    readonly includeAuthProfiles?: boolean;
+  },
 ): PolicyEvidence;
 export function collectPolicyEvidence(
   cfg: Record<string, unknown>,
-  options: { readonly toolsRaw: string; readonly secretsConfig?: Record<string, unknown> },
+  options: {
+    readonly toolsRaw: string;
+    readonly includeSecrets?: boolean;
+    readonly includeAuthProfiles?: boolean;
+  },
 ): Promise<PolicyEvidence>;
 export function collectPolicyEvidence(
   cfg: Record<string, unknown>,
-  options: { readonly toolsRaw?: string; readonly secretsConfig?: Record<string, unknown> } = {},
+  options: {
+    readonly toolsRaw?: string;
+    readonly includeSecrets?: boolean;
+    readonly includeAuthProfiles?: boolean;
+  } = {},
 ): PolicyEvidence | Promise<PolicyEvidence> {
-  const evidence: PolicyEvidence = {
+  const evidence = {
     channels: scanPolicyChannels(cfg),
     mcpServers: scanPolicyMcpServers(cfg),
     modelProviders: scanPolicyModelProviders(cfg),
     modelRefs: scanPolicyModelRefs(cfg),
     network: scanPolicyNetwork(cfg),
-    secrets: scanPolicySecrets(options.secretsConfig ?? cfg),
-    authProfiles: scanPolicyAuthProfiles(cfg),
+    ...(options.includeSecrets === false ? {} : { secrets: scanPolicySecrets(cfg) }),
+    ...(options.includeAuthProfiles === false ? {} : { authProfiles: scanPolicyAuthProfiles(cfg) }),
   };
   if (options.toolsRaw === undefined) {
     return evidence;
@@ -400,15 +412,6 @@ function collectSecretInputs(
       });
       continue;
     }
-    if (secretInputPath && typeof child === "string" && child.trim() !== "") {
-      entries.push({
-        id: source,
-        kind: "input",
-        source,
-        provenance: "inline",
-      });
-      continue;
-    }
     collectSecretInputs(entries, child, childPath, defaults);
   }
 }
@@ -422,19 +425,28 @@ function isSecretInputPath(path: readonly string[]): boolean {
   if (key === undefined) {
     return false;
   }
+  if (
+    matchesConfigPath(path, ["plugins", "entries", "acpx", "config", "mcpServers", "*", "env", "*"])
+  ) {
+    return true;
+  }
+  if (isRawEnvMapValuePath(path)) {
+    return false;
+  }
   if (isSecretInputKey(key)) {
     return true;
   }
-  const joined = path.join(".");
   return (
-    /^models\.providers\.[^.]+\.headers\.[^.]+$/.test(joined) ||
+    matchesConfigPath(path, ["models", "providers", "*", "headers", "*"]) ||
     isConfiguredProviderRequestSecretPath(path, ["models", "providers", "*"]) ||
     isMediaConfiguredProviderRequestSecretPath(path) ||
-    /^agents\.defaults\.memorySearch\.remote\.headers\.[^.]+$/.test(joined) ||
-    /^diagnostics\.otel\.headers\.[^.]+$/.test(joined) ||
-    /^mcp\.servers\.[^.]+\.env\.[^.]+$/.test(joined) ||
-    /^plugins\.entries\.[^.]+\.config\.mcpServers\.[^.]+\.env\.[^.]+$/.test(joined)
+    matchesConfigPath(path, ["agents", "defaults", "memorySearch", "remote", "headers", "*"]) ||
+    matchesConfigPath(path, ["diagnostics", "otel", "headers", "*"])
   );
+}
+
+function isRawEnvMapValuePath(path: readonly string[]): boolean {
+  return path.length >= 2 && path.at(-2) === "env";
 }
 
 function isMediaConfiguredProviderRequestSecretPath(path: readonly string[]): boolean {
@@ -497,6 +509,10 @@ function matchesConfigPathPrefix(path: readonly string[], prefix: readonly strin
   });
 }
 
+function matchesConfigPath(path: readonly string[], pattern: readonly string[]): boolean {
+  return path.length === pattern.length && matchesConfigPathPrefix(path, pattern);
+}
+
 function isConfiguredProviderTlsSecretKey(key: string | undefined): boolean {
   return key === "ca" || key === "cert" || key === "key" || key === "passphrase";
 }
@@ -510,6 +526,7 @@ function isSecretInputKey(key: string): boolean {
     normalized === "tokenref" ||
     normalized === "password" ||
     normalized === "secret" ||
+    normalized === "encryptkey" ||
     normalized === "webhooksecret" ||
     normalized === "serviceaccount" ||
     normalized === "serviceaccountref" ||
@@ -869,7 +886,7 @@ function isModelSettingKey(key: string): boolean {
 }
 
 function ocPathSegment(value: string): string {
-  if (/^[A-Za-z0-9_-]+$/.test(value)) {
+  if (/^(?:[A-Za-z0-9_-]+|#\d+)$/.test(value)) {
     return value;
   }
   if (value.includes('"') || value.includes("\\")) {

@@ -26,7 +26,6 @@ const CHECK_IDS = {
   policyDeniedModelProvider: "policy/models-denied-provider",
   policyUnapprovedModelProvider: "policy/models-unapproved-provider",
   policyPrivateNetworkAccess: "policy/network-private-access-enabled",
-  policySecretsInlineValue: "policy/secrets-inline-value",
   policySecretsUnmanagedProvider: "policy/secrets-unmanaged-provider",
   policySecretsDeniedProviderSource: "policy/secrets-denied-provider-source",
   policySecretsInsecureProvider: "policy/secrets-insecure-provider",
@@ -50,7 +49,6 @@ export const POLICY_CHECK_IDS = [
   CHECK_IDS.policyDeniedModelProvider,
   CHECK_IDS.policyUnapprovedModelProvider,
   CHECK_IDS.policyPrivateNetworkAccess,
-  CHECK_IDS.policySecretsInlineValue,
   CHECK_IDS.policySecretsUnmanagedProvider,
   CHECK_IDS.policySecretsDeniedProviderSource,
   CHECK_IDS.policySecretsInsecureProvider,
@@ -103,7 +101,6 @@ export function registerPolicyDoctorChecks(host?: PolicyDoctorRegistrationHost):
   registerHealthCheck(policyModelsDeniedProviderCheck);
   registerHealthCheck(policyModelsUnapprovedProviderCheck);
   registerHealthCheck(policyNetworkPrivateAccessCheck);
-  registerHealthCheck(policySecretsInlineValueCheck);
   registerHealthCheck(policySecretsUnmanagedProviderCheck);
   registerHealthCheck(policySecretsDeniedProviderSourceCheck);
   registerHealthCheck(policySecretsInsecureProviderCheck);
@@ -256,21 +253,11 @@ const policyNetworkPrivateAccessCheck: HealthCheck = {
   },
 };
 
-const policySecretsInlineValueCheck: HealthCheck = {
-  id: CHECK_IDS.policySecretsInlineValue,
-  kind: "plugin",
-  description: "Secret inputs use managed references when policy disallows inline values.",
-  source: "policy",
-  async detect(ctx) {
-    return findingsForCheck(await evaluatePolicy(ctx), CHECK_IDS.policySecretsInlineValue);
-  },
-};
-
 const policySecretsUnmanagedProviderCheck: HealthCheck = {
   id: CHECK_IDS.policySecretsUnmanagedProvider,
   kind: "plugin",
   description:
-    "Secret references use configured secret providers when policy requires managed providers.",
+    "OpenClaw config SecretRefs use configured secret providers when policy requires managed providers.",
   source: "policy",
   async detect(ctx) {
     return findingsForCheck(await evaluatePolicy(ctx), CHECK_IDS.policySecretsUnmanagedProvider);
@@ -280,7 +267,8 @@ const policySecretsUnmanagedProviderCheck: HealthCheck = {
 const policySecretsDeniedProviderSourceCheck: HealthCheck = {
   id: CHECK_IDS.policySecretsDeniedProviderSource,
   kind: "plugin",
-  description: "Secret providers and references do not use sources denied by policy.",
+  description:
+    "OpenClaw config secret providers and SecretRefs do not use sources denied by policy.",
   source: "policy",
   async detect(ctx) {
     return findingsForCheck(await evaluatePolicy(ctx), CHECK_IDS.policySecretsDeniedProviderSource);
@@ -301,7 +289,7 @@ const policySecretsInsecureProviderCheck: HealthCheck = {
 const policyAuthProfileInvalidMetadataCheck: HealthCheck = {
   id: CHECK_IDS.policyAuthProfileInvalidMetadata,
   kind: "plugin",
-  description: "Auth profiles declare required provider and mode metadata.",
+  description: "OpenClaw config auth profiles declare required provider and mode metadata.",
   source: "policy",
   async detect(ctx) {
     return findingsForCheck(await evaluatePolicy(ctx), CHECK_IDS.policyAuthProfileInvalidMetadata);
@@ -311,7 +299,7 @@ const policyAuthProfileInvalidMetadataCheck: HealthCheck = {
 const policyAuthProfileUnapprovedModeCheck: HealthCheck = {
   id: CHECK_IDS.policyAuthProfileUnapprovedMode,
   kind: "plugin",
-  description: "Auth profile modes stay within the policy allowlist.",
+  description: "OpenClaw config auth profile modes stay within the policy allowlist.",
   source: "policy",
   async detect(ctx) {
     return findingsForCheck(await evaluatePolicy(ctx), CHECK_IDS.policyAuthProfileUnapprovedMode);
@@ -371,11 +359,10 @@ const policyToolsMissingOwnerCheck: HealthCheck = {
 async function evaluatePolicyUncached(ctx: HealthCheckContext): Promise<PolicyEvaluation> {
   const settings = policySettings(ctx);
   const policyPath = policyDisplayName(ctx);
-  const secretsConfig = await readConfigFileForSecretEvidence(ctx);
-  let evidence: PolicyEvidence =
-    secretsConfig === undefined
-      ? collectPolicyEvidence(ctx.cfg as Record<string, unknown>)
-      : collectPolicyEvidence(ctx.cfg as Record<string, unknown>, { secretsConfig });
+  let evidence: PolicyEvidence = collectPolicyEvidence(ctx.cfg as Record<string, unknown>, {
+    includeSecrets: false,
+    includeAuthProfiles: false,
+  });
   const findings: HealthFinding[] = [];
 
   if (!policyChecksEnabled(ctx, settings)) {
@@ -459,11 +446,19 @@ async function evaluatePolicyUncached(ctx: HealthCheckContext): Promise<PolicyEv
   );
   const requiredMetadata =
     metadataRequirementFindings.length === 0 ? requiredToolMetadata(policy) : new Set<string>();
+  const includeSecrets = policyHasSecretRules(policy);
+  const includeAuthProfiles = policyHasAuthProfileRules(policy);
   if (requiredMetadata.size > 0) {
     const toolsFile = await readWorkspaceFile(ctx, "TOOLS.md");
     evidence = await collectPolicyEvidence(ctx.cfg as Record<string, unknown>, {
       toolsRaw: toolsFile?.raw ?? "",
-      ...(secretsConfig ? { secretsConfig } : {}),
+      includeSecrets,
+      includeAuthProfiles,
+    });
+  } else {
+    evidence = collectPolicyEvidence(ctx.cfg as Record<string, unknown>, {
+      includeSecrets,
+      includeAuthProfiles,
     });
   }
   const policyFindings: HealthFinding[] = [
@@ -1173,21 +1168,44 @@ function secretAuthProvenanceFindings(
   policyDocName: string,
   evidence: PolicyEvidence,
 ): readonly HealthFinding[] {
-  const invalidShapes = [
-    ...secretPolicyShapeFindings(policy, policyPath, policyDocName),
-    ...authProfileAllowModesShapeFindings(policy, policyPath, policyDocName),
-  ];
-  if (invalidShapes.length > 0) {
-    return invalidShapes;
-  }
+  const secretShapeFindings = secretPolicyShapeFindings(policy, policyPath, policyDocName);
+  const authShapeFindings = authProfileAllowModesShapeFindings(policy, policyPath, policyDocName);
   return [
-    ...secretInlineFindings(policy, policyDocName, evidence),
-    ...secretManagedProviderFindings(policy, policyDocName, evidence),
-    ...secretDeniedSourceFindings(policy, policyDocName, evidence),
-    ...secretInsecureProviderFindings(policy, policyDocName, evidence),
-    ...authProfileMetadataFindings(policy, policyDocName, evidence),
-    ...authProfileModeFindings(policy, policyDocName, evidence),
+    ...(secretShapeFindings.length > 0
+      ? secretShapeFindings
+      : [
+          ...secretManagedProviderFindings(policy, policyDocName, evidence),
+          ...secretDeniedSourceFindings(policy, policyDocName, evidence),
+          ...secretInsecureProviderFindings(policy, policyDocName, evidence),
+        ]),
+    ...(authShapeFindings.length > 0
+      ? authShapeFindings
+      : [
+          ...authProfileMetadataFindings(policy, policyDocName, evidence),
+          ...authProfileModeFindings(policy, policyDocName, evidence),
+        ]),
   ];
+}
+
+function policyHasSecretRules(policy: unknown): boolean {
+  if (!isRecord(policy) || !isRecord(policy.secrets)) {
+    return false;
+  }
+  return (
+    policy.secrets.requireManagedProviders !== undefined ||
+    policy.secrets.denySources !== undefined ||
+    policy.secrets.allowInsecureProviders !== undefined
+  );
+}
+
+function policyHasAuthProfileRules(policy: unknown): boolean {
+  return (
+    isRecord(policy) &&
+    isRecord(policy.auth) &&
+    isRecord(policy.auth.profiles) &&
+    (policy.auth.profiles.requireMetadata !== undefined ||
+      policy.auth.profiles.allowModes !== undefined)
+  );
 }
 
 function secretPolicyShapeFindings(
@@ -1199,11 +1217,7 @@ function secretPolicyShapeFindings(
     return [];
   }
   const findings: HealthFinding[] = [];
-  for (const key of [
-    "disallowInline",
-    "requireManagedProviders",
-    "allowInsecureProviders",
-  ] as const) {
+  for (const key of ["requireManagedProviders", "allowInsecureProviders"] as const) {
     if (policy.secrets[key] !== undefined && typeof policy.secrets[key] !== "boolean") {
       findings.push(
         policyShapeFinding(
@@ -1285,32 +1299,6 @@ function authProfileAllowModesShapeFindings(
   ];
 }
 
-function secretInlineFindings(
-  policy: unknown,
-  policyDocName: string,
-  evidence: PolicyEvidence,
-): readonly HealthFinding[] {
-  if (readPolicyBoolean(policy, ["secrets", "disallowInline"]) !== true) {
-    return [];
-  }
-  return evidence.secrets
-    .filter((secret) => secret.kind === "input" && secret.provenance === "inline")
-    .map((secret): HealthFinding => {
-      return {
-        checkId: CHECK_IDS.policySecretsInlineValue,
-        severity: "error",
-        message:
-          "A configured secret input uses an inline value where policy requires a SecretRef.",
-        source: "policy",
-        path: "openclaw config",
-        ocPath: secret.source,
-        target: secret.source,
-        requirement: `oc://${policyDocName}/secrets/disallowInline`,
-        fixHint: "Move the value into a managed secret provider and replace it with a SecretRef.",
-      };
-    });
-}
-
 function secretManagedProviderFindings(
   policy: unknown,
   policyDocName: string,
@@ -1319,15 +1307,20 @@ function secretManagedProviderFindings(
   if (readPolicyBoolean(policy, ["secrets", "requireManagedProviders"]) !== true) {
     return [];
   }
-  const providerIds = new Set(
-    evidence.secrets.filter((secret) => secret.kind === "provider").map((secret) => secret.id),
+  const secrets = evidence.secrets ?? [];
+  const providerKeys = new Set(
+    secrets
+      .filter((secret) => secret.kind === "provider" && secret.providerSource !== undefined)
+      .map((secret) => `${secret.providerSource}:${secret.id}`),
   );
-  return evidence.secrets
+  return secrets
     .filter(
       (secret) =>
         secret.kind === "input" &&
         secret.provenance === "secretRef" &&
-        (secret.refProvider === undefined || !providerIds.has(secret.refProvider)),
+        (secret.refProvider === undefined ||
+          secret.refSource === undefined ||
+          !providerKeys.has(`${secret.refSource}:${secret.refProvider}`)),
     )
     .map((secret): HealthFinding => {
       return {
@@ -1354,7 +1347,7 @@ function secretDeniedSourceFindings(
   if (deniedSources.size === 0) {
     return [];
   }
-  return evidence.secrets
+  return (evidence.secrets ?? [])
     .filter((secret) => {
       const source = secret.kind === "provider" ? secret.providerSource : secret.refSource;
       return source !== undefined && deniedSources.has(source);
@@ -1383,7 +1376,7 @@ function secretInsecureProviderFindings(
   if (readPolicyBoolean(policy, ["secrets", "allowInsecureProviders"]) !== false) {
     return [];
   }
-  return evidence.secrets
+  return (evidence.secrets ?? [])
     .filter((secret) => secret.kind === "provider" && (secret.insecure?.length ?? 0) > 0)
     .map((secret): HealthFinding => {
       return {
@@ -1409,7 +1402,7 @@ function authProfileMetadataFindings(
   if (requiredMetadata.size === 0) {
     return [];
   }
-  return evidence.authProfiles.flatMap((profile): HealthFinding[] => {
+  return (evidence.authProfiles ?? []).flatMap((profile): HealthFinding[] => {
     const missing = [...requiredMetadata].filter(
       (metadata) => !authProfileHasMetadata(profile, metadata),
     );
@@ -1441,7 +1434,7 @@ function authProfileModeFindings(
   if (allowedModes.size === 0) {
     return [];
   }
-  return evidence.authProfiles
+  return (evidence.authProfiles ?? [])
     .filter((profile) => profile.mode !== undefined && !allowedModes.has(profile.mode))
     .map((profile): HealthFinding => {
       return {
@@ -1572,41 +1565,6 @@ function toolOwnerFindings(
         fixHint: "Declare owner:<team-or-person> for this tool.",
       };
     });
-}
-
-async function readConfigFileForSecretEvidence(
-  ctx: HealthCheckContext,
-): Promise<Record<string, unknown> | undefined> {
-  if (ctx.configPath === undefined) {
-    return undefined;
-  }
-  try {
-    const fs = await import("node:fs/promises");
-    const parsed = JSON5.parse(await fs.readFile(ctx.configPath, "utf-8"));
-    if (!isRecord(parsed) || !hasSecretEvidenceSurface(parsed)) {
-      return undefined;
-    }
-    return parsed;
-  } catch {
-    return undefined;
-  }
-}
-
-function hasSecretEvidenceSurface(value: Record<string, unknown>): boolean {
-  return [
-    "agents",
-    "auth",
-    "channels",
-    "cron",
-    "diagnostics",
-    "gateway",
-    "mcp",
-    "models",
-    "plugins",
-    "secrets",
-    "skills",
-    "tools",
-  ].some((key) => value[key] !== undefined);
 }
 
 async function readPolicyFile(
