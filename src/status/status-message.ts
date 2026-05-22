@@ -900,7 +900,10 @@ export function buildStatusMessage(args: StatusArgs): string {
   const effectiveCostAuthMode = fallbackState.active
     ? activeAuthMode
     : (selectedAuthMode ?? activeAuthMode);
-  const showCost = effectiveCostAuthMode === "api-key" || effectiveCostAuthMode === "mixed";
+  const showCost =
+    effectiveCostAuthMode === "api-key" ||
+    effectiveCostAuthMode === "aws-sdk" ||
+    effectiveCostAuthMode === "mixed";
   const hasUsage = typeof inputTokens === "number" || typeof outputTokens === "number";
   const costConfig =
     showCost && hasUsage
