@@ -3,6 +3,7 @@ import { existsSync } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { isDeepStrictEqual } from "node:util";
 import { confirm, isCancel } from "@clack/prompts";
 import {
   checkShellCompletionStatus,
@@ -19,6 +20,7 @@ import {
   mutateConfigFileWithRetry,
   parseConfigJson5,
   readConfigFileSnapshot,
+  replaceConfigFile,
   resolveGatewayPort,
 } from "../../config/config.js";
 import { resolveConfigEnvVars } from "../../config/env-substitution.js";
@@ -161,6 +163,8 @@ const POST_INSTALL_DOCTOR_SERVICE_ENV_KEYS = [
   "OPENCLAW_PROFILE",
 ] as const;
 const POST_UPDATE_PLUGIN_REPAIR_GUIDANCE = "Run openclaw doctor --fix to attempt automatic repair.";
+const LEGACY_CODEX_MODEL_PREFIX = "openai-codex/";
+const CANONICAL_OPENAI_MODEL_PREFIX = "openai/";
 
 async function createUpdateConfigSnapshot(): Promise<void> {
   await createPreUpdateConfigSnapshot({
@@ -260,6 +264,561 @@ function normalizeDirectAuthoredChannelConfigMap(value: unknown): Record<string,
   return channels;
 }
 
+function hasAnyInclude(value: unknown): boolean {
+  if (Array.isArray(value)) {
+    return value.some((entry) => hasAnyInclude(entry));
+  }
+  if (!isRecord(value)) {
+    return false;
+  }
+  if (Object.prototype.hasOwnProperty.call(value, "$include")) {
+    return true;
+  }
+  return Object.values(value).some((entry) => hasAnyInclude(entry));
+}
+
+function hasNestedInclude(value: unknown): boolean {
+  if (Array.isArray(value)) {
+    return value.some((entry) => hasAnyInclude(entry));
+  }
+  if (!isRecord(value)) {
+    return false;
+  }
+  return Object.entries(value).some(([key, entry]) => key !== "$include" && hasAnyInclude(entry));
+}
+
+function isSingleTopLevelInclude(value: unknown): boolean {
+  return (
+    isRecord(value) &&
+    Object.keys(value).length === 1 &&
+    typeof value.$include === "string" &&
+    value.$include.trim().length > 0
+  );
+}
+
+function omitTopLevelPlugins(config: OpenClawConfig): Omit<OpenClawConfig, "plugins"> {
+  const { plugins: _plugins, ...rest } = config;
+  return rest;
+}
+
+function shouldSplitTopLevelPluginIncludeWrite(params: {
+  snapshot: Awaited<ReturnType<typeof readConfigFileSnapshot>>;
+  preUpdateAuthoredConfig?: OpenClawConfig;
+  hasPendingNonPluginConfigChange?: boolean;
+  pluginOnlyConfig: OpenClawConfig;
+  finalConfig: OpenClawConfig;
+}): boolean {
+  const snapshotHasTopLevelPluginInclude =
+    isRecord(params.snapshot.parsed) &&
+    isSingleTopLevelInclude((params.snapshot.parsed as OpenClawConfig).plugins);
+  const preUpdateHadTopLevelPluginInclude = isSingleTopLevelInclude(
+    params.preUpdateAuthoredConfig?.plugins,
+  );
+  if (!snapshotHasTopLevelPluginInclude && !preUpdateHadTopLevelPluginInclude) {
+    return false;
+  }
+  if (params.hasPendingNonPluginConfigChange === true) {
+    return true;
+  }
+  if (isDeepStrictEqual(params.snapshot.sourceConfig.plugins, params.pluginOnlyConfig.plugins)) {
+    return false;
+  }
+  return !isDeepStrictEqual(
+    omitTopLevelPlugins(params.snapshot.sourceConfig),
+    omitTopLevelPlugins(params.finalConfig),
+  );
+}
+
+function normalizeLegacyCodexModelRef(model: string): { model: string; codexRuntime: boolean } {
+  if (!model.startsWith(LEGACY_CODEX_MODEL_PREFIX)) {
+    return { model, codexRuntime: false };
+  }
+  const modelId = model.slice(LEGACY_CODEX_MODEL_PREFIX.length).trim();
+  if (!modelId) {
+    return { model, codexRuntime: false };
+  }
+  return { model: `${CANONICAL_OPENAI_MODEL_PREFIX}${modelId}`, codexRuntime: true };
+}
+
+function normalizeAgentModelConfigForUpdateIntent(
+  value: unknown,
+  codexRuntimeModels: Set<string>,
+): unknown {
+  if (typeof value === "string") {
+    const normalized = normalizeLegacyCodexModelRef(value);
+    if (normalized.codexRuntime) {
+      codexRuntimeModels.add(normalized.model);
+    }
+    return normalized.model;
+  }
+  if (!isRecord(value)) {
+    return structuredClone(value);
+  }
+  const next: Record<string, unknown> = {};
+  if (typeof value.primary === "string") {
+    const normalized = normalizeLegacyCodexModelRef(value.primary);
+    next.primary = normalized.model;
+    if (normalized.codexRuntime) {
+      codexRuntimeModels.add(normalized.model);
+    }
+  }
+  if (Array.isArray(value.fallbacks)) {
+    next.fallbacks = value.fallbacks.flatMap((fallback) => {
+      if (typeof fallback !== "string") {
+        return [];
+      }
+      const normalized = normalizeLegacyCodexModelRef(fallback);
+      if (normalized.codexRuntime) {
+        codexRuntimeModels.add(normalized.model);
+      }
+      return [normalized.model];
+    });
+  }
+  return next;
+}
+
+function normalizeAgentModelEntryMapForUpdateIntent(
+  value: unknown,
+  codexRuntimeModels: Set<string>,
+): Record<string, unknown> | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+  const entries: Record<string, unknown> = {};
+  for (const [modelRef, entry] of Object.entries(value)) {
+    const normalized = normalizeLegacyCodexModelRef(modelRef);
+    if (normalized.codexRuntime) {
+      codexRuntimeModels.add(normalized.model);
+    }
+    const nextEntry = isRecord(entry) ? structuredClone(entry) : {};
+    if (normalized.codexRuntime) {
+      const runtime = isRecord(nextEntry.agentRuntime)
+        ? structuredClone(nextEntry.agentRuntime)
+        : {};
+      nextEntry.agentRuntime = {
+        ...runtime,
+        id: "codex",
+      };
+    }
+    entries[normalized.model] = nextEntry;
+  }
+  return entries;
+}
+
+function mergeAgentModelEntryMaps(
+  currentValue: unknown,
+  preUpdateValue: unknown,
+  codexRuntimeModels: Set<string>,
+): unknown {
+  const preUpdateEntries = normalizeAgentModelEntryMapForUpdateIntent(
+    preUpdateValue,
+    codexRuntimeModels,
+  );
+  if (!preUpdateEntries) {
+    return currentValue === undefined ? undefined : structuredClone(currentValue);
+  }
+  const currentEntries = isRecord(currentValue) ? structuredClone(currentValue) : {};
+  for (const [modelRef, preUpdateEntry] of Object.entries(preUpdateEntries)) {
+    const currentEntry = isRecord(currentEntries[modelRef])
+      ? structuredClone(currentEntries[modelRef])
+      : {};
+    currentEntries[modelRef] = isRecord(preUpdateEntry)
+      ? { ...currentEntry, ...structuredClone(preUpdateEntry) }
+      : preUpdateEntry;
+  }
+  return currentEntries;
+}
+
+function applyCodexRuntimeModels(
+  target: Record<string, unknown>,
+  codexRuntimeModels: ReadonlySet<string>,
+) {
+  if (codexRuntimeModels.size === 0) {
+    return;
+  }
+  const models = isRecord(target.models) ? structuredClone(target.models) : {};
+  for (const modelRef of [...codexRuntimeModels].toSorted()) {
+    const entry = isRecord(models[modelRef]) ? structuredClone(models[modelRef]) : {};
+    const runtime = isRecord(entry.agentRuntime) ? structuredClone(entry.agentRuntime) : {};
+    entry.agentRuntime = {
+      ...runtime,
+      id: "codex",
+    };
+    models[modelRef] = entry;
+  }
+  target.models = models;
+}
+
+function restorePreUpdateAgentModelIntent(
+  config: OpenClawConfig,
+  preUpdateSourceConfig: OpenClawConfig,
+  preUpdateAuthoredConfig: OpenClawConfig,
+) {
+  const preUpdateAgents = isRecord(preUpdateSourceConfig.agents)
+    ? preUpdateSourceConfig.agents
+    : undefined;
+  if (!preUpdateAgents) {
+    return { config, changed: false };
+  }
+  const preUpdateAuthoredAgents = isRecord(preUpdateAuthoredConfig.agents)
+    ? preUpdateAuthoredConfig.agents
+    : undefined;
+  const topLevelAuthoredAgentsInclude = isSingleTopLevelInclude(preUpdateAuthoredAgents);
+
+  const nextConfig = structuredClone(config);
+  const currentAgents: Record<string, unknown> = isRecord(nextConfig.agents)
+    ? structuredClone(nextConfig.agents)
+    : {};
+  const originalAgents = structuredClone(currentAgents);
+  let authoredAgents: Record<string, unknown> | undefined;
+  const ensureAuthoredAgents = () => {
+    authoredAgents ??= {};
+    return authoredAgents;
+  };
+
+  const preUpdateDefaults = isRecord(preUpdateAgents.defaults)
+    ? preUpdateAgents.defaults
+    : undefined;
+  if (
+    preUpdateDefaults &&
+    !topLevelAuthoredAgentsInclude &&
+    !hasAnyInclude(preUpdateAuthoredAgents?.defaults)
+  ) {
+    const defaults = isRecord(currentAgents.defaults)
+      ? structuredClone(currentAgents.defaults)
+      : {};
+    const codexRuntimeModels = new Set<string>();
+    if (preUpdateDefaults.model !== undefined) {
+      defaults.model = normalizeAgentModelConfigForUpdateIntent(
+        preUpdateDefaults.model,
+        codexRuntimeModels,
+      );
+    }
+    const restoredDefaultModels = mergeAgentModelEntryMaps(
+      defaults.models,
+      preUpdateDefaults.models,
+      codexRuntimeModels,
+    );
+    if (restoredDefaultModels !== undefined) {
+      defaults.models = restoredDefaultModels;
+    }
+    applyCodexRuntimeModels(defaults, codexRuntimeModels);
+    currentAgents.defaults = defaults;
+
+    const preUpdateAuthoredDefaults = isRecord(preUpdateAuthoredAgents?.defaults)
+      ? preUpdateAuthoredAgents.defaults
+      : preUpdateDefaults;
+    const authoredDefaults = structuredClone(defaults);
+    const authoredCodexRuntimeModels = new Set<string>();
+    if (preUpdateAuthoredDefaults.model !== undefined) {
+      authoredDefaults.model = normalizeAgentModelConfigForUpdateIntent(
+        preUpdateAuthoredDefaults.model,
+        authoredCodexRuntimeModels,
+      );
+    }
+    const restoredAuthoredDefaultModels = mergeAgentModelEntryMaps(
+      authoredDefaults.models,
+      preUpdateAuthoredDefaults.models,
+      authoredCodexRuntimeModels,
+    );
+    if (restoredAuthoredDefaultModels !== undefined) {
+      authoredDefaults.models = restoredAuthoredDefaultModels;
+    }
+    applyCodexRuntimeModels(authoredDefaults, authoredCodexRuntimeModels);
+    ensureAuthoredAgents().defaults = authoredDefaults;
+  }
+
+  if (
+    Array.isArray(preUpdateAgents.list) &&
+    !topLevelAuthoredAgentsInclude &&
+    !hasAnyInclude(preUpdateAuthoredAgents?.list)
+  ) {
+    const currentList = Array.isArray(currentAgents.list)
+      ? currentAgents.list.map((entry) => structuredClone(entry))
+      : [];
+    const byId = new Map<string, Record<string, unknown>>();
+    for (const entry of currentList) {
+      if (isRecord(entry) && typeof entry.id === "string") {
+        byId.set(entry.id, entry);
+      }
+    }
+    for (const preUpdateEntry of preUpdateAgents.list) {
+      if (!isRecord(preUpdateEntry) || typeof preUpdateEntry.id !== "string") {
+        continue;
+      }
+      const codexRuntimeModels = new Set<string>();
+      let currentEntry = byId.get(preUpdateEntry.id);
+      if (!currentEntry) {
+        currentEntry = { id: preUpdateEntry.id };
+        currentList.push(currentEntry);
+        byId.set(preUpdateEntry.id, currentEntry);
+      }
+      if (preUpdateEntry.model !== undefined) {
+        currentEntry.model = normalizeAgentModelConfigForUpdateIntent(
+          preUpdateEntry.model,
+          codexRuntimeModels,
+        );
+      }
+      const restoredAgentModels = mergeAgentModelEntryMaps(
+        currentEntry.models,
+        preUpdateEntry.models,
+        codexRuntimeModels,
+      );
+      if (restoredAgentModels !== undefined) {
+        currentEntry.models = restoredAgentModels;
+      }
+      applyCodexRuntimeModels(currentEntry, codexRuntimeModels);
+    }
+    currentAgents.list = currentList;
+
+    const authoredList = currentList.map((entry) => structuredClone(entry));
+    const authoredById = new Map<string, Record<string, unknown>>();
+    for (const entry of authoredList) {
+      if (isRecord(entry) && typeof entry.id === "string") {
+        authoredById.set(entry.id, entry);
+      }
+    }
+    const preUpdateAuthoredList = Array.isArray(preUpdateAuthoredAgents?.list)
+      ? preUpdateAuthoredAgents.list
+      : preUpdateAgents.list;
+    for (const preUpdateAuthoredEntry of preUpdateAuthoredList) {
+      if (!isRecord(preUpdateAuthoredEntry) || typeof preUpdateAuthoredEntry.id !== "string") {
+        continue;
+      }
+      const codexRuntimeModels = new Set<string>();
+      let authoredEntry = authoredById.get(preUpdateAuthoredEntry.id);
+      if (!authoredEntry) {
+        authoredEntry = { id: preUpdateAuthoredEntry.id };
+        authoredList.push(authoredEntry);
+        authoredById.set(preUpdateAuthoredEntry.id, authoredEntry);
+      }
+      if (preUpdateAuthoredEntry.model !== undefined) {
+        authoredEntry.model = normalizeAgentModelConfigForUpdateIntent(
+          preUpdateAuthoredEntry.model,
+          codexRuntimeModels,
+        );
+      }
+      const restoredAgentModels = mergeAgentModelEntryMaps(
+        authoredEntry.models,
+        preUpdateAuthoredEntry.models,
+        codexRuntimeModels,
+      );
+      if (restoredAgentModels !== undefined) {
+        authoredEntry.models = restoredAgentModels;
+      }
+      applyCodexRuntimeModels(authoredEntry, codexRuntimeModels);
+    }
+    ensureAuthoredAgents().list = authoredList;
+  }
+
+  if (isDeepStrictEqual(originalAgents, currentAgents)) {
+    return {
+      config,
+      changed: false,
+      ...(authoredAgents !== undefined ? { authoredAgents } : {}),
+    };
+  }
+  nextConfig.agents = currentAgents as OpenClawConfig["agents"];
+  return {
+    config: nextConfig,
+    changed: true,
+    ...(authoredAgents !== undefined ? { authoredAgents } : {}),
+  };
+}
+
+function mergeUserConfigRecords(
+  current: Record<string, unknown>,
+  preUpdate: Record<string, unknown>,
+) {
+  const merged = structuredClone(current);
+  for (const [key, preUpdateValue] of Object.entries(preUpdate)) {
+    const currentValue = merged[key];
+    merged[key] =
+      isRecord(currentValue) && isRecord(preUpdateValue)
+        ? mergeUserConfigRecords(currentValue, preUpdateValue)
+        : structuredClone(preUpdateValue);
+  }
+  return merged;
+}
+
+function mergeAuthoredPluginEntryForWrite(currentValue: unknown, authoredValue: unknown): unknown {
+  if (!isRecord(authoredValue)) {
+    return structuredClone(authoredValue);
+  }
+  if (!isRecord(currentValue)) {
+    return structuredClone(authoredValue);
+  }
+  const merged = mergeUserConfigRecords(currentValue, authoredValue);
+  if (currentValue.enabled === false && authoredValue.enabled !== false) {
+    merged.enabled = false;
+  }
+  return merged;
+}
+
+function mergeIncludedAuthoredSubpathsForWrite(
+  currentValue: unknown,
+  authoredValue: unknown,
+): unknown {
+  if (!isRecord(authoredValue)) {
+    return structuredClone(currentValue);
+  }
+  if (Object.prototype.hasOwnProperty.call(authoredValue, "$include")) {
+    return structuredClone(authoredValue);
+  }
+  const merged = isRecord(currentValue) ? structuredClone(currentValue) : {};
+  for (const [key, authoredEntry] of Object.entries(authoredValue)) {
+    if (hasAnyInclude(authoredEntry)) {
+      merged[key] = mergeIncludedAuthoredSubpathsForWrite(merged[key], authoredEntry);
+    }
+  }
+  return merged;
+}
+
+function mergeRestoredAuthoredAgentsForWrite(
+  currentAgentsValue: unknown,
+  authoredAgentsValue: unknown,
+): OpenClawConfig["agents"] {
+  if (!isRecord(authoredAgentsValue)) {
+    return structuredClone(authoredAgentsValue) as OpenClawConfig["agents"];
+  }
+  const currentAgents = isRecord(currentAgentsValue) ? structuredClone(currentAgentsValue) : {};
+  return mergeUserConfigRecords(currentAgents, authoredAgentsValue) as OpenClawConfig["agents"];
+}
+
+function mergeRestoredAuthoredPluginsForWrite(
+  currentPluginsValue: unknown,
+  authoredPluginsValue: unknown,
+): OpenClawConfig["plugins"] {
+  if (!isRecord(authoredPluginsValue)) {
+    return structuredClone(authoredPluginsValue) as OpenClawConfig["plugins"];
+  }
+  const currentPlugins = isRecord(currentPluginsValue) ? structuredClone(currentPluginsValue) : {};
+  const authoredPlugins = structuredClone(authoredPluginsValue);
+  const mergedPlugins = mergeIncludedAuthoredSubpathsForWrite(
+    currentPlugins,
+    authoredPlugins,
+  ) as Record<string, unknown>;
+  if (!isRecord(currentPlugins.entries) || !isRecord(authoredPlugins.entries)) {
+    return mergedPlugins as OpenClawConfig["plugins"];
+  }
+
+  const currentEntries = currentPlugins.entries;
+  const authoredEntries = authoredPlugins.entries;
+  if (Object.prototype.hasOwnProperty.call(authoredEntries, "$include")) {
+    const entries = isRecord(mergedPlugins.entries)
+      ? structuredClone(mergedPlugins.entries)
+      : structuredClone(authoredEntries);
+    for (const [pluginId, currentEntry] of Object.entries(currentEntries)) {
+      if (
+        pluginId === "$include" ||
+        !isRecord(currentEntry) ||
+        Object.prototype.hasOwnProperty.call(entries, pluginId)
+      ) {
+        continue;
+      }
+      if (currentEntry.enabled === false) {
+        entries[pluginId] = { enabled: false };
+      }
+    }
+    mergedPlugins.entries = entries;
+    return mergedPlugins as OpenClawConfig["plugins"];
+  }
+
+  const entries = structuredClone(currentEntries);
+  const authoredPluginsHasNestedInclude = hasNestedInclude(authoredPlugins);
+  for (const [pluginId, authoredEntry] of Object.entries(authoredEntries)) {
+    if (pluginId === "$include") {
+      entries[pluginId] = structuredClone(authoredEntry);
+      continue;
+    }
+    if (authoredPluginsHasNestedInclude && !hasAnyInclude(authoredEntry)) {
+      continue;
+    }
+    entries[pluginId] = mergeAuthoredPluginEntryForWrite(currentEntries[pluginId], authoredEntry);
+  }
+
+  mergedPlugins.entries = entries;
+  return mergedPlugins as OpenClawConfig["plugins"];
+}
+
+function restorePreUpdatePluginEntryIntent(
+  config: OpenClawConfig,
+  preUpdateSourceConfig: OpenClawConfig,
+  preUpdateAuthoredConfig: OpenClawConfig,
+) {
+  const preUpdateSourcePlugins = isRecord(preUpdateSourceConfig.plugins)
+    ? preUpdateSourceConfig.plugins
+    : undefined;
+  const preUpdateSourceEntries = isRecord(preUpdateSourcePlugins?.entries)
+    ? preUpdateSourcePlugins.entries
+    : undefined;
+  if (!preUpdateSourceEntries) {
+    return { config, changed: false };
+  }
+  const preUpdateAuthoredPlugins = isRecord(preUpdateAuthoredConfig.plugins)
+    ? preUpdateAuthoredConfig.plugins
+    : undefined;
+  const preUpdateAuthoredEntriesIncludeOwned = hasAnyInclude(preUpdateAuthoredPlugins?.entries);
+  const preUpdateAuthoredEntries =
+    !preUpdateAuthoredEntriesIncludeOwned && isRecord(preUpdateAuthoredPlugins?.entries)
+      ? preUpdateAuthoredPlugins.entries
+      : undefined;
+
+  const nextConfig = structuredClone(config);
+  const currentPlugins = isRecord(nextConfig.plugins) ? structuredClone(nextConfig.plugins) : {};
+  const currentEntries = isRecord(currentPlugins.entries)
+    ? structuredClone(currentPlugins.entries)
+    : {};
+  const originalEntries = structuredClone(currentEntries);
+  const authoredEntries = preUpdateAuthoredEntries ? structuredClone(currentEntries) : undefined;
+  let restoredEntry = false;
+
+  for (const [pluginId, preUpdateSourceEntry] of Object.entries(preUpdateSourceEntries)) {
+    if (preUpdateAuthoredEntriesIncludeOwned) {
+      continue;
+    }
+    if (!isRecord(preUpdateSourceEntry)) {
+      continue;
+    }
+    if (!isRecord(currentEntries[pluginId])) {
+      continue;
+    }
+    const currentEntry = structuredClone(currentEntries[pluginId]);
+    if (currentEntry.enabled === false && preUpdateSourceEntry.enabled !== false) {
+      continue;
+    }
+    const preUpdateAuthoredEntry = preUpdateAuthoredEntries?.[pluginId];
+    if (hasAnyInclude(preUpdateAuthoredEntry)) {
+      continue;
+    }
+    restoredEntry = true;
+    currentEntries[pluginId] = mergeUserConfigRecords(currentEntry, preUpdateSourceEntry);
+    if (authoredEntries && isRecord(preUpdateAuthoredEntry)) {
+      authoredEntries[pluginId] = mergeUserConfigRecords(currentEntry, preUpdateAuthoredEntry);
+    }
+  }
+
+  if (!restoredEntry) {
+    return { config, changed: false };
+  }
+  const changed = !isDeepStrictEqual(originalEntries, currentEntries);
+  if (changed) {
+    currentPlugins.entries = currentEntries;
+    nextConfig.plugins = currentPlugins as OpenClawConfig["plugins"];
+  }
+  if (authoredEntries) {
+    return {
+      config: changed ? nextConfig : config,
+      changed,
+      authoredPlugins: {
+        ...currentPlugins,
+        entries: authoredEntries,
+      },
+    };
+  }
+  return { config: changed ? nextConfig : config, changed };
+}
+
 function restorePreUpdateChannelModelOverrides(params: {
   channels: Record<string, unknown>;
   preUpdateChannels: Record<string, unknown>;
@@ -305,83 +864,156 @@ function restorePreUpdateChannelModelOverrides(params: {
     : { channels: params.channels, changed: false };
 }
 
-function restoreDroppedPreUpdateChannels(
+function applyPreUpdateConfigIntent(params: {
+  config: OpenClawConfig;
+  currentAuthoredConfig: OpenClawConfig;
+  preUpdateConfig: PreUpdateConfigRestoreInput;
+}): {
+  config: OpenClawConfig;
+  changed: boolean;
+  authoredChannels?: unknown;
+  authoredAgents?: unknown;
+  authoredPlugins?: unknown;
+} {
+  let nextConfig = params.config;
+  let changed = false;
+  let authoredChannels: unknown;
+  let authoredAgents: unknown;
+  let authoredPlugins: unknown;
+  const preUpdateChannels = normalizeChannelConfigMap(params.preUpdateConfig.sourceConfig.channels);
+  const postUpdateChannels = normalizeChannelConfigMap(nextConfig.channels) ?? {};
+  let restoredChannels = { ...postUpdateChannels };
+  const restoredChannelIds: string[] = [];
+  let restored = false;
+  if (preUpdateChannels) {
+    for (const [channelId, channelConfig] of Object.entries(preUpdateChannels)) {
+      if (restoredChannels[channelId] !== undefined) {
+        continue;
+      }
+      restoredChannels[channelId] = structuredClone(channelConfig);
+      if (channelId !== "modelByChannel") {
+        restoredChannelIds.push(channelId);
+      }
+      restored = true;
+    }
+    if (restored) {
+      const restoredModelOverrides = restorePreUpdateChannelModelOverrides({
+        channels: restoredChannels,
+        preUpdateChannels,
+        restoredChannelIds,
+      });
+      restoredChannels = restoredModelOverrides.channels;
+
+      authoredChannels = resolveRestoredAuthoredChannels({
+        currentChannels: nextConfig.channels,
+        currentAuthoredChannels: params.currentAuthoredConfig.channels,
+        preUpdateAuthoredChannels: params.preUpdateConfig.authoredConfig.channels,
+        restoredChannelIds,
+      });
+      nextConfig = {
+        ...nextConfig,
+        channels: restoredChannels,
+      } as OpenClawConfig;
+      changed = true;
+    }
+  }
+
+  const restoredAgents = restorePreUpdateAgentModelIntent(
+    nextConfig,
+    params.preUpdateConfig.sourceConfig,
+    params.preUpdateConfig.authoredConfig,
+  );
+  nextConfig = restoredAgents.config;
+  changed ||= restoredAgents.changed;
+  authoredAgents = restoredAgents.authoredAgents;
+
+  const restoredPlugins = restorePreUpdatePluginEntryIntent(
+    nextConfig,
+    params.preUpdateConfig.sourceConfig,
+    params.preUpdateConfig.authoredConfig,
+  );
+  nextConfig = restoredPlugins.config;
+  changed ||= restoredPlugins.changed;
+  authoredPlugins = restoredPlugins.authoredPlugins;
+
+  return {
+    config: nextConfig,
+    changed,
+    ...(authoredChannels !== undefined ? { authoredChannels } : {}),
+    ...(authoredAgents !== undefined ? { authoredAgents } : {}),
+    ...(authoredPlugins !== undefined ? { authoredPlugins } : {}),
+  };
+}
+
+function hasPreUpdateAuthoredRestore(
+  restored: ReturnType<typeof applyPreUpdateConfigIntent>,
+): boolean {
+  return (
+    restored.authoredChannels !== undefined ||
+    restored.authoredAgents !== undefined ||
+    restored.authoredPlugins !== undefined
+  );
+}
+
+function restorePreUpdateConfigIntent(
   snapshot: Awaited<ReturnType<typeof readConfigFileSnapshot>>,
   preUpdateConfig: PreUpdateConfigRestoreInput | undefined,
 ): {
   snapshot: Awaited<ReturnType<typeof readConfigFileSnapshot>>;
   changed: boolean;
   authoredChannels?: unknown;
+  authoredAgents?: unknown;
+  authoredPlugins?: unknown;
+  preUpdateConfig?: PreUpdateConfigRestoreInput | undefined;
 } {
   if (!snapshot.valid || !preUpdateConfig) {
     return { snapshot, changed: false };
   }
-  const preUpdateChannels = normalizeChannelConfigMap(preUpdateConfig.sourceConfig.channels);
-  if (!preUpdateChannels) {
+  const restored = applyPreUpdateConfigIntent({
+    config: snapshot.sourceConfig,
+    currentAuthoredConfig: isRecord(snapshot.parsed)
+      ? (snapshot.parsed as OpenClawConfig)
+      : snapshot.sourceConfig,
+    preUpdateConfig,
+  });
+  const hasAuthoredRestore = hasPreUpdateAuthoredRestore(restored);
+  if (!restored.changed && !hasAuthoredRestore) {
     return { snapshot, changed: false };
   }
-
-  const postUpdateChannels = normalizeChannelConfigMap(snapshot.sourceConfig.channels) ?? {};
-  let restoredChannels = { ...postUpdateChannels };
-  const restoredChannelIds: string[] = [];
-  let restored = false;
-  for (const [channelId, channelConfig] of Object.entries(preUpdateChannels)) {
-    if (restoredChannels[channelId] !== undefined) {
-      continue;
-    }
-    restoredChannels[channelId] = structuredClone(channelConfig);
-    if (channelId !== "modelByChannel") {
-      restoredChannelIds.push(channelId);
-    }
-    restored = true;
-  }
-  if (!restored) {
-    return { snapshot, changed: false };
-  }
-  const restoredModelOverrides = restorePreUpdateChannelModelOverrides({
-    channels: restoredChannels,
-    preUpdateChannels,
-    restoredChannelIds,
-  });
-  restoredChannels = restoredModelOverrides.channels;
-
-  const authoredChannels = resolveRestoredAuthoredChannels({
-    currentChannels: snapshot.sourceConfig.channels,
-    currentAuthoredChannels: isRecord(snapshot.parsed)
-      ? (snapshot.parsed as OpenClawConfig).channels
-      : snapshot.sourceConfig.channels,
-    preUpdateAuthoredChannels: preUpdateConfig.authoredConfig.channels,
-    restoredChannelIds,
-  });
-  const nextConfig = {
-    ...snapshot.sourceConfig,
-    channels: restoredChannels,
-  } as OpenClawConfig;
   return {
-    snapshot: {
-      ...createUpdatedConfigSnapshot(snapshot, nextConfig),
-      hash: snapshot.hash,
-    },
-    changed: true,
-    ...(authoredChannels !== undefined ? { authoredChannels } : {}),
+    snapshot: restored.changed
+      ? {
+          ...createUpdatedConfigSnapshot(snapshot, restored.config),
+          hash: snapshot.hash,
+        }
+      : snapshot,
+    changed: restored.changed,
+    preUpdateConfig,
+    ...(restored.authoredChannels !== undefined
+      ? { authoredChannels: restored.authoredChannels }
+      : {}),
+    ...(restored.authoredAgents !== undefined ? { authoredAgents: restored.authoredAgents } : {}),
+    ...(restored.authoredPlugins !== undefined
+      ? { authoredPlugins: restored.authoredPlugins }
+      : {}),
   };
 }
 
-function hasRestorablePreUpdateChannels(
+function hasRestorablePreUpdateConfigIntent(
   snapshot: Awaited<ReturnType<typeof readConfigFileSnapshot>>,
   preUpdateConfig: PreUpdateConfigRestoreInput,
 ): boolean {
   if (!snapshot.valid) {
     return false;
   }
-  const preUpdateChannels = normalizeChannelConfigMap(preUpdateConfig.sourceConfig.channels);
-  if (!preUpdateChannels) {
-    return false;
-  }
-  const postUpdateChannels = normalizeChannelConfigMap(snapshot.sourceConfig.channels) ?? {};
-  return Object.keys(preUpdateChannels).some(
-    (channelId) => postUpdateChannels[channelId] === undefined,
-  );
+  const restored = applyPreUpdateConfigIntent({
+    config: snapshot.sourceConfig,
+    currentAuthoredConfig: isRecord(snapshot.parsed)
+      ? (snapshot.parsed as OpenClawConfig)
+      : snapshot.sourceConfig,
+    preUpdateConfig,
+  });
+  return restored.changed || hasPreUpdateAuthoredRestore(restored);
 }
 
 function resolveRestoredAuthoredChannels(params: {
@@ -1557,8 +2189,12 @@ export async function updatePluginsAfterCoreUpdate(params: {
   root: string;
   channel: "stable" | "beta" | "dev";
   configSnapshot: Awaited<ReturnType<typeof readConfigFileSnapshot>>;
+  writeBaseConfigSnapshot?: Awaited<ReturnType<typeof readConfigFileSnapshot>>;
   configChanged?: boolean;
   restoredAuthoredChannels?: unknown;
+  restoredAuthoredAgents?: unknown;
+  restoredAuthoredPlugins?: unknown;
+  preUpdateConfig?: PreUpdateConfigRestoreInput | undefined;
   opts: UpdateCommandOptions;
   timeoutMs: number;
   pluginInstallRecords?: Record<string, PluginInstallRecord>;
@@ -1777,20 +2413,76 @@ export async function updatePluginsAfterCoreUpdate(params: {
   if (pluginsChanged) {
     const nextInstallRecords = pluginConfig.plugins?.installs ?? {};
     let nextConfig = withoutPluginInstallRecords(pluginConfig);
+    let restoredAuthoredAgents = params.restoredAuthoredAgents;
+    let restoredAuthoredPlugins = params.restoredAuthoredPlugins;
+    if (params.preUpdateConfig) {
+      const restored = applyPreUpdateConfigIntent({
+        config: nextConfig,
+        currentAuthoredConfig: nextConfig,
+        preUpdateConfig: params.preUpdateConfig,
+      });
+      nextConfig = restored.config;
+      if (restored.authoredAgents !== undefined) {
+        restoredAuthoredAgents = restored.authoredAgents;
+      }
+      restoredAuthoredPlugins = restored.authoredPlugins;
+    }
+    const registryConfig = nextConfig;
     if (params.restoredAuthoredChannels !== undefined) {
       nextConfig = {
         ...nextConfig,
         channels: structuredClone(params.restoredAuthoredChannels) as OpenClawConfig["channels"],
       };
     }
-    await commitPluginInstallRecordsWithConfig({
-      previousInstallRecords: pluginInstallRecords,
-      nextInstallRecords,
-      nextConfig,
-      baseHash: params.configSnapshot.hash,
-    });
+    if (restoredAuthoredAgents !== undefined) {
+      nextConfig = {
+        ...nextConfig,
+        agents: mergeRestoredAuthoredAgentsForWrite(nextConfig.agents, restoredAuthoredAgents),
+      };
+    }
+    const writeBaseConfigSnapshot = params.writeBaseConfigSnapshot ?? params.configSnapshot;
+    const pluginOnlyConfig = {
+      ...writeBaseConfigSnapshot.sourceConfig,
+      plugins: structuredClone(registryConfig.plugins),
+    } as OpenClawConfig;
+    if (restoredAuthoredPlugins !== undefined) {
+      nextConfig = {
+        ...nextConfig,
+        plugins: mergeRestoredAuthoredPluginsForWrite(nextConfig.plugins, restoredAuthoredPlugins),
+      };
+    }
+    if (
+      shouldSplitTopLevelPluginIncludeWrite({
+        snapshot: writeBaseConfigSnapshot,
+        preUpdateAuthoredConfig: params.preUpdateConfig?.authoredConfig,
+        hasPendingNonPluginConfigChange: params.configChanged === true,
+        pluginOnlyConfig,
+        finalConfig: nextConfig,
+      })
+    ) {
+      const pluginWriteResult = await commitPluginInstallRecordsWithConfig({
+        previousInstallRecords: pluginInstallRecords,
+        nextInstallRecords,
+        nextConfig: pluginOnlyConfig,
+        baseHash: writeBaseConfigSnapshot.hash,
+      });
+      if (!pluginWriteResult?.persistedHash) {
+        throw new Error("Plugin include update did not return a persisted config hash.");
+      }
+      await replaceConfigFile({
+        nextConfig,
+        baseHash: pluginWriteResult.persistedHash,
+      });
+    } else {
+      await commitPluginInstallRecordsWithConfig({
+        previousInstallRecords: pluginInstallRecords,
+        nextInstallRecords,
+        nextConfig,
+        baseHash: params.configSnapshot.hash,
+      });
+    }
     await refreshPluginRegistryAfterConfigMutation({
-      config: nextConfig,
+      config: registryConfig,
       reason: "source-changed",
       workspaceDir: params.root,
       installRecords: nextInstallRecords,
@@ -2159,8 +2851,12 @@ async function runPostCorePluginUpdate(params: {
   root: string;
   channel: "stable" | "beta" | "dev";
   configSnapshot: Awaited<ReturnType<typeof readConfigFileSnapshot>>;
+  writeBaseConfigSnapshot?: Awaited<ReturnType<typeof readConfigFileSnapshot>>;
   configChanged?: boolean;
   restoredAuthoredChannels?: unknown;
+  restoredAuthoredAgents?: unknown;
+  restoredAuthoredPlugins?: unknown;
+  preUpdateConfig?: PreUpdateConfigRestoreInput | undefined;
   opts: UpdateCommandOptions;
   timeoutMs: number;
   pluginInstallRecords?: Record<string, PluginInstallRecord>;
@@ -2169,8 +2865,12 @@ async function runPostCorePluginUpdate(params: {
     root: params.root,
     channel: params.channel,
     configSnapshot: params.configSnapshot,
+    writeBaseConfigSnapshot: params.writeBaseConfigSnapshot,
     configChanged: params.configChanged,
     restoredAuthoredChannels: params.restoredAuthoredChannels,
+    restoredAuthoredAgents: params.restoredAuthoredAgents,
+    restoredAuthoredPlugins: params.restoredAuthoredPlugins,
+    ...(params.preUpdateConfig ? { preUpdateConfig: params.preUpdateConfig } : {}),
     opts: params.opts,
     timeoutMs: params.timeoutMs,
     pluginInstallRecords: params.pluginInstallRecords,
@@ -2270,7 +2970,8 @@ export async function updateFinalizeCommand(opts: UpdateFinalizeOptions): Promis
         requestedChannel,
       });
     }
-    const restoredConfig = restoreDroppedPreUpdateChannels(configSnapshot, preFinalizeConfig);
+    const writeBaseConfigSnapshot = configSnapshot;
+    const restoredConfig = restorePreUpdateConfigIntent(configSnapshot, preFinalizeConfig);
     configSnapshot = restoredConfig.snapshot;
     const postDoctorStoredChannel = configSnapshot.valid
       ? normalizeUpdateChannel(configSnapshot.config.update?.channel)
@@ -2282,8 +2983,12 @@ export async function updateFinalizeCommand(opts: UpdateFinalizeOptions): Promis
       root,
       channel: postDoctorChannel,
       configSnapshot,
+      writeBaseConfigSnapshot,
       configChanged: restoredConfig.changed,
       restoredAuthoredChannels: restoredConfig.authoredChannels,
+      restoredAuthoredAgents: restoredConfig.authoredAgents,
+      restoredAuthoredPlugins: restoredConfig.authoredPlugins,
+      preUpdateConfig: restoredConfig.preUpdateConfig,
       opts: {
         json: opts.json,
         timeout: opts.timeout,
@@ -2572,7 +3277,7 @@ async function readPostCorePreUpdateSourceConfig(params: {
     });
     if (
       preUpdateConfig &&
-      hasRestorablePreUpdateChannels(params.currentSnapshot, preUpdateConfig)
+      hasRestorablePreUpdateConfigIntent(params.currentSnapshot, preUpdateConfig)
     ) {
       return preUpdateConfig;
     }
@@ -2592,7 +3297,7 @@ async function readPostCorePreUpdateSourceConfig(params: {
     });
     if (
       preUpdateConfig &&
-      hasRestorablePreUpdateChannels(params.currentSnapshot, preUpdateConfig)
+      hasRestorablePreUpdateConfigIntent(params.currentSnapshot, preUpdateConfig)
     ) {
       return preUpdateConfig;
     }
@@ -2662,7 +3367,7 @@ async function continuePostCoreUpdateInFreshProcess(params: {
   requestedChannel: "stable" | "beta" | "dev" | null;
   opts: UpdateCommandOptions;
   pluginInstallRecords: Record<string, PluginInstallRecord>;
-  preUpdateConfig?: PreUpdateConfigRestoreInput;
+  preUpdateConfig?: PreUpdateConfigRestoreInput | undefined;
   updateStartedAtMs: number;
   nodeRunner?: string;
 }): Promise<{ resumed: boolean; pluginUpdate?: PostCorePluginUpdateResult }> {
@@ -2908,7 +3613,8 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
       configSnapshot: postCoreConfigSnapshot,
       requestedChannel: postCoreRequestedChannel,
     });
-    const restoredPostCoreConfig = restoreDroppedPreUpdateChannels(
+    const writeBasePostCoreConfigSnapshot = postCoreConfigSnapshot;
+    const restoredPostCoreConfig = restorePreUpdateConfigIntent(
       postCoreConfigSnapshot,
       preUpdateSourceConfig,
     );
@@ -2926,8 +3632,12 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
       root,
       channel: postCoreUpdateChannel,
       configSnapshot: restoredPostCoreConfig.snapshot,
+      writeBaseConfigSnapshot: writeBasePostCoreConfigSnapshot,
       configChanged: restoredPostCoreConfig.changed,
       restoredAuthoredChannels: restoredPostCoreConfig.authoredChannels,
+      restoredAuthoredAgents: restoredPostCoreConfig.authoredAgents,
+      restoredAuthoredPlugins: restoredPostCoreConfig.authoredPlugins,
+      preUpdateConfig: restoredPostCoreConfig.preUpdateConfig,
       opts,
       timeoutMs: updateStepTimeoutMs,
       pluginInstallRecords,
@@ -3428,7 +4138,8 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
         requestedChannel,
       });
     }
-    const restoredConfig = restoreDroppedPreUpdateChannels(
+    const writeBasePostUpdateConfigSnapshot = postUpdateConfigSnapshot;
+    const restoredConfig = restorePreUpdateConfigIntent(
       postUpdateConfigSnapshot,
       configSnapshot.valid
         ? {
@@ -3444,8 +4155,12 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
       root: postUpdateRoot,
       channel,
       configSnapshot: postUpdateConfigSnapshot,
+      writeBaseConfigSnapshot: writeBasePostUpdateConfigSnapshot,
       configChanged: restoredConfig.changed,
       restoredAuthoredChannels: restoredConfig.authoredChannels,
+      restoredAuthoredAgents: restoredConfig.authoredAgents,
+      restoredAuthoredPlugins: restoredConfig.authoredPlugins,
+      preUpdateConfig: restoredConfig.preUpdateConfig,
       opts,
       timeoutMs: updateStepTimeoutMs,
       pluginInstallRecords: preUpdatePluginInstallRecords,

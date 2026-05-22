@@ -47,6 +47,7 @@ Docs: https://docs.openclaw.ai
 - Diffs: render viewer toolbar icons from a closed icon-name map instead of HTML strings, removing the toolbar icon XSS sink. (#83955) Thanks @tanshanshan.
 - QA: keep `pnpm qa:e2e` self-check runs inside the private QA runtime envelope even when inherited shell env disables bundled plugins.
 - fix(config): validate browser sandbox bind sources [AI]. (#84799) Thanks @pgondhi987.
+- CLI/update: preserve authored agent model and plugin entry config across updates so customized Codex routing, fallbacks, and plugin settings are not replaced by dist defaults. Fixes #85080. (#85183) Thanks @joshavant.
 - doctor: constrain legacy plugin cleanup paths [AI]. (#84801) Thanks @pgondhi987.
 - Update/doctor: prune stale local bundled plugin install records that point at old compiled bundled output so current bundled plugin schemas win after upgrade. (#84863) Thanks @fuller-stack-dev.
 - Providers/Ollama: preserve native Ollama tool-call IDs across assistant replay so Gemini over Ollama Cloud can keep its hidden function-call thought-signature handle.

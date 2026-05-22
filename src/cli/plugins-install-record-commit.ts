@@ -90,8 +90,8 @@ export async function commitPluginInstallRecordsWithConfig(params: {
   nextConfig: OpenClawConfig;
   baseHash?: string;
   writeOptions?: ConfigWriteOptions;
-}): Promise<void> {
-  await commitPluginInstallRecordsWithWriter({
+}): Promise<ConfigReplaceResult | void> {
+  return await commitPluginInstallRecordsWithWriter({
     ...params,
     commit: async (nextConfig, writeOptions) => {
       return await replaceConfigFile({

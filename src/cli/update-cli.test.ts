@@ -40,6 +40,7 @@ const probeGateway = vi.fn();
 const pathExists = vi.fn();
 const syncPluginsForUpdateChannel = vi.fn();
 const updateNpmInstalledPlugins = vi.fn();
+const refreshPluginRegistryAfterConfigMutation = vi.fn(async (_params?: unknown) => undefined);
 const loadInstalledPluginIndexInstallRecords = vi.fn(
   async (params: { config?: OpenClawConfig } = {}) => params.config?.plugins?.installs ?? {},
 );
@@ -219,6 +220,11 @@ vi.mock("../plugins/installed-plugin-index-records.js", async (importOriginal) =
     writePersistedInstalledPluginIndexInstallRecords: vi.fn(async () => undefined),
   };
 });
+
+vi.mock("./plugins-registry-refresh.js", () => ({
+  refreshPluginRegistryAfterConfigMutation: (params: unknown) =>
+    refreshPluginRegistryAfterConfigMutation(params),
+}));
 
 vi.mock("../daemon/service.js", () => ({
   readGatewayServiceState: async () => {
@@ -438,6 +444,12 @@ describe("update-cli", () => {
     >;
     return calls[index]?.[0];
   };
+  const lastPluginRegistryRefreshCall = () => {
+    const calls = refreshPluginRegistryAfterConfigMutation.mock.calls as unknown as Array<
+      [{ config?: OpenClawConfig }]
+    >;
+    return calls[calls.length - 1]?.[0];
+  };
 
   const npmPluginUpdateCall = (index = 0) => {
     const calls = updateNpmInstalledPlugins.mock.calls as unknown as Array<
@@ -601,6 +613,19 @@ describe("update-cli", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     resetRuntimeCapture();
+    let replaceConfigHashCounter = 0;
+    vi.mocked(replaceConfigFile).mockImplementation(async (params) => {
+      replaceConfigHashCounter += 1;
+      return {
+        path: baseSnapshot.path,
+        previousHash: params.baseHash ?? null,
+        snapshot: baseSnapshot,
+        nextConfig: params.nextConfig,
+        persistedHash: `replace-config-hash-${replaceConfigHashCounter}`,
+        afterWrite: { mode: "none", reason: "test" },
+        followUp: { mode: "none", reason: "test", requiresRestart: false },
+      };
+    });
     spawn.mockImplementation(() => {
       const child = new EventEmitter() as EventEmitter & {
         once: EventEmitter["once"];
@@ -4172,6 +4197,1337 @@ describe("update-cli", () => {
       | undefined;
     expect(syncConfig?.channels?.whatsapp?.token).toBe("resolved-secret");
     expect(lastWrite?.nextConfig?.channels?.whatsapp?.token).toBe("${WHATSAPP_TOKEN}");
+  });
+
+  it("preserves pre-update agent model routing and plugin entry config across post-core doctor rewrites", async () => {
+    const tempDir = createCaseDir("openclaw-update");
+    const sourceConfigPath = path.join(tempDir, "source-config.json");
+    const preUpdateAuthoredConfig = {
+      update: { channel: "stable" },
+      agents: {
+        defaults: {
+          model: {
+            primary: "openai-codex/gpt-5.5",
+            timeoutMs: 30_000,
+            fallbacks: [
+              "openai-codex/gpt-5.4",
+              "claude-cli/claude-sonnet-4-6",
+              "openai-codex/gpt-5.4-mini",
+            ],
+          },
+          models: {
+            "openai-codex/gpt-5.5": {
+              params: { apiKey: "${CODEX_AGENT_TOKEN}" },
+            },
+          },
+        },
+        list: [
+          {
+            id: "cron",
+            model: {
+              primary: "openai-codex/gpt-5.4",
+              timeoutMs: 30_000,
+            },
+            models: {
+              "openai-codex/gpt-5.4": {
+                params: { apiKey: "${CRON_CODEX_TOKEN}" },
+              },
+            },
+          },
+        ],
+      },
+      plugins: {
+        entries: {
+          "lossless-claw": {
+            enabled: true,
+            config: {
+              summaryModel: "openai-codex/gpt-5.4-mini",
+              apiKey: "${LOSSLESS_TOKEN}",
+              keepLocal: true,
+            },
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+    const preUpdateSourceConfig = {
+      ...preUpdateAuthoredConfig,
+      agents: {
+        defaults: {
+          ...preUpdateAuthoredConfig.agents?.defaults,
+          models: {
+            "openai-codex/gpt-5.5": {
+              params: { apiKey: "resolved-codex-agent-token" },
+            },
+          },
+        },
+        list: [
+          {
+            id: "cron",
+            model: {
+              primary: "openai-codex/gpt-5.4",
+              timeoutMs: 30_000,
+            },
+            models: {
+              "openai-codex/gpt-5.4": {
+                params: { apiKey: "resolved-cron-codex-token" },
+              },
+            },
+          },
+        ],
+      },
+      plugins: {
+        entries: {
+          "lossless-claw": {
+            enabled: true,
+            config: {
+              summaryModel: "openai-codex/gpt-5.4-mini",
+              apiKey: "resolved-lossless-token",
+              keepLocal: true,
+            },
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+    const postDoctorConfig = {
+      update: { channel: "stable" },
+      agents: {
+        defaults: {
+          model: {
+            primary: "openai/gpt-5.5",
+            fallbacks: ["openai/gpt-5.4"],
+          },
+        },
+        list: [
+          {
+            id: "cron",
+            model: {
+              primary: "openai/gpt-5.5",
+            },
+          },
+        ],
+      },
+      plugins: {
+        entries: {
+          "lossless-claw": {
+            enabled: true,
+            config: {
+              summaryModel: "openai/gpt-5.4-mini",
+              apiKey: "dist-default",
+              distDefault: true,
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+    await fs.mkdir(tempDir, { recursive: true });
+    await fs.writeFile(
+      sourceConfigPath,
+      `${JSON.stringify({
+        sourceConfig: preUpdateSourceConfig,
+        authoredConfig: preUpdateAuthoredConfig,
+      })}\n`,
+      "utf-8",
+    );
+    vi.mocked(readConfigFileSnapshot).mockResolvedValue({
+      ...baseSnapshot,
+      sourceConfig: postDoctorConfig,
+      config: postDoctorConfig,
+      runtimeConfig: postDoctorConfig,
+      hash: "post-doctor-hash",
+    });
+    syncPluginsForUpdateChannel.mockImplementation(async ({ config }) => ({
+      changed: true,
+      config: {
+        ...config,
+        plugins: {
+          ...config.plugins,
+          load: { paths: ["/updated/plugin/path"] },
+          entries: {
+            ...config.plugins?.entries,
+            "lossless-claw": {
+              enabled: true,
+              config: {
+                summaryModel: "openai/gpt-5.4-mini",
+                apiKey: "dist-default",
+                distDefault: true,
+              },
+            },
+          },
+        },
+      },
+      summary: {
+        switchedToBundled: [],
+        switchedToNpm: [],
+        warnings: [],
+        errors: [],
+      },
+    }));
+    updateNpmInstalledPlugins.mockImplementation(async ({ config }) => ({
+      changed: false,
+      config,
+      outcomes: [],
+    }));
+
+    await withEnvAsync(
+      {
+        OPENCLAW_UPDATE_POST_CORE: "1",
+        OPENCLAW_UPDATE_POST_CORE_CHANNEL: "stable",
+        OPENCLAW_UPDATE_POST_CORE_SOURCE_CONFIG_PATH: sourceConfigPath,
+      },
+      async () => {
+        await updateCommand({ yes: true, restart: false });
+      },
+    );
+
+    const syncConfig = syncPluginCall()?.config;
+    const persistedConfig = lastReplaceConfigCall()?.nextConfig as OpenClawConfig | undefined;
+    for (const config of [syncConfig, persistedConfig]) {
+      expect(config?.agents?.defaults?.model).toEqual({
+        primary: "openai/gpt-5.5",
+        fallbacks: ["openai/gpt-5.4", "claude-cli/claude-sonnet-4-6", "openai/gpt-5.4-mini"],
+      });
+      expect(config?.agents?.defaults?.models?.["openai/gpt-5.5"]?.agentRuntime?.id).toBe("codex");
+      expect(config?.agents?.defaults?.models?.["openai/gpt-5.4"]?.agentRuntime?.id).toBe("codex");
+      expect(config?.agents?.defaults?.models?.["openai/gpt-5.4-mini"]?.agentRuntime?.id).toBe(
+        "codex",
+      );
+      expect(config?.agents?.list?.[0]?.model).toEqual({
+        primary: "openai/gpt-5.4",
+      });
+      expect(config?.agents?.list?.[0]?.models?.["openai/gpt-5.4"]?.agentRuntime?.id).toBe("codex");
+    }
+    expect(syncConfig?.plugins?.entries?.["lossless-claw"]?.config).toEqual({
+      summaryModel: "openai-codex/gpt-5.4-mini",
+      apiKey: "resolved-lossless-token",
+      distDefault: true,
+      keepLocal: true,
+    });
+    expect(syncConfig?.agents?.defaults?.models?.["openai/gpt-5.5"]?.params).toEqual({
+      apiKey: "resolved-codex-agent-token",
+    });
+    expect(syncConfig?.agents?.list?.[0]?.models?.["openai/gpt-5.4"]?.params).toEqual({
+      apiKey: "resolved-cron-codex-token",
+    });
+    expect(persistedConfig?.plugins?.entries?.["lossless-claw"]?.config).toEqual({
+      summaryModel: "openai-codex/gpt-5.4-mini",
+      apiKey: "${LOSSLESS_TOKEN}",
+      distDefault: true,
+      keepLocal: true,
+    });
+    expect(persistedConfig?.agents?.defaults?.models?.["openai/gpt-5.5"]?.params).toEqual({
+      apiKey: "${CODEX_AGENT_TOKEN}",
+    });
+    expect(persistedConfig?.agents?.list?.[0]?.models?.["openai/gpt-5.4"]?.params).toEqual({
+      apiKey: "${CRON_CODEX_TOKEN}",
+    });
+  });
+
+  it("keeps authored plugin env refs when only later plugin sync changes the config", async () => {
+    const tempDir = createCaseDir("openclaw-update");
+    const sourceConfigPath = path.join(tempDir, "source-config.json");
+    const preUpdateAuthoredConfig = {
+      update: { channel: "stable" },
+      plugins: {
+        entries: {
+          "lossless-claw": {
+            enabled: true,
+            config: {
+              apiKey: "${LOSSLESS_TOKEN}",
+              keepLocal: true,
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const preUpdateSourceConfig = {
+      update: { channel: "stable" },
+      plugins: {
+        entries: {
+          "lossless-claw": {
+            enabled: true,
+            config: {
+              apiKey: "resolved-lossless-token",
+              keepLocal: true,
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+    await fs.mkdir(tempDir, { recursive: true });
+    await fs.writeFile(
+      sourceConfigPath,
+      `${JSON.stringify({
+        sourceConfig: preUpdateSourceConfig,
+        authoredConfig: preUpdateAuthoredConfig,
+      })}\n`,
+      "utf-8",
+    );
+    vi.mocked(readConfigFileSnapshot).mockResolvedValue({
+      ...baseSnapshot,
+      sourceConfig: preUpdateSourceConfig,
+      config: preUpdateSourceConfig,
+      runtimeConfig: preUpdateSourceConfig,
+      hash: "post-doctor-hash",
+    });
+    syncPluginsForUpdateChannel.mockImplementation(async ({ config }) => ({
+      changed: true,
+      config: {
+        ...config,
+        plugins: {
+          ...config.plugins,
+          entries: {
+            ...config.plugins?.entries,
+            "lossless-claw": {
+              enabled: true,
+              config: {
+                apiKey: "resolved-lossless-token",
+                distDefault: true,
+              },
+            },
+          },
+        },
+      },
+      summary: {
+        switchedToBundled: [],
+        switchedToNpm: [],
+        warnings: [],
+        errors: [],
+      },
+    }));
+    updateNpmInstalledPlugins.mockImplementation(async ({ config }) => ({
+      changed: false,
+      config,
+      outcomes: [],
+    }));
+
+    await withEnvAsync(
+      {
+        OPENCLAW_UPDATE_POST_CORE: "1",
+        OPENCLAW_UPDATE_POST_CORE_CHANNEL: "stable",
+        OPENCLAW_UPDATE_POST_CORE_SOURCE_CONFIG_PATH: sourceConfigPath,
+      },
+      async () => {
+        await updateCommand({ yes: true, restart: false });
+      },
+    );
+
+    const persistedConfig = lastReplaceConfigCall()?.nextConfig as OpenClawConfig | undefined;
+    expect(persistedConfig?.plugins?.entries?.["lossless-claw"]?.config).toEqual({
+      apiKey: "${LOSSLESS_TOKEN}",
+      distDefault: true,
+      keepLocal: true,
+    });
+  });
+
+  it("keeps authored plugin env refs from a legacy pre-update file when only plugin sync changes the config", async () => {
+    const tempDir = await createTrackedTempDir("openclaw-update-");
+    const configPath = path.join(tempDir, "openclaw.json");
+    const preUpdatePath = `${configPath}.pre-update`;
+    const preUpdateAuthoredConfig = {
+      update: { channel: "stable" },
+      plugins: {
+        entries: {
+          "lossless-claw": {
+            enabled: true,
+            config: {
+              apiKey: "${LOSSLESS_TOKEN}",
+              keepLocal: true,
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const preUpdateSourceConfig = {
+      update: { channel: "stable" },
+      plugins: {
+        entries: {
+          "lossless-claw": {
+            enabled: true,
+            config: {
+              apiKey: "resolved-lossless-token",
+              keepLocal: true,
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+    await fs.writeFile(configPath, `${JSON.stringify(preUpdateSourceConfig)}\n`, "utf-8");
+    await fs.writeFile(
+      preUpdatePath,
+      `${JSON.stringify({
+        sourceConfig: preUpdateSourceConfig,
+        authoredConfig: preUpdateAuthoredConfig,
+      })}\n`,
+      "utf-8",
+    );
+    vi.mocked(readConfigFileSnapshot).mockResolvedValue({
+      ...baseSnapshot,
+      path: configPath,
+      parsed: preUpdateSourceConfig,
+      sourceConfig: preUpdateSourceConfig,
+      config: preUpdateSourceConfig,
+      runtimeConfig: preUpdateSourceConfig,
+      hash: "post-doctor-hash",
+    });
+    syncPluginsForUpdateChannel.mockImplementation(async ({ config }) => ({
+      changed: true,
+      config: {
+        ...config,
+        plugins: {
+          ...config.plugins,
+          entries: {
+            ...config.plugins?.entries,
+            "lossless-claw": {
+              enabled: true,
+              config: {
+                apiKey: "resolved-lossless-token",
+                distDefault: true,
+              },
+            },
+          },
+        },
+      },
+      summary: {
+        switchedToBundled: [],
+        switchedToNpm: [],
+        warnings: [],
+        errors: [],
+      },
+    }));
+    updateNpmInstalledPlugins.mockImplementation(async ({ config }) => ({
+      changed: false,
+      config,
+      outcomes: [],
+    }));
+
+    await withEnvAsync(
+      {
+        OPENCLAW_UPDATE_POST_CORE: "1",
+        OPENCLAW_UPDATE_POST_CORE_CHANNEL: "stable",
+      },
+      async () => {
+        await updateCommand({ yes: true, restart: false });
+      },
+    );
+
+    const persistedConfig = lastReplaceConfigCall()?.nextConfig as OpenClawConfig | undefined;
+    expect(persistedConfig?.plugins?.entries?.["lossless-claw"]?.config).toEqual({
+      apiKey: "${LOSSLESS_TOKEN}",
+      distDefault: true,
+      keepLocal: true,
+    });
+  });
+
+  it("leaves top-level plugin includes to the config writer write-through path", async () => {
+    const tempDir = createCaseDir("openclaw-update");
+    const sourceConfigPath = path.join(tempDir, "source-config.json");
+    const preUpdateAuthoredConfig = {
+      update: { channel: "stable" },
+      plugins: { $include: "./plugins.json5" },
+    } as OpenClawConfig;
+    const preUpdateSourceConfig = {
+      update: { channel: "stable" },
+      plugins: {
+        entries: {
+          "lossless-claw": {
+            enabled: true,
+            config: { keepLocal: true },
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const postDoctorConfig = {
+      update: { channel: "stable" },
+      plugins: {
+        entries: {
+          "lossless-claw": {
+            enabled: true,
+            config: { distDefault: true },
+          },
+        },
+      },
+    } as OpenClawConfig;
+    await fs.mkdir(tempDir, { recursive: true });
+    await fs.writeFile(
+      sourceConfigPath,
+      `${JSON.stringify({
+        sourceConfig: preUpdateSourceConfig,
+        authoredConfig: preUpdateAuthoredConfig,
+      })}\n`,
+      "utf-8",
+    );
+    vi.mocked(readConfigFileSnapshot).mockResolvedValue({
+      ...baseSnapshot,
+      sourceConfig: postDoctorConfig,
+      config: postDoctorConfig,
+      runtimeConfig: postDoctorConfig,
+      hash: "post-doctor-hash",
+    });
+    syncPluginsForUpdateChannel.mockImplementation(async ({ config }) => ({
+      changed: true,
+      config: {
+        ...config,
+        plugins: {
+          ...config.plugins,
+          entries: {
+            ...config.plugins?.entries,
+            "lossless-claw": {
+              enabled: true,
+              config: { distDefault: true },
+            },
+          },
+        },
+      },
+      summary: {
+        switchedToBundled: [],
+        switchedToNpm: [],
+        warnings: [],
+        errors: [],
+      },
+    }));
+    updateNpmInstalledPlugins.mockImplementation(async ({ config }) => ({
+      changed: false,
+      config,
+      outcomes: [],
+    }));
+
+    await withEnvAsync(
+      {
+        OPENCLAW_UPDATE_POST_CORE: "1",
+        OPENCLAW_UPDATE_POST_CORE_CHANNEL: "stable",
+        OPENCLAW_UPDATE_POST_CORE_SOURCE_CONFIG_PATH: sourceConfigPath,
+      },
+      async () => {
+        await updateCommand({ yes: true, restart: false });
+      },
+    );
+
+    const persistedConfig = lastReplaceConfigCall()?.nextConfig as OpenClawConfig | undefined;
+    expect(persistedConfig?.plugins).toEqual({
+      entries: {
+        "lossless-claw": {
+          enabled: true,
+          config: { distDefault: true, keepLocal: true },
+        },
+      },
+    });
+  });
+
+  it("splits top-level plugin include writes when other restored sections also changed", async () => {
+    const tempDir = createCaseDir("openclaw-update");
+    const sourceConfigPath = path.join(tempDir, "source-config.json");
+    const preUpdateAuthoredConfig = {
+      update: { channel: "stable" },
+      agents: {
+        defaults: {
+          model: { primary: "openai-codex/gpt-5.5" },
+        },
+      },
+      plugins: { $include: "./plugins.json5" },
+    } as OpenClawConfig;
+    const preUpdateSourceConfig = {
+      update: { channel: "stable" },
+      agents: {
+        defaults: {
+          model: { primary: "openai-codex/gpt-5.5" },
+        },
+      },
+      plugins: {
+        entries: {
+          "lossless-claw": {
+            enabled: true,
+            config: { keepLocal: true },
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const postDoctorConfig = {
+      update: { channel: "stable" },
+      agents: {
+        defaults: {
+          model: { primary: "openai/gpt-5.4" },
+        },
+      },
+      plugins: {
+        entries: {
+          "lossless-claw": {
+            enabled: true,
+            config: { distDefault: true },
+          },
+        },
+      },
+    } as OpenClawConfig;
+    await fs.mkdir(tempDir, { recursive: true });
+    await fs.writeFile(
+      sourceConfigPath,
+      `${JSON.stringify({
+        sourceConfig: preUpdateSourceConfig,
+        authoredConfig: preUpdateAuthoredConfig,
+      })}\n`,
+      "utf-8",
+    );
+    vi.mocked(readConfigFileSnapshot).mockResolvedValue({
+      ...baseSnapshot,
+      parsed: {
+        update: { channel: "stable" },
+        agents: postDoctorConfig.agents,
+        plugins: { $include: "./plugins.json5" },
+      },
+      sourceConfig: postDoctorConfig,
+      config: postDoctorConfig,
+      runtimeConfig: postDoctorConfig,
+      hash: "post-doctor-hash",
+    });
+    syncPluginsForUpdateChannel.mockImplementation(async ({ config }) => ({
+      changed: true,
+      config: {
+        ...config,
+        plugins: {
+          ...config.plugins,
+          entries: {
+            ...config.plugins?.entries,
+            "lossless-claw": {
+              enabled: true,
+              config: { distDefault: true },
+            },
+          },
+        },
+      },
+      summary: {
+        switchedToBundled: [],
+        switchedToNpm: [],
+        warnings: [],
+        errors: [],
+      },
+    }));
+    updateNpmInstalledPlugins.mockImplementation(async ({ config }) => ({
+      changed: false,
+      config,
+      outcomes: [],
+    }));
+
+    await withEnvAsync(
+      {
+        OPENCLAW_UPDATE_POST_CORE: "1",
+        OPENCLAW_UPDATE_POST_CORE_CHANNEL: "stable",
+        OPENCLAW_UPDATE_POST_CORE_SOURCE_CONFIG_PATH: sourceConfigPath,
+      },
+      async () => {
+        await updateCommand({ yes: true, restart: false });
+      },
+    );
+
+    expect(replaceConfigFile).toHaveBeenCalledTimes(2);
+    const pluginWrite = replaceConfigCall(0)?.nextConfig as OpenClawConfig | undefined;
+    const rootWrite = replaceConfigCall(1)?.nextConfig as OpenClawConfig | undefined;
+    expect(replaceConfigCall(1)?.baseHash).toBe("replace-config-hash-1");
+    expect(pluginWrite?.agents).toEqual(postDoctorConfig.agents);
+    expect(pluginWrite?.plugins?.entries?.["lossless-claw"]?.config).toEqual({
+      distDefault: true,
+      keepLocal: true,
+    });
+    expect(rootWrite?.agents?.defaults?.model).toEqual({ primary: "openai/gpt-5.5" });
+    expect(rootWrite?.agents?.defaults?.models?.["openai/gpt-5.5"]?.agentRuntime?.id).toBe("codex");
+    expect(rootWrite?.plugins?.entries?.["lossless-claw"]?.config).toEqual({
+      distDefault: true,
+      keepLocal: true,
+    });
+  });
+
+  it("uses the pre-restore post-update snapshot for same-process top-level plugin include split writes", async () => {
+    const preUpdateAuthoredConfig = {
+      update: { channel: "stable" },
+      agents: {
+        defaults: {
+          model: { primary: "openai-codex/gpt-5.5" },
+        },
+      },
+      plugins: { $include: "./plugins.json5" },
+    } as OpenClawConfig;
+    const preUpdateSourceConfig = {
+      update: { channel: "stable" },
+      agents: preUpdateAuthoredConfig.agents,
+      plugins: {
+        entries: {
+          "lossless-claw": {
+            enabled: true,
+            config: { keepLocal: true },
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const postDoctorConfig = {
+      update: { channel: "stable" },
+      agents: {
+        defaults: {
+          model: { primary: "openai/gpt-5.4" },
+        },
+      },
+      plugins: {
+        entries: {
+          "lossless-claw": {
+            enabled: true,
+            config: { distDefault: true },
+          },
+        },
+      },
+    } as OpenClawConfig;
+    vi.mocked(readConfigFileSnapshot)
+      .mockResolvedValueOnce({
+        ...baseSnapshot,
+        parsed: preUpdateAuthoredConfig,
+        sourceConfig: preUpdateSourceConfig,
+        config: preUpdateSourceConfig,
+        runtimeConfig: preUpdateSourceConfig,
+        hash: "pre-update-hash",
+      })
+      .mockResolvedValueOnce({
+        ...baseSnapshot,
+        parsed: {
+          update: { channel: "stable" },
+          agents: postDoctorConfig.agents,
+          plugins: { $include: "./plugins.json5" },
+        },
+        sourceConfig: postDoctorConfig,
+        config: postDoctorConfig,
+        runtimeConfig: postDoctorConfig,
+        hash: "post-doctor-hash",
+      });
+    syncPluginsForUpdateChannel.mockImplementation(async ({ config }) => ({
+      changed: true,
+      config: {
+        ...config,
+        plugins: {
+          ...config.plugins,
+          entries: {
+            ...config.plugins?.entries,
+            "lossless-claw": {
+              enabled: true,
+              config: { distDefault: true },
+            },
+          },
+        },
+      },
+      summary: {
+        switchedToBundled: [],
+        switchedToNpm: [],
+        warnings: [],
+        errors: [],
+      },
+    }));
+    updateNpmInstalledPlugins.mockImplementation(async ({ config }) => ({
+      changed: false,
+      config,
+      outcomes: [],
+    }));
+
+    await updateCommand({ yes: true, restart: false });
+
+    expect(replaceConfigFile).toHaveBeenCalledTimes(2);
+    const pluginWrite = replaceConfigCall(0)?.nextConfig as OpenClawConfig | undefined;
+    const rootWrite = replaceConfigCall(1)?.nextConfig as OpenClawConfig | undefined;
+    expect(replaceConfigCall(1)?.baseHash).toBe("replace-config-hash-1");
+    expect(pluginWrite?.agents).toEqual(postDoctorConfig.agents);
+    expect(pluginWrite?.plugins?.entries?.["lossless-claw"]?.config).toEqual({
+      distDefault: true,
+      keepLocal: true,
+    });
+    expect(rootWrite?.agents?.defaults?.model).toEqual({ primary: "openai/gpt-5.5" });
+    expect(rootWrite?.agents?.defaults?.models?.["openai/gpt-5.5"]?.agentRuntime?.id).toBe("codex");
+    expect(rootWrite?.plugins?.entries?.["lossless-claw"]?.config).toEqual({
+      distDefault: true,
+      keepLocal: true,
+    });
+  });
+
+  it("does not restore plugin entry intent through nested plugin includes", async () => {
+    const tempDir = createCaseDir("openclaw-update");
+    const sourceConfigPath = path.join(tempDir, "source-config.json");
+    const preUpdateAuthoredConfig = {
+      update: { channel: "stable" },
+      plugins: {
+        load: { paths: ["/old/plugin/path"] },
+        entries: { $include: "./plugin-entries.json5" },
+      },
+    } as OpenClawConfig;
+    const preUpdateSourceConfig = {
+      update: { channel: "stable" },
+      plugins: {
+        load: { paths: ["/old/plugin/path"] },
+        entries: {
+          "lossless-claw": {
+            enabled: true,
+            config: {
+              summaryModel: "openai-codex/gpt-5.4-mini",
+              apiKey: "resolved-lossless-token",
+              keepLocal: true,
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const postDoctorConfig = {
+      update: { channel: "stable" },
+      plugins: {
+        entries: {
+          "lossless-claw": {
+            enabled: true,
+            config: {
+              summaryModel: "openai/gpt-5.4-mini",
+              apiKey: "dist-default",
+              distDefault: true,
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+    await fs.mkdir(tempDir, { recursive: true });
+    await fs.writeFile(
+      sourceConfigPath,
+      `${JSON.stringify({
+        sourceConfig: preUpdateSourceConfig,
+        authoredConfig: preUpdateAuthoredConfig,
+      })}\n`,
+      "utf-8",
+    );
+    vi.mocked(readConfigFileSnapshot).mockResolvedValue({
+      ...baseSnapshot,
+      sourceConfig: postDoctorConfig,
+      config: postDoctorConfig,
+      runtimeConfig: postDoctorConfig,
+      hash: "post-doctor-hash",
+    });
+    syncPluginsForUpdateChannel.mockImplementation(async ({ config }) => ({
+      changed: true,
+      config: {
+        ...config,
+        plugins: {
+          ...config.plugins,
+          load: { paths: ["/updated/plugin/path"] },
+          entries: {
+            ...config.plugins?.entries,
+            "lossless-claw": {
+              enabled: true,
+              config: {
+                summaryModel: "openai/gpt-5.4-mini",
+                apiKey: "dist-default",
+                distDefault: true,
+              },
+            },
+          },
+        },
+      },
+      summary: {
+        switchedToBundled: [],
+        switchedToNpm: [],
+        warnings: [],
+        errors: [],
+      },
+    }));
+    updateNpmInstalledPlugins.mockImplementation(async ({ config }) => ({
+      changed: false,
+      config,
+      outcomes: [],
+    }));
+
+    await withEnvAsync(
+      {
+        OPENCLAW_UPDATE_POST_CORE: "1",
+        OPENCLAW_UPDATE_POST_CORE_CHANNEL: "stable",
+        OPENCLAW_UPDATE_POST_CORE_SOURCE_CONFIG_PATH: sourceConfigPath,
+      },
+      async () => {
+        await updateCommand({ yes: true, restart: false });
+      },
+    );
+
+    const syncConfig = syncPluginCall()?.config;
+    const persistedConfig = lastReplaceConfigCall()?.nextConfig as OpenClawConfig | undefined;
+    expect(syncConfig?.plugins?.entries?.["lossless-claw"]?.config).toEqual({
+      summaryModel: "openai/gpt-5.4-mini",
+      apiKey: "dist-default",
+      distDefault: true,
+    });
+    expect(persistedConfig?.plugins).toEqual({
+      load: { paths: ["/updated/plugin/path"] },
+      entries: {
+        "lossless-claw": {
+          enabled: true,
+          config: {
+            summaryModel: "openai/gpt-5.4-mini",
+            apiKey: "dist-default",
+            distDefault: true,
+          },
+        },
+      },
+    });
+    expect(lastPluginRegistryRefreshCall()?.config?.plugins?.entries).toEqual({
+      "lossless-claw": {
+        enabled: true,
+        config: {
+          summaryModel: "openai/gpt-5.4-mini",
+          apiKey: "dist-default",
+          distDefault: true,
+        },
+      },
+    });
+  });
+
+  it("does not restore default agent model intent through nested agent includes", async () => {
+    const tempDir = createCaseDir("openclaw-update");
+    const sourceConfigPath = path.join(tempDir, "source-config.json");
+    const preUpdateAuthoredConfig = {
+      update: { channel: "stable" },
+      agents: {
+        defaults: { $include: "./agent-defaults.json5" },
+        list: [
+          {
+            id: "cron",
+            model: { primary: "openai-codex/gpt-5.4" },
+          },
+        ],
+      },
+    } as OpenClawConfig;
+    const preUpdateSourceConfig = {
+      update: { channel: "stable" },
+      agents: {
+        defaults: {
+          model: {
+            primary: "openai-codex/gpt-5.5",
+            fallbacks: ["openai-codex/gpt-5.4"],
+          },
+        },
+        list: [
+          {
+            id: "cron",
+            model: { primary: "openai-codex/gpt-5.4" },
+          },
+        ],
+      },
+    } as OpenClawConfig;
+    const postDoctorConfig = {
+      update: { channel: "stable" },
+      agents: {
+        defaults: {
+          model: {
+            primary: "openai/gpt-5.5",
+          },
+        },
+        list: [
+          {
+            id: "cron",
+            model: { primary: "openai/gpt-5.5" },
+          },
+        ],
+      },
+    } as OpenClawConfig;
+    await fs.mkdir(tempDir, { recursive: true });
+    await fs.writeFile(
+      sourceConfigPath,
+      `${JSON.stringify({
+        sourceConfig: preUpdateSourceConfig,
+        authoredConfig: preUpdateAuthoredConfig,
+      })}\n`,
+      "utf-8",
+    );
+    vi.mocked(readConfigFileSnapshot).mockResolvedValue({
+      ...baseSnapshot,
+      sourceConfig: postDoctorConfig,
+      config: postDoctorConfig,
+      runtimeConfig: postDoctorConfig,
+      hash: "post-doctor-hash",
+    });
+    syncPluginsForUpdateChannel.mockImplementation(async ({ config }) => ({
+      changed: true,
+      config: {
+        ...config,
+        plugins: {
+          entries: {
+            "lossless-claw": {
+              enabled: true,
+              config: { distDefault: true },
+            },
+          },
+        },
+      },
+      summary: {
+        switchedToBundled: [],
+        switchedToNpm: [],
+        warnings: [],
+        errors: [],
+      },
+    }));
+    updateNpmInstalledPlugins.mockImplementation(async ({ config }) => ({
+      changed: false,
+      config,
+      outcomes: [],
+    }));
+
+    await withEnvAsync(
+      {
+        OPENCLAW_UPDATE_POST_CORE: "1",
+        OPENCLAW_UPDATE_POST_CORE_CHANNEL: "stable",
+        OPENCLAW_UPDATE_POST_CORE_SOURCE_CONFIG_PATH: sourceConfigPath,
+      },
+      async () => {
+        await updateCommand({ yes: true, restart: false });
+      },
+    );
+
+    const syncConfig = syncPluginCall()?.config;
+    const persistedConfig = lastReplaceConfigCall()?.nextConfig as OpenClawConfig | undefined;
+    expect(syncConfig?.agents?.defaults?.model).toEqual({
+      primary: "openai/gpt-5.5",
+    });
+    expect(persistedConfig?.agents).toEqual({
+      defaults: {
+        model: {
+          primary: "openai/gpt-5.5",
+        },
+      },
+      list: [
+        {
+          id: "cron",
+          model: {
+            primary: "openai/gpt-5.4",
+          },
+          models: {
+            "openai/gpt-5.4": {
+              agentRuntime: { id: "codex" },
+            },
+          },
+        },
+      ],
+    });
+    expect(persistedConfig?.plugins?.entries?.["lossless-claw"]?.config).toEqual({
+      distDefault: true,
+    });
+  });
+
+  it("does not restore agent list model intent through array entry includes", async () => {
+    const tempDir = createCaseDir("openclaw-update");
+    const sourceConfigPath = path.join(tempDir, "source-config.json");
+    const preUpdateAuthoredConfig = {
+      update: { channel: "stable" },
+      agents: {
+        defaults: {
+          model: { primary: "openai-codex/gpt-5.5" },
+        },
+        list: [{ $include: "./cron-agent.json5" }],
+      },
+    } as unknown as OpenClawConfig;
+    const preUpdateSourceConfig = {
+      update: { channel: "stable" },
+      agents: {
+        defaults: {
+          model: { primary: "openai-codex/gpt-5.5" },
+        },
+        list: [
+          {
+            id: "cron",
+            model: { primary: "openai-codex/gpt-5.4" },
+          },
+        ],
+      },
+    } as OpenClawConfig;
+    const postDoctorConfig = {
+      update: { channel: "stable" },
+      agents: {
+        defaults: {
+          model: { primary: "openai/gpt-5.4" },
+        },
+        list: [
+          {
+            id: "cron",
+            model: { primary: "openai/gpt-5.5" },
+          },
+        ],
+      },
+    } as OpenClawConfig;
+    await fs.mkdir(tempDir, { recursive: true });
+    await fs.writeFile(
+      sourceConfigPath,
+      `${JSON.stringify({
+        sourceConfig: preUpdateSourceConfig,
+        authoredConfig: preUpdateAuthoredConfig,
+      })}\n`,
+      "utf-8",
+    );
+    vi.mocked(readConfigFileSnapshot).mockResolvedValue({
+      ...baseSnapshot,
+      sourceConfig: postDoctorConfig,
+      config: postDoctorConfig,
+      runtimeConfig: postDoctorConfig,
+      hash: "post-doctor-hash",
+    });
+    syncPluginsForUpdateChannel.mockImplementation(async ({ config }) => ({
+      changed: true,
+      config: {
+        ...config,
+        plugins: {
+          entries: {
+            "lossless-claw": {
+              enabled: true,
+              config: { distDefault: true },
+            },
+          },
+        },
+      },
+      summary: {
+        switchedToBundled: [],
+        switchedToNpm: [],
+        warnings: [],
+        errors: [],
+      },
+    }));
+    updateNpmInstalledPlugins.mockImplementation(async ({ config }) => ({
+      changed: false,
+      config,
+      outcomes: [],
+    }));
+
+    await withEnvAsync(
+      {
+        OPENCLAW_UPDATE_POST_CORE: "1",
+        OPENCLAW_UPDATE_POST_CORE_CHANNEL: "stable",
+        OPENCLAW_UPDATE_POST_CORE_SOURCE_CONFIG_PATH: sourceConfigPath,
+      },
+      async () => {
+        await updateCommand({ yes: true, restart: false });
+      },
+    );
+
+    const persistedConfig = lastReplaceConfigCall()?.nextConfig as OpenClawConfig | undefined;
+    expect(persistedConfig?.agents?.defaults?.model).toEqual({ primary: "openai/gpt-5.5" });
+    expect(persistedConfig?.agents?.defaults?.models?.["openai/gpt-5.5"]?.agentRuntime?.id).toBe(
+      "codex",
+    );
+    expect(persistedConfig?.agents?.list).toEqual([
+      {
+        id: "cron",
+        model: { primary: "openai/gpt-5.5" },
+      },
+    ]);
+  });
+
+  it("does not restore agent model intent through a top-level agent include", async () => {
+    const tempDir = createCaseDir("openclaw-update");
+    const sourceConfigPath = path.join(tempDir, "source-config.json");
+    const preUpdateAuthoredConfig = {
+      update: { channel: "stable" },
+      agents: { $include: "./agents.json5" },
+      plugins: {
+        entries: {
+          "lossless-claw": {
+            enabled: true,
+            config: { keepLocal: true },
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const preUpdateSourceConfig = {
+      update: { channel: "stable" },
+      agents: {
+        defaults: {
+          model: { primary: "openai-codex/gpt-5.5" },
+        },
+      },
+      plugins: {
+        entries: {
+          "lossless-claw": {
+            enabled: true,
+            config: { keepLocal: true },
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const postDoctorConfig = {
+      update: { channel: "stable" },
+      agents: {
+        defaults: {
+          model: { primary: "openai/gpt-5.4" },
+        },
+      },
+      plugins: {
+        entries: {
+          "lossless-claw": {
+            enabled: true,
+            config: { distDefault: true },
+          },
+        },
+      },
+    } as OpenClawConfig;
+    await fs.mkdir(tempDir, { recursive: true });
+    await fs.writeFile(
+      sourceConfigPath,
+      `${JSON.stringify({
+        sourceConfig: preUpdateSourceConfig,
+        authoredConfig: preUpdateAuthoredConfig,
+      })}\n`,
+      "utf-8",
+    );
+    vi.mocked(readConfigFileSnapshot).mockResolvedValue({
+      ...baseSnapshot,
+      parsed: {
+        update: { channel: "stable" },
+        agents: { $include: "./agents.json5" },
+        plugins: postDoctorConfig.plugins,
+      },
+      sourceConfig: postDoctorConfig,
+      config: postDoctorConfig,
+      runtimeConfig: postDoctorConfig,
+      hash: "post-doctor-hash",
+    });
+    syncPluginsForUpdateChannel.mockImplementation(async ({ config }) => ({
+      changed: true,
+      config: {
+        ...config,
+        plugins: {
+          ...config.plugins,
+          entries: {
+            ...config.plugins?.entries,
+            "lossless-claw": {
+              enabled: true,
+              config: { distDefault: true },
+            },
+          },
+        },
+      },
+      summary: {
+        switchedToBundled: [],
+        switchedToNpm: [],
+        warnings: [],
+        errors: [],
+      },
+    }));
+    updateNpmInstalledPlugins.mockImplementation(async ({ config }) => ({
+      changed: false,
+      config,
+      outcomes: [],
+    }));
+
+    await withEnvAsync(
+      {
+        OPENCLAW_UPDATE_POST_CORE: "1",
+        OPENCLAW_UPDATE_POST_CORE_CHANNEL: "stable",
+        OPENCLAW_UPDATE_POST_CORE_SOURCE_CONFIG_PATH: sourceConfigPath,
+      },
+      async () => {
+        await updateCommand({ yes: true, restart: false });
+      },
+    );
+
+    const persistedConfig = lastReplaceConfigCall()?.nextConfig as OpenClawConfig | undefined;
+    expect(persistedConfig?.agents).toEqual(postDoctorConfig.agents);
+    expect(persistedConfig?.plugins?.entries?.["lossless-claw"]?.config).toEqual({
+      distDefault: true,
+      keepLocal: true,
+    });
+  });
+
+  it("does not replay stale authored plugin config after post-core plugin failure disables it", async () => {
+    const tempDir = createCaseDir("openclaw-update");
+    const sourceConfigPath = path.join(tempDir, "source-config.json");
+    const preUpdateConfig = {
+      update: { channel: "stable" },
+      plugins: {
+        entries: {
+          "lossless-claw": {
+            enabled: true,
+            config: {
+              summaryModel: "openai-codex/gpt-5.4-mini",
+              keepLocal: true,
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const postDoctorConfig = {
+      update: { channel: "stable" },
+      plugins: {
+        entries: {
+          "lossless-claw": {
+            enabled: true,
+            config: {
+              summaryModel: "openai/gpt-5.4-mini",
+              distDefault: true,
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const disabledAfterFailureConfig = {
+      update: { channel: "stable" },
+      plugins: {
+        entries: {
+          "lossless-claw": {
+            enabled: false,
+            config: {
+              summaryModel: "openai/gpt-5.4-mini",
+              distDefault: true,
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+    await fs.mkdir(tempDir, { recursive: true });
+    await fs.writeFile(
+      sourceConfigPath,
+      `${JSON.stringify({
+        sourceConfig: preUpdateConfig,
+        authoredConfig: preUpdateConfig,
+      })}\n`,
+      "utf-8",
+    );
+    vi.mocked(readConfigFileSnapshot).mockResolvedValue({
+      ...baseSnapshot,
+      sourceConfig: postDoctorConfig,
+      config: postDoctorConfig,
+      runtimeConfig: postDoctorConfig,
+      hash: "post-doctor-hash",
+    });
+    syncPluginsForUpdateChannel.mockImplementation(async ({ config }) => ({
+      changed: false,
+      config,
+      summary: {
+        switchedToBundled: [],
+        switchedToNpm: [],
+        warnings: [],
+        errors: [],
+      },
+    }));
+    updateNpmInstalledPlugins.mockResolvedValue({
+      changed: true,
+      config: disabledAfterFailureConfig,
+      outcomes: [
+        {
+          pluginId: "lossless-claw",
+          status: "skipped",
+          message:
+            'Disabled "lossless-claw" after plugin update failure; OpenClaw will continue without it.',
+        },
+      ],
+    });
+
+    await withEnvAsync(
+      {
+        OPENCLAW_UPDATE_POST_CORE: "1",
+        OPENCLAW_UPDATE_POST_CORE_CHANNEL: "stable",
+        OPENCLAW_UPDATE_POST_CORE_SOURCE_CONFIG_PATH: sourceConfigPath,
+      },
+      async () => {
+        await updateCommand({ yes: true, restart: false });
+      },
+    );
+
+    const persistedConfig = lastReplaceConfigCall()?.nextConfig as OpenClawConfig | undefined;
+    expect(persistedConfig?.plugins?.entries?.["lossless-claw"]).toEqual({
+      enabled: false,
+      config: {
+        summaryModel: "openai/gpt-5.4-mini",
+        distDefault: true,
+      },
+    });
   });
 
   it("resolves included pre-update channels for old post-core parents", async () => {
