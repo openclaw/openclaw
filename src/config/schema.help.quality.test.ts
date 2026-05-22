@@ -95,6 +95,7 @@ const TARGET_KEYS = [
   "agents.defaults.memorySearch.remote.batch.pollIntervalMs",
   "agents.defaults.memorySearch.remote.batch.timeoutMinutes",
   "agents.defaults.memorySearch.local.modelPath",
+  "agents.defaults.memorySearch.local.gpu",
   "agents.defaults.memorySearch.store.path",
   "agents.defaults.memorySearch.inputType",
   "agents.defaults.memorySearch.queryInputType",

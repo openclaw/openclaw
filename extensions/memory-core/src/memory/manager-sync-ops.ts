@@ -170,6 +170,7 @@ export abstract class MemoryManagerSyncOps {
   protected abstract readonly settings: ResolvedMemorySearchConfig;
   protected provider: EmbeddingProvider | null = null;
   protected fallbackFrom?: EmbeddingProviderId;
+  protected abstract providerUnavailableReason?: string;
   protected providerRuntime?: EmbeddingProviderRuntime;
   protected abstract batch: {
     enabled: boolean;
@@ -1214,11 +1215,20 @@ export abstract class MemoryManagerSyncOps {
         });
         return;
       }
+      if (!this.provider && this.fts.enabled && this.shouldFallbackOnError(reason)) {
+        log.warn(`memory embeddings unavailable; rebuilding lexical memory index only: ${reason}`);
+        await this.runSafeReindex({
+          reason: params?.reason ?? "embedding-degraded",
+          force: true,
+          progress: progress ?? undefined,
+        });
+        return;
+      }
       throw err;
     }
   }
 
-  private shouldFallbackOnError(message: string): boolean {
+  protected shouldFallbackOnError(message: string): boolean {
     return /embedding|embeddings|batch/i.test(message);
   }
 
@@ -1240,19 +1250,21 @@ export abstract class MemoryManagerSyncOps {
     };
   }
 
-  private async activateFallbackProvider(reason: string): Promise<boolean> {
+  protected async activateFallbackProvider(reason: string): Promise<boolean> {
+    const currentProviderId =
+      this.provider?.id ??
+      (this.providerUnavailableReason?.startsWith("Local embeddings degraded") ? "local" : null);
     const fallbackRequest = resolveMemoryFallbackProviderRequest({
       cfg: this.cfg,
       settings: this.settings,
-      currentProviderId: this.provider?.id ?? null,
+      currentProviderId,
     });
-    if (!fallbackRequest || !this.provider) {
+    if (!fallbackRequest || !currentProviderId) {
       return false;
     }
     if (this.fallbackFrom) {
       return false;
     }
-    const fallbackFrom = this.provider.id;
 
     const fallbackResult = await createEmbeddingProvider({
       config: this.cfg,
@@ -1268,7 +1280,7 @@ export abstract class MemoryManagerSyncOps {
         providerUnavailableReason: undefined,
         providerRuntime: this.providerRuntime,
       },
-      fallbackFrom,
+      fallbackFrom: currentProviderId,
       reason,
       result: fallbackResult,
     });
@@ -1276,6 +1288,7 @@ export abstract class MemoryManagerSyncOps {
     this.fallbackReason = fallbackState.fallbackReason;
     this.provider = fallbackState.provider;
     this.providerRuntime = fallbackState.providerRuntime;
+    this.providerUnavailableReason = fallbackState.providerUnavailableReason;
     this.providerKey = this.computeProviderKey();
     this.batch = this.resolveBatchConfig();
     log.warn(`memory embeddings: switched to fallback provider (${fallbackRequest.provider})`, {
@@ -1284,7 +1297,7 @@ export abstract class MemoryManagerSyncOps {
     return true;
   }
 
-  private async runSafeReindex(params: {
+  protected async runSafeReindex(params: {
     reason?: string;
     force?: boolean;
     progress?: MemorySyncProgressState;

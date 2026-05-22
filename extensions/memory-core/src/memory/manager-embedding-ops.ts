@@ -111,6 +111,10 @@ export function resolveMemoryIndexConcurrency(params: {
   return params.providerId === "ollama" ? 1 : EMBEDDING_INDEX_CONCURRENCY;
 }
 
+export function isLocalEmbeddingWorkerFailure(message: string): boolean {
+  return /local embedding worker|embedding worker exited|embedding worker failed/i.test(message);
+}
+
 export async function runEmbeddingOperationWithTimeout<T>(params: {
   timeoutMs: number;
   message: string;
@@ -144,6 +148,7 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
   protected abstract batchFailureLastError?: string;
   protected abstract batchFailureLastProvider?: string;
   protected abstract batchFailureLock: Promise<void>;
+  protected abstract markLocalEmbeddingProviderDegraded(message: string): void;
 
   protected pruneEmbeddingCacheIfNeeded(): void {
     if (!this.cache.enabled) {
@@ -324,27 +329,32 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
     if (!provider) {
       throw new Error("Cannot embed batch in FTS-only mode (no embedding provider)");
     }
-    return await runMemoryEmbeddingRetryLoop({
-      run: async () => {
-        const timeoutMs = this.resolveEmbeddingTimeout("batch");
-        log.debug("memory embeddings: batch start", {
-          provider: provider.id,
-          items: texts.length,
-          timeoutMs,
-        });
-        return await runEmbeddingOperationWithTimeout({
-          timeoutMs,
-          message: `memory embeddings batch timed out after ${Math.round(timeoutMs / 1000)}s`,
-          run: async (signal) => await provider.embedBatch(texts, { signal }),
-        });
-      },
-      isRetryable: isRetryableMemoryEmbeddingError,
-      waitForRetry: async (delayMs) => {
-        await this.waitForEmbeddingRetry(delayMs, "retrying");
-      },
-      maxAttempts: EMBEDDING_RETRY_MAX_ATTEMPTS,
-      baseDelayMs: EMBEDDING_RETRY_BASE_DELAY_MS,
-    });
+    try {
+      return await runMemoryEmbeddingRetryLoop({
+        run: async () => {
+          const timeoutMs = this.resolveEmbeddingTimeout("batch");
+          log.debug("memory embeddings: batch start", {
+            provider: provider.id,
+            items: texts.length,
+            timeoutMs,
+          });
+          return await runEmbeddingOperationWithTimeout({
+            timeoutMs,
+            message: `memory embeddings batch timed out after ${Math.round(timeoutMs / 1000)}s`,
+            run: async (signal) => await provider.embedBatch(texts, { signal }),
+          });
+        },
+        isRetryable: isRetryableMemoryEmbeddingError,
+        waitForRetry: async (delayMs) => {
+          await this.waitForEmbeddingRetry(delayMs, "retrying");
+        },
+        maxAttempts: EMBEDDING_RETRY_MAX_ATTEMPTS,
+        baseDelayMs: EMBEDDING_RETRY_BASE_DELAY_MS,
+      });
+    } catch (err) {
+      this.markLocalEmbeddingProviderDegraded(formatErrorMessage(err));
+      throw err;
+    }
   }
 
   protected async embedBatchInputsWithRetry(inputs: EmbeddingInput[]): Promise<number[][]> {
@@ -356,27 +366,32 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
     if (!embedBatchInputs) {
       return await this.embedBatchWithRetry(inputs.map((input) => input.text));
     }
-    return await runMemoryEmbeddingRetryLoop({
-      run: async () => {
-        const timeoutMs = this.resolveEmbeddingTimeout("batch");
-        log.debug("memory embeddings: structured batch start", {
-          provider: provider.id,
-          items: inputs.length,
-          timeoutMs,
-        });
-        return await runEmbeddingOperationWithTimeout({
-          timeoutMs,
-          message: `memory embeddings batch timed out after ${Math.round(timeoutMs / 1000)}s`,
-          run: async (signal) => await embedBatchInputs(inputs, { signal }),
-        });
-      },
-      isRetryable: isRetryableMemoryEmbeddingError,
-      waitForRetry: async (delayMs) => {
-        await this.waitForEmbeddingRetry(delayMs, "retrying structured batch");
-      },
-      maxAttempts: EMBEDDING_RETRY_MAX_ATTEMPTS,
-      baseDelayMs: EMBEDDING_RETRY_BASE_DELAY_MS,
-    });
+    try {
+      return await runMemoryEmbeddingRetryLoop({
+        run: async () => {
+          const timeoutMs = this.resolveEmbeddingTimeout("batch");
+          log.debug("memory embeddings: structured batch start", {
+            provider: provider.id,
+            items: inputs.length,
+            timeoutMs,
+          });
+          return await runEmbeddingOperationWithTimeout({
+            timeoutMs,
+            message: `memory embeddings batch timed out after ${Math.round(timeoutMs / 1000)}s`,
+            run: async (signal) => await embedBatchInputs(inputs, { signal }),
+          });
+        },
+        isRetryable: isRetryableMemoryEmbeddingError,
+        waitForRetry: async (delayMs) => {
+          await this.waitForEmbeddingRetry(delayMs, "retrying structured batch");
+        },
+        maxAttempts: EMBEDDING_RETRY_MAX_ATTEMPTS,
+        baseDelayMs: EMBEDDING_RETRY_BASE_DELAY_MS,
+      });
+    } catch (err) {
+      this.markLocalEmbeddingProviderDegraded(formatErrorMessage(err));
+      throw err;
+    }
   }
 
   private async waitForEmbeddingRetry(delayMs: number, action: string): Promise<void> {
@@ -405,11 +420,16 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
     }
     const timeoutMs = this.resolveEmbeddingTimeout("query");
     log.debug("memory embeddings: query start", { provider: provider.id, timeoutMs });
-    return await runEmbeddingOperationWithTimeout({
-      timeoutMs,
-      message: `memory embeddings query timed out after ${Math.round(timeoutMs / 1000)}s`,
-      run: async (signal) => await provider.embedQuery(text, { signal }),
-    });
+    try {
+      return await runEmbeddingOperationWithTimeout({
+        timeoutMs,
+        message: `memory embeddings query timed out after ${Math.round(timeoutMs / 1000)}s`,
+        run: async (signal) => await provider.embedQuery(text, { signal }),
+      });
+    } catch (err) {
+      this.markLocalEmbeddingProviderDegraded(formatErrorMessage(err));
+      throw err;
+    }
   }
 
   protected async withTimeout<T>(

@@ -37,7 +37,10 @@ import {
   resolveSingletonManagedCache,
 } from "./manager-cache.js";
 import { closeMemoryDatabase } from "./manager-db.js";
-import { MemoryManagerEmbeddingOps } from "./manager-embedding-ops.js";
+import {
+  isLocalEmbeddingWorkerFailure,
+  MemoryManagerEmbeddingOps,
+} from "./manager-embedding-ops.js";
 import {
   resolveMemoryPrimaryProviderRequest,
   resolveMemoryProviderState,
@@ -124,7 +127,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
   private providerInitialized = false;
   protected override fallbackFrom?: EmbeddingProviderId;
   protected override fallbackReason?: string;
-  private providerUnavailableReason?: string;
+  protected providerUnavailableReason?: string;
   protected override providerRuntime?: EmbeddingProviderRuntime;
   protected batch: {
     enabled: boolean;
@@ -312,6 +315,29 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     }
   }
 
+  protected markLocalEmbeddingProviderDegraded(message: string): void {
+    if (this.provider?.id !== "local") {
+      return;
+    }
+    if (!isLocalEmbeddingWorkerFailure(message)) {
+      return;
+    }
+    const degradedProvider = this.provider;
+    this.provider = null;
+    this.providerRuntime = undefined;
+    this.providerUnavailableReason = `Local embeddings degraded: ${message}`;
+    EMBEDDING_PROBE_CACHE.delete(this.cacheKey);
+    this.providerKey = this.computeProviderKey();
+    this.batch = this.resolveBatchConfig();
+    this.vector.semanticAvailable = false;
+    void Promise.resolve(degradedProvider.close?.()).catch((err: unknown) => {
+      log.debug(`memory embeddings: failed to close degraded local provider: ${String(err)}`);
+    });
+    log.warn("memory embeddings: local provider degraded after worker failure", {
+      error: message,
+    });
+  }
+
   async warmSession(sessionKey?: string): Promise<void> {
     if (!this.settings.sync.onSessionStart) {
       return;
@@ -474,7 +500,29 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
           })
         : [];
 
-    const queryVec = await this.embedQueryWithTimeout(cleaned);
+    let queryVec: number[];
+    try {
+      queryVec = await this.embedQueryWithTimeout(cleaned);
+    } catch (err) {
+      const message = formatErrorMessage(err);
+      const activatedFallback = this.shouldFallbackOnError(message)
+        ? await this.activateFallbackProvider(message).catch((fallbackErr: unknown) => {
+            log.warn(
+              `memory search: failed to activate fallback provider: ${formatErrorMessage(fallbackErr)}`,
+            );
+            return false;
+          })
+        : false;
+      if (activatedFallback) {
+        await this.runSafeReindex({ reason: "fallback", force: true });
+        queryVec = await this.embedQueryWithTimeout(cleaned);
+      } else if (!this.provider && this.fts.enabled && this.fts.available) {
+        log.warn(`memory search: embeddings unavailable; using keyword-only results: ${message}`);
+        return this.selectScoredResults(keywordResults, maxResults, minScore, 0);
+      } else {
+        throw err;
+      }
+    }
     const hasVector = queryVec.some((v) => v !== 0);
     const vectorResults = hasVector
       ? await this.searchVector(queryVec, candidates, sourceFilterList).catch((err) => {

@@ -3449,6 +3449,50 @@ describe("QmdMemoryManager", () => {
     await manager.close();
   });
 
+  it("passes CPU policy to QMD subprocesses", async () => {
+    cfg = {
+      ...cfg,
+      agents: {
+        ...cfg.agents,
+        defaults: {
+          ...(cfg.agents?.defaults ?? {}),
+          memorySearch: {
+            ...(cfg.agents?.defaults?.memorySearch ?? {}),
+            local: {
+              ...(cfg.agents?.defaults?.memorySearch?.local ?? {}),
+              gpu: "cpu",
+            },
+          },
+        },
+      },
+      memory: {
+        ...(cfg.memory ?? {}),
+        qmd: {
+          ...(cfg.memory?.qmd ?? {}),
+          searchMode: "query",
+        },
+      },
+    } as OpenClawConfig;
+    spawnMock.mockImplementation((_cmd: string, _args: string[]) => {
+      const child = createMockChild({ autoClose: false });
+      emitAndClose(child, "stdout", "[]");
+      return child;
+    });
+
+    const { manager } = await createManager();
+    await manager.probeVectorAvailability();
+
+    const searchCall = requireValue(
+      spawnMock.mock.calls.find((call: unknown[]) => (call[1] as string[])?.[0] === "status"),
+      "qmd status call missing",
+    );
+    const spawnOpts = searchCall[2] as { env?: NodeJS.ProcessEnv } | undefined;
+    expect(spawnOpts?.env?.QMD_FORCE_CPU).toBe("1");
+    expect(manager.status().custom?.qmd).toMatchObject({ localGpuPolicy: "cpu" });
+
+    await manager.close();
+  });
+
   it("retries mcporter daemon start after a failure", async () => {
     cfg = {
       ...cfg,

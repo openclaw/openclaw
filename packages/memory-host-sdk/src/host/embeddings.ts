@@ -1,10 +1,16 @@
 import { DEFAULT_LOCAL_MODEL } from "./embedding-defaults.js";
 import { sanitizeAndNormalizeEmbedding } from "./embedding-vectors.js";
-import type { EmbeddingProvider, EmbeddingProviderOptions } from "./embeddings.types.js";
+import { createLocalEmbeddingWorkerProvider } from "./embeddings-worker.js";
+import type {
+  EmbeddingProvider,
+  EmbeddingProviderOptions,
+  LocalEmbeddingGpuPolicy,
+} from "./embeddings.types.js";
 import {
   importNodeLlamaCpp,
   type Llama,
   type LlamaEmbeddingContext,
+  type LlamaGpuPolicy,
   type LlamaModel,
 } from "./node-llama.js";
 import { normalizeOptionalString } from "./string-utils.js";
@@ -20,9 +26,15 @@ export type {
   EmbeddingProviderOptions,
   EmbeddingProviderRequest,
   GeminiTaskType,
+  LocalEmbeddingGpuPolicy,
 } from "./embeddings.types.js";
 
 export { DEFAULT_LOCAL_MODEL } from "./embedding-defaults.js";
+
+export type LocalEmbeddingProviderRuntimeOptions = {
+  isolation?: "worker" | "in-process";
+  workerScriptPath?: string;
+};
 
 async function disposeResources(
   resources: Array<DisposableResource | null | undefined>,
@@ -42,10 +54,25 @@ async function disposeResources(
 
 export async function createLocalEmbeddingProvider(
   options: EmbeddingProviderOptions,
+  runtimeOptions?: LocalEmbeddingProviderRuntimeOptions,
+): Promise<EmbeddingProvider> {
+  if (runtimeOptions?.isolation === "in-process") {
+    return await createLocalEmbeddingProviderInProcess(options);
+  }
+  return await createLocalEmbeddingWorkerProvider(options, runtimeOptions);
+}
+
+function mapGpuPolicy(policy: LocalEmbeddingGpuPolicy): LlamaGpuPolicy {
+  return policy === "cpu" ? false : policy;
+}
+
+export async function createLocalEmbeddingProviderInProcess(
+  options: EmbeddingProviderOptions,
 ): Promise<EmbeddingProvider> {
   const modelPath = normalizeOptionalString(options.local?.modelPath) || DEFAULT_LOCAL_MODEL;
   const modelCacheDir = normalizeOptionalString(options.local?.modelCacheDir);
   const contextSize: number | "auto" = options.local?.contextSize ?? 4096;
+  const gpuPolicy: LocalEmbeddingGpuPolicy = options.local?.gpu ?? "auto";
 
   // Lazy-load node-llama-cpp to keep startup light unless local is enabled.
   const { getLlama, resolveModelFile, LlamaLogLevel } = await importNodeLlamaCpp();
@@ -85,7 +112,10 @@ export async function createLocalEmbeddingProvider(
       initAbortController = abortController;
       try {
         if (!llama) {
-          const nextLlama = await getLlama({ logLevel: LlamaLogLevel.error });
+          const nextLlama = await getLlama({
+            logLevel: LlamaLogLevel.error,
+            gpu: mapGpuPolicy(gpuPolicy),
+          });
           llama = await disposeAndThrowIfClosed(nextLlama);
         }
         if (!embeddingModel) {
@@ -97,6 +127,7 @@ export async function createLocalEmbeddingProvider(
           const nextModel = await llama.loadModel({
             modelPath: resolved,
             loadSignal: abortController.signal,
+            ...(gpuPolicy === "cpu" ? { gpuLayers: 0 } : {}),
           });
           embeddingModel = await disposeAndThrowIfClosed(nextModel);
         }
@@ -138,14 +169,13 @@ export async function createLocalEmbeddingProvider(
       const ctx = await ensureContext();
       throwIfClosed();
       options?.signal?.throwIfAborted();
-      const embeddings = await Promise.all(
-        texts.map(async (text) => {
-          throwIfClosed();
-          options?.signal?.throwIfAborted();
-          const embedding = await ctx.getEmbeddingFor(text);
-          return sanitizeAndNormalizeEmbedding(Array.from(embedding.vector));
-        }),
-      );
+      const embeddings: number[][] = [];
+      for (const text of texts) {
+        throwIfClosed();
+        options?.signal?.throwIfAborted();
+        const embedding = await ctx.getEmbeddingFor(text);
+        embeddings.push(sanitizeAndNormalizeEmbedding(Array.from(embedding.vector)));
+      }
       return embeddings;
     },
     close: async () => {

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   resolveEmbeddingTimeoutMs,
   resolveMemoryIndexConcurrency,
+  isLocalEmbeddingWorkerFailure,
   runEmbeddingOperationWithTimeout,
 } from "./manager-embedding-ops.js";
 
@@ -35,6 +36,16 @@ describe("memory embedding timeout resolution", () => {
         configuredBatchTimeoutSeconds: 45,
       }),
     ).toBe(45_000);
+  });
+});
+
+describe("local embedding worker failure detection", () => {
+  it("matches local worker crash messages", () => {
+    expect(
+      isLocalEmbeddingWorkerFailure("Local embedding worker exited unexpectedly (exit code 134)"),
+    ).toBe(true);
+    expect(isLocalEmbeddingWorkerFailure("embedding worker failed during cleanup")).toBe(true);
+    expect(isLocalEmbeddingWorkerFailure("remote embedding provider returned 429")).toBe(false);
   });
 });
 

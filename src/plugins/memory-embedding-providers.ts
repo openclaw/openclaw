@@ -62,6 +62,8 @@ export type MemoryEmbeddingProviderCreateOptions = {
   local?: {
     modelPath?: string;
     modelCacheDir?: string;
+    gpu?: "auto" | "metal" | "cpu";
+    contextSize?: number | "auto";
   };
   outputDimensionality?: number;
   taskType?:

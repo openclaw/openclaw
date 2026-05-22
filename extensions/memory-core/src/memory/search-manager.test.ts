@@ -327,6 +327,37 @@ describe("getMemorySearchManager caching", () => {
     expect(createQmdManagerMock.mock.calls).toHaveLength(1);
   });
 
+  it("replaces the QMD manager when the local GPU policy changes", async () => {
+    const agentId = "qmd-gpu-policy-cache";
+    const firstPrimary = createQmdManagerInstanceMock();
+    const secondPrimary = createQmdManagerInstanceMock();
+    createQmdManagerMock
+      .mockResolvedValueOnce(firstPrimary as unknown as QmdManagerInstance)
+      .mockResolvedValueOnce(secondPrimary as unknown as QmdManagerInstance);
+    const firstCfg = createQmdCfg(agentId);
+    const secondCfg = {
+      ...firstCfg,
+      agents: {
+        ...firstCfg.agents,
+        defaults: {
+          ...(firstCfg.agents?.defaults ?? {}),
+          memorySearch: {
+            ...(firstCfg.agents?.defaults?.memorySearch ?? {}),
+            local: { gpu: "cpu" },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    const first = await getMemorySearchManager({ cfg: firstCfg, agentId });
+    const second = await getMemorySearchManager({ cfg: secondCfg, agentId });
+
+    expect(first.manager).not.toBe(second.manager);
+    expect(createQmdManagerMock).toHaveBeenCalledTimes(2);
+    expect(firstPrimary.close).toHaveBeenCalledTimes(1);
+    expect(qmdCreateParams(1).runtimeConfig).toMatchObject({ localGpuPolicy: "cpu" });
+  });
+
   it("evicts failed qmd wrapper so next call retries qmd", async () => {
     const retryAgentId = "retry-agent";
     const {

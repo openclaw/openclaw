@@ -22,6 +22,8 @@ export type EmbeddingProviderId = string;
 export type EmbeddingProviderRequest = string;
 export type EmbeddingProviderFallback = string;
 
+export type LocalEmbeddingGpuPolicy = "auto" | "metal" | "cpu";
+
 export type GeminiTaskType =
   | "RETRIEVAL_QUERY"
   | "RETRIEVAL_DOCUMENT"
@@ -48,6 +50,12 @@ export type EmbeddingProviderOptions = {
   local?: {
     modelPath?: string;
     modelCacheDir?: string;
+    /**
+     * GPU backend policy passed to node-llama-cpp.
+     * "auto" preserves upstream selection, "metal" requires Metal, and "cpu"
+     * disables GPU offload where the installed node-llama-cpp build supports it.
+     */
+    gpu?: LocalEmbeddingGpuPolicy;
     /**
      * Context size passed to node-llama-cpp `createEmbeddingContext`.
      * Default: 4096, chosen to cover typical memory-search chunks (128–512 tokens)

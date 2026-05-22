@@ -44,6 +44,8 @@ vi.mock("./embeddings.js", () => {
     return [alpha, beta, image, audio];
   };
   return {
+    resolveEmbeddingProviderFallbackModel: (providerId: string, fallbackSourceModel: string) =>
+      providerId === "gemini" ? "gemini-embed" : fallbackSourceModel,
     createEmbeddingProvider: async (options: {
       provider?: string;
       model?: string;
@@ -243,6 +245,7 @@ describe("memory index", () => {
     sources?: Array<"memory" | "sessions">;
     sessionMemory?: boolean;
     provider?: "openai" | "gemini";
+    fallback?: "none" | "gemini";
     model?: string;
     outputDimensionality?: number;
     multimodal?: {
@@ -263,6 +266,7 @@ describe("memory index", () => {
           memorySearch: {
             provider: params.provider ?? "openai",
             model: params.model ?? "mock-embed",
+            fallback: params.fallback,
             outputDimensionality: params.outputDimensionality,
             store: { path: params.storePath, vector: { enabled: params.vectorEnabled ?? false } },
             // Perf: keep test indexes to a single chunk to reduce sqlite work.
@@ -575,6 +579,88 @@ describe("memory index", () => {
     expect((cached?.cacheExpiresAtMs ?? 0) - (cached?.checkedAtMs ?? 0)).toBe(
       EMBEDDING_PROBE_CACHE_TTL_MS,
     );
+  });
+
+  it("clears cached embedding probe readiness when local embeddings degrade", async () => {
+    const cfg = createCfg({ storePath: path.join(workspaceDir, "index-probe-degraded.sqlite") });
+    const manager = await getPersistentManager(cfg);
+
+    await expect(manager.probeEmbeddingAvailability()).resolves.toEqual({ ok: true });
+    expect(manager.getCachedEmbeddingAvailability()?.ok).toBe(true);
+    (
+      manager as unknown as {
+        provider: {
+          id: string;
+          model: string;
+          embedQuery: (text: string) => Promise<number[]>;
+          embedBatch: (texts: string[]) => Promise<number[][]>;
+          close: () => Promise<void>;
+        };
+      }
+    ).provider = {
+      id: "local",
+      model: "local-model",
+      embedQuery: async () => [1, 0],
+      embedBatch: async (texts: string[]) => texts.map(() => [1, 0]),
+      close: async () => {},
+    };
+
+    (
+      manager as unknown as {
+        markLocalEmbeddingProviderDegraded: (message: string) => void;
+      }
+    ).markLocalEmbeddingProviderDegraded(
+      "Local embedding worker exited unexpectedly (exit code 134)",
+    );
+
+    expect(manager.getCachedEmbeddingAvailability()).toBeNull();
+    await expect(manager.probeEmbeddingAvailability()).resolves.toMatchObject({
+      ok: false,
+      error: expect.stringContaining("Local embeddings degraded"),
+    });
+  });
+
+  it("activates configured fallback when local embeddings degrade during search", async () => {
+    const cfg = createCfg({
+      storePath: path.join(workspaceDir, "index-search-degraded-fallback.sqlite"),
+      fallback: "gemini",
+      hybrid: { enabled: true, vectorWeight: 0.5, textWeight: 0.5 },
+    });
+    const manager = await getPersistentManager(cfg);
+
+    await manager.sync({ reason: "test" });
+    const callsBeforeSearch = providerCalls.length;
+    (
+      manager as unknown as {
+        provider: {
+          id: string;
+          model: string;
+          embedQuery: () => Promise<number[]>;
+          embedBatch: (texts: string[]) => Promise<number[][]>;
+          close: () => Promise<void>;
+        };
+      }
+    ).provider = {
+      id: "local",
+      model: "local-model",
+      embedQuery: async () => {
+        throw new Error("Local embedding worker exited unexpectedly (exit code 134)");
+      },
+      embedBatch: async (texts: string[]) => texts.map(() => [1, 0, 0, 0]),
+      close: async () => {},
+    };
+
+    const results = await manager.search("alpha");
+
+    expect(results.length).toBeGreaterThan(0);
+    expect(providerCalls.slice(callsBeforeSearch).map((call) => call.provider)).toContain("gemini");
+    expect(
+      (
+        manager as unknown as {
+          provider: { id: string } | null;
+        }
+      ).provider?.id,
+    ).toBe("gemini");
   });
 
   it("streams embedding cache rows during safe reindex", async () => {

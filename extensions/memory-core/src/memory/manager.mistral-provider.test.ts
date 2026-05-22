@@ -124,6 +124,29 @@ describe("memory manager mistral provider wiring", () => {
     expect(fallbackState.providerRuntime).toBe(mistralRuntime);
   });
 
+  it("clears provider unavailable reason after fallback activation", () => {
+    const fallbackState = applyMemoryFallbackProviderState({
+      current: resolveMemoryProviderState({
+        provider: null,
+        fallbackFrom: undefined,
+        fallbackReason: undefined,
+        providerUnavailableReason: "Local embeddings degraded: worker crashed",
+        runtime: undefined,
+      }),
+      fallbackFrom: "local",
+      reason: "worker crashed",
+      result: {
+        provider: createProvider("openai"),
+        runtime: {
+          id: "openai",
+          cacheKeyData: { provider: "openai", model: "text-embedding-3-small" },
+        },
+      },
+    });
+
+    expect(fallbackState.providerUnavailableReason).toBeUndefined();
+  });
+
   it("uses default ollama model when activating ollama fallback", () => {
     const request = resolveMemoryFallbackProviderRequest({
       cfg: {} as OpenClawConfig,

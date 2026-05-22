@@ -68,6 +68,7 @@ export function applyMemoryFallbackProviderState(params: {
     ...params.current,
     fallbackFrom: params.fallbackFrom,
     fallbackReason: params.reason,
+    providerUnavailableReason: undefined,
     provider: params.result.provider,
     providerRuntime: params.result.runtime,
   };
