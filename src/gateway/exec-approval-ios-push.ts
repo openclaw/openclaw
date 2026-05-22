@@ -97,14 +97,17 @@ function shouldTargetDevice(params: {
 async function loadRegisteredTargets(params: {
   deviceIds: readonly string[];
 }): Promise<DeliveryTarget[]> {
-  const { results } = await runTasksWithConcurrency({
+  const { results, firstError, hasError } = await runTasksWithConcurrency({
     tasks: params.deviceIds.map((nodeId) => async () => {
       const registration = await loadApnsRegistration(nodeId);
       return registration ? ({ nodeId, registration } as DeliveryTarget) : null;
     }),
     limit: 10,
   });
-  return results.filter((target): target is DeliveryTarget => target !== null);
+  if (hasError) {
+    throw firstError;
+  }
+  return results.filter((target): target is DeliveryTarget => target != null);
 }
 
 async function resolvePairedTargets(params: {

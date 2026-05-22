@@ -327,11 +327,15 @@ export async function resolveAllAgentSessionStoreTargets(
   const realAgentsRootPromises = new Map<string, Promise<string | undefined>>();
   const getRealAgentsRoot = (agentsRoot: string): Promise<string | undefined> => {
     const existing = realAgentsRootPromises.get(agentsRoot);
-    if (existing) return existing;
+    if (existing) {
+      return existing;
+    }
     const p = fs.realpath(agentsRoot).then(
       (result) => result,
       (err: unknown) => {
-        if (shouldSkipDiscoveryError(err)) return undefined;
+        if (shouldSkipDiscoveryError(err)) {
+          return undefined;
+        }
         throw err;
       },
     );

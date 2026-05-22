@@ -47,7 +47,9 @@ export function createTrackedTempDirs() {
       const dirlists = await Promise.all(
         roots.map((dir) =>
           fs.readdir(dir).catch((err: unknown) => {
-            if ((err as NodeJS.ErrnoException).code === "ENOENT") return [];
+            if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+              return [];
+            }
             throw err;
           }),
         ),
