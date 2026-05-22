@@ -412,7 +412,11 @@ async function probeAntigravityCliCandidate(command: string): Promise<string | n
   }
   try {
     const { stdout } = await runExec(resolved, ["--help"], { timeoutMs: 3000 });
-    return stdout.includes("--print") && stdout.includes("--add-dir") ? resolved : null;
+    return stdout.includes("--print") &&
+      stdout.includes("--add-dir") &&
+      stdout.includes("--sandbox")
+      ? resolved
+      : null;
   } catch {
     return null;
   }
@@ -541,6 +545,7 @@ async function resolveAntigravityCliEntry(
     type: "cli",
     command,
     args: [
+      "--sandbox",
       "--add-dir",
       "{{MediaDir}}",
       "--print",

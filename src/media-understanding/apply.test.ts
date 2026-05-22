@@ -989,7 +989,7 @@ describe("applyMediaUnderstanding", () => {
     });
     mockedRunExec.mockImplementation(async (_command, args) => {
       if (Array.isArray(args) && args.includes("--help")) {
-        return { stdout: "--print\n--add-dir\n", stderr: "" };
+        return { stdout: "--print\n--add-dir\n--sandbox\n", stderr: "" };
       }
       return { stdout: "antigravity image description\n", stderr: "" };
     });
@@ -1002,14 +1002,20 @@ describe("applyMediaUnderstanding", () => {
     expect(ctx.Body).toBe("[Image]\nDescription:\nantigravity image description");
     expect(mockedRunExec).toHaveBeenCalledTimes(2);
     const realImagePath = await fs.realpath(imagePath);
-    const [command, args] = getRunExecCall(1);
+    const [command, args, options] = getRunExecCall(1);
     expect(command).toBe(path.join(binDir, "agy"));
     expect(args).toEqual([
+      "--sandbox",
       "--add-dir",
       path.dirname(realImagePath),
       "--print",
       expect.stringContaining(realImagePath),
     ]);
+    expect(options).toEqual({
+      timeoutMs: 60_000,
+      maxBuffer: CLI_OUTPUT_MAX_BUFFER,
+      cwd: path.dirname(realImagePath),
+    });
   });
 
   it("uses CLI image understanding and preserves caption for commands", async () => {
