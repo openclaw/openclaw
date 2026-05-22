@@ -5,6 +5,7 @@ import {
   buildAgentMainSessionKey,
   normalizeAgentId,
   parseAgentSessionKey,
+  parseThreadSessionSuffix,
 } from "../routing/session-key.js";
 import { resolveEventSessionKey, scopedHeartbeatWakeOptions } from "../routing/session-key.js";
 import { resolvePinnedMainDmOwnerFromAllowlist } from "../security/dm-policy-shared.js";
@@ -66,8 +67,10 @@ function normalizeEntry(value: string): string | undefined {
 export function parseDirectAgentSessionTarget(
   sessionKey: string | undefined | null,
 ): DirectSessionTarget | null {
-  const parsed = parseAgentSessionKey(sessionKey);
-  if (!parsed || deriveSessionChatTypeFromKey(sessionKey) !== "direct") {
+  const { baseSessionKey } = parseThreadSessionSuffix(sessionKey);
+  const directSessionKey = baseSessionKey ?? sessionKey;
+  const parsed = parseAgentSessionKey(directSessionKey);
+  if (!parsed || deriveSessionChatTypeFromKey(directSessionKey) !== "direct") {
     return null;
   }
   const parts = parsed.rest.split(":");
