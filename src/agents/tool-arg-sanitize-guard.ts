@@ -65,6 +65,9 @@ const ENV_FN_GUARD_WINDOW_MS = "OPENCLAW_FALSE_NEGATIVE_GUARD_WINDOW_MS";
 
 const DEFAULT_SANITIZED_FIELDS = [
   "command",
+  // P2.24b (2026-05-22): exec/bash 도구의 표준 변형 필드. command 외에도 cmd, script 누설 가능.
+  "cmd",
+  "script",
   "url",
   "prompt",
   "text",
@@ -85,6 +88,13 @@ const DEFAULT_SANITIZED_FIELDS = [
 // receive an extra "R4 path-quote-strip" rule and bypass R3 balance-quote
 // (which would corrupt a one-side-unbalanced path by appending a stray dquote).
 const PATH_SANITIZED_FIELDS = new Set<string>(["file_path", "path"]);
+
+// EXEC_CMD_SANITIZED_FIELDS (P2.24c, 2026-05-22): fields holding raw shell
+// command strings. They receive an extra R5b orphan-prefix strip pass that
+// is unsafe to apply globally (would touch markdown body / prose text), but
+// is safe and necessary here because shell command syntax never legitimately
+// contains a "<|" / "<<|" token.
+const EXEC_CMD_SANITIZED_FIELDS = new Set<string>(["command", "cmd", "script"]);
 
 const DEFAULT_MAX_FIELD_LEN = 65536;
 const DEFAULT_FN_WINDOW_MS = 10000;
@@ -207,6 +217,34 @@ const RE_SENTINEL_NESTED_SINGLE = /<\|[^|\s]{1,64}\|(?!>)/g;
 // contain pipe (pipe is reserved for the explicit |...|> sentinel form
 // above to keep the rules orthogonal).
 const RE_SENTINEL_HEREDOC = /<<[^|>\s]{1,64}>/g;
+// R1.x command-prefix sentinel (P6-2 2026-05-22): "<|find", "<|\find" etc.
+// "<|" immediately followed by a non-whitespace/non-pipe/non-> char.
+// Models emit this when the JSON serializer leaks a sentinel token before a
+// command word but without the closing "|>" terminator.
+const RE_SENTINEL_CMD_PREFIX = /<\|(?=[^\s|>])/g;
+
+// R1.x' double-variant cmd-prefix sentinel (P2.24c-fix, 2026-05-22): "<<|find",
+// "<<|\find" etc. Without this, RE_SENTINEL_CMD_PREFIX matches from index 1 of
+// "<<|find" (consuming "<|f" → leaving "<find"). The double variant matches the
+// leading "<<|" so the entire orphan prefix is stripped. Applied BEFORE the
+// single variant so it always wins on this pattern.
+const RE_SENTINEL_CMD_PREFIX_DOUBLE = /<<\|(?=[^\s|>])/g;
+
+// R5b (P2.24c, 2026-05-22): unconditional orphan-prefix strip. Catches cases
+// where the next byte after "<|" or "<<|" is a control character (e.g. \f from
+// "\\f" JSON-decoded), which RE_SENTINEL_CMD_PREFIX's `[^\s|>]` lookahead
+// rejects because `\s` includes \f/\v. Position-free, no lookahead.
+// Safe ordering: runs AFTER all paired/open sentinel regexes, so legitimate
+// `<|...|>` pairs are already consumed.
+const RE_SENTINEL_PIPE_ORPHAN_DOUBLE = /<<\|/g;
+const RE_SENTINEL_PIPE_ORPHAN_SINGLE = /<\|/g;
+
+// R5c (P2.24c, 2026-05-22): strip stray ASCII control bytes that Gemma4
+// occasionally leaks alongside sentinel tokens (form-feed \x0c, vertical-tab
+// \x0b, etc.). Preserves \t (\x09), \n (\x0a), \r (\x0d) which are
+// legitimate in multi-line script bodies.
+// eslint-disable-next-line no-control-regex
+const RE_CONTROL_CHARS_SAFE = /[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/g;
 
 // R2 html-tag: matches "</tag>", "<tag>", "<tag attr=value ...>".
 // Inner attr region bounded to 256 chars and may not contain "<" or ">".
@@ -244,7 +282,13 @@ export function sanitizeString(
 
   if (cfg.removeSentinel) {
     const before = current;
-    const next = current
+    // R5c (P2.24c) FIRST: strip stray ASCII control bytes (form-feed \x0c,
+    // vertical-tab \x0b, etc.) BEFORE the sentinel regexes run, so the
+    // lookahead-based RE_SENTINEL_CMD_PREFIX can match patterns like
+    // "<|<form-feed>find ..." (which previously slipped through because \s
+    // includes \f/\v). Preserves \t / \n / \r.
+    let chain = current.replace(RE_CONTROL_CHARS_SAFE, "");
+    chain = chain
       .replace(RE_SENTINEL_DOUBLE, "")
       .replace(RE_SENTINEL_OPEN_DOUBLE, "")
       .replace(RE_SENTINEL_NESTED_DOUBLE, "")
@@ -252,6 +296,24 @@ export function sanitizeString(
       .replace(RE_SENTINEL_OPEN_SINGLE, "")
       .replace(RE_SENTINEL_NESTED_SINGLE, "")
       .replace(RE_SENTINEL_HEREDOC, "");
+    // CMD_PREFIX variants strip orphan "<|" / "<<|" before command words.
+    // Skipped on path fields so R4 path-quote-strip (below) handles them and
+    // attributes the mutation to "path-quote-strip" rule (P2.19b contract).
+    // DOUBLE applied first to ensure "<<|" matches as a unit (otherwise the
+    // SINGLE pattern matches from index 1, leaving a stray "<").
+    if (!options.isPath) {
+      chain = chain.replace(RE_SENTINEL_CMD_PREFIX_DOUBLE, "").replace(RE_SENTINEL_CMD_PREFIX, "");
+    }
+    // R5b (P2.24c): exec/cmd/script fields get an unconditional orphan-prefix
+    // strip pass as a last-resort net for any remaining "<|" / "<<|" tokens.
+    // Safe because shell command syntax never legitimately contains them.
+    // Also skipped on path fields (R4 handles).
+    if (EXEC_CMD_SANITIZED_FIELDS.has(field) && !options.isPath) {
+      chain = chain
+        .replace(RE_SENTINEL_PIPE_ORPHAN_DOUBLE, "")
+        .replace(RE_SENTINEL_PIPE_ORPHAN_SINGLE, "");
+    }
+    const next = chain;
     if (next !== before) {
       mutations.push({
         field,
@@ -403,6 +465,7 @@ export function sanitizeToolArgs(
       // Also sanitize any string field whose value looks contaminated.
       const looksContaminated =
         RE_SENTINEL_DOUBLE.test(value) ||
+        RE_SENTINEL_CMD_PREFIX.test(value) ||
         RE_SENTINEL_OPEN_DOUBLE.test(value) ||
         RE_SENTINEL_NESTED_DOUBLE.test(value) ||
         RE_SENTINEL_SINGLE.test(value) ||

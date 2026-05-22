@@ -22,6 +22,7 @@ import {
   patchToolSchemaForClaudeCompatibility,
   wrapToolParamNormalization,
 } from "./pi-tools.params.js";
+import { applyReadEmptyArgsGuard } from "./pi-tools.read-guards.js";
 import type { AnyAgentTool } from "./pi-tools.types.js";
 import { assertSandboxPath } from "./sandbox-paths.js";
 import type { SandboxFsBridge } from "./sandbox/fs-bridge.js";
@@ -648,6 +649,15 @@ export function createOpenClawReadTool(
       const record =
         normalized ??
         (params && typeof params === "object" ? (params as Record<string, unknown>) : undefined);
+      // P2.24a — empty path guard (auto-extract from last user message, or throw strong error)
+      const autoPath = applyReadEmptyArgsGuard(record);
+      if (autoPath !== undefined) {
+        if (normalized) {
+          normalized.path = autoPath;
+        } else if (record) {
+          record.path = autoPath;
+        }
+      }
       assertRequiredParams(record, CLAUDE_PARAM_GROUPS.read, base.name);
       const result = await executeReadWithAdaptivePaging({
         base,

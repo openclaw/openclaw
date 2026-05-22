@@ -275,6 +275,34 @@ describe("false negative guard", () => {
 // here-doc, reading stdin until EOF and corrupting the command.
 // ---------------------------------------------------------------------------
 
+describe("R1.x cmd-prefix sentinel (P6-2)", () => {
+  const cases = [
+    { id: "CP1", input: "<|find ~/projects -name foo.md", want: "find ~/projects -name foo.md" },
+    {
+      id: "CP2",
+      input: "<|\\find ~/projects -name foo.md",
+      want: "\\find ~/projects -name foo.md",
+    },
+    {
+      id: "CP3",
+      input: "bash <|scripts/memory.sh on 2026-05-22",
+      want: "bash scripts/memory.sh on 2026-05-22",
+    },
+    {
+      id: "CP4",
+      input: "normal command without sentinel",
+      want: "normal command without sentinel",
+    },
+    { id: "CP5", input: "<|find foo && <|ls bar", want: "find foo && ls bar" },
+  ];
+  cases.forEach(({ id, input, want }) => {
+    it(id, () => {
+      const result = sanitizeString(input, "command", baseCfg);
+      expect(result.value).toBe(want);
+    });
+  });
+});
+
 describe("R1.1 heredoc-variant sentinel (TD18-2 regression)", () => {
   it("H1 removes <<//code> heredoc-shaped leak", () => {
     const r = sanitizeString("코드예시 <<//code> P218_MARKER_B_HTMLTAG 끝", "command", baseCfg);
@@ -501,5 +529,84 @@ describe("R4 path-quote-strip (P2.19b file_path quote sanitize)", () => {
     const r = sanitizeString("'\"x\"'", "file_path", baseCfg, { isPath: true });
     expect(r.value).toBe("x");
     expect(r.mutations.some((m) => m.rule === "path-quote-strip")).toBe(true);
+  });
+});
+
+// ===========================================================================
+// P2.24c — sentinel orphan-prefix + control-char strip (2026-05-22)
+// Regression cases for scenario-07-exec-sentinel-guard failure:
+//   raw bytes "3c 7c 0c 69 6e 64" = "<|<\x0c>ind" — sentinel <| followed by
+//   form-feed (0x0c). RE_SENTINEL_CMD_PREFIX's `[^\s|>]` lookahead rejected
+//   form-feed (\s includes \f), so the sentinel survived sanitize and reached
+//   bash unchanged, producing "ind: command not found".
+// ===========================================================================
+describe("tool-arg-sanitize-guard P2.24c — orphan prefix + control char strip", () => {
+  it("C1 scenario-07 exact raw: <|<0x0c>find ~/projects strips to 'find ~/projects'", () => {
+    // Raw input as emitted by Gemma4 (after JSON.parse): "<|" + 0x0c + "find ..."
+    const raw = "<|\u000cfind ~/projects/openclaw/agents/gemma/workspace";
+    const r = sanitizeString(raw, "command", baseCfg);
+    expect(r.value).toBe("find ~/projects/openclaw/agents/gemma/workspace");
+    expect(r.mutations.some((m) => m.rule === "sentinel")).toBe(true);
+  });
+
+  it("C2 double orphan <<|find ... strips to 'find ...'", () => {
+    const r = sanitizeString("<<|find /home -name '*.md'", "command", baseCfg);
+    expect(r.value).toBe("find /home -name '*.md'");
+    expect(r.mutations.some((m) => m.rule === "sentinel")).toBe(true);
+  });
+
+  it("C3 single orphan <|find ... (no control char) strips to 'find ...'", () => {
+    // Already handled by RE_SENTINEL_CMD_PREFIX (lookahead matches 'f'), but
+    // verify R5b also catches it as a last-resort net.
+    const r = sanitizeString("<|find /tmp", "command", baseCfg);
+    expect(r.value).toBe("find /tmp");
+    expect(r.mutations.some((m) => m.rule === "sentinel")).toBe(true);
+  });
+
+  it("C4 clean command is passed through unchanged", () => {
+    const r = sanitizeString("find /home/lisyoen -name '*.md'", "command", baseCfg);
+    expect(r.value).toBe("find /home/lisyoen -name '*.md'");
+    expect(r.mutations.length).toBe(0);
+  });
+
+  it("C5 multi-line script body preserves \\n and \\t", () => {
+    const raw = "set -e\n\tfind /tmp\n\techo done";
+    const r = sanitizeString(raw, "script", baseCfg);
+    expect(r.value).toBe(raw);
+    expect(r.mutations.length).toBe(0);
+  });
+
+  it("C6 non-EXEC field (body) — control char strip + CMD_PREFIX still cleans <|<0x0c>text", () => {
+    const raw = "<|\u000chello world";
+    const r = sanitizeString(raw, "body", baseCfg);
+    // R5c strips 0x0c -> "<|hello world" -> CMD_PREFIX (next char 'h' is
+    // non-space/pipe/gt) matches -> "hello world"
+    expect(r.value).toBe("hello world");
+    expect(r.mutations.some((m) => m.rule === "sentinel")).toBe(true);
+  });
+
+  it("C7 sanitizeToolArgs end-to-end on exec.command field", () => {
+    const raw = "<|\u000cfind ~/projects -name '*.md'";
+    const r = sanitizeToolArgs({ command: raw }, "exec");
+    expect(r.args.command).toBe("find ~/projects -name '*.md'");
+    expect(r.changed).toBe(true);
+  });
+
+  it("C8 vertical-tab \\x0b is also stripped", () => {
+    const raw = "<|\u000bls /tmp";
+    const r = sanitizeString(raw, "command", baseCfg);
+    expect(r.value).toBe("ls /tmp");
+    expect(r.mutations.some((m) => m.rule === "sentinel")).toBe(true);
+  });
+
+  it("C9 EXEC_CMD_SANITIZED_FIELDS strips <| even when surrounded by literal chars (R5b)", () => {
+    // Construct a case the standard sentinel regexes miss: "<|" embedded mid-string
+    // with no closing |>. RE_SENTINEL_CMD_PREFIX needs lookahead to non-space; this
+    // case has "<|" followed by 'x'. R5b is the safety net.
+    const r = sanitizeString("ls && <|x && pwd", "command", baseCfg);
+    // CMD_PREFIX would also catch this (next char 'x' is non-space), so verify
+    // result is clean regardless of which rule applied.
+    expect(r.value).toBe("ls && x && pwd");
+    expect(r.mutations.some((m) => m.rule === "sentinel")).toBe(true);
   });
 });
