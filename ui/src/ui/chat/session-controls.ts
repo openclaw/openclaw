@@ -38,18 +38,6 @@ import type { GatewayThinkingLevelOption, SessionsListResult } from "../types.ts
 
 type ChatSessionSwitchHandler = (state: AppViewState, nextSessionKey: string) => void;
 type ChatSessionSelectSurface = "desktop" | "mobile";
-type ChatSessionPickerSearchController = {
-  activeRequestId: number | null;
-  activeRequestSignature: string | null;
-  nextRequestId: number;
-  timer: ReturnType<typeof globalThis.setTimeout> | null;
-};
-
-const CHAT_SESSION_PICKER_SEARCH_DEBOUNCE_MS = 300;
-const chatSessionPickerSearchControllers = new WeakMap<
-  AppViewState,
-  ChatSessionPickerSearchController
->();
 
 export function renderChatSessionSelect(
   state: AppViewState,
@@ -116,78 +104,6 @@ function requestHostUpdate(state: AppViewState) {
   (state as AppViewState & { requestUpdate?: () => void }).requestUpdate?.();
 }
 
-function getChatSessionPickerSearchController(
-  state: AppViewState,
-): ChatSessionPickerSearchController {
-  let controller = chatSessionPickerSearchControllers.get(state);
-  if (!controller) {
-    controller = {
-      activeRequestId: null,
-      activeRequestSignature: null,
-      nextRequestId: 0,
-      timer: null,
-    };
-    chatSessionPickerSearchControllers.set(state, controller);
-  }
-  return controller;
-}
-
-function clearChatSessionPickerSearchTimer(state: AppViewState) {
-  const controller = getChatSessionPickerSearchController(state);
-  if (controller.timer) {
-    globalThis.clearTimeout(controller.timer);
-    controller.timer = null;
-  }
-}
-
-function invalidateChatSessionPickerSearchRequests(state: AppViewState) {
-  const controller = getChatSessionPickerSearchController(state);
-  controller.nextRequestId += 1;
-  controller.activeRequestId = null;
-  controller.activeRequestSignature = null;
-}
-
-function beginChatSessionPickerSearchRequest(
-  state: AppViewState,
-  signature: string,
-): number | null {
-  const controller = getChatSessionPickerSearchController(state);
-  if (controller.activeRequestSignature === signature) {
-    return null;
-  }
-  controller.nextRequestId += 1;
-  controller.activeRequestId = controller.nextRequestId;
-  controller.activeRequestSignature = signature;
-  return controller.activeRequestId;
-}
-
-function isCurrentChatSessionPickerSearchRequest(state: AppViewState, requestId: number): boolean {
-  return getChatSessionPickerSearchController(state).activeRequestId === requestId;
-}
-
-function finishChatSessionPickerSearchRequest(state: AppViewState, requestId: number) {
-  if (!isCurrentChatSessionPickerSearchRequest(state, requestId)) {
-    return;
-  }
-  const controller = getChatSessionPickerSearchController(state);
-  controller.activeRequestId = null;
-  controller.activeRequestSignature = null;
-}
-
-function createChatSessionPickerRequestSignature(options: {
-  append?: boolean;
-  offset?: number;
-  query: string;
-}) {
-  return [
-    options.query,
-    typeof options.offset === "number" && Number.isFinite(options.offset)
-      ? Math.max(0, Math.floor(options.offset))
-      : 0,
-    options.append === true ? "append" : "replace",
-  ].join("\n");
-}
-
 function focusChatSessionPickerSearch(state: AppViewState) {
   const updateComplete = (state as AppViewState & { updateComplete?: Promise<unknown> })
     .updateComplete;
@@ -210,7 +126,6 @@ function openChatSessionPicker(state: AppViewState, surface: ChatSessionSelectSu
 }
 
 function closeChatSessionPicker(state: AppViewState) {
-  clearChatSessionPickerSearchTimer(state);
   state.chatSessionPickerOpen = false;
   state.chatSessionPickerSurface = null;
   requestHostUpdate(state);
@@ -296,17 +211,6 @@ async function loadChatSessionPickerPage(
     return;
   }
   const query = normalizeOptionalString(options.query ?? state.chatSessionPickerAppliedQuery) ?? "";
-  const requestId = beginChatSessionPickerSearchRequest(
-    state,
-    createChatSessionPickerRequestSignature({
-      append: options.append,
-      offset: options.offset,
-      query,
-    }),
-  );
-  if (requestId === null) {
-    return;
-  }
   state.chatSessionPickerLoading = true;
   state.chatSessionPickerError = null;
   requestHostUpdate(state);
@@ -318,29 +222,19 @@ async function loadChatSessionPickerPage(
         createChatSessionPickerRequestParams(state, { query, offset: options.offset }),
       ),
     );
-    if (!isCurrentChatSessionPickerSearchRequest(state, requestId)) {
-      return;
-    }
     const previous = state.chatSessionPickerResult ?? state.sessionsResult;
     state.chatSessionPickerResult =
       options.append === true && previous ? appendChatSessionPickerResult(previous, page) : page;
     state.chatSessionPickerAppliedQuery = query;
   } catch (err) {
-    if (!isCurrentChatSessionPickerSearchRequest(state, requestId)) {
-      return;
-    }
     state.chatSessionPickerError = String(err);
   } finally {
-    if (isCurrentChatSessionPickerSearchRequest(state, requestId)) {
-      finishChatSessionPickerSearchRequest(state, requestId);
-      state.chatSessionPickerLoading = false;
-      requestHostUpdate(state);
-    }
+    state.chatSessionPickerLoading = false;
+    requestHostUpdate(state);
   }
 }
 
 async function applyChatSessionPickerSearch(state: AppViewState) {
-  clearChatSessionPickerSearchTimer(state);
   const query = normalizeOptionalString(state.chatSessionPickerQuery) ?? "";
   if (!query) {
     clearChatSessionPickerSearch(state);
@@ -349,44 +243,26 @@ async function applyChatSessionPickerSearch(state: AppViewState) {
   await loadChatSessionPickerPage(state, { query });
 }
 
-function clearChatSessionPickerSearch(state: AppViewState, options: { focus?: boolean } = {}) {
-  clearChatSessionPickerSearchTimer(state);
-  invalidateChatSessionPickerSearchRequests(state);
+function clearChatSessionPickerSearch(state: AppViewState) {
   state.chatSessionPickerQuery = "";
   state.chatSessionPickerAppliedQuery = "";
   state.chatSessionPickerError = null;
   state.chatSessionPickerResult = null;
-  state.chatSessionPickerLoading = false;
   requestHostUpdate(state);
-  if (options.focus ?? true) {
-    focusChatSessionPickerSearch(state);
-  }
-}
-
-function scheduleChatSessionPickerSearch(state: AppViewState) {
-  clearChatSessionPickerSearchTimer(state);
-  const controller = getChatSessionPickerSearchController(state);
-  controller.timer = globalThis.setTimeout(() => {
-    controller.timer = null;
-    void applyChatSessionPickerSearch(state);
-  }, CHAT_SESSION_PICKER_SEARCH_DEBOUNCE_MS);
+  focusChatSessionPickerSearch(state);
 }
 
 function updateChatSessionPickerSearchQuery(state: AppViewState, nextQuery: string) {
   state.chatSessionPickerQuery = nextQuery;
-  const query = normalizeOptionalString(nextQuery) ?? "";
-  if (!query) {
-    clearChatSessionPickerSearch(state, { focus: false });
+  if (normalizeOptionalString(nextQuery)) {
     return;
   }
-  if (query !== state.chatSessionPickerAppliedQuery || !state.chatSessionPickerResult) {
-    invalidateChatSessionPickerSearchRequests(state);
-    state.chatSessionPickerError = null;
-    state.chatSessionPickerLoading = false;
-    scheduleChatSessionPickerSearch(state);
-  } else {
-    clearChatSessionPickerSearchTimer(state);
+  if (!state.chatSessionPickerAppliedQuery && !state.chatSessionPickerResult) {
+    return;
   }
+  state.chatSessionPickerAppliedQuery = "";
+  state.chatSessionPickerError = null;
+  state.chatSessionPickerResult = null;
   requestHostUpdate(state);
 }
 
@@ -495,10 +371,7 @@ function renderChatSessionPickerPopover(
 ) {
   const result = resolveChatSessionPickerResult(state);
   const rows = result?.sessions ?? [];
-  const controlsDisabled = !state.connected || !state.client;
-  const normalizedQuery = normalizeOptionalString(state.chatSessionPickerQuery) ?? "";
-  const searchPending = normalizedQuery !== state.chatSessionPickerAppliedQuery;
-  const loadMoreDisabled = controlsDisabled || state.chatSessionPickerLoading || searchPending;
+  const disabled = !state.connected || !state.client || state.chatSessionPickerLoading;
   const hasQuery =
     state.chatSessionPickerQuery.trim() !== "" || state.chatSessionPickerAppliedQuery.trim() !== "";
   const loadMoreOffset = resolveNextChatSessionOffset(result);
@@ -531,7 +404,7 @@ function renderChatSessionPickerPopover(
             placeholder=${t("chat.selectors.sessionSearch")}
             aria-label=${t("chat.selectors.sessionSearch")}
             .value=${state.chatSessionPickerQuery}
-            ?disabled=${controlsDisabled}
+            ?disabled=${disabled}
             @input=${(event: Event) => {
               updateChatSessionPickerSearchQuery(state, (event.target as HTMLInputElement).value);
             }}
@@ -541,7 +414,6 @@ function renderChatSessionPickerPopover(
                 void applyChatSessionPickerSearch(state);
               }
             }}
-            @blur=${() => void applyChatSessionPickerSearch(state)}
           />
         </label>
         <button
@@ -550,7 +422,7 @@ function renderChatSessionPickerPopover(
           type="button"
           title=${t("common.search")}
           aria-label=${t("common.search")}
-          ?disabled=${controlsDisabled}
+          ?disabled=${disabled}
           @click=${() => void applyChatSessionPickerSearch(state)}
         >
           ${icons.search}
@@ -562,7 +434,7 @@ function renderChatSessionPickerPopover(
               type="button"
               title=${t("chat.selectors.clearSessionSearch")}
               aria-label=${t("chat.selectors.clearSessionSearch")}
-              ?disabled=${controlsDisabled}
+              ?disabled=${disabled}
               @click=${() => clearChatSessionPickerSearch(state)}
             >
               ${icons.x}
@@ -627,7 +499,7 @@ function renderChatSessionPickerPopover(
               class="btn btn--ghost btn--sm"
               data-chat-session-load-more="true"
               type="button"
-              ?disabled=${loadMoreDisabled}
+              ?disabled=${disabled}
               @click=${() => void loadMoreChatSessionPickerResults(state)}
             >
               ${t("chat.selectors.loadMoreSessions")}
