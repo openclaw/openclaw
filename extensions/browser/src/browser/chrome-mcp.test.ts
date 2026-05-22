@@ -26,10 +26,13 @@ import {
   openChromeMcpTab,
   resolveChromeMcpNavigateCallTimeoutMs,
   resetChromeMcpSessionsForTest,
+  runChromeMcpLighthouseAudit,
   setChromeMcpProcessCleanupDepsForTest,
   setChromeMcpSessionFactoryForTest,
   startChromeMcpPerformanceTrace,
+  startChromeMcpScreencast,
   stopChromeMcpPerformanceTrace,
+  stopChromeMcpScreencast,
   takeChromeMcpHeapSnapshot,
   takeChromeMcpScreenshot,
   takeChromeMcpSnapshot,
@@ -143,6 +146,18 @@ function createFakeSession(): ChromeMcpSession {
     }
     if (name === "get_heapsnapshot_retainers") {
       return { content: [{ type: "text", text: "Heap snapshot retainers." }] };
+    }
+    if (name === "lighthouse_audit") {
+      return {
+        content: [{ type: "text", text: "Lighthouse audit complete." }],
+        structuredContent: { summary: { device: args?.device, mode: args?.mode } },
+      };
+    }
+    if (name === "screencast_start") {
+      return { content: [{ type: "text", text: `Screencast recording started: ${args?.filePath}` }] };
+    }
+    if (name === "screencast_stop") {
+      return { content: [{ type: "text", text: "The screencast recording has been stopped." }] };
     }
     if (name === "list_console_messages") {
       return {
@@ -539,6 +554,59 @@ describe("chrome MCP page parsing", () => {
     ]);
   });
 
+  it("forwards Chrome MCP lighthouse audit and screencast tools", async () => {
+    const session = createFakeSession();
+    const factory: ChromeMcpSessionFactory = async () => session;
+    setChromeMcpSessionFactoryForTest(factory);
+
+    await expect(
+      runChromeMcpLighthouseAudit({
+        profileName: "chrome-live",
+        targetId: "2",
+        mode: "snapshot",
+        device: "mobile",
+        outputDirPath: "/tmp/openclaw/lighthouse",
+      }),
+    ).resolves.toEqual({
+      output: "Lighthouse audit complete.",
+      structuredContent: { summary: { device: "mobile", mode: "snapshot" } },
+    });
+    await expect(
+      startChromeMcpScreencast({
+        profileName: "chrome-live",
+        targetId: "2",
+        filePath: "/tmp/openclaw/screencast.webm",
+      }),
+    ).resolves.toContain("screencast.webm");
+    await expect(
+      stopChromeMcpScreencast({
+        profileName: "chrome-live",
+        targetId: "2",
+      }),
+    ).resolves.toContain("stopped");
+
+    const calls = (session.client.callTool as unknown as ToolCallMock).mock.calls;
+    expect(calls.slice(-3).map(([call]) => call)).toEqual([
+      {
+        name: "lighthouse_audit",
+        arguments: {
+          pageId: 2,
+          mode: "snapshot",
+          device: "mobile",
+          outputDirPath: "/tmp/openclaw/lighthouse",
+        },
+      },
+      {
+        name: "screencast_start",
+        arguments: { pageId: 2, filePath: "/tmp/openclaw/screencast.webm" },
+      },
+      {
+        name: "screencast_stop",
+        arguments: { pageId: 2 },
+      },
+    ]);
+  });
+
   it("keeps evaluated clickCoords fallback when Chrome MCP click_at cannot preserve options", async () => {
     const session = createFakeSession();
     const factory: ChromeMcpSessionFactory = async () => session;
@@ -569,6 +637,7 @@ describe("chrome MCP page parsing", () => {
       "--experimental-page-id-routing",
       "--experimentalVision",
       "--experimentalMemory",
+      "--experimentalScreencast",
       "--userDataDir",
       "/tmp/brave-profile",
     ]);
@@ -590,6 +659,7 @@ describe("chrome MCP page parsing", () => {
       "--experimental-page-id-routing",
       "--experimentalVision",
       "--experimentalMemory",
+      "--experimentalScreencast",
     ]);
   });
 
@@ -608,6 +678,7 @@ describe("chrome MCP page parsing", () => {
       "--experimental-page-id-routing",
       "--experimentalVision",
       "--experimentalMemory",
+      "--experimentalScreencast",
     ]);
   });
 
@@ -624,6 +695,7 @@ describe("chrome MCP page parsing", () => {
       "--experimental-page-id-routing",
       "--experimentalVision",
       "--experimentalMemory",
+      "--experimentalScreencast",
       "--browserUrl",
       "http://127.0.0.1:9222",
       "--no-usage-statistics",
@@ -674,6 +746,7 @@ describe("chrome MCP page parsing", () => {
       "--experimental-page-id-routing",
       "--experimentalVision",
       "--experimentalMemory",
+      "--experimentalScreencast",
     ]);
   });
 

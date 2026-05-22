@@ -171,6 +171,8 @@ const DEFAULT_CHROME_MCP_FEATURE_ARGS = [
   "--experimentalVision",
   // Enables Chrome DevTools MCP heap snapshot inspection tools.
   "--experimentalMemory",
+  // Enables Chrome DevTools MCP screencast_start/stop tools.
+  "--experimentalScreencast",
 ];
 const CHROME_MCP_USAGE_STATISTICS_FLAG_RE = /^--(?:no-)?usage-?statistics(?:=.*)?$/i;
 const CHROME_MCP_CONNECTION_FLAGS = new Set([
@@ -2247,6 +2249,78 @@ export async function getChromeMcpHeapSnapshotRetainers(params: {
     { timeoutMs: params.timeoutMs },
   );
   return toHeapSnapshotInspectionResult(result);
+}
+
+export type ChromeMcpLighthouseAuditResult = {
+  output: string;
+  structuredContent?: Record<string, unknown>;
+};
+
+export async function runChromeMcpLighthouseAudit(params: {
+  profileName: string;
+  profile?: ChromeMcpProfileOptions;
+  userDataDir?: string;
+  targetId: string;
+  mode?: "navigation" | "snapshot";
+  device?: "desktop" | "mobile";
+  outputDirPath?: string;
+  timeoutMs?: number;
+}): Promise<ChromeMcpLighthouseAuditResult> {
+  const result = await callTool(
+    params.profileName,
+    chromeMcpProfileOptionsFromParams(params),
+    "lighthouse_audit",
+    {
+      pageId: parsePageId(params.targetId),
+      ...(params.mode ? { mode: params.mode } : {}),
+      ...(params.device ? { device: params.device } : {}),
+      ...(params.outputDirPath ? { outputDirPath: params.outputDirPath } : {}),
+    },
+    { timeoutMs: params.timeoutMs },
+  );
+  const structuredContent = extractStructuredContent(result);
+  return {
+    output: extractMessageText(result),
+    ...(Object.keys(structuredContent).length > 0 ? { structuredContent } : {}),
+  };
+}
+
+export async function startChromeMcpScreencast(params: {
+  profileName: string;
+  profile?: ChromeMcpProfileOptions;
+  userDataDir?: string;
+  targetId: string;
+  filePath?: string;
+  timeoutMs?: number;
+}): Promise<string> {
+  const result = await callTool(
+    params.profileName,
+    chromeMcpProfileOptionsFromParams(params),
+    "screencast_start",
+    {
+      pageId: parsePageId(params.targetId),
+      ...(params.filePath ? { filePath: params.filePath } : {}),
+    },
+    { timeoutMs: params.timeoutMs },
+  );
+  return extractMessageText(result);
+}
+
+export async function stopChromeMcpScreencast(params: {
+  profileName: string;
+  profile?: ChromeMcpProfileOptions;
+  userDataDir?: string;
+  targetId: string;
+  timeoutMs?: number;
+}): Promise<string> {
+  const result = await callTool(
+    params.profileName,
+    chromeMcpProfileOptionsFromParams(params),
+    "screencast_stop",
+    { pageId: parsePageId(params.targetId) },
+    { timeoutMs: params.timeoutMs },
+  );
+  return extractMessageText(result);
 }
 
 /** Accept or dismiss a Chrome MCP browser dialog. */
