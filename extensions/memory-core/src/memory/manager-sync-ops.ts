@@ -29,6 +29,7 @@ import {
   listMemoryFiles,
   loadSqliteVecExtension,
   normalizeExtraMemoryPaths,
+  retryTransientMemoryRead,
   runWithConcurrency,
   type MemorySource,
   type MemorySyncProgressUpdate,
@@ -989,7 +990,10 @@ export abstract class MemoryManagerSyncOps {
     }
     let handle;
     try {
-      handle = await fs.open(absPath, "r");
+      handle = await retryTransientMemoryRead(
+        () => fs.open(absPath, "r"),
+        `open session transcript for newline count ${absPath}`,
+      );
     } catch (err) {
       if (isFileMissingError(err)) {
         return 0;
@@ -1002,7 +1006,10 @@ export abstract class MemoryManagerSyncOps {
       const buffer = Buffer.alloc(SESSION_DELTA_READ_CHUNK_BYTES);
       while (offset < end) {
         const toRead = Math.min(buffer.length, end - offset);
-        const { bytesRead } = await handle.read(buffer, 0, toRead, offset);
+        const { bytesRead } = await retryTransientMemoryRead(
+          () => handle.read(buffer, 0, toRead, offset),
+          `count session transcript newlines ${absPath}`,
+        );
         if (bytesRead <= 0) {
           break;
         }
