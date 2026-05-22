@@ -1495,7 +1495,7 @@ describe("registerCoreHealthChecks", () => {
           OPENCLAW_STATE_DIR: tmp,
         },
       },
-      { checks: [check!] },
+      { checks: [check!], validate: true },
     );
 
     expect(result.effects).toContainEqual(
@@ -1604,9 +1604,9 @@ describe("registerCoreHealthChecks", () => {
     });
     await fs.writeFile(selectedLock, payload);
     await fs.writeFile(otherLock, payload);
-    const check = CORE_HEALTH_CHECKS.find((entry) => entry.id === "core/doctor/session-locks");
+    const check = getCheck(CORE_HEALTH_CHECKS, "core/doctor/session-locks");
 
-    const findings = await check?.detect(
+    const findings = await check.detect(
       {
         mode: "fix",
         runtime: { log() {}, error() {}, exit() {} },
@@ -1661,7 +1661,7 @@ describe("registerCoreHealthChecks", () => {
           OPENCLAW_STATE_DIR: tmp,
         },
       },
-      { checks: [check!] },
+      { checks: [check!], validate: true },
     );
 
     expect(result.effects).toContainEqual(
@@ -1824,11 +1824,9 @@ describe("registerCoreHealthChecks", () => {
     const raw = `${entries.map((entry) => JSON.stringify(entry)).join("\n")}\n`;
     await fs.writeFile(selectedFile, raw);
     await fs.writeFile(otherFile, raw);
-    const check = CORE_HEALTH_CHECKS.find(
-      (entry) => entry.id === "core/doctor/session-transcripts",
-    );
+    const check = getCheck(CORE_HEALTH_CHECKS, "core/doctor/session-transcripts");
 
-    const findings = await check?.detect(
+    const findings = await check.detect(
       {
         mode: "fix",
         runtime: { log() {}, error() {}, exit() {} },
