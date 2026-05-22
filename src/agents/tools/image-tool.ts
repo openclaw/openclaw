@@ -15,6 +15,7 @@ import { buildProviderRegistry } from "../../media-understanding/runner.js";
 import {
   classifyMediaReferenceSource,
   normalizeMediaReferenceSource,
+  resolveMediaReferenceLocalPath,
 } from "../../media/media-reference.js";
 import { loadWebMedia } from "../../media/web-media.js";
 import {
@@ -625,9 +626,25 @@ export function createImageTool(options?: {
           throw new Error("Sandboxed image tool does not allow remote URLs.");
         }
 
-        const resolvedImage = (() => {
+        // Resolve `media://inbound/<id>` claim-check URIs to their physical
+        // buffer path BEFORE the non-sandbox workspace fallback. Without this
+        // short-circuit, the workspace-resolve branch below sees a non-absolute
+        // reference and calls `resolve(workspaceDir, "media://inbound/<id>")`,
+        // which produces `<workspaceDir>/media:/inbound/<id>` and ENOENTs at
+        // load time. Sandboxed runs keep the raw URI so the sandbox bridge can
+        // rewrite it through its managed inbound media fallback instead of
+        // crossing the boundary with a host state-dir path.
+        const resolvedImage = await (async () => {
           if (sandboxConfig) {
             return normalizedRef;
+          }
+          if (refInfo.isMediaStoreUrl) {
+            const localPath = await resolveMediaReferenceLocalPath(normalizedRef);
+            // `resolveMediaReferenceLocalPath` returns its input unchanged when
+            // no inbound buffer matches. Pass that through so the existing
+            // `loadWebMedia` ENOENT path still surfaces a clear error rather
+            // than masking it as a workspace miss.
+            return localPath;
           }
           if (normalizedRef.startsWith("~")) {
             return resolveUserPath(normalizedRef);

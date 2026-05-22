@@ -1724,6 +1724,46 @@ describe("image tool implicit imageModel config", () => {
       expect((res.details as { rewrittenFrom?: string }).rewrittenFrom).toContain("photo.png");
     });
   });
+
+  it("preserves media:// refs for sandbox inbound fallback resolution", async () => {
+    await withTempSandboxState(async ({ agentDir, sandboxRoot }) => {
+      await fs.mkdir(path.join(sandboxRoot, "media", "inbound"), {
+        recursive: true,
+      });
+      await fs.writeFile(
+        path.join(sandboxRoot, "media", "inbound", "photo.png"),
+        Buffer.from(ONE_PIXEL_PNG_B64, "base64"),
+      );
+
+      const fetch = stubMinimaxOkFetch();
+      const cfg: OpenClawConfig = {
+        ...createMinimaxImageConfig(),
+        tools: { fs: { workspaceOnly: true } },
+      };
+      const sandbox = {
+        root: sandboxRoot,
+        bridge: createHostSandboxFsBridge(sandboxRoot),
+        workspaceOnly: true,
+      };
+      const tool = createRequiredImageTool({
+        config: cfg,
+        agentDir,
+        sandbox,
+        workspaceDir: sandboxRoot,
+      });
+
+      const res = await tool.execute("t1", {
+        prompt: "Describe the image.",
+        image: "media://inbound/photo.png",
+      });
+
+      expectToolText(res, "ok");
+      expect(fetch).toHaveBeenCalledTimes(1);
+      expect((res.details as { rewrittenFrom?: string }).rewrittenFrom).toBe(
+        "media://inbound/photo.png",
+      );
+    });
+  });
 });
 
 describe("image tool data URL support", () => {
@@ -1936,6 +1976,32 @@ describe("image tool managed inbound media", () => {
 
         await expectImageToolExecOk(tool, mediaPath);
         expect(fetch).toHaveBeenCalledTimes(1);
+      });
+    });
+  });
+
+  it("resolves media://inbound refs even when workspaceDir is set", async () => {
+    // Regression: when an agent had `options.workspaceDir` set (the common
+    // case for any sessioned agent run), the IIFE that builds `resolvedImage`
+    // fell into the relative-path branch for `media://inbound/<id>` because
+    // the URI is technically non-absolute. `resolve(workspaceDir, "media://...")`
+    // mangled the URI into `<workspaceDir>/media:/inbound/<id>` and
+    // `loadWebMedia` ENOENTed before its own `resolveMediaStoreUriToPath`
+    // helper could rescue it (upstream #74123 seam 2).
+    await withManagedInboundPng(async ({ mediaId }) => {
+      installImageUnderstandingProviderStubs();
+      const fetch = stubMinimaxOkFetch();
+      await withTempAgentDir(async (agentDir) => {
+        await withTempWorkspacePng(async ({ workspaceDir }) => {
+          const tool = createRequiredImageTool({
+            config: createMinimaxImageConfig(),
+            agentDir,
+            workspaceDir,
+          });
+
+          await expectImageToolExecOk(tool, `media://inbound/${mediaId}`);
+          expect(fetch).toHaveBeenCalledTimes(1);
+        });
       });
     });
   });

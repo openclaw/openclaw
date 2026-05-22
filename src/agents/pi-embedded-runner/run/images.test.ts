@@ -350,6 +350,30 @@ describe("modelSupportsImages", () => {
 });
 
 describe("loadImageFromRef", () => {
+  async function withManagedInboundPng(
+    run: (params: { stateDir: string; mediaId: string; mediaPath: string }) => Promise<void>,
+  ) {
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-native-image-inbound-"));
+    const inboundDir = path.join(stateDir, "media", "inbound");
+    const mediaId = "claim-check-test.png";
+    const mediaPath = path.join(inboundDir, mediaId);
+    await fs.mkdir(inboundDir, { recursive: true });
+    await fs.writeFile(
+      mediaPath,
+      Buffer.from(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/woAAn8B9FD5fHAAAAAASUVORK5CYII=",
+        "base64",
+      ),
+    );
+    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+    try {
+      await run({ stateDir, mediaId, mediaPath });
+    } finally {
+      vi.unstubAllEnvs();
+      await fs.rm(stateDir, { recursive: true, force: true });
+    }
+  }
+
   it("allows sandbox-validated host paths outside default media roots", async () => {
     const homeDir = os.homedir();
     await fs.mkdir(homeDir, { recursive: true });
@@ -385,6 +409,68 @@ describe("loadImageFromRef", () => {
     } finally {
       await fs.rm(sandboxParent, { recursive: true, force: true });
     }
+  });
+
+  it("resolves media:// claim-check URIs against the inbound media store", async () => {
+    // Regression: previously `loadImageFromRef` treated `media://inbound/<id>`
+    // as a plain relative path and `path.resolve(workspaceDir, ref.resolved)`
+    // mangled it into `<workspaceDir>/media:/inbound/<id>`, ENOENTing silently
+    // (upstream #74123 seam 1).
+    await withManagedInboundPng(async ({ mediaId }) => {
+      const image = await loadImageFromRef(
+        {
+          raw: `media://inbound/${mediaId}`,
+          type: "media-uri",
+          resolved: `media://inbound/${mediaId}`,
+        },
+        "/home/node/.openclaw/workspace",
+      );
+
+      expect(image?.type).toBe("image");
+      expect(image?.mimeType).toMatch(/^image\//);
+      expect(image?.data).toBeTruthy();
+    });
+  });
+
+  it("resolves media:// claim-check URIs when sandbox reads are enabled", async () => {
+    await withManagedInboundPng(async ({ mediaId }) => {
+      const sandboxRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-native-image-sandbox-"));
+      try {
+        const image = await loadImageFromRef(
+          {
+            raw: `media://inbound/${mediaId}`,
+            type: "media-uri",
+            resolved: `media://inbound/${mediaId}`,
+          },
+          sandboxRoot,
+          {
+            workspaceOnly: true,
+            sandbox: {
+              root: sandboxRoot,
+              bridge: createHostSandboxFsBridge(sandboxRoot),
+            },
+          },
+        );
+
+        expect(image?.type).toBe("image");
+        expect(image?.mimeType).toMatch(/^image\//);
+        expect(image?.data).toBeTruthy();
+      } finally {
+        await fs.rm(sandboxRoot, { recursive: true, force: true });
+      }
+    });
+  });
+
+  it("returns null for media:// URIs that do not match a known inbound buffer", async () => {
+    const image = await loadImageFromRef(
+      {
+        raw: "media://inbound/no-such-buffer.png",
+        type: "media-uri",
+        resolved: "media://inbound/no-such-buffer.png",
+      },
+      "/home/node/.openclaw/workspace",
+    );
+    expect(image).toBeNull();
   });
 });
 

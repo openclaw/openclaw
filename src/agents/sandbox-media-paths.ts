@@ -26,6 +26,7 @@ export async function resolveSandboxedBridgeMediaPath(params: {
   const normalizeFileUrl = (rawPath: string) =>
     rawPath.startsWith("file://") ? rawPath.slice("file://".length) : rawPath;
   const filePath = normalizeFileUrl(params.mediaPath);
+  const mediaStoreMatch = /^media:\/\/inbound\/(.+)$/i.exec(filePath);
   const enforceWorkspaceBoundary = async (hostPath: string) => {
     if (!params.sandbox.workspaceOnly) {
       return;
@@ -42,6 +43,33 @@ export async function resolveSandboxedBridgeMediaPath(params: {
       filePath,
       cwd: params.sandbox.root,
     });
+  if (mediaStoreMatch && params.inboundFallbackDir?.trim()) {
+    try {
+      const decodedId = decodeURIComponent(mediaStoreMatch[1]);
+      if (decodedId && !decodedId.includes("/") && !decodedId.includes("\\")) {
+        const fallbackPath = path.join(params.inboundFallbackDir.trim(), decodedId);
+        const stat = await params.sandbox.bridge.stat({
+          filePath: fallbackPath,
+          cwd: params.sandbox.root,
+        });
+        if (stat) {
+          const resolvedFallback = params.sandbox.bridge.resolvePath({
+            filePath: fallbackPath,
+            cwd: params.sandbox.root,
+          });
+          if (resolvedFallback.hostPath) {
+            await enforceWorkspaceBoundary(resolvedFallback.hostPath);
+          }
+          return {
+            resolved: resolvedFallback.hostPath ?? resolvedFallback.containerPath,
+            rewrittenFrom: filePath,
+          };
+        }
+      }
+    } catch {
+      // Fall through to the existing direct/fallback error path for a clear failure.
+    }
+  }
   try {
     const resolved = resolveDirect();
     if (resolved.hostPath) {

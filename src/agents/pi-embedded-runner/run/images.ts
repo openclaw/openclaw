@@ -2,6 +2,7 @@ import path from "node:path";
 import type { ImageContent } from "@earendil-works/pi-ai";
 import { formatErrorMessage } from "../../../infra/errors.js";
 import { assertNoWindowsNetworkPath, safeFileURLToPath } from "../../../infra/local-file-access.js";
+import { resolveMediaReferenceLocalPath } from "../../../media/media-reference.js";
 import type { PromptImageOrderEntry } from "../../../media/prompt-image-order.js";
 import { loadWebMedia } from "../../../media/web-media.js";
 import { normalizeLowercaseStringOrEmpty } from "../../../shared/string-coerce.js";
@@ -436,8 +437,35 @@ export async function loadImageFromRef(
   try {
     let targetPath = ref.resolved;
 
+    let mediaLocalRoots: readonly string[] | undefined;
+
     // Resolve paths relative to sandbox or workspace as needed
-    if (options?.sandbox) {
+    if (ref.type === "media-uri") {
+      // Claim-check URI written by the Gateway's inbound media offload
+      // (`media://inbound/<id>`). Resolve to the physical buffer path before
+      // sandbox validation or workspace resolution — otherwise
+      // `path.resolve(workspaceDir, "media://inbound/<id>")` mangles the URI
+      // into a non-existent workspace-rooted path (e.g.
+      // `<workspace>/media:/inbound/<id>`) and `loadWebMedia` ENOENTs. Managed
+      // inbound buffers are outside sandbox/workspace roots, so allow exactly
+      // the resolved buffer directory instead of forcing sandbox bridge reads.
+      try {
+        targetPath = await resolveMediaReferenceLocalPath(ref.resolved);
+      } catch (err) {
+        log.debug(
+          `Native image: media-uri resolution failed for ${ref.resolved}: ${formatErrorMessage(err)}`,
+        );
+        return null;
+      }
+      if (targetPath === ref.resolved) {
+        // `resolveMediaReferenceLocalPath` returns its input unchanged when the
+        // URI does not match a known inbound buffer. Bail out instead of
+        // letting downstream code try to read `media://...` as a real file.
+        log.debug(`Native image: no inbound buffer for media-uri ${ref.resolved}`);
+        return null;
+      }
+      mediaLocalRoots = [path.dirname(targetPath)];
+    } else if (options?.sandbox) {
       try {
         const resolved = await resolveSandboxedBridgeMediaPath({
           sandbox: {
@@ -459,18 +487,21 @@ export async function loadImageFromRef(
     }
 
     // loadWebMedia handles local file paths (including file:// URLs)
-    const media = options?.sandbox
-      ? await loadWebMedia(targetPath, {
-          maxBytes: options.maxBytes,
-          sandboxValidated: true,
-          readFile: createSandboxBridgeReadFile({ sandbox: options.sandbox }),
-        })
-      : await loadWebMedia(
-          targetPath,
-          options?.workspaceOnly
-            ? { maxBytes: options.maxBytes, localRoots: [workspaceDir] }
-            : options?.maxBytes,
-        );
+    const media =
+      options?.sandbox && !mediaLocalRoots
+        ? await loadWebMedia(targetPath, {
+            maxBytes: options.maxBytes,
+            sandboxValidated: true,
+            readFile: createSandboxBridgeReadFile({ sandbox: options.sandbox }),
+          })
+        : await loadWebMedia(
+            targetPath,
+            mediaLocalRoots
+              ? { maxBytes: options?.maxBytes, localRoots: mediaLocalRoots }
+              : options?.workspaceOnly
+                ? { maxBytes: options.maxBytes, localRoots: [workspaceDir] }
+                : options?.maxBytes,
+          );
 
     if (media.kind !== "image") {
       log.debug(`Native image: not an image file: ${targetPath} (got ${media.kind})`);

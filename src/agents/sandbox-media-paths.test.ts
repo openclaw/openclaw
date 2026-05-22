@@ -42,4 +42,58 @@ describe("createSandboxBridgeReadFile", () => {
     expect(resolved).toEqual({ resolved: "/sandbox/image.png" });
     expect(stat).not.toHaveBeenCalled();
   });
+
+  it("rewrites media store refs through the inbound sandbox fallback", async () => {
+    const stat = vi.fn(async () => ({ type: "file", size: 1, mtimeMs: 1 }));
+    const resolvePath = vi.fn(({ filePath }: { filePath: string }) => ({
+      relativePath: filePath,
+      containerPath: `/sandbox/${filePath}`,
+    }));
+
+    const resolved = await resolveSandboxedBridgeMediaPath({
+      sandbox: {
+        root: "/tmp/sandbox-root",
+        bridge: { resolvePath, stat } as unknown as SandboxFsBridge,
+      },
+      mediaPath: "media://inbound/photo%20one.png",
+      inboundFallbackDir: "media/inbound",
+    });
+
+    expect(resolved).toEqual({
+      resolved: "/sandbox/media/inbound/photo one.png",
+      rewrittenFrom: "media://inbound/photo%20one.png",
+    });
+    expect(stat).toHaveBeenCalledWith({
+      filePath: "media/inbound/photo one.png",
+      cwd: "/tmp/sandbox-root",
+    });
+    expect(resolvePath).toHaveBeenCalledWith({
+      filePath: "media/inbound/photo one.png",
+      cwd: "/tmp/sandbox-root",
+    });
+  });
+
+  it("does not rewrite media store refs with nested decoded paths", async () => {
+    const stat = vi.fn(async () => ({ type: "file", size: 1, mtimeMs: 1 }));
+    const resolvePath = vi.fn(({ filePath }: { filePath: string }) => ({
+      relativePath: filePath,
+      containerPath: `/sandbox/${filePath}`,
+    }));
+
+    const resolved = await resolveSandboxedBridgeMediaPath({
+      sandbox: {
+        root: "/tmp/sandbox-root",
+        bridge: { resolvePath, stat } as unknown as SandboxFsBridge,
+      },
+      mediaPath: "media://inbound/nested%2Fsecret.png",
+      inboundFallbackDir: "media/inbound",
+    });
+
+    expect(resolved).toEqual({ resolved: "/sandbox/media://inbound/nested%2Fsecret.png" });
+    expect(stat).not.toHaveBeenCalled();
+    expect(resolvePath).toHaveBeenCalledWith({
+      filePath: "media://inbound/nested%2Fsecret.png",
+      cwd: "/tmp/sandbox-root",
+    });
+  });
 });
