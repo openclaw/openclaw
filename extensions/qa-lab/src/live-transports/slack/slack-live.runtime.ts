@@ -1363,7 +1363,7 @@ async function resolveApprovalDecision(params: {
     { decision: params.decision, id: params.approvalId },
     {
       expectFinal: false,
-      timeoutMs: 5_000,
+      timeoutMs: SLACK_QA_APPROVAL_DECISION_TIMEOUT_MS + 5_000,
     },
   );
 }
@@ -2052,6 +2052,7 @@ export const testing = {
   findScenario,
   parseSlackQaCredentialPayload,
   resolveSlackApprovalCheckpointConfig,
+  resolveApprovalDecision,
   resolveSlackQaRuntimeEnv,
   SLACK_QA_STANDARD_SCENARIO_IDS,
   toSlackQaScenarioArtifactResults,

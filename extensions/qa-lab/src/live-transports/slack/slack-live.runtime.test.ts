@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { testing, runSlackQaLive } from "./slack-live.runtime.js";
 
 describe("Slack live QA runtime helpers", () => {
@@ -163,6 +163,28 @@ describe("Slack live QA runtime helpers", () => {
       timeoutMs: 5000,
     });
     expect(testing.resolveSlackApprovalCheckpointConfig({})).toBeUndefined();
+  });
+
+  it("allows live approval resolve RPCs to take longer than the generic gateway probe timeout", async () => {
+    const call = vi.fn(async () => ({ decision: "allow-once" }));
+
+    await testing.resolveApprovalDecision({
+      approvalId: "plugin:abc",
+      context: {
+        gateway: { call },
+      } as never,
+      decision: "allow-once",
+      kind: "plugin",
+    });
+
+    expect(call).toHaveBeenCalledWith(
+      "plugin.approval.resolve",
+      { decision: "allow-once", id: "plugin:abc" },
+      {
+        expectFinal: false,
+        timeoutMs: 35_000,
+      },
+    );
   });
 
   it("redacts approval artifact content and Slack metadata in summary-shaped results", () => {

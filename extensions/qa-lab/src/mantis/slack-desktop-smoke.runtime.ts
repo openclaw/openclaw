@@ -592,6 +592,9 @@ approval_checkpoints=${approvalCheckpoints}
 slack_channel_id=${slackChannelId}
 approval_checkpoint_scenarios_json=${checkpointScenarioJson}
 remote_command_timeout_seconds="\${OPENCLAW_MANTIS_REMOTE_COMMAND_TIMEOUT_SECONDS:-600}"
+if [ -z "\${OPENCLAW_QA_SLACK_CHANNEL_ID:-}" ] && [ -n "$slack_channel_id" ]; then
+  export OPENCLAW_QA_SLACK_CHANNEL_ID="$slack_channel_id"
+fi
 case "$remote_command_timeout_seconds" in
   ''|*[!0-9]*)
     echo "OPENCLAW_MANTIS_REMOTE_COMMAND_TIMEOUT_SECONDS must be an integer number of seconds." >&2
@@ -1051,7 +1054,13 @@ if [ "$qa_status" -eq 124 ] || [ "$qa_status" -eq 137 ]; then
   qa_status=124
 fi
 sleep 5
-scrot "$out/slack-desktop-smoke.png" || true
+if [ "$approval_checkpoints" = "1" ] && [ -s "$out/approval-checkpoints/slack-approval-plugin-native-pending.png" ]; then
+  cp "$out/approval-checkpoints/slack-approval-plugin-native-pending.png" "$out/slack-desktop-smoke.png"
+elif [ "$approval_checkpoints" = "1" ] && [ -s "$out/approval-checkpoints/slack-approval-exec-native-pending.png" ]; then
+  cp "$out/approval-checkpoints/slack-approval-exec-native-pending.png" "$out/slack-desktop-smoke.png"
+else
+  scrot "$out/slack-desktop-smoke.png" || true
+fi
 if [ -n "$video_pid" ]; then
   wait "$video_pid" || true
 fi

@@ -310,6 +310,7 @@ describe("mantis Slack desktop smoke runtime", () => {
       .find((entry) => entry.command === "/tmp/crabbox" && entry.args[0] === "run")
       ?.args.at(-1);
     expect(remoteScript).toContain("approval_checkpoints=1");
+    expect(remoteScript).toContain('export OPENCLAW_QA_SLACK_CHANNEL_ID="$slack_channel_id"');
     expect(remoteScript).toContain("--scenario 'slack-approval-exec-native'");
     expect(remoteScript).toContain("--scenario 'slack-approval-plugin-native'");
     expect(remoteScript).toContain("OPENCLAW_QA_SLACK_APPROVAL_CHECKPOINT_DIR");
@@ -324,6 +325,12 @@ describe("mantis Slack desktop smoke runtime", () => {
     expect(remoteScript).not.toContain('spawn("scrot", [screenshotPath]');
     expect(remoteScript).toContain("Slack QA exited before all expected approval checkpoints");
     expect(remoteScript).toContain('if [ "$qa_exit" -eq 0 ]; then\n        wait "$watcher_pid"');
+    expect(remoteScript).toContain(
+      'cp "$out/approval-checkpoints/slack-approval-plugin-native-pending.png" "$out/slack-desktop-smoke.png"',
+    );
+    expect(remoteScript).toContain(
+      'cp "$out/approval-checkpoints/slack-approval-exec-native-pending.png" "$out/slack-desktop-smoke.png"',
+    );
     const summary = JSON.parse(await fs.readFile(result.summaryPath, "utf8")) as {
       artifacts: {
         approvalCheckpoints?: {
