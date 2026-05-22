@@ -296,6 +296,16 @@ describe("refreshActiveTab", () => {
     sessions.resolve();
   });
 
+  it("loads config before rendering session Workboard actions", async () => {
+    const host = createHost();
+    host.tab = "sessions";
+
+    await refreshActiveTab(host as never);
+
+    expect(mocks.loadConfigMock).toHaveBeenCalledOnce();
+    expect(mocks.loadSessionsMock).toHaveBeenCalledOnce();
+  });
+
   it("starts node polling on Nodes tab entry and clears pending session reloads on tab changes", () => {
     vi.useFakeTimers();
     const host = createHost();

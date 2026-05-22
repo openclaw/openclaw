@@ -66,11 +66,17 @@ export type WorkboardUiState = {
   busyCardId: string | null;
   draggedCardId: string | null;
   syncingCardIds: Set<string>;
+  capturingSessionKeys: Set<string>;
 };
 
 type WorkboardHost = object;
 
 const workboardStates = new WeakMap<WorkboardHost, WorkboardUiState>();
+const workboardLoadPromises = new WeakMap<WorkboardHost, Promise<void>>();
+const SESSION_CAPTURE_HISTORY_LIMIT = 40;
+const SESSION_CAPTURE_HISTORY_MAX_CHARS = 6000;
+const SESSION_CAPTURE_TEXT_MAX_CHARS = 700;
+const WORKBOARD_CAPTURE_TITLE_MAX_CHARS = 180;
 
 function createDefaultState(): WorkboardUiState {
   return {
@@ -91,6 +97,7 @@ function createDefaultState(): WorkboardUiState {
     busyCardId: null,
     draggedCardId: null,
     syncingCardIds: new Set(),
+    capturingSessionKeys: new Set(),
   };
 }
 
@@ -187,25 +194,36 @@ export async function loadWorkboard(params: {
   force?: boolean;
 }) {
   const state = getWorkboardState(params.host);
-  if (!params.client || state.loading || (!params.force && (state.loaded || state.loadAttempted))) {
+  if (!params.client || (!params.force && (state.loaded || state.loadAttempted))) {
+    return;
+  }
+  const client = params.client;
+  const existingLoad = workboardLoadPromises.get(params.host);
+  if (existingLoad) {
+    await existingLoad;
     return;
   }
   state.loadAttempted = true;
   state.loading = true;
   state.error = null;
   params.requestUpdate?.();
-  try {
-    const payload = await params.client.request("workboard.cards.list", {});
-    const normalized = normalizeCardsPayload(payload);
-    state.cards = normalized.cards;
-    state.statuses = normalized.statuses;
-    state.loaded = true;
-  } catch (error) {
-    state.error = formatError(error);
-  } finally {
-    state.loading = false;
-    params.requestUpdate?.();
-  }
+  const loadPromise = (async () => {
+    try {
+      const payload = await client.request("workboard.cards.list", {});
+      const normalized = normalizeCardsPayload(payload);
+      state.cards = normalized.cards;
+      state.statuses = normalized.statuses;
+      state.loaded = true;
+    } catch (error) {
+      state.error = formatError(error);
+    } finally {
+      state.loading = false;
+      workboardLoadPromises.delete(params.host);
+      params.requestUpdate?.();
+    }
+  })();
+  workboardLoadPromises.set(params.host, loadPromise);
+  await loadPromise;
 }
 
 function replaceCard(state: WorkboardUiState, card: WorkboardCard) {
@@ -276,6 +294,184 @@ function getLifecycleSyncKeys(host: WorkboardHost): Map<string, string> {
     lifecycleSyncKeys.set(host, keys);
   }
   return keys;
+}
+
+function normalizeString(value: unknown): string | null {
+  return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+
+function textFromContent(value: unknown): string {
+  if (typeof value === "string") {
+    return value;
+  }
+  if (!Array.isArray(value)) {
+    return "";
+  }
+  return value
+    .map((part) => {
+      if (!isRecord(part)) {
+        return "";
+      }
+      if (typeof part.text === "string") {
+        return part.text;
+      }
+      if (typeof part.content === "string") {
+        return part.content;
+      }
+      return "";
+    })
+    .filter(Boolean)
+    .join("\n")
+    .trim();
+}
+
+function extractChatHistoryText(
+  messages: unknown[],
+  role: "assistant" | "user",
+  direction: "first" | "last",
+): string | null {
+  const ordered = direction === "first" ? messages : messages.toReversed();
+  for (const message of ordered) {
+    if (!isRecord(message) || message.role !== role) {
+      continue;
+    }
+    const text = textFromContent(message.content).trim();
+    if (text) {
+      return text;
+    }
+  }
+  return null;
+}
+
+function clampSessionCaptureText(value: string): string {
+  const compact = value.replace(/\s+/g, " ").trim();
+  if (compact.length <= SESSION_CAPTURE_TEXT_MAX_CHARS) {
+    return compact;
+  }
+  return `${compact.slice(0, SESSION_CAPTURE_TEXT_MAX_CHARS - 3).trimEnd()}...`;
+}
+
+function clampSessionCaptureTitle(value: string): string {
+  const compact = value.replace(/\s+/g, " ").trim();
+  if (compact.length <= WORKBOARD_CAPTURE_TITLE_MAX_CHARS) {
+    return compact;
+  }
+  return `${compact.slice(0, WORKBOARD_CAPTURE_TITLE_MAX_CHARS - 3).trimEnd()}...`;
+}
+
+function sessionTitle(session: GatewaySessionRow, recentUserText: string | null): string {
+  const title =
+    normalizeString(session.label) ??
+    normalizeString(session.displayName) ??
+    recentUserText ??
+    session.key;
+  return clampSessionCaptureTitle(title);
+}
+
+function sessionCaptureStatus(session: GatewaySessionRow): WorkboardStatus {
+  if (session.hasActiveRun === true || session.status === "running") {
+    return "running";
+  }
+  if (session.abortedLastRun || isFailedSessionStatus(session.status)) {
+    return "blocked";
+  }
+  if (session.status === "done") {
+    return "review";
+  }
+  return "todo";
+}
+
+async function loadSessionCaptureHistory(params: {
+  client: GatewayBrowserClient;
+  sessionKey: string;
+}): Promise<unknown[]> {
+  try {
+    const payload = await params.client.request("chat.history", {
+      sessionKey: params.sessionKey,
+      limit: SESSION_CAPTURE_HISTORY_LIMIT,
+      maxChars: SESSION_CAPTURE_HISTORY_MAX_CHARS,
+    });
+    return isRecord(payload) && Array.isArray(payload.messages) ? payload.messages : [];
+  } catch {
+    return [];
+  }
+}
+
+function buildSessionCaptureNotes(params: {
+  session: GatewaySessionRow;
+  recentUserText: string | null;
+  lastAssistantText: string | null;
+}): string {
+  const lines = [`Session: ${params.session.key}`];
+  if (params.recentUserText) {
+    lines.push("", `Recent user prompt: ${clampSessionCaptureText(params.recentUserText)}`);
+  }
+  if (params.lastAssistantText) {
+    lines.push("", `Latest assistant note: ${clampSessionCaptureText(params.lastAssistantText)}`);
+  }
+  return lines.join("\n");
+}
+
+export async function captureSessionToWorkboard(params: {
+  host: WorkboardHost;
+  client: GatewayBrowserClient | null;
+  session: GatewaySessionRow;
+  requestUpdate?: () => void;
+}): Promise<WorkboardCard | null> {
+  const state = getWorkboardState(params.host);
+  if (!params.client || params.session.kind === "global") {
+    return null;
+  }
+  if (state.capturingSessionKeys.has(params.session.key)) {
+    return state.cards.find((card) => card.sessionKey === params.session.key) ?? null;
+  }
+  state.error = null;
+  state.capturingSessionKeys.add(params.session.key);
+  params.requestUpdate?.();
+  try {
+    if (!state.loaded) {
+      await loadWorkboard({
+        host: params.host,
+        client: params.client,
+        requestUpdate: params.requestUpdate,
+        force: true,
+      });
+    }
+    if (!state.loaded) {
+      return null;
+    }
+    const existing = state.cards.find((card) => card.sessionKey === params.session.key);
+    if (existing) {
+      return existing;
+    }
+    const messages = await loadSessionCaptureHistory({
+      client: params.client,
+      sessionKey: params.session.key,
+    });
+    const recentUserText = extractChatHistoryText(messages, "user", "last");
+    const lastAssistantText = extractChatHistoryText(messages, "assistant", "last");
+    const payload = await params.client.request("workboard.cards.create", {
+      title: sessionTitle(params.session, recentUserText),
+      notes: buildSessionCaptureNotes({
+        session: params.session,
+        recentUserText,
+        lastAssistantText,
+      }),
+      status: sessionCaptureStatus(params.session),
+      priority: "normal",
+      agentId: "",
+      sessionKey: params.session.key,
+    });
+    const card = normalizeCardPayload(payload);
+    replaceCard(state, card);
+    return card;
+  } catch (error) {
+    state.error = formatError(error);
+    return null;
+  } finally {
+    state.capturingSessionKeys.delete(params.session.key);
+    params.requestUpdate?.();
+  }
 }
 
 export async function syncWorkboardLifecycle(params: {

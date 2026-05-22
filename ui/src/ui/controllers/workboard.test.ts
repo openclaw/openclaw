@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { GatewaySessionRow } from "../types.ts";
 import {
+  captureSessionToWorkboard,
   createWorkboardCard,
   getWorkboardLifecycle,
   getWorkboardState,
@@ -17,6 +18,17 @@ function createClient(responses: Record<string, unknown> | ((method: string) => 
     typeof responses === "function" ? responses(method) : responses[method],
   );
   return { request };
+}
+
+function createDeferred<T>() {
+  let resolve: ((value: T) => void) | undefined;
+  const promise = new Promise<T>((res) => {
+    resolve = res;
+  });
+  if (!resolve) {
+    throw new Error("Expected deferred resolver");
+  }
+  return { promise, resolve };
 }
 
 const sampleCard: WorkboardCard = {
@@ -78,6 +90,184 @@ describe("workboard controller", () => {
     expect(state.cards[0]).toMatchObject({ id: "card-2", title: "Write tests" });
     expect(state.draftOpen).toBe(false);
     expect(state.draftSessionKey).toBe("");
+  });
+
+  it("captures existing sessions as linked workboard cards", async () => {
+    const host = {};
+    const session = {
+      ...sampleSession,
+      label: "Fix login",
+      status: "done",
+      hasActiveRun: false,
+    } as const;
+    const created = {
+      ...sampleCard,
+      title: "Fix login",
+      status: "review",
+      sessionKey: sampleSession.key,
+    } as const;
+    const client = createClient((method) => {
+      if (method === "workboard.cards.list") {
+        return { cards: [], statuses: ["todo", "running", "review"] };
+      }
+      if (method === "chat.history") {
+        return {
+          messages: [
+            { role: "user", content: [{ type: "text", text: "Please investigate login" }] },
+            { role: "assistant", content: [{ type: "text", text: "Found the issue." }] },
+            { role: "user", content: [{ type: "text", text: "Please fix login" }] },
+            { role: "assistant", content: [{ type: "text", text: "Implemented and tested." }] },
+          ],
+        };
+      }
+      if (method === "workboard.cards.create") {
+        return { card: created };
+      }
+      return {};
+    });
+
+    const card = await captureSessionToWorkboard({ host, client: client as never, session });
+
+    expect(card).toMatchObject({ title: "Fix login", status: "review" });
+    expect(client.request).toHaveBeenNthCalledWith(1, "workboard.cards.list", {});
+    expect(client.request).toHaveBeenNthCalledWith(2, "chat.history", {
+      sessionKey: sampleSession.key,
+      limit: 40,
+      maxChars: 6000,
+    });
+    expect(client.request).toHaveBeenNthCalledWith(3, "workboard.cards.create", {
+      title: "Fix login",
+      notes: [
+        `Session: ${sampleSession.key}`,
+        "",
+        "Recent user prompt: Please fix login",
+        "",
+        "Latest assistant note: Implemented and tested.",
+      ].join("\n"),
+      status: "review",
+      priority: "normal",
+      agentId: "",
+      sessionKey: sampleSession.key,
+    });
+    expect(getWorkboardState(host).cards[0]).toMatchObject({ sessionKey: sampleSession.key });
+  });
+
+  it("does not duplicate existing captured sessions", async () => {
+    const host = {};
+    const state = getWorkboardState(host);
+    const existing = { ...sampleCard, sessionKey: sampleSession.key };
+    state.loaded = true;
+    state.cards = [existing];
+    const client = createClient({});
+
+    const card = await captureSessionToWorkboard({
+      host,
+      client: client as never,
+      session: sampleSession,
+    });
+
+    expect(card).toBe(existing);
+    expect(client.request).not.toHaveBeenCalled();
+  });
+
+  it("does not start duplicate capture requests while a session is in flight", async () => {
+    const host = {};
+    const state = getWorkboardState(host);
+    state.capturingSessionKeys.add(sampleSession.key);
+    const client = createClient({});
+
+    const card = await captureSessionToWorkboard({
+      host,
+      client: client as never,
+      session: sampleSession,
+    });
+
+    expect(card).toBeNull();
+    expect(client.request).not.toHaveBeenCalled();
+  });
+
+  it("does not create capture cards when the duplicate preflight list fails", async () => {
+    const host = {};
+    const client = createClient((method) => {
+      if (method === "workboard.cards.list") {
+        throw new Error("list unavailable");
+      }
+      return {};
+    });
+
+    const card = await captureSessionToWorkboard({
+      host,
+      client: client as never,
+      session: sampleSession,
+    });
+
+    expect(card).toBeNull();
+    expect(client.request).toHaveBeenCalledOnce();
+    expect(client.request).toHaveBeenCalledWith("workboard.cards.list", {});
+  });
+
+  it("waits for an in-flight Workboard load before capturing a session", async () => {
+    const host = {};
+    const list = createDeferred<unknown>();
+    const created = { ...sampleCard, sessionKey: sampleSession.key };
+    const client = createClient((method) => {
+      if (method === "workboard.cards.list") {
+        return list.promise;
+      }
+      if (method === "chat.history") {
+        return { messages: [] };
+      }
+      if (method === "workboard.cards.create") {
+        return { card: created };
+      }
+      return {};
+    });
+
+    const loading = loadWorkboard({ host, client: client as never, force: true });
+    const captured = captureSessionToWorkboard({
+      host,
+      client: client as never,
+      session: sampleSession,
+    });
+
+    await Promise.resolve();
+    expect(client.request).toHaveBeenCalledTimes(1);
+    list.resolve({ cards: [], statuses: ["todo"] });
+    await loading;
+
+    await expect(captured).resolves.toMatchObject({ sessionKey: sampleSession.key });
+    expect(client.request).toHaveBeenCalledWith("workboard.cards.create", expect.any(Object));
+  });
+
+  it("clamps long session labels before creating captured cards", async () => {
+    const host = {};
+    const longLabel = "x".repeat(220);
+    const client = createClient((method) => {
+      if (method === "workboard.cards.list") {
+        return { cards: [], statuses: ["todo"] };
+      }
+      if (method === "chat.history") {
+        return { messages: [] };
+      }
+      if (method === "workboard.cards.create") {
+        return { card: { ...sampleCard, title: `${"x".repeat(177)}...` } };
+      }
+      return {};
+    });
+
+    await captureSessionToWorkboard({
+      host,
+      client: client as never,
+      session: { ...sampleSession, label: longLabel },
+    });
+
+    expect(client.request).toHaveBeenNthCalledWith(
+      3,
+      "workboard.cards.create",
+      expect.objectContaining({
+        title: `${"x".repeat(177)}...`,
+      }),
+    );
   });
 
   it("starts a session and links it back to the card", async () => {

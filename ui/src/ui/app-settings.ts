@@ -439,7 +439,7 @@ export async function refreshActiveTab(host: SettingsHost) {
         await loadUsage(app);
         break;
       case "sessions":
-        await loadSessions(app);
+        await Promise.all([loadConfig(app), loadSessions(app)]);
         break;
       case "cron":
         await loadCron(host);

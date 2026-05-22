@@ -57,6 +57,11 @@ Cards can be linked to existing dashboard sessions or to the session created
 when you start work from a card. Linked cards show the session lifecycle inline:
 running, linked idle, done, failed, or missing.
 
+You can also capture an existing dashboard session from the Sessions tab with
+Add to Workboard. The card is linked to that session, uses the session label or
+recent user prompt as the title, and seeds notes from the recent user prompt plus
+the latest assistant response when chat history is available.
+
 Workboard follows the linked session while the card is still in an active work
 state:
 
@@ -73,10 +78,11 @@ Workboard stops auto-moving that card until you move it back to `todo` or
 1. Open the Workboard tab in the Control UI.
 2. Create a card with a title, notes, priority, labels, optional agent, and
    optional linked session.
-3. Drag the card between columns or use the column controls.
-4. Start work from the card to create or reuse a dashboard session.
-5. Open the linked session from the card while the agent works.
-6. Let lifecycle sync move running work into review or blocked, then manually
+3. Or open Sessions and choose Add to Workboard for an existing session.
+4. Drag the card between columns or use the column controls.
+5. Start work from the card to create or reuse a dashboard session.
+6. Open the linked session from the card while the agent works.
+7. Let lifecycle sync move running work into review or blocked, then manually
    move the card to done when accepted.
 
 Starting a card uses normal Gateway sessions. The Workboard plugin only stores
