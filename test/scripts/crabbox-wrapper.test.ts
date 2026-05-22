@@ -63,6 +63,23 @@ describe("scripts/crabbox-wrapper", () => {
     expect(result.stdout).toContain('"local-container"');
   });
 
+  it("accepts advertised providers from wrapped Crabbox help", () => {
+    const result = runWrapper(
+      [
+        "provider: hetzner, aws, local-container, blacksmith-testbox,",
+        "  docker, or cloudflare (default: aws)",
+        "",
+      ].join("\n"),
+      ["run", "--provider", "docker", "--", "echo ok"],
+    );
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain('"docker"');
+    expect(result.stderr).toContain(
+      "providers=hetzner,aws,local-container,blacksmith-testbox,docker,cloudflare",
+    );
+  });
+
   it("accepts Crabbox provider aliases when their canonical provider is advertised", () => {
     const helpText = "provider: hetzner, aws, local-container, blacksmith-testbox, or cloudflare\n";
 

@@ -285,12 +285,36 @@ function addProviderNames(names, text) {
   }
 }
 
+function providerListContinuation(line, previousText) {
+  const match = line.match(
+    /^\s*((?:or\s+)?[a-z0-9][a-z0-9-]*(?:\s*(?:,|\||\bor\b)\s*(?:or\s+)?[a-z0-9][a-z0-9-]*)*\s*(?:,|\|)?)(?:\s+\(default\b.*)?\s*$/u,
+  );
+  if (!match) {
+    return "";
+  }
+  if (/[,|]\s*$/u.test(previousText) || /[,|]|\bor\b|\(default\b/u.test(line)) {
+    return match[1];
+  }
+  return "";
+}
+
 function parseProvidersFromHelp(text) {
   const names = new Set();
-  for (const line of text.split(/\r?\n/u)) {
+  const lines = text.split(/\r?\n/u);
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index];
     const providerMatch = line.match(/provider:\s*([a-z0-9][a-z0-9, -]*)(?:\s*\(default\b|$)/u);
     if (providerMatch) {
-      addProviderNames(names, providerMatch[1]);
+      let providerText = providerMatch[1];
+      while (!/\(default\b/u.test(lines[index]) && index + 1 < lines.length) {
+        const continuation = providerListContinuation(lines[index + 1], providerText);
+        if (!continuation) {
+          break;
+        }
+        index += 1;
+        providerText = `${providerText} ${continuation}`;
+      }
+      addProviderNames(names, providerText);
       continue;
     }
 
