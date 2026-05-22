@@ -972,7 +972,11 @@ async function installPluginFromManagedNpmRoot(
   }
   return {
     ...result,
-    npmResolution: params.npmResolution,
+    // #85184: when the downgrade guard preserved a newer installed dependency,
+    // report the preserved resolution (not the older incoming one) so that
+    // install records and config metadata match what is actually in the
+    // managed npm root.
+    npmResolution: expectedNpmResolution,
     ...(params.integrityDrift ? { integrityDrift: params.integrityDrift } : {}),
   };
 }

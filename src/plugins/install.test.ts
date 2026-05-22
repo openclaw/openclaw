@@ -782,6 +782,11 @@ describe("installPluginFromNpmSpec downgrade guard (#85184 integration)", () => 
       dependencies?: Record<string, string>;
     };
     expect(manifest.dependencies?.[pkg]).toBe("0.11.2");
+    // #85184: the returned resolution must reflect the preserved version so
+    // downstream install records/config match the managed npm root.
+    if (result.ok) {
+      expect(result.npmResolution?.version).toBe("0.11.2");
+    }
   });
 
   it("allows a normal upgrade to rewrite the managed dependency (no false preserve)", async () => {
