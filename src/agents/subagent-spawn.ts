@@ -40,7 +40,11 @@ import {
   normalizeInheritedToolAllowlist,
   normalizeInheritedToolDenylist,
 } from "./inherited-tool-deny.js";
-import { resolveDefaultModelForAgent } from "./model-selection.js";
+import {
+  normalizeStoredOverrideModel,
+  resolveDefaultModelForAgent,
+  resolvePersistedSelectedModelRef,
+} from "./model-selection.js";
 import { resolveThinkingDefault } from "./model-thinking-default.js";
 import {
   mapToolContextToSpawnedRunMetadata,
@@ -385,16 +389,36 @@ function readRequesterThinkingLevel(params: {
     if (typeof entry?.thinkingLevel === "string" && entry.thinkingLevel.trim()) {
       return entry.thinkingLevel.trim();
     }
+    const defaultModel = resolveDefaultModelForAgent({
+      cfg: params.cfg,
+      agentId: params.requesterAgentId,
+    });
+    if (entry) {
+      const normalizedOverride = normalizeStoredOverrideModel({
+        providerOverride: entry.providerOverride,
+        modelOverride: entry.modelOverride,
+      });
+      const persistedModel = resolvePersistedSelectedModelRef({
+        defaultProvider: defaultModel.provider,
+        runtimeProvider: entry.modelProvider,
+        runtimeModel: entry.model,
+        overrideProvider: normalizedOverride.providerOverride,
+        overrideModel: normalizedOverride.modelOverride,
+      });
+      if (persistedModel) {
+        return resolveThinkingDefault({
+          cfg: params.cfg,
+          provider: persistedModel.provider,
+          model: persistedModel.model,
+        });
+      }
+    }
     const requesterAgentThinking = params.requesterAgentId
       ? resolveAgentConfig(params.cfg, params.requesterAgentId)?.thinkingDefault
       : undefined;
     if (requesterAgentThinking) {
       return requesterAgentThinking;
     }
-    const defaultModel = resolveDefaultModelForAgent({
-      cfg: params.cfg,
-      agentId: params.requesterAgentId,
-    });
     return resolveThinkingDefault({
       cfg: params.cfg,
       provider: defaultModel.provider,
