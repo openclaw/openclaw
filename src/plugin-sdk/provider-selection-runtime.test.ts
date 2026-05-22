@@ -69,6 +69,42 @@ describe("plugin-sdk provider-selection-runtime", () => {
     expect(resolution.providerConfig).toEqual({ providerId: "second" });
   });
 
+  it("passes explicit selection metadata to provider configuration checks", () => {
+    const seen: Array<{
+      providerId: string;
+      configuredProviderId?: string;
+      providerConfigExplicit: boolean;
+    }> = [];
+    const resolution = resolveConfiguredCapabilityProvider({
+      configuredProviderId: "second",
+      providerConfigs: {
+        second: { enabled: true },
+      },
+      cfg: {},
+      cfgForResolve: {},
+      getConfiguredProvider: (providerId) => providers.find((entry) => entry.id === providerId),
+      listProviders: () => providers,
+      resolveProviderConfig: ({ rawConfig }) => rawConfig,
+      isProviderConfigured: ({ provider, configuredProviderId, providerConfigExplicit }) => {
+        seen.push({
+          providerId: provider.id,
+          configuredProviderId,
+          providerConfigExplicit,
+        });
+        return true;
+      },
+    });
+
+    expect(resolution.ok).toBe(true);
+    expect(seen).toEqual([
+      {
+        providerId: "second",
+        configuredProviderId: "second",
+        providerConfigExplicit: true,
+      },
+    ]);
+  });
+
   it("merges canonical and selected provider config", () => {
     expect(
       resolveProviderRawConfig({

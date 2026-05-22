@@ -11,6 +11,8 @@ export type RealtimeTranscriptionProviderResolveConfigContext = {
 
 export type RealtimeTranscriptionProviderConfiguredContext = {
   cfg?: OpenClawConfig;
+  configuredProviderId?: string;
+  providerConfigExplicit?: boolean;
   providerConfig: RealtimeTranscriptionProviderConfig;
 };
 

@@ -437,8 +437,14 @@ export function buildGradiumRealtimeTranscriptionProvider(): RealtimeTranscripti
     aliases: ["gradium-realtime", "gradium-asr"],
     autoSelectOrder: 50,
     resolveConfig: ({ rawConfig }) => normalizeProviderConfig(rawConfig),
-    isConfigured: ({ providerConfig }) =>
-      Boolean(normalizeProviderConfig(providerConfig).apiKey || process.env.GRADIUM_API_KEY),
+    isConfigured: ({ configuredProviderId, providerConfigExplicit, providerConfig }) => {
+      const config = normalizeProviderConfig(providerConfig);
+      if (config.apiKey) {
+        return true;
+      }
+      const explicitGradiumSttOptIn = Boolean(configuredProviderId || providerConfigExplicit);
+      return explicitGradiumSttOptIn && Boolean(process.env.GRADIUM_API_KEY);
+    },
     createSession: (req) => {
       const config = normalizeProviderConfig(req.providerConfig);
       const apiKey = config.apiKey || process.env.GRADIUM_API_KEY;

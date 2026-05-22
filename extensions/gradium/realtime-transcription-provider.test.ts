@@ -48,6 +48,34 @@ describe("buildGradiumRealtimeTranscriptionProvider", () => {
     });
   });
 
+  it("does not auto-select from a Gradium TTS environment key alone", () => {
+    vi.stubEnv("GRADIUM_API_KEY", "gsk_env");
+
+    const provider = buildGradiumRealtimeTranscriptionProvider();
+
+    expect(provider.isConfigured({ cfg: {} as OpenClawConfig, providerConfig: {} })).toBe(false);
+    expect(
+      provider.isConfigured({
+        cfg: {} as OpenClawConfig,
+        configuredProviderId: "gradium",
+        providerConfig: {},
+      }),
+    ).toBe(true);
+    expect(
+      provider.isConfigured({
+        cfg: {} as OpenClawConfig,
+        providerConfigExplicit: true,
+        providerConfig: { inputFormat: "ulaw_8000" },
+      }),
+    ).toBe(true);
+    expect(
+      provider.isConfigured({
+        cfg: {} as OpenClawConfig,
+        providerConfig: { apiKey: "gsk_configured" },
+      }),
+    ).toBe(true);
+  });
+
   it("rejects unknown input formats", () => {
     const provider = buildGradiumRealtimeTranscriptionProvider();
     expect(() =>

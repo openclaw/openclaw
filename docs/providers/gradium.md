@@ -168,7 +168,7 @@ Gradium's realtime ASR WebSocket (`wss://api.gradium.ai/api/speech/asr`) is regi
 
 | Key                                                                                     | Type    | Description                                                                                                                                                 |
 | --------------------------------------------------------------------------------------- | ------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `plugins.entries.voice-call.config.streaming.providers.gradium.apiKey`                  | string  | Resolved API key. Supports `${ENV}` and secret refs; falls back to `GRADIUM_API_KEY`.                                                                       |
+| `plugins.entries.voice-call.config.streaming.providers.gradium.apiKey`                  | string  | Resolved API key. Supports `${ENV}` and secret refs. When Gradium STT is explicitly selected or configured, falls back to `GRADIUM_API_KEY`.                |
 | `plugins.entries.voice-call.config.streaming.providers.gradium.baseUrl`                 | string  | Override the API origin. Trailing slashes are stripped. Defaults to `https://api.gradium.ai`.                                                               |
 | `plugins.entries.voice-call.config.streaming.providers.gradium.modelName`               | string  | Gradium ASR model name. Defaults to `default`.                                                                                                              |
 | `plugins.entries.voice-call.config.streaming.providers.gradium.inputFormat`             | string  | Audio input format: `pcm`, `wav`, `opus`, `ulaw_8000`, `mulaw_8000`, `alaw_8000`, or sample-rate-specific PCM such as `pcm_16000`. Defaults to `ulaw_8000`. |
@@ -181,6 +181,8 @@ Gradium's realtime ASR WebSocket (`wss://api.gradium.ai/api/speech/asr`) is regi
 | `plugins.entries.voice-call.config.streaming.providers.gradium.semanticVadHorizonIndex` | number  | Which `step.vad[]` prediction horizon OpenClaw reads. Defaults to `2`.                                                                                      |
 
 The default `ulaw_8000` input format matches the audio format Voice Call telephony bridges send. `mulaw_8000` is accepted as an alias for the same mu-law format.
+
+Gradium STT is opt-in for live-call audio routing. A `GRADIUM_API_KEY` that was configured for Gradium TTS does not make Gradium eligible for Voice Call streaming auto-selection by itself. Set `streaming.provider: "gradium"` or add a `streaming.providers.gradium` block to use the environment key for realtime STT.
 
 ### Natural turn taking
 
