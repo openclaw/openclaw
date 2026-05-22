@@ -9,10 +9,11 @@ import {
 import type {
   AnyAgentTool,
   OpenClawPluginApi,
+  OpenClawPluginService,
   OpenClawPluginToolContext,
 } from "openclaw/plugin-sdk/plugin-entry";
 import { Type } from "typebox";
-import { resolveMeetingNotesConfig } from "./config.js";
+import { type MeetingNotesAutoStartConfig, resolveMeetingNotesConfig } from "./config.js";
 import { manualTranscriptSourceProvider } from "./manual-source.js";
 import { MeetingNotesStore } from "./store.js";
 import { summarizeMeetingNotes } from "./summary.js";
@@ -23,6 +24,8 @@ type ActiveMeetingNotesSession = {
 };
 
 const activeSessions = new Map<string, ActiveMeetingNotesSession>();
+const AUTO_START_RETRY_ATTEMPTS = 12;
+const AUTO_START_RETRY_MS = 5_000;
 
 function asParamsRecord(params: unknown): Record<string, unknown> {
   return params && typeof params === "object" && !Array.isArray(params)
@@ -317,6 +320,103 @@ export function createMeetingNotesTool(
         default:
           throw new Error(`unsupported meeting_notes action: ${action}`);
       }
+    },
+  };
+}
+
+export function createMeetingNotesAutoStartService(api: OpenClawPluginApi): OpenClawPluginService {
+  let stopped = false;
+  const timers = new Set<ReturnType<typeof setTimeout>>();
+  const startedSessionIds = new Set<string>();
+
+  const schedule = (run: () => void, delayMs: number) => {
+    const timer = setTimeout(() => {
+      timers.delete(timer);
+      run();
+    }, delayMs);
+    timers.add(timer);
+  };
+
+  const startEntry = (
+    entry: MeetingNotesAutoStartConfig,
+    attempt: number,
+    serviceApi: OpenClawPluginApi,
+    store: MeetingNotesStore,
+  ) => {
+    if (stopped || !entry.enabled || startedSessionIds.has(entry.sessionId ?? "")) {
+      return;
+    }
+    void startMeetingNotes({
+      api: serviceApi,
+      store,
+      rawParams: {
+        action: "start",
+        ...entry,
+        sessionId: entry.sessionId ?? createSessionId(),
+      },
+    })
+      .then((result) => {
+        const sessionId = result.details?.sessionId;
+        if (typeof sessionId === "string") {
+          startedSessionIds.add(sessionId);
+        }
+      })
+      .catch((err) => {
+        if (stopped || attempt >= AUTO_START_RETRY_ATTEMPTS) {
+          api.logger.warn(
+            `meeting-notes autoStart failed provider=${entry.providerId}: ${
+              err instanceof Error ? err.message : String(err)
+            }`,
+          );
+          return;
+        }
+        schedule(() => startEntry(entry, attempt + 1, serviceApi, store), AUTO_START_RETRY_MS);
+      });
+  };
+
+  return {
+    id: "meeting-notes-auto-start",
+    start(ctx) {
+      const config = resolveMeetingNotesConfig(api.pluginConfig);
+      if (!config.enabled || config.autoStart.length === 0) {
+        return;
+      }
+      const serviceApi = { ...api, config: ctx.config };
+      const store = new MeetingNotesStore(path.join(ctx.stateDir, "meeting-notes"));
+      for (const entry of config.autoStart) {
+        startEntry(
+          {
+            ...entry,
+            sessionId: entry.sessionId ?? createSessionId(),
+          },
+          1,
+          serviceApi,
+          store,
+        );
+      }
+    },
+    async stop(ctx) {
+      stopped = true;
+      for (const timer of timers) {
+        clearTimeout(timer);
+      }
+      timers.clear();
+      const serviceApi = { ...api, config: ctx.config };
+      const store = new MeetingNotesStore(path.join(ctx.stateDir, "meeting-notes"));
+      for (const sessionId of startedSessionIds) {
+        await stopMeetingNotes({
+          api: serviceApi,
+          store,
+          rawParams: { action: "stop", sessionId },
+        }).catch((err) =>
+          api.logger.warn(
+            `meeting-notes autoStart stop failed session=${sessionId}: ${
+              err instanceof Error ? err.message : String(err)
+            }`,
+          ),
+        );
+      }
+      startedSessionIds.clear();
     },
   };
 }

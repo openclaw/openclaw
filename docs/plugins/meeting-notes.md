@@ -32,6 +32,30 @@ Meeting Notes is a bundled startup plugin. It is available by default unless
 `plugins.enabled` is false, `plugins.deny` includes `meeting-notes`, or
 `plugins.entries.meeting-notes.enabled` is false.
 
+Use `autoStart` when OpenClaw should begin notes capture automatically on
+gateway startup:
+
+```json5
+{
+  plugins: {
+    entries: {
+      "meeting-notes": {
+        config: {
+          autoStart: [
+            {
+              providerId: "discord-voice",
+              guildId: "123",
+              channelId: "456",
+              title: "Weekly planning",
+            },
+          ],
+        },
+      },
+    },
+  },
+}
+```
+
 Discord voice capture still needs normal Discord voice setup and permissions.
 See [Discord voice](/channels/discord#voice-mode).
 

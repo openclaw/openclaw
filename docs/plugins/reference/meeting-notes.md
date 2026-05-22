@@ -12,6 +12,6 @@ title: "meeting-notes"
 - Contracts: `tools`, `meetingNotesSourceProviders`
 - Tool: `meeting_notes`
 - Source provider: `manual-transcript`
-- Config: `enabled`, `maxUtterances`
+- Config: `enabled`, `maxUtterances`, `autoStart`
 
 See [Meeting Notes](/plugins/meeting-notes).
