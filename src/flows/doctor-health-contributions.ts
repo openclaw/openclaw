@@ -268,6 +268,7 @@ async function runStructuredHealthRepairChecks(
         options: ctx.options,
         sourceLastTouchedVersion: ctx.configResult.sourceLastTouchedVersion,
         confirm: (params) => ctx.prompter.confirm(params),
+        confirmRuntimeRepair: (params) => ctx.prompter.confirmRuntimeRepair(params),
         note,
       },
     },
@@ -472,6 +473,15 @@ async function runLegacyCronHealth(ctx: DoctorHealthFlowContext): Promise<void> 
 }
 
 async function runSandboxHealth(ctx: DoctorHealthFlowContext): Promise<void> {
+  if (ctx.prompter.shouldRepair) {
+    await runStructuredHealthRepairChecks(ctx, [
+      "core/doctor/sandbox/registry-files",
+      "core/doctor/sandbox/images",
+    ]);
+    const { noteSandboxScopeWarnings } = await import("../commands/doctor-sandbox.js");
+    noteSandboxScopeWarnings(ctx.cfg);
+    return;
+  }
   const { maybeRepairSandboxImages, maybeRepairSandboxRegistryFiles, noteSandboxScopeWarnings } =
     await import("../commands/doctor-sandbox.js");
   await maybeRepairSandboxRegistryFiles(ctx.prompter);
@@ -899,6 +909,11 @@ export function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
     createDoctorHealthContribution({
       id: "doctor:sandbox",
       label: "Sandbox",
+      healthCheckIds: [
+        "core/doctor/sandbox/registry-files",
+        "core/doctor/sandbox/images",
+        "core/doctor/sandbox-scope",
+      ],
       run: runSandboxHealth,
     }),
     createDoctorHealthContribution({

@@ -56,6 +56,11 @@ export interface HealthCheckContext {
     };
     readonly sourceLastTouchedVersion?: string;
     readonly confirm?: (params: { message: string; initialValue?: boolean }) => Promise<boolean>;
+    readonly confirmRuntimeRepair?: (params: {
+      message: string;
+      initialValue?: boolean;
+      requiresInteractiveConfirmation?: boolean;
+    }) => Promise<boolean>;
     readonly note?: (message: unknown, title?: string) => void | Promise<void>;
   };
 }

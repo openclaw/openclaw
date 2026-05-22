@@ -29,6 +29,11 @@ const mocks = vi.hoisted(() => ({
   detectShellCompletionHealth: vi.fn(),
   repairShellCompletionHealth: vi.fn(),
   registerBundledHealthChecks: vi.fn(),
+  detectSandboxRegistryFileIssues: vi.fn(),
+  detectSandboxImageIssues: vi.fn(),
+  noteSandboxScopeWarnings: vi.fn(),
+  maybeRepairSandboxRegistryFiles: vi.fn(),
+  maybeRepairSandboxImages: vi.fn(),
   noteChromeMcpBrowserReadiness: vi.fn(),
   detectLegacyClawdBrowserProfileResidue: vi.fn(),
   maybeArchiveLegacyClawdBrowserProfileResidue: vi.fn(),
@@ -111,6 +116,18 @@ vi.mock("../commands/doctor-completion.js", () => ({
   repairShellCompletionHealth: mocks.repairShellCompletionHealth,
 }));
 
+vi.mock("../commands/doctor-sandbox.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../commands/doctor-sandbox.js")>();
+  return {
+    ...actual,
+    detectSandboxRegistryFileIssues: mocks.detectSandboxRegistryFileIssues,
+    detectSandboxImageIssues: mocks.detectSandboxImageIssues,
+    noteSandboxScopeWarnings: mocks.noteSandboxScopeWarnings,
+    maybeRepairSandboxRegistryFiles: mocks.maybeRepairSandboxRegistryFiles,
+    maybeRepairSandboxImages: mocks.maybeRepairSandboxImages,
+  };
+});
+
 vi.mock("../commands/doctor-browser.js", () => ({
   noteChromeMcpBrowserReadiness: mocks.noteChromeMcpBrowserReadiness,
   detectLegacyClawdBrowserProfileResidue: mocks.detectLegacyClawdBrowserProfileResidue,
@@ -187,6 +204,15 @@ describe("doctor health contributions", () => {
       warnings: [],
     });
     mocks.registerBundledHealthChecks.mockReset();
+    mocks.detectSandboxRegistryFileIssues.mockReset();
+    mocks.detectSandboxRegistryFileIssues.mockResolvedValue([]);
+    mocks.detectSandboxImageIssues.mockReset();
+    mocks.detectSandboxImageIssues.mockResolvedValue([]);
+    mocks.noteSandboxScopeWarnings.mockReset();
+    mocks.maybeRepairSandboxRegistryFiles.mockReset();
+    mocks.maybeRepairSandboxRegistryFiles.mockResolvedValue(undefined);
+    mocks.maybeRepairSandboxImages.mockReset();
+    mocks.maybeRepairSandboxImages.mockImplementation(async (cfg: unknown) => cfg);
     mocks.noteChromeMcpBrowserReadiness.mockReset();
     mocks.noteChromeMcpBrowserReadiness.mockResolvedValue(undefined);
     mocks.detectLegacyClawdBrowserProfileResidue.mockReset();
@@ -316,6 +342,58 @@ describe("doctor health contributions", () => {
     expect(ids.indexOf("doctor:systemd-linger")).toBeGreaterThan(ids.indexOf("doctor:hooks-model"));
     expect(ids.indexOf("doctor:shell-completion")).toBeGreaterThan(
       ids.indexOf("doctor:bootstrap-size"),
+    );
+    expect(ids.indexOf("doctor:sandbox")).toBeGreaterThan(ids.indexOf("doctor:legacy-cron"));
+    expect(ids.indexOf("doctor:sandbox")).toBeLessThan(ids.indexOf("doctor:gateway-services"));
+  });
+
+  it("runs structured sandbox registry and image repairs at the sandbox contribution position", async () => {
+    mocks.detectSandboxRegistryFileIssues.mockResolvedValue([
+      {
+        kind: "containers",
+        registryPath: "/tmp/openclaw/sandbox/containers.json",
+        shardedDir: "/tmp/openclaw/sandbox/containers",
+        exists: true,
+        valid: true,
+        entries: 2,
+      },
+    ]);
+    mocks.detectSandboxImageIssues.mockResolvedValue([
+      {
+        kind: "missing-image",
+        imageKind: "base",
+        image: "openclaw/sandbox:local",
+        path: "agents.defaults.sandbox.docker.image",
+        buildScript: "scripts/sandbox-setup.sh",
+        message: "Sandbox base image missing: openclaw/sandbox:local.",
+        fixHint: "Build it with scripts/sandbox-setup.sh.",
+      },
+    ]);
+    const contribution = requireDoctorContribution("doctor:sandbox");
+    const ctx = {
+      cfg: { agents: { defaults: { sandbox: { mode: "all" } } } },
+      configResult: { cfg: {}, sourceLastTouchedVersion: "2026.5.2-test" },
+      sourceConfigValid: true,
+      prompter: buildDoctorPrompter(true),
+      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+      options: { dryRun: true, diff: true },
+      env: {},
+      cfgForPersistence: { agents: { defaults: { sandbox: { mode: "all" } } } },
+      configPath: "/tmp/fake-openclaw.json",
+    } as Parameters<(typeof contribution)["run"]>[0];
+
+    await contribution.run(ctx);
+
+    expect(mocks.maybeRepairSandboxRegistryFiles).not.toHaveBeenCalled();
+    expect(mocks.maybeRepairSandboxImages).not.toHaveBeenCalled();
+    expect(mocks.noteSandboxScopeWarnings).toHaveBeenCalledWith(ctx.cfg);
+    expect(mocks.note).toHaveBeenCalledWith(
+      expect.stringContaining("Would migrate legacy sandbox containers registry"),
+      "Doctor changes",
+    );
+    expect(mocks.note).toHaveBeenCalledWith(
+      expect.stringContaining("Would build or pull missing sandbox base image"),
+      "Doctor changes",
     );
   });
 
