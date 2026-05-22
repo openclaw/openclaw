@@ -1106,6 +1106,7 @@ export async function runMantisSlackDesktopSmoke(
         resolvedLeaseId,
         "--desktop",
         "--browser",
+        "--no-hydrate",
         "--shell",
         "--",
         renderRemoteScript({

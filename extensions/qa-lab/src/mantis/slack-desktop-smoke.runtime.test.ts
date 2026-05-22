@@ -173,6 +173,7 @@ describe("mantis Slack desktop smoke runtime", () => {
     const runArgs = commands.find(
       (entry) => entry.command === "/tmp/crabbox" && entry.args[0] === "run",
     )?.args;
+    expect(runArgs).toContain("--no-hydrate");
     expect(runArgs).not.toContain("--no-sync");
     const remoteScript = runArgs?.at(-1);
     expect(remoteScript).toContain("hydrate_mode='source'");
