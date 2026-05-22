@@ -343,9 +343,9 @@ describe("plugin npm package manifest staging", () => {
     const packageDir = writePublishablePluginPackage(repoDir);
     writeFileText(join(packageDir, "dist", "index.js"), "export {};\n");
     writeFileText(join(packageDir, "dist", "setup-entry.js"), "export {};\n");
-    const optionalDependencyDir = writeOptionalPlatformDependencyPackage(packageDir);
+    writeOptionalPlatformDependencyPackage(packageDir);
     writeLocalDependencyPackage(packageDir, {
-      optionalDependencySpec: `file:${optionalDependencyDir}`,
+      optionalDependencySpec: "file:../../deps/optional-platform-dep",
     });
     writeJsonFile(join(packageDir, "package.json"), {
       name: "@openclaw/diffs",
@@ -382,11 +382,20 @@ describe("plugin npm package manifest staging", () => {
           name: "local-runtime-dep",
           version: "1.0.0",
           optionalDependencies: {
-            "optional-platform-dep": `file:${optionalDependencyDir}`,
+            "optional-platform-dep": "file:../../deps/optional-platform-dep",
           },
+        },
+        "deps/optional-platform-dep": {
+          version: "1.0.0",
+          optional: true,
+          os: [process.platform === "win32" ? "darwin" : "win32"],
         },
         "node_modules/local-runtime-dep": {
           resolved: "deps/local-runtime-dep",
+          link: true,
+        },
+        "node_modules/optional-platform-dep": {
+          resolved: "deps/optional-platform-dep",
           link: true,
         },
       },

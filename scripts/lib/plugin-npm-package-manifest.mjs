@@ -353,14 +353,13 @@ function installPackageLocalBundledDependencies(params) {
   console.error(`[plugin-npm-publish] installing bundled dependencies for ${params.pluginDir}`);
   const result = spawnNpmSync(
     [
-      "install",
+      "ci",
       "--omit=dev",
       "--omit=peer",
       "--legacy-peer-deps",
       "--ignore-scripts",
       "--no-audit",
       "--no-fund",
-      "--package-lock=false",
       "--loglevel=error",
     ],
     {
