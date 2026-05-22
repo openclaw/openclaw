@@ -1,0 +1,196 @@
+/**
+ * Strict configuration parsing for the Claude app-server bridge.
+ *
+ * Mirrors extensions/codex/src/app-server/config.ts at smaller scope.
+ * Uses zod schemas so invalid plugin config is caught at boundary time
+ * rather than surfacing as a runtime cast failure mid-turn.
+ *
+ * Responsibilities split between the bridge (this code) and the server:
+ *   - command/args/env       → BRIDGE enforces (where to spawn the server).
+ *   - turnTimeoutMs          → BRIDGE enforces (per-turn deadline timer).
+ *   - turnIdleTimeoutMs      → BRIDGE enforces (notification idle watchdog).
+ *   - approvalPolicy         → BRIDGE applies promotion (never → untrusted
+ *                              when BeforeToolCall hooks exist); then
+ *                              passed to server which makes the actual
+ *                              approval gate decisions.
+ *   - sandbox                → ECHOED to server (informational at the
+ *                              bridge layer; the actual filesystem
+ *                              sandbox is enforced via openclaw's
+ *                              resolveSandboxContext earlier in the
+ *                              turn — see run-attempt.ts).
+ *   - dynamicTools.exclude   → BRIDGE enforces (filters openclaw tools
+ *                              out of the projected DynamicToolSpec[]).
+ */
+
+import { z } from "zod";
+import type { ApprovalPolicy, SandboxPolicy } from "./types.js";
+
+export const DEFAULT_CLAUDE_APP_SERVER_APPROVAL_POLICY: ApprovalPolicy = "never";
+export const DEFAULT_CLAUDE_APP_SERVER_SANDBOX: SandboxPolicy = { type: "dangerFullAccess" };
+export const DEFAULT_CLAUDE_APP_SERVER_TURN_TIMEOUT_MS = 600_000;
+export const DEFAULT_CLAUDE_APP_SERVER_TURN_IDLE_TIMEOUT_MS = 90_000;
+
+export const CLAUDE_APP_SERVER_CONFIG_KEYS = [
+  "command",
+  "args",
+  "env",
+  "approvalPolicy",
+  "sandbox",
+  "turnTimeoutMs",
+  "turnIdleTimeoutMs",
+] as const;
+
+export const CLAUDE_DYNAMIC_TOOLS_CONFIG_KEYS = ["exclude"] as const;
+
+// ── zod schemas ─────────────────────────────────────────────────────────────
+
+const approvalPolicySchema = z.enum(["never", "untrusted", "on-failure", "on-request"]);
+
+const sandboxModeSchema = z.enum(["read-only", "workspace-write", "danger-full-access"]);
+
+// SandboxPolicy can arrive as either a short string ("workspace-write") OR a
+// pre-structured object ({ type: "workspaceWrite", ... }). Normalize the
+// string form into the object form so downstream code only deals with one
+// shape.
+const sandboxConfigSchema = z.union([
+  sandboxModeSchema,
+  z.object({ type: z.string() }).passthrough(),
+]);
+
+const positiveIntegerSchema = z.number().int().positive();
+
+const appServerConfigSchema = z
+  .object({
+    command: z.string().min(1).optional(),
+    args: z.array(z.string()).optional(),
+    env: z.record(z.string(), z.string()).optional(),
+    approvalPolicy: approvalPolicySchema.optional(),
+    sandbox: sandboxConfigSchema.optional(),
+    turnTimeoutMs: positiveIntegerSchema.optional(),
+    turnIdleTimeoutMs: positiveIntegerSchema.optional(),
+  })
+  .strict();
+
+const dynamicToolsConfigSchema = z
+  .object({
+    exclude: z.array(z.string()).optional(),
+  })
+  .strict();
+
+const pluginConfigSchema = z
+  .object({
+    appServer: appServerConfigSchema.optional(),
+    dynamicTools: dynamicToolsConfigSchema.optional(),
+  })
+  .strict();
+
+// ── public types ────────────────────────────────────────────────────────────
+
+export type ClaudeAppServerRuntimeConfig = {
+  command?: string;
+  args?: string[];
+  env?: Record<string, string>;
+  approvalPolicy: ApprovalPolicy;
+  sandbox: SandboxPolicy;
+  turnTimeoutMs: number;
+  turnIdleTimeoutMs: number;
+};
+
+export type ClaudeDynamicToolsRuntimeConfig = {
+  excludeNames: string[];
+};
+
+export type ResolvedClaudeAppServerConfig = {
+  appServer: ClaudeAppServerRuntimeConfig;
+  dynamicTools: ClaudeDynamicToolsRuntimeConfig;
+};
+
+// ── resolver ────────────────────────────────────────────────────────────────
+
+/**
+ * Parse plugin config into a fully-resolved runtime config.
+ *
+ * Fail-closed semantics: if a section doesn't parse against its schema
+ * (unknown keys, wrong types, malformed sandbox), fall back to runtime
+ * defaults for that section rather than letting a partial cast leak into
+ * the turn runner. Sections are parsed independently so partial
+ * misconfiguration doesn't kill all defaults.
+ */
+export function resolveClaudeAppServerConfig(raw: unknown): ResolvedClaudeAppServerConfig {
+  const root = asRecord(raw);
+  const appServerParsed = appServerConfigSchema.safeParse(root.appServer ?? {});
+  const dynamicToolsParsed = dynamicToolsConfigSchema.safeParse(root.dynamicTools ?? {});
+
+  const appServer: ClaudeAppServerRuntimeConfig = {
+    approvalPolicy: DEFAULT_CLAUDE_APP_SERVER_APPROVAL_POLICY,
+    sandbox: DEFAULT_CLAUDE_APP_SERVER_SANDBOX,
+    turnTimeoutMs: DEFAULT_CLAUDE_APP_SERVER_TURN_TIMEOUT_MS,
+    turnIdleTimeoutMs: DEFAULT_CLAUDE_APP_SERVER_TURN_IDLE_TIMEOUT_MS,
+  };
+  if (appServerParsed.success) {
+    const a = appServerParsed.data;
+    if (a.command !== undefined) {
+      appServer.command = a.command;
+    }
+    if (a.args !== undefined) {
+      appServer.args = a.args;
+    }
+    if (a.env !== undefined) {
+      appServer.env = a.env;
+    }
+    if (a.approvalPolicy !== undefined) {
+      appServer.approvalPolicy = a.approvalPolicy;
+    }
+    if (a.sandbox !== undefined) {
+      appServer.sandbox = normalizeSandbox(a.sandbox);
+    }
+    if (a.turnTimeoutMs !== undefined) {
+      appServer.turnTimeoutMs = a.turnTimeoutMs;
+    }
+    if (a.turnIdleTimeoutMs !== undefined) {
+      appServer.turnIdleTimeoutMs = a.turnIdleTimeoutMs;
+    }
+  }
+
+  const excludeNames =
+    dynamicToolsParsed.success && dynamicToolsParsed.data.exclude !== undefined
+      ? dynamicToolsParsed.data.exclude
+      : [];
+
+  return {
+    appServer,
+    dynamicTools: { excludeNames },
+  };
+}
+
+export function normalizeClaudeAppServerApprovalPolicy(raw: unknown): ApprovalPolicy {
+  const parsed = approvalPolicySchema.safeParse(raw);
+  return parsed.success ? parsed.data : DEFAULT_CLAUDE_APP_SERVER_APPROVAL_POLICY;
+}
+
+export function normalizeClaudeAppServerSandbox(raw: unknown): SandboxPolicy {
+  const parsed = sandboxConfigSchema.safeParse(raw);
+  return parsed.success ? normalizeSandbox(parsed.data) : DEFAULT_CLAUDE_APP_SERVER_SANDBOX;
+}
+
+// ── helpers ─────────────────────────────────────────────────────────────────
+
+function normalizeSandbox(sandbox: z.infer<typeof sandboxConfigSchema>): SandboxPolicy {
+  if (typeof sandbox === "string") {
+    if (sandbox === "read-only") {
+      return { type: "readOnly" };
+    }
+    if (sandbox === "workspace-write") {
+      return { type: "workspaceWrite" };
+    }
+    return { type: "dangerFullAccess" };
+  }
+  return sandbox as SandboxPolicy;
+}
+
+function asRecord(raw: unknown): Record<string, unknown> {
+  if (raw && typeof raw === "object" && !Array.isArray(raw)) {
+    return raw as Record<string, unknown>;
+  }
+  return {};
+}

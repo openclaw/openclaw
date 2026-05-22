@@ -71,7 +71,7 @@
   "uiHints": {
     "appServer.approvalPolicy": {
       "label": "Approval Policy",
-      "help": "'never' is the openclaw-default unattended posture. Switch to 'untrusted' or 'on-request' to wire the codex approval-request protocol; the plugin currently auto-declines unhandled approval requests."
+      "help": "'never' is the openclaw-default unattended posture. Switch to 'untrusted' or 'on-request' to wire the codex approval-request protocol; command and file approval requests are routed through openclaw's BeforeToolCall hook chain. Promotion from 'never' to 'untrusted' fires automatically when any BeforeToolCall policy is registered, so destructive actions go through the hook chain even at the unattended default."
     },
     "appServer.sandbox": {
       "label": "Sandbox",
