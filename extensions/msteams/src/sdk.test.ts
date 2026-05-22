@@ -84,15 +84,23 @@ vi.mock("node:fs", async (importOriginal) => {
   };
 });
 
-const { mockGetToken } = vi.hoisted(() => {
+const { mockGetToken, azureIdentityState } = vi.hoisted(() => {
   const mockGetToken = vi.fn().mockResolvedValue({ token: "mock-managed-token" });
-  return { mockGetToken };
+  const azureIdentityState = {
+    assertionGetters: [] as Array<() => Promise<string>>,
+    clientAssertionCredentialCalls: [] as Array<{ tenantId: string; clientId: string }>,
+    managedIdentityCredentialClientIds: [] as Array<string | undefined>,
+  };
+  return { mockGetToken, azureIdentityState };
 });
 vi.mock("@azure/identity", () => {
   // Use classes so `new ...Credential()` works after vitest hoisting
   // (function declarations inside vi.mock factories can be transformed
   // into arrow functions during hoisting, which breaks `new`).
   class ManagedIdentityCredential {
+    constructor(clientId?: string) {
+      azureIdentityState.managedIdentityCredentialClientIds.push(clientId);
+    }
     getToken = mockGetToken;
   }
   class DefaultAzureCredential {
@@ -101,7 +109,19 @@ vi.mock("@azure/identity", () => {
   class ClientCertificateCredential {
     getToken = mockGetToken;
   }
-  return { ManagedIdentityCredential, DefaultAzureCredential, ClientCertificateCredential };
+  class ClientAssertionCredential {
+    constructor(tenantId: string, clientId: string, getAssertion: () => Promise<string>) {
+      azureIdentityState.clientAssertionCredentialCalls.push({ tenantId, clientId });
+      azureIdentityState.assertionGetters.push(getAssertion);
+    }
+    getToken = mockGetToken;
+  }
+  return {
+    ManagedIdentityCredential,
+    DefaultAzureCredential,
+    ClientCertificateCredential,
+    ClientAssertionCredential,
+  };
 });
 
 const originalFetch = globalThis.fetch;
@@ -114,6 +134,10 @@ afterEach(() => {
   jwtState.decodedHeader = { kid: "key-1" };
   jwtState.decodedPayload = { iss: "https://api.botframework.com" };
   jwtState.verifyResult = { sub: "ok" };
+  azureIdentityState.assertionGetters.length = 0;
+  azureIdentityState.clientAssertionCredentialCalls.length = 0;
+  azureIdentityState.managedIdentityCredentialClientIds.length = 0;
+  mockGetToken.mockClear();
   vi.restoreAllMocks();
 });
 
@@ -542,6 +566,10 @@ describe("createMSTeamsApp – federated certificate credentials", () => {
 });
 
 describe("createMSTeamsApp – federated managed identity", () => {
+  beforeEach(() => {
+    mockGetToken.mockResolvedValue({ token: "mock-managed-token" });
+  });
+
   it("creates app with token function for user-assigned MI", async () => {
     const { sdk, appInstances } = makeFakeSdk();
     const creds: MSTeamsFederatedCredentials = {
@@ -561,6 +589,10 @@ describe("createMSTeamsApp – federated managed identity", () => {
     }
     const token = await tokenProvider("https://api.botframework.com/.default");
     expect(token).toBe("mock-managed-token");
+    expect(azureIdentityState.managedIdentityCredentialClientIds).toEqual(["mi-client-id"]);
+    expect(azureIdentityState.clientAssertionCredentialCalls).toEqual([
+      { tenantId: "mi-tenant", clientId: "mi-app-id" },
+    ]);
   });
 
   it("creates app with token function for system-assigned MI", async () => {
@@ -578,6 +610,35 @@ describe("createMSTeamsApp – federated managed identity", () => {
     }
     const token = await tokenProvider("https://api.botframework.com/.default");
     expect(token).toBe("mock-managed-token");
+    expect(azureIdentityState.managedIdentityCredentialClientIds).toEqual([undefined]);
+    expect(azureIdentityState.clientAssertionCredentialCalls).toEqual([
+      { tenantId: "mi-tenant", clientId: "mi-app-id" },
+    ]);
+  });
+
+  it("uses managed identity only as the AzureADTokenExchange assertion", async () => {
+    const { sdk, appInstances } = makeFakeSdk();
+    const creds: MSTeamsFederatedCredentials = {
+      type: "federated",
+      appId: "bot-app-id",
+      tenantId: "tenant-id",
+      useManagedIdentity: true,
+      managedIdentityClientId: "mi-client-id",
+    };
+    await createMSTeamsApp(creds, sdk);
+    const tokenProvider = appInstances[0].token as ((scope: string) => Promise<string>) | undefined;
+    if (!tokenProvider) {
+      throw new Error("expected managed-identity app to expose token provider");
+    }
+    await tokenProvider("https://api.botframework.com/.default");
+
+    const assertionGetter = azureIdentityState.assertionGetters[0];
+    if (!assertionGetter) {
+      throw new Error("expected client assertion getter");
+    }
+    await expect(assertionGetter()).resolves.toBe("mock-managed-token");
+    expect(mockGetToken).toHaveBeenCalledWith("https://api.botframework.com/.default");
+    expect(mockGetToken).toHaveBeenCalledWith("api://AzureADTokenExchange");
   });
 
   it("throws from token function when token acquisition fails", async () => {

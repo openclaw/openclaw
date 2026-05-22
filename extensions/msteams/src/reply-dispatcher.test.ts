@@ -4,6 +4,7 @@ const createChannelMessageReplyPipelineMock = vi.hoisted(() => vi.fn());
 const createReplyDispatcherWithTypingMock = vi.hoisted(() => vi.fn());
 const getMSTeamsRuntimeMock = vi.hoisted(() => vi.fn());
 const enqueueSystemEventMock = vi.hoisted(() => vi.fn());
+const classifyMSTeamsSendErrorMock = vi.hoisted(() => vi.fn(() => ({})));
 const renderReplyPayloadsToMessagesMock = vi.hoisted(() => vi.fn(() => []));
 const sendMSTeamsMessagesMock = vi.hoisted(() => vi.fn(async () => []));
 const streamInstances = vi.hoisted(
@@ -36,7 +37,7 @@ vi.mock("./messenger.js", () => ({
 }));
 
 vi.mock("./errors.js", () => ({
-  classifyMSTeamsSendError: vi.fn(() => ({})),
+  classifyMSTeamsSendError: classifyMSTeamsSendErrorMock,
   formatMSTeamsSendErrorHint: vi.fn(() => undefined),
   formatUnknownError: vi.fn((err) => String(err)),
 }));
@@ -75,6 +76,7 @@ describe("createMSTeamsReplyDispatcher", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     streamInstances.length = 0;
+    classifyMSTeamsSendErrorMock.mockReturnValue({});
 
     typingCallbacks = {
       onReplyStart: vi.fn(async () => {}),
@@ -113,6 +115,11 @@ describe("createMSTeamsReplyDispatcher", () => {
 
   let lastCreatedDispatcher: ReturnType<typeof createMSTeamsReplyDispatcher> | undefined;
   let lastContextSendActivity: ReturnType<typeof vi.fn> | undefined;
+  let lastLogger: {
+    debug: ReturnType<typeof vi.fn>;
+    error: ReturnType<typeof vi.fn>;
+    warn: ReturnType<typeof vi.fn>;
+  };
 
   function createDispatcher(
     conversationType: string = "personal",
@@ -121,12 +128,13 @@ describe("createMSTeamsReplyDispatcher", () => {
   ) {
     const contextSendActivity = vi.fn(async () => ({ id: "activity-1" }));
     lastContextSendActivity = contextSendActivity;
+    lastLogger = { debug: vi.fn(), error: vi.fn(), warn: vi.fn() };
     const dispatcher = createMSTeamsReplyDispatcher({
       cfg: { channels: { msteams: msteamsConfig } } as never,
       agentId: "agent",
       sessionKey: "agent:main:main",
       runtime: { error: vi.fn() } as never,
-      log: { debug: vi.fn(), error: vi.fn(), warn: vi.fn() } as never,
+      log: lastLogger as never,
       adapter: {
         continueConversation: vi.fn(),
         process: vi.fn(),
@@ -489,6 +497,10 @@ describe("createMSTeamsReplyDispatcher", () => {
       .mockRejectedValueOnce(Object.assign(new Error("gateway timeout"), { statusCode: 502 }))
       .mockResolvedValueOnce(["id-1"] as never)
       .mockRejectedValueOnce(Object.assign(new Error("gateway timeout"), { statusCode: 502 }));
+    classifyMSTeamsSendErrorMock.mockReturnValue({
+      kind: "transient",
+      statusCode: 502,
+    });
 
     const dispatcher = createDispatcher(
       "personal",
@@ -507,6 +519,13 @@ describe("createMSTeamsReplyDispatcher", () => {
     expect(message).toContain("1 of 2 message blocks were not delivered");
     expect(message).toContain("The user may not have received the full reply");
     expect(message).toContain("Error: Error: gateway timeout.");
+    expect(lastLogger.warn).toHaveBeenCalledWith("failed to deliver 1 of 2 message blocks", {
+      error: "Error: gateway timeout",
+      failed: 1,
+      kind: "transient",
+      statusCode: 502,
+      total: 2,
+    });
     expect(context).toEqual({
       sessionKey: "agent:main:main",
       contextKey: "msteams:delivery-failure:conv",

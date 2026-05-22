@@ -240,8 +240,12 @@ export function createMSTeamsReplyDispatcher(params: {
         }
       }
       if (failed > 0) {
+        const classification = classifyMSTeamsSendError(lastFailedError);
         params.log.warn?.(`failed to deliver ${failed} of ${total} message blocks`, {
+          error: formatUnknownError(lastFailedError),
           failed,
+          kind: classification.kind,
+          statusCode: classification.statusCode,
           total,
         });
         queueDeliveryFailureSystemEvent({

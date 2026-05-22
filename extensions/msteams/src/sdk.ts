@@ -62,6 +62,11 @@ type AzureIdentityModule = {
     clientId: string,
     options: { certificate: string },
   ) => AzureTokenCredential;
+  ClientAssertionCredential: new (
+    tenantId: string,
+    clientId: string,
+    getAssertion: () => Promise<string>,
+  ) => AzureTokenCredential;
   ManagedIdentityCredential: new (clientId?: string) => AzureTokenCredential;
 };
 
@@ -200,11 +205,18 @@ function createManagedIdentityApp(
 
   const getCredential = async () => {
     if (!credentialPromise) {
-      credentialPromise = loadAzureIdentity().then((az) =>
-        creds.managedIdentityClientId
+      credentialPromise = loadAzureIdentity().then((az) => {
+        const managedIdentityCredential = creds.managedIdentityClientId
           ? new az.ManagedIdentityCredential(creds.managedIdentityClientId)
-          : new az.ManagedIdentityCredential(),
-      );
+          : new az.ManagedIdentityCredential();
+        return new az.ClientAssertionCredential(creds.tenantId, creds.appId, async () => {
+          const assertion = await managedIdentityCredential.getToken("api://AzureADTokenExchange");
+          if (!assertion?.token) {
+            throw new Error("Failed to acquire managed identity assertion for token exchange.");
+          }
+          return assertion.token;
+        });
+      });
     }
     return credentialPromise;
   };
@@ -214,7 +226,7 @@ function createManagedIdentityApp(
     const token = await credential.getToken(scope);
 
     if (!token?.token) {
-      throw new Error("Failed to acquire token via managed identity.");
+      throw new Error("Failed to acquire token via managed identity federated exchange.");
     }
 
     return token.token;
