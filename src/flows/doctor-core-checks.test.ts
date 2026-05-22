@@ -101,6 +101,20 @@ const pluginRegistryMocks = vi.hoisted(() => ({
     warnings: [],
   })),
 }));
+const sandboxMocks = vi.hoisted(() => ({
+  detectSandboxRegistryFileIssues: vi.fn(async (): Promise<unknown[]> => []),
+  detectSandboxImageIssues: vi.fn(async (): Promise<unknown[]> => []),
+  repairSandboxImages: vi.fn(async (params: { cfg: OpenClawConfig }) => ({
+    config: params.cfg,
+    changes: [],
+    warnings: [],
+  })),
+  migrateLegacySandboxRegistryFiles: vi.fn(async (): Promise<unknown[]> => []),
+  formatLegacySandboxRegistryMigrationLine: vi.fn((result: { kind: string }) => {
+    return `- Migrated ${result.kind} registry.`;
+  }),
+  collectSandboxScopeWarnings: vi.fn((): unknown[] => []),
+}));
 
 vi.mock("../commands/doctor-completion.js", () => ({
   detectShellCompletionHealth,
@@ -120,6 +134,26 @@ vi.mock("../commands/doctor-plugin-registry.js", () => ({
   repairPluginRegistryState: pluginRegistryMocks.repairPluginRegistryState,
 }));
 
+vi.mock("../commands/doctor-sandbox.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../commands/doctor-sandbox.js")>();
+  return {
+    ...actual,
+    detectSandboxRegistryFileIssues: sandboxMocks.detectSandboxRegistryFileIssues,
+    detectSandboxImageIssues: sandboxMocks.detectSandboxImageIssues,
+    repairSandboxImages: sandboxMocks.repairSandboxImages,
+    formatLegacySandboxRegistryMigrationLine: sandboxMocks.formatLegacySandboxRegistryMigrationLine,
+    collectSandboxScopeWarnings: sandboxMocks.collectSandboxScopeWarnings,
+  };
+});
+
+vi.mock("../agents/sandbox/registry.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../agents/sandbox/registry.js")>();
+  return {
+    ...actual,
+    migrateLegacySandboxRegistryFiles: sandboxMocks.migrateLegacySandboxRegistryFiles,
+  };
+});
+
 describe("registerCoreHealthChecks", () => {
   let tmp: string | undefined;
 
@@ -138,6 +172,22 @@ describe("registerCoreHealthChecks", () => {
         warnings: [],
       }),
     );
+    sandboxMocks.detectSandboxRegistryFileIssues.mockReset();
+    sandboxMocks.detectSandboxRegistryFileIssues.mockResolvedValue([]);
+    sandboxMocks.detectSandboxImageIssues.mockReset();
+    sandboxMocks.detectSandboxImageIssues.mockResolvedValue([]);
+    sandboxMocks.repairSandboxImages.mockReset();
+    sandboxMocks.repairSandboxImages.mockImplementation(
+      async (params: { cfg: OpenClawConfig }) => ({
+        config: params.cfg,
+        changes: [],
+        warnings: [],
+      }),
+    );
+    sandboxMocks.migrateLegacySandboxRegistryFiles.mockReset();
+    sandboxMocks.migrateLegacySandboxRegistryFiles.mockResolvedValue([]);
+    sandboxMocks.collectSandboxScopeWarnings.mockReset();
+    sandboxMocks.collectSandboxScopeWarnings.mockReturnValue([]);
   });
 
   afterEach(async () => {
@@ -662,6 +712,191 @@ describe("registerCoreHealthChecks", () => {
     ).resolves.toStrictEqual({ findings: [] });
   });
 
+  it("detects sandbox registry files and previews sharded migration", async () => {
+    sandboxMocks.detectSandboxRegistryFileIssues.mockResolvedValue([
+      {
+        kind: "containers",
+        registryPath: "/tmp/openclaw/sandbox/containers.json",
+        shardedDir: "/tmp/openclaw/sandbox/containers",
+        exists: true,
+        valid: true,
+        entries: 2,
+      },
+    ]);
+    const check = CORE_HEALTH_CHECKS.find(
+      (entry) => entry.id === "core/doctor/sandbox/registry-files",
+    );
+
+    const preview = await check?.run({
+      mode: "lint",
+      runtime: { log() {}, error() {}, exit() {} },
+      cfg: {},
+      repair: false,
+    });
+
+    expect(preview?.findings).toContainEqual(
+      expect.objectContaining({
+        checkId: "core/doctor/sandbox/registry-files",
+        path: "/tmp/openclaw/sandbox/containers.json",
+      }),
+    );
+
+    expect(sandboxMocks.migrateLegacySandboxRegistryFiles).not.toHaveBeenCalled();
+    expect(preview?.changes).toContain(
+      "Would migrate legacy sandbox containers registry /tmp/openclaw/sandbox/containers.json into sharded registry files.",
+    );
+    expect(preview?.effects).toContainEqual(
+      expect.objectContaining({
+        kind: "state",
+        action: "would-migrate-legacy-sandbox-registry",
+        target: "/tmp/openclaw/sandbox/containers.json",
+      }),
+    );
+  });
+
+  it("detects sandbox image readiness and previews build side effects", async () => {
+    sandboxMocks.detectSandboxImageIssues.mockResolvedValue([
+      {
+        kind: "missing-image",
+        imageKind: "base",
+        image: "openclaw/sandbox:local",
+        path: "agents.defaults.sandbox.docker.image",
+        buildScript: "scripts/sandbox-setup.sh",
+        message: "Sandbox base image missing: openclaw/sandbox:local.",
+        fixHint: "Build it with scripts/sandbox-setup.sh.",
+      },
+    ]);
+    const check = CORE_HEALTH_CHECKS.find((entry) => entry.id === "core/doctor/sandbox/images");
+
+    const preview = await check?.run({
+      mode: "lint",
+      runtime: { log() {}, error() {}, exit() {} },
+      cfg: {},
+      repair: false,
+    });
+
+    expect(preview?.findings).toContainEqual(
+      expect.objectContaining({
+        checkId: "core/doctor/sandbox/images",
+        path: "agents.defaults.sandbox.docker.image",
+      }),
+    );
+
+    expect(preview?.changes).toContain(
+      "Would build or pull missing sandbox base image openclaw/sandbox:local with scripts/sandbox-setup.sh.",
+    );
+    expect(preview?.effects).toContainEqual(
+      expect.objectContaining({
+        kind: "process",
+        action: "would-build-sandbox-base-image",
+        target: "openclaw/sandbox:local",
+        dryRunSafe: false,
+      }),
+    );
+  });
+
+  it("preserves sandbox operator guidance for non-repairable image issues", async () => {
+    sandboxMocks.detectSandboxImageIssues.mockResolvedValue([
+      {
+        kind: "docker-unavailable",
+        mode: "all",
+        path: "agents.defaults.sandbox.mode",
+        message: 'Sandbox mode is enabled (mode: "all") but Docker is not available.',
+        fixHint: "Install Docker and restart the gateway, or disable sandbox mode.",
+      },
+    ]);
+    const check = CORE_HEALTH_CHECKS.find((entry) => entry.id === "core/doctor/sandbox/images");
+
+    const repaired = await check?.run({
+      mode: "fix",
+      runtime: { log() {}, error() {}, exit() {} },
+      cfg: {},
+      repair: true,
+    });
+
+    expect(repaired).toMatchObject({
+      status: "skipped",
+      reason: "sandbox image issue needs operator action",
+      warnings: [
+        'Sandbox mode is enabled (mode: "all") but Docker is not available. Install Docker and restart the gateway, or disable sandbox mode.',
+      ],
+    });
+  });
+
+  it("leaves custom missing sandbox images as operator guidance", async () => {
+    sandboxMocks.detectSandboxImageIssues.mockResolvedValue([
+      {
+        kind: "missing-image",
+        imageKind: "base",
+        image: "registry.example.com/openclaw/sandbox:custom",
+        path: "agents.defaults.sandbox.docker.image",
+        message: "Sandbox base image missing: registry.example.com/openclaw/sandbox:custom.",
+        fixHint: "Build or pull it first.",
+      },
+    ]);
+    const check = CORE_HEALTH_CHECKS.find((entry) => entry.id === "core/doctor/sandbox/images");
+
+    const dryRun = await check?.run({
+      mode: "fix",
+      runtime: { log() {}, error() {}, exit() {} },
+      cfg: {},
+      repair: false,
+    });
+    const repaired = await check?.run({
+      mode: "fix",
+      runtime: { log() {}, error() {}, exit() {} },
+      cfg: {},
+      repair: true,
+    });
+
+    expect(dryRun?.changes).toEqual([
+      "Would leave sandbox image issue for operator action: Sandbox base image missing: registry.example.com/openclaw/sandbox:custom.",
+    ]);
+    expect(dryRun?.effects).toContainEqual(
+      expect.objectContaining({
+        kind: "other",
+        action: "would-inspect-sandbox-images",
+        target: "agents.defaults.sandbox.docker.image",
+      }),
+    );
+    expect(repaired).toMatchObject({
+      status: "skipped",
+      reason: "sandbox image issue needs operator action",
+      changes: [],
+      warnings: [
+        "Sandbox base image missing: registry.example.com/openclaw/sandbox:custom. Build or pull it first.",
+      ],
+    });
+  });
+
+  it("detects sandbox shared-scope ignored overrides as read-only findings", async () => {
+    sandboxMocks.collectSandboxScopeWarnings.mockReturnValue([
+      {
+        agentId: "work",
+        overrides: ["docker"],
+        path: "agents.list.work.sandbox",
+        message: 'agents.list (id "work") sandbox docker overrides ignored.',
+        fixHint: 'scope resolves to "shared".',
+      },
+    ]);
+    const check = getCheck(CORE_HEALTH_CHECKS, "core/doctor/sandbox-scope");
+
+    expect(check?.repair).toBeUndefined();
+    await expect(
+      check?.detect({
+        mode: "lint",
+        runtime: { log() {}, error() {}, exit() {} },
+        cfg: {},
+      }),
+    ).resolves.toContainEqual(
+      expect.objectContaining({
+        checkId: "core/doctor/sandbox-scope",
+        path: "agents.list.work.sandbox",
+        message: 'agents.list (id "work") sandbox docker overrides ignored.',
+      }),
+    );
+  });
+
   it("validates configured plugin install repairs against repaired config metadata", async () => {
     const check = CORE_HEALTH_CHECKS.find(
       (entry) => entry.id === "core/doctor/configured-plugin-installs",
@@ -965,6 +1200,107 @@ describe("registerCoreHealthChecks", () => {
         target: "@openclaw/slack",
       }),
     ]);
+  });
+
+  it("validates sandbox registry repairs with detect-after", async () => {
+    const issue = {
+      kind: "containers",
+      registryPath: "/tmp/openclaw/sandbox/containers.json",
+      shardedDir: "/tmp/openclaw/sandbox/containers",
+      exists: true,
+      valid: true,
+      entries: 2,
+    };
+    sandboxMocks.detectSandboxRegistryFileIssues
+      .mockResolvedValueOnce([issue])
+      .mockResolvedValueOnce([]);
+    sandboxMocks.migrateLegacySandboxRegistryFiles.mockResolvedValueOnce([
+      {
+        kind: "containers",
+        registryPath: issue.registryPath,
+        shardedDir: issue.shardedDir,
+        status: "migrated",
+        entries: 2,
+      },
+    ]);
+    const check = CORE_HEALTH_CHECKS.find(
+      (entry) => entry.id === "core/doctor/sandbox/registry-files",
+    );
+
+    const result = await runDoctorHealthRepairs(
+      {
+        mode: "fix",
+        runtime: { log() {}, error() {}, exit() {} },
+        cfg: {},
+      },
+      { checks: [check!], validate: true },
+    );
+
+    expect(sandboxMocks.migrateLegacySandboxRegistryFiles).toHaveBeenCalledTimes(1);
+    expect(result.effects).toContainEqual(
+      expect.objectContaining({
+        kind: "state",
+        action: "migrate-legacy-sandbox-registry",
+        target: issue.registryPath,
+      }),
+    );
+    expect(result.checksRepaired).toBe(1);
+    expect(result.checksValidated).toBe(1);
+    expect(result.remainingFindings).toEqual([]);
+  });
+
+  it("validates sandbox image repairs with detect-after", async () => {
+    const issue = {
+      kind: "missing-image",
+      imageKind: "base",
+      image: "openclaw/sandbox:local",
+      path: "agents.defaults.sandbox.docker.image",
+      buildScript: "scripts/sandbox-setup.sh",
+      message: "Sandbox base image missing: openclaw/sandbox:local.",
+      fixHint: "Build it with scripts/sandbox-setup.sh.",
+    };
+    sandboxMocks.detectSandboxImageIssues
+      .mockResolvedValueOnce([issue])
+      .mockResolvedValueOnce([]);
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {
+          sandbox: {
+            mode: "all",
+          },
+        },
+      },
+    };
+    const check = CORE_HEALTH_CHECKS.find((entry) => entry.id === "core/doctor/sandbox/images");
+
+    const result = await runDoctorHealthRepairs(
+      {
+        mode: "fix",
+        runtime: { log() {}, error() {}, exit() {} },
+        cfg,
+      },
+      { checks: [check!], validate: true },
+    );
+
+    expect(sandboxMocks.repairSandboxImages).toHaveBeenCalledTimes(1);
+    expect(sandboxMocks.repairSandboxImages).toHaveBeenCalledWith(
+      expect.objectContaining({
+        cfg,
+        prompter: expect.objectContaining({
+          note: expect.any(Function),
+        }),
+      }),
+    );
+    expect(result.effects).toContainEqual(
+      expect.objectContaining({
+        kind: "process",
+        action: "build-sandbox-base-image",
+        target: "openclaw/sandbox:local",
+      }),
+    );
+    expect(result.checksRepaired).toBe(1);
+    expect(result.checksValidated).toBe(1);
+    expect(result.remainingFindings).toEqual([]);
   });
 
   it("previews converted side-effect repairs as effects without fake diffs", async () => {
