@@ -2363,10 +2363,12 @@ describe("registerCoreHealthChecks", () => {
             {
               id: "manual-notify",
               name: "Manual notify",
+              description: undefined,
+              enabled: true,
+              wakeMode: "now",
               notify: true,
-              createdAtMs: Date.parse("2026-02-01T00:00:00.000Z"),
-              updatedAtMs: Date.parse("2026-02-02T00:00:00.000Z"),
-              schedule: { kind: "cron", cron: "0 7 * * *", tz: "UTC" },
+              schedule: { kind: "every", everyMs: 60_000, anchorMs: 1_700_000_000_000 },
+              sessionTarget: "main",
               payload: { kind: "systemEvent", text: "Morning brief" },
               state: {},
             },
@@ -2391,6 +2393,8 @@ describe("registerCoreHealthChecks", () => {
     expect(result.warnings).toContain(
       'Cron job "Manual notify" still uses legacy notify fallback, but cron.webhook is unset so doctor cannot migrate it automatically.',
     );
+    expect(result.changes).toEqual([]);
+    expect(result.effects).toEqual([]);
     expect(await fs.readFile(storePath, "utf-8")).toContain('"notify": true');
   });
 

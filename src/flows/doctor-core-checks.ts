@@ -1456,12 +1456,14 @@ const legacyCronStoreCheck: RegisteredHealthCheck = defineSplitHealthCheck({
       return {
         changes: previewed.flatMap((result) => result.changes),
         warnings: previewed.flatMap((result) => result.warnings),
-        effects: previewed.map((result) => ({
-          kind: "file" as const,
-          action: "would-normalize-legacy-cron-store",
-          target: result.storePath,
-          dryRunSafe: true,
-        })),
+        effects: previewed
+          .filter((result) => result.changed)
+          .map((result) => ({
+            kind: "file" as const,
+            action: "would-normalize-legacy-cron-store",
+            target: result.storePath,
+            dryRunSafe: true,
+          })),
       };
     }
     const repaired = await repairLegacyCronStoreIssues({

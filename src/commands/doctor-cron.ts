@@ -200,16 +200,29 @@ export async function repairLegacyCronStoreIssues(params: {
     return [];
   }
   if (params.dryRun === true) {
+    const dryRunJobs = cloneCronJobs(inspected.rawJobs);
     const notifyMigration = migrateLegacyNotifyFallback({
-      jobs: cloneCronJobs(inspected.rawJobs),
+      jobs: dryRunJobs,
       legacyWebhook: inspected.legacyWebhook,
     });
+    const dreamingMigration = migrateLegacyDreamingPayloadShape(dryRunJobs);
+    const changed =
+      inspected.normalizedMutated || notifyMigration.changed || dreamingMigration.changed;
+    const changes: string[] = [];
+    if (changed) {
+      changes.push(`Would normalize legacy cron store at ${inspected.storePath}.`);
+    }
+    if (dreamingMigration.rewrittenCount > 0) {
+      changes.push(
+        `Would rewrite ${pluralize(dreamingMigration.rewrittenCount, "managed dreaming job")} to run as an isolated agent turn so dreaming no longer requires heartbeat.`,
+      );
+    }
     return [
       {
         storePath: inspected.storePath,
-        changed: true,
-        dreamingRewrittenCount: 0,
-        changes: [`Would normalize legacy cron store at ${inspected.storePath}.`],
+        changed,
+        dreamingRewrittenCount: dreamingMigration.rewrittenCount,
+        changes,
         warnings: notifyMigration.warnings,
       },
     ];
