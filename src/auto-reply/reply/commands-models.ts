@@ -157,7 +157,7 @@ export async function buildModelsProviderData(
     defaultModel: resolvedDefault.model,
     agentId,
   });
-  const visibleCatalog = resolveVisibleModelCatalog({
+  const visibleCatalog = await resolveVisibleModelCatalog({
     cfg,
     catalog,
     defaultProvider: resolvedDefault.provider,
@@ -245,9 +245,9 @@ export async function buildModelsProviderData(
     add(entry.provider, entry.id);
   }
 
-  const hasAuth =
+  const hasAuth: (provider: string) => Promise<boolean> =
     options.view === "all"
-      ? () => true
+      ? async () => true
       : createProviderAuthChecker({
           cfg,
           workspaceDir:
@@ -258,7 +258,7 @@ export async function buildModelsProviderData(
         });
 
   for (const entry of catalog) {
-    if (usesUnfilteredCatalogModels(entry.provider) && hasAuth(entry.provider)) {
+    if (usesUnfilteredCatalogModels(entry.provider) && (await hasAuth(entry.provider))) {
       add(entry.provider, entry.id);
     }
   }

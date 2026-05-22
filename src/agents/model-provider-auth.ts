@@ -76,7 +76,7 @@ function resolveProviderAuthConfigFingerprint(cfg: OpenClawConfig | undefined): 
   return fingerprint;
 }
 
-export function hasAuthForModelProvider(params: {
+export async function hasAuthForModelProvider(params: {
   provider: string;
   cfg?: OpenClawConfig;
   workspaceDir?: string;
@@ -85,7 +85,7 @@ export function hasAuthForModelProvider(params: {
   store?: AuthProfileStore;
   allowPluginSyntheticAuth?: boolean;
   discoverExternalCliAuth?: boolean;
-}): boolean {
+}): Promise<boolean> {
   const provider = normalizeProviderId(params.provider);
   // The prepared map is built by warmCurrentProviderAuthState — one entry per
   // configured agent, keyed by agentId. Only consult it when the caller's
@@ -123,6 +123,7 @@ export function hasAuthForModelProvider(params: {
       return preparedAnswer;
     }
   }
+  await new Promise<void>((resolve) => setImmediate(resolve));
   if (
     hasRuntimeAvailableProviderAuth({
       provider,
@@ -158,15 +159,15 @@ export function createProviderAuthChecker(params: {
   env?: NodeJS.ProcessEnv;
   allowPluginSyntheticAuth?: boolean;
   discoverExternalCliAuth?: boolean;
-}): (provider: string) => boolean {
+}): (provider: string) => Promise<boolean> {
   const authCache = new Map<string, boolean>();
-  return (provider: string) => {
+  return async (provider: string) => {
     const key = normalizeProviderId(provider);
     const cached = authCache.get(key);
     if (cached !== undefined) {
       return cached;
     }
-    const value = hasAuthForModelProvider({
+    const value = await hasAuthForModelProvider({
       provider: key,
       cfg: params.cfg,
       workspaceDir: params.workspaceDir,
@@ -210,7 +211,7 @@ export async function warmCurrentProviderAuthState(cfg: OpenClawConfig): Promise
     });
     const state = new Map<string, boolean>();
     for (const provider of providers) {
-      const value = hasAuthForModelProvider({
+      const value = await hasAuthForModelProvider({
         provider,
         cfg,
         workspaceDir,
