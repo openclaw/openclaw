@@ -23,6 +23,14 @@ export type EmbeddedAgentQueueMessageOptions = {
   deliveryTimeoutMs?: number;
   waitForTranscriptCommit?: boolean;
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
+  /**
+   * Clean user-input text for the steered message, as derived by
+   * `CommandBody ?? RawBody ?? Body` in the channel handler. When set, the
+   * embedded run refreshes its `params.rawBody` so any subsequent
+   * `before_prompt_build` / `agent_end` hook events report this text
+   * instead of the original turn's text. See PR #52664.
+   */
+  rawBody?: string;
 };
 
 export type ActiveEmbeddedRunSnapshot = {

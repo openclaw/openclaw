@@ -1240,6 +1240,11 @@ export async function runReplyAgent(params: {
       {
         steeringMode: "all",
         ...(resolvedQueue.debounceMs !== undefined ? { debounceMs: resolvedQueue.debounceMs } : {}),
+        // PR #52664: thread the new inbound's clean rawBody alongside the
+        // decorated prompt so the active embedded run's subsequent
+        // before_prompt_build / agent_end events report this turn's user
+        // text rather than the original turn's text.
+        ...(followupRun.rawBody !== undefined ? { rawBody: followupRun.rawBody } : {}),
       },
     );
     if (steerOutcome.queued) {
