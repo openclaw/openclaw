@@ -354,6 +354,36 @@ describe("openai-compatible generic embedding provider", () => {
     expect(server.requests[0]?.headers["x-tenant"]).toBe("tenant-a");
   });
 
+  it("treats blank remote overrides as unset for configured provider aliases", async () => {
+    const token = "alias-token";
+    const server = await startEmbeddingServer({ token });
+    const { provider, client } = createOpenAICompatibleEmbeddingProvider(
+      createOptions({
+        config: {
+          models: {
+            providers: {
+              "tenant-embeddings": {
+                baseUrl: server.baseUrl,
+                apiKey: token,
+                models: [],
+              },
+            },
+          },
+        } as EmbeddingProviderCreateOptions["config"],
+        provider: "tenant-embeddings",
+        model: "text-embedding-bge-m3",
+        remote: {
+          baseUrl: "   ",
+          apiKey: "   ",
+        },
+      }),
+    );
+
+    expect(client.baseUrl).toBe(server.baseUrl);
+    await expect(provider.embed("hello")).resolves.toEqual([0.1, 0.2, 0.3]);
+    expect(server.requests[0]?.headers.authorization).toBe(`Bearer ${token}`);
+  });
+
   it("strips the active configured provider alias from model ids", async () => {
     const server = await startEmbeddingServer();
     const { provider } = createOpenAICompatibleEmbeddingProvider(

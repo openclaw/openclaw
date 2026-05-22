@@ -213,22 +213,9 @@ describe("memory-core generic embedding provider bridge", () => {
       [1, 0.5, 3],
       [4, 1.5, 3],
     ]);
-    if (!result.provider?.embedBatchInputs) {
-      throw new Error("expected memory bridge to expose structured embedding inputs");
-    }
-    await expect(
-      result.provider.embedBatchInputs([
-        {
-          text: "ignored",
-          parts: [
-            { type: "text", text: "x" },
-            { type: "text", text: "y" },
-          ],
-        },
-      ]),
-    ).resolves.toEqual([[2, 0.5, 3]]);
+    expect(result.provider?.embedBatchInputs).toBeUndefined();
 
-    expect(server.requests).toHaveLength(3);
+    expect(server.requests).toHaveLength(2);
     expect(server.requests[0]).toMatchObject({
       method: "POST",
       url: "/v1/embeddings",
@@ -246,12 +233,6 @@ describe("memory-core generic embedding provider bridge", () => {
     expect(server.requests[1]?.body).toEqual({
       model: "text-embedding-bge-m3",
       input: ["a", "abcd"],
-      dimensions: 3,
-      input_type: "document",
-    });
-    expect(server.requests[2]?.body).toEqual({
-      model: "text-embedding-bge-m3",
-      input: ["xy"],
       dimensions: 3,
       input_type: "document",
     });

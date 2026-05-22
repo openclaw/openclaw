@@ -92,6 +92,21 @@ function normalizeOptionalInputType(value: string | undefined): string | undefin
   return inputType ? inputType : undefined;
 }
 
+function normalizeOptionalString(value: string | undefined): string | undefined {
+  const normalized = value?.trim();
+  return normalized ? normalized : undefined;
+}
+
+function chooseSecretInputOverride<T>(
+  override: T | undefined,
+  fallback: T | undefined,
+): T | undefined {
+  if (typeof override === "string") {
+    return override.trim() ? override : fallback;
+  }
+  return override ?? fallback;
+}
+
 function resolveRequestInputType(
   client: OpenAICompatibleEmbeddingClient,
   kind: EmbeddingProviderCallOptions["inputType"] | undefined,
@@ -318,9 +333,13 @@ export function createOpenAICompatibleEmbeddingClient(
   options: EmbeddingProviderCreateOptions,
 ): OpenAICompatibleEmbeddingClient {
   const configuredProvider = resolveConfiguredProvider(options);
-  const baseUrl = normalizeBaseUrl(options.remote?.baseUrl ?? configuredProvider?.baseUrl);
+  const baseUrl = normalizeBaseUrl(
+    normalizeOptionalString(options.remote?.baseUrl) ?? configuredProvider?.baseUrl,
+  );
   const model = normalizeModel(options.model, options.provider);
-  const apiKey = resolveRemoteApiKey(options.remote?.apiKey ?? configuredProvider?.apiKey);
+  const apiKey = resolveRemoteApiKey(
+    chooseSecretInputOverride(options.remote?.apiKey, configuredProvider?.apiKey),
+  );
   const inputType = normalizeOptionalInputType(options.inputType);
   const queryInputType = normalizeOptionalInputType(options.queryInputType);
   const documentInputType = normalizeOptionalInputType(options.documentInputType);

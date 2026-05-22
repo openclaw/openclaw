@@ -146,17 +146,7 @@ describe("memory-core generic embedding provider bridge", () => {
       [0, 7],
       [1, 7],
     ]);
-    await expect(
-      result.provider?.embedBatchInputs?.([
-        {
-          text: "ignored",
-          parts: [
-            { type: "text", text: "doc-" },
-            { type: "text", text: "c" },
-          ],
-        },
-      ]),
-    ).resolves.toEqual([[0, 7]]);
+    expect(result.provider?.embedBatchInputs).toBeUndefined();
 
     expect(calls).toEqual([
       {
@@ -167,19 +157,6 @@ describe("memory-core generic embedding provider bridge", () => {
       {
         kind: "embedBatch",
         input: ["doc-a", "doc-b"],
-        options: { inputType: "document" },
-      },
-      {
-        kind: "embedBatch",
-        input: [
-          {
-            text: "ignored",
-            parts: [
-              { type: "text", text: "doc-" },
-              { type: "text", text: "c" },
-            ],
-          },
-        ],
         options: { inputType: "document" },
       },
     ]);

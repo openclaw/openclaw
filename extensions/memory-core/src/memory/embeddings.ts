@@ -54,11 +54,6 @@ function adaptGenericEmbeddingProvider(
         ...options,
         inputType: "document",
       }),
-    embedBatchInputs: async (inputs, options) =>
-      await provider.embedBatch(inputs, {
-        ...options,
-        inputType: "document",
-      }),
     ...(provider.close ? { close: provider.close } : {}),
   };
 }
