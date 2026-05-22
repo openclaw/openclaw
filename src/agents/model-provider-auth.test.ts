@@ -204,4 +204,26 @@ describe("prepared provider auth state", () => {
     );
     expect(modelAuthMocks.hasRuntimeAvailableProviderAuth).toHaveBeenCalledTimes(3);
   });
+
+  it("does not publish a warm that is cancelled before completion", async () => {
+    const cfg = {} as OpenClawConfig;
+    let cancelled = false;
+    modelCatalogMocks.loadModelCatalog.mockResolvedValue([
+      { id: "gpt", name: "gpt", provider: "openai" },
+    ]);
+    modelAuthMocks.hasRuntimeAvailableProviderAuth.mockReturnValue(true);
+
+    await warmCurrentProviderAuthState(cfg, { isCancelled: () => cancelled });
+    await expect(hasAuthForModelProvider({ provider: "openai", cfg })).resolves.toBe(true);
+    expect(modelAuthMocks.hasRuntimeAvailableProviderAuth).toHaveBeenCalledTimes(1);
+
+    clearCurrentProviderAuthState();
+    modelAuthMocks.hasRuntimeAvailableProviderAuth.mockClear();
+    cancelled = true;
+    await warmCurrentProviderAuthState(cfg, { isCancelled: () => cancelled });
+
+    modelAuthMocks.hasRuntimeAvailableProviderAuth.mockReturnValue(false);
+    await expect(hasAuthForModelProvider({ provider: "openai", cfg })).resolves.toBe(false);
+    expect(modelAuthMocks.hasRuntimeAvailableProviderAuth).toHaveBeenCalledTimes(2);
+  });
 });
