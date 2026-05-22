@@ -228,13 +228,21 @@ function sanitizeUsage(raw: unknown): Record<string, number> | undefined {
   const knownFields = [
     "input",
     "output",
+    "total",
     "totalTokens",
     "inputTokens",
     "outputTokens",
+    "promptTokens",
+    "completionTokens",
     "cacheRead",
     "cacheWrite",
     "cache_read_input_tokens",
     "cache_creation_input_tokens",
+    "input_tokens",
+    "output_tokens",
+    "prompt_tokens",
+    "completion_tokens",
+    "total_tokens",
   ];
 
   for (const k of knownFields) {
