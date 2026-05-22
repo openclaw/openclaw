@@ -1335,7 +1335,6 @@ describe("fetchWithSsrFGuard hardening", () => {
     const fetchImpl = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
       const requestInit = init as RequestInit & { dispatcher?: unknown };
       expectDispatcherAttached(requestInit.dispatcher);
-      expect(getDispatcherClassName(requestInit.dispatcher)).toBe("MockEnvHttpProxyAgent");
       return okResponse();
     });
 
@@ -1352,6 +1351,40 @@ describe("fetchWithSsrFGuard hardening", () => {
 
     expect(fetchImpl).toHaveBeenCalledTimes(1);
     expect(envHttpProxyAgentCtor).toHaveBeenCalledTimes(1);
+    expect(agentCtor).not.toHaveBeenCalled();
+    await result.release();
+  });
+
+  it("keeps public configured origins on the managed proxy path when DNS resolves to loopback", async () => {
+    clearProxyEnv();
+    vi.stubEnv("OPENCLAW_PROXY_ACTIVE", "1");
+    vi.stubEnv("http_proxy", "http://127.0.0.1:7890");
+    (globalThis as Record<string, unknown>)[TEST_UNDICI_RUNTIME_DEPS_KEY] = {
+      Agent: agentCtor,
+      EnvHttpProxyAgent: envHttpProxyAgentCtor,
+      ProxyAgent: proxyAgentCtor,
+      fetch: vi.fn(async () => okResponse()),
+    };
+    const fetchImpl = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      const requestInit = init as RequestInit & { dispatcher?: unknown };
+      expectDispatcherAttached(requestInit.dispatcher);
+      return okResponse();
+    });
+
+    const result = await fetchWithSsrFGuard({
+      url: "https://api.example.com/v1/embeddings",
+      fetchImpl,
+      lookupFn: createLoopbackLookup(),
+      policy: { allowedOrigins: ["https://api.example.com"] },
+      managedProxyBypass: {
+        kind: "configured-local-origin",
+        baseUrl: "https://api.example.com",
+      },
+    });
+
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    expect(envHttpProxyAgentCtor).toHaveBeenCalledTimes(1);
+    expect(agentCtor).not.toHaveBeenCalled();
     await result.release();
   });
 
