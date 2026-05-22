@@ -1,5 +1,8 @@
 import type { OpenClawConfig } from "../config/types.js";
-import { loadManifestMetadataSnapshot } from "../plugins/manifest-contract-eligibility.js";
+import {
+  isManifestPluginAvailableForControlPlane,
+  loadManifestMetadataSnapshot,
+} from "../plugins/manifest-contract-eligibility.js";
 import { normalizeMediaProviderId } from "./provider-id.js";
 import type { MediaUnderstandingProvider } from "./types.js";
 
@@ -14,6 +17,15 @@ export function buildMediaUnderstandingManifestMetadataRegistry(
     ...(workspaceDir ? { workspaceDir } : {}),
   });
   for (const plugin of snapshot.plugins) {
+    if (
+      !isManifestPluginAvailableForControlPlane({
+        snapshot,
+        plugin,
+        config: cfg,
+      })
+    ) {
+      continue;
+    }
     const declaredProviders = new Set(
       (plugin.contracts?.mediaUnderstandingProviders ?? []).map((providerId) =>
         normalizeMediaProviderId(providerId),

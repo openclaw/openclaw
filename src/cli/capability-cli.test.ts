@@ -132,6 +132,7 @@ const mocks = vi.hoisted(() => ({
   ]),
   registerBuiltInMemoryEmbeddingProviders: vi.fn(),
   buildMediaUnderstandingRegistry: vi.fn(() => new Map()),
+  buildMediaUnderstandingManifestMetadataRegistry: vi.fn(() => new Map()),
   convertHeicToJpeg: vi.fn(async () => Buffer.from("jpeg-normalized")),
   isWebSearchProviderConfigured: vi.fn(() => false),
   isWebFetchProviderConfigured: vi.fn(() => false),
@@ -240,6 +241,11 @@ vi.mock("../media-understanding/runtime.js", () => ({
 vi.mock("../media-understanding/provider-registry.js", () => ({
   buildMediaUnderstandingRegistry:
     mocks.buildMediaUnderstandingRegistry as typeof import("../media-understanding/provider-registry.js").buildMediaUnderstandingRegistry,
+}));
+
+vi.mock("../media-understanding/manifest-metadata.js", () => ({
+  buildMediaUnderstandingManifestMetadataRegistry:
+    mocks.buildMediaUnderstandingManifestMetadataRegistry as typeof import("../media-understanding/manifest-metadata.js").buildMediaUnderstandingManifestMetadataRegistry,
 }));
 
 vi.mock("../media/media-services.js", async (importOriginal) => {
@@ -442,6 +448,7 @@ describe("capability cli", () => {
     mocks.setTtsProvider.mockClear();
     mocks.resolveExplicitTtsOverrides.mockClear();
     mocks.buildMediaUnderstandingRegistry.mockReset().mockReturnValue(new Map());
+    mocks.buildMediaUnderstandingManifestMetadataRegistry.mockReset().mockReturnValue(new Map());
     mocks.convertHeicToJpeg.mockClear();
     mocks.createEmbeddingProvider.mockClear();
     mocks.registerMemoryEmbeddingProvider.mockClear();
@@ -2277,7 +2284,7 @@ describe("capability cli", () => {
   it("marks env-backed audio providers as configured", async () => {
     vi.stubEnv("DEEPGRAM_API_KEY", "deepgram-test-key");
     vi.stubEnv("GROQ_API_KEY", "groq-test-key");
-    mocks.buildMediaUnderstandingRegistry.mockReturnValueOnce(
+    mocks.buildMediaUnderstandingManifestMetadataRegistry.mockReturnValueOnce(
       new Map([
         [
           "deepgram",
@@ -2321,6 +2328,7 @@ describe("capability cli", () => {
         defaultModels: { audio: "whisper-large-v3-turbo" },
       },
     ]);
+    expect(mocks.buildMediaUnderstandingRegistry).not.toHaveBeenCalled();
   });
 
   it("resolves plugin web search SecretRefs before running infer web search", async () => {
