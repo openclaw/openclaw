@@ -39,6 +39,16 @@ describe("whatsappChannelOutbound", () => {
     });
   });
 
+  it("keeps the channel registration import on the light outbound descriptor", async () => {
+    const source = await import("node:fs/promises").then((fs) =>
+      fs.readFile(new URL("./channel-outbound.ts", import.meta.url), "utf8"),
+    );
+
+    expect(source).not.toContain("./outbound-base.js");
+    expect(source).not.toContain("./outbound-media-contract.js");
+    expect(source).not.toContain("./send.js");
+  });
+
   it("keeps XML sanitizer normalization idempotent", () => {
     const raw = [
       "<function_calls>",

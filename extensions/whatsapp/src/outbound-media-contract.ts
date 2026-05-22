@@ -1,17 +1,20 @@
 import path from "node:path";
 import { MEDIA_FFMPEG_MAX_AUDIO_DURATION_SECS, runFfmpeg } from "openclaw/plugin-sdk/media-runtime";
-import { sanitizeForPlainText } from "openclaw/plugin-sdk/outbound-runtime";
 import { writeExternalFileWithinRoot } from "openclaw/plugin-sdk/security-runtime";
 import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolvePreferredOpenClawTmpDir, withTempWorkspace } from "openclaw/plugin-sdk/temp-path";
+import { sleep } from "openclaw/plugin-sdk/text-utility-runtime";
 import { resolveWhatsAppDocumentFileName } from "./document-filename.js";
-import { formatError } from "./session-errors.js";
 import {
-  sanitizeAssistantVisibleText,
-  sanitizeAssistantVisibleTextWithProfile,
-  stripToolCallXmlTags,
-  sleep,
-} from "./text-runtime.js";
+  normalizeWhatsAppPayloadText,
+  normalizeWhatsAppPayloadTextPreservingIndentation,
+} from "./outbound-text.js";
+import { formatError } from "./session-errors.js";
+
+export {
+  normalizeWhatsAppPayloadText,
+  normalizeWhatsAppPayloadTextPreservingIndentation,
+} from "./outbound-text.js";
 
 type WhatsAppOutboundPayloadLike = {
   text?: string;
@@ -53,33 +56,6 @@ const WHATSAPP_VOICE_FILE_NAME = "voice.ogg";
 const WHATSAPP_VOICE_SAMPLE_RATE_HZ = 48_000;
 const WHATSAPP_VOICE_BITRATE = "64k";
 const WHATSAPP_VOICE_MIMETYPE = "audio/ogg; codecs=opus";
-
-function stripWhatsAppPluralToolXml(text: string): string {
-  return stripToolCallXmlTags(text, { stripFunctionCallsXmlPayloads: true });
-}
-
-function finalizeWhatsAppVisibleText(text: string): string {
-  return sanitizeForPlainText(stripWhatsAppPluralToolXml(text));
-}
-
-export function normalizeWhatsAppPayloadText(text: string | undefined): string {
-  return finalizeWhatsAppVisibleText(sanitizeAssistantVisibleText(text ?? "")).trimStart();
-}
-
-function stripLeadingBlankLines(text: string): string {
-  return text.replace(/^(?:[ \t]*\r?\n)+/, "");
-}
-
-export function normalizeWhatsAppPayloadTextPreservingIndentation(
-  text: string | undefined,
-): string {
-  const sanitized = sanitizeAssistantVisibleTextWithProfile(
-    stripLeadingBlankLines(text ?? ""),
-    "history",
-  );
-  const normalized = stripLeadingBlankLines(finalizeWhatsAppVisibleText(sanitized));
-  return normalized.trim() ? normalized : "";
-}
 
 export function resolveWhatsAppOutboundMediaUrls(
   payload: Pick<WhatsAppOutboundPayloadLike, "mediaUrl" | "mediaUrls">,

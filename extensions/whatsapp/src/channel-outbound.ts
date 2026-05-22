@@ -3,14 +3,16 @@ import {
   defineChannelMessageAdapter,
   type ChannelMessageSendResult,
 } from "openclaw/plugin-sdk/channel-message";
+import type { ChannelOutboundAdapter } from "openclaw/plugin-sdk/channel-send-result";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
+import { createRuntimeOutboundDelegates } from "openclaw/plugin-sdk/outbound-runtime";
 import { chunkText } from "openclaw/plugin-sdk/reply-chunking";
-import { createWhatsAppOutboundBase } from "./outbound-base.js";
-import { normalizeWhatsAppPayloadTextPreservingIndentation } from "./outbound-media-contract.js";
+import { normalizeWhatsAppPayloadTextPreservingIndentation } from "./outbound-text.js";
 import { resolveWhatsAppOutboundTarget } from "./resolve-outbound-target.js";
-import { getWhatsAppRuntime } from "./runtime.js";
 
-const loadWhatsAppSend = createLazyRuntimeModule(() => import("./send.js"));
+const loadWhatsAppChannelOutboundRuntime = createLazyRuntimeModule(
+  () => import("./channel-outbound.runtime.js"),
+);
 
 export function normalizeWhatsAppChannelPayloadText(text: string | undefined): string {
   return normalizeWhatsAppPayloadTextPreservingIndentation(text);
@@ -21,22 +23,40 @@ function normalizeWhatsAppChannelSendText(text: string | undefined): string {
   return normalized.trim() ? normalized : "";
 }
 
-export const whatsappChannelOutbound = {
-  ...createWhatsAppOutboundBase({
-    chunker: chunkText,
-    sendMessageWhatsApp: async (to, text, options) =>
-      await (
-        await loadWhatsAppSend()
-      ).sendMessageWhatsApp(to, text, {
-        ...options,
-        preserveLeadingWhitespace: true,
-      }),
-    sendPollWhatsApp: async (to, poll, options) =>
-      await (await loadWhatsAppSend()).sendPollWhatsApp(to, poll, options),
-    shouldLogVerbose: () => getWhatsAppRuntime().logging.shouldLogVerbose(),
-    resolveTarget: ({ to, allowFrom, mode }) =>
-      resolveWhatsAppOutboundTarget({ to, allowFrom, mode }),
-    normalizeText: normalizeWhatsAppChannelSendText,
+export const whatsappChannelOutbound: ChannelOutboundAdapter = {
+  deliveryMode: "gateway",
+  chunker: chunkText,
+  chunkerMode: "text",
+  textChunkLimit: 4000,
+  sanitizeText: ({ text }) => normalizeWhatsAppChannelSendText(text),
+  deliveryCapabilities: {
+    durableFinal: {
+      text: true,
+      replyTo: true,
+      messageSendingHooks: true,
+    },
+  },
+  pollMaxOptions: 12,
+  resolveTarget: ({ to, allowFrom, mode }) =>
+    resolveWhatsAppOutboundTarget({ to, allowFrom, mode }),
+  ...createRuntimeOutboundDelegates({
+    getRuntime: loadWhatsAppChannelOutboundRuntime,
+    sendPayload: {
+      resolve: (runtime) => runtime.whatsappChannelRuntimeOutbound.sendPayload,
+      unavailableMessage: "WhatsApp outbound payload delivery is unavailable",
+    },
+    sendText: {
+      resolve: (runtime) => runtime.whatsappChannelRuntimeOutbound.sendText,
+      unavailableMessage: "WhatsApp outbound text delivery is unavailable",
+    },
+    sendMedia: {
+      resolve: (runtime) => runtime.whatsappChannelRuntimeOutbound.sendMedia,
+      unavailableMessage: "WhatsApp outbound media delivery is unavailable",
+    },
+    sendPoll: {
+      resolve: (runtime) => runtime.whatsappChannelRuntimeOutbound.sendPoll,
+      unavailableMessage: "WhatsApp outbound poll delivery is unavailable",
+    },
   }),
   sendTextOnlyErrorPayloads: true,
   normalizePayload: ({ payload }: { payload: { text?: string } }) => ({
@@ -46,7 +66,7 @@ export const whatsappChannelOutbound = {
 };
 
 function toWhatsAppMessageSendResult(
-  result: Awaited<ReturnType<NonNullable<typeof whatsappChannelOutbound.sendText>>>,
+  result: Awaited<ReturnType<NonNullable<ChannelOutboundAdapter["sendText"]>>>,
   replyToId?: string | null,
 ): ChannelMessageSendResult {
   const source = result as typeof result & { toJid?: string };
