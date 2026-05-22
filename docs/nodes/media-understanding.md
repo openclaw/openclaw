@@ -137,6 +137,30 @@ Each `models[]` entry can be **provider** or **CLI**:
   </Tab>
 </Tabs>
 
+### Provider credentials (apiKey)
+
+Provider media understanding uses the standard provider auth resolution order: `auth-profiles.json` → env vars → `models.providers.<providerId>.apiKey`.
+
+Important:
+
+- `tools.media.*.models[]` entries do **not** accept an inline `apiKey` field.
+- The `provider` value in your media model entry (for example `openai`, `moonshot`) must have credentials available via one of the sources above.
+
+Minimal example:
+
+```json5
+{
+  models: {
+    providers: {
+      openai: { apiKey: "sk-..." },
+      moonshot: { apiKey: "sk-..." },
+    },
+  },
+}
+```
+
+For the full provider auth reference (profiles, env vars, custom base URLs), see [Tools and custom providers](/gateway/config-tools).
+
 ## Defaults and limits
 
 Recommended defaults:
