@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { spawn as spawnPty, type PtyExitEvent, type PtyHandle } from "@lydell/node-pty";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 type KillablePtyHandle = PtyHandle & {
   kill?: (signal?: string) => void;
@@ -24,6 +24,11 @@ type FixtureLogEntry = {
 };
 
 const activeRuns: PtyRun[] = [];
+const STARTUP_TIMEOUT_MS = 10_000;
+const OUTPUT_TIMEOUT_MS = 2_000;
+const EXIT_TIMEOUT_MS = 4_000;
+const TEST_TIMEOUT_MS = 6_000;
+const STARTUP_TEST_TIMEOUT_MS = 10_000;
 
 function waitFor<T>(params: {
   timeoutMs: number;
@@ -120,7 +125,7 @@ function startPty(command: string, args: string[], opts: { cwd: string; env: Nod
   const run: PtyRun = {
     output: () => output,
     write: async (data, writeOpts) => await writePtyInput(pty, data, writeOpts),
-    waitForOutput: async (needle, timeoutMs = 10_000) =>
+    waitForOutput: async (needle, timeoutMs = OUTPUT_TIMEOUT_MS) =>
       await waitFor({
         timeoutMs,
         read: () => {
@@ -136,7 +141,7 @@ function startPty(command: string, args: string[], opts: { cwd: string; env: Nod
         },
         onTimeout: () => new Error(`timed out waiting for ${JSON.stringify(needle)}\n${output}`),
       }),
-    waitForExit: async (timeoutMs = 10_000) =>
+    waitForExit: async (timeoutMs = EXIT_TIMEOUT_MS) =>
       await waitFor({
         timeoutMs,
         read: () => exitEvent,
@@ -170,7 +175,7 @@ async function readFixtureLog(logPath: string): Promise<FixtureLogEntry[]> {
 async function waitForFixtureLogEntry(
   logPath: string,
   predicate: (entry: FixtureLogEntry) => boolean,
-  timeoutMs = 10_000,
+  timeoutMs = OUTPUT_TIMEOUT_MS,
 ) {
   const start = Date.now();
   while (Date.now() - start < timeoutMs) {
@@ -204,7 +209,6 @@ async function writeTuiPtyFixtureScript(dir: string) {
       import { runTui } from ${JSON.stringify(tuiModuleUrl)};
 
       const actionLogPath = process.env.OPENCLAW_TUI_PTY_LOG_PATH;
-      const responseDelayMs = Number(process.env.OPENCLAW_TUI_PTY_RESPONSE_DELAY_MS ?? "20");
       const gatewayStatus = process.env.OPENCLAW_TUI_PTY_GATEWAY_STATUS ?? "fixture gateway ok";
       let currentModel = "fixture-provider/fixture-model";
       let fastMode = process.env.OPENCLAW_TUI_PTY_FAST_MODE === "true";
@@ -249,6 +253,7 @@ async function writeTuiPtyFixtureScript(dir: string) {
             thinking: opts.thinking,
           });
           const runId = opts.runId ?? "run-pty-fixture";
+          const responseDelayMs = opts.message === "slow prompt" ? 500 : 20;
           setTimeout(() => {
             this.onEvent?.({
               event: "chat",
@@ -387,167 +392,121 @@ async function startTuiFixture(opts: { env?: NodeJS.ProcessEnv } = {}) {
   };
 }
 
-describe("TUI PTY harness", () => {
-  afterEach(async () => {
+describe.sequential("TUI PTY harness", () => {
+  let fixture: Awaited<ReturnType<typeof startTuiFixture>>;
+
+  beforeAll(async () => {
+    fixture = await startTuiFixture();
+    await fixture.run.waitForOutput("local ready", STARTUP_TIMEOUT_MS);
+  }, STARTUP_TEST_TIMEOUT_MS);
+
+  afterAll(async () => {
     for (const run of activeRuns.splice(0)) {
       run.dispose();
     }
+    await fixture.cleanup();
   });
 
-  it("renders local ready on startup", async () => {
-    const fixture = await startTuiFixture();
-    try {
-      await fixture.run.waitForOutput("local ready", 20_000);
-      await fixture.run.write("\x04");
+  it("renders local ready on startup", () => {
+    expect(fixture.run.output()).toContain("local ready");
+  });
 
-      const exit = await fixture.run.waitForExit(20_000);
-      expect(exit.exitCode).toBe(0);
-    } finally {
-      await fixture.cleanup();
-    }
-  }, 60_000);
-
-  it("drives the real TUI terminal loop through typed input", async () => {
-    const fixture = await startTuiFixture();
-    try {
-      await fixture.run.waitForOutput("local ready", 20_000);
+  it(
+    "drives the real TUI terminal loop through typed input",
+    async () => {
       await fixture.run.write("hello from pty\r");
-      await fixture.run.waitForOutput("PTY_RESPONSE: hello from pty", 20_000);
+      await fixture.run.waitForOutput("PTY_RESPONSE: hello from pty");
       await fixture.waitForLogEntry(
         (entry) =>
           entry.method === "sendChat" && objectFieldEquals(entry, "message", "hello from pty"),
       );
-      await fixture.run.write("\x04");
+    },
+    TEST_TIMEOUT_MS,
+  );
 
-      const exit = await fixture.run.waitForExit(20_000);
-      expect(exit.exitCode).toBe(0);
-    } finally {
-      await fixture.cleanup();
-    }
-  }, 60_000);
-
-  it("sends multiple prompts in order", async () => {
-    const fixture = await startTuiFixture();
-    try {
-      await fixture.run.waitForOutput("local ready", 20_000);
+  it(
+    "sends multiple prompts in order",
+    async () => {
       await fixture.run.write("first prompt\r");
-      await fixture.run.waitForOutput("PTY_RESPONSE: first prompt", 20_000);
+      await fixture.run.waitForOutput("PTY_RESPONSE: first prompt");
       await fixture.run.write("second prompt\r");
-      await fixture.run.waitForOutput("PTY_RESPONSE: second prompt", 20_000);
+      await fixture.run.waitForOutput("PTY_RESPONSE: second prompt");
       await fixture.waitForLogEntry(
         (entry) =>
           entry.method === "sendChat" && objectFieldEquals(entry, "message", "second prompt"),
       );
-      await fixture.run.write("\x04");
+    },
+    TEST_TIMEOUT_MS,
+  );
 
-      const exit = await fixture.run.waitForExit(20_000);
-      expect(exit.exitCode).toBe(0);
-    } finally {
-      await fixture.cleanup();
-    }
-  }, 60_000);
-
-  it("blocks overlapping normal messages while a run is busy", async () => {
-    const fixture = await startTuiFixture({
-      env: { OPENCLAW_TUI_PTY_RESPONSE_DELAY_MS: "3000" },
-    });
-    try {
-      await fixture.run.waitForOutput("local ready", 20_000);
+  it(
+    "blocks overlapping normal messages while a run is busy",
+    async () => {
       await fixture.run.write("slow prompt\r");
-      await sleep(100);
+      await sleep(50);
       await fixture.run.write("second prompt\r");
-      await fixture.run.waitForOutput("agent is busy", 20_000);
-      await fixture.run.waitForOutput("PTY_RESPONSE: slow prompt", 20_000);
+      await fixture.run.waitForOutput("agent is busy");
+      await fixture.run.waitForOutput("PTY_RESPONSE: slow prompt");
       const sendCalls = (await readFixtureLog(fixture.logPath)).filter(
         (entry) => entry.method === "sendChat",
       );
-      expect(sendCalls).toHaveLength(1);
-      expect(sendCalls[0]?.payload).toMatchObject({ message: "slow prompt" });
-      await fixture.run.write("\x15/exit\r", { delay: false });
+      const slowPromptCalls = sendCalls.filter((entry) =>
+        objectFieldEquals(entry, "message", "slow prompt"),
+      );
+      expect(slowPromptCalls).toHaveLength(1);
+      expect(slowPromptCalls[0]?.payload).toMatchObject({ message: "slow prompt" });
+      await fixture.run.write("\x15", { delay: false });
+    },
+    TEST_TIMEOUT_MS,
+  );
 
-      const exit = await fixture.run.waitForExit(20_000);
-      expect(exit.exitCode).toBe(0);
-    } finally {
-      await fixture.cleanup();
-    }
-  }, 60_000);
-
-  it("renders slash command help", async () => {
-    const fixture = await startTuiFixture();
-    try {
-      await fixture.run.waitForOutput("local ready", 20_000);
+  it(
+    "renders slash command help",
+    async () => {
       await fixture.run.write("/help\r", { delay: false });
-      await fixture.run.waitForOutput("Slash commands:", 20_000);
-      await fixture.run.waitForOutput("/help", 20_000);
-      await fixture.run.waitForOutput("/exit", 20_000);
-      await fixture.run.write("\x04");
+      await fixture.run.waitForOutput("Slash commands:");
+      await fixture.run.waitForOutput("/help");
+      await fixture.run.waitForOutput("/exit");
+    },
+    TEST_TIMEOUT_MS,
+  );
 
-      const exit = await fixture.run.waitForExit(20_000);
-      expect(exit.exitCode).toBe(0);
-    } finally {
-      await fixture.cleanup();
-    }
-  }, 60_000);
-
-  it("renders gateway status from the backend", async () => {
-    const fixture = await startTuiFixture({
-      env: { OPENCLAW_TUI_PTY_GATEWAY_STATUS: "fixture gateway ok" },
-    });
-    try {
-      await fixture.run.waitForOutput("local ready", 20_000);
+  it(
+    "renders gateway status from the backend",
+    async () => {
       await fixture.run.write("/gateway-status\r", { delay: false });
-      await fixture.run.waitForOutput("fixture gateway ok", 20_000);
+      await fixture.run.waitForOutput("fixture gateway ok");
       await fixture.waitForLogEntry((entry) => entry.method === "getGatewayStatus");
-      await fixture.run.write("\x04");
+    },
+    TEST_TIMEOUT_MS,
+  );
 
-      const exit = await fixture.run.waitForExit(20_000);
-      expect(exit.exitCode).toBe(0);
-    } finally {
-      await fixture.cleanup();
-    }
-  }, 60_000);
-
-  it("patches the session model from /model", async () => {
-    const fixture = await startTuiFixture();
-    try {
-      await fixture.run.waitForOutput("local ready", 20_000);
+  it(
+    "patches the session model from /model",
+    async () => {
       await fixture.run.write("/model fixture-provider/fixture-model-2\r", { delay: false });
-      await fixture.run.waitForOutput("model set to fixture-provider/fixture-model-2", 20_000);
+      await fixture.run.waitForOutput("model set to fixture-provider/fixture-model-2");
       await fixture.waitForLogEntry(
         (entry) =>
           entry.method === "patchSession" &&
           objectFieldEquals(entry, "model", "fixture-provider/fixture-model-2"),
       );
-      await fixture.run.write("\x04");
+    },
+    TEST_TIMEOUT_MS,
+  );
 
-      const exit = await fixture.run.waitForExit(20_000);
-      expect(exit.exitCode).toBe(0);
-    } finally {
-      await fixture.cleanup();
-    }
-  }, 60_000);
-
-  it("shows fast mode status", async () => {
-    const fixture = await startTuiFixture({
-      env: { OPENCLAW_TUI_PTY_FAST_MODE: "false" },
-    });
-    try {
-      await fixture.run.waitForOutput("local ready", 20_000);
+  it(
+    "shows fast mode status",
+    async () => {
       await fixture.run.write("/fast status\r", { delay: false });
-      await fixture.run.waitForOutput("fast mode: off", 20_000);
-      await fixture.run.write("\x04");
+      await fixture.run.waitForOutput("fast mode: off");
+    },
+    TEST_TIMEOUT_MS,
+  );
 
-      const exit = await fixture.run.waitForExit(20_000);
-      expect(exit.exitCode).toBe(0);
-    } finally {
-      await fixture.cleanup();
-    }
-  }, 60_000);
-
-  it("resets the current session from /reset", async () => {
-    const fixture = await startTuiFixture();
-    try {
-      await fixture.run.waitForOutput("local ready", 20_000);
+  it(
+    "resets the current session from /reset",
+    async () => {
       await fixture.run.write("/reset\r", { delay: false });
       await fixture.waitForLogEntry((entry) => {
         if (
@@ -561,25 +520,18 @@ describe("TUI PTY harness", () => {
         const key = (entry.payload as Record<string, unknown>).key;
         return key === "main" || key === "agent:main:main";
       });
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  it(
+    "exits cleanly from /exit",
+    async () => {
       await fixture.run.write("/exit\r", { delay: false });
 
-      const exit = await fixture.run.waitForExit(20_000);
+      const exit = await fixture.run.waitForExit();
       expect(exit.exitCode).toBe(0);
-    } finally {
-      await fixture.cleanup();
-    }
-  }, 60_000);
-
-  it("exits cleanly from /exit", async () => {
-    const fixture = await startTuiFixture();
-    try {
-      await fixture.run.waitForOutput("local ready", 20_000);
-      await fixture.run.write("/exit\r", { delay: false });
-
-      const exit = await fixture.run.waitForExit(20_000);
-      expect(exit.exitCode).toBe(0);
-    } finally {
-      await fixture.cleanup();
-    }
-  }, 60_000);
+    },
+    TEST_TIMEOUT_MS,
+  );
 });

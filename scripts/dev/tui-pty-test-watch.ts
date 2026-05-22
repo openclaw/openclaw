@@ -13,9 +13,9 @@ type Options = {
 const DEFAULT_MIRROR_PATH = path.join(process.cwd(), ".artifacts", "tui-pty-mirror", "latest.ansi");
 const require = createRequire(import.meta.url);
 const MODE_TEST_FILES = {
-  fake: ["src/tui/tui-pty-harness.test.ts"],
-  local: ["src/tui/tui-pty-local.test.ts"],
-  all: ["src/tui/tui-pty-harness.test.ts", "src/tui/tui-pty-local.test.ts"],
+  fake: ["src/tui/tui-pty-harness.e2e.test.ts"],
+  local: ["src/tui/tui-pty-local.e2e.test.ts"],
+  all: ["src/tui/tui-pty-harness.e2e.test.ts", "src/tui/tui-pty-local.e2e.test.ts"],
 } as const;
 const MIRROR_TERMINAL_QUERIES = ["\x1b[?u", "\x1b[16t"];
 const DEFAULT_PTY_COLS = 100;
@@ -111,8 +111,8 @@ async function main(): Promise<void> {
         OPENCLAW_TUI_PTY_MIRROR_PATH: options.mirrorPath,
         OPENCLAW_TUI_PTY_COLS: currentTerminalDimension(process.stdout.columns, DEFAULT_PTY_COLS),
         OPENCLAW_TUI_PTY_ROWS: currentTerminalDimension(process.stdout.rows, DEFAULT_PTY_ROWS),
-        OPENCLAW_TUI_PTY_TYPE_CHUNK_SIZE: process.env.OPENCLAW_TUI_PTY_TYPE_CHUNK_SIZE ?? "1",
-        OPENCLAW_TUI_PTY_TYPE_DELAY_MS: process.env.OPENCLAW_TUI_PTY_TYPE_DELAY_MS ?? "70",
+        OPENCLAW_TUI_PTY_TYPE_CHUNK_SIZE: process.env.OPENCLAW_TUI_PTY_TYPE_CHUNK_SIZE ?? "4",
+        OPENCLAW_TUI_PTY_TYPE_DELAY_MS: process.env.OPENCLAW_TUI_PTY_TYPE_DELAY_MS ?? "25",
       },
       stdio: ["ignore", "pipe", "pipe"],
     },
