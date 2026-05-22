@@ -677,6 +677,22 @@ export const id: TranslationMap = {
       newer: "Lebih baru",
       reload: "Muat ulang",
       reloading: "Memuat ulang…",
+      subtabDreams: "Mimpi",
+      subtabInsights: "Imported Insights",
+      subtabPalace: "Memory Palace",
+      explainerDreams:
+        "This is the raw dream diary the system writes while replaying and consolidating memory; use it to inspect what the memory system is noticing, and where it still looks noisy or thin.",
+      explainerInsights:
+        "These are imported insights clustered from external history; use them to review what imports surfaced before any of it graduates into durable memory.",
+      explainerPalace:
+        "This is the compiled memory wiki surface the system can search and reason over; use it to inspect actual memory pages, claims, open questions, and contradictions rather than raw imported source chats.",
+      howToEnable: "How to enable",
+      memoryWikiNotEnabled: "Memory Wiki is not enabled",
+      memoryWikiDescription:
+        "Imported Insights and Memory Palace are provided by the bundled memory-wiki plugin.",
+      memoryWikiEnableHint:
+        "Enable plugins.entries.memory-wiki.enabled = true, then reload this tab.",
+      openConfig: "Open Config",
     },
     phrases: {
       consolidatingMemories: "mengonsolidasikan memori…",

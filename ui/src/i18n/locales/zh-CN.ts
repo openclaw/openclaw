@@ -588,13 +588,12 @@ export const zh_CN: TranslationMap = {
       off: "Dreaming 已关闭",
     },
     restartConfirmation: {
-      title: "Restart Gateway to Apply Change",
-      subtitle: "Changing Dreaming mode restarts the gateway.",
-      warning:
-        "This action will restart the Gateway and may temporarily interrupt chats, automations, and connected channels.",
-      confirm: "Confirm Restart",
-      restarting: "Restarting…",
-      failed: "Could not apply change. Check your connection and try again.",
+      title: "重启 Gateway 以应用更改",
+      subtitle: "切换 Dreaming 模式将重启 Gateway。",
+      warning: "此操作将重启 Gateway，聊天、自动化和已连接的渠道可能会暂时中断。",
+      confirm: "确认重启",
+      restarting: "正在重启…",
+      failed: "无法应用更改，请检查连接后重试。",
     },
     status: {
       active: "Dreaming 运行中",
@@ -667,6 +666,21 @@ export const zh_CN: TranslationMap = {
       newer: "较新",
       reload: "重新加载",
       reloading: "重新加载中…",
+      subtabDreams: "梦境日记",
+      subtabInsights: "导入洞察",
+      subtabPalace: "记忆宫殿",
+      explainerDreams:
+        "这是系统在重放和整合记忆时写入的原始梦境日记，你可以用它来查看记忆系统注意到了什么，以及哪些地方仍然显得嘈杂或单薄。",
+      explainerInsights:
+        "这些是从外部历史聚类而来的导入洞察，你可以在它们升级为持久记忆之前，回顾导入过程浮现了哪些内容。",
+      explainerPalace:
+        "这是系统可以搜索和推理的已编译记忆 Wiki，你可以用它来查看实际的记忆页面、主张、开放问题和矛盾，而不是原始的导入聊天记录。",
+      howToEnable: "如何启用",
+      memoryWikiNotEnabled: "Memory Wiki 未启用",
+      memoryWikiDescription: "导入洞察和记忆宫殿由捆绑的 memory-wiki 插件提供。",
+      memoryWikiEnableHint:
+        "启用 plugins.entries.memory-wiki.enabled = true，然后重新加载此标签页。",
+      openConfig: "打开配置",
     },
     phrases: {
       consolidatingMemories: "正在整合记忆…",
