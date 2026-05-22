@@ -1733,6 +1733,103 @@ describe("registerCoreHealthChecks", () => {
     expect(originalLines).toHaveLength(3);
   });
 
+  it("validates config audit scrub repairs with detect-after", async () => {
+    tmp = await fs.mkdtemp(join(tmpdir(), "openclaw-health-config-audit-"));
+    const auditPath = join(tmp, "logs", "config-audit.jsonl");
+    await fs.mkdir(join(tmp, "logs"), { recursive: true });
+    await fs.writeFile(
+      auditPath,
+      `${JSON.stringify({
+        ts: "2026-05-02T00:03:48.471Z",
+        source: "config-io",
+        event: "config.write",
+        configPath: join(tmp, "openclaw.json"),
+        pid: 1590563,
+        ppid: 1590548,
+        cwd: tmp,
+        argv: ["openclaw", "config", "set", "--token", "plain-token-value-1234567890"],
+        execArgv: [],
+        suspicious: [],
+        result: "rename",
+      })}\n`,
+      "utf-8",
+    );
+    const check = CORE_HEALTH_CHECKS.find((entry) => entry.id === "core/doctor/config-audit-scrub");
+
+    const result = await runDoctorHealthRepairs(
+      {
+        mode: "fix",
+        runtime: { log() {}, error() {}, exit() {} },
+        cfg: {},
+        env: {
+          ...process.env,
+          OPENCLAW_STATE_DIR: tmp,
+        },
+      },
+      { checks: [check!] },
+    );
+
+    expect(result.effects).toContainEqual(
+      expect.objectContaining({
+        kind: "file",
+        action: "scrub-config-audit-log",
+        target: auditPath,
+      }),
+    );
+    expect(result.checksRepaired).toBe(1);
+    expect(result.checksValidated).toBe(1);
+    expect(result.remainingFindings).toEqual([]);
+    expect(await fs.readFile(auditPath, "utf-8")).not.toContain("plain-token-value");
+  });
+
+  it("previews config audit scrub repairs without rewriting files", async () => {
+    tmp = await fs.mkdtemp(join(tmpdir(), "openclaw-health-config-audit-dry-"));
+    const auditPath = join(tmp, "logs", "config-audit.jsonl");
+    await fs.mkdir(join(tmp, "logs"), { recursive: true });
+    await fs.writeFile(
+      auditPath,
+      `${JSON.stringify({
+        ts: "2026-05-02T00:03:48.471Z",
+        source: "config-io",
+        event: "config.write",
+        configPath: join(tmp, "openclaw.json"),
+        pid: 1590563,
+        ppid: 1590548,
+        cwd: tmp,
+        argv: ["openclaw", "config", "set", "--api-key", "plain-api-key-1234567890"],
+        execArgv: [],
+        suspicious: [],
+        result: "rename",
+      })}\n`,
+      "utf-8",
+    );
+    const check = CORE_HEALTH_CHECKS.find((entry) => entry.id === "core/doctor/config-audit-scrub");
+
+    const result = await runDoctorHealthRepairs(
+      {
+        mode: "fix",
+        runtime: { log() {}, error() {}, exit() {} },
+        cfg: {},
+        env: {
+          ...process.env,
+          OPENCLAW_STATE_DIR: tmp,
+        },
+      },
+      { checks: [check!], dryRun: true },
+    );
+
+    expect(result.effects).toContainEqual(
+      expect.objectContaining({
+        kind: "file",
+        action: "would-scrub-config-audit-log",
+        target: auditPath,
+      }),
+    );
+    expect(result.checksRepaired).toBe(1);
+    expect(result.checksValidated).toBe(0);
+    expect(await fs.readFile(auditPath, "utf-8")).toContain("plain-api-key");
+  });
+
   it("repairs only session transcripts represented by findings", async () => {
     tmp = await fs.mkdtemp(join(tmpdir(), "openclaw-health-transcripts-scoped-"));
     const sessionsDir = join(tmp, "agents", "main", "sessions");
@@ -2145,6 +2242,156 @@ describe("registerCoreHealthChecks", () => {
         target: "@openclaw/slack",
       }),
     ]);
+  });
+
+  it("validates legacy cron store repairs with detect-after", async () => {
+    tmp = await fs.mkdtemp(join(tmpdir(), "openclaw-health-cron-"));
+    const storePath = join(tmp, "cron", "jobs.json");
+    await fs.mkdir(join(tmp, "cron"), { recursive: true });
+    await fs.writeFile(
+      storePath,
+      JSON.stringify(
+        {
+          version: 1,
+          jobs: [
+            {
+              jobId: "legacy-job",
+              name: "Legacy job",
+              notify: true,
+              createdAtMs: Date.parse("2026-02-01T00:00:00.000Z"),
+              updatedAtMs: Date.parse("2026-02-02T00:00:00.000Z"),
+              schedule: { kind: "cron", cron: "0 7 * * *", tz: "UTC" },
+              payload: { kind: "systemEvent", text: "Morning brief" },
+              state: {},
+            },
+          ],
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+    const check = CORE_HEALTH_CHECKS.find((entry) => entry.id === "core/doctor/legacy-cron-store");
+
+    const result = await runDoctorHealthRepairs(
+      {
+        mode: "fix",
+        runtime: { log() {}, error() {}, exit() {} },
+        cfg: { cron: { store: storePath, webhook: "https://example.invalid/hook" } },
+      },
+      { checks: [check!] },
+    );
+
+    expect(result.effects).toContainEqual(
+      expect.objectContaining({
+        kind: "file",
+        action: "normalize-legacy-cron-store",
+        target: storePath,
+      }),
+    );
+    expect(result.checksRepaired).toBe(1);
+    expect(result.checksValidated).toBe(1);
+    expect(result.remainingFindings).toEqual([]);
+    const persisted = JSON.parse(await fs.readFile(storePath, "utf-8")) as {
+      jobs: Array<Record<string, unknown>>;
+    };
+    expect(persisted.jobs[0]?.jobId).toBeUndefined();
+    expect(persisted.jobs[0]?.id).toBe("legacy-job");
+    expect(persisted.jobs[0]?.notify).toBeUndefined();
+  });
+
+  it("previews legacy cron store repairs without rewriting files", async () => {
+    tmp = await fs.mkdtemp(join(tmpdir(), "openclaw-health-cron-dry-"));
+    const storePath = join(tmp, "cron", "jobs.json");
+    await fs.mkdir(join(tmp, "cron"), { recursive: true });
+    await fs.writeFile(
+      storePath,
+      JSON.stringify(
+        {
+          version: 1,
+          jobs: [
+            {
+              jobId: "legacy-job",
+              name: "Legacy job",
+              notify: true,
+              createdAtMs: Date.parse("2026-02-01T00:00:00.000Z"),
+              updatedAtMs: Date.parse("2026-02-02T00:00:00.000Z"),
+              schedule: { kind: "cron", cron: "0 7 * * *", tz: "UTC" },
+              payload: { kind: "systemEvent", text: "Morning brief" },
+              state: {},
+            },
+          ],
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+    const check = CORE_HEALTH_CHECKS.find((entry) => entry.id === "core/doctor/legacy-cron-store");
+
+    const result = await runDoctorHealthRepairs(
+      {
+        mode: "fix",
+        runtime: { log() {}, error() {}, exit() {} },
+        cfg: { cron: { store: storePath, webhook: "https://example.invalid/hook" } },
+      },
+      { checks: [check!], dryRun: true },
+    );
+
+    expect(result.effects).toContainEqual(
+      expect.objectContaining({
+        kind: "file",
+        action: "would-normalize-legacy-cron-store",
+        target: storePath,
+      }),
+    );
+    expect(result.checksRepaired).toBe(1);
+    expect(result.checksValidated).toBe(0);
+    expect(await fs.readFile(storePath, "utf-8")).toContain('"jobId": "legacy-job"');
+  });
+
+  it("reports manual cron migration warnings during dry-run", async () => {
+    tmp = await fs.mkdtemp(join(tmpdir(), "openclaw-health-cron-dry-warning-"));
+    const storePath = join(tmp, "cron", "jobs.json");
+    await fs.mkdir(join(tmp, "cron"), { recursive: true });
+    await fs.writeFile(
+      storePath,
+      JSON.stringify(
+        {
+          version: 1,
+          jobs: [
+            {
+              id: "manual-notify",
+              name: "Manual notify",
+              notify: true,
+              createdAtMs: Date.parse("2026-02-01T00:00:00.000Z"),
+              updatedAtMs: Date.parse("2026-02-02T00:00:00.000Z"),
+              schedule: { kind: "cron", cron: "0 7 * * *", tz: "UTC" },
+              payload: { kind: "systemEvent", text: "Morning brief" },
+              state: {},
+            },
+          ],
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+    const check = CORE_HEALTH_CHECKS.find((entry) => entry.id === "core/doctor/legacy-cron-store");
+
+    const result = await runDoctorHealthRepairs(
+      {
+        mode: "fix",
+        runtime: { log() {}, error() {}, exit() {} },
+        cfg: { cron: { store: storePath } },
+      },
+      { checks: [check!], dryRun: true },
+    );
+
+    expect(result.warnings).toContain(
+      'Cron job "Manual notify" still uses legacy notify fallback, but cron.webhook is unset so doctor cannot migrate it automatically.',
+    );
+    expect(await fs.readFile(storePath, "utf-8")).toContain('"notify": true');
   });
 
   it("validates sandbox registry repairs with detect-after", async () => {
