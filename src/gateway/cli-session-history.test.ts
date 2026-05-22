@@ -887,7 +887,7 @@ describe("cli session history", () => {
     }
   });
 
-  it("ignores non-event Codex transcript records while importing event messages", async () => {
+  it("imports Codex response_item message records while ignoring unsupported records", async () => {
     const sessionId = "019d7b7a-6bf8-7fb3-8abb-412fb4107f9f";
     await withCodexSessionsDir(
       async ({ homeDir }) => {
@@ -895,29 +895,75 @@ describe("cli session history", () => {
         expect(messages).toHaveLength(2);
         expect(messages[0]).toMatchObject({
           role: "user",
-          content: "Why is the history missing after refresh?",
+          content: "Response item question",
+          __openclaw: {
+            importedFrom: "codex-cli",
+            cliSessionId: sessionId,
+            externalId: "response_item:2026-04-11T07:38:34.000Z:0",
+          },
         });
         expect(messages[1]).toMatchObject({
           role: "assistant",
+          provider: "codex-cli",
+          phase: "final_answer",
           content: [
             {
               type: "text",
-              text: "The current history view only reads the persisted transcript.",
+              text: "Response item answer",
             },
           ],
+          __openclaw: {
+            importedFrom: "codex-cli",
+            cliSessionId: sessionId,
+            externalId: "response_item:2026-04-11T07:38:36.000Z:1",
+            phase: "final_answer",
+          },
         });
       },
       {
         lines: [
-          createCodexHistoryLines(sessionId),
           JSON.stringify({
-            timestamp: "2026-04-11T07:38:38.000Z",
+            timestamp: "2026-04-11T07:38:33.999Z",
+            type: "session_meta",
+            payload: {
+              id: sessionId,
+              cwd: "/tmp/demo",
+            },
+          }),
+          JSON.stringify({
+            timestamp: "2026-04-11T07:38:34.000Z",
+            type: "response_item",
+            payload: {
+              type: "message",
+              role: "user",
+              content: [{ type: "input_text", text: "Response item question" }],
+            },
+          }),
+          JSON.stringify({
+            timestamp: "2026-04-11T07:38:35.000Z",
+            type: "response_item",
+            payload: {
+              type: "reasoning",
+              content: [{ type: "summary_text", text: "internal reasoning" }],
+            },
+          }),
+          JSON.stringify({
+            timestamp: "2026-04-11T07:38:36.000Z",
             type: "response_item",
             payload: {
               type: "message",
               role: "assistant",
-              content: [{ type: "output_text", text: "Ignored response item." }],
+              content: [{ type: "output_text", text: "Response item answer" }],
               phase: "final_answer",
+            },
+          }),
+          JSON.stringify({
+            timestamp: "2026-04-11T07:38:37.000Z",
+            type: "response_item",
+            payload: {
+              type: "message",
+              role: "developer",
+              content: [{ type: "input_text", text: "hidden instructions" }],
             },
           }),
         ].join("\n"),

@@ -868,18 +868,20 @@ describe("gateway server chat", () => {
         [
           JSON.stringify({
             timestamp: "2026-04-11T07:38:34.000Z",
-            type: "event_msg",
+            type: "response_item",
             payload: {
-              type: "user_message",
-              message: "codex question",
+              type: "message",
+              role: "user",
+              content: [{ type: "input_text", text: "codex question" }],
             },
           }),
           JSON.stringify({
             timestamp: "2026-04-11T07:38:35.000Z",
-            type: "event_msg",
+            type: "response_item",
             payload: {
-              type: "agent_message",
-              message: "codex answer",
+              type: "message",
+              role: "assistant",
+              content: [{ type: "output_text", text: "codex answer" }],
               phase: "final_answer",
             },
           }),

@@ -16,7 +16,10 @@ type CodexCliTranscriptEntry = {
   timestamp?: unknown;
   type?: unknown;
   payload?: {
+    id?: unknown;
     type?: unknown;
+    role?: unknown;
+    content?: unknown;
     message?: unknown;
     phase?: unknown;
     images?: unknown;
@@ -33,6 +36,10 @@ type TranscriptContentBlock = {
 };
 
 type TranscriptLikeMessage = Record<string, unknown>;
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value && typeof value === "object" && !Array.isArray(value));
+}
 
 function resolveHistoryHomeDir(homeDir?: string): string {
   return normalizeOptionalString(homeDir) || process.env.HOME || os.homedir();
@@ -335,6 +342,8 @@ function resolveCodexCliAttachmentLabel(value: unknown): string | undefined {
     path?: unknown;
     uri?: unknown;
     url?: unknown;
+    imageUrl?: unknown;
+    image_url?: unknown;
   };
   const normalized =
     normalizeOptionalString(record.label) ??
@@ -343,7 +352,9 @@ function resolveCodexCliAttachmentLabel(value: unknown): string | undefined {
     normalizeOptionalString(record.filename) ??
     normalizeOptionalString(record.path) ??
     normalizeOptionalString(record.uri) ??
-    normalizeOptionalString(record.url);
+    normalizeOptionalString(record.url) ??
+    normalizeOptionalString(record.imageUrl) ??
+    normalizeOptionalString(record.image_url);
   if (!normalized) {
     return undefined;
   }
@@ -400,20 +411,79 @@ function buildCodexCliUserContent(
   return blocks;
 }
 
-function parseCodexCliHistoryEntry(
+function appendCodexCliResponseItemContentBlock(
+  blocks: TranscriptContentBlock[],
+  value: unknown,
+): void {
+  if (typeof value === "string") {
+    appendUniqueTextBlock(blocks, value);
+    return;
+  }
+  if (!isRecord(value)) {
+    return;
+  }
+  const text =
+    normalizeOptionalString(value.text) ??
+    normalizeOptionalString(value.input_text) ??
+    normalizeOptionalString(value.output_text);
+  if (text) {
+    appendUniqueTextBlock(blocks, text);
+    return;
+  }
+
+  const type = normalizeOptionalString(value.type);
+  if (type !== "input_image" && type !== "image_url") {
+    return;
+  }
+  const inlineImage = resolveCodexCliInlineImage(value.image_url ?? value.imageUrl ?? value.url);
+  if (inlineImage) {
+    blocks.push(inlineImage);
+    return;
+  }
+  const label = resolveCodexCliAttachmentLabel(value);
+  if (label) {
+    blocks.push(buildTextBlock(`[Image attachment: ${label}]`));
+  }
+}
+
+function buildCodexCliResponseItemContentBlocks(
+  payload: CodexCliTranscriptEntry["payload"],
+): TranscriptContentBlock[] {
+  const blocks: TranscriptContentBlock[] = [];
+  if (Array.isArray(payload?.content)) {
+    for (const item of payload.content) {
+      appendCodexCliResponseItemContentBlock(blocks, item);
+    }
+  } else {
+    appendUniqueTextBlock(blocks, payload?.content);
+  }
+  return blocks;
+}
+
+function resolveCodexCliResponseItemContent(
+  payload: CodexCliTranscriptEntry["payload"],
+): string | TranscriptContentBlock[] | undefined {
+  const blocks = buildCodexCliResponseItemContentBlocks(payload);
+  if (blocks.length === 0) {
+    return undefined;
+  }
+  if (blocks.length === 1 && blocks[0]?.type === "text" && typeof blocks[0].text === "string") {
+    return blocks[0].text;
+  }
+  return blocks;
+}
+
+function parseCodexCliEventMessageHistoryEntry(
   entry: CodexCliTranscriptEntry,
   cliSessionId: string,
   sequence: number,
 ): TranscriptLikeMessage | null {
-  if (entry.type !== "event_msg" || !entry.payload || typeof entry.payload !== "object") {
-    return null;
-  }
-  const payloadType = normalizeOptionalString(entry.payload.type);
+  const payloadType = normalizeOptionalString(entry.payload?.type);
   if (!payloadType) {
     return null;
   }
   const timestamp = resolveTimestampMs(entry.timestamp);
-  const phase = normalizeOptionalString(entry.payload.phase);
+  const phase = normalizeOptionalString(entry.payload?.phase);
   const externalId = `${payloadType}:${normalizeOptionalString(entry.timestamp) ?? "no-ts"}:${sequence}`;
 
   if (payloadType === "user_message") {
@@ -430,7 +500,7 @@ function parseCodexCliHistoryEntry(
   }
 
   if (payloadType === "agent_message") {
-    const message = normalizeOptionalString(entry.payload.message);
+    const message = normalizeOptionalString(entry.payload?.message);
     if (!message) {
       return null;
     }
@@ -445,6 +515,70 @@ function parseCodexCliHistoryEntry(
     };
   }
 
+  return null;
+}
+
+function parseCodexCliResponseItemHistoryEntry(
+  entry: CodexCliTranscriptEntry,
+  cliSessionId: string,
+  sequence: number,
+): TranscriptLikeMessage | null {
+  const payloadType = normalizeOptionalString(entry.payload?.type);
+  if (payloadType !== "message") {
+    return null;
+  }
+  const role = normalizeOptionalString(entry.payload?.role);
+  if (role !== "user" && role !== "assistant") {
+    return null;
+  }
+  const timestamp = resolveTimestampMs(entry.timestamp);
+  const phase = normalizeOptionalString(entry.payload?.phase);
+  const payloadId = normalizeOptionalString(entry.payload?.id);
+  const externalId =
+    payloadId ?? `response_item:${normalizeOptionalString(entry.timestamp) ?? "no-ts"}:${sequence}`;
+
+  if (role === "user") {
+    const content = resolveCodexCliResponseItemContent(entry.payload);
+    if (content === undefined) {
+      return null;
+    }
+    return {
+      role,
+      content,
+      ...(timestamp !== undefined ? { timestamp } : {}),
+      __openclaw: buildImportedMessageMeta({ cliSessionId, externalId }),
+    };
+  }
+
+  const content = buildCodexCliResponseItemContentBlocks(entry.payload);
+  if (content.length === 0) {
+    return null;
+  }
+  const normalizedPhase = normalizeAssistantPhase(phase);
+  return {
+    role,
+    provider: CODEX_CLI_PROVIDER,
+    content,
+    ...(normalizedPhase ? { phase: normalizedPhase } : {}),
+    ...(timestamp !== undefined ? { timestamp } : {}),
+    __openclaw: buildImportedMessageMeta({ cliSessionId, externalId, phase }),
+  };
+}
+
+function parseCodexCliHistoryEntry(
+  entry: CodexCliTranscriptEntry,
+  cliSessionId: string,
+  sequence: number,
+): TranscriptLikeMessage | null {
+  if (!isRecord(entry.payload)) {
+    return null;
+  }
+  if (entry.type === "event_msg") {
+    return parseCodexCliEventMessageHistoryEntry(entry, cliSessionId, sequence);
+  }
+  if (entry.type === "response_item") {
+    return parseCodexCliResponseItemHistoryEntry(entry, cliSessionId, sequence);
+  }
   return null;
 }
 
