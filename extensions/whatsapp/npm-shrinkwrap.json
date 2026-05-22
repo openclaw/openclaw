@@ -198,6 +198,9 @@
       "cpu": [
         "arm"
       ],
+      "libc": [
+        "glibc"
+      ],
       "license": "LGPL-3.0-or-later",
       "optional": true,
       "os": [
@@ -214,6 +217,9 @@
       "integrity": "sha512-excjX8DfsIcJ10x1Kzr4RcWe1edC9PquDRRPx3YVCvQv+U5p7Yin2s32ftzikXojb1PIFc/9Mt28/y+iRklkrw==",
       "cpu": [
         "arm64"
+      ],
+      "libc": [
+        "glibc"
       ],
       "license": "LGPL-3.0-or-later",
       "optional": true,
@@ -232,6 +238,9 @@
       "cpu": [
         "ppc64"
       ],
+      "libc": [
+        "glibc"
+      ],
       "license": "LGPL-3.0-or-later",
       "optional": true,
       "os": [
@@ -248,6 +257,9 @@
       "integrity": "sha512-oVDbcR4zUC0ce82teubSm+x6ETixtKZBh/qbREIOcI3cULzDyb18Sr/Wcyx7NRQeQzOiHTNbZFF1UwPS2scyGA==",
       "cpu": [
         "riscv64"
+      ],
+      "libc": [
+        "glibc"
       ],
       "license": "LGPL-3.0-or-later",
       "optional": true,
@@ -266,6 +278,9 @@
       "cpu": [
         "s390x"
       ],
+      "libc": [
+        "glibc"
+      ],
       "license": "LGPL-3.0-or-later",
       "optional": true,
       "os": [
@@ -282,6 +297,9 @@
       "integrity": "sha512-tJxiiLsmHc9Ax1bz3oaOYBURTXGIRDODBqhveVHonrHJ9/+k89qbLl0bcJns+e4t4rvaNBxaEZsFtSfAdquPrw==",
       "cpu": [
         "x64"
+      ],
+      "libc": [
+        "glibc"
       ],
       "license": "LGPL-3.0-or-later",
       "optional": true,
@@ -300,6 +318,9 @@
       "cpu": [
         "arm64"
       ],
+      "libc": [
+        "musl"
+      ],
       "license": "LGPL-3.0-or-later",
       "optional": true,
       "os": [
@@ -317,6 +338,9 @@
       "cpu": [
         "x64"
       ],
+      "libc": [
+        "musl"
+      ],
       "license": "LGPL-3.0-or-later",
       "optional": true,
       "os": [
@@ -333,6 +357,9 @@
       "integrity": "sha512-9dLqsvwtg1uuXBGZKsxem9595+ujv0sJ6Vi8wcTANSFpwV/GONat5eCkzQo/1O6zRIkh0m/8+5BjrRr7jDUSZw==",
       "cpu": [
         "arm"
+      ],
+      "libc": [
+        "glibc"
       ],
       "license": "Apache-2.0",
       "optional": true,
@@ -357,6 +384,9 @@
       "cpu": [
         "arm64"
       ],
+      "libc": [
+        "glibc"
+      ],
       "license": "Apache-2.0",
       "optional": true,
       "os": [
@@ -379,6 +409,9 @@
       "integrity": "sha512-7zznwNaqW6YtsfrGGDA6BRkISKAAE1Jo0QdpNYXNMHu2+0dTrPflTLNkpc8l7MUP5M16ZJcUvysVWWrMefZquA==",
       "cpu": [
         "ppc64"
+      ],
+      "libc": [
+        "glibc"
       ],
       "license": "Apache-2.0",
       "optional": true,
@@ -403,6 +436,9 @@
       "cpu": [
         "riscv64"
       ],
+      "libc": [
+        "glibc"
+      ],
       "license": "Apache-2.0",
       "optional": true,
       "os": [
@@ -425,6 +461,9 @@
       "integrity": "sha512-nQtCk0PdKfho3eC5MrbQoigJ2gd1CgddUMkabUj+rBevs8tZ2cULOx46E7oyX+04WGfABgIwmMC0VqieTiR4jg==",
       "cpu": [
         "s390x"
+      ],
+      "libc": [
+        "glibc"
       ],
       "license": "Apache-2.0",
       "optional": true,
@@ -449,6 +488,9 @@
       "cpu": [
         "x64"
       ],
+      "libc": [
+        "glibc"
+      ],
       "license": "Apache-2.0",
       "optional": true,
       "os": [
@@ -472,6 +514,9 @@
       "cpu": [
         "arm64"
       ],
+      "libc": [
+        "musl"
+      ],
       "license": "Apache-2.0",
       "optional": true,
       "os": [
@@ -494,6 +539,9 @@
       "integrity": "sha512-Jg8wNT1MUzIvhBFxViqrEhWDGzqymo3sV7z7ZsaWbZNDLXRJZoRGrjulp60YYtV4wfY8VIKcWidjojlLcWrd8Q==",
       "cpu": [
         "x64"
+      ],
+      "libc": [
+        "musl"
       ],
       "license": "Apache-2.0",
       "optional": true,

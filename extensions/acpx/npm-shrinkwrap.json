@@ -94,6 +94,9 @@
       "cpu": [
         "arm64"
       ],
+      "libc": [
+        "glibc"
+      ],
       "license": "SEE LICENSE IN LICENSE.md",
       "optional": true,
       "os": [
@@ -106,6 +109,9 @@
       "integrity": "sha512-9UeV1W2vjOVwJSJrq9aw3UeMo82Ir59FfJ5mchh7OXZEaevkANvHYn25bTCnIpqfqOx7qFEosJW2ELIoV1nprg==",
       "cpu": [
         "arm64"
+      ],
+      "libc": [
+        "musl"
       ],
       "license": "SEE LICENSE IN LICENSE.md",
       "optional": true,
@@ -120,6 +126,9 @@
       "cpu": [
         "x64"
       ],
+      "libc": [
+        "glibc"
+      ],
       "license": "SEE LICENSE IN LICENSE.md",
       "optional": true,
       "os": [
@@ -132,6 +141,9 @@
       "integrity": "sha512-rr4334GOLl9caYDeyWsbwMaVJCiNvKHE9nLdey8opIkq7/FHHu712U6tDk0tcoCdsGU/S3/BBaZParOgF+s5qw==",
       "cpu": [
         "x64"
+      ],
+      "libc": [
+        "musl"
       ],
       "license": "SEE LICENSE IN LICENSE.md",
       "optional": true,
@@ -1230,9 +1242,9 @@
       }
     },
     "node_modules/es-object-atoms": {
-      "version": "1.1.2",
-      "resolved": "https://registry.npmjs.org/es-object-atoms/-/es-object-atoms-1.1.2.tgz",
-      "integrity": "sha512-HWcBoN6NileqtSydK2FqHbS/LoDd2pqrnQHLyJzBj4kOp/ky2MWMN694xOfkK8/SnUsW2DH7EfyVlydKCsm1Zw==",
+      "version": "1.1.1",
+      "resolved": "https://registry.npmjs.org/es-object-atoms/-/es-object-atoms-1.1.1.tgz",
+      "integrity": "sha512-FGgH2h8zKNim9ljj7dankFPcICIK9Cp5bm+c2gQSYePhpaG5+esrLODihIorn+Pe6FGJzWhXQotPv73jTaldXA==",
       "license": "MIT",
       "peer": true,
       "dependencies": {
