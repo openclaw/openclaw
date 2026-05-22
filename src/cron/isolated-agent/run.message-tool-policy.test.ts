@@ -779,16 +779,15 @@ describe("runCronIsolatedAgentTurn message tool policy", () => {
       payloads: [{ text: "provider failed", isError: true }],
       meta: { agentMeta: { usage: { input: 10, output: 20 } } },
     });
+    const deleteAfterRunJob = makeAnnounceMessageToolJob({
+      id: "fatal-delete-after-run",
+      name: "Fatal Delete After Run",
+    }) as unknown as Record<string, unknown>;
+    deleteAfterRunJob.deleteAfterRun = true;
 
     await runCronIsolatedAgentTurn({
       ...makeParams(),
-      job: {
-        ...makeAnnounceMessageToolJob({
-          id: "fatal-delete-after-run",
-          name: "Fatal Delete After Run",
-        }),
-        deleteAfterRun: true,
-      } as never,
+      job: deleteAfterRunJob as never,
     });
 
     expect(dispatchCronDeliveryMock).not.toHaveBeenCalled();
