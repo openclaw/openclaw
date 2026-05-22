@@ -25,6 +25,14 @@ describe("event session routing", () => {
       accountId: "work",
       peerId: "123",
     });
+    expect(
+      parseDirectAgentSessionTarget("agent:main:telegram:work:direct:123:thread:1712345678.123"),
+    ).toEqual({
+      agentId: "main",
+      channel: "telegram",
+      accountId: "work",
+      peerId: "123",
+    });
   });
 
   it("routes single-owner dmScope=main direct event keys to the agent main session", () => {
@@ -53,6 +61,12 @@ describe("event session routing", () => {
         policy,
       ),
     ).toEqual({ reason: "exec-event", sessionKey: "agent:main:main" });
+    expect(
+      resolveEventSessionKeyForPolicy(
+        "agent:main:telegram:work:direct:123:thread:1712345678.123",
+        policy,
+      ),
+    ).toBe("agent:main:main");
   });
 
   it("does not route multi-owner or wildcard direct sessions to main", () => {
