@@ -206,7 +206,13 @@ export class TwitchClientManager {
     const key = this.getAccountKey(account);
     this.messageHandlers.set(key, handler);
     return () => {
-      this.messageHandlers.delete(key);
+      // Only remove the handler if it is still the one this closure registered.
+      // A later onMessage() for the same account replaces the stored handler;
+      // an unconditional delete here would drop that newer handler and silently
+      // stop dispatching inbound messages (#83888).
+      if (this.messageHandlers.get(key) === handler) {
+        this.messageHandlers.delete(key);
+      }
     };
   }
 
