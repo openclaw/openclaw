@@ -62,6 +62,81 @@ describe("hasProviderAuthForTool", () => {
     ).toBe(true);
   });
 
+  it("keeps bearer token profiles as valid tool auth", () => {
+    expect(
+      hasProviderAuthForTool({
+        provider: "hatchery",
+        authStore: {
+          version: 1,
+          profiles: {
+            "hatchery:default": {
+              provider: "hatchery",
+              type: "token",
+              token: "tok-profile", // pragma: allowlist secret
+            },
+          },
+        },
+      }),
+    ).toBe(true);
+  });
+
+  it("rejects blank API-key auth-store profiles for tool preflight", () => {
+    expect(
+      hasProviderAuthForTool({
+        provider: "hatchery",
+        authStore: {
+          version: 1,
+          profiles: {
+            "hatchery:default": {
+              provider: "hatchery",
+              type: "api_key",
+              key: "   ",
+            },
+          },
+        },
+      }),
+    ).toBe(false);
+  });
+
+  it("rejects expired bearer token profiles for tool preflight", () => {
+    expect(
+      hasProviderAuthForTool({
+        provider: "hatchery",
+        authStore: {
+          version: 1,
+          profiles: {
+            "hatchery:default": {
+              provider: "hatchery",
+              type: "token",
+              token: "tok-profile", // pragma: allowlist secret
+              expires: Date.now() - 1_000,
+            },
+          },
+        },
+      }),
+    ).toBe(false);
+  });
+
+  it("keeps env-backed API-key profiles as valid tool auth", () => {
+    vi.stubEnv("HATCHERY_API_KEY", "sk-hatchery-env-profile"); // pragma: allowlist secret
+
+    expect(
+      hasProviderAuthForTool({
+        provider: "hatchery",
+        authStore: {
+          version: 1,
+          profiles: {
+            "hatchery:default": {
+              provider: "hatchery",
+              type: "api_key",
+              keyRef: { source: "env", provider: "default", id: "HATCHERY_API_KEY" },
+            },
+          },
+        },
+      }),
+    ).toBe(true);
+  });
+
   it("rejects aws-sdk auth because tool execution requires an API key string", () => {
     const cfg = {
       models: {

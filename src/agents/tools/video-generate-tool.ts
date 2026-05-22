@@ -263,6 +263,7 @@ function isVideoGenerationProviderConfigured(params: {
     }) ||
     hasAuthForProvider({
       provider: params.providerId,
+      cfg: params.cfg,
       agentDir: params.agentDir,
       authStore: params.authStore,
     })
