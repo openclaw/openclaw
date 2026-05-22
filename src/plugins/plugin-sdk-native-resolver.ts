@@ -42,6 +42,17 @@ function isPluginSdkAliasSpecifier(specifier: string): boolean {
   );
 }
 
+function isNativeLoadableSdkTarget(targetPath: string): boolean {
+  switch (path.extname(targetPath)) {
+    case ".cjs":
+    case ".js":
+    case ".mjs":
+      return true;
+    default:
+      return false;
+  }
+}
+
 function normalizePathForBoundary(candidate: string): string {
   try {
     return fs.realpathSync(candidate);
@@ -106,6 +117,7 @@ function listPluginSdkNativeAliases(
     ),
   )
     .filter(([specifier]) => isPluginSdkAliasSpecifier(specifier))
+    .filter(([, target]) => isNativeLoadableSdkTarget(target))
     .flatMap(([specifier, target]) => {
       if (specifier.endsWith(".js")) {
         return [[specifier, target]] as Array<readonly [string, string]>;

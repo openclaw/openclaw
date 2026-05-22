@@ -28,6 +28,7 @@ function writeFakeOpenClawPackage(root: string): { distRoot: string; loaderModul
       "./cli-entry": "./dist/cli-entry.js",
       "./plugin-sdk": "./dist/plugin-sdk/root-alias.cjs",
       "./plugin-sdk/channel-message": "./dist/plugin-sdk/channel-message.js",
+      "./plugin-sdk/source-only": "./dist/plugin-sdk/source-only.js",
     },
   });
   fs.writeFileSync(path.join(root, "openclaw.mjs"), "#!/usr/bin/env node\n", "utf8");
@@ -134,5 +135,25 @@ describe("installOpenClawPluginSdkNativeResolver", () => {
     const requireFromOutside = createRequire(unrelatedEntry);
     expect(requireFromPlugin.resolve("openclaw/plugin-sdk/channel-message")).toBeTruthy();
     expect(() => requireFromOutside.resolve("openclaw/plugin-sdk/channel-message")).toThrow();
+  });
+
+  it("does not register source-only SDK subpaths for native resolution", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-sdk-native-source-only-"));
+    const { loaderModulePath } = writeFakeOpenClawPackage(root);
+    const sourceOnlyPath = path.join(root, "src", "plugin-sdk", "source-only.ts");
+    fs.mkdirSync(path.dirname(sourceOnlyPath), { recursive: true });
+    fs.writeFileSync(sourceOnlyPath, "export const sourceOnly = true;\n", "utf8");
+    const externalPluginEntry = writeExternalPluginEntry(path.join(root, "external-plugin"));
+
+    const installedAliases = installOpenClawPluginSdkNativeResolver({
+      modulePath: loaderModulePath,
+      pluginModulePath: externalPluginEntry,
+      pluginSdkResolution: "src",
+    });
+
+    expect(installedAliases).toContain("openclaw/plugin-sdk/channel-message");
+    expect(installedAliases).not.toContain("openclaw/plugin-sdk/source-only");
+    const requireFromPlugin = createRequire(externalPluginEntry);
+    expect(() => requireFromPlugin.resolve("openclaw/plugin-sdk/source-only")).toThrow();
   });
 });
