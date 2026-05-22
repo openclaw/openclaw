@@ -1,6 +1,10 @@
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
-import { joinPresentTextSegments } from "../../../shared/text/join-segments.js";
 import { normalizeStructuredPromptSection } from "../../prompt-cache-stability.js";
+import {
+  appendSystemPromptAdditionAfterCacheBoundary,
+  ensureSystemPromptCacheBoundary,
+  prependSystemPromptAdditionAfterCacheBoundary,
+} from "../../system-prompt-cache-boundary.js";
 
 export const ATTEMPT_CACHE_TTL_CUSTOM_TYPE = "openclaw.cache-ttl";
 
@@ -20,9 +24,20 @@ export function composeSystemPromptWithHookContext(params: {
   if (!prependSystem && !appendSystem) {
     return undefined;
   }
-  return joinPresentTextSegments([prependSystem, params.baseSystemPrompt, appendSystem], {
-    trim: true,
-  });
+  let result = ensureSystemPromptCacheBoundary(params.baseSystemPrompt ?? "");
+  if (prependSystem) {
+    result = prependSystemPromptAdditionAfterCacheBoundary({
+      systemPrompt: result,
+      systemPromptAddition: prependSystem,
+    });
+  }
+  if (appendSystem) {
+    result = appendSystemPromptAdditionAfterCacheBoundary({
+      systemPrompt: result,
+      systemPromptAddition: appendSystem,
+    });
+  }
+  return result;
 }
 
 export function resolveAttemptSpawnWorkspaceDir(params: {

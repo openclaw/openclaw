@@ -648,33 +648,33 @@ describe("composeSystemPromptWithHookContext", () => {
     expect(composeSystemPromptWithHookContext({ baseSystemPrompt: "base" })).toBeUndefined();
   });
 
-  it("builds prepend/base/append system prompt order", () => {
+  it("places hook context after the synthesized cache boundary so the base stays in the stable prefix", () => {
     expect(
       composeSystemPromptWithHookContext({
-        baseSystemPrompt: "  base system  ",
+        baseSystemPrompt: "base system",
         prependSystemContext: "  prepend  ",
         appendSystemContext: "  append  ",
       }),
-    ).toBe("prepend\n\nbase system\n\nappend");
+    ).toBe(`base system${SYSTEM_PROMPT_CACHE_BOUNDARY}prepend\n\nappend`);
   });
 
-  it("normalizes hook system context line endings and trailing whitespace", () => {
+  it("normalizes hook system context line endings and trailing whitespace below the cache boundary", () => {
     expect(
       composeSystemPromptWithHookContext({
-        baseSystemPrompt: "  base system  ",
+        baseSystemPrompt: "base system",
         prependSystemContext: "  prepend line  \r\nsecond line\t\r\n",
         appendSystemContext: "  append  \t\r\n",
       }),
-    ).toBe("prepend line\nsecond line\n\nbase system\n\nappend");
+    ).toBe(`base system${SYSTEM_PROMPT_CACHE_BOUNDARY}prepend line\nsecond line\n\nappend`);
   });
 
-  it("avoids blank separators when base system prompt is empty", () => {
+  it("synthesizes a boundary even when base system prompt is empty so hook context lives in the dynamic region", () => {
     expect(
       composeSystemPromptWithHookContext({
         baseSystemPrompt: "   ",
         appendSystemContext: "  append only  ",
       }),
-    ).toBe("append only");
+    ).toBe(`${SYSTEM_PROMPT_CACHE_BOUNDARY}append only`);
   });
 
   it("keeps bootstrap truncation notices in the system prompt instead of the user prompt", () => {
@@ -694,6 +694,45 @@ describe("composeSystemPromptWithHookContext", () => {
     expect(composedSystemPrompt).toContain("Treat Project Context as partial");
     expect(composedSystemPrompt).toContain("hook system context");
     expect("hello").not.toContain("[Bootstrap truncation warning]");
+  });
+});
+
+describe("composeSystemPromptWithHookContext cache prefix stability (#85203)", () => {
+  it("preserves byte-stable cache prefix when only volatile prepend context changes across turns", () => {
+    const stablePrefix = "agent system role + tool list + workspace";
+    const dynamicSuffix = "session state + per-turn context";
+    const base = `${stablePrefix}${SYSTEM_PROMPT_CACHE_BOUNDARY}${dynamicSuffix}`;
+
+    const turn1 = composeSystemPromptWithHookContext({
+      baseSystemPrompt: base,
+      prependSystemContext: "trigger=A sessionKey=X",
+    });
+    const turn2 = composeSystemPromptWithHookContext({
+      baseSystemPrompt: base,
+      prependSystemContext: "trigger=B sessionKey=X",
+    });
+
+    expect(turn1).toBeDefined();
+    expect(turn2).toBeDefined();
+
+    const turn1Marker = turn1!.indexOf(SYSTEM_PROMPT_CACHE_BOUNDARY);
+    const turn2Marker = turn2!.indexOf(SYSTEM_PROMPT_CACHE_BOUNDARY);
+    expect(turn1Marker).toBeGreaterThan(-1);
+    expect(turn2Marker).toBeGreaterThan(-1);
+
+    expect(turn1!.slice(0, turn1Marker)).toBe(turn2!.slice(0, turn2Marker));
+  });
+
+  it("synthesizes a cache boundary when base lacks marker so volatile append context is isolated below it", () => {
+    const base = "user-supplied system prompt override without marker";
+    const result = composeSystemPromptWithHookContext({
+      baseSystemPrompt: base,
+      appendSystemContext: "runtimeContext=A",
+    });
+    expect(result).toBeDefined();
+    expect(result).toContain(SYSTEM_PROMPT_CACHE_BOUNDARY);
+    const markerIdx = result!.indexOf(SYSTEM_PROMPT_CACHE_BOUNDARY);
+    expect(result!.slice(0, markerIdx)).toContain("user-supplied system prompt override");
   });
 });
 

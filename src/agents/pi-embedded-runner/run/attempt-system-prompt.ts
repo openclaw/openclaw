@@ -1,6 +1,10 @@
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { ProviderTransformSystemPromptContext } from "../../../plugins/types.js";
 import {
+  appendSystemPromptAdditionAfterCacheBoundary,
+  ensureSystemPromptCacheBoundary,
+} from "../../system-prompt-cache-boundary.js";
+import {
   appendAgentBootstrapSystemPromptSupplement,
   appendModelIdentitySystemPrompt,
 } from "../../system-prompt.js";
@@ -44,7 +48,10 @@ function appendRuntimeExtraSystemPrompt(params: {
   }
   const contextHeader =
     params.promptMode === "minimal" ? "## Subagent Context" : "## Group Chat Context";
-  return `${params.systemPrompt.trimEnd()}\n\n${contextHeader}\n${extraSystemPrompt}\n`;
+  return appendSystemPromptAdditionAfterCacheBoundary({
+    systemPrompt: ensureSystemPromptCacheBoundary(params.systemPrompt),
+    systemPromptAddition: `${contextHeader}\n${extraSystemPrompt}`,
+  });
 }
 
 export function buildAttemptSystemPrompt(
