@@ -125,7 +125,7 @@ function sanitizeSkillEnvOverrides(params: {
     if (!value) {
       continue;
     }
-    const warning = validateEnvVarValue(value);
+    const warning = validateEnvVarValue(value, key);
     if (warning) {
       if (warning === "Contains null bytes") {
         blocked.add(key);
