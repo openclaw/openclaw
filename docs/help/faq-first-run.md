@@ -581,9 +581,13 @@ and troubleshooting see the main [FAQ](/help/faq).
     Anthropic's 1M context window (a GA-capable 1M Claude 4.x model or legacy
     `context1m: true` config). That only works when your credential is eligible
     for long-context billing (API key billing or the OpenClaw Claude-login path
-    with Extra Usage enabled).
+    with Extra Usage enabled). OpenClaw classifies this body as a context overflow
+    and automatically attempts **compact + retry** on the standard usage tier
+    before surfacing the error, so if the session fits after compaction the retry
+    succeeds without operator intervention.
 
-    Tip: set a **fallback model** so OpenClaw can keep replying while a provider is rate-limited.
+    Tip: set a **fallback model** so OpenClaw can keep replying when compact + retry
+    is not enough and the long-context tier remains unavailable.
     See [Models](/cli/models), [OAuth](/concepts/oauth), and
     [/gateway/troubleshooting#anthropic-429-extra-usage-required-for-long-context](/gateway/troubleshooting#anthropic-429-extra-usage-required-for-long-context).
 
