@@ -302,12 +302,20 @@ function formatTelegramCommandArgMenuTitle(params: {
   command: NonNullable<ReturnType<typeof findCommandByNativeName>>;
   menu: NonNullable<ReturnType<typeof resolveCommandArgMenu>>;
   currentThinkingLevel?: string;
+  currentVerboseLevel?: string;
+  currentReasoningLevel?: string;
 }): string {
   const title = formatCommandArgMenuTitle({ command: params.command, menu: params.menu });
-  if (params.command.key !== "think" || !params.currentThinkingLevel) {
-    return title;
+  if (params.command.key === "think" && params.currentThinkingLevel) {
+    return `Current thinking level: ${params.currentThinkingLevel}.\n${title}`;
   }
-  return `Current thinking level: ${params.currentThinkingLevel}.\n${title}`;
+  if (params.command.key === "verbose" && params.currentVerboseLevel) {
+    return `Current verbose level: ${params.currentVerboseLevel}.\n${title}`;
+  }
+  if (params.command.key === "reasoning" && params.currentReasoningLevel) {
+    return `Current reasoning level: ${params.currentReasoningLevel}.\n${title}`;
+  }
+  return title;
 }
 
 function resolveTelegramNativeReplyChannelData(
@@ -1071,6 +1079,19 @@ export const registerTelegramNativeCommands = ({
             })
           : null;
         if (menu && commandDefinition) {
+          const targetSessionKeyForMenu = await resolveTargetSessionKey();
+          const menuStorePath = resolveStorePath(
+            runtimeCfg.session?.store,
+            { agentId: route.agentId },
+          );
+          const menuSessionEntry = (() => {
+            try {
+              const store = loadSessionStore(menuStorePath);
+              return store[targetSessionKeyForMenu];
+            } catch {
+              return undefined;
+            }
+          })();
           const title = formatTelegramCommandArgMenuTitle({
             command: commandDefinition,
             menu,
@@ -1081,6 +1102,14 @@ export const registerTelegramNativeCommands = ({
                     agentId: route.agentId,
                     ...menuModelContext,
                   })
+                : undefined,
+            currentVerboseLevel:
+              commandDefinition.key === "verbose"
+                ? (menuSessionEntry?.verboseLevel as string | undefined) ?? "off"
+                : undefined,
+            currentReasoningLevel:
+              commandDefinition.key === "reasoning"
+                ? (menuSessionEntry?.reasoningLevel as string | undefined) ?? "off"
                 : undefined,
           });
           const rows: Array<Array<{ text: string; callback_data: string }>> = [];
