@@ -43,6 +43,42 @@ import {
   type OperatorScope,
 } from "./method-scopes.js";
 import { MIN_CLIENT_PROTOCOL_VERSION, PROTOCOL_VERSION } from "./protocol/index.js";
+
+// Connection pool: reuse GatewayClient by normalized pool key (method + auth).
+// Repeated callGateway calls (e.g., background agent sessions.list polling)
+// share connections so WS backoff timers are not reset on every call.
+const clientPool = new Map<string, GatewayClient>();
+const CLIENT_POOL_TTL_MS = 10_000;
+
+type PoolKey = { method: string; token: string };
+function formatPoolKey(opts: CallGatewayBaseOptions, token?: string, password?: string): string {
+  return JSON.stringify({ m: opts.method, t: token ?? "", p: password ?? "" });
+}
+
+function acquirePooledClient(key: string, create: () => GatewayClient): GatewayClient {
+  const existing = clientPool.get(key);
+  if (existing && !existing.isShutdown) {
+    return existing;
+  }
+  const client = create();
+  clientPool.set(key, client);
+  return client;
+}
+
+function releasePooledClient(key: string, client: GatewayClient): void {
+  // Keep in pool for TTL so subsequent calls reuse the same connection.
+  const timer = setTimeout(() => {
+    const current = clientPool.get(key);
+    if (current === client) {
+      clientPool.delete(key);
+    }
+    if (!client.isShutdown) {
+      void stopGatewayClient(client);
+    }
+  }, CLIENT_POOL_TTL_MS);
+  timer.unref();
+}
+
 export type { GatewayConnectionDetails };
 
 type CallGatewayBaseOptions = {
@@ -678,68 +714,71 @@ async function executeGatewayRequestWithScopes<T>(params: {
       settled = true;
       startAbort.abort();
       clearTimeout(timer);
-      void stopGatewayClient(client).finally(() => {
-        if (err) {
-          reject(err);
-        } else {
-          resolve(value as T);
-        }
-      });
+      releasePooledClient(poolKey, client);
+      if (err) {
+        reject(err);
+      } else {
+        resolve(value as T);
+      }
     };
 
-    const client = gatewayCallDeps.createGatewayClient({
-      url,
-      token,
-      password,
-      tlsFingerprint,
-      preauthHandshakeTimeoutMs,
-      instanceId: opts.instanceId ?? randomUUID(),
-      clientName: opts.clientName ?? GATEWAY_CLIENT_NAMES.CLI,
-      clientDisplayName: resolveGatewayClientDisplayName(opts),
-      clientVersion: opts.clientVersion ?? VERSION,
-      platform: opts.platform,
-      mode: opts.mode ?? GATEWAY_CLIENT_MODES.CLI,
-      ...(opts.approvalRuntimeToken ? { approvalRuntimeToken: opts.approvalRuntimeToken } : {}),
-      role: "operator",
-      scopes,
-      deviceIdentity:
-        opts.deviceIdentity === undefined
-          ? resolveDeviceIdentityForGatewayCall({ opts, url, token, password })
-          : opts.deviceIdentity,
-      minProtocol: opts.minProtocol ?? MIN_CLIENT_PROTOCOL_VERSION,
-      maxProtocol: opts.maxProtocol ?? PROTOCOL_VERSION,
-      onHelloOk: async (hello) => {
-        try {
-          ensureGatewaySupportsRequiredMethods({
-            requiredMethods: opts.requiredMethods,
-            methods: hello.features?.methods,
-            attemptedMethod: opts.method,
-          });
-          const result = await client.request<T>(opts.method, opts.params, {
-            expectFinal: opts.expectFinal,
-            timeoutMs: opts.timeoutMs,
-          });
+    const poolKey = formatPoolKey(opts, token, password);
+
+    const client = acquirePooledClient(poolKey, () =>
+      gatewayCallDeps.createGatewayClient({
+        url,
+        token,
+        password,
+        tlsFingerprint,
+        preauthHandshakeTimeoutMs,
+        instanceId: opts.instanceId ?? randomUUID(),
+        clientName: opts.clientName ?? GATEWAY_CLIENT_NAMES.CLI,
+        clientDisplayName: resolveGatewayClientDisplayName(opts),
+        clientVersion: opts.clientVersion ?? VERSION,
+        platform: opts.platform,
+        mode: opts.mode ?? GATEWAY_CLIENT_MODES.CLI,
+        ...(opts.approvalRuntimeToken ? { approvalRuntimeToken: opts.approvalRuntimeToken } : {}),
+        role: "operator",
+        scopes,
+        deviceIdentity:
+          opts.deviceIdentity === undefined
+            ? resolveDeviceIdentityForGatewayCall({ opts, url, token, password })
+            : opts.deviceIdentity,
+        minProtocol: opts.minProtocol ?? MIN_CLIENT_PROTOCOL_VERSION,
+        maxProtocol: opts.maxProtocol ?? PROTOCOL_VERSION,
+        onHelloOk: async (hello) => {
+          try {
+            ensureGatewaySupportsRequiredMethods({
+              requiredMethods: opts.requiredMethods,
+              methods: hello.features?.methods,
+              attemptedMethod: opts.method,
+            });
+            const result = await client.request<T>(opts.method, opts.params, {
+              expectFinal: opts.expectFinal,
+              timeoutMs: opts.timeoutMs,
+            });
+            ignoreClose = true;
+            stop(undefined, result);
+          } catch (err) {
+            ignoreClose = true;
+            stop(err as Error);
+          }
+        },
+        onClose: (code, reason) => {
+          if (settled || ignoreClose) {
+            return;
+          }
           ignoreClose = true;
-          stop(undefined, result);
-        } catch (err) {
-          ignoreClose = true;
-          stop(err as Error);
-        }
-      },
-      onClose: (code, reason) => {
-        if (settled || ignoreClose) {
-          return;
-        }
-        ignoreClose = true;
-        stop(
-          createGatewayCloseTransportError({
-            code,
-            reason,
-            connectionDetails: params.connectionDetails,
-          }),
-        );
-      },
-    });
+          stop(
+            createGatewayCloseTransportError({
+              code,
+              reason,
+              connectionDetails: params.connectionDetails,
+            }),
+          );
+        },
+      }),
+    );
 
     const timer = setTimeout(() => {
       ignoreClose = true;

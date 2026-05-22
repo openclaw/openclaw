@@ -227,6 +227,12 @@ export class GatewayClient {
   private pending = new Map<string, Pending>();
   private backoffMs = 1000;
   private closed = false;
+
+  /** @internal Exposed for connection pool to check liveness. */
+  public get isShutdown(): boolean {
+    return this.closed;
+  }
+
   private lastSeq: number | null = null;
   private connectNonce: string | null = null;
   private connectSent = false;
