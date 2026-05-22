@@ -386,6 +386,26 @@ describe("tui session actions", () => {
     expect(setActivityStatus).toHaveBeenCalledWith("aborted");
   });
 
+  it("coalesces repeated no-active-run abort notices", async () => {
+    const addSystem = vi.fn();
+    const requestRender = vi.fn();
+
+    const { abortActive } = createTestSessionActions({
+      chatLog: {
+        addSystem,
+        clearAll: vi.fn(),
+      } as unknown as import("./components/chat-log.js").ChatLog,
+      tui: { requestRender } as unknown as import("@earendil-works/pi-tui").TUI,
+    });
+
+    await abortActive();
+
+    expect(addSystem).toHaveBeenCalledWith("no active run", {
+      coalesceConsecutive: true,
+    });
+    expect(requestRender).toHaveBeenCalledOnce();
+  });
+
   it("remembers the selected session after history loads", async () => {
     const listSessions = vi.fn().mockResolvedValue({
       ts: Date.now(),
