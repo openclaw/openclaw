@@ -6,7 +6,9 @@ import type { PluginInstallRecord } from "../../config/types.plugins.js";
 import { createSubsystemLogger } from "../../logging.js";
 import { resolvePluginActivationSourceConfig } from "../activation-source-config.js";
 import {
+  clearCurrentPluginMetadataSnapshot,
   getCurrentPluginMetadataSnapshot,
+  isReusableCurrentPluginMetadataSnapshot,
   setCurrentPluginMetadataSnapshot,
 } from "../current-plugin-metadata-snapshot.js";
 import { extractPluginInstallRecordsFromInstalledPluginIndex } from "../installed-plugin-index-install-records.js";
@@ -95,12 +97,16 @@ export function resolvePluginRuntimeLoadContext(
   const workspaceDir =
     options?.workspaceDir ?? resolveAgentWorkspaceDir(config, resolveDefaultAgentId(config));
   if (metadataSnapshot) {
-    setCurrentPluginMetadataSnapshot(metadataSnapshot, {
-      config: rawConfig,
-      compatibleConfigs: [config, activationSourceConfig],
-      env,
-      workspaceDir,
-    });
+    if (isReusableCurrentPluginMetadataSnapshot(metadataSnapshot)) {
+      setCurrentPluginMetadataSnapshot(metadataSnapshot, {
+        config: rawConfig,
+        compatibleConfigs: [config, activationSourceConfig],
+        env,
+        workspaceDir,
+      });
+    } else {
+      clearCurrentPluginMetadataSnapshot();
+    }
   }
   return {
     rawConfig,
