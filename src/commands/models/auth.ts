@@ -2,6 +2,7 @@ import {
   cancel,
   confirm as clackConfirm,
   isCancel,
+  password as clackPassword,
   select as clackSelect,
   text as clackText,
 } from "@clack/prompts";
@@ -81,6 +82,13 @@ const text = async (params: Parameters<typeof clackText>[0]) =>
       message: stylePromptMessage(params.message),
     }),
   );
+const password = async (params: Parameters<typeof clackPassword>[0]) =>
+  guardCancel(
+    await clackPassword({
+      ...params,
+      message: stylePromptMessage(params.message),
+    }),
+  );
 const select = async <T>(params: Parameters<typeof clackSelect<T>>[0]) =>
   guardCancel(
     await clackSelect({
@@ -94,6 +102,46 @@ const select = async <T>(params: Parameters<typeof clackSelect<T>>[0]) =>
 
 function resolveDefaultTokenProfileId(provider: string): string {
   return `${normalizeProviderId(provider)}:manual`;
+}
+
+function isOpenAICodexProvider(provider: string): boolean {
+  return normalizeProviderId(provider) === "openai-codex";
+}
+
+function stripBearerPrefix(value: string): string {
+  return value
+    .trim()
+    .replace(/^Bearer\s+/i, "")
+    .trim();
+}
+
+function looksLikeOpenAIApiKey(value: string): boolean {
+  return /^sk-[A-Za-z0-9_-]{8,}$/.test(value.trim());
+}
+
+function looksLikeJwtToken(value: string): boolean {
+  const token = stripBearerPrefix(value);
+  const parts = token.split(".");
+  return parts.length === 3 && parts.every((part) => /^[A-Za-z0-9_-]{8,}$/.test(part));
+}
+
+function looksLikeStructuredCredential(value: string): boolean {
+  const trimmed = value.trim();
+  return trimmed.startsWith("{") || trimmed.startsWith("[");
+}
+
+function validateOpenAICodexApiKeyInput(value: string): string | undefined {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return "Required";
+  }
+  if (looksLikeOpenAIApiKey(trimmed)) {
+    return undefined;
+  }
+  if (looksLikeJwtToken(trimmed) || looksLikeStructuredCredential(trimmed)) {
+    return `That looks like token or OAuth material, not an OpenAI API key. Use ${formatCliCommand("openclaw models auth paste-token --provider openai-codex")} for token auth material.`;
+  }
+  return "That does not look like an OpenAI API key.";
 }
 
 type ResolvedModelsAuthContext = {
@@ -512,6 +560,9 @@ export async function modelsAuthPasteTokenCommand(
       if (provider === "anthropic") {
         return validateAnthropicSetupToken(trimmed.replaceAll(/\s+/g, ""));
       }
+      if (isOpenAICodexProvider(provider) && looksLikeOpenAIApiKey(trimmed)) {
+        return `That looks like an OpenAI API key. Use ${formatCliCommand("openclaw models auth paste-api-key --provider openai-codex")} for API-key auth.`;
+      }
       return undefined;
     },
   });
@@ -547,6 +598,58 @@ export async function modelsAuthPasteTokenCommand(
     runtime.log("OpenClaw prefers Claude CLI reuse when it is available on the host.");
     runtime.log("Anthropic staff told us this OpenClaw path is allowed again.");
   }
+}
+
+export async function modelsAuthPasteApiKeyCommand(
+  opts: {
+    provider?: string;
+    profileId?: string;
+    agent?: string;
+  },
+  runtime: RuntimeEnv,
+) {
+  const agentDir = await resolveModelsAuthAgentDir(opts.agent);
+  const rawProvider = normalizeOptionalString(opts.provider);
+  if (!rawProvider) {
+    throw new Error(
+      `Missing --provider. Run ${formatCliCommand("openclaw models status")} or ${formatCliCommand("openclaw plugins list")} to choose a provider.`,
+    );
+  }
+  const provider = normalizeProviderId(rawProvider);
+  const profileId =
+    normalizeOptionalString(opts.profileId) || resolveDefaultTokenProfileId(provider);
+
+  const keyInput = await password({
+    message: `Paste API key for ${provider}`,
+    validate: (value) => {
+      const trimmed = value?.trim();
+      if (!trimmed) {
+        return "Required";
+      }
+      if (isOpenAICodexProvider(provider)) {
+        return validateOpenAICodexApiKeyInput(trimmed);
+      }
+      return undefined;
+    },
+  });
+  const key = normalizeOptionalString(keyInput) ?? "";
+
+  await upsertAuthProfileWithLockOrThrow({
+    profileId,
+    credential: {
+      type: "api_key",
+      provider,
+      key,
+    },
+    agentDir,
+  });
+
+  await updateConfig((cfg) =>
+    applyAuthProfileConfig(cfg, { profileId, provider, mode: "api_key" }),
+  );
+
+  logConfigUpdated(runtime);
+  runtime.log(`Auth profile: ${profileId} (${provider}/api_key)`);
 }
 
 async function upsertAuthProfileWithLockOrThrow(params: UpsertAuthProfileParams): Promise<void> {
