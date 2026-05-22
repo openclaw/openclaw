@@ -142,25 +142,29 @@ export async function emitResetCommandHooks(params: {
   const hookRunner = getGlobalHookRunner();
   if (hookRunner?.hasHooks("before_reset")) {
     const prevEntry = params.previousSessionEntry;
-    void (async () => {
-      const { sessionFile, messages } = await loadBeforeResetTranscript({
-        sessionFile: prevEntry?.sessionFile,
-      });
+    const handle = setImmediate(
+      () =>
+        void (async () => {
+          const { sessionFile, messages } = await loadBeforeResetTranscript({
+            sessionFile: prevEntry?.sessionFile,
+          });
 
-      try {
-        await hookRunner.runBeforeReset(
-          { sessionFile, messages, reason: params.action },
-          {
-            agentId: resolveAgentIdFromSessionKey(params.sessionKey),
-            sessionKey: params.sessionKey,
-            sessionId: prevEntry?.sessionId,
-            workspaceDir: params.workspaceDir,
-          },
-        );
-      } catch (err: unknown) {
-        logVerbose(`before_reset hook failed: ${String(err)}`);
-      }
-    })();
+          try {
+            await hookRunner.runBeforeReset(
+              { sessionFile, messages, reason: params.action },
+              {
+                agentId: resolveAgentIdFromSessionKey(params.sessionKey),
+                sessionKey: params.sessionKey,
+                sessionId: prevEntry?.sessionId,
+                workspaceDir: params.workspaceDir,
+              },
+            );
+          } catch (err: unknown) {
+            logVerbose(`before_reset hook failed: ${String(err)}`);
+          }
+        })(),
+    );
+    handle.unref?.();
   }
   return { routedReply };
 }

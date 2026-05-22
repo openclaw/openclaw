@@ -69,7 +69,7 @@ describe("emitResetCommandHooks", () => {
       workspaceDir: "/tmp/openclaw-workspace",
     });
 
-    expect(hookRunnerMocks.runBeforeReset).toHaveBeenCalledTimes(1);
+    await vi.waitFor(() => expect(hookRunnerMocks.runBeforeReset).toHaveBeenCalledTimes(1));
     const [, ctx] = firstBeforeResetCall();
     return ctx;
   }
@@ -111,6 +111,32 @@ describe("emitResetCommandHooks", () => {
     expect(ctx?.sessionKey).toBe("agent:main:main");
     expect(ctx?.sessionId).toBe("prev-session");
     expect(ctx?.workspaceDir).toBe("/tmp/openclaw-workspace");
+  });
+
+  it("does not run before_reset hooks synchronously on the reset command path", async () => {
+    const command = {
+      surface: "telegram",
+      senderId: "vac",
+      channel: "telegram",
+      from: "telegram:vac",
+      to: "telegram:bot",
+      resetHookTriggered: false,
+    } as HandleCommandsParams["command"];
+
+    await emitResetCommandHooks({
+      action: "new",
+      ctx: {} as HandleCommandsParams["ctx"],
+      cfg: {} as HandleCommandsParams["cfg"],
+      command,
+      sessionKey: "agent:main:main",
+      previousSessionEntry: {
+        sessionId: "prev-session",
+      } as HandleCommandsParams["previousSessionEntry"],
+      workspaceDir: "/tmp/openclaw-workspace",
+    });
+
+    expect(hookRunnerMocks.runBeforeReset).not.toHaveBeenCalled();
+    await vi.waitFor(() => expect(hookRunnerMocks.runBeforeReset).toHaveBeenCalledTimes(1));
   });
 
   it("recovers the archived transcript when the original reset transcript path is gone", async () => {

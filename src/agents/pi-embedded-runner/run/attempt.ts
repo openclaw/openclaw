@@ -101,6 +101,7 @@ import {
 import { DEFAULT_CONTEXT_TOKENS } from "../../defaults.js";
 import { resolveOpenClawReferencePaths } from "../../docs-path.js";
 import { isTimeoutError } from "../../failover-error.js";
+import { runAgentHarnessAgentEndHook } from "../../harness/lifecycle-hook-helpers.js";
 import { resolveHeartbeatPromptForSystemPrompt } from "../../heartbeat-system-prompt.js";
 import { resolveImageSanitizationLimits } from "../../image-sanitization.js";
 import { stripHistoricalRuntimeContextCustomMessages } from "../../internal-runtime-context.js";
@@ -4495,32 +4496,27 @@ export async function runEmbeddedAttempt(
         });
         anthropicPayloadLogger?.recordUsage(messagesSnapshot, promptError);
 
-        // Run agent_end hooks to allow plugins to analyze the conversation
-        // This is fire-and-forget, so we don't await
-        // Run even on compaction timeout so plugins can log/cleanup
+        // Run even on compaction timeout so plugins can log/cleanup.
         if (hookRunner?.hasHooks("agent_end")) {
-          hookRunner
-            .runAgentEnd(
-              {
-                messages: messagesSnapshot,
-                success: !aborted && !promptError,
-                error: promptError ? formatErrorMessage(promptError) : undefined,
-                durationMs: Date.now() - promptStartedAt,
-              },
-              {
-                runId: params.runId,
-                trace: freezeDiagnosticTraceContext(diagnosticTrace),
-                agentId: hookAgentId,
-                sessionKey: params.sessionKey,
-                sessionId: params.sessionId,
-                workspaceDir: params.workspaceDir,
-                trigger: params.trigger,
-                ...buildAgentHookContextChannelFields(params),
-              },
-            )
-            .catch((err) => {
-              log.warn(`agent_end hook failed: ${err}`);
-            });
+          runAgentHarnessAgentEndHook({
+            hookRunner,
+            event: {
+              messages: messagesSnapshot,
+              success: !aborted && !promptError,
+              error: promptError ? formatErrorMessage(promptError) : undefined,
+              durationMs: Date.now() - promptStartedAt,
+            },
+            ctx: {
+              runId: params.runId,
+              trace: freezeDiagnosticTraceContext(diagnosticTrace),
+              agentId: hookAgentId,
+              sessionKey: params.sessionKey,
+              sessionId: params.sessionId,
+              workspaceDir: params.workspaceDir,
+              trigger: params.trigger,
+              ...buildAgentHookContextChannelFields(params),
+            },
+          });
         }
       } finally {
         clearTimeout(abortTimer);

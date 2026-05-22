@@ -5,11 +5,17 @@ import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plug
 
 const mocks = vi.hoisted(() => ({
   getCurrentPluginMetadataSnapshot: vi.fn(),
+  isReusableCurrentPluginMetadataSnapshot: vi.fn(() => true),
+  setCurrentPluginMetadataSnapshot: vi.fn(),
+  clearCurrentPluginMetadataSnapshot: vi.fn(),
   loadOpenClawPlugins: vi.fn<typeof import("../plugins/loader.js").loadOpenClawPlugins>(),
 }));
 
 vi.mock("../plugins/current-plugin-metadata-snapshot.js", () => ({
   getCurrentPluginMetadataSnapshot: mocks.getCurrentPluginMetadataSnapshot,
+  isReusableCurrentPluginMetadataSnapshot: mocks.isReusableCurrentPluginMetadataSnapshot,
+  setCurrentPluginMetadataSnapshot: mocks.setCurrentPluginMetadataSnapshot,
+  clearCurrentPluginMetadataSnapshot: mocks.clearCurrentPluginMetadataSnapshot,
 }));
 
 vi.mock("../plugins/loader.js", async (importOriginal) => {
@@ -37,6 +43,10 @@ function createRegistryWithPlugin(pluginId: string): PluginRegistry {
 
 beforeEach(() => {
   mocks.getCurrentPluginMetadataSnapshot.mockReset();
+  mocks.isReusableCurrentPluginMetadataSnapshot.mockReset();
+  mocks.isReusableCurrentPluginMetadataSnapshot.mockReturnValue(true);
+  mocks.setCurrentPluginMetadataSnapshot.mockReset();
+  mocks.clearCurrentPluginMetadataSnapshot.mockReset();
   mocks.loadOpenClawPlugins.mockReset();
 });
 

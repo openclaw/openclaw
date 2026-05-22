@@ -35,5 +35,6 @@ export type BuildStatusTextParams = {
   primaryModelLabelOverride?: string;
   modelAuthOverride?: string;
   activeModelAuthOverride?: string;
+  includeProviderUsage?: boolean;
   includeTranscriptUsage?: boolean;
 };

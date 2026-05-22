@@ -167,6 +167,24 @@ describe("OpenAI Codex routing policy", () => {
     ).toBe("openai-codex");
   });
 
+  it("routes OpenAI provider to OpenAI-Codex when OpenAI auth order selects Codex", () => {
+    const config = {
+      auth: {
+        order: {
+          openai: ["openai-codex:work"],
+        },
+      },
+    } satisfies OpenClawConfig;
+
+    expect(
+      resolveSelectedOpenAIPiRuntimeProvider({
+        provider: "openai",
+        harnessRuntime: "codex",
+        config,
+      }),
+    ).toBe("openai-codex");
+  });
+
   it("keeps OpenAI provider for Codex runtime when only direct API-key auth is implied", () => {
     expect(
       resolveSelectedOpenAIPiRuntimeProvider({

@@ -292,6 +292,7 @@ export async function buildStatusText(params: BuildStatusTextParams): Promise<st
     resolveUsageProviderId(activeStatusProvider) ?? resolveUsageProviderId(activeProvider);
   let usageLine: string | null = null;
   if (
+    params.includeProviderUsage === true &&
     currentUsageProvider &&
     shouldLoadUsageSummary({
       provider: currentUsageProvider,

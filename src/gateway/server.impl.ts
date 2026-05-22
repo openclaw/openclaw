@@ -1576,7 +1576,10 @@ export async function startGatewayServer(
             },
             startupTrace,
             deferSidecars: opts.deferStartupSidecars === true,
-            providerAuthPrewarm: { getConfig: getRuntimeConfig },
+            providerAuthPrewarm: {
+              enabled: isTruthyEnvValue(process.env.OPENCLAW_ENABLE_PROVIDER_AUTH_PREWARM),
+              getConfig: getRuntimeConfig,
+            },
           }),
       ),
     ));

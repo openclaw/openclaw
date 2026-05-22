@@ -112,7 +112,18 @@ export function runAgentHarnessAgentEndHook(params: {
   ctx: AgentHarnessHookContext;
   hookRunner?: AgentHarnessHookRunner;
 }): void {
-  void executeAgentHarnessAgentEndHook({ ...params, unrefTimeout: true });
+  const hookRunner = params.hookRunner ?? getGlobalHookRunner();
+  if (!hookRunner?.hasHooks("agent_end") || typeof hookRunner.runAgentEnd !== "function") {
+    return;
+  }
+  const scheduled = setImmediate(() => {
+    void executeAgentHarnessAgentEndHook({
+      ...params,
+      hookRunner,
+      unrefTimeout: true,
+    });
+  });
+  scheduled.unref?.();
 }
 
 export async function awaitAgentHarnessAgentEndHook(params: {

@@ -6189,6 +6189,8 @@ describe("runCodexAppServerAttempt", () => {
     const result = await run;
 
     expect(result.promptError).toBeNull();
+    expect(agentEnd).not.toHaveBeenCalled();
+    await new Promise<void>((resolve) => setImmediate(resolve));
     expect(agentEnd).toHaveBeenCalledTimes(1);
     releaseAgentEnd();
   });
@@ -7134,6 +7136,8 @@ describe("runCodexAppServerAttempt", () => {
 
     expect(llmInput).toHaveBeenCalledTimes(1);
     expect(llmOutput).toHaveBeenCalledTimes(1);
+    expect(agentEnd).not.toHaveBeenCalled();
+    await new Promise<void>((resolve) => setImmediate(resolve));
     expect(agentEnd).toHaveBeenCalledTimes(1);
     const [llmOutputPayload] = mockCall(llmOutput, "llm_output") as [
       {

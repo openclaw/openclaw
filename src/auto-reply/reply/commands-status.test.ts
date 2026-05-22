@@ -559,6 +559,17 @@ describe("buildStatusReply subagent summary", () => {
     expect(normalizeTestText(text)).toContain("Uptime: gateway 2h 5m · system 4d 3h");
   });
 
+  it("does not block chat /status on provider usage lookups", async () => {
+    providerUsageMock.loadProviderUsageSummary.mockImplementation(
+      () => new Promise(() => undefined),
+    );
+
+    const reply = await buildStatusReplyForTest({});
+
+    expect(reply?.text).toContain("OpenClaw");
+    expect(providerUsageMock.loadProviderUsageSummary).not.toHaveBeenCalled();
+  });
+
   it("shows the effective non-PI embedded harness in /status", async () => {
     registerStatusCodexHarness();
 
@@ -682,10 +693,12 @@ describe("buildStatusReply subagent summary", () => {
             },
           },
           ...commonParams,
+          includeProviderUsage: true,
         });
         const implicitCodexText = await buildStatusText({
           cfg: baseCfg,
           ...commonParams,
+          includeProviderUsage: true,
         });
 
         const normalizedCodex = normalizeTestText(codexText);

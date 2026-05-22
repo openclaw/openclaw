@@ -2,6 +2,9 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const hoisted = vi.hoisted(() => ({
   getCurrentPluginMetadataSnapshot: vi.fn(),
+  isReusableCurrentPluginMetadataSnapshot: vi.fn(() => true),
+  setCurrentPluginMetadataSnapshot: vi.fn(),
+  clearCurrentPluginMetadataSnapshot: vi.fn(),
   ensureStandaloneRuntimePluginRegistryLoaded: vi.fn(),
   getActivePluginRuntimeSubagentMode: vi.fn<() => "default" | "explicit" | "gateway-bindable">(
     () => "default",
@@ -10,6 +13,9 @@ const hoisted = vi.hoisted(() => ({
 
 vi.mock("../plugins/current-plugin-metadata-snapshot.js", () => ({
   getCurrentPluginMetadataSnapshot: hoisted.getCurrentPluginMetadataSnapshot,
+  isReusableCurrentPluginMetadataSnapshot: hoisted.isReusableCurrentPluginMetadataSnapshot,
+  setCurrentPluginMetadataSnapshot: hoisted.setCurrentPluginMetadataSnapshot,
+  clearCurrentPluginMetadataSnapshot: hoisted.clearCurrentPluginMetadataSnapshot,
 }));
 
 vi.mock("../plugins/runtime/standalone-runtime-registry-loader.js", () => ({
@@ -26,6 +32,10 @@ describe("ensureRuntimePluginsLoaded", () => {
   beforeEach(async () => {
     hoisted.getCurrentPluginMetadataSnapshot.mockReset();
     hoisted.getCurrentPluginMetadataSnapshot.mockReturnValue(undefined);
+    hoisted.isReusableCurrentPluginMetadataSnapshot.mockReset();
+    hoisted.isReusableCurrentPluginMetadataSnapshot.mockReturnValue(true);
+    hoisted.setCurrentPluginMetadataSnapshot.mockReset();
+    hoisted.clearCurrentPluginMetadataSnapshot.mockReset();
     hoisted.ensureStandaloneRuntimePluginRegistryLoaded.mockReset();
     hoisted.ensureStandaloneRuntimePluginRegistryLoaded.mockReturnValue(undefined);
     hoisted.getActivePluginRuntimeSubagentMode.mockReset();
@@ -55,13 +65,15 @@ describe("ensureRuntimePluginsLoaded", () => {
 
     expect(hoisted.ensureStandaloneRuntimePluginRegistryLoaded).toHaveBeenCalledWith({
       requiredPluginIds: undefined,
-      loadOptions: {
+      loadOptions: expect.objectContaining({
         config: {} as never,
+        activationSourceConfig: {} as never,
+        autoEnabledReasons: {},
         workspaceDir: "/tmp/workspace",
         runtimeOptions: {
           allowGatewaySubagentBinding: true,
         },
-      },
+      }),
     });
   });
 
@@ -85,14 +97,16 @@ describe("ensureRuntimePluginsLoaded", () => {
     });
     expect(hoisted.ensureStandaloneRuntimePluginRegistryLoaded).toHaveBeenCalledWith({
       requiredPluginIds: ["telegram", "memory-core"],
-      loadOptions: {
+      loadOptions: expect.objectContaining({
         config,
+        activationSourceConfig: config,
+        autoEnabledReasons: {},
         workspaceDir: "/tmp/workspace",
         onlyPluginIds: ["telegram", "memory-core"],
         runtimeOptions: {
           allowGatewaySubagentBinding: true,
         },
-      },
+      }),
     });
   });
 
@@ -112,14 +126,16 @@ describe("ensureRuntimePluginsLoaded", () => {
 
     expect(hoisted.ensureStandaloneRuntimePluginRegistryLoaded).toHaveBeenCalledWith({
       requiredPluginIds: ["telegram"],
-      loadOptions: {
+      loadOptions: expect.objectContaining({
         config: {} as never,
+        activationSourceConfig: {} as never,
+        autoEnabledReasons: {},
         onlyPluginIds: ["telegram"],
         workspaceDir: "/tmp/workspace",
         runtimeOptions: {
           allowGatewaySubagentBinding: true,
         },
-      },
+      }),
     });
   });
 
@@ -148,14 +164,16 @@ describe("ensureRuntimePluginsLoaded", () => {
 
     expect(hoisted.ensureStandaloneRuntimePluginRegistryLoaded).toHaveBeenCalledWith({
       requiredPluginIds: ["telegram"],
-      loadOptions: {
+      loadOptions: expect.objectContaining({
         config,
+        activationSourceConfig: config,
+        autoEnabledReasons: {},
         onlyPluginIds: ["telegram"],
         workspaceDir: "/tmp/workspace",
         runtimeOptions: {
           allowGatewaySubagentBinding: true,
         },
-      },
+      }),
     });
   });
 
@@ -167,11 +185,13 @@ describe("ensureRuntimePluginsLoaded", () => {
 
     expect(hoisted.ensureStandaloneRuntimePluginRegistryLoaded).toHaveBeenCalledWith({
       requiredPluginIds: undefined,
-      loadOptions: {
+      loadOptions: expect.objectContaining({
         config: {} as never,
+        activationSourceConfig: {} as never,
+        autoEnabledReasons: {},
         workspaceDir: "/tmp/workspace",
         runtimeOptions: undefined,
-      },
+      }),
     });
   });
 
@@ -185,13 +205,15 @@ describe("ensureRuntimePluginsLoaded", () => {
 
     expect(hoisted.ensureStandaloneRuntimePluginRegistryLoaded).toHaveBeenCalledWith({
       requiredPluginIds: undefined,
-      loadOptions: {
+      loadOptions: expect.objectContaining({
         config: {} as never,
+        activationSourceConfig: {} as never,
+        autoEnabledReasons: {},
         workspaceDir: "/tmp/workspace",
         runtimeOptions: {
           allowGatewaySubagentBinding: true,
         },
-      },
+      }),
     });
   });
 });

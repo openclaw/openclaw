@@ -22,6 +22,7 @@ export async function buildStatusReply(
     text: await buildStatusText({
       ...params,
       statusChannel: command.channel,
+      includeProviderUsage: params.includeProviderUsage ?? false,
     }),
   };
 }
