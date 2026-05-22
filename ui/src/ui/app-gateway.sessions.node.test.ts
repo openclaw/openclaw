@@ -12,6 +12,7 @@ const handleSessionOperationEventMock = vi.fn();
 vi.mock("./app-chat.ts", () => ({
   CHAT_SESSIONS_ACTIVE_MINUTES: 10,
   CHAT_SESSIONS_REFRESH_LIMIT: 25,
+  createChatSessionsLoadOverrides: () => ({ activeMinutes: 10, limit: 25 }),
   clearPendingQueueItemsForRun: clearPendingQueueItemsForRunMock,
   flushChatQueueForEvent: flushChatQueueForEventMock,
   refreshChatAvatar: vi.fn(),

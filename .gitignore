@@ -123,6 +123,8 @@ mantis/
 !.agents/skills/crabbox/**
 !.agents/skills/clawdtributor/
 !.agents/skills/clawdtributor/**
+!.agents/skills/control-ui-e2e/
+!.agents/skills/control-ui-e2e/**
 !.agents/skills/gitcrawl/
 !.agents/skills/gitcrawl/**
 !.agents/skills/openclaw-docs/**
@@ -162,6 +164,8 @@ mantis/
 !.agents/skills/security-triage/**
 !.agents/skills/tag-duplicate-prs-issues/
 !.agents/skills/tag-duplicate-prs-issues/**
+!.agents/skills/autoreview/
+!.agents/skills/autoreview/**
 
 # Agent credentials and memory (NEVER COMMIT)
 /memory/

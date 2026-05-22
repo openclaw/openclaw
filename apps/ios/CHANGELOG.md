@@ -4,6 +4,8 @@
 
 Maintenance update for the current OpenClaw release.
 
+- Added realtime Gateway Talk relay support for iOS voice sessions, including OpenAI realtime provider and voice selection controls. Thanks @Solvely-Colin.
+
 ## 2026.5.20 - 2026-05-20
 
 Maintenance update for the current OpenClaw release.
