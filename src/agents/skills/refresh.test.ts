@@ -168,7 +168,7 @@ describe("ensureSkillsWatcher", () => {
       config: { skills: { load: { extraDirs: ["/tmp/shared-b"] } } },
     });
 
-    const callPaths = watchMock.mock.calls.map((call) => call[0] as unknown as string);
+    const callPaths = (watchMock.mock.calls as unknown as Array<[string]>).map((call) => call[0]);
     const sharedAIndex = callPaths.findIndex((target) => target.includes("/tmp/shared-a"));
     // The dropped extra dir is unsubscribed and its watcher closed; the new dir
     // gets a fresh watcher.
@@ -194,7 +194,7 @@ describe("ensureSkillsWatcher", () => {
       config: { skills: { load: { extraDirs: ["/tmp/shared"] } } },
     });
 
-    const callPaths = watchMock.mock.calls.map((call) => call[0] as unknown as string);
+    const callPaths = (watchMock.mock.calls as unknown as Array<[string]>).map((call) => call[0]);
     // The shared directory is watched exactly once even though two workspaces
     // include it, instead of one watcher per workspace (the EMFILE root cause).
     const sharedWatchers = callPaths.filter((target) => target.includes("/tmp/shared"));
@@ -216,7 +216,7 @@ describe("ensureSkillsWatcher", () => {
       config: { skills: { load: { extraDirs: ["/tmp/shared"], watchDebounceMs: 10 } } },
     });
 
-    const callPaths = watchMock.mock.calls.map((call) => call[0] as unknown as string);
+    const callPaths = (watchMock.mock.calls as unknown as Array<[string]>).map((call) => call[0]);
     const sharedIndex = callPaths.findIndex((target) => target.includes("/tmp/shared"));
     expect(sharedIndex).toBeGreaterThanOrEqual(0);
 
