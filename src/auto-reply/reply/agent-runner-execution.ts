@@ -27,6 +27,7 @@ import {
   isOverloadedErrorMessage,
   isRateLimitErrorMessage,
   isTransientHttpError,
+  classifyProviderRuntimeFailureKind,
 } from "../../agents/embedded-agent-helpers.js";
 import { sanitizeUserFacingText } from "../../agents/embedded-agent-helpers/sanitize-user-facing-text.js";
 import { isMessagingToolSendAction } from "../../agents/embedded-agent-messaging.js";
@@ -607,6 +608,13 @@ function hasBillingAttemptSummary(err: unknown): boolean {
   );
 }
 
+const REPLAY_INVALID_SESSION_USER_MESSAGE =
+  "⚠️ Session history got out of sync. Please try again, or use /new to start a fresh session.";
+
+function isReplayInvalidRunFailureError(message: string): boolean {
+  return classifyProviderRuntimeFailureKind(message) === "replay_invalid";
+}
+
 function collapseRepeatedFailureDetail(message: string): string {
   const parts = message
     .split(/\s+\|\s+/u)
@@ -750,6 +758,12 @@ function buildExternalRunFailureReply(
   if (providerRequestError) {
     return {
       text: providerRequestError.userMessage,
+      isGenericRunnerFailure: false,
+    };
+  }
+  if (isReplayInvalidRunFailureError(normalizedMessage)) {
+    return {
+      text: REPLAY_INVALID_SESSION_USER_MESSAGE,
       isGenericRunnerFailure: false,
     };
   }
@@ -1400,6 +1414,7 @@ export async function runAgentTurnWithFallback(params: {
   shouldEmitToolOutput: () => boolean;
   pendingToolTasks: Set<Promise<void>>;
   resetSessionAfterRoleOrderingConflict: (reason: string) => Promise<boolean>;
+  resetSessionAfterReplayInvalid?: (reason: string) => Promise<boolean>;
   isHeartbeat: boolean;
   sessionKey?: string;
   runtimePolicySessionKey?: string;
@@ -2744,6 +2759,16 @@ export async function runAgentTurnWithFallback(params: {
             text: providerRequestError.userMessage,
           }),
         };
+      }
+
+      if (isReplayInvalidRunFailureError(message)) {
+        try {
+          await params.resetSessionAfterReplayInvalid?.(message);
+        } catch (resetErr) {
+          defaultRuntime.error(
+            `Failed to reset replay-invalid session ${params.sessionKey}: ${String(resetErr)}`,
+          );
+        }
       }
 
       if (isTransientHttp && !didRetryTransientHttpError) {

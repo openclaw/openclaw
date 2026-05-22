@@ -200,6 +200,7 @@ function createMinimalRun(params?: {
   return {
     typing,
     opts,
+    followupRun,
     run: async () => {
       const runReplyAgent = await getRunReplyAgent();
       return runReplyAgent({
@@ -425,6 +426,61 @@ describe("runReplyAgent pending final delivery capture", () => {
     const raw = await readFile(storePath, "utf8");
     return JSON.parse(raw).main as SessionEntry;
   }
+
+  it("rotates poisoned replay-invalid sessions before returning reset guidance", async () => {
+    const sessionEntry: SessionEntry = {
+      sessionId: "poisoned-session",
+      sessionFile: "/tmp/poisoned-session.jsonl",
+      updatedAt: Date.now(),
+      sessionStartedAt: Date.now() - 10_000,
+      systemSent: true,
+      status: "running",
+      contextTokens: 272_000,
+      inputTokens: 877_883,
+      outputTokens: 5_500,
+      modelProvider: "openai-codex",
+      model: "gpt-5.5",
+      cliSessionBindings: { "codex-cli": { sessionId: "codex-session" } },
+    };
+    const sessionStore = { main: sessionEntry };
+    const storePath = await createSessionStoreFile(sessionEntry);
+    state.runEmbeddedAgentMock.mockRejectedValueOnce(
+      new Error(
+        "400 code=invalid_encrypted_content Encrypted content could not be decrypted or parsed.",
+      ),
+    );
+
+    const { followupRun, run } = createMinimalRun({
+      sessionEntry,
+      sessionStore,
+      sessionKey: "main",
+      storePath,
+      runOverrides: {
+        provider: "openai-codex",
+        model: "gpt-5.5",
+      },
+    });
+
+    const result = await run();
+    const stored = await readStoredMainSession(storePath);
+
+    expect(result).toMatchObject({
+      text: "⚠️ Session history got out of sync. Please try again, or use /new to start a fresh session.",
+    });
+    expect(stored.sessionId).not.toBe("poisoned-session");
+    expect(stored.sessionFile).toEqual(expect.any(String));
+    expect(stored.sessionFile).not.toBe("/tmp/poisoned-session.jsonl");
+    expect(followupRun.run.sessionId).toBe(stored.sessionId);
+    expect(followupRun.run.sessionFile).toBe(stored.sessionFile);
+    expect(vi.mocked(refreshQueuedFollowupSession)).toHaveBeenCalledWith({
+      key: "main",
+      previousSessionId: "poisoned-session",
+      nextSessionId: stored.sessionId,
+      nextSessionFile: stored.sessionFile,
+    });
+    expect(stored.systemSent).toBe(false);
+    expect(stored.contextTokens).toBeUndefined();
+  });
 
   it("does not persist message-tool-only final replies for heartbeat replay", async () => {
     const sessionEntry: SessionEntry = {

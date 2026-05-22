@@ -1559,6 +1559,11 @@ describe("classifyProviderRuntimeFailureKind", () => {
     expect(
       classifyProviderRuntimeFailureKind("401 input item ID does not belong to this connection"),
     ).toBe("replay_invalid");
+    expect(
+      classifyProviderRuntimeFailureKind(
+        "400 code=invalid_encrypted_content Encrypted content could not be decrypted or parsed.",
+      ),
+    ).toBe("replay_invalid");
   });
 
   it("splits ambiguous provider runtime failures instead of collapsing to unknown", () => {

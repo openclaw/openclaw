@@ -96,6 +96,12 @@ vi.mock("../../agents/bootstrap-budget.js", () => ({
 
 vi.mock("../../agents/embedded-agent-helpers.js", () => ({
   BILLING_ERROR_USER_MESSAGE: "billing",
+  classifyProviderRuntimeFailureKind: (message: string) =>
+    /invalid_encrypted_content|encrypted content could not be decrypted or parsed|tool_(?:use|call)\.(?:input|arguments)|input item id does not belong to this connection/i.test(
+      message,
+    )
+      ? "replay_invalid"
+      : "unclassified",
   formatRateLimitOrOverloadedErrorCopy: (message: string) => {
     if (/model\s+(?:is\s+)?at capacity/i.test(message)) {
       return "⚠️ Selected model is at capacity. Try a different model, or wait and retry.";
@@ -5473,6 +5479,50 @@ describe("runAgentTurnWithFallback", () => {
     expect(result.kind).toBe("final");
     if (result.kind === "final") {
       expect(result.payload.text).toBe(PROVIDER_CONVERSATION_STATE_ERROR_USER_MESSAGE);
+    }
+  });
+
+  it("returns a session reset hint for OpenAI encrypted replay failures", async () => {
+    const resetSessionAfterReplayInvalid = vi.fn(async () => true);
+    state.runEmbeddedAgentMock.mockRejectedValueOnce(
+      new Error(
+        "400 code=invalid_encrypted_content Encrypted content could not be decrypted or parsed.",
+      ),
+    );
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const result = await runAgentTurnWithFallback({
+      commandBody: "hello",
+      followupRun: createFollowupRun(),
+      sessionCtx: {
+        Provider: "telegram",
+        MessageSid: "msg",
+      } as unknown as TemplateContext,
+      opts: {},
+      typingSignals: createMockTypingSignaler(),
+      blockReplyPipeline: null,
+      blockStreamingEnabled: false,
+      resolvedBlockStreamingBreak: "message_end",
+      applyReplyToMode: (payload) => payload,
+      shouldEmitToolResult: () => true,
+      shouldEmitToolOutput: () => false,
+      pendingToolTasks: new Set(),
+      resetSessionAfterRoleOrderingConflict: async () => false,
+      resetSessionAfterReplayInvalid,
+      isHeartbeat: false,
+      sessionKey: "main",
+      getActiveSessionEntry: () => undefined,
+      resolvedVerboseLevel: "off",
+    });
+
+    expect(resetSessionAfterReplayInvalid).toHaveBeenCalledWith(
+      "400 code=invalid_encrypted_content Encrypted content could not be decrypted or parsed.",
+    );
+    expect(result.kind).toBe("final");
+    if (result.kind === "final") {
+      expect(result.payload.text).toBe(
+        "⚠️ Session history got out of sync. Please try again, or use /new to start a fresh session.",
+      );
     }
   });
 

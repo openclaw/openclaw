@@ -1460,6 +1460,13 @@ export async function runReplyAgent(params: {
           `Role ordering conflict (${reason}). Restarting session ${sessionKey} -> ${nextSessionId}.`,
         cleanupTranscripts: true,
       });
+    const resetSessionAfterReplayInvalid = async (reason: string): Promise<boolean> =>
+      resetSession({
+        failureLabel: "replay-invalid session state",
+        buildLogMessage: (nextSessionId) =>
+          `Replay-invalid session state (${reason}). Restarting session ${sessionKey} -> ${nextSessionId}.`,
+        cleanupTranscripts: true,
+      });
 
     replyOperation.setPhase("running");
     const runStartedAt = Date.now();
@@ -1482,6 +1489,7 @@ export async function runReplyAgent(params: {
         shouldEmitToolOutput,
         pendingToolTasks,
         resetSessionAfterRoleOrderingConflict,
+        resetSessionAfterReplayInvalid,
         isHeartbeat,
         sessionKey,
         runtimePolicySessionKey,
