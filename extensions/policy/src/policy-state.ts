@@ -491,7 +491,7 @@ function matchesConfigPathPrefix(path: readonly string[], prefix: readonly strin
       return value !== undefined && value !== "";
     }
     if (segment === "#") {
-      return value?.startsWith("#") === true;
+      return value?.startsWith("#") ?? false;
     }
     return value === segment;
   });

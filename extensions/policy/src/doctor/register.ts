@@ -372,9 +372,10 @@ async function evaluatePolicyUncached(ctx: HealthCheckContext): Promise<PolicyEv
   const settings = policySettings(ctx);
   const policyPath = policyDisplayName(ctx);
   const secretsConfig = await readConfigFileForSecretEvidence(ctx);
-  let evidence: PolicyEvidence = collectPolicyEvidence(ctx.cfg as Record<string, unknown>, {
-    ...(secretsConfig ? { secretsConfig } : {}),
-  });
+  let evidence: PolicyEvidence =
+    secretsConfig === undefined
+      ? collectPolicyEvidence(ctx.cfg as Record<string, unknown>)
+      : collectPolicyEvidence(ctx.cfg as Record<string, unknown>, { secretsConfig });
   const findings: HealthFinding[] = [];
 
   if (!policyChecksEnabled(ctx, settings)) {
