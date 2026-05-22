@@ -189,6 +189,20 @@ describe("listThinkingLevels", () => {
       { provider: "openai", id: "gpt-5.4", name: "GPT-5.4", reasoning: false },
       { provider: "openai-codex", id: "gpt-5.5", name: "GPT-5.5 (Codex)", reasoning: false },
       { provider: "openai", id: "chat-latest", name: "Chat Latest", reasoning: false },
+      // Bundled-catalog non-reasoning chat-latest variants must stay off-only
+      // even after the resolver change so users still get the documented opt-out.
+      {
+        provider: "openai",
+        id: "gpt-5.3-chat-latest",
+        name: "GPT-5.3 Chat (latest)",
+        reasoning: false,
+      },
+      {
+        provider: "openai",
+        id: "gpt-5-chat-latest",
+        name: "GPT-5 Chat Latest",
+        reasoning: false,
+      },
     ];
 
     // Issue #84880 acceptance: sessions_spawn must accept high/xhigh on gpt-5.5/5.4.
@@ -222,6 +236,11 @@ describe("listThinkingLevels", () => {
     // chat-latest is a non-reasoning OpenAI model — provider does NOT override,
     // so stale catalog reasoning=false still wins.
     expect(listThinkingLevels("openai", "chat-latest", staleCatalog)).toEqual(["off"]);
+    // Regression guard for ClawSweeper review on PR #85285: an earlier revision
+    // matched `gpt-5.3-chat-latest` via the `gpt-5.3` reasoning prefix and would
+    // have incorrectly flipped this catalog opt-out.
+    expect(listThinkingLevels("openai", "gpt-5.3-chat-latest", staleCatalog)).toEqual(["off"]);
+    expect(listThinkingLevels("openai", "gpt-5-chat-latest", staleCatalog)).toEqual(["off"]);
   });
 
   it("keeps non-authoritative provider profiles behind catalog reasoning=false", () => {

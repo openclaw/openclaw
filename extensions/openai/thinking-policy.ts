@@ -32,7 +32,13 @@ function matchesExactOrPrefix(id: string, values: readonly string[]): boolean {
   });
 }
 
-const OPENAI_NON_REASONING_MODEL_IDS = ["chat-latest", "gpt-5-chat-latest"] as const;
+// Chat-latest variants are matched suffix-aware so a `gpt-5.N` reasoning
+// prefix below does not accidentally flip a non-reasoning catalog row.
+// Only the variants explicitly listed here are treated as reasoning.
+const OPENAI_REASONING_CHAT_LATEST_MODEL_IDS = [
+  "gpt-5.1-chat-latest",
+  "gpt-5.2-chat-latest",
+] as const;
 
 const OPENAI_REASONING_MODEL_PREFIXES = [
   "gpt-5.5",
@@ -52,8 +58,12 @@ const OPENAI_REASONING_MODEL_PREFIXES = [
 
 function isOpenAIReasoningModelId(modelId: string): boolean {
   const normalizedId = normalizeModelId(modelId);
-  if (OPENAI_NON_REASONING_MODEL_IDS.includes(normalizedId as never)) {
-    return false;
+  // Chat-latest variants opt in explicitly. Any other `*-chat-latest` (the
+  // bundled `chat-latest`, `gpt-5-chat-latest`, `gpt-5.3-chat-latest` are all
+  // catalog reasoning=false) stays catalog-authoritative so a stale
+  // `reasoning: false` row keeps forcing off-only as designed.
+  if (normalizedId === "chat-latest" || normalizedId.endsWith("-chat-latest")) {
+    return OPENAI_REASONING_CHAT_LATEST_MODEL_IDS.includes(normalizedId as never);
   }
   if (normalizedId === "gpt-5") {
     return true;
