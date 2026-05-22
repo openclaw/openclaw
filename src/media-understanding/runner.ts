@@ -15,6 +15,7 @@ import type {
   MediaUnderstandingModelConfig,
 } from "../config/types.tools.js";
 import { logVerbose, shouldLogVerbose } from "../globals.js";
+import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { logWarn } from "../logger.js";
 import { resolveChannelInboundAttachmentRoots } from "../media/channel-inbound-roots.js";
 import { mergeInboundPathRoots } from "../media/inbound-path-policy.js";
@@ -410,8 +411,14 @@ async function probeAntigravityCliCandidate(command: string): Promise<string | n
   if (!resolved) {
     return null;
   }
+  const probeDir = await fs.mkdtemp(
+    path.join(resolvePreferredOpenClawTmpDir(), "openclaw-antigravity-probe-"),
+  );
   try {
-    const { stdout } = await runExec(resolved, ["--help"], { timeoutMs: 3000 });
+    const { stdout } = await runExec(resolved, ["--help"], {
+      timeoutMs: 3000,
+      cwd: probeDir,
+    });
     return stdout.includes("--print") &&
       stdout.includes("--add-dir") &&
       stdout.includes("--sandbox")
@@ -419,6 +426,8 @@ async function probeAntigravityCliCandidate(command: string): Promise<string | n
       : null;
   } catch {
     return null;
+  } finally {
+    await fs.rm(probeDir, { recursive: true, force: true }).catch(() => {});
   }
 }
 

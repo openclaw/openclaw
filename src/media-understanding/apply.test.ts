@@ -1003,6 +1003,11 @@ describe("applyMediaUnderstanding", () => {
     expect(ctx.Body).toBe("[Image]\nDescription:\nantigravity image description");
     expect(mockedRunExec).toHaveBeenCalledTimes(2);
     const realImagePath = await fs.realpath(imagePath);
+    const [_probeCommand, _probeArgs, probeOptions] = getRunExecCall(0);
+    expect(probeOptions).toEqual({
+      timeoutMs: 3000,
+      cwd: expect.stringContaining("openclaw-antigravity-probe-"),
+    });
     const [command, args, options] = getRunExecCall(1);
     expect(command).toBe(path.join(binDir, "agy"));
     expect(args).toEqual([
