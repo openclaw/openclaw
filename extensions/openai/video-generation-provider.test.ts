@@ -9,6 +9,8 @@ const {
   postJsonRequestMock,
   postMultipartRequestMock,
   fetchWithTimeoutMock,
+  fetchWithTimeoutGuardedMock,
+  pollProviderOperationJsonMock,
   resolveProviderHttpRequestConfigMock,
   sanitizeConfiguredModelProviderRequestMock,
 } = getProviderHttpMocks();
@@ -47,6 +49,28 @@ function fetchWithTimeoutCall(index: number): [string, RequestInit | undefined, 
     throw new Error(`expected fetchWithTimeout call ${index}`);
   }
   return call;
+}
+
+function fetchWithTimeoutGuardedCall(
+  index = 0,
+): [string, RequestInit | undefined, number, unknown, Record<string, unknown> | undefined] {
+  const call = fetchWithTimeoutGuardedMock.mock.calls[index] as
+    | [string, RequestInit | undefined, number, unknown, Record<string, unknown> | undefined]
+    | undefined;
+  if (!call) {
+    throw new Error(`expected fetchWithTimeoutGuarded call ${index}`);
+  }
+  return call;
+}
+
+function pollProviderOperationRequest(index = 0): Record<string, unknown> {
+  const request = pollProviderOperationJsonMock.mock.calls[index]?.[0] as
+    | Record<string, unknown>
+    | undefined;
+  if (!request) {
+    throw new Error(`expected pollProviderOperationJson call ${index}`);
+  }
+  return request;
 }
 
 function providerHttpConfigRequest(): Record<string, unknown> {
@@ -263,6 +287,20 @@ describe("openai video generation provider", () => {
     const createRequest = postJsonRequest();
     expect(createRequest.url).toBe("http://127.0.0.1:44080/v1/videos");
     expect(createRequest.allowPrivateNetwork).toBe(true);
+    const statusRequest = pollProviderOperationRequest();
+    expect(statusRequest.url).toBe("http://127.0.0.1:44080/v1/videos/vid_local");
+    expect(statusRequest.allowPrivateNetwork).toBe(true);
+    expect(statusRequest.auditContext).toBe("openai-video-status");
+    const [downloadUrl, downloadInit, downloadTimeout, downloadFetch, downloadOptions] =
+      fetchWithTimeoutGuardedCall();
+    expect(downloadUrl).toBe("http://127.0.0.1:44080/v1/videos/vid_local/content?variant=video");
+    expect(downloadInit?.method).toBe("GET");
+    expect(downloadTimeout).toBe(120000);
+    expect(downloadFetch).toBe(fetch);
+    expect(downloadOptions).toEqual({
+      ssrfPolicy: { allowPrivateNetwork: true },
+      auditContext: "openai-video-download",
+    });
   });
 
   it("uses multipart input_reference for video-to-video uploads", async () => {
@@ -303,6 +341,59 @@ describe("openai video generation provider", () => {
     expect(createRequest.timeoutMs).toBe(120000);
     expect(createRequest.fetchFn).toBe(fetch);
     expect(createRequest.allowPrivateNetwork).toBe(false);
+  });
+
+  it("honors configured request allowPrivateNetwork for multipart video uploads", async () => {
+    fetchWithTimeoutMock
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          id: "vid_789",
+          model: "sora-2",
+          status: "queued",
+        }),
+      })
+      .mockResolvedValueOnce({
+        json: async () => ({
+          id: "vid_789",
+          model: "sora-2",
+          status: "completed",
+        }),
+      })
+      .mockResolvedValueOnce({
+        headers: new Headers({ "content-type": "video/mp4" }),
+        arrayBuffer: async () => Buffer.from("mp4-bytes"),
+      });
+
+    const provider = buildOpenAIVideoGenerationProvider();
+    await provider.generateVideo({
+      provider: "openai",
+      model: "sora-2",
+      prompt: "Remix this clip",
+      cfg: {
+        models: {
+          providers: {
+            openai: {
+              baseUrl: "http://127.0.0.1:44080/v1",
+              request: { allowPrivateNetwork: true },
+              models: [],
+            },
+          },
+        },
+      },
+      inputVideos: [{ buffer: Buffer.from("mp4-bytes"), mimeType: "video/mp4" }],
+    });
+
+    expect(postJsonRequestMock).not.toHaveBeenCalled();
+    const createRequest = postMultipartRequest();
+    expect(createRequest.url).toBe("http://127.0.0.1:44080/v1/videos");
+    expect(createRequest.body).toBeInstanceOf(FormData);
+    expect(createRequest.allowPrivateNetwork).toBe(true);
+    expect(pollProviderOperationRequest().allowPrivateNetwork).toBe(true);
+    expect(fetchWithTimeoutGuardedCall()[4]).toEqual({
+      ssrfPolicy: { allowPrivateNetwork: true },
+      auditContext: "openai-video-download",
+    });
   });
 
   it("rejects multiple reference assets", async () => {
