@@ -893,6 +893,51 @@ describe("agentCommand", () => {
     });
   });
 
+  it("uses modelByChannel for ingress session runs without stored or explicit overrides", async () => {
+    await withTempHome(async (home) => {
+      const store = path.join(home, "sessions-channel-model.json");
+      const sessionKey = "agent:main:discord:channel:1489110116304424990";
+      writeSessionStoreSeed(store, {
+        [sessionKey]: {
+          sessionId: "session-channel-model",
+          updatedAt: Date.now(),
+          channel: "discord",
+          groupId: "1489110116304424990",
+          chatType: "channel",
+        },
+      });
+
+      const cfg = mockConfig(home, store, {
+        model: { primary: "ollama/qwen3.5:35b-a3b-coding-nvfp4" },
+        models: {
+          "anthropic/claude-opus-4-6": {},
+          "ollama/qwen3.5:35b-a3b-coding-nvfp4": {},
+        },
+      });
+      cfg.channels = {
+        ...cfg.channels,
+        modelByChannel: {
+          discord: {
+            "1489110116304424990": "anthropic/claude-opus-4-6",
+          },
+        },
+      };
+
+      await agentCommandFromIngress(
+        {
+          message: "announce completion",
+          sessionKey,
+          channel: "discord",
+          messageChannel: "discord",
+          allowModelOverride: false,
+        },
+        runtime,
+      );
+
+      expectLastRunProviderModel("anthropic", "claude-opus-4-6");
+    });
+  });
+
   it("clears disallowed stored override fields", async () => {
     await withTempHome(async (home) => {
       const clearStore = path.join(home, "sessions-clear-overrides.json");
