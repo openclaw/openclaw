@@ -543,6 +543,7 @@ describe("workboard controller", () => {
 
     expect(client.request).toHaveBeenNthCalledWith(1, "chat.abort", {
       sessionKey: sampleSession.key,
+      runId: "run-1",
     });
     expect(client.request).toHaveBeenNthCalledWith(2, "workboard.cards.update", {
       id: "card-1",
@@ -565,6 +566,7 @@ describe("workboard controller", () => {
     expect(client.request).toHaveBeenCalledOnce();
     expect(client.request).toHaveBeenCalledWith("chat.abort", {
       sessionKey: sampleSession.key,
+      runId: "stale-run",
     });
     expect(state.cards).toEqual([linked]);
   });

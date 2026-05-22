@@ -784,6 +784,7 @@ export async function stopWorkboardCard(params: {
   try {
     const abortResult = await params.client.request("chat.abort", {
       sessionKey: params.card.sessionKey,
+      ...(params.card.runId ? { runId: params.card.runId } : {}),
     });
     const aborted =
       isRecord(abortResult) &&
