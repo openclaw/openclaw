@@ -1,5 +1,0 @@
-import type { OpenClawConfig } from "./types.js";
-export declare function collectConfigRuntimeEnvVars(cfg?: OpenClawConfig): Record<string, string>;
-export declare function collectConfigServiceEnvVars(cfg?: OpenClawConfig): Record<string, string>;
-export declare function createConfigRuntimeEnv(cfg: OpenClawConfig, baseEnv?: NodeJS.ProcessEnv): NodeJS.ProcessEnv;
-export declare function applyConfigEnvVars(cfg: OpenClawConfig, env?: NodeJS.ProcessEnv): void;

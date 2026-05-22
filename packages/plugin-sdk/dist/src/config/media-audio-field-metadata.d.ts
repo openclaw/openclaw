@@ -1,5 +1,0 @@
-export declare const MEDIA_AUDIO_FIELD_KEYS: readonly ["tools.media.audio.enabled", "tools.media.audio.maxBytes", "tools.media.audio.maxChars", "tools.media.audio.prompt", "tools.media.audio.timeoutSeconds", "tools.media.audio.language", "tools.media.audio.attachments", "tools.media.audio.models", "tools.media.audio.scope", "tools.media.audio.echoTranscript", "tools.media.audio.echoFormat", "tools.media.audio.request", "tools.media.audio.request.headers", "tools.media.audio.request.auth", "tools.media.audio.request.auth.mode", "tools.media.audio.request.auth.token", "tools.media.audio.request.auth.headerName", "tools.media.audio.request.auth.value", "tools.media.audio.request.auth.prefix", "tools.media.audio.request.proxy", "tools.media.audio.request.proxy.mode", "tools.media.audio.request.proxy.url", "tools.media.audio.request.proxy.tls", "tools.media.audio.request.tls"];
-type MediaAudioFieldKey = (typeof MEDIA_AUDIO_FIELD_KEYS)[number];
-export declare const MEDIA_AUDIO_FIELD_HELP: Record<MediaAudioFieldKey, string>;
-export declare const MEDIA_AUDIO_FIELD_LABELS: Record<MediaAudioFieldKey, string>;
-export {};

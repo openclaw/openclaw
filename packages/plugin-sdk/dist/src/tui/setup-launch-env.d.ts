@@ -1,2 +1,0 @@
-export declare const TUI_SETUP_AUTH_SOURCE_ENV = "OPENCLAW_TUI_SETUP_AUTH_SOURCE";
-export declare const TUI_SETUP_AUTH_SOURCE_CONFIG = "config";
