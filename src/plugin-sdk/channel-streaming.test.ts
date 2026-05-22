@@ -452,6 +452,24 @@ describe("channel-streaming", () => {
     ).toBe("🛠️ Exec");
     expect(
       formatChannelProgressDraftLine({
+        event: "command-output",
+        phase: "end",
+        name: "exec",
+        exitCode: 123,
+        outcomeClassification: "benign_no_result",
+        statusLabel: "No matches found",
+      }),
+    ).toBe("🛠️ No matches found");
+    expect(
+      formatChannelProgressDraftLine({
+        event: "command-output",
+        phase: "end",
+        name: "exec",
+        exitCode: 123,
+      }),
+    ).toBe("🛠️ exit 123");
+    expect(
+      formatChannelProgressDraftLine({
         event: "item",
         itemKind: "analysis",
         title: "Reasoning",
