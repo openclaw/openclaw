@@ -3,7 +3,7 @@ import type { AddressInfo } from "node:net";
 import type { EmbeddingProviderCreateOptions } from "openclaw/plugin-sdk/embedding-providers";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { afterEach, describe, expect, it } from "vitest";
-import plugin from "../index.js";
+import plugin from "./index.js";
 import {
   createOpenAICompatibleEmbeddingProvider,
   openAICompatibleEmbeddingProviderAdapter,
