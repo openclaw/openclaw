@@ -1778,6 +1778,7 @@ describe("cron service timer regressions", () => {
       const cleanupTimedOutAgentRun = vi.fn(async () => {});
       const state = createCronServiceState({
         cronEnabled: true,
+        cronConfig: { isolatedAgentPreExecutionWatchdog: "60s" },
         storePath: store.storePath,
         log: noopLogger,
         nowMs: () => now,
