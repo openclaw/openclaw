@@ -169,9 +169,8 @@ export async function createIsolatedCodexAppServerClient(options?: {
     config: options?.config,
   });
   const client = CodexAppServerClient.start(startOptions);
-  const initialize = client.initialize();
-  try {
-    await withTimeout(initialize, options?.timeoutMs ?? 0, "codex app-server initialize timed out");
+  const setup = (async () => {
+    await client.initialize();
     await applyCodexAppServerAuthProfile({
       client,
       agentDir,
@@ -179,10 +178,13 @@ export async function createIsolatedCodexAppServerClient(options?: {
       startOptions,
       config: options?.config,
     });
+  })();
+  try {
+    await withTimeout(setup, options?.timeoutMs ?? 0, "codex app-server initialize timed out");
     return client;
   } catch (error) {
     client.close();
-    void initialize.catch(() => undefined);
+    void setup.catch(() => undefined);
     throw error;
   }
 }

@@ -125,6 +125,7 @@ describe("shared Codex app-server client", () => {
     vi.restoreAllMocks();
     mocks.bridgeCodexAppServerStartOptions.mockClear();
     mocks.applyCodexAppServerAuthProfile.mockClear();
+    mocks.applyCodexAppServerAuthProfile.mockImplementation(async () => undefined);
     mocks.resolveCodexAppServerAuthProfileIdForAgent.mockClear();
     mocks.resolveCodexAppServerAuthProfileIdForAgent.mockImplementation(
       (params?: { authProfileId?: string }) => params?.authProfileId,
@@ -182,6 +183,20 @@ describe("shared Codex app-server client", () => {
     await expect(createIsolatedCodexAppServerClient({ timeoutMs: 5 })).rejects.toThrow(
       "codex app-server initialize timed out",
     );
+    expect(harness.process.stdin.destroyed).toBe(true);
+  });
+
+  it("closes the client and destroys stdin if applyCodexAppServerAuthProfile hangs during isolated initialize", async () => {
+    const harness = createClientHarness();
+    vi.spyOn(CodexAppServerClient, "start").mockReturnValue(harness.client);
+
+    mocks.applyCodexAppServerAuthProfile.mockImplementationOnce(() => new Promise(() => {}));
+
+    const clientPromise = createIsolatedCodexAppServerClient({ timeoutMs: 500 });
+
+    await sendInitializeResult(harness, "openclaw/0.125.0 (macOS; test)");
+
+    await expect(clientPromise).rejects.toThrow("codex app-server initialize timed out");
     expect(harness.process.stdin.destroyed).toBe(true);
   });
 
