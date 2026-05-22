@@ -154,9 +154,9 @@ export class ChatLog extends Container {
     if (existing) {
       this.removeChild(existing);
     }
-    const entry = this.createSystemMessage(text);
-    this.pendingSystemNotices.set(runId, entry);
-    this.append(entry);
+    const message = this.createSystemMessage(text);
+    this.pendingSystemNotices.set(runId, message.component);
+    this.append(message.component);
   }
 
   dismissPendingSystem(runId: string) {
