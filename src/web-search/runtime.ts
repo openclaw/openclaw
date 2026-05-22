@@ -456,6 +456,7 @@ export async function runWebSearch(params: RunWebSearchParams): Promise<RunWebSe
     try {
       const definition = candidate.createTool({
         config,
+        agentDir: params.agentDir,
         searchConfig: search as Record<string, unknown> | undefined,
         runtimeMetadata: runtimeWebSearch,
       });
