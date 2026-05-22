@@ -388,18 +388,20 @@ export async function executeXaiWebSearchProviderTool(
       apiKey: auth.apiKey,
     });
   } catch (error) {
-    if (auth.mode !== "oauth" || !auth.profileId || !isXaiUnauthorizedError(error)) {
+    if (!isXaiUnauthorizedError(error) || !auth.profileId) {
       throw error;
     }
-    const refreshed = await resolveXaiWebSearchAuth(ctx, searchConfig, {
-      forceRefresh: true,
-      profileId: auth.profileId,
-    });
-    if (refreshed?.apiKey && refreshed.apiKey !== auth.apiKey) {
-      return await runXaiWebSearch({
-        ...request,
-        apiKey: refreshed.apiKey,
+    if (auth.mode === "oauth") {
+      const refreshed = await resolveXaiWebSearchAuth(ctx, searchConfig, {
+        forceRefresh: true,
+        profileId: auth.profileId,
       });
+      if (refreshed?.apiKey && refreshed.apiKey !== auth.apiKey) {
+        return await runXaiWebSearch({
+          ...request,
+          apiKey: refreshed.apiKey,
+        });
+      }
     }
     const fallback = await resolveXaiWebSearchApiKeyFallback(ctx, searchConfig);
     if (!fallback?.apiKey || fallback.apiKey === auth.apiKey) {
