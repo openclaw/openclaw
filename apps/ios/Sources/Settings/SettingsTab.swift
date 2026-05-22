@@ -916,10 +916,12 @@ struct SettingsTab: View {
             }
         }
         if !trimmedBootstrapToken.isEmpty || !trimmedToken.isEmpty || !trimmedPassword.isEmpty {
-            self.pendingManualAuthOverride = GatewayConnectionController.ManualAuthOverride(
-                token: trimmedToken.isEmpty ? nil : trimmedToken,
-                bootstrapToken: trimmedBootstrapToken.isEmpty ? nil : trimmedBootstrapToken,
-                password: trimmedPassword.isEmpty ? nil : trimmedPassword)
+            self.pendingManualAuthOverride = GatewayConnectionController.ManualAuthOverride.normalized(
+                token: trimmedToken,
+                bootstrapToken: trimmedBootstrapToken,
+                password: trimmedPassword)
+        } else {
+            self.pendingManualAuthOverride = nil
         }
     }
 
@@ -1012,7 +1014,15 @@ struct SettingsTab: View {
 
         GatewayDiagnostics.log(
             "connect manual host=\(host) port=\(self.manualGatewayPort) tls=\(self.manualGatewayTLS)")
-        let authOverride = self.pendingManualAuthOverride
+        let authOverride = self.pendingManualAuthOverride.map { pending in
+            GatewayConnectionController.ManualAuthOverride.explicit(
+                token: self.gatewayToken,
+                bootstrapToken: pending.bootstrapToken,
+                password: self.gatewayPassword)
+        } ?? GatewayConnectionController.ManualAuthOverride.normalized(
+            token: self.gatewayToken,
+            bootstrapToken: nil,
+            password: self.gatewayPassword)
         self.pendingManualAuthOverride = nil
         await self.gatewayController.connectManual(
             host: host,

@@ -24,6 +24,41 @@ final class GatewayConnectionController {
         let token: String?
         let bootstrapToken: String?
         let password: String?
+
+        static func explicit(
+            token: String?,
+            bootstrapToken: String?,
+            password: String?) -> ManualAuthOverride
+        {
+            let trimmedToken = token?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            let trimmedBootstrapToken = bootstrapToken?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            let trimmedPassword = password?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            return ManualAuthOverride(
+                token: trimmedToken.isEmpty ? nil : trimmedToken,
+                bootstrapToken: trimmedBootstrapToken.isEmpty ? nil : trimmedBootstrapToken,
+                password: trimmedPassword.isEmpty ? nil : trimmedPassword)
+        }
+
+        static func normalized(
+            token: String?,
+            bootstrapToken: String?,
+            password: String?) -> ManualAuthOverride?
+        {
+            let override = ManualAuthOverride.explicit(
+                token: token,
+                bootstrapToken: bootstrapToken,
+                password: password)
+            guard override.token != nil || override.bootstrapToken != nil || override.password != nil
+            else { return nil }
+            return override
+        }
+    }
+
+    private struct PendingTrustConnect {
+        let url: URL
+        let stableID: String
+        let isManual: Bool
+        let authOverride: ManualAuthOverride?
     }
 
     struct TrustPrompt: Identifiable, Equatable {
@@ -48,7 +83,7 @@ final class GatewayConnectionController {
     private weak var appModel: NodeAppModel?
     private var didAutoConnect = false
     private var pendingServiceResolvers: [String: GatewayServiceResolver] = [:]
-    private var pendingTrustConnect: (url: URL, stableID: String, isManual: Bool)?
+    private var pendingTrustConnect: PendingTrustConnect?
 
     init(appModel: NodeAppModel, startDiscovery: Bool = true) {
         self.appModel = appModel
@@ -131,7 +166,11 @@ final class GatewayConnectionController {
             guard let fp = await self.probeTLSFingerprint(url: url) else {
                 return "Failed to read TLS fingerprint from discovered gateway."
             }
-            self.pendingTrustConnect = (url: url, stableID: stableID, isManual: false)
+            self.pendingTrustConnect = PendingTrustConnect(
+                url: url,
+                stableID: stableID,
+                isManual: false,
+                authOverride: nil)
             self.pendingTrustPrompt = TrustPrompt(
                 stableID: stableID,
                 gatewayName: gateway.name,
@@ -181,6 +220,10 @@ final class GatewayConnectionController {
             authOverride.map(\.bootstrapToken) ?? GatewaySettingsStore.loadGatewayBootstrapToken(instanceId: instanceId)
         let password =
             authOverride.map(\.password) ?? GatewaySettingsStore.loadGatewayPassword(instanceId: instanceId)
+        let pendingAuthOverride = authOverride ?? ManualAuthOverride.normalized(
+            token: token,
+            bootstrapToken: bootstrapToken,
+            password: password)
         let resolvedUseTLS = self.resolveManualUseTLS(host: host, useTLS: useTLS)
         guard let resolvedPort = self.resolveManualPort(host: host, port: port, useTLS: resolvedUseTLS)
         else { return }
@@ -194,7 +237,11 @@ final class GatewayConnectionController {
                         + "Remote gateways must use HTTPS/WSS."
                 return
             }
-            self.pendingTrustConnect = (url: url, stableID: stableID, isManual: true)
+            self.pendingTrustConnect = PendingTrustConnect(
+                url: url,
+                stableID: stableID,
+                isManual: true,
+                authOverride: pendingAuthOverride)
             self.pendingTrustPrompt = TrustPrompt(
                 stableID: stableID,
                 gatewayName: "\(host):\(resolvedPort)",
@@ -282,11 +329,14 @@ final class GatewayConnectionController {
             GatewaySettingsStore.saveLastGatewayConnectionDiscovered(stableID: pending.stableID, useTLS: true)
         }
 
-        let instanceId = UserDefaults.standard.string(forKey: "node.instanceId")?
-            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        let token = GatewaySettingsStore.loadGatewayToken(instanceId: instanceId)
-        let bootstrapToken = GatewaySettingsStore.loadGatewayBootstrapToken(instanceId: instanceId)
-        let password = GatewaySettingsStore.loadGatewayPassword(instanceId: instanceId)
+        let instanceId = GatewaySettingsStore.currentInstanceID()
+        let token =
+            pending.authOverride.map(\.token) ?? GatewaySettingsStore.loadGatewayToken(instanceId: instanceId)
+        let bootstrapToken =
+            pending.authOverride.map(\.bootstrapToken) ?? GatewaySettingsStore.loadGatewayBootstrapToken(
+                instanceId: instanceId)
+        let password =
+            pending.authOverride.map(\.password) ?? GatewaySettingsStore.loadGatewayPassword(instanceId: instanceId)
         let tlsParams = GatewayTLSParams(
             required: true,
             expectedFingerprint: prompt.fingerprintSha256,

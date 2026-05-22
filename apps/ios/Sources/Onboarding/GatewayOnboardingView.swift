@@ -220,7 +220,15 @@ private struct ManualEntryStep: View {
 
         self.connectingGatewayID = "manual"
         defer { self.connectingGatewayID = nil }
-        let authOverride = self.pendingManualAuthOverride
+        let authOverride = self.pendingManualAuthOverride.map { pending in
+            GatewayConnectionController.ManualAuthOverride.explicit(
+                token: self.manualToken,
+                bootstrapToken: pending.bootstrapToken,
+                password: self.manualPassword)
+        } ?? GatewayConnectionController.ManualAuthOverride.normalized(
+            token: self.manualToken,
+            bootstrapToken: nil,
+            password: self.manualPassword)
         self.pendingManualAuthOverride = nil
         await self.gatewayController.connectManual(
             host: host,
@@ -286,10 +294,12 @@ private struct ManualEntryStep: View {
             GatewaySettingsStore.saveGatewayBootstrapToken(trimmedBootstrapToken, instanceId: trimmedInstanceId)
         }
         if !trimmedBootstrapToken.isEmpty || !trimmedToken.isEmpty || !trimmedPassword.isEmpty {
-            self.pendingManualAuthOverride = GatewayConnectionController.ManualAuthOverride(
-                token: trimmedToken.isEmpty ? nil : trimmedToken,
-                bootstrapToken: trimmedBootstrapToken.isEmpty ? nil : trimmedBootstrapToken,
-                password: trimmedPassword.isEmpty ? nil : trimmedPassword)
+            self.pendingManualAuthOverride = GatewayConnectionController.ManualAuthOverride.normalized(
+                token: trimmedToken,
+                bootstrapToken: trimmedBootstrapToken,
+                password: trimmedPassword)
+        } else {
+            self.pendingManualAuthOverride = nil
         }
 
         self.setupStatusText = "Setup code applied."
