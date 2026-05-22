@@ -1,4 +1,4 @@
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
@@ -108,8 +108,25 @@ async function waitForClose(child: ReturnType<typeof spawn>) {
 function isProcessAlive(pid: number) {
   try {
     process.kill(pid, 0);
-    return true;
+    return !isZombieProcess(pid);
   } catch {
     return false;
   }
+}
+
+function isZombieProcess(pid: number) {
+  if (process.platform === "win32") {
+    return false;
+  }
+
+  const result = spawnSync("ps", ["-o", "stat=", "-p", String(pid)], {
+    encoding: "utf8",
+  });
+
+  if (result.status !== 0) {
+    return false;
+  }
+
+  const stat = (result.stdout ?? "").trim();
+  return stat.startsWith("Z");
 }
