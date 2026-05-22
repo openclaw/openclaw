@@ -8,6 +8,7 @@ import {
   normalizeChannelProgressDraftLineIdentity,
   resolveChannelProgressDraftMaxLines,
   resolveChannelStreamingBlockEnabled,
+  resolveChannelStreamingProgressCommentary,
   resolveChannelStreamingPreviewToolProgress,
   resolveChannelStreamingSuppressDefaultToolProgressMessages,
 } from "openclaw/plugin-sdk/channel-outbound";
@@ -81,6 +82,8 @@ export function createDiscordDraftPreviewController(params: {
   let finalReplyDelivered = false;
   const previewToolProgressEnabled =
     Boolean(draftStream) && resolveChannelStreamingPreviewToolProgress(params.discordConfig);
+  const commentaryProgressEnabled =
+    Boolean(draftStream) && resolveChannelStreamingProgressCommentary(params.discordConfig);
   const suppressDefaultToolProgressMessages =
     Boolean(draftStream) &&
     resolveChannelStreamingSuppressDefaultToolProgressMessages(params.discordConfig, {
@@ -140,6 +143,7 @@ export function createDiscordDraftPreviewController(params: {
   return {
     draftStream,
     previewToolProgressEnabled,
+    commentaryProgressEnabled,
     suppressDefaultToolProgressMessages,
     get isProgressMode() {
       return discordStreamMode === "progress";
@@ -267,6 +271,33 @@ export function createDiscordDraftPreviewController(params: {
       if (alreadyStarted && progressDraftGate.hasStarted) {
         await renderProgressDraft();
       }
+    },
+    async pushCommentaryProgress(text?: string, options?: { itemId?: string }) {
+      if (!draftStream || discordStreamMode !== "progress" || !commentaryProgressEnabled || !text) {
+        return;
+      }
+      if (finalReplyStarted || finalReplyDelivered) {
+        return;
+      }
+      const normalized = normalizeCommentaryProgressText(text);
+      if (!normalized) {
+        return;
+      }
+      const lineId = options?.itemId?.trim()
+        ? `commentary:${options.itemId.trim()}`
+        : `commentary:${normalized}`;
+      const line: ChannelProgressDraftLine = {
+        id: lineId,
+        kind: "item",
+        text: normalized,
+        label: "Commentary",
+        prefix: false,
+      };
+      previewToolProgressLines = mergeChannelProgressDraftLine(previewToolProgressLines, line, {
+        maxLines: resolveChannelProgressDraftMaxLines(params.discordConfig),
+      });
+      await progressDraftGate.startNow();
+      await renderProgressDraft();
     },
     resolvePreviewFinalText(text?: string) {
       if (typeof text !== "string") {
@@ -403,6 +434,24 @@ function normalizeReasoningProgressLine(text: string): string {
     .replace(/^\s*(?:>\s*)?(?:Reasoning:|Thinking\.{0,3})\s*/i, "")
     .replace(/\s+/g, " ")
     .trim();
+}
+
+function normalizeCommentaryProgressText(text: string): string {
+  const cleaned = stripInlineDirectiveTagsForDelivery(text).text.trim();
+  if (!cleaned || isSilentCommentaryProgressText(cleaned)) {
+    return "";
+  }
+  return cleaned
+    .split(/\r?\n/u)
+    .map((line) => line.replace(/\s+/g, " ").trim())
+    .filter(Boolean)
+    .map((line) => `_${line}_`)
+    .join("\n");
+}
+
+function isSilentCommentaryProgressText(text: string): boolean {
+  const normalized = text.replace(/^[\s*_`~]+|[\s*_`~]+$/gu, "").trim();
+  return /^NO_REPLY$/iu.test(normalized);
 }
 
 function mergeReasoningProgressText(
