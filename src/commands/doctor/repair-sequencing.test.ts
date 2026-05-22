@@ -4,6 +4,7 @@ import { runDoctorRepairSequence } from "./repair-sequencing.js";
 
 const mocks = vi.hoisted(() => ({
   applyPluginAutoEnable: vi.fn(),
+  cleanupLegacyPluginDependencyState: vi.fn(),
   ensureAuthProfileStore: vi.fn(),
   evaluateStoredCredentialEligibility: vi.fn(),
   getInstalledPluginRecord: vi.fn(),
@@ -183,10 +184,7 @@ vi.mock("./shared/exec-safe-bins.js", () => ({
 }));
 
 vi.mock("./shared/plugin-dependency-cleanup.js", () => ({
-  cleanupLegacyPluginDependencyState: async () => ({
-    changes: [],
-    warnings: [],
-  }),
+  cleanupLegacyPluginDependencyState: mocks.cleanupLegacyPluginDependencyState,
 }));
 
 describe("doctor repair sequencing", () => {
@@ -221,6 +219,10 @@ describe("doctor repair sequencing", () => {
       config: cfg,
       changes: [],
     }));
+    mocks.cleanupLegacyPluginDependencyState.mockResolvedValue({
+      changes: [],
+      warnings: [],
+    });
     mocks.maybeRepairStaleManagedNpmBundledPlugins.mockReturnValue(false);
     mocks.repairMissingConfiguredPluginInstalls.mockResolvedValue({
       changes: [],
@@ -378,6 +380,14 @@ describe("doctor repair sequencing", () => {
       cfg: {},
       prompter: { confirmAutoFix: expect.any(Function) },
       emitNotes: false,
+      env: process.env,
+    });
+    expect(mocks.repairStaleOAuthProfileShadows).toHaveBeenCalledWith({
+      cfg: {},
+      env: process.env,
+    });
+    // Verify all 3 parallel branches were exercised
+    expect(mocks.cleanupLegacyPluginDependencyState).toHaveBeenCalledWith({
       env: process.env,
     });
     expect(result.changeNotes).toEqual([
