@@ -413,7 +413,7 @@ That stages grounded durable candidates into the short-term dreaming store while
     - short cooldowns (rate limits/timeouts/auth failures)
     - longer disables (billing/credit failures)
 
-    Legacy Codex OAuth profiles whose tokens live in macOS Keychain (older onboarding before the file-based sidecar layout) are not picked up by the embedded runtime path — that path runs with `allowKeychainPrompt: false` and cannot trigger a Keychain prompt. Run `openclaw doctor --fix` once to migrate Keychain-backed legacy tokens inline into `auth-profiles.json`; after that, embedded turns (Telegram, cron, sub-agent dispatch) resolve them like any other inline OAuth profile.
+    Legacy Codex OAuth profiles backed by encrypted sidecar files migrate back to inline `auth-profiles.json` credentials during `openclaw doctor --fix`. On macOS, the first interactive `openclaw <anything>` invocation also auto-detects and offers to run that same migration so users whose sidecar seed lives only in the Keychain self-heal without knowing they had to run doctor — the embedded runtime path itself still runs with `allowKeychainPrompt: false` and cannot trigger a Keychain prompt from inside Telegram/cron/sub-agent dispatch. Declining the interactive offer cools the prompt off for ~24h. Headless paths skip the offer entirely and instead log a one-time warning pointing at `openclaw doctor --fix`; set `OPENCLAW_AUTO_MIGRATE_LEGACY_OAUTH_SIDECAR=0` to suppress the interactive offer too.
 
   </Accordion>
   <Accordion title="6. Hooks model validation">

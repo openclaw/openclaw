@@ -665,6 +665,16 @@ export async function runCli(argv: string[] = process.argv) {
       return;
     }
 
+    if (!isHelpOrVersionInvocation) {
+      const { maybeAutoMigrateLegacyOAuthSidecarOnInteractiveCli } = await startupTrace.measure(
+        "auto-migrate-legacy-oauth-sidecar-import",
+        () => import("./auto-migrate-legacy-oauth-sidecar.js"),
+      );
+      await startupTrace.measure("auto-migrate-legacy-oauth-sidecar", () =>
+        maybeAutoMigrateLegacyOAuthSidecarOnInteractiveCli({ argv: normalizedArgv }),
+      );
+    }
+
     const { tryRouteCli } = await startupTrace.measure("route-import", () => import("./route.js"));
     if (await startupTrace.measure("route", () => tryRouteCli(normalizedArgv))) {
       return;
