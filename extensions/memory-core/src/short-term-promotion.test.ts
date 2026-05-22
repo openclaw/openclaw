@@ -1155,6 +1155,7 @@ describe("short-term promotion", () => {
       "## Tagesnotizen\n## Entscheidungen",
       "## Tagesnotizen - ## Entscheidungen -",
       "## Tagesnotizen ## Entscheidungen",
+      "## Tagesnotizen ## Entscheidungen ## Aufgaben",
       "- ## Entscheidungen",
     ]) {
       expect(testing.isUnpromotableShortTermSnippet(snippet)).toBe(true);
@@ -1167,6 +1168,8 @@ describe("short-term promotion", () => {
     expect(testing.isUnpromotableShortTermSnippet("- ## Decision: Move backups to S3")).toBe(false);
     expect(testing.isUnpromotableShortTermSnippet("## Decision move backups to S3")).toBe(false);
     expect(testing.isUnpromotableShortTermSnippet("- ## Decision move backups to S3")).toBe(false);
+    expect(testing.isUnpromotableShortTermSnippet("## API keys rotated")).toBe(false);
+    expect(testing.isUnpromotableShortTermSnippet("- ## VPN outage fix")).toBe(false);
   });
 
   it("does not record placeholder-only grounded candidates for promotion", async () => {
@@ -1209,7 +1212,7 @@ describe("short-term promotion", () => {
       await writeDailyMemoryNote(workspaceDir, "2026-04-18", [
         "## Tagesnotizen",
         "- ## Entscheidungen",
-        "- ## Decision move backups to S3",
+        "- ## VPN outage fix",
       ]);
       await fs.writeFile(
         resolveShortTermRecallStorePath(workspaceDir),
@@ -1219,7 +1222,7 @@ describe("short-term promotion", () => {
             updatedAt: "2026-04-18T10:00:00.000Z",
             entries: {
               placeholder: entry("- ## Entscheidungen", 2),
-              durable: entry("- ## Decision move backups to S3", 3),
+              durable: entry("- ## VPN outage fix", 3),
             },
           },
           null,
@@ -1235,7 +1238,7 @@ describe("short-term promotion", () => {
         minUniqueQueries: 0,
       });
       expect(ranked).toHaveLength(1);
-      expect(ranked[0]?.snippet).toBe("- ## Decision move backups to S3");
+      expect(ranked[0]?.snippet).toBe("- ## VPN outage fix");
 
       const applied = await applyShortTermPromotions({
         workspaceDir,
@@ -1247,7 +1250,7 @@ describe("short-term promotion", () => {
 
       expect(applied.applied).toBe(1);
       const memoryText = await fs.readFile(path.join(workspaceDir, "MEMORY.md"), "utf-8");
-      expect(memoryText).toContain("- ## Decision move backups to S3");
+      expect(memoryText).toContain("- ## VPN outage fix");
       expect(memoryText).not.toContain("- ## Entscheidungen");
     });
   });

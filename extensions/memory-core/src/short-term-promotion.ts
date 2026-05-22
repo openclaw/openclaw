@@ -336,13 +336,15 @@ function isMarkdownSkeletonSnippet(raw: string): boolean {
       continue;
     }
     if (/^#{1,6}\s+\S/.test(withoutLeadingMarkers)) {
-      const headingBody = withoutLeadingMarkers
-        .replace(/^#{1,6}\s+/, "")
-        .replace(/#{1,6}\s*/g, " ")
-        .trim();
-      const headingWords = headingBody.match(/[\p{L}\p{N}][\p{L}\p{N}'-]*/gu) ?? [];
-      // Short heading-only snippets are usually template scaffolding; longer headings carry memory text.
-      if (/:\s*\S/.test(headingBody) || headingWords.length >= 4) {
+      const headingBody = withoutLeadingMarkers.replace(/^#{1,6}\s+/, "").trim();
+      if (/(?:^|\s)#{1,6}\s+\S/.test(headingBody)) {
+        hasPlaceholderLine = true;
+        continue;
+      }
+      const headingWords =
+        headingBody.replace(/#{1,6}\s*/g, " ").match(/[\p{L}\p{N}][\p{L}\p{N}'-]*/gu) ?? [];
+      // Short single headings are usually template scaffolding; three or more words carry memory text.
+      if (/:\s*\S/.test(headingBody) || headingWords.length >= 3) {
         return false;
       }
       hasPlaceholderLine = true;
