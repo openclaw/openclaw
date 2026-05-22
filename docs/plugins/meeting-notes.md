@@ -114,6 +114,16 @@ Artifacts are stored under the OpenClaw state directory:
 - `meeting-notes/<session>/summary.json`
 - `meeting-notes/<session>/summary.md`
 
+Use the read-only CLI to find or print stored summaries:
+
+```bash
+openclaw meeting-notes list
+openclaw meeting-notes show <session>
+openclaw meeting-notes path <session>
+```
+
+See [Meeting Notes CLI](/cli/meeting-notes) for the full command reference.
+
 For long meetings, utterances are appended to `transcript.jsonl` as they arrive.
 Summary generation reads a bounded window controlled by
 `plugins.entries.meeting-notes.config.maxUtterances` (default: `2000`) so a

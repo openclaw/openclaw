@@ -33,6 +33,10 @@ async function createHarness(stateDir: string, pluginConfig: Record<string, unkn
   const providers: unknown[] = [];
   const tools: AnyAgentTool[] = [];
   const services: OpenClawPluginService[] = [];
+  const cliRegistrars: Array<{
+    registrar: unknown;
+    opts: unknown;
+  }> = [];
   const api = createTestPluginApi({
     pluginConfig,
     runtime: {
@@ -43,10 +47,11 @@ async function createHarness(stateDir: string, pluginConfig: Record<string, unkn
     registerMeetingNotesSourceProvider: (provider) => providers.push(provider),
     registerTool: (tool) => tools.push(tool as AnyAgentTool),
     registerService: (service) => services.push(service),
+    registerCli: (registrar, opts) => cliRegistrars.push({ registrar, opts }),
   });
   const { default: meetingNotesPlugin } = await import("./index.js");
   meetingNotesPlugin.register(api);
-  return { providers, services, tool: tools[0] };
+  return { cliRegistrars, providers, services, tool: tools[0] };
 }
 
 describe("meeting-notes plugin", () => {
@@ -56,10 +61,13 @@ describe("meeting-notes plugin", () => {
 
   it("registers the manual transcript source and tool", async () => {
     const stateDir = await makeStateDir();
-    const { providers, tool } = await createHarness(stateDir);
+    const { cliRegistrars, providers, tool } = await createHarness(stateDir);
 
     expect(providers).toHaveLength(1);
     expect(tool?.name).toBe("meeting_notes");
+    expect(cliRegistrars[0]?.opts).toMatchObject({
+      descriptors: [{ name: "meeting-notes", hasSubcommands: true }],
+    });
   });
 
   it("imports a speaker transcript and writes summary artifacts", async () => {

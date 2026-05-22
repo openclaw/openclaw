@@ -11,6 +11,7 @@ title: "meeting-notes"
 - Startup activated by default
 - Contracts: `tools`, `meetingNotesSourceProviders`
 - Tool: `meeting_notes`
+- CLI: `openclaw meeting-notes`
 - Source provider: `manual-transcript`
 - Config: `enabled`, `maxUtterances`, `autoStart`
 

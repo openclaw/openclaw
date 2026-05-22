@@ -9,6 +9,21 @@ export default definePluginEntry({
   register(api) {
     api.registerMeetingNotesSourceProvider(manualTranscriptSourceProvider);
     api.registerTool(createMeetingNotesTool(api), { name: "meeting_notes" });
+    api.registerCli(
+      async ({ program }) => {
+        const { registerMeetingNotesCli } = await import("./src/cli.js");
+        registerMeetingNotesCli(program);
+      },
+      {
+        descriptors: [
+          {
+            name: "meeting-notes",
+            description: "Inspect stored meeting notes",
+            hasSubcommands: true,
+          },
+        ],
+      },
+    );
     api.registerService(createMeetingNotesAutoStartService(api));
   },
 });

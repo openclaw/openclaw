@@ -1,7 +1,9 @@
 {
   "id": "meeting-notes",
+  "enabledByDefault": true,
   "activation": {
-    "onStartup": true
+    "onStartup": true,
+    "onCommands": ["meeting-notes"]
   },
   "name": "Meeting Notes",
   "description": "Capture meeting transcripts from channel-owned sources and write summaries.",
@@ -9,6 +11,12 @@
     "meetingNotesSourceProviders": ["manual-transcript"],
     "tools": ["meeting_notes"]
   },
+  "commandAliases": [
+    {
+      "name": "meeting-notes",
+      "kind": "cli"
+    }
+  ],
   "configSchema": {
     "type": "object",
     "additionalProperties": false,
