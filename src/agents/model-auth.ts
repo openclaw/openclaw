@@ -13,6 +13,7 @@ import {
   shouldDeferProviderSyntheticProfileAuthWithPlugin,
 } from "../plugins/provider-runtime.js";
 import { resolveOwningPluginIdsForProvider } from "../plugins/providers.js";
+import type { ProviderAuthEvidence } from "../secrets/provider-env-vars.js";
 import { resolveDefaultSecretProviderAlias } from "../secrets/ref-contract.js";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -349,6 +350,11 @@ export function hasRuntimeAvailableProviderAuth(params: {
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
   allowPluginSyntheticAuth?: boolean;
+  envAuthLookup?: {
+    aliasMap?: Readonly<Record<string, string>>;
+    candidateMap?: Readonly<Record<string, readonly string[]>>;
+    authEvidenceMap?: Readonly<Record<string, readonly ProviderAuthEvidence[]>>;
+  };
 }): boolean {
   const provider = normalizeProviderId(params.provider);
   const authOverride = resolveProviderAuthOverride(params.cfg, provider);
@@ -362,6 +368,9 @@ export function hasRuntimeAvailableProviderAuth(params: {
     resolveEnvApiKey(provider, params.env, {
       config: params.cfg,
       workspaceDir: params.workspaceDir,
+      aliasMap: params.envAuthLookup?.aliasMap,
+      candidateMap: params.envAuthLookup?.candidateMap,
+      authEvidenceMap: params.envAuthLookup?.authEvidenceMap,
     })
   ) {
     return true;
@@ -774,7 +783,11 @@ export async function resolveApiKeyForProvider(params: {
     return deferredAuthProfileResult;
   }
 
-  const syntheticLocalAuth = resolveSyntheticLocalProviderAuth({ cfg, provider, modelApi: params.modelApi });
+  const syntheticLocalAuth = resolveSyntheticLocalProviderAuth({
+    cfg,
+    provider,
+    modelApi: params.modelApi,
+  });
   if (syntheticLocalAuth) {
     return syntheticLocalAuth;
   }
