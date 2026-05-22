@@ -1,6 +1,10 @@
 import fs from "node:fs";
 import { describe, expect, it } from "vitest";
 import { parse } from "yaml";
+import {
+  collectPnpmLockViolations,
+  parsePnpmPackageKey,
+} from "../scripts/generate-npm-shrinkwrap.mjs";
 
 type PnpmBuildConfig = {
   allowBuilds?: Record<string, boolean>;
@@ -25,6 +29,20 @@ type NpmShrinkwrap = {
 
 function readJson(filePath: string): unknown {
   return JSON.parse(fs.readFileSync(filePath, "utf8")) as unknown;
+}
+
+function collectPnpmLockPackages(): Set<string> {
+  const lockfile = parse(fs.readFileSync("pnpm-lock.yaml", "utf8")) as {
+    packages?: Record<string, unknown>;
+  };
+  return new Set(
+    Object.keys(lockfile.packages ?? {})
+      .map((packageKey) => {
+        const parsed = parsePnpmPackageKey(packageKey);
+        return parsed ? `${parsed.name}@${parsed.version}` : null;
+      })
+      .filter((packageKey) => packageKey !== null),
+  );
 }
 
 describe("package manager build policy", () => {
@@ -53,6 +71,24 @@ describe("package manager build policy", () => {
       expect(shrinkwrap.packages?.[`node_modules/${packageName}`]?.version).toBe(
         String(workspace.overrides?.[packageName]),
       );
+    }
+  });
+
+  it("keeps npm shrinkwrap package versions inside the pnpm lock graph", () => {
+    const pnpmLockPackages = collectPnpmLockPackages();
+    const shrinkwrapPaths = [
+      "npm-shrinkwrap.json",
+      ...fs
+        .readdirSync("extensions", { withFileTypes: true })
+        .filter((entry) => entry.isDirectory())
+        .map((entry) => `extensions/${entry.name}/npm-shrinkwrap.json`)
+        .filter((shrinkwrapPath) => fs.existsSync(shrinkwrapPath))
+        .sort((left, right) => left.localeCompare(right)),
+    ];
+
+    for (const shrinkwrapPath of shrinkwrapPaths) {
+      const shrinkwrap = readJson(shrinkwrapPath);
+      expect(collectPnpmLockViolations(shrinkwrap, pnpmLockPackages), shrinkwrapPath).toEqual([]);
     }
   });
 

@@ -546,6 +546,32 @@ afterEach(() => {
 });
 
 describe("chat loading skeleton", () => {
+  it("renders realtime Talk transcript as ordered voice turns", () => {
+    const container = renderChatView({
+      realtimeTalkActive: true,
+      realtimeTalkConversation: [
+        { id: "u1", role: "user", text: "Turn off the lights", isStreaming: false },
+        { id: "a1", role: "assistant", text: "Checking", isStreaming: true },
+        { id: "u2", role: "user", text: "Second request", isStreaming: false },
+      ],
+    });
+
+    const turns = [...container.querySelectorAll(".agent-chat__voice-turn")];
+    expect(turns.map((turn) => turn.getAttribute("data-role"))).toEqual([
+      "user",
+      "assistant",
+      "user",
+    ]);
+    expect(turns.map((turn) => turn.textContent?.replace(/\s+/g, " ").trim())).toEqual([
+      "You Turn off the lights",
+      "Val Checking",
+      "You Second request",
+    ]);
+    expect(container.querySelector(".chat-thread-inner .agent-chat__voice-turns")).not.toBeNull();
+    expect(container.querySelector(".agent-chat__input .agent-chat__voice-turns")).toBeNull();
+    expect(container.querySelector(".agent-chat__welcome")).toBeNull();
+  });
+
   it("shows the skeleton while the initial history load has no rendered content", () => {
     const container = renderChatView({ loading: true });
 
@@ -1013,6 +1039,35 @@ describe("chat slash menu accessibility", () => {
 });
 
 describe("chat attachment picker", () => {
+  it("converts pasted data image text into an attachment", () => {
+    const onAttachmentsChange = vi.fn();
+    const container = renderChatView({ onAttachmentsChange });
+    const textarea = requireElement(
+      container,
+      ".agent-chat__composer-combobox > textarea",
+      "composer textarea",
+    );
+    const base64 = btoa("png");
+    const dataUrl = ` data:image/PNG;base64,${base64.slice(0, 2)}\n${base64.slice(2)} `;
+    const event = new Event("paste", { bubbles: true, cancelable: true });
+    Object.defineProperty(event, "clipboardData", {
+      value: {
+        items: { length: 0 },
+        getData: (type: string) => (type === "text/plain" ? dataUrl : ""),
+      },
+    });
+
+    const allowed = textarea.dispatchEvent(event);
+
+    expect(allowed).toBe(false);
+    const attachments = requireFirstAttachmentsChange(onAttachmentsChange);
+    expect(attachments).toHaveLength(1);
+    expect(attachments[0]?.fileName).toBe("pasted-image.png");
+    expect(attachments[0]?.mimeType).toBe("image/png");
+    expect(attachments[0]?.sizeBytes).toBe(3);
+    expect(getChatAttachmentDataUrl(attachments[0])).toBe(`data:image/png;base64,${base64}`);
+  });
+
   it("accepts and previews non-video file attachments", async () => {
     const onAttachmentsChange = vi.fn();
     const container = renderChatView({ onAttachmentsChange });
@@ -1618,6 +1673,48 @@ describe("chat session controls", () => {
     expect(thinkingSelect?.value).toBe("");
     expect(thinkingSelect?.options[0]?.textContent?.trim()).toBe("Inherited: Adaptive");
     expect(thinkingSelect?.title).toBe("Inherited: Adaptive");
+  });
+
+  it("disables thinking for known non-reasoning models without duplicate off options", () => {
+    const { state } = createChatHeaderState({
+      model: "mistral:v0.3",
+      modelProvider: "ollama",
+      models: [
+        {
+          id: "mistral:v0.3",
+          name: "Mistral",
+          provider: "ollama",
+          reasoning: false,
+        },
+      ],
+    });
+    const session = state.sessionsResult!.sessions[0];
+    state.sessionsResult = {
+      ...state.sessionsResult!,
+      defaults: {
+        ...state.sessionsResult!.defaults,
+        thinkingLevels: [{ id: "off", label: "off" }],
+      },
+      sessions: [
+        {
+          ...session,
+          thinkingLevel: "off",
+          thinkingLevels: [{ id: "off", label: "off" }],
+        },
+      ],
+    };
+    const container = document.createElement("div");
+    render(renderChatSessionSelect(state), container);
+
+    const thinkingSelect = container.querySelector<HTMLSelectElement>(
+      'select[data-chat-thinking-select="true"]',
+    );
+
+    expect(thinkingSelect?.disabled).toBe(true);
+    expect([...(thinkingSelect?.options ?? [])].map((option) => option.value)).toEqual([""]);
+    expect(
+      [...(thinkingSelect?.options ?? [])].map((option) => option.textContent?.trim()),
+    ).toEqual(["Inherited: Off"]);
   });
 
   it("always renders full thinking labels", () => {

@@ -117,6 +117,7 @@ runs:
         if [ -n "${PNPM_CONFIG_MODULES_DIR:-}" ]; then
           rm -rf node_modules
           ln -s "$PNPM_CONFIG_MODULES_DIR" node_modules
+          ln -sfn . "$PNPM_CONFIG_MODULES_DIR/node_modules"
         fi
 
     - name: Save pnpm store cache

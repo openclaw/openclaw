@@ -183,6 +183,48 @@ function Resolve-PortableNodeDownload {
     }
 }
 
+function Expand-PortableNodeArchive {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$ZipPath,
+        [Parameter(Mandatory = $true)]
+        [string]$DestinationPath
+    )
+
+    $tarCommand = Get-Command tar -ErrorAction SilentlyContinue
+    if ($tarCommand -and $tarCommand.Source) {
+        New-Item -ItemType Directory -Force -Path $DestinationPath | Out-Null
+        & $tarCommand.Source -xf $ZipPath -C $DestinationPath --strip-components 1
+        if ($LASTEXITCODE -eq 0) {
+            return
+        }
+
+        $tarExitCode = $LASTEXITCODE
+        if (Test-Path $DestinationPath) {
+            Remove-Item -Recurse -Force $DestinationPath
+        }
+        Write-Host "[!] tar extraction failed with exit code $tarExitCode; trying .NET zip extraction." -ForegroundColor Yellow
+    }
+
+    $fallbackExtract = Join-Path (Split-Path -Parent $DestinationPath) ("portable-node-extract-" + [guid]::NewGuid().ToString("N"))
+    try {
+        Add-Type -AssemblyName System.IO.Compression.FileSystem
+        [System.IO.Compression.ZipFile]::ExtractToDirectory($ZipPath, $fallbackExtract)
+
+        $nodeDir = Get-ChildItem -Path $fallbackExtract -Directory |
+            Where-Object { Test-Path (Join-Path $_.FullName "node.exe") } |
+            Select-Object -First 1
+        if (-not $nodeDir) {
+            throw "Node.js archive did not contain node.exe."
+        }
+        Copy-Item -LiteralPath $nodeDir.FullName -Destination $DestinationPath -Recurse -Force
+    } finally {
+        if (Test-Path $fallbackExtract) {
+            Remove-Item -Recurse -Force $fallbackExtract
+        }
+    }
+}
+
 function Install-PortableNode {
     if (Use-PortableNodeIfPresent) {
         Ensure-PortableNodeOnUserPath
@@ -199,37 +241,19 @@ function Install-PortableNode {
     $portableRoot = Get-PortableNodeRoot
     $portableParent = Split-Path -Parent $portableRoot
     $tmpZip = Join-Path $env:TEMP $download.Name
-    $tmpExtract = Join-Path $env:TEMP ("openclaw-portable-node-" + [guid]::NewGuid().ToString("N"))
 
     New-Item -ItemType Directory -Force -Path $portableParent | Out-Null
     if (Test-Path $portableRoot) {
         Remove-Item -Recurse -Force $portableRoot
     }
-    if (Test-Path $tmpExtract) {
-        Remove-Item -Recurse -Force $tmpExtract
-    }
-    New-Item -ItemType Directory -Force -Path $tmpExtract | Out-Null
 
     try {
         Write-Host "  Downloading Node.js $($download.Version)..." -ForegroundColor Gray
         Invoke-WebRequest -UseBasicParsing -Uri $download.Url -OutFile $tmpZip
-        Expand-Archive -Path $tmpZip -DestinationPath $tmpExtract -Force
-
-        $nodeDir = Get-ChildItem -Path $tmpExtract -Directory |
-            Where-Object { Test-Path (Join-Path $_.FullName "node.exe") } |
-            Select-Object -First 1
-        if (-not $nodeDir) {
-            throw "Node.js archive did not contain node.exe."
-        }
-
-        New-Item -ItemType Directory -Force -Path $portableRoot | Out-Null
-        Move-Item -Path (Join-Path $nodeDir.FullName "*") -Destination $portableRoot -Force
+        Expand-PortableNodeArchive -ZipPath $tmpZip -DestinationPath $portableRoot
     } finally {
         if (Test-Path $tmpZip) {
             Remove-Item -Force $tmpZip
-        }
-        if (Test-Path $tmpExtract) {
-            Remove-Item -Recurse -Force $tmpExtract
         }
     }
 
@@ -365,8 +389,7 @@ function Add-ToUserPath {
 }
 
 function Get-PortableGitRoot {
-    $base = Join-Path $env:LOCALAPPDATA "OpenClaw\deps"
-    return (Join-Path $base "portable-git")
+    return (Join-Path (Get-OpenClawDepsRoot) "portable-git")
 }
 
 function Get-PortableGitCommandPath {
@@ -390,20 +413,41 @@ function Use-PortableGitIfPresent {
         return $false
     }
 
-    $portableRoot = Get-PortableGitRoot
-    foreach ($pathEntry in @(
-        (Join-Path $portableRoot "mingw64\bin"),
-        (Join-Path $portableRoot "usr\bin"),
-        (Split-Path -Parent $gitExe)
-    )) {
-        if (Test-Path $pathEntry) {
-            Add-ToProcessPath $pathEntry
-        }
+    foreach ($pathEntry in (Get-PortableGitPathEntries)) {
+        Add-ToProcessPath $pathEntry
     }
     if (Check-Git) {
         return $true
     }
     return $false
+}
+
+function Get-PortableGitPathEntries {
+    $gitExe = Get-PortableGitCommandPath
+    if (-not $gitExe) {
+        return @()
+    }
+
+    $portableRoot = Get-PortableGitRoot
+    $pathEntries = @(
+        (Join-Path $portableRoot "mingw64\bin"),
+        (Join-Path $portableRoot "usr\bin"),
+        (Split-Path -Parent $gitExe)
+    )
+    return ($pathEntries | Where-Object { Test-Path $_ } | Select-Object -Unique)
+}
+
+function Ensure-PortableGitOnUserPath {
+    $added = @()
+    foreach ($pathEntry in (Get-PortableGitPathEntries)) {
+        if (Add-ToUserPath $pathEntry) {
+            $added += $pathEntry
+        }
+    }
+
+    if ($added.Count -gt 0) {
+        Write-Host "[!] Added user-local Git to user PATH (restart terminal if git or git-backed updates are not found)" -ForegroundColor Yellow
+    }
 }
 
 function Resolve-PortableGitDownload {
@@ -434,6 +478,7 @@ function Resolve-PortableGitDownload {
 
 function Install-PortableGit {
     if (Use-PortableGitIfPresent) {
+        Ensure-PortableGitOnUserPath
         $portableVersion = (& git --version 2>$null)
         if ($portableVersion) {
             Write-Host "[OK] User-local Git already available: $portableVersion" -ForegroundColor Green
@@ -475,6 +520,7 @@ function Install-PortableGit {
     if (-not (Use-PortableGitIfPresent)) {
         throw "Portable Git bootstrap completed, but git is still unavailable."
     }
+    Ensure-PortableGitOnUserPath
 
     $portableVersion = (& git --version 2>$null)
     Write-Host "[OK] User-local Git ready: $portableVersion" -ForegroundColor Green
@@ -482,7 +528,10 @@ function Install-PortableGit {
 
 function Ensure-Git {
     if (Check-Git) { return $true }
-    if (Use-PortableGitIfPresent) { return $true }
+    if (Use-PortableGitIfPresent) {
+        Ensure-PortableGitOnUserPath
+        return $true
+    }
     try {
         Install-PortableGit
         if (Check-Git) {
@@ -631,17 +680,81 @@ function Ensure-OpenClawOnPath {
     return $false
 }
 
+function Get-RepoPnpmVersion {
+    param([string]$RepoDir)
+
+    if ([string]::IsNullOrWhiteSpace($RepoDir)) {
+        return $null
+    }
+
+    $packageJsonPath = Join-Path $RepoDir "package.json"
+    if (-not (Test-Path $packageJsonPath)) {
+        return $null
+    }
+
+    try {
+        $packageJson = Get-Content -LiteralPath $packageJsonPath -Raw | ConvertFrom-Json
+        if ($packageJson.packageManager -match '^pnpm@(?<version>[^+]+)') {
+            return $Matches["version"]
+        }
+        if ($packageJson.devEngines -and $packageJson.devEngines.packageManager) {
+            $packageManager = $packageJson.devEngines.packageManager
+            if ($packageManager.name -eq "pnpm" -and -not [string]::IsNullOrWhiteSpace($packageManager.version)) {
+                return $packageManager.version
+            }
+        }
+    } catch {
+        return $null
+    }
+
+    return $null
+}
+
+function Test-PnpmCommandMatchesVersion {
+    param(
+        [string]$PnpmVersion,
+        [string]$RepoDir
+    )
+
+    $pnpmCommand = Get-PnpmCommandPath
+    if (-not $pnpmCommand) {
+        return $false
+    }
+    if ([string]::IsNullOrWhiteSpace($PnpmVersion)) {
+        return $true
+    }
+
+    $pushedLocation = $false
+    try {
+        if (-not [string]::IsNullOrWhiteSpace($RepoDir) -and (Test-Path $RepoDir)) {
+            Push-Location -LiteralPath $RepoDir
+            $pushedLocation = $true
+        }
+        $currentVersion = (& $pnpmCommand --version 2>$null)
+        return ($LASTEXITCODE -eq 0 -and $currentVersion -and $currentVersion.Trim() -eq $PnpmVersion)
+    } finally {
+        if ($pushedLocation) {
+            Pop-Location
+        }
+    }
+}
+
 function Ensure-Pnpm {
-    if (Get-PnpmCommandPath) {
+    param([string]$RepoDir)
+
+    $pnpmVersion = Get-RepoPnpmVersion -RepoDir $RepoDir
+    $pnpmSpec = if ([string]::IsNullOrWhiteSpace($pnpmVersion)) { "pnpm@latest" } else { "pnpm@$pnpmVersion" }
+
+    if (Test-PnpmCommandMatchesVersion -PnpmVersion $pnpmVersion -RepoDir $RepoDir) {
         return
     }
     $corepackCommand = Get-CorepackCommandPath
     if ($corepackCommand) {
         try {
             & $corepackCommand enable | Out-Null
-            & $corepackCommand prepare pnpm@latest --activate | Out-Null
-            if (Get-PnpmCommandPath) {
-                Write-Host "[OK] pnpm installed via corepack" -ForegroundColor Green
+            & $corepackCommand prepare $pnpmSpec --activate | Out-Null
+            if (Test-PnpmCommandMatchesVersion -PnpmVersion $pnpmVersion -RepoDir $RepoDir) {
+                Write-Host "[OK] pnpm installed via corepack ($pnpmSpec)" -ForegroundColor Green
                 return
             }
         } catch {
@@ -652,9 +765,12 @@ function Ensure-Pnpm {
     $prevScriptShell = $env:NPM_CONFIG_SCRIPT_SHELL
     $env:NPM_CONFIG_SCRIPT_SHELL = "cmd.exe"
     try {
-        & (Get-NpmCommandPath) install -g pnpm
+        & (Get-NpmCommandPath) install -g $pnpmSpec
     } finally {
         $env:NPM_CONFIG_SCRIPT_SHELL = $prevScriptShell
+    }
+    if (-not (Test-PnpmCommandMatchesVersion -PnpmVersion $pnpmVersion -RepoDir $RepoDir)) {
+        throw "pnpm install completed, but $pnpmSpec is not first on PATH."
     }
     Write-Host "[OK] pnpm installed" -ForegroundColor Green
 }
@@ -797,7 +913,6 @@ function Install-OpenClawFromGit {
     if (-not (Ensure-Git)) {
         return $false
     }
-    Ensure-Pnpm
 
     $repoUrl = "https://github.com/openclaw/openclaw.git"
     Write-Host "[*] Installing OpenClaw from GitHub ($repoUrl)..." -ForegroundColor Yellow
@@ -820,6 +935,7 @@ function Install-OpenClawFromGit {
     } else {
         Write-Host "[!] Git update disabled; skipping git pull" -ForegroundColor Yellow
     }
+    Ensure-Pnpm -RepoDir $RepoDir
 
     Remove-LegacySubmodule -RepoDir $RepoDir
 
@@ -829,13 +945,19 @@ function Install-OpenClawFromGit {
         throw "pnpm not found after installation."
     }
     $env:NPM_CONFIG_SCRIPT_SHELL = "cmd.exe"
+    $pushedRepoLocation = $false
     try {
-        & $pnpmCommand -C $RepoDir install
-        if (-not (& $pnpmCommand -C $RepoDir ui:build)) {
+        Push-Location -LiteralPath $RepoDir
+        $pushedRepoLocation = $true
+        & $pnpmCommand install
+        if (-not (& $pnpmCommand ui:build)) {
             Write-Host "[!] UI build failed; continuing (CLI may still work)" -ForegroundColor Yellow
         }
-        & $pnpmCommand -C $RepoDir build
+        & $pnpmCommand build
     } finally {
+        if ($pushedRepoLocation) {
+            Pop-Location
+        }
         $env:NPM_CONFIG_SCRIPT_SHELL = $prevPnpmScriptShell
     }
 

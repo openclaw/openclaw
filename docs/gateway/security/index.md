@@ -88,6 +88,10 @@ pnpm deps:shrinkwrap:generate
 pnpm deps:shrinkwrap:check
 ```
 
+The generator resolves npm's publishable lock format but rejects generated
+package versions that are not already present in `pnpm-lock.yaml`, preserving
+the pnpm dependency age, override, and patch review boundary.
+
 Use `pnpm deps:shrinkwrap:root:generate` and
 `pnpm deps:shrinkwrap:root:check` only when you intentionally want to refresh
 the root `openclaw` package without touching plugin packages.

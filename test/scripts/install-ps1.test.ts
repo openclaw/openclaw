@@ -117,23 +117,88 @@ describe("install.ps1 failure handling", () => {
   it("falls back to a user-local portable Node.js bootstrap when package managers are absent", () => {
     const installNodeBody = extractFunctionBody(source, "Install-Node");
     const portableNodeBody = extractFunctionBody(source, "Install-PortableNode");
+    const portableNodeRootBody = extractFunctionBody(source, "Get-PortableNodeRoot");
     const portableNodePathBody = extractFunctionBody(source, "Ensure-PortableNodeOnUserPath");
     const userPathBody = extractFunctionBody(source, "Add-ToUserPath");
     const depsRootBody = extractFunctionBody(source, "Get-OpenClawDepsRoot");
     const resolveNodeBody = extractFunctionBody(source, "Resolve-PortableNodeDownload");
+    const expandNodeBody = extractFunctionBody(source, "Expand-PortableNodeArchive");
 
     expect(installNodeBody).toContain("Install-PortableNode");
     expect(installNodeBody).toContain("Portable Node.js bootstrap failed");
     expect(installNodeBody).toContain("Error: Could not install Node.js automatically.");
     expect(depsRootBody).toContain("OpenClaw\\deps");
-    expect(portableNodeBody).toContain("portable-node");
+    expect(portableNodeRootBody).toContain("portable-node");
     expect(portableNodeBody).toContain("Ensure-PortableNodeOnUserPath");
+    expect(portableNodeBody).toContain(
+      "Expand-PortableNodeArchive -ZipPath $tmpZip -DestinationPath $portableRoot",
+    );
+    expect(portableNodeBody).not.toContain("Copy-Item");
+    expect(portableNodeBody).not.toContain('Join-Path $nodeDir.FullName "*"');
     expect(portableNodePathBody).toContain("Add-ToUserPath $nodeDir");
-    expect(userPathBody).toContain('[Environment]::SetEnvironmentVariable("Path", $newUserPath, "User")');
+    expect(userPathBody).toContain(
+      '[Environment]::SetEnvironmentVariable("Path", $newUserPath, "User")',
+    );
     expect(portableNodeBody).toContain("Invoke-WebRequest -UseBasicParsing");
+    expect(portableNodeBody).toContain("Expand-PortableNodeArchive");
+    expect(portableNodeBody).not.toContain("Expand-Archive");
+    expect(portableNodeBody).not.toContain("New-Item -ItemType Directory -Force -Path $tmpExtract");
+    expect(expandNodeBody).toContain("Get-Command tar");
+    expect(expandNodeBody).toContain("-xf $ZipPath -C $DestinationPath --strip-components 1");
+    expect(expandNodeBody).toContain(
+      "Copy-Item -LiteralPath $nodeDir.FullName -Destination $DestinationPath -Recurse -Force",
+    );
+    expect(expandNodeBody).toContain("System.IO.Compression.ZipFile");
     expect(resolveNodeBody).toContain("https://nodejs.org/dist/index.json");
     expect(resolveNodeBody).toContain("win-$architecture-zip");
     expect(resolveNodeBody).toContain("node-$($release.version)-win-$architecture.zip");
+  });
+
+  it("persists user-local portable Git for future git-backed updates", () => {
+    const portableGitRootBody = extractFunctionBody(source, "Get-PortableGitRoot");
+    const portableGitBody = extractFunctionBody(source, "Install-PortableGit");
+    const portableGitPathEntriesBody = extractFunctionBody(source, "Get-PortableGitPathEntries");
+    const portableGitPathBody = extractFunctionBody(source, "Ensure-PortableGitOnUserPath");
+    const usePortableGitBody = extractFunctionBody(source, "Use-PortableGitIfPresent");
+    const ensureGitBody = extractFunctionBody(source, "Ensure-Git");
+
+    expect(portableGitRootBody).toContain("Get-OpenClawDepsRoot");
+    expect(portableGitPathEntriesBody).toContain("mingw64\\bin");
+    expect(portableGitPathEntriesBody).toContain("usr\\bin");
+    expect(portableGitPathEntriesBody).toContain("Split-Path -Parent $gitExe");
+    expect(usePortableGitBody).toContain("foreach ($pathEntry in (Get-PortableGitPathEntries))");
+    expect(portableGitBody).toContain("Ensure-PortableGitOnUserPath");
+    expect(ensureGitBody).toContain("Ensure-PortableGitOnUserPath");
+    expect(portableGitPathBody).toContain("Add-ToUserPath $pathEntry");
+    expect(portableGitPathBody).toContain("git-backed updates");
+  });
+
+  it("activates the repo-pinned pnpm version for git installs", () => {
+    const pnpmVersionBody = extractFunctionBody(source, "Get-RepoPnpmVersion");
+    const pnpmVersionMatchBody = extractFunctionBody(source, "Test-PnpmCommandMatchesVersion");
+    const ensurePnpmBody = extractFunctionBody(source, "Ensure-Pnpm");
+    const gitInstallBody = extractFunctionBody(source, "Install-OpenClawFromGit");
+
+    expect(pnpmVersionBody).toContain("package.json");
+    expect(pnpmVersionBody).toContain("$packageJson.packageManager -match '^pnpm@(?<version>[^+]+)'");
+    expect(pnpmVersionMatchBody).toContain("Push-Location -LiteralPath $RepoDir");
+    expect(pnpmVersionMatchBody).toContain("$currentVersion.Trim() -eq $PnpmVersion");
+    expect(ensurePnpmBody).toContain("Get-RepoPnpmVersion -RepoDir $RepoDir");
+    expect(ensurePnpmBody).toContain("$pnpmSpec");
+    expect(ensurePnpmBody).toContain(
+      "Test-PnpmCommandMatchesVersion -PnpmVersion $pnpmVersion -RepoDir $RepoDir",
+    );
+    expect(ensurePnpmBody).toContain("& $corepackCommand prepare $pnpmSpec --activate");
+    expect(ensurePnpmBody).toContain("& (Get-NpmCommandPath) install -g $pnpmSpec");
+    expect(gitInstallBody.indexOf("git clone $repoUrl $RepoDir")).toBeLessThan(
+      gitInstallBody.indexOf("Ensure-Pnpm -RepoDir $RepoDir"),
+    );
+    expect(gitInstallBody.indexOf("git -C $RepoDir pull --rebase")).toBeLessThan(
+      gitInstallBody.indexOf("Ensure-Pnpm -RepoDir $RepoDir"),
+    );
+    expect(gitInstallBody).toContain("Push-Location -LiteralPath $RepoDir");
+    expect(gitInstallBody).toContain("& $pnpmCommand install");
+    expect(gitInstallBody).not.toContain("& $pnpmCommand -C $RepoDir install");
   });
 
   it("cleans legacy git submodules only from the selected git checkout", () => {
