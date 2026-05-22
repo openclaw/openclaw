@@ -27,7 +27,7 @@ import { createInternalHookEventPayload } from "../../test-utils/internal-hook-e
 import type { MsgContext } from "../templating.js";
 import { setReplyPayloadMetadata, type GetReplyOptions, type ReplyPayload } from "../types.js";
 import { PROVIDER_CONVERSATION_STATE_ERROR_USER_MESSAGE } from "./provider-request-error-classifier.js";
-import type { ReplyDispatcher } from "./reply-dispatcher.js";
+import { createReplyDispatcher, type ReplyDispatcher } from "./reply-dispatcher.js";
 import { buildTestCtx } from "./test-ctx.js";
 
 type AbortResult = { handled: boolean; aborted: boolean; stoppedSubagents?: number };
@@ -110,6 +110,7 @@ const pluginConversationBindingMocks = vi.hoisted(() => ({
 const sessionStoreMocks = vi.hoisted(() => ({
   currentEntry: undefined as Record<string, unknown> | undefined,
   loadSessionStore: vi.fn(() => ({})),
+  readSessionEntry: vi.fn(() => sessionStoreMocks.currentEntry),
   resolveStorePath: vi.fn(() => "/tmp/mock-sessions.json"),
   resolveSessionStoreEntry: vi.fn(() => ({ existing: sessionStoreMocks.currentEntry })),
   updateSessionStoreEntry: vi.fn(
@@ -381,6 +382,7 @@ vi.mock("../../config/sessions/thread-info.js", () => ({
 vi.mock("./dispatch-from-config.runtime.js", () => ({
   createInternalHookEvent: internalHookMocks.createInternalHookEvent,
   loadSessionStore: sessionStoreMocks.loadSessionStore,
+  readSessionEntry: sessionStoreMocks.readSessionEntry,
   resolveSessionStoreEntry: sessionStoreMocks.resolveSessionStoreEntry,
   resolveStorePath: sessionStoreMocks.resolveStorePath,
   triggerInternalHook: internalHookMocks.triggerInternalHook,
@@ -880,6 +882,8 @@ describe("dispatchReplyFromConfig", () => {
     sessionBindingMocks.touch.mockReset();
     sessionStoreMocks.currentEntry = undefined;
     sessionStoreMocks.loadSessionStore.mockClear();
+    sessionStoreMocks.readSessionEntry.mockReset();
+    sessionStoreMocks.readSessionEntry.mockImplementation(() => sessionStoreMocks.currentEntry);
     sessionStoreMocks.resolveStorePath.mockClear();
     sessionStoreMocks.resolveSessionStoreEntry.mockClear();
     threadInfoMocks.parseSessionThreadInfo.mockReset();
@@ -1873,6 +1877,55 @@ describe("dispatchReplyFromConfig", () => {
 
     await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
 
+    expect(dispatcher.sendToolResult).not.toHaveBeenCalled();
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith({ text: "done" });
+  });
+
+  it("refreshes verbose progress with session entry snapshots", async () => {
+    setNoAbort();
+    sessionStoreMocks.currentEntry = {
+      verboseLevel: "on",
+    };
+    sessionStoreMocks.readSessionEntry.mockReturnValue({ verboseLevel: "off" });
+    const cfg = {
+      ...emptyConfig,
+      agents: {
+        defaults: {
+          verboseDefault: "on",
+        },
+      },
+    } satisfies OpenClawConfig;
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "telegram",
+      ChatType: "direct",
+      SessionKey: "agent:main:main",
+    });
+
+    const replyResolver = async (
+      _ctx: MsgContext,
+      opts?: GetReplyOptions,
+      _cfg?: OpenClawConfig,
+    ) => {
+      sessionStoreMocks.loadSessionStore.mockClear();
+      sessionStoreMocks.resolveSessionStoreEntry.mockClear();
+      sessionStoreMocks.readSessionEntry.mockClear();
+      await opts?.onPlanUpdate?.({
+        phase: "update",
+        explanation: "Inspect code, patch it, run tests.",
+        steps: ["Inspect code", "Patch code", "Run tests"],
+      });
+      return { text: "done" } satisfies ReplyPayload;
+    };
+
+    await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
+
+    expect(sessionStoreMocks.readSessionEntry).toHaveBeenCalledWith(
+      "/tmp/mock-sessions.json",
+      "agent:main:main",
+    );
+    expect(sessionStoreMocks.loadSessionStore).not.toHaveBeenCalled();
+    expect(sessionStoreMocks.resolveSessionStoreEntry).not.toHaveBeenCalled();
     expect(dispatcher.sendToolResult).not.toHaveBeenCalled();
     expect(dispatcher.sendFinalReply).toHaveBeenCalledWith({ text: "done" });
   });
@@ -4535,6 +4588,56 @@ describe("dispatchReplyFromConfig", () => {
     });
 
     expect(callOrder).toEqual(["queued:The answer is 42", "dispatch:The answer is 42"]);
+  });
+
+  it("waits for same-channel block dispatcher delivery before resolving block replies", async () => {
+    setNoAbort();
+    const ctx = buildTestCtx({ Provider: "whatsapp" });
+    const delivered: ReplyPayload[] = [];
+    let releaseDelivery: (() => void) | undefined;
+    let markDeliveryStarted: (() => void) | undefined;
+    const deliveryStarted = new Promise<void>((resolve) => {
+      markDeliveryStarted = resolve;
+    });
+    const deliveryGate = new Promise<void>((resolve) => {
+      releaseDelivery = resolve;
+    });
+    const dispatcher = createReplyDispatcher({
+      deliver: async (payload) => {
+        delivered.push(payload);
+        markDeliveryStarted?.();
+        await deliveryGate;
+      },
+    });
+    let blockReplySettled = false;
+    const replyResolver = async (
+      _ctx: MsgContext,
+      opts?: GetReplyOptions,
+    ): Promise<ReplyPayload | undefined> => {
+      const blockReplyPromise = Promise.resolve(opts?.onBlockReply?.({ text: "before tool" })).then(
+        () => {
+          blockReplySettled = true;
+        },
+      );
+
+      await deliveryStarted;
+
+      expect(delivered).toEqual([{ text: "before tool" }]);
+      expect(blockReplySettled).toBe(false);
+
+      releaseDelivery?.();
+      await blockReplyPromise;
+      return undefined;
+    };
+
+    await dispatchReplyFromConfig({
+      ctx,
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver,
+    });
+
+    expect(blockReplySettled).toBe(true);
   });
 
   it("forwards payload metadata into onBlockReplyQueued context", async () => {
