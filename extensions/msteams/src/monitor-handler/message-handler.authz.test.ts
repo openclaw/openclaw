@@ -1,3 +1,4 @@
+import { createInboundDebouncer } from "openclaw/plugin-sdk/channel-inbound-debounce";
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig, PluginRuntime } from "../../runtime-api.js";
 import type { GraphThreadMessage } from "../graph-thread.js";
@@ -84,6 +85,11 @@ describe("msteams monitor handler authz", () => {
     cfg: OpenClawConfig,
     options: {
       hasControlCommand?: PluginRuntime["channel"]["text"]["hasControlCommand"];
+      isControlCommandMessage?: PluginRuntime["channel"]["commands"]["isControlCommandMessage"];
+      shouldComputeCommandAuthorized?: PluginRuntime["channel"]["commands"]["shouldComputeCommandAuthorized"];
+      shouldHandleTextCommands?: PluginRuntime["channel"]["commands"]["shouldHandleTextCommands"];
+      createInboundDebouncer?: PluginRuntime["channel"]["debounce"]["createInboundDebouncer"];
+      resolveInboundDebounceMs?: PluginRuntime["channel"]["debounce"]["resolveInboundDebounceMs"];
     } = {},
   ) {
     const readAllowFromStore = vi.fn(async () => ["attacker-aad"]);
@@ -100,6 +106,11 @@ describe("msteams monitor handler authz", () => {
         accountId: "default",
       })),
       hasControlCommand: options.hasControlCommand,
+      isControlCommandMessage: options.isControlCommandMessage,
+      shouldComputeCommandAuthorized: options.shouldComputeCommandAuthorized,
+      shouldHandleTextCommands: options.shouldHandleTextCommands,
+      createInboundDebouncer: options.createInboundDebouncer,
+      resolveInboundDebounceMs: options.resolveInboundDebounceMs,
     });
   }
 
@@ -604,6 +615,47 @@ describe("msteams monitor handler authz", () => {
     expect(hasControlCommand).toHaveBeenCalledWith("/config set foo bar", deps.cfg);
     expect(conversationStore.upsert).not.toHaveBeenCalled();
     expect(runtimeApiMockState.dispatchReplyFromConfigWithSettledDispatcher).not.toHaveBeenCalled();
+  });
+
+  it("flushes pending group text before authorizing a bare abort without a mention", async () => {
+    resetThreadMocks();
+    const isBareAbort = vi.fn((text?: string) =>
+      ["abort", "stop"].includes(text?.trim().toLowerCase() ?? ""),
+    );
+    const { deps } = createDeps(
+      {
+        commands: { useAccessGroups: false },
+        messages: { inbound: { debounceMs: 60_000 } },
+        channels: {
+          msteams: {
+            groupPolicy: "open",
+            requireMention: true,
+          },
+        },
+      } as OpenClawConfig,
+      {
+        hasControlCommand: vi.fn(() => false),
+        isControlCommandMessage: isBareAbort,
+        shouldComputeCommandAuthorized: isBareAbort,
+        shouldHandleTextCommands: vi.fn(() => true),
+        createInboundDebouncer,
+        resolveInboundDebounceMs: vi.fn(() => 60_000),
+      },
+    );
+
+    const handler = createMSTeamsMessageHandler(deps);
+    await handler(createAttackerGroupActivity({ text: "pending text" }));
+    expect(runtimeApiMockState.dispatchReplyFromConfigWithSettledDispatcher).not.toHaveBeenCalled();
+
+    await handler(createAttackerGroupActivity({ text: "abort" }));
+
+    expect(runtimeApiMockState.dispatchReplyFromConfigWithSettledDispatcher).toHaveBeenCalledTimes(
+      1,
+    );
+    const dispatched = firstSettledDispatch();
+    const ctxPayload = recordFromMockCall(dispatched.ctxPayload);
+    expect(ctxPayload.BodyForAgent).toBe("abort");
+    expect(ctxPayload.CommandAuthorized).toBe(true);
   });
 
   it("marks skipped channel message system events as non-owner", async () => {
