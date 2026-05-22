@@ -998,5 +998,29 @@
   {
     "source": "ds4 (local DeepSeek V4)",
     "target": "ds4（本地 DeepSeek V4）"
+  },
+  {
+    "source": "Dynamic Agent Creation",
+    "target": "动态 Agent 创建"
+  },
+  {
+    "source": "dynamic agent creation",
+    "target": "动态 Agent 创建"
+  },
+  {
+    "source": "multi-user isolation",
+    "target": "多用户隔离"
+  },
+  {
+    "source": "workspaceTemplate",
+    "target": "工作空间模板"
+  },
+  {
+    "source": "agentDirTemplate",
+    "target": "Agent 目录模板"
+  },
+  {
+    "source": "Per-user agent isolation",
+    "target": "每用户 Agent 隔离"
   }
 ]
