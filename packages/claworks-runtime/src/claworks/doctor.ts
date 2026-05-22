@@ -9,6 +9,7 @@ import {
   seedPacksToStateDir,
   type ProductConfigRepairResult,
 } from "./product-config-repair.js";
+import { isClaworksProductionMode } from "./product-env.js";
 import type { ClaworksRuntime } from "./runtime-types.js";
 
 export type DoctorCheck = {
@@ -125,6 +126,58 @@ export function runClaworksDoctor(runtime: ClaworksRuntime): DoctorCheck[] {
       message: "No pack sources — clone ../claworks-packs or set CLAWORKS_PACKS_DIR",
     });
   }
+
+  // ── 生产就绪安全检查 ─────────────────────────────────────────────────────
+  const isProduction = isClaworksProductionMode(runtime.config);
+
+  const apiKey = runtime.config.api?.api_key?.trim();
+  checks.push({
+    id: "security_api_key",
+    status: apiKey ? "ok" : "warn",
+    message: apiKey
+      ? "API key configured"
+      : "No api.api_key — all requests authorized as system; set api.api_key for production",
+  });
+
+  const requireApiKey = runtime.config.api?.require_api_key === true;
+  checks.push({
+    id: "security_require_api_key",
+    status: requireApiKey ? "ok" : isProduction ? "error" : "warn",
+    message: requireApiKey
+      ? "require_api_key=true"
+      : "api.require_api_key not set — recommended for production (set to true)",
+  });
+
+  const dbUrlForCheck = runtime.config.data?.database_url ?? "";
+  checks.push({
+    id: "database_production",
+    status: dbUrlForCheck.startsWith("postgres") ? "ok" : isProduction ? "warn" : "ok",
+    message: dbUrlForCheck.startsWith("postgres")
+      ? "PostgreSQL configured"
+      : isProduction
+        ? "SQLite in production — consider PostgreSQL for reliability & scale"
+        : "SQLite (development default)",
+  });
+
+  const a2aPeers = runtime.config.a2a?.peers ?? [];
+  if (a2aPeers.length > 0) {
+    const httpsA2a = runtime.config.security?.require_https_a2a === true;
+    checks.push({
+      id: "security_a2a_https",
+      status: httpsA2a ? "ok" : isProduction ? "warn" : "ok",
+      message: httpsA2a
+        ? "A2A HTTPS enforcement enabled"
+        : `${a2aPeers.length} A2A peer(s) configured — set security.require_https_a2a=true for production`,
+    });
+  }
+
+  checks.push({
+    id: "production_mode",
+    status: "ok",
+    message: isProduction
+      ? "production_mode=true — stub steps fail-closed, full security enforcement"
+      : "production_mode=false (dev mode) — stub steps return gracefully",
+  });
 
   return checks;
 }

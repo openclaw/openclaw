@@ -1,5 +1,6 @@
 import { evaluateCondition } from "../../kernel/playbook-matcher.js";
 import { interpolate } from "./step-executor.js";
+import { resolveLenExpression } from "./template-resolve.js";
 
 type StepsMap = Record<string, { status?: string; result?: Record<string, unknown> }>;
 
@@ -68,6 +69,20 @@ export function evaluatePlaybookCondition(
   );
   if (stepsStatus) {
     return steps[stepsStatus[1]]?.status === stepsStatus[2];
+  }
+
+  const lenGt = expr.match(/^len\((.+)\)\s*>\s*(\d+)$/);
+  if (lenGt) {
+    const length = resolveLenExpression(`len(${lenGt[1]})`, variables);
+    return length != null && length > Number(lenGt[2]);
+  }
+
+  const stepsChoice = expr.match(
+    /steps\[['"](\w+)['"]\]\[['"]result['"]\]\.get\(\s*['"](\w+)['"]\s*(?:,\s*[^)]+)?\s*\)\s*==\s*['"]([\w-]+)['"]/,
+  );
+  if (stepsChoice) {
+    const result = steps[stepsChoice[1]]?.result ?? {};
+    return String(result[stepsChoice[2]] ?? "") === stepsChoice[3];
   }
 
   if (expr.includes(" and ")) {

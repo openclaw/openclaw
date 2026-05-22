@@ -22,6 +22,32 @@ export function migrateClaworksSchema(db: CwDatabase): void {
   addColumnIfMissing(db, "cw_outbox", "is_dead", "INTEGER NOT NULL DEFAULT 0");
 
   db.exec(`
+    CREATE TABLE IF NOT EXISTS cw_user_profiles (
+      user_id TEXT PRIMARY KEY,
+      name TEXT,
+      preferred_language TEXT,
+      preferred_style TEXT NOT NULL DEFAULT 'concise',
+      recent_topics TEXT NOT NULL DEFAULT '[]',
+      interaction_count INTEGER NOT NULL DEFAULT 0,
+      last_seen_at TEXT NOT NULL,
+      custom_notes TEXT,
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+  `);
+
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS cw_audit_log (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      event_type TEXT NOT NULL,
+      actor TEXT,
+      target TEXT,
+      payload TEXT,
+      created_at TEXT DEFAULT (datetime('now'))
+    );
+  `);
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_cw_audit_log_type ON cw_audit_log(event_type);`);
+
+  db.exec(`
     CREATE INDEX IF NOT EXISTS idx_cw_playbook_runs_playbook ON cw_playbook_runs(playbook_id);
     CREATE INDEX IF NOT EXISTS idx_cw_playbook_runs_status ON cw_playbook_runs(status);
     CREATE INDEX IF NOT EXISTS idx_cw_playbook_runs_started ON cw_playbook_runs(started_at DESC);

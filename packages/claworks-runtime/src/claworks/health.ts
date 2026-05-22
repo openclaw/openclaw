@@ -22,6 +22,9 @@ export function buildHealthPayload(runtime: ClaworksRuntime) {
     robot: runtime.robot.name,
     role: runtime.robot.role,
     version: runtime.robot.version,
+    kb_provider: runtime.config.data?.kb_provider ?? "stub",
+    kb_vector: runtime.config.data?.kb_provider === "memory-core",
+    kb_embed_model: runtime.config.data?.kb_embed_model,
     uptime_s: runtimeUptimeSeconds(),
     planes: {
       kernel: status === "unavailable" ? "error" : "ok",

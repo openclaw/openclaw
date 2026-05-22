@@ -1,0 +1,15 @@
+{
+  "name": "@claworks/client",
+  "version": "0.1.0",
+  "description": "ClaWorks REST API client — typed HTTP client for the ClaWorks robot runtime",
+  "type": "module",
+  "license": "MIT",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "test": "vitest run src"
+  }
+}

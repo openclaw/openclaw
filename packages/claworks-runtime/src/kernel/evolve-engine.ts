@@ -1,0 +1,512 @@
+/**
+ * evolve-engine.ts — ClaWorks 自主进化引擎
+ *
+ * 用户输入自然语言需求 → LLM 生成 Playbook YAML → 写文件 + 热重载 → 验证 → CBR 学习
+ *
+ * 完整进化循环：
+ *   propose()  → 分析需求，LLM 生成 Playbook 方案
+ *   deploy()   → 写文件到 Pack 目录 + packLoader.load() 热重载
+ *   verify()   → 发布测试事件，订阅结果，等待触发
+ *   learn()    → 写入 CbrStore 供后续检索
+ *   remove()   → 从文件系统删除并从引擎卸载
+ */
+
+import {} from "node:crypto";
+import { mkdir, writeFile, unlink, readdir } from "node:fs/promises";
+import { join } from "node:path";
+import type { ClaworksRuntime } from "../claworks/runtime-types.js";
+import { BRIDGE_LLM } from "./bridge-registry.js";
+import type { OutputSchema } from "./structured-output.js";
+
+// ── 公开类型 ──────────────────────────────────────────────────────────────
+
+export type EvolveRequest = {
+  /** 用户的需求描述（自然语言） */
+  description: string;
+  /** 额外上下文（系统状态、已有能力等） */
+  context?: string;
+  /** 参考案例（few-shot 提示） */
+  examples?: string[];
+};
+
+export type EvolveProposal = {
+  id: string;
+  title: string;
+  description: string;
+  /** 生成的完整 Playbook YAML 字符串 */
+  playbook_yaml: string;
+  /** 需要调用的能力 ID 列表 */
+  required_capabilities: string[];
+  /** 不在注册表中但需要的能力 */
+  missing_capabilities: string[];
+  /** 触发事件名 */
+  trigger_event: string;
+  /** 测试时发送的事件名 */
+  test_event: string;
+  /** 测试时的事件载荷 */
+  test_payload: Record<string, unknown>;
+  /** 0–1 置信度 */
+  confidence: number;
+  /** 潜在问题警告 */
+  warnings: string[];
+};
+
+export type EvolveResult = {
+  proposal: EvolveProposal;
+  deployed: boolean;
+  playbook_path: string;
+  test_passed?: boolean;
+  test_output?: unknown;
+  cbr_case_id?: string;
+};
+
+export interface EvolveEngine {
+  /** 分析需求，LLM 生成 Playbook 方案 */
+  propose(req: EvolveRequest): Promise<EvolveProposal>;
+  /** 部署方案（写文件 + 热重载） */
+  deploy(proposal: EvolveProposal, opts?: { packId?: string }): Promise<EvolveResult>;
+  /** 发布测试事件，验证 Playbook 是否正确触发 */
+  verify(
+    playbookId: string,
+    testEvent: string,
+    testPayload: Record<string, unknown>,
+  ): Promise<{ passed: boolean; output?: unknown; error?: string }>;
+  /** 将进化结果写入 CbrStore */
+  learn(result: EvolveResult, feedback?: string): Promise<string | undefined>;
+  /** 列出用户通过对话生成的所有 Playbook */
+  listEvolved(): Promise<Array<{ id: string; title: string; deployedAt: Date }>>;
+  /** 移除一个进化的 Playbook */
+  remove(playbookId: string): Promise<void>;
+}
+
+// ── LLM prompt 常量 ───────────────────────────────────────────────────────
+
+function buildSystemPrompt(capIds: string, playbookExamples: string): string {
+  return `你是 ClaWorks 机器人的 Playbook 工程师。
+用户描述一个业务需求，你需要生成一个可执行的 Playbook YAML。
+
+## 已注册的能力（从这些中选择 action）：
+${capIds || "（暂无，请使用通用能力）"}
+
+## Playbook YAML 格式示例：
+${playbookExamples || "（暂无已有 Playbook）"}
+
+## 完整 Playbook YAML 格式说明：
+\`\`\`yaml
+id: unique_playbook_id          # 唯一标识符，snake_case
+name: 可读名称
+pack: user_evolved              # 固定为 user_evolved
+trigger:
+  kind: event
+  pattern: event.name           # 触发事件
+  condition: "{{ expr }}"       # 可选过滤条件
+priority: 500
+steps:
+  - kind: action
+    id: step_id
+    action: capability.id       # 必须是已注册的能力 ID
+    params:
+      key: "{{ event.payload.key }}"
+    store_result_as: result_var
+    on_failure: continue
+
+  - kind: condition
+    id: check_something
+    if: "{{ result_var.value > 85 }}"
+    then:
+      - kind: action
+        id: sub_step
+        action: another.capability
+        params: {}
+
+  - kind: hitl
+    id: confirm
+    message: "确认执行？"
+    timeout_seconds: 300
+\`\`\`
+
+## 重要规则：
+1. action: 字段必须使用已注册的能力 ID
+2. notify.dispatch 用于跨渠道通知，comms.send 用于回复 IM 消息
+3. object.create 用于创建工单/记录
+4. 模板使用 Jinja2 语法：{{ event.payload.field }}
+5. 触发事件 pattern 可以是标准事件（如 sensor.reading_received）也可以是自定义事件
+
+以 JSON 格式返回，包含：
+{
+  "title": "方案名称",
+  "description": "方案说明",
+  "playbook_yaml": "完整YAML字符串",
+  "required_capabilities": ["能力id"],
+  "missing_capabilities": ["不在列表中但需要的能力"],
+  "trigger_event": "触发事件名",
+  "test_event": "测试时发布的事件名",
+  "test_payload": {"测试载荷"},
+  "confidence": 0.85,
+  "warnings": ["潜在问题"]
+}`;
+}
+
+const PROPOSAL_SCHEMA: OutputSchema = {
+  type: "object",
+  required: [
+    "title",
+    "description",
+    "playbook_yaml",
+    "required_capabilities",
+    "trigger_event",
+    "test_event",
+    "test_payload",
+    "confidence",
+  ],
+  properties: {
+    title: { type: "string" },
+    description: { type: "string" },
+    playbook_yaml: { type: "string" },
+    required_capabilities: { type: "array" },
+    missing_capabilities: { type: "array" },
+    trigger_event: { type: "string" },
+    test_event: { type: "string" },
+    test_payload: { type: "object" },
+    confidence: { type: "number" },
+    warnings: { type: "array" },
+  },
+};
+
+// ── 工厂函数 ──────────────────────────────────────────────────────────────
+
+export function createEvolveEngine(runtime: ClaworksRuntime): EvolveEngine {
+  return {
+    // ── propose ────────────────────────────────────────────────────────────
+    async propose(req: EvolveRequest): Promise<EvolveProposal> {
+      // 1. 收集系统能力列表作为上下文
+      const capabilities = runtime.capabilities.list();
+      const capIds = capabilities
+        .slice(0, 60)
+        .map((c) => `${c.id}  # ${c.description ?? ""}`)
+        .join("\n");
+
+      // 2. 取前 3 个 Playbook 作为 few-shot 示例
+      const existingPlaybooks = runtime.playbookEngine.listPlaybooks().slice(0, 3);
+      const playbookExamples = existingPlaybooks
+        .map((p) => {
+          const trigger = (p.trigger as { pattern?: string } | undefined)?.pattern ?? "some.event";
+          return `# 示例: ${p.id}\ntrigger:\n  kind: event\n  pattern: ${trigger}\nsteps: [...]`;
+        })
+        .join("\n\n");
+
+      // 3. 如果有相关 CBR 案例，加入参考
+      const cbrExamples: string[] = req.examples ?? [];
+      if (runtime.cbrStore) {
+        const cases = runtime.cbrStore.search(req.description, 2);
+        for (const c of cases) {
+          const prob = String(c.problem ?? "");
+          const sol = String(c.solution ?? "").slice(0, 200);
+          cbrExamples.push(`# 历史案例（相似度高）\n问题: ${prob}\n方案摘要: ${sol}`);
+        }
+      }
+
+      const systemPrompt = buildSystemPrompt(capIds, playbookExamples);
+      const userPrompt = [
+        `用户需求：${req.description}`,
+        req.context ? `\n额外上下文：${req.context}` : "",
+        cbrExamples.length > 0 ? `\n参考案例：\n${cbrExamples.join("\n")}` : "",
+      ]
+        .filter(Boolean)
+        .join("");
+
+      // 4. 优先使用 structuredOutput 引擎
+      if (runtime.structuredOutput) {
+        const combinedPrompt = `${systemPrompt}\n\n${userPrompt}`;
+        const { data } = await runtime.structuredOutput.complete(combinedPrompt, PROPOSAL_SCHEMA, {
+          maxRetries: 3,
+          fallback: buildFallbackProposal(req.description),
+        });
+        return normalizeProposal(data, req.description);
+      }
+
+      // 5. 降级：使用 llmComplete 直接补全
+      const completeFn =
+        (
+          runtime.bridges?.get(BRIDGE_LLM) as
+            | { complete?: (p: { prompt: string }) => Promise<{ text: string }> }
+            | undefined
+        )?.complete ?? runtime.llmComplete;
+
+      if (!completeFn) {
+        runtime.logger?.("[EvolveEngine] no LLM configured, returning minimal fallback proposal");
+        return {
+          id: `evolved_${Date.now()}`,
+          ...buildFallbackProposal(req.description),
+        };
+      }
+
+      const fullPrompt = `${systemPrompt}\n\n${userPrompt}\n\n请直接返回 JSON，不要 markdown 代码块。`;
+      const result = await completeFn({ prompt: fullPrompt });
+
+      try {
+        const match = result.text.match(/\{[\s\S]*\}/);
+        const parsed = match ? (JSON.parse(match[0]) as Record<string, unknown>) : null;
+        if (parsed) {
+          return normalizeProposal(parsed, req.description);
+        }
+      } catch {
+        // fall through to fallback
+      }
+
+      return { id: `evolved_${Date.now()}`, ...buildFallbackProposal(req.description) };
+    },
+
+    // ── deploy ─────────────────────────────────────────────────────────────
+    async deploy(proposal: EvolveProposal, opts = {}): Promise<EvolveResult> {
+      const packId = opts.packId ?? "user_evolved";
+
+      // 确定 Pack 根目录（相对于 CWD 或绝对路径）
+      const cwdPacksDir = join(process.cwd(), "contrib", "packs");
+      const packDir = join(cwdPacksDir, packId);
+      const playbooksDir = join(packDir, "ontology", "playbooks");
+
+      await mkdir(playbooksDir, { recursive: true });
+
+      // 写入 Playbook YAML
+      const filename = `${proposal.id}.yaml`;
+      const filePath = join(playbooksDir, filename);
+      await writeFile(filePath, proposal.playbook_yaml, "utf8");
+
+      // 确保 claworks.pack.json 存在
+      const packJsonPath = join(packDir, "claworks.pack.json");
+      try {
+        await mkdir(packDir, { recursive: true });
+        // 仅在不存在时创建
+        await writeFile(
+          packJsonPath,
+          JSON.stringify(
+            {
+              id: packId,
+              name: "用户进化 Pack",
+              version: "1.0.0",
+              description: "用户通过对话自动生成的 Playbook",
+              license: "proprietary",
+              provides: { objectTypes: [], playbooks: [], actionTypes: [] },
+            },
+            null,
+            2,
+          ),
+          { flag: "wx" }, // wx = 仅当文件不存在时写入
+        );
+      } catch {
+        // 文件已存在，忽略
+      }
+
+      // 热重载：使用 packLoader.load() 加载/更新这个 Pack
+      let deployed = false;
+      try {
+        const loadedPack = await runtime.packLoader.load(packDir, runtime.logger);
+        // 将新 Pack 的 Playbook 注入到 playbookEngine
+        await runtime.playbookEngine.loadFromPacks([loadedPack]);
+        // 更新 runtime.loadedPacks
+        const existingIdx = runtime.loadedPacks.findIndex(
+          (p) => p.manifest.id === loadedPack.manifest.id,
+        );
+        if (existingIdx >= 0) {
+          runtime.loadedPacks[existingIdx] = loadedPack;
+        } else {
+          runtime.loadedPacks.push(loadedPack);
+        }
+        deployed = true;
+        runtime.logger?.(`[EvolveEngine] deployed playbook ${proposal.id} to ${filePath}`);
+      } catch (err) {
+        runtime.logger?.(
+          `[EvolveEngine] hot-reload failed: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+
+      return { proposal, deployed, playbook_path: filePath };
+    },
+
+    // ── verify ─────────────────────────────────────────────────────────────
+    async verify(
+      playbookId: string,
+      testEvent: string,
+      testPayload: Record<string, unknown>,
+    ): Promise<{ passed: boolean; output?: unknown; error?: string }> {
+      try {
+        const log: Record<string, unknown>[] = [];
+
+        const unsubCompleted = runtime.kernel.subscribe("playbook.run.completed", (payload) => {
+          if (payload["playbook_id"] === playbookId) {
+            log.push({ ...payload, kind: "completed" });
+          }
+        });
+        const unsubFailed = runtime.kernel.subscribe("playbook.run.failed", (payload) => {
+          if (payload["playbook_id"] === playbookId) {
+            log.push({ ...payload, kind: "failed" });
+          }
+        });
+
+        await runtime.kernel.publish(testEvent, "evolve-verify", testPayload);
+
+        // 等待最多 5 秒
+        await new Promise<void>((resolve) => setTimeout(resolve, 5000));
+
+        unsubCompleted();
+        unsubFailed();
+
+        if (log.length > 0) {
+          const hasFailure = log.some((l) => l["kind"] === "failed");
+          return { passed: !hasFailure, output: log[0] };
+        }
+
+        // 没有事件回调时，检查 playbookEngine 里的 runs
+        const runs = await runtime.playbookEngine.listRuns({ playbookId, limit: 1 });
+        if (runs.length > 0) {
+          const run = runs[0];
+          return {
+            passed: run.status === "completed",
+            output: { run_id: run.id, status: run.status },
+          };
+        }
+
+        // 未触发：可能触发条件不匹配，视为未验证而非失败
+        return {
+          passed: false,
+          error: `测试事件 '${testEvent}' 已发布，但 Playbook '${playbookId}' 未在 5s 内触发。请检查 trigger.pattern 是否匹配。`,
+        };
+      } catch (err) {
+        return { passed: false, error: err instanceof Error ? err.message : String(err) };
+      }
+    },
+
+    // ── learn ──────────────────────────────────────────────────────────────
+    async learn(result: EvolveResult, feedback?: string): Promise<string | undefined> {
+      if (!runtime.cbrStore) {
+        return undefined;
+      }
+
+      const tags = [
+        "evolved",
+        `trigger:${result.proposal.trigger_event}`,
+        ...result.proposal.required_capabilities.map((c) => `cap:${c}`),
+      ];
+
+      const caseEntry = runtime.cbrStore.add({
+        id: `evolved-${result.proposal.id}`,
+        problem: result.proposal.description,
+        solution: result.proposal.playbook_yaml,
+        outcome: result.test_passed ? "success" : "partial",
+        tags,
+        playbookId: result.proposal.id,
+      });
+
+      const entryId = String(caseEntry?.id ?? `evolved-${result.proposal.id}`);
+      if (feedback) {
+        runtime.logger?.(`[EvolveEngine] learn feedback for ${entryId}: ${feedback}`);
+      }
+
+      return entryId;
+    },
+
+    // ── listEvolved ────────────────────────────────────────────────────────
+    async listEvolved(): Promise<Array<{ id: string; title: string; deployedAt: Date }>> {
+      const playbooksDir = join(
+        process.cwd(),
+        "contrib",
+        "packs",
+        "user_evolved",
+        "ontology",
+        "playbooks",
+      );
+      try {
+        const files = await readdir(playbooksDir);
+        return files
+          .filter((f) => f.endsWith(".yaml"))
+          .map((f) => ({
+            id: f.replace(/\.yaml$/, ""),
+            title: f
+              .replace(/\.yaml$/, "")
+              .replace(/_/g, " ")
+              .replace(/^evolved\s+\d+$/, "用户进化 Playbook"),
+            deployedAt: new Date(),
+          }));
+      } catch {
+        return [];
+      }
+    },
+
+    // ── remove ─────────────────────────────────────────────────────────────
+    async remove(playbookId: string): Promise<void> {
+      const filePath = join(
+        process.cwd(),
+        "contrib",
+        "packs",
+        "user_evolved",
+        "ontology",
+        "playbooks",
+        `${playbookId}.yaml`,
+      );
+      await unlink(filePath).catch(() => {});
+
+      // 从 playbookEngine 卸载
+      runtime.playbookEngine.unload?.(playbookId);
+    },
+  };
+}
+
+// ── 辅助函数 ──────────────────────────────────────────────────────────────
+
+function buildFallbackProposal(description: string): Omit<EvolveProposal, "id"> {
+  const id = `evolved_${Date.now()}`;
+  return {
+    title: description.slice(0, 40),
+    description,
+    playbook_yaml: [
+      `id: ${id}`,
+      `name: ${description.slice(0, 40)}`,
+      "pack: user_evolved",
+      `trigger:`,
+      `  kind: event`,
+      `  pattern: user.custom_event`,
+      `steps: []`,
+      `# TODO: LLM 未返回有效方案，请手动编辑此文件`,
+    ].join("\n"),
+    required_capabilities: [],
+    missing_capabilities: [],
+    trigger_event: "user.custom_event",
+    test_event: "user.custom_event",
+    test_payload: { _test: true },
+    confidence: 0.1,
+    warnings: ["LLM 未配置或未返回有效方案，已生成空模板，请手动完善"],
+  };
+}
+
+function normalizeProposal(raw: Record<string, unknown>, description: string): EvolveProposal {
+  // 若 LLM 没给 id，使用时间戳
+  const id = typeof raw["id"] === "string" && raw["id"] ? raw["id"] : `evolved_${Date.now()}`;
+
+  // 保证 playbook_yaml 中 id 与 proposal.id 一致
+  let yaml = String(raw["playbook_yaml"] ?? "");
+  if (yaml && !yaml.includes(`id: ${id}`)) {
+    yaml = yaml.replace(/^id:\s*.+$/m, `id: ${id}`);
+  }
+
+  return {
+    id,
+    title: String(raw["title"] ?? description.slice(0, 40)),
+    description: String(raw["description"] ?? description),
+    playbook_yaml: yaml || buildFallbackProposal(description).playbook_yaml,
+    required_capabilities: Array.isArray(raw["required_capabilities"])
+      ? (raw["required_capabilities"] as string[])
+      : [],
+    missing_capabilities: Array.isArray(raw["missing_capabilities"])
+      ? (raw["missing_capabilities"] as string[])
+      : [],
+    trigger_event: String(raw["trigger_event"] ?? "user.custom_event"),
+    test_event: String(raw["test_event"] ?? raw["trigger_event"] ?? "user.custom_event"),
+    test_payload:
+      raw["test_payload"] && typeof raw["test_payload"] === "object"
+        ? (raw["test_payload"] as Record<string, unknown>)
+        : { _test: true },
+    confidence: typeof raw["confidence"] === "number" ? raw["confidence"] : 0.5,
+    warnings: Array.isArray(raw["warnings"]) ? (raw["warnings"] as string[]) : [],
+  };
+}

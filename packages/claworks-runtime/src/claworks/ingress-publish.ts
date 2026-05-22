@@ -6,6 +6,7 @@
 
 import type { IngressDecision, IngressSource } from "../kernel/ingress.js";
 import type { CwEvent } from "../kernel/types.js";
+import { DEFAULT_ROBOT_CONSTITUTION, isTrustedEventSource } from "./robot-constitution.js";
 import type { ClaworksRuntime } from "./runtime-types.js";
 
 export type IngressPublishParams = {
@@ -39,6 +40,18 @@ export async function applyIngressPublish(
   runtime: ClaworksRuntime,
   params: IngressPublishParams,
 ): Promise<IngressPublishResult> {
+  const publishSource = params.publishSource ?? params.subjectId;
+  const constitution = runtime.identity?.constitution ?? DEFAULT_ROBOT_CONSTITUTION;
+  if (!isTrustedEventSource(constitution, publishSource)) {
+    runtime.logger?.(
+      `[claworks:ingress] untrusted source "${publishSource}" — denied by robot constitution`,
+    );
+    return {
+      action: "denied",
+      reason: `untrusted event source: ${publishSource}`,
+    };
+  }
+
   const decision = runtime.ingress.decide(params.source, params.eventType, params.subjectId);
 
   if (decision.action === "deny") {

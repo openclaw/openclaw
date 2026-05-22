@@ -94,6 +94,23 @@ export async function bridgeImMessage(
     subjectType: "channel_user",
   });
 
+  // Publish user.first_interaction for welcome_new_user Playbook when the user
+  // profile store sees this user for the very first time.
+  if (result.action !== "denied" && runtime.userProfileStore) {
+    const profile = runtime.userProfileStore.get(input.userId);
+    const isFirstInteraction = !profile || profile.interactionCount === 0;
+    if (isFirstInteraction) {
+      await runtime.kernel
+        .publish("user.first_interaction", "im-bridge", {
+          channel: input.channel,
+          user_id: input.userId,
+          group_id: input.groupId,
+          first_message: input.text,
+        })
+        .catch(() => {});
+    }
+  }
+
   if (result.action === "denied") {
     return { action: "denied", reason: result.reason };
   }

@@ -31,6 +31,14 @@ export type RobotIdentity = {
   owner?: RobotOwner;
 };
 
+/**
+ * RBAC 策略记录。
+ *
+ * 基础 RBAC（单机器人、固定规则）是开源功能，存储于 ObjectStore 的 RbacPolicy 对象。
+ *
+ * @enterprise 高级 RBAC 功能（行级安全、委托链、多租户命名空间隔离、SSO 身份绑定）
+ * 通过 ClaWorks Enterprise 插件提供，不包含在本开源版本中。
+ */
 export type RbacPolicy = {
   id: string;
   /** 操作类型：event.publish | playbook.trigger | rest.write | a2a.delegate | hitl.resolve */
@@ -228,32 +236,42 @@ export function buildRobotIdentity(opts: {
 export function createRbacGuard(policies: RbacPolicy[]) {
   return {
     check(input: RbacCheckInput): RbacCheckResult {
+      // subjectId 使用 matchesPattern，支持 role:admin:* 这样的前缀通配
       const matches = policies.filter(
         (p) =>
           matchesPattern(p.action, input.action) &&
           matchesPattern(p.resource, input.resource) &&
           (p.subjectType === input.subjectType || p.subjectType === "system") &&
-          (p.subjectId === "*" || p.subjectId === input.subjectId),
+          (p.subjectId === "*" || matchesPattern(p.subjectId, input.subjectId)),
       );
 
-      // deny 优先（先精确，再通配）
+      // 安全模型：deny > allow（显式 deny 始终优先）
+      // 顺序：精确 deny → 精确 allow → 通配符 deny → 通配符 allow
+      // subjectId 精确 = 与 input.subjectId 严格相等（非通配）
+      const isExactSubject = (p: RbacPolicy) => p.subjectId === input.subjectId;
+
+      // 1. 精确主体 deny
       for (const p of matches) {
-        if (
-          p.effect === "deny" &&
-          p.action === input.action &&
-          p.resource === input.resource &&
-          p.subjectId === input.subjectId
-        ) {
+        if (p.effect === "deny" && isExactSubject(p)) {
           return { allowed: false, reason: `Denied by policy ${p.id}`, policy: p };
         }
       }
+
+      // 2. 精确主体 allow
+      for (const p of matches) {
+        if (p.effect === "allow" && isExactSubject(p)) {
+          return { allowed: true };
+        }
+      }
+
+      // 3. 通配符 deny（subjectId = * 或前缀通配）
       for (const p of matches) {
         if (p.effect === "deny") {
           return { allowed: false, reason: `Denied by policy ${p.id}`, policy: p };
         }
       }
 
-      // allow
+      // 4. 通配符 allow
       for (const p of matches) {
         if (p.effect === "allow") {
           return { allowed: true };
@@ -514,4 +532,6 @@ export const DEFAULT_RBAC_POLICIES: RbacPolicy[] = [
     subjectId: "*",
     effect: "allow",
   },
+  // rest.write 对 channel_user 已由 default-deny 保障（无 allow 策略 = 不允许）。
+  // role:admin:*/role:approver:*/owner:* 通过各自的具名 allow 策略获得写权限。
 ];

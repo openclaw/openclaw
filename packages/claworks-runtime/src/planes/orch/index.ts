@@ -20,6 +20,7 @@ export {
   type LlmCompleteFn,
   type NotifyFn,
   type SkillRunFn,
+  type ScriptRunFn,
   type SubagentRunFn,
   type ConnectorInvokeFn,
   type StepExecutorDeps,

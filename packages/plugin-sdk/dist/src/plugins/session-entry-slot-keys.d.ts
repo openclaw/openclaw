@@ -1,0 +1,14 @@
+import type { SessionEntry } from "../config/sessions/types.js";
+declare const SESSION_ENTRY_RESERVED_SLOT_KEY_LIST: readonly ["__proto__", "constructor", "prototype", "lastHeartbeatText", "lastHeartbeatSentAt", "heartbeatIsolatedBaseSessionKey", "heartbeatTaskState", "pluginExtensions", "pluginExtensionSlotKeys", "pluginNextTurnInjections", "sessionId", "updatedAt", "sessionFile", "spawnedBy", "spawnedWorkspaceDir", "parentSessionKey", "forkedFromParent", "spawnDepth", "subagentRole", "subagentControlScope", "inheritedToolDeny", "inheritedToolAllow", "subagentRecovery", "pluginOwnerId", "systemSent", "abortedLastRun", "sessionStartedAt", "lastInteractionAt", "startedAt", "endedAt", "runtimeMs", "status", "abortCutoffMessageSid", "abortCutoffTimestamp", "chatType", "thinkingLevel", "fastMode", "verboseLevel", "traceLevel", "reasoningLevel", "elevatedLevel", "ttsAuto", "lastTtsReadLatestHash", "lastTtsReadLatestAt", "execHost", "execSecurity", "execAsk", "execNode", "responseUsage", "usageFamilyKey", "usageFamilySessionIds", "providerOverride", "modelOverride", "agentRuntimeOverride", "modelOverrideSource", "modelOverrideFallbackOriginProvider", "modelOverrideFallbackOriginModel", "authProfileOverride", "authProfileOverrideSource", "authProfileOverrideCompactionCount", "liveModelSwitchPending", "groupActivation", "groupActivationNeedsSystemIntro", "sendPolicy", "queueMode", "queueDebounceMs", "queueCap", "queueDrop", "inputTokens", "outputTokens", "totalTokens", "pendingFinalDelivery", "pendingFinalDeliveryCreatedAt", "pendingFinalDeliveryLastAttemptAt", "pendingFinalDeliveryAttemptCount", "pendingFinalDeliveryLastError", "pendingFinalDeliveryText", "pendingFinalDeliveryContext", "pendingFinalDeliveryIntentId", "totalTokensFresh", "estimatedCostUsd", "cacheRead", "cacheWrite", "modelProvider", "model", "agentHarnessId", "fallbackNoticeSelectedModel", "fallbackNoticeActiveModel", "fallbackNoticeReason", "contextTokens", "compactionCount", "compactionCheckpoints", "memoryFlushAt", "memoryFlushCompactionCount", "memoryFlushContextHash", "cliSessionIds", "cliSessionBindings", "claudeCliSessionId", "label", "displayName", "channel", "groupId", "subject", "groupChannel", "space", "origin", "route", "deliveryContext", "lastChannel", "lastTo", "lastAccountId", "lastThreadId", "skillsSnapshot", "systemPromptReport", "pluginDebugEntries", "acp", "quotaSuspension"];
+type ReservedSessionEntrySlotKey = Extract<(typeof SESSION_ENTRY_RESERVED_SLOT_KEY_LIST)[number], keyof SessionEntry>;
+type MissingSessionEntryReservedSlotKeys = Exclude<keyof SessionEntry, ReservedSessionEntrySlotKey>;
+type AssertNever<T extends never> = T;
+export type _AssertAllSessionEntryKeysAreReserved = AssertNever<MissingSessionEntryReservedSlotKeys>;
+export declare function normalizeSessionEntrySlotKey(value: unknown): {
+    ok: true;
+    key: string;
+} | {
+    ok: false;
+    error: string;
+};
+export {};

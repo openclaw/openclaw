@@ -44,7 +44,7 @@ export function createFileKnowledgeBase(filePath: string): KnowledgeBase {
       const docs = load().documents.filter((d) => !ns || d.namespace === ns);
       const hits: KbResult[] = [];
       for (let i = 0; i < docs.length; i++) {
-        const doc = docs[i]!;
+        const doc = docs[i];
         if (doc.text.toLowerCase().includes(q)) {
           hits.push({
             id: doc.id,

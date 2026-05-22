@@ -2,6 +2,11 @@ import { randomUUID } from "node:crypto";
 import type { CwDatabase } from "../planes/data/db-types.js";
 import type { PlaybookEngine } from "../planes/orch/playbook-engine.js";
 import { HitlSuspendedError } from "../planes/orch/step-executor.js";
+import type {
+  CapabilityContext,
+  CapabilityRegistry,
+  CapabilityView,
+} from "./capability-registry.js";
 import { createDedupGuard, type DedupGuard } from "./dedup.js";
 import { createEventBus, type EventBus } from "./event-bus.js";
 import { createEventOutbox, type EventOutbox } from "./outbox.js";
@@ -27,6 +32,20 @@ export interface EventKernel {
     },
   ): Promise<CwEventMatch[]>;
   flushOutbox(): Promise<number>;
+  /** 列出所有已注册的能力（委托给 capabilities 注册表）。 */
+  listCapabilities(): CapabilityView[];
+  /** 订阅事件总线上的特定事件类型，返回取消订阅函数。 */
+  subscribe(type: string, handler: (payload: Record<string, unknown>) => void): () => void;
+  /** 通过能力注册表调用能力（委托给 capabilities.invoke）。 */
+  callCapability(
+    id: string,
+    ctx: CapabilityContext,
+    params: Record<string, unknown>,
+  ): Promise<Record<string, unknown>>;
+  /** 注入能力注册表（在 runtime 组装完成后调用）。 */
+  setCapabilityRegistry(registry: CapabilityRegistry): void;
+  /** 返回最近 N 条事件（用于 observe.* 能力统计）。 */
+  getRecentEvents(limit?: number, type?: string): Array<{ type: string; source: string; ts: Date }>;
 }
 
 export type EventKernelOptions = {
@@ -36,6 +55,8 @@ export type EventKernelOptions = {
   logger?: (msg: string) => void;
   dedupWindowMs?: number;
   playbookConcurrency?: number;
+  /** 单个用户同时可触发的最大 Playbook 并行数，默认 3。 */
+  maxPlaysPerUser?: number;
   publishAnomaly?: (payload: Record<string, unknown>) => Promise<void>;
   onOutboxExhausted?: (payload: Record<string, unknown>) => Promise<void>;
 };
@@ -50,13 +71,19 @@ export function createEventKernel(opts: EventKernelOptions): EventKernel {
   const outbox = opts.db ? createEventOutbox(opts.db) : null;
   const dedup = createDedupGuard(opts.dedupWindowMs ?? 60_000);
   const playbookConcurrency = opts.playbookConcurrency ?? 10;
+  const maxPlaysPerUser = opts.maxPlaysPerUser ?? 3;
   const runningCounts = new Map<string, number>();
+  /** 每个用户当前正在运行的 Playbook 数量（用户级并发保护）。 */
+  const userActivePlays = new Map<string, number>();
   const failureState = new Map<string, FailureState>();
   const insertEvent = opts.db?.prepare(`
     INSERT OR REPLACE INTO cw_events (id, type, source, payload, correlation_id, timestamp, subject_id, subject_type, idempotency_key)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
   let running = false;
+  let capabilityRegistry: CapabilityRegistry | null = null;
+  const recentEventLog: Array<{ type: string; source: string; ts: Date }> = [];
+  const MAX_RECENT_LOG = 500;
 
   async function publishAnomaly(payload: Record<string, unknown>): Promise<void> {
     if (!opts.publishAnomaly) {
@@ -87,6 +114,23 @@ export function createEventKernel(opts: EventKernelOptions): EventKernel {
       return;
     }
 
+    // 用户级并发限制
+    const userId = String(event.payload.user_id ?? event.payload.userId ?? "");
+    if (userId) {
+      const userActive = userActivePlays.get(userId) ?? 0;
+      if (userActive >= maxPlaysPerUser) {
+        await publishAnomaly({
+          kind: "user_concurrency_exceeded",
+          playbookId,
+          eventType: event.type,
+          userId,
+          active: userActive,
+          limit: maxPlaysPerUser,
+        });
+        return;
+      }
+    }
+
     const concurrent = runningCounts.get(playbookId) ?? 0;
     if (concurrent >= playbookConcurrency) {
       await publishAnomaly({
@@ -100,6 +144,7 @@ export function createEventKernel(opts: EventKernelOptions): EventKernel {
     }
 
     runningCounts.set(playbookId, concurrent + 1);
+    if (userId) userActivePlays.set(userId, (userActivePlays.get(userId) ?? 0) + 1);
     try {
       await opts.playbookEngine.trigger(playbookId, input, { triggerEvent: event });
       failureState.set(playbookId, { failCount: 0, coolingUntil: 0 });
@@ -133,6 +178,14 @@ export function createEventKernel(opts: EventKernelOptions): EventKernel {
         runningCounts.delete(playbookId);
       } else {
         runningCounts.set(playbookId, next);
+      }
+      if (userId) {
+        const userNext = Math.max(0, (userActivePlays.get(userId) ?? 1) - 1);
+        if (userNext === 0) {
+          userActivePlays.delete(userId);
+        } else {
+          userActivePlays.set(userId, userNext);
+        }
       }
     }
   }
@@ -204,6 +257,10 @@ export function createEventKernel(opts: EventKernelOptions): EventKernel {
         subjectType: pubOpts?.subjectType ?? "system",
         idempotencyKey: pubOpts?.idempotencyKey,
       };
+      recentEventLog.push({ type, source, ts: event.timestamp });
+      if (recentEventLog.length > MAX_RECENT_LOG) {
+        recentEventLog.splice(0, recentEventLog.length - MAX_RECENT_LOG);
+      }
       insertEvent?.run(
         event.id,
         event.type,
@@ -268,6 +325,37 @@ export function createEventKernel(opts: EventKernelOptions): EventKernel {
           },
         },
       );
+    },
+    listCapabilities(): CapabilityView[] {
+      return capabilityRegistry?.list() ?? [];
+    },
+    subscribe(type: string, handler: (payload: Record<string, unknown>) => void): () => void {
+      return bus.subscribe(type, async (event) => {
+        handler(event.payload);
+      });
+    },
+    async callCapability(
+      id: string,
+      ctx: CapabilityContext,
+      params: Record<string, unknown>,
+    ): Promise<Record<string, unknown>> {
+      if (!capabilityRegistry) {
+        throw new Error(`CapabilityRegistry not set; cannot call capability: ${id}`);
+      }
+      return capabilityRegistry.invoke(id, ctx, params);
+    },
+    setCapabilityRegistry(registry: CapabilityRegistry): void {
+      capabilityRegistry = registry;
+    },
+    getRecentEvents(
+      limit = 200,
+      filterType?: string,
+    ): Array<{ type: string; source: string; ts: Date }> {
+      let events = recentEventLog;
+      if (filterType) {
+        events = events.filter((e) => e.type === filterType);
+      }
+      return events.slice(-limit);
     },
   };
 }

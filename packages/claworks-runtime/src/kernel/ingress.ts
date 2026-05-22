@@ -117,7 +117,7 @@ export function createIngressRouter(initialPolicies?: IngressPolicy[]): IngressR
 
   return {
     decide(source, eventType, subjectId) {
-      const sorted = [...policies].sort((a, b) => b.priority - a.priority);
+      const sorted = [...policies].toSorted((a, b) => b.priority - a.priority);
 
       for (const policy of sorted) {
         if (policy.source !== "*" && policy.source !== source) {

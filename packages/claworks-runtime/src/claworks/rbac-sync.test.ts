@@ -70,4 +70,55 @@ describe("rbac-sync", () => {
     expect(DEFAULT_RBAC_POLICIES.some((p) => p.id === "apikey-write")).toBe(true);
     (runtime as { close: () => void }).close();
   });
+
+  it("syncRbacFromObjectStore loads custom deny policies from ObjectStore", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "cw-rbac-custom-"));
+    const runtime = minimalRuntime(join(dir, "custom.db"));
+    await runtime.objectStore.create("RbacPolicy", {
+      id: "deny-k2",
+      action: "rest.write",
+      resource: "event:*",
+      subjectType: "apikey",
+      subjectId: "k2",
+      effect: "deny",
+    });
+
+    await syncRbacFromObjectStore(runtime);
+
+    const denied = runtime.rbac.check({
+      action: "rest.write",
+      resource: "event:alarm.created",
+      subjectType: "apikey",
+      subjectId: "k2",
+    });
+    expect(denied.allowed).toBe(false);
+    const allowed = runtime.rbac.check({
+      action: "rest.write",
+      resource: "event:alarm.created",
+      subjectType: "apikey",
+      subjectId: "other",
+    });
+    expect(allowed.allowed).toBe(true);
+    (runtime as { close: () => void }).close();
+  });
+
+  it("syncIngressFromObjectStore loads custom policies ahead of defaults", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "cw-ingress-custom-"));
+    const runtime = minimalRuntime(join(dir, "custom-ingress.db"));
+    await runtime.objectStore.create("IngressPolicy", {
+      id: "deny-connector-test",
+      source: "connector",
+      eventTypePattern: "test.*",
+      decision: { action: "deny", reason: "blocked" },
+      priority: 500,
+    });
+
+    await syncIngressFromObjectStore(runtime);
+
+    const denied = runtime.ingress.decide("connector", "test.alarm", "x");
+    expect(denied.action).toBe("deny");
+    const kernel = runtime.ingress.decide("connector", "alarm.created", "x");
+    expect(kernel.action).toBe("kernel");
+    (runtime as { close: () => void }).close();
+  });
 });

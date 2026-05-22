@@ -76,7 +76,7 @@ async function handleRequest(
       parts[1] === "packages" &&
       parts.length === 3
     ) {
-      const detail = getPackageDetail(state.entries, parts[2]!);
+      const detail = getPackageDetail(state.entries, parts[2]);
       if (!detail) {
         sendJson(res, 404, { error: "package not found", code: "NOT_FOUND" });
         return;
@@ -92,8 +92,8 @@ async function handleRequest(
       parts[3] === "versions" &&
       parts.length === 5
     ) {
-      const slug = parts[2]!;
-      const version = parts[4]!;
+      const slug = parts[2];
+      const version = parts[4];
       const pack = resolvePackDir(state.entries, slug, version);
       if (!pack) {
         sendJson(res, 404, { error: "version not found", code: "NOT_FOUND" });
@@ -115,9 +115,9 @@ async function handleRequest(
       parts[5] === "artifacts" &&
       parts.length === 7
     ) {
-      const slug = parts[2]!;
-      const version = parts[4]!;
-      const hostKey = parts[6]!;
+      const slug = parts[2];
+      const version = parts[4];
+      const hostKey = parts[6];
       const pack = resolvePackDir(state.entries, slug, version);
       if (!pack) {
         sendJson(res, 404, { error: "artifact not found", code: "NOT_FOUND" });

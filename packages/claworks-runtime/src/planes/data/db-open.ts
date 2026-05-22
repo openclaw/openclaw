@@ -47,6 +47,18 @@ CREATE TABLE IF NOT EXISTS cw_events (
   subject_type TEXT,
   idempotency_key TEXT
 );
+
+CREATE TABLE IF NOT EXISTS cw_user_profiles (
+  user_id TEXT PRIMARY KEY,
+  name TEXT,
+  preferred_language TEXT,
+  preferred_style TEXT NOT NULL DEFAULT 'concise',
+  recent_topics TEXT NOT NULL DEFAULT '[]',
+  interaction_count INTEGER NOT NULL DEFAULT 0,
+  last_seen_at TEXT NOT NULL,
+  custom_notes TEXT,
+  updated_at TEXT NOT NULL DEFAULT NOW()
+);
 `;
 
 function bootstrapPgSchema(db: CwDatabase): void {

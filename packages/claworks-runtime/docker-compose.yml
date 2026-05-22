@@ -1,0 +1,50 @@
+version: "3.8"
+
+services:
+  claworks:
+    build:
+      context: ../..
+      dockerfile: packages/claworks-runtime/Dockerfile
+    ports:
+      - "${CLAWORKS_PORT:-3100}:3100"
+    environment:
+      - CLAWORKS_ROBOT_ID=${CLAWORKS_ROBOT_ID:-my-robot}
+      - CLAWORKS_ROBOT_NAME=${CLAWORKS_ROBOT_NAME:-ClaWorks助手}
+      - CLAWORKS_OWNER_USER_ID=${CLAWORKS_OWNER_USER_ID}
+      - OLLAMA_BASE_URL=${OLLAMA_BASE_URL:-http://ollama:11434}
+      - CLAWORKS_DEFAULT_MODEL=${CLAWORKS_DEFAULT_MODEL:-qwen2.5:7b}
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - OPENAI_BASE_URL=${OPENAI_BASE_URL}
+      - FEISHU_APP_ID=${FEISHU_APP_ID}
+      - FEISHU_APP_SECRET=${FEISHU_APP_SECRET}
+      - FEISHU_VERIFICATION_TOKEN=${FEISHU_VERIFICATION_TOKEN}
+      - CLAWORKS_RATE_LIMIT_PER_MIN=${CLAWORKS_RATE_LIMIT_PER_MIN:-120}
+    volumes:
+      - claworks_data:/root/.claworks
+    depends_on:
+      - ollama
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:3100/healthz"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+
+  ollama:
+    image: ollama/ollama:latest
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_models:/root/.ollama
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:11434/api/version"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
+volumes:
+  claworks_data:
+  ollama_models:

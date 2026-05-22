@@ -1,0 +1,53 @@
+{
+  "$schema": "https://claworks.ai/schema/robot/v1",
+  "id": "my-robot",
+  "name": "ClaWorks 助手",
+  "version": "1.0.0",
+  "role": "工业生产管理助手",
+  "organization": "我的公司",
+  "domain": "manufacturing",
+  "language": "zh-CN",
+  "timezone": "Asia/Shanghai",
+
+  "owner": {
+    "user_id": "",
+    "name": "",
+    "channel": "feishu"
+  },
+
+  "admins": [],
+  "operators": [],
+
+  "capabilities": {
+    "auto_learn": true,
+    "proactive": true,
+    "a2a_enabled": true,
+    "max_concurrent_playbooks": 10
+  },
+
+  "packs": [
+    "base"
+  ],
+
+  "connectors": [],
+
+  "llm": {
+    "default_model": "",
+    "classification_model": "",
+    "reasoning_model": ""
+  },
+
+  "notifications": {
+    "default_channel": "feishu",
+    "throttle_per_minute": 5
+  },
+
+  "behavior": {
+    "constitution_tier": "standard",
+    "auto_approve_low_risk": false,
+    "hitl_timeout_hours": 2
+  },
+
+  "description": "这是我的机器人，负责管理工业生产流程。",
+  "introduction": "您好，我是您的工业生产管理助手。我可以帮您监控设备、管理工单、处理报警、生成报告。"
+}

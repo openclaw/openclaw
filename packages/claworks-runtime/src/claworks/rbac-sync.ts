@@ -21,25 +21,24 @@ export async function syncRbacFromObjectStore(runtime: ClaworksRuntime): Promise
       return;
     }
 
-    const customPolicies: RbacPolicy[] = items
-      .map((item) => {
-        try {
-          return {
-            id: String(item.id),
-            action: String(item.action ?? "*"),
-            resource: String(item.resource ?? "*"),
-            subjectType: (item.subjectType ??
-              item.subject_type ??
-              "apikey") as RbacPolicy["subjectType"],
-            subjectId: String(item.subjectId ?? item.subject_id ?? "*"),
-            effect: (item.effect ?? "allow") as "allow" | "deny",
-            condition: item.condition ? String(item.condition) : undefined,
-          } satisfies RbacPolicy;
-        } catch {
-          return null;
-        }
-      })
-      .filter((p): p is RbacPolicy => p !== null);
+    const customPolicies: RbacPolicy[] = items.flatMap((item) => {
+      try {
+        const policy: RbacPolicy = {
+          id: String(item.id),
+          action: String(item.action ?? "*"),
+          resource: String(item.resource ?? "*"),
+          subjectType: (item.subjectType ??
+            item.subject_type ??
+            "apikey") as RbacPolicy["subjectType"],
+          subjectId: String(item.subjectId ?? item.subject_id ?? "*"),
+          effect: (item.effect ?? "allow") as "allow" | "deny",
+          condition: item.condition ? String(item.condition) : undefined,
+        };
+        return [policy];
+      } catch {
+        return [];
+      }
+    });
 
     // ObjectStore 中的策略优先级比默认策略高（放在前面）
     runtime.rbac.reload([...customPolicies, ...DEFAULT_RBAC_POLICIES]);
@@ -63,22 +62,21 @@ export async function syncIngressFromObjectStore(runtime: ClaworksRuntime): Prom
       runtime.ingress.reload([...DEFAULT_INGRESS_POLICIES]);
       return;
     }
-    const customPolicies = items
-      .map((item) => {
-        try {
-          return {
-            id: String(item.id),
-            source: (item.source ?? "*") as IngressPolicy["source"],
-            eventTypePattern: String(item.eventTypePattern ?? item.event_type_pattern ?? "*"),
-            subjectId: item.subjectId ? String(item.subjectId) : undefined,
-            decision: (item.decision ?? { action: "kernel" }) as IngressPolicy["decision"],
-            priority: Number(item.priority ?? 50),
-          } satisfies IngressPolicy;
-        } catch {
-          return null;
-        }
-      })
-      .filter((p): p is IngressPolicy => p !== null);
+    const customPolicies: IngressPolicy[] = items.flatMap((item) => {
+      try {
+        const policy: IngressPolicy = {
+          id: String(item.id),
+          source: (item.source ?? "*") as IngressPolicy["source"],
+          eventTypePattern: String(item.eventTypePattern ?? item.event_type_pattern ?? "*"),
+          subjectId: item.subjectId ? String(item.subjectId) : undefined,
+          decision: (item.decision ?? { action: "kernel" }) as IngressPolicy["decision"],
+          priority: Number(item.priority ?? 50),
+        };
+        return [policy];
+      } catch {
+        return [];
+      }
+    });
 
     runtime.ingress.reload([...customPolicies, ...DEFAULT_INGRESS_POLICIES]);
     runtime.logger?.(

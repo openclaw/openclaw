@@ -1,6 +1,8 @@
 import { randomUUID } from "node:crypto";
 import type { ModelRouter } from "../../claworks/model-router.js";
 import type { RbacCheckInput, RbacCheckResult } from "../../claworks/robot-identity.js";
+import { CW_EVENTS } from "../../kernel/event-names.js";
+import { globalMetrics } from "../../kernel/metrics.js";
 import type { KnowledgeBase, RobotInfo } from "../../kernel/types.js";
 import type { LoadedPack } from "../../pack-loader/index.js";
 import type { CwDatabase } from "../data/db.js";
@@ -17,6 +19,7 @@ import {
   HitlSuspendedError,
   StepFailedError,
   type LlmCompleteFn,
+  type CallPlaybookFn,
   type ConnectorInvokeFn,
   type NotifyFn,
   type StepExecutorDeps,
@@ -24,7 +27,18 @@ import {
 
 export interface PlaybookEngine {
   loadFromPacks(packs: LoadedPack[]): Promise<void>;
+  /**
+   * 动态加载（或替换）单个 Playbook 定义（热重载用）。
+   * 若同 id 已存在则替换，否则新增。
+   */
+  load(playbook: PlaybookDefinition): void;
+  /**
+   * 按 id 卸载一个 Playbook（热移除用）。
+   */
+  unload(id: string): void;
   list(): PlaybookDefinition[];
+  /** Alias for list() for readability in integration tests and external consumers. */
+  listPlaybooks(): PlaybookDefinition[];
   trigger(
     playbookId: string,
     input: Record<string, unknown>,
@@ -41,9 +55,15 @@ export interface PlaybookEngine {
   reloadPack(packId: string): Promise<void>;
   /** Restore waiting_hitl runs from DB after process restart */
   hydrateSuspendedRuns(): Promise<number>;
+  /**
+   * Sweep HITL entries past their expiresAt deadline and auto-resume them
+   * with the configured on_timeout decision. Returns count of expired runs.
+   */
+  expireStaleHitl(): Promise<number>;
   setLlmComplete(fn: LlmCompleteFn | undefined): void;
   setNotify(fn: NotifyFn | undefined): void;
   setConnectorInvoke(fn: ConnectorInvokeFn | undefined): void;
+  setPublishAnomaly(fn: ((payload: Record<string, unknown>) => Promise<void>) | undefined): void;
 }
 
 export type PlaybookEngineDeps = {
@@ -64,6 +84,7 @@ export type PlaybookEngineDeps = {
   ontology?: import("../data/ontology-engine.js").OntologyEngine;
   subagentRun?: import("./step-executor.js").SubagentRunFn;
   skillRun?: import("./step-executor.js").SkillRunFn;
+  scriptRun?: import("./step-executor.js").ScriptRunFn;
   reloadPacks?: () => Promise<Record<string, unknown>>;
   reloadPackById?: (
     packId: string,
@@ -72,6 +93,14 @@ export type PlaybookEngineDeps = {
   modelRouter?: ModelRouter;
   rbacCheck?: (input: RbacCheckInput) => RbacCheckResult;
   logger?: (msg: string) => void;
+  /** Pack action registry — passed through to step-executor for dynamic dispatch */
+  actionRegistry?: import("../../kernel/action-registry.js").ActionRegistry;
+  /** Pack intent registry — passed through to function-executor */
+  intentRegistry?: import("../../kernel/intent-registry.js").IntentRegistry;
+  /** 生产模式：stub 步骤 fail-closed */
+  productionMode?: boolean;
+  /** 发布异常事件 */
+  publishAnomaly?: (payload: Record<string, unknown>) => Promise<void>;
 };
 
 type RunRow = {
@@ -117,6 +146,9 @@ export function createPlaybookEngine(deps: PlaybookEngineDeps): PlaybookEngine {
   const modelRouter = deps.modelRouter;
   let subagentRun = deps.subagentRun;
   let skillRun = deps.skillRun;
+  let scriptRun = deps.scriptRun;
+  const productionMode = deps.productionMode ?? false;
+  let publishAnomaly = deps.publishAnomaly;
 
   const upsertRun = db.prepare(`
     INSERT INTO cw_playbook_runs (id, playbook_id, status, input, output, error, steps, started_at, completed_at)
@@ -152,6 +184,7 @@ export function createPlaybookEngine(deps: PlaybookEngineDeps): PlaybookEngine {
     }
 
     const runId = randomUUID();
+    const _pbStartMs = Date.now();
     const run: PlaybookRun = {
       id: runId,
       playbookId,
@@ -162,6 +195,7 @@ export function createPlaybookEngine(deps: PlaybookEngineDeps): PlaybookEngine {
     };
     runs.set(runId, run);
     persistRun(upsertRun, run, suspended.get(runId));
+    globalMetrics.increment(CW_EVENTS.PLAYBOOK_STARTED, { playbook_id: playbookId });
 
     const ctx: PlaybookStepContext = {
       runId,
@@ -172,6 +206,10 @@ export function createPlaybookEngine(deps: PlaybookEngineDeps): PlaybookEngine {
         trigger: input, // {{trigger.xxx}} 语法支持
         _now: new Date().toISOString(),
         _now_ts: Date.now(),
+        _now_date: new Date().toLocaleDateString("zh-CN"),
+        _now_weekday: ["周日", "周一", "周二", "周三", "周四", "周五", "周六"][new Date().getDay()],
+        _robot_name: deps.robot.name,
+        _robot_id: deps.robot.id ?? deps.robot.name,
         steps: {},
       },
       objectStore: deps.objectStore,
@@ -181,6 +219,8 @@ export function createPlaybookEngine(deps: PlaybookEngineDeps): PlaybookEngine {
       ontology,
       reloadPacks,
       a2aPeers,
+      connectorInvoke: deps.connectorInvoke,
+      logger: deps.logger,
       ...partialCtx,
     };
 
@@ -204,10 +244,29 @@ export function createPlaybookEngine(deps: PlaybookEngineDeps): PlaybookEngine {
       run.error = err instanceof Error ? err.message : String(err);
       run.completedAt = new Date();
       clearSuspended(runId);
+      globalMetrics.increment(CW_EVENTS.PLAYBOOK_FAILED, { playbook_id: playbookId });
+      globalMetrics.recordDuration("playbook.duration_ms", Date.now() - _pbStartMs, {
+        playbook_id: playbookId,
+        status: "failed",
+      });
+      // 发布 playbook.failed 事件，触发 error_recovery_notify Playbook
+      publishEvent?.(CW_EVENTS.PLAYBOOK_FAILED, "playbook-engine", {
+        playbook_id: playbookId,
+        run_id: runId,
+        error: run.error,
+        user_id: String(input.user_id ?? input.sender_id ?? ""),
+        original_text: String(input.text ?? input.message ?? ""),
+        failed_at: run.completedAt.toISOString(),
+      }).catch(() => {});
     }
 
     if (run.status === "completed") {
       run.output = summarizeRunOutput(ctx.variables);
+      globalMetrics.increment(CW_EVENTS.PLAYBOOK_COMPLETED, { playbook_id: playbookId });
+      globalMetrics.recordDuration("playbook.duration_ms", Date.now() - _pbStartMs, {
+        playbook_id: playbookId,
+        status: "completed",
+      });
     }
 
     runs.set(runId, run);
@@ -223,7 +282,7 @@ export function createPlaybookEngine(deps: PlaybookEngineDeps): PlaybookEngine {
   ): Promise<void> {
     for (let i = fromIndex; i < def.steps.length; i++) {
       try {
-        await executePlaybookStep(def.steps[i]!, ctx, run, stepDeps());
+        await executePlaybookStep(def.steps[i], ctx, run, stepDeps());
       } catch (err) {
         if (err instanceof HitlSuspendedError) {
           throw err;
@@ -253,11 +312,23 @@ export function createPlaybookEngine(deps: PlaybookEngineDeps): PlaybookEngine {
       connectorInvoke,
       subagentRun,
       skillRun,
+      scriptRun,
       a2aPeers,
       modelRouter,
       rbacCheck: deps.rbacCheck,
       triggerPlaybook: (playbookId, input) => triggerInternal(playbookId, input),
+      callPlaybook: async (playbookId, params, parentRunId) => {
+        const child = await triggerInternal(playbookId, {
+          ...params,
+          parent_run_id: parentRunId,
+        });
+        return { output: child.output, status: child.status };
+      },
+      actionRegistry: deps.actionRegistry,
+      intentRegistry: deps.intentRegistry,
       logger: deps.logger,
+      productionMode,
+      publishAnomaly,
     };
   }
 
@@ -295,7 +366,21 @@ export function createPlaybookEngine(deps: PlaybookEngineDeps): PlaybookEngine {
       }
     },
 
+    load(playbook: PlaybookDefinition) {
+      if (playbook.id) {
+        playbooks.set(playbook.id, playbook);
+      }
+    },
+
+    unload(id: string) {
+      playbooks.delete(id);
+    },
+
     list() {
+      return [...playbooks.values()];
+    },
+
+    listPlaybooks() {
       return [...playbooks.values()];
     },
 
@@ -309,6 +394,10 @@ export function createPlaybookEngine(deps: PlaybookEngineDeps): PlaybookEngine {
 
     setConnectorInvoke(fn) {
       connectorInvoke = fn;
+    },
+
+    setPublishAnomaly(fn) {
+      publishAnomaly = fn;
     },
 
     async trigger(playbookId, input, partialCtx) {
@@ -353,7 +442,7 @@ export function createPlaybookEngine(deps: PlaybookEngineDeps): PlaybookEngine {
         byId.set(run.id, run);
       }
       return [...byId.values()]
-        .sort((a, b) => b.startedAt.getTime() - a.startedAt.getTime())
+        .toSorted((a, b) => b.startedAt.getTime() - a.startedAt.getTime())
         .slice(0, limit);
     },
 
@@ -372,6 +461,41 @@ export function createPlaybookEngine(deps: PlaybookEngineDeps): PlaybookEngine {
         runs.set(run.id, run);
         suspended.set(run.id, susp);
         count += 1;
+      }
+      return count;
+    },
+
+    async expireStaleHitl() {
+      const expired = deps.hitl.expireStale?.() ?? [];
+      let count = 0;
+      for (const { pending, decision } of expired) {
+        const { runId, stepId } = pending;
+        try {
+          deps.logger?.(
+            `[claworks:hitl] auto-expire run=${runId} step=${stepId} decision=${decision}`,
+          );
+          if (decision === "abort") {
+            // Mark the run as failed with a timeout reason
+            const run = await this.getRun(runId);
+            if (run) {
+              run.status = "failed";
+              run.error = `HITL timeout: step '${stepId}' expired with on_timeout=abort`;
+              run.completedAt = new Date();
+            }
+            if (deps.notify) {
+              await deps.notify({
+                message: `[HITL 超时] Playbook ${runId} 步骤 ${stepId} 超时后已终止（on_timeout=abort）`,
+              });
+            }
+          } else {
+            await this.submitHitlDecision(runId, stepId, decision, "auto-escalated by timeout");
+          }
+          count += 1;
+        } catch (err) {
+          deps.logger?.(
+            `[claworks:hitl] expiry failed for run=${runId}: ${err instanceof Error ? err.message : String(err)}`,
+          );
+        }
       }
       return count;
     },
@@ -491,6 +615,20 @@ function reviveStepLogs(logs: StepLog[]): StepLog[] {
   }));
 }
 
+/** JSON.stringify with circular reference protection. */
+function safeJsonStringify(value: unknown): string {
+  const seen = new WeakSet<object>();
+  return JSON.stringify(value, (_key, val) => {
+    if (typeof val === "object" && val !== null) {
+      if (seen.has(val)) {
+        return "[Circular]";
+      }
+      seen.add(val);
+    }
+    return val as unknown;
+  });
+}
+
 function persistRun(
   stmt: ReturnType<CwDatabase["prepare"]>,
   run: PlaybookRun,
@@ -498,14 +636,14 @@ function persistRun(
 ): void {
   const stepsJson =
     susp != null
-      ? JSON.stringify({ logs: run.steps, suspended: susp } satisfies StepsPersistence)
-      : JSON.stringify(run.steps);
+      ? safeJsonStringify({ logs: run.steps, suspended: susp } satisfies StepsPersistence)
+      : safeJsonStringify(run.steps);
   stmt.run(
     run.id,
     run.playbookId,
     run.status,
-    JSON.stringify(run.input),
-    run.output ? JSON.stringify(run.output) : null,
+    safeJsonStringify(run.input),
+    run.output ? safeJsonStringify(run.output) : null,
     run.error ?? null,
     stepsJson,
     run.startedAt.getTime(),

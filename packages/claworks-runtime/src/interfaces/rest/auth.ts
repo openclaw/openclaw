@@ -27,11 +27,16 @@ function readChannelUserHeader(req: IncomingMessage): string {
 
 export function resolveAuthContext(req: IncomingMessage, runtime: ClaworksRuntime): AuthContext {
   const expected = runtime.config.api?.api_key?.trim();
+  const requireApiKey = runtime.config.api?.require_api_key === true;
   const header = req.headers.authorization ?? "";
   const token = header.startsWith("Bearer ") ? header.slice(7).trim() : "";
   const channelUser = readChannelUserHeader(req);
 
   if (!expected) {
+    // require_api_key=true but no api_key configured → deny (misconfigured, fail safe)
+    if (requireApiKey) {
+      return { authenticated: false, subjectType: "apikey", subjectId: "unknown" };
+    }
     if (channelUser) {
       return { authenticated: true, subjectType: "channel_user", subjectId: channelUser };
     }

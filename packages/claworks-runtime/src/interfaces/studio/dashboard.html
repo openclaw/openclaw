@@ -1,0 +1,486 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>ClaWorks 机器人控制台</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+      .status-dot {
+        width: 10px;
+        height: 10px;
+        border-radius: 50%;
+        display: inline-block;
+      }
+      .status-healthy {
+        background: #22c55e;
+        box-shadow: 0 0 6px #22c55e;
+      }
+      .status-degraded {
+        background: #f59e0b;
+        box-shadow: 0 0 6px #f59e0b;
+      }
+      .status-unhealthy {
+        background: #ef4444;
+        box-shadow: 0 0 6px #ef4444;
+      }
+      .fade-in {
+        animation: fadeIn 0.3s ease-in;
+      }
+      @keyframes fadeIn {
+        from {
+          opacity: 0;
+          transform: translateY(4px);
+        }
+        to {
+          opacity: 1;
+          transform: translateY(0);
+        }
+      }
+      .scrollbar-thin::-webkit-scrollbar {
+        width: 4px;
+      }
+      .scrollbar-thin::-webkit-scrollbar-track {
+        background: transparent;
+      }
+      .scrollbar-thin::-webkit-scrollbar-thumb {
+        background: #374151;
+        border-radius: 2px;
+      }
+    </style>
+  </head>
+  <body class="bg-gray-950 text-gray-100 min-h-screen">
+    <!-- 顶部导航 -->
+    <nav
+      class="bg-gray-900 border-b border-gray-800 px-6 py-3 flex items-center justify-between sticky top-0 z-10"
+    >
+      <div class="flex items-center gap-3">
+        <div class="text-2xl">🤖</div>
+        <div>
+          <div class="font-bold text-white text-base" id="robot-name">ClaWorks 机器人</div>
+          <div class="text-xs text-gray-400" id="robot-id">加载中...</div>
+        </div>
+      </div>
+      <div class="flex items-center gap-5">
+        <div class="flex items-center gap-2">
+          <span class="status-dot status-unhealthy" id="connection-dot"></span>
+          <span class="text-sm text-gray-400" id="connection-status">连接中...</span>
+        </div>
+        <div class="text-xs text-gray-500" id="last-updated">-</div>
+        <button
+          onclick="manualRefresh()"
+          class="text-xs text-gray-400 hover:text-white bg-gray-800 hover:bg-gray-700 px-2 py-1 rounded transition-colors"
+        >
+          刷新
+        </button>
+      </div>
+    </nav>
+
+    <div class="max-w-7xl mx-auto px-6 py-6 space-y-6">
+      <!-- 状态卡片行 -->
+      <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
+        <div
+          class="bg-gray-900 rounded-xl p-4 border border-gray-800 hover:border-gray-700 transition-colors"
+        >
+          <div class="text-xs text-gray-400 mb-2">系统健康</div>
+          <div class="flex items-center gap-2">
+            <span class="status-dot status-unhealthy" id="health-dot"></span>
+            <span class="text-lg font-semibold" id="health-status">-</span>
+          </div>
+        </div>
+        <div
+          class="bg-gray-900 rounded-xl p-4 border border-gray-800 hover:border-gray-700 transition-colors"
+        >
+          <div class="text-xs text-gray-400 mb-2">注册能力数</div>
+          <div class="text-2xl font-bold text-blue-400" id="caps-count">-</div>
+        </div>
+        <div
+          class="bg-gray-900 rounded-xl p-4 border border-gray-800 hover:border-gray-700 transition-colors"
+        >
+          <div class="text-xs text-gray-400 mb-2">已加载 Pack</div>
+          <div class="text-2xl font-bold text-emerald-400" id="packs-count">-</div>
+        </div>
+        <div
+          class="bg-gray-900 rounded-xl p-4 border border-gray-800 hover:border-gray-700 transition-colors"
+        >
+          <div class="text-xs text-gray-400 mb-2">运行时长</div>
+          <div class="text-2xl font-bold text-purple-400" id="uptime">-</div>
+        </div>
+      </div>
+
+      <!-- 机器人身份信息 -->
+      <div class="bg-gray-900 rounded-xl border border-gray-800 p-4" id="identity-panel">
+        <h2 class="font-semibold text-sm mb-3 text-gray-300">🪪 机器人身份</h2>
+        <div class="grid grid-cols-2 md:grid-cols-4 gap-3 text-sm">
+          <div>
+            <span class="text-gray-500 text-xs">角色</span>
+            <div id="robot-role" class="text-gray-200">-</div>
+          </div>
+          <div>
+            <span class="text-gray-500 text-xs">领域</span>
+            <div id="robot-domain" class="text-gray-200">-</div>
+          </div>
+          <div>
+            <span class="text-gray-500 text-xs">Playbook 数</span>
+            <div id="playbooks-count" class="text-blue-400 font-medium">-</div>
+          </div>
+          <div>
+            <span class="text-gray-500 text-xs">Connector 数</span>
+            <div id="connectors-count" class="text-emerald-400 font-medium">-</div>
+          </div>
+        </div>
+        <div class="mt-3 text-xs text-gray-500" id="robot-desc">-</div>
+      </div>
+
+      <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+        <!-- 实时事件流 -->
+        <div class="bg-gray-900 rounded-xl border border-gray-800 flex flex-col">
+          <div
+            class="px-4 py-3 border-b border-gray-800 flex items-center justify-between shrink-0"
+          >
+            <h2 class="font-semibold text-sm">📡 实时事件流</h2>
+            <div class="flex items-center gap-3">
+              <span class="text-xs text-gray-500" id="event-count">0 条</span>
+              <button
+                onclick="clearEvents()"
+                class="text-xs text-gray-500 hover:text-gray-300 transition-colors"
+              >
+                清空
+              </button>
+            </div>
+          </div>
+          <div
+            id="event-log"
+            class="p-3 space-y-1 h-64 overflow-y-auto font-mono text-xs scrollbar-thin"
+          >
+            <div class="text-gray-500 italic">等待事件...</div>
+          </div>
+        </div>
+
+        <!-- 能力调用统计 -->
+        <div class="bg-gray-900 rounded-xl border border-gray-800 flex flex-col">
+          <div
+            class="px-4 py-3 border-b border-gray-800 flex items-center justify-between shrink-0"
+          >
+            <h2 class="font-semibold text-sm">⚡ 能力调用统计</h2>
+            <button
+              onclick="fetchCapabilityStats()"
+              class="text-xs text-gray-500 hover:text-gray-300 transition-colors"
+            >
+              刷新
+            </button>
+          </div>
+          <div id="capability-stats" class="p-3 h-64 overflow-y-auto scrollbar-thin">
+            <div class="text-gray-500 text-sm italic">加载中...</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 已加载 Playbooks -->
+      <div class="bg-gray-900 rounded-xl border border-gray-800">
+        <div class="px-4 py-3 border-b border-gray-800 flex items-center justify-between">
+          <h2 class="font-semibold text-sm">📋 Playbooks</h2>
+          <button
+            onclick="fetchPlaybooks()"
+            class="text-xs text-gray-500 hover:text-gray-300 transition-colors"
+          >
+            刷新
+          </button>
+        </div>
+        <div
+          id="playbooks-list"
+          class="p-3 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-2 max-h-48 overflow-y-auto scrollbar-thin"
+        >
+          <div class="text-gray-500 text-sm italic">加载中...</div>
+        </div>
+      </div>
+
+      <!-- 发送测试消息 -->
+      <div class="bg-gray-900 rounded-xl border border-gray-800 p-4">
+        <h2 class="font-semibold text-sm mb-3">💬 发送测试消息</h2>
+        <div class="flex gap-3">
+          <input
+            id="test-msg"
+            type="text"
+            placeholder="发送测试消息给机器人（触发 im.message_received 事件）..."
+            class="flex-1 bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 transition-colors"
+            onkeydown="if (event.key === 'Enter') sendTestMessage();"
+          />
+          <button
+            onclick="sendTestMessage()"
+            class="bg-blue-600 hover:bg-blue-500 active:bg-blue-700 px-4 py-2 rounded-lg text-sm font-medium transition-colors whitespace-nowrap"
+          >
+            发送
+          </button>
+        </div>
+        <div
+          id="msg-response"
+          class="mt-3 text-sm text-gray-400 hidden p-2 bg-gray-800 rounded-lg"
+        ></div>
+      </div>
+
+      <!-- KB 快速搜索 -->
+      <div class="bg-gray-900 rounded-xl border border-gray-800 p-4">
+        <h2 class="font-semibold text-sm mb-3">🔍 知识库快速搜索</h2>
+        <div class="flex gap-3">
+          <input
+            id="kb-query"
+            type="text"
+            placeholder="搜索知识库..."
+            class="flex-1 bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500 transition-colors"
+            onkeydown="if (event.key === 'Enter') searchKb();"
+          />
+          <button
+            onclick="searchKb()"
+            class="bg-emerald-700 hover:bg-emerald-600 active:bg-emerald-800 px-4 py-2 rounded-lg text-sm font-medium transition-colors whitespace-nowrap"
+          >
+            搜索
+          </button>
+        </div>
+        <div id="kb-results" class="mt-3 space-y-2 hidden"></div>
+      </div>
+    </div>
+
+    <script>
+      const BASE = window.location.origin;
+      let eventSource = null;
+      let eventCount = 0;
+
+      // ── 状态轮询 ────────────────────────────────────────────────
+      async function fetchStatus() {
+        try {
+          const [healthRes, identityRes, packsRes, playRes, connRes] = await Promise.all([
+            fetch(`${BASE}/v1/health`).then(r => r.json()).catch(() => null),
+            fetch(`${BASE}/v1/identity`).then(r => r.json()).catch(() => null),
+            fetch(`${BASE}/v1/packs`).then(r => r.json()).catch(() => null),
+            fetch(`${BASE}/v1/playbooks`).then(r => r.json()).catch(() => null),
+            fetch(`${BASE}/v1/connectors`).then(r => r.json()).catch(() => null),
+          ]);
+
+          // Health card
+          const health = healthRes?.overall ?? healthRes?.health ?? 'unknown';
+          document.getElementById('health-status').textContent = health;
+          const dot = document.getElementById('health-dot');
+          dot.className = 'status-dot ' + (health === 'healthy' ? 'status-healthy' : health === 'degraded' ? 'status-degraded' : 'status-unhealthy');
+
+          // Capabilities count
+          document.getElementById('caps-count').textContent = healthRes?.capabilities_registered ?? '-';
+
+          // Packs count
+          document.getElementById('packs-count').textContent = packsRes?.packs?.length ?? '-';
+
+          // Uptime
+          const upSec = healthRes?.uptime_seconds;
+          if (upSec !== undefined) {
+            const h = Math.floor(upSec / 3600);
+            const m = Math.floor((upSec % 3600) / 60);
+            document.getElementById('uptime').textContent = h > 0 ? `${h}h${m}m` : `${m}m`;
+          }
+
+          // Identity
+          if (identityRes) {
+            document.getElementById('robot-name').textContent = identityRes.name ?? 'ClaWorks';
+            document.getElementById('robot-id').textContent = identityRes.robot?.id ?? '-';
+            document.getElementById('robot-role').textContent = identityRes.role ?? '-';
+            document.getElementById('robot-domain').textContent = identityRes.domain ?? '-';
+            document.getElementById('robot-desc').textContent = identityRes.description ?? '';
+          }
+
+          // Playbooks / Connectors count
+          document.getElementById('playbooks-count').textContent = playRes?.playbooks?.length ?? '-';
+          document.getElementById('connectors-count').textContent = connRes?.connectors?.length ?? '-';
+
+          document.getElementById('connection-status').textContent = '已连接';
+          document.getElementById('connection-dot').className = 'status-dot status-healthy';
+          document.getElementById('last-updated').textContent = '更新于 ' + new Date().toLocaleTimeString('zh-CN');
+        } catch(e) {
+          document.getElementById('connection-status').textContent = '连接失败';
+          document.getElementById('connection-dot').className = 'status-dot status-unhealthy';
+        }
+      }
+
+      // ── Capability 统计 ─────────────────────────────────────────
+      async function fetchCapabilityStats() {
+        try {
+          const r = await fetch(`${BASE}/v1/capabilities/observe.capability_stats/call`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: '{}'
+          });
+          const d = await r.json();
+          const stats = d.result?.stats ?? d.stats ?? {};
+          const container = document.getElementById('capability-stats');
+          const entries = Object.entries(stats)
+            .sort((a, b) => ((b[1] as any)?.calls ?? 0) - ((a[1] as any)?.calls ?? 0))
+            .slice(0, 12);
+          if (entries.length === 0) {
+            container.innerHTML = '<div class="text-gray-500 text-sm italic">暂无调用记录</div>';
+            return;
+          }
+          const max = (entries[0][1] as any)?.calls ?? 1;
+          container.innerHTML = entries.map(([id, stat]) => {
+            const calls = (stat as any)?.calls ?? 0;
+            const pct = Math.round(calls / max * 100);
+            return `<div class="mb-2">
+              <div class="flex items-center justify-between mb-0.5">
+                <span class="text-xs text-gray-300 truncate flex-1 mr-2">${id}</span>
+                <span class="text-xs text-blue-400 tabular-nums">${calls}</span>
+              </div>
+              <div class="h-1 bg-gray-800 rounded-full overflow-hidden">
+                <div class="h-full bg-blue-600 rounded-full" style="width:${pct}%"></div>
+              </div>
+            </div>`;
+          }).join('');
+        } catch {
+          document.getElementById('capability-stats').innerHTML = '<div class="text-gray-500 text-sm italic">获取失败</div>';
+        }
+      }
+
+      // ── Playbooks 列表 ──────────────────────────────────────────
+      async function fetchPlaybooks() {
+        try {
+          const r = await fetch(`${BASE}/v1/playbooks`);
+          const d = await r.json();
+          const pbs = d.playbooks ?? [];
+          const container = document.getElementById('playbooks-list');
+          if (pbs.length === 0) {
+            container.innerHTML = '<div class="text-gray-500 text-sm italic">无已加载 Playbook</div>';
+            return;
+          }
+          container.innerHTML = pbs.map((p) => `
+            <div class="bg-gray-800 rounded-lg px-3 py-2 border border-gray-700">
+              <div class="text-xs font-medium text-gray-200 truncate">${p.name ?? p.id}</div>
+              <div class="text-xs text-gray-500 mt-0.5 truncate">${p.id} · ${p.pack ?? ''}</div>
+              <div class="text-xs text-gray-600 truncate">${p.trigger?.kind ?? ''}: ${p.trigger?.pattern ?? ''}</div>
+            </div>
+          `).join('');
+        } catch {
+          document.getElementById('playbooks-list').innerHTML = '<div class="text-gray-500 text-sm italic">获取失败</div>';
+        }
+      }
+
+      // ── SSE 事件流 ──────────────────────────────────────────────
+      function setupSSE() {
+        if (eventSource) { try { eventSource.close(); } catch {} }
+        try {
+          eventSource = new EventSource(`${BASE}/v1/events/stream`);
+          eventSource.onmessage = (e) => {
+            try {
+              const data = JSON.parse(e.data);
+              addEvent(data.type ?? 'unknown', data.payload ?? {});
+            } catch {}
+          };
+          eventSource.onerror = () => {
+            document.getElementById('connection-status').textContent = 'SSE 断开';
+            document.getElementById('connection-dot').className = 'status-dot status-degraded';
+          };
+          eventSource.onopen = () => {
+            document.getElementById('connection-status').textContent = '已连接 (SSE)';
+            document.getElementById('connection-dot').className = 'status-dot status-healthy';
+          };
+        } catch {}
+      }
+
+      function addEvent(type, payload) {
+        const log = document.getElementById('event-log');
+        // 清除占位符
+        const placeholder = log.querySelector('.italic');
+        if (placeholder) placeholder.remove();
+
+        eventCount++;
+        document.getElementById('event-count').textContent = `${eventCount} 条`;
+
+        const isError = type.includes('error') || type.includes('fail') || type.includes('denied');
+        const isSuccess = type.includes('complete') || type.includes('success') || type.includes('ok');
+        const color = isError ? 'text-red-400' : isSuccess ? 'text-emerald-400' : 'text-blue-400';
+        const detail = typeof payload === 'string' ? payload : JSON.stringify(payload).slice(0, 100);
+
+        const item = document.createElement('div');
+        item.className = 'fade-in flex gap-2 leading-relaxed';
+        item.innerHTML = `<span class="text-gray-600 shrink-0">${new Date().toLocaleTimeString('zh-CN', {hour12:false})}</span>`
+          + `<span class="${color} shrink-0 truncate max-w-[160px]">${type}</span>`
+          + `<span class="text-gray-500 truncate flex-1 min-w-0">${detail}</span>`;
+        log.insertBefore(item, log.firstChild);
+        if (log.children.length > 60) log.removeChild(log.lastChild);
+      }
+
+      function clearEvents() {
+        document.getElementById('event-log').innerHTML = '<div class="text-gray-500 italic">已清空</div>';
+        eventCount = 0;
+        document.getElementById('event-count').textContent = '0 条';
+      }
+
+      // ── 测试消息发送 ─────────────────────────────────────────────
+      async function sendTestMessage() {
+        const msgEl = document.getElementById('test-msg');
+        const msg = msgEl.value.trim();
+        if (!msg) return;
+        const resp = document.getElementById('msg-response');
+        resp.classList.remove('hidden');
+        resp.textContent = '发送中...';
+        try {
+          const r = await fetch(`${BASE}/v1/events/publish`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              type: 'im.message_received',
+              payload: { text: msg, user_id: 'dashboard-user', source: 'dashboard' }
+            })
+          });
+          const d = await r.json();
+          resp.textContent = d.published
+            ? `✅ 已发送，匹配 ${d.matched_playbooks ?? 0} 个 Playbook`
+            : `❌ 发送失败：${JSON.stringify(d)}`;
+          addEvent('im.message_received (sent)', { text: msg });
+        } catch(e) {
+          resp.textContent = '❌ ' + (e instanceof Error ? e.message : String(e));
+        }
+        msgEl.value = '';
+      }
+
+      // ── KB 搜索 ──────────────────────────────────────────────────
+      async function searchKb() {
+        const q = document.getElementById('kb-query').value.trim();
+        if (!q) return;
+        const container = document.getElementById('kb-results');
+        container.classList.remove('hidden');
+        container.innerHTML = '<div class="text-gray-500 text-sm">搜索中...</div>';
+        try {
+          const r = await fetch(`${BASE}/v1/kb/search?q=${encodeURIComponent(q)}&limit=5`);
+          const d = await r.json();
+          const results = d.results ?? [];
+          if (results.length === 0) {
+            container.innerHTML = '<div class="text-gray-500 text-sm italic">未找到相关结果</div>';
+            return;
+          }
+          container.innerHTML = results.map((item, i) => `
+            <div class="bg-gray-800 rounded-lg p-3 border border-gray-700">
+              <div class="flex items-center justify-between mb-1">
+                <span class="text-xs text-gray-400">结果 ${i+1}</span>
+                <span class="text-xs text-emerald-400">相关度 ${Math.round((item.score ?? 0) * 100)}%</span>
+              </div>
+              <p class="text-sm text-gray-200 leading-relaxed">${String(item.text ?? item.content ?? '').slice(0, 300)}</p>
+              ${item.source ? `<div class="text-xs text-gray-500 mt-1">来源: ${item.source}</div>` : ''}
+            </div>
+          `).join('');
+        } catch(e) {
+          container.innerHTML = `<div class="text-red-400 text-sm">搜索失败：${e instanceof Error ? e.message : String(e)}</div>`;
+        }
+      }
+
+      function manualRefresh() {
+        fetchStatus();
+        fetchCapabilityStats();
+        fetchPlaybooks();
+      }
+
+      // ── 初始化 ───────────────────────────────────────────────────
+      fetchStatus();
+      fetchCapabilityStats();
+      fetchPlaybooks();
+      setupSSE();
+      setInterval(fetchStatus, 15000);
+      setInterval(fetchCapabilityStats, 30000);
+    </script>
+  </body>
+</html>

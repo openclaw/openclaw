@@ -1,6 +1,9 @@
 export type A2aPeerConfig = {
   name: string;
+  /** 对端基础 URL（url 的别名，两者等价） */
   url: string;
+  /** 对端端点（与 url 等价，供旧代码使用 .endpoint 的地方） */
+  endpoint?: string;
 };
 
 /** Resolve playbook ``target`` (URL or configured peer name) to an A2A base URL. */

@@ -6,6 +6,7 @@ import type { ClaworksRuntime } from "../../claworks/runtime.js";
 import { createEventKernel } from "../../kernel/event-kernel.js";
 import { createIngressRouter } from "../../kernel/ingress.js";
 import { openDatabase } from "../../planes/data/db.js";
+import { createDocumentKnowledgeBase } from "../../planes/data/kb-document-knowledge-base.js";
 import { createKnowledgeBase } from "../../planes/data/knowledge-base.js";
 import { createObjectStore } from "../../planes/data/object-store.js";
 import { createHitlGate } from "../../planes/orch/hitl-gate.js";
@@ -62,6 +63,52 @@ describe("MCP tools", () => {
       name: string;
     };
     expect(result.name).toBe("test-robot");
+    close();
+  });
+
+  it("cw_kb_status describes stub KB", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "cw-mcp-kb-"));
+    const { db, close } = openDatabase(`sqlite://${join(dir, "t.db")}`);
+    const kb = createKnowledgeBase();
+    const runtime = {
+      config: { data: { kb_provider: "stub", kb_embed_model: "text-embedding-3-small" } },
+      kb,
+    } as unknown as ClaworksRuntime;
+
+    const status = (await callClaworksMcpTool(runtime, "cw_kb_status", {})) as {
+      provider: string;
+      vector: boolean;
+    };
+    expect(status.provider).toBe("bm25-memory");
+    expect(status.vector).toBe(false);
+    close();
+  });
+
+  it("cw_kb_ingest_document publishes searchable document metadata", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "cw-mcp-doc-kb-"));
+    const { db, close } = openDatabase(`sqlite://${join(dir, "t.db")}`);
+    const kb = createDocumentKnowledgeBase(db, createKnowledgeBase());
+    const runtime = {
+      config: { data: {} },
+      kb,
+    } as unknown as ClaworksRuntime;
+
+    const ingest = (await callClaworksMcpTool(runtime, "cw_kb_ingest_document", {
+      text: "Compressor vibration threshold is 4.5 mm/s",
+      source: "compressor-manual.md",
+      namespace: "plant",
+      auto_publish: true,
+    })) as { document: { id: string; status: string } };
+
+    expect(ingest.document.status).toBe("published");
+
+    const search = (await callClaworksMcpTool(runtime, "cw_kb_search", {
+      query: "vibration",
+      namespace: "plant",
+    })) as { results: Array<{ document_id?: string; citation?: string }> };
+
+    expect(search.results.length).toBeGreaterThan(0);
+    expect(search.results[0]?.document_id).toBe(ingest.document.id);
     close();
   });
 

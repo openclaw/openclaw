@@ -1,4 +1,4 @@
-export { createPackLoader, resolvePackDir, type PackLoader } from "./loader.js";
+export { createPackLoader, resolvePackDir, validatePackDependencies } from "./loader.js";
 export {
   installPackFromNexus,
   listNexusPackages,
@@ -8,4 +8,11 @@ export {
   type NexusInstallSpec,
 } from "./nexus-client.js";
 export { parseObjectTypeYaml, parsePlaybookYaml, readPackManifest } from "./yaml-parsers.js";
-export type { CwPackConfig, LoadedPack, PackManifest } from "./types.js";
+export type {
+  CwPackConfig,
+  LoadedPack,
+  PackManifest,
+  PackDependency,
+  PackDependencyError,
+  PackLoader,
+} from "./types.js";

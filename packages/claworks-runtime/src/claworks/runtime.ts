@@ -1,12 +1,30 @@
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { createResearchAgent } from "../agents/research-agent.js";
 import { ConnectorManager } from "../interfaces/connectors/connector-manager.js";
 import { resolveConnectorConfigs } from "../interfaces/connectors/presets.js";
+import { createActionRegistry } from "../kernel/action-registry.js";
+import { createContextEngine } from "../kernel/context-engine.js";
+import { createCoreCapabilityRegistry } from "../kernel/core-capabilities.js";
 import { createEventKernel, type EventKernel } from "../kernel/event-kernel.js";
+import { CW_EVENTS } from "../kernel/event-names.js";
+import { EvolutionSyncManager } from "../kernel/evolution-sync.js";
+import { registerExtensionCapabilities } from "../kernel/extension-capabilities.js";
+import { createHookEngine } from "../kernel/hook-engine.js";
 import { createIngressRouter, DEFAULT_INGRESS_POLICIES } from "../kernel/ingress.js";
+import { createIntentRegistry } from "../kernel/intent-registry.js";
+import {
+  createConstitutionV2,
+  DEFAULT_OPERATOR_CONSTITUTION,
+} from "../kernel/robot-constitution-v2.js";
+import { createRobotIdentityManager } from "../kernel/robot-identity-manager.js";
+import { createScaffoldEngine } from "../kernel/scaffold-engine.js";
 import { createPlaybookScheduler } from "../kernel/scheduler.js";
+import { createScriptLibrary, registerBuiltinScripts } from "../kernel/script-library.js";
 import type { KnowledgeBase, RobotInfo } from "../kernel/types.js";
+import { createUserProfileStore } from "../kernel/user-profile-store.js";
 import { createPackLoader } from "../pack-loader/index.js";
+import { createCbrStore } from "../planes/data/cbr-store.js";
 import { openDatabase } from "../planes/data/db-open.js";
 import { createFileKnowledgeBase } from "../planes/data/knowledge-base-file.js";
 import { createKnowledgeBase } from "../planes/data/knowledge-base.js";
@@ -18,9 +36,9 @@ import type {
   LlmCompleteFn,
   NotifyFn,
   SkillRunFn,
+  ScriptRunFn,
   SubagentRunFn,
 } from "../planes/orch/step-executor.js";
-import type { A2aPeerConfig } from "./a2a-peers.js";
 import { applyIngressPublish } from "./ingress-publish.js";
 import { createModelRouter } from "./model-router.js";
 import { appendObservationEvent, markRuntimeStarted } from "./observability.js";
@@ -31,6 +49,7 @@ import {
   reloadClaworksPacksFromDisk,
 } from "./pack-runtime.js";
 import { schedulePolicySync } from "./policy-sync.js";
+import { isClaworksProductionMode } from "./product-env.js";
 import {
   buildRobotIdentity,
   createRbacGuard,
@@ -61,13 +80,12 @@ export async function createClaworksRuntime(
   if (note) {
     opts?.logger?.(`[claworks] ${note}`);
   }
-  void dialect;
 
   const robot: RobotInfo = {
     name: config.robot?.name ?? "claworks-robot",
     role: config.robot?.role ?? "monolith",
-    version: opts?.version ?? "2026.5.0-alpha.1",
-    endpoint: `http://${config.robot?.host ?? "127.0.0.1"}:${config.robot?.port ?? 8000}`,
+    version: opts?.version ?? "2026.5.20",
+    endpoint: `http://${config.robot?.host ?? "127.0.0.1"}:${config.robot?.port ?? 18_800}`,
   };
 
   const stateDir = join(homedir(), ".claworks");
@@ -120,6 +138,20 @@ export async function createClaworksRuntime(
 
   const modelRouter = createModelRouter(config.model_router);
 
+  // Create registries before playbook engine so they can be shared
+  const actionRegistry = createActionRegistry();
+  const intentRegistry = createIntentRegistry();
+
+  // ScriptLibrary: 内置纯 TS 脚本（不依赖 LLM），供 kind:script Playbook 步骤调用
+  const scriptLibrary = createScriptLibrary();
+
+  // scriptRun: 优先调用内置 ScriptLibrary，找不到时返回 not_found（外部 skill 走 skillRun）
+  const scriptRun: ScriptRunFn = async ({ scriptId, input }) => {
+    return scriptLibrary.invoke(scriptId, input ?? {});
+  };
+
+  const productionMode = isClaworksProductionMode(config);
+
   const playbookEngine = createPlaybookEngine({
     db,
     objectStore,
@@ -132,6 +164,7 @@ export async function createClaworksRuntime(
     publishEvent,
     subagentRun: opts?.subagentRun,
     skillRun: opts?.skillRun,
+    scriptRun,
     a2aPeers,
     modelRouter,
     rbacCheck: (input) => rbac.check(input),
@@ -144,7 +177,12 @@ export async function createClaworksRuntime(
       };
     },
     reloadPackById: async (packId) => reloadClaworksPackById(runtime, packId),
+    actionRegistry,
+    intentRegistry,
     logger: opts?.logger,
+    productionMode,
+    // publishAnomaly 在 kernel 创建后通过 runtime.kernel.publish 实现，
+    // 延迟绑定到 playbookEngine（engine 已支持热替换 deps）
   });
 
   const packLoader = createPackLoader();
@@ -191,6 +229,8 @@ export async function createClaworksRuntime(
     },
   });
   kernel.matcher.load(playbookEngine.list());
+  // 延迟绑定 publishAnomaly 到 playbookEngine（kernel 创建后才有完整引用）
+  playbookEngine.setPublishAnomaly(publishAnomaly);
 
   const connectorManager = new ConnectorManager({ logger: opts?.logger });
   connectorManager.setEventHandler(async (ev) => {
@@ -235,6 +275,11 @@ export async function createClaworksRuntime(
   });
   scheduler.reload(playbookEngine.list());
 
+  const robotIdentityManager = createRobotIdentityManager({
+    name: robot.name,
+    role: robot.role,
+  });
+
   runtime = {
     config,
     robot,
@@ -247,14 +292,87 @@ export async function createClaworksRuntime(
     kb,
     playbookEngine,
     kernel,
+    // Will be set after runtime is assembled
+    capabilities: null as never,
+    actionRegistry,
+    intentRegistry,
+    robotIdentityManager,
+    shutdown: async () => stopClaworksRuntime(runtime),
     loadedPacks: packs,
     packLoader,
     connectorManager,
     scheduler,
     logger: opts?.logger,
+    databaseDialect: dialect,
     close,
   };
   policySyncTarget.runtime = runtime;
+
+  // 初始化脚本库并绑定 runtime（需在 runtime 对象创建后执行）
+  registerBuiltinScripts(scriptLibrary, runtime);
+  runtime.scriptLibrary = scriptLibrary as ClaworksRuntime["scriptLibrary"];
+  // 向后兼容别名：skillLibrary → scriptLibrary
+  runtime.skillLibrary = runtime.scriptLibrary;
+  // OpenClaw ClawHub Skill bridge（AI 能力，由 claworks-robot 注入）
+  if (opts?.skillRun) {
+    runtime.skillRun = opts.skillRun;
+  }
+
+  // Create capability registry after runtime is fully assembled (it needs the runtime ref)
+  const capabilities = createCoreCapabilityRegistry(runtime);
+  runtime.capabilities = capabilities;
+  kernel.setCapabilityRegistry(capabilities);
+
+  // Register extension capabilities (L10-L36: reasoning, memory, comms, a2a, industrial, etc.)
+  const constitutionConfig = (config.kernel as Record<string, unknown> | undefined) ?? {};
+  const constitution = createConstitutionV2({
+    autoAllow: Array.isArray(constitutionConfig.extra_auto_allow)
+      ? [
+          ...DEFAULT_OPERATOR_CONSTITUTION.autoAllow,
+          ...(constitutionConfig.extra_auto_allow as string[]),
+        ]
+      : undefined,
+    hitlRequired: Array.isArray(constitutionConfig.extra_hitl_required)
+      ? [
+          ...DEFAULT_OPERATOR_CONSTITUTION.hitlRequired,
+          ...(constitutionConfig.extra_hitl_required as string[]),
+        ]
+      : undefined,
+    deny: Array.isArray(constitutionConfig.extra_deny)
+      ? [...DEFAULT_OPERATOR_CONSTITUTION.deny, ...(constitutionConfig.extra_deny as string[])]
+      : undefined,
+  });
+  runtime.constitution = constitution;
+  registerExtensionCapabilities(runtime, constitution);
+  capabilities.setConstitution(constitution);
+
+  // 初始化脚手架引擎（强模型离线预生成，弱模型在线填空执行）
+  runtime.scaffoldEngine = createScaffoldEngine(runtime);
+
+  // 初始化对话上下文引擎（多轮会话记忆，跨消息追踪对话历史）
+  runtime.contextEngine = createContextEngine({
+    llmComplete: opts?.llmComplete
+      ? async (p) => {
+          const r = await opts.llmComplete!(p.prompt);
+          return { text: typeof r === "string" ? r : String(r) };
+        }
+      : undefined,
+  });
+
+  // 初始化用户画像存储（记忆用户偏好风格、近期话题，持久化到 SQLite）
+  runtime.userProfileStore = createUserProfileStore(db);
+
+  // 初始化研究智能体（多源并行搜索 + LLM 综合分析）
+  runtime.researchAgent = createResearchAgent(runtime);
+
+  // 初始化 Hook 引擎（生命周期钩子注册，支持 im_notify/webhook/playbook/a2a_delegate）
+  runtime.hookEngine = createHookEngine();
+
+  // 初始化 CBR 案例记忆（Case-Based Reasoning，存储历史成功案例供类比推理）
+  runtime.cbrStore = createCbrStore();
+
+  // 初始化离线进化同步管理器（导出进化数据包 / 导入进化包）
+  runtime.evolutionSync = new EvolutionSyncManager(runtime);
 
   return runtime;
 }
@@ -298,20 +416,114 @@ export async function startClaworksRuntime(runtime: ClaworksRuntime): Promise<vo
     });
   }, 30_000);
 
-  await runtime.kernel.publish("system.runtime.started", "runtime", {
+  // HITL timeout sweep — auto-resolve expired approvals every 30 s
+  runtime._hitlExpiryTimer = setInterval(() => {
+    void runtime.playbookEngine
+      .expireStaleHitl()
+      .then((n) => {
+        if (n > 0) {
+          runtime.logger?.(`[claworks:hitl] expired ${n} stale HITL token(s)`);
+        }
+      })
+      .catch((err) => {
+        runtime.logger?.(
+          `[claworks:hitl] expiry sweep failed: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      });
+  }, 30_000);
+
+  // Startup configuration health validation
+  const startupWarnings = validateStartupConfig(runtime.config);
+  if (startupWarnings.length > 0) {
+    startupWarnings.forEach((w) => runtime.logger?.(`[ClaWorks Startup] ${w}`));
+    await runtime.kernel
+      .publish(CW_EVENTS.SYSTEM_STARTUP_WARNINGS, "runtime", { warnings: startupWarnings })
+      .catch(() => {});
+  }
+
+  await runtime.kernel.publish(CW_EVENTS.SYSTEM_RUNTIME_STARTED, "runtime", {
     version: runtime.robot.version,
     name: runtime.robot.name,
     role: runtime.robot.role,
     packCount: runtime.loadedPacks.length,
     playbookCount: runtime.playbookEngine.list().length,
     endpoint: runtime.robot.endpoint,
+    warnings: startupWarnings,
   });
+  // system.startup is the Playbook-facing alias for system.runtime.started
+  // (robot_identity_announce and similar Playbooks subscribe to system.startup)
+  await runtime.kernel.publish(CW_EVENTS.SYSTEM_STARTUP, "runtime", {
+    version: runtime.robot.version,
+    name: runtime.robot.name,
+    role: runtime.robot.role,
+    packCount: runtime.loadedPacks.length,
+    playbookCount: runtime.playbookEngine.list().length,
+  });
+}
+
+function validateStartupConfig(config: ClaworksRobotConfig): string[] {
+  const warnings: string[] = [];
+  const isProduction = isClaworksProductionMode(config);
+  const tag = isProduction ? "[PRODUCTION]" : "[DEV]";
+
+  if (!config.model_router?.complete && !config.model_router?.fast) {
+    warnings.push(`${tag} LLM bridge 未配置，意图分类和 LLM 步骤将不可用`);
+  }
+  if (!config.notify?.targets || config.notify.targets.length === 0) {
+    warnings.push(`${tag} Notify bridge 未配置，主动推送消息将不可用`);
+  }
+  if (!config.data?.database_url) {
+    warnings.push(`${tag} 数据库路径未配置，将使用默认路径 ~/.claworks/robot.db`);
+  }
+  if (!config.robot?.name) {
+    warnings.push(`${tag} robot.name 未配置，使用默认名称 claworks-robot`);
+  }
+
+  // ── 生产模式安全检查 ────────────────────────────────────────────────────
+  if (isProduction) {
+    if (!config.api?.api_key?.trim()) {
+      warnings.push(
+        "[PRODUCTION][SECURITY] api.api_key 未配置 — 所有请求均以 system 主体授权，建议设置 Bearer token 或 CLAWORKS_INIT_SECURE=1",
+      );
+    }
+    if (config.api?.require_api_key !== true) {
+      warnings.push(
+        "[PRODUCTION][SECURITY] api.require_api_key 未设为 true — 生产环境建议强制要求 API key",
+      );
+    }
+    const kbProvider = config.data?.kb_provider ?? "stub";
+    if (kbProvider === "stub") {
+      warnings.push(
+        "[PRODUCTION][QUALITY] KB 使用 in-memory stub（子串匹配），知识检索准确率低 — 建议 data.kb_provider=memory-core + CLAWORKS_VECTOR_KB=1",
+      );
+    }
+    const dbUrl = config.data?.database_url ?? "";
+    if (!dbUrl.startsWith("postgres")) {
+      warnings.push(
+        "[PRODUCTION][RELIABILITY] 数据库未配置 PostgreSQL — 生产环境建议使用 PG 以避免 SQLite 并发/容量限制",
+      );
+    }
+    if (!config.a2a?.peers || config.a2a.peers.length === 0) {
+      // 仅提示，不强制——单机器人部署不需要 A2A
+    }
+    if (config.security?.require_https_a2a !== true && (config.a2a?.peers?.length ?? 0) > 0) {
+      warnings.push(
+        "[PRODUCTION][SECURITY] A2A peers 已配置，但 security.require_https_a2a 未启用 — 建议强制 HTTPS A2A 连接",
+      );
+    }
+  }
+
+  return warnings;
 }
 
 export async function stopClaworksRuntime(runtime: ClaworksRuntime): Promise<void> {
   if (runtime._outboxFlushTimer) {
     clearInterval(runtime._outboxFlushTimer);
     runtime._outboxFlushTimer = undefined;
+  }
+  if (runtime._hitlExpiryTimer) {
+    clearInterval(runtime._hitlExpiryTimer);
+    runtime._hitlExpiryTimer = undefined;
   }
   try {
     await runtime.kernel.publish("system.runtime.stopped", "runtime", {

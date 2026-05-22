@@ -90,7 +90,7 @@ export function createA2aHttpHandler(deps: A2aHandlerDeps | (() => ClaworksRunti
 
         const headerPeer = readA2aPeerHeader(req);
         const meta = {
-          ...(body.metadata ?? {}),
+          ...body.metadata,
           ...(headerPeer ? { peer_id: headerPeer } : {}),
         };
         void processA2aTask(runtime, store, task.id, { ...body, metadata: meta }).catch((err) => {
@@ -201,7 +201,7 @@ async function processA2aTask(
     eventType,
     source,
     payload,
-    typeof meta.correlation_id === "string" ? meta.correlation_id : undefined,
+    typeof meta.correlation_id === "string" ? { correlationId: meta.correlation_id } : undefined,
   );
 
   store.update(taskId, {

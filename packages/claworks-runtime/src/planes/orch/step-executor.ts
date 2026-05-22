@@ -1,16 +1,17 @@
 import { randomUUID } from "node:crypto";
-import { readdirSync, readFileSync, statSync } from "node:fs";
-import { extname, join } from "node:path";
 import { resolveA2aTarget, type A2aPeerConfig } from "../../claworks/a2a-peers.js";
 import type { ModelRouter } from "../../claworks/model-router.js";
 import type { RbacCheckInput, RbacCheckResult } from "../../claworks/robot-identity.js";
 import { A2aClient } from "../../interfaces/a2a/client.js";
+import type { ActionRegistry } from "../../kernel/action-registry.js";
 import type { KnowledgeBase, RobotInfo } from "../../kernel/types.js";
+import { isDocumentKnowledgeBase } from "../data/kb-types.js";
 import type { ObjectStore } from "../data/object-store.js";
 import { executeFunction } from "./function-executor.js";
 import type { HitlGate } from "./hitl-gate.js";
 import type {
   ActionStep,
+  CallPlaybookStep,
   PlaybookRun,
   PlaybookStep,
   PlaybookStepContext,
@@ -18,6 +19,7 @@ import type {
   StepMeta,
 } from "./playbook-types.js";
 import { evaluatePlaybookCondition } from "./step-conditions.js";
+import { expandJinjaForLoops } from "./template-resolve.js";
 
 export class HitlSuspendedError extends Error {
   constructor(
@@ -45,7 +47,17 @@ export type LlmCompleteFn = (params: {
   model?: string;
 }) => Promise<{ text: string }>;
 
-export type NotifyFn = (params: { message: string; channels?: string[] }) => Promise<void>;
+export type NotifyFn = (params: {
+  message: string;
+  channels?: string[];
+  /**
+   * 渠道原生富格式卡片数据（可选）。
+   * key 为渠道 ID（如 "feishu"），value 为该渠道的原生卡片 JSON。
+   * 由 comms.send 能力通过 CardBuilder.toAuto() 生成后传入；
+   * notify 实现按渠道判断是否支持富格式，不支持则降级为纯文本。
+   */
+  cards?: Record<string, unknown>;
+}) => Promise<void>;
 
 export type ConnectorInvokeFn = (
   connectorId: string,
@@ -68,6 +80,21 @@ export type SkillRunFn = (params: {
   input?: Record<string, unknown>;
 }) => Promise<Record<string, unknown>>;
 
+/**
+ * ScriptRunFn — 调用 ClaWorks 内置脚本（纯代码，不依赖 LLM）。
+ * 对应 kind:script Playbook 步骤。
+ */
+export type ScriptRunFn = (params: {
+  scriptId: string;
+  input?: Record<string, unknown>;
+}) => Promise<Record<string, unknown>>;
+
+export type CallPlaybookFn = (
+  playbookId: string,
+  params: Record<string, unknown>,
+  parentRunId: string,
+) => Promise<{ output?: Record<string, unknown>; status: string }>;
+
 export type StepExecutorDeps = {
   objectStore: ObjectStore;
   kb: KnowledgeBase;
@@ -79,10 +106,31 @@ export type StepExecutorDeps = {
   triggerPlaybook?: TriggerPlaybookFn;
   subagentRun?: SubagentRunFn;
   skillRun?: SkillRunFn;
+  scriptRun?: ScriptRunFn;
+  callPlaybook?: CallPlaybookFn;
   a2aPeers?: A2aPeerConfig[];
   modelRouter?: ModelRouter;
   rbacCheck?: (input: RbacCheckInput) => RbacCheckResult;
   logger?: (msg: string) => void;
+  /**
+   * Pack action registry — step-executor 优先在此查找处理器。
+   * 找到时直接委托给 Pack 注册的 ActionHandler，无需修改 runtime。
+   */
+  actionRegistry?: ActionRegistry;
+  /**
+   * Pack intent registry — 传递给 function-executor 的 publish_event_from_intent。
+   * 各 Pack 在 entry.ts 通过 PackContribution.intentMappings 注册。
+   */
+  intentRegistry?: import("../../kernel/intent-registry.js").IntentRegistry;
+  /**
+   * 生产模式：true 时 LLM/skill/subagent/script/call_playbook bridge 缺失时
+   * 抛 StepFailedError 而非返回 stub 结果（fail-closed）。
+   * 由 createClaworksRuntime 根据 config.production_mode 或
+   * CLAWORKS_PRODUCTION env 注入。
+   */
+  productionMode?: boolean;
+  /** 发布异常事件（供 Playbook 响应），由 runtime 注入 */
+  publishAnomaly?: (payload: Record<string, unknown>) => Promise<void>;
 };
 
 function recordStepResult(
@@ -161,7 +209,9 @@ export async function executePlaybookStep(
     if (step.kind === "notification") {
       const msg = interpolate(step.message, ctx.variables);
       // 支持 channels: 数组 和 channel: 单字符串两种写法（均做模板插值）
-      const channelField = (step as Record<string, unknown>).channel as string | undefined;
+      const channelField = (step as unknown as Record<string, unknown>).channel as
+        | string
+        | undefined;
       const rawChannels = step.channels ?? (channelField ? [channelField] : undefined);
       const resolvedChannels = rawChannels
         ?.map((c) => interpolate(c, ctx.variables))
@@ -174,7 +224,35 @@ export async function executePlaybookStep(
       log.output = { message: msg, channels: resolvedChannels };
       recordStepResult(ctx, step.id, log.output);
     } else if (step.kind === "action") {
-      log.output = await executeActionStep(step, ctx, deps);
+      const actionStart = Date.now();
+      const SLOW_STEP_MS = 5_000;
+      // 超过 5s 发布 playbook.step_slow 事件，触发进度提醒 Playbook
+      const slowTimer = setTimeout(() => {
+        ctx
+          .publishEvent?.(
+            "playbook.step_slow",
+            "step-executor",
+            {
+              playbook_id: ctx.playbookId,
+              run_id: ctx.runId,
+              step_id: step.id,
+              step_name: (step as unknown as Record<string, unknown>).name ?? step.id,
+              action: (step as unknown as Record<string, unknown>).action ?? step.id,
+              elapsed_ms: Date.now() - actionStart,
+              requester_channel: ctx.variables.requester_channel ?? ctx.variables.channel ?? "",
+              user_id: ctx.variables.user_id ?? "",
+            },
+            ctx.runId,
+          )
+          .catch(() => {
+            /* non-critical */
+          });
+      }, SLOW_STEP_MS);
+      try {
+        log.output = await executeActionStep(step, ctx, deps);
+      } finally {
+        clearTimeout(slowTimer);
+      }
       recordStepResult(ctx, step.id, log.output);
       await maybeHitlAfterStep(step, ctx, run, deps, log.output);
     } else if (step.kind === "function") {
@@ -183,10 +261,13 @@ export async function executePlaybookStep(
         kb: deps.kb,
         llmComplete: deps.llmComplete,
         publishEvent: ctx.publishEvent,
+        intentRegistry: deps.intentRegistry,
         logger: deps.logger,
         playbookId: ctx.playbookId,
         runId: ctx.runId,
         stepId: step.id,
+        productionMode: deps.productionMode,
+        publishAnomaly: deps.publishAnomaly,
       });
       log.output = result;
       if (step.output) {
@@ -205,7 +286,7 @@ export async function executePlaybookStep(
         throw new Error("playbook step requires triggerPlaybook");
       }
       const child = await deps.triggerPlaybook(step.playbookId, {
-        ...(step.input ?? {}),
+        ...step.input,
         parent_run_id: ctx.runId,
       });
       log.output = { run_id: child.id, status: child.status };
@@ -214,28 +295,66 @@ export async function executePlaybookStep(
       log.output = await executeAtomic(step.fn, step.params, ctx, deps);
       recordStepResult(ctx, step.id, log.output);
     } else if (step.kind === "hitl") {
-      const token = deps.hitl.suspend(run, step.id, step.message, step.options);
+      const token = deps.hitl.suspend(
+        run,
+        step.id,
+        step.message,
+        step.options,
+        step.timeout_seconds,
+        step.on_timeout,
+      );
       if (deps.notify) {
+        const timeoutNote = step.timeout_seconds
+          ? ` (${step.timeout_seconds}s 后自动${step.on_timeout === "abort" ? "终止" : `选择「${step.on_timeout ?? step.options[0]}」`})`
+          : "";
         await deps.notify({
-          message: `[HITL] ${interpolate(step.message, ctx.variables)} (run=${run.id} step=${step.id})`,
+          message: `[HITL] ${interpolate(step.message, ctx.variables)}${timeoutNote} (run=${run.id} step=${step.id})`,
           channels: step.channel ? [step.channel] : undefined,
         });
       }
       run.status = "waiting_hitl";
       log.status = "waiting";
-      log.output = { hitl_token: token };
+      log.output = { hitl_token: token, timeout_seconds: step.timeout_seconds };
       throw new HitlSuspendedError(token, step.id);
     } else if (step.kind === "llm") {
       const prompt = interpolate(step.prompt, ctx.variables);
       if (deps.llmComplete) {
         const model = deps.modelRouter?.resolve("llm", step.model) ?? step.model;
-        const result = await deps.llmComplete({ prompt, model });
-        log.output = { text: result.text };
-        ctx.variables[step.output] = result.text;
+        if (step.output_schema) {
+          // 结构化输出：使用 StructuredOutputEngine 保证格式
+          const { createStructuredOutputEngine } =
+            await import("../../kernel/structured-output.js");
+          const engine = createStructuredOutputEngine(async (p) =>
+            deps.llmComplete!({ prompt: p.prompt, model }),
+          );
+          if (step.output_voting) {
+            const { data, vote_counts, votes_cast } = await engine.completeWithVoting(
+              prompt,
+              step.output_schema,
+              { votes: step.output_voting.votes, voteField: step.output_voting.field },
+            );
+            log.output = { ...data, _vote_counts: vote_counts, _votes_cast: votes_cast };
+          } else {
+            const { data } = await engine.complete(prompt, step.output_schema);
+            log.output = data;
+          }
+          ctx.variables[step.output] = log.output;
+        } else {
+          const result = await deps.llmComplete({ prompt, model });
+          log.output = { text: result.text };
+          ctx.variables[step.output] = result.text;
+        }
+      } else if (deps.productionMode) {
+        throw new StepFailedError(
+          "LLM bridge 未配置（production_mode=true 时 stub 不可用）",
+          step.id,
+          "abort",
+        );
       } else {
         log.output = { stub: true, prompt };
         ctx.variables[step.output] = prompt;
-        deps.logger?.(`[claworks:llm] stub: ${prompt.slice(0, 80)}...`);
+        deps.logger?.(`[claworks:llm] stub（无 LLM bridge）: ${prompt.slice(0, 80)}...`);
+        void deps.publishAnomaly?.({ kind: "stub_step", stepKind: "llm", stepId: step.id });
       }
       recordStepResult(ctx, step.id, log.output);
     } else if (step.kind === "a2a_delegate") {
@@ -280,9 +399,16 @@ export async function executePlaybookStep(
       } else if (deps.llmComplete) {
         const result = await deps.llmComplete({ prompt, model });
         log.output = { text: result.text };
+      } else if (deps.productionMode) {
+        throw new StepFailedError(
+          "subagent bridge 未配置（production_mode=true 时 stub 不可用）",
+          step.id,
+          "abort",
+        );
       } else {
         log.output = { stub: true, prompt };
-        deps.logger?.(`[claworks:subagent] stub: ${prompt.slice(0, 80)}...`);
+        deps.logger?.(`[claworks:subagent] stub（无 bridge）: ${prompt.slice(0, 80)}...`);
+        void deps.publishAnomaly?.({ kind: "stub_step", stepKind: "subagent", stepId: step.id });
       }
       if (step.output) {
         ctx.variables[step.output] = log.output;
@@ -294,12 +420,89 @@ export async function executePlaybookStep(
         : {};
       if (deps.skillRun) {
         log.output = await deps.skillRun({ skillId: step.skillId, input });
+      } else if (deps.productionMode) {
+        throw new StepFailedError(
+          `skill bridge 未配置（production_mode=true 时 stub 不可用），skillId=${step.skillId}`,
+          step.id,
+          "abort",
+        );
       } else {
         log.output = { stub: true, skillId: step.skillId, input };
-        deps.logger?.(`[claworks:skill] stub skill=${step.skillId}`);
+        deps.logger?.(`[claworks:skill] stub（无 skillRun）skill=${step.skillId}`);
+        void deps.publishAnomaly?.({
+          kind: "stub_step",
+          stepKind: "skill",
+          stepId: step.id,
+          skillId: step.skillId,
+        });
       }
       if (step.output) {
         ctx.variables[step.output] = log.output;
+      }
+      recordStepResult(ctx, step.id, log.output);
+    } else if (step.kind === "script") {
+      const input = step.input
+        ? (resolveParamsDeep(step.input, ctx.variables) as Record<string, unknown>)
+        : {};
+      if (deps.scriptRun) {
+        log.output = await deps.scriptRun({ scriptId: step.scriptId, input });
+      } else if (deps.productionMode) {
+        throw new StepFailedError(
+          `scriptRun 未配置（production_mode=true 时 stub 不可用），scriptId=${step.scriptId}`,
+          step.id,
+          "abort",
+        );
+      } else {
+        log.output = { stub: true, scriptId: step.scriptId, input };
+        deps.logger?.(`[claworks:script] stub（无 scriptRun）scriptId=${step.scriptId}`);
+        void deps.publishAnomaly?.({
+          kind: "stub_step",
+          stepKind: "script",
+          stepId: step.id,
+          scriptId: step.scriptId,
+        });
+      }
+      if (step.output) {
+        ctx.variables[step.output] = log.output;
+      }
+      recordStepResult(ctx, step.id, log.output);
+    } else if (step.kind === "call_playbook") {
+      const resolvedId = interpolate(step.playbookId, ctx.variables);
+      const params = step.params ? resolveParams(step.params, ctx) : {};
+      if (deps.callPlaybook) {
+        const result = await deps.callPlaybook(resolvedId, params, ctx.runId);
+        log.output = result;
+        if (step.storeResultAs) {
+          ctx.variables[step.storeResultAs] = result.output ?? result;
+        }
+      } else if (deps.triggerPlaybook) {
+        // fallback: reuse triggerPlaybook and wait for the run result
+        const child = await deps.triggerPlaybook(resolvedId, {
+          ...params,
+          parent_run_id: ctx.runId,
+        });
+        log.output = { run_id: child.id, status: child.status, output: child.output };
+        if (step.storeResultAs) {
+          ctx.variables[step.storeResultAs] = child.output ?? {};
+        }
+      } else if (deps.productionMode) {
+        throw new StepFailedError(
+          `callPlaybook bridge 未配置（production_mode=true 时 stub 不可用），playbookId=${resolvedId}`,
+          step.id,
+          "abort",
+        );
+      } else {
+        log.output = { stub: true, playbookId: resolvedId };
+        if (step.storeResultAs) {
+          ctx.variables[step.storeResultAs] = {};
+        }
+        deps.logger?.(`[claworks:call_playbook] stub（无 bridge）playbookId=${resolvedId}`);
+        void deps.publishAnomaly?.({
+          kind: "stub_step",
+          stepKind: "call_playbook",
+          stepId: step.id,
+          playbookId: resolvedId,
+        });
       }
       recordStepResult(ctx, step.id, log.output);
     } else if (step.kind === "condition") {
@@ -353,10 +556,23 @@ export async function executePlaybookStep(
       recordStepResult(ctx, step.id, log.output);
     } else if (step.kind === "publish_event") {
       if (!ctx.publishEvent) {
+        if (deps.productionMode) {
+          throw new StepFailedError(
+            `publishEvent 未配置（production_mode=true），eventType=${step.eventType}`,
+            step.id,
+            "abort",
+          );
+        }
         log.output = { stub: true, eventType: step.eventType };
         deps.logger?.(
           `[claworks:publish_event] no publishEvent fn, stub eventType=${step.eventType}`,
         );
+        void deps.publishAnomaly?.({
+          kind: "stub_step",
+          stepKind: "publish_event",
+          stepId: step.id,
+          eventType: step.eventType,
+        });
       } else {
         const eventType = interpolate(step.eventType, ctx.variables);
         const source = step.source
@@ -371,6 +587,63 @@ export async function executePlaybookStep(
       }
       if (step.output) {
         ctx.variables[step.output] = log.output;
+      }
+      recordStepResult(ctx, step.id, log.output);
+    } else if (step.kind === "parallel") {
+      const ps = step;
+      const timeoutMs = (ps.timeout_seconds ?? 30) * 1000;
+
+      type BranchResult =
+        | { idx: number; success: true; vars: Record<string, unknown> }
+        | { idx: number; success: false; error: string };
+
+      const branchPromises: Promise<BranchResult>[] = ps.branches.map(
+        async (branch, idx): Promise<BranchResult> => {
+          // Deep-copy the entire variables object so nested mutations in one branch
+          // (arrays, sub-objects, step results) cannot contaminate sibling branches.
+          let isolatedVars: Record<string, unknown>;
+          try {
+            isolatedVars = JSON.parse(JSON.stringify(ctx.variables)) as Record<string, unknown>;
+          } catch {
+            // Non-serializable values (e.g. functions) — fall back to shallow + steps copy.
+            isolatedVars = {
+              ...ctx.variables,
+              steps: { ...((ctx.variables.steps as Record<string, unknown>) ?? {}) },
+            };
+          }
+          const branchCtx = { ...ctx, variables: isolatedVars };
+          try {
+            for (const s of branch) {
+              await executePlaybookStep(s, branchCtx, run, deps);
+            }
+            return { idx, success: true, vars: branchCtx.variables };
+          } catch (e) {
+            if (ps.on_branch_failure === "abort_all") {
+              throw e;
+            }
+            return {
+              idx,
+              success: false,
+              error: e instanceof Error ? e.message : String(e),
+            };
+          }
+        },
+      );
+
+      const settled = await Promise.race([
+        Promise.allSettled(branchPromises),
+        new Promise<never>((_, rej) =>
+          setTimeout(() => rej(new Error("parallel timeout")), timeoutMs),
+        ),
+      ]);
+
+      const results: BranchResult[] = settled.map((r) =>
+        r.status === "fulfilled" ? r.value : { idx: -1, success: false, error: "rejected" },
+      );
+
+      log.output = { branches: results };
+      if (ps.store_result_as) {
+        ctx.variables[ps.store_result_as] = results;
       }
       recordStepResult(ctx, step.id, log.output);
     }
@@ -399,7 +672,7 @@ async function maybeHitlAfterStep(
   ctx: PlaybookStepContext,
   run: PlaybookRun,
   deps: StepExecutorDeps,
-  output: unknown,
+  _output: unknown,
 ): Promise<void> {
   const hitl = step.hitl;
   if (!hitl?.requiredIf) {
@@ -428,6 +701,15 @@ async function executeActionStep(
   const params = resolveParams(step.params, ctx);
   const action = step.actionApiName;
 
+  // ── Pack ActionRegistry 优先分发 ─────────────────────────────────────
+  // Pack entry.ts 通过 PackContribution.actionHandlers 注册的处理器在此调用，
+  // 无需修改 step-executor 核心代码即可扩展新 action。
+  if (deps.actionRegistry?.has(action)) {
+    const reg = deps.actionRegistry.get(action)!;
+    deps.logger?.(`[claworks:action] dispatching '${action}' to pack '${reg.packId}'`);
+    return await reg.handler(params, ctx);
+  }
+
   if (step.objectType && step.objectId) {
     return await ctx.objectStore.executeAction(
       step.objectType,
@@ -438,9 +720,7 @@ async function executeActionStep(
     );
   }
 
-  if (action === "mes_production_dispatch") {
-    return await ctx.objectStore.executeAction("_mes", "_virtual", action, params, ctx);
-  }
+  // mes_production_dispatch → process-industry Pack via ActionRegistry（已迁移）
 
   if (action === "reload_packs") {
     if (!ctx.reloadPacks) {
@@ -460,75 +740,17 @@ async function executeActionStep(
   if (action === "update_object" || action === "patch_object") {
     const typeName = String(params.type ?? params.object_type ?? "");
     const id = String(params.id ?? params.object_id ?? "");
-    if (!typeName || !id) return { status: "error", reason: "type and id are required" };
+    if (!typeName || !id) {
+      return { status: "error", reason: "type and id are required" };
+    }
     const { type: _t, object_type: _ot, id: _id, object_id: _oid, ...fields } = params;
     const updated = await ctx.objectStore.update(typeName, id, fields);
-    return { status: "ok", id, ...updated };
+    const { id: _updId, ...rest } = updated;
+    return { status: "ok", id, ...rest };
   }
 
-  // ── create_quote / create_bid_project / create_bid_document ─────────
-  if (action === "create_quote") {
-    const quoteNo = `Q-${Date.now().toString(36).toUpperCase()}`;
-    const created = await ctx.objectStore.create(
-      "Quote",
-      { ...params, quote_no: quoteNo, status: "draft" },
-      ctx,
-    );
-    if (ctx.publishEvent) {
-      await ctx.publishEvent(
-        "quote.created",
-        "playbook-action",
-        { ...created },
-        ctx.triggerEvent?.correlationId,
-      );
-    }
-    return { status: "ok", id: created.id, quote_no: quoteNo, ...created };
-  }
-
-  if (action === "create_bid_project") {
-    const created = await ctx.objectStore.create("BidProject", { ...params, status: "draft" }, ctx);
-    if (ctx.publishEvent) {
-      await ctx.publishEvent(
-        "bid_project.created",
-        "playbook-action",
-        { ...created },
-        ctx.triggerEvent?.correlationId,
-      );
-    }
-    return { status: "ok", id: created.id, ...created };
-  }
-
-  if (action === "create_bid_document") {
-    const wordCount = typeof params.content === "string" ? (params.content as string).length : 0;
-    const created = await ctx.objectStore.create(
-      "BidDocument",
-      { ...params, word_count: wordCount, status: "draft" },
-      ctx,
-    );
-    if (ctx.publishEvent) {
-      await ctx.publishEvent(
-        "bid_document.created",
-        "playbook-action",
-        { id: created.id, bid_project_id: params.bid_project_id, doc_type: params.doc_type },
-        ctx.triggerEvent?.correlationId,
-      );
-    }
-    return { status: "ok", id: created.id, ...created };
-  }
-
-  if (action === "create_customer") {
-    const created = await ctx.objectStore.create(
-      "Customer",
-      { ...params, status: params.status ?? "prospect" },
-      ctx,
-    );
-    return { status: "ok", id: created.id, ...created };
-  }
-
-  if (action === "create_product") {
-    const created = await ctx.objectStore.create("Product", { ...params, status: "active" }, ctx);
-    return { status: "ok", id: created.id, ...created };
-  }
+  // create_quote / create_bid_* / create_customer / create_product
+  // → enterprise-commercial Pack via ActionRegistry（已迁移）
 
   // ── 通用 create_* 动作：按 objectType 推断或从 params 中读取 ──────────
   const actionTypeMap: Record<string, string> = {
@@ -563,206 +785,71 @@ async function executeActionStep(
         );
       }
     }
-    return { status: "ok", id: created.id, ...created };
+    const { id: createdId, ...createdRest } = created;
+    return { status: "ok", id: createdId, ...createdRest };
   }
 
   if (action.startsWith("create_")) {
     const typeName = String(params.type ?? params.object_type ?? "WorkOrder");
     const created = await ctx.objectStore.create(typeName, params, ctx);
-    return { status: "ok", id: created.id, ...created };
+    const { id: createdId2, ...createdRest2 } = created;
+    return { status: "ok", id: createdId2, ...createdRest2 };
   }
 
   // ── update / resolve 动作：patch ObjectStore 对象 + 可选发布后续事件 ──
-  if (action === "update_task_status") {
-    const id = String(params.task_id ?? params.id ?? "");
-    if (!id) return { status: "error", reason: "task_id required" };
-    const updated = await ctx.objectStore.update("Task", id, {
-      status: params.status,
-      ...(params.comment ? { last_comment: params.comment } : {}),
-    });
-    if (ctx.publishEvent) {
-      await ctx.publishEvent(
-        "task.status_changed",
-        "playbook-action",
-        { id, status: params.status },
-        ctx.triggerEvent?.correlationId,
-      );
-    }
-    return { status: "ok", id, ...updated };
-  }
+  // update_task_status → enterprise-foundation Pack via ActionRegistry（已迁移）
 
-  if (action === "resolve_approval") {
-    const id = String(params.request_id ?? params.id ?? "");
-    if (!id) return { status: "error", reason: "request_id required" };
-    const updated = await ctx.objectStore.update("ApprovalRequest", id, {
-      status: params.status,
-      decision_reason: params.decision_reason ?? "",
-      decided_at: new Date().toISOString(),
-    });
-    if (ctx.publishEvent) {
-      await ctx.publishEvent(
-        "approval.decided",
-        "playbook-action",
-        { id, ...updated },
-        ctx.triggerEvent?.correlationId,
-      );
-    }
-    return { status: "ok", id, ...updated };
-  }
+  // resolve_approval → enterprise-foundation Pack via ActionRegistry（已迁移）
 
-  if (action === "resolve_incident") {
-    const id = String(params.incident_id ?? params.id ?? "");
-    if (!id) return { status: "error", reason: "incident_id required" };
-    const updated = await ctx.objectStore.update("Incident", id, {
-      status: "resolved",
-      root_cause: params.root_cause ?? "",
-      resolution: params.resolution ?? "",
-      resolved_at: new Date().toISOString(),
-    });
-    if (ctx.publishEvent) {
-      await ctx.publishEvent(
-        "incident.resolved",
-        "playbook-action",
-        { id, ...updated },
-        ctx.triggerEvent?.correlationId,
-      );
-    }
-    return { status: "ok", id, ...updated };
-  }
+  // resolve_incident → enterprise-foundation Pack via ActionRegistry（已迁移）
 
-  if (action === "update_robot_owner") {
-    await ctx.objectStore.upsert("RobotOwner", `owner:${params.owner_id}`, {
-      owner_id: params.owner_id,
-      channel_id: params.channel_id,
-      ...(params.handover_note ? { handover_note: params.handover_note } : {}),
-    });
-    return { status: "ok", owner_id: params.owner_id, channel_id: params.channel_id };
-  }
+  // update_robot_owner → enterprise-foundation Pack via ActionRegistry（已迁移）
 
-  // ── 查询动作：返回 ObjectStore 列表（供 Playbook 变量引用）────────────
-  if (action === "query_overdue_tasks") {
-    const now = new Date().toISOString();
-    const { items } = await ctx.objectStore.query("Task", { limit: 50 });
-    const statuses = (params.status_filter as string[] | undefined) ?? ["open", "in_progress"];
-    const overdue = items.filter(
-      (t) => statuses.includes(String(t.status)) && typeof t.due_at === "string" && t.due_at < now,
-    );
-    return { status: "ok", items: overdue, count: overdue.length };
-  }
+  // query_overdue_tasks / query_user_tasks / query_daily_stats → enterprise-foundation Pack via ActionRegistry（已迁移）
 
-  if (action === "query_user_tasks") {
-    const userId = String(params.user_id ?? "");
-    const { items } = await ctx.objectStore.query("Task", { limit: Number(params.limit ?? 10) });
-    const userTasks = userId ? items.filter((t) => t.assignee_id === userId) : items;
-    return { status: "ok", items: userTasks, count: userTasks.length };
-  }
-
-  if (action === "query_daily_stats") {
-    const todayStart = new Date();
-    todayStart.setHours(0, 0, 0, 0);
-    const iso = todayStart.toISOString();
-
-    const [tasks, incidents, approvals] = await Promise.all([
-      ctx.objectStore.query("Task", { limit: 200 }),
-      ctx.objectStore.query("Incident", { limit: 200 }),
-      ctx.objectStore.query("ApprovalRequest", { limit: 200 }),
-    ]);
-
-    const todayTasks = tasks.items.filter((t) => String(t._createdAt ?? "") >= iso);
-    const stats = {
-      tasks_created: todayTasks.length,
-      tasks_done: todayTasks.filter((t) => t.status === "done").length,
-      tasks_in_progress: tasks.items.filter((t) => t.status === "in_progress").length,
-      tasks_overdue: tasks.items.filter(
-        (t) =>
-          t.status !== "done" &&
-          t.status !== "cancelled" &&
-          typeof t.due_at === "string" &&
-          t.due_at < new Date().toISOString(),
-      ).length,
-      incidents_created: incidents.items.filter((i) => String(i._createdAt ?? "") >= iso).length,
-      incidents_resolved: incidents.items.filter(
-        (i) => i.status === "resolved" && String(i._updatedAt ?? "") >= iso,
-      ).length,
-      incidents_open: incidents.items.filter((i) =>
-        ["open", "investigating"].includes(String(i.status)),
-      ).length,
-      approvals_pending: approvals.items.filter((a) => a.status === "pending").length,
-      approvals_decided: approvals.items.filter(
-        (a) => String(a._updatedAt ?? "") >= iso && a.status !== "pending",
-      ).length,
-    };
-    return { status: "ok", date: params.date ?? "today", ...stats };
-  }
-
+  // search_kb / ingest_kb_text / ingest_folder → base Pack via ActionRegistry（已迁移）
+  // Fallback: handle core KB actions inline when no ActionRegistry registration exists
   if (action === "search_kb") {
     const query = String(params.query ?? "");
-    const limit = Number(params.limit ?? 5);
-    const results = await ctx.kb.search(query, { limit });
-    return { status: "ok", results, count: results.length };
+    const limit = typeof params.limit === "number" ? params.limit : 5;
+    const namespace = typeof params.namespace === "string" ? params.namespace : undefined;
+    const results = await ctx.kb.search(query, { limit, namespace });
+    return { results, count: results.length };
   }
-
-  if (action === "ingest_kb_text") {
-    const text = String(params.text ?? "");
-    if (!text) return { status: "error", reason: "text is required" };
-    await ctx.kb.ingest(text, {
-      namespace: params.namespace ? String(params.namespace) : undefined,
-      source: params.source ? String(params.source) : undefined,
+  if (action === "ingest_kb_text" || action === "ingest_kb") {
+    const text = String(params.text ?? params.content ?? "");
+    const namespace = typeof params.namespace === "string" ? params.namespace : undefined;
+    await ctx.kb.ingest(text, { namespace });
+    return { ingested: true };
+  }
+  if (action === "ingest_document") {
+    if (!isDocumentKnowledgeBase(ctx.kb)) {
+      return { status: "error", reason: "ingest_document requires DocumentKnowledgeBase" };
+    }
+    const doc = await ctx.kb.ingestDocument({
+      text: String(params.text ?? params.content ?? ""),
+      source: typeof params.source === "string" ? params.source : undefined,
+      namespace: typeof params.namespace === "string" ? params.namespace : undefined,
+      title: typeof params.title === "string" ? params.title : undefined,
+      auto_publish: params.auto_publish === true,
     });
-    return { status: "ok", ingested: true };
+    return { document_id: doc.id, document: doc };
+  }
+  if (action === "lint_document") {
+    if (!isDocumentKnowledgeBase(ctx.kb)) {
+      return { ok: false, reason: "lint_document requires DocumentKnowledgeBase" };
+    }
+    const id = String(params.document_id ?? params.id ?? "");
+    if (!id) return { ok: false, reason: "document_id required" };
+    const result = ctx.kb.lintDocument(id);
+    return result;
   }
 
-  if (action === "ingest_folder") {
-    const folderPath = String(params.folder_path ?? "");
-    if (!folderPath) return { status: "error", reason: "folder_path is required" };
-    const ns = params.namespace ? String(params.namespace) : undefined;
-    const srcPrefix = params.source_prefix ? String(params.source_prefix) : undefined;
-    const recursive = params.recursive !== false;
-    const allowedExts = new Set<string>(
-      Array.isArray(params.file_types)
-        ? (params.file_types as string[]).map((e) => (e.startsWith(".") ? e : `.${e}`))
-        : [".txt", ".md", ".markdown", ".json", ".csv", ".yaml", ".yml"],
-    );
-    const collect = (dir: string): string[] => {
-      try {
-        return readdirSync(dir).flatMap((entry) => {
-          const full = join(dir, entry);
-          try {
-            const st = statSync(full);
-            if (st.isDirectory() && recursive) return collect(full);
-            if (st.isFile() && allowedExts.has(extname(entry).toLowerCase())) return [full];
-          } catch {
-            /* skip */
-          }
-          return [];
-        });
-      } catch {
-        return [];
-      }
-    };
-    const files = collect(folderPath);
-    let ok = 0;
-    let errors = 0;
-    for (const file of files) {
-      try {
-        const text = readFileSync(file, "utf-8");
-        const source = srcPrefix ? `${srcPrefix}/${file.slice(folderPath.length + 1)}` : file;
-        await ctx.kb.ingest(text, { namespace: ns, source });
-        ok++;
-      } catch {
-        errors++;
-      }
-    }
-    if (ctx.publishEvent) {
-      await ctx.publishEvent(
-        "kb.folder_ingested",
-        "playbook-action",
-        { folder_path: folderPath, namespace: ns, total: files.length, ok, errors },
-        ctx.triggerEvent?.correlationId,
-      );
-    }
-    return { status: "ok", total: files.length, ingested: ok, errors };
-  }
+  // score_work_item / compute_performance_summary / create_scoring_rule / update_scoring_rule → enterprise-performance Pack via ActionRegistry（已迁移）
+
+  // record_daily_report_run / update_daily_report_status → daily-report Pack via ActionRegistry（已迁移）
+
+  // query_objects_time_range / aggregate_objects / export_to_bi → enterprise-analytics Pack via ActionRegistry（已迁移）
 
   return await ctx.objectStore.executeAction(
     String(params.type ?? params.object_type ?? "WorkOrder"),
@@ -842,7 +929,10 @@ export function interpolate(template: string, vars: Record<string, unknown>): st
     { status?: string; result?: Record<string, unknown> }
   >;
 
-  let out = template
+  // Expand Jinja-style for loops before other replacements
+  const expanded = expandJinjaForLoops(template, vars);
+
+  let out = expanded
     .replace(/\{\{\s*payload\.get\(\s*['"](\w+)['"]\s*(?:,\s*[^)]+)?\s*\)\s*\}\}/g, (_, key) =>
       String(payload[key] ?? ""),
     )

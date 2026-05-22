@@ -54,6 +54,23 @@ steps:
     });
   });
 
+  it("parses event: shorthand as event trigger pattern", () => {
+    const yaml = `
+id: quote_generate
+trigger:
+  event: quote.create_requested
+steps:
+  - id: noop
+    kind: function
+    function_api_name: noop
+`;
+    const pb = parsePlaybookYaml(yaml, "enterprise-commercial");
+    expect(pb.trigger).toMatchObject({
+      kind: "event",
+      pattern: "quote.create_requested",
+    });
+  });
+
   it("parses schedule trigger with type:", () => {
     const yaml = `
 id: nightly_sync

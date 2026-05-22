@@ -24,12 +24,15 @@ export type PlaybookStep =
   | FunctionStep
   | ConnectorStep
   | SubPlaybookStep
+  | CallPlaybookStep
   | A2aDelegateStep
   | SubagentStep
   | SkillStep
+  | ScriptStep
   | MemoryReadStep
   | MemoryWriteStep
-  | PublishEventStep;
+  | PublishEventStep
+  | ParallelStep;
 
 export type PublishEventFn = (
   type: string,
@@ -86,6 +89,24 @@ export interface SubPlaybookStep extends StepMeta {
   input?: Record<string, unknown>;
 }
 
+/**
+ * call_playbook — 同步调用子 Playbook，等待完成并获取输出。
+ * 与 kind: "playbook" 不同，此步骤支持模板化 playbook_id、param 插值，
+ * 并可通过 store_result_as 将子流程输出写入当前上下文变量。
+ */
+export interface CallPlaybookStep extends StepMeta {
+  kind: "call_playbook";
+  id: string;
+  /** 子 Playbook ID，支持模板字符串 e.g. "{{ intent }}_handler" */
+  playbookId: string;
+  /** 传入子 Playbook 的参数（支持模板插值） */
+  params?: Record<string, unknown>;
+  /** 将子 Playbook 的 output 写入此变量名 */
+  storeResultAs?: string;
+  /** 超时秒数，默认 60 */
+  timeoutSeconds?: number;
+}
+
 export interface A2aDelegateStep extends StepMeta {
   kind: "a2a_delegate";
   id: string;
@@ -103,10 +124,28 @@ export interface SubagentStep extends StepMeta {
   output?: string;
 }
 
+/**
+ * SkillStep — 调用 OpenClaw ClawHub Skill（AI 推理能力，通过 runEmbeddedAgent）。
+ * Playbook YAML：kind: skill
+ */
 export interface SkillStep extends StepMeta {
   kind: "skill";
   id: string;
   skillId: string;
+  input?: Record<string, unknown>;
+  output?: string;
+}
+
+/**
+ * ScriptStep — 调用 ClaWorks 内置脚本（纯代码，不依赖 LLM）。
+ * Playbook YAML：kind: script
+ * 对应 ScriptLibrary.invoke()，IDs 如 kb.quick_search / alarm.classify_severity 等。
+ */
+export interface ScriptStep extends StepMeta {
+  kind: "script";
+  id: string;
+  /** 脚本 ID，对应 ScriptLibrary 中注册的 id */
+  scriptId: string;
   input?: Record<string, unknown>;
   output?: string;
 }
@@ -117,6 +156,24 @@ export interface LlmStep extends StepMeta {
   prompt: string;
   model?: string;
   output: string;
+  /**
+   * 结构化输出 schema（可选）。
+   * 指定后 LLM 步骤会使用 StructuredOutputEngine 保证输出格式，
+   * 解析失败自动重试（最多 3 次），最终输出写入 output 变量。
+   * 格式同 StructuredOutputEngine.OutputSchema。
+   */
+  output_schema?: import("../../kernel/structured-output.js").OutputSchema;
+  /**
+   * Self-Consistency 投票（与 output_schema 配合使用）。
+   * 多次采样并对指定字段投票，提升分类/决策准确率。
+   * 典型用途：报警严重度分类、意图分类等高置信场景。
+   */
+  output_voting?: {
+    /** 投票字段名（schema 中的某个枚举字段） */
+    field: string;
+    /** 采样次数（默认 3） */
+    votes?: number;
+  };
 }
 
 export interface HitlStep extends StepMeta {
@@ -126,7 +183,17 @@ export interface HitlStep extends StepMeta {
   channel?: string;
   options: string[];
   output: string;
+  /**
+   * 超时秒数。到期后若仍未决策，自动以 on_timeout 决策值继续 Playbook。
+   * 未指定时不自动超时（无限等待）。
+   */
   timeout_seconds?: number;
+  /**
+   * 超时自动降级决策值，须是 options 中的一项。
+   * 默认取 options[0]（通常为 "approve"）。
+   * 设为 "abort" 可让超时后 Playbook 终止并发告警通知。
+   */
+  on_timeout?: string;
 }
 
 export interface ConditionStep extends StepMeta {
@@ -170,6 +237,25 @@ export interface MemoryWriteStep extends StepMeta {
 }
 
 /**
+ * parallel — 并行执行多个分支（branch 是 PlaybookStep 数组），
+ * 支持超时、失败策略和结果合并。
+ */
+export interface ParallelStep extends StepMeta {
+  kind: "parallel";
+  id: string;
+  /** 并行分支列表，每个分支是一个步骤序列 */
+  branches: PlaybookStep[][];
+  /** 合并策略：all（等待所有）| first_success（取第一个成功的） */
+  merge_strategy?: "all" | "first_success";
+  /** 超时秒数，默认 30 */
+  timeout_seconds?: number;
+  /** 将分支结果写入 ctx.variables 的变量名 */
+  store_result_as?: string;
+  /** 某分支失败时的处理策略：continue（继续其他分支）| abort_all（中止全部） */
+  on_branch_failure?: "continue" | "abort_all";
+}
+
+/**
  * publish_event — 在 Playbook 内部直接发布一个新的业务事件到 EventKernel。
  * 用于意图路由：IM bridge classify → 发布具体业务事件（alarm.created / workorder.query 等）。
  */
@@ -209,6 +295,17 @@ export interface PlaybookStepContext {
   ontology?: import("../data/ontology-engine.js").OntologyEngine;
   reloadPacks?: () => Promise<Record<string, unknown>>;
   a2aPeers?: import("../../claworks/a2a-peers.js").A2aPeerConfig[];
+  /**
+   * 调用外部连接器（供 Pack ActionHandler 使用）。
+   * 例：ctx.connectorInvoke?.("bi-tableau", "push", { records: [...] })
+   */
+  connectorInvoke?: (
+    connectorId: string,
+    method: string,
+    params?: Record<string, unknown>,
+  ) => Promise<void>;
+  /** 运行时日志输出 */
+  logger?: (msg: string) => void;
 }
 
 export interface StepLog {

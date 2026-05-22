@@ -1,8 +1,8 @@
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
-import type { DatabaseSync } from "node:sqlite";
 import { requireNodeSqlite } from "../../../../../src/infra/node-sqlite.js";
 import { migrateClaworksSchema } from "./db-migrate.js";
+import { execSchemaBootstrap } from "./schema-bootstrap.sql.js";
 
 export type { CwDatabase } from "./db-types.js";
 import type { CwDatabase } from "./db-types.js";
@@ -51,6 +51,7 @@ export function openDatabase(databaseUrl: string): { db: CwDatabase; close: () =
       idempotency_key TEXT
     );
   `);
+  execSchemaBootstrap(db);
   migrateClaworksSchema(db);
   return {
     db,

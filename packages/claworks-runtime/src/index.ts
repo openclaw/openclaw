@@ -23,6 +23,14 @@ export * from "./interfaces/index.js";
 export type { KnowledgeBase, KbResult, RobotInfo } from "./kernel/types.js";
 
 export {
+  SystemPromptBuilder,
+  createBasePromptBuilder,
+  PROMPT_PRIORITY,
+  type PromptSection,
+  type PromptSectionPriority,
+} from "./kernel/system-prompt-builder.js";
+
+export {
   createPackLoader,
   resolvePackDir,
   parsePlaybookYaml,
@@ -37,3 +45,27 @@ export {
   type PackManifest,
   type NexusInstallSpec,
 } from "./pack-loader/index.js";
+
+export type {
+  PackContribution,
+  PackFactory,
+  PackSdkContext,
+  HookDefinition,
+} from "./pack-loader/pack-sdk.js";
+
+export type { CapabilityDescriptor, CapabilityContext } from "./kernel/capability-registry.js";
+export type {
+  ActionRegistry,
+  ActionHandler,
+  ActionRegistration,
+} from "./kernel/action-registry.js";
+export type { IntentRegistry, IntentMapping } from "./kernel/intent-registry.js";
+export { CW_EVENTS, type CwEventType } from "./kernel/event-names.js";
+
+export {
+  discoverPackSourceDir,
+  hasPackSourcesAvailable,
+  isClaworksRobotConfigPresent,
+  repairClaworksJsonConfig,
+  type ProductConfigRepairResult,
+} from "./claworks/product-config-repair.js";

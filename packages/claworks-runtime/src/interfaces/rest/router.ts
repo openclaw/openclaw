@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { dirname, extname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { runClaworksDoctor } from "../../claworks/doctor.js";
 import { buildHealthPayload } from "../../claworks/health.js";
 import { applyIngressPublish } from "../../claworks/ingress-publish.js";
@@ -18,16 +19,49 @@ import {
   updateClaworksPack,
 } from "../../claworks/pack-runtime.js";
 import type { ClaworksRuntime } from "../../claworks/runtime.js";
+import { globalMetrics } from "../../kernel/metrics.js";
+import {
+  createRateLimiter,
+  resolveRateLimitKey,
+  API_RATE_LIMITER_CONFIG,
+} from "../../kernel/rate-limiter.js";
 import { buildA2aAgentCard } from "../a2a/agent-card.js";
 import { resolveAuthContext, checkRbac } from "./auth.js";
 import { badRequest, notFound, parsePath, readJsonBody, sendJson } from "./http-utils.js";
+
+// Per-handler 速率限制器（每 REST handler 实例独立，防进程内 DoS）
+const _apiRateLimiter = createRateLimiter(API_RATE_LIMITER_CONFIG);
+
+const _routerDir = dirname(fileURLToPath(import.meta.url));
+let _dashboardHtml: string | null = null;
+
+function serveDashboard(res: ServerResponse): void {
+  if (!_dashboardHtml) {
+    try {
+      _dashboardHtml = readFileSync(join(_routerDir, "../studio/dashboard.html"), "utf-8");
+    } catch {
+      _dashboardHtml =
+        "<h1>ClaWorks API</h1><p>Studio UI unavailable. Access <a href='/v1/health'>/v1/health</a> for status.</p>";
+    }
+  }
+  res.statusCode = 200;
+  res.setHeader("Content-Type", "text/html; charset=utf-8");
+  res.end(_dashboardHtml);
+}
 
 export function createClaworksRestHandler(
   runtime: ClaworksRuntime,
 ): (req: IncomingMessage, res: ServerResponse) => Promise<boolean> {
   return async (req, res) => {
     const method = req.method ?? "GET";
+    const rawPath = new URL(req.url ?? "/", "http://localhost").pathname;
     const parts = parsePath(req.url ?? "/");
+
+    // GET / or GET /studio → serve monitoring dashboard (no auth required)
+    if (method === "GET" && (rawPath === "/" || rawPath === "/studio" || rawPath === "/studio/")) {
+      serveDashboard(res);
+      return true;
+    }
 
     if (parts[0] !== "v1") {
       return false;
@@ -37,6 +71,32 @@ export function createClaworksRestHandler(
     if (!auth.authenticated) {
       sendJson(res, 401, { error: "Unauthorized", code: "UNAUTHORIZED" });
       return true;
+    }
+
+    // 速率限制：跳过 GET /v1/health 和 GET /v1/metrics（监控探针）
+    const isMonitorEndpoint = method === "GET" && (parts[1] === "health" || parts[1] === "metrics");
+    if (!isMonitorEndpoint) {
+      const configLimits = runtime.config.kernel;
+      const limiter =
+        configLimits?.rate_limit_max_requests || configLimits?.rate_limit_window_ms
+          ? createRateLimiter({
+              maxRequests: configLimits.rate_limit_max_requests,
+              windowMs: configLimits.rate_limit_window_ms,
+            })
+          : _apiRateLimiter;
+      const rlKey = resolveRateLimitKey("rest", auth.subjectId);
+      const rlResult = limiter.consume(rlKey);
+      if (!rlResult.allowed) {
+        res.setHeader("Retry-After", String(Math.ceil(rlResult.retryAfterMs / 1000)));
+        res.setHeader("X-RateLimit-Remaining", "0");
+        sendJson(res, 429, {
+          error: "Too Many Requests",
+          code: "RATE_LIMITED",
+          retryAfterMs: rlResult.retryAfterMs,
+        });
+        return true;
+      }
+      res.setHeader("X-RateLimit-Remaining", String(rlResult.remaining));
     }
 
     /** 写操作 RBAC helper（deny 时发 rbac.denied 事件并返回 403） */
@@ -110,10 +170,15 @@ export function createClaworksRestHandler(
         return true;
       }
 
-      if (method === "GET" && parts[1] === "metrics") {
+      if (method === "GET" && parts[1] === "metrics" && parts.length === 2) {
         res.statusCode = 200;
         res.setHeader("Content-Type", "text/plain; version=0.0.4");
         res.end(prometheusMetricsText(runtime.robot.name));
+        return true;
+      }
+
+      if (method === "GET" && parts[1] === "metrics" && parts[2] === "json") {
+        sendJson(res, 200, globalMetrics.snapshot());
         return true;
       }
 
@@ -281,7 +346,9 @@ export function createClaworksRestHandler(
 
       // PUT /v1/playbooks/{id}/yaml — 写入 Playbook YAML 到自定义 pack 并热重载
       if (method === "PUT" && parts[1] === "playbooks" && parts[2] && parts[3] === "yaml") {
-        if (!(await requireWrite(`playbook:${parts[2]}`))) return true;
+        if (!(await requireWrite(`playbook:${parts[2]}`))) {
+          return true;
+        }
         const body = (await readJsonBody(req)) as { yaml?: string; pack_path?: string };
         if (!body.yaml) {
           badRequest(res, "yaml is required");
@@ -630,7 +697,9 @@ export function createClaworksRestHandler(
         parts[2] === "ingest" &&
         parts[3] === "folder"
       ) {
-        if (!(await requireWrite("kb:ingest:folder"))) return true;
+        if (!(await requireWrite("kb:ingest:folder"))) {
+          return true;
+        }
         const body = (await readJsonBody(req)) as {
           folder_path?: string;
           namespace?: string;
@@ -654,8 +723,12 @@ export function createClaworksRestHandler(
               const full = join(dir, entry);
               try {
                 const st = statSync(full);
-                if (st.isDirectory() && body.recursive !== false) return collectFiles(full);
-                if (st.isFile() && allowedExts.has(extname(entry).toLowerCase())) return [full];
+                if (st.isDirectory() && body.recursive !== false) {
+                  return collectFiles(full);
+                }
+                if (st.isFile() && allowedExts.has(extname(entry).toLowerCase())) {
+                  return [full];
+                }
               } catch {
                 // skip unreadable entries
               }
@@ -693,6 +766,58 @@ export function createClaworksRestHandler(
 
       if (method === "GET" && parts[1] === ".well-known" && parts[2] === "agent.json") {
         sendJson(res, 200, buildA2aAgentCard(runtime));
+        return true;
+      }
+
+      // GET /v1/hitl/pending — 列出所有等待人工审批的 Playbook 运行
+      if (method === "GET" && parts[1] === "hitl" && parts[2] === "pending") {
+        const runs = await runtime.playbookEngine.listRuns({ status: "waiting_hitl", limit: 50 });
+        sendJson(res, 200, {
+          pending: runs.map((run) => ({
+            run_id: run.id,
+            playbook_id: run.playbookId,
+            started_at: run.startedAt,
+            waiting_step_id: run.steps.find((s) => s.status === "waiting")?.stepId ?? null,
+            steps: run.steps,
+          })),
+        });
+        return true;
+      }
+
+      // POST /v1/hitl/{token}/resolve — 通过 run_id + step_id 提交 HITL 决策（token 即 run_id）
+      if (method === "POST" && parts[1] === "hitl" && parts[2] && parts[3] === "resolve") {
+        if (!(await requireWrite(`hitl:${parts[2]}`))) return true;
+        const runId = parts[2];
+        const body = (await readJsonBody(req)) as {
+          step_id?: string;
+          decision?: string;
+          comment?: string;
+        };
+        if (!body.decision) {
+          badRequest(res, "decision is required");
+          return true;
+        }
+        // 若未提供 step_id，自动解析等待中的步骤
+        let stepId = body.step_id;
+        if (!stepId) {
+          const run = await runtime.playbookEngine.getRun(runId);
+          if (!run) {
+            sendJson(res, 404, { error: "Run not found", code: "NOT_FOUND" });
+            return true;
+          }
+          stepId = run.steps.find((s) => s.status === "waiting")?.stepId;
+          if (!stepId) {
+            badRequest(res, "No waiting step found on run; provide step_id explicitly");
+            return true;
+          }
+        }
+        const updated = await runtime.playbookEngine.submitHitlDecision(
+          runId,
+          stepId,
+          body.decision,
+          body.comment,
+        );
+        sendJson(res, 200, updated);
         return true;
       }
 

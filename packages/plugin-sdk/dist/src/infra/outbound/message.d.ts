@@ -1,0 +1,103 @@
+import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { OutboundMediaAccess } from "../../media/load-options.js";
+import { type GatewayClientMode, type GatewayClientName } from "../../utils/message-channel.js";
+import { type OutboundDeliveryResult, type OutboundDeliveryQueuePolicy, type OutboundSendDeps } from "./deliver.js";
+import type { OutboundMirror } from "./mirror.js";
+export type MessageGatewayOptions = {
+    url?: string;
+    token?: string;
+    timeoutMs?: number;
+    clientName?: GatewayClientName;
+    clientDisplayName?: string;
+    mode?: GatewayClientMode;
+};
+type MessageSendParams = {
+    to: string;
+    content: string;
+    /** Active agent id for per-agent outbound media root scoping. */
+    agentId?: string;
+    /** Originating session key used for requester-scoped outbound media policy. */
+    requesterSessionKey?: string;
+    /** Originating account id used for requester-scoped outbound media policy. */
+    requesterAccountId?: string;
+    /** Originating sender id used for sender-scoped outbound media policy. */
+    requesterSenderId?: string;
+    /** Originating sender display name for name-keyed sender policy matching. */
+    requesterSenderName?: string;
+    /** Originating sender username for username-keyed sender policy matching. */
+    requesterSenderUsername?: string;
+    /** Originating sender E.164 phone number for e164-keyed sender policy matching. */
+    requesterSenderE164?: string;
+    channel?: string;
+    mediaUrl?: string;
+    mediaUrls?: string[];
+    asVoice?: boolean;
+    gifPlayback?: boolean;
+    forceDocument?: boolean;
+    accountId?: string;
+    replyToId?: string;
+    threadId?: string | number;
+    dryRun?: boolean;
+    bestEffort?: boolean;
+    queuePolicy?: OutboundDeliveryQueuePolicy;
+    payloads?: ReplyPayload[];
+    mediaAccess?: OutboundMediaAccess;
+    deps?: OutboundSendDeps;
+    cfg?: OpenClawConfig;
+    gateway?: MessageGatewayOptions;
+    idempotencyKey?: string;
+    mirror?: OutboundMirror;
+    abortSignal?: AbortSignal;
+    silent?: boolean;
+    parseMode?: "HTML";
+};
+export type MessageSendResult = {
+    channel: string;
+    to: string;
+    via: "direct" | "gateway";
+    mediaUrl: string | null;
+    mediaUrls?: string[];
+    result?: OutboundDeliveryResult | {
+        messageId: string;
+    };
+    dryRun?: boolean;
+};
+type MessagePollParams = {
+    to: string;
+    question: string;
+    options: string[];
+    maxSelections?: number;
+    durationSeconds?: number;
+    durationHours?: number;
+    channel?: string;
+    accountId?: string;
+    threadId?: string;
+    silent?: boolean;
+    isAnonymous?: boolean;
+    dryRun?: boolean;
+    cfg?: OpenClawConfig;
+    gateway?: MessageGatewayOptions;
+    idempotencyKey?: string;
+};
+export type MessagePollResult = {
+    channel: string;
+    to: string;
+    question: string;
+    options: string[];
+    maxSelections: number;
+    durationSeconds: number | null;
+    durationHours: number | null;
+    via: "gateway";
+    result?: {
+        messageId: string;
+        toJid?: string;
+        channelId?: string;
+        conversationId?: string;
+        pollId?: string;
+    };
+    dryRun?: boolean;
+};
+export declare function sendMessage(params: MessageSendParams): Promise<MessageSendResult>;
+export declare function sendPoll(params: MessagePollParams): Promise<MessagePollResult>;
+export {};

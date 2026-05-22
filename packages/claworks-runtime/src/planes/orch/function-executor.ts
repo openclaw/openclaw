@@ -1,4 +1,5 @@
 import { appendDecisionLog } from "../../claworks/observability.js";
+import type { IntentRegistry } from "../../kernel/intent-registry.js";
 import type { KnowledgeBase } from "../../kernel/types.js";
 import type { PublishEventFn } from "./playbook-types.js";
 import type { LlmCompleteFn } from "./step-executor.js";
@@ -8,6 +9,15 @@ export type FunctionExecutorDeps = {
   llmComplete?: LlmCompleteFn;
   publishEvent?: PublishEventFn;
   logger?: (msg: string) => void;
+  /**
+   * Pack intent registry — publish_event_from_intent 查此表替代硬编码映射。
+   * 各业务 Pack 在 entry.ts 通过 PackContribution.intentMappings 注册。
+   */
+  intentRegistry?: IntentRegistry;
+  /** 生产模式：未知 function 时抛错而非返回 stub */
+  productionMode?: boolean;
+  /** 发布异常事件（供 Playbook 响应） */
+  publishAnomaly?: (payload: Record<string, unknown>) => Promise<void>;
 };
 
 export async function executeFunction(
@@ -37,39 +47,38 @@ export async function executeFunction(
 
   // ── publish_event_from_intent ─────────────────────────────────────────
   // IM 意图路由 Playbook 中使用：将 LLM 分类结果转为业务事件发布
+  // 优先查 IntentRegistry（各 Pack 注册），回退到内置系统级映射表
   if (name === "publish_event_from_intent") {
     const intent = String(params.intent ?? "none");
     const extracted = (params.extracted ?? {}) as Record<string, unknown>;
     const source = String(params.source ?? "im-bridge:intent");
     const correlationId = params.correlation_id ? String(params.correlation_id) : undefined;
 
-    const intentToEventType: Record<string, string> = {
-      // 工业场景（process-industry pack）
-      alarm_report: "alarm.created",
-      workorder_query: "workorder.query",
-      workorder_create: "workorder.create_requested",
-      status_check: "equipment.status_requested",
-      // 通用企业场景（enterprise-general pack）
-      task_query: "task.status_query",
-      task_create: "task.create_requested",
-      approval_create: "approval.created",
-      approval_decide: "approval.decision_input",
-      incident_report: "incident.created",
-      meeting_create: "meeting.created",
-      announcement: "announcement.publish",
-      // 商务场景（enterprise-commercial pack）
-      quote_request: "quote.create_requested",
-      bid_request: "bid.generate_requested",
-      kb_ingest: "kb.folder_ingest_requested",
-      // 系统操作
+    // 系统级 intent 映射（base Pack 保留，业务 intent 由各 Pack 注册）
+    // workflow/knowledge Pack 为 YAML-only（无 TS entry），在此注册基础映射。
+    const SYSTEM_INTENT_MAP: Record<string, string> = {
       hitl_approve: "hitl.approve_requested",
       kb_query: "kb.query_requested",
+      query_kb: "knowledge.query_requested",
+      knowledge_query: "knowledge.query_requested",
       pack_reload: "system.pack_reload_requested",
+      create_task: "task.create_requested",
+      list_tasks: "task.list_requested",
+      approve_request: "approval.requested",
     };
 
-    const eventType = intentToEventType[intent];
-    if (!eventType || intent === "none") {
+    // 优先查 Pack 注册的 IntentRegistry
+    const registryMapping = deps.intentRegistry?.resolve(intent);
+    const eventType = registryMapping?.eventType ?? SYSTEM_INTENT_MAP[intent] ?? `intent.${intent}`;
+
+    if (intent === "none") {
       return { status: "skipped", intent, reason: "no matching business event" };
+    }
+
+    if (!registryMapping && !SYSTEM_INTENT_MAP[intent]) {
+      deps.logger?.(
+        `[claworks:function] unmapped intent '${intent}' — routing to generic event '${eventType}'`,
+      );
     }
 
     if (deps.publishEvent) {
@@ -123,12 +132,24 @@ export async function executeFunction(
     };
   }
 
-  // ── 兜底：未知 function，返回 stub 结果而不是 throw ──────────────────
-  deps.logger?.(`[claworks:function] unknown function "${name}" — returning stub`);
-  return { status: "ok", function: name, params };
+  // ── 兜底：未知 function ────────────────────────────────────────────────
+  // 生产模式：抛错（明确配置问题，避免静默跳过业务逻辑）。
+  // 开发模式：记录警告并返回 stub，方便本地调试。
+  deps.logger?.(
+    `[claworks:function] unknown function "${name}" — ${deps.productionMode ? "throwing" : "returning stub"}`,
+  );
+  void deps.publishAnomaly?.({
+    kind: "unknown_function",
+    function: name,
+    params,
+  });
+  if (deps.productionMode) {
+    throw new Error(`未知 function: "${name}"，请检查 Playbook 配置或注册对应 Pack`);
+  }
+  return { status: "stub", function: name, params };
 }
 
-function tryParseJson(text: string): Record<string, unknown> | null {
+export function tryParseJson(text: string): Record<string, unknown> | null {
   const trimmed = text.trim();
   const start = trimmed.indexOf("{");
   const end = trimmed.lastIndexOf("}");

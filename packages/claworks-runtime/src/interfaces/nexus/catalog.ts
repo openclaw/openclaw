@@ -85,7 +85,7 @@ export function getPackageDetail(
   if (matches.length === 0) {
     return null;
   }
-  const first = matches[0]!;
+  const first = matches[0];
   return {
     slug,
     name: first.manifest.name,

@@ -197,4 +197,20 @@ export class ConnectorManager {
       });
     }
   }
+
+  /**
+   * 返回所有连接器的状态快照（供能力/UI 查询）。
+   * ready: 进程已就绪; error: 进程出错或已退出; idle: 尚未启动
+   */
+  status(): Array<{
+    id: string;
+    ready: boolean;
+    lastError?: string;
+  }> {
+    return [...this.connectors.values()].map((c) => ({
+      id: c.id,
+      ready: c.ready,
+      lastError: c.lastError,
+    }));
+  }
 }

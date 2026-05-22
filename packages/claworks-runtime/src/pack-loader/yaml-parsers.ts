@@ -159,15 +159,43 @@ function parseStep(raw: Record<string, unknown>, index: number): PlaybookStep {
     };
   }
   if (stepType === "hitl") {
+    // Support both `message` and `prompt` as the HITL question text
+    const hitlMessage = String(raw.message ?? raw.prompt ?? "");
+    // Support both plain string options and {label, value} objects
+    const rawOptions = Array.isArray(raw.options) ? raw.options : ["approve", "reject"];
+    const resolvedOptions = rawOptions.map((o: unknown) => {
+      if (o && typeof o === "object" && "value" in (o as Record<string, unknown>)) {
+        return String((o as Record<string, unknown>).value);
+      }
+      return String(o);
+    });
+    // Support timeout_hours at step level (in addition to hitl.timeout_hours)
+    const timeoutHours =
+      typeof raw.timeout_hours === "number" ? raw.timeout_hours : meta.hitl?.timeoutHours;
+    const timeoutSeconds =
+      typeof raw.timeout_seconds === "number"
+        ? raw.timeout_seconds
+        : timeoutHours != null
+          ? timeoutHours * 3600
+          : undefined;
+    // Support auto_approve_if at step level (in addition to hitl.auto_approve_if)
+    const autoApproveIf =
+      raw.auto_approve_if != null ? String(raw.auto_approve_if) : meta.hitl?.autoApproveIf;
+    const hitlConfig = {
+      ...meta.hitl,
+      ...(autoApproveIf != null ? { autoApproveIf } : {}),
+      ...(timeoutHours != null ? { timeoutHours } : {}),
+    };
     return {
       ...meta,
+      hitl: Object.keys(hitlConfig).length > 0 ? hitlConfig : meta.hitl,
       kind: "hitl",
       id,
-      message: String(raw.message ?? ""),
+      message: hitlMessage,
       channel: raw.channel ? String(raw.channel) : undefined,
-      options: Array.isArray(raw.options) ? raw.options.map(String) : ["approve", "reject"],
+      options: resolvedOptions,
       output: String(raw.output ?? `${id}_decision`),
-      timeout_seconds: typeof raw.timeout_seconds === "number" ? raw.timeout_seconds : undefined,
+      timeout_seconds: timeoutSeconds,
     };
   }
   if (stepType === "llm" || stepType === "llm_reason" || stepType === "llm_reasoning") {
@@ -190,6 +218,25 @@ function parseStep(raw: Record<string, unknown>, index: number): PlaybookStep {
       if: String(raw.if ?? "true"),
       then: thenRaw.map((s, i) => parseStep(s as Record<string, unknown>, i)),
       else: elseRaw.map((s, i) => parseStep(s as Record<string, unknown>, i + 100)),
+    };
+  }
+  // scaffold 是 action + llm.scaffold 的语法糖，YAML 中 kind: scaffold 自动展开为 action
+  if (stepType === "scaffold") {
+    const outputKey = readField(raw, "store_result_as", "storeResultAs", "output", "output_var");
+    const variables = (raw.variables ?? raw.params ?? {}) as Record<string, unknown>;
+    return {
+      ...meta,
+      kind: "action",
+      id,
+      actionApiName: "llm.scaffold",
+      params: {
+        scaffold_id: String(raw.scaffold_id ?? raw.scaffoldId ?? ""),
+        variables,
+        ...(raw.extra_context ? { extra_context: String(raw.extra_context) } : {}),
+        ...(raw.max_tokens ? { max_tokens: Number(raw.max_tokens) } : {}),
+        ...(raw.require_json !== undefined ? { require_json: raw.require_json === true } : {}),
+      },
+      output: outputKey || id,
     };
   }
   if (stepType === "action") {
@@ -235,6 +282,18 @@ function parseStep(raw: Record<string, unknown>, index: number): PlaybookStep {
       input: (raw.input ?? raw.params) as Record<string, unknown> | undefined,
     };
   }
+  if (stepType === "call_playbook") {
+    const outputKey = readField(raw, "store_result_as", "storeResultAs", "output");
+    return {
+      ...meta,
+      kind: "call_playbook",
+      id,
+      playbookId: String(raw.playbook_id ?? raw.playbook ?? ""),
+      params: (raw.params ?? raw.input) as Record<string, unknown> | undefined,
+      storeResultAs: outputKey || undefined,
+      timeoutSeconds: typeof raw.timeout_seconds === "number" ? raw.timeout_seconds : undefined,
+    };
+  }
   if (stepType === "a2a_delegate") {
     const a2aOutput = readField(raw, "output", "output_var", "outputVar");
     return {
@@ -264,6 +323,16 @@ function parseStep(raw: Record<string, unknown>, index: number): PlaybookStep {
       kind: "skill",
       id,
       skillId: String(raw.skill_id ?? raw.skill ?? ""),
+      input: (raw.input ?? raw.params) as Record<string, unknown> | undefined,
+      output: raw.output ? String(raw.output) : id,
+    };
+  }
+  if (stepType === "script") {
+    return {
+      ...meta,
+      kind: "script",
+      id,
+      scriptId: String(raw.script_id ?? raw.script ?? ""),
       input: (raw.input ?? raw.params) as Record<string, unknown> | undefined,
       output: raw.output ? String(raw.output) : id,
     };
@@ -319,6 +388,23 @@ function parseStep(raw: Record<string, unknown>, index: number): PlaybookStep {
       source: raw.source ? String(raw.source) : undefined,
       payload: raw.payload ? (raw.payload as Record<string, unknown>) : undefined,
       output: raw.output ? String(raw.output) : undefined,
+    };
+  }
+  if (stepType === "parallel") {
+    const branchesRaw = Array.isArray(raw.branches) ? raw.branches : [];
+    return {
+      ...meta,
+      kind: "parallel",
+      id,
+      branches: branchesRaw.map((branch: unknown) =>
+        Array.isArray(branch)
+          ? branch.map((s, i) => parseStep(s as Record<string, unknown>, i))
+          : [],
+      ),
+      merge_strategy: raw.merge_strategy === "first_success" ? "first_success" : "all",
+      timeout_seconds: typeof raw.timeout_seconds === "number" ? raw.timeout_seconds : undefined,
+      store_result_as: raw.store_result_as ? String(raw.store_result_as) : undefined,
+      on_branch_failure: raw.on_branch_failure === "abort_all" ? "abort_all" : "continue",
     };
   }
   return {

@@ -22,3 +22,12 @@ export * from "./pack-runtime.js";
 export { createClaworksRuntime, startClaworksRuntime, stopClaworksRuntime } from "./runtime.js";
 
 export { registerClaworksPacksCli } from "./packs-cli.js";
+export { registerClaworksEvolutionCli } from "./evolution-cli.js";
+
+export type {
+  EvolutionExportData,
+  EvolutionPack,
+  ImportResult,
+  EvolutionHistoryEntry,
+} from "../kernel/evolution-sync.js";
+export { EvolutionSyncManager } from "../kernel/evolution-sync.js";

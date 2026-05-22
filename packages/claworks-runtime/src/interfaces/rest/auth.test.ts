@@ -37,6 +37,15 @@ describe("resolveAuthContext channel_user header", () => {
     expect(ctx.subjectId).toBe("feishu:user-001");
   });
 
+  it("denies when require_api_key set but api_key missing", () => {
+    const req = { headers: {} } as import("node:http").IncomingMessage;
+    const rt = {
+      config: { api: { require_api_key: true } },
+    } as ClaworksRuntime;
+    const denied = resolveAuthContext(req, rt);
+    expect(denied.authenticated).toBe(false);
+  });
+
   it("uses channel_user in local dev when header present", () => {
     const req = {
       headers: { "x-claworks-channel-user": "feishu:owner" },

@@ -7,8 +7,36 @@ export interface PlaybookMatcher {
   match(event: CwEvent): CwEventMatch[];
 }
 
+type RuleEntry = { playbookId: string; trigger: EventTrigger; priority: number };
+
 export function createPlaybookMatcher(): PlaybookMatcher {
-  let rules: Array<{ playbookId: string; trigger: EventTrigger; priority: number }> = [];
+  let rules: RuleEntry[] = [];
+  /**
+   * 精确匹配索引：eventType → 规则列表（无通配符 pattern 才入索引）。
+   * 热路径从 O(n) 全量遍历降为 O(1) + 少量通配符扫描。
+   * 语义回退（semantic fallback）仍需扫描全量规则，但仅在无 glob 命中时执行。
+   */
+  const exactIndex = new Map<string, RuleEntry[]>();
+  let wildcardRules: RuleEntry[] = [];
+
+  function buildIndex(newRules: RuleEntry[]): void {
+    exactIndex.clear();
+    wildcardRules = [];
+    for (const rule of newRules) {
+      if (rule.trigger.kind !== "event") continue;
+      const p = rule.trigger.pattern;
+      if (!p.includes("*") && !p.includes("?")) {
+        const bucket = exactIndex.get(p);
+        if (bucket) {
+          bucket.push(rule);
+        } else {
+          exactIndex.set(p, [rule]);
+        }
+      } else {
+        wildcardRules.push(rule);
+      }
+    }
+  }
 
   return {
     load(playbooks: PlaybookDefinition[]) {
@@ -19,44 +47,56 @@ export function createPlaybookMatcher(): PlaybookMatcher {
           trigger: p.trigger,
           priority: p.priority,
         }));
+      buildIndex(rules);
     },
 
     match(event: CwEvent): CwEventMatch[] {
       const matches: CwEventMatch[] = [];
       const semanticCandidates: CwEventMatch[] = [];
 
-      for (const rule of rules) {
-        if (rule.trigger.kind !== "event") {
+      // 精确命中（O(1) 查找）+ 通配符扫描
+      const exactHits = exactIndex.get(event.type) ?? [];
+      const exactHitSet = new Set(exactHits);
+
+      // 热路径：精确匹配 + 通配符规则
+      const hotCandidates = exactHits.length > 0 ? [...exactHits, ...wildcardRules] : wildcardRules;
+
+      for (const rule of hotCandidates) {
+        if (rule.trigger.kind !== "event") continue;
+        const globHit = exactHitSet.has(rule) || matchGlob(rule.trigger.pattern, event.type);
+        if (!globHit) continue;
+        if (rule.trigger.filter && !matchesFilter(rule.trigger.filter, event.payload)) continue;
+        if (rule.trigger.condition && !evaluateCondition(rule.trigger.condition, event.payload))
           continue;
-        }
-        const globHit = matchGlob(rule.trigger.pattern, event.type);
-        const semanticHit =
-          !globHit && semanticFallbackScore(rule.trigger.pattern, event.type) >= 0.5;
-        if (!globHit && !semanticHit) {
-          continue;
-        }
-        if (rule.trigger.filter && !matchesFilter(rule.trigger.filter, event.payload)) {
-          continue;
-        }
-        if (rule.trigger.condition && !evaluateCondition(rule.trigger.condition, event.payload)) {
-          continue;
-        }
-        const entry: CwEventMatch = {
+        matches.push({
           event,
           playbookId: rule.playbookId,
           priority: rule.priority,
           input: { ...event.payload, _event: event },
-        };
-        if (globHit) {
-          matches.push(entry);
-        } else {
-          semanticCandidates.push(entry);
-        }
+        });
       }
 
-      if (matches.length === 0 && semanticCandidates.length > 0) {
-        semanticCandidates.sort((a, b) => b.priority - a.priority);
-        matches.push(semanticCandidates[0]!);
+      // 语义回退：仅在无 glob 命中时，扫描全量规则寻找语义近似匹配
+      if (matches.length === 0) {
+        for (const rule of rules) {
+          if (rule.trigger.kind !== "event") continue;
+          if (matchGlob(rule.trigger.pattern, event.type)) continue; // 已被热路径处理
+          const score = semanticFallbackScore(rule.trigger.pattern, event.type);
+          if (score < 0.5) continue;
+          if (rule.trigger.filter && !matchesFilter(rule.trigger.filter, event.payload)) continue;
+          if (rule.trigger.condition && !evaluateCondition(rule.trigger.condition, event.payload))
+            continue;
+          semanticCandidates.push({
+            event,
+            playbookId: rule.playbookId,
+            priority: rule.priority,
+            input: { ...event.payload, _event: event },
+          });
+        }
+        if (semanticCandidates.length > 0) {
+          semanticCandidates.sort((a, b) => b.priority - a.priority);
+          matches.push(semanticCandidates[0]);
+        }
       }
 
       matches.sort((a, b) => b.priority - a.priority);

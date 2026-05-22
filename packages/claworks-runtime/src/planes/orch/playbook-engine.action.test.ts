@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { openDatabase } from "../data/db.js";
+import { createDocumentKnowledgeBase } from "../data/kb-document-knowledge-base.js";
 import { createKnowledgeBase } from "../data/knowledge-base.js";
 import { createObjectStore } from "../data/object-store.js";
 import { createHitlGate } from "./hitl-gate.js";
@@ -64,6 +65,68 @@ describe("playbook-engine action/function steps", () => {
     expect(run.status).toBe("completed");
     const hits = await kb.search("sensor manual", { limit: 5 });
     expect(hits.length).toBeGreaterThan(0);
+
+    close();
+  });
+
+  it("runs search_kb action with namespace filter", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "cw-action-kb-"));
+    const { db, close } = openDatabase(`sqlite://${join(dir, "t.db")}`);
+    const kb = createKnowledgeBase();
+    await kb.ingest("alpha namespace doc", { namespace: "alpha" });
+    await kb.ingest("beta namespace doc", { namespace: "beta" });
+
+    const engine = createPlaybookEngine({
+      db,
+      objectStore: createObjectStore(db),
+      kb,
+      robot: {
+        name: "t",
+        role: "monolith",
+        version: "0",
+        endpoint: "http://127.0.0.1:18800",
+      },
+      hitl: createHitlGate(),
+    });
+
+    const def: PlaybookDefinition = {
+      id: "search_kb_flow",
+      name: "Search KB",
+      pack: "test",
+      trigger: { kind: "manual" },
+      priority: 0,
+      steps: [
+        {
+          kind: "action",
+          id: "search",
+          actionApiName: "search_kb",
+          params: { query: "namespace", namespace: "alpha", limit: 5 },
+          output: "search",
+        },
+      ],
+    };
+
+    await engine.loadFromPacks([
+      {
+        manifest: {
+          id: "test",
+          name: "t",
+          version: "1",
+          license: "MIT",
+          provides: { objectTypes: [], playbooks: ["search_kb_flow"], actionTypes: [] },
+        },
+        path: dir,
+        objectTypes: [],
+        playbooks: [def],
+      },
+    ]);
+
+    const run = await engine.trigger("search_kb_flow", {});
+    expect(run.status).toBe("completed");
+    const stepLog = run.steps.find((s) => s.stepId === "search");
+    const stepOut = stepLog?.output as { results?: Array<{ namespace?: string }> };
+    expect(stepOut?.results?.length).toBeGreaterThan(0);
+    expect(stepOut?.results?.every((r) => r.namespace === "alpha")).toBe(true);
 
     close();
   });
@@ -193,6 +256,81 @@ describe("playbook-engine action/function steps", () => {
       pack_ids: ["demo-pack"],
     });
 
+    close();
+  });
+
+  it("runs ingest_document action on document KB", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "cw-doc-action-"));
+    const { db, close } = openDatabase(`sqlite://${join(dir, "t.db")}`);
+    const kb = createDocumentKnowledgeBase(db, createKnowledgeBase());
+
+    const engine = createPlaybookEngine({
+      db,
+      objectStore: createObjectStore(db),
+      kb,
+      robot: {
+        name: "t",
+        role: "monolith",
+        version: "0",
+        endpoint: "http://127.0.0.1:18800",
+      },
+      hitl: createHitlGate(),
+    });
+
+    const def: PlaybookDefinition = {
+      id: "doc_flow",
+      name: "Doc flow",
+      pack: "test",
+      trigger: { kind: "manual" },
+      priority: 0,
+      steps: [
+        {
+          kind: "action",
+          id: "ingest",
+          actionApiName: "ingest_document",
+          params: {
+            text: "Tank level alarm response SOP",
+            source: "tank-sop.md",
+            namespace: "ops",
+            auto_publish: true,
+          },
+          output: "ingest",
+        },
+        {
+          kind: "action",
+          id: "lint",
+          actionApiName: "lint_document",
+          params: {
+            document_id: "{{ steps['ingest']['result'].get('document_id', '') }}",
+          },
+          output: "lint",
+        },
+      ],
+    };
+
+    await engine.loadFromPacks([
+      {
+        manifest: {
+          id: "test",
+          name: "t",
+          version: "1",
+          license: "MIT",
+          provides: { objectTypes: [], playbooks: ["doc_flow"], actionTypes: [] },
+        },
+        path: dir,
+        objectTypes: [],
+        playbooks: [def],
+      },
+    ]);
+
+    const run = await engine.trigger("doc_flow", {});
+    expect(run.status).toBe("completed");
+    const ingestStep = run.steps.find((s) => s.stepId === "ingest");
+    expect((ingestStep?.output as { document?: { status?: string } })?.document?.status).toBe(
+      "published",
+    );
+    const lintStep = run.steps.find((s) => s.stepId === "lint");
+    expect((lintStep?.output as { ok?: boolean })?.ok).toBe(true);
     close();
   });
 });

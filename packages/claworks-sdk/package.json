@@ -1,11 +1,39 @@
 {
   "name": "@claworks/sdk",
   "version": "0.1.0",
-  "description": "ClaWorks Extension Pack SDK — manifest helpers and types",
+  "description": "ClaWorks Extension Pack SDK — type-safe helpers for authoring ObjectTypes, Playbooks, and Packs",
   "type": "module",
   "license": "MIT",
+  "main": "./dist/index.mjs",
+  "types": "./dist/index.d.mts",
   "exports": {
-    ".": "./src/index.ts"
+    ".": {
+      "types": "./src/index.ts",
+      "import": "./src/index.ts"
+    },
+    "./write": {
+      "types": "./src/write.ts",
+      "import": "./src/write.ts"
+    },
+    "./package.json": "./package.json"
   },
-  "files": ["src"]
+  "publishConfig": {
+    "exports": {
+      ".": {
+        "types": "./dist/index.d.mts",
+        "import": "./dist/index.mjs"
+      },
+      "./write": {
+        "types": "./dist/write.d.mts",
+        "import": "./dist/write.mjs"
+      },
+      "./package.json": "./package.json"
+    }
+  },
+  "files": ["dist", "src", "README.md", "LICENSE"],
+  "scripts": {
+    "build": "../../node_modules/.bin/tsdown src/index.ts src/write.ts --no-config --platform node --format esm --dts --out-dir dist --clean",
+    "prepublishOnly": "pnpm run build",
+    "test": "vitest run src"
+  }
 }

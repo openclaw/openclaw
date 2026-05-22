@@ -7,28 +7,24 @@ import type { StepExecutorDeps } from "./step-executor.js";
 function makeCtx(overrides?: Partial<PlaybookStepContext>): PlaybookStepContext {
   const store: Partial<ObjectStore> = {
     get: vi.fn().mockResolvedValue(null),
-    create: vi
-      .fn()
-      .mockImplementation((_t, data) =>
-        Promise.resolve({
-          ...data,
-          _type: _t,
-          _version: 1,
-          _createdAt: new Date(),
-          _updatedAt: new Date(),
-        }),
-      ),
-    update: vi
-      .fn()
-      .mockImplementation((_t, _id, patch) =>
-        Promise.resolve({
-          ...patch,
-          _type: _t,
-          _version: 2,
-          _createdAt: new Date(),
-          _updatedAt: new Date(),
-        }),
-      ),
+    create: vi.fn().mockImplementation((_t, data) =>
+      Promise.resolve({
+        ...data,
+        _type: _t,
+        _version: 1,
+        _createdAt: new Date(),
+        _updatedAt: new Date(),
+      }),
+    ),
+    update: vi.fn().mockImplementation((_t, _id, patch) =>
+      Promise.resolve({
+        ...patch,
+        _type: _t,
+        _version: 2,
+        _createdAt: new Date(),
+        _updatedAt: new Date(),
+      }),
+    ),
     upsert: vi.fn().mockImplementation(async (_t, id, data) => ({
       ...data,
       id,
@@ -93,13 +89,11 @@ describe("memory_read step", () => {
 
   it("returns found=true with value when memory exists", async () => {
     const mockStore: Partial<ObjectStore> = {
-      get: vi
-        .fn()
-        .mockResolvedValue({
-          id: "mem:pump-001:baseline_pressure",
-          value: "5.2",
-          confidence: 0.95,
-        }),
+      get: vi.fn().mockResolvedValue({
+        id: "mem:pump-001:baseline_pressure",
+        value: "5.2",
+        confidence: 0.95,
+      }),
       upsert: vi.fn(),
       create: vi.fn(),
       update: vi.fn(),

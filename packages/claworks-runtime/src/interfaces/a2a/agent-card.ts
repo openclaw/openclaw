@@ -9,7 +9,7 @@ export function buildA2aAgentCard(runtime: ClaworksRuntime, baseUrl?: string): A
     url,
     version: runtime.robot.version,
     capabilities: {
-      streaming: false,
+      streaming: true,
       pushNotifications: false,
     },
     defaultInputModes: ["text"],

@@ -23,3 +23,15 @@ export {
 } from "./event-priority.js";
 export { matchGlob } from "./glob.js";
 export type * from "./types.js";
+export {
+  createActionRegistry,
+  type ActionRegistry,
+  type ActionHandler,
+  type ActionRegistration,
+} from "./action-registry.js";
+export {
+  createIntentRegistry,
+  type IntentRegistry,
+  type IntentMapping,
+} from "./intent-registry.js";
+export { CW_EVENTS, type CwEventType } from "./event-names.js";
