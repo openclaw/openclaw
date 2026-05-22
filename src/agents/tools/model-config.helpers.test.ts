@@ -1,6 +1,27 @@
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import { hasProviderAuthForTool } from "./model-config.helpers.js";
+
+async function withTempAgentDir<T>(run: (agentDir: string) => Promise<T>): Promise<T> {
+  const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-tool-auth-"));
+  try {
+    return await run(agentDir);
+  } finally {
+    await fs.rm(agentDir, { recursive: true, force: true });
+  }
+}
+
+async function writeAuthProfiles(agentDir: string, profiles: unknown) {
+  await fs.mkdir(agentDir, { recursive: true });
+  await fs.writeFile(
+    path.join(agentDir, "auth-profiles.json"),
+    `${JSON.stringify(profiles, null, 2)}\n`,
+    "utf8",
+  );
+}
 
 describe("hasProviderAuthForTool", () => {
   afterEach(() => {
@@ -59,6 +80,63 @@ describe("hasProviderAuthForTool", () => {
 
   it("rejects implicit amazon-bedrock aws-sdk auth for tool preflight", () => {
     expect(hasProviderAuthForTool({ provider: "amazon-bedrock", cfg: {} })).toBe(false);
+  });
+
+  it("keeps agent-local amazon-bedrock API key profiles before implicit aws-sdk rejection", async () => {
+    await withTempAgentDir(async (agentDir) => {
+      await writeAuthProfiles(agentDir, {
+        version: 1,
+        profiles: {
+          "amazon-bedrock:default": {
+            provider: "amazon-bedrock",
+            type: "api_key",
+            key: "sk-profile", // pragma: allowlist secret
+          },
+        },
+      });
+
+      const cfg = {
+        models: {
+          providers: {
+            "amazon-bedrock": {
+              baseUrl: "https://bedrock-runtime.us-east-1.amazonaws.com",
+              models: [],
+            },
+          },
+        },
+      } as OpenClawConfig;
+
+      expect(hasProviderAuthForTool({ provider: "amazon-bedrock", cfg, agentDir })).toBe(true);
+    });
+  });
+
+  it("still rejects explicit amazon-bedrock aws-sdk auth for tool preflight", async () => {
+    await withTempAgentDir(async (agentDir) => {
+      await writeAuthProfiles(agentDir, {
+        version: 1,
+        profiles: {
+          "amazon-bedrock:default": {
+            provider: "amazon-bedrock",
+            type: "api_key",
+            key: "sk-profile", // pragma: allowlist secret
+          },
+        },
+      });
+
+      const cfg = {
+        models: {
+          providers: {
+            "amazon-bedrock": {
+              baseUrl: "https://bedrock-runtime.us-east-1.amazonaws.com",
+              auth: "aws-sdk",
+              models: [],
+            },
+          },
+        },
+      } as OpenClawConfig;
+
+      expect(hasProviderAuthForTool({ provider: "amazon-bedrock", cfg, agentDir })).toBe(false);
+    });
   });
 
   it("rejects providers without config, env, or profile auth", () => {

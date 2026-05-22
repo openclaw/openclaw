@@ -19,6 +19,7 @@ import {
   resolveModelAuthMode,
 } from "../model-auth.js";
 import { resolveConfiguredModelRef } from "../model-selection.js";
+import { findNormalizedProviderValue } from "../provider-id.js";
 
 export type ToolModelConfig = { primary?: string; fallbacks?: string[]; timeoutMs?: number };
 
@@ -71,6 +72,22 @@ export function hasProviderAuthForTool(params: {
   agentDir?: string;
   authStore?: AuthProfileStore;
 }): boolean {
+  const providerConfig = findNormalizedProviderValue(
+    params.cfg?.models?.providers,
+    params.provider,
+  );
+  if (providerConfig?.auth === "aws-sdk") {
+    return false;
+  }
+  if (
+    hasAuthForProvider({
+      provider: params.provider,
+      agentDir: params.agentDir,
+      authStore: params.authStore,
+    })
+  ) {
+    return true;
+  }
   if (
     resolveModelAuthMode(params.provider, params.cfg, params.authStore, {
       workspaceDir: params.workspaceDir,
@@ -78,18 +95,11 @@ export function hasProviderAuthForTool(params: {
   ) {
     return false;
   }
-  return (
-    hasRuntimeAvailableProviderAuth({
-      provider: params.provider,
-      cfg: params.cfg,
-      workspaceDir: params.workspaceDir,
-    }) ||
-    hasAuthForProvider({
-      provider: params.provider,
-      agentDir: params.agentDir,
-      authStore: params.authStore,
-    })
-  );
+  return hasRuntimeAvailableProviderAuth({
+    provider: params.provider,
+    cfg: params.cfg,
+    workspaceDir: params.workspaceDir,
+  });
 }
 
 export function coerceToolModelConfig(model?: AgentToolModelConfig): ToolModelConfig {
