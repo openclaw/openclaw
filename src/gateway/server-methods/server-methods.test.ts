@@ -530,6 +530,35 @@ describe("sanitizeChatHistoryMessages", () => {
     ]);
   });
 
+  it("preserves OpenAI-compatible assistant usage aliases for display context", () => {
+    const result = sanitizeChatHistoryMessages([
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "done" }],
+        usage: {
+          prompt_tokens: 11,
+          completion_tokens: 1,
+          total_tokens: 12,
+          provider_payload: "discard",
+        },
+        timestamp: 1,
+      },
+    ]);
+
+    expect(result).toEqual([
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "done" }],
+        usage: {
+          prompt_tokens: 11,
+          completion_tokens: 1,
+          total_tokens: 12,
+        },
+        timestamp: 1,
+      },
+    ]);
+  });
+
   it("drops commentary-only assistant entries when phase exists only in textSignature", () => {
     const result = sanitizeChatHistoryMessages([
       {
