@@ -231,6 +231,7 @@ export function createOpenClawTools(
         workspaceDir,
         sandbox,
         fsPolicy: options?.fsPolicy,
+        onAsyncTaskStarted: options?.onYield,
       })
     : null;
   options?.recordToolPrepStage?.("openclaw-tools:image-generate-tool");
@@ -244,6 +245,7 @@ export function createOpenClawTools(
         workspaceDir,
         sandbox,
         fsPolicy: options?.fsPolicy,
+        onAsyncTaskStarted: options?.onYield,
       })
     : null;
   options?.recordToolPrepStage?.("openclaw-tools:video-generate-tool");
@@ -257,6 +259,7 @@ export function createOpenClawTools(
         workspaceDir,
         sandbox,
         fsPolicy: options?.fsPolicy,
+        onAsyncTaskStarted: options?.onYield,
       })
     : null;
   options?.recordToolPrepStage?.("openclaw-tools:music-generate-tool");

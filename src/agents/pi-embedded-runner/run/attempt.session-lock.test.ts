@@ -2,12 +2,17 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { appendSessionTranscriptMessage } from "../../../config/sessions/transcript-append.js";
 import {
   runWithOwnedSessionTranscriptWriteLock,
   runWithOwnedSessionTranscriptWritePublication,
   withOwnedSessionTranscriptWrites,
 } from "../../../config/sessions/transcript-write-context.js";
 import { SessionWriteLockTimeoutError } from "../../session-write-lock-error.js";
+import {
+  acquireSessionWriteLock,
+  resetSessionWriteLockStateForTest,
+} from "../../session-write-lock.js";
 import {
   createEmbeddedAttemptSessionLockController,
   EmbeddedAttemptSessionTakeoverError,
@@ -26,6 +31,7 @@ const lockOptions = {
 const tempDirs: string[] = [];
 
 afterEach(async () => {
+  resetSessionWriteLockStateForTest();
   for (const dir of tempDirs.splice(0)) {
     await fs.rm(dir, { recursive: true, force: true });
   }
@@ -184,6 +190,71 @@ describe("embedded attempt session lock lifecycle", () => {
     expect(release).toHaveBeenCalledTimes(2);
   });
 
+  it("allows delivery mirror appends while the prompt lock is released", async () => {
+    const sessionFile = await createTempSessionFile();
+    const release = vi.fn(async () => {});
+    const acquireSessionWriteLock = vi.fn(async () => ({ release }));
+    const controller = await createEmbeddedAttemptSessionLockController({
+      acquireSessionWriteLock,
+      lockOptions: { ...lockOptions, sessionFile },
+    });
+
+    await controller.releaseForPrompt();
+    await appendSessionTranscriptMessage({
+      transcriptPath: sessionFile,
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "mirrored media delivery" }],
+        provider: "openclaw",
+        model: "delivery-mirror",
+      },
+    });
+
+    await expect(controller.withSessionWriteLock(() => "late-write")).resolves.toBe("late-write");
+    const cleanupLock = await controller.acquireForCleanup();
+    await cleanupLock.release();
+
+    expect(controller.hasSessionTakeover()).toBe(false);
+    expect(release).toHaveBeenCalledTimes(3);
+  });
+
+  it("allows delivery mirror appends that migrate legacy linear transcripts", async () => {
+    const sessionFile = await createTempSessionFile();
+    await fs.appendFile(
+      sessionFile,
+      `${JSON.stringify({
+        type: "message",
+        id: "legacy-user",
+        message: { role: "user", content: [{ type: "text", text: "hello" }] },
+      })}\n`,
+      "utf8",
+    );
+    const release = vi.fn(async () => {});
+    const acquireSessionWriteLock = vi.fn(async () => ({ release }));
+    const controller = await createEmbeddedAttemptSessionLockController({
+      acquireSessionWriteLock,
+      lockOptions: { ...lockOptions, sessionFile },
+    });
+
+    await controller.releaseForPrompt();
+    await appendSessionTranscriptMessage({
+      transcriptPath: sessionFile,
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "mirrored migrated media delivery" }],
+        provider: "openclaw",
+        model: "delivery-mirror",
+      },
+    });
+
+    await expect(controller.withSessionWriteLock(() => "late-write")).resolves.toBe("late-write");
+    const cleanupLock = await controller.acquireForCleanup();
+    await cleanupLock.release();
+
+    await expect(fs.readFile(sessionFile, "utf8")).resolves.toContain('"parentId"');
+    expect(controller.hasSessionTakeover()).toBe(false);
+  });
+
   it("refreshes the prompt fence after an owned write throws", async () => {
     const sessionFile = await createTempSessionFile();
     const release = vi.fn(async () => {});
@@ -293,7 +364,11 @@ describe("embedded attempt session lock lifecycle", () => {
 
     await controller.releaseForPrompt();
     await controller.reacquireAfterPrompt();
-    await fs.appendFile(sessionFile, '{"type":"message","id":"external-after-reacquire"}\n', "utf8");
+    await fs.appendFile(
+      sessionFile,
+      '{"type":"message","id":"external-after-reacquire"}\n',
+      "utf8",
+    );
 
     const cleanupLock = await controller.acquireForCleanup();
     await cleanupLock.release();
@@ -751,6 +826,111 @@ describe("embedded attempt session lock lifecycle", () => {
       "second-stream",
       "reacquire",
     ]);
+  });
+
+  it("treats transcript appends during prompt streaming as owned session writes", async () => {
+    const sessionFile = await createTempSessionFile();
+    const controller = await createEmbeddedAttemptSessionLockController({
+      acquireSessionWriteLock,
+      lockOptions: {
+        ...lockOptions,
+        sessionFile,
+        timeoutMs: 1_000,
+      },
+    });
+    const session = {
+      agent: {
+        streamFn: vi.fn(async (..._args: unknown[]) => {
+          await appendSessionTranscriptMessage({
+            transcriptPath: sessionFile,
+            message: {
+              role: "assistant",
+              content: [{ type: "text", text: "mirrored message-tool delivery" }],
+            },
+          });
+        }),
+      },
+    };
+
+    installPromptSubmissionLockRelease({
+      session,
+      waitForSessionEvents: (sessionToDrain) => controller.waitForSessionEvents(sessionToDrain),
+      releaseForPrompt: () => controller.releaseForPrompt(),
+      reacquireAfterPrompt: () => controller.reacquireAfterPrompt(),
+      sessionFile,
+      withSessionWriteLock: (run) => controller.withSessionWriteLock(run),
+    });
+
+    await session.agent.streamFn("model", "context");
+    const cleanupLock = await controller.acquireForCleanup({ session });
+    await cleanupLock.release();
+
+    expect(controller.hasSessionTakeover()).toBe(false);
+    await expect(fs.readFile(sessionFile, "utf8")).resolves.toContain(
+      "mirrored message-tool delivery",
+    );
+  });
+
+  it("keeps prompt-stream transcript appends from blocking session-locked hook writes", async () => {
+    const sessionFile = await createTempSessionFile();
+    const controller = await createEmbeddedAttemptSessionLockController({
+      acquireSessionWriteLock,
+      lockOptions: {
+        ...lockOptions,
+        sessionFile,
+        timeoutMs: 250,
+      },
+    });
+    await controller.releaseForPrompt();
+
+    let releaseHookAppend!: () => void;
+    const hookCanAppend = new Promise<void>((resolve) => {
+      releaseHookAppend = resolve;
+    });
+    let markHookHasLock!: () => void;
+    const hookHasLock = new Promise<void>((resolve) => {
+      markHookHasLock = resolve;
+    });
+
+    const hookAppend = controller.withSessionWriteLock(async () => {
+      markHookHasLock();
+      await hookCanAppend;
+      await appendSessionTranscriptMessage({
+        transcriptPath: sessionFile,
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "session-locked hook write" }],
+        },
+      });
+    });
+    await hookHasLock;
+
+    const promptAppend = withOwnedSessionTranscriptWrites(
+      {
+        sessionFile,
+        withSessionWriteLock: (run, options) => controller.withSessionWriteLock(run, options),
+      },
+      async () =>
+        await appendSessionTranscriptMessage({
+          transcriptPath: sessionFile,
+          message: {
+            role: "assistant",
+            content: [{ type: "text", text: "prompt-stream write" }],
+          },
+        }),
+    );
+
+    await new Promise<void>((resolve) => setTimeout(resolve, 25));
+    releaseHookAppend();
+    await Promise.all([hookAppend, promptAppend]);
+
+    const cleanupLock = await controller.acquireForCleanup();
+    await cleanupLock.release();
+
+    const transcript = await fs.readFile(sessionFile, "utf8");
+    expect(transcript).toContain("session-locked hook write");
+    expect(transcript).toContain("prompt-stream write");
+    expect(controller.hasSessionTakeover()).toBe(false);
   });
 
   it("locks agent events that can reach transcript writers or registered extension hooks", async () => {
