@@ -6,6 +6,7 @@ type GoogleApiCarrier = {
 };
 
 type GoogleProviderConfigLike = GoogleApiCarrier & {
+  baseUrl?: string | null;
   models?: ReadonlyArray<GoogleApiCarrier | null | undefined> | null;
 };
 
@@ -97,10 +98,36 @@ export function resolveGoogleGenerativeAiApiOrigin(baseUrl?: string): string {
   ).replace(/\/v1beta$/i, "");
 }
 
+export const GOOGLE_VERTEX_HOST = "aiplatform.googleapis.com";
+export const GOOGLE_VERTEX_REGION_HOST_SUFFIX = "-aiplatform.googleapis.com";
+
+export function isGoogleVertexHostname(hostname: string): boolean {
+  const host = hostname.toLowerCase();
+  if (host === GOOGLE_VERTEX_HOST) {
+    return true;
+  }
+  return host.endsWith(GOOGLE_VERTEX_REGION_HOST_SUFFIX);
+}
+
+export function isGoogleVertexBaseUrl(baseUrl?: string | null): boolean {
+  const raw = normalizeOptionalString(baseUrl);
+  if (!raw) {
+    return false;
+  }
+  try {
+    return isGoogleVertexHostname(new URL(raw).hostname);
+  } catch {
+    return false;
+  }
+}
+
 export function shouldNormalizeGoogleGenerativeAiProviderConfig(
   providerKey: string,
   provider: GoogleProviderConfigLike,
 ): boolean {
+  if (providerKey === "google-vertex" && isGoogleVertexBaseUrl(provider.baseUrl)) {
+    return false;
+  }
   if (isGoogleGenerativeAiApi(provider.api)) {
     return true;
   }

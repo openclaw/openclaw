@@ -616,6 +616,60 @@ describe("runtime.llm.complete", () => {
     ).rejects.toThrow('model override "openai/gpt-5.5" is not allowlisted');
   });
 
+  it("does not double-prefix provider-qualified model refs in allowlist diagnostics", async () => {
+    hoisted.resolveSimpleCompletionSelectionForAgent.mockImplementation(
+      (params: { modelRef?: string; agentId: string }) => {
+        const modelRef = params.modelRef ?? "openrouter/gpt-5.4-mini";
+        const slash = modelRef.indexOf("/");
+        return {
+          provider: slash > 0 ? modelRef.slice(0, slash) : "openrouter",
+          modelId: slash > 0 ? modelRef.slice(slash + 1) : modelRef,
+          agentDir: `/tmp/${params.agentId}`,
+        };
+      },
+    );
+    const llm = createRuntimeLlm({
+      getConfig: () => ({
+        ...cfg,
+        plugins: {
+          entries: {
+            "lossless-claw": {
+              llm: {
+                allowModelOverride: true,
+                allowedModels: ["openrouter/gpt-5.4-mini"],
+              },
+            },
+          },
+        },
+      }),
+      authority: {
+        allowComplete: true,
+      },
+    });
+
+    await withPluginRuntimePluginIdScope("lossless-claw", () =>
+      llm.complete({
+        model: "openrouter/gpt-5.4-mini",
+        messages: [{ role: "user", content: "Ping" }],
+      }),
+    );
+    expectSingleCallFirstArg(hoisted.prepareSimpleCompletionModelForAgent, {
+      agentId: "main",
+      modelRef: "openrouter/gpt-5.4-mini",
+    });
+
+    await expect(
+      withPluginRuntimePluginIdScope("lossless-claw", () =>
+        llm.complete({
+          model: "openrouter/gpt-5.5",
+          messages: [{ role: "user", content: "Ping" }],
+        }),
+      ),
+    ).rejects.toThrow(
+      'model override "openrouter/gpt-5.5" is not allowlisted for plugin "lossless-claw"',
+    );
+  });
+
   it("denies completions when runtime authority disables the capability", async () => {
     const logger = createLogger();
     const llm = createRuntimeLlm({

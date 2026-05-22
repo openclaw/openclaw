@@ -80,8 +80,8 @@ export async function ensureAbsoluteDirectory(
   }
   if (existingAncestor === absolutePath) {
     try {
-      const stat = await fs.lstat(absolutePath);
-      if (!stat.isSymbolicLink() && stat.isDirectory()) {
+      const stat = await fs.stat(absolutePath);
+      if (stat.isDirectory()) {
         return { ok: true, path: absolutePath };
       }
     } catch {

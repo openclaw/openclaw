@@ -6,6 +6,7 @@ import { GOOGLE_GEMINI_DEFAULT_MODEL, applyGoogleGeminiModelDefault } from "./on
 import { GOOGLE_GEMINI_PROVIDER_HOOKS } from "./provider-hooks.js";
 import { isModernGoogleModel, resolveGoogleGeminiForwardCompatModel } from "./provider-models.js";
 import {
+  isGoogleVertexBaseUrl,
   normalizeGoogleProviderConfig,
   resolveGoogleGenerativeAiTransport,
 } from "./provider-policy.js";
@@ -13,7 +14,6 @@ import {
   createGoogleGenerativeAiTransportStreamFn,
   createGoogleVertexTransportStreamFn,
 } from "./transport-stream.js";
-import { hasGoogleVertexAuthorizedUserAdcSync } from "./vertex-adc.js";
 
 export function buildGoogleProvider(): ProviderPlugin {
   return {
@@ -54,11 +54,15 @@ export function buildGoogleProvider(): ProviderPlugin {
         ctx,
       }),
     createStreamFn: ({ model }) => {
+      const useVertexTransport =
+        model.provider === "google-vertex" ||
+        model.api === "google-vertex" ||
+        isGoogleVertexBaseUrl(model.baseUrl);
+      if (useVertexTransport) {
+        return createGoogleVertexTransportStreamFn();
+      }
       if (model.api === "google-generative-ai") {
         return createGoogleGenerativeAiTransportStreamFn();
-      }
-      if (model.api === "google-vertex" && hasGoogleVertexAuthorizedUserAdcSync()) {
-        return createGoogleVertexTransportStreamFn();
       }
       return undefined;
     },
