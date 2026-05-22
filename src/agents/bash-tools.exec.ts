@@ -20,9 +20,9 @@ import {
 } from "../infra/shell-env.js";
 import { logInfo } from "../logger.js";
 import { parseAgentSessionKey, resolveAgentIdFromSessionKey } from "../routing/session-key.js";
-import { matchSkillByCommand } from "./skills/skill-bins.js";
+import { matchSkillByCommand } from "./skill-bins.js";
 import { getSkillBinsMap } from "./skills/workspace.js";
-import { trackSkillUsage } from "./skills/usage-tracker.js";
+import { trackSkillUsage } from "./usage-tracker.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -1721,7 +1721,7 @@ export function createExecTool(
             if (yielded || run.session.backgrounded) {
               return;
             }
-            // Track successful skill invocation for telemetry (fire-and-forget)
+            // Track successful skill invocation for telemetry
             const command = params.command;
             if (agentId && command) {
               const binsMap = getSkillBinsMap();
