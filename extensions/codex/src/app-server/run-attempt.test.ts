@@ -6064,6 +6064,92 @@ describe("runCodexAppServerAttempt", () => {
     expect(agentEndContext.sessionId).toBe("session-1");
   });
 
+  it("waits for agent_end hooks before resolving local codex turns", async () => {
+    let releaseAgentEnd: () => void = () => undefined;
+    const agentEndSettled = new Promise<void>((resolve) => {
+      releaseAgentEnd = resolve;
+    });
+    const agentEnd = vi.fn(() => agentEndSettled);
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([{ hookName: "agent_end", handler: agentEnd }]),
+    );
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    const harness = createStartedThreadHarness();
+    const run = runCodexAppServerAttempt(createParams(sessionFile, workspaceDir));
+    let settled = false;
+    void run.then(() => {
+      settled = true;
+    });
+
+    await harness.waitForMethod("turn/start");
+    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+
+    await vi.waitFor(() => expect(agentEnd).toHaveBeenCalledTimes(1), fastWait);
+    expect(settled).toBe(false);
+    releaseAgentEnd();
+    await expect(run).resolves.toMatchObject({ promptError: null });
+    expect(settled).toBe(true);
+  });
+
+  it("does not wait for agent_end hooks before resolving channel-backed codex turns", async () => {
+    let releaseAgentEnd: () => void = () => undefined;
+    const agentEndSettled = new Promise<void>((resolve) => {
+      releaseAgentEnd = resolve;
+    });
+    const agentEnd = vi.fn(() => agentEndSettled);
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([{ hookName: "agent_end", handler: agentEnd }]),
+    );
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    const harness = createStartedThreadHarness();
+    const params = createParams(sessionFile, workspaceDir);
+    params.messageChannel = "discord";
+    params.messageProvider = "discord";
+    const run = runCodexAppServerAttempt(params);
+
+    await harness.waitForMethod("turn/start");
+    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+    const result = await run;
+
+    expect(result.promptError).toBeNull();
+    expect(agentEnd).toHaveBeenCalledTimes(1);
+    releaseAgentEnd();
+  });
+
+  it("waits for agent_end hooks before rejecting local codex turn-start failures", async () => {
+    let releaseAgentEnd: () => void = () => undefined;
+    const agentEndSettled = new Promise<void>((resolve) => {
+      releaseAgentEnd = resolve;
+    });
+    const agentEnd = vi.fn(() => agentEndSettled);
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([{ hookName: "agent_end", handler: agentEnd }]),
+    );
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    createStartedThreadHarness(async (method) => {
+      if (method === "turn/start") {
+        throw new Error("turn start exploded");
+      }
+      return undefined;
+    });
+    const run = runCodexAppServerAttempt(createParams(sessionFile, workspaceDir));
+    let rejected = false;
+    void run.catch(() => {
+      rejected = true;
+    });
+
+    await vi.waitFor(() => expect(agentEnd).toHaveBeenCalledTimes(1), fastWait);
+    await new Promise<void>((resolve) => setImmediate(resolve));
+
+    expect(rejected).toBe(false);
+    releaseAgentEnd();
+    await expect(run).rejects.toThrow("turn start exploded");
+    expect(rejected).toBe(true);
+  });
+
   it("forwards Codex app-server verbose tool summaries and completed output", async () => {
     const onToolResult = vi.fn();
     const sessionFile = path.join(tempDir, "session.jsonl");
@@ -6663,6 +6749,7 @@ describe("runCodexAppServerAttempt", () => {
     expect(harness.requests.map((request) => request.method)).toEqual([
       "thread/start",
       "turn/start",
+      "thread/unsubscribe",
     ]);
     const binding = await readCodexAppServerBinding(sessionFile);
     expect(binding?.threadId).toBe("thread-existing");
@@ -6689,6 +6776,7 @@ describe("runCodexAppServerAttempt", () => {
     expect(harness.requests.map((request) => request.method)).toEqual([
       "thread/resume",
       "turn/start",
+      "thread/unsubscribe",
     ]);
     const binding = await readCodexAppServerBinding(sessionFile);
     expect(binding?.threadId).toBe("thread-existing");

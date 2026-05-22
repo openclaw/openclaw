@@ -28,6 +28,7 @@ import {
   resolveSandboxContext,
   resolveSessionAgentIds,
   resolveUserPath,
+  awaitAgentHarnessAgentEndHook,
   runAgentHarnessAgentEndHook,
   runAgentHarnessLlmInputHook,
   runAgentHarnessLlmOutputHook,
@@ -768,6 +769,23 @@ async function rotateOversizedCodexAppServerStartupBinding(params: {
     return undefined;
   }
   return binding;
+}
+
+type CodexAgentEndHookParams = Parameters<typeof runAgentHarnessAgentEndHook>[0];
+
+function shouldAwaitCodexAgentEndHook(params: EmbeddedRunAttemptParams): boolean {
+  return !params.messageChannel && !params.messageProvider;
+}
+
+async function runCodexAgentEndHook(
+  params: EmbeddedRunAttemptParams,
+  hookParams: CodexAgentEndHookParams,
+): Promise<void> {
+  if (shouldAwaitCodexAgentEndHook(params)) {
+    await awaitAgentHarnessAgentEndHook(hookParams);
+    return;
+  }
+  runAgentHarnessAgentEndHook(hookParams);
 }
 
 export async function runCodexAppServerAttempt(
@@ -2581,7 +2599,7 @@ export async function runCodexAppServerAttempt(
         },
         ctx: hookContext,
       });
-      runAgentHarnessAgentEndHook({
+      await runCodexAgentEndHook(params, {
         event: {
           messages: buildTurnStartFailureMessages(),
           success: false,
@@ -2894,7 +2912,7 @@ export async function runCodexAppServerAttempt(
       },
       ctx: hookContext,
     });
-    runAgentHarnessAgentEndHook({
+    await runCodexAgentEndHook(params, {
       event: {
         messages: result.messagesSnapshot,
         success: !finalAborted && !finalPromptError,
