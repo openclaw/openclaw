@@ -448,6 +448,19 @@ const TOOL_SEARCH_CONTROL_ALLOWLIST_NAMES = [
   TOOL_CALL_RAW_TOOL_NAME,
 ];
 
+export function pickLastAssistantAfterMessageIndex(
+  messages: AgentMessage[],
+  startIndex: number,
+): AssistantMessage | undefined {
+  const safeStartIndex = Number.isFinite(startIndex)
+    ? Math.max(0, Math.floor(startIndex))
+    : messages.length;
+  return messages
+    .slice(safeStartIndex)
+    .toReversed()
+    .find((message): message is AssistantMessage => message.role === "assistant");
+}
+
 export function buildCallableToolNamesForEmptyAllowlistCheck(params: {
   effectiveToolNames: string[];
   autoAddedToolSearchControlNames?: Set<string>;
@@ -2413,6 +2426,7 @@ export async function runEmbeddedAttempt(
           await baseConvertToLlm(normalizeMessagesForLlmBoundary(messages));
       }
       let prePromptMessageCount = activeSession.messages.length;
+      let currentTurnStartMessageCount = prePromptMessageCount;
       let contextEngineAfterTurnCheckpoint: number | null = null;
       let unwindowedContextEngineMessagesForPrecheck: AgentMessage[] | undefined;
       let contextEnginePromptAuthority: NonNullable<AssembleResult["promptAuthority"]> =
@@ -3578,6 +3592,7 @@ export async function runEmbeddedAttempt(
           applySystemPromptOverrideToSession(activeSession, modelAwareSystemPrompt);
           systemPromptText = modelAwareSystemPrompt;
         }
+        currentTurnStartMessageCount = activeSession.messages.length;
 
         if (cacheObservabilityEnabled) {
           const cacheObservation = beginPromptCacheObservation({
@@ -4308,10 +4323,10 @@ export async function runEmbeddedAttempt(
           );
           sessionIdUsed = snapshotSelection.sessionIdUsed;
 
-          lastAssistant = messagesSnapshot
-            .slice()
-            .toReversed()
-            .find((message): message is AssistantMessage => message.role === "assistant");
+          lastAssistant = pickLastAssistantAfterMessageIndex(
+            messagesSnapshot,
+            currentTurnStartMessageCount,
+          );
           currentAttemptAssistant = findCurrentAttemptAssistantMessage({
             messagesSnapshot,
             prePromptMessageCount,

@@ -17,6 +17,7 @@ const MUTATING_TOOL_NAMES = new Set([
   "cron",
   "gateway",
   "canvas",
+  "peekaboo",
   "nodes",
   "session_status",
 ]);
@@ -165,6 +166,12 @@ export function isMutatingToolCall(toolName: string, args: unknown): boolean {
     default: {
       if (normalized === "cron" || normalized === "gateway" || normalized === "canvas") {
         return action == null || !READ_ONLY_ACTIONS.has(action);
+      }
+      if (normalized === "peekaboo") {
+        return (
+          action == null ||
+          !["status", "permissions", "list_windows", "see", "image"].includes(action)
+        );
       }
       if (normalized === "nodes") {
         return action == null || action !== "list";

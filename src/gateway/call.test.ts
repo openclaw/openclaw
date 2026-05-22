@@ -56,17 +56,19 @@ let lastClientOptions: {
   deviceIdentity?: unknown;
   onHelloOk?: (hello: { features?: { methods?: string[] } }) => void | Promise<void>;
   onClose?: (code: number, reason: string) => void;
+  onConnectError?: (err: Error) => void;
 } | null = null;
 let lastRequestOptions: {
   method?: string;
   params?: unknown;
   opts?: { expectFinal?: boolean; timeoutMs?: number | null };
 } | null = null;
-type StartMode = "hello" | "close" | "silent" | "startup-retry-then-hello";
+type StartMode = "hello" | "close" | "connect-error" | "silent" | "startup-retry-then-hello";
 let startMode: StartMode = "hello";
 let startCalls = 0;
 let closeCode = 1006;
 let closeReason = "";
+let connectError = new Error("pairing required");
 let helloMethods: string[] | undefined = ["health", "secrets.resolve"];
 
 vi.mock("./client.js", () => ({
@@ -92,6 +94,7 @@ vi.mock("./client.js", () => ({
       scopes?: string[];
       onHelloOk?: (hello: { features?: { methods?: string[] } }) => void | Promise<void>;
       onClose?: (code: number, reason: string) => void;
+      onConnectError?: (err: Error) => void;
     }) {
       lastClientOptions = opts;
     }
@@ -119,6 +122,8 @@ vi.mock("./client.js", () => ({
         });
       } else if (startMode === "close") {
         lastClientOptions?.onClose?.(closeCode, closeReason);
+      } else if (startMode === "connect-error") {
+        lastClientOptions?.onConnectError?.(connectError);
       }
     }
     stop() {}
@@ -157,6 +162,7 @@ class StubGatewayClient {
     scopes?: string[];
     onHelloOk?: (hello: { features?: { methods?: string[] } }) => void | Promise<void>;
     onClose?: (code: number, reason: string) => void;
+    onConnectError?: (err: Error) => void;
   }) {
     lastClientOptions = opts;
   }
@@ -184,6 +190,8 @@ class StubGatewayClient {
       });
     } else if (startMode === "close") {
       lastClientOptions?.onClose?.(closeCode, closeReason);
+    } else if (startMode === "connect-error") {
+      lastClientOptions?.onConnectError?.(connectError);
     }
   }
   stop() {}
@@ -210,6 +218,7 @@ function resetGatewayCallMocks() {
   startCalls = 0;
   closeCode = 1006;
   closeReason = "";
+  connectError = new Error("pairing required");
   helloMethods = ["health", "secrets.resolve"];
   const loadConfigForTests = getRuntimeConfig as unknown as () => OpenClawConfig;
   const resolveGatewayPortForTests = resolveGatewayPort as unknown as (
@@ -964,6 +973,24 @@ describe("callGateway error details", () => {
     await expect(callGateway({ method: "health" })).resolves.toEqual({ ok: true });
 
     expect(lastRequestOptions?.method).toBe("health");
+  });
+
+  it("surfaces handshake errors before generic close handling", async () => {
+    startMode = "connect-error";
+    connectError = new Error("pairing required");
+    setLocalLoopbackGatewayConfig();
+
+    let err: Error | null = null;
+    try {
+      await callGateway({ method: "health" });
+    } catch (caught) {
+      err = caught as Error;
+    }
+
+    expect(err?.message).toContain("gateway connect failed: pairing required");
+    expect(err?.message).not.toContain("gateway closed");
+    expect(err?.message).toContain("Gateway target: ws://127.0.0.1:18789");
+    expect(err?.message).toContain("Source: local loopback");
   });
 
   it("includes connection details on timeout", async () => {

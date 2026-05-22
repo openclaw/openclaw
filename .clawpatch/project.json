@@ -1,0 +1,25 @@
+{
+  "schemaVersion": 1,
+  "projectId": "prj_git-github-com-openclaw-openclaw_554188b5e5",
+  "name": "openclaw",
+  "rootPath": "/Users/ale/Dev/openclaw",
+  "git": {
+    "remoteUrl": "git@github.com:openclaw/openclaw.git",
+    "defaultBranch": "main",
+    "currentBranch": "main",
+    "headSha": "fee91fefceb4652933182ad14fb323a7e94d3c2d"
+  },
+  "detected": {
+    "languages": ["typescript", "javascript", "python"],
+    "frameworks": ["express", "vitest"],
+    "packageManagers": ["pnpm"],
+    "commands": {
+      "typecheck": null,
+      "lint": "pnpm lint",
+      "format": "pnpm format",
+      "test": "pnpm test"
+    }
+  },
+  "createdAt": "2026-05-16T21:01:35.989Z",
+  "updatedAt": "2026-05-16T21:01:35.989Z"
+}

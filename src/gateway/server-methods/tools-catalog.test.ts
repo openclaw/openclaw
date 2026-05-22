@@ -112,6 +112,8 @@ describe("tools.catalog handler", () => {
     expect(groups.some((group) => group.source === "plugin")).toBe(false);
     const media = groups.find((group) => group.id === "media");
     expect(media?.tools.map((tool) => `${tool.source}:${tool.id}`) ?? []).toContain("core:tts");
+    const ui = groups.find((group) => group.id === "ui");
+    expect(ui?.tools.map((tool) => `${tool.source}:${tool.id}`) ?? []).toContain("core:peekaboo");
   });
 
   it("includes plugin groups with plugin metadata", async () => {
