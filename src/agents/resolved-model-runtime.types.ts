@@ -1,4 +1,4 @@
-import type { Api } from "@earendil-works/pi-ai";
+import type { Api } from "../llm/types.js";
 import type { ProviderRuntimeModel } from "../plugins/provider-runtime-model.types.js";
 import type { ModelProviderRequestTransportOverrides } from "./provider-request-config.js";
 

@@ -1289,7 +1289,7 @@ function resolveModelRuntimeWithRegistry(params: {
 export function resolveModelWithRegistry(params: {
   provider: string;
   modelId: string;
-  modelRegistry: ModelRegistry;
+  modelRegistry: CoreModelRegistry;
   cfg?: OpenClawConfig;
   agentDir?: string;
   workspaceDir?: string;
@@ -1524,10 +1524,14 @@ export async function resolveModelAsync(
     const resolvedMediaInput = (modelResolution.model as ProviderRuntimeModel).mediaInput;
     const mediaInput = mergeModelMediaInput(staticMediaInput, resolvedMediaInput);
     if (mediaInput) {
+      const modelWithMediaInput: ProviderRuntimeModel = {
+        ...(modelResolution.model as ProviderRuntimeModel),
+        mediaInput,
+      };
       modelResolution = createResolvedModelRuntimeResult({
         provider: normalizedRef.provider,
         modelId: normalizedRef.model,
-        model: { ...(modelResolution.model as ProviderRuntimeModel), mediaInput },
+        model: modelWithMediaInput,
         providerConfig,
       });
     }

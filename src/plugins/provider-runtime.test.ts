@@ -440,7 +440,7 @@ describe("provider-runtime", () => {
   });
 
   it("derives model refs from runtime hook contexts", () => {
-    const createStreamFn = vi.fn();
+    const createStreamFn = vi.fn(() => vi.fn() as never);
     resolvePluginProvidersMock.mockReturnValue([
       {
         id: "anthropic",

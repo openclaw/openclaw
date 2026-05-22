@@ -5,7 +5,7 @@ import type { ModelProviderAuthMode, ModelProviderConfig } from "../config/types
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { coerceSecretRef } from "../config/types.secrets.js";
 import { getShellEnvAppliedKeys } from "../infra/shell-env.js";
-import type { Model } from "../llm/types.js";
+import type { Api, Model } from "../llm/types.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
   buildProviderMissingAuthMessageWithPlugin,
@@ -570,6 +570,23 @@ function resolveSyntheticLocalProviderAuth(params: {
   return null;
 }
 
+function resolveModelRuntimeAuthFromModel(model: Model<Api>): ResolvedModelRuntimeAuth {
+  const provider = model.provider;
+  const modelApi = typeof model.api === "string" ? model.api : undefined;
+  const providerRefs = [provider];
+  if (modelApi && normalizeProviderId(modelApi) !== normalizeProviderId(provider)) {
+    providerRefs.push(modelApi);
+  }
+  const modelBaseUrl =
+    typeof model.baseUrl === "string" && model.baseUrl.trim() ? model.baseUrl : undefined;
+  return {
+    providerRefs,
+    preferredProvider: providerRefs.length > 1 ? providerRefs[providerRefs.length - 1] : provider,
+    ...(modelApi ? { modelApi } : {}),
+    ...(modelBaseUrl ? { modelBaseUrl } : {}),
+  };
+}
+
 function resolveEnvSourceLabel(params: {
   applied: Set<string>;
   envVars: string[];
@@ -1071,6 +1088,8 @@ export async function getApiKeyForModel(params: {
   credentialPrecedence?: ProviderCredentialPrecedence;
   modelRuntimeAuth?: ResolvedModelRuntimeAuth;
 }): Promise<ResolvedProviderAuth> {
+  const modelRuntimeAuth =
+    params.modelRuntimeAuth ?? resolveModelRuntimeAuthFromModel(params.model);
   return resolveApiKeyForProvider({
     provider: params.model.provider,
     cfg: params.cfg,
@@ -1082,7 +1101,7 @@ export async function getApiKeyForModel(params: {
     lockedProfile: params.lockedProfile,
     credentialPrecedence: params.credentialPrecedence,
     modelApi: params.model.api,
-    modelRuntimeAuth: params.modelRuntimeAuth,
+    modelRuntimeAuth,
   });
 }
 

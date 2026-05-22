@@ -506,9 +506,7 @@ export function normalizeProviderToolSchemasWithPlugin(params: {
     params.allowRuntimePluginLoad === false
       ? (params.runtimeHandle?.plugin ?? resolveLoadedProviderRuntimePlugin(params))
       : ensureProviderRuntimePluginHandle(params).plugin;
-  return (
-    plugin?.normalizeToolSchemas?.(params.context) ?? undefined
-  );
+  return plugin?.normalizeToolSchemas?.(params.context) ?? undefined;
 }
 
 export function inspectProviderToolSchemasWithPlugin(params: {
@@ -524,9 +522,7 @@ export function inspectProviderToolSchemasWithPlugin(params: {
     params.allowRuntimePluginLoad === false
       ? (params.runtimeHandle?.plugin ?? resolveLoadedProviderRuntimePlugin(params))
       : ensureProviderRuntimePluginHandle(params).plugin;
-  return (
-    plugin?.inspectToolSchemas?.(params.context) ?? undefined
-  );
+  return plugin?.inspectToolSchemas?.(params.context) ?? undefined;
 }
 
 export function resolveProviderReasoningOutputModeWithPlugin(params: {

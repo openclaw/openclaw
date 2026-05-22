@@ -146,6 +146,7 @@ import { buildEmbeddedMessageActionDiscoveryInput } from "./message-action-disco
 import { readAgentModelContextTokens } from "./model-context-tokens.js";
 import { resolveModelAsync } from "./model.js";
 import { sanitizeSessionHistory, validateReplayTurns } from "./replay-history.js";
+import { withResolvedModelRuntimeModel } from "./resolved-model-runtime.js";
 import { createEmbeddedAgentResourceLoader } from "./resource-loader.js";
 import { resolveAttemptSpawnWorkspaceDir } from "./run/attempt.thread-helpers.js";
 import { buildEmbeddedSandboxInfo } from "./sandbox-info.js";
@@ -539,7 +540,7 @@ async function compactEmbeddedAgentSessionDirectOnce(
   await ensureOpenClawModelsJson(params.config, agentDir, {
     workspaceDir: resolvedWorkspace,
   });
-  const { model, error, authStorage, modelRegistry } = await resolveModelAsync(
+  const { model, runtime, error, authStorage, modelRegistry } = await resolveModelAsync(
     runtimeProvider,
     modelId,
     agentDir,
@@ -550,6 +551,7 @@ async function compactEmbeddedAgentSessionDirectOnce(
     return fail(reason);
   }
   let runtimeModel = model;
+  let resolvedModelRuntime = runtime;
   let apiKeyInfo: Awaited<ReturnType<typeof getApiKeyForModel>> | null = null;
   let hasRuntimeAuthExchange = false;
   try {
@@ -559,6 +561,7 @@ async function compactEmbeddedAgentSessionDirectOnce(
       profileId: authProfileId,
       agentDir,
       workspaceDir: resolvedWorkspace,
+      modelRuntimeAuth: resolvedModelRuntime?.auth,
     });
 
     if (!apiKeyInfo.apiKey) {
@@ -586,6 +589,9 @@ async function compactEmbeddedAgentSessionDirectOnce(
       });
       if (preparedAuth?.baseUrl) {
         runtimeModel = { ...runtimeModel, baseUrl: preparedAuth.baseUrl };
+        resolvedModelRuntime = resolvedModelRuntime
+          ? withResolvedModelRuntimeModel(resolvedModelRuntime, runtimeModel)
+          : undefined;
       }
       const runtimeApiKey = preparedAuth?.apiKey ?? apiKeyInfo.apiKey;
       hasRuntimeAuthExchange = Boolean(preparedAuth?.apiKey);
@@ -720,13 +726,16 @@ async function compactEmbeddedAgentSessionDirectOnce(
       hasRuntimeAuthExchange ? null : apiKeyInfo,
       params.config,
     );
+    resolvedModelRuntime = resolvedModelRuntime
+      ? withResolvedModelRuntimeModel(resolvedModelRuntime, effectiveModel)
+      : undefined;
     const runtimePlan =
       params.runtimePlan ??
       buildAgentRuntimePlan({
-        provider,
-        modelId,
-        model: effectiveModel,
-        modelApi: effectiveModel.api,
+        provider: resolvedModelRuntime?.ref.provider ?? provider,
+        modelId: resolvedModelRuntime?.ref.modelId ?? modelId,
+        model: resolvedModelRuntime?.model ?? effectiveModel,
+        modelApi: resolvedModelRuntime?.transport.api ?? effectiveModel.api,
         harnessId: params.agentHarnessId,
         harnessRuntime: runtimeHarnessPolicy.runtime,
         authProfileProvider: authProfileId?.split(":", 1)[0],

@@ -1193,6 +1193,41 @@ describe("resolveApiKeyForProvider – synthetic local auth for custom providers
     });
   });
 
+  it("derives runtime auth from the selected model when caller has no descriptor", async () => {
+    const auth = await getApiKeyForModel({
+      model: {
+        provider: "my-router",
+        id: "local-llama",
+        name: "Local Llama",
+        api: "ollama",
+        baseUrl: "http://localhost:11434",
+        reasoning: false,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 8192,
+        maxTokens: 4096,
+      } as Model<"ollama">,
+      cfg: {
+        models: {
+          providers: {
+            "my-router": {
+              baseUrl: "http://router.local/v1",
+              api: "openai-completions",
+              models: [],
+            },
+          },
+        },
+      },
+      store: { version: 1, profiles: {} },
+    });
+
+    expectAuthFields(auth, {
+      apiKey: "ollama-local",
+      source: "models.providers.my-router (synthetic local key)",
+      mode: "api-key",
+    });
+  });
+
   it("accepts non-secret local markers for private LAN custom OpenAI-compatible providers", async () => {
     const auth = await resolveApiKeyForProvider({
       provider: "custom-192-168-0-222-11434",
