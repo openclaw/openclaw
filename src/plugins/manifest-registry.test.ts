@@ -586,6 +586,60 @@ describe("loadPluginManifestRegistry", () => {
     expect(registry.plugins[0]?.origin).toBe("global");
   });
 
+  it("prefers bundled official plugins over stale installed official globals", () => {
+    const bundledDir = makeTempDir();
+    const globalDir = makeTempDir();
+    writeManifest(bundledDir, {
+      id: "codex",
+      version: "2026.5.19",
+      configSchema: { type: "object" },
+    });
+    writeManifest(globalDir, {
+      id: "codex",
+      version: "2026.5.12",
+      configSchema: { type: "object" },
+    });
+
+    const registry = loadPluginManifestRegistry({
+      env: hermeticEnv({ OPENCLAW_VERSION: "2026.5.19" }),
+      installRecords: {
+        codex: {
+          source: "npm",
+          installPath: globalDir,
+          resolvedName: "@openclaw/codex",
+          resolvedVersion: "2026.5.12",
+        },
+      },
+      candidates: [
+        createPluginCandidate({
+          idHint: "codex",
+          rootDir: globalDir,
+          packageName: "@openclaw/codex",
+          packageVersion: "2026.5.12",
+          origin: "global",
+        }),
+        createPluginCandidate({
+          idHint: "codex",
+          rootDir: bundledDir,
+          packageName: "@openclaw/codex",
+          packageVersion: "2026.5.19",
+          origin: "bundled",
+        }),
+      ],
+    });
+
+    expect(countDuplicateWarnings(registry)).toBe(1);
+    expect(registry.plugins).toHaveLength(1);
+    expectRecordFields(registry.plugins[0], "plugin", {
+      origin: "bundled",
+      version: "2026.5.19",
+    });
+    expectRegistryDiagnosticContains(
+      registry,
+      "global plugin will be overridden by bundled plugin",
+    );
+  });
+
   it("marks official installed npm globals as trusted official installs", () => {
     const dir = makeTempDir();
     writeManifest(dir, { id: "diagnostics-prometheus", configSchema: { type: "object" } });
