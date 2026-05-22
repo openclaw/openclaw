@@ -17,6 +17,7 @@ import {
 import { resolveMirroredTranscriptText } from "../../config/sessions/transcript-mirror.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { TtsAutoMode } from "../../config/types.tts.js";
+import { isSuppressedControlReplyText } from "../../gateway/control-reply-text.js";
 import { sleepWithAbort } from "../../infra/backoff.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import type {
@@ -62,7 +63,7 @@ function normalizeSilentReplyText(text: string | undefined): NormalizedSilentRep
   if (!text) {
     return { text, strippedTrailingSilentToken: false };
   }
-  if (isSilentReplyText(text, SILENT_REPLY_TOKEN)) {
+  if (isSuppressedControlReplyText(text)) {
     return { text: undefined, strippedTrailingSilentToken: false };
   }
 
@@ -80,7 +81,7 @@ function normalizeSilentReplyText(text: string | undefined): NormalizedSilentRep
     next = stripped;
   }
 
-  if (!next.trim() || isSilentReplyText(next, SILENT_REPLY_TOKEN)) {
+  if (!next.trim() || isSuppressedControlReplyText(next)) {
     return { text: undefined, strippedTrailingSilentToken };
   }
   return { text: next, strippedTrailingSilentToken };
