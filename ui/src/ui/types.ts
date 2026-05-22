@@ -554,6 +554,15 @@ export type CronPayload =
       channel?: string;
       to?: string;
       bestEffortDeliver?: boolean;
+    }
+  | {
+      kind: "acpTurn";
+      message: string;
+      harness?: string;
+      cwd?: string;
+      model?: string;
+      thinking?: string;
+      timeoutSeconds?: number;
     };
 
 export type CronDelivery = {

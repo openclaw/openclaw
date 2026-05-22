@@ -115,6 +115,14 @@ describe("cron service store load: missing sessionTarget", () => {
     expect(assertSupportedJobSpec(job)).toBeUndefined();
   });
 
+  it("accepts isolated acpTurn payloads in assertSupportedJobSpec", async () => {
+    const job = {
+      sessionTarget: "isolated" as const,
+      payload: { kind: "acpTurn" as const, message: "ACP smoke" },
+    };
+    expect(assertSupportedJobSpec(job)).toBeUndefined();
+  });
+
   it("assertSupportedJobSpec throws a clear error when sessionTarget is missing", () => {
     const bogus = {
       payload: { kind: "agentTurn" as const, message: "ping" },

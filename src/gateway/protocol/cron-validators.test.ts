@@ -22,6 +22,21 @@ describe("cron protocol validators", () => {
     expect(validateCronAddParams(minimalAddParams)).toBe(true);
   });
 
+  it("accepts isolated acpTurn payload", () => {
+    expect(
+      validateCronAddParams({
+        ...minimalAddParams,
+        sessionTarget: "isolated",
+        payload: {
+          kind: "acpTurn",
+          message: "run acp task",
+          harness: "cursor",
+          cwd: "/tmp/project",
+        },
+      }),
+    ).toBe(true);
+  });
+
   it("accepts current and custom session targets", () => {
     expect(
       validateCronAddParams({

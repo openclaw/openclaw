@@ -173,7 +173,8 @@ export async function executeJobCoreWithTimeout(
   });
 
   const deferTimeoutUntilExecutionStart =
-    job.sessionTarget !== "main" && job.payload.kind === "agentTurn";
+    job.sessionTarget !== "main" &&
+    (job.payload.kind === "agentTurn" || job.payload.kind === "acpTurn");
   const triggerTimeout = (reason: string) => {
     if (runAbortController.signal.aborted) {
       return;
@@ -1519,11 +1520,13 @@ async function planStartupCatchup(
     const sorted = missed.toSorted(
       (a, b) => (a.state.nextRunAtMs ?? 0) - (b.state.nextRunAtMs ?? 0),
     );
+    const isIsolatedAgentPayload = (job: CronJob) =>
+      job.payload.kind === "agentTurn" || job.payload.kind === "acpTurn";
     const deferredAgentJobs = opts?.deferAgentTurnJobs
-      ? sorted.filter((job) => job.payload.kind === "agentTurn")
+      ? sorted.filter((job) => isIsolatedAgentPayload(job))
       : [];
     const startupEligible = opts?.deferAgentTurnJobs
-      ? sorted.filter((job) => job.payload.kind !== "agentTurn")
+      ? sorted.filter((job) => !isIsolatedAgentPayload(job))
       : sorted;
     const startupCandidates = startupEligible.slice(0, maxImmediate);
     const deferredOverflow = startupEligible.slice(maxImmediate);
@@ -1876,8 +1879,8 @@ async function executeDetachedCronJob(
       delivery?: CronDeliveryTrace;
     }
 > {
-  if (job.payload.kind !== "agentTurn") {
-    const error = "isolated job requires payload.kind=agentTurn";
+  if (job.payload.kind !== "agentTurn" && job.payload.kind !== "acpTurn") {
+    const error = "isolated job requires payload.kind=agentTurn or acpTurn";
     return {
       status: "skipped",
       error,

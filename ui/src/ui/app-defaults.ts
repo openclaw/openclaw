@@ -38,6 +38,8 @@ export const DEFAULT_CRON_FORM: CronFormState = {
   payloadText: "",
   payloadModel: "",
   payloadThinking: "",
+  payloadHarness: "",
+  payloadCwd: "",
   payloadLightContext: false,
   deliveryMode: "announce",
   deliveryChannel: "last",

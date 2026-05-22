@@ -169,9 +169,42 @@ export type CronFailureAlert = {
   accountId?: string;
 };
 
-export type CronPayload = { kind: "systemEvent"; text: string } | CronAgentTurnPayload;
+type CronAcpTurnPayloadFields = {
+  message: string;
+  /** ACP harness id (e.g. cursor, codex). Defaults to `acp.defaultAgent`. */
+  harness?: string;
+  /** Working directory for the ACP runtime. */
+  cwd?: string;
+  /** Optional model override passed to the ACP runtime. */
+  model?: string;
+  thinking?: string;
+  timeoutSeconds?: number;
+};
 
-export type CronPayloadPatch = { kind: "systemEvent"; text?: string } | CronAgentTurnPayloadPatch;
+type CronAcpTurnPayload = {
+  kind: "acpTurn";
+} & CronAcpTurnPayloadFields;
+
+type CronAcpTurnPayloadPatch = {
+  kind: "acpTurn";
+} & Partial<CronAcpTurnPayloadFields>;
+
+export type CronPayload =
+  | { kind: "systemEvent"; text: string }
+  | CronAgentTurnPayload
+  | CronAcpTurnPayload;
+
+export type CronPayloadPatch =
+  | { kind: "systemEvent"; text?: string }
+  | CronAgentTurnPayloadPatch
+  | CronAcpTurnPayloadPatch;
+
+/** agentTurn 与 acpTurn 均用于 isolated/current/session 类任务。 */
+export function isIsolatedPromptPayloadKind(
+  kind: CronPayload["kind"] | string | undefined,
+): kind is "agentTurn" | "acpTurn" {
+  return kind === "agentTurn" || kind === "acpTurn";
+}
 
 type CronAgentTurnPayloadFields = {
   message: string;
