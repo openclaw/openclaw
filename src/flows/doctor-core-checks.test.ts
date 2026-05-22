@@ -1085,6 +1085,54 @@ describe("registerCoreHealthChecks", () => {
     });
   });
 
+  it("reports gateway service install plan warnings as structured findings", async () => {
+    gatewayServiceMocks.detectGatewayServiceConfigIssues.mockResolvedValue({
+      status: "issue",
+      installPlanWarnings: [
+        {
+          message:
+            "Gateway service cannot persist SecretRef-backed environment values; keep them available at runtime.",
+          title: "Gateway service config",
+        },
+      ],
+      issues: [],
+    });
+    const check = CORE_HEALTH_CHECKS.find(
+      (entry) => entry.id === "core/doctor/gateway-services/config",
+    );
+
+    await expect(
+      check?.detect({
+        mode: "lint",
+        runtime: { log() {}, error() {}, exit() {} },
+        cfg: {},
+      }),
+    ).resolves.toContainEqual(
+      expect.objectContaining({
+        checkId: "core/doctor/gateway-services/config",
+        message:
+          "Gateway service cannot persist SecretRef-backed environment values; keep them available at runtime.",
+        path: "gateway.service",
+      }),
+    );
+    await expect(
+      check?.repair?.(
+        {
+          mode: "fix",
+          runtime: { log() {}, error() {}, exit() {} },
+          cfg: {},
+        },
+        [],
+      ),
+    ).resolves.toMatchObject({
+      status: "skipped",
+      reason: "gateway service config issue needs operator action",
+      warnings: [
+        "Gateway service cannot persist SecretRef-backed environment values; keep them available at runtime.",
+      ],
+    });
+  });
+
   it("does not promise unrepairable legacy gateway services during dry-run", async () => {
     gatewayServiceMocks.detectExtraGatewayServices.mockResolvedValue({
       services: [

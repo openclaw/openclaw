@@ -109,6 +109,7 @@ vi.mock("./doctor-gateway-auth-token.js", () => ({
 }));
 
 import {
+  detectGatewayServiceConfigIssues,
   maybeRepairGatewayServiceConfig,
   maybeScanExtraGatewayServices,
 } from "./doctor-gateway-services.js";
@@ -407,6 +408,40 @@ describe("maybeRepairGatewayServiceConfig", () => {
     expect(runtimeMessages.map((message) => String(message)).join("\n")).toContain(
       "Using /home/orin/.nvm/versions/node/v22.22.2/bin/node",
     );
+  });
+
+  it("preserves gateway install plan warnings during structured detection", async () => {
+    mocks.readCommand.mockResolvedValue({
+      programArguments: gatewayProgramArguments,
+      environment: {},
+    });
+    mocks.buildGatewayInstallPlan.mockImplementation(async ({ warn }) => {
+      warn?.(
+        "Gateway service cannot persist SecretRef-backed environment values; keep them available at runtime.",
+        "Gateway service config",
+      );
+      return {
+        programArguments: gatewayProgramArguments,
+        workingDirectory: "/tmp",
+        environment: {},
+      };
+    });
+    mocks.auditGatewayServiceConfig.mockResolvedValue({
+      ok: true,
+      issues: [],
+    });
+
+    await expect(detectGatewayServiceConfigIssues({ gateway: {} }, "local")).resolves.toMatchObject({
+      status: "issue",
+      installPlanWarnings: [
+        {
+          message:
+            "Gateway service cannot persist SecretRef-backed environment values; keep them available at runtime.",
+          title: "Gateway service config",
+        },
+      ],
+      issues: [],
+    });
   });
 
   it("passes planned managed env keys into service audit for legacy inline secret detection", async () => {

@@ -1421,6 +1421,14 @@ const gatewayServiceConfigCheck: RegisteredHealthCheck = defineSplitHealthCheck(
         path: "gateway.runtime",
       });
     }
+    for (const warning of detection.installPlanWarnings ?? []) {
+      findings.push({
+        checkId: "core/doctor/gateway-services/config",
+        severity: "warning",
+        message: warning.message,
+        path: "gateway.service",
+      });
+    }
     if (detection.sourceCheckoutWarning && detection.showSourceCheckoutWarning) {
       findings.push(
         noteTextToFinding({
@@ -1461,6 +1469,7 @@ const gatewayServiceConfigCheck: RegisteredHealthCheck = defineSplitHealthCheck(
       const warnings = [
         detection.tokenWarning,
         detection.gatewayRuntimeWarning,
+        ...(detection.installPlanWarnings ?? []).map((warning) => warning.message),
         detection.sourceCheckoutWarning,
         detection.serviceRewriteBlocked
           ? "Gateway service is running; leaving supervisor metadata unchanged."
@@ -1488,6 +1497,7 @@ const gatewayServiceConfigCheck: RegisteredHealthCheck = defineSplitHealthCheck(
               ]
             : []),
           ...(detection.gatewayRuntimeWarning ? [detection.gatewayRuntimeWarning] : []),
+          ...(detection.installPlanWarnings ?? []).map((warning) => warning.message),
         ],
         effects: [
           {
@@ -1507,6 +1517,7 @@ const gatewayServiceConfigCheck: RegisteredHealthCheck = defineSplitHealthCheck(
         warnings: [
           "Gateway service is running; leaving supervisor metadata unchanged. Stop the service first or use `openclaw gateway install --force` when you want to replace the active launcher.",
           ...(detection.gatewayRuntimeWarning ? [detection.gatewayRuntimeWarning] : []),
+          ...(detection.installPlanWarnings ?? []).map((warning) => warning.message),
         ],
         effects: [],
       };
@@ -1522,7 +1533,10 @@ const gatewayServiceConfigCheck: RegisteredHealthCheck = defineSplitHealthCheck(
         status: repaired.status,
         reason: repaired.reason,
         changes: [],
-        warnings: detection.gatewayRuntimeWarning ? [detection.gatewayRuntimeWarning] : [],
+        warnings: [
+          ...(detection.gatewayRuntimeWarning ? [detection.gatewayRuntimeWarning] : []),
+          ...(detection.installPlanWarnings ?? []).map((warning) => warning.message),
+        ],
         effects: [],
       };
     }

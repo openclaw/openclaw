@@ -58,6 +58,11 @@ export interface GatewayServiceConfigIssue {
   readonly level: "recommended" | "aggressive";
 }
 
+export interface GatewayServicePlanWarning {
+  readonly message: string;
+  readonly title?: string;
+}
+
 export interface GatewayServiceConfigDetection {
   readonly status: "skipped" | "clean" | "issue";
   readonly reason?: string;
@@ -73,6 +78,7 @@ export interface GatewayServiceConfigDetection {
   readonly needsNodeRuntime?: boolean;
   readonly systemNodePath?: string | null;
   readonly gatewayRuntimeWarning?: string;
+  readonly installPlanWarnings?: readonly GatewayServicePlanWarning[];
   readonly tokenWarning?: string;
   readonly issues: GatewayServiceConfigIssue[];
 }
@@ -175,6 +181,7 @@ async function buildGatewayServiceAuditInputs(params: {
   cfg: OpenClawConfig;
   command: GatewayServiceCommandConfig;
   serviceInstallEnv: NodeJS.ProcessEnv;
+  warn?: (message: string, title?: string) => void;
 }) {
   const port = resolveGatewayPort(params.cfg, process.env);
   const runtimeChoice = detectGatewayRuntime(params.command.programArguments);
@@ -184,6 +191,7 @@ async function buildGatewayServiceAuditInputs(params: {
     serviceInstallEnv: params.serviceInstallEnv,
     port,
     runtime: runtimeChoice,
+    warn: params.warn,
   });
   const expectedManagedServiceEnvKeys = readManagedServiceEnvKeysFromEnvironment(
     expectedPlan.environment,
@@ -460,6 +468,16 @@ export async function detectGatewayServiceConfigIssues(
   }
   const serviceInstallEnv = buildGatewayServiceRepairEnv(command);
   const serviceWrapperPath = resolveGatewayServiceWrapperPath(command);
+  const installPlanWarnings: GatewayServicePlanWarning[] = [];
+  const seenInstallPlanWarnings = new Set<string>();
+  const collectInstallPlanWarning = (message: string, title?: string) => {
+    const key = `${title ?? ""}\n${message}`;
+    if (seenInstallPlanWarnings.has(key)) {
+      return;
+    }
+    seenInstallPlanWarnings.add(key);
+    installPlanWarnings.push({ message, ...(title ? { title } : {}) });
+  };
   const serviceLayout = await summarizeGatewayServiceLayout(command);
   const sourceCheckoutWarning = serviceLayout?.entrypointSourceCheckout
     ? [
@@ -484,6 +502,7 @@ export async function detectGatewayServiceConfigIssues(
       cfg,
       command,
       serviceInstallEnv,
+      warn: collectInstallPlanWarning,
     });
   const audit = await auditGatewayServiceConfig({
     env: process.env,
@@ -523,6 +542,7 @@ export async function detectGatewayServiceConfigIssues(
           port,
           runtime: "node",
           nodePath: systemNodePath,
+          warn: collectInstallPlanWarning,
         })
       : expectedPlan;
   const { programArguments } = expectedRuntimePlan;
@@ -563,6 +583,7 @@ export async function detectGatewayServiceConfigIssues(
       issues.length > 0 ||
       serviceRewriteBlocked ||
       sourceCheckoutWarning ||
+      installPlanWarnings.length > 0 ||
       tokenWarning ||
       gatewayRuntimeWarning
         ? "issue"
@@ -579,6 +600,7 @@ export async function detectGatewayServiceConfigIssues(
     needsNodeRuntime,
     systemNodePath,
     gatewayRuntimeWarning,
+    installPlanWarnings,
     tokenWarning,
     issues,
   };
@@ -647,6 +669,13 @@ export async function repairGatewayServiceConfig(params: {
   }
   if (detection.gatewayRuntimeWarning) {
     await emitGatewayServiceNote(prompter, detection.gatewayRuntimeWarning, "Gateway runtime");
+  }
+  for (const warning of detection.installPlanWarnings ?? []) {
+    await emitGatewayServiceNote(
+      prompter,
+      warning.message,
+      warning.title ?? "Gateway service config",
+    );
   }
   if (serviceRewriteBlocked) {
     await emitGatewayServiceNote(
