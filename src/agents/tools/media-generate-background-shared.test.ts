@@ -125,6 +125,67 @@ describe("scheduleMediaGenerationTaskCompletion", () => {
       }),
     );
   });
+
+  it("reports a generated media task failure when completion wake throws", async () => {
+    const scheduled: Array<() => Promise<void>> = [];
+    const wakeError = new Error("requester wake failed");
+    const lifecycle = {
+      createTaskRun: vi.fn(),
+      recordTaskProgress: vi.fn(),
+      completeTaskRun: vi.fn(),
+      failTaskRun: vi.fn(),
+      wakeTaskCompletion: vi.fn().mockRejectedValueOnce(wakeError).mockResolvedValueOnce(true),
+    };
+    const onWakeFailure = vi.fn();
+
+    scheduleMediaGenerationTaskCompletion({
+      lifecycle,
+      handle: {
+        taskId: "task-image-789",
+        runId: "tool:image_generate:789",
+        requesterSessionKey: "agent:main:discord:channel:123",
+        taskLabel: "proof image",
+      },
+      scheduleBackgroundWork: (work) => {
+        scheduled.push(work);
+      },
+      progressSummary: "Generating image",
+      toolName: "Image generation",
+      onWakeFailure,
+      run: async () => ({
+        provider: "openai",
+        model: "gpt-image-1",
+        count: 1,
+        paths: ["/tmp/proof.png"],
+        wakeResult: "generated",
+      }),
+    });
+
+    await scheduled[0]?.();
+
+    expect(onWakeFailure).toHaveBeenCalledWith(
+      "Image generation completion wake failed after successful generation",
+      expect.objectContaining({
+        error: wakeError,
+        runId: "tool:image_generate:789",
+        taskId: "task-image-789",
+      }),
+    );
+    expect(lifecycle.completeTaskRun).not.toHaveBeenCalled();
+    expect(lifecycle.failTaskRun).toHaveBeenCalledWith(
+      expect.objectContaining({
+        error: expect.objectContaining({
+          message: "Image generation completion delivery failed after successful generation",
+        }),
+      }),
+    );
+    expect(lifecycle.wakeTaskCompletion).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        status: "error",
+        result: "Image generation completion delivery failed after successful generation",
+      }),
+    );
+  });
 });
 
 describe("createMediaGenerationTaskLifecycle", () => {
