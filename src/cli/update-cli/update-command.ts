@@ -3,6 +3,7 @@ import { existsSync } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { Writable } from "node:stream";
 import { confirm, isCancel } from "@clack/prompts";
 import {
   checkShellCompletionStatus,
@@ -161,6 +162,11 @@ const POST_INSTALL_DOCTOR_SERVICE_ENV_KEYS = [
   "OPENCLAW_PROFILE",
 ] as const;
 const POST_UPDATE_PLUGIN_REPAIR_GUIDANCE = "Run openclaw doctor --fix to attempt automatic repair.";
+const JSON_MODE_SERVICE_STDOUT = new Writable({
+  write(_chunk, _encoding, callback) {
+    callback();
+  },
+});
 
 async function createUpdateConfigSnapshot(): Promise<void> {
   await createPreUpdateConfigSnapshot({
@@ -778,6 +784,10 @@ function gatewayRuntimeAncestryBlockMessage(
   return gatewayAncestryBlockMessage(runtime?.pid);
 }
 
+function serviceControlStdoutForMode(jsonMode: boolean): NodeJS.WritableStream {
+  return jsonMode ? JSON_MODE_SERVICE_STDOUT : process.stdout;
+}
+
 async function maybeStopManagedServiceBeforePackageUpdate(params: {
   shouldRestart: boolean;
   jsonMode: boolean;
@@ -855,7 +865,10 @@ async function maybeStopManagedServiceBeforePackageUpdate(params: {
   if (!params.jsonMode) {
     defaultRuntime.log(theme.muted("Stopping managed gateway service before package update..."));
   }
-  await service.stop({ env: serviceState.env, stdout: process.stdout });
+  await service.stop({
+    env: serviceState.env,
+    stdout: serviceControlStdoutForMode(params.jsonMode),
+  });
   return {
     stopped: true,
     inspected: true,
@@ -875,7 +888,7 @@ async function maybeRestartServiceAfterFailedPackageUpdate(params: {
   try {
     await resolveGatewayService().restart({
       env: params.prePackageServiceStop.serviceEnv,
-      stdout: process.stdout,
+      stdout: serviceControlStdoutForMode(params.jsonMode),
     });
     if (!params.jsonMode) {
       defaultRuntime.log(theme.muted("Restarted managed gateway service after failed update."));
@@ -1071,6 +1084,17 @@ export function resolveUpdatedGatewayRestartPort(params: {
   serviceEnv?: NodeJS.ProcessEnv;
 }): number {
   return resolveGatewayPort(params.config, params.serviceEnv ?? params.processEnv ?? process.env);
+}
+
+export function resolvePostUpdateServiceStateReadEnv(params: {
+  updateMode: UpdateRunResult["mode"];
+  processEnv?: NodeJS.ProcessEnv;
+  prePackageServiceEnv?: NodeJS.ProcessEnv;
+}): NodeJS.ProcessEnv {
+  if (isPackageManagerUpdateMode(params.updateMode) && params.prePackageServiceEnv) {
+    return params.prePackageServiceEnv;
+  }
+  return params.processEnv ?? process.env;
 }
 
 type UpdateDryRunPreview = {
@@ -3489,7 +3513,11 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
   if (shouldRestart) {
     try {
       const serviceState = await readGatewayServiceState(resolveGatewayService(), {
-        env: process.env,
+        env: resolvePostUpdateServiceStateReadEnv({
+          updateMode: resultWithPostUpdate.mode,
+          processEnv: process.env,
+          prePackageServiceEnv: prePackageServiceStop?.serviceEnv,
+        }),
       });
       if (
         shouldPrepareUpdatedInstallRestart({

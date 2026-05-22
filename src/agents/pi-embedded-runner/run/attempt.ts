@@ -19,6 +19,10 @@ import {
   bindOwnedSessionTranscriptWrites,
   withOwnedSessionTranscriptWrites,
 } from "../../../config/sessions/transcript-write-context.js";
+import {
+  assertContextEngineHostSupport,
+  PI_EMBEDDED_CONTEXT_ENGINE_HOST,
+} from "../../../context-engine/host-compat.js";
 import { resolveContextEngineOwnerPluginId } from "../../../context-engine/registry.js";
 import type { AssembleResult } from "../../../context-engine/types.js";
 import { emitTrustedDiagnosticEvent } from "../../../infra/diagnostic-events.js";
@@ -1284,6 +1288,13 @@ export async function runEmbeddedAttempt(
       );
     }
     const activeContextEngine = isRawModelRun ? undefined : params.contextEngine;
+    if (activeContextEngine && activeContextEngine.info.id !== "legacy") {
+      assertContextEngineHostSupport({
+        contextEngine: activeContextEngine,
+        operation: "agent-run",
+        host: PI_EMBEDDED_CONTEXT_ENGINE_HOST,
+      });
+    }
     const activeContextEnginePluginId = resolveContextEngineOwnerPluginId(activeContextEngine);
     const agentDir = params.agentDir ?? resolveAgentDir(params.config ?? {}, sessionAgentId);
     const diagnosticTrace = freezeDiagnosticTraceContext(

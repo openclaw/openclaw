@@ -10,6 +10,14 @@ import { resolvePnpmRunner } from "./pnpm-runner.mjs";
 const nodeBin = process.execPath;
 const WINDOWS_BUILD_MAX_OLD_SPACE_MB = 4096;
 const BUILD_CACHE_VERSION = 2;
+const PNPM_STEP_NODE_FALLBACKS = new Map([
+  ["plugins:assets:build", ["scripts/bundled-plugin-assets.mjs", "--phase", "build"]],
+  [
+    "build:plugin-sdk:dts",
+    ["scripts/run-tsgo.mjs", "-p", "tsconfig.plugin-sdk.dts.json", "--declaration", "true"],
+  ],
+  ["plugins:assets:copy", ["scripts/bundled-plugin-assets.mjs", "--phase", "copy"]],
+]);
 export const BUILD_ALL_STEPS = [
   { label: "plugins:assets:build", kind: "pnpm", pnpmArgs: ["plugins:assets:build"] },
   { label: "tsdown", kind: "node", args: ["scripts/tsdown-build.mjs"] },
@@ -163,6 +171,18 @@ export function resolveBuildAllStep(step, params = {}) {
   const platform = params.platform ?? process.platform;
   const env = resolveStepEnv(step, params.env ?? process.env, platform);
   if (step.kind === "pnpm") {
+    const nodeFallbackArgs =
+      env.OPENCLAW_BUILD_ALL_NO_PNPM === "1" ? PNPM_STEP_NODE_FALLBACKS.get(step.label) : undefined;
+    if (nodeFallbackArgs) {
+      return {
+        command: params.nodeExecPath ?? nodeBin,
+        args: nodeFallbackArgs,
+        options: {
+          stdio: "inherit",
+          env,
+        },
+      };
+    }
     const runner = resolvePnpmRunner({
       pnpmArgs: step.pnpmArgs,
       nodeExecPath: params.nodeExecPath ?? nodeBin,

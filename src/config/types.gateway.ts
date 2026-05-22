@@ -62,6 +62,8 @@ export type TalkRealtimeConfig = {
   transport?: "webrtc" | "provider-websocket" | "gateway-relay" | "managed-room";
   /** Tool/agent strategy for realtime sessions. */
   brain?: "agent-consult" | "direct-tools" | "none";
+  /** How Gateway relay handles final user transcripts when the provider skips a consult. */
+  consultRouting?: "provider-direct" | "force-agent-consult";
 };
 
 export type ResolvedTalkConfig = {

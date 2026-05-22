@@ -44,8 +44,7 @@ async function runHelperWithExistingSentinel(params: {
 }) {
   const { execFile } =
     await vi.importActual<typeof import("node:child_process")>("node:child_process");
-  const { startManagedServiceUpdateHandoff } =
-    await import("./update-managed-service-handoff.js");
+  const { startManagedServiceUpdateHandoff } = await import("./update-managed-service-handoff.js");
   const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-handoff-helper-test-"));
   tempDirs.add(tmpDir);
 
@@ -162,12 +161,14 @@ describe("managed service update handoff", () => {
     expect(args).toHaveLength(2);
     tempDirs.add(path.dirname(args[0] ?? result.logPath));
     const helperParams = JSON.parse(await fs.readFile(args[1] ?? "", "utf-8")) as {
+      cwd?: string;
       metaPath?: string;
       sentinelPath?: string;
     };
     expect(helperParams.metaPath).toMatch(/sentinel-meta\.json$/u);
     expect(helperParams.sentinelPath).toMatch(/restart-sentinel\.json$/u);
-    expect(options.cwd).toBe("/tmp/openclaw");
+    expect(options.cwd).toBe(os.homedir());
+    expect(helperParams.cwd).toBe(os.homedir());
     expect(options.detached).toBe(true);
     expect(options.env.KEEP_ME).toBe("1");
     for (const [key, value] of Object.entries(serviceIdentityEnv)) {
