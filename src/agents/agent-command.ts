@@ -273,6 +273,21 @@ async function persistSessionEntry(
   });
 }
 
+function clearPendingFinalDeliveryFields(entry: SessionEntry, updatedAt: number): SessionEntry {
+  return {
+    ...entry,
+    pendingFinalDelivery: undefined,
+    pendingFinalDeliveryText: undefined,
+    pendingFinalDeliveryCreatedAt: undefined,
+    pendingFinalDeliveryLastAttemptAt: undefined,
+    pendingFinalDeliveryAttemptCount: undefined,
+    pendingFinalDeliveryLastError: undefined,
+    pendingFinalDeliveryContext: undefined,
+    pendingFinalDeliveryIntentId: undefined,
+    updatedAt,
+  };
+}
+
 function containsControlCharacters(value: string): boolean {
   for (const char of value) {
     const code = char.codePointAt(0);
@@ -1086,9 +1101,70 @@ async function agentCommandInternal(
     const startedAt = Date.now();
     const attemptLifecycleState = {
       currentTurnUserMessagePersisted: false,
+      lifecycleFinishing: false,
       lifecycleEnded: false,
     };
     const attemptLifecycleCallbacks = createAgentAttemptLifecycleCallbacks(attemptLifecycleState);
+    let lifecycleFinishingEmitted = false;
+    const emitLifecycleFinishing = (runResult: AgentAttemptResult) => {
+      if (
+        attemptLifecycleState.lifecycleEnded ||
+        attemptLifecycleState.lifecycleFinishing ||
+        lifecycleFinishingEmitted
+      ) {
+        return;
+      }
+      lifecycleFinishingEmitted = true;
+      attemptLifecycleState.lifecycleFinishing = true;
+      emitAgentEvent({
+        runId,
+        stream: "lifecycle",
+        data: {
+          phase: "finishing",
+          startedAt,
+          endedAt: Date.now(),
+          aborted: runResult.meta.aborted ?? false,
+          stopReason: runResult.meta.stopReason,
+        },
+      });
+    };
+    const emitLifecycleEnd = (runResult: AgentAttemptResult) => {
+      if (attemptLifecycleState.lifecycleEnded) {
+        return;
+      }
+      attemptLifecycleState.lifecycleEnded = true;
+      const stopReason = runResult.meta.stopReason;
+      if (stopReason && stopReason !== "end_turn") {
+        console.error(`[agent] run ${runId} ended with stopReason=${stopReason}`);
+      }
+      emitAgentEvent({
+        runId,
+        stream: "lifecycle",
+        data: {
+          phase: "end",
+          startedAt,
+          endedAt: Date.now(),
+          aborted: runResult.meta.aborted ?? false,
+          stopReason,
+        },
+      });
+    };
+    const emitLifecyclePostTurnError = (error: unknown) => {
+      if (attemptLifecycleState.lifecycleEnded) {
+        return;
+      }
+      attemptLifecycleState.lifecycleEnded = true;
+      emitAgentEvent({
+        runId,
+        stream: "lifecycle",
+        data: {
+          phase: "error",
+          startedAt,
+          endedAt: Date.now(),
+          error: error instanceof Error ? error.message : "Agent run failed",
+        },
+      });
+    };
     const attemptExecutionRuntime = await loadAttemptExecutionRuntime();
     const runContext = resolveAgentRunContext(opts);
     const messageChannel = resolveMessageChannel(
@@ -1224,6 +1300,7 @@ async function agentCommandInternal(
                 (isFallbackRetry && attemptLifecycleState.currentTurnUserMessagePersisted),
               onUserMessagePersisted: attemptLifecycleCallbacks.onUserMessagePersisted,
               onAgentEvent: attemptLifecycleCallbacks.onAgentEvent,
+              deferTerminalLifecycleEnd: true,
             });
           },
         });
@@ -1285,23 +1362,7 @@ async function agentCommandInternal(
             },
           };
         }
-        if (!attemptLifecycleState.lifecycleEnded) {
-          const stopReason = result.meta.stopReason;
-          if (stopReason && stopReason !== "end_turn") {
-            console.error(`[agent] run ${runId} ended with stopReason=${stopReason}`);
-          }
-          emitAgentEvent({
-            runId,
-            stream: "lifecycle",
-            data: {
-              phase: "end",
-              startedAt,
-              endedAt: Date.now(),
-              aborted: result.meta.aborted ?? false,
-              stopReason,
-            },
-          });
-        }
+        emitLifecycleFinishing(result);
         break;
       } catch (err) {
         if (err instanceof LiveSessionModelSwitchError) {
@@ -1401,181 +1462,190 @@ async function agentCommandInternal(
         throw err;
       }
     }
-    await fallbackTrajectoryRecorder?.flush();
+    try {
+      await fallbackTrajectoryRecorder?.flush();
 
-    // Update token+model fields in the session store.
-    if (sessionStore && sessionKey) {
-      const { updateSessionStoreAfterAgentRun } = await loadSessionStoreRuntime();
-      await updateSessionStoreAfterAgentRun({
-        cfg,
-        contextTokensOverride: agentCfg?.contextTokens,
-        sessionId,
-        sessionKey,
-        storePath,
-        sessionStore,
-        defaultProvider: provider,
-        defaultModel: model,
-        fallbackProvider,
-        fallbackModel,
-        result,
-        touchInteraction:
-          opts.bootstrapContextRunKind !== "cron" &&
-          opts.bootstrapContextRunKind !== "heartbeat" &&
-          !opts.internalEvents?.length,
-        preserveRuntimeModel: opts.bootstrapContextRunKind === "heartbeat",
-      });
-      sessionEntry = sessionStore[sessionKey] ?? sessionEntry;
-    }
-
-    const transcriptPersistenceRunner = result.meta.executionTrace?.runner;
-    const embeddedAssistantGapFill =
-      transcriptPersistenceRunner === "embedded" ||
-      (transcriptPersistenceRunner === undefined &&
-        Boolean(result.meta.finalAssistantVisibleText?.trim()));
-    if (transcriptPersistenceRunner === "cli" || embeddedAssistantGapFill) {
-      try {
-        sessionEntry = await attemptExecutionRuntime.persistCliTurnTranscript({
-          body,
-          transcriptBody,
-          result,
-          sessionId,
-          sessionKey: sessionKey ?? sessionId,
-          sessionEntry,
-          sessionStore,
-          storePath,
-          sessionAgentId,
-          threadId: opts.threadId,
-          sessionCwd: workspaceDir,
-          config: cfg,
-          embeddedAssistantGapFill,
-        });
-        sessionEntry = await (
-          await loadCliCompactionRuntime()
-        ).runCliTurnCompactionLifecycle({
+      // Update token+model fields in the session store.
+      if (sessionStore && sessionKey) {
+        const { updateSessionStoreAfterAgentRun } = await loadSessionStoreRuntime();
+        await updateSessionStoreAfterAgentRun({
           cfg,
+          contextTokensOverride: agentCfg?.contextTokens,
           sessionId,
-          sessionKey: sessionKey ?? sessionId,
-          sessionEntry,
-          sessionStore,
-          storePath,
-          sessionAgentId,
-          workspaceDir,
-          agentDir,
-          provider: result.meta.agentMeta?.provider ?? provider,
-          model: result.meta.agentMeta?.model ?? model,
-          skillsSnapshot,
-          messageChannel,
-          agentAccountId: runContext.accountId,
-          thinkLevel: resolvedThinkLevel,
-          extraSystemPrompt: opts.extraSystemPrompt,
-        });
-      } catch (error) {
-        log.warn(
-          `Turn transcript persistence failed for ${sessionKey ?? sessionId}: ${error instanceof Error ? error.message : String(error)}`,
-        );
-      }
-    }
-
-    const payloads = result.payloads ?? [];
-
-    // Phase 2: Persist pending final delivery for main sessions before attempting delivery.
-    // This ensures that if the process restarts during delivery, the payload is durable.
-    if (
-      opts.deliver === true &&
-      sessionStore &&
-      sessionKey &&
-      payloads.length > 0 &&
-      !isSubagentSessionKey(sessionKey)
-    ) {
-      const now = Date.now();
-      const combinedPayload = sanitizePendingFinalDeliveryText(
-        payloads
-          .map((p) => (typeof p.text === "string" ? p.text : ""))
-          .filter(Boolean)
-          .join("\n\n"),
-      );
-
-      if (combinedPayload) {
-        const entry = sessionStore[sessionKey] ?? sessionEntry;
-        const next: SessionEntry = {
-          ...entry,
-          pendingFinalDelivery: true,
-          pendingFinalDeliveryText: combinedPayload,
-          pendingFinalDeliveryCreatedAt: now,
-          updatedAt: now,
-        };
-        await persistSessionEntry({
-          sessionStore,
           sessionKey,
           storePath,
-          entry: next,
+          sessionStore,
+          defaultProvider: provider,
+          defaultModel: model,
+          fallbackProvider,
+          fallbackModel,
+          result,
+          touchInteraction:
+            opts.bootstrapContextRunKind !== "cron" &&
+            opts.bootstrapContextRunKind !== "heartbeat" &&
+            !opts.internalEvents?.length,
+          preserveRuntimeModel: opts.bootstrapContextRunKind === "heartbeat",
         });
-        sessionEntry = next;
+        sessionEntry = sessionStore[sessionKey] ?? sessionEntry;
       }
-    }
 
-    const { deliverAgentCommandResult } = await loadDeliveryRuntime();
-    const resolveFreshSessionEntryForDelivery =
-      sessionStore && sessionKey
-        ? async (): Promise<SessionEntry | undefined> => {
-            const { loadSessionStore } = await loadSessionStoreRuntime();
-            const freshStore = loadSessionStore(storePath, {
-              skipCache: true,
-              clone: false,
-            });
-            const freshEntry = freshStore[sessionKey];
-            if (!freshEntry || freshEntry.sessionId !== sessionId) {
-              return undefined;
+      const transcriptPersistenceRunner = result.meta.executionTrace?.runner;
+      const embeddedAssistantGapFill =
+        transcriptPersistenceRunner === "embedded" ||
+        (transcriptPersistenceRunner === undefined &&
+          Boolean(result.meta.finalAssistantVisibleText?.trim()));
+      if (transcriptPersistenceRunner === "cli" || embeddedAssistantGapFill) {
+        let persistedCliTurnTranscript = false;
+        try {
+          sessionEntry = await attemptExecutionRuntime.persistCliTurnTranscript({
+            body,
+            transcriptBody,
+            result,
+            sessionId,
+            sessionKey: sessionKey ?? sessionId,
+            sessionEntry,
+            sessionStore,
+            storePath,
+            sessionAgentId,
+            threadId: opts.threadId,
+            sessionCwd: workspaceDir,
+            config: cfg,
+            embeddedAssistantGapFill,
+          });
+          persistedCliTurnTranscript = true;
+        } catch (error) {
+          log.warn(
+            `Turn transcript persistence failed for ${sessionKey ?? sessionId}: ${error instanceof Error ? error.message : String(error)}`,
+          );
+        }
+        if (persistedCliTurnTranscript) {
+          sessionEntry = await (
+            await loadCliCompactionRuntime()
+          ).runCliTurnCompactionLifecycle({
+            cfg,
+            sessionId,
+            sessionKey: sessionKey ?? sessionId,
+            sessionEntry,
+            sessionStore,
+            storePath,
+            sessionAgentId,
+            workspaceDir,
+            agentDir,
+            provider: result.meta.agentMeta?.provider ?? provider,
+            model: result.meta.agentMeta?.model ?? model,
+            skillsSnapshot,
+            messageChannel,
+            agentAccountId: runContext.accountId,
+            senderIsOwner: opts.senderIsOwner,
+            thinkLevel: resolvedThinkLevel,
+            extraSystemPrompt: opts.extraSystemPrompt,
+          });
+        }
+      }
+
+      const payloads = result.payloads ?? [];
+      let pendingFinalDeliveryTextForThisRun: string | undefined;
+
+      // Phase 2: Persist pending final delivery for main sessions before attempting delivery.
+      // This ensures that if the process restarts during delivery, the payload is durable.
+      if (
+        opts.deliver === true &&
+        sessionStore &&
+        sessionKey &&
+        payloads.length > 0 &&
+        !isSubagentSessionKey(sessionKey)
+      ) {
+        const now = Date.now();
+        const combinedPayload = sanitizePendingFinalDeliveryText(
+          payloads
+            .map((p) => (typeof p.text === "string" ? p.text : ""))
+            .filter(Boolean)
+            .join("\n\n"),
+        );
+        pendingFinalDeliveryTextForThisRun = combinedPayload || undefined;
+
+        if (combinedPayload) {
+          const entry = sessionStore[sessionKey] ?? sessionEntry;
+          const next: SessionEntry = {
+            ...entry,
+            pendingFinalDelivery: true,
+            pendingFinalDeliveryText: combinedPayload,
+            pendingFinalDeliveryCreatedAt: now,
+            updatedAt: now,
+          };
+          await persistSessionEntry({
+            sessionStore,
+            sessionKey,
+            storePath,
+            entry: next,
+          });
+          sessionEntry = next;
+        }
+      }
+
+      const { deliverAgentCommandResult } = await loadDeliveryRuntime();
+      const resolveFreshSessionEntryForDelivery =
+        sessionStore && sessionKey
+          ? async (): Promise<SessionEntry | undefined> => {
+              const { loadSessionStore } = await loadSessionStoreRuntime();
+              const freshStore = loadSessionStore(storePath, {
+                skipCache: true,
+                clone: false,
+              });
+              const freshEntry = freshStore[sessionKey];
+              if (!freshEntry || freshEntry.sessionId !== sessionId) {
+                return undefined;
+              }
+              sessionStore[sessionKey] = freshEntry;
+              return freshEntry;
             }
-            sessionStore[sessionKey] = freshEntry;
-            return freshEntry;
-          }
-        : undefined;
-    const deliveryParams = {
-      cfg,
-      deps: resolvedDeps,
-      runtime,
-      opts,
-      outboundSession,
-      sessionEntry,
-      result,
-      payloads,
-    };
-    const deliveryResult = await deliverAgentCommandResult(
-      resolveFreshSessionEntryForDelivery
-        ? {
-            ...deliveryParams,
-            expectedSessionIdForFreshDelivery: sessionId,
-            resolveFreshSessionEntryForDelivery,
-          }
-        : deliveryParams,
-    );
-
-    // Phase 2: Clear pending delivery payload after successful delivery.
-    if (
-      deliveryResult?.deliverySucceeded === true &&
-      sessionStore &&
-      sessionKey &&
-      !isSubagentSessionKey(sessionKey)
-    ) {
-      const entry = sessionStore[sessionKey] ?? sessionEntry;
-      const next: SessionEntry = {
-        ...entry,
-        pendingFinalDelivery: undefined,
-        pendingFinalDeliveryText: undefined,
-        pendingFinalDeliveryCreatedAt: undefined,
-        updatedAt: Date.now(),
+          : undefined;
+      const deliveryParams = {
+        cfg,
+        deps: resolvedDeps,
+        runtime,
+        opts,
+        outboundSession,
+        sessionEntry,
+        result,
+        payloads,
       };
-      await persistSessionEntry({
-        sessionStore,
-        sessionKey,
-        storePath,
-        entry: next,
-      });
-      sessionEntry = next;
-    }
+      const deliveryResult = await deliverAgentCommandResult(
+        resolveFreshSessionEntryForDelivery
+          ? {
+              ...deliveryParams,
+              expectedSessionIdForFreshDelivery: sessionId,
+              resolveFreshSessionEntryForDelivery,
+            }
+          : deliveryParams,
+      );
 
-    return deliveryResult;
+      // Phase 2: Clear pending delivery payload after successful delivery.
+      if (sessionStore && sessionKey && !isSubagentSessionKey(sessionKey)) {
+        const entry = sessionStore[sessionKey] ?? sessionEntry;
+        const noPendingTextForThisRun =
+          opts.deliver === true &&
+          pendingFinalDeliveryTextForThisRun === undefined &&
+          entry.pendingFinalDelivery === true &&
+          !entry.pendingFinalDeliveryText;
+        if (deliveryResult?.deliverySucceeded === true || noPendingTextForThisRun) {
+          const next = clearPendingFinalDeliveryFields(entry, Date.now());
+          await persistSessionEntry({
+            sessionStore,
+            sessionKey,
+            storePath,
+            entry: next,
+          });
+          sessionEntry = next;
+        }
+      }
+
+      emitLifecycleEnd(result);
+      return deliveryResult;
+    } catch (error) {
+      emitLifecyclePostTurnError(error);
+      throw error;
+    }
   } finally {
     clearAgentRunContext(runId);
   }
