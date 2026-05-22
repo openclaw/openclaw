@@ -323,6 +323,10 @@ const PRECISE_SOURCE_TEST_TARGETS = new Map([
   ],
 ]);
 const TOOLING_SOURCE_TEST_TARGETS = new Map([
+  [
+    ".github/workflows/crabbox-pr-desktop-lease.yml",
+    ["test/scripts/crabbox-pr-desktop-lease-workflow.test.ts"],
+  ],
   ["scripts/github/barnacle-auto-response.mjs", ["test/scripts/barnacle-auto-response.test.ts"]],
   ["scripts/changed-lanes.mjs", ["test/scripts/changed-lanes.test.ts"]],
   ["scripts/check-changed.mjs", ["test/scripts/changed-lanes.test.ts"]],
@@ -342,6 +346,7 @@ const TOOLING_SOURCE_TEST_TARGETS = new Map([
     "scripts/mantis/build-telegram-desktop-proof-evidence.mjs",
     ["test/scripts/mantis-build-telegram-desktop-proof-evidence.test.ts"],
   ],
+  ["scripts/crabbox/pr-desktop-lease.mjs", ["test/scripts/crabbox-pr-desktop-lease.test.ts"]],
   ["scripts/mantis/publish-pr-evidence.mjs", ["test/scripts/mantis-publish-pr-evidence.test.ts"]],
   [
     "scripts/run-vitest.mjs",
@@ -403,6 +408,14 @@ const TOOLING_TEST_TARGETS = new Map([
   [
     "test/scripts/mantis-build-telegram-desktop-proof-evidence.test.ts",
     ["test/scripts/mantis-build-telegram-desktop-proof-evidence.test.ts"],
+  ],
+  [
+    "test/scripts/crabbox-pr-desktop-lease.test.ts",
+    ["test/scripts/crabbox-pr-desktop-lease.test.ts"],
+  ],
+  [
+    "test/scripts/crabbox-pr-desktop-lease-workflow.test.ts",
+    ["test/scripts/crabbox-pr-desktop-lease-workflow.test.ts"],
   ],
   [
     "test/scripts/plugin-prerelease-test-plan.test.ts",

@@ -1,0 +1,223 @@
+name: Crabbox PR Desktop Lease
+
+on:
+  repository_dispatch:
+    types: [clawsweeper_crabbox_pr_lease]
+  workflow_dispatch:
+    inputs:
+      target_repo:
+        description: Target repository.
+        required: true
+        default: openclaw/openclaw
+        type: string
+      pr_number:
+        description: Pull request number.
+        required: true
+        type: string
+      action:
+        description: lease, status, stop, or reset-vnc.
+        required: true
+        default: lease
+        type: choice
+        options: [lease, status, stop, reset-vnc]
+      platform:
+        description: linux or mac.
+        required: true
+        default: linux
+        type: choice
+        options: [linux, mac]
+      ttl_minutes:
+        description: Lease TTL in minutes.
+        required: true
+        default: "90"
+        type: string
+      head_sha:
+        description: Expected PR head SHA.
+        required: false
+        default: ""
+        type: string
+      provider:
+        description: Crabbox provider. mac requires aws.
+        required: false
+        default: aws
+        type: choice
+        options: [aws, azure, hetzner]
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: read
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+  CRABBOX_REF: d303d6b34fd8f9dbfa2e578f10a5eceafa8a496e
+
+jobs:
+  authorize_actor:
+    name: Authorize workflow actor
+    runs-on: ubuntu-24.04
+    outputs:
+      authorized: ${{ steps.permission.outputs.authorized }}
+    steps:
+      - name: Require maintainer-level repository access
+        id: permission
+        uses: actions/github-script@v8
+        with:
+          script: |
+            const allowed = new Set(["admin", "maintain", "write"]);
+            const requestedBy =
+              context.eventName === "repository_dispatch"
+                ? String(context.payload.client_payload?.author || "")
+                : context.actor;
+            if (!requestedBy) {
+              core.notice("Repository dispatch did not include a requesting comment author.");
+              core.setOutput("authorized", "false");
+              return;
+            }
+
+            const { owner, repo } = context.repo;
+            const { data } = await github.rest.repos.getCollaboratorPermissionLevel({
+              owner,
+              repo,
+              username: requestedBy,
+            });
+            const permission = data.permission;
+            core.info(`Lease requester ${requestedBy} permission: ${permission}`);
+            if (!allowed.has(permission)) {
+              core.notice(
+                `Workflow requires write/maintain/admin access. Requester "${requestedBy}" has "${permission}".`,
+              );
+              core.setOutput("authorized", "false");
+              return;
+            }
+            core.setOutput("authorized", "true");
+
+  resolve_lease_key:
+    name: Resolve desktop lease key
+    needs: authorize_actor
+    if: needs.authorize_actor.outputs.authorized == 'true'
+    runs-on: ubuntu-24.04
+    outputs:
+      group: ${{ steps.key.outputs.group }}
+      head_sha: ${{ steps.key.outputs.head_sha }}
+    steps:
+      - name: Build lease concurrency key
+        id: key
+        env:
+          GH_TOKEN: ${{ github.token }}
+          INPUT_TARGET_REPO: ${{ inputs.target_repo }}
+          INPUT_PR_NUMBER: ${{ inputs.pr_number }}
+          INPUT_ACTION: ${{ inputs.action }}
+          INPUT_PLATFORM: ${{ inputs.platform }}
+          INPUT_HEAD_SHA: ${{ inputs.head_sha }}
+          CLIENT_TARGET_REPO: ${{ github.event.client_payload.target_repo }}
+          CLIENT_PR_NUMBER: ${{ github.event.client_payload.item_number || github.event.client_payload.pr_number }}
+          CLIENT_ACTION: ${{ github.event.client_payload.action }}
+          CLIENT_PLATFORM: ${{ github.event.client_payload.platform }}
+          CLIENT_HEAD_SHA: ${{ github.event.client_payload.head_sha }}
+          RUN_ID: ${{ github.run_id }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          target_repo="${INPUT_TARGET_REPO:-${CLIENT_TARGET_REPO:-openclaw/openclaw}}"
+          pr_number="${INPUT_PR_NUMBER:-${CLIENT_PR_NUMBER:-$RUN_ID}}"
+          action="${INPUT_ACTION:-${CLIENT_ACTION:-lease}}"
+          platform="${INPUT_PLATFORM:-${CLIENT_PLATFORM:-linux}}"
+          head_sha="${INPUT_HEAD_SHA:-${CLIENT_HEAD_SHA:-}}"
+          key_tail="$RUN_ID"
+          if [ "$action" = "lease" ]; then
+            if [ -z "$head_sha" ]; then
+              head_sha="$(gh pr view "$pr_number" --repo "$target_repo" --json headRefOid --jq .headRefOid)"
+            fi
+            key_tail="${head_sha:-$RUN_ID}"
+          fi
+          echo "group=crabbox-pr-desktop-lease-${target_repo}-${pr_number}-${platform}-${key_tail}" >> "$GITHUB_OUTPUT"
+          echo "head_sha=$head_sha" >> "$GITHUB_OUTPUT"
+
+  pr-desktop-lease:
+    needs: [authorize_actor, resolve_lease_key]
+    if: needs.authorize_actor.outputs.authorized == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    environment: qa-live-shared
+    concurrency:
+      group: ${{ needs.resolve_lease_key.outputs.group }}
+      cancel-in-progress: false
+    steps:
+      - name: Checkout harness ref
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+          fetch-depth: 1
+          ref: main
+
+      - name: Setup Go for Crabbox CLI
+        uses: actions/setup-go@v6
+        with:
+          go-version: "1.26.x"
+          cache: false
+
+      - name: Install Crabbox CLI
+        shell: bash
+        run: |
+          set -euo pipefail
+          install_dir="${RUNNER_TEMP}/crabbox"
+          mkdir -p "$install_dir" "$HOME/.local/bin"
+          git init "$install_dir/src"
+          git -C "$install_dir/src" remote add origin https://github.com/openclaw/crabbox.git
+          git -C "$install_dir/src" fetch --depth 1 origin "$CRABBOX_REF"
+          git -C "$install_dir/src" checkout --detach FETCH_HEAD
+          go build -C "$install_dir/src" -o "$HOME/.local/bin/crabbox" ./cmd/crabbox
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          "$HOME/.local/bin/crabbox" --version
+          "$HOME/.local/bin/crabbox" warmup --help > "$install_dir/warmup-help.txt" 2>&1
+          grep -q -- "-desktop" "$install_dir/warmup-help.txt"
+
+      - name: Run Crabbox PR desktop lease command
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CRABBOX_COORDINATOR: ${{ secrets.CRABBOX_COORDINATOR || secrets.OPENCLAW_QA_CRABBOX_COORDINATOR }}
+          CRABBOX_COORDINATOR_TOKEN: ${{ secrets.CRABBOX_COORDINATOR_TOKEN || secrets.OPENCLAW_QA_CRABBOX_COORDINATOR_TOKEN }}
+          CRABBOX_ACCESS_CLIENT_ID: ${{ secrets.CRABBOX_ACCESS_CLIENT_ID }}
+          CRABBOX_ACCESS_CLIENT_SECRET: ${{ secrets.CRABBOX_ACCESS_CLIENT_SECRET }}
+          INPUT_TARGET_REPO: ${{ inputs.target_repo }}
+          INPUT_PR_NUMBER: ${{ inputs.pr_number }}
+          INPUT_ACTION: ${{ inputs.action }}
+          INPUT_PLATFORM: ${{ inputs.platform }}
+          INPUT_TTL_MINUTES: ${{ inputs.ttl_minutes }}
+          INPUT_HEAD_SHA: ${{ inputs.head_sha || needs.resolve_lease_key.outputs.head_sha }}
+          INPUT_PROVIDER: ${{ inputs.provider }}
+          CRABBOX_PR_DESKTOP_LEASE_HEAD_SHA: ${{ needs.resolve_lease_key.outputs.head_sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -z "${CRABBOX_COORDINATOR:-}" ]; then
+            echo "Missing CRABBOX_COORDINATOR or OPENCLAW_QA_CRABBOX_COORDINATOR." >&2
+            exit 1
+          fi
+          if [ -z "${CRABBOX_COORDINATOR_TOKEN:-}" ]; then
+            echo "Missing CRABBOX_COORDINATOR_TOKEN or OPENCLAW_QA_CRABBOX_COORDINATOR_TOKEN." >&2
+            exit 1
+          fi
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            event_path="$(mktemp)"
+            jq -n \
+              --arg target_repo "$INPUT_TARGET_REPO" \
+              --arg item_number "$INPUT_PR_NUMBER" \
+              --arg action "$INPUT_ACTION" \
+              --arg platform "$INPUT_PLATFORM" \
+              --arg ttl_minutes "$INPUT_TTL_MINUTES" \
+              --arg head_sha "$INPUT_HEAD_SHA" \
+              --arg provider "$INPUT_PROVIDER" \
+              '{client_payload:{target_repo:$target_repo,item_number:$item_number,action:$action,platform:$platform,ttl_minutes:$ttl_minutes,head_sha:$head_sha,provider:$provider}}' > "$event_path"
+            export GITHUB_EVENT_PATH="$event_path"
+          fi
+          node scripts/crabbox/pr-desktop-lease.mjs
+
+      - name: Upload Crabbox PR desktop lease summary
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: crabbox-pr-desktop-lease-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .artifacts/crabbox/pr-desktop-lease
+          if-no-files-found: ignore
