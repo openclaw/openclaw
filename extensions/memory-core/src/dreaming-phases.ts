@@ -18,13 +18,17 @@ import {
   resolveMemoryRemDreamingConfig,
 } from "openclaw/plugin-sdk/memory-core-host-status";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
-import { appendRegularFile, privateFileStore } from "openclaw/plugin-sdk/security-runtime";
+import { appendRegularFile } from "openclaw/plugin-sdk/security-runtime";
 import { writeDailyDreamingPhaseBlock } from "./dreaming-markdown.js";
 import {
   generateAndAppendDreamNarrative,
   type NarrativePhaseData,
   runDetachedDreamNarrative,
 } from "./dreaming-narrative.js";
+import {
+  readDreamingPrivateJsonIfExists,
+  writeDreamingPrivateJson,
+} from "./dreaming-private-store.js";
 import { asRecord, formatErrorMessage, normalizeTrimmedString } from "./dreaming-shared.js";
 import {
   filterLiveShortTermRecallEntries,
@@ -477,7 +481,7 @@ function normalizeMemoryDay(value: unknown): string | undefined {
 async function readDailyIngestionState(workspaceDir: string): Promise<DailyIngestionState> {
   try {
     return normalizeDailyIngestionState(
-      await privateFileStore(workspaceDir).readJsonIfExists(DAILY_INGESTION_STATE_RELATIVE_PATH),
+      await readDreamingPrivateJsonIfExists(workspaceDir, DAILY_INGESTION_STATE_RELATIVE_PATH),
     );
   } catch (err) {
     if (err instanceof SyntaxError) {
@@ -491,9 +495,7 @@ async function writeDailyIngestionState(
   workspaceDir: string,
   state: DailyIngestionState,
 ): Promise<void> {
-  await privateFileStore(workspaceDir).writeJson(DAILY_INGESTION_STATE_RELATIVE_PATH, state, {
-    trailingNewline: true,
-  });
+  await writeDreamingPrivateJson(workspaceDir, DAILY_INGESTION_STATE_RELATIVE_PATH, state);
 }
 
 type SessionIngestionFileState = {
@@ -583,7 +585,7 @@ function normalizeSessionIngestionState(raw: unknown): SessionIngestionState {
 async function readSessionIngestionState(workspaceDir: string): Promise<SessionIngestionState> {
   try {
     return normalizeSessionIngestionState(
-      await privateFileStore(workspaceDir).readJsonIfExists(SESSION_INGESTION_STATE_RELATIVE_PATH),
+      await readDreamingPrivateJsonIfExists(workspaceDir, SESSION_INGESTION_STATE_RELATIVE_PATH),
     );
   } catch (err) {
     if (err instanceof SyntaxError) {
@@ -597,9 +599,7 @@ async function writeSessionIngestionState(
   workspaceDir: string,
   state: SessionIngestionState,
 ): Promise<void> {
-  await privateFileStore(workspaceDir).writeJson(SESSION_INGESTION_STATE_RELATIVE_PATH, state, {
-    trailingNewline: true,
-  });
+  await writeDreamingPrivateJson(workspaceDir, SESSION_INGESTION_STATE_RELATIVE_PATH, state);
 }
 
 function trimTrackedSessionScopes(
