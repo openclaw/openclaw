@@ -329,7 +329,8 @@ describe("subagent registry lifecycle hardening", () => {
       sessionKey: entry.childSessionKey,
       progressSummary: "I'll inspect the repo now.",
       terminalOutcome: "blocked",
-      terminalSummary: "Required completion ended with progress-only text, not a final deliverable.",
+      terminalSummary:
+        "Required completion ended with progress-only text, not a final deliverable.",
     });
     expect(taskExecutorMocks.failTaskRunByRunId).not.toHaveBeenCalled();
   });
@@ -392,7 +393,7 @@ describe("subagent registry lifecycle hardening", () => {
     await createLifecycleController({
       entry,
       captureSubagentCompletionReply: vi.fn(
-        async () => "I'll inspect the repo now. Fixed the crash and verified the tests pass.",
+        async () => "I'll inspect the repo now. The crash is a missing null check in src/foo.ts.",
       ),
     }).completeSubagentRun({
       runId: entry.runId,
@@ -407,7 +408,8 @@ describe("subagent registry lifecycle hardening", () => {
       runId: entry.runId,
       runtime: "subagent",
       sessionKey: entry.childSessionKey,
-      progressSummary: "I'll inspect the repo now. Fixed the crash and verified the tests pass.",
+      progressSummary:
+        "I'll inspect the repo now. The crash is a missing null check in src/foo.ts.",
       terminalSummary: null,
     });
     expect(finalArg.terminalOutcome).toBeUndefined();

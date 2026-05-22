@@ -5,11 +5,8 @@ export type RequiredCompletionTerminalResult = {
   terminalSummary?: string;
 };
 
-const FINAL_DELIVERABLE_INDICATOR_PATTERN =
-  /\b(?:added|already|changed|completed|created|diagnosis|done|failed|finished|fixed|found|implemented|merged|no changes|nothing to change|opened|passed|ready|report|result|results|summary|tested|updated|validated|verified|wrote)\b/i;
-
 const PROGRESS_ONLY_PATTERN =
-  /^(?:i(?:'|’)ll|i will|i(?:'|’)m|i am|i(?:'|’)m going to|i am going to|let me|i need to)\s+(?:now\s+)?(?:analyz(?:e|ing)|apply|check(?:ing)?|continue|debug(?:ging)?|inspect(?:ing)?|investigat(?:e|ing)|look(?:ing)?(?:\s+into)?|map(?:ping)?|open(?:ing)?|read(?:ing)?|review(?:ing)?|run(?:ning)?|start(?:ing)?|test(?:ing)?|trace|trac(?:e|ing)|try(?:ing)?|update|verify(?:ing)?|work(?:ing)?)/i;
+  /^(?:i(?:'|\u2019)ll|i will|i(?:'|\u2019)m|i am|i(?:'|\u2019)m going to|i am going to|let me|i need to)\s+(?:now\s+)?(?:analyz(?:e|ing)|apply|check(?:ing)?|continue|debug(?:ging)?|follow(?:ing)?\s+up|inspect(?:ing)?|investigat(?:e|ing)|look(?:ing)?(?:\s+into)?|map(?:ping)?|open(?:ing)?|read(?:ing)?|report(?:ing)?(?:\s+back)?|review(?:ing)?|run(?:ning)?|start(?:ing)?|test(?:ing)?|trace|trac(?:e|ing)|try(?:ing)?|update|verify(?:ing)?|work(?:ing)?)/i;
 
 const BARE_PROGRESS_ONLY_PATTERN =
   /^(?:analyz(?:e|ing)|checking|debugging|inspecting|investigating|looking\s+into|mapping|reading|reviewing|running|testing|tracing|verifying|working\s+on)\b/i;
@@ -26,18 +23,29 @@ function normalizeCompletionFailureReason(value: string | null | undefined): str
   return normalized.length <= 160 ? normalized : `${normalized.slice(0, 159)}...`;
 }
 
+function matchesProgressOnlyPrefix(value: string): boolean {
+  return PROGRESS_ONLY_PATTERN.test(value) || BARE_PROGRESS_ONLY_PATTERN.test(value);
+}
+
+function hasNonProgressFollowupSentence(value: string): boolean {
+  const boundary = /[.!?]\s+\S/.exec(value);
+  if (!boundary) {
+    return false;
+  }
+  const firstSentence = value.slice(0, boundary.index + 1).trim();
+  const rest = value.slice(boundary.index + 1).trim();
+  return matchesProgressOnlyPrefix(firstSentence) && !isProgressOnlyCompletionText(rest);
+}
+
 export function isProgressOnlyCompletionText(value: string | null | undefined): boolean {
   const normalized = normalizeCompletionText(value);
   if (!normalized) {
     return false;
   }
-  if (FINAL_DELIVERABLE_INDICATOR_PATTERN.test(normalized)) {
+  if (hasNonProgressFollowupSentence(normalized)) {
     return false;
   }
-  if (PROGRESS_ONLY_PATTERN.test(normalized)) {
-    return true;
-  }
-  return BARE_PROGRESS_ONLY_PATTERN.test(normalized);
+  return matchesProgressOnlyPrefix(normalized);
 }
 
 export function resolveRequiredCompletionTerminalResult(
@@ -53,7 +61,8 @@ export function resolveRequiredCompletionTerminalResult(
   if (isProgressOnlyCompletionText(normalized)) {
     return {
       terminalOutcome: "blocked",
-      terminalSummary: "Required completion ended with progress-only text, not a final deliverable.",
+      terminalSummary:
+        "Required completion ended with progress-only text, not a final deliverable.",
     };
   }
   return {};

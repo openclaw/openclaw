@@ -2745,7 +2745,7 @@ describe("AcpSessionManager", () => {
           yield {
             type: "text_delta" as const,
             stream: "output" as const,
-            text: "Fixed the crash and verified the regression tests pass.",
+            text: "The crash is a missing null check in src/foo.ts.",
           };
         })(),
         result: Promise.resolve({
@@ -2804,7 +2804,7 @@ describe("AcpSessionManager", () => {
         childSessionKey: "agent:codex:acp:child-1",
         status: "succeeded",
         progressSummary:
-          "I'll inspect the repo now. Fixed the crash and verified the regression tests pass.",
+          "I'll inspect the repo now. The crash is a missing null check in src/foo.ts.",
       });
       expect(record.terminalOutcome).toBeUndefined();
       expect(record.terminalSummary).toBeUndefined();
@@ -2884,7 +2884,8 @@ describe("AcpSessionManager", () => {
         status: "succeeded",
         progressSummary: "I'll inspect the repo now.",
         terminalOutcome: "blocked",
-        terminalSummary: "Required completion ended with progress-only text, not a final deliverable.",
+        terminalSummary:
+          "Required completion ended with progress-only text, not a final deliverable.",
       });
     });
   });
