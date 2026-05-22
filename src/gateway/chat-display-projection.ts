@@ -535,6 +535,7 @@ function hasNonEmptyValue(value: unknown): boolean {
 }
 
 function hasExplicitMessageToolRoute(args: Record<string, unknown>): boolean {
+  // Channel/provider select the transport; only concrete target ids move the send off-chat.
   const routeFields = [
     "target",
     "targets",
