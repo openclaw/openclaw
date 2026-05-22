@@ -113,6 +113,10 @@
       "destination": "/plugins/adding-capabilities"
     },
     {
+      "source": "/browserbase-search",
+      "destination": "/tools/browserbase-search"
+    },
+    {
       "source": "/brave-search",
       "destination": "/tools/brave-search"
     },
@@ -1295,6 +1299,7 @@
                     "pages": [
                       "tools/web-fetch",
                       "tools/web",
+                      "tools/browserbase-search",
                       "tools/brave-search",
                       "tools/duckduckgo-search",
                       "tools/exa-search",

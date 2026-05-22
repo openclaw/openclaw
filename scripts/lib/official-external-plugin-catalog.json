@@ -51,6 +51,39 @@
       }
     },
     {
+      "name": "@browserbasehq/openclaw-browserbase-search",
+      "description": "Browserbase Search web search provider plugin for OpenClaw",
+      "source": "official",
+      "kind": "plugin",
+      "openclaw": {
+        "plugin": {
+          "id": "browserbase-search",
+          "label": "Browserbase Search"
+        },
+        "webSearchProviders": [
+          {
+            "id": "browserbase-search",
+            "label": "Browserbase Search",
+            "hint": "Fast, token-efficient Browserbase Search results.",
+            "onboardingScopes": ["text-inference"],
+            "credentialLabel": "Browserbase API key",
+            "envVars": ["BROWSERBASE_API_KEY"],
+            "placeholder": "bb_...",
+            "signupUrl": "https://www.browserbase.com/",
+            "docsUrl": "https://docs.openclaw.ai/tools/browserbase-search",
+            "credentialPath": "plugins.entries.browserbase-search.config.webSearch.apiKey",
+            "autoDetectOrder": 68
+          }
+        ],
+        "install": {
+          "clawhubSpec": "clawhub:@browserbasehq/openclaw-browserbase-search",
+          "npmSpec": "@browserbasehq/openclaw-browserbase-search",
+          "defaultChoice": "clawhub",
+          "minHostVersion": ">=2026.5.21"
+        }
+      }
+    },
+    {
       "name": "@openclaw/diagnostics-otel",
       "description": "OpenClaw diagnostics OpenTelemetry exporter",
       "source": "official",

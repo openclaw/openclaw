@@ -57,6 +57,9 @@ local while `web_search` and `x_search` can use xAI Responses under the hood.
 ## Choosing a provider
 
 <CardGroup cols={2}>
+  <Card title="Browserbase Search" icon="globe" href="/tools/browserbase-search">
+    Fast, token-efficient structured results from Browserbase Search.
+  </Card>
   <Card title="Brave Search" icon="shield" href="/tools/brave-search">
     Structured results with snippets. Supports `llm-context` mode, country/language filters. Free tier available.
   </Card>
@@ -99,6 +102,7 @@ local while `web_search` and `x_search` can use xAI Responses under the hood.
 
 | Provider                                  | Result style                                                   | Filters                                          | API key                                                                                 |
 | ----------------------------------------- | -------------------------------------------------------------- | ------------------------------------------------ | --------------------------------------------------------------------------------------- |
+| [Browserbase Search](/tools/browserbase-search) | Structured snippets                                            | Result count                                     | `BROWSERBASE_API_KEY`                                                                   |
 | [Brave](/tools/brave-search)              | Structured snippets                                            | Country, language, time, `llm-context` mode      | `BRAVE_API_KEY`                                                                         |
 | [DuckDuckGo](/tools/duckduckgo-search)    | Structured snippets                                            | --                                               | None (key-free)                                                                         |
 | [Exa](/tools/exa-search)                  | Structured + extracted                                         | Neural/keyword mode, date, content extraction    | `EXA_API_KEY`                                                                           |
@@ -183,13 +187,14 @@ API-backed providers first:
 6. **Perplexity** -- `PERPLEXITY_API_KEY` / `OPENROUTER_API_KEY` or `plugins.entries.perplexity.config.webSearch.apiKey` (order 50)
 7. **Firecrawl** -- `FIRECRAWL_API_KEY` or `plugins.entries.firecrawl.config.webSearch.apiKey` (order 60)
 8. **Exa** -- `EXA_API_KEY` or `plugins.entries.exa.config.webSearch.apiKey`; optional `plugins.entries.exa.config.webSearch.baseUrl` overrides the Exa endpoint (order 65)
-9. **Tavily** -- `TAVILY_API_KEY` or `plugins.entries.tavily.config.webSearch.apiKey` (order 70)
+9. **Browserbase Search** -- `BROWSERBASE_API_KEY` or `plugins.entries.browserbase-search.config.webSearch.apiKey`; optional `plugins.entries.browserbase-search.config.webSearch.baseUrl` overrides the Browserbase endpoint (order 68)
+10. **Tavily** -- `TAVILY_API_KEY` or `plugins.entries.tavily.config.webSearch.apiKey` (order 70)
 
 Key-free fallbacks after that:
 
-10. **DuckDuckGo** -- key-free HTML fallback with no account or API key (order 100)
-11. **Ollama Web Search** -- key-free fallback via your configured local Ollama host when it is reachable and signed in with `ollama signin`; can reuse Ollama provider bearer auth when the host needs it, and can call direct `https://ollama.com` search when configured with `OLLAMA_API_KEY` (order 110)
-12. **SearXNG** -- `SEARXNG_BASE_URL` or `plugins.entries.searxng.config.webSearch.baseUrl` (order 200)
+11. **DuckDuckGo** -- key-free HTML fallback with no account or API key (order 100)
+12. **Ollama Web Search** -- key-free fallback via your configured local Ollama host when it is reachable and signed in with `ollama signin`; can reuse Ollama provider bearer auth when the host needs it, and can call direct `https://ollama.com` search when configured with `OLLAMA_API_KEY` (order 110)
+13. **SearXNG** -- `SEARXNG_BASE_URL` or `plugins.entries.searxng.config.webSearch.baseUrl` (order 200)
 
 If no provider is detected, it falls back to Brave (you will get a missing-key
 error prompting you to configure one).
@@ -457,5 +462,6 @@ If you use tool profiles or allowlists, add `web_search`, `x_search`, or `group:
 
 - [Web Fetch](/tools/web-fetch) -- fetch a URL and extract readable content
 - [Web Browser](/tools/browser) -- full browser automation for JS-heavy sites
+- [Browserbase Search](/tools/browserbase-search) -- Browserbase as the `web_search` provider
 - [Grok Search](/tools/grok-search) -- Grok as the `web_search` provider
 - [Ollama Web Search](/tools/ollama-search) -- key-free web search through your Ollama host
