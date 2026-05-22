@@ -166,6 +166,14 @@ describe("package acceptance workflow", () => {
     expect(workflow).toContain(
       'args+=(-f package_acceptance_package_spec="$PACKAGE_ACCEPTANCE_PACKAGE_SPEC")',
     );
+    expect(workflow).toContain("codex_plugin_spec:");
+    expect(workflow).toContain('args+=(-f codex_plugin_spec="$CODEX_PLUGIN_SPEC")');
+    expect(releaseChecksWorkflow).toContain(
+      'codex_plugin_spec="npm:@openclaw/codex@${BASH_REMATCH[1]}"',
+    );
+    expect(releaseChecksWorkflow).toContain(
+      "codex_plugin_spec: ${{ needs.resolve_target.outputs.codex_plugin_spec }}",
+    );
     expect(workflow).toContain("--json status,conclusion,url,attempt,headSha,jobs");
     expect(workflow).toContain(
       '[[ "$CHILD_WORKFLOW_REF" == release-ci/* && -n "${TARGET_SHA// }" && "$head_sha" != "$TARGET_SHA" ]]',
@@ -525,6 +533,9 @@ describe("package artifact reuse", () => {
     expect(scenarios).toMatch(/liveDockerScriptCommand\(\s*"test-live-cli-backend-docker\.sh"/u);
     expect(scenarios).toMatch(/liveDockerScriptCommand\(\s*"test-live-acp-bind-docker\.sh"/u);
     expect(scenarios).toMatch(/liveDockerScriptCommand\(\s*"test-live-codex-harness-docker\.sh"/u);
+    expect(scenarios).toMatch(
+      /liveDockerScriptCommand\(\s*"e2e\/codex-npm-plugin-live-docker\.sh"/u,
+    );
     expect(scenarios).toMatch(
       /liveDockerScriptCommand\(\s*"test-live-subagent-announce-docker\.sh"/u,
     );

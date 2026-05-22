@@ -1,11 +1,11 @@
 {
   "name": "@openclaw/xai-plugin",
-  "version": "2026.5.20",
+  "version": "2026.5.21",
   "private": true,
   "description": "OpenClaw xAI plugin",
   "type": "module",
   "dependencies": {
-    "@earendil-works/pi-ai": "0.75.3",
+    "@earendil-works/pi-ai": "0.75.4",
     "typebox": "1.1.38"
   },
   "devDependencies": {

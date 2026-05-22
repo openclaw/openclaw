@@ -88,6 +88,11 @@ on:
         required: false
         default: ""
         type: string
+      codex_plugin_spec:
+        description: Optional Codex plugin install spec for live Docker package checks; blank derives from release_package_spec or packs the selected ref
+        required: false
+        default: ""
+        type: string
       npm_telegram_provider_mode:
         description: Provider mode for the package Telegram E2E lane
         required: false
@@ -151,6 +156,7 @@ jobs:
           RELEASE_PACKAGE_SPEC: ${{ inputs.release_package_spec }}
           EVIDENCE_PACKAGE_SPEC: ${{ inputs.evidence_package_spec }}
           PACKAGE_ACCEPTANCE_PACKAGE_SPEC: ${{ inputs.package_acceptance_package_spec }}
+          CODEX_PLUGIN_SPEC: ${{ inputs.codex_plugin_spec }}
           RELEASE_PROFILE: ${{ inputs.release_profile }}
           RUN_RELEASE_SOAK: ${{ inputs.run_release_soak || inputs.release_profile == 'full' }}
           RERUN_GROUP: ${{ inputs.rerun_group }}
@@ -207,6 +213,9 @@ jobs:
               echo "- Package Acceptance package spec: \`${RELEASE_PACKAGE_SPEC}\`"
             else
               echo "- Package Acceptance package spec: SHA-built release artifact"
+            fi
+            if [[ -n "${CODEX_PLUGIN_SPEC// }" ]]; then
+              echo "- Codex plugin spec: \`${CODEX_PLUGIN_SPEC}\`"
             fi
           } >> "$GITHUB_STEP_SUMMARY"
 
@@ -463,6 +472,7 @@ jobs:
           CROSS_OS_SUITE_FILTER: ${{ inputs.cross_os_suite_filter }}
           RELEASE_PACKAGE_SPEC: ${{ inputs.release_package_spec }}
           PACKAGE_ACCEPTANCE_PACKAGE_SPEC: ${{ inputs.package_acceptance_package_spec }}
+          CODEX_PLUGIN_SPEC: ${{ inputs.codex_plugin_spec }}
         run: |
           set -euo pipefail
 
@@ -558,6 +568,9 @@ jobs:
             if [[ -n "${PACKAGE_ACCEPTANCE_PACKAGE_SPEC// }" ]]; then
               echo "- Package Acceptance package spec: \`${PACKAGE_ACCEPTANCE_PACKAGE_SPEC}\`"
             fi
+            if [[ -n "${CODEX_PLUGIN_SPEC// }" ]]; then
+              echo "- Codex plugin spec: \`${CODEX_PLUGIN_SPEC}\`"
+            fi
           } >> "$GITHUB_STEP_SUMMARY"
 
           child_rerun_group="$RERUN_GROUP"
@@ -585,6 +598,9 @@ jobs:
           fi
           if [[ -n "${PACKAGE_ACCEPTANCE_PACKAGE_SPEC// }" ]]; then
             args+=(-f package_acceptance_package_spec="$PACKAGE_ACCEPTANCE_PACKAGE_SPEC")
+          fi
+          if [[ -n "${CODEX_PLUGIN_SPEC// }" ]]; then
+            args+=(-f codex_plugin_spec="$CODEX_PLUGIN_SPEC")
           fi
 
           dispatch_and_wait openclaw-release-checks.yml "${args[@]}"
@@ -1046,9 +1062,17 @@ jobs:
             exit 0
           fi
 
+          evidence_package_spec="$PACKAGE_SPEC"
+          if [[ -z "${evidence_package_spec// }" ]]; then
+            tag_ref="${TARGET_REF#refs/tags/}"
+            if [[ "$tag_ref" =~ ^v([0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*((-(alpha|beta)\.[1-9][0-9]*)|(-[1-9][0-9]*))?)$ ]]; then
+              evidence_package_spec="openclaw@${BASH_REMATCH[1]}"
+            fi
+          fi
+
           release_id="${TARGET_REF#refs/tags/}"
           release_id="${release_id#v}"
-          if [[ "$PACKAGE_SPEC" =~ ^openclaw@(.+)$ ]]; then
+          if [[ "$evidence_package_spec" =~ ^openclaw@(.+)$ ]]; then
             release_id="${BASH_REMATCH[1]}"
           fi
           release_id="$(printf '%s' "$release_id" | tr '/:@ ' '----' | tr -cd 'A-Za-z0-9._-')"
@@ -1062,7 +1086,7 @@ jobs:
               --arg full_validation_run_id "$GITHUB_RUN_ID_VALUE" \
               --arg release_id "$release_id" \
               --arg release_ref "$TARGET_REF" \
-              --arg package_spec "$PACKAGE_SPEC" \
+              --arg package_spec "$evidence_package_spec" \
               --arg notes "Automatically requested by Full Release Validation ${GITHUB_RUN_ID_VALUE} after child workflows completed; the parent summary re-checks current child run conclusions." \
               '{
                 event_type: "openclaw_full_release_validation_completed",
@@ -1084,6 +1108,15 @@ jobs:
             https://api.github.com/repos/openclaw/releases-private/dispatches \
             -d "$payload"; then
             echo "::warning::Automatic private release evidence dispatch failed; child workflow validation remains authoritative."
+            {
+              echo "### Private release evidence dispatch failed"
+              echo
+              echo "Child workflow validation remains authoritative. Backfill durable evidence from \`openclaw/releases-private\`:"
+              echo
+              echo "\`\`\`bash"
+              echo "gh workflow run openclaw-release-evidence-from-full-validation.yml --repo openclaw/releases-private --ref main -f full_validation_run_id=${GITHUB_RUN_ID_VALUE} -f release_id=${release_id} -f release_ref=${TARGET_REF} -f package_spec=${evidence_package_spec}"
+              echo "\`\`\`"
+            } >> "$GITHUB_STEP_SUMMARY"
           fi
 
       - name: Write release validation manifest
