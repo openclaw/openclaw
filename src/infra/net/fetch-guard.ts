@@ -427,7 +427,11 @@ function rewriteRedirectInitForCrossOrigin(params: {
 export { fetchWithRuntimeDispatcher } from "./runtime-fetch.js";
 
 export async function fetchWithSsrFGuard(params: GuardedFetchOptions): Promise<GuardedFetchResult> {
-  return await fetchWithSsrFGuardInternal(params);
+  const { managedProxyBypass: _ignoredManagedProxyBypass, ...publicParams } =
+    params as GuardedFetchOptions & {
+      managedProxyBypass?: unknown;
+    };
+  return await fetchWithSsrFGuardInternal(publicParams);
 }
 
 export async function fetchConfiguredLocalOriginWithSsrFGuard({
