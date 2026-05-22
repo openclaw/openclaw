@@ -1,6 +1,5 @@
 import { isMessagingToolDuplicate } from "../../agents/pi-embedded-helpers.js";
 import type { MessagingToolSend } from "../../agents/pi-embedded-messaging.types.js";
-import { getChannelPlugin } from "../../channels/plugins/index.js";
 import { getLoadedChannelPluginForRead } from "../../channels/plugins/registry-loaded-read.js";
 import { normalizeAnyChannelId } from "../../channels/registry.js";
 import {
@@ -148,10 +147,34 @@ function parseExplicitRouteTargetForDedupe(provider: string, rawTarget?: string)
   if (!raw) {
     return null;
   }
-  const plugin =
-    getLoadedChannelPluginForRead(provider)?.messaging?.parseExplicitTarget ??
-    getChannelPlugin(provider)?.messaging?.parseExplicitTarget;
-  return plugin?.({ raw }) ?? null;
+  const plugin = getLoadedChannelPluginForRead(provider)?.messaging?.parseExplicitTarget;
+  return plugin?.({ raw }) ?? parseInternalRouteTargetForDedupe(provider, raw);
+}
+
+function parseInternalRouteTargetForDedupe(provider: string, rawTarget: string) {
+  const normalizedProvider = normalizeProviderForComparison(provider);
+  let target = rawTarget.trim();
+  if (!normalizedProvider || !target) {
+    return null;
+  }
+
+  const providerPrefix = `${normalizedProvider}:`;
+  if (normalizeLowercaseStringOrEmpty(target).startsWith(providerPrefix)) {
+    target = target.slice(providerPrefix.length).trim();
+  }
+  const routePrefix = /^(?:group|direct|dm|channel):/iu.exec(target);
+  if (routePrefix) {
+    target = target.slice(routePrefix[0].length).trim();
+  }
+
+  const threadMatch = /^(.*?):(?:topic|thread|reply):([^:]+)$/iu.exec(target);
+  if (threadMatch?.[1] && threadMatch[2]) {
+    return {
+      to: threadMatch[1],
+      threadId: threadMatch[2],
+    };
+  }
+  return target === rawTarget ? null : { to: target };
 }
 
 function resolveTargetProviderForComparison(params: {
@@ -197,7 +220,8 @@ function targetsMatchForDedupe(params: {
   targetThreadId?: unknown;
   requireThreadSpecificMatch?: boolean;
 }): boolean {
-  const pluginMatch = getChannelPlugin(params.provider)?.outbound?.targetsMatchForReplySuppression;
+  const pluginMatch = getLoadedChannelPluginForRead(params.provider)?.outbound
+    ?.targetsMatchForReplySuppression;
   if (pluginMatch) {
     const matchWithThread = pluginMatch({
       originTarget: params.originTarget,
