@@ -1441,6 +1441,8 @@
     "deps:patches:check": "node scripts/check-package-patches.mjs",
     "deps:pins:check": "node scripts/check-dependency-pins.mjs",
     "deps:shrinkwrap:check": "node scripts/generate-npm-shrinkwrap.mjs --all --check",
+    "deps:shrinkwrap:changed:check": "node scripts/generate-npm-shrinkwrap.mjs --changed --check",
+    "deps:shrinkwrap:changed:generate": "node scripts/generate-npm-shrinkwrap.mjs --changed",
     "deps:shrinkwrap:generate": "node scripts/generate-npm-shrinkwrap.mjs --all",
     "deps:shrinkwrap:root:check": "node scripts/generate-npm-shrinkwrap.mjs --check",
     "deps:shrinkwrap:root:generate": "node scripts/generate-npm-shrinkwrap.mjs",

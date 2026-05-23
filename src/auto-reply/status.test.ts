@@ -1435,7 +1435,7 @@ describe("buildStatusMessage", () => {
       config: {
         models: {
           providers: {
-            claudecli: {
+            "claude-cli": {
               models: [
                 {
                   id: "claude-opus-4-6",
