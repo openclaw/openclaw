@@ -750,6 +750,22 @@ export async function acquireSessionWriteLock(params: {
   const normalizedSessionFile = await resolveNormalizedSessionFile(sessionFile);
   const lockPath = `${normalizedSessionFile}.lock`;
   await fs.mkdir(sessionDir, { recursive: true });
+
+  // Fast path: if a lock file exists but its owner PID is dead,
+  // remove it immediately before entering the retry loop.
+  // This saves up to timeoutMs of futile waiting for a dead process.
+  // The shouldReclaim callback in acquire() already handles this case,
+  // but only after the retry loop iterates — this avoids that delay.
+  try {
+    const fastPayload = await readLockPayload(lockPath);
+    if (fastPayload?.pid != null && !isPidAlive(fastPayload.pid)) {
+      await fs.unlink(lockPath).catch(() => {});
+    }
+  } catch {
+    // Best-effort: if read/delete fails, the retry loop's shouldReclaim
+    // will clean up the stale lock during acquisition.
+  }
+
   while (true) {
     try {
       const lock = await SESSION_LOCKS.acquire(sessionFile, {
