@@ -51,6 +51,7 @@ import { throwIfAborted } from "./abort.js";
 import { resolveOutboundChannelPlugin } from "./channel-resolution.js";
 import {
   listConfiguredMessageChannels,
+  resolveMessageAccountSelection,
   resolveMessageChannelSelection,
 } from "./channel-selection.js";
 import type { OutboundSendDeps } from "./deliver.js";
@@ -1280,6 +1281,14 @@ export async function runMessageAction(
       args: params,
       agentId: resolvedAgentId,
     });
+  }
+  if (!accountId) {
+    accountId = (
+      await resolveMessageAccountSelection({
+        cfg,
+        channel,
+      })
+    ).accountId;
   }
   if (accountId) {
     params.accountId = accountId;

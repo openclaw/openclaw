@@ -17,7 +17,9 @@ host configuration.
 - **AccountId**: per-channel account instance (when supported).
 - Optional channel default account: `channels.<channel>.defaultAccount` chooses
   which account is used when an outbound path does not specify `accountId`.
-  - In multi-account setups, set an explicit default (`defaultAccount` or `accounts.default`) when two or more accounts are configured. Without it, fallback routing may pick the first normalized account ID.
+  - If no default account is enabled and exactly one configured account is
+    enabled, outbound message actions use that single account automatically.
+  - In multi-account setups, set an explicit default (`defaultAccount` or `accounts.default`) when two or more accounts are configured. Without it, outbound message actions require an explicit `accountId` when multiple enabled accounts are available.
 - **AgentId**: an isolated workspace + session store ("brain").
 - **SessionKey**: the bucket key used to store context and control concurrency.
 

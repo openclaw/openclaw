@@ -1755,5 +1755,82 @@ describe("runMessageAction plugin dispatch", () => {
       expect(ctx.accountId).toBe(expectedAccountId);
       expect(ctx.params.accountId).toBe(expectedAccountId);
     });
+
+    it("auto-selects the only enabled configured account when no account id is provided", async () => {
+      const autoSelectPlugin: ChannelPlugin = {
+        ...accountPlugin,
+        config: {
+          listAccountIds: () => ["default", "xiaomi"],
+          defaultAccountId: () => "default",
+          resolveAccount: (_cfg, accountId) => ({
+            accountId,
+            enabled: accountId !== "default",
+            configured: true,
+          }),
+          isConfigured: (account) => (account as { configured?: boolean }).configured === true,
+        },
+      };
+      setActivePluginRegistry(
+        createTestRegistry([
+          {
+            pluginId: "accountchat",
+            source: "test",
+            plugin: autoSelectPlugin,
+          },
+        ]),
+      );
+
+      await runMessageAction({
+        cfg: {} as OpenClawConfig,
+        action: "send",
+        params: {
+          channel: "accountchat",
+          target: "channel:123",
+          message: "hi",
+        },
+      });
+
+      const ctx = readFirstPluginCall(handleAction) as {
+        accountId?: string | null;
+        params: Record<string, unknown>;
+      };
+      expect(ctx.accountId).toBe("xiaomi");
+      expect(ctx.params.accountId).toBe("xiaomi");
+    });
+
+    it("does not dispatch when omitted account id matches multiple enabled configured accounts", async () => {
+      const multiAccountPlugin: ChannelPlugin = {
+        ...accountPlugin,
+        config: {
+          listAccountIds: () => ["work", "personal"],
+          resolveAccount: (_cfg, accountId) => ({ accountId, enabled: true }),
+        },
+      };
+      setActivePluginRegistry(
+        createTestRegistry([
+          {
+            pluginId: "accountchat",
+            source: "test",
+            plugin: multiAccountPlugin,
+          },
+        ]),
+      );
+
+      await expect(
+        runMessageAction({
+          cfg: {} as OpenClawConfig,
+          action: "send",
+          params: {
+            channel: "accountchat",
+            target: "channel:123",
+            message: "hi",
+          },
+        }),
+      ).rejects.toThrow(
+        "Account is required for channel accountchat because multiple enabled configured accounts are available: work, personal.",
+      );
+
+      expect(handleAction).not.toHaveBeenCalled();
+    });
   });
 });
