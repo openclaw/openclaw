@@ -1420,13 +1420,7 @@ describe("dispatchReplyFromConfig", () => {
       return undefined;
     };
 
-    await dispatchReplyFromConfig({
-      ctx,
-      cfg,
-      dispatcher,
-      replyResolver,
-      replyOptions: { suppressDefaultToolProgressMessages: true },
-    });
+    await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
 
     const normalizerOptions = replyMediaPathMocks.createReplyMediaPathNormalizer.mock
       .calls[0]?.[0] as { cfg?: unknown; messageProvider?: unknown } | undefined;
@@ -1531,7 +1525,35 @@ describe("dispatchReplyFromConfig", () => {
     expect(dispatcher.sendFinalReply).toHaveBeenCalledTimes(1);
   });
 
-  it("allows group tool summaries when session verbose is enabled despite preview suppression", async () => {
+  it("keeps group tool summaries suppressed when the channel omits the quiet-default flag", async () => {
+    setNoAbort();
+    const cfg = automaticGroupReplyConfig;
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "whatsapp",
+      Surface: "whatsapp",
+      ChatType: "group",
+      From: "whatsapp:group:123@g.us",
+      SessionKey: "agent:main:whatsapp:group:123@g.us",
+    });
+
+    const replyResolver = async (
+      _ctx: MsgContext,
+      opts?: GetReplyOptions,
+      _cfg?: OpenClawConfig,
+    ) => {
+      const onToolResult = requireToolResultHandler(opts?.onToolResult);
+      await onToolResult({ text: "🔧 exec: ls" });
+      return { text: "hi" } satisfies ReplyPayload;
+    };
+
+    await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
+
+    expect(dispatcher.sendToolResult).not.toHaveBeenCalled();
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledTimes(1);
+  });
+
+  it("allows group tool summaries when session verbose is enabled without a channel quiet-default flag", async () => {
     setNoAbort();
     sessionStoreMocks.currentEntry = {
       verboseLevel: "on",
@@ -1556,13 +1578,7 @@ describe("dispatchReplyFromConfig", () => {
       return { text: "hi" } satisfies ReplyPayload;
     };
 
-    await dispatchReplyFromConfig({
-      ctx,
-      cfg,
-      dispatcher,
-      replyResolver,
-      replyOptions: { suppressDefaultToolProgressMessages: true },
-    });
+    await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
 
     expect(dispatcher.sendToolResult).toHaveBeenCalledTimes(1);
     expect(firstToolResultPayload(dispatcher)?.text).toBe("🔧 exec: ls");
@@ -1597,13 +1613,7 @@ describe("dispatchReplyFromConfig", () => {
       return { text: "hi" } satisfies ReplyPayload;
     };
 
-    await dispatchReplyFromConfig({
-      ctx,
-      cfg,
-      dispatcher,
-      replyResolver,
-      replyOptions: { suppressDefaultToolProgressMessages: true },
-    });
+    await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
 
     expect(dispatcher.sendToolResult).toHaveBeenCalledTimes(1);
     expect(firstToolResultPayload(dispatcher)?.text).toBe("🔧 exec: pwd");
@@ -1895,9 +1905,16 @@ describe("dispatchReplyFromConfig", () => {
     expect(dispatcher.sendFinalReply).toHaveBeenCalledWith({ text: "done" });
   });
 
-  it("delivers tool summaries in forum topic sessions (group + IsForum)", async () => {
+  it("delivers tool summaries in forum topic sessions when verbose is enabled", async () => {
     setNoAbort();
-    const cfg = automaticGroupReplyConfig;
+    const cfg = {
+      ...automaticGroupReplyConfig,
+      agents: {
+        defaults: {
+          verboseDefault: "on",
+        },
+      },
+    } satisfies OpenClawConfig;
     const dispatcher = createDispatcher();
     const ctx = buildTestCtx({
       Provider: "telegram",
@@ -4093,7 +4110,14 @@ describe("dispatchReplyFromConfig", () => {
 
   it("forwards non-answer progress callbacks when source replies are suppressed", async () => {
     setNoAbort();
-    const cfg = { diagnostics: { enabled: true } } as OpenClawConfig;
+    const cfg = {
+      diagnostics: { enabled: true },
+      agents: {
+        defaults: {
+          verboseDefault: "on",
+        },
+      },
+    } satisfies OpenClawConfig;
     const dispatcher = createDispatcher();
     const ctx = buildTestCtx({
       Provider: "discord",
