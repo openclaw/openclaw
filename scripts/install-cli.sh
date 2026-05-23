@@ -31,7 +31,7 @@ ensure_home_env
 
 PREFIX="${OPENCLAW_PREFIX:-${HOME}/.openclaw}"
 OPENCLAW_VERSION="${OPENCLAW_VERSION:-latest}"
-NODE_VERSION="${OPENCLAW_NODE_VERSION:-22.22.0}"
+NODE_VERSION="${OPENCLAW_NODE_VERSION:-24.15.0}"
 SHARP_IGNORE_GLOBAL_LIBVIPS="${SHARP_IGNORE_GLOBAL_LIBVIPS:-1}"
 NPM_LOGLEVEL="${OPENCLAW_NPM_LOGLEVEL:-error}"
 INSTALL_METHOD="${OPENCLAW_INSTALL_METHOD:-npm}"
@@ -52,7 +52,7 @@ Usage: install-cli.sh [options]
   --git, --github                     Shortcut for --install-method git
   --git-dir, --dir <path>             Checkout directory (default: ~/openclaw)
   --version <ver>                     OpenClaw version (default: latest)
-  --node-version <ver>                Node version (default: 22.22.0)
+  --node-version <ver>                Node version (default: 24.15.0)
   --onboard                           Run "openclaw onboard" after install
   --no-onboard                        Skip onboarding (default)
   --set-npm-prefix                    Force npm prefix to ~/.npm-global if current prefix is not writable (Linux)
