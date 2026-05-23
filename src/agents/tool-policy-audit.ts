@@ -169,10 +169,11 @@ export function auditToolPolicyFilter(params: {
     }
     const rule = sanitizeAuditField(labelForRuleKind(params.stepLabel, ruleKind));
     const { toolNames, truncated } = boundedToolNames(removed);
+    const matchedRuleSourceTools = removed.slice(0, MAX_AUDIT_TOOL_NAMES);
     const matchedRules = matchedPolicyRules({
       policy: params.policy,
       ruleKind,
-      tools: removed,
+      tools: matchedRuleSourceTools,
     });
     const matchedRuleSuffix = matchedRules.length > 0 ? `; matched ${matchedRules.join(", ")}` : "";
     toolPolicyAuditLogger.info(
@@ -180,7 +181,12 @@ export function auditToolPolicyFilter(params: {
       {
         rule,
         ruleKind,
-        ...(matchedRules.length > 0 ? { matchedRules } : {}),
+        ...(matchedRules.length > 0
+          ? {
+              matchedRules,
+              ...(truncated ? { matchedRulesTruncated: true } : {}),
+            }
+          : {}),
         removedToolCount: removed.length,
         removedTools: toolNames,
         removedToolsTruncated: truncated,
