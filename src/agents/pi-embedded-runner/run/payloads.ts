@@ -152,13 +152,16 @@ function resolveToolErrorWarningPolicy(params: {
   verboseLevel?: VerboseLevel;
 }): ToolErrorWarningPolicy {
   const normalizedToolName = normalizeOptionalLowercaseString(params.lastToolError.toolName) ?? "";
-  const toolErrorWarningOverride =
-    typeof params.suppressToolErrorWarnings === "function"
-      ? params.suppressToolErrorWarnings()
-      : params.suppressToolErrorWarnings;
+  const hasDynamicToolErrorWarningOverride = typeof params.suppressToolErrorWarnings === "function";
+  const toolErrorWarningOverride = hasDynamicToolErrorWarningOverride
+    ? params.suppressToolErrorWarnings?.()
+    : params.suppressToolErrorWarnings;
   const includeDetails = shouldIncludeToolErrorDetails({
     ...params,
-    verboseLevel: toolErrorWarningOverride === false ? "off" : params.verboseLevel,
+    verboseLevel:
+      hasDynamicToolErrorWarningOverride && toolErrorWarningOverride === false
+        ? "off"
+        : params.verboseLevel,
   });
   const suppressToolErrorWarnings = toolErrorWarningOverride === true;
   if (suppressToolErrorWarnings) {

@@ -489,6 +489,19 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
     });
   });
 
+  it("preserves full-verbose tool error details with static suppression disabled", () => {
+    const payloads = buildPayloads({
+      lastToolError: { toolName: "write", error: "permission denied" },
+      suppressToolErrorWarnings: false,
+      verboseLevel: "full",
+    });
+
+    expectSingleToolErrorPayload(payloads, {
+      title: "Write",
+      detail: "permission denied",
+    });
+  });
+
   it("keeps non-exec mutating tool failures visible", () => {
     const payloads = buildPayloads({
       lastToolError: { toolName: "write", error: "permission denied" },
