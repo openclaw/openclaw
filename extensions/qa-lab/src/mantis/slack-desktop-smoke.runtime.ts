@@ -1092,6 +1092,9 @@ if [ "$qa_status" -ne 0 ]; then
   find "$out" -maxdepth 3 -type f -printf "%p %s bytes\\n" | sort || true
   for diagnostic_file in \
     "$out/slack-desktop-command.log" \
+    "$out/slack-qa/slack-qa-report.md" \
+    "$out/slack-qa/slack-qa-summary.json" \
+    "$out/slack-qa/slack-qa-observed-messages.json" \
     "$out/remote-command-timeout.txt" \
     "$out/approval-checkpoint-watcher.log" \
     "$out/chrome.log" \

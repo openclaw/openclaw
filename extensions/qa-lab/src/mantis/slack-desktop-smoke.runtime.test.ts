@@ -219,6 +219,9 @@ describe("mantis Slack desktop smoke runtime", () => {
     expect(remoteScript).toContain("MANTIS_REMOTE_HEARTBEAT");
     expect(remoteScript).toContain("qa_status=$?");
     expect(remoteScript).toContain("MANTIS_REMOTE_FAILURE_DIAGNOSTICS_BEGIN");
+    expect(remoteScript).toContain("$out/slack-qa/slack-qa-report.md");
+    expect(remoteScript).toContain("$out/slack-qa/slack-qa-summary.json");
+    expect(remoteScript).toContain("$out/slack-qa/slack-qa-observed-messages.json");
     expect(remoteScript).toContain('tail -n 200 "$diagnostic_file"');
     expect(remoteScript).toContain("Slack desktop screenshot is missing or empty");
     expect(remoteScript).not.toContain('test -s "$out/slack-desktop-smoke.png"');
