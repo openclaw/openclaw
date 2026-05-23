@@ -1493,11 +1493,8 @@ export async function dispatchReplyFromConfig(
     // so /stop can abort pre-run and in-run stalls through the same session lane.
     ensureDispatchReplyOperation();
 
-    const chatType = normalizeChatType(ctx.ChatType);
     const suppressDefaultToolProgressMessages =
-      params.replyOptions?.suppressDefaultToolProgressMessages === true ||
-      chatType === "group" ||
-      chatType === "channel";
+      params.replyOptions?.suppressDefaultToolProgressMessages !== false;
     const shouldSuppressDefaultToolProgressMessages = () =>
       suppressDefaultToolProgressMessages && !shouldEmitVerboseProgress();
     const shouldSendVerboseProgressMessages = () => !shouldSuppressDefaultToolProgressMessages();

@@ -393,7 +393,7 @@ export function createFollowupRunner(params: {
       }
       const shouldEmitVerboseProgress = () => run.verboseLevel !== "off";
       const shouldSuppressDefaultToolProgressMessages = () =>
-        opts?.suppressDefaultToolProgressMessages === true && !shouldEmitVerboseProgress();
+        opts?.suppressDefaultToolProgressMessages !== false && !shouldEmitVerboseProgress();
       const shouldEmitToolResultProgress = () =>
         shouldEmitVerboseProgress() && !shouldSuppressDefaultToolProgressMessages();
       const shouldEmitToolOutputProgress = () =>

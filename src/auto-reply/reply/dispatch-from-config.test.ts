@@ -1437,7 +1437,10 @@ describe("dispatchReplyFromConfig", () => {
   it("provides onToolResult in DM sessions", async () => {
     setNoAbort();
     mocks.routeReply.mockClear();
-    const cfg = emptyConfig;
+    const cfg = {
+      ...emptyConfig,
+      agents: { defaults: { verboseDefault: "on" } },
+    } satisfies OpenClawConfig;
     const dispatcher = createDispatcher();
     const ctx = buildTestCtx({
       Provider: "telegram",
@@ -1985,7 +1988,10 @@ describe("dispatchReplyFromConfig", () => {
 
   it("sends tool results via dispatcher in DM sessions", async () => {
     setNoAbort();
-    const cfg = emptyConfig;
+    const cfg = {
+      ...emptyConfig,
+      agents: { defaults: { verboseDefault: "on" } },
+    } satisfies OpenClawConfig;
     const dispatcher = createDispatcher();
     const ctx = buildTestCtx({
       Provider: "telegram",
@@ -2009,7 +2015,10 @@ describe("dispatchReplyFromConfig", () => {
 
   it("delivers native tool summaries and tool media", async () => {
     setNoAbort();
-    const cfg = emptyConfig;
+    const cfg = {
+      ...emptyConfig,
+      agents: { defaults: { verboseDefault: "on" } },
+    } satisfies OpenClawConfig;
     const dispatcher = createDispatcher();
     const ctx = buildTestCtx({
       Provider: "telegram",
@@ -2115,6 +2124,10 @@ describe("dispatchReplyFromConfig", () => {
 
   it("sends only one plan status notice per reply run", async () => {
     setNoAbort();
+    const cfg = {
+      ...emptyConfig,
+      agents: { defaults: { verboseDefault: "on" } },
+    } satisfies OpenClawConfig;
     const dispatcher = createDispatcher();
     const ctx = buildTestCtx({
       Provider: "telegram",
@@ -2137,7 +2150,7 @@ describe("dispatchReplyFromConfig", () => {
       return { text: "done" } satisfies ReplyPayload;
     };
 
-    await dispatchReplyFromConfig({ ctx, cfg: emptyConfig, dispatcher, replyResolver });
+    await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
 
     expect(dispatcher.sendToolResult).toHaveBeenCalledTimes(1);
     expect(firstToolResultPayload(dispatcher)).toMatchObject({
@@ -2230,7 +2243,7 @@ describe("dispatchReplyFromConfig", () => {
     expect(dispatcher.sendFinalReply).toHaveBeenCalledWith({ text: "done" });
   });
 
-  it("keeps plan notices when session verbose is off but suppresses working statuses", async () => {
+  it("suppresses plan notices when session verbose is off", async () => {
     setNoAbort();
     sessionStoreMocks.currentEntry = {
       verboseLevel: "off",
@@ -2275,20 +2288,16 @@ describe("dispatchReplyFromConfig", () => {
 
     await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
 
-    expect(firstToolResultPayload(dispatcher)).toMatchObject({
-      text: "1. Inspect code\n2. Patch code\n3. Run tests",
-      isStatusNotice: true,
-    });
-    expect(dispatcher.sendToolResult).toHaveBeenCalledTimes(1);
+    expect(dispatcher.sendToolResult).not.toHaveBeenCalled();
     expect(dispatcher.sendFinalReply).toHaveBeenCalledWith({ text: "done" });
   });
 
   it("refreshes verbose progress with session entry snapshots", async () => {
     setNoAbort();
     sessionStoreMocks.currentEntry = {
-      verboseLevel: "on",
+      verboseLevel: "off",
     };
-    sessionStoreMocks.readSessionEntry.mockReturnValue({ verboseLevel: "off" });
+    sessionStoreMocks.readSessionEntry.mockReturnValue({ verboseLevel: "on" });
     const cfg = {
       ...emptyConfig,
       agents: {
@@ -2559,7 +2568,7 @@ describe("dispatchReplyFromConfig", () => {
       replyResolver,
     });
 
-    expect(receivedOptions?.suppressToolErrorWarnings).toBe(true);
+    expect(receivedOptions?.suppressToolErrorWarnings).toBeUndefined();
     expect(receivedOptions?.shouldSuppressToolErrorWarnings?.()).toBe(true);
     expect(dispatcher.sendFinalReply).toHaveBeenCalledWith({ text: "done" });
   });
