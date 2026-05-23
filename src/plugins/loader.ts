@@ -246,7 +246,12 @@ function resolveDreamingSidecarEngineId(params: {
     pluginConfig: resolveMemoryDreamingPluginConfig(params.cfg),
     cfg: params.cfg,
   });
-  return dreamingConfig.enabled ? DEFAULT_MEMORY_DREAMING_PLUGIN_ID : null;
+  if (!dreamingConfig.enabled) return null;
+  // Check if a non-memory-core plugin registered a dreaming provider
+  const { getMemoryCapabilityRegistration } = await import("./memory-state.js");
+  const cap = getMemoryCapabilityRegistration();
+  if (cap?.capability.dreaming) return normalizedMemorySlot;
+  return DEFAULT_MEMORY_DREAMING_PLUGIN_ID;
 }
 
 export class PluginLoadFailureError extends Error {
