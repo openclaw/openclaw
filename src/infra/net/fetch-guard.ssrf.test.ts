@@ -1458,6 +1458,41 @@ describe("fetchWithSsrFGuard hardening", () => {
     await result.release();
   });
 
+  it("keeps origin/baseUrl mismatches on the managed proxy path before the first request", async () => {
+    clearProxyEnv();
+    vi.stubEnv("OPENCLAW_PROXY_ACTIVE", "1");
+    vi.stubEnv("OPENCLAW_PROXY_LOOPBACK_MODE", "gateway-only");
+    vi.stubEnv("http_proxy", "http://127.0.0.1:7890");
+    (globalThis as Record<string, unknown>)[TEST_UNDICI_RUNTIME_DEPS_KEY] = {
+      Agent: agentCtor,
+      EnvHttpProxyAgent: envHttpProxyAgentCtor,
+      ProxyAgent: proxyAgentCtor,
+      fetch: vi.fn(async () => okResponse()),
+    };
+    const fetchImpl = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      const requestInit = init as RequestInit & { dispatcher?: unknown };
+      expectDispatcherAttached(requestInit.dispatcher);
+      return okResponse();
+    });
+
+    const result = await fetchConfiguredLocalOriginWithSsrFGuard({
+      url: "http://127.0.0.1:11435/api/embed",
+      fetchImpl,
+      lookupFn: createLoopbackLookup(),
+      policy: {
+        allowedOrigins: ["http://127.0.0.1:11434", "http://127.0.0.1:11435"],
+        allowPrivateNetwork: true,
+      },
+      configuredLocalOriginBaseUrl: "http://127.0.0.1:11434",
+    });
+
+    expect(result.finalUrl).toBe("http://127.0.0.1:11435/api/embed");
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    expect(envHttpProxyAgentCtor).toHaveBeenCalledTimes(1);
+    expect(agentCtor).not.toHaveBeenCalled();
+    await result.release();
+  });
+
   it("does not carry managed-proxy direct routing across redirects to another loopback port", async () => {
     clearProxyEnv();
     vi.stubEnv("OPENCLAW_PROXY_ACTIVE", "1");
@@ -1705,14 +1740,14 @@ describe("fetchWithSsrFGuard hardening", () => {
         lookupFn: createLoopbackLookup(),
         policy: { allowedOrigins: ["http://127.0.0.1:11434"] },
         configuredLocalOriginBaseUrl: "http://127.0.0.1:11434",
-        auditContext: "ollama-embedding",
+        auditContext: "ollama-memory-embedding",
       }),
     ).rejects.toThrow("blocked by proxy.loopbackMode");
     expect(fetchImpl).not.toHaveBeenCalled();
     expect(logWarnMock).toHaveBeenCalledTimes(1);
     const [warning] = firstMockCall(logWarnMock) as [string];
     expect(warning).toContain(
-      "security: blocked URL fetch (ollama-embedding) targetOrigin=http://127.0.0.1:11434",
+      "security: blocked URL fetch (ollama-memory-embedding) targetOrigin=http://127.0.0.1:11434",
     );
     expect(warning).toContain("blocked by proxy.loopbackMode");
   });
@@ -1737,14 +1772,14 @@ describe("fetchWithSsrFGuard hardening", () => {
         lookupFn: createLoopbackLookup(),
         policy: { allowedOrigins: ["http://localhost:11434"] },
         configuredLocalOriginBaseUrl: "http://localhost:11434",
-        auditContext: "ollama-embedding",
+        auditContext: "ollama-memory-embedding",
       }),
     ).rejects.toThrow("blocked by proxy.loopbackMode");
     expect(fetchImpl).not.toHaveBeenCalled();
     expect(logWarnMock).toHaveBeenCalledTimes(1);
     const [warning] = firstMockCall(logWarnMock) as [string];
     expect(warning).toContain(
-      "security: blocked URL fetch (ollama-embedding) targetOrigin=http://localhost:11434",
+      "security: blocked URL fetch (ollama-memory-embedding) targetOrigin=http://localhost:11434",
     );
     expect(warning).toContain("blocked by proxy.loopbackMode");
   });
@@ -1769,14 +1804,14 @@ describe("fetchWithSsrFGuard hardening", () => {
         lookupFn: createIpv6LoopbackLookup(),
         policy: { allowedOrigins: ["http://[::1]:11434"] },
         configuredLocalOriginBaseUrl: "http://[::1]:11434",
-        auditContext: "ollama-embedding",
+        auditContext: "ollama-memory-embedding",
       }),
     ).rejects.toThrow("blocked by proxy.loopbackMode");
     expect(fetchImpl).not.toHaveBeenCalled();
     expect(logWarnMock).toHaveBeenCalledTimes(1);
     const [warning] = firstMockCall(logWarnMock) as [string];
     expect(warning).toContain(
-      "security: blocked URL fetch (ollama-embedding) targetOrigin=http://[::1]:11434",
+      "security: blocked URL fetch (ollama-memory-embedding) targetOrigin=http://[::1]:11434",
     );
     expect(warning).toContain("blocked by proxy.loopbackMode");
   });
