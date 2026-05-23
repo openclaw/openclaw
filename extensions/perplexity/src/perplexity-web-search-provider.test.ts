@@ -1,5 +1,5 @@
-import { withEnv, withEnvAsync } from "openclaw/plugin-sdk/test-env";
-import { describe, expect, it } from "vitest";
+import { withEnv, withEnvAsync, withFetchPreconnect } from "openclaw/plugin-sdk/test-env";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createPerplexityWebSearchProvider } from "./perplexity-web-search-provider.js";
 import { testing } from "./perplexity-web-search-provider.runtime.js";
 
@@ -8,6 +8,10 @@ const perplexityApiKeyEnv = ["PERPLEXITY_API", "KEY"].join("_");
 const openRouterPerplexityApiKey = ["sk", "or", "v1", "test"].join("-");
 const directPerplexityApiKey = ["pplx", "test"].join("-");
 const enterprisePerplexityApiKey = ["enterprise", "perplexity", "test"].join("-");
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+});
 
 describe("perplexity web search provider", () => {
   it("points missing-key users to fetch/browser alternatives", async () => {
@@ -100,6 +104,54 @@ describe("perplexity web search provider", () => {
           baseUrl: "https://api.perplexity.ai",
           model: "perplexity/sonar-pro",
           transport: "search_api",
+        });
+      },
+    );
+  });
+
+  it("honors a per-call model override on the chat-completions path", async () => {
+    const mockFetch = vi.fn(() =>
+      Promise.resolve(
+        new Response(
+          JSON.stringify({
+            choices: [
+              {
+                message: {
+                  content: "Grounded answer",
+                },
+              },
+            ],
+          }),
+        ),
+      ),
+    );
+    vi.stubGlobal("fetch", withFetchPreconnect(mockFetch));
+
+    await withEnvAsync(
+      { [perplexityApiKeyEnv]: undefined, [openRouterApiKeyEnv]: openRouterPerplexityApiKey },
+      async () => {
+        const provider = createPerplexityWebSearchProvider();
+        const tool = provider.createTool({
+          config: {},
+          searchConfig: {},
+        });
+        if (!tool) {
+          throw new Error("Expected tool definition");
+        }
+
+        const result = await tool.execute({
+          query: "OpenClaw docs",
+          model: "perplexity/sonar",
+        });
+
+        expect(result.model).toBe("perplexity/sonar");
+        expect(result.provider).toBe("perplexity");
+
+        const [input, init] = mockFetch.mock.calls[0] ?? [];
+        expect(String(input)).toBe("https://openrouter.ai/api/v1/chat/completions");
+        expect(JSON.parse(String(init?.body))).toMatchObject({
+          model: "perplexity/sonar",
+          messages: [{ role: "user", content: "OpenClaw docs" }],
         });
       },
     );

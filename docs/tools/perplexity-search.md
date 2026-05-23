@@ -105,6 +105,10 @@ Search query.
 Number of results to return (1-10).
 </ParamField>
 
+<ParamField path="model" type="string">
+Optional Sonar/OpenRouter model override for the chat-completions path. Use `default` to fall back to the configured model.
+</ParamField>
+
 <ParamField path="country" type="string">
 2-letter ISO country code (e.g. `US`, `DE`).
 </ParamField>
@@ -140,6 +144,7 @@ Per-page token limit.
 For the legacy Sonar/OpenRouter compatibility path:
 
 - `query`, `count`, and `freshness` are accepted
+- `model` can override the configured Sonar/OpenRouter model for a single call
 - `count` is compatibility-only there; the response is still one synthesized
   answer with citations rather than an N-result list
 - Search API-only filters such as `country`, `language`, `date_after`,

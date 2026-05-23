@@ -25,6 +25,15 @@ describe("web_search tool schema", () => {
 
     expect(parameters?.properties?.count?.maximum).toBe(MAX_SEARCH_COUNT);
   });
+
+  it("advertises an optional model override for provider-specific routing", () => {
+    const tool = createWebSearchTool();
+    const parameters = tool?.parameters as
+      | { properties?: { model?: { type?: unknown } } }
+      | undefined;
+
+    expect(parameters?.properties?.model?.type).toBe("string");
+  });
 });
 
 describe("web_search freshness normalization", () => {

@@ -17,6 +17,10 @@ const WebSearchSchema = {
       minimum: 1,
       maximum: MAX_SEARCH_COUNT,
     },
+    model: {
+      type: "string",
+      description: "Optional provider-specific model override. Use 'default' to reset.",
+    },
     country: {
       type: "string",
       description: "2-letter country code.",

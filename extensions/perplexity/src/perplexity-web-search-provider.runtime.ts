@@ -1,6 +1,7 @@
 import {
   readNumberParam,
   readStringArrayParam,
+  normalizeToolModelOverride,
   readStringParam,
 } from "openclaw/plugin-sdk/provider-web-search";
 import {
@@ -117,7 +118,11 @@ function resolvePerplexityBaseUrl(
   return DEFAULT_PERPLEXITY_BASE_URL;
 }
 
-function resolvePerplexityModel(perplexity?: PerplexityConfig): string {
+function resolvePerplexityModel(perplexity?: PerplexityConfig, modelOverride?: string): string {
+  const override = normalizeToolModelOverride(modelOverride);
+  if (override) {
+    return override;
+  }
   const model = normalizeOptionalString(perplexity?.model) ?? "";
   return model || DEFAULT_PERPLEXITY_MODEL;
 }
@@ -147,7 +152,10 @@ async function readPerplexityJsonResponse<T>(response: Response, label: string):
   }
 }
 
-function resolvePerplexityTransport(perplexity?: PerplexityConfig): {
+function resolvePerplexityTransport(
+  perplexity?: PerplexityConfig,
+  modelOverride?: string,
+): {
   apiKey?: string;
   source: "config" | "perplexity_env" | "openrouter_env" | "none";
   baseUrl: string;
@@ -156,9 +164,11 @@ function resolvePerplexityTransport(perplexity?: PerplexityConfig): {
 } {
   const auth = resolvePerplexityApiKey(perplexity);
   const baseUrl = resolvePerplexityBaseUrl(perplexity, auth.source, auth.apiKey);
-  const model = resolvePerplexityModel(perplexity);
+  const model = resolvePerplexityModel(perplexity, modelOverride);
   const hasLegacyOverride = Boolean(
-    normalizeOptionalString(perplexity?.baseUrl) || normalizeOptionalString(perplexity?.model),
+    normalizeOptionalString(perplexity?.baseUrl) ||
+    normalizeOptionalString(perplexity?.model) ||
+    normalizeToolModelOverride(modelOverride),
   );
   return {
     ...auth,
@@ -314,7 +324,8 @@ export async function executePerplexitySearch(
   searchConfig?: SearchConfigRecord,
 ): Promise<Record<string, unknown>> {
   const perplexityConfig = resolvePerplexityConfig(searchConfig);
-  const runtime = resolvePerplexityTransport(perplexityConfig);
+  const modelOverride = normalizeToolModelOverride(readStringParam(args, "model"));
+  const runtime = resolvePerplexityTransport(perplexityConfig, modelOverride);
   if (!runtime.apiKey) {
     return {
       error: "missing_perplexity_api_key",
