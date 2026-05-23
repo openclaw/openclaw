@@ -917,13 +917,14 @@ For the full setup and behavior details, see [Ollama Web Search](/tools/ollama-s
     multiple memory chunks into one `input` request when possible.
 
     When `proxy.enabled=true`, Ollama memory embedding requests to the exact
-    configured host-local loopback `baseUrl` use OpenClaw's guarded direct path
-    instead of the managed forward proxy. LAN, tailnet, private-network, and
-    public Ollama hosts still use the managed proxy path. Redirects to another
-    host or port do not inherit trust. Operators can still set
-    `proxy.loopbackMode: "proxy"` to send loopback Ollama embedding traffic
-    through the proxy, or `proxy.loopbackMode: "block"` to deny loopback Ollama
-    embedding traffic before opening a connection.
+    host-local loopback origin derived from the configured `baseUrl` use
+    OpenClaw's guarded direct path instead of the managed forward proxy. LAN,
+    tailnet, private-network, and public Ollama hosts still use the managed
+    proxy path. Redirects to another host or port do not inherit trust.
+    Operators can still set `proxy.loopbackMode: "proxy"` to send loopback
+    Ollama embedding traffic through the proxy, or
+    `proxy.loopbackMode: "block"` to deny loopback Ollama embedding traffic
+    before opening a connection.
 
     | Property      | Value               |
     | ------------- | ------------------- |
