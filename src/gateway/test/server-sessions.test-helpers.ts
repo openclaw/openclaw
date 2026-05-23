@@ -248,13 +248,16 @@ export function setupGatewaySessionsTestHarness() {
   let sessionStoreCaseSeq = 0;
 
   beforeAll(async () => {
+    testState.gatewayBind = "loopback";
     harness = await startGatewayServerHarness();
     sharedSessionStoreDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-sessions-"));
   });
 
   afterAll(async () => {
-    await harness.close();
-    await fs.rm(sharedSessionStoreDir, { recursive: true, force: true });
+    await harness?.close();
+    if (sharedSessionStoreDir) {
+      await fs.rm(sharedSessionStoreDir, { recursive: true, force: true });
+    }
   });
 
   beforeEach(async () => {

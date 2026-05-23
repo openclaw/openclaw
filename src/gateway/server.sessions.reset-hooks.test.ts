@@ -14,6 +14,7 @@ import {
   sessionStoreEntry,
   expectActiveRunCleanup,
   directSessionReq,
+  threadBindingMocks,
 } from "./test/server-sessions.test-helpers.js";
 
 const { createSessionStoreDir, seedActiveMainSession } = setupGatewaySessionsTestHarness();
