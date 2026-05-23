@@ -118,11 +118,22 @@ export function createDurableInboundReceiveJournal<
       record.metadata = acceptOptions.metadata;
     }
 
+    const acceptInsertedRecord = async (): Promise<
+      DurableInboundReceiveAcceptResult<TPayload, TMetadata, TCompletedMetadata>
+    > => {
+      const completedAfterInsertRace = await options.completedStore.lookup(key);
+      if (completedAfterInsertRace) {
+        await options.pendingStore.delete(key);
+        return { kind: "completed", duplicate: true, record: completedAfterInsertRace };
+      }
+      return { kind: "accepted", duplicate: false, record };
+    };
+
     const inserted = await options.pendingStore.registerIfAbsent(key, record, {
       ttlMs: options.pendingTtlMs,
     });
     if (inserted) {
-      return { kind: "accepted", duplicate: false, record };
+      return acceptInsertedRecord();
     }
 
     const pending = await options.pendingStore.lookup(key);
@@ -139,7 +150,7 @@ export function createDurableInboundReceiveJournal<
       ttlMs: options.pendingTtlMs,
     });
     if (retryInserted) {
-      return { kind: "accepted", duplicate: false, record };
+      return acceptInsertedRecord();
     }
     return {
       kind: "pending",

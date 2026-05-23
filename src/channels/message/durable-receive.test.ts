@@ -184,6 +184,53 @@ describe("createDurableInboundReceiveJournal", () => {
     });
   });
 
+  it("removes newly inserted pending state when completion wins the insert race", async () => {
+    let completedLookups = 0;
+    const pendingStore =
+      createMemoryStore<
+        import("./durable-receive.js").DurableInboundReceivePendingRecord<TestPayload, TestMetadata>
+      >();
+    const completedStore: PluginStateKeyedStore<
+      import("./durable-receive.js").DurableInboundReceiveCompletedRecord<TestCompletedMetadata>
+    > = {
+      async register() {},
+      async registerIfAbsent() {
+        return false;
+      },
+      async lookup() {
+        completedLookups += 1;
+        return completedLookups === 2
+          ? { id: "message-1", completedAt: 50, metadata: { delivered: true } }
+          : undefined;
+      },
+      async consume() {
+        return undefined;
+      },
+      async delete() {
+        return false;
+      },
+      async entries() {
+        return [];
+      },
+      async clear() {},
+    };
+    const journal = createDurableInboundReceiveJournal<
+      TestPayload,
+      TestMetadata,
+      TestCompletedMetadata
+    >({
+      pendingStore,
+      completedStore,
+    });
+
+    await expect(journal.accept("message-1", { body: "again" })).resolves.toMatchObject({
+      kind: "completed",
+      duplicate: true,
+      record: { completedAt: 50 },
+    });
+    await expect(pendingStore.lookup("message-1")).resolves.toBeUndefined();
+  });
+
   it("filters stale pending records when completion left both stores populated", async () => {
     const pendingStore =
       createMemoryStore<
