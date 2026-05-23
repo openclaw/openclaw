@@ -6,13 +6,17 @@ import {
 
 describe("parseReleaseVerifyBetaArgs", () => {
   it("defaults beta verification to the matching tag and repo", () => {
-    expect(parseReleaseVerifyBetaArgs(["2026.5.10-beta.3"])).toMatchObject({
+    expect(parseReleaseVerifyBetaArgs(["2026.5.10-beta.3"])).toEqual({
       version: "2026.5.10-beta.3",
       tag: "v2026.5.10-beta.3",
       distTag: "beta",
       repo: "openclaw/openclaw",
       registry: "https://clawhub.ai",
+      workflowRef: undefined,
+      pluginSelection: [],
+      evidenceOut: undefined,
       skipPostpublish: false,
+      skipClawHub: false,
       rerunFailedClawHub: false,
       workflowRuns: {},
     });
@@ -23,22 +27,44 @@ describe("parseReleaseVerifyBetaArgs", () => {
       parseReleaseVerifyBetaArgs([
         "--",
         "2026.5.10-beta.3",
+        "--workflow-ref",
+        "release/2026.5.10",
+        "--plugins",
+        "@openclaw/plugin-a,@openclaw/plugin-b",
+        "--full-release-validation-run",
+        "10",
         "--openclaw-npm-run",
         "11",
         "--plugin-npm-run",
         "22",
         "--plugin-clawhub-run",
         "33",
+        "--npm-telegram-run",
+        "44",
+        "--evidence-out",
+        ".artifacts/release-evidence.json",
         "--skip-postpublish",
+        "--skip-clawhub",
         "--rerun-failed-clawhub",
       ]),
-    ).toMatchObject({
+    ).toEqual({
+      version: "2026.5.10-beta.3",
+      tag: "v2026.5.10-beta.3",
+      distTag: "beta",
+      repo: "openclaw/openclaw",
+      registry: "https://clawhub.ai",
+      workflowRef: "release/2026.5.10",
+      pluginSelection: ["@openclaw/plugin-a", "@openclaw/plugin-b"],
+      evidenceOut: ".artifacts/release-evidence.json",
       skipPostpublish: true,
+      skipClawHub: true,
       rerunFailedClawHub: true,
       workflowRuns: {
+        fullReleaseValidation: "10",
         openclawNpm: "11",
         pluginNpm: "22",
         pluginClawHub: "33",
+        npmTelegram: "44",
       },
     });
   });

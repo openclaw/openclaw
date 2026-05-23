@@ -218,7 +218,8 @@ function requireLastCallFirstArg(
   mock: { mock: { calls: readonly (readonly unknown[])[] } },
   label: string,
 ): Record<string, unknown> {
-  const call = mock.mock.calls.at(-1);
+  const calls = mock.mock.calls;
+  const call = calls[calls.length - 1];
   if (!call) {
     throw new Error(`${label} should have been called`);
   }
@@ -334,7 +335,7 @@ function createActiveBraveRegistryFixture(params?: {
         : {}),
       env,
     });
-  const { cacheKey } = loaderModule.__testing.resolvePluginLoadCacheContext({
+  const { cacheKey } = loaderModule.testing.resolvePluginLoadCacheContext({
     config,
     activationSourceConfig,
     autoEnabledReasons,

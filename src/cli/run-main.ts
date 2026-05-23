@@ -3,7 +3,7 @@ import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
 import { resolveStateDir } from "../config/paths.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.openclaw.js";
 import { isTruthyEnvValue, normalizeEnv } from "../infra/env.js";
 import { isMainModule } from "../infra/is-main.js";
 import type { ProxyHandle } from "../infra/net/proxy/proxy-lifecycle.js";
@@ -22,10 +22,12 @@ import {
   consumeGatewayFastPathRootOptionToken,
   consumeGatewayRunOptionToken,
 } from "./gateway-run-argv.js";
+import { hasJsonOutputFlag, withConsoleLogsRoutedToStderrForJson } from "./json-output-mode.js";
 import { applyCliProfileEnv, parseCliProfileArgs } from "./profile.js";
 import { getCoreCliCommandNames } from "./program/core-command-descriptors.js";
 import { getSubCliEntries } from "./program/subcli-descriptors.js";
 import {
+  resolvePrecomputedSubcommandHelpFastPath,
   resolveMissingPluginCommandMessage as resolveMissingPluginCommandMessageFromPolicy,
   rewriteUpdateFlagArgv,
   shouldEnsureCliPath,
@@ -33,18 +35,25 @@ import {
   shouldStartCrestodianForModernOnboard,
   shouldStartProxyForCli,
   shouldUseBrowserHelpFastPath,
+  shouldUseNodesHelpFastPath,
   shouldUseRootHelpFastPath,
+  shouldUseSecretsHelpFastPath,
+  shouldUseSetupOnboardConfigureHelpFastPath,
 } from "./run-main-policy.js";
 import { normalizeWindowsArgv } from "./windows-argv.js";
 
 export {
+  resolvePrecomputedSubcommandHelpFastPath,
   rewriteUpdateFlagArgv,
   shouldEnsureCliPath,
   shouldStartCrestodianForBareRoot,
   shouldStartCrestodianForModernOnboard,
   shouldStartProxyForCli,
   shouldUseBrowserHelpFastPath,
+  shouldUseNodesHelpFastPath,
   shouldUseRootHelpFastPath,
+  shouldUseSecretsHelpFastPath,
+  shouldUseSetupOnboardConfigureHelpFastPath,
 } from "./run-main-policy.js";
 
 type Awaitable<T> = T | Promise<T>;
@@ -133,10 +142,6 @@ export function isGatewayRunFastPathArgv(argv: string[]): boolean {
   return sawGateway;
 }
 
-function hasJsonOutputFlag(argv: string[]): boolean {
-  return argv.some((arg) => arg === "--json" || arg.startsWith("--json="));
-}
-
 async function tryRunGatewayRunFastPath(
   argv: string[],
   startupTrace: ReturnType<typeof createGatewayCliMainStartupTrace>,
@@ -154,7 +159,7 @@ async function tryRunGatewayRunFastPath(
   ] = await startupTrace.measure("gateway-run-imports", () =>
     Promise.all([
       import("commander"),
-      import("./gateway-cli/run.js"),
+      import("./gateway-cli/run-command.js"),
       import("../version.js"),
       import("./banner.js"),
       import("./command-startup-policy.js"),
@@ -222,6 +227,31 @@ async function disposeCliAgentHarnesses(): Promise<void> {
     // Best-effort teardown for short-lived CLI commands. Harness plugins may
     // own subprocesses, but cleanup must not hide the command's real outcome.
   }
+}
+
+const UNCONFIGURED_CONFIG_IGNORED_KEYS = new Set(["$schema", "meta"]);
+
+function isUnconfiguredConfigSnapshot(
+  snapshot: Pick<ConfigFileSnapshot, "exists" | "valid" | "sourceConfig">,
+): boolean {
+  if (!snapshot.exists) {
+    return true;
+  }
+  if (!snapshot.valid) {
+    return false;
+  }
+  return Object.keys(snapshot.sourceConfig).every((key) =>
+    UNCONFIGURED_CONFIG_IGNORED_KEYS.has(key),
+  );
+}
+
+export async function shouldStartOnboardingForFreshInstall(argv: string[]): Promise<boolean> {
+  if (!shouldStartCrestodianForBareRoot(argv)) {
+    return false;
+  }
+  const { readConfigFileSnapshot } = await import("../config/config.js");
+  const snapshot = await readConfigFileSnapshot();
+  return isUnconfiguredConfigSnapshot(snapshot);
 }
 
 function pauseNonTtyStdinForCliExit(): void {
@@ -526,11 +556,19 @@ export async function runCli(argv: string[] = process.argv) {
 
   try {
     if (shouldUseRootHelpFastPath(normalizedArgv)) {
-      const { outputPrecomputedRootHelpText } = await import("./root-help-metadata.js");
-      if (!outputPrecomputedRootHelpText()) {
-        const { outputRootHelp } = await import("./program/root-help.js");
-        await outputRootHelp();
+      const { loadRootHelpRenderOptionsForConfigSensitivePlugins } =
+        await import("./root-help-live-config.js");
+      const liveRootHelpOptions = await loadRootHelpRenderOptionsForConfigSensitivePlugins(
+        process.env,
+      );
+      if (!liveRootHelpOptions) {
+        const { outputPrecomputedRootHelpText } = await import("./root-help-metadata.js");
+        if (outputPrecomputedRootHelpText()) {
+          return;
+        }
       }
+      const { outputRootHelp } = await import("./program/root-help.js");
+      await outputRootHelp(liveRootHelpOptions ?? undefined);
       return;
     }
 
@@ -541,6 +579,43 @@ export async function runCli(argv: string[] = process.argv) {
       }
     }
 
+    if (shouldUseSetupOnboardConfigureHelpFastPath(normalizedArgv)) {
+      const { tryOutputSetupOnboardConfigureHelp } =
+        await import("./setup-onboard-configure-help-fast-path.js");
+      if (await tryOutputSetupOnboardConfigureHelp(normalizedArgv)) {
+        return;
+      }
+    }
+
+    if (shouldUseSecretsHelpFastPath(normalizedArgv)) {
+      const { outputPrecomputedSecretsHelpText } = await import("./root-help-metadata.js");
+      if (outputPrecomputedSecretsHelpText()) {
+        return;
+      }
+    }
+
+    const precomputedSubcommandHelp = resolvePrecomputedSubcommandHelpFastPath(normalizedArgv);
+    if (precomputedSubcommandHelp) {
+      const { outputPrecomputedSubcommandHelpText } = await import("./root-help-metadata.js");
+      if (outputPrecomputedSubcommandHelpText(precomputedSubcommandHelp)) {
+        return;
+      }
+    }
+
+    if (shouldUseNodesHelpFastPath(normalizedArgv)) {
+      const { loadRootHelpRenderOptionsForConfigSensitivePlugins } =
+        await import("./root-help-live-config.js");
+      const liveRootHelpOptions = await loadRootHelpRenderOptionsForConfigSensitivePlugins(
+        process.env,
+      );
+      if (!liveRootHelpOptions) {
+        const { outputPrecomputedNodesHelpText } = await import("./root-help-metadata.js");
+        if (outputPrecomputedNodesHelpText()) {
+          return;
+        }
+      }
+    }
+
     const shouldRunBareRootCrestodian = shouldStartCrestodianForBareRoot(normalizedArgv);
     const shouldRunModernOnboardCrestodian = shouldStartCrestodianForModernOnboard(normalizedArgv);
     if (shouldRunBareRootCrestodian || shouldRunModernOnboardCrestodian) {
@@ -548,6 +623,18 @@ export async function runCli(argv: string[] = process.argv) {
     }
 
     if (shouldRunBareRootCrestodian) {
+      if (await shouldStartOnboardingForFreshInstall(normalizedArgv)) {
+        if (!process.stdin.isTTY || !process.stdout.isTTY) {
+          console.error(
+            "Onboarding needs an interactive TTY. Use `openclaw onboard --non-interactive --accept-risk ...` for automation.",
+          );
+          process.exitCode = 1;
+          return;
+        }
+        const { setupWizardCommand } = await import("../commands/onboard.js");
+        await setupWizardCommand({});
+        return;
+      }
       if (!process.stdin.isTTY || !process.stdout.isTTY) {
         console.error(
           'Crestodian needs an interactive TTY. Use `openclaw crestodian --message "status"` for one command.',
@@ -625,7 +712,6 @@ export async function runCli(argv: string[] = process.argv) {
       label: "Loading OpenClaw CLI…",
       indeterminate: true,
       delayMs: 0,
-      fallback: "none",
     });
     let startupProgressStopped = false;
     const stopStartupProgress = () => {
@@ -725,10 +811,12 @@ export async function runCli(argv: string[] = process.argv) {
         const config = await startupTrace.measure("register-plugin-commands", async () => {
           const { registerPluginCliCommandsFromValidatedConfig } =
             await import("../plugins/cli.js");
-          return await registerPluginCliCommandsFromValidatedConfig(program, undefined, undefined, {
-            mode: "lazy",
-            primary,
-          });
+          return await withConsoleLogsRoutedToStderrForJson(parseArgv, () =>
+            registerPluginCliCommandsFromValidatedConfig(program, undefined, undefined, {
+              mode: "lazy",
+              primary,
+            }),
+          );
         });
         if (config) {
           if (

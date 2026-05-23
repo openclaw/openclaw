@@ -17,12 +17,33 @@ import {
   normalizeOptionalString,
 } from "../shared/string-coerce.js";
 
+function extractMessageId(payload: unknown): string | undefined {
+  if (!payload || typeof payload !== "object") {
+    return undefined;
+  }
+  const record = payload as Record<string, unknown>;
+  const direct = normalizeOptionalString(record.messageId);
+  if (direct) {
+    return direct;
+  }
+  const result = record.result;
+  if (result && typeof result === "object") {
+    const nested = normalizeOptionalString((result as Record<string, unknown>).messageId);
+    if (nested) {
+      return nested;
+    }
+  }
+  return undefined;
+}
+
 function buildMessageCliJson(result: Awaited<ReturnType<typeof runMessageAction>>) {
+  const messageId = extractMessageId(result.payload);
   return {
     action: result.action,
     channel: result.channel,
     dryRun: result.dryRun,
     handledBy: result.handledBy,
+    ...(messageId ? { messageId } : {}),
     payload: result.payload,
   };
 }
@@ -68,7 +89,6 @@ export async function messageCommand(
   const action = actionMatch as ChannelMessageActionName;
 
   const outboundDeps: OutboundSendDeps = createOutboundSendDeps(deps);
-  const senderIsOwner = typeof opts.senderIsOwner === "boolean" ? opts.senderIsOwner : true;
 
   const run = async () =>
     await runMessageAction({
@@ -77,7 +97,7 @@ export async function messageCommand(
       params: opts,
       deps: outboundDeps,
       agentId: resolveDefaultAgentId(cfg),
-      senderIsOwner,
+      senderIsOwner: opts.senderIsOwner !== false,
       gateway: {
         clientName: GATEWAY_CLIENT_NAMES.CLI,
         mode: GATEWAY_CLIENT_MODES.CLI,

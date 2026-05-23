@@ -217,6 +217,44 @@ describe("openrouter image generation provider", () => {
     expect(release).toHaveBeenCalledOnce();
   });
 
+  it("uses a 180s default timeout when no request timeout is provided", async () => {
+    const release = vi.fn(async () => {});
+    postJsonRequestMock.mockResolvedValue({
+      response: {
+        json: async () => ({
+          choices: [
+            {
+              message: {
+                images: [
+                  {
+                    imageUrl: {
+                      url: `data:image/png;base64,${Buffer.from("png-one").toString("base64")}`,
+                    },
+                  },
+                ],
+              },
+            },
+          ],
+        }),
+      },
+      release,
+    });
+
+    const provider = buildOpenRouterImageGenerationProvider();
+    await provider.generateImage({
+      provider: "openrouter",
+      model: "google/gemini-3.1-flash-image-preview",
+      prompt: "draw a sticker",
+      cfg: {},
+    });
+
+    expect(postJsonRequestMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        timeoutMs: 180_000,
+      }),
+    );
+  });
+
   it("sends reference images as data URLs for edit-style requests", async () => {
     postJsonRequestMock.mockResolvedValue({
       response: {
@@ -264,6 +302,25 @@ describe("openrouter image generation provider", () => {
     expect(image.mimeType).toBe("image/webp");
   });
 
+  it("wraps wrong-shape successful OpenRouter image responses", async () => {
+    postJsonRequestMock.mockResolvedValue({
+      response: {
+        json: async () => ({ choices: { message: {} } }),
+      },
+      release: vi.fn(async () => {}),
+    });
+
+    const provider = buildOpenRouterImageGenerationProvider();
+    await expect(
+      provider.generateImage({
+        provider: "openrouter",
+        model: "google/gemini-3.1-flash-image-preview",
+        prompt: "bad shape",
+        cfg: {},
+      }),
+    ).rejects.toThrow("OpenRouter image generation response malformed");
+  });
+
   it("extracts image fallbacks from string content and raw b64 parts", () => {
     const png = Buffer.from("png-inline").toString("base64");
     const raw = Buffer.from("raw-inline").toString("base64");
@@ -283,5 +340,22 @@ describe("openrouter image generation provider", () => {
     });
 
     expect(images.map((image) => image.buffer.toString())).toEqual(["png-inline", "raw-inline"]);
+  });
+
+  it("rejects invalid raw image parts in strict extraction mode", () => {
+    expect(() =>
+      extractOpenRouterImagesFromResponse(
+        {
+          choices: [
+            {
+              message: {
+                content: [{ b64_json: "not-base64!" }],
+              },
+            },
+          ],
+        },
+        { malformedResponseError: "OpenRouter image generation response malformed" },
+      ),
+    ).toThrow("OpenRouter image generation response malformed");
   });
 });

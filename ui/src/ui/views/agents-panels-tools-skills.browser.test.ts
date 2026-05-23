@@ -104,13 +104,32 @@ describe("agents tools panel (browser)", () => {
     );
     await Promise.resolve();
 
-    const text = container.textContent ?? "";
-    expect(text).toContain("Built-In");
-    expect(text).toContain("Plugin: voice-call");
-    expect(text).toContain("Optional");
-    expect(text).toContain("Available Right Now");
-    expect(text).toContain("Message Actions");
-    expect(text).toContain("Channel: guildchat");
+    expect(
+      Array.from(container.querySelectorAll(".agent-tools-pane > .label")).map((label) =>
+        label.textContent?.trim(),
+      ),
+    ).toEqual(["Available Right Now", "Quick Presets"]);
+    const runtimeChip = container.querySelector(".agent-tools-runtime-chip");
+    expect(runtimeChip?.querySelector(".mono")?.textContent?.trim()).toBe("Message Actions");
+    expect(runtimeChip?.querySelector(".agent-tools-runtime-chip__meta")?.textContent?.trim()).toBe(
+      "Channel: guildchat",
+    );
+    expect(
+      Array.from(container.querySelectorAll(".agent-tools-group__title > .agent-pill")).map(
+        (pill) => pill.textContent?.trim(),
+      ),
+    ).toEqual(["Plugin: voice-call"]);
+    expect(
+      Array.from(container.querySelectorAll(".agent-tool-card")).map((card) => ({
+        title: card.querySelector(".agent-tool-title")?.textContent?.trim(),
+        badges: Array.from(card.querySelectorAll(".agent-tool-summary__badges .agent-pill")).map(
+          (pill) => pill.textContent?.trim(),
+        ),
+      })),
+    ).toEqual([
+      { title: "tts", badges: ["Built-In"] },
+      { title: "voice_call", badges: ["Plugin: voice-call", "Optional"] },
+    ]);
     expect(container.querySelector(".agent-tool-card[open]")).toBeNull();
   });
 

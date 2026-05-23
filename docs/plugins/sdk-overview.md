@@ -95,6 +95,7 @@ methods:
 | `api.registerAgentHarness(...)`                  | Experimental low-level agent executor |
 | `api.registerCliBackend(...)`                    | Local CLI inference backend           |
 | `api.registerChannel(...)`                       | Messaging channel                     |
+| `api.registerEmbeddingProvider(...)`             | Reusable vector embedding provider    |
 | `api.registerSpeechProvider(...)`                | Text-to-speech / STT synthesis        |
 | `api.registerRealtimeTranscriptionProvider(...)` | Streaming realtime transcription      |
 | `api.registerRealtimeVoiceProvider(...)`         | Duplex realtime voice sessions        |
@@ -105,7 +106,17 @@ methods:
 | `api.registerWebFetchProvider(...)`              | Web fetch / scrape provider           |
 | `api.registerWebSearchProvider(...)`             | Web search                            |
 
+Embedding providers registered with `api.registerEmbeddingProvider(...)` must
+also be listed in `contracts.embeddingProviders` in the plugin manifest. This
+is the generic embedding surface for reusable vector generation. Memory-only
+adapters still use `api.registerMemoryEmbeddingProvider(...)` and
+`contracts.memoryEmbeddingProviders`.
+
 ### Tools and commands
+
+Use [`defineToolPlugin`](/plugins/tool-plugins) for simple tool-only plugins
+with fixed tool names. Use `api.registerTool(...)` directly for mixed plugins
+or fully dynamic tool registration.
 
 | Method                          | What it registers                             |
 | ------------------------------- | --------------------------------------------- |
@@ -115,6 +126,26 @@ methods:
 Plugin commands can set `agentPromptGuidance` when the agent needs a short,
 command-owned routing hint. Keep that text about the command itself; do not add
 provider- or plugin-specific policy to core prompt builders.
+
+Guidance entries may be legacy strings, which apply to every prompt surface, or
+structured entries:
+
+```ts
+agentPromptGuidance: [
+  "Global command hint.",
+  { text: "Only show this in the main PI prompt.", surfaces: ["pi_main"] },
+];
+```
+
+Structured `surfaces` may include `pi_main`, `codex_app_server`, `cli_backend`,
+`acp_backend`, or `subagent`. Omit `surfaces` for intentional all-surface
+guidance. Do not pass an empty `surfaces` array; it is rejected so accidental
+scope loss does not become global prompt text.
+
+Native Codex app-server developer instructions are stricter than other prompt
+surfaces: only guidance explicitly scoped to `codex_app_server` is promoted into
+that higher-priority lane. Legacy string guidance and unscoped structured
+guidance remain available to non-Codex prompt surfaces for compatibility.
 
 ### Infrastructure
 
@@ -320,9 +351,9 @@ descriptor-backed placeholders for parse-time lazy loading.
 ### CLI backend registration
 
 `api.registerCliBackend(...)` lets a plugin own the default config for a local
-AI CLI backend such as `codex-cli`.
+AI CLI backend such as `claude-cli` or `my-cli`.
 
-- The backend `id` becomes the provider prefix in model refs like `codex-cli/gpt-5`.
+- The backend `id` becomes the provider prefix in model refs like `my-cli/gpt-5`.
 - The backend `config` uses the same shape as `agents.defaults.cliBackends.<id>`.
 - User config still wins. OpenClaw merges `agents.defaults.cliBackends.<id>` over the
   plugin default before running the CLI.

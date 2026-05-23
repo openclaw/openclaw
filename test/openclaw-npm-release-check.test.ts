@@ -26,6 +26,7 @@ import {
 } from "../src/infra/package-dist-inventory.ts";
 
 const REQUIRED_PACKED_PATHS = [
+  "npm-shrinkwrap.json",
   PACKAGE_DIST_INVENTORY_RELATIVE_PATH,
   ...WORKSPACE_TEMPLATE_PACK_PATHS,
 ] as const;
@@ -306,7 +307,7 @@ describe("resolveNpmCommandInvocation", () => {
   });
 
   it("uses the platform npm command when npm_execpath is missing", () => {
-    expect(resolveNpmCommandInvocation({ platform: "win32" })).toEqual({
+    expect(resolveNpmCommandInvocation({ npmExecPath: "", platform: "win32" })).toEqual({
       command: "npm.cmd",
       args: [],
     });

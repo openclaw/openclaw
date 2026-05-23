@@ -346,6 +346,12 @@ export const en: TranslationMap = {
     eventLogSubtitle: "Latest gateway events.",
     noEvents: "No events yet.",
   },
+  quickSettings: {
+    security: {
+      browserEnabled: "Browser enabled",
+      toolProfile: "Tool profile",
+    },
+  },
   execApproval: {
     expiresIn: "expires in {time}",
     expired: "expired",
@@ -688,9 +694,6 @@ export const en: TranslationMap = {
     },
   },
   usage: {
-    page: {
-      subtitle: "See where tokens go, when sessions spike, and what drives cost.",
-    },
     common: {
       emptyValue: "—",
       unknown: "unknown",
@@ -1032,6 +1035,10 @@ export const en: TranslationMap = {
     settings: "Chat settings",
     thinkingToggle: "Toggle assistant thinking/working output",
     toolCallsToggle: "Toggle tool calls and tool results",
+    autoScrollMode: "Auto-scroll mode",
+    autoScrollAlways: "Always",
+    autoScrollNearBottom: "Near bottom",
+    autoScrollOff: "Off",
     focusToggle: "Toggle focus mode (hide sidebar + page header)",
     hideCronSessions: "Hide cron sessions",
     showCronSessions: "Show cron sessions",
@@ -1075,11 +1082,16 @@ export const en: TranslationMap = {
       placeholderDisconnected: "Connect to the gateway to start chatting...",
       attachFile: "Attach file",
       startTalk: "Start Talk",
+      stillListening: "Still listening",
+      talkTranscript: "Talk transcript",
       stopTalk: "Stop Talk",
     },
     selectors: {
       agentFilter: "Filter sessions by agent",
       session: "Chat session",
+      sessionSearch: "Search sessions",
+      clearSessionSearch: "Clear session search",
+      loadMoreSessions: "Load more sessions",
       model: "Chat model",
       thinkingLevel: "Chat thinking level",
     },
@@ -1162,7 +1174,7 @@ export const en: TranslationMap = {
       whenHint: "Pick a schedule. You can fine-tune it later.",
       howHeading: "How should it work?",
       howHint: "Choose how results are delivered.",
-      title: "New Automation",
+      title: "New Cron Job",
     },
     summary: {
       enabled: "Enabled",
@@ -1191,6 +1203,9 @@ export const en: TranslationMap = {
       ascending: "Ascending",
       descending: "Descending",
       reset: "Reset",
+      emptyTitle: "No scheduled jobs yet.",
+      emptyHint: "Create one from a plain-language prompt; advanced fields can wait.",
+      emptyFilteredHint: "Clear or change filters to see scheduled jobs.",
       noMatching: "No matching jobs.",
       loading: "Loading...",
       loadMore: "Load more jobs",
@@ -1226,6 +1241,7 @@ export const en: TranslationMap = {
     form: {
       editJob: "Edit Job",
       newJob: "New Job",
+      advancedJob: "Advanced job",
       updateSubtitle: "Update the selected scheduled job.",
       createSubtitle: "Create a scheduled wakeup or agent run.",
       required: "Required",

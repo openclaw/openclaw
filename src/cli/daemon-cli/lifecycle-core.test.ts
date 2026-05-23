@@ -235,7 +235,7 @@ describe("runServiceRestart token drift", () => {
     expect(payload.result).toBe("stopped");
     expect(payload.service?.loaded).toBe(false);
     expect(service.stop).toHaveBeenCalledTimes(1);
-    const [stopOptions] = service.stop.mock.calls.at(0) ?? [];
+    const [stopOptions] = service.stop.mock.calls[0] ?? [];
     expect(stopOptions?.env).toBe(process.env);
     expect(stopOptions?.disable).toBe(true);
     expect(onNotLoaded).not.toHaveBeenCalled();
@@ -346,7 +346,10 @@ describe("runServiceRestart token drift", () => {
 
     await runServiceRestart(createServiceRunArgs());
 
-    expect(writeGatewayRestartIntentSync).toHaveBeenCalledWith({ targetPid: 1234 });
+    expect(writeGatewayRestartIntentSync).toHaveBeenCalledWith({
+      targetPid: 1234,
+      reason: "gateway.restart",
+    });
     expect(clearGatewayRestartIntentSync).not.toHaveBeenCalled();
     expect(service.restart).toHaveBeenCalledTimes(1);
   });
@@ -366,6 +369,7 @@ describe("runServiceRestart token drift", () => {
 
     expect(writeGatewayRestartIntentSync).toHaveBeenCalledWith({
       targetPid: 1234,
+      reason: "gateway.restart",
       intent: {
         waitMs: 2_500,
       },
@@ -379,7 +383,10 @@ describe("runServiceRestart token drift", () => {
 
     await expect(runServiceRestart(createServiceRunArgs())).rejects.toThrow("__exit__:1");
 
-    expect(writeGatewayRestartIntentSync).toHaveBeenCalledWith({ targetPid: 1234 });
+    expect(writeGatewayRestartIntentSync).toHaveBeenCalledWith({
+      targetPid: 1234,
+      reason: "gateway.restart",
+    });
     expect(clearGatewayRestartIntentSync).toHaveBeenCalledOnce();
   });
 

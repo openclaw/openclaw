@@ -437,6 +437,23 @@ describe("openai image generation provider", () => {
     expect(jsonRequestCall().ssrfPolicy).toEqual({ allowRfc2544BenchmarkRange: true });
   });
 
+  it("wraps malformed successful OpenAI image responses", async () => {
+    postJsonRequestMock.mockResolvedValue({
+      response: { json: async () => ({ data: { b64_json: "not-an-array" } }) },
+      release: vi.fn(async () => {}),
+    });
+
+    const provider = buildOpenAIImageGenerationProvider();
+    await expect(
+      provider.generateImage({
+        provider: "openai",
+        model: "gpt-image-2",
+        prompt: "bad shape",
+        cfg: {},
+      }),
+    ).rejects.toThrow("OpenAI image generation response malformed");
+  });
+
   it("forwards generation count and custom size overrides", async () => {
     mockGeneratedPngResponse();
 
@@ -1163,7 +1180,7 @@ describe("openai image generation provider", () => {
       ],
     });
 
-    const body = postJsonRequestMock.mock.calls.at(0)?.[0].body as {
+    const body = postJsonRequestMock.mock.calls[0]?.[0].body as {
       input: Array<{ content: Array<Record<string, string>> }>;
     };
     expect(body.input[0]?.content).toEqual([
@@ -1192,7 +1209,7 @@ describe("openai image generation provider", () => {
     });
 
     expect(postJsonRequestMock).toHaveBeenCalledTimes(2);
-    const firstBody = postJsonRequestMock.mock.calls.at(0)?.[0].body as {
+    const firstBody = postJsonRequestMock.mock.calls[0]?.[0].body as {
       tools: Array<Record<string, unknown>>;
     };
     expect(firstBody.tools[0]).toEqual({

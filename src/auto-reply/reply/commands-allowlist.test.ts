@@ -18,6 +18,7 @@ import {
 } from "../../test-utils/channel-plugins.js";
 import { handleAllowlistCommand } from "./commands-allowlist.js";
 import type { HandleCommandsParams } from "./commands-types.js";
+import { type ConfigSnapshotMock } from "./commands.test-harness.js";
 
 const readConfigFileSnapshotMock = vi.hoisted(() => vi.fn());
 const validateConfigObjectWithPluginsMock = vi.hoisted(() => vi.fn());
@@ -31,6 +32,43 @@ vi.mock("../../config/config.js", () => ({
   readConfigFileSnapshot: readConfigFileSnapshotMock,
   validateConfigObjectWithPlugins: validateConfigObjectWithPluginsMock,
   replaceConfigFile: replaceConfigFileMock,
+  transformConfigFileWithRetry: async (params: {
+    afterWrite?: unknown;
+    transform: (
+      currentConfig: OpenClawConfig,
+      context: { snapshot: ConfigSnapshotMock; previousHash: string | null; attempt: number },
+    ) =>
+      | Promise<{ nextConfig: OpenClawConfig; result?: unknown }>
+      | {
+          nextConfig: OpenClawConfig;
+          result?: unknown;
+        };
+  }) => {
+    const snapshot = (await readConfigFileSnapshotMock()) as ConfigSnapshotMock;
+    const previousHash = snapshot.hash ?? null;
+    const currentConfig = structuredClone(
+      snapshot.sourceConfig ?? snapshot.resolved ?? snapshot.runtimeConfig ?? snapshot.parsed ?? {},
+    );
+    const transformed = await params.transform(currentConfig, {
+      snapshot,
+      previousHash,
+      attempt: 0,
+    });
+    const afterWrite = params.afterWrite ?? { mode: "auto" };
+    const writePayload = { nextConfig: transformed.nextConfig, afterWrite };
+    await replaceConfigFileMock(writePayload);
+    return {
+      path: snapshot.path ?? "/tmp/openclaw.json",
+      previousHash,
+      persistedHash: "persisted-hash",
+      snapshot,
+      nextConfig: transformed.nextConfig,
+      result: transformed.result,
+      attempts: 1,
+      afterWrite,
+      followUp: { action: "none" },
+    };
+  },
 }));
 
 vi.mock("../../pairing/pairing-store.js", () => ({

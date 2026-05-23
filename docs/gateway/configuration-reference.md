@@ -52,6 +52,7 @@ Moved to a dedicated page - see
   - `talk.consultFastMode`: one-shot fast-mode override for Control UI Talk realtime consults
   - `talk.speechLocale`: optional BCP 47 locale id for Talk speech recognition on iOS/macOS
   - `talk.silenceTimeoutMs`: when unset, Talk keeps the platform default pause window before sending the transcript (`700 ms on macOS and Android, 900 ms on iOS`)
+  - `talk.realtime.consultRouting`: Gateway relay fallback for finalized realtime Talk transcripts that skip `openclaw_agent_consult`
 
 ## Tools and custom providers
 
@@ -108,6 +109,11 @@ target server during config edits.
         headers: {
           Authorization: "Bearer ${MCP_REMOTE_TOKEN}",
         },
+        // Optional Codex app-server projection controls.
+        codex: {
+          agents: ["main"],
+          defaultToolsApprovalMode: "approve", // auto | prompt | approve
+        },
       },
     },
   },
@@ -119,6 +125,17 @@ target server during config edits.
   Remote entries use `transport: "streamable-http"` or `transport: "sse"`;
   `type: "http"` is a CLI-native alias that `openclaw mcp set` and
   `openclaw doctor --fix` normalize into the canonical `transport` field.
+- `mcp.servers.<name>.codex`: optional Codex app-server projection controls.
+  This block is OpenClaw metadata for Codex app-server threads only; it does not
+  affect ACP sessions, generic Codex harness config, or other runtime adapters.
+  Non-empty `codex.agents` limits the server to the listed OpenClaw agent ids.
+  Empty, blank, or invalid scoped agent lists are rejected by config validation
+  and omitted by the runtime projection path instead of becoming global.
+  `codex.defaultToolsApprovalMode` emits Codex's native
+  `default_tools_approval_mode` for that server. OpenClaw strips the `codex`
+  block before passing native `mcp_servers` config to Codex. Omit the block to
+  keep the server projected for every Codex app-server agent with Codex's
+  default MCP approval behavior.
 - `mcp.sessionIdleTtlMs`: idle TTL for session-scoped bundled MCP runtimes.
   One-shot embedded runs request run-end cleanup; this TTL is the backstop for
   long-lived sessions and future callers.
@@ -471,7 +488,7 @@ See [Inferred commitments](/concepts/commitments).
       // dangerouslyDisableDeviceAuth: false,
     },
     remote: {
-      url: "ws://gateway.tailnet:18789",
+      url: "ws://127.0.0.1:18789",
       transport: "ssh", // ssh | direct
       token: "your-token",
       // password: "your-password",
@@ -529,16 +546,11 @@ See [Inferred commitments](/concepts/commitments).
   checks `tailscale funnel status` before re-applying Serve at startup and skips
   it if an externally configured Funnel route already covers the gateway port.
   Default `false`.
-- `controlUi.allowedOrigins`: explicit browser-origin allowlist for Gateway WebSocket connects. Required when browser clients are expected from non-loopback origins.
+- `controlUi.allowedOrigins`: explicit browser-origin allowlist for Gateway WebSocket connects. Required for public non-loopback browser origins. Private same-origin LAN/Tailnet UI loads from loopback, RFC1918/link-local, `.local`, `.ts.net`, or Tailscale CGNAT hosts are accepted without enabling Host-header fallback.
 - `controlUi.chatMessageMaxWidth`: optional max-width for grouped Control UI chat messages. Accepts constrained CSS width values such as `960px`, `82%`, `min(1280px, 82%)`, and `calc(100% - 2rem)`.
 - `controlUi.dangerouslyAllowHostHeaderOriginFallback`: dangerous mode that enables Host-header origin fallback for deployments that intentionally rely on Host-header origin policy.
-- `remote.transport`: `ssh` (default) or `direct` (ws/wss). For `direct`, `remote.url` must be `ws://` or `wss://`.
-- `OPENCLAW_ALLOW_INSECURE_PRIVATE_WS=1`: client-side process-environment
-  break-glass override that allows plaintext `ws://` to trusted private-network
-  IPs; default remains loopback-only for plaintext. There is no `openclaw.json`
-  equivalent, and browser private-network config such as
-  `browser.ssrfPolicy.dangerouslyAllowPrivateNetwork` does not affect Gateway
-  WebSocket clients.
+- `remote.transport`: `ssh` (default) or `direct` (ws/wss). For `direct`, `remote.url` must be `wss://` for public hosts; plaintext `ws://` is accepted only for loopback, LAN, link-local, `.local`, `.ts.net`, and Tailscale CGNAT hosts.
+- `remote.remotePort`: gateway port on the remote SSH host. Defaults to `18789`; use this when the local tunnel port differs from the remote gateway port.
 - `gateway.remote.token` / `.password` are remote-client credential fields. They do not configure gateway auth by themselves.
 - `gateway.push.apns.relay.baseUrl`: base HTTPS URL for the external APNs relay used by official/TestFlight iOS builds after they publish relay-backed registrations to the gateway. This URL must match the relay URL compiled into the iOS build.
 - `gateway.push.apns.relay.timeoutMs`: gateway-to-relay send timeout in milliseconds. Defaults to `10000`.
@@ -564,6 +576,7 @@ See [Inferred commitments](/concepts/commitments).
 
 ### OpenAI-compatible endpoints
 
+- Admin HTTP RPC: off by default as the `admin-http-rpc` plugin. Enable the plugin to register `POST /api/v1/admin/rpc`. See [Admin HTTP RPC](/plugins/admin-http-rpc).
 - Chat Completions: disabled by default. Enable with `gateway.http.endpoints.chatCompletions.enabled: true`.
 - Responses API: `gateway.http.endpoints.responses.enabled`.
 - Responses URL-input hardening:
@@ -1014,7 +1027,8 @@ Notes:
     enabled: true,
     flags: ["telegram.*"],
     stuckSessionWarnMs: 30000,
-    stuckSessionAbortMs: 600000,
+    stuckSessionAbortMs: 300000,
+    memoryPressureSnapshot: false,
 
     otel: {
       enabled: false,
@@ -1054,7 +1068,8 @@ Notes:
 - `enabled`: master toggle for instrumentation output (default: `true`).
 - `flags`: array of flag strings enabling targeted log output (supports wildcards like `"telegram.*"` or `"*"`).
 - `stuckSessionWarnMs`: no-progress age threshold in ms for classifying long-running processing sessions as `session.long_running`, `session.stalled`, or `session.stuck`. Reply, tool, status, block, and ACP progress reset the timer; repeated `session.stuck` diagnostics back off while unchanged.
-- `stuckSessionAbortMs`: no-progress age threshold in ms before eligible stalled active work may be abort-drained for recovery. When unset, OpenClaw uses the safer extended embedded-run window of at least 10 minutes and 5x `stuckSessionWarnMs`.
+- `stuckSessionAbortMs`: no-progress age threshold in ms before eligible stalled active work may be abort-drained for recovery. When unset, OpenClaw uses the safer extended embedded-run window of at least 5 minutes and 3x `stuckSessionWarnMs`.
+- `memoryPressureSnapshot`: captures a redacted pre-OOM stability snapshot when memory pressure reaches `critical` (default: `false`). Set to `true` to add the stability bundle file scan/write while keeping normal memory pressure events.
 - `otel.enabled`: enables the OpenTelemetry export pipeline (default: `false`). For the full configuration, signal catalog, and privacy model, see [OpenTelemetry export](/gateway/opentelemetry).
 - `otel.endpoint`: collector URL for OTel export.
 - `otel.tracesEndpoint` / `otel.metricsEndpoint` / `otel.logsEndpoint`: optional signal-specific OTLP endpoints. When set, they override `otel.endpoint` for that signal only.

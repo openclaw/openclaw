@@ -110,6 +110,7 @@ export async function startMcpLoopbackServer(port = 0): Promise<{
           sessionKey: requestContext.sessionKey,
           messageProvider: requestContext.messageProvider,
           accountId: requestContext.accountId,
+          inboundEventKind: requestContext.inboundEventKind,
           senderIsOwner: requestContext.senderIsOwner,
         });
 
@@ -118,7 +119,8 @@ export async function startMcpLoopbackServer(port = 0): Promise<{
           batchSize: messages.length,
           methods: messages.map((message) => message.method),
           sessionKey: requestContext.sessionKey,
-          senderIsOwner: requestContext.senderIsOwner,
+          inboundEventKind: requestContext.inboundEventKind,
+          senderIsOwner: requestContext.senderIsOwner === true,
           toolCount: scopedTools.toolSchema.length,
           cronVisible: scopedTools.toolSchema.some((tool) => tool.name === "cron"),
         });

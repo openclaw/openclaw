@@ -794,7 +794,6 @@ function enqueueSlackBlockActionEvent(params: {
       accountId: params.ctx.accountId,
       threadId: params.parsed.threadTs,
     },
-    trusted: false,
   });
   if (queued) {
     requestHeartbeat({

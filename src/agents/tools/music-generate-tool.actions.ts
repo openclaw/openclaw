@@ -6,6 +6,7 @@ import {
   buildMusicGenerationTaskStatusDetails,
   buildMusicGenerationTaskStatusText,
   findActiveMusicGenerationTaskForSession,
+  findDuplicateGuardMusicGenerationTaskForSession,
 } from "../music-generation-task-status.js";
 import {
   createMediaGenerateProviderListActionResult,
@@ -27,7 +28,18 @@ function summarizeMusicGenerationCapabilities(
     edit?.maxInputImages ? `maxInputImages=${edit.maxInputImages}` : null,
     generate?.maxDurationSeconds ? `maxDurationSeconds=${generate.maxDurationSeconds}` : null,
     generate?.supportsLyrics ? "lyrics" : null,
+    generate?.supportsLyricsByModel && Object.keys(generate.supportsLyricsByModel).length > 0
+      ? `supportsLyricsByModel=${Object.entries(generate.supportsLyricsByModel)
+          .map(([modelId, supported]) => `${modelId}:${supported}`)
+          .join("; ")}`
+      : null,
     generate?.supportsInstrumental ? "instrumental" : null,
+    generate?.supportsInstrumentalByModel &&
+    Object.keys(generate.supportsInstrumentalByModel).length > 0
+      ? `supportsInstrumentalByModel=${Object.entries(generate.supportsInstrumentalByModel)
+          .map(([modelId, supported]) => `${modelId}:${supported}`)
+          .join("; ")}`
+      : null,
     generate?.supportsDuration ? "duration" : null,
     generate?.supportsFormat ? "format" : null,
     generate?.supportedFormats?.length
@@ -76,6 +88,26 @@ export function createMusicGenerateStatusActionResult(
 
 export function createMusicGenerateDuplicateGuardResult(
   sessionKey?: string,
+  params?: { prompt?: string; requestKey?: string },
 ): MusicGenerateActionResult | undefined {
-  return musicGenerateTaskStatusActions.createDuplicateGuardResult(sessionKey);
+  const blockingTask = findDuplicateGuardMusicGenerationTaskForSession(sessionKey, {
+    prompt: params?.prompt,
+    requestKey: params?.requestKey,
+  });
+  if (!blockingTask) {
+    return undefined;
+  }
+  return {
+    content: [
+      {
+        type: "text",
+        text: buildMusicGenerationTaskStatusText(blockingTask, { duplicateGuard: true }),
+      },
+    ],
+    details: {
+      action: "status",
+      duplicateGuard: true,
+      ...buildMusicGenerationTaskStatusDetails(blockingTask),
+    },
+  };
 }

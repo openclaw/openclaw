@@ -292,6 +292,113 @@ describe("createConfiguredOllamaCompatStreamWrapper", () => {
     );
   });
 
+  it("does not forward truthy configured native Ollama thinking for non-reasoning models", async () => {
+    await withMockNdjsonFetch(
+      [
+        '{"model":"m","created_at":"t","message":{"role":"assistant","content":"ok"},"done":false}',
+        '{"model":"m","created_at":"t","message":{"role":"assistant","content":""},"done":true,"prompt_eval_count":1,"eval_count":1}',
+      ],
+      async (fetchMock) => {
+        const baseStreamFn = createOllamaStreamFn("http://ollama-host:11434");
+        const model = {
+          api: "ollama",
+          provider: "ollama",
+          id: "llama3.2:latest",
+          contextWindow: 8192,
+          reasoning: false,
+          params: { thinking: "medium" },
+        };
+
+        const wrapped = createConfiguredOllamaCompatStreamWrapper({
+          provider: "ollama",
+          modelId: "llama3.2:latest",
+          model,
+          streamFn: baseStreamFn,
+          thinkingLevel: "off",
+        } as never);
+        if (!wrapped) {
+          throw new Error("Expected wrapped Ollama stream function");
+        }
+
+        const stream = await Promise.resolve(
+          wrapped(
+            model as never,
+            {
+              messages: [{ role: "user", content: "hello" }],
+            } as never,
+            {} as never,
+          ),
+        );
+
+        await collectStreamEvents(stream);
+
+        const requestInit = getGuardedFetchCall(fetchMock).init ?? {};
+        if (typeof requestInit.body !== "string") {
+          throw new Error("Expected string request body");
+        }
+        const requestBody = JSON.parse(requestInit.body) as {
+          think?: string;
+          options?: { think?: string };
+        };
+        expect(requestBody.think).toBeUndefined();
+        expect(requestBody.options?.think).toBeUndefined();
+      },
+    );
+  });
+
+  it("does not forward runtime native Ollama thinking for non-reasoning models", async () => {
+    await withMockNdjsonFetch(
+      [
+        '{"model":"m","created_at":"t","message":{"role":"assistant","content":"ok"},"done":false}',
+        '{"model":"m","created_at":"t","message":{"role":"assistant","content":""},"done":true,"prompt_eval_count":1,"eval_count":1}',
+      ],
+      async (fetchMock) => {
+        const baseStreamFn = createOllamaStreamFn("http://ollama-host:11434");
+        const model = {
+          api: "ollama",
+          provider: "ollama",
+          id: "llama3.2:latest",
+          contextWindow: 8192,
+          reasoning: false,
+        };
+
+        const wrapped = createConfiguredOllamaCompatStreamWrapper({
+          provider: "ollama",
+          modelId: "llama3.2:latest",
+          model,
+          streamFn: baseStreamFn,
+          thinkingLevel: "low",
+        } as never);
+        if (!wrapped) {
+          throw new Error("Expected wrapped Ollama stream function");
+        }
+
+        const stream = await Promise.resolve(
+          wrapped(
+            model as never,
+            {
+              messages: [{ role: "user", content: "hello" }],
+            } as never,
+            {} as never,
+          ),
+        );
+
+        await collectStreamEvents(stream);
+
+        const requestInit = getGuardedFetchCall(fetchMock).init ?? {};
+        if (typeof requestInit.body !== "string") {
+          throw new Error("Expected string request body");
+        }
+        const requestBody = JSON.parse(requestInit.body) as {
+          think?: string;
+          options?: { think?: string };
+        };
+        expect(requestBody.think).toBeUndefined();
+        expect(requestBody.options?.think).toBeUndefined();
+      },
+    );
+  });
+
   it("forwards the native think effort on native Ollama chat requests when thinking is enabled", async () => {
     await withMockNdjsonFetch(
       [
@@ -586,7 +693,27 @@ describe("convertToOllamaMessages", () => {
     expect(result[0].role).toBe("assistant");
     expect(result[0].content).toBe("Let me check.");
     expect(result[0].tool_calls).toEqual([
-      { function: { name: "bash", arguments: { command: "ls" } } },
+      { id: "call_1", function: { name: "bash", arguments: { command: "ls" } } },
+    ]);
+  });
+
+  it("preserves assistant tool-call ids before Ollama replay", () => {
+    const messages = [
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "toolCall",
+            id: "fc_ollama_123",
+            name: "bash",
+            arguments: { command: "pwd" },
+          },
+        ],
+      },
+    ];
+    const result = convertToOllamaMessages(messages);
+    expect(result[0].tool_calls).toEqual([
+      { id: "fc_ollama_123", function: { name: "bash", arguments: { command: "pwd" } } },
     ]);
   });
 
@@ -602,8 +729,8 @@ describe("convertToOllamaMessages", () => {
     ];
     const result = convertToOllamaMessages(messages);
     expect(result[0].tool_calls).toEqual([
-      { function: { name: "exec", arguments: { command: "pwd" } } },
-      { function: { name: "read", arguments: { path: "README.md" } } },
+      { id: "call_1", function: { name: "exec", arguments: { command: "pwd" } } },
+      { id: "call_2", function: { name: "read", arguments: { path: "README.md" } } },
     ]);
   });
 
@@ -622,9 +749,9 @@ describe("convertToOllamaMessages", () => {
       availableToolNames: new Set(["tool_a", "tools_invoke_test", "function-run"]),
     });
     expect(result[0].tool_calls).toEqual([
-      { function: { name: "tool_a", arguments: { value: 1 } } },
-      { function: { name: "tools_invoke_test", arguments: { value: 2 } } },
-      { function: { name: "function-run", arguments: { value: 3 } } },
+      { id: "call_1", function: { name: "tool_a", arguments: { value: 1 } } },
+      { id: "call_2", function: { name: "tools_invoke_test", arguments: { value: 2 } } },
+      { id: "call_3", function: { name: "function-run", arguments: { value: 3 } } },
     ]);
   });
 
@@ -643,9 +770,9 @@ describe("convertToOllamaMessages", () => {
       availableToolNames: new Set(["exec", "read"]),
     });
     expect(result[0].tool_calls).toEqual([
-      { function: { name: "exec", arguments: { command: "pwd" } } },
-      { function: { name: "read", arguments: { path: "." } } },
-      { function: { name: "tool_missing", arguments: {} } },
+      { id: "call_1", function: { name: "exec", arguments: { command: "pwd" } } },
+      { id: "call_2", function: { name: "read", arguments: { path: "." } } },
+      { id: "call_3", function: { name: "tool_missing", arguments: {} } },
     ]);
   });
 
@@ -663,10 +790,10 @@ describe("convertToOllamaMessages", () => {
     ];
     const result = convertToOllamaMessages(messages);
     expect(result[0].tool_calls).toEqual([
-      { function: { name: "functionshell", arguments: {} } },
-      { function: { name: "tooling", arguments: {} } },
-      { function: { name: "tools", arguments: {} } },
-      { function: { name: "tool_a", arguments: {} } },
+      { id: "call_1", function: { name: "functionshell", arguments: {} } },
+      { id: "call_2", function: { name: "tooling", arguments: {} } },
+      { id: "call_3", function: { name: "tools", arguments: {} } },
+      { id: "call_4", function: { name: "tool_a", arguments: {} } },
     ]);
   });
 
@@ -688,7 +815,7 @@ describe("convertToOllamaMessages", () => {
     ];
     const result = convertToOllamaMessages(messages);
     expect(result[0].tool_calls).toEqual([
-      { function: { name: "Read", arguments: { file_path: "/tmp/test.txt" } } },
+      { id: "call_2", function: { name: "Read", arguments: { file_path: "/tmp/test.txt" } } },
     ]);
   });
 
@@ -703,7 +830,7 @@ describe("convertToOllamaMessages", () => {
     ];
     const result = convertToOllamaMessages(messages);
     expect(result[0].tool_calls).toEqual([
-      { function: { name: "exec", arguments: { command: "echo hello" } } },
+      { id: "toolu_1", function: { name: "exec", arguments: { command: "echo hello" } } },
     ]);
   });
 
@@ -724,6 +851,7 @@ describe("convertToOllamaMessages", () => {
     const result = convertToOllamaMessages(messages);
     expect(result[0].tool_calls).toEqual([
       {
+        id: "call_3",
         function: {
           name: "read",
           arguments: {
@@ -872,6 +1000,47 @@ describe("buildAssistantMessage", () => {
     expect(toolCall.name).toBe("bash");
     expect(toolCall.arguments).toEqual({ command: "ls -la" });
     expect(toolCall.id).toMatch(/^ollama_call_[0-9a-f-]{36}$/);
+  });
+
+  it("preserves Ollama response tool-call ids", () => {
+    const response = {
+      model: "gemini-3-flash-preview:cloud",
+      created_at: "2026-01-01T00:00:00Z",
+      message: {
+        role: "assistant" as const,
+        content: "",
+        tool_calls: [
+          { id: "fc_ollama_real_1", function: { name: "bash", arguments: { command: "pwd" } } },
+        ],
+      },
+      done: true,
+    };
+    const result = buildAssistantMessage(response, modelInfo);
+    expectToolCallContent(result.content[0], { name: "bash", arguments: { command: "pwd" } });
+    expect((result.content[0] as { id?: string }).id).toBe("fc_ollama_real_1");
+  });
+
+  it("preserves parallel Ollama response tool-call ids independently", () => {
+    const response = {
+      model: "gemini-3-flash-preview:cloud",
+      created_at: "2026-01-01T00:00:00Z",
+      message: {
+        role: "assistant" as const,
+        content: "",
+        tool_calls: [
+          { id: "fc_ollama_real_1", function: { name: "read", arguments: { path: "a.txt" } } },
+          { id: "fc_ollama_real_2", function: { name: "exec", arguments: { command: "date" } } },
+        ],
+      },
+      done: true,
+    };
+    const result = buildAssistantMessage(response, modelInfo);
+    expect(result.content.map((part) => (part as { id?: string }).id)).toEqual([
+      "fc_ollama_real_1",
+      "fc_ollama_real_2",
+    ]);
+    expectToolCallContent(result.content[0], { name: "read", arguments: { path: "a.txt" } });
+    expectToolCallContent(result.content[1], { name: "exec", arguments: { command: "date" } });
   });
 
   it("normalizes provider-prefixed tool-call names in Ollama responses", () => {

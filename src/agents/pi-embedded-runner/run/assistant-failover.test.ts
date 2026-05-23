@@ -118,6 +118,29 @@ describe("handleAssistantFailover", () => {
       expect(outcome.action).toBe("retry");
       expect(warn).not.toHaveBeenCalled();
     });
+
+    it("marks provider-started timeout rotations against the failed profile", async () => {
+      const maybeMarkAuthProfileFailure = vi.fn(async () => {});
+
+      const outcome = await handleAssistantFailover(
+        makeParams({
+          initialDecision: { action: "rotate_profile", reason: "timeout" },
+          failoverReason: "timeout",
+          timedOut: true,
+          assistantProfileFailureReason: "timeout",
+          lastProfileId: "profile-timeout",
+          advanceAuthProfile: vi.fn(async () => true),
+          maybeMarkAuthProfileFailure,
+        }),
+      );
+
+      expect(outcome.action).toBe("retry");
+      expect(maybeMarkAuthProfileFailure).toHaveBeenCalledWith({
+        profileId: "profile-timeout",
+        reason: "timeout",
+        modelId: "claude-haiku-4-5-20251001",
+      });
+    });
   });
 
   describe("surface_error branch (openclaw#70124)", () => {
@@ -194,11 +217,6 @@ describe("handleAssistantFailover", () => {
     });
 
     it("coerces a null decision reason onto the most specific non-timeout failure signal", async () => {
-      // failover-policy can return `surface_error` with `reason: null`
-      // when shouldRotateAssistant fires on `failoverFailure` without a
-      // classified upstream reason. FailoverError requires a concrete
-      // reason, so the throw path coerces null onto the most specific
-      // signal the run observed.
       const outcome = await handleAssistantFailover(
         makeParams({
           initialDecision: { action: "surface_error", reason: null },
@@ -213,6 +231,33 @@ describe("handleAssistantFailover", () => {
       expect(err.reason).toBe("auth");
       expect(err.message).toBe("LLM request unauthorized.");
       expect(err.status).toBe(401);
+    });
+
+    it("leaves successful turns with a stale classified errorMessage on the continue_normal path", async () => {
+      const outcome = await handleAssistantFailover(
+        makeParams({
+          initialDecision: { action: "surface_error", reason: "billing" },
+          failoverFailure: false,
+          failoverReason: "billing",
+          billingFailure: false,
+        }),
+      );
+
+      expect(outcome.action).toBe("continue_normal");
+    });
+
+    it("does not escalate stale classified text after an already-started rotation attempt", async () => {
+      const outcome = await handleAssistantFailover(
+        makeParams({
+          initialDecision: { action: "rotate_profile", reason: "billing" },
+          fallbackConfigured: true,
+          failoverFailure: false,
+          failoverReason: "billing",
+          billingFailure: false,
+        }),
+      );
+
+      expect(outcome.action).toBe("continue_normal");
     });
 
     it("leaves externally-aborted runs on the continue_normal path", async () => {

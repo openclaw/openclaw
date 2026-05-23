@@ -50,7 +50,7 @@ afterEach(() => {
 });
 
 function firstMockArg(mockFn: ReturnType<typeof vi.fn>, label: string): Record<string, any> {
-  const call = mockFn.mock.calls.at(0);
+  const call = mockFn.mock.calls[0];
   if (!call) {
     throw new Error(`Expected ${label} call`);
   }
@@ -147,6 +147,30 @@ describe("buildGatewayInstallPlan", () => {
     expect(serviceEnvRequest?.env).toStrictEqual({ HOME: isolatedHome });
     expect(serviceEnvRequest?.port).toBe(3000);
     expect(serviceEnvRequest?.extraPathDirs).toStrictEqual(["/custom"]);
+  });
+
+  it("adds the active openclaw command bin directory to the managed service PATH", async () => {
+    mockNodeGatewayPlanFixture();
+    const originalArgv = process.argv;
+    const openclawBinPath = path.join(isolatedHome, ".npm-global", "bin", "openclaw");
+    process.argv = ["node", openclawBinPath, "gateway", "install"];
+
+    try {
+      await buildGatewayInstallPlan({
+        env: { HOME: isolatedHome },
+        port: 3000,
+        runtime: "node",
+        nodePath: "/opt/homebrew/opt/node/bin/node",
+        platform: "darwin",
+      });
+    } finally {
+      process.argv = originalArgv;
+    }
+
+    expect(mocks.buildServiceEnvironment).toHaveBeenCalledOnce();
+    expect(
+      firstMockArg(mocks.buildServiceEnvironment, "buildServiceEnvironment").extraPathDirs,
+    ).toStrictEqual(["/opt/homebrew/opt/node/bin", path.dirname(openclawBinPath)]);
   });
 
   it("does not prepend '.' when nodePath is a bare executable name", async () => {
@@ -417,7 +441,7 @@ describe("buildGatewayInstallPlan", () => {
       'Exec SecretRef passEnv ref "HOME" blocked by host-env security policy',
       "Config SecretRef",
     );
-    const warningMessages = warn.mock.calls.map(([message]) => message);
+    const warningOutput = warn.mock.calls.map(([message]) => message).join("\n");
     for (const blockedName of [
       "XDG_CONFIG_HOME",
       "XDG_CONFIG_DIRS",
@@ -427,7 +451,7 @@ describe("buildGatewayInstallPlan", () => {
       "DOCKER_HOST",
       "NODE_TLS_REJECT_UNAUTHORIZED",
     ]) {
-      expect(warningMessages.some((message) => message.includes(blockedName))).toBe(true);
+      expect(warningOutput).toContain(blockedName);
     }
     expect(warn.mock.calls.every(([, title]) => title === "Config SecretRef")).toBe(true);
   });

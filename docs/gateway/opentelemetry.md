@@ -189,6 +189,10 @@ When any subkey is enabled, model and tool spans get bounded, redacted
 - `openclaw.webhook.error` (counter, attrs: `openclaw.channel`, `openclaw.webhook`)
 - `openclaw.webhook.duration_ms` (histogram, attrs: `openclaw.channel`, `openclaw.webhook`)
 - `openclaw.message.queued` (counter, attrs: `openclaw.channel`, `openclaw.source`)
+- `openclaw.message.received` (counter, attrs: `openclaw.channel`, `openclaw.source`)
+- `openclaw.message.dispatch.started` (counter, attrs: `openclaw.channel`, `openclaw.source`)
+- `openclaw.message.dispatch.completed` (counter, attrs: `openclaw.channel`, `openclaw.outcome`, `openclaw.reason`, `openclaw.source`)
+- `openclaw.message.dispatch.duration_ms` (histogram, attrs: `openclaw.channel`, `openclaw.outcome`, `openclaw.reason`, `openclaw.source`)
 - `openclaw.message.processed` (counter, attrs: `openclaw.channel`, `openclaw.outcome`)
 - `openclaw.message.duration_ms` (histogram, attrs: `openclaw.channel`, `openclaw.outcome`)
 - `openclaw.message.delivery.started` (counter, attrs: `openclaw.channel`, `openclaw.delivery.kind`)
@@ -209,6 +213,7 @@ When any subkey is enabled, model and tool spans get bounded, redacted
 - `openclaw.session.state` (counter, attrs: `openclaw.state`, `openclaw.reason`)
 - `openclaw.session.stuck` (counter, attrs: `openclaw.state`; emitted only for stale session bookkeeping with no active work)
 - `openclaw.session.stuck_age_ms` (histogram, attrs: `openclaw.state`; emitted only for stale session bookkeeping with no active work)
+- `openclaw.session.turn.created` (counter, attrs: `openclaw.agent`, `openclaw.channel`, `openclaw.trigger`)
 - `openclaw.session.recovery.requested` (counter, attrs: `openclaw.state`, `openclaw.action`, `openclaw.active_work_kind`, `openclaw.reason`)
 - `openclaw.session.recovery.completed` (counter, attrs: `openclaw.state`, `openclaw.action`, `openclaw.status`, `openclaw.active_work_kind`, `openclaw.reason`)
 - `openclaw.session.recovery.age_ms` (histogram, attrs: same as the matching recovery counter)
@@ -230,7 +235,7 @@ OpenClaw classifies sessions by the work it can still observe:
   recent progress. Stalled embedded runs stay observe-only at first, then
   abort-drain after `diagnostics.stuckSessionAbortMs` with no progress so queued
   turns behind the lane can resume. When unset, the abort threshold defaults to
-  the safer extended window of at least 10 minutes and 5x
+  the safer extended window of at least 5 minutes and 3x
   `diagnostics.stuckSessionWarnMs`.
 - `session.stuck`: stale session bookkeeping with no active work. This releases
   the affected session lane immediately.

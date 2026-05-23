@@ -4,6 +4,7 @@ import { createSubsystemLogger } from "../../logging/subsystem.js";
 import {
   extractLeadingHttpStatus,
   formatRawAssistantErrorForUi,
+  isGenericProviderInternalError,
 } from "../../shared/assistant-error-format.js";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -13,6 +14,7 @@ export {
   extractLeadingHttpStatus,
   formatRawAssistantErrorForUi,
   isCloudflareOrHtmlErrorPage,
+  isGenericProviderInternalError,
   parseApiErrorInfo,
 } from "../../shared/assistant-error-format.js";
 import { classifyOAuthRefreshFailure } from "../auth-profiles/oauth-refresh-failure.js";
@@ -257,7 +259,7 @@ export type ProviderRuntimeFailureKind =
   | "refresh_contention"
   | "callback_timeout"
   | "callback_validation"
-  | "auth_html_403"
+  | "auth_html"
   | "upstream_html"
   | "proxy"
   | "rate_limit"
@@ -328,7 +330,7 @@ const INTERRUPTED_NETWORK_ERROR_RE =
 const REPLAY_INVALID_RE =
   /\bprevious_response_id\b.*\b(?:invalid|unknown|not found|does not exist|expired|mismatch)\b|\btool_(?:use|call)\.(?:input|arguments)\b.*\b(?:missing|required)\b|\bincorrect role information\b|\broles must alternate\b|\binput item id does not belong to this connection\b/i;
 const SANDBOX_BLOCKED_RE =
-  /\bapproval is required\b|\bapproval timed out\b|\bapproval was denied\b|\bblocked by sandbox\b|\bsandbox\b.*\b(?:blocked|denied|forbidden|disabled|not allowed)\b/i;
+  /\bapproval is required\b|\bapproval timed out\b|\bapproval was denied\b|\bblocked by sandbox\b|\bsandbox\b.*\b(?:blocked|denied|forbidden|disabled|not allowed)\b|\bexec denied\s*\(/i;
 const NO_BODY_HTTP_WRAPPER_RE =
   /^(?:no body(?: response)?|no response body|status code \(no body\))$/i;
 
@@ -610,7 +612,13 @@ export function classifyFailoverReasonFromHttpStatus(
     ? classifyFailoverClassificationFromMessage(message, opts?.provider)
     : null;
   return failoverReasonFromClassification(
-    classifyFailoverClassificationFromHttpStatus(status, message, messageClassification, status),
+    classifyFailoverClassificationFromHttpStatus(
+      status,
+      message,
+      messageClassification,
+      status,
+      opts?.provider,
+    ),
   );
 }
 
@@ -619,6 +627,7 @@ function classifyFailoverClassificationFromHttpStatus(
   message: string | undefined,
   messageClassification: FailoverClassification | null,
   explicitStatus: number | undefined,
+  provider?: string,
 ): FailoverClassification | null {
   const messageReason = failoverReasonFromClassification(messageClassification);
   if (typeof status !== "number" || !Number.isFinite(status)) {
@@ -642,6 +651,13 @@ function classifyFailoverClassificationFromHttpStatus(
     return toReasonClassification(classify402Message(message));
   }
   if (status === 429) {
+    if (
+      message &&
+      (isProvider(provider, "moonshot") || isProvider(provider, "kimi")) &&
+      isBillingErrorMessage(message)
+    ) {
+      return toReasonClassification("billing");
+    }
     return toReasonClassification("rate_limit");
   }
   if (status === 401 || status === 403) {
@@ -742,6 +758,8 @@ function classifyFailoverReasonFromCode(raw: string | undefined): FailoverReason
     case "THROTTLINGEXCEPTION":
     case "THROTTLING_EXCEPTION":
       return "rate_limit";
+    case "DEACTIVATED_WORKSPACE":
+      return "auth_permanent";
     case "OVERLOADED":
     case "OVERLOADED_ERROR":
       return "overloaded";
@@ -843,11 +861,18 @@ function classifyFailoverClassificationFromMessage(
     }
     return toReasonClassification("timeout");
   }
+  if (isGenericProviderInternalError(raw)) {
+    return toReasonClassification("timeout");
+  }
   // Billing and auth classifiers run before the broad isJsonApiInternalServerError
   // check so that provider errors like {"type":"api_error","message":"insufficient
   // balance"} are correctly classified as "billing"/"auth" rather than "timeout".
   if (isBillingErrorMessage(raw)) {
     return toReasonClassification("billing");
+  }
+  const oauthRefreshFailure = classifyOAuthRefreshFailure(raw);
+  if (oauthRefreshFailure?.reason) {
+    return toReasonClassification("auth_permanent");
   }
   if (isAuthPermanentErrorMessage(raw)) {
     return toReasonClassification("auth_permanent");
@@ -896,16 +921,20 @@ export function classifyFailoverSignal(signal: FailoverSignal): FailoverClassifi
   const messageClassification = signal.message
     ? classifyFailoverClassificationFromMessage(signal.message, signal.provider)
     : null;
+  const codeReason = classifyFailoverReasonFromCode(signal.code);
+  if (codeReason === "auth_permanent") {
+    return toReasonClassification(codeReason);
+  }
   const statusClassification = classifyFailoverClassificationFromHttpStatus(
     inferredStatus,
     signal.message,
     messageClassification,
     signal.status,
+    signal.provider,
   );
   if (statusClassification) {
     return statusClassification;
   }
-  const codeReason = classifyFailoverReasonFromCode(signal.code);
   if (codeReason) {
     return toReasonClassification(codeReason);
   }
@@ -947,7 +976,7 @@ export function classifyProviderRuntimeFailureKind(
     return "proxy";
   }
   if (message && isHtmlErrorResponse(message, status)) {
-    return status === 403 ? "auth_html_403" : "upstream_html";
+    return status === 401 || status === 403 ? "auth_html" : "upstream_html";
   }
   const failoverClassification = classifyFailoverSignal({
     ...normalizedSignal,
@@ -1061,10 +1090,10 @@ export function formatAssistantErrorText(
     );
   }
 
-  if (providerRuntimeFailureKind === "auth_html_403") {
+  if (providerRuntimeFailureKind === "auth_html") {
     return (
-      "Authentication failed with an HTML 403 response from the provider. " +
-      "Re-authenticate and verify your provider account access."
+      "Authentication failed at the provider. " +
+      "Re-authenticate and verify your provider credentials and account access."
     );
   }
 
@@ -1126,6 +1155,10 @@ export function formatAssistantErrorText(
   const transientCopy = formatRateLimitOrOverloadedErrorCopy(raw);
   if (transientCopy) {
     return transientCopy;
+  }
+
+  if (isGenericProviderInternalError(raw)) {
+    return formatRawAssistantErrorForUi(raw);
   }
 
   const transportCopy = formatTransportErrorCopy(raw);

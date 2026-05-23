@@ -278,6 +278,15 @@ function resolveOllamaThinkParamValue(
   return undefined;
 }
 
+function shouldForwardNativeOllamaThink(
+  model: ProviderRuntimeModel | undefined,
+  think: OllamaThinkValue,
+): boolean {
+  // Ollama accepts top-level `think` as the native chat contract, but rejects
+  // truthy values for models known not to expose thinking support.
+  return think === false || model?.reasoning !== false;
+}
+
 function resolveOllamaConfiguredNumCtx(model: ProviderRuntimeModel): number | undefined {
   const raw = model.params?.num_ctx;
   if (typeof raw !== "number" || !Number.isFinite(raw) || raw <= 0) {
@@ -341,7 +350,7 @@ function resolveOllamaTopLevelParams(
     }
   }
   const think = resolveOllamaThinkParamValue(params);
-  if (think !== undefined) {
+  if (think !== undefined && shouldForwardNativeOllamaThink(model, think)) {
     requestParams.think = think;
   }
   return Object.keys(requestParams).length > 0 ? requestParams : undefined;
@@ -390,7 +399,7 @@ export function createConfiguredOllamaCompatStreamWrapper(
     runtimeThinkValue === false && configuredThinkValue !== undefined
       ? undefined
       : runtimeThinkValue;
-  if (ollamaThinkValue !== undefined) {
+  if (ollamaThinkValue !== undefined && shouldForwardNativeOllamaThink(model, ollamaThinkValue)) {
     streamFn = createOllamaThinkingWrapper(streamFn, ollamaThinkValue);
   }
 
@@ -525,6 +534,7 @@ interface OllamaTool {
 }
 
 interface OllamaToolCall {
+  id?: string;
   function: {
     name: string;
     arguments: Record<string, unknown> | string;
@@ -780,6 +790,10 @@ type OllamaToolCallNameOptions = {
   availableToolNames?: ReadonlySet<string>;
 };
 
+function readOllamaToolCallId(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
+}
+
 function extractToolCalls(
   content: unknown,
   options: OllamaToolCallNameOptions = {},
@@ -791,14 +805,18 @@ function extractToolCalls(
   const result: OllamaToolCall[] = [];
   for (const part of parts) {
     if (part.type === "toolCall") {
+      const id = readOllamaToolCallId(part.id);
       result.push({
+        ...(id ? { id } : {}),
         function: {
           name: normalizeOllamaToolCallName(part.name, options),
           arguments: ensureArgsObject(part.arguments),
         },
       });
     } else if (part.type === "tool_use") {
+      const id = readOllamaToolCallId(part.id);
       result.push({
+        ...(id ? { id } : {}),
         function: {
           name: normalizeOllamaToolCallName(part.name, options),
           arguments: ensureArgsObject(part.input),
@@ -943,7 +961,7 @@ export function buildAssistantMessage(
     for (const toolCall of toolCalls) {
       content.push({
         type: "toolCall",
-        id: `ollama_call_${randomUUID()}`,
+        id: readOllamaToolCallId(toolCall.id) ?? `ollama_call_${randomUUID()}`,
         name: normalizeOllamaToolCallName(toolCall.function.name, options),
         arguments: normalizeOllamaToolCallArguments(toolCall.function.arguments),
       });

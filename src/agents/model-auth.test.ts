@@ -72,6 +72,7 @@ vi.mock("../plugins/provider-runtime.js", async () => {
           };
         };
       };
+      modelApi?: string;
       context: { providerConfig?: { api?: string; baseUrl?: string; models?: unknown[] } };
     }) => {
       if (params.provider === "plugin-web") {
@@ -106,9 +107,11 @@ vi.mock("../plugins/provider-runtime.js", async () => {
           mode: "oauth" as const,
         };
       }
+      const effectiveApi = params.modelApi ?? params.context.providerConfig?.api;
       if (
-        params.context.providerConfig?.api === "ollama" &&
-        params.context.providerConfig.baseUrl?.startsWith("http://192.168.")
+        effectiveApi === "ollama" &&
+        (params.context.providerConfig?.baseUrl?.startsWith("http://192.168.") ||
+          params.modelApi === "ollama")
       ) {
         return {
           apiKey: "ollama-local",
@@ -123,9 +126,11 @@ vi.mock("../plugins/provider-runtime.js", async () => {
 
 let applyAuthHeaderOverride: typeof import("./model-auth.js").applyAuthHeaderOverride;
 let applyLocalNoAuthHeaderOverride: typeof import("./model-auth.js").applyLocalNoAuthHeaderOverride;
+let formatMissingAuthError: typeof import("./model-auth.js").formatMissingAuthError;
 let hasUsableCustomProviderApiKey: typeof import("./model-auth.js").hasUsableCustomProviderApiKey;
 let hasSyntheticLocalProviderAuthConfig: typeof import("./model-auth.js").hasSyntheticLocalProviderAuthConfig;
 let requireApiKey: typeof import("./model-auth.js").requireApiKey;
+let getApiKeyForModel: typeof import("./model-auth.js").getApiKeyForModel;
 let resolveApiKeyForProvider: typeof import("./model-auth.js").resolveApiKeyForProvider;
 let resolveAwsSdkEnvVarName: typeof import("./model-auth.js").resolveAwsSdkEnvVarName;
 let resolveModelAuthMode: typeof import("./model-auth.js").resolveModelAuthMode;
@@ -141,7 +146,9 @@ beforeAll(async () => {
   ({
     applyAuthHeaderOverride,
     applyLocalNoAuthHeaderOverride,
+    formatMissingAuthError,
     hasSyntheticLocalProviderAuthConfig,
+    getApiKeyForModel,
     hasUsableCustomProviderApiKey,
     requireApiKey,
     resolveApiKeyForProvider,
@@ -354,6 +361,20 @@ describe("resolveModelAuthMode", () => {
 });
 
 describe("requireApiKey", () => {
+  it("formats missing auth errors with the checked credential source", () => {
+    expect(
+      formatMissingAuthError(
+        {
+          source: "env: OPENAI_API_KEY",
+          mode: "api-key",
+        },
+        "openai",
+      ),
+    ).toBe(
+      'No API key resolved for provider "openai" (auth mode: api-key, checked: env: OPENAI_API_KEY).',
+    );
+  });
+
   it("normalizes line breaks in resolved API keys", () => {
     const key = requireApiKey(
       {
@@ -376,7 +397,9 @@ describe("requireApiKey", () => {
         },
         "openai",
       ),
-    ).toThrow('No API key resolved for provider "openai"');
+    ).toThrow(
+      'No API key resolved for provider "openai" (auth mode: api-key, checked: env: OPENAI_API_KEY).',
+    );
   });
 });
 
@@ -1058,6 +1081,53 @@ describe("resolveApiKeyForProvider – synthetic local auth for custom providers
     });
   });
 
+  it("resolves synthetic auth when model overrides api to ollama within a non-ollama provider", async () => {
+    const auth = await getApiKeyForModel({
+      model: {
+        id: "my-router/local-llama",
+        name: "Local Llama",
+        provider: "my-router",
+        api: "ollama",
+        baseUrl: "http://localhost:11434",
+        reasoning: false,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 8192,
+        maxTokens: 4096,
+      },
+      cfg: {
+        models: {
+          providers: {
+            "my-router": {
+              baseUrl: "http://localhost:8080/v1",
+              api: "openai-completions",
+              models: [
+                {
+                  id: "my-router/local-llama",
+                  name: "Local Llama",
+                  api: "ollama",
+                  baseUrl: "http://localhost:11434",
+                  reasoning: false,
+                  input: ["text"],
+                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                  contextWindow: 8192,
+                  maxTokens: 4096,
+                },
+              ],
+            },
+          },
+        },
+      },
+      store: { version: 1, profiles: {} },
+    });
+
+    expectAuthFields(auth, {
+      apiKey: "ollama-local",
+      source: "models.providers.my-router (synthetic local key)",
+      mode: "api-key",
+    });
+  });
+
   it("accepts non-secret local markers for private LAN custom OpenAI-compatible providers", async () => {
     const auth = await resolveApiKeyForProvider({
       provider: "custom-192-168-0-222-11434",
@@ -1092,6 +1162,44 @@ describe("resolveApiKeyForProvider – synthetic local auth for custom providers
       mode: "api-key",
     });
   });
+
+  it.each(["docker.orb.internal", "host.docker.internal", "host.orb.internal"])(
+    "accepts ollama-local marker auth for host-backed alias %s",
+    async (hostname) => {
+      const auth = await resolveApiKeyForProvider({
+        provider: "ollama",
+        cfg: {
+          models: {
+            providers: {
+              ollama: {
+                baseUrl: `http://${hostname}:11434`,
+                api: "ollama",
+                apiKey: "ollama-local",
+                models: [
+                  {
+                    id: "qwen3.5:27b",
+                    name: "Qwen 3.5 27B",
+                    reasoning: false,
+                    input: ["text"],
+                    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                    contextWindow: 262144,
+                    maxTokens: 8192,
+                  },
+                ],
+              },
+            },
+          },
+        },
+        store: { version: 1, profiles: {} },
+      });
+
+      expectAuthFields(auth, {
+        apiKey: "ollama-local",
+        source: "models.json (local marker)",
+        mode: "api-key",
+      });
+    },
+  );
 
   it("does not accept non-secret local markers for remote custom providers", async () => {
     await expect(

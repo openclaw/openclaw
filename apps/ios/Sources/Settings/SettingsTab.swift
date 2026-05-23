@@ -21,6 +21,9 @@ struct SettingsTab: View {
     @AppStorage("node.instanceId") private var instanceId: String = UUID().uuidString
     @AppStorage("voiceWake.enabled") private var voiceWakeEnabled: Bool = false
     @AppStorage("talk.enabled") private var talkEnabled: Bool = false
+    @AppStorage(TalkModeProviderSelection.storageKey) private var talkProviderSelectionRaw: String =
+        TalkModeProviderSelection.gatewayDefault.rawValue
+    @AppStorage(TalkModeRealtimeVoiceSelection.storageKey) private var talkRealtimeVoiceSelectionRaw: String = ""
     @AppStorage(TalkSpeechLocale.storageKey) private var talkSpeechLocale: String = TalkSpeechLocale.automaticID
     @AppStorage("talk.button.enabled") private var talkButtonEnabled: Bool = true
     @AppStorage("talk.background.enabled") private var talkBackgroundEnabled: Bool = false
@@ -54,6 +57,7 @@ struct SettingsTab: View {
     @State private var manualGatewayPortText: String = ""
     @State private var gatewayExpanded: Bool = true
     @State private var selectedAgentPickerId: String = ""
+    @State private var pendingManualAuthOverride: GatewayConnectionController.ManualAuthOverride?
 
     @State private var showResetOnboardingAlert: Bool = false
     @State private var showGatewayProblemDetails: Bool = false
@@ -344,66 +348,11 @@ struct SettingsTab: View {
                             help: "Keeps the screen awake while OpenClaw is open.")
 
                         DisclosureGroup("Advanced") {
-                            VStack(alignment: .leading, spacing: 8) {
-                                Text("Talk Voice (Gateway)")
-                                    .font(.footnote.weight(.semibold))
-                                    .foregroundStyle(.secondary)
-                                LabeledContent("Provider", value: "ElevenLabs")
-                                LabeledContent(
-                                    "API Key",
-                                    value: self.appModel.talkMode.gatewayTalkConfigLoaded
-                                        ? (
-                                            self.appModel.talkMode.gatewayTalkApiKeyConfigured
-                                                ? "Configured"
-                                                : "Not configured")
-                                        : "Not loaded")
-                                LabeledContent(
-                                    "Default Model",
-                                    value: self.appModel.talkMode.gatewayTalkDefaultModelId ?? "eleven_v3 (fallback)")
-                                LabeledContent(
-                                    "Default Voice",
-                                    value: self.appModel.talkMode.gatewayTalkDefaultVoiceId ?? "auto (first available)")
-                                Text("Configured on gateway via talk.apiKey, talk.modelId, and talk.voiceId.")
-                                    .font(.footnote)
-                                    .foregroundStyle(.secondary)
-                            }
-                            self.featureToggle(
-                                "Show Talk Control",
-                                isOn: self.$talkButtonEnabled,
-                                help: "Shows the Talk control in the main toolbar.")
-                            TextField("Default Share Instruction", text: self.$defaultShareInstruction, axis: .vertical)
-                                .lineLimit(2...6)
-                                .textInputAutocapitalization(.sentences)
-                            HStack(spacing: 8) {
-                                Text("Default Share Instruction")
-                                    .font(.footnote)
-                                    .foregroundStyle(.secondary)
-                                Spacer()
-                                Button {
-                                    self.activeFeatureHelp = FeatureHelp(
-                                        title: "Default Share Instruction",
-                                        message: "Appends this instruction when sharing content "
-                                            + "into OpenClaw from iOS.")
-                                } label: {
-                                    Image(systemName: "info.circle")
-                                        .foregroundStyle(.secondary)
-                                }
-                                .buttonStyle(.plain)
-                                .accessibilityLabel("Default Share Instruction info")
-                            }
-
-                            VStack(alignment: .leading, spacing: 8) {
-                                Button {
-                                    Task { await self.appModel.runSharePipelineSelfTest() }
-                                } label: {
-                                    Label("Run Share Self-Test", systemImage: "checkmark.seal")
-                                }
-                                Text(self.appModel.lastShareEventText)
-                                    .font(.footnote)
-                                    .foregroundStyle(.secondary)
-                            }
+                            self.advancedAppSettingsView()
                         }
                     }
+
+                    AnyView(PrivacyAccessSectionView())
 
                     DisclosureGroup("Device Info") {
                         TextField("Name", text: self.$displayName)
@@ -419,16 +368,7 @@ struct SettingsTab: View {
                 }
             }
             .navigationTitle("Settings")
-            .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button {
-                        self.dismiss()
-                    } label: {
-                        Image(systemName: "xmark")
-                    }
-                    .accessibilityLabel("Close")
-                }
-            }
+            .modifier(SettingsCloseToolbar())
             .sheet(isPresented: self.$showGatewayProblemDetails) {
                 if let gatewayProblem = self.appModel.lastGatewayProblem {
                     GatewayProblemDetailsSheet(
@@ -488,90 +428,91 @@ struct SettingsTab: View {
                 Text(self.scannerError ?? "")
             }
             .onAppear {
-                self.lastLocationModeRaw = self.locationEnabledModeRaw
-                self.syncManualPortText()
-                let trimmedInstanceId = self.instanceId.trimmingCharacters(in: .whitespacesAndNewlines)
-                if !trimmedInstanceId.isEmpty {
-                    self.gatewayToken = GatewaySettingsStore.loadGatewayToken(instanceId: trimmedInstanceId) ?? ""
-                    self.gatewayPassword = GatewaySettingsStore.loadGatewayPassword(instanceId: trimmedInstanceId) ?? ""
+                    self.lastLocationModeRaw = self.locationEnabledModeRaw
+                    self.syncManualPortText()
+                    let trimmedInstanceId = self.instanceId.trimmingCharacters(in: .whitespacesAndNewlines)
+                    if !trimmedInstanceId.isEmpty {
+                        self.gatewayToken = GatewaySettingsStore.loadGatewayToken(instanceId: trimmedInstanceId) ?? ""
+                        self.gatewayPassword = GatewaySettingsStore
+                            .loadGatewayPassword(instanceId: trimmedInstanceId) ?? ""
+                    }
+                    self.defaultShareInstruction = ShareToAgentSettings.loadDefaultInstruction()
+                    self.appModel.refreshLastShareEventFromRelay()
+                    // Keep setup front-and-center when disconnected; keep things compact once connected.
+                    self.gatewayExpanded = !self.isGatewayConnected
+                    self.selectedAgentPickerId = self.appModel.selectedAgentId ?? ""
+                    if self.isGatewayConnected {
+                        self.appModel.reloadTalkConfig()
+                    }
                 }
-                self.defaultShareInstruction = ShareToAgentSettings.loadDefaultInstruction()
-                self.appModel.refreshLastShareEventFromRelay()
-                // Keep setup front-and-center when disconnected; keep things compact once connected.
-                self.gatewayExpanded = !self.isGatewayConnected
-                self.selectedAgentPickerId = self.appModel.selectedAgentId ?? ""
-                if self.isGatewayConnected {
-                    self.appModel.reloadTalkConfig()
+                .onChange(of: self.selectedAgentPickerId) { _, newValue in
+                    let trimmed = newValue.trimmingCharacters(in: .whitespacesAndNewlines)
+                    self.appModel.setSelectedAgentId(trimmed.isEmpty ? nil : trimmed)
                 }
-            }
-            .onChange(of: self.selectedAgentPickerId) { _, newValue in
-                let trimmed = newValue.trimmingCharacters(in: .whitespacesAndNewlines)
-                self.appModel.setSelectedAgentId(trimmed.isEmpty ? nil : trimmed)
-            }
-            .onChange(of: self.appModel.selectedAgentId ?? "") { _, newValue in
-                if newValue != self.selectedAgentPickerId {
-                    self.selectedAgentPickerId = newValue
+                .onChange(of: self.appModel.selectedAgentId ?? "") { _, newValue in
+                    if newValue != self.selectedAgentPickerId {
+                        self.selectedAgentPickerId = newValue
+                    }
                 }
-            }
-            .onChange(of: self.preferredGatewayStableID) { _, newValue in
-                let trimmed = newValue.trimmingCharacters(in: .whitespacesAndNewlines)
-                guard !trimmed.isEmpty else { return }
-                GatewaySettingsStore.savePreferredGatewayStableID(trimmed)
-            }
-            .onChange(of: self.gatewayToken) { _, newValue in
-                guard !self.suppressCredentialPersist else { return }
-                let trimmed = newValue.trimmingCharacters(in: .whitespacesAndNewlines)
-                let instanceId = self.instanceId.trimmingCharacters(in: .whitespacesAndNewlines)
-                guard !instanceId.isEmpty else { return }
-                GatewaySettingsStore.saveGatewayToken(trimmed, instanceId: instanceId)
-            }
-            .onChange(of: self.gatewayPassword) { _, newValue in
-                guard !self.suppressCredentialPersist else { return }
-                let trimmed = newValue.trimmingCharacters(in: .whitespacesAndNewlines)
-                let instanceId = self.instanceId.trimmingCharacters(in: .whitespacesAndNewlines)
-                guard !instanceId.isEmpty else { return }
-                GatewaySettingsStore.saveGatewayPassword(trimmed, instanceId: instanceId)
-            }
-            .onChange(of: self.defaultShareInstruction) { _, newValue in
-                ShareToAgentSettings.saveDefaultInstruction(newValue)
-            }
-            .onChange(of: self.manualGatewayPort) { _, _ in
-                self.syncManualPortText()
-            }
-            .onChange(of: self.appModel.gatewayServerName) { _, newValue in
-                if newValue != nil {
-                    self.setupCode = ""
-                    self.setupStatusText = nil
-                    return
+                .onChange(of: self.preferredGatewayStableID) { _, newValue in
+                    let trimmed = newValue.trimmingCharacters(in: .whitespacesAndNewlines)
+                    guard !trimmed.isEmpty else { return }
+                    GatewaySettingsStore.savePreferredGatewayStableID(trimmed)
                 }
-                if self.manualGatewayEnabled {
-                    self.setupStatusText = self.appModel.gatewayStatusText
+                .onChange(of: self.gatewayToken) { _, newValue in
+                    guard !self.suppressCredentialPersist else { return }
+                    let trimmed = newValue.trimmingCharacters(in: .whitespacesAndNewlines)
+                    let instanceId = self.instanceId.trimmingCharacters(in: .whitespacesAndNewlines)
+                    guard !instanceId.isEmpty else { return }
+                    GatewaySettingsStore.saveGatewayToken(trimmed, instanceId: instanceId)
                 }
-            }
-            .onChange(of: self.appModel.gatewayStatusText) { _, newValue in
-                guard self.manualGatewayEnabled || self.connectingGatewayID == "manual" else { return }
-                let trimmed = newValue.trimmingCharacters(in: .whitespacesAndNewlines)
-                guard !trimmed.isEmpty else { return }
-                self.setupStatusText = trimmed
-            }
-            .onChange(of: self.locationEnabledModeRaw) { _, newValue in
-                let previous = self.lastLocationModeRaw
-                self.lastLocationModeRaw = newValue
-                guard let mode = OpenClawLocationMode(rawValue: newValue) else { return }
-                Task {
-                    let granted = await self.appModel.requestLocationPermissions(mode: mode)
-                    if !granted {
-                        await MainActor.run {
-                            self.locationEnabledModeRaw = previous
-                            self.lastLocationModeRaw = previous
-                        }
+                .onChange(of: self.gatewayPassword) { _, newValue in
+                    guard !self.suppressCredentialPersist else { return }
+                    let trimmed = newValue.trimmingCharacters(in: .whitespacesAndNewlines)
+                    let instanceId = self.instanceId.trimmingCharacters(in: .whitespacesAndNewlines)
+                    guard !instanceId.isEmpty else { return }
+                    GatewaySettingsStore.saveGatewayPassword(trimmed, instanceId: instanceId)
+                }
+                .onChange(of: self.defaultShareInstruction) { _, newValue in
+                    ShareToAgentSettings.saveDefaultInstruction(newValue)
+                }
+                .onChange(of: self.manualGatewayPort) { _, _ in
+                    self.syncManualPortText()
+                }
+                .onChange(of: self.appModel.gatewayServerName) { _, newValue in
+                    if newValue != nil {
+                        self.setupCode = ""
+                        self.setupStatusText = nil
                         return
                     }
-                    await MainActor.run {
-                        self.gatewayController.refreshActiveGatewayRegistrationFromSettings()
+                    if self.manualGatewayEnabled {
+                        self.setupStatusText = self.appModel.gatewayStatusText
                     }
                 }
-            }
+                .onChange(of: self.appModel.gatewayStatusText) { _, newValue in
+                    guard self.manualGatewayEnabled || self.connectingGatewayID == "manual" else { return }
+                    let trimmed = newValue.trimmingCharacters(in: .whitespacesAndNewlines)
+                    guard !trimmed.isEmpty else { return }
+                    self.setupStatusText = trimmed
+                }
+                .onChange(of: self.locationEnabledModeRaw) { _, newValue in
+                    let previous = self.lastLocationModeRaw
+                    self.lastLocationModeRaw = newValue
+                    guard let mode = OpenClawLocationMode(rawValue: newValue) else { return }
+                    Task {
+                        let granted = await self.appModel.requestLocationPermissions(mode: mode)
+                        if !granted {
+                            await MainActor.run {
+                                self.locationEnabledModeRaw = previous
+                                self.lastLocationModeRaw = previous
+                            }
+                            return
+                        }
+                        await MainActor.run {
+                            self.gatewayController.refreshActiveGatewayRegistrationFromSettings()
+                        }
+                    }
+                }
         }
         .gatewayTrustPromptAlert()
     }
@@ -666,6 +607,120 @@ struct SettingsTab: View {
         }
         let trimmed = self.appModel.gatewayStatusText.trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed.isEmpty ? "Not connected" : trimmed
+    }
+
+    private var shouldShowRealtimeVoicePicker: Bool {
+        let providerSelection = TalkModeProviderSelection.resolved(self.talkProviderSelectionRaw)
+        return providerSelection == .openAIRealtime
+            || self.appModel.talkMode.gatewayTalkUsesRealtimeRelay
+    }
+
+    private func talkVoiceSettingsView() -> AnyView {
+        AnyView(VStack(alignment: .leading, spacing: 8) {
+            Text("Talk Voice (Gateway)")
+                .font(.footnote.weight(.semibold))
+                .foregroundStyle(.secondary)
+            Picker("Provider", selection: self.talkProviderSelectionBinding) {
+                ForEach(TalkModeProviderSelection.allCases) { option in
+                    Text(option.label).tag(option.rawValue)
+                }
+            }
+            if self.shouldShowRealtimeVoicePicker {
+                Picker("Realtime Voice", selection: self.talkRealtimeVoiceSelectionBinding) {
+                    Text("Gateway Default").tag("")
+                    ForEach(TalkModeRealtimeVoiceSelection.voices, id: \.self) { voice in
+                        Text(TalkModeRealtimeVoiceSelection.label(for: voice)).tag(voice)
+                    }
+                }
+            }
+            LabeledContent(
+                "Active Provider",
+                value: self.appModel.talkMode.gatewayTalkProviderLabel)
+            LabeledContent(
+                "Transport",
+                value: self.appModel.talkMode.gatewayTalkTransportLabel)
+            LabeledContent(
+                "API Key",
+                value: self.appModel.talkMode.gatewayTalkConfigLoaded
+                    ? (
+                        self.appModel.talkMode.gatewayTalkApiKeyConfigured
+                            ? "Configured"
+                            : "Not configured")
+                    : "Not loaded")
+            LabeledContent(
+                "Default Model",
+                value: self.appModel.talkMode.gatewayTalkDefaultModelId ?? "eleven_v3 (fallback)")
+            LabeledContent(
+                "Default Voice",
+                value: self.appModel.talkMode.gatewayTalkDefaultVoiceId ?? "auto (first available)")
+            if let realtimeProvider = self.appModel.talkMode.gatewayTalkRealtimeProviderLabel {
+                LabeledContent("Realtime Provider", value: realtimeProvider)
+            }
+            Text("Realtime uses gateway auth via OpenAI API key or OAuth.")
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+        })
+    }
+
+    private var talkProviderSelectionBinding: Binding<String> {
+        Binding(
+            get: { self.talkProviderSelectionRaw },
+            set: { newValue in
+                let selection = TalkModeProviderSelection.resolved(newValue)
+                self.talkProviderSelectionRaw = selection.rawValue
+                self.appModel.setTalkProviderSelection(selection.rawValue)
+            })
+    }
+
+    private var talkRealtimeVoiceSelectionBinding: Binding<String> {
+        Binding(
+            get: { self.talkRealtimeVoiceSelectionRaw },
+            set: { newValue in
+                let voice = TalkModeRealtimeVoiceSelection.resolvedOverride(newValue) ?? ""
+                self.talkRealtimeVoiceSelectionRaw = voice
+                self.appModel.setTalkRealtimeVoiceSelection(voice)
+            })
+    }
+
+    private func advancedAppSettingsView() -> AnyView {
+        AnyView(Group {
+            self.talkVoiceSettingsView()
+            self.featureToggle(
+                "Show Talk Control",
+                isOn: self.$talkButtonEnabled,
+                help: "Shows the Talk control in the main toolbar.")
+            TextField("Default Share Instruction", text: self.$defaultShareInstruction, axis: .vertical)
+                .lineLimit(2...6)
+                .textInputAutocapitalization(.sentences)
+            HStack(spacing: 8) {
+                Text("Default Share Instruction")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Button {
+                    self.activeFeatureHelp = FeatureHelp(
+                        title: "Default Share Instruction",
+                        message: "Appends this instruction when sharing content "
+                            + "into OpenClaw from iOS.")
+                } label: {
+                    Image(systemName: "info.circle")
+                        .foregroundStyle(.secondary)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Default Share Instruction info")
+            }
+
+            VStack(alignment: .leading, spacing: 8) {
+                Button {
+                    Task { await self.appModel.runSharePipelineSelfTest() }
+                } label: {
+                    Label("Run Share Self-Test", systemImage: "checkmark.seal")
+                }
+                Text(self.appModel.lastShareEventText)
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            }
+        })
     }
 
     private func featureToggle(
@@ -825,36 +880,29 @@ struct SettingsTab: View {
         self.manualGatewayPortText = String(link.port)
         self.manualGatewayTLS = link.tls
 
-        let trimmedInstanceId = self.instanceId.trimmingCharacters(in: .whitespacesAndNewlines)
-        let trimmedBootstrapToken =
-            link.bootstrapToken?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let trimmedInstanceId = GatewaySettingsStore.currentInstanceID()
+        let setupAuth = GatewayConnectionController.ManualAuthOverride.setupAuth(from: link)
+        if setupAuth.hasBootstrapToken {
+            GatewayOnboardingReset.prepareForBootstrapPairing(
+                appModel: self.appModel,
+                instanceId: trimmedInstanceId)
+        }
         if !trimmedInstanceId.isEmpty {
-            GatewaySettingsStore.saveGatewayBootstrapToken(trimmedBootstrapToken, instanceId: trimmedInstanceId)
+            GatewaySettingsStore.saveGatewayBootstrapToken(setupAuth.bootstrapToken, instanceId: trimmedInstanceId)
         }
-        if let token = link.token, !token.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            let trimmedToken = token.trimmingCharacters(in: .whitespacesAndNewlines)
-            self.gatewayToken = trimmedToken
+        if setupAuth.shouldApplyTokenField {
+            self.gatewayToken = setupAuth.token
             if !trimmedInstanceId.isEmpty {
-                GatewaySettingsStore.saveGatewayToken(trimmedToken, instanceId: trimmedInstanceId)
-            }
-        } else if !trimmedBootstrapToken.isEmpty {
-            self.gatewayToken = ""
-            if !trimmedInstanceId.isEmpty {
-                GatewaySettingsStore.saveGatewayToken("", instanceId: trimmedInstanceId)
+                GatewaySettingsStore.saveGatewayToken(setupAuth.token, instanceId: trimmedInstanceId)
             }
         }
-        if let password = link.password, !password.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            let trimmedPassword = password.trimmingCharacters(in: .whitespacesAndNewlines)
-            self.gatewayPassword = trimmedPassword
+        if setupAuth.shouldApplyPasswordField {
+            self.gatewayPassword = setupAuth.password
             if !trimmedInstanceId.isEmpty {
-                GatewaySettingsStore.saveGatewayPassword(trimmedPassword, instanceId: trimmedInstanceId)
-            }
-        } else if !trimmedBootstrapToken.isEmpty {
-            self.gatewayPassword = ""
-            if !trimmedInstanceId.isEmpty {
-                GatewaySettingsStore.saveGatewayPassword("", instanceId: trimmedInstanceId)
+                GatewaySettingsStore.saveGatewayPassword(setupAuth.password, instanceId: trimmedInstanceId)
             }
         }
+        self.pendingManualAuthOverride = setupAuth.manualAuthOverride
     }
 
     private func openGatewayQRScanner() {
@@ -946,10 +994,16 @@ struct SettingsTab: View {
 
         GatewayDiagnostics.log(
             "connect manual host=\(host) port=\(self.manualGatewayPort) tls=\(self.manualGatewayTLS)")
+        let authOverride = GatewayConnectionController.ManualAuthOverride.currentManualInput(
+            token: self.gatewayToken,
+            pendingOverride: self.pendingManualAuthOverride,
+            password: self.gatewayPassword)
+        self.pendingManualAuthOverride = nil
         await self.gatewayController.connectManual(
             host: host,
             port: self.manualGatewayPort,
-            useTLS: self.manualGatewayTLS)
+            useTLS: self.manualGatewayTLS,
+            authOverride: authOverride)
     }
 
     private var setupStatusLine: String? {
@@ -1063,10 +1117,15 @@ struct SettingsTab: View {
     }
 
     private func gatewayProblemPrimaryActionTitle(_ problem: GatewayConnectionProblem) -> String {
-        problem.canTrustRotatedCertificate ? "Trust certificate" : "Retry connection"
+        if problem.suggestsOnboardingReset { return "Reset onboarding" }
+        return problem.canTrustRotatedCertificate ? "Trust certificate" : "Retry connection"
     }
 
     private func handleGatewayProblemPrimaryAction(_ problem: GatewayConnectionProblem) async {
+        if problem.suggestsOnboardingReset {
+            self.resetOnboarding()
+            return
+        }
         if problem.canTrustRotatedCertificate {
             _ = await self.gatewayController.trustRotatedGatewayCertificate(from: problem)
             return
@@ -1076,7 +1135,6 @@ struct SettingsTab: View {
 
     private func resetOnboarding() {
         // Disconnect first so RootCanvas doesn't instantly mark onboarding complete again.
-        self.appModel.disconnectGateway()
         self.connectingGatewayID = nil
         self.setupStatusText = nil
         self.setupCode = ""
@@ -1088,19 +1146,7 @@ struct SettingsTab: View {
         self.gatewayToken = ""
         self.gatewayPassword = ""
 
-        let trimmedInstanceId = self.instanceId.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !trimmedInstanceId.isEmpty {
-            GatewaySettingsStore.deleteGatewayCredentials(instanceId: trimmedInstanceId)
-        }
-
-        // Reset onboarding state + clear saved gateway connection (the two things RootCanvas checks).
-        GatewaySettingsStore.clearLastGatewayConnection()
-        GatewaySettingsStore.clearPreferredGatewayStableID()
-        GatewaySettingsStore.clearLastDiscoveredGatewayStableID()
-        // Resetting onboarding should also forget trusted gateway TLS fingerprints.
-        // Otherwise a restarted dev gateway can stay stuck in a local TLS cancel loop.
-        GatewayTLSStore.clearAllFingerprints()
-        OnboardingStateStore.reset()
+        GatewayOnboardingReset.reset(appModel: self.appModel, instanceId: self.instanceId)
 
         // RootCanvas also short-circuits onboarding when these are true.
         self.onboardingComplete = false
@@ -1135,6 +1181,23 @@ struct SettingsTab: View {
         }
 
         return lines
+    }
+}
+
+private struct SettingsCloseToolbar: ViewModifier {
+    @Environment(\.dismiss) private var dismiss
+
+    func body(content: Content) -> some View {
+        content.toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+                Button {
+                    self.dismiss()
+                } label: {
+                    Image(systemName: "xmark")
+                }
+                .accessibilityLabel("Close")
+            }
+        }
     }
 }
 

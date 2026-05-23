@@ -346,6 +346,12 @@ export const th: TranslationMap = {
     eventLogSubtitle: "Latest gateway events.",
     noEvents: "No events yet.",
   },
+  quickSettings: {
+    security: {
+      browserEnabled: "Browser enabled",
+      toolProfile: "Tool profile",
+    },
+  },
   execApproval: {
     expiresIn: "expires in {time}",
     expired: "expired",
@@ -683,9 +689,6 @@ export const th: TranslationMap = {
     },
   },
   usage: {
-    page: {
-      subtitle: "ดูว่าโทเค็นถูกใช้ไปที่ไหน เซสชันพุ่งขึ้นเมื่อใด และอะไรเป็นตัวขับเคลื่อนค่าใช้จ่าย",
-    },
     common: {
       emptyValue: "—",
       unknown: "ไม่ทราบ",
@@ -1011,6 +1014,10 @@ export const th: TranslationMap = {
     settings: "การตั้งค่าแชท",
     thinkingToggle: "สลับการแสดงผลการคิด/การทำงานของผู้ช่วย",
     toolCallsToggle: "สลับการแสดงการเรียกใช้ tool และผลลัพธ์ของ tool",
+    autoScrollMode: "โหมดเลื่อนอัตโนมัติ",
+    autoScrollAlways: "เสมอ",
+    autoScrollNearBottom: "ใกล้ด้านล่าง",
+    autoScrollOff: "ปิด",
     focusToggle: "สลับโหมดโฟกัส (ซ่อนแถบด้านข้าง + ส่วนหัวหน้า)",
     hideCronSessions: "ซ่อนเซสชัน cron",
     showCronSessions: "แสดงเซสชัน cron",
@@ -1054,11 +1061,16 @@ export const th: TranslationMap = {
       placeholderDisconnected: "Connect to the gateway to start chatting...",
       attachFile: "Attach file",
       startTalk: "Start Talk",
+      stillListening: "ยังฟังอยู่",
+      talkTranscript: "ข้อความถอดเสียงจากการพูด",
       stopTalk: "Stop Talk",
     },
     selectors: {
       agentFilter: "กรองเซสชันตามเอเจนต์",
       session: "Chat session",
+      sessionSearch: "ค้นหาเซสชัน",
+      clearSessionSearch: "ล้างการค้นหาเซสชัน",
+      loadMoreSessions: "โหลดเซสชันเพิ่มเติม",
       model: "Chat model",
       thinkingLevel: "Chat thinking level",
     },
@@ -1170,6 +1182,9 @@ export const th: TranslationMap = {
       ascending: "น้อยไปมาก",
       descending: "มากไปน้อย",
       reset: "รีเซ็ต",
+      emptyTitle: "No scheduled jobs yet.",
+      emptyHint: "Create one from a plain-language prompt; advanced fields can wait.",
+      emptyFilteredHint: "Clear or change filters to see scheduled jobs.",
       noMatching: "ไม่พบงานที่ตรงกัน",
       loading: "กำลังโหลด...",
       loadMore: "โหลดงานเพิ่มเติม",
@@ -1205,6 +1220,7 @@ export const th: TranslationMap = {
     form: {
       editJob: "แก้ไขงาน",
       newJob: "งานใหม่",
+      advancedJob: "Advanced job",
       updateSubtitle: "อัปเดตงานตามกำหนดเวลาที่เลือก",
       createSubtitle: "สร้างการปลุกหรืองานรันของเอเจนต์ตามกำหนดเวลา",
       required: "จำเป็น",

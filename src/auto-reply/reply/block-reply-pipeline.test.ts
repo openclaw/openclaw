@@ -36,6 +36,20 @@ describe("createBlockReplyPayloadKey", () => {
     expect(a).not.toBe(b);
   });
 
+  it("produces different keys for payloads with different presentation content", () => {
+    const a = createBlockReplyPayloadKey({
+      presentation: {
+        blocks: [{ type: "buttons", buttons: [{ label: "Approve", value: "approve" }] }],
+      },
+    });
+    const b = createBlockReplyPayloadKey({
+      presentation: {
+        blocks: [{ type: "buttons", buttons: [{ label: "Reject", value: "reject" }] }],
+      },
+    });
+    expect(a).not.toBe(b);
+  });
+
   it("trims whitespace from text for key comparison", () => {
     const a = createBlockReplyPayloadKey({ text: "  hello  " });
     const b = createBlockReplyPayloadKey({ text: "hello" });
@@ -50,6 +64,29 @@ describe("createBlockReplyContentKey", () => {
     const c = createBlockReplyContentKey({ text: "hello world" });
     expect(a).toBe(b);
     expect(a).toBe(c);
+  });
+
+  it("keeps rich content in the reply-independent content key", () => {
+    const a = createBlockReplyContentKey({
+      presentation: {
+        blocks: [{ type: "buttons", buttons: [{ label: "Approve", value: "approve" }] }],
+      },
+      replyToId: "post-1",
+    });
+    const b = createBlockReplyContentKey({
+      presentation: {
+        blocks: [{ type: "buttons", buttons: [{ label: "Approve", value: "approve" }] }],
+      },
+      replyToId: "post-2",
+    });
+    const c = createBlockReplyContentKey({
+      presentation: {
+        blocks: [{ type: "buttons", buttons: [{ label: "Reject", value: "reject" }] }],
+      },
+      replyToId: "post-1",
+    });
+    expect(a).toBe(b);
+    expect(a).not.toBe(c);
   });
 });
 
@@ -104,6 +141,55 @@ describe("createBlockReplyPipeline dedup with threading", () => {
       "file:///b.ogg",
       "file:///c.ogg",
     ]);
+  });
+
+  it("keeps separate deliveries for distinct rich-only payloads", async () => {
+    const sent: Array<{ presentation?: unknown }> = [];
+    const pipeline = createBlockReplyPipeline({
+      onBlockReply: async (payload) => {
+        sent.push({ presentation: payload.presentation });
+      },
+      timeoutMs: 5000,
+    });
+
+    pipeline.enqueue({
+      presentation: {
+        blocks: [{ type: "buttons", buttons: [{ label: "Approve", value: "approve" }] }],
+      },
+    });
+    pipeline.enqueue({
+      presentation: {
+        blocks: [{ type: "buttons", buttons: [{ label: "Reject", value: "reject" }] }],
+      },
+    });
+    await pipeline.flush({ force: true });
+
+    expect(sent).toHaveLength(2);
+  });
+
+  it("bypasses text coalescing for rich-only payloads", async () => {
+    const sent: Array<{ presentation?: unknown }> = [];
+    const pipeline = createBlockReplyPipeline({
+      onBlockReply: async (payload) => {
+        sent.push({ presentation: payload.presentation });
+      },
+      timeoutMs: 5000,
+      coalescing: {
+        minChars: 1,
+        maxChars: 200,
+        idleMs: 0,
+        joiner: "\n\n",
+      },
+    });
+
+    const presentation = {
+      blocks: [{ type: "buttons" as const, buttons: [{ label: "Open", value: "open" }] }],
+    };
+
+    pipeline.enqueue({ presentation });
+    await pipeline.flush({ force: true });
+
+    expect(sent).toEqual([{ presentation }]);
   });
 
   it("does not track media when text-only blocks are delivered", async () => {
@@ -184,6 +270,37 @@ describe("createBlockReplyPipeline content coverage dedup", () => {
     expect(pipeline.didStream()).toBe(true);
     expect(pipeline.isAborted()).toBe(true);
     expect(pipeline.hasSentPayload({ text: "First paragraph.\n\nSecond paragraph." })).toBe(false);
+  });
+
+  it("keeps status notices out of streamed final-content accounting", async () => {
+    const pipeline = createBlockReplyPipeline({
+      onBlockReply: async () => {},
+      timeoutMs: 5000,
+    });
+
+    pipeline.enqueue({ text: "1. Inspect\n2. Patch", isStatusNotice: true });
+    await pipeline.flush({ force: true });
+
+    expect(pipeline.didStream()).toBe(false);
+    expect(pipeline.hasSentPayload({ text: "1. Inspect\n2. Patch" })).toBe(false);
+  });
+
+  it("does not let a status notice de-dupe later matching assistant content", async () => {
+    const sent: Array<{ text?: string; isStatusNotice?: boolean }> = [];
+    const pipeline = createBlockReplyPipeline({
+      onBlockReply: async (payload) => {
+        sent.push({ text: payload.text, isStatusNotice: payload.isStatusNotice });
+      },
+      timeoutMs: 5000,
+    });
+
+    pipeline.enqueue({ text: "same text", isStatusNotice: true });
+    pipeline.enqueue({ text: "same text" });
+    await pipeline.flush({ force: true });
+
+    expect(sent).toEqual([{ text: "same text", isStatusNotice: true }, { text: "same text" }]);
+    expect(pipeline.didStream()).toBe(true);
+    expect(pipeline.hasSentPayload({ text: "same text" })).toBe(true);
   });
 
   it("does not suppress media payloads through streamed text coverage", async () => {

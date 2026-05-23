@@ -9,6 +9,7 @@ import {
 import type { SubagentDelegationMode } from "../config/types.agent-defaults.js";
 import type { MemoryCitationsMode } from "../config/types.memory.js";
 import { buildMemoryPromptSection } from "../plugins/memory-state.js";
+import type { AgentPromptSurfaceKind } from "../plugins/types.js";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
@@ -30,6 +31,10 @@ import {
   normalizePromptCapabilityIds,
   normalizeStructuredPromptSection,
 } from "./prompt-cache-stability.js";
+import {
+  buildOpenClawToolFallbackText,
+  shouldRenderOpenClawToolWorkflowHints,
+} from "./prompt-surface.js";
 import { sanitizeForPromptLiteral } from "./sanitize-for-prompt.js";
 import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "./system-prompt-cache-boundary.js";
 import type {
@@ -186,9 +191,17 @@ function buildProjectContextSection(params: {
     const hasSoulFile = params.files.some(
       (file) => getContextFileBasename(file.path) === "soul.md",
     );
+    const hasMemoryFile = params.files.some(
+      (file) => getContextFileBasename(file.path) === "memory.md",
+    );
     lines.push("The following project context files have been loaded:");
     if (hasSoulFile) {
       lines.push("SOUL.md: persona/tone. Follow it unless higher-priority instructions override.");
+    }
+    if (hasMemoryFile) {
+      lines.push(
+        "MEMORY.md: durable user preferences and behavior guidance. Keep following it throughout the session unless higher-priority instructions override.",
+      );
     }
     lines.push("");
   }
@@ -389,13 +402,27 @@ function buildTimeSection(params: { userTimezone?: string }) {
   return ["## Current Date & Time", `Time zone: ${params.userTimezone}`, ""];
 }
 
-function buildAssistantOutputDirectivesSection(isMinimal: boolean) {
-  if (isMinimal) {
+function buildAssistantOutputDirectivesSection(params: {
+  isMinimal: boolean;
+  sourceMessageToolOnly: boolean;
+}) {
+  if (params.isMinimal) {
     return [];
+  }
+  if (params.sourceMessageToolOnly) {
+    return [
+      "## Assistant Output Directives",
+      "- Visible source-channel output is delivered through `message(action=send)`.",
+      "- Attach media with message-tool attachment fields such as `media`, `path`, or `filePath`; do not use legacy `MEDIA:` directives for source-channel delivery.",
+      "- Voice-note audio hint: use message-tool `asVoice` when sending audio as a voice note.",
+      "- Native quote/reply: use message-tool `replyTo` when an explicit reply target is needed.",
+      "",
+    ];
   }
   return [
     "## Assistant Output Directives",
     "- Attach media: `MEDIA:<path-or-url>` on its own line.",
+    "  The MEDIA directive must start the line as plain text, outside code fences and without Markdown wrappers. Do not write `**MEDIA:...**`, `` `MEDIA:...` ``, or inline prose like `Here is the file: MEDIA:...`.",
     "- Voice-note audio hint: `[[audio_as_voice]]` when audio is attached.",
     "- Native quote/reply: first token `[[reply_to_current]]`; use `[[reply_to:<id>]]` only with an explicit id.",
     "- Supported directives are stripped before rendering; channel config still decides delivery.",
@@ -403,7 +430,11 @@ function buildAssistantOutputDirectivesSection(isMinimal: boolean) {
   ];
 }
 
-function buildWebchatCanvasSection(params: { isMinimal: boolean; runtimeChannel?: string }) {
+function buildWebchatCanvasSection(params: {
+  isMinimal: boolean;
+  runtimeChannel?: string;
+  sourceMessageToolOnly: boolean;
+}) {
   if (params.isMinimal || params.runtimeChannel !== "webchat") {
     return [];
   }
@@ -411,7 +442,9 @@ function buildWebchatCanvasSection(params: { isMinimal: boolean; runtimeChannel?
     "## Control UI Embed",
     "Use `[embed ...]` only in Control UI/webchat sessions for inline rich rendering inside the assistant bubble.",
     "- Do not use `[embed ...]` for non-web channels.",
-    "- `[embed ...]` is separate from `MEDIA:`. Use `MEDIA:` for attachments; use `[embed ...]` for web-only rich rendering.",
+    params.sourceMessageToolOnly
+      ? "- `[embed ...]` is separate from message-tool attachments; use message-tool attachment fields for files and `[embed ...]` for web-only rich rendering."
+      : "- `[embed ...]` is separate from `MEDIA:`. Use `MEDIA:` for attachments; use `[embed ...]` for web-only rich rendering.",
     '- Use self-closing form for hosted embed documents: `[embed ref="cv_123" title="Status" height="320" /]`.',
     '- You may also use an explicit hosted URL: `[embed url="/__openclaw__/canvas/documents/cv_123/index.html" title="Status" height="320" /]`.',
     '- Never use local filesystem paths or `file://...` URLs in `[embed ...]`. Hosted embeds must point at `/__openclaw__/canvas/...` URLs or use `ref="..."`.',
@@ -465,6 +498,7 @@ function buildMessagingSection(params: {
   messageChannelOptions?: string;
   messageToolHints?: string[];
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
+  silentReplyPromptMode?: SilentReplyPromptMode;
 }) {
   if (params.isMinimal) {
     return [];
@@ -474,7 +508,8 @@ function buildMessagingSection(params: {
   const hasSessionsSpawn = params.availableTools.has("sessions_spawn");
   const hasSubagents = params.availableTools.has("subagents");
   const hasSessionsYield = params.availableTools.has("sessions_yield");
-  const completionEventGuidance = messageToolOnly
+  const suppressSilentTokenGuidance = messageToolOnly || params.silentReplyPromptMode === "none";
+  const completionEventGuidance = suppressSilentTokenGuidance
     ? "- Runtime-generated completion events may ask for a user update. Rewrite those in your normal assistant voice and send the update (do not forward raw internal metadata or default to a silent placeholder)."
     : `- Runtime-generated completion events may ask for a user update. Rewrite those in your normal assistant voice and send the update (do not forward raw internal metadata or default to ${SILENT_REPLY_TOKEN}).`;
   const subagentOrchestrationGuidance = hasSessionsSpawn
@@ -487,7 +522,7 @@ function buildMessagingSection(params: {
   return [
     "## Messaging",
     messageToolOnly
-      ? "- Reply in current session → private by default for this source channel; use `message(action=send)` for visible channel output."
+      ? "- Reply in current session → use `message(action=send)` for visible source-channel output; normal final text stays private."
       : "- Reply in current session → automatically routes to the source channel (Signal, Telegram, etc.)",
     "- Cross-session messaging → use sessions_send(sessionKey, message)",
     subagentOrchestrationGuidance,
@@ -505,8 +540,10 @@ function buildMessagingSection(params: {
             ? `- No current/default source channel: include \`channel\` for proactive sends; valid ids: ${params.messageChannelOptions}.`
             : "- Pass `channel` only when sending outside the current/default source channel.",
           messageToolOnly
-            ? "- If you use `message` (`action=send`) to deliver visible output, do not repeat that visible content in your final answer; final answers are private in this mode."
-            : `- If you use \`message\` (\`action=send\`) to deliver your user-visible reply, respond with ONLY: ${SILENT_REPLY_TOKEN} (avoid duplicate replies).`,
+            ? "- If you use `message` (`action=send`) to deliver visible output, do not repeat that visible content in your final answer."
+            : suppressSilentTokenGuidance
+              ? "- Do not use `message(action=send)` to deliver the current source-channel reply; reply normally so OpenClaw can route it once."
+              : `- If you use \`message\` (\`action=send\`) to deliver your user-visible reply, respond with ONLY: ${SILENT_REPLY_TOKEN} (avoid duplicate replies).`,
           showGenericInlineButtonHint
             ? params.inlineButtonsEnabled
               ? "- Inline buttons supported. Use `action=send` with `buttons=[[{text,callback_data,style?}]]`; `style` can be `primary`, `success`, or `danger`."
@@ -664,6 +701,8 @@ export function buildAgentSystemPrompt(params: {
   subagentDelegationMode?: SubagentDelegationMode;
   /** Whether ACP-specific routing guidance should be included. Defaults to true. */
   acpEnabled?: boolean;
+  /** Prompt surface controls runtime-specific fallback fragments. Defaults to PI main. */
+  promptSurface?: AgentPromptSurfaceKind;
   /** Registered runtime slash/native command names such as `codex`. */
   nativeCommandNames?: string[];
   /** Plugin-owned prompt guidance for registered native slash commands. */
@@ -694,6 +733,7 @@ export function buildAgentSystemPrompt(params: {
   promptContribution?: ProviderSystemPromptContribution;
 }) {
   const acpEnabled = params.acpEnabled === true;
+  const promptSurface = params.promptSurface ?? "pi_main";
   const sandboxedRuntime = params.sandboxInfo?.enabled === true;
   const acpSpawnRuntimeEnabled = acpEnabled && !sandboxedRuntime;
   const coreToolSummaries: Record<string, string> = {
@@ -805,6 +845,10 @@ export function buildAgentSystemPrompt(params: {
     const name = resolveToolName(tool);
     toolLines.push(summary ? `- ${name}: ${summary}` : `- ${name}`);
   }
+  const renderOpenClawToolWorkflowHints = shouldRenderOpenClawToolWorkflowHints({
+    surface: promptSurface,
+    hasToolList: toolLines.length > 0,
+  });
 
   const hasGateway = availableTools.has("gateway");
   const readToolName = resolveToolName("read");
@@ -929,7 +973,9 @@ export function buildAgentSystemPrompt(params: {
   const stablePrefixCacheKey = hashStablePromptInput({
     workspaceDir: params.workspaceDir,
     promptMode,
+    promptSurface,
     toolLines,
+    renderOpenClawToolWorkflowHints,
     hasGateway,
     readToolName,
     execToolName,
@@ -972,30 +1018,19 @@ export function buildAgentSystemPrompt(params: {
       "Available tools are policy-filtered. Names are case-sensitive; call exactly as listed.",
       toolLines.length > 0
         ? toolLines.join("\n")
-        : [
-            "Pi lists the standard tools above. This runtime enables:",
-            "- grep: search file contents for patterns",
-            "- find: find files by glob pattern",
-            "- ls: list directory contents",
-            "- apply_patch: apply multi-file patches",
-            `- ${execToolName}: run shell commands (supports background via yieldMs/background)`,
-            `- ${processToolName}: manage background exec sessions`,
-            "- browser: control OpenClaw's dedicated browser",
-            "- canvas: present/eval/snapshot the Canvas",
-            "- nodes: list/describe/notify/camera/screen on paired nodes",
-            "- cron: manage cron jobs and wake events (use for reminders; when scheduling a reminder, write the systemEvent text as something that will read like a reminder when it fires, and mention that it is a reminder depending on the time gap between setting and firing; include recent context in reminder text if appropriate)",
-            "- sessions_list: list sessions",
-            "- sessions_history: fetch session history",
-            "- sessions_send: send to another session",
-            "- sessions_spawn: spawn an isolated sub-agent session",
-            "- sessions_yield: end this turn and wait for sub-agent completion events",
-            "- subagents: list/steer/kill sub-agent runs",
-            '- session_status: show usage/time/model state and answer "what model are we using?"',
-          ].join("\n"),
+        : buildOpenClawToolFallbackText({
+            surface: promptSurface,
+            execToolName,
+            processToolName,
+          }),
       "TOOLS.md is usage guidance, not availability.",
-      `For long waits, avoid rapid poll loops: use ${execToolName} with enough yieldMs or ${processToolName}(action=poll, timeout=<ms>).`,
-      "Larger work: use `sessions_spawn`; completion is push-based.",
-      '`sessions_spawn`: omit `context` unless transcript needed; then set `context:"fork"`.',
+      ...(renderOpenClawToolWorkflowHints
+        ? [
+            `For long waits, avoid rapid poll loops: use ${execToolName} with enough yieldMs or ${processToolName}(action=poll, timeout=<ms>).`,
+            "Larger work: use `sessions_spawn`; completion is push-based.",
+            '`sessions_spawn`: omit `context` unless transcript needed; then set `context:"fork"`.',
+          ]
+        : []),
       ...nativeCommandGuidanceLines,
       ...(acpHarnessSpawnAllowed
         ? [
@@ -1013,9 +1048,13 @@ export function buildAgentSystemPrompt(params: {
               : []),
           ]
         : []),
-      availableTools.has("sessions_yield")
-        ? "Do not poll `subagents list` / `sessions_list` in a loop; use `sessions_yield` when waiting for spawned sub-agent completion events, and check status only on-demand (for intervention, debugging, or when explicitly asked)."
-        : "Do not poll `subagents list` / `sessions_list` in a loop; only check status on-demand (for intervention, debugging, or when explicitly asked).",
+      ...(renderOpenClawToolWorkflowHints
+        ? [
+            availableTools.has("sessions_yield")
+              ? "Do not poll `subagents list` / `sessions_list` in a loop; use `sessions_yield` when waiting for spawned sub-agent completion events, and check status only on-demand (for intervention, debugging, or when explicitly asked)."
+              : "Do not poll `subagents list` / `sessions_list` in a loop; only check status on-demand (for intervention, debugging, or when explicitly asked).",
+          ]
+        : []),
       "",
       ...buildSubagentDelegationPreferenceSection({
         mode: subagentDelegationMode,
@@ -1166,7 +1205,7 @@ export function buildAgentSystemPrompt(params: {
       "## Workspace Files (injected)",
       "These user-editable files are loaded by OpenClaw and included below in Project Context.",
       "",
-      ...buildAssistantOutputDirectivesSection(isMinimal),
+      ...buildAssistantOutputDirectivesSection({ isMinimal, sourceMessageToolOnly }),
     ];
 
     if (reasoningHint) {
@@ -1218,6 +1257,7 @@ export function buildAgentSystemPrompt(params: {
     ...buildWebchatCanvasSection({
       isMinimal,
       runtimeChannel,
+      sourceMessageToolOnly,
     }),
     ...buildMessagingSection({
       isMinimal,
@@ -1227,6 +1267,7 @@ export function buildAgentSystemPrompt(params: {
       messageChannelOptions,
       messageToolHints: params.messageToolHints,
       sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
+      silentReplyPromptMode,
     }),
     ...buildVoiceSection({ isMinimal, ttsHint: params.ttsHint }),
   );

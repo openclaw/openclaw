@@ -18,7 +18,7 @@ vi.mock("../../plugins/manifest-contract-eligibility.js", () => ({
 }));
 
 vi.mock("../../plugins/provider-hook-runtime.js", () => ({
-  __testing: {},
+  testing: {},
   ensureProviderRuntimePluginHandle: vi.fn(
     (params) => params.runtimeHandle ?? { provider: "openai" },
   ),
@@ -138,6 +138,14 @@ describe("AgentRuntimePlan", () => {
       plan.delivery.isSilentPayload({
         text: '{"action":"NO_REPLY"}',
         mediaUrl: "file:///tmp/image.png",
+      }),
+    ).toBe(false);
+    expect(
+      plan.delivery.isSilentPayload({
+        text: '{"action":"NO_REPLY"}',
+        presentation: {
+          blocks: [{ type: "buttons", buttons: [{ label: "Open", value: "open" }] }],
+        },
       }),
     ).toBe(false);
     expectExtraParams(plan.transport.extraParams, {

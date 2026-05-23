@@ -6,6 +6,7 @@ import {
 } from "../../../auto-reply/tokens.js";
 import type { EmbeddedPiExecutionContract } from "../../../config/types.agent-defaults.js";
 import { normalizeLowercaseStringOrEmpty } from "../../../shared/string-coerce.js";
+import { hasAcceptedSessionSpawn } from "../../accepted-session-spawn.js";
 import { collectTextContentBlocks } from "../../content-blocks.js";
 import {
   isStrictAgenticSupportedProviderModel,
@@ -29,7 +30,7 @@ type ReplayMetadataAttempt = Pick<
   | "messagingToolSentMediaUrls"
   | "successfulCronAdds"
 > &
-  Partial<Pick<EmbeddedRunAttemptResult, "messagingToolSentTargets">>;
+  Partial<Pick<EmbeddedRunAttemptResult, "messagingToolSentTargets" | "acceptedSessionSpawns">>;
 
 type IncompleteTurnAttempt = Pick<
   EmbeddedRunAttemptResult,
@@ -47,7 +48,8 @@ type IncompleteTurnAttempt = Pick<
   | "replayMetadata"
   | "promptErrorSource"
   | "timedOutDuringCompaction"
->;
+> &
+  Partial<Pick<EmbeddedRunAttemptResult, "acceptedSessionSpawns">>;
 
 type PlanningOnlyAttempt = Pick<
   EmbeddedRunAttemptResult,
@@ -131,7 +133,6 @@ const GEMINI_INCOMPLETE_TURN_MODEL_ID_PATTERN = /^gemini(?:[.-]|$)/;
 // Ollama native `/api/chat` can finish with only thinking/internal blocks when
 // constrained, but it should not inherit the stricter planning-only/ack prompts.
 const OLLAMA_INCOMPLETE_TURN_PROVIDER_ID_PATTERN = /^ollama(?:-|$)/;
-const KIMI_INCOMPLETE_TURN_PROVIDER_ID_PATTERN = /^kimi(?:-|$)/;
 const DEFAULT_PLANNING_ONLY_RETRY_LIMIT = 1;
 const STRICT_AGENTIC_PLANNING_ONLY_RETRY_LIMIT = 2;
 // Allow one immediate continuation plus one follow-up continuation before
@@ -207,6 +208,7 @@ export function buildAttemptReplayMetadata(
   const hadPotentialSideEffects =
     hadMutatingTools ||
     hasMessagingToolDeliveryEvidence(params) ||
+    hasAcceptedSessionSpawn(params.acceptedSessionSpawns) ||
     (params.successfulCronAdds ?? 0) > 0;
   return {
     hadPotentialSideEffects,
@@ -250,6 +252,10 @@ export function resolveIncompleteTurnPayloadText(params: {
   }
 
   if (hasCommittedMessagingToolDeliveryEvidence(params.attempt)) {
+    return null;
+  }
+
+  if (hasAcceptedSessionSpawn(params.attempt.acceptedSessionSpawns)) {
     return null;
   }
 
@@ -485,6 +491,7 @@ function shouldSkipPlanningOnlyRetry(params: {
     params.attempt.yieldDetected ||
     params.attempt.didSendDeterministicApprovalPrompt ||
     params.attempt.lastToolError ||
+    hasAcceptedSessionSpawn(params.attempt.acceptedSessionSpawns) ||
     resolveAttemptReplayMetadata(params.attempt).hadPotentialSideEffects,
   );
 }
@@ -620,14 +627,10 @@ function shouldApplyNonVisibleTurnRetryGuard(params: {
   if (shouldApplyPlanningOnlyRetryGuard(params)) {
     return true;
   }
-  if (normalizeLowercaseStringOrEmpty(params.modelApi ?? "") === "openai-completions") {
-    return true;
-  }
   if (
-    normalizeLowercaseStringOrEmpty(params.modelApi ?? "") === "anthropic-messages" &&
-    KIMI_INCOMPLETE_TURN_PROVIDER_ID_PATTERN.test(
-      normalizeLowercaseStringOrEmpty(params.provider ?? ""),
-    )
+    normalizeLowercaseStringOrEmpty(params.modelApi ?? "") === "openai-completions" ||
+    normalizeLowercaseStringOrEmpty(params.modelApi ?? "") === "anthropic-messages" ||
+    normalizeLowercaseStringOrEmpty(params.modelApi ?? "") === "bedrock-converse-stream"
   ) {
     return true;
   }

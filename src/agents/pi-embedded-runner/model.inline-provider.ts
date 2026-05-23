@@ -24,6 +24,7 @@ export type InlineProviderConfig = {
   contextWindow?: ModelProviderConfig["contextWindow"];
   contextTokens?: ModelProviderConfig["contextTokens"];
   maxTokens?: ModelProviderConfig["maxTokens"];
+  params?: ModelProviderConfig["params"];
   headers?: unknown;
   authHeader?: boolean;
   timeoutSeconds?: ModelProviderConfig["timeoutSeconds"];
@@ -140,7 +141,7 @@ export function buildInlineProviderModels(
     return (entry?.models ?? []).map((model) => {
       const transport = resolveInlineProviderTransport({
         api: model.api ?? entry?.api,
-        baseUrl: entry?.baseUrl,
+        baseUrl: (model as InlineModelEntry).baseUrl ?? entry?.baseUrl,
       });
       const modelHeaders = sanitizeModelHeaders((model as InlineModelEntry).headers, {
         stripSecretRefMarkers: true,

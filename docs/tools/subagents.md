@@ -86,7 +86,9 @@ requester chat when the run finishes.
   <Accordion title="Manual-spawn delivery resilience">
     - OpenClaw hands completions back to the requester session through an `agent` turn with a stable idempotency key.
     - If the requester run is still active, OpenClaw first tries to wake/steer that run instead of starting a second visible reply path.
+    - If an active requester cannot be woken, OpenClaw falls back to a requester-agent handoff with the same completion context instead of dropping the announce.
     - If the requester-agent completion handoff fails or produces no visible output, OpenClaw treats delivery as failed and falls back to queue routing/retry. It does not raw-send the child result directly to the external chat.
+    - Group and channel completion handoffs follow the same message-tool-only visible reply policy as normal group/channel turns, so the requester agent must use the message tool when required.
     - If direct handoff cannot be used, it falls back to queue routing.
     - If queue routing is still not available, the announce is retried with a short exponential backoff before final give-up.
     - Completion delivery keeps the resolved requester route: thread-bound or conversation-bound completion routes win when available; if the completion origin only provides a channel, OpenClaw fills the missing target/account from the requester session's resolved route (`lastChannel` / `lastTo` / `lastAccountId`) so direct delivery still works.
@@ -97,9 +99,11 @@ requester chat when the run finishes.
     internal context (not user-authored text) and includes:
 
     - `Result` — latest visible `assistant` reply text, otherwise sanitized latest tool/toolResult text. Terminal failed runs do not reuse captured reply text.
-    - `Status` — `completed successfully` / `failed` / `timed out` / `unknown`.
+    - `Status` — `completed; ready for parent review` / `failed` / `timed out` / `unknown`.
     - Compact runtime/token stats.
-    - A delivery instruction telling the requester agent to rewrite in normal assistant voice (not forward raw internal metadata).
+    - A review instruction telling the requester agent to verify the result before deciding whether the original task is done.
+    - Follow-up guidance telling the requester agent to continue the task or record a follow-up when the child result leaves more action.
+    - A final-update instruction for the no-more-action path, written in normal assistant voice without forwarding raw internal metadata.
 
   </Accordion>
   <Accordion title="Modes and ACP runtime">
@@ -144,6 +148,7 @@ session to confirm the effective tool list.
 - **Model:** inherits the caller unless you set `agents.defaults.subagents.model` (or per-agent `agents.list[].subagents.model`); an explicit `sessions_spawn.model` still wins.
 - **Thinking:** inherits the caller unless you set `agents.defaults.subagents.thinking` (or per-agent `agents.list[].subagents.thinking`); an explicit `sessions_spawn.thinking` still wins.
 - **Run timeout:** if `sessions_spawn.runTimeoutSeconds` is omitted, OpenClaw uses `agents.defaults.subagents.runTimeoutSeconds` when set; otherwise it falls back to `0` (no timeout).
+- **Task delivery:** native sub-agents receive the delegated task in their first visible `[Subagent Task]` message. The sub-agent system prompt carries runtime rules and routing context, not a hidden duplicate of the task.
 
 ### Delegation prompt mode
 
@@ -185,7 +190,7 @@ Per-agent overrides use `agents.list[].subagents.delegationMode`.
   Optional human-readable label.
 </ParamField>
 <ParamField path="agentId" type="string">
-  Spawn under another agent id when allowed by `subagents.allowAgents`.
+  Spawn under another configured agent id when allowed by `subagents.allowAgents`.
 </ParamField>
 <ParamField path="runtime" type='"subagent" | "acp"' default="subagent">
   `acp` is only for external ACP harnesses (`claude`, `droid`, `gemini`, `opencode`, or explicitly requested Codex ACP/acpx) and for `agents.list[]` entries whose `runtime.type` is `acp`.
@@ -335,10 +340,10 @@ See [Configuration reference](/gateway/configuration-reference) and
 ### Allowlist
 
 <ParamField path="agents.list[].subagents.allowAgents" type="string[]">
-  List of agent ids that can be targeted via explicit `agentId` (`["*"]` allows any). Default: only the requester agent. If you set a list and still want the requester to spawn itself with `agentId`, include the requester id in the list.
+  List of configured agent ids that can be targeted via explicit `agentId` (`["*"]` allows any configured target). Default: only the requester agent. If you set a list and still want the requester to spawn itself with `agentId`, include the requester id in the list.
 </ParamField>
 <ParamField path="agents.defaults.subagents.allowAgents" type="string[]">
-  Default target-agent allowlist used when the requester agent does not set its own `subagents.allowAgents`.
+  Default configured target-agent allowlist used when the requester agent does not set its own `subagents.allowAgents`.
 </ParamField>
 <ParamField path="agents.defaults.subagents.requireAgentId" type="boolean" default="false">
   Block `sessions_spawn` calls that omit `agentId` (forces explicit profile selection). Per-agent override: `agents.list[].subagents.requireAgentId`.
@@ -356,6 +361,13 @@ Use `agents_list` to see which agent ids are currently allowed for
 `sessions_spawn`. The response includes each listed agent's effective
 model and embedded runtime metadata so callers can distinguish PI, Codex
 app-server, and other configured native runtimes.
+
+`allowAgents` entries must point at configured agent ids in `agents.list[]`.
+`["*"]` means any configured target agent plus the requester. If an agent config
+is deleted but its id remains in `allowAgents`, `sessions_spawn` rejects that id
+and `agents_list` omits it. Run `openclaw doctor --fix` to clean stale
+allowlist entries, or add a minimal `agents.list[]` entry when the target should
+remain spawnable while inheriting defaults.
 
 ### Auto-archive
 
@@ -633,7 +645,7 @@ still need normal device approval for scope upgrades.
 - Sub-agent announce is **best-effort**. If the gateway restarts, pending "announce back" work is lost.
 - Sub-agents still share the same gateway process resources; treat `maxConcurrent` as a safety valve.
 - `sessions_spawn` is always non-blocking: it returns `{ status: "accepted", runId, childSessionKey }` immediately.
-- Sub-agent context only injects `AGENTS.md`, `TOOLS.md`, `SOUL.md`, `IDENTITY.md` and `USER.md` (no `MEMORY.md`, `HEARTBEAT.md`, or `BOOTSTRAP.md`).
+- Sub-agent context only injects `AGENTS.md` and `TOOLS.md` (no `SOUL.md`, `IDENTITY.md`, `USER.md`, `MEMORY.md`, `HEARTBEAT.md`, or `BOOTSTRAP.md`).
 - Maximum nesting depth is 5 (`maxSpawnDepth` range: 1–5). Depth 2 is recommended for most use cases.
 - `maxChildrenPerAgent` caps active children per session (default `5`, range `1–20`).
 

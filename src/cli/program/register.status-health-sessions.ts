@@ -1,19 +1,4 @@
 import type { Command } from "commander";
-import { commitmentsDismissCommand, commitmentsListCommand } from "../../commands/commitments.js";
-import { exportTrajectoryCommand } from "../../commands/export-trajectory.js";
-import { flowsCancelCommand, flowsListCommand, flowsShowCommand } from "../../commands/flows.js";
-import { healthCommand } from "../../commands/health.js";
-import { sessionsCleanupCommand } from "../../commands/sessions-cleanup.js";
-import { sessionsCommand } from "../../commands/sessions.js";
-import { statusCommand } from "../../commands/status.js";
-import {
-  tasksAuditCommand,
-  tasksCancelCommand,
-  tasksListCommand,
-  tasksMaintenanceCommand,
-  tasksNotifyCommand,
-  tasksShowCommand,
-} from "../../commands/tasks.js";
 import { setVerbose } from "../../globals.js";
 import { defaultRuntime } from "../../runtime.js";
 import { formatDocsLink } from "../../terminal/links.js";
@@ -24,6 +9,58 @@ import { parsePositiveIntOrUndefined } from "./helpers.js";
 
 function resolveVerbose(opts: { verbose?: boolean; debug?: boolean }): boolean {
   return Boolean(opts.verbose || opts.debug);
+}
+
+type SessionsListCliOptions = {
+  json?: boolean;
+  verbose?: boolean;
+  store?: string;
+  agent?: string;
+  allAgents?: boolean;
+  active?: string;
+  limit?: string;
+};
+
+function addSessionsListOptions(command: Command): Command {
+  return command
+    .option("--json", "Output as JSON", false)
+    .option("--verbose", "Verbose logging", false)
+    .option("--store <path>", "Path to session store (default: resolved from config)")
+    .option("--agent <id>", "Agent id to inspect (default: configured default agent)")
+    .option("--all-agents", "Aggregate sessions across all configured agents", false)
+    .option("--active <minutes>", "Only show sessions updated within the past N minutes")
+    .option("--limit <count>", 'Max sessions to show (default: 100; use "all" for full output)');
+}
+
+function mergeSessionsListOptions(
+  opts: SessionsListCliOptions,
+  parentOpts?: SessionsListCliOptions,
+): SessionsListCliOptions {
+  return {
+    json: Boolean(opts.json || parentOpts?.json),
+    verbose: Boolean(opts.verbose || parentOpts?.verbose),
+    store: opts.store ?? parentOpts?.store,
+    agent: opts.agent ?? parentOpts?.agent,
+    allAgents: Boolean(opts.allAgents || parentOpts?.allAgents),
+    active: opts.active ?? parentOpts?.active,
+    limit: opts.limit ?? parentOpts?.limit,
+  };
+}
+
+async function runSessionsListCli(opts: SessionsListCliOptions): Promise<void> {
+  setVerbose(Boolean(opts.verbose));
+  const { sessionsCommand } = await import("../../commands/sessions.js");
+  await sessionsCommand(
+    {
+      json: Boolean(opts.json),
+      store: opts.store,
+      agent: opts.agent,
+      allAgents: Boolean(opts.allAgents),
+      active: opts.active,
+      limit: opts.limit,
+    },
+    defaultRuntime,
+  );
 }
 
 function parseTimeoutMs(timeout: unknown): number | null | undefined {
@@ -84,6 +121,7 @@ export function registerStatusHealthSessionsCommands(program: Command) {
     )
     .action(async (opts) => {
       await runWithVerboseAndTimeout(opts, async ({ verbose, timeoutMs }) => {
+        const { statusCommand } = await import("../../commands/status.js");
         await statusCommand(
           {
             json: Boolean(opts.json),
@@ -112,6 +150,7 @@ export function registerStatusHealthSessionsCommands(program: Command) {
     )
     .action(async (opts) => {
       await runWithVerboseAndTimeout(opts, async ({ verbose, timeoutMs }) => {
+        const { healthCommand } = await import("../../commands/health.js");
         await healthCommand(
           {
             json: Boolean(opts.json),
@@ -123,16 +162,9 @@ export function registerStatusHealthSessionsCommands(program: Command) {
       });
     });
 
-  const sessionsCmd = program
-    .command("sessions")
-    .description("List stored conversation sessions")
-    .option("--json", "Output as JSON", false)
-    .option("--verbose", "Verbose logging", false)
-    .option("--store <path>", "Path to session store (default: resolved from config)")
-    .option("--agent <id>", "Agent id to inspect (default: configured default agent)")
-    .option("--all-agents", "Aggregate sessions across all configured agents", false)
-    .option("--active <minutes>", "Only show sessions updated within the past N minutes")
-    .option("--limit <count>", 'Max sessions to show (default: 100; use "all" for full output)')
+  const sessionsCmd = addSessionsListOptions(
+    program.command("sessions").description("List stored conversation sessions"),
+  )
     .addHelpText(
       "after",
       () =>
@@ -154,20 +186,16 @@ export function registerStatusHealthSessionsCommands(program: Command) {
         `\n${theme.muted("Docs:")} ${formatDocsLink("/cli/sessions", "docs.openclaw.ai/cli/sessions")}\n`,
     )
     .action(async (opts) => {
-      setVerbose(Boolean(opts.verbose));
-      await sessionsCommand(
-        {
-          json: Boolean(opts.json),
-          store: opts.store as string | undefined,
-          agent: opts.agent as string | undefined,
-          allAgents: Boolean(opts.allAgents),
-          active: opts.active as string | undefined,
-          limit: opts.limit as string | undefined,
-        },
-        defaultRuntime,
-      );
+      await runSessionsListCli(opts as SessionsListCliOptions);
     });
   sessionsCmd.enablePositionalOptions();
+
+  addSessionsListOptions(
+    sessionsCmd.command("list").description("List stored conversation sessions"),
+  ).action(async (opts, command) => {
+    const parentOpts = command.parent?.opts() as SessionsListCliOptions | undefined;
+    await runSessionsListCli(mergeSessionsListOptions(opts as SessionsListCliOptions, parentOpts));
+  });
 
   sessionsCmd
     .command("cleanup")
@@ -221,6 +249,7 @@ export function registerStatusHealthSessionsCommands(program: Command) {
           }
         | undefined;
       await runCommandWithRuntime(defaultRuntime, async () => {
+        const { sessionsCleanupCommand } = await import("../../commands/sessions-cleanup.js");
         await sessionsCleanupCommand(
           {
             store: (opts.store as string | undefined) ?? parentOpts?.store,
@@ -257,6 +286,7 @@ export function registerStatusHealthSessionsCommands(program: Command) {
           }
         | undefined;
       await runCommandWithRuntime(defaultRuntime, async () => {
+        const { exportTrajectoryCommand } = await import("../../commands/export-trajectory.js");
         await exportTrajectoryCommand(
           {
             sessionKey: opts.sessionKey as string | undefined,
@@ -291,6 +321,7 @@ export function registerStatusHealthSessionsCommands(program: Command) {
     )
     .action(async (opts) => {
       await runCommandWithRuntime(defaultRuntime, async () => {
+        const { commitmentsListCommand } = await import("../../commands/commitments.js");
         await commitmentsListCommand(
           {
             json: Boolean(opts.json),
@@ -316,6 +347,7 @@ export function registerStatusHealthSessionsCommands(program: Command) {
         | { json?: boolean; agent?: string; status?: string; all?: boolean }
         | undefined;
       await runCommandWithRuntime(defaultRuntime, async () => {
+        const { commitmentsListCommand } = await import("../../commands/commitments.js");
         await commitmentsListCommand(
           {
             json: Boolean(opts.json || parentOpts?.json),
@@ -335,6 +367,7 @@ export function registerStatusHealthSessionsCommands(program: Command) {
     .action(async (ids: string[], opts, command) => {
       const parentOpts = command.parent?.opts() as { json?: boolean } | undefined;
       await runCommandWithRuntime(defaultRuntime, async () => {
+        const { commitmentsDismissCommand } = await import("../../commands/commitments.js");
         await commitmentsDismissCommand(
           {
             ids,
@@ -356,6 +389,7 @@ export function registerStatusHealthSessionsCommands(program: Command) {
     )
     .action(async (opts) => {
       await runCommandWithRuntime(defaultRuntime, async () => {
+        const { tasksListCommand } = await import("../../commands/tasks.js");
         await tasksListCommand(
           {
             json: Boolean(opts.json),
@@ -386,6 +420,7 @@ export function registerStatusHealthSessionsCommands(program: Command) {
           }
         | undefined;
       await runCommandWithRuntime(defaultRuntime, async () => {
+        const { tasksListCommand } = await import("../../commands/tasks.js");
         await tasksListCommand(
           {
             json: Boolean(opts.json || parentOpts?.json),
@@ -410,6 +445,7 @@ export function registerStatusHealthSessionsCommands(program: Command) {
     .action(async (opts, command) => {
       const parentOpts = command.parent?.opts() as { json?: boolean } | undefined;
       await runCommandWithRuntime(defaultRuntime, async () => {
+        const { tasksAuditCommand } = await import("../../commands/tasks.js");
         await tasksAuditCommand(
           {
             json: Boolean(opts.json || parentOpts?.json),
@@ -443,6 +479,7 @@ export function registerStatusHealthSessionsCommands(program: Command) {
     .action(async (opts, command) => {
       const parentOpts = command.parent?.opts() as { json?: boolean } | undefined;
       await runCommandWithRuntime(defaultRuntime, async () => {
+        const { tasksMaintenanceCommand } = await import("../../commands/tasks.js");
         await tasksMaintenanceCommand(
           {
             json: Boolean(opts.json || parentOpts?.json),
@@ -461,6 +498,7 @@ export function registerStatusHealthSessionsCommands(program: Command) {
     .action(async (lookup, opts, command) => {
       const parentOpts = command.parent?.opts() as { json?: boolean } | undefined;
       await runCommandWithRuntime(defaultRuntime, async () => {
+        const { tasksShowCommand } = await import("../../commands/tasks.js");
         await tasksShowCommand(
           {
             lookup,
@@ -478,6 +516,7 @@ export function registerStatusHealthSessionsCommands(program: Command) {
     .argument("<notify>", "Notify policy (done_only, state_changes, silent)")
     .action(async (lookup, notify) => {
       await runCommandWithRuntime(defaultRuntime, async () => {
+        const { tasksNotifyCommand } = await import("../../commands/tasks.js");
         await tasksNotifyCommand(
           {
             lookup,
@@ -494,6 +533,7 @@ export function registerStatusHealthSessionsCommands(program: Command) {
     .argument("<lookup>", "Task id, run id, or session key")
     .action(async (lookup) => {
       await runCommandWithRuntime(defaultRuntime, async () => {
+        const { tasksCancelCommand } = await import("../../commands/tasks.js");
         await tasksCancelCommand(
           {
             lookup,
@@ -517,6 +557,7 @@ export function registerStatusHealthSessionsCommands(program: Command) {
     )
     .action(async (opts) => {
       await runCommandWithRuntime(defaultRuntime, async () => {
+        const { flowsListCommand } = await import("../../commands/flows.js");
         await flowsListCommand(
           {
             json: Boolean(opts.json),
@@ -534,6 +575,7 @@ export function registerStatusHealthSessionsCommands(program: Command) {
     .option("--json", "Output as JSON", false)
     .action(async (lookup, opts) => {
       await runCommandWithRuntime(defaultRuntime, async () => {
+        const { flowsShowCommand } = await import("../../commands/flows.js");
         await flowsShowCommand(
           {
             lookup,
@@ -550,6 +592,7 @@ export function registerStatusHealthSessionsCommands(program: Command) {
     .argument("<lookup>", "Flow id or owner key")
     .action(async (lookup) => {
       await runCommandWithRuntime(defaultRuntime, async () => {
+        const { flowsCancelCommand } = await import("../../commands/flows.js");
         await flowsCancelCommand(
           {
             lookup,

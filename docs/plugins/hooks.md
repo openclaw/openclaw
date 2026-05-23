@@ -114,7 +114,7 @@ observation-only.
 
 - `model_call_started` / `model_call_ended` - observe sanitized provider/model call metadata, timing, outcome, and bounded request-id hashes without prompt or response content
 - `llm_input` - observe provider input (system prompt, prompt, history)
-- `llm_output` - observe provider output
+- `llm_output` - observe provider output, usage, and the resolved `contextTokenBudget` when available
 
 **Tools**
 
@@ -145,8 +145,21 @@ observation-only.
 **Lifecycle**
 
 - `gateway_start` / `gateway_stop` - start or stop plugin-owned services with the Gateway
+- `deactivate` - deprecated compatibility alias for `gateway_stop`; use `gateway_stop` in new plugins
 - `cron_changed` - observe gateway-owned cron lifecycle changes (added, updated, removed, started, finished, scheduled)
 - **`before_install`** - inspect skill or plugin install scans and optionally block
+
+## Debug runtime hooks
+
+Use `before_model_resolve` when a plugin needs to switch the provider or model
+for an agent turn. It runs before model resolution; `llm_output` only runs after
+a model attempt produces assistant output.
+
+For proof of the effective session model, inspect runtime registrations, then
+use `openclaw sessions` or the Gateway session/status surfaces. When debugging
+provider payloads, start the Gateway with `--raw-stream` and
+`--raw-stream-path <path>`; those flags write raw model stream events to a jsonl
+file.
 
 ## Tool call policy
 
@@ -154,6 +167,11 @@ observation-only.
 
 - `event.toolName`
 - `event.params`
+- optional `event.toolKind` and `event.toolInputKind`, host-authoritative
+  discriminators for tools that intentionally share names; for example, outer
+  code-mode `exec` calls use `toolKind: "code_mode_exec"` and
+  include `toolInputKind: "javascript" | "typescript"` when the input language
+  is known
 - optional `event.derivedPaths`, containing best-effort host-derived target path
   hints for well-known tool envelopes such as `apply_patch`; when present,
   these paths may be incomplete or may over-approximate what the tool will
@@ -161,7 +179,8 @@ observation-only.
 - optional `event.runId`
 - optional `event.toolCallId`
 - context fields such as `ctx.agentId`, `ctx.sessionKey`, `ctx.sessionId`,
-  `ctx.runId`, `ctx.jobId` (set on cron-driven runs), and diagnostic `ctx.trace`
+  `ctx.runId`, `ctx.jobId` (set on cron-driven runs), `ctx.toolKind`,
+  `ctx.toolInputKind`, and diagnostic `ctx.trace`
 
 It can return:
 
@@ -184,7 +203,7 @@ type BeforeToolCallResult = {
 };
 ```
 
-Rules:
+Hook guard behavior for typed lifecycle hooks:
 
 - `block: true` is terminal and skips lower-priority handlers.
 - `block: false` is treated as no decision.
@@ -264,18 +283,24 @@ as `discord` or `telegram`, while `ctx.channelId` is the conversation target
 identifier when OpenClaw can derive one from the session key or delivery
 metadata.
 
-`agent_end` is an observation hook and runs fire-and-forget after the turn. The
-hook runner applies a 30 second timeout so a wedged plugin or embedding
-endpoint cannot leave the hook promise pending forever. A timeout is logged and
-OpenClaw continues; it does not cancel plugin-owned network work unless the
-plugin also uses its own abort signal.
+`agent_end` is an observation hook. Gateway and persistent harness paths run it
+fire-and-forget after the turn, while short-lived one-shot CLI paths wait for the
+hook promise before process cleanup so trusted plugins can flush terminal
+observability or capture state. The hook runner applies a 30 second timeout so a
+wedged plugin or embedding endpoint cannot leave the hook promise pending
+forever. A timeout is logged and OpenClaw continues; it does not cancel
+plugin-owned network work unless the plugin also uses its own abort signal.
 
 Use `model_call_started` and `model_call_ended` for provider-call telemetry
 that should not receive raw prompts, history, responses, headers, request
 bodies, or provider request IDs. These hooks include stable metadata such as
 `runId`, `callId`, `provider`, `model`, optional `api`/`transport`, terminal
 `durationMs`/`outcome`, and `upstreamRequestIdHash` when OpenClaw can derive a
-bounded provider request-id hash.
+bounded provider request-id hash. When the runtime has resolved context-window
+metadata, the hook event and context also include `contextTokenBudget`, the
+effective token budget after model/config/agent caps, plus
+`contextWindowSource` and `contextWindowReferenceTokens` when a lower cap was
+applied.
 
 `before_agent_finalize` runs only when a harness is about to accept a natural
 final assistant answer. It is not the `/stop` cancellation path and does not
@@ -421,6 +446,8 @@ before the next major release:
 - **`before_agent_start`** remains for compatibility. New plugins should use
   `before_model_resolve` and `before_prompt_build` instead of the combined
   phase.
+- **`deactivate`** remains as a deprecated cleanup compatibility alias until
+  after 2026-08-16. New plugins should use `gateway_stop`.
 - **`onResolution` in `before_tool_call`** now uses the typed
   `PluginApprovalResolution` union (`allow-once` / `allow-always` / `deny` /
   `timeout` / `cancelled`) instead of a free-form `string`.

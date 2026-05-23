@@ -7,81 +7,45 @@ struct SettingsRootView: View {
     private let permissionMonitor = PermissionMonitor.shared
     @State private var monitoringPermissions = false
     @State private var selectedTab: SettingsTab = .general
+    @State private var cachedTabs: Set<SettingsTab>
+    @State private var columnVisibility: NavigationSplitViewVisibility = .all
     @State private var snapshotPaths: (configPath: String?, stateDir: String?) = (nil, nil)
     let updater: UpdaterProviding?
     private let isPreview = ProcessInfo.processInfo.isPreview
     private let isNixMode = ProcessInfo.processInfo.isNixMode
 
     init(state: AppState, updater: UpdaterProviding?, initialTab: SettingsTab? = nil) {
+        let initial = initialTab ?? .general
         self.state = state
         self.updater = updater
-        self._selectedTab = State(initialValue: initialTab ?? .general)
+        self._selectedTab = State(initialValue: initial)
+        self._cachedTabs = State(initialValue: [initial])
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            if self.isNixMode {
-                self.nixManagedBanner
-            }
-            TabView(selection: self.$selectedTab) {
-                GeneralSettings(state: self.state)
-                    .tabItem { Label("General", systemImage: "gearshape") }
-                    .tag(SettingsTab.general)
-
-                ChannelsSettings()
-                    .tabItem { Label("Channels", systemImage: "link") }
-                    .tag(SettingsTab.channels)
-
-                VoiceWakeSettings(state: self.state, isActive: self.selectedTab == .voiceWake)
-                    .tabItem { Label("Voice Wake", systemImage: "waveform.circle") }
-                    .tag(SettingsTab.voiceWake)
-
-                ConfigSettings()
-                    .tabItem { Label("Config", systemImage: "slider.horizontal.3") }
-                    .tag(SettingsTab.config)
-
-                InstancesSettings()
-                    .tabItem { Label("Instances", systemImage: "network") }
-                    .tag(SettingsTab.instances)
-
-                SessionsSettings()
-                    .tabItem { Label("Sessions", systemImage: "clock.arrow.circlepath") }
-                    .tag(SettingsTab.sessions)
-
-                CronSettings()
-                    .tabItem { Label("Cron", systemImage: "calendar") }
-                    .tag(SettingsTab.cron)
-
-                SkillsSettings(state: self.state)
-                    .tabItem { Label("Skills", systemImage: "sparkles") }
-                    .tag(SettingsTab.skills)
-
-                PermissionsSettings(
-                    status: self.permissionMonitor.status,
-                    refresh: self.refreshPerms,
-                    showOnboarding: { DebugActions.restartOnboarding() })
-                    .tabItem { Label("Permissions", systemImage: "lock.shield") }
-                    .tag(SettingsTab.permissions)
-
-                if self.state.debugPaneEnabled {
-                    DebugSettings(state: self.state)
-                        .tabItem { Label("Debug", systemImage: "ant") }
-                        .tag(SettingsTab.debug)
+        NavigationSplitView(columnVisibility: self.animatedColumnVisibility) {
+            List(selection: self.sidebarSelection) {
+                ForEach(self.visibleGroups) { group in
+                    Section(group.title) {
+                        ForEach(group.tabs) { tab in
+                            Label(tab.title, systemImage: tab.systemImage)
+                                .tag(tab as SettingsTab?)
+                        }
+                    }
                 }
-
-                AboutSettings(updater: self.updater)
-                    .tabItem { Label("About", systemImage: "info.circle") }
-                    .tag(SettingsTab.about)
             }
+            .listStyle(.sidebar)
+            .navigationSplitViewColumnWidth(SettingsLayout.sidebarWidth)
+        } detail: {
+            self.detailContainer
         }
-        .padding(.horizontal, 28)
-        .padding(.vertical, 22)
+        .navigationSplitViewStyle(.balanced)
         .frame(width: SettingsTab.windowWidth, height: SettingsTab.windowHeight, alignment: .topLeading)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .onReceive(NotificationCenter.default.publisher(for: .openclawSelectSettingsTab)) { note in
             if let tab = note.object as? SettingsTab {
                 withAnimation(.spring(response: 0.32, dampingFraction: 0.85)) {
-                    self.selectedTab = tab
+                    self.selectedTab = self.validTab(for: tab)
                 }
             }
         }
@@ -89,6 +53,7 @@ struct SettingsRootView: View {
             if let pending = SettingsTabRouter.consumePending() {
                 self.selectedTab = self.validTab(for: pending)
             }
+            self.cacheSelectedTab()
             self.updatePermissionMonitoring(for: self.selectedTab)
         }
         .onChange(of: self.state.debugPaneEnabled) { _, enabled in
@@ -97,6 +62,7 @@ struct SettingsRootView: View {
             }
         }
         .onChange(of: self.selectedTab) { _, newValue in
+            self.cachedTabs.insert(newValue)
             self.updatePermissionMonitoring(for: newValue)
         }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
@@ -112,6 +78,46 @@ struct SettingsRootView: View {
             guard !self.isPreview else { return }
             await self.refreshSnapshotPaths()
         }
+    }
+
+    private var visibleGroups: [SettingsTabGroup] {
+        SettingsTabGroup.defaultGroups(showDebug: self.state.debugPaneEnabled)
+    }
+
+    private var sidebarSelection: Binding<SettingsTab?> {
+        Binding(
+            get: { self.selectedTab },
+            set: { tab in
+                guard let tab else { return }
+                self.selectedTab = self.validTab(for: tab)
+            })
+    }
+
+    private var animatedColumnVisibility: Binding<NavigationSplitViewVisibility> {
+        Binding(
+            get: { self.columnVisibility },
+            set: { visibility in
+                withAnimation(.easeInOut(duration: 0.22)) {
+                    self.columnVisibility = visibility
+                }
+            })
+    }
+
+    private var detailContainer: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            if self.isNixMode {
+                self.nixManagedBanner
+            }
+            self.cachedDetailViews
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .padding(.horizontal, SettingsLayout.detailHorizontalPadding)
+        .padding(.vertical, SettingsLayout.detailVerticalPadding)
+    }
+
+    private var cachedDetailTabs: [SettingsTab] {
+        let cached = self.cachedTabs.union([self.selectedTab])
+        return self.visibleGroups.flatMap(\.tabs).filter { cached.contains($0) }
     }
 
     private var nixManagedBanner: some View {
@@ -144,9 +150,61 @@ struct SettingsRootView: View {
         .cornerRadius(10)
     }
 
+    private var cachedDetailViews: some View {
+        ZStack(alignment: .topLeading) {
+            ForEach(self.cachedDetailTabs) { tab in
+                self.detailView(for: tab)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                    .opacity(tab == self.selectedTab ? 1 : 0)
+                    .allowsHitTesting(tab == self.selectedTab)
+                    .disabled(tab != self.selectedTab)
+                    .accessibilityHidden(tab != self.selectedTab)
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    }
+
+    private func detailView(for tab: SettingsTab) -> AnyView {
+        switch tab {
+        case .general:
+            AnyView(GeneralSettings(state: self.state, page: .general, isActive: self.selectedTab == tab))
+        case .connection:
+            AnyView(GeneralSettings(state: self.state, page: .connection, isActive: self.selectedTab == tab))
+        case .permissions:
+            AnyView(PermissionsSettings(
+                status: self.permissionMonitor.status,
+                refresh: self.refreshPerms,
+                showOnboarding: { DebugActions.restartOnboarding() }))
+        case .voiceWake:
+            AnyView(VoiceWakeSettings(state: self.state, isActive: self.selectedTab == .voiceWake))
+        case .channels:
+            AnyView(ChannelsSettings(isActive: self.selectedTab == tab))
+        case .skills:
+            AnyView(SkillsSettings(state: self.state))
+        case .cron:
+            AnyView(CronSettings(isActive: self.selectedTab == tab))
+        case .execApprovals:
+            AnyView(ExecApprovalsSettings())
+        case .sessions:
+            AnyView(SessionsSettings())
+        case .instances:
+            AnyView(InstancesSettings(isActive: self.selectedTab == tab))
+        case .config:
+            AnyView(ConfigSettings())
+        case .debug:
+            AnyView(DebugSettings(state: self.state))
+        case .about:
+            AnyView(AboutSettings(updater: self.updater))
+        }
+    }
+
     private func validTab(for requested: SettingsTab) -> SettingsTab {
         if requested == .debug, !self.state.debugPaneEnabled { return .general }
         return requested
+    }
+
+    private func cacheSelectedTab() {
+        self.cachedTabs.insert(self.selectedTab)
     }
 
     @MainActor
@@ -171,21 +229,54 @@ struct SettingsRootView: View {
     }
 }
 
-enum SettingsTab: CaseIterable {
-    case general, channels, skills, sessions, cron, config, instances, voiceWake, permissions, debug, about
-    static let windowWidth: CGFloat = 824 // wider
-    static let windowHeight: CGFloat = 790 // +10% (more room)
+private struct SettingsTabGroup: Identifiable {
+    let title: String
+    let tabs: [SettingsTab]
+
+    var id: String {
+        self.title
+    }
+
+    static func defaultGroups(showDebug: Bool) -> [SettingsTabGroup] {
+        var groups = [
+            SettingsTabGroup(title: "Basics", tabs: [.general, .connection, .permissions, .voiceWake]),
+            SettingsTabGroup(title: "Automation", tabs: [.channels, .skills, .cron, .execApprovals]),
+            SettingsTabGroup(title: "Data", tabs: [.sessions, .instances]),
+            SettingsTabGroup(title: "Advanced", tabs: [.config]),
+            SettingsTabGroup(title: "OpenClaw", tabs: [.about]),
+        ]
+
+        if showDebug {
+            groups.insert(SettingsTabGroup(title: "Developer", tabs: [.debug]), at: groups.count - 1)
+        }
+
+        return groups
+    }
+}
+
+enum SettingsTab: CaseIterable, Identifiable, Hashable {
+    case general, connection, permissions, voiceWake, channels, skills, cron
+    case execApprovals, sessions, instances, config, debug, about
+    static let windowWidth: CGFloat = 1120
+    static let windowHeight: CGFloat = 790
+
+    var id: Self {
+        self
+    }
+
     var title: String {
         switch self {
         case .general: "General"
+        case .connection: "Connection"
+        case .permissions: "Permissions"
+        case .voiceWake: "Voice & Talk"
         case .channels: "Channels"
         case .skills: "Skills"
+        case .cron: "Cron Jobs"
+        case .execApprovals: "Exec Approvals"
         case .sessions: "Sessions"
-        case .cron: "Cron"
-        case .config: "Config"
         case .instances: "Instances"
-        case .voiceWake: "Voice Wake"
-        case .permissions: "Permissions"
+        case .config: "Config"
         case .debug: "Debug"
         case .about: "About"
         }
@@ -194,14 +285,16 @@ enum SettingsTab: CaseIterable {
     var systemImage: String {
         switch self {
         case .general: "gearshape"
+        case .connection: "point.3.connected.trianglepath.dotted"
+        case .permissions: "lock.shield"
+        case .voiceWake: "waveform.circle"
         case .channels: "link"
         case .skills: "sparkles"
+        case .cron: "calendar.badge.clock"
+        case .execApprovals: "terminal"
         case .sessions: "clock.arrow.circlepath"
-        case .cron: "calendar"
-        case .config: "slider.horizontal.3"
         case .instances: "network"
-        case .voiceWake: "waveform.circle"
-        case .permissions: "lock.shield"
+        case .config: "slider.horizontal.3"
         case .debug: "ant"
         case .about: "info.circle"
         }

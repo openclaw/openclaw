@@ -677,6 +677,36 @@ describe("config io write", () => {
     });
   });
 
+  it("does not print overwrite audit output by default when updating config", async () => {
+    await withSuiteHome(async (home) => {
+      const configPath = path.join(home, ".openclaw", "openclaw.json");
+      await fs.mkdir(path.dirname(configPath), { recursive: true });
+      await fs.writeFile(
+        configPath,
+        `${JSON.stringify({ gateway: { mode: "local", port: 18789 } }, null, 2)}\n`,
+        "utf-8",
+      );
+      const warn = vi.fn();
+      const io = createConfigIO({
+        env: {} as NodeJS.ProcessEnv,
+        homedir: () => home,
+        logger: {
+          warn,
+          error: vi.fn(),
+        },
+      });
+
+      await io.writeConfigFile({
+        gateway: { mode: "local", port: 18790 },
+      });
+
+      const overwriteLogs = warn.mock.calls.filter(
+        (call) => typeof call[0] === "string" && call[0].startsWith("Config overwrite:"),
+      );
+      expect(overwriteLogs).toHaveLength(0);
+    });
+  });
+
   it("suppresses overwrite audit output when skipOutputLogs is set", async () => {
     await withSuiteHome(async (home) => {
       const configPath = path.join(home, ".openclaw", "openclaw.json");
@@ -780,7 +810,7 @@ describe("config io write", () => {
     });
   });
 
-  it("caps repeated prefix-recovery clobber snapshots for doctor-style repair loops", async () => {
+  it("rotates repeated prefix-recovery clobber snapshots for doctor-style repair loops", async () => {
     await withSuiteHome(async (home) => {
       const configPath = path.join(home, ".openclaw", "openclaw.json");
       const cleanConfig = {
@@ -806,6 +836,13 @@ describe("config io write", () => {
       const entries = await fs.readdir(path.dirname(configPath));
       const clobbered = entries.filter((entry) => entry.includes(".clobbered."));
       expect(clobbered).toHaveLength(CONFIG_CLOBBER_SNAPSHOT_LIMIT);
+      const clobberedContents = await Promise.all(
+        clobbered.map((entry) => fs.readFile(path.join(path.dirname(configPath), entry), "utf-8")),
+      );
+      expect(clobberedContents).not.toContain(`Found and updated: False 0\n${cleanRaw}`);
+      expect(clobberedContents).toContain(
+        `Found and updated: False ${CONFIG_CLOBBER_SNAPSHOT_LIMIT + 3}\n${cleanRaw}`,
+      );
       const capWarnings = warn.mock.calls.filter(
         ([message]) =>
           typeof message === "string" && message.includes("Config clobber snapshot cap reached"),

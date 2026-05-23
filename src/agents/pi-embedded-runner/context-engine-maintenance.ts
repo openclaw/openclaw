@@ -60,6 +60,8 @@ type DeferredTurnMaintenanceRunState = {
 
 const activeDeferredTurnMaintenanceRuns = new Map<string, DeferredTurnMaintenanceRunState>();
 
+type SessionManagerRewriteLock = <T>(operation: () => Promise<T> | T) => Promise<T>;
+
 type DeferredTurnMaintenanceSignal = "SIGINT" | "SIGTERM";
 type DeferredTurnMaintenanceProcessLike = Pick<NodeJS.Process, "on" | "off"> &
   Partial<Pick<NodeJS.Process, "listenerCount" | "kill" | "pid">> & {
@@ -277,6 +279,7 @@ export function buildContextEngineMaintenanceRuntimeContext(params: {
   sessionKey?: string;
   sessionFile: string;
   sessionManager?: Parameters<typeof rewriteTranscriptEntriesInSessionManager>[0]["sessionManager"];
+  withSessionManagerRewriteLock?: SessionManagerRewriteLock;
   runtimeContext?: ContextEngineRuntimeContext;
   agentId?: string;
   allowDeferredCompactionExecution?: boolean;
@@ -297,10 +300,15 @@ export function buildContextEngineMaintenanceRuntimeContext(params: {
     ...(params.allowDeferredCompactionExecution ? { allowDeferredCompactionExecution: true } : {}),
     rewriteTranscriptEntries: async (request) => {
       if (params.sessionManager) {
-        return rewriteTranscriptEntriesInSessionManager({
-          sessionManager: params.sessionManager,
-          replacements: request.replacements,
-        });
+        const sessionManager = params.sessionManager;
+        const rewriteSessionManagerEntries = () =>
+          rewriteTranscriptEntriesInSessionManager({
+            sessionManager,
+            replacements: request.replacements,
+          });
+        return params.withSessionManagerRewriteLock
+          ? await params.withSessionManagerRewriteLock(rewriteSessionManagerEntries)
+          : rewriteSessionManagerEntries();
       }
       const rewriteTranscriptEntriesInFile = async () =>
         await rewriteTranscriptEntriesInSessionFile({
@@ -329,6 +337,7 @@ async function executeContextEngineMaintenance(params: {
   sessionFile: string;
   reason: "bootstrap" | "compaction" | "turn";
   sessionManager?: Parameters<typeof rewriteTranscriptEntriesInSessionManager>[0]["sessionManager"];
+  withSessionManagerRewriteLock?: SessionManagerRewriteLock;
   runtimeContext?: ContextEngineRuntimeContext;
   agentId?: string;
   executionMode: "foreground" | "background";
@@ -346,6 +355,8 @@ async function executeContextEngineMaintenance(params: {
       sessionKey: params.sessionKey,
       sessionFile: params.sessionFile,
       sessionManager: params.executionMode === "background" ? undefined : params.sessionManager,
+      withSessionManagerRewriteLock:
+        params.executionMode === "background" ? undefined : params.withSessionManagerRewriteLock,
       runtimeContext: params.runtimeContext,
       agentId: params.agentId,
       allowDeferredCompactionExecution: params.executionMode === "background",
@@ -525,16 +536,18 @@ async function runDeferredTurnMaintenanceWorker(params: {
   }
 }
 
-function scheduleDeferredTurnMaintenance(params: DeferredTurnMaintenanceScheduleParams): void {
+function scheduleDeferredTurnMaintenance(
+  params: DeferredTurnMaintenanceScheduleParams,
+): Promise<void> | undefined {
   const sessionKey = normalizeSessionKey(params.sessionKey);
   if (!sessionKey) {
-    return;
+    return undefined;
   }
   const activeRun = activeDeferredTurnMaintenanceRuns.get(sessionKey);
   if (activeRun) {
     activeRun.rerunRequested = true;
     activeRun.latestParams = { ...params, sessionKey };
-    return;
+    return activeRun.promise;
   }
 
   const existingTask = findActiveSessionTask({
@@ -589,7 +602,7 @@ function scheduleDeferredTurnMaintenance(params: DeferredTurnMaintenanceSchedule
       taskId: task.taskId,
       error: err,
     });
-    return;
+    return undefined;
   }
   let state!: DeferredTurnMaintenanceRunState;
   const trackedPromise = runPromise
@@ -600,7 +613,7 @@ function scheduleDeferredTurnMaintenance(params: DeferredTurnMaintenanceSchedule
         error: err,
       });
     })
-    .finally(() => {
+    .finally(async () => {
       schedulerAbort.dispose();
       const current = activeDeferredTurnMaintenanceRuns.get(sessionKey);
       if (current !== state) {
@@ -611,7 +624,7 @@ function scheduleDeferredTurnMaintenance(params: DeferredTurnMaintenanceSchedule
         current.rerunRequested && !shutdownTriggered ? current.latestParams : undefined;
       activeDeferredTurnMaintenanceRuns.delete(sessionKey);
       if (rerunParams) {
-        scheduleDeferredTurnMaintenance(rerunParams);
+        await scheduleDeferredTurnMaintenance(rerunParams);
       }
     });
   state = {
@@ -621,6 +634,7 @@ function scheduleDeferredTurnMaintenance(params: DeferredTurnMaintenanceSchedule
   };
   activeDeferredTurnMaintenanceRuns.set(sessionKey, state);
   void trackedPromise;
+  return trackedPromise;
 }
 
 /**
@@ -633,9 +647,11 @@ export async function runContextEngineMaintenance(params: {
   sessionFile: string;
   reason: "bootstrap" | "compaction" | "turn";
   sessionManager?: Parameters<typeof rewriteTranscriptEntriesInSessionManager>[0]["sessionManager"];
+  withSessionManagerRewriteLock?: SessionManagerRewriteLock;
   runtimeContext?: ContextEngineRuntimeContext;
   agentId?: string;
   executionMode?: "foreground" | "background";
+  onDeferredMaintenance?: (promise: Promise<void>) => void;
   config?: OpenClawConfig;
 }): Promise<ContextEngineMaintenanceResult | undefined> {
   if (typeof params.contextEngine?.maintain !== "function") {
@@ -650,7 +666,7 @@ export async function runContextEngineMaintenance(params: {
 
   if (shouldDefer) {
     try {
-      scheduleDeferredTurnMaintenance({
+      const deferred = scheduleDeferredTurnMaintenance({
         contextEngine: params.contextEngine,
         sessionId: params.sessionId,
         sessionKey: params.sessionKey ?? params.sessionId,
@@ -660,6 +676,9 @@ export async function runContextEngineMaintenance(params: {
         agentId: params.agentId,
         config: params.config,
       });
+      if (deferred) {
+        params.onDeferredMaintenance?.(deferred);
+      }
     } catch (err) {
       log.warn(`failed to schedule deferred context engine maintenance: ${String(err)}`);
     }
@@ -674,6 +693,7 @@ export async function runContextEngineMaintenance(params: {
       sessionFile: params.sessionFile,
       reason: params.reason,
       sessionManager: params.sessionManager,
+      withSessionManagerRewriteLock: params.withSessionManagerRewriteLock,
       runtimeContext: params.runtimeContext,
       agentId: params.agentId,
       executionMode,

@@ -1,4 +1,4 @@
-import { beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   makeAttemptResult,
   makeCompactionSuccess,
@@ -17,6 +17,7 @@ import {
   mockedSessionLikelyHasOversizedToolResults,
   mockedTruncateOversizedToolResultsInSession,
   overflowBaseRunParams as baseParams,
+  resetRunOverflowCompactionHarnessMocks,
 } from "./run.overflow-compaction.harness.js";
 import type { EmbeddedRunAttemptResult } from "./run/types.js";
 
@@ -41,11 +42,11 @@ function requireMockCallArg(
 }
 
 function expectLogIncludes(mock: { mock: { calls: unknown[][] } }, fragment: string) {
-  expect(mock.mock.calls.some((call) => String(call[0]).includes(fragment))).toBe(true);
+  expect(mock.mock.calls.map((call) => String(call[0])).join("\n")).toContain(fragment);
 }
 
 function expectLogExcludes(mock: { mock: { calls: unknown[][] } }, fragment: string) {
-  expect(mock.mock.calls.some((call) => String(call[0]).includes(fragment))).toBe(false);
+  expect(mock.mock.calls.map((call) => String(call[0])).join("\n")).not.toContain(fragment);
 }
 
 function expectRetryContinuesFromTranscript() {
@@ -61,17 +62,7 @@ describe("overflow compaction in run loop", () => {
   });
 
   beforeEach(() => {
-    mockedRunEmbeddedAttempt.mockReset();
-    mockedCompactDirect.mockReset();
-    mockedSessionLikelyHasOversizedToolResults.mockReset();
-    mockedTruncateOversizedToolResultsInSession.mockReset();
-    mockedContextEngine.info.ownsCompaction = false;
-    mockedLog.debug.mockReset();
-    mockedLog.info.mockReset();
-    mockedLog.warn.mockReset();
-    mockedLog.error.mockReset();
-    mockedLog.isEnabled.mockReset();
-    mockedLog.isEnabled.mockReturnValue(false);
+    resetRunOverflowCompactionHarnessMocks();
     mockedIsCompactionFailureError.mockImplementation((msg?: string) => {
       if (!msg) {
         return false;
@@ -90,17 +81,6 @@ describe("overflow compaction in run loop", () => {
         lower.includes("context window exceeded") ||
         lower.includes("prompt too large")
       );
-    });
-    mockedCompactDirect.mockResolvedValue({
-      ok: false,
-      compacted: false,
-      reason: "nothing to compact",
-    });
-    mockedSessionLikelyHasOversizedToolResults.mockReturnValue(false);
-    mockedTruncateOversizedToolResultsInSession.mockResolvedValue({
-      truncated: false,
-      truncatedCount: 0,
-      reason: "no oversized tool results",
     });
   });
 
@@ -611,6 +591,43 @@ describe("overflow compaction in run loop", () => {
     expect(result.payloads?.[0]?.text).toContain("timed out");
   });
 
+  it("uses harness-provided prompt timeout outcome metadata", async () => {
+    const setTerminalLifecycleMeta = vi.fn();
+    mockedRunEmbeddedAttempt.mockResolvedValue(
+      makeAttemptResult({
+        aborted: true,
+        timedOut: true,
+        timedOutDuringCompaction: false,
+        assistantTexts: [],
+        promptTimeoutOutcome: {
+          message: "Harness stopped after completed work without terminal confirmation.",
+          replayInvalid: true,
+          livenessState: "abandoned",
+        },
+        setTerminalLifecycleMeta,
+      }),
+    );
+
+    const result = await runEmbeddedPiAgent(baseParams);
+
+    expect(result.payloads).toEqual([
+      {
+        text: "Harness stopped after completed work without terminal confirmation.",
+        isError: true,
+      },
+    ]);
+    expect(result.meta?.replayInvalid).toBe(true);
+    expect(result.meta?.livenessState).toBe("abandoned");
+    expect(result.meta?.timeoutPhase).toBe("provider");
+    expect(result.meta?.providerStarted).toBe(true);
+    expect(setTerminalLifecycleMeta).toHaveBeenCalledWith({
+      replayInvalid: true,
+      livenessState: "abandoned",
+      timeoutPhase: "provider",
+      providerStarted: true,
+    });
+  });
+
   it("does not emit a generic timeout payload after messaging-tool delivery", async () => {
     mockedRunEmbeddedAttempt.mockResolvedValue(
       makeAttemptResult({
@@ -677,15 +694,26 @@ describe("overflow compaction in run loop", () => {
 
     const result = await runEmbeddedPiAgent(baseParams);
 
-    expect(result.payloads).toEqual([
-      expect.objectContaining({
+    expect(
+      result.payloads?.map((payload) => ({
+        isError: payload.isError,
+        textIncludesTimedOut: payload.text?.includes("timed out") ?? false,
+        mediaUrl: payload.mediaUrl,
+        mediaUrls: payload.mediaUrls,
+      })),
+    ).toEqual([
+      {
+        isError: undefined,
+        textIncludesTimedOut: false,
         mediaUrl: "https://example.test/tool-output.png",
         mediaUrls: ["https://example.test/tool-output.png"],
-      }),
-      expect.objectContaining({
+      },
+      {
         isError: true,
-        text: expect.stringContaining("timed out"),
-      }),
+        textIncludesTimedOut: true,
+        mediaUrl: undefined,
+        mediaUrls: undefined,
+      },
     ]);
   });
 

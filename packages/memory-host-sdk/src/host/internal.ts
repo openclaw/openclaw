@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
+import { homedir } from "node:os";
 import path from "node:path";
 import { CANONICAL_ROOT_MEMORY_FILENAME } from "./config-utils.js";
 import { estimateStructuredEmbeddingInputBytes } from "./embedding-input-limits.js";
@@ -65,15 +66,23 @@ const DISABLED_MULTIMODAL_SETTINGS: MemoryMultimodalSettings = {
 };
 
 export function ensureDir(dir: string): string {
-  try {
-    fsSync.mkdirSync(dir, { recursive: true });
-  } catch {}
+  fsSync.mkdirSync(dir, { recursive: true });
   return dir;
 }
 
 export function normalizeRelPath(value: string): string {
   const trimmed = value.trim().replace(/^[./]+/, "");
   return trimmed.replace(/\\/g, "/");
+}
+
+function expandHomePath(value: string): string {
+  if (value === "~") {
+    return homedir();
+  }
+  if (value.startsWith("~/") || value.startsWith("~\\")) {
+    return path.join(homedir(), value.slice(2));
+  }
+  return value;
 }
 
 export function normalizeExtraMemoryPaths(workspaceDir: string, extraPaths?: string[]): string[] {
@@ -83,6 +92,7 @@ export function normalizeExtraMemoryPaths(workspaceDir: string, extraPaths?: str
   const resolved = extraPaths
     .map((value) => value.trim())
     .filter(Boolean)
+    .map((value) => expandHomePath(value))
     .map((value) =>
       path.isAbsolute(value) ? path.resolve(value) : path.resolve(workspaceDir, value),
     );

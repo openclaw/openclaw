@@ -1,8 +1,18 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  clearRuntimeAuthProfileStoreSnapshots,
+  replaceRuntimeAuthProfileStoreSnapshots,
+} from "../auth-profiles.js";
 import { discoverAuthStorage, discoverModels } from "../pi-model-discovery.js";
+import { resetModelDiscoveryCacheForTest } from "./model-discovery-cache.js";
 import { createProviderRuntimeTestMock } from "./model.provider-runtime.test-support.js";
 
 const resolveBundledStaticCatalogModelMock = vi.hoisted(() => vi.fn());
+const resolveRuntimeSyntheticAuthProviderRefsMock = vi.hoisted(() => vi.fn((): string[] => []));
+const resolveRuntimeExternalAuthProviderRefsMock = vi.hoisted(() => vi.fn((): string[] => []));
 
 vi.mock("../model-suppression.js", () => {
   // Mirrors the canonical manifest-driven suppression in
@@ -42,25 +52,6 @@ vi.mock("../model-suppression.js", () => {
     return undefined;
   }
 
-  const staleOpenAICodexModelIds = new Set([
-    "gpt-5.1",
-    "gpt-5.1-codex",
-    "gpt-5.1-codex-mini",
-    "gpt-5.1-codex-max",
-    "gpt-5.2",
-    "gpt-5.2-codex",
-    "gpt-5.2-pro",
-    "gpt-5.3",
-    "gpt-5.3-codex",
-    "gpt-5.3-chat-latest",
-  ]);
-
-  function isStaleOpenAICodexModel(provider?: string, id?: string): boolean {
-    return (
-      provider === "openai-codex" && staleOpenAICodexModelIds.has(id?.trim().toLowerCase() ?? "")
-    );
-  }
-
   return {
     shouldSuppressBuiltInModel: ({
       provider,
@@ -73,9 +64,6 @@ vi.mock("../model-suppression.js", () => {
       baseUrl?: string;
       config?: unknown;
     }) => {
-      if (isStaleOpenAICodexModel(provider, id)) {
-        return true;
-      }
       if (
         (provider === "openai" ||
           provider === "azure-openai-responses" ||
@@ -91,9 +79,6 @@ vi.mock("../model-suppression.js", () => {
       );
     },
     shouldUnconditionallySuppress: ({ provider, id }: { provider?: string; id?: string }) => {
-      if (isStaleOpenAICodexModel(provider, id)) {
-        return true;
-      }
       if (
         (provider === "openai" ||
           provider === "azure-openai-responses" ||
@@ -120,10 +105,6 @@ vi.mock("../model-suppression.js", () => {
       ) {
         return "Unknown model: qwen/qwen3.6-plus. qwen3.6-plus is not supported on the Qwen Coding Plan endpoint; use a Standard pay-as-you-go Qwen endpoint or choose qwen/qwen3.5-plus.";
       }
-      if (isStaleOpenAICodexModel(provider, id)) {
-        const modelId = id?.trim().toLowerCase() ?? "";
-        return `Unknown model: openai-codex/${modelId}. ${modelId} is no longer supported for ChatGPT/Codex OAuth accounts. Use openai/gpt-5.5 through the Codex runtime.`;
-      }
       if (
         (provider === "openai" ||
           provider === "azure-openai-responses" ||
@@ -140,6 +121,11 @@ vi.mock("../model-suppression.js", () => {
 vi.mock("../pi-model-discovery.js", () => ({
   discoverAuthStorage: vi.fn(() => ({ mocked: true })),
   discoverModels: vi.fn(() => ({ find: vi.fn(() => null) })),
+}));
+
+vi.mock("../../plugins/synthetic-auth.runtime.js", () => ({
+  resolveRuntimeSyntheticAuthProviderRefs: resolveRuntimeSyntheticAuthProviderRefsMock,
+  resolveRuntimeExternalAuthProviderRefs: resolveRuntimeExternalAuthProviderRefsMock,
 }));
 
 vi.mock("./model.static-catalog.js", () => ({
@@ -160,7 +146,8 @@ vi.mock("./openrouter-model-capabilities.js", () => ({
     mockLoadOpenRouterModelCapabilities(modelId),
 }));
 
-import type { OpenClawConfig } from "../../config/config.js";
+import type { OpenClawConfig, OpenClawConfigInput } from "../../config/config.js";
+import { COPILOT_INTEGRATION_ID, buildCopilotIdeHeaders } from "../copilot-dynamic-headers.js";
 import { getModelProviderLocalService } from "../provider-local-service.js";
 import { getModelProviderRequestTransport } from "../provider-request-config.js";
 import { buildForwardCompatTemplate } from "./model.forward-compat.test-support.js";
@@ -180,14 +167,24 @@ import {
 } from "./model.test-harness.js";
 
 beforeEach(() => {
+  clearRuntimeAuthProfileStoreSnapshots();
+  resetModelDiscoveryCacheForTest();
   resetMockDiscoverModels(discoverModels);
   vi.mocked(discoverModels).mockClear();
   vi.mocked(discoverAuthStorage).mockClear();
+  resolveRuntimeSyntheticAuthProviderRefsMock.mockReset();
+  resolveRuntimeSyntheticAuthProviderRefsMock.mockReturnValue([]);
+  resolveRuntimeExternalAuthProviderRefsMock.mockReset();
+  resolveRuntimeExternalAuthProviderRefsMock.mockReturnValue([]);
   mockGetOpenRouterModelCapabilities.mockReset();
   mockGetOpenRouterModelCapabilities.mockReturnValue(undefined);
   mockLoadOpenRouterModelCapabilities.mockReset();
   mockLoadOpenRouterModelCapabilities.mockResolvedValue();
   resolveBundledStaticCatalogModelMock.mockReset();
+});
+
+afterEach(() => {
+  vi.unstubAllEnvs();
 });
 
 function createRuntimeHooks() {
@@ -272,6 +269,160 @@ function mockCallArg(mock: ReturnType<typeof vi.fn>, callIndex = 0): Record<stri
 }
 
 describe("resolveModel", () => {
+  it("reuses PI discovery stores while the agent model files are unchanged", async () => {
+    mockDiscoveredModel(discoverModels, {
+      provider: "openai",
+      modelId: "gpt-5.5",
+      templateModel: {
+        provider: "openai",
+        ...makeModel("gpt-5.5"),
+      },
+    });
+
+    const first = await resolveModelAsync("openai", "gpt-5.5", "/tmp/agent", undefined, {
+      runtimeHooks: createRuntimeHooks(),
+    });
+    const second = await resolveModelAsync("openai", "gpt-5.5", "/tmp/agent", undefined, {
+      runtimeHooks: createRuntimeHooks(),
+    });
+
+    expectResolvedModel(first);
+    expectResolvedModel(second);
+    expect(discoverAuthStorage).toHaveBeenCalledTimes(1);
+    expect(discoverModels).toHaveBeenCalledTimes(1);
+  });
+
+  it("invalidates PI discovery stores when inherited default auth changes", async () => {
+    const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-model-cache-"));
+    const agentDir = path.join(rootDir, "agent");
+    const defaultAgentDir = path.join(rootDir, "default-agent");
+    fs.mkdirSync(agentDir, { recursive: true });
+    fs.mkdirSync(defaultAgentDir, { recursive: true });
+    const cfg = {
+      agents: {
+        list: [
+          { id: "main", default: true, agentDir: defaultAgentDir },
+          { id: "worker", agentDir },
+        ],
+      },
+    } as unknown as OpenClawConfig;
+    mockDiscoveredModel(discoverModels, {
+      provider: "openai",
+      modelId: "gpt-5.5",
+      templateModel: {
+        provider: "openai",
+        ...makeModel("gpt-5.5"),
+      },
+    });
+
+    const first = await resolveModelAsync("openai", "gpt-5.5", agentDir, cfg, {
+      runtimeHooks: createRuntimeHooks(),
+    });
+    fs.writeFileSync(
+      path.join(defaultAgentDir, "auth-profiles.json"),
+      JSON.stringify({ version: 1, profiles: { openai: { type: "api_key", key: "one" } } }),
+    );
+    const second = await resolveModelAsync("openai", "gpt-5.5", agentDir, cfg, {
+      runtimeHooks: createRuntimeHooks(),
+    });
+
+    expectResolvedModel(first);
+    expectResolvedModel(second);
+    expect(discoverAuthStorage).toHaveBeenCalledTimes(2);
+    expect(discoverModels).toHaveBeenCalledTimes(2);
+  });
+
+  it("invalidates PI discovery stores when implicit main auth changes without config", async () => {
+    const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-model-cache-state-"));
+    vi.stubEnv("OPENCLAW_STATE_DIR", rootDir);
+    const agentDir = path.join(rootDir, "agents", "worker", "agent");
+    const mainAgentDir = path.join(rootDir, "agents", "main", "agent");
+    fs.mkdirSync(agentDir, { recursive: true });
+    fs.mkdirSync(mainAgentDir, { recursive: true });
+    mockDiscoveredModel(discoverModels, {
+      provider: "openai",
+      modelId: "gpt-5.5",
+      templateModel: {
+        provider: "openai",
+        ...makeModel("gpt-5.5"),
+      },
+    });
+
+    const first = await resolveModelAsync("openai", "gpt-5.5", agentDir, undefined, {
+      runtimeHooks: createRuntimeHooks(),
+    });
+    fs.writeFileSync(
+      path.join(mainAgentDir, "auth-profiles.json"),
+      JSON.stringify({ version: 1, profiles: { openai: { type: "api_key", key: "one" } } }),
+    );
+    const second = await resolveModelAsync("openai", "gpt-5.5", agentDir, undefined, {
+      runtimeHooks: createRuntimeHooks(),
+    });
+
+    expectResolvedModel(first);
+    expectResolvedModel(second);
+    expect(discoverAuthStorage).toHaveBeenCalledTimes(2);
+    expect(discoverModels).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not cache PI discovery stores while runtime auth snapshots are active", async () => {
+    replaceRuntimeAuthProfileStoreSnapshots([
+      {
+        store: {
+          version: 1,
+          profiles: {
+            openai: { type: "api_key", key: "one" },
+          },
+        } as never,
+      },
+    ]);
+    mockDiscoveredModel(discoverModels, {
+      provider: "openai",
+      modelId: "gpt-5.5",
+      templateModel: {
+        provider: "openai",
+        ...makeModel("gpt-5.5"),
+      },
+    });
+
+    const first = await resolveModelAsync("openai", "gpt-5.5", "/tmp/agent", undefined, {
+      runtimeHooks: createRuntimeHooks(),
+    });
+    const second = await resolveModelAsync("openai", "gpt-5.5", "/tmp/agent", undefined, {
+      runtimeHooks: createRuntimeHooks(),
+    });
+
+    expectResolvedModel(first);
+    expectResolvedModel(second);
+    expect(discoverAuthStorage).toHaveBeenCalledTimes(2);
+    expect(discoverModels).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not cache PI discovery stores while plugin auth overlays are active", async () => {
+    resolveRuntimeSyntheticAuthProviderRefsMock.mockReturnValue(["runtime-provider"]);
+    resolveRuntimeExternalAuthProviderRefsMock.mockReturnValue(["external-provider"]);
+    mockDiscoveredModel(discoverModels, {
+      provider: "openai",
+      modelId: "gpt-5.5",
+      templateModel: {
+        provider: "openai",
+        ...makeModel("gpt-5.5"),
+      },
+    });
+
+    const first = await resolveModelAsync("openai", "gpt-5.5", "/tmp/agent", undefined, {
+      runtimeHooks: createRuntimeHooks(),
+    });
+    const second = await resolveModelAsync("openai", "gpt-5.5", "/tmp/agent", undefined, {
+      runtimeHooks: createRuntimeHooks(),
+    });
+
+    expectResolvedModel(first);
+    expectResolvedModel(second);
+    expect(discoverAuthStorage).toHaveBeenCalledTimes(2);
+    expect(discoverModels).toHaveBeenCalledTimes(2);
+  });
+
   it("skips PI auth and model discovery during dynamic model resolution", async () => {
     const result = await resolveModelAsync(
       "openrouter",
@@ -337,6 +488,57 @@ describe("resolveModel", () => {
     expect(discoverModels).not.toHaveBeenCalled();
   });
 
+  it("applies provider overrides to bundled static catalog rows while skipping PI discovery", async () => {
+    resolveBundledStaticCatalogModelMock.mockReturnValueOnce({
+      provider: "mistral",
+      id: "mistral-medium-3-5",
+      name: "Mistral Medium 3.5",
+      api: "openai-completions",
+      baseUrl: "https://api.mistral.ai/v1",
+      input: ["text", "image"],
+      contextWindow: 262144,
+      maxTokens: 8192,
+    });
+    const cfg = {
+      models: {
+        providers: {
+          mistral: {
+            baseUrl: "https://mistral-proxy.example.com/v1",
+            api: "openai-completions",
+            headers: { "X-Proxy": "static-fast-path" },
+            request: { proxy: { mode: "explicit-proxy", url: "http://127.0.0.1:18080" } },
+            localService: {
+              command: "/opt/mistral/start",
+              args: ["--port", "18080"],
+              healthUrl: "http://127.0.0.1:18080/health",
+            },
+            models: [],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const result = await resolveModelAsync("mistral", "mistral-medium-3-5", "/tmp/agent", cfg, {
+      allowBundledStaticCatalogFallback: true,
+      runtimeHooks: createRuntimeHooks(),
+      skipPiDiscovery: true,
+    });
+    const model = expectResolvedModel(result);
+
+    expect(model.baseUrl).toBe("https://mistral-proxy.example.com/v1");
+    expect(model.headers).toEqual({ "X-Proxy": "static-fast-path" });
+    expect(getModelProviderRequestTransport(model)).toEqual({
+      proxy: { mode: "explicit-proxy", url: "http://127.0.0.1:18080" },
+    });
+    expect(getModelProviderLocalService(model)).toEqual({
+      command: "/opt/mistral/start",
+      args: ["--port", "18080"],
+      healthUrl: "http://127.0.0.1:18080/health",
+    });
+    expect(discoverAuthStorage).not.toHaveBeenCalled();
+    expect(discoverModels).not.toHaveBeenCalled();
+  });
+
   it("does not use bundled static catalog rows unless the caller opts in", async () => {
     const result = await resolveModelAsync(
       "mistral",
@@ -391,10 +593,11 @@ describe("resolveModel", () => {
   });
 
   it("defaults missing model cost before handing models to PI", () => {
-    const cfg = {
+    const cfg: OpenClawConfig = {
       models: {
         providers: {
           openai: {
+            baseUrl: "",
             api: "openai-responses",
             models: [
               {
@@ -403,6 +606,7 @@ describe("resolveModel", () => {
                 api: "openai-responses",
                 reasoning: true,
                 input: ["text"],
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
                 contextWindow: 400_000,
                 maxTokens: 128_000,
               },
@@ -410,7 +614,7 @@ describe("resolveModel", () => {
           },
         },
       },
-    } as unknown as OpenClawConfig;
+    };
 
     const result = resolveModelForTest("openai", "gpt-5.5", "/tmp/agent", cfg);
 
@@ -440,6 +644,109 @@ describe("resolveModel", () => {
     expect(model.provider).toBe("custom");
     expect(model.id).toBe("missing-model");
     expect(model.api).toBe("openai-completions");
+  });
+
+  it("does not synthesize unknown models from timeout-only provider overlays", () => {
+    const cfg = {
+      models: {
+        providers: {
+          openai: {
+            timeoutSeconds: 300,
+            baseUrl: "",
+            models: [],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const result = resolveModelForTest("openai", "typo-model", "/tmp/agent", cfg);
+
+    expect(result.model).toBeUndefined();
+    expect(result.error).toBe("Unknown model: openai/typo-model");
+  });
+
+  it("does not create fallback models from provider overlays alone", () => {
+    const cfg = {
+      models: {
+        providers: {
+          typoProvider: {
+            timeoutSeconds: 600,
+          },
+        },
+      },
+    } satisfies OpenClawConfigInput;
+
+    const result = resolveModelForTest(
+      "typoProvider",
+      "typoed-model",
+      "/tmp/agent",
+      cfg as unknown as OpenClawConfig,
+    );
+
+    expect(result.model).toBeUndefined();
+    expect(result.error).toBe("Unknown model: typoProvider/typoed-model");
+  });
+
+  it("does not create fallback models from built-in provider api overlays", () => {
+    const cfg = {
+      models: {
+        providers: {
+          openai: {
+            api: "openai-responses",
+          },
+        },
+      },
+    } satisfies OpenClawConfigInput;
+
+    const result = resolveModelForTest(
+      "openai",
+      "typoed-model",
+      "/tmp/agent",
+      cfg as unknown as OpenClawConfig,
+    );
+
+    expect(result.model).toBeUndefined();
+    expect(result.error).toBe("Unknown model: openai/typoed-model");
+  });
+
+  it("resolves per-model api and baseUrl override in fallback model", () => {
+    const cfg = {
+      models: {
+        providers: {
+          "my-router": {
+            baseUrl: "http://localhost:8080",
+            api: "ollama",
+            models: [
+              {
+                id: "my-router/claude",
+                name: "Claude via Router",
+                api: "anthropic-messages",
+                input: ["text", "image"],
+                contextWindow: 200_000,
+              },
+              {
+                id: "my-router/gpt",
+                name: "GPT via Router",
+                api: "openai-completions",
+                baseUrl: "http://localhost:8080/v1",
+                input: ["text"],
+                contextWindow: 400_000,
+              },
+            ],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const claude = resolveModelForTest("my-router", "my-router/claude", "/tmp/agent", cfg);
+    const claudeModel = expectResolvedModel(claude);
+    expect(claudeModel.api).toBe("anthropic-messages");
+    expect(claudeModel.baseUrl).toBe("http://localhost:8080");
+
+    const gpt = resolveModelForTest("my-router", "my-router/gpt", "/tmp/agent", cfg);
+    const gptModel = expectResolvedModel(gpt);
+    expect(gptModel.api).toBe("openai-completions");
+    expect(gptModel.baseUrl).toBe("http://localhost:8080/v1");
   });
 
   it("defaults baseUrl-only local custom fallback models to chat completions", () => {
@@ -696,6 +1003,40 @@ describe("resolveModel", () => {
     });
   });
 
+  it("adds GitHub Copilot IDE headers to dynamic resolved model headers for Pi-native compaction", () => {
+    const result = resolveModelForTest("github-copilot", "gpt-5.5", "/tmp/agent");
+    const model = expectResolvedModel(result) as unknown as { headers?: Record<string, string> };
+
+    expect(model.headers).toEqual({
+      ...buildCopilotIdeHeaders(),
+      "Copilot-Integration-Id": COPILOT_INTEGRATION_ID,
+      "Openai-Organization": "github-copilot",
+    });
+  });
+
+  it("adds GitHub Copilot IDE headers to configured resolved model headers for Pi-native compaction", () => {
+    const cfg = {
+      models: {
+        providers: {
+          "github-copilot": {
+            baseUrl: "https://api.githubcopilot.com",
+            api: "openai-responses",
+            models: [makeModel("gpt-5.5")],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const result = resolveModelForTest("github-copilot", "gpt-5.5", "/tmp/agent", cfg);
+    const model = expectResolvedModel(result) as unknown as { headers?: Record<string, string> };
+
+    expect(model.headers).toEqual({
+      ...buildCopilotIdeHeaders(),
+      "Copilot-Integration-Id": COPILOT_INTEGRATION_ID,
+      "Openai-Organization": "github-copilot",
+    });
+  });
+
   it("includes provider headers in provider fallback model", () => {
     const cfg = {
       models: {
@@ -841,6 +1182,38 @@ describe("resolveModel", () => {
     });
   });
 
+  it("applies configured provider params to resolved models", () => {
+    mockDiscoveredModel(discoverModels, {
+      provider: "ollama",
+      modelId: "qwen3:32b",
+      templateModel: {
+        ...makeModel("qwen3:32b"),
+        provider: "ollama",
+        params: { keep_alive: "1m" },
+      },
+    });
+    const cfg = {
+      models: {
+        providers: {
+          ollama: {
+            baseUrl: "http://localhost:11434",
+            params: { num_ctx: 65536, top_p: 0.9 },
+            models: [],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const result = resolveModelForTest("ollama", "qwen3:32b", "/tmp/agent", cfg);
+
+    expect(result.error).toBeUndefined();
+    expect((result.model as { params?: Record<string, unknown> } | undefined)?.params).toEqual({
+      keep_alive: "1m",
+      num_ctx: 65536,
+      top_p: 0.9,
+    });
+  });
+
   it("resolves provider request timeout metadata for configured provider models", () => {
     mockDiscoveredModel(discoverModels, {
       provider: "ollama",
@@ -867,6 +1240,38 @@ describe("resolveModel", () => {
     expect(result.error).toBeUndefined();
     expect((result.model as { requestTimeoutMs?: number } | undefined)?.requestTimeoutMs).toBe(
       300_000,
+    );
+  });
+
+  it("resolves provider request timeout metadata from built-in provider overlays", () => {
+    mockDiscoveredModel(discoverModels, {
+      provider: "openai",
+      modelId: "gpt-5.5",
+      templateModel: {
+        ...makeModel("gpt-5.5"),
+        provider: "openai",
+      },
+    });
+    const cfg = {
+      models: {
+        providers: {
+          openai: {
+            timeoutSeconds: 600,
+          },
+        },
+      },
+    } satisfies OpenClawConfigInput;
+
+    const result = resolveModelForTest(
+      "openai",
+      "gpt-5.5",
+      "/tmp/agent",
+      cfg as unknown as OpenClawConfig,
+    );
+
+    expect(result.error).toBeUndefined();
+    expect((result.model as { requestTimeoutMs?: number } | undefined)?.requestTimeoutMs).toBe(
+      600_000,
     );
   });
 
@@ -1300,6 +1705,31 @@ describe("resolveModel", () => {
     expect(result.model?.input).toEqual(["text", "image"]);
   });
 
+  it("repairs stale text-only Anthropic fallback rows for Claude vision models", () => {
+    const cfg = {
+      models: {
+        providers: {
+          anthropic: {
+            baseUrl: "https://api.anthropic.com",
+            api: "anthropic-messages",
+            models: [
+              {
+                ...makeModel("claude-sonnet-4-5"),
+                name: "claude-sonnet-4-5",
+                api: "anthropic-messages",
+                input: ["text"],
+              },
+            ],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const result = resolveModelForTest("anthropic", "claude-sonnet-4-5", "/tmp/agent", cfg);
+
+    expect(result.model?.input).toEqual(["text", "image"]);
+  });
+
   it("repairs stale text-only Foundry discovered rows for GPT-family models", () => {
     const cfg = {
       models: {
@@ -1692,7 +2122,7 @@ describe("resolveModel", () => {
     });
   });
 
-  it("rejects stale exact openai-codex gpt-5.3-codex registry metadata", () => {
+  it("accepts available exact openai-codex gpt-5.3-codex registry metadata", () => {
     vi.mocked(discoverModels).mockReturnValue({
       find: vi.fn((provider: string, modelId: string) => {
         if (provider !== "openai-codex") {
@@ -1712,10 +2142,12 @@ describe("resolveModel", () => {
 
     const result = resolveModelForTest("openai-codex", "gpt-5.3-codex", "/tmp/agent");
 
-    expect(result.model).toBeUndefined();
-    expect(result.error).toBe(
-      "Unknown model: openai-codex/gpt-5.3-codex. gpt-5.3-codex is no longer supported for ChatGPT/Codex OAuth accounts. Use openai/gpt-5.5 through the Codex runtime.",
-    );
+    expect(result.error).toBeUndefined();
+    expectRecordFields(result.model, {
+      provider: "openai-codex",
+      id: "gpt-5.3-codex",
+      contextWindow: 272000,
+    });
   });
 
   it("canonicalizes the legacy openai-codex gpt-5.4-codex alias at runtime", () => {

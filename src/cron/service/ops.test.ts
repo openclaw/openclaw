@@ -6,7 +6,7 @@ import { findTaskByRunId, resetTaskRegistryForTests } from "../../tasks/task-reg
 import { setupCronServiceSuite, writeCronStoreSnapshot } from "../service.test-harness.js";
 import { loadCronStore } from "../store.js";
 import type { CronJob } from "../types.js";
-import { run, start, stop, update } from "./ops.js";
+import { add, run, start, stop, update } from "./ops.js";
 import { createCronServiceState } from "./state.js";
 import { runMissedJobs } from "./timer.js";
 
@@ -72,6 +72,8 @@ function createInterruptedMainJob(now: number): CronJob {
     state: {
       nextRunAtMs: now - 60_000,
       runningAtMs: now - 30 * 60_000,
+      lastFailureNotificationDelivered: true,
+      lastFailureNotificationDeliveryStatus: "delivered",
     },
   };
 }
@@ -97,6 +99,11 @@ async function writeDueIsolatedJobSnapshot(storePath: string, now: number) {
     storePath,
     jobs: [createDueIsolatedJob(now)],
   });
+}
+
+async function writeLegacyCronArraySnapshot(storePath: string, jobs: CronJob[]) {
+  await fs.mkdir(path.dirname(storePath), { recursive: true });
+  await fs.writeFile(storePath, JSON.stringify(jobs, null, 2), "utf-8");
 }
 
 async function expectDueIsolatedManualRunProgresses(storePath: string, now: number) {
@@ -151,6 +158,59 @@ function createMissedIsolatedJob(now: number): CronJob {
 }
 
 describe("cron service ops seam coverage", () => {
+  it("preserves legacy top-level array jobs when adding a new job (#60799)", async () => {
+    const { storePath } = await makeStorePath();
+    const now = Date.parse("2026-05-20T08:00:00.000Z");
+    const legacyJobs: CronJob[] = [
+      {
+        id: "legacy-alpha",
+        name: "legacy alpha",
+        enabled: true,
+        createdAtMs: now - 120_000,
+        updatedAtMs: now - 120_000,
+        schedule: { kind: "every", everyMs: 3_600_000 },
+        sessionTarget: "main",
+        wakeMode: "next-heartbeat",
+        payload: { kind: "systemEvent", text: "alpha" },
+        state: { nextRunAtMs: now + 3_600_000 },
+      },
+      {
+        id: "legacy-beta",
+        name: "legacy beta",
+        enabled: true,
+        createdAtMs: now - 60_000,
+        updatedAtMs: now - 60_000,
+        schedule: { kind: "every", everyMs: 7_200_000 },
+        sessionTarget: "main",
+        wakeMode: "next-heartbeat",
+        payload: { kind: "systemEvent", text: "beta" },
+        state: { nextRunAtMs: now + 7_200_000 },
+      },
+    ];
+    await writeLegacyCronArraySnapshot(storePath, legacyJobs);
+    const state = createOkIsolatedCronState({ storePath, now });
+
+    const newJob = await add(state, {
+      name: "new after upgrade",
+      enabled: true,
+      schedule: { kind: "every", everyMs: 10_800_000 },
+      sessionTarget: "main",
+      wakeMode: "next-heartbeat",
+      payload: { kind: "systemEvent", text: "new" },
+    });
+    if (state.timer) {
+      clearTimeout(state.timer);
+    }
+
+    const loaded = await loadCronStore(storePath);
+    const raw = JSON.parse(await fs.readFile(storePath, "utf-8")) as {
+      jobs: Array<Record<string, unknown>>;
+    };
+
+    expect(loaded.jobs.map((job) => job.id)).toEqual(["legacy-alpha", "legacy-beta", newJob.id]);
+    expect(raw.jobs.map((job) => job.id)).toEqual(["legacy-alpha", "legacy-beta", newJob.id]);
+  });
+
   it("start marks interrupted running jobs failed, persists, and arms the timer", async () => {
     const { storePath } = await makeStorePath();
     const now = Date.parse("2026-03-23T12:00:00.000Z");
@@ -198,6 +258,9 @@ describe("cron service ops seam coverage", () => {
     expect(job.state.lastRunStatus).toBe("error");
     expect(job.state.lastRunAtMs).toBe(now - 30 * 60_000);
     expect(job.state.lastError).toBe("cron: job interrupted by gateway restart");
+    expect(job.state.lastFailureNotificationDelivered).toBeUndefined();
+    expect(job.state.lastFailureNotificationDeliveryStatus).toBe("not-requested");
+    expect(job.state.lastFailureNotificationDeliveryError).toBeUndefined();
     expect((job.state.nextRunAtMs ?? 0) > now).toBe(true);
 
     const delays = timeoutSpy.mock.calls

@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import JSZip from "jszip";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { resolveStateDir } from "../config/paths.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
@@ -9,6 +10,7 @@ import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plug
 
 let LocalMediaAccessError: typeof import("./web-media.js").LocalMediaAccessError;
 let loadWebMedia: typeof import("./web-media.js").loadWebMedia;
+let loadWebMediaRaw: typeof import("./web-media.js").loadWebMediaRaw;
 let optimizeImageToJpeg: typeof import("./web-media.js").optimizeImageToJpeg;
 
 const TINY_PNG_BASE64 =
@@ -38,7 +40,8 @@ function installCanvasMediaResolver() {
 }
 
 beforeAll(async () => {
-  ({ LocalMediaAccessError, loadWebMedia, optimizeImageToJpeg } = await import("./web-media.js"));
+  ({ LocalMediaAccessError, loadWebMedia, loadWebMediaRaw, optimizeImageToJpeg } =
+    await import("./web-media.js"));
   fixtureRoot = await fs.mkdtemp(path.join(resolvePreferredOpenClawTmpDir(), "web-media-core-"));
   tinyPngFile = path.join(fixtureRoot, "tiny.png");
   await fs.writeFile(tinyPngFile, Buffer.from(TINY_PNG_BASE64, "base64"));
@@ -74,6 +77,47 @@ afterAll(async () => {
 });
 
 describe("loadWebMedia", () => {
+  function makeStallingFetch(firstChunk: Uint8Array) {
+    return vi.fn(
+      async () =>
+        new Response(
+          new ReadableStream<Uint8Array>({
+            start(controller) {
+              controller.enqueue(firstChunk);
+            },
+          }),
+          {
+            status: 200,
+            headers: { "content-type": "application/pdf" },
+          },
+        ),
+    );
+  }
+
+  async function expectWebMediaIdleTimeout(
+    createLoadPromise: () => Promise<unknown>,
+    idleTimeoutMs: number,
+  ) {
+    vi.useFakeTimers();
+    try {
+      const outcome = createLoadPromise().then(
+        () => ({ status: "resolved" as const }),
+        (error: unknown) => ({ status: "rejected" as const, error }),
+      );
+      await vi.advanceTimersByTimeAsync(idleTimeoutMs + 5);
+      await expect(
+        Promise.race([outcome, Promise.resolve({ status: "pending" as const })]),
+      ).resolves.toMatchObject({ status: "rejected" });
+      const result = await outcome;
+      expect(result.status).toBe("rejected");
+      if (result.status === "rejected") {
+        expect(String(result.error)).toMatch(/stalled|no data received/i);
+      }
+    } finally {
+      vi.useRealTimers();
+    }
+  }
+
   function createLocalWebMediaOptions() {
     return {
       maxBytes: 1024 * 1024,
@@ -240,15 +284,19 @@ describe("loadWebMedia", () => {
 
   async function withUnavailableImageOptimizer<T>(fn: () => Promise<T>): Promise<T> {
     vi.resetModules();
-    vi.doMock("./image-ops.js", () => ({
+    vi.doMock("./media-services.js", () => ({
       convertHeicToJpeg: vi.fn(async (buffer: Buffer) => buffer),
       hasAlphaChannel: vi.fn(async () => {
         throw new Error(
           "Optional dependency sharp is required for image attachment processing | Cannot find package 'sharp' imported from image-ops.js",
         );
       }),
+      isImageProcessorUnavailableError: (err: unknown) =>
+        err instanceof Error && err.message.includes("Optional dependency sharp is required"),
       optimizeImageToPng: vi.fn(async () => {
-        throw new Error("should not optimize png");
+        throw new Error(
+          "Optional dependency sharp is required for image attachment processing | Cannot find package 'sharp' imported from image-ops.js",
+        );
       }),
       resizeToJpeg: vi.fn(async () => {
         throw new Error(
@@ -259,7 +307,7 @@ describe("loadWebMedia", () => {
     try {
       return await fn();
     } finally {
-      vi.doUnmock("./image-ops.js");
+      vi.doUnmock("./media-services.js");
       vi.resetModules();
     }
   }
@@ -306,6 +354,31 @@ describe("loadWebMedia", () => {
     });
     expect(result.kind).toBe("image");
     expect(result.buffer.length).toBeGreaterThan(0);
+  });
+
+  it("does not treat image-named generic container bytes as local image media", async () => {
+    const zip = new JSZip();
+    zip.file("hello.txt", "hi");
+    const fakeImage = path.join(fixtureRoot, "fake.png");
+    await fs.writeFile(fakeImage, await zip.generateAsync({ type: "nodebuffer" }));
+
+    const result = await loadWebMedia(fakeImage, createLocalWebMediaOptions());
+
+    expect(result.kind).toBe("document");
+    expect(result.contentType).toBe("application/zip");
+    expect(result.fileName).toBe("fake.png");
+  });
+
+  it("uses only the leaf filename from Windows-style sandbox-validated media paths", async () => {
+    const result = await loadWebMedia(String.raw`C:\workspace\captures\tiny.png`, {
+      maxBytes: 1024 * 1024,
+      sandboxValidated: true,
+      readFile: async () => Buffer.from(TINY_PNG_BASE64, "base64"),
+    });
+
+    expect(result.kind).toBe("image");
+    expect(result.contentType).toBe("image/png");
+    expect(result.fileName).toBe("tiny.png");
   });
 
   it("resolves home-relative local media paths through allowed local roots", async () => {
@@ -657,6 +730,43 @@ describe("loadWebMedia", () => {
     } finally {
       await fs.rm(filePath, { force: true });
     }
+  });
+
+  it("applies the shared remote read idle timeout for raw web media loads", async () => {
+    const readIdleTimeoutMs = 20;
+    const fetchImpl = makeStallingFetch(new Uint8Array([0x25, 0x50, 0x44, 0x46]));
+
+    await expectWebMediaIdleTimeout(
+      () =>
+        loadWebMediaRaw("https://example.test/stalled.pdf", {
+          maxBytes: 1024 * 1024,
+          fetchImpl,
+          readIdleTimeoutMs,
+          ssrfPolicy: { allowedHostnames: ["example.test"] },
+        }),
+      readIdleTimeoutMs,
+    );
+  });
+
+  it("loads a valid remote PDF when the raw web media read stays active", async () => {
+    const fetchImpl = vi.fn(
+      async () =>
+        new Response(Buffer.from("%PDF-1.4\n%%EOF"), {
+          status: 200,
+          headers: { "content-type": "application/pdf" },
+        }),
+    );
+
+    const result = await loadWebMediaRaw("https://example.test/ok.pdf", {
+      maxBytes: 1024 * 1024,
+      fetchImpl,
+      readIdleTimeoutMs: 20,
+      ssrfPolicy: { allowedHostnames: ["example.test"] },
+    });
+
+    expect(result.kind).toBe("document");
+    expect(result.contentType).toBe("application/pdf");
+    expect(result.buffer.toString()).toContain("%PDF-1.4");
   });
 
   it("rejects unsupported media store URI locations", async () => {

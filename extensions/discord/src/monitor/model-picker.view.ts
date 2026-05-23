@@ -1,6 +1,9 @@
 import type { APISelectMenuOption } from "discord-api-types/v10";
 import { ButtonStyle } from "discord-api-types/v10";
-import type { ModelsProviderData } from "openclaw/plugin-sdk/models-provider-runtime";
+import type {
+  ModelsProviderData,
+  ModelsRuntimeChoice,
+} from "openclaw/plugin-sdk/models-provider-runtime";
 import { normalizeProviderId } from "openclaw/plugin-sdk/provider-model-shared";
 import {
   Button,
@@ -26,6 +29,7 @@ import {
 } from "./model-picker.state.js";
 
 const DISCORD_PROVIDER_BUTTON_LABEL_MAX_CHARS = 18;
+const DISCORD_MODEL_PICKER_PAGE_INDICATOR_CUSTOM_ID = "mdlpk:nav-indicator";
 
 type DiscordModelPickerButtonOptions = {
   label: string;
@@ -76,8 +80,10 @@ export type DiscordModelPickerModelViewParams = {
   page?: number;
   providerPage?: number;
   currentModel?: string;
+  currentRuntime?: string;
   pendingModel?: string;
   pendingModelIndex?: number;
+  pendingRuntime?: string;
   quickModels?: string[];
   layout?: DiscordModelPickerLayout;
 };
@@ -164,6 +170,59 @@ function createModelSelect(params: {
   return new DiscordModelPickerSelect();
 }
 
+function getRuntimeChoices(params: {
+  data: ModelsProviderData;
+  provider: string;
+}): ModelsRuntimeChoice[] {
+  const choices = params.data.runtimeChoicesByProvider?.get(normalizeProviderId(params.provider));
+  if (choices?.length) {
+    return choices;
+  }
+  return [
+    {
+      id: "pi",
+      label: "OpenClaw Pi Default",
+      description: "Use the built-in OpenClaw Pi runtime.",
+    },
+  ];
+}
+
+function resolveSelectedRuntime(params: {
+  data: ModelsProviderData;
+  provider: string;
+  currentRuntime?: string;
+  pendingRuntime?: string;
+}): string {
+  const choices = getRuntimeChoices({ data: params.data, provider: params.provider });
+  const allowed = new Set(choices.map((choice) => choice.id));
+  const pending = params.pendingRuntime?.trim();
+  if (pending && allowed.has(pending)) {
+    return pending;
+  }
+  const current = params.currentRuntime?.trim();
+  if (current && allowed.has(current)) {
+    return current;
+  }
+  return choices[0]?.id ?? "pi";
+}
+
+function resolveExplicitRuntimeState(params: {
+  choices: ModelsRuntimeChoice[];
+  currentRuntime?: string;
+  pendingRuntime?: string;
+}): string | undefined {
+  const allowed = new Set(params.choices.map((choice) => choice.id));
+  const pending = params.pendingRuntime?.trim();
+  if (pending && allowed.has(pending)) {
+    return pending;
+  }
+  const current = params.currentRuntime?.trim();
+  if (current && current !== "auto" && current !== "default" && allowed.has(current)) {
+    return current;
+  }
+  return undefined;
+}
+
 function buildRenderedShell(
   params: DiscordModelPickerRenderShellParams,
 ): DiscordModelPickerRenderedView {
@@ -234,6 +293,63 @@ function buildProviderRows(params: {
   return rows;
 }
 
+function buildPaginationRow(params: {
+  command: DiscordModelPickerCommandContext;
+  userId: string;
+  view: "providers" | "models";
+  page: number;
+  totalPages: number;
+  hasPrev: boolean;
+  hasNext: boolean;
+  provider?: string;
+  runtime?: string;
+  providerPage?: number;
+  modelIndex?: number;
+}): Row<Button> | null {
+  if (params.totalPages <= 1) {
+    return null;
+  }
+  const prevButton = createModelPickerButton({
+    label: "◀ Prev",
+    style: ButtonStyle.Secondary,
+    disabled: !params.hasPrev,
+    customId: buildDiscordModelPickerCustomId({
+      command: params.command,
+      action: "nav",
+      view: params.view,
+      provider: params.provider,
+      runtime: params.runtime,
+      page: Math.max(1, params.page - 1),
+      providerPage: params.providerPage,
+      modelIndex: params.modelIndex,
+      userId: params.userId,
+    }),
+  });
+  const indicatorButton = createModelPickerButton({
+    label: `Page ${params.page}/${params.totalPages}`,
+    style: ButtonStyle.Secondary,
+    disabled: true,
+    customId: DISCORD_MODEL_PICKER_PAGE_INDICATOR_CUSTOM_ID,
+  });
+  const nextButton = createModelPickerButton({
+    label: "Next ▶",
+    style: ButtonStyle.Secondary,
+    disabled: !params.hasNext,
+    customId: buildDiscordModelPickerCustomId({
+      command: params.command,
+      action: "nav",
+      view: params.view,
+      provider: params.provider,
+      runtime: params.runtime,
+      page: Math.min(params.totalPages, params.page + 1),
+      providerPage: params.providerPage,
+      modelIndex: params.modelIndex,
+      userId: params.userId,
+    }),
+  });
+  return new Row([prevButton, indicatorButton, nextButton]);
+}
+
 function buildModelRows(params: {
   command: DiscordModelPickerCommandContext;
   userId: string;
@@ -241,8 +357,10 @@ function buildModelRows(params: {
   providerPage: number;
   modelPage: DiscordModelPickerModelPage;
   currentModel?: string;
+  currentRuntime?: string;
   pendingModel?: string;
   pendingModelIndex?: number;
+  pendingRuntime?: string;
   quickModels?: string[];
 }): { rows: DiscordModelPickerRow[]; buttonRow: Row<Button> } {
   const parsedCurrentModel = parseCurrentModelRef(params.currentModel);
@@ -279,6 +397,54 @@ function buildModelRows(params: {
     ]),
   );
 
+  const runtimeChoices = getRuntimeChoices({
+    data: params.data,
+    provider: params.modelPage.provider,
+  });
+  const selectedRuntime = resolveSelectedRuntime({
+    data: params.data,
+    provider: params.modelPage.provider,
+    currentRuntime: params.currentRuntime,
+    pendingRuntime: params.pendingRuntime,
+  });
+  const stateRuntime = resolveExplicitRuntimeState({
+    choices: runtimeChoices,
+    currentRuntime: params.currentRuntime,
+    pendingRuntime: params.pendingRuntime,
+  });
+
+  if (runtimeChoices.length > 1) {
+    rows.push(
+      new Row([
+        createModelSelect({
+          customId: buildDiscordModelPickerCustomId({
+            command: params.command,
+            action: "runtime",
+            view: "models",
+            provider: params.modelPage.provider,
+            runtime: selectedRuntime,
+            page: params.modelPage.page,
+            providerPage: providerPage.page,
+            modelIndex: params.pendingModelIndex,
+            userId: params.userId,
+          }),
+          options: runtimeChoices.map((choice) => {
+            const option: APISelectMenuOption = {
+              label: choice.label,
+              value: choice.id,
+              default: choice.id === selectedRuntime,
+            };
+            if (choice.description) {
+              option.description = choice.description;
+            }
+            return option;
+          }),
+          placeholder: "Select runtime",
+        }),
+      ]),
+    );
+  }
+
   const selectedModelRef = parsedPendingModel ?? parsedCurrentModel;
   const modelOptions: APISelectMenuOption[] = params.modelPage.items.map((model) => ({
     label: model,
@@ -296,6 +462,7 @@ function buildModelRows(params: {
           action: "model",
           view: "models",
           provider: params.modelPage.provider,
+          runtime: stateRuntime,
           page: params.modelPage.page,
           providerPage: providerPage.page,
           userId: params.userId,
@@ -305,6 +472,23 @@ function buildModelRows(params: {
       }),
     ]),
   );
+
+  const modelNavRow = buildPaginationRow({
+    command: params.command,
+    userId: params.userId,
+    view: "models",
+    page: params.modelPage.page,
+    totalPages: params.modelPage.totalPages,
+    hasPrev: params.modelPage.hasPrev,
+    hasNext: params.modelPage.hasNext,
+    provider: params.modelPage.provider,
+    runtime: stateRuntime,
+    providerPage: providerPage.page,
+    modelIndex: params.pendingModelIndex,
+  });
+  if (modelNavRow) {
+    rows.push(modelNavRow);
+  }
 
   const resolvedDefault = params.data.resolvedDefault;
   const shouldDisableReset =
@@ -327,6 +511,7 @@ function buildModelRows(params: {
         action: "cancel",
         view: "models",
         provider: params.modelPage.provider,
+        runtime: stateRuntime,
         page: params.modelPage.page,
         providerPage: providerPage.page,
         userId: params.userId,
@@ -341,6 +526,7 @@ function buildModelRows(params: {
         action: "reset",
         view: "models",
         provider: params.modelPage.provider,
+        runtime: stateRuntime,
         page: params.modelPage.page,
         providerPage: providerPage.page,
         userId: params.userId,
@@ -358,6 +544,7 @@ function buildModelRows(params: {
           action: "recents",
           view: "recents",
           provider: params.modelPage.provider,
+          runtime: stateRuntime,
           page: params.modelPage.page,
           providerPage: providerPage.page,
           userId: params.userId,
@@ -376,6 +563,7 @@ function buildModelRows(params: {
         action: "submit",
         view: "models",
         provider: params.modelPage.provider,
+        runtime: stateRuntime,
         page: params.modelPage.page,
         providerPage: providerPage.page,
         modelIndex: params.pendingModelIndex,
@@ -392,23 +580,40 @@ export function renderDiscordModelPickerProvidersView(
 ): DiscordModelPickerRenderedView {
   const page = getDiscordModelPickerProviderPage({ data: params.data, page: params.page });
   const parsedCurrent = parseCurrentModelRef(params.currentModel);
-  const rows = buildProviderRows({
+  const rows: DiscordModelPickerRow[] = buildProviderRows({
     command: params.command,
     userId: params.userId,
     page,
     currentProvider: parsedCurrent?.provider,
   });
 
+  const navRow = buildPaginationRow({
+    command: params.command,
+    userId: params.userId,
+    view: "providers",
+    page: page.page,
+    totalPages: page.totalPages,
+    hasPrev: page.hasPrev,
+    hasNext: page.hasNext,
+  });
+  if (navRow) {
+    rows.push(navRow);
+  }
+
   const detailLines = [
     formatCurrentModelLine(params.currentModel),
     `Select a provider (${page.totalItems} available).`,
   ];
+  const footer =
+    page.totalPages > 1
+      ? `Showing page ${page.page}/${page.totalPages} · ${page.totalItems} providers total`
+      : `All ${page.totalItems} providers shown`;
   return buildRenderedShell({
     layout: params.layout ?? "v2",
     title: "Model Picker",
     detailLines,
     rows,
-    footer: `All ${page.totalItems} providers shown`,
+    footer,
   });
 }
 
@@ -457,20 +662,34 @@ export function renderDiscordModelPickerModelsView(
     providerPage,
     modelPage,
     currentModel: params.currentModel,
+    currentRuntime: params.currentRuntime,
     pendingModel: params.pendingModel,
     pendingModelIndex: params.pendingModelIndex,
+    pendingRuntime: params.pendingRuntime,
     quickModels: params.quickModels,
   });
 
   const defaultModel = `${params.data.resolvedDefault.provider}/${params.data.resolvedDefault.model}`;
   const pendingLine = params.pendingModel
-    ? `Selected: ${params.pendingModel} (press Submit)`
+    ? `Selected: ${params.pendingModel} · runtime ${resolveSelectedRuntime({
+        data: params.data,
+        provider: modelPage.provider,
+        currentRuntime: params.currentRuntime,
+        pendingRuntime: params.pendingRuntime,
+      })} (press Submit)`
     : "Select a model, then press Submit.";
+
+  const detailLines = [formatCurrentModelLine(params.currentModel), `Default: ${defaultModel}`];
+  if (modelPage.totalPages > 1) {
+    detailLines.push(
+      `${modelPage.provider}: page ${modelPage.page}/${modelPage.totalPages} · ${modelPage.totalItems} models`,
+    );
+  }
 
   return buildRenderedShell({
     layout: params.layout ?? "v2",
     title: "Model Picker",
-    detailLines: [formatCurrentModelLine(params.currentModel), `Default: ${defaultModel}`],
+    detailLines,
     preRowText: pendingLine,
     rows,
     trailingRows: [buttonRow],
@@ -483,6 +702,7 @@ export type DiscordModelPickerRecentsViewParams = {
   data: ModelsProviderData;
   quickModels: string[];
   currentModel?: string;
+  runtime?: string;
   provider?: string;
   page?: number;
   providerPage?: number;
@@ -522,6 +742,7 @@ export function renderDiscordModelPickerRecentsView(
           view: "recents",
           recentSlot: 1,
           provider: params.provider,
+          runtime: params.runtime,
           page: params.page,
           providerPage: params.providerPage,
           userId: params.userId,
@@ -544,6 +765,7 @@ export function renderDiscordModelPickerRecentsView(
             view: "recents",
             recentSlot: i + 2,
             provider: params.provider,
+            runtime: params.runtime,
             page: params.page,
             providerPage: params.providerPage,
             userId: params.userId,
@@ -563,6 +785,7 @@ export function renderDiscordModelPickerRecentsView(
         action: "back",
         view: "models",
         provider: params.provider,
+        runtime: params.runtime,
         page: params.page,
         providerPage: params.providerPage,
         userId: params.userId,

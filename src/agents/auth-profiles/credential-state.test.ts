@@ -103,4 +103,18 @@ describe("evaluateStoredCredentialEligibility", () => {
     });
     expect(result).toEqual({ eligible: false, reasonCode: "invalid_expires" });
   });
+
+  it("marks oauth without inline credential material as ineligible", () => {
+    const result = evaluateStoredCredentialEligibility({
+      credential: {
+        type: "oauth",
+        provider: "openai-codex",
+        access: "",
+        refresh: "",
+        expires: now + 60_000,
+      },
+      now,
+    });
+    expect(result).toEqual({ eligible: false, reasonCode: "missing_credential" });
+  });
 });
