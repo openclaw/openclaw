@@ -6,12 +6,12 @@ import { lookup as dnsLookupCb } from "node:dns";
 import { lookup as dnsLookup } from "node:dns/promises";
 import { createWriteStream } from "node:fs";
 import fs from "node:fs/promises";
+import { request as httpsRequest } from "node:https";
 import { isIP } from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { pipeline } from "node:stream/promises";
 import { fileURLToPath } from "node:url";
-import { Agent } from "undici";
 
 const ROOT_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const DEFAULT_OUTPUT_NAME = "openclaw-current.tgz";
@@ -389,7 +389,7 @@ function ipv4InCidr(octets, base, bits) {
 }
 
 function isUnsafeIpv4(address) {
-  const octets = parseIpv4(address);
+  const octets = Array.isArray(address) ? address : parseIpv4(address);
   if (!octets) {
     return true;
   }
@@ -411,10 +411,81 @@ function isUnsafeIpv4(address) {
   ].some(([base, bits]) => ipv4InCidr(octets, base, bits));
 }
 
+function ipv4FromHextets(high, low) {
+  return [(high >>> 8) & 0xff, high & 0xff, (low >>> 8) & 0xff, low & 0xff];
+}
+
+function parseIpv6Parts(address) {
+  const normalized = address.toLowerCase().replace(/%[0-9a-z_.-]+$/u, "");
+  const dottedIpv4 = normalized.match(/^(.*:)(\d{1,3}(?:\.\d{1,3}){3})$/u);
+  const canonical = dottedIpv4
+    ? `${dottedIpv4[1]}${((parseIpv4(dottedIpv4[2])?.[0] ?? 0) << 8) | (parseIpv4(dottedIpv4[2])?.[1] ?? 0)}:${((parseIpv4(dottedIpv4[2])?.[2] ?? 0) << 8) | (parseIpv4(dottedIpv4[2])?.[3] ?? 0)}`
+    : normalized;
+  if (canonical.includes(":::") || canonical.split("::").length > 2) {
+    return null;
+  }
+  const [leftRaw = "", rightRaw = ""] = canonical.split("::");
+  const parseParts = (value) => {
+    if (!value) {
+      return [];
+    }
+    return value.split(":").map((part) => {
+      if (!/^[0-9a-f]{1,4}$/u.test(part)) {
+        return Number.NaN;
+      }
+      return Number.parseInt(part, 16);
+    });
+  };
+  const left = parseParts(leftRaw);
+  const right = parseParts(rightRaw);
+  if ([...left, ...right].some((part) => !Number.isInteger(part) || part < 0 || part > 0xffff)) {
+    return null;
+  }
+  const zeroCount = canonical.includes("::") ? 8 - left.length - right.length : 0;
+  if (zeroCount < 0 || (!canonical.includes("::") && left.length !== 8)) {
+    return null;
+  }
+  return [...left, ...Array.from({ length: zeroCount }, () => 0), ...right];
+}
+
+function extractUnsafeEmbeddedIpv4FromIpv6(address) {
+  const parts = parseIpv6Parts(address);
+  if (!parts || parts.length !== 8) {
+    return null;
+  }
+  const candidates = [];
+  if (parts.slice(0, 5).every((part) => part === 0) && parts[5] === 0xffff) {
+    candidates.push(ipv4FromHextets(parts[6], parts[7]));
+  }
+  if (parts.slice(0, 6).every((part) => part === 0)) {
+    candidates.push(ipv4FromHextets(parts[6], parts[7]));
+  }
+  if (parts[0] === 0x0064 && parts[1] === 0xff9b && parts.slice(2, 6).every((part) => part === 0)) {
+    candidates.push(ipv4FromHextets(parts[6], parts[7]));
+  }
+  if (
+    parts[0] === 0x0064 &&
+    parts[1] === 0xff9b &&
+    parts[2] === 0x0001 &&
+    parts.slice(3, 6).every((part) => part === 0)
+  ) {
+    candidates.push(ipv4FromHextets(parts[6], parts[7]));
+  }
+  if (parts[0] === 0x2002) {
+    candidates.push(ipv4FromHextets(parts[1], parts[2]));
+  }
+  if (parts[0] === 0x2001 && parts[1] === 0x0000) {
+    candidates.push(ipv4FromHextets(parts[6] ^ 0xffff, parts[7] ^ 0xffff));
+  }
+  if ((parts[4] & 0xfcff) === 0 && parts[5] === 0x5efe) {
+    candidates.push(ipv4FromHextets(parts[6], parts[7]));
+  }
+  return candidates.find((candidate) => isUnsafeIpv4(candidate)) ?? null;
+}
+
 function isUnsafeIpv6(address) {
   const normalized = address.toLowerCase();
-  const embeddedIpv4 = normalized.match(/(?:::ffff:)?(\d{1,3}(?:\.\d{1,3}){3})$/u)?.[1];
-  if (embeddedIpv4 && isUnsafeIpv4(embeddedIpv4)) {
+  if (extractUnsafeEmbeddedIpv4FromIpv6(normalized)) {
     return true;
   }
   return (
@@ -679,8 +750,106 @@ async function resolvePackageDownloadAddresses(parsed, lookupHost, trustedSource
   return [...new Set(results.map((entry) => entry.address))];
 }
 
+function responseStatus(response) {
+  return Number(response.status ?? 0);
+}
+
+function responseOk(response) {
+  const status = responseStatus(response);
+  return status >= 200 && status < 300;
+}
+
+function responseHeader(response, name) {
+  return response.headers?.get?.(name) ?? null;
+}
+
+async function closeResponseBody(body) {
+  if (!body) {
+    return;
+  }
+  if (typeof body.cancel === "function") {
+    await body.cancel().catch(() => {});
+    return;
+  }
+  if (typeof body.destroy === "function") {
+    body.destroy();
+  }
+}
+
+async function openFetchPackageDownloadResponse(parsed, options) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), options.timeoutMs);
+  timeout.unref?.();
+  const response = await options.fetchImpl(parsed, {
+    headers: options.headers,
+    redirect: "manual",
+    signal: controller.signal,
+  }).catch((error) => {
+    clearTimeout(timeout);
+    if (error?.name === "AbortError") {
+      throw new Error(`package_url download timed out after ${options.timeoutMs}ms: ${parsed.toString()}`, {
+        cause: error,
+      });
+    }
+    throw error;
+  });
+  return {
+    close: async () => closeResponseBody(response.body),
+    response,
+    timeout,
+    timeoutMs: options.timeoutMs,
+  };
+}
+
+async function openHttpsPackageDownloadResponse(parsed, options) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), options.timeoutMs);
+  timeout.unref?.();
+  const lookup = createPinnedLookup(parsed.hostname, options.addresses);
+  const response = await new Promise((resolve, reject) => {
+    const request = httpsRequest(
+      parsed,
+      {
+        headers: options.headers,
+        lookup,
+        signal: controller.signal,
+      },
+      (message) => {
+        resolve({
+          body: message,
+          headers: {
+            get(name) {
+              const value = message.headers[name.toLowerCase()];
+              if (Array.isArray(value)) {
+                return value[0] ?? null;
+              }
+              return value ?? null;
+            },
+          },
+          status: message.statusCode ?? 0,
+        });
+      },
+    );
+    request.on("error", reject);
+    request.end();
+  }).catch((error) => {
+    clearTimeout(timeout);
+    if (error?.name === "AbortError" || error?.code === "ABORT_ERR") {
+      throw new Error(`package_url download timed out after ${options.timeoutMs}ms: ${parsed.toString()}`, {
+        cause: error,
+      });
+    }
+    throw error;
+  });
+  return {
+    close: async () => closeResponseBody(response.body),
+    response,
+    timeout,
+    timeoutMs: options.timeoutMs,
+  };
+}
+
 async function openPackageDownloadResponse(url, options) {
-  const fetchImpl = options.fetchImpl ?? fetch;
   const lookupHost = options.lookupHost ?? defaultLookupHost;
   const timeoutMs = options.timeoutMs ?? PACKAGE_URL_DOWNLOAD_TIMEOUT_MS;
   const maxRedirects = options.maxRedirects ?? PACKAGE_URL_MAX_REDIRECTS;
@@ -694,43 +863,29 @@ async function openPackageDownloadResponse(url, options) {
       validatePackageDownloadUrl(parsed);
     }
     const addresses = await resolvePackageDownloadAddresses(parsed, lookupHost, trustedSource);
-    const dispatcher = new Agent({
-      connect: { lookup: createPinnedLookup(parsed.hostname, addresses) },
-    });
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), timeoutMs);
-    timeout.unref?.();
-    const response = await fetchImpl(parsed, {
-      dispatcher,
-      headers,
-      redirect: "manual",
-      signal: controller.signal,
-    }).catch(async (error) => {
-      clearTimeout(timeout);
-      await dispatcher.close();
-      if (error?.name === "AbortError") {
-        throw new Error(
-          `package_url download timed out after ${timeoutMs}ms: ${parsed.toString()}`,
-          {
-            cause: error,
-          },
-        );
-      }
-      throw error;
-    });
-
-    if ([301, 302, 303, 307, 308].includes(response.status)) {
-      clearTimeout(timeout);
-      response.body?.cancel();
-      await dispatcher.close();
-      const location = response.headers.get("location");
+    const opened = options.fetchImpl
+      ? await openFetchPackageDownloadResponse(parsed, {
+          fetchImpl: options.fetchImpl,
+          headers,
+          timeoutMs,
+        })
+      : await openHttpsPackageDownloadResponse(parsed, {
+          addresses,
+          headers,
+          timeoutMs,
+        });
+    const status = responseStatus(opened.response);
+    if ([301, 302, 303, 307, 308].includes(status)) {
+      clearTimeout(opened.timeout);
+      await opened.close();
+      const location = responseHeader(opened.response, "location");
       if (!location) {
-        throw new Error(`package_url redirect missing Location header: HTTP ${response.status}`);
+        throw new Error(`package_url redirect missing Location header: HTTP ${status}`);
       }
       parsed = new URL(location, parsed);
       continue;
     }
-    return { dispatcher, response, timeout, timeoutMs };
+    return opened;
   }
   throw new Error(`package_url exceeded ${maxRedirects} redirects: ${url}`);
 }
@@ -749,16 +904,13 @@ async function* limitResponseBody(body, maxBytes) {
 
 export async function downloadUrl(url, target, options = {}) {
   const maxBytes = options.maxBytes ?? PACKAGE_URL_MAX_BYTES;
-  const { dispatcher, response, timeout, timeoutMs } = await openPackageDownloadResponse(
-    url,
-    options,
-  );
+  const { close, response, timeout, timeoutMs } = await openPackageDownloadResponse(url, options);
   const tempTarget = `${target}.tmp`;
   try {
-    if (!response.ok || !response.body) {
-      throw new Error(`failed to download package_url: HTTP ${response.status}`);
+    if (!responseOk(response) || !response.body) {
+      throw new Error(`failed to download package_url: HTTP ${responseStatus(response)}`);
     }
-    const contentLength = Number(response.headers.get("content-length") ?? "");
+    const contentLength = Number(responseHeader(response, "content-length") ?? "");
     if (Number.isFinite(contentLength) && contentLength > maxBytes) {
       throw new Error(`package_url exceeds maximum download size of ${maxBytes} bytes`);
     }
@@ -774,8 +926,7 @@ export async function downloadUrl(url, target, options = {}) {
     throw error;
   } finally {
     clearTimeout(timeout);
-    response.body?.cancel();
-    await dispatcher.close();
+    await close();
     await fs.rm(tempTarget, { force: true });
   }
 }
