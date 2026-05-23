@@ -5,7 +5,7 @@ import {
   resolveDefaultMediaModel,
 } from "../../media-understanding/defaults.js";
 import type { AuthProfileStore } from "../auth-profiles/types.js";
-import { isMinimaxVlmProvider } from "../minimax-vlm.js";
+import { isMinimaxVlmModel, isMinimaxVlmProvider } from "../minimax-vlm.js";
 import {
   coerceImageModelConfig,
   type ImageModelConfig,
@@ -53,6 +53,78 @@ function resolveImageCandidateRefs(params: {
       return modelId ? `${providerId}/${modelId}` : null;
     })
     .filter((value): value is string => Boolean(value));
+}
+
+function formatProviderModelRef(providerId: string, modelId: string): string {
+  const slash = modelId.indexOf("/");
+  if (slash > 0 && modelId.slice(0, slash).trim() === providerId) {
+    return modelId;
+  }
+  return `${providerId}/${modelId}`;
+}
+
+function isMinimaxVlmModelRef(ref: string): boolean {
+  const slash = ref.indexOf("/");
+  if (slash <= 0) {
+    return false;
+  }
+  return isMinimaxVlmModel(ref.slice(0, slash), ref.slice(slash + 1));
+}
+
+function resolveMinimaxTextExtractionCandidateRefs(params: {
+  cfg?: OpenClawConfig;
+  primary: { provider: string; model: string };
+  primaryProviderOk: boolean;
+  agentDir: string;
+  authStore?: AuthProfileStore;
+}): string[] {
+  const candidates: string[] = [];
+  const addCandidate = (providerId: string, modelId: string) => {
+    const provider = providerId.trim();
+    const model = modelId.trim();
+    if (!provider || !model || isMinimaxVlmModel(provider, model)) {
+      return;
+    }
+    const ref = formatProviderModelRef(provider, model);
+    if (!candidates.includes(ref)) {
+      candidates.push(ref);
+    }
+  };
+
+  if (params.primaryProviderOk && isMinimaxVlmProvider(params.primary.provider)) {
+    addCandidate(params.primary.provider, params.primary.model);
+  }
+
+  const providers = params.cfg?.models?.providers;
+  if (!providers || typeof providers !== "object") {
+    return candidates;
+  }
+
+  for (const [providerKey, providerCfg] of Object.entries(providers)) {
+    const providerId = providerKey.trim();
+    if (
+      !providerId ||
+      !isMinimaxVlmProvider(providerId) ||
+      !hasAuthForProvider({
+        provider: providerId,
+        agentDir: params.agentDir,
+        authStore: params.authStore,
+      })
+    ) {
+      continue;
+    }
+    const modelId = (providerCfg?.models ?? [])
+      .find((model) => {
+        const id = model?.id?.trim();
+        return Boolean(id) && Array.isArray(model?.input) && model.input.includes("text");
+      })
+      ?.id?.trim();
+    if (modelId) {
+      addCandidate(providerId, modelId);
+    }
+  }
+
+  return candidates;
 }
 
 export function resolvePdfModelConfigForTool(params: {
@@ -138,6 +210,13 @@ export function resolvePdfModelConfigForTool(params: {
     agentDir: params.agentDir,
     workspaceDir: params.workspaceDir,
     authStore: params.authStore,
+  }).filter((ref) => !isMinimaxVlmModelRef(ref));
+  const minimaxTextExtractionCandidates = resolveMinimaxTextExtractionCandidateRefs({
+    cfg: params.cfg,
+    primary,
+    primaryProviderOk: providerOk,
+    agentDir: params.agentDir,
+    authStore: params.authStore,
   });
 
   if (params.cfg?.models?.providers && typeof params.cfg.models.providers === "object") {
@@ -180,11 +259,19 @@ export function resolvePdfModelConfigForTool(params: {
   } else if (providerOk && primarySupportsNativePdf && (providerVision || providerDefault)) {
     preferred = providerVision ?? `${primary.provider}/${providerDefault}`;
   } else {
-    preferred = nativePdfCandidates[0] ?? genericImageCandidates[0] ?? null;
+    preferred =
+      nativePdfCandidates[0] ??
+      minimaxTextExtractionCandidates[0] ??
+      genericImageCandidates[0] ??
+      null;
   }
 
   if (preferred?.trim()) {
-    for (const candidate of [...nativePdfCandidates, ...genericImageCandidates]) {
+    for (const candidate of [
+      ...nativePdfCandidates,
+      ...minimaxTextExtractionCandidates,
+      ...genericImageCandidates,
+    ]) {
       if (candidate !== preferred) {
         addFallback(candidate);
       }

@@ -32,7 +32,12 @@ vi.mock("./model-config.helpers.js", () => ({
     if (provider === "google") {
       return Boolean(process.env.GOOGLE_API_KEY || process.env.GEMINI_API_KEY);
     }
-    if (provider === "minimax" || provider === "minimax-cn") {
+    if (
+      provider === "minimax" ||
+      provider === "minimax-cn" ||
+      provider === "minimax-portal" ||
+      provider === "minimax-portal-cn"
+    ) {
       return Boolean(process.env.MINIMAX_API_KEY);
     }
     return false;
@@ -113,7 +118,7 @@ describe("resolvePdfModelConfigForTool", () => {
     );
   });
 
-  it("does not add configured MiniMax chat models as automatic PDF image fallbacks", () => {
+  it("uses configured MiniMax chat models for PDF text extraction fallback", () => {
     vi.stubEnv("MINIMAX_API_KEY", "minimax-test");
     const cfg = {
       ...withDefaultModel("openai/gpt-5.4"),
@@ -126,7 +131,7 @@ describe("resolvePdfModelConfigForTool", () => {
                 id: "MiniMax-M2.7",
                 name: "MiniMax M2.7",
                 reasoning: false,
-                input: ["text", "image"],
+                input: ["text"],
                 cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
                 contextWindow: 128_000,
                 maxTokens: 8_192,
@@ -138,7 +143,27 @@ describe("resolvePdfModelConfigForTool", () => {
     } as OpenClawConfig;
 
     expect(resolvePdfModelConfigForTool({ cfg, agentDir: TEST_AGENT_DIR })).toEqual({
-      primary: "minimax/MiniMax-VL-01",
+      primary: "minimax/MiniMax-M2.7",
+    });
+  });
+
+  it("uses the default MiniMax chat model for PDF text extraction fallback", () => {
+    vi.stubEnv("MINIMAX_API_KEY", "minimax-test");
+    const cfg = {
+      ...withDefaultModel("minimax-portal/MiniMax-M2.7"),
+      models: {
+        providers: {
+          "minimax-portal": {
+            baseUrl: "https://api.minimax.io/anthropic",
+            api: "anthropic-messages",
+            models: [],
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    expect(resolvePdfModelConfigForTool({ cfg, agentDir: TEST_AGENT_DIR })).toEqual({
+      primary: "minimax-portal/MiniMax-M2.7",
     });
   });
 
