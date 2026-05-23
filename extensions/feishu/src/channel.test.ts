@@ -232,6 +232,7 @@ describe("feishuPlugin actions", () => {
       "send",
       "read",
       "edit",
+      "unsend",
       "thread-reply",
       "pin",
       "list-pins",
@@ -262,6 +263,7 @@ describe("feishuPlugin actions", () => {
       "send",
       "read",
       "edit",
+      "unsend",
       "thread-reply",
       "pin",
       "list-pins",
@@ -300,6 +302,7 @@ describe("feishuPlugin actions", () => {
       "send",
       "read",
       "edit",
+      "unsend",
       "thread-reply",
       "pin",
       "list-pins",
@@ -312,6 +315,7 @@ describe("feishuPlugin actions", () => {
       "send",
       "read",
       "edit",
+      "unsend",
       "thread-reply",
       "pin",
       "list-pins",
@@ -587,6 +591,24 @@ describe("feishuPlugin actions", () => {
     expect(details.ok).toBe(true);
     expect(details.messageId).toBe("om_2");
     expect(details.contentType).toBe("post");
+  });
+
+  it("unsends (recalls) messages via im.message.delete", async () => {
+    const deleteMock = vi.fn().mockResolvedValueOnce({ code: 0 });
+    createFeishuClientMock.mockResolvedValueOnce({ im: { message: { delete: deleteMock } } });
+
+    const result = await feishuPlugin.actions?.handleAction?.({
+      action: "unsend",
+      params: { messageId: "om_recall_1" },
+      cfg,
+      accountId: undefined,
+    } as never);
+
+    expect(deleteMock).toHaveBeenCalledWith({ path: { message_id: "om_recall_1" } });
+    const details = resultDetails(result);
+    expect(details.ok).toBe(true);
+    expect(details.action).toBe("unsend");
+    expect(details.messageId).toBe("om_recall_1");
   });
 
   it("sends explicit thread replies with reply_in_thread semantics", async () => {

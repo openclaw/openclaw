@@ -267,6 +267,7 @@ function describeFeishuMessageTool({
     "send",
     "read",
     "edit",
+    "unsend",
     "thread-reply",
     "pin",
     "list-pins",
@@ -918,6 +919,21 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
               channel: "feishu",
               action: "edit",
               ...result,
+            });
+          }
+
+          if (ctx.action === "unsend") {
+            const messageId = resolveFeishuMessageId(ctx.params);
+            if (!messageId) {
+              throw new Error("Feishu unsend requires messageId.");
+            }
+            const client = await createFeishuActionClient(account);
+            await client.im.message.delete({ path: { message_id: messageId } });
+            return jsonActionResult({
+              ok: true,
+              channel: "feishu",
+              action: "unsend",
+              messageId,
             });
           }
 
