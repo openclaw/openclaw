@@ -1,6 +1,7 @@
 // Resolves command executables and wrapper policy paths for exec approvals.
 import fs from "node:fs";
 import path from "node:path";
+import { hasNestedRepetition } from "../security/safe-regex.js";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { matchesExecAllowlistPattern } from "./exec-allowlist-pattern.js";
 import type { ExecAllowlistEntry } from "./exec-approvals.types.js";
@@ -322,6 +323,9 @@ function matchArgPattern(argPattern: string, argv: string[], platform?: string |
         : argsSlice.join(sep) + sep // trailing sentinel to match pattern format
       : argsSlice.join(sep);
   try {
+    if (hasNestedRepetition(argPattern)) {
+      return false;
+    }
     const regex = new RegExp(argPattern);
     if (regex.test(argsString)) {
       return true;
