@@ -793,6 +793,409 @@ describeLive("browser (live): Chrome MCP isolated local fixture", () => {
   );
 
   it(
+    "proves the Browser tool surface through live Chrome MCP sandbox actions",
+    { timeout: 300_000 },
+    async () => {
+      const fixture = await startFixture();
+      const profileName = "chrome-tool-surface-live";
+      const profile: ChromeMcpProfileOptions = { cdpUrl: `http://127.0.0.1:${fixture.cdpPort}` };
+      const coverage: Record<string, { status: "pass" | "unsupported"; note?: string }> = {};
+      let targetId: string | undefined;
+      const mark = (name: string, note?: string) => {
+        coverage[name] = { status: "pass", ...(note ? { note } : {}) };
+      };
+      const markUnsupported = (name: string, error: unknown) => {
+        coverage[name] = {
+          status: "unsupported",
+          note: error instanceof Error ? error.message : String(error),
+        };
+      };
+      const action = (args: Record<string, unknown>) =>
+        executeBrowserToolAction({ profile: profileName, targetId, ...args });
+      const tryAction = async (name: string, args: Record<string, unknown>) => {
+        try {
+          const result = await action(args);
+          mark(name, JSON.stringify(result).slice(0, 240));
+          return result;
+        } catch (error) {
+          markUnsupported(name, error);
+          return undefined;
+        }
+      };
+      try {
+        const routeJson = createLiveRouteJson(profileName, fixture);
+        const routeImageResult = async (params: { path: string; label: string }) => ({
+          content: [{ type: "text" as const, text: `IMAGE:${params.path}` }],
+          details: { ok: true, path: params.path, label: params.label },
+        });
+        browserToolTesting.setDepsForTest({
+          browserRouteJson: routeJson,
+          browserDoctor: async (_baseUrl, opts) =>
+            routeJson(undefined, {
+              method: "GET",
+              path: "/doctor",
+              query: { profile: opts.profile },
+              timeoutMs: opts.timeoutMs,
+            }),
+          browserStatus: async (_baseUrl, opts) =>
+            routeJson(undefined, {
+              method: "GET",
+              path: "/",
+              query: { profile: opts.profile },
+              timeoutMs: opts.timeoutMs,
+            }),
+          browserStart: async (_baseUrl, opts) => {
+            await routeJson(undefined, {
+              method: "POST",
+              path: "/start",
+              query: { profile: opts.profile },
+              timeoutMs: opts.timeoutMs,
+            });
+          },
+          browserStop: async (_baseUrl, opts) => {
+            await routeJson(undefined, {
+              method: "POST",
+              path: "/stop",
+              query: { profile: opts.profile },
+              timeoutMs: opts.timeoutMs,
+            });
+          },
+          browserProfiles: async (_baseUrl, opts) =>
+            (
+              await routeJson(undefined, {
+                method: "GET",
+                path: "/profiles",
+                timeoutMs: opts.timeoutMs,
+              })
+            ).profiles,
+          browserOpenTab: async (_baseUrl, url, opts) =>
+            routeJson(undefined, {
+              method: "POST",
+              path: "/tabs/open",
+              query: { profile: opts.profile },
+              body: { url, label: opts.label },
+              timeoutMs: opts.timeoutMs,
+            }),
+          browserFocusTab: async (_baseUrl, focusTargetId, opts) => {
+            await routeJson(undefined, {
+              method: "POST",
+              path: "/tabs/focus",
+              query: { profile: opts.profile },
+              body: { targetId: focusTargetId },
+              timeoutMs: opts.timeoutMs,
+            });
+          },
+          browserCloseTab: async (_baseUrl, closeTargetId, opts) => {
+            await routeJson(undefined, {
+              method: "DELETE",
+              path: `/tabs/${encodeURIComponent(closeTargetId)}`,
+              query: { profile: opts.profile },
+              timeoutMs: opts.timeoutMs,
+            });
+          },
+          browserNavigate: async (_baseUrl, opts) =>
+            routeJson(undefined, {
+              method: "POST",
+              path: "/navigate",
+              query: { profile: opts.profile },
+              body: { url: opts.url, targetId: opts.targetId },
+            }),
+          browserScreenshotAction: async (_baseUrl, opts) =>
+            routeJson(undefined, {
+              method: "POST",
+              path: "/screenshot",
+              query: { profile: opts.profile },
+              body: opts,
+              timeoutMs: opts.timeoutMs,
+            }),
+          browserPdfSave: async (_baseUrl, opts) =>
+            routeJson(undefined, {
+              method: "POST",
+              path: "/pdf",
+              query: { profile: opts.profile },
+              body: { targetId: opts.targetId },
+            }),
+          getRuntimeConfig: () => ({ browser: createLiveBrowserConfig(profileName, fixture) }),
+          imageResultFromFile: routeImageResult,
+        });
+        browserToolActionTesting.setDepsForTest({
+          browserAct: async (_baseUrl, request, opts) =>
+            routeJson(undefined, {
+              method: "POST",
+              path: "/act",
+              query: { profile: opts?.profile },
+              body: request,
+              timeoutMs: opts?.timeoutMs,
+            }),
+          browserTabs: async (_baseUrl, opts) =>
+            (
+              await routeJson(undefined, {
+                method: "GET",
+                path: "/tabs",
+                query: { profile: opts.profile },
+                timeoutMs: opts.timeoutMs,
+              })
+            ).tabs,
+          browserSnapshot: async (_baseUrl, opts) =>
+            routeJson(undefined, {
+              method: "GET",
+              path: "/snapshot",
+              query: opts,
+            }),
+          browserConsoleMessages: async (_baseUrl, opts) =>
+            routeJson(undefined, {
+              method: "GET",
+              path: "/console",
+              query: opts,
+            }),
+          browserNetworkRequests: async (_baseUrl, opts) =>
+            routeJson(undefined, {
+              method: "GET",
+              path: "/requests",
+              query: opts,
+            }),
+          imageResultFromFile: routeImageResult,
+          getRuntimeConfig: () => ({ browser: createLiveBrowserConfig(profileName, fixture) }),
+        });
+
+        await expect(action({ action: "status" })).resolves.toEqual(
+          expect.objectContaining({ enabled: true }),
+        );
+        mark("status");
+        await expect(action({ action: "doctor" })).resolves.toEqual(expect.objectContaining({}));
+        mark("doctor");
+        await expect(action({ action: "profiles" })).resolves.toEqual(
+          expect.objectContaining({ profiles: expect.any(Array) }),
+        );
+        mark("profiles");
+        await expect(action({ action: "start" })).resolves.toEqual(expect.objectContaining({}));
+        mark("start");
+
+        const opened = await action({
+          action: "open",
+          targetUrl: `http://127.0.0.1:${fixture.httpPort}/`,
+          label: "tool-surface-fixture",
+        });
+        targetId = String(opened.targetId);
+        expect(targetId).toBeTruthy();
+        mark("open");
+        await waitForChromeMcpText({
+          profileName,
+          profile,
+          targetId,
+          text: ["OpenClaw Chrome MCP live fixture"],
+          timeoutMs: 10_000,
+        });
+
+        await expect(action({ action: "tabs" })).resolves.toEqual(
+          expect.objectContaining({ tabs: expect.any(Array) }),
+        );
+        mark("tabs");
+        await expect(action({ action: "focus" })).resolves.toEqual(
+          expect.objectContaining({ ok: true }),
+        );
+        mark("focus");
+        await expect(action({ action: "snapshot", snapshotFormat: "aria" })).resolves.toEqual(
+          expect.objectContaining({ ok: true, targetId }),
+        );
+        mark("snapshot:aria");
+        await expect(
+          action({ action: "snapshot", snapshotFormat: "ai", maxChars: 2_000 }),
+        ).resolves.toEqual(expect.objectContaining({ ok: true, targetId }));
+        mark("snapshot:ai");
+        await expect(
+          action({ action: "screenshot", type: "png", fullPage: false }),
+        ).resolves.toEqual(expect.objectContaining({ ok: true }));
+        mark("screenshot");
+        await tryAction("pdf", { action: "pdf" });
+
+        await expect(
+          action({ action: "navigate", targetUrl: `http://127.0.0.1:${fixture.httpPort}/roster` }),
+        ).resolves.toEqual(expect.objectContaining({ ok: true, targetId }));
+        mark("navigate");
+        await waitForChromeMcpText({
+          profileName,
+          profile,
+          targetId,
+          text: ["New Recruit-style Roster Fixture"],
+          timeoutMs: 10_000,
+        });
+        await expect(
+          action({ action: "navigate", targetUrl: `http://127.0.0.1:${fixture.httpPort}/` }),
+        ).resolves.toEqual(expect.objectContaining({ ok: true, targetId }));
+        await waitForChromeMcpText({
+          profileName,
+          profile,
+          targetId,
+          text: ["OpenClaw Chrome MCP live fixture"],
+          timeoutMs: 10_000,
+        });
+
+        const consoleList = await action({ action: "console", level: "log" });
+        expect(consoleList).toEqual(
+          expect.objectContaining({ ok: true, messageCount: expect.any(Number) }),
+        );
+        mark("console");
+        const directConsoleMessages = await listChromeMcpConsoleMessages({
+          profileName,
+          profile,
+          targetId,
+          includePreservedMessages: true,
+          pageSize: 20,
+        });
+        const consoleHit = directConsoleMessages.messages.find((message) =>
+          String(message.text ?? "").includes("openclaw-live-fixture"),
+        );
+        expect(consoleHit?.id).toEqual(expect.any(Number));
+        await expect(action({ action: "console-message", msgid: consoleHit?.id })).resolves.toEqual(
+          expect.objectContaining({ ok: true }),
+        );
+        mark("console-message");
+
+        const requests = await action({ action: "requests", filter: "/api/data.json" });
+        expect(requests).toEqual(
+          expect.objectContaining({ ok: true, requestCount: expect.any(Number) }),
+        );
+        mark("requests");
+        const directNetworkRequests = await listChromeMcpNetworkRequests({
+          profileName,
+          profile,
+          targetId,
+          includePreservedRequests: true,
+          pageSize: 50,
+        });
+        const requestHit = directNetworkRequests.requests.find((request) =>
+          String(request.url ?? "").includes("/api/data.json"),
+        );
+        const reqid =
+          typeof requestHit?.requestId === "number" ? requestHit.requestId : requestHit?.id;
+        expect(reqid).toEqual(expect.any(Number));
+        await expect(action({ action: "request-detail", reqid })).resolves.toEqual(
+          expect.objectContaining({ ok: true }),
+        );
+        mark("request-detail");
+
+        for (const emulate of [
+          { name: "emulate:offline", args: { operation: "offline", offline: false } },
+          {
+            name: "emulate:headers",
+            args: { operation: "headers", headers: { "x-openclaw-live": "yes" } },
+          },
+          {
+            name: "emulate:geolocation",
+            args: {
+              operation: "geolocation",
+              latitude: 49.2827,
+              longitude: -123.1207,
+              accuracy: 10,
+            },
+          },
+          { name: "emulate:media", args: { operation: "media", colorScheme: "dark" } },
+        ]) {
+          await tryAction(emulate.name, { action: "emulate", ...emulate.args });
+        }
+
+        await expect(action({ action: "trace", operation: "start" })).resolves.toEqual(
+          expect.objectContaining({ ok: true }),
+        );
+        mark("trace:start");
+        await evaluateChromeMcpScript({
+          profileName,
+          profile,
+          targetId,
+          fn: "() => { for (let i = 0; i < 1000; i++) Math.sqrt(i); return true; }",
+        });
+        await expect(action({ action: "trace", operation: "stop" })).resolves.toEqual(
+          expect.objectContaining({ ok: true }),
+        );
+        mark("trace:stop");
+        await tryAction("trace:insight", { action: "trace", operation: "insight" });
+
+        await tryAction("heap-snapshot:take", {
+          action: "heap-snapshot",
+          operation: "take",
+          timeoutMs: 20_000,
+        });
+        await expect(
+          action({
+            action: "lighthouse",
+            mode: "snapshot",
+            device: "desktop",
+            outputDirPath: path.join(fixture.root, "out"),
+            timeoutMs: 60_000,
+          }),
+        ).resolves.toEqual(expect.objectContaining({ ok: true }));
+        mark("lighthouse");
+        await expect(
+          action({ action: "screencast", operation: "start", timeoutMs: 15_000 }),
+        ).resolves.toEqual(expect.objectContaining({ ok: true }));
+        mark("screencast:start");
+        await expect(
+          action({ action: "screencast", operation: "stop", timeoutMs: 15_000 }),
+        ).resolves.toEqual(expect.objectContaining({ ok: true }));
+        mark("screencast:stop");
+
+        await tryAction("extensions:list", { action: "extensions", operation: "list" });
+        await expect(action({ action: "extensions", operation: "tab-id" })).resolves.toEqual(
+          expect.objectContaining({ ok: true, tabId: expect.any(String) }),
+        );
+        mark("extensions:tab-id");
+        await tryAction("third-party-tools:list", {
+          action: "third-party-tools",
+          operation: "list",
+        });
+        await tryAction("web-mcp-tools:list", { action: "web-mcp-tools", operation: "list" });
+
+        await expect(
+          action({ action: "act", kind: "evaluate", fn: "() => document.title" }),
+        ).resolves.toEqual(expect.objectContaining({ ok: true }));
+        mark("act:evaluate");
+        await expect(action({ action: "act", kind: "close" })).resolves.toEqual(
+          expect.objectContaining({ ok: true }),
+        );
+        mark("act:close");
+        targetId = undefined;
+        await expect(action({ action: "stop" })).resolves.toEqual(expect.objectContaining({}));
+        mark("stop");
+
+        console.log("openclaw-browser-tool-surface-coverage", JSON.stringify(coverage));
+        expect(coverage).toMatchObject({
+          status: { status: "pass" },
+          doctor: { status: "pass" },
+          profiles: { status: "pass" },
+          start: { status: "pass" },
+          open: { status: "pass" },
+          tabs: { status: "pass" },
+          focus: { status: "pass" },
+          "snapshot:aria": { status: "pass" },
+          "snapshot:ai": { status: "pass" },
+          screenshot: { status: "pass" },
+          navigate: { status: "pass" },
+          console: { status: "pass" },
+          "console-message": { status: "pass" },
+          requests: { status: "pass" },
+          "request-detail": { status: "pass" },
+          "emulate:media": { status: "pass" },
+          lighthouse: { status: "pass" },
+          "screencast:start": { status: "pass" },
+          "screencast:stop": { status: "pass" },
+          "extensions:tab-id": { status: "pass" },
+          "act:evaluate": { status: "pass" },
+          "act:close": { status: "pass" },
+          stop: { status: "pass" },
+        });
+      } finally {
+        browserToolTesting.setDepsForTest(null);
+        browserToolActionTesting.setDepsForTest(null);
+        if (targetId) {
+          await closeChromeMcpTab(profileName, targetId, profile).catch(() => {});
+        }
+        await stopFixture(fixture);
+      }
+    },
+  );
+
+  it(
     "proves New Recruit-style roster interactions through Chrome MCP Browser tool actions",
     { timeout: 180_000 },
     async () => {
