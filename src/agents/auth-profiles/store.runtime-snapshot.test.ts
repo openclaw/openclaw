@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { AUTH_STORE_VERSION } from "./constants.js";
 import { testing as externalAuthTesting } from "./external-auth.js";
+import { resolveAuthStorePath } from "./paths.js";
 import { getRuntimeAuthProfileStoreSnapshot } from "./runtime-snapshots.js";
 import {
   clearRuntimeAuthProfileStoreSnapshots,
@@ -73,11 +74,11 @@ function createStore(credential = createCredential()): AuthProfileStore {
   };
 }
 
-function createAgentDir(): string {
+function createAgentDir(agentId = "main"): string {
   const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-auth-runtime-snapshot-"));
   tempDirs.push(stateDir);
   process.env.OPENCLAW_STATE_DIR = stateDir;
-  const agentDir = path.join(stateDir, "agents", "main", "agent");
+  const agentDir = path.join(stateDir, "agents", agentId, "agent");
   fs.mkdirSync(agentDir, { recursive: true });
   return agentDir;
 }
@@ -110,6 +111,36 @@ describe("auth profile runtime snapshots", () => {
     );
     const persisted = JSON.parse(
       fs.readFileSync(path.join(agentDir, "auth-profiles.json"), "utf8"),
+    ) as AuthProfileStore;
+    expect(persisted.profiles[PROFILE_ID]).toBeUndefined();
+  });
+
+  it("does not pin inherited main OAuth profiles in child runtime snapshots", () => {
+    const childAgentDir = createAgentDir("secondary");
+    const mainCredential = createCredential();
+    const refreshedMainCredential = {
+      ...mainCredential,
+      access: "main-refreshed-access-token",
+      refresh: "main-refreshed-refresh-token",
+      expires: mainCredential.expires + 60_000,
+    };
+    saveAuthProfileStore(createStore(mainCredential));
+    const childStore = createStore(mainCredential);
+    replaceRuntimeAuthProfileStoreSnapshots([{ agentDir: childAgentDir, store: childStore }]);
+
+    saveAuthProfileStore(childStore, childAgentDir);
+    saveAuthProfileStore(createStore(refreshedMainCredential));
+
+    expect(getRuntimeAuthProfileStoreSnapshot(childAgentDir)?.profiles[PROFILE_ID]).toBeUndefined();
+    const resolvedCredential =
+      ensureAuthProfileStoreWithoutExternalProfiles(childAgentDir).profiles[PROFILE_ID];
+    expect(resolvedCredential).toMatchObject({
+      type: "oauth",
+      access: "main-refreshed-access-token",
+      refresh: "main-refreshed-refresh-token",
+    });
+    const persisted = JSON.parse(
+      fs.readFileSync(resolveAuthStorePath(childAgentDir), "utf8"),
     ) as AuthProfileStore;
     expect(persisted.profiles[PROFILE_ID]).toBeUndefined();
   });

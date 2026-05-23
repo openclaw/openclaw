@@ -433,6 +433,49 @@ function buildLocalAuthProfileStoreForSave(params: {
   return localStore;
 }
 
+function buildRuntimeAuthProfileStoreForSave(params: {
+  store: AuthProfileStore;
+  agentDir?: string;
+}): AuthProfileStore {
+  const runtimeStore = cloneAuthProfileStore(params.store);
+  runtimeStore.profiles = Object.fromEntries(
+    Object.entries(runtimeStore.profiles).filter(
+      ([profileId, credential]) =>
+        !isInheritedMainOAuthCredential({
+          agentDir: params.agentDir,
+          profileId,
+          credential,
+        }),
+    ),
+  );
+  const keptProfileIds = new Set(Object.keys(runtimeStore.profiles));
+  runtimeStore.order = runtimeStore.order
+    ? Object.fromEntries(
+        Object.entries(runtimeStore.order)
+          .map(([provider, profileIds]) => [
+            provider,
+            profileIds.filter((profileId) => keptProfileIds.has(profileId)),
+          ])
+          .filter(([, profileIds]) => profileIds.length > 0),
+      )
+    : undefined;
+  runtimeStore.lastGood = runtimeStore.lastGood
+    ? Object.fromEntries(
+        Object.entries(runtimeStore.lastGood).filter(([, profileId]) =>
+          keptProfileIds.has(profileId),
+        ),
+      )
+    : undefined;
+  runtimeStore.usageStats = runtimeStore.usageStats
+    ? Object.fromEntries(
+        Object.entries(runtimeStore.usageStats).filter(([profileId]) =>
+          keptProfileIds.has(profileId),
+        ),
+      )
+    : undefined;
+  return runtimeStore;
+}
+
 export async function updateAuthProfileStoreWithLock(params: {
   agentDir?: string;
   saveOptions?: SaveAuthProfileStoreOptions;
@@ -766,6 +809,9 @@ export function saveAuthProfileStore(
     store: localStore,
   });
   if (hasRuntimeAuthProfileStoreSnapshot(agentDir)) {
-    setRuntimeAuthProfileStoreSnapshot(store, agentDir);
+    setRuntimeAuthProfileStoreSnapshot(
+      buildRuntimeAuthProfileStoreForSave({ store, agentDir }),
+      agentDir,
+    );
   }
 }
