@@ -82,6 +82,24 @@ describe("model auth markers", () => {
     expect(markers.has("ollama-local")).toBe(true);
   });
 
+  it("keeps package-stable non-secret markers when excluded plugin manifests are absent", async () => {
+    await withEnvAsync(
+      {
+        ...cleanPluginManifestEnv(),
+        OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+      },
+      loadMarkerModules,
+    );
+
+    const markers = new Set(listKnownNonSecretApiKeyMarkers());
+    expect(markers.has("codex-app-server")).toBe(true);
+    expect(markers.has("gcp-vertex-credentials")).toBe(true);
+    expect(isNonSecretApiKeyMarker("codex-app-server")).toBe(true);
+    expect(isNonSecretApiKeyMarker(GCP_VERTEX_CREDENTIALS_MARKER)).toBe(true);
+
+    await withEnvAsync(cleanPluginManifestEnv(), loadMarkerModules);
+  });
+
   it("does not treat removed provider markers as active auth markers", () => {
     expect(isNonSecretApiKeyMarker("qwen-oauth")).toBe(false);
   });

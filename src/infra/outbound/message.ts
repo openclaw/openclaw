@@ -1,6 +1,11 @@
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import { deriveDurableFinalDeliveryRequirements } from "../../channels/message/capabilities.js";
 import { sendDurableMessageBatch } from "../../channels/message/runtime.js";
+import {
+  getRuntimeConfigSnapshot,
+  getRuntimeConfigSourceSnapshot,
+  selectApplicableRuntimeConfig,
+} from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { OutboundMediaAccess } from "../../media/load-options.js";
 import type { PollInput } from "../../polls.js";
@@ -305,6 +310,24 @@ async function resolveMessageConfig(cfg?: OpenClawConfig): Promise<OpenClawConfi
   return getRuntimeConfig();
 }
 
+function selectMessageDeliveryRuntimeConfig(inputConfig: OpenClawConfig): OpenClawConfig {
+  const runtimeConfig = getRuntimeConfigSnapshot() ?? undefined;
+  if (!runtimeConfig || inputConfig === runtimeConfig) {
+    return inputConfig;
+  }
+  const runtimeSourceConfig = getRuntimeConfigSourceSnapshot() ?? undefined;
+  if (!runtimeSourceConfig) {
+    return inputConfig;
+  }
+  return (
+    selectApplicableRuntimeConfig({
+      inputConfig,
+      runtimeConfig,
+      runtimeSourceConfig,
+    }) ?? inputConfig
+  );
+}
+
 async function resolveGatewayIdempotencyKey(idempotencyKey?: string): Promise<string> {
   if (idempotencyKey) {
     return idempotencyKey;
@@ -314,7 +337,8 @@ async function resolveGatewayIdempotencyKey(idempotencyKey?: string): Promise<st
 }
 
 export async function sendMessage(params: MessageSendParams): Promise<MessageSendResult> {
-  const cfg = await resolveMessageConfig(params.cfg);
+  let cfg = await resolveMessageConfig(params.cfg);
+  cfg = selectMessageDeliveryRuntimeConfig(cfg);
   const channel = await resolveRequiredChannel({ cfg, channel: params.channel });
   const plugin = resolveRequiredPlugin(channel, cfg);
   const deliveryMode = plugin.outbound?.deliveryMode ?? "direct";
@@ -457,7 +481,8 @@ export async function sendMessage(params: MessageSendParams): Promise<MessageSen
 }
 
 export async function sendPoll(params: MessagePollParams): Promise<MessagePollResult> {
-  const cfg = await resolveMessageConfig(params.cfg);
+  let cfg = await resolveMessageConfig(params.cfg);
+  cfg = selectMessageDeliveryRuntimeConfig(cfg);
   const channel = await resolveRequiredChannel({ cfg, channel: params.channel });
 
   const pollInput: PollInput = {

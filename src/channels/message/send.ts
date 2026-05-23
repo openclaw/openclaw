@@ -1,4 +1,10 @@
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
+import {
+  getRuntimeConfigSnapshot,
+  getRuntimeConfigSourceSnapshot,
+  selectApplicableRuntimeConfig,
+} from "../../config/config.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import type { OutboundDeliveryResult } from "../../infra/outbound/deliver-types.js";
 import {
@@ -105,6 +111,27 @@ export type DurableMessageDeliveryOutcome = DurableMessageBatchSendResult;
 
 const neverAbortedSignal = new AbortController().signal;
 
+function selectDurableDeliveryRuntimeConfig(
+  inputConfig?: OpenClawConfig,
+): OpenClawConfig | undefined {
+  const runtimeConfig = getRuntimeConfigSnapshot() ?? undefined;
+  if (!runtimeConfig) {
+    return inputConfig;
+  }
+  if (!inputConfig || inputConfig === runtimeConfig) {
+    return runtimeConfig;
+  }
+  const runtimeSourceConfig = getRuntimeConfigSourceSnapshot() ?? undefined;
+  if (!runtimeSourceConfig) {
+    return inputConfig;
+  }
+  return selectApplicableRuntimeConfig({
+    inputConfig,
+    runtimeConfig,
+    runtimeSourceConfig,
+  });
+}
+
 function toDurableMessageIntent(
   intent: OutboundDeliveryIntent,
   renderedBatch: RenderedMessageBatch<ReplyPayload>,
@@ -200,8 +227,10 @@ export async function withDurableMessageSendContext<T>(
       const durablePayloadOutcomes = (): DurableMessagePayloadDeliveryOutcome[] =>
         toDurablePayloadOutcomes(payloadOutcomes);
       try {
+        const selectedCfg = selectDurableDeliveryRuntimeConfig(deliveryParams.cfg);
         const results = await deliverOutboundPayloadsInternal({
           ...deliveryParams,
+          ...(selectedCfg ? { cfg: selectedCfg } : {}),
           payloads: rendered.payloads,
           renderedBatchPlan: rendered.plan,
           queuePolicy,

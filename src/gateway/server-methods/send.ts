@@ -3,6 +3,7 @@ import { sendDurableMessageBatch } from "../../channels/message/runtime.js";
 import { normalizeChannelId } from "../../channels/plugins/index.js";
 import { dispatchChannelMessageAction } from "../../channels/plugins/message-action-dispatch.js";
 import { createOutboundSendDeps } from "../../cli/deps.js";
+import { getRuntimeConfigSnapshot } from "../../config/config.js";
 import { applyPluginAutoEnable } from "../../config/plugin-auto-enable.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveOutboundChannelPlugin } from "../../infra/outbound/channel-resolution.js";
@@ -22,7 +23,6 @@ import { resolveOutboundTarget } from "../../infra/outbound/targets.js";
 import { extractToolPayload } from "../../infra/outbound/tool-payload.js";
 import { getAgentScopedMediaLocalRoots } from "../../media/local-roots.js";
 import { normalizePollInput } from "../../polls.js";
-import { getActiveSecretsRuntimeSnapshot } from "../../secrets/runtime.js";
 import { parseThreadSessionSuffix } from "../../sessions/session-key-utils.js";
 import {
   normalizeOptionalLowercaseString,
@@ -132,9 +132,9 @@ async function resolveRequestedChannel(params: {
       error: errorShape(ErrorCodes.INVALID_REQUEST, params.unsupportedMessage(channelInput)),
     };
   }
-  const activeSecretsRuntimeConfig = getActiveSecretsRuntimeSnapshot()?.config;
+  const activeRuntimeConfig = getRuntimeConfigSnapshot();
   const cfg = applyPluginAutoEnable({
-    config: activeSecretsRuntimeConfig ?? params.context.getRuntimeConfig(),
+    config: activeRuntimeConfig ?? params.context.getRuntimeConfig(),
     env: process.env,
   }).config;
   let channel = normalizedChannel;

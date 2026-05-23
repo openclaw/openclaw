@@ -1,4 +1,5 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 
 const mocks = vi.hoisted(() => ({
   getChannelPlugin: vi.fn(),
@@ -63,6 +64,7 @@ vi.mock("../../utils/message-channel.js", async () => {
   };
 });
 
+import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../config/config.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createTestRegistry } from "../../test-utils/channel-plugins.js";
 
@@ -134,6 +136,7 @@ describe("sendMessage", () => {
   });
 
   beforeEach(() => {
+    clearRuntimeConfigSnapshot();
     setActivePluginRegistry(createTestRegistry([]));
     resetOutboundChannelResolutionStateForTest();
     mocks.getChannelPlugin.mockClear();
@@ -161,6 +164,39 @@ describe("sendMessage", () => {
 
     const deliveryParams = expectDeliveryCallFields({ channel: "forum", to: "123456" });
     expectRecordFields(deliveryParams.session, { agentId: "work" }, "outbound session");
+  });
+
+  it("preserves explicit configs when a runtime snapshot has no source snapshot", async () => {
+    const explicitCfg = { channels: { forum: { enabled: true } } };
+    const runtimeCfg = { channels: { forum: { enabled: false } } };
+    setRuntimeConfigSnapshot(runtimeCfg as OpenClawConfig);
+
+    await sendMessage({
+      cfg: explicitCfg as OpenClawConfig,
+      channel: "forum",
+      to: "123456",
+      content: "hi",
+    });
+
+    expect(expectDeliveryCallFields({}).cfg).toBe(explicitCfg);
+  });
+
+  it("upgrades source-shaped configs to the active runtime snapshot", async () => {
+    const resolvedCredential = "resolved-runtime-credential";
+    const sourceCfg = {
+      channels: { forum: { token: { source: "env", provider: "default", id: "FORUM_TOKEN" } } },
+    };
+    const runtimeCfg = { channels: { forum: { token: resolvedCredential } } };
+    setRuntimeConfigSnapshot(runtimeCfg as OpenClawConfig, sourceCfg as unknown as OpenClawConfig);
+
+    await sendMessage({
+      cfg: sourceCfg as unknown as OpenClawConfig,
+      channel: "forum",
+      to: "123456",
+      content: "hi",
+    });
+
+    expect(expectDeliveryCallFields({}).cfg).toBe(runtimeCfg);
   });
 
   it("forwards requesterSenderId into the outbound delivery session", async () => {

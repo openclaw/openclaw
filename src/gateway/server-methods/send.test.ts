@@ -28,7 +28,7 @@ const mocks = vi.hoisted(() => ({
   getChannelPlugin: vi.fn(),
   loadOpenClawPlugins: vi.fn(),
   applyPluginAutoEnable: vi.fn(),
-  activeSecretsSnapshot: null as { config: Record<string, unknown> } | null,
+  runtimeConfigSnapshot: null as Record<string, unknown> | null,
 }));
 
 vi.mock("../../config/config.js", async () => {
@@ -37,12 +37,9 @@ vi.mock("../../config/config.js", async () => {
   return {
     ...actual,
     getRuntimeConfig: () => ({}),
+    getRuntimeConfigSnapshot: () => mocks.runtimeConfigSnapshot,
   };
 });
-
-vi.mock("../../secrets/runtime.js", () => ({
-  getActiveSecretsRuntimeSnapshot: () => mocks.activeSecretsSnapshot,
-}));
 
 vi.mock("../../channels/plugins/index.js", () => ({
   getLoadedChannelPlugin: mocks.getChannelPlugin,
@@ -278,7 +275,7 @@ describe("gateway send mirroring", () => {
       changes: [],
       autoEnabledReasons: {},
     }));
-    mocks.activeSecretsSnapshot = null;
+    mocks.runtimeConfigSnapshot = null;
     mocks.resolveOutboundTarget.mockReturnValue({ ok: true, to: "resolved" });
     mocks.resolveOutboundSessionRoute.mockImplementation(
       async ({ agentId, channel }: { agentId?: string; channel?: string }) => ({
@@ -360,7 +357,7 @@ describe("gateway send mirroring", () => {
     expect(secondCall?.[3]?.cached).toBe(true);
   });
 
-  it("dispatches message actions with the active secrets runtime snapshot config", async () => {
+  it("dispatches message actions with the active runtime config snapshot", async () => {
     const rawSecretRef = { source: "exec", provider: "default", id: "discord-bot-token" };
     const resolvedConfig = {
       channels: {
@@ -369,7 +366,7 @@ describe("gateway send mirroring", () => {
         },
       },
     };
-    mocks.activeSecretsSnapshot = { config: resolvedConfig };
+    mocks.runtimeConfigSnapshot = resolvedConfig;
     mocks.getChannelPlugin.mockReturnValue({
       actions: { handleAction: true },
     });
@@ -380,7 +377,7 @@ describe("gateway send mirroring", () => {
         channel: "discord",
         action: "send",
         params: { channelId: "C1", message: "hello" },
-        idempotencyKey: "idem-message-action-active-secrets",
+        idempotencyKey: "idem-message-action-runtime-snapshot",
       } as never,
       respond,
       context: {

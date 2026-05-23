@@ -1,4 +1,5 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { OutboundDeliveryError } from "../../infra/outbound/deliver-types.js";
 import type { OutboundPayloadDeliveryOutcome } from "../../infra/outbound/deliver-types.js";
@@ -25,6 +26,7 @@ type DeliveryIntentCallbackParams = {
 
 type DeliveryRequest = DeliveryIntentCallbackParams & {
   abortSignal?: AbortSignal;
+  cfg?: OpenClawConfig;
   payloads?: unknown;
   queuePolicy?: string;
   replyToId?: string;
@@ -32,6 +34,10 @@ type DeliveryRequest = DeliveryIntentCallbackParams & {
 };
 
 const cfg = {} as OpenClawConfig;
+
+afterEach(() => {
+  clearRuntimeConfigSnapshot();
+});
 
 function requireMockCall(
   mock: { mock: { calls: unknown[][] } },
@@ -64,6 +70,43 @@ function expectBatchStatus<TStatus extends DurableMessageBatchSendResult["status
 }
 
 describe("withDurableMessageSendContext", () => {
+  it("preserves explicit configs when a runtime snapshot has no source snapshot", async () => {
+    const explicitCfg = { channels: { telegram: { enabled: true } } };
+    const runtimeCfg = { channels: { telegram: { enabled: false } } };
+    setRuntimeConfigSnapshot(runtimeCfg as OpenClawConfig);
+    deliverOutboundPayloads.mockResolvedValueOnce([{ channel: "telegram", messageId: "msg-1" }]);
+
+    const result = await sendDurableMessageBatch({
+      cfg: explicitCfg as OpenClawConfig,
+      channel: "telegram",
+      to: "chat-1",
+      payloads: [{ text: "hello" }],
+    });
+
+    expectBatchStatus(result, "sent");
+    expect(latestDeliveryRequest().cfg).toBe(explicitCfg);
+  });
+
+  it("upgrades source-shaped configs to the active runtime snapshot", async () => {
+    const resolvedCredential = "resolved-runtime-credential";
+    const sourceCfg = {
+      channels: { telegram: { token: { source: "env", provider: "default", id: "TG_TOKEN" } } },
+    };
+    const runtimeCfg = { channels: { telegram: { token: resolvedCredential } } };
+    setRuntimeConfigSnapshot(runtimeCfg as OpenClawConfig, sourceCfg as unknown as OpenClawConfig);
+    deliverOutboundPayloads.mockResolvedValueOnce([{ channel: "telegram", messageId: "msg-1" }]);
+
+    const result = await sendDurableMessageBatch({
+      cfg: sourceCfg as unknown as OpenClawConfig,
+      channel: "telegram",
+      to: "chat-1",
+      payloads: [{ text: "hello" }],
+    });
+
+    expectBatchStatus(result, "sent");
+    expect(latestDeliveryRequest().cfg).toBe(runtimeCfg);
+  });
+
   it("renders and sends through a durable send context", async () => {
     deliverOutboundPayloads.mockImplementationOnce(async (params: DeliveryIntentCallbackParams) => {
       params.onDeliveryIntent?.({
