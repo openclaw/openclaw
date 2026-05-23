@@ -555,23 +555,12 @@ async function buildDynamicToolsForTest(
   });
 }
 
-async function createCodexToolBridgeForTest(
+function createCodexToolBridgeForTest(
   params: EmbeddedRunAttemptParams,
-  workspaceDir: string,
-  options: Partial<
-    Pick<
-      Parameters<typeof testing.buildDynamicTools>[0],
-      "forceHeartbeatTool" | "ignoreRuntimePlan"
-    >
-  > = {},
+  tools: RuntimeDynamicToolForTest[],
+  registeredTools: RuntimeDynamicToolForTest[] = tools,
 ) {
   const signal = new AbortController().signal;
-  const tools = await buildDynamicToolsForTest(params, workspaceDir, options);
-  const registeredTools = await buildDynamicToolsForTest(params, workspaceDir, {
-    ...options,
-    forceHeartbeatTool: true,
-    ignoreRuntimePlan: true,
-  });
   return createCodexDynamicToolBridge({
     tools,
     registeredTools,
@@ -2383,18 +2372,8 @@ describe("runCodexAppServerAttempt", () => {
         ? [createRuntimeDynamicTool("heartbeat_respond")]
         : []),
     ]);
-    const request = vi.fn(async (method: string, _params?: unknown) => {
-      if (method === "thread/start") {
-        return threadStartResult("thread-1");
-      }
-      if (method === "thread/resume") {
-        return threadStartResult("thread-1");
-      }
-      throw new Error(`unexpected method: ${method}`);
-    });
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
-    const appServer = createThreadLifecycleAppServerOptions();
     const createRunParams = (trigger?: EmbeddedRunAttemptParams["trigger"]) => {
       const params = createParams(sessionFile, workspaceDir);
       params.disableTools = false;
@@ -2407,47 +2386,43 @@ describe("runCodexAppServerAttempt", () => {
       }
       return params;
     };
-    const startOrResume = async (params: EmbeddedRunAttemptParams) => {
-      const toolBridge = await createCodexToolBridgeForTest(params, workspaceDir);
-      return startOrResumeThread({
-        client: { request } as never,
-        params,
-        cwd: workspaceDir,
-        dynamicTools: toolBridge.specs,
-        appServer,
-        developerInstructions: testing.buildDeveloperInstructions(params, {
-          dynamicTools: toolBridge.availableSpecs,
-        }),
-        nativeCodeModeEnabled: true,
-        userMcpServersEnabled: false,
-      });
-    };
 
-    await startOrResume(createRunParams());
-
-    const startRequest = request.mock.calls.find(([method]) => method === "thread/start");
-    const startParams = startRequest?.[1] as
-      | { dynamicTools?: Array<{ name?: string }>; developerInstructions?: string }
-      | undefined;
-    const registeredToolNames = startParams?.dynamicTools?.map((tool) => tool.name) ?? [];
+    const registeredTools = [
+      createRuntimeDynamicTool("message"),
+      createRuntimeDynamicTool("heartbeat_respond"),
+    ];
+    const normalBridge = createCodexToolBridgeForTest(
+      createRunParams(),
+      [createRuntimeDynamicTool("message")],
+      registeredTools,
+    );
+    const normalInstructions = testing.buildDeveloperInstructions(createRunParams(), {
+      dynamicTools: normalBridge.availableSpecs,
+    });
+    const registeredToolNames = normalBridge.specs.map((tool) => tool.name);
 
     expect(registeredToolNames).toContain("message");
     expect(registeredToolNames).toContain("heartbeat_respond");
-    expect(startParams?.developerInstructions).toContain(
+    expect(normalInstructions).toContain(
       "Deferred searchable OpenClaw dynamic tools available: message.",
     );
-    expect(startParams?.developerInstructions).not.toContain(
+    expect(normalInstructions).not.toContain(
       "Deferred searchable OpenClaw dynamic tools available: heartbeat_respond",
     );
 
-    await startOrResume(createRunParams("heartbeat"));
-    await startOrResume(createRunParams());
+    const heartbeatBridge = createCodexToolBridgeForTest(
+      createRunParams("heartbeat"),
+      [createRuntimeDynamicTool("message"), createRuntimeDynamicTool("heartbeat_respond")],
+      registeredTools,
+    );
+    const nextNormalBridge = createCodexToolBridgeForTest(
+      createRunParams(),
+      [createRuntimeDynamicTool("message")],
+      registeredTools,
+    );
 
-    expect(request.mock.calls.map(([method]) => method)).toEqual([
-      "thread/start",
-      "thread/resume",
-      "thread/resume",
-    ]);
+    expect(heartbeatBridge.specs.map((tool) => tool.name)).toEqual(registeredToolNames);
+    expect(nextNormalBridge.specs.map((tool) => tool.name)).toEqual(registeredToolNames);
   });
 
   it("keeps the persistent dynamic schema stable across heartbeat-only turns", async () => {
@@ -2458,18 +2433,8 @@ describe("runCodexAppServerAttempt", () => {
         ? [createRuntimeDynamicTool("heartbeat_respond")]
         : []),
     ]);
-    const request = vi.fn(async (method: string, _params?: unknown) => {
-      if (method === "thread/start") {
-        return threadStartResult("thread-1");
-      }
-      if (method === "thread/resume") {
-        return threadStartResult("thread-1");
-      }
-      throw new Error(`unexpected method: ${method}`);
-    });
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
-    const appServer = createThreadLifecycleAppServerOptions();
     const createRunParams = (trigger?: EmbeddedRunAttemptParams["trigger"]) => {
       const params = createParams(sessionFile, workspaceDir);
       params.disableTools = false;
@@ -2489,31 +2454,34 @@ describe("runCodexAppServerAttempt", () => {
       }
       return params;
     };
-    const startOrResume = async (params: EmbeddedRunAttemptParams) => {
-      const toolBridge = await createCodexToolBridgeForTest(params, workspaceDir);
-      return startOrResumeThread({
-        client: { request } as never,
-        params,
-        cwd: workspaceDir,
-        dynamicTools: toolBridge.specs,
-        appServer,
-        developerInstructions: testing.buildDeveloperInstructions(params, {
-          dynamicTools: toolBridge.availableSpecs,
-        }),
-        nativeCodeModeEnabled: true,
-        userMcpServersEnabled: false,
-      });
-    };
+    const registeredTools = [
+      createRuntimeDynamicTool("message"),
+      createRuntimeDynamicTool("web_search"),
+      createRuntimeDynamicTool("heartbeat_respond"),
+    ];
+    const normalBridge = createCodexToolBridgeForTest(
+      createRunParams(),
+      registeredTools,
+      registeredTools,
+    );
+    const heartbeatBridge = createCodexToolBridgeForTest(
+      createRunParams("heartbeat"),
+      [createRuntimeDynamicTool("heartbeat_respond")],
+      registeredTools,
+    );
+    const nextNormalBridge = createCodexToolBridgeForTest(
+      createRunParams(),
+      registeredTools,
+      registeredTools,
+    );
 
-    await startOrResume(createRunParams());
-    await startOrResume(createRunParams("heartbeat"));
-    await startOrResume(createRunParams());
-
-    expect(
-      request.mock.calls
-        .map(([method]) => method)
-        .filter((method) => method === "thread/start" || method === "thread/resume"),
-    ).toEqual(["thread/start", "thread/resume", "thread/resume"]);
+    expect(heartbeatBridge.availableSpecs.map((tool) => tool.name)).toEqual(["heartbeat_respond"]);
+    expect(heartbeatBridge.specs.map((tool) => tool.name)).toEqual(
+      normalBridge.specs.map((tool) => tool.name),
+    );
+    expect(nextNormalBridge.specs.map((tool) => tool.name)).toEqual(
+      normalBridge.specs.map((tool) => tool.name),
+    );
   });
 
   it("disables Codex native tool surfaces when runtime toolsAllow is empty", async () => {
