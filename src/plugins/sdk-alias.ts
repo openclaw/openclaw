@@ -548,15 +548,16 @@ function shouldIncludePrivateLocalOnlyPluginSdkSubpath(params: {
   modulePath: string;
   subpath: string;
 }) {
+  if (BUNDLED_OLLAMA_PRIVATE_PLUGIN_SDK_SUBPATHS.has(params.subpath)) {
+    return isTrustedOllamaPluginModulePath({
+      packageRoot: params.packageRoot,
+      modulePath: params.modulePath,
+    });
+  }
   return (
     shouldIncludePrivateLocalOnlyPluginSdkSubpaths() ||
     (BUNDLED_CODEX_PRIVATE_PLUGIN_SDK_SUBPATHS.has(params.subpath) &&
       isTrustedCodexPluginModulePath({
-        packageRoot: params.packageRoot,
-        modulePath: params.modulePath,
-      })) ||
-    (BUNDLED_OLLAMA_PRIVATE_PLUGIN_SDK_SUBPATHS.has(params.subpath) &&
-      isTrustedOllamaPluginModulePath({
         packageRoot: params.packageRoot,
         modulePath: params.modulePath,
       }))
