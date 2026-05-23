@@ -142,7 +142,7 @@ export async function resolveAgentDeliveryPlanWithSessionRoute(
 ): Promise<AgentDeliveryPlan> {
   const plan = resolveAgentDeliveryPlan(params);
   if (
-    params.wantsDelivery !== true ||
+    !params.wantsDelivery ||
     !plan.resolvedTo ||
     !isDeliverableMessageChannel(plan.resolvedChannel) ||
     !resolveOutboundChannelPlugin({
