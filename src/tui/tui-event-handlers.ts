@@ -52,7 +52,7 @@ type EventHandlerContext = {
 
 const DEFAULT_STREAMING_WATCHDOG_MS = 30_000;
 const STREAMING_WATCHDOG_USER_MESSAGE =
-  "This response is taking longer than expected. Send another message to continue.";
+  "This response is taking longer than expected. Still waiting for the current run.";
 
 export function createEventHandlers(context: EventHandlerContext) {
   const {
@@ -124,17 +124,16 @@ export function createEventHandlers(context: EventHandlerContext) {
         return;
       }
       streamingWatchdogRunId = null;
-      state.activeChatRunId = null;
-      state.activityStatus = "idle";
-      setActivityStatus("idle");
       if (reconnectPendingRunId === runId) {
         reconnectPendingRunId = null;
+        state.activeChatRunId = null;
+        state.activityStatus = "idle";
+        setActivityStatus("idle");
         pendingHistoryRefresh = false;
         void loadHistory?.();
         tui.requestRender();
         return;
       }
-      flushPendingHistoryRefreshIfIdle();
       chatLog.addPendingSystem(runId, STREAMING_WATCHDOG_USER_MESSAGE);
       tui.requestRender();
     }, streamingWatchdogMs);
