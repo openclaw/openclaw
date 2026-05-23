@@ -94,6 +94,9 @@
             "name": "Llama 4 Scout 17B",
             "reasoning": false,
             "input": ["text", "image"],
+            "mediaInput": {
+              "image": { "maxPixels": 33177600, "preferredSidePx": 2048, "tokenMode": "provider" }
+            },
             "contextWindow": 131072,
             "maxTokens": 8192,
             "cost": {

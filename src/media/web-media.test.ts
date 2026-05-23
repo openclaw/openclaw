@@ -288,54 +288,49 @@ describe("loadWebMedia", () => {
     );
   });
 
-  it("uses provider/model-aware image compression grids", () => {
+  it("uses model metadata-aware image compression grids", () => {
     expect(
       resolveImageCompressionGrid({
-        provider: "anthropic",
-        model: "claude-opus-4.7",
+        models: [{ maxSidePx: 2576, preferredSidePx: 2576 }],
         quality: "high",
       }).sides[0],
     ).toBe(2576);
     expect(
       resolveImageCompressionGrid({
-        provider: "anthropic",
-        model: "claude-opus-4-6",
+        models: [{ maxSidePx: 1568, preferredSidePx: 1568 }],
         quality: "high",
       }).sides[0],
     ).toBe(1568);
     expect(
       resolveImageCompressionGrid({
-        provider: "openai",
-        model: "gpt-5.5",
+        models: [{ maxSidePx: 6000, preferredSidePx: 2048 }],
         quality: "high",
       }).sides[0],
     ).toBe(6000);
     expect(
       resolveImageCompressionGrid({
-        provider: "openai",
-        model: "gpt-5.4",
-        quality: "high",
+        models: [{ maxSidePx: 6000, preferredSidePx: 2048 }],
+        quality: "balanced",
       }).sides[0],
     ).toBe(2048);
     expect(
       resolveImageCompressionGrid({
-        provider: "chutes",
-        model: "Qwen/Qwen3-VL-235B-A22B-Instruct",
+        models: [{ maxSidePx: 6000, maxPixels: 12845056, preferredSidePx: 2048 }],
         quality: "high",
       }).sides[0],
     ).toBe(3584);
     expect(
       resolveImageCompressionGrid({
-        provider: "groq",
-        model: "meta-llama/llama-4-maverick-17b-128e-instruct",
+        models: [{ maxPixels: 33177600, preferredSidePx: 2048 }],
         quality: "high",
       }).sides[0],
     ).toBe(5760);
     expect(
       resolveImageCompressionGrid({
-        provider: "openai",
-        model: "gpt-5.5",
-        modelRefs: ["openai/gpt-5.5", "anthropic/claude-opus-4-6"],
+        models: [
+          { maxSidePx: 6000, preferredSidePx: 2048 },
+          { maxSidePx: 1568, preferredSidePx: 1568 },
+        ],
         quality: "high",
       }).sides[0],
     ).toBe(1568);
@@ -343,14 +338,12 @@ describe("loadWebMedia", () => {
 
   it("adapts automatic image compression for many-image turns", () => {
     const single = resolveImageCompressionGrid({
-      provider: "anthropic",
-      model: "claude-opus-4-7",
+      models: [{ maxSidePx: 2576, preferredSidePx: 2576 }],
       quality: "auto",
       imageCount: 1,
     });
     const many = resolveImageCompressionGrid({
-      provider: "anthropic",
-      model: "claude-opus-4-7",
+      models: [{ maxSidePx: 2576, preferredSidePx: 2576 }],
       quality: "auto",
       imageCount: 8,
     });
@@ -412,6 +405,18 @@ describe("loadWebMedia", () => {
         loadWebMediaWithMissingOptimizer(tinyPngFile, { maxBytes: 8, localRoots: [fixtureRoot] }),
       ).rejects.toThrow(/Optional dependency sharp is required/);
     });
+  });
+
+  it("applies model image maxBytes to the effective image cap", async () => {
+    await expect(
+      loadWebMediaRaw(tinyPngFile, {
+        maxBytes: 1024 * 1024,
+        localRoots: [fixtureRoot],
+        imageCompression: {
+          models: [{ maxBytes: 8 }],
+        },
+      }),
+    ).rejects.toThrow(/exceeds/i);
   });
 
   it("does not send original HEIC media when optional sharp conversion is unavailable", async () => {

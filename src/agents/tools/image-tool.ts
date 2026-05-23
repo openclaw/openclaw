@@ -16,15 +16,22 @@ import {
   classifyMediaReferenceSource,
   normalizeMediaReferenceSource,
 } from "../../media/media-reference.js";
-import { loadWebMedia, type ImageCompressionPolicy } from "../../media/web-media.js";
+import {
+  effectiveImageBytesCap,
+  loadWebMedia,
+  type ImageCompressionModelPolicy,
+  type ImageCompressionPolicy,
+} from "../../media/web-media.js";
 import {
   describeImageWithModel,
   describeImagesWithModel,
   type MediaUnderstandingProvider,
 } from "../../plugin-sdk/media-understanding.js";
+import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
 import { resolveUserPath } from "../../utils.js";
 import type { AuthProfileStore } from "../auth-profiles/types.js";
 import { isMinimaxVlmProvider } from "../minimax-vlm.js";
+import { resolveModelAsync } from "../pi-embedded-runner/model.js";
 import {
   coerceImageAssistantText,
   coerceImageModelConfig,
@@ -311,21 +318,44 @@ function resolveCompressionModelRefs(params: {
   return [...new Set(refs)];
 }
 
-function resolveImageCompressionPolicy(params: {
+async function resolveImageCompressionPolicy(params: {
   cfg?: OpenClawConfig;
   imageModelConfig?: ImageModelConfig | null;
   modelOverride?: string;
   imageCount: number;
-}): ImageCompressionPolicy {
+  agentDir?: string;
+  workspaceDir?: string;
+}): Promise<ImageCompressionPolicy> {
   const modelRefs = resolveCompressionModelRefs(params);
-  const primary = splitModelRef(modelRefs[0]);
   const quality = params.cfg?.agents?.defaults?.imageQuality;
+  const models: ImageCompressionModelPolicy[] = await Promise.all(
+    modelRefs.map(async (modelRef): Promise<ImageCompressionModelPolicy> => {
+      const parsed = splitModelRef(modelRef);
+      if (!parsed.provider || !parsed.model) {
+        return {};
+      }
+      try {
+        const resolved = await resolveModelAsync(
+          parsed.provider,
+          parsed.model,
+          params.agentDir,
+          params.cfg,
+          {
+            allowBundledStaticCatalogFallback: true,
+            skipPiDiscovery: true,
+            workspaceDir: params.workspaceDir,
+          },
+        );
+        return (resolved.model as ProviderRuntimeModel | undefined)?.mediaInput?.image ?? {};
+      } catch {
+        return {};
+      }
+    }),
+  );
   return {
     imageCount: params.imageCount,
-    ...(modelRefs.length > 0 ? { modelRefs } : {}),
+    ...(models.length > 0 ? { models } : {}),
     ...(quality ? { quality } : {}),
-    ...(primary.provider ? { provider: primary.provider } : {}),
-    ...(primary.model ? { model: primary.model } : {}),
   };
 }
 
@@ -648,11 +678,13 @@ export function createImageTool(options?: {
           "No image model is configured. Set agents.defaults.imageModel or configure an image-capable provider.",
         );
       }
-      const imageCompression = resolveImageCompressionPolicy({
+      const imageCompression = await resolveImageCompressionPolicy({
         cfg: options?.config,
         imageModelConfig,
         modelOverride,
         imageCount: imageInputs.length,
+        agentDir,
+        workspaceDir: options?.workspaceDir,
       });
 
       const sandboxConfig: SandboxedBridgeMediaPathConfig | null =
@@ -751,8 +783,9 @@ export function createImageTool(options?: {
           resolvedPath ? [resolvedPath] : undefined,
         );
 
+        const dataUrlMaxBytes = effectiveImageBytesCap(maxBytes, imageCompression);
         const media = isDataUrl
-          ? decodeDataUrl(resolvedImage, { maxBytes })
+          ? decodeDataUrl(resolvedImage, { maxBytes: dataUrlMaxBytes })
           : sandboxConfig
             ? await loadWebMedia(resolvedPath ?? resolvedImage, {
                 maxBytes,

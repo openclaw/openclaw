@@ -64,11 +64,16 @@ type WebMediaOptions = {
 
 export type ImageQualityPreference = "auto" | "efficient" | "balanced" | "high";
 
+export type ImageCompressionModelPolicy = {
+  maxBytes?: number;
+  maxPixels?: number;
+  maxSidePx?: number;
+  preferredSidePx?: number;
+};
+
 export type ImageCompressionPolicy = {
   quality?: ImageQualityPreference;
-  provider?: string;
-  model?: string;
-  modelRefs?: string[];
+  models?: ImageCompressionModelPolicy[];
   imageCount?: number;
 };
 
@@ -348,12 +353,7 @@ type OptimizedImage = {
 
 const DEFAULT_JPEG_SIDES = [2048, 1536, 1280, 1024, 800] as const;
 const DEFAULT_JPEG_QUALITIES = [80, 70, 60, 50, 40] as const;
-const CLAUDE_OPUS_47_MAX_SIDE = 2576;
-const CLAUDE_DEFAULT_MAX_SIDE = 1568;
-const OPENAI_ORIGINAL_DETAIL_MAX_SIDE = 6000;
 const DEFAULT_VISION_MAX_SIDE = 2048;
-const QWEN_VL_MAX_PIXELS = 12_845_056;
-const LLAMA_4_GROQ_MAX_PIXELS = 33_177_600;
 
 function normalizeImageQualityPreference(value?: string): ImageQualityPreference {
   switch (value) {
@@ -366,19 +366,14 @@ function normalizeImageQualityPreference(value?: string): ImageQualityPreference
   }
 }
 
-function normalizedModelRefs(policy?: ImageCompressionPolicy): string[] {
-  const refs = [`${policy?.provider ?? ""}/${policy?.model ?? ""}`, ...(policy?.modelRefs ?? [])]
-    .map((ref) => ref.trim().toLowerCase())
-    .filter((ref) => ref.length > 1 && ref !== "/");
-  return [...new Set(refs)];
-}
-
-function compactModelRef(modelRef: string): string {
-  return modelRef.replace(/[^a-z0-9]+/g, "");
-}
-
 function squareLongSideForPixelBudget(pixelBudget: number): number {
   return Math.floor(Math.sqrt(pixelBudget));
+}
+
+function positiveInteger(value: number | undefined): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) && value > 0
+    ? Math.floor(value)
+    : undefined;
 }
 
 function effectiveImageQualityPreference(
@@ -395,35 +390,71 @@ function effectiveImageQualityPreference(
   return "balanced";
 }
 
-function maxSideForModelRef(modelRef: string): number {
-  const compactRef = compactModelRef(modelRef);
-  if (modelRef.includes("anthropic/") || modelRef.includes("claude")) {
-    return compactRef.includes("claudeopus47") ? CLAUDE_OPUS_47_MAX_SIDE : CLAUDE_DEFAULT_MAX_SIDE;
+function maxSideForModel(model: ImageCompressionModelPolicy | undefined): number {
+  const maxSide = positiveInteger(model?.maxSidePx);
+  const maxPixels = positiveInteger(model?.maxPixels);
+  const hardLimits = [
+    maxSide,
+    maxPixels ? squareLongSideForPixelBudget(maxPixels) : undefined,
+  ].filter((value): value is number => value !== undefined);
+  if (hardLimits.length > 0) {
+    return Math.min(...hardLimits);
   }
-  if (modelRef.includes("openai/") || modelRef.includes("gpt-")) {
-    if (compactRef.includes("gpt55")) {
-      return OPENAI_ORIGINAL_DETAIL_MAX_SIDE;
-    }
-    return DEFAULT_VISION_MAX_SIDE;
-  }
-  if (modelRef.includes("qwen") && (modelRef.includes("vl") || modelRef.includes("qvq"))) {
-    return squareLongSideForPixelBudget(QWEN_VL_MAX_PIXELS);
-  }
-  if (modelRef.includes("llama-4") || compactRef.includes("llama4")) {
-    return squareLongSideForPixelBudget(LLAMA_4_GROQ_MAX_PIXELS);
-  }
-  if (modelRef.includes("google/") || modelRef.includes("gemini")) {
-    return DEFAULT_VISION_MAX_SIDE;
-  }
-  return DEFAULT_VISION_MAX_SIDE;
+  return positiveInteger(model?.preferredSidePx) ?? DEFAULT_VISION_MAX_SIDE;
 }
 
-function modelMaxSide(policy?: ImageCompressionPolicy): number {
-  const refs = normalizedModelRefs(policy);
-  if (refs.length === 0) {
-    return DEFAULT_VISION_MAX_SIDE;
+function preferredSideForModel(model: ImageCompressionModelPolicy | undefined): number {
+  return (
+    positiveInteger(model?.preferredSidePx) ??
+    Math.min(maxSideForModel(model), DEFAULT_VISION_MAX_SIDE)
+  );
+}
+
+function policyModelSides(policy: ImageCompressionPolicy | undefined): {
+  maxSide: number;
+  preferredSide: number;
+} {
+  const models = policy?.models?.length ? policy.models : [undefined];
+  const maxSide = Math.min(...models.map((model) => maxSideForModel(model)));
+  const preferredSide = Math.min(...models.map((model) => preferredSideForModel(model)));
+  return {
+    maxSide,
+    preferredSide: Math.min(preferredSide, maxSide),
+  };
+}
+
+function sideForPreference(
+  preference: Exclude<ImageQualityPreference, "auto">,
+  policy?: ImageCompressionPolicy,
+): number {
+  const { maxSide, preferredSide } = policyModelSides(policy);
+  switch (preference) {
+    case "efficient":
+      return Math.min(preferredSide, maxSide, 1280);
+    case "balanced":
+      return Math.min(preferredSide, maxSide);
+    case "high":
+      return maxSide;
   }
-  return Math.min(...refs.map((ref) => maxSideForModelRef(ref)));
+  return Math.min(preferredSide, maxSide);
+}
+
+function imageMaxBytesForPolicy(policy?: ImageCompressionPolicy): number | undefined {
+  const maxBytes = policy?.models
+    ?.map((model) => positiveInteger(model.maxBytes))
+    .filter((value): value is number => value !== undefined);
+  return maxBytes?.length ? Math.min(...maxBytes) : undefined;
+}
+
+export function effectiveImageBytesCap(
+  baseCap: number | undefined,
+  policy?: ImageCompressionPolicy,
+): number | undefined {
+  const policyCap = imageMaxBytesForPolicy(policy);
+  if (baseCap === undefined) {
+    return policyCap;
+  }
+  return policyCap === undefined ? baseCap : Math.min(baseCap, policyCap);
 }
 
 function buildDescendingLadder(maxSide: number, values: readonly number[]): number[] {
@@ -439,26 +470,26 @@ export function resolveImageCompressionGrid(policy?: ImageCompressionPolicy): {
   qualities: number[];
 } {
   const preference = effectiveImageQualityPreference(policy);
-  const maxSide = modelMaxSide(policy);
+  const side = sideForPreference(preference, policy);
   switch (preference) {
     case "efficient":
       return {
-        sides: buildDescendingLadder(Math.min(maxSide, 1280), [1024, 800]),
+        sides: buildDescendingLadder(side, [1024, 800]),
         qualities: [70, 60, 50, 40],
       };
     case "high":
       return {
-        sides: buildDescendingLadder(maxSide, [3072, 2576, 2048, 1800, 1536, 1280, 1024, 800]),
+        sides: buildDescendingLadder(side, [3072, 2576, 2048, 1800, 1536, 1280, 1024, 800]),
         qualities: [92, 85, 78, 70, 62, 52, 42],
       };
     case "balanced":
       return {
-        sides: buildDescendingLadder(maxSide, [...DEFAULT_JPEG_SIDES]),
+        sides: buildDescendingLadder(side, [...DEFAULT_JPEG_SIDES]),
         qualities: [...DEFAULT_JPEG_QUALITIES],
       };
   }
   return {
-    sides: buildDescendingLadder(maxSide, [...DEFAULT_JPEG_SIDES]),
+    sides: buildDescendingLadder(side, [...DEFAULT_JPEG_SIDES]),
     qualities: [...DEFAULT_JPEG_QUALITIES],
   };
 }
@@ -610,10 +641,11 @@ async function loadWebMediaInternal(
     // Otherwise fall back to per-kind defaults.
     const cap = maxBytes !== undefined ? maxBytes : maxBytesForKind(params.kind ?? "document");
     if (params.kind === "image") {
+      const imageCap = effectiveImageBytesCap(cap, imageCompression) ?? cap;
       const isGif = params.contentType === "image/gif";
       if (isGif || !optimizeImages) {
-        if (params.buffer.length > cap) {
-          throw new Error(formatCapLimit(isGif ? "GIF" : "Media", cap, params.buffer.length));
+        if (params.buffer.length > imageCap) {
+          throw new Error(formatCapLimit(isGif ? "GIF" : "Media", imageCap, params.buffer.length));
         }
         return {
           buffer: params.buffer,
@@ -623,7 +655,7 @@ async function loadWebMediaInternal(
         };
       }
       return {
-        ...(await optimizeAndClampImage(params.buffer, cap, {
+        ...(await optimizeAndClampImage(params.buffer, imageCap, {
           contentType: params.contentType,
           fileName: params.fileName,
         })),

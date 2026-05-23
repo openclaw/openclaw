@@ -1783,6 +1783,40 @@ describe("image tool data URL support", () => {
       bufferFromSpy.mockRestore();
     }
   });
+
+  it("applies model image maxBytes to data URLs", async () => {
+    await withTempAgentDir(async (agentDir) => {
+      installImageUnderstandingProviderStubs();
+      const model = {
+        ...makeModelDefinition("tiny-vision", ["text", "image"]),
+        mediaInput: { image: { maxBytes: 1 } },
+      } satisfies ModelDefinitionConfig;
+      const cfg: OpenClawConfig = {
+        agents: {
+          defaults: {
+            imageModel: { primary: "openai/tiny-vision" },
+          },
+        },
+        models: {
+          providers: {
+            openai: {
+              api: "openai-responses",
+              baseUrl: "https://api.openai.com/v1",
+              models: [model],
+            },
+          },
+        },
+      };
+      const tool = createRequiredImageTool({ config: cfg, agentDir });
+
+      await expect(
+        tool.execute("t1", {
+          prompt: "Describe this image.",
+          image: `data:image/png;base64,${ONE_PIXEL_PNG_B64}`,
+        }),
+      ).rejects.toThrow(/size limit/i);
+    });
+  });
 });
 
 describe("image tool MiniMax VLM routing", () => {
@@ -2168,50 +2202,109 @@ describe("image tool response validation", () => {
 });
 
 describe("image compression policy", () => {
-  it("derives provider, model, quality preference, and image count from config", () => {
-    const cfg = {
-      agents: {
-        defaults: {
-          imageQuality: "high",
+  const cfgWithImageModelMetadata = {
+    agents: {
+      defaults: {
+        imageQuality: "high",
+      },
+    },
+    models: {
+      providers: {
+        anthropic: {
+          baseUrl: "https://api.anthropic.com",
+          api: "anthropic-messages",
+          models: [
+            {
+              id: "claude-opus-4-7",
+              name: "Claude Opus 4.7",
+              reasoning: true,
+              input: ["text", "image"],
+              contextWindow: 1_000_000,
+              maxTokens: 64_000,
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+              mediaInput: {
+                image: { maxSidePx: 2576, preferredSidePx: 2576, tokenMode: "provider" },
+              },
+            },
+            {
+              id: "claude-opus-4-6",
+              name: "Claude Opus 4.6",
+              reasoning: true,
+              input: ["text", "image"],
+              contextWindow: 1_000_000,
+              maxTokens: 64_000,
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+              mediaInput: {
+                image: { maxSidePx: 1568, preferredSidePx: 1568, tokenMode: "provider" },
+              },
+            },
+          ],
+        },
+        openai: {
+          baseUrl: "https://api.openai.com/v1",
+          api: "openai-responses",
+          models: [
+            {
+              id: "gpt-5.5",
+              name: "GPT-5.5",
+              reasoning: true,
+              input: ["text", "image"],
+              contextWindow: 272_000,
+              maxTokens: 128_000,
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+              mediaInput: {
+                image: { maxSidePx: 6000, preferredSidePx: 2048, tokenMode: "detail" },
+              },
+            },
+          ],
         },
       },
+    },
+  } satisfies OpenClawConfig;
+
+  it("derives model metadata, quality preference, and image count from config", async () => {
+    const cfg = {
+      ...cfgWithImageModelMetadata,
     } satisfies OpenClawConfig;
 
-    expect(
+    await expect(
       testing.resolveImageCompressionPolicy({
         cfg,
         imageModelConfig: { primary: "anthropic/claude-opus-4-7" },
         imageCount: 2,
       }),
-    ).toEqual({
+    ).resolves.toEqual({
       quality: "high",
       imageCount: 2,
-      modelRefs: ["anthropic/claude-opus-4-7"],
-      provider: "anthropic",
-      model: "claude-opus-4-7",
+      models: [{ maxSidePx: 2576, preferredSidePx: 2576, tokenMode: "provider" }],
     });
   });
 
-  it("keeps unset image quality as adaptive auto behavior and includes fallback refs", () => {
-    expect(
+  it("keeps unset image quality as adaptive auto behavior and includes fallback models", async () => {
+    const { agents: _agents, ...cfg } = cfgWithImageModelMetadata;
+    await expect(
       testing.resolveImageCompressionPolicy({
+        cfg,
         imageModelConfig: {
           primary: "openai/gpt-5.5",
-          fallbacks: ["anthropic/claude-opus-4-6"],
+          fallbacks: ["anthropic/claude-opus-4-6", "unknown/custom-image"],
         },
         imageCount: 1,
       }),
-    ).toEqual({
+    ).resolves.toEqual({
       imageCount: 1,
-      modelRefs: ["openai/gpt-5.5", "anthropic/claude-opus-4-6"],
-      provider: "openai",
-      model: "gpt-5.5",
+      models: [
+        { maxSidePx: 6000, preferredSidePx: 2048, tokenMode: "detail" },
+        { maxSidePx: 1568, preferredSidePx: 1568, tokenMode: "provider" },
+        {},
+      ],
     });
   });
 
-  it("uses a model override as the first compression candidate", () => {
-    expect(
+  it("uses a model override as the compression candidate", async () => {
+    await expect(
       testing.resolveImageCompressionPolicy({
+        cfg: cfgWithImageModelMetadata,
         imageModelConfig: {
           primary: "openai/gpt-5.5",
           fallbacks: ["anthropic/claude-opus-4-6"],
@@ -2219,10 +2312,8 @@ describe("image compression policy", () => {
         modelOverride: "anthropic/claude-opus-4-6",
         imageCount: 1,
       }),
-    ).toMatchObject({
-      modelRefs: ["anthropic/claude-opus-4-6"],
-      provider: "anthropic",
-      model: "claude-opus-4-6",
+    ).resolves.toMatchObject({
+      models: [{ maxSidePx: 1568, preferredSidePx: 1568, tokenMode: "provider" }],
     });
   });
 });
