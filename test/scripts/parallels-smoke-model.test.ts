@@ -1,6 +1,14 @@
-import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  copyFileSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { delimiter, join } from "node:path";
+import { pathToFileURL } from "node:url";
 import { describe, expect, it } from "vitest";
 import { execNodeEvalSync, spawnNodeEvalSync } from "../../src/test-utils/node-process.js";
 
@@ -47,6 +55,27 @@ function countNonEmptyLines(value: string): number {
 
 function runTsEval(source: string, env: Record<string, string> = {}) {
   return execNodeEvalSync(source, { env: { ...process.env, ...env }, imports: ["tsx"] });
+}
+
+function fakePrlctlEnv(tempDir: string): Record<string, string> {
+  const pathValue = `${tempDir}${delimiter}${process.env.Path ?? process.env.PATH ?? ""}`;
+  const fakeBootstrap = pathToFileURL(join(tempDir, "prlctl-bootstrap.mjs")).href;
+  const nodeOptions = [process.env.NODE_OPTIONS, `--import=${fakeBootstrap}`]
+    .filter(Boolean)
+    .join(" ");
+  return { NODE_OPTIONS: nodeOptions, PATH: pathValue, Path: pathValue };
+}
+
+function writeFakePrlctl(
+  tempDir: string,
+  posixScript: string,
+  windowsBootstrap: string,
+): void {
+  const prlctlPath = join(tempDir, "prlctl");
+  writeFileSync(prlctlPath, posixScript);
+  chmodSync(prlctlPath, 0o755);
+  copyFileSync(process.execPath, join(tempDir, "prlctl.exe"));
+  writeFileSync(join(tempDir, "prlctl-bootstrap.mjs"), windowsBootstrap);
 }
 
 function resolveProviderAuth(
@@ -161,9 +190,8 @@ console.log(result);
 
   it("quotes shell args and resolves fuzzy snapshot hints through the shared TypeScript helper", () => {
     const tempDir = mkdtempSync(join(tmpdir(), "openclaw-parallels-helper-"));
-    const prlctlPath = join(tempDir, "prlctl");
-    writeFileSync(
-      prlctlPath,
+    writeFakePrlctl(
+      tempDir,
       `#!/usr/bin/env bash
 set -euo pipefail
 if [[ "$1" == "snapshot-list" ]]; then
@@ -178,8 +206,23 @@ JSON
 fi
 exit 1
 `,
+      `import { basename } from "node:path";
+const isPrlctl = [process.argv0, process.execPath].some((value) =>
+  basename(value).toLowerCase() === "prlctl.exe",
+);
+if (isPrlctl) {
+  if (process.argv.some((arg) => arg.includes("snapshot-list"))) {
+    console.log(JSON.stringify({
+      "{older}": { name: "fresh", state: "running" },
+      "{wanted}": { name: "fresh-poweroff-2026-04-01", state: "poweroff" },
+      "{other}": { name: "unrelated", state: "poweroff" },
+    }));
+    process.exit(0);
+  }
+  process.exit(1);
+}
+`,
     );
-    chmodSync(prlctlPath, 0o755);
 
     try {
       const output = runTsEval(
@@ -189,7 +232,7 @@ console.log(shellQuote("it's ok"));
 const snapshot = resolveSnapshot("vm", "fresh");
 console.log([snapshot.id, snapshot.state, snapshot.name].join("\\t"));
 `,
-        { PATH: `${tempDir}:${process.env.PATH ?? ""}` },
+        fakePrlctlEnv(tempDir),
       );
 
       expect(output.split("\n")[0]).toBe("'it'\"'\"'s ok'");
@@ -201,9 +244,8 @@ console.log([snapshot.id, snapshot.state, snapshot.name].join("\\t"));
 
   it("uses one Ubuntu VM fallback resolver for Linux lanes", () => {
     const tempDir = mkdtempSync(join(tmpdir(), "openclaw-parallels-vm-helper-"));
-    const prlctlPath = join(tempDir, "prlctl");
-    writeFileSync(
-      prlctlPath,
+    writeFakePrlctl(
+      tempDir,
       `#!/usr/bin/env bash
 set -euo pipefail
 if [[ "$1" == "list" ]]; then
@@ -218,8 +260,23 @@ JSON
 fi
 exit 1
 `,
+      `import { basename } from "node:path";
+const isPrlctl = [process.argv0, process.execPath].some((value) =>
+  basename(value).toLowerCase() === "prlctl.exe",
+);
+if (isPrlctl) {
+  if (process.argv.some((arg) => arg.includes("list"))) {
+    console.log(JSON.stringify([
+      { name: "Ubuntu 25.10" },
+      { name: "Ubuntu 23.10" },
+      { name: "Ubuntu 24.04.3 ARM64" },
+    ]));
+    process.exit(0);
+  }
+  process.exit(1);
+}
+`,
     );
-    chmodSync(prlctlPath, 0o755);
 
     try {
       const output = runTsEval(
@@ -227,7 +284,7 @@ exit 1
 import { resolveUbuntuVmName } from "./${TS_PATHS.common}";
 console.log(resolveUbuntuVmName("Ubuntu missing"));
 `,
-        { PATH: `${tempDir}:${process.env.PATH ?? ""}` },
+        fakePrlctlEnv(tempDir),
       );
 
       expect(output.trim()).toBe("Ubuntu 24.04.3 ARM64");
@@ -426,6 +483,15 @@ console.log(JSON.stringify(result));
     expect(script).toContain("auth.modelId");
     expect(script).toContain("authForPlatform");
     expect(script).toContain("OPENCLAW_PARALLELS_LINUX_DISABLE_BONJOUR");
+  });
+
+  it("keeps the Windows update config scrub compatible with PowerShell 5.1", () => {
+    const script = readFileSync(TS_PATHS.npmUpdateScripts, "utf8");
+
+    expect(script).not.toContain("ConvertFrom-Json -AsHashtable");
+    expect(script).toContain("function Get-OpenClawJsonProperty");
+    expect(script).toContain("function Remove-OpenClawJsonProperty");
+    expect(script).toContain("Remove-OpenClawJsonProperty $entries $pluginId");
   });
 
   it("keeps aggregate update guest scripts isolated from the npm-update orchestrator", () => {
