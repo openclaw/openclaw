@@ -7,6 +7,15 @@ import {
 } from "../../../config/legacy.shared.js";
 import { isModelThinkingFormat } from "../../../config/types.models.js";
 
+/**
+ * Catalog-correct contextWindow values for models that shipped with stale
+ * defaults in older OpenClaw releases.
+ */
+const STALE_CONTEXT_WINDOW_FIXES: Record<string, number> = {
+  "deepseek/deepseek-v4-flash": 1_000_000,
+  "deepseek-v4-flash": 1_000_000,
+} as const;
+
 function hasInvalidThinkingFormat(providers: unknown): boolean {
   const providersRecord = getRecord(providers);
   if (!providersRecord) {
@@ -534,6 +543,50 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_MODELS: LegacyConfigMigrationSpec[
           delete compat.thinkingFormat;
           changes.push(
             `Removed models.providers.${providerId}.models.${index}.compat.thinkingFormat (unrecognized value ${JSON.stringify(thinkingFormat)}; runtime default applies).`,
+          );
+        }
+      }
+    },
+  }),
+  defineLegacyConfigMigration({
+    id: "models.providers.*.models.*.contextWindow-stale",
+    describe: "Repair stale contextWindow values to match catalog defaults",
+    apply: (raw, changes) => {
+      const providers = getRecord(getRecord(raw.models)?.providers);
+      if (!providers) {
+        return;
+      }
+
+      for (const [providerId, provider] of Object.entries(providers)) {
+        const models = getRecord(provider)?.models;
+        if (!Array.isArray(models)) {
+          continue;
+        }
+
+        for (const [index, model] of models.entries()) {
+          if (!getRecord(model)) {
+            continue;
+          }
+          const modelId = typeof model.id === "string" ? model.id : undefined;
+          if (!modelId) {
+            continue;
+          }
+          const contextWindow = model.contextWindow;
+          if (typeof contextWindow !== "number" || !Number.isFinite(contextWindow)) {
+            continue;
+          }
+
+          // Check against both "deepseek-v4-flash" and "deepseek/deepseek-v4-flash"
+          const correct =
+            STALE_CONTEXT_WINDOW_FIXES[modelId] ??
+            STALE_CONTEXT_WINDOW_FIXES[`${providerId}/${modelId}`];
+          if (correct === undefined || contextWindow === correct) {
+            continue;
+          }
+
+          model.contextWindow = correct;
+          changes.push(
+            `Repaired models.providers.${providerId}.models[${index}].${modelId}.contextWindow (${contextWindow} → ${correct} to match catalog default).`,
           );
         }
       }
