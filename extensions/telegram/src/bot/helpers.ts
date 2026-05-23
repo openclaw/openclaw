@@ -246,24 +246,16 @@ export async function resolveTelegramGroupAllowFromContext(params: {
     groupConfig,
     dmPolicy: params.dmPolicy,
   });
-  const shouldReadPairingStore = params.isGroup !== true && effectiveDmPolicy === "pairing";
-  const configuredDmAllowed = shouldReadPairingStore
-    ? await isTelegramDmAllowedByConfiguredAllowFrom({
-        cfg: params.cfg,
-        allowFrom: params.allowFrom,
-        groupAllowOverride,
-        accountId,
-        senderId: params.senderId,
-      })
-    : false;
-  const storeAllowFrom =
-    shouldReadPairingStore && !configuredDmAllowed
-      ? await (params.readChannelAllowFromStore ?? readChannelAllowFromStore)(
-          "telegram",
-          process.env,
-          accountId,
-        )
-      : [];
+  const storeAllowFrom = await loadTelegramPairingStoreIfNeeded({
+    cfg: params.cfg,
+    allowFrom: params.allowFrom,
+    groupAllowOverride,
+    accountId,
+    senderId: params.senderId,
+    isGroup: params.isGroup ?? false,
+    effectiveDmPolicy,
+    readChannelAllowFromStore: params.readChannelAllowFromStore,
+  });
   const expandedGroupAllowFrom = await expandTelegramAllowFromWithAccessGroups({
     cfg: params.cfg,
     allowFrom: groupAllowOverride ?? params.groupAllowFrom,
@@ -286,7 +278,7 @@ export async function resolveTelegramGroupAllowFromContext(params: {
   };
 }
 
-export async function isTelegramDmAllowedByConfiguredAllowFrom(params: {
+async function isTelegramDmAllowedByConfiguredAllowFrom(params: {
   cfg?: OpenClawConfig;
   allowFrom?: Array<string | number>;
   groupAllowOverride?: Array<string | number>;
@@ -310,6 +302,41 @@ export async function isTelegramDmAllowedByConfiguredAllowFrom(params: {
       allow: normalizedAllowFrom,
       senderId: params.senderId,
     })
+  );
+}
+
+// Only read the pairing-store file when it can affect the decision: DM, pairing
+// mode, and the sender is not already authorized by configured allowFrom.
+// readChannelAllowFromStore translates a missing pairing file to [] internally,
+// so the only errors that escape are unexpected I/O failures — letting them
+// throw lets callers drop the message instead of issuing a bogus pairing prompt.
+export async function loadTelegramPairingStoreIfNeeded(params: {
+  cfg?: OpenClawConfig;
+  allowFrom?: Array<string | number>;
+  groupAllowOverride?: Array<string | number>;
+  accountId: string;
+  senderId?: string;
+  isGroup: boolean;
+  effectiveDmPolicy: DmPolicy;
+  readChannelAllowFromStore?: typeof readChannelAllowFromStore;
+}): Promise<string[]> {
+  if (params.isGroup || params.effectiveDmPolicy !== "pairing") {
+    return [];
+  }
+  const configuredDmAllowed = await isTelegramDmAllowedByConfiguredAllowFrom({
+    cfg: params.cfg,
+    allowFrom: params.allowFrom,
+    groupAllowOverride: params.groupAllowOverride,
+    accountId: params.accountId,
+    senderId: params.senderId,
+  });
+  if (configuredDmAllowed) {
+    return [];
+  }
+  return await (params.readChannelAllowFromStore ?? readChannelAllowFromStore)(
+    "telegram",
+    process.env,
+    params.accountId,
   );
 }
 

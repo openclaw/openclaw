@@ -89,7 +89,7 @@ import {
   resolveTelegramForumFlag,
   resolveTelegramForumThreadId,
   resolveTelegramGroupAllowFromContext,
-  isTelegramDmAllowedByConfiguredAllowFrom,
+  loadTelegramPairingStoreIfNeeded,
   shouldUseTelegramDmThreadSession,
   withResolvedTelegramForumFlag,
 } from "./bot/helpers.js";
@@ -978,10 +978,7 @@ export const registerTelegramHandlers = ({
   };
 
   const loadStoreAllowFrom = async (msg: Message) => {
-    const isGroup = msg.chat.type !== "private";
-    if (isGroup) {
-      return [];
-    }
+    const isGroup = msg.chat.type === "group" || msg.chat.type === "supergroup";
     const { groupConfig, topicConfig } = resolveTelegramGroupConfig(
       msg.chat.id,
       msg.message_thread_id,
@@ -992,20 +989,16 @@ export const registerTelegramHandlers = ({
       groupConfig,
       dmPolicy: telegramCfg.dmPolicy,
     });
-    if (effectiveDmPolicy !== "pairing") {
-      return [];
-    }
-    const senderId = msg.from?.id != null ? String(msg.from.id) : undefined;
-    const configuredDmAllowed = await isTelegramDmAllowedByConfiguredAllowFrom({
+    return loadTelegramPairingStoreIfNeeded({
       cfg,
       allowFrom,
       groupAllowOverride,
       accountId,
-      senderId,
+      senderId: msg.from?.id != null ? String(msg.from.id) : undefined,
+      isGroup,
+      effectiveDmPolicy,
+      readChannelAllowFromStore: telegramDeps.readChannelAllowFromStore,
     });
-    return configuredDmAllowed
-      ? []
-      : await telegramDeps.readChannelAllowFromStore("telegram", process.env, accountId);
   };
 
   const recordMessageForReplyChain = (msg: Message, threadId?: number) =>
