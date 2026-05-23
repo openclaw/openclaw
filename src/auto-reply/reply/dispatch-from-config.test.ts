@@ -2706,7 +2706,7 @@ describe("dispatchReplyFromConfig", () => {
         exitCode: 1,
       });
       sessionStoreMocks.currentEntry = {
-        ...(sessionStoreMocks.currentEntry ?? {}),
+        ...sessionStoreMocks.currentEntry,
         verboseLevel: "on",
       };
       expect(opts?.shouldSuppressToolErrorWarnings?.()).toBeUndefined();
@@ -2750,7 +2750,7 @@ describe("dispatchReplyFromConfig", () => {
       receivedOptions = opts;
       expect(opts?.shouldSuppressToolErrorWarnings?.()).toBeUndefined();
       sessionStoreMocks.currentEntry = {
-        ...(sessionStoreMocks.currentEntry ?? {}),
+        ...sessionStoreMocks.currentEntry,
         verboseLevel: "off",
       };
       expect(opts?.shouldSuppressToolErrorWarnings?.()).toBe(false);

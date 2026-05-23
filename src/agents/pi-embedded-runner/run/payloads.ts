@@ -152,16 +152,17 @@ function resolveToolErrorWarningPolicy(params: {
   verboseLevel?: VerboseLevel;
 }): ToolErrorWarningPolicy {
   const normalizedToolName = normalizeOptionalLowercaseString(params.lastToolError.toolName) ?? "";
-  const hasDynamicToolErrorWarningOverride = typeof params.suppressToolErrorWarnings === "function";
-  const toolErrorWarningOverride = hasDynamicToolErrorWarningOverride
-    ? params.suppressToolErrorWarnings?.()
-    : params.suppressToolErrorWarnings;
+  let toolErrorWarningOverride: boolean | undefined;
+  let dynamicToolErrorWarningsDisabled = false;
+  if (typeof params.suppressToolErrorWarnings === "function") {
+    toolErrorWarningOverride = params.suppressToolErrorWarnings();
+    dynamicToolErrorWarningsDisabled = toolErrorWarningOverride === false;
+  } else {
+    toolErrorWarningOverride = params.suppressToolErrorWarnings;
+  }
   const includeDetails = shouldIncludeToolErrorDetails({
     ...params,
-    verboseLevel:
-      hasDynamicToolErrorWarningOverride && toolErrorWarningOverride === false
-        ? "off"
-        : params.verboseLevel,
+    verboseLevel: dynamicToolErrorWarningsDisabled ? "off" : params.verboseLevel,
   });
   const suppressToolErrorWarnings = toolErrorWarningOverride === true;
   if (suppressToolErrorWarnings) {
