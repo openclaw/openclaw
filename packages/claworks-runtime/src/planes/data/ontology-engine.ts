@@ -7,6 +7,8 @@ export interface OntologyEngine {
   getType(name: string): ObjectTypeDefinition | null;
   listTypes(): ObjectTypeDefinition[];
   validate(typeName: string, data: Record<string, unknown>): ValidationResult;
+  /** 运行时动态注册类型定义（供 ontology.bootstrap_* capabilities 使用）。 */
+  registerType(def: ObjectTypeDefinition): void;
 }
 
 export function createOntologyEngine(): OntologyEngine {
@@ -56,6 +58,10 @@ export function createOntologyEngine(): OntologyEngine {
         }
       }
       return { valid: errors.length === 0, errors };
+    },
+
+    registerType(def: ObjectTypeDefinition) {
+      types.set(def.name, def);
     },
   };
 }

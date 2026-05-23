@@ -2593,10 +2593,10 @@ function makeOntologyBootstrapFromCsvDescriptor(runtime: ClaworksRuntime): Capab
         actions: [],
       };
 
-      if (!runtime.ontologyEngine?.registerType) {
+      if (!runtime.ontology?.registerType) {
         return { status: "error", reason: "OntologyEngine 未初始化" };
       }
-      runtime.ontologyEngine.registerType(def);
+      runtime.ontology.registerType(def);
       return { status: "ok", type_name: typeName, fields: fields.length };
     },
   };
@@ -2631,7 +2631,7 @@ function makeOntologyBootstrapFromOpenApiDescriptor(
       const packName = String(params.pack ?? "runtime");
       const only = Array.isArray(params.only_names) ? (params.only_names as string[]) : [];
 
-      if (!runtime.ontologyEngine?.registerType) {
+      if (!runtime.ontology?.registerType) {
         return { status: "error", reason: "OntologyEngine 未初始化" };
       }
 
@@ -2675,7 +2675,7 @@ function makeOntologyBootstrapFromOpenApiDescriptor(
           fields,
           actions: [],
         };
-        runtime.ontologyEngine.registerType(def);
+        runtime.ontology.registerType(def);
         registered.push(schemaName);
       }
 
@@ -2710,7 +2710,7 @@ function makeOntologyBootstrapFromDescriptionDescriptor(
       const packName = String(params.pack ?? "runtime");
       if (!description) return { status: "error", reason: "description 不能为空" };
 
-      if (!runtime.ontologyEngine?.registerType) {
+      if (!runtime.ontology?.registerType) {
         return { status: "error", reason: "OntologyEngine 未初始化" };
       }
 
@@ -2822,7 +2822,7 @@ function makeOntologyBootstrapFromDescriptionDescriptor(
           fsm,
         };
 
-        runtime.ontologyEngine.registerType(def);
+        runtime.ontology.registerType(def);
         return { status: "ok", type_name: typeName, fields: fields.length, has_fsm: !!fsm };
       } catch (e) {
         return { status: "error", reason: String(e) };
