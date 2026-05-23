@@ -194,25 +194,23 @@ agents:
 `agents.list[].params` merges on top of the selected model's `params`, so you can
 override only `cacheRetention` and inherit other model defaults unchanged.
 
-### Example: enable Anthropic 1M context
+### Anthropic 1M context
 
-OpenClaw can request Anthropic's 1M context window when you enable `context1m`
-on GA-capable Claude 4.x models such as Opus 4.6, Opus 4.7, and Sonnet 4.6.
+OpenClaw sizes GA-capable Claude 4.x models such as Opus 4.6, Opus 4.7, and
+Sonnet 4.6 with Anthropic's 1M context window. You do not need
+`params.context1m: true` for those models.
 
 ```yaml
 agents:
   defaults:
     models:
       "anthropic/claude-opus-4-6":
-        params:
-          context1m: true
+        alias: opus
 ```
 
-This keeps the larger context window as an explicit opt-in on eligible models.
-OpenClaw no longer sends Anthropic's retired `context-1m-2025-08-07` beta header
-for this setting.
-
-This only applies when `context1m: true` is set on that model entry.
+Older configs can keep `context1m: true`, but OpenClaw no longer sends
+Anthropic's retired `context-1m-2025-08-07` beta header for this setting and
+does not expand unsupported older Claude models to 1M.
 
 Requirement: the credential must be eligible for long-context usage. If not,
 Anthropic responds with a provider-side rate limit error for that request.
