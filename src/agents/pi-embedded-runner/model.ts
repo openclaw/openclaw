@@ -1309,7 +1309,9 @@ export async function resolveModelAsync(
       cfg,
       workspaceDir,
     });
-    const mediaInput = mergeModelMediaInput(staticCatalogModel?.mediaInput, model.mediaInput);
+    const staticMediaInput = (staticCatalogModel as ProviderRuntimeModel | undefined)?.mediaInput;
+    const resolvedMediaInput = (model as ProviderRuntimeModel).mediaInput;
+    const mediaInput = mergeModelMediaInput(staticMediaInput, resolvedMediaInput);
     if (mediaInput) {
       model = { ...model, mediaInput };
     }
