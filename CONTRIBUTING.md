@@ -95,7 +95,40 @@ Welcome to the lobster tank! 🦞
 2. **New features / architecture** → Start a [GitHub Issue](https://github.com/openclaw/openclaw/issues/new/choose) or ask in Discord first. Most features are not accepted and should be third party plugins instead using our plugin SDK.
 3. **Refactor-only PRs** → Don't open a PR. We are not accepting refactor-only changes unless a maintainer explicitly asks for them as part of a concrete fix.
 4. **Test/CI-only PRs for known `main` failures** → Don't open a PR. The Maintainer team is already tracking those failures, and PRs that only tweak tests or CI to chase them will be closed unless they are required to validate a new fix.
-5. **Questions** → Discord [#help](https://discord.com/channels/1456350064065904867/1459642797895319552) / [#users-helping-users](https://discord.com/channels/1456350064065904867/1459007081603403828)
+5. **Questions** → Discord [#help](https://discord.com/channels/1456350064065944867/1459642797895319552) / [#users-helping-users](https://discord.com/channels/1456350064065944867/1459007081603403828)
+
+## First Run Setup
+
+After cloning and running `pnpm install`, you need to configure at least one provider before running locally:
+
+1. **Set your API key** — most providers require an API key:
+
+   ```bash
+   export OPENAI_API_KEY=your-key-here        # OpenAI
+   export ANTHROPIC_API_KEY=your-key-here      # Anthropic
+   export GEMINI_API_KEY=your-key-here         # Google
+   ```
+
+2. **Verify your setup** — run the doctor command:
+
+   ```bash
+   openclaw doctor --lint
+   ```
+
+   This checks your config file, environment variables, and provider credentials.
+
+3. **Start the gateway** (if testing channels or plugins):
+
+   ```bash
+   openclaw gateway start
+   ```
+
+4. **Quick test** — verify your setup works:
+   ```bash
+   openclaw chat "Hello"
+   ```
+
+For additional configuration, see the [full config docs](https://docs.openclaw.ai/config). To add a new provider, see the [provider setup guide](https://docs.openclaw.ai/providers).
 
 ## PR Limits
 
