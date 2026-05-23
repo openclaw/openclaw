@@ -1358,6 +1358,40 @@ describe("fetchWithSsrFGuard hardening", () => {
     await result.release();
   });
 
+  it("keeps localhost on the managed proxy path when any resolved address is public", async () => {
+    clearProxyEnv();
+    vi.stubEnv("OPENCLAW_PROXY_ACTIVE", "1");
+    vi.stubEnv("OPENCLAW_PROXY_LOOPBACK_MODE", "gateway-only");
+    vi.stubEnv("http_proxy", "http://127.0.0.1:7890");
+    (globalThis as Record<string, unknown>)[TEST_UNDICI_RUNTIME_DEPS_KEY] = {
+      Agent: agentCtor,
+      EnvHttpProxyAgent: envHttpProxyAgentCtor,
+      ProxyAgent: proxyAgentCtor,
+      fetch: vi.fn(async () => okResponse()),
+    };
+    const fetchImpl = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      const requestInit = init as RequestInit & { dispatcher?: unknown };
+      expectDispatcherAttached(requestInit.dispatcher);
+      return okResponse();
+    });
+
+    const result = await fetchConfiguredLocalOriginWithSsrFGuard({
+      url: "http://localhost:11434/api/embed",
+      fetchImpl,
+      lookupFn: vi.fn(async () => [
+        { address: "127.0.0.1", family: 4 },
+        { address: "8.8.8.8", family: 4 },
+      ]) as unknown as LookupFn,
+      policy: { allowedOrigins: ["http://localhost:11434"] },
+      configuredLocalOriginBaseUrl: "http://localhost:11434",
+    });
+
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    expect(envHttpProxyAgentCtor).toHaveBeenCalledTimes(1);
+    expect(agentCtor).not.toHaveBeenCalled();
+    await result.release();
+  });
+
   it("ignores hidden managed-proxy bypass markers on the public guarded fetch helper", async () => {
     clearProxyEnv();
     vi.stubEnv("OPENCLAW_PROXY_ACTIVE", "1");
@@ -1639,6 +1673,31 @@ describe("fetchWithSsrFGuard hardening", () => {
         lookupFn: createLoopbackLookup(),
         policy: { allowedOrigins: ["http://127.0.0.1:11434"] },
         configuredLocalOriginBaseUrl: "http://127.0.0.1:11434",
+      }),
+    ).rejects.toThrow("blocked by proxy.loopbackMode");
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it("honors proxy.loopbackMode=block for localhost provider origins", async () => {
+    clearProxyEnv();
+    vi.stubEnv("OPENCLAW_PROXY_ACTIVE", "1");
+    vi.stubEnv("OPENCLAW_PROXY_LOOPBACK_MODE", "block");
+    vi.stubEnv("http_proxy", "http://127.0.0.1:7890");
+    (globalThis as Record<string, unknown>)[TEST_UNDICI_RUNTIME_DEPS_KEY] = {
+      Agent: agentCtor,
+      EnvHttpProxyAgent: envHttpProxyAgentCtor,
+      ProxyAgent: proxyAgentCtor,
+      fetch: vi.fn(async () => okResponse()),
+    };
+    const fetchImpl = vi.fn(async () => okResponse());
+
+    await expect(
+      fetchConfiguredLocalOriginWithSsrFGuard({
+        url: "http://localhost:11434/api/embed",
+        fetchImpl,
+        lookupFn: createLoopbackLookup(),
+        policy: { allowedOrigins: ["http://localhost:11434"] },
+        configuredLocalOriginBaseUrl: "http://localhost:11434",
       }),
     ).rejects.toThrow("blocked by proxy.loopbackMode");
     expect(fetchImpl).not.toHaveBeenCalled();

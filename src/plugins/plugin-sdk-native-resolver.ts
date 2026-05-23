@@ -76,13 +76,65 @@ function findNearestPackageRoot(modulePath: string): string {
   return path.dirname(path.resolve(modulePath));
 }
 
+function findBundledPluginRoot(modulePath: string): string | undefined {
+  const resolvedModulePath = normalizePathForBoundary(modulePath);
+  const packageRoot = resolveLoaderPackageRootFromModulePath(modulePath);
+  for (const relativeRoot of ["extensions", "dist/extensions", "dist-runtime/extensions"]) {
+    const bundledRoot = path.join(packageRoot, relativeRoot);
+    const relative = path.relative(bundledRoot, resolvedModulePath);
+    if (!relative || relative.startsWith("..") || path.isAbsolute(relative)) {
+      continue;
+    }
+    const [pluginId] = relative.split(path.sep);
+    if (pluginId) {
+      return path.join(bundledRoot, pluginId);
+    }
+  }
+  return undefined;
+}
+
+function resolveLoaderPackageRootFromModulePath(modulePath: string): string {
+  let cursor = path.dirname(path.resolve(modulePath));
+  for (let i = 0; i < 12; i += 1) {
+    const packageJsonPath = path.join(cursor, "package.json");
+    if (fs.existsSync(packageJsonPath)) {
+      try {
+        const packageJson = JSON.parse(fs.readFileSync(packageJsonPath, "utf8")) as {
+          bin?: unknown;
+          name?: unknown;
+        };
+        if (
+          packageJson.name === "openclaw" ||
+          (typeof packageJson.bin === "object" &&
+            packageJson.bin !== null &&
+            typeof (packageJson.bin as { openclaw?: unknown }).openclaw === "string")
+        ) {
+          return cursor;
+        }
+      } catch {
+        // Keep walking; malformed package metadata should not widen alias scope.
+      }
+    }
+    const parent = path.dirname(cursor);
+    if (parent === cursor) {
+      break;
+    }
+    cursor = parent;
+  }
+  return findNearestPackageRoot(modulePath);
+}
+
+function resolveAllowedParentRoot(modulePath: string): string {
+  return findBundledPluginRoot(modulePath) ?? findNearestPackageRoot(modulePath);
+}
+
 function addAllowedParentRoot(root: string): void {
   allowedParentRoots.add(normalizePathForBoundary(root));
 }
 
 function registerAllowedParentRoots(options: InstallOpenClawPluginSdkNativeResolverOptions): void {
   if (options.pluginModulePath) {
-    addAllowedParentRoot(findNearestPackageRoot(options.pluginModulePath));
+    addAllowedParentRoot(resolveAllowedParentRoot(options.pluginModulePath));
   }
   for (const root of options.allowedParentRoots ?? []) {
     addAllowedParentRoot(root);
@@ -105,7 +157,7 @@ function canResolveForParent(parent: NodeJS.Module | undefined): boolean {
 function listPluginSdkNativeAliases(
   options: InstallOpenClawPluginSdkNativeResolverOptions,
 ): Array<readonly [string, string]> {
-  const modulePath = resolveLoaderModulePath(options);
+  const modulePath = options.pluginModulePath ?? resolveLoaderModulePath(options);
   return Object.entries(
     buildPluginLoaderAliasMap(
       modulePath,

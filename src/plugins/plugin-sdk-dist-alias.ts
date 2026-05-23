@@ -6,7 +6,7 @@ type OpenClawPackageJson = {
   exports?: Record<string, unknown>;
 };
 
-const PRIVATE_LOCAL_ONLY_PLUGIN_SDK_DIST_FILE_NAMES = new Set([
+const PRIVATE_LOCAL_ONLY_PLUGIN_SDK_DIST_FILE_NAME_FALLBACK = [
   "codex-mcp-projection.js",
   "codex-native-task-runtime.js",
   "qa-channel.js",
@@ -15,7 +15,7 @@ const PRIVATE_LOCAL_ONLY_PLUGIN_SDK_DIST_FILE_NAMES = new Set([
   "qa-runtime.js",
   "ssrf-runtime-internal.js",
   "test-utils.js",
-]);
+] as const;
 
 function isSafePluginSdkSubpathSegment(subpath: string): boolean {
   return /^[A-Za-z0-9][A-Za-z0-9_-]*$/.test(subpath);
@@ -26,17 +26,35 @@ function collectLegacyPublicPluginSdkDistFileNames(distRoot: string): Set<string
   if (!fs.existsSync(pluginSdkDir)) {
     return undefined;
   }
+  const privateFileNames = readPrivateLocalOnlyPluginSdkDistFileNames(distRoot);
   const fileNames = new Set<string>();
   for (const entry of fs.readdirSync(pluginSdkDir, { withFileTypes: true })) {
     if (!entry.isFile() || path.extname(entry.name) !== ".js") {
       continue;
     }
-    if (PRIVATE_LOCAL_ONLY_PLUGIN_SDK_DIST_FILE_NAMES.has(entry.name)) {
+    if (privateFileNames.has(entry.name)) {
       continue;
     }
     fileNames.add(entry.name);
   }
   return fileNames.size > 0 ? fileNames : undefined;
+}
+
+function readPrivateLocalOnlyPluginSdkDistFileNames(distRoot: string): Set<string> {
+  const packageRoot = path.dirname(path.resolve(distRoot));
+  const privateFileNames = new Set<string>(PRIVATE_LOCAL_ONLY_PLUGIN_SDK_DIST_FILE_NAME_FALLBACK);
+  const subpaths = tryReadJsonSync<unknown>(
+    path.join(packageRoot, "scripts", "lib", "plugin-sdk-private-local-only-subpaths.json"),
+  );
+  if (!Array.isArray(subpaths)) {
+    return privateFileNames;
+  }
+  for (const subpath of subpaths) {
+    if (typeof subpath === "string" && isSafePluginSdkSubpathSegment(subpath)) {
+      privateFileNames.add(`${subpath}.js`);
+    }
+  }
+  return privateFileNames;
 }
 
 function readPublicPluginSdkDistFileNames(distRoot: string): Set<string> | undefined {
