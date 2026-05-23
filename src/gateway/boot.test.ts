@@ -186,6 +186,22 @@ describe("runBootOnce", () => {
     });
   });
 
+  it("keeps boot session isolation when the main session key is configured", async () => {
+    await withBootWorkspace({ bootContent: "Check status." }, async (workspaceDir) => {
+      agentCommand.mockResolvedValue(undefined);
+      const cfg = { session: { mainKey: "primary" } };
+      const agentId = "ops";
+      await expect(runBootOnce({ cfg, deps: makeDeps(), workspaceDir, agentId })).resolves.toEqual({
+        status: "ran",
+      });
+
+      expect(agentCommand).toHaveBeenCalledTimes(1);
+      const mainSessionKey = resolveAgentMainSessionKey({ cfg, agentId });
+      expect(mainSessionKey).toBe("agent:ops:primary");
+      expect(requireAgentCall().sessionKey).toBe("agent:ops:boot");
+    });
+  });
+
   it("generates new session ID when no existing session exists", async () => {
     const content = "Say hello when you wake up.";
     await withBootWorkspace({ bootContent: content }, async (workspaceDir) => {

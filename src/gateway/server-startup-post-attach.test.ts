@@ -6,10 +6,11 @@ import type {
   PluginHookGatewayContext,
   PluginHookGatewayStartEvent,
 } from "../plugins/hook-types.js";
+import type { PluginServicesHandle } from "../plugins/services.js";
 import { withEnvAsync } from "../test-utils/env.js";
 
 const hoisted = vi.hoisted(() => {
-  const startPluginServices = vi.fn(async () => null);
+  const startPluginServices = vi.fn<() => Promise<PluginServicesHandle | null>>(async () => null);
   const startGmailWatcherWithLogs = vi.fn(async () => {});
   const loadInternalHooks = vi.fn(async () => 0);
   const setInternalHooksEnabled = vi.fn();
@@ -1002,7 +1003,7 @@ describe("startGatewayPostAttachRuntime", () => {
       async () => {
         let releaseChannels: (() => void) | undefined;
         const events: string[] = [];
-        const pluginServices = { stop: vi.fn(async () => {}) } as never;
+        const pluginServices: PluginServicesHandle = { stop: vi.fn(async () => {}) };
         const onPluginServices = vi.fn();
         const onSidecarsReady = vi.fn();
         const startChannels = vi.fn(
@@ -1109,7 +1110,7 @@ describe("startGatewayPostAttachRuntime", () => {
       async () => {
         let shouldStartPluginServices = true;
         let releasePluginServices: (() => void) | undefined;
-        const pluginServices = { stop: vi.fn(async () => {}) };
+        const pluginServices: PluginServicesHandle = { stop: vi.fn(async () => {}) };
         const onPluginServices = vi.fn();
         hoisted.startPluginServices.mockImplementationOnce(
           async () =>
