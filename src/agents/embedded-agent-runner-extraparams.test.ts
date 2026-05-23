@@ -733,6 +733,27 @@ describe("applyExtraParamsToAgent", () => {
     expect(messages[2]).not.toHaveProperty("reasoning_content");
   });
 
+  it("does not add DeepSeek V4 thinking params when compat uses OpenAI-style reasoning", () => {
+    const payload = runResponsesPayloadMutationCase({
+      applyProvider: "microsoft-foundry",
+      applyModelId: "deepseek-v4-pro",
+      thinkingLevel: "high",
+      model: {
+        api: "openai-completions",
+        provider: "microsoft-foundry",
+        id: "deepseek-v4-pro",
+        compat: { thinkingFormat: "openai", supportsReasoningEffort: true },
+      } as Model<"openai-completions">,
+      payload: {
+        reasoning_effort: "high",
+        messages: [{ role: "user", content: "hello" }],
+      },
+    });
+
+    expect(payload.reasoning_effort).toBe("high");
+    expect(payload).not.toHaveProperty("thinking");
+  });
+
   it("fills MiMo V2.6 reasoning_content for unowned OpenAI-compatible proxy models", () => {
     const payload = runResponsesPayloadMutationCase({
       applyProvider: "opencode",
