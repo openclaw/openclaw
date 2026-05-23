@@ -415,14 +415,19 @@ export async function loadModelCatalog(params?: {
     const sortModels = sortModelCatalogEntries;
     try {
       const cfg = params?.config ?? getRuntimeConfig();
+      let manifestMetadataSnapshot: PluginMetadataSnapshot | undefined;
       let manifestPlugins: ProviderModelIdNormalizationOptions["manifestPlugins"];
-      const getManifestPlugins = () => {
-        manifestPlugins ??=
-          params?.metadataSnapshot?.plugins ??
+      const getManifestMetadataSnapshot = () => {
+        manifestMetadataSnapshot ??=
+          params?.metadataSnapshot ??
           loadManifestMetadataSnapshot({
             config: cfg,
             env: process.env,
-          }).plugins;
+          });
+        return manifestMetadataSnapshot;
+      };
+      const getManifestPlugins = () => {
+        manifestPlugins ??= getManifestMetadataSnapshot().plugins;
         return manifestPlugins;
       };
       if (!readOnly) {
@@ -493,6 +498,15 @@ export async function loadModelCatalog(params?: {
           compat,
         });
       }
+      appendCatalogEntriesIfAbsent(
+        models,
+        loadManifestModelCatalog({
+          config: cfg,
+          env: process.env,
+          metadataSnapshot: getManifestMetadataSnapshot(),
+        }),
+      );
+      logStage("manifest-models-merged", `entries=${models.length}`);
       if (!readOnly) {
         const supplemental = await augmentModelCatalogWithProviderPlugins({
           config: cfg,

@@ -33,9 +33,6 @@ const hoisted = vi.hoisted(() => {
     resolved: 0,
     failed: 0,
   }));
-  const resolveAgentModelPrimaryValue = vi.fn(() => "");
-  const normalizeProviderId = vi.fn((provider: string) => provider.toLowerCase());
-  const resolveDefaultAgentDir = vi.fn(() => "/tmp/openclaw-state/agents/default/agent");
   const isCliProvider = vi.fn(() => false);
   const resolveConfiguredModelRef = vi.fn(() => ({
     provider: "openai",
@@ -48,8 +45,6 @@ const hoisted = vi.hoisted(() => {
     allowed: true,
     inCatalog: true,
   }));
-  const resolveEmbeddedAgentRuntime = vi.fn(() => "pi");
-  const ensureOpenClawModelsJson = vi.fn(async () => {});
   const clearCurrentProviderAuthState = vi.fn();
   const warmCurrentProviderAuthState = vi.fn(async (_cfg?: unknown, _options?: unknown) => {});
   const setAuthProfileFailureHook = vi.fn();
@@ -72,16 +67,11 @@ const hoisted = vi.hoisted(() => {
     refreshLatestUpdateRestartSentinel,
     getAcpRuntimeBackend,
     reconcilePendingSessionIdentities,
-    resolveAgentModelPrimaryValue,
-    normalizeProviderId,
-    resolveDefaultAgentDir,
     isCliProvider,
     resolveConfiguredModelRef,
     resolveHooksGmailModel,
     loadModelCatalog,
     getModelRefStatus,
-    resolveEmbeddedAgentRuntime,
-    ensureOpenClawModelsJson,
     clearCurrentProviderAuthState,
     warmCurrentProviderAuthState,
     setAuthProfileFailureHook,
@@ -162,25 +152,6 @@ vi.mock("../infra/update-startup.js", () => ({
   scheduleGatewayUpdateCheck: hoisted.scheduleGatewayUpdateCheck,
 }));
 
-vi.mock("../config/model-input.js", () => ({
-  resolveAgentModelPrimaryValue: hoisted.resolveAgentModelPrimaryValue,
-}));
-
-vi.mock("../agents/provider-id.js", () => ({
-  normalizeProviderId: hoisted.normalizeProviderId,
-}));
-
-vi.mock("../agents/agent-scope.js", () => ({
-  resolveDefaultAgentDir: hoisted.resolveDefaultAgentDir,
-  resolveAgentWorkspaceDir: vi.fn(() => "/tmp/openclaw-workspace"),
-  resolveDefaultAgentId: vi.fn(() => "default"),
-}));
-
-vi.mock("../agents/defaults.js", () => ({
-  DEFAULT_MODEL: "gpt-5.4",
-  DEFAULT_PROVIDER: "openai",
-}));
-
 vi.mock("../agents/model-catalog.js", () => ({
   loadModelCatalog: hoisted.loadModelCatalog,
 }));
@@ -190,14 +161,6 @@ vi.mock("../agents/model-selection.js", () => ({
   isCliProvider: hoisted.isCliProvider,
   resolveConfiguredModelRef: hoisted.resolveConfiguredModelRef,
   resolveHooksGmailModel: hoisted.resolveHooksGmailModel,
-}));
-
-vi.mock("../agents/pi-embedded-runner/runtime.js", () => ({
-  resolveEmbeddedAgentRuntime: hoisted.resolveEmbeddedAgentRuntime,
-}));
-
-vi.mock("../agents/models-config.js", () => ({
-  ensureOpenClawModelsJson: hoisted.ensureOpenClawModelsJson,
 }));
 
 vi.mock("../agents/model-provider-auth.js", () => ({
@@ -236,34 +199,6 @@ function mockCallArg(mock: { mock: { calls: unknown[][] } }, index = 0, argIndex
 
 function firstStartupLog(): { loadedPluginIds?: string[] } {
   return mockCallArg(hoisted.logGatewayStartup) as { loadedPluginIds?: string[] };
-}
-
-function firstEnsureModelsJsonCall(): [
-  unknown,
-  string,
-  {
-    workspaceDir?: string;
-    providerDiscoveryProviderIds?: string[];
-  },
-] {
-  const call = hoisted.ensureOpenClawModelsJson.mock.calls[0];
-  if (!call || call.length < 3) {
-    throw new Error("expected ensureOpenClawModelsJson call");
-  }
-  return call as unknown as [
-    unknown,
-    string,
-    {
-      workspaceDir?: string;
-      providerDiscoveryProviderIds?: string[];
-    },
-  ];
-}
-
-function firstPrewarmCall(
-  prewarmPrimaryModel: ReturnType<typeof vi.fn>,
-): [{ workspaceDir?: string }] {
-  return prewarmPrimaryModel.mock.calls[0] as [{ workspaceDir?: string }];
 }
 
 function createStartupTraceRecorder() {
@@ -324,10 +259,6 @@ describe("startGatewayPostAttachRuntime", () => {
     hoisted.getAcpRuntimeBackend.mockReset();
     hoisted.getAcpRuntimeBackend.mockReturnValue(null);
     hoisted.reconcilePendingSessionIdentities.mockClear();
-    hoisted.resolveAgentModelPrimaryValue.mockReset();
-    hoisted.resolveAgentModelPrimaryValue.mockReturnValue("");
-    hoisted.normalizeProviderId.mockClear();
-    hoisted.resolveDefaultAgentDir.mockClear();
     hoisted.isCliProvider.mockReset();
     hoisted.isCliProvider.mockReturnValue(false);
     hoisted.resolveConfiguredModelRef.mockClear();
@@ -341,10 +272,6 @@ describe("startGatewayPostAttachRuntime", () => {
       allowed: true,
       inCatalog: true,
     });
-    hoisted.resolveEmbeddedAgentRuntime.mockReset();
-    hoisted.resolveEmbeddedAgentRuntime.mockReturnValue("pi");
-    hoisted.ensureOpenClawModelsJson.mockReset();
-    hoisted.ensureOpenClawModelsJson.mockResolvedValue(undefined);
     hoisted.clearCurrentProviderAuthState.mockClear();
     hoisted.warmCurrentProviderAuthState.mockReset();
     hoisted.warmCurrentProviderAuthState.mockResolvedValue(undefined);
@@ -852,35 +779,6 @@ describe("startGatewayPostAttachRuntime", () => {
     expect(returned).toBe(true);
   });
 
-  it("continues channel startup when primary model prewarm hangs", async () => {
-    vi.useFakeTimers();
-    const log = { warn: vi.fn() };
-    const prewarm = vi.fn(async () => {
-      await new Promise(() => undefined);
-    });
-
-    try {
-      const promise = testing.prewarmConfiguredPrimaryModelWithTimeout(
-        {
-          cfg: {} as never,
-          log,
-          timeoutMs: 25,
-        },
-        prewarm as never,
-      );
-
-      await vi.advanceTimersByTimeAsync(25);
-      await promise;
-
-      expect(prewarm).toHaveBeenCalledTimes(1);
-      expect(log.warn).toHaveBeenCalledWith(
-        "startup model warmup timed out after 25ms; continuing without waiting",
-      );
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
   it("delays provider auth prewarm so post-ready gateway work can run first", async () => {
     vi.useFakeTimers();
     const postReadyRequestTurn = vi.fn();
@@ -1063,46 +961,16 @@ describe("startGatewayPostAttachRuntime", () => {
     }
   });
 
-  it("prewarms models.json in the configured default agent dir", async () => {
-    const cfg = {
-      agents: {
-        defaults: { model: "openai/gpt-5.4" },
-        list: [{ id: "main" }, { id: "ops", default: true }],
-      },
-    } as never;
-    hoisted.resolveAgentModelPrimaryValue.mockReturnValue("openai/gpt-5.4");
-    hoisted.resolveDefaultAgentDir.mockReturnValue("/tmp/openclaw-state/agents/ops/agent");
-
-    await testing.prewarmConfiguredPrimaryModel({
-      cfg,
-      workspaceDir: "/tmp/openclaw-workspace",
-      log: { warn: vi.fn() },
-    });
-
-    expect(hoisted.resolveDefaultAgentDir).toHaveBeenCalledWith(cfg);
-    expect(hoisted.ensureOpenClawModelsJson).toHaveBeenCalledTimes(1);
-    const ensureCall = firstEnsureModelsJsonCall();
-    expect(ensureCall[0]).toBe(cfg);
-    expect(ensureCall[1]).toBe("/tmp/openclaw-state/agents/ops/agent");
-    const options = ensureCall[2];
-    expect(options?.workspaceDir).toBe("/tmp/openclaw-workspace");
-    expect(options?.providerDiscoveryProviderIds).toEqual(["openai"]);
-  });
-
-  it("starts channels without waiting for primary model prewarm completion", async () => {
+  it("starts channels when channel startup is enabled", async () => {
     await withEnvAsync(
-      { OPENCLAW_SKIP_CHANNELS: undefined, OPENCLAW_SKIP_PROVIDERS: undefined },
+      {
+        OPENCLAW_SKIP_CHANNELS: undefined,
+        OPENCLAW_SKIP_PROVIDERS: undefined,
+      },
       async () => {
-        let resolvePrewarm: (() => void) | undefined;
-        const prewarmPrimaryModel = vi.fn(
-          async () =>
-            await new Promise<undefined>((resolve) => {
-              resolvePrewarm = () => resolve(undefined);
-            }),
-        );
         const startChannels = vi.fn(async () => {});
 
-        const sidecarsPromise = startGatewaySidecars({
+        await startGatewaySidecars({
           cfg: {
             hooks: { internal: { enabled: false } },
             agents: { defaults: { model: "openai/gpt-5.4" } },
@@ -1111,7 +979,6 @@ describe("startGatewayPostAttachRuntime", () => {
           defaultWorkspaceDir: "/tmp/openclaw-workspace",
           deps: {} as never,
           startChannels,
-          prewarmPrimaryModel: prewarmPrimaryModel as never,
           log: { warn: vi.fn() },
           logHooks: {
             info: vi.fn(),
@@ -1124,23 +991,7 @@ describe("startGatewayPostAttachRuntime", () => {
           },
         });
 
-        await vi.waitFor(
-          () => {
-            expect(prewarmPrimaryModel).toHaveBeenCalledTimes(1);
-            expect(firstPrewarmCall(prewarmPrimaryModel)[0].workspaceDir).toBe(
-              "/tmp/openclaw-workspace",
-            );
-            expect(startChannels).toHaveBeenCalledTimes(1);
-          },
-          { timeout: 2_000 },
-        );
-        await sidecarsPromise;
-
-        if (!resolvePrewarm) {
-          throw new Error("Expected primary model prewarm resolver to be initialized");
-        }
-        resolvePrewarm();
-        await Promise.resolve();
+        expect(startChannels).toHaveBeenCalledTimes(1);
       },
     );
   });

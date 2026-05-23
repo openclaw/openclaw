@@ -206,7 +206,7 @@ export async function warmCurrentProviderAuthState(
   const ownGeneration = currentProviderAuthStateGeneration;
   const isWarmStale = () =>
     options.isCancelled?.() === true || ownGeneration !== currentProviderAuthStateGeneration;
-  const catalog = await loadModelCatalog({ config: cfg });
+  const catalog = await loadModelCatalog({ config: cfg, readOnly: true });
   if (isWarmStale()) {
     return;
   }

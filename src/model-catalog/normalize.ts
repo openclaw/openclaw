@@ -425,11 +425,13 @@ export function normalizeModelCatalog(
   const aliases = normalizeModelCatalogAliases(value.aliases, ownedProviders);
   const suppressions = normalizeModelCatalogSuppressions(value.suppressions);
   const discovery = normalizeModelCatalogDiscovery(value.discovery, ownedProviders);
+  const runtimeAugment = value.runtimeAugment === true;
   const catalog = {
     ...(providers ? { providers } : {}),
     ...(aliases ? { aliases } : {}),
     ...(suppressions ? { suppressions } : {}),
     ...(discovery ? { discovery } : {}),
+    ...(runtimeAugment ? { runtimeAugment } : {}),
   } satisfies ModelCatalog;
   return Object.keys(catalog).length > 0 ? catalog : undefined;
 }
