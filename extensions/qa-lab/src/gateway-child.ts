@@ -789,7 +789,7 @@ export async function startQaGatewayChild(params: {
           for (let rpcAttempt = 1; rpcAttempt <= 4; rpcAttempt += 1) {
             try {
               await attemptRpcClient.request(
-                "config.get",
+                "health",
                 {},
                 {
                   timeoutMs: QA_GATEWAY_CHILD_RPC_STARTUP_TIMEOUT_MS,
@@ -889,7 +889,7 @@ export async function startQaGatewayChild(params: {
           for (let rpcAttempt = 1; rpcAttempt <= 4; rpcAttempt += 1) {
             try {
               await nextRpcClient.request(
-                "config.get",
+                "health",
                 {},
                 {
                   timeoutMs: QA_GATEWAY_CHILD_RPC_STARTUP_TIMEOUT_MS,
