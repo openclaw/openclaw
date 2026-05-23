@@ -266,16 +266,16 @@ describe("setupSkills", () => {
     expect(brewNote?.title).toBe("Homebrew recommended");
   });
 
-  it("displays a clear empty state note when no dependencies are installable", async () => {
+  it("displays a clear empty state note when all skill dependencies are ready", async () => {
     mockMissingBrewStatus([]);
 
     const { prompter, notes } = createPrompter({});
     await setupSkills({} as OpenClawConfig, "/tmp/ws", runtime, prompter);
 
     expect(prompter.multiselect).not.toHaveBeenCalled();
-    const emptyStateNote = notes.find(
-      (n) => n.message && n.message.includes("No missing skill dependencies to install"),
-    );
-    expect(emptyStateNote).toBeDefined();
+    const emptyStateNote = notes.find((n) => n.title === "All skills ready");
+    expect(emptyStateNote?.message).toContain("No missing skill dependencies to install");
+    expect(emptyStateNote?.message).toContain("openclaw skills list --verbose");
+    expect(emptyStateNote?.message).toContain("openclaw skills check");
   });
 });

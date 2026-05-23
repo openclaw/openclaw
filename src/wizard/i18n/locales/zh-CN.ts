@@ -318,7 +318,7 @@ export const zh_CN = {
       setEnv: "为 {name} 设置 {env}？",
       skipDepsHint: "继续，不安装依赖",
       statusTitle: "技能状态",
-      noDepsToInstall: "没有需要安装的缺失技能依赖。\n要检查可用技能，请运行：openclaw skills list --verbose",
+      allReadyTitle: "所有技能已就绪",
     },
     channels: {
       account: "{label} 账号",

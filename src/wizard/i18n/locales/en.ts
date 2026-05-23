@@ -326,7 +326,7 @@ export const en = {
       setEnv: "Set {env} for {name}?",
       skipDepsHint: "Continue without installing dependencies",
       statusTitle: "Skills status",
-      noDepsToInstall: "No missing skill dependencies to install.\nTo inspect available skills, run: openclaw skills list --verbose",
+      allReadyTitle: "All skills ready",
     },
     channels: {
       account: "{label} account",
