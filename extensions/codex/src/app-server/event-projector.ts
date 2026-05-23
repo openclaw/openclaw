@@ -1818,8 +1818,16 @@ function itemToolArgs(item: CodexThreadItem): Record<string, unknown> | undefine
       changes: itemFileChanges(item),
     });
   }
-  if (item.type === "webSearch" && typeof item.query === "string") {
-    return sanitizeCodexAgentEventRecord({ query: item.query });
+  if (item.type === "webSearch") {
+    const query =
+      typeof item.query === "string" && item.query.length > 0
+        ? item.query
+        : "<native web search — query not exposed by provider>";
+    const action = (item as Record<string, unknown>).action;
+    return sanitizeCodexAgentEventRecord({
+      query,
+      ...(action != null ? { action } : {}),
+    });
   }
   if (item.type === "dynamicToolCall" || item.type === "mcpToolCall") {
     return sanitizeCodexToolArguments(item.arguments);
@@ -1856,7 +1864,13 @@ function itemToolResult(item: CodexThreadItem): { result?: Record<string, unknow
     };
   }
   if (item.type === "webSearch") {
-    return { result: sanitizeCodexAgentEventRecord({ status: "completed" }) };
+    const action = (item as Record<string, unknown>).action;
+    return {
+      result: sanitizeCodexAgentEventRecord({
+        status: "completed",
+        ...(action != null ? { action } : {}),
+      }),
+    };
   }
   return {};
 }

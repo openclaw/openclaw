@@ -1950,6 +1950,38 @@ describe("CodexAppServerEventProjector", () => {
     expect(event.result).toEqual({ status: "completed" });
   });
 
+  it("uses sentinel for empty webSearch query and preserves action metadata", async () => {
+    const projector = await createProjector();
+
+    await projector.handleNotification(
+      forCurrentTurn("item/completed", {
+        item: {
+          type: "webSearch",
+          id: "search-empty",
+          query: "",
+          status: "completed",
+          durationMs: 3,
+          action: { type: "search", query: "actual search term" },
+        },
+      }),
+    );
+
+    await vi.waitFor(() => expect(afterToolCall).toHaveBeenCalledTimes(1));
+    const event = requireRecord(
+      mockCallArg(afterToolCall, 0, 0, "after_tool_call event"),
+      "after_tool_call event",
+    );
+    expect(event.toolName).toBe("web_search");
+    expect(event.params).toEqual({
+      query: "<native web search \u2014 query not exposed by provider>",
+      action: { type: "search", query: "actual search term" },
+    });
+    expect(event.result).toEqual({
+      status: "completed",
+      action: { type: "search", query: "actual search term" },
+    });
+  });
+
   it("records dynamic OpenClaw tool calls in mirrored transcript snapshots", async () => {
     const projector = await createProjector();
 
