@@ -1471,7 +1471,7 @@ describe("createFollowupRunner progress forwarding", () => {
       .mockImplementationOnce(
         async (args: { suppressToolErrorWarnings?: boolean | (() => boolean | undefined) }) => {
           const shouldSuppress = args.suppressToolErrorWarnings as () => boolean | undefined;
-          expect(shouldSuppress()).toBeUndefined();
+          expect(shouldSuppress()).toBe(false);
           return { payloads: [], meta: { agentMeta: {} } };
         },
       );

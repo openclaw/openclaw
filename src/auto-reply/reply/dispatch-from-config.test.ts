@@ -2753,7 +2753,7 @@ describe("dispatchReplyFromConfig", () => {
         ...(sessionStoreMocks.currentEntry ?? {}),
         verboseLevel: "off",
       };
-      expect(opts?.shouldSuppressToolErrorWarnings?.()).toBeUndefined();
+      expect(opts?.shouldSuppressToolErrorWarnings?.()).toBe(false);
       return { text: "done" } satisfies ReplyPayload;
     });
 
@@ -2765,7 +2765,7 @@ describe("dispatchReplyFromConfig", () => {
     });
 
     expect(receivedOptions?.suppressToolErrorWarnings).toBeUndefined();
-    expect(receivedOptions?.shouldSuppressToolErrorWarnings?.()).toBeUndefined();
+    expect(receivedOptions?.shouldSuppressToolErrorWarnings?.()).toBe(false);
     expect(dispatcher.sendFinalReply).toHaveBeenCalledWith({ text: "done" });
   });
 
