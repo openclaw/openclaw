@@ -2353,7 +2353,7 @@ describe("runCodexAppServerAttempt", () => {
       signal: new AbortController().signal,
       directToolNames: ["message"],
     });
-    const request = vi.fn(async (method: string) => {
+    const request = vi.fn(async (method: string, _params?: unknown) => {
       if (method === "thread/start") {
         return threadStartResult();
       }
