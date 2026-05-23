@@ -11,6 +11,7 @@ import {
   navigateChromeMcpPage,
   openChromeMcpTab,
   resetChromeMcpSessionsForTest,
+  setChromeMcpProcessCleanupDepsForTest,
   setChromeMcpSessionFactoryForTest,
   takeChromeMcpScreenshot,
   takeChromeMcpSnapshot,
@@ -168,6 +169,7 @@ describe("chrome MCP page parsing", () => {
       "--no-usage-statistics",
       "--experimentalStructuredContent",
       "--experimental-page-id-routing",
+      "--no-usage-statistics",
       "--userDataDir",
       "/tmp/brave-profile",
     ]);
@@ -187,6 +189,7 @@ describe("chrome MCP page parsing", () => {
       "--no-usage-statistics",
       "--experimentalStructuredContent",
       "--experimental-page-id-routing",
+      "--no-usage-statistics",
     ]);
   });
 
@@ -203,6 +206,7 @@ describe("chrome MCP page parsing", () => {
       "--no-usage-statistics",
       "--experimentalStructuredContent",
       "--experimental-page-id-routing",
+      "--no-usage-statistics",
     ]);
   });
 
@@ -265,6 +269,41 @@ describe("chrome MCP page parsing", () => {
       "--no-usage-statistics",
       "--experimentalStructuredContent",
       "--experimental-page-id-routing",
+      "--no-usage-statistics",
+    ]);
+  });
+
+  it("terminates the owned Chrome MCP subprocess tree when closing temporary sessions", async () => {
+    const session = createFakeSession();
+    Object.assign(session, { ownsProcessTree: true });
+    const closeMock = vi.fn().mockResolvedValue(undefined);
+    session.client.close = closeMock as typeof session.client.close;
+    const killCalls: Array<{ pid: number; signal: NodeJS.Signals }> = [];
+    setChromeMcpProcessCleanupDepsForTest({
+      platform: "linux",
+      listProcesses: vi.fn().mockResolvedValue([
+        { pid: 123, ppid: 1 },
+        { pid: 124, ppid: 123 },
+        { pid: 125, ppid: 124 },
+        { pid: 126, ppid: 1 },
+      ]),
+      killProcess: (pid, signal) => {
+        killCalls.push({ pid, signal });
+      },
+      sleep: vi.fn().mockResolvedValue(undefined),
+    });
+    setChromeMcpSessionFactoryForTest(async () => session);
+
+    await ensureChromeMcpAvailable("chrome-live", undefined, { ephemeral: true });
+
+    expect(closeMock).toHaveBeenCalledTimes(1);
+    expect(killCalls).toEqual([
+      { pid: 125, signal: "SIGTERM" },
+      { pid: 124, signal: "SIGTERM" },
+      { pid: 123, signal: "SIGTERM" },
+      { pid: 125, signal: "SIGKILL" },
+      { pid: 124, signal: "SIGKILL" },
+      { pid: 123, signal: "SIGKILL" },
     ]);
   });
 
