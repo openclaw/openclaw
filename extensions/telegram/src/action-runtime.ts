@@ -16,7 +16,6 @@ import {
   renderMessagePresentationFallbackText,
 } from "openclaw/plugin-sdk/interactive-runtime";
 import type { MessagePresentation } from "openclaw/plugin-sdk/interactive-runtime";
-import { sendPayloadMediaSequenceOrFallback } from "openclaw/plugin-sdk/reply-payload";
 import { createTelegramActionGate, resolveTelegramPollActionGateState } from "./accounts.js";
 import { resolveTelegramInlineButtons } from "./button-types.js";
 import { notifyTelegramInboundEventOutboundSuccess } from "./inbound-event-delivery.js";
@@ -458,22 +457,25 @@ export async function handleTelegramAction(
         readBooleanParam(params, "asDocument") ??
         false,
     };
-    const result = await sendPayloadMediaSequenceOrFallback({
-      text: content,
-      mediaUrls,
-      fallbackResult: { messageId: "unknown", chatId: to },
-      sendNoMedia: async () =>
-        await telegramActionRuntime.sendMessageTelegram(to, content, {
-          ...sendOptions,
-          buttons,
-        }),
-      send: async ({ text, mediaUrl, isFirst }) =>
-        await telegramActionRuntime.sendMessageTelegram(to, text, {
+    let result: Awaited<ReturnType<typeof telegramActionRuntime.sendMessageTelegram>>;
+    if (!firstMediaUrl) {
+      result = await telegramActionRuntime.sendMessageTelegram(to, content, {
+        ...sendOptions,
+        buttons,
+      });
+    } else {
+      result = await telegramActionRuntime.sendMessageTelegram(to, content, {
+        ...sendOptions,
+        mediaUrl: firstMediaUrl,
+        buttons,
+      });
+      for (const mediaUrl of mediaUrls.slice(1)) {
+        result = await telegramActionRuntime.sendMessageTelegram(to, "", {
           ...sendOptions,
           mediaUrl,
-          ...(isFirst ? { buttons } : {}),
-        }),
-    });
+        });
+      }
+    }
     notifyVisibleOutboundSuccess(to, messageThreadId);
     await maybePinTelegramActionSend({
       args: params,
