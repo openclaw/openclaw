@@ -1031,6 +1031,75 @@ describe("loadModelCatalog", () => {
     expect(entry.contextWindow).toBe(128_000);
   });
 
+  it("merges manifest model catalog rows on the normal catalog path", async () => {
+    mockSingleOpenAiCatalogModel();
+    currentPluginMetadataSnapshotMock.mockReturnValue({
+      ...emptyPluginMetadataSnapshot(),
+      plugins: [
+        {
+          id: "byteplus",
+          origin: "bundled",
+          providers: ["byteplus"],
+          modelCatalog: {
+            providers: {
+              byteplus: {
+                baseUrl: "https://ark.ap-southeast.bytepluses.com/api/v3",
+                api: "openai-completions",
+                models: [
+                  {
+                    id: "seed-1-8-251228",
+                    name: "Doubao Seed 1.8",
+                    input: ["text", "image"],
+                    contextWindow: 256_000,
+                  },
+                ],
+              },
+            },
+          },
+        },
+      ],
+    });
+
+    const result = await loadModelCatalog({ config: {} as OpenClawConfig });
+
+    const entry = requireCatalogEntry(result, "byteplus", "seed-1-8-251228");
+    expect(entry.name).toBe("Doubao Seed 1.8");
+    expect(entry.input).toEqual(["text", "image"]);
+    expect(entry.contextWindow).toBe(256_000);
+  });
+
+  it("keeps configured LM Studio models visible without runtime catalog augmentation", async () => {
+    mockSingleOpenAiCatalogModel();
+    augmentCatalogMock.mockResolvedValueOnce([]);
+
+    const result = await loadModelCatalog({
+      config: {
+        models: {
+          providers: {
+            lmstudio: {
+              baseUrl: "http://127.0.0.1:1234/v1",
+              models: [
+                {
+                  id: "qwen3.6-27b@iq3_xxs",
+                  name: "Qwen 3.6 27B",
+                  input: ["text"],
+                  reasoning: false,
+                  contextWindow: 128_000,
+                  maxTokens: 8192,
+                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                },
+              ],
+            },
+          },
+        },
+      } as OpenClawConfig,
+    });
+
+    const entry = requireCatalogEntry(result, "lmstudio", "qwen3.6-27b@iq3_xxs");
+    expect(entry.name).toBe("Qwen 3.6 27B");
+    expect(entry.contextWindow).toBe(128_000);
+  });
+
   it("dedupes configured models against discovered provider aliases", async () => {
     mockPiDiscoveryModels([{ id: "glm-5", provider: "z.ai", name: "GLM-5" }]);
 
