@@ -177,7 +177,7 @@ handoff path over manual terminal capture.
 
 ## Approval prompts
 
-WhatsApp can render exec and plugin approval prompts with numeric emoji reactions, but the
+WhatsApp can render exec and plugin approval prompts with `👍` / `👎` reactions, but the
 channel does not have a `channels.whatsapp.execApprovals` config block. Delivery is controlled by
 the top-level approval forwarding config instead:
 
@@ -203,9 +203,10 @@ and routes to WhatsApp. Session mode delivers native emoji approvals only for ap
 originate from WhatsApp. Target mode uses the shared forwarding pipeline for explicit WhatsApp
 targets and does not create separate approver-DM fanout.
 
-WhatsApp approval authorization still comes from WhatsApp access config: direct chats use
-`allowFrom`/pairing, and group-origin emoji approval prompts require explicit WhatsApp approvers
-from `allowFrom` or `defaultTo`.
+WhatsApp approval reactions require explicit WhatsApp approvers from `allowFrom` or `"*"`.
+`defaultTo` controls ordinary default message targets; it is not an approval approver. Manual
+`/approve` commands still pass through the normal WhatsApp sender authorization path before
+approval resolution.
 
 ## Plugin hooks and privacy
 

@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { whatsappApprovalNativeRuntime } from "./approval-handler.runtime.js";
 
 describe("whatsappApprovalNativeRuntime", () => {
-  it("renders allowed numeric reactions in pending exec approvals", async () => {
+  it("renders allowed thumbs-only reactions in pending exec approvals", async () => {
     const payload = await whatsappApprovalNativeRuntime.presentation.buildPendingPayload({
       cfg: {} as never,
       accountId: "default",
@@ -38,13 +38,15 @@ describe("whatsappApprovalNativeRuntime", () => {
       } as never,
     });
 
-    expect(payload.text).toContain("1️⃣ Allow Once");
-    expect(payload.text).toContain("3️⃣ Deny");
+    expect(payload.text).toContain("👍 Allow Once");
+    expect(payload.text).toContain("👎 Deny");
+    expect(payload.text).not.toContain("1️⃣ Allow Once");
     expect(payload.text).not.toContain("2️⃣ Allow Always");
+    expect(payload.text).not.toContain("3️⃣ Deny");
     expect(payload.allowedDecisions).toEqual(["allow-once", "deny"]);
   });
 
-  it("renders allowed numeric reactions in pending plugin approvals", async () => {
+  it("renders allowed thumbs-only reactions in pending plugin approvals", async () => {
     const payload = await whatsappApprovalNativeRuntime.presentation.buildPendingPayload({
       cfg: {} as never,
       accountId: "default",
@@ -93,9 +95,13 @@ describe("whatsappApprovalNativeRuntime", () => {
     });
 
     expect(payload.text).toContain("Plugin approval required");
-    expect(payload.text).toContain("1️⃣ Allow Once");
-    expect(payload.text).toContain("2️⃣ Allow Always");
-    expect(payload.text).toContain("3️⃣ Deny");
+    expect(payload.text).toContain("Reply with: /approve plugin:abc allow-once|allow-always|deny");
+    expect(payload.text).toContain("👍 Allow Once");
+    expect(payload.text).toContain("👎 Deny");
+    expect(payload.text).not.toContain("/approve <id>");
+    expect(payload.text).not.toContain("1️⃣ Allow Once");
+    expect(payload.text).not.toContain("2️⃣ Allow Always");
+    expect(payload.text).not.toContain("3️⃣ Deny");
     expect(payload.allowedDecisions).toEqual(["allow-once", "allow-always", "deny"]);
   });
 

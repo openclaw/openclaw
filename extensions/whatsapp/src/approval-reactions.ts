@@ -6,22 +6,17 @@ import { getOptionalWhatsAppRuntime } from "./runtime.js";
 
 const WHATSAPP_APPROVAL_REACTION_META = {
   "allow-once": {
-    emoji: "1️⃣",
+    emoji: "👍",
     label: "Allow Once",
   },
-  "allow-always": {
-    emoji: "2️⃣",
-    label: "Allow Always",
-  },
   deny: {
-    emoji: "3️⃣",
+    emoji: "👎",
     label: "Deny",
   },
-} satisfies Record<ExecApprovalReplyDecision, { emoji: string; label: string }>;
+} satisfies Partial<Record<ExecApprovalReplyDecision, { emoji: string; label: string }>>;
 
 const WHATSAPP_APPROVAL_REACTION_ORDER = [
   "allow-once",
-  "allow-always",
   "deny",
 ] as const satisfies readonly ExecApprovalReplyDecision[];
 
@@ -205,6 +200,50 @@ export function buildWhatsAppApprovalReactionHint(
   return `React with:\n\n${bindings.map((binding) => `${binding.emoji} ${binding.label}`).join("\n")}`;
 }
 
+function insertWhatsAppApprovalReactionHintNearHeader(params: {
+  text: string;
+  hint: string;
+}): string {
+  const lines = params.text.split(/\r?\n/);
+  const idLineIndex = lines.findIndex((line) => /^ID:\s*\S+/.test(line.trim()));
+  if (idLineIndex >= 0) {
+    const before = lines.slice(0, idLineIndex + 1).join("\n");
+    const after = lines
+      .slice(idLineIndex + 1)
+      .join("\n")
+      .replace(/^\n+/, "");
+    return after ? `${before}\n\n${params.hint}\n\n${after}` : `${before}\n\n${params.hint}`;
+  }
+  return `${params.hint}\n\n${params.text}`;
+}
+
+export function addWhatsAppApprovalReactionHintToText(params: {
+  text: string;
+  allowedDecisions: readonly ExecApprovalReplyDecision[];
+}): string {
+  if (/(^|\n)React with:\s*(\n|$)/i.test(params.text)) {
+    return params.text;
+  }
+  const hint = buildWhatsAppApprovalReactionHint(params.allowedDecisions);
+  return hint
+    ? insertWhatsAppApprovalReactionHintNearHeader({ text: params.text, hint })
+    : params.text;
+}
+
+export function appendWhatsAppApprovalReactionHintForOutboundMessage(text: string): string {
+  if (/(^|\n)React with:\s*(\n|$)/i.test(text)) {
+    return text;
+  }
+  const binding = extractWhatsAppApprovalPromptBinding(text);
+  if (!binding) {
+    return text;
+  }
+  return addWhatsAppApprovalReactionHintToText({
+    text,
+    allowedDecisions: binding.allowedDecisions,
+  });
+}
+
 function resolveWhatsAppApprovalReactionDecision(
   reactionKey: string,
   allowedDecisions: readonly ExecApprovalReplyDecision[],
@@ -272,13 +311,8 @@ export function registerWhatsAppApprovalReactionTarget(params: {
 }): WhatsAppApprovalReactionTarget | null {
   const key = buildReactionTargetKey(params);
   const approvalId = params.approvalId.trim();
-  const allowedDecisions = Array.from(
-    new Set(
-      params.allowedDecisions.filter(
-        (decision): decision is ExecApprovalReplyDecision =>
-          decision === "allow-once" || decision === "allow-always" || decision === "deny",
-      ),
-    ),
+  const allowedDecisions = listWhatsAppApprovalReactionBindings(params.allowedDecisions).map(
+    (binding) => binding.decision,
   );
   if (!key || !approvalId || allowedDecisions.length === 0) {
     return null;
@@ -426,12 +460,10 @@ export async function maybeResolveWhatsAppApprovalReaction(params: {
   }
 
   const approvalKind = target.approvalId.startsWith("plugin:") ? "plugin" : "exec";
-  if (
-    event.remoteJid.endsWith("@g.us") &&
-    getWhatsAppApprovalApprovers({ cfg: params.cfg, accountId: params.accountId }).length === 0
-  ) {
+  const approvers = getWhatsAppApprovalApprovers({ cfg: params.cfg, accountId: params.accountId });
+  if (approvers.length === 0) {
     params.logVerboseMessage?.(
-      `whatsapp: approval reaction denied id=${target.approvalId}; group reactions require explicit approvers`,
+      `whatsapp: approval reaction denied id=${target.approvalId}; reactions require explicit approvers`,
     );
     return true;
   }

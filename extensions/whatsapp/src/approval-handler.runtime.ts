@@ -61,6 +61,10 @@ function appendReactionHint(params: {
   return hint ? `${params.text}\n\n${hint}` : params.text;
 }
 
+function replaceApprovalIdPlaceholder(text: string | undefined, approvalId: string): string {
+  return (text ?? "").replace(/\/approve\s+<id>/g, `/approve ${approvalId}`);
+}
+
 function buildPendingPayload(params: {
   request: ApprovalRequest;
   approvalKind: "exec" | "plugin";
@@ -95,7 +99,7 @@ function buildPendingPayload(params: {
         } satisfies ExecApprovalPendingReplyParams);
   return {
     text: appendReactionHint({
-      text: payload.text ?? "",
+      text: replaceApprovalIdPlaceholder(payload.text, params.request.id),
       allowedDecisions,
     }),
     allowedDecisions,

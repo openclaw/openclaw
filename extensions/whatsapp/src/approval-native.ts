@@ -11,8 +11,15 @@ import {
   doesApprovalRequestMatchChannelAccount,
   resolveApprovalRequestSessionTarget,
 } from "openclaw/plugin-sdk/approval-native-runtime";
+import {
+  buildExecApprovalPendingReplyPayload,
+  buildPluginApprovalPendingReplyPayload,
+  resolveExecApprovalCommandDisplay,
+  resolveExecApprovalRequestAllowedDecisions,
+} from "openclaw/plugin-sdk/approval-runtime";
 import type {
   ExecApprovalRequest,
+  ExecApprovalReplyDecision,
   PluginApprovalRequest,
 } from "openclaw/plugin-sdk/approval-runtime";
 import type { ChannelApprovalCapability } from "openclaw/plugin-sdk/channel-contract";
@@ -29,6 +36,7 @@ import {
   resolveWhatsAppAccount,
 } from "./accounts.js";
 import { getWhatsAppApprovalApprovers, whatsappApprovalAuth } from "./approval-auth.js";
+import { addWhatsAppApprovalReactionHintToText } from "./approval-reactions.js";
 import { isWhatsAppGroupJid, normalizeWhatsAppMessagingTarget } from "./normalize.js";
 
 type ApprovalRequest = ExecApprovalRequest | PluginApprovalRequest;
@@ -47,6 +55,11 @@ type WhatsAppApprovalTarget = {
 };
 
 const DEFAULT_APPROVAL_FORWARDING_MODE: ApprovalForwardingMode = "session";
+const DEFAULT_PLUGIN_APPROVAL_DECISIONS: readonly ExecApprovalReplyDecision[] = [
+  "allow-once",
+  "allow-always",
+  "deny",
+];
 
 function isWhatsAppApprovalTransportEnabled(params: {
   cfg: OpenClawConfig;
@@ -409,6 +422,71 @@ const resolveWhatsAppApproverDmTargets = createChannelApproverDmTargetResolver({
   },
 });
 
+function appendWhatsAppReactionHint(params: {
+  text?: string;
+  allowedDecisions: readonly ExecApprovalReplyDecision[];
+}): string {
+  return addWhatsAppApprovalReactionHintToText({
+    text: params.text ?? "",
+    allowedDecisions: params.allowedDecisions,
+  });
+}
+
+function replaceApprovalIdPlaceholder(text: string | undefined, approvalId: string): string {
+  return (text ?? "").replace(/\/approve\s+<id>/g, `/approve ${approvalId}`);
+}
+
+function buildWhatsAppExecPendingPayload(params: { request: ExecApprovalRequest; nowMs: number }) {
+  const allowedDecisions = resolveExecApprovalRequestAllowedDecisions(params.request.request);
+  const command = resolveExecApprovalCommandDisplay(params.request.request).commandText;
+  const payload = buildExecApprovalPendingReplyPayload({
+    approvalId: params.request.id,
+    approvalSlug: params.request.id.slice(0, 8),
+    approvalCommandId: params.request.id,
+    warningText: params.request.request.warningText ?? undefined,
+    ask: params.request.request.ask ?? null,
+    agentId: params.request.request.agentId ?? null,
+    allowedDecisions,
+    command,
+    cwd: params.request.request.cwd ?? undefined,
+    host: params.request.request.host === "node" ? "node" : "gateway",
+    nodeId: params.request.request.nodeId ?? undefined,
+    sessionKey: params.request.request.sessionKey ?? null,
+    expiresAtMs: params.request.expiresAtMs,
+    nowMs: params.nowMs,
+  });
+  return {
+    ...payload,
+    text: appendWhatsAppReactionHint({
+      text: replaceApprovalIdPlaceholder(payload.text, params.request.id),
+      allowedDecisions,
+    }),
+  };
+}
+
+function buildWhatsAppPluginPendingPayload(params: {
+  request: PluginApprovalRequest;
+  nowMs: number;
+}) {
+  const configuredDecisions = params.request.request.allowedDecisions;
+  const allowedDecisions =
+    configuredDecisions && configuredDecisions.length > 0
+      ? configuredDecisions
+      : DEFAULT_PLUGIN_APPROVAL_DECISIONS;
+  const payload = buildPluginApprovalPendingReplyPayload({
+    request: params.request,
+    nowMs: params.nowMs,
+    allowedDecisions,
+  });
+  return {
+    ...payload,
+    text: appendWhatsAppReactionHint({
+      text: replaceApprovalIdPlaceholder(payload.text, params.request.id),
+      allowedDecisions,
+    }),
+  };
+}
+
 export const whatsappApprovalCapability: ChannelApprovalCapability =
   createChannelApprovalCapability({
     ...whatsappApprovalAuth,
@@ -429,7 +507,7 @@ export const whatsappApprovalCapability: ChannelApprovalCapability =
         accountId && accountId !== "default"
           ? `channels.whatsapp.accounts.${accountId}`
           : "channels.whatsapp";
-      return `WhatsApp supports native exec approvals for this account when \`approvals.exec.enabled\` is true and the route allows WhatsApp. Link WhatsApp and keep the gateway running; configure \`${prefix}.allowFrom\` or \`${prefix}.defaultTo\` to restrict approvers.`;
+      return `WhatsApp supports native exec approvals for this account when \`approvals.exec.enabled\` is true and the route allows WhatsApp. Link WhatsApp and keep the gateway running; configure \`${prefix}.allowFrom\` to restrict approvers.`;
     },
     delivery: {
       hasConfiguredDmRoute: ({ cfg }) =>
@@ -496,6 +574,16 @@ export const whatsappApprovalCapability: ChannelApprovalCapability =
         }).some((approverTarget) =>
           nativeApprovalTargetsMatch({ left: forwardingTargetForMatch, right: approverTarget }),
         );
+      },
+    },
+    render: {
+      exec: {
+        buildPendingPayload: ({ request, nowMs }) =>
+          buildWhatsAppExecPendingPayload({ request, nowMs }),
+      },
+      plugin: {
+        buildPendingPayload: ({ request, nowMs }) =>
+          buildWhatsAppPluginPendingPayload({ request, nowMs }),
       },
     },
     native: {

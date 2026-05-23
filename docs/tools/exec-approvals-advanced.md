@@ -281,8 +281,8 @@ Generic model:
   sessions or targets even when Slack exec approvals are disabled
 - WhatsApp is the exception to the channel-specific native-client field: it has no
   `channels.whatsapp.execApprovals`; WhatsApp emoji approval delivery is gated by
-  `approvals.exec` and `approvals.plugin` plus the normal WhatsApp `allowFrom`/`defaultTo`
-  authorization config
+  `approvals.exec` and `approvals.plugin`, while approval reactions require explicit WhatsApp
+  approvers from `channels.whatsapp.allowFrom` or `"*"`
 
 Native approval clients auto-enable DM-first delivery when all of these are true:
 

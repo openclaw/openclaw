@@ -206,6 +206,75 @@ describe("whatsapp approval capability", () => {
     ).toBe(false);
   });
 
+  it("renders target-mode exec prompts with concrete thumbs-only reaction choices", () => {
+    const cfg = buildConfig({
+      approvals: {
+        exec: {
+          enabled: true,
+          mode: "targets",
+          targets: [{ channel: "whatsapp", to: "+15551230000" }],
+        },
+      },
+    });
+    const request = buildExecRequest("+15551230000", {
+      ask: "always",
+      cwd: "/tmp/work",
+      host: "gateway",
+    });
+
+    const payload = whatsappApprovalCapability.render?.exec?.buildPendingPayload?.({
+      cfg,
+      request,
+      target: { channel: "whatsapp", to: "+15551230000", source: "target" },
+      nowMs: 0,
+    });
+    const text = payload?.text ?? "";
+
+    expect(text).toContain("/approve exec-1 allow-once");
+    expect(text).toContain("React with:");
+    expect(text).toContain("👍 Allow Once");
+    expect(text).toContain("👎 Deny");
+    expect(text).not.toContain("<id>");
+    expect(text).not.toContain("1️⃣ Allow Once");
+    expect(text).not.toContain("2️⃣ Allow Always");
+    expect(text).not.toContain("3️⃣ Deny");
+    expect(text.indexOf("React with:")).toBeLessThan(text.indexOf("/approve exec-1 allow-once"));
+  });
+
+  it("renders target-mode plugin prompts with concrete thumbs-only reaction choices", () => {
+    const cfg = buildConfig({
+      approvals: {
+        plugin: {
+          enabled: true,
+          mode: "targets",
+          targets: [{ channel: "whatsapp", to: "+15551230000" }],
+        },
+      },
+    });
+    const request = buildPluginRequest("+15551230000", {
+      allowedDecisions: ["allow-once", "allow-always", "deny"],
+    });
+
+    const payload = whatsappApprovalCapability.render?.plugin?.buildPendingPayload?.({
+      cfg,
+      request,
+      target: { channel: "whatsapp", to: "+15551230000", source: "target" },
+      nowMs: 0,
+    });
+
+    expect(payload?.text).toContain("/approve plugin:approval-1 allow-once");
+    expect(payload?.text).toContain(
+      "Reply with: /approve plugin:approval-1 allow-once|allow-always|deny",
+    );
+    expect(payload?.text).toContain("React with:");
+    expect(payload?.text).toContain("👍 Allow Once");
+    expect(payload?.text).toContain("👎 Deny");
+    expect(payload?.text).not.toContain("1️⃣ Allow Once");
+    expect(payload?.text).not.toContain("2️⃣ Allow Always");
+    expect(payload?.text).not.toContain("3️⃣ Deny");
+    expect(payload?.text).not.toContain("<id>");
+  });
+
   it("does not report target-mode availability when no WhatsApp target matches", () => {
     const cfg = buildConfig({
       approvals: {
