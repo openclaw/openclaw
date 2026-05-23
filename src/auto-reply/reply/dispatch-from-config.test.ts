@@ -1557,7 +1557,7 @@ describe("dispatchReplyFromConfig", () => {
     expect(dispatcher.sendFinalReply).toHaveBeenCalledTimes(1);
   });
 
-  it("allows group tool summaries when the agent verbose default is enabled", async () => {
+  it("keeps group tool summaries suppressed when only the agent verbose default is enabled", async () => {
     setNoAbort();
     const cfg = {
       ...automaticGroupReplyConfig,
@@ -1593,8 +1593,7 @@ describe("dispatchReplyFromConfig", () => {
       replyOptions: { suppressDefaultToolProgressMessages: true },
     });
 
-    expect(dispatcher.sendToolResult).toHaveBeenCalledTimes(1);
-    expect(firstToolResultPayload(dispatcher)?.text).toBe("🔧 exec: pwd");
+    expect(dispatcher.sendToolResult).not.toHaveBeenCalled();
     expect(dispatcher.sendFinalReply).toHaveBeenCalledTimes(1);
   });
 

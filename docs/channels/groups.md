@@ -60,6 +60,8 @@ Typing indicators are still sent for direct group requests. Ambient always-on ro
 Group sessions suppress verbose tool/progress summaries by default. Use
 `/verbose on` to show those summaries for the current group session while
 debugging, and `/verbose off` to return the group to final-reply-only behavior.
+Inherited agent `verboseDefault` settings do not opt normal groups into these
+summaries; each group session needs its own explicit `/verbose on`.
 
 To submit unmentioned always-on group chatter as quiet room context instead of user requests, use [Ambient room events](/channels/ambient-room-events):
 

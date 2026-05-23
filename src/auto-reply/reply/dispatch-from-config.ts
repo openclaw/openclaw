@@ -356,24 +356,33 @@ const resolveBoundAcpDispatchSessionKey = (params: {
 const createShouldEmitVerboseProgress = (params: {
   sessionKey?: string;
   storePath?: string;
+  initialExplicitLevel?: string;
   fallbackLevel: string;
 }) => {
-  const resolveLevel = () => {
+  const resolveCurrentExplicitLevel = () => {
     if (params.sessionKey && params.storePath) {
       try {
         const entry = readSessionEntry(params.storePath, params.sessionKey);
-        const currentLevel = normalizeVerboseLevel(entry?.verboseLevel ?? "");
-        if (currentLevel) {
-          return currentLevel;
-        }
+        return normalizeVerboseLevel(entry?.verboseLevel ?? "");
       } catch {
         // Ignore transient store read failures and fall back to the current dispatch snapshot.
       }
+    }
+    return normalizeVerboseLevel(params.initialExplicitLevel ?? "");
+  };
+  const resolveLevel = () => {
+    const explicitLevel = resolveCurrentExplicitLevel();
+    if (explicitLevel) {
+      return explicitLevel;
     }
     return normalizeVerboseLevel(params.fallbackLevel) ?? "off";
   };
   return {
     shouldEmit: () => resolveLevel() !== "off",
+    shouldEmitExplicit: () => {
+      const explicitLevel = resolveCurrentExplicitLevel();
+      return explicitLevel != null && explicitLevel !== "off";
+    },
     shouldEmitFull: () => resolveLevel() === "full",
   };
 };
@@ -884,6 +893,7 @@ export async function dispatchReplyFromConfig(
   const verboseProgress = createShouldEmitVerboseProgress({
     sessionKey: acpDispatchSessionKey,
     storePath: sessionStoreEntry.storePath,
+    initialExplicitLevel: sessionStoreEntry.entry?.verboseLevel,
     fallbackLevel:
       normalizeVerboseLevel(
         sessionStoreEntry.entry?.verboseLevel ??
@@ -1493,7 +1503,7 @@ export async function dispatchReplyFromConfig(
     const isGroupChat = chatType === "group";
     const isForumTopic = ctx.IsForum === true;
     const shouldAllowGroupVerboseProgress = () =>
-      isGroupChat && !isForumTopic && shouldEmitVerboseProgress();
+      isGroupChat && !isForumTopic && verboseProgress.shouldEmitExplicit();
     const shouldSendVerboseProgressMessages = () =>
       !isSlackNonDirectSurface &&
       (!isGroupChat || isForumTopic || shouldAllowGroupVerboseProgress());
