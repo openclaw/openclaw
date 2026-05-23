@@ -165,6 +165,93 @@ provider/source posture and SecretRef metadata, never raw secret values. Policy
 does not read or attest per-agent credential stores such as `auth-profiles.json`;
 those stores remain owned by the existing auth and credential flows.
 
+### Policy rule reference
+
+Each policy field below is optional. A check runs only when the matching rule is
+present in `policy.jsonc`. The observed state is existing OpenClaw config or
+workspace metadata; policy reports drift but does not rewrite runtime behavior
+unless a repair path is explicitly available and enabled.
+
+#### Channels
+
+| Policy field                         | Observed state                          | Use when                                                     |
+| ------------------------------------ | --------------------------------------- | ------------------------------------------------------------ |
+| `channels.denyRules[].when.provider` | `channels.*` provider and enabled state | Deny configured channels from a provider such as `telegram`. |
+| `channels.denyRules[].reason`        | Finding message and repair hint context | Explain why the provider is denied.                          |
+
+#### MCP servers
+
+| Policy field        | Observed state      | Use when                                                   |
+| ------------------- | ------------------- | ---------------------------------------------------------- |
+| `mcp.servers.allow` | `mcp.servers.*` ids | Require every configured MCP server to be in an allowlist. |
+| `mcp.servers.deny`  | `mcp.servers.*` ids | Deny specific configured MCP server ids.                   |
+
+#### Model providers
+
+| Policy field             | Observed state                                   | Use when                                                                        |
+| ------------------------ | ------------------------------------------------ | ------------------------------------------------------------------------------- |
+| `models.providers.allow` | `models.providers.*` ids and selected model refs | Require configured providers and selected model refs to use approved providers. |
+| `models.providers.deny`  | `models.providers.*` ids and selected model refs | Deny configured providers and selected model refs by provider id.               |
+
+#### Network
+
+| Policy field                   | Observed state                      | Use when                                                           |
+| ------------------------------ | ----------------------------------- | ------------------------------------------------------------------ |
+| `network.privateNetwork.allow` | Private-network SSRF escape hatches | Set to `false` to require private-network access to stay disabled. |
+
+#### Gateway
+
+| Policy field                            | Observed state                                 | Use when                                                     |
+| --------------------------------------- | ---------------------------------------------- | ------------------------------------------------------------ |
+| `gateway.exposure.allowNonLoopbackBind` | `gateway.bind`                                 | Set to `false` to require loopback Gateway binding.          |
+| `gateway.exposure.allowTailscaleFunnel` | Tailscale serve/funnel Gateway posture         | Set to `false` to deny Tailscale Funnel exposure.            |
+| `gateway.auth.requireAuth`              | `gateway.auth.mode`                            | Set to `true` to reject disabled Gateway auth.               |
+| `gateway.auth.requireExplicitRateLimit` | `gateway.auth.rateLimit`                       | Set to `true` to require explicit auth rate-limit config.    |
+| `gateway.controlUi.allowInsecure`       | Control UI insecure auth/device/origin toggles | Set to `false` to deny insecure Control UI exposure toggles. |
+| `gateway.remote.allow`                  | Remote Gateway mode/config                     | Set to `false` to deny remote Gateway mode.                  |
+| `gateway.http.denyEndpoints`            | Gateway HTTP API endpoints                     | Deny endpoint ids such as `chatCompletions` or `responses`.  |
+| `gateway.http.requireUrlAllowlists`     | Gateway HTTP URL-fetch inputs                  | Set to `true` to require URL allowlists on URL-fetch inputs. |
+
+#### Agent workspace
+
+| Policy field                     | Observed state                                                                        | Use when                                                                                                            |
+| -------------------------------- | ------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------- |
+| `agents.workspace.allowedAccess` | `agents.defaults.sandbox.workspaceAccess` and `agents.list[].sandbox.workspaceAccess` | Allow only sandbox workspace access values such as `none` or `ro`.                                                  |
+| `agents.workspace.denyTools`     | Global and per-agent tool deny config                                                 | Require workspace/runtime mutation tools such as `exec`, `process`, `write`, `edit`, or `apply_patch` to be denied. |
+
+#### Secrets
+
+| Policy field                      | Observed state                                           | Use when                                                                |
+| --------------------------------- | -------------------------------------------------------- | ----------------------------------------------------------------------- |
+| `secrets.requireManagedProviders` | Config SecretRefs and `secrets.providers.*` declarations | Set to `true` to require SecretRefs to point at declared providers.     |
+| `secrets.denySources`             | Secret provider sources and SecretRef sources            | Deny sources such as `exec`, `file`, or another configured source name. |
+| `secrets.allowInsecureProviders`  | Insecure secret-provider posture flags                   | Set to `false` to reject providers that opt into insecure posture.      |
+
+#### Auth profiles
+
+| Policy field                    | Observed state                               | Use when                                                                                   |
+| ------------------------------- | -------------------------------------------- | ------------------------------------------------------------------------------------------ |
+| `auth.profiles.requireMetadata` | `auth.profiles.*` provider and mode metadata | Require metadata keys such as `provider` and `mode` on config auth profiles.               |
+| `auth.profiles.allowModes`      | `auth.profiles.*.mode`                       | Allow only supported auth profile modes such as `api_key`, `aws-sdk`, `oauth`, or `token`. |
+
+#### Tool metadata
+
+| Policy field            | Observed state                   | Use when                                                                                   |
+| ----------------------- | -------------------------------- | ------------------------------------------------------------------------------------------ |
+| `tools.requireMetadata` | Governed `TOOLS.md` declarations | Require governed tools to declare metadata keys such as `risk`, `sensitivity`, or `owner`. |
+
+#### Tool posture
+
+| Policy field                    | Observed state                                              | Use when                                                                                                 |
+| ------------------------------- | ----------------------------------------------------------- | -------------------------------------------------------------------------------------------------------- |
+| `tools.profiles.allow`          | `tools.profile` and `agents.list[].tools.profile`           | Allow only tool profile ids such as `minimal`, `messaging`, or `coding`.                                 |
+| `tools.fs.requireWorkspaceOnly` | `tools.fs.workspaceOnly` and per-agent `tools.fs` overrides | Set to `true` to require workspace-only filesystem tool posture.                                         |
+| `tools.exec.allowSecurity`      | `tools.exec.security` and per-agent exec security           | Allow only exec security modes such as `deny` or `allowlist`.                                            |
+| `tools.exec.requireAsk`         | `tools.exec.ask` and per-agent exec ask mode                | Require approval posture such as `always`.                                                               |
+| `tools.exec.allowHosts`         | `tools.exec.host` and per-agent exec host routing           | Allow only exec host routing modes such as `sandbox`.                                                    |
+| `tools.elevated.allow`          | `tools.elevated.enabled` and per-agent elevated posture     | Set to `false` to require elevated tool mode to stay disabled.                                           |
+| `tools.denyTools`               | `tools.deny` and `agents.list[].tools.deny`                 | Require configured tool deny lists to include tool ids or groups such as `group:runtime` and `group:fs`. |
+
 Run policy-only checks during authoring:
 
 ```bash
