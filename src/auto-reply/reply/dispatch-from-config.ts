@@ -1848,9 +1848,7 @@ export async function dispatchReplyFromConfig(
       shouldSendVerboseProgressMessages() &&
       ctx.InboundEventKind !== "room_event" &&
       !shouldSuppressProgressDelivery();
-    const hasLiveVerboseProgressGate = canTrackSession;
-    let observedVisibleToolErrorProgress =
-      hasVisibleRegularVerboseToolProgress() && !hasLiveVerboseProgressGate;
+    let observedVisibleToolErrorProgress = false;
     const markVisibleToolErrorProgress = () => {
       if (hasVisibleRegularVerboseToolProgress()) {
         observedVisibleToolErrorProgress = true;

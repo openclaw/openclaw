@@ -2731,6 +2731,44 @@ describe("dispatchReplyFromConfig", () => {
     expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
   });
 
+  it("does not pre-latch terminal tool-error suppression when diagnostics are disabled", async () => {
+    setNoAbort();
+    sessionStoreMocks.currentEntry = {
+      sessionId: "s1",
+      updatedAt: 0,
+      sendPolicy: "allow",
+      verboseLevel: "on",
+    };
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "telegram",
+      ChatType: "direct",
+      SessionKey: "agent:main:telegram:direct:U1",
+    });
+    let receivedOptions: GetReplyOptions | undefined;
+    const replyResolver = vi.fn(async (_ctx: MsgContext, opts?: GetReplyOptions) => {
+      receivedOptions = opts;
+      expect(opts?.shouldSuppressToolErrorWarnings?.()).toBeUndefined();
+      sessionStoreMocks.currentEntry = {
+        ...(sessionStoreMocks.currentEntry ?? {}),
+        verboseLevel: "off",
+      };
+      expect(opts?.shouldSuppressToolErrorWarnings?.()).toBeUndefined();
+      return { text: "done" } satisfies ReplyPayload;
+    });
+
+    await dispatchReplyFromConfig({
+      ctx,
+      cfg: { diagnostics: { enabled: false } } as OpenClawConfig,
+      dispatcher,
+      replyResolver,
+    });
+
+    expect(receivedOptions?.suppressToolErrorWarnings).toBeUndefined();
+    expect(receivedOptions?.shouldSuppressToolErrorWarnings?.()).toBeUndefined();
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith({ text: "done" });
+  });
+
   it("keeps terminal tool-error fallbacks available in verbose full mode", async () => {
     setNoAbort();
     sessionStoreMocks.currentEntry = {
