@@ -407,6 +407,12 @@ describe("loadWebMedia", () => {
         quality: "high",
       }).sides[0],
     ).toBe(1568);
+    expect(
+      resolveImageCompressionGrid({
+        models: [{ maxSidePx: 512, preferredSidePx: 512, maxBytes: 64 * 1024 }],
+        quality: "balanced",
+      }).sides,
+    ).toEqual([512, 384, 256, 192, 128]);
   });
 
   it("adapts automatic image compression for many-image turns", () => {

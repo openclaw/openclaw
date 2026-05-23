@@ -354,6 +354,7 @@ type OptimizedImage = {
 const DEFAULT_JPEG_SIDES = [2048, 1536, 1280, 1024, 800] as const;
 const DEFAULT_JPEG_QUALITIES = [80, 70, 60, 50, 40] as const;
 const DEFAULT_VISION_MAX_SIDE = 2048;
+const LOW_IMAGE_SIDE_FALLBACKS = [640, 512, 384, 256, 192, 128] as const;
 
 function normalizeImageQualityPreference(value?: string): ImageQualityPreference {
   switch (value) {
@@ -459,8 +460,19 @@ export function effectiveImageBytesCap(
 
 function buildDescendingLadder(maxSide: number, values: readonly number[]): number[] {
   const normalizedMax = Math.max(1, Math.floor(maxSide));
-  return [normalizedMax, ...values]
+  const ladder = [normalizedMax, ...values, ...LOW_IMAGE_SIDE_FALLBACKS]
     .map((value) => Math.min(normalizedMax, value))
+    .filter((value, idx, arr) => value > 0 && arr.indexOf(value) === idx)
+    .toSorted((a, b) => b - a);
+  if (ladder.length > 1 || normalizedMax <= 1) {
+    return ladder;
+  }
+  return [
+    normalizedMax,
+    Math.floor(normalizedMax * 0.75),
+    Math.floor(normalizedMax * 0.5),
+    Math.floor(normalizedMax * 0.25),
+  ]
     .filter((value, idx, arr) => value > 0 && arr.indexOf(value) === idx)
     .toSorted((a, b) => b - a);
 }
