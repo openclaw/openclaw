@@ -1,5 +1,7 @@
 import { createHash } from "node:crypto";
 import path from "node:path";
+import type { FileLockOptions } from "openclaw/plugin-sdk/file-lock";
+import { withFileLock } from "openclaw/plugin-sdk/file-lock";
 import { readJsonFileWithFallback, writeJsonFileAtomically } from "openclaw/plugin-sdk/json-store";
 import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
@@ -27,6 +29,17 @@ const MAX_MAX_FAILURE_RETRIES = 1_000;
 // should not balloon the cursor file. When over the bound, keep only the
 // highest-count entries (closest to give-up) and drop the rest.
 const MAX_FAILURE_RETRY_MAP_SIZE = 5_000;
+const CATCHUP_CURSOR_LOCK_OPTIONS: FileLockOptions = {
+  retries: {
+    retries: 6,
+    factor: 1.35,
+    minTimeout: 8,
+    maxTimeout: 180,
+    randomize: true,
+  },
+  stale: 60_000,
+};
+const cursorWriteQueues = new Map<string, Promise<unknown>>();
 
 export type IMessageCatchupConfig = {
   enabled?: boolean;
@@ -115,6 +128,20 @@ function resolveCursorFilePath(accountId: string): string {
   return path.join(resolveStateDirFromEnv(), "imessage", "catchup", `${safePrefix}__${hash}.json`);
 }
 
+function enqueueCursorWrite<T>(filePath: string, fn: () => Promise<T>): Promise<T> {
+  const prev = cursorWriteQueues.get(filePath) ?? Promise.resolve();
+  const next = prev.then(fn, fn);
+  cursorWriteQueues.set(filePath, next);
+  next
+    .finally(() => {
+      if (cursorWriteQueues.get(filePath) === next) {
+        cursorWriteQueues.delete(filePath);
+      }
+    })
+    .catch(() => {});
+  return next;
+}
+
 function sanitizeFailureRetriesInput(raw: unknown): Record<string, number> {
   if (!raw || typeof raw !== "object") {
     return {};
@@ -142,6 +169,12 @@ export async function loadIMessageCatchupCursor(
   accountId: string,
 ): Promise<IMessageCatchupCursor | null> {
   const filePath = resolveCursorFilePath(accountId);
+  return await loadIMessageCatchupCursorFromPath(filePath);
+}
+
+async function loadIMessageCatchupCursorFromPath(
+  filePath: string,
+): Promise<IMessageCatchupCursor | null> {
   const { value } = await readJsonFileWithFallback<IMessageCatchupCursor | null>(filePath, null);
   if (!value || typeof value !== "object") {
     return null;
@@ -167,6 +200,13 @@ export async function saveIMessageCatchupCursor(
   next: { lastSeenMs: number; lastSeenRowid: number; failureRetries?: Record<string, number> },
 ): Promise<void> {
   const filePath = resolveCursorFilePath(accountId);
+  await saveIMessageCatchupCursorToPath(filePath, next);
+}
+
+async function saveIMessageCatchupCursorToPath(
+  filePath: string,
+  next: { lastSeenMs: number; lastSeenRowid: number; failureRetries?: Record<string, number> },
+): Promise<void> {
   const sanitized = sanitizeFailureRetriesInput(next.failureRetries);
   const hasRetries = Object.keys(sanitized).length > 0;
   const cursor: IMessageCatchupCursor = {
@@ -289,24 +329,29 @@ export async function advanceIMessageCatchupCursor(
     return false;
   }
 
-  const cursor = await loadIMessageCatchupCursor(accountId);
-  if (cursor && next.lastSeenRowid <= cursor.lastSeenRowid) {
-    return false;
-  }
+  const filePath = resolveCursorFilePath(accountId);
+  return await enqueueCursorWrite(filePath, () =>
+    withFileLock(filePath, CATCHUP_CURSOR_LOCK_OPTIONS, async () => {
+      const cursor = await loadIMessageCatchupCursorFromPath(filePath);
+      if (cursor && next.lastSeenRowid <= cursor.lastSeenRowid) {
+        return false;
+      }
 
-  const blockingFailure = Object.values(cursor?.failureRetries ?? {}).some(
-    (count) => count < config.maxFailureRetries,
+      const blockingFailure = Object.values(cursor?.failureRetries ?? {}).some(
+        (count) => count < config.maxFailureRetries,
+      );
+      if (blockingFailure) {
+        return false;
+      }
+
+      await saveIMessageCatchupCursorToPath(filePath, {
+        lastSeenMs: Math.max(cursor?.lastSeenMs ?? next.lastSeenMs, next.lastSeenMs),
+        lastSeenRowid: next.lastSeenRowid,
+        failureRetries: cursor?.failureRetries,
+      });
+      return true;
+    }),
   );
-  if (blockingFailure) {
-    return false;
-  }
-
-  await saveIMessageCatchupCursor(accountId, {
-    lastSeenMs: Math.max(cursor?.lastSeenMs ?? next.lastSeenMs, next.lastSeenMs),
-    lastSeenRowid: next.lastSeenRowid,
-    failureRetries: cursor?.failureRetries,
-  });
-  return true;
 }
 
 /**

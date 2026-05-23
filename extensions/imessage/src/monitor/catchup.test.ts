@@ -154,6 +154,35 @@ describe("loadIMessageCatchupCursor / saveIMessageCatchupCursor", () => {
     expect(cursor?.failureRetries).toEqual({ "GIVEN-UP": 3 });
   });
 
+  it("serializes concurrent live cursor advances so a lower row cannot overwrite a higher row", async () => {
+    const config = resolveCatchupConfig({ enabled: true, maxFailureRetries: 3 });
+    await saveIMessageCatchupCursor("primary", {
+      lastSeenMs: 1_700_000_000_000,
+      lastSeenRowid: 10,
+    });
+
+    const results = await Promise.all([
+      advanceIMessageCatchupCursor(
+        "primary",
+        { lastSeenMs: 1_700_000_050_000, lastSeenRowid: 50 },
+        config,
+      ),
+      ...Array.from({ length: 24 }, (_, index) =>
+        advanceIMessageCatchupCursor(
+          "primary",
+          { lastSeenMs: 1_700_000_011_000 + index, lastSeenRowid: 11 + index },
+          config,
+        ),
+      ),
+    ]);
+
+    expect(results[0]).toBe(true);
+    expect(results.slice(1).every((advanced) => !advanced)).toBe(true);
+    const cursor = await loadIMessageCatchupCursor("primary");
+    expect(cursor?.lastSeenRowid).toBe(50);
+    expect(cursor?.lastSeenMs).toBe(1_700_000_050_000);
+  });
+
   it("does not advance from live rows while a catchup failure is still retrying", async () => {
     const config = resolveCatchupConfig({ enabled: true, maxFailureRetries: 3 });
     await saveIMessageCatchupCursor("primary", {
