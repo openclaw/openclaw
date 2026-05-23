@@ -35,8 +35,6 @@ const CODEX_API_KEY_ENV_VAR = "CODEX_API_KEY";
 const OPENAI_API_KEY_ENV_VAR = "OPENAI_API_KEY";
 const CODEX_APP_SERVER_API_KEY_ENV_VARS = [CODEX_API_KEY_ENV_VAR, OPENAI_API_KEY_ENV_VAR];
 const CODEX_APP_SERVER_HOME_ENV_VARS = [CODEX_HOME_ENV_VAR, HOME_ENV_VAR];
-const OPENAI_API_KEY_RE = /^sk-[A-Za-z0-9_-]{8,}$/;
-const JWT_TOKEN_RE = /^[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}$/;
 
 type AuthProfileOrderConfig = Parameters<typeof resolveAuthProfileOrder>[0]["cfg"];
 
@@ -416,6 +414,9 @@ async function resolveLoginParamsForCredential(
   credential: AuthProfileCredential,
   params: { agentDir: string; forceOAuthRefresh: boolean; config?: AuthProfileOrderConfig },
 ): Promise<CodexLoginAccountParams | undefined> {
+  // Runtime honors the persisted auth profile type. Shape-based remediation
+  // belongs at credential entry time so request handling does not preemptively
+  // reject opaque provider credentials.
   if (credential.type === "api_key") {
     const resolved = await resolveApiKeyForProfile({
       store: ensureAuthProfileStore(params.agentDir, { allowKeychainPrompt: false }),
@@ -423,15 +424,6 @@ async function resolveLoginParamsForCredential(
       agentDir: params.agentDir,
     });
     const apiKey = resolved?.apiKey?.trim();
-    if (
-      apiKey &&
-      isCodexAppServerAuthProfileCredential(credential, params.config) &&
-      looksLikeChatgptTokenMaterial(apiKey)
-    ) {
-      throw new Error(
-        `Codex app-server auth profile "${profileId}" is api_key-mode but contains ChatGPT/OAuth token material. Store token auth material with ${formatAuthCommand("paste-token")}.`,
-      );
-    }
     return apiKey ? { type: "apiKey", apiKey } : undefined;
   }
   if (credential.type === "token") {
@@ -441,15 +433,6 @@ async function resolveLoginParamsForCredential(
       agentDir: params.agentDir,
     });
     const accessToken = resolved?.apiKey?.trim();
-    if (
-      accessToken &&
-      isCodexAppServerAuthProvider(credential.provider, params.config) &&
-      looksLikeOpenAIApiKey(accessToken)
-    ) {
-      throw new Error(
-        `Codex app-server auth profile "${profileId}" is token-mode but contains an OpenAI API key. Store OpenAI API keys with ${formatAuthCommand("paste-api-key")}.`,
-      );
-    }
     return accessToken
       ? buildChatgptAuthTokensParams(profileId, credential, accessToken)
       : undefined;
@@ -527,25 +510,6 @@ async function resolveOAuthCredentialForCodexAppServer(
 
 function isCodexAppServerAuthProvider(provider: string, config?: AuthProfileOrderConfig): boolean {
   return resolveProviderIdForAuth(provider, { config }) === CODEX_APP_SERVER_AUTH_PROVIDER;
-}
-
-function formatAuthCommand(command: "paste-api-key" | "paste-token"): string {
-  return `\`openclaw models auth ${command} --provider openai-codex\``;
-}
-
-function looksLikeOpenAIApiKey(value: string): boolean {
-  return OPENAI_API_KEY_RE.test(value.trim());
-}
-
-function stripBearerPrefix(value: string): string {
-  return value
-    .trim()
-    .replace(/^Bearer\s+/i, "")
-    .trim();
-}
-
-function looksLikeChatgptTokenMaterial(value: string): boolean {
-  return JWT_TOKEN_RE.test(stripBearerPrefix(value));
 }
 
 function isOpenAIApiKeyBackupCredential(

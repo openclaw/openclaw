@@ -1123,7 +1123,7 @@ describe("bridgeCodexAppServerStartOptions", () => {
     }
   });
 
-  it("rejects OpenAI API keys stored as OpenAI Codex token profiles before app-server login", async () => {
+  it("passes OpenAI Codex token profiles through to app-server token login", async () => {
     const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-app-server-"));
     const request = vi.fn(async () => ({ type: "chatgptAuthTokens" }));
     try {
@@ -1143,17 +1143,23 @@ describe("bridgeCodexAppServerStartOptions", () => {
           agentDir,
           authProfileId: "openai-codex:work",
         }),
-      ).rejects.toThrow("token-mode but contains an OpenAI API key");
+      ).resolves.toBeUndefined();
 
-      expect(request).not.toHaveBeenCalled();
+      expect(request).toHaveBeenCalledWith("account/login/start", {
+        type: "chatgptAuthTokens",
+        accessToken: "sk-openai-codex-api-key-value",
+        chatgptAccountId: "openai-codex:work",
+        chatgptPlanType: null,
+      });
     } finally {
       await fs.rm(agentDir, { recursive: true, force: true });
     }
   });
 
-  it("rejects token material stored as OpenAI Codex API-key profiles before app-server login", async () => {
+  it("passes OpenAI Codex API-key profiles through to app-server API-key login", async () => {
     const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-app-server-"));
     const request = vi.fn(async () => ({ type: "apiKey" }));
+    const tokenLikeKey = "eyJhbGciOiJub25l.eyJzdWIiOiJjb2RleCJ9.signature123456";
     try {
       upsertAuthProfile({
         agentDir,
@@ -1161,7 +1167,7 @@ describe("bridgeCodexAppServerStartOptions", () => {
         credential: {
           type: "api_key",
           provider: "openai-codex",
-          key: "eyJhbGciOiJub25l.eyJzdWIiOiJjb2RleCJ9.signature123456",
+          key: tokenLikeKey,
         },
       });
 
@@ -1171,9 +1177,12 @@ describe("bridgeCodexAppServerStartOptions", () => {
           agentDir,
           authProfileId: "openai-codex:work",
         }),
-      ).rejects.toThrow("api_key-mode but contains ChatGPT/OAuth token material");
+      ).resolves.toBeUndefined();
 
-      expect(request).not.toHaveBeenCalled();
+      expect(request).toHaveBeenCalledWith("account/login/start", {
+        type: "apiKey",
+        apiKey: tokenLikeKey,
+      });
     } finally {
       await fs.rm(agentDir, { recursive: true, force: true });
     }
