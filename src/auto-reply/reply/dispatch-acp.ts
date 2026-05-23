@@ -471,6 +471,7 @@ export async function tryDispatchAcpReply(params: {
         await applyMediaUnderstanding({
           ctx: params.ctx,
           cfg: params.cfg,
+          agentId: acpAgentId,
           agentDir: resolveAgentDir(params.cfg, acpAgentId),
           workspaceDir: resolveAgentWorkspaceDir(params.cfg, acpAgentId),
         });
