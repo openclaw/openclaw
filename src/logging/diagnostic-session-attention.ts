@@ -46,6 +46,7 @@ export function classifySessionAttention(params: {
     if (
       params.queueDepth > 0 &&
       params.activity.activeWorkKind === "embedded_run" &&
+      (params.activity.lastProgressAgeMs ?? 0) > params.staleMs &&
       isTerminalDiagnosticProgressReason(params.activity.lastProgressReason)
     ) {
       return {
