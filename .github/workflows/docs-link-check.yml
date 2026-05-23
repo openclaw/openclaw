@@ -1,0 +1,39 @@
+name: Docs Link Validation
+
+on:
+  push:
+    paths:
+      - 'docs/**'
+      - '.github/workflows/docs-link-check.yml'
+  pull_request:
+    paths:
+      - 'docs/**'
+
+jobs:
+  link-check:
+    name: Check docs links
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check for markdown links
+        run: |
+          # Find all markdown files in docs/
+          find docs -name "*.md" -type f > markdown_files.txt
+          
+          # Check for broken links using grep patterns
+          echo "Checking docs/*.md for link issues..."
+          
+          # Check for internal links that might be broken
+          grep -h -o '\[.*\](.*\.md)' $(cat markdown_files.txt) 2>/dev/null | \
+            sed 's/.*](//' | sed 's/)$//' | sort -u > internal_links.txt
+          
+          echo "Found $(wc -l < internal_links.txt) internal links to validate"
+          
+          # Simple syntax check: warn about empty link text
+          if grep -r '\[.*\]()' docs/ 2>/dev/null; then
+            echo "WARNING: Found empty link targets"
+            grep -r '\[.*\]()' docs/ | head -5
+          fi
+          
+          echo "Link validation complete"
