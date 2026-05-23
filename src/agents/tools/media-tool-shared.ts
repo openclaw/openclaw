@@ -214,14 +214,10 @@ export function isCapabilityProviderConfigured<T extends CapabilityProvider>(par
       : false;
   }
   if (provider.isConfigured) {
-    if (
-      provider.isConfigured({
-        cfg: params.cfg,
-        agentDir: params.agentDir,
-      })
-    ) {
-      return true;
-    }
+    return provider.isConfigured({
+      cfg: params.cfg,
+      agentDir: params.agentDir,
+    });
   }
   return hasProviderAuthForTool({
     provider: provider.id,

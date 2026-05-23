@@ -128,11 +128,11 @@ describe("hasGenerationToolAvailability", () => {
     ).toBe(true);
   });
 
-  it("keeps config-backed auth when provider isConfigured only checks env/profile", () => {
+  it("preserves a provider-specific not-configured result over generic config auth", () => {
     const cfg = {
       models: {
         providers: {
-          "custom-image": {
+          "workflow-image": {
             baseUrl: "https://example.com/v1",
             apiKey: "sk-configured", // pragma: allowlist secret
             models: [],
@@ -141,7 +141,7 @@ describe("hasGenerationToolAvailability", () => {
       },
     };
     const provider = {
-      id: "custom-image",
+      id: "workflow-image",
       defaultModel: "workflow",
       isConfigured: () => false,
     };
@@ -152,13 +152,13 @@ describe("hasGenerationToolAvailability", () => {
         provider,
         cfg,
       }),
-    ).toBe(true);
+    ).toBe(false);
     expect(
       resolveCapabilityModelConfigForTool({
         cfg,
         providers: [provider],
       }),
-    ).toEqual({ primary: "custom-image/workflow" });
+    ).toBeNull();
   });
 
   it("allows generation tools for runtime providers configured without auth", () => {
