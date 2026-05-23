@@ -1071,7 +1071,7 @@ describe("plugin sdk alias helpers", () => {
     expect(shadowCodexAliases["openclaw/plugin-sdk/codex-native-task-runtime"]).toBeUndefined();
   });
 
-  it("aliases the Ollama SSRF internal helper only for the bundled Ollama plugin", async () => {
+  it("aliases the SSRF internal helper only for bundled local IPC owner plugins", async () => {
     const fixture = createPluginSdkAliasFixture({
       packageExports: {
         "./plugin-sdk/core": { default: "./dist/plugin-sdk/core.js" },
@@ -1100,6 +1100,10 @@ describe("plugin sdk alias helpers", () => {
       fixture.root,
       bundledPluginFile("ollama", "index.ts"),
     );
+    const sourceBrowserEntry = writePluginEntry(
+      fixture.root,
+      bundledPluginFile("browser", "index.ts"),
+    );
     const sourceOtherPluginEntry = writePluginEntry(
       fixture.root,
       bundledPluginFile("demo", "index.ts"),
@@ -1110,17 +1114,28 @@ describe("plugin sdk alias helpers", () => {
       "",
     ].join("\n");
     fs.writeFileSync(sourceOllamaEntry, entryBody, "utf-8");
+    fs.writeFileSync(sourceBrowserEntry, entryBody, "utf-8");
     fs.writeFileSync(sourceOtherPluginEntry, entryBody, "utf-8");
     const distOllamaEntry = writePluginEntry(
       fixture.root,
       bundledDistPluginFile("ollama", "index.js"),
     );
+    const distBrowserEntry = writePluginEntry(
+      fixture.root,
+      bundledDistPluginFile("browser", "index.js"),
+    );
     const distRuntimeOllamaEntry = writePluginEntry(
       fixture.root,
       path.join("dist-runtime", "extensions", "ollama", "index.js"),
     );
+    const distRuntimeBrowserEntry = writePluginEntry(
+      fixture.root,
+      path.join("dist-runtime", "extensions", "browser", "index.js"),
+    );
     fs.writeFileSync(distOllamaEntry, entryBody, "utf-8");
+    fs.writeFileSync(distBrowserEntry, entryBody, "utf-8");
     fs.writeFileSync(distRuntimeOllamaEntry, entryBody, "utf-8");
+    fs.writeFileSync(distRuntimeBrowserEntry, entryBody, "utf-8");
     const { packageRoot: installedOllamaRoot, pluginEntry: installedOllamaEntry } =
       writeInstalledPluginEntry({
         installRoot: path.join(makeTempDir(), ".openclaw", "npm"),
@@ -1132,6 +1147,11 @@ describe("plugin sdk alias helpers", () => {
         modulePath: sourceOllamaEntry,
       }),
     );
+    const sourceBrowserSubpaths = withEnv({ OPENCLAW_ENABLE_PRIVATE_QA_CLI: undefined }, () =>
+      listPluginSdkExportedSubpaths({
+        modulePath: sourceBrowserEntry,
+      }),
+    );
     const privateQaOtherSubpaths = withEnv({ OPENCLAW_ENABLE_PRIVATE_QA_CLI: "1" }, () =>
       listPluginSdkExportedSubpaths({
         modulePath: sourceOtherPluginEntry,
@@ -1141,13 +1161,25 @@ describe("plugin sdk alias helpers", () => {
       { OPENCLAW_ENABLE_PRIVATE_QA_CLI: undefined, NODE_ENV: undefined },
       () => buildPluginLoaderAliasMap(sourceOllamaEntry),
     );
+    const sourceBrowserAliases = withEnv(
+      { OPENCLAW_ENABLE_PRIVATE_QA_CLI: undefined, NODE_ENV: undefined },
+      () => buildPluginLoaderAliasMap(sourceBrowserEntry),
+    );
     const distAliases = withEnv(
       { OPENCLAW_ENABLE_PRIVATE_QA_CLI: undefined, NODE_ENV: undefined },
       () => buildPluginLoaderAliasMap(distOllamaEntry, undefined, undefined, "dist"),
     );
+    const distBrowserAliases = withEnv(
+      { OPENCLAW_ENABLE_PRIVATE_QA_CLI: undefined, NODE_ENV: undefined },
+      () => buildPluginLoaderAliasMap(distBrowserEntry, undefined, undefined, "dist"),
+    );
     const distRuntimeAliases = withEnv(
       { OPENCLAW_ENABLE_PRIVATE_QA_CLI: undefined, NODE_ENV: undefined },
       () => buildPluginLoaderAliasMap(distRuntimeOllamaEntry, undefined, undefined, "dist"),
+    );
+    const distRuntimeBrowserAliases = withEnv(
+      { OPENCLAW_ENABLE_PRIVATE_QA_CLI: undefined, NODE_ENV: undefined },
+      () => buildPluginLoaderAliasMap(distRuntimeBrowserEntry, undefined, undefined, "dist"),
     );
     const otherAliases = withEnv(
       { OPENCLAW_ENABLE_PRIVATE_QA_CLI: undefined, NODE_ENV: undefined },
@@ -1169,15 +1201,25 @@ describe("plugin sdk alias helpers", () => {
     );
 
     expect(sourceSubpaths).toEqual(["core", "ssrf-runtime-internal"]);
+    expect(sourceBrowserSubpaths).toEqual(["core", "ssrf-runtime-internal"]);
     expect(privateQaOtherSubpaths).toEqual(["core"]);
     expect(fs.realpathSync(sourceAliases["openclaw/plugin-sdk/ssrf-runtime-internal"] ?? "")).toBe(
       fs.realpathSync(sourceSsrFInternalPath),
     );
+    expect(
+      fs.realpathSync(sourceBrowserAliases["openclaw/plugin-sdk/ssrf-runtime-internal"] ?? ""),
+    ).toBe(fs.realpathSync(sourceSsrFInternalPath));
     expect(fs.realpathSync(distAliases["openclaw/plugin-sdk/ssrf-runtime-internal"] ?? "")).toBe(
       fs.realpathSync(distSsrFInternalPath),
     );
     expect(
+      fs.realpathSync(distBrowserAliases["openclaw/plugin-sdk/ssrf-runtime-internal"] ?? ""),
+    ).toBe(fs.realpathSync(distSsrFInternalPath));
+    expect(
       fs.realpathSync(distRuntimeAliases["openclaw/plugin-sdk/ssrf-runtime-internal"] ?? ""),
+    ).toBe(fs.realpathSync(distSsrFInternalPath));
+    expect(
+      fs.realpathSync(distRuntimeBrowserAliases["openclaw/plugin-sdk/ssrf-runtime-internal"] ?? ""),
     ).toBe(fs.realpathSync(distSsrFInternalPath));
     expect(otherAliases["openclaw/plugin-sdk/ssrf-runtime-internal"]).toBeUndefined();
     expect(privateQaOtherAliases["openclaw/plugin-sdk/ssrf-runtime-internal"]).toBeUndefined();
@@ -1193,6 +1235,12 @@ describe("plugin sdk alias helpers", () => {
     });
     const loadedOllama = ollamaLoader(sourceOllamaEntry) as { loadedSsrFInternal?: unknown };
     expect(loadedOllama.loadedSsrFInternal).toBe(true);
+    const browserLoader = createJiti(sourceLoaderBaseUrl, {
+      ...buildPluginLoaderJitiOptions(sourceBrowserAliases),
+      tryNative: false,
+    });
+    const loadedBrowser = browserLoader(sourceBrowserEntry) as { loadedSsrFInternal?: unknown };
+    expect(loadedBrowser.loadedSsrFInternal).toBe(true);
 
     const distLoader = createJiti(sourceLoaderBaseUrl, {
       ...buildPluginLoaderJitiOptions(distAliases),
@@ -1202,6 +1250,14 @@ describe("plugin sdk alias helpers", () => {
       loadedSsrFInternal?: unknown;
     };
     expect(loadedDistOllama.loadedSsrFInternal).toBe(true);
+    const distBrowserLoader = createJiti(sourceLoaderBaseUrl, {
+      ...buildPluginLoaderJitiOptions(distBrowserAliases),
+      tryNative: true,
+    });
+    const loadedDistBrowser = distBrowserLoader(distBrowserEntry) as {
+      loadedSsrFInternal?: unknown;
+    };
+    expect(loadedDistBrowser.loadedSsrFInternal).toBe(true);
 
     const distRuntimeLoader = createJiti(sourceLoaderBaseUrl, {
       ...buildPluginLoaderJitiOptions(distRuntimeAliases),
@@ -1211,6 +1267,14 @@ describe("plugin sdk alias helpers", () => {
       loadedSsrFInternal?: unknown;
     };
     expect(loadedDistRuntimeOllama.loadedSsrFInternal).toBe(true);
+    const distRuntimeBrowserLoader = createJiti(sourceLoaderBaseUrl, {
+      ...buildPluginLoaderJitiOptions(distRuntimeBrowserAliases),
+      tryNative: true,
+    });
+    const loadedDistRuntimeBrowser = distRuntimeBrowserLoader(distRuntimeBrowserEntry) as {
+      loadedSsrFInternal?: unknown;
+    };
+    expect(loadedDistRuntimeBrowser.loadedSsrFInternal).toBe(true);
 
     const otherLoader = createJiti(sourceLoaderBaseUrl, {
       ...buildPluginLoaderJitiOptions(privateQaOtherAliases),

@@ -483,8 +483,9 @@ export function openCdpWebSocket(
       ? Math.max(1, Math.floor(opts.handshakeTimeoutMs))
       : CDP_WS_HANDSHAKE_TIMEOUT_MS;
   const agent = getDirectAgentForCdp(wsUrl);
+  const bypassUrl = stripUrlCredentials(wsUrl);
   return withManagedProxyForCdpUrl(
-    wsUrl,
+    bypassUrl,
     () =>
       new WebSocket(wsUrl, {
         handshakeTimeout: handshakeTimeoutMs,

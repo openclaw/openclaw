@@ -17,7 +17,7 @@ vi.mock("openclaw/plugin-sdk/ssrf-runtime", async (importOriginal) => {
   };
 });
 
-vi.mock("openclaw/plugin-sdk/proxy-runtime", () => ({
+vi.mock("openclaw/plugin-sdk/ssrf-runtime-internal", () => ({
   registerManagedProxyBrowserCdpBypass: registerManagedProxyBrowserCdpBypassMock,
 }));
 
@@ -523,6 +523,21 @@ describe("openCdpWebSocket option handling", () => {
 
     expect(ws.url).toBe(url);
     expect(registerManagedProxyBrowserCdpBypassMock).toHaveBeenCalledWith(url);
+    expect(release).toHaveBeenCalledOnce();
+    ws.once("error", () => {});
+    ws.close();
+  });
+
+  it("registers websocket managed-proxy bypass without URL credentials", () => {
+    const release = vi.fn();
+    registerManagedProxyBrowserCdpBypassMock.mockReturnValueOnce(release);
+    const ws = openCdpWebSocket("ws://user:secret@127.0.0.1:1/devtools/browser/X", {
+      handshakeTimeoutMs: 500,
+    });
+
+    expect(registerManagedProxyBrowserCdpBypassMock).toHaveBeenCalledWith(
+      "ws://127.0.0.1:1/devtools/browser/X",
+    );
     expect(release).toHaveBeenCalledOnce();
     ws.once("error", () => {});
     ws.close();

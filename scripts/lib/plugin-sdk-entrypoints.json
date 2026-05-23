@@ -13,7 +13,6 @@
   "runtime-env",
   "runtime-logger",
   "proxy-capture",
-  "proxy-runtime",
   "runtime-secret-resolution",
   "setup",
   "setup-adapter-runtime",
