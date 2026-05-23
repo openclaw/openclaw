@@ -72,8 +72,9 @@ export function createEventHandlers(context: EventHandlerContext) {
     clearLocalBtwRunIds,
     localMode,
   } = context;
-  const finalizedRuns = new Map<string, number>();
   const sessionRuns = new Map<string, number>();
+  const finalizedRuns = new Map<string, number>();
+  const finalizedRunsWithDisplay = new Map<string, number>();
   const postFinalizingRuns = new Map<string, number>();
   let streamAssembler = new TuiStreamAssembler();
   let lastSessionKey = state.currentSessionKey;
@@ -172,6 +173,7 @@ export function createEventHandlers(context: EventHandlerContext) {
     }
     lastSessionKey = state.currentSessionKey;
     finalizedRuns.clear();
+    finalizedRunsWithDisplay.clear();
     sessionRuns.clear();
     postFinalizingRuns.clear();
     streamAssembler = new TuiStreamAssembler();
@@ -230,11 +232,15 @@ export function createEventHandlers(context: EventHandlerContext) {
     pruneRunMap(sessionRuns);
   };
 
-  const noteFinalizedRun = (runId: string) => {
+  const noteFinalizedRun = (runId: string, opts?: { displayedFinal?: boolean }) => {
     finalizedRuns.set(runId, Date.now());
+    if (opts?.displayedFinal === true) {
+      finalizedRunsWithDisplay.set(runId, Date.now());
+    }
     sessionRuns.delete(runId);
     streamAssembler.drop(runId);
     pruneRunMap(finalizedRuns);
+    pruneRunMap(finalizedRunsWithDisplay);
   };
 
   const notePostFinalizingRun = (runId: string) => {
@@ -287,8 +293,9 @@ export function createEventHandlers(context: EventHandlerContext) {
     runId: string;
     wasActiveRun: boolean;
     status: "idle" | "error";
+    displayedFinal?: boolean;
   }) => {
-    noteFinalizedRun(params.runId);
+    noteFinalizedRun(params.runId, { displayedFinal: params.displayedFinal });
     clearActiveRunIfMatch(params.runId);
     flushPendingHistoryRefreshIfIdle();
     if (params.wasActiveRun) {
@@ -393,8 +400,12 @@ export function createEventHandlers(context: EventHandlerContext) {
         return;
       }
       if (evt.state === "final") {
-        clearStaleStreamingIfNoTrackedRunRemains();
-        return;
+        const hasLateDisplayableFinal =
+          Boolean(evt.message) && !finalizedRunsWithDisplay.has(evt.runId);
+        if (!hasLateDisplayableFinal) {
+          clearStaleStreamingIfNoTrackedRunRemains();
+          return;
+        }
       }
     }
     if (reconnectPendingRunId === evt.runId) {
@@ -451,7 +462,7 @@ export function createEventHandlers(context: EventHandlerContext) {
         if (text) {
           chatLog.addSystem(text);
         }
-        finalizeRun({ runId: evt.runId, wasActiveRun, status: "idle" });
+        finalizeRun({ runId: evt.runId, wasActiveRun, status: "idle", displayedFinal: true });
         tui.requestRender();
         return;
       }
@@ -480,6 +491,7 @@ export function createEventHandlers(context: EventHandlerContext) {
         runId: evt.runId,
         wasActiveRun,
         status: stopReason === "error" ? "error" : "idle",
+        displayedFinal: !suppressEmptyExternalPlaceholder,
       });
     }
     if (evt.state === "aborted") {
