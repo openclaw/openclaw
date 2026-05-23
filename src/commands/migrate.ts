@@ -69,11 +69,11 @@ function hasPlannedAuthCredentialItem(plan: MigrationPlan): boolean {
 function resolveDefaultIncludeSecrets<T extends MigrateCommonOptions & { yes?: boolean }>(
   opts: T,
 ): T {
-  if (opts.includeSecrets !== undefined) {
-    return opts;
-  }
   if (opts.authCredentials === false) {
     return { ...opts, includeSecrets: false };
+  }
+  if (opts.includeSecrets !== undefined) {
+    return opts;
   }
   return opts;
 }
