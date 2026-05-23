@@ -3,7 +3,7 @@ export {
   DEFAULT_AGENT_COMPACTION_RESERVE_TOKENS_FLOOR,
   DEFAULT_PI_COMPACTION_RESERVE_TOKENS_FLOOR,
 } from "../agents/agent-settings.js";
-export { resolveAgentCompactionConfig, resolveAgentConfig } from "../agents/agent-scope-config.js";
+export { resolveAgentCompactionConfig } from "../agents/agent-scope-config.js";
 export {
   asToolParamsRecord,
   jsonResult,
