@@ -53,6 +53,9 @@ export function createDiscordHandlerParams(overrides?: {
 
 export function createDiscordPreflightContext(channelId = "ch-1") {
   return {
+    cfg: {},
+    accountId: "default",
+    token: "test-token",
     data: {
       channel_id: channelId,
       message: {
@@ -71,5 +74,12 @@ export function createDiscordPreflightContext(channelId = "ch-1") {
     },
     baseSessionKey: `agent:main:discord:channel:${channelId}`,
     messageChannelId: channelId,
+    isDirectMessage: true,
+    isGuildMessage: false,
+    isGroupDm: false,
+    baseText: "hello",
+    messageText: "hello",
+    wasMentioned: false,
+    effectiveWasMentioned: false,
   };
 }

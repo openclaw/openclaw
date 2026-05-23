@@ -68,14 +68,19 @@ function shouldSendAcceptedDiscordTypingCue(ctx: DiscordMessagePreflightContext)
   if (ctx.abortSignal?.aborted) {
     return false;
   }
-  if (!ctx.isDirectMessage || ctx.isGuildMessage || ctx.isGroupDm) {
-    return false;
-  }
   if (!ctx.messageText.trim()) {
     return false;
   }
+
   const configuredTypingMode = ctx.cfg.session?.typingMode ?? ctx.cfg.agents?.defaults?.typingMode;
-  return configuredTypingMode === undefined || configuredTypingMode === "instant";
+  if (configuredTypingMode !== undefined) {
+    return configuredTypingMode === "instant";
+  }
+
+  const isDirectMessage = ctx.isDirectMessage && !ctx.isGuildMessage && !ctx.isGroupDm;
+  const isMentionedGuildMessage =
+    ctx.isGuildMessage && (ctx.effectiveWasMentioned || ctx.wasMentioned);
+  return isDirectMessage || isMentionedGuildMessage;
 }
 
 function queueAcceptedDiscordTypingCue(ctx: DiscordMessagePreflightContext): void {

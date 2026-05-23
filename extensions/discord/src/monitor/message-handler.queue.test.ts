@@ -110,13 +110,9 @@ function createPreflightContext(channelId = "ch-1") {
   };
 }
 
-function createAcceptedDmPreflightContext(overrides: Record<string, unknown> = {}) {
+function createAcceptedPreflightContext(overrides: Record<string, unknown> = {}) {
   return {
     ...createPreflightContext("dm-1"),
-    isDirectMessage: true,
-    isGuildMessage: false,
-    isGroupDm: false,
-    messageText: "hello",
     ...overrides,
   };
 }
@@ -183,7 +179,7 @@ describe("createDiscordMessageHandler queue behavior", () => {
   it("sends an accepted DM typing cue before queued processing starts", async () => {
     preflightDiscordMessageMock.mockReset();
     processDiscordMessageMock.mockReset();
-    preflightDiscordMessageMock.mockResolvedValue(createAcceptedDmPreflightContext());
+    preflightDiscordMessageMock.mockResolvedValue(createAcceptedPreflightContext());
     processDiscordMessageMock.mockResolvedValue(undefined);
 
     const handler = createDiscordMessageHandler(createDiscordHandlerParams());
@@ -213,7 +209,7 @@ describe("createDiscordMessageHandler queue behavior", () => {
     preflightDiscordMessageMock.mockReset();
     processDiscordMessageMock.mockReset();
     earlyTypingMocks.sendTyping.mockRejectedValueOnce(new Error("typing failed"));
-    preflightDiscordMessageMock.mockResolvedValue(createAcceptedDmPreflightContext());
+    preflightDiscordMessageMock.mockResolvedValue(createAcceptedPreflightContext());
     processDiscordMessageMock.mockResolvedValue(undefined);
 
     const handler = createDiscordMessageHandler(createDiscordHandlerParams());
@@ -247,7 +243,7 @@ describe("createDiscordMessageHandler queue behavior", () => {
     preflightDiscordMessageMock.mockReset();
     processDiscordMessageMock.mockReset();
     preflightDiscordMessageMock.mockResolvedValue(
-      createAcceptedDmPreflightContext({
+      createAcceptedPreflightContext({
         cfg: {
           ...createPreflightContext().cfg,
           agents: {
@@ -271,14 +267,16 @@ describe("createDiscordMessageHandler queue behavior", () => {
     expect(processDiscordMessageMock).toHaveBeenCalledTimes(1);
   });
 
-  it("does not send early typing for guild messages", async () => {
+  it("sends early typing for accepted guild mentions before queued processing starts", async () => {
     preflightDiscordMessageMock.mockReset();
     processDiscordMessageMock.mockReset();
     preflightDiscordMessageMock.mockResolvedValue(
-      createAcceptedDmPreflightContext({
+      createAcceptedPreflightContext({
         isDirectMessage: false,
         isGuildMessage: true,
         messageChannelId: "guild-channel",
+        wasMentioned: true,
+        effectiveWasMentioned: true,
       }),
     );
     processDiscordMessageMock.mockResolvedValue(undefined);
@@ -286,6 +284,44 @@ describe("createDiscordMessageHandler queue behavior", () => {
     const handler = createDiscordMessageHandler(createDiscordHandlerParams());
     await expect(
       handler(createMessageData("m-guild", "guild-channel") as never, {} as never),
+    ).resolves.toBeUndefined();
+
+    await flushQueueWork();
+
+    expect(earlyTypingMocks.createDiscordRestClient).toHaveBeenCalledTimes(1);
+    const [restClientParams] = mockCall(
+      earlyTypingMocks.createDiscordRestClient,
+      "createDiscordRestClient",
+    );
+    expect((restClientParams as { accountId?: unknown } | undefined)?.accountId).toBe("default");
+    expect((restClientParams as { token?: unknown } | undefined)?.token).toBe("test-token");
+    expect(earlyTypingMocks.sendTyping).toHaveBeenCalledWith({
+      rest: { kind: "discord-rest" },
+      channelId: "guild-channel",
+    });
+    expect(earlyTypingMocks.sendTyping.mock.invocationCallOrder[0]).toBeLessThan(
+      processDiscordMessageMock.mock.invocationCallOrder[0],
+    );
+    expect(processDiscordMessageMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not send early typing for accepted unmentioned guild messages", async () => {
+    preflightDiscordMessageMock.mockReset();
+    processDiscordMessageMock.mockReset();
+    preflightDiscordMessageMock.mockResolvedValue(
+      createAcceptedPreflightContext({
+        isDirectMessage: false,
+        isGuildMessage: true,
+        messageChannelId: "guild-channel",
+        wasMentioned: false,
+        effectiveWasMentioned: false,
+      }),
+    );
+    processDiscordMessageMock.mockResolvedValue(undefined);
+
+    const handler = createDiscordMessageHandler(createDiscordHandlerParams());
+    await expect(
+      handler(createMessageData("m-guild-unmentioned", "guild-channel") as never, {} as never),
     ).resolves.toBeUndefined();
 
     await flushQueueWork();
