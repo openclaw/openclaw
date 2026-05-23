@@ -3,7 +3,10 @@ import { parseByteSize } from "../cli/parse-bytes.js";
 import { parseDurationMs } from "../cli/parse-duration.js";
 import { normalizeStringifiedOptionalString } from "../shared/string-coerce.js";
 import { ElevatedAllowFromSchema } from "./zod-schema.agent-runtime.js";
-import { createSessionSendPolicySchema } from "./zod-schema.allowdeny.js";
+import {
+  createAllowDenyChannelRulesSchema,
+  createSessionSendPolicySchema,
+} from "./zod-schema.allowdeny.js";
 import {
   GroupChatSchema,
   InboundDebounceSchema,
@@ -23,7 +26,8 @@ const SessionResetConfigSchema = z
   })
   .strict();
 
-export const SessionSendPolicySchema = createSessionSendPolicySchema();
+export const SessionSendPolicySchema = createAllowDenyChannelRulesSchema();
+const RelationalSessionSendPolicySchema = createSessionSendPolicySchema();
 
 export const SessionSchema = z
   .object({
@@ -55,7 +59,7 @@ export const SessionSchema = z
     typingIntervalSeconds: z.number().int().positive().optional(),
     typingMode: TypingModeSchema.optional(),
     mainKey: z.string().optional(),
-    sendPolicy: SessionSendPolicySchema.optional(),
+    sendPolicy: RelationalSessionSendPolicySchema.optional(),
     writeLock: z
       .object({
         acquireTimeoutMs: z.number().int().positive().optional(),
