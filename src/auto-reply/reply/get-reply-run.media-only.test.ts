@@ -968,6 +968,13 @@ describe("runPreparedReply media-only handling", () => {
               model: "gpt-4o",
               text: "a tiny dot image",
             },
+            {
+              kind: "image.description",
+              attachmentIndex: 1,
+              provider: "openai",
+              model: "gpt-4o",
+              text: "another tiny dot image",
+            },
           ],
           OriginatingChannel: "webchat",
           OriginatingTo: "webchat:local",
@@ -992,6 +999,71 @@ describe("runPreparedReply media-only handling", () => {
     const call = requireRunReplyAgentCall();
     expect(call.followupRun.images).toBeUndefined();
     expect(call.followupRun.imageOrder).toBeUndefined();
+    expect(call.followupRun.prompt).toContain("a tiny dot image");
+  });
+
+  it("rehydrates only current MediaPaths missing image understanding", async () => {
+    const tmpDir = await mkdtemp(path.join(os.tmpdir(), "openclaw-followup-image-"));
+    cleanupPaths.push(tmpDir);
+    const imagePath = path.join(tmpDir, "inbound.png");
+    await writeFile(
+      imagePath,
+      Buffer.from(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=",
+        "base64",
+      ),
+    );
+    const secondImageData = Buffer.from("second image bytes");
+    const secondImagePath = path.join(tmpDir, "second.png");
+    await writeFile(secondImagePath, secondImageData);
+
+    const result = await runPreparedReply(
+      baseParams({
+        ctx: {
+          Body: "describe this\n\n[Image]\nDescription:\na tiny dot image",
+          RawBody: "describe this\n\n[Image]\nDescription:\na tiny dot image",
+          CommandBody: "describe this\n\n[Image]\nDescription:\na tiny dot image",
+          MediaPaths: [imagePath, secondImagePath],
+          MediaTypes: ["image/png", "image/png"],
+          MediaWorkspaceDir: tmpDir,
+          MediaUnderstanding: [
+            {
+              kind: "image.description",
+              attachmentIndex: 0,
+              provider: "openai",
+              model: "gpt-4o",
+              text: "a tiny dot image",
+            },
+          ],
+          OriginatingChannel: "webchat",
+          OriginatingTo: "webchat:local",
+          ChatType: "direct",
+        },
+        sessionCtx: {
+          Body: "describe this\n\n[Image]\nDescription:\na tiny dot image",
+          BodyStripped: "describe this\n\n[Image]\nDescription:\na tiny dot image",
+          Provider: "webchat",
+          OriginatingChannel: "webchat",
+          OriginatingTo: "webchat:local",
+          ChatType: "direct",
+          MediaPaths: [imagePath, secondImagePath],
+          MediaTypes: ["image/png", "image/png"],
+          MediaWorkspaceDir: tmpDir,
+        },
+      }),
+    );
+
+    expect(result).toEqual({ text: "ok" });
+    expect(vi.mocked(runReplyAgent)).toHaveBeenCalledOnce();
+    const call = requireRunReplyAgentCall();
+    expect(call.followupRun.images).toEqual([
+      {
+        type: "image",
+        data: secondImageData.toString("base64"),
+        mimeType: "image/png",
+      },
+    ]);
+    expect(call.followupRun.imageOrder).toEqual(["inline"]);
     expect(call.followupRun.prompt).toContain("a tiny dot image");
   });
 
