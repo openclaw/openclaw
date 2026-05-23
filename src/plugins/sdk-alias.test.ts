@@ -1194,6 +1194,15 @@ describe("plugin sdk alias helpers", () => {
     const loadedOllama = ollamaLoader(sourceOllamaEntry) as { loadedSsrFInternal?: unknown };
     expect(loadedOllama.loadedSsrFInternal).toBe(true);
 
+    const distLoader = createJiti(sourceLoaderBaseUrl, {
+      ...buildPluginLoaderJitiOptions(distAliases),
+      tryNative: true,
+    });
+    const loadedDistOllama = distLoader(distOllamaEntry) as {
+      loadedSsrFInternal?: unknown;
+    };
+    expect(loadedDistOllama.loadedSsrFInternal).toBe(true);
+
     const distRuntimeLoader = createJiti(sourceLoaderBaseUrl, {
       ...buildPluginLoaderJitiOptions(distRuntimeAliases),
       tryNative: true,

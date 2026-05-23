@@ -1705,9 +1705,16 @@ describe("fetchWithSsrFGuard hardening", () => {
         lookupFn: createLoopbackLookup(),
         policy: { allowedOrigins: ["http://127.0.0.1:11434"] },
         configuredLocalOriginBaseUrl: "http://127.0.0.1:11434",
+        auditContext: "ollama-embedding",
       }),
     ).rejects.toThrow("blocked by proxy.loopbackMode");
     expect(fetchImpl).not.toHaveBeenCalled();
+    expect(logWarnMock).toHaveBeenCalledTimes(1);
+    const [warning] = firstMockCall(logWarnMock) as [string];
+    expect(warning).toContain(
+      "security: blocked URL fetch (ollama-embedding) targetOrigin=http://127.0.0.1:11434",
+    );
+    expect(warning).toContain("blocked by proxy.loopbackMode");
   });
 
   it("honors proxy.loopbackMode=block for localhost provider origins", async () => {

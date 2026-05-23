@@ -212,7 +212,7 @@ function shouldUseManagedProxyDirectBypass(params: {
     return false;
   }
   if (loopbackMode === "block" && isLoopbackManagedProxyBypassHost(params.url.hostname)) {
-    throw new Error(
+    throw new SsrFBlockedError(
       "proxy: configured local provider loopback connections are blocked by proxy.loopbackMode",
     );
   }
