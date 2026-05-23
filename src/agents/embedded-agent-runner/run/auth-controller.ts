@@ -7,6 +7,7 @@ import {
   isProfileInCooldown,
   resolveProfilesUnavailableReason,
 } from "../../auth-profiles.js";
+import { formatAuthProfileFailureMessage } from "../../auth-profiles/failure-copy.js";
 import {
   classifyFailoverReason,
   isFailoverErrorMessage,
@@ -324,16 +325,25 @@ export function createEmbeddedRunAuthController(params: {
   }): never => {
     const provider = params.getProvider();
     const modelId = params.getModelId();
-    const fallbackMessage = `No available auth profile for ${provider} (all in cooldown or unavailable).`;
-    const message =
+    const messageForReason =
       failoverParams.message?.trim() ||
-      (failoverParams.error ? formatErrorMessage(failoverParams.error).trim() : "") ||
-      fallbackMessage;
+      (failoverParams.error ? formatErrorMessage(failoverParams.error).trim() : "");
     const reason = resolveAuthProfileFailoverReason({
       allInCooldown: failoverParams.allInCooldown,
-      message,
+      message: messageForReason,
       profileIds: params.profileCandidates,
     });
+    const message =
+      failoverParams.message?.trim() ||
+      formatAuthProfileFailureMessage({
+        reason,
+        provider,
+        allInCooldown: failoverParams.allInCooldown,
+        cause: failoverParams.error,
+        config: params.config,
+        workspaceDir: params.workspaceDir,
+        env: process.env,
+      });
     if (params.fallbackConfigured) {
       throw new FailoverError(message, {
         reason,
