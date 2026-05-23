@@ -174,6 +174,7 @@ import {
   areCodexDynamicToolFingerprintsCompatible,
   buildDeveloperInstructions,
   buildContextEngineBinding,
+  buildTurnCollaborationMode,
   buildTurnStartParams,
   codexDynamicToolsFingerprint,
   isContextEngineBindingCompatible,
@@ -1338,6 +1339,17 @@ export async function runCodexAppServerAttempt(
   const refreshCodexTurnPromptText = () => {
     codexTurnPromptText = decorateCodexTurnPromptText(promptBuild.prompt);
   };
+  const buildCodexTurnCollaborationDeveloperInstructions = () =>
+    buildTurnCollaborationMode(params, {
+      turnScopedDeveloperInstructions: workspaceBootstrapContext.turnScopedDeveloperInstructions,
+      heartbeatCollaborationInstructions:
+        workspaceBootstrapContext.heartbeatCollaborationInstructions,
+    }).settings.developer_instructions ?? undefined;
+  const buildRenderedCodexDeveloperInstructions = () =>
+    joinPresentSections(
+      promptBuild.developerInstructions,
+      buildCodexTurnCollaborationDeveloperInstructions(),
+    );
   const rebuildPromptAfterContextEngineCompaction = async () => {
     historyMessages =
       (await readMirroredSessionHistoryMessages(activeSessionFile)) ?? historyMessages;
@@ -1369,17 +1381,17 @@ export async function runCodexAppServerAttempt(
     const reserveTokens =
       resolveCodexContextEngineProjectionReserveTokens({ config: params.config }) ??
       DEFAULT_CODEX_PROJECTION_RESERVE_TOKENS;
-    const renderedChars =
-      codexTurnPromptText.length + (promptBuild.developerInstructions?.length ?? 0);
+    const renderedDeveloperInstructions = buildRenderedCodexDeveloperInstructions();
+    const renderedChars = codexTurnPromptText.length + renderedDeveloperInstructions.length;
     return shouldPreemptivelyCompactBeforePrompt({
       messages: historyMessages,
-      systemPrompt: promptBuild.developerInstructions,
+      systemPrompt: renderedDeveloperInstructions,
       prompt: codexTurnPromptText,
       contextTokenBudget,
       reserveTokens,
       llmBoundaryTokenPressure: {
         estimatedPromptTokens: estimateRenderedLlmBoundaryTokenPressure({
-          systemPrompt: promptBuild.developerInstructions,
+          systemPrompt: renderedDeveloperInstructions,
           prompt: codexTurnPromptText,
         }),
         source: "codex_app_server_rendered_prompt",
@@ -1445,7 +1457,7 @@ export async function runCodexAppServerAttempt(
     attempt: params,
     sessionKey: contextSessionKey,
     workspaceDir: effectiveWorkspace,
-    developerInstructions: promptBuild.developerInstructions,
+    developerInstructions: buildRenderedCodexDeveloperInstructions(),
     workspaceBootstrapContext,
     skillsPrompt: openClawPromptContext ? (params.skillsSnapshot?.prompt ?? "") : "",
     tools: toolBridge.availableSpecs,
@@ -1453,7 +1465,7 @@ export async function runCodexAppServerAttempt(
   const trajectoryRecorder = createCodexTrajectoryRecorder({
     attempt: params,
     cwd: effectiveWorkspace,
-    developerInstructions: promptBuild.developerInstructions,
+    developerInstructions: buildRenderedCodexDeveloperInstructions(),
     prompt: codexTurnPromptText,
     tools: toolBridge.availableSpecs,
   });
@@ -2781,7 +2793,7 @@ export async function runCodexAppServerAttempt(
     sessionId: params.sessionId,
     provider: params.provider,
     model: params.modelId,
-    systemPrompt: promptBuild.developerInstructions,
+    systemPrompt: buildRenderedCodexDeveloperInstructions(),
     prompt: codexTurnPromptText,
     historyMessages,
     imagesCount: params.images?.length ?? 0,

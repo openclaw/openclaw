@@ -338,7 +338,10 @@ describe("Codex app-server turn input image sanitizing", () => {
       turnScopedDeveloperInstructions: "SOUL.md turn-only context",
     });
 
-    expect(request.collaborationMode?.settings.developer_instructions).toBe(
+    expect(request.collaborationMode?.settings.developer_instructions).toContain(
+      "# Collaboration Mode: Default",
+    );
+    expect(request.collaborationMode?.settings.developer_instructions).toContain(
       "SOUL.md turn-only context",
     );
   });
