@@ -8,11 +8,11 @@ import {
 } from "openclaw/plugin-sdk/migration";
 import type { MigrationItem, MigrationProviderContext } from "openclaw/plugin-sdk/plugin-entry";
 import {
-  applyProviderAuthConfigPatch,
   buildOauthProviderAuthResult,
   updateAuthProfileStoreWithLock,
   type AuthProfileStore,
   type OAuthCredential,
+  type OpenClawConfig,
   type ProviderAuthResult,
 } from "openclaw/plugin-sdk/provider-auth";
 import {
@@ -36,6 +36,11 @@ import type { PlannedTargets } from "./targets.js";
 const OPENAI_CODEX_PROVIDER_ID = "openai-codex";
 const OPENAI_CODEX_DEFAULT_MODEL = "openai/gpt-5.5";
 const HERMES_AUTH_DISPLAY_NAME = "Hermes import";
+
+type AgentDefaultModelConfigs = NonNullable<
+  NonNullable<NonNullable<OpenClawConfig["agents"]>["defaults"]>["models"]
+>;
+type AgentDefaultModelConfigEntry = AgentDefaultModelConfigs[string];
 
 type HermesCodexAuthCandidate = {
   access: string;
@@ -303,6 +308,51 @@ function buildAuthResult(
   });
 }
 
+function readProviderAuthModelConfigs(result: ProviderAuthResult): AgentDefaultModelConfigs {
+  const models = result.configPatch?.agents?.defaults?.models;
+  if (isRecord(models)) {
+    return { ...models };
+  }
+  const defaultModel = readString(result.defaultModel) ?? OPENAI_CODEX_DEFAULT_MODEL;
+  return { [defaultModel]: {} };
+}
+
+function mergeModelConfigEntry(
+  existing: AgentDefaultModelConfigEntry | undefined,
+  patch: AgentDefaultModelConfigEntry,
+): AgentDefaultModelConfigEntry {
+  if (existing && isRecord(existing) && isRecord(patch)) {
+    return { ...existing, ...patch } as AgentDefaultModelConfigEntry;
+  }
+  return existing ?? patch;
+}
+
+function applyOAuthModelConfigsToConfig(
+  cfg: OpenClawConfig,
+  result: ProviderAuthResult,
+): OpenClawConfig {
+  const patchModels = readProviderAuthModelConfigs(result);
+  const existingModels = cfg.agents?.defaults?.models ?? {};
+  const models: AgentDefaultModelConfigs = result.replaceDefaultModels
+    ? { ...patchModels }
+    : { ...existingModels };
+  if (!result.replaceDefaultModels) {
+    for (const [modelRef, modelConfig] of Object.entries(patchModels)) {
+      models[modelRef] = mergeModelConfigEntry(models[modelRef], modelConfig);
+    }
+  }
+  return {
+    ...cfg,
+    agents: {
+      ...cfg.agents,
+      defaults: {
+        ...cfg.agents?.defaults,
+        models,
+      },
+    },
+  };
+}
+
 function authProfileDedupeKey(profile: HermesCodexAuthProfile): string {
   if (profile.credential.accountId) {
     return `${profile.credential.provider}:account:${profile.credential.accountId}`;
@@ -564,12 +614,7 @@ export async function applyAuthItem(
     ctx,
     profile: configProfile,
     applyConfigPatch(config) {
-      if (!profile.result.configPatch) {
-        return config;
-      }
-      return applyProviderAuthConfigPatch(config, profile.result.configPatch, {
-        replaceDefaultModels: profile.result.replaceDefaultModels,
-      });
+      return applyOAuthModelConfigsToConfig(config, profile.result);
     },
   });
   if (configResult === "conflict") {

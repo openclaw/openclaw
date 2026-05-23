@@ -236,12 +236,53 @@ The bundled Hermes provider detects state at `~/.hermes` by default. Use `--from
 - Memory config defaults for OpenClaw file memory, plus archive or manual-review items for external memory providers such as Honcho.
 - Skills that include a `SKILL.md` file under `skills/<name>/`.
 - Per-skill config values from `skills.config`.
-- Supported OAuth credentials from `auth.json` when interactive credential migration is accepted, or when `--include-secrets` is set.
-- Supported API keys from `.env` when interactive credential migration is accepted, or when `--include-secrets` is set.
+- Supported OAuth credentials from Hermes `auth.json` and OpenCode OpenAI OAuth credentials from OpenCode `auth.json` when interactive credential migration is accepted, or when `--include-secrets` is set.
+- Supported API keys and tokens from Hermes `.env` and OpenCode `auth.json` when interactive credential migration is accepted, or when `--include-secrets` is set.
 
 ### Supported `.env` keys
 
-`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `OPENROUTER_API_KEY`, `GOOGLE_API_KEY`, `GEMINI_API_KEY`, `GROQ_API_KEY`, `XAI_API_KEY`, `MISTRAL_API_KEY`, `DEEPSEEK_API_KEY`.
+- `AI_GATEWAY_API_KEY`
+- `ALIBABA_API_KEY`
+- `ANTHROPIC_API_KEY`
+- `ARCEEAI_API_KEY`
+- `CEREBRAS_API_KEY`
+- `CHUTES_API_KEY`
+- `CLOUDFLARE_AI_GATEWAY_API_KEY`
+- `COPILOT_GITHUB_TOKEN`
+- `DASHSCOPE_API_KEY`
+- `DEEPINFRA_API_KEY`
+- `DEEPSEEK_API_KEY`
+- `FIREWORKS_API_KEY`
+- `GEMINI_API_KEY`
+- `GH_TOKEN`
+- `GITHUB_TOKEN`
+- `GLM_API_KEY`
+- `GOOGLE_API_KEY`
+- `GROQ_API_KEY`
+- `HF_TOKEN`
+- `HUGGINGFACE_HUB_TOKEN`
+- `KILOCODE_API_KEY`
+- `KIMICODE_API_KEY`
+- `KIMI_API_KEY`
+- `MINIMAX_API_KEY`
+- `MINIMAX_CODING_API_KEY`
+- `MISTRAL_API_KEY`
+- `MODELSTUDIO_API_KEY`
+- `MOONSHOT_API_KEY`
+- `NVIDIA_API_KEY`
+- `OPENAI_API_KEY`
+- `OPENCODE_API_KEY`
+- `OPENCODE_GO_API_KEY`
+- `OPENCODE_ZEN_API_KEY`
+- `OPENROUTER_API_KEY`
+- `QIANFAN_API_KEY`
+- `QWEN_API_KEY`
+- `TOGETHER_API_KEY`
+- `VENICE_API_KEY`
+- `XAI_API_KEY`
+- `XIAOMI_API_KEY`
+- `ZAI_API_KEY`
+- `Z_AI_API_KEY`
 
 ### Archive-only state
 
