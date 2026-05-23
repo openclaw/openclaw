@@ -14,6 +14,7 @@ import {
   mockedIsCompactionFailureError,
   mockedIsLikelyContextOverflowError,
   mockedLog,
+  mockedMarkAuthProfileSuccess,
   mockedResolveModelAsync,
   mockedRunEmbeddedAttempt,
   mockedSessionLikelyHasOversizedToolResults,
@@ -185,6 +186,22 @@ describe("overflow compaction in run loop", () => {
     });
 
     expect(requireMockCallArg(mockedRunEmbeddedAttempt, 0).thinkLevel).toBe("adaptive");
+  });
+
+  it("does not wait for post-run auth-profile success bookkeeping before returning", async () => {
+    let resolveSuccess!: () => void;
+    const successPromise = new Promise<void>((resolve) => {
+      resolveSuccess = resolve;
+    });
+    mockedMarkAuthProfileSuccess.mockReturnValueOnce(successPromise);
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(makeAttemptResult());
+
+    const result = await runEmbeddedPiAgent(baseParams);
+
+    expect(result.meta.error).toBeUndefined();
+    expect(mockedMarkAuthProfileSuccess).toHaveBeenCalledTimes(1);
+    resolveSuccess();
+    await successPromise;
   });
 
   it("continues from transcript after compaction when the current inbound message was persisted", async () => {
