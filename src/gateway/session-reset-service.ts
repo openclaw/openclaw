@@ -686,6 +686,15 @@ export async function performGatewaySessionReset(params: {
     },
   );
   await triggerInternalHook(hookEvent);
+  if (params.expectedDailySession) {
+    const { entry: currentEntry } = loadSessionEntry(params.key);
+    if (!matchesExpectedDailyResetEntry(currentEntry, params.expectedDailySession)) {
+      return {
+        ok: false,
+        error: skippedDailyResetError(params.key),
+      };
+    }
+  }
   const mutationCleanupError = await cleanupSessionBeforeMutation({
     cfg,
     key: params.key,
