@@ -2,21 +2,28 @@ import type { ChildProcess } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import type { SupervisorBoundary, SupervisorLaunchPlan } from "../boundary.js";
 import {
   expectRealExitWinsOverSigkillFallback,
   expectWaitStaysPendingUntilSigkillFallback,
 } from "./test-support.js";
 
-const { spawnWithFallbackMock, killProcessTreeMock, createWindowsOutputDecoderMock } = vi.hoisted(
-  () => ({
-    spawnWithFallbackMock: vi.fn(),
-    killProcessTreeMock: vi.fn(),
-    createWindowsOutputDecoderMock: vi.fn(() => ({
-      decode: (chunk: Buffer | string) => (Buffer.isBuffer(chunk) ? chunk.toString("utf8") : chunk),
-      flush: () => "",
-    })),
-  }),
-);
+const {
+  spawnWithFallbackMock,
+  killProcessTreeMock,
+  createWindowsOutputDecoderMock,
+  resolveSupervisorBoundaryMock,
+  runBoundaryStopCommandMock,
+} = vi.hoisted(() => ({
+  spawnWithFallbackMock: vi.fn(),
+  killProcessTreeMock: vi.fn(),
+  createWindowsOutputDecoderMock: vi.fn(() => ({
+    decode: (chunk: Buffer | string) => (Buffer.isBuffer(chunk) ? chunk.toString("utf8") : chunk),
+    flush: () => "",
+  })),
+  resolveSupervisorBoundaryMock: vi.fn(),
+  runBoundaryStopCommandMock: vi.fn(),
+}));
 
 vi.mock("../../spawn-utils.js", () => ({
   spawnWithFallback: spawnWithFallbackMock,
@@ -28,6 +35,11 @@ vi.mock("../../kill-tree.js", () => ({
 
 vi.mock("../../../infra/windows-encoding.js", () => ({
   createWindowsOutputDecoder: createWindowsOutputDecoderMock,
+}));
+
+vi.mock("../boundary.js", () => ({
+  resolveSupervisorBoundary: resolveSupervisorBoundaryMock,
+  runBoundaryStopCommand: runBoundaryStopCommandMock,
 }));
 
 let createChildAdapter: typeof import("./child.js").createChildAdapter;
@@ -125,6 +137,8 @@ describe("createChildAdapter", () => {
     spawnWithFallbackMock.mockClear();
     killProcessTreeMock.mockClear();
     createWindowsOutputDecoderMock.mockClear();
+    resolveSupervisorBoundaryMock.mockReset();
+    runBoundaryStopCommandMock.mockReset();
     createWindowsOutputDecoderMock.mockImplementation(() => ({
       decode: (chunk: Buffer | string) => (Buffer.isBuffer(chunk) ? chunk.toString("utf8") : chunk),
       flush: () => "",
@@ -441,5 +455,184 @@ describe("createChildAdapter", () => {
     expect(createWindowsOutputDecoderMock).toHaveBeenCalledTimes(2);
     expect(first).toHaveBeenCalledWith("first");
     expect(second).toHaveBeenCalledWith("second");
+  });
+});
+
+function fakeBoundary(plan: SupervisorLaunchPlan): SupervisorBoundary {
+  return { kind: plan.kind, plan: () => plan };
+}
+
+const SYSTEMD_PLAN: SupervisorLaunchPlan = {
+  kind: "systemd-scope",
+  command: "systemd-run",
+  args: [
+    "--user",
+    "--scope",
+    "--quiet",
+    "--collect",
+    "--unit=openclaw-worker-run-1.scope",
+    "--",
+    "node",
+    "worker.js",
+  ],
+  survivesSupervisorRestart: true,
+  unitId: "openclaw-worker-run-1.scope",
+  stopCommand: { command: "systemctl", args: ["--user", "stop", "openclaw-worker-run-1.scope"] },
+};
+
+describe("createChildAdapter survival boundary wiring (gate G-D1)", () => {
+  const originalPlatformDescriptor = Object.getOwnPropertyDescriptor(process, "platform");
+
+  beforeEach(() => {
+    spawnWithFallbackMock.mockReset();
+    runBoundaryStopCommandMock.mockReset();
+    resolveSupervisorBoundaryMock.mockReset();
+    spawnWithFallbackMock.mockResolvedValue({
+      child: createStubChild().child,
+      usedFallback: false,
+    });
+    // Pin a non-Linux platform so the oom-wrap shim doesn't rewrite the worker
+    // argv the boundary receives; the mocked boundary plan is fixed regardless.
+    Object.defineProperty(process, "platform", { value: "darwin", configurable: true });
+  });
+
+  afterEach(() => {
+    if (originalPlatformDescriptor) {
+      Object.defineProperty(process, "platform", originalPlatformDescriptor);
+    }
+  });
+
+  it("does not consult the boundary unless survival is requested", async () => {
+    await createChildAdapter({ argv: ["node", "worker.js"], stdinMode: "pipe-closed" });
+    expect(resolveSupervisorBoundaryMock).not.toHaveBeenCalled();
+    expect(firstSpawnWithFallbackParams().argv).toEqual(["node", "worker.js"]);
+  });
+
+  it("wraps the worker argv in the boundary launcher and runs it detached", async () => {
+    resolveSupervisorBoundaryMock.mockReturnValue(fakeBoundary(SYSTEMD_PLAN));
+
+    await createChildAdapter({
+      argv: ["node", "worker.js"],
+      stdinMode: "pipe-closed",
+      surviveSupervisorRestart: true,
+      boundaryId: "run-1",
+    });
+
+    expect(resolveSupervisorBoundaryMock).toHaveBeenCalledTimes(1);
+    expect(firstSpawnWithFallbackParams().argv).toEqual([
+      SYSTEMD_PLAN.command,
+      ...SYSTEMD_PLAN.args,
+    ]);
+    expect(firstSpawnWithFallbackParams().options?.detached).toBe(true);
+  });
+
+  it("stops the scope unit when a survivable worker is killed", async () => {
+    spawnWithFallbackMock.mockResolvedValue({
+      child: createStubChild(9090).child,
+      usedFallback: false,
+    });
+    resolveSupervisorBoundaryMock.mockReturnValue(fakeBoundary(SYSTEMD_PLAN));
+
+    const adapter = await createChildAdapter({
+      argv: ["node", "worker.js"],
+      stdinMode: "pipe-closed",
+      surviveSupervisorRestart: true,
+      boundaryId: "run-1",
+    });
+
+    adapter.kill("SIGKILL");
+    expect(runBoundaryStopCommandMock).toHaveBeenCalledWith(SYSTEMD_PLAN.stopCommand);
+    // Killing twice must not re-issue the unit stop.
+    adapter.kill("SIGKILL");
+    expect(runBoundaryStopCommandMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("falls back to a normal child spawn when the boundary is inline", async () => {
+    const inlinePlan: SupervisorLaunchPlan = {
+      kind: "inline",
+      command: "node",
+      args: ["worker.js"],
+      survivesSupervisorRestart: false,
+      stopCommand: null,
+    };
+    resolveSupervisorBoundaryMock.mockReturnValue(fakeBoundary(inlinePlan));
+
+    const adapter = await createChildAdapter({
+      argv: ["node", "worker.js"],
+      stdinMode: "pipe-closed",
+      surviveSupervisorRestart: true,
+      boundaryId: "run-1",
+    });
+
+    // Inline boundary means no wrapper: the worker argv is spawned directly.
+    expect(firstSpawnWithFallbackParams().argv).toEqual(["node", "worker.js"]);
+    adapter.kill("SIGKILL");
+    expect(runBoundaryStopCommandMock).not.toHaveBeenCalled();
+  });
+
+  // Blocker D-GAP-1(1): the systemd-run --user launcher must reach the per-user
+  // manager even when the worker carries an explicit env override that omits the
+  // user-bus vars. The launcher env sources those missing keys from the gateway's
+  // own process.env, never from the (possibly stripped) worker override.
+  describe("systemd launcher user-bus env", () => {
+    const BUS_KEYS = ["XDG_RUNTIME_DIR", "DBUS_SESSION_BUS_ADDRESS"] as const;
+    const originalBus: Record<string, string | undefined> = {};
+
+    beforeEach(() => {
+      for (const key of BUS_KEYS) {
+        originalBus[key] = process.env[key];
+      }
+      process.env.XDG_RUNTIME_DIR = "/run/user/4242";
+      process.env.DBUS_SESSION_BUS_ADDRESS = "unix:path=/run/user/4242/bus";
+      resolveSupervisorBoundaryMock.mockReturnValue(fakeBoundary(SYSTEMD_PLAN));
+    });
+
+    afterEach(() => {
+      for (const key of BUS_KEYS) {
+        if (originalBus[key] === undefined) {
+          delete process.env[key];
+        } else {
+          process.env[key] = originalBus[key];
+        }
+      }
+    });
+
+    it("sources missing user-bus vars from process.env, not the worker env override", async () => {
+      await createChildAdapter({
+        argv: ["node", "worker.js"],
+        env: { WORKER_ONLY: "1" },
+        stdinMode: "pipe-closed",
+        surviveSupervisorRestart: true,
+        boundaryId: "run-1",
+      });
+
+      const env = firstSpawnWithFallbackParams().options?.env;
+      if (!env) {
+        throw new Error("expected systemd launcher env");
+      }
+      // The worker override is preserved...
+      expect(env.WORKER_ONLY).toBe("1");
+      // ...and the launcher still gets the gateway's user-bus vars.
+      expect(env.XDG_RUNTIME_DIR).toBe("/run/user/4242");
+      expect(env.DBUS_SESSION_BUS_ADDRESS).toBe("unix:path=/run/user/4242/bus");
+    });
+
+    it("does not clobber user-bus vars the worker env override sets explicitly", async () => {
+      await createChildAdapter({
+        argv: ["node", "worker.js"],
+        env: { DBUS_SESSION_BUS_ADDRESS: "unix:path=/worker/custom/bus" },
+        stdinMode: "pipe-closed",
+        surviveSupervisorRestart: true,
+        boundaryId: "run-1",
+      });
+
+      const env = firstSpawnWithFallbackParams().options?.env;
+      if (!env) {
+        throw new Error("expected systemd launcher env");
+      }
+      // Explicit override wins; only the missing key is filled from process.env.
+      expect(env.DBUS_SESSION_BUS_ADDRESS).toBe("unix:path=/worker/custom/bus");
+      expect(env.XDG_RUNTIME_DIR).toBe("/run/user/4242");
+    });
   });
 });

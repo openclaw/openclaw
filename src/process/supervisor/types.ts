@@ -91,6 +91,14 @@ type SpawnChildInput = SpawnBaseInput & {
   windowsVerbatimArguments?: boolean;
   input?: string;
   stdinMode?: "inherit" | "pipe-open" | "pipe-closed";
+  /**
+   * Opt in to the supervisor survival boundary (gate G-D1): launch the worker in
+   * a transient systemd scope (Linux) so it survives a gateway restart or
+   * `systemctl stop`. Falls back to a normal child spawn when the platform
+   * integration is unavailable, including macOS (no survival boundary yet — see
+   * `./boundary.ts`).
+   */
+  surviveSupervisorRestart?: boolean;
 };
 
 type SpawnPtyInput = SpawnBaseInput & {
