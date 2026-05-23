@@ -54,6 +54,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Auth: keep runtime-only external OAuth profiles in active auth-profile snapshots after save operations while still filtering those credentials from disk. Fixes #85521. (#85618) Thanks @cobenrogers and @zhouhe-xydt.
 - Models: prune retired GitHub Copilot model rows and old Claude catalog entries below 4.6, with doctor migration to upgrade existing configs to current Claude/Copilot refs.
 - Doctor/update: recognize junction-backed source checkouts as git installs by comparing canonical paths before showing package-manager update guidance. Fixes #82215. Thanks @igormf.
 - CLI/skills: show an all-ready note with next-step commands when skill setup has no missing dependencies to install. (#85032) Thanks @aniruddhaadak80.
