@@ -1320,86 +1320,55 @@ describe("runCodexAppServerAttempt", () => {
     }
   });
 
-  it("releases the sandbox exec-server when startup times out after environment registration", async () => {
-    const restoreSandboxBackend = registerSandboxBackend("codex-test-sandbox", async () => ({
-      id: "codex-test-sandbox",
-      runtimeId: "codex-test-runtime",
-      runtimeLabel: "Codex Test Sandbox",
-      workdir: "/workspace",
-      buildExecSpec: async () => ({
-        argv: ["true"],
-        env: {},
-        stdinMode: "pipe-closed" as const,
-      }),
+  it("closes the sandbox exec-server release path used by startup timeout cleanup", async () => {
+    const appServer = {
+      ...createThreadLifecycleAppServerOptions(),
+      sandbox: "danger-full-access",
+    };
+    const sandbox = createSandboxContext({
       runShellCommand: async () => ({
         stdout: Buffer.alloc(0),
         stderr: Buffer.alloc(0),
         code: 0,
       }),
-    }));
+    });
+    const request = vi.fn(async (method: string, _params?: unknown) => {
+      if (method === "environment/add") {
+        return {};
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+    const client = {
+      getServerVersion: () => "0.132.0",
+      request,
+    };
     try {
-      const sessionFile = path.join(tempDir, "session.jsonl");
-      const workspaceDir = path.join(tempDir, "workspace");
-      const params = createParams(sessionFile, workspaceDir);
-      params.disableTools = false;
-      params.timeoutMs = 5;
-      params.runtimePlan = createCodexRuntimePlanFixture();
-      params.config = {
-        agents: {
-          defaults: {
-            sandbox: {
-              mode: "all",
-              backend: "codex-test-sandbox",
-              scope: "session",
-            },
-          },
-        },
-      } as never;
-      const { requests } = createStartedThreadHarness(async (method, _params, options) => {
-        if (method === "thread/start") {
-          await new Promise<never>((_resolve, reject) => {
-            const signal = options?.signal;
-            if (signal?.aborted) {
-              reject(new Error("thread start aborted"));
-              return;
-            }
-            signal?.addEventListener("abort", () => reject(new Error("thread start aborted")), {
-              once: true,
-            });
-          });
-        }
-        return undefined;
+      const environment = await ensureCodexSandboxExecServerEnvironment({
+        client: client as never,
+        sandbox,
+        appServerStartOptions: appServer.start,
       });
+      if (!environment) {
+        throw new Error("expected sandbox exec-server environment");
+      }
 
       await expect(
-        runCodexAppServerAttempt(params, {
-          pluginConfig: {
-            appServer: {
-              mode: "yolo",
-              experimental: { sandboxExecServer: true },
-            },
+        testing.withCodexStartupTimeout({
+          timeoutMs: 5,
+          signal: new AbortController().signal,
+          onTimeout: async () => {
+            await releaseCodexSandboxExecServerEnvironment(sandbox);
           },
-          startupTimeoutFloorMs: 5,
+          operation: async () => new Promise<never>(() => undefined),
         }),
       ).rejects.toThrow("codex app-server startup timed out");
 
-      const environmentAdd = requests.find((request) => request.method === "environment/add");
-      const environmentAddParams = environmentAdd?.params as { execServerUrl?: string } | undefined;
+      const environmentAdd = request.mock.calls.find(([method]) => method === "environment/add");
+      const environmentAddParams = environmentAdd?.[1] as { execServerUrl?: string } | undefined;
       expect(environmentAddParams?.execServerUrl).toMatch(/^ws:\/\/127\.0\.0\.1:/);
-
-      await vi.waitFor(async () => {
-        let leakedSocket: WebSocket | undefined;
-        try {
-          leakedSocket = await openSocket(environmentAddParams!.execServerUrl!);
-        } catch {
-          leakedSocket = undefined;
-        } finally {
-          leakedSocket?.close();
-        }
-        expect(leakedSocket).toBeUndefined();
-      });
+      await expect(openSocket(environmentAddParams!.execServerUrl!)).rejects.toThrow();
     } finally {
-      restoreSandboxBackend();
+      await releaseCodexSandboxExecServerEnvironment(sandbox);
     }
   });
 
