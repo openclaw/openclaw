@@ -1,4 +1,3 @@
-import fs from "node:fs";
 import path from "node:path";
 import { MANIFEST_KEY } from "../../compat/legacy-names.js";
 import type { PluginInstallRecord } from "../../config/types.plugins.js";
@@ -77,13 +76,8 @@ type ExternalCatalogEntry = {
 
 const ENV_CATALOG_PATHS = ["OPENCLAW_PLUGIN_CATALOG_PATHS", "OPENCLAW_MPM_CATALOG_PATHS"];
 const OFFICIAL_CHANNEL_CATALOG_RELATIVE_PATH = path.join("dist", "channel-catalog.json");
-type CatalogEntriesCacheEntry = {
-  fingerprint: string;
-  entries: ExternalCatalogEntry[] | null;
-};
-
 const officialCatalogEntriesByPath = new Map<string, ExternalCatalogEntry[] | null>();
-const externalCatalogEntriesByPath = new Map<string, CatalogEntriesCacheEntry>();
+const externalCatalogEntriesByPath = new Map<string, ExternalCatalogEntry[] | null>();
 
 type ManifestKey = typeof MANIFEST_KEY;
 
@@ -143,16 +137,6 @@ function loadExternalCatalogEntries(options: CatalogOptions): ExternalCatalogEnt
   return loadCatalogEntriesFromPaths(paths, externalCatalogEntriesByPath);
 }
 
-function fingerprintCatalogPath(filePath: string): string {
-  try {
-    const stat = fs.statSync(filePath, { bigint: true });
-    const kind = stat.isFile() ? "file" : stat.isDirectory() ? "dir" : "other";
-    return [kind, stat.size.toString(), stat.mtimeNs.toString(), stat.ctimeNs.toString()].join(":");
-  } catch {
-    return "missing";
-  }
-}
-
 function readCatalogEntriesFromPath(resolvedPath: string): ExternalCatalogEntry[] | null {
   const payload = tryReadJsonSync(resolvedPath);
   return payload === null ? null : parseCatalogEntries(payload);
@@ -160,19 +144,19 @@ function readCatalogEntriesFromPath(resolvedPath: string): ExternalCatalogEntry[
 
 function loadCatalogEntriesFromPaths(
   paths: Iterable<string>,
-  cache?: Map<string, CatalogEntriesCacheEntry>,
+  cache?: Map<string, ExternalCatalogEntry[] | null>,
 ): ExternalCatalogEntry[] {
   const entries: ExternalCatalogEntry[] = [];
   for (const resolvedPath of paths) {
-    const fingerprint = cache ? fingerprintCatalogPath(resolvedPath) : undefined;
-    const cached = fingerprint ? cache?.get(resolvedPath) : undefined;
-    const parsed =
-      cached && cached.fingerprint === fingerprint
-        ? cached.entries
-        : readCatalogEntriesFromPath(resolvedPath);
-    if (cache && fingerprint) {
-      cache.set(resolvedPath, { fingerprint, entries: parsed });
+    if (cache?.has(resolvedPath)) {
+      const cached = cache.get(resolvedPath);
+      if (cached) {
+        entries.push(...cached);
+      }
+      continue;
     }
+    const parsed = readCatalogEntriesFromPath(resolvedPath);
+    cache?.set(resolvedPath, parsed);
     if (parsed === null) {
       continue;
     }
