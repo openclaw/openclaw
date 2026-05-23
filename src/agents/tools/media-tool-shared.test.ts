@@ -3,6 +3,8 @@ import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   hasGenerationToolAvailability,
+  isCapabilityProviderConfigured,
+  resolveCapabilityModelConfigForTool,
   resolveMediaToolLocalRoots,
   resolveModelFromRegistry,
 } from "./media-tool-shared.js";
@@ -124,6 +126,39 @@ describe("hasGenerationToolAvailability", () => {
         providers: [{ id: "custom-image", defaultModel: "workflow" }],
       }),
     ).toBe(true);
+  });
+
+  it("keeps config-backed auth when provider isConfigured only checks env/profile", () => {
+    const cfg = {
+      models: {
+        providers: {
+          "custom-image": {
+            baseUrl: "https://example.com/v1",
+            apiKey: "sk-configured", // pragma: allowlist secret
+            models: [],
+          },
+        },
+      },
+    };
+    const provider = {
+      id: "custom-image",
+      defaultModel: "workflow",
+      isConfigured: () => false,
+    };
+
+    expect(
+      isCapabilityProviderConfigured({
+        providers: [provider],
+        provider,
+        cfg,
+      }),
+    ).toBe(true);
+    expect(
+      resolveCapabilityModelConfigForTool({
+        cfg,
+        providers: [provider],
+      }),
+    ).toEqual({ primary: "custom-image/workflow" });
   });
 
   it("allows generation tools for runtime providers configured without auth", () => {
