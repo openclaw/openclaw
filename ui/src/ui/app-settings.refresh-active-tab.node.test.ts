@@ -389,6 +389,16 @@ describe("refreshActiveTab", () => {
     });
   });
 
+  it("loads config before rendering the Workboard tab", async () => {
+    const host = createHost();
+    host.tab = "workboard";
+
+    await refreshActiveTab(host as never);
+
+    expect(mocks.loadConfigMock).toHaveBeenCalledOnce();
+    expect(mocks.loadConfigSchemaMock).not.toHaveBeenCalled();
+  });
+
   it("does not start the deferred schema refresh when scoped settings fail to load", async () => {
     const host = createHost();
     host.tab = "communications";

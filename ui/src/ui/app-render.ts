@@ -369,6 +369,7 @@ const lazyLogs = createLazyView(() => import("./views/logs.ts"), notifyLazyViewC
 const lazyNodes = createLazyView(() => import("./views/nodes.ts"), notifyLazyViewChanged);
 const lazySessions = createLazyView(() => import("./views/sessions.ts"), notifyLazyViewChanged);
 const lazySkills = createLazyView(() => import("./views/skills.ts"), notifyLazyViewChanged);
+const lazyWorkboard = createLazyView(() => import("./views/workboard.ts"), notifyLazyViewChanged);
 
 function formatDreamNextCycle(nextRunAtMs: number | undefined): string | null {
   if (typeof nextRunAtMs !== "number" || !Number.isFinite(nextRunAtMs)) {
@@ -2167,6 +2168,25 @@ export function renderApp(state: AppViewState) {
                 },
                 onRestoreCheckpoint: (sessionKey, checkpointId) =>
                   restoreSessionFromCheckpoint(state, sessionKey, checkpointId),
+              }),
+            )
+          : nothing}
+        ${state.tab === "workboard"
+          ? renderLazyView(lazyWorkboard, (m) =>
+              m.renderWorkboard({
+                host: state,
+                client: state.client,
+                connected: state.connected,
+                pluginEnabled: isPluginEnabledInConfigSnapshot(state.configSnapshot, "workboard", {
+                  enabledByDefault: false,
+                }),
+                agentsList: state.agentsList,
+                sessions: state.sessionsResult?.sessions ?? [],
+                onOpenSession: (sessionKey) => {
+                  switchChatSession(state, sessionKey);
+                  state.setTab("chat" as import("./navigation.ts").Tab);
+                },
+                onRequestUpdate: requestHostUpdate,
               }),
             )
           : nothing}

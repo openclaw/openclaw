@@ -1,0 +1,13 @@
+{
+  "id": "workboard",
+  "activation": {
+    "onStartup": true
+  },
+  "name": "Workboard",
+  "description": "Dashboard workboard for agent-owned issues and sessions.",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

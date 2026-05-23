@@ -1,0 +1,207 @@
+.workboard {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  min-height: 0;
+}
+
+.workboard-toolbar,
+.workboard-draft {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: flex-start;
+}
+
+.workboard-toolbar__filters,
+.workboard-toolbar__actions,
+.workboard-draft__meta,
+.workboard-card__actions,
+.workboard-card__meta,
+.workboard-card__top,
+.workboard-labels {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.workboard-toolbar__filters {
+  flex: 1;
+}
+
+.workboard-toolbar__filters .input[type="search"] {
+  min-width: min(340px, 100%);
+}
+
+.workboard-draft {
+  padding: 14px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--panel);
+}
+
+.workboard-draft__main {
+  display: grid;
+  gap: 8px;
+  flex: 1;
+  min-width: 220px;
+}
+
+.workboard-draft__title {
+  font-weight: 650;
+}
+
+.workboard-draft__notes {
+  min-height: 76px;
+  resize: vertical;
+}
+
+.workboard-draft__meta {
+  justify-content: flex-end;
+}
+
+.workboard-board {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(220px, 1fr));
+  gap: 12px;
+  overflow-x: auto;
+  padding-bottom: 8px;
+}
+
+.workboard-column {
+  min-height: 440px;
+  background: color-mix(in srgb, var(--panel) 78%, transparent);
+  border: 1px solid color-mix(in srgb, var(--border) 80%, transparent);
+  border-radius: 8px;
+  display: flex;
+  flex-direction: column;
+  min-width: 220px;
+}
+
+.workboard-column--drop {
+  outline: 1px dashed color-mix(in srgb, var(--accent) 70%, transparent);
+  outline-offset: -4px;
+}
+
+.workboard-column__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 12px;
+  border-bottom: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
+}
+
+.workboard-column__header h2 {
+  margin: 0;
+  font-size: 0.82rem;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.workboard-column__header span {
+  color: var(--muted);
+  font-size: 0.82rem;
+}
+
+.workboard-column__cards {
+  padding: 10px;
+  display: grid;
+  gap: 10px;
+  align-content: start;
+  min-height: 100%;
+}
+
+.workboard-card {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg);
+  padding: 11px;
+  display: grid;
+  gap: 8px;
+  box-shadow: 0 1px 0 color-mix(in srgb, var(--border) 60%, transparent);
+}
+
+.workboard-card--busy {
+  opacity: 0.62;
+}
+
+.workboard-card h3 {
+  margin: 0;
+  font-size: 0.95rem;
+  line-height: 1.3;
+}
+
+.workboard-card p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.86rem;
+  line-height: 1.4;
+  display: -webkit-box;
+  -webkit-line-clamp: 4;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.workboard-card__top,
+.workboard-card__meta {
+  justify-content: space-between;
+  color: var(--muted);
+  font-size: 0.76rem;
+}
+
+.workboard-card__actions {
+  justify-content: flex-end;
+}
+
+.workboard-card__priority,
+.workboard-live,
+.workboard-labels span {
+  border-radius: 999px;
+  padding: 2px 7px;
+  background: color-mix(in srgb, var(--border) 60%, transparent);
+  color: var(--muted);
+  font-size: 0.72rem;
+}
+
+.priority-high .workboard-card__priority,
+.priority-urgent .workboard-card__priority {
+  background: color-mix(in srgb, var(--danger) 18%, transparent);
+  color: var(--danger);
+}
+
+.priority-low .workboard-card__priority {
+  background: color-mix(in srgb, var(--ok) 16%, transparent);
+  color: var(--ok);
+}
+
+.workboard-live {
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+  color: var(--accent);
+}
+
+.workboard-empty {
+  border: 1px dashed color-mix(in srgb, var(--border) 80%, transparent);
+  border-radius: 8px;
+  padding: 18px 10px;
+  color: var(--muted);
+  text-align: center;
+  font-size: 0.86rem;
+}
+
+@media (max-width: 860px) {
+  .workboard-toolbar,
+  .workboard-draft {
+    flex-direction: column;
+  }
+
+  .workboard-toolbar__actions,
+  .workboard-draft__meta {
+    width: 100%;
+    justify-content: flex-start;
+  }
+
+  .workboard-board {
+    grid-template-columns: repeat(6, minmax(260px, 82vw));
+  }
+}
