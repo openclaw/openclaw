@@ -77,6 +77,7 @@ export function resolveConfiguredDoctorSessionStateRoute(params: {
     resolveAgentModelFallbackValues(params.cfg.agents?.defaults?.model);
   for (const fallback of fallbacks) {
     const parsed = parseModelRef(fallback, primary.provider, {
+      allowManifestNormalization: false,
       allowPluginNormalization: false,
     });
     if (parsed) {
@@ -167,7 +168,7 @@ function resolvePersistedOverrideModelRef(params: {
   return parseModelRef(
     overrideProvider ? `${overrideProvider}/${overrideModel}` : overrideModel,
     params.defaultProvider,
-    { allowPluginNormalization: false },
+    { allowManifestNormalization: false, allowPluginNormalization: false },
   );
 }
 
@@ -296,6 +297,7 @@ function scanEntryForOwner(params: {
     const runtimeModel = normalizeString(params.entry.model);
     const runtimeRef = runtimeModel
       ? parseModelRef(runtimeModel, normalizeString(params.entry.modelProvider) ?? "", {
+          allowManifestNormalization: false,
           allowPluginNormalization: false,
         })
       : null;
