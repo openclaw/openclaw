@@ -560,6 +560,7 @@ async function removeReportedStaleLockIfStillStale(params: {
   lockPath: string;
   normalizedSessionFile: string;
   staleMs: number;
+  maxHoldMs?: number;
   readOwnerProcessArgs?: SessionLockOwnerProcessArgsReader;
 }): Promise<boolean> {
   const nowMs = Date.now();
@@ -581,6 +582,7 @@ async function removeReportedStaleLockIfStillStale(params: {
     heldByThisProcess: sessionLockHeldByThisProcess(params.normalizedSessionFile),
     reclaimLockWithoutStarttime: true,
     readOwnerProcessArgs: params.readOwnerProcessArgs ?? readProcessArgsSync,
+    maxHoldMs: params.maxHoldMs,
   });
   if (!(await shouldReclaimContendedLockFile(params.lockPath, inspected, params.staleMs, nowMs))) {
     return false;
@@ -756,21 +758,6 @@ export async function acquireSessionWriteLock(params: {
   const lockPath = `${normalizedSessionFile}.lock`;
   await fs.mkdir(sessionDir, { recursive: true });
 
-  // Fast path: if a lock file exists but its owner PID is dead,
-  // remove it immediately before entering the retry loop.
-  // This saves up to timeoutMs of futile waiting for a dead process.
-  // The shouldReclaim callback in acquire() already handles this case,
-  // but only after the retry loop iterates — this avoids that delay.
-  try {
-    const fastPayload = await readLockPayload(lockPath);
-    if (fastPayload?.pid != null && !isPidAlive(fastPayload.pid)) {
-      await fs.unlink(lockPath).catch(() => {});
-    }
-  } catch {
-    // Best-effort: if read/delete fails, the retry loop's shouldReclaim
-    // will clean up the stale lock during acquisition.
-  }
-
   while (true) {
     try {
       const lock = await SESSION_LOCKS.acquire(sessionFile, {
@@ -810,6 +797,7 @@ export async function acquireSessionWriteLock(params: {
             lockPath: staleLockPath,
             normalizedSessionFile,
             staleMs,
+            maxHoldMs,
           })
         ) {
           continue;
