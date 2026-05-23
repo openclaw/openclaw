@@ -415,11 +415,22 @@ function ipv4FromHextets(high, low) {
   return [(high >>> 8) & 0xff, high & 0xff, (low >>> 8) & 0xff, low & 0xff];
 }
 
+function ipv4OctetsToHextets(octets) {
+  return [
+    ((octets[0] << 8) | octets[1]).toString(16),
+    ((octets[2] << 8) | octets[3]).toString(16),
+  ];
+}
+
 function parseIpv6Parts(address) {
   const normalized = address.toLowerCase().replace(/%[0-9a-z_.-]+$/u, "");
   const dottedIpv4 = normalized.match(/^(.*:)(\d{1,3}(?:\.\d{1,3}){3})$/u);
+  const dottedIpv4Octets = dottedIpv4 ? parseIpv4(dottedIpv4[2]) : null;
+  if (dottedIpv4 && !dottedIpv4Octets) {
+    return null;
+  }
   const canonical = dottedIpv4
-    ? `${dottedIpv4[1]}${((parseIpv4(dottedIpv4[2])?.[0] ?? 0) << 8) | (parseIpv4(dottedIpv4[2])?.[1] ?? 0)}:${((parseIpv4(dottedIpv4[2])?.[2] ?? 0) << 8) | (parseIpv4(dottedIpv4[2])?.[3] ?? 0)}`
+    ? `${dottedIpv4[1]}${ipv4OctetsToHextets(dottedIpv4Octets)[0]}:${ipv4OctetsToHextets(dottedIpv4Octets)[1]}`
     : normalized;
   if (canonical.includes(":::") || canonical.split("::").length > 2) {
     return null;
