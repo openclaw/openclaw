@@ -369,11 +369,15 @@ export async function migratePlanCommand(
       `Migration provider is required. Run ${formatCliCommand("openclaw migrate list")} to choose one.`,
     );
   }
-  assertVerifyPluginAppsProvider(providerId, opts);
-  const plan = await createMigrationPlanWithProgress(runtime, { ...opts, provider: providerId });
-  if (opts.json) {
+  const resolvedOpts = resolveDefaultIncludeSecrets(opts);
+  assertVerifyPluginAppsProvider(providerId, resolvedOpts);
+  const plan = await createMigrationPlanWithProgress(runtime, {
+    ...resolvedOpts,
+    provider: providerId,
+  });
+  if (resolvedOpts.json) {
     writeRuntimeJson(runtime, redactMigrationPlan(plan));
-  } else if (opts.suppressPlanLog !== true) {
+  } else if (resolvedOpts.suppressPlanLog !== true) {
     log.message(formatMigrationPreview(plan).join("\n"));
   }
   return plan;

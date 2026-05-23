@@ -391,6 +391,23 @@ describe("migrateApplyCommand", () => {
     );
   });
 
+  it("lets --no-auth-credentials override explicit secret import in plan", async () => {
+    const planned = authPlan("skipped");
+    mocks.provider.plan.mockImplementation(async (ctx) => {
+      expect(ctx.includeSecrets).toBe(false);
+      return planned;
+    });
+
+    const result = await migratePlanCommand(runtime, {
+      provider: "hermes",
+      includeSecrets: true,
+      authCredentials: false,
+    });
+
+    expect(result).toBe(planned);
+    expect(mocks.provider.plan).toHaveBeenCalledTimes(1);
+  });
+
   it("does not wrap JSON planning in progress output", async () => {
     const planned = codexPluginPlan();
     mocks.provider.plan.mockResolvedValue(planned);
