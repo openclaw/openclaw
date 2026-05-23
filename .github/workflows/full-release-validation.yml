@@ -845,46 +845,6 @@ jobs:
         run: |
           set -euo pipefail
 
-          before_json="$(gh run list --workflow npm-telegram-beta-e2e.yml --event workflow_dispatch --limit 100 --json databaseId --jq '[.[].databaseId]')"
-
-          args=(-f package_spec="${PACKAGE_SPEC:-openclaw@beta}" -f harness_ref="$TARGET_SHA" -f provider_mode="$PROVIDER_MODE")
-          if [[ -z "${PACKAGE_SPEC// }" ]]; then
-            if [[ "$PREPARE_PACKAGE_RESULT" != "success" || -z "${PACKAGE_ARTIFACT_NAME// }" ]]; then
-              echo "Full release Telegram requires either npm_telegram_package_spec or a prepared release-package-under-test artifact." >&2
-              exit 1
-            fi
-            args+=(
-              -f package_artifact_name="$PACKAGE_ARTIFACT_NAME"
-              -f package_artifact_run_id="${GITHUB_RUN_ID}"
-              -f package_label="full-release-${TARGET_SHA:0:12}"
-            )
-          fi
-          if [[ -n "${SCENARIO// }" ]]; then
-            args+=(-f scenario="$SCENARIO")
-          fi
-
-          gh workflow run npm-telegram-beta-e2e.yml --ref "$CHILD_WORKFLOW_REF" "${args[@]}"
-
-          run_id=""
-          for _ in $(seq 1 60); do
-            run_id="$(
-              BEFORE_IDS="$before_json" gh run list --workflow npm-telegram-beta-e2e.yml --event workflow_dispatch --limit 50 --json databaseId,createdAt \
-                --jq 'map(select(.databaseId as $id | (env.BEFORE_IDS | fromjson | index($id) | not))) | sort_by(.createdAt) | reverse | .[0].databaseId // empty'
-            )"
-            if [[ -n "$run_id" ]]; then
-              break
-            fi
-            sleep 5
-          done
-
-          if [[ -z "$run_id" ]]; then
-            echo "Could not find dispatched run for npm-telegram-beta-e2e.yml." >&2
-            exit 1
-          fi
-
-          echo "Dispatched npm-telegram-beta-e2e.yml: https://github.com/${GITHUB_REPOSITORY}/actions/runs/${run_id}"
-          echo "run_id=${run_id}" >> "$GITHUB_OUTPUT"
-
           gh_with_retry() {
             local output status attempt
             for attempt in 1 2 3 4 5 6; do
@@ -907,6 +867,46 @@ jobs:
             printf '%s\n' "$output" >&2
             return "$status"
           }
+
+          before_json="$(gh_with_retry run list --workflow npm-telegram-beta-e2e.yml --event workflow_dispatch --limit 100 --json databaseId --jq '[.[].databaseId]')"
+
+          args=(-f package_spec="${PACKAGE_SPEC:-openclaw@beta}" -f harness_ref="$TARGET_SHA" -f provider_mode="$PROVIDER_MODE")
+          if [[ -z "${PACKAGE_SPEC// }" ]]; then
+            if [[ "$PREPARE_PACKAGE_RESULT" != "success" || -z "${PACKAGE_ARTIFACT_NAME// }" ]]; then
+              echo "Full release Telegram requires either npm_telegram_package_spec or a prepared release-package-under-test artifact." >&2
+              exit 1
+            fi
+            args+=(
+              -f package_artifact_name="$PACKAGE_ARTIFACT_NAME"
+              -f package_artifact_run_id="${GITHUB_RUN_ID}"
+              -f package_label="full-release-${TARGET_SHA:0:12}"
+            )
+          fi
+          if [[ -n "${SCENARIO// }" ]]; then
+            args+=(-f scenario="$SCENARIO")
+          fi
+
+          gh_with_retry workflow run npm-telegram-beta-e2e.yml --ref "$CHILD_WORKFLOW_REF" "${args[@]}"
+
+          run_id=""
+          for _ in $(seq 1 60); do
+            run_id="$(
+              BEFORE_IDS="$before_json" gh_with_retry run list --workflow npm-telegram-beta-e2e.yml --event workflow_dispatch --limit 50 --json databaseId,createdAt \
+                --jq 'map(select(.databaseId as $id | (env.BEFORE_IDS | fromjson | index($id) | not))) | sort_by(.createdAt) | reverse | .[0].databaseId // empty'
+            )"
+            if [[ -n "$run_id" ]]; then
+              break
+            fi
+            sleep 5
+          done
+
+          if [[ -z "$run_id" ]]; then
+            echo "Could not find dispatched run for npm-telegram-beta-e2e.yml." >&2
+            exit 1
+          fi
+
+          echo "Dispatched npm-telegram-beta-e2e.yml: https://github.com/${GITHUB_REPOSITORY}/actions/runs/${run_id}"
+          echo "run_id=${run_id}" >> "$GITHUB_OUTPUT"
 
           cancel_child() {
             if [[ -n "${run_id:-}" ]]; then
