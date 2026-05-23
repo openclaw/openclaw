@@ -12,6 +12,8 @@ import {
   stopWorkboardCard,
   syncWorkboardLifecycle,
   WORKBOARD_PRIORITIES,
+  type WorkboardExecutionEngine,
+  type WorkboardExecutionMode,
   type WorkboardCard,
   type WorkboardLifecycle,
   type WorkboardPriority,
@@ -63,7 +65,17 @@ function matchesFilter(
   if (!query) {
     return true;
   }
-  return [card.title, card.notes, card.agentId, card.sessionKey, ...card.labels]
+  return [
+    card.title,
+    card.notes,
+    card.agentId,
+    card.sessionKey,
+    card.execution?.engine,
+    card.execution?.mode,
+    card.execution?.model,
+    card.execution?.sessionKey,
+    ...card.labels,
+  ]
     .filter((value): value is string => typeof value === "string")
     .some((value) => value.toLowerCase().includes(query));
 }
@@ -94,10 +106,11 @@ function openCardSession(
   props: Pick<WorkboardProps, "onOpenSession">,
   card: WorkboardCard,
 ): boolean {
-  if (!card.sessionKey) {
+  const sessionKey = card.sessionKey ?? card.execution?.sessionKey;
+  if (!sessionKey) {
     return false;
   }
-  props.onOpenSession(card.sessionKey);
+  props.onOpenSession(sessionKey);
   return true;
 }
 
@@ -533,14 +546,64 @@ function renderLifecycle(card: WorkboardCard, sessions: readonly GatewaySessionR
   const lifecycle = getWorkboardLifecycle(card, sessions);
   const formatted = formatLifecycle(lifecycle);
   const session = lifecycle.session;
+  const execution = card.execution;
   return html`
     <div class="workboard-card__lifecycle">
       <span class="workboard-lifecycle workboard-lifecycle--${formatted.tone}">
-        ${formatted.label}
+        ${execution ? `${execution.engine} ${execution.mode}` : formatted.label}
       </span>
       <span class="workboard-card__lifecycle-detail">
         ${session?.displayName ?? session?.label ?? formatted.detail}
       </span>
+    </div>
+  `;
+}
+
+function renderStartExecutionButton(
+  props: WorkboardProps,
+  card: WorkboardCard,
+  engine: WorkboardExecutionEngine | null,
+  mode: WorkboardExecutionMode,
+) {
+  const state = getWorkboardState(props.host);
+  const busy = state.busyCardId === card.id;
+  const title = engine
+    ? `${mode === "autonomous" ? "Run" : "Open"} ${engine}`
+    : "Run default agent";
+  return html`
+    <button
+      class="btn btn--xs workboard-card__start workboard-card__start--${mode} ${engine
+        ? ""
+        : "workboard-card__start--default"}"
+      title=${title}
+      ?disabled=${busy || !props.connected}
+      @click=${async () => {
+        const key = await startWorkboardCard({
+          host: props.host,
+          client: props.client,
+          card,
+          ...(engine ? { engine } : {}),
+          mode,
+          requestUpdate: props.onRequestUpdate,
+        });
+        if (key) {
+          props.onOpenSession(key);
+        }
+      }}
+    >
+      ${mode === "autonomous" ? icons.play : icons.penLine} ${engine ?? "Start"}
+    </button>
+  `;
+}
+
+function renderStartExecutionControls(props: WorkboardProps, card: WorkboardCard) {
+  return html`
+    <div class="workboard-card__execution-controls">
+      ${renderStartExecutionButton(props, card, null, "autonomous")}
+      ${renderStartExecutionButton(props, card, "codex", "autonomous")}
+      ${renderStartExecutionButton(props, card, "claude", "autonomous")}
+      ${renderStartExecutionButton(props, card, "codex", "manual")}
+      ${renderStartExecutionButton(props, card, "claude", "manual")}
     </div>
   `;
 }
@@ -551,7 +614,8 @@ function renderCard(props: WorkboardProps, card: WorkboardCard) {
   const busy = state.busyCardId === card.id;
   const syncing = state.syncingCardIds.has(card.id);
   const live = session?.hasActiveRun === true;
-  const linked = Boolean(card.sessionKey);
+  const linkedSessionKey = card.sessionKey ?? card.execution?.sessionKey;
+  const linked = Boolean(linkedSessionKey);
   return html`
     <article
       class="workboard-card priority-${card.priority} ${busy ? "workboard-card--busy" : ""} ${linked
@@ -612,12 +676,12 @@ function renderCard(props: WorkboardProps, card: WorkboardCard) {
         >
           ${icons.edit}
         </button>
-        ${card.sessionKey
+        ${linked
           ? html`
               <button
                 class="btn btn--icon workboard-card__icon"
                 title="Open session"
-                @click=${() => props.onOpenSession(card.sessionKey!)}
+                @click=${() => props.onOpenSession(linkedSessionKey!)}
               >
                 ${icons.messageSquare}
               </button>
@@ -640,26 +704,7 @@ function renderCard(props: WorkboardProps, card: WorkboardCard) {
                   `
                 : nothing}
             `
-          : html`
-              <button
-                class="btn btn--xs workboard-card__start"
-                title="Start session"
-                ?disabled=${busy || !props.connected}
-                @click=${async () => {
-                  const key = await startWorkboardCard({
-                    host: props.host,
-                    client: props.client,
-                    card,
-                    requestUpdate: props.onRequestUpdate,
-                  });
-                  if (key) {
-                    props.onOpenSession(key);
-                  }
-                }}
-              >
-                ${icons.play} Start
-              </button>
-            `}
+          : renderStartExecutionControls(props, card)}
         <button
           class="btn btn--icon workboard-card__icon workboard-card__delete"
           title="Delete card"

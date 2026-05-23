@@ -44,12 +44,28 @@ describe("WorkboardStore", () => {
       sessionKey: "agent:main:dashboard:1",
       runId: "run-1",
       taskId: "task-1",
+      execution: {
+        id: "exec-1",
+        kind: "agent-session",
+        engine: "claude",
+        mode: "manual",
+        status: "running",
+        model: "anthropic/claude-sonnet-4-6",
+        sessionKey: "agent:main:dashboard:1",
+        startedAt: 10,
+        updatedAt: 10,
+      },
     });
 
     expect(card).toMatchObject({
       sessionKey: "agent:main:dashboard:1",
       runId: "run-1",
       taskId: "task-1",
+      execution: {
+        engine: "claude",
+        mode: "manual",
+        model: "anthropic/claude-sonnet-4-6",
+      },
     });
   });
 
@@ -64,6 +80,36 @@ describe("WorkboardStore", () => {
 
     const done = await store.update(card.id, { status: "done" });
     expect(done.completedAt).toBeGreaterThanOrEqual(done.startedAt ?? 0);
+  });
+
+  it("keeps execution session links aligned with edited card links", async () => {
+    const store = new WorkboardStore(createMemoryStore());
+    const card = await store.create({
+      title: "Relink me",
+      sessionKey: "agent:main:dashboard:1",
+      execution: {
+        id: "exec-1",
+        kind: "agent-session",
+        engine: "codex",
+        mode: "autonomous",
+        status: "running",
+        model: "openai/gpt-5.5",
+        sessionKey: "agent:main:dashboard:1",
+        startedAt: 10,
+        updatedAt: 10,
+      },
+    });
+
+    const relinked = await store.update(card.id, { sessionKey: "agent:main:dashboard:2" });
+    expect(relinked.sessionKey).toBe("agent:main:dashboard:2");
+    expect(relinked.execution?.sessionKey).toBe("agent:main:dashboard:2");
+
+    const unlinked = await store.update(card.id, { sessionKey: "" });
+    expect(unlinked.sessionKey).toBeUndefined();
+    expect(unlinked.execution?.sessionKey).toBeUndefined();
+
+    const cleared = await store.update(card.id, { execution: null });
+    expect(cleared.execution).toBeUndefined();
   });
 
   it("rejects invalid status values", async () => {

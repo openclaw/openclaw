@@ -1,8 +1,15 @@
 import { randomUUID } from "node:crypto";
 import {
+  WORKBOARD_EXECUTION_ENGINES,
+  WORKBOARD_EXECUTION_MODES,
+  WORKBOARD_EXECUTION_STATUSES,
   WORKBOARD_PRIORITIES,
   WORKBOARD_STATUSES,
   type WorkboardCard,
+  type WorkboardExecution,
+  type WorkboardExecutionEngine,
+  type WorkboardExecutionMode,
+  type WorkboardExecutionStatus,
   type WorkboardPriority,
   type WorkboardStatus,
 } from "./types.js";
@@ -33,6 +40,7 @@ export type WorkboardCardInput = {
   runId?: unknown;
   taskId?: unknown;
   sourceUrl?: unknown;
+  execution?: unknown;
   position?: unknown;
 };
 
@@ -117,6 +125,105 @@ function normalizePosition(value: unknown, fallback: number): number {
   return Math.max(0, Math.trunc(value));
 }
 
+function normalizeExecutionEngine(
+  value: unknown,
+  fallback: WorkboardExecutionEngine,
+): WorkboardExecutionEngine {
+  if (
+    typeof value === "string" &&
+    WORKBOARD_EXECUTION_ENGINES.includes(value as WorkboardExecutionEngine)
+  ) {
+    return value as WorkboardExecutionEngine;
+  }
+  return fallback;
+}
+
+function normalizeExecutionMode(
+  value: unknown,
+  fallback: WorkboardExecutionMode,
+): WorkboardExecutionMode {
+  if (
+    typeof value === "string" &&
+    WORKBOARD_EXECUTION_MODES.includes(value as WorkboardExecutionMode)
+  ) {
+    return value as WorkboardExecutionMode;
+  }
+  return fallback;
+}
+
+function normalizeExecutionStatus(
+  value: unknown,
+  fallback: WorkboardExecutionStatus,
+): WorkboardExecutionStatus {
+  if (
+    typeof value === "string" &&
+    WORKBOARD_EXECUTION_STATUSES.includes(value as WorkboardExecutionStatus)
+  ) {
+    return value as WorkboardExecutionStatus;
+  }
+  return fallback;
+}
+
+function normalizeTimestamp(value: unknown, fallback: number): number {
+  return typeof value === "number" && Number.isFinite(value)
+    ? Math.max(0, Math.trunc(value))
+    : fallback;
+}
+
+function normalizeExecution(value: unknown): WorkboardExecution | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return undefined;
+  }
+  const record = value as Record<string, unknown>;
+  const now = Date.now();
+  const model = normalizeOptionalString(record.model);
+  const id = normalizeOptionalString(record.id) ?? randomUUID();
+  if (!model) {
+    return undefined;
+  }
+  const startedAt = normalizeTimestamp(record.startedAt, now);
+  const updatedAt = normalizeTimestamp(record.updatedAt, startedAt);
+  const sessionKey = normalizeOptionalString(record.sessionKey);
+  const runId = normalizeOptionalString(record.runId);
+  return {
+    id,
+    kind: "agent-session",
+    engine: normalizeExecutionEngine(record.engine, "codex"),
+    mode: normalizeExecutionMode(record.mode, "autonomous"),
+    status: normalizeExecutionStatus(record.status, "idle"),
+    model,
+    startedAt,
+    updatedAt,
+    ...(sessionKey ? { sessionKey } : {}),
+    ...(runId ? { runId } : {}),
+  };
+}
+
+function syncExecutionSessionKey(
+  execution: WorkboardExecution | undefined,
+  sessionKey: string | undefined,
+): WorkboardExecution | undefined {
+  if (!execution) {
+    return undefined;
+  }
+  return removeUndefinedExecutionFields({
+    ...execution,
+    sessionKey,
+    updatedAt: Date.now(),
+  });
+}
+
+function removeUndefinedExecutionFields(execution: WorkboardExecution): WorkboardExecution {
+  const next = { ...execution };
+  if (next.sessionKey === undefined) {
+    delete next.sessionKey;
+  }
+  if (next.runId === undefined) {
+    delete next.runId;
+  }
+  return next;
+}
+
 function compareCards(left: WorkboardCard, right: WorkboardCard): number {
   if (left.status !== right.status) {
     return WORKBOARD_STATUSES.indexOf(left.status) - WORKBOARD_STATUSES.indexOf(right.status);
@@ -136,6 +243,7 @@ function removeUndefinedCardFields(card: WorkboardCard): WorkboardCard {
     "runId",
     "taskId",
     "sourceUrl",
+    "execution",
     "startedAt",
     "completedAt",
   ] as const) {
@@ -179,6 +287,7 @@ export class WorkboardStore {
     const runId = normalizeOptionalString(input.runId);
     const taskId = normalizeOptionalString(input.taskId);
     const sourceUrl = normalizeOptionalString(input.sourceUrl);
+    const execution = normalizeExecution(input.execution);
     const card: WorkboardCard = {
       id: randomUUID(),
       title: normalizeTitle(input.title),
@@ -194,6 +303,7 @@ export class WorkboardStore {
       ...(runId ? { runId } : {}),
       ...(taskId ? { taskId } : {}),
       ...(sourceUrl ? { sourceUrl } : {}),
+      ...(execution ? { execution } : {}),
     };
     await this.store.register(card.id, { version: 1, card });
     return card;
@@ -208,6 +318,16 @@ export class WorkboardStore {
     const now = Date.now();
     const completedAt = status === "done" ? (existing.completedAt ?? now) : undefined;
     const startedAt = status === "running" ? (existing.startedAt ?? now) : existing.startedAt;
+    const sessionKey =
+      patch.sessionKey === undefined
+        ? existing.sessionKey
+        : normalizeOptionalString(patch.sessionKey);
+    const execution =
+      patch.execution === undefined
+        ? patch.sessionKey === undefined
+          ? existing.execution
+          : syncExecutionSessionKey(existing.execution, sessionKey)
+        : normalizeExecution(patch.execution);
     const next = removeUndefinedCardFields({
       ...existing,
       title: patch.title === undefined ? existing.title : normalizeTitle(patch.title),
@@ -220,16 +340,14 @@ export class WorkboardStore {
       labels: patch.labels === undefined ? existing.labels : normalizeLabels(patch.labels),
       agentId:
         patch.agentId === undefined ? existing.agentId : normalizeOptionalString(patch.agentId),
-      sessionKey:
-        patch.sessionKey === undefined
-          ? existing.sessionKey
-          : normalizeOptionalString(patch.sessionKey),
+      sessionKey,
       runId: patch.runId === undefined ? existing.runId : normalizeOptionalString(patch.runId),
       taskId: patch.taskId === undefined ? existing.taskId : normalizeOptionalString(patch.taskId),
       sourceUrl:
         patch.sourceUrl === undefined
           ? existing.sourceUrl
           : normalizeOptionalString(patch.sourceUrl),
+      execution,
       position:
         patch.position === undefined
           ? existing.position

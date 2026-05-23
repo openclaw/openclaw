@@ -457,6 +457,13 @@
   justify-content: flex-end;
 }
 
+.workboard-card__execution-controls {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(72px, 1fr));
+  gap: 6px;
+  flex: 1 1 100%;
+}
+
 .workboard-card__icon {
   width: 28px;
   min-width: 28px;
@@ -481,6 +488,17 @@
   min-height: 28px;
   padding: 4px 9px;
   border-radius: 6px;
+  justify-content: center;
+  min-width: 0;
+  white-space: nowrap;
+}
+
+.workboard-card__start--manual {
+  color: var(--muted);
+}
+
+.workboard-card__start--default {
+  grid-column: 1 / -1;
 }
 
 .workboard-card__lifecycle {

@@ -47,9 +47,26 @@ Each card stores:
 - labels
 - optional agent id
 - optional linked session, run, task, or source URL
+- optional execution metadata for a Codex or Claude session started from the card
 
 Cards are stored in the plugin's Gateway state. They are local to the Gateway
 state directory and move with the rest of that Gateway's OpenClaw state.
+
+## Card executions
+
+Unlinked cards can start work from the card. Start uses the Gateway's configured
+default agent and model. Codex and Claude actions are optional explicit model
+choices:
+
+- Run Codex or Run Claude creates a dashboard session, sends the card prompt,
+  and marks the card `running`.
+- Open Codex or Open Claude creates a linked dashboard session without sending
+  the card prompt or moving the card, so you can work manually while it stays
+  attached to the board.
+
+Execution metadata stores the selected engine, mode, model ref, session key,
+run id, and lifecycle status on the card. Codex executions use
+`openai/gpt-5.5`; Claude executions use `anthropic/claude-sonnet-4-6`.
 
 ## Session lifecycle sync
 

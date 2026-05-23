@@ -342,12 +342,133 @@ describe("workboard controller", () => {
         message: expect.stringContaining("Work on this OpenClaw Workboard card: Build board"),
       }),
     );
+    expect(client.request.mock.calls[0]?.[1]).not.toHaveProperty("model");
     expect(client.request).toHaveBeenNthCalledWith(
       2,
       "workboard.cards.update",
       expect.objectContaining({
         id: "card-1",
-        patch: expect.objectContaining({ status: "running", runId: "run-1" }),
+        patch: expect.objectContaining({
+          status: "running",
+          runId: "run-1",
+        }),
+      }),
+    );
+    expect(client.request.mock.calls[1]?.[1]).toHaveProperty("patch.execution", null);
+  });
+
+  it("starts a Codex execution with an explicit model override", async () => {
+    const host = {};
+    const running = {
+      ...sampleCard,
+      status: "running",
+      sessionKey: "agent:main:dashboard:1",
+      execution: {
+        id: "card-1:codex",
+        kind: "agent-session",
+        engine: "codex",
+        mode: "autonomous",
+        status: "running",
+        model: "openai/gpt-5.5",
+        sessionKey: "agent:main:dashboard:1",
+        runId: "run-1",
+        startedAt: 10,
+        updatedAt: 10,
+      },
+    };
+    const client = createClient({
+      "sessions.create": { key: "agent:main:dashboard:1", runId: "run-1" },
+      "workboard.cards.update": { card: running },
+    });
+
+    await startWorkboardCard({
+      host,
+      client: client as never,
+      card: sampleCard,
+      engine: "codex",
+    });
+
+    expect(client.request).toHaveBeenNthCalledWith(
+      1,
+      "sessions.create",
+      expect.objectContaining({
+        model: "openai/gpt-5.5",
+        message: expect.stringContaining("Work on this OpenClaw Workboard card: Build board"),
+      }),
+    );
+    expect(client.request).toHaveBeenNthCalledWith(
+      2,
+      "workboard.cards.update",
+      expect.objectContaining({
+        id: "card-1",
+        patch: expect.objectContaining({
+          status: "running",
+          execution: expect.objectContaining({
+            engine: "codex",
+            mode: "autonomous",
+            model: "openai/gpt-5.5",
+            runId: "run-1",
+          }),
+        }),
+      }),
+    );
+  });
+
+  it("starts a manual Claude execution without sending the card prompt", async () => {
+    const host = {};
+    const running = {
+      ...sampleCard,
+      status: "todo",
+      sessionKey: "agent:main:dashboard:1",
+      execution: {
+        id: "card-1:claude",
+        kind: "agent-session",
+        engine: "claude",
+        mode: "manual",
+        status: "idle",
+        model: "anthropic/claude-sonnet-4-6",
+        sessionKey: "agent:main:dashboard:1",
+        startedAt: 10,
+        updatedAt: 10,
+      },
+    };
+    const client = createClient({
+      "sessions.create": { key: "agent:main:dashboard:1", runStarted: false },
+      "workboard.cards.update": { card: running },
+    });
+
+    const sessionKey = await startWorkboardCard({
+      host,
+      client: client as never,
+      card: sampleCard,
+      engine: "claude",
+      mode: "manual",
+    });
+
+    expect(sessionKey).toBe("agent:main:dashboard:1");
+    expect(client.request).toHaveBeenNthCalledWith(
+      1,
+      "sessions.create",
+      expect.objectContaining({
+        model: "anthropic/claude-sonnet-4-6",
+      }),
+    );
+    expect(client.request.mock.calls[0]?.[1]).not.toHaveProperty("message");
+    expect(client.request.mock.calls[0]?.[1]).not.toHaveProperty("task");
+    expect(client.request).toHaveBeenNthCalledWith(
+      2,
+      "workboard.cards.update",
+      expect.objectContaining({
+        id: "card-1",
+        patch: expect.objectContaining({
+          status: "todo",
+          execution: expect.objectContaining({
+            engine: "claude",
+            mode: "manual",
+            status: "idle",
+            model: "anthropic/claude-sonnet-4-6",
+          }),
+        }),
       }),
     );
   });
@@ -376,9 +497,13 @@ describe("workboard controller", () => {
       "workboard.cards.update",
       expect.objectContaining({
         id: "card-1",
-        patch: { status: "blocked", sessionKey: "agent:main:dashboard:1" },
+        patch: expect.objectContaining({
+          status: "blocked",
+          sessionKey: "agent:main:dashboard:1",
+        }),
       }),
     );
+    expect(client.request.mock.calls[1]?.[1]).toHaveProperty("patch.execution", null);
     expect(getWorkboardState(host).error).toBe("Agent run did not start: provider unavailable");
   });
 
@@ -424,6 +549,28 @@ describe("workboard controller", () => {
       state: "failed",
       targetStatus: "blocked",
     });
+    expect(
+      getWorkboardLifecycle(
+        {
+          ...sampleCard,
+          execution: {
+            id: "exec-1",
+            kind: "agent-session",
+            engine: "codex",
+            mode: "autonomous",
+            status: "running",
+            model: "openai/gpt-5.5",
+            sessionKey: sampleSession.key,
+            startedAt: 1,
+            updatedAt: 1,
+          },
+        },
+        [sampleSession],
+      ),
+    ).toMatchObject({
+      state: "running",
+      targetStatus: "running",
+    });
   });
 
   it("syncs linked card status from session lifecycle without overriding manual review", async () => {
@@ -456,6 +603,38 @@ describe("workboard controller", () => {
       patch: { status: "running" },
     });
     expect(state.cards.find((card) => card.id === "card-review")?.status).toBe("review");
+  });
+
+  it("does not mark executions blocked when the linked session is missing from the current list", async () => {
+    const host = {};
+    const state = getWorkboardState(host);
+    const linked = {
+      ...sampleCard,
+      status: "running",
+      sessionKey: "agent:main:dashboard:missing",
+      execution: {
+        id: "exec-1",
+        kind: "agent-session",
+        engine: "codex",
+        mode: "autonomous",
+        status: "running",
+        model: "openai/gpt-5.5",
+        sessionKey: "agent:main:dashboard:missing",
+        startedAt: 1,
+        updatedAt: 1,
+      },
+    } as const;
+    state.loaded = true;
+    state.cards = [linked];
+    const client = createClient({ "workboard.cards.update": { card: linked } });
+
+    await syncWorkboardLifecycle({
+      host,
+      client: client as never,
+      sessions: [],
+    });
+
+    expect(client.request).not.toHaveBeenCalled();
   });
 
   it("skips lifecycle writeback for read-only workboard clients", async () => {

@@ -109,7 +109,7 @@ describe("renderWorkboard", () => {
     expect(onOpenSession).not.toHaveBeenCalled();
   });
 
-  it("shows a labeled start action for unlinked cards", () => {
+  it("shows Codex and Claude execution actions for unlinked cards", () => {
     const host = {};
     const state = getWorkboardState(host);
     state.loaded = true;
@@ -140,8 +140,23 @@ describe("renderWorkboard", () => {
       container,
     );
 
-    const startButton = container.querySelector<HTMLButtonElement>(".workboard-card__start");
-    expect(startButton?.textContent).toContain("Start");
+    const startButtons = [
+      ...container.querySelectorAll<HTMLButtonElement>(".workboard-card__start"),
+    ];
+    expect(startButtons.map((button) => button.textContent?.trim())).toEqual([
+      "Start",
+      "codex",
+      "claude",
+      "codex",
+      "claude",
+    ]);
+    expect(startButtons.map((button) => button.title)).toEqual([
+      "Run default agent",
+      "Run codex",
+      "Run claude",
+      "Open codex",
+      "Open claude",
+    ]);
     expect(container.querySelector(".workboard-card")?.getAttribute("role")).toBeNull();
   });
 
