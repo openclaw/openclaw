@@ -1,5 +1,5 @@
-import type { StreamFn } from "@earendil-works/pi-agent-core";
-import type { Context, Model, SimpleStreamOptions } from "@earendil-works/pi-ai";
+import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
+import type { Context, Model, SimpleStreamOptions } from "openclaw/plugin-sdk/llm";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { buildOpenAICodexProviderPlugin } from "./openai-codex-provider.js";
 import { buildOpenAIProvider } from "./openai-provider.js";
@@ -356,7 +356,7 @@ describe("buildOpenAIProvider", () => {
     });
   });
 
-  it("leaves gpt-5.5 to Pi and resolves gpt-5.5-pro locally", () => {
+  it("leaves gpt-5.5 to OpenClaw and resolves gpt-5.5-pro locally", () => {
     const provider = buildOpenAIProvider();
 
     const model = provider.resolveDynamicModel?.({

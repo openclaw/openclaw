@@ -33,6 +33,7 @@ import { defaultQaModelForMode } from "./run-config.js";
 import {
   captureRuntimeParityCell,
   isRuntimeParityResultPass,
+  openclawRuntimeParityCell,
   runRuntimeParityScenario,
   type RuntimeId,
   type RuntimeParityCell,
@@ -362,18 +363,17 @@ function buildRuntimeParityScenarioResult(params: {
   result: RuntimeParityResult;
 }): QaSuiteScenarioResult {
   const driftStepStatus = isRuntimeParityPass(params.result) ? "pass" : "fail";
+  const openclawCell = openclawRuntimeParityCell(params.result.cells);
   return {
     name: params.scenarioName,
     status: driftStepStatus,
     details: params.result.driftDetails ?? `runtime drift classified as ${params.result.drift}`,
     steps: [
       {
-        name: params.result.cells.pi.runtime,
+        name: openclawCell.runtime,
         status:
-          params.result.cells.pi.runtimeErrorClass || params.result.cells.pi.transportErrorClass
-            ? "fail"
-            : "pass",
-        details: formatRuntimeParityCellDetails(params.result.cells.pi),
+          openclawCell.runtimeErrorClass || openclawCell.transportErrorClass ? "fail" : "pass",
+        details: formatRuntimeParityCellDetails(openclawCell),
       },
       {
         name: params.result.cells.codex.runtime,
@@ -1015,7 +1015,9 @@ export async function runQaSuite(params?: QaSuiteRunParams): Promise<QaSuiteResu
     ...new Set([
       ...collectQaSuitePluginIds(selectedCatalogScenarios),
       ...(params?.enabledPluginIds ?? []).map((pluginId) => pluginId.trim()).filter(Boolean),
-      ...(params?.forcedRuntime && params.forcedRuntime !== "pi" ? [params.forcedRuntime] : []),
+      ...(params?.forcedRuntime && params.forcedRuntime !== "openclaw"
+        ? [params.forcedRuntime]
+        : []),
     ]),
   ];
   const gatewayConfigPatch = collectQaSuiteGatewayConfigPatch(selectedCatalogScenarios);

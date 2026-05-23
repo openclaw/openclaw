@@ -1,6 +1,6 @@
-import type { StreamFn } from "@earendil-works/pi-agent-core";
-import { streamSimple } from "@earendil-works/pi-ai";
-import { streamWithPayloadPatch } from "../agents/pi-embedded-runner/stream-payload-utils.js";
+import { streamSimple } from "openclaw/plugin-sdk/llm";
+import type { StreamFn } from "../agents/runtime/index.js";
+import { streamWithPayloadPatch } from "../llm/providers/stream-wrappers/stream-payload-utils.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import type { ProviderWrapStreamFnContext } from "./plugin-entry.js";
 
@@ -650,7 +650,7 @@ function sanitizeGoogleThinkingConfigContainer(params: {
     return;
   }
 
-  // pi-ai can emit thinkingBudget=-1 for some Google model IDs; a negative budget
+  // shared model runtime can emit thinkingBudget=-1 for some Google model IDs; a negative budget
   // is invalid for Google-compatible backends and can lead to malformed handling.
   delete thinkingConfigObj.thinkingBudget;
   if (Object.keys(thinkingConfigObj).length === 0) {
@@ -685,13 +685,13 @@ export {
   applyAnthropicPayloadPolicyToParams,
   resolveAnthropicPayloadPolicy,
 } from "../agents/anthropic-payload-policy.js";
-export { applyAnthropicEphemeralCacheControlMarkers } from "../agents/pi-embedded-runner/anthropic-cache-control-payload.js";
+export { applyAnthropicEphemeralCacheControlMarkers } from "../llm/providers/stream-wrappers/anthropic-cache-control-payload.js";
 export {
   createMoonshotThinkingWrapper,
   resolveMoonshotThinkingType,
-} from "../agents/pi-embedded-runner/moonshot-thinking-stream-wrappers.js";
+} from "../llm/providers/stream-wrappers/moonshot-thinking.js";
 export { streamWithPayloadPatch };
 export {
   createToolStreamWrapper,
   createZaiToolStreamWrapper,
-} from "../agents/pi-embedded-runner/zai-stream-wrappers.js";
+} from "../llm/providers/stream-wrappers/zai.js";

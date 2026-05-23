@@ -23,25 +23,21 @@ minimumReleaseAgeExclude:
   - "@cloudflare/workers-types"
   - "@hono/node-server"
   - "@mariozechner/*"
-  - "@aws-sdk/client-bedrock-runtime@3.1051.0"
-  - "@aws-sdk/client-bedrock@3.1051.0"
-  - "@aws-sdk/client-cognito-identity@3.1051.0"
-  - "@aws-sdk/client-s3@3.1051.0"
-  - "@aws-sdk/core"
-  - "@aws-sdk/credential-providers@3.1051.0"
-  - "@aws-sdk/s3-request-presigner@3.1051.0"
-  - "@aws-sdk/token-providers@3.1051.0"
+  - "@aws-sdk/*"
+  - "@aws-sdk/client-bedrock-runtime"
   - "@copilotkit/aimock@1.27.0"
-  - "@earendil-works/pi-agent-core"
-  - "@earendil-works/pi-ai"
-  - "@earendil-works/pi-coding-agent"
   - "@earendil-works/pi-tui"
   - "@google/genai@2.5.0"
   - "@larksuiteoapi/node-sdk@1.65.0"
   - "@openai/codex"
   - "@openai/codex-*"
   - "@pierre/diffs@1.2.1"
-  - "@smithy/shared-ini-file-loader@4.5.1"
+  - "@smithy/*"
+  - "@smithy/node-http-handler"
+  - "@smithy/node-http-handler@4.7.3"
+  - "@smithy/shared-ini-file-loader@4.5.3"
+  - "@smithy/types"
+  - "@smithy/types@4.14.2"
   - "@typescript/native-preview*"
   - "@types/node"
   - "@rolldown/*"
@@ -62,7 +58,6 @@ overrides:
   "@anthropic-ai/sdk": 0.97.1
   hono: 4.12.18
   "@hono/node-server": 1.19.14
-  "@aws-sdk/client-bedrock-runtime": 3.1051.0
   axios: 1.16.0
   fast-uri: 3.1.2
   follow-redirects: 1.16.0
@@ -104,11 +99,6 @@ allowBuilds:
   tree-sitter-bash: false
   openclaw: true
   "@openclaw/proxyline": true
-
-packageExtensions:
-  "@earendil-works/pi-coding-agent":
-    dependencies:
-      strip-ansi: 7.2.0
 
 peerDependencyRules:
   allowedVersions:

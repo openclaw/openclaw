@@ -258,7 +258,7 @@ function installModelsListCommandForwardCompatMocks() {
     loadModelCatalog: mocks.loadModelCatalog,
   }));
 
-  vi.doMock("../../agents/pi-embedded-runner/model.js", () => ({
+  vi.doMock("../../agents/embedded-agent-runner/model.js", () => ({
     resolveModelWithRegistry: mocks.resolveModelWithRegistry,
   }));
 

@@ -168,7 +168,7 @@ function qaLiveRequiresCodexAuth(params: {
     return false;
   }
   const forcedRuntime = params.env.OPENCLAW_QA_FORCE_RUNTIME?.trim().toLowerCase();
-  if (forcedRuntime === "pi") {
+  if (forcedRuntime === "openclaw") {
     return false;
   }
   if (forcedRuntime === "codex") {

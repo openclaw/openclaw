@@ -1,4 +1,4 @@
-import type { StreamFn } from "@earendil-works/pi-agent-core";
+import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import {
   calculateCost,
   getEnvApiKey,
@@ -6,7 +6,7 @@ import {
   type Model,
   type SimpleStreamOptions,
   type ThinkingLevel,
-} from "@earendil-works/pi-ai";
+} from "openclaw/plugin-sdk/llm";
 import { createProviderHttpError } from "openclaw/plugin-sdk/provider-http";
 import {
   buildGuardedModelFetch,
@@ -202,9 +202,7 @@ function hasGeminiThoughtSignatureTruncationFootprint(value: string): boolean {
   );
 }
 
-function sanitizeGeminiThoughtSignature(
-  thoughtSignature: string | undefined,
-): string | undefined {
+function sanitizeGeminiThoughtSignature(thoughtSignature: string | undefined): string | undefined {
   if (typeof thoughtSignature !== "string") {
     return undefined;
   }
@@ -552,9 +550,7 @@ function convertGoogleMessages(model: GoogleTransportModel, context: Context) {
             : undefined;
           parts.push({
             text: sanitizeTransportPayloadText(block.text),
-            ...(sanitizedTextSignature
-              ? { thoughtSignature: sanitizedTextSignature }
-              : {}),
+            ...(sanitizedTextSignature ? { thoughtSignature: sanitizedTextSignature } : {}),
           });
           continue;
         }

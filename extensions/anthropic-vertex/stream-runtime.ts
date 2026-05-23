@@ -1,10 +1,10 @@
 import { AnthropicVertex as AnthropicVertexSdk } from "@anthropic-ai/vertex-sdk";
-import type { StreamFn } from "@earendil-works/pi-agent-core";
+import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import {
   streamAnthropic as streamAnthropicDefault,
   type AnthropicOptions,
   type Model,
-} from "@earendil-works/pi-ai";
+} from "openclaw/plugin-sdk/llm";
 import {
   applyAnthropicPayloadPolicyToParams,
   resolveAnthropicPayloadPolicy,
@@ -114,9 +114,9 @@ function createAnthropicVertexOnPayload(params: {
 }
 
 /**
- * Create a StreamFn that routes through pi-ai's `streamAnthropic` with an
+ * Create a StreamFn that routes through OpenClaw's `streamAnthropic` with an
  * injected `AnthropicVertex` client.  All streaming, message conversion, and
- * event handling is handled by pi-ai — we only supply the GCP-authenticated
+ * event handling is handled by the shared model runtime - we only supply the GCP-authenticated
  * client and map SimpleStreamOptions → AnthropicOptions.
  */
 export function createAnthropicVertexStreamFn(

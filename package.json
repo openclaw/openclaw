@@ -1362,6 +1362,50 @@
       "types": "./dist/plugin-sdk/zod.d.ts",
       "default": "./dist/plugin-sdk/zod.js"
     },
+    "./plugin-sdk/agent-core": {
+      "types": "./dist/plugin-sdk/agent-core.d.ts",
+      "default": "./dist/plugin-sdk/agent-core.js"
+    },
+    "./plugin-sdk/agent-sessions": {
+      "types": "./dist/plugin-sdk/agent-sessions.d.ts",
+      "default": "./dist/plugin-sdk/agent-sessions.js"
+    },
+    "./plugin-sdk/llm": {
+      "types": "./dist/plugin-sdk/llm.d.ts",
+      "default": "./dist/plugin-sdk/llm.js"
+    },
+    "./plugin-sdk/llm-anthropic": {
+      "types": "./dist/plugin-sdk/llm-anthropic.d.ts",
+      "default": "./dist/plugin-sdk/llm-anthropic.js"
+    },
+    "./plugin-sdk/llm-bedrock": {
+      "types": "./dist/plugin-sdk/llm-bedrock.d.ts",
+      "default": "./dist/plugin-sdk/llm-bedrock.js"
+    },
+    "./plugin-sdk/llm-google-shared": {
+      "types": "./dist/plugin-sdk/llm-google-shared.d.ts",
+      "default": "./dist/plugin-sdk/llm-google-shared.js"
+    },
+    "./plugin-sdk/llm-provider-runtime": {
+      "types": "./dist/plugin-sdk/llm-provider-runtime.d.ts",
+      "default": "./dist/plugin-sdk/llm-provider-runtime.js"
+    },
+    "./plugin-sdk/llm-oauth": {
+      "types": "./dist/plugin-sdk/llm-oauth.d.ts",
+      "default": "./dist/plugin-sdk/llm-oauth.js"
+    },
+    "./plugin-sdk/llm-openai-codex-responses": {
+      "types": "./dist/plugin-sdk/llm-openai-codex-responses.d.ts",
+      "default": "./dist/plugin-sdk/llm-openai-codex-responses.js"
+    },
+    "./plugin-sdk/llm-openai-completions": {
+      "types": "./dist/plugin-sdk/llm-openai-completions.d.ts",
+      "default": "./dist/plugin-sdk/llm-openai-completions.js"
+    },
+    "./plugin-sdk/llm-openai-responses": {
+      "types": "./dist/plugin-sdk/llm-openai-responses.d.ts",
+      "default": "./dist/plugin-sdk/llm-openai-responses.js"
+    },
     "./extension-api": "./dist/extensionAPI.js",
     "./cli-entry": "./openclaw.mjs"
   },
@@ -1681,7 +1725,7 @@
     "test:docker:openai-image-auth": "bash scripts/e2e/openai-image-auth-docker.sh",
     "test:docker:openai-web-search-minimal": "bash scripts/e2e/openai-web-search-minimal-docker.sh",
     "test:docker:openwebui": "bash scripts/e2e/openwebui-docker.sh",
-    "test:docker:pi-bundle-mcp-tools": "bash scripts/e2e/pi-bundle-mcp-tools-docker.sh",
+    "test:docker:agent-bundle-mcp-tools": "bash scripts/e2e/agent-bundle-mcp-tools-docker.sh",
     "test:docker:plugin-binding-command-escape": "bash scripts/e2e/plugin-binding-command-escape-docker.sh",
     "test:docker:plugin-lifecycle-matrix": "bash scripts/e2e/plugin-lifecycle-matrix-docker.sh",
     "test:docker:plugin-update": "bash scripts/e2e/plugin-update-unchanged-docker.sh",
@@ -1798,30 +1842,38 @@
   },
   "dependencies": {
     "@agentclientprotocol/sdk": "0.22.1",
+    "@anthropic-ai/sdk": "0.97.1",
     "@clack/core": "1.3.1",
     "@clack/prompts": "1.4.0",
-    "@earendil-works/pi-agent-core": "0.75.4",
-    "@earendil-works/pi-ai": "0.75.4",
-    "@earendil-works/pi-coding-agent": "0.75.4",
     "@earendil-works/pi-tui": "0.75.4",
     "@google/genai": "2.5.0",
     "@grammyjs/runner": "2.0.3",
     "@grammyjs/transformer-throttler": "1.2.1",
     "@homebridge/ciao": "1.3.8",
     "@lydell/node-pty": "1.2.0-beta.12",
+    "@mistralai/mistralai": "2.2.1",
     "@modelcontextprotocol/sdk": "1.29.0",
     "@mozilla/readability": "0.6.0",
     "@openclaw/fs-safe": "0.2.7",
     "@openclaw/proxyline": "0.3.3",
+    "@silvia-odwyer/photon-node": "0.3.4",
     "ajv": "8.20.0",
     "chalk": "5.6.2",
     "chokidar": "5.0.0",
     "commander": "14.0.3",
     "croner": "10.0.1",
+    "cross-spawn": "7.0.6",
+    "diff": "8.0.4",
     "dotenv": "17.4.2",
     "express": "5.2.1",
     "file-type": "22.0.1",
+    "glob": "13.0.6",
     "grammy": "1.43.0",
+    "highlight.js": "10.7.3",
+    "hosted-git-info": "9.0.3",
+    "http-proxy-agent": "7.0.2",
+    "https-proxy-agent": "7.0.6",
+    "ignore": "7.0.5",
     "ipaddr.js": "2.4.0",
     "jiti": "2.7.0",
     "json5": "2.2.3",
@@ -1829,10 +1881,13 @@
     "kysely": "0.29.2",
     "linkedom": "0.18.12",
     "markdown-it": "14.1.1",
+    "minimatch": "10.2.5",
     "node-edge-tts": "1.2.10",
     "openai": "6.38.0",
+    "partial-json": "0.1.7",
     "pdfjs-dist": "5.7.284",
     "playwright-core": "1.60.0",
+    "proper-lockfile": "4.1.2",
     "qrcode": "1.5.4",
     "quickjs-wasi": "2.2.0",
     "tar": "7.5.15",
@@ -1855,9 +1910,12 @@
     "@lit-labs/signals": "0.3.0",
     "@lit/context": "1.1.6",
     "@mdx-js/mdx": "3.1.1",
+    "@types/cross-spawn": "6.0.6",
     "@types/express": "5.0.6",
+    "@types/hosted-git-info": "3.0.5",
     "@types/markdown-it": "14.1.2",
     "@types/node": "25.9.1",
+    "@types/proper-lockfile": "4.1.4",
     "@types/ws": "8.18.1",
     "@typescript/native-preview": "7.0.0-dev.20260519.1",
     "@vitest/coverage-v8": "4.1.7",

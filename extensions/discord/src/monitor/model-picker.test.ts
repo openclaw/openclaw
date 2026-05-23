@@ -550,9 +550,9 @@ describe("Discord model picker rendering", () => {
             description: "Use the OpenAI Codex runtime selected by the effective harness policy.",
           },
           {
-            id: "pi",
-            label: "OpenClaw Pi Default",
-            description: "Use the built-in OpenClaw Pi runtime.",
+            id: "openclaw",
+            label: "OpenClaw Default",
+            description: "Use the built-in OpenClaw runtime.",
           },
         ],
       ],
@@ -578,7 +578,9 @@ describe("Discord model picker rendering", () => {
       throw new Error("models view did not render a runtime select");
     }
     expect(runtimeSelect.options?.find((option) => option.value === "codex")?.default).toBe(true);
-    expect(runtimeSelect.options?.find((option) => option.value === "pi")?.default).toBe(false);
+    expect(runtimeSelect.options?.find((option) => option.value === "openclaw")?.default).toBe(
+      false,
+    );
 
     const modelSelect = rows[2]?.components?.find(
       (component) => component.type === DISCORD_STRING_SELECT_COMPONENT_TYPE,
@@ -607,9 +609,9 @@ describe("Discord model picker rendering", () => {
             description: "Use the OpenAI Codex runtime selected by the effective harness policy.",
           },
           {
-            id: "pi",
-            label: "OpenClaw Pi Default",
-            description: "Use the built-in OpenClaw Pi runtime.",
+            id: "openclaw",
+            label: "OpenClaw Default",
+            description: "Use the built-in OpenClaw runtime.",
           },
         ],
       ],
@@ -623,17 +625,17 @@ describe("Discord model picker rendering", () => {
       currentModel: "openai/gpt-4.1",
       pendingModel: "openai/gpt-4o",
       pendingModelIndex: 2,
-      pendingRuntime: "pi",
+      pendingRuntime: "openclaw",
     });
 
     const modelSelect = rows[2]?.components?.find(
       (component) => component.type === DISCORD_STRING_SELECT_COMPONENT_TYPE,
     );
-    expect(parseDiscordModelPickerCustomId(modelSelect?.custom_id ?? "")?.runtime).toBe("pi");
+    expect(parseDiscordModelPickerCustomId(modelSelect?.custom_id ?? "")?.runtime).toBe("openclaw");
     const submitState = parseDiscordModelPickerCustomId(
       rows[3]?.components?.at(-1)?.custom_id ?? "",
     );
-    expect(submitState?.runtime).toBe("pi");
+    expect(submitState?.runtime).toBe("openclaw");
   });
 
   it("renders not-found model view with a back button", () => {

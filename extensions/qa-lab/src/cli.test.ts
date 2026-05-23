@@ -501,7 +501,7 @@ describe("qa cli registration", () => {
       "--transcripts",
       "qa/scenarios/jsonl-replay",
       "--runtime-pair",
-      "pi,codex",
+      "openclaw,codex",
       "--provider-mode",
       "mock-openai",
       "--output-dir",
@@ -511,7 +511,7 @@ describe("qa cli registration", () => {
     expect(runQaJsonlReplayCommand).toHaveBeenCalledWith({
       repoRoot: "/tmp/openclaw-repo",
       transcripts: "qa/scenarios/jsonl-replay",
-      runtimePair: "pi,codex",
+      runtimePair: "openclaw,codex",
       providerMode: "mock-openai",
       outputDir: ".artifacts/qa-e2e/jsonl-replay-test",
     });

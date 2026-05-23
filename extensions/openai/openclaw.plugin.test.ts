@@ -33,6 +33,7 @@ const packageJson = JSON.parse(
   readFileSync(new URL("./package.json", import.meta.url), "utf8"),
 ) as {
   dependencies?: Record<string, string>;
+  devDependencies?: Record<string, string>;
 };
 
 function manifestComparableWizardFields(choice: {
@@ -92,7 +93,7 @@ function expectWizardFields(
 
 describe("OpenAI plugin manifest", () => {
   it("keeps runtime dependencies in the package manifest", () => {
-    expect(packageJson.dependencies?.["@earendil-works/pi-ai"]).toBe("0.75.4");
+    expect(packageJson.devDependencies?.["@openclaw/plugin-sdk"]).toBe("workspace:*");
     expect(packageJson.dependencies?.ws).toBe("8.20.1");
   });
 

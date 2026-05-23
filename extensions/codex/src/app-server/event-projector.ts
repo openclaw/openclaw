@@ -1,4 +1,3 @@
-import type { AssistantMessage, Usage } from "@earendil-works/pi-ai";
 import {
   classifyAgentHarnessTerminalOutcome,
   embeddedAgentLog,
@@ -21,6 +20,7 @@ import {
   type ToolProgressDetailMode,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { emitTrustedDiagnosticEvent } from "openclaw/plugin-sdk/diagnostic-runtime";
+import type { AssistantMessage, Usage } from "openclaw/plugin-sdk/llm";
 import { resolveCodexLocalRuntimeAttribution } from "./local-runtime-attribution.js";
 import {
   readCodexNotificationThreadId,

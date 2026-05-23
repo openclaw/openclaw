@@ -1,4 +1,4 @@
-import type { Api, Model } from "@earendil-works/pi-ai";
+import type { Model } from "openclaw/plugin-sdk/llm";
 import {
   fetchWithSsrFGuard,
   withTrustedEnvProxyGuardedFetchMode,
@@ -192,7 +192,7 @@ function sanitizeOpenAISdkSseResponse(
   });
 }
 
-function shouldSanitizeOpenAISdkSseResponse(model: Model<Api>): boolean {
+function shouldSanitizeOpenAISdkSseResponse(model: Model): boolean {
   if (model.provider !== "openai") {
     return true;
   }
@@ -357,7 +357,7 @@ function buildManagedResponse(
   });
 }
 
-function resolveModelRequestPolicy(model: Model<Api>) {
+function resolveModelRequestPolicy(model: Model) {
   const debugProxy = resolveDebugProxySettings();
   let explicitDebugProxyUrl: string | undefined;
   if (debugProxy.enabled && debugProxy.proxyUrl) {
@@ -388,7 +388,7 @@ function resolveModelRequestPolicy(model: Model<Api>) {
 }
 
 export function resolveModelRequestTimeoutMs(
-  model: Model<Api>,
+  model: Model,
   timeoutMs: number | undefined,
 ): number | undefined {
   if (timeoutMs !== undefined) {
@@ -463,7 +463,7 @@ function canApplyFakeIpHostnamePolicy(value: unknown): value is string {
 }
 
 function resolveModelTransportSsrFPolicy(params: {
-  model: Model<Api>;
+  model: Model;
   url: string;
   allowPrivateNetwork?: boolean;
   trustConfiguredBaseUrlOrigin?: boolean;
@@ -493,7 +493,7 @@ function resolveModelTransportSsrFPolicy(params: {
 }
 
 export function buildGuardedModelFetch(
-  model: Model<Api>,
+  model: Model,
   timeoutMs?: number,
   options?: { sanitizeSse?: boolean },
 ): typeof fetch {
