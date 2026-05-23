@@ -453,6 +453,7 @@ function inspectLockPayload(
   payload: LockFilePayload | null,
   staleMs: number,
   nowMs: number,
+  opts: { respectMaxHold?: boolean } = {},
 ): LockInspectionDetails {
   const pid = isValidLockNumber(payload?.pid) && payload.pid > 0 ? payload.pid : null;
   const pidAlive = pid !== null ? isPidAlive(pid) : false;
@@ -487,7 +488,12 @@ function inspectLockPayload(
   }
   const holderMaxHoldMs =
     isValidLockNumber(payload?.maxHoldMs) && payload.maxHoldMs > 0 ? payload.maxHoldMs : undefined;
-  if (typeof holderMaxHoldMs === "number" && ageMs !== null && ageMs > holderMaxHoldMs) {
+  if (
+    opts.respectMaxHold === true &&
+    typeof holderMaxHoldMs === "number" &&
+    ageMs !== null &&
+    ageMs > holderMaxHoldMs
+  ) {
     staleReasons.push("hold-exceeded");
   }
 
@@ -586,6 +592,7 @@ async function removeReportedStaleLockIfStillStale(params: {
     heldByThisProcess: sessionLockHeldByThisProcess(params.normalizedSessionFile),
     reclaimLockWithoutStarttime: true,
     readOwnerProcessArgs: params.readOwnerProcessArgs ?? readProcessArgsSync,
+    respectMaxHold: true,
   });
   if (!(await shouldReclaimContendedLockFile(params.lockPath, inspected, params.staleMs, nowMs))) {
     return false;
@@ -625,8 +632,11 @@ function inspectLockPayloadForSession(params: {
   heldByThisProcess: boolean;
   reclaimLockWithoutStarttime: boolean;
   readOwnerProcessArgs: SessionLockOwnerProcessArgsReader;
+  respectMaxHold?: boolean;
 }): LockInspectionDetails {
-  const inspected = inspectLockPayload(params.payload, params.staleMs, params.nowMs);
+  const inspected = inspectLockPayload(params.payload, params.staleMs, params.nowMs, {
+    respectMaxHold: params.respectMaxHold,
+  });
   if (
     shouldTreatAsOrphanSelfLock({
       payload: params.payload,
@@ -780,6 +790,7 @@ export async function acquireSessionWriteLock(params: {
             heldByThisProcess,
             reclaimLockWithoutStarttime: true,
             readOwnerProcessArgs: readProcessArgsSync,
+            respectMaxHold: true,
           });
           return await shouldReclaimContendedLockFile(lockPath, inspected, staleMs, nowMs);
         },

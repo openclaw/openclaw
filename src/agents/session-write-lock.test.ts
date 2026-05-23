@@ -321,6 +321,7 @@ describe("acquireSessionWriteLock", () => {
       },
       60_000,
       nowMs,
+      { respectMaxHold: true },
     );
 
     expect(inspected.stale).toBe(true);
@@ -337,6 +338,7 @@ describe("acquireSessionWriteLock", () => {
       },
       60_000,
       nowMs,
+      { respectMaxHold: true },
     );
 
     expect(inspected.stale).toBe(false);
@@ -484,6 +486,47 @@ describe("acquireSessionWriteLock", () => {
         readOwnerProcessArgs: () => ["node", "/opt/openclaw/openclaw.mjs", "doctor"],
       });
       expect(envOverride.locks[0]?.stale).toBe(false);
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("does not clean live OpenClaw locks just because holder max hold expired", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-lock-policy-"));
+    const sessionsDir = path.join(root, "sessions");
+    await fs.mkdir(sessionsDir, { recursive: true });
+    const nowMs = Date.now();
+    const lockPath = path.join(sessionsDir, "held-past-max.jsonl.lock");
+
+    try {
+      await fs.writeFile(
+        lockPath,
+        JSON.stringify({
+          pid: process.pid,
+          createdAt: new Date(nowMs - 30_000).toISOString(),
+          maxHoldMs: 10_000,
+        }),
+        "utf8",
+      );
+
+      const result = await cleanStaleLockFiles({
+        sessionsDir,
+        staleMs: 60_000,
+        nowMs,
+        removeStale: true,
+        readOwnerProcessArgs: () => ["node", "/opt/openclaw/openclaw.mjs", "agent"],
+      });
+
+      expect(lockCleanupRecords(result.locks)).toEqual([
+        {
+          name: "held-past-max.jsonl.lock",
+          removed: false,
+          stale: false,
+          staleReasons: [],
+        },
+      ]);
+      expect(result.cleaned).toEqual([]);
+      await expect(fs.access(lockPath)).resolves.toBeUndefined();
     } finally {
       await fs.rm(root, { recursive: true, force: true });
     }
