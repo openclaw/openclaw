@@ -1612,6 +1612,18 @@ openclaw logs --follow
 
   </Accordion>
 
+  <Accordion title="REST API timeout aborts">
+    OpenClaw gives each Discord REST API call a request timeout. The default is enough for normal Discord message delivery,
+    but very large guild operations or slow/rate-limited Discord endpoints can need a longer window.
+
+    REST API timeout knobs:
+
+    - single-account: `channels.discord.apiTimeoutMs`
+    - multi-account: `channels.discord.accounts.<accountId>.apiTimeoutMs`
+    - default: `15000` (15 seconds), max: `120000`
+
+  </Accordion>
+
   <Accordion title="Permissions audit mismatches">
     `channels status --probe` permission checks only work for numeric channel IDs.
 
@@ -1716,7 +1728,7 @@ Primary reference: [Configuration reference - Discord](/gateway/config-channels#
 - policy: `groupPolicy`, `dm.*`, `guilds.*`, `guilds.*.channels.*`
 - command: `commands.native`, `commands.useAccessGroups`, `configWrites`, `slashCommand.*`
 - event queue: `eventQueue.listenerTimeout` (listener budget), `eventQueue.maxQueueSize`, `eventQueue.maxConcurrency`
-- gateway: `gatewayInfoTimeoutMs`, `gatewayReadyTimeoutMs`, `gatewayRuntimeReadyTimeoutMs`
+- gateway/API: `gatewayInfoTimeoutMs`, `gatewayReadyTimeoutMs`, `gatewayRuntimeReadyTimeoutMs`, `apiTimeoutMs`
 - reply/history: `replyToMode`, `historyLimit`, `dmHistoryLimit`, `dms.*.historyLimit`
 - delivery: `textChunkLimit`, `chunkMode`, `maxLinesPerMessage`
 - streaming: `streaming` (legacy alias: `streamMode`), `streaming.preview.toolProgress`, `draftChunk`, `blockStreaming`, `blockStreamingCoalesce`

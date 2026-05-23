@@ -86,10 +86,11 @@ function resolveRest(
     return rest;
   }
   const resolvedProxyFetch = proxyFetch ?? resolveDiscordProxyFetchForAccount(account, cfg);
+  const resolvedTimeoutMs = timeoutMs ?? account.config.apiTimeoutMs;
   return createDiscordRequestClient(token, {
     ...(resolvedProxyFetch ? { fetch: resolvedProxyFetch } : {}),
     ...(signal ? { signal } : {}),
-    ...(timeoutMs !== undefined ? { timeout: timeoutMs } : {}),
+    ...(resolvedTimeoutMs !== undefined ? { timeout: resolvedTimeoutMs } : {}),
   });
 }
 

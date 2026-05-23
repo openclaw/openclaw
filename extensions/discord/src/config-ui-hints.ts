@@ -206,6 +206,10 @@ export const discordChannelConfigUiHints = {
     label: "Discord Gateway Runtime READY Timeout (ms)",
     help: "Runtime reconnect wait for the Discord gateway READY event before force-stopping the lifecycle. Default is 30000; OPENCLAW_DISCORD_RUNTIME_READY_TIMEOUT_MS can override when config is unset.",
   },
+  apiTimeoutMs: {
+    label: "Discord REST API Timeout (ms)",
+    help: "Timeout for Discord REST API calls. Default is 15000; maximum is 120000. Set per account via channels.discord.accounts.<id>.apiTimeoutMs.",
+  },
   "voice.enabled": {
     label: "Discord Voice Enabled",
     help: "Enable Discord voice channel conversations. Text-only Discord configs leave voice off by default; set true to enable /vc commands and the Guild Voice States intent.",

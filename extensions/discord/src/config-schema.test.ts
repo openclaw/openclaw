@@ -410,6 +410,40 @@ describe("discord config schema", () => {
     expect(res.success).toBe(true);
   });
 
+  it("accepts apiTimeoutMs at channel and account scope", () => {
+    const cfg = expectValidDiscordConfig({
+      apiTimeoutMs: 120_000,
+      accounts: {
+        work: {
+          apiTimeoutMs: 45_000,
+        },
+      },
+    });
+
+    expect(cfg.apiTimeoutMs).toBe(120_000);
+    expect(cfg.accounts?.work?.apiTimeoutMs).toBe(45_000);
+  });
+
+  it("rejects invalid apiTimeoutMs values", () => {
+    for (const apiTimeoutMs of [0, -1, 1.5, 120_001]) {
+      expect(
+        DiscordConfigSchema.safeParse({
+          apiTimeoutMs,
+        }).success,
+      ).toBe(false);
+
+      expect(
+        DiscordConfigSchema.safeParse({
+          accounts: {
+            work: {
+              apiTimeoutMs,
+            },
+          },
+        }).success,
+      ).toBe(false);
+    }
+  });
+
   it("accepts agentComponents.ttlMs at channel and account scope", () => {
     const res = DiscordConfigSchema.safeParse({
       agentComponents: {
