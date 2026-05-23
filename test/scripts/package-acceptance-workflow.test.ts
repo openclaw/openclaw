@@ -633,7 +633,7 @@ describe("package artifact reuse", () => {
     );
   });
 
-  it("plumbs Factory credentials through planned Docker E2E live lanes", () => {
+  it("plumbs live credentials through planned Docker E2E live lanes", () => {
     const reusableWorkflow = readFileSync(LIVE_E2E_WORKFLOW, "utf8");
     const releaseChecksWorkflow = readFileSync(RELEASE_CHECKS_WORKFLOW, "utf8");
     const scheduledWorkflow = readFileSync(SCHEDULED_LIVE_CHECKS_WORKFLOW, "utf8");
@@ -645,9 +645,20 @@ describe("package artifact reuse", () => {
 
     expect(hydrateScript).toContain("  FACTORY_API_KEY \\");
     expect(dockerPlanAction).toContain('if [[ "$credentials" == *",factory,"* ]]; then');
-    expect(dockerPlanAction).toContain(
-      "FACTORY_API_KEY is required for selected Docker E2E lanes.",
-    );
+    expectTextToIncludeAll(dockerPlanAction, [
+      'if [[ "$credentials" == *",openai,"* ]]; then',
+      "require_any OpenAI OPENAI_API_KEY",
+      'if [[ "$credentials" == *",codex,"* ]]; then',
+      "require_any Codex OPENCLAW_CODEX_AUTH_JSON",
+      'if [[ "$credentials" == *",anthropic,"* ]]; then',
+      "require_any Anthropic ANTHROPIC_API_TOKEN ANTHROPIC_API_KEY OPENCLAW_CLAUDE_CREDENTIALS_JSON OPENCLAW_CLAUDE_JSON",
+      'if [[ "$credentials" == *",factory,"* ]]; then',
+      "require_any Factory FACTORY_API_KEY",
+      'if [[ "$credentials" == *",gemini,"* ]]; then',
+      "require_any Gemini GEMINI_API_KEY GOOGLE_API_KEY OPENCLAW_GEMINI_SETTINGS_JSON",
+      'if [[ "$credentials" == *",opencode,"* ]]; then',
+      "require_any OpenCode OPENCODE_API_KEY OPENCODE_ZEN_API_KEY",
+    ]);
     for (const workflow of [
       reusableWorkflow,
       releaseChecksWorkflow,
@@ -660,7 +671,16 @@ describe("package artifact reuse", () => {
     }
     expect(reusableWorkflow).toContain("FACTORY_API_KEY:\n        required: false");
     expect(packageAcceptanceWorkflow).toContain("FACTORY_API_KEY:\n        required: false");
-    expect(reusableWorkflow).toContain('if [[ "$credentials" == *",factory,"* ]]; then');
+    expectTextToIncludeAll(reusableWorkflow, [
+      'if [[ "$credentials" == *",openai,"* ]]; then',
+      "require_any OpenAI OPENAI_API_KEY",
+      'if [[ "$credentials" == *",codex,"* ]]; then',
+      "require_any Codex OPENCLAW_CODEX_AUTH_JSON",
+      'if [[ "$credentials" == *",gemini,"* ]]; then',
+      "require_any Gemini GEMINI_API_KEY GOOGLE_API_KEY OPENCLAW_GEMINI_SETTINGS_JSON",
+      'if [[ "$credentials" == *",opencode,"* ]]; then',
+      "require_any OpenCode OPENCODE_API_KEY OPENCODE_ZEN_API_KEY",
+    ]);
   });
 
   it("allows the Telegram lane to run from reusable package acceptance artifacts", () => {

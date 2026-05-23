@@ -660,6 +660,7 @@ describe("scripts/lib/docker-e2e-plan", () => {
   it("plans a live-only selected lane without package e2e images", () => {
     const plan = planFor({ selectedLaneNames: ["live-models"] });
 
+    expect(plan.credentials).toEqual(["anthropic", "gemini"]);
     expect(plan.lanes.map((lane) => lane.name)).toEqual(["live-models"]);
     expect(plan.needs).toEqual({
       bareImage: false,
@@ -668,6 +669,28 @@ describe("scripts/lib/docker-e2e-plan", () => {
       liveImage: true,
       package: false,
     });
+  });
+
+  it("derives live Docker credentials from lane resources", () => {
+    const cases = [
+      { credentials: ["anthropic", "gemini"], name: "live-models" },
+      { credentials: ["anthropic", "gemini"], name: "live-gateway" },
+      { credentials: ["anthropic"], name: "live-cli-backend-claude" },
+      { credentials: ["gemini"], name: "live-cli-backend-gemini" },
+      { credentials: ["codex"], name: "live-codex-harness" },
+      { credentials: ["openai"], name: "live-codex-media-path" },
+      { credentials: ["openai"], name: "live-subagent-announce" },
+      { credentials: ["codex"], name: "live-codex-bind" },
+      { credentials: ["anthropic"], name: "live-acp-bind-claude" },
+      { credentials: ["codex", "openai"], name: "live-acp-bind-codex" },
+      { credentials: ["factory"], name: "live-acp-bind-droid" },
+      { credentials: ["gemini"], name: "live-acp-bind-gemini" },
+      { credentials: ["opencode"], name: "live-acp-bind-opencode" },
+    ] as const;
+
+    for (const { credentials, name } of cases) {
+      expect(planFor({ selectedLaneNames: [name] }).credentials, name).toEqual(credentials);
+    }
   });
 
   it("plans the Codex npm plugin live lane as package-backed OpenAI proof", () => {
