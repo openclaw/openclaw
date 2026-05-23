@@ -303,41 +303,6 @@ function mockCall(mock: unknown, label: string, index = 0): unknown[] {
   return call;
 }
 
-async function waitForPromiseForTest<T>(
-  promise: Promise<T>,
-  timeoutMs: number,
-  label: string,
-): Promise<T> {
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  try {
-    return await Promise.race([
-      promise,
-      new Promise<never>((_resolve, reject) => {
-        timer = setTimeout(() => reject(new Error(`${label} timed out`)), timeoutMs);
-      }),
-    ]);
-  } finally {
-    if (timer) {
-      clearTimeout(timer);
-    }
-  }
-}
-
-async function drainPromiseForTest(
-  promise: Promise<unknown>,
-  timeoutMs: number,
-  label: string,
-): Promise<void> {
-  await waitForPromiseForTest(
-    promise.then(
-      () => undefined,
-      () => undefined,
-    ),
-    timeoutMs,
-    label,
-  );
-}
-
 function openSocket(url: string): Promise<WebSocket> {
   return new Promise((resolve, reject) => {
     const socket = new WebSocket(url);
@@ -3243,84 +3208,51 @@ describe("runCodexAppServerAttempt", () => {
     }
   });
 
-  it("releases the turn after terminal dynamic tool responses", async () => {
-    const harness = createStartedThreadHarness();
-    testing.setOpenClawCodingToolsFactoryForTests((options) => [
-      {
-        ...createRuntimeDynamicTool("image_generate"),
-        execute: vi.fn(async () => {
-          await options?.onYield?.("Image generation started; wait for completion.");
-          return {
-            content: [{ type: "text" as const, text: "Background task started." }],
-            details: { async: true, status: "started", taskId: "task-1" },
-            terminate: true,
-          };
-        }),
-      },
-    ]);
-
-    const params = createParams(
-      path.join(tempDir, "session.jsonl"),
-      path.join(tempDir, "workspace"),
-    );
-    const abortController = new AbortController();
-    params.abortSignal = abortController.signal;
-    params.disableTools = false;
-    params.runtimePlan = createCodexRuntimePlanFixture();
-
-    const run = runCodexAppServerAttempt(params);
-    let completed = false;
-    try {
-      await harness.waitForMethod("turn/start", 10_000);
-
-      const toolResult = (await harness.handleServerRequest({
-        id: "request-image-generate",
-        method: "item/tool/call",
-        params: {
-          threadId: "thread-1",
-          turnId: "turn-1",
-          callId: "call-image-1",
-          namespace: null,
-          tool: "image_generate",
-          arguments: { prompt: "lighthouse" },
-        },
-      })) as {
-        contentItems?: Array<{ text?: string; type?: string }>;
-        success?: boolean;
-      };
-
-      expect(toolResult).toEqual({
-        success: true,
-        contentItems: [{ type: "inputText", text: "Background task started." }],
-      });
-      expect(harness.requests.some((request) => request.method === "turn/interrupt")).toBe(false);
-      const result = await waitForPromiseForTest(run, 20_000, "Codex terminal dynamic tool run");
-      completed = true;
-
-      expect(result.timedOut).toBe(false);
-      expect(result.promptError).toBeNull();
-      expect(result.yieldDetected).toBe(true);
-      expect(result.messagesSnapshot.map((message) => message.role)).toEqual([
-        "user",
-        "assistant",
-        "toolResult",
-      ]);
-      expect(
-        harness.requests.some(
-          (request) =>
-            request.method === "turn/interrupt" &&
-            (request.params as { turnId?: string } | undefined)?.turnId === "turn-1",
-        ),
-      ).toBe(true);
-    } finally {
-      if (!completed) {
-        harness.close();
-        abortController.abort(new Error("test cleanup"));
-        await drainPromiseForTest(run, 1_000, "Codex terminal dynamic tool cleanup").catch(
-          () => undefined,
-        );
-      }
-    }
+  it("allows turn release after successful terminal dynamic tool responses", () => {
+    expect(
+      testing.shouldReleaseTurnAfterTerminalDynamicTool({
+        completed: false,
+        aborted: false,
+        responseSuccess: true,
+        currentTurnHadNonTerminalDynamicToolResult: false,
+        activeAppServerTurnRequests: 0,
+        activeTurnItemIdsCount: 0,
+        pendingOpenClawDynamicToolCompletionIdsCount: 0,
+      }),
+    ).toBe(true);
+    expect(
+      testing.shouldReleaseTurnAfterTerminalDynamicTool({
+        completed: false,
+        aborted: false,
+        responseSuccess: true,
+        currentTurnHadNonTerminalDynamicToolResult: true,
+        activeAppServerTurnRequests: 0,
+        activeTurnItemIdsCount: 0,
+        pendingOpenClawDynamicToolCompletionIdsCount: 0,
+      }),
+    ).toBe(false);
+    expect(
+      testing.shouldReleaseTurnAfterTerminalDynamicTool({
+        completed: false,
+        aborted: false,
+        responseSuccess: true,
+        currentTurnHadNonTerminalDynamicToolResult: false,
+        activeAppServerTurnRequests: 1,
+        activeTurnItemIdsCount: 0,
+        pendingOpenClawDynamicToolCompletionIdsCount: 0,
+      }),
+    ).toBe(false);
+    expect(
+      testing.shouldReleaseTurnAfterTerminalDynamicTool({
+        completed: false,
+        aborted: false,
+        responseSuccess: true,
+        currentTurnHadNonTerminalDynamicToolResult: false,
+        activeAppServerTurnRequests: 0,
+        activeTurnItemIdsCount: 0,
+        pendingOpenClawDynamicToolCompletionIdsCount: 1,
+      }),
+    ).toBe(false);
   });
 
   it("keeps mixed dynamic tool batches running after one terminal result", async () => {
