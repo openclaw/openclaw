@@ -16,6 +16,7 @@ describe("WhatsApp connection controller registry", () => {
     const controller = {
       getActiveListener: vi.fn(() => null),
       getCurrentSock: vi.fn(() => null),
+      getSelfIdentity: vi.fn(() => null),
     };
 
     first.registerWhatsAppConnectionController("work", controller);

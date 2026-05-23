@@ -6,6 +6,7 @@ import {
   registerWhatsAppConnectionController,
   unregisterWhatsAppConnectionController,
 } from "./connection-controller-registry.js";
+import type { WhatsAppSelfIdentity } from "./identity.js";
 import type { ActiveWebListener, WebListenerCloseReason } from "./inbound/types.js";
 import { computeBackoff, sleepWithAbort, type ReconnectPolicy } from "./reconnect.js";
 import {
@@ -372,6 +373,21 @@ export class WhatsAppConnectionController {
 
   getCurrentSock(): WASocket | null {
     return this.socketRef.current;
+  }
+
+  getSelfIdentity(): WhatsAppSelfIdentity | null {
+    const user = this.socketRef.current?.user as
+      | { id?: string | null; lid?: string | null }
+      | undefined;
+    if (!user) {
+      return null;
+    }
+    const jid = user.id ?? null;
+    const lid = user.lid ?? null;
+    if (!jid && !lid) {
+      return null;
+    }
+    return { jid, lid };
   }
 
   getReconnectAttempts(): number {

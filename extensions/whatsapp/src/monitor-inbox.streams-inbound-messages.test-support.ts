@@ -854,9 +854,14 @@ describe("web monitor inbox", () => {
     await waitForMessageCalls(onMessage, 1);
     const inbound = inboundMessage(onMessage) as { reply: (text: string) => Promise<void> };
 
-    // Register controller A's handle (mirrors what WhatsAppConnectionController
-    // does on construction).
-    const handleA = { getActiveListener: () => null, getCurrentSock: () => null } as never;
+    // The mock harness socket exposes user.id = "123@s.whatsapp.net"; the
+    // successor handle must report a self identity that overlaps that JID
+    // so the session-safety guard accepts the fallback.
+    const handleA = {
+      getActiveListener: () => null,
+      getCurrentSock: () => null,
+      getSelfIdentity: () => null,
+    } as never;
     registerWhatsAppConnectionController(DEFAULT_ACCOUNT_ID, handleA);
 
     // === Simulate health-monitor-driven shutdown of controller A ===
@@ -871,6 +876,7 @@ describe("web monitor inbox", () => {
     const handleB = {
       getActiveListener: () => null,
       getCurrentSock: () => sockB as never,
+      getSelfIdentity: () => ({ jid: "123@s.whatsapp.net", lid: null }),
     } as never;
     registerWhatsAppConnectionController(DEFAULT_ACCOUNT_ID, handleB);
 
@@ -882,6 +888,70 @@ describe("web monitor inbox", () => {
       expect(sockB.sendMessage).toHaveBeenCalledWith("999@s.whatsapp.net", { text: "pong" });
     } finally {
       unregisterWhatsAppConnectionController(DEFAULT_ACCOUNT_ID, handleB);
+      await listenerA.close();
+    }
+  });
+
+  // VE-513 session-safety guard: if the registered successor controller has been
+  // re-linked to a different WhatsApp identity (different self JID), the
+  // captured reply must fail closed rather than route through the wrong number.
+  it("refuses successor-controller fallback when the registered controller's self JID does not match", async () => {
+    const onMessage = vi.fn(async () => undefined);
+    const socketRefA = createSocketRef();
+
+    let aShouldRetryDisconnect = true;
+    const { listener: listenerA, sock: sockA } = await startInboxMonitor(
+      onMessage as InboxOnMessage,
+      {
+        socketRef: socketRefA,
+        shouldRetryDisconnect: () => aShouldRetryDisconnect,
+        disconnectRetryPolicy: {
+          initialMs: 1,
+          maxMs: 1,
+          factor: 1,
+          jitter: 0,
+          maxAttempts: 1,
+        },
+      },
+    );
+
+    sockA.ev.emit(
+      "messages.upsert",
+      buildNotifyMessageUpsert({
+        id: nextMessageId("outbound-successor-mismatch"),
+        remoteJid: "999@s.whatsapp.net",
+        text: "ping",
+        timestamp: 1_700_000_000,
+        pushName: "Tester",
+      }),
+    );
+    await waitForMessageCalls(onMessage, 1);
+    const inbound = inboundMessage(onMessage) as { reply: (text: string) => Promise<void> };
+
+    // A's shutdown sequence.
+    socketRefA.current = null;
+    aShouldRetryDisconnect = false;
+
+    // === Successor is registered but with a DIFFERENT self identity (relink/repair) ===
+    const sockB = {
+      sendMessage: vi.fn(async () => ({ key: { id: "should-not-be-called" } })),
+    };
+    const handleBMismatch = {
+      getActiveListener: () => null,
+      getCurrentSock: () => sockB as never,
+      getSelfIdentity: () => ({ jid: "456@s.whatsapp.net", lid: null }),
+    } as never;
+    registerWhatsAppConnectionController(DEFAULT_ACCOUNT_ID, handleBMismatch);
+
+    try {
+      await expect(inbound.reply("pong")).rejects.toThrow(
+        "no active socket - reconnection in progress",
+      );
+
+      // The mismatched successor's socket was never used.
+      expect(sockB.sendMessage).not.toHaveBeenCalled();
+    } finally {
+      unregisterWhatsAppConnectionController(DEFAULT_ACCOUNT_ID, handleBMismatch);
       await listenerA.close();
     }
   });
