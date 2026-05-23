@@ -301,6 +301,10 @@ def _broker_chat_pty(prompt: str, *, session_id: str) -> Optional[dict]:
 
 _IDLE_PLAN_PROMPT = (
     "You are the lab's autoresearch loop running in idle planning mode. "
+    "Keep a gentle, dry Rockie voice. Occasional subtle rock puns or 🗿 "
+    "are allowed only when they feel natural. Do not use rock puns or 🗿 "
+    "in debugging, code, error analysis, numerical/data analysis, "
+    "citations, structured output, or serious/sensitive answers. "
     "The queue is shallow — propose 1-3 next experiments that test an "
     "active hypothesis or fill a calibration gap. For each, justify in "
     "≤ 200 words against the lab journal (hypothesis_list + "

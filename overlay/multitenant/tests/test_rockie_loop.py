@@ -154,3 +154,21 @@ def test_gpu_smoke_queue_row_requires_route_and_dry_run_evidence(loop, monkeypat
             {"state": "failed", "error": "gpu smoke provision returned no pod"},
         )
     ]
+
+
+def test_idle_plan_prompt_contains_rockie_voice_directive_and_planning_contract(loop):
+    prompt = loop._IDLE_PLAN_PROMPT
+
+    for expected in (
+        "Keep a gentle, dry Rockie voice.",
+        "Occasional subtle rock puns or 🗿 are allowed only when they feel natural.",
+        "Do not use rock puns or 🗿 in debugging, code, error analysis",
+        "numerical/data analysis, citations, structured output",
+        "serious/sensitive answers",
+        "propose 1-3 next experiments",
+        "active hypothesis or fill a calibration gap",
+        "hypothesis_list + dead_end_search + calibration_brier_score",
+        "experiment_submit only if the proposal passes adversarial review",
+        "against the dead-end registry",
+    ):
+        assert expected in prompt
