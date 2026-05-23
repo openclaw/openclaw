@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import type { WAMessage } from "baileys";
 import { createDurableInboundReceiveJournal } from "openclaw/plugin-sdk/channel-message";
+import type { PluginJsonValue } from "openclaw/plugin-sdk/plugin-entry";
 import { getWhatsAppRuntime } from "../runtime.js";
 import { BufferJSON } from "../session.runtime.js";
 
@@ -15,8 +16,10 @@ export type WhatsAppReadReceiptTarget = {
   participant?: string;
 };
 
+export type SerializedWhatsAppDurableInboundMessage = PluginJsonValue;
+
 export type WhatsAppDurableInboundPayload = {
-  message: unknown;
+  message: SerializedWhatsAppDurableInboundMessage;
   upsertType?: string;
   receivedAt: number;
 };
@@ -40,11 +43,15 @@ export function createWhatsAppDurableInboundMessageId(params: {
   return createHash("sha256").update(`${params.remoteJid}\n${params.id}`).digest("hex");
 }
 
-export function serializeWhatsAppDurableInboundMessage(message: WAMessage): unknown {
-  return JSON.parse(JSON.stringify(message, BufferJSON.replacer)) as unknown;
+export function serializeWhatsAppDurableInboundMessage(
+  message: WAMessage,
+): SerializedWhatsAppDurableInboundMessage {
+  return JSON.parse(JSON.stringify(message, BufferJSON.replacer)) as PluginJsonValue;
 }
 
-export function deserializeWhatsAppDurableInboundMessage(message: unknown): WAMessage {
+export function deserializeWhatsAppDurableInboundMessage(
+  message: SerializedWhatsAppDurableInboundMessage,
+): WAMessage {
   return JSON.parse(JSON.stringify(message), BufferJSON.reviver) as WAMessage;
 }
 
