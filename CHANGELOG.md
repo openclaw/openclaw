@@ -775,6 +775,7 @@ Docs: https://docs.openclaw.ai
 - Providers: reuse already-loaded provider runtime hooks for synthetic auth before falling back to provider discovery loads.
 - QA-Lab: include the gateway diagnostic timeline in WhatsApp live trace artifacts so RTT probes expose reply setup, compaction, and model-run phase costs.
 - QA-Lab: shorten WhatsApp Convex credential leases in live CI and wait long enough for the reduced TTL so cancelled RTT probes recover the credential pool instead of blocking the next run for the default 20-minute lease.
+- QA-Lab: hold logged-out WhatsApp Convex credentials while trying alternate pooled leases so live canaries report stale credential pools instead of reacquiring the same session.
 - QA-Lab: disable web search and deny session-management tools in WhatsApp live exact-marker runs so RTT probes measure reply delivery without unused model tool payload.
 - Gateway/plugins: preload provider owner plugins for configured PI agent models during gateway startup so first live replies avoid lazy provider-runtime activation.
 - QA-Lab: run WhatsApp live QA through the Pi runtime with messaging-only tools, skip agent workspace bootstrap, force thinking and reasoning off for exact-marker canaries, and emit/preserve model transport timings, per-scenario phase timings, RSS samples, complete gateway heap checkpoints, and redacted gateway traces so channel RTT artifacts isolate send, wait, startup, readiness, model, and retained-memory cost.

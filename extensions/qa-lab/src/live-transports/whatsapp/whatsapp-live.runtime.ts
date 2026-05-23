@@ -1248,6 +1248,8 @@ export async function runWhatsAppQaLive(params: {
     const credentialAttempts =
       requestedCredentialSource === "convex" ? WHATSAPP_QA_CREDENTIAL_ATTEMPTS : 1;
     let activeDriver: WhatsAppQaDriverSession | undefined;
+    let activeDriverAuthDir: string | undefined;
+    let activeSutAuthDir: string | undefined;
 
     for (let credentialAttempt = 1; credentialAttempt <= credentialAttempts; credentialAttempt += 1) {
       credentialLease = await acquireQaCredentialLease({
@@ -1284,6 +1286,8 @@ export async function runWhatsAppQaLive(params: {
 
       try {
         activeDriver = await startWhatsAppQaDriverSessionWithRetry({ authDir: driverAuthDir });
+        activeDriverAuthDir = driverAuthDir;
+        activeSutAuthDir = sutAuthDir;
         driver = activeDriver;
         break;
       } catch (error) {
@@ -1300,7 +1304,7 @@ export async function runWhatsAppQaLive(params: {
       }
     }
 
-    if (!activeDriver || !runtimeEnv) {
+    if (!activeDriver || !activeDriverAuthDir || !activeSutAuthDir || !runtimeEnv) {
       throw new Error("WhatsApp QA could not start a driver session.");
     }
 
@@ -1309,8 +1313,6 @@ export async function runWhatsAppQaLive(params: {
         heartbeat.throwIfFailed();
       }
     };
-    const sutAuthDir = path.join(tempAuthRoots.at(-1)!, "sut-auth");
-
     for (const scenario of scenarios) {
       assertLeaseHealthy();
       if (scenario.requiresGroupJid && !runtimeEnv.groupJid) {
@@ -1343,7 +1345,7 @@ export async function runWhatsAppQaLive(params: {
             scenario,
             sampleGatewayProcessRss,
             sutAccountId,
-            sutAuthDir,
+            sutAuthDir: activeSutAuthDir,
             sutPhoneE164: runtimeEnv.sutPhoneE164,
           });
           if (preserveSuccessfulGatewayDebugArtifacts) {
@@ -1369,7 +1371,7 @@ export async function runWhatsAppQaLive(params: {
             );
             try {
               activeDriver = await restartWhatsAppQaDriverSession({
-                authDir: driverAuthDir,
+                authDir: activeDriverAuthDir,
                 current: activeDriver,
               });
               driver = activeDriver;
