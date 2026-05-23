@@ -917,7 +917,7 @@ export async function runCodexAppServerAttempt(
   recordCodexTrajectoryContext(trajectoryRecorder, {
     attempt: params,
     cwd: effectiveCwd,
-    developerInstructions: promptBuild.developerInstructions,
+    developerInstructions: buildRenderedCodexDeveloperInstructions(),
     prompt: codexTurnPromptText,
     tools: toolBridge.availableSpecs,
   });

@@ -1071,16 +1071,42 @@ describe("runCodexAppServerAttempt", () => {
     expect(turnDeveloperInstructions).toContain("<available_skills>");
     expect(turnDeveloperInstructions).toContain(params.skillsSnapshot.prompt);
 
-    const [llmInputPayload] = mockCall(llmInput, "llm_input") as [{ prompt?: string }, unknown];
+    const [llmInputPayload] = mockCall(llmInput, "llm_input") as [
+      { prompt?: string; systemPrompt?: string },
+      unknown,
+    ];
     expect(llmInputPayload.prompt).toBe(inputText);
+    // The llm_input hook is documented as observing provider input (system
+    // prompt, prompt, history). Skills routed via
+    // collaborationMode.settings.developer_instructions are model-visible, so
+    // they must appear in llm_input.systemPrompt alongside the base
+    // developer_instructions — without leaking the workspace user-editable
+    // turn-input lane into the system-prompt observation.
+    expect(llmInputPayload.systemPrompt).toContain("## OpenClaw Skills");
+    expect(llmInputPayload.systemPrompt).toContain("<available_skills>");
+    expect(llmInputPayload.systemPrompt).toContain(params.skillsSnapshot.prompt);
+    expect(llmInputPayload.systemPrompt).not.toContain("OpenClaw workspace context for this turn:");
     const trajectoryEvents = (
       await fs.readFile(path.join(tempDir, "trajectory", "session-1.jsonl"), "utf8")
     )
       .trim()
       .split("\n")
-      .map((line) => JSON.parse(line) as { data?: { prompt?: string }; type?: string });
-    expect(trajectoryEvents.find((event) => event.type === "context.compiled")?.data?.prompt).toBe(
-      inputText,
+      .map(
+        (line) =>
+          JSON.parse(line) as {
+            data?: { prompt?: string; systemPrompt?: string };
+            type?: string;
+          },
+      );
+    const contextCompiled = trajectoryEvents.find((event) => event.type === "context.compiled");
+    expect(contextCompiled?.data?.prompt).toBe(inputText);
+    // Trajectory context.compiled must record the same combined system prompt
+    // that the model receives, so post-fix debugging mirrors the real
+    // collaboration-mode skills lane rather than the legacy turn-input view.
+    expect(contextCompiled?.data?.systemPrompt).toContain("## OpenClaw Skills");
+    expect(contextCompiled?.data?.systemPrompt).toContain(params.skillsSnapshot.prompt);
+    expect(contextCompiled?.data?.systemPrompt).not.toContain(
+      "OpenClaw workspace context for this turn:",
     );
     expect(trajectoryEvents.find((event) => event.type === "prompt.submitted")?.data?.prompt).toBe(
       inputText,
@@ -1089,6 +1115,16 @@ describe("runCodexAppServerAttempt", () => {
     expect(result.systemPromptReport?.skills.entries).toEqual([
       { name: "demo", blockChars: "<skill><name>demo</name></skill>".length },
     ]);
+    // The system prompt report's chars field tracks the bytes the model sees
+    // through the developer_instructions surface. After this PR moves skills
+    // into collaborationMode.settings.developer_instructions, the report must
+    // count those bytes too, not just the base developer_instructions.
+    expect(result.systemPromptReport?.systemPrompt.chars).toBeGreaterThan(
+      params.skillsSnapshot.prompt.length,
+    );
+    expect(result.systemPromptReport?.systemPrompt.nonProjectContextChars).toBe(
+      result.systemPromptReport?.systemPrompt.chars,
+    );
   });
 
   it("keeps leading delivery hints out of the Codex current user request", async () => {
