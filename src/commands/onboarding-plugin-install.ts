@@ -1,6 +1,8 @@
 import fs from "node:fs";
 import path from "node:path";
 import { resolveBundledInstallPlanForCatalogEntry } from "../cli/plugin-install-plan.js";
+import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
+import { buildBundledPluginLoadPathAliases, normalizeBundledLookupPath } from "../plugins/bundled-load-path-aliases.js";
 import { assertConfigWriteAllowedInCurrentMode } from "../config/nix-mode-write-guard.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { parseClawHubPluginSpec } from "../infra/clawhub-spec.js";
@@ -144,6 +146,22 @@ function hasGitWorkspace(workspaceDir?: string): boolean {
 }
 
 function addPluginLoadPath(cfg: OpenClawConfig, pluginPath: string): OpenClawConfig {
+  // Guard: do not add bundled plugin paths to plugins.load.paths.
+  // Bundled plugins are auto-loaded by discovery; explicit load paths
+  // trigger doctor warnings and create update/doctor churn cycles.
+  const workspaceDir = resolveAgentWorkspaceDir(cfg, resolveDefaultAgentId(cfg)) ?? undefined;
+  const bundled = resolveBundledPluginSources({ workspaceDir, env: process.env });
+  
+  const normalizedPluginPath = normalizeBundledLookupPath(pluginPath);
+  for (const source of bundled.values()) {
+    for (const alias of buildBundledPluginLoadPathAliases(source.localPath)) {
+      if (normalizeBundledLookupPath(alias.path) === normalizedPluginPath) {
+        // This is a bundled plugin path; skip adding it to load paths
+        return cfg;
+      }
+    }
+  }
+
   const existing = cfg.plugins?.load?.paths ?? [];
   const merged = Array.from(new Set([...existing, pluginPath]));
   return {

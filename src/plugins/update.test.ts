@@ -3013,14 +3013,14 @@ describe("syncPluginsForUpdateChannel", () => {
       expectedInstallPath: appBundledPluginRoot("feishu"),
     },
     {
-      name: "repairs bundled install metadata when the load path is re-added",
+      name: "repairs bundled install metadata without re-adding the load path",
       config: createBundledPathInstallConfig({
         loadPaths: [],
         installPath: "/tmp/old-feishu",
         spec: "@openclaw/feishu",
       }),
       expectedChanged: true,
-      expectedLoadPaths: [appBundledPluginRoot("feishu")],
+      expectedLoadPaths: [],
       expectedInstallPath: appBundledPluginRoot("feishu"),
     },
   ] as const)(

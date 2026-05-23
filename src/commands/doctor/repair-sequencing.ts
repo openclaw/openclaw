@@ -70,7 +70,6 @@ export async function runDoctorRepairSequence(params: {
   })) {
     applyMutation(mutation);
   }
-  applyMutation(maybeRepairBundledPluginLoadPaths(state.candidate, env));
   maybeRepairStaleManagedNpmBundledPlugins({
     config: state.candidate,
     env,
@@ -165,5 +164,9 @@ export async function runDoctorRepairSequence(params: {
     warningNotes.push(sanitizeLines(staleOAuthShadowRepair.warnings));
   }
 
+
+  // Run bundled plugin load path cleanup last, after all other repairs that might
+  // write to plugins.load.paths (e.g., repairMissingConfiguredPluginInstalls).
+  applyMutation(maybeRepairBundledPluginLoadPaths(state.candidate, env));
   return { state, changeNotes, warningNotes };
 }
