@@ -68,7 +68,11 @@ import {
   isAudioPayload,
   signalTypingIfNeeded,
 } from "./agent-runner-helpers.js";
-import { runMemoryFlushIfNeeded, runPreflightCompactionIfNeeded } from "./agent-runner-memory.js";
+import {
+  registerPendingMemoryFlush,
+  runMemoryFlushIfNeeded,
+  runPreflightCompactionIfNeeded,
+} from "./agent-runner-memory.js";
 import { buildReplyPayloads } from "./agent-runner-payloads.js";
 import {
   appendUnscheduledReminderNote,
@@ -1347,66 +1351,37 @@ export async function runReplyAgent(params: {
     preflightCompactionApplied =
       (activeSessionEntry?.compactionCount ?? 0) > prePreflightCompactionCount;
 
-    const visibleMemoryFlushErrorPayloads: ReplyPayload[] = [];
-    activeSessionEntry = await traceAgentPhase("reply.memory_flush", () =>
-      runMemoryFlushIfNeeded({
-        cfg,
-        followupRun,
-        promptForEstimate: followupRun.prompt,
-        sessionCtx,
-        opts,
-        defaultModel,
-        agentCfgContextTokens,
-        resolvedVerboseLevel,
-        sessionEntry: activeSessionEntry,
-        sessionStore: activeSessionStore,
-        sessionKey,
-        runtimePolicySessionKey,
-        storePath,
-        isHeartbeat,
-        replyOperation,
-        onVisibleErrorPayloads: (payloads) => {
-          visibleMemoryFlushErrorPayloads.push(...payloads);
-        },
-      }),
-    );
-
-    if (visibleMemoryFlushErrorPayloads.length > 0) {
-      const currentMessageId = sessionCtx.MessageSidFull ?? sessionCtx.MessageSid;
-      const payloadResult = await buildReplyPayloads({
-        payloads: visibleMemoryFlushErrorPayloads,
-        isHeartbeat,
-        didLogHeartbeatStrip: false,
-        silentExpected: true,
-        blockStreamingEnabled,
-        blockReplyPipeline,
-        replyToMode,
-        replyToChannel,
-        currentMessageId,
-        replyThreading: replyThreadingOverride ?? sessionCtx.ReplyThreading,
-        messageProvider: followupRun.run.messageProvider,
-        originatingChannel: sessionCtx.OriginatingChannel,
-        originatingTo: resolveOriginMessageTo({
-          originatingTo: sessionCtx.OriginatingTo,
-          to: sessionCtx.To,
+    // Near-threshold memory flush dispatch is deferred to the post-reply
+    // path so it does not block the start of the user-visible reply turn.
+    // The flush is registered into a per-sessionKey pending map; the next
+    // turn's preflight compaction awaits it before mutating session state.
+    const dispatchPostReplyMemoryFlush = (): void => {
+      const flushPromise = traceAgentPhase("reply.memory_flush", () =>
+        runMemoryFlushIfNeeded({
+          cfg,
+          followupRun,
+          promptForEstimate: followupRun.prompt,
+          sessionCtx,
+          opts,
+          defaultModel,
+          agentCfgContextTokens,
+          resolvedVerboseLevel,
+          sessionEntry: activeSessionEntry,
+          sessionStore: activeSessionStore,
+          sessionKey,
+          runtimePolicySessionKey,
+          storePath,
+          isHeartbeat,
+          replyOperation,
         }),
-        accountId: sessionCtx.AccountId,
-        normalizeMediaPaths: replyMediaContext.normalizePayload,
-      });
-      const replyPayloads = payloadResult.replyPayloads.map((payload) =>
-        markReplyPayloadForSourceSuppressionDelivery(payload),
       );
-      if (replyPayloads.length > 0) {
-        replyOperation.fail(
-          "run_failed",
-          new Error("memory flush produced visible error payloads"),
-        );
-        await signalTypingIfNeeded(replyPayloads, typingSignals);
-        return returnWithQueuedFollowupDrain(
-          replyPayloads.length === 1 ? replyPayloads[0] : replyPayloads,
-        );
+      if (sessionKey) {
+        registerPendingMemoryFlush(sessionKey, flushPromise);
       }
-    }
+      void flushPromise.catch((err) => {
+        logVerbose(`post-reply memory flush failed: ${String(err)}`);
+      });
+    };
 
     runFollowupTurn = createFollowupRunner({
       opts,
@@ -1463,6 +1438,14 @@ export async function runReplyAgent(params: {
 
     replyOperation.setPhase("running");
     const runStartedAt = Date.now();
+    let postReplyFlushDispatched = false;
+    const ensureMemoryFlushDispatched = (): void => {
+      if (postReplyFlushDispatched) {
+        return;
+      }
+      postReplyFlushDispatched = true;
+      dispatchPostReplyMemoryFlush();
+    };
     const runOutcome = await traceAgentPhase("reply.run_agent_turn", () =>
       runAgentTurnWithFallback({
         commandBody,
@@ -1493,6 +1476,8 @@ export async function runReplyAgent(params: {
         replyMediaContext,
       }),
     );
+
+    ensureMemoryFlushDispatched();
 
     if (runOutcome.kind === "final") {
       if (!replyOperation.result) {

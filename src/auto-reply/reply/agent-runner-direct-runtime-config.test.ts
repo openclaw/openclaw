@@ -59,11 +59,26 @@ vi.mock("./reply-media-paths.js", () => ({
     createReplyMediaPathNormalizerMock(...args),
 }));
 
+const registerPendingMemoryFlushMock = vi.fn();
+
 vi.mock("./agent-runner-memory.js", () => ({
   runPreflightCompactionIfNeeded: (...args: unknown[]) =>
     runPreflightCompactionIfNeededMock(...args),
   runMemoryFlushIfNeeded: (...args: unknown[]) => runMemoryFlushIfNeededMock(...args),
+  registerPendingMemoryFlush: (...args: unknown[]) => registerPendingMemoryFlushMock(...args),
 }));
+
+const runAgentTurnWithFallbackMock = vi.fn();
+
+vi.mock("./agent-runner-execution.js", async () => {
+  const actual = await vi.importActual<typeof import("./agent-runner-execution.js")>(
+    "./agent-runner-execution.js",
+  );
+  return {
+    ...actual,
+    runAgentTurnWithFallback: (...args: unknown[]) => runAgentTurnWithFallbackMock(...args),
+  };
+});
 
 vi.mock("./queue.js", async () => {
   const actual = await vi.importActual<typeof import("./queue.js")>("./queue.js");
@@ -171,6 +186,8 @@ describe("runReplyAgent runtime config", () => {
     createReplyMediaPathNormalizerMock.mockReset();
     runPreflightCompactionIfNeededMock.mockReset();
     runMemoryFlushIfNeededMock.mockReset();
+    registerPendingMemoryFlushMock.mockReset();
+    runAgentTurnWithFallbackMock.mockReset();
     enqueueFollowupRunMock.mockReset();
 
     resolveQueuedReplyExecutionConfigMock.mockResolvedValue(freshCfg);
@@ -219,7 +236,33 @@ describe("runReplyAgent runtime config", () => {
     expect(preflightCall.followupRun).toBe(followupRun);
   });
 
-  it("passes the derived runtime-policy key to pre-run maintenance", async () => {
+  it("passes the derived runtime-policy key to preflight compaction", async () => {
+    const { followupRun, replyParams } = createDirectRuntimeReplyParams({
+      shouldFollowup: false,
+      isActive: false,
+    });
+    const runtimePolicySessionKey = "agent:main:telegram:default:direct:test";
+    followupRun.run.sessionKey = "agent:main:main";
+    followupRun.run.runtimePolicySessionKey = runtimePolicySessionKey;
+    replyParams.sessionKey = "agent:main:main";
+    replyParams.runtimePolicySessionKey = runtimePolicySessionKey;
+    runPreflightCompactionIfNeededMock.mockRejectedValue(sentinelError);
+
+    await expect(runReplyAgent(replyParams)).rejects.toBe(sentinelError);
+
+    const preflightCall = requireMaintenanceCall(
+      runPreflightCompactionIfNeededMock,
+      "runPreflightCompactionIfNeeded",
+    );
+    expect(preflightCall.sessionKey).toBe("agent:main:main");
+    expect(preflightCall.runtimePolicySessionKey).toBe(runtimePolicySessionKey);
+    // The near-threshold memory flush is now dispatched after the user-visible
+    // reply path; if preflight throws, the reply never runs and the flush is
+    // not dispatched this turn.
+    expect(runMemoryFlushIfNeededMock).not.toHaveBeenCalled();
+  });
+
+  it("dispatches the post-reply memory flush after the user-visible reply path returns", async () => {
     const { followupRun, replyParams } = createDirectRuntimeReplyParams({
       shouldFollowup: false,
       isActive: false,
@@ -230,60 +273,51 @@ describe("runReplyAgent runtime config", () => {
     replyParams.sessionKey = "agent:main:main";
     replyParams.runtimePolicySessionKey = runtimePolicySessionKey;
     runPreflightCompactionIfNeededMock.mockResolvedValue(undefined);
-    runMemoryFlushIfNeededMock.mockRejectedValue(sentinelError);
+    runAgentTurnWithFallbackMock.mockResolvedValue({
+      kind: "final",
+      payload: { text: "ok" },
+    });
 
-    await expect(runReplyAgent(replyParams)).rejects.toBe(sentinelError);
+    await runReplyAgent(replyParams);
 
-    const preflightCall = requireMaintenanceCall(
-      runPreflightCompactionIfNeededMock,
-      "runPreflightCompactionIfNeeded",
+    expect(runAgentTurnWithFallbackMock).toHaveBeenCalledTimes(1);
+    expect(runMemoryFlushIfNeededMock).toHaveBeenCalledTimes(1);
+    const memoryCall = runMemoryFlushIfNeededMock.mock.calls[0]?.[0] as
+      | { sessionKey?: string; runtimePolicySessionKey?: string }
+      | undefined;
+    expect(memoryCall?.sessionKey).toBe("agent:main:main");
+    expect(memoryCall?.runtimePolicySessionKey).toBe(runtimePolicySessionKey);
+    expect(registerPendingMemoryFlushMock).toHaveBeenCalledTimes(1);
+    expect(registerPendingMemoryFlushMock.mock.calls[0]?.[0]).toBe("agent:main:main");
+    // Reply path's runAgentTurnWithFallback completed before the flush dispatch.
+    expect(runAgentTurnWithFallbackMock.mock.invocationCallOrder[0]).toBeLessThan(
+      runMemoryFlushIfNeededMock.mock.invocationCallOrder[0] ?? Number.MAX_SAFE_INTEGER,
     );
-    expect(preflightCall.sessionKey).toBe("agent:main:main");
-    expect(preflightCall.runtimePolicySessionKey).toBe(runtimePolicySessionKey);
-    const memoryCall = requireMaintenanceCall(runMemoryFlushIfNeededMock, "runMemoryFlushIfNeeded");
-    expect(memoryCall.sessionKey).toBe("agent:main:main");
-    expect(memoryCall.runtimePolicySessionKey).toBe(runtimePolicySessionKey);
   });
 
-  it("returns source-suppression-safe memory-flush error payloads before the main reply run", async () => {
-    const { replyParams } = createDirectRuntimeReplyParams({
+  it("does not block the start of the user-visible reply on a pending memory flush", async () => {
+    const { followupRun, replyParams } = createDirectRuntimeReplyParams({
       shouldFollowup: false,
       isActive: false,
     });
-    replyParams.opts = { sourceReplyDeliveryMode: "message_tool_only" };
+    followupRun.run.sessionKey = "agent:main:main";
+    replyParams.sessionKey = "agent:main:main";
     runPreflightCompactionIfNeededMock.mockResolvedValue(undefined);
-    runMemoryFlushIfNeededMock.mockImplementation(
-      async (params: {
-        onVisibleErrorPayloads?: (payloads: Array<{ text?: string; isError?: boolean }>) => void;
-      }) => {
-        params.onVisibleErrorPayloads?.([
-          {
-            text: "⚠️ write failed: Memory flush writes are restricted to memory/2023-11-14.md; use that path only.",
-            isError: true,
-          },
-        ]);
-        return undefined;
-      },
-    );
+    // Memory flush returns a promise that never resolves within the test.
+    runMemoryFlushIfNeededMock.mockImplementation(() => new Promise<undefined>(() => undefined));
+    runAgentTurnWithFallbackMock.mockResolvedValue({
+      kind: "final",
+      payload: { text: "ok" },
+    });
 
     const result = await runReplyAgent(replyParams);
 
-    if (!result || Array.isArray(result)) {
-      throw new Error("expected a single memory-flush error reply payload");
-    }
-    expect(result).toEqual({
-      text: "⚠️ write failed: Memory flush writes are restricted to memory/2023-11-14.md; use that path only.",
-      isError: true,
-      replyToId: "msg-1",
-      replyToCurrent: undefined,
-      replyToTag: false,
-      mediaUrl: undefined,
-      mediaUrls: undefined,
-      audioAsVoice: false,
-    });
-    expect(getReplyPayloadMetadata(result)).toEqual({
-      deliverDespiteSourceReplySuppression: true,
-    });
+    // Reply path completed even though the flush promise is still pending.
+    expect(runAgentTurnWithFallbackMock).toHaveBeenCalledTimes(1);
+    expect(result).toBeDefined();
+    // Flush was dispatched (fire-and-forget) but never resolved.
+    expect(runMemoryFlushIfNeededMock).toHaveBeenCalledTimes(1);
+    expect(registerPendingMemoryFlushMock).toHaveBeenCalledTimes(1);
   });
 
   it("surfaces known pre-run Codex usage-limit failures instead of dropping the reply", async () => {

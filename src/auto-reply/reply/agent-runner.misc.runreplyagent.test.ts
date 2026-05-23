@@ -25,6 +25,10 @@ import {
   type MemoryFlushPlanResolver,
 } from "../../plugins/memory-state.js";
 import type { TemplateContext } from "../templating.js";
+import {
+  awaitPendingMemoryFlush,
+  clearPendingMemoryFlushesForTest,
+} from "./agent-runner-memory.js";
 import type { FollowupRun, QueueSettings } from "./queue.js";
 import { scheduleFollowupDrain } from "./queue.js";
 import { testing as replyRunRegistryTesting, replyRunRegistry } from "./reply-run-registry.js";
@@ -2544,6 +2548,11 @@ describe("runReplyAgent fallback reasoning tags", () => {
         compactionCount: 0,
       },
     });
+
+    // The near-threshold memory flush is now dispatched post-reply
+    // (fire-and-forget). Wait for the pending flush before asserting on its
+    // embedded-run params.
+    await awaitPendingMemoryFlush("main");
 
     const flushCall = runEmbeddedAgentMock.mock.calls.find(([params]) =>
       (params as EmbeddedAgentParams | undefined)?.prompt?.includes("Pre-compaction memory flush."),

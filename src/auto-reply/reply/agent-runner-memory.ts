@@ -130,6 +130,64 @@ const memoryDeps = {
   now: () => Date.now(),
 };
 
+// Pending memory-flush registry, keyed by sessionKey. Used so that a
+// near-threshold flush dispatched after the reply path can be awaited by
+// the next turn's preflight compaction before it mutates session state.
+const pendingMemoryFlushes = new Map<string, Promise<void>>();
+
+const DEFAULT_PENDING_MEMORY_FLUSH_BARRIER_TIMEOUT_MS = 30_000;
+
+export function registerPendingMemoryFlush(sessionKey: string, promise: Promise<unknown>): void {
+  const wrapped: Promise<void> = promise.then(
+    () => undefined,
+    () => undefined,
+  );
+  pendingMemoryFlushes.set(sessionKey, wrapped);
+  void wrapped.finally(() => {
+    if (pendingMemoryFlushes.get(sessionKey) === wrapped) {
+      pendingMemoryFlushes.delete(sessionKey);
+    }
+  });
+}
+
+export async function awaitPendingMemoryFlush(
+  sessionKey: string | undefined,
+  options?: { timeoutMs?: number },
+): Promise<void> {
+  if (!sessionKey) {
+    return;
+  }
+  const pending = pendingMemoryFlushes.get(sessionKey);
+  if (!pending) {
+    return;
+  }
+  const timeoutMs = options?.timeoutMs ?? DEFAULT_PENDING_MEMORY_FLUSH_BARRIER_TIMEOUT_MS;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeoutPromise = new Promise<"timeout">((resolve) => {
+    timer = setTimeout(() => resolve("timeout"), timeoutMs);
+  });
+  try {
+    const outcome = await Promise.race([pending.then(() => "done" as const), timeoutPromise]);
+    if (outcome === "timeout") {
+      logVerbose(
+        `pending memory flush barrier timed out after ${timeoutMs}ms for sessionKey=${sessionKey}`,
+      );
+    }
+  } finally {
+    if (timer !== undefined) {
+      clearTimeout(timer);
+    }
+  }
+}
+
+export function hasPendingMemoryFlushForTest(sessionKey: string): boolean {
+  return pendingMemoryFlushes.has(sessionKey);
+}
+
+export function clearPendingMemoryFlushesForTest(): void {
+  pendingMemoryFlushes.clear();
+}
+
 export function setAgentRunnerMemoryTestDeps(overrides?: Partial<typeof memoryDeps>): void {
   Object.assign(memoryDeps, {
     runWithModelFallback,
@@ -718,6 +776,19 @@ export async function runPreflightCompactionIfNeeded(params: {
     logVerbose(
       `preflightCompaction skipped: sessionKey=${params.sessionKey} runtime=codex reason=codex_native_auto_compaction`,
     );
+    return entry ?? params.sessionEntry;
+  }
+
+  // Pre-compaction barrier: if the previous turn dispatched a near-threshold
+  // memory flush that has not yet completed, await it before reading session
+  // state for the current preflight. The flush's embedded run can itself
+  // trigger a compaction that mutates sessionId; allowing this preflight's
+  // compaction to interleave would split session writes across two sessionIds.
+  // Best-effort: a hung flush is bounded by the timeout in
+  // awaitPendingMemoryFlush so compaction is not permanently blocked.
+  await awaitPendingMemoryFlush(params.sessionKey);
+  entry = params.sessionStore?.[params.sessionKey] ?? entry;
+  if (!entry?.sessionId) {
     return entry ?? params.sessionEntry;
   }
 
