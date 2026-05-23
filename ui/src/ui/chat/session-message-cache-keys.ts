@@ -17,18 +17,9 @@ const DEFAULT_CANONICAL_MAIN_SESSION_KEY = buildAgentMainSessionKey({
   mainKey: DEFAULT_MAIN_KEY,
 });
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return !!value && typeof value === "object";
-}
-
 function toTrimmedString(value: string | undefined): string | undefined {
   const trimmed = value?.trim();
   return trimmed ? trimmed : undefined;
-}
-
-function readStringProperty(record: Record<string, unknown>, key: string): string | undefined {
-  const value = record[key];
-  return typeof value === "string" ? value : undefined;
 }
 
 function resolveDefaultMainSessionKey(defaults?: ChatMessageCacheSessionDefaults): string {
@@ -48,17 +39,34 @@ function uniqueStrings(values: string[]): string[] {
 export function readChatMessageCacheSessionDefaults(
   host: unknown,
 ): ChatMessageCacheSessionDefaults | undefined {
-  if (!isRecord(host) || !isRecord(host.hello)) {
+  if (!host || typeof host !== "object" || !("hello" in host)) {
     return undefined;
   }
-  const snapshot = host.hello.snapshot;
-  if (!isRecord(snapshot) || !isRecord(snapshot.sessionDefaults)) {
+  const { hello } = host;
+  if (!hello || typeof hello !== "object" || !("snapshot" in hello)) {
+    return undefined;
+  }
+  const { snapshot } = hello;
+  if (!snapshot || typeof snapshot !== "object" || !("sessionDefaults" in snapshot)) {
+    return undefined;
+  }
+  const { sessionDefaults } = snapshot;
+  if (!sessionDefaults || typeof sessionDefaults !== "object") {
     return undefined;
   }
   return {
-    defaultAgentId: readStringProperty(snapshot.sessionDefaults, "defaultAgentId"),
-    mainKey: readStringProperty(snapshot.sessionDefaults, "mainKey"),
-    mainSessionKey: readStringProperty(snapshot.sessionDefaults, "mainSessionKey"),
+    defaultAgentId:
+      "defaultAgentId" in sessionDefaults && typeof sessionDefaults.defaultAgentId === "string"
+        ? sessionDefaults.defaultAgentId
+        : undefined,
+    mainKey:
+      "mainKey" in sessionDefaults && typeof sessionDefaults.mainKey === "string"
+        ? sessionDefaults.mainKey
+        : undefined,
+    mainSessionKey:
+      "mainSessionKey" in sessionDefaults && typeof sessionDefaults.mainSessionKey === "string"
+        ? sessionDefaults.mainSessionKey
+        : undefined,
   };
 }
 
