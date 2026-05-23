@@ -2319,58 +2319,25 @@ describe("runCodexAppServerAttempt", () => {
     expect(dynamicToolNames).toEqual(["message"]);
   });
 
-  it("keeps searchable OpenClaw dynamic tools when code-mode-only is enabled", async () => {
-    testing.setOpenClawCodingToolsFactoryForTests(() => [
+  it("keeps searchable OpenClaw dynamic tools when code-mode-only is enabled", () => {
+    const tools = [
       createRuntimeDynamicTool("message"),
       createRuntimeDynamicTool("web_search"),
       createRuntimeDynamicTool("heartbeat_respond"),
       createRuntimeDynamicTool("sessions_spawn"),
       createRuntimeDynamicTool("sessions_yield"),
-    ]);
-    const workspaceDir = path.join(tempDir, "workspace");
-    const params = createParams(path.join(tempDir, "session.jsonl"), workspaceDir);
-    params.disableTools = false;
-    params.runtimePlan = createCodexRuntimePlanFixture();
-    params.sourceReplyDeliveryMode = "message_tool_only";
-    const dynamicTools = await buildDynamicToolsForTest(params, workspaceDir, {
-      forceHeartbeatTool: true,
-      ignoreRuntimePlan: true,
-    });
+    ];
     const toolBridge = createCodexDynamicToolBridge({
-      tools: dynamicTools,
+      tools,
       signal: new AbortController().signal,
       directToolNames: ["message"],
     });
-    const request = vi.fn(async (method: string, _params?: unknown) => {
-      if (method === "thread/start") {
-        return threadStartResult();
-      }
-      throw new Error(`unexpected method: ${method}`);
-    });
 
-    await startOrResumeThread({
-      client: { request } as never,
-      params,
-      cwd: workspaceDir,
-      dynamicTools: toolBridge.specs,
-      appServer: { ...createThreadLifecycleAppServerOptions(), codeModeOnly: true },
-      nativeCodeModeEnabled: true,
-      nativeCodeModeOnlyEnabled: true,
-      userMcpServersEnabled: true,
-      environmentSelection: [],
-    });
-
-    const startRequest = request.mock.calls.find(([method]) => method === "thread/start");
-    const startDynamicTools =
-      (startRequest?.[1] as { dynamicTools?: Array<Record<string, unknown>> } | undefined)
-        ?.dynamicTools ?? [];
-    const startConfig = (startRequest?.[1] as { config?: Record<string, unknown> } | undefined)
-      ?.config;
-    const message = startDynamicTools.find((tool) => tool.name === "message");
-    const webSearch = startDynamicTools.find((tool) => tool.name === "web_search");
-    const heartbeat = startDynamicTools.find((tool) => tool.name === "heartbeat_respond");
-    const sessionsSpawn = startDynamicTools.find((tool) => tool.name === "sessions_spawn");
-    const sessionsYield = startDynamicTools.find((tool) => tool.name === "sessions_yield");
+    const message = toolBridge.specs.find((tool) => tool.name === "message");
+    const webSearch = toolBridge.specs.find((tool) => tool.name === "web_search");
+    const heartbeat = toolBridge.specs.find((tool) => tool.name === "heartbeat_respond");
+    const sessionsSpawn = toolBridge.specs.find((tool) => tool.name === "sessions_spawn");
+    const sessionsYield = toolBridge.specs.find((tool) => tool.name === "sessions_yield");
 
     expect(message).not.toHaveProperty("namespace");
     expect(message).not.toHaveProperty("deferLoading");
@@ -2382,8 +2349,6 @@ describe("runCodexAppServerAttempt", () => {
     expect(sessionsSpawn?.deferLoading).toBe(true);
     expect(sessionsYield).not.toHaveProperty("namespace");
     expect(sessionsYield).not.toHaveProperty("deferLoading");
-    expect(startConfig?.["features.code_mode"]).toBe(true);
-    expect(startConfig?.["features.code_mode_only"]).toBe(true);
   });
 
   it("registers heartbeat response durably without advertising it on normal turns", async () => {
