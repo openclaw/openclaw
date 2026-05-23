@@ -676,13 +676,16 @@ describe("selectAgentHarness", () => {
     });
   });
 
-  it.each(["claude-cli", "google-gemini-cli"])(
-    "returns PI for explicit CLI runtime alias %s instead of throwing MissingAgentHarnessError",
-    (alias) => {
+  it.each([
+    { provider: "anthropic", modelId: "sonnet-4.6", alias: "claude-cli" },
+    { provider: "google", modelId: "gemini-3-pro-preview", alias: "google-gemini-cli" },
+  ])(
+    "returns PI for explicit CLI runtime alias $alias on $provider instead of throwing MissingAgentHarnessError",
+    ({ provider, modelId, alias }) => {
       expect(
         selectAgentHarness({
-          provider: "anthropic",
-          modelId: "sonnet-4.6",
+          provider,
+          modelId,
           agentHarnessRuntimeOverride: alias,
         }).id,
       ).toBe("pi");
@@ -718,5 +721,15 @@ describe("selectAgentHarness", () => {
         agentHarnessRuntimeOverride: "clade-cli",
       }),
     ).toThrow('Requested agent harness "clade-cli" is not registered');
+  });
+
+  it("still throws MissingAgentHarnessError for an explicit CLI alias owned by another provider", () => {
+    expect(() =>
+      selectAgentHarness({
+        provider: "anthropic",
+        modelId: "sonnet-4.6",
+        agentHarnessRuntimeOverride: "google-gemini-cli",
+      }),
+    ).toThrow('Requested agent harness "google-gemini-cli" is not registered');
   });
 });

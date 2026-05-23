@@ -1,8 +1,7 @@
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
-import { isCliRuntimeAlias } from "../model-runtime-aliases.js";
-import { isCliProvider } from "../model-selection-cli.js";
+import { isCliRuntimeAliasForProvider } from "../model-runtime-aliases.js";
 import type { CompactEmbeddedPiSessionParams } from "../pi-embedded-runner/compact.types.js";
 import type {
   EmbeddedRunAttemptParams,
@@ -15,6 +14,7 @@ import {
   resolveInheritedToolPolicyForSession,
   resolveSubagentToolPolicyForSession,
 } from "../pi-tools.policy.js";
+import { normalizeProviderId } from "../provider-id.js";
 import { resolveSandboxRuntimeStatus } from "../sandbox/runtime-status.js";
 import { resolveSenderToolPolicy } from "../sender-tool-policy.js";
 import {
@@ -75,6 +75,13 @@ type AgentHarnessSelectionDecision = {
 
 function listPluginAgentHarnesses(): AgentHarness[] {
   return listRegisteredAgentHarnesses().map((entry) => entry.harness);
+}
+
+function hasConfiguredCliBackendId(runtime: string, config: OpenClawConfig | undefined): boolean {
+  const configured = config?.agents?.defaults?.cliBackends ?? {};
+  return Object.keys(configured).some(
+    (key) => normalizeProviderId(key) === normalizeProviderId(runtime),
+  );
 }
 
 export function resolveAvailableAgentHarnessPolicy(params: {
@@ -178,7 +185,10 @@ function selectAgentHarnessDecision(params: {
         candidates: listHarnessCandidates(pluginHarnesses),
       });
     }
-    if (isCliRuntimeAlias(runtime) || isCliProvider(runtime, params.config)) {
+    if (
+      isCliRuntimeAliasForProvider({ runtime, provider: params.provider }) ||
+      hasConfiguredCliBackendId(runtime, params.config)
+    ) {
       return buildSelectionDecision({
         harness: piHarness,
         policy: {
