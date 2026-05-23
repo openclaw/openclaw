@@ -439,6 +439,25 @@ function parsePortFromProgramArguments(programArguments?: string[]): number | nu
   return null;
 }
 
+function collectGatewayListenerPids(
+  listeners: Array<{ pid?: number; commandLine?: string }>,
+): number[] {
+  return Array.from(
+    new Set(
+      listeners
+        .filter(
+          (listener) =>
+            typeof listener.pid === "number" &&
+            listener.commandLine &&
+            isGatewayArgv(parseCmdScriptCommandLine(listener.commandLine), {
+              allowGatewayBinary: true,
+            }),
+        )
+        .map((listener) => listener.pid as number),
+    ),
+  );
+}
+
 async function resolveScheduledTaskPort(env: GatewayServiceEnv): Promise<number | null> {
   const command = await readScheduledTaskCommand(env).catch(() => null);
   return (
@@ -459,31 +478,7 @@ async function resolveScheduledTaskGatewayListenerPids(port: number): Promise<nu
     return [];
   }
 
-  const matchedGatewayPids = Array.from(
-    new Set(
-      diagnostics.listeners
-        .filter(
-          (listener) =>
-            typeof listener.pid === "number" &&
-            listener.commandLine &&
-            isGatewayArgv(parseCmdScriptCommandLine(listener.commandLine), {
-              allowGatewayBinary: true,
-            }),
-        )
-        .map((listener) => listener.pid as number),
-    ),
-  );
-  if (matchedGatewayPids.length > 0) {
-    return matchedGatewayPids;
-  }
-
-  return Array.from(
-    new Set(
-      diagnostics.listeners
-        .map((listener) => listener.pid)
-        .filter((pid): pid is number => typeof pid === "number" && Number.isFinite(pid) && pid > 0),
-    ),
-  );
+  return collectGatewayListenerPids(diagnostics.listeners);
 }
 
 async function resolveListenerBackedScheduledTaskRuntime(
@@ -575,13 +570,7 @@ async function terminateBusyPortListeners(port: number): Promise<number[]> {
   if (diagnostics?.status !== "busy") {
     return [];
   }
-  const pids = Array.from(
-    new Set(
-      diagnostics.listeners
-        .map((listener) => listener.pid)
-        .filter((pid): pid is number => typeof pid === "number" && Number.isFinite(pid) && pid > 0),
-    ),
-  );
+  const pids = collectGatewayListenerPids(diagnostics.listeners);
   for (const pid of pids) {
     await terminateGatewayProcessTree(pid, 300);
   }
