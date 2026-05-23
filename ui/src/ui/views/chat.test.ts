@@ -1551,7 +1551,15 @@ describe("chat session controls", () => {
     const loadMore = container.querySelector<HTMLButtonElement>(
       'button[data-chat-session-load-more="true"]',
     );
+    const input = container.querySelector<HTMLInputElement>(
+      'input[data-chat-session-picker-search="true"]',
+    );
     expect(loadMore?.disabled).toBe(false);
+    request.mockClear();
+    input!.dispatchEvent(new FocusEvent("blur", { bubbles: false }));
+    await flushTasks();
+    expect(request).not.toHaveBeenCalled();
+
     loadMore!.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
     await vi.waitFor(() => expect(state.chatSessionPickerResult?.sessions).toHaveLength(4));
 

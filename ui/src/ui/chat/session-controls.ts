@@ -346,6 +346,9 @@ async function applyChatSessionPickerSearch(state: AppViewState) {
     clearChatSessionPickerSearch(state);
     return;
   }
+  if (query === state.chatSessionPickerAppliedQuery && state.chatSessionPickerResult) {
+    return;
+  }
   await loadChatSessionPickerPage(state, { query });
 }
 
