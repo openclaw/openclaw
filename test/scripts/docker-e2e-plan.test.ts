@@ -117,6 +117,7 @@ describe("scripts/lib/docker-e2e-plan", () => {
     expect(plan.lanes.map((lane) => lane.name)).toContain("codex-on-demand");
     expect(plan.lanes.map((lane) => lane.name)).toContain("install-e2e-anthropic");
     expect(plan.lanes.map((lane) => lane.name)).toContain("mcp-channels");
+    expect(plan.lanes.map((lane) => lane.name)).toContain("plugin-binding-command-escape");
     expect(plan.lanes.map((lane) => lane.name)).toContain("live-plugin-tool");
     expect(plan.lanes.map((lane) => lane.name)).toContain("commitments-safety");
     expect(plan.lanes.map((lane) => lane.name)).toContain("bundled-plugin-install-uninstall-0");
@@ -179,6 +180,11 @@ describe("scripts/lib/docker-e2e-plan", () => {
   });
 
   it("splits release-path package and plugin chunks across shorter CI jobs", () => {
+    const core = planFor({
+      includeOpenWebUI: true,
+      profile: RELEASE_PATH_PROFILE,
+      releaseChunk: "core",
+    });
     const packageInstallOpenAi = planFor({
       includeOpenWebUI: true,
       profile: RELEASE_PATH_PROFILE,
@@ -245,6 +251,7 @@ describe("scripts/lib/docker-e2e-plan", () => {
       releaseChunk: "plugins-runtime-install-h",
     });
 
+    expect(core.lanes.map((lane) => lane.name)).toContain("plugin-binding-command-escape");
     expect(packageInstallOpenAi.lanes.map((lane) => lane.name)).toEqual([
       "install-e2e-openai",
       "openai-chat-tools",
@@ -703,6 +710,23 @@ describe("scripts/lib/docker-e2e-plan", () => {
     expect(lane.timeoutMs).toBe(1_800_000);
     expect(plan.needs.bareImage).toBe(true);
     expect(plan.needs.package).toBe(true);
+  });
+
+  it("plans the plugin binding command escape lane as source Docker proof", () => {
+    const plan = planFor({ selectedLaneNames: ["plugin-binding-command-escape"] });
+
+    expect(plan.lanes).toHaveLength(1);
+    const lane = requireFirstLane(plan);
+    expect(lane.command).toBe(
+      "OPENCLAW_SKIP_DOCKER_BUILD=0 pnpm test:docker:plugin-binding-command-escape",
+    );
+    expect(lane.imageKind).toBeUndefined();
+    expect(lane.live).toBe(false);
+    expect(lane.name).toBe("plugin-binding-command-escape");
+    expect(lane.resources).toEqual(["docker", "npm"]);
+    expect(lane.stateScenario).toBe("empty");
+    expect(plan.needs.e2eImage).toBe(false);
+    expect(plan.needs.package).toBe(false);
   });
 
   it("plans the live plugin tool lane as package-backed OpenAI proof", () => {
