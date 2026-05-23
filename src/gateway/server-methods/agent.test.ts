@@ -1667,6 +1667,7 @@ describe("gateway agent handler", () => {
   it("keeps backend internal session-effect runs out of visible gateway state", async () => {
     primeMainAgentRun({ cfg: mocks.loadConfigReturn });
     mocks.agentCommand.mockClear();
+    mocks.updateSessionStore.mockClear();
     mocks.registerAgentRunContext.mockClear();
     const context = makeContext();
 
