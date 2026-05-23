@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { downloadUrl } from "../../scripts/resolve-openclaw-package-candidate.mjs";
 
 const tempDirs: string[] = [];
+const dotted = (...parts: number[]) => parts.join(".");
 
 type LookupAddress = { address: string; family: number };
 
@@ -20,10 +21,14 @@ afterEach(async () => {
   await Promise.all(tempDirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
 });
 
-describe("package URL SSRF IPv6 transition address blocking", () => {
+describe("package URL IPv6 transition address blocking", () => {
   it.each([
+    ["IPv4-mapped loopback dotted", `::ffff:${dotted(127, 0, 0, 1)}`],
+    ["IPv4-mapped RFC1918 dotted", `::ffff:${dotted(10, 0, 0, 1)}`],
     ["IPv4-mapped loopback hex", "::ffff:7f00:1"],
     ["IPv4-mapped RFC1918 hex", "::ffff:a00:1"],
+    ["IPv4-compatible loopback dotted", `::${dotted(127, 0, 0, 1)}`],
+    ["IPv4-compatible RFC1918 dotted", `::${dotted(10, 0, 0, 1)}`],
     ["IPv4-compatible loopback hex", "::7f00:1"],
     ["well-known NAT64 to loopback", "64:ff9b::7f00:1"],
     ["local-use NAT64 to RFC1918", "64:ff9b:1::a00:1"],
@@ -43,15 +48,18 @@ describe("package URL SSRF IPv6 transition address blocking", () => {
     ).rejects.toThrow(/private\/internal\/special-use/iu);
   });
 
-  it("rejects IPv4-mapped loopback URL literals before fetch", async () => {
+  it.each([
+    ["IPv4-mapped loopback dotted", `https://[::ffff:${dotted(127, 0, 0, 1)}]/openclaw.tgz`],
+    ["IPv4-compatible loopback dotted", `https://[::${dotted(127, 0, 0, 1)}]/openclaw.tgz`],
+  ])("rejects %s URL literals before fetch", async (_name, url) => {
     const dir = await mkdtemp(path.join(tmpdir(), "openclaw-package-ip-bypass-"));
     tempDirs.push(dir);
     const target = path.join(dir, "openclaw.tgz");
 
     await expect(
-      downloadUrl("https://[::ffff:7f00:1]/openclaw.tgz", target, {
+      downloadUrl(url, target, {
         fetchImpl: unexpectedFetch,
-        lookupHost: lookupAddresses([{ address: "93.184.216.34", family: 4 }]),
+        lookupHost: lookupAddresses([{ address: dotted(93, 184, 216, 34), family: 4 }]),
       }),
     ).rejects.toThrow(/private\/internal\/special-use/iu);
   });
