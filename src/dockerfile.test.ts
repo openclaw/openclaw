@@ -92,14 +92,14 @@ describe("Dockerfile", () => {
   it("uses the Docker target platform for pnpm install and prune", async () => {
     const dockerfile = await readFile(dockerfilePath, "utf8");
     const installIndex = dockerfile.indexOf("pnpm install --frozen-lockfile \\");
-    const storeAddIndex = dockerfile.indexOf(
+    const storeSeedIndex = dockerfile.indexOf(
       "pnpm list --prod --depth Infinity --json | node scripts/list-prod-store-packages.mjs | xargs -r pnpm store add",
     );
     const pruneIndex = dockerfile.indexOf("CI=true pnpm prune --prod \\");
 
     expect(installIndex).toBeGreaterThan(-1);
-    expect(storeAddIndex).toBeGreaterThan(installIndex);
-    expect(storeAddIndex).toBeLessThan(pruneIndex);
+    expect(storeSeedIndex).toBeGreaterThan(installIndex);
+    expect(storeSeedIndex).toBeLessThan(pruneIndex);
     expect(pruneIndex).toBeGreaterThan(-1);
     expect(dockerfile).toContain("--config.offline=true");
     expect(dockerfile.split("--config.supportedArchitectures.os=linux").length - 1).toBe(2);

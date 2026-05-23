@@ -108,7 +108,13 @@ describe("waitForAgentJob", () => {
       emitAgentEvent({
         runId,
         stream: "lifecycle",
-        data: { phase: "end", endedAt: 200, aborted: true },
+        data: {
+          phase: "end",
+          endedAt: 200,
+          aborted: true,
+          timeoutPhase: "provider",
+          providerStarted: true,
+        },
       });
 
       await vi.advanceTimersByTimeAsync(15_000);
@@ -117,6 +123,8 @@ describe("waitForAgentJob", () => {
         status: "timeout",
         startedAt: 100,
         endedAt: 200,
+        timeoutPhase: "provider",
+        providerStarted: true,
       });
     } finally {
       vi.useRealTimers();

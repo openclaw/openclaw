@@ -190,6 +190,8 @@ on:
         required: false
       ANTHROPIC_API_TOKEN:
         required: false
+      FACTORY_API_KEY:
+        required: false
       BYTEPLUS_API_KEY:
         required: false
       CEREBRAS_API_KEY:
@@ -288,7 +290,6 @@ concurrency:
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
   NODE_VERSION: "24.15.0"
-  PNPM_VERSION: "11.0.8"
   PACKAGE_ARTIFACT_NAME: package-under-test
 
 jobs:
@@ -320,7 +321,6 @@ jobs:
         uses: ./.github/actions/setup-node-env
         with:
           node-version: ${{ env.NODE_VERSION }}
-          pnpm-version: ${{ env.PNPM_VERSION }}
           install-bun: ${{ inputs.source == 'ref' && 'true' || 'false' }}
           install-deps: "false"
 
@@ -563,6 +563,7 @@ jobs:
       ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
       ANTHROPIC_API_KEY_OLD: ${{ secrets.ANTHROPIC_API_KEY_OLD }}
       ANTHROPIC_API_TOKEN: ${{ secrets.ANTHROPIC_API_TOKEN }}
+      FACTORY_API_KEY: ${{ secrets.FACTORY_API_KEY }}
       BYTEPLUS_API_KEY: ${{ secrets.BYTEPLUS_API_KEY }}
       CEREBRAS_API_KEY: ${{ secrets.CEREBRAS_API_KEY }}
       DEEPINFRA_API_KEY: ${{ secrets.DEEPINFRA_API_KEY }}

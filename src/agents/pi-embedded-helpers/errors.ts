@@ -68,6 +68,7 @@ export {
 } from "./failover-matches.js";
 
 const log = createSubsystemLogger("errors");
+const sandboxToolPolicyAuditMessages = new WeakSet<AssistantMessage>();
 
 export function isReasoningConstraintErrorMessage(raw: string): boolean {
   if (!raw) {
@@ -330,7 +331,7 @@ const INTERRUPTED_NETWORK_ERROR_RE =
 const REPLAY_INVALID_RE =
   /\bprevious_response_id\b.*\b(?:invalid|unknown|not found|does not exist|expired|mismatch)\b|\btool_(?:use|call)\.(?:input|arguments)\b.*\b(?:missing|required)\b|\bincorrect role information\b|\broles must alternate\b|\binput item id does not belong to this connection\b/i;
 const SANDBOX_BLOCKED_RE =
-  /\bapproval is required\b|\bapproval timed out\b|\bapproval was denied\b|\bblocked by sandbox\b|\bsandbox\b.*\b(?:blocked|denied|forbidden|disabled|not allowed)\b/i;
+  /\bapproval is required\b|\bapproval timed out\b|\bapproval was denied\b|\bblocked by sandbox\b|\bsandbox\b.*\b(?:blocked|denied|forbidden|disabled|not allowed)\b|\bexec denied\s*\(/i;
 const NO_BODY_HTTP_WRAPPER_RE =
   /^(?:no body(?: response)?|no response body|status code \(no body\))$/i;
 
@@ -1036,12 +1037,17 @@ export function formatAssistantErrorText(
     raw.match(/unknown tool[:\s]+["']?([a-z0-9_-]+)["']?/i) ??
     raw.match(/tool\s+["']?([a-z0-9_-]+)["']?\s+(?:not found|is not available)/i);
   if (unknownTool?.[1]) {
+    const audit = !sandboxToolPolicyAuditMessages.has(msg);
     const rewritten = formatSandboxToolPolicyBlockedMessage({
       cfg: opts?.cfg,
       sessionKey: opts?.sessionKey,
       toolName: unknownTool[1],
+      audit,
     });
     if (rewritten) {
+      if (audit) {
+        sandboxToolPolicyAuditMessages.add(msg);
+      }
       return rewritten;
     }
   }

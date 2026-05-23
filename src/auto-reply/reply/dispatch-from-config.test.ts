@@ -13,6 +13,7 @@ import type {
   AcpRuntimeHandle,
   AcpRuntimeTurnInput,
 } from "../../plugin-sdk/acp-runtime.js";
+import { clearPluginCommands, registerPluginCommand } from "../../plugins/commands.js";
 import type {
   PluginHookBeforeDispatchResult,
   PluginHookReplyDispatchResult,
@@ -791,6 +792,7 @@ async function dispatchTwiceWithFreshDispatchers(params: Omit<DispatchReplyArgs,
 describe("dispatchReplyFromConfig", () => {
   beforeEach(() => {
     clearAgentHarnesses();
+    clearPluginCommands();
     const discordTestPlugin = {
       ...createChannelTestPluginBase({
         id: "discord",
@@ -3881,6 +3883,217 @@ describe("dispatchReplyFromConfig", () => {
     expect(replyResolver).not.toHaveBeenCalled();
   });
 
+  it("lets authorized plugin-owned binding commands fall through to command processing", async () => {
+    setNoAbort();
+    expect(
+      registerPluginCommand(
+        "codex",
+        {
+          name: "codex",
+          description: "Control Codex app-server bindings",
+          acceptsArgs: true,
+          requireAuth: true,
+          handler: vi.fn(async () => ({ continueAgent: true })),
+        },
+        { allowReservedCommandNames: true },
+      ),
+    ).toEqual({ ok: true });
+    hookMocks.runner.hasHooks.mockImplementation(
+      ((hookName?: string) =>
+        hookName === "inbound_claim" || hookName === "message_received") as () => boolean,
+    );
+    hookMocks.registry.plugins = [{ id: "openclaw-codex-app-server", status: "loaded" }];
+    hookMocks.runner.runInboundClaimForPluginOutcome.mockResolvedValue({
+      status: "handled",
+      result: { handled: true },
+    });
+    sessionBindingMocks.resolveByConversation.mockReturnValue({
+      bindingId: "binding-command-escape-1",
+      targetSessionKey: "plugin-binding:codex:abc123",
+      targetKind: "session",
+      conversation: {
+        channel: "discord",
+        accountId: "default",
+        conversationId: "channel:1481858418548412579",
+      },
+      status: "active",
+      boundAt: 1710000000000,
+      metadata: {
+        pluginBindingOwner: "plugin",
+        pluginId: "openclaw-codex-app-server",
+        pluginRoot: "/Users/huntharo/github/openclaw-app-server",
+        detachHint: "/codex detach",
+        data: {
+          kind: "codex-app-server-session",
+          version: 1,
+          sessionFile: "/tmp/session.jsonl",
+          workspaceDir: "/workspace/openclaw",
+        },
+      },
+    } satisfies SessionBindingRecord);
+    const cfg = emptyConfig;
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "discord",
+      Surface: "discord",
+      OriginatingChannel: "discord",
+      OriginatingTo: "discord:channel:1481858418548412579",
+      To: "discord:channel:1481858418548412579",
+      AccountId: "default",
+      SenderId: "user-9",
+      SenderUsername: "ada",
+      CommandSource: "text",
+      CommandAuthorized: true,
+      WasMentioned: false,
+      CommandBody: "/codex detach",
+      RawBody: "/codex detach",
+      Body: "/codex detach",
+      MessageSid: "msg-claim-plugin-command-escape",
+      SessionKey: "agent:main:discord:channel:1481858418548412579",
+    });
+    const replyResolver = vi.fn(async () => ({ text: "detached" }) satisfies ReplyPayload);
+
+    const result = await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
+
+    expect(result).toEqual({ queuedFinal: true, counts: { tool: 0, block: 0, final: 0 } });
+    expect(sessionBindingMocks.touch).toHaveBeenCalledWith("binding-command-escape-1");
+    expect(hookMocks.runner.runInboundClaimForPluginOutcome).not.toHaveBeenCalled();
+    expect(hookMocks.runner.runInboundClaim).not.toHaveBeenCalled();
+    expect(replyResolver).toHaveBeenCalledTimes(1);
+    expect(firstFinalReplyPayload(dispatcher)?.text).toBe("detached");
+  });
+
+  it("keeps authorized unknown slash text in a plugin-owned binding routed to the bound plugin", async () => {
+    setNoAbort();
+    hookMocks.runner.hasHooks.mockImplementation(
+      ((hookName?: string) =>
+        hookName === "inbound_claim" || hookName === "message_received") as () => boolean,
+    );
+    hookMocks.registry.plugins = [{ id: "openclaw-codex-app-server", status: "loaded" }];
+    hookMocks.runner.runInboundClaimForPluginOutcome.mockResolvedValue({
+      status: "handled",
+      result: { handled: true },
+    });
+    sessionBindingMocks.resolveByConversation.mockReturnValue({
+      bindingId: "binding-command-unknown-slash",
+      targetSessionKey: "plugin-binding:codex:abc123",
+      targetKind: "session",
+      conversation: {
+        channel: "discord",
+        accountId: "default",
+        conversationId: "channel:1481858418548412579",
+      },
+      status: "active",
+      boundAt: 1710000000000,
+      metadata: {
+        pluginBindingOwner: "plugin",
+        pluginId: "openclaw-codex-app-server",
+        pluginRoot: "/Users/huntharo/github/openclaw-app-server",
+      },
+    } satisfies SessionBindingRecord);
+    const cfg = emptyConfig;
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "discord",
+      Surface: "discord",
+      OriginatingChannel: "discord",
+      OriginatingTo: "discord:channel:1481858418548412579",
+      To: "discord:channel:1481858418548412579",
+      AccountId: "default",
+      SenderId: "user-9",
+      SenderUsername: "ada",
+      CommandSource: "text",
+      CommandAuthorized: true,
+      WasMentioned: false,
+      CommandBody: "/notes keep this with the bound plugin",
+      RawBody: "/notes keep this with the bound plugin",
+      Body: "/notes keep this with the bound plugin",
+      MessageSid: "msg-claim-plugin-command-unknown-slash",
+      SessionKey: "agent:main:discord:channel:1481858418548412579",
+    });
+    const replyResolver = vi.fn(async () => ({ text: "should not run" }) satisfies ReplyPayload);
+
+    const result = await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
+
+    expect(result).toEqual({ queuedFinal: false, counts: { tool: 0, block: 0, final: 0 } });
+    expect(sessionBindingMocks.touch).toHaveBeenCalledWith("binding-command-unknown-slash");
+    expect(hookMocks.runner.runInboundClaimForPluginOutcome).toHaveBeenCalledWith(
+      "openclaw-codex-app-server",
+      expect.objectContaining({ content: "/notes keep this with the bound plugin" }),
+      expect.objectContaining({
+        pluginBinding: expect.objectContaining({ bindingId: "binding-command-unknown-slash" }),
+      }),
+    );
+    expect(hookMocks.runner.runInboundClaim).not.toHaveBeenCalled();
+    expect(replyResolver).not.toHaveBeenCalled();
+  });
+
+  it("keeps unauthorized plugin-owned binding slash text routed to the bound plugin", async () => {
+    setNoAbort();
+    hookMocks.runner.hasHooks.mockImplementation(
+      ((hookName?: string) =>
+        hookName === "inbound_claim" || hookName === "message_received") as () => boolean,
+    );
+    hookMocks.registry.plugins = [{ id: "openclaw-codex-app-server", status: "loaded" }];
+    hookMocks.runner.runInboundClaimForPluginOutcome.mockResolvedValue({
+      status: "handled",
+      result: { handled: true },
+    });
+    sessionBindingMocks.resolveByConversation.mockReturnValue({
+      bindingId: "binding-command-escape-denied",
+      targetSessionKey: "plugin-binding:codex:abc123",
+      targetKind: "session",
+      conversation: {
+        channel: "discord",
+        accountId: "default",
+        conversationId: "channel:1481858418548412579",
+      },
+      status: "active",
+      boundAt: 1710000000000,
+      metadata: {
+        pluginBindingOwner: "plugin",
+        pluginId: "openclaw-codex-app-server",
+        pluginRoot: "/Users/huntharo/github/openclaw-app-server",
+        detachHint: "/codex detach",
+      },
+    } satisfies SessionBindingRecord);
+    const cfg = emptyConfig;
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "discord",
+      Surface: "discord",
+      OriginatingChannel: "discord",
+      OriginatingTo: "discord:channel:1481858418548412579",
+      To: "discord:channel:1481858418548412579",
+      AccountId: "default",
+      SenderId: "user-9",
+      SenderUsername: "ada",
+      CommandSource: "text",
+      CommandAuthorized: false,
+      WasMentioned: false,
+      CommandBody: "/codex detach",
+      RawBody: "/codex detach",
+      Body: "/codex detach",
+      MessageSid: "msg-claim-plugin-command-denied",
+      SessionKey: "agent:main:discord:channel:1481858418548412579",
+    });
+    const replyResolver = vi.fn(async () => ({ text: "should not run" }) satisfies ReplyPayload);
+
+    const result = await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
+
+    expect(result).toEqual({ queuedFinal: false, counts: { tool: 0, block: 0, final: 0 } });
+    expect(sessionBindingMocks.touch).toHaveBeenCalledWith("binding-command-escape-denied");
+    expect(hookMocks.runner.runInboundClaimForPluginOutcome).toHaveBeenCalledWith(
+      "openclaw-codex-app-server",
+      expect.objectContaining({ content: "/codex detach" }),
+      expect.objectContaining({
+        pluginBinding: expect.objectContaining({ bindingId: "binding-command-escape-denied" }),
+      }),
+    );
+    expect(hookMocks.runner.runInboundClaim).not.toHaveBeenCalled();
+    expect(replyResolver).not.toHaveBeenCalled();
+  });
+
   it("delivers plugin-owned binding replies returned by the owning inbound claim hook", async () => {
     setNoAbort();
     hookMocks.runner.hasHooks.mockImplementation(
@@ -6032,43 +6245,6 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     expect(replyResolver).toHaveBeenCalledTimes(1);
     expect(result.queuedFinal).toBe(true);
     expect(firstFinalReplyPayload(dispatcher)?.text).toBe("visible parent-model reply");
-  });
-
-  it("honors one-turn model overrides before Codex direct source delivery defaults", async () => {
-    setNoAbort();
-    registerAgentHarness({
-      id: "codex",
-      label: "Codex",
-      deliveryDefaults: { sourceVisibleReplies: "message_tool" },
-      supports: (ctx) =>
-        ctx.provider === "codex"
-          ? { supported: true, priority: 100 }
-          : { supported: false, reason: "codex provider only" },
-      runAttempt: vi.fn(async () => ({}) as never),
-    });
-    const dispatcher = createDispatcher();
-    const replyResolver = vi.fn(async (_ctx: MsgContext, opts?: GetReplyOptions) => {
-      expect(opts?.sourceReplyDeliveryMode).toBe("automatic");
-      return { text: "visible one-turn-model reply" } satisfies ReplyPayload;
-    });
-
-    const result = await dispatchReplyFromConfig({
-      ctx: buildTestCtx({
-        ChatType: "direct",
-        CommandSource: undefined,
-        Provider: "telegram",
-        Surface: "telegram",
-        SessionKey: "agent:main:telegram:direct:U1",
-      }),
-      cfg: emptyConfig,
-      dispatcher,
-      replyOptions: { modelOverride: "anthropic/claude-sonnet-4.6" },
-      replyResolver,
-    });
-
-    expect(replyResolver).toHaveBeenCalledTimes(1);
-    expect(result.queuedFinal).toBe(true);
-    expect(firstFinalReplyPayload(dispatcher)?.text).toBe("visible one-turn-model reply");
   });
 
   it("honors heartbeat model overrides before Codex direct source delivery defaults", async () => {

@@ -1,6 +1,7 @@
 import fs from "node:fs";
 
-const roots = JSON.parse(fs.readFileSync(0, "utf8"));
+const parsed = JSON.parse(fs.readFileSync(0, "utf8"));
+const roots = Array.isArray(parsed) ? parsed : [parsed];
 const specs = new Set();
 
 function visit(node) {

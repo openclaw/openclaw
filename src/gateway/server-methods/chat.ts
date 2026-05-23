@@ -10,14 +10,12 @@ import {
   resolveSendableOutboundReplyParts,
 } from "openclaw/plugin-sdk/reply-payload";
 import { resolveAgentWorkspaceDir, resolveSessionAgentId } from "../../agents/agent-scope.js";
-import { resolveDefaultModelForAgent } from "../../agents/model-selection.js";
 import { rewriteTranscriptEntriesInSessionFile } from "../../agents/pi-embedded-runner/transcript-rewrite.js";
 import { resolveProviderIdForAuth } from "../../agents/provider-auth-aliases.js";
 import { ensureSandboxWorkspaceForSession } from "../../agents/sandbox/context.js";
 import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
 import { dispatchInboundMessage } from "../../auto-reply/dispatch.js";
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
-import { resolveImageModelOverridePlan } from "../../auto-reply/reply/image-model-override-plan.js";
 import { createReplyDispatcher } from "../../auto-reply/reply/reply-dispatcher.js";
 import { stageSandboxMedia } from "../../auto-reply/reply/stage-sandbox-media.js";
 import type { MsgContext, TemplateContext } from "../../auto-reply/templating.js";
@@ -75,12 +73,10 @@ import {
   updateChatRunProvider,
 } from "../chat-abort.js";
 import {
-  type ChatAttachment,
   type ChatImageContent,
   MediaOffloadError,
   type OffloadedRef,
   parseMessageWithAttachments,
-  resolveChatAttachmentLooksLikeImage,
   resolveChatAttachmentMaxBytes,
   UnsupportedAttachmentError,
 } from "../chat-attachments.js";
@@ -245,15 +241,6 @@ function buildMediaOnlyTtsSupplementTranscriptMarker(
     return undefined;
   }
   return buildTtsSupplementTranscriptMarker(payload);
-}
-
-async function hasImageChatAttachments(attachments: ChatAttachment[]): Promise<boolean> {
-  for (const [index, attachment] of attachments.entries()) {
-    if (await resolveChatAttachmentLooksLikeImage(attachment, index)) {
-      return true;
-    }
-  }
-  return false;
 }
 
 async function buildWebchatAssistantMediaMessage(
@@ -2302,7 +2289,6 @@ export const chatHandlers: GatewayRequestHandlers = {
       sessionKey,
       config: cfg,
     });
-    const resolvedConfiguredDefaultModel = resolveDefaultModelForAgent({ cfg, agentId });
     const resolvedSessionModel = resolveSessionModelRef(cfg, entry, agentId);
     const resolvedSessionAuthProvider = resolveProviderIdForAuth(resolvedSessionModel.provider, {
       config: cfg,
@@ -2405,14 +2391,11 @@ export const chatHandlers: GatewayRequestHandlers = {
     const explicitOriginTargetsPlugin = explicitOriginTargetsPluginBinding(
       explicitOriginResult.value,
     );
-    let modelOverride: string | undefined;
-    let modelOverrideFallbacks: string[] | undefined;
     if (normalizedAttachments.length > 0) {
       try {
         await measureDiagnosticsTimelineSpan(
           "gateway.chat_send.prepare_attachments",
           async () => {
-            const hasImageAttachments = await hasImageChatAttachments(normalizedAttachments);
             const supportsSessionModelImages = await resolveGatewayModelSupportsImages({
               loadGatewayModelCatalog: context.loadGatewayModelCatalog,
               provider: resolvedSessionModel.provider,
@@ -2421,31 +2404,9 @@ export const chatHandlers: GatewayRequestHandlers = {
             const explicitOriginSupportsInlineImages =
               explicitOriginTargetsAcpSession(explicitOriginResult.value) ||
               explicitOriginTargetsPlugin;
-            const imageModelPlan = await resolveImageModelOverridePlan({
-              cfg,
-              agentId,
-              defaultProvider: resolvedConfiguredDefaultModel.provider,
-              defaultModel: resolvedConfiguredDefaultModel.model,
-              hasImageAttachments,
-              sessionModelSupportsImages:
-                supportsSessionModelImages || explicitOriginSupportsInlineImages,
-              modelSupportsImages: (ref) =>
-                resolveGatewayModelSupportsImages({
-                  loadGatewayModelCatalog: context.loadGatewayModelCatalog,
-                  provider: ref.provider,
-                  model: ref.model,
-                }),
-            });
-            if (imageModelPlan.kind === "inline-image-model") {
-              modelOverride = imageModelPlan.modelOverride;
-              modelOverrideFallbacks = imageModelPlan.modelOverrideFallbacks;
-            }
             // Bound plugin sessions own the real recipient model, so keep image
             // attachments even when the parent OpenClaw session model is text-only.
-            const supportsImages =
-              imageModelPlan.kind === "inline-session" ||
-              imageModelPlan.kind === "inline-image-model" ||
-              explicitOriginSupportsInlineImages;
+            const supportsImages = supportsSessionModelImages || explicitOriginSupportsInlineImages;
             const routeImageOffloadsAsMediaPaths = !supportsImages;
             const parsed = await parseMessageWithAttachments(
               inboundMessage,
@@ -2853,8 +2814,6 @@ export const chatHandlers: GatewayRequestHandlers = {
               abortSignal: activeRunAbort.controller.signal,
               images: parsedImages.length > 0 ? parsedImages : undefined,
               imageOrder: imageOrder.length > 0 ? imageOrder : undefined,
-              modelOverride,
-              modelOverrideFallbacks,
               thinkingLevelOverride: p.thinking,
               fastModeOverride: p.fastMode,
               onAgentRunStart: (runId) => {
