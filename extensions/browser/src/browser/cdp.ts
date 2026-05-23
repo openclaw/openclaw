@@ -470,6 +470,62 @@ export async function setExtraHTTPHeadersViaCdp(opts: {
   );
 }
 
+export async function printPdfViaCdp(opts: {
+  cdpUrl: string;
+  targetId?: string;
+  targetUrl?: string;
+  ssrfPolicy?: SsrFPolicy;
+  timeoutMs?: number;
+}): Promise<{ buffer: Buffer }> {
+  await assertCdpEndpointAllowed(opts.cdpUrl, opts.ssrfPolicy);
+  const cdpHttpBase = normalizeCdpHttpBaseForJsonEndpoints(opts.cdpUrl);
+  const pages = await fetchJson<
+    Array<{
+      id?: string;
+      url?: string;
+      type?: string;
+      webSocketDebuggerUrl?: string;
+    }>
+  >(appendCdpPath(cdpHttpBase, "/json/list"), opts.timeoutMs ?? 2000, undefined, opts.ssrfPolicy);
+
+  const targetId = opts.targetId?.trim() ?? "";
+  const targetUrl = opts.targetUrl?.trim() ?? "";
+  const candidates = pages.filter((page) => (page.type ?? "page") === "page");
+  const targetById = targetId ? candidates.find((page) => page.id === targetId) : undefined;
+  const urlMatches = targetUrl ? candidates.filter((page) => page.url === targetUrl) : [];
+  const numericTargetId = Number.parseInt(targetId, 10);
+  const ordinalTarget =
+    Number.isInteger(numericTargetId) && numericTargetId > 0
+      ? candidates[numericTargetId - 1]
+      : undefined;
+  const target =
+    targetById ??
+    (urlMatches.length === 1 ? urlMatches[0] : undefined) ??
+    ordinalTarget ??
+    (candidates.length === 1 ? candidates[0] : undefined);
+
+  const wsUrlRaw = target?.webSocketDebuggerUrl?.trim() ?? "";
+  if (!wsUrlRaw) {
+    throw new Error("CDP /json/list did not expose a matching page WebSocket URL");
+  }
+  const wsUrl = normalizeCdpWsUrl(wsUrlRaw, cdpHttpBase);
+  await assertCdpEndpointAllowed(wsUrl, opts.ssrfPolicy);
+
+  const result = await withCdpSocket(
+    wsUrl,
+    async (send) => {
+      await send("Page.enable");
+      return (await send("Page.printToPDF", { printBackground: true })) as { data?: string };
+    },
+    { commandTimeoutMs: opts.timeoutMs ?? 10_000, handshakeTimeoutMs: opts.timeoutMs ?? 2000 },
+  );
+
+  if (!result.data) {
+    throw new Error("PDF generation failed: missing data");
+  }
+  return { buffer: Buffer.from(result.data, "base64") };
+}
+
 /** Normalized accessibility tree node returned by ARIA snapshots. */
 export type AriaSnapshotNode = {
   ref: string;

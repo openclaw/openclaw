@@ -56,6 +56,7 @@ const chromeMcpMocks = vi.hoisted(() => ({
 
 const cdpMocks = vi.hoisted(() => ({
   handleJavaScriptDialogViaCdp: vi.fn(async () => {}),
+  printPdfViaCdp: vi.fn(async () => ({ buffer: Buffer.from("%PDF-1.7") })),
   setExtraHTTPHeadersViaCdp: vi.fn(async () => {}),
 }));
 
@@ -110,6 +111,7 @@ vi.mock("../chrome-mcp.js", () => ({
 vi.mock("../cdp.js", () => ({
   captureScreenshot: vi.fn(),
   handleJavaScriptDialogViaCdp: cdpMocks.handleJavaScriptDialogViaCdp,
+  printPdfViaCdp: cdpMocks.printPdfViaCdp,
   setExtraHTTPHeadersViaCdp: cdpMocks.setExtraHTTPHeadersViaCdp,
   snapshotAria: vi.fn(),
 }));
@@ -158,6 +160,16 @@ function getSnapshotPostHandler(ssrfPolicy?: unknown) {
     state: () => ({ resolved: { ssrfPolicy } }),
   } as never);
   const handler = postHandlers.get("/screenshot");
+  expect(handler).toBeTypeOf("function");
+  return handler;
+}
+
+function getPdfPostHandler(ssrfPolicy?: unknown) {
+  const { app, postHandlers } = createBrowserRouteApp();
+  registerBrowserAgentSnapshotRoutes(app, {
+    state: () => ({ resolved: { ssrfPolicy } }),
+  } as never);
+  const handler = postHandlers.get("/pdf");
   expect(handler).toBeTypeOf("function");
   return handler;
 }
@@ -274,6 +286,7 @@ describe("existing-session browser routes", () => {
     chromeMcpMocks.uninstallChromeMcpExtension.mockClear();
     chromeMcpMocks.waitForChromeMcpText.mockClear();
     cdpMocks.handleJavaScriptDialogViaCdp.mockClear();
+    cdpMocks.printPdfViaCdp.mockClear();
     cdpMocks.setExtraHTTPHeadersViaCdp.mockClear();
     navigationGuardMocks.assertBrowserNavigationAllowed.mockClear();
     navigationGuardMocks.assertBrowserNavigationResultAllowed.mockClear();
@@ -419,6 +432,42 @@ describe("existing-session browser routes", () => {
       },
       response.res,
     );
+
+    expect(response.statusCode).toBe(200);
+    expect(navigationGuardMocks.assertBrowserNavigationResultAllowed).toHaveBeenCalledWith({
+      url: "https://example.com",
+      ssrfPolicy: { allowPrivateNetwork: false },
+    });
+  });
+
+  it("prints existing-session PDFs through CDP", async () => {
+    const handler = getPdfPostHandler();
+    const response = createBrowserRouteResponse();
+    await handler?.(
+      {
+        params: {},
+        query: {},
+        body: {},
+      },
+      response.res,
+    );
+
+    expect(response.statusCode).toBe(200);
+    const body = requireRecord(response.body, "response body");
+    expect(body.ok).toBe(true);
+    expect(body.path).toBe("/tmp/fake.png");
+    expect(body.targetId).toBe("7");
+    expect(cdpMocks.printPdfViaCdp).toHaveBeenCalledWith({
+      cdpUrl: "http://127.0.0.1:18800",
+      targetId: "7",
+      targetUrl: "https://example.com",
+    });
+  });
+
+  it("checks existing-session PDF URL when SSRF policy is configured", async () => {
+    const handler = getPdfPostHandler({ allowPrivateNetwork: false });
+    const response = createBrowserRouteResponse();
+    await handler?.({ params: {}, query: {}, body: {} }, response.res);
 
     expect(response.statusCode).toBe(200);
     expect(navigationGuardMocks.assertBrowserNavigationResultAllowed).toHaveBeenCalledWith({

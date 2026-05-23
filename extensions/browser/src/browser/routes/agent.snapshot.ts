@@ -6,7 +6,7 @@
  */
 import path from "node:path";
 import { ensureMediaDir, saveMediaBuffer } from "../../media/store.js";
-import { captureScreenshot, snapshotAria, snapshotRoleViaCdp } from "../cdp.js";
+import { captureScreenshot, printPdfViaCdp, snapshotAria, snapshotRoleViaCdp } from "../cdp.js";
 import {
   evaluateChromeMcpScript,
   navigateChromeMcpPage,
@@ -322,7 +322,29 @@ export function registerBrowserAgentSnapshotRoutes(
         return;
       }
       if (getBrowserProfileCapabilities(profileCtx.profile).usesChromeMcp) {
-        return jsonError(res, 501, EXISTING_SESSION_LIMITS.snapshot.pdfUnsupported);
+        await withRouteTabContext({
+          req,
+          res,
+          ctx,
+          targetId,
+          enforceCurrentUrlAllowed: true,
+          run: async ({ cdpUrl, tab }) => {
+            const pdf = await printPdfViaCdp({
+              cdpUrl,
+              targetId: tab.targetId,
+              targetUrl: tab.url,
+            });
+            await saveBrowserMediaResponse({
+              res,
+              buffer: pdf.buffer,
+              contentType: "application/pdf",
+              maxBytes: pdf.buffer.byteLength,
+              targetId: tab.targetId,
+              url: tab.url,
+            });
+          },
+        });
+        return;
       }
       await withPlaywrightRouteContext({
         req,
