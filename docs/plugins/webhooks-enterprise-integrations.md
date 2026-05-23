@@ -707,5 +707,6 @@ source application as described above, trigger a real event, and confirm:
 ## Related docs
 
 - [Webhooks plugin](/plugins/webhooks)
+- [Enterprise webhook validation and deployment](/plugins/webhooks-enterprise-validation)
 - [Gateway configuration](/gateway/configuration-reference)
 - [Plugin runtime SDK](/plugins/sdk-runtime)
