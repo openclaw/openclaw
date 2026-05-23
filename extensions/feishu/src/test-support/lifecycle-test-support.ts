@@ -124,6 +124,7 @@ function installFeishuLifecycleRuntime(params: {
         withReplyDispatcher: params.withReplyDispatcher,
       },
       commands: {
+        isControlCommandMessage: vi.fn(() => false),
         shouldComputeCommandAuthorized: params.shouldComputeCommandAuthorized ?? vi.fn(() => false),
         resolveCommandAuthorizedFromAuthorizers:
           params.resolveCommandAuthorizedFromAuthorizers ?? vi.fn(() => false),
