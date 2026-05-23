@@ -101,6 +101,11 @@ function createDoctorHealthContribution(params: {
   };
 }
 
+async function runSessionStoreSizeHealth(ctx: DoctorHealthFlowContext): Promise<void> {
+  const { noteSessionStoreSizeHealth } = await import("../commands/doctor-session-store-size.js");
+  noteSessionStoreSizeHealth({ cfg: ctx.cfg, env: ctx.env });
+}
+
 async function runGatewayConfigHealth(ctx: DoctorHealthFlowContext): Promise<void> {
   const { formatCliCommand } = await import("../cli/command-format.js");
   const { hasAmbiguousGatewayAuthModeConfig } = await import("../gateway/auth-mode-policy.js");
@@ -741,6 +746,11 @@ export function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
       label: "Gateway config",
       healthCheckIds: ["core/doctor/gateway-config"],
       run: runGatewayConfigHealth,
+    }),
+    createDoctorHealthContribution({
+      id: "doctor:session-store-size",
+      label: "Session store size",
+      run: runSessionStoreSizeHealth,
     }),
     createDoctorHealthContribution({
       id: "doctor:auth-profiles",
