@@ -279,8 +279,9 @@ describe("stripInvalidThinkingSignatures", () => {
     expect(result).toBe(messages);
   });
 
-  it("strips thinking blocks with missing, empty, or blank signatures", () => {
+  it("strips thinking blocks with missing, empty, or blank signatures from older assistant turns", () => {
     const messages: AgentMessage[] = [
+      castAgentMessage({ role: "user", content: "first" }),
       castAgentMessage({
         role: "assistant",
         content: [
@@ -291,34 +292,48 @@ describe("stripInvalidThinkingSignatures", () => {
           { type: "text", text: "answer" },
         ],
       }),
+      castAgentMessage({ role: "user", content: "second" }),
+      castAgentMessage({
+        role: "assistant",
+        content: [{ type: "text", text: "latest" }],
+      }),
     ];
 
     const result = stripInvalidThinkingSignatures(messages);
-    const assistant = result[0] as Extract<AgentMessage, { role: "assistant" }>;
+    const oldAssistant = result[1] as Extract<AgentMessage, { role: "assistant" }>;
 
     expect(result).not.toBe(messages);
-    expect(assistant.content).toEqual([
+    expect(oldAssistant.content).toEqual([
       { type: "thinking", thinking: "signed", thinkingSignature: "sig" },
       { type: "text", text: "answer" },
     ]);
   });
 
-  it("uses non-empty omitted-reasoning text when all thinking signatures are invalid", () => {
+  it("uses non-empty omitted-reasoning text when all thinking signatures are invalid in older turns", () => {
     const messages: AgentMessage[] = [
+      castAgentMessage({ role: "user", content: "first" }),
       castAgentMessage({
         role: "assistant",
         content: [{ type: "thinking", thinking: "reasoning", thinkingSignature: "" }],
       }),
+      castAgentMessage({ role: "user", content: "second" }),
+      castAgentMessage({
+        role: "assistant",
+        content: [{ type: "text", text: "latest" }],
+      }),
     ];
 
     const result = stripInvalidThinkingSignatures(messages);
-    const assistant = result[0] as Extract<AgentMessage, { role: "assistant" }>;
+    const oldAssistant = result[1] as Extract<AgentMessage, { role: "assistant" }>;
 
-    expect(assistant.content).toEqual([{ type: "text", text: OMITTED_ASSISTANT_REASONING_TEXT }]);
+    expect(oldAssistant.content).toEqual([
+      { type: "text", text: OMITTED_ASSISTANT_REASONING_TEXT },
+    ]);
   });
 
-  it("strips redacted thinking blocks with invalid opaque signatures", () => {
+  it("strips redacted thinking blocks with invalid opaque signatures from older turns", () => {
     const messages: AgentMessage[] = [
+      castAgentMessage({ role: "user", content: "first" }),
       castAgentMessage({
         role: "assistant",
         content: [
@@ -328,14 +343,81 @@ describe("stripInvalidThinkingSignatures", () => {
           { type: "text", text: "answer" },
         ],
       }),
+      castAgentMessage({ role: "user", content: "second" }),
+      castAgentMessage({
+        role: "assistant",
+        content: [{ type: "text", text: "latest" }],
+      }),
     ];
 
     const result = stripInvalidThinkingSignatures(messages);
-    const assistant = result[0] as Extract<AgentMessage, { role: "assistant" }>;
+    const oldAssistant = result[1] as Extract<AgentMessage, { role: "assistant" }>;
 
-    expect(assistant.content).toEqual([
+    expect(oldAssistant.content).toEqual([
       { type: "redacted_thinking", data: "opaque" },
       { type: "text", text: "answer" },
+    ]);
+  });
+
+  it("preserves the latest assistant message even when its thinking signatures are invalid", () => {
+    const messages: AgentMessage[] = [
+      castAgentMessage({ role: "user", content: "first" }),
+      castAgentMessage({
+        role: "assistant",
+        content: [
+          { type: "thinking", thinking: "old", thinkingSignature: "" },
+          { type: "text", text: "old text" },
+        ],
+      }),
+      castAgentMessage({ role: "user", content: "second" }),
+      castAgentMessage({
+        role: "assistant",
+        content: [
+          { type: "thinking", thinking: "latest", thinkingSignature: "" },
+          { type: "text", text: "latest text" },
+        ],
+      }),
+    ];
+
+    const result = stripInvalidThinkingSignatures(messages);
+    const firstAssistant = result[1] as Extract<AgentMessage, { role: "assistant" }>;
+    const latestAssistant = result[3] as Extract<AgentMessage, { role: "assistant" }>;
+
+    expect(firstAssistant.content).toEqual([{ type: "text", text: "old text" }]);
+    expect(latestAssistant.content).toEqual([
+      { type: "thinking", thinking: "latest", thinkingSignature: "" },
+      { type: "text", text: "latest text" },
+    ]);
+  });
+
+  it("preserves the latest assistant message even when its thinking signatures are invalid", () => {
+    const messages: AgentMessage[] = [
+      castAgentMessage({ role: "user", content: "first" }),
+      castAgentMessage({
+        role: "assistant",
+        content: [
+          { type: "thinking", thinking: "old", thinkingSignature: "" },
+          { type: "text", text: "old text" },
+        ],
+      }),
+      castAgentMessage({ role: "user", content: "second" }),
+      castAgentMessage({
+        role: "assistant",
+        content: [
+          { type: "thinking", thinking: "latest", thinkingSignature: "" },
+          { type: "text", text: "latest text" },
+        ],
+      }),
+    ];
+
+    const result = stripInvalidThinkingSignatures(messages);
+    const firstAssistant = result[1] as Extract<AgentMessage, { role: "assistant" }>;
+    const latestAssistant = result[3] as Extract<AgentMessage, { role: "assistant" }>;
+
+    expect(firstAssistant.content).toEqual([{ type: "text", text: "old text" }]);
+    expect(latestAssistant.content).toEqual([
+      { type: "thinking", thinking: "latest", thinkingSignature: "" },
+      { type: "text", text: "latest text" },
     ]);
   });
 });
