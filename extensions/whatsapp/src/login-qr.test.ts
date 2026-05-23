@@ -2,6 +2,7 @@
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { getActiveWebListener } from "./active-listener.js";
+import { clearStalePhoneCodePairingAuthIfNeeded } from "./auth-store.js";
 import { startWebLoginWithQr, waitForWebLogin } from "./login-qr.js";
 import { renderQrPngDataUrl } from "./qr-image.js";
 import {
@@ -46,6 +47,14 @@ vi.mock("./active-listener.js", () => ({
   getActiveWebListener: vi.fn(() => null),
 }));
 
+vi.mock("./auth-store.js", async () => {
+  const actual = await vi.importActual<typeof import("./auth-store.js")>("./auth-store.js");
+  return {
+    ...actual,
+    clearStalePhoneCodePairingAuthIfNeeded: vi.fn(async () => false),
+  };
+});
+
 vi.mock("./qr-image.js", () => ({
   renderQrPngBase64: vi.fn(async () => "base64"),
   renderQrPngDataUrl: vi.fn(async (input: string) => `data:image/png;base64,encoded:${input}`),
@@ -53,6 +62,9 @@ vi.mock("./qr-image.js", () => ({
 
 const createWaSocketMock = vi.mocked(createWaSocket);
 const getActiveWebListenerMock = vi.mocked(getActiveWebListener);
+const clearStalePhoneCodePairingAuthIfNeededMock = vi.mocked(
+  clearStalePhoneCodePairingAuthIfNeeded,
+);
 const readWebAuthExistsForDecisionMock = vi.mocked(readWebAuthExistsForDecision);
 const readWebSelfIdMock = vi.mocked(readWebSelfId);
 const waitForWaConnectionMock = vi.mocked(waitForWaConnection);
@@ -160,6 +172,7 @@ describe("login-qr", () => {
         },
       );
     waitForWaConnectionMock.mockReset();
+    clearStalePhoneCodePairingAuthIfNeededMock.mockReset().mockResolvedValue(false);
     readWebAuthExistsForDecisionMock.mockReset().mockResolvedValue({
       outcome: "stable",
       exists: false,
