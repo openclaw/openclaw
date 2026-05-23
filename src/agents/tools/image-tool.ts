@@ -19,6 +19,7 @@ import {
 import {
   effectiveImageBytesCap,
   loadWebMedia,
+  optimizeImageBufferForWebMedia,
   type ImageCompressionModelPolicy,
   type ImageCompressionPolicy,
 } from "../../media/web-media.js";
@@ -282,6 +283,17 @@ function pickMaxBytes(cfg?: OpenClawConfig, maxBytesMb?: number): number | undef
     return Math.floor(configured * 1024 * 1024);
   }
   return undefined;
+}
+
+function hasImageDimensionPolicy(policy?: ImageCompressionPolicy): boolean {
+  return Boolean(
+    policy?.models?.some(
+      (model) =>
+        (typeof model.maxSidePx === "number" && model.maxSidePx > 0) ||
+        (typeof model.maxPixels === "number" && model.maxPixels > 0) ||
+        (typeof model.preferredSidePx === "number" && model.preferredSidePx > 0),
+    ),
+  );
 }
 
 function resolveCompressionModelCandidates(params: {
@@ -772,7 +784,18 @@ export function createImageTool(options?: {
 
         const dataUrlMaxBytes = effectiveImageBytesCap(maxBytes, imageCompression);
         const media = isDataUrl
-          ? decodeDataUrl(resolvedImage, { maxBytes: dataUrlMaxBytes })
+          ? await (async () => {
+              const decoded = decodeDataUrl(resolvedImage, { maxBytes: dataUrlMaxBytes });
+              if (!hasImageDimensionPolicy(imageCompression)) {
+                return decoded;
+              }
+              return await optimizeImageBufferForWebMedia({
+                buffer: decoded.buffer,
+                contentType: decoded.mimeType,
+                maxBytes,
+                imageCompression,
+              });
+            })()
           : sandboxConfig
             ? await loadWebMedia(resolvedPath ?? resolvedImage, {
                 maxBytes,

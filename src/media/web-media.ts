@@ -542,6 +542,36 @@ async function optimizeImageWithFallback(params: {
   return { ...optimized, format: "jpeg" };
 }
 
+export async function optimizeImageBufferForWebMedia(params: {
+  buffer: Buffer;
+  contentType?: string;
+  fileName?: string;
+  maxBytes?: number;
+  imageCompression?: ImageCompressionPolicy;
+}): Promise<WebMediaResult> {
+  const baseCap = params.maxBytes ?? maxBytesForKind("image");
+  const cap = effectiveImageBytesCap(baseCap, params.imageCompression) ?? baseCap;
+  const optimized = await optimizeImageWithFallback({
+    buffer: params.buffer,
+    cap,
+    meta: { contentType: params.contentType, fileName: params.fileName },
+    imageCompression: params.imageCompression,
+  });
+  logOptimizedImage({ originalSize: params.buffer.length, optimized });
+  if (optimized.buffer.length > cap) {
+    throw new Error(formatCapReduce("Media", cap, optimized.buffer.length));
+  }
+  return {
+    buffer: optimized.buffer,
+    contentType: optimized.format === "png" ? "image/png" : "image/jpeg",
+    kind: "image",
+    fileName:
+      optimized.format === "jpeg" && isHeicSource(params)
+        ? toJpegFileName(params.fileName)
+        : params.fileName,
+  };
+}
+
 async function loadWebMediaInternal(
   mediaUrl: string,
   options: WebMediaOptions = {},

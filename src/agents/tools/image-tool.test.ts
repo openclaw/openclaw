@@ -5,6 +5,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { ModelDefinitionConfig } from "../../config/types.models.js";
+import { encodePngRgba, fillPixel } from "../../media/png-encode.js";
 import type {
   ImageDescriptionRequest,
   ImagesDescriptionRequest,
@@ -224,6 +225,53 @@ const ONE_PIXEL_PNG_B64 =
   "iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAIAAAAlC+aJAAAAIGNIUk0AAHomAACAhAAA+gAAAIDoAAB1MAAA6mAAADqYAAAXcJy6UTwAAAAGYktHRAD/AP8A/6C9p5MAAAAHdElNRQfqBBsGAQr00ED3AAAAJXRFWHRkYXRlOmNyZWF0ZQAyMDI2LTA0LTI3VDA2OjAxOjEwKzAwOjAwPU3tXwAAACV0RVh0ZGF0ZTptb2RpZnkAMjAyNi0wNC0yN1QwNjowMToxMCswMDowMEwQVeMAAAAodEVYdGRhdGU6dGltZXN0YW1wADIwMjYtMDQtMjdUMDY6MDE6MTArMDA6MDAbBXQ8AAAAeElEQVRo3u3awQnDQBAEwT2Q8w/YAikIP5rF1RFMca+FO8/s7rrnqjcA1BsA6g0A9QaAesOfA77zqTf8Blj/AgAAAAAAAJsDqAOoA6gDqAOoc9TXAdQB1AHUAdQB1AHUAdQB1AHU7Qc46gEAAAAANrcecGZ2f8B/ASYSQPlKoEJ/AAAAAElFTkSuQmCC";
 const ONE_PIXEL_GIF_B64 = "R0lGODlhAQABAIABAP///wAAACwAAAAAAQABAAACAkQBADs=";
 const ONE_PIXEL_JPEG_B64 = "QUJDRA==";
+
+function createLargeColorBlockPng(size: number): Buffer {
+  const buf = Buffer.alloc(size * size * 4, 255);
+  const centerStart = Math.floor(size * 0.25);
+  const centerEnd = Math.floor(size * 0.75);
+  for (let y = 0; y < size; y += 1) {
+    for (let x = 0; x < size; x += 1) {
+      const inCenter = x >= centerStart && x < centerEnd && y >= centerStart && y < centerEnd;
+      fillPixel(buf, x, y, size, inCenter ? 230 : 30, inCenter ? 40 : 110, inCenter ? 35 : 220);
+    }
+  }
+  return encodePngRgba(buf, size, size);
+}
+
+function readJpegDimensions(buffer: Buffer): { width: number; height: number } {
+  let offset = 2;
+  while (offset + 9 < buffer.length) {
+    if (buffer[offset] !== 0xff) {
+      offset += 1;
+      continue;
+    }
+    const marker = buffer[offset + 1];
+    offset += 2;
+    if (marker === 0xd8 || marker === 0xd9 || (marker >= 0xd0 && marker <= 0xd7)) {
+      continue;
+    }
+    const segmentLength = buffer.readUInt16BE(offset);
+    if (marker >= 0xc0 && marker <= 0xcf && ![0xc4, 0xc8, 0xcc].includes(marker)) {
+      return {
+        height: buffer.readUInt16BE(offset + 3),
+        width: buffer.readUInt16BE(offset + 5),
+      };
+    }
+    offset += segmentLength;
+  }
+  throw new Error("JPEG dimensions not found");
+}
+
+function readPngDimensions(buffer: Buffer): { width: number; height: number } {
+  if (buffer.length < 24 || buffer.toString("ascii", 12, 16) !== "IHDR") {
+    throw new Error("PNG dimensions not found");
+  }
+  return {
+    width: buffer.readUInt32BE(16),
+    height: buffer.readUInt32BE(20),
+  };
+}
 
 async function withTempWorkspacePng(
   cb: (args: { workspaceDir: string; imagePath: string }) => Promise<void>,
@@ -1815,6 +1863,56 @@ describe("image tool data URL support", () => {
           image: `data:image/png;base64,${ONE_PIXEL_PNG_B64}`,
         }),
       ).rejects.toThrow(/size limit/i);
+    });
+  });
+
+  it("downscales data URL images to the resolved model side limit", async () => {
+    await withTempAgentDir(async (agentDir) => {
+      let observedDimensions: { width: number; height: number } | undefined;
+      installImageUnderstandingProviderStubs({
+        id: "openai",
+        capabilities: ["image"],
+        describeImage: async (params) => {
+          observedDimensions =
+            params.mime === "image/png"
+              ? readPngDimensions(params.buffer)
+              : readJpegDimensions(params.buffer);
+          return { text: "ok", model: params.model };
+        },
+      });
+      const model = {
+        ...makeModelDefinition("tiny-vision", ["text", "image"]),
+        mediaInput: { image: { maxSidePx: 512, preferredSidePx: 512 } },
+      } satisfies ModelDefinitionConfig;
+      const cfg: OpenClawConfig = {
+        agents: {
+          defaults: {
+            imageModel: { primary: "openai/tiny-vision" },
+            imageQuality: "high",
+          },
+        },
+        models: {
+          providers: {
+            openai: {
+              api: "openai-responses",
+              apiKey: "test-key",
+              baseUrl: "https://api.openai.com/v1",
+              models: [model],
+            },
+          },
+        },
+      };
+      const tool = createRequiredImageTool({ config: cfg, agentDir });
+      const source = createLargeColorBlockPng(1600);
+      await expectImageToolExecOk(tool, `data:image/png;base64,${source.toString("base64")}`);
+
+      expect(observedDimensions).toBeDefined();
+      if (!observedDimensions) {
+        throw new Error("expected observed data URL dimensions");
+      }
+      expect(Math.max(observedDimensions.width, observedDimensions.height)).toBeLessThanOrEqual(
+        512,
+      );
     });
   });
 });
