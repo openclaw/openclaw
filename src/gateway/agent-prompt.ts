@@ -1,3 +1,5 @@
+import { STREAM_ERROR_FALLBACK_TEXT } from "../agents/stream-message-shared.js";
+import { stripInternalMetadataForDisplay } from "../auto-reply/reply/display-text-sanitize.js";
 import { buildHistoryContextFromEntries, type HistoryEntry } from "../auto-reply/reply/history.js";
 import { extractTextFromChatContent } from "../shared/chat-content.js";
 
@@ -11,11 +13,13 @@ export type ConversationEntry = {
  * (e.g. [{type:"text", text:"hello"}]) that would serialize as
  * [object Object] if used directly in a template literal.
  */
+function stripInternalReplayPlaceholder(text: string): string {
+  return text.trim() === STREAM_ERROR_FALLBACK_TEXT ? "" : text;
+}
+
 function safeBody(body: unknown): string {
-  if (typeof body === "string") {
-    return body;
-  }
-  return extractTextFromChatContent(body) ?? "";
+  const text = typeof body === "string" ? body : (extractTextFromChatContent(body) ?? "");
+  return stripInternalReplayPlaceholder(stripInternalMetadataForDisplay(text));
 }
 
 export function buildAgentMessageFromConversationEntries(entries: ConversationEntry[]): string {
