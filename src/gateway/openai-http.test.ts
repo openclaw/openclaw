@@ -6,6 +6,7 @@ import { createClientToolNameConflictError } from "../agents/agent-tool-definiti
 import { FailoverError } from "../agents/failover-error.js";
 import { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
 import * as ssrf from "../infra/net/ssrf.js";
+import * as ip from "../shared/net/ip.js";
 import {
   createStubSessionHarness,
   emitAssistantTextDelta,
@@ -2449,7 +2450,9 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
       const hostIp = addressInfo.family === "IPv6" ? `[${addressInfo.address}]` : addressInfo.address;
       const hangingPort = addressInfo.port;
 
-      const isPrivateIpSpy = vi.spyOn(ssrf, "isPrivateIpAddress").mockReturnValue(false);
+      // Mock the lowest-level IP block checks (cross-module boundary) to bypass SSRF loopback protections in ESM
+      const isBlockedIpv4Spy = vi.spyOn(ip, "isBlockedSpecialUseIpv4Address").mockReturnValue(false);
+      const isBlockedIpv6Spy = vi.spyOn(ip, "isBlockedSpecialUseIpv6Address").mockReturnValue(false);
 
       agentCommand.mockClear();
       agentCommand.mockImplementationOnce(
@@ -2460,8 +2463,13 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
 
             // Simulate the agent's outbound fetch to verify the Hard-Kill teardown logic
             // actually invokes dispatcher.destroy() when the abort signal fires.
-            fetchWithSsrFGuard({ url: `http://${hostIp === "::" ? "[::1]" : hostIp === "0.0.0.0" ? "127.0.0.1" : hostIp}:${hangingPort}`, signal }).catch((e) => {
-              expect.fail("fetchWithSsrFGuard threw: " + String(e));
+            fetchWithSsrFGuard({
+              url: `http://${hostIp === "::" ? "[::1]" : hostIp === "0.0.0.0" ? "127.0.0.1" : hostIp}:${hangingPort}`,
+              signal,
+            }).catch((e) => {
+              if (e?.name !== "AbortError") {
+                expect.fail("fetchWithSsrFGuard threw: " + String(e));
+              }
             });
 
             if (signal?.aborted) {
@@ -2503,7 +2511,8 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
           () => {
             expect(serverAbortSignal?.aborted).toBe(true);
             expect(serverSocketClosed).toBe(true);
-            isPrivateIpSpy.mockRestore();
+            isBlockedIpv4Spy.mockRestore();
+            isBlockedIpv6Spy.mockRestore();
           },
           { timeout: 5_000, interval: 50 },
         );
