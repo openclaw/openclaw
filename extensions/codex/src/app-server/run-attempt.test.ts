@@ -526,6 +526,35 @@ function createNamedDynamicTool(
   };
 }
 
+async function buildDynamicToolsForTest(
+  params: EmbeddedRunAttemptParams,
+  workspaceDir: string,
+  options: Partial<
+    Pick<
+      Parameters<typeof testing.buildDynamicTools>[0],
+      "forceHeartbeatTool" | "ignoreRuntimePlan"
+    >
+  > = {},
+) {
+  const sandboxSessionKey = params.sessionKey;
+  if (!sandboxSessionKey) {
+    throw new Error("createParams must provide a sessionKey for Codex dynamic tool tests.");
+  }
+  return testing.buildDynamicTools({
+    params,
+    resolvedWorkspace: workspaceDir,
+    effectiveWorkspace: workspaceDir,
+    sandboxSessionKey,
+    sandbox: { enabled: false, backendId: "docker" } as never,
+    nativeToolSurfaceEnabled: true,
+    runAbortController: new AbortController(),
+    sessionAgentId: "main",
+    pluginConfig: {},
+    onYieldDetected: () => undefined,
+    ...options,
+  });
+}
+
 type RuntimeDynamicToolForTest = Parameters<
   typeof createCodexDynamicToolBridge
 >[0]["tools"][number];
@@ -2236,34 +2265,19 @@ describe("runCodexAppServerAttempt", () => {
       createRuntimeDynamicTool("message"),
       createRuntimeDynamicTool("music_generate"),
     ]);
-    const harness = createStartedThreadHarness(async (method) => {
-      if (method === "turn/start") {
-        await new Promise((resolve) => setTimeout(resolve, 5));
-        return turnStartResult();
-      }
-      return undefined;
-    });
-    const params = createParams(
-      path.join(tempDir, "session.jsonl"),
-      path.join(tempDir, "workspace"),
-    );
+    const workspaceDir = path.join(tempDir, "workspace");
+    const params = createParams(path.join(tempDir, "session.jsonl"), workspaceDir);
     params.disableTools = false;
     params.runtimePlan = createCodexRuntimePlanFixture();
     params.sourceReplyDeliveryMode = "message_tool_only";
     params.toolsAllow = ["music_generate"];
 
-    const run = runCodexAppServerAttempt(params, {
-      pluginConfig: { appServer: { mode: "yolo" } },
-    });
-    await harness.waitForMethod("turn/start", 120_000);
-    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
-    await run;
-
-    const startRequest = harness.requests.find((entry) => entry.method === "thread/start");
-    const dynamicToolNames =
-      (
-        startRequest?.params as { dynamicTools?: Array<{ name?: string }> } | undefined
-      )?.dynamicTools?.map((tool) => tool.name) ?? [];
+    const dynamicToolNames = (
+      await buildDynamicToolsForTest(params, workspaceDir, {
+        forceHeartbeatTool: true,
+        ignoreRuntimePlan: true,
+      })
+    ).map((tool) => tool.name);
 
     expect(dynamicToolNames).toContain("message");
     expect(dynamicToolNames).toContain("music_generate");
@@ -2277,28 +2291,19 @@ describe("runCodexAppServerAttempt", () => {
         ? [createRuntimeDynamicTool("heartbeat_respond")]
         : []),
     ]);
-    const harness = createStartedThreadHarness();
-    const params = createParams(
-      path.join(tempDir, "session.jsonl"),
-      path.join(tempDir, "workspace"),
-    );
+    const workspaceDir = path.join(tempDir, "workspace");
+    const params = createParams(path.join(tempDir, "session.jsonl"), workspaceDir);
     params.disableTools = false;
     params.runtimePlan = createCodexRuntimePlanFixture();
     params.sourceReplyDeliveryMode = "message_tool_only";
     params.toolsAllow = [];
 
-    const run = runCodexAppServerAttempt(params, {
-      pluginConfig: { appServer: { mode: "yolo" } },
-    });
-    await harness.waitForMethod("turn/start", 120_000);
-    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
-    await run;
-
-    const startRequest = harness.requests.find((entry) => entry.method === "thread/start");
-    const dynamicToolNames =
-      (
-        startRequest?.params as { dynamicTools?: Array<{ name?: string }> } | undefined
-      )?.dynamicTools?.map((tool) => tool.name) ?? [];
+    const dynamicToolNames = (
+      await buildDynamicToolsForTest(params, workspaceDir, {
+        forceHeartbeatTool: true,
+        ignoreRuntimePlan: true,
+      })
+    ).map((tool) => tool.name);
 
     expect(dynamicToolNames).toEqual(["message"]);
   });
@@ -2310,27 +2315,18 @@ describe("runCodexAppServerAttempt", () => {
         ? [createRuntimeDynamicTool("heartbeat_respond")]
         : []),
     ]);
-    const harness = createStartedThreadHarness();
-    const params = createParams(
-      path.join(tempDir, "session.jsonl"),
-      path.join(tempDir, "workspace"),
-    );
+    const workspaceDir = path.join(tempDir, "workspace");
+    const params = createParams(path.join(tempDir, "session.jsonl"), workspaceDir);
     params.disableTools = false;
     params.runtimePlan = createCodexRuntimePlanFixture();
     params.toolsAllow = ["message"];
 
-    const run = runCodexAppServerAttempt(params, {
-      pluginConfig: { appServer: { mode: "yolo" } },
-    });
-    await harness.waitForMethod("turn/start", 120_000);
-    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
-    await run;
-
-    const startRequest = harness.requests.find((entry) => entry.method === "thread/start");
-    const dynamicToolNames =
-      (
-        startRequest?.params as { dynamicTools?: Array<{ name?: string }> } | undefined
-      )?.dynamicTools?.map((tool) => tool.name) ?? [];
+    const dynamicToolNames = (
+      await buildDynamicToolsForTest(params, workspaceDir, {
+        forceHeartbeatTool: true,
+        ignoreRuntimePlan: true,
+      })
+    ).map((tool) => tool.name);
 
     expect(dynamicToolNames).toEqual(["message"]);
   });
@@ -2343,33 +2339,50 @@ describe("runCodexAppServerAttempt", () => {
       createRuntimeDynamicTool("sessions_spawn"),
       createRuntimeDynamicTool("sessions_yield"),
     ]);
-    const harness = createStartedThreadHarness();
-    const params = createParams(
-      path.join(tempDir, "session.jsonl"),
-      path.join(tempDir, "workspace"),
-    );
+    const workspaceDir = path.join(tempDir, "workspace");
+    const params = createParams(path.join(tempDir, "session.jsonl"), workspaceDir);
     params.disableTools = false;
     params.runtimePlan = createCodexRuntimePlanFixture();
     params.sourceReplyDeliveryMode = "message_tool_only";
-
-    const run = runCodexAppServerAttempt(params, {
-      pluginConfig: { appServer: { mode: "yolo", codeModeOnly: true } },
+    const dynamicTools = await buildDynamicToolsForTest(params, workspaceDir, {
+      forceHeartbeatTool: true,
+      ignoreRuntimePlan: true,
     });
-    await harness.waitForMethod("turn/start", 120_000);
-    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
-    await run;
+    const toolBridge = createCodexDynamicToolBridge({
+      tools: dynamicTools,
+      signal: new AbortController().signal,
+      directToolNames: ["message"],
+    });
+    const request = vi.fn(async (method: string) => {
+      if (method === "thread/start") {
+        return threadStartResult();
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
 
-    const startRequest = harness.requests.find((entry) => entry.method === "thread/start");
-    const dynamicTools =
-      (startRequest?.params as { dynamicTools?: Array<Record<string, unknown>> } | undefined)
+    await startOrResumeThread({
+      client: { request } as never,
+      params,
+      cwd: workspaceDir,
+      dynamicTools: toolBridge.specs,
+      appServer: { ...createThreadLifecycleAppServerOptions(), codeModeOnly: true },
+      nativeCodeModeEnabled: true,
+      nativeCodeModeOnlyEnabled: true,
+      userMcpServersEnabled: true,
+      environmentSelection: [],
+    });
+
+    const startRequest = request.mock.calls.find(([method]) => method === "thread/start");
+    const startDynamicTools =
+      (startRequest?.[1] as { dynamicTools?: Array<Record<string, unknown>> } | undefined)
         ?.dynamicTools ?? [];
-    const startConfig = (startRequest?.params as { config?: Record<string, unknown> } | undefined)
+    const startConfig = (startRequest?.[1] as { config?: Record<string, unknown> } | undefined)
       ?.config;
-    const message = dynamicTools.find((tool) => tool.name === "message");
-    const webSearch = dynamicTools.find((tool) => tool.name === "web_search");
-    const heartbeat = dynamicTools.find((tool) => tool.name === "heartbeat_respond");
-    const sessionsSpawn = dynamicTools.find((tool) => tool.name === "sessions_spawn");
-    const sessionsYield = dynamicTools.find((tool) => tool.name === "sessions_yield");
+    const message = startDynamicTools.find((tool) => tool.name === "message");
+    const webSearch = startDynamicTools.find((tool) => tool.name === "web_search");
+    const heartbeat = startDynamicTools.find((tool) => tool.name === "heartbeat_respond");
+    const sessionsSpawn = startDynamicTools.find((tool) => tool.name === "sessions_spawn");
+    const sessionsYield = startDynamicTools.find((tool) => tool.name === "sessions_yield");
 
     expect(message).not.toHaveProperty("namespace");
     expect(message).not.toHaveProperty("deferLoading");
