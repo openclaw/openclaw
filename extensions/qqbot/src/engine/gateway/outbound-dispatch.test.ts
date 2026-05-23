@@ -311,6 +311,26 @@ describe("dispatchOutbound", () => {
     expect(sendMediaMock).not.toHaveBeenCalled();
   });
 
+  it("keeps immediate tool progress media-like text inert with markdown support enabled", async () => {
+    const progress = "progress ![x](http://internal.example/progress.png)";
+    const runtime = makeRuntime({
+      onDeliver: async (deliver) => {
+        await deliver({ text: progress }, { kind: "tool" });
+        await deliver({ text: "final answer" }, { kind: "block" });
+      },
+    });
+
+    await dispatchOutbound(makeInbound(), {
+      runtime,
+      cfg: {},
+      account: { ...account, markdownSupport: true, config: { streaming: { mode: "partial" } } },
+    });
+
+    expect(sendTextMock.mock.calls.map((call) => call[1])).toEqual([progress, "final answer"]);
+    expect(sendTextMock.mock.calls[0]?.[3]).toMatchObject({ forcePlainText: true });
+    expect(sendMediaMock).not.toHaveBeenCalled();
+  });
+
   it("keeps text-only tool progress buffered when streaming is off", async () => {
     const runtime = makeRuntime({
       onDeliver: async (deliver) => {
