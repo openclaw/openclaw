@@ -22,6 +22,17 @@ export type TelegramIngressWorkerMessage =
       type: "spooled";
       updateId: number;
       queued: number;
+    }
+  | {
+      type: "ingress-typing-sent";
+      chatId: number | string;
+      sentAt: number;
+    }
+  | {
+      type: "ingress-typing-failed";
+      chatId: number | string;
+      sentAt: number;
+      message?: string;
     };
 
 export type TelegramIngressWorkerOptions = {

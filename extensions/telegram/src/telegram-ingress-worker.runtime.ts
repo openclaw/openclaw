@@ -88,12 +88,85 @@ async function fetchJson(params: {
   }
 }
 
+function resolveTypingTarget(update: unknown): { chatId: number | string; messageThreadId?: number } | null {
+  if (!update || typeof update !== "object" || !("message" in update)) {
+    return null;
+  }
+  const message = update.message;
+  if (!message || typeof message !== "object" || !("chat" in message)) {
+    return null;
+  }
+  const chat = message.chat;
+  if (!chat || typeof chat !== "object" || !("id" in chat)) {
+    return null;
+  }
+  if ("type" in chat && chat.type !== undefined && chat.type !== "private") {
+    return null;
+  }
+  const chatId = chat.id;
+  if (typeof chatId !== "number" && typeof chatId !== "string") {
+    return null;
+  }
+  const messageThreadId =
+    "message_thread_id" in message && typeof message.message_thread_id === "number"
+      ? message.message_thread_id
+      : undefined;
+  return { chatId, messageThreadId };
+}
+
+function sendIngressTypingCue(params: {
+  fetch: typeof fetch;
+  url: string;
+  update: unknown;
+}): void {
+  const target = resolveTypingTarget(params.update);
+  if (!target) {
+    return;
+  }
+  const body = {
+    chat_id: target.chatId,
+    action: "typing",
+    ...(target.messageThreadId === undefined
+      ? {}
+      : { message_thread_id: target.messageThreadId }),
+  };
+  void params
+    .fetch(params.url, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body),
+    })
+    .then(async (response) => {
+      let ok = response.ok;
+      try {
+        const json = (await response.json()) as { ok?: unknown };
+        ok = ok && json.ok === true;
+      } catch {
+        // A successful HTTP response is enough for this best-effort cue.
+      }
+      post({
+        type: ok ? "ingress-typing-sent" : "ingress-typing-failed",
+        chatId: target.chatId,
+        sentAt: Date.now(),
+      });
+    })
+    .catch((err) => {
+      post({
+        type: "ingress-typing-failed",
+        chatId: target.chatId,
+        sentAt: Date.now(),
+        message: formatErrorMessage(err),
+      });
+    });
+}
+
 async function main(): Promise<void> {
   const proxyFetch = options.proxy ? makeProxyFetch(options.proxy) : undefined;
   const transport = resolveTelegramTransport(proxyFetch, { network: options.network });
   const fetchImpl = transport.fetch ?? globalThis.fetch;
   const apiRoot = normalizeTelegramApiRoot(options.apiRoot ?? "https://api.telegram.org");
   const getUpdatesUrl = `${apiRoot}/bot${options.token}/getUpdates`;
+  const sendChatActionUrl = `${apiRoot}/bot${options.token}/sendChatAction`;
   const pollTimeoutSeconds = resolveTelegramLongPollTimeoutSeconds(options.timeoutSeconds);
   let lastUpdateId = options.initialUpdateId;
   let failures = 0;
@@ -124,6 +197,11 @@ async function main(): Promise<void> {
           if (stopped) {
             break;
           }
+          sendIngressTypingCue({
+            fetch: fetchImpl,
+            url: sendChatActionUrl,
+            update,
+          });
           const updateId = await writeTelegramSpooledUpdate({
             spoolDir: options.spoolDir,
             update,
