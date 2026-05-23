@@ -1548,6 +1548,45 @@ describe("createFollowupRunner progress forwarding", () => {
 
     expect(onCommandOutput).toHaveBeenCalledTimes(1);
   });
+
+  it("keeps queued tool-error fallbacks when failed progress has no callback", async () => {
+    runEmbeddedPiAgentMock.mockImplementationOnce(
+      async (args: {
+        onAgentEvent?: (evt: { stream: string; data: Record<string, unknown> }) => Promise<void>;
+        suppressToolErrorWarnings?: boolean | (() => boolean | undefined);
+      }) => {
+        const shouldSuppress = args.suppressToolErrorWarnings as () => boolean | undefined;
+        expect(shouldSuppress()).toBeUndefined();
+        await args.onAgentEvent?.({
+          stream: "command_output",
+          data: {
+            phase: "end",
+            name: "exec",
+            status: "failed",
+            exitCode: 1,
+          },
+        });
+        expect(shouldSuppress()).toBeUndefined();
+        return { payloads: [], meta: { agentMeta: {} } };
+      },
+    );
+
+    const runner = createFollowupRunner({
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      defaultModel: "claude",
+    });
+
+    await runner(
+      createQueuedRun({
+        run: {
+          messageProvider: "discord",
+          sourceReplyDeliveryMode: "message_tool_only",
+          verboseLevel: "on",
+        },
+      }),
+    );
+  });
 });
 
 describe("createFollowupRunner compaction", () => {

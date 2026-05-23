@@ -81,6 +81,22 @@ function hasFailedFollowupProgressEvent(evt: FollowupAgentEvent): boolean {
   );
 }
 
+function canForwardFailedFollowupProgressEvent(
+  evt: FollowupAgentEvent,
+  opts?: GetReplyOptions,
+): boolean {
+  if (evt.stream === "command_output") {
+    return typeof opts?.onCommandOutput === "function";
+  }
+  if (evt.stream !== "item") {
+    return false;
+  }
+  if (evt.data.suppressChannelProgress === true && Boolean(opts?.onToolStart)) {
+    return false;
+  }
+  return typeof opts?.onItemEvent === "function";
+}
+
 async function forwardFollowupProgressEvent(params: {
   evt: FollowupAgentEvent;
   opts?: GetReplyOptions;
@@ -808,7 +824,10 @@ export function createFollowupRunner(params: {
                         attemptCompactionCount += 1;
                       },
                     });
-                    if (hasFailedFollowupProgressEvent(evt)) {
+                    if (
+                      hasFailedFollowupProgressEvent(evt) &&
+                      canForwardFailedFollowupProgressEvent(evt, opts)
+                    ) {
                       markVisibleToolErrorProgress();
                     }
                   }),
