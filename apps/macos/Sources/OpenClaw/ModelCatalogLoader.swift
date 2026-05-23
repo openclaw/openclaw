@@ -57,7 +57,7 @@ enum ModelCatalogLoader {
         let cache = self.cachePath.path
         if FileManager().isReadableFile(atPath: cache) { return cache }
         if let bundlePath = self.bundleCatalogPath() { return bundlePath }
-        if let nodePath = self.nodeModulesCatalogPath() { return nodePath }
+        if let sourcePath = self.sourceCatalogPath() { return sourcePath }
         return cache
     }
 
@@ -77,9 +77,9 @@ enum ModelCatalogLoader {
             return (cache, false)
         }
 
-        if let nodePath = self.nodeModulesCatalogPath(), nodePath != preferred {
-            self.logger.warning("model catalog path missing; falling back to node_modules catalog")
-            return (nodePath, true)
+        if let sourcePath = self.sourceCatalogPath(), sourcePath != preferred {
+            self.logger.warning("model catalog path missing; falling back to source catalog")
+            return (sourcePath, true)
         }
 
         return nil
@@ -92,14 +92,14 @@ enum ModelCatalogLoader {
         return url.path
     }
 
-    private static func nodeModulesCatalogPath() -> String? {
+    private static func sourceCatalogPath() -> String? {
         let roots = [
             URL(fileURLWithPath: CommandResolver.projectRootPath()),
             URL(fileURLWithPath: FileManager().currentDirectoryPath),
         ]
         for root in roots {
             let candidate = root
-                .appendingPathComponent("node_modules/@earendil-works/pi-ai/dist/models.generated.js")
+                .appendingPathComponent("src/llm/models.generated.ts")
             if FileManager().isReadableFile(atPath: candidate.path) {
                 return candidate.path
             }

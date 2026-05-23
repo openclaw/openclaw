@@ -1,7 +1,7 @@
 import "./isolated-agent.mocks.js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { clearAllBootstrapSnapshots } from "../agents/bootstrap-cache.js";
-import { runEmbeddedPiAgent } from "../agents/pi-embedded.js";
+import { runEmbeddedAgent } from "../agents/embedded-agent.js";
 import { clearSessionStoreCacheForTest } from "../config/sessions/store.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resetAgentRunContextForTest } from "../infra/agent-events.js";
@@ -15,7 +15,7 @@ import {
 } from "./isolated-agent.test-harness.js";
 
 function lastEmbeddedCall(): { runTimeoutOverrideMs?: number; timeoutMs?: number } {
-  const calls = vi.mocked(runEmbeddedPiAgent).mock.calls;
+  const calls = vi.mocked(runEmbeddedAgent).mock.calls;
   expect(calls.length).toBeGreaterThan(0);
   return calls.at(-1)?.[0] as { runTimeoutOverrideMs?: number; timeoutMs?: number };
 }
@@ -31,7 +31,7 @@ function makeTimeoutTestCfg(
       providers: {
         openai: {
           baseUrl: "https://api.openai.com/v1",
-          agentRuntime: { id: "pi" },
+          agentRuntime: { id: "openclaw" },
           models: [],
         },
       },
@@ -60,12 +60,12 @@ function restoreSnapshotEnv() {
 
 describe("runCronIsolatedAgentTurn — explicit per-run timeout signal", () => {
   beforeEach(() => {
-    vi.mocked(runEmbeddedPiAgent).mockClear();
+    vi.mocked(runEmbeddedAgent).mockClear();
   });
 
   afterEach(() => {
     restoreSnapshotEnv();
-    vi.doUnmock("../agents/pi-embedded.js");
+    vi.doUnmock("../agents/embedded-agent.js");
     vi.doUnmock("../agents/model-catalog.js");
     vi.doUnmock("../agents/model-selection.js");
     vi.doUnmock("../agents/subagent-announce.js");

@@ -2,16 +2,16 @@ import { resolveStorePath } from "../config/sessions/paths.js";
 import { loadSessionStore, updateSessionStore } from "../config/sessions/store.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import {
+  abortEmbeddedAgentRun,
+  consumeEmbeddedRunModelSwitch,
+  requestEmbeddedRunModelSwitch,
+  type EmbeddedRunModelSwitchRequest,
+} from "./embedded-agent-runner/runs.js";
+import {
   normalizeStoredOverrideModel,
   resolveDefaultModelForAgent,
   resolvePersistedSelectedModelRef,
 } from "./model-selection.js";
-import {
-  abortEmbeddedPiRun,
-  consumeEmbeddedRunModelSwitch,
-  requestEmbeddedRunModelSwitch,
-  type EmbeddedRunModelSwitchRequest,
-} from "./pi-embedded-runner/runs.js";
 export { LiveSessionModelSwitchError } from "./live-model-switch-error.js";
 export type LiveSessionModelSelection = EmbeddedRunModelSwitchRequest;
 import { normalizeOptionalString } from "../shared/string-coerce.js";
@@ -72,7 +72,7 @@ export function requestLiveSessionModelSwitch(params: {
   if (!sessionId) {
     return false;
   }
-  const aborted = abortEmbeddedPiRun(sessionId);
+  const aborted = abortEmbeddedAgentRun(sessionId);
   if (!aborted) {
     return false;
   }

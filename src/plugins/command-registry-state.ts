@@ -71,7 +71,7 @@ export function listRegisteredPluginAgentPromptGuidance(params?: {
   for (const command of pluginCommands.values()) {
     for (const entry of command.agentPromptGuidance ?? []) {
       const trimmed = resolveAgentPromptGuidanceTextForSurface(entry, {
-        surface: params?.surface,
+        surface: normalizeAgentPromptSurface(params?.surface),
         includeLegacyGlobalGuidance: params?.includeLegacyGlobalGuidance ?? true,
       });
       if (!trimmed || seen.has(trimmed)) {
@@ -82,6 +82,12 @@ export function listRegisteredPluginAgentPromptGuidance(params?: {
     }
   }
   return lines;
+}
+
+function normalizeAgentPromptSurface(
+  surface: AgentPromptSurfaceKind | undefined,
+): AgentPromptSurfaceKind | undefined {
+  return surface === "pi_main" ? "openclaw_main" : surface;
 }
 
 function resolveAgentPromptGuidanceTextForSurface(

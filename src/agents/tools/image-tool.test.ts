@@ -11,8 +11,8 @@ import type {
   MediaUnderstandingProvider,
 } from "../../plugin-sdk/media-understanding.js";
 import { withFetchPreconnect } from "../../test-utils/fetch-mock.js";
+import { createOpenClawCodingTools } from "../agent-tools.js";
 import { minimaxUnderstandImage } from "../minimax-vlm.js";
-import { createOpenClawCodingTools } from "../pi-tools.js";
 import type { SandboxFsBridge } from "../sandbox/fs-bridge.js";
 import { createHostSandboxFsBridge } from "../test-helpers/host-sandbox-fs-bridge.js";
 import { createUnsafeMountedSandbox } from "../test-helpers/unsafe-mounted-sandbox.js";
@@ -30,7 +30,7 @@ type MockOpenClawToolsOptions = {
   modelHasVision?: boolean;
 };
 
-const piToolsHarness = vi.hoisted(() => ({
+const agentToolsHarness = vi.hoisted(() => ({
   createStubTool(name: string) {
     return {
       name,
@@ -70,8 +70,8 @@ vi.mock("../bash-tools.js", async () => {
   const actual = await vi.importActual<typeof import("../bash-tools.js")>("../bash-tools.js");
   return {
     ...actual,
-    createExecTool: vi.fn(() => piToolsHarness.createStubTool("exec")),
-    createProcessTool: vi.fn(() => piToolsHarness.createStubTool("process")),
+    createExecTool: vi.fn(() => agentToolsHarness.createStubTool("exec")),
+    createProcessTool: vi.fn(() => agentToolsHarness.createStubTool("process")),
   };
 });
 
@@ -81,14 +81,14 @@ vi.mock("../channel-tools.js", () => ({
 }));
 
 vi.mock("../apply-patch.js", () => ({
-  createApplyPatchTool: vi.fn(() => piToolsHarness.createStubTool("apply_patch")),
+  createApplyPatchTool: vi.fn(() => agentToolsHarness.createStubTool("apply_patch")),
 }));
 
-vi.mock("../pi-tools.before-tool-call.js", () => ({
+vi.mock("../agent-tools.before-tool-call.js", () => ({
   wrapToolWithBeforeToolCallHook: vi.fn((tool) => tool),
 }));
 
-vi.mock("../pi-tools.abort.js", () => ({
+vi.mock("../agent-tools.abort.js", () => ({
   wrapToolWithAbortSignal: vi.fn((tool) => tool),
 }));
 

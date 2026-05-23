@@ -2,27 +2,22 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { StringDecoder } from "node:string_decoder";
-import type { AgentMessage } from "@earendil-works/pi-agent-core";
+import type { AgentMessage } from "../../agents/runtime/index.js";
 import {
   acquireSessionWriteLock,
   resolveSessionWriteLockOptions,
 } from "../../agents/session-write-lock.js";
+import { CURRENT_SESSION_VERSION } from "../../agents/sessions/index.js";
 import { redactTranscriptMessage } from "../../agents/transcript-redact.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { redactSecrets } from "../../logging/redact.js";
+import { createSessionTranscriptHeader } from "./transcript-header.js";
 import { resolveOwnedSessionTranscriptWriteLockRunner } from "./transcript-write-context.js";
 
 const TRANSCRIPT_APPEND_SCAN_CHUNK_BYTES = 64 * 1024;
 const SESSION_MANAGER_APPEND_MAX_BYTES = 8 * 1024 * 1024;
 
-let piCodingAgentModulePromise: Promise<typeof import("@earendil-works/pi-coding-agent")> | null =
-  null;
 const transcriptAppendQueues = new Map<string, Promise<void>>();
-
-async function loadCurrentSessionVersion(): Promise<number> {
-  piCodingAgentModulePromise ??= import("@earendil-works/pi-coding-agent");
-  return (await piCodingAgentModulePromise).CURRENT_SESSION_VERSION;
-}
 
 type TranscriptLeafInfo = {
   leafId?: string;
@@ -129,7 +124,6 @@ async function migrateLinearTranscriptToParentLinked(transcriptPath: string): Pr
   leafId?: string;
 }> {
   const raw = await fs.readFile(transcriptPath, "utf-8");
-  const currentSessionVersion = await loadCurrentSessionVersion();
   const existingIds = new Set<string>();
   const output: string[] = [];
   let previousId: string | null = null;
@@ -151,7 +145,7 @@ async function migrateLinearTranscriptToParentLinked(transcriptPath: string): Pr
     }
     const record = parsed as Record<string, unknown>;
     if (record.type === "session") {
-      output.push(JSON.stringify({ ...record, version: currentSessionVersion }));
+      output.push(JSON.stringify({ ...record, version: CURRENT_SESSION_VERSION }));
       continue;
     }
     const id = normalizeEntryId(record.id) ?? generateEntryId(existingIds);
@@ -183,15 +177,8 @@ async function ensureTranscriptHeader(
   if (stat?.isFile() && stat.size > 0) {
     return;
   }
-  const currentSessionVersion = await loadCurrentSessionVersion();
   await fs.mkdir(path.dirname(transcriptPath), { recursive: true });
-  const header = {
-    type: "session",
-    version: currentSessionVersion,
-    id: params.sessionId ?? randomUUID(),
-    timestamp: new Date().toISOString(),
-    cwd: params.cwd ?? process.cwd(),
-  };
+  const header = createSessionTranscriptHeader(params);
   await fs.writeFile(transcriptPath, `${JSON.stringify(header)}\n`, {
     encoding: "utf-8",
     mode: 0o600,

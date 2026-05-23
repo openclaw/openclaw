@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import type { OAuthCredentials } from "@earendil-works/pi-ai";
+import type { OAuthCredentials } from "openclaw/plugin-sdk/llm";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   applyAuthProfileConfig,
@@ -119,7 +119,6 @@ describe("writeOAuthCredentials", () => {
   const lifecycle = createAuthTestLifecycle([
     "OPENCLAW_STATE_DIR",
     "OPENCLAW_AGENT_DIR",
-    "PI_CODING_AGENT_DIR",
     "OPENCLAW_OAUTH_DIR",
   ]);
 
@@ -167,7 +166,6 @@ describe("writeOAuthCredentials", () => {
     await fs.mkdir(workerAgentDir, { recursive: true });
 
     process.env.OPENCLAW_AGENT_DIR = kidAgentDir;
-    process.env.PI_CODING_AGENT_DIR = kidAgentDir;
 
     const creds = {
       refresh: "refresh-sync",
@@ -202,7 +200,6 @@ describe("writeOAuthCredentials", () => {
     await fs.mkdir(kidAgentDir, { recursive: true });
 
     process.env.OPENCLAW_AGENT_DIR = kidAgentDir;
-    process.env.PI_CODING_AGENT_DIR = kidAgentDir;
 
     const creds = {
       refresh: "refresh-kid",
@@ -270,7 +267,6 @@ describe("upsertApiKeyProfile secret refs", () => {
   const lifecycle = createAuthTestLifecycle([
     "OPENCLAW_STATE_DIR",
     "OPENCLAW_AGENT_DIR",
-    "PI_CODING_AGENT_DIR",
     "MOONSHOT_API_KEY",
     "OPENAI_API_KEY",
     "CLOUDFLARE_AI_GATEWAY_API_KEY",
@@ -413,11 +409,7 @@ describe("upsertApiKeyProfile secret refs", () => {
 });
 
 describe("upsertApiKeyProfile", () => {
-  const lifecycle = createAuthTestLifecycle([
-    "OPENCLAW_STATE_DIR",
-    "OPENCLAW_AGENT_DIR",
-    "PI_CODING_AGENT_DIR",
-  ]);
+  const lifecycle = createAuthTestLifecycle(["OPENCLAW_STATE_DIR", "OPENCLAW_AGENT_DIR"]);
 
   afterEach(async () => {
     await lifecycle.cleanup();

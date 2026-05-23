@@ -43,7 +43,7 @@ export const AgentSummarySchema = Type.Object(
       Type.Object(
         {
           id: NonEmptyString,
-          fallback: Type.Optional(Type.Union([Type.Literal("pi"), Type.Literal("none")])),
+          fallback: Type.Optional(Type.Union([Type.Literal("openclaw"), Type.Literal("none")])),
           source: Type.Union([
             Type.Literal("env"),
             Type.Literal("agent"),

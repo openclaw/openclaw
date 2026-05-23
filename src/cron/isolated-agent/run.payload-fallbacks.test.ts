@@ -11,7 +11,7 @@ import {
   resolveConfiguredModelRefMock,
   resolveAgentModelFallbacksOverrideMock,
   runCliAgentMock,
-  runEmbeddedPiAgentMock,
+  runEmbeddedAgentMock,
   runWithModelFallbackMock,
 } from "./run.test-harness.js";
 
@@ -38,7 +38,7 @@ function requireModelFallbackRequest(): {
 function requireEmbeddedRunRequest(): {
   modelFallbacksOverride?: string[];
 } {
-  const request = runEmbeddedPiAgentMock.mock.calls[0]?.[0] as
+  const request = runEmbeddedAgentMock.mock.calls[0]?.[0] as
     | {
         modelFallbacksOverride?: string[];
       }
@@ -170,8 +170,8 @@ describe("runCronIsolatedAgentTurn — payload.fallbacks", () => {
       "openai-codex/gpt-5.2",
       "zai/glm-5",
     ]);
-    expect(runEmbeddedPiAgentMock).toHaveBeenCalledOnce();
-    expect(runEmbeddedPiAgentMock.mock.calls[0]?.[0]).toMatchObject({
+    expect(runEmbeddedAgentMock).toHaveBeenCalledOnce();
+    expect(runEmbeddedAgentMock.mock.calls[0]?.[0]).toMatchObject({
       modelFallbacksOverride: ["openai-codex/gpt-5.2", "zai/glm-5"],
     });
   });

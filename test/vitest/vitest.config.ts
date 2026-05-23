@@ -33,7 +33,7 @@ export const rootVitestProjects = [
   "test/vitest/vitest.commands.config.ts",
   "test/vitest/vitest.auto-reply.config.ts",
   "test/vitest/vitest.agents-core.config.ts",
-  "test/vitest/vitest.agents-pi-embedded.config.ts",
+  "test/vitest/vitest.agents-embedded-agent.config.ts",
   "test/vitest/vitest.agents-support.config.ts",
   "test/vitest/vitest.agents-tools.config.ts",
   "test/vitest/vitest.daemon.config.ts",

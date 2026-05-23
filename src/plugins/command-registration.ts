@@ -75,6 +75,11 @@ function getAgentPromptSurfaces(): Set<string> {
   return agentPromptSurfaces;
 }
 
+function normalizeAgentPromptSurface(value: string): AgentPromptSurfaceKind {
+  const surface = value.trim();
+  return (surface === "pi_main" ? "openclaw_main" : surface) as AgentPromptSurfaceKind;
+}
+
 export type CommandRegistrationResult = {
   ok: boolean;
   error?: string;
@@ -263,9 +268,7 @@ function normalizeAgentPromptGuidance(
       text: entry.text.trim(),
     };
     if (entry.surfaces) {
-      normalized.surfaces = entry.surfaces.map(
-        (surface) => surface.trim() as AgentPromptSurfaceKind,
-      );
+      normalized.surfaces = entry.surfaces.map(normalizeAgentPromptSurface);
     }
     return normalized;
   });

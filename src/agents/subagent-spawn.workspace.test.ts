@@ -32,9 +32,9 @@ const hoisted = vi.hoisted(() => ({
 let spawnSubagentDirect: typeof import("./subagent-spawn.js").spawnSubagentDirect;
 let resetSubagentRegistryForTests: typeof import("./subagent-registry.js").resetSubagentRegistryForTests;
 
-vi.mock("@earendil-works/pi-ai/oauth", async () => {
-  const actual = await vi.importActual<typeof import("@earendil-works/pi-ai/oauth")>(
-    "@earendil-works/pi-ai/oauth",
+vi.mock("openclaw/plugin-sdk/llm-oauth", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/llm-oauth")>(
+    "openclaw/plugin-sdk/llm-oauth",
   );
   return {
     ...actual,

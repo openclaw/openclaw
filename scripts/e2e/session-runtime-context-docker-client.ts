@@ -5,11 +5,11 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { SessionManager } from "@earendil-works/pi-coding-agent";
+import { SessionManager } from "openclaw/plugin-sdk/agent-sessions";
 import {
   queueRuntimeContextForNextTurn,
   resolveRuntimeContextPromptParts,
-} from "../../dist/agents/pi-embedded-runner/run/runtime-context-prompt.js";
+} from "../../dist/agents/embedded-agent-runner/run/runtime-context-prompt.js";
 
 type TranscriptEntry = {
   type?: string;

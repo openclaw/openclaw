@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { resolveEmbeddedSessionLane } from "../agents/pi-embedded-runner/lanes.js";
+import { resolveEmbeddedSessionLane } from "../agents/embedded-agent-runner/lanes.js";
 import {
   testing as replyRunTesting,
   createReplyOperation,

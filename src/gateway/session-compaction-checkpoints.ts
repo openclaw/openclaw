@@ -5,8 +5,8 @@ import {
   CURRENT_SESSION_VERSION,
   migrateSessionEntries,
   SessionManager,
-  type FileEntry as PiSessionFileEntry,
-} from "@earendil-works/pi-coding-agent";
+  type FileEntry as SessionFileEntry,
+} from "../agents/sessions/index.js";
 import { updateSessionStore } from "../config/sessions.js";
 import type {
   SessionCompactionCheckpoint,
@@ -150,8 +150,8 @@ function parseTranscriptLineId(
 
 async function readTranscriptEntriesForForkAsync(
   sessionFile: string,
-): Promise<PiSessionFileEntry[] | null> {
-  const entries: PiSessionFileEntry[] = [];
+): Promise<SessionFileEntry[] | null> {
+  const entries: SessionFileEntry[] = [];
   try {
     for await (const line of streamSessionTranscriptLines(sessionFile)) {
       try {
@@ -159,9 +159,9 @@ async function readTranscriptEntriesForForkAsync(
         if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
           continue;
         }
-        entries.push(parsed as PiSessionFileEntry);
+        entries.push(parsed as SessionFileEntry);
       } catch {
-        // Match pi-coding-agent's loader: malformed JSONL entries are ignored.
+        // Match session runtime's loader: malformed JSONL entries are ignored.
       }
     }
   } catch {

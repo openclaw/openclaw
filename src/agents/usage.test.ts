@@ -126,7 +126,7 @@ describe("normalizeUsage", () => {
   });
 
   it("clamps negative input to zero (pre-subtracted cached_tokens > prompt_tokens)", () => {
-    // pi-ai OpenAI-format providers subtract cached_tokens from prompt_tokens
+    // shared model runtime OpenAI-format providers subtract cached_tokens from prompt_tokens
     // upstream.  When cached_tokens exceeds prompt_tokens the result is negative.
     const usage = normalizeUsage({
       input: -4900,

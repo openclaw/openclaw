@@ -52,8 +52,8 @@ function resolveModelRuntimeOverride(params: {
   if (MODEL_RUNTIME_CLEAR_VALUES.has(runtime)) {
     return { kind: "clear" };
   }
-  if (runtime === "pi") {
-    return { kind: "set", runtime: "pi" };
+  if (runtime === "openclaw") {
+    return { kind: "set", runtime: "openclaw" };
   }
 
   const provider = normalizeProviderId(params.provider);

@@ -212,9 +212,9 @@ vi.mock("../agents/model-provider-auth.js", () => ({
   warmCurrentProviderAuthState: hoisted.warmCurrentProviderAuthState,
 }));
 
-vi.mock("../agents/pi-bundle-mcp-tools.js", async () => {
-  const actual = await vi.importActual<typeof import("../agents/pi-bundle-mcp-tools.js")>(
-    "../agents/pi-bundle-mcp-tools.js",
+vi.mock("../agents/agent-bundle-mcp-tools.js", async () => {
+  const actual = await vi.importActual<typeof import("../agents/agent-bundle-mcp-tools.js")>(
+    "../agents/agent-bundle-mcp-tools.js",
   );
   return {
     ...actual,
@@ -230,9 +230,9 @@ vi.mock("../infra/openclaw-root.js", async (importOriginal) => {
   };
 });
 
-vi.mock("../agents/pi-embedded-runner/runs.js", async () => {
-  const actual = await vi.importActual<typeof import("../agents/pi-embedded-runner/runs.js")>(
-    "../agents/pi-embedded-runner/runs.js",
+vi.mock("../agents/embedded-agent-runner/runs.js", async () => {
+  const actual = await vi.importActual<typeof import("../agents/embedded-agent-runner/runs.js")>(
+    "../agents/embedded-agent-runner/runs.js",
   );
   return {
     ...actual,
@@ -240,10 +240,10 @@ vi.mock("../agents/pi-embedded-runner/runs.js", async () => {
   };
 });
 
-vi.mock("../agents/pi-embedded-runner/run-state.js", async () => {
-  const actual = await vi.importActual<typeof import("../agents/pi-embedded-runner/run-state.js")>(
-    "../agents/pi-embedded-runner/run-state.js",
-  );
+vi.mock("../agents/embedded-agent-runner/run-state.js", async () => {
+  const actual = await vi.importActual<
+    typeof import("../agents/embedded-agent-runner/run-state.js")
+  >("../agents/embedded-agent-runner/run-state.js");
   return {
     ...actual,
     getActiveEmbeddedRunCount: () => hoisted.activeEmbeddedRunCount.value,

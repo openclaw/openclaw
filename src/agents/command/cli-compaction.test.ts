@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { CURRENT_SESSION_VERSION } from "@earendil-works/pi-coding-agent";
+import { CURRENT_SESSION_VERSION } from "openclaw/plugin-sdk/agent-sessions";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -114,7 +114,7 @@ describe("runCliTurnCompactionLifecycle", () => {
     const maintenance = vi.fn(async () => ({ changed: false, bytesFreed: 0, rewrittenEntries: 0 }));
     setCliCompactionTestDeps({
       resolveContextEngine: async () => buildContextEngine({ compactCalls }),
-      createPreparedEmbeddedPiSettingsManager: async () => ({
+      createPreparedEmbeddedAgentSettingsManager: async () => ({
         getCompactionReserveTokens: () => 200,
         getCompactionKeepRecentTokens: () => 0,
         applyOverrides: () => {},
@@ -205,7 +205,7 @@ describe("runCliTurnCompactionLifecycle", () => {
       compacted: true,
       result: { tokensBefore: 950, tokensAfter: 100 },
     }));
-    const applyPiAutoCompactionGuard = vi.fn(async () => ({
+    const applyAgentAutoCompactionGuard = vi.fn(async () => ({
       supported: true,
       disabled: false,
     }));
@@ -217,7 +217,7 @@ describe("runCliTurnCompactionLifecycle", () => {
       resolveContextEngine,
       ensureSelectedAgentHarnessPlugin,
       maybeCompactAgentHarnessSession: compactAgentHarnessSession as never,
-      createPreparedEmbeddedPiSettingsManager: async () => ({
+      createPreparedEmbeddedAgentSettingsManager: async () => ({
         getCompactionReserveTokens: () => 200,
         getCompactionKeepRecentTokens: () => 0,
         applyOverrides: () => {},
@@ -232,7 +232,7 @@ describe("runCliTurnCompactionLifecycle", () => {
         effectiveReserveTokens: 200,
       }),
       resolveLiveToolResultMaxChars: () => 20_000,
-      applyPiAutoCompactionGuard,
+      applyAgentAutoCompactionGuard,
       recordCliCompactionInStore,
     });
 
@@ -251,7 +251,7 @@ describe("runCliTurnCompactionLifecycle", () => {
     });
 
     expect(resolveContextEngine).toHaveBeenCalledTimes(1);
-    expect(applyPiAutoCompactionGuard).toHaveBeenCalledWith(
+    expect(applyAgentAutoCompactionGuard).toHaveBeenCalledWith(
       expect.objectContaining({
         contextEngineInfo: contextEngine.info,
       }),
@@ -264,7 +264,7 @@ describe("runCliTurnCompactionLifecycle", () => {
         agentHarnessRuntimeOverride: "codex",
       }),
     );
-    expect(applyPiAutoCompactionGuard.mock.invocationCallOrder[0] ?? 0).toBeLessThan(
+    expect(applyAgentAutoCompactionGuard.mock.invocationCallOrder[0] ?? 0).toBeLessThan(
       compactAgentHarnessSession.mock.invocationCallOrder[0] ?? 0,
     );
     expect(compactAgentHarnessSession).toHaveBeenCalledTimes(1);
@@ -296,10 +296,10 @@ describe("runCliTurnCompactionLifecycle", () => {
   });
 
   it("ignores stale native harness ids when the active provider no longer matches", async () => {
-    const sessionKey = "agent:main:pi-after-codex";
-    const sessionId = "session-pi-after-codex";
-    const sessionFile = path.join(tmpDir, "session-pi-after-codex.jsonl");
-    const storePath = path.join(tmpDir, "sessions-pi-after-codex.json");
+    const sessionKey = "agent:main:openclaw-after-codex";
+    const sessionId = "session-openclaw-after-codex";
+    const sessionFile = path.join(tmpDir, "session-openclaw-after-codex.jsonl");
+    const storePath = path.join(tmpDir, "sessions-openclaw-after-codex.json");
     await writeSessionFile({ sessionFile, sessionId });
 
     const sessionEntry: SessionEntry = {
@@ -319,7 +319,7 @@ describe("runCliTurnCompactionLifecycle", () => {
     setCliCompactionTestDeps({
       resolveContextEngine: async () => buildContextEngine({ compactCalls }),
       maybeCompactAgentHarnessSession: compactAgentHarnessSession as never,
-      createPreparedEmbeddedPiSettingsManager: async () => ({
+      createPreparedEmbeddedAgentSettingsManager: async () => ({
         getCompactionReserveTokens: () => 200,
         getCompactionKeepRecentTokens: () => 0,
         applyOverrides: () => {},
@@ -351,7 +351,7 @@ describe("runCliTurnCompactionLifecycle", () => {
       sessionAgentId: "main",
       workspaceDir: tmpDir,
       agentDir: tmpDir,
-      provider: "pi",
+      provider: "openclaw",
       model: "sonnet-4.6",
     });
 
@@ -390,7 +390,7 @@ describe("runCliTurnCompactionLifecycle", () => {
       resolveContextEngine: async () => buildContextEngine({ compactCalls }),
       ensureSelectedAgentHarnessPlugin,
       maybeCompactAgentHarnessSession: compactAgentHarnessSession as never,
-      createPreparedEmbeddedPiSettingsManager: async () => ({
+      createPreparedEmbeddedAgentSettingsManager: async () => ({
         getCompactionReserveTokens: () => 200,
         getCompactionKeepRecentTokens: () => 0,
         applyOverrides: () => {},
@@ -455,7 +455,7 @@ describe("runCliTurnCompactionLifecycle", () => {
       resolveContextEngine: async () => buildContextEngine({ compactCalls }),
       ensureSelectedAgentHarnessPlugin: vi.fn(async () => undefined),
       maybeCompactAgentHarnessSession: vi.fn(async () => undefined) as never,
-      createPreparedEmbeddedPiSettingsManager: async () => ({
+      createPreparedEmbeddedAgentSettingsManager: async () => ({
         getCompactionReserveTokens: () => 200,
         getCompactionKeepRecentTokens: () => 0,
         applyOverrides: () => {},
@@ -549,7 +549,7 @@ describe("runCliTurnCompactionLifecycle", () => {
       resolveContextEngine: async () => contextEngine,
       ensureSelectedAgentHarnessPlugin,
       maybeCompactAgentHarnessSession: compactAgentHarnessSession as never,
-      createPreparedEmbeddedPiSettingsManager: async () => ({
+      createPreparedEmbeddedAgentSettingsManager: async () => ({
         getCompactionReserveTokens: () => 200,
         getCompactionKeepRecentTokens: () => 0,
         applyOverrides: () => {},
@@ -629,7 +629,7 @@ describe("runCliTurnCompactionLifecycle", () => {
       resolveContextEngine: async () => buildContextEngine({ compactCalls }),
       ensureSelectedAgentHarnessPlugin,
       maybeCompactAgentHarnessSession: compactAgentHarnessSession as never,
-      createPreparedEmbeddedPiSettingsManager: async () => ({
+      createPreparedEmbeddedAgentSettingsManager: async () => ({
         getCompactionReserveTokens: () => 200,
         getCompactionKeepRecentTokens: () => 0,
         applyOverrides: () => {},
@@ -713,7 +713,7 @@ describe("runCliTurnCompactionLifecycle", () => {
       resolveContextEngine: async () => buildContextEngine({ compactCalls }),
       ensureSelectedAgentHarnessPlugin,
       maybeCompactAgentHarnessSession: compactAgentHarnessSession as never,
-      createPreparedEmbeddedPiSettingsManager: async () => ({
+      createPreparedEmbeddedAgentSettingsManager: async () => ({
         getCompactionReserveTokens: () => 200,
         getCompactionKeepRecentTokens: () => 0,
         applyOverrides: () => {},
@@ -795,7 +795,7 @@ describe("runCliTurnCompactionLifecycle", () => {
         reason: "thread not found: thread-1",
         failure: { reason: "stale_thread_binding" },
       })) as never,
-      createPreparedEmbeddedPiSettingsManager: async () => ({
+      createPreparedEmbeddedAgentSettingsManager: async () => ({
         getCompactionReserveTokens: () => 200,
         getCompactionKeepRecentTokens: () => 0,
         applyOverrides: () => {},
@@ -859,7 +859,7 @@ describe("runCliTurnCompactionLifecycle", () => {
         calls.push("resolve");
         return buildContextEngine({ compactCalls: [] });
       },
-      createPreparedEmbeddedPiSettingsManager: async () => ({
+      createPreparedEmbeddedAgentSettingsManager: async () => ({
         getCompactionReserveTokens: () => 200,
         getCompactionKeepRecentTokens: () => 0,
         applyOverrides: () => {},
@@ -927,7 +927,7 @@ describe("runCliTurnCompactionLifecycle", () => {
           return await new Promise(() => {});
         },
       }),
-      createPreparedEmbeddedPiSettingsManager: async () => ({
+      createPreparedEmbeddedAgentSettingsManager: async () => ({
         getCompactionReserveTokens: () => 200,
         getCompactionKeepRecentTokens: () => 0,
         applyOverrides: () => {},

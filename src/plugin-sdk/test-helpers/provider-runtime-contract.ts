@@ -1,6 +1,3 @@
-import fs from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ProviderRuntimeModel } from "../plugin-entry.js";
 import { registerProviderPlugin, requireRegisteredProvider } from "../plugin-test-runtime.js";
@@ -9,7 +6,7 @@ import { createProviderUsageFetch, makeResponse } from "../test-env.js";
 
 const CONTRACT_SETUP_TIMEOUT_MS = 300_000;
 
-const OAUTH_MODULE_ID = "@earendil-works/pi-ai/oauth";
+const OAUTH_MODULE_ID = "openclaw/plugin-sdk/llm-oauth";
 const OPENAI_CODEX_PROVIDER_RUNTIME_MODULE_ID =
   "../../../extensions/openai/openai-codex-provider.runtime.js";
 const refreshOpenAICodexTokenMock = vi.fn();
@@ -22,7 +19,7 @@ const getOAuthProvidersMock = vi.fn(() => [
 function installProviderRuntimeContractMocks() {
   vi.doMock(OAUTH_MODULE_ID, async () => {
     const actual =
-      await vi.importActual<typeof import("@earendil-works/pi-ai/oauth")>(OAUTH_MODULE_ID);
+      await vi.importActual<typeof import("openclaw/plugin-sdk/llm-oauth")>(OAUTH_MODULE_ID);
     return {
       ...actual,
       refreshOpenAICodexToken: refreshOpenAICodexTokenMock,
@@ -468,7 +465,7 @@ export function describeOpenAIProviderRuntimeContract(load: ProviderRuntimeContr
       });
     });
 
-    it("leaves openai gpt-5.5 forward-compat resolution to Pi", () => {
+    it("leaves openai gpt-5.5 forward-compat resolution to OpenClaw", () => {
       const provider = requireProviderContractProvider("openai");
       const model = provider.resolveDynamicModel?.({
         provider: "openai",
@@ -587,7 +584,7 @@ export function describeOpenAIProviderRuntimeContract(load: ProviderRuntimeContr
       });
     });
 
-    it("keeps Pi cost metadata but applies Codex context metadata for gpt-5.5 models", () => {
+    it("keeps OpenClaw cost metadata but applies Codex context metadata for gpt-5.5 models", () => {
       const provider = requireProviderContractProvider("openai-codex");
       const model = provider.resolveDynamicModel?.({
         provider: "openai-codex",
@@ -808,33 +805,6 @@ export function describeZAIProviderRuntimeContract(load: ProviderRuntimeContract
       ).resolves.toEqual({
         token: "env-zai-token",
       });
-    });
-
-    it("falls back to legacy pi auth tokens for usage auth", async () => {
-      const provider = requireProviderContractProvider("zai");
-      const home = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-zai-contract-"));
-      await fs.mkdir(path.join(home, ".pi", "agent"), { recursive: true });
-      await fs.writeFile(
-        path.join(home, ".pi", "agent", "auth.json"),
-        `${JSON.stringify({ "z-ai": { access: "legacy-zai-token" } }, null, 2)}\n`,
-        "utf8",
-      );
-
-      try {
-        await expect(
-          provider.resolveUsageAuth?.({
-            config: {} as never,
-            env: { HOME: home } as NodeJS.ProcessEnv,
-            provider: "zai",
-            resolveApiKeyFromConfigAndStore: () => undefined,
-            resolveOAuthToken: async () => null,
-          }),
-        ).resolves.toEqual({
-          token: "legacy-zai-token",
-        });
-      } finally {
-        await fs.rm(home, { recursive: true, force: true });
-      }
     });
 
     it("owns usage snapshot fetching", async () => {

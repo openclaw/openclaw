@@ -96,7 +96,7 @@ export function resolveCliBackendLiveModelSelection(params: {
     cliModelKey: modelKey,
     configModelKey: modelKey,
     configModelSwitchTarget: params.modelSwitchTarget,
-    agentRuntime: { id: "pi" },
+    agentRuntime: { id: "openclaw" },
   };
 }
 

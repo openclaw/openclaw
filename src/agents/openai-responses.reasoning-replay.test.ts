@@ -1,5 +1,5 @@
-import type { AssistantMessage, Model, ToolResultMessage } from "@earendil-works/pi-ai";
-import { streamOpenAIResponses } from "@earendil-works/pi-ai";
+import type { AssistantMessage, Model, ToolResultMessage } from "openclaw/plugin-sdk/llm";
+import { streamOpenAIResponses } from "openclaw/plugin-sdk/llm";
 import { Type } from "typebox";
 import { describe, expect, it } from "vitest";
 

@@ -12,6 +12,8 @@ import { loadPluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.
 import { CommandLaneTaskTimeoutError } from "../process/command-queue.js";
 import { AUTH_STORE_VERSION } from "./auth-profiles/constants.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
+import { classifyEmbeddedAgentRunResultForModelFallback } from "./embedded-agent-runner/result-fallback-classifier.js";
+import type { EmbeddedAgentRunResult } from "./embedded-agent-runner/types.js";
 import { FailoverError } from "./failover-error.js";
 import { MissingAgentHarnessError } from "./harness/errors.js";
 import { LiveSessionModelSwitchError } from "./live-model-switch-error.js";
@@ -21,8 +23,6 @@ import {
   runWithImageModelFallback,
   runWithModelFallback,
 } from "./model-fallback.js";
-import { classifyEmbeddedPiRunResultForModelFallback } from "./pi-embedded-runner/result-fallback-classifier.js";
-import type { EmbeddedPiRunResult } from "./pi-embedded-runner/types.js";
 import { SessionWriteLockTimeoutError } from "./session-write-lock-error.js";
 import { makeModelFallbackCfg } from "./test-helpers/model-fallback-config-fixture.js";
 
@@ -1103,7 +1103,7 @@ describe("runWithModelFallback", () => {
   });
 
   it("keeps tool-executing empty GPT-5 runs out of fallback", () => {
-    const runResult: EmbeddedPiRunResult = {
+    const runResult: EmbeddedAgentRunResult = {
       payloads: [],
       meta: {
         durationMs: 1,
@@ -1115,7 +1115,7 @@ describe("runWithModelFallback", () => {
     };
 
     expect(
-      classifyEmbeddedPiRunResultForModelFallback({
+      classifyEmbeddedAgentRunResultForModelFallback({
         provider: "openai-codex",
         model: "gpt-5.4",
         result: runResult,
@@ -1124,7 +1124,7 @@ describe("runWithModelFallback", () => {
   });
 
   it("keeps normalized silent GPT-5 terminal replies out of fallback", () => {
-    const runResult: EmbeddedPiRunResult = {
+    const runResult: EmbeddedAgentRunResult = {
       payloads: [],
       meta: {
         durationMs: 1,
@@ -1133,7 +1133,7 @@ describe("runWithModelFallback", () => {
     };
 
     expect(
-      classifyEmbeddedPiRunResultForModelFallback({
+      classifyEmbeddedAgentRunResultForModelFallback({
         provider: "openai-codex",
         model: "gpt-5.4",
         result: runResult,
@@ -1142,7 +1142,7 @@ describe("runWithModelFallback", () => {
   });
 
   it("keeps before_agent_run hook blocks out of empty-result fallback", () => {
-    const runResult: EmbeddedPiRunResult = {
+    const runResult: EmbeddedAgentRunResult = {
       payloads: [{ text: "Blocked by before-run policy.", isError: true }],
       meta: {
         durationMs: 1,
@@ -1155,7 +1155,7 @@ describe("runWithModelFallback", () => {
     };
 
     expect(
-      classifyEmbeddedPiRunResultForModelFallback({
+      classifyEmbeddedAgentRunResultForModelFallback({
         provider: "atlassian-ai-gateway-openai",
         model: "gpt-5.5-2026-04-23",
         result: runResult,
@@ -1164,7 +1164,7 @@ describe("runWithModelFallback", () => {
   });
 
   it("uses harness-owned terminal classification for GPT-5 fallback", () => {
-    const runResult: EmbeddedPiRunResult = {
+    const runResult: EmbeddedAgentRunResult = {
       payloads: [],
       meta: {
         durationMs: 1,
@@ -1172,7 +1172,7 @@ describe("runWithModelFallback", () => {
       },
     };
 
-    const classification = classifyEmbeddedPiRunResultForModelFallback({
+    const classification = classifyEmbeddedAgentRunResultForModelFallback({
       provider: "codex",
       model: "gpt-5.4",
       result: runResult,
@@ -1183,7 +1183,7 @@ describe("runWithModelFallback", () => {
   });
 
   it("classifies non-GPT incomplete terminal errors for configured fallback", () => {
-    const runResult: EmbeddedPiRunResult = {
+    const runResult: EmbeddedAgentRunResult = {
       payloads: [
         { text: "⚠️ Agent couldn't generate a response. Please try again.", isError: true },
       ],
@@ -1192,7 +1192,7 @@ describe("runWithModelFallback", () => {
       },
     };
 
-    const classification = classifyEmbeddedPiRunResultForModelFallback({
+    const classification = classifyEmbeddedAgentRunResultForModelFallback({
       provider: "anthropic",
       model: "claude-opus-4.7",
       result: runResult,
@@ -1203,7 +1203,7 @@ describe("runWithModelFallback", () => {
   });
 
   it("keeps aborted harness-classified GPT-5 runs out of fallback", () => {
-    const runResult: EmbeddedPiRunResult = {
+    const runResult: EmbeddedAgentRunResult = {
       payloads: [],
       meta: {
         durationMs: 1,
@@ -1213,7 +1213,7 @@ describe("runWithModelFallback", () => {
     };
 
     expect(
-      classifyEmbeddedPiRunResultForModelFallback({
+      classifyEmbeddedAgentRunResultForModelFallback({
         provider: "codex",
         model: "gpt-5.4",
         result: runResult,

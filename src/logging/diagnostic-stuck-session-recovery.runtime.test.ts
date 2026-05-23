@@ -4,50 +4,50 @@ import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
-  abortEmbeddedPiRun: vi.fn(),
-  forceClearEmbeddedPiRun: vi.fn(),
-  isEmbeddedPiRunActive: vi.fn(),
-  isEmbeddedPiRunHandleActive: vi.fn(),
+  abortEmbeddedAgentRun: vi.fn(),
+  forceClearEmbeddedAgentRun: vi.fn(),
+  isEmbeddedAgentRunActive: vi.fn(),
+  isEmbeddedAgentRunHandleActive: vi.fn(),
   getCommandLaneSnapshot: vi.fn(),
   resetCommandLane: vi.fn(),
   resolveActiveEmbeddedRunSessionId: vi.fn(),
   resolveActiveEmbeddedRunHandleSessionId: vi.fn(),
   resolveEmbeddedSessionLane: vi.fn((key: string) => `session:${key}`),
-  waitForEmbeddedPiRunEnd: vi.fn(),
+  waitForEmbeddedAgentRunEnd: vi.fn(),
   diag: {
     debug: vi.fn(),
     warn: vi.fn(),
   },
 }));
 
-vi.mock("../agents/pi-embedded-runner/runs.js", () => ({
-  abortAndDrainEmbeddedPiRun: async (params: {
+vi.mock("../agents/embedded-agent-runner/runs.js", () => ({
+  abortAndDrainEmbeddedAgentRun: async (params: {
     sessionId: string;
     sessionKey?: string;
     settleMs?: number;
     forceClear?: boolean;
     reason?: string;
   }) => {
-    const aborted = mocks.abortEmbeddedPiRun(params.sessionId);
+    const aborted = mocks.abortEmbeddedAgentRun(params.sessionId);
     const drained = aborted
-      ? await mocks.waitForEmbeddedPiRunEnd(params.sessionId, params.settleMs)
+      ? await mocks.waitForEmbeddedAgentRunEnd(params.sessionId, params.settleMs)
       : false;
     const forceCleared =
       params.forceClear === true && (!aborted || !drained)
-        ? mocks.forceClearEmbeddedPiRun(params.sessionId, params.sessionKey, params.reason)
+        ? mocks.forceClearEmbeddedAgentRun(params.sessionId, params.sessionKey, params.reason)
         : false;
     return { aborted, drained, forceCleared };
   },
-  abortEmbeddedPiRun: mocks.abortEmbeddedPiRun,
-  forceClearEmbeddedPiRun: mocks.forceClearEmbeddedPiRun,
-  isEmbeddedPiRunActive: mocks.isEmbeddedPiRunActive,
-  isEmbeddedPiRunHandleActive: mocks.isEmbeddedPiRunHandleActive,
+  abortEmbeddedAgentRun: mocks.abortEmbeddedAgentRun,
+  forceClearEmbeddedAgentRun: mocks.forceClearEmbeddedAgentRun,
+  isEmbeddedAgentRunActive: mocks.isEmbeddedAgentRunActive,
+  isEmbeddedAgentRunHandleActive: mocks.isEmbeddedAgentRunHandleActive,
   resolveActiveEmbeddedRunSessionId: mocks.resolveActiveEmbeddedRunSessionId,
   resolveActiveEmbeddedRunHandleSessionId: mocks.resolveActiveEmbeddedRunHandleSessionId,
-  waitForEmbeddedPiRunEnd: mocks.waitForEmbeddedPiRunEnd,
+  waitForEmbeddedAgentRunEnd: mocks.waitForEmbeddedAgentRunEnd,
 }));
 
-vi.mock("../agents/pi-embedded-runner/lanes.js", () => ({
+vi.mock("../agents/embedded-agent-runner/lanes.js", () => ({
   resolveEmbeddedSessionLane: mocks.resolveEmbeddedSessionLane,
 }));
 
@@ -67,10 +67,10 @@ import {
 
 function resetMocks() {
   testing.resetRecoveriesInFlight();
-  mocks.abortEmbeddedPiRun.mockReset();
-  mocks.forceClearEmbeddedPiRun.mockReset();
-  mocks.isEmbeddedPiRunActive.mockReset();
-  mocks.isEmbeddedPiRunHandleActive.mockReset();
+  mocks.abortEmbeddedAgentRun.mockReset();
+  mocks.forceClearEmbeddedAgentRun.mockReset();
+  mocks.isEmbeddedAgentRunActive.mockReset();
+  mocks.isEmbeddedAgentRunHandleActive.mockReset();
   mocks.getCommandLaneSnapshot.mockReset();
   mocks.getCommandLaneSnapshot.mockReturnValue({
     lane: "session:agent:main:main",
@@ -84,7 +84,7 @@ function resetMocks() {
   mocks.resolveActiveEmbeddedRunSessionId.mockReset();
   mocks.resolveActiveEmbeddedRunHandleSessionId.mockReset();
   mocks.resolveEmbeddedSessionLane.mockClear();
-  mocks.waitForEmbeddedPiRunEnd.mockReset();
+  mocks.waitForEmbeddedAgentRunEnd.mockReset();
   mocks.diag.debug.mockReset();
   mocks.diag.warn.mockReset();
 }
@@ -111,9 +111,9 @@ describe("stuck session recovery", () => {
       queueDepth: 1,
     });
 
-    expect(mocks.abortEmbeddedPiRun).not.toHaveBeenCalled();
-    expect(mocks.waitForEmbeddedPiRunEnd).not.toHaveBeenCalled();
-    expect(mocks.forceClearEmbeddedPiRun).not.toHaveBeenCalled();
+    expect(mocks.abortEmbeddedAgentRun).not.toHaveBeenCalled();
+    expect(mocks.waitForEmbeddedAgentRunEnd).not.toHaveBeenCalled();
+    expect(mocks.forceClearEmbeddedAgentRun).not.toHaveBeenCalled();
     expect(mocks.resetCommandLane).not.toHaveBeenCalled();
     expect(warnLogMessages()).toEqual([
       "stuck session recovery skipped: sessionId=session-1 sessionKey=agent:main:main age=180s queueDepth=1 activeSessionId=session-1",
@@ -123,8 +123,8 @@ describe("stuck session recovery", () => {
 
   it("aborts an active embedded run when active abort recovery is enabled", async () => {
     mocks.resolveActiveEmbeddedRunHandleSessionId.mockReturnValue("session-1");
-    mocks.abortEmbeddedPiRun.mockReturnValue(true);
-    mocks.waitForEmbeddedPiRunEnd.mockResolvedValue(true);
+    mocks.abortEmbeddedAgentRun.mockReturnValue(true);
+    mocks.waitForEmbeddedAgentRunEnd.mockResolvedValue(true);
 
     await recoverStuckDiagnosticSession({
       sessionId: "session-1",
@@ -133,16 +133,16 @@ describe("stuck session recovery", () => {
       allowActiveAbort: true,
     });
 
-    expect(mocks.abortEmbeddedPiRun).toHaveBeenCalledWith("session-1");
-    expect(mocks.waitForEmbeddedPiRunEnd).toHaveBeenCalledWith("session-1", 15_000);
-    expect(mocks.forceClearEmbeddedPiRun).not.toHaveBeenCalled();
+    expect(mocks.abortEmbeddedAgentRun).toHaveBeenCalledWith("session-1");
+    expect(mocks.waitForEmbeddedAgentRunEnd).toHaveBeenCalledWith("session-1", 15_000);
+    expect(mocks.forceClearEmbeddedAgentRun).not.toHaveBeenCalled();
     expect(mocks.resetCommandLane).not.toHaveBeenCalled();
   });
 
   it("returns an abort outcome for a stale tool call on an active embedded run", async () => {
     mocks.resolveActiveEmbeddedRunHandleSessionId.mockReturnValue("session-tool");
-    mocks.abortEmbeddedPiRun.mockReturnValue(true);
-    mocks.waitForEmbeddedPiRunEnd.mockResolvedValue(true);
+    mocks.abortEmbeddedAgentRun.mockReturnValue(true);
+    mocks.waitForEmbeddedAgentRunEnd.mockResolvedValue(true);
 
     const outcome = await recoverStuckDiagnosticSession({
       sessionId: "session-tool",
@@ -164,8 +164,8 @@ describe("stuck session recovery", () => {
       forceCleared: false,
       released: 0,
     });
-    expect(mocks.abortEmbeddedPiRun).toHaveBeenCalledWith("session-tool");
-    expect(mocks.waitForEmbeddedPiRunEnd).toHaveBeenCalledWith("session-tool", 15_000);
+    expect(mocks.abortEmbeddedAgentRun).toHaveBeenCalledWith("session-tool");
+    expect(mocks.waitForEmbeddedAgentRunEnd).toHaveBeenCalledWith("session-tool", 15_000);
     expect(mocks.resetCommandLane).not.toHaveBeenCalled();
   });
 
@@ -191,8 +191,8 @@ describe("stuck session recovery", () => {
         }) + "\n",
       );
       mocks.resolveActiveEmbeddedRunHandleSessionId.mockReturnValue("run-456");
-      mocks.abortEmbeddedPiRun.mockReturnValue(true);
-      mocks.waitForEmbeddedPiRunEnd.mockResolvedValue(true);
+      mocks.abortEmbeddedAgentRun.mockReturnValue(true);
+      mocks.waitForEmbeddedAgentRunEnd.mockResolvedValue(true);
 
       await recoverStuckDiagnosticSession({
         sessionId: "run-456",
@@ -217,8 +217,8 @@ describe("stuck session recovery", () => {
 
   it("force-clears and releases the session lane when abort cleanup does not drain", async () => {
     mocks.resolveActiveEmbeddedRunHandleSessionId.mockReturnValue("session-1");
-    mocks.abortEmbeddedPiRun.mockReturnValue(true);
-    mocks.waitForEmbeddedPiRunEnd.mockResolvedValue(false);
+    mocks.abortEmbeddedAgentRun.mockReturnValue(true);
+    mocks.waitForEmbeddedAgentRunEnd.mockResolvedValue(false);
     mocks.resetCommandLane.mockReturnValue(1);
 
     await recoverStuckDiagnosticSession({
@@ -228,7 +228,7 @@ describe("stuck session recovery", () => {
       allowActiveAbort: true,
     });
 
-    expect(mocks.forceClearEmbeddedPiRun).toHaveBeenCalledWith(
+    expect(mocks.forceClearEmbeddedAgentRun).toHaveBeenCalledWith(
       "session-1",
       "agent:main:main",
       "stuck_recovery",
@@ -238,7 +238,7 @@ describe("stuck session recovery", () => {
 
   it("force-clears and releases the session lane when an active run cannot be aborted", async () => {
     mocks.resolveActiveEmbeddedRunHandleSessionId.mockReturnValue("session-1");
-    mocks.abortEmbeddedPiRun.mockReturnValue(false);
+    mocks.abortEmbeddedAgentRun.mockReturnValue(false);
     mocks.resetCommandLane.mockReturnValue(1);
 
     await recoverStuckDiagnosticSession({
@@ -248,8 +248,8 @@ describe("stuck session recovery", () => {
       allowActiveAbort: true,
     });
 
-    expect(mocks.waitForEmbeddedPiRunEnd).not.toHaveBeenCalled();
-    expect(mocks.forceClearEmbeddedPiRun).toHaveBeenCalledWith(
+    expect(mocks.waitForEmbeddedAgentRunEnd).not.toHaveBeenCalled();
+    expect(mocks.forceClearEmbeddedAgentRun).toHaveBeenCalledWith(
       "session-1",
       "agent:main:main",
       "stuck_recovery",
@@ -267,15 +267,15 @@ describe("stuck session recovery", () => {
       ageMs: 180_000,
     });
 
-    expect(mocks.abortEmbeddedPiRun).not.toHaveBeenCalled();
+    expect(mocks.abortEmbeddedAgentRun).not.toHaveBeenCalled();
     expect(mocks.resetCommandLane).toHaveBeenCalledWith("session:agent:main:main");
   });
 
   it("does not release the session lane while reply work is active without an embedded handle", async () => {
     mocks.resolveActiveEmbeddedRunSessionId.mockReturnValue("queued-reply-session");
     mocks.resolveActiveEmbeddedRunHandleSessionId.mockReturnValue(undefined);
-    mocks.isEmbeddedPiRunActive.mockReturnValue(true);
-    mocks.isEmbeddedPiRunHandleActive.mockReturnValue(false);
+    mocks.isEmbeddedAgentRunActive.mockReturnValue(true);
+    mocks.isEmbeddedAgentRunHandleActive.mockReturnValue(false);
 
     await recoverStuckDiagnosticSession({
       sessionId: "queued-reply-session",
@@ -284,8 +284,8 @@ describe("stuck session recovery", () => {
       queueDepth: 1,
     });
 
-    expect(mocks.abortEmbeddedPiRun).not.toHaveBeenCalled();
-    expect(mocks.forceClearEmbeddedPiRun).not.toHaveBeenCalled();
+    expect(mocks.abortEmbeddedAgentRun).not.toHaveBeenCalled();
+    expect(mocks.forceClearEmbeddedAgentRun).not.toHaveBeenCalled();
     expect(mocks.resetCommandLane).not.toHaveBeenCalled();
     expect(warnLogMessages()).toEqual([
       "stuck session recovery outcome: status=skipped action=keep_lane sessionId=queued-reply-session sessionKey=agent:main:main activeSessionId=queued-reply-session activeWorkKind=embedded_run reason=active_reply_work",
@@ -295,10 +295,10 @@ describe("stuck session recovery", () => {
   it("aborts stale reply work without an embedded handle when active abort recovery is enabled", async () => {
     mocks.resolveActiveEmbeddedRunSessionId.mockReturnValue("queued-reply-session");
     mocks.resolveActiveEmbeddedRunHandleSessionId.mockReturnValue(undefined);
-    mocks.isEmbeddedPiRunActive.mockReturnValue(true);
-    mocks.isEmbeddedPiRunHandleActive.mockReturnValue(false);
-    mocks.abortEmbeddedPiRun.mockReturnValue(true);
-    mocks.waitForEmbeddedPiRunEnd.mockResolvedValue(true);
+    mocks.isEmbeddedAgentRunActive.mockReturnValue(true);
+    mocks.isEmbeddedAgentRunHandleActive.mockReturnValue(false);
+    mocks.abortEmbeddedAgentRun.mockReturnValue(true);
+    mocks.waitForEmbeddedAgentRunEnd.mockResolvedValue(true);
 
     await recoverStuckDiagnosticSession({
       sessionId: "queued-reply-session",
@@ -308,9 +308,9 @@ describe("stuck session recovery", () => {
       allowActiveAbort: true,
     });
 
-    expect(mocks.abortEmbeddedPiRun).toHaveBeenCalledWith("queued-reply-session");
-    expect(mocks.waitForEmbeddedPiRunEnd).toHaveBeenCalledWith("queued-reply-session", 15_000);
-    expect(mocks.forceClearEmbeddedPiRun).not.toHaveBeenCalled();
+    expect(mocks.abortEmbeddedAgentRun).toHaveBeenCalledWith("queued-reply-session");
+    expect(mocks.waitForEmbeddedAgentRunEnd).toHaveBeenCalledWith("queued-reply-session", 15_000);
+    expect(mocks.forceClearEmbeddedAgentRun).not.toHaveBeenCalled();
     expect(mocks.resetCommandLane).not.toHaveBeenCalled();
     expect(warnLogMessages()).toEqual([
       "stuck session recovery: sessionId=queued-reply-session sessionKey=agent:main:main age=720s action=abort_embedded_run aborted=true drained=true released=0",
@@ -321,11 +321,11 @@ describe("stuck session recovery", () => {
   it("reports queued lane work when aborting active work releases a lane", async () => {
     mocks.resolveActiveEmbeddedRunSessionId.mockReturnValue("queued-reply-session");
     mocks.resolveActiveEmbeddedRunHandleSessionId.mockReturnValue(undefined);
-    mocks.isEmbeddedPiRunActive.mockReturnValue(true);
-    mocks.isEmbeddedPiRunHandleActive.mockReturnValue(false);
-    mocks.abortEmbeddedPiRun.mockReturnValue(false);
-    mocks.forceClearEmbeddedPiRun.mockReturnValue(true);
-    mocks.waitForEmbeddedPiRunEnd.mockResolvedValue(false);
+    mocks.isEmbeddedAgentRunActive.mockReturnValue(true);
+    mocks.isEmbeddedAgentRunHandleActive.mockReturnValue(false);
+    mocks.abortEmbeddedAgentRun.mockReturnValue(false);
+    mocks.forceClearEmbeddedAgentRun.mockReturnValue(true);
+    mocks.waitForEmbeddedAgentRunEnd.mockResolvedValue(false);
     mocks.resetCommandLane.mockReturnValue(1);
     mocks.getCommandLaneSnapshot.mockReturnValue({
       lane: "session:agent:main:main",
@@ -358,8 +358,8 @@ describe("stuck session recovery", () => {
   it("does not release the session lane while unregistered lane work is active", async () => {
     mocks.resolveActiveEmbeddedRunSessionId.mockReturnValue(undefined);
     mocks.resolveActiveEmbeddedRunHandleSessionId.mockReturnValue(undefined);
-    mocks.isEmbeddedPiRunActive.mockReturnValue(false);
-    mocks.isEmbeddedPiRunHandleActive.mockReturnValue(false);
+    mocks.isEmbeddedAgentRunActive.mockReturnValue(false);
+    mocks.isEmbeddedAgentRunHandleActive.mockReturnValue(false);
     mocks.getCommandLaneSnapshot.mockReturnValue({
       lane: "session:agent:main:main",
       queuedCount: 1,
@@ -376,8 +376,8 @@ describe("stuck session recovery", () => {
       queueDepth: 1,
     });
 
-    expect(mocks.abortEmbeddedPiRun).not.toHaveBeenCalled();
-    expect(mocks.forceClearEmbeddedPiRun).not.toHaveBeenCalled();
+    expect(mocks.abortEmbeddedAgentRun).not.toHaveBeenCalled();
+    expect(mocks.forceClearEmbeddedAgentRun).not.toHaveBeenCalled();
     expect(mocks.resetCommandLane).not.toHaveBeenCalled();
     expect(warnLogMessages()).toEqual([
       "stuck session recovery outcome: status=skipped action=keep_lane sessionId=unregistered-work-session sessionKey=agent:main:main lane=session:agent:main:main reason=active_lane_task laneActive=1 laneQueued=1",
@@ -387,7 +387,7 @@ describe("stuck session recovery", () => {
   it("reports when recovery finds no active work to release", async () => {
     mocks.resolveActiveEmbeddedRunHandleSessionId.mockReturnValue(undefined);
     mocks.resolveActiveEmbeddedRunSessionId.mockReturnValue(undefined);
-    mocks.isEmbeddedPiRunActive.mockReturnValue(false);
+    mocks.isEmbeddedAgentRunActive.mockReturnValue(false);
     mocks.resetCommandLane.mockReturnValue(0);
 
     await recoverStuckDiagnosticSession({
@@ -405,7 +405,7 @@ describe("stuck session recovery", () => {
   it("clears stale queued processing state even when the lane has no active work", async () => {
     mocks.resolveActiveEmbeddedRunHandleSessionId.mockReturnValue(undefined);
     mocks.resolveActiveEmbeddedRunSessionId.mockReturnValue(undefined);
-    mocks.isEmbeddedPiRunActive.mockReturnValue(false);
+    mocks.isEmbeddedAgentRunActive.mockReturnValue(false);
     mocks.resetCommandLane.mockReturnValue(0);
 
     await recoverStuckDiagnosticSession({
@@ -423,7 +423,7 @@ describe("stuck session recovery", () => {
   });
 
   it("releases a stale session-id lane when no session key is available", async () => {
-    mocks.isEmbeddedPiRunHandleActive.mockReturnValue(false);
+    mocks.isEmbeddedAgentRunHandleActive.mockReturnValue(false);
     mocks.resetCommandLane.mockReturnValue(1);
 
     await recoverStuckDiagnosticSession({
@@ -431,7 +431,7 @@ describe("stuck session recovery", () => {
       ageMs: 180_000,
     });
 
-    expect(mocks.abortEmbeddedPiRun).not.toHaveBeenCalled();
+    expect(mocks.abortEmbeddedAgentRun).not.toHaveBeenCalled();
     expect(mocks.resolveEmbeddedSessionLane).toHaveBeenCalledWith("session-only");
     expect(mocks.resetCommandLane).toHaveBeenCalledWith("session:session-only");
   });
@@ -442,8 +442,8 @@ describe("stuck session recovery", () => {
       resolveWait = resolve;
     });
     mocks.resolveActiveEmbeddedRunHandleSessionId.mockReturnValue("session-1");
-    mocks.abortEmbeddedPiRun.mockReturnValue(true);
-    mocks.waitForEmbeddedPiRunEnd.mockReturnValue(waitPromise);
+    mocks.abortEmbeddedAgentRun.mockReturnValue(true);
+    mocks.waitForEmbeddedAgentRunEnd.mockReturnValue(waitPromise);
 
     const first = recoverStuckDiagnosticSession({
       sessionId: "session-1",
@@ -458,7 +458,7 @@ describe("stuck session recovery", () => {
       allowActiveAbort: true,
     });
 
-    expect(mocks.abortEmbeddedPiRun).toHaveBeenCalledTimes(1);
+    expect(mocks.abortEmbeddedAgentRun).toHaveBeenCalledTimes(1);
     if (!resolveWait) {
       throw new Error("Expected diagnostic recovery wait resolver to be initialized");
     }

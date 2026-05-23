@@ -1,4 +1,4 @@
-import { completeSimple, type Api, type Model } from "@earendil-works/pi-ai";
+import { completeSimple, type Api, type Model } from "openclaw/plugin-sdk/llm";
 import { isTruthyEnvValue } from "../infra/env.js";
 
 const LIVE_OK_PROMPT = "Reply with the word ok.";

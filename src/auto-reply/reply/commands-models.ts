@@ -86,7 +86,7 @@ function usesUnfilteredCatalogModels(provider: string): boolean {
 function normalizeRuntimeChoiceId(runtime: string | undefined): string {
   const normalized = normalizeLowercaseStringOrEmpty(runtime);
   if (!normalized || normalized === "auto" || normalized === "default") {
-    return "pi";
+    return "openclaw";
   }
   return normalized;
 }
@@ -103,8 +103,8 @@ function buildRuntimeChoice(params: {
     id,
     label,
     description:
-      id === "pi"
-        ? "Use the built-in OpenClaw Pi runtime."
+      id === "openclaw"
+        ? "Use the built-in OpenClaw runtime."
         : params.cli
           ? `Run ${params.provider} models through ${label}.`
           : `Use the ${label} runtime selected by the effective harness policy.`,
@@ -300,7 +300,7 @@ export async function buildModelsProviderData(
         modelId: defaultModelId,
       }),
     ];
-    addRuntimeChoice(choices, buildRuntimeChoice({ cfg, provider, runtime: "pi" }));
+    addRuntimeChoice(choices, buildRuntimeChoice({ cfg, provider, runtime: "openclaw" }));
     addRuntimeChoice(
       choices,
       buildRuntimeChoice({

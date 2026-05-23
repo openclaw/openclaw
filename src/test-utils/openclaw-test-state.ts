@@ -59,7 +59,6 @@ const ENV_KEYS = [
   "OPENCLAW_STATE_DIR",
   "OPENCLAW_CONFIG_PATH",
   "OPENCLAW_AGENT_DIR",
-  "PI_CODING_AGENT_DIR",
   "OPENCLAW_SERVICE_REPAIR_POLICY",
 ] as const;
 
@@ -201,11 +200,9 @@ function buildEnvVars(params: {
     params.agentEnv === "main"
       ? {
           OPENCLAW_AGENT_DIR: params.agentDir,
-          PI_CODING_AGENT_DIR: params.agentDir,
         }
       : {
           OPENCLAW_AGENT_DIR: undefined,
-          PI_CODING_AGENT_DIR: undefined,
         };
   const envVars: Record<string, string | undefined> = {
     OPENCLAW_STATE_DIR: params.stateDir,

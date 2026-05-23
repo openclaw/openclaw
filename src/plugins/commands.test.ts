@@ -336,7 +336,7 @@ describe("registerPluginCommand", () => {
       expected: {
         ok: false,
         error:
-          "Agent prompt guidance 1 surface 1 must be one of: pi_main, codex_app_server, cli_backend, acp_backend, subagent",
+          "Agent prompt guidance 1 surface 1 must be one of: openclaw_main, pi_main, codex_app_server, cli_backend, acp_backend, subagent",
       },
     },
     {
@@ -416,7 +416,7 @@ describe("registerPluginCommand", () => {
         "  Use /demo_cmd everywhere.  ",
         {
           text: "  Use /demo_cmd for main agent routing.  ",
-          surfaces: ["pi_main"],
+          surfaces: ["openclaw_main"],
         },
         {
           text: "Use /demo_cmd for subagents.",
@@ -431,6 +431,10 @@ describe("registerPluginCommand", () => {
       "Use /demo_cmd everywhere.",
       "Use /demo_cmd for main agent routing.",
       "Use /demo_cmd for subagents.",
+    ]);
+    expect(listRegisteredPluginAgentPromptGuidance({ surface: "openclaw_main" })).toEqual([
+      "Use /demo_cmd everywhere.",
+      "Use /demo_cmd for main agent routing.",
     ]);
     expect(listRegisteredPluginAgentPromptGuidance({ surface: "pi_main" })).toEqual([
       "Use /demo_cmd everywhere.",

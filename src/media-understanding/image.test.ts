@@ -76,9 +76,9 @@ function requireRecord(value: unknown, label: string): Record<string, unknown> {
   return value as Record<string, unknown>;
 }
 
-vi.mock("@earendil-works/pi-ai", async () => {
+vi.mock("openclaw/plugin-sdk/llm", async () => {
   const actual =
-    await vi.importActual<typeof import("@earendil-works/pi-ai")>("@earendil-works/pi-ai");
+    await vi.importActual<typeof import("openclaw/plugin-sdk/llm")>("openclaw/plugin-sdk/llm");
   return {
     ...actual,
     complete: completeMock,
@@ -102,7 +102,7 @@ vi.mock("../agents/provider-stream.js", () => ({
   registerProviderStreamForModel: registerProviderStreamForModelMock,
 }));
 
-vi.mock("../agents/pi-model-discovery-runtime.js", () => ({
+vi.mock("../agents/agent-model-discovery.js", () => ({
   discoverAuthStorage: () => ({
     setRuntimeApiKey: setRuntimeApiKeyMock,
   }),
@@ -116,7 +116,7 @@ vi.mock("../plugins/provider-runtime.js", async () => ({
   prepareProviderDynamicModel: prepareProviderDynamicModelMock,
 }));
 
-vi.mock("../agents/pi-embedded-runner/model.js", () => ({
+vi.mock("../agents/embedded-agent-runner/model.js", () => ({
   resolveModelAsync: resolveModelAsyncMock,
 }));
 
@@ -505,7 +505,7 @@ describe("describeImageWithModel", () => {
       {},
       {
         allowBundledStaticCatalogFallback: true,
-        skipPiDiscovery: true,
+        skipAgentDiscovery: true,
         skipProviderRuntimeHooks: true,
         workspaceDir: "/tmp/openclaw-workspace",
       },
@@ -581,7 +581,7 @@ describe("describeImageWithModel", () => {
       {},
       {
         allowBundledStaticCatalogFallback: true,
-        skipPiDiscovery: true,
+        skipAgentDiscovery: true,
         skipProviderRuntimeHooks: true,
       },
     );
@@ -593,7 +593,7 @@ describe("describeImageWithModel", () => {
       {},
       {
         allowBundledStaticCatalogFallback: true,
-        skipPiDiscovery: true,
+        skipAgentDiscovery: true,
       },
     );
     const [completeModel] = requireFirstMockCall(completeMock, "complete");

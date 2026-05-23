@@ -1,0 +1,56 @@
+import type { SessionEntry } from "../config/sessions.js";
+import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
+import { isDefaultAgentRuntimeId } from "./agent-runtime-id.js";
+import { normalizeOptionalAgentRuntimeId } from "./agent-runtime-id.js";
+import { listLegacyRuntimeModelProviderAliases } from "./model-runtime-aliases.js";
+import { resolveContextConfigProviderForRuntime } from "./openai-codex-routing.js";
+
+export type SessionRuntimeCompatEntry = Pick<
+  SessionEntry,
+  "agentHarnessId" | "agentRuntimeOverride"
+>;
+
+export function resolvePersistedSessionRuntimeId(
+  entry?: SessionRuntimeCompatEntry,
+): string | undefined {
+  const runtimeOverride = normalizeOptionalAgentRuntimeId(entry?.agentRuntimeOverride);
+  if (runtimeOverride && !isDefaultAgentRuntimeId(runtimeOverride)) {
+    return runtimeOverride;
+  }
+  return normalizeOptionalAgentRuntimeId(entry?.agentHarnessId);
+}
+
+export function resolveSessionRuntimeOverrideForProvider(params: {
+  provider: string;
+  entry?: Pick<SessionEntry, "agentRuntimeOverride">;
+}): string | undefined {
+  const provider = normalizeLowercaseStringOrEmpty(params.provider);
+  const runtime = normalizeOptionalAgentRuntimeId(params.entry?.agentRuntimeOverride);
+  if (!runtime || isDefaultAgentRuntimeId(runtime)) {
+    return undefined;
+  }
+  if (runtime === "openclaw") {
+    return "openclaw";
+  }
+  if (provider === "openai" && runtime === "codex") {
+    return "codex";
+  }
+  return listLegacyRuntimeModelProviderAliases().find(
+    (alias) =>
+      normalizeLowercaseStringOrEmpty(alias.provider) === provider &&
+      normalizeLowercaseStringOrEmpty(alias.runtime) === runtime,
+  )?.runtime;
+}
+
+export function resolveContextConfigProviderForSessionRuntime(params: {
+  provider: string;
+  entry?: SessionRuntimeCompatEntry;
+}): string | undefined {
+  const runtimeId = resolvePersistedSessionRuntimeId(params.entry);
+  return runtimeId
+    ? resolveContextConfigProviderForRuntime({
+        provider: params.provider,
+        runtimeId,
+      })
+    : undefined;
+}

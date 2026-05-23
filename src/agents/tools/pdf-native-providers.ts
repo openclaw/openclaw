@@ -1,6 +1,6 @@
 /**
  * Direct SDK/HTTP calls for providers that support native PDF document input.
- * This bypasses pi-ai's content type system which does not have a "document" type.
+ * This bypasses shared model runtime's content type system which does not have a "document" type.
  */
 
 import { normalizeProviderTransportWithPlugin } from "../../plugins/provider-runtime.js";

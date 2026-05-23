@@ -1,7 +1,7 @@
+import { sanitizeServerName, TOOL_NAME_SEPARATOR } from "../../../agents/agent-bundle-mcp-names.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../../../agents/defaults.js";
 import { compileGlobPatterns, matchesAnyGlobPattern } from "../../../agents/glob-pattern.js";
 import { parseModelRef } from "../../../agents/model-selection-normalize.js";
-import { sanitizeServerName, TOOL_NAME_SEPARATOR } from "../../../agents/pi-bundle-mcp-names.js";
 import { normalizeProviderId } from "../../../agents/provider-id.js";
 import {
   mergeAlsoAllowPolicy,

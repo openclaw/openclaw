@@ -149,7 +149,7 @@ function configure() {
         api: "openai-responses",
         baseUrl: (process.env.OPENAI_BASE_URL || "https://api.openai.com/v1").trim(),
         apiKey: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
-        agentRuntime: { id: "pi" },
+        agentRuntime: { id: "openclaw" },
         timeoutSeconds: agentTurnTimeoutSeconds,
         models: [
           {
@@ -176,7 +176,7 @@ function configure() {
         ...cfg.agents?.defaults?.models,
         [modelRef]: {
           ...cfg.agents?.defaults?.models?.[modelRef],
-          agentRuntime: { id: "pi" },
+          agentRuntime: { id: "openclaw" },
           params: { transport: "sse", openaiWsWarmup: false },
         },
       },

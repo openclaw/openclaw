@@ -20,7 +20,7 @@ docsRefs:
   - docs/help/gpt55-codex-agentic-parity.md
 codeRefs:
   - extensions/qa-lab/src/mock-openai-server.ts
-  - src/agents/pi-embedded-runner/run/incomplete-turn.ts
+  - src/agents/embedded-agent-runner/run/incomplete-turn.ts
 execution:
   kind: flow
   summary: Verify reasoning-only turns after a write do not auto-retry.

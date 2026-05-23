@@ -1,7 +1,7 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const state = vi.hoisted(() => ({
-  abortEmbeddedPiRunMock: vi.fn(),
+  abortEmbeddedAgentRunMock: vi.fn(),
   requestEmbeddedRunModelSwitchMock: vi.fn(),
   consumeEmbeddedRunModelSwitchMock: vi.fn(),
   resolveDefaultModelForAgentMock: vi.fn(),
@@ -9,16 +9,16 @@ const state = vi.hoisted(() => ({
   loadSessionStoreMock: vi.fn(),
   resolveStorePathMock: vi.fn(),
   updateSessionStoreMock: vi.fn(),
-  piEmbeddedModuleImported: false,
+  embeddedAgentModuleImported: false,
 }));
 
-vi.mock("./pi-embedded.js", () => {
-  state.piEmbeddedModuleImported = true;
+vi.mock("./embedded-agent.js", () => {
+  state.embeddedAgentModuleImported = true;
   return {};
 });
 
-vi.mock("./pi-embedded-runner/runs.js", () => ({
-  abortEmbeddedPiRun: (...args: unknown[]) => state.abortEmbeddedPiRunMock(...args),
+vi.mock("./embedded-agent-runner/runs.js", () => ({
+  abortEmbeddedAgentRun: (...args: unknown[]) => state.abortEmbeddedAgentRunMock(...args),
   requestEmbeddedRunModelSwitch: (...args: unknown[]) =>
     state.requestEmbeddedRunModelSwitchMock(...args),
   consumeEmbeddedRunModelSwitch: (...args: unknown[]) =>
@@ -81,10 +81,10 @@ describe("live model switch", () => {
   });
 
   beforeEach(() => {
-    state.abortEmbeddedPiRunMock.mockReset().mockReturnValue(false);
+    state.abortEmbeddedAgentRunMock.mockReset().mockReturnValue(false);
     state.requestEmbeddedRunModelSwitchMock.mockReset();
     state.consumeEmbeddedRunModelSwitchMock.mockReset();
-    state.piEmbeddedModuleImported = false;
+    state.embeddedAgentModuleImported = false;
     state.resolveDefaultModelForAgentMock
       .mockReset()
       .mockReturnValue({ provider: "anthropic", model: "claude-opus-4-6" });
@@ -337,7 +337,7 @@ describe("live model switch", () => {
   });
 
   it("queues a live switch only when an active run was aborted", async () => {
-    state.abortEmbeddedPiRunMock.mockReturnValue(true);
+    state.abortEmbeddedAgentRunMock.mockReturnValue(true);
 
     const { requestLiveSessionModelSwitch } = await loadModule();
 
@@ -347,7 +347,7 @@ describe("live model switch", () => {
         selection: { provider: "openai", model: "gpt-5.4", authProfileId: "profile-gpt" },
       }),
     ).toBe(true);
-    expect(state.abortEmbeddedPiRunMock).toHaveBeenCalledWith("session-1");
+    expect(state.abortEmbeddedAgentRunMock).toHaveBeenCalledWith("session-1");
     expect(state.requestEmbeddedRunModelSwitchMock).toHaveBeenCalledWith("session-1", {
       provider: "openai",
       model: "gpt-5.4",
@@ -355,10 +355,10 @@ describe("live model switch", () => {
     });
   });
 
-  it("does not import the broad pi-embedded barrel on module load", async () => {
+  it("does not import the broad embedded-agent barrel on module load", async () => {
     await loadModule();
 
-    expect(state.piEmbeddedModuleImported).toBe(false);
+    expect(state.embeddedAgentModuleImported).toBe(false);
   });
 
   it("treats auth-profile-source changes as no-op when no auth profile is selected", async () => {

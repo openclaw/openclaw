@@ -469,7 +469,7 @@ export async function runGatewayLoop(params: {
             "restart.drain",
             async () => {
               const {
-                abortEmbeddedPiRun,
+                abortEmbeddedAgentRun,
                 getRuntimeConfig,
                 getInspectableActiveTaskRestartBlockers,
                 getActiveEmbeddedRunCount,
@@ -555,7 +555,7 @@ export async function runGatewayLoop(params: {
               // Best-effort abort for compacting runs so long compaction operations
               // don't hold session write locks across restart boundaries.
               if (activeRuns > 0) {
-                abortEmbeddedPiRun(undefined, { mode: "compacting" });
+                abortEmbeddedAgentRun(undefined, { mode: "compacting" });
               }
 
               if (activeTasks > 0 || activeRuns > 0) {
@@ -571,7 +571,7 @@ export async function runGatewayLoop(params: {
                 if (restartIntent?.force) {
                   gatewayLog.warn("forced restart requested; skipping active work drain");
                   await markActiveMainSessionsForRestart("forced gateway restart");
-                  abortEmbeddedPiRun(undefined, { mode: "all" });
+                  abortEmbeddedAgentRun(undefined, { mode: "all" });
                 } else {
                   const activeRunDrainWaitMs = resolveActiveRunDrainWaitMs(activeRuns);
                   const stillPendingDrainLogger = createStillPendingDrainLogger();
@@ -591,7 +591,7 @@ export async function runGatewayLoop(params: {
                       gatewayLog.warn(
                         "active embedded run drain grace reached; aborting active run(s) before restart",
                       );
-                      abortEmbeddedPiRun(undefined, { mode: "all" });
+                      abortEmbeddedAgentRun(undefined, { mode: "all" });
                       abortedAfterRunGrace = true;
                     }
                     tasksDrain = await tasksDrainPromise;
@@ -607,7 +607,7 @@ export async function runGatewayLoop(params: {
                     // Final best-effort abort to avoid carrying active runs into the
                     // next lifecycle when drain time budget is exhausted.
                     if (!abortedAfterRunGrace) {
-                      abortEmbeddedPiRun(undefined, { mode: "all" });
+                      abortEmbeddedAgentRun(undefined, { mode: "all" });
                     }
                   }
                 }

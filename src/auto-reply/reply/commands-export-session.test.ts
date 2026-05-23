@@ -56,7 +56,7 @@ vi.mock("node:fs", async () => {
       if (filePath.includes("/export-html/")) {
         return actual.readFileSync(filePath, "utf8");
       }
-      return "";
+      return actual.readFileSync(filePath, "utf8");
     }),
   };
   return {

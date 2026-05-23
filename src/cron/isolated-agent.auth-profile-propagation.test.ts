@@ -2,7 +2,7 @@ import "./isolated-agent.mocks.js";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { runEmbeddedPiAgent } from "../agents/pi-embedded.js";
+import { runEmbeddedAgent } from "../agents/embedded-agent.js";
 import { createCliDeps } from "./isolated-agent.delivery.test-helpers.js";
 import { runCronIsolatedAgentTurn } from "./isolated-agent.js";
 import {
@@ -17,17 +17,17 @@ vi.mock("../plugins/provider-runtime.js", () => ({
   resolveExternalAuthProfilesWithPlugins: () => [],
 }));
 
-function getEmbeddedPiAgentParams(): {
+function getEmbeddedAgentParams(): {
   authProfileId?: string;
   authProfileIdSource?: string;
 } {
-  const [call] = vi.mocked(runEmbeddedPiAgent).mock.calls;
+  const [call] = vi.mocked(runEmbeddedAgent).mock.calls;
   if (!call) {
-    throw new Error("Expected embedded PI agent call for auth profile propagation");
+    throw new Error("Expected embedded OpenClaw agent call for auth profile propagation");
   }
   const [params] = call;
   if (typeof params !== "object" || params === null || Array.isArray(params)) {
-    throw new Error("Expected embedded PI agent params to be an object");
+    throw new Error("Expected embedded OpenClaw agent params to be an object");
   }
   return params;
 }
@@ -37,7 +37,7 @@ describe("runCronIsolatedAgentTurn auth profile propagation (#20624)", () => {
     setupIsolatedAgentTurnMocks({ fast: true });
   });
 
-  it("passes authProfileId to runEmbeddedPiAgent when auth profiles exist", async () => {
+  it("passes authProfileId to runEmbeddedAgent when auth profiles exist", async () => {
     await withTempCronHome(async (home) => {
       const storePath = await writeSessionStore(home, { lastProvider: "webchat", lastTo: "" });
 
@@ -64,8 +64,8 @@ describe("runCronIsolatedAgentTurn auth profile propagation (#20624)", () => {
         "utf-8",
       );
 
-      // 3. Mock runEmbeddedPiAgent to return ok
-      vi.mocked(runEmbeddedPiAgent).mockResolvedValue({
+      // 3. Mock runEmbeddedAgent to return ok
+      vi.mocked(runEmbeddedAgent).mockResolvedValue({
         payloads: [{ text: "done" }],
         meta: {
           durationMs: 5,
@@ -96,10 +96,10 @@ describe("runCronIsolatedAgentTurn auth profile propagation (#20624)", () => {
       });
 
       expect(res.status).toBe("ok");
-      expect(vi.mocked(runEmbeddedPiAgent)).toHaveBeenCalledTimes(1);
+      expect(vi.mocked(runEmbeddedAgent)).toHaveBeenCalledTimes(1);
 
       // 5. Check that authProfileId was passed
-      const callArgs = getEmbeddedPiAgentParams();
+      const callArgs = getEmbeddedAgentParams();
 
       expect(callArgs.authProfileId).toBe("openrouter:default");
     });

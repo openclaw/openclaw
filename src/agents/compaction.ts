@@ -1,9 +1,3 @@
-import type { AgentMessage } from "@earendil-works/pi-agent-core";
-import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
-import {
-  estimateTokens,
-  generateSummary as piGenerateSummary,
-} from "@earendil-works/pi-coding-agent";
 import type { AgentCompactionIdentifierPolicy } from "../config/types.agent-defaults.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { retryAsync } from "../infra/retry.js";
@@ -12,7 +6,10 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import { DEFAULT_CONTEXT_TOKENS } from "./defaults.js";
 import { isTimeoutError } from "./failover-error.js";
 import { stripRuntimeContextCustomMessages } from "./internal-runtime-context.js";
+import type { AgentMessage } from "./runtime/index.js";
 import { repairToolUseResultPairing, stripToolResultDetails } from "./session-transcript-repair.js";
+import type { ExtensionContext } from "./sessions/index.js";
+import { estimateTokens, generateSummary as agentGenerateSummary } from "./sessions/index.js";
 import { extractToolCallsFromAssistant, extractToolResultId } from "./tool-call-id.js";
 
 const log = createSubsystemLogger("compaction");
@@ -83,7 +80,7 @@ type GenerateSummaryCompat = {
   ): Promise<string>;
 };
 
-const generateSummaryCompat = piGenerateSummary as unknown as GenerateSummaryCompat;
+const generateSummaryCompat = agentGenerateSummary as unknown as GenerateSummaryCompat;
 
 function resolveIdentifierPreservationInstructions(
   instructions?: CompactionSummarizationInstructions,
@@ -372,7 +369,7 @@ function generateSummary(
   customInstructions?: string,
   previousSummary?: string,
 ): Promise<string> {
-  if (piGenerateSummary.length >= 8) {
+  if (agentGenerateSummary.length >= 8) {
     return generateSummaryCompat(
       currentMessages,
       model,

@@ -19,7 +19,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import * as v8 from "node:v8";
-import { abortable as productionAbortable } from "../src/agents/pi-embedded-runner/run/abortable.js";
+import { abortable as productionAbortable } from "../src/agents/embedded-agent-runner/run/abortable.js";
 
 type Mode = "production" | "closure-extracted" | "closure-inline" | "synthetic-leak";
 

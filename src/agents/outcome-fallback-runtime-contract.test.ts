@@ -5,14 +5,14 @@ import {
 } from "openclaw/plugin-sdk/agent-runtime-test-contracts";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { classifyEmbeddedAgentRunResultForModelFallback } from "./embedded-agent-runner/result-fallback-classifier.js";
 import { runWithModelFallback } from "./model-fallback.js";
-import { classifyEmbeddedPiRunResultForModelFallback } from "./pi-embedded-runner/result-fallback-classifier.js";
 
 vi.mock("./auth-profiles/source-check.js", () => ({
   hasAnyAuthProfileStoreSource: () => false,
 }));
 
-describe("Outcome/fallback runtime contract - Pi fallback classifier", () => {
+describe("Outcome/fallback runtime contract - embedded runtime fallback classifier", () => {
   beforeAll(async () => {
     await runWithModelFallback({
       cfg: {} as OpenClawConfig,
@@ -32,7 +32,7 @@ describe("Outcome/fallback runtime contract - Pi fallback classifier", () => {
   it.each(fallbackClassificationCases)(
     "maps harness classification %s to a format fallback code",
     (classification, code) => {
-      const fallback = classifyEmbeddedPiRunResultForModelFallback({
+      const fallback = classifyEmbeddedAgentRunResultForModelFallback({
         provider: OUTCOME_FALLBACK_RUNTIME_CONTRACT.primaryProvider,
         model: OUTCOME_FALLBACK_RUNTIME_CONTRACT.primaryModel,
         result: createContractRunResult({
@@ -69,7 +69,7 @@ describe("Outcome/fallback runtime contract - Pi fallback classifier", () => {
       model: OUTCOME_FALLBACK_RUNTIME_CONTRACT.primaryModel,
       run,
       classifyResult: ({ provider, model, result }) =>
-        classifyEmbeddedPiRunResultForModelFallback({
+        classifyEmbeddedAgentRunResultForModelFallback({
           provider,
           model,
           result,
@@ -162,7 +162,7 @@ describe("Outcome/fallback runtime contract - Pi fallback classifier", () => {
   it("does not classify terminal results with visible output or side effects as fallbacks", () => {
     for (const contractCase of nonFallbackCases) {
       expect(
-        classifyEmbeddedPiRunResultForModelFallback({
+        classifyEmbeddedAgentRunResultForModelFallback({
           provider: OUTCOME_FALLBACK_RUNTIME_CONTRACT.primaryProvider,
           model: OUTCOME_FALLBACK_RUNTIME_CONTRACT.primaryModel,
           result: contractCase.result,
@@ -182,7 +182,7 @@ describe("Outcome/fallback runtime contract - Pi fallback classifier", () => {
       model: OUTCOME_FALLBACK_RUNTIME_CONTRACT.primaryModel,
       run,
       classifyResult: ({ provider, model, result }) =>
-        classifyEmbeddedPiRunResultForModelFallback({
+        classifyEmbeddedAgentRunResultForModelFallback({
           provider,
           model,
           result,
