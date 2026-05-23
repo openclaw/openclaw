@@ -1028,6 +1028,62 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     expect(assistantEntries).toStrictEqual([]);
   });
 
+  it("does not broadcast an error terminal after an internal-ui source reply final", async () => {
+    createTranscriptFixture("openclaw-chat-send-agent-source-reply-error-");
+    mockState.triggerAgentRunStart = true;
+    const sourceReply = setReplyPayloadMetadata(
+      {
+        text: "Codex source reply",
+      },
+      {
+        sourceReplyTranscriptMirror: {
+          sessionKey: "main",
+          text: "Codex source reply",
+          idempotencyKey: "idem-agent-source-reply-error:internal-source-reply:0",
+        },
+      },
+    );
+    mockState.dispatchedReplies = [
+      {
+        kind: "final",
+        payload: sourceReply,
+      },
+      {
+        kind: "final",
+        payload: {
+          text: "tool warning",
+          isError: true,
+        },
+      },
+    ];
+    const respond = vi.fn();
+    const context = createChatContext();
+
+    const broadcast = await runNonStreamingChatSend({
+      context,
+      respond,
+      idempotencyKey: "idem-agent-source-reply-error",
+      message: "hello from codex",
+    });
+
+    expect(broadcast).toMatchObject({
+      runId: "idem-agent-source-reply-error",
+      sessionKey: "main",
+      state: "final",
+    });
+    expect(extractFirstTextBlock(broadcast)).toBe("Codex source reply");
+    const errorBroadcasts = (
+      context.broadcast as unknown as ReturnType<typeof vi.fn>
+    ).mock.calls.filter(([, payload]) => (payload as { state?: unknown })?.state === "error");
+    expect(errorBroadcasts).toStrictEqual([]);
+    const dedupe = context.dedupe.get("chat:idem-agent-source-reply-error");
+    expect(dedupe?.ok).toBe(true);
+    expect(dedupe?.payload).toMatchObject({
+      runId: "idem-agent-source-reply-error",
+      status: "ok",
+    });
+  });
+
   it("broadcasts returned agent-run error payloads after an agent starts", async () => {
     createTranscriptFixture("openclaw-chat-send-agent-returned-error-");
     const errorMessage = "LLM idle timeout (120s): no response from model";

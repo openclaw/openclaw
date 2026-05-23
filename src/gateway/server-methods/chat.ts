@@ -2875,6 +2875,7 @@ export const chatHandlers: GatewayRequestHandlers = {
                   .map((payload) => payload.text?.trim())
                   .filter((text): text is string => Boolean(text))
                   .join(" | ") || undefined;
+              let broadcastedSourceReplyFinal = false;
               // WebChat persistence has two owners. Agent runs persist model-visible turns
               // through Pi's SessionManager; this dispatcher only owns live delivery payloads.
               // Do not blindly mirror agent-run final payloads into JSONL or chat.history can
@@ -3151,10 +3152,13 @@ export const chatHandlers: GatewayRequestHandlers = {
                       sessionKey,
                       message,
                     });
+                    broadcastedSourceReplyFinal = true;
                   }
                 }
               }
-              if (returnedAgentErrorPayloads.length > 0) {
+              const shouldBroadcastAgentError =
+                returnedAgentErrorPayloads.length > 0 && !broadcastedSourceReplyFinal;
+              if (shouldBroadcastAgentError) {
                 if (!hasBeforeAgentRunGate) {
                   await emitUserTranscriptUpdateAfterAgentRun();
                 }
@@ -3168,27 +3172,25 @@ export const chatHandlers: GatewayRequestHandlers = {
                 await emitUserTranscriptUpdateAfterAgentRun();
               }
               if (!context.chatAbortedRuns.has(clientRunId)) {
-                const returnedAgentError =
-                  returnedAgentErrorPayloads.length > 0
-                    ? errorShape(
-                        ErrorCodes.UNAVAILABLE,
-                        returnedAgentErrorMessage ?? "agent returned an error payload",
-                      )
-                    : undefined;
+                const returnedAgentError = shouldBroadcastAgentError
+                  ? errorShape(
+                      ErrorCodes.UNAVAILABLE,
+                      returnedAgentErrorMessage ?? "agent returned an error payload",
+                    )
+                  : undefined;
                 setGatewayDedupeEntry({
                   dedupe: context.dedupe,
                   key: `chat:${clientRunId}`,
                   entry: {
                     ts: Date.now(),
-                    ok: returnedAgentErrorPayloads.length === 0,
-                    payload:
-                      returnedAgentErrorPayloads.length > 0
-                        ? {
-                            runId: clientRunId,
-                            status: "error" as const,
-                            summary: returnedAgentErrorMessage ?? "agent returned an error payload",
-                          }
-                        : { runId: clientRunId, status: "ok" as const },
+                    ok: !shouldBroadcastAgentError,
+                    payload: shouldBroadcastAgentError
+                      ? {
+                          runId: clientRunId,
+                          status: "error" as const,
+                          summary: returnedAgentErrorMessage ?? "agent returned an error payload",
+                        }
+                      : { runId: clientRunId, status: "ok" as const },
                     ...(returnedAgentError ? { error: returnedAgentError } : {}),
                   },
                 });
