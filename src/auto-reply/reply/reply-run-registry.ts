@@ -439,7 +439,8 @@ export const replyRunRegistry: ReplyRunRegistry = {
     operation.abortByUser();
     return true;
   },
-  waitForIdle(sessionKey, timeoutMs = 15_000, opts) {
+  waitForIdle(sessionKey, timeoutMs, opts) {
+    const effectiveTimeoutMs = timeoutMs ?? 15_000;
     const normalizedSessionKey = normalizeOptionalString(sessionKey);
     if (!normalizedSessionKey || !replyRunState.activeRunsByKey.has(normalizedSessionKey)) {
       return Promise.resolve(true);
@@ -470,8 +471,8 @@ export const replyRunRegistry: ReplyRunRegistry = {
           resolve(ended);
         },
       };
-      if (Number.isFinite(timeoutMs)) {
-        waiter.timer = setTimeout(() => waiter.finish(false), Math.max(100, timeoutMs));
+      if (Number.isFinite(effectiveTimeoutMs)) {
+        waiter.timer = setTimeout(() => waiter.finish(false), Math.max(100, effectiveTimeoutMs));
       }
       if (opts?.signal) {
         abortHandler = () => waiter.finish(false);

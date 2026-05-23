@@ -965,7 +965,10 @@ describe("dispatchReplyFromConfig", () => {
     activeOperation.setPhase("running");
     const dispatcher = createDispatcher();
     const replyResolver = vi.fn(async (_ctx: MsgContext, opts?: GetReplyOptions) => {
-      expect(opts?.replyOperation?.sessionId).toBe("heartbeat-session");
+      const internalOpts = opts as GetReplyOptions & {
+        replyOperation?: { sessionId?: string };
+      };
+      expect(internalOpts.replyOperation?.sessionId).toBe("heartbeat-session");
       return { text: "visible after active run" } satisfies ReplyPayload;
     });
     const waitForIdleSpy = vi.spyOn(replyRunRegistry, "waitForIdle");

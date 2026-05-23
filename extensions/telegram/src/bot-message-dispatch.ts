@@ -395,7 +395,8 @@ function formatProgressAsMarkdownCode(text: string): string {
 }
 
 function normalizeTelegramThreadId(value: unknown): number | undefined {
-  const raw = typeof value === "number" ? value : typeof value === "string" ? Number(value) : NaN;
+  const raw =
+    typeof value === "number" ? value : typeof value === "string" ? Number(value) : Number.NaN;
   if (!Number.isFinite(raw)) {
     return undefined;
   }
