@@ -429,15 +429,19 @@ describe("meeting-notes plugin", () => {
       ],
     });
     const logger = { debug: vi.fn(), error: vi.fn(), info: vi.fn(), warn: vi.fn() };
+    const service = services[0];
+    if (!service?.stop) {
+      throw new Error("Expected meeting notes service with stop hook");
+    }
 
-    await services[0]?.start({ config: {}, logger, stateDir });
+    await service.start({ config: {}, logger, stateDir });
     await vi.waitFor(() => {
       expect(start).toHaveBeenCalledOnce();
     });
     const request = start.mock.calls[0]?.[0];
     expect(request.abortSignal?.aborted).toBe(false);
 
-    await services[0]?.stop({ config: {}, logger, stateDir });
+    await service.stop({ config: {}, logger, stateDir });
 
     expect(request.abortSignal?.aborted).toBe(true);
     expect(stop).not.toHaveBeenCalled();
