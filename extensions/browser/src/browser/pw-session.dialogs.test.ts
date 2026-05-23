@@ -82,6 +82,26 @@ describe("observed browser dialogs", () => {
     ]);
   });
 
+  it("returns after issuing a response even when Playwright's dialog command never settles", async () => {
+    vi.useFakeTimers();
+    const { page, emit } = createPageHarness();
+    ensurePageState(page);
+    const dialog = createDialog({ type: "alert", message: "Heads up" });
+    dialog.accept.mockImplementation(async () => await new Promise(() => {}));
+
+    emit("dialog", dialog);
+    const closedPromise = respondToObservedDialogOnPage({ page, dialogId: "d1", accept: true });
+    await vi.advanceTimersByTimeAsync(1000);
+    const closed = await closedPromise;
+
+    expect(dialog.accept).toHaveBeenCalledOnce();
+    expect(closed.closedBy).toBe("agent");
+    expect(getObservedBrowserStateForPage(page).dialogs.pending).toEqual([]);
+    expect(getObservedBrowserStateForPage(page).dialogs.recent).toMatchObject([
+      { id: "d1", type: "alert", closedBy: "agent" },
+    ]);
+  });
+
   it("keeps arm-next-dialog behavior through the observed dialog path", async () => {
     const { page, emit } = createPageHarness();
     ensurePageState(page);
@@ -91,13 +111,16 @@ describe("observed browser dialogs", () => {
     armObservedDialogResponseOnPage({ page, accept: false, timeoutMs: 1000 });
     emit("dialog", dialog);
     await Promise.resolve();
+    await Promise.resolve();
 
     expect(observed.signal.aborted).toBe(false);
     expect(dialog.dismiss).toHaveBeenCalledOnce();
-    expect(getObservedBrowserStateForPage(page).dialogs.pending).toEqual([]);
-    expect(getObservedBrowserStateForPage(page).dialogs.recent).toMatchObject([
-      { id: "d1", type: "alert", closedBy: "armed" },
-    ]);
+    await vi.waitFor(() => {
+      expect(getObservedBrowserStateForPage(page).dialogs.pending).toEqual([]);
+      expect(getObservedBrowserStateForPage(page).dialogs.recent).toMatchObject([
+        { id: "d1", type: "alert", closedBy: "armed" },
+      ]);
+    });
     observed.cleanup();
   });
 

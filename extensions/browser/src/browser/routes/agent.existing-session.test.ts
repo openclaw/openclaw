@@ -54,6 +54,11 @@ const chromeMcpMocks = vi.hoisted(() => ({
   waitForChromeMcpText: vi.fn(async () => {}),
 }));
 
+const cdpMocks = vi.hoisted(() => ({
+  handleJavaScriptDialogViaCdp: vi.fn(async () => {}),
+  setExtraHTTPHeadersViaCdp: vi.fn(async () => {}),
+}));
+
 const navigationGuardMocks = vi.hoisted(() => ({
   assertBrowserNavigationAllowed: vi.fn(async () => {}),
   assertBrowserNavigationResultAllowed: vi.fn(async () => {}),
@@ -104,6 +109,8 @@ vi.mock("../chrome-mcp.js", () => ({
 
 vi.mock("../cdp.js", () => ({
   captureScreenshot: vi.fn(),
+  handleJavaScriptDialogViaCdp: cdpMocks.handleJavaScriptDialogViaCdp,
+  setExtraHTTPHeadersViaCdp: cdpMocks.setExtraHTTPHeadersViaCdp,
   snapshotAria: vi.fn(),
 }));
 
@@ -266,6 +273,8 @@ describe("existing-session browser routes", () => {
     chromeMcpMocks.triggerChromeMcpExtensionAction.mockClear();
     chromeMcpMocks.uninstallChromeMcpExtension.mockClear();
     chromeMcpMocks.waitForChromeMcpText.mockClear();
+    cdpMocks.handleJavaScriptDialogViaCdp.mockClear();
+    cdpMocks.setExtraHTTPHeadersViaCdp.mockClear();
     navigationGuardMocks.assertBrowserNavigationAllowed.mockClear();
     navigationGuardMocks.assertBrowserNavigationResultAllowed.mockClear();
     navigationGuardMocks.withBrowserNavigationPolicy.mockClear();
@@ -534,6 +543,7 @@ describe("existing-session browser routes", () => {
       targetId: "7",
       action: "accept",
       promptText: "approved",
+      timeoutMs: 5000,
     });
   });
 
@@ -561,6 +571,39 @@ describe("existing-session browser routes", () => {
       targetId: "7",
       action: "dismiss",
       promptText: undefined,
+      timeoutMs: 2000,
+    });
+    expect(chromeMcpMocks.evaluateChromeMcpScript).not.toHaveBeenCalled();
+  });
+
+  it("falls back to direct CDP for active existing-session dialogs when Chrome MCP times out", async () => {
+    chromeMcpMocks.evaluateChromeMcpScript.mockReset().mockResolvedValue(true as never);
+    chromeMcpMocks.handleChromeMcpDialog
+      .mockReset()
+      .mockRejectedValue(new Error('Chrome MCP "handle_dialog" timed out after 2000ms.'));
+    const handler = getDialogHookPostHandler();
+    const response = createBrowserRouteResponse();
+
+    await handler?.(
+      {
+        params: {},
+        query: {},
+        body: { accept: true, promptText: "approved" },
+      },
+      response.res,
+    );
+
+    expect(response.statusCode).toBe(200);
+    const body = requireRecord(response.body, "response body");
+    expect(body.ok).toBe(true);
+    expect(cdpMocks.handleJavaScriptDialogViaCdp).toHaveBeenCalledWith({
+      cdpUrl: "http://127.0.0.1:18800",
+      targetId: "7",
+      targetUrl: "https://example.com",
+      accept: true,
+      promptText: "approved",
+      ssrfPolicy: undefined,
+      timeoutMs: 2000,
     });
     expect(chromeMcpMocks.evaluateChromeMcpScript).not.toHaveBeenCalled();
   });
@@ -732,7 +775,7 @@ describe("existing-session browser routes", () => {
     });
   });
 
-  it("routes existing-session headers through Chrome MCP emulate", async () => {
+  it("routes existing-session headers through CDP because Chrome MCP emulate does not support headers", async () => {
     const handler = getStoragePostHandler("/set/headers");
     const response = createBrowserRouteResponse();
 
@@ -746,11 +789,11 @@ describe("existing-session browser routes", () => {
     );
 
     expect(response.statusCode).toBe(200);
-    expect(chromeMcpMocks.emulateChromeMcpPage).toHaveBeenCalledWith({
-      profileName: "chrome-live",
-      profile: expect.objectContaining({ name: "chrome-live", driver: "existing-session" }),
+    expect(cdpMocks.setExtraHTTPHeadersViaCdp).toHaveBeenCalledWith({
+      cdpUrl: "http://127.0.0.1:18800",
       targetId: "7",
-      extraHttpHeaders: { "x-openclaw-test": "yes" },
+      targetUrl: "https://example.com",
+      headers: { "x-openclaw-test": "yes" },
     });
   });
 

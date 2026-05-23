@@ -99,6 +99,8 @@ const cdpMocks = vi.hoisted(() => ({
   createTargetViaCdp: vi.fn<() => Promise<{ targetId: string }>>(async () => {
     throw new Error("cdp disabled");
   }),
+  handleJavaScriptDialogViaCdp: vi.fn(async () => {}),
+  setExtraHTTPHeadersViaCdp: vi.fn(async () => {}),
   snapshotAria: vi.fn(async () => ({
     nodes: [{ ref: "1", role: "link", name: "x", depth: 0 }],
   })),
@@ -112,11 +114,15 @@ const cdpMocks = vi.hoisted(() => ({
 /** Returns mocked CDP functions used by Browser control-server tests. */
 export function getCdpMocks(): {
   createTargetViaCdp: MockFn;
+  handleJavaScriptDialogViaCdp: MockFn;
+  setExtraHTTPHeadersViaCdp: MockFn;
   snapshotAria: MockFn;
   snapshotRoleViaCdp: MockFn;
 } {
   return cdpMocks as unknown as {
     createTargetViaCdp: MockFn;
+    handleJavaScriptDialogViaCdp: MockFn;
+    setExtraHTTPHeadersViaCdp: MockFn;
     snapshotAria: MockFn;
     snapshotRoleViaCdp: MockFn;
   };
@@ -362,6 +368,7 @@ const chromeMcpMocks = vi.hoisted(() => ({
   fillChromeMcpForm: vi.fn(async () => {}),
   focusChromeMcpTab: vi.fn(async () => {}),
   getChromeMcpPid: vi.fn(() => 4321),
+  handleChromeMcpDialog: vi.fn(async () => {}),
   hoverChromeMcpElement: vi.fn(async () => {}),
   listChromeMcpTabs: vi.fn(async () => [
     { targetId: "7", title: "", url: "https://example.com", type: "page" },
@@ -384,6 +391,10 @@ const chromeMcpMocks = vi.hoisted(() => ({
   })),
   uploadChromeMcpFile: vi.fn(async () => {}),
 }));
+
+export function getChromeMcpMocks(): Record<string, MockFn> {
+  return chromeMcpMocks as unknown as Record<string, MockFn>;
+}
 
 const chromeUserDataDir = vi.hoisted(() => ({ dir: "/tmp/openclaw" }));
 installChromeUserDataDirHooks(chromeUserDataDir);
@@ -503,6 +514,8 @@ vi.mock("./chrome.js", () => ({
 
 vi.mock("./cdp.js", () => ({
   createTargetViaCdp: cdpMocks.createTargetViaCdp,
+  handleJavaScriptDialogViaCdp: cdpMocks.handleJavaScriptDialogViaCdp,
+  setExtraHTTPHeadersViaCdp: cdpMocks.setExtraHTTPHeadersViaCdp,
   normalizeCdpWsUrl: vi.fn((wsUrl: string) => wsUrl),
   snapshotAria: cdpMocks.snapshotAria,
   snapshotRoleViaCdp: cdpMocks.snapshotRoleViaCdp,

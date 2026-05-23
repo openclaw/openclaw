@@ -9,6 +9,7 @@ import {
   readStringValue,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { setExtraHTTPHeadersViaCdp } from "../cdp.js";
 import { emulateChromeMcpPage } from "../chrome-mcp.js";
 import { getBrowserProfileCapabilities } from "../profile-capabilities.js";
 import type { BrowserRouteContext } from "../server-context.js";
@@ -414,11 +415,11 @@ export function registerBrowserAgentStorageRoutes(
         targetId,
         run: async ({ cdpUrl, tab, profileCtx }) => {
           if (getBrowserProfileCapabilities(profileCtx.profile).usesChromeMcp) {
-            await emulateChromeMcpPage({
-              profileName: profileCtx.profile.name,
-              profile: profileCtx.profile,
+            await setExtraHTTPHeadersViaCdp({
+              cdpUrl,
               targetId: tab.targetId,
-              extraHttpHeaders: parsed,
+              targetUrl: tab.url,
+              headers: parsed,
             });
             res.json({ ok: true, targetId: tab.targetId });
             return;
@@ -543,8 +544,7 @@ export function registerBrowserAgentStorageRoutes(
               profileName: profileCtx.profile.name,
               profile: profileCtx.profile,
               targetId: tab.targetId,
-              colorScheme:
-                colorScheme === "dark" || colorScheme === "light" ? colorScheme : "auto",
+              colorScheme: colorScheme === "dark" || colorScheme === "light" ? colorScheme : "auto",
             });
             res.json({ ok: true, targetId: tab.targetId });
             return;

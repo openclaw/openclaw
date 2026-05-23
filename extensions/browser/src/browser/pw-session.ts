@@ -195,6 +195,7 @@ const MAX_PAGE_ERRORS = 200;
 const MAX_NETWORK_REQUESTS = 500;
 const MAX_RECENT_DIALOGS = 20;
 const OBSERVED_DIALOG_TIMEOUT_MS = 120_000;
+const OBSERVED_DIALOG_RESPONSE_SETTLE_TIMEOUT_MS = 1_000;
 
 const cachedByCdpUrl = new Map<string, ConnectedBrowser>();
 const connectingByCdpUrl = new Map<string, Promise<ConnectedBrowser>>();
@@ -338,13 +339,25 @@ async function settleObservedDialog(params: {
   state.pendingDialogs = state.pendingDialogs.filter((dialog) => dialog.id !== pending.id);
 
   let closedBy = params.closedBy;
-  try {
-    if (params.accept) {
-      await pending.dialog.accept(params.promptText);
-    } else {
-      await pending.dialog.dismiss();
-    }
-  } catch (err) {
+  const responsePromise = (
+    params.accept ? pending.dialog.accept(params.promptText) : pending.dialog.dismiss()
+  ).then(
+    () => ({ status: "settled" as const }),
+    (error: unknown) => ({ status: "error" as const, error }),
+  );
+  let timer: NodeJS.Timeout | undefined;
+  const timeoutPromise = new Promise<{ status: "timeout" }>((resolve) => {
+    timer = setTimeout(
+      () => resolve({ status: "timeout" }),
+      OBSERVED_DIALOG_RESPONSE_SETTLE_TIMEOUT_MS,
+    );
+  });
+  const result = await Promise.race([responsePromise, timeoutPromise]);
+  if (timer) {
+    clearTimeout(timer);
+  }
+  if (result.status === "error") {
+    const err = result.error;
     if (!isNoDialogShowingError(err)) {
       if (params.closedBy === "agent") {
         state.pendingDialogs.push(pending);
@@ -352,6 +365,11 @@ async function settleObservedDialog(params: {
       throw err;
     }
     closedBy = "remote";
+  } else if (result.status === "timeout") {
+    // Playwright can occasionally send the dialog response but never settle its command
+    // while the page is blocked by the modal. Return once the response has been issued,
+    // keep state consistent, and swallow any eventual late rejection from that command.
+    responsePromise.catch(() => {});
   }
 
   const record: BrowserObservedDialogRecord = {
@@ -1149,6 +1167,26 @@ async function getPageForTargetIdOnce(opts: {
   if (!pages.length) {
     throw new Error("No pages available in the connected browser.");
   }
+  const first = pages[0];
+
+  if (opts.targetId) {
+    if (pages.length === 1 && first && !isBlockedPageRef(opts.cdpUrl, first)) {
+      return first;
+    }
+    try {
+      const foundByTargetList = await findPageByTargetIdViaTargetList(
+        pages,
+        opts.targetId,
+        opts.cdpUrl,
+        opts.ssrfPolicy,
+      );
+      if (foundByTargetList && !isBlockedPageRef(opts.cdpUrl, foundByTargetList)) {
+        return foundByTargetList;
+      }
+    } catch {
+      // Fall back to the older Playwright/CDP-session probing path below.
+    }
+  }
 
   const { accessible, blockedCount } = await partitionAccessiblePages({
     cdpUrl: opts.cdpUrl,
@@ -1160,9 +1198,9 @@ async function getPageForTargetIdOnce(opts: {
     }
     throw new Error("No pages available in the connected browser.");
   }
-  const first = accessible[0];
+  const firstAccessible = accessible[0];
   if (!opts.targetId) {
-    return first;
+    return firstAccessible;
   }
   const found = await findPageByTargetId(browser, opts.targetId, opts.cdpUrl, opts.ssrfPolicy);
   if (found) {
@@ -1177,7 +1215,7 @@ async function getPageForTargetIdOnce(opts: {
   }
   // If Playwright only exposes a single Page total, use it as a best-effort fallback.
   if (pages.length === 1) {
-    return first;
+    return firstAccessible;
   }
   throw new BrowserTabNotFoundError();
 }

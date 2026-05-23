@@ -322,7 +322,7 @@ async function optionalChromeMcpTool<T>(fn: () => Promise<T>): Promise<T | undef
     return await fn();
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    if (/Tool .+ not found/.test(message)) {
+    if (/Tool .+ not found/.test(message) || /Method not available/.test(message)) {
       return undefined;
     }
     throw err;
@@ -1109,7 +1109,12 @@ describeLive("browser (live): Chrome MCP isolated local fixture", () => {
           expect.objectContaining({ ok: true }),
         );
         mark("trace:stop");
-        await tryAction("trace:insight", { action: "trace", operation: "insight" });
+        await tryAction("trace:insight", {
+          action: "trace",
+          operation: "insight",
+          insightSetId: "navigation-1",
+          insightName: "DocumentLatency",
+        });
 
         await tryAction("heap-snapshot:take", {
           action: "heap-snapshot",

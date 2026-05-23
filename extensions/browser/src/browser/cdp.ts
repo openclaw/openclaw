@@ -363,6 +363,113 @@ export async function evaluateJavaScript(opts: {
   });
 }
 
+export async function handleJavaScriptDialogViaCdp(opts: {
+  cdpUrl: string;
+  targetId?: string;
+  targetUrl?: string;
+  accept: boolean;
+  promptText?: string;
+  ssrfPolicy?: SsrFPolicy;
+  timeoutMs?: number;
+}): Promise<void> {
+  await assertCdpEndpointAllowed(opts.cdpUrl, opts.ssrfPolicy);
+  const cdpHttpBase = normalizeCdpHttpBaseForJsonEndpoints(opts.cdpUrl);
+  const pages = await fetchJson<
+    Array<{
+      id?: string;
+      url?: string;
+      type?: string;
+      webSocketDebuggerUrl?: string;
+    }>
+  >(appendCdpPath(cdpHttpBase, "/json/list"), opts.timeoutMs ?? 2000, undefined, opts.ssrfPolicy);
+
+  const targetId = opts.targetId?.trim() ?? "";
+  const targetUrl = opts.targetUrl?.trim() ?? "";
+  const candidates = pages.filter((page) => (page.type ?? "page") === "page");
+  const targetById = targetId ? candidates.find((page) => page.id === targetId) : undefined;
+  const urlMatches = targetUrl ? candidates.filter((page) => page.url === targetUrl) : [];
+  const numericTargetId = Number.parseInt(targetId, 10);
+  const ordinalTarget =
+    Number.isInteger(numericTargetId) && numericTargetId > 0
+      ? candidates[numericTargetId - 1]
+      : undefined;
+  const target =
+    targetById ??
+    (urlMatches.length === 1 ? urlMatches[0] : undefined) ??
+    ordinalTarget ??
+    (candidates.length === 1 ? candidates[0] : undefined);
+
+  const wsUrlRaw = target?.webSocketDebuggerUrl?.trim() ?? "";
+  if (!wsUrlRaw) {
+    throw new Error("CDP /json/list did not expose a matching page WebSocket URL");
+  }
+  const wsUrl = normalizeCdpWsUrl(wsUrlRaw, cdpHttpBase);
+  await assertCdpEndpointAllowed(wsUrl, opts.ssrfPolicy);
+
+  await withCdpSocket(
+    wsUrl,
+    async (send) => {
+      await send("Page.handleJavaScriptDialog", {
+        accept: opts.accept,
+        ...(opts.promptText !== undefined ? { promptText: opts.promptText } : {}),
+      });
+    },
+    { commandTimeoutMs: opts.timeoutMs ?? 2000, handshakeTimeoutMs: opts.timeoutMs ?? 2000 },
+  );
+}
+
+export async function setExtraHTTPHeadersViaCdp(opts: {
+  cdpUrl: string;
+  targetId?: string;
+  targetUrl?: string;
+  headers: Record<string, string>;
+  ssrfPolicy?: SsrFPolicy;
+  timeoutMs?: number;
+}): Promise<void> {
+  await assertCdpEndpointAllowed(opts.cdpUrl, opts.ssrfPolicy);
+  const cdpHttpBase = normalizeCdpHttpBaseForJsonEndpoints(opts.cdpUrl);
+  const pages = await fetchJson<
+    Array<{
+      id?: string;
+      url?: string;
+      type?: string;
+      webSocketDebuggerUrl?: string;
+    }>
+  >(appendCdpPath(cdpHttpBase, "/json/list"), opts.timeoutMs ?? 2000, undefined, opts.ssrfPolicy);
+
+  const targetId = opts.targetId?.trim() ?? "";
+  const targetUrl = opts.targetUrl?.trim() ?? "";
+  const candidates = pages.filter((page) => (page.type ?? "page") === "page");
+  const targetById = targetId ? candidates.find((page) => page.id === targetId) : undefined;
+  const urlMatches = targetUrl ? candidates.filter((page) => page.url === targetUrl) : [];
+  const numericTargetId = Number.parseInt(targetId, 10);
+  const ordinalTarget =
+    Number.isInteger(numericTargetId) && numericTargetId > 0
+      ? candidates[numericTargetId - 1]
+      : undefined;
+  const target =
+    targetById ??
+    (urlMatches.length === 1 ? urlMatches[0] : undefined) ??
+    ordinalTarget ??
+    (candidates.length === 1 ? candidates[0] : undefined);
+
+  const wsUrlRaw = target?.webSocketDebuggerUrl?.trim() ?? "";
+  if (!wsUrlRaw) {
+    throw new Error("CDP /json/list did not expose a matching page WebSocket URL");
+  }
+  const wsUrl = normalizeCdpWsUrl(wsUrlRaw, cdpHttpBase);
+  await assertCdpEndpointAllowed(wsUrl, opts.ssrfPolicy);
+
+  await withCdpSocket(
+    wsUrl,
+    async (send) => {
+      await send("Network.enable");
+      await send("Network.setExtraHTTPHeaders", { headers: opts.headers });
+    },
+    { commandTimeoutMs: opts.timeoutMs ?? 2000, handshakeTimeoutMs: opts.timeoutMs ?? 2000 },
+  );
+}
+
 /** Normalized accessibility tree node returned by ARIA snapshots. */
 export type AriaSnapshotNode = {
   ref: string;
