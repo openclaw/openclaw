@@ -1,32 +1,19 @@
 import { describe, expect, it, vi } from "vitest";
 import type { GatewayRequestContext } from "../types.js";
-
-// Mock loadSessionEntry to throw a synchronous error
-vi.mock("../session-utils.js", async () => {
-  const actual = await vi.importActual<typeof import("../session-utils.js")>("../session-utils.js");
-  return {
-    ...actual,
-    loadSessionEntry: vi.fn().mockImplementation(() => {
-      throw Object.assign(new Error("LLM timeout"), { code: "TIMEOUT" });
-    }),
-  };
-});
-
-// Import chatHandlers AFTER the mock is set up
-const { chatHandlers } = await import("./chat.js");
+import { chatHandlers } from "./chat.js";
 
 function createMockContext() {
   const broadcast = vi.fn();
   const nodeSendToSession = vi.fn();
   const chatAbortControllers = new Map();
-  const chatRunSeq = new Map<string, number>();
+  const agentRunSeq = new Map<string, number>();
   const dedupe = new Map();
 
   return {
     broadcast,
     nodeSendToSession,
     chatAbortControllers,
-    chatRunSeq,
+    agentRunSeq,
     dedupe,
     logGateway: { warn: vi.fn(), debug: vi.fn(), error: vi.fn() },
     addChatRun: vi.fn(),
@@ -34,15 +21,20 @@ function createMockContext() {
   };
 }
 
-describe("chat.send error broadcast fix", () => {
-  it("should broadcast error via broadcastChatError when synchronous error occurs", async () => {
+describe("chat.send error broadcast", () => {
+  it("should broadcast error when addChatRun throws", async () => {
     const ctx = createMockContext();
     const respond = vi.fn();
+
+    // Make addChatRun throw synchronously (inside the try block at line 2470)
+    ctx.addChatRun.mockImplementation(() => {
+      throw Object.assign(new Error("LLM timeout"), { code: "TIMEOUT" });
+    });
 
     await chatHandlers["chat.send"]({
       params: {
         sessionKey: "main",
-        message: "hello timeout-test",
+        message: "hello",
         idempotencyKey: "test-run-1",
       },
       respond: respond as never,
@@ -52,7 +44,7 @@ describe("chat.send error broadcast fix", () => {
       isWebchatConnect: () => false,
     });
 
-    // Verify that respond was called with error
+    // Verify respond was called with error
     expect(respond).toHaveBeenCalledWith(
       false,
       expect.objectContaining({ runId: "test-run-1", status: "error" }),
@@ -60,7 +52,7 @@ describe("chat.send error broadcast fix", () => {
       expect.any(Object),
     );
 
-    // Verify that broadcastChatError was called (via context.broadcast)
+    // Verify broadcastChatError was called (via context.broadcast)
     expect(ctx.broadcast).toHaveBeenCalledWith(
       "chat",
       expect.objectContaining({
