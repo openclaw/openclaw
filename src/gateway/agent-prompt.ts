@@ -60,7 +60,7 @@ export function buildAgentMessageFromConversationEntries(entries: ConversationEn
   const historyEntries = entries
     .slice(0, currentIndex)
     .map(toPromptEntry)
-    .filter((entry): entry is HistoryEntry => entry !== null && entry.body.trim().length > 0);
+    .filter((entry): entry is HistoryEntry => entry !== null);
   const currentPromptEntry = toPromptEntry(currentConversationEntry);
   if (!currentPromptEntry) {
     return "";

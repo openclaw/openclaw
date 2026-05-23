@@ -147,6 +147,18 @@ describe("gateway agent prompt", () => {
     expect(prompt).toContain(`Assistant: ${STREAM_ERROR_FALLBACK_TEXT}`);
   });
 
+  it("preserves empty tool outputs in replay history", () => {
+    const entries = [
+      { role: "user", entry: { sender: "User", body: "lookup" } },
+      { role: "tool", entry: { sender: "Tool:call_1", body: "" } },
+      { role: "user", entry: { sender: "User", body: "continue" } },
+    ] as const;
+
+    const prompt = buildAgentMessageFromConversationEntries([...entries]);
+    expect(prompt).toContain("Tool:call_1: ");
+    expect(prompt).toContain("User: continue");
+  });
+
   it("preserves current user text that looks like internal display metadata", () => {
     const body = "[Thu 2026-03-12 07:00 UTC] what happened then?";
     expect(
