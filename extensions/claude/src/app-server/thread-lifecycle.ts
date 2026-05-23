@@ -304,6 +304,14 @@ async function forkThreadOnCatalogDrift(args: {
   // as an explicit override and only falls back to parent inheritance
   // when a field is omitted; we want zero parent inheritance for
   // execution-policy fields.
+  // Always send disallowedTools as an explicit array, even when empty.
+  // The server treats `omitted` as "inherit parent" but `[]` as "explicit
+  // empty policy" — which is exactly what we want when openclaw policy
+  // has been RELAXED (parent blocked Bash/Edit, current policy allows
+  // them). Without the explicit empty array the fork would keep the
+  // parent's stale block. The server's createThread doesn't persist
+  // empty disallowedTools to meta.json (see thread-store.ts), so the
+  // resulting thread meta is identical to a fresh start.
   const forkParams = {
     threadId: existing.threadId,
     cwd: effectiveWorkspace,
@@ -314,7 +322,7 @@ async function forkThreadOnCatalogDrift(args: {
     baseInstructions: developerInstructions,
     dynamicTools: bridge.specs,
     dynamicToolsFingerprint,
-    ...(nativeDisallowedTools.length > 0 ? { disallowedTools: [...nativeDisallowedTools] } : {}),
+    disallowedTools: [...nativeDisallowedTools],
   };
   const rawResponse = await client.request<unknown>("thread/fork", forkParams);
   const response = assertThreadStartResponse(rawResponse);

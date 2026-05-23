@@ -275,15 +275,20 @@ describe("startOrResumeClaudeThread", () => {
     );
   });
 
-  it("omits disallowedTools from fork params when the policy has none (avoid sending empty array)", async () => {
+  it("sends disallowedTools: [] when policy is empty so the fork clears parent's stale blocks", async () => {
+    // Parent thread blocked Bash/Edit; current openclaw policy has been
+    // relaxed (no disallowed natives). The fork must explicitly send
+    // disallowedTools: [] so the server doesn't inherit the parent's
+    // stale block list. Omitting the field would inherit parent →
+    // stale Bash/Edit blocks persist into the new thread.
     await seedBinding(sessionFile, {
-      threadId: "thr_no_disallowed",
+      threadId: "thr_relaxed_policy",
       dynamicToolsFingerprint: "fp-OLD",
       developerInstructionsFingerprint: STABLE_DEVINSTRUCTIONS_FP,
     });
     const request = vi.fn(async (method: string) => {
       if (method === "thread/fork") {
-        return { thread: { id: "thr_fork_no_disallowed" } };
+        return { thread: { id: "thr_fork_relaxed" } };
       }
       return {};
     });
@@ -305,7 +310,7 @@ describe("startOrResumeClaudeThread", () => {
       | Record<string, unknown>
       | undefined;
     expect(forkCallArgs).toBeDefined();
-    expect(forkCallArgs?.disallowedTools).toBeUndefined();
+    expect(forkCallArgs?.disallowedTools).toEqual([]);
   });
 
   it("propagates non-thread-not-found errors from thread/fork", async () => {
