@@ -555,6 +555,31 @@ async function buildDynamicToolsForTest(
   });
 }
 
+async function createCodexToolBridgeForTest(
+  params: EmbeddedRunAttemptParams,
+  workspaceDir: string,
+  options: Partial<
+    Pick<
+      Parameters<typeof testing.buildDynamicTools>[0],
+      "forceHeartbeatTool" | "ignoreRuntimePlan"
+    >
+  > = {},
+) {
+  const signal = new AbortController().signal;
+  const tools = await buildDynamicToolsForTest(params, workspaceDir, options);
+  const registeredTools = await buildDynamicToolsForTest(params, workspaceDir, {
+    ...options,
+    forceHeartbeatTool: true,
+    ignoreRuntimePlan: true,
+  });
+  return createCodexDynamicToolBridge({
+    tools,
+    registeredTools,
+    signal,
+    directToolNames: testing.shouldForceMessageTool(params) ? ["message"] : [],
+  });
+}
+
 function filterAllowedRuntimeToolNamesForTest(
   params: EmbeddedRunAttemptParams,
   tools: RuntimeDynamicToolForTest[],
@@ -2358,14 +2383,18 @@ describe("runCodexAppServerAttempt", () => {
         ? [createRuntimeDynamicTool("heartbeat_respond")]
         : []),
     ]);
-    const harness = createStartedThreadHarness(async (method) => {
+    const request = vi.fn(async (method: string) => {
+      if (method === "thread/start") {
+        return threadStartResult("thread-1");
+      }
       if (method === "thread/resume") {
         return threadStartResult("thread-1");
       }
-      return undefined;
+      throw new Error(`unexpected method: ${method}`);
     });
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
+    const appServer = createThreadLifecycleAppServerOptions();
     const createRunParams = (trigger?: EmbeddedRunAttemptParams["trigger"]) => {
       const params = createParams(sessionFile, workspaceDir);
       params.disableTools = false;
@@ -2378,16 +2407,26 @@ describe("runCodexAppServerAttempt", () => {
       }
       return params;
     };
+    const startOrResume = async (params: EmbeddedRunAttemptParams) => {
+      const toolBridge = await createCodexToolBridgeForTest(params, workspaceDir);
+      return startOrResumeThread({
+        client: { request } as never,
+        params,
+        cwd: workspaceDir,
+        dynamicTools: toolBridge.specs,
+        appServer,
+        developerInstructions: testing.buildDeveloperInstructions(params, {
+          dynamicTools: toolBridge.availableSpecs,
+        }),
+        nativeCodeModeEnabled: true,
+        userMcpServersEnabled: false,
+      });
+    };
 
-    const normalRun = runCodexAppServerAttempt(createRunParams(), {
-      pluginConfig: { appServer: { mode: "yolo" } },
-    });
-    await harness.waitForMethod("turn/start", 120_000);
-    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
-    await normalRun;
+    await startOrResume(createRunParams());
 
-    const startRequest = harness.requests.find((entry) => entry.method === "thread/start");
-    const startParams = startRequest?.params as
+    const startRequest = request.mock.calls.find(([method]) => method === "thread/start");
+    const startParams = startRequest?.[1] as
       | { dynamicTools?: Array<{ name?: string }>; developerInstructions?: string }
       | undefined;
     const registeredToolNames = startParams?.dynamicTools?.map((tool) => tool.name) ?? [];
@@ -2401,32 +2440,14 @@ describe("runCodexAppServerAttempt", () => {
       "Deferred searchable OpenClaw dynamic tools available: heartbeat_respond",
     );
 
-    const heartbeatRun = runCodexAppServerAttempt(createRunParams("heartbeat"), {
-      pluginConfig: { appServer: { mode: "yolo" } },
-    });
-    await vi.waitFor(
-      () => {
-        expect(harness.requests.filter((entry) => entry.method === "turn/start")).toHaveLength(2);
-      },
-      { interval: 1, timeout: 120_000 },
-    );
-    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
-    await heartbeatRun;
+    await startOrResume(createRunParams("heartbeat"));
+    await startOrResume(createRunParams());
 
-    const nextNormalRun = runCodexAppServerAttempt(createRunParams(), {
-      pluginConfig: { appServer: { mode: "yolo" } },
-    });
-    await vi.waitFor(
-      () => {
-        expect(harness.requests.filter((entry) => entry.method === "turn/start")).toHaveLength(3);
-      },
-      { interval: 1, timeout: 120_000 },
-    );
-    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
-    await nextNormalRun;
-
-    expect(harness.requests.filter((entry) => entry.method === "thread/start")).toHaveLength(1);
-    expect(harness.requests.filter((entry) => entry.method === "thread/resume")).toHaveLength(2);
+    expect(request.mock.calls.map(([method]) => method)).toEqual([
+      "thread/start",
+      "thread/resume",
+      "thread/resume",
+    ]);
   });
 
   it("keeps the persistent dynamic schema stable across heartbeat-only turns", async () => {
@@ -2437,14 +2458,18 @@ describe("runCodexAppServerAttempt", () => {
         ? [createRuntimeDynamicTool("heartbeat_respond")]
         : []),
     ]);
-    const harness = createStartedThreadHarness(async (method) => {
+    const request = vi.fn(async (method: string) => {
+      if (method === "thread/start") {
+        return threadStartResult("thread-1");
+      }
       if (method === "thread/resume") {
         return threadStartResult("thread-1");
       }
-      return undefined;
+      throw new Error(`unexpected method: ${method}`);
     });
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
+    const appServer = createThreadLifecycleAppServerOptions();
     const createRunParams = (trigger?: EmbeddedRunAttemptParams["trigger"]) => {
       const params = createParams(sessionFile, workspaceDir);
       params.disableTools = false;
@@ -2464,41 +2489,29 @@ describe("runCodexAppServerAttempt", () => {
       }
       return params;
     };
+    const startOrResume = async (params: EmbeddedRunAttemptParams) => {
+      const toolBridge = await createCodexToolBridgeForTest(params, workspaceDir);
+      return startOrResumeThread({
+        client: { request } as never,
+        params,
+        cwd: workspaceDir,
+        dynamicTools: toolBridge.specs,
+        appServer,
+        developerInstructions: testing.buildDeveloperInstructions(params, {
+          dynamicTools: toolBridge.availableSpecs,
+        }),
+        nativeCodeModeEnabled: true,
+        userMcpServersEnabled: false,
+      });
+    };
 
-    const normalRun = runCodexAppServerAttempt(createRunParams(), {
-      pluginConfig: { appServer: { mode: "yolo" } },
-    });
-    await harness.waitForMethod("turn/start", 120_000);
-    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
-    await normalRun;
-
-    const heartbeatRun = runCodexAppServerAttempt(createRunParams("heartbeat"), {
-      pluginConfig: { appServer: { mode: "yolo" } },
-    });
-    await vi.waitFor(
-      () => {
-        expect(harness.requests.filter((entry) => entry.method === "turn/start")).toHaveLength(2);
-      },
-      { interval: 1, timeout: 120_000 },
-    );
-    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
-    await heartbeatRun;
-
-    const nextNormalRun = runCodexAppServerAttempt(createRunParams(), {
-      pluginConfig: { appServer: { mode: "yolo" } },
-    });
-    await vi.waitFor(
-      () => {
-        expect(harness.requests.filter((entry) => entry.method === "turn/start")).toHaveLength(3);
-      },
-      { interval: 1, timeout: 120_000 },
-    );
-    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
-    await nextNormalRun;
+    await startOrResume(createRunParams());
+    await startOrResume(createRunParams("heartbeat"));
+    await startOrResume(createRunParams());
 
     expect(
-      harness.requests
-        .map((entry) => entry.method)
+      request.mock.calls
+        .map(([method]) => method)
         .filter((method) => method === "thread/start" || method === "thread/resume"),
     ).toEqual(["thread/start", "thread/resume", "thread/resume"]);
   });
