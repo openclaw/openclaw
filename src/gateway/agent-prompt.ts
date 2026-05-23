@@ -46,7 +46,10 @@ export function buildAgentMessageFromConversationEntries(entries: ConversationEn
     return "";
   }
 
-  const historyEntries = entries.slice(0, currentIndex).map((e) => e.entry);
+  const historyEntries = entries
+    .slice(0, currentIndex)
+    .map((e) => e.entry)
+    .filter((entry) => safeBody(entry.body).trim().length > 0);
   if (historyEntries.length === 0) {
     return safeBody(currentEntry.body);
   }

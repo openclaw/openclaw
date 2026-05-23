@@ -110,6 +110,7 @@ describe("gateway agent prompt", () => {
 
     const prompt = buildAgentMessageFromConversationEntries([...entries]);
     expect(prompt).not.toContain(STREAM_ERROR_FALLBACK_TEXT);
+    expect(prompt).not.toContain("Assistant:");
     expect(prompt).toContain("User: first");
     expect(prompt).toContain("User: retry");
   });
