@@ -326,6 +326,7 @@ function readPrivateLocalOnlyPluginSdkSubpaths(packageRoot: string): string[] {
     ...new Set([
       CODEX_NATIVE_TASK_RUNTIME_PLUGIN_SDK_SUBPATH,
       CODEX_MCP_PROJECTION_PLUGIN_SDK_SUBPATH,
+      OLLAMA_CONFIGURED_LOCAL_ORIGIN_RUNTIME_PLUGIN_SDK_SUBPATH,
       ...(Array.isArray(parsed)
         ? parsed.filter((subpath): subpath is string => isSafePluginSdkSubpathSegment(subpath))
         : []),
