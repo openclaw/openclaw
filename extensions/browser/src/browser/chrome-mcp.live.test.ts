@@ -1,6 +1,6 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { existsSync } from "node:fs";
-import { mkdir, mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { createServer, type Server } from "node:http";
 import os from "node:os";
 import path from "node:path";
@@ -32,6 +32,7 @@ import {
   type ChromeMcpProfileOptions,
 } from "./chrome-mcp.js";
 import type { ResolvedBrowserConfig } from "./config.js";
+import { DEFAULT_UPLOAD_DIR } from "./paths.js";
 import { createBrowserRouteDispatcher } from "./routes/dispatcher.js";
 import type { BrowserDispatchRequest } from "./routes/dispatcher.js";
 import { createBrowserRouteContext } from "./server-context.js";
@@ -94,10 +95,12 @@ function rosterFixtureHtml(): string {
     body { font-family: system-ui, sans-serif; margin: 0; background: #f6f6f1; }
     header, main { padding: 16px; }
     header { display: flex; gap: 12px; align-items: center; border-bottom: 1px solid #ccc; background: white; }
-    button, input, select { font: inherit; margin: 4px; padding: 6px; }
+    button, input, select, textarea { font: inherit; margin: 4px; padding: 6px; }
     .builder { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
-    .panel, .unit-card, .summary { background: white; border: 1px solid #bbb; border-radius: 6px; padding: 12px; }
+    .panel, .unit-card, .summary, .gauntlet { background: white; border: 1px solid #bbb; border-radius: 6px; padding: 12px; }
     .unit-card { margin-top: 12px; }
+    canvas { border: 1px solid #555; background: #fafafa; }
+    iframe { width: 100%; height: 120px; border: 1px solid #777; }
     .hidden { display: none; }
     .valid { color: #146c2e; font-weight: 700; }
   </style>
@@ -148,8 +151,23 @@ function rosterFixtureHtml(): string {
             </select>
           </label>
           <label><input id="termagants-enhancement" aria-label="Adaptive Biology enhancement" type="checkbox"> Adaptive Biology enhancement</label>
+          <label>Roster notes <textarea id="roster-notes" aria-label="Roster notes"></textarea></label>
+          <button id="rules-help" aria-label="Show rules help">Show rules help</button>
+          <button id="validate-dialog" aria-label="Validate roster dialog">Validate roster dialog</button>
+          <label>Import roster file <input id="roster-upload" aria-label="Roster import file" type="file"></label>
+          <p id="upload-status">No roster file imported.</p>
         </div>
         <div id="leader-drop" class="unit-card" role="button" tabindex="0" aria-label="Leader attachment drop zone">Attach leader here</div>
+        <div class="unit-card">
+          <h2>Deployment Map</h2>
+          <canvas id="deployment-map" aria-label="Deployment objective map" width="320" height="160"></canvas>
+          <p id="canvas-status">No objective selected.</p>
+        </div>
+        <div class="unit-card">
+          <h2>Nested Rules Frame</h2>
+          <iframe id="rules-frame" title="Roster rules frame" srcdoc="<button id='frame-rule'>Mark Synapse Rule</button><p id='frame-result'>No frame rule selected.</p><script>document.getElementById('frame-rule').addEventListener('click',()=>{document.getElementById('frame-result').textContent='Synapse rule selected'; parent.postMessage({type:'frame-rule', value:'Synapse rule selected'}, '*');});</script>"></iframe>
+          <p id="frame-status">No frame event.</p>
+        </div>
       </div>
     </section>
     <aside class="summary" aria-live="polite">
@@ -159,7 +177,7 @@ function rosterFixtureHtml(): string {
       <p id="valid-line" class="valid">Waiting for units</p>
     </aside>
     <script>
-      const state = { created: false, faction: 'Adeptus Astartes', detachment: 'Invasion Fleet', hasTermagants: false, count: 10, weapon: 'Fleshborers', enhancement: false, leaderAttached: false };
+      const state = { created: false, faction: 'Adeptus Astartes', detachment: 'Invasion Fleet', hasTermagants: false, count: 10, weapon: 'Fleshborers', enhancement: false, leaderAttached: false, notes: '', uploadedFile: '', objective: '', dialogResult: '', frameRule: '' };
       const $ = (id) => document.getElementById(id);
       const render = () => {
         $('builder').classList.toggle('hidden', !state.created);
@@ -168,8 +186,11 @@ function rosterFixtureHtml(): string {
         const unitLine = state.hasTermagants ? 'Termagants x' + state.count + ' with ' + state.weapon : 'No units selected';
         const enhancement = state.enhancement ? ' + Adaptive Biology enhancement' : '';
         const leader = state.leaderAttached ? ' + leader attached' : '';
+        const file = state.uploadedFile ? ' + import ' + state.uploadedFile : '';
+        const objective = state.objective ? ' + objective ' + state.objective : '';
+        const frameRule = state.frameRule ? ' + ' + state.frameRule : '';
         const points = state.hasTermagants ? 60 + Math.max(0, state.count - 10) * 6 + (state.weapon === 'Devourers' ? 10 : 0) + (state.enhancement ? 25 : 0) + (state.leaderAttached ? 80 : 0) : 0;
-        $('summary-line').textContent = state.faction + ' / ' + state.detachment + ': ' + unitLine + enhancement + leader;
+        $('summary-line').textContent = state.faction + ' / ' + state.detachment + ': ' + unitLine + enhancement + leader + file + objective + frameRule;
         $('points-line').textContent = points + ' pts';
         $('valid-line').textContent = state.hasTermagants && state.count >= 10 ? 'Roster valid' : 'Waiting for units';
         window.__openclawRosterFixture = { ...state, points, summary: $('summary-line').textContent, valid: $('valid-line').textContent };
@@ -184,9 +205,18 @@ function rosterFixtureHtml(): string {
       $('termagants-plus').addEventListener('click', () => { state.count += 5; $('termagants-count').value = String(state.count); render(); });
       $('termagants-weapon').addEventListener('change', (event) => { state.weapon = event.target.value; render(); });
       $('termagants-enhancement').addEventListener('change', (event) => { state.enhancement = event.target.checked; render(); });
-      $('termagants-card').addEventListener('dragstart', (event) => { event.dataTransfer.setData('text/plain', 'Termagants'); });
+      $('termagants-card').addEventListener('dragstart', (event) => { state.draggingTermagants = true; event.dataTransfer.setData('text/plain', 'Termagants'); });
+      $('termagants-card').addEventListener('mousedown', () => { state.draggingTermagants = true; });
       $('leader-drop').addEventListener('dragover', (event) => event.preventDefault());
-      $('leader-drop').addEventListener('drop', (event) => { event.preventDefault(); state.leaderAttached = true; render(); });
+      $('leader-drop').addEventListener('drop', (event) => { event.preventDefault(); state.leaderAttached = true; state.draggingTermagants = false; render(); });
+      $('leader-drop').addEventListener('mouseup', () => { if (state.draggingTermagants) { state.leaderAttached = true; state.draggingTermagants = false; render(); } });
+      $('roster-notes').addEventListener('input', (event) => { state.notes = event.target.value; render(); });
+      $('rules-help').addEventListener('mouseenter', () => { state.hoveredHelp = true; render(); });
+      $('validate-dialog').addEventListener('click', () => { state.dialogResult = prompt('Roster validation note?', 'ready') || ''; render(); });
+      $('roster-upload').addEventListener('input', (event) => { state.uploadedFile = event.target.files?.[0]?.name || ''; $('upload-status').textContent = state.uploadedFile ? 'Imported ' + state.uploadedFile : 'No roster file imported.'; render(); });
+      $('deployment-map').addEventListener('click', (event) => { const rect = event.currentTarget.getBoundingClientRect(); state.objective = Math.round(event.clientX - rect.left) + ',' + Math.round(event.clientY - rect.top); $('canvas-status').textContent = 'Objective selected at ' + state.objective; render(); });
+      window.addEventListener('message', (event) => { if (event.data?.type === 'frame-rule') { state.frameRule = event.data.value; $('frame-status').textContent = event.data.value; render(); } });
+      const ctx = $('deployment-map').getContext('2d'); ctx.fillStyle = '#dceeff'; ctx.fillRect(20, 20, 80, 50); ctx.fillStyle = '#333'; ctx.fillText('Objective A', 34, 50);
       console.log('openclaw-roster-fixture-ready');
       render();
     </script>
@@ -951,6 +981,207 @@ describeLive("browser (live): Chrome MCP isolated local fixture", () => {
         if (targetId) {
           await closeChromeMcpTab(profileName, targetId, profile).catch(() => {});
         }
+        await stopFixture(fixture);
+      }
+    },
+  );
+
+  it(
+    "proves a complex roster gauntlet across Chrome MCP Browser tool abilities",
+    { timeout: 240_000 },
+    async () => {
+      const fixture = await startFixture();
+      const profileName = "chrome-roster-gauntlet-live";
+      const profile: ChromeMcpProfileOptions = { cdpUrl: `http://127.0.0.1:${fixture.cdpPort}` };
+      let targetId: string | undefined;
+      const uploadPath = path.join(DEFAULT_UPLOAD_DIR, `roster-gauntlet-${Date.now()}.rosz`);
+      try {
+        await mkdir(DEFAULT_UPLOAD_DIR, { recursive: true });
+        await writeFile(uploadPath, "openclaw roster gauntlet import");
+        const routeJson = createLiveRouteJson(profileName, fixture);
+        const browserAct = async (
+          _baseUrl: string | undefined,
+          request: unknown,
+          opts?: { profile?: string; timeoutMs?: number },
+        ) =>
+          routeJson(undefined, {
+            method: "POST",
+            path: "/act",
+            query: { profile: opts?.profile },
+            body: request,
+            timeoutMs: opts?.timeoutMs,
+          });
+        const getRuntimeConfig = () => ({ browser: createLiveBrowserConfig(profileName, fixture) });
+        browserToolTesting.setDepsForTest({
+          browserRouteJson: routeJson,
+          browserAct,
+          browserArmFileChooser: async (_baseUrl, opts) =>
+            routeJson(undefined, {
+              method: "POST",
+              path: "/hooks/file-chooser",
+              query: { profile: opts.profile },
+              body: opts,
+              timeoutMs: opts.timeoutMs,
+            }),
+          browserArmDialog: async (_baseUrl, opts) =>
+            routeJson(undefined, {
+              method: "POST",
+              path: "/hooks/dialog",
+              query: { profile: opts.profile },
+              body: opts,
+              timeoutMs: opts.timeoutMs,
+            }),
+          getRuntimeConfig,
+        });
+        browserToolActionTesting.setDepsForTest({ browserAct, getRuntimeConfig });
+
+        const tab = await openChromeMcpTab(
+          profileName,
+          `http://127.0.0.1:${fixture.httpPort}/roster`,
+          profile,
+        );
+        targetId = tab.targetId;
+        await waitForChromeMcpText({
+          profileName,
+          profile,
+          targetId,
+          text: ["New Recruit-style Roster Fixture"],
+          timeoutMs: 10_000,
+        });
+
+        const refBy = (params: { role?: string; nameIncludes: string }) =>
+          snapshotUid({ profileName, profile, targetId: targetId!, ...params });
+        const act = (args: Record<string, unknown>) =>
+          executeBrowserToolAction({ action: "act", profile: profileName, targetId, ...args });
+
+        await act({ kind: "resize", width: 1280, height: 900 });
+        await act({
+          kind: "click",
+          ref: await refBy({ role: "button", nameIncludes: "Create List" }),
+        });
+        await act({
+          kind: "fill",
+          fields: [
+            {
+              ref: await refBy({ role: "textbox", nameIncludes: "List name" }),
+              value: "Gauntlet Tyranids",
+            },
+            {
+              ref: await refBy({ role: "textbox", nameIncludes: "Unit search" }),
+              value: "Termagants",
+            },
+          ],
+        });
+        await act({
+          kind: "select",
+          ref: await refBy({ role: "combobox", nameIncludes: "Faction" }),
+          values: ["Tyranids"],
+        });
+        await act({
+          kind: "select",
+          ref: await refBy({ role: "combobox", nameIncludes: "Detachment" }),
+          values: ["Crusher Stampede"],
+        });
+        await act({
+          kind: "click",
+          ref: await refBy({ role: "button", nameIncludes: "Add Termagants" }),
+        });
+        await act({
+          kind: "type",
+          ref: await refBy({ role: "textbox", nameIncludes: "Termagants model count" }),
+          text: "25",
+        });
+        await act({
+          kind: "press",
+          ref: await refBy({ role: "textbox", nameIncludes: "Termagants model count" }),
+          key: "ArrowUp",
+        });
+        await act({
+          kind: "select",
+          ref: await refBy({ role: "combobox", nameIncludes: "Termagants weapon loadout" }),
+          values: ["Spinefists"],
+        });
+        await act({
+          kind: "click",
+          ref: await refBy({ role: "checkbox", nameIncludes: "Adaptive Biology enhancement" }),
+        });
+        await act({
+          kind: "hover",
+          ref: await refBy({ role: "button", nameIncludes: "Show rules help" }),
+        });
+        await act({
+          kind: "type",
+          ref: await refBy({ role: "textbox", nameIncludes: "Roster notes" }),
+          text: "Synapse web, screen, and battleline checks complete.",
+        });
+
+        const fileRef = await refBy({ nameIncludes: "Roster import file" });
+        await expect(
+          executeBrowserToolAction({
+            action: "upload",
+            profile: profileName,
+            targetId,
+            inputRef: fileRef,
+            paths: [uploadPath],
+          }),
+        ).resolves.toEqual(expect.objectContaining({ ok: true }));
+
+        const canvasClick = (await act({
+          kind: "evaluate",
+          fn: `() => { const r = document.getElementById('deployment-map').getBoundingClientRect(); return { x: Math.round(r.left + 60), y: Math.round(r.top + 45) }; }`,
+        })) as { result?: { x?: number; y?: number } };
+        await act({ kind: "clickCoords", x: canvasClick.result?.x, y: canvasClick.result?.y });
+
+        await expect(
+          executeBrowserToolAction({
+            action: "dialog",
+            profile: profileName,
+            targetId,
+            accept: true,
+            promptText: "validation accepted",
+          }),
+        ).resolves.toEqual(expect.objectContaining({ ok: true }));
+        await act({
+          kind: "click",
+          ref: await refBy({ role: "button", nameIncludes: "Validate roster dialog" }),
+        });
+
+        await act({
+          kind: "evaluate",
+          fn: `() => { const frame = document.getElementById('rules-frame'); frame.contentDocument.getElementById('frame-rule').click(); return true; }`,
+        });
+        await act({
+          kind: "wait",
+          fn: `() => ["Imported", "Objective selected", "Synapse rule selected", "Roster valid"].every((text) => document.body.innerText.includes(text))`,
+          timeoutMs: 10_000,
+        });
+
+        await expect(
+          act({ kind: "evaluate", fn: "() => window.__openclawRosterFixture" }),
+        ).resolves.toEqual(
+          expect.objectContaining({
+            ok: true,
+            result: expect.objectContaining({
+              faction: "Tyranids",
+              detachment: "Crusher Stampede",
+              hasTermagants: true,
+              weapon: "Spinefists",
+              enhancement: true,
+              uploadedFile: expect.stringContaining("roster-gauntlet"),
+              objective: expect.stringContaining(","),
+              dialogResult: "validation accepted",
+              frameRule: "Synapse rule selected",
+              valid: "Roster valid",
+            }),
+          }),
+        );
+      } finally {
+        browserToolTesting.setDepsForTest(null);
+        browserToolActionTesting.setDepsForTest(null);
+        if (targetId) {
+          await closeChromeMcpTab(profileName, targetId, profile).catch(() => {});
+        }
+        await rm(uploadPath, { force: true }).catch(() => {});
         await stopFixture(fixture);
       }
     },
