@@ -1126,7 +1126,7 @@ describe("subagent registry seam flow", () => {
     ).toBeUndefined();
   });
 
-  it("suspends retry-budgeted successful keep-mode completion deliveries during resume", async () => {
+  it("retries suspended successful keep-mode completion deliveries during resume", async () => {
     mocks.restoreSubagentRunsFromDisk.mockImplementation(((params: {
       runs: Map<string, unknown>;
       mergeOnly?: boolean;
@@ -1149,6 +1149,10 @@ describe("subagent registry seam flow", () => {
         lastAnnounceDeliveryError: "gateway request timeout for agent",
         frozenResultText: "child completed successfully",
         pendingFinalDelivery: true,
+        pendingFinalDeliveryLastError: "gateway request timeout for agent",
+        pendingFinalDeliveryAttemptCount: 1,
+        deliverySuspendedAt: Date.parse("2026-03-24T11:59:45Z"),
+        deliverySuspendedReason: "transient",
         pendingFinalDeliveryPayload: {
           requesterSessionKey: "agent:main:main",
           requesterDisplayKey: "main",
@@ -1168,20 +1172,23 @@ describe("subagent registry seam flow", () => {
     await Promise.resolve();
     await Promise.resolve();
 
-    expect(mocks.runSubagentAnnounceFlow).not.toHaveBeenCalled();
-    const run = mod
-      .listSubagentRunsForRequester("agent:main:main")
-      .find((entry) => entry.runId === "run-resume-keep");
-    expect(run).toMatchObject({
-      pendingFinalDelivery: true,
-      deliverySuspendedReason: "retry-limit",
-      cleanupHandled: false,
-    });
-    expect(run?.cleanupCompletedAt).toBeUndefined();
-    expect(run?.pendingFinalDeliveryPayload).toMatchObject({
-      childRunId: "run-resume-keep",
-      frozenResultText: "child completed successfully",
-    });
+    await waitForFast(() => expect(mocks.runSubagentAnnounceFlow).toHaveBeenCalledTimes(1));
+    const announceArg = getMockCallArg(
+      mocks.runSubagentAnnounceFlow,
+      0,
+      0,
+      "runSubagentAnnounceFlow",
+    );
+    expectRecordFields(
+      announceArg,
+      {
+        childRunId: "run-resume-keep",
+        childSessionKey: "agent:main:subagent:child",
+        roundOneReply: "child completed successfully",
+        waitForCompletion: false,
+      },
+      "announceArg",
+    );
   });
 
   it("clears suspended final delivery fields when reactivating a subagent run", () => {
@@ -1205,7 +1212,7 @@ describe("subagent registry seam flow", () => {
       pendingFinalDelivery: true,
       pendingFinalDeliveryCreatedAt: endedAt + 1_000,
       pendingFinalDeliveryLastAttemptAt: endedAt + 2_000,
-      pendingFinalDeliveryAttemptCount: 3,
+      pendingFinalDeliveryAttemptCount: 1,
       pendingFinalDeliveryLastError: "gateway request timeout for agent",
       pendingFinalDeliveryPayload: {
         requesterSessionKey: "agent:main:main",
@@ -1788,6 +1795,7 @@ describe("subagent registry seam flow", () => {
         },
         deliverySuspendedAt: now - 60_000 + i,
         deliverySuspendedReason: "retry-limit",
+        lastAnnounceDeliveryError: "gateway request timeout for agent",
       });
     }
 
@@ -1800,11 +1808,13 @@ describe("subagent registry seam flow", () => {
     const stillSuspended = runs.filter(
       (run) => run?.pendingFinalDelivery === true && typeof run.deliverySuspendedAt === "number",
     );
-    expect(discarded).toHaveLength(41);
-    expect(stillSuspended).toHaveLength(10);
+    expect(discarded).toHaveLength(1);
+    expect(stillSuspended).toHaveLength(0);
     expect(discarded[0]?.runId).toBe("run-suspended-pressure-0");
-    expect(runs[40]?.deliveryDiscardReason).toBe("pressure-pruned");
-    expect(runs[41]?.pendingFinalDelivery).toBe(true);
+    expect(runs[0]?.deliveryDiscardReason).toBe("pressure-pruned");
+    expect(runs.slice(1)).toSatisfy((entries: Array<(typeof runs)[number]>) =>
+      entries.every((run) => run == null),
+    );
     expect(mocks.persistSubagentRunsToDisk).toHaveBeenCalled();
   });
 });

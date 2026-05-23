@@ -517,18 +517,16 @@ function resumeSubagentRun(runId: string) {
   if (entry.cleanupCompletedAt) {
     return;
   }
-  if (
-    typeof entry.endedAt === "number" &&
-    entry.pendingFinalDelivery === true &&
-    typeof entry.deliverySuspendedAt === "number"
-  ) {
-    return;
-  }
   if (entry.pauseReason === "sessions_yield") {
     return;
   }
-  // Skip entries that have exhausted their retry budget or expired (#18264).
-  if ((entry.announceRetryCount ?? 0) >= MAX_ANNOUNCE_RETRY_COUNT) {
+  // Skip entries that have exhausted their retry budget or expired (#18264),
+  // except suspended required keep-mode completions: those are durable pending
+  // deliveries and must get a restart recovery attempt instead of staying stuck.
+  if (
+    (entry.announceRetryCount ?? 0) >= MAX_ANNOUNCE_RETRY_COUNT &&
+    !isRestartRecoverableSuspendedCompletionDelivery(entry)
+  ) {
     void finalizeResumedAnnounceGiveUp({
       runId,
       entry,
@@ -680,7 +678,22 @@ function isSuspendedPendingFinalDelivery(entry: SubagentRunRecord): boolean {
   return (
     typeof entry.endedAt === "number" &&
     entry.pendingFinalDelivery === true &&
-    typeof entry.deliverySuspendedAt === "number"
+    typeof entry.deliverySuspendedAt === "number" &&
+    !isRestartRecoverableSuspendedCompletionDelivery(entry)
+  );
+}
+
+function isRestartRecoverableSuspendedCompletionDelivery(entry: SubagentRunRecord): boolean {
+  return (
+    entry.expectsCompletionMessage === true &&
+    entry.cleanup === "keep" &&
+    typeof entry.endedAt === "number" &&
+    entry.pendingFinalDelivery === true &&
+    typeof entry.deliverySuspendedAt === "number" &&
+    entry.deliverySuspendedReason !== "retry-limit" &&
+    entry.lastAnnounceDeliveryError != null &&
+    entry.pendingFinalDeliveryPayload != null &&
+    !entry.requesterSessionKey.includes(":cron:")
   );
 }
 

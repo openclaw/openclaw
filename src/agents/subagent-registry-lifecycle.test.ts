@@ -583,6 +583,111 @@ describe("subagent registry lifecycle hardening", () => {
     });
   });
 
+  it("retries suspended required completion delivery after restart instead of treating suspension as terminal", async () => {
+    const entry = createRunEntry({
+      endedAt: 4_000,
+      endedReason: SUBAGENT_ENDED_REASON_COMPLETE,
+      expectsCompletionMessage: true,
+      cleanup: "keep",
+      cleanupHandled: true,
+      pendingFinalDelivery: true,
+      pendingFinalDeliveryLastError: "previous gateway outage",
+      deliverySuspendedAt: 4_500,
+      deliverySuspendedReason: "expiry",
+      lastAnnounceDeliveryError: "previous gateway outage",
+      frozenResultText: "final answer",
+      frozenResultCapturedAt: 4_100,
+      outcome: { status: "ok" },
+      retainAttachmentsOnKeep: false,
+    });
+    let finishAnnounce!: () => void;
+    const runSubagentAnnounceFlow: LifecycleControllerParams["runSubagentAnnounceFlow"] = vi.fn(
+      (announceParams) =>
+        new Promise<boolean>((resolve) => {
+          finishAnnounce = () => {
+            announceParams.onDeliveryResult?.({
+              delivered: true,
+              path: "direct",
+              deliveredAt: 14_300,
+            });
+            resolve(true);
+          };
+        }),
+    );
+
+    const controller = createLifecycleController({
+      entry,
+      runSubagentAnnounceFlow,
+    });
+
+    expect(controller.startSubagentAnnounceCleanupFlow(entry.runId, entry)).toBe(true);
+
+    expect(entry.pendingFinalDelivery).toBe(true);
+    expect(entry.deliverySuspendedAt).toBe(4_500);
+    finishAnnounce();
+
+    await vi.waitFor(() => expect(entry.completionAnnouncedAt).toBe(14_300));
+    expect(entry.completionDeliveredAt).toBe(14_300);
+    expect(entry.pendingFinalDelivery).toBeUndefined();
+    expect(entry.pendingFinalDeliveryLastError).toBeUndefined();
+    expect(entry.deliverySuspendedAt).toBeUndefined();
+    expect(entry.deliverySuspendedReason).toBeUndefined();
+    expect(entry.lastAnnounceDeliveryError).toBeUndefined();
+    expect(entry.cleanupCompletedAt).toBeTypeOf("number");
+    expectFields(firstCallArg(taskExecutorMocks.setDetachedTaskDeliveryStatusByRunId), {
+      runId: entry.runId,
+      runtime: "subagent",
+      sessionKey: entry.childSessionKey,
+      deliveryStatus: "delivered",
+    });
+  });
+
+  it("recovers stale handled completion cleanup records that never delivered", async () => {
+    const entry = createRunEntry({
+      endedAt: 4_000,
+      endedReason: SUBAGENT_ENDED_REASON_COMPLETE,
+      expectsCompletionMessage: true,
+      cleanup: "keep",
+      cleanupHandled: true,
+      frozenResultText: "final answer",
+      frozenResultCapturedAt: 4_100,
+      outcome: { status: "ok" },
+      retainAttachmentsOnKeep: false,
+    });
+    const runSubagentAnnounceFlow: LifecycleControllerParams["runSubagentAnnounceFlow"] = vi.fn(
+      async (announceParams) => {
+        announceParams.onDeliveryResult?.({
+          delivered: true,
+          path: "direct",
+          deliveredAt: 12_300,
+        });
+        return true;
+      },
+    );
+    const persist = vi.fn();
+
+    const controller = createLifecycleController({
+      entry,
+      persist,
+      runSubagentAnnounceFlow,
+    });
+
+    expect(controller.startSubagentAnnounceCleanupFlow(entry.runId, entry)).toBe(true);
+
+    await vi.waitFor(() => expect(entry.completionAnnouncedAt).toBe(12_300));
+    expect(entry.completionDeliveredAt).toBe(12_300);
+    expect(entry.cleanupCompletedAt).toBeTypeOf("number");
+    expect(entry.pendingFinalDelivery).toBeUndefined();
+    expectFields(firstCallArg(taskExecutorMocks.setDetachedTaskDeliveryStatusByRunId), {
+      runId: entry.runId,
+      runtime: "subagent",
+      sessionKey: entry.childSessionKey,
+      deliveryStatus: "delivered",
+    });
+    expect(helperMocks.safeRemoveAttachmentsDir).toHaveBeenCalledTimes(1);
+    expect(persist).toHaveBeenCalled();
+  });
+
   it("skips announce delivery when completion messages are disabled", async () => {
     const persist = vi.fn();
     const entry = createRunEntry({

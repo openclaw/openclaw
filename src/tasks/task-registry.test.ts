@@ -45,6 +45,7 @@ import {
   setTaskRegistryControlRuntimeForTests,
   setTaskRegistryDeliveryRuntimeForTests,
   setTaskProgressById,
+  setTaskRunDeliveryStatusByRunId,
   setTaskTimingById,
   updateTaskNotifyPolicyById,
 } from "./task-registry.js";
@@ -1990,6 +1991,49 @@ describe("task-registry", () => {
         status: "running",
         lastEventAt: now - 31 * 60_000,
       });
+    });
+  });
+
+  it("records delivery-state notification when delivery status is set by run id", async () => {
+    await withTaskRegistryTempDir(async () => {
+      const task = createTaskRecord({
+        runtime: "subagent",
+        ownerKey: "agent:main:discord:channel:C123",
+        requesterSessionKey: "agent:main:discord:channel:C123",
+        requesterOrigin: {
+          channel: "discord",
+          to: "channel:C123",
+          accountId: "default",
+        },
+        scopeKind: "session",
+        childSessionKey: "agent:worker:subagent:child",
+        runId: "run-delivery-state-by-run-id",
+        task: "Delivery state task",
+        status: "succeeded",
+        deliveryStatus: "pending",
+      });
+      setTaskTimingById({
+        taskId: task.taskId,
+        endedAt: 1_000,
+        lastEventAt: 1_500,
+      });
+
+      const [updated] = setTaskRunDeliveryStatusByRunId({
+        runId: "run-delivery-state-by-run-id",
+        runtime: "subagent",
+        sessionKey: "agent:worker:subagent:child",
+        deliveryStatus: "delivered",
+      });
+      expect(updated).toMatchObject({
+        taskId: task.taskId,
+        deliveryStatus: "delivered",
+      });
+      reloadTaskRegistryFromStore();
+      expect(await maybeDeliverTaskStateChangeUpdate(task.taskId)).toMatchObject({
+        taskId: task.taskId,
+        deliveryStatus: "delivered",
+      });
+      expect(hoisted.sendMessageMock).not.toHaveBeenCalled();
     });
   });
 

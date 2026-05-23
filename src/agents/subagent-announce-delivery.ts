@@ -66,6 +66,7 @@ const AGENT_MEDIATED_COMPLETION_TOOLS = new Set([
 ]);
 
 type SubagentAnnounceDeliveryDeps = {
+  callGateway: typeof callGateway;
   dispatchGatewayMethodInProcess: typeof dispatchGatewayMethodInProcess;
   getRuntimeConfig: typeof getRuntimeConfig;
   getRequesterSessionActivity: (requesterSessionKey: string) => {
@@ -81,6 +82,7 @@ type SubagentAnnounceDeliveryDeps = {
 };
 
 const defaultSubagentAnnounceDeliveryDeps: SubagentAnnounceDeliveryDeps = {
+  callGateway,
   dispatchGatewayMethodInProcess,
   getRuntimeConfig,
   getRequesterSessionActivity: (requesterSessionKey: string) => {
@@ -116,14 +118,31 @@ async function runAnnounceAgentCall(params: {
   expectFinal?: boolean;
   timeoutMs?: number;
 }): Promise<unknown> {
-  return await subagentAnnounceDeliveryDeps.dispatchGatewayMethodInProcess(
-    "agent",
-    params.agentParams,
-    {
+  try {
+    return await subagentAnnounceDeliveryDeps.dispatchGatewayMethodInProcess(
+      "agent",
+      params.agentParams,
+      {
+        expectFinal: params.expectFinal,
+        timeoutMs: params.timeoutMs,
+      },
+    );
+  } catch (error) {
+    if (!isMissingGatewayRequestScopeError(error)) {
+      throw error;
+    }
+    return await subagentAnnounceDeliveryDeps.callGateway({
+      method: "agent",
+      params: params.agentParams,
       expectFinal: params.expectFinal,
       timeoutMs: params.timeoutMs,
-    },
-  );
+    });
+  }
+}
+
+function isMissingGatewayRequestScopeError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : typeof error === "string" ? error : "";
+  return message.includes("In-process gateway dispatch requires a gateway request scope");
 }
 
 function formatQueueWakeFailureError(

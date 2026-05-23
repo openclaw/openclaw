@@ -932,6 +932,57 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     expect(queueEmbeddedPiMessageWithOutcome).not.toHaveBeenCalled();
   });
 
+  it("falls back to gateway call when in-process announce dispatch has no request scope", async () => {
+    const callGateway = createGatewayMock({
+      result: {
+        payloads: [{ text: "requester voice completion" }],
+      },
+    });
+    const dispatchGatewayMethodInProcess = vi.fn(async () => {
+      throw new Error(
+        "In-process gateway dispatch requires a gateway request scope (method: agent). No scope set and no fallback context available.",
+      );
+    }) as unknown as typeof runtimeDispatchGatewayMethodInProcess;
+    testing.setDepsForTest({
+      callGateway,
+      dispatchGatewayMethodInProcess,
+      getRequesterSessionActivity: () => ({
+        sessionId: "requester-session-local",
+        isActive: false,
+      }),
+      getRuntimeConfig: () => ({}) as never,
+    });
+
+    const result = await deliverSubagentAnnouncement({
+      requesterSessionKey: "agent:main:slack:channel:C123:thread:171.222",
+      targetRequesterSessionKey: "agent:main:slack:channel:C123:thread:171.222",
+      triggerMessage: "child done",
+      steerMessage: "child done",
+      requesterOrigin: slackThreadOrigin,
+      requesterSessionOrigin: slackThreadOrigin,
+      completionDirectOrigin: slackThreadOrigin,
+      directOrigin: slackThreadOrigin,
+      requesterIsSubagent: false,
+      expectsCompletionMessage: true,
+      bestEffortDeliver: true,
+      directIdempotencyKey: "announce-local-dispatch-fallback",
+    });
+
+    expectRecordFields(result, {
+      delivered: true,
+      path: "direct",
+    });
+    expect(dispatchGatewayMethodInProcess).toHaveBeenCalledTimes(1);
+    expectGatewayAgentParams(callGateway, {
+      deliver: true,
+      channel: "slack",
+      accountId: "acct-1",
+      to: "channel:C123",
+      threadId: "171.222",
+      bestEffortDeliver: true,
+    });
+  });
+
   it("uses in-process agent dispatch for dormant completion requesters", async () => {
     const callGateway = createGatewayMock();
     const dispatchGatewayMethodInProcess = createInProcessGatewayMock({

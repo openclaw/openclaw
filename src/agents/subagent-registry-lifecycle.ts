@@ -581,13 +581,26 @@ export function createSubagentRegistryLifecycleController(params: {
     await emitCompletionEndedHookIfNeeded(giveUpParams.entry, completionReason);
   };
 
+  const shouldResumeStaleCompletionCleanup = (entry: SubagentRunRecord): boolean =>
+    entry.expectsCompletionMessage === true &&
+    typeof entry.endedAt === "number" &&
+    typeof entry.cleanupCompletedAt !== "number" &&
+    typeof entry.completionAnnouncedAt !== "number";
+
   const beginSubagentCleanup = (runId: string) => {
     const entry = params.runs.get(runId);
     if (!entry) {
       return false;
     }
-    if (entry.cleanupCompletedAt || entry.cleanupHandled) {
+    if (entry.cleanupCompletedAt) {
       return false;
+    }
+    if (entry.cleanupHandled) {
+      if (!shouldResumeStaleCompletionCleanup(entry)) {
+        return false;
+      }
+      entry.cleanupHandled = false;
+      params.resumedRuns.delete(runId);
     }
     entry.cleanupHandled = true;
     params.persist();
@@ -604,9 +617,6 @@ export function createSubagentRegistryLifecycleController(params: {
         continue;
       }
       if (entry.cleanupCompletedAt || entry.cleanupHandled) {
-        continue;
-      }
-      if (entry.pendingFinalDelivery === true && typeof entry.deliverySuspendedAt === "number") {
         continue;
       }
       if (params.suppressAnnounceForSteerRestart(entry)) {

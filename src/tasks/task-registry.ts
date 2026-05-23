@@ -1734,12 +1734,23 @@ function updateTaskDeliveryByRunId(params: {
   if (params.error !== undefined) {
     patch.error = params.error;
   }
-  return updateTasksByRunId({
+  const updated = updateTasksByRunId({
     runId: params.runId,
     runtime: params.runtime,
     sessionKey: params.sessionKey,
     patch,
   });
+  if (params.deliveryStatus === "delivered") {
+    const deliveredAt = Date.now();
+    for (const task of updated) {
+      upsertTaskDeliveryState({
+        taskId: task.taskId,
+        requesterOrigin: getTaskDeliveryState(task.taskId)?.requesterOrigin,
+        lastNotifiedEventAt: Math.max(task.lastEventAt ?? 0, task.endedAt ?? 0, deliveredAt),
+      });
+    }
+  }
+  return updated;
 }
 
 export function markTaskRunningByRunId(params: {
