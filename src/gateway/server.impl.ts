@@ -17,7 +17,7 @@ import {
   setRuntimeConfigSnapshot,
   type ReadConfigFileSnapshotWithPluginMetadataResult,
 } from "../config/io.js";
-import { isNixMode } from "../config/paths.js";
+import { isNixMode, normalizeStateDirEnv } from "../config/paths.js";
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import { applyConfigOverrides } from "../config/runtime-overrides.js";
 import { resolveMainSessionKey } from "../config/sessions.js";
@@ -538,6 +538,7 @@ export async function startGatewayServer(
   port = 18789,
   opts: GatewayServerOptions = {},
 ): Promise<GatewayServer> {
+  normalizeStateDirEnv(process.env);
   const { bootstrapGatewayNetworkRuntime } = await import("./server-network-runtime.js");
   bootstrapGatewayNetworkRuntime();
 
