@@ -34,13 +34,21 @@ async function loadLogsCliRuntime(): Promise<LogsCliRuntimeModule> {
 
 type LogsTailPayload = {
   file?: string;
-  cursor?: number;
+  source?: string;
+  sourceKind?: "file" | "journal";
+  service?: {
+    pid?: number;
+    execStart?: string;
+  };
+  cursor?: LogCursor;
   size?: number;
   lines?: string[];
   truncated?: boolean;
   reset?: boolean;
   localFallback?: boolean;
 };
+
+type LogCursor = number | string;
 
 type LogsCliOptions = {
   limit?: string;
@@ -58,6 +66,19 @@ type LogsCliOptions = {
 };
 
 const LOCAL_FALLBACK_NOTICE = "Local Gateway RPC unavailable; reading configured file log instead.";
+const JOURNAL_FALLBACK_NOTICE =
+  "Local Gateway RPC unavailable; reading active systemd gateway journal instead.";
+const JOURNAL_CURSOR_PREFIX = "-- cursor: ";
+const SENSITIVE_EXEC_ARG_NAMES = new Set([
+  "--api-key",
+  "--apikey",
+  "--auth",
+  "--client-secret",
+  "--key",
+  "--password",
+  "--secret",
+  "--token",
+]);
 
 function parsePositiveInt(value: string | undefined, fallback: number): number {
   if (!value) {
@@ -69,16 +90,17 @@ function parsePositiveInt(value: string | undefined, fallback: number): number {
 
 async function fetchLogs(
   opts: LogsCliOptions,
-  cursor: number | undefined,
+  cursor: LogCursor | undefined,
   showProgress: boolean,
 ): Promise<LogsTailPayload> {
   const limit = parsePositiveInt(opts.limit, 200);
   const maxBytes = parsePositiveInt(opts.maxBytes, 250_000);
+  const gatewayCursor = typeof cursor === "number" ? cursor : undefined;
   try {
     const payload = await callGatewayFromCli(
       "logs.tail",
       opts,
-      { cursor, limit, maxBytes },
+      { cursor: gatewayCursor, limit, maxBytes },
       buildLogsTailGatewayExtra(opts, showProgress),
     );
     if (!payload || typeof payload !== "object") {
@@ -89,9 +111,17 @@ async function fetchLogs(
     if (!shouldUseLocalLogsFallback(opts, error)) {
       throw error;
     }
+    if (opts.follow) {
+      const journalPayload = await readSystemdJournalFallback({ cursor, limit, maxBytes });
+      if (journalPayload) {
+        return journalPayload;
+      }
+      throw error;
+    }
     // Match the Gateway logs.tail source when implicit local RPC is unavailable.
     return {
-      ...(await readConfiguredLogTail({ cursor, limit, maxBytes })),
+      ...(await readConfiguredLogTail({ cursor: gatewayCursor, limit, maxBytes })),
+      sourceKind: "file",
       localFallback: true,
     };
   }
@@ -105,9 +135,6 @@ function normalizeErrorMessage(error: unknown): string {
 }
 
 function shouldUseLocalLogsFallback(opts: LogsCliOptions, error: unknown): boolean {
-  if (opts.follow) {
-    return false;
-  }
   if (!isLocalGatewayRpcUnavailableError(error)) {
     return false;
   }
@@ -169,6 +196,126 @@ function isPlainGatewayRequestCloseError(message: string): boolean {
 
 function isPlainGatewayRequestTimeoutError(message: string): boolean {
   return /^gateway timeout after \d+ms\b/u.test(message);
+}
+
+async function readSystemdJournalFallback(params: {
+  cursor: LogCursor | undefined;
+  limit: number;
+  maxBytes: number;
+}): Promise<LogsTailPayload | null> {
+  if (process.platform !== "linux") {
+    return null;
+  }
+  const runtime = await loadLogsCliRuntime();
+  const service = await runtime.readSystemdServiceRuntime(process.env);
+  if (service.status !== "running" || typeof service.pid !== "number") {
+    return null;
+  }
+  const serviceCommand = await runtime.readSystemdServiceExecStart(process.env).catch(() => null);
+  const source = `journalctl --user _PID=${service.pid}`;
+  const args = [
+    "--user",
+    `_PID=${service.pid}`,
+    "--no-pager",
+    "--output=cat",
+    "--show-cursor",
+  ];
+  if (typeof params.cursor === "string" && params.cursor.trim().length > 0) {
+    args.push(`--after-cursor=${params.cursor}`);
+  } else {
+    args.push("-n", String(params.limit));
+  }
+  const result = await runtime.execFileUtf8("journalctl", args, {
+    env: process.env,
+    maxBuffer: Math.max(params.maxBytes * 2, 1024 * 1024),
+  });
+  if (result.code !== 0) {
+    return null;
+  }
+  const parsed = parseJournalctlOutput(result.stdout);
+  return {
+    source,
+    sourceKind: "journal",
+    service: {
+      pid: service.pid,
+      ...(serviceCommand
+        ? { execStart: formatServiceExecStart(serviceCommand.programArguments) }
+        : {}),
+    },
+    cursor: parsed.cursor ?? params.cursor,
+    lines: parsed.lines,
+    localFallback: true,
+  };
+}
+
+function parseJournalctlOutput(output: string): { lines: string[]; cursor?: string } {
+  const lines: string[] = [];
+  let cursor: string | undefined;
+  for (const rawLine of output.split(/\r?\n/u)) {
+    if (!rawLine) {
+      continue;
+    }
+    if (rawLine.startsWith(JOURNAL_CURSOR_PREFIX)) {
+      cursor = rawLine.slice(JOURNAL_CURSOR_PREFIX.length).trim() || cursor;
+      continue;
+    }
+    lines.push(rawLine);
+  }
+  return { lines, cursor };
+}
+
+function formatServiceExecStart(args: readonly string[]): string {
+  const rendered: string[] = [];
+  let redactNext = false;
+  for (const arg of args) {
+    if (redactNext) {
+      rendered.push("[redacted]");
+      redactNext = false;
+      continue;
+    }
+    const [name, value] = splitInlineArg(arg);
+    if (isSensitiveExecArgName(name)) {
+      if (value === undefined) {
+        rendered.push(name);
+        redactNext = true;
+      } else {
+        rendered.push(`${name}=[redacted]`);
+      }
+      continue;
+    }
+    rendered.push(renderShellArg(arg));
+  }
+  return rendered.join(" ");
+}
+
+function isSensitiveExecArgName(name: string): boolean {
+  if (SENSITIVE_EXEC_ARG_NAMES.has(name)) {
+    return true;
+  }
+  const normalized = normalizeLowercaseStringOrEmpty(name);
+  return (
+    normalized.includes("api-key") ||
+    normalized.includes("apikey") ||
+    normalized.includes("auth") ||
+    normalized.includes("password") ||
+    normalized.includes("secret") ||
+    normalized.includes("token")
+  );
+}
+
+function splitInlineArg(arg: string): [string, string | undefined] {
+  const index = arg.indexOf("=");
+  if (index <= 0) {
+    return [arg, undefined];
+  }
+  return [arg.slice(0, index), arg.slice(index + 1)];
+}
+
+function renderShellArg(arg: string): string {
+  if (/^[A-Za-z0-9_./:=@%+-]+$/u.test(arg)) {
+    return arg;
+  }
+  return JSON.stringify(arg);
 }
 
 const MAX_FOLLOW_RETRIES = 8;
@@ -346,7 +493,7 @@ export function registerLogsCli(program: Command) {
   logs.action(async (opts: LogsCliOptions) => {
     const { logLine, errorLine, emitJsonLine } = createLogWriters();
     const interval = parsePositiveInt(opts.interval, 1000);
-    let cursor: number | undefined;
+    let cursor: LogCursor | undefined;
     let first = true;
     const jsonMode = Boolean(opts.json);
     const pretty = !jsonMode && process.stdout.isTTY && !opts.plain;
@@ -405,6 +552,9 @@ export function registerLogsCli(program: Command) {
             !emitJsonLine({
               type: "meta",
               file: payload.file,
+              source: payload.source,
+              sourceKind: payload.sourceKind,
+              service: payload.service,
               cursor: payload.cursor,
               size: payload.size,
             })
@@ -445,15 +595,36 @@ export function registerLogsCli(program: Command) {
           }
         }
       } else {
-        if (first && payload.file && payload.localFallback === true) {
-          if (!errorLine(colorize(rich, theme.warn, LOCAL_FALLBACK_NOTICE))) {
+        if (first && payload.localFallback === true) {
+          const notice =
+            payload.sourceKind === "journal" ? JOURNAL_FALLBACK_NOTICE : LOCAL_FALLBACK_NOTICE;
+          if (!errorLine(colorize(rich, theme.warn, notice))) {
             return;
           }
         }
-        if (first && payload.file) {
-          const prefix = pretty ? colorize(rich, theme.muted, "Log file:") : "Log file:";
-          if (!logLine(`${prefix} ${payload.file}`)) {
-            return;
+        if (first) {
+          if (payload.sourceKind === "journal" && payload.source) {
+            const prefix = pretty ? colorize(rich, theme.muted, "Log source:") : "Log source:";
+            if (!logLine(`${prefix} ${payload.source}`)) {
+              return;
+            }
+            if (
+              payload.service?.pid !== undefined &&
+              !logLine(`Service PID: ${payload.service.pid}`)
+            ) {
+              return;
+            }
+            if (
+              payload.service?.execStart &&
+              !logLine(`Service ExecStart: ${payload.service.execStart}`)
+            ) {
+              return;
+            }
+          } else if (payload.file) {
+            const prefix = pretty ? colorize(rich, theme.muted, "Log file:") : "Log file:";
+            if (!logLine(`${prefix} ${payload.file}`)) {
+              return;
+            }
           }
         }
         for (const line of lines) {
