@@ -154,7 +154,7 @@ jobs:
       - name: Checkout trusted workflow helper
         uses: actions/checkout@v6
         with:
-          persist-credentials: true
+          persist-credentials: false
           ref: ${{ github.ref_name }}
           path: workflow
           fetch-depth: 1
@@ -175,7 +175,7 @@ jobs:
         if: steps.fast_ref.outputs.fallback == 'true'
         uses: actions/checkout@v6
         with:
-          persist-credentials: true
+          persist-credentials: false
           ref: ${{ inputs.ref }}
           path: source
           fetch-depth: 0
