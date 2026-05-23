@@ -1862,7 +1862,7 @@ describe("image tool data URL support", () => {
           prompt: "Describe this image.",
           image: `data:image/png;base64,${ONE_PIXEL_PNG_B64}`,
         }),
-      ).rejects.toThrow(/size limit/i);
+      ).rejects.toThrow(/could not be reduced below/i);
     });
   });
 

@@ -17,7 +17,6 @@ import {
   normalizeMediaReferenceSource,
 } from "../../media/media-reference.js";
 import {
-  effectiveImageBytesCap,
   loadWebMedia,
   optimizeImageBufferForWebMedia,
   type ImageCompressionModelPolicy,
@@ -293,6 +292,15 @@ function hasImageDimensionPolicy(policy?: ImageCompressionPolicy): boolean {
         (typeof model.maxPixels === "number" && model.maxPixels > 0) ||
         (typeof model.preferredSidePx === "number" && model.preferredSidePx > 0),
     ),
+  );
+}
+
+function hasImageOptimizationPolicy(policy?: ImageCompressionPolicy): boolean {
+  return (
+    hasImageDimensionPolicy(policy) ||
+    Boolean(
+      policy?.models?.some((model) => typeof model.maxBytes === "number" && model.maxBytes > 0),
+    )
   );
 }
 
@@ -782,11 +790,10 @@ export function createImageTool(options?: {
           resolvedPath ? [resolvedPath] : undefined,
         );
 
-        const dataUrlMaxBytes = effectiveImageBytesCap(maxBytes, imageCompression);
         const media = isDataUrl
           ? await (async () => {
-              const decoded = decodeDataUrl(resolvedImage, { maxBytes: dataUrlMaxBytes });
-              if (!hasImageDimensionPolicy(imageCompression)) {
+              const decoded = decodeDataUrl(resolvedImage, { maxBytes });
+              if (!hasImageOptimizationPolicy(imageCompression)) {
                 return decoded;
               }
               return await optimizeImageBufferForWebMedia({
