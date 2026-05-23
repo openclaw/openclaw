@@ -480,6 +480,36 @@ describe("loadWebMedia", () => {
     });
   });
 
+  it("sends an in-limit data URL image when optional sharp optimization is unavailable", async () => {
+    await withUnavailableImageOptimizer(async () => {
+      const { optimizeImageBufferForWebMedia } = await import("./web-media.js");
+      const buffer = Buffer.from(TINY_PNG_BASE64, "base64");
+      const result = await optimizeImageBufferForWebMedia({
+        buffer,
+        contentType: "image/png",
+        maxBytes: 1024,
+        imageCompression: { models: [{ maxSidePx: 1024 }] },
+      });
+      expect(result.kind).toBe("image");
+      expect(result.contentType).toBe("image/png");
+      expect(result.buffer.equals(buffer)).toBe(true);
+    });
+  });
+
+  it("does not bypass the data URL image cap when optional sharp optimization is unavailable", async () => {
+    await withUnavailableImageOptimizer(async () => {
+      const { optimizeImageBufferForWebMedia } = await import("./web-media.js");
+      await expect(
+        optimizeImageBufferForWebMedia({
+          buffer: Buffer.from(TINY_PNG_BASE64, "base64"),
+          contentType: "image/png",
+          maxBytes: 8,
+          imageCompression: { models: [{ maxSidePx: 1024 }] },
+        }),
+      ).rejects.toThrow(/Optional dependency sharp is required/);
+    });
+  });
+
   it("applies model image maxBytes to the effective image cap", async () => {
     await expect(
       loadWebMediaRaw(tinyPngFile, {

@@ -551,12 +551,35 @@ export async function optimizeImageBufferForWebMedia(params: {
 }): Promise<WebMediaResult> {
   const baseCap = params.maxBytes ?? maxBytesForKind("image");
   const cap = effectiveImageBytesCap(baseCap, params.imageCompression) ?? baseCap;
-  const optimized = await optimizeImageWithFallback({
-    buffer: params.buffer,
-    cap,
-    meta: { contentType: params.contentType, fileName: params.fileName },
-    imageCompression: params.imageCompression,
-  });
+  const meta = { contentType: params.contentType, fileName: params.fileName };
+  let optimized: OptimizedImage;
+  try {
+    optimized = await optimizeImageWithFallback({
+      buffer: params.buffer,
+      cap,
+      meta,
+      imageCompression: params.imageCompression,
+    });
+  } catch (err) {
+    if (
+      isImageProcessorUnavailableError(err) &&
+      !isHeicSource(meta) &&
+      params.buffer.length <= cap
+    ) {
+      if (shouldLogVerbose()) {
+        logVerbose(
+          `Image optimizer unavailable; sending original ${formatMb(params.buffer.length)}MB media without optimization`,
+        );
+      }
+      return {
+        buffer: params.buffer,
+        contentType: params.contentType,
+        kind: "image",
+        fileName: params.fileName,
+      };
+    }
+    throw err;
+  }
   logOptimizedImage({ originalSize: params.buffer.length, optimized });
   if (optimized.buffer.length > cap) {
     throw new Error(formatCapReduce("Media", cap, optimized.buffer.length));
