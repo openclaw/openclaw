@@ -15,7 +15,7 @@ import { resolveProviderIdForAuth } from "../../agents/provider-auth-aliases.js"
 import { ensureSandboxWorkspaceForSession } from "../../agents/sandbox/context.js";
 import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
 import { dispatchInboundMessage } from "../../auto-reply/dispatch.js";
-import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
+import { getReplyPayloadMetadata, type ReplyPayload } from "../../auto-reply/reply-payload.js";
 import { createReplyDispatcher } from "../../auto-reply/reply/reply-dispatcher.js";
 import { stageSandboxMedia } from "../../auto-reply/reply/stage-sandbox-media.js";
 import type { MsgContext, TemplateContext } from "../../auto-reply/templating.js";
@@ -1974,6 +1974,10 @@ function broadcastChatError(params: {
   params.context.agentRunSeq.delete(params.runId);
 }
 
+function isSourceReplyTranscriptMirrorPayload(payload: ReplyPayload | undefined) {
+  return Boolean(payload && getReplyPayloadMetadata(payload)?.sourceReplyTranscriptMirror);
+}
+
 export const chatHandlers: GatewayRequestHandlers = {
   "chat.history": async ({ params, respond, context }) => {
     if (!validateChatHistoryParams(params)) {
@@ -3067,7 +3071,90 @@ export const chatHandlers: GatewayRequestHandlers = {
                     message,
                   });
                 }
-              } else if (returnedAgentErrorPayloads.length > 0) {
+              } else {
+                const sourceReplyPayloads = deliveredReplies
+                  .filter((entry) => entry.kind === "final")
+                  .map((entry) => entry.payload)
+                  .filter(isSourceReplyTranscriptMirrorPayload);
+                if (sourceReplyPayloads.length > 0) {
+                  const finalPayloads = await normalizeWebchatReplyMediaPathsForDisplay({
+                    cfg,
+                    sessionKey,
+                    agentId,
+                    accountId,
+                    payloads: sourceReplyPayloads,
+                  });
+                  const { storePath: latestStorePath, entry: latestEntry } =
+                    loadSessionEntry(sessionKey);
+                  const sessionId = latestEntry?.sessionId ?? backingSessionId ?? clientRunId;
+                  const resolvedTranscriptPath = resolveTranscriptPath({
+                    sessionId,
+                    storePath: latestStorePath,
+                    sessionFile: latestEntry?.sessionFile ?? entry?.sessionFile,
+                    agentId,
+                  });
+                  const mediaLocalRoots = appendLocalMediaParentRoots(
+                    getAgentScopedMediaLocalRoots(cfg, agentId),
+                    resolvedTranscriptPath ? [resolvedTranscriptPath] : undefined,
+                  );
+                  const assistantContent = await buildAssistantDisplayContentFromReplyPayloads({
+                    sessionKey,
+                    payloads: finalPayloads,
+                    managedImageLocalRoots: mediaLocalRoots,
+                    includeSensitiveMedia: false,
+                    onLocalAudioAccessDenied: (message) => {
+                      context.logGateway.warn(
+                        `webchat audio embedding denied local path: ${message}`,
+                      );
+                    },
+                    onManagedImagePrepareError: (message) => {
+                      context.logGateway.warn(
+                        `webchat image embedding skipped attachment: ${message}`,
+                      );
+                    },
+                  });
+                  const mediaMessage = await buildWebchatAssistantMediaMessage(finalPayloads, {
+                    localRoots: mediaLocalRoots,
+                    onLocalAudioAccessDenied: (message) => {
+                      context.logGateway.warn(
+                        `webchat audio embedding denied local path: ${message}`,
+                      );
+                    },
+                  });
+                  const broadcastAssistantContent = hasAssistantDisplayMediaContent(
+                    assistantContent,
+                  )
+                    ? assistantContent
+                    : hasAssistantDisplayMediaContent(mediaMessage?.content)
+                      ? mediaMessage?.content
+                      : assistantContent;
+                  const displayReply =
+                    extractAssistantDisplayTextFromContent(assistantContent) ??
+                    buildTranscriptReplyText(finalPayloads);
+                  if (broadcastAssistantContent?.length || displayReply) {
+                    const now = Date.now();
+                    const message = {
+                      role: "assistant",
+                      ...(broadcastAssistantContent?.length
+                        ? { content: broadcastAssistantContent }
+                        : displayReply
+                          ? { content: [{ type: "text", text: displayReply }] }
+                          : {}),
+                      ...(displayReply ? { text: displayReply } : {}),
+                      timestamp: now,
+                      stopReason: "stop",
+                      usage: { input: 0, output: 0, totalTokens: 0 },
+                    };
+                    broadcastChatFinal({
+                      context,
+                      runId: clientRunId,
+                      sessionKey,
+                      message,
+                    });
+                  }
+                }
+              }
+              if (returnedAgentErrorPayloads.length > 0) {
                 if (!hasBeforeAgentRunGate) {
                   await emitUserTranscriptUpdateAfterAgentRun();
                 }
