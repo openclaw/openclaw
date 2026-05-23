@@ -1,5 +1,5 @@
 import { recordChannelActivity } from "openclaw/plugin-sdk/channel-activity-runtime";
-import { buildChannelTurnContext } from "openclaw/plugin-sdk/channel-inbound";
+import { buildChannelInboundEventContext } from "openclaw/plugin-sdk/channel-inbound";
 import {
   createChannelMessageReplyPipeline,
   deliverInboundReplyWithMessageSendContext,
@@ -23,6 +23,7 @@ import { syncTelegramMenuCommands } from "./bot-native-command-menu.js";
 import { deliverReplies, emitInternalMessageSentHook } from "./bot/delivery.js";
 import { createTelegramDraftStream } from "./draft-stream.js";
 import { resolveTelegramExecApproval } from "./exec-approval-resolver.js";
+import { createNativeTelegramToolProgressDraft } from "./native-tool-progress-draft.js";
 import { editMessageTelegram } from "./send.js";
 import { wasSentByBot } from "./sent-message-cache.js";
 
@@ -35,7 +36,7 @@ export type TelegramBotDeps = {
   recordChannelActivity?: typeof recordChannelActivity;
   resolveInboundLastRouteSessionKey?: typeof resolveInboundLastRouteSessionKey;
   resolvePinnedMainDmOwnerFromAllowlist?: typeof resolvePinnedMainDmOwnerFromAllowlist;
-  buildChannelTurnContext?: typeof buildChannelTurnContext;
+  buildChannelInboundEventContext?: typeof buildChannelInboundEventContext;
   readChannelAllowFromStore: typeof readChannelAllowFromStore;
   upsertChannelPairingRequest: typeof upsertChannelPairingRequest;
   enqueueSystemEvent: typeof enqueueSystemEvent;
@@ -47,6 +48,7 @@ export type TelegramBotDeps = {
   wasSentByBot: typeof wasSentByBot;
   resolveExecApproval?: typeof resolveTelegramExecApproval;
   createTelegramDraftStream?: typeof createTelegramDraftStream;
+  createNativeTelegramToolProgressDraft?: typeof createNativeTelegramToolProgressDraft;
   deliverReplies?: typeof deliverReplies;
   deliverInboundReplyWithMessageSendContext?: typeof deliverInboundReplyWithMessageSendContext;
   emitInternalMessageSentHook?: typeof emitInternalMessageSentHook;
@@ -82,8 +84,8 @@ export const defaultTelegramBotDeps: TelegramBotDeps = {
   get resolvePinnedMainDmOwnerFromAllowlist() {
     return resolvePinnedMainDmOwnerFromAllowlist;
   },
-  get buildChannelTurnContext() {
-    return buildChannelTurnContext;
+  get buildChannelInboundEventContext() {
+    return buildChannelInboundEventContext;
   },
   get upsertChannelPairingRequest() {
     return upsertChannelPairingRequest;
@@ -114,6 +116,9 @@ export const defaultTelegramBotDeps: TelegramBotDeps = {
   },
   get createTelegramDraftStream() {
     return createTelegramDraftStream;
+  },
+  get createNativeTelegramToolProgressDraft() {
+    return createNativeTelegramToolProgressDraft;
   },
   get deliverReplies() {
     return deliverReplies;

@@ -16,7 +16,11 @@ export type ResolvedSignalAccount = {
   config: SignalAccountConfig;
 };
 
-const { listAccountIds, resolveDefaultAccountId } = createAccountListHelpers("signal");
+const { listAccountIds, resolveDefaultAccountId } = createAccountListHelpers("signal", {
+  implicitDefaultAccount: {
+    channelKeys: ["account"],
+  },
+});
 export const listSignalAccountIds = listAccountIds;
 export const resolveDefaultSignalAccountId = resolveDefaultAccountId;
 
@@ -46,6 +50,7 @@ export function resolveSignalAccount(params: {
   const baseUrl = normalizeOptionalString(merged.httpUrl) ?? `http://${host}:${port}`;
   const configured = Boolean(
     normalizeOptionalString(merged.account) ||
+    normalizeOptionalString(merged.configPath) ||
     normalizeOptionalString(merged.httpUrl) ||
     normalizeOptionalString(merged.cliPath) ||
     normalizeOptionalString(merged.httpHost) ||

@@ -41,6 +41,7 @@ async function runQaSuite(opts: {
   enabledPluginIds?: string[];
   cliAuthMode?: string;
   parityPack?: string;
+  pack?: string;
   scenarioIds?: string[];
   concurrency?: number;
   runner?: string;
@@ -50,6 +51,7 @@ async function runQaSuite(opts: {
   disk?: string;
   preflight?: boolean;
   runtimePair?: string;
+  runtimeParityTier?: string[];
 }) {
   const runtime = await loadQaLabCliRuntime();
   await runtime.runQaSuiteCommand(opts);
@@ -64,14 +66,32 @@ async function runQaParityReport(opts: {
   outputDir?: string;
   runtimeAxis?: boolean;
   summary?: string;
+  tokenEfficiency?: boolean;
 }) {
   const runtime = await loadQaLabCliRuntime();
   await runtime.runQaParityReportCommand(opts);
 }
 
-async function runQaCoverageReport(opts: { repoRoot?: string; output?: string; json?: boolean }) {
+async function runQaCoverageReport(opts: {
+  repoRoot?: string;
+  output?: string;
+  json?: boolean;
+  tools?: boolean;
+  summary?: string;
+}) {
   const runtime = await loadQaLabCliRuntime();
   await runtime.runQaCoverageReportCommand(opts);
+}
+
+async function runQaJsonlReplay(opts: {
+  repoRoot?: string;
+  transcripts?: string;
+  outputDir?: string;
+  runtimePair?: string;
+  providerMode?: QaProviderModeInput;
+}) {
+  const runtime = await loadQaLabCliRuntime();
+  await runtime.runQaJsonlReplayCommand(opts);
 }
 
 async function runQaCharacterEval(opts: {
@@ -162,7 +182,6 @@ async function runQaUi(opts: {
   advertiseHost?: string;
   advertisePort?: number;
   controlUiUrl?: string;
-  controlUiToken?: string;
   controlUiProxyTarget?: string;
   uiDistDir?: string;
   autoKickoffTarget?: string;
@@ -253,6 +272,10 @@ export function registerQaLabCli(program: Command) {
       "CLI backend auth mode for live Claude CLI runs: auto, api-key, or subscription",
     )
     .option("--parity-pack <name>", 'Preset scenario pack; currently only "agentic" is supported')
+    .option(
+      "--pack <id>",
+      'Scenario pack id; currently "personal-agent" and "observability" are supported',
+    )
     .option("--scenario <id>", "Run only the named QA scenario (repeatable)", collectString, [])
     .option(
       "--enable-plugin <id>",
@@ -279,6 +302,12 @@ export function registerQaLabCli(program: Command) {
     .option("--memory <size>", "Multipass memory size")
     .option("--disk <size>", "Multipass disk size")
     .option("--runtime-pair <pair>", "Run each scenario under both runtimes, e.g. pi,codex")
+    .option(
+      "--runtime-parity-tier <tier>",
+      "Add scenarios tagged with runtimeParityTier (standard, optional, live-only, soak; repeatable or comma-separated)",
+      collectString,
+      [],
+    )
     .action(
       async (opts: {
         repoRoot?: string;
@@ -290,6 +319,7 @@ export function registerQaLabCli(program: Command) {
         altModel?: string;
         cliAuthMode?: string;
         parityPack?: string;
+        pack?: string;
         scenario?: string[];
         enablePlugin?: string[];
         concurrency?: number;
@@ -302,6 +332,7 @@ export function registerQaLabCli(program: Command) {
         disk?: string;
         preflight?: boolean;
         runtimePair?: string;
+        runtimeParityTier?: string[];
       }) => {
         await runQaSuite({
           repoRoot: opts.repoRoot,
@@ -315,6 +346,7 @@ export function registerQaLabCli(program: Command) {
           thinking: opts.thinking,
           cliAuthMode: opts.cliAuthMode,
           parityPack: opts.parityPack,
+          pack: opts.pack,
           scenarioIds: opts.scenario,
           enabledPluginIds: opts.enablePlugin,
           concurrency: opts.concurrency,
@@ -325,6 +357,7 @@ export function registerQaLabCli(program: Command) {
           disk: opts.disk,
           preflight: opts.preflight,
           runtimePair: opts.runtimePair,
+          runtimeParityTier: opts.runtimeParityTier,
         });
       },
     );
@@ -335,6 +368,11 @@ export function registerQaLabCli(program: Command) {
     .option("--baseline-summary <path>", "Baseline qa-suite-summary.json path")
     .option("--runtime-axis", "Interpret --summary as a runtime-pair qa-suite-summary.json", false)
     .option("--summary <path>", "Runtime-axis qa-suite-summary.json path")
+    .option(
+      "--token-efficiency",
+      "Also write the runtime token-efficiency report for --runtime-axis summaries",
+      false,
+    )
     .option("--repo-root <path>", "Repository root to target when running from a neutral cwd")
     .option(
       "--candidate-label <label>",
@@ -353,19 +391,57 @@ export function registerQaLabCli(program: Command) {
         outputDir?: string;
         runtimeAxis?: boolean;
         summary?: string;
+        tokenEfficiency?: boolean;
       }) => {
         await runQaParityReport(opts);
       },
     );
 
   qa.command("coverage")
-    .description("Print the markdown scenario coverage inventory")
+    .description("Print the markdown QA coverage inventory")
     .option("--repo-root <path>", "Repository root to target when writing --output")
     .option("--output <path>", "Write the coverage inventory to this path")
     .option("--json", "Print JSON instead of Markdown", false)
-    .action(async (opts: { repoRoot?: string; output?: string; json?: boolean }) => {
-      await runQaCoverageReport(opts);
-    });
+    .option("--tools", "Print runtime tool fixture coverage instead of scenario coverage", false)
+    .option("--summary <path>", "Runtime qa-suite-summary.json to overlay on --tools coverage")
+    .action(
+      async (opts: {
+        repoRoot?: string;
+        output?: string;
+        json?: boolean;
+        tools?: boolean;
+        summary?: string;
+      }) => {
+        await runQaCoverageReport(opts);
+      },
+    );
+
+  qa.command("jsonl-replay")
+    .description("Replay curated JSONL transcripts through the runtime parity replay harness")
+    .option("--repo-root <path>", "Repository root to target when running from a neutral cwd")
+    .option(
+      "--transcripts <path>",
+      "Directory of curated JSONL transcripts",
+      "qa/scenarios/jsonl-replay",
+    )
+    .option("--runtime-pair <pair>", "Runtime pair label, e.g. pi,codex", "pi,codex")
+    .option(
+      "--provider-mode <mode>",
+      `Provider mode (${formatQaProviderModeHelp()})`,
+      "mock-openai",
+    )
+    .option("--output-dir <path>", "Artifact directory for the JSONL replay report")
+    .action(
+      async (opts: {
+        repoRoot?: string;
+        transcripts?: string;
+        runtimePair?: string;
+        providerMode?: QaProviderModeInput;
+        outputDir?: string;
+      }) => {
+        await runQaJsonlReplay(opts);
+      },
+    );
 
   qa.command("character-eval")
     .description("Run the character QA scenario across live models and write a judged report")
@@ -565,7 +641,6 @@ export function registerQaLabCli(program: Command) {
       Number(value),
     )
     .option("--control-ui-url <url>", "Optional Control UI URL to embed beside the QA panel")
-    .option("--control-ui-token <token>", "Optional Control UI token for embedded links")
     .option(
       "--control-ui-proxy-target <url>",
       "Optional upstream Control UI target for /control-ui proxying",
@@ -586,7 +661,6 @@ export function registerQaLabCli(program: Command) {
         advertiseHost?: string;
         advertisePort?: number;
         controlUiUrl?: string;
-        controlUiToken?: string;
         controlUiProxyTarget?: string;
         uiDistDir?: string;
         autoKickoffTarget?: string;

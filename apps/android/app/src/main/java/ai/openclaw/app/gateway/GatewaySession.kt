@@ -1,12 +1,14 @@
 package ai.openclaw.app.gateway
 
 import android.util.Log
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
@@ -68,6 +70,20 @@ data class GatewayConnectErrorDetails(
   val reason: String? = null,
 )
 
+data class GatewayHelloSummary(
+  val serverName: String?,
+  val remoteAddress: String?,
+  val serverVersion: String?,
+  val mainSessionKey: String?,
+  val updateAvailable: GatewayUpdateAvailableSummary?,
+)
+
+data class GatewayUpdateAvailableSummary(
+  val currentVersion: String?,
+  val latestVersion: String?,
+  val channel: String?,
+)
+
 private data class SelectedConnectAuth(
   val authToken: String?,
   val authBootstrapToken: String?,
@@ -86,7 +102,7 @@ class GatewaySession(
   private val scope: CoroutineScope,
   private val identityStore: DeviceIdentityStore,
   private val deviceAuthStore: DeviceAuthTokenStore,
-  private val onConnected: (serverName: String?, remoteAddress: String?, mainSessionKey: String?) -> Unit,
+  private val onConnected: (GatewayHelloSummary) -> Unit,
   private val onDisconnected: (message: String) -> Unit,
   private val onEvent: (event: String, payloadJson: String?) -> Unit,
   private val onInvoke: (suspend (InvokeRequest) -> InvokeResult)? = null,
@@ -149,7 +165,10 @@ class GatewaySession(
     val tls: GatewayTlsParams?,
   )
 
-  private var desired: DesiredConnection? = null
+  private val lifecycleLock = Any()
+
+  @Volatile private var desired: DesiredConnection? = null
+
   private var job: Job? = null
 
   @Volatile private var currentConnection: Connection? = null
@@ -168,26 +187,39 @@ class GatewaySession(
     options: GatewayConnectOptions,
     tls: GatewayTlsParams? = null,
   ) {
-    desired = DesiredConnection(endpoint, token, bootstrapToken, password, options, tls)
-    pendingDeviceTokenRetry = false
-    deviceTokenRetryBudgetUsed = false
-    reconnectPausedForAuthFailure = false
-    if (job == null) {
-      job = scope.launch(Dispatchers.IO) { runLoop() }
+    val connectionToClose: Connection?
+    synchronized(lifecycleLock) {
+      desired = DesiredConnection(endpoint, token, bootstrapToken, password, options, tls)
+      pendingDeviceTokenRetry = false
+      deviceTokenRetryBudgetUsed = false
+      reconnectPausedForAuthFailure = false
+      connectionToClose = currentConnection
+      if (job?.isActive != true) {
+        job = scope.launch(Dispatchers.IO) { runLoop() }
+      }
     }
+    connectionToClose?.closeQuietly()
   }
 
   fun disconnect() {
-    desired = null
-    pendingDeviceTokenRetry = false
-    deviceTokenRetryBudgetUsed = false
-    reconnectPausedForAuthFailure = false
-    currentConnection?.closeQuietly()
-    scope.launch(Dispatchers.IO) {
-      job?.cancelAndJoin()
+    val jobToCancel: Job?
+    val connectionToClose: Connection?
+    synchronized(lifecycleLock) {
+      desired = null
+      pendingDeviceTokenRetry = false
+      deviceTokenRetryBudgetUsed = false
+      reconnectPausedForAuthFailure = false
+      connectionToClose = currentConnection
+      jobToCancel = job
       job = null
-      pluginSurfaceUrls = emptyMap()
-      mainSessionKey = null
+    }
+    connectionToClose?.closeQuietly()
+    scope.launch(Dispatchers.IO) {
+      jobToCancel?.cancelAndJoin()
+      if (desired == null) {
+        pluginSurfaceUrls = emptyMap()
+        mainSessionKey = null
+      }
       onDisconnected("Offline")
     }
   }
@@ -316,6 +348,22 @@ class GatewaySession(
     return RpcResult(ok = res.ok, payloadJson = res.payloadJson, error = res.error)
   }
 
+  suspend fun sendRequestFrame(
+    method: String,
+    paramsJson: String?,
+    timeoutMs: Long = 15_000,
+    onError: (ErrorShape) -> Unit = {},
+  ) {
+    val conn = currentConnection ?: throw IllegalStateException("not connected")
+    val params =
+      if (paramsJson.isNullOrBlank()) {
+        null
+      } else {
+        json.parseToJsonElement(paramsJson)
+      }
+    conn.sendRequestFrame(method = method, params = params, timeoutMs = timeoutMs, onError = onError)
+  }
+
   private data class RpcResponse(
     val id: String,
     val ok: Boolean,
@@ -338,6 +386,22 @@ class GatewaySession(
     private val client: OkHttpClient = buildClient()
     private var socket: WebSocket? = null
     private val loggerTag = "OpenClawGateway"
+    private val incomingMessages = Channel<String>(Channel.UNLIMITED)
+    private val messagePumpJob =
+      scope.launch(Dispatchers.IO) {
+        for (text in incomingMessages) {
+          try {
+            handleMessage(text)
+          } catch (err: CancellationException) {
+            throw err
+          } catch (err: Throwable) {
+            Log.w(
+              loggerTag,
+              "gateway message handling failed: ${err.message ?: err::class.java.simpleName}",
+            )
+          }
+        }
+      }
 
     val remoteAddress: String = formatGatewayAuthority(endpoint.host, endpoint.port)
 
@@ -360,14 +424,12 @@ class GatewaySession(
       val id = UUID.randomUUID().toString()
       val deferred = CompletableDeferred<RpcResponse>()
       pending[id] = deferred
-      val frame =
-        buildJsonObject {
-          put("type", JsonPrimitive("req"))
-          put("id", JsonPrimitive(id))
-          put("method", JsonPrimitive(method))
-          if (params != null) put("params", params)
-        }
-      sendJson(frame)
+      try {
+        sendJson(buildRequestFrame(id = id, method = method, params = params))
+      } catch (err: Throwable) {
+        pending.remove(id)
+        throw err
+      }
       return try {
         withTimeout(timeoutMs) { deferred.await() }
       } catch (err: TimeoutCancellationException) {
@@ -376,17 +438,66 @@ class GatewaySession(
       }
     }
 
+    suspend fun sendRequestFrame(
+      method: String,
+      params: JsonElement?,
+      timeoutMs: Long,
+      onError: (ErrorShape) -> Unit,
+    ) {
+      val id = UUID.randomUUID().toString()
+      val deferred = CompletableDeferred<RpcResponse>()
+      pending[id] = deferred
+      try {
+        sendJson(buildRequestFrame(id = id, method = method, params = params))
+      } catch (err: Throwable) {
+        pending.remove(id)
+        throw err
+      }
+      scope.launch(Dispatchers.IO) {
+        val response =
+          try {
+            withTimeout(timeoutMs) { deferred.await() }
+          } catch (_: TimeoutCancellationException) {
+            pending.remove(id)
+            onError(ErrorShape("UNAVAILABLE", "request timeout"))
+            return@launch
+          }
+        if (!response.ok) {
+          onError(response.error ?: ErrorShape("UNAVAILABLE", "request failed"))
+        }
+      }
+    }
+
     suspend fun sendJson(obj: JsonObject) {
       val jsonString = obj.toString()
       writeLock.withLock {
-        socket?.send(jsonString)
+        if (socket?.send(jsonString) != true) {
+          throw IllegalStateException("gateway send failed")
+        }
       }
     }
+
+    private fun buildRequestFrame(
+      id: String,
+      method: String,
+      params: JsonElement?,
+    ): JsonObject =
+      buildJsonObject {
+        put("type", JsonPrimitive("req"))
+        put("id", JsonPrimitive(id))
+        put("method", JsonPrimitive(method))
+        if (params != null) put("params", params)
+      }
 
     suspend fun awaitClose() = closedDeferred.await()
 
     fun closeQuietly() {
       if (isClosed.compareAndSet(false, true)) {
+        incomingMessages.close()
+        messagePumpJob.cancel()
+        if (!connectDeferred.isCompleted) {
+          connectDeferred.completeExceptionally(IllegalStateException("Gateway closed"))
+        }
         socket?.close(1000, "bye")
         socket = null
         closedDeferred.complete(Unit)
@@ -431,7 +542,7 @@ class GatewaySession(
         webSocket: WebSocket,
         text: String,
       ) {
-        scope.launch { handleMessage(text) }
+        incomingMessages.trySend(text)
       }
 
       override fun onFailure(
@@ -443,6 +554,7 @@ class GatewaySession(
           connectDeferred.completeExceptionally(t)
         }
         if (isClosed.compareAndSet(false, true)) {
+          incomingMessages.close()
           failPending()
           closedDeferred.complete(Unit)
           onDisconnected("Gateway error: ${t.message ?: t::class.java.simpleName}")
@@ -458,6 +570,7 @@ class GatewaySession(
           connectDeferred.completeExceptionally(IllegalStateException("Gateway closed: $reason"))
         }
         if (isClosed.compareAndSet(false, true)) {
+          incomingMessages.close()
           failPending()
           closedDeferred.complete(Unit)
           onDisconnected("Gateway closed: $reason")
@@ -530,8 +643,8 @@ class GatewaySession(
           val allowedOperatorScopes =
             setOf(
               "operator.approvals",
+              "operator.pairing",
               "operator.read",
-              "operator.talk.secrets",
               "operator.write",
             )
           scopes.filter { allowedOperatorScopes.contains(it) }.distinct().sorted()
@@ -574,7 +687,9 @@ class GatewaySession(
       pendingDeviceTokenRetry = false
       deviceTokenRetryBudgetUsed = false
       reconnectPausedForAuthFailure = false
-      val serverName = obj["server"].asObjectOrNull()?.get("host").asStringOrNull()
+      val server = obj["server"].asObjectOrNull()
+      val serverName = server?.get("host").asStringOrNull()
+      val serverVersion = server?.get("version").asStringOrNull()
       val authObj = obj["auth"].asObjectOrNull()
       val deviceToken = authObj?.get("deviceToken").asStringOrNull()
       val authRole = authObj?.get("role").asStringOrNull() ?: options.role
@@ -612,13 +727,33 @@ class GatewaySession(
             ?.let { normalized -> surface to normalized }
         } ?: emptyList()
       pluginSurfaceUrls = normalizedPluginSurfaceUrls.toMap()
+      val snapshot = obj["snapshot"].asObjectOrNull()
       val sessionDefaults =
-        obj["snapshot"]
-          .asObjectOrNull()
+        snapshot
           ?.get("sessionDefaults")
           .asObjectOrNull()
       mainSessionKey = sessionDefaults?.get("mainSessionKey").asStringOrNull()
-      onConnected(serverName, remoteAddress, mainSessionKey)
+      onConnected(
+        GatewayHelloSummary(
+          serverName = serverName,
+          remoteAddress = remoteAddress,
+          serverVersion = serverVersion,
+          mainSessionKey = mainSessionKey,
+          updateAvailable = parseUpdateAvailable(snapshot?.get("updateAvailable").asObjectOrNull()),
+        ),
+      )
+    }
+
+    private fun parseUpdateAvailable(value: JsonObject?): GatewayUpdateAvailableSummary? {
+      if (value == null) return null
+      val latestVersion = value["latestVersion"].asStringOrNull()?.trim()?.takeIf { it.isNotEmpty() }
+      val currentVersion = value["currentVersion"].asStringOrNull()?.trim()?.takeIf { it.isNotEmpty() }
+      val channel = value["channel"].asStringOrNull()?.trim()?.takeIf { it.isNotEmpty() }
+      return GatewayUpdateAvailableSummary(
+        currentVersion = currentVersion,
+        latestVersion = latestVersion,
+        channel = channel,
+      )
     }
 
     private fun buildConnectParams(
@@ -905,9 +1040,11 @@ class GatewaySession(
         conn.connect()
         conn.awaitClose()
       } finally {
-        currentConnection = null
-        pluginSurfaceUrls = emptyMap()
-        mainSessionKey = null
+        if (currentConnection === conn) {
+          currentConnection = null
+          pluginSurfaceUrls = emptyMap()
+          mainSessionKey = null
+        }
       }
     }
 
@@ -1090,8 +1227,10 @@ internal fun shouldPauseGatewayReconnectAfterAuthFailure(
           role?.trim() == "node" &&
           scopes.isEmpty() &&
           error.details.reason == "not-paired" &&
-          (error.details.pauseReconnect == false ||
-            error.details.recommendedNextStep == "wait_then_retry")
+          (
+            error.details.pauseReconnect == false ||
+              error.details.recommendedNextStep == "wait_then_retry"
+          )
       )
     "AUTH_TOKEN_MISMATCH" -> deviceTokenRetryBudgetUsed && !pendingDeviceTokenRetry
     else -> false

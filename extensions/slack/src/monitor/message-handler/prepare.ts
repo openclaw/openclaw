@@ -4,17 +4,20 @@ import {
   type AckReactionScope,
 } from "openclaw/plugin-sdk/channel-feedback";
 import {
-  buildChannelTurnContext,
+  buildChannelInboundEventContext,
   buildMentionRegexes,
+  classifyChannelInboundEvent,
   formatInboundEnvelope,
   implicitMentionKindWhen,
   logInboundDrop,
   matchesMentionWithExplicit,
   resolveEnvelopeFormatOptions,
+  resolveUnmentionedGroupInboundPolicy,
   toInboundMediaFacts,
 } from "openclaw/plugin-sdk/channel-inbound";
 import { resolveChannelMessageSourceReplyDeliveryMode } from "openclaw/plugin-sdk/channel-message";
 import { hasControlCommand } from "openclaw/plugin-sdk/command-detection";
+import { isAbortRequestText } from "openclaw/plugin-sdk/command-primitives-runtime";
 import { shouldHandleTextCommands } from "openclaw/plugin-sdk/command-surface";
 import { ensureConfiguredBindingRouteReady } from "openclaw/plugin-sdk/conversation-runtime";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
@@ -67,7 +70,7 @@ import { resolveSlackMessageContent } from "./prepare-content.js";
 import { resolveSlackDmHistoryContext, resolveSlackDmHistoryLimit } from "./prepare-dm-history.js";
 import { resolveSlackRoutingContext } from "./prepare-routing.js";
 import { resolveSlackThreadContextData } from "./prepare-thread-context.js";
-import { isSlackSubteamMentionForBot } from "./subteam-mentions.js";
+import { isSlackSubteamMentionForBot, normalizeSlackId } from "./subteam-mentions.js";
 import type { PreparedSlackMessage } from "./types.js";
 
 const mentionRegexCache = new WeakMap<SlackMonitorContext, Map<string, RegExp[]>>();
@@ -363,7 +366,7 @@ function collectUniqueSlackMentionIds(text: string, regex: RegExp): string[] {
   const ids: string[] = [];
   regex.lastIndex = 0;
   for (const match of text.matchAll(regex)) {
-    const id = normalizeOptionalString(match[1]);
+    const id = normalizeSlackId(match[1]);
     if (id && !ids.includes(id)) {
       ids.push(id);
     }
@@ -387,8 +390,9 @@ async function resolveSlackExplicitMentionState(params: {
   hasSubteamMention: boolean;
   source: "message" | "app_mention";
 }): Promise<SlackExplicitMentionState> {
+  const normalizedBotUserId = normalizeSlackId(params.ctx.botUserId);
   const explicitlyMentionedBotUser = Boolean(
-    params.ctx.botUserId && params.mentionedUserIds.includes(params.ctx.botUserId),
+    normalizedBotUserId && params.mentionedUserIds.includes(normalizedBotUserId),
   );
   const explicitlyMentionedBotSubteam =
     Boolean(params.ctx.botUserId && params.hasSubteamMention) &&
@@ -849,7 +853,7 @@ export async function prepareSlackMessage(params: {
   const shouldRequireMention = isRoom
     ? (channelConfig?.requireMention ?? ctx.defaultRequireMention)
     : false;
-  if (message._ambiguousThreadReply) {
+  if (message["_ambiguousThreadReply"]) {
     ctx.logger.info(
       {
         channel: message.channel,
@@ -864,6 +868,7 @@ export async function prepareSlackMessage(params: {
   // Strip Slack mentions (<@U123>) before command detection so "@Labrador /new" is recognized
   const textForCommandDetection = stripSlackMentionsForCommandDetection(message.text ?? "");
   const hasControlCommandInMessage = hasControlCommand(textForCommandDetection, cfg);
+  const hasAbortRequest = isAbortRequestText(textForCommandDetection);
   const channelUsersAllowlistConfigured =
     isRoom && Array.isArray(channelConfig?.users) && channelConfig.users.length > 0;
   const messageIngress = await resolveSlackCommandIngress({
@@ -1033,6 +1038,16 @@ export async function prepareSlackMessage(params: {
   }
   const { rawBody, effectiveDirectMedia } = resolvedMessageContent;
   const chatType = resolveSlackChatType(conversation.resolvedChannelType);
+  const inboundEventKind = classifyChannelInboundEvent({
+    conversation: { kind: chatType },
+    unmentionedGroupPolicy: resolveUnmentionedGroupInboundPolicy({
+      cfg,
+      agentId: route.agentId,
+    }),
+    wasMentioned: effectiveWasMentioned,
+    hasControlCommand: hasControlCommandInMessage,
+    hasAbortRequest,
+  });
 
   const ackReaction = resolveAckReaction(cfg, route.agentId, {
     channel: "slack",
@@ -1040,8 +1055,10 @@ export async function prepareSlackMessage(params: {
   });
   const ackReactionValue = ackReaction ?? "";
   const sourceRepliesAreToolOnly =
-    resolveChannelMessageSourceReplyDeliveryMode({ cfg, ctx: { ChatType: chatType } }) ===
-    "message_tool_only";
+    resolveChannelMessageSourceReplyDeliveryMode({
+      cfg,
+      ctx: { ChatType: chatType, InboundEventKind: inboundEventKind },
+    }) === "message_tool_only";
   const statusReactionsExplicitlyEnabled = cfg.messages?.statusReactions?.enabled === true;
   const shouldAckReaction = () =>
     Boolean(
@@ -1100,8 +1117,6 @@ export async function prepareSlackMessage(params: {
   enqueueSystemEvent(`${inboundLabel}: ${preview}`, {
     sessionKey,
     contextKey: `slack:message:${message.channel}:${message.ts ?? "unknown"}`,
-    forceSenderIsOwnerFalse: true,
-    trusted: false,
   });
 
   const envelopeFrom =
@@ -1224,7 +1239,7 @@ export async function prepareSlackMessage(params: {
   const effectiveMessageThreadId =
     assistantThreadContext?.threadTs ?? threadContext.messageThreadId;
 
-  const ctxPayload = buildChannelTurnContext({
+  const ctxPayload = buildChannelInboundEventContext({
     channel: "slack",
     provider: "slack",
     surface: "slack",
@@ -1263,6 +1278,7 @@ export async function prepareSlackMessage(params: {
       nativeChannelId: message.channel,
     },
     message: {
+      inboundEventKind,
       body: combinedBody,
       bodyForAgent: rawBody,
       rawBody,
@@ -1362,6 +1378,8 @@ export async function prepareSlackMessage(params: {
     logVerbose(`slack inbound: channel=${message.channel} from=${slackFrom} preview="${preview}"`);
   }
 
+  const updateLastRouteSessionKey = resolveInboundLastRouteSessionKey({ route, sessionKey });
+
   return {
     ctx,
     account,
@@ -1375,13 +1393,15 @@ export async function prepareSlackMessage(params: {
       record: {
         updateLastRoute: isDirectMessage
           ? {
-              sessionKey: resolveInboundLastRouteSessionKey({ route, sessionKey }),
+              sessionKey: updateLastRouteSessionKey,
               channel: "slack",
               to: `user:${message.user}`,
               accountId: route.accountId,
               threadId: effectiveMessageThreadId,
               mainDmOwnerPin:
-                pinnedMainDmOwner && message.user
+                updateLastRouteSessionKey === route.mainSessionKey &&
+                pinnedMainDmOwner &&
+                message.user
                   ? {
                       ownerRecipient: pinnedMainDmOwner,
                       senderRecipient: normalizeLowercaseStringOrEmpty(message.user),

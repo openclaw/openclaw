@@ -31,11 +31,16 @@ import {
   type ChatState,
 } from "./controllers/chat.ts";
 import { loadModels } from "./controllers/models.ts";
-import { loadSessions, type SessionsState } from "./controllers/sessions.ts";
+import {
+  loadSessions,
+  type LoadSessionsOverrides,
+  type SessionsState,
+} from "./controllers/sessions.ts";
 import type { GatewayBrowserClient, GatewayHelloOk } from "./gateway.ts";
 import { normalizeBasePath } from "./navigation.ts";
 import { parseAgentSessionKey } from "./session-key.ts";
-import { normalizeLowercaseStringOrEmpty } from "./string-coerce.ts";
+import { isSessionRunActive } from "./session-run-state.ts";
+import { normalizeLowercaseStringOrEmpty, normalizeOptionalString } from "./string-coerce.ts";
 import type { ChatModelOverride, ModelCatalogEntry } from "./types.ts";
 import type { SessionsListResult } from "./types.ts";
 import type { ChatAttachment, ChatQueueItem } from "./ui-types.ts";
@@ -66,6 +71,7 @@ export type ChatHost = ChatInputHistoryState & {
   chatModelsLoading: boolean;
   chatModelCatalog: ModelCatalogEntry[];
   sessionsResult?: SessionsListResult | null;
+  sessionsShowArchived?: boolean;
   updateComplete?: Promise<unknown>;
   requestUpdate?: () => void;
   refreshSessionsAfterChat: Set<string>;
@@ -84,8 +90,40 @@ export type ChatAbortOptions = {
   preserveDraft?: boolean;
 };
 
-export const CHAT_SESSIONS_ACTIVE_MINUTES = 120;
-export const CHAT_SESSIONS_REFRESH_LIMIT = 100;
+// Chat pickers need recency-free session rows so older channel chats remain selectable.
+export const CHAT_SESSIONS_ACTIVE_MINUTES = 0;
+export const CHAT_SESSIONS_REFRESH_LIMIT = 50;
+
+export function createChatSessionsLoadOverrides(
+  state: { sessionsShowArchived?: boolean },
+  options: { offset?: number; append?: boolean; search?: string | null } = {},
+): LoadSessionsOverrides {
+  const overrides: LoadSessionsOverrides = {
+    activeMinutes: CHAT_SESSIONS_ACTIVE_MINUTES,
+    limit: CHAT_SESSIONS_REFRESH_LIMIT,
+    includeGlobal: true,
+    includeUnknown: true,
+    configuredAgentsOnly: true,
+  };
+  if (typeof state.sessionsShowArchived === "boolean") {
+    overrides.showArchived = state.sessionsShowArchived;
+  }
+  const search = normalizeOptionalString(options.search ?? undefined);
+  if (search) {
+    overrides.search = search;
+  }
+  const offset =
+    typeof options.offset === "number" && Number.isFinite(options.offset)
+      ? Math.max(0, Math.floor(options.offset))
+      : 0;
+  if (offset > 0) {
+    overrides.offset = offset;
+  }
+  if (options.append === true) {
+    overrides.append = true;
+  }
+  return overrides;
+}
 export {
   handleChatDraftChange,
   handleChatInputHistoryKey,
@@ -108,7 +146,7 @@ export function hasAbortableSessionRun(host: {
   }
   return Boolean(
     host.sessionsResult?.sessions.some(
-      (session) => session.key === host.sessionKey && session.hasActiveRun === true,
+      (session) => session.key === host.sessionKey && isSessionRunActive(session),
     ),
   );
 }
@@ -779,11 +817,7 @@ export async function refreshChat(
   });
   const secondaryRefresh = Promise.allSettled([
     loadSessions(host as unknown as SessionsState, {
-      activeMinutes: CHAT_SESSIONS_ACTIVE_MINUTES,
-      limit: CHAT_SESSIONS_REFRESH_LIMIT,
-      includeGlobal: true,
-      includeUnknown: true,
-      agentId: resolveAgentIdForSession(host) ?? undefined,
+      ...createChatSessionsLoadOverrides(host),
     }),
     refreshChatAvatar(host),
     refreshChatModels(host),

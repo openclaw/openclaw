@@ -115,7 +115,7 @@ export const zh_TW = {
       cacheFailed: "產生 completion 快取失敗。稍後執行 `{command}`。",
       enable: "為 {cli} 啟用 {shell} shell completion？",
       installed: "Shell completion 已安裝。{reloadHint}",
-      reloadPowerShell: "重新啟動 shell（或重新載入 PowerShell profile）。",
+      reloadPowerShell: "重新啟動 shell 或執行：{command}",
       reloadShell: "重新啟動 shell 或執行：source {profile}",
       title: "Shell completion",
     },
@@ -300,6 +300,10 @@ export const zh_TW = {
     },
     skills: {
       configure: "現在設定技能？（建議）",
+      containerBrewHidden:
+        "在 Linux 容器中會隱藏僅支援 brew 的技能安裝項，因為官方映像檔不包含 Homebrew。",
+      containerBrewManual: "請使用預先安裝 Homebrew 的自訂映像檔，或手動安裝這些依賴。",
+      containerInstallsTitle: "容器技能安裝",
       docsLine: "文件：https://docs.openclaw.ai/skills",
       enterEnv: "輸入 {env}",
       homebrewCommand: "顯示 Homebrew 安裝命令？",
@@ -314,6 +318,7 @@ export const zh_TW = {
       setEnv: "為 {name} 設定 {env}？",
       skipDepsHint: "繼續，不安裝依賴",
       statusTitle: "技能狀態",
+      allReadyTitle: "所有技能已就緒",
     },
     channels: {
       account: "{label} 帳號",
@@ -422,7 +427,8 @@ export const zh_TW = {
       scanDenied: "使用者拒絕授權。改為手動輸入。",
       scanError: "註冊錯誤：{error}。改為手動輸入。",
       scanExpired: "工作階段已過期。改為手動輸入。",
-      scanQr: "請用手機上的 Lark/飛書掃描 QR code。如果手機應用程式沒有反應，請重新執行設定並選擇手動輸入。",
+      scanQr:
+        "請用手機上的 Lark/飛書掃描 QR code。如果手機應用程式沒有反應，請重新執行設定並選擇手動輸入。",
       scanTimedOut: "掃碼逾時。改為手動輸入。",
       scanTitle: "Feishu 掃碼建立",
       scanUnavailable: "目前環境不支援掃碼建立。改為手動輸入。",
@@ -950,11 +956,13 @@ export const zh_TW = {
       webSearchDisabled: "Web search（{provider}）已設定但被停用。",
       webSearchEnabled: "Web search 已啟用，agent 可在需要時線上查詢。",
       webSearchGetKey: "取得 key：{url}",
+      webSearchAuthProfile: "憑證：使用已有 {provider} auth profile。",
       webSearchKeyEnv: "API key：透過 {env} 環境變數提供。",
       webSearchKeyRef: "API key：透過 secret reference 設定。",
       webSearchKeyStored: "API key：已存入設定。",
       webSearchNeedsKey: "新增 key 前 web_search 無法運作。",
       webSearchNoKey: "已選擇 provider {provider}，但沒有找到 API key。",
+      webSearchOAuthProfile: "憑證：使用已有 {provider} OAuth 登入。",
       webSearchProvider: "Provider：{provider}",
       webSearchProviderUnavailable:
         "已選擇 Web search provider {provider}，但目前插件策略下不可用。",

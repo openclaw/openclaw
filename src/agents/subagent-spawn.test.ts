@@ -259,6 +259,26 @@ describe("spawnSubagentDirect seam flow", () => {
     expect(agentParams.cleanupBundleMcpOnRunEnd).toBe(true);
   });
 
+  it("keeps controller ownership separate from completion ownership", async () => {
+    await spawnSubagentDirect(
+      {
+        task: "background work",
+      },
+      {
+        agentSessionKey: "agent:main:telegram:default:direct:456",
+        completionOwnerKey: "agent:main:main",
+        agentChannel: "telegram",
+        agentAccountId: "default",
+        agentTo: "telegram:direct:456",
+      },
+    );
+
+    const registerInput = firstRegisteredSubagentRun();
+    expect(registerInput.controllerSessionKey).toBe("agent:main:telegram:default:direct:456");
+    expect(registerInput.requesterSessionKey).toBe("agent:main:main");
+    expect(registerInput.requesterDisplayKey).toBe("agent:main:main");
+  });
+
   it("omits requesterOrigin threadId when no requester thread is provided", async () => {
     hoisted.callGatewayMock.mockImplementation(async (request: { method?: string }) => {
       if (request.method === "agent") {
@@ -332,8 +352,7 @@ describe("spawnSubagentDirect seam flow", () => {
         // Admin-only methods must be pinned to operator.admin.
         expect(call.scopes).toEqual(["operator.admin"]);
       } else {
-        // Non-admin methods (e.g. "agent") must NOT be forced to admin scope
-        // so the gateway preserves least-privilege and senderIsOwner stays false.
+        // Non-admin methods (e.g. "agent") must NOT be forced to admin scope.
         expect(call.scopes).toBeUndefined();
       }
     }

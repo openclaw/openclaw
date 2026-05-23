@@ -5,9 +5,13 @@ import { createCodexAppServerAgentHarness } from "./harness.js";
 import plugin from "./index.js";
 
 const runCodexAppServerAttemptMock = vi.hoisted(() => vi.fn());
+const runCodexAppServerSideQuestionMock = vi.hoisted(() => vi.fn());
 
 vi.mock("./src/app-server/run-attempt.js", () => ({
   runCodexAppServerAttempt: runCodexAppServerAttemptMock,
+}));
+vi.mock("./src/app-server/side-question.js", () => ({
+  runCodexAppServerSideQuestion: runCodexAppServerSideQuestionMock,
 }));
 
 function mockCall(mock: { mock: { calls: unknown[][] } }, index = 0) {
@@ -139,6 +143,84 @@ describe("codex plugin", () => {
 
     expect(runCodexAppServerAttemptMock).toHaveBeenCalledWith(
       { prompt: "hello" },
+      {
+        pluginConfig: { appServer: {} },
+        nativeHookRelay: { enabled: true },
+      },
+    );
+  });
+
+  it("passes live Codex plugin config into public Codex app-server attempts", async () => {
+    const registerAgentHarness = vi.fn();
+    const liveConfig = {
+      plugins: {
+        entries: {
+          codex: {
+            config: {
+              codexPlugins: {
+                enabled: true,
+                plugins: {
+                  "google-calendar": {
+                    marketplaceName: "openai-curated",
+                    pluginName: "google-calendar",
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    };
+    plugin.register(
+      createTestPluginApi({
+        id: "codex",
+        name: "Codex",
+        source: "test",
+        config: {},
+        pluginConfig: { codexPlugins: { enabled: false } },
+        runtime: {
+          config: {
+            current: () => liveConfig,
+          },
+        } as never,
+        registerAgentHarness,
+        registerCommand: vi.fn(),
+        registerMediaUnderstandingProvider: vi.fn(),
+        registerMigrationProvider: vi.fn(),
+        registerProvider: vi.fn(),
+        on: vi.fn(),
+      }),
+    );
+    const harness = mockCallArg(registerAgentHarness) as ReturnType<
+      typeof createCodexAppServerAgentHarness
+    >;
+    const result = { success: true };
+    runCodexAppServerAttemptMock.mockResolvedValueOnce(result);
+
+    await expect(harness.runAttempt({ prompt: "calendar" } as never)).resolves.toBe(result);
+
+    expect(runCodexAppServerAttemptMock).toHaveBeenCalledWith(
+      { prompt: "calendar" },
+      {
+        pluginConfig: liveConfig.plugins.entries.codex.config,
+        nativeHookRelay: { enabled: true },
+      },
+    );
+  });
+
+  it("enables the native hook relay for public Codex side questions", async () => {
+    const harness = createCodexAppServerAgentHarness({ pluginConfig: { appServer: {} } });
+    const runSideQuestion = harness.runSideQuestion;
+    const result = { text: "ok" };
+    runCodexAppServerSideQuestionMock.mockResolvedValueOnce(result);
+
+    if (!runSideQuestion) {
+      throw new Error("Expected Codex harness to expose side questions");
+    }
+    await expect(runSideQuestion({ question: "btw" } as never)).resolves.toBe(result);
+
+    expect(runCodexAppServerSideQuestionMock).toHaveBeenCalledWith(
+      { question: "btw" },
       {
         pluginConfig: { appServer: {} },
         nativeHookRelay: { enabled: true },

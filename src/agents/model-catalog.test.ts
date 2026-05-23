@@ -4,7 +4,7 @@ import { resetLogger, setLoggerOverride } from "../logging/logger.js";
 
 type PiSdkModule = typeof import("./pi-model-discovery.js");
 
-let __setModelCatalogImportForTest: typeof import("./model-catalog.js").__setModelCatalogImportForTest;
+let setModelCatalogImportForTest: typeof import("./model-catalog.js").setModelCatalogImportForTest;
 let findModelCatalogEntry: typeof import("./model-catalog.js").findModelCatalogEntry;
 let findModelInCatalog: typeof import("./model-catalog.js").findModelInCatalog;
 let loadManifestModelCatalog: typeof import("./model-catalog.js").loadManifestModelCatalog;
@@ -29,34 +29,17 @@ function isSuppressedModel(provider?: string, id?: string): boolean {
   if (!modelId) {
     return false;
   }
-  if (
+  return (
     (provider === "openai" ||
       provider === "azure-openai-responses" ||
       provider === "openai-codex") &&
     modelId === "gpt-5.3-codex-spark"
-  ) {
-    return true;
-  }
-  return (
-    provider === "openai-codex" &&
-    [
-      "gpt-5.1",
-      "gpt-5.1-codex",
-      "gpt-5.1-codex-mini",
-      "gpt-5.1-codex-max",
-      "gpt-5.2",
-      "gpt-5.2-codex",
-      "gpt-5.2-pro",
-      "gpt-5.3",
-      "gpt-5.3-codex",
-      "gpt-5.3-chat-latest",
-    ].includes(modelId)
   );
 }
 
 function mockCatalogImportFailThenRecover() {
   let call = 0;
-  __setModelCatalogImportForTest(async () => {
+  setModelCatalogImportForTest(async () => {
     call += 1;
     if (call === 1) {
       throw new Error("boom");
@@ -75,7 +58,7 @@ function mockCatalogImportFailThenRecover() {
 }
 
 function mockPiDiscoveryModels(models: unknown[]) {
-  __setModelCatalogImportForTest(
+  setModelCatalogImportForTest(
     async () =>
       ({
         discoverAuthStorage: () => ({}),
@@ -125,6 +108,23 @@ function modelIdNormalizationSnapshot() {
         },
       },
     ],
+  };
+}
+
+function configuredModel(id: string) {
+  return {
+    id,
+    name: id,
+    reasoning: false,
+    input: ["text"] as Array<"text">,
+    cost: {
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+    },
+    contextWindow: 128_000,
+    maxTokens: 8192,
   };
 }
 
@@ -194,7 +194,7 @@ describe("loadModelCatalog", () => {
     }));
 
     ({
-      __setModelCatalogImportForTest,
+      setModelCatalogImportForTest,
       findModelCatalogEntry,
       findModelInCatalog,
       loadManifestModelCatalog,
@@ -221,7 +221,7 @@ describe("loadModelCatalog", () => {
   });
 
   afterEach(() => {
-    __setModelCatalogImportForTest();
+    setModelCatalogImportForTest();
     resetModelCatalogCacheForTest();
     vi.restoreAllMocks();
   });
@@ -300,7 +300,7 @@ describe("loadModelCatalog", () => {
   it("returns partial results on discovery errors", async () => {
     setLoggerOverride({ level: "silent", consoleLevel: "warn" });
     try {
-      __setModelCatalogImportForTest(
+      setModelCatalogImportForTest(
         async () =>
           ({
             discoverAuthStorage: () => ({}),
@@ -334,7 +334,7 @@ describe("loadModelCatalog", () => {
     const importPiSdk = vi.fn(async () => {
       throw new Error("provider discovery should not load");
     });
-    __setModelCatalogImportForTest(importPiSdk as unknown as () => Promise<PiSdkModule>);
+    setModelCatalogImportForTest(importPiSdk as unknown as () => Promise<PiSdkModule>);
     currentPluginMetadataSnapshotMock.mockReturnValueOnce(undefined);
     loadPluginMetadataSnapshotMock.mockImplementationOnce(() => {
       throw new Error("metadata scan should not run");
@@ -465,7 +465,7 @@ describe("loadModelCatalog", () => {
     const importPiSdk = vi.fn(async () => {
       throw new Error("provider discovery should not load");
     });
-    __setModelCatalogImportForTest(importPiSdk as unknown as () => Promise<PiSdkModule>);
+    setModelCatalogImportForTest(importPiSdk as unknown as () => Promise<PiSdkModule>);
 
     const result = await loadModelCatalog({ config: {} as OpenClawConfig, readOnly: true });
 
@@ -536,6 +536,79 @@ describe("loadModelCatalog", () => {
     expect(loadPluginMetadataSnapshotMock).not.toHaveBeenCalled();
   });
 
+  it("reuses injected metadata for persisted read-only catalog normalization", async () => {
+    currentPluginMetadataSnapshotMock.mockReturnValue(undefined);
+    readFileMock.mockResolvedValueOnce(
+      JSON.stringify({
+        providers: {
+          custom: {
+            models: [{ id: "latest", name: "Latest Alias" }],
+          },
+        },
+      }),
+    );
+
+    const result = await loadModelCatalog({
+      config: {} as OpenClawConfig,
+      readOnly: true,
+      metadataSnapshot: modelIdNormalizationSnapshot() as unknown as NonNullable<
+        Parameters<typeof loadModelCatalog>[0]
+      >["metadataSnapshot"],
+    });
+
+    expect(requireCatalogEntry(result, "custom", "vendor/modern-model").name).toBe("Latest Alias");
+    expect(loadPluginMetadataSnapshotMock).not.toHaveBeenCalled();
+  });
+
+  it("reuses injected metadata when read-only catalog falls back to manifest rows", async () => {
+    currentPluginMetadataSnapshotMock.mockReturnValue(undefined);
+    const metadataSnapshot = {
+      ...emptyPluginMetadataSnapshot(),
+      index: {
+        policyHash: "policy",
+        plugins: [
+          {
+            pluginId: "external-provider",
+            enabled: true,
+            origin: "global",
+          },
+        ],
+      },
+      plugins: [
+        {
+          id: "external-provider",
+          origin: "global",
+          modelCatalog: {
+            providers: {
+              external: {
+                models: [{ id: "external-fast", name: "External Fast" }],
+              },
+            },
+          },
+        },
+      ],
+    };
+
+    const result = await loadModelCatalog({
+      config: {} as OpenClawConfig,
+      readOnly: true,
+      metadataSnapshot: metadataSnapshot as unknown as NonNullable<
+        Parameters<typeof loadModelCatalog>[0]
+      >["metadataSnapshot"],
+    });
+
+    expect(result).toEqual([
+      {
+        provider: "external",
+        id: "external-fast",
+        name: "External Fast",
+        input: ["text"],
+        reasoning: false,
+      },
+    ]);
+    expect(loadPluginMetadataSnapshotMock).not.toHaveBeenCalled();
+  });
+
   it("loads manifest model id policies once for persisted read-only catalog rows", async () => {
     currentPluginMetadataSnapshotMock.mockReturnValue(undefined);
     loadPluginMetadataSnapshotMock.mockReturnValue(modelIdNormalizationSnapshot());
@@ -551,8 +624,54 @@ describe("loadModelCatalog", () => {
 
     const result = await loadModelCatalog({ config: {} as OpenClawConfig, readOnly: true });
 
-    expect(requireCatalogEntry(result, "custom", "vendor/model-a").name).toBe("vendor/model-a");
-    expect(requireCatalogEntry(result, "custom", "vendor/model-d").name).toBe("vendor/model-d");
+    expect(requireCatalogEntry(result, "custom", "vendor/model-a").id).toBe("vendor/model-a");
+    expect(requireCatalogEntry(result, "custom", "vendor/model-d").id).toBe("vendor/model-d");
+    expect(loadPluginMetadataSnapshotMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("loads manifest model id policies once for configured read-only catalog rows", async () => {
+    currentPluginMetadataSnapshotMock.mockReturnValue(undefined);
+    loadPluginMetadataSnapshotMock.mockReturnValue(modelIdNormalizationSnapshot());
+
+    const result = await loadModelCatalog({
+      readOnly: true,
+      config: {
+        models: {
+          providers: {
+            custom: {
+              api: "openai-completions",
+              baseUrl: "https://custom.example/v1",
+              models: [
+                configuredModel("model-a"),
+                configuredModel("model-b"),
+                configuredModel("model-c"),
+                configuredModel("model-d"),
+              ],
+            },
+          },
+        },
+      } as OpenClawConfig,
+    });
+
+    expect(requireCatalogEntry(result, "custom", "vendor/model-a").id).toBe("vendor/model-a");
+    expect(requireCatalogEntry(result, "custom", "vendor/model-d").id).toBe("vendor/model-d");
+    expect(loadPluginMetadataSnapshotMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("loads manifest model id policies once for discovered catalog rows", async () => {
+    currentPluginMetadataSnapshotMock.mockReturnValue(undefined);
+    loadPluginMetadataSnapshotMock.mockReturnValue(modelIdNormalizationSnapshot());
+    mockPiDiscoveryModels([
+      { provider: "custom", id: "model-a", name: "Model A" },
+      { provider: "custom", id: "model-b", name: "Model B" },
+      { provider: "custom", id: "model-c", name: "Model C" },
+      { provider: "custom", id: "model-d", name: "Model D" },
+    ]);
+
+    const result = await loadModelCatalog({ config: {} as OpenClawConfig, useCache: false });
+
+    expect(requireCatalogEntry(result, "custom", "vendor/model-a").name).toBe("Model A");
+    expect(requireCatalogEntry(result, "custom", "vendor/model-d").name).toBe("Model D");
     expect(loadPluginMetadataSnapshotMock).toHaveBeenCalledTimes(1);
   });
 
@@ -654,7 +773,7 @@ describe("loadModelCatalog", () => {
     expectNoCatalogEntry(result, "openai-codex", "gpt-5.3-codex-spark");
   });
 
-  it("filters stale openai-codex 5.1/5.2/5.3 built-ins from the catalog", async () => {
+  it("keeps available openai-codex 5.1/5.2/5.3 built-ins in the catalog", async () => {
     mockPiDiscoveryModels([
       {
         id: "gpt-5.1-codex-mini",
@@ -691,9 +810,11 @@ describe("loadModelCatalog", () => {
     ]);
 
     const result = await loadModelCatalog({ config: {} as OpenClawConfig });
-    expectNoCatalogEntry(result, "openai-codex", "gpt-5.1-codex-mini");
-    expectNoCatalogEntry(result, "openai-codex", "gpt-5.2-codex");
-    expectNoCatalogEntry(result, "openai-codex", "gpt-5.3-codex");
+    expect(requireCatalogEntry(result, "openai-codex", "gpt-5.1-codex-mini").name).toBe(
+      "GPT-5.1 Codex Mini",
+    );
+    expect(requireCatalogEntry(result, "openai-codex", "gpt-5.2-codex").name).toBe("GPT-5.2 Codex");
+    expect(requireCatalogEntry(result, "openai-codex", "gpt-5.3-codex").name).toBe("GPT-5.3 Codex");
     expect(requireCatalogEntry(result, "openai-codex", "gpt-5.5").name).toBe("GPT-5.5");
   });
 
@@ -907,6 +1028,75 @@ describe("loadModelCatalog", () => {
     expect(entry.name).toBe("Qwen3.5 35B");
     expect(entry.input).toEqual(["text", "image"]);
     expect(entry.reasoning).toBe(true);
+    expect(entry.contextWindow).toBe(128_000);
+  });
+
+  it("merges manifest model catalog rows on the normal catalog path", async () => {
+    mockSingleOpenAiCatalogModel();
+    currentPluginMetadataSnapshotMock.mockReturnValue({
+      ...emptyPluginMetadataSnapshot(),
+      plugins: [
+        {
+          id: "byteplus",
+          origin: "bundled",
+          providers: ["byteplus"],
+          modelCatalog: {
+            providers: {
+              byteplus: {
+                baseUrl: "https://ark.ap-southeast.bytepluses.com/api/v3",
+                api: "openai-completions",
+                models: [
+                  {
+                    id: "seed-1-8-251228",
+                    name: "Doubao Seed 1.8",
+                    input: ["text", "image"],
+                    contextWindow: 256_000,
+                  },
+                ],
+              },
+            },
+          },
+        },
+      ],
+    });
+
+    const result = await loadModelCatalog({ config: {} as OpenClawConfig });
+
+    const entry = requireCatalogEntry(result, "byteplus", "seed-1-8-251228");
+    expect(entry.name).toBe("Doubao Seed 1.8");
+    expect(entry.input).toEqual(["text", "image"]);
+    expect(entry.contextWindow).toBe(256_000);
+  });
+
+  it("keeps configured LM Studio models visible without runtime catalog augmentation", async () => {
+    mockSingleOpenAiCatalogModel();
+    augmentCatalogMock.mockResolvedValueOnce([]);
+
+    const result = await loadModelCatalog({
+      config: {
+        models: {
+          providers: {
+            lmstudio: {
+              baseUrl: "http://127.0.0.1:1234/v1",
+              models: [
+                {
+                  id: "qwen3.6-27b@iq3_xxs",
+                  name: "Qwen 3.6 27B",
+                  input: ["text"],
+                  reasoning: false,
+                  contextWindow: 128_000,
+                  maxTokens: 8192,
+                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                },
+              ],
+            },
+          },
+        },
+      } as OpenClawConfig,
+    });
+
+    const entry = requireCatalogEntry(result, "lmstudio", "qwen3.6-27b@iq3_xxs");
+    expect(entry.name).toBe("Qwen 3.6 27B");
     expect(entry.contextWindow).toBe(128_000);
   });
 

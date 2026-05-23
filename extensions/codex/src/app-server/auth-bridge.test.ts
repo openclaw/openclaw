@@ -652,7 +652,7 @@ describe("bridgeCodexAppServerStartOptions", () => {
     }
   });
 
-  it("selects an oauthRef-backed Codex profile for app-server login", () => {
+  it("does not select Codex profiles without inline OAuth credential material", () => {
     expect(
       resolveCodexAppServerAuthProfileId({
         store: {
@@ -664,19 +664,14 @@ describe("bridgeCodexAppServerStartOptions", () => {
               access: "",
               refresh: "",
               expires: Date.now() + 60_000,
-              oauthRef: {
-                source: "openclaw-credentials",
-                provider: "openai-codex",
-                id: "0123456789abcdef0123456789abcdef",
-              },
             },
           },
         },
       }),
-    ).toBe("openai-codex:default");
+    ).toBeUndefined();
   });
 
-  it("answers refresh requests from a discovered oauthRef-backed Codex profile", async () => {
+  it("answers refresh requests from a discovered inline Codex OAuth profile", async () => {
     const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-app-server-"));
     oauthMocks.refreshOpenAICodexToken.mockResolvedValueOnce({
       access: "refreshed-ref-backed-access-token",
@@ -1122,6 +1117,71 @@ describe("bridgeCodexAppServerStartOptions", () => {
         accessToken: "ref-backed-access-token",
         chatgptAccountId: "codex@example.test",
         chatgptPlanType: null,
+      });
+    } finally {
+      await fs.rm(agentDir, { recursive: true, force: true });
+    }
+  });
+
+  it("passes OpenAI Codex token profiles through to app-server token login", async () => {
+    const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-app-server-"));
+    const request = vi.fn(async () => ({ type: "chatgptAuthTokens" }));
+    try {
+      upsertAuthProfile({
+        agentDir,
+        profileId: "openai-codex:work",
+        credential: {
+          type: "token",
+          provider: "openai-codex",
+          token: "sk-openai-codex-api-key-value",
+        },
+      });
+
+      await expect(
+        applyCodexAppServerAuthProfile({
+          client: { request } as never,
+          agentDir,
+          authProfileId: "openai-codex:work",
+        }),
+      ).resolves.toBeUndefined();
+
+      expect(request).toHaveBeenCalledWith("account/login/start", {
+        type: "chatgptAuthTokens",
+        accessToken: "sk-openai-codex-api-key-value",
+        chatgptAccountId: "openai-codex:work",
+        chatgptPlanType: null,
+      });
+    } finally {
+      await fs.rm(agentDir, { recursive: true, force: true });
+    }
+  });
+
+  it("passes OpenAI Codex API-key profiles through to app-server API-key login", async () => {
+    const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-app-server-"));
+    const request = vi.fn(async () => ({ type: "apiKey" }));
+    const tokenLikeKey = "eyJhbGciOiJub25l.eyJzdWIiOiJjb2RleCJ9.signature123456";
+    try {
+      upsertAuthProfile({
+        agentDir,
+        profileId: "openai-codex:work",
+        credential: {
+          type: "api_key",
+          provider: "openai-codex",
+          key: tokenLikeKey,
+        },
+      });
+
+      await expect(
+        applyCodexAppServerAuthProfile({
+          client: { request } as never,
+          agentDir,
+          authProfileId: "openai-codex:work",
+        }),
+      ).resolves.toBeUndefined();
+
+      expect(request).toHaveBeenCalledWith("account/login/start", {
+        type: "apiKey",
+        apiKey: tokenLikeKey,
       });
     } finally {
       await fs.rm(agentDir, { recursive: true, force: true });

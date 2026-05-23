@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  buildTelegramInboundOriginTarget,
   buildTelegramRoutingTarget,
   buildTelegramThreadParams,
   buildTypingThreadParams,
@@ -65,6 +66,36 @@ describe("resolveTelegramForumFlag", () => {
       }),
     ).resolves.toBe(true);
     expect(getChat).toHaveBeenCalledWith(-100789);
+  });
+
+  it("uses supergroup topic-message metadata before getChat lookup", async () => {
+    const getChat = vi.fn(async () => {
+      throw new Error("lookup should not run");
+    });
+    await expect(
+      resolveTelegramForumFlag({
+        chatId: -100987,
+        chatType: "supergroup",
+        isGroup: true,
+        isTopicMessage: true,
+        getChat,
+      }),
+    ).resolves.toBe(true);
+    expect(getChat).not.toHaveBeenCalled();
+  });
+
+  it("does not treat private DM topic metadata as forum metadata", async () => {
+    const getChat = vi.fn(async () => ({ is_forum: true }));
+    await expect(
+      resolveTelegramForumFlag({
+        chatId: 123456,
+        chatType: "private",
+        isGroup: false,
+        isTopicMessage: true,
+        getChat,
+      }),
+    ).resolves.toBe(false);
+    expect(getChat).not.toHaveBeenCalled();
   });
 
   it("reuses resolved forum metadata for later supergroup updates", async () => {
@@ -175,6 +206,37 @@ describe("buildTelegramRoutingTarget", () => {
     },
   ])("$name", ({ chatId, thread, expected }) => {
     expect(buildTelegramRoutingTarget(chatId, thread)).toBe(expected);
+  });
+});
+
+describe("buildTelegramInboundOriginTarget", () => {
+  it.each([
+    {
+      name: "keeps DM topic thread ids out of the origin target",
+      chatId: 42,
+      thread: { id: 77, scope: "dm" as const },
+      expected: "telegram:42",
+    },
+    {
+      name: "keeps regular groups chat-scoped",
+      chatId: -100123,
+      thread: { scope: "none" as const },
+      expected: "telegram:-100123",
+    },
+    {
+      name: "keeps General forum topic chat-scoped",
+      chatId: -100123,
+      thread: { id: 1, scope: "forum" as const },
+      expected: "telegram:-100123",
+    },
+    {
+      name: "includes real forum topic ids",
+      chatId: -100123,
+      thread: { id: 42, scope: "forum" as const },
+      expected: "telegram:-100123:topic:42",
+    },
+  ])("$name", ({ chatId, thread, expected }) => {
+    expect(buildTelegramInboundOriginTarget(chatId, thread)).toBe(expected);
   });
 });
 

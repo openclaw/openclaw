@@ -1,6 +1,7 @@
 import type { SourceReplyDeliveryMode } from "../../auto-reply/get-reply-options.types.js";
 import {
   getActiveReplyRunCount,
+  listActiveReplyRunSessionKeys,
   listActiveReplyRunSessionIds,
 } from "../../auto-reply/reply/reply-run-registry.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
@@ -10,6 +11,7 @@ export type EmbeddedPiQueueHandle = {
   queueMessage: (text: string, options?: EmbeddedPiQueueMessageOptions) => Promise<void>;
   isStreaming: () => boolean;
   isCompacting: () => boolean;
+  supportsTranscriptCommitWait?: boolean;
   cancel?: (reason?: "user_abort" | "restart" | "superseded") => void;
   abort: () => void;
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
@@ -18,6 +20,8 @@ export type EmbeddedPiQueueHandle = {
 export type EmbeddedPiQueueMessageOptions = {
   steeringMode?: "all";
   debounceMs?: number;
+  deliveryTimeoutMs?: number;
+  waitForTranscriptCommit?: boolean;
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
 };
 
@@ -73,4 +77,23 @@ export function getActiveEmbeddedRunCount(): number {
     }
   }
   return Math.max(activeCount, getActiveReplyRunCount());
+}
+
+export function listActiveEmbeddedRunSessionKeys(): string[] {
+  return [
+    ...new Set([
+      ...ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_KEY.keys(),
+      ...listActiveReplyRunSessionKeys(),
+    ]),
+  ].toSorted((a, b) => a.localeCompare(b));
+}
+
+export function listActiveEmbeddedRunSessionIds(): string[] {
+  return [
+    ...new Set([
+      ...ACTIVE_EMBEDDED_RUNS.keys(),
+      ...ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_KEY.values(),
+      ...listActiveReplyRunSessionIds(),
+    ]),
+  ].toSorted((a, b) => a.localeCompare(b));
 }

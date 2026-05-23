@@ -45,6 +45,10 @@ pnpm crabbox:run -- --help | sed -n '1,120p'
   shim can be stale.
 - Check `.crabbox.yaml` for direct-provider defaults. Omitting `--provider`
   means brokered AWS today.
+- The brokered AWS default is a Linux developer image in `eu-west-1`; the repo
+  config pins hot `eu-west-1a/b/c` placement so Fast Snapshot Restore can apply.
+  If warmup drifts well past the minute-scale path, verify image promotion,
+  region/AZ placement, and FSR state before blaming OpenClaw.
 - For broad OpenClaw maintainer `pnpm` gates, prefer the repo wrapper with
   `--provider blacksmith-testbox` or the repo Testbox helpers when the standing
   Testbox policy applies.
@@ -77,6 +81,25 @@ pnpm crabbox:run -- --help | sed -n '1,120p'
 Use these only when the task needs an existing non-Linux host. OpenClaw broad
 Linux validation uses the repo Crabbox config unless a provider is explicitly
 requested.
+
+Native brokered Windows is available for Windows-specific proof. Use the AWS
+developer image in `us-west-2` on demand; it has the expected OpenClaw developer
+toolchain and Docker image cache. Keep broad Linux gates on Linux/Testbox unless
+the bug is Windows-specific:
+
+```sh
+../crabbox/bin/crabbox warmup \
+  --provider aws \
+  --target windows \
+  --windows-mode normal \
+  --region us-west-2 \
+  --market on-demand \
+  --timing-json
+```
+
+The hydrate workflow assumes Docker should already be baked into Linux images
+and only installs it as a fallback. Do not add per-run Docker installs to proof
+commands unless the image probe shows Docker is actually missing.
 
 When the user explicitly asks for brokered macOS runners, use Crabbox AWS
 macOS only after confirming the deployed coordinator supports EC2 Mac host
@@ -287,6 +310,13 @@ Use the smallest Crabbox lane that proves the reported user path, not just the
 touched code. Aim for one after-fix E2E proof before commenting, closing, or
 opening a PR for a user-visible bug.
 
+When the user says "test in Crabbox", do not simply copy tests to the remote
+box and run them there. Crabbox is for remote real-scenario proof: copy or
+install OpenClaw as the user would, run the same setup/update/CLI/Gateway/API
+call that failed, and capture behavior from that entrypoint. For regressions or
+bug reports, prove the broken state first when feasible, then run the same
+scenario after the fix.
+
 Pick the lane by symptom:
 
 - Docker/setup/install bug: build a package tarball and run the matching
@@ -308,8 +338,9 @@ Pick the lane by symptom:
 
 Efficient flow:
 
-1. Reproduce or prove the pre-fix symptom when feasible. If the issue cannot be
-   reproduced, capture the exact command and observed behavior instead.
+1. Reproduce or prove the pre-fix symptom from the real user-facing entrypoint
+   when feasible. If the issue cannot be reproduced, capture the exact command
+   and observed behavior instead.
 2. Patch locally and run narrow local tests for edit speed.
 3. Run one Crabbox E2E command that starts from the user-facing entrypoint:
    package install, Docker setup, onboarding, channel add, gateway start, or

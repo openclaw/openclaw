@@ -518,6 +518,7 @@ describe("talk.session unified handlers", () => {
                 provider: "openai",
                 providers: { openai: { apiKey: "openai-key" } },
                 instructions: "Speak warmly.",
+                consultRouting: "force-agent-consult",
               },
             },
           }) as OpenClawConfig,
@@ -537,6 +538,9 @@ describe("talk.session unified handlers", () => {
     expect(relayCreateInput.instructions).toContain(
       "Additional realtime instructions:\nSpeak warmly.",
     );
+    expect(relayCreateInput.forceAgentConsultOnFinalTranscript).toBe(true);
+    expect(relayCreateInput.instructions).toContain("tool-backed actions");
+    expect(relayCreateInput.instructions).toContain("Let me check that for you");
     expectRespondOk(createRespond, {
       sessionId: "relay-unified-1",
       relaySessionId: "relay-unified-1",
@@ -629,7 +633,7 @@ describe("talk.session unified handlers", () => {
       mode: "transcription",
       transport: "gateway-relay",
       transcriptionSessionId: "stt-unified-1",
-      audio: { inputEncoding: "pcm16", inputSampleRateHz: 24000 },
+      audio: { inputEncoding: "g711_ulaw", inputSampleRateHz: 8000 },
       expiresAt: 1_797_986_400,
     });
 
@@ -666,7 +670,6 @@ describe("talk.session unified handlers", () => {
       transport: "gateway-relay",
       brain: "none",
     });
-
     const inputRespond = vi.fn();
     await talkHandlers["talk.session.appendAudio"]({
       req: { type: "req", id: "2", method: "talk.session.appendAudio" },
@@ -1257,6 +1260,8 @@ describe("talk.client.create handler", () => {
       reasoningEffort: "low",
     });
     expect(createInput.instructions).toContain("Additional realtime instructions:\nSpeak warmly.");
+    expect(createInput.instructions).toContain("tool-backed actions");
+    expect(createInput.instructions).toContain("Let me check that for you");
     expect(createInput).not.toHaveProperty("provider");
     expect(createInput).not.toHaveProperty("providers");
     expect(createInput).not.toHaveProperty("transport");

@@ -11,6 +11,8 @@ import {
 } from "./plugin-control-plane-context.js";
 import type { PluginMetadataSnapshot } from "./plugin-metadata-snapshot.types.js";
 
+type CurrentPluginMetadataSnapshotState = ReturnType<typeof getCurrentPluginMetadataSnapshotState>;
+
 export function resolvePluginMetadataControlPlaneFingerprint(
   config?: OpenClawConfig,
   options: Omit<ResolvePluginControlPlaneContextParams, "config"> = {},
@@ -19,6 +21,10 @@ export function resolvePluginMetadataControlPlaneFingerprint(
     config,
     ...options,
   });
+}
+
+export function isReusableCurrentPluginMetadataSnapshot(snapshot: PluginMetadataSnapshot): boolean {
+  return snapshot.registrySource !== "derived";
 }
 
 // Single-slot Gateway-owned handoff. Replace or clear it at lifecycle boundaries;
@@ -32,6 +38,10 @@ export function setCurrentPluginMetadataSnapshot(
     workspaceDir?: string;
   } = {},
 ): void {
+  if (snapshot && !isReusableCurrentPluginMetadataSnapshot(snapshot)) {
+    clearCurrentPluginMetadataSnapshotState();
+    return;
+  }
   const compatiblePolicyHashes = snapshot
     ? options.compatibleConfigs?.map((config) => resolveInstalledPluginIndexPolicyHash(config))
     : undefined;
@@ -62,6 +72,21 @@ export function setCurrentPluginMetadataSnapshot(
 
 export function clearCurrentPluginMetadataSnapshot(): void {
   clearCurrentPluginMetadataSnapshotState();
+}
+
+export function captureCurrentPluginMetadataSnapshotState(): CurrentPluginMetadataSnapshotState {
+  return getCurrentPluginMetadataSnapshotState();
+}
+
+export function restoreCurrentPluginMetadataSnapshotState(
+  state: CurrentPluginMetadataSnapshotState,
+): void {
+  setCurrentPluginMetadataSnapshotState(
+    state.snapshot,
+    state.configFingerprint,
+    state.compatiblePolicyHashes,
+    state.compatibleConfigFingerprints,
+  );
 }
 
 export function getCurrentPluginMetadataSnapshot(

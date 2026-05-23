@@ -122,4 +122,30 @@ describe("exec allowlist matching", () => {
       expect(matchAllowlist([{ pattern }], resolution)?.pattern).toBe(pattern);
     }
   });
+
+  it("matches path-shaped allowlist entries against the executable trust realpath", () => {
+    const resolution = {
+      rawExecutable: "rg",
+      resolvedPath: "/opt/homebrew/bin/rg",
+      resolvedRealPath: "/opt/homebrew/Cellar/ripgrep/14.1.1/bin/rg",
+      executableName: "rg",
+    };
+
+    expect(
+      matchAllowlist([{ pattern: "/opt/homebrew/Cellar/ripgrep/14.1.1/bin/rg" }], resolution)
+        ?.pattern,
+    ).toBe("/opt/homebrew/Cellar/ripgrep/14.1.1/bin/rg");
+    expect(matchAllowlist([{ pattern: "/opt/homebrew/bin/rg" }], resolution)).toBeNull();
+  });
+
+  it("keeps basename allowlist entries on the PATH-resolved executable name", () => {
+    const resolution = {
+      rawExecutable: "rg",
+      resolvedPath: "/opt/homebrew/bin/rg",
+      resolvedRealPath: "/opt/homebrew/Cellar/ripgrep/14.1.1/bin/rg",
+      executableName: "rg",
+    };
+
+    expect(matchAllowlist([{ pattern: "rg" }], resolution)?.pattern).toBe("rg");
+  });
 });

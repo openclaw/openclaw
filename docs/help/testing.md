@@ -47,9 +47,9 @@ When debugging real providers/models (requires real creds):
 - Live suite (models + gateway tool/image probes): `pnpm test:live`
 - Target one live file quietly: `pnpm test:live -- src/agents/models.profiles.live.test.ts`
 - Runtime performance reports: dispatch `OpenClaw Performance` with
-  `live_gpt54=true` for a real `openai/gpt-5.4` agent turn or
+  `live_openai_candidate=true` for a real `openai/gpt-5.5` agent turn or
   `deep_profile=true` for Kova CPU/heap/trace artifacts. Daily scheduled runs
-  publish mock-provider, deep-profile, and GPT 5.4 lane artifacts to
+  publish mock-provider, deep-profile, and GPT 5.5 lane artifacts to
   `openclaw/clawgrit-reports` when `CLAWGRIT_REPORTS_TOKEN` is configured. The
   mock-provider report also includes source-level gateway boot, memory,
   plugin-pressure, repeated fake-model hello-loop, and CLI startup numbers.
@@ -98,10 +98,10 @@ When debugging real providers/models (requires real creds):
     and verifies the fuzzy planner fallback translates into an audited typed
     config write.
 - Crestodian first-run Docker smoke: `pnpm test:docker:crestodian-first-run`
-  - Starts from an empty OpenClaw state dir, routes bare `openclaw` to
-    Crestodian, applies setup/model/agent/Discord plugin + SecretRef writes,
-    validates config, and verifies audit entries. The same Ring 0 setup path is
-    also covered in QA Lab by
+  - Starts from an empty OpenClaw state dir, verifies the modern onboard
+    Crestodian entrypoint, applies setup/model/agent/Discord plugin + SecretRef
+    writes, validates config, and verifies audit entries. The same Ring 0 setup
+    path is also covered in QA Lab by
     `pnpm openclaw qa suite --scenario crestodian-ring-zero-setup`.
 - Moonshot/Kimi cost smoke: with `MOONSHOT_API_KEY` set, run
   `openclaw models list --provider moonshot --json`, then run an isolated
@@ -242,7 +242,7 @@ gh workflow run package-acceptance.yml --ref main \
   -f telegram_mode=mock-openai
 ```
 
-- Exact tarball URL proof requires a digest:
+- Exact tarball URL proof requires a digest and uses the public URL safety policy:
 
 ```bash
 gh workflow run package-acceptance.yml --ref main \
@@ -251,6 +251,19 @@ gh workflow run package-acceptance.yml --ref main \
   -f package_sha256=<sha256> \
   -f suite_profile=package
 ```
+
+- Enterprise/private tarball mirrors use an explicit trusted-source policy:
+
+```bash
+gh workflow run package-acceptance.yml --ref main \
+  -f source=trusted-url \
+  -f trusted_source_id=enterprise-artifactory \
+  -f package_url=https://packages.example.internal:8443/artifactory/openclaw/openclaw-VERSION.tgz \
+  -f package_sha256=<sha256> \
+  -f suite_profile=package
+```
+
+`source=trusted-url` reads `.github/package-trusted-sources.json` from the trusted workflow ref and does not accept URL credentials or a workflow-input private-network bypass. If the named policy declares bearer auth, configure the fixed `OPENCLAW_TRUSTED_PACKAGE_TOKEN` secret.
 
 - Artifact proof downloads a tarball artifact from another Actions run:
 
@@ -335,9 +348,9 @@ start it from the Actions UI through `Mantis Scenario` (`scenario_id:
 telegram-live`) or directly from a pull request comment:
 
 ```text
-@Mantis telegram
-@Mantis telegram scenario=telegram-status-command
-@Mantis telegram scenarios=telegram-status-command,telegram-mentioned-message-reply
+@openclaw-mantis telegram
+@openclaw-mantis telegram scenario=telegram-status-command
+@openclaw-mantis telegram scenarios=telegram-status-command,telegram-mentioned-message-reply
 ```
 
 `Mantis Telegram Desktop Proof` is the agentic native Telegram Desktop
@@ -346,7 +359,7 @@ freeform `instructions`, through `Mantis Scenario` (`scenario_id:
 telegram-desktop-proof`), or from a PR comment:
 
 ```text
-@Mantis telegram desktop proof
+@openclaw-mantis telegram desktop proof
 ```
 
 The Mantis agent reads the PR, decides what Telegram-visible behavior proves the
@@ -450,70 +463,7 @@ Payload shape for Telegram real-user kind:
 - `{ groupId: string, sutToken: string, testerUserId: string, testerUsername: string, telegramApiId: string, telegramApiHash: string, tdlibDatabaseEncryptionKey: string, tdlibArchiveBase64: string, tdlibArchiveSha256: string, desktopTdataArchiveBase64: string, desktopTdataArchiveSha256: string }`
 - `groupId`, `testerUserId`, and `telegramApiId` must be numeric strings.
 - `tdlibArchiveSha256` and `desktopTdataArchiveSha256` must be SHA-256 hex strings.
-- `kind: "telegram-user"` represents one Telegram burner account. Treat the lease as account-wide: the TDLib CLI driver and Telegram Desktop visual witness restore from the same payload, and only one job should hold the lease at a time.
-
-Telegram real-user lease restore:
-
-```bash
-tmp=$(mktemp -d /tmp/openclaw-telegram-user.XXXXXX)
-node --import tsx scripts/e2e/telegram-user-credential.ts lease-restore \
-  --user-driver-dir "$tmp/user-driver" \
-  --desktop-workdir "$tmp/desktop" \
-  --lease-file "$tmp/lease.json"
-TELEGRAM_USER_DRIVER_STATE_DIR="$tmp/user-driver" \
-  uv run ~/.codex/skills/custom/telegram-e2e-bot-to-bot/scripts/user-driver.py status --json
-node --import tsx scripts/e2e/telegram-user-credential.ts release --lease-file "$tmp/lease.json"
-```
-
-Use the restored Desktop profile with `Telegram -workdir "$tmp/desktop"` when a visual recording is needed. In local operator environments, `scripts/e2e/telegram-user-credential.ts` reads `~/.codex/skills/custom/telegram-e2e-bot-to-bot/convex.local.env` by default if process env vars are absent.
-
-Agent-driven Crabbox session:
-
-```bash
-pnpm qa:telegram-user:crabbox -- start \
-  --tdlib-url http://artifacts.openclaw.ai/tdlib-v1.8.0-linux-x64.tgz \
-  --output-dir .artifacts/qa-e2e/telegram-user-crabbox/pr-review
-pnpm qa:telegram-user:crabbox -- send \
-  --session .artifacts/qa-e2e/telegram-user-crabbox/pr-review/session.json \
-  --text /status
-pnpm qa:telegram-user:crabbox -- finish \
-  --session .artifacts/qa-e2e/telegram-user-crabbox/pr-review/session.json
-```
-
-`start` leases the `telegram-user` credential, restores the same account into
-TDLib and Telegram Desktop on a Crabbox Linux desktop, starts a local mock SUT
-gateway from the current checkout, opens the visible Telegram chat, starts
-desktop recording, and writes a private `session.json`. While the session is
-alive, an agent can keep testing until satisfied:
-
-- `send --session <file> --text <message>` sends through the real TDLib user and waits for the SUT reply.
-- `run --session <file> -- <remote command>` runs an arbitrary command on the Crabbox and saves its output, for example `bash -lc 'source /tmp/openclaw-telegram-user-crabbox/env.sh && python3 /tmp/openclaw-telegram-user-crabbox/user-driver.py transcript --limit 20 --json'`.
-- `screenshot --session <file>` captures the current visible desktop.
-- `status --session <file>` prints the lease and WebVNC command.
-- `finish --session <file>` stops the recorder, captures screenshot/video/motion-trim artifacts, releases the Convex credential, stops local SUT processes, and stops the Crabbox lease unless `--keep-box` is passed.
-- `publish --session <file> --pr <number>` publishes a GIF-only PR comment by default. Pass `--full-artifacts` only when logs or JSON artifacts are intentionally needed.
-
-For deterministic visual repros, pass `--mock-response-file <path>` to `start`
-or to the one-command `probe` shorthand. The runner defaults to a standard
-Crabbox class, 24fps recording, 24fps motion GIF previews, and 1920px GIF
-width. Override with `--class`, `--record-fps`, `--preview-fps`, and
-`--preview-width` only when the proof needs different capture settings.
-
-One-command Crabbox proof:
-
-```bash
-pnpm qa:telegram-user:crabbox -- --text /status
-```
-
-The default `probe` command is shorthand for one start/send/finish cycle. Use
-it for a quick `/status` smoke. Use the session commands for PR review,
-bug-reproduction work, or any case where the agent needs minutes of arbitrary
-experimentation before deciding the proof is complete. Use `--id <cbx_...>` to
-reuse a warm desktop lease, `--keep-box` to keep VNC open after finish,
-`--desktop-chat-title <name>` to pick the visible chat, and `--tdlib-url <tgz>`
-when using a prebaked Linux `libtdjson.so` archive instead of building TDLib on
-a fresh box. The runner verifies `--tdlib-url` with `--tdlib-sha256 <hex>` or,
-by default, a sibling `<url>.sha256` file.
+- `kind: "telegram-user"` is reserved for the Mantis Telegram Desktop proof workflow. Generic QA Lab lanes must not acquire it.
 
 Broker-validated multi-channel payloads:
 
@@ -671,9 +621,19 @@ Native dependency policy:
   - CI-safe and keyless
   - Narrow lane for stability-regression follow-up, not a substitute for the full Gateway suite
 
-### E2E (gateway smoke)
+### E2E (repo aggregate)
 
 - Command: `pnpm test:e2e`
+- Scope:
+  - Runs the gateway smoke E2E lane
+  - Runs the mocked Control UI browser E2E lane
+- Expectations:
+  - CI-safe and keyless
+  - Requires Playwright Chromium to be installed
+
+### E2E (gateway smoke)
+
+- Command: `pnpm test:e2e:gateway`
 - Config: `vitest.e2e.config.ts`
 - Files: `src/**/*.e2e.test.ts`, `test/**/*.e2e.test.ts`, and bundled-plugin E2E tests under `extensions/`
 - Runtime defaults:
@@ -690,6 +650,20 @@ Native dependency policy:
   - Runs in CI (when enabled in the pipeline)
   - No real keys required
   - More moving parts than unit tests (can be slower)
+
+### E2E (Control UI mocked browser)
+
+- Command: `pnpm test:ui:e2e`
+- Config: `test/vitest/vitest.ui-e2e.config.ts`
+- Files: `ui/src/**/*.e2e.test.ts`
+- Scope:
+  - Starts the Vite Control UI
+  - Drives a real Chromium page through Playwright
+  - Replaces the Gateway WebSocket with deterministic in-browser mocks
+- Expectations:
+  - Runs in CI as part of `pnpm test:e2e`
+  - No real Gateway, agents, or provider keys required
+  - Browser dependency must be present (`pnpm --dir ui exec playwright install chromium`)
 
 ### E2E: OpenShell backend smoke
 
@@ -774,7 +748,7 @@ The live-model Docker runners also bind-mount only the needed CLI auth homes (or
 - CLI backend smoke: `pnpm test:docker:live-cli-backend` (script: `scripts/test-live-cli-backend-docker.sh`)
 - Codex app-server harness smoke: `pnpm test:docker:live-codex-harness` (script: `scripts/test-live-codex-harness-docker.sh`)
 - Gateway + dev agent: `pnpm test:docker:live-gateway` (script: `scripts/test-live-gateway-models-docker.sh`)
-- Observability smoke: `pnpm qa:otel:smoke` is a private QA source-checkout lane. It is intentionally not part of package Docker release lanes because the npm tarball omits QA Lab.
+- Observability smokes: `pnpm qa:otel:smoke`, `pnpm qa:prometheus:smoke`, and `pnpm qa:observability:smoke` are private QA source-checkout lanes. They are intentionally not part of package Docker release lanes because the npm tarball omits QA Lab.
 - Open WebUI live smoke: `pnpm test:docker:openwebui` (script: `scripts/e2e/openwebui-docker.sh`)
 - Onboarding wizard (TTY, full scaffolding): `pnpm test:docker:onboard` (script: `scripts/e2e/onboard-docker.sh`)
 - Npm tarball onboarding/channel/agent smoke: `pnpm test:docker:npm-onboard-channel-agent` installs the packed OpenClaw tarball globally in Docker, configures OpenAI via env-ref onboarding plus Telegram by default, runs doctor, and runs one mocked OpenAI agent turn. Reuse a prebuilt tarball with `OPENCLAW_CURRENT_PACKAGE_TGZ=/path/to/openclaw-*.tgz`, skip the host rebuild with `OPENCLAW_NPM_ONBOARD_HOST_BUILD=0`, or switch channel with `OPENCLAW_NPM_ONBOARD_CHANNEL=discord` or `OPENCLAW_NPM_ONBOARD_CHANNEL=slack`.
@@ -856,7 +830,7 @@ MCP runtime, executes the tool, then verifies `coding` and `messaging` keep
 `bundle-mcp` tools while `minimal` and `tools.deny: ["bundle-mcp"]` filter them.
 `test:docker:cron-mcp-cleanup` is deterministic and does not need a live model
 key. It starts a seeded Gateway with a real stdio MCP probe server, runs an
-isolated cron turn and a `/subagents spawn` one-shot child turn, then verifies
+isolated cron turn and a `sessions_spawn` one-shot child turn, then verifies
 the MCP child process exits after each run.
 
 Manual ACP plain-language thread smoke (not CI):

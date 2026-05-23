@@ -9,7 +9,7 @@ import type { MessagePresentation } from "../../interactive/payload.js";
 import type { OutboundMediaAccess } from "../../media/load-options.js";
 import type { PollInput } from "../../polls.js";
 import type { ChatType } from "../chat-type.js";
-import type { InboundTurnKind } from "../turn/kind.js";
+import type { InboundEventKind } from "../inbound-event/kind.js";
 import type { ChannelId } from "./channel-id.types.js";
 import type { ChannelMessageActionName as ChannelMessageActionNameFromList } from "./message-action-names.js";
 import type { ChannelMessageCapability } from "./message-capabilities.js";
@@ -25,9 +25,7 @@ export type ChannelExposure = {
 export type ChannelOutboundTargetMode = "explicit" | "implicit" | "heartbeat";
 
 /** Agent tool registered by a channel plugin. */
-export type ChannelAgentTool = AgentTool<TSchema, unknown> & {
-  ownerOnly?: boolean;
-};
+export type ChannelAgentTool = AgentTool<TSchema, unknown>;
 
 /** Lazy agent-tool factory used when tool availability depends on config. */
 export type ChannelAgentToolFactory = (params: { cfg?: OpenClawConfig }) => ChannelAgentTool[];
@@ -467,6 +465,8 @@ export type ChannelThreadingToolContext = {
   currentMessageId?: string | number;
   replyToMode?: "off" | "first" | "all" | "batched";
   hasRepliedRef?: { value: boolean };
+  /** True when posting at the parent conversation root would leak a thread-originated reply. */
+  sameChannelThreadRequired?: boolean;
   /**
    * When true, skip cross-context decoration (e.g., "[from X]" prefix).
    * Use this for direct tool invocations where the agent is composing a new message,
@@ -680,10 +680,11 @@ export type ChannelMessageActionContext = {
    * never be sourced from tool/model-controlled params.
    */
   requesterSenderId?: string | null;
+  /** Trusted owner identity bit from command/channel-action auth. */
   senderIsOwner?: boolean;
   sessionKey?: string | null;
   sessionId?: string | null;
-  inboundTurnKind?: InboundTurnKind;
+  inboundEventKind?: InboundEventKind;
   agentId?: string | null;
   gateway?: {
     url?: string;
@@ -695,6 +696,7 @@ export type ChannelMessageActionContext = {
   };
   toolContext?: ChannelThreadingToolContext;
   dryRun?: boolean;
+  gatewayClientScopes?: readonly string[];
 };
 
 export type ChannelToolSend = {

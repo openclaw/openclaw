@@ -90,6 +90,7 @@ const mocks = vi.hoisted(() => ({
   executePollAction: vi.fn(),
   callGatewayLeastPrivilege: vi.fn(),
   randomIdempotencyKey: vi.fn(() => "idem-gateway-action"),
+  maybeApplyTtsToPayload: vi.fn(async (params: { payload: unknown }) => params.payload),
 }));
 
 vi.mock("./channel-resolution.js", () => ({
@@ -105,6 +106,10 @@ vi.mock("./outbound-send-service.js", () => ({
 vi.mock("./message.gateway.runtime.js", () => ({
   callGatewayLeastPrivilege: mocks.callGatewayLeastPrivilege,
   randomIdempotencyKey: mocks.randomIdempotencyKey,
+}));
+
+vi.mock("../../tts/tts.runtime.js", () => ({
+  maybeApplyTtsToPayload: mocks.maybeApplyTtsToPayload,
 }));
 
 vi.mock("./outbound-session.js", () => ({
@@ -215,7 +220,7 @@ async function executePluginAction(params: {
     | "accountId"
     | "gateway"
     | "toolContext"
-    | "inboundTurnKind"
+    | "inboundEventKind"
   > & {
     dryRun: boolean;
     agentId?: string;
@@ -235,7 +240,7 @@ async function executePluginAction(params: {
     accountId: params.ctx.accountId ?? undefined,
     gateway: params.ctx.gateway,
     toolContext: params.ctx.toolContext,
-    inboundTurnKind: params.ctx.inboundTurnKind,
+    inboundEventKind: params.ctx.inboundEventKind,
     dryRun: params.ctx.dryRun,
     agentId: params.ctx.agentId,
   });
@@ -268,6 +273,10 @@ describe("runMessageAction plugin dispatch", () => {
     );
     mocks.callGatewayLeastPrivilege.mockReset();
     mocks.randomIdempotencyKey.mockClear();
+    mocks.maybeApplyTtsToPayload.mockReset();
+    mocks.maybeApplyTtsToPayload.mockImplementation(
+      async (params: { payload: unknown }) => params.payload,
+    );
   });
 
   describe("alias-based plugin action dispatch", () => {
@@ -393,7 +402,7 @@ describe("runMessageAction plugin dispatch", () => {
         sessionKey: "agent:alpha:main",
         sessionId: "session-123",
         agentId: "alpha",
-        inboundTurnKind: "room_event",
+        inboundEventKind: "room_event",
         toolContext: {
           currentChannelId: "oc_123",
           currentChannelProvider: "actionhub",
@@ -412,7 +421,7 @@ describe("runMessageAction plugin dispatch", () => {
           requesterSenderId: "trusted-user",
           sessionKey: "agent:alpha:main",
           sessionId: "session-123",
-          inboundTurnKind: "room_event",
+          inboundEventKind: "room_event",
           agentId: "alpha",
         },
         "plugin action call",
@@ -480,6 +489,7 @@ describe("runMessageAction plugin dispatch", () => {
         sessionKey: "agent:alpha:main",
         sessionId: "session-123",
         agentId: "alpha",
+        inboundEventKind: "room_event",
         toolContext: {
           currentChannelProvider: "gatewaychat",
           currentMessageId: "wamid.1",
@@ -506,6 +516,7 @@ describe("runMessageAction plugin dispatch", () => {
           sessionKey: "agent:alpha:main",
           sessionId: "session-123",
           agentId: "alpha",
+          inboundTurnKind: "room_event",
           idempotencyKey: "idem-gateway-action",
         },
         "gateway call params",
@@ -692,6 +703,151 @@ describe("runMessageAction plugin dispatch", () => {
           messageId: "gw-send-1",
         },
         "result payload",
+      );
+    });
+
+    it("applies TTS before gateway-executed plugin sends", async () => {
+      const gatewayPlugin = createGatewayActionPlugin({
+        pluginId: "gatewaychat",
+        label: "Gateway Chat",
+        blurb: "Gateway Chat send test plugin.",
+        actions: ["send"],
+        messaging: {
+          targetResolver: {
+            looksLikeId: () => true,
+          },
+        },
+        handleAction: vi.fn(async () => jsonResult({ ok: true, local: true })),
+      });
+      setActivePluginRegistry(
+        createTestRegistry([
+          {
+            pluginId: "gatewaychat",
+            source: "test",
+            plugin: gatewayPlugin,
+          },
+        ]),
+      );
+      mocks.callGatewayLeastPrivilege.mockResolvedValue({
+        ok: true,
+        messageId: "gw-send-tts",
+      });
+      mocks.maybeApplyTtsToPayload.mockResolvedValueOnce({
+        mediaUrl: "file:///tmp/openclaw-voice.ogg",
+        audioAsVoice: true,
+        spokenText: "hello there",
+      });
+
+      await runMessageAction({
+        cfg: {
+          channels: {
+            gatewaychat: {
+              enabled: true,
+            },
+          },
+          messages: {
+            tts: {
+              auto: "tagged",
+            },
+          },
+        } as OpenClawConfig,
+        action: "send",
+        params: {
+          channel: "gatewaychat",
+          target: "user-123",
+          message: "[[tts:text]]hello there[[/tts:text]]",
+        },
+        gateway: {
+          clientName: "cli",
+          mode: "cli",
+        },
+        dryRun: false,
+      });
+
+      const gatewayCall = readMockCallArg(
+        mocks.callGatewayLeastPrivilege,
+        "gateway least privilege call",
+      );
+      const gatewayParams = readRecordField(gatewayCall, "params", "gateway call params");
+      expectRecordFields(
+        readRecordField(gatewayParams, "params", "gateway message params"),
+        {
+          message: "",
+          media: "file:///tmp/openclaw-voice.ogg",
+          mediaUrl: "file:///tmp/openclaw-voice.ogg",
+          asVoice: true,
+          audioAsVoice: true,
+        },
+        "gateway message params",
+      );
+      expect(mocks.executeSendAction).not.toHaveBeenCalled();
+    });
+
+    it("applies TTS before local plugin send fallback dispatch", async () => {
+      const handleAction = vi.fn(async ({ params }: { params: Record<string, unknown> }) =>
+        jsonResult({ ok: true, params }),
+      );
+      const localPlugin = createGatewayActionPlugin({
+        pluginId: "localchat",
+        label: "Local Chat",
+        blurb: "Local Chat send test plugin.",
+        actions: ["send"],
+        gatewayActions: [],
+        messaging: {
+          targetResolver: {
+            looksLikeId: () => true,
+          },
+        },
+        handleAction,
+      });
+      setActivePluginRegistry(
+        createTestRegistry([
+          {
+            pluginId: "localchat",
+            source: "test",
+            plugin: localPlugin,
+          },
+        ]),
+      );
+      mocks.maybeApplyTtsToPayload.mockResolvedValueOnce({
+        mediaUrl: "file:///tmp/openclaw-voice.ogg",
+        audioAsVoice: true,
+        spokenText: "hello there",
+      });
+
+      await runMessageAction({
+        cfg: {
+          channels: {
+            localchat: {
+              enabled: true,
+            },
+          },
+          messages: {
+            tts: {
+              auto: "tagged",
+            },
+          },
+        } as OpenClawConfig,
+        action: "send",
+        params: {
+          channel: "localchat",
+          target: "user-123",
+          message: "[[tts:text]]hello there[[/tts:text]]",
+        },
+        dryRun: false,
+      });
+
+      const call = readFirstPluginCall(handleAction);
+      expectRecordFields(
+        readRecordField(call, "params", "local plugin params"),
+        {
+          message: "",
+          media: "file:///tmp/openclaw-voice.ogg",
+          mediaUrl: "file:///tmp/openclaw-voice.ogg",
+          asVoice: true,
+          audioAsVoice: true,
+        },
+        "local plugin params",
       );
     });
 

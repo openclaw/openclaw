@@ -1,4 +1,4 @@
-import type { InboundTurnKind } from "../channels/turn/kind.js";
+import type { InboundEventKind } from "../channels/inbound-event/kind.js";
 import type {
   MediaUnderstandingDecision,
   MediaUnderstandingOutput,
@@ -41,7 +41,7 @@ type UntrustedStructuredContextEntry = {
 
 export type MsgContext = {
   Body?: string;
-  InboundTurnKind?: InboundTurnKind;
+  InboundEventKind?: InboundEventKind;
   /**
    * Agent prompt body (may include envelope/history/context). Prefer this for prompt shaping.
    * Should use real newlines (`\n`), not escaped `\\n`.
@@ -236,8 +236,6 @@ export type MsgContext = {
   AcpDispatchTailAfterReset?: boolean;
   /** Gateway client scopes when the message originates from the gateway. */
   GatewayClientScopes?: string[];
-  /** System-event authority override for contexts that must never inherit owner semantics. */
-  ForceSenderIsOwnerFalse?: boolean;
   /** Thread identifier (Telegram topic id or Matrix thread event id). */
   MessageThreadId?: string | number;
   /** Provider-native thread target for reply delivery without making the session thread-scoped. */

@@ -220,7 +220,9 @@ const SHARED_CORE_VITEST_CONFIG = "test/vitest/vitest.shared-core.config.ts";
 const TASKS_VITEST_CONFIG = "test/vitest/vitest.tasks.config.ts";
 const TOOLING_VITEST_CONFIG = "test/vitest/vitest.tooling.config.ts";
 const TUI_VITEST_CONFIG = "test/vitest/vitest.tui.config.ts";
+const TUI_PTY_VITEST_CONFIG = "test/vitest/vitest.tui-pty.config.ts";
 const UI_VITEST_CONFIG = "test/vitest/vitest.ui.config.ts";
+const UI_E2E_VITEST_CONFIG = "test/vitest/vitest.ui-e2e.config.ts";
 const UTILS_VITEST_CONFIG = "test/vitest/vitest.utils.config.ts";
 const WIZARD_VITEST_CONFIG = "test/vitest/vitest.wizard.config.ts";
 const INCLUDE_FILE_ENV_KEY = "OPENCLAW_VITEST_INCLUDE_FILE";
@@ -299,7 +301,9 @@ const VITEST_CONFIG_BY_KIND = {
   tasks: TASKS_VITEST_CONFIG,
   tooling: TOOLING_VITEST_CONFIG,
   tui: TUI_VITEST_CONFIG,
+  tuiPty: TUI_PTY_VITEST_CONFIG,
   ui: UI_VITEST_CONFIG,
+  uiE2e: UI_E2E_VITEST_CONFIG,
   utils: UTILS_VITEST_CONFIG,
   wizard: WIZARD_VITEST_CONFIG,
 };
@@ -424,9 +428,40 @@ const GROUP_VISIBLE_REPLY_PROMPT_TEST_TARGETS = [
   "src/agents/system-prompt.test.ts",
   ...GROUP_VISIBLE_REPLY_TEST_TARGETS,
 ];
+const CHANNEL_CONTRACT_REGISTRY_BACKED_TARGETS = [
+  "directory",
+  "plugin",
+  "surfaces-only",
+  "threading",
+].flatMap((suite) =>
+  "abcdefgh"
+    .split("")
+    .map(
+      (shard) =>
+        `src/channels/plugins/contracts/${suite}.registry-backed-shard-${shard}.contract.test.ts`,
+    ),
+);
+const TEST_HELPER_NORMALIZE_TEXT_TARGETS = [
+  "src/auto-reply/reply/commands-status.test.ts",
+  "src/auto-reply/status.test.ts",
+  "src/tui/components/chat-log.test.ts",
+];
 const SOURCE_TEST_TARGETS = new Map([
   ...PRECISE_SOURCE_TEST_TARGETS,
   ["src/test-utils/openclaw-test-state.ts", ["src/test-utils/openclaw-test-state.test.ts"]],
+  [
+    "src/channels/plugins/contracts/test-helpers/manifest.ts",
+    [
+      ...CHANNEL_CONTRACT_REGISTRY_BACKED_TARGETS,
+      "src/channels/plugins/contracts/registry.contract.test.ts",
+      "src/channels/plugins/contracts/session-binding.registry-backed.contract.test.ts",
+    ],
+  ],
+  [
+    "src/channels/plugins/contracts/test-helpers/registry-backed-contract-shards.ts",
+    CHANNEL_CONTRACT_REGISTRY_BACKED_TARGETS,
+  ],
+  ["test/helpers/normalize-text.ts", TEST_HELPER_NORMALIZE_TEXT_TARGETS],
   [
     "src/plugin-sdk/test-helpers/directory-ids.ts",
     [
@@ -452,6 +487,19 @@ const SOURCE_TEST_TARGETS = new Map([
   ["extensions/google-meet/src/cli.ts", ["extensions/google-meet/src/cli.test.ts"]],
   ["extensions/google-meet/src/create.ts", ["extensions/google-meet/index.test.ts"]],
   ["extensions/google-meet/src/oauth.ts", ["extensions/google-meet/src/oauth.test.ts"]],
+  [
+    "extensions/discord/src/monitor/message-handler.ts",
+    [
+      "extensions/discord/src/channel-actions.contract.test.ts",
+      "extensions/discord/src/channel.message-adapter.test.ts",
+      "extensions/discord/src/channel.test.ts",
+      "extensions/discord/src/durable-delivery.test.ts",
+      "extensions/discord/src/monitor/message-handler.bot-self-filter.test.ts",
+      "extensions/discord/src/monitor/message-handler.queue.test.ts",
+      "extensions/discord/src/monitor/provider.skill-dedupe.test.ts",
+      "extensions/discord/src/monitor/provider.test.ts",
+    ],
+  ],
   ["src/commands/doctor-memory-search.ts", ["src/commands/doctor-memory-search.test.ts"]],
   [
     "src/commitments/model-selection.runtime.ts",
@@ -988,6 +1036,15 @@ function isUnitUiTestTarget(relative) {
   );
 }
 
+function isControlUiE2eTarget(relative) {
+  return (
+    relative === "ui/src/test-helpers/control-ui-e2e.ts" ||
+    relative === "ui/src/ui/e2e" ||
+    relative.startsWith("ui/src/ui/e2e/") ||
+    (relative.startsWith("ui/src/") && relative.endsWith(".e2e.test.ts"))
+  );
+}
+
 function resolveChannelContractTargetKind(relative) {
   if (!relative.startsWith("src/channels/plugins/contracts/")) {
     return null;
@@ -1218,6 +1275,12 @@ function classifyTarget(arg, cwd) {
   if (resolveUnitFastTestIncludePattern(relative)) {
     return "unitFast";
   }
+  if (isControlUiE2eTarget(relative)) {
+    return "uiE2e";
+  }
+  if (relative.startsWith("src/tui/tui-pty-")) {
+    return "tuiPty";
+  }
   if (relative.endsWith(".e2e.test.ts")) {
     return "e2e";
   }
@@ -1388,6 +1451,9 @@ function classifyTarget(arg, cwd) {
     return "plugin";
   }
   if (relative.startsWith("ui/src/")) {
+    if (isControlUiE2eTarget(relative)) {
+      return "uiE2e";
+    }
     if (isUnitUiTestTarget(relative)) {
       return "unitUi";
     }
@@ -1423,6 +1489,10 @@ function shouldUseWholeConfigTarget(kind, targetArg, cwd) {
   if (isVitestConfigTargetForKind(kind, targetArg, cwd)) {
     return true;
   }
+  if (kind === "uiE2e") {
+    const relative = toRepoRelativeTarget(targetArg, cwd);
+    return relative === "ui/src/test-helpers/control-ui-e2e.ts";
+  }
   if (kind !== "ui") {
     return false;
   }
@@ -1439,6 +1509,7 @@ function createVitestArgs(params) {
     ...(params.watchMode ? [] : ["run"]),
     "--config",
     params.config,
+    ...(params.config === UI_E2E_VITEST_CONFIG ? ["--configLoader", "runner"] : []),
     ...params.forwardedArgs,
   ];
 }
@@ -1536,6 +1607,7 @@ export function buildVitestRunPlans(
     "sharedCore",
     "tasks",
     "tui",
+    "tuiPty",
     "mediaUnderstanding",
     "acp",
     "cli",
@@ -1548,6 +1620,7 @@ export function buildVitestRunPlans(
     "agent",
     "plugin",
     "ui",
+    "uiE2e",
     "unitSrc",
     "unitSecurity",
     "unitSupport",

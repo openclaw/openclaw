@@ -16,6 +16,12 @@ vi.mock("../logging/subsystem.js", () => ({
 }));
 
 import { STATE_DIR } from "../config/paths.js";
+import { registerPluginHttpRoute } from "./http-registry.js";
+import {
+  pinActivePluginHttpRouteRegistry,
+  resetPluginRuntimeStateForTest,
+  setActivePluginRegistry,
+} from "./runtime.js";
 import { startPluginServices } from "./services.js";
 
 function createRegistry(
@@ -138,6 +144,7 @@ function createTrackingService(
 describe("startPluginServices", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    resetPluginRuntimeStateForTest();
   });
 
   it("starts services and stops them in reverse order", async () => {
@@ -158,6 +165,35 @@ describe("startPluginServices", () => {
     await handle.stop();
 
     expectServiceLifecycleState({ starts, stops, contexts, config });
+  });
+
+  it("registers dynamic HTTP routes into the service registry scope", async () => {
+    const serviceRegistry = createRegistry([
+      {
+        id: "route-service",
+        start: () => {
+          registerPluginHttpRoute({
+            path: "/service-route",
+            auth: "plugin",
+            handler: vi.fn(),
+          });
+        },
+      },
+    ]);
+    const pinnedRegistry = createEmptyPluginRegistry();
+
+    setActivePluginRegistry(pinnedRegistry);
+    pinActivePluginHttpRouteRegistry(pinnedRegistry);
+
+    const handle = await startPluginServices({
+      registry: serviceRegistry,
+      config: createServiceConfig(),
+    });
+
+    expect(serviceRegistry.httpRoutes.map((route) => route.path)).toEqual(["/service-route"]);
+    expect(pinnedRegistry.httpRoutes).toHaveLength(0);
+
+    await handle.stop();
   });
 
   it("logs start/stop failures and continues", async () => {
@@ -227,6 +263,58 @@ describe("startPluginServices", () => {
           ["serviceCount", 2],
           ["startedCount", 1],
           ["failedCount", 1],
+        ],
+      },
+    ]);
+  });
+
+  it("passes a scoped startup trace through service context for owned subspans", async () => {
+    const contexts: OpenClawPluginServiceContext[] = [];
+    const measured: string[] = [];
+    const details: Array<{
+      name: string;
+      metrics: ReadonlyArray<readonly [string, number | string]>;
+    }> = [];
+    const startupTrace: NonNullable<Parameters<typeof startPluginServices>[0]["startupTrace"]> = {
+      measure: async (name, run) => {
+        measured.push(name);
+        return await run();
+      },
+      detail: (name, metrics) => {
+        details.push({ name, metrics });
+      },
+    };
+
+    await startTrackingServices({
+      services: [
+        {
+          id: "service-a",
+          start: async (ctx) => {
+            contexts.push(ctx);
+            ctx.startupTrace?.detail?.("probe.result", [["healthyCount", 1]]);
+            await ctx.startupTrace?.measure("config:resolve", async () => {});
+          },
+        },
+      ],
+      startupTrace,
+    });
+
+    expect(contexts[0]?.startupTrace).not.toBe(startupTrace);
+    expect(measured).toEqual([
+      "sidecars.plugin-services.plugin~003Atest.service-a",
+      "sidecars.plugin-services.plugin~003Atest.service-a.config~003Aresolve",
+    ]);
+    expect(details).toEqual([
+      {
+        name: "sidecars.plugin-services.plugin~003Atest.service-a.probe.result",
+        metrics: [["healthyCount", 1]],
+      },
+      {
+        name: "sidecars.plugin-services.summary",
+        metrics: [
+          ["serviceCount", 1],
+          ["startedCount", 1],
+          ["failedCount", 0],
         ],
       },
     ]);

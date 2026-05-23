@@ -1,4 +1,4 @@
-import { MessageFlags } from "discord-api-types/v10";
+import { ButtonStyle, MessageFlags } from "discord-api-types/v10";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 let clearDiscordComponentEntries: typeof import("./components-registry.js").clearDiscordComponentEntries;
@@ -58,6 +58,41 @@ describe("discord components", () => {
     );
     expect(result.modals[0]?.callbackData).toBe("codex:modal");
     expect(result.modals[0]?.allowedUsers).toEqual(["discord:user-1"]);
+  });
+
+  it("serializes disabled link buttons", () => {
+    const spec = readDiscordComponentSpec({
+      blocks: [
+        {
+          type: "actions",
+          buttons: [
+            {
+              label: "Open docs",
+              style: "link",
+              url: "https://example.com/docs",
+              disabled: true,
+            },
+          ],
+        },
+      ],
+    });
+    if (!spec) {
+      throw new Error("Expected component spec to be parsed");
+    }
+
+    const result = buildDiscordComponentMessage({ spec });
+    const serialized = result.components[0]?.serialize() as
+      | { components?: Array<{ components?: Array<Record<string, unknown>> }> }
+      | undefined;
+    const button = serialized?.components?.[0]?.components?.[0];
+
+    expect(button).toMatchObject({
+      label: "Open docs",
+      style: ButtonStyle.Link,
+      url: "https://example.com/docs",
+      disabled: true,
+    });
+    expect(result.entries).toHaveLength(0);
   });
 
   it("requires options for modal select fields", () => {
@@ -319,11 +354,14 @@ describe("discord component registry", () => {
 
   it("falls back to the in-memory registry when persistent state cannot open", async () => {
     const warn = vi.fn();
+    const cause = new TypeError("disk busy");
     const { setDiscordRuntime } = await import("./runtime.js");
     setDiscordRuntime({
       state: {
         openKeyedStore: vi.fn(() => {
-          throw new Error("sqlite unavailable");
+          const error = new Error("sqlite unavailable") as Error & { cause?: unknown };
+          error.cause = cause;
+          throw error;
         }),
       },
       logging: { getChildLogger: () => ({ warn }) },
@@ -340,6 +378,16 @@ describe("discord component registry", () => {
     expect(fallbackEntry?.label).toBe("Fallback");
     expect(typeof fallbackEntry?.createdAt).toBe("number");
     expect(typeof fallbackEntry?.expiresAt).toBe("number");
-    expect(warn).toHaveBeenCalled();
+    expect(warn).toHaveBeenCalledWith(
+      "Discord persistent component registry state failed",
+      expect.objectContaining({
+        error: "Error: sqlite unavailable",
+        errorName: "Error",
+        errorMessage: "sqlite unavailable",
+        errorCause: "TypeError: disk busy",
+        errorCauseName: "TypeError",
+        errorCauseMessage: "disk busy",
+      }),
+    );
   });
 });

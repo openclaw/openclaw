@@ -1,5 +1,9 @@
 // @vitest-environment node
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  MIN_CLIENT_PROTOCOL_VERSION,
+  PROTOCOL_VERSION,
+} from "../../../src/gateway/protocol/version.js";
 import { createStorageMock } from "../test-helpers/storage.ts";
 import { loadDeviceAuthToken, storeDeviceAuthToken } from "./device-auth.ts";
 import type { DeviceIdentity } from "./device-identity.ts";
@@ -94,14 +98,20 @@ vi.mock("./device-identity.ts", () => ({
   signDevicePayload: signDevicePayloadMock,
 }));
 
-const { CONTROL_UI_OPERATOR_SCOPES, GatewayBrowserClient, shouldRetryWithDeviceToken } =
-  await import("./gateway.ts");
+const {
+  CONTROL_UI_OPERATOR_SCOPES,
+  GatewayBrowserClient,
+  GatewayRequestError,
+  shouldRetryWithDeviceToken,
+} = await import("./gateway.ts");
 
 type ConnectFrame = {
   id?: string;
   method?: string;
   params?: {
     auth?: { token?: string; password?: string; deviceToken?: string };
+    maxProtocol?: number;
+    minProtocol?: number;
     scopes?: string[];
   };
 };
@@ -343,7 +353,18 @@ describe("GatewayBrowserClient", () => {
     const { connectFrame } = await startConnect(client);
 
     expect(connectFrame.method).toBe("connect");
+    expect(connectFrame.params?.minProtocol).toBe(MIN_CLIENT_PROTOCOL_VERSION);
+    expect(connectFrame.params?.maxProtocol).toBe(PROTOCOL_VERSION);
     expect(connectFrame.params?.scopes).toEqual([...CONTROL_UI_OPERATOR_SCOPES]);
+  });
+
+  it("adds the current Control UI protocol to bare protocol mismatch errors", () => {
+    const error = new GatewayRequestError({
+      code: "INVALID_REQUEST",
+      message: "protocol mismatch",
+    });
+
+    expect(error.message).toBe(`protocol mismatch: Control UI v${PROTOCOL_VERSION}`);
   });
 
   it("reuses cached device token scopes when connecting from bootstrap handoff", async () => {

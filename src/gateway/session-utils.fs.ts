@@ -123,8 +123,10 @@ export function attachOpenClawTranscriptMeta(
   }
   const record = message as Record<string, unknown>;
   const existing =
-    record.__openclaw && typeof record.__openclaw === "object" && !Array.isArray(record.__openclaw)
-      ? (record.__openclaw as Record<string, unknown>)
+    record["__openclaw"] &&
+    typeof record["__openclaw"] === "object" &&
+    !Array.isArray(record["__openclaw"])
+      ? (record["__openclaw"] as Record<string, unknown>)
       : {};
   return {
     ...record,
@@ -552,7 +554,7 @@ export async function readSessionMessagesAsync(
   opts: ReadSessionMessagesAsyncOptions,
 ): Promise<unknown[]> {
   if (opts.mode === "recent") {
-    const { mode: _mode, ...recentOpts } = opts;
+    const { mode: modeValue, ...recentOpts } = opts;
     return await readRecentSessionMessagesAsync(sessionId, storePath, sessionFile, recentOpts);
   }
   const filePath = findExistingTranscriptPath(sessionId, storePath, sessionFile);
@@ -1109,27 +1111,6 @@ async function readLastMessagePreviewFromOpenTranscriptAsync(params: {
     }
   }
   return null;
-}
-
-export function readLastMessagePreviewFromTranscript(
-  sessionId: string,
-  storePath: string | undefined,
-  sessionFile?: string,
-  agentId?: string,
-): string | null {
-  const filePath = findExistingTranscriptPath(sessionId, storePath, sessionFile, agentId);
-  if (!filePath) {
-    return null;
-  }
-
-  return withOpenTranscriptFd(filePath, (fd) => {
-    const stat = fs.fstatSync(fd);
-    const size = stat.size;
-    if (size === 0) {
-      return null;
-    }
-    return readLastMessagePreviewFromOpenTranscript({ fd, size });
-  });
 }
 
 type SessionTranscriptUsageSnapshot = {

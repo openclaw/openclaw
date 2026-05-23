@@ -622,6 +622,30 @@ describe("runReplyAgent typing (heartbeat)", () => {
     }
   });
 
+  it("keeps final text blocks after partial preview streaming", async () => {
+    const onPartialReply = vi.fn();
+    state.runEmbeddedPiAgentMock.mockImplementationOnce(async (params: AgentRunParams) => {
+      await params.onPartialReply?.({ text: "First block\n\nSecond block" });
+      return {
+        payloads: [{ text: "First block" }, { text: "Second block" }],
+        meta: {},
+      };
+    });
+
+    const { run } = createMinimalRun({
+      opts: { onPartialReply },
+      typingMode: "message",
+    });
+
+    const result = await run();
+
+    expect(onPartialReply).toHaveBeenCalledWith({ text: "First block\n\nSecond block" });
+    expect(result).toEqual([
+      expect.objectContaining({ text: "First block" }),
+      expect.objectContaining({ text: "Second block" }),
+    ]);
+  });
+
   it("suppresses narrated silent-turn partials, block replies, and final payloads", async () => {
     const onPartialReply = vi.fn();
     const onBlockReply = vi.fn();
@@ -1949,7 +1973,8 @@ describe("runReplyAgent typing (heartbeat)", () => {
     if (!payload) {
       throw new Error("expected payload");
     }
-    expect(payload.text).toContain("conversation is too large");
+    expect(payload.text).toContain("Auto-compaction could not recover this turn");
+    expect(payload.text).toContain("reserveTokensFloor");
     expect(payload.text).toContain("/new");
   });
 
@@ -1971,7 +1996,8 @@ describe("runReplyAgent typing (heartbeat)", () => {
     if (!payload) {
       throw new Error("expected payload");
     }
-    expect(payload.text).toContain("conversation is too large");
+    expect(payload.text).toContain("Auto-compaction could not recover this turn");
+    expect(payload.text).toContain("reserveTokensFloor");
     expect(payload.text).toContain("/new");
   });
 
@@ -1984,7 +2010,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
     const res = await run();
 
     const payload = requireRecord(res, "ordering conflict payload");
-    expect(payload.text).toContain("Message ordering conflict");
+    expect(payload.text).toContain("model provider rejected the conversation state");
     expect(payload.text).not.toContain("400");
   });
 

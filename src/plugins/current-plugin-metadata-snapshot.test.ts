@@ -3,8 +3,10 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
+  captureCurrentPluginMetadataSnapshotState,
   clearCurrentPluginMetadataSnapshot,
   getCurrentPluginMetadataSnapshot,
+  restoreCurrentPluginMetadataSnapshotState,
   setCurrentPluginMetadataSnapshot,
 } from "./current-plugin-metadata-snapshot.js";
 import { resolveInstalledPluginIndexPolicyHash } from "./installed-plugin-index-policy.js";
@@ -14,11 +16,13 @@ import type { PluginMetadataSnapshot } from "./plugin-metadata-snapshot.js";
 function createSnapshot(
   params: {
     config?: Parameters<typeof resolveInstalledPluginIndexPolicyHash>[0];
+    registrySource?: PluginMetadataSnapshot["registrySource"];
     workspaceDir?: string;
   } = {},
 ): PluginMetadataSnapshot {
   return {
     policyHash: resolveInstalledPluginIndexPolicyHash(params.config),
+    ...(params.registrySource ? { registrySource: params.registrySource } : {}),
     ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
     index: {
       version: 1,
@@ -212,6 +216,29 @@ describe("current plugin metadata snapshot", () => {
     clearCurrentPluginMetadataSnapshot();
 
     expect(getCurrentPluginMetadataSnapshot()).toBeUndefined();
+  });
+
+  it("does not keep derived registry snapshots as the current snapshot", () => {
+    const persisted = createSnapshot({ registrySource: "persisted" });
+    setCurrentPluginMetadataSnapshot(persisted);
+    setCurrentPluginMetadataSnapshot(createSnapshot({ registrySource: "derived" }));
+
+    expect(getCurrentPluginMetadataSnapshot()).toBeUndefined();
+  });
+
+  it("restores a captured current snapshot state", () => {
+    const firstConfig = { plugins: { allow: ["first"] } };
+    const secondConfig = { plugins: { allow: ["second"] } };
+    const first = createSnapshot({ config: firstConfig });
+    const second = createSnapshot({ config: secondConfig });
+    setCurrentPluginMetadataSnapshot(first, { config: firstConfig });
+    const captured = captureCurrentPluginMetadataSnapshotState();
+
+    setCurrentPluginMetadataSnapshot(second, { config: secondConfig });
+    restoreCurrentPluginMetadataSnapshotState(captured);
+
+    expect(getCurrentPluginMetadataSnapshot({ config: firstConfig })).toBe(first);
+    expect(getCurrentPluginMetadataSnapshot({ config: secondConfig })).toBeUndefined();
   });
 
   it("clears the current snapshot when the persisted installed index changes", () => {

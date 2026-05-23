@@ -31,7 +31,7 @@ vi.mock("openclaw/plugin-sdk/media-runtime", async () => {
   };
 });
 import {
-  __testing as sessionBindingTesting,
+  testing as sessionBindingTesting,
   registerSessionBindingAdapter,
 } from "openclaw/plugin-sdk/conversation-runtime";
 import {
@@ -47,7 +47,7 @@ import {
 let preflightDiscordMessage: typeof import("./message-handler.preflight.js").preflightDiscordMessage;
 let resolvePreflightMentionRequirement: typeof import("./message-handler.preflight.js").resolvePreflightMentionRequirement;
 let shouldIgnoreBoundThreadWebhookMessage: typeof import("./message-handler.preflight.js").shouldIgnoreBoundThreadWebhookMessage;
-let threadBindingTesting: typeof import("./thread-bindings.js").__testing;
+let threadBindingTesting: typeof import("./thread-bindings.js").testing;
 let createThreadBindingManager: typeof import("./thread-bindings.js").createThreadBindingManager;
 
 beforeAll(async () => {
@@ -56,7 +56,7 @@ beforeAll(async () => {
     resolvePreflightMentionRequirement,
     shouldIgnoreBoundThreadWebhookMessage,
   } = await import("./message-handler.preflight.js"));
-  ({ __testing: threadBindingTesting, createThreadBindingManager } =
+  ({ testing: threadBindingTesting, createThreadBindingManager } =
     await import("./thread-bindings.js"));
 });
 
@@ -1207,6 +1207,50 @@ describe("preflightDiscordMessage", () => {
     expect(preflight.commandAuthorized).toBe(true);
     expect(preflight.shouldRequireMention).toBe(true);
     expect(preflight.shouldBypassMention).toBe(true);
+  });
+
+  it("keeps unmentioned abort requests as user requests when room events are enabled", async () => {
+    const channelId = "channel-room-event-abort";
+    const guildId = "guild-room-event-abort";
+    const message = createDiscordMessage({
+      id: "m-room-event-abort",
+      channelId,
+      content: "please stop",
+      author: {
+        id: "user-1",
+        bot: false,
+        username: "Alice",
+      },
+    });
+
+    const result = await runGuildPreflight({
+      channelId,
+      guildId,
+      message,
+      discordConfig: {} as DiscordConfig,
+      cfg: {
+        ...DEFAULT_PREFLIGHT_CFG,
+        messages: {
+          groupChat: {
+            unmentionedInbound: "room_event",
+          },
+        },
+      } as import("openclaw/plugin-sdk/config-contracts").OpenClawConfig,
+      guildEntries: {
+        [guildId]: {
+          channels: {
+            [channelId]: {
+              enabled: true,
+              requireMention: false,
+            },
+          },
+        },
+      },
+    });
+
+    const preflight = expectPreflightResult(result);
+    expect(preflight.baseText).toBe("please stop");
+    expect(preflight.inboundEventKind).toBe("user_request");
   });
 
   it("still drops Discord native command echo messages", async () => {

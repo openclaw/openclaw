@@ -17,7 +17,7 @@ Persona:
 Style:
 - read source and docs first
 - test systematically
-- record evidence
+- record what happened
 - end with a concise protocol report`;
 
 const qaScenarioConfigSchema = z.record(z.string(), z.unknown()).superRefine((config, ctx) => {
@@ -92,6 +92,9 @@ const qaScenarioCoverageSchema = z
 const qaScenarioGatewayRuntimeSchema = z.object({
   forwardHostHome: z.boolean().optional(),
 });
+
+export const QA_RUNTIME_PARITY_TIERS = ["standard", "optional", "live-only", "soak"] as const;
+const qaRuntimeParityTierSchema = z.enum(QA_RUNTIME_PARITY_TIERS);
 
 const qaFlowCallActionSchema = z.object({
   call: z.string().trim().min(1),
@@ -176,6 +179,7 @@ const qaSeedScenarioSchema = z.object({
   title: z.string().trim().min(1),
   surface: z.string().trim().min(1),
   category: z.string().trim().min(1).optional(),
+  runtimeParityTier: qaRuntimeParityTierSchema.optional(),
   coverage: qaScenarioCoverageSchema.optional(),
   surfaces: z.array(z.string().trim().min(1)).min(1).optional(),
   risk: z.enum(["low", "medium", "high"]).optional(),
@@ -206,6 +210,7 @@ const qaScenarioPackSchema = z.object({
 
 export type QaScenarioExecution = z.infer<typeof qaScenarioExecutionSchema>;
 export type QaScenarioFlow = z.infer<typeof qaFlowSchema>;
+export type QaRuntimeParityTier = z.infer<typeof qaRuntimeParityTierSchema>;
 export type QaSeedScenario = z.infer<typeof qaSeedScenarioSchema>;
 export type QaSeedScenarioWithSource = QaSeedScenario & {
   sourcePath: string;
@@ -225,8 +230,10 @@ export type QaBootstrapScenarioCatalog = {
 };
 
 export {
+  QA_OBSERVABILITY_SCENARIO_IDS,
   QA_PERSONAL_AGENT_SCENARIO_IDS,
   QA_SCENARIO_PACKS,
+  resolveQaScenarioPackScenarioIds,
   type QaScenarioPackDefinition,
 } from "./scenario-packs.js";
 

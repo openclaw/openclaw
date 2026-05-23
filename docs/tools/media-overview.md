@@ -25,16 +25,16 @@ telephony, meetings, browser realtime, and native push-to-talk clients.
 <CardGroup cols={2}>
   <Card title="Image generation" href="/tools/image-generation" icon="image">
     Create and edit images from text prompts or reference images via
-    `image_generate`. Synchronous — returns structured media attachments for
-    the agent to deliver with the reply contract.
+    `image_generate`. Async in chat sessions — runs in the background and
+    posts the result when ready.
   </Card>
   <Card title="Video generation" href="/tools/video-generation" icon="video">
     Text-to-video, image-to-video, and video-to-video via `video_generate`.
     Async — runs in the background and posts the result when ready.
   </Card>
   <Card title="Music generation" href="/tools/music-generation" icon="music">
-    Generate music or audio tracks via `music_generate`. Async on shared
-    providers; ComfyUI workflow path runs synchronously.
+    Generate music or audio tracks via `music_generate`. Async in chat
+    sessions on the shared media-generation task lifecycle.
   </Card>
   <Card title="Text-to-speech" href="/tools/tts" icon="microphone">
     Convert outbound replies to spoken audio via the `tts` tool plus
@@ -60,7 +60,7 @@ telephony, meetings, browser realtime, and native push-to-talk clients.
 | DeepInfra   |   ✓   |   ✓   |       |  ✓  |  ✓  |                |          ✓          |
 | Deepgram    |       |       |       |     |  ✓  |       ✓        |                     |
 | ElevenLabs  |       |       |       |  ✓  |  ✓  |                |                     |
-| fal         |   ✓   |   ✓   |       |     |     |                |                     |
+| fal         |   ✓   |   ✓   |   ✓   |     |     |                |                     |
 | Google      |   ✓   |   ✓   |   ✓   |  ✓  |     |       ✓        |          ✓          |
 | Gradium     |       |       |       |  ✓  |     |                |                     |
 | Local CLI   |       |       |       |  ✓  |     |                |                     |
@@ -68,7 +68,7 @@ telephony, meetings, browser realtime, and native push-to-talk clients.
 | MiniMax     |   ✓   |   ✓   |   ✓   |  ✓  |     |                |                     |
 | Mistral     |       |       |       |     |  ✓  |                |                     |
 | OpenAI      |   ✓   |   ✓   |       |  ✓  |  ✓  |       ✓        |          ✓          |
-| OpenRouter  |   ✓   |   ✓   |       |  ✓  |  ✓  |                |          ✓          |
+| OpenRouter  |   ✓   |   ✓   |   ✓   |  ✓  |  ✓  |                |          ✓          |
 | Qwen        |       |   ✓   |       |     |     |                |                     |
 | Runway      |       |   ✓   |       |     |     |                |                     |
 | SenseAudio  |       |       |       |     |  ✓  |                |                     |
@@ -87,21 +87,21 @@ reply model.
 
 ## Async vs synchronous
 
-| Capability      | Mode         | Why                                                                                                  |
-| --------------- | ------------ | ---------------------------------------------------------------------------------------------------- |
-| Image           | Synchronous  | Provider responses return in seconds; tool-result media follows the current reply contract.          |
-| Text-to-speech  | Synchronous  | Provider responses return in seconds; attached to the reply audio.                                   |
-| Video           | Asynchronous | Provider processing takes 30 s to several minutes; slow queues can run up to the configured timeout. |
-| Music (shared)  | Asynchronous | Same provider-processing characteristic as video.                                                    |
-| Music (ComfyUI) | Synchronous  | Local workflow runs inline against the configured ComfyUI server.                                    |
+| Capability     | Mode         | Why                                                                                                  |
+| -------------- | ------------ | ---------------------------------------------------------------------------------------------------- |
+| Image          | Asynchronous | Provider processing can outlive a chat turn; generated attachments use the shared completion path.   |
+| Text-to-speech | Synchronous  | Provider responses return in seconds; attached to the reply audio.                                   |
+| Video          | Asynchronous | Provider processing takes 30 s to several minutes; slow queues can run up to the configured timeout. |
+| Music          | Asynchronous | Same provider-processing characteristic as video.                                                    |
 
 For async tools, OpenClaw submits the request to the provider, returns a task
 id immediately, and tracks the job in the task ledger. The agent continues
 responding to other messages while the job runs. When the provider finishes,
 OpenClaw wakes the agent with the generated media paths so it can tell the
-user and relay the result through the message tool. OpenClaw treats missing
-message-tool delivery evidence as a failed completion attempt and does not
-auto-post the generated media as a fallback.
+user and relay the result through the message tool. If the requester session
+is inactive and some generated media is still missing from message-tool
+delivery, OpenClaw sends an idempotent direct fallback with only the missing
+media. Media already delivered through the message tool is not posted again.
 
 ## Speech-to-text and Voice Call
 

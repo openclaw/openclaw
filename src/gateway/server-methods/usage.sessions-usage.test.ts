@@ -212,6 +212,80 @@ describe("sessions.usage", () => {
     expect(sessions[0].agentId).toBe("opus");
   });
 
+  it("loads selected session summaries concurrently and reports cache refresh status", async () => {
+    vi.mocked(discoverAllSessions).mockResolvedValueOnce([
+      {
+        sessionId: "s-a",
+        sessionFile: "/tmp/agents/main/sessions/s-a.jsonl",
+        mtime: 300,
+      },
+      {
+        sessionId: "s-b",
+        sessionFile: "/tmp/agents/main/sessions/s-b.jsonl",
+        mtime: 200,
+      },
+      {
+        sessionId: "s-c",
+        sessionFile: "/tmp/agents/main/sessions/s-c.jsonl",
+        mtime: 100,
+      },
+    ]);
+    const pending: Array<{
+      sessionId?: string;
+      resolve: (value: Awaited<ReturnType<typeof loadSessionCostSummaryFromCache>>) => void;
+    }> = [];
+    for (let i = 0; i < 3; i += 1) {
+      vi.mocked(loadSessionCostSummaryFromCache).mockImplementationOnce(
+        async ({ sessionId }) =>
+          await new Promise<Awaited<ReturnType<typeof loadSessionCostSummaryFromCache>>>(
+            (resolve) => {
+              pending.push({ sessionId, resolve });
+            },
+          ),
+      );
+    }
+
+    const respondPromise = runSessionsUsage({ ...BASE_USAGE_RANGE, limit: 3 });
+    await vi.waitFor(() =>
+      expect(vi.mocked(loadSessionCostSummaryFromCache)).toHaveBeenCalledTimes(3),
+    );
+    for (const item of pending) {
+      const tokens = item.sessionId === "s-a" ? 10 : item.sessionId === "s-b" ? 20 : 30;
+      item.resolve({
+        summary: {
+          input: tokens,
+          output: 0,
+          cacheRead: 0,
+          cacheWrite: 0,
+          totalTokens: tokens,
+          totalCost: tokens / 1000,
+          inputCost: tokens / 1000,
+          outputCost: 0,
+          cacheReadCost: 0,
+          cacheWriteCost: 0,
+          missingCostEntries: 0,
+        },
+        cacheStatus: {
+          status: item.sessionId === "s-b" ? "refreshing" : "fresh",
+          cachedFiles: item.sessionId === "s-b" ? 0 : 1,
+          pendingFiles: item.sessionId === "s-b" ? 1 : 0,
+          staleFiles: item.sessionId === "s-b" ? 1 : 0,
+        },
+      });
+    }
+
+    const respond = await respondPromise;
+    expect(respond).toHaveBeenCalledTimes(1);
+    const result = mockArg(respond, 0, 1) as {
+      cacheStatus?: { status: string };
+      sessions: Array<{ sessionId: string; usage?: { totalTokens: number } | null }>;
+      totals: { totalTokens: number };
+    };
+    expect(result.cacheStatus?.status).toBe("refreshing");
+    expect(result.sessions.map((session) => session.sessionId)).toEqual(["s-a", "s-b", "s-c"]);
+    expect(result.totals.totalTokens).toBe(60);
+  });
+
   it("discovers usage for requested disk-only agents not listed in config", async () => {
     const respond = await runSessionsUsage({ ...BASE_USAGE_RANGE, agentId: "codex" });
 
@@ -291,7 +365,7 @@ describe("sessions.usage", () => {
         expect(vi.mocked(loadSessionCostSummaryFromCache)).toHaveBeenCalledWith(
           expect.objectContaining({
             agentId: "opus",
-            sessionFile,
+            sessionFile: fs.realpathSync(sessionFile),
             sessionId: "main",
           }),
         );
@@ -347,7 +421,7 @@ describe("sessions.usage", () => {
           expect.objectContaining({
             agentId: "opus",
             sessionEntry,
-            sessionFile,
+            sessionFile: fs.realpathSync(sessionFile),
             sessionId: "current",
           }),
         );
@@ -393,7 +467,7 @@ describe("sessions.usage", () => {
           expect.objectContaining({
             agentId: "opus",
             sessionEntry: undefined,
-            sessionFile,
+            sessionFile: fs.realpathSync(sessionFile),
             sessionId: "shared",
           }),
         );
@@ -442,7 +516,7 @@ describe("sessions.usage", () => {
         expect(
           vi
             .mocked(loadSessionCostSummaryFromCache)
-            .mock.calls.every((call) => call[0]?.refreshMode === "sync-when-empty"),
+            .mock.calls.every((call) => call[0]?.refreshMode === "background"),
         ).toBe(true);
       });
     } finally {

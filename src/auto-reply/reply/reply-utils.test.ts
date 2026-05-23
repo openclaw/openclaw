@@ -88,6 +88,21 @@ describe("matchesMentionWithExplicit", () => {
       expect(result, testCase.name).toBe(testCase.expected);
     }
   });
+
+  it("lets catch-all regexes activate empty text without matching specific patterns", () => {
+    expect(
+      matchesMentionWithExplicit({
+        text: "",
+        mentionRegexes: [/.*/i],
+      }),
+    ).toBe(true);
+    expect(
+      matchesMentionWithExplicit({
+        text: "",
+        mentionRegexes,
+      }),
+    ).toBe(false);
+  });
 });
 
 // Keep channelData-only payloads so channel-specific replies survive normalization.

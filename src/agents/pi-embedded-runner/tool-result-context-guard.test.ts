@@ -371,6 +371,36 @@ describe("installToolResultContextGuard", () => {
       expect((err as MidTurnPrecheckSignal).request.route).toBe("compact_only");
     }
   });
+  it("does not count tool-result details toward the context budget", async () => {
+    const agent = makeGuardableAgent();
+    const contextForNextCall = [
+      makeToolResultWithDetails("call_small_text", "x".repeat(100), "d".repeat(50_000)),
+      makeToolResultWithDetails("call_another", "y".repeat(120), "e".repeat(80_000)),
+    ];
+
+    const transformed = (await applyGuardToContext(agent, contextForNextCall)) as AgentMessage[];
+
+    expect(transformed).toBe(contextForNextCall);
+    expect(getToolResultText(transformed[0])).toBe("x".repeat(100));
+    expect(getToolResultText(transformed[1])).toBe("y".repeat(120));
+    expect((contextForNextCall[0] as { details?: unknown }).details).toBeDefined();
+    expect((contextForNextCall[1] as { details?: unknown }).details).toBeDefined();
+  });
+
+  it("ignores large tool-result details when deciding preemptive overflow", async () => {
+    const agent = makeGuardableAgent();
+    const contextForNextCall = [
+      makeUser("small user prompt"),
+      makeToolResultWithDetails("call_1", "a".repeat(50), "d".repeat(30_000)),
+      makeToolResultWithDetails("call_2", "b".repeat(50), "d".repeat(30_000)),
+      makeToolResultWithDetails("call_3", "c".repeat(50), "d".repeat(30_000)),
+      makeToolResultWithDetails("call_4", "e".repeat(50), "d".repeat(30_000)),
+    ];
+
+    const transformed = (await applyGuardToContext(agent, contextForNextCall)) as AgentMessage[];
+
+    expect(transformed).toBe(contextForNextCall);
+  });
 });
 
 type MockedEngine = ContextEngine & {
@@ -470,6 +500,38 @@ describe("installContextEngineLoopHook", () => {
     });
   }
 
+  function installOwnsCompactionHookWithGuard(
+    agent: ReturnType<typeof makeGuardableAgent>,
+    engine: MockedEngine,
+    options: {
+      prePromptCount?: number;
+      contextWindowTokens?: number;
+      contextTokenBudget?: number;
+      reserveTokens?: number;
+      toolResultMaxChars?: number;
+    } = {},
+  ): () => void {
+    const removeEngineHook = installHook(agent, engine, options.prePromptCount);
+    const removeGuard = installToolResultContextGuard({
+      agent,
+      contextWindowTokens: options.contextWindowTokens ?? 200_000,
+      midTurnPrecheck: {
+        enabled: true,
+        contextTokenBudget: options.contextTokenBudget ?? 20_000,
+        reserveTokens: () => options.reserveTokens ?? 12_000,
+        toolResultMaxChars: options.toolResultMaxChars,
+        getSystemPrompt: () => "sys",
+        ...(options.prePromptCount !== undefined
+          ? { getPrePromptMessageCount: () => options.prePromptCount as number }
+          : {}),
+      },
+    });
+    return () => {
+      removeGuard();
+      removeEngineHook();
+    };
+  }
+
   async function callAfterInitialToolResult(
     agent: ReturnType<typeof makeGuardableAgent>,
     options: { includeSecondUser?: boolean; firstResultText?: string } = {},
@@ -499,6 +561,46 @@ describe("installContextEngineLoopHook", () => {
     expect(transformed).toBe(messages);
     expect(engine.afterTurn).not.toHaveBeenCalled();
     expect(engine.assemble).not.toHaveBeenCalled();
+  });
+
+  it("keeps the pressure guard active around ownsCompaction loop assembly", async () => {
+    const agent = makeGuardableAgent();
+    const engine = makeMockEngine();
+    installOwnsCompactionHookWithGuard(agent, engine, {
+      prePromptCount: 1,
+      contextWindowTokens: 200_000,
+      contextTokenBudget: 20_000,
+      reserveTokens: 12_000,
+      toolResultMaxChars: 16_000,
+    });
+
+    const messages = [makeUser("first"), makeToolResult("call_1", "x".repeat(80_000))];
+
+    await expect(callTransform(agent, messages)).rejects.toBeInstanceOf(MidTurnPrecheckSignal);
+    expect(engine.afterTurn).toHaveBeenCalledTimes(1);
+    expect(engine.assemble).toHaveBeenCalledTimes(1);
+  });
+
+  it("lets ownsCompaction assembly resolve pressure before the generic guard checks", async () => {
+    const agent = makeGuardableAgent();
+    const compactedView = [makeUser("compacted")];
+    const engine = makeMockEngine({
+      assemble: async () => ({ messages: compactedView, estimatedTokens: 0 }),
+    });
+    installOwnsCompactionHookWithGuard(agent, engine, {
+      prePromptCount: 1,
+      contextWindowTokens: 200_000,
+      contextTokenBudget: 20_000,
+      reserveTokens: 12_000,
+      toolResultMaxChars: 16_000,
+    });
+
+    const messages = [makeUser("first"), makeToolResult("call_1", "x".repeat(80_000))];
+    const transformed = await callTransform(agent, messages);
+
+    expect(transformed).toBe(compactedView);
+    expect(engine.afterTurn).toHaveBeenCalledTimes(1);
+    expect(engine.assemble).toHaveBeenCalledTimes(1);
   });
 
   it("processes the first call when messages already exceed the pre-prompt baseline", async () => {

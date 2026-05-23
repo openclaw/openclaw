@@ -27,6 +27,11 @@ import { clearPluginCommands } from "./command-registry-state.js";
 import { getPluginCommandSpecs } from "./command-specs.js";
 import { listCompactionProviderIds } from "./compaction-provider.js";
 import {
+  getEmbeddingProvider,
+  listEmbeddingProviders,
+  registerEmbeddingProvider,
+} from "./embedding-providers.js";
+import {
   getGlobalHookRunner,
   getGlobalPluginRegistry,
   resetGlobalHookRunner,
@@ -43,7 +48,7 @@ import {
   commitPluginInteractiveCallbackDedupe,
 } from "./interactive-state.js";
 import {
-  __testing,
+  testing,
   clearPluginLoaderCache,
   loadOpenClawPlugins,
   type PluginLoadOptions,
@@ -89,7 +94,7 @@ import {
   setActivePluginRegistry,
 } from "./runtime.js";
 import {
-  __testing as runtimeRegistryLoaderTesting,
+  testing as runtimeRegistryLoaderTesting,
   ensurePluginRegistryLoaded,
 } from "./runtime/runtime-registry-loader.js";
 import type { PluginSdkResolutionPreference } from "./sdk-alias.js";
@@ -1661,7 +1666,7 @@ describe("loadOpenClawPlugins", () => {
         });
         let capturedApi: typeof api | undefined;
 
-        __testing.runPluginRegisterSync((guardedApi) => {
+        testing.runPluginRegisterSync((guardedApi) => {
           capturedApi = guardedApi;
           // Host-hook delivery remains callable after registration closes; only registration-only APIs lock.
           guardedApi.registerGatewayMethod("proofchat.ping", vi.fn() as never);
@@ -2789,6 +2794,132 @@ module.exports = { id: "throws-after-import", register() {} };`,
     expect(listMemoryEmbeddingProviders().map((adapter) => adapter.id)).toEqual(["active"]);
   });
 
+  it("does not replace active embedding providers during non-activating loads", () => {
+    useNoBundledPlugins();
+    registerEmbeddingProvider({
+      id: "active",
+      create: async () => ({ provider: null }),
+    });
+    const plugin = writePlugin({
+      id: "snapshot-embedding",
+      filename: "snapshot-embedding.cjs",
+      body: `module.exports = {
+        id: "snapshot-embedding",
+        register(api) {
+          api.registerEmbeddingProvider({
+            id: "snapshot",
+            create: async () => ({ provider: null }),
+          });
+        },
+      };`,
+    });
+    updatePluginManifest(plugin, {
+      contracts: { embeddingProviders: ["snapshot"] },
+    });
+
+    const scoped = loadOpenClawPlugins({
+      cache: false,
+      activate: false,
+      workspaceDir: plugin.dir,
+      config: {
+        plugins: {
+          load: { paths: [plugin.file] },
+          allow: ["snapshot-embedding"],
+        },
+      },
+      onlyPluginIds: ["snapshot-embedding"],
+    });
+
+    expect(scoped.plugins.find((entry) => entry.id === "snapshot-embedding")?.status).toBe(
+      "loaded",
+    );
+    expect(scoped.embeddingProviders.map((entry) => entry.provider.id)).toEqual(["snapshot"]);
+    expect(listEmbeddingProviders().map((adapter) => adapter.id)).toEqual(["active"]);
+    expect(getEmbeddingProvider("snapshot")).toBeUndefined();
+  });
+
+  it("allows non-activating embedding provider snapshots to reuse active ids", () => {
+    useNoBundledPlugins();
+    registerEmbeddingProvider({
+      id: "shared",
+      create: async () => ({ provider: null }),
+    });
+    const plugin = writePlugin({
+      id: "snapshot-shared-embedding",
+      filename: "snapshot-shared-embedding.cjs",
+      body: `module.exports = {
+        id: "snapshot-shared-embedding",
+        register(api) {
+          api.registerEmbeddingProvider({
+            id: "shared",
+            create: async () => ({ provider: null }),
+          });
+        },
+      };`,
+    });
+    updatePluginManifest(plugin, {
+      contracts: { embeddingProviders: ["shared"] },
+    });
+
+    const scoped = loadOpenClawPlugins({
+      cache: false,
+      activate: false,
+      workspaceDir: plugin.dir,
+      config: {
+        plugins: {
+          load: { paths: [plugin.file] },
+          allow: ["snapshot-shared-embedding"],
+        },
+      },
+      onlyPluginIds: ["snapshot-shared-embedding"],
+    });
+
+    expect(scoped.plugins.find((entry) => entry.id === "snapshot-shared-embedding")?.status).toBe(
+      "loaded",
+    );
+    expect(scoped.embeddingProviders.map((entry) => entry.provider.id)).toEqual(["shared"]);
+    expect(listEmbeddingProviders().map((adapter) => adapter.id)).toEqual(["shared"]);
+    expect(getEmbeddingProvider("shared")?.id).toBe("shared");
+  });
+
+  it("clears newly-registered embedding providers when plugin register fails", () => {
+    useNoBundledPlugins();
+    const plugin = writePlugin({
+      id: "failing-embedding",
+      filename: "failing-embedding.cjs",
+      body: `module.exports = {
+        id: "failing-embedding",
+        register(api) {
+          api.registerEmbeddingProvider({
+            id: "failed",
+            create: async () => ({ provider: null }),
+          });
+          throw new Error("embedding register failed");
+        },
+      };`,
+    });
+    updatePluginManifest(plugin, {
+      contracts: { embeddingProviders: ["failed"] },
+    });
+
+    const registry = loadOpenClawPlugins({
+      cache: false,
+      workspaceDir: plugin.dir,
+      config: {
+        plugins: {
+          load: { paths: [plugin.file] },
+          allow: ["failing-embedding"],
+        },
+      },
+      onlyPluginIds: ["failing-embedding"],
+    });
+
+    expect(registry.plugins.find((entry) => entry.id === "failing-embedding")?.status).toBe(
+      "error",
+    );
+    expect(listEmbeddingProviders()).toStrictEqual([]);
+  });
+
   it("clears newly-registered memory plugin registries when plugin register fails", () => {
     useNoBundledPlugins();
     const plugin = writePlugin({
@@ -3839,9 +3970,9 @@ module.exports = { id: "throws-after-import", register() {} };`,
       filename: "cache-eviction.cjs",
       body: `module.exports = { id: "cache-eviction", register() {} };`,
     });
-    const previousCacheCap = __testing.maxPluginRegistryCacheEntries;
-    __testing.setMaxPluginRegistryCacheEntriesForTest(4);
-    const stateDirs = Array.from({ length: __testing.maxPluginRegistryCacheEntries + 1 }, () =>
+    const previousCacheCap = testing.maxPluginRegistryCacheEntries;
+    testing.setMaxPluginRegistryCacheEntriesForTest(4);
+    const stateDirs = Array.from({ length: testing.maxPluginRegistryCacheEntries + 1 }, () =>
       makeTempDir(),
     );
 
@@ -3875,7 +4006,7 @@ module.exports = { id: "throws-after-import", register() {} };`,
       expect(loadWithStateDir(stateDirs[0] ?? makeTempDir())).toBe(first);
       expect(loadWithStateDir(stateDirs[1] ?? makeTempDir())).not.toBe(second);
     } finally {
-      __testing.setMaxPluginRegistryCacheEntriesForTest(previousCacheCap);
+      testing.setMaxPluginRegistryCacheEntriesForTest(previousCacheCap);
     }
   });
 
@@ -5598,7 +5729,7 @@ module.exports = {
 
   it("prefers setupEntry for configured channel loads during startup when opted in", () => {
     expect(
-      __testing.shouldLoadChannelPluginInSetupRuntime({
+      testing.shouldLoadChannelPluginInSetupRuntime({
         manifestChannels: ["setup-runtime-preferred-test"],
         setupSource: "./setup-entry.cjs",
         startupDeferConfiguredChannelFullLoadUntilAfterListen: true,
@@ -7284,19 +7415,19 @@ export const runtimeValue = helperValue;`,
   it("converts Windows absolute import specifiers to file URLs only for module loading", () => {
     const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
     try {
-      expect(__testing.toSafeImportPath("C:\\Users\\alice\\plugin\\index.mjs")).toBe(
+      expect(testing.toSafeImportPath("C:\\Users\\alice\\plugin\\index.mjs")).toBe(
         "file:///C:/Users/alice/plugin/index.mjs",
       );
-      expect(__testing.toSafeImportPath("C:\\Users\\alice\\plugin folder\\x#y.mjs")).toBe(
+      expect(testing.toSafeImportPath("C:\\Users\\alice\\plugin folder\\x#y.mjs")).toBe(
         "file:///C:/Users/alice/plugin%20folder/x%23y.mjs",
       );
-      expect(__testing.toSafeImportPath("\\\\server\\share\\plugin\\index.mjs")).toBe(
+      expect(testing.toSafeImportPath("\\\\server\\share\\plugin\\index.mjs")).toBe(
         "file://server/share/plugin/index.mjs",
       );
-      expect(__testing.toSafeImportPath("file:///C:/Users/alice/plugin/index.mjs")).toBe(
+      expect(testing.toSafeImportPath("file:///C:/Users/alice/plugin/index.mjs")).toBe(
         "file:///C:/Users/alice/plugin/index.mjs",
       );
-      expect(__testing.toSafeImportPath("./relative/index.mjs")).toBe("./relative/index.mjs");
+      expect(testing.toSafeImportPath("./relative/index.mjs")).toBe("./relative/index.mjs");
     } finally {
       platformSpy.mockRestore();
     }

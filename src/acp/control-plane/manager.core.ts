@@ -12,6 +12,7 @@ import {
   failTaskRunByRunId,
   startTaskRunByRunId,
 } from "../../tasks/detached-task-runtime.js";
+import { resolveRequiredCompletionTerminalResult } from "../../tasks/task-completion-contract.js";
 import type { DeliveryContext } from "../../utils/delivery-context.js";
 import {
   AcpRuntimeError,
@@ -125,6 +126,10 @@ function resolveBackgroundTaskTerminalResult(progressSummary: string): {
   terminalOutcome?: "blocked";
   terminalSummary?: string;
 } {
+  const requiredCompletionResult = resolveRequiredCompletionTerminalResult(progressSummary);
+  if (requiredCompletionResult.terminalOutcome) {
+    return requiredCompletionResult;
+  }
   const normalized = normalizeText(progressSummary)?.replace(/\s+/g, " ").trim();
   if (!normalized) {
     return {};
@@ -896,6 +901,10 @@ export class AcpSessionManager {
                   ? AbortSignal.any([input.signal, internalAbortController.signal])
                   : internalAbortController.signal;
               const eventGate = { open: true };
+              await input.onLifecycle?.({
+                type: "prompt_submitted",
+                at: Date.now(),
+              });
               const turnPromise = consumeAcpTurnStream({
                 runtime,
                 turn: {

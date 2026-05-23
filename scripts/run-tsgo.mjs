@@ -8,6 +8,7 @@ import {
   resolveLocalHeavyCheckEnv,
   shouldAcquireLocalHeavyCheckLockForTsgo,
 } from "./lib/local-heavy-check-runtime.mjs";
+import { createManagedCommandInvocation } from "./lib/managed-child-process.mjs";
 import {
   getSparseTsgoGuardError,
   shouldSkipSparseTsgoGuardError,
@@ -45,10 +46,16 @@ try {
       process.exitCode = 1;
     }
   } else {
-    const result = spawnSync(tsgoPath, finalArgs, {
+    const tsgo = createManagedCommandInvocation({
+      args: finalArgs,
+      bin: tsgoPath,
+      env,
+    });
+    const result = spawnSync(tsgo.command, tsgo.args, {
       stdio: "inherit",
       env,
-      shell: process.platform === "win32",
+      shell: tsgo.shell,
+      windowsVerbatimArguments: tsgo.windowsVerbatimArguments,
     });
 
     if (result.error) {

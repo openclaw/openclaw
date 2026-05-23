@@ -264,6 +264,9 @@ const cachedPluginSdkExportedSubpaths = new PluginLruCache<string[]>(
 const cachedPluginSdkScopedAliasMaps = new PluginLruCache<Record<string, string>>(
   MAX_PLUGIN_LOADER_ALIAS_CACHE_ENTRIES,
 );
+const cachedBundledPluginPublicSurfaceAliasMaps = new PluginLruCache<Record<string, string>>(
+  MAX_PLUGIN_LOADER_ALIAS_CACHE_ENTRIES,
+);
 const PLUGIN_SDK_PACKAGE_NAMES = ["openclaw/plugin-sdk", "@openclaw/plugin-sdk"] as const;
 const OFFICIAL_CODEX_PLUGIN_PACKAGE_NAME = "@openclaw/codex";
 const CODEX_NATIVE_TASK_RUNTIME_PLUGIN_SDK_SUBPATH = "codex-native-task-runtime";
@@ -417,19 +420,25 @@ function resolveBundledPluginPackagePublicSurfaceAliasMap(params: {
   if (!packageRoot) {
     return {};
   }
-  const extensionsRoot = path.join(packageRoot, "extensions");
-  let extensionDirs: fs.Dirent[];
-  try {
-    extensionDirs = fs.readdirSync(extensionsRoot, { withFileTypes: true });
-  } catch {
-    return {};
-  }
   const orderedKinds = resolvePluginSdkAliasCandidateOrder({
     modulePath: params.modulePath,
     isProduction: process.env.NODE_ENV === "production",
     pluginSdkResolution: params.pluginSdkResolution,
   });
   const includePrivateQa = shouldIncludePrivateLocalOnlyPluginSdkSubpaths();
+  const cacheKey = `${packageRoot}::${orderedKinds.join(",")}::privateQa=${includePrivateQa ? "1" : "0"}`;
+  const cached = cachedBundledPluginPublicSurfaceAliasMaps.get(cacheKey);
+  if (cached) {
+    return cached;
+  }
+  const extensionsRoot = path.join(packageRoot, "extensions");
+  let extensionDirs: fs.Dirent[];
+  try {
+    extensionDirs = fs.readdirSync(extensionsRoot, { withFileTypes: true });
+  } catch {
+    cachedBundledPluginPublicSurfaceAliasMaps.set(cacheKey, {});
+    return {};
+  }
   const aliasMap: Record<string, string> = {};
   for (const entry of extensionDirs) {
     if (!entry.isDirectory()) {
@@ -458,6 +467,7 @@ function resolveBundledPluginPackagePublicSurfaceAliasMap(params: {
       aliasMap[`${packageName}/${basename}.js`] = normalizeJitiAliasTargetPath(target);
     }
   }
+  cachedBundledPluginPublicSurfaceAliasMaps.set(cacheKey, aliasMap);
   return aliasMap;
 }
 

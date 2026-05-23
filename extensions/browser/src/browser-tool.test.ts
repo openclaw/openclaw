@@ -123,6 +123,7 @@ const configMocks = vi.hoisted(() => ({
     () => {
       browser: Record<string, unknown>;
       gateway?: { nodes?: { browser?: { node?: string } } };
+      agents?: { defaults?: { imageMaxDimensionPx?: number } };
     }
   >(() => ({ browser: {} })),
 }));
@@ -185,6 +186,12 @@ vi.mock("./browser-tool.runtime.js", () => {
     ...gatewayMocks,
     ...sessionTabRegistryMocks,
     getRuntimeConfig: configMocks.loadConfig,
+    resolveRuntimeImageSanitization: () => {
+      const configured = configMocks.loadConfig().agents?.defaults?.imageMaxDimensionPx;
+      return typeof configured === "number" && Number.isFinite(configured)
+        ? { maxDimensionPx: Math.max(1, Math.floor(configured)) }
+        : undefined;
+    },
     applyBrowserProxyPaths: vi.fn(),
     getBrowserProfileCapabilities: (profile: Record<string, unknown>) => ({
       usesChromeMcp: profile.driver === "existing-session",
@@ -218,8 +225,8 @@ vi.mock("./browser-tool.runtime.js", () => {
   };
 });
 
-import { __testing as browserToolActionsTesting } from "./browser-tool.actions.js";
-import { __testing as browserToolTesting, createBrowserTool } from "./browser-tool.js";
+import { testing as browserToolActionsTesting } from "./browser-tool.actions.js";
+import { testing as browserToolTesting, createBrowserTool } from "./browser-tool.js";
 import { DEFAULT_AI_SNAPSHOT_MAX_CHARS } from "./browser/constants.js";
 
 function mockSingleBrowserProxyNode() {
@@ -715,6 +722,29 @@ describe("browser tool snapshot maxChars", () => {
     expect(opts.timeoutMs).toBe(12_345);
   });
 
+  it("passes configured image sanitization to screenshot image results", async () => {
+    configMocks.loadConfig.mockReturnValue({
+      browser: {},
+      agents: { defaults: { imageMaxDimensionPx: 2000 } },
+    } as never);
+    toolCommonMocks.imageResultFromFile.mockResolvedValueOnce({
+      content: [{ type: "image", data: "base64", mimeType: "image/png" }],
+      details: { path: "/tmp/test.png" },
+    });
+
+    const tool = createBrowserTool();
+    await tool.execute?.("call-1", {
+      action: "screenshot",
+      target: "host",
+      targetId: "tab-1",
+    });
+
+    const imageParams = lastMockCallArg<{
+      imageSanitization?: { maxDimensionPx?: number };
+    }>(toolCommonMocks.imageResultFromFile, 0);
+    expect(imageParams.imageSanitization).toEqual({ maxDimensionPx: 2000 });
+  });
+
   it("passes screenshot timeoutMs through the node browser proxy", async () => {
     mockSingleBrowserProxyNode();
     gatewayMocks.callGatewayTool.mockResolvedValueOnce({
@@ -1163,6 +1193,10 @@ describe("browser tool snapshot labels", () => {
   registerBrowserToolAfterEachReset();
 
   it("returns image + text when labels are requested", async () => {
+    configMocks.loadConfig.mockReturnValue({
+      browser: {},
+      agents: { defaults: { imageMaxDimensionPx: 2000 } },
+    } as never);
     const tool = createBrowserTool();
     const imageResult = {
       content: [
@@ -1188,12 +1222,14 @@ describe("browser tool snapshot labels", () => {
       labels: true,
     });
 
-    const imageParams = lastMockCallArg<{ path?: string; extraText?: string }>(
-      toolCommonMocks.imageResultFromFile,
-      0,
-    );
+    const imageParams = lastMockCallArg<{
+      path?: string;
+      extraText?: string;
+      imageSanitization?: { maxDimensionPx?: number };
+    }>(toolCommonMocks.imageResultFromFile, 0);
     expect(imageParams.path).toBe("/tmp/snap.png");
     expect(imageParams.extraText).toContain("<<<EXTERNAL_UNTRUSTED_CONTENT");
+    expect(imageParams.imageSanitization).toEqual({ maxDimensionPx: 2000 });
     expect(result).toEqual(imageResult);
     expect(result?.content).toHaveLength(2);
     expect(result?.content?.[0]).toEqual({ type: "text", text: "label text" });
@@ -1228,6 +1264,35 @@ describe("browser tool external content wrapping", () => {
     const details = externalContentDetails(result, "snapshot");
     expect(details.format).toBe("aria");
     expect(details.nodeCount).toBe(1);
+  });
+
+  it("preserves pending dialog state in ai snapshot results", async () => {
+    browserClientMocks.browserSnapshot.mockResolvedValueOnce({
+      ok: true,
+      format: "ai",
+      targetId: "t1",
+      url: "https://example.com",
+      snapshot: "",
+      blockedByDialog: true,
+      browserState: {
+        dialogs: {
+          pending: [{ id: "d1", type: "confirm", message: "Continue?" }],
+          recent: [],
+        },
+      },
+    });
+
+    const tool = createBrowserTool();
+    const result = await tool.execute?.("call-1", { action: "snapshot", snapshotFormat: "ai" });
+    const text = firstResultText(result);
+    expect(text).toContain('"blockedByDialog": true');
+    expect(text).toContain('"id": "d1"');
+    const details = externalContentDetails(result, "snapshot") as {
+      blockedByDialog?: unknown;
+      browserState?: { dialogs?: { pending?: Array<{ id?: string }> } };
+    };
+    expect(details.blockedByDialog).toBe(true);
+    expect(details.browserState?.dialogs?.pending?.[0]?.id).toBe("d1");
   });
 
   it("wraps tabs output as external content", async () => {

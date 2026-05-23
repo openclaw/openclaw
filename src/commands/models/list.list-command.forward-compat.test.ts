@@ -247,9 +247,11 @@ function installModelsListCommandForwardCompatMocks() {
   }));
 
   vi.doMock("../../agents/agent-scope.js", () => ({
+    listAgentEntries: vi.fn(() => []),
     resolveAgentWorkspaceDir: vi.fn(() => "/tmp/openclaw-workspace"),
     resolveDefaultAgentDir: mocks.resolveDefaultAgentDir,
     resolveDefaultAgentId: vi.fn(() => "main"),
+    resolveSessionAgentIds: vi.fn(() => ({ defaultAgentId: "main", sessionAgentId: "main" })),
   }));
 
   vi.doMock("../../agents/model-catalog.js", () => ({
@@ -826,12 +828,14 @@ describe("modelsListCommand forward-compat", () => {
 
       expect(mocks.ensureOpenClawModelsJson).not.toHaveBeenCalled();
       expect(mocks.loadModelRegistry).not.toHaveBeenCalled();
-      expect(mocks.loadProviderCatalogModelsForList).toHaveBeenCalledWith({
-        cfg: mocks.resolvedConfig,
-        agentDir: "/tmp/openclaw-agent",
-        providerFilter: "codex",
-        staticOnly: true,
-      });
+      expect(mocks.loadProviderCatalogModelsForList).toHaveBeenCalledWith(
+        expect.objectContaining({
+          cfg: mocks.resolvedConfig,
+          agentDir: "/tmp/openclaw-agent",
+          providerFilter: "codex",
+          staticOnly: true,
+        }),
+      );
       const rows = lastPrintedRows<{ key: string; available: boolean }>();
       expectRowKeys(rows, ["codex/gpt-5.4"]);
       expectRowFields(rows, "codex/gpt-5.4", { available: true });
@@ -1015,18 +1019,24 @@ describe("modelsListCommand forward-compat", () => {
       expectFirstRegistryConfig();
       expect(modelRegistryOptions().providerFilter).toBe("openai-codex");
       expect(modelRegistryOptions().normalizeModels).toBe(true);
-      expect(mocks.loadProviderCatalogModelsForList).toHaveBeenNthCalledWith(1, {
-        cfg: mocks.resolvedConfig,
-        agentDir: "/tmp/openclaw-agent",
-        providerFilter: "openai-codex",
-        staticOnly: true,
-      });
-      expect(mocks.loadProviderCatalogModelsForList).toHaveBeenNthCalledWith(2, {
-        cfg: mocks.resolvedConfig,
-        agentDir: "/tmp/openclaw-agent",
-        providerFilter: "openai-codex",
-        staticOnly: undefined,
-      });
+      expect(mocks.loadProviderCatalogModelsForList).toHaveBeenNthCalledWith(
+        1,
+        expect.objectContaining({
+          cfg: mocks.resolvedConfig,
+          agentDir: "/tmp/openclaw-agent",
+          providerFilter: "openai-codex",
+          staticOnly: true,
+        }),
+      );
+      expect(mocks.loadProviderCatalogModelsForList).toHaveBeenNthCalledWith(
+        2,
+        expect.objectContaining({
+          cfg: mocks.resolvedConfig,
+          agentDir: "/tmp/openclaw-agent",
+          providerFilter: "openai-codex",
+          staticOnly: undefined,
+        }),
+      );
       const rows = lastPrintedRows<{ key: string; available: boolean }>();
       expectRowKeys(rows, ["openai-codex/gpt-5.4"]);
       expectRowFields(rows, "openai-codex/gpt-5.4", { available: true });

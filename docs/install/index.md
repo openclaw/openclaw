@@ -9,7 +9,7 @@ title: "Install"
 
 ## System requirements
 
-- **Node 24** (recommended) or Node 22.16+ - the installer script handles this automatically
+- **Node 24** (recommended) or Node 22.19+ - the installer script handles this automatically
 - **macOS, Linux, or Windows** - both native Windows and WSL2 are supported; WSL2 is more stable. See [Windows](/platforms/windows).
 - `pnpm` is only needed if you build from source
 
@@ -131,10 +131,10 @@ openclaw onboard --install-daemon
 
 Or skip the link and use `pnpm openclaw ...` from inside the repo. See [Setup](/start/setup) for full development workflows.
 
-### Install from GitHub main
+### Install from the GitHub main checkout
 
 ```bash
-npm install -g github:openclaw/openclaw#main
+curl -fsSL --proto '=https' --tlsv1.2 https://openclaw.ai/install.sh | bash -s -- --install-method git --version main
 ```
 
 ### Containers and package managers
