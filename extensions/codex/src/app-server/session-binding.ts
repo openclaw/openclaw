@@ -1,4 +1,5 @@
 import fs from "node:fs/promises";
+import path from "node:path";
 import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
   ensureAuthProfileStore,
@@ -181,10 +182,9 @@ export async function writeCodexAppServerBinding(
     createdAt: binding.createdAt ?? now,
     updatedAt: now,
   };
-  await fs.writeFile(
-    resolveCodexAppServerBindingPath(sessionFile),
-    `${JSON.stringify(payload, null, 2)}\n`,
-  );
+  const bindingPath = resolveCodexAppServerBindingPath(sessionFile);
+  await fs.mkdir(path.dirname(bindingPath), { recursive: true });
+  await fs.writeFile(bindingPath, `${JSON.stringify(payload, null, 2)}\n`);
 }
 
 function readContextEngineBinding(value: unknown): CodexAppServerContextEngineBinding | undefined {

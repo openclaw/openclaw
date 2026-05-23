@@ -573,6 +573,9 @@ export async function runCliTurnCompactionLifecycle(params: {
     });
     compacted = contextOutcome.compacted;
     if (!compacted) {
+      if (!params.sessionStore || !params.storePath) {
+        return params.sessionEntry;
+      }
       throw new Error(
         `CLI transcript compaction failed for ${params.provider}/${params.model}: ${
           contextOutcome.failureReason ?? "compaction did not reduce context"

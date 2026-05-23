@@ -1199,7 +1199,11 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
     const afterTurn = vi.fn(
       async (_params: Parameters<NonNullable<ContextEngine["afterTurn"]>>[0]) => undefined,
     );
-    const maintain = vi.fn(async () => ({ changed: false, bytesFreed: 0, rewrittenEntries: 0 }));
+    const maintain = vi.fn<NonNullable<ContextEngine["maintain"]>>(async () => ({
+      changed: false,
+      bytesFreed: 0,
+      rewrittenEntries: 0,
+    }));
     const contextEngine = createContextEngine({ afterTurn, maintain, bootstrap: undefined });
     const harness = createStartedThreadHarness();
     const params = createParams(sessionFile, workspaceDir);
@@ -1230,7 +1234,11 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
     SessionManager.open(sessionFile).appendMessage(
       assistantMessage("existing context", Date.now()) as never,
     );
-    const maintain = vi.fn(async () => ({ changed: false, bytesFreed: 0, rewrittenEntries: 0 }));
+    const maintain = vi.fn<NonNullable<ContextEngine["maintain"]>>(async () => ({
+      changed: false,
+      bytesFreed: 0,
+      rewrittenEntries: 0,
+    }));
     const contextEngine = createContextEngine({ maintain });
     const harness = createStartedThreadHarness();
     const params = createParams(sessionFile, workspaceDir);
@@ -1349,7 +1357,11 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
     const ingestBatch = vi.fn(async () => ({ ingestedCount: 2 }));
-    const maintain = vi.fn(async () => ({ changed: false, bytesFreed: 0, rewrittenEntries: 0 }));
+    const maintain = vi.fn<NonNullable<ContextEngine["maintain"]>>(async () => ({
+      changed: false,
+      bytesFreed: 0,
+      rewrittenEntries: 0,
+    }));
     const contextEngine = createContextEngine({
       afterTurn: undefined,
       ingestBatch,

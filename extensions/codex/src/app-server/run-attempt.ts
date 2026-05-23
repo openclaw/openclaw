@@ -573,6 +573,7 @@ export async function runCodexAppServerAttempt(
     profilerEnabled,
     forceHeartbeatTool: true,
     ignoreRuntimePlan: true,
+    skipRuntimeToolNormalization: true,
     onYieldDetected: () => {
       yieldDetected = true;
     },
