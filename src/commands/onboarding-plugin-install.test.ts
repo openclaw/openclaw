@@ -1559,7 +1559,7 @@ describe("ensureOnboardingPluginInstalled", () => {
       entry: {
         pluginId: "@openclaw/feishu",
         label: "Feishu",
-        install: { path: bundledPluginPath },
+        install: { localPath: bundledPluginPath },
       },
       prompter: { select: vi.fn(async () => "path"), note: vi.fn(), progress: vi.fn(() => ({ update: vi.fn(), stop: vi.fn() })) } as never,
       runtime: {} as never,
@@ -1574,7 +1574,7 @@ describe("ensureOnboardingPluginInstalled", () => {
       entry: {
         pluginId: "custom-plugin",
         label: "Custom",
-        install: { path: nonBundledPath },
+        install: { localPath: nonBundledPath },
       },
       prompter: { select: vi.fn(async () => "path"), note: vi.fn(), progress: vi.fn(() => ({ update: vi.fn(), stop: vi.fn() })) } as never,
       runtime: {} as never,
