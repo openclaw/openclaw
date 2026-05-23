@@ -18,6 +18,7 @@
  */
 
 import {
+  createAgentToolResultMiddlewareRunner,
   extractToolResultMediaArtifact,
   filterToolResultMediaUrls,
   HEARTBEAT_RESPONSE_TOOL_NAME,
@@ -32,6 +33,7 @@ import {
   type EmbeddedRunAttemptParams,
   type HeartbeatToolResponse,
   type MessagingToolSend,
+  type MessagingToolSourceReplyPayload,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { normalizeAgentId } from "openclaw/plugin-sdk/routing";
 import type {
@@ -56,6 +58,17 @@ export type ClaudeDynamicToolTelemetry = {
   messagingToolSentTexts: string[];
   messagingToolSentMediaUrls: string[];
   messagingToolSentTargets: MessagingToolSend[];
+  /**
+   * Internal-UI source-reply payloads extracted from messaging-tool
+   * results. Mirrors codex's `messagingToolSourceReplyPayloads`. When
+   * a messaging tool returns a `details.sourceReplySink === "internal-ui"`
+   * payload (the agent invoked the tool to surface a structured reply
+   * to a source message rather than send a fresh message), the payload
+   * lands here and `messagingToolSent*` fields are skipped for that
+   * call — matches codex's source-reply attribution path so the
+   * downstream reply pipeline keeps its parent-message context.
+   */
+  messagingToolSourceReplyPayloads: MessagingToolSourceReplyPayload[];
   heartbeatToolResponse?: HeartbeatToolResponse;
   toolMediaUrls: string[];
   toolAudioAsVoice: boolean;
@@ -79,6 +92,13 @@ export function createClaudeDynamicToolBridge(params: {
   const excluded = new Set([...(params.excludeNames ?? [])].map((n) => n.trim()).filter(Boolean));
   const hookContext = params.hookContext ?? {};
   const toolResultMaxChars = resolveClaudeDynamicToolResultMaxChars(hookContext);
+  const middlewareRunner = createAgentToolResultMiddlewareRunner({
+    runtime: "claude",
+    ...(hookContext.agentId ? { agentId: hookContext.agentId } : {}),
+    ...(hookContext.sessionId ? { sessionId: hookContext.sessionId } : {}),
+    ...(hookContext.sessionKey ? { sessionKey: hookContext.sessionKey } : {}),
+    ...(hookContext.runId ? { runId: hookContext.runId } : {}),
+  });
   // Wrap each tool so OpenClaw `BeforeToolCall` hooks fire around it. The
   // runtime's existing wrapping (if any) is preserved; we only attach when
   // missing.
@@ -103,6 +123,7 @@ export function createClaudeDynamicToolBridge(params: {
     messagingToolSentTexts: [],
     messagingToolSentMediaUrls: [],
     messagingToolSentTargets: [],
+    messagingToolSourceReplyPayloads: [],
     toolMediaUrls: [],
     toolAudioAsVoice: false,
   };
@@ -120,8 +141,20 @@ export function createClaudeDynamicToolBridge(params: {
     const startedAt = Date.now();
     try {
       const preparedArgs = tool.prepareArguments ? tool.prepareArguments(args) : args;
-      const result = await tool.execute(call.callId, preparedArgs, callerSignal);
-      const isError = isResultError(result);
+      const rawResult = await tool.execute(call.callId, preparedArgs, callerSignal);
+      const rawIsError = isResultError(rawResult);
+      const result = await middlewareRunner.applyToolResultMiddleware({
+        threadId: call.threadId,
+        turnId: call.turnId,
+        toolCallId: call.callId,
+        toolName: tool.name,
+        args,
+        isError: rawIsError,
+        result: rawResult as Parameters<
+          typeof middlewareRunner.applyToolResultMiddleware
+        >[0]["result"],
+      });
+      const isError = rawIsError || isResultError(result);
       collectTelemetry({ telemetry, toolName: tool.name, args, result, isError });
       void runAgentHarnessAfterToolCallHook({
         toolName: tool.name,
@@ -201,6 +234,19 @@ function collectTelemetry(params: {
     return;
   }
   params.telemetry.didSendViaMessagingTool = true;
+  // Source-reply path: the agent invoked a messaging tool to surface a
+  // structured reply to a parent source message (not a fresh outbound
+  // send). The tool result carries the rich payload under
+  // `details.sourceReply` with `details.sourceReplySink === "internal-ui"`;
+  // route it through the source-reply pipeline instead of the regular
+  // sent-text/media tracking. Mirrors codex.
+  const sourceReplyPayload = extractInternalSourceReplyPayload(
+    (params.result as { details?: unknown } | undefined)?.details,
+  );
+  if (sourceReplyPayload) {
+    params.telemetry.messagingToolSourceReplyPayloads.push(sourceReplyPayload);
+    return;
+  }
   const text = readFirstString(params.args, ["text", "message", "body", "content"]);
   if (text) {
     params.telemetry.messagingToolSentTexts.push(text);
@@ -216,6 +262,45 @@ function collectTelemetry(params: {
     ...(text ? { text } : {}),
     ...(mediaUrls.length > 0 ? { mediaUrls } : {}),
   } as MessagingToolSend);
+}
+
+function extractInternalSourceReplyPayload(
+  details: unknown,
+): MessagingToolSourceReplyPayload | undefined {
+  if (!isRecord(details) || details.sourceReplySink !== "internal-ui") {
+    return undefined;
+  }
+  const rawPayload = details.sourceReply;
+  if (!isRecord(rawPayload)) {
+    return undefined;
+  }
+  const text = readFirstString(rawPayload, ["text", "message"]);
+  const mediaUrls = collectArgMediaUrls(rawPayload);
+  const mediaUrl =
+    typeof rawPayload.mediaUrl === "string" && rawPayload.mediaUrl.trim()
+      ? rawPayload.mediaUrl.trim()
+      : mediaUrls[0];
+  const payload: MessagingToolSourceReplyPayload = {
+    ...(text ? { text } : {}),
+    ...(mediaUrl ? { mediaUrl } : {}),
+    ...(mediaUrls.length > 0 ? { mediaUrls } : {}),
+    ...(rawPayload.audioAsVoice === true ? { audioAsVoice: true } : {}),
+    ...(isRecord(rawPayload.presentation)
+      ? { presentation: rawPayload.presentation as never }
+      : {}),
+    ...(isRecord(rawPayload.interactive) ? { interactive: rawPayload.interactive as never } : {}),
+    ...(isRecord(rawPayload.channelData) ? { channelData: rawPayload.channelData } : {}),
+    ...(typeof details.idempotencyKey === "string" && details.idempotencyKey.trim()
+      ? { idempotencyKey: details.idempotencyKey.trim() }
+      : {}),
+  };
+  return text || mediaUrls.length > 0 || payload.presentation || payload.interactive
+    ? payload
+    : undefined;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
 // ─── Result projection ──────────────────────────────────────────────────────

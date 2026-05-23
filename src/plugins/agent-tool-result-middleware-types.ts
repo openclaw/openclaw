@@ -2,7 +2,7 @@ import type { AgentToolResult as PiAgentToolResult } from "@earendil-works/pi-ag
 
 export type OpenClawAgentToolResult<TResult = unknown> = PiAgentToolResult<TResult>;
 
-export type AgentToolResultMiddlewareRuntime = "pi" | "codex";
+export type AgentToolResultMiddlewareRuntime = "pi" | "codex" | "claude";
 /** @deprecated Use AgentToolResultMiddlewareRuntime. */
 export type AgentToolResultMiddlewareHarness =
   | AgentToolResultMiddlewareRuntime
