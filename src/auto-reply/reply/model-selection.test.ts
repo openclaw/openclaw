@@ -220,6 +220,55 @@ describe("createModelSelectionState catalog loading", () => {
     expect(loadModelCatalog).toHaveBeenCalledOnce();
   });
 
+  it.each(["openai", "openai-codex"])(
+    "preserves runtime reasoning provenance when configured %s rows omit reasoning",
+    async (provider) => {
+      vi.mocked(loadModelCatalog).mockClear();
+      vi.mocked(loadModelCatalog).mockResolvedValueOnce([
+        { provider, id: "gpt-5.5", name: "GPT-5.5", reasoning: false },
+      ]);
+      const cfg = {
+        agents: {
+          defaults: {
+            models: {
+              [`${provider}/*`]: {},
+            },
+          },
+        },
+        models: {
+          providers: {
+            [provider]: {
+              baseUrl: "https://api.openai.com/v1",
+              models: [
+                makeConfiguredModel({ id: "gpt-5.5", name: "GPT-5.5", reasoning: undefined }),
+              ],
+            },
+          },
+        },
+      } as OpenClawConfig;
+
+      const state = await createModelSelectionState({
+        cfg,
+        agentCfg: cfg.agents?.defaults,
+        defaultProvider: provider,
+        defaultModel: "gpt-5.5",
+        provider,
+        model: "gpt-5.5",
+        hasModelDirective: true,
+      });
+
+      await expect(state.resolveThinkingCatalog()).resolves.toMatchObject([
+        {
+          provider,
+          id: "gpt-5.5",
+          source: "runtime",
+          reasoning: false,
+        },
+      ]);
+      expect(loadModelCatalog).toHaveBeenCalledOnce();
+    },
+  );
+
   it("prefers per-agent thinkingDefault over model and global defaults", async () => {
     vi.mocked(loadModelCatalog).mockClear();
     const cfg = {

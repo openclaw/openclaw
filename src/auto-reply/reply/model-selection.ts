@@ -361,14 +361,19 @@ export async function createModelSelectionState(params: {
     source: ThinkingCatalogSource,
   ): ThinkingCatalogEntryWithSource[] =>
     catalog.map((entry) => {
-      const configuredEntry = configuredThinkingEntriesByKey.get(modelKey(entry.provider, entry.id));
+      const configuredEntry = configuredThinkingEntriesByKey.get(
+        modelKey(entry.provider, entry.id),
+      );
       if (configuredEntry) {
+        const entrySource = (entry as ThinkingCatalogEntryWithSource).source ?? source;
+        const reasoningSource =
+          typeof configuredEntry.reasoning === "boolean" ? "configured" : entrySource;
         return {
           ...entry,
           ...Object.fromEntries(
             Object.entries(configuredEntry).filter(([, value]) => value !== undefined),
           ),
-          source: "configured",
+          source: reasoningSource,
         };
       }
       return {
