@@ -919,7 +919,7 @@ For the full setup and behavior details, see [Ollama Web Search](/tools/ollama-s
     When `proxy.enabled=true`, Ollama memory embedding requests to the exact
     host-local loopback origin derived from the configured `baseUrl` use
     OpenClaw's guarded direct path instead of the managed forward proxy. The
-    configured hostname must itself be `localhost`, `127.0.0.1`, or `[::1]`;
+    configured hostname must itself be `localhost` or a loopback IP literal;
     DNS names that merely resolve to loopback still use the managed proxy path.
     LAN, tailnet, private-network, and public Ollama hosts also stay on the
     managed proxy path. Redirects to another host or port do not inherit trust.

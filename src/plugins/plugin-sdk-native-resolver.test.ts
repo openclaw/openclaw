@@ -174,6 +174,11 @@ describe("installOpenClawPluginSdkNativeResolver", () => {
       pluginModulePath: ollamaEntry,
       pluginSdkResolution: "dist",
     });
+    installOpenClawPluginSdkNativeResolver({
+      modulePath: loaderModulePath,
+      pluginModulePath: otherEntry,
+      pluginSdkResolution: "dist",
+    });
 
     expect(installedAliases).toContain("openclaw/plugin-sdk/ssrf-runtime-internal");
     const requireFromOllama = createRequire(ollamaEntry);

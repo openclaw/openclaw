@@ -145,6 +145,27 @@ describe("ollama embedding provider", () => {
     });
   });
 
+  it("passes cloud Ollama origins through the guarded fetch contract", async () => {
+    const fetchMock = mockEmbeddingFetch([1, 0]);
+
+    const { provider } = await createOllamaEmbeddingProvider({
+      config: {} as OpenClawConfig,
+      provider: "ollama",
+      model: "nomic-embed-text",
+      fallback: "none",
+      remote: { baseUrl: "https://ollama.com" },
+    });
+
+    await provider.embedQuery("hello");
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(firstGuardedFetchCall()).toMatchObject({
+      url: "https://ollama.com/api/embed",
+      policy: { allowedOrigins: ["https://ollama.com"] },
+      configuredLocalOriginBaseUrl: "https://ollama.com",
+    });
+  });
+
   it("resolves configured base URL and headers without sending local marker auth", async () => {
     const fetchMock = mockEmbeddingFetch([1, 0]);
 
