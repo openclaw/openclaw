@@ -104,6 +104,7 @@ Docs: https://docs.openclaw.ai
 - Codex app-server: keep native web search observations out of mirrored chat transcripts while preserving tool progress telemetry. Fixes #85109. Thanks @ugitmebaby.
 - OpenCode Go: strip unsupported Kimi reasoning replay fields before provider requests so repeated `kimi-k2.6` turns do not fail schema validation. Fixes #83812. Thanks @Sleeck.
 - Browser/CDP: add a WSL2 portproxy self-loop hint when Chrome DevTools endpoints accept connections but return an empty HTTP reply. Fixes #59209. Thanks @Owlock.
+- Agents/tools: add bounded tool-policy audit log entries that identify which allow/deny rule removed tools or blocked a sandboxed tool call. Fixes #55801. Thanks @justinjkline.
 - Agents/OpenAI: preserve structured provider error code, type, and redacted body metadata on boundary-aware transport failures.
 - Doctor/Codex: point native Codex asset warnings at the canonical `openclaw migrate plan codex` preview command. Fixes #84948. Thanks @markoa.
 - CLI/models: make `capability model auth logout --agent` remove auth profiles from the selected non-default agent store. Fixes #85092. Thanks @islandpreneur007.
