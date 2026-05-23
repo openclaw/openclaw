@@ -16,8 +16,9 @@ export function stripTelegramInternalPrefixes(to: string): string {
         strippedTelegramPrefix = true;
         return trimmed.replace(/^(telegram|tg):/i, "").trim();
       }
-      // Legacy internal form: `telegram:group:<id>` (still emitted by session keys).
-      if (strippedTelegramPrefix && /^group:/i.test(trimmed)) {
+      // Legacy internal forms still appear in durable queue entries.
+      const groupPrefixMatch = /^group:(-?\d+(?::(?:topic:)?\d+)?)$/i.exec(trimmed);
+      if ((strippedTelegramPrefix || groupPrefixMatch) && /^group:/i.test(trimmed)) {
         return trimmed.replace(/^group:/i, "").trim();
       }
       return trimmed;

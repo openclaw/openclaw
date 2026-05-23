@@ -872,6 +872,26 @@ describe("sendMessageTelegram", () => {
     });
   });
 
+  it("normalizes legacy durable group queue targets", async () => {
+    const sendMessage = vi.fn().mockResolvedValue({
+      message_id: 1,
+      chat: { id: "-100123" },
+    });
+    const api = { sendMessage } as unknown as {
+      sendMessage: typeof sendMessage;
+    };
+
+    await sendMessageTelegram("group:-100123", "hi", {
+      cfg: TELEGRAM_TEST_CFG,
+      token: "tok",
+      api,
+    });
+
+    expect(sendMessage).toHaveBeenCalledWith("-100123", "hi", {
+      parse_mode: "HTML",
+    });
+  });
+
   it("resolves t.me targets to numeric chat ids via getChat", async () => {
     const sendMessage = vi.fn().mockResolvedValue({
       message_id: 1,

@@ -32,8 +32,13 @@ describe("stripTelegramInternalPrefixes", () => {
     expect(stripTelegramInternalPrefixes("telegram:group:-100123")).toBe("-100123");
   });
 
-  it("does not strip group prefix without telegram prefix", () => {
-    expect(stripTelegramInternalPrefixes("group:-100123")).toBe("group:-100123");
+  it("strips legacy group prefix without telegram prefix for numeric chat ids", () => {
+    expect(stripTelegramInternalPrefixes("group:-100123")).toBe("-100123");
+    expect(stripTelegramInternalPrefixes("group:-100123:topic:77")).toBe("-100123:topic:77");
+  });
+
+  it("does not strip group prefix without a numeric chat id", () => {
+    expect(stripTelegramInternalPrefixes("group:announcements")).toBe("group:announcements");
   });
 
   it("is idempotent", () => {
@@ -94,6 +99,13 @@ describe("parseTelegramTarget", () => {
       chatType: "group",
     });
   });
+
+  it("parses legacy group queue targets", () => {
+    expect(parseTelegramTarget("group:-1001234567890")).toEqual({
+      chatId: "-1001234567890",
+      chatType: "group",
+    });
+  });
 });
 
 describe("telegram numeric target normalization", () => {
@@ -102,6 +114,13 @@ describe("telegram numeric target normalization", () => {
     ({ normalize }) => {
       expect(normalize("-1001234567890")).toBe("-1001234567890");
       expect(normalize("123456789")).toBe("123456789");
+    },
+  );
+
+  it.each(numericTelegramTargetNormalizers)(
+    "$name accepts legacy durable group queue targets",
+    ({ normalize }) => {
+      expect(normalize("group:-1001234567890")).toBe("-1001234567890");
     },
   );
 });
