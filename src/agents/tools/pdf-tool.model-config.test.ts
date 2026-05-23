@@ -147,6 +147,37 @@ describe("resolvePdfModelConfigForTool", () => {
     });
   });
 
+  it("preserves generic image provider precedence when the default model is not MiniMax", () => {
+    vi.stubEnv("OPENAI_API_KEY", "openai-test");
+    vi.stubEnv("MINIMAX_API_KEY", "minimax-test");
+    const cfg = {
+      ...withDefaultModel("openai/gpt-5.4"),
+      models: {
+        providers: {
+          minimax: {
+            baseUrl: "https://api.minimax.io/anthropic",
+            models: [
+              {
+                id: "MiniMax-M2.7",
+                name: "MiniMax M2.7",
+                reasoning: false,
+                input: ["text"],
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                contextWindow: 128_000,
+                maxTokens: 8_192,
+              },
+            ],
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    expect(resolvePdfModelConfigForTool({ cfg, agentDir: TEST_AGENT_DIR })).toEqual({
+      primary: "openai/gpt-5.4-mini",
+      fallbacks: ["minimax/MiniMax-M2.7"],
+    });
+  });
+
   it("uses the default MiniMax chat model for PDF text extraction fallback", () => {
     vi.stubEnv("MINIMAX_API_KEY", "minimax-test");
     const cfg = {
