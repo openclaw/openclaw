@@ -92,12 +92,15 @@ jobs:
           git fetch --no-tags --depth=50 origin "+refs/heads/main:refs/remotes/origin/main"
 
           node_bin="$(dirname "$(node -p 'process.execPath')")"
-          pnpm_bin="$(command -v pnpm)"
           sudo ln -sf "$node_bin/node" /usr/local/bin/node
           sudo ln -sf "$node_bin/npm" /usr/local/bin/npm
           sudo ln -sf "$node_bin/npx" /usr/local/bin/npx
           sudo ln -sf "$node_bin/corepack" /usr/local/bin/corepack
-          sudo ln -sf "$pnpm_bin" /usr/local/bin/pnpm
+          sudo tee /usr/local/bin/pnpm >/dev/null <<'PNPM'
+          #!/usr/bin/env bash
+          exec /usr/local/bin/corepack pnpm "$@"
+          PNPM
+          sudo chmod 0755 /usr/local/bin/pnpm
 
       - name: Hydrate Testbox provider env helper
         shell: bash
