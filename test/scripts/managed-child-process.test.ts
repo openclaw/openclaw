@@ -6,6 +6,7 @@ import { pathToFileURL } from "node:url";
 import { describe, expect, it } from "vitest";
 import {
   createManagedCommandSpawnSpec,
+  runManagedCommand,
   signalExitCode,
 } from "../../scripts/lib/managed-child-process.mjs";
 import { createScriptTestHarness } from "./test-helpers.js";
@@ -82,6 +83,36 @@ describe("managed-child-process", () => {
         shell: true,
       }),
     ).toThrow("unsafe Windows cmd.exe argument detected");
+  });
+
+  it("shares process signal listeners across parallel managed commands", async () => {
+    const signals = ["SIGHUP", "SIGINT", "SIGTERM"] as const;
+    const baseline = new Map(signals.map((signal) => [signal, process.listenerCount(signal)]));
+    let readyCount = 0;
+    const commands = Array.from({ length: 12 }, () =>
+      runManagedCommand({
+        args: ["-e", "setTimeout(() => {}, 500)"],
+        bin: process.execPath,
+        shell: false,
+        stdio: "ignore",
+        onReady: () => {
+          readyCount += 1;
+        },
+      }),
+    );
+
+    try {
+      await waitFor(() => readyCount === commands.length);
+      for (const signal of signals) {
+        expect(process.listenerCount(signal)).toBe((baseline.get(signal) ?? 0) + 1);
+      }
+    } finally {
+      await Promise.all(commands);
+    }
+
+    for (const signal of signals) {
+      expect(process.listenerCount(signal)).toBe(baseline.get(signal) ?? 0);
+    }
   });
 
   posixIt("kills the managed child process group when the runner is terminated", async () => {
