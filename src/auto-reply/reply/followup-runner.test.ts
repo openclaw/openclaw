@@ -1443,6 +1443,67 @@ describe("createFollowupRunner progress forwarding", () => {
     expect(onCommandOutput).not.toHaveBeenCalled();
     expect(routeReplyMock).not.toHaveBeenCalled();
   });
+
+  it("does not reuse dispatch-scoped tool-error suppression across queued follow-ups", async () => {
+    const onCommandOutput = vi.fn(async () => {});
+
+    runEmbeddedPiAgentMock
+      .mockImplementationOnce(
+        async (args: {
+          onAgentEvent?: (evt: { stream: string; data: Record<string, unknown> }) => Promise<void>;
+          suppressToolErrorWarnings?: boolean | (() => boolean | undefined);
+        }) => {
+          const shouldSuppress = args.suppressToolErrorWarnings as () => boolean | undefined;
+          expect(shouldSuppress()).toBeUndefined();
+          await args.onAgentEvent?.({
+            stream: "command_output",
+            data: {
+              phase: "end",
+              name: "exec",
+              status: "failed",
+              exitCode: 1,
+            },
+          });
+          expect(shouldSuppress()).toBe(true);
+          return { payloads: [], meta: { agentMeta: {} } };
+        },
+      )
+      .mockImplementationOnce(
+        async (args: { suppressToolErrorWarnings?: boolean | (() => boolean | undefined) }) => {
+          const shouldSuppress = args.suppressToolErrorWarnings as () => boolean | undefined;
+          expect(shouldSuppress()).toBeUndefined();
+          return { payloads: [], meta: { agentMeta: {} } };
+        },
+      );
+
+    const runner = createFollowupRunner({
+      opts: { onCommandOutput, shouldSuppressToolErrorWarnings: () => true },
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      defaultModel: "claude",
+    });
+
+    await runner(
+      createQueuedRun({
+        run: {
+          messageProvider: "discord",
+          sourceReplyDeliveryMode: "message_tool_only",
+          verboseLevel: "on",
+        },
+      }),
+    );
+    await runner(
+      createQueuedRun({
+        run: {
+          messageProvider: "discord",
+          sourceReplyDeliveryMode: "message_tool_only",
+          verboseLevel: "off",
+        },
+      }),
+    );
+
+    expect(onCommandOutput).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe("createFollowupRunner compaction", () => {

@@ -67,6 +67,20 @@ function filterStringArray(value: unknown): string[] | undefined {
     : undefined;
 }
 
+function hasFailedFollowupProgressEvent(evt: FollowupAgentEvent): boolean {
+  if (evt.stream !== "item" && evt.stream !== "command_output") {
+    return false;
+  }
+  const phase = readStringValue(evt.data.phase);
+  const status = readStringValue(evt.data.status);
+  return (
+    phase === "error" ||
+    status === "failed" ||
+    status === "error" ||
+    (typeof evt.data.exitCode === "number" && evt.data.exitCode !== 0)
+  );
+}
+
 async function forwardFollowupProgressEvent(params: {
   evt: FollowupAgentEvent;
   opts?: GetReplyOptions;
@@ -398,6 +412,14 @@ export function createFollowupRunner(params: {
         shouldEmitVerboseProgress() && !shouldSuppressDefaultToolProgressMessages();
       const shouldEmitToolOutputProgress = () =>
         run.verboseLevel === "full" && !shouldSuppressDefaultToolProgressMessages();
+      let observedVisibleToolErrorProgress = false;
+      const markVisibleToolErrorProgress = () => {
+        if (shouldEmitToolResultProgress()) {
+          observedVisibleToolErrorProgress = true;
+        }
+      };
+      const shouldSuppressToolErrorWarnings = () =>
+        opts?.suppressToolErrorWarnings ?? (observedVisibleToolErrorProgress ? true : undefined);
       let progressDeliveryChain: Promise<void> = Promise.resolve();
       const pendingProgressDeliveries = new Set<Promise<void>>();
       const enqueueProgressDelivery = (deliver: () => Promise<void>) => {
@@ -736,8 +758,7 @@ export function createFollowupRunner(params: {
                 thinkLevel: run.thinkLevel,
                 verboseLevel: run.verboseLevel,
                 reasoningLevel: run.reasoningLevel,
-                suppressToolErrorWarnings:
-                  opts?.shouldSuppressToolErrorWarnings ?? opts?.suppressToolErrorWarnings,
+                suppressToolErrorWarnings: shouldSuppressToolErrorWarnings,
                 execOverrides: run.execOverrides,
                 bashElevated: run.bashElevated,
                 timeoutMs: run.timeoutMs,
@@ -772,6 +793,9 @@ export function createFollowupRunner(params: {
                       },
                       { mirror: false },
                     );
+                    if (payload.isError === true) {
+                      markVisibleToolErrorProgress();
+                    }
                   }),
                 onAgentEvent: (evt) =>
                   enqueueProgressDelivery(async () => {
@@ -784,6 +808,9 @@ export function createFollowupRunner(params: {
                         attemptCompactionCount += 1;
                       },
                     });
+                    if (hasFailedFollowupProgressEvent(evt)) {
+                      markVisibleToolErrorProgress();
+                    }
                   }),
               });
               bootstrapPromptWarningSignaturesSeen = resolveBootstrapWarningSignaturesSeen(
