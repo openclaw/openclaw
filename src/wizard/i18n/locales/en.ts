@@ -306,6 +306,7 @@ export const en = {
       toolAccess: "This bot can read files and run actions if tools are enabled.",
     },
     skills: {
+      allReadyTitle: "All skills ready",
       configure: "Configure skills now? (recommended)",
       containerBrewHidden:
         "Brew-only skill installs are hidden in Linux containers because the official image does not ship Homebrew.",

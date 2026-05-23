@@ -299,6 +299,7 @@ export const zh_CN = {
       toolAccess: "如果启用了工具，这个 bot 可以读取文件并执行操作。",
     },
     skills: {
+      allReadyTitle: "技能已就绪",
       configure: "现在配置技能？（推荐）",
       containerBrewHidden:
         "在 Linux 容器中会隐藏仅支持 brew 的技能安装项，因为官方镜像不包含 Homebrew。",

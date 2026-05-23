@@ -144,6 +144,9 @@ const runtime: RuntimeEnv = {
 
 describe("setupSkills", () => {
   afterEach(() => {
+    mocks.buildWorkspaceSkillStatus.mockReset();
+    mocks.installSkill.mockReset();
+    mocks.detectBinary.mockReset();
     mocks.isContainerEnvironment.mockReset();
     mocks.resolveBrewExecutable.mockReset();
   });
@@ -240,6 +243,41 @@ describe("setupSkills", () => {
 
     const brewNote = notes.find((n) => n.title === "Homebrew recommended");
     expect(brewNote).toBeUndefined();
+  });
+
+  it("shows an all-ready note when no skill requirements are missing", async () => {
+    mocks.buildWorkspaceSkillStatus.mockReturnValue({
+      workspaceDir: "/tmp/ws",
+      managedSkillsDir: "/tmp/managed",
+      skills: [
+        {
+          ...createBundledSkill({
+            name: "video-frames",
+            description: "ffmpeg",
+            bins: [],
+            installLabel: "Install ffmpeg (brew)",
+          }),
+          eligible: true,
+          requirements: { bins: [], anyBins: [], env: [], config: [], os: [] },
+          missing: { bins: [], anyBins: [], env: [], config: [], os: [] },
+          install: [],
+        },
+      ],
+    } as never);
+
+    const { prompter, notes } = createPrompter({});
+    await setupSkills({} as OpenClawConfig, "/tmp/ws", runtime, prompter);
+
+    expect(prompter.multiselect).not.toHaveBeenCalled();
+    expect(mocks.installSkill).not.toHaveBeenCalled();
+    expect(notes).toContainEqual({
+      title: "All skills ready",
+      message: [
+        "No missing skill dependencies to install.",
+        "To inspect available skills, run: openclaw skills list --verbose",
+        "To check skill status, run: openclaw skills check",
+      ].join("\n"),
+    });
   });
 
   it("recommends Homebrew when user selects a brew-backed install and brew is missing", async () => {
