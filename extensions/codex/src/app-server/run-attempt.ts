@@ -5128,8 +5128,9 @@ async function buildCodexWorkspaceBootstrapContext(params: {
       turnScopedDeveloperInstructionFiles,
       heartbeatReferenceFiles,
       promptContext: renderCodexWorkspaceBootstrapPromptContext(promptContextFiles),
-      developerInstructions: renderCodexWorkspaceDeveloperInstructions(developerInstructionFiles),
-      turnScopedDeveloperInstructions: renderCodexWorkspaceDeveloperInstructions(
+      developerInstructions:
+        renderCodexWorkspaceThreadDeveloperInstructions(developerInstructionFiles),
+      turnScopedDeveloperInstructions: renderCodexWorkspaceCollaborationDeveloperInstructions(
         turnScopedDeveloperInstructionFiles,
       ),
       heartbeatCollaborationInstructions:
@@ -5453,18 +5454,38 @@ function selectCodexWorkspaceDeveloperInstructionFiles(
     .toSorted(compareCodexContextFiles);
 }
 
-function renderCodexWorkspaceDeveloperInstructions(
+function renderCodexWorkspaceThreadDeveloperInstructions(
   files: EmbeddedContextFile[],
 ): string | undefined {
+  return renderCodexWorkspaceDeveloperInstructions({
+    files,
+    header: "## OpenClaw Workspace Instructions",
+    preamble:
+      "OpenClaw loaded these workspace instruction files from the active agent workspace. Internalize and follow them accordingly.",
+  });
+}
+
+function renderCodexWorkspaceCollaborationDeveloperInstructions(
+  files: EmbeddedContextFile[],
+): string | undefined {
+  return renderCodexWorkspaceDeveloperInstructions({
+    files,
+    header: "## OpenClaw Agent Soul",
+    preamble:
+      "OpenClaw loaded these workspace instruction files from the active agent workspace. They are the canonical definitions of who you are, how you think and work, and the human you work alongside. Internalize and follow them accordingly.",
+  });
+}
+
+function renderCodexWorkspaceDeveloperInstructions(params: {
+  files: EmbeddedContextFile[];
+  header: string;
+  preamble: string;
+}): string | undefined {
+  const { files, header, preamble } = params;
   if (files.length === 0) {
     return undefined;
   }
-  const lines = [
-    "## OpenClaw Workspace Instructions",
-    "",
-    "OpenClaw loaded these workspace instruction files from the active agent workspace. Internalize and follow them accordingly.",
-    "",
-  ];
+  const lines = [header, "", preamble, ""];
   for (const file of files) {
     lines.push(`### ${file.path}`, "", file.content, "");
   }
