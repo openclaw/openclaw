@@ -1,7 +1,9 @@
 import fs from "node:fs";
 import path from "node:path";
 import { resolveStateDir } from "../config/paths.js";
+import { REDACTED_SENTINEL, redactConfigObject } from "../config/redact-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { redactSensitiveUrlLikeString } from "../shared/net/redact-sensitive-url.js";
 
 /**
  * Incident Ledger - Persistent audit trail for repairs and incidents.
@@ -92,6 +94,28 @@ function parseJsonlLine(line: string): LedgerEntry | RepairAttempt | null {
   return null;
 }
 
+function redactLedgerValue(value: unknown): unknown {
+  if (typeof value === "string") {
+    return redactSensitiveUrlLikeString(value);
+  }
+  if (Array.isArray(value)) {
+    return value.map(redactLedgerValue);
+  }
+  if (value && typeof value === "object") {
+    return Object.fromEntries(
+      Object.entries(value as Record<string, unknown>).map(([key, item]) => [
+        key,
+        redactLedgerValue(item),
+      ]),
+    );
+  }
+  return value;
+}
+
+function redactLedgerRecord<T extends Record<string, unknown>>(record: T): T {
+  return redactLedgerValue(redactConfigObject(record)) as T;
+}
+
 export function appendLedgerEntry(
   entry: Omit<LedgerEntry, "id" | "timestamp">,
   config?: OpenClawConfig,
@@ -99,6 +123,7 @@ export function appendLedgerEntry(
   const ledgerPath = resolveLedgerPath(config);
   const fullEntry: LedgerEntry = {
     ...entry,
+    details: entry.details ? redactLedgerRecord(entry.details) : undefined,
     id: generateId(),
     timestamp: new Date().toISOString(),
   };
@@ -113,6 +138,9 @@ export function appendRepairAttempt(
   const ledgerPath = resolveLedgerPath(config);
   const fullRepair: RepairAttempt = {
     ...repair,
+    error: repair.error ? REDACTED_SENTINEL : undefined,
+    beforeState: repair.beforeState ? redactLedgerRecord(repair.beforeState) : undefined,
+    afterState: repair.afterState ? redactLedgerRecord(repair.afterState) : undefined,
     id: generateId(),
     timestamp: new Date().toISOString(),
   };
@@ -165,9 +193,13 @@ export function getIncident(id: string, config?: OpenClawConfig): IncidentWithRe
   const lastAttemptAt =
     incidentRepairs.length > 0 ? incidentRepairs[incidentRepairs.length - 1].timestamp : undefined;
 
-  // Circuit breaker: freeze after 3 consecutive failed repairs
-  const failedAttempts = incidentRepairs.filter((r) => r.status === "failed").length;
-  const circuitBreakerTripped = failedAttempts >= 3;
+  // Circuit breaker: freeze after 3 consecutive failed repairs.
+  const consecutiveFailedAttempts = incidentRepairs
+    .toReversed()
+    .findIndex((repair) => repair.status !== "failed");
+  const failedAttemptRun =
+    consecutiveFailedAttempts === -1 ? incidentRepairs.length : consecutiveFailedAttempts;
+  const circuitBreakerTripped = failedAttemptRun >= 3;
 
   return {
     ...incident,

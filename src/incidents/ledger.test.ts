@@ -141,6 +141,52 @@ describe("incident ledger", () => {
     expect(storedIncident?.circuitBreakerTripped).toBe(false);
   });
 
+  it("resets circuit breaker count after successful repairs", () => {
+    const incident = createIncident({
+      type: "plugin_failure",
+      severity: "medium",
+      summary: "Plugin crashed",
+      source: "plugins",
+    });
+
+    recordRepairAttempt({ incidentId: incident.id, action: "restart", status: "failed" });
+    recordRepairAttempt({ incidentId: incident.id, action: "restart", status: "failed" });
+    recordRepairAttempt({ incidentId: incident.id, action: "restart", status: "succeeded" });
+    recordRepairAttempt({ incidentId: incident.id, action: "restart", status: "failed" });
+    recordRepairAttempt({ incidentId: incident.id, action: "restart", status: "failed" });
+
+    const storedIncident = getIncident(incident.id);
+    expect(storedIncident?.circuitBreakerTripped).toBe(false);
+  });
+
+  it("redacts sensitive ledger details before persistence", () => {
+    const incident = createIncident({
+      type: "gateway_health",
+      severity: "high",
+      summary: "Gateway leaked config",
+      source: "test",
+      details: {
+        token: "secret-token-value",
+        callbackUrl: "https://user:pass@example.com/path",
+      },
+    });
+
+    recordRepairAttempt({
+      incidentId: incident.id,
+      action: "repair",
+      status: "failed",
+      error: "token=secret-token-value",
+      beforeState: { apiKey: "sk-test-secret" },
+      afterState: { apiKey: "sk-test-secret-2" },
+    });
+
+    const rawLedger = fs.readFileSync(resolveLedgerPath(), "utf-8");
+    expect(rawLedger).not.toContain("secret-token-value");
+    expect(rawLedger).not.toContain("sk-test-secret");
+    expect(rawLedger).toContain("__OPENCLAW_REDACTED__");
+    expect(incident.details?.token).toBe("__OPENCLAW_REDACTED__");
+  });
+
   it("resolves incidents", () => {
     const incident = createIncident({
       type: "channel_connectivity",

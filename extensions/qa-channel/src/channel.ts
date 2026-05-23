@@ -7,6 +7,7 @@ import {
   createMessageReceiptFromOutboundResults,
   defineChannelMessageAdapter,
 } from "openclaw/plugin-sdk/channel-message";
+import { getChatChannelMeta } from "openclaw/plugin-sdk/channel-plugin-common";
 import {
   DEFAULT_ACCOUNT_ID,
   listQaChannelAccountIds,
@@ -24,14 +25,7 @@ import { qaChannelStatus } from "./status.js";
 import type { CoreConfig, ResolvedQaChannelAccount } from "./types.js";
 
 const CHANNEL_ID = "qa-channel" as const;
-const meta = {
-  id: CHANNEL_ID,
-  label: "QA Channel",
-  selectionLabel: "QA Channel",
-  docsPath: "/channels/qa-channel",
-  docsLabel: "QA Channel",
-  blurb: "Synthetic QA channel plugin",
-};
+const meta = { ...getChatChannelMeta(CHANNEL_ID) };
 
 const qaChannelMessageAdapter = defineChannelMessageAdapter({
   id: CHANNEL_ID,

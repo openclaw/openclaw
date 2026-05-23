@@ -1,9 +1,9 @@
-import { listBaselines } from "../baseline/capture.js";
+import { captureBaseline, listBaselines, saveBaseline } from "../baseline/capture.js";
 import { getRuntimeConfig } from "../config/config.js";
 import { redactConfigObject } from "../config/redact-snapshot.js";
-import { getOpenIncidents, readLedger } from "../incidents/ledger.js";
+import { createIncident, getOpenIncidents, readLedger } from "../incidents/ledger.js";
 import { validatePluginContracts } from "../plugins/contract-validator.js";
-import { listCachedProbes } from "../probes/cache.js";
+import { executeWithCacheAndStagger, listCachedProbes } from "../probes/cache.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 import { tasksAuditJsonPayloadForDiagnose } from "./tasks-json.js";
 
@@ -11,6 +11,8 @@ export type DiagnoseOptions = {
   json?: boolean;
   timeoutMs?: number;
 };
+
+const DIAGNOSE_BASELINE_NAME = "diagnose-latest";
 
 function summarizeIncident(incident: {
   id: string;
@@ -35,11 +37,48 @@ function summarizeGatewayConfig(gatewayConfig: Record<string, unknown>) {
   return safeGatewayConfig;
 }
 
-export async function buildDiagnoseJson(_opts: DiagnoseOptions, _runtime: RuntimeEnv) {
+export async function buildDiagnoseJson(opts: DiagnoseOptions, _runtime: RuntimeEnv) {
   const cfg = getRuntimeConfig();
   const redactedGatewayConfig = redactConfigObject(cfg.gateway ?? {});
-  const pluginContracts = validatePluginContracts({ config: cfg, strict: true });
+  const pluginContractsProbe = await executeWithCacheAndStagger(
+    "plugin",
+    "contracts",
+    async () => validatePluginContracts({ config: cfg, strict: true }),
+    {
+      config: cfg,
+      forceRefresh: true,
+      baseDelayMs: 0,
+      jitterMs: 0,
+      ttlMs: opts.timeoutMs,
+    },
+  );
+  const pluginContracts = pluginContractsProbe.result;
   const tasks = tasksAuditJsonPayloadForDiagnose({});
+  const currentBaseline = await captureBaseline({
+    config: cfg,
+    skipGateway: opts.timeoutMs === 0,
+  });
+  await saveBaseline(currentBaseline, DIAGNOSE_BASELINE_NAME, cfg);
+  if (!pluginContracts.ok || tasks.summary.combined.errors > 0) {
+    const existing = getOpenIncidents(cfg).some(
+      (incident) => incident.type === "gateway_health" && incident.source === "diagnose",
+    );
+    if (!existing) {
+      createIncident(
+        {
+          type: "gateway_health",
+          severity: pluginContracts.ok ? "medium" : "high",
+          summary: "Control-plane diagnose detected failing checks",
+          source: "diagnose",
+          details: {
+            pluginContractFindings: pluginContracts.findingCount,
+            taskErrors: tasks.summary.combined.errors,
+          },
+        },
+        cfg,
+      );
+    }
+  }
   const ledger = readLedger(cfg);
   const openIncidents = getOpenIncidents(cfg);
   const baselines = listBaselines(cfg);
@@ -58,6 +97,12 @@ export async function buildDiagnoseJson(_opts: DiagnoseOptions, _runtime: Runtim
     tasks,
     baselines: {
       count: baselines.length,
+      latest: DIAGNOSE_BASELINE_NAME,
+      current: {
+        timestamp: currentBaseline.timestamp,
+        components: currentBaseline.components,
+        metrics: currentBaseline.metrics,
+      },
       recent: baselines.slice(-10),
     },
     probeCache: {
