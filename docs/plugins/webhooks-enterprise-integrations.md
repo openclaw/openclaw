@@ -576,7 +576,8 @@ It verifies:
 - Agent dispatch with `deliveryMode: "none"` and route-specific scheduler names
   and tags.
 
-The same suite also includes five negative and edge-angle checks:
+The same suite also includes five negative and edge-angle checks. These are
+expected safety behaviors, not unresolved failures:
 
 - Invalid GitHub-style HMAC is rejected with `401` before agent dispatch.
 - A Jira event outside the configured allowlist is acknowledged as skipped and
@@ -587,6 +588,87 @@ The same suite also includes five negative and edge-angle checks:
   placeholder visible and still includes the raw JSON payload for inspection.
 - Two source-control routes sharing one path are isolated by route-specific auth
   and dispatch to the matching route only.
+
+## Handling edge cases
+
+Use the negative checks above as runbooks for production integrations.
+
+### Fix signature failures
+
+If a GitHub-style HMAC request returns `401`, OpenClaw intentionally refuses to
+dispatch the event. Check:
+
+- The source webhook secret and the OpenClaw `auth.secret` refer to the same
+  value.
+- The source sends the exact raw JSON body that was signed. Proxies must not
+  reformat JSON before OpenClaw verifies the signature.
+- The header and prefix match the source. GitHub uses
+  `x-hub-signature-256: sha256=<hex>`.
+- If the source uses a vendor-specific signing format, verify it at your edge
+  and forward to OpenClaw with bearer or header auth.
+
+Do not weaken the route to accept unsigned traffic. Rotate the route secret if
+the secret may have been copied into logs or chat.
+
+### Handle skipped events
+
+If a Jira or similar event is acknowledged as `skipped`, the route matched but
+the event type was not in `events`. This prevents high-volume sources from
+triggering agents for unrelated changes.
+
+Fix by either adding the event type intentionally:
+
+```json5
+events: ["jira:issue_created", "jira:issue_updated", "jira:issue_deleted"]
+```
+
+or by keeping the event excluded and treating the `skipped` response as a normal
+acknowledgment in the source system.
+
+### Handle duplicate deliveries
+
+If a Shopify or similar retry returns `duplicate: true`, OpenClaw has already
+processed that delivery id. This is the desired behavior for sources that retry
+on network timeouts.
+
+Use the source delivery id for idempotency:
+
+```json5
+idempotency: { header: "x-shopify-webhook-id", ttlHours: 72 }
+```
+
+If a source does not provide a stable id, add one at your integration gateway.
+Avoid hashing the entire payload unless the source has no better identifier,
+because harmless payload ordering changes can bypass deduplication.
+
+### Fix missing template fields
+
+If a prompt contains an unresolved placeholder such as `{event.title}`, the
+payload did not contain that path. OpenClaw leaves single-brace placeholders
+visible so operators can see which source field is missing.
+
+Fix by updating either the source mapping or the prompt:
+
+```json5
+prompt: "Investigate Sentry {project_slug}: {issue.title}\nRaw:\n{__raw__}"
+```
+
+Keep `{__raw__}` during rollout so the first real deliveries show the actual
+payload shape. Remove or shorten raw payload inclusion after the route is
+stable if the source includes sensitive data.
+
+### Separate routes that share a path
+
+OpenClaw can host multiple route targets on the same path, but production
+configs are easier to audit when each application has its own path. Prefer:
+
+```json5
+path: "/plugins/webhooks/github-pr-review"
+path: "/plugins/webhooks/gitlab-merge-request"
+```
+
+If you intentionally share a path, use route-specific auth headers or secrets so
+OpenClaw can select the correct route without trusting event names alone.
 
 Run the validation:
 
