@@ -50,7 +50,7 @@ resolve_openclaw_effective_home() {
 }
 
 OPENCLAW_EFFECTIVE_HOME="$(resolve_openclaw_effective_home)"
-PREFIX="${OPENCLAW_PREFIX:-${OPENCLAW_EFFECTIVE_HOME}/.openclaw}"
+PREFIX="${OPENCLAW_PREFIX:-${HOME}/.openclaw}"
 OPENCLAW_VERSION="${OPENCLAW_VERSION:-latest}"
 NODE_VERSION="${OPENCLAW_NODE_VERSION:-22.22.0}"
 SHARP_IGNORE_GLOBAL_LIBVIPS="${SHARP_IGNORE_GLOBAL_LIBVIPS:-1}"
@@ -67,7 +67,7 @@ print_usage() {
   cat <<EOF
 Usage: install-cli.sh [options]
   --json                              Emit NDJSON events (no human output)
-  --prefix <path>                     Install prefix (default: ~/.openclaw, or \$OPENCLAW_HOME/.openclaw)
+  --prefix <path>                     Install prefix (default: ~/.openclaw; use \$OPENCLAW_PREFIX to override)
   --install-method, --method npm|git  Install via npm (default) or from a git checkout
   --npm                               Shortcut for --install-method npm
   --git, --github                     Shortcut for --install-method git

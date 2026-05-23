@@ -2620,8 +2620,15 @@ run_bootstrap_onboarding_if_needed() {
     local effective_home
     effective_home="$(resolve_openclaw_effective_home)"
     local config_path="${OPENCLAW_CONFIG_PATH:-$effective_home/.openclaw/openclaw.json}"
+    local legacy_config_path="${HOME}/.openclaw/openclaw.json"
+    local legacy_clawdbot_path="${HOME}/.clawdbot/clawdbot.json"
     if [[ -f "${config_path}" || -f "$effective_home/.clawdbot/clawdbot.json" ]]; then
         return
+    fi
+    if [[ -z "${OPENCLAW_CONFIG_PATH:-}" && "${effective_home}" != "${HOME}" ]]; then
+        if [[ -f "$legacy_config_path" || -f "$legacy_clawdbot_path" ]]; then
+            return
+        fi
     fi
 
     local workspace

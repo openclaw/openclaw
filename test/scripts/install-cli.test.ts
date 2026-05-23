@@ -20,7 +20,7 @@ function runInstallCliShell(script: string, env: NodeJS.ProcessEnv = {}) {
 describe("install-cli.sh", () => {
   const script = readFileSync(SCRIPT_PATH, "utf8");
 
-  it("uses OPENCLAW_HOME for default prefix and git checkout paths", () => {
+  it("keeps HOME for default prefix while OPENCLAW_HOME controls git checkout paths", () => {
     const tmp = mkdtempSync(join(tmpdir(), "openclaw-install-cli-home-"));
     const osHome = join(tmp, "os-home");
     const openclawHome = join(tmp, "openclaw-home");
@@ -48,7 +48,7 @@ describe("install-cli.sh", () => {
 
     expect(result?.status).toBe(0);
     const output = result?.stdout ?? "";
-    expect(output).toContain(`prefix=${join(openclawHome, ".openclaw")}`);
+    expect(output).toContain(`prefix=${join(osHome, ".openclaw")}`);
     expect(output).toContain(`git=${join(openclawHome, "openclaw")}`);
   });
 
