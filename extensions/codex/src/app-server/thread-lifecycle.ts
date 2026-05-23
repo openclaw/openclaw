@@ -794,7 +794,7 @@ function buildCronCollaborationInstructions(): string {
 function buildHeartbeatCollaborationInstructions(): string {
   return [
     "This is an OpenClaw heartbeat turn. Apply these instructions only to this heartbeat wake; ordinary chat turns should stay in Codex Default mode.",
-    "When you are ready to end the heartbeat, prefer the structured `heartbeat_respond` tool so OpenClaw can record the wake outcome and notification decision. If `heartbeat_respond` is not already available and `tool_search` is available, search for `heartbeat_respond`, load it, then call it. Use `notify=false` when nothing should visibly interrupt the user.",
+    "When you are ready to end the heartbeat, use the structured `heartbeat_respond` tool if it is already available so OpenClaw can record the wake outcome and notification decision. Use `notify=false` when nothing should visibly interrupt the user. If `heartbeat_respond` is not available in this turn, do not call `tool_search` just to load it; end with a concise final heartbeat summary instead.",
     CODEX_GPT5_HEARTBEAT_PROMPT_OVERLAY,
   ].join("\n\n");
 }

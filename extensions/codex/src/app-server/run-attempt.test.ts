@@ -11387,7 +11387,10 @@ describe("runCodexAppServerAttempt", () => {
       "Use heartbeats to create useful proactive progress",
     );
     expect(heartbeatCollaborationMode.settings.developer_instructions).toContain(
-      "If `heartbeat_respond` is not already available and `tool_search` is available",
+      "If `heartbeat_respond` is not available in this turn, do not call `tool_search` just to load it",
+    );
+    expect(heartbeatCollaborationMode.settings.developer_instructions).not.toContain(
+      "search for `heartbeat_respond`, load it, then call it",
     );
     expect(heartbeatCollaborationMode.settings.developer_instructions).toContain(
       "HEARTBEAT.md exists at /tmp/workspace/HEARTBEAT.md.",
