@@ -263,7 +263,20 @@ export function deriveSessionTotalTokens(params: {
     return undefined;
   }
 
-  // Keep this value unclamped; display layers are responsible for capping
-  // percentages for terminal output.
+  // Clamp at contextTokens when available: a single-turn prompt snapshot
+  // cannot physically exceed the model's context window.  Providers like
+  // claude-cli report summed cache_read_input_tokens across tool sub-calls
+  // in the result event, which inflates the derived total well beyond the
+  // real prompt size and trips the preemptive compaction gate. (#85573)
+  const contextTokens = params.contextTokens;
+  if (
+    typeof contextTokens === "number" &&
+    Number.isFinite(contextTokens) &&
+    contextTokens > 0 &&
+    promptTokens > contextTokens
+  ) {
+    return contextTokens;
+  }
+
   return promptTokens;
 }

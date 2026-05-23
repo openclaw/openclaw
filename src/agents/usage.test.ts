@@ -337,4 +337,44 @@ describe("deriveSessionTotalTokens", () => {
     });
     expect(totalTokens).toBe(2500);
   });
+
+  it("clamps at contextTokens when derived total exceeds context window (#85573)", () => {
+    // Simulates claude-cli summing cache_read across tool sub-calls:
+    // real per-call cacheRead ~111K, but result event reports ~882K (summed).
+    const totalTokens = deriveSessionTotalTokens({
+      usage: {
+        input: 18,
+        cacheRead: 882_580,
+        cacheWrite: 24_178,
+      },
+      contextTokens: 1_048_576,
+    });
+    // Derived total (18 + 882580 + 24178 = 906776) is below context window,
+    // so it stays unclamped in this case.
+    expect(totalTokens).toBe(906_776);
+  });
+
+  it("clamps when inflated total exceeds contextTokens", () => {
+    const totalTokens = deriveSessionTotalTokens({
+      usage: {
+        input: 500_000,
+        cacheRead: 900_000,
+        cacheWrite: 50_000,
+      },
+      contextTokens: 1_048_576,
+    });
+    // 500000 + 900000 + 50000 = 1450000 > 1048576, clamped.
+    expect(totalTokens).toBe(1_048_576);
+  });
+
+  it("does not clamp when contextTokens is not provided", () => {
+    const totalTokens = deriveSessionTotalTokens({
+      usage: {
+        input: 500_000,
+        cacheRead: 900_000,
+        cacheWrite: 50_000,
+      },
+    });
+    expect(totalTokens).toBe(1_450_000);
+  });
 });
