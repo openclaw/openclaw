@@ -9,12 +9,17 @@ import {
   buildChromeMcpArgs,
   clickChromeMcpCoords,
   clickChromeMcpElement,
+  closeChromeMcpTab,
   decodeChromeMcpStderrTail,
+  dragChromeMcpElement,
   ensureChromeMcpAvailable,
   emulateChromeMcpPage,
   evaluateChromeMcpScript,
   executeChromeMcpThirdPartyDeveloperTool,
   executeChromeMcpWebMcpTool,
+  fillChromeMcpElement,
+  fillChromeMcpForm,
+  focusChromeMcpTab,
   getChromeMcpConsoleMessage,
   getChromeMcpHeapSnapshotClassNodes,
   getChromeMcpHeapSnapshotDetails,
@@ -22,8 +27,11 @@ import {
   getChromeMcpHeapSnapshotSummary,
   getChromeMcpNetworkRequest,
   getChromeMcpTabId,
+  handleChromeMcpDialog,
+  hoverChromeMcpElement,
   installChromeMcpExtension,
   listChromeMcpExtensions,
+  listChromeMcpPages,
   listChromeMcpTabs,
   listChromeMcpConsoleMessages,
   listChromeMcpNetworkRequests,
@@ -31,9 +39,11 @@ import {
   listChromeMcpWebMcpTools,
   navigateChromeMcpPage,
   openChromeMcpTab,
+  pressChromeMcpKey,
   reloadChromeMcpExtension,
   resolveChromeMcpNavigateCallTimeoutMs,
   resetChromeMcpSessionsForTest,
+  resizeChromeMcpPage,
   runChromeMcpLighthouseAudit,
   setChromeMcpProcessCleanupDepsForTest,
   setChromeMcpSessionFactoryForTest,
@@ -42,10 +52,12 @@ import {
   stopChromeMcpPerformanceTrace,
   stopChromeMcpScreencast,
   takeChromeMcpHeapSnapshot,
+  takeChromeMcpSnapshot,
   takeChromeMcpScreenshot,
   takeChromeMcpSnapshot,
   triggerChromeMcpExtensionAction,
   uninstallChromeMcpExtension,
+  uploadChromeMcpFile,
   waitForChromeMcpText,
 } from "./chrome-mcp.js";
 
@@ -111,6 +123,44 @@ function createFakeSession(): ChromeMcpSession {
       currentUrl = readUrlArg(args?.url, currentUrl);
       return { content: [{ type: "text", text: "navigated" }] };
     }
+    if (name === "select_page") {
+      return { content: [{ type: "text", text: `Selected page ${args?.pageId}` }] };
+    }
+    if (name === "close_page") {
+      return { content: [{ type: "text", text: `Closed page ${args?.pageId}` }] };
+    }
+    if (name === "take_snapshot") {
+      return {
+        content: [{ type: "text", text: "Snapshot captured." }],
+        structuredContent: {
+          snapshot: { role: "RootWebArea", name: "Fixture page", children: [] },
+        },
+      };
+    }
+    if (name === "fill") {
+      return { content: [{ type: "text", text: `Filled ${args?.uid}` }] };
+    }
+    if (name === "fill_form") {
+      return { content: [{ type: "text", text: "Form filled" }] };
+    }
+    if (name === "hover") {
+      return { content: [{ type: "text", text: `Hovered ${args?.uid}` }] };
+    }
+    if (name === "drag") {
+      return { content: [{ type: "text", text: `Dragged ${args?.from_uid} to ${args?.to_uid}` }] };
+    }
+    if (name === "upload_file") {
+      return { content: [{ type: "text", text: `Uploaded ${args?.filePath}` }] };
+    }
+    if (name === "press_key") {
+      return { content: [{ type: "text", text: `Pressed ${args?.key}` }] };
+    }
+    if (name === "resize_page") {
+      return { content: [{ type: "text", text: `Resized ${args?.width}x${args?.height}` }] };
+    }
+    if (name === "handle_dialog") {
+      return { content: [{ type: "text", text: `Dialog ${args?.action}` }] };
+    }
     if (name === "evaluate_script") {
       return {
         content: [
@@ -122,7 +172,7 @@ function createFakeSession(): ChromeMcpSession {
       };
     }
     if (name === "wait_for") {
-      return { content: [{ type: "text", text: "Element matching one of [\"Ready\"] found." }] };
+      return { content: [{ type: "text", text: 'Element matching one of ["Ready"] found.' }] };
     }
     if (name === "click_at") {
       return { content: [{ type: "text", text: "Successfully clicked at the coordinates" }] };
@@ -164,7 +214,9 @@ function createFakeSession(): ChromeMcpSession {
       };
     }
     if (name === "screencast_start") {
-      return { content: [{ type: "text", text: `Screencast recording started: ${args?.filePath}` }] };
+      return {
+        content: [{ type: "text", text: `Screencast recording started: ${args?.filePath}` }],
+      };
     }
     if (name === "screencast_stop") {
       return { content: [{ type: "text", text: "The screencast recording has been stopped." }] };
@@ -202,7 +254,13 @@ function createFakeSession(): ChromeMcpSession {
           thirdPartyDeveloperTools: {
             name: "Fixture tools",
             description: "Fixture page tools",
-            tools: [{ name: "inspectState", description: "Inspect state", inputSchema: { type: "object" } }],
+            tools: [
+              {
+                name: "inspectState",
+                description: "Inspect state",
+                inputSchema: { type: "object" },
+              },
+            ],
           },
         },
       };
@@ -218,14 +276,23 @@ function createFakeSession(): ChromeMcpSession {
         content: [{ type: "text", text: "## WebMCP tools" }],
         structuredContent: {
           webmcpTools: [
-            { name: "fixture_web_tool", description: "Fixture WebMCP tool", inputSchema: { type: "object" } },
+            {
+              name: "fixture_web_tool",
+              description: "Fixture WebMCP tool",
+              inputSchema: { type: "object" },
+            },
           ],
         },
       };
     }
     if (name === "execute_webmcp_tool") {
       return {
-        content: [{ type: "text", text: JSON.stringify({ status: "success", output: { toolName: args?.toolName } }) }],
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify({ status: "success", output: { toolName: args?.toolName } }),
+          },
+        ],
         structuredContent: { status: "success", output: { toolName: args?.toolName } },
       };
     }
@@ -417,6 +484,112 @@ describe("chrome MCP page parsing", () => {
         format: "jpeg",
       }),
     ).resolves.toEqual(Buffer.from("screenshot:jpeg"));
+  });
+
+  it("forwards Chrome MCP page lifecycle, snapshot, and dialog calls", async () => {
+    const session = createFakeSession();
+    const factory: ChromeMcpSessionFactory = async () => session;
+    setChromeMcpSessionFactoryForTest(factory);
+
+    await expect(listChromeMcpPages("chrome-live")).resolves.toEqual([
+      {
+        id: 1,
+        url: "https://developer.chrome.com/blog/chrome-devtools-mcp-debug-your-browser-session",
+        selected: true,
+      },
+      { id: 2, url: "https://github.com/openclaw/openclaw/pull/45318", selected: false },
+    ]);
+    await focusChromeMcpTab("chrome-live", "2");
+    await closeChromeMcpTab("chrome-live", "2");
+    await expect(
+      takeChromeMcpSnapshot({ profileName: "chrome-live", targetId: "2" }),
+    ).resolves.toEqual({
+      role: "RootWebArea",
+      name: "Fixture page",
+      children: [],
+    });
+    await handleChromeMcpDialog({
+      profileName: "chrome-live",
+      targetId: "2",
+      action: "accept",
+      promptText: "fixture prompt",
+    });
+
+    const calls = (session.client.callTool as unknown as ToolCallMock).mock.calls;
+    expect(calls.slice(-5).map(([call]) => call)).toEqual([
+      { name: "list_pages", arguments: {} },
+      { name: "select_page", arguments: { pageId: 2, bringToFront: true } },
+      { name: "close_page", arguments: { pageId: 2 } },
+      { name: "take_snapshot", arguments: { pageId: 2 } },
+      {
+        name: "handle_dialog",
+        arguments: { pageId: 2, action: "accept", promptText: "fixture prompt" },
+      },
+    ]);
+  });
+
+  it("forwards Chrome MCP element, keyboard, file, and viewport actions", async () => {
+    const session = createFakeSession();
+    const factory: ChromeMcpSessionFactory = async () => session;
+    setChromeMcpSessionFactoryForTest(factory);
+
+    await fillChromeMcpElement({
+      profileName: "chrome-live",
+      targetId: "2",
+      uid: "input-1",
+      value: "hello",
+    });
+    await fillChromeMcpForm({
+      profileName: "chrome-live",
+      targetId: "2",
+      elements: [
+        { uid: "input-1", value: "hello" },
+        { uid: "input-2", value: "world" },
+      ],
+    });
+    await hoverChromeMcpElement({ profileName: "chrome-live", targetId: "2", uid: "button-1" });
+    await dragChromeMcpElement({
+      profileName: "chrome-live",
+      targetId: "2",
+      fromUid: "drag-source",
+      toUid: "drop-target",
+    });
+    await uploadChromeMcpFile({
+      profileName: "chrome-live",
+      targetId: "2",
+      uid: "file-input",
+      filePath: "/tmp/openclaw/uploads/fixture.txt",
+    });
+    await pressChromeMcpKey({ profileName: "chrome-live", targetId: "2", key: "Enter" });
+    await resizeChromeMcpPage({
+      profileName: "chrome-live",
+      targetId: "2",
+      width: 1024,
+      height: 768,
+    });
+
+    const calls = (session.client.callTool as unknown as ToolCallMock).mock.calls;
+    expect(calls.slice(-7).map(([call]) => call)).toEqual([
+      { name: "fill", arguments: { pageId: 2, uid: "input-1", value: "hello" } },
+      {
+        name: "fill_form",
+        arguments: {
+          pageId: 2,
+          elements: [
+            { uid: "input-1", value: "hello" },
+            { uid: "input-2", value: "world" },
+          ],
+        },
+      },
+      { name: "hover", arguments: { pageId: 2, uid: "button-1" } },
+      { name: "drag", arguments: { pageId: 2, from_uid: "drag-source", to_uid: "drop-target" } },
+      {
+        name: "upload_file",
+        arguments: { pageId: 2, uid: "file-input", filePath: "/tmp/openclaw/uploads/fixture.txt" },
+      },
+      { name: "press_key", arguments: { pageId: 2, key: "Enter" } },
+      { name: "resize_page", arguments: { pageId: 2, width: 1024, height: 768 } },
+    ]);
   });
 
   it("forwards text waits to Chrome MCP wait_for with page routing", async () => {
@@ -615,11 +788,21 @@ describe("chrome MCP page parsing", () => {
       },
       {
         name: "get_heapsnapshot_class_nodes",
-        arguments: { filePath: "/tmp/openclaw/page.heapsnapshot", id: 42, pageIdx: 2, pageSize: 10 },
+        arguments: {
+          filePath: "/tmp/openclaw/page.heapsnapshot",
+          id: 42,
+          pageIdx: 2,
+          pageSize: 10,
+        },
       },
       {
         name: "get_heapsnapshot_retainers",
-        arguments: { filePath: "/tmp/openclaw/page.heapsnapshot", nodeId: 99, pageIdx: 3, pageSize: 5 },
+        arguments: {
+          filePath: "/tmp/openclaw/page.heapsnapshot",
+          nodeId: 99,
+          pageIdx: 3,
+          pageSize: 5,
+        },
       },
     ]);
   });
@@ -694,9 +877,9 @@ describe("chrome MCP page parsing", () => {
     await expect(
       uninstallChromeMcpExtension({ profileName: "chrome-live", id: "abc" }),
     ).resolves.toContain("abc");
-    await expect(reloadChromeMcpExtension({ profileName: "chrome-live", id: "abc" })).resolves.toContain(
-      "reloaded",
-    );
+    await expect(
+      reloadChromeMcpExtension({ profileName: "chrome-live", id: "abc" }),
+    ).resolves.toContain("reloaded");
     await expect(
       triggerChromeMcpExtensionAction({ profileName: "chrome-live", id: "abc" }),
     ).resolves.toContain("abc");
@@ -716,7 +899,9 @@ describe("chrome MCP page parsing", () => {
     const factory: ChromeMcpSessionFactory = async () => session;
     setChromeMcpSessionFactoryForTest(factory);
 
-    await expect(getChromeMcpTabId({ profileName: "chrome-live", targetId: "2" })).resolves.toBe("12345");
+    await expect(getChromeMcpTabId({ profileName: "chrome-live", targetId: "2" })).resolves.toBe(
+      "12345",
+    );
     await expect(
       listChromeMcpThirdPartyDeveloperTools({ profileName: "chrome-live", targetId: "2" }),
     ).resolves.toMatchObject({
@@ -731,8 +916,12 @@ describe("chrome MCP page parsing", () => {
         toolName: "inspectState",
         toolParams: { verbose: true },
       }),
-    ).resolves.toMatchObject({ structuredContent: { result: { ok: true, toolName: "inspectState" } } });
-    await expect(listChromeMcpWebMcpTools({ profileName: "chrome-live", targetId: "2" })).resolves.toMatchObject({
+    ).resolves.toMatchObject({
+      structuredContent: { result: { ok: true, toolName: "inspectState" } },
+    });
+    await expect(
+      listChromeMcpWebMcpTools({ profileName: "chrome-live", targetId: "2" }),
+    ).resolves.toMatchObject({
       structuredContent: { webmcpTools: [{ name: "fixture_web_tool" }] },
     });
     await expect(
@@ -742,7 +931,9 @@ describe("chrome MCP page parsing", () => {
         toolName: "fixture_web_tool",
         input: { query: "state" },
       }),
-    ).resolves.toMatchObject({ structuredContent: { status: "success", output: { toolName: "fixture_web_tool" } } });
+    ).resolves.toMatchObject({
+      structuredContent: { status: "success", output: { toolName: "fixture_web_tool" } },
+    });
 
     const calls = (session.client.callTool as unknown as ToolCallMock).mock.calls;
     expect(calls.slice(-5).map(([call]) => call)).toEqual([
@@ -777,7 +968,9 @@ describe("chrome MCP page parsing", () => {
     const calls = (session.client.callTool as unknown as ToolCallMock).mock.calls;
     expect(calls.at(-1)?.[0].name).toBe("evaluate_script");
     expect(calls.at(-1)?.[0].arguments?.pageId).toBe(2);
-    expect(calls.at(-1)?.[0].arguments?.function).toContain('dispatch("mousedown", pressedButtons, 1)');
+    expect(calls.at(-1)?.[0].arguments?.function).toContain(
+      'dispatch("mousedown", pressedButtons, 1)',
+    );
   });
 
   it("adds --userDataDir when an explicit Chromium profile path is configured", () => {
