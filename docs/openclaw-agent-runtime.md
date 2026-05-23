@@ -1,47 +1,47 @@
 ---
-summary: "Developer workflow for Pi integration: build, test, and live validation"
-title: "Pi development workflow"
+summary: "Developer workflow for OpenClaw agent runtime: build, test, and live validation"
+title: "OpenClaw agent runtime workflow"
 read_when:
-  - Working on Pi integration code or tests
-  - Running Pi-specific lint, typecheck, and live test flows
+  - Working on OpenClaw agent runtime code or tests
+  - Running agent-runtime lint, typecheck, and live test flows
 ---
 
-A sane workflow for working on the Pi integration in OpenClaw.
+A sane workflow for working on the OpenClaw agent runtime in OpenClaw.
 
 ## Type checking and linting
 
 - Default local gate: `pnpm check`
 - Build gate: `pnpm build` when the change can affect build output, packaging, or lazy-loading/module boundaries
-- Full landing gate for Pi-heavy changes: `pnpm check && pnpm test`
+- Full landing gate for agent-runtime changes: `pnpm check && pnpm test`
 
-## Running Pi tests
+## Running Agent Runtime Tests
 
-Run the Pi-focused test set directly with Vitest:
+Run the agent-runtime test set directly with Vitest:
 
 ```bash
 pnpm test \
-  "src/agents/pi-*.test.ts" \
-  "src/agents/pi-embedded-*.test.ts" \
-  "src/agents/pi-tools*.test.ts" \
-  "src/agents/pi-settings.test.ts" \
-  "src/agents/pi-tool-definition-adapter*.test.ts" \
-  "src/agents/pi-hooks/**/*.test.ts"
+  "src/agents/agent-*.test.ts" \
+  "src/agents/embedded-agent-*.test.ts" \
+  "src/agents/agent-tools*.test.ts" \
+  "src/agents/agent-settings.test.ts" \
+  "src/agents/agent-tool-definition-adapter*.test.ts" \
+  "src/agents/agent-hooks/**/*.test.ts"
 ```
 
 To include the live provider exercise:
 
 ```bash
-OPENCLAW_LIVE_TEST=1 pnpm test src/agents/pi-embedded-runner-extraparams.live.test.ts
+OPENCLAW_LIVE_TEST=1 pnpm test src/agents/embedded-agent-runner-extraparams.live.test.ts
 ```
 
-This covers the main Pi unit suites:
+This covers the main agent runtime unit suites:
 
-- `src/agents/pi-*.test.ts`
-- `src/agents/pi-embedded-*.test.ts`
-- `src/agents/pi-tools*.test.ts`
-- `src/agents/pi-settings.test.ts`
-- `src/agents/pi-tool-definition-adapter.test.ts`
-- `src/agents/pi-hooks/*.test.ts`
+- `src/agents/agent-*.test.ts`
+- `src/agents/embedded-agent-*.test.ts`
+- `src/agents/agent-tools*.test.ts`
+- `src/agents/agent-settings.test.ts`
+- `src/agents/agent-tool-definition-adapter.test.ts`
+- `src/agents/agent-hooks/*.test.ts`
 
 ## Manual testing
 
@@ -79,4 +79,4 @@ If you only want to reset sessions, delete `agents/<agentId>/sessions/` for that
 
 ## Related
 
-- [Pi integration architecture](/pi)
+- [OpenClaw agent runtime architecture](/agent-runtime-architecture)
