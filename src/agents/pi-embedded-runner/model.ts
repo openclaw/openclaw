@@ -1313,7 +1313,7 @@ export async function resolveModelAsync(
     const resolvedMediaInput = (model as ProviderRuntimeModel).mediaInput;
     const mediaInput = mergeModelMediaInput(staticMediaInput, resolvedMediaInput);
     if (mediaInput) {
-      model = { ...model, mediaInput };
+      model = { ...(model as ProviderRuntimeModel), mediaInput } as typeof model;
     }
   }
   if (model) {

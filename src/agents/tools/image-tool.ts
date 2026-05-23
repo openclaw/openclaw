@@ -797,10 +797,13 @@ export function createImageTool(options?: {
           throw new Error(`Unsupported media type: ${media.kind}`);
         }
 
-        const mimeType =
-          ("contentType" in media && media.contentType) ||
-          ("mimeType" in media && media.mimeType) ||
-          "image/png";
+        const contentType =
+          "contentType" in media && typeof media.contentType === "string"
+            ? media.contentType
+            : undefined;
+        const legacyMimeType =
+          "mimeType" in media && typeof media.mimeType === "string" ? media.mimeType : undefined;
+        const mimeType = contentType ?? legacyMimeType ?? "image/png";
         loadedImages.push({
           buffer: media.buffer,
           mimeType,
