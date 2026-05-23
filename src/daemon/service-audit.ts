@@ -35,9 +35,15 @@ export type ServiceConfigIssue = {
   level?: "recommended" | "aggressive";
 };
 
+export type ExpectedCustomWrapperSummary = {
+  path: string;
+  status: "custom, expected";
+};
+
 export type ServiceConfigAudit = {
   ok: boolean;
   issues: ServiceConfigIssue[];
+  expectedCustomWrapper?: ExpectedCustomWrapperSummary;
 };
 
 export const SERVICE_AUDIT_CODES = {
@@ -551,6 +557,47 @@ export function checkTokenDrift(params: {
   return null;
 }
 
+function normalizeWrapperPath(value: string | undefined): string | null {
+  const normalized = normalizeOptionalString(value);
+  return normalized ? path.resolve(normalized) : null;
+}
+
+export function listExpectedCustomServiceWrappers(
+  params: {
+    env?: Record<string, string | undefined>;
+  } = {},
+): string[] {
+  const env = params.env ?? process.env;
+  const values = [
+    env.OPENCLAW_EXPECTED_SERVICE_WRAPPER,
+    ...(env.OPENCLAW_EXPECTED_SERVICE_WRAPPERS ?? "").split(path.delimiter),
+  ];
+  return [
+    ...new Set(
+      values
+        .map((value) => normalizeWrapperPath(value))
+        .filter((value): value is string => Boolean(value)),
+    ),
+  ].toSorted((left, right) => left.localeCompare(right));
+}
+
+function resolveExpectedCustomWrapper(params: {
+  command: GatewayServiceCommand;
+  env: Record<string, string | undefined>;
+}): ExpectedCustomWrapperSummary | undefined {
+  const executable = normalizeWrapperPath(params.command?.programArguments?.[0]);
+  if (!executable) {
+    return undefined;
+  }
+  const expected = listExpectedCustomServiceWrappers({ env: params.env });
+  return expected.includes(executable)
+    ? {
+        path: executable,
+        status: "custom, expected",
+      }
+    : undefined;
+}
+
 export async function auditGatewayServiceConfig(params: {
   env: Record<string, string | undefined>;
   command: GatewayServiceCommand;
@@ -562,6 +609,10 @@ export async function auditGatewayServiceConfig(params: {
 }): Promise<ServiceConfigAudit> {
   const issues: ServiceConfigIssue[] = [];
   const platform = params.platform ?? process.platform;
+  const expectedCustomWrapper = resolveExpectedCustomWrapper({
+    command: params.command,
+    env: params.env,
+  });
 
   auditGatewayCommand(params.command?.programArguments, issues);
   auditGatewayServicePort({
@@ -581,5 +632,9 @@ export async function auditGatewayServiceConfig(params: {
     await auditLaunchdPlist(params.env, issues);
   }
 
-  return { ok: issues.length === 0, issues };
+  return {
+    ok: issues.length === 0,
+    issues,
+    ...(expectedCustomWrapper ? { expectedCustomWrapper } : {}),
+  };
 }

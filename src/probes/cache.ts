@@ -35,7 +35,7 @@ export type ProbeCacheOptions = {
   config?: OpenClawConfig;
 };
 
-function resolveProbeCacheDir(config?: OpenClawConfig): string {
+function resolveProbeCacheDir(_config?: OpenClawConfig): string {
   const stateDir = resolveStateDir();
   const cacheDir = path.join(stateDir, PROBE_CACHE_DIRNAME);
   if (!fs.existsSync(cacheDir)) {
@@ -153,7 +153,9 @@ export function listCachedProbes(
   const results: Array<{ type: string; id: string; timestamp: string; stale: boolean }> = [];
   for (const file of files) {
     const match = file.match(/^([a-z]+)-(.+)\.json$/);
-    if (!match) continue;
+    if (!match) {
+      continue;
+    }
     const [, type, id] = match;
     const cachePath = path.join(cacheDir, file);
     try {
@@ -198,7 +200,7 @@ export function calculateStaggerDelay(attempt: number, options?: StaggerOptions)
   const jitterMs = options?.jitterMs ?? DEFAULT_JITTER_MS;
   const backoffFactor = options?.backoffFactor ?? DEFAULT_BACKOFF_FACTOR;
 
-  const exponentialDelay = Math.min(maxDelayMs, baseDelayMs * Math.pow(backoffFactor, attempt - 1));
+  const exponentialDelay = Math.min(maxDelayMs, baseDelayMs * backoffFactor ** (attempt - 1));
   const jitter = Math.random() * jitterMs;
   return Math.floor(exponentialDelay + jitter);
 }
@@ -313,26 +315,20 @@ export async function executeProbesWithStagger<T>(
       }),
     );
 
-    for (const settled of batchResults) {
+    for (const [idx, settled] of batchResults.entries()) {
       if (settled.status === "fulfilled") {
         results.set(settled.value.id, settled.value.result);
       } else {
-        // Store error result
-        const item = batch.find((_, idx) => {
-          const batchIdx = batchResults.findIndex(
-            (r) =>
-              r.status === "rejected" || (r.status === "fulfilled" && r.value.id === batch[idx].id),
-          );
-          return batchIdx !== -1;
-        });
-        if (item) {
-          results.set(item.id, {
-            result: null as T,
-            cached: false,
-            stale: false,
-            durationMs: 0,
-          });
+        const item = batch[idx];
+        if (!item) {
+          continue;
         }
+        results.set(item.id, {
+          result: null as T,
+          cached: false,
+          stale: false,
+          durationMs: 0,
+        });
       }
     }
 

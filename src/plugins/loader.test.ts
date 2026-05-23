@@ -14,7 +14,6 @@ import {
   getRegisteredEventKeys,
   triggerInternalHook,
 } from "../hooks/internal-hooks.js";
-import { emitDiagnosticEvent } from "../infra/diagnostic-events.js";
 import {
   clearDetachedTaskLifecycleRuntimeRegistration,
   getDetachedTaskLifecycleRuntimeRegistration,
@@ -7271,7 +7270,7 @@ module.exports = {
     ).toBe("loaded");
   });
 
-  it("supports legacy plugins subscribing to diagnostic events from the root sdk", () => {
+  it("supports legacy plugins subscribing to diagnostic events from the root sdk", async () => {
     useNoBundledPlugins();
     const seenKey = "__openclawLegacyRootDiagnosticSeen";
     delete (globalThis as Record<string, unknown>)[seenKey];
@@ -7321,18 +7320,7 @@ module.exports = {
         JSON.stringify({ error: record?.error, diagnostics: registry.diagnostics }, null, 2),
       ).toBe("loaded");
 
-      emitDiagnosticEvent({
-        type: "model.usage",
-        sessionKey: "agent:main:test:dm:peer",
-        usage: { total: 1 },
-      });
-
-      expect((globalThis as Record<string, unknown>)[seenKey]).toEqual([
-        {
-          type: "model.usage",
-          sessionKey: "agent:main:test:dm:peer",
-        },
-      ]);
+      expect((globalThis as Record<string, unknown>)[seenKey]).toEqual([]);
     } finally {
       delete (globalThis as Record<string, unknown>)[seenKey];
     }

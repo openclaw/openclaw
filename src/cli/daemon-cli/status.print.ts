@@ -110,6 +110,11 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean })
       `${label("Command:")} ${infoText(service.command.programArguments.join(" "))}`,
     );
   }
+  if (service.configAudit?.expectedCustomWrapper) {
+    defaultRuntime.log(
+      `${label("Wrapper:")} ${infoText(shortenHomePath(service.configAudit.expectedCustomWrapper.path))} (${okText(service.configAudit.expectedCustomWrapper.status)})`,
+    );
+  }
   if (service.command?.sourcePath) {
     defaultRuntime.log(
       `${label("Service file:")} ${infoText(shortenHomePath(service.command.sourcePath))}`,

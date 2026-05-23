@@ -61,7 +61,7 @@ export type IncidentWithRepairs = LedgerEntry & {
   circuitBreakerTripped: boolean;
 };
 
-function resolveLedgerDir(config?: OpenClawConfig): string {
+function resolveLedgerDir(_config?: OpenClawConfig): string {
   const stateDir = resolveStateDir();
   const ledgerDir = path.join(stateDir, LEDGER_DIRNAME);
   if (!fs.existsSync(ledgerDir)) {
@@ -76,7 +76,7 @@ function resolveLedgerPath(config?: OpenClawConfig): string {
 
 function generateId(): string {
   const timestamp = Date.now().toString(36);
-  const random = Math.random().toString(36).substring(2, 10);
+  const random = Math.random().toString(36).slice(2, 10);
   return `${timestamp}-${random}`;
 }
 
@@ -135,14 +135,18 @@ export function readLedger(config?: OpenClawConfig): {
   const content = fs.readFileSync(ledgerPath, "utf-8");
   for (const line of content.split("\n")) {
     const trimmed = line.trim();
-    if (!trimmed) continue;
+    if (!trimmed) {
+      continue;
+    }
     const parsed = parseJsonlLine(trimmed);
-    if (!parsed) continue;
+    if (!parsed) {
+      continue;
+    }
 
     if ("incidentId" in parsed) {
-      repairs.push(parsed as RepairAttempt);
+      repairs.push(parsed);
     } else {
-      incidents.push(parsed as LedgerEntry);
+      incidents.push(parsed);
     }
   }
 
@@ -152,7 +156,9 @@ export function readLedger(config?: OpenClawConfig): {
 export function getIncident(id: string, config?: OpenClawConfig): IncidentWithRepairs | null {
   const { incidents, repairs } = readLedger(config);
   const incident = incidents.find((i) => i.id === id);
-  if (!incident) return null;
+  if (!incident) {
+    return null;
+  }
 
   const incidentRepairs = repairs.filter((r) => r.incidentId === id);
   const attemptCount = incidentRepairs.length;
@@ -174,15 +180,30 @@ export function getIncident(id: string, config?: OpenClawConfig): IncidentWithRe
 
 export function getOpenIncidents(config?: OpenClawConfig): IncidentWithRepairs[] {
   const { incidents } = readLedger(config);
+  const closedIncidentIds = new Set(
+    incidents
+      .filter((incident) => incident.status === "resolved" || incident.status === "frozen")
+      .map((incident) => {
+        const details = incident.details ?? {};
+        return typeof details.resolvedIncidentId === "string"
+          ? details.resolvedIncidentId
+          : typeof details.frozenIncidentId === "string"
+            ? details.frozenIncidentId
+            : undefined;
+      })
+      .filter((id): id is string => Boolean(id)),
+  );
   return incidents
-    .filter((i) => i.status === "open")
+    .filter((i) => i.status === "open" && !closedIncidentIds.has(i.id))
     .map((i) => getIncident(i.id, config))
     .filter((i): i is IncidentWithRepairs => i !== null);
 }
 
 export function resolveIncident(id: string, config?: OpenClawConfig): boolean {
   const incident = getIncident(id, config);
-  if (!incident) return false;
+  if (!incident) {
+    return false;
+  }
 
   appendLedgerEntry(
     {
@@ -200,7 +221,9 @@ export function resolveIncident(id: string, config?: OpenClawConfig): boolean {
 
 export function freezeIncident(id: string, reason: string, config?: OpenClawConfig): boolean {
   const incident = getIncident(id, config);
-  if (!incident) return false;
+  if (!incident) {
+    return false;
+  }
 
   appendLedgerEntry(
     {

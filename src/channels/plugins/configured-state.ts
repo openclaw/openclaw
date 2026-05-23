@@ -5,7 +5,9 @@ import {
 } from "./package-state-probes.js";
 
 export function listBundledChannelIdsWithConfiguredState(): string[] {
-  return listBundledChannelIdsForPackageState("configuredState");
+  return listBundledChannelIdsForPackageState("configuredState").toSorted((left, right) =>
+    left.localeCompare(right),
+  );
 }
 
 export function hasBundledChannelConfiguredState(params: {

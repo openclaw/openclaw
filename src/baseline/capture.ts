@@ -5,7 +5,7 @@ import { resolveStateDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { callGateway } from "../gateway/call.js";
 import { listConfiguredChannelIdsForReadOnlyScope } from "../plugins/channel-plugin-ids.js";
-import { getLoadedPlugins, getPluginManifest } from "../plugins/clawHub.js";
+import { loadPluginManifestRegistry } from "../plugins/manifest-registry.js";
 
 /**
  * Baseline Capture and Compare
@@ -79,7 +79,7 @@ export type BaselineComparison = {
   improvements: string[];
 };
 
-function resolveBaselineDir(config?: OpenClawConfig): string {
+function resolveBaselineDir(_config?: OpenClawConfig): string {
   const stateDir = resolveStateDir();
   const baselineDir = path.join(stateDir, BASELINE_DIRNAME);
   if (!fs.existsSync(baselineDir)) {
@@ -108,10 +108,9 @@ export async function captureBaseline(options?: {
   const locks: ComponentStatus = await checkLocksStatus();
   const plugins: ComponentStatus = await checkPluginsStatus(options?.skipPlugins);
 
-  const agentCount = (await listAgentEntries({})).length;
-  const channelCount = listConfiguredChannelIdsForReadOnlyScope(config ?? {}).length;
-  const loadedPlugins = await getLoadedPlugins();
-  const pluginCount = Array.isArray(loadedPlugins) ? loadedPlugins.length : 0;
+  const agentCount = listAgentEntries({}).length;
+  const channelCount = listConfiguredChannelIdsForReadOnlyScope({ config: config ?? {} }).length;
+  const pluginCount = loadPluginManifestRegistry({ config }).plugins.length;
 
   let sessionCount = 0;
   try {
@@ -297,6 +296,7 @@ function statusToScore(status: BaselineSeverity): number {
     case "fail":
       return 0;
   }
+  return 0;
 }
 
 async function checkGatewayStatus(skip?: boolean): Promise<ComponentStatus> {
@@ -305,21 +305,20 @@ async function checkGatewayStatus(skip?: boolean): Promise<ComponentStatus> {
   }
 
   try {
-    const result = await callGateway<{ running?: boolean; pid?: number; uptimeMs?: number }>({
-      method: "gateway.status",
+    const result = await callGateway({
+      method: "status",
       params: {},
       timeoutMs: 5000,
     });
 
-    if (result?.running) {
-      return {
-        status: "pass",
-        message: "Gateway running",
-        details: { pid: result.pid, uptimeMs: result.uptimeMs },
-      };
-    }
-
-    return { status: "fail", message: "Gateway not running" };
+    return {
+      status: "pass",
+      message: "Gateway responded",
+      details: {
+        eventLoop: result.eventLoop,
+        runtimeVersion: result.runtimeVersion,
+      },
+    };
   } catch (err) {
     return { status: "fail", message: err instanceof Error ? err.message : "Unknown error" };
   }
@@ -327,7 +326,7 @@ async function checkGatewayStatus(skip?: boolean): Promise<ComponentStatus> {
 
 async function checkChannelsStatus(config?: OpenClawConfig): Promise<ComponentStatus> {
   try {
-    const channelIds = listConfiguredChannelIdsForReadOnlyScope(config ?? {});
+    const channelIds = listConfiguredChannelIdsForReadOnlyScope({ config: config ?? {} });
     if (channelIds.length === 0) {
       return { status: "pass", message: "No channels configured" };
     }
@@ -368,7 +367,7 @@ async function checkChannelsStatus(config?: OpenClawConfig): Promise<ComponentSt
 
 async function checkAgentsStatus(): Promise<ComponentStatus> {
   try {
-    const entries = await listAgentEntries({});
+    const entries = listAgentEntries({});
     return {
       status: "pass",
       message: `${entries.length} agents`,
@@ -381,13 +380,13 @@ async function checkAgentsStatus(): Promise<ComponentStatus> {
 
 async function checkTasksStatus(): Promise<ComponentStatus> {
   try {
-    const result = await callGateway<{ flows?: unknown[] }>({
-      method: "tasks.flows",
-      params: { active: true },
+    const result = await callGateway<{ tasks?: unknown[] }>({
+      method: "tasks.list",
+      params: { status: ["queued", "running"], limit: 100 },
       timeoutMs: 5000,
     });
-    const count = Array.isArray(result?.flows) ? result.flows.length : 0;
-    return { status: "pass", message: `${count} active flows`, details: { count } };
+    const count = Array.isArray(result?.tasks) ? result.tasks.length : 0;
+    return { status: "pass", message: `${count} active tasks`, details: { count } };
   } catch (err) {
     return { status: "warn", message: err instanceof Error ? err.message : "Unknown error" };
   }
@@ -420,8 +419,7 @@ async function checkPluginsStatus(skip?: boolean): Promise<ComponentStatus> {
   }
 
   try {
-    const loadedPlugins = await getLoadedPlugins();
-    const count = Array.isArray(loadedPlugins) ? loadedPlugins.length : 0;
+    const count = loadPluginManifestRegistry().plugins.length;
     return { status: "pass", message: `${count} plugins loaded`, details: { count } };
   } catch (err) {
     return { status: "warn", message: err instanceof Error ? err.message : "Unknown error" };

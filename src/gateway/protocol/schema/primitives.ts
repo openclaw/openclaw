@@ -27,6 +27,8 @@ export const InputProvenanceSchema = Type.Object(
     originSessionId: Type.Optional(Type.String()),
     sourceSessionKey: Type.Optional(Type.String()),
     sourceChannel: Type.Optional(Type.String()),
+    handoffId: Type.Optional(Type.String()),
+    replyTo: Type.Optional(Type.String()),
     sourceTool: Type.Optional(Type.String()),
   },
   { additionalProperties: false },
