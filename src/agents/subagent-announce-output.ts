@@ -9,6 +9,7 @@ import {
   callGateway,
   getRuntimeConfig,
   readSessionEntry,
+  readSessionMessagesAsync,
   resolveAgentIdFromSessionKey,
   resolveStorePath,
 } from "./subagent-announce.runtime.js";
@@ -22,6 +23,7 @@ type SubagentAnnounceOutputDeps = {
   callGateway: typeof callGateway;
   getRuntimeConfig: typeof getRuntimeConfig;
   readSessionEntry: typeof readSessionEntry;
+  readSessionMessagesAsync: typeof readSessionMessagesAsync;
   resolveAgentIdFromSessionKey: typeof resolveAgentIdFromSessionKey;
   resolveStorePath: typeof resolveStorePath;
 };
@@ -30,6 +32,7 @@ const defaultSubagentAnnounceOutputDeps: SubagentAnnounceOutputDeps = {
   callGateway,
   getRuntimeConfig,
   readSessionEntry,
+  readSessionMessagesAsync,
   resolveAgentIdFromSessionKey,
   resolveStorePath,
 };
@@ -194,13 +197,31 @@ function selectSubagentOutputText(snapshot: SubagentOutputSnapshot): string | un
 export async function readSubagentOutput(
   sessionKey: string,
   _outcome?: SubagentRunOutcome,
+  options?: { sessionFile?: string },
 ): Promise<string | undefined> {
-  const history = await subagentAnnounceOutputDeps.callGateway({
-    method: "chat.history",
-    params: { sessionKey, limit: 100 },
-  });
-  const messages = Array.isArray(history?.messages) ? history.messages : [];
-  const snapshot = summarizeSubagentOutputHistory(messages);
+  let messages: unknown[] | undefined;
+  if (options?.sessionFile) {
+    const transcriptMessages = await subagentAnnounceOutputDeps.readSessionMessagesAsync(
+      sessionKey,
+      undefined,
+      options.sessionFile,
+      {
+        mode: "recent",
+        maxMessages: 100,
+        maxBytes: 1024 * 1024,
+      },
+    );
+    messages = transcriptMessages;
+  }
+  const history =
+    messages === undefined
+      ? await subagentAnnounceOutputDeps.callGateway({
+          method: "chat.history",
+          params: { sessionKey, limit: 100 },
+        })
+      : undefined;
+  const sourceMessages = messages ?? (Array.isArray(history?.messages) ? history.messages : []);
+  const snapshot = summarizeSubagentOutputHistory(sourceMessages);
   const selected = selectSubagentOutputText(snapshot);
   if (selected?.trim()) {
     return selected;
@@ -272,7 +293,7 @@ export function applySubagentWaitOutcome(params: {
 
 export async function captureSubagentCompletionReply(
   sessionKey: string,
-  options?: { waitForReply?: boolean; outcome?: SubagentRunOutcome },
+  options?: { waitForReply?: boolean; outcome?: SubagentRunOutcome; sessionFile?: string },
 ): Promise<string | undefined> {
   return await captureSubagentCompletionReplyUsing({
     sessionKey,
@@ -280,7 +301,9 @@ export async function captureSubagentCompletionReply(
     maxWaitMs: isFastTestMode() ? 50 : 1_500,
     retryIntervalMs: isFastTestMode() ? FAST_TEST_RETRY_INTERVAL_MS : 100,
     readSubagentOutput: async (nextSessionKey) =>
-      await readSubagentOutput(nextSessionKey, options?.outcome),
+      await readSubagentOutput(nextSessionKey, options?.outcome, {
+        sessionFile: options?.sessionFile,
+      }),
   });
 }
 
@@ -316,7 +339,9 @@ export function buildChildCompletionFindings(
     label?: string;
     createdAt: number;
     endedAt?: number;
-    frozenResultText?: string | null;
+    completion?: {
+      resultText?: string | null;
+    };
     outcome?: SubagentRunOutcome;
   }>,
 ): string | undefined {
@@ -331,7 +356,7 @@ export function buildChildCompletionFindings(
 
   const sections: string[] = [];
   for (const [index, child] of sorted.entries()) {
-    const resultText = child.frozenResultText?.trim();
+    const resultText = child.completion?.resultText?.trim();
     const outcome = describeSubagentOutcome(child.outcome);
     if (
       child.outcome?.status === "ok" &&
@@ -367,7 +392,9 @@ export function dedupeLatestChildCompletionRows(
     label?: string;
     createdAt: number;
     endedAt?: number;
-    frozenResultText?: string | null;
+    completion?: {
+      resultText?: string | null;
+    };
     outcome?: SubagentRunOutcome;
   }>,
 ) {
@@ -390,7 +417,9 @@ export function filterCurrentDirectChildCompletionRows(
     label?: string;
     createdAt: number;
     endedAt?: number;
-    frozenResultText?: string | null;
+    completion?: {
+      resultText?: string | null;
+    };
     outcome?: SubagentRunOutcome;
   }>,
   params: {

@@ -7,13 +7,20 @@ import {
 } from "./subagent-announce-output.js";
 
 type CallGateway = typeof import("../gateway/call.js").callGateway;
+type ReadSessionMessagesAsync =
+  typeof import("./subagent-announce.runtime.js").readSessionMessagesAsync;
 
-function installOutputDeps(params: { messages: Array<unknown> }) {
+function installOutputDeps(params: {
+  messages: Array<unknown>;
+  transcriptMessages?: Array<unknown>;
+}) {
   const callGateway = vi.fn(async () => ({ messages: params.messages }));
+  const readSessionMessagesAsync = vi.fn(async () => params.transcriptMessages ?? []);
   testing.setDepsForTest({
     callGateway: callGateway as unknown as CallGateway,
+    readSessionMessagesAsync: readSessionMessagesAsync as unknown as ReadSessionMessagesAsync,
   });
-  return { callGateway };
+  return { callGateway, readSessionMessagesAsync };
 }
 
 function sessionsYieldTurn(message = "Waiting for subagent completion.") {
@@ -146,6 +153,56 @@ describe("readSubagentOutput", () => {
 
     await expect(readSubagentOutput("agent:main:subagent:child")).resolves.toBeUndefined();
   });
+
+  it("reads recovered output from the private transcript before gateway history", async () => {
+    const deps = installOutputDeps({
+      messages: [
+        {
+          role: "assistant",
+          content: [{ type: "text", text: "stale visible output" }],
+        },
+      ],
+      transcriptMessages: [
+        {
+          role: "assistant",
+          stopReason: "stop",
+          content: [{ type: "text", text: "fresh recovered output" }],
+        },
+      ],
+    });
+
+    await expect(
+      readSubagentOutput("agent:main:subagent:child", undefined, {
+        sessionFile: "/tmp/openclaw-internal-run.jsonl",
+      }),
+    ).resolves.toBe("fresh recovered output");
+    expect(deps.readSessionMessagesAsync).toHaveBeenCalledWith(
+      "agent:main:subagent:child",
+      undefined,
+      "/tmp/openclaw-internal-run.jsonl",
+      { mode: "recent", maxMessages: 100, maxBytes: 1024 * 1024 },
+    );
+    expect(deps.callGateway).not.toHaveBeenCalled();
+  });
+
+  it("does not read visible gateway history when a private transcript is empty", async () => {
+    const deps = installOutputDeps({
+      messages: [
+        {
+          role: "assistant",
+          content: [{ type: "text", text: "stale visible output" }],
+        },
+      ],
+      transcriptMessages: [],
+    });
+
+    await expect(
+      readSubagentOutput("agent:main:subagent:child", undefined, {
+        sessionFile: "/tmp/openclaw-empty-internal-run.jsonl",
+      }),
+    ).resolves.toBeUndefined();
+    expect(deps.callGateway).not.toHaveBeenCalled();
+  });
 });
 
 describe("buildChildCompletionFindings", () => {
@@ -155,7 +212,7 @@ describe("buildChildCompletionFindings", () => {
         childSessionKey: "agent:main:subagent:silent",
         task: "silent task",
         createdAt: 1,
-        frozenResultText: "ANNOUNCE_SKIP",
+        completion: { resultText: "ANNOUNCE_SKIP" },
         outcome: { status: "ok" },
       },
     ]);
@@ -169,7 +226,7 @@ describe("buildChildCompletionFindings", () => {
         childSessionKey: "agent:main:subagent:silent",
         task: "silent task",
         createdAt: 1,
-        frozenResultText: "ANNOUNCE_SKIP",
+        completion: { resultText: "ANNOUNCE_SKIP" },
         outcome: { status: "error", error: "boom" },
       },
     ]);
@@ -184,14 +241,14 @@ describe("buildChildCompletionFindings", () => {
         childSessionKey: "agent:main:subagent:silent",
         task: "silent task",
         createdAt: 1,
-        frozenResultText: "ANNOUNCE_SKIP",
+        completion: { resultText: "ANNOUNCE_SKIP" },
         outcome: { status: "ok" },
       },
       {
         childSessionKey: "agent:main:subagent:visible",
         task: "visible task",
         createdAt: 2,
-        frozenResultText: "actual output",
+        completion: { resultText: "actual output" },
         outcome: { status: "ok" },
       },
     ]);
