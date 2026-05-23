@@ -16,6 +16,36 @@ export function resolveWebCredsBackupPath(authDir: string): string {
   return path.join(authDir, "creds.json.bak");
 }
 
+export function isPartialPhoneCodePairingCredsPayload(value: unknown): boolean {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+  const record = value as {
+    account?: unknown;
+    me?: { id?: unknown };
+    pairingCode?: unknown;
+    platform?: unknown;
+    registered?: unknown;
+  };
+  return (
+    record.registered === false &&
+    typeof record.me?.id === "string" &&
+    record.me.id.trim().length > 0 &&
+    typeof record.pairingCode === "string" &&
+    record.pairingCode.trim().length > 0 &&
+    !record.account &&
+    !record.platform
+  );
+}
+
+function isUsableWebCredsRaw(raw: string): boolean {
+  try {
+    return !isPartialPhoneCodePairingCredsPayload(JSON.parse(raw));
+  } catch {
+    return false;
+  }
+}
+
 function resolveWebCredsParentCheck(filePath: string) {
   const dir = path.resolve(path.dirname(filePath));
   return {
@@ -99,5 +129,6 @@ export function hasWebCredsRegularFileSync(authDir: string): boolean {
 }
 
 export function hasWebCredsSync(authDir: string): boolean {
-  return statWebCredsFileSync(resolveWebCredsPath(authDir)) !== null;
+  const raw = readWebCredsJsonRawSync(resolveWebCredsPath(authDir));
+  return raw !== null && isUsableWebCredsRaw(raw);
 }

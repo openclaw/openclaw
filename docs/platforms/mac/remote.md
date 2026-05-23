@@ -96,6 +96,7 @@ the selected transport when it starts.
 ## WhatsApp login flow (remote)
 
 - Run `openclaw channels login --verbose` **on the remote host**. Scan the QR with WhatsApp on your phone.
+- If QR scanning is unavailable, run `openclaw channels login --verbose --phone-number 15551234567` on the remote host, then enter the printed code in WhatsApp under _Linked Devices_ → _Link with phone number_.
 - Re-run login on that host if auth expires. Health check will surface link problems.
 
 ## Troubleshooting

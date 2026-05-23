@@ -1,8 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { Agent } from "node:https";
 import { HttpsProxyAgent } from "https-proxy-agent";
-import { formatCliCommand } from "openclaw/plugin-sdk/cli-runtime";
-import { VERSION } from "openclaw/plugin-sdk/cli-runtime";
+import { formatCliCommand, VERSION } from "openclaw/plugin-sdk/cli-runtime";
 import {
   createHttp1EnvHttpProxyAgent,
   createHttp1ProxyAgent,
@@ -137,7 +136,9 @@ export async function createWaSocket(
   verbose: boolean,
   opts: {
     authDir?: string;
+    browser?: [string, string, string];
     onQr?: (qr: string) => void;
+    qrTimeoutMs?: number;
   } & WhatsAppSocketTimingOptions = {},
 ): Promise<ReturnType<typeof makeWASocket>> {
   const baseLogger = getChildLogger(
@@ -181,7 +182,7 @@ export async function createWaSocket(
     version,
     logger,
     printQRInTerminal: false,
-    browser: ["openclaw", "cli", VERSION],
+    browser: opts.browser ?? ["openclaw", "cli", VERSION],
     syncFullHistory: false,
     markOnlineOnConnect: false,
     ...socketTiming,
@@ -189,6 +190,7 @@ export async function createWaSocket(
     // Baileys types still model `fetchAgent` as a Node agent even though the
     // runtime path accepts an undici dispatcher for upload fetches.
     fetchAgent: fetchAgent as Agent | undefined,
+    ...(opts.qrTimeoutMs ? { qrTimeout: opts.qrTimeoutMs } : {}),
   });
 
   sock.ev.on("creds.update", () => enqueueSaveCreds(authDir, saveCreds, sessionLogger));

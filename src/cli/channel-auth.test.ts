@@ -219,6 +219,16 @@ describe("channel-auth", () => {
     });
   });
 
+  it("passes phone-number login hints to channel auth adapters", async () => {
+    await runChannelLogin({ channel: "wa", phoneNumber: " +44 7123 456789 " }, runtime);
+
+    expectFields(readFirstCallArg(mocks.login), {
+      accountId: "default-account",
+      channelInput: "wa",
+      phoneNumber: "+44 7123 456789",
+    });
+  });
+
   it("skips gateway runtime reconcile in remote mode and warns without failing login", async () => {
     mocks.loadConfig.mockReturnValue({
       gateway: { mode: "remote" },
