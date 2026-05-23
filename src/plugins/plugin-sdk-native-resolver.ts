@@ -82,7 +82,7 @@ function findNearestPackageRoot(modulePath: string): string {
 
 function findBundledPluginRoot(modulePath: string): string | undefined {
   const resolvedModulePath = normalizePathForBoundary(modulePath);
-  const packageRoot = resolveLoaderPackageRootFromModulePath(modulePath);
+  const packageRoot = normalizePathForBoundary(resolveLoaderPackageRootFromModulePath(modulePath));
   for (const relativeRoot of ["extensions", "dist/extensions", "dist-runtime/extensions"]) {
     const bundledRoot = path.join(packageRoot, relativeRoot);
     const relative = path.relative(bundledRoot, resolvedModulePath);

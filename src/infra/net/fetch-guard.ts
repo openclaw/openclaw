@@ -1,13 +1,15 @@
 import type { Dispatcher } from "undici";
 import { logWarn } from "../../logger.js";
-import { isLoopbackIpAddress } from "../../shared/net/ip.js";
 import { buildTimeoutAbortSignal } from "../../utils/fetch-timeout.js";
 import {
   normalizeHeadersInitForFetch,
   normalizeRequestInitHeadersForFetch,
 } from "../fetch-headers.js";
+import {
+  shouldUseConfiguredLocalOriginManagedProxyBypass,
+  type ConfiguredLocalOriginManagedProxyBypass,
+} from "./configured-local-origin-bypass.js";
 import { hasProxyEnvConfigured, shouldUseEnvHttpProxyForUrl } from "./proxy-env.js";
-import { getActiveManagedProxyLoopbackMode } from "./proxy/active-proxy-state.js";
 import { retainSafeHeadersForCrossOriginRedirect as retainSafeRedirectHeaders } from "./redirect-headers.js";
 import {
   fetchWithRuntimeDispatcher,
@@ -54,11 +56,6 @@ export const GUARDED_FETCH_MODE = {
 
 export type GuardedFetchMode = (typeof GUARDED_FETCH_MODE)[keyof typeof GUARDED_FETCH_MODE];
 
-type GuardedFetchManagedProxyBypass = {
-  kind: "configured-local-origin";
-  baseUrl: string;
-};
-
 export type GuardedFetchOptions = {
   url: string;
   fetchImpl?: FetchLike;
@@ -101,7 +98,7 @@ export type GuardedFetchResult = {
 };
 
 type GuardedFetchInternalOptions = GuardedFetchOptions & {
-  managedProxyBypass?: GuardedFetchManagedProxyBypass;
+  managedProxyBypass?: ConfiguredLocalOriginManagedProxyBypass;
 };
 
 export type GuardedFetchConfiguredLocalOriginOptions = GuardedFetchOptions & {
@@ -148,75 +145,6 @@ function resolveGuardedFetchMode(params: GuardedFetchOptions): GuardedFetchMode 
 
 function isManagedProxyActive(): boolean {
   return process.env["OPENCLAW_PROXY_ACTIVE"] === "1";
-}
-
-function resolveHttpOrigin(value: string): string | undefined {
-  try {
-    const parsed = new URL(value.trim());
-    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
-      return undefined;
-    }
-    parsed.hostname = parsed.hostname.replace(/\.+$/, "");
-    return parsed.origin.toLowerCase();
-  } catch {
-    return undefined;
-  }
-}
-
-function isLoopbackManagedProxyBypassHost(hostname: string): boolean {
-  const normalized = hostname
-    .trim()
-    .toLowerCase()
-    .replace(/\.+$/, "")
-    .replace(/^\[(.*)\]$/, "$1");
-  return normalized === "localhost" || isLoopbackIpAddress(normalized);
-}
-
-function isExactConfiguredLocalOriginBypass(params: {
-  url: URL;
-  managedProxyBypass: GuardedFetchManagedProxyBypass | undefined;
-}): boolean {
-  if (params.managedProxyBypass?.kind !== "configured-local-origin") {
-    return false;
-  }
-  const baseOrigin = resolveHttpOrigin(params.managedProxyBypass.baseUrl);
-  if (!baseOrigin) {
-    return false;
-  }
-  let baseHostname: string;
-  try {
-    baseHostname = new URL(params.managedProxyBypass.baseUrl.trim()).hostname;
-  } catch {
-    return false;
-  }
-  if (!isLoopbackManagedProxyBypassHost(baseHostname)) {
-    return false;
-  }
-  return resolveHttpOrigin(params.url.toString()) === baseOrigin;
-}
-
-function isPinnedLoopbackTarget(addresses: readonly string[]): boolean {
-  return addresses.length > 0 && addresses.every((address) => isLoopbackIpAddress(address));
-}
-
-function shouldUseManagedProxyDirectBypass(params: {
-  url: URL;
-  managedProxyBypass: GuardedFetchManagedProxyBypass | undefined;
-  resolvedAddresses: readonly string[];
-}): boolean {
-  if (!isExactConfiguredLocalOriginBypass(params)) {
-    return false;
-  }
-  const loopbackMode = getActiveManagedProxyLoopbackMode();
-  if (loopbackMode === "proxy") {
-    return false;
-  }
-  if (loopbackMode === "block" && isLoopbackManagedProxyBypassHost(params.url.hostname)) {
-    throw new SsrFBlockedError(
-      "proxy: configured local provider loopback connections are blocked by proxy.loopbackMode",
-    );
-  }
-  return isPinnedLoopbackTarget(params.resolvedAddresses);
 }
 
 function assertExplicitProxySupportsPinnedDns(
@@ -543,7 +471,7 @@ async function fetchWithSsrFGuardInternal(
           lookupFn: params.lookupFn,
           policy: policyForUrl,
         });
-        dispatcher = shouldUseManagedProxyDirectBypass({
+        dispatcher = shouldUseConfiguredLocalOriginManagedProxyBypass({
           url: parsedUrl,
           managedProxyBypass: params.managedProxyBypass,
           resolvedAddresses: pinned.addresses,
