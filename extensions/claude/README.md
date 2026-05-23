@@ -7,13 +7,12 @@ protocol.
 ## Architecture
 
 This package is the **in-tree client bridge** to an external JSON-RPC server.
-Three pieces, two repos:
+Two pieces, two repos:
 
-| Component                                    | Repo                        | Package                                  |
-| -------------------------------------------- | --------------------------- | ---------------------------------------- |
-| Client bridge (this package)                 | `openclaw/openclaw`         | `@openclaw/claude` (bundled extension)   |
-| Plugin manifest + harness wiring             | `openclaw/openclaw-plugins` | `@openclaw/claude` (plugin distribution) |
-| **JSON-RPC server** (spawned by this bridge) | `openclaw/openclaw-plugins` | `@zeroaltitude/openclaw-claude-bridge`   |
+| Component                                    | Repo                        | Package                                |
+| -------------------------------------------- | --------------------------- | -------------------------------------- |
+| Client bridge (this package)                 | `openclaw/openclaw`         | `@openclaw/claude` (bundled extension) |
+| **JSON-RPC server** (spawned by this bridge) | `openclaw/openclaw-plugins` | `@zeroaltitude/openclaw-claude-bridge` |
 
 The directory name `src/app-server/` mirrors `extensions/codex/src/app-server/`
 for visual symmetry with the codex extension. In both cases the directory
