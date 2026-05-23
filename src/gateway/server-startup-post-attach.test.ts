@@ -1114,9 +1114,9 @@ describe("startGatewayPostAttachRuntime", () => {
         const onPluginServices = vi.fn();
         hoisted.startPluginServices.mockImplementationOnce(
           async () =>
-            await new Promise((resolve) => {
+            (await new Promise<typeof pluginServices>((resolve) => {
               releasePluginServices = () => resolve(pluginServices);
-            }),
+            })) as never,
         );
 
         const sidecarsPromise = startGatewaySidecars({
