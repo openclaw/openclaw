@@ -766,6 +766,6 @@ export function saveAuthProfileStore(
     store: localStore,
   });
   if (hasRuntimeAuthProfileStoreSnapshot(agentDir)) {
-    setRuntimeAuthProfileStoreSnapshot(localStore, agentDir);
+    setRuntimeAuthProfileStoreSnapshot(store, agentDir);
   }
 }
