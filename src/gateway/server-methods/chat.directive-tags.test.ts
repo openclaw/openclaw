@@ -4,6 +4,7 @@ import path from "node:path";
 import { CURRENT_SESSION_VERSION } from "@earendil-works/pi-coding-agent";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ModelCatalogEntry } from "../../agents/model-catalog.types.js";
+import { setReplyPayloadMetadata } from "../../auto-reply/reply-payload.js";
 import type { MsgContext } from "../../auto-reply/templating.js";
 import {
   GATEWAY_CLIENT_CAPS,
@@ -960,6 +961,63 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     );
     // Normal agent-run final text must not be mirrored into JSONL by WebChat;
     // Pi persists the model-visible assistant turn from message_end.
+    expect(assistantUpdates).toStrictEqual([]);
+    const transcriptLines = readTranscriptJsonLines(mockState.transcriptPath);
+    const assistantEntries = transcriptLines.filter(
+      (entry) =>
+        (entry as { message?: { role?: string } }).message?.role === "assistant" ||
+        (entry as { role?: string }).role === "assistant",
+    );
+    expect(assistantEntries).toStrictEqual([]);
+  });
+
+  it("broadcasts agent-run internal-ui source replies without duplicating transcript", async () => {
+    createTranscriptFixture("openclaw-chat-send-agent-source-reply-");
+    mockState.triggerAgentRunStart = true;
+    const sourceReply = setReplyPayloadMetadata(
+      {
+        text: "Codex source reply",
+      },
+      {
+        sourceReplyTranscriptMirror: {
+          sessionKey: "main",
+          text: "Codex source reply",
+          idempotencyKey: "idem-agent-source-reply:internal-source-reply:0",
+        },
+      },
+    );
+    mockState.dispatchedReplies = [
+      {
+        kind: "final",
+        payload: sourceReply,
+      },
+    ];
+    const respond = vi.fn();
+    const context = createChatContext();
+
+    const broadcast = await runNonStreamingChatSend({
+      context,
+      respond,
+      idempotencyKey: "idem-agent-source-reply",
+      message: "hello from codex",
+    });
+
+    expect(broadcast).toMatchObject({
+      runId: "idem-agent-source-reply",
+      sessionKey: "main",
+      state: "final",
+    });
+    expect(extractFirstTextBlock(broadcast)).toBe("Codex source reply");
+    const nodeSend = lastNodeSendCall(context);
+    expect(nodeSend?.[0]).toBe("main");
+    expect(nodeSend?.[1]).toBe("chat");
+    expect(extractFirstTextBlock(nodeSend?.[2])).toBe("Codex source reply");
+    const assistantUpdates = mockState.emittedTranscriptUpdates.filter(
+      (update) =>
+        typeof update.message === "object" &&
+        update.message !== null &&
+        (update.message as { role?: unknown }).role === "assistant",
+    );
     expect(assistantUpdates).toStrictEqual([]);
     const transcriptLines = readTranscriptJsonLines(mockState.transcriptPath);
     const assistantEntries = transcriptLines.filter(
