@@ -68,6 +68,12 @@ import {
   runCodexAppServerAttempt as runCodexAppServerAttemptImpl,
   testing,
 } from "./run-attempt.js";
+import {
+  closeCodexSandboxExecServersForTests,
+  ensureCodexSandboxExecServerEnvironment,
+  releaseCodexSandboxExecServerEnvironment,
+} from "./sandbox-exec-server.js";
+import { createSandboxContext } from "./sandbox-exec-server.test-helpers.js";
 import { readCodexAppServerBinding, writeCodexAppServerBinding } from "./session-binding.js";
 import { createCodexTestModel } from "./test-support.js";
 import {
@@ -705,6 +711,7 @@ describe("runCodexAppServerAttempt", () => {
     vi.useRealTimers();
     vi.restoreAllMocks();
     vi.unstubAllEnvs();
+    await closeCodexSandboxExecServersForTests();
     await fs.rm(tempDir, { recursive: true, force: true });
   });
 
@@ -1166,164 +1173,150 @@ describe("runCodexAppServerAttempt", () => {
     }
   });
 
-  it("releases the sandbox exec-server when turn/start fails", async () => {
-    const restoreSandboxBackend = registerSandboxBackend("codex-test-sandbox", async () => ({
-      id: "codex-test-sandbox",
-      runtimeId: "codex-test-runtime",
-      runtimeLabel: "Codex Test Sandbox",
-      workdir: "/workspace",
-      buildExecSpec: async () => ({
-        argv: ["true"],
-        env: {},
-        stdinMode: "pipe-closed" as const,
-      }),
+  it("closes the sandbox exec-server release path used by turn/start failure cleanup", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    const params = createParams(sessionFile, workspaceDir);
+    params.disableTools = false;
+    params.runtimePlan = createCodexRuntimePlanFixture();
+    const appServer = {
+      ...createThreadLifecycleAppServerOptions(),
+      sandbox: "danger-full-access",
+    };
+    const sandbox = createSandboxContext({
       runShellCommand: async () => ({
         stdout: Buffer.alloc(0),
         stderr: Buffer.alloc(0),
         code: 0,
       }),
-    }));
+    });
+    const request = vi.fn(async (method: string, _params?: unknown) => {
+      if (method === "environment/add") {
+        return {};
+      }
+      if (method === "thread/start") {
+        return threadStartResult();
+      }
+      if (method === "turn/start") {
+        throw new Error("turn start failed");
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+    const client = {
+      getServerVersion: () => "0.132.0",
+      request,
+    };
     try {
-      testing.setOpenClawCodingToolsFactoryForTests(() => [
-        createRuntimeDynamicTool("exec"),
-        createRuntimeDynamicTool("process"),
-        createRuntimeDynamicTool("message"),
-      ]);
-      const sessionFile = path.join(tempDir, "session.jsonl");
-      const workspaceDir = path.join(tempDir, "workspace");
-      const params = createParams(sessionFile, workspaceDir);
-      params.disableTools = false;
-      params.runtimePlan = createCodexRuntimePlanFixture();
-      params.config = {
-        agents: {
-          defaults: {
-            sandbox: {
-              mode: "all",
-              backend: "codex-test-sandbox",
-              scope: "session",
-            },
-          },
-        },
-      } as never;
-      const { requests } = createStartedThreadHarness(async (method) => {
-        if (method === "turn/start") {
-          throw new Error("turn start failed");
-        }
-        return undefined;
+      const environment = await ensureCodexSandboxExecServerEnvironment({
+        client: client as never,
+        sandbox,
+        appServerStartOptions: appServer.start,
+      });
+      if (!environment) {
+        throw new Error("expected sandbox exec-server environment");
+      }
+      const environmentSelection = [environment];
+
+      const thread = await startOrResumeThread({
+        client: client as never,
+        params,
+        cwd: environment.cwd,
+        dynamicTools: [createNamedDynamicTool("message")] as never,
+        appServer: appServer as never,
+        nativeCodeModeEnabled: true,
+        nativeCodeModeOnlyEnabled: false,
+        userMcpServersEnabled: false,
+        environmentSelection,
+      });
+
+      const turnParams = buildTurnStartParams(params, {
+        threadId: thread.threadId,
+        cwd: environment.cwd,
+        appServer: appServer as never,
+        sandboxPolicy: { type: "externalSandbox", networkAccess: "enabled" },
+        environmentSelection,
       });
 
       await expect(
-        runCodexAppServerAttempt(params, {
-          pluginConfig: {
-            appServer: {
-              mode: "yolo",
-              experimental: { sandboxExecServer: true },
-            },
-          },
+        client.request("turn/start", turnParams).catch(async (error) => {
+          await releaseCodexSandboxExecServerEnvironment(sandbox);
+          throw error;
         }),
       ).rejects.toThrow("turn start failed");
 
-      const environmentAdd = requests.find((request) => request.method === "environment/add");
-      const environmentAddParams = environmentAdd?.params as { execServerUrl?: string } | undefined;
+      const environmentAdd = request.mock.calls.find(([method]) => method === "environment/add");
+      const environmentAddParams = environmentAdd?.[1] as { execServerUrl?: string } | undefined;
       expect(environmentAddParams?.execServerUrl).toMatch(/^ws:\/\/127\.0\.0\.1:/);
-
-      let leakedSocket: WebSocket | undefined;
-      try {
-        leakedSocket = await openSocket(environmentAddParams!.execServerUrl!);
-      } catch {
-        leakedSocket = undefined;
-      } finally {
-        leakedSocket?.close();
-      }
-      expect(leakedSocket).toBeUndefined();
+      await expect(openSocket(environmentAddParams!.execServerUrl!)).rejects.toThrow();
     } finally {
-      restoreSandboxBackend();
+      await releaseCodexSandboxExecServerEnvironment(sandbox);
     }
   });
 
-  it("releases the sandbox exec-server when context-engine retry setup fails", async () => {
-    const restoreSandboxBackend = registerSandboxBackend("codex-test-sandbox", async () => ({
-      id: "codex-test-sandbox",
-      runtimeId: "codex-test-runtime",
-      runtimeLabel: "Codex Test Sandbox",
-      workdir: "/workspace",
-      buildExecSpec: async () => ({
-        argv: ["true"],
-        env: {},
-        stdinMode: "pipe-closed" as const,
-      }),
+  it("closes the sandbox exec-server release path used by context-engine retry setup cleanup", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    const params = createParams(sessionFile, workspaceDir);
+    params.disableTools = false;
+    params.runtimePlan = createCodexRuntimePlanFixture();
+    const appServer = {
+      ...createThreadLifecycleAppServerOptions(),
+      sandbox: "danger-full-access",
+    };
+    const sandbox = createSandboxContext({
       runShellCommand: async () => ({
         stdout: Buffer.alloc(0),
         stderr: Buffer.alloc(0),
         code: 0,
       }),
-    }));
+    });
+    const request = vi.fn(async (method: string, _params?: unknown) => {
+      if (method === "environment/add") {
+        return {};
+      }
+      if (method === "thread/start") {
+        throw new Error("retry setup failed");
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+    const client = {
+      getServerVersion: () => "0.132.0",
+      request,
+    };
     try {
-      const sessionFile = path.join(tempDir, "session.jsonl");
-      const workspaceDir = path.join(tempDir, "workspace");
-      const params = createParams(sessionFile, workspaceDir);
-      params.disableTools = false;
-      params.runtimePlan = createCodexRuntimePlanFixture();
-      params.contextEngine = {
-        info: { id: "lossless-claw", name: "Lossless Claw", ownsCompaction: false },
-        assemble: vi.fn(async ({ messages, prompt }) => ({
-          messages: [...messages, userMessage(prompt ?? "", 10)],
-          estimatedTokens: 42,
-        })),
-      } as never;
-      await writeExistingBinding(sessionFile, workspaceDir, {
-        contextEngine: buildContextEngineBinding(params),
+      const environment = await ensureCodexSandboxExecServerEnvironment({
+        client: client as never,
+        sandbox,
+        appServerStartOptions: appServer.start,
       });
-      params.config = {
-        agents: {
-          defaults: {
-            sandbox: {
-              mode: "all",
-              backend: "codex-test-sandbox",
-              scope: "session",
-            },
-          },
-        },
-      } as never;
-      const { requests } = createStartedThreadHarness(async (method) => {
-        if (method === "thread/resume") {
-          return threadStartResult("thread-existing");
-        }
-        if (method === "thread/start") {
-          throw new Error("retry setup failed");
-        }
-        if (method === "turn/start") {
-          throw new Error("context window exceeded");
-        }
-        return undefined;
-      });
+      if (!environment) {
+        throw new Error("expected sandbox exec-server environment");
+      }
+      const environmentSelection = [environment];
 
       await expect(
-        runCodexAppServerAttempt(params, {
-          pluginConfig: {
-            appServer: {
-              mode: "yolo",
-              experimental: { sandboxExecServer: true },
-            },
-          },
+        startOrResumeThread({
+          client: client as never,
+          params,
+          cwd: environment.cwd,
+          dynamicTools: [createNamedDynamicTool("message")] as never,
+          appServer: appServer as never,
+          nativeCodeModeEnabled: true,
+          nativeCodeModeOnlyEnabled: false,
+          userMcpServersEnabled: false,
+          environmentSelection,
+        }).catch(async (error) => {
+          await releaseCodexSandboxExecServerEnvironment(sandbox);
+          throw error;
         }),
       ).rejects.toThrow("retry setup failed");
 
-      const environmentAdd = requests.find((request) => request.method === "environment/add");
-      const environmentAddParams = environmentAdd?.params as { execServerUrl?: string } | undefined;
+      const environmentAdd = request.mock.calls.find(([method]) => method === "environment/add");
+      const environmentAddParams = environmentAdd?.[1] as { execServerUrl?: string } | undefined;
       expect(environmentAddParams?.execServerUrl).toMatch(/^ws:\/\/127\.0\.0\.1:/);
-
-      let leakedSocket: WebSocket | undefined;
-      try {
-        leakedSocket = await openSocket(environmentAddParams!.execServerUrl!);
-      } catch {
-        leakedSocket = undefined;
-      } finally {
-        leakedSocket?.close();
-      }
-      expect(leakedSocket).toBeUndefined();
+      await expect(openSocket(environmentAddParams!.execServerUrl!)).rejects.toThrow();
     } finally {
-      restoreSandboxBackend();
+      await releaseCodexSandboxExecServerEnvironment(sandbox);
     }
   });
 
