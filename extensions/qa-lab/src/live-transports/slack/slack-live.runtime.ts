@@ -37,10 +37,12 @@ type SlackChannelStatus = {
   connected?: boolean;
   lastConnectedAt?: number;
   lastDisconnect?: unknown;
-  lastError?: string;
+  lastError?: string | null;
   restartPending?: boolean;
   running?: boolean;
 };
+
+type SlackChannelReadinessMode = "connected" | "started";
 
 const SLACK_QA_READY_TIMEOUT_MS = 45_000;
 const SLACK_QA_READY_STABILITY_MS = 3_000;
@@ -1493,6 +1495,7 @@ async function runSlackApprovalScenario(params: {
 async function waitForSlackChannelRunning(
   gateway: Awaited<ReturnType<typeof startQaGatewayChild>>,
   accountId: string,
+  mode: SlackChannelReadinessMode,
 ): Promise<SlackChannelStatus> {
   const startedAt = Date.now();
   let lastStatus: SlackChannelStatus | undefined;
@@ -1510,7 +1513,7 @@ async function waitForSlackChannelRunning(
             connected?: boolean;
             lastConnectedAt?: number;
             lastDisconnect?: unknown;
-            lastError?: string;
+            lastError?: string | null;
             restartPending?: boolean;
             running?: boolean;
           }>
@@ -1528,7 +1531,7 @@ async function waitForSlackChannelRunning(
             running: match.running,
           }
         : undefined;
-      if (match?.running && match.connected === true && match.restartPending !== true) {
+      if (isSlackChannelReadyForQa(lastStatus, mode)) {
         if (!lastStatus) {
           throw new Error(`slack account "${accountId}" status disappeared after readiness check`);
         }
@@ -1548,25 +1551,55 @@ async function waitForSlackChannelRunning(
 async function waitForSlackChannelStable(
   gateway: Awaited<ReturnType<typeof startQaGatewayChild>>,
   accountId: string,
+  mode: SlackChannelReadinessMode,
 ) {
   const startedAt = Date.now();
+  let readySince: number | undefined;
   while (Date.now() - startedAt < SLACK_QA_READY_TIMEOUT_MS) {
-    const status = await waitForSlackChannelRunning(gateway, accountId);
-    const connectedAt =
-      typeof status.lastConnectedAt === "number" && status.lastConnectedAt > 0
-        ? status.lastConnectedAt
-        : Date.now();
-    const connectedForMs = Date.now() - connectedAt;
-    if (connectedForMs >= SLACK_QA_READY_STABILITY_MS) {
+    const status = await waitForSlackChannelRunning(gateway, accountId, mode);
+    const observedAt = Date.now();
+    readySince = resolveSlackChannelReadySince({
+      observedAt,
+      previousReadySince: readySince,
+      status,
+    });
+    const readyForMs = observedAt - readySince;
+    if (readyForMs >= SLACK_QA_READY_STABILITY_MS) {
       return;
     }
     await new Promise((resolve) =>
-      setTimeout(resolve, Math.max(500, SLACK_QA_READY_STABILITY_MS - connectedForMs)),
+      setTimeout(resolve, Math.max(500, SLACK_QA_READY_STABILITY_MS - readyForMs)),
     );
   }
   throw new Error(
     `slack account "${accountId}" did not remain ready for ${SLACK_QA_READY_STABILITY_MS}ms`,
   );
+}
+
+function isSlackChannelReadyForQa(
+  status: SlackChannelStatus | undefined,
+  mode: SlackChannelReadinessMode,
+): boolean {
+  if (
+    !status?.running ||
+    status.restartPending === true ||
+    status.lastError != null ||
+    status.connected === false
+  ) {
+    return false;
+  }
+  return mode === "started" || status.connected === true;
+}
+
+function resolveSlackChannelReadySince(params: {
+  observedAt: number;
+  previousReadySince: number | undefined;
+  status: SlackChannelStatus;
+}): number {
+  if (typeof params.status.lastConnectedAt === "number" && params.status.lastConnectedAt > 0) {
+    return params.status.lastConnectedAt;
+  }
+  return params.previousReadySince ?? params.observedAt;
 }
 
 function isRetryableSlackQaScenarioError(error: unknown) {
@@ -1775,8 +1808,14 @@ export async function runSlackQaLive(params: {
               }),
           });
           const activeGatewayHarness = gatewayHarness;
-          await waitForSlackChannelStable(activeGatewayHarness.gateway, sutAccountId);
           const scenarioRun = scenario.buildRun(sutIdentity.userId);
+          const readinessMode: SlackChannelReadinessMode =
+            scenarioRun.kind === "approval" ? "started" : "connected";
+          await waitForSlackChannelStable(
+            activeGatewayHarness.gateway,
+            sutAccountId,
+            readinessMode,
+          );
           const baseScenarioContext = {
             channelId: activeRuntimeEnv.channelId,
             driverClient,
@@ -1791,7 +1830,11 @@ export async function runSlackQaLive(params: {
             sutIdentity,
             sutReadClient,
             waitForReady: async () =>
-              await waitForSlackChannelStable(activeGatewayHarness.gateway, sutAccountId),
+              await waitForSlackChannelStable(
+                activeGatewayHarness.gateway,
+                sutAccountId,
+                "connected",
+              ),
           };
           if (scenarioRun.kind === "approval") {
             const approval = await runSlackApprovalScenario({
@@ -2050,7 +2093,9 @@ export const testing = {
   collectSlackButtonLabels,
   collectSlackBlockText,
   findScenario,
+  isSlackChannelReadyForQa,
   parseSlackQaCredentialPayload,
+  resolveSlackChannelReadySince,
   resolveSlackApprovalCheckpointConfig,
   resolveApprovalDecision,
   resolveSlackQaRuntimeEnv,

@@ -165,6 +165,72 @@ describe("Slack live QA runtime helpers", () => {
     expect(testing.resolveSlackApprovalCheckpointConfig({})).toBeUndefined();
   });
 
+  it("uses started Slack channel readiness for native approval-only scenarios", () => {
+    const startedStatus = {
+      lastError: null,
+      restartPending: false,
+      running: true,
+    };
+
+    expect(testing.isSlackChannelReadyForQa(startedStatus, "started")).toBe(true);
+    expect(testing.isSlackChannelReadyForQa(startedStatus, "connected")).toBe(false);
+    expect(
+      testing.isSlackChannelReadyForQa(
+        {
+          ...startedStatus,
+          connected: false,
+        },
+        "started",
+      ),
+    ).toBe(false);
+    expect(
+      testing.isSlackChannelReadyForQa(
+        {
+          ...startedStatus,
+          lastError: "socket auth failed",
+        },
+        "started",
+      ),
+    ).toBe(false);
+  });
+
+  it("keeps Slack readiness stability anchored when connectedAt is absent", () => {
+    expect(
+      testing.resolveSlackChannelReadySince({
+        observedAt: 2_000,
+        previousReadySince: undefined,
+        status: {
+          lastError: null,
+          restartPending: false,
+          running: true,
+        },
+      }),
+    ).toBe(2_000);
+    expect(
+      testing.resolveSlackChannelReadySince({
+        observedAt: 3_000,
+        previousReadySince: 2_000,
+        status: {
+          lastError: null,
+          restartPending: false,
+          running: true,
+        },
+      }),
+    ).toBe(2_000);
+    expect(
+      testing.resolveSlackChannelReadySince({
+        observedAt: 4_000,
+        previousReadySince: 2_000,
+        status: {
+          lastConnectedAt: 3_500,
+          lastError: null,
+          restartPending: false,
+          running: true,
+        },
+      }),
+    ).toBe(3_500);
+  });
+
   it("allows live approval resolve RPCs to take longer than the generic gateway probe timeout", async () => {
     const call = vi.fn(async () => ({ decision: "allow-once" }));
 
