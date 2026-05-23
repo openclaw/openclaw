@@ -454,10 +454,10 @@ jobs:
 
       - name: Run installer docker tests
         env:
-          OPENCLAW_INSTALL_URL: https://openclaw.ai/install.sh
-          OPENCLAW_INSTALL_CLI_URL: https://openclaw.ai/install-cli.sh
+          OPENCLAW_INSTALL_URL: file:///tmp/openclaw-install.sh
+          OPENCLAW_INSTALL_CLI_URL: file:///tmp/openclaw-install-cli.sh
           OPENCLAW_NO_ONBOARD: "1"
-          OPENCLAW_INSTALL_SMOKE_SKIP_CLI: "1"
+          OPENCLAW_INSTALL_SMOKE_SKIP_CLI: "0"
           OPENCLAW_INSTALL_SMOKE_SKIP_IMAGE_BUILD: "1"
           OPENCLAW_INSTALL_NONROOT_SKIP_IMAGE_BUILD: "1"
           OPENCLAW_INSTALL_SMOKE_SKIP_NONROOT: "0"
@@ -467,6 +467,15 @@ jobs:
           OPENCLAW_INSTALL_SMOKE_UPDATE_DIST_IMAGE: ${{ needs.root_dockerfile_image.outputs.image_ref }}
           OPENCLAW_INSTALL_SMOKE_UPDATE_SKIP_LOCAL_BUILD: "1"
         run: bash scripts/test-install-sh-docker.sh
+
+      - name: Run Rocky Linux installer smoke
+        run: |
+          timeout 20m docker run --rm \
+            -e OPENCLAW_NO_ONBOARD=1 \
+            -e OPENCLAW_NO_PROMPT=1 \
+            -v "$PWD/scripts/install.sh:/tmp/install.sh:ro" \
+            rockylinux:9@sha256:d7be1c094cc5845ee815d4632fe377514ee6ebcf8efaed6892889657e5ddaaa6 \
+            bash -lc 'dnf install -y -q ca-certificates tar gzip xz findutils which sudo >/dev/null && bash /tmp/install.sh --install-method npm --version latest --no-onboard --no-prompt --verify && openclaw --version'
 
   bun_global_install_smoke:
     needs: [preflight, root_dockerfile_image]
