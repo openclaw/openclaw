@@ -639,6 +639,15 @@ describe("selectAgentHarness", () => {
     ).toBe("codex");
   });
 
+  it("routes CLI runtimes to PI harness instead of throwing MissingAgentHarnessError", () => {
+    const harness = selectAgentHarness({
+      provider: "anthropic",
+      modelId: "sonnet-4.6",
+      config: providerRuntimeConfig("anthropic", "claude-cli"),
+    });
+    expect(harness.id).toBe("pi");
+  });
+
   it("ignores stale plugin pins during compaction when the provider no longer matches", async () => {
     registerFailingCodexHarness();
 

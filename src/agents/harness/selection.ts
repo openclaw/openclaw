@@ -1,6 +1,8 @@
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { isCliRuntimeAlias } from "../model-runtime-aliases.js";
+import { isCliProvider } from "../model-selection-cli.js";
 import type { CompactEmbeddedPiSessionParams } from "../pi-embedded-runner/compact.types.js";
 import type {
   EmbeddedRunAttemptParams,
@@ -68,6 +70,17 @@ type AgentHarnessSelectionDecision = {
 
 function listPluginAgentHarnesses(): AgentHarness[] {
   return listRegisteredAgentHarnesses().map((entry) => entry.harness);
+}
+
+function isCliAgentRuntime(
+  runtime: string | undefined,
+  cfg: import("../../config/types.openclaw.js").OpenClawConfig | undefined,
+): boolean {
+  const normalized = runtime?.trim();
+  if (!normalized) {
+    return false;
+  }
+  return isCliRuntimeAlias(normalized) || isCliProvider(normalized, cfg);
 }
 
 export function resolveAvailableAgentHarnessPolicy(params: {
@@ -168,6 +181,14 @@ function selectAgentHarnessDecision(params: {
           runtime: "pi",
         },
         selectedReason: "implicit_plugin_unavailable_pi",
+        candidates: listHarnessCandidates(pluginHarnesses),
+      });
+    }
+    if (isCliAgentRuntime(runtime, params.config)) {
+      return buildSelectionDecision({
+        harness: piHarness,
+        policy,
+        selectedReason: "forced_pi",
         candidates: listHarnessCandidates(pluginHarnesses),
       });
     }
