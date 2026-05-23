@@ -1974,9 +1974,6 @@ export async function dispatchReplyFromConfig(
             }),
             onToolResult: (payload: ReplyPayload) => {
               markProgress();
-              if (payload.isError === true) {
-                markVisibleToolErrorProgress();
-              }
               const run = async () => {
                 if (isDispatchOperationAborted()) {
                   return;
@@ -2020,6 +2017,9 @@ export async function dispatchReplyFromConfig(
                   if (!hasMedia && !hasExecApprovalPayload(deliveryPayload)) {
                     return;
                   }
+                }
+                if (deliveryPayload.isError === true) {
+                  markVisibleToolErrorProgress();
                 }
                 if (shouldRouteToOriginating) {
                   await sendPayloadAsync(deliveryPayload, undefined, false);
