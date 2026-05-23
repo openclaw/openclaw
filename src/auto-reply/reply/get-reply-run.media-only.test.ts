@@ -942,6 +942,14 @@ describe("runPreparedReply media-only handling", () => {
         "base64",
       ),
     );
+    const secondImagePath = path.join(tmpDir, "second.png");
+    await writeFile(
+      secondImagePath,
+      Buffer.from(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=",
+        "base64",
+      ),
+    );
 
     const result = await runPreparedReply(
       baseParams({
@@ -949,8 +957,8 @@ describe("runPreparedReply media-only handling", () => {
           Body: "describe this\n\n[Image]\nDescription:\na tiny dot image",
           RawBody: "describe this\n\n[Image]\nDescription:\na tiny dot image",
           CommandBody: "describe this\n\n[Image]\nDescription:\na tiny dot image",
-          MediaPaths: [imagePath],
-          MediaTypes: ["image/png"],
+          MediaPaths: [imagePath, secondImagePath],
+          MediaTypes: ["image/png", "image/png"],
           MediaWorkspaceDir: tmpDir,
           MediaUnderstanding: [
             {
@@ -972,8 +980,8 @@ describe("runPreparedReply media-only handling", () => {
           OriginatingChannel: "webchat",
           OriginatingTo: "webchat:local",
           ChatType: "direct",
-          MediaPaths: [imagePath],
-          MediaTypes: ["image/png"],
+          MediaPaths: [imagePath, secondImagePath],
+          MediaTypes: ["image/png", "image/png"],
           MediaWorkspaceDir: tmpDir,
         },
       }),

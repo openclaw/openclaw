@@ -33,7 +33,10 @@ function collectCurrentImageAttachmentIndexes(ctx: MsgContext): number[] {
   return indexes;
 }
 
-function hasCurrentImageUnderstanding(ctx: MsgContext, imageAttachmentIndexes: number[]): boolean {
+function hasAnyCurrentImageUnderstanding(
+  ctx: MsgContext,
+  imageAttachmentIndexes: number[],
+): boolean {
   if (imageAttachmentIndexes.length === 0) {
     return false;
   }
@@ -42,7 +45,7 @@ function hasCurrentImageUnderstanding(ctx: MsgContext, imageAttachmentIndexes: n
       (output) => output.attachmentIndex,
     ) ?? [],
   );
-  return imageAttachmentIndexes.every((index) => describedImageIndexes.has(index));
+  return imageAttachmentIndexes.some((index) => describedImageIndexes.has(index));
 }
 
 export async function resolveCurrentTurnImages(params: {
@@ -62,7 +65,7 @@ export async function resolveCurrentTurnImages(params: {
   if (currentImageAttachmentIndexes.length === 0) {
     return { images: params.images, imageOrder: params.imageOrder };
   }
-  if (hasCurrentImageUnderstanding(params.ctx, currentImageAttachmentIndexes)) {
+  if (hasAnyCurrentImageUnderstanding(params.ctx, currentImageAttachmentIndexes)) {
     return { images: params.images, imageOrder: params.imageOrder };
   }
 
