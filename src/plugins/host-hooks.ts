@@ -295,6 +295,34 @@ export type PluginSessionTurnUnscheduleByTagResult = {
   failed: number;
 };
 
+export type PluginSessionContinuationLeaseParams = {
+  /** Trusted host command/tool context for the active session. */
+  session: { sessionKey?: string };
+  leaseKey: string;
+  message: string;
+  delayMs: number;
+  agentId?: string;
+  deliveryMode?: "none" | "announce";
+};
+
+export type PluginSessionContinuationLeaseResult =
+  | {
+      scheduled: true;
+      handle: PluginSessionSchedulerJobHandle;
+      replaced: PluginSessionTurnUnscheduleByTagResult;
+    }
+  | {
+      scheduled: false;
+      reason: "invalid_request" | "plugin_not_loaded" | "scheduler_unavailable";
+      replaced?: PluginSessionTurnUnscheduleByTagResult;
+    };
+
+export type PluginSessionContinuationLeaseClearParams = {
+  /** Trusted host command/tool context for the active session. */
+  session: { sessionKey?: string };
+  leaseKey: string;
+};
+
 export function normalizePluginHostHookId(value: string | undefined): string {
   return (value ?? "").trim();
 }

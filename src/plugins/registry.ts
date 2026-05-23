@@ -77,6 +77,8 @@ import {
   setPluginRunContext,
 } from "./host-hook-runtime.js";
 import {
+  clearPluginSessionContinuationLease,
+  requestPluginSessionContinuationLease,
   schedulePluginSessionTurn,
   unschedulePluginSessionTurnsByTag,
 } from "./host-hook-scheduled-turns.js";
@@ -2862,6 +2864,36 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
                   cron: getHostCronService(),
                   shouldCommit: isLoadedRecordInActiveRegistry,
                   ownerRegistry: registry,
+                });
+              },
+              requestSessionContinuationLease: async (request) => {
+                if (registryParams.activateGlobalSideEffects === false) {
+                  return { scheduled: false, reason: "scheduler_unavailable" };
+                }
+                await Promise.resolve();
+                return requestPluginSessionContinuationLease({
+                  pluginId: record.id,
+                  pluginName: record.name,
+                  origin: record.origin,
+                  request,
+                  cron: getHostCronService(),
+                  shouldCommit: isLoadedRecordInActiveRegistry,
+                  ownerRegistry: registry,
+                });
+              },
+              clearSessionContinuationLease: async (request) => {
+                if (registryParams.activateGlobalSideEffects === false) {
+                  return { removed: 0, failed: 0 };
+                }
+                await Promise.resolve();
+                if (!isLoadedRecordInActiveRegistry()) {
+                  return { removed: 0, failed: 0 };
+                }
+                return clearPluginSessionContinuationLease({
+                  pluginId: record.id,
+                  origin: record.origin,
+                  cron: getHostCronService(),
+                  request,
                 });
               },
               unscheduleSessionTurnsByTag: async (request) => {

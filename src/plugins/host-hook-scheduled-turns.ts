@@ -9,6 +9,9 @@ import {
   registerPluginSessionSchedulerJob,
 } from "./host-hook-runtime.js";
 import type {
+  PluginSessionContinuationLeaseClearParams,
+  PluginSessionContinuationLeaseParams,
+  PluginSessionContinuationLeaseResult,
   PluginSessionSchedulerJobHandle,
   PluginSessionTurnScheduleParams,
   PluginSessionTurnUnscheduleByTagParams,
@@ -20,6 +23,8 @@ import type { PluginRegistry } from "./registry-types.js";
 const log = createSubsystemLogger("plugins/host-scheduled-turns");
 const PLUGIN_CRON_NAME_PREFIX = "plugin:";
 const PLUGIN_CRON_TAG_MARKER = ":tag:";
+const CONTINUATION_LEASE_TAG_PREFIX = "continuation-lease-";
+const CONTINUATION_LEASE_KEY_RE = /^[A-Za-z0-9._-]{1,80}$/u;
 
 type ResolvedSessionTurnSchedule =
   | {
@@ -135,6 +140,14 @@ function resolvePluginSessionTurnTag(value: unknown): {
     return { invalid: true };
   }
   return { tag, invalid: false };
+}
+
+function resolveContinuationLeaseTag(value: unknown): string | undefined {
+  const leaseKey = normalizeOptionalString(value);
+  if (!leaseKey || !CONTINUATION_LEASE_KEY_RE.test(leaseKey)) {
+    return undefined;
+  }
+  return `${CONTINUATION_LEASE_TAG_PREFIX}${leaseKey}`;
 }
 
 export function buildPluginSchedulerCronName(params: {
@@ -412,4 +425,86 @@ export async function unschedulePluginSessionTurnsByTag(params: {
     }
   }
   return { removed, failed };
+}
+
+export async function requestPluginSessionContinuationLease(params: {
+  pluginId: string;
+  pluginName?: string;
+  origin?: PluginOrigin;
+  request: PluginSessionContinuationLeaseParams;
+  shouldCommit?: () => boolean;
+  cron?: CronServiceContract;
+  ownerRegistry?: PluginRegistry;
+}): Promise<PluginSessionContinuationLeaseResult> {
+  if (params.origin !== "bundled") {
+    return { scheduled: false, reason: "plugin_not_loaded" };
+  }
+  const sessionKey = normalizeOptionalString(params.request.session.sessionKey);
+  const message = normalizeOptionalString(params.request.message);
+  const tag = resolveContinuationLeaseTag(params.request.leaseKey);
+  if (
+    !sessionKey ||
+    !message ||
+    !tag ||
+    !Number.isFinite(params.request.delayMs) ||
+    params.request.delayMs < 0
+  ) {
+    return { scheduled: false, reason: "invalid_request" };
+  }
+  if (!params.cron) {
+    log.warn("plugin session continuation lease failed: cron service unavailable");
+    return { scheduled: false, reason: "scheduler_unavailable" };
+  }
+  if (params.shouldCommit && !params.shouldCommit()) {
+    return { scheduled: false, reason: "plugin_not_loaded" };
+  }
+  const replaced = await unschedulePluginSessionTurnsByTag({
+    pluginId: params.pluginId,
+    origin: params.origin,
+    cron: params.cron,
+    request: { sessionKey, tag },
+  });
+  if (replaced.failed > 0) {
+    return { scheduled: false, reason: "scheduler_unavailable", replaced };
+  }
+  const handle = await schedulePluginSessionTurn({
+    pluginId: params.pluginId,
+    pluginName: params.pluginName,
+    origin: params.origin,
+    cron: params.cron,
+    ownerRegistry: params.ownerRegistry,
+    shouldCommit: params.shouldCommit,
+    schedule: {
+      sessionKey,
+      message,
+      delayMs: params.request.delayMs,
+      deleteAfterRun: true,
+      tag,
+      deliveryMode: params.request.deliveryMode ?? "none",
+      ...(params.request.agentId ? { agentId: params.request.agentId } : {}),
+    },
+  });
+  if (!handle) {
+    return { scheduled: false, reason: "scheduler_unavailable", replaced };
+  }
+  return { scheduled: true, handle, replaced };
+}
+
+export async function clearPluginSessionContinuationLease(params: {
+  pluginId: string;
+  origin?: PluginOrigin;
+  cron?: CronServiceContract;
+  request: PluginSessionContinuationLeaseClearParams;
+}): Promise<PluginSessionTurnUnscheduleByTagResult> {
+  const sessionKey = normalizeOptionalString(params.request.session.sessionKey);
+  const tag = resolveContinuationLeaseTag(params.request.leaseKey);
+  if (!sessionKey || !tag) {
+    return { removed: 0, failed: 0 };
+  }
+  return await unschedulePluginSessionTurnsByTag({
+    pluginId: params.pluginId,
+    origin: params.origin,
+    cron: params.cron,
+    request: { sessionKey, tag },
+  });
 }

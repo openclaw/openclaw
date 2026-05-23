@@ -18,6 +18,8 @@ import {
 } from "../host-hook-runtime.js";
 import {
   buildPluginSchedulerCronName,
+  clearPluginSessionContinuationLease,
+  requestPluginSessionContinuationLease,
   schedulePluginSessionTurn,
   unschedulePluginSessionTurnsByTag,
 } from "../host-hook-scheduled-turns.js";
@@ -182,6 +184,39 @@ async function unscheduleWorkflowTurnsByTag(
   });
 }
 
+async function requestWorkflowContinuationLease(
+  request: Partial<Parameters<typeof requestPluginSessionContinuationLease>[0]["request"]> = {},
+) {
+  return await requestPluginSessionContinuationLease({
+    pluginId: WORKFLOW_PLUGIN_ID,
+    pluginName: "Workflow Plugin",
+    origin: "bundled",
+    cron,
+    request: {
+      session: { sessionKey: MAIN_SESSION_KEY },
+      leaseKey: "goal-active",
+      message: "continue the active goal",
+      delayMs: 1_000,
+      ...request,
+    },
+  });
+}
+
+async function clearWorkflowContinuationLease(
+  request: Partial<Parameters<typeof clearPluginSessionContinuationLease>[0]["request"]> = {},
+) {
+  return await clearPluginSessionContinuationLease({
+    pluginId: WORKFLOW_PLUGIN_ID,
+    origin: "bundled",
+    cron,
+    request: {
+      session: { sessionKey: MAIN_SESSION_KEY },
+      leaseKey: "goal-active",
+      ...request,
+    },
+  });
+}
+
 describe("plugin scheduled turns", () => {
   beforeEach(() => {
     workflowMocks.cronAdd.mockReset();
@@ -343,6 +378,80 @@ describe("plugin scheduled turns", () => {
       },
     ]);
     expect(removed.toSorted()).toEqual(["job-page-1", "job-page-2"]);
+  });
+
+  it("replaces one same-session continuation lease before scheduling the next turn", async () => {
+    workflowMocks.cronListPage.mockResolvedValueOnce({
+      jobs: [
+        makeCronJob({
+          id: "old-lease",
+          name: "plugin:workflow-plugin:tag:continuation-lease-goal-active:agent:main:main:old",
+          sessionTarget: "session:agent:main:main",
+        }),
+        makeCronJob({
+          id: "other-session-lease",
+          name: "plugin:workflow-plugin:tag:continuation-lease-goal-active:agent:other:main:old",
+          sessionTarget: "session:agent:other:main",
+        }),
+      ],
+      total: 2,
+      offset: 0,
+      limit: 200,
+      hasMore: false,
+      nextOffset: null,
+    });
+    mockCronAdd(makeCronJob({ id: "new-lease" }));
+
+    await expect(requestWorkflowContinuationLease()).resolves.toEqual({
+      scheduled: true,
+      handle: {
+        id: "new-lease",
+        pluginId: WORKFLOW_PLUGIN_ID,
+        sessionKey: MAIN_SESSION_KEY,
+        kind: "session-turn",
+      },
+      replaced: { removed: 1, failed: 0 },
+    });
+    expect(workflowMocks.cronRemove).toHaveBeenCalledWith("old-lease");
+    expect(workflowMocks.cronRemove).not.toHaveBeenCalledWith("other-session-lease");
+    expect(getCronAddBody()).toMatchObject({
+      name: expect.stringMatching(
+        /^plugin:workflow-plugin:tag:continuation-lease-goal-active:agent:main:main:/u,
+      ),
+      sessionTarget: "session:agent:main:main",
+      payload: { kind: "agentTurn", message: "continue the active goal" },
+      delivery: { mode: "none" },
+      deleteAfterRun: true,
+    });
+  });
+
+  it("rejects continuation lease keys that cannot be represented as owned scheduler tags", async () => {
+    await expect(requestWorkflowContinuationLease({ leaseKey: "bad:route" })).resolves.toEqual({
+      scheduled: false,
+      reason: "invalid_request",
+    });
+    expect(workflowMocks.cronListPage).not.toHaveBeenCalled();
+    expect(workflowMocks.cronAdd).not.toHaveBeenCalled();
+  });
+
+  it("clears a same-session continuation lease by lease key", async () => {
+    workflowMocks.cronListPage.mockResolvedValueOnce({
+      jobs: [
+        makeCronJob({
+          id: "lease-to-clear",
+          name: "plugin:workflow-plugin:tag:continuation-lease-goal-active:agent:main:main:old",
+          sessionTarget: "session:agent:main:main",
+        }),
+      ],
+      total: 1,
+      offset: 0,
+      limit: 200,
+      hasMore: false,
+      nextOffset: null,
+    });
+
+    await expect(clearWorkflowContinuationLease()).resolves.toEqual({ removed: 1, failed: 0 });
+    expect(workflowMocks.cronRemove).toHaveBeenCalledWith("lease-to-clear");
   });
 
   it("tracks scheduled session turns using cron.add's top-level job id", async () => {
