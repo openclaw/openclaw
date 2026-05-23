@@ -57,6 +57,7 @@ export async function buildDiagnoseJson(opts: DiagnoseOptions, _runtime: Runtime
   const currentBaseline = await captureBaseline({
     config: cfg,
     skipGateway: opts.timeoutMs === 0,
+    gatewayTimeoutMs: opts.timeoutMs,
   });
   await saveBaseline(currentBaseline, DIAGNOSE_BASELINE_NAME, cfg);
   if (!pluginContracts.ok || tasks.summary.combined.errors > 0) {

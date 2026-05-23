@@ -97,14 +97,16 @@ export async function captureBaseline(options?: {
   config?: OpenClawConfig;
   skipGateway?: boolean;
   skipPlugins?: boolean;
+  gatewayTimeoutMs?: number;
 }): Promise<BaselineCapture> {
   const config = options?.config;
+  const gatewayTimeoutMs = options?.gatewayTimeoutMs ?? 5000;
   const version = "1.0.0";
 
-  const gateway: ComponentStatus = await checkGatewayStatus(options?.skipGateway);
-  const channels: ComponentStatus = await checkChannelsStatus(config);
+  const gateway: ComponentStatus = await checkGatewayStatus(options?.skipGateway, gatewayTimeoutMs);
+  const channels: ComponentStatus = await checkChannelsStatus(config, gatewayTimeoutMs);
   const agents: ComponentStatus = await checkAgentsStatus();
-  const tasks: ComponentStatus = await checkTasksStatus();
+  const tasks: ComponentStatus = await checkTasksStatus(gatewayTimeoutMs);
   const locks: ComponentStatus = await checkLocksStatus();
   const plugins: ComponentStatus = await checkPluginsStatus(options?.skipPlugins);
 
@@ -117,7 +119,7 @@ export async function captureBaseline(options?: {
     const result = await callGateway<{ sessions?: unknown[] }>({
       method: "sessions.list",
       params: { limit: 1 },
-      timeoutMs: 5000,
+      timeoutMs: gatewayTimeoutMs,
     });
     sessionCount = Array.isArray(result?.sessions) ? result.sessions.length : 0;
   } catch {
@@ -126,12 +128,12 @@ export async function captureBaseline(options?: {
 
   let taskCount = 0;
   try {
-    const result = await callGateway<{ flows?: unknown[] }>({
-      method: "tasks.flows",
-      params: { active: true },
-      timeoutMs: 5000,
+    const result = await callGateway<{ tasks?: unknown[] }>({
+      method: "tasks.list",
+      params: { status: ["queued", "running"], limit: 100 },
+      timeoutMs: gatewayTimeoutMs,
     });
-    taskCount = Array.isArray(result?.flows) ? result.flows.length : 0;
+    taskCount = Array.isArray(result?.tasks) ? result.tasks.length : 0;
   } catch {
     // task count unknown
   }
@@ -204,6 +206,7 @@ export async function compareBaseline(
     config?: OpenClawConfig;
     skipGateway?: boolean;
     skipPlugins?: boolean;
+    gatewayTimeoutMs?: number;
   },
 ): Promise<BaselineComparison> {
   const baseline = loadBaseline(baselineName, options?.config);
@@ -299,7 +302,7 @@ function statusToScore(status: BaselineSeverity): number {
   return 0;
 }
 
-async function checkGatewayStatus(skip?: boolean): Promise<ComponentStatus> {
+async function checkGatewayStatus(skip?: boolean, timeoutMs = 5000): Promise<ComponentStatus> {
   if (skip) {
     return { status: "pass", message: "Skipped" };
   }
@@ -308,7 +311,7 @@ async function checkGatewayStatus(skip?: boolean): Promise<ComponentStatus> {
     const result = await callGateway({
       method: "status",
       params: {},
-      timeoutMs: 5000,
+      timeoutMs,
     });
 
     return {
@@ -324,21 +327,48 @@ async function checkGatewayStatus(skip?: boolean): Promise<ComponentStatus> {
   }
 }
 
-async function checkChannelsStatus(config?: OpenClawConfig): Promise<ComponentStatus> {
+type ChannelStatusSummary = {
+  configured?: boolean;
+  connected?: boolean;
+  linked?: boolean;
+};
+
+function listChannelStatusSummaries(
+  channels: Record<string, ChannelStatusSummary> | ChannelStatusSummary[] | undefined,
+): ChannelStatusSummary[] {
+  if (Array.isArray(channels)) {
+    return channels;
+  }
+  if (channels && typeof channels === "object") {
+    return Object.values(channels);
+  }
+  return [];
+}
+
+function isChannelConnected(channel: ChannelStatusSummary): boolean {
+  return channel.connected === true || channel.linked === true;
+}
+
+async function checkChannelsStatus(
+  config?: OpenClawConfig,
+  timeoutMs = 5000,
+): Promise<ComponentStatus> {
   try {
     const channelIds = listConfiguredChannelIdsForReadOnlyScope({ config: config ?? {} });
     if (channelIds.length === 0) {
       return { status: "pass", message: "No channels configured" };
     }
 
-    const result = await callGateway<{ channels?: Array<{ id: string; connected?: boolean }> }>({
+    const result = await callGateway<{
+      channels?: Record<string, ChannelStatusSummary> | ChannelStatusSummary[];
+    }>({
       method: "channels.status",
       params: {},
-      timeoutMs: 5000,
+      timeoutMs,
     });
 
-    const channels = result?.channels ?? [];
-    const connected = channels.filter((c) => c.connected).length;
+    const channels = listChannelStatusSummaries(result?.channels);
+    const connected = channels.filter(isChannelConnected).length;
     const total = channelIds.length;
 
     if (connected === total) {
@@ -378,12 +408,12 @@ async function checkAgentsStatus(): Promise<ComponentStatus> {
   }
 }
 
-async function checkTasksStatus(): Promise<ComponentStatus> {
+async function checkTasksStatus(timeoutMs = 5000): Promise<ComponentStatus> {
   try {
     const result = await callGateway<{ tasks?: unknown[] }>({
       method: "tasks.list",
       params: { status: ["queued", "running"], limit: 100 },
-      timeoutMs: 5000,
+      timeoutMs,
     });
     const count = Array.isArray(result?.tasks) ? result.tasks.length : 0;
     return { status: "pass", message: `${count} active tasks`, details: { count } };

@@ -15,6 +15,11 @@ import {
   triggerInternalHook,
 } from "../hooks/internal-hooks.js";
 import {
+  emitDiagnosticEvent,
+  resetDiagnosticEventsForTest,
+  waitForDiagnosticEventsDrained,
+} from "../infra/diagnostic-events.js";
+import {
   clearDetachedTaskLifecycleRuntimeRegistration,
   getDetachedTaskLifecycleRuntimeRegistration,
   registerDetachedTaskLifecycleRuntime,
@@ -7320,9 +7325,22 @@ module.exports = {
         JSON.stringify({ error: record?.error, diagnostics: registry.diagnostics }, null, 2),
       ).toBe("loaded");
 
-      expect((globalThis as Record<string, unknown>)[seenKey]).toEqual([]);
+      emitDiagnosticEvent({
+        type: "model.usage",
+        sessionKey: "agent:main:test:dm:peer",
+        usage: { total: 1 },
+      });
+      await waitForDiagnosticEventsDrained();
+
+      expect((globalThis as Record<string, unknown>)[seenKey]).toEqual([
+        {
+          type: "model.usage",
+          sessionKey: "agent:main:test:dm:peer",
+        },
+      ]);
     } finally {
       delete (globalThis as Record<string, unknown>)[seenKey];
+      resetDiagnosticEventsForTest();
     }
   });
 
