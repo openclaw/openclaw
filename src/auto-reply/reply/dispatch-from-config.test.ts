@@ -555,6 +555,9 @@ const automaticGroupReplyConfig = {
 let dispatchReplyFromConfig: typeof import("./dispatch-from-config.js").dispatchReplyFromConfig;
 let resetInboundDedupe: typeof import("./inbound-dedupe.js").resetInboundDedupe;
 let tryDispatchAcpReplyHook: typeof import("../../plugin-sdk/acp-runtime.js").tryDispatchAcpReplyHook;
+let createReplyOperation: typeof import("./reply-run-registry.js").createReplyOperation;
+let replyRunRegistry: typeof import("./reply-run-registry.js").replyRunRegistry;
+let replyRunTesting: typeof import("./reply-run-registry.js").__testing;
 type DispatchReplyArgs = Parameters<
   typeof import("./dispatch-from-config.js").dispatchReplyFromConfig
 >[0];
@@ -567,6 +570,11 @@ beforeAll(async () => {
   await import("./dispatch-acp-session.runtime.js");
   ({ resetInboundDedupe } = await import("./inbound-dedupe.js"));
   ({ tryDispatchAcpReplyHook } = await import("../../plugin-sdk/acp-runtime.js"));
+  ({
+    createReplyOperation,
+    replyRunRegistry,
+    __testing: replyRunTesting,
+  } = await import("./reply-run-registry.js"));
 });
 
 function createDispatcher(): ReplyDispatcher {
@@ -846,6 +854,7 @@ describe("dispatchReplyFromConfig", () => {
     clearApprovalNativeRouteStateForTest();
     acpManagerRuntimeMocks.getAcpSessionManager.mockReset();
     acpManagerRuntimeMocks.getAcpSessionManager.mockReturnValue(createMockAcpSessionManager());
+    replyRunTesting.resetReplyRunRegistry();
     resetInboundDedupe();
     mocks.routeReply.mockReset();
     mocks.routeReply.mockResolvedValue({ ok: true, messageId: "mock" });
@@ -943,6 +952,191 @@ describe("dispatchReplyFromConfig", () => {
     expect(runtimePluginMocks.ensureRuntimePluginsLoaded.mock.invocationCallOrder[0]).toBeLessThan(
       hookMocks.runner.hasHooks.mock.invocationCallOrder[0],
     );
+  });
+
+  it("waits for the active reply operation before running a Telegram topic user turn", async () => {
+    setNoAbort();
+    const sessionKey = "agent:main:telegram:group:-1003774691294:topic:3731";
+    const activeOperation = createReplyOperation({
+      sessionKey,
+      sessionId: "heartbeat-session",
+      resetTriggered: false,
+    });
+    activeOperation.setPhase("running");
+    const dispatcher = createDispatcher();
+    const replyResolver = vi.fn(async (_ctx: MsgContext, opts?: GetReplyOptions) => {
+      expect(opts?.replyOperation?.sessionId).toBe("heartbeat-session");
+      return { text: "visible after active run" } satisfies ReplyPayload;
+    });
+    const waitForIdleSpy = vi.spyOn(replyRunRegistry, "waitForIdle");
+
+    const dispatchPromise = dispatchReplyFromConfig({
+      ctx: buildTestCtx({
+        Provider: "telegram",
+        Surface: "telegram",
+        OriginatingChannel: "telegram",
+        SessionKey: sessionKey,
+        ChatType: "group",
+        IsForum: true,
+        MessageThreadId: 3731,
+        TransportThreadId: 3731,
+        To: "telegram:-1003774691294:topic:3731",
+        BodyForAgent: "real user message while heartbeat is active",
+      }),
+      cfg: automaticGroupReplyConfig,
+      dispatcher,
+      replyResolver,
+    });
+
+    await vi.waitFor(() => {
+      expect(waitForIdleSpy).toHaveBeenCalledWith(
+        sessionKey,
+        Infinity,
+        expect.objectContaining({ signal: undefined }),
+      );
+    });
+    expect(replyResolver).not.toHaveBeenCalled();
+
+    activeOperation.complete();
+    const result = await dispatchPromise;
+    waitForIdleSpy.mockRestore();
+
+    expect(result.queuedFinal).toBe(true);
+    expect(replyResolver).toHaveBeenCalledTimes(1);
+    expect(firstFinalReplyPayload(dispatcher)?.text).toBe("visible after active run");
+  });
+
+  it("continues waiting when another queued Telegram topic user turn wins the reply operation", async () => {
+    setNoAbort();
+    const sessionKey = "agent:main:telegram:group:-1003774691294:topic:3731";
+    const activeOperation = createReplyOperation({
+      sessionKey,
+      sessionId: "active-session",
+      resetTriggered: false,
+    });
+    activeOperation.setPhase("running");
+    let releaseFirstResolver!: () => void;
+    let releaseSecondResolver!: () => void;
+    const firstResolverReleased = new Promise<void>((resolve) => {
+      releaseFirstResolver = resolve;
+    });
+    const secondResolverReleased = new Promise<void>((resolve) => {
+      releaseSecondResolver = resolve;
+    });
+    const firstDispatcher = createDispatcher();
+    const secondDispatcher = createDispatcher();
+    const firstReplyResolver = vi.fn(async () => {
+      await firstResolverReleased;
+      return { text: "first visible reply" } satisfies ReplyPayload;
+    });
+    const secondReplyResolver = vi.fn(async () => {
+      await secondResolverReleased;
+      return { text: "second visible reply" } satisfies ReplyPayload;
+    });
+    const createTopicCtx = (messageSid: string, body: string) =>
+      buildTestCtx({
+        Provider: "telegram",
+        Surface: "telegram",
+        OriginatingChannel: "telegram",
+        SessionKey: sessionKey,
+        ChatType: "group",
+        IsForum: true,
+        MessageSid: messageSid,
+        MessageThreadId: 3731,
+        TransportThreadId: 3731,
+        To: "telegram:-1003774691294:topic:3731",
+        BodyForAgent: body,
+      });
+
+    const firstDispatch = dispatchReplyFromConfig({
+      ctx: createTopicCtx("27782", "first queued user message"),
+      cfg: automaticGroupReplyConfig,
+      dispatcher: firstDispatcher,
+      replyResolver: firstReplyResolver,
+    });
+    const secondDispatch = dispatchReplyFromConfig({
+      ctx: createTopicCtx("27783", "second queued user message"),
+      cfg: automaticGroupReplyConfig,
+      dispatcher: secondDispatcher,
+      replyResolver: secondReplyResolver,
+    });
+
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(firstReplyResolver).not.toHaveBeenCalled();
+    expect(secondReplyResolver).not.toHaveBeenCalled();
+
+    activeOperation.complete();
+    await vi.waitFor(() => {
+      expect(firstReplyResolver.mock.calls.length + secondReplyResolver.mock.calls.length).toBe(1);
+    });
+
+    const firstStarted = firstReplyResolver.mock.calls.length === 1;
+    if (firstStarted) {
+      releaseFirstResolver();
+    } else {
+      releaseSecondResolver();
+    }
+    await vi.waitFor(() => {
+      expect(firstReplyResolver.mock.calls.length + secondReplyResolver.mock.calls.length).toBe(2);
+    });
+    if (firstStarted) {
+      releaseSecondResolver();
+    } else {
+      releaseFirstResolver();
+    }
+
+    await expect(Promise.all([firstDispatch, secondDispatch])).resolves.toEqual([
+      expect.objectContaining({ queuedFinal: true }),
+      expect.objectContaining({ queuedFinal: true }),
+    ]);
+    expect(firstFinalReplyPayload(firstDispatcher)?.text).toBe("first visible reply");
+    expect(firstFinalReplyPayload(secondDispatcher)?.text).toBe("second visible reply");
+  });
+
+  it("stops waiting for an active reply operation when the caller aborts", async () => {
+    setNoAbort();
+    const sessionKey = "agent:main:telegram:group:-1003774691294:topic:3731";
+    const activeOperation = createReplyOperation({
+      sessionKey,
+      sessionId: "active-session",
+      resetTriggered: false,
+    });
+    activeOperation.setPhase("running");
+    const abortController = new AbortController();
+    const dispatcher = createDispatcher();
+    const replyResolver = vi.fn(async () => ({ text: "should not run" }) satisfies ReplyPayload);
+
+    const dispatchPromise = dispatchReplyFromConfig({
+      ctx: buildTestCtx({
+        Provider: "telegram",
+        Surface: "telegram",
+        OriginatingChannel: "telegram",
+        SessionKey: sessionKey,
+        ChatType: "group",
+        IsForum: true,
+        MessageSid: "27784",
+        MessageThreadId: 3731,
+        TransportThreadId: 3731,
+        To: "telegram:-1003774691294:topic:3731",
+        BodyForAgent: "superseded while waiting",
+      }),
+      cfg: automaticGroupReplyConfig,
+      dispatcher,
+      replyOptions: { abortSignal: abortController.signal },
+      replyResolver,
+    });
+
+    await Promise.resolve();
+    await Promise.resolve();
+    abortController.abort();
+
+    await expect(dispatchPromise).resolves.toMatchObject({
+      queuedFinal: false,
+      counts: { tool: 0, block: 0, final: 0 },
+    });
+    expect(replyResolver).not.toHaveBeenCalled();
+    activeOperation.complete();
   });
 
   it("does not route when Provider matches OriginatingChannel (even if Surface is missing)", async () => {

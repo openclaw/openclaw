@@ -918,7 +918,7 @@ export async function dispatchReplyFromConfig(
   const workspaceDir = resolveAgentWorkspaceDir(cfg, sessionAgentId);
   let dispatchReplyOperation: ReplyOperation | undefined;
   let dispatchAbortOperation: ReplyOperation | undefined;
-  const ensureDispatchReplyOperation = (): ReplyOperation | undefined => {
+  const tryBeginDispatchReplyOperation = (): ReplyOperation | undefined => {
     if (dispatchReplyOperation && !dispatchReplyOperation.result) {
       return dispatchReplyOperation;
     }
@@ -952,6 +952,27 @@ export async function dispatchReplyFromConfig(
       throw error;
     }
     return dispatchReplyOperation;
+  };
+  const ensureDispatchReplyOperation = async (): Promise<boolean> => {
+    while (true) {
+      const operation = tryBeginDispatchReplyOperation();
+      if (operation || !dispatchOperationSessionKey) {
+        return true;
+      }
+      if (!dispatchAbortOperation) {
+        return false;
+      }
+      if (params.replyOptions?.isHeartbeat === true) {
+        return false;
+      }
+      if (
+        !(await replyRunRegistry.waitForIdle(dispatchOperationSessionKey, Infinity, {
+          signal: params.replyOptions?.abortSignal,
+        }))
+      ) {
+        return false;
+      }
+    }
   };
   const getReplyOptions = () =>
     dispatchReplyOperation
@@ -1495,7 +1516,15 @@ export async function dispatchReplyFromConfig(
     }
     // Register the dispatch-owned operation before any plugin hook or model work
     // so /stop can abort pre-run and in-run stalls through the same session lane.
-    ensureDispatchReplyOperation();
+    if (!(await ensureDispatchReplyOperation())) {
+      recordProcessed("skipped", { reason: "reply-operation-active" });
+      markIdle("message_completed");
+      commitInboundDedupeIfClaimed();
+      return attachSourceReplyDeliveryMode({
+        queuedFinal: false,
+        counts: dispatcher.getQueuedCounts(),
+      });
+    }
 
     const shouldSuppressDefaultToolProgressMessages = () => !shouldEmitVerboseProgress();
     const shouldSendVerboseProgressMessages = () => !shouldSuppressDefaultToolProgressMessages();
@@ -2213,7 +2242,16 @@ export async function dispatchReplyFromConfig(
         ),
       ),
     );
-    ensureDispatchReplyOperation();
+    if (!(await ensureDispatchReplyOperation())) {
+      recordAgentDispatchCompleted("completed", { reason: "reply-operation-active" });
+      recordProcessed("skipped", { reason: "reply-operation-active" });
+      markIdle("message_completed");
+      commitInboundDedupeIfClaimed();
+      return attachSourceReplyDeliveryMode({
+        queuedFinal: false,
+        counts: dispatcher.getQueuedCounts(),
+      });
+    }
 
     if (ctx.AcpDispatchTailAfterReset === true) {
       // Command handling prepared a trailing prompt after ACP in-place reset.

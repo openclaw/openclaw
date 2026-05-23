@@ -32,6 +32,7 @@ let resetInboundDedupe: typeof import("./inbound-dedupe.js").resetInboundDedupe;
 let replyRunRegistry: typeof import("./reply-run-registry.js").replyRunRegistry;
 let getActiveReplyRunCount: typeof import("./reply-run-registry.js").getActiveReplyRunCount;
 let createReplyOperation: typeof import("./reply-run-registry.js").createReplyOperation;
+let replyRunTesting: typeof import("./reply-run-registry.js").__testing;
 
 function shouldUseAcpReplyDispatchHook(eventUnknown: unknown): boolean {
   const event = eventUnknown as {
@@ -155,12 +156,17 @@ describe("dispatchReplyFromConfig ACP abort", () => {
     ({ dispatchReplyFromConfig } = await import("./dispatch-from-config.js"));
     ({ tryDispatchAcpReplyHook } = await import("../../plugin-sdk/acp-runtime.js"));
     ({ resetInboundDedupe } = await import("./inbound-dedupe.js"));
-    ({ replyRunRegistry, getActiveReplyRunCount, createReplyOperation } =
-      await import("./reply-run-registry.js"));
+    ({
+      replyRunRegistry,
+      getActiveReplyRunCount,
+      createReplyOperation,
+      __testing: replyRunTesting,
+    } = await import("./reply-run-registry.js"));
   });
 
   beforeEach(() => {
     setDiscordTestRegistry();
+    replyRunTesting.resetReplyRunRegistry();
     resetInboundDedupe();
     acpManagerRuntimeMocks.getAcpSessionManager.mockReset();
     acpManagerRuntimeMocks.getAcpSessionManager.mockReturnValue(createMockAcpSessionManager());
@@ -696,7 +702,7 @@ describe("dispatchReplyFromConfig ACP abort", () => {
     expect(getActiveReplyRunCount()).toBe(0);
   });
 
-  it("uses an already-active source operation to abort pre-dispatch hooks without owning it", async () => {
+  it("waits for an already-active source operation before starting pre-dispatch hooks", async () => {
     hookMocks.runner.hasHooks.mockImplementation(
       (hookName?: string) => hookName === "before_dispatch",
     );
@@ -704,12 +710,10 @@ describe("dispatchReplyFromConfig ACP abort", () => {
     const beforeDispatchStartedPromise = new Promise<void>((resolve) => {
       beforeDispatchStarted = resolve;
     });
-    hookMocks.runner.runBeforeDispatch.mockImplementation(
-      async () =>
-        new Promise<undefined>(() => {
-          beforeDispatchStarted();
-        }),
-    );
+    hookMocks.runner.runBeforeDispatch.mockImplementation(async () => {
+      beforeDispatchStarted();
+      return undefined;
+    });
 
     const existingOperation = createReplyOperation({
       sessionKey: "agent:already-active",
@@ -741,9 +745,12 @@ describe("dispatchReplyFromConfig ACP abort", () => {
         100,
         "pending" as const,
       ),
-    ).resolves.toBe("started");
+    ).resolves.toBe("pending");
     expect(replyRunRegistry.abort("agent:already-active")).toBe(true);
 
+    await expect(beforeDispatchStartedPromise.then(() => "started" as const)).resolves.toBe(
+      "started",
+    );
     type DispatchOutcome =
       | { status: "settled"; result: Awaited<typeof dispatchPromise> }
       | { status: "pending" };

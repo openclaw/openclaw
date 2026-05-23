@@ -79,7 +79,11 @@ import {
 } from "./bot-message-dispatch.runtime.js";
 import type { TelegramBotOptions } from "./bot.types.js";
 import { deliverReplies, emitInternalMessageSentHook } from "./bot/delivery.js";
-import { getTelegramTextParts, resolveTelegramReplyId } from "./bot/helpers.js";
+import {
+  getTelegramTextParts,
+  resolveTelegramReplyId,
+  type TelegramThreadSpec,
+} from "./bot/helpers.js";
 import {
   addTelegramNativeQuoteCandidate,
   buildTelegramNativeQuoteCandidate,
@@ -372,6 +376,7 @@ async function mirrorTelegramAssistantReplyToTranscript(params: {
 }
 
 const MAX_PROGRESS_MARKDOWN_TEXT_CHARS = 300;
+const TELEGRAM_GENERAL_TOPIC_ID = 1;
 
 function clipProgressMarkdownText(text: string): string {
   if (text.length <= MAX_PROGRESS_MARKDOWN_TEXT_CHARS) {
@@ -387,6 +392,47 @@ function sanitizeProgressMarkdownText(text: string): string {
 function formatProgressAsMarkdownCode(text: string): string {
   const clipped = clipProgressMarkdownText(text);
   return `\`${sanitizeProgressMarkdownText(clipped)}\``;
+}
+
+function normalizeTelegramThreadId(value: unknown): number | undefined {
+  const raw = typeof value === "number" ? value : typeof value === "string" ? Number(value) : NaN;
+  if (!Number.isFinite(raw)) {
+    return undefined;
+  }
+  const normalized = Math.trunc(raw);
+  return normalized > 0 ? normalized : undefined;
+}
+
+function resolveTelegramForumThreadIdFromSessionKey(sessionKey: unknown): number | undefined {
+  if (typeof sessionKey !== "string") {
+    return undefined;
+  }
+  const match = /:telegram:group:-?\d+:topic:(\d+)(?::|$)/.exec(sessionKey);
+  return normalizeTelegramThreadId(match?.[1]);
+}
+
+function resolveDispatchTelegramThreadSpec(params: {
+  ctxPayload: TelegramMessageContext["ctxPayload"];
+  threadSpec: TelegramThreadSpec;
+}): TelegramThreadSpec {
+  if (
+    params.threadSpec.scope !== "forum" ||
+    (params.threadSpec.id != null && params.threadSpec.id !== TELEGRAM_GENERAL_TOPIC_ID)
+  ) {
+    return params.threadSpec;
+  }
+  const scopedThreadId = resolveTelegramForumThreadIdFromSessionKey(params.ctxPayload.SessionKey);
+  const payloadThreadId =
+    normalizeTelegramThreadId(params.ctxPayload.MessageThreadId) ??
+    normalizeTelegramThreadId(params.ctxPayload.TransportThreadId);
+  // Missing forum IDs are normalized to General; topic-scoped turn facts are more specific.
+  const recoveredThreadId =
+    params.threadSpec.id === TELEGRAM_GENERAL_TOPIC_ID
+      ? (scopedThreadId ?? payloadThreadId)
+      : (payloadThreadId ?? scopedThreadId);
+  return recoveredThreadId == null
+    ? params.threadSpec
+    : { ...params.threadSpec, id: recoveredThreadId };
 }
 
 export const dispatchTelegramMessage = async ({
@@ -412,7 +458,7 @@ export const dispatchTelegramMessage = async ({
     isGroup,
     groupConfig,
     topicConfig,
-    threadSpec,
+    threadSpec: rawThreadSpec,
     historyKey,
     historyLimit,
     groupHistories,
@@ -425,6 +471,10 @@ export const dispatchTelegramMessage = async ({
     removeAckAfterReply,
     statusReactionController: rawStatusReactionController,
   } = context;
+  const threadSpec = resolveDispatchTelegramThreadSpec({
+    ctxPayload,
+    threadSpec: rawThreadSpec,
+  });
   const isRoomEvent = ctxPayload.InboundEventKind === "room_event";
   const statusReactionController = isRoomEvent ? null : rawStatusReactionController;
   const statusReactionTiming = {
