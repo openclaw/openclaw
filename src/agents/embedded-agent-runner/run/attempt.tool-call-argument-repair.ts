@@ -1,7 +1,7 @@
-import { streamSimple } from "openclaw/plugin-sdk/llm";
 import { extractBalancedJsonPrefix } from "../../../shared/balanced-json.js";
 import { normalizeProviderId } from "../../model-selection.js";
 import type { StreamFn } from "../../runtime/index.js";
+import type { MutableAssistantMessageEventStream } from "../../stream-compat.js";
 import { log } from "../logger.js";
 import {
   createHtmlEntityToolCallArgumentDecodingWrapper,
@@ -187,8 +187,8 @@ function repairMalformedToolCallArgumentsInMessage(
 }
 
 function wrapStreamRepairMalformedToolCallArguments(
-  stream: ReturnType<typeof streamSimple>,
-): ReturnType<typeof streamSimple> {
+  stream: MutableAssistantMessageEventStream,
+): MutableAssistantMessageEventStream {
   const partialJsonByIndex = new Map<number, string>();
   const repairedArgsByIndex = new Map<number, Record<string, unknown>>();
   const hadPreexistingArgsByIndex = new Set<number>();

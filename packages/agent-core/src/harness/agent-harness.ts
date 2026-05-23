@@ -1,11 +1,6 @@
-import {
-  type AssistantMessage,
-  type ImageContent,
-  type Model,
-  streamSimple,
-  type UserMessage,
-} from "openclaw/plugin-sdk/llm";
 import { runAgentLoop } from "../agent-loop.js";
+import { type AssistantMessage, type ImageContent, type Model, type UserMessage } from "../llm.js";
+import { resolveAgentCoreStreamFn } from "../runtime-deps.js";
 import type {
   AgentContext,
   AgentEvent,
@@ -435,7 +430,7 @@ export class AgentHarness<
         turnState.sessionId,
         snapshotOptions,
       );
-      return streamSimple(model, context, {
+      return resolveAgentCoreStreamFn()(model, context, {
         cacheRetention: requestOptions.cacheRetention,
         headers: requestOptions.headers,
         maxRetries: requestOptions.maxRetries,

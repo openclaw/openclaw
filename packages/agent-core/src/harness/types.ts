@@ -1,11 +1,5 @@
-import type {
-  ImageContent,
-  Model,
-  SimpleStreamOptions,
-  TextContent,
-  Transport,
-} from "openclaw/plugin-sdk/llm";
 import type { AgentEvent, AgentMessage, AgentTool, QueueMode, ThinkingLevel } from "../index.js";
+import type { ImageContent, Model, SimpleStreamOptions, TextContent, Transport } from "../llm.js";
 import type { Session } from "./session/session.js";
 
 /** Result of a fallible operation. Expected failures are returned as `ok: false` instead of thrown. */

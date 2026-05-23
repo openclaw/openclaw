@@ -17,9 +17,12 @@ export * from "./harness/session/session.js";
 export { uuidv7 } from "./harness/session/uuid.js";
 export {
   type BranchPreparation,
+  type BranchPathEntry,
   type BranchSummaryDetails,
+  type CollectBranchPathEntriesResult,
   type CollectEntriesResult,
   collectEntriesForBranchSummary,
+  collectEntriesForBranchSummaryFromBranches,
   generateBranchSummary,
   prepareBranchEntries,
 } from "./harness/compaction/branch-summarization.js";
@@ -36,6 +39,11 @@ export {
   prepareCompaction,
   serializeConversation,
   shouldCompact,
+  type CompactionDetails,
+  type CompactionPreparation,
+  type CompactionResult,
+  type CompactionSettings,
+  type ContextUsageEstimate,
 } from "./harness/compaction/compaction.js";
 export * from "./harness/utils/shell-output.js";
 export * from "./harness/utils/truncate.js";

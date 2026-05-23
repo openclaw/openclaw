@@ -1,14 +1,14 @@
+import { runAgentLoop, runAgentLoopContinue } from "./agent-loop.js";
 import {
   type ImageContent,
   type Message,
   type Model,
   type SimpleStreamOptions,
-  streamSimple,
   type TextContent,
   type ThinkingBudgets,
   type Transport,
-} from "openclaw/plugin-sdk/llm";
-import { runAgentLoop, runAgentLoopContinue } from "./agent-loop.js";
+} from "./llm.js";
+import { resolveAgentCoreStreamFn } from "./runtime-deps.js";
 import type {
   AfterToolCallContext,
   AfterToolCallResult,
@@ -221,7 +221,7 @@ export class Agent {
     this.mutableState = createMutableAgentState(options.initialState);
     this.convertToLlm = options.convertToLlm ?? defaultConvertToLlm;
     this.transformContext = options.transformContext;
-    this.streamFn = options.streamFn ?? streamSimple;
+    this.streamFn = resolveAgentCoreStreamFn(options.streamFn);
     this.getApiKey = options.getApiKey;
     this.onPayload = options.onPayload;
     this.onResponse = options.onResponse;

@@ -1,4 +1,4 @@
-import type { ImageContent, TextContent } from "openclaw/plugin-sdk/llm";
+import type { ImageContent, TextContent } from "../../llm.js";
 import type { AgentMessage } from "../../types.js";
 import {
   createBranchSummaryMessage,

@@ -1,9 +1,9 @@
-import { streamSimple } from "openclaw/plugin-sdk/llm";
 import { visitObjectContentBlocks } from "../../../shared/message-content-blocks.js";
 import { normalizeLowercaseStringOrEmpty } from "../../../shared/string-coerce.js";
 import { validateAnthropicTurns, validateGeminiTurns } from "../../embedded-agent-helpers.js";
 import type { AgentMessage, StreamFn } from "../../runtime/index.js";
 import { sanitizeToolUseResultPairing } from "../../session-transcript-repair.js";
+import type { MutableAssistantMessageEventStream } from "../../stream-compat.js";
 import {
   extractToolCallsFromAssistant,
   sanitizeToolCallIdsForCloudCodeAssist,
@@ -803,10 +803,10 @@ function guardUnknownToolLoopInMessage(
 }
 
 function wrapStreamTrimToolCallNames(
-  stream: ReturnType<typeof streamSimple>,
+  stream: MutableAssistantMessageEventStream,
   allowedToolNames?: Set<string>,
   options?: { unknownToolThreshold?: number; state?: UnknownToolLoopGuardState },
-): ReturnType<typeof streamSimple> {
+): MutableAssistantMessageEventStream {
   const unknownToolGuardState = options?.state ?? {
     count: 0,
     countedMessages: new WeakSet<object>(),

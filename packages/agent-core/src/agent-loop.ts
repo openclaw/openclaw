@@ -3,14 +3,8 @@
  * Transforms to Message[] only at the LLM call boundary.
  */
 
-import {
-  type AssistantMessage,
-  type Context,
-  EventStream,
-  streamSimple,
-  type ToolResultMessage,
-  validateToolArguments,
-} from "openclaw/plugin-sdk/llm";
+import { type AssistantMessage, type Context, EventStream, type ToolResultMessage } from "./llm.js";
+import { resolveAgentCoreStreamFn, validateAgentCoreToolArguments } from "./runtime-deps.js";
 import type {
   AgentContext,
   AgentEvent,
@@ -300,7 +294,7 @@ async function streamAssistantResponse(
     tools: context.tools,
   };
 
-  const streamFunction = streamFn || streamSimple;
+  const streamFunction = resolveAgentCoreStreamFn(streamFn);
 
   // Resolve API key (important for expiring tokens)
   const resolvedApiKey =
@@ -317,12 +311,14 @@ async function streamAssistantResponse(
 
   for await (const event of response) {
     switch (event.type) {
-      case "start":
-        partialMessage = event.partial;
-        context.messages.push(partialMessage);
+      case "start": {
+        const message = event.partial;
+        partialMessage = message;
+        context.messages.push(message);
         addedPartial = true;
-        await emit({ type: "message_start", message: { ...partialMessage } });
+        await emit({ type: "message_start", message: { ...message } });
         break;
+      }
 
       case "text_start":
       case "text_delta":
@@ -334,12 +330,13 @@ async function streamAssistantResponse(
       case "toolcall_delta":
       case "toolcall_end":
         if (partialMessage) {
-          partialMessage = event.partial;
-          context.messages[context.messages.length - 1] = partialMessage;
+          const message = event.partial;
+          partialMessage = message;
+          context.messages[context.messages.length - 1] = message;
           await emit({
             type: "message_update",
             assistantMessageEvent: event,
-            message: { ...partialMessage },
+            message: { ...message },
           });
         }
         break;
@@ -611,7 +608,7 @@ async function prepareToolCall(
 
   try {
     const preparedToolCall = prepareToolCallArguments(tool, toolCall);
-    const validatedArgs = validateToolArguments(tool, preparedToolCall);
+    const validatedArgs = validateAgentCoreToolArguments(tool, preparedToolCall);
     if (config.beforeToolCall) {
       const beforeResult = await config.beforeToolCall(
         {
