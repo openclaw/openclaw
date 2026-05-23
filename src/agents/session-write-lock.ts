@@ -567,40 +567,6 @@ function sessionLockHeldByThisProcess(normalizedSessionFile: string): boolean {
   );
 }
 
-async function removeReportedStaleLockIfStillStale(params: {
-  lockPath: string;
-  normalizedSessionFile: string;
-  staleMs: number;
-  readOwnerProcessArgs?: SessionLockOwnerProcessArgsReader;
-}): Promise<boolean> {
-  const nowMs = Date.now();
-  const payload = await readLockPayload(params.lockPath);
-  if (payload === null) {
-    try {
-      await fs.access(params.lockPath);
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-        return true;
-      }
-      throw error;
-    }
-  }
-  const inspected = inspectLockPayloadForSession({
-    payload,
-    staleMs: params.staleMs,
-    nowMs,
-    heldByThisProcess: sessionLockHeldByThisProcess(params.normalizedSessionFile),
-    reclaimLockWithoutStarttime: true,
-    readOwnerProcessArgs: params.readOwnerProcessArgs ?? readProcessArgsSync,
-    respectMaxHold: true,
-  });
-  if (!(await shouldReclaimContendedLockFile(params.lockPath, inspected, params.staleMs, nowMs))) {
-    return false;
-  }
-  await fs.rm(params.lockPath, { force: true });
-  return true;
-}
-
 function shouldTreatAsOrphanSelfLock(params: {
   payload: LockFilePayload | null;
   heldByThisProcess: boolean;
@@ -771,6 +737,7 @@ export async function acquireSessionWriteLock(params: {
         staleMs,
         timeoutMs,
         retry: { minTimeout: 50, maxTimeout: 1000, factor: 1 },
+        staleRecovery: "remove-if-unchanged",
         allowReentrant,
         metadata: { maxHoldMs },
         payload: () => {
@@ -794,21 +761,22 @@ export async function acquireSessionWriteLock(params: {
           });
           return await shouldReclaimContendedLockFile(lockPath, inspected, staleMs, nowMs);
         },
+        shouldRemoveStaleLock: async ({ lockPath, normalizedTargetPath, payload }) => {
+          const nowMs = Date.now();
+          const inspected = inspectLockPayloadForSession({
+            payload: payload as LockFilePayload | null,
+            staleMs,
+            nowMs,
+            heldByThisProcess: sessionLockHeldByThisProcess(normalizedTargetPath),
+            reclaimLockWithoutStarttime: true,
+            readOwnerProcessArgs: readProcessArgsSync,
+            respectMaxHold: true,
+          });
+          return await shouldReclaimContendedLockFile(lockPath, inspected, staleMs, nowMs);
+        },
       });
       return { release: lock.release };
     } catch (err) {
-      if (isFileLockError(err, "file_lock_stale")) {
-        const staleLockPath = (err as { lockPath?: string }).lockPath ?? lockPath;
-        if (
-          await removeReportedStaleLockIfStillStale({
-            lockPath: staleLockPath,
-            normalizedSessionFile,
-            staleMs,
-          })
-        ) {
-          continue;
-        }
-      }
       if (!isFileLockError(err, "file_lock_timeout")) {
         throw err;
       }
