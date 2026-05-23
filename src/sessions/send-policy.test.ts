@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import type { SessionEntry } from "../config/sessions.js";
-import { resolveSendPolicy } from "./send-policy.js";
+import { SessionSendPolicySchema } from "../config/zod-schema.session.js";
+import { resolveSendPolicy, resolveSendPolicyDetailed } from "./send-policy.js";
 
 describe("resolveSendPolicy", () => {
   const cfgWithRules = (
@@ -68,5 +69,123 @@ describe("resolveSendPolicy", () => {
     },
   ])("$name", ({ cfg, entry, sessionKey, expected }) => {
     expect(resolveSendPolicy({ cfg, entry, sessionKey })).toBe(expected);
+  });
+
+  it("accepts relational peer rules in the session config schema", () => {
+    expect(
+      SessionSendPolicySchema.safeParse({
+        default: "allow",
+        rules: [
+          {
+            action: "deny",
+            match: {
+              allOf: [{ channel: "telegram" }, { peerEquals: "inboundPeer", invert: true }],
+            },
+          },
+        ],
+      }).success,
+    ).toBe(true);
+  });
+
+  it("matches outbound peers against the inbound peer", () => {
+    const cfg = {
+      session: {
+        sendPolicy: {
+          default: "deny",
+          rules: [{ action: "allow", match: { peerEquals: "inboundPeer" } }],
+        },
+      },
+    } as OpenClawConfig;
+
+    expect(
+      resolveSendPolicy({
+        cfg,
+        inboundPeer: "User-1",
+        outboundPeer: "user-1",
+      }),
+    ).toBe("allow");
+    expect(
+      resolveSendPolicy({
+        cfg,
+        inboundPeer: "User-1",
+        outboundPeer: "user-2",
+      }),
+    ).toBe("deny");
+  });
+
+  it("denies mismatched peers with structured cancel metadata", () => {
+    const cfg = {
+      session: {
+        sendPolicy: {
+          default: "allow",
+          rules: [{ action: "deny", match: { peerEquals: "inboundPeer", invert: true } }],
+        },
+      },
+    } as OpenClawConfig;
+
+    expect(
+      resolveSendPolicyDetailed({
+        cfg,
+        inboundPeer: ["user-1", "alias-1"],
+        outboundPeer: "user-2",
+      }),
+    ).toEqual({
+      decision: "deny",
+      cancelReason: {
+        code: "send_policy_peer_mismatch",
+        peerEquals: "inboundPeer",
+        expectedPeer: "user-1",
+        expectedPeers: ["user-1", "alias-1"],
+        actualPeer: "user-2",
+      },
+    });
+  });
+
+  it("does not let missing inbound peer context trigger inverted peer denies", () => {
+    const cfg = {
+      session: {
+        sendPolicy: {
+          default: "allow",
+          rules: [{ action: "deny", match: { peerEquals: "inboundPeer", invert: true } }],
+        },
+      },
+    } as OpenClawConfig;
+
+    expect(resolveSendPolicy({ cfg, outboundPeer: "user-2" })).toBe("allow");
+  });
+
+  it("composes peer rules with static predicates", () => {
+    const cfg = {
+      session: {
+        sendPolicy: {
+          default: "allow",
+          rules: [
+            {
+              action: "deny",
+              match: {
+                allOf: [{ channel: "telegram" }, { peerEquals: "inboundPeer", invert: true }],
+              },
+            },
+          ],
+        },
+      },
+    } as OpenClawConfig;
+
+    expect(
+      resolveSendPolicy({
+        cfg,
+        channel: "telegram",
+        inboundPeer: "user-1",
+        outboundPeer: "user-2",
+      }),
+    ).toBe("deny");
+    expect(
+      resolveSendPolicy({
+        cfg,
+        channel: "slack",
+        inboundPeer: "user-1",
+        outboundPeer: "user-2",
+      }),
+    ).toBe("allow");
   });
 });

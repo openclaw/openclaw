@@ -43,6 +43,8 @@ export type RouteReplyParams = {
   channel: OriginatingChannelType;
   /** The destination chat/channel/user ID. */
   to: string;
+  /** Inbound peer candidates from the current turn for relational send policy checks. */
+  inboundPeer?: string | readonly string[];
   /** Session key for deriving agent identity defaults (multi-agent). */
   sessionKey?: string;
   /** Session key for policy resolution when native-command delivery targets a different session. */
@@ -206,6 +208,13 @@ export async function routeReply(params: RouteReplyParams): Promise<RouteReplyRe
       sessionKey: params.sessionKey,
       policySessionKey: params.policySessionKey,
       conversationType: params.policyConversationType,
+      inboundPeer:
+        params.inboundPeer ??
+        [
+          params.requesterSenderId,
+          params.requesterSenderUsername,
+          params.requesterSenderE164,
+        ].filter((value): value is string => typeof value === "string" && value.length > 0),
       isGroup:
         params.policySessionKey || params.policyConversationType ? undefined : params.isGroup,
       requesterSenderId: params.requesterSenderId,

@@ -12,6 +12,34 @@ const AllowDenyChatTypeSchema = z
   ])
   .optional();
 
+const AllowDenyPeerEqualsSchema = z.literal("inboundPeer");
+
+export type AllowDenyChannelRuleMatchShape = {
+  channel?: string;
+  chatType?: "direct" | "group" | "channel" | "dm";
+  keyPrefix?: string;
+  rawKeyPrefix?: string;
+  peerEquals?: "inboundPeer";
+  invert?: boolean;
+  allOf?: AllowDenyChannelRuleMatchShape[];
+  anyOf?: AllowDenyChannelRuleMatchShape[];
+};
+
+const AllowDenyChannelRuleMatchSchema: z.ZodType<AllowDenyChannelRuleMatchShape> = z.lazy(() =>
+  z
+    .object({
+      channel: z.string().optional(),
+      chatType: AllowDenyChatTypeSchema,
+      keyPrefix: z.string().optional(),
+      rawKeyPrefix: z.string().optional(),
+      peerEquals: AllowDenyPeerEqualsSchema.optional(),
+      invert: z.boolean().optional(),
+      allOf: z.array(AllowDenyChannelRuleMatchSchema).optional(),
+      anyOf: z.array(AllowDenyChannelRuleMatchSchema).optional(),
+    })
+    .strict(),
+);
+
 export function createAllowDenyChannelRulesSchema() {
   return z
     .object({
@@ -21,15 +49,7 @@ export function createAllowDenyChannelRulesSchema() {
           z
             .object({
               action: AllowDenyActionSchema,
-              match: z
-                .object({
-                  channel: z.string().optional(),
-                  chatType: AllowDenyChatTypeSchema,
-                  keyPrefix: z.string().optional(),
-                  rawKeyPrefix: z.string().optional(),
-                })
-                .strict()
-                .optional(),
+              match: AllowDenyChannelRuleMatchSchema.optional(),
             })
             .strict(),
         )

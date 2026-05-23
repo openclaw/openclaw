@@ -76,7 +76,7 @@ import {
 import { getGlobalHookRunner, getGlobalPluginRegistry } from "../../plugins/hook-runner-global.js";
 import type { PluginHookReplyDispatchEvent } from "../../plugins/hook-types.js";
 import { isAcpSessionKey } from "../../routing/session-key.js";
-import { resolveSendPolicy } from "../../sessions/send-policy.js";
+import { resolveSendPolicyDetailed } from "../../sessions/send-policy.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -1137,6 +1137,9 @@ export async function dispatchReplyFromConfig(
     isRoutableChannel: routeReplyRuntime?.isRoutableChannel ?? (() => false),
   });
   const routeReplyTo = replyRoute.to;
+  const inboundPolicyPeers = [ctx.From, ctx.SenderId, ctx.OriginatingTo].filter(
+    (value): value is string => typeof value === "string" && value.length > 0,
+  );
   const deliveryChannel = shouldRouteToOriginating ? routeReplyChannel : currentSurface;
   let normalizeReplyMediaPaths:
     | ReturnType<
@@ -1184,6 +1187,7 @@ export async function dispatchReplyFromConfig(
       payload,
       channel: routeReplyChannel,
       to: routeReplyTo,
+      inboundPeer: inboundPolicyPeers,
       sessionKey: ctx.SessionKey,
       policySessionKey: resolveCommandTurnTargetSessionKey(ctx) ?? ctx.SessionKey,
       policyConversationType: resolveRoutedPolicyConversationType(ctx),
@@ -1271,7 +1275,7 @@ export async function dispatchReplyFromConfig(
   // below (plugin-binding notices, fast-abort, normal dispatch) honors it. The
   // agent still processes inbound, but automatic replies/notices/indicators are
   // blocked; explicit message tool sends remain available.
-  const sendPolicy = resolveSendPolicy({
+  const sendPolicyDecision = resolveSendPolicyDetailed({
     cfg,
     entry: sessionStoreEntry.entry,
     sessionKey: sessionStoreEntry.sessionKey ?? sessionKey,
@@ -1283,7 +1287,11 @@ export async function dispatchReplyFromConfig(
       ctx.Provider ??
       undefined,
     chatType: sessionStoreEntry.entry?.chatType,
+    outboundPeer:
+      (shouldRouteToOriginating ? routeReplyTo : undefined) ?? replyRoute.to ?? ctx.To ?? undefined,
+    inboundPeer: inboundPolicyPeers,
   });
+  const sendPolicy = sendPolicyDecision.decision;
   const {
     globalPolicy,
     globalProviderPolicy,

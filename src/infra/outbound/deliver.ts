@@ -38,6 +38,7 @@ import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { OutboundMediaAccess } from "../../media/load-options.js";
 import { resolveAgentScopedOutboundMediaAccess } from "../../media/read-capability.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
+import { resolveSendPolicyDetailed } from "../../sessions/send-policy.js";
 import { diagnosticErrorCategory } from "../diagnostic-error-metadata.js";
 import { emitDiagnosticEvent, type DiagnosticMessageDeliveryKind } from "../diagnostic-events.js";
 import { formatErrorMessage } from "../errors.js";
@@ -1195,6 +1196,36 @@ export async function deliverOutboundPayloadsInternal(
   const queueRenderedBatchPlan = queuePayloadsChanged
     ? createRenderedMessageBatchPlan(queuePayloads)
     : renderedBatchPlan;
+
+  const sendPolicyDecision = resolveSendPolicyDetailed({
+    cfg: params.cfg,
+    sessionKey: params.session?.policyKey ?? params.session?.key,
+    channel,
+    chatType:
+      params.session?.conversationType === "group" || params.session?.conversationType === "direct"
+        ? params.session.conversationType
+        : undefined,
+    outboundPeer: to,
+    inboundPeer: params.session?.inboundPeer,
+  });
+  if (sendPolicyDecision.decision === "deny") {
+    const hookEffect = sendPolicyDecision.cancelReason
+      ? {
+          cancelReason: sendPolicyDecision.cancelReason.code,
+          metadata: sendPolicyDecision.cancelReason,
+        }
+      : { cancelReason: "denied_by_send_policy" };
+    payloads.forEach((_payload, index) => {
+      params.onPayloadDeliveryOutcome?.(
+        suppressedPayloadOutcome({
+          index,
+          reason: "denied_by_send_policy",
+          hookEffect,
+        }),
+      );
+    });
+    return [];
+  }
 
   // Write-ahead delivery queue: persist before sending, remove after success.
   const queueId = params.skipQueue

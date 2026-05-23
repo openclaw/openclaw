@@ -122,6 +122,7 @@ export type HumanDelayConfig = {
 };
 
 export type SessionSendPolicyAction = "allow" | "deny";
+export type SessionSendPolicyPeerEquals = "inboundPeer";
 export type SessionSendPolicyMatch = {
   channel?: string;
   chatType?: ChatType;
@@ -132,6 +133,14 @@ export type SessionSendPolicyMatch = {
   keyPrefix?: string;
   /** Optional raw session-key prefix match for consumers that normalize session keys. */
   rawKeyPrefix?: string;
+  /** Match when the outbound peer is the inbound peer for the same turn. */
+  peerEquals?: SessionSendPolicyPeerEquals;
+  /** Invert this match predicate after evaluating configured fields. */
+  invert?: boolean;
+  /** Require all nested match predicates to match. */
+  allOf?: SessionSendPolicyMatch[];
+  /** Require at least one nested match predicate to match. */
+  anyOf?: SessionSendPolicyMatch[];
 };
 export type SessionSendPolicyRule = {
   action: SessionSendPolicyAction;

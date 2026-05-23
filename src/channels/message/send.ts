@@ -42,6 +42,7 @@ export type DurableMessageSuppressionReason =
   | "empty_after_message_sending_hook"
   | "no_visible_payload"
   | "adapter_returned_no_identity"
+  | "denied_by_send_policy"
   | "no_visible_result";
 
 export type DurableMessageFailureStage = "platform_send" | "queue" | "unknown";

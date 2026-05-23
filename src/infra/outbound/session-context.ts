@@ -4,6 +4,21 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { SilentReplyConversationType } from "../../shared/silent-reply-policy.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
 
+function normalizeStringList(raw?: string | readonly string[] | null): string[] | undefined {
+  const values = Array.isArray(raw) ? raw : raw ? [raw] : [];
+  const normalized: string[] = [];
+  const seen = new Set<string>();
+  for (const value of values) {
+    const next = normalizeOptionalString(value);
+    if (!next || seen.has(next)) {
+      continue;
+    }
+    normalized.push(next);
+    seen.add(next);
+  }
+  return normalized.length > 0 ? normalized : undefined;
+}
+
 export type OutboundSessionContext = {
   /** Canonical session key used for internal hook dispatch. */
   key?: string;
@@ -11,6 +26,8 @@ export type OutboundSessionContext = {
   policyKey?: string;
   /** Explicit conversation type for policy resolution when a session key is generic. */
   conversationType?: SilentReplyConversationType;
+  /** Inbound peer candidates from the current turn for relational send policy checks. */
+  inboundPeer?: string[];
   /** Active agent id used for workspace-scoped media roots. */
   agentId?: string;
   /** Originating account id used for requester-scoped group policy resolution. */
@@ -30,6 +47,7 @@ export function buildOutboundSessionContext(params: {
   sessionKey?: string | null;
   policySessionKey?: string | null;
   conversationType?: string | null;
+  inboundPeer?: string | readonly string[] | null;
   isGroup?: boolean | null;
   agentId?: string | null;
   requesterAccountId?: string | null;
@@ -52,6 +70,7 @@ export function buildOutboundSessionContext(params: {
             ? "direct"
             : undefined;
   const explicitAgentId = normalizeOptionalString(params.agentId);
+  const inboundPeer = normalizeStringList(params.inboundPeer);
   const requesterAccountId = normalizeOptionalString(params.requesterAccountId);
   const requesterSenderId = normalizeOptionalString(params.requesterSenderId);
   const requesterSenderName = normalizeOptionalString(params.requesterSenderName);
@@ -65,6 +84,7 @@ export function buildOutboundSessionContext(params: {
     !key &&
     !policyKey &&
     !conversationType &&
+    !inboundPeer &&
     !agentId &&
     !requesterAccountId &&
     !requesterSenderId &&
@@ -78,6 +98,7 @@ export function buildOutboundSessionContext(params: {
     ...(key ? { key } : {}),
     ...(policyKey ? { policyKey } : {}),
     ...(conversationType ? { conversationType } : {}),
+    ...(inboundPeer ? { inboundPeer } : {}),
     ...(agentId ? { agentId } : {}),
     ...(requesterAccountId ? { requesterAccountId } : {}),
     ...(requesterSenderId ? { requesterSenderId } : {}),
