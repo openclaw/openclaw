@@ -11,6 +11,7 @@ const { fetchConfiguredLocalOriginWithSsrFGuardMock } = vi.hoisted(() => ({
 }));
 
 vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
+  fetchWithSsrFGuard: vi.fn(),
   formatErrorMessage: (error: unknown) => (error instanceof Error ? error.message : String(error)),
   ssrfPolicyFromHttpBaseUrlAllowedOrigin: (baseUrl: string) => {
     const parsed = new URL(baseUrl);
