@@ -351,7 +351,10 @@ describe("createLaneTextDeliverer", () => {
       text: "Hello...",
       buttons,
     });
-    expect(harness.sendPayload).toHaveBeenCalledWith({ text: " world" });
+    expect(harness.sendPayload).toHaveBeenCalledWith(
+      { text: " world" },
+      { markDeliveredState: false },
+    );
     expect(harness.markDelivered).toHaveBeenCalledTimes(1);
   });
 
@@ -658,8 +661,85 @@ describe("createLaneTextDeliverer", () => {
     expect(delivery.messageId).toBe(999);
     expect(harness.answer?.update).toHaveBeenCalledWith("Hello");
     expect(harness.sendPayload).toHaveBeenCalledTimes(2);
-    expect(harness.sendPayload).toHaveBeenNthCalledWith(1, { text: " world" });
-    expect(harness.sendPayload).toHaveBeenNthCalledWith(2, { text: " again" });
+    expect(harness.sendPayload).toHaveBeenNthCalledWith(
+      1,
+      { text: " world" },
+      { markDeliveredState: false },
+    );
+    expect(harness.sendPayload).toHaveBeenNthCalledWith(
+      2,
+      { text: " again" },
+      { markDeliveredState: false },
+    );
+  });
+
+  it("does not mark streamed finals as delivered when a follow-up chunk send fails", async () => {
+    const harness = createHarness({
+      answerMessageId: 999,
+      draftMaxChars: 5,
+      splitFinalTextForStream: () => ["Hello", " world"],
+    });
+    harness.sendPayload.mockRejectedValueOnce(new Error("telegram send failed"));
+
+    await expect(deliverFinalAnswer(harness, "Hello world")).rejects.toThrow(
+      "telegram send failed",
+    );
+
+    expect(harness.answer?.update).toHaveBeenCalledWith("Hello");
+    expect(harness.sendPayload).toHaveBeenCalledTimes(1);
+    expect(harness.sendPayload).toHaveBeenCalledWith(
+      { text: " world" },
+      { markDeliveredState: false },
+    );
+    expect(harness.markDelivered).not.toHaveBeenCalled();
+  });
+
+  it("does not mark streamed finals as delivered when a follow-up chunk is suppressed", async () => {
+    const harness = createHarness({
+      answerMessageId: 999,
+      draftMaxChars: 5,
+      splitFinalTextForStream: () => ["Hello", " world"],
+    });
+    harness.sendPayload.mockResolvedValueOnce(false);
+
+    await expect(deliverFinalAnswer(harness, "Hello world")).rejects.toThrow(
+      "Telegram follow-up chunk was not delivered",
+    );
+
+    expect(harness.answer?.update).toHaveBeenCalledWith("Hello");
+    expect(harness.sendPayload).toHaveBeenCalledTimes(1);
+    expect(harness.sendPayload).toHaveBeenCalledWith(
+      { text: " world" },
+      { markDeliveredState: false },
+    );
+    expect(harness.markDelivered).not.toHaveBeenCalled();
+  });
+
+  it("does not mark streamed finals as delivered when a later follow-up chunk is suppressed", async () => {
+    const harness = createHarness({
+      answerMessageId: 999,
+      draftMaxChars: 5,
+      splitFinalTextForStream: () => ["Hello", " world", " again"],
+    });
+    harness.sendPayload.mockResolvedValueOnce(true).mockResolvedValueOnce(false);
+
+    await expect(deliverFinalAnswer(harness, "Hello world again")).rejects.toThrow(
+      "Telegram follow-up chunk was not delivered",
+    );
+
+    expect(harness.answer?.update).toHaveBeenCalledWith("Hello");
+    expect(harness.sendPayload).toHaveBeenCalledTimes(2);
+    expect(harness.sendPayload).toHaveBeenNthCalledWith(
+      1,
+      { text: " world" },
+      { markDeliveredState: false },
+    );
+    expect(harness.sendPayload).toHaveBeenNthCalledWith(
+      2,
+      { text: " again" },
+      { markDeliveredState: false },
+    );
+    expect(harness.markDelivered).not.toHaveBeenCalled();
   });
 
   it("retains the streamed message when stop may have landed without a message id", async () => {
