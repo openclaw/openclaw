@@ -576,6 +576,18 @@ It verifies:
 - Agent dispatch with `deliveryMode: "none"` and route-specific scheduler names
   and tags.
 
+The same suite also includes five negative and edge-angle checks:
+
+- Invalid GitHub-style HMAC is rejected with `401` before agent dispatch.
+- A Jira event outside the configured allowlist is acknowledged as skipped and
+  does not schedule work.
+- A replayed Shopify delivery id returns a duplicate acknowledgment and does not
+  schedule a second agent turn.
+- A Sentry payload with a missing template field keeps the unresolved
+  placeholder visible and still includes the raw JSON payload for inspection.
+- Two source-control routes sharing one path are isolated by route-specific auth
+  and dispatch to the matching route only.
+
 Run the validation:
 
 ```bash

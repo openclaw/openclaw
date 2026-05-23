@@ -1368,6 +1368,251 @@ describe("createTaskFlowWebhookRequestHandler", () => {
     }
   });
 
+  it("rejects enterprise HMAC requests before dispatching", async () => {
+    const scheduleSessionTurn = vi.fn(async (params) => ({
+      id: "job-github",
+      pluginId: "webhooks",
+      sessionKey: params.sessionKey,
+      kind: "session-turn",
+    }));
+    const target: WebhookTarget = {
+      routeId: "github_pr_review",
+      path: "/plugins/webhooks/github-pr-review",
+      dispatchMode: "agent",
+      auth: {
+        mode: "hmac-sha256",
+        header: "x-hub-signature-256",
+        prefix: "sha256=",
+        secret: "shared-secret",
+      },
+      event: { header: "x-github-event" },
+      events: ["pull_request_review"],
+      idempotency: { header: "x-github-delivery", ttlMs: 60_000 },
+      prompt: "Review GitHub PR #{pull_request.number}",
+      sessionKey: "agent:main:main",
+      agent: { deliveryMode: "none", delayMs: 1 },
+    };
+    const handler = createHandlerWithTarget(target, {} as OpenClawConfig, {
+      scheduleSessionTurn,
+    });
+    const req = createRawJsonRequest({
+      path: target.path,
+      rawBody: JSON.stringify({ pull_request: { number: 42 } }),
+      headers: {
+        "x-github-event": "pull_request_review",
+        "x-github-delivery": "gh-delivery-bad",
+        "x-hub-signature-256": "sha256=bad",
+      },
+    });
+    const res = createMockServerResponse();
+
+    await handler(req, res);
+
+    expect(res.statusCode).toBe(401);
+    expect(res.body).toBe("unauthorized");
+    expect(scheduleSessionTurn).not.toHaveBeenCalled();
+  });
+
+  it("skips enterprise events outside the configured allowlist", async () => {
+    const scheduleSessionTurn = vi.fn(async (params) => ({
+      id: "job-jira",
+      pluginId: "webhooks",
+      sessionKey: params.sessionKey,
+      kind: "session-turn",
+    }));
+    const target: WebhookTarget = {
+      routeId: "jira_issue",
+      path: "/plugins/webhooks/jira-issue",
+      dispatchMode: "agent",
+      auth: { mode: "bearer", prefix: "Bearer", secret: "shared-secret" },
+      event: { payloadPath: "webhookEvent" },
+      events: ["jira:issue_created", "jira:issue_updated"],
+      idempotency: { payloadPath: "webhookEventId", ttlMs: 60_000 },
+      prompt: "Triage Jira {issue.key}",
+      sessionKey: "agent:main:main",
+      agent: { deliveryMode: "none", delayMs: 1 },
+    };
+    const handler = createHandlerWithTarget(target, {} as OpenClawConfig, {
+      scheduleSessionTurn,
+    });
+
+    const res = await dispatchJsonRequest({
+      handler,
+      path: target.path,
+      headers: { authorization: "Bearer shared-secret" },
+      body: {
+        webhookEvent: "jira:issue_deleted",
+        webhookEventId: "jira-event-skipped",
+        issue: { key: "ENG-9" },
+      },
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(parseJsonBody(res)).toEqual({
+      ok: true,
+      routeId: "jira_issue",
+      skipped: true,
+      reason: "event_not_allowed",
+      eventType: "jira:issue_deleted",
+    });
+    expect(scheduleSessionTurn).not.toHaveBeenCalled();
+  });
+
+  it("deduplicates replayed enterprise deliveries before scheduling again", async () => {
+    const scheduleSessionTurn = vi.fn(async (params) => ({
+      id: "job-shopify",
+      pluginId: "webhooks",
+      sessionKey: params.sessionKey,
+      kind: "session-turn",
+    }));
+    const target: WebhookTarget = {
+      routeId: "shopify_order",
+      path: "/plugins/webhooks/shopify-order",
+      dispatchMode: "agent",
+      auth: {
+        mode: "header",
+        header: "x-openclaw-shopify-token",
+        secret: "shared-secret",
+      },
+      event: { header: "x-shopify-topic" },
+      events: ["orders/create"],
+      idempotency: { header: "x-shopify-webhook-id", ttlMs: 60_000 },
+      prompt: "Review Shopify order {id}",
+      sessionKey: "agent:main:main",
+      agent: { deliveryMode: "none", delayMs: 1 },
+    };
+    const handler = createHandlerWithTarget(target, {} as OpenClawConfig, {
+      scheduleSessionTurn,
+    });
+    const request = {
+      handler,
+      path: target.path,
+      headers: {
+        "x-openclaw-shopify-token": "shared-secret",
+        "x-shopify-topic": "orders/create",
+        "x-shopify-webhook-id": "shopify-replay-1",
+      },
+      body: { id: 1001 },
+    };
+
+    const first = await dispatchJsonRequest(request);
+    const second = await dispatchJsonRequest(request);
+
+    expect(first.statusCode).toBe(202);
+    expect(second.statusCode).toBe(200);
+    expect(parseJsonBody(second)).toEqual({
+      ok: true,
+      routeId: "shopify_order",
+      duplicate: true,
+      idempotencyKey: "shopify-replay-1",
+    });
+    expect(scheduleSessionTurn).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps missing enterprise template fields inspectable while preserving raw payload", async () => {
+    const scheduleSessionTurn = vi.fn(async (params) => ({
+      id: "job-sentry",
+      pluginId: "webhooks",
+      sessionKey: params.sessionKey,
+      kind: "session-turn",
+    }));
+    const target: WebhookTarget = {
+      routeId: "sentry_issue",
+      path: "/plugins/webhooks/sentry-issue",
+      dispatchMode: "agent",
+      auth: {
+        mode: "header",
+        header: "x-openclaw-sentry-token",
+        secret: "shared-secret",
+      },
+      event: { header: "x-sentry-hook-resource" },
+      events: ["issue"],
+      idempotency: { payloadPath: "id", ttlMs: 60_000 },
+      prompt: "Investigate Sentry {project_slug}: {event.title}\nRaw:\n{__raw__}",
+      sessionKey: "agent:main:main",
+      agent: { deliveryMode: "none", delayMs: 1 },
+    };
+    const handler = createHandlerWithTarget(target, {} as OpenClawConfig, {
+      scheduleSessionTurn,
+    });
+
+    const res = await dispatchJsonRequest({
+      handler,
+      path: target.path,
+      headers: {
+        "x-openclaw-sentry-token": "shared-secret",
+        "x-sentry-hook-resource": "issue",
+      },
+      body: {
+        id: "sentry-missing-title",
+        project_slug: "api",
+        event: {},
+      },
+    });
+
+    expect(res.statusCode).toBe(202);
+    expect(scheduleSessionTurn).toHaveBeenCalledTimes(1);
+    const message = scheduleSessionTurn.mock.calls[0]?.[0].message ?? "";
+    expect(message).toContain("Investigate Sentry api: {event.title}");
+    expect(message).toContain('"id": "sentry-missing-title"');
+    expect(message).toContain('"project_slug": "api"');
+  });
+
+  it("isolates enterprise routes sharing a path by route-specific auth", async () => {
+    const scheduleSessionTurn = vi.fn(async (params) => ({
+      id: `job-${params.name}`,
+      pluginId: "webhooks",
+      sessionKey: params.sessionKey,
+      kind: "session-turn",
+    }));
+    const gitlab: WebhookTarget = {
+      routeId: "gitlab_merge_request",
+      path: "/plugins/webhooks/source-control",
+      dispatchMode: "agent",
+      auth: { mode: "header", header: "x-gitlab-token", secret: "gitlab-secret" },
+      event: { header: "x-gitlab-event" },
+      events: ["Merge Request Hook"],
+      prompt: "Review GitLab MR !{object_attributes.iid}",
+      sessionKey: "agent:main:main",
+      agent: { deliveryMode: "none", delayMs: 1, nameTemplate: "gitlab-{eventType}" },
+    };
+    const github: WebhookTarget = {
+      routeId: "github_pr_review",
+      path: "/plugins/webhooks/source-control",
+      dispatchMode: "agent",
+      auth: { mode: "bearer", prefix: "Bearer", secret: "github-secret" },
+      event: { header: "x-github-event" },
+      events: ["pull_request"],
+      prompt: "Review GitHub PR #{pull_request.number}",
+      sessionKey: "agent:main:main",
+      agent: { deliveryMode: "none", delayMs: 1, nameTemplate: "github-{eventType}" },
+    };
+    const handler = createTaskFlowWebhookRequestHandler({
+      cfg: {} as OpenClawConfig,
+      targetsByPath: new Map([[gitlab.path, [gitlab, github]]]),
+      scheduleSessionTurn,
+    });
+
+    const res = await dispatchJsonRequest({
+      handler,
+      path: gitlab.path,
+      headers: {
+        authorization: "Bearer github-secret",
+        "x-github-event": "pull_request",
+      },
+      body: {
+        pull_request: { number: 42 },
+      },
+    });
+
+    expect(res.statusCode).toBe(202);
+    expect(parseJsonBody(res).routeId).toBe("github_pr_review");
+    expect(scheduleSessionTurn).toHaveBeenCalledTimes(1);
+    expect(scheduleSessionTurn.mock.calls[0]?.[0].name).toBe("github-pull_request");
+    expect(scheduleSessionTurn.mock.calls[0]?.[0].message).toContain("Review GitHub PR #42");
+    expect(scheduleSessionTurn.mock.calls[0]?.[0].message).not.toContain("GitLab");
+  });
+
   it("uses the durable idempotency store before dispatching side effects", async () => {
     const registerIfAbsent = vi.fn(async () => false);
     const scheduleSessionTurn = vi.fn(async (params) => ({
