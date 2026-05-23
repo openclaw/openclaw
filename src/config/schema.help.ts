@@ -171,6 +171,8 @@ export const FIELD_HELP: Record<string, string> = {
     "Talk byte/session transport: webrtc, provider-websocket, gateway-relay, or managed-room.",
   "talk.realtime.brain":
     "Talk reasoning strategy: agent-consult for Gateway-mediated agent help, direct-tools for local tool calls, or none.",
+  "talk.realtime.consultRouting":
+    "Gateway relay fallback for final user transcripts when the realtime provider skips openclaw_agent_consult. provider-direct preserves provider replies; force-agent-consult routes through OpenClaw.",
   "talk.consultThinkingLevel":
     "Use this to override the thinking level for the regular agent run behind Talk realtime consults.",
   "talk.consultFastMode":
@@ -1410,6 +1412,8 @@ export const FIELD_HELP: Record<string, string> = {
     "Default provider request timeout in milliseconds for image_generate calls. Per-call timeoutMs overrides this.",
   "agents.defaults.videoGenerationModel.primary":
     "Optional video-generation model (provider/model) used by the shared video generation capability.",
+  "agents.defaults.videoGenerationModel.timeoutMs":
+    "Default provider request timeout in milliseconds for video_generate calls. Per-call timeoutMs overrides this, and this value overrides provider-authored defaults.",
   "agents.defaults.videoGenerationModel.fallbacks":
     "Ordered fallback video-generation models (provider/model).",
   "agents.defaults.musicGenerationModel.primary":
@@ -1914,7 +1918,7 @@ export const FIELD_HELP: Record<string, string> = {
   "messages.statusReactions.emojis":
     "Override default status reaction emojis. Keys: queued, thinking, compacting, tool, coding, web, deploy, build, concierge, done, error, stallSoft, stallHard. Telegram chooses the first supported fallback when a configured emoji is not available in the chat.",
   "messages.statusReactions.timing":
-    "Override default timing. Keys: debounceMs (700), stallSoftMs (25000), stallHardMs (60000), doneHoldMs (1500), errorHoldMs (2500).",
+    "Override default timing. Keys: debounceMs (700), stallSoftMs (10000), stallHardMs (30000), doneHoldMs (1500), errorHoldMs (2500).",
   "messages.inbound.debounceMs":
     "Debounce window (ms) for batching rapid inbound messages from the same sender (0 to disable).",
 };

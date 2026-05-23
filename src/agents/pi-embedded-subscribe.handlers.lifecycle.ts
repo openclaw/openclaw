@@ -1,5 +1,6 @@
 import { emitAgentEvent } from "../infra/agent-events.js";
 import { createInlineCodeState } from "../markdown/code-spans.js";
+import { hasAcceptedSessionSpawn } from "./accepted-session-spawn.js";
 import {
   buildApiErrorObservationFields,
   buildTextObservationFields,
@@ -48,6 +49,7 @@ export function handleAgentEnd(ctx: EmbeddedPiSubscribeContext): void | Promise<
   const hadDeterministicSideEffect =
     ctx.state.hadDeterministicSideEffect === true ||
     hasCommittedMessagingToolDeliveryEvidence(ctx.state) ||
+    hasAcceptedSessionSpawn(ctx.state.acceptedSessionSpawns) ||
     (ctx.state.successfulCronAdds ?? 0) > 0;
   const incompleteTerminalAssistant = isIncompleteTerminalAssistantTurn({
     hasAssistantVisibleText,
@@ -118,6 +120,10 @@ export function handleAgentEnd(ctx: EmbeddedPiSubscribeContext): void | Promise<
     const terminalMeta = {
       ...(ctx.state.terminalStopReason ? { stopReason: ctx.state.terminalStopReason } : {}),
       ...(ctx.state.yielded === true ? { yielded: true } : {}),
+      ...(ctx.state.timeoutPhase ? { timeoutPhase: ctx.state.timeoutPhase } : {}),
+      ...(typeof ctx.state.providerStarted === "boolean"
+        ? { providerStarted: ctx.state.providerStarted }
+        : {}),
     };
     if (isError) {
       emitAgentEvent({
@@ -144,11 +150,12 @@ export function handleAgentEnd(ctx: EmbeddedPiSubscribeContext): void | Promise<
       });
       return;
     }
+    const successPhase = ctx.params.terminalLifecyclePhase ?? "end";
     emitAgentEvent({
       runId: ctx.params.runId,
       stream: "lifecycle",
       data: {
-        phase: "end",
+        phase: successPhase,
         ...terminalMeta,
         ...(livenessState ? { livenessState } : {}),
         ...(replayInvalid ? { replayInvalid } : {}),
@@ -158,7 +165,7 @@ export function handleAgentEnd(ctx: EmbeddedPiSubscribeContext): void | Promise<
     void ctx.params.onAgentEvent?.({
       stream: "lifecycle",
       data: {
-        phase: "end",
+        phase: successPhase,
         ...terminalMeta,
         ...(livenessState ? { livenessState } : {}),
         ...(replayInvalid ? { replayInvalid } : {}),

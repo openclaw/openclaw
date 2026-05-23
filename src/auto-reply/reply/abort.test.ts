@@ -251,6 +251,9 @@ describe("abort detection", () => {
       "detén",
       "arrête",
       "停止",
+      "停下来",
+      "暂停",
+      "停下来！",
       "やめて",
       "止めて",
       "रुको",
@@ -287,6 +290,8 @@ describe("abort detection", () => {
     expect(isAbortRequestText("STOP")).toBe(true);
     expect(isAbortRequestText("stop action")).toBe(true);
     expect(isAbortRequestText("stop openclaw!!!")).toBe(true);
+    expect(isAbortRequestText("停下来")).toBe(true);
+    expect(isAbortRequestText("暂停")).toBe(true);
     expect(isAbortRequestText("やめて")).toBe(true);
     expect(isAbortRequestText("остановись")).toBe(true);
     expect(isAbortRequestText("halt")).toBe(true);

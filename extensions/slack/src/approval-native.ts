@@ -23,7 +23,6 @@ import { getSlackApprovalApprovers, isSlackApprovalAuthorizedSender } from "./ap
 import {
   isSlackAnyNativeApprovalClientEnabled,
   resolveSlackApprovalKind,
-  shouldDeliverSlackNativeApprovalRequest,
   shouldHandleSlackNativeApprovalRequest,
   type SlackApprovalKind,
   type SlackNativeApprovalRequest,
@@ -39,9 +38,7 @@ import { parseSlackTarget } from "./targets.js";
 type ApprovalRequest = SlackNativeApprovalRequest;
 type ApprovalKind = SlackApprovalKind;
 type SlackOriginTarget = { to: string; threadId?: string };
-type SlackDeliverySuppressionInput = {
-  cfg: Parameters<typeof shouldHandleSlackNativeApprovalRequest>[0]["cfg"];
-  approvalKind: ApprovalKind;
+type SlackSuppressionAccountInput = {
   target: { channel: string; accountId?: string | null };
   request: {
     request: {
@@ -50,6 +47,14 @@ type SlackDeliverySuppressionInput = {
     };
   };
 };
+type SlackForwardingSuppressionInput = Parameters<
+  NonNullable<
+    NonNullable<ChannelApprovalCapability["delivery"]>["shouldSuppressForwardingFallback"]
+  >
+>[0];
+
+const SLACK_DM_CHANNEL_ID_RE = /^D[A-Z0-9]{8,}$/i;
+const SLACK_USER_ID_RE = /^[UW][A-Z0-9]{8,}$/i;
 
 function extractSlackSessionKind(
   sessionKey?: string | null,
@@ -67,12 +72,20 @@ function normalizeComparableTarget(value: string): string {
 }
 
 function normalizeSlackThreadMatchKey(threadId?: string): string {
-  const trimmed = threadId?.trim();
-  if (!trimmed) {
-    return "";
+  return threadId?.trim() ?? "";
+}
+
+function resolveSlackTurnSourceDefaultKind(params: {
+  turnSourceTo: string;
+  sessionKind: "direct" | "channel" | "group" | null;
+}): "user" | "channel" {
+  // Slack app conversations arrive at Codex as the concrete D-channel plus the
+  // app thread root. That live channel target must not be reinterpreted as a
+  // user id just because the backing session is direct-message shaped.
+  if (SLACK_DM_CHANNEL_ID_RE.test(params.turnSourceTo)) {
+    return "channel";
   }
-  const leadingEpoch = trimmed.match(/^\d+/)?.[0];
-  return leadingEpoch ?? trimmed;
+  return params.sessionKind === "direct" ? "user" : "channel";
 }
 
 function resolveTurnSourceSlackOriginTarget(request: ApprovalRequest): SlackOriginTarget | null {
@@ -83,7 +96,7 @@ function resolveTurnSourceSlackOriginTarget(request: ApprovalRequest): SlackOrig
   }
   const sessionKind = extractSlackSessionKind(request.request.sessionKey ?? undefined);
   const parsed = parseSlackTarget(turnSourceTo, {
-    defaultKind: sessionKind === "direct" ? "user" : "channel",
+    defaultKind: resolveSlackTurnSourceDefaultKind({ turnSourceTo, sessionKind }),
   });
   if (!parsed) {
     return null;
@@ -133,8 +146,28 @@ function normalizeSlackOriginTarget(target: SlackOriginTarget): SlackOriginTarge
   };
 }
 
-function slackTargetsMatch(a: SlackOriginTarget, b: SlackOriginTarget): boolean {
+function parseComparableSlackTarget(target: SlackOriginTarget) {
+  return parseSlackTarget(target.to, { defaultKind: "channel" });
+}
+
+function isSlackDmChannelToUserRoutePair(a: SlackOriginTarget, b: SlackOriginTarget): boolean {
+  const left = parseComparableSlackTarget(a);
+  const right = parseComparableSlackTarget(b);
+  if (!left || !right) {
+    return false;
+  }
   return (
+    (left.kind === "channel" && SLACK_DM_CHANNEL_ID_RE.test(left.id) && right.kind === "user") ||
+    (right.kind === "channel" && SLACK_DM_CHANNEL_ID_RE.test(right.id) && left.kind === "user")
+  );
+}
+
+function slackTargetsMatch(a: SlackOriginTarget, b: SlackOriginTarget): boolean {
+  const threadKey = normalizeSlackThreadMatchKey(a.threadId);
+  if (threadKey !== normalizeSlackThreadMatchKey(b.threadId)) {
+    return false;
+  }
+  if (
     channelRouteTargetsMatchExact({
       left: {
         channel: "slack",
@@ -144,14 +177,17 @@ function slackTargetsMatch(a: SlackOriginTarget, b: SlackOriginTarget): boolean 
         channel: "slack",
         to: b.to,
       },
-    }) && normalizeSlackThreadMatchKey(a.threadId) === normalizeSlackThreadMatchKey(b.threadId)
-  );
+    })
+  ) {
+    return true;
+  }
+  return Boolean(threadKey && isSlackDmChannelToUserRoutePair(a, b));
 }
 
 function resolveSlackNativeSuppressionAccountId({
   target,
   request,
-}: SlackDeliverySuppressionInput): string | undefined {
+}: SlackSuppressionAccountInput): string | undefined {
   return (
     normalizeOptionalString(target.accountId) ??
     normalizeOptionalString(request.request.turnSourceAccountId)
@@ -159,7 +195,7 @@ function resolveSlackNativeSuppressionAccountId({
 }
 
 function shouldConsiderSlackNativeForwardingSuppression(
-  input: SlackDeliverySuppressionInput,
+  input: SlackSuppressionAccountInput & { approvalKind: ApprovalKind },
 ): boolean {
   const channel = normalizeMessageChannel(input.target.channel) ?? input.target.channel;
   if (channel !== "slack") {
@@ -170,6 +206,50 @@ function shouldConsiderSlackNativeForwardingSuppression(
   }
   const turnSourceChannel = normalizeMessageChannel(input.request.request.turnSourceChannel);
   return turnSourceChannel === "slack";
+}
+
+function resolveForwardingFallbackSlackTarget(
+  target: SlackForwardingSuppressionInput["target"],
+): SlackOriginTarget | null {
+  const to = normalizeOptionalString(target.to);
+  if (!to) {
+    return null;
+  }
+  const parsed = parseSlackTarget(to, {
+    defaultKind: SLACK_USER_ID_RE.test(to) ? "user" : "channel",
+  });
+  if (!parsed) {
+    return null;
+  }
+  return {
+    to: `${parsed.kind}:${parsed.id}`,
+    threadId: stringifyRouteThreadId(target.threadId),
+  };
+}
+
+function isSlackPluginForwardingFallbackHandledNatively(
+  input: SlackForwardingSuppressionInput,
+): boolean {
+  const forwardingTarget = resolveForwardingFallbackSlackTarget(input.target);
+  if (!forwardingTarget) {
+    return false;
+  }
+  const request = input.request;
+  const originTarget = resolveSlackOriginTarget({
+    cfg: input.cfg,
+    accountId: resolveSlackNativeSuppressionAccountId(input),
+    approvalKind: input.approvalKind,
+    request,
+  });
+  if (originTarget && slackTargetsMatch(forwardingTarget, originTarget)) {
+    return true;
+  }
+  return resolveSlackApproverDmTargets({
+    cfg: input.cfg,
+    accountId: resolveSlackNativeSuppressionAccountId(input),
+    approvalKind: input.approvalKind,
+    request,
+  }).some((target) => slackTargetsMatch(forwardingTarget, target));
 }
 
 const resolveSlackOriginTarget = createChannelNativeOriginTargetResolver({
@@ -197,6 +277,7 @@ function resolveSlackApproverDmTargets(params: {
     !shouldHandleSlackNativeApprovalRequest({
       cfg: params.cfg,
       accountId: params.accountId,
+      approvalKind: params.approvalKind,
       request: params.request,
     })
   ) {
@@ -245,7 +326,7 @@ const baseSlackApprovalCapability = createApproverRestrictedNativeApprovalCapabi
         accountId,
       }),
     shouldHandle: ({ cfg, accountId, request }) =>
-      shouldDeliverSlackNativeApprovalRequest({
+      shouldHandleSlackNativeApprovalRequest({
         cfg,
         accountId,
         approvalKind: resolveSlackApprovalKind(request),
@@ -264,16 +345,19 @@ export const slackApprovalCapability: ChannelApprovalCapability = {
   delivery: {
     ...baseSlackApprovalCapability.delivery,
     shouldSuppressForwardingFallback: (input) => {
-      const slackInput = input as SlackDeliverySuppressionInput;
-      if (!shouldConsiderSlackNativeForwardingSuppression(slackInput)) {
+      if (!shouldConsiderSlackNativeForwardingSuppression(input)) {
         return false;
       }
-      return shouldDeliverSlackNativeApprovalRequest({
-        cfg: slackInput.cfg,
-        accountId: resolveSlackNativeSuppressionAccountId(slackInput),
-        approvalKind: slackInput.approvalKind,
-        request: slackInput.request as ApprovalRequest,
+      const canHandleNative = shouldHandleSlackNativeApprovalRequest({
+        cfg: input.cfg,
+        accountId: resolveSlackNativeSuppressionAccountId(input),
+        approvalKind: input.approvalKind,
+        request: input.request,
       });
+      if (!canHandleNative || input.approvalKind !== "plugin") {
+        return canHandleNative;
+      }
+      return isSlackPluginForwardingFallbackHandledNatively(input);
     },
   },
   native: baseSlackNativeAdapter

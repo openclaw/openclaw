@@ -3,7 +3,11 @@ import { createAgentAttemptLifecycleCallbacks } from "./attempt-callbacks.js";
 
 describe("createAgentAttemptLifecycleCallbacks", () => {
   it("tracks user-message persistence without closing over the agent command scope", () => {
-    const state = { currentTurnUserMessagePersisted: false, lifecycleEnded: false };
+    const state = {
+      currentTurnUserMessagePersisted: false,
+      lifecycleFinishing: false,
+      lifecycleEnded: false,
+    };
     const callbacks = createAgentAttemptLifecycleCallbacks(state);
 
     callbacks.onUserMessagePersisted?.({
@@ -17,7 +21,11 @@ describe("createAgentAttemptLifecycleCallbacks", () => {
   });
 
   it("tracks terminal lifecycle phases", () => {
-    const state = { currentTurnUserMessagePersisted: false, lifecycleEnded: false };
+    const state = {
+      currentTurnUserMessagePersisted: false,
+      lifecycleFinishing: false,
+      lifecycleEnded: false,
+    };
     const callbacks = createAgentAttemptLifecycleCallbacks(state);
 
     callbacks.onAgentEvent({ stream: "lifecycle", data: { phase: "start" } });

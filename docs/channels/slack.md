@@ -1048,19 +1048,46 @@ When a `message` tool call runs inside a Slack thread and targets the same chann
 
 ## Ack reactions
 
-`ackReaction` sends an acknowledgement emoji while OpenClaw is processing an inbound message.
+`ackReaction` sends an acknowledgement emoji while OpenClaw is processing an inbound message. `ackReactionScope` decides _when_ that emoji is actually sent.
+
+### Emoji (`ackReaction`)
 
 Resolution order:
 
 - `channels.slack.accounts.<accountId>.ackReaction`
 - `channels.slack.ackReaction`
 - `messages.ackReaction`
-- agent identity emoji fallback (`agents.list[].identity.emoji`, else "👀")
+- agent identity emoji fallback (`agents.list[].identity.emoji`, else `"eyes"` / 👀)
 
 Notes:
 
 - Slack expects shortcodes (for example `"eyes"`).
 - Use `""` to disable the reaction for the Slack account or globally.
+
+### Scope (`messages.ackReactionScope`)
+
+The Slack provider reads scope from `messages.ackReactionScope` (default `"group-mentions"`). There is no Slack-account or Slack-channel-level override today; the value is global to the gateway.
+
+Values:
+
+- `"all"`: react in DMs and groups.
+- `"direct"`: react in DMs only.
+- `"group-all"`: react on every group message (no DMs).
+- `"group-mentions"` (default): react in groups, but only when the bot is mentioned (or in group mentionables that opted in). **DMs are excluded.**
+- `"off"` / `"none"`: never react.
+
+<Note>
+The default scope (`"group-mentions"`) does not fire ack reactions in direct messages. To see the configured `ackReaction` (for example `"eyes"`) on inbound Slack DMs, set `messages.ackReactionScope` to `"direct"` or `"all"`. `messages.ackReactionScope` is read at Slack provider startup, so a gateway restart is needed for the change to take effect.
+</Note>
+
+```json5
+{
+  messages: {
+    ackReaction: "eyes",
+    ackReactionScope: "all", // react in DMs and groups
+  },
+}
+```
 
 ## Text streaming
 
@@ -1293,8 +1320,9 @@ plugin-owned storage without seeing the complete form payload.
 Slack can act as a native approval client with interactive buttons and interactions, instead of falling back to the Web UI or terminal.
 
 - Exec and plugin approvals can render as Slack-native Block Kit prompts.
-- `channels.slack.execApprovals.*` remains the native approval client enablement and DM/channel routing config.
+- `channels.slack.execApprovals.*` remains the native exec approval client enablement and DM/channel routing config.
 - Exec approval DMs use `channels.slack.execApprovals.approvers` or `commands.ownerAllowFrom`.
+- Plugin approvals use Slack-native buttons when Slack is enabled as a native approval client for the originating session, or when `approvals.plugin` routes to the originating Slack session or a Slack target.
 - Plugin approval DMs use Slack plugin approvers from `channels.slack.allowFrom`, named-account `allowFrom`, or the account default route.
 - Approver authorization is still enforced: exec-only approvers cannot approve plugin requests unless they are also plugin approvers.
 
@@ -1311,8 +1339,12 @@ Config path:
 - `agentFilter`, `sessionFilter`
 
 Slack auto-enables native exec approvals when `enabled` is unset or `"auto"` and at least one
-approver resolves. Set `enabled: false` to disable Slack as a native approval client explicitly.
-Set `enabled: true` to force native approvals on when approvers resolve.
+exec approver resolves. Slack can also handle native plugin approvals through this native-client
+path when Slack plugin approvers resolve and the request matches the native-client filters. Set
+`enabled: false` to disable Slack as a native approval client explicitly. Set `enabled: true` to
+force native approvals on when approvers resolve. Disabling Slack exec approvals does not disable
+native Slack plugin approval delivery that is enabled through `approvals.plugin`; plugin approval
+delivery uses Slack plugin approvers instead.
 
 Default behavior with no explicit Slack exec approval config:
 
