@@ -277,7 +277,7 @@ type PrivatePluginSdkSubpathOwner = {
   allowPrivateQaCli: boolean;
   subpaths: readonly string[];
 };
-const PRIVATE_PLUGIN_SDK_SUBPATH_OWNERS = [
+const PRIVATE_PLUGIN_SDK_SUBPATH_OWNERS: readonly PrivatePluginSdkSubpathOwner[] = [
   {
     bundledPluginId: "codex",
     officialInstalledPackageName: "@openclaw/codex",
@@ -292,7 +292,7 @@ const PRIVATE_PLUGIN_SDK_SUBPATH_OWNERS = [
     allowPrivateQaCli: false,
     subpaths: [OLLAMA_CONFIGURED_LOCAL_ORIGIN_RUNTIME_PLUGIN_SDK_SUBPATH],
   },
-] as const satisfies readonly PrivatePluginSdkSubpathOwner[];
+];
 const PLUGIN_SDK_SOURCE_CANDIDATE_EXTENSIONS = [
   ".ts",
   ".mts",
