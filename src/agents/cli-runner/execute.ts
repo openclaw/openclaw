@@ -472,7 +472,6 @@ export async function executePreparedCliRun(
           claudeSkillsPluginCleanupOwned = true;
           const ownedPreparedBackendCleanup = context.preparedBackend.cleanup;
           context.preparedBackend.cleanup = undefined;
-          const liveDiagnosticState = { lastEmittedAt: 0 };
           const liveResult = await runClaudeLiveSessionTurn({
             context,
             args,
@@ -482,11 +481,6 @@ export async function executePreparedCliRun(
             noOutputTimeoutMs,
             getProcessSupervisor: executeDeps.getProcessSupervisor,
             onAssistantDelta: ({ text, delta }) => {
-              emitCliDiagnosticProgress(
-                { runId: params.runId, sessionId: params.sessionId, sessionKey: params.sessionKey },
-                "cli:live:delta",
-                liveDiagnosticState,
-              );
               emitAgentEvent({
                 runId: params.runId,
                 stream: "assistant",
