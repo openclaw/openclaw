@@ -283,6 +283,13 @@ export async function settleInboundWork() {
   await new Promise((resolve) => setImmediate(resolve));
 }
 
+export function resetWebInboundDedupeForTests() {
+  if (!resetWebInboundDedupe) {
+    throw new Error("resetWebInboundDedupe not initialized");
+  }
+  resetWebInboundDedupe();
+}
+
 export async function waitForMessageCalls(onMessage: ReturnType<typeof vi.fn>, count: number) {
   await vi.waitFor(
     () => {

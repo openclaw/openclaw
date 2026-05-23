@@ -787,6 +787,9 @@ export async function attachWebInboxToSocket(
           );
           return;
         }
+        if (accepted.kind === "pending" && accepted.record.attempts === 0) {
+          return;
+        }
       } catch (err) {
         durableId = undefined;
         const error = formatError(err);

@@ -12,6 +12,8 @@ import {
   getAuthDir,
   getSock,
   installWebMonitorInboxUnitTestHooks,
+  resetWebInboundDedupeForTests,
+  settleInboundWork,
   startInboxMonitor,
   waitForMessageCalls,
 } from "./monitor-inbox.test-harness.js";
@@ -258,6 +260,37 @@ describe("web monitor inbox", () => {
       ]);
     });
 
+    await listener.close();
+  });
+
+  it("does not dispatch live duplicates that already have pending durable delivery", async () => {
+    let finishMessage: (() => void) | undefined;
+    const handlerGate = new Promise<void>((resolve) => {
+      finishMessage = resolve;
+    });
+    const onMessage = vi.fn(async () => {
+      await handlerGate;
+    });
+
+    const { listener, sock } = await startInboxMonitor(onMessage as InboxOnMessage);
+    const messageId = nextMessageId("durable-pending");
+    const upsert = buildNotifyMessageUpsert({
+      id: messageId,
+      remoteJid: "999@s.whatsapp.net",
+      text: "ping",
+      timestamp: 1_700_000_000,
+      pushName: "Tester",
+    });
+
+    sock.ev.emit("messages.upsert", upsert);
+    await waitForMessageCalls(onMessage, 1);
+
+    resetWebInboundDedupeForTests();
+    sock.ev.emit("messages.upsert", upsert);
+    await settleInboundWork();
+    expect(onMessage).toHaveBeenCalledTimes(1);
+
+    finishMessage?.();
     await listener.close();
   });
 
