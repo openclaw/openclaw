@@ -92,9 +92,9 @@ describe("daily session reset scheduler", () => {
     expect(performReset).not.toHaveBeenCalled();
   });
 
-  it("does not use idle expiry to reset daily sessions before the daily boundary", async () => {
-    const sessionStartedAt = new Date(2026, 4, 18, 6, 0, 0, 0).getTime();
-    const lastInteractionAt = new Date(2026, 4, 19, 6, 30, 0, 0).getTime();
+  it("does not use idle expiry to reset daily sessions before the next daily boundary", async () => {
+    const sessionStartedAt = new Date(2026, 4, 18, 13, 0, 0, 0).getTime();
+    const lastInteractionAt = new Date(2026, 4, 18, 13, 30, 0, 0).getTime();
     const beforeNoonReset = new Date(2026, 4, 19, 8, 0, 0, 0).getTime();
     const sessionKey = "agent:main:telegram:direct:user-1";
     const { cfg } = await makeStore({
@@ -123,6 +123,33 @@ describe("daily session reset scheduler", () => {
 
     expect(result).toEqual({ checked: 1, reset: 0, errors: 0 });
     expect(performReset).not.toHaveBeenCalled();
+  });
+
+  it("uses session start, not post-boundary metadata writes, for scheduled daily staleness", async () => {
+    const beforeReset = new Date(2026, 4, 18, 23, 0, 0, 0).getTime();
+    const afterReset = new Date(2026, 4, 19, 8, 0, 0, 0).getTime();
+    const sessionKey = "agent:main:telegram:direct:user-1";
+    const { cfg } = await makeStore({
+      [sessionKey]: {
+        sessionId: "old-session",
+        updatedAt: afterReset,
+        sessionStartedAt: beforeReset,
+        lastInteractionAt: afterReset,
+      },
+    });
+    const performReset = vi.fn(async () => ({ ok: true }));
+
+    const result = await resetStaleDailySessions({
+      cfg,
+      nowMs: afterReset,
+      performReset,
+    });
+
+    expect(result).toEqual({ checked: 1, reset: 1, errors: 0 });
+    expect(performReset).toHaveBeenCalledWith(sessionKey, {
+      sessionId: "old-session",
+      updatedAt: afterReset,
+    });
   });
 
   it("evaluates duplicate session rows as one freshest alias group", async () => {
