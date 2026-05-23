@@ -311,16 +311,16 @@ function resolveCronSourceDeliveryPlan(params: {
       reason: "cron_none",
       target,
       messageToolEnabled: true,
-      messageToolForced: true,
+      messageToolForced: false,
       directFallback: false,
     });
   }
   return createSourceDeliveryPlan({
-    owner: params.resolvedDelivery.ok ? "message_tool_then_direct_fallback" : "direct_fallback",
+    owner: "direct_fallback",
     reason: "cron_announce",
     target,
     messageToolEnabled: true,
-    messageToolForced: true,
+    messageToolForced: false,
     directFallback: true,
     skipFallbackWhenMessageToolSentToTarget: params.resolvedDelivery.ok,
   });
