@@ -1,0 +1,42 @@
+{
+  "name": "@slimelab/openclaw-evennia",
+  "version": "0.1.0",
+  "description": "OpenClaw channel bridge for Evennia MUD characters.",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/slimelab-ai/openclaw-evennia"
+  },
+  "type": "module",
+  "dependencies": {},
+  "devDependencies": {
+    "openclaw": "workspace:*"
+  },
+  "peerDependencies": {
+    "openclaw": ">=2026.5.20"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.js"
+    ],
+    "setupEntry": "./setup-entry.js",
+    "channel": {
+      "id": "evennia",
+      "label": "Evennia",
+      "selectionLabel": "Evennia (MUD bridge)",
+      "detailLabel": "Evennia WebSocket",
+      "docsPath": "/channels/evennia",
+      "docsLabel": "evennia",
+      "blurb": "experimental MUD bridge for agent characters.",
+      "systemImage": "sparkles.rectangle.stack",
+      "markdownCapable": false
+    },
+    "install": {
+      "npmSpec": "@slimelab/openclaw-evennia",
+      "defaultChoice": "npm",
+      "minHostVersion": ">=2026.5.20"
+    },
+    "compat": {
+      "pluginApi": ">=2026.5.20"
+    }
+  }
+}

@@ -1,0 +1,50 @@
+{
+  "id": "evennia",
+  "kind": "channel",
+  "channels": ["evennia"],
+  "name": "Evennia",
+  "description": "OpenClaw channel bridge for Evennia MUD characters.",
+  "entry": "./index.js",
+  "setupEntry": "./setup-entry.js",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  },
+  "channelConfigs": {
+    "evennia": {
+      "schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "enabled": { "type": "boolean" },
+          "baseUrl": { "type": "string" },
+          "websocketUrl": { "type": "string" },
+          "accounts": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "enabled": { "type": "boolean" },
+                "agentId": { "type": "string" },
+                "username": { "type": "string" },
+                "passwordFile": { "type": "string" },
+                "character": { "type": "string" },
+                "triggerName": { "type": "string" },
+                "startRoom": { "type": "string" },
+                "allowFrom": { "type": "array", "items": { "type": "string" } },
+                "allowedRooms": { "type": "array", "items": { "type": "string" } },
+                "respondToAmbientMentions": { "type": "boolean" }
+              },
+              "required": ["username", "passwordFile"]
+            }
+          }
+        }
+      },
+      "uiHints": {
+        "accounts.*.passwordFile": { "label": "Password file", "sensitive": true }
+      }
+    }
+  }
+}
