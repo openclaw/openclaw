@@ -2,6 +2,28 @@ import { extractAssistantTextForPhase } from "../../shared/chat-message-content.
 import { sanitizeAssistantVisibleTextWithProfile } from "../../shared/text/assistant-visible-text.js";
 import { sanitizeUserFacingText } from "../embedded-agent-helpers/sanitize-user-facing-text.js";
 
+const TRANSCRIPT_ONLY_OPENCLAW_MODELS = new Set(["delivery-mirror", "gateway-injected"]);
+
+/**
+ * Filter out OpenClaw-internal delivery-mirror and gateway-injected assistant messages.
+ * These are transcript-only entries used for delivery tracking; they duplicate real
+ * assistant turns and must not be surfaced in sessions_history results.
+ */
+export function stripTranscriptOnlyMessages(messages: unknown[]): unknown[] {
+  return messages.filter((msg) => {
+    if (!msg || typeof msg !== "object") {
+      return true;
+    }
+    const entry = msg as Record<string, unknown>;
+    if (entry.role !== "assistant") {
+      return true;
+    }
+    const provider = typeof entry.provider === "string" ? entry.provider : "";
+    const model = typeof entry.model === "string" ? entry.model : "";
+    return !(provider === "openclaw" && TRANSCRIPT_ONLY_OPENCLAW_MODELS.has(model));
+  });
+}
+
 export function stripToolMessages(messages: unknown[]): unknown[] {
   return messages.filter((msg) => {
     if (!msg || typeof msg !== "object") {

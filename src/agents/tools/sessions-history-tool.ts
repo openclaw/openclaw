@@ -22,6 +22,7 @@ import {
   resolveVisibleSessionReference,
   stripToolMessages,
 } from "./sessions-helpers.js";
+import { stripTranscriptOnlyMessages } from "./chat-history-text.js";
 
 const SessionsHistoryToolSchema = Type.Object({
   sessionKey: Type.String(),
@@ -257,7 +258,11 @@ export function createSessionsHistoryTool(opts?: {
         params: { sessionKey: resolvedKey, limit },
       });
       const rawMessages = Array.isArray(result?.messages) ? result.messages : [];
-      const selectedMessages = includeTools ? rawMessages : stripToolMessages(rawMessages);
+      // Always strip delivery-mirror and gateway-injected messages regardless of includeTools.
+      // These are OpenClaw-internal transcript entries that duplicate real assistant turns;
+      // returning them causes double messages in the dashboard and tool callers (#85669).
+      const filteredMessages = stripTranscriptOnlyMessages(rawMessages);
+      const selectedMessages = includeTools ? filteredMessages : stripToolMessages(filteredMessages);
       const sanitizedMessages = selectedMessages.map((message) => sanitizeHistoryMessage(message));
       const contentTruncated = sanitizedMessages.some((entry) => entry.truncated);
       const contentRedacted = sanitizedMessages.some((entry) => entry.redacted);

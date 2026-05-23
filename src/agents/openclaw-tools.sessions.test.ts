@@ -619,6 +619,46 @@ describe("sessions tools", () => {
     expect(withToolsDetails.messages).toHaveLength(2);
   });
 
+  it("sessions_history filters delivery-mirror and gateway-injected messages unconditionally", async () => {
+    callGatewayMock.mockImplementation(async (opts: unknown) => {
+      const request = opts as { method?: string };
+      if (request.method === "chat.history") {
+        return {
+          messages: [
+            { role: "user", content: [{ type: "text", text: "hello" }] },
+            { role: "assistant", provider: "openai", model: "gpt-4o", content: [{ type: "text", text: "hi" }] },
+            { role: "assistant", provider: "openclaw", model: "delivery-mirror", content: [{ type: "text", text: "hi" }] },
+            { role: "assistant", provider: "openclaw", model: "gateway-injected", content: [{ type: "text", text: "injected" }] },
+          ],
+        };
+      }
+      return {};
+    });
+
+    const tool = createOpenClawTools().find((candidate) => candidate.name === "sessions_history");
+    expect(tool).toBeDefined();
+    if (!tool) {
+      throw new Error("missing sessions_history tool");
+    }
+
+    // Default (includeTools=false): delivery-mirror and gateway-injected must be absent
+    const result = await tool.execute("call-dm-default", { sessionKey: "main" });
+    const details = result.details as { messages?: Array<Record<string, unknown>> };
+    const models = details.messages?.map((m) => m.model).filter(Boolean);
+    expect(models).not.toContain("delivery-mirror");
+    expect(models).not.toContain("gateway-injected");
+    // real assistant message must be present
+    expect(details.messages?.some((m) => m.role === "assistant" && m.provider !== "openclaw")).toBe(true);
+
+    // includeTools=true: delivery-mirror and gateway-injected must still be absent
+    const withTools = await tool.execute("call-dm-tools", { sessionKey: "main", includeTools: true });
+    const withToolsDetails = withTools.details as { messages?: Array<Record<string, unknown>> };
+    const modelsWithTools = withToolsDetails.messages?.map((m) => m.model).filter(Boolean);
+    expect(modelsWithTools).not.toContain("delivery-mirror");
+    expect(modelsWithTools).not.toContain("gateway-injected");
+    expect(withToolsDetails.messages).toHaveLength(2); // user + real assistant
+  });
+
   it("sessions_history caps oversized payloads and strips heavy fields", async () => {
     const oversized = Array.from({ length: 80 }, (_, idx) => ({
       role: "assistant",
