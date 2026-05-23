@@ -127,6 +127,41 @@ export function runClaworksDoctor(runtime: ClaworksRuntime): DoctorCheck[] {
     });
   }
 
+  // ── OpenClaw 桥接对齐（LLM / 通知 / IM）──────────────────────────────────
+  const modelRouter = runtime.config.model_router ?? {};
+  const hasLlmRoute = Boolean(
+    modelRouter.chat?.trim() ||
+    modelRouter.complete?.trim() ||
+    modelRouter.fast?.trim() ||
+    modelRouter.default?.trim(),
+  );
+  checks.push({
+    id: "openclaw_bridge_llm",
+    status: hasLlmRoute ? "ok" : "warn",
+    message: hasLlmRoute
+      ? "model_router configured for OpenClaw LLM bridge"
+      : "No model_router — Playbook llm/subagent steps need agents.defaults.model + bridge at runtime",
+  });
+
+  const notifyTargets = runtime.config.notify?.targets ?? [];
+  checks.push({
+    id: "openclaw_bridge_notify",
+    status: notifyTargets.length > 0 ? "ok" : "warn",
+    message:
+      notifyTargets.length > 0
+        ? `Notify targets: ${notifyTargets.map((t) => `${t.channel}:${t.to}`).join(", ")}`
+        : "notify.targets empty — run claworks doctor --fix to derive from channels.feishu.allowFrom or set notify.targets",
+  });
+
+  const imAuto = runtime.config.im_bridge?.auto_on_message_received === true;
+  checks.push({
+    id: "openclaw_bridge_im",
+    status: imAuto ? "ok" : "warn",
+    message: imAuto
+      ? "IM auto-bridge enabled (message_received → classify_im)"
+      : "im_bridge.auto_on_message_received=false — users must POST /v1/bridge/im or enable auto bridge",
+  });
+
   // ── 生产就绪安全检查 ─────────────────────────────────────────────────────
   const isProduction = isClaworksProductionMode(runtime.config);
 

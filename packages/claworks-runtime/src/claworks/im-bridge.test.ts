@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { bridgeImMessage } from "./im-bridge.js";
+import { bridgeImMessage, normalizeImBridgeInput } from "./im-bridge.js";
 import type { ClaworksRuntime } from "./runtime-types.js";
 
 function mockRuntime(overrides?: {
@@ -30,6 +30,19 @@ function mockRuntime(overrides?: {
 }
 
 describe("bridgeImMessage", () => {
+  it("normalizes legacy snake_case IM payload", () => {
+    const normalized = normalizeImBridgeInput({
+      channel_id: "feishu",
+      user_id: "sales-001",
+      message: "quote please",
+      tenant_id: "acme",
+    } as never);
+    expect(normalized.channel).toBe("feishu");
+    expect(normalized.userId).toBe("sales-001");
+    expect(normalized.text).toBe("quote please");
+    expect(normalized.extra).toEqual({ tenant_id: "acme" });
+  });
+
   it("denies when RBAC check fails", async () => {
     const runtime = mockRuntime({ rbacAllowed: false });
     const result = await bridgeImMessage(runtime, {

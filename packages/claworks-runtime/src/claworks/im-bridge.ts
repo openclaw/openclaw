@@ -32,6 +32,31 @@ export type ImBridgeInput = {
   extra?: Record<string, unknown>;
 };
 
+/** Accept REST/legacy snake_case aliases before routing. */
+export function normalizeImBridgeInput(
+  input: ImBridgeInput & Record<string, unknown>,
+): ImBridgeInput {
+  const channel = String(input.channel ?? input.channel_id ?? "").trim();
+  const userId = String(input.userId ?? input.user_id ?? "").trim();
+  const text = String(input.text ?? input.message ?? "").trim();
+  const messageId = String(
+    input.messageId ??
+      input.message_id ??
+      `msg-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+  );
+  const groupRaw = input.groupId ?? input.group_id;
+  const extra =
+    input.extra ?? (input.tenant_id != null ? { tenant_id: input.tenant_id } : undefined);
+  return {
+    channel,
+    messageId,
+    userId: userId || "anonymous",
+    text,
+    groupId: groupRaw != null ? String(groupRaw) : undefined,
+    extra: extra as Record<string, unknown> | undefined,
+  };
+}
+
 export type ImBridgeResult =
   | { action: "denied"; reason: string }
   | { action: "observe_only" }
@@ -41,11 +66,12 @@ export type ImBridgeResult =
 
 export async function bridgeImMessage(
   runtime: ClaworksRuntime,
-  input: ImBridgeInput,
+  input: ImBridgeInput & Record<string, unknown>,
 ): Promise<ImBridgeResult> {
+  const normalized = normalizeImBridgeInput(input);
   const source = "im";
   const eventType = "im.message.received";
-  const subjectId = `${input.channel}:${input.userId}`;
+  const subjectId = `${normalized.channel}:${normalized.userId}`;
   const decision = runtime.ingress.decide(source, eventType, subjectId);
 
   const rbacAction = decision.action === "intent_route" ? "playbook.trigger" : "event.publish";
@@ -59,7 +85,7 @@ export async function bridgeImMessage(
     resource: rbacResource,
     subjectType: "channel_user",
     subjectId,
-    context: { channel: input.channel },
+    context: { channel: normalized.channel },
   });
 
   if (!rbacResult.allowed) {
@@ -75,13 +101,13 @@ export async function bridgeImMessage(
   }
 
   const payload: Record<string, unknown> = {
-    _im_channel: input.channel,
-    _im_message_id: input.messageId,
-    _im_user_id: input.userId,
-    _im_group_id: input.groupId,
-    _im_message: input.text,
+    _im_channel: normalized.channel,
+    _im_message_id: normalized.messageId,
+    _im_user_id: normalized.userId,
+    _im_group_id: normalized.groupId,
+    _im_message: normalized.text,
     _ingress_decision: decision.action,
-    ...input.extra,
+    ...normalized.extra,
   };
 
   const result = await applyIngressPublish(runtime, {
@@ -90,22 +116,22 @@ export async function bridgeImMessage(
     subjectId,
     payload,
     publishSource: "im-bridge",
-    idempotencyKey: `im:${input.channel}:${input.messageId}`,
+    idempotencyKey: `im:${normalized.channel}:${normalized.messageId}`,
     subjectType: "channel_user",
   });
 
   // Publish user.first_interaction for welcome_new_user Playbook when the user
   // profile store sees this user for the very first time.
-  if (result.action !== "denied" && runtime.userProfileStore) {
-    const profile = runtime.userProfileStore.get(input.userId);
+  if (result.action !== "denied" && runtime.userProfileStore && normalized.userId !== "anonymous") {
+    const profile = runtime.userProfileStore.get(normalized.userId);
     const isFirstInteraction = !profile || profile.interactionCount === 0;
     if (isFirstInteraction) {
       await runtime.kernel
         .publish("user.first_interaction", "im-bridge", {
-          channel: input.channel,
-          user_id: input.userId,
-          group_id: input.groupId,
-          first_message: input.text,
+          channel: normalized.channel,
+          user_id: normalized.userId,
+          group_id: normalized.groupId,
+          first_message: normalized.text,
         })
         .catch(() => {});
     }

@@ -79,7 +79,7 @@ describe("MCP tools", () => {
       provider: string;
       vector: boolean;
     };
-    expect(status.provider).toBe("bm25-memory");
+    expect(status.provider).toBe("stub");
     expect(status.vector).toBe(false);
     close();
   });

@@ -52,7 +52,7 @@ function loadProductPluginAllow() {
 }
 
 function defaultInstalledPacks() {
-  const base = ["base", "process-industry"];
+  const base = ["base", "enterprise-foundation", "process-industry"];
   const profile = process.env.CLAWORKS_INIT_PROFILE?.trim() || "enterprise";
   if (profile === "core") {
     return base;
@@ -177,6 +177,9 @@ const config = {
           notify: {
             default_channel: "feishu",
             targets: [],
+          },
+          im_bridge: {
+            auto_on_message_received: process.env.CLAWORKS_INIT_PROFILE?.trim() !== "minimal",
           },
           connectors: buildConnectorsConfig(root),
         },

@@ -1,4 +1,10 @@
-export { createPackLoader, resolvePackDir, validatePackDependencies } from "./loader.js";
+export {
+  createPackLoader,
+  resolvePackDir,
+  resolveInstalledPackIds,
+  readPackManifestFromDir,
+  validatePackDependencies,
+} from "./loader.js";
 export {
   installPackFromNexus,
   listNexusPackages,

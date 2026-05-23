@@ -51,22 +51,16 @@ export function mergePackConfig(
   };
 }
 
-export async function reloadClaworksPacks(runtime: ClaworksRuntime): Promise<void> {
-  const persisted = await loadPersistedInstalled();
-  const packConfig = mergePackConfig(runtime.config.packs, persisted);
-  runtime.config.packs = packConfig;
-  const packs = await runtime.packLoader.loadInstalled(packConfig, runtime.logger);
-  runtime.loadedPacks.splice(0, runtime.loadedPacks.length, ...packs);
-  await runtime.ontology.loadFromPacks(packs);
-  await runtime.playbookEngine.loadFromPacks(packs);
-  runtime.kernel.matcher.load(runtime.playbookEngine.list());
-  runtime.scheduler.reload(runtime.playbookEngine.list());
+export async function applyPackContributions(
+  runtime: ClaworksRuntime,
+  packs: LoadedPack[],
+  opts?: { clearRegistries?: boolean },
+): Promise<void> {
+  if (opts?.clearRegistries) {
+    runtime.actionRegistry.clear();
+    runtime.intentRegistry.clear();
+  }
 
-  // 清空旧注册，避免热重载时重复注册
-  runtime.actionRegistry.clear();
-  runtime.intentRegistry.clear();
-
-  // 注册文件系统加载的 scaffolds（llm.scaffold 能力依赖此注册）
   for (const pack of packs) {
     if (pack.scaffolds?.length && runtime.scaffoldEngine) {
       for (const scaffold of pack.scaffolds) {
@@ -78,89 +72,101 @@ export async function reloadClaworksPacks(runtime: ClaworksRuntime): Promise<voi
     }
   }
 
-  // 调用 Pack JS factory，注册 Pack 提供的能力 / action handlers / intent mappings / scaffolds
   for (const pack of packs) {
-    if (pack.factory) {
-      try {
-        const contribution = await pack.factory(runtime);
-        if (contribution.capabilities?.length) {
-          runtime.capabilities.registerAll(contribution.capabilities);
-          runtime.logger?.(
-            `[claworks:packs] registered ${contribution.capabilities.length} capabilities from pack '${pack.manifest.id}'`,
-          );
-        }
-        if (contribution.actionHandlers && Object.keys(contribution.actionHandlers).length > 0) {
-          runtime.actionRegistry.registerAll(pack.manifest.id, contribution.actionHandlers);
-          runtime.logger?.(
-            `[claworks:packs] registered ${Object.keys(contribution.actionHandlers).length} action handlers from pack '${pack.manifest.id}'`,
-          );
-        }
-        if (contribution.intentMappings?.length) {
-          runtime.intentRegistry.registerAll(pack.manifest.id, contribution.intentMappings);
-          runtime.logger?.(
-            `[claworks:packs] registered ${contribution.intentMappings.length} intent mappings from pack '${pack.manifest.id}'`,
-          );
-        }
-        if (contribution.scripts?.length) {
-          runtime.scriptLibrary?.registerFromPack(pack.manifest.id, contribution.scripts);
-          runtime.logger?.(
-            `[claworks:packs] registered ${contribution.scripts.length} scripts from pack '${pack.manifest.id}'`,
-          );
-        }
-        if (contribution.scaffolds?.length && runtime.scaffoldEngine) {
-          for (const scaffold of contribution.scaffolds) {
-            runtime.scaffoldEngine.loadFromJson(scaffold as unknown as Record<string, unknown>);
-          }
-          runtime.logger?.(
-            `[claworks:packs] registered ${contribution.scaffolds.length} code scaffolds from pack '${pack.manifest.id}'`,
-          );
-        }
-        // objectTypes from code contribution (merged with YAML-loaded types)
-        if (contribution.objectTypes?.length) {
-          for (const typeDef of contribution.objectTypes) {
-            runtime.ontology?.registerType?.(typeDef);
-          }
-          runtime.logger?.(
-            `[claworks:packs] registered ${contribution.objectTypes.length} object types from pack '${pack.manifest.id}'`,
-          );
-        }
-        // playbooks from code contribution
-        if (contribution.playbooks?.length) {
-          runtime.playbookEngine?.loadPlaybooks?.(contribution.playbooks);
-          runtime.logger?.(
-            `[claworks:packs] registered ${contribution.playbooks.length} code playbooks from pack '${pack.manifest.id}'`,
-          );
-        }
-        // event hooks from code contribution
-        if (contribution.hooks?.length) {
-          for (const hook of contribution.hooks) {
-            runtime.kernel?.bus?.subscribe?.(hook.event, (e) => {
-              void hook.handler(e.payload as Record<string, unknown>);
-            });
-          }
-          runtime.logger?.(
-            `[claworks:packs] registered ${contribution.hooks.length} hooks from pack '${pack.manifest.id}'`,
-          );
-        }
-        // promptTemplates from code contribution
-        if (contribution.promptTemplates?.length && runtime.scaffoldEngine) {
-          for (const tmpl of contribution.promptTemplates) {
-            runtime.scaffoldEngine.loadPromptTemplate?.(tmpl);
-          }
-          runtime.logger?.(
-            `[claworks:packs] registered ${contribution.promptTemplates.length} prompt templates from pack '${pack.manifest.id}'`,
-          );
-        }
-        if (contribution.onLoad) {
-          await contribution.onLoad(runtime);
-        }
-      } catch (err) {
+    if (!pack.factory) {
+      continue;
+    }
+    try {
+      const contribution = await pack.factory(runtime);
+      if (contribution.capabilities?.length) {
+        runtime.capabilities.registerAll(contribution.capabilities);
         runtime.logger?.(
-          `[claworks:packs] factory error in pack '${pack.manifest.id}': ${err instanceof Error ? err.message : String(err)}`,
+          `[claworks:packs] registered ${contribution.capabilities.length} capabilities from pack '${pack.manifest.id}'`,
         );
       }
+      if (contribution.actionHandlers && Object.keys(contribution.actionHandlers).length > 0) {
+        runtime.actionRegistry.registerAll(pack.manifest.id, contribution.actionHandlers);
+        runtime.logger?.(
+          `[claworks:packs] registered ${Object.keys(contribution.actionHandlers).length} action handlers from pack '${pack.manifest.id}'`,
+        );
+      }
+      if (contribution.intentMappings?.length) {
+        runtime.intentRegistry.registerAll(pack.manifest.id, contribution.intentMappings);
+        runtime.logger?.(
+          `[claworks:packs] registered ${contribution.intentMappings.length} intent mappings from pack '${pack.manifest.id}'`,
+        );
+      }
+      if (contribution.scripts?.length) {
+        runtime.scriptLibrary?.registerFromPack(pack.manifest.id, contribution.scripts);
+        runtime.logger?.(
+          `[claworks:packs] registered ${contribution.scripts.length} scripts from pack '${pack.manifest.id}'`,
+        );
+      }
+      if (contribution.scaffolds?.length && runtime.scaffoldEngine) {
+        for (const scaffold of contribution.scaffolds) {
+          runtime.scaffoldEngine.loadFromJson(scaffold as unknown as Record<string, unknown>);
+        }
+        runtime.logger?.(
+          `[claworks:packs] registered ${contribution.scaffolds.length} code scaffolds from pack '${pack.manifest.id}'`,
+        );
+      }
+      if (contribution.objectTypes?.length) {
+        for (const typeDef of contribution.objectTypes) {
+          runtime.ontology?.registerType?.(typeDef);
+        }
+        runtime.logger?.(
+          `[claworks:packs] registered ${contribution.objectTypes.length} object types from pack '${pack.manifest.id}'`,
+        );
+      }
+      if (contribution.playbooks?.length) {
+        runtime.playbookEngine?.loadPlaybooks?.(contribution.playbooks);
+        runtime.kernel.matcher.load(runtime.playbookEngine.list());
+        runtime.scheduler.reload(runtime.playbookEngine.list());
+        runtime.logger?.(
+          `[claworks:packs] registered ${contribution.playbooks.length} code playbooks from pack '${pack.manifest.id}'`,
+        );
+      }
+      if (contribution.hooks?.length) {
+        for (const hook of contribution.hooks) {
+          runtime.kernel?.bus?.subscribe?.(hook.event, (e) => {
+            void hook.handler(e.payload as Record<string, unknown>);
+          });
+        }
+        runtime.logger?.(
+          `[claworks:packs] registered ${contribution.hooks.length} hooks from pack '${pack.manifest.id}'`,
+        );
+      }
+      if (contribution.promptTemplates?.length && runtime.scaffoldEngine) {
+        for (const tmpl of contribution.promptTemplates) {
+          runtime.scaffoldEngine.loadPromptTemplate?.(tmpl);
+        }
+        runtime.logger?.(
+          `[claworks:packs] registered ${contribution.promptTemplates.length} prompt templates from pack '${pack.manifest.id}'`,
+        );
+      }
+      if (contribution.onLoad) {
+        await contribution.onLoad(runtime);
+      }
+    } catch (err) {
+      runtime.logger?.(
+        `[claworks:packs] factory error in pack '${pack.manifest.id}': ${err instanceof Error ? err.message : String(err)}`,
+      );
     }
   }
+}
+
+export async function reloadClaworksPacks(runtime: ClaworksRuntime): Promise<void> {
+  const persisted = await loadPersistedInstalled();
+  const packConfig = mergePackConfig(runtime.config.packs, persisted);
+  runtime.config.packs = packConfig;
+  const packs = await runtime.packLoader.loadInstalled(packConfig, runtime.logger);
+  runtime.loadedPacks.splice(0, runtime.loadedPacks.length, ...packs);
+  await runtime.ontology.loadFromPacks(packs);
+  await runtime.playbookEngine.loadFromPacks(packs);
+  runtime.kernel.matcher.load(runtime.playbookEngine.list());
+  runtime.scheduler.reload(runtime.playbookEngine.list());
+
+  await applyPackContributions(runtime, packs, { clearRegistries: true });
 
   // Pack 加载后同步 RBAC / Ingress 策略（从 ObjectStore 可靠数据读取）
   const { syncRbacFromObjectStore, syncIngressFromObjectStore } = await import("./rbac-sync.js");

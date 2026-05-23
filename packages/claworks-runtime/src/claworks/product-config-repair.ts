@@ -3,6 +3,7 @@ import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { ClaworksRobotConfig } from "./config-types.js";
+import { repairNotifyTargets } from "./notify-config-repair.js";
 import {
   isPersonalWorkProfile,
   repairPersonalEnterpriseProfile,
@@ -14,6 +15,7 @@ export const CLAWORKS_STANDARD_GATEWAY_PORT = 18_800;
 
 export const DEFAULT_CLAWORKS_PACK_IDS = [
   "base",
+  "enterprise-foundation",
   "process-industry",
   "enterprise-general",
   "enterprise-commercial",
@@ -300,6 +302,42 @@ export function repairClaworksRobotPluginConfig(
     };
     actions.push("connectors.echo: enabled (demo OT/events)");
     changed = true;
+  }
+
+  pluginConfig.im_bridge ??= {};
+  if (pluginConfig.im_bridge.auto_on_message_received !== true) {
+    pluginConfig.im_bridge.auto_on_message_received = true;
+    actions.push("im_bridge.auto_on_message_received = true (OpenClaw channel → EventKernel)");
+    changed = true;
+  }
+
+  pluginConfig.notify ??= {};
+  if (!pluginConfig.notify.default_channel) {
+    pluginConfig.notify.default_channel = "feishu";
+    actions.push("notify.default_channel = feishu");
+    changed = true;
+  }
+
+  const notifyRepair = repairNotifyTargets(config, pluginConfig, {
+    stateDir: defaultClaworksStateDir(),
+  });
+  if (notifyRepair.changed) {
+    actions.push(...notifyRepair.actions);
+    changed = true;
+  }
+
+  if (pluginConfig.production_mode === true) {
+    const connectorEntries = (pluginConfig.connectors ?? {}) as Record<
+      string,
+      { simulate?: boolean; preset?: string }
+    >;
+    for (const [id, entry] of Object.entries(connectorEntries)) {
+      if (entry?.simulate === true) {
+        entry.simulate = false;
+        actions.push(`connectors.${id}.simulate = false (production_mode)`);
+        changed = true;
+      }
+    }
   }
 
   const seed = seedPacksToStateDir({

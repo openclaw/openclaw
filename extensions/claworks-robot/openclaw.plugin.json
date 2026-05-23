@@ -129,6 +129,16 @@
                     }
                 }
             },
+            "im_bridge": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                    "auto_on_message_received": {
+                        "type": "boolean",
+                        "description": "Route OpenClaw message_received hook into EventKernel intent classify"
+                    }
+                }
+            },
             "connectors": {
                 "type": "object",
                 "additionalProperties": {

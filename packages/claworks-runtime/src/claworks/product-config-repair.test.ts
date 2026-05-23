@@ -108,6 +108,22 @@ describe("product-config-repair", () => {
       }
     ).entries["claworks-robot"].config.packs.installed;
     expect(installed).toContain("base");
+    expect(installed).toContain("enterprise-foundation");
     expect(installed).toContain("process-industry");
+  });
+
+  it("repairNotifyTargets derives from feishu allowFrom", () => {
+    const config: Record<string, unknown> = {
+      channels: { feishu: { allowFrom: ["ou_test"] } },
+      plugins: { entries: {} },
+    };
+    const result = repairClaworksRobotPluginConfig(config, { enableEchoConnector: false });
+    expect(result.changed).toBe(true);
+    const notify = (
+      config.plugins as {
+        entries: Record<string, { config: { notify: { targets: Array<{ to: string }> } } }>;
+      }
+    ).entries["claworks-robot"].config.notify;
+    expect(notify.targets[0]?.to).toBe("ou_test");
   });
 });

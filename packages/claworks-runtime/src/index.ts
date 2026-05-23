@@ -33,6 +33,8 @@ export {
 export {
   createPackLoader,
   resolvePackDir,
+  resolveInstalledPackIds,
+  readPackManifestFromDir,
   parsePlaybookYaml,
   parseObjectTypeYaml,
   readPackManifest,

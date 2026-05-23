@@ -7,10 +7,20 @@ export function createKnowledgeBase(): KnowledgeBase {
   return {
     async search(query, opts) {
       const limit = opts?.limit ?? 5;
-      const q = query.toLowerCase();
+      const terms = query
+        .toLowerCase()
+        .split(/\s+/)
+        .map((t) => t.trim())
+        .filter(Boolean);
       const hits = docs
         .filter((d) => !opts?.namespace || d.namespace === opts.namespace)
-        .filter((d) => d.text.toLowerCase().includes(q))
+        .filter((d) => {
+          const text = d.text.toLowerCase();
+          if (terms.length === 0) {
+            return true;
+          }
+          return terms.every((term) => text.includes(term));
+        })
         .slice(0, limit)
         .map(
           (d, i): KbResult => ({

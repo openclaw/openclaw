@@ -27,6 +27,10 @@ async function listYamlFiles(dir: string): Promise<string[]> {
  * Resolve the pack manifest from either `claworks.pack.json` (legacy) or `pack.yaml` (new format).
  * pack.yaml uses a top-level `pack:` key and `requires:` for structured dependencies.
  */
+export async function readPackManifestFromDir(packDir: string): Promise<PackManifest> {
+  return resolveManifest(packDir);
+}
+
 async function resolveManifest(packDir: string): Promise<PackManifest> {
   // Prefer the canonical JSON manifest
   const jsonPath = join(packDir, "claworks.pack.json");
@@ -163,14 +167,20 @@ async function tryLoadFactory(
   manifest: PackManifest,
   logger?: (msg: string) => void,
 ): Promise<PackFactory | undefined> {
-  const candidates: string[] = manifest.entry
-    ? [join(packDir, manifest.entry)]
-    : [
-        join(packDir, "index.js"),
-        join(packDir, "index.ts"),
-        join(packDir, "src", "index.js"),
-        join(packDir, "src", "index.ts"),
-      ];
+  const candidates: string[] = [];
+  if (manifest.entry) {
+    candidates.push(join(packDir, manifest.entry));
+    if (manifest.entry.endsWith(".js")) {
+      candidates.push(join(packDir, manifest.entry.replace(/\.js$/, ".ts")));
+    }
+  } else {
+    candidates.push(
+      join(packDir, "index.js"),
+      join(packDir, "index.ts"),
+      join(packDir, "src", "index.js"),
+      join(packDir, "src", "index.ts"),
+    );
+  }
 
   for (const candidate of candidates) {
     try {
@@ -280,6 +290,91 @@ async function loadPackFromDir(
   return { manifest, path: packDir, objectTypes, playbooks, factory, skills, scaffolds };
 }
 
+/**
+ * Expand installed pack IDs with non-optional `requires` dependencies (transitive).
+ * Returns a load order where dependencies precede dependents.
+ */
+export async function resolveInstalledPackIds(
+  installed: string[],
+  searchPaths: string[],
+  logger?: (msg: string) => void,
+): Promise<string[]> {
+  const seed = installed.map((ref) => ref.split("@")[0] ?? ref).filter(Boolean);
+  const discovered = new Set<string>();
+  const manifests = new Map<string, PackManifest>();
+
+  const queue = [...seed];
+  while (queue.length > 0) {
+    const packId = queue.shift();
+    if (!packId || discovered.has(packId)) {
+      continue;
+    }
+    discovered.add(packId);
+
+    const dir = await resolvePackDir(packId, searchPaths);
+    if (!dir) {
+      logger?.(`[claworks:packs] pack not found during dependency resolve: ${packId}`);
+      continue;
+    }
+
+    let manifest: PackManifest;
+    try {
+      manifest = await resolveManifest(dir);
+    } catch (err) {
+      logger?.(
+        `[claworks:packs] failed to read manifest for '${packId}': ${err instanceof Error ? err.message : String(err)}`,
+      );
+      continue;
+    }
+    manifests.set(packId, manifest);
+
+    for (const dep of manifest.requires ?? []) {
+      if (dep.optional) {
+        continue;
+      }
+      if (!discovered.has(dep.id)) {
+        queue.push(dep.id);
+      }
+    }
+  }
+
+  const ordered: string[] = [];
+  const visiting = new Set<string>();
+  const visited = new Set<string>();
+
+  const visit = (packId: string) => {
+    if (visited.has(packId)) {
+      return;
+    }
+    if (visiting.has(packId)) {
+      return;
+    }
+    visiting.add(packId);
+    const manifest = manifests.get(packId);
+    for (const dep of manifest?.requires ?? []) {
+      if (!dep.optional && discovered.has(dep.id)) {
+        visit(dep.id);
+      }
+    }
+    visiting.delete(packId);
+    visited.add(packId);
+    ordered.push(packId);
+  };
+
+  for (const packId of seed) {
+    if (discovered.has(packId)) {
+      visit(packId);
+    }
+  }
+  for (const packId of discovered) {
+    if (!visited.has(packId)) {
+      visit(packId);
+    }
+  }
+
+  return ordered;
+}
+
 export async function resolvePackDir(
   packRef: string,
   searchPaths: string[],
@@ -319,10 +414,18 @@ export function createPackLoader(): PackLoader {
     ): Promise<LoadedPack[]> {
       const paths = config.paths ?? [];
       const installed = config.installed ?? [];
+      const expanded = await resolveInstalledPackIds(installed, paths, logger);
+      if (expanded.length > installed.length) {
+        const added = expanded.filter(
+          (id) => !installed.some((ref) => (ref.split("@")[0] ?? ref) === id),
+        );
+        if (added.length > 0) {
+          logger?.(`[claworks:packs] auto-installed required dependencies: ${added.join(", ")}`);
+        }
+      }
       const results: LoadedPack[] = [];
 
-      for (const ref of installed) {
-        const packId = ref.split("@")[0] ?? ref;
+      for (const packId of expanded) {
         const dir = await resolvePackDir(packId, paths);
         if (!dir) {
           logger?.(`[claworks:packs] pack not found: ${packId}`);

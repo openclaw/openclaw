@@ -81,10 +81,10 @@ export type ClaworksRobotConfig = {
     kb_watch_interval_ms?: number;
   };
   packs?: CwPackConfig;
-  notify?: ClaworksNotifyConfig;
   im_bridge?: {
     auto_on_message_received?: boolean;
   };
+  notify?: ClaworksNotifyConfig;
   model_router?: {
     default?: string;
     fast?: string;

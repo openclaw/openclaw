@@ -43,6 +43,7 @@ import { applyIngressPublish } from "./ingress-publish.js";
 import { createModelRouter } from "./model-router.js";
 import { appendObservationEvent, markRuntimeStarted } from "./observability.js";
 import {
+  applyPackContributions,
   loadPersistedInstalled,
   mergePackConfig,
   reloadClaworksPackById,
@@ -197,7 +198,12 @@ export async function createClaworksRuntime(
     {
       ...config.packs,
       paths: packPaths,
-      installed: config.packs?.installed ?? ["base", "process-industry"],
+      installed: config.packs?.installed ?? [
+        "base",
+        "enterprise-foundation",
+        "process-industry",
+        "enterprise-general",
+      ],
     },
     persistedInstalled,
   );
@@ -373,6 +379,9 @@ export async function createClaworksRuntime(
 
   // 初始化离线进化同步管理器（导出进化数据包 / 导入进化包）
   runtime.evolutionSync = new EvolutionSyncManager(runtime);
+
+  // 注册 Pack factory 贡献（action handlers / intent mappings / capabilities）
+  await applyPackContributions(runtime, packs);
 
   return runtime;
 }

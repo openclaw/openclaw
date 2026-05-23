@@ -16,6 +16,7 @@ import { createClaworksBridge } from "./bridge.js";
 import { registerClaworksOpsTools } from "./cw-tools-ops.js";
 import { registerClaworksAgentTools } from "./cw-tools.js";
 import { createMemoryKnowledgeBase } from "./memory-kb.js";
+import { createClaworksRobotSecurityAuditCollector } from "./security-audit.js";
 
 let runtime: ClaworksRuntime | null = null;
 let activeBridge: import("./bridge.js").ClaworksBridge | null = null;
@@ -91,6 +92,9 @@ export default definePluginEntry({
   name: "ClaWorks Robot",
   description: "ClaWorks industrial robot runtime — EventKernel · DataPlane · OrchPlane · A2A",
   register(api: OpenClawPluginApi) {
+    api.registerSecurityAuditCollector(
+      createClaworksRobotSecurityAuditCollector(() => resolveRobotConfig(api)),
+    );
     api.registerService({
       id: "claworks-kernel",
       start: async () => {
@@ -108,7 +112,7 @@ export default definePluginEntry({
         });
         const bridge = activeBridge;
         runtime = await createClaworksRuntime(robotConfig, {
-          version: "2026.5.0-alpha.1",
+          version: "2026.5.20",
           logger: (msg) => api.logger.info?.(`[claworks-robot] ${msg}`),
           kb,
           hitl: bridge.createHitlGate(),

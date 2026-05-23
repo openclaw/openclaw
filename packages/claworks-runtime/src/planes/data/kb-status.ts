@@ -9,10 +9,10 @@ export function resolveKbProviderLabel(
   if (data?.kb_provider === "memory-core") {
     return "memory-core";
   }
-  if (data?.kb_path?.trim()) {
+  if (data?.kb_path?.trim() && data.kb_provider !== "stub") {
     return "file";
   }
-  return "bm25-memory";
+  return "stub";
 }
 
 export async function describeKnowledgeBase(
@@ -39,8 +39,8 @@ export async function describeKnowledgeBase(
     memory_slot: opts?.memorySlot,
     document_count: 0,
     note:
-      provider === "bm25-memory"
-        ? "in-memory BM25 KB (no vectors; set kb_provider=memory-core for RAG)"
+      provider === "stub"
+        ? "in-memory stub KB (substring match; set kb_provider=memory-core for vector RAG)"
         : undefined,
   };
 }

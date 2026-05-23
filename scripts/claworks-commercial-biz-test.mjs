@@ -275,10 +275,11 @@ async function main() {
 
   const { bridgeImMessage } = await import("../packages/claworks-runtime/src/index.ts");
   const imResult = await bridgeImMessage(runtime, {
-    channel_id: "feishu",
-    user_id: "sales-001",
-    tenant_id: "acme",
-    message: "我需要给华能集团做一个工业数字孪生解决方案的报价单",
+    channel: "feishu",
+    messageId: "msg-commercial-001",
+    userId: "sales-001",
+    text: "我需要给华能集团做一个工业数字孪生解决方案的报价单",
+    extra: { tenant_id: "acme" },
   });
   assert(imResult?.action === "intent_routed", `IM 商务消息路由成功 (action=${imResult?.action})`);
   assert(llmCallCount > 0, `LLM 被调用（共 ${llmCallCount} 次）`);

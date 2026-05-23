@@ -25,6 +25,7 @@ import {
   resolveRateLimitKey,
   API_RATE_LIMITER_CONFIG,
 } from "../../kernel/rate-limiter.js";
+import { describeKnowledgeBase } from "../../planes/data/kb-status.js";
 import { buildA2aAgentCard } from "../a2a/agent-card.js";
 import { resolveAuthContext, checkRbac } from "./auth.js";
 import { badRequest, notFound, parsePath, readJsonBody, sendJson } from "./http-utils.js";
@@ -661,6 +662,25 @@ export function createClaworksRestHandler(
           robot: runtime.robot,
         });
         sendJson(res, 200, result);
+        return true;
+      }
+
+      if (method === "GET" && parts[1] === "kb" && parts[2] === "status") {
+        const status = await describeKnowledgeBase(runtime.kb, runtime.config.data, {
+          memorySlot: (runtime.config as { plugins?: { slots?: { memory?: string } } }).plugins
+            ?.slots?.memory,
+        });
+        sendJson(res, 200, status);
+        return true;
+      }
+
+      if (method === "POST" && parts[1] === "kb" && parts[2] === "flush") {
+        if (typeof runtime.kb.flush !== "function") {
+          sendJson(res, 200, { flushed: false, note: "KB provider has no flush hook" });
+          return true;
+        }
+        await runtime.kb.flush();
+        sendJson(res, 200, { flushed: true });
         return true;
       }
 
