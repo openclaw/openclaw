@@ -279,10 +279,8 @@ Generic model:
 - Slack plugin approvals can use Slack's native approval client when the request comes from Slack
   and Slack plugin approvers resolve; `approvals.plugin` can also route plugin approvals to Slack
   sessions or targets even when Slack exec approvals are disabled
-- WhatsApp is the exception to the channel-specific native-client field: it has no
-  `channels.whatsapp.execApprovals`; WhatsApp emoji approval delivery is gated by
-  `approvals.exec` and `approvals.plugin`, while approval reactions require explicit WhatsApp
-  approvers from `channels.whatsapp.allowFrom` or `"*"`
+- WhatsApp emoji approval delivery is gated by `approvals.exec` and `approvals.plugin`, while
+  approval reactions require explicit WhatsApp approvers from `channels.whatsapp.allowFrom` or `"*"`
 
 Native approval clients auto-enable DM-first delivery when all of these are true:
 
@@ -300,8 +298,7 @@ FAQ: [Why are there two exec approval configs for chat approvals?](/help/faq-fir
 - Discord: `channels.discord.execApprovals.*`
 - Slack: `channels.slack.execApprovals.*`
 - Telegram: `channels.telegram.execApprovals.*`
-- WhatsApp: no `channels.whatsapp.execApprovals`; use `approvals.exec` and
-  `approvals.plugin` to route approval prompts to WhatsApp
+- WhatsApp: use `approvals.exec` and `approvals.plugin` to route approval prompts to WhatsApp
 
 These native approval clients add DM routing and optional channel fanout on top of the shared
 same-chat `/approve` flow and shared approval buttons.

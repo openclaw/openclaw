@@ -177,9 +177,8 @@ handoff path over manual terminal capture.
 
 ## Approval prompts
 
-WhatsApp can render exec and plugin approval prompts with `👍` / `👎` reactions, but the
-channel does not have a `channels.whatsapp.execApprovals` config block. Delivery is controlled by
-the top-level approval forwarding config instead:
+WhatsApp can render exec and plugin approval prompts with `👍` / `👎` reactions. Delivery is
+controlled by the top-level approval forwarding config:
 
 ```json5
 {
