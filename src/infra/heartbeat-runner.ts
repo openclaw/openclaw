@@ -13,6 +13,7 @@ import {
   resolveDefaultAgentId,
 } from "../agents/agent-scope.js";
 import { appendCronStyleCurrentTimeLine } from "../agents/current-time.js";
+import { resolveAgentHarnessPolicy } from "../agents/harness/policy.js";
 import { resolveModelRefFromString, type ModelRef } from "../agents/model-selection.js";
 import { resolveEmbeddedSessionLane } from "../agents/pi-embedded-runner/lanes.js";
 import { formatReasoningMessage } from "../agents/pi-embedded-utils.js";
@@ -39,6 +40,7 @@ import { replyRunRegistry } from "../auto-reply/reply/reply-run-registry.js";
 import { resolveResponsePrefixTemplate } from "../auto-reply/reply/response-prefix-template.js";
 import { HEARTBEAT_TOKEN } from "../auto-reply/tokens.js";
 import type { ReplyPayload } from "../auto-reply/types.js";
+import { normalizeChatType, type ChatType } from "../channels/chat-type.js";
 import { sendDurableMessageBatch } from "../channels/message/runtime.js";
 import { getChannelPlugin } from "../channels/plugins/index.js";
 import type {
@@ -129,7 +131,7 @@ import {
 import type { OutboundSendDeps } from "./outbound/deliver.js";
 import { buildOutboundSessionContext } from "./outbound/session-context.js";
 import {
-  resolveHeartbeatDeliveryTarget,
+  resolveHeartbeatDeliveryTargetWithSessionRoute,
   resolveHeartbeatSenderContext,
 } from "./outbound/targets.js";
 import {
@@ -451,6 +453,7 @@ function usesCodexHarness(params: {
     normalizeHeartbeatRuntimeId(process.env.OPENCLAW_AGENT_RUNTIME) ||
     normalizeHeartbeatRuntimeId(agentEntry?.agentRuntime?.id) ||
     normalizeHeartbeatRuntimeId(agentEntry?.embeddedHarness?.runtime) ||
+    resolveConfiguredHeartbeatModelRuntimeId(params) ||
     normalizeHeartbeatRuntimeId(params.cfg.agents?.defaults?.agentRuntime?.id) ||
     normalizeHeartbeatRuntimeId(params.cfg.agents?.defaults?.embeddedHarness?.runtime);
   if (runtimeId === "codex") {
@@ -462,13 +465,38 @@ function usesCodexHarness(params: {
   return normalizeLowercaseStringOrEmpty(resolveHeartbeatModelRef(params).provider) === "codex";
 }
 
+function resolveConfiguredHeartbeatModelRuntimeId(params: {
+  cfg: OpenClawConfig;
+  agentId: string;
+  heartbeat?: HeartbeatConfig;
+  entry?: SessionEntry;
+}): string {
+  const modelRef = resolveHeartbeatModelRef(params);
+  const policy = resolveAgentHarnessPolicy({
+    config: params.cfg,
+    provider: modelRef.provider,
+    modelId: modelRef.model,
+    agentId: params.agentId,
+  });
+  if (policy.runtimeSource === "implicit") {
+    return "";
+  }
+  const runtime = normalizeHeartbeatRuntimeId(policy.runtime);
+  return runtime === "auto" ? "" : runtime;
+}
+
 function shouldUseHeartbeatResponseToolPrompt(params: {
   cfg: OpenClawConfig;
   agentId: string;
   heartbeat?: HeartbeatConfig;
   entry?: SessionEntry;
+  chatType?: ChatType;
 }): boolean {
-  const visibleReplies = params.cfg.messages?.visibleReplies;
+  const chatType = normalizeChatType(params.chatType);
+  const visibleReplies =
+    chatType === "group" || chatType === "channel"
+      ? (params.cfg.messages?.groupChat?.visibleReplies ?? params.cfg.messages?.visibleReplies)
+      : params.cfg.messages?.visibleReplies;
   if (visibleReplies === "message_tool") {
     return true;
   }
@@ -1410,10 +1438,12 @@ export async function runHeartbeatOnce(opts: {
   const heartbeatForDelivery = commitmentDeliveryContext
     ? { ...heartbeat, target: "last", to: undefined, accountId: undefined }
     : heartbeat;
-  const delivery = resolveHeartbeatDeliveryTarget({
+  const delivery = await resolveHeartbeatDeliveryTargetWithSessionRoute({
     cfg,
+    agentId,
     entry,
     heartbeat: heartbeatForDelivery,
+    currentSessionKey: sessionKey,
     // Isolated heartbeat runs drain system events from their dedicated
     // `:heartbeat` session, not from the base session we peek during preflight.
     // Reusing base-session turnSource routing here can pin later isolated runs
@@ -1462,6 +1492,7 @@ export async function runHeartbeatOnce(opts: {
     agentId,
     heartbeat,
     entry,
+    chatType: delivery.chatType,
   });
   const {
     prompt,

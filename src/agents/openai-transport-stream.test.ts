@@ -4953,6 +4953,89 @@ describe("openai transport stream", () => {
     });
   });
 
+  it("omits tools from completions payload when model compat sets supportsTools to false", () => {
+    const params = buildOpenAICompletionsParams(
+      {
+        id: "chat-only-model",
+        name: "Chat Only Model",
+        api: "openai-completions",
+        provider: "venice",
+        baseUrl: "https://api.venice.ai/api/v1",
+        reasoning: false,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 128000,
+        maxTokens: 4096,
+        compat: {
+          supportsTools: false,
+        } as Record<string, unknown>,
+      } satisfies Model<"openai-completions">,
+      {
+        systemPrompt: "system",
+        messages: [],
+        tools: [
+          {
+            name: "noop",
+            description: "noop tool",
+            parameters: { type: "object", properties: {} },
+          },
+        ],
+      } as never,
+      undefined,
+    ) as { tools?: unknown; tool_choice?: unknown };
+
+    expect(params).not.toHaveProperty("tools");
+    expect(params).not.toHaveProperty("tool_choice");
+  });
+
+  it("omits tool-history tools:[] fallback when model compat sets supportsTools to false", () => {
+    const params = buildOpenAICompletionsParams(
+      {
+        id: "chat-only-model",
+        name: "Chat Only Model",
+        api: "openai-completions",
+        provider: "venice",
+        baseUrl: "https://api.venice.ai/api/v1",
+        reasoning: false,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 128000,
+        maxTokens: 4096,
+        compat: {
+          supportsTools: false,
+        } as Record<string, unknown>,
+      } satisfies Model<"openai-completions">,
+      {
+        systemPrompt: "system",
+        messages: [
+          {
+            role: "assistant",
+            content: [
+              {
+                type: "toolCall",
+                id: "call_abc",
+                name: "noop",
+                arguments: {},
+              },
+            ],
+            timestamp: Date.now(),
+          },
+          {
+            role: "toolResult",
+            toolCallId: "call_abc",
+            toolName: "noop",
+            content: [{ type: "text", text: "ok" }],
+            isError: false,
+            timestamp: Date.now(),
+          },
+        ],
+      } as never,
+      undefined,
+    ) as { tools?: unknown };
+
+    expect(params).not.toHaveProperty("tools");
+  });
+
   describe("Gemini thought_signature round-trip on OpenAI-compatible completions", () => {
     const geminiModel = {
       id: "gemini-3-flash-preview",
@@ -5544,6 +5627,142 @@ describe("openai transport stream", () => {
     expect(params).toHaveProperty("tool_choice", "required");
   });
 
+  it("omits empty tools and tool_choice for proxy-like openai-completions endpoints when context.tools is []", () => {
+    const params = buildOpenAICompletionsParams(
+      {
+        id: "test-model",
+        name: "Test Model",
+        api: "openai-completions",
+        provider: "vllm",
+        baseUrl: "http://localhost:8000/v1",
+        reasoning: false,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 4096,
+        maxTokens: 2048,
+      } satisfies Model<"openai-completions">,
+      {
+        systemPrompt: "You are a helpful assistant",
+        messages: [],
+        tools: [],
+      } as never,
+      undefined,
+    );
+
+    expect(params).not.toHaveProperty("tools");
+    expect(params).not.toHaveProperty("tool_choice");
+  });
+
+  it("omits tools for proxy-like openai-completions endpoints when only prior tool history is present", () => {
+    const params = buildOpenAICompletionsParams(
+      {
+        id: "test-model",
+        name: "Test Model",
+        api: "openai-completions",
+        provider: "vllm",
+        baseUrl: "http://localhost:8000/v1",
+        reasoning: false,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 4096,
+        maxTokens: 2048,
+      } satisfies Model<"openai-completions">,
+      {
+        systemPrompt: "You are a helpful assistant",
+        messages: [
+          {
+            role: "assistant",
+            content: [
+              {
+                type: "toolCall",
+                id: "call_abc",
+                name: "get_weather",
+                arguments: "{}",
+              },
+            ],
+          },
+          {
+            role: "toolResult",
+            content: [{ type: "text", text: "sunny" }],
+            toolCallId: "call_abc",
+          },
+        ],
+      } as never,
+      undefined,
+    );
+
+    expect(params).not.toHaveProperty("tools");
+    expect(params).not.toHaveProperty("tool_choice");
+  });
+
+  it("preserves empty tools array for native openai-completions endpoints (existing behavior)", () => {
+    const params = buildOpenAICompletionsParams(
+      {
+        id: "gpt-5.4",
+        name: "GPT-5.4",
+        api: "openai-completions",
+        provider: "openai",
+        baseUrl: "https://api.openai.com/v1",
+        reasoning: false,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 4096,
+        maxTokens: 2048,
+      } satisfies Model<"openai-completions">,
+      {
+        systemPrompt: "You are a helpful assistant",
+        messages: [],
+        tools: [],
+      } as never,
+      undefined,
+    );
+
+    expect(params).toHaveProperty("tools");
+    expect((params as { tools: unknown[] }).tools).toEqual([]);
+  });
+
+  it("preserves tools: [] fallback for native openai-completions endpoints when only prior tool history is present (existing behavior)", () => {
+    const params = buildOpenAICompletionsParams(
+      {
+        id: "gpt-5.4",
+        name: "GPT-5.4",
+        api: "openai-completions",
+        provider: "openai",
+        baseUrl: "https://api.openai.com/v1",
+        reasoning: false,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 4096,
+        maxTokens: 2048,
+      } satisfies Model<"openai-completions">,
+      {
+        systemPrompt: "You are a helpful assistant",
+        messages: [
+          {
+            role: "assistant",
+            content: [
+              {
+                type: "toolCall",
+                id: "call_abc",
+                name: "get_weather",
+                arguments: "{}",
+              },
+            ],
+          },
+          {
+            role: "toolResult",
+            content: [{ type: "text", text: "sunny" }],
+            toolCallId: "call_abc",
+          },
+        ],
+      } as never,
+      undefined,
+    );
+
+    expect(params).toHaveProperty("tools");
+    expect((params as { tools: unknown[] }).tools).toEqual([]);
+  });
+
   it("resets stopReason to stop when finish_reason is tool_calls but tool_calls array is empty", async () => {
     const model = {
       id: "nemotron-3-super",
@@ -5637,6 +5856,105 @@ describe("openai transport stream", () => {
     expect(
       output.content.filter((block) => (block as { type?: string }).type === "toolCall"),
     ).toStrictEqual([]);
+  });
+
+  it("accumulates arguments for parallel tool calls with split indices", async () => {
+    const model = {
+      id: "kimi-for-coding",
+      name: "Kimi for Coding",
+      api: "openai-completions",
+      provider: "kimi-code",
+      baseUrl: "https://api.moonshot.cn",
+      reasoning: true,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 200000,
+      maxTokens: 8192,
+    } satisfies Model<"openai-completions">;
+
+    const output = createAssistantOutput(model);
+
+    const mockChunks = [
+      {
+        id: "chatcmpl-parallel",
+        object: "chat.completion.chunk" as const,
+        created: 1,
+        model: model.id,
+        choices: [
+          {
+            index: 0,
+            delta: {
+              tool_calls: [
+                {
+                  index: 0,
+                  id: "call_0",
+                  type: "function",
+                  function: { name: "exec", arguments: "" },
+                },
+                {
+                  index: 1,
+                  id: "call_1",
+                  type: "function",
+                  function: { name: "read", arguments: "" },
+                },
+              ],
+            },
+            logprobs: null,
+            finish_reason: null,
+          },
+        ],
+      },
+      {
+        id: "chatcmpl-parallel",
+        object: "chat.completion.chunk" as const,
+        created: 1,
+        model: model.id,
+        choices: [
+          {
+            index: 0,
+            delta: {
+              tool_calls: [{ index: 0, function: { arguments: '{"command":"ls"}' } }],
+            },
+            logprobs: null,
+            finish_reason: null,
+          },
+        ],
+      },
+      {
+        id: "chatcmpl-parallel",
+        object: "chat.completion.chunk" as const,
+        created: 1,
+        model: model.id,
+        choices: [
+          {
+            index: 0,
+            delta: {
+              tool_calls: [{ index: 1, function: { arguments: '{"path":"/tmp"}' } }],
+            },
+            logprobs: null,
+            finish_reason: "tool_calls" as const,
+          },
+        ],
+      },
+    ] as const;
+
+    await testing.processOpenAICompletionsStream(streamChunks(mockChunks), output, model, {
+      push() {},
+    });
+
+    expect(output.content).toHaveLength(2);
+    expectRecordFields(output.content[0], {
+      type: "toolCall",
+      id: "call_0",
+      name: "exec",
+      arguments: { command: "ls" },
+    });
+    expectRecordFields(output.content[1], {
+      type: "toolCall",
+      id: "call_1",
+      name: "read",
+      arguments: { path: "/tmp" },
+    });
   });
 
   it("handles reasoning_details from OpenRouter/Qwen3 in completions stream", async () => {

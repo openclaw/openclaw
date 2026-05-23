@@ -1860,17 +1860,13 @@ export async function runReplyAgent(params: {
       (sessionKey ? activeSessionStore?.[sessionKey]?.responseUsage : undefined);
     const responseUsageMode = resolveResponseUsageMode(responseUsageRaw);
     if (responseUsageMode !== "off" && hasNonzeroUsage(usage)) {
-      const authMode = resolveModelAuthMode(providerUsed, cfg, undefined, {
-        workspaceDir: followupRun.run.workspaceDir,
+      const costConfig = resolveModelCostConfig({
+        provider: providerUsed,
+        model: modelUsed,
+        config: cfg,
+        allowPluginNormalization: false,
       });
-      const showCost = authMode === "api-key";
-      const costConfig = showCost
-        ? resolveModelCostConfig({
-            provider: providerUsed,
-            model: modelUsed,
-            config: cfg,
-          })
-        : undefined;
+      const showCost = responseUsageMode === "full" && costConfig !== undefined;
       let formatted = formatResponseUsageLine({
         usage,
         showCost,

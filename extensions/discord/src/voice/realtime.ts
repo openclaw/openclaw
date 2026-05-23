@@ -74,6 +74,8 @@ const DISCORD_REALTIME_FORCED_CONSULT_TRAILING_FRAGMENT_WORDS = new Set([
   "to",
   "with",
 ]);
+const DISCORD_REALTIME_FORCED_CONSULT_REASON =
+  "provider_final_transcript_without_openclaw_agent_consult";
 const DISCORD_REALTIME_VERBOSE_OMITTED_EVENTS = new Set([
   "conversation.output_audio.delta",
   "input_audio_buffer.append",
@@ -1084,6 +1086,9 @@ export class DiscordRealtimeVoiceSession implements VoiceRealtimeSession {
     logger.info(
       `discord voice: realtime forced agent consult starting chars=${question.length} voiceSession=${this.params.entry.voiceSessionKey} supervisorSession=${this.params.entry.route.sessionKey} agent=${this.params.entry.route.agentId} speaker=${context.speakerLabel} owner=${context.senderIsOwner}`,
     );
+    logger.debug(
+      `discord voice: realtime forced agent consult reason=${DISCORD_REALTIME_FORCED_CONSULT_REASON} consultPolicy=always voiceSession=${this.params.entry.voiceSessionKey} supervisorSession=${this.params.entry.route.sessionKey} agent=${this.params.entry.route.agentId} speaker=${context.speakerLabel}`,
+    );
     if (this.hasInterruptibleOutputAudio()) {
       logger.info(
         `discord voice: realtime forced agent consult preserving active playback guild=${this.params.entry.guildId} channel=${this.params.entry.channelId} outputAudioMs=${Math.floor(this.outputAudioTimestampMs)} outputActive=${this.isOutputAudioActive()} playbackChunks=${this.outputAudioChunks}`,
@@ -1093,10 +1098,7 @@ export class DiscordRealtimeVoiceSession implements VoiceRealtimeSession {
     try {
       const promise = this.runAgentTurn({
         context,
-        message: [
-          question,
-          "Context: The realtime model produced a final user transcript without calling openclaw_agent_consult. OpenClaw is forcing the consult because consultPolicy is always.",
-        ].join("\n\n"),
+        message: question,
       });
       this.setRecentAgentProxyConsultPromise(pending.recent, promise);
       const text = await promise;

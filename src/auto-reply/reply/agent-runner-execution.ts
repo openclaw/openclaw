@@ -1372,9 +1372,6 @@ export async function runAgentTurnWithFallback(params: {
     model: string,
     candidateRun: FollowupRun["run"],
   ): Promise<(() => Promise<void>) | undefined> => {
-    if (effectiveRun.hasOneTurnModelOverride === true) {
-      return undefined;
-    }
     if (
       !params.sessionKey ||
       !params.activeSessionStore ||
@@ -1906,7 +1903,9 @@ export async function runAgentTurnWithFallback(params: {
                   return isMarkdownCapableMessageChannel(channel) ? "markdown" : "plain";
                 })(),
                 toolProgressDetail: params.toolProgressDetail,
-                suppressToolErrorWarnings: params.opts?.suppressToolErrorWarnings,
+                suppressToolErrorWarnings:
+                  params.opts?.shouldSuppressToolErrorWarnings ??
+                  params.opts?.suppressToolErrorWarnings,
                 disableTools: params.opts?.disableTools,
                 enableHeartbeatTool: params.opts?.enableHeartbeatTool,
                 forceHeartbeatTool: params.opts?.forceHeartbeatTool,

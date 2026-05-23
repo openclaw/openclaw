@@ -581,6 +581,32 @@ describe("DiscordVoiceManager", () => {
     expectConnectedStatus(manager, "1002");
   });
 
+  it("attaches meeting notes capture to an existing voice session", async () => {
+    const manager = createManager();
+
+    await manager.join({ guildId: "g1", channelId: "1001" });
+    const onUtterance = vi.fn();
+    const result = await manager.join(
+      { guildId: "g1", channelId: "1001" },
+      {
+        meetingNotes: {
+          sessionId: "notes-1",
+          onUtterance,
+        },
+      },
+    );
+
+    const entry = getSessionEntry(manager) as {
+      meetingNotes?: { sessionId: string; onUtterance: typeof onUtterance };
+    };
+    expect(result.ok).toBe(true);
+    expect(joinVoiceChannelMock).toHaveBeenCalledTimes(1);
+    expect(entry.meetingNotes).toEqual({
+      sessionId: "notes-1",
+      onUtterance,
+    });
+  });
+
   it("destroys stale tracked voice connections before joining", async () => {
     const staleConnection = createConnectionMock();
     const connection = createConnectionMock();
@@ -2111,6 +2137,47 @@ describe("DiscordVoiceManager", () => {
     await new Promise((resolve) => setTimeout(resolve, 260));
     expect(lastAgentCommandArgs().message).toContain("ship it.");
     expectUserMessageIncludes("valid answer");
+  });
+
+  it("keeps forced agent-proxy fallback diagnostics out of agent prompts", async () => {
+    agentCommandMock.mockResolvedValueOnce({ payloads: [{ text: "Could you repeat that?" }] });
+    const manager = createManager({
+      groupPolicy: "open",
+      voice: {
+        enabled: true,
+        mode: "agent-proxy",
+        realtime: { provider: "openai" },
+      },
+    });
+
+    await manager.join({ guildId: "g1", channelId: "1001" });
+    const entry = getSessionEntry(manager) as {
+      realtime?: {
+        beginSpeakerTurn: (
+          context: { extraSystemPrompt?: string; senderIsOwner: boolean; speakerLabel: string },
+          userId: string,
+        ) => { close: () => void; sendInputAudio: (audio: Buffer) => void };
+      };
+    };
+    const bridgeParams = lastRealtimeBridgeParams() as
+      | {
+          onTranscript?: (role: "user" | "assistant", text: string, isFinal: boolean) => void;
+        }
+      | undefined;
+
+    const turn = entry.realtime?.beginSpeakerTurn(
+      { extraSystemPrompt: undefined, senderIsOwner: true, speakerLabel: "Owner" },
+      "u-owner",
+    );
+    turn?.sendInputAudio(Buffer.alloc(8));
+    bridgeParams?.onTranscript?.("user", "What?", true);
+
+    await new Promise((resolve) => setTimeout(resolve, 260));
+
+    expect(lastAgentCommandArgs().message).toBe("What?");
+    expect(lastAgentCommandArgs().message).not.toContain("consultPolicy");
+    expect(lastAgentCommandArgs().message).not.toContain("openclaw_agent_consult");
+    expectUserMessageIncludes("Could you repeat that?");
   });
 
   it("queues forced agent-proxy answers until current realtime playback idles", async () => {

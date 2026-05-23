@@ -840,7 +840,9 @@ function fingerprintDynamicToolSpec(tool: JsonValue): JsonValue {
   for (const [key, child] of Object.entries(tool).toSorted(([left], [right]) =>
     left.localeCompare(right),
   )) {
-    if (key === "description") {
+    // Tool-search presentation can change per turn without changing the
+    // durable app-server execution contract for an existing thread.
+    if (key === "description" || key === "deferLoading" || key === "namespace") {
       continue;
     }
     stable[key] = stabilizeJsonValue(child);
@@ -977,7 +979,7 @@ export function resolveCodexAppServerModelProvider(params: {
   return normalizedLower === "openai-codex" ? "openai" : normalized;
 }
 
-// Modern Codex models (gpt-5.5, gpt-5.4, gpt-5.4-mini, gpt-5.2) use the
+// Modern Codex models (gpt-5.5, gpt-5.4, gpt-5.4-mini) use the
 // none/low/medium/high/xhigh effort enum and reject "minimal". The CLI
 // defaults thinkLevel to "minimal", so without translation EVERY agent turn
 // on those models pays a wasted first request + retry-with-low fallback in

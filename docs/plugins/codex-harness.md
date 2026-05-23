@@ -28,6 +28,10 @@ OpenClaw dynamic tools continue through the app-server `item/tool/call` bridge.
 Active OpenClaw sandboxing and restricted tool policies disable native code mode
 entirely unless you opt into the experimental sandbox exec-server path.
 
+This Codex-native feature is separate from
+[OpenClaw code mode](/reference/code-mode), which is an opt-in QuickJS-WASI
+runtime for generic OpenClaw runs with a different `exec` input shape.
+
 For the broader model/provider/runtime split, start with
 [Agent runtimes](/concepts/agent-runtimes). The short version is:
 `openai/gpt-5.5` is the model ref, `codex` is the runtime, and Telegram,

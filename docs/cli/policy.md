@@ -18,11 +18,16 @@ report drift through `doctor --lint`. The final conformance signal is a clean
 instead of creating a separate health gate.
 
 Policy currently manages configured channels, MCP servers, model providers,
-network SSRF posture, and governed tool declarations. For example, IT or a
-workspace operator can record that Telegram is not an approved channel
-provider, restrict MCP servers and model refs to approved entries, require
-private-network fetch/browser access to remain disabled, require governed tools
-to carry risk and sensitivity metadata, then use `doctor --lint` as the shared
+network SSRF posture, Gateway exposure posture, agent workspace posture,
+OpenClaw config secret provider/auth profile posture, and governed tool
+declarations. For example, IT or a workspace operator can record that Telegram
+is not an approved channel provider, restrict MCP servers and model refs to
+approved entries, require private-network fetch/browser access to remain
+disabled, require Gateway bind/auth/HTTP exposure to stay within reviewed
+bounds, require agent workspace access and tool denies to stay in a reviewed
+posture, require OpenClaw config SecretRefs to use managed providers, require
+config auth profiles to carry provider/mode metadata, require governed tools to
+carry risk and sensitivity metadata, then use `doctor --lint` as the shared
 conformance gate.
 
 Use policy when a workspace needs a durable statement such as "these channels
@@ -44,8 +49,9 @@ arbitrary plugins. The plugin remains enabled if `policy.jsonc` is missing, so
 doctor can report the missing artifact.
 
 Policy is authored, not generated from the user's current settings. A minimal
-policy for channels, MCP servers, model providers, network posture, and tool
-metadata looks like this:
+policy for channels, MCP servers, model providers, network posture, Gateway
+exposure, agent workspace posture, OpenClaw config secret provider/auth profile
+posture, and tool metadata looks like this:
 
 ```jsonc
 {
@@ -75,6 +81,43 @@ metadata looks like this:
       "allow": false,
     },
   },
+  "gateway": {
+    "exposure": {
+      "allowNonLoopbackBind": false,
+      "allowTailscaleFunnel": false,
+    },
+    "auth": {
+      "requireAuth": true,
+      "requireExplicitRateLimit": true,
+    },
+    "controlUi": {
+      "allowInsecure": false,
+    },
+    "remote": {
+      "allow": false,
+    },
+    "http": {
+      "denyEndpoints": ["chatCompletions", "responses"],
+      "requireUrlAllowlists": true,
+    },
+  },
+  "agents": {
+    "workspace": {
+      "allowedAccess": ["none", "ro"],
+      "denyTools": ["exec", "process", "write", "edit", "apply_patch"],
+    },
+  },
+  "secrets": {
+    "requireManagedProviders": true,
+    "denySources": ["exec"],
+    "allowInsecureProviders": false,
+  },
+  "auth": {
+    "profiles": {
+      "requireMetadata": ["provider", "mode"],
+      "allowModes": ["api_key", "token"],
+    },
+  },
   "tools": {
     "requireMetadata": ["risk", "sensitivity", "owner"],
   },
@@ -84,8 +127,21 @@ metadata looks like this:
 The rules are the authority. A category block is only a namespace; checks run
 when a concrete rule is present. OpenClaw reads current `channels.*` settings
 `mcp.servers.*`, `models.providers.*`, selected agent model refs, network SSRF
-settings, and `TOOLS.md` declarations as evidence, then reports observed state
-that does not conform.
+settings, Gateway bind/auth/Control UI/Tailscale/remote/HTTP posture, OpenClaw
+config agent sandbox workspace access and tool deny posture, config secret
+provider and SecretRef provenance, config auth profile metadata, and `TOOLS.md`
+declarations as evidence, then reports observed state that does not conform. If
+a policy denies non-loopback Gateway binds, omit `gateway.bind` only when you
+are willing to review the runtime default; set `gateway.bind=loopback` for
+strict config conformance. For read-only agent posture, configure sandbox mode
+on the applicable defaults or agent and set `workspaceAccess` to `none` or
+`ro`; omitted or `off` sandbox mode does not satisfy a read-only/no-write
+policy. `agents.workspace.denyTools` supports `exec`, `process`, `write`,
+`edit`, and `apply_patch`; OpenClaw config `group:fs` covers file mutation tools
+and `group:runtime` covers shell/process tools. Secret evidence records
+provider/source posture and SecretRef metadata, never raw secret values. Policy
+does not read or attest per-agent credential stores such as `auth-profiles.json`;
+those stores remain owned by the existing auth and credential flows.
 
 Run policy-only checks during authoring:
 
@@ -218,6 +274,63 @@ Example JSON output:
         "value": false
       }
     ],
+    "gatewayExposure": [
+      {
+        "id": "gateway-bind",
+        "kind": "bind",
+        "source": "oc://openclaw.config/gateway/bind",
+        "value": "loopback",
+        "nonLoopback": false,
+        "explicit": true
+      }
+    ],
+    "agentWorkspace": [
+      {
+        "id": "agents-defaults-workspace-access",
+        "kind": "workspaceAccess",
+        "source": "oc://openclaw.config/agents/defaults/sandbox/workspaceAccess",
+        "scope": "defaults",
+        "value": "ro",
+        "sandboxMode": "all",
+        "sandboxModeSource": "oc://openclaw.config/agents/defaults/sandbox/mode",
+        "sandboxEnabled": true,
+        "explicit": true
+      },
+      {
+        "id": "agents-defaults-tool-exec",
+        "kind": "toolDeny",
+        "source": "oc://openclaw.config/tools/deny",
+        "scope": "defaults",
+        "tool": "exec",
+        "denied": true,
+        "explicit": true
+      }
+    ],
+    "secrets": [
+      {
+        "id": "vault",
+        "kind": "provider",
+        "source": "oc://openclaw.config/secrets/providers/vault",
+        "providerSource": "env"
+      },
+      {
+        "id": "oc://openclaw.config/models/providers/openai/apiKey",
+        "kind": "input",
+        "source": "oc://openclaw.config/models/providers/openai/apiKey",
+        "provenance": "secretRef",
+        "refSource": "env",
+        "refProvider": "vault"
+      }
+    ],
+    "authProfiles": [
+      {
+        "id": "github",
+        "source": "oc://openclaw.config/auth/profiles/github",
+        "validMetadata": true,
+        "provider": "github",
+        "mode": "token"
+      }
+    ],
     "tools": [
       {
         "id": "deploy",
@@ -229,7 +342,7 @@ Example JSON output:
       }
     ]
   },
-  "checksRun": 15,
+  "checksRun": 30,
   "checksSkipped": 0,
   "findings": []
 }
@@ -262,6 +375,10 @@ If policy rules change intentionally, update both accepted hashes from a clean
 check. If workspace settings change intentionally but policy stays the same,
 only `expectedAttestationHash` usually changes.
 
+Enabling or upgrading `agents.workspace` rules adds `agentWorkspace` evidence to
+the workspace hash and attestation hash. Operators should review the new
+evidence and refresh accepted attestation hashes after enabling these rules.
+
 `openclaw policy watch` runs the same check repeatedly and reports when the
 current evidence no longer matches `expectedAttestationHash`:
 
@@ -277,23 +394,38 @@ choose a different interval.
 
 Policy currently verifies:
 
-| Check id                                 | Finding                                                               |
-| ---------------------------------------- | --------------------------------------------------------------------- |
-| `policy/policy-jsonc-missing`            | Policy is enabled but `policy.jsonc` is missing.                      |
-| `policy/policy-jsonc-invalid`            | Policy cannot be parsed or contains malformed rule entries.           |
-| `policy/policy-hash-mismatch`            | Policy does not match configured `expectedHash`.                      |
-| `policy/attestation-hash-mismatch`       | Current policy evidence no longer matches the accepted attestation.   |
-| `policy/channels-denied-provider`        | An enabled channel matches a channel deny rule.                       |
-| `policy/mcp-denied-server`               | A configured MCP server is denied by policy.                          |
-| `policy/mcp-unapproved-server`           | A configured MCP server is outside the allowlist.                     |
-| `policy/models-denied-provider`          | A configured model provider or model ref uses a denied provider.      |
-| `policy/models-unapproved-provider`      | A configured model provider or model ref is outside the allowlist.    |
-| `policy/network-private-access-enabled`  | A private-network SSRF escape hatch is enabled when policy denies it. |
-| `policy/tools-missing-risk-level`        | A governed tool declaration is missing risk metadata.                 |
-| `policy/tools-unknown-risk-level`        | A governed tool declaration uses an unknown risk value.               |
-| `policy/tools-missing-sensitivity-token` | A governed tool declaration is missing sensitivity metadata.          |
-| `policy/tools-missing-owner`             | A governed tool declaration is missing owner metadata.                |
-| `policy/tools-unknown-sensitivity-token` | A governed tool declaration uses an unknown sensitivity value.        |
+| Check id                                     | Finding                                                                          |
+| -------------------------------------------- | -------------------------------------------------------------------------------- |
+| `policy/policy-jsonc-missing`                | Policy is enabled but `policy.jsonc` is missing.                                 |
+| `policy/policy-jsonc-invalid`                | Policy cannot be parsed or contains malformed rule entries.                      |
+| `policy/policy-hash-mismatch`                | Policy does not match configured `expectedHash`.                                 |
+| `policy/attestation-hash-mismatch`           | Current policy evidence no longer matches the accepted attestation.              |
+| `policy/channels-denied-provider`            | An enabled channel matches a channel deny rule.                                  |
+| `policy/mcp-denied-server`                   | A configured MCP server is denied by policy.                                     |
+| `policy/mcp-unapproved-server`               | A configured MCP server is outside the allowlist.                                |
+| `policy/models-denied-provider`              | A configured model provider or model ref uses a denied provider.                 |
+| `policy/models-unapproved-provider`          | A configured model provider or model ref is outside the allowlist.               |
+| `policy/network-private-access-enabled`      | A private-network SSRF escape hatch is enabled when policy denies it.            |
+| `policy/gateway-non-loopback-bind`           | Gateway bind posture permits non-loopback exposure when policy denies it.        |
+| `policy/gateway-auth-disabled`               | Gateway authentication is disabled when policy requires auth.                    |
+| `policy/gateway-rate-limit-missing`          | Gateway auth rate-limit posture is not explicit when policy requires it.         |
+| `policy/gateway-control-ui-insecure`         | Gateway Control UI insecure exposure toggles are enabled.                        |
+| `policy/gateway-tailscale-funnel`            | Gateway Tailscale Funnel exposure is enabled when policy denies it.              |
+| `policy/gateway-remote-enabled`              | Gateway remote mode is active when policy denies it.                             |
+| `policy/gateway-http-endpoint-enabled`       | A Gateway HTTP API endpoint is enabled while denied by policy.                   |
+| `policy/gateway-http-url-fetch-unrestricted` | Gateway HTTP URL-fetch input lacks a required URL allowlist.                     |
+| `policy/agents-workspace-access-denied`      | Agent sandbox mode or workspace access is outside the policy allowlist.          |
+| `policy/agents-tool-not-denied`              | An agent or default config does not deny a tool required by policy.              |
+| `policy/secrets-unmanaged-provider`          | A config SecretRef references a provider not declared under `secrets.providers`. |
+| `policy/secrets-denied-provider-source`      | A config secret provider or SecretRef uses a source denied by policy.            |
+| `policy/secrets-insecure-provider`           | A secret provider opts into insecure posture when policy denies it.              |
+| `policy/auth-profile-invalid-metadata`       | A config auth profile is missing valid provider or mode metadata.                |
+| `policy/auth-profile-unapproved-mode`        | A config auth profile mode is outside the policy allowlist.                      |
+| `policy/tools-missing-risk-level`            | A governed tool declaration is missing risk metadata.                            |
+| `policy/tools-unknown-risk-level`            | A governed tool declaration uses an unknown risk value.                          |
+| `policy/tools-missing-sensitivity-token`     | A governed tool declaration is missing sensitivity metadata.                     |
+| `policy/tools-missing-owner`                 | A governed tool declaration is missing owner metadata.                           |
+| `policy/tools-unknown-sensitivity-token`     | A governed tool declaration uses an unknown sensitivity value.                   |
 
 Policy findings can include both `target` and `requirement`. `target` is the
 observed workspace thing that does not conform. `requirement` is the authored
@@ -375,6 +507,36 @@ Example network finding:
   "ocPath": "oc://openclaw.config/browser/ssrfPolicy/dangerouslyAllowPrivateNetwork",
   "target": "oc://openclaw.config/browser/ssrfPolicy/dangerouslyAllowPrivateNetwork",
   "requirement": "oc://policy.jsonc/network/privateNetwork/allow"
+}
+```
+
+Example Gateway exposure finding:
+
+```json
+{
+  "checkId": "policy/gateway-non-loopback-bind",
+  "severity": "error",
+  "message": "Gateway bind setting 'gateway-bind' permits non-loopback exposure.",
+  "source": "policy",
+  "path": "openclaw config",
+  "ocPath": "oc://openclaw.config/gateway/bind",
+  "target": "oc://openclaw.config/gateway/bind",
+  "requirement": "oc://policy.jsonc/gateway/exposure/allowNonLoopbackBind"
+}
+```
+
+Example agent workspace finding:
+
+```json
+{
+  "checkId": "policy/agents-workspace-access-denied",
+  "severity": "error",
+  "message": "agents.defaults sandbox workspaceAccess 'rw' is not allowed by policy.",
+  "source": "policy",
+  "path": "openclaw config",
+  "ocPath": "oc://openclaw.config/agents/defaults/sandbox/workspaceAccess",
+  "target": "oc://openclaw.config/agents/defaults/sandbox/workspaceAccess",
+  "requirement": "oc://policy.jsonc/agents/workspace/allowedAccess"
 }
 ```
 

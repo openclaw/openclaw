@@ -23,6 +23,12 @@ Skills own workflows; root owns hard policy and routing.
 - Installers: sibling `../openclaw.ai`.
 - Scoped guides: `extensions/`, `src/{plugin-sdk,channels,plugins,gateway,gateway/protocol,agents}/`, `test/helpers*/`, `docs/`, `ui/`, `scripts/`.
 
+## Docs
+
+- Source docs: `docs/**`; publish repo: `openclaw/docs`; host: `https://docs.openclaw.ai`.
+- Flow: source -> `docs-sync-publish.yml` -> mirror build -> R2 -> Worker router.
+- Docs AI: `openclaw/ask-molty`; see its `AGENTS.md`.
+
 ## Architecture
 
 - Core stays plugin-agnostic. No bundled ids/defaults/policy in core when manifest/registry/capability contracts work.

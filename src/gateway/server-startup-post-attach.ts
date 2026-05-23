@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { monitorEventLoopDelay, performance } from "node:perf_hooks";
 import { setTimeout as sleep } from "node:timers/promises";
 import type { CliDeps } from "../cli/deps.types.js";
 import type { GatewayTailscaleMode } from "../config/types.gateway.js";
@@ -25,10 +26,8 @@ import type { startGatewayTailscaleExposure } from "./server-tailscale.js";
 
 const ACP_BACKEND_READY_TIMEOUT_MS = 5_000;
 const ACP_BACKEND_READY_POLL_MS = 50;
-const PRIMARY_MODEL_PREWARM_TIMEOUT_MS = 5_000;
-const STARTUP_PROVIDER_DISCOVERY_TIMEOUT_MS = 5_000;
 const PROVIDER_AUTH_PREWARM_START_DELAY_MS = 1_000;
-const SKIP_STARTUP_MODEL_PREWARM_ENV = "OPENCLAW_SKIP_STARTUP_MODEL_PREWARM";
+const PROVIDER_AUTH_REWARM_DELAY_MS = 1_000;
 const QMD_STARTUP_IDLE_DELAY_MS = 120_000;
 const RESTART_SENTINEL_FILENAME = "restart-sentinel.json";
 
@@ -69,13 +68,33 @@ async function measureStartup<T>(
   return startupTrace ? startupTrace.measure(name, run) : await run();
 }
 
-function shouldCheckRestartSentinel(env: NodeJS.ProcessEnv = process.env): boolean {
-  return !env.VITEST && env.NODE_ENV !== "test";
+async function measureProviderAuthWarm(run: () => Promise<void>): Promise<{
+  elapsedMs: number;
+  eventLoopMaxMs: number;
+}> {
+  const eventLoopDelay = monitorEventLoopDelay({ resolution: 10 });
+  eventLoopDelay.enable();
+  const startMs = performance.now();
+  try {
+    await run();
+  } finally {
+    eventLoopDelay.disable();
+  }
+  return {
+    elapsedMs: performance.now() - startMs,
+    eventLoopMaxMs: eventLoopDelay.max / 1_000_000,
+  };
 }
 
-function shouldSkipStartupModelPrewarm(env: NodeJS.ProcessEnv = process.env): boolean {
-  const raw = env[SKIP_STARTUP_MODEL_PREWARM_ENV]?.trim().toLowerCase();
-  return raw === "1" || raw === "true" || raw === "yes" || raw === "on";
+function formatProviderAuthWarmMetrics(metrics: {
+  elapsedMs: number;
+  eventLoopMaxMs: number;
+}): string {
+  return `in ${metrics.elapsedMs.toFixed(0)}ms eventLoopMax=${metrics.eventLoopMaxMs.toFixed(1)}ms`;
+}
+
+function shouldCheckRestartSentinel(env: NodeJS.ProcessEnv = process.env): boolean {
+  return !env.VITEST && env.NODE_ENV !== "test";
 }
 
 function resolveGatewayMemoryStartupPolicy(cfg: OpenClawConfig): GatewayMemoryStartupPolicy {
@@ -155,29 +174,58 @@ function scheduleProviderAuthStatePrewarm(params: {
   delayMs?: number;
 }): GatewayPostReadySidecarHandle {
   let stopped = false;
-  let timer: ReturnType<typeof setTimeout> | undefined;
+  let startupTimer: ReturnType<typeof setTimeout> | undefined;
+  let rewarmTimer: ReturnType<typeof setTimeout> | undefined;
+  let rewarmInFlight = false;
+  let pendingRewarmReason: string | undefined;
   const isStopped = () => stopped;
   const delayMs = params.delayMs ?? PROVIDER_AUTH_PREWARM_START_DELAY_MS;
   void (async () => {
     const { clearCurrentProviderAuthState, warmCurrentProviderAuthState } =
       await import("../agents/model-provider-auth.js");
     const { setAuthProfileFailureHook } = await import("../agents/auth-profiles.js");
-    const scheduleAuthMapRewarm = (reason: string) => {
+    const runRewarm = async (reason: string) => {
       if (isStopped()) {
         return;
       }
       const cfg = params.getConfig();
-      const startMs = Date.now();
-      void warmCurrentProviderAuthState(cfg, { isCancelled: isStopped })
-        .then(() => {
-          if (isStopped()) {
-            return;
-          }
-          params.log.info(`provider auth state re-warmed (${reason}) in ${Date.now() - startMs}ms`);
-        })
-        .catch((err) => {
-          params.log.warn(`provider auth state rewarm failed: ${String(err)}`);
-        });
+      rewarmInFlight = true;
+      try {
+        const metrics = await measureProviderAuthWarm(() =>
+          warmCurrentProviderAuthState(cfg, { isCancelled: isStopped }),
+        );
+        if (isStopped()) {
+          return;
+        }
+        params.log.info(
+          `provider auth state re-warmed (${reason}) ${formatProviderAuthWarmMetrics(metrics)}`,
+        );
+      } catch (err) {
+        params.log.warn(`provider auth state rewarm failed: ${String(err)}`);
+      } finally {
+        rewarmInFlight = false;
+        const nextReason = pendingRewarmReason;
+        pendingRewarmReason = undefined;
+        if (nextReason && !isStopped()) {
+          scheduleAuthMapRewarm(nextReason);
+        }
+      }
+    };
+    const scheduleAuthMapRewarm = (reason: string) => {
+      if (isStopped()) {
+        return;
+      }
+      pendingRewarmReason = reason;
+      if (rewarmTimer || rewarmInFlight) {
+        return;
+      }
+      rewarmTimer = setTimeout(() => {
+        rewarmTimer = undefined;
+        const nextReason = pendingRewarmReason ?? reason;
+        pendingRewarmReason = undefined;
+        void runRewarm(nextReason);
+      }, PROVIDER_AUTH_REWARM_DELAY_MS);
+      rewarmTimer.unref?.();
     };
     if (isStopped()) {
       return;
@@ -189,35 +237,42 @@ function scheduleProviderAuthStatePrewarm(params: {
       clearCurrentProviderAuthState();
       scheduleAuthMapRewarm("auth-profile-failure");
     });
-    timer = setTimeout(
+    startupTimer = setTimeout(
       () => {
         void (async () => {
           if (isStopped()) {
             return;
           }
           const cfg = params.getConfig();
-          const startMs = Date.now();
-          await warmCurrentProviderAuthState(cfg, { isCancelled: isStopped });
+          const metrics = await measureProviderAuthWarm(() =>
+            warmCurrentProviderAuthState(cfg, { isCancelled: isStopped }),
+          );
           if (isStopped()) {
             return;
           }
-          params.log.info(`provider auth state pre-warmed in ${Date.now() - startMs}ms`);
+          params.log.info(
+            `provider auth state pre-warmed ${formatProviderAuthWarmMetrics(metrics)}`,
+          );
         })().catch((err) => {
           params.log.warn(`provider auth state pre-warm failed: ${String(err)}`);
         });
       },
       Math.max(0, delayMs),
     );
-    timer.unref?.();
+    startupTimer.unref?.();
   })().catch((err) => {
     params.log.warn(`provider auth state pre-warm setup failed: ${String(err)}`);
   });
   return {
     stop: () => {
       stopped = true;
-      if (timer) {
-        clearTimeout(timer);
-        timer = undefined;
+      if (startupTimer) {
+        clearTimeout(startupTimer);
+        startupTimer = undefined;
+      }
+      if (rewarmTimer) {
+        clearTimeout(rewarmTimer);
+        rewarmTimer = undefined;
       }
     },
   };
@@ -322,21 +377,6 @@ function hasGatewayStartHooks(pluginRegistry: ReturnType<typeof loadOpenClawPlug
   return pluginRegistry.typedHooks.some((hook) => hook.hookName === "gateway_start");
 }
 
-function isConfiguredCliBackendPrimary(params: {
-  cfg: OpenClawConfig;
-  explicitPrimary: string;
-  normalizeProviderId: (provider: string) => string;
-}): boolean {
-  const slashIndex = params.explicitPrimary.indexOf("/");
-  if (slashIndex <= 0) {
-    return false;
-  }
-  const provider = params.normalizeProviderId(params.explicitPrimary.slice(0, slashIndex));
-  return Object.keys(params.cfg.agents?.defaults?.cliBackends ?? {}).some(
-    (backend) => params.normalizeProviderId(backend) === provider,
-  );
-}
-
 async function hasGatewayStartupInternalHookListeners(): Promise<boolean> {
   const { hasInternalHookListeners } = await import("../hooks/internal-hooks.js");
   return hasInternalHookListeners("gateway", "startup");
@@ -369,128 +409,12 @@ async function waitForAcpRuntimeBackendReady(params: {
   return false;
 }
 
-async function prewarmConfiguredPrimaryModel(params: {
-  cfg: OpenClawConfig;
-  workspaceDir?: string;
-  log: { warn: (msg: string) => void };
-}): Promise<void> {
-  const { resolveAgentModelPrimaryValue } = await import("../config/model-input.js");
-  const explicitPrimary = resolveAgentModelPrimaryValue(params.cfg.agents?.defaults?.model)?.trim();
-  if (!explicitPrimary) {
-    return;
-  }
-  const { normalizeProviderId } = await import("../agents/provider-id.js");
-  if (
-    isConfiguredCliBackendPrimary({
-      cfg: params.cfg,
-      explicitPrimary,
-      normalizeProviderId,
-    })
-  ) {
-    return;
-  }
-  const [
-    { resolveAgentWorkspaceDir, resolveDefaultAgentDir, resolveDefaultAgentId },
-    { DEFAULT_MODEL, DEFAULT_PROVIDER },
-    { isCliProvider, resolveConfiguredModelRef },
-    { resolveEmbeddedAgentRuntime },
-  ] = await Promise.all([
-    import("../agents/agent-scope.js"),
-    import("../agents/defaults.js"),
-    import("../agents/model-selection.js"),
-    import("../agents/pi-embedded-runner/runtime.js"),
-  ]);
-  const { provider, model } = resolveConfiguredModelRef({
-    cfg: params.cfg,
-    defaultProvider: DEFAULT_PROVIDER,
-    defaultModel: DEFAULT_MODEL,
-  });
-  if (isCliProvider(provider, params.cfg)) {
-    return;
-  }
-  const runtime = resolveEmbeddedAgentRuntime();
-  if (runtime !== "auto" && runtime !== "pi") {
-    return;
-  }
-  // Keep startup prewarm metadata-only; resolving models can import provider runtimes and block readiness.
-  const { ensureOpenClawModelsJson } = await import("../agents/models-config.js");
-  const agentDir = resolveDefaultAgentDir(params.cfg);
-  const workspaceDir =
-    params.workspaceDir ?? resolveAgentWorkspaceDir(params.cfg, resolveDefaultAgentId(params.cfg));
-  try {
-    await ensureOpenClawModelsJson(params.cfg, agentDir, {
-      workspaceDir,
-      providerDiscoveryProviderIds: [provider],
-      providerDiscoveryTimeoutMs: STARTUP_PROVIDER_DISCOVERY_TIMEOUT_MS,
-      providerDiscoveryEntriesOnly: true,
-    });
-  } catch (err) {
-    params.log.warn(`startup model warmup failed for ${provider}/${model}: ${String(err)}`);
-  }
-}
-
-async function prewarmConfiguredPrimaryModelWithTimeout(
-  params: {
-    cfg: OpenClawConfig;
-    workspaceDir?: string;
-    log: { warn: (msg: string) => void };
-    timeoutMs?: number;
-  },
-  prewarm: typeof prewarmConfiguredPrimaryModel = prewarmConfiguredPrimaryModel,
-): Promise<void> {
-  let settled = false;
-  const warmup = prewarm(params)
-    .catch((err) => {
-      params.log.warn(`startup model warmup failed: ${String(err)}`);
-    })
-    .finally(() => {
-      settled = true;
-    });
-  const timeout = sleep(params.timeoutMs ?? PRIMARY_MODEL_PREWARM_TIMEOUT_MS, undefined, {
-    ref: false,
-  }).then(() => {
-    if (!settled) {
-      params.log.warn(
-        `startup model warmup timed out after ${params.timeoutMs ?? PRIMARY_MODEL_PREWARM_TIMEOUT_MS}ms; continuing without waiting`,
-      );
-    }
-  });
-  await Promise.race([warmup, timeout]);
-}
-
-function schedulePrimaryModelPrewarm(
-  params: {
-    cfg: OpenClawConfig;
-    workspaceDir?: string;
-    log: { warn: (msg: string) => void };
-    startupTrace?: GatewayStartupTrace;
-  },
-  prewarm: typeof prewarmConfiguredPrimaryModel = prewarmConfiguredPrimaryModel,
-): void {
-  if (shouldSkipStartupModelPrewarm()) {
-    return;
-  }
-  void measureStartup(params.startupTrace, "sidecars.model-prewarm", () =>
-    prewarmConfiguredPrimaryModelWithTimeout(
-      {
-        cfg: params.cfg,
-        ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
-        log: params.log,
-      },
-      prewarm,
-    ),
-  ).catch((err) => {
-    params.log.warn(`startup model warmup failed: ${String(err)}`);
-  });
-}
-
 export async function startGatewaySidecars(params: {
   cfg: OpenClawConfig;
   pluginRegistry: ReturnType<typeof loadOpenClawPlugins>;
   defaultWorkspaceDir: string;
   deps: CliDeps;
   startChannels: () => Promise<void>;
-  prewarmPrimaryModel?: typeof prewarmConfiguredPrimaryModel;
   onPluginServices?: (pluginServices: PluginServicesHandle | null) => void;
   log: { warn: (msg: string) => void };
   logHooks: {
@@ -555,15 +479,6 @@ export async function startGatewaySidecars(params: {
   await measureStartup(params.startupTrace, "sidecars.channels", async () => {
     if (!skipChannels) {
       try {
-        schedulePrimaryModelPrewarm(
-          {
-            cfg: params.cfg,
-            workspaceDir: params.defaultWorkspaceDir,
-            log: params.log,
-            startupTrace: params.startupTrace,
-          },
-          params.prewarmPrimaryModel,
-        );
         await measureStartup(params.startupTrace, "sidecars.channel-start", () =>
           params.startChannels(),
         );
@@ -1140,13 +1055,9 @@ export async function startGatewayPostAttachRuntime(
 
 export const testing = {
   hasRestartSentinelFileFast,
-  prewarmConfiguredPrimaryModel,
-  prewarmConfiguredPrimaryModelWithTimeout,
   refreshLatestUpdateRestartSentinelIfPresent,
   resolveGatewayMemoryStartupPolicy,
   scheduleProviderAuthStatePrewarm,
-  schedulePrimaryModelPrewarm,
-  shouldSkipStartupModelPrewarm,
   stopPostReadySidecarsAfterCloseStarted,
 };
 export { testing as __testing };

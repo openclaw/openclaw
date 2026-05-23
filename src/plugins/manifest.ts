@@ -408,6 +408,7 @@ export type PluginManifestContracts = {
   realtimeTranscriptionProviders?: string[];
   realtimeVoiceProviders?: string[];
   mediaUnderstandingProviders?: string[];
+  meetingNotesSourceProviders?: string[];
   documentExtractors?: string[];
   imageGenerationProviders?: string[];
   videoGenerationProviders?: string[];
@@ -808,6 +809,7 @@ function normalizeManifestContracts(value: unknown): PluginManifestContracts | u
   );
   const realtimeVoiceProviders = normalizeTrimmedStringList(value.realtimeVoiceProviders);
   const mediaUnderstandingProviders = normalizeTrimmedStringList(value.mediaUnderstandingProviders);
+  const meetingNotesSourceProviders = normalizeTrimmedStringList(value.meetingNotesSourceProviders);
   const documentExtractors = normalizeTrimmedStringList(value.documentExtractors);
   const imageGenerationProviders = normalizeTrimmedStringList(value.imageGenerationProviders);
   const videoGenerationProviders = normalizeTrimmedStringList(value.videoGenerationProviders);
@@ -828,6 +830,7 @@ function normalizeManifestContracts(value: unknown): PluginManifestContracts | u
     ...(realtimeTranscriptionProviders.length > 0 ? { realtimeTranscriptionProviders } : {}),
     ...(realtimeVoiceProviders.length > 0 ? { realtimeVoiceProviders } : {}),
     ...(mediaUnderstandingProviders.length > 0 ? { mediaUnderstandingProviders } : {}),
+    ...(meetingNotesSourceProviders.length > 0 ? { meetingNotesSourceProviders } : {}),
     ...(documentExtractors.length > 0 ? { documentExtractors } : {}),
     ...(imageGenerationProviders.length > 0 ? { imageGenerationProviders } : {}),
     ...(videoGenerationProviders.length > 0 ? { videoGenerationProviders } : {}),
@@ -1610,11 +1613,12 @@ export function loadPluginManifest(
   const version = normalizeOptionalString(raw.version);
   const channels = normalizeTrimmedStringList(raw.channels);
   const providers = normalizeTrimmedStringList(raw.providers);
+  const cliBackends = normalizeTrimmedStringList(raw.cliBackends);
   const providerCatalogEntry = normalizeOptionalString(raw.providerCatalogEntry);
   const providerDiscoveryEntry = normalizeOptionalString(raw.providerDiscoveryEntry);
   const modelSupport = normalizeManifestModelSupport(raw.modelSupport);
   const modelCatalog = normalizeModelCatalog(raw.modelCatalog, {
-    ownedProviders: new Set(providers),
+    ownedProviders: new Set([...providers, ...cliBackends]),
   });
   const modelPricing = normalizeManifestModelPricing(raw.modelPricing, {
     ownedProviders: new Set(providers),
@@ -1626,7 +1630,6 @@ export function loadPluginManifest(
   const providerRequest = normalizeManifestProviderRequest(raw.providerRequest, {
     ownedProviders: new Set(providers),
   });
-  const cliBackends = normalizeTrimmedStringList(raw.cliBackends);
   const syntheticAuthRefs = normalizeTrimmedStringList(raw.syntheticAuthRefs);
   const nonSecretAuthMarkers = normalizeTrimmedStringList(raw.nonSecretAuthMarkers);
   const commandAliases = normalizeManifestCommandAliases(raw.commandAliases);

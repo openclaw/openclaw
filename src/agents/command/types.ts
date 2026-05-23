@@ -108,6 +108,8 @@ export type AgentCommandOpts = {
   inputProvenance?: InputProvenance;
   /** Visible source replies must be sent through the message tool when set. */
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
+  /** Internal runs can omit the channel message tool entirely. */
+  disableMessageTool?: boolean;
   /** Per-call stream param overrides (best-effort). */
   streamParams?: AgentStreamParams;
   /** Explicit workspace directory override (for subagents to inherit parent workspace). */
