@@ -1925,9 +1925,6 @@ export async function dispatchReplyFromConfig(
                 if (isDispatchOperationAborted()) {
                   return;
                 }
-                if (shouldSuppressProgressDelivery()) {
-                  return;
-                }
                 const ttsPayload = await maybeApplyTtsToReplyPayload({
                   payload,
                   cfg,
@@ -1941,6 +1938,11 @@ export async function dispatchReplyFromConfig(
                 const normalizedPayload = await normalizeReplyMediaPayload(ttsPayload);
                 const deliveryPayload = resolveToolDeliveryPayload(normalizedPayload);
                 if (!deliveryPayload) {
+                  return;
+                }
+                const ttsMediaExempt =
+                  !!deliveryPayload && resolveSendableOutboundReplyParts(deliveryPayload).hasMedia;
+                if (shouldSuppressProgressDelivery() && !ttsMediaExempt) {
                   return;
                 }
                 if (isDispatchOperationAborted()) {
