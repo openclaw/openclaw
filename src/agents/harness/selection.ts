@@ -476,4 +476,3 @@ export async function maybeCompactAgentHarnessSession(
 function formatProviderModel(params: { provider: string; modelId?: string }): string {
   return params.modelId ? `${params.provider}/${params.modelId}` : params.provider;
 }
-
