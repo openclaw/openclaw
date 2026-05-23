@@ -7,6 +7,7 @@ import { tryReadJson, writeJson } from "./json-files.js";
 import { movePathWithCopyFallback } from "./replace-file.js";
 import { createSafeNpmInstallArgs, createSafeNpmInstallEnv } from "./safe-package-install.js";
 
+const PACKAGE_MANAGER_INSTALL_SOURCE_HARDLINKS = "allow" as const;
 const INSTALL_BASE_CHANGED_ERROR_MESSAGE = "install base directory changed during install";
 const INSTALL_BASE_CHANGED_ABORT_WARNING =
   "Install base directory changed during install; aborting staged publish.";
@@ -213,7 +214,7 @@ export async function installPackageDir(params: {
     }
     await movePathWithCopyFallback({
       from: backupDir,
-      sourceHardlinks: "reject",
+      sourceHardlinks: PACKAGE_MANAGER_INSTALL_SOURCE_HARDLINKS,
       to: canonicalTargetDir,
     }).catch(() => undefined);
     backupDir = null;
@@ -300,7 +301,7 @@ export async function installPackageDir(params: {
       });
       await movePathWithCopyFallback({
         from: canonicalTargetDir,
-        sourceHardlinks: "reject",
+        sourceHardlinks: PACKAGE_MANAGER_INSTALL_SOURCE_HARDLINKS,
         to: backupDir,
       });
     } catch (err) {
@@ -315,7 +316,7 @@ export async function installPackageDir(params: {
     });
     await movePathWithCopyFallback({
       from: stageDir,
-      sourceHardlinks: "reject",
+      sourceHardlinks: PACKAGE_MANAGER_INSTALL_SOURCE_HARDLINKS,
       to: canonicalTargetDir,
     });
     stageDir = null;
