@@ -268,13 +268,31 @@ const cachedBundledPluginPublicSurfaceAliasMaps = new PluginLruCache<Record<stri
   MAX_PLUGIN_LOADER_ALIAS_CACHE_ENTRIES,
 );
 const PLUGIN_SDK_PACKAGE_NAMES = ["openclaw/plugin-sdk", "@openclaw/plugin-sdk"] as const;
-const OFFICIAL_CODEX_PLUGIN_PACKAGE_NAME = "@openclaw/codex";
 const CODEX_NATIVE_TASK_RUNTIME_PLUGIN_SDK_SUBPATH = "codex-native-task-runtime";
 const CODEX_MCP_PROJECTION_PLUGIN_SDK_SUBPATH = "codex-mcp-projection";
-const BUNDLED_CODEX_PRIVATE_PLUGIN_SDK_SUBPATHS = new Set([
-  CODEX_NATIVE_TASK_RUNTIME_PLUGIN_SDK_SUBPATH,
-  CODEX_MCP_PROJECTION_PLUGIN_SDK_SUBPATH,
-]);
+const OLLAMA_CONFIGURED_LOCAL_ORIGIN_RUNTIME_PLUGIN_SDK_SUBPATH = "ssrf-runtime-internal";
+type PrivatePluginSdkSubpathOwner = {
+  bundledPluginId: string;
+  officialInstalledPackageName?: string;
+  allowPrivateQaCli: boolean;
+  subpaths: readonly string[];
+};
+const PRIVATE_PLUGIN_SDK_SUBPATH_OWNERS: readonly PrivatePluginSdkSubpathOwner[] = [
+  {
+    bundledPluginId: "codex",
+    officialInstalledPackageName: "@openclaw/codex",
+    allowPrivateQaCli: true,
+    subpaths: [
+      CODEX_NATIVE_TASK_RUNTIME_PLUGIN_SDK_SUBPATH,
+      CODEX_MCP_PROJECTION_PLUGIN_SDK_SUBPATH,
+    ],
+  },
+  {
+    bundledPluginId: "ollama",
+    allowPrivateQaCli: false,
+    subpaths: [OLLAMA_CONFIGURED_LOCAL_ORIGIN_RUNTIME_PLUGIN_SDK_SUBPATH],
+  },
+];
 const PLUGIN_SDK_SOURCE_CANDIDATE_EXTENSIONS = [
   ".ts",
   ".mts",
@@ -322,6 +340,7 @@ function readPrivateLocalOnlyPluginSdkSubpaths(packageRoot: string): string[] {
     ...new Set([
       CODEX_NATIVE_TASK_RUNTIME_PLUGIN_SDK_SUBPATH,
       CODEX_MCP_PROJECTION_PLUGIN_SDK_SUBPATH,
+      OLLAMA_CONFIGURED_LOCAL_ORIGIN_RUNTIME_PLUGIN_SDK_SUBPATH,
       ...(Array.isArray(parsed)
         ? parsed.filter((subpath): subpath is string => isSafePluginSdkSubpathSegment(subpath))
         : []),
@@ -475,12 +494,16 @@ function shouldIncludePrivateLocalOnlyPluginSdkSubpaths() {
   return process.env.OPENCLAW_ENABLE_PRIVATE_QA_CLI === "1";
 }
 
-function isBundledCodexPluginModulePath(params: { packageRoot: string; modulePath: string }) {
+function isBundledPluginModulePath(params: {
+  packageRoot: string;
+  modulePath: string;
+  pluginId: string;
+}) {
   const normalizedModulePath = path.resolve(params.modulePath);
   const roots = [
-    path.join(params.packageRoot, "extensions", "codex"),
-    path.join(params.packageRoot, "dist", "extensions", "codex"),
-    path.join(params.packageRoot, "dist-runtime", "extensions", "codex"),
+    path.join(params.packageRoot, "extensions", params.pluginId),
+    path.join(params.packageRoot, "dist", "extensions", params.pluginId),
+    path.join(params.packageRoot, "dist-runtime", "extensions", params.pluginId),
   ];
   return roots.some(
     (root) =>
@@ -488,22 +511,32 @@ function isBundledCodexPluginModulePath(params: { packageRoot: string; modulePat
   );
 }
 
-function isOfficialInstalledCodexPluginPackageRoot(packageRoot: string) {
-  const segments = path.resolve(packageRoot).split(path.sep).filter(Boolean);
+function isOfficialInstalledPluginPackageRoot(params: {
+  packageRoot: string;
+  packageName: string;
+}) {
+  const [scope, name] = params.packageName.split("/");
+  if (!scope || !name) {
+    return false;
+  }
+  const segments = path.resolve(params.packageRoot).split(path.sep).filter(Boolean);
   const last = segments.at(-1);
-  const scope = segments.at(-2);
+  const packageScope = segments.at(-2);
   const nodeModules = segments.at(-3);
-  return last === "codex" && scope === "@openclaw" && nodeModules === "node_modules";
+  return last === name && packageScope === scope && nodeModules === "node_modules";
 }
 
-function isOfficialInstalledCodexPluginModulePath(params: { modulePath: string }) {
+function isOfficialInstalledPluginModulePath(params: { modulePath: string; packageName: string }) {
   let cursor = path.dirname(path.resolve(params.modulePath));
   for (let depth = 0; depth < 12; depth += 1) {
     const packageJson = tryReadJsonSync<{ name?: unknown }>(path.join(cursor, "package.json"));
     if (packageJson) {
       return (
-        packageJson.name === OFFICIAL_CODEX_PLUGIN_PACKAGE_NAME &&
-        isOfficialInstalledCodexPluginPackageRoot(cursor)
+        packageJson.name === params.packageName &&
+        isOfficialInstalledPluginPackageRoot({
+          packageRoot: cursor,
+          packageName: params.packageName,
+        })
       );
     }
     const parent = path.dirname(cursor);
@@ -515,11 +548,41 @@ function isOfficialInstalledCodexPluginModulePath(params: { modulePath: string }
   return false;
 }
 
-function isTrustedCodexPluginModulePath(params: { packageRoot: string; modulePath: string }) {
-  return (
-    isBundledCodexPluginModulePath(params) ||
-    isOfficialInstalledCodexPluginModulePath({ modulePath: params.modulePath })
-  );
+function isTrustedPrivatePluginSdkOwnerPath(params: {
+  packageRoot: string;
+  modulePath: string;
+  owner: PrivatePluginSdkSubpathOwner;
+}) {
+  if (
+    isBundledPluginModulePath({
+      packageRoot: params.packageRoot,
+      modulePath: params.modulePath,
+      pluginId: params.owner.bundledPluginId,
+    })
+  ) {
+    return true;
+  }
+  return params.owner.officialInstalledPackageName
+    ? isOfficialInstalledPluginModulePath({
+        modulePath: params.modulePath,
+        packageName: params.owner.officialInstalledPackageName,
+      })
+    : false;
+}
+
+function findPrivatePluginSdkSubpathOwner(
+  subpath: string,
+): PrivatePluginSdkSubpathOwner | undefined {
+  return PRIVATE_PLUGIN_SDK_SUBPATH_OWNERS.find((owner) => owner.subpaths.includes(subpath));
+}
+
+function listTrustedPrivatePluginSdkOwnerKeys(params: {
+  packageRoot: string;
+  modulePath: string;
+}): string[] {
+  return PRIVATE_PLUGIN_SDK_SUBPATH_OWNERS.filter((owner) =>
+    isTrustedPrivatePluginSdkOwnerPath({ ...params, owner }),
+  ).map((owner) => owner.bundledPluginId);
 }
 
 function shouldIncludePrivateLocalOnlyPluginSdkSubpath(params: {
@@ -527,13 +590,13 @@ function shouldIncludePrivateLocalOnlyPluginSdkSubpath(params: {
   modulePath: string;
   subpath: string;
 }) {
+  const owner = findPrivatePluginSdkSubpathOwner(params.subpath);
+  if (!owner) {
+    return shouldIncludePrivateLocalOnlyPluginSdkSubpaths();
+  }
   return (
-    shouldIncludePrivateLocalOnlyPluginSdkSubpaths() ||
-    (BUNDLED_CODEX_PRIVATE_PLUGIN_SDK_SUBPATHS.has(params.subpath) &&
-      isTrustedCodexPluginModulePath({
-        packageRoot: params.packageRoot,
-        modulePath: params.modulePath,
-      }))
+    isTrustedPrivatePluginSdkOwnerPath({ ...params, owner }) ||
+    (owner.allowPrivateQaCli && shouldIncludePrivateLocalOnlyPluginSdkSubpaths())
   );
 }
 
@@ -590,8 +653,8 @@ export function listPluginSdkExportedSubpaths(
   if (!packageRoot) {
     return [];
   }
-  const includeCodexPrivateRuntime = isTrustedCodexPluginModulePath({ packageRoot, modulePath });
-  const cacheKey = `${packageRoot}::privateQa=${shouldIncludePrivateLocalOnlyPluginSdkSubpaths() ? "1" : "0"}::codexPrivate=${includeCodexPrivateRuntime ? "1" : "0"}`;
+  const trustedPrivateOwners = listTrustedPrivatePluginSdkOwnerKeys({ packageRoot, modulePath });
+  const cacheKey = `${packageRoot}::privateQa=${shouldIncludePrivateLocalOnlyPluginSdkSubpaths() ? "1" : "0"}::privateOwners=${trustedPrivateOwners.join(",")}`;
   const cached = cachedPluginSdkExportedSubpaths.get(cacheKey);
   if (cached) {
     return cached;
@@ -628,8 +691,8 @@ export function resolvePluginSdkScopedAliasMap(
     isProduction: process.env.NODE_ENV === "production",
     pluginSdkResolution: params.pluginSdkResolution,
   });
-  const includeCodexPrivateRuntime = isTrustedCodexPluginModulePath({ packageRoot, modulePath });
-  const cacheKey = `${packageRoot}::${orderedKinds.join(",")}::privateQa=${shouldIncludePrivateLocalOnlyPluginSdkSubpaths() ? "1" : "0"}::codexPrivate=${includeCodexPrivateRuntime ? "1" : "0"}`;
+  const trustedPrivateOwners = listTrustedPrivatePluginSdkOwnerKeys({ packageRoot, modulePath });
+  const cacheKey = `${packageRoot}::${orderedKinds.join(",")}::privateQa=${shouldIncludePrivateLocalOnlyPluginSdkSubpaths() ? "1" : "0"}::privateOwners=${trustedPrivateOwners.join(",")}`;
   const cached = cachedPluginSdkScopedAliasMaps.get(cacheKey);
   if (cached) {
     return cached;

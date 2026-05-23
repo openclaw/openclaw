@@ -74,6 +74,7 @@
   "talk-config-runtime",
   "ssrf-policy",
   "ssrf-runtime",
+  "ssrf-runtime-internal",
   "media-runtime",
   "media-store",
   "media-mime",
