@@ -253,8 +253,8 @@ Cursor 快的原因：专为代码编辑优化的 prompt + streaming + 增量更
 ## 十一、开源策略
 
 | 建议开源                                     | 建议商业/私有              |
-| -------------------------------------------- | -------------------------- |
-| `src/kernel`, `src/planes`, `src/interfaces` | 行业 Pack（油气/流程工业） |
+| -------------------------------------------- | -------------------------- | ----------- | -------------------------- |
+| `packages/claworks-runtime/src/kernel        | planes                     | interfaces` | 行业 Pack（油气/流程工业） |
 | `packages/claworks-sdk` + Pack 规范          | 托管 SaaS / 企业 RBAC 服务 |
 | `extensions/claworks-robot` 薄封装           | 与 MES/OT 的深度连接器     |
 | 示例 Pack `base` / `process-industry` 基础版 | 高级功能模块               |

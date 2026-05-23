@@ -75,7 +75,9 @@ curl http://127.0.0.1:18800/v1/health
 | `packs/`                     | 运行时安装目录（git 空）           |
 | sibling `claworks-packs/`    | Pack YAML/TS **唯一真源**          |
 
-详见 [`docs/design/DIRECTORY-LAYOUT.md`](docs/design/DIRECTORY-LAYOUT.md) 与 [`docs/design/ECOSYSTEM-LAYOUT.md`](docs/design/ECOSYSTEM-LAYOUT.md)。
+详见 [`docs/design/DIRECTORY-LAYOUT.md`](docs/design/DIRECTORY-LAYOUT.md) 与 [`docs/design/ECOSYSTEM-EXTENSION-GUIDE.md`](docs/design/ECOSYSTEM-EXTENSION-GUIDE.md)。
+
+**产品阶段**：核心 Phase 0–7 已完成 → 生态扩展。见 [`docs/design/PRODUCT-COMPLETION.md`](docs/design/PRODUCT-COMPLETION.md)。
 
 ---
 

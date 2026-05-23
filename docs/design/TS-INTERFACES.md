@@ -1,13 +1,15 @@
 # ClaWorks TypeScript 接口定义
 
 > 这份文档是 Phase 1 实现的**类型契约**。所有核心模块必须实现这些接口。
-> 文件路径对应 `src/kernel/`, `src/planes/`, `src/interfaces/`。
+> **路径（2026-05-23）**：类型契约对应的实现代码在 `packages/claworks-runtime/src/` 下。
+
+> 文件路径前缀：`packages/claworks-runtime/src/kernel/`、`.../planes/`、`.../interfaces/`。
 
 ---
 
 ## 一、EventKernel
 
-### 事件类型（`src/kernel/types.ts`）
+### 事件类型（`packages/claworks-runtime/src/kernel/types.ts`）
 
 ```typescript
 /** ClaWorks 内部事件。source 是 URI 格式标识符，payload 由事件类型决定。 */
@@ -28,7 +30,7 @@ export interface CwEventMatch {
 }
 ```
 
-### 事件总线（`src/kernel/event-bus.ts`）
+### 事件总线（`packages/claworks-runtime/src/kernel/event-bus.ts`）
 
 ```typescript
 export interface EventBus {
@@ -52,7 +54,7 @@ export interface EventQueryOptions {
 }
 ```
 
-### Playbook Matcher（`src/kernel/playbook-matcher.ts`）
+### Playbook Matcher（`packages/claworks-runtime/src/kernel/playbook-matcher.ts`）
 
 ```typescript
 export interface PlaybookMatchRule {
@@ -77,7 +79,7 @@ export interface PlaybookMatcher {
 
 ---
 
-## 二、ObjectStore（`src/planes/data/object-store.ts`）
+## 二、ObjectStore（`packages/claworks-runtime/src/planes/data/object-store.ts`）
 
 ```typescript
 /** 对象类型实例，字段由 Pack 的 ObjectType YAML 定义 */
@@ -129,7 +131,7 @@ export interface ObjectStore {
 
 ---
 
-## 三、OntologyEngine（`src/planes/data/ontology-engine.ts`）
+## 三、OntologyEngine（`packages/claworks-runtime/src/planes/data/ontology-engine.ts`）
 
 ```typescript
 export interface ObjectTypeDefinition {
@@ -187,7 +189,7 @@ export interface ValidationResult {
 
 ---
 
-## 四、PlaybookEngine（`src/planes/orch/playbook-engine.ts`）
+## 四、PlaybookEngine（`packages/claworks-runtime/src/planes/orch/playbook-engine.ts`）
 
 ```typescript
 export interface PlaybookDefinition {
@@ -392,7 +394,7 @@ export interface CwAgentSkill {
 
 ---
 
-## 七、共享类型（`src/kernel/types.ts`）
+## 七、共享类型（`packages/claworks-runtime/src/kernel/types.ts`）
 
 ```typescript
 export interface RobotInfo {

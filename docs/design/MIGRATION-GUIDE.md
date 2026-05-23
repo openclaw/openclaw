@@ -3,6 +3,7 @@
 ## 原则：迁移概念和接口，不逐行翻译代码
 
 Python 侧已有 11,372 行业务核心代码，其中：
+
 - **YAML 文件**（本体/Playbook）：语言无关，100% 直接复用
 - **核心逻辑**：用 TypeScript 重写，直接调 OpenClaw API，比 Python 版更简洁
 - **数据库结构**：参考 Python Alembic 迁移，用 Drizzle ORM 重建
@@ -24,10 +25,10 @@ class PostgresObjectStore:
 ```typescript
 // TypeScript (src/planes/data/object-store.ts)
 export class ObjectStore {
-  static async open(databaseUrl: string): Promise<ObjectStore>
-  async query(typeName: string, filters?: Record<string, unknown>): Promise<unknown[]>
-  async save(typeName: string, data: Record<string, unknown>): Promise<string>
-  async executeAction(actionRef: string, params: unknown, ctx: PlaybookContext): Promise<unknown>
+  static async open(databaseUrl: string): Promise<ObjectStore>;
+  async query(typeName: string, filters?: Record<string, unknown>): Promise<unknown[]>;
+  async save(typeName: string, data: Record<string, unknown>): Promise<string>;
+  async executeAction(actionRef: string, params: unknown, ctx: PlaybookContext): Promise<unknown>;
 }
 ```
 
@@ -43,7 +44,7 @@ export const equipment = sqliteTable("equipment", {
   id: text("id").primaryKey(),
   stationId: text("station_id").notNull(),
   equipmentType: text("equipment_type").notNull(),
-  status: text("status").notNull().default("normal"),  // 8 态，参考 equipment.yaml
+  status: text("status").notNull().default("normal"), // 8 态，参考 equipment.yaml
   tag: text("tag"),
   createdAt: integer("created_at", { mode: "timestamp" }),
 });
@@ -51,8 +52,8 @@ export const equipment = sqliteTable("equipment", {
 export const alarms = sqliteTable("alarms", {
   id: text("id").primaryKey(),
   equipmentId: text("equipment_id"),
-  priority: integer("priority").notNull(),             // ISA-18.2: 1-4
-  status: text("status").notNull().default("active"),  // active/acknowledged/shelved/resolved
+  priority: integer("priority").notNull(), // ISA-18.2: 1-4
+  status: text("status").notNull().default("active"), // active/acknowledged/shelved/resolved
   triggeredAt: integer("triggered_at", { mode: "timestamp" }),
   acknowledgedBy: text("acknowledged_by"),
 });
@@ -60,8 +61,8 @@ export const alarms = sqliteTable("alarms", {
 export const workOrders = sqliteTable("work_orders", {
   id: text("id").primaryKey(),
   title: text("title").notNull(),
-  state: text("state").notNull().default("draft"),     // FSM: draft→in_progress→done/rejected
-  workType: text("work_type"),                         // maintenance/inspection/repair
+  state: text("state").notNull().default("draft"), // FSM: draft→in_progress→done/rejected
+  workType: text("work_type"), // maintenance/inspection/repair
   stationId: text("station_id").notNull(),
   createdAt: integer("created_at", { mode: "timestamp" }),
 });
@@ -81,24 +82,25 @@ class OntologyLoader:
 
 ```typescript
 // TypeScript (src/planes/data/ontology-engine.ts)
-import { parse as parseYaml } from "yaml";  // 已在 OpenClaw 中使用
+import { parse as parseYaml } from "yaml"; // 已在 OpenClaw 中使用
 
 export class OntologyEngine {
-  static async load(packsDir: string): Promise<OntologyEngine>
-  getObjectType(apiName: string): ObjectTypeDef | undefined
-  validateInstance(typeName: string, data: unknown): ValidationResult
-  async reload(packId: string): Promise<void>  // 热重载：写 YAML → 调此方法
+  static async load(packsDir: string): Promise<OntologyEngine>;
+  getObjectType(apiName: string): ObjectTypeDef | undefined;
+  validateInstance(typeName: string, data: unknown): ValidationResult;
+  async reload(packId: string): Promise<void>; // 热重载：写 YAML → 调此方法
 }
 ```
 
 **YAML 文件直接复用**（零迁移成本）：
 
 ```bash
-# 从 clawtwin-platform 迁移 YAML 文件
-cp -r /Users/power/Projects/clawtwin-platform/platform-api/ontology/object_types/*.yaml \
-      /Users/power/Projects/claworks-packs/base/ontology/object_types/
-cp -r /Users/power/Projects/clawtwin-platform/platform-api/ontology/playbooks/*.yaml \
-      /Users/power/Projects/claworks-packs/base/ontology/playbooks/
+# 从归档的 clawtwin-platform 迁移 YAML（若本地有 archive）
+# ~/Projects/archive/ecosystem-legacy-20260522/clawtwin-platform/platform-api/ontology/...
+cp -r /path/to/archived/ontology/object_types/*.yaml \
+      ../claworks-packs/base/ontology/object_types/
+cp -r /path/to/archived/ontology/playbooks/*.yaml \
+      ../claworks-packs/base/ontology/playbooks/
 ```
 
 ---
@@ -116,7 +118,7 @@ class PlaybookMatcher:
 ```
 
 ```typescript
-// TypeScript (src/kernel/event-bus.ts)
+// TypeScript (packages/claworks-runtime/src/kernel/event-bus.ts)
 // 利用 OpenClaw registerService 生命周期
 
 export class EventKernel {
@@ -126,10 +128,10 @@ export class EventKernel {
     playbookEngine: PlaybookEngine;
   }) {}
 
-  async start(): Promise<void>
-  async stop(): Promise<void>
-  async publish(event: ClaworksEvent): Promise<void>
-  subscribe(pattern: EventPattern, handler: EventHandler): Unsubscribe
+  async start(): Promise<void>;
+  async stop(): Promise<void>;
+  async publish(event: ClaworksEvent): Promise<void>;
+  subscribe(pattern: EventPattern, handler: EventHandler): Unsubscribe;
 }
 
 // 挂载到 OpenClaw（extensions/claworks-robot/index.ts）：
@@ -158,16 +160,16 @@ class PlaybookExecutor:
 ```typescript
 // TypeScript (src/planes/orch/playbook-engine.ts)
 export class PlaybookEngine {
-  static async load(packsDir: string): Promise<PlaybookEngine>
+  static async load(packsDir: string): Promise<PlaybookEngine>;
 
-  async trigger(playbookId: string, payload: unknown): Promise<PlaybookRunHandle>
-  async resume(runId: string, decision: HITLDecision): Promise<void>
-  async reload(packId?: string): Promise<void>
+  async trigger(playbookId: string, payload: unknown): Promise<PlaybookRunHandle>;
+  async resume(runId: string, decision: HITLDecision): Promise<void>;
+  async reload(packId?: string): Promise<void>;
 }
 
 // 步骤执行器（src/planes/orch/step-executor.ts）
 export class StepExecutor {
-  constructor(private api: OpenClawPluginApi) {}  // 直接持有 api，用 OpenClaw 能力
+  constructor(private api: OpenClawPluginApi) {} // 直接持有 api，用 OpenClaw 能力
 
   async execute(step: StepDef, ctx: RunContext): Promise<StepResult> {
     switch (step.type) {
@@ -233,13 +235,13 @@ class ExtensionRegistry:
 // 类比 OpenClaw 的 PluginRegistry，但面向 Pack
 
 export class PackLoader {
-  static async loadFromDir(packsDir: string): Promise<PackRegistry>
+  static async loadFromDir(packsDir: string): Promise<PackRegistry>;
 
-  getObjectTypes(): ObjectTypeDef[]
-  getPlaybooks(): PlaybookDef[]
-  getConnectors(): ConnectorDef[]
-  async install(packId: string, nexusUrl: string): Promise<void>
-  async reload(packId?: string): Promise<void>
+  getObjectTypes(): ObjectTypeDef[];
+  getPlaybooks(): PlaybookDef[];
+  getConnectors(): ConnectorDef[];
+  async install(packId: string, nexusUrl: string): Promise<void>;
+  async reload(packId?: string): Promise<void>;
 }
 ```
 
@@ -254,21 +256,25 @@ Python 版完整 FSM 直接用 TypeScript 重写，逻辑完全一致：
 export type WorkOrderState = "draft" | "in_progress" | "waiting_approval" | "done" | "rejected";
 export type WorkOrderAction = "start" | "submit_approval" | "approve" | "reject" | "complete";
 
-export const WORKORDER_TRANSITIONS: Record<WorkOrderState, Partial<Record<WorkOrderAction, WorkOrderState>>> = {
-  draft:            { start: "in_progress" },
-  in_progress:      { submit_approval: "waiting_approval", complete: "done" },
+export const WORKORDER_TRANSITIONS: Record<
+  WorkOrderState,
+  Partial<Record<WorkOrderAction, WorkOrderState>>
+> = {
+  draft: { start: "in_progress" },
+  in_progress: { submit_approval: "waiting_approval", complete: "done" },
   waiting_approval: { approve: "in_progress", reject: "rejected" },
-  done:             {},
-  rejected:         {},
+  done: {},
+  rejected: {},
 };
 
-export function transition(
-  current: WorkOrderState,
-  action: WorkOrderAction,
-): WorkOrderState {
+export function transition(current: WorkOrderState, action: WorkOrderAction): WorkOrderState {
   const next = WORKORDER_TRANSITIONS[current]?.[action];
   if (!next) {
-    throw new WorkOrderFSMError({ current, action, allowed: Object.keys(WORKORDER_TRANSITIONS[current] ?? {}) });
+    throw new WorkOrderFSMError({
+      current,
+      action,
+      allowed: Object.keys(WORKORDER_TRANSITIONS[current] ?? {}),
+    });
   }
   return next;
 }

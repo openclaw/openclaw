@@ -1,5 +1,7 @@
 # ClaWorks Fork 改造计划
 
+> **路径（2026-05-23）**：ClaWorks 核心已迁入 `packages/claworks-runtime/src/`。下文 `src/kernel/` 等均指该路径。
+
 > 这份文档回答：从 openclaw fork 过来之后，**哪些文件要改、哪些扩展要保留、哪些要删除**。
 >
 > 原则：**最小改动**。内部 TS 标识符不重命名（保持 openclaw\* 变量名），只改用户可见的品牌表面和新增 ClaWorks 核心代码。
@@ -28,26 +30,26 @@
 
 ### 1.3 新增（ClaWorks 核心——Phase 1 主要工作）
 
-| 路径                                   | 内容                                    |
-| -------------------------------------- | --------------------------------------- |
-| `src/kernel/event-bus.ts`              | EventKernel 事件总线                    |
-| `src/kernel/playbook-matcher.ts`       | 事件→Playbook 匹配规则                  |
-| `src/kernel/scheduler.ts`              | cron/延迟触发调度器                     |
-| `src/planes/data/object-store.ts`      | ObjectStore (Drizzle ORM)               |
-| `src/planes/data/ontology-engine.ts`   | 本体加载/验证/查询                      |
-| `src/planes/data/knowledge-base.ts`    | KB 语义检索                             |
-| `src/planes/orch/playbook-engine.ts`   | Playbook YAML 执行引擎                  |
-| `src/planes/orch/hitl-gate.ts`         | HITL 人工审批节点                       |
-| `src/planes/orch/function-executor.ts` | Playbook step 函数执行器                |
-| `src/interfaces/a2a/server.ts`         | Google A2A Server (robot-to-robot)      |
-| `src/interfaces/a2a/client.ts`         | Google A2A Client                       |
-| `src/interfaces/mcp/server.ts`         | MCP 工具暴露服务                        |
-| `src/interfaces/connectors/opc-ua.ts`  | OPC-UA Connector（stdio child process） |
-| `src/interfaces/connectors/modbus.ts`  | Modbus Connector                        |
-| `src/interfaces/connectors/mqtt.ts`    | MQTT Connector                          |
-| `src/interfaces/rest/router.ts`        | ClaWorks REST API 路由                  |
-| `src/pack-loader/loader.ts`            | Pack 加载/验证/注册                     |
-| `extensions/claworks-robot/index.ts`   | 主插件实现（注册所有 cw\_\* 工具）      |
+| 路径                                                       | 内容                                    |
+| ---------------------------------------------------------- | --------------------------------------- |
+| `packages/claworks-runtime/src/kernel/event-bus.ts`        | EventKernel 事件总线                    |
+| `packages/claworks-runtime/src/kernel/playbook-matcher.ts` | 事件→Playbook 匹配规则                  |
+| `packages/claworks-runtime/src/kernel/scheduler.ts`        | cron/延迟触发调度器                     |
+| `src/planes/data/object-store.ts`                          | ObjectStore (Drizzle ORM)               |
+| `src/planes/data/ontology-engine.ts`                       | 本体加载/验证/查询                      |
+| `src/planes/data/knowledge-base.ts`                        | KB 语义检索                             |
+| `src/planes/orch/playbook-engine.ts`                       | Playbook YAML 执行引擎                  |
+| `src/planes/orch/hitl-gate.ts`                             | HITL 人工审批节点                       |
+| `src/planes/orch/function-executor.ts`                     | Playbook step 函数执行器                |
+| `src/interfaces/a2a/server.ts`                             | Google A2A Server (robot-to-robot)      |
+| `src/interfaces/a2a/client.ts`                             | Google A2A Client                       |
+| `src/interfaces/mcp/server.ts`                             | MCP 工具暴露服务                        |
+| `src/interfaces/connectors/opc-ua.ts`                      | OPC-UA Connector（stdio child process） |
+| `src/interfaces/connectors/modbus.ts`                      | Modbus Connector                        |
+| `src/interfaces/connectors/mqtt.ts`                        | MQTT Connector                          |
+| `src/interfaces/rest/router.ts`                            | ClaWorks REST API 路由                  |
+| `src/pack-loader/loader.ts`                                | Pack 加载/验证/注册                     |
+| `extensions/claworks-robot/index.ts`                       | 主插件实现（注册所有 cw\_\* 工具）      |
 
 ---
 
@@ -162,7 +164,7 @@ claworks:
 
 每次从 `upstream/main` 合并前检查：
 
-1. `src/kernel/`, `src/planes/`, `src/interfaces/` — **仅 ClaWorks 新增**，upstream 没有，不会冲突
+1. `packages/claworks-runtime/src/kernel/`, `.../planes/`, `.../interfaces/` — **仅 ClaWorks 新增**，upstream 没有，不会冲突
 2. `src/plugin-sdk/` — openclaw 可能更新，接受 upstream 版本
 3. `extensions/claworks-robot/` — 仅 ClaWorks 有，不会冲突
 4. `package.json` — `name/version/bin/description` 保持 claworks 版本，其余字段接受 upstream

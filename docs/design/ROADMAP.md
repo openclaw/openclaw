@@ -2,7 +2,12 @@
 
 **版本**：v1.0  
 **日期**：2026-05-19  
-**实现注记（2026-05-20）**：Phase 0–7 与 `@claworks/runtime` M2/M3 已在仓内落地；M0.3 独立外仓见 `EXTERNAL-EXTENSION.md`（本地 `../openclaw-claworks-extension`）。下文 `□` 为历史清单，**以 `IMPLEMENTATION-STATUS.md` + `pnpm claworks:smoke` 为准**。未完成：外仓 npm 发布、Studio React、Drizzle 全量 PG、KB 向量。
+**实现注记（2026-05-23）**：
+
+- **Phase 0–7：✅ 已完成**（见 [PRODUCT-COMPLETION.md](./PRODUCT-COMPLETION.md)）
+- **Phase 8+：🔜 生态扩展**（见 [ECOSYSTEM-EXTENSION-GUIDE.md](./ECOSYSTEM-EXTENSION-GUIDE.md)）
+- 下文 `□` 为 **历史任务清单**，勿当作待办；以 `IMPLEMENTATION-STATUS.md` + `pnpm claworks:smoke` 为准
+- 刻意未完成：npm 公开发布、Studio React、Drizzle 全量 PG、KB 向量、根 package 品牌（最后做）
 
 ---
 

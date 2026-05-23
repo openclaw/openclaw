@@ -1,6 +1,6 @@
 # ClaWorks 实现状态（对照设计文档）
 
-**更新**：2026-05-20（设计对齐审计 + M2/M3 收尾）  
+**更新**：2026-05-23（Phase 0–7 完毕；生态扩展见 `ECOSYSTEM-EXTENSION-GUIDE.md`）  
 **结论**：`docs/design/` 中 **Phase 0–7 核心业务闭环已实现**；`@claworks/runtime` **M2 物理迁入 + M3 本地 dist** 已完成；根 `src/kernel|planes|interfaces|claworks` shim **已删除**；`packs-cli` 已迁入包内。  
 **发布策略**：当前仅 **本地开发 / 仓内验证**，不执行 npm 公开发布。  
 **测试**：`pnpm claworks:smoke` 或 `pnpm claworks:runtime:test` — **56 文件 / 141 用例** + e2e/http/dist-smoke。
@@ -160,7 +160,7 @@ extensions/claworks-robot/   ← OpenClaw 薄插件（唯一仓内胶水）
 | Extension 从 Fork **物理删除**（仅 allow 裁剪）       | `ROADMAP` Phase 4                    | ❌ 仍 bundled                                                                                 |
 | Drizzle ORM + 9 迁移全量 PostgreSQL 生产路径          | `MIGRATION-GUIDE.md`、`ROADMAP`      | ⚠️ SQLite 闭环；`db-pg` 部分                                                                  |
 | KB **向量检索**（Phase 2）                            | `REPO-STRUCTURE.md`、`CONFIG-SCHEMA` | ❌ 子串/文件 KB                                                                               |
-| `contrib/industrial-oilgas-skills/` ClawTwin 愿景文档 | 并行产品叙事                         | ❌ 非 `docs/design/` 交付范围                                                                 |
+| `contrib/industrial-oilgas-skills/` ClawTwin 愿景文档 | 并行产品叙事                         | 📦 已迁入 `legacy-from-openclaw/`，非交付范围                                                 |
 | npm 公开发布 `@claworks/runtime`                      | `RUNTIME-PACKAGE` M3                 | ⏸ 按产品策略暂缓                                                                              |
 
 **说明**：`ROADMAP.md` 中大量 `□` 未勾选为文档滞后，不代表对应 API/Playbook 未实现；以本文与 `pnpm claworks:smoke` 为准。
@@ -255,4 +255,6 @@ node --import tsx scripts/claworks-closed-loop-demo.mjs
 - `ROADMAP.md` — 里程碑
 - `EXTERNAL-EXTENSION.md` — 官方 OpenClaw 桥接外仓
 - `REPO-STRUCTURE.md` — 目录与包边界
-- `BUSINESS-GENERAL-PLAN.md` — 通用企业业务扩展规划（enterprise-general Pack）
+- `PRODUCT-COMPLETION.md` — 核心完毕 vs 生态阶段
+- `CORE-ARCHITECTURE-GUIDE.md` — 模块地图与业务逻辑
+- `ECOSYSTEM-EXTENSION-GUIDE.md` — 伙伴/用户扩展手册
