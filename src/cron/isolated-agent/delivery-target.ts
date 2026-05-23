@@ -283,6 +283,7 @@ export async function resolveDeliveryTarget(
     }
   }
 
+  const preResolvedRouteTargetCandidate = toCandidate;
   const docked = await resolveOutboundTargetWithRuntime({
     channel,
     to: toCandidate,
@@ -305,7 +306,6 @@ export async function resolveDeliveryTarget(
   toCandidate = docked.to;
 
   let resolvedTarget: ResolvedMessagingTarget | undefined;
-  let routeTargetCandidate = toCandidate;
   const targetResolution = await deliveryTargetRuntime.resolveChannelTargetForDelivery({
     cfg,
     channel,
@@ -324,7 +324,10 @@ export async function resolveDeliveryTarget(
     };
   }
   resolvedTarget = targetResolution.target;
-  routeTargetCandidate = resolvedTarget.to;
+  const routeTargetCandidate =
+    resolvedTarget.source === "directory"
+      ? resolvedTarget.to
+      : (preResolvedRouteTargetCandidate ?? toCandidate);
   const selectedTarget = stripSelectedProviderPrefix({
     channel,
     to: resolvedTarget.to,
@@ -358,11 +361,13 @@ export async function resolveDeliveryTarget(
       return null;
     }
   })();
-  const routeCanCanonicalizeTarget = Boolean(
-    deliveryTargetRuntime.getLoadedChannelPluginForRead(channel)?.messaging
-      ?.resolveOutboundSessionRoute,
-  );
-  if (route && routeCanCanonicalizeTarget) {
+  const routeCanCanonicalizeTarget = deliveryTargetRuntime.channelCanResolveOutboundSessionRoute({
+    cfg,
+    channel,
+  });
+  const routeShouldCanonicalizeTarget =
+    route && (route.threadId !== undefined || route.to !== routeTargetCandidate);
+  if (route && routeCanCanonicalizeTarget && routeShouldCanonicalizeTarget) {
     const routeTo = stripSelectedProviderPrefix({
       channel,
       to: route.to,

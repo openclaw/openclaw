@@ -57,3 +57,16 @@ export async function resolveOutboundSessionRouteForDelivery(params: {
   });
   return await resolveOutboundSessionRoute(params);
 }
+
+export function channelCanResolveOutboundSessionRoute(params: {
+  cfg: OpenClawConfig;
+  channel: ChannelId;
+}): boolean {
+  return Boolean(
+    resolveOutboundChannelPlugin({
+      channel: params.channel,
+      cfg: params.cfg,
+      allowBootstrap: true,
+    })?.messaging?.resolveOutboundSessionRoute,
+  );
+}
