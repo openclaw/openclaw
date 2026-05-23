@@ -1,0 +1,32 @@
+name: Agents intake
+
+on:
+  issues:
+    types: [opened, reopened]
+
+jobs:
+  label:
+    # Auto-label new issues with agents:intake so the mctl-agents issue-poller
+    # picks them up for investigation within 5 minutes. The poller removes the
+    # label after writing the proposal, so issues are only investigated once.
+    #
+    # Exemptions: issues opened by bots are skipped (they typically come from
+    # upstream openclaw automation and are not mctlhq-scoped proposals).
+    if: >
+      github.actor != 'github-actions[bot]' &&
+      github.actor != 'dependabot[bot]' &&
+      github.actor != 'renovate[bot]'
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+    steps:
+      - name: Add agents:intake label
+        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7
+        with:
+          script: |
+            await github.rest.issues.addLabels({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              labels: ['agents:intake'],
+            });
