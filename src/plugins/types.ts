@@ -109,6 +109,9 @@ import type {
   PluginSessionActionRegistration,
   PluginSessionAttachmentParams,
   PluginSessionAttachmentResult,
+  PluginSessionContinuationLeaseClearParams,
+  PluginSessionContinuationLeaseParams,
+  PluginSessionContinuationLeaseResult,
   PluginSessionSchedulerJobHandle,
   PluginSessionSchedulerJobRegistration,
   PluginSessionExtensionRegistration,
@@ -219,6 +222,9 @@ export type {
   PluginRuntimeLifecycleRegistration,
   PluginSessionAttachmentParams,
   PluginSessionAttachmentResult,
+  PluginSessionContinuationLeaseClearParams,
+  PluginSessionContinuationLeaseParams,
+  PluginSessionContinuationLeaseResult,
   PluginSessionSchedulerJobHandle,
   PluginSessionSchedulerJobRegistration,
   PluginSessionExtensionRegistration,
@@ -2536,6 +2542,17 @@ export type OpenClawPluginSessionWorkflowApi = {
   scheduleSessionTurn: (
     params: PluginSessionTurnScheduleParams,
   ) => Promise<PluginSessionSchedulerJobHandle | undefined>;
+  /**
+   * Replace any prior continuation lease for the same session and lease key,
+   * then schedule one bounded follow-up turn.
+   */
+  requestSessionContinuationLease: (
+    params: PluginSessionContinuationLeaseParams,
+  ) => Promise<PluginSessionContinuationLeaseResult>;
+  /** Clear a previously scheduled same-session continuation lease. */
+  clearSessionContinuationLease: (
+    params: PluginSessionContinuationLeaseClearParams,
+  ) => Promise<PluginSessionTurnUnscheduleByTagResult>;
   /** Remove Cron-backed scheduled session turns that share a plugin-owned tag. */
   unscheduleSessionTurnsByTag: (
     params: PluginSessionTurnUnscheduleByTagParams,
@@ -2839,6 +2856,23 @@ export type OpenClawPluginApi = {
   scheduleSessionTurn: (
     params: PluginSessionTurnScheduleParams,
   ) => Promise<PluginSessionSchedulerJobHandle | undefined>;
+  /**
+   * Replace any prior continuation lease for the same session and lease key,
+   * then schedule one bounded follow-up turn.
+   *
+   * @deprecated Use `api.session.workflow.requestSessionContinuationLease(...)`.
+   */
+  requestSessionContinuationLease: (
+    params: PluginSessionContinuationLeaseParams,
+  ) => Promise<PluginSessionContinuationLeaseResult>;
+  /**
+   * Clear a previously scheduled same-session continuation lease.
+   *
+   * @deprecated Use `api.session.workflow.clearSessionContinuationLease(...)`.
+   */
+  clearSessionContinuationLease: (
+    params: PluginSessionContinuationLeaseClearParams,
+  ) => Promise<PluginSessionTurnUnscheduleByTagResult>;
   /**
    * Remove Cron-backed scheduled session turns that share the same plugin-owned tag.
    * Bundled plugins only; workspace plugins receive a zero-count result.

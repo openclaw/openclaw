@@ -18,6 +18,8 @@ const PLUGIN_API_METHOD_POLICIES: Partial<Record<PluginApiMethodName, PluginApiL
   emitAgentEvent: { phase: "runtime", lateCallable: true },
   sendSessionAttachment: { phase: "runtime", lateCallable: true },
   scheduleSessionTurn: { phase: "runtime", lateCallable: true },
+  requestSessionContinuationLease: { phase: "runtime", lateCallable: true },
+  clearSessionContinuationLease: { phase: "runtime", lateCallable: true },
   unscheduleSessionTurnsByTag: { phase: "runtime", lateCallable: true },
 };
 

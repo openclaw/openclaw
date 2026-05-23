@@ -73,6 +73,8 @@ export type BuildPluginApiParams = {
       | "registerSessionAction"
       | "sendSessionAttachment"
       | "scheduleSessionTurn"
+      | "requestSessionContinuationLease"
+      | "clearSessionContinuationLease"
       | "unscheduleSessionTurnsByTag"
       | "registerDetachedTaskRuntime"
       | "registerMemoryCapability"
@@ -164,6 +166,10 @@ const noopSendSessionAttachment: OpenClawPluginApi["sendSessionAttachment"] = as
   error: "not wired",
 });
 const noopScheduleSessionTurn: OpenClawPluginApi["scheduleSessionTurn"] = async () => undefined;
+const noopRequestSessionContinuationLease: OpenClawPluginApi["requestSessionContinuationLease"] =
+  async () => ({ scheduled: false, reason: "plugin_not_loaded" });
+const noopClearSessionContinuationLease: OpenClawPluginApi["clearSessionContinuationLease"] =
+  async () => ({ removed: 0, failed: 0 });
 const noopUnscheduleSessionTurnsByTag: OpenClawPluginApi["unscheduleSessionTurnsByTag"] =
   async () => ({ removed: 0, failed: 0 });
 const noopRegisterDetachedTaskRuntime: OpenClawPluginApi["registerDetachedTaskRuntime"] = () => {};
@@ -272,6 +278,10 @@ export function buildPluginApi(params: BuildPluginApiParams): OpenClawPluginApi 
     registerSessionAction: handlers.registerSessionAction ?? noopRegisterSessionAction,
     sendSessionAttachment: handlers.sendSessionAttachment ?? noopSendSessionAttachment,
     scheduleSessionTurn: handlers.scheduleSessionTurn ?? noopScheduleSessionTurn,
+    requestSessionContinuationLease:
+      handlers.requestSessionContinuationLease ?? noopRequestSessionContinuationLease,
+    clearSessionContinuationLease:
+      handlers.clearSessionContinuationLease ?? noopClearSessionContinuationLease,
     unscheduleSessionTurnsByTag:
       handlers.unscheduleSessionTurnsByTag ?? noopUnscheduleSessionTurnsByTag,
     registerDetachedTaskRuntime:

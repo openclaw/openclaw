@@ -77,6 +77,8 @@ export function createTestPluginApi(api: TestPluginApiInput = {}): OpenClawPlugi
     sendSessionAttachment: async () => ({ ok: false, error: "test plugin api" }),
     scheduleSessionTurn: async () => undefined,
     unscheduleSessionTurnsByTag: async () => ({ removed: 0, failed: 0 }),
+    requestSessionContinuationLease: async () => ({ enqueued: false, reason: "test plugin api" }),
+    clearSessionContinuationLease: async () => ({ removed: 0, failed: 0 }),
     registerMemoryCapability() {},
     registerMemoryPromptSection() {},
     registerMemoryPromptSupplement() {},
