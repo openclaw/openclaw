@@ -14,7 +14,6 @@ import {
   resolveInheritedToolPolicyForSession,
   resolveSubagentToolPolicyForSession,
 } from "../pi-tools.policy.js";
-import { normalizeProviderId } from "../provider-id.js";
 import { resolveSandboxRuntimeStatus } from "../sandbox/runtime-status.js";
 import { resolveSenderToolPolicy } from "../sender-tool-policy.js";
 import {
@@ -61,9 +60,9 @@ type AgentHarnessSelectionDecision = {
     | "forced_plugin"
     // Implicit Codex preference found no registered Codex harness, so PI handled the run.
     | "implicit_plugin_unavailable_pi"
-    // Explicit CLI runtime alias or configured cliBackends id has no agent harness
-    // plugin counterpart. PI is returned as the transcript-composition placeholder;
-    // the actual run is routed through CLI dispatch by callers that consult model
+    // Explicit provider-owned CLI runtime aliases have no agent harness plugin
+    // counterpart. PI is returned as the transcript-composition placeholder; the
+    // actual run is routed through CLI dispatch by callers that consult model
     // runtime policy (see `assertModelFallbackCandidateHarnessAvailable`).
     | "cli_runtime_passthrough_pi"
     // Auto mode chose a registered plugin harness that supports the provider/model.
@@ -75,13 +74,6 @@ type AgentHarnessSelectionDecision = {
 
 function listPluginAgentHarnesses(): AgentHarness[] {
   return listRegisteredAgentHarnesses().map((entry) => entry.harness);
-}
-
-function hasConfiguredCliBackendId(runtime: string, config: OpenClawConfig | undefined): boolean {
-  const configured = config?.agents?.defaults?.cliBackends ?? {};
-  return Object.keys(configured).some(
-    (key) => normalizeProviderId(key) === normalizeProviderId(runtime),
-  );
 }
 
 export function resolveAvailableAgentHarnessPolicy(params: {
@@ -185,10 +177,7 @@ function selectAgentHarnessDecision(params: {
         candidates: listHarnessCandidates(pluginHarnesses),
       });
     }
-    if (
-      isCliRuntimeAliasForProvider({ runtime, provider: params.provider }) ||
-      hasConfiguredCliBackendId(runtime, params.config)
-    ) {
+    if (isCliRuntimeAliasForProvider({ runtime, provider: params.provider })) {
       return buildSelectionDecision({
         harness: piHarness,
         policy: {

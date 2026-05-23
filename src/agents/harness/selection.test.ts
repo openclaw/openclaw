@@ -692,7 +692,7 @@ describe("selectAgentHarness", () => {
     },
   );
 
-  it("returns PI for an explicit configured cliBackends id instead of throwing", () => {
+  it("still throws MissingAgentHarnessError for an explicit configured cliBackends id", () => {
     const config = {
       agents: {
         defaults: {
@@ -703,14 +703,14 @@ describe("selectAgentHarness", () => {
       },
     } as OpenClawConfig;
 
-    expect(
+    expect(() =>
       selectAgentHarness({
         provider: "anthropic",
         modelId: "sonnet-4.6",
         agentHarnessRuntimeOverride: "my-custom-cli",
         config,
-      }).id,
-    ).toBe("pi");
+      }),
+    ).toThrow('Requested agent harness "my-custom-cli" is not registered');
   });
 
   it("still throws MissingAgentHarnessError for an explicit non-CLI unknown runtime", () => {
