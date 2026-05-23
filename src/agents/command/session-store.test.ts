@@ -705,6 +705,71 @@ describe("updateSessionStoreAfterAgentRun", () => {
     });
   });
 
+  it("clears stale estimated context budget status when a runtime refresh has no current estimate", async () => {
+    await withTempSessionStore(async ({ storePath }) => {
+      const cfg = {} as OpenClawConfig;
+      const sessionKey = "agent:main:explicit:test-clear-context-budget-status";
+      const sessionId = "test-clear-context-budget-status-session";
+      const sessionStore: Record<string, SessionEntry> = {
+        [sessionKey]: {
+          sessionId,
+          updatedAt: 1,
+          totalTokens: 21225,
+          totalTokensFresh: false,
+          contextBudgetStatus: {
+            schemaVersion: 1,
+            source: "pre-prompt-estimate",
+            updatedAt: 123,
+            provider: "anthropic",
+            model: "claude-sonnet-4.6",
+            route: "fits",
+            shouldCompact: false,
+            estimatedPromptTokens: 18_000,
+            contextTokenBudget: 32_000,
+            promptBudgetBeforeReserve: 28_000,
+            reserveTokens: 4_000,
+            effectiveReserveTokens: 4_000,
+            remainingPromptBudgetTokens: 10_000,
+            overflowTokens: 0,
+            toolResultReducibleChars: 0,
+            messageCount: 4,
+            unwindowedMessageCount: 4,
+          },
+        },
+      };
+      await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2));
+
+      const result: EmbeddedPiRunResult = {
+        meta: {
+          durationMs: 500,
+          agentMeta: {
+            sessionId,
+            provider: "minimax",
+            model: "MiniMax-M2.7",
+          },
+        },
+      };
+
+      await updateSessionStoreAfterAgentRun({
+        cfg,
+        sessionId,
+        sessionKey,
+        storePath,
+        sessionStore,
+        defaultProvider: "minimax",
+        defaultModel: "MiniMax-M2.7",
+        result,
+      });
+
+      expect(sessionStore[sessionKey]?.modelProvider).toBe("minimax");
+      expect(sessionStore[sessionKey]?.model).toBe("MiniMax-M2.7");
+      expect(sessionStore[sessionKey]?.contextBudgetStatus).toBeUndefined();
+
+      const persisted = loadSessionStore(storePath);
+      expect(persisted[sessionKey]?.contextBudgetStatus).toBeUndefined();
+    });
+  });
+
   it("does not treat CLI cumulative usage as a fresh context snapshot", async () => {
     await withTempSessionStore(async ({ storePath }) => {
       const cfg = {

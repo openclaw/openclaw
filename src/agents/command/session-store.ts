@@ -181,7 +181,7 @@ export async function updateSessionStoreAfterAgentRun(params: {
   if (result.meta.systemPromptReport) {
     next.systemPromptReport = result.meta.systemPromptReport;
   }
-  if (contextBudgetStatus && !preserveRuntimeModel) {
+  if (!preserveRuntimeModel) {
     next.contextBudgetStatus = contextBudgetStatus;
   }
   if (hasNonzeroUsage(usage)) {
