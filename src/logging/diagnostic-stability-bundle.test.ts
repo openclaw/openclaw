@@ -333,6 +333,45 @@ describe("diagnostic stability bundles", () => {
     }
   });
 
+  it("preserves delayed fetch timeout fields when reading bundles", () => {
+    const file = path.join(tempDir, "bundle.json");
+    const bundle = createImportedBundle();
+    const snapshot = bundle.snapshot as Record<string, unknown>;
+    Object.assign(snapshot, {
+      events: [
+        {
+          seq: 1,
+          ts: 1,
+          type: "fetch.timeout.delayed",
+          timeoutMs: 10_000,
+          elapsedMs: 17_175,
+          timerDelayMs: 7_175,
+          operation: "matrix.guarded-redirect-fetch",
+          eventLoopDelayHint: "timer delayed 7175ms, likely event-loop starvation",
+          url: "https://api.telegram.org/bot-secret/getMe",
+        },
+      ],
+      summary: { byType: { "fetch.timeout.delayed": 1 } },
+    });
+    fs.writeFileSync(file, `${JSON.stringify(bundle, null, 2)}\n`, "utf8");
+
+    const result = readDiagnosticStabilityBundleFileSync(file);
+
+    expect(result.status).toBe("found");
+    if (result.status !== "found") {
+      return;
+    }
+    expect(result.bundle.snapshot.events[0]).toEqual({
+      seq: 1,
+      ts: 1,
+      type: "fetch.timeout.delayed",
+      timeoutMs: 10_000,
+      elapsedMs: 17_175,
+      timerDelayMs: 7_175,
+      operation: "matrix.guarded-redirect-fetch",
+    });
+  });
+
   it("rejects malformed bundle files", () => {
     const file = path.join(tempDir, "invalid.json");
     fs.writeFileSync(file, "{}\n", "utf8");

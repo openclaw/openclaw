@@ -271,10 +271,10 @@ describe("gateway-cli coverage", () => {
         snapshot: {
           generatedAt: "2026-04-22T12:00:00.000Z",
           capacity: 1000,
-          count: 1,
+          count: 2,
           dropped: 0,
           firstSeq: 1,
-          lastSeq: 1,
+          lastSeq: 2,
           events: [
             {
               seq: 1,
@@ -285,9 +285,18 @@ describe("gateway-cli coverage", () => {
               bytes: 2048,
               limitBytes: 1024,
             },
+            {
+              seq: 2,
+              ts: Date.parse("2026-04-22T12:00:01.000Z"),
+              type: "fetch.timeout.delayed",
+              timeoutMs: 10_000,
+              elapsedMs: 17_175,
+              timerDelayMs: 7_175,
+              operation: "matrix.guarded-redirect-fetch",
+            },
           ],
           summary: {
-            byType: { "payload.large": 1 },
+            byType: { "payload.large": 1, "fetch.timeout.delayed": 1 },
             payloadLarge: {
               count: 1,
               rejected: 1,
@@ -315,6 +324,8 @@ describe("gateway-cli coverage", () => {
       expect(output).toContain("agents/<agent>/sessions/<session>.jsonl");
       expect(output).toContain("payload.large");
       expect(output).toContain("gateway.http.json");
+      expect(output).toContain("fetch.timeout.delayed");
+      expect(output).toContain("timerDelayMs=7175");
     } finally {
       fs.rmSync(tempDir, { recursive: true, force: true });
     }
