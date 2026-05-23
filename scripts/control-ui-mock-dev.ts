@@ -146,6 +146,44 @@ function buildSearchSessionListCases(
   return searchTerms.flatMap((search) => buildSessionListCases(sessions, { search }));
 }
 
+function chatHistoryMessage(role: "assistant" | "user", text: string, timestamp: number) {
+  return {
+    content: [{ text, type: "text" }],
+    role,
+    timestamp,
+  };
+}
+
+function buildScrollableChatHistory(baseTime: number): unknown[] {
+  const messages: unknown[] = [
+    chatHistoryMessage(
+      "assistant",
+      `Mock Control UI is running with ${TOTAL_MOCK_SESSIONS} sessions. Open the chat picker, search for "telegram" or "claude", then use Load more repeatedly.`,
+      baseTime,
+    ),
+  ];
+
+  for (let index = 1; index <= 36; index += 1) {
+    const timestamp = baseTime + index * 60_000;
+    messages.push(
+      chatHistoryMessage(
+        "user",
+        `Mock scroll request ${index}: add enough transcript content to exercise the chat scroll container in focused mode.`,
+        timestamp,
+      ),
+      chatHistoryMessage(
+        "assistant",
+        `Mock scroll response ${index}: this deterministic history keeps the mock chat long enough to scroll while testing focus mode, header collapse, and composer anchoring. `.repeat(
+          2,
+        ),
+        timestamp + 30_000,
+      ),
+    );
+  }
+
+  return messages;
+}
+
 function searchPrefixes(term: string): string[] {
   return Array.from({ length: term.length }, (_value, index) => term.slice(0, index + 1));
 }
@@ -179,18 +217,7 @@ function createChatPickerScenario(): ControlUiMockGatewayScenario {
     assistantAgentId: "openclaw-mock",
     assistantName: "OpenClaw mock",
     defaultAgentId: "openclaw-mock",
-    historyMessages: [
-      {
-        content: [
-          {
-            text: `Mock Control UI is running with ${TOTAL_MOCK_SESSIONS} sessions. Open the chat picker, search for "telegram" or "claude", then use Load more repeatedly.`,
-            type: "text",
-          },
-        ],
-        role: "assistant",
-        timestamp: baseTime,
-      },
-    ],
+    historyMessages: buildScrollableChatHistory(baseTime),
     methodResponses: {
       "sessions.list": {
         cases: [
