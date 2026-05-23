@@ -68,6 +68,7 @@ export type IMessageCatchupRow = {
 
 export type IMessageCatchupSummary = {
   querySucceeded: boolean;
+  fullyCaughtUp: boolean;
   fetchedCount: number;
   replayed: number;
   skippedFromMe: number;
@@ -259,6 +260,12 @@ export type CatchupFetchFn = (params: {
   highWatermarkRowid?: number;
   /** Companion to `highWatermarkRowid` — highest `date` seen in the raw response. */
   highWatermarkMs?: number;
+  /**
+   * True when the fetcher reached every eligible source row for this pass.
+   * False means a best-effort partial pass occurred (for example one chat
+   * history fetch failed, or the global cap left rows for a later startup).
+   */
+  fullyCaughtUp?: boolean;
 }>;
 
 export type CatchupDispatchFn = (row: IMessageCatchupRow) => Promise<{ ok: boolean }>;
@@ -328,6 +335,7 @@ export async function performIMessageCatchup(
 
   const summary: IMessageCatchupSummary = {
     querySucceeded: false,
+    fullyCaughtUp: false,
     fetchedCount: 0,
     replayed: 0,
     skippedFromMe: 0,
@@ -362,6 +370,7 @@ export async function performIMessageCatchup(
     return summary;
   }
   summary.querySucceeded = true;
+  summary.fullyCaughtUp = fetchResult.fullyCaughtUp !== false;
   summary.fetchedCount = fetchResult.rows.length;
 
   // Stable order: process oldest-first so the cursor advances monotonically

@@ -20,6 +20,16 @@ const dispatchInboundMessageMock = vi.hoisted(() =>
       ({ queuedFinal: false, counts: { tool: 0, block: 0, final: 0 } }) as const,
   ),
 );
+const debouncerControl = vi.hoisted(() => ({
+  holdEntries: false,
+  entries: [] as unknown[],
+  flush: undefined as undefined | (() => Promise<void>),
+  reset() {
+    this.holdEntries = false;
+    this.entries = [];
+    this.flush = undefined;
+  },
+}));
 
 vi.mock("openclaw/plugin-sdk/transport-ready-runtime", () => ({
   waitForTransportReady: waitForTransportReadyMock,
@@ -41,7 +51,17 @@ vi.mock("openclaw/plugin-sdk/channel-inbound", async (importOriginal) => {
     ...actual,
     createChannelInboundDebouncer: vi.fn((opts) => ({
       debouncer: {
-        enqueue: async (entry: unknown) => await opts.onFlush([entry]),
+        enqueue: async (entry: unknown) => {
+          if (!debouncerControl.holdEntries) {
+            await opts.onFlush([entry]);
+            return;
+          }
+          debouncerControl.entries.push(entry);
+          debouncerControl.flush = async () => {
+            const entries = debouncerControl.entries.splice(0);
+            await opts.onFlush(entries);
+          };
+        },
       },
     })),
     shouldDebounceTextInbound: vi.fn(() => false),
@@ -73,6 +93,7 @@ describe("iMessage monitor last-route updates", () => {
     readChannelAllowFromStoreMock.mockReset().mockResolvedValue([]);
     recordInboundSessionMock.mockClear();
     dispatchInboundMessageMock.mockClear();
+    debouncerControl.reset();
   });
 
   afterEach(() => {
@@ -212,6 +233,175 @@ describe("iMessage monitor last-route updates", () => {
 
     await vi.waitFor(async () => {
       expect((await loadIMessageCatchupCursor("default"))?.lastSeenRowid).toBe(77);
+    });
+  });
+
+  it("does not advance the live cursor after partial startup catchup", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-05-22T15:31:00.000Z"));
+    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-imsg-partial-cursor-"));
+    tempDirs.push(stateDir);
+    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+
+    let onNotification: ((message: { method: string; params: unknown }) => void) | undefined;
+    const client = {
+      request: vi.fn(async (method: string, params: unknown) => {
+        if (method === "watch.subscribe") {
+          return { subscription: 1 };
+        }
+        if (method === "chats.list") {
+          return {
+            chats: [
+              { id: 1, last_message_at: "2026-05-22T15:15:00.000Z" },
+              { id: 2, last_message_at: "2026-05-22T15:15:00.000Z" },
+            ],
+          };
+        }
+        if (method === "messages.history") {
+          const p = params as { chat_id: number };
+          if (p.chat_id === 1) {
+            throw new Error("chat history unavailable");
+          }
+          return {
+            messages: [
+              {
+                id: 10,
+                guid: "CATCHUP-GUID-10",
+                chat_id: 2,
+                sender: "+15550001111",
+                is_from_me: false,
+                text: "catchup row",
+                is_group: false,
+                created_at: "2026-05-22T15:15:00.000Z",
+              },
+            ],
+          };
+        }
+        throw new Error(`unexpected imsg method ${method}`);
+      }),
+      waitForClose: vi.fn(async () => {
+        onNotification?.({
+          method: "message",
+          params: {
+            message: {
+              id: 77,
+              guid: "LIVE-GUID-77",
+              chat_id: 123,
+              sender: "+15550001111",
+              is_from_me: false,
+              text: "hello after partial catchup",
+              is_group: false,
+              created_at: "2026-05-22T15:30:00.000Z",
+            },
+          },
+        });
+        await Promise.resolve();
+        await Promise.resolve();
+      }),
+      stop: vi.fn(async () => {}),
+    };
+    createIMessageRpcClientMock.mockImplementation(async (params) => {
+      if (!params?.onNotification) {
+        throw new Error("expected iMessage notification handler");
+      }
+      onNotification = params.onNotification;
+      return client as never;
+    });
+
+    await monitorIMessageProvider({
+      config: {
+        channels: {
+          imessage: {
+            catchup: { enabled: true },
+            dmPolicy: "allowlist",
+            allowFrom: ["+15550001111"],
+          },
+        },
+        messages: { inbound: { debounceMs: 0 } },
+        session: { mainKey: "main" },
+      } as never,
+      runtime: { error: vi.fn(), exit: vi.fn(), log: vi.fn() },
+    });
+
+    await vi.waitFor(async () => {
+      expect((await loadIMessageCatchupCursor("default"))?.lastSeenRowid).toBe(10);
+    });
+  });
+
+  it("advances a coalesced live bucket to the highest source row", async () => {
+    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-imsg-coalesced-cursor-"));
+    tempDirs.push(stateDir);
+    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+    debouncerControl.holdEntries = true;
+
+    let onNotification: ((message: { method: string; params: unknown }) => void) | undefined;
+    const client = {
+      request: vi.fn(async (method: string) => {
+        if (method === "watch.subscribe") {
+          return { subscription: 1 };
+        }
+        if (method === "chats.list") {
+          return { chats: [] };
+        }
+        throw new Error(`unexpected imsg method ${method}`);
+      }),
+      waitForClose: vi.fn(async () => {
+        for (const row of [
+          { id: 77, guid: "LIVE-GUID-77", text: "Dump", created_at: "2026-05-22T15:30:00.000Z" },
+          {
+            id: 78,
+            guid: "LIVE-GUID-78",
+            text: "https://example.com",
+            created_at: "2026-05-22T15:30:01.000Z",
+          },
+        ]) {
+          onNotification?.({
+            method: "message",
+            params: {
+              message: {
+                ...row,
+                chat_id: 123,
+                sender: "+15550001111",
+                is_from_me: false,
+                is_group: false,
+              },
+            },
+          });
+        }
+        await vi.waitFor(() => {
+          expect(debouncerControl.flush).toBeDefined();
+        });
+        await debouncerControl.flush?.();
+        await Promise.resolve();
+      }),
+      stop: vi.fn(async () => {}),
+    };
+    createIMessageRpcClientMock.mockImplementation(async (params) => {
+      if (!params?.onNotification) {
+        throw new Error("expected iMessage notification handler");
+      }
+      onNotification = params.onNotification;
+      return client as never;
+    });
+
+    await monitorIMessageProvider({
+      config: {
+        channels: {
+          imessage: {
+            catchup: { enabled: true },
+            coalesceSameSenderDms: true,
+            dmPolicy: "allowlist",
+            allowFrom: ["+15550001111"],
+          },
+        },
+        messages: { inbound: { debounceMs: 2500 } },
+        session: { mainKey: "main" },
+      } as never,
+      runtime: { error: vi.fn(), exit: vi.fn(), log: vi.fn() },
+    });
+
+    await vi.waitFor(async () => {
+      expect((await loadIMessageCatchupCursor("default"))?.lastSeenRowid).toBe(78);
     });
   });
 });

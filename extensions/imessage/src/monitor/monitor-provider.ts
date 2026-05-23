@@ -356,9 +356,24 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
     if (!catchupCfg.enabled || !liveCatchupCursorAdvanceEnabled) {
       return;
     }
-    const rowid = typeof message.id === "number" && Number.isFinite(message.id) ? message.id : null;
+    const coalescedCursor = (
+      message as {
+        coalescedCatchupCursor?: { lastSeenMs?: unknown; lastSeenRowid?: unknown };
+      }
+    ).coalescedCatchupCursor;
+    const rowid =
+      typeof coalescedCursor?.lastSeenRowid === "number" &&
+      Number.isFinite(coalescedCursor.lastSeenRowid)
+        ? coalescedCursor.lastSeenRowid
+        : typeof message.id === "number" && Number.isFinite(message.id)
+          ? message.id
+          : null;
     const dateMs =
-      typeof message.created_at === "string" ? Date.parse(message.created_at) : Number.NaN;
+      typeof coalescedCursor?.lastSeenMs === "number" && Number.isFinite(coalescedCursor.lastSeenMs)
+        ? coalescedCursor.lastSeenMs
+        : typeof message.created_at === "string"
+          ? Date.parse(message.created_at)
+          : Number.NaN;
     if (rowid === null || !Number.isFinite(dateMs)) {
       return;
     }
@@ -955,7 +970,8 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
         dispatchPayload: (message) => handleMessageNow(message, { advanceCatchupCursor: false }),
         runtime,
       });
-      liveCatchupCursorAdvanceEnabled = catchupSummary.querySucceeded;
+      liveCatchupCursorAdvanceEnabled =
+        catchupSummary.querySucceeded && catchupSummary.fullyCaughtUp;
     } catch (err) {
       // Catchup is opt-in recovery — surface the error but do not block the
       // monitor. The live dispatch loop is already up and running.
