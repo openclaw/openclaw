@@ -1747,7 +1747,7 @@ describe("dispatchReplyFromConfig", () => {
     });
 
     expect(receivedOptions?.suppressToolErrorWarnings).toBeUndefined();
-    expect(receivedOptions?.shouldSuppressToolErrorWarnings?.()).toBeUndefined();
+    expect(receivedOptions?.shouldSuppressToolErrorWarnings?.()).toBe(false);
     expect(dispatcher.sendToolResult).not.toHaveBeenCalled();
     expect(dispatcher.sendFinalReply).toHaveBeenCalledTimes(1);
   });

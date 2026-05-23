@@ -453,8 +453,15 @@ export function createFollowupRunner(params: {
           observedVisibleToolErrorProgress = true;
         }
       };
-      const shouldSuppressToolErrorWarnings = () =>
-        opts?.suppressToolErrorWarnings ?? (observedVisibleToolErrorProgress ? true : undefined);
+      const shouldSuppressToolErrorWarnings = () => {
+        if (opts?.suppressToolErrorWarnings !== undefined) {
+          return opts.suppressToolErrorWarnings;
+        }
+        if (!shouldEmitVerboseProgress()) {
+          return false;
+        }
+        return observedVisibleToolErrorProgress ? true : undefined;
+      };
       let progressDeliveryChain: Promise<void> = Promise.resolve();
       const pendingProgressDeliveries = new Set<Promise<void>>();
       const enqueueProgressDelivery = (deliver: () => Promise<void>) => {

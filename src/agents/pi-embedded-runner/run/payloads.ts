@@ -152,11 +152,15 @@ function resolveToolErrorWarningPolicy(params: {
   verboseLevel?: VerboseLevel;
 }): ToolErrorWarningPolicy {
   const normalizedToolName = normalizeOptionalLowercaseString(params.lastToolError.toolName) ?? "";
-  const includeDetails = shouldIncludeToolErrorDetails(params);
-  const suppressToolErrorWarnings =
+  const toolErrorWarningOverride =
     typeof params.suppressToolErrorWarnings === "function"
-      ? params.suppressToolErrorWarnings() === true
-      : params.suppressToolErrorWarnings === true;
+      ? params.suppressToolErrorWarnings()
+      : params.suppressToolErrorWarnings;
+  const includeDetails = shouldIncludeToolErrorDetails({
+    ...params,
+    verboseLevel: toolErrorWarningOverride === false ? "off" : params.verboseLevel,
+  });
+  const suppressToolErrorWarnings = toolErrorWarningOverride === true;
   if (suppressToolErrorWarnings) {
     return { showWarning: false, includeDetails };
   }

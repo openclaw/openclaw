@@ -1863,9 +1863,15 @@ export async function dispatchReplyFromConfig(
       payload.status === "failed" ||
       payload.status === "error" ||
       (typeof payload.exitCode === "number" && payload.exitCode !== 0);
-    const shouldSuppressToolErrorWarnings = () =>
-      params.replyOptions?.suppressToolErrorWarnings ??
-      (observedVisibleToolErrorProgress ? true : undefined);
+    const shouldSuppressToolErrorWarnings = () => {
+      if (params.replyOptions?.suppressToolErrorWarnings !== undefined) {
+        return params.replyOptions.suppressToolErrorWarnings;
+      }
+      if (!shouldEmitVerboseProgress()) {
+        return false;
+      }
+      return observedVisibleToolErrorProgress ? true : undefined;
+    };
     const suppressToolErrorWarnings =
       params.replyOptions?.suppressToolErrorWarnings ??
       (observedVisibleToolErrorProgress ? true : undefined);
