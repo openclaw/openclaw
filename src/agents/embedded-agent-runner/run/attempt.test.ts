@@ -3303,6 +3303,7 @@ describe("buildAfterTurnRuntimeContext", () => {
         activeAgentId: "main",
       });
 
+      expect(legacy.activeAgentId).toBe("main");
       const activeProcessSessions = legacy.activeProcessSessions as
         | Array<{ sessionId?: string; command?: string; pid?: number }>
         | undefined;

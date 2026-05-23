@@ -2235,6 +2235,7 @@ export async function runEmbeddedAttempt(
               cwd: effectiveCwd,
               agentDir,
               tokenBudget: params.contextTokenBudget,
+              activeAgentId: sessionAgentId,
               promptCache:
                 promptCache ??
                 buildLoopPromptCacheInfo({

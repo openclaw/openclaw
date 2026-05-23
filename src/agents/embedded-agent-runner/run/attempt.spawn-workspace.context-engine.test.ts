@@ -49,6 +49,12 @@ type ToolResultGuardInstallParams = {
     onMidTurnPrecheck?: (request: MidTurnPrecheckRequest) => void;
   };
 };
+type ContextEngineLoopHookInstallParams = {
+  getRuntimeContext?: (params: {
+    messages: AgentMessage[];
+    prePromptMessageCount: number;
+  }) => Record<string, unknown> | undefined;
+};
 type MockCallSource = {
   mock: {
     calls: ArrayLike<ReadonlyArray<unknown>>;
@@ -2376,6 +2382,36 @@ describe("runEmbeddedAttempt context engine mid-turn precheck integration", () =
     ) as ToolResultGuardInstallParams;
     expect(guardParams.midTurnPrecheck).toBeDefined();
     expect(guardParams.midTurnPrecheck?.enabled).toBe(true);
+  });
+
+  it("threads the active agent id into loop-hook runtime context", async () => {
+    await createContextEngineAttemptRunner({
+      contextEngine: {
+        ...createContextEngineBootstrapAndAssemble(),
+        info: { ownsCompaction: true },
+      },
+      sessionKey: "agent:worker:discord:channel:test-loop-agent",
+      tempPaths,
+      attemptOverrides: {
+        config: {
+          agents: {
+            defaults: {},
+            list: [{ id: "main" }, { id: "worker" }],
+          },
+        } as OpenClawConfig,
+      },
+    });
+
+    const loopHookParams = mockParams(
+      hoisted.installContextEngineLoopHookMock,
+      0,
+      "context engine loop hook params",
+    ) as ContextEngineLoopHookInstallParams;
+    const runtimeContext = loopHookParams.getRuntimeContext?.({
+      messages: [seedMessage],
+      prePromptMessageCount: 0,
+    });
+    expect(runtimeContext?.activeAgentId).toBe("worker");
   });
 
   it("recovers when the runtime persists the mid-turn precheck as an assistant error", async () => {
