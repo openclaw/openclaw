@@ -411,6 +411,7 @@ export const zh_CN: TranslationMap = {
     debug: "调试",
     logs: "日志",
     dreams: "梦境",
+    audit: "Memory Audit",
   },
   subtitles: {
     agents: "工作区、工具、身份。",
@@ -433,6 +434,7 @@ export const zh_CN: TranslationMap = {
     debug: "快照、事件、RPC。",
     logs: "实时网关日志。",
     dreams: "睡眠时进行记忆巩固。",
+    audit: "Review staged memory cleanup suggestions.",
   },
   activity: {
     title: "活动",
@@ -1113,6 +1115,46 @@ export const zh_CN: TranslationMap = {
       loadMoreSessions: "加载更多会话",
       model: "聊天模型",
       thinkingLevel: "聊天思考级别",
+    },
+  },
+  memoryAudit: {
+    review: {
+      title: "Review Queue",
+      subtitle: "Pending suggestions staged by memory audit runs.",
+      loading: "Loading audit suggestions…",
+      emptyTitle: "No pending audit suggestions",
+      emptyBody: "Audit runs will stage reviewable memory changes here before anything is applied.",
+    },
+    summary: {
+      label: "Memory audit summary",
+      total: "总计",
+      pending: "Pending",
+      applied: "Applied",
+      rejected: "Rejected",
+      conflict: "Conflicts",
+    },
+    actions: {
+      apply: "Apply",
+      reject: "Reject",
+      working: "处理中…",
+    },
+    action: {
+      add: "Add",
+      edit: "Edit",
+      delete: "删除",
+      move: "Move",
+    },
+    status: {
+      pending: "Pending",
+      applied: "Applied",
+      rejected: "Rejected",
+      conflict: "Conflict",
+    },
+    kind: {
+      "agent-memory": "Agent memory",
+      "user-profile": "User profile",
+      "tool-notes": "Tool notes",
+      "shared-memory": "Shared memory",
     },
   },
   languages: {

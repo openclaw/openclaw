@@ -222,6 +222,11 @@ export type AppViewState = {
   wikiMemoryPalaceLoading: boolean;
   wikiMemoryPalaceError: string | null;
   wikiMemoryPalace: import("./controllers/dreaming.js").WikiMemoryPalace | null;
+  memoryAuditLoading: boolean;
+  memoryAuditError: string | null;
+  memoryAuditSuggestions: import("./controllers/memory-audit.js").MemoryAuditSuggestions | null;
+  memoryAuditActionId: string | null;
+  memoryAuditActionMessage: { kind: "success" | "error"; text: string } | null;
   configFormMode: "form" | "raw";
   configSettingsMode: "quick" | "advanced";
   configSearchQuery: string;

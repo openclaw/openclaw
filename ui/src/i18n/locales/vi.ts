@@ -414,6 +414,7 @@ export const vi: TranslationMap = {
     debug: "Gỡ lỗi",
     logs: "Nhật ký",
     dreams: "Đang mơ",
+    audit: "Memory Audit",
   },
   subtitles: {
     agents: "Không gian làm việc, công cụ, danh tính.",
@@ -436,6 +437,7 @@ export const vi: TranslationMap = {
     debug: "Ảnh chụp, sự kiện, RPC.",
     logs: "Nhật ký gateway trực tiếp.",
     dreams: "Mơ bộ nhớ, hợp nhất và phản chiếu.",
+    audit: "Review staged memory cleanup suggestions.",
   },
   activity: {
     title: "Hoạt động",
@@ -1140,6 +1142,46 @@ export const vi: TranslationMap = {
       loadMoreSessions: "Tải thêm phiên",
       model: "Chat model",
       thinkingLevel: "Chat thinking level",
+    },
+  },
+  memoryAudit: {
+    review: {
+      title: "Review Queue",
+      subtitle: "Pending suggestions staged by memory audit runs.",
+      loading: "Loading audit suggestions…",
+      emptyTitle: "No pending audit suggestions",
+      emptyBody: "Audit runs will stage reviewable memory changes here before anything is applied.",
+    },
+    summary: {
+      label: "Memory audit summary",
+      total: "Tổng",
+      pending: "Pending",
+      applied: "Applied",
+      rejected: "Rejected",
+      conflict: "Conflicts",
+    },
+    actions: {
+      apply: "Apply",
+      reject: "Reject",
+      working: "Đang xử lý…",
+    },
+    action: {
+      add: "Add",
+      edit: "Chỉnh sửa",
+      delete: "Xóa",
+      move: "Move",
+    },
+    status: {
+      pending: "Pending",
+      applied: "Applied",
+      rejected: "Rejected",
+      conflict: "Conflict",
+    },
+    kind: {
+      "agent-memory": "Agent memory",
+      "user-profile": "User profile",
+      "tool-notes": "Tool notes",
+      "shared-memory": "Shared memory",
     },
   },
   languages: {

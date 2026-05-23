@@ -413,6 +413,7 @@ export const ko: TranslationMap = {
     debug: "디버그",
     logs: "로그",
     dreams: "드리밍",
+    audit: "Memory Audit",
   },
   subtitles: {
     agents: "워크스페이스, 도구, 정체성.",
@@ -435,6 +436,7 @@ export const ko: TranslationMap = {
     debug: "스냅샷, 이벤트, RPC.",
     logs: "실시간 Gateway 로그.",
     dreams: "수면 중 메모리 통합.",
+    audit: "Review staged memory cleanup suggestions.",
   },
   activity: {
     title: "활동",
@@ -1141,6 +1143,46 @@ export const ko: TranslationMap = {
       loadMoreSessions: "세션 더 불러오기",
       model: "Chat model",
       thinkingLevel: "Chat thinking level",
+    },
+  },
+  memoryAudit: {
+    review: {
+      title: "Review Queue",
+      subtitle: "Pending suggestions staged by memory audit runs.",
+      loading: "Loading audit suggestions…",
+      emptyTitle: "No pending audit suggestions",
+      emptyBody: "Audit runs will stage reviewable memory changes here before anything is applied.",
+    },
+    summary: {
+      label: "Memory audit summary",
+      total: "합계",
+      pending: "Pending",
+      applied: "Applied",
+      rejected: "Rejected",
+      conflict: "Conflicts",
+    },
+    actions: {
+      apply: "Apply",
+      reject: "Reject",
+      working: "작업 중…",
+    },
+    action: {
+      add: "Add",
+      edit: "편집",
+      delete: "삭제",
+      move: "Move",
+    },
+    status: {
+      pending: "Pending",
+      applied: "Applied",
+      rejected: "Rejected",
+      conflict: "Conflict",
+    },
+    kind: {
+      "agent-memory": "Agent memory",
+      "user-profile": "User profile",
+      "tool-notes": "Tool notes",
+      "shared-memory": "Shared memory",
     },
   },
   languages: {

@@ -414,6 +414,7 @@ export const id: TranslationMap = {
     debug: "Debug",
     logs: "Log",
     dreams: "Mimpi",
+    audit: "Memory Audit",
   },
   subtitles: {
     agents: "Ruang kerja, alat, identitas.",
@@ -436,6 +437,7 @@ export const id: TranslationMap = {
     debug: "Snapshot, peristiwa, RPC.",
     logs: "Log Gateway langsung.",
     dreams: "Konsolidasi memori saat tidur.",
+    audit: "Review staged memory cleanup suggestions.",
   },
   activity: {
     title: "Aktivitas",
@@ -1148,6 +1150,46 @@ export const id: TranslationMap = {
       loadMoreSessions: "Muat sesi lainnya",
       model: "Chat model",
       thinkingLevel: "Chat thinking level",
+    },
+  },
+  memoryAudit: {
+    review: {
+      title: "Review Queue",
+      subtitle: "Pending suggestions staged by memory audit runs.",
+      loading: "Loading audit suggestions…",
+      emptyTitle: "No pending audit suggestions",
+      emptyBody: "Audit runs will stage reviewable memory changes here before anything is applied.",
+    },
+    summary: {
+      label: "Memory audit summary",
+      total: "Total",
+      pending: "Pending",
+      applied: "Applied",
+      rejected: "Rejected",
+      conflict: "Conflicts",
+    },
+    actions: {
+      apply: "Apply",
+      reject: "Reject",
+      working: "Sedang bekerja…",
+    },
+    action: {
+      add: "Add",
+      edit: "Edit",
+      delete: "Hapus",
+      move: "Move",
+    },
+    status: {
+      pending: "Pending",
+      applied: "Applied",
+      rejected: "Rejected",
+      conflict: "Conflict",
+    },
+    kind: {
+      "agent-memory": "Agent memory",
+      "user-profile": "User profile",
+      "tool-notes": "Tool notes",
+      "shared-memory": "Shared memory",
     },
   },
   languages: {

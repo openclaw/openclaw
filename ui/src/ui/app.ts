@@ -102,6 +102,7 @@ import {
   type ExecApprovalRequest,
 } from "./controllers/exec-approval.ts";
 import type { ExecApprovalsFile, ExecApprovalsSnapshot } from "./controllers/exec-approvals.ts";
+import type { MemoryAuditSuggestions } from "./controllers/memory-audit.ts";
 import type {
   ClawHubSearchResult,
   ClawHubSkillSecurityVerdict,
@@ -364,6 +365,11 @@ export class OpenClawApp extends LitElement {
   @state() wikiMemoryPalaceLoading = false;
   @state() wikiMemoryPalaceError: string | null = null;
   @state() wikiMemoryPalace: WikiMemoryPalace | null = null;
+  @state() memoryAuditLoading = false;
+  @state() memoryAuditError: string | null = null;
+  @state() memoryAuditSuggestions: MemoryAuditSuggestions | null = null;
+  @state() memoryAuditActionId: string | null = null;
+  @state() memoryAuditActionMessage: { kind: "success" | "error"; text: string } | null = null;
   @state() configFormDirty = false;
   @state() configSettingsMode: "quick" | "advanced" = "quick";
   @state() configFormMode: "form" | "raw" = "form";

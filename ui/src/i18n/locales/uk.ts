@@ -415,6 +415,7 @@ export const uk: TranslationMap = {
     debug: "Налагодження",
     logs: "Журнали",
     dreams: "Сни",
+    audit: "Memory Audit",
   },
   subtitles: {
     agents: "Робочі простори, інструменти, ідентичності.",
@@ -437,6 +438,7 @@ export const uk: TranslationMap = {
     debug: "Знімки, події, RPC.",
     logs: "Журнали шлюзу в реальному часі.",
     dreams: "Консолідація пам’яті під час сну.",
+    audit: "Review staged memory cleanup suggestions.",
   },
   activity: {
     title: "Активність",
@@ -1151,6 +1153,46 @@ export const uk: TranslationMap = {
       loadMoreSessions: "Завантажити більше сеансів",
       model: "Chat model",
       thinkingLevel: "Chat thinking level",
+    },
+  },
+  memoryAudit: {
+    review: {
+      title: "Review Queue",
+      subtitle: "Pending suggestions staged by memory audit runs.",
+      loading: "Loading audit suggestions…",
+      emptyTitle: "No pending audit suggestions",
+      emptyBody: "Audit runs will stage reviewable memory changes here before anything is applied.",
+    },
+    summary: {
+      label: "Memory audit summary",
+      total: "Усього",
+      pending: "Pending",
+      applied: "Applied",
+      rejected: "Rejected",
+      conflict: "Conflicts",
+    },
+    actions: {
+      apply: "Apply",
+      reject: "Reject",
+      working: "Обробка…",
+    },
+    action: {
+      add: "Add",
+      edit: "Редагувати",
+      delete: "Видалити",
+      move: "Move",
+    },
+    status: {
+      pending: "Pending",
+      applied: "Applied",
+      rejected: "Rejected",
+      conflict: "Conflict",
+    },
+    kind: {
+      "agent-memory": "Agent memory",
+      "user-profile": "User profile",
+      "tool-notes": "Tool notes",
+      "shared-memory": "Shared memory",
     },
   },
   languages: {

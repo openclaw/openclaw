@@ -416,6 +416,7 @@ export const it: TranslationMap = {
     debug: "Debug",
     logs: "Log",
     dreams: "Sogni",
+    audit: "Memory Audit",
   },
   subtitles: {
     agents: "Spazi di lavoro, strumenti, identità.",
@@ -438,6 +439,7 @@ export const it: TranslationMap = {
     debug: "Snapshot, eventi, RPC.",
     logs: "Log gateway live.",
     dreams: "Sogni della memoria, consolidamento e riflessione.",
+    audit: "Review staged memory cleanup suggestions.",
   },
   activity: {
     title: "Attività",
@@ -1155,6 +1157,46 @@ export const it: TranslationMap = {
       loadMoreSessions: "Carica altre sessioni",
       model: "Chat model",
       thinkingLevel: "Chat thinking level",
+    },
+  },
+  memoryAudit: {
+    review: {
+      title: "Review Queue",
+      subtitle: "Pending suggestions staged by memory audit runs.",
+      loading: "Loading audit suggestions…",
+      emptyTitle: "No pending audit suggestions",
+      emptyBody: "Audit runs will stage reviewable memory changes here before anything is applied.",
+    },
+    summary: {
+      label: "Memory audit summary",
+      total: "Totale",
+      pending: "Pending",
+      applied: "Applied",
+      rejected: "Rejected",
+      conflict: "Conflicts",
+    },
+    actions: {
+      apply: "Apply",
+      reject: "Reject",
+      working: "Elaborazione…",
+    },
+    action: {
+      add: "Add",
+      edit: "Modifica",
+      delete: "Elimina",
+      move: "Move",
+    },
+    status: {
+      pending: "Pending",
+      applied: "Applied",
+      rejected: "Rejected",
+      conflict: "Conflict",
+    },
+    kind: {
+      "agent-memory": "Agent memory",
+      "user-profile": "User profile",
+      "tool-notes": "Tool notes",
+      "shared-memory": "Shared memory",
     },
   },
   languages: {

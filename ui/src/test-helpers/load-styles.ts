@@ -6,4 +6,5 @@ import "../styles/chat.css";
 import "../styles/config.css";
 import "../styles/usage.css";
 import "../styles/dreams.css";
+import "../styles/memory-audit.css";
 import "@create-markdown/preview/themes/system.css";

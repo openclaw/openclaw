@@ -72,6 +72,7 @@ describe("control UI routing", () => {
     expect(window.matchMedia("(max-width: 768px)").matches).toBe(true);
 
     expectElement(app, 'a.nav-item[href="/dreaming"]', HTMLAnchorElement);
+    expectElement(app, 'a.nav-item[href="/memory-audit"]', HTMLAnchorElement);
   });
 
   it("renders the dashboard breadcrumb as an overview link", async () => {
@@ -168,6 +169,45 @@ describe("control UI routing", () => {
     expect(app.tab).toBe("dreams");
     expectElement(app, ".dreams__tab", HTMLElement);
     expectElement(app, ".dreams__lobster", HTMLElement);
+  });
+
+  it("renders the memory audit view on the /memory-audit route", async () => {
+    const app = mountApp("/memory-audit");
+    app.memoryAuditSuggestions = {
+      agentId: "hex",
+      workspaces: ["/tmp/openclaw/agents/hex"],
+      total: 1,
+      pending: 1,
+      applied: 0,
+      rejected: 0,
+      conflict: 0,
+      suggestions: [
+        {
+          id: "audit-1",
+          status: "pending",
+          action: "edit",
+          text: "Use compact dashboard wording.",
+          rationale: "Existing memory is too broad for the observed preference.",
+          confidence: 0.82,
+          target: {
+            surfaceId: "agent-memory:hex",
+            kind: "agent-memory",
+            path: "MEMORY.md",
+            workspaceDir: "/tmp/openclaw/agents/hex",
+            agentId: "hex",
+          },
+          createdAt: "2026-05-01T06:10:00.000Z",
+          updatedAt: "2026-05-01T06:10:00.000Z",
+        },
+      ],
+    };
+    app.requestUpdate();
+    await app.updateComplete;
+
+    expect(app.tab).toBe("audit");
+    expectElement(app, ".memory-audit-page", HTMLElement);
+    expectElement(app, ".memory-audit-item", HTMLElement);
+    expect(app.textContent).toContain("Use compact dashboard wording.");
   });
 
   it("requires confirmation before sending dreaming restart patch", async () => {

@@ -39,6 +39,7 @@ describe("iconForTab", () => {
       skills: "zap",
       nodes: "monitor",
       dreams: "moon",
+      audit: "search",
       config: "settings",
       communications: "send",
       appearance: "spark",
@@ -72,6 +73,7 @@ describe("titleForTab", () => {
       skills: "Skills",
       nodes: "Nodes",
       dreams: "Dreaming",
+      audit: "Memory Audit",
       config: "Settings",
       communications: "Communications",
       appearance: "Appearance",
@@ -99,6 +101,7 @@ describe("subtitleForTab", () => {
       skills: "Skills and API keys.",
       nodes: "Paired devices and commands.",
       dreams: "Memory dreaming, consolidation, and reflection.",
+      audit: "Review staged memory cleanup suggestions.",
       config: "Edit openclaw.json.",
       communications: "Channels, messages, and audio settings.",
       appearance: "Theme, UI, and setup wizard settings.",
@@ -153,6 +156,7 @@ describe("pathForTab", () => {
   it("returns correct path without base", () => {
     expect(pathForTab("chat")).toBe("/chat");
     expect(pathForTab("overview")).toBe("/overview");
+    expect(pathForTab("audit")).toBe("/memory-audit");
   });
 
   it("prepends base path", () => {
@@ -169,6 +173,7 @@ describe("tabFromPath", () => {
     expect(tabFromPath("/sessions")).toBe("sessions");
     expect(tabFromPath("/dreaming")).toBe("dreams");
     expect(tabFromPath("/dreams")).toBe("dreams");
+    expect(tabFromPath("/memory-audit")).toBe("audit");
   });
 
   it("returns chat for root path", () => {
@@ -200,6 +205,7 @@ describe("inferBasePathFromPathname", () => {
     expect(inferBasePathFromPathname("/overview")).toBe("");
     expect(inferBasePathFromPathname("/dreaming")).toBe("");
     expect(inferBasePathFromPathname("/dreams")).toBe("");
+    expect(inferBasePathFromPathname("/memory-audit")).toBe("");
   });
 
   it("infers base path from nested paths", () => {

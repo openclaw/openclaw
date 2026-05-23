@@ -28,7 +28,8 @@ type Tab =
   | "infrastructure"
   | "aiAgents"
   | "debug"
-  | "logs";
+  | "logs"
+  | "audit";
 
 type SettingsHost = {
   settings: {
@@ -85,6 +86,11 @@ type SettingsHost = {
   wikiMemoryPalaceLoading: boolean;
   wikiMemoryPalaceError: string | null;
   wikiMemoryPalace: null;
+  memoryAuditLoading: boolean;
+  memoryAuditError: string | null;
+  memoryAuditSuggestions: null;
+  memoryAuditActionId: string | null;
+  memoryAuditActionMessage: { kind: "success" | "error"; text: string } | null;
 };
 
 function setTestWindowUrl(urlString: string) {
@@ -184,6 +190,11 @@ const createHost = (tab: Tab): SettingsHost => ({
   wikiMemoryPalaceLoading: false,
   wikiMemoryPalaceError: null,
   wikiMemoryPalace: null,
+  memoryAuditLoading: false,
+  memoryAuditError: null,
+  memoryAuditSuggestions: null,
+  memoryAuditActionId: null,
+  memoryAuditActionMessage: null,
 });
 
 describe("setTabFromRoute", () => {

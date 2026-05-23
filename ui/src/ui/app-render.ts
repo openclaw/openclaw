@@ -107,6 +107,7 @@ import {
   updateExecApprovalsFormValue,
 } from "./controllers/exec-approvals.ts";
 import { loadLogs } from "./controllers/logs.ts";
+import { loadMemoryAuditSuggestions, runMemoryAuditAction } from "./controllers/memory-audit.ts";
 import { loadNodes } from "./controllers/nodes.ts";
 import { loadPresence } from "./controllers/presence.ts";
 import {
@@ -184,6 +185,7 @@ import { renderDreaming } from "./views/dreaming.ts";
 import { renderExecApprovalPrompt } from "./views/exec-approval.ts";
 import { renderGatewayUrlConfirmation } from "./views/gateway-url-confirmation.ts";
 import { renderLoginGate } from "./views/login-gate.ts";
+import { renderMemoryAudit } from "./views/memory-audit.ts";
 import { renderOverview } from "./views/overview.ts";
 
 let pendingUpdate: (() => void) | undefined;
@@ -3020,6 +3022,18 @@ export function renderApp(state: AppViewState) {
               onResetGroundedShortTerm: () => resetGroundedShortTerm(state),
               onRepairDreamingArtifacts: () => repairDreamingArtifacts(state),
               onRequestUpdate: requestHostUpdate,
+            })
+          : nothing}
+        ${state.tab === "audit"
+          ? renderMemoryAudit({
+              loading: state.memoryAuditLoading,
+              error: state.memoryAuditError,
+              actionId: state.memoryAuditActionId,
+              actionMessage: state.memoryAuditActionMessage,
+              suggestions: state.memoryAuditSuggestions,
+              onRefresh: () => loadMemoryAuditSuggestions(state),
+              onApply: (suggestion) => runMemoryAuditAction(state, suggestion, "apply"),
+              onReject: (suggestion) => runMemoryAuditAction(state, suggestion, "reject"),
             })
           : nothing}
       </main>

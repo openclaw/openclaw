@@ -45,6 +45,7 @@ import {
 } from "./controllers/dreaming.ts";
 import { loadExecApprovals, type ExecApprovalsState } from "./controllers/exec-approvals.ts";
 import { loadLogs, type LogsState } from "./controllers/logs.ts";
+import { loadMemoryAuditSuggestions, type MemoryAuditState } from "./controllers/memory-audit.ts";
 import {
   loadModelAuthStatusState,
   type ModelAuthStatusState,
@@ -119,6 +120,11 @@ type SettingsHost = {
   dreamDiaryError: string | null;
   dreamDiaryPath: string | null;
   dreamDiaryContent: string | null;
+  memoryAuditLoading: boolean;
+  memoryAuditError: string | null;
+  memoryAuditSuggestions: import("./controllers/memory-audit.js").MemoryAuditSuggestions | null;
+  memoryAuditActionId: string | null;
+  memoryAuditActionMessage: { kind: "success" | "error"; text: string } | null;
 };
 
 type LocalUserIdentityHost = {
@@ -137,6 +143,7 @@ type SettingsAppHost = SettingsHost &
   DebugState &
   DevicesState &
   DreamingState &
+  MemoryAuditState &
   ExecApprovalsState &
   LogsState &
   NodesState &
@@ -459,6 +466,9 @@ export async function refreshActiveTab(host: SettingsHost) {
           loadWikiImportInsights(app),
           loadWikiMemoryPalace(app),
         ]);
+        break;
+      case "audit":
+        await loadMemoryAuditSuggestions(app);
         break;
       case "chat": {
         const modelAuthRefresh = loadModelAuthStatusState(app).catch(() => undefined);
