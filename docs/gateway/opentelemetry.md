@@ -70,10 +70,10 @@ openclaw plugins enable diagnostics-otel
 
 ## Signals exported
 
-| Signal      | What goes in it                                                                                                                                         |
-| ----------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Metrics** | Counters and histograms for token usage, cost, run duration, message flow, Talk events, queue lanes, session state/recovery, exec, and memory pressure. |
-| **Traces**  | Spans for model usage, model calls, harness lifecycle, tool execution, exec, webhook/message processing, context assembly, and tool loops.              |
+| Signal      | What goes in it                                                                                                                                                     |
+| ----------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Metrics** | Counters and histograms for token usage, cost, run duration, message flow, Talk events, queue lanes, session state/recovery, exec, and memory pressure.             |
+| **Traces**  | Spans for model usage, model calls, harness lifecycle, tool execution, exec, webhook/message processing, context assembly, and tool loops.                          |
 | **Logs**    | Structured `logging.file` records exported over OTLP when `diagnostics.otel.logs` is enabled; log bodies are withheld unless content capture is explicitly enabled. |
 
 Toggle `traces`, `metrics`, and `logs` independently. All three default to on
