@@ -125,4 +125,14 @@ describe("gateway agent prompt", () => {
     const prompt = buildAgentMessageFromConversationEntries([...entries]);
     expect(prompt).toContain(mention);
   });
+
+  it("preserves exact stream-error placeholder text from user history", () => {
+    const entries = [
+      { role: "user", entry: { sender: "User", body: STREAM_ERROR_FALLBACK_TEXT } },
+      { role: "user", entry: { sender: "User", body: "next" } },
+    ] as const;
+
+    const prompt = buildAgentMessageFromConversationEntries([...entries]);
+    expect(prompt).toContain(`User: ${STREAM_ERROR_FALLBACK_TEXT}`);
+  });
 });

@@ -13,13 +13,20 @@ export type ConversationEntry = {
  * (e.g. [{type:"text", text:"hello"}]) that would serialize as
  * [object Object] if used directly in a template literal.
  */
-function stripInternalReplayPlaceholder(text: string): string {
-  return text.trim() === STREAM_ERROR_FALLBACK_TEXT ? "" : text;
-}
-
 function safeBody(body: unknown): string {
   const text = typeof body === "string" ? body : (extractTextFromChatContent(body) ?? "");
-  return stripInternalReplayPlaceholder(stripInternalMetadataForDisplay(text));
+  return stripInternalMetadataForDisplay(text);
+}
+
+function toPromptEntry(entry: ConversationEntry): HistoryEntry | null {
+  const body = safeBody(entry.entry.body);
+  if (entry.role === "assistant" && body.trim() === STREAM_ERROR_FALLBACK_TEXT) {
+    return null;
+  }
+  return {
+    ...entry.entry,
+    body,
+  };
 }
 
 export function buildAgentMessageFromConversationEntries(entries: ConversationEntry[]): string {
@@ -41,23 +48,28 @@ export function buildAgentMessageFromConversationEntries(entries: ConversationEn
     currentIndex = entries.length - 1;
   }
 
-  const currentEntry = entries[currentIndex]?.entry;
-  if (!currentEntry) {
+  const currentConversationEntry = entries[currentIndex];
+  const currentEntry = currentConversationEntry?.entry;
+  if (!currentConversationEntry || !currentEntry) {
     return "";
   }
 
   const historyEntries = entries
     .slice(0, currentIndex)
-    .map((e) => e.entry)
-    .filter((entry) => safeBody(entry.body).trim().length > 0);
+    .map(toPromptEntry)
+    .filter((entry): entry is HistoryEntry => entry !== null && entry.body.trim().length > 0);
+  const currentPromptEntry = toPromptEntry(currentConversationEntry);
+  if (!currentPromptEntry) {
+    return "";
+  }
   if (historyEntries.length === 0) {
-    return safeBody(currentEntry.body);
+    return currentPromptEntry.body;
   }
 
-  const formatEntry = (entry: HistoryEntry) => `${entry.sender}: ${safeBody(entry.body)}`;
+  const formatEntry = (entry: HistoryEntry) => `${entry.sender}: ${entry.body}`;
   return buildHistoryContextFromEntries({
-    entries: [...historyEntries, currentEntry],
-    currentMessage: formatEntry(currentEntry),
+    entries: [...historyEntries, currentPromptEntry],
+    currentMessage: formatEntry(currentPromptEntry),
     formatEntry,
   });
 }
