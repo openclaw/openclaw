@@ -37,6 +37,7 @@ export async function processDiscordVoiceSegment(params: {
   ownerAllowFrom?: string[];
   fetchGuildName: (guildId: string) => Promise<string | undefined>;
   speakerContext: DiscordVoiceSpeakerContextResolver;
+  meetingNotes?: VoiceSessionEntry["meetingNotes"];
   enqueuePlayback: (entry: VoiceSessionEntry, task: () => Promise<void>) => void;
 }) {
   const { entry, wavPath, userId, durationSeconds } = params;
@@ -75,6 +76,25 @@ export async function processDiscordVoiceSegment(params: {
   logVoiceVerbose(
     `transcript from ${ingress.speakerLabel} (${userId}) in guild ${entry.guildId} channel ${entry.channelId}: ${formatVoiceTranscriptLogPreview(transcript)}`,
   );
+  if (params.meetingNotes) {
+    await params.meetingNotes.onUtterance({
+      sessionId: params.meetingNotes.sessionId,
+      startedAt: new Date().toISOString(),
+      final: true,
+      speaker: {
+        id: userId,
+        label: ingress.speakerLabel,
+      },
+      text: transcript,
+      metadata: {
+        channel: "discord",
+        guildId: entry.guildId,
+        channelId: entry.channelId,
+        voiceSessionKey: entry.voiceSessionKey,
+      },
+    });
+    return;
+  }
 
   const prompt = formatVoiceIngressPrompt(transcript, ingress.speakerLabel);
   const turn = await runDiscordVoiceAgentTurn({
