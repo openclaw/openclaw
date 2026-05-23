@@ -14,16 +14,19 @@ import {
   relativePathEscapesContainerRoot,
 } from "./path-utils.js";
 
+type RemoteMountSource = "workspace" | "agent" | "protectedSkill";
+
 type ResolvedRemotePath = SandboxResolvedPath & {
   writable: boolean;
   mountRootPath: string;
-  source: "workspace" | "agent";
+  source: RemoteMountSource;
 };
 
 type MountInfo = {
+  localRoot: string;
   containerRoot: string;
   writable: boolean;
-  source: "workspace" | "agent";
+  source: RemoteMountSource;
 };
 
 export type RemoteShellSandboxHandle = {
@@ -239,9 +242,14 @@ class RemoteShellSandboxFsBridge implements SandboxFsBridge {
   }
 
   private getMounts(): MountInfo[] {
+    const workspaceRoot = path.resolve(this.sandbox.workspaceDir);
+    const agentRoot = path.resolve(this.sandbox.agentWorkspaceDir);
+    const workspaceContainerRoot = normalizeContainerPath(this.runtime.remoteWorkspaceDir);
+    const agentContainerRoot = normalizeContainerPath(this.runtime.remoteAgentWorkspaceDir);
     const mounts: MountInfo[] = [
       {
-        containerRoot: normalizeContainerPath(this.runtime.remoteWorkspaceDir),
+        localRoot: workspaceRoot,
+        containerRoot: workspaceContainerRoot,
         writable: this.sandbox.workspaceAccess === "rw",
         source: "workspace",
       },
@@ -251,19 +259,27 @@ class RemoteShellSandboxFsBridge implements SandboxFsBridge {
       path.resolve(this.sandbox.agentWorkspaceDir) !== path.resolve(this.sandbox.workspaceDir)
     ) {
       mounts.push({
-        containerRoot: normalizeContainerPath(this.runtime.remoteAgentWorkspaceDir),
+        localRoot: agentRoot,
+        containerRoot: agentContainerRoot,
         writable: this.sandbox.workspaceAccess === "rw",
         source: "agent",
       });
+    }
+    if (this.sandbox.workspaceAccess === "rw") {
+      mounts.push(
+        ...buildRemoteProtectedSkillMounts({
+          localRoot: agentRoot,
+          workspaceContainerRoot,
+          agentContainerRoot,
+          includeAgentMount: path.resolve(this.sandbox.agentWorkspaceDir) !== path.resolve(this.sandbox.workspaceDir),
+        }),
+      );
     }
     return mounts;
   }
 
   private resolveTarget(params: { filePath: string; cwd?: string }): ResolvedRemotePath {
     const workspaceRoot = path.resolve(this.sandbox.workspaceDir);
-    const agentRoot = path.resolve(this.sandbox.agentWorkspaceDir);
-    const workspaceContainerRoot = normalizeContainerPath(this.runtime.remoteWorkspaceDir);
-    const agentContainerRoot = normalizeContainerPath(this.runtime.remoteAgentWorkspaceDir);
     const mounts = this.getMounts();
     const input = params.filePath.trim();
     const inputPosix = input.replace(/\\/g, "/");
@@ -281,22 +297,14 @@ class RemoteShellSandboxFsBridge implements SandboxFsBridge {
     const hostCandidate = path.isAbsolute(input)
       ? path.resolve(input)
       : path.resolve(hostCwd, input);
-    if (isPathInside(workspaceRoot, hostCandidate)) {
-      const relative = toPosixRelative(workspaceRoot, hostCandidate);
+    const hostMount = this.resolveMountByLocalPath(mounts, hostCandidate);
+    if (hostMount) {
+      const relative = toPosixRelative(hostMount.localRoot, hostCandidate);
       return this.toResolvedPath({
-        mount: mounts[0],
+        mount: hostMount,
         containerPath: relative
-          ? path.posix.join(workspaceContainerRoot, relative)
-          : workspaceContainerRoot,
-      });
-    }
-    if (mounts[1] && isPathInside(agentRoot, hostCandidate)) {
-      const relative = toPosixRelative(agentRoot, hostCandidate);
-      return this.toResolvedPath({
-        mount: mounts[1],
-        containerPath: relative
-          ? path.posix.join(agentContainerRoot, relative)
-          : agentContainerRoot,
+          ? path.posix.join(hostMount.containerRoot, relative)
+          : hostMount.containerRoot,
       });
     }
 
@@ -326,10 +334,10 @@ class RemoteShellSandboxFsBridge implements SandboxFsBridge {
     }
     return {
       relativePath:
-        params.mount.source === "workspace"
+        params.mount.source === "workspace" || params.mount.source === "protectedSkill"
           ? relative === "."
             ? ""
-            : relative
+            : path.posix.relative(this.runtime.remoteWorkspaceDir, params.containerPath)
           : relative === "."
             ? params.mount.containerRoot
             : `${params.mount.containerRoot}/${relative}`,
@@ -344,9 +352,19 @@ class RemoteShellSandboxFsBridge implements SandboxFsBridge {
     mounts: MountInfo[],
     containerPath: string,
   ): MountInfo | null {
-    const ordered = [...mounts].toSorted((a, b) => b.containerRoot.length - a.containerRoot.length);
+    const ordered = [...mounts].toSorted(compareRemoteMountsByContainerPath);
     for (const mount of ordered) {
       if (isPathInsideContainerRoot(mount.containerRoot, containerPath)) {
+        return mount;
+      }
+    }
+    return null;
+  }
+
+  private resolveMountByLocalPath(mounts: MountInfo[], localPath: string): MountInfo | null {
+    const ordered = [...mounts].toSorted(compareRemoteMountsByLocalPath);
+    for (const mount of ordered) {
+      if (isPathInside(mount.localRoot, localPath)) {
         return mount;
       }
     }
@@ -507,6 +525,63 @@ class RemoteShellSandboxFsBridge implements SandboxFsBridge {
       allowFailure: params.allowFailure,
     });
   }
+}
+
+function buildRemoteProtectedSkillMounts(params: {
+  localRoot: string;
+  workspaceContainerRoot: string;
+  agentContainerRoot: string;
+  includeAgentMount: boolean;
+}): MountInfo[] {
+  const mounts: MountInfo[] = [
+    {
+      localRoot: path.join(params.localRoot, "skills"),
+      containerRoot: path.posix.join(params.workspaceContainerRoot, "skills"),
+      writable: false,
+      source: "protectedSkill",
+    },
+    {
+      localRoot: path.join(params.localRoot, ".agents", "skills"),
+      containerRoot: path.posix.join(params.workspaceContainerRoot, ".agents", "skills"),
+      writable: false,
+      source: "protectedSkill",
+    },
+  ];
+  if (params.includeAgentMount) {
+    mounts.push(
+      {
+        localRoot: path.join(params.localRoot, "skills"),
+        containerRoot: path.posix.join(params.agentContainerRoot, "skills"),
+        writable: false,
+        source: "protectedSkill",
+      },
+      {
+        localRoot: path.join(params.localRoot, ".agents", "skills"),
+        containerRoot: path.posix.join(params.agentContainerRoot, ".agents", "skills"),
+        writable: false,
+        source: "protectedSkill",
+      },
+    );
+  }
+  return mounts;
+}
+
+function compareRemoteMountsByContainerPath(a: MountInfo, b: MountInfo): number {
+  return b.containerRoot.length - a.containerRoot.length || mountPriority(b) - mountPriority(a);
+}
+
+function compareRemoteMountsByLocalPath(a: MountInfo, b: MountInfo): number {
+  return b.localRoot.length - a.localRoot.length || mountPriority(b) - mountPriority(a);
+}
+
+function mountPriority(mount: MountInfo): number {
+  if (mount.source === "protectedSkill") {
+    return 2;
+  }
+  if (mount.source === "agent") {
+    return 1;
+  }
+  return 0;
 }
 
 function normalizeContainerPath(value: string): string {
