@@ -2,6 +2,7 @@
 import { createHash } from "node:crypto";
 import type { BootstrapContextMode } from "../../agents/bootstrap-files.js";
 import { resolveCliRuntimeExecutionProvider } from "../../agents/model-runtime-aliases.js";
+import type { SourceReplyDeliveryMode } from "../../auto-reply/get-reply-options.types.js";
 import type { ThinkLevel, VerboseLevel } from "../../auto-reply/thinking.js";
 import type { AgentDefaultsConfig } from "../../config/types.agent-defaults.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -216,9 +217,18 @@ export function createCronPromptExecutor(params: {
         directFallback: false,
       });
     })();
-  const legacyMode = (params as Record<string, unknown>).sourceReplyDeliveryMode as
+  const rawLegacyMode = (params as Record<string, unknown>).sourceReplyDeliveryMode as
     | string
     | undefined;
+  const legacyMode: SourceReplyDeliveryMode | undefined =
+    rawLegacyMode === "automatic" || rawLegacyMode === "message_tool_only"
+      ? rawLegacyMode
+      : undefined;
+  if (rawLegacyMode && !legacyMode) {
+    logWarn(
+      `cron: ignoring unrecognized legacy sourceReplyDeliveryMode ${JSON.stringify(rawLegacyMode)}, falling back to sourceDelivery plan`,
+    );
+  }
   const sourceReplyDeliveryMode = legacyMode ?? sourceDelivery.sourceReplyDeliveryMode;
   const messageChannel = sourceDelivery.target.channel ?? params.resolvedDelivery.channel;
 
@@ -474,7 +484,11 @@ export async function executeCronRun(params: {
           }
         | undefined;
       const legacyMessageChannel = legacy.messageChannel as string | undefined;
-      const legacyReplyMode = legacy.sourceReplyDeliveryMode as string | undefined;
+      const rawReplyMode = legacy.sourceReplyDeliveryMode as string | undefined;
+      const legacyReplyMode: SourceReplyDeliveryMode | undefined =
+        rawReplyMode === "automatic" || rawReplyMode === "message_tool_only"
+          ? rawReplyMode
+          : undefined;
       const owner = legacyReplyMode === "message_tool_only" ? "message_tool" : "none";
 
       return createSourceDeliveryPlan({
