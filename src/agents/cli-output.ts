@@ -396,7 +396,12 @@ export function createCliJsonlStreamingParser(params: {
     if (!sessionId && typeof parsed.thread_id === "string") {
       sessionId = parsed.thread_id.trim();
     }
-    usage = readCliUsage(parsed) ?? usage;
+    // Only read usage from non-result events. Claude-cli's result event
+    // reports cumulative cache_read across all tool sub-calls, while
+    // assistant events carry the per-call usage we need.
+    if (parsed.type !== "result") {
+      usage = readCliUsage(parsed) ?? usage;
+    }
 
     const result = parseClaudeCliJsonlResult({
       backend: params.backend,

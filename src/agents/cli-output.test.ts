@@ -447,4 +447,42 @@ describe("createCliJsonlStreamingParser", () => {
       { text: "hello", delta: "hello", sessionId: "session-stream", usage: undefined },
     ]);
   });
+
+  it("ignores cumulative usage from result events to avoid cache_read inflation", () => {
+    const parser = createCliJsonlStreamingParser({
+      backend: {
+        command: "local-cli",
+        output: "jsonl",
+        jsonlDialect: "claude-stream-json",
+        sessionIdFields: ["session_id"],
+      },
+      providerId: "local-cli",
+      onAssistantDelta: () => {},
+    });
+
+    parser.push(
+      [
+        JSON.stringify({ type: "init", session_id: "session-stream" }),
+        JSON.stringify({
+          type: "assistant",
+          usage: { input_tokens: 10, output_tokens: 5, cache_read_input_tokens: 100 },
+        }),
+        JSON.stringify({
+          type: "result",
+          result: "done",
+          usage: { input_tokens: 30, output_tokens: 15, cache_read_input_tokens: 300 },
+        }),
+      ].join("\n"),
+    );
+    parser.finish();
+
+    const output = parser.getOutput();
+    expect(output?.usage).toEqual({
+      input: 10,
+      output: 5,
+      cacheRead: 100,
+      cacheWrite: undefined,
+      total: undefined,
+    });
+  });
 });
