@@ -120,6 +120,10 @@ Current source-of-truth:
 - plugin commands come from plugin `registerCommand()` calls
 - actual availability on your gateway still depends on config flags, channel surface, and installed/enabled plugins
 
+Common plugin commands include:
+
+- `/goal` for explicit same-session continuation goals. See [Goals](/automation/goals).
+
 ### Core built-in commands
 
 <AccordionGroup>

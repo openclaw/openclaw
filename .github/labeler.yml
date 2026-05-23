@@ -318,6 +318,10 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/device-pair/**"
+"extensions: goal":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/goal/**"
 "extensions: duckduckgo":
   - changed-files:
       - any-glob-to-any-file:

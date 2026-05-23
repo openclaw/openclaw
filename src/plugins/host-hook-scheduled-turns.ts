@@ -481,7 +481,6 @@ export async function requestPluginSessionContinuationLease(params: {
       deleteAfterRun: true,
       tag,
       deliveryMode: params.request.deliveryMode ?? "none",
-      ...(params.request.agentId ? { agentId: params.request.agentId } : {}),
     },
   });
   if (!handle) {

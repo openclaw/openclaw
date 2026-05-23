@@ -22,6 +22,7 @@ flowchart TD
     START --> Q4{React to lifecycle events?}
     START --> Q5{Give the agent persistent instructions?}
     START --> Q6{Remember a natural follow-up?}
+    START --> Q7{Continue the current objective?}
 
     Q1 -->|Yes| Q1a{Exact timing or flexible?}
     Q1a -->|Exact| CRON["Scheduled Tasks (Cron)"]
@@ -32,23 +33,25 @@ flowchart TD
     Q4 -->|Yes| HOOKS[Hooks]
     Q5 -->|Yes| SO[Standing Orders]
     Q6 -->|Yes| COMMITMENTS[Inferred Commitments]
+    Q7 -->|Yes| GOALS[Goals]
 ```
 
-| Use case                                | Recommended            | Why                                              |
-| --------------------------------------- | ---------------------- | ------------------------------------------------ |
-| Send daily report at 9 AM sharp         | Scheduled Tasks (Cron) | Exact timing, isolated execution                 |
-| Remind me in 20 minutes                 | Scheduled Tasks (Cron) | One-shot with precise timing (`--at`)            |
-| Run weekly deep analysis                | Scheduled Tasks (Cron) | Standalone task, can use different model         |
-| Check inbox every 30 min                | Heartbeat              | Batches with other checks, context-aware         |
-| Monitor calendar for upcoming events    | Heartbeat              | Natural fit for periodic awareness               |
-| Check in after a mentioned interview    | Inferred Commitments   | Memory-like follow-up, no exact reminder request |
-| Gentle care check-in after user context | Inferred Commitments   | Scoped to the same agent and channel             |
-| Inspect status of a subagent or ACP run | Background Tasks       | Tasks ledger tracks all detached work            |
-| Audit what ran and when                 | Background Tasks       | `openclaw tasks list` and `openclaw tasks audit` |
-| Multi-step research then summarize      | Task Flow              | Durable orchestration with revision tracking     |
-| Run a script on session reset           | Hooks                  | Event-driven, fires on lifecycle events          |
-| Execute code on every tool call         | Plugin hooks           | In-process hooks can intercept tool calls        |
-| Always check compliance before replying | Standing Orders        | Injected into every session automatically        |
+| Use case                                                      | Recommended            | Why                                              |
+| ------------------------------------------------------------- | ---------------------- | ------------------------------------------------ |
+| Keep working on a current chat objective for a few more turns | Goals                  | Explicit, visible, same-session continuation     |
+| Send daily report at 9 AM sharp                               | Scheduled Tasks (Cron) | Exact timing, isolated execution                 |
+| Remind me in 20 minutes                                       | Scheduled Tasks (Cron) | One-shot with precise timing (`--at`)            |
+| Run weekly deep analysis                                      | Scheduled Tasks (Cron) | Standalone task, can use different model         |
+| Check inbox every 30 min                                      | Heartbeat              | Batches with other checks, context-aware         |
+| Monitor calendar for upcoming events                          | Heartbeat              | Natural fit for periodic awareness               |
+| Check in after a mentioned interview                          | Inferred Commitments   | Memory-like follow-up, no exact reminder request |
+| Gentle care check-in after user context                       | Inferred Commitments   | Scoped to the same agent and channel             |
+| Inspect status of a subagent or ACP run                       | Background Tasks       | Tasks ledger tracks all detached work            |
+| Audit what ran and when                                       | Background Tasks       | `openclaw tasks list` and `openclaw tasks audit` |
+| Multi-step research then summarize                            | Task Flow              | Durable orchestration with revision tracking     |
+| Run a script on session reset                                 | Hooks                  | Event-driven, fires on lifecycle events          |
+| Execute code on every tool call                               | Plugin hooks           | In-process hooks can intercept tool calls        |
+| Always check compliance before replying                       | Standing Orders        | Injected into every session automatically        |
 
 ### Scheduled Tasks (Cron) vs Heartbeat
 
@@ -85,6 +88,15 @@ belong to cron.
 
 See [Inferred Commitments](/concepts/commitments).
 
+### Goals
+
+Goals are explicit current-session objectives. A trusted sender starts a goal
+with `/goal start`, the agent reports each turn through `goal_status`, and
+OpenClaw schedules only bounded same-session continuation turns until the goal
+is done, blocked, paused, cleared, or waiting for approval.
+
+See [Goals](/automation/goals).
+
 ### Task Flow
 
 Task Flow is the flow orchestration substrate above background tasks. It manages durable multi-step flows with managed and mirrored sync modes, revision tracking, and `openclaw tasks flow list|show|cancel` for inspection.
@@ -117,6 +129,7 @@ See [Heartbeat](/gateway/heartbeat).
 
 - **Cron** handles precise schedules (daily reports, weekly reviews) and one-shot reminders. All cron executions create task records.
 - **Heartbeat** handles routine monitoring (inbox, calendar, notifications) in one batched turn every 30 minutes.
+- **Goals** handle explicit current-session continuation with a visible status trail.
 - **Hooks** react to specific events (session resets, compaction, message flow) with custom scripts. Plugin hooks cover tool calls.
 - **Standing orders** give the agent persistent context and authority boundaries.
 - **Task Flow** coordinates multi-step flows above individual tasks.
@@ -125,6 +138,7 @@ See [Heartbeat](/gateway/heartbeat).
 ## Related
 
 - [Scheduled Tasks](/automation/cron-jobs) — precise scheduling and one-shot reminders
+- [Goals](/automation/goals) — explicit same-session continuation
 - [Inferred Commitments](/concepts/commitments) — memory-like follow-up check-ins
 - [Background Tasks](/automation/tasks) — task ledger for all detached work
 - [Task Flow](/automation/taskflow) — durable multi-step flow orchestration

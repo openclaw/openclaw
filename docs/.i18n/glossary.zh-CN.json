@@ -512,6 +512,10 @@
     "target": "推断式跟进承诺"
   },
   {
+    "source": "Goals",
+    "target": "目标"
+  },
+  {
     "source": "Heartbeat",
     "target": "Heartbeat"
   },

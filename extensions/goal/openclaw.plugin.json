@@ -1,7 +1,8 @@
 {
   "id": "goal",
   "activation": {
-    "onStartup": true
+    "onStartup": false,
+    "onCommands": ["goal"]
   },
   "name": "Goal",
   "description": "Session-scoped goal tracking with bounded continuation turns.",

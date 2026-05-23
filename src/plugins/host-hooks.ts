@@ -301,7 +301,6 @@ export type PluginSessionContinuationLeaseParams = {
   leaseKey: string;
   message: string;
   delayMs: number;
-  agentId?: string;
   deliveryMode?: "none" | "announce";
 };
 

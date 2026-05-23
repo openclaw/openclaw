@@ -425,6 +425,22 @@ describe("plugin scheduled turns", () => {
     });
   });
 
+  it("ignores caller-supplied agent routing on continuation leases", async () => {
+    mockCronAdd(makeCronJob({ id: "same-session-lease" }));
+
+    await expect(
+      requestWorkflowContinuationLease({ agentId: "other-agent" } as never),
+    ).resolves.toMatchObject({
+      scheduled: true,
+    });
+
+    expect(getCronAddBody()).toMatchObject({
+      sessionTarget: "session:agent:main:main",
+      payload: { kind: "agentTurn", message: "continue the active goal" },
+    });
+    expect(getCronAddBody()).not.toHaveProperty("agentId");
+  });
+
   it("rejects continuation lease keys that cannot be represented as owned scheduler tags", async () => {
     await expect(requestWorkflowContinuationLease({ leaseKey: "bad:route" })).resolves.toEqual({
       scheduled: false,

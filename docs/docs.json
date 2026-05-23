@@ -1249,6 +1249,7 @@
                 "group": "Automation",
                 "pages": [
                   "automation/index",
+                  "automation/goals",
                   "automation/cron-jobs",
                   "automation/tasks",
                   "automation/taskflow",
