@@ -41,7 +41,7 @@ Requirements
 
 spogo setup
 
-- Import cookies: `spogo auth import --browser chrome`
+- Use the supported `spogo` authentication flow. Do not import session data from a general-purpose browser during automated runs.
 
 Common CLI commands
 
