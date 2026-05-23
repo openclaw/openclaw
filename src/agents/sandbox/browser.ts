@@ -50,7 +50,12 @@ import { resolveSandboxAgentId, slugifySessionKey } from "./shared.js";
 import { isToolAllowed } from "./tool-policy.js";
 import type { SandboxBrowserContext, SandboxConfig } from "./types.js";
 import { validateNetworkMode } from "./validate-sandbox-security.js";
-import { appendWorkspaceMountArgs, SANDBOX_MOUNT_FORMAT_VERSION } from "./workspace-mounts.js";
+import {
+  appendWorkspaceMountArgs,
+  formatReadOnlyWorkspaceSkillMountHashState,
+  resolveReadOnlyWorkspaceSkillMounts,
+  SANDBOX_MOUNT_FORMAT_VERSION,
+} from "./workspace-mounts.js";
 
 const HOT_BROWSER_WINDOW_MS = 5 * 60 * 1000;
 const CDP_SOURCE_RANGE_ENV_KEY = "OPENCLAW_BROWSER_CDP_SOURCE_RANGE";
@@ -227,6 +232,12 @@ export async function ensureSandboxBrowser(params: {
     docker: params.cfg.docker,
     browser: { ...params.cfg.browser, image: browserImage },
   });
+  const readOnlyWorkspaceSkillMounts = resolveReadOnlyWorkspaceSkillMounts({
+    workspaceDir: params.workspaceDir,
+    agentWorkspaceDir: params.agentWorkspaceDir,
+    workdir: params.cfg.docker.workdir,
+    workspaceAccess: params.cfg.workspaceAccess,
+  });
   const expectedHash = computeSandboxBrowserConfigHash({
     docker: browserDockerCfg,
     dockerEnvPolicyEpoch: resolveDockerEnvPolicyEpoch(browserDockerCfg.env),
@@ -244,6 +255,9 @@ export async function ensureSandboxBrowser(params: {
     workspaceDir: params.workspaceDir,
     agentWorkspaceDir: params.agentWorkspaceDir,
     mountFormatVersion: SANDBOX_MOUNT_FORMAT_VERSION,
+    readOnlyWorkspaceSkillMounts: formatReadOnlyWorkspaceSkillMountHashState(
+      readOnlyWorkspaceSkillMounts,
+    ),
   });
 
   const now = Date.now();
@@ -334,6 +348,7 @@ export async function ensureSandboxBrowser(params: {
       agentWorkspaceDir: params.agentWorkspaceDir,
       workdir: params.cfg.docker.workdir,
       workspaceAccess: params.cfg.workspaceAccess,
+      readOnlyWorkspaceSkillMounts,
     });
     if (browserDockerCfg.binds?.length) {
       for (const bind of browserDockerCfg.binds) {
