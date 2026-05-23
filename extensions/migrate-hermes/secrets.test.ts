@@ -590,7 +590,11 @@ describe("Hermes migration secret items", () => {
     const authItems = plan.items.filter((item) => item.kind === "auth");
 
     expect(authItems).toHaveLength(3);
-    expect(authItems.map((item) => item.details?.profileId).sort()).toEqual([
+    expect(
+      authItems
+        .map((item) => item.details?.profileId)
+        .toSorted((left, right) => String(left).localeCompare(String(right))),
+    ).toEqual([
       "openai-codex:account-acct_active",
       "openai-codex:account-acct_pool",
       "openai-codex:account-acct_second_pool",
@@ -631,7 +635,9 @@ describe("Hermes migration secret items", () => {
         refresh: "refresh-second-pool-token",
       }),
     );
-    expect(Object.keys(config.auth?.profiles ?? {}).sort()).toEqual([
+    expect(
+      Object.keys(config.auth?.profiles ?? {}).toSorted((left, right) => left.localeCompare(right)),
+    ).toEqual([
       "openai-codex:account-acct_active",
       "openai-codex:account-acct_pool",
       "openai-codex:account-acct_second_pool",

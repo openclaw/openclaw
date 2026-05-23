@@ -49,7 +49,7 @@ export function hasCurrentAuthProfileConfigConflict(
   ctx: MigrationProviderContext,
   profile: HermesAuthProfileConfig,
 ): boolean {
-  let config = ctx.config as OpenClawConfig;
+  let config = ctx.config;
   try {
     config = (ctx.runtime?.config?.current?.() as OpenClawConfig | undefined) ?? config;
   } catch {
@@ -72,7 +72,7 @@ export async function applyAuthProfileConfigWithConflictCheck(params: {
       base: "runtime",
       afterWrite: { mode: "auto" },
       mutate(draft) {
-        let next = draft as OpenClawConfig;
+        let next = draft;
         if (params.applyConfigPatch) {
           next = params.applyConfigPatch(next);
         }
@@ -87,7 +87,7 @@ export async function applyAuthProfileConfigWithConflictCheck(params: {
           ...(params.profile.displayName ? { displayName: params.profile.displayName } : {}),
           preferProfileFirst: false,
         });
-        replaceConfigDraft(draft as OpenClawConfig, next);
+        replaceConfigDraft(draft, next);
       },
     });
     return "configured";
