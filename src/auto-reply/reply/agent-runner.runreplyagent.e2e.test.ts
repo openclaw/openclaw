@@ -1009,6 +1009,79 @@ describe("runReplyAgent typing (heartbeat)", () => {
     }
   });
 
+  it("does not persist active fallback state for internal subagent announce fallback", async () => {
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+      modelProvider: "openai-codex",
+      model: "gpt-5.5",
+    };
+    const sessionStore = { main: sessionEntry };
+    const storeRoot = await mkdtemp(join(tmpdir(), "openclaw-internal-fallback-"));
+    const storePath = join(storeRoot, "sessions.json");
+    await writeFile(storePath, JSON.stringify(sessionStore), "utf-8");
+    try {
+      state.runEmbeddedPiAgentMock.mockResolvedValueOnce({
+        payloads: [{ text: "subagent timed out" }],
+        meta: {},
+      });
+      vi.spyOn(modelFallbackModule, "runWithModelFallback").mockImplementationOnce(async (args) => {
+        const { run, onFallbackStep } = args;
+        await onFallbackStep?.({
+          fallbackStepType: "fallback_step",
+          fallbackStepFromModel: "openai/gpt-5.5",
+          fallbackStepToModel: "google/gemini-2.5-flash",
+          fallbackStepFromFailureReason: "timeout",
+          fallbackStepFinalOutcome: "succeeded",
+        });
+        return {
+          result: await run("google", "gemini-2.5-flash"),
+          provider: "google",
+          model: "gemini-2.5-flash",
+          attempts: [
+            {
+              provider: "openai-codex",
+              model: "gpt-5.5",
+              error: "codex app-server attempt timed out",
+              reason: "timeout",
+            },
+          ],
+        };
+      });
+
+      const { run } = createMinimalRun({
+        sessionEntry,
+        sessionStore,
+        sessionKey: "main",
+        storePath,
+        runOverrides: {
+          inputProvenance: {
+            kind: "inter_session",
+            sourceSessionKey: "agent:codex:subagent:c34fca91",
+            sourceChannel: "__internal__",
+            sourceTool: "subagent_announce",
+          },
+        },
+      });
+      const res = await run();
+
+      expect(sessionEntry.modelProvider).toBe("openai-codex");
+      expect(sessionEntry.model).toBe("gpt-5.5");
+      expect(sessionEntry.fallbackNoticeSelectedModel).toBeUndefined();
+      expect(sessionEntry.fallbackNoticeActiveModel).toBeUndefined();
+      expect(sessionEntry.fallbackNoticeReason).toBeUndefined();
+      const persistedStore = JSON.parse(await readFile(storePath, "utf-8"));
+      expect(persistedStore.main.modelProvider).toBe("openai-codex");
+      expect(persistedStore.main.model).toBe("gpt-5.5");
+      expect(persistedStore.main.fallbackNoticeSelectedModel).toBeUndefined();
+      expect(persistedStore.main.fallbackNoticeActiveModel).toBeUndefined();
+      const payloads = Array.isArray(res) ? res : res ? [res] : [];
+      expect(payloads.some((payload) => payload.text?.includes("Model Fallback:"))).toBe(false);
+    } finally {
+      await rm(storeRoot, { recursive: true, force: true });
+    }
+  });
+
   it("keeps fallback transition notices when block streaming has no final text", async () => {
     const sessionEntry: SessionEntry = {
       sessionId: "session",

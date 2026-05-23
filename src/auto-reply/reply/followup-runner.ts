@@ -25,6 +25,7 @@ import { logVerbose } from "../../globals.js";
 import { emitAgentEvent, registerAgentRunContext } from "../../infra/agent-events.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { defaultRuntime } from "../../runtime.js";
+import { shouldPreserveUserFacingSessionStateForInputProvenance } from "../../sessions/input-provenance.js";
 import { readStringValue } from "../../shared/string-coerce.js";
 import { isInternalMessageChannel } from "../../utils/message-channel.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
@@ -925,6 +926,9 @@ export function createFollowupRunner(params: {
       const modelUsed = runResult.meta?.agentMeta?.model ?? fallbackModel ?? defaultModel;
       const providerUsed =
         runResult.meta?.agentMeta?.provider ?? fallbackProvider ?? queued.run.provider;
+      const preserveUserFacingSessionState = shouldPreserveUserFacingSessionStateForInputProvenance(
+        queued.run.inputProvenance,
+      );
       const contextTokensUsed =
         resolveContextTokensForModel({
           cfg: queued.run.config,
@@ -944,6 +948,7 @@ export function createFollowupRunner(params: {
           lastCallUsage: runResult.meta?.agentMeta?.lastCallUsage,
           promptTokens,
           isHeartbeat: opts?.isHeartbeat === true,
+          preserveUserFacingSessionModelState: preserveUserFacingSessionState,
           modelUsed,
           providerUsed,
           contextTokensUsed,
