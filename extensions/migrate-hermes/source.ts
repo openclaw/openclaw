@@ -5,6 +5,7 @@ export type HermesSource = {
   root: string;
   configPath?: string;
   envPath?: string;
+  authPath?: string;
   soulPath?: string;
   agentsPath?: string;
   memoryPath?: string;
@@ -20,7 +21,7 @@ type HermesArchivePath = {
 };
 
 const HERMES_ARCHIVE_DIRS = ["plugins", "sessions", "logs", "cron", "mcp-tokens"] as const;
-const HERMES_ARCHIVE_FILES = ["auth.json", "state.db"] as const;
+const HERMES_ARCHIVE_FILES = ["state.db"] as const;
 
 export async function discoverHermesSource(input?: string): Promise<HermesSource> {
   const root = resolveHomePath(input?.trim() || "~/.hermes");
@@ -44,6 +45,9 @@ export async function discoverHermesSource(input?: string): Promise<HermesSource
       ? { configPath: path.join(root, "config.yaml") }
       : {}),
     ...((await exists(path.join(root, ".env"))) ? { envPath: path.join(root, ".env") } : {}),
+    ...((await exists(path.join(root, "auth.json")))
+      ? { authPath: path.join(root, "auth.json") }
+      : {}),
     ...((await exists(path.join(root, "SOUL.md"))) ? { soulPath: path.join(root, "SOUL.md") } : {}),
     ...((await exists(path.join(root, "AGENTS.md")))
       ? { agentsPath: path.join(root, "AGENTS.md") }
@@ -64,6 +68,7 @@ export function hasHermesSource(source: HermesSource): boolean {
   return Boolean(
     source.configPath ||
     source.envPath ||
+    source.authPath ||
     source.soulPath ||
     source.agentsPath ||
     source.memoryPath ||

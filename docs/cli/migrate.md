@@ -46,7 +46,10 @@ openclaw onboard --import-from hermes --import-source ~/.hermes
   Override the source state directory. Hermes defaults to `~/.hermes`.
 </ParamField>
 <ParamField path="--include-secrets" type="boolean">
-  Import supported credentials. Off by default.
+  Import supported credentials without prompting. Interactive apply asks before importing detected auth credentials, with yes selected by default; non-interactive `--yes` requires `--include-secrets` to import them.
+</ParamField>
+<ParamField path="--no-auth-credentials" type="boolean">
+  Skip auth credential import, including the interactive prompt.
 </ParamField>
 <ParamField path="--overwrite" type="boolean">
   Allow apply to replace existing targets when the plan reports conflicts.
@@ -91,7 +94,7 @@ openclaw onboard --import-from hermes --import-source ~/.hermes
     Apply refuses to continue when the plan has conflicts. Review the plan, then rerun with `--overwrite` if replacing existing targets is intentional. Providers may still write item-level backups for overwritten files in the migration report directory.
   </Accordion>
   <Accordion title="Secrets">
-    Secrets are never imported by default. Use `--include-secrets` to import supported credentials.
+    Interactive apply asks whether to import detected auth credentials, with yes selected by default. Use `--no-auth-credentials` to skip them, or use `--include-secrets` for unattended credential import with `--yes`.
   </Accordion>
 </AccordionGroup>
 
@@ -233,7 +236,8 @@ The bundled Hermes provider detects state at `~/.hermes` by default. Use `--from
 - Memory config defaults for OpenClaw file memory, plus archive or manual-review items for external memory providers such as Honcho.
 - Skills that include a `SKILL.md` file under `skills/<name>/`.
 - Per-skill config values from `skills.config`.
-- Supported API keys from `.env`, only with `--include-secrets`.
+- Supported OAuth credentials from `auth.json` when interactive credential migration is accepted, or when `--include-secrets` is set.
+- Supported API keys from `.env` when interactive credential migration is accepted, or when `--include-secrets` is set.
 
 ### Supported `.env` keys
 
@@ -248,7 +252,6 @@ Hermes state that OpenClaw cannot safely interpret is copied into the migration 
 - `logs/`
 - `cron/`
 - `mcp-tokens/`
-- `auth.json`
 - `state.db`
 
 ### After applying

@@ -9,7 +9,7 @@ import { readString } from "./helpers.js";
 
 export const HERMES_REASON_ALREADY_CONFIGURED = "already configured";
 export const HERMES_REASON_DEFAULT_MODEL_CONFIGURED = "default model already configured";
-export const HERMES_REASON_INCLUDE_SECRETS = "use --include-secrets to import";
+export const HERMES_REASON_INCLUDE_SECRETS = "auth credential migration not selected";
 export const HERMES_REASON_AUTH_PROFILE_EXISTS = "auth profile exists";
 export const HERMES_REASON_CONFIG_RUNTIME_UNAVAILABLE = "config runtime unavailable";
 export const HERMES_REASON_MISSING_SECRET_METADATA = "missing secret metadata";
