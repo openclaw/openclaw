@@ -64,6 +64,7 @@ Docs: https://docs.openclaw.ai
 
 - Agents/compaction: skip agent-harness preflight for provider-owned CLI runtime sessions so over-threshold Claude CLI sessions continue through normal compaction instead of failing on a missing harness. Fixes #84857. (#84878) Thanks @zhangguiping-xydt.
 - WebChat: summarize internal message-tool source replies so tool cards no longer duplicate the visible reply body. (#84773) Thanks @jason-allen-oneal.
+- Gateway/WebChat: hide duplicate `gateway-injected` assistant rows when Cursor ACP already persisted the same `acp-runtime` reply. Fixes #85741. Thanks @lxf-lxf.
 - WebChat: scope the visible attachment button to its own composer file input so clicking Upload reliably opens the file picker. (#83952, fixes #47983) Thanks @jason-allen-oneal.
 - Gateway: preserve deferred lifecycle-error cleanup across later non-terminal events so provider timeouts can persist failed session state instead of leaving sessions stuck running. (#85256, fixes #63819) Thanks @samzong.
 - Agents/subagents: report tool-only child progress during timeout summaries instead of showing no visible output.
