@@ -8,7 +8,6 @@ import {
 import type { MigrationItem, MigrationProviderContext } from "openclaw/plugin-sdk/plugin-entry";
 import {
   applyAuthProfileConfig,
-  applyProviderAuthConfigPatch,
   buildApiKeyCredential,
   buildOauthProviderAuthResult,
   readCodexCliCredentialsCached,
@@ -34,6 +33,10 @@ const CODEX_REASON_MISSING_AUTH_METADATA = "missing auth metadata";
 const CODEX_CONFIG_PATCH_MODE_RETURN = "return";
 
 type CodexMigrationTargets = ReturnType<typeof resolveCodexMigrationTargets>;
+type AgentDefaultModelConfigs = NonNullable<
+  NonNullable<NonNullable<OpenClawConfig["agents"]>["defaults"]>["models"]
+>;
+type AgentDefaultModelConfigEntry = AgentDefaultModelConfigs[string];
 
 type CodexAuthCredential =
   | {
@@ -41,6 +44,7 @@ type CodexAuthCredential =
       provider: typeof OPENAI_CODEX_PROVIDER_ID;
       profileId: string;
       result: ProviderAuthResult;
+      modelConfigs: AgentDefaultModelConfigs;
     }
   | {
       kind: "api_key";
@@ -170,6 +174,15 @@ async function readModelRefs(source: CodexSource): Promise<string[]> {
   return [...refs].toSorted();
 }
 
+function readProviderAuthModelConfigs(result: ProviderAuthResult): AgentDefaultModelConfigs {
+  const models = result.configPatch?.agents?.defaults?.models;
+  if (isRecord(models)) {
+    return { ...models };
+  }
+  const defaultModel = readString(result.defaultModel) ?? OPENAI_CODEX_DEFAULT_MODEL;
+  return { [defaultModel]: {} };
+}
+
 async function buildCodexOAuthCredential(source: CodexSource): Promise<CodexAuthCredential | null> {
   const credential = readCodexCliCredentialsCached({
     codexHome: source.codexHome,
@@ -206,7 +219,13 @@ async function buildCodexOAuthCredential(source: CodexSource): Promise<CodexAuth
   });
   const profile = result.profiles[0];
   return profile
-    ? { kind: "oauth", provider: OPENAI_CODEX_PROVIDER_ID, profileId: profile.profileId, result }
+    ? {
+        kind: "oauth",
+        provider: OPENAI_CODEX_PROVIDER_ID,
+        profileId: profile.profileId,
+        result,
+        modelConfigs: readProviderAuthModelConfigs(result),
+      }
     : null;
 }
 
@@ -351,17 +370,47 @@ function applyDefaultModelIfMissing(cfg: OpenClawConfig): OpenClawConfig {
   };
 }
 
+function mergeModelConfigEntry(
+  existing: AgentDefaultModelConfigEntry | undefined,
+  patch: AgentDefaultModelConfigEntry,
+): AgentDefaultModelConfigEntry {
+  if (existing && isRecord(existing) && isRecord(patch)) {
+    return { ...existing, ...patch } as AgentDefaultModelConfigEntry;
+  }
+  return existing ?? patch;
+}
+
+function applyOAuthModelConfigsToConfig(
+  cfg: OpenClawConfig,
+  credential: Extract<CodexAuthCredential, { kind: "oauth" }>,
+): OpenClawConfig {
+  const existingModels = cfg.agents?.defaults?.models ?? {};
+  const models: AgentDefaultModelConfigs = credential.result.replaceDefaultModels
+    ? { ...credential.modelConfigs }
+    : { ...existingModels };
+  if (!credential.result.replaceDefaultModels) {
+    for (const [modelRef, modelConfig] of Object.entries(credential.modelConfigs)) {
+      models[modelRef] = mergeModelConfigEntry(models[modelRef], modelConfig);
+    }
+  }
+  return {
+    ...cfg,
+    agents: {
+      ...cfg.agents,
+      defaults: {
+        ...cfg.agents?.defaults,
+        models,
+      },
+    },
+  };
+}
+
 function applyOAuthConfigToConfig(
   cfg: OpenClawConfig,
   credential: Extract<CodexAuthCredential, { kind: "oauth" }>,
   profileId: string,
 ): OpenClawConfig {
-  let next = cfg;
-  if (credential.result.configPatch) {
-    next = applyProviderAuthConfigPatch(next, credential.result.configPatch, {
-      replaceDefaultModels: credential.result.replaceDefaultModels,
-    });
-  }
+  let next = applyOAuthModelConfigsToConfig(cfg, credential);
   const profile = credential.result.profiles[0];
   if (profile) {
     next = applyAuthProfileConfig(next, {

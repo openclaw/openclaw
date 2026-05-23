@@ -81,7 +81,6 @@ export {
   type ApiKeyStorageOptions,
   type WriteOAuthCredentialsOptions,
 } from "../plugins/provider-auth-helpers.js";
-export { applyProviderAuthConfigPatch } from "../plugins/provider-auth-choice-helpers.js";
 export { createProviderApiKeyAuthMethod } from "../plugins/provider-api-key-auth.js";
 export { coerceSecretRef, hasConfiguredSecretInput } from "../config/types.secrets.js";
 export { resolveDefaultSecretProviderAlias } from "../secrets/ref-contract.js";
