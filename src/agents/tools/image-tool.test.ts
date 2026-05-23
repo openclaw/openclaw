@@ -2166,3 +2166,63 @@ describe("image tool response validation", () => {
     expect(testing.hasImageReasoningOnlyResponse(message as never)).toBe(false);
   });
 });
+
+describe("image compression policy", () => {
+  it("derives provider, model, quality preference, and image count from config", () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          imageQuality: "high",
+        },
+      },
+    } satisfies OpenClawConfig;
+
+    expect(
+      testing.resolveImageCompressionPolicy({
+        cfg,
+        imageModelConfig: { primary: "anthropic/claude-opus-4-7" },
+        imageCount: 2,
+      }),
+    ).toEqual({
+      quality: "high",
+      imageCount: 2,
+      modelRefs: ["anthropic/claude-opus-4-7"],
+      provider: "anthropic",
+      model: "claude-opus-4-7",
+    });
+  });
+
+  it("keeps unset image quality as adaptive auto behavior and includes fallback refs", () => {
+    expect(
+      testing.resolveImageCompressionPolicy({
+        imageModelConfig: {
+          primary: "openai/gpt-5.5",
+          fallbacks: ["anthropic/claude-opus-4-6"],
+        },
+        imageCount: 1,
+      }),
+    ).toEqual({
+      imageCount: 1,
+      modelRefs: ["openai/gpt-5.5", "anthropic/claude-opus-4-6"],
+      provider: "openai",
+      model: "gpt-5.5",
+    });
+  });
+
+  it("uses a model override as the first compression candidate", () => {
+    expect(
+      testing.resolveImageCompressionPolicy({
+        imageModelConfig: {
+          primary: "openai/gpt-5.5",
+          fallbacks: ["anthropic/claude-opus-4-6"],
+        },
+        modelOverride: "anthropic/claude-opus-4-6",
+        imageCount: 1,
+      }),
+    ).toMatchObject({
+      modelRefs: ["anthropic/claude-opus-4-6"],
+      provider: "anthropic",
+      model: "claude-opus-4-6",
+    });
+  });
+});

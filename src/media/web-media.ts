@@ -45,6 +45,7 @@ export type WebMediaResult = {
 type WebMediaOptions = {
   maxBytes?: number;
   optimizeImages?: boolean;
+  imageCompression?: ImageCompressionPolicy;
   ssrfPolicy?: SsrFPolicy;
   proxyUrl?: string;
   fetchImpl?: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
@@ -59,6 +60,16 @@ type WebMediaOptions = {
   readFile?: (filePath: string) => Promise<Buffer>;
   /** Host-local fs-policy read piggyback; rejects plaintext-like document sends. */
   hostReadCapability?: boolean;
+};
+
+export type ImageQualityPreference = "auto" | "efficient" | "balanced" | "high";
+
+export type ImageCompressionPolicy = {
+  quality?: ImageQualityPreference;
+  provider?: string;
+  model?: string;
+  modelRefs?: string[];
+  imageCount?: number;
 };
 
 async function resolveMediaStoreUriToPath(mediaUrl: string): Promise<string | null> {
@@ -335,6 +346,123 @@ type OptimizedImage = {
   compressionLevel?: number;
 };
 
+const DEFAULT_JPEG_SIDES = [2048, 1536, 1280, 1024, 800] as const;
+const DEFAULT_JPEG_QUALITIES = [80, 70, 60, 50, 40] as const;
+const CLAUDE_OPUS_47_MAX_SIDE = 2576;
+const CLAUDE_DEFAULT_MAX_SIDE = 1568;
+const OPENAI_ORIGINAL_DETAIL_MAX_SIDE = 6000;
+const DEFAULT_VISION_MAX_SIDE = 2048;
+const QWEN_VL_MAX_PIXELS = 12_845_056;
+const LLAMA_4_GROQ_MAX_PIXELS = 33_177_600;
+
+function normalizeImageQualityPreference(value?: string): ImageQualityPreference {
+  switch (value) {
+    case "efficient":
+    case "balanced":
+    case "high":
+      return value;
+    default:
+      return "auto";
+  }
+}
+
+function normalizedModelRefs(policy?: ImageCompressionPolicy): string[] {
+  const refs = [`${policy?.provider ?? ""}/${policy?.model ?? ""}`, ...(policy?.modelRefs ?? [])]
+    .map((ref) => ref.trim().toLowerCase())
+    .filter((ref) => ref.length > 1 && ref !== "/");
+  return [...new Set(refs)];
+}
+
+function compactModelRef(modelRef: string): string {
+  return modelRef.replace(/[^a-z0-9]+/g, "");
+}
+
+function squareLongSideForPixelBudget(pixelBudget: number): number {
+  return Math.floor(Math.sqrt(pixelBudget));
+}
+
+function effectiveImageQualityPreference(
+  policy?: ImageCompressionPolicy,
+): Exclude<ImageQualityPreference, "auto"> {
+  const preference = normalizeImageQualityPreference(policy?.quality);
+  if (preference !== "auto") {
+    return preference;
+  }
+  const imageCount = Math.max(1, Math.floor(policy?.imageCount ?? 1));
+  if (imageCount >= 6) {
+    return "efficient";
+  }
+  return "balanced";
+}
+
+function maxSideForModelRef(modelRef: string): number {
+  const compactRef = compactModelRef(modelRef);
+  if (modelRef.includes("anthropic/") || modelRef.includes("claude")) {
+    return compactRef.includes("claudeopus47") ? CLAUDE_OPUS_47_MAX_SIDE : CLAUDE_DEFAULT_MAX_SIDE;
+  }
+  if (modelRef.includes("openai/") || modelRef.includes("gpt-")) {
+    if (compactRef.includes("gpt55")) {
+      return OPENAI_ORIGINAL_DETAIL_MAX_SIDE;
+    }
+    return DEFAULT_VISION_MAX_SIDE;
+  }
+  if (modelRef.includes("qwen") && (modelRef.includes("vl") || modelRef.includes("qvq"))) {
+    return squareLongSideForPixelBudget(QWEN_VL_MAX_PIXELS);
+  }
+  if (modelRef.includes("llama-4") || compactRef.includes("llama4")) {
+    return squareLongSideForPixelBudget(LLAMA_4_GROQ_MAX_PIXELS);
+  }
+  if (modelRef.includes("google/") || modelRef.includes("gemini")) {
+    return DEFAULT_VISION_MAX_SIDE;
+  }
+  return DEFAULT_VISION_MAX_SIDE;
+}
+
+function modelMaxSide(policy?: ImageCompressionPolicy): number {
+  const refs = normalizedModelRefs(policy);
+  if (refs.length === 0) {
+    return DEFAULT_VISION_MAX_SIDE;
+  }
+  return Math.min(...refs.map((ref) => maxSideForModelRef(ref)));
+}
+
+function buildDescendingLadder(maxSide: number, values: readonly number[]): number[] {
+  const normalizedMax = Math.max(1, Math.floor(maxSide));
+  return [normalizedMax, ...values]
+    .map((value) => Math.min(normalizedMax, value))
+    .filter((value, idx, arr) => value > 0 && arr.indexOf(value) === idx)
+    .toSorted((a, b) => b - a);
+}
+
+export function resolveImageCompressionGrid(policy?: ImageCompressionPolicy): {
+  sides: number[];
+  qualities: number[];
+} {
+  const preference = effectiveImageQualityPreference(policy);
+  const maxSide = modelMaxSide(policy);
+  switch (preference) {
+    case "efficient":
+      return {
+        sides: buildDescendingLadder(Math.min(maxSide, 1280), [1024, 800]),
+        qualities: [70, 60, 50, 40],
+      };
+    case "high":
+      return {
+        sides: buildDescendingLadder(maxSide, [3072, 2576, 2048, 1800, 1536, 1280, 1024, 800]),
+        qualities: [92, 85, 78, 70, 62, 52, 42],
+      };
+    case "balanced":
+      return {
+        sides: buildDescendingLadder(maxSide, [...DEFAULT_JPEG_SIDES]),
+        qualities: [...DEFAULT_JPEG_QUALITIES],
+      };
+  }
+  return {
+    sides: buildDescendingLadder(maxSide, [...DEFAULT_JPEG_SIDES]),
+    qualities: [...DEFAULT_JPEG_QUALITIES],
+  };
+}
+
 function logOptimizedImage(params: { originalSize: number; optimized: OptimizedImage }): void {
   if (!shouldLogVerbose()) {
     return;
@@ -357,6 +485,7 @@ async function optimizeImageWithFallback(params: {
   buffer: Buffer;
   cap: number;
   meta?: { contentType?: string; fileName?: string };
+  imageCompression?: ImageCompressionPolicy;
 }): Promise<OptimizedImage> {
   const { buffer, cap, meta } = params;
   const isPng = meta?.contentType === "image/png" || meta?.fileName?.toLowerCase().endsWith(".png");
@@ -374,7 +503,10 @@ async function optimizeImageWithFallback(params: {
     }
   }
 
-  const optimized = await optimizeImageToJpeg(buffer, cap, meta);
+  const optimized = await optimizeImageToJpeg(buffer, cap, {
+    ...meta,
+    ...(params.imageCompression ? { imageCompression: params.imageCompression } : {}),
+  });
   return { ...optimized, format: "jpeg" };
 }
 
@@ -396,6 +528,7 @@ async function loadWebMediaInternal(
     sandboxValidated = false,
     readFile: readFileOverride,
     hostReadCapability = false,
+    imageCompression,
   } = options;
   // Strip MEDIA: prefix used by agent tools (e.g. TTS) to tag media paths.
   // Be lenient: LLM output may add extra whitespace (e.g. "  MEDIA :  /tmp/x.png").
@@ -421,7 +554,12 @@ async function loadWebMediaInternal(
     const originalSize = buffer.length;
     let optimized: OptimizedImage;
     try {
-      optimized = await optimizeImageWithFallback({ buffer, cap, meta });
+      optimized = await optimizeImageWithFallback({
+        buffer,
+        cap,
+        meta,
+        ...(imageCompression ? { imageCompression } : {}),
+      });
     } catch (err) {
       if (
         isImageProcessorUnavailableError(err) &&
@@ -643,7 +781,11 @@ export async function loadWebMediaRaw(
 export async function optimizeImageToJpeg(
   buffer: Buffer,
   maxBytes: number,
-  opts: { contentType?: string; fileName?: string } = {},
+  opts: {
+    contentType?: string;
+    fileName?: string;
+    imageCompression?: ImageCompressionPolicy;
+  } = {},
 ): Promise<{
   buffer: Buffer;
   optimizedSize: number;
@@ -659,8 +801,7 @@ export async function optimizeImageToJpeg(
       throw new Error(`HEIC image conversion failed: ${String(err)}`, { cause: err });
     }
   }
-  const sides = [2048, 1536, 1280, 1024, 800];
-  const qualities = [80, 70, 60, 50, 40];
+  const { sides, qualities } = resolveImageCompressionGrid(opts.imageCompression);
   let smallest: {
     buffer: Buffer;
     size: number;

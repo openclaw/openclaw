@@ -12,6 +12,7 @@ let LocalMediaAccessError: typeof import("./web-media.js").LocalMediaAccessError
 let loadWebMedia: typeof import("./web-media.js").loadWebMedia;
 let loadWebMediaRaw: typeof import("./web-media.js").loadWebMediaRaw;
 let optimizeImageToJpeg: typeof import("./web-media.js").optimizeImageToJpeg;
+let resolveImageCompressionGrid: typeof import("./web-media.js").resolveImageCompressionGrid;
 
 const TINY_PNG_BASE64 =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/woAAn8B9FD5fHAAAAAASUVORK5CYII=";
@@ -40,8 +41,13 @@ function installCanvasMediaResolver() {
 }
 
 beforeAll(async () => {
-  ({ LocalMediaAccessError, loadWebMedia, loadWebMediaRaw, optimizeImageToJpeg } =
-    await import("./web-media.js"));
+  ({
+    LocalMediaAccessError,
+    loadWebMedia,
+    loadWebMediaRaw,
+    optimizeImageToJpeg,
+    resolveImageCompressionGrid,
+  } = await import("./web-media.js"));
   fixtureRoot = await fs.mkdtemp(path.join(resolvePreferredOpenClawTmpDir(), "web-media-core-"));
   tinyPngFile = path.join(fixtureRoot, "tiny.png");
   await fs.writeFile(tinyPngFile, Buffer.from(TINY_PNG_BASE64, "base64"));
@@ -280,6 +286,79 @@ describe("loadWebMedia", () => {
     await expect(optimizeImageToJpeg(Buffer.from("not an image"), 8)).rejects.toThrow(
       /Failed to optimize image: .+/,
     );
+  });
+
+  it("uses provider/model-aware image compression grids", () => {
+    expect(
+      resolveImageCompressionGrid({
+        provider: "anthropic",
+        model: "claude-opus-4.7",
+        quality: "high",
+      }).sides[0],
+    ).toBe(2576);
+    expect(
+      resolveImageCompressionGrid({
+        provider: "anthropic",
+        model: "claude-opus-4-6",
+        quality: "high",
+      }).sides[0],
+    ).toBe(1568);
+    expect(
+      resolveImageCompressionGrid({
+        provider: "openai",
+        model: "gpt-5.5",
+        quality: "high",
+      }).sides[0],
+    ).toBe(6000);
+    expect(
+      resolveImageCompressionGrid({
+        provider: "openai",
+        model: "gpt-5.4",
+        quality: "high",
+      }).sides[0],
+    ).toBe(2048);
+    expect(
+      resolveImageCompressionGrid({
+        provider: "chutes",
+        model: "Qwen/Qwen3-VL-235B-A22B-Instruct",
+        quality: "high",
+      }).sides[0],
+    ).toBe(3584);
+    expect(
+      resolveImageCompressionGrid({
+        provider: "groq",
+        model: "meta-llama/llama-4-maverick-17b-128e-instruct",
+        quality: "high",
+      }).sides[0],
+    ).toBe(5760);
+    expect(
+      resolveImageCompressionGrid({
+        provider: "openai",
+        model: "gpt-5.5",
+        modelRefs: ["openai/gpt-5.5", "anthropic/claude-opus-4-6"],
+        quality: "high",
+      }).sides[0],
+    ).toBe(1568);
+  });
+
+  it("adapts automatic image compression for many-image turns", () => {
+    const single = resolveImageCompressionGrid({
+      provider: "anthropic",
+      model: "claude-opus-4-7",
+      quality: "auto",
+      imageCount: 1,
+    });
+    const many = resolveImageCompressionGrid({
+      provider: "anthropic",
+      model: "claude-opus-4-7",
+      quality: "auto",
+      imageCount: 8,
+    });
+
+    expect(single.sides[0]).toBe(2576);
+    expect(single.qualities).toEqual([80, 70, 60, 50, 40]);
+    expect(many.sides[0]).toBe(1280);
+    expect(many.qualities).toEqual([70, 60, 50, 40]);
   });
 
   async function withUnavailableImageOptimizer<T>(fn: () => Promise<T>): Promise<T> {
