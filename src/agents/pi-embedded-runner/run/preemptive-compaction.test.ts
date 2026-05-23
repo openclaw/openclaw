@@ -6,6 +6,7 @@ import { estimateToolResultReductionPotential } from "../tool-result-truncation.
 let PREEMPTIVE_OVERFLOW_ERROR_TEXT: typeof import("./preemptive-compaction.js").PREEMPTIVE_OVERFLOW_ERROR_TEXT;
 let estimateLlmBoundaryTokenPressure: typeof import("./preemptive-compaction.js").estimateLlmBoundaryTokenPressure;
 let estimatePrePromptTokens: typeof import("./preemptive-compaction.js").estimatePrePromptTokens;
+let estimateRenderedLlmBoundaryTokenPressure: typeof import("./preemptive-compaction.js").estimateRenderedLlmBoundaryTokenPressure;
 let formatPrePromptPrecheckLog: typeof import("./preemptive-compaction.js").formatPrePromptPrecheckLog;
 let shouldPreemptivelyCompactBeforePrompt: typeof import("./preemptive-compaction.js").shouldPreemptivelyCompactBeforePrompt;
 
@@ -15,6 +16,7 @@ beforeAll(async () => {
     PREEMPTIVE_OVERFLOW_ERROR_TEXT,
     estimateLlmBoundaryTokenPressure,
     estimatePrePromptTokens,
+    estimateRenderedLlmBoundaryTokenPressure,
     formatPrePromptPrecheckLog,
     shouldPreemptivelyCompactBeforePrompt,
   } = await import("./preemptive-compaction.js"));
@@ -172,6 +174,31 @@ describe("preemptive-compaction", () => {
     expect(result.shouldCompact).toBe(true);
     expect(result.route).toBe("compact_only");
     expect(result.estimatedPromptTokens).toBeGreaterThan(result.promptBudgetBeforeReserve);
+  });
+
+  it("uses rendered LLM-boundary pressure when the runtime owns the final payload shape", () => {
+    const renderedPrompt = "x".repeat(60_000);
+    const estimatedPromptTokens = estimateRenderedLlmBoundaryTokenPressure({
+      systemPrompt: "sys",
+      prompt: renderedPrompt,
+    });
+    const result = shouldPreemptivelyCompactBeforePrompt({
+      messages: [makeAssistantHistory("the transcript view is intentionally small")],
+      systemPrompt: "sys",
+      prompt: "small prompt before runtime projection",
+      contextTokenBudget: 16_000,
+      reserveTokens: 4_000,
+      llmBoundaryTokenPressure: {
+        estimatedPromptTokens,
+        source: "test_rendered_payload",
+        renderedChars: renderedPrompt.length,
+      },
+    });
+
+    expect(result.pressureSource).toBe("test_rendered_payload");
+    expect(result.estimatedPromptTokens).toBe(estimatedPromptTokens);
+    expect(result.route).toBe("compact_only");
+    expect(result.shouldCompact).toBe(true);
   });
 
   it("counts array/object tool-result payloads at the LLM boundary", () => {

@@ -25,10 +25,17 @@ export type PreemptiveCompactionDecision = {
   route: PreemptiveCompactionRoute;
   shouldCompact: boolean;
   estimatedPromptTokens: number;
+  pressureSource?: string;
   promptBudgetBeforeReserve: number;
   overflowTokens: number;
   toolResultReducibleChars: number;
   effectiveReserveTokens: number;
+};
+
+export type LlmBoundaryTokenPressure = {
+  estimatedPromptTokens: number;
+  source: string;
+  renderedChars?: number;
 };
 
 function estimateStringTokenPressure(text: string, charsPerToken = ESTIMATED_CHARS_PER_TOKEN) {
@@ -197,12 +204,41 @@ export function estimateLlmBoundaryTokenPressure(params: {
   return Math.max(0, Math.ceil((historyTokens + systemTokens + promptTokens) * SAFETY_MARGIN));
 }
 
+export function estimateRenderedLlmBoundaryTokenPressure(params: {
+  systemPrompt?: string;
+  prompt: string;
+}): number {
+  const systemTokens =
+    typeof params.systemPrompt === "string" && params.systemPrompt.trim().length > 0
+      ? MESSAGE_BOUNDARY_OVERHEAD_TOKENS + estimateStringTokenPressure(params.systemPrompt)
+      : 0;
+  const promptTokens =
+    MESSAGE_BOUNDARY_OVERHEAD_TOKENS + estimateStringTokenPressure(params.prompt);
+  return Math.max(0, Math.ceil((systemTokens + promptTokens) * SAFETY_MARGIN));
+}
+
 export function estimatePrePromptTokens(params: {
   messages: AgentMessage[];
   systemPrompt?: string;
   prompt: string;
 }): number {
   return estimateLlmBoundaryTokenPressure(params);
+}
+
+function normalizeLlmBoundaryTokenPressure(
+  pressure: LlmBoundaryTokenPressure | undefined,
+): LlmBoundaryTokenPressure | undefined {
+  if (!pressure || !Number.isFinite(pressure.estimatedPromptTokens)) {
+    return undefined;
+  }
+  const estimatedPromptTokens = Math.max(0, Math.ceil(pressure.estimatedPromptTokens));
+  return {
+    estimatedPromptTokens,
+    source: pressure.source.trim() || "rendered_llm_boundary",
+    ...(typeof pressure.renderedChars === "number" && Number.isFinite(pressure.renderedChars)
+      ? { renderedChars: Math.max(0, Math.ceil(pressure.renderedChars)) }
+      : {}),
+  };
 }
 
 export function shouldPreemptivelyCompactBeforePrompt(params: {
@@ -213,13 +249,20 @@ export function shouldPreemptivelyCompactBeforePrompt(params: {
   contextTokenBudget: number;
   reserveTokens: number;
   toolResultMaxChars?: number;
+  llmBoundaryTokenPressure?: LlmBoundaryTokenPressure;
 }): PreemptiveCompactionDecision {
   let messagesForPressure = params.messages;
-  let estimatedPromptTokens = estimatePrePromptTokens({
-    messages: params.messages,
-    systemPrompt: params.systemPrompt,
-    prompt: params.prompt,
-  });
+  const llmBoundaryTokenPressure = normalizeLlmBoundaryTokenPressure(
+    params.llmBoundaryTokenPressure,
+  );
+  let estimatedPromptTokens =
+    llmBoundaryTokenPressure?.estimatedPromptTokens ??
+    estimatePrePromptTokens({
+      messages: params.messages,
+      systemPrompt: params.systemPrompt,
+      prompt: params.prompt,
+    });
+  let pressureSource = llmBoundaryTokenPressure?.source ?? "transcript_estimate";
   if (params.unwindowedMessages && params.unwindowedMessages !== params.messages) {
     const unwindowedEstimatedPromptTokens = estimatePrePromptTokens({
       messages: params.unwindowedMessages,
@@ -229,6 +272,7 @@ export function shouldPreemptivelyCompactBeforePrompt(params: {
     if (unwindowedEstimatedPromptTokens > estimatedPromptTokens) {
       estimatedPromptTokens = unwindowedEstimatedPromptTokens;
       messagesForPressure = params.unwindowedMessages;
+      pressureSource = "unwindowed_transcript_estimate";
     }
   }
   const contextTokenBudget = Math.max(1, Math.floor(params.contextTokenBudget));
@@ -270,6 +314,7 @@ export function shouldPreemptivelyCompactBeforePrompt(params: {
     route,
     shouldCompact: route === "compact_only" || route === "compact_then_truncate",
     estimatedPromptTokens,
+    pressureSource,
     promptBudgetBeforeReserve,
     overflowTokens,
     toolResultReducibleChars,
@@ -296,6 +341,7 @@ export function formatPrePromptPrecheckLog(params: {
     `provider=${params.provider}/${params.modelId} ` +
     `route=${result.route} ` +
     `estimatedPromptTokens=${result.estimatedPromptTokens} ` +
+    `pressureSource=${result.pressureSource ?? "unknown"} ` +
     `promptBudgetBeforeReserve=${result.promptBudgetBeforeReserve} ` +
     `overflowTokens=${result.overflowTokens} ` +
     `toolResultReducibleChars=${result.toolResultReducibleChars} ` +
