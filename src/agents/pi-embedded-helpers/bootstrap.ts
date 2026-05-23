@@ -151,8 +151,11 @@ export function resolveBootstrapPromptTruncationWarningMode(
   return DEFAULT_BOOTSTRAP_PROMPT_TRUNCATION_WARNING_MODE;
 }
 
-function isAgentsBootstrapFile(fileName: string): boolean {
-  return fileName.toLowerCase() === AGENTS_BOOTSTRAP_FILENAME.toLowerCase();
+function isAgentsBootstrapFile(fileName: string | undefined | null): boolean {
+  return (
+    typeof fileName === "string" &&
+    fileName.toLowerCase() === AGENTS_BOOTSTRAP_FILENAME.toLowerCase()
+  );
 }
 
 function isPolicyDigestCandidate(line: string): boolean {
@@ -449,14 +452,19 @@ export function buildBootstrapContextFiles(
       break;
     }
     const fileMaxChars = Math.max(1, Math.min(maxChars, remainingTotalChars));
-    const trimmed = trimBootstrapContent(file.content ?? "", file.name, fileMaxChars);
+    // Defensive: bootstrap entries occasionally arrive with a missing/undefined
+    // `name` field. Fall back to the path basename so trimBootstrapContent and
+    // its `.toLowerCase()` callers never crash on undefined input. See #85523.
+    const safeFileName =
+      normalizeOptionalString(file.name) ?? (path.basename(pathValue) || pathValue);
+    const trimmed = trimBootstrapContent(file.content ?? "", safeFileName, fileMaxChars);
     const contentWithinBudget = clampToBudget(trimmed.content, remainingTotalChars);
     if (!contentWithinBudget) {
       continue;
     }
     if (trimmed.truncated || contentWithinBudget.length < trimmed.content.length) {
       opts?.warn?.(
-        `workspace bootstrap file ${file.name} is ${trimmed.originalLength} chars (limit ${trimmed.maxChars}); truncating in injected context`,
+        `workspace bootstrap file ${safeFileName} is ${trimmed.originalLength} chars (limit ${trimmed.maxChars}); truncating in injected context`,
       );
     }
     remainingTotalChars = Math.max(0, remainingTotalChars - contentWithinBudget.length);

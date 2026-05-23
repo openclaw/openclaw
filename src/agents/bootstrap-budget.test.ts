@@ -519,3 +519,25 @@ describe("bootstrap prompt warnings", () => {
     expect(optimizedTurns[0]).not.toContain("⚠ Bootstrap truncation warning:");
   });
 });
+
+describe("formatBootstrapTruncationWarningLines edge cases", () => {
+  it("survives undefined file.name without crashing (regression for #85523)", () => {
+    const analysis = {
+      truncatedFiles: [{ name: undefined as any, rawChars: 1, injectedChars: 1, limitChars: 1 }],
+      injectedFiles: [],
+      originalFiles: [],
+      totalRawChars: 1,
+      totalInjectedChars: 1,
+      totalBootstrapBudgetChars: 102400,
+    };
+    const params = {
+      sessionKey: "agent:main:test",
+      analysis,
+      sessionId: "test-123",
+      fileExpiryDateMs: Date.now() + 86400000,
+      signature: "test-sig",
+    };
+    // Must not throw TypeError on undefined `name.toLowerCase()`.
+    expect(() => formatBootstrapTruncationWarningLines(params as any)).not.toThrow();
+  });
+});

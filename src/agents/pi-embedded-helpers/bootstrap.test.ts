@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { buildBootstrapContextFiles } from "./bootstrap.js";
 import { stripThoughtSignatures } from "./bootstrap.js";
 
 describe("stripThoughtSignatures", () => {
@@ -39,5 +40,35 @@ describe("stripThoughtSignatures", () => {
       type: "text",
       text: "visible",
     });
+  });
+});
+
+describe("buildBootstrapContextFiles edge cases", () => {
+  it("survives undefined file.name without crashing (regression for #85523)", () => {
+    const files = [
+      {
+        name: undefined,
+        path: "/workspace/src/named-file.ts",
+        content: "export const x = 1;",
+        missing: false,
+      },
+    ];
+    // Must not throw TypeError on undefined `name.toLowerCase()`.
+    const result = buildBootstrapContextFiles(files as any);
+    expect(Array.isArray(result)).toBe(true);
+    expect(result.length).toBe(1);
+    expect(result[0].content).toContain("export const x");
+  });
+
+  it("survives missing file.name and file.path (regression for #85523)", () => {
+    const files = [
+      {
+        name: undefined,
+        path: "",
+        content: "nope",
+        missing: false,
+      },
+    ];
+    expect(() => buildBootstrapContextFiles(files as any)).not.toThrow();
   });
 });
