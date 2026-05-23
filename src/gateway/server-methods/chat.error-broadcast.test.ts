@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
-import type { GatewayRequestContext } from "../types.js";
 import { chatHandlers } from "./chat.js";
+import type { GatewayRequestContext } from "./types.js";
 
 function createMockContext() {
   const broadcast = vi.fn();
