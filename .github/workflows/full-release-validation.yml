@@ -301,12 +301,35 @@ jobs:
             echo "Dispatched ${workflow}: https://github.com/${GITHUB_REPOSITORY}/actions/runs/${run_id}"
             echo "run_id=${run_id}" >> "$GITHUB_OUTPUT"
 
+            gh_with_retry() {
+              local output status attempt
+              for attempt in 1 2 3 4 5 6; do
+                set +e
+                output="$(gh "$@" 2>&1)"
+                status=$?
+                set -e
+                if [[ "$status" -eq 0 ]]; then
+                  printf '%s\n' "$output"
+                  return 0
+                fi
+                if [[ "$output" == *"Bad credentials"* || "$output" == *"HTTP 401"* || "$output" == *"secondary rate limit"* || "$output" == *"API rate limit"* ]]; then
+                  echo "::warning::gh $* failed on attempt ${attempt}: ${output}" >&2
+                  sleep $((attempt * 10))
+                  continue
+                fi
+                printf '%s\n' "$output" >&2
+                return "$status"
+              done
+              printf '%s\n' "$output" >&2
+              return "$status"
+            }
+
             fetch_child_run_json() {
-              gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}"
+              gh_with_retry api "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}"
             }
 
             fetch_child_jobs() {
-              gh api --paginate "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}/jobs?per_page=100" --jq '.jobs[]'
+              gh_with_retry api --paginate "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}/jobs?per_page=100" --jq '.jobs[]'
             }
 
             cancel_child() {
@@ -409,12 +432,35 @@ jobs:
             echo "Dispatched ${workflow}: https://github.com/${GITHUB_REPOSITORY}/actions/runs/${run_id}"
             echo "run_id=${run_id}" >> "$GITHUB_OUTPUT"
 
+            gh_with_retry() {
+              local output status attempt
+              for attempt in 1 2 3 4 5 6; do
+                set +e
+                output="$(gh "$@" 2>&1)"
+                status=$?
+                set -e
+                if [[ "$status" -eq 0 ]]; then
+                  printf '%s\n' "$output"
+                  return 0
+                fi
+                if [[ "$output" == *"Bad credentials"* || "$output" == *"HTTP 401"* || "$output" == *"secondary rate limit"* || "$output" == *"API rate limit"* ]]; then
+                  echo "::warning::gh $* failed on attempt ${attempt}: ${output}" >&2
+                  sleep $((attempt * 10))
+                  continue
+                fi
+                printf '%s\n' "$output" >&2
+                return "$status"
+              done
+              printf '%s\n' "$output" >&2
+              return "$status"
+            }
+
             fetch_child_run_json() {
-              gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}"
+              gh_with_retry api "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}"
             }
 
             fetch_child_jobs() {
-              gh api --paginate "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}/jobs?per_page=100" --jq '.jobs[]'
+              gh_with_retry api --paginate "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}/jobs?per_page=100" --jq '.jobs[]'
             }
 
             cancel_child() {
@@ -527,12 +573,35 @@ jobs:
             echo "Dispatched ${workflow}: https://github.com/${GITHUB_REPOSITORY}/actions/runs/${run_id}"
             echo "run_id=${run_id}" >> "$GITHUB_OUTPUT"
 
+            gh_with_retry() {
+              local output status attempt
+              for attempt in 1 2 3 4 5 6; do
+                set +e
+                output="$(gh "$@" 2>&1)"
+                status=$?
+                set -e
+                if [[ "$status" -eq 0 ]]; then
+                  printf '%s\n' "$output"
+                  return 0
+                fi
+                if [[ "$output" == *"Bad credentials"* || "$output" == *"HTTP 401"* || "$output" == *"secondary rate limit"* || "$output" == *"API rate limit"* ]]; then
+                  echo "::warning::gh $* failed on attempt ${attempt}: ${output}" >&2
+                  sleep $((attempt * 10))
+                  continue
+                fi
+                printf '%s\n' "$output" >&2
+                return "$status"
+              done
+              printf '%s\n' "$output" >&2
+              return "$status"
+            }
+
             fetch_child_run_json() {
-              gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}"
+              gh_with_retry api "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}"
             }
 
             fetch_child_jobs() {
-              gh api --paginate "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}/jobs?per_page=100" --jq '.jobs[]'
+              gh_with_retry api --paginate "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}/jobs?per_page=100" --jq '.jobs[]'
             }
 
             release_check_blocking_job() {
@@ -816,6 +885,29 @@ jobs:
           echo "Dispatched npm-telegram-beta-e2e.yml: https://github.com/${GITHUB_REPOSITORY}/actions/runs/${run_id}"
           echo "run_id=${run_id}" >> "$GITHUB_OUTPUT"
 
+          gh_with_retry() {
+            local output status attempt
+            for attempt in 1 2 3 4 5 6; do
+              set +e
+              output="$(gh "$@" 2>&1)"
+              status=$?
+              set -e
+              if [[ "$status" -eq 0 ]]; then
+                printf '%s\n' "$output"
+                return 0
+              fi
+              if [[ "$output" == *"Bad credentials"* || "$output" == *"HTTP 401"* || "$output" == *"secondary rate limit"* || "$output" == *"API rate limit"* ]]; then
+                echo "::warning::gh $* failed on attempt ${attempt}: ${output}" >&2
+                sleep $((attempt * 10))
+                continue
+              fi
+              printf '%s\n' "$output" >&2
+              return "$status"
+            done
+            printf '%s\n' "$output" >&2
+            return "$status"
+          }
+
           cancel_child() {
             if [[ -n "${run_id:-}" ]]; then
               echo "Cancelling child workflow npm-telegram-beta-e2e.yml: ${run_id}" >&2
@@ -826,26 +918,26 @@ jobs:
 
           poll_count=0
           while true; do
-            status="$(gh run view "$run_id" --json status --jq '.status')"
+            status="$(gh_with_retry run view "$run_id" --json status --jq '.status')"
             if [[ "$status" == "completed" ]]; then
               break
             fi
             poll_count=$((poll_count + 1))
             if (( poll_count % 10 == 0 )); then
               echo "Still waiting on npm-telegram-beta-e2e.yml: https://github.com/${GITHUB_REPOSITORY}/actions/runs/${run_id}"
-              gh run view "$run_id" --json jobs --jq '.jobs[] | select(.status != "completed") | {name, status, url}' || true
+              gh_with_retry run view "$run_id" --json jobs --jq '.jobs[] | select(.status != "completed") | {name, status, url}' || true
             fi
             sleep 30
           done
           trap - EXIT INT TERM
 
-          conclusion="$(gh run view "$run_id" --json conclusion --jq '.conclusion')"
-          url="$(gh run view "$run_id" --json url --jq '.url')"
+          conclusion="$(gh_with_retry run view "$run_id" --json conclusion --jq '.conclusion')"
+          url="$(gh_with_retry run view "$run_id" --json url --jq '.url')"
           echo "npm-telegram-beta-e2e.yml finished with ${conclusion}: ${url}"
           echo "url=${url}" >> "$GITHUB_OUTPUT"
           echo "conclusion=${conclusion}" >> "$GITHUB_OUTPUT"
           if [[ "$conclusion" != "success" ]]; then
-            gh run view "$run_id" --json jobs --jq '.jobs[] | select(.conclusion != "success" and .conclusion != "skipped") | {name, conclusion, url}' || true
+            gh_with_retry run view "$run_id" --json jobs --jq '.jobs[] | select(.conclusion != "success" and .conclusion != "skipped") | {name, conclusion, url}' || true
             exit 1
           fi
 
