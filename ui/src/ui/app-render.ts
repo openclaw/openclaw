@@ -316,9 +316,6 @@ function renderSidebarSessions(state: AppViewState) {
                 class="sidebar-recent-sessions__label"
                 type="button"
                 aria-expanded=${String(!state.settings.recentSessionsCollapsed)}
-                title=${state.settings.recentSessionsCollapsed
-                  ? t("nav.recentSessionsExpand")
-                  : t("nav.recentSessionsCollapse")}
                 @click=${() => {
                   state.applySettings({
                     ...state.settings,

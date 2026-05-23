@@ -296,6 +296,10 @@ export function loadSettings(): UiSettings {
         typeof parsed.navGroupsCollapsed === "object" && parsed.navGroupsCollapsed !== null
           ? parsed.navGroupsCollapsed
           : defaults.navGroupsCollapsed,
+      recentSessionsCollapsed:
+        typeof parsed.recentSessionsCollapsed === "boolean"
+          ? parsed.recentSessionsCollapsed
+          : defaults.recentSessionsCollapsed,
       borderRadius:
         typeof parsed.borderRadius === "number" &&
         parsed.borderRadius >= 0 &&
@@ -422,6 +426,7 @@ function persistSettings(next: UiSettings) {
     navCollapsed: next.navCollapsed,
     navWidth: next.navWidth,
     navGroupsCollapsed: next.navGroupsCollapsed,
+    recentSessionsCollapsed: next.recentSessionsCollapsed ?? false,
     borderRadius: next.borderRadius,
     textScale: normalizeTextScale(next.textScale),
     ...(next.customTheme ? { customTheme: next.customTheme } : {}),
