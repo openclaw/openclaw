@@ -970,6 +970,8 @@ describe("RealtimeCallHandler path routing", () => {
         expect(args).toEqual({
           question: "Create a smoke test file for me.",
         });
+        expect(JSON.stringify(args)).not.toContain("consultPolicy");
+        expect(JSON.stringify(args)).not.toContain("openclaw_agent_consult");
         expect(callId).toBe("call-1");
         expect(context).toEqual({});
         await waitForRealtimeTest(() => {
