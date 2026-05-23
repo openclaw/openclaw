@@ -1537,4 +1537,49 @@ describe("ensureOnboardingPluginInstalled", () => {
       }
     });
   });
+
+
+  it("does not add bundled plugin paths to plugins.load.paths (regression for #85334)", async () => {
+    const bundledPluginPath = "/opt/homebrew/lib/node_modules/openclaw/plugins/feishu";
+    const nonBundledPath = "/Users/test/.openclaw/extensions/custom-plugin/plugin.ts";
+
+    vi.mocked(resolveBundledPluginSources).mockReturnValue(
+      new Map([["@openclaw/feishu", { pluginId: "@openclaw/feishu", localPath: bundledPluginPath }]]),
+    );
+
+    const config: OpenClawConfig = {
+      plugins: {
+        load: { paths: [nonBundledPath] },
+      },
+    };
+
+    // Attempt to add a bundled plugin path via onboarding flow.
+    const result = await ensureOnboardingPluginInstalled({
+      cfg: config,
+      entry: {
+        pluginId: "@openclaw/feishu",
+        label: "Feishu",
+        install: { path: bundledPluginPath },
+      },
+      prompter: { select: vi.fn(async () => "path"), note: vi.fn(), progress: vi.fn(() => ({ update: vi.fn(), stop: vi.fn() })) } as never,
+      runtime: {} as never,
+    });
+
+    // The bundled path must NOT be added to plugins.load.paths.
+    expect(result.cfg.plugins?.load?.paths).toEqual([nonBundledPath]);
+
+    // Now attempt to add a non-bundled path — it should be added normally.
+    const result2 = await ensureOnboardingPluginInstalled({
+      cfg: result.cfg,
+      entry: {
+        pluginId: "custom-plugin",
+        label: "Custom",
+        install: { path: nonBundledPath },
+      },
+      prompter: { select: vi.fn(async () => "path"), note: vi.fn(), progress: vi.fn(() => ({ update: vi.fn(), stop: vi.fn() })) } as never,
+      runtime: {} as never,
+    });
+
+    expect(result2.cfg.plugins?.load?.paths).toEqual([nonBundledPath]);
+  });
 });

@@ -3046,6 +3046,40 @@ describe("syncPluginsForUpdateChannel", () => {
     },
   );
 
+  it("does not re-add bundled load path on repeated channel sync (regression for #85334)", async () => {
+    mockBundledSources(createBundledSource());
+
+    // Simulate a config that has just been cleaned by `doctor --fix`:
+    // the bundled install record is preserved but plugins.load.paths is empty.
+    const cleanedConfig = createBundledPathInstallConfig({
+      loadPaths: [],
+      installPath: appBundledPluginRoot("feishu"),
+      spec: "@openclaw/feishu",
+    });
+
+    // First sync after doctor cleanup: must NOT re-add the bundled path.
+    const firstSync = await syncPluginsForUpdateChannel({
+      channel: "beta",
+      config: cleanedConfig,
+    });
+    expect(firstSync.config.plugins?.load?.paths).toEqual([]);
+
+    // Second sync: still must remain empty (idempotent — no churn loop).
+    const secondSync = await syncPluginsForUpdateChannel({
+      channel: "beta",
+      config: firstSync.config,
+    });
+    expect(secondSync.config.plugins?.load?.paths).toEqual([]);
+
+    // Bundled install record itself must be preserved across both syncs.
+    expectBundledPathInstall({
+      install: secondSync.config.plugins?.installs?.feishu,
+      sourcePath: appBundledPluginRoot("feishu"),
+      installPath: appBundledPluginRoot("feishu"),
+      spec: "@openclaw/feishu",
+    });
+  });
+
   it("forwards an explicit env to bundled plugin source resolution", async () => {
     resolveBundledPluginSourcesMock.mockReturnValue(new Map());
     const env = { OPENCLAW_HOME: "/srv/openclaw-home" } as NodeJS.ProcessEnv;
