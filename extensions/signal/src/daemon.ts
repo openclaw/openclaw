@@ -163,7 +163,7 @@ export function spawnSignalDaemon(opts: SignalDaemonOpts): SignalDaemonHandle {
   };
 }
 
-export const __testing = {
+export const testApi = {
   buildDaemonArgs,
   resolveSignalCliConfigPath,
 } as const;
