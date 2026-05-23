@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { buildCmdExeCommandLine } from "../windows-cmd-helpers.mjs";
 
 const FORWARDED_SIGNALS = ["SIGINT", "SIGTERM", "SIGHUP"];
 const FORCE_KILL_DELAY_MS = 5_000;
@@ -48,6 +49,9 @@ function terminateManagedChild(child, signal = "SIGTERM") {
  *   env?: NodeJS.ProcessEnv;
  *   stdio?: import("node:child_process").StdioOptions;
  *   shell?: boolean;
+ *   windowsVerbatimArguments?: boolean;
+ *   platform?: NodeJS.Platform;
+ *   comSpec?: string;
  *   onReady?: (child: import("node:child_process").ChildProcess) => void;
  * }} options
  * @returns {Promise<number>}
@@ -59,15 +63,23 @@ export async function runManagedCommand({
   env,
   stdio = "inherit",
   shell = process.platform === "win32",
+  windowsVerbatimArguments,
+  platform = process.platform,
+  comSpec,
   onReady,
 }) {
-  const child = spawn(bin, args, {
+  const spawnSpec = createManagedCommandSpawnSpec({
+    bin,
+    args,
     cwd,
     env,
     stdio,
     shell,
-    detached: process.platform !== "win32",
+    windowsVerbatimArguments,
+    platform,
+    comSpec,
   });
+  const child = spawn(spawnSpec.command, spawnSpec.args, spawnSpec.options);
 
   let receivedSignal = null;
   let forceKillTimer = null;
@@ -100,6 +112,91 @@ export async function runManagedCommand({
       process.off(signal, forwardSignal);
     }
   }
+}
+
+/**
+ * @param {{
+ *   bin: string;
+ *   args?: string[];
+ *   cwd?: string;
+ *   env?: NodeJS.ProcessEnv;
+ *   stdio?: import("node:child_process").StdioOptions;
+ *   shell?: boolean;
+ *   windowsVerbatimArguments?: boolean;
+ *   platform?: NodeJS.Platform;
+ *   comSpec?: string;
+ * }} options
+ */
+export function createManagedCommandSpawnSpec({
+  bin,
+  args = [],
+  cwd,
+  env,
+  stdio = "inherit",
+  shell = process.platform === "win32",
+  windowsVerbatimArguments,
+  platform = process.platform,
+  comSpec,
+}) {
+  const invocation = createManagedCommandInvocation({
+    bin,
+    args,
+    env,
+    shell,
+    windowsVerbatimArguments,
+    platform,
+    comSpec,
+  });
+
+  return {
+    args: invocation.args,
+    command: invocation.command,
+    options: {
+      cwd,
+      env,
+      stdio,
+      shell: invocation.shell,
+      detached: platform !== "win32",
+      windowsVerbatimArguments: invocation.windowsVerbatimArguments,
+    },
+  };
+}
+
+/**
+ * @param {{
+ *   bin: string;
+ *   args?: string[];
+ *   env?: NodeJS.ProcessEnv;
+ *   shell?: boolean;
+ *   windowsVerbatimArguments?: boolean;
+ *   platform?: NodeJS.Platform;
+ *   comSpec?: string;
+ * }} options
+ */
+export function createManagedCommandInvocation({
+  bin,
+  args = [],
+  env,
+  shell = process.platform === "win32",
+  windowsVerbatimArguments,
+  platform = process.platform,
+  comSpec,
+}) {
+  if (platform === "win32" && shell && args.length > 0) {
+    return {
+      args: ["/d", "/s", "/c", buildCmdExeCommandLine(bin, args)],
+      command: comSpec ?? env?.ComSpec ?? env?.COMSPEC ?? process.env.ComSpec ?? "cmd.exe",
+      shell: false,
+      windowsVerbatimArguments: true,
+    };
+  }
+
+  return {
+    args,
+    command: bin,
+    shell,
+    windowsVerbatimArguments,
+  };
 }
 
 function signalNumberFor(signal) {
