@@ -229,7 +229,8 @@ export function createTelegramOutboundAdapter(
     },
     pinDeliveredMessage: async ({ cfg, target, messageId, pin }) => {
       const { pinMessageTelegram } = await loadSendModule();
-      await pinMessageTelegram(target.to, messageId, {
+      const outboundTo = normalizeTelegramOutboundTarget(target.to);
+      await pinMessageTelegram(outboundTo, messageId, {
         cfg,
         accountId: target.accountId ?? undefined,
         notify: pin.notify,
