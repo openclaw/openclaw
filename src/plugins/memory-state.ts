@@ -1,6 +1,7 @@
 import type { MemoryCitationsMode } from "../config/types.memory.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { MemorySearchManager } from "../memory-host-sdk/host/types.js";
+import type { OpenClawPluginApi } from "../plugin-entry.js";
 
 export type MemoryPromptSectionBuilder = (params: {
   availableTools: Set<string>;
@@ -125,12 +126,114 @@ export type MemoryPluginPublicArtifact = {
 export type MemoryPluginPublicArtifactsProvider = {
   listArtifacts(params: { cfg: OpenClawConfig }): Promise<MemoryPluginPublicArtifact[]>;
 };
+// ── Dreaming Provider Interface ──────────────────────────────────────
+//
+// Any memory plugin that implements this interface can participate in
+// OpenClaw's dreaming lifecycle (Light → Deep → REM memory consolidation).
+// All methods are optional — the runtime falls back to memory-core defaults.
+
+export type DreamingCandidate = {
+  /** Unique key, typically `${path}:${startLine}:${endLine}` */
+  key: string;
+  /** Absolute path to the source memory file */
+  path: string;
+  startLine: number;
+  endLine: number;
+  /** Human-readable snippet of the candidate content */
+  snippet: string;
+  /** Composite score 0–1 */
+  score: number;
+  /** How many times this candidate has been recalled */
+  recallCount: number;
+  /** Number of unique search queries that surfaced this candidate */
+  uniqueQueries: number;
+  /** Individual component scores (for transparency / debugging) */
+  components: {
+    frequency: number;
+    relevance: number;
+    diversity: number;
+    recency: number;
+    consolidation: number;
+    conceptual: number;
+  };
+};
+
+export type DreamingPromotionResult = {
+  /** Number of candidates promoted to long-term memory */
+  applied: number;
+  /** The candidates that were promoted */
+  appliedCandidates: DreamingCandidate[];
+  /** Dates of dropped old promotion sections (compaction) */
+  droppedDates: string[];
+};
+
+export type DreamingPhaseSignal = {
+  phase: "light" | "deep" | "rem";
+  keys: string[];
+  timestamp: number;
+};
+
+export type DreamingStorageConfig = {
+  timezone?: string;
+  storage: {
+    mode: "inline" | "separate" | "both";
+    separateReports: boolean;
+  };
+  execution?: {
+    model?: string;
+  };
+};
+
+export type DreamingLogger = Pick<
+  OpenClawPluginApi["logger"],
+  "info" | "warn" | "error" | "debug"
+>;
+
+export type MemoryPluginDreamingProvider = {
+  /** Light phase: ingest daily memory + session signals, collect candidates */
+  runLightPhase?(params: {
+    workspaceDir: string;
+    cfg?: OpenClawConfig;
+    nowMs: number;
+    logger: DreamingLogger;
+  }): Promise<void>;
+
+  /** Deep phase: rank short-term candidates, promote high-scorers to MEMORY.md */
+  runDeepPhase?(params: {
+    workspaceDir: string;
+    cfg?: OpenClawConfig;
+    limit: number;
+    minScore: number;
+    nowMs: number;
+    logger: DreamingLogger;
+  }): Promise<DreamingPromotionResult>;
+
+  /** REM phase: surface cross-cutting patterns and write reflection entries */
+  runRemPhase?(params: {
+    workspaceDir: string;
+    cfg?: OpenClawConfig;
+    nowMs: number;
+    logger: DreamingLogger;
+  }): Promise<void>;
+
+  /** Write a deep dreaming report artifact (markdown or JSON) */
+  writeDeepReport?(params: {
+    workspaceDir: string;
+    bodyLines: string[];
+    nowMs: number;
+    timezone?: string;
+    storage: DreamingStorageConfig["storage"];
+  }): Promise<void>;
+};
+
 
 export type MemoryPluginCapability = {
   promptBuilder?: MemoryPromptSectionBuilder;
   flushPlanResolver?: MemoryFlushPlanResolver;
   runtime?: MemoryPluginRuntime;
   publicArtifacts?: MemoryPluginPublicArtifactsProvider;
+  /** Optional dreaming lifecycle provider */
+  dreaming?: MemoryPluginDreamingProvider;
 };
 
 export type MemoryPluginCapabilityRegistration = {

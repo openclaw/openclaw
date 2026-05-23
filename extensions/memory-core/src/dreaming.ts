@@ -34,6 +34,11 @@ import {
   includesSystemEventToken,
   normalizeTrimmedString,
 } from "./dreaming-shared.js";
+
+// Dreaming provider protocol — allows external memory plugins to
+// implement the dreaming lifecycle without coupling to memory-core internals.
+import type { MemoryPluginDreamingProvider, DreamingPromotionResult, DreamingLogger } from "openclaw/plugin-sdk/memory-state";
+import { getMemoryCapabilityRegistration } from "openclaw/plugin-sdk/memory-state";
 import {
   applyShortTermPromotions,
   repairShortTermPromotionArtifacts,
@@ -490,7 +495,49 @@ export async function reconcileShortTermDreamingCronJob(params: {
   return { status: "updated", removed };
 }
 
-export async function runShortTermDreamingPromotionIfTriggered(params: {
+export 
+// ── Dreaming Provider Resolution ─────────────────────────────────────
+//
+// Resolve the active dreaming provider from the plugin capability registry.
+// Returns null if no memory plugin has registered one.
+// The caller falls back to memory-core's default implementation when null.
+
+function resolveDreamingProvider(): MemoryPluginDreamingProvider | null {
+  const cap = getMemoryCapabilityRegistration();
+  return cap?.capability.dreaming ?? null;
+}
+
+/**
+ * Convenience wrapper: run a dreaming phase through the provider with
+ * automatic fallback to the memory-core inline implementation.
+ */
+async function runPhaseWithProvider(
+  provider: MemoryPluginDreamingProvider | null,
+  phase: "light" | "deep" | "rem",
+  params: {
+    workspaceDir: string;
+    cfg: Record<string, unknown> | undefined;
+    nowMs: number;
+    logger: DreamingLogger;
+  },
+  memoryCoreImpl: () => Promise<void>,
+): Promise<void> {
+  if (phase === "light" && provider?.runLightPhase) {
+    await provider.runLightPhase(params);
+    return;
+  }
+  if (phase === "deep" && provider?.runDeepPhase) {
+    await provider.runDeepPhase(params);
+    return;
+  }
+  if (phase === "rem" && provider?.runRemPhase) {
+    await provider.runRemPhase(params);
+    return;
+  }
+  await memoryCoreImpl();
+}
+
+async function runShortTermDreamingPromotionIfTriggered(params: {
   cleanedBody: string;
   trigger?: string;
   workspaceDir?: string;
@@ -554,113 +601,168 @@ export async function runShortTermDreamingPromotionIfTriggered(params: {
   for (const workspaceDir of workspaces) {
     try {
       const sweepNowMs = Date.now();
-      await runDreamingSweepPhases({
-        workspaceDir,
-        pluginConfig,
-        cfg: params.cfg,
+      const provider = resolveDreamingProvider();
+      const providerId = getMemoryCapabilityRegistration()?.pluginId ?? "memory-core";
+      const sweepConfig = {
+        cfg: params.cfg as Record<string, unknown> | undefined,
         logger: params.logger,
         subagent: params.subagent,
-        detachNarratives,
         nowMs: sweepNowMs,
-      });
+      };
 
-      const reportLines: string[] = [];
-      const repair = await repairShortTermPromotionArtifacts({ workspaceDir });
-      if (repair.changed) {
-        params.logger.info(
-          `memory-core: normalized recall artifacts before dreaming (${formatRepairSummary(repair)}) [workspace=${workspaceDir}].`,
-        );
-        reportLines.push(`- Repaired recall artifacts: ${formatRepairSummary(repair)}.`);
-      }
-      const candidates = await rankShortTermPromotionCandidates({
-        workspaceDir,
-        limit: params.config.limit,
-        minScore: params.config.minScore,
-        minRecallCount: params.config.minRecallCount,
-        minUniqueQueries: params.config.minUniqueQueries,
-        recencyHalfLifeDays,
-        maxAgeDays: params.config.maxAgeDays,
-        nowMs: sweepNowMs,
-      });
-      totalCandidates += candidates.length;
-      reportLines.push(`- Ranked ${candidates.length} candidate(s) for durable promotion.`);
-      if (params.config.verboseLogging) {
-        const candidateSummary =
-          candidates.length > 0
-            ? candidates
-                .map(
-                  (candidate) =>
-                    `${candidate.path}:${candidate.startLine}-${candidate.endLine} score=${candidate.score.toFixed(3)} recalls=${candidate.recallCount} queries=${candidate.uniqueQueries} components={freq=${candidate.components.frequency.toFixed(3)},rel=${candidate.components.relevance.toFixed(3)},div=${candidate.components.diversity.toFixed(3)},rec=${candidate.components.recency.toFixed(3)},cons=${candidate.components.consolidation.toFixed(3)},concept=${candidate.components.conceptual.toFixed(3)}}`,
-                )
-                .join(" | ")
-            : "none";
-        params.logger.info(
-          `memory-core: dreaming candidate details [workspace=${workspaceDir}] ${candidateSummary}`,
-        );
-      }
-      const applied = await applyShortTermPromotions({
-        workspaceDir,
-        candidates,
-        limit: params.config.limit,
-        minScore: params.config.minScore,
-        minRecallCount: params.config.minRecallCount,
-        minUniqueQueries: params.config.minUniqueQueries,
-        maxAgeDays: params.config.maxAgeDays,
-        timezone: params.config.timezone,
-        nowMs: sweepNowMs,
-      });
-      totalApplied += applied.applied;
-      reportLines.push(`- Promoted ${applied.applied} candidate(s) into MEMORY.md.`);
-      if (params.config.verboseLogging) {
-        const appliedSummary =
-          applied.appliedCandidates.length > 0
-            ? applied.appliedCandidates
-                .map(
-                  (candidate) =>
-                    `${candidate.path}:${candidate.startLine}-${candidate.endLine} score=${candidate.score.toFixed(3)} recalls=${candidate.recallCount}`,
-                )
-                .join(" | ")
-            : "none";
-        params.logger.info(
-          `memory-core: dreaming applied details [workspace=${workspaceDir}] ${appliedSummary}`,
-        );
-      }
-      await writeDeepDreamingReport({
-        workspaceDir,
-        bodyLines: reportLines,
-        nowMs: sweepNowMs,
-        timezone: params.config.timezone,
-        storage: params.config.storage ?? { mode: "separate", separateReports: false },
-      });
-      // Generate dream diary narrative from promoted memories.
-      if (params.subagent && (candidates.length > 0 || applied.applied > 0)) {
-        const data: NarrativePhaseData = {
-          phase: "deep",
-          snippets: candidates.map((c) => c.snippet).filter(Boolean),
-          promotions: applied.appliedCandidates.map((c) => c.snippet).filter(Boolean),
-        };
-        if (detachNarratives) {
-          runDetachedDreamNarrative({
-            subagent: params.subagent,
+      // ── Phase 1: Light (daily/session ingestion) ─────────────────
+      //
+      // When a provider is active, delegate the entire light phase to it.
+      // Otherwise fall through to memory-core's built-in sweep phases.
+      await runPhaseWithProvider(
+        provider,
+        "light",
+        {
+          workspaceDir,
+          cfg: params.cfg as Record<string, unknown> | undefined,
+          nowMs: sweepNowMs,
+          logger: params.logger,
+        },
+        async () => {
+          await runDreamingSweepPhases({
             workspaceDir,
-            data,
-            nowMs: sweepNowMs,
-            timezone: params.config.timezone,
-            model: params.config.execution?.model,
+            pluginConfig,
+            cfg: params.cfg,
             logger: params.logger,
-          });
-        } else {
-          await generateAndAppendDreamNarrative({
             subagent: params.subagent,
-            workspaceDir,
-            data,
+            detachNarratives,
             nowMs: sweepNowMs,
-            timezone: params.config.timezone,
-            model: params.config.execution?.model,
-            logger: params.logger,
           });
+        },
+      );
+
+      // ── Phase 2: Deep (ranking & promotion) ──────────────────────
+      //
+      // If the provider implements runDeepPhase, the entire ranking,
+      // promotion, and report-writing pipeline is delegated to it.
+      // Memory-core handles narrative generation regardless — that
+      // belongs to the dreaming runtime, not the storage backend.
+      if (provider?.runDeepPhase) {
+        const deepResult = await provider.runDeepPhase({
+          workspaceDir,
+          cfg: params.cfg as Record<string, unknown> | undefined,
+          limit: params.config.limit,
+          minScore: params.config.minScore,
+          nowMs: sweepNowMs,
+          logger: params.logger,
+        });
+        totalCandidates += deepResult.appliedCandidates.length;
+        totalApplied += deepResult.applied;
+        if (deepResult.applied > 0 || params.config.verboseLogging) {
+          params.logger.info(
+            `[provider=${providerId}] deep phase: promoted ${deepResult.applied}` +
+              ` candidate(s) (dropped ${deepResult.droppedDates.length} stale sections) [workspace=${workspaceDir}].`,
+          );
         }
-      }
+      } else {
+        // Fallback: use memory-core's own promotion pipeline
+        const reportLines: string[] = [];
+        const repair = await repairShortTermPromotionArtifacts({ workspaceDir });
+        if (repair.changed) {
+          params.logger.info(
+            `memory-core: normalized recall artifacts before dreaming (${formatRepairSummary(repair)}) [workspace=${workspaceDir}].`,
+          );
+          reportLines.push(`- Repaired recall artifacts: ${formatRepairSummary(repair)}.`);
+        }
+        const candidates = await rankShortTermPromotionCandidates({
+          workspaceDir,
+          limit: params.config.limit,
+          minScore: params.config.minScore,
+          minRecallCount: params.config.minRecallCount,
+          minUniqueQueries: params.config.minUniqueQueries,
+          recencyHalfLifeDays,
+          maxAgeDays: params.config.maxAgeDays,
+          nowMs: sweepNowMs,
+        });
+        totalCandidates += candidates.length;
+        reportLines.push(`- Ranked ${candidates.length} candidate(s) for durable promotion.`);
+        if (params.config.verboseLogging) {
+          const candidateSummary =
+            candidates.length > 0
+              ? candidates
+                  .map(
+                    (candidate) =>
+                      `${candidate.path}:${candidate.startLine}-${candidate.endLine} score=${candidate.score.toFixed(3)} recalls=${candidate.recallCount} queries=${candidate.uniqueQueries} components={freq=${candidate.components.frequency.toFixed(3)},rel=${candidate.components.relevance.toFixed(3)},div=${candidate.components.diversity.toFixed(3)},rec=${candidate.components.recency.toFixed(3)},cons=${candidate.components.consolidation.toFixed(3)},concept=${candidate.components.conceptual.toFixed(3)}}`,
+                  )
+                  .join(" | ")
+              : "none";
+          params.logger.info(
+            `memory-core: dreaming candidate details [workspace=${workspaceDir}] ${candidateSummary}`,
+          );
+        }
+        const applied = await applyShortTermPromotions({
+          workspaceDir,
+          candidates,
+          limit: params.config.limit,
+          minScore: params.config.minScore,
+          minRecallCount: params.config.minRecallCount,
+          minUniqueQueries: params.config.minUniqueQueries,
+          maxAgeDays: params.config.maxAgeDays,
+          timezone: params.config.timezone,
+          nowMs: sweepNowMs,
+        });
+        totalApplied += applied.applied;
+        reportLines.push(`- Promoted ${applied.applied} candidate(s) into MEMORY.md.`);
+        if (params.config.verboseLogging) {
+          const appliedSummary =
+            applied.appliedCandidates.length > 0
+              ? applied.appliedCandidates
+                  .map(
+                    (candidate) =>
+                      `${candidate.path}:${candidate.startLine}-${candidate.endLine} score=${candidate.score.toFixed(3)} recalls=${candidate.recallCount}`,
+                  )
+                  .join(" | ")
+              : "none";
+          params.logger.info(
+            `memory-core: dreaming applied details [workspace=${workspaceDir}] ${appliedSummary}`,
+          );
+        }
+        await writeDeepDreamingReport({
+          workspaceDir,
+          bodyLines: reportLines,
+          nowMs: sweepNowMs,
+          timezone: params.config.timezone,
+          storage: params.config.storage ?? { mode: "separate", separateReports: false },
+        });
+        // Generate dream diary narrative from promoted memories.
+        if (params.subagent && (candidates.length > 0 || applied.applied > 0)) {
+          const data: NarrativePhaseData = {
+            phase: "deep",
+            snippets: candidates.map((c) => c.snippet).filter(Boolean),
+            promotions: applied.appliedCandidates.map((c) => c.snippet).filter(Boolean),
+          };
+          if (detachNarratives) {
+            runDetachedDreamNarrative({
+              subagent: params.subagent,
+              workspaceDir,
+              data,
+              nowMs: sweepNowMs,
+              timezone: params.config.timezone,
+              model: params.config.execution?.model,
+              logger: params.logger,
+            });
+          } else {
+            await generateAndAppendDreamNarrative({
+              subagent: params.subagent,
+              workspaceDir,
+              data,
+              nowMs: sweepNowMs,
+              timezone: params.config.timezone,
+              model: params.config.execution?.model,
+              logger: params.logger,
+            });
+          }
+        }
+      }  // ← closes else block
+
+
+
+
     } catch (err) {
       failedWorkspaces += 1;
       params.logger.error(

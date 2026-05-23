@@ -13,6 +13,7 @@ import {
 } from "openclaw/plugin-sdk/plugin-entry";
 import type { TSchema } from "typebox";
 import { registerShortTermPromotionDreaming } from "./src/dreaming.js";
+import { createMemoryCoreDreamingProvider } from "./src/dreaming-provider.js";
 import { buildMemoryFlushPlan } from "./src/flush-plan.js";
 import { registerBuiltInMemoryEmbeddingProviders } from "./src/memory/provider-adapters.js";
 import { buildPromptSection } from "./src/prompt-section.js";
@@ -179,6 +180,13 @@ export default definePluginEntry({
   register(api) {
     registerBuiltInMemoryEmbeddingProviders(api);
     registerShortTermPromotionDreaming(api);
+
+    // Register dreaming provider so the runtime can discover it through
+    // the plugin capability protocol instead of hardcoded imports.
+    const dreamingProvider = createMemoryCoreDreamingProvider();
+    api.registerMemoryCapability({
+      dreaming: dreamingProvider,
+    });
     api.registerMemoryCapability({
       promptBuilder: buildPromptSection,
       flushPlanResolver: buildMemoryFlushPlan,
