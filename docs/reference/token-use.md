@@ -66,10 +66,12 @@ For a practical breakdown (per injected file, tools, skills, and system prompt s
 Use these in chat:
 
 - `/status` → **emoji-rich status card** with the session model, context usage,
-  last response input/output tokens, and **estimated cost** (API key only).
+  last response input/output tokens, and **estimated cost** when local pricing is
+  configured for the active model.
 - `/usage off|tokens|full` → appends a **per-response usage footer** to every reply.
   - Persists per session (stored as `responseUsage`).
-  - OAuth auth **hides cost** (tokens only).
+  - `/usage full` shows estimated cost only when OpenClaw has usage metadata and
+    local pricing for the active model. Otherwise it shows tokens only.
 - `/usage cost` → shows a local cost summary from OpenClaw session logs.
 
 Other surfaces:
@@ -119,8 +121,10 @@ models.providers.<provider>.models[].cost
 ```
 
 These are **USD per 1M tokens** for `input`, `output`, `cacheRead`, and
-`cacheWrite`. If pricing is missing, OpenClaw shows tokens only. OAuth tokens
-never show dollar cost.
+`cacheWrite`. If pricing is missing, OpenClaw shows tokens only. Cost display is
+not limited to API-key auth: non-API-key providers such as `aws-sdk` can show
+estimated cost when their configured model entry includes local pricing and the
+provider returns usage metadata.
 
 After sidecars and channels reach the Gateway ready path, OpenClaw starts an
 optional background pricing bootstrap for configured model refs that do not

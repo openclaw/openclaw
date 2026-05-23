@@ -897,31 +897,31 @@ export function buildStatusMessage(args: StatusArgs): string {
     activeModelRef: activeModelLabel,
     state: entry,
   });
-  const effectiveCostAuthMode = fallbackState.active
-    ? activeAuthMode
-    : (selectedAuthMode ?? activeAuthMode);
-  const showCost = effectiveCostAuthMode === "api-key" || effectiveCostAuthMode === "mixed";
-  const hasUsage = typeof inputTokens === "number" || typeof outputTokens === "number";
-  const costConfig =
-    showCost && hasUsage
-      ? resolveModelCostConfig({
-          provider: activeProvider,
-          model: activeModel,
-          config: args.config,
-          allowPluginNormalization: false,
-        })
-      : undefined;
-  const cost =
-    showCost && hasUsage
-      ? estimateUsageCost({
-          usage: {
-            input: inputTokens ?? undefined,
-            output: outputTokens ?? undefined,
-          },
-          cost: costConfig,
-        })
-      : undefined;
-  const costLabel = showCost && hasUsage ? formatUsd(cost) : undefined;
+  const hasUsage =
+    typeof inputTokens === "number" ||
+    typeof outputTokens === "number" ||
+    typeof cacheRead === "number" ||
+    typeof cacheWrite === "number";
+  const costConfig = hasUsage
+    ? resolveModelCostConfig({
+        provider: activeProvider,
+        model: activeModel,
+        config: args.config,
+        allowPluginNormalization: false,
+      })
+    : undefined;
+  const cost = hasUsage
+    ? estimateUsageCost({
+        usage: {
+          input: inputTokens ?? undefined,
+          output: outputTokens ?? undefined,
+          cacheRead: cacheRead ?? undefined,
+          cacheWrite: cacheWrite ?? undefined,
+        },
+        cost: costConfig,
+      })
+    : undefined;
+  const costLabel = hasUsage ? formatUsd(cost) : undefined;
 
   const selectedAuthLabel = selectedAuthLabelValue ? ` · 🔑 ${selectedAuthLabelValue}` : "";
   const modelNote = channelModelNote ? ` · ${channelModelNote}` : "";
