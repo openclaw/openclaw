@@ -555,7 +555,7 @@ export async function collectSandboxBrowserHashLabelFindings(params?: {
 function buildSandboxBrowserDockerProbeTimeoutFinding(timeoutMs: number): SecurityAuditFinding {
   return {
     checkId: "sandbox.browser_container.docker_probe_timeout",
-    severity: "info",
+    severity: "warn",
     title: "Sandbox browser Docker audit probe timed out",
     detail:
       `Docker did not answer within ${timeoutMs}ms while checking sandbox browser containers. ` +

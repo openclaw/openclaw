@@ -97,7 +97,7 @@ describe("security audit sandbox browser findings", () => {
     expect(findings).toEqual([
       expect.objectContaining({
         checkId: "sandbox.browser_container.docker_probe_timeout",
-        severity: "info",
+        severity: "warn",
       }),
     ]);
   });
