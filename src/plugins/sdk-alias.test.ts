@@ -1093,11 +1093,7 @@ describe("plugin sdk alias helpers", () => {
     );
     fs.writeFileSync(sourceRootAlias, "module.exports = {};\n", "utf-8");
     fs.writeFileSync(distRootAlias, "module.exports = {};\n", "utf-8");
-    fs.writeFileSync(
-      path.join(fixture.root, "scripts", "lib", "plugin-sdk-private-local-only-subpaths.json"),
-      JSON.stringify(["ssrf-runtime-internal"], null, 2),
-      "utf-8",
-    );
+    fs.rmSync(path.join(fixture.root, "scripts"), { force: true, recursive: true });
     fs.writeFileSync(sourceSsrFInternalPath, "export const ssrfInternal = true;\n", "utf-8");
     fs.writeFileSync(distSsrFInternalPath, "export const ssrfInternal = true;\n", "utf-8");
     const sourceOllamaEntry = writePluginEntry(
