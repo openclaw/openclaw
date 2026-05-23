@@ -43,6 +43,7 @@ type SessionsListDetails = {
     fastMode?: boolean;
     reasoningLevel?: string;
     responseUsage?: string;
+    resumable?: boolean;
     thinkingLevel?: string;
     verboseLevel?: string;
   }>;
@@ -192,5 +193,48 @@ describe("sessions-list-tool", () => {
     expect(session?.reasoningLevel).toBe("deep");
     expect(session?.elevatedLevel).toBe("on");
     expect(session?.responseUsage).toBe("full");
+  });
+
+  it("exposes resumable field reflecting whether sessions_send can reactivate the session", async () => {
+    const statuses = [
+      { status: "running", expected: true },
+      { status: "done", expected: true },
+      { status: "failed", expected: true },
+      { status: "timeout", expected: true },
+      { status: "killed", expected: false },
+    ] as const;
+
+    for (const { status, expected } of statuses) {
+      mocks.gatewayCall.mockImplementation(async (opts: unknown) => {
+        const request = opts as { method?: string };
+        if (request.method === "sessions.list") {
+          return {
+            path: "/tmp/sessions.json",
+            sessions: [{ key: "main", kind: "direct", sessionId: `sess-${status}`, status }],
+          };
+        }
+        return {};
+      });
+      const tool = createSessionsListTool({ config: {} as never });
+      const result = await tool.execute(`call-resumable-${status}`, {});
+      const details = getSessionsListDetails(result);
+      expect(details.sessions?.[0]?.resumable, `status="${status}"`).toBe(expected);
+    }
+
+    // unknown/malformed status produces undefined, not a guess
+    mocks.gatewayCall.mockImplementation(async (opts: unknown) => {
+      const request = opts as { method?: string };
+      if (request.method === "sessions.list") {
+        return {
+          path: "/tmp/sessions.json",
+          sessions: [{ key: "main", kind: "direct", sessionId: "sess-unknown", status: "bogus" }],
+        };
+      }
+      return {};
+    });
+    const toolUnknown = createSessionsListTool({ config: {} as never });
+    const resultUnknown = await toolUnknown.execute("call-resumable-unknown", {});
+    const detailsUnknown = getSessionsListDetails(resultUnknown);
+    expect(detailsUnknown.sessions?.[0]?.resumable, 'status="bogus"').toBeUndefined();
   });
 });

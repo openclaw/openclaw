@@ -62,6 +62,11 @@ function readSessionRunStatus(value: unknown): SessionRunStatus | undefined {
     : undefined;
 }
 
+function readSessionResumable(value: unknown): boolean | undefined {
+  const status = readSessionRunStatus(value);
+  return status !== undefined ? status !== "killed" : undefined;
+}
+
 export function createSessionsListTool(opts?: {
   agentSessionKey?: string;
   sandboxed?: boolean;
@@ -303,6 +308,7 @@ export function createSessionsListTool(opts?: {
           estimatedCostUsd:
             typeof entry.estimatedCostUsd === "number" ? entry.estimatedCostUsd : undefined,
           status: readSessionRunStatus(entry.status),
+          resumable: readSessionResumable(entry.status),
           startedAt: typeof entry.startedAt === "number" ? entry.startedAt : undefined,
           endedAt: typeof entry.endedAt === "number" ? entry.endedAt : undefined,
           runtimeMs: typeof entry.runtimeMs === "number" ? entry.runtimeMs : undefined,

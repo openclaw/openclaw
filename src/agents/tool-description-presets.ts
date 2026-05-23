@@ -13,6 +13,7 @@ export function describeSessionsListTool(): string {
   return [
     "List visible sessions; filter by kind, label, agentId, search, activity.",
     "Use before sessions_history or sessions_send target selection.",
+    "Each session includes a resumable field: true for all statuses except killed; use sessions_send to resume or interrupt any non-killed session.",
   ].join(" ");
 }
 
