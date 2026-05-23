@@ -563,6 +563,11 @@ jobs:
   docker_acceptance:
     name: Docker product acceptance
     needs: [resolve_package, package_integrity]
+    permissions:
+      actions: read
+      contents: read
+      packages: write
+      pull-requests: read
     uses: ./.github/workflows/openclaw-live-and-e2e-checks-reusable.yml
     with:
       advisory: ${{ inputs.advisory }}

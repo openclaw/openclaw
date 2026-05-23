@@ -759,6 +759,7 @@ jobs:
         if: contains(matrix.profiles, inputs.release_test_profile)
         uses: actions/checkout@v6
         with:
+          persist-credentials: false
           ref: ${{ needs.validate_selected_ref.outputs.selected_sha }}
           fetch-depth: 1
 
@@ -766,6 +767,7 @@ jobs:
         if: contains(matrix.profiles, inputs.release_test_profile)
         uses: actions/checkout@v6
         with:
+          persist-credentials: false
           ref: ${{ github.sha }}
           fetch-depth: 1
           path: .release-harness
@@ -928,6 +930,7 @@ jobs:
       - name: Checkout trusted release harness
         uses: actions/checkout@v6
         with:
+          persist-credentials: false
           ref: ${{ github.sha }}
           fetch-depth: 1
 
@@ -1019,12 +1022,14 @@ jobs:
       - name: Checkout selected ref
         uses: actions/checkout@v6
         with:
+          persist-credentials: false
           ref: ${{ needs.validate_selected_ref.outputs.selected_sha }}
           fetch-depth: 1
 
       - name: Checkout trusted release harness
         uses: actions/checkout@v6
         with:
+          persist-credentials: false
           ref: ${{ github.sha }}
           fetch-depth: 1
           path: .release-harness
