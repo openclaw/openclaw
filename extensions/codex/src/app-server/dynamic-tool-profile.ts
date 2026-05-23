@@ -14,6 +14,13 @@ export const CODEX_APP_SERVER_OWNED_DYNAMIC_TOOL_EXCLUDES = [
   "tool_search_code",
 ] as const;
 
+// Models that don't support tool_search / tool_search_code at the API level.
+// e.g. gpt-5.4-nano returns "Tool 'tool_search' is not supported" from OpenAI.
+const OPENAI_TOOL_SEARCH_UNSUPPORTED_MODELS = [
+  "gpt-5.4-nano",
+  "gpt-5-nano",
+] as const;
+
 const DYNAMIC_TOOL_NAME_ALIASES: Record<string, string> = {
   bash: "exec",
   "apply-patch": "apply_patch",
@@ -67,4 +74,25 @@ export function filterCodexDynamicTools<T extends { name: string }>(
   return excludes.size === 0
     ? tools
     : tools.filter((tool) => !excludes.has(normalizeCodexDynamicToolName(tool.name)));
+}
+
+/**
+ * Exclude dynamic tools that the target model API doesn't support.
+ *
+ * For example, OpenAI nano models return a 400 error when `tool_search` is
+ * included in the tools array, causing the entire run to fail over to a more
+ * expensive fallback model.
+ */
+export function excludeUnsupportedDynamicToolsForModel<T extends { name: string }>(
+  tools: T[],
+  model: { provider?: string; modelId?: string },
+): T[] {
+  const isUnsupported =
+    model.provider?.toLowerCase() === "openai" &&
+    OPENAI_TOOL_SEARCH_UNSUPPORTED_MODELS.includes(model.modelId as (typeof OPENAI_TOOL_SEARCH_UNSUPPORTED_MODELS)[number]);
+  if (!isUnsupported) {
+    return tools;
+  }
+  const exclude = new Set(["tool_search", "tool_search_code"]);
+  return tools.filter((tool) => !exclude.has(normalizeCodexDynamicToolName(tool.name)));
 }

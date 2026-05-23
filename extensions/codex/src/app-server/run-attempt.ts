@@ -106,6 +106,7 @@ import {
 } from "./dynamic-tool-diagnostics.js";
 import {
   filterCodexDynamicTools,
+  excludeUnsupportedDynamicToolsForModel,
   isForcedPrivateQaCodexRuntime,
   normalizeCodexDynamicToolName,
   resolveCodexDynamicToolsLoading,
@@ -3919,9 +3920,13 @@ async function buildDynamicTools(input: DynamicToolBuildParams) {
   });
   const toolsAllow = includeForcedCodexDynamicToolAllow(params.toolsAllow, params);
   const filteredTools = filterCodexDynamicToolsForAllowlist(visionFilteredTools, toolsAllow);
+  const modelFilteredTools = excludeUnsupportedDynamicToolsForModel(filteredTools, {
+    provider: params.provider,
+    modelId: params.modelId,
+  });
   return normalizeAgentRuntimeTools({
     runtimePlan: input.ignoreRuntimePlan ? undefined : params.runtimePlan,
-    tools: filteredTools,
+    tools: modelFilteredTools,
     provider: params.provider,
     config: params.config,
     workspaceDir: input.effectiveWorkspace,
