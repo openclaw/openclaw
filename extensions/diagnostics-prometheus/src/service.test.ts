@@ -150,6 +150,70 @@ describe("diagnostics-prometheus service", () => {
     expect(rendered).not.toContain("sk-secret");
   });
 
+  it("drops session-shaped agent labels", () => {
+    const store = testApi.createPrometheusMetricStore();
+
+    testApi.recordDiagnosticEvent(
+      store,
+      {
+        ...baseEvent(),
+        type: "model.usage",
+        agentId: "Agent:qa:otel-trace-smoke",
+        provider: "openai",
+        model: "gpt-5.4",
+        usage: { input: 12 },
+      },
+      trusted,
+    );
+
+    const rendered = testApi.renderPrometheusMetrics(store);
+
+    expect(rendered).toContain(
+      'openclaw_model_tokens_total{agent="unknown",channel="unknown",model="gpt-5.4",provider="openai",token_type="input"} 12',
+    );
+    expect(rendered).not.toContain("Agent:qa:otel-trace-smoke");
+  });
+
+  it("drops session-shaped queue lane labels", () => {
+    const store = testApi.createPrometheusMetricStore();
+
+    testApi.recordDiagnosticEvent(
+      store,
+      {
+        ...baseEvent(),
+        type: "queue.lane.enqueue",
+        lane: "session:Agent:qa:otel-trace-smoke",
+        queueSize: 2,
+      },
+      trusted,
+    );
+
+    const rendered = testApi.renderPrometheusMetrics(store);
+
+    expect(rendered).toContain('openclaw_queue_lane_size{lane="session"} 2');
+    expect(rendered).not.toContain("Agent:qa:otel-trace-smoke");
+  });
+
+  it("keeps only the bounded prefix from scoped queue lane labels", () => {
+    const store = testApi.createPrometheusMetricStore();
+
+    testApi.recordDiagnosticEvent(
+      store,
+      {
+        ...baseEvent(),
+        type: "queue.lane.enqueue",
+        lane: "dreaming-narrative:session-main",
+        queueSize: 2,
+      },
+      trusted,
+    );
+
+    const rendered = testApi.renderPrometheusMetrics(store);
+
+    expect(rendered).toContain('openclaw_queue_lane_size{lane="dreaming-narrative"} 2');
+    expect(rendered).not.toContain("session-main");
+  });
+
   it("bounds messaging labels without exporting raw chat identifiers", () => {
     const store = testApi.createPrometheusMetricStore();
 

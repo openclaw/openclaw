@@ -55,7 +55,25 @@ function lowCardinalityLabel(value: string | undefined, fallback = "unknown"): s
     return fallback;
   }
   const redacted = redactSensitiveText(value.trim());
+  const redactedLower = redacted.toLowerCase();
+  if (redactedLower.startsWith("agent:") || redactedLower.includes(":agent:")) {
+    return fallback;
+  }
   return LOW_CARDINALITY_VALUE_RE.test(redacted) ? redacted : fallback;
+}
+
+function lowCardinalityQueueLaneLabel(value: string | undefined, fallback = "unknown"): string {
+  if (!value) {
+    return fallback;
+  }
+  const redacted = redactSensitiveText(value.trim());
+  const redactedLower = redacted.toLowerCase();
+  if (redactedLower.startsWith("agent:")) {
+    return fallback;
+  }
+  const scopedLaneIndex = redacted.indexOf(":");
+  const lane = scopedLaneIndex >= 0 ? redacted.slice(0, scopedLaneIndex) : redacted;
+  return LOW_CARDINALITY_VALUE_RE.test(lane) ? lane : fallback;
 }
 
 function numericValue(value: number | undefined): number | undefined {
@@ -643,7 +661,7 @@ function recordDiagnosticEvent(
         "openclaw_queue_lane_size",
         "Current diagnostic queue lane size.",
         {
-          lane: lowCardinalityLabel(evt.lane),
+          lane: lowCardinalityQueueLaneLabel(evt.lane),
         },
         numericValue(evt.queueSize),
       );
@@ -651,7 +669,7 @@ function recordDiagnosticEvent(
         store.histogram(
           "openclaw_queue_lane_wait_seconds",
           "Queue lane wait time in seconds.",
-          { lane: lowCardinalityLabel(evt.lane) },
+          { lane: lowCardinalityQueueLaneLabel(evt.lane) },
           seconds(evt.waitMs),
         );
       }
