@@ -164,9 +164,11 @@ vYYYY.M.D-beta.N` from the matching `release/YYYY.M.D` branch. The helper runs
   for a package candidate while release work continues. Use `source=npm` for
   `openclaw@beta`, `openclaw@latest`, or an exact release version; `source=ref`
   to pack a trusted `package_ref` branch/tag/SHA with the current
-  `workflow_ref` harness; `source=url` for an HTTPS tarball with a required
-  SHA-256; or `source=artifact` for a tarball uploaded by another GitHub
-  Actions run. The workflow resolves the candidate to
+  `workflow_ref` harness; `source=url` for a public HTTPS tarball with a
+  required SHA-256 and strict public URL policy; `source=trusted-url` for a
+  named trusted-source policy using required `trusted_source_id` and SHA-256; or
+  `source=artifact` for a tarball uploaded by another GitHub Actions run. The
+  workflow resolves the candidate to
   `package-under-test`, reuses the Docker E2E release scheduler against that
   tarball, and can run Telegram QA against the same tarball with
   `telegram_mode=mock-openai` or `telegram_mode=live-frontier`. When the
@@ -570,9 +572,11 @@ tarball. Blocking release checks use the default latest published package
 baseline; `run_release_soak=true` or
 `release_profile=full` expands to every stable npm-published baseline from
 `2026.4.23` through `latest` plus reported-issue fixtures. Use
-Package Acceptance with `source=npm` for an already shipped candidate, or
-`source=ref`/`source=artifact` for a SHA-backed local npm tarball before
-publish. It is the GitHub-native
+Package Acceptance with `source=npm` for an already shipped candidate,
+`source=ref` for a SHA-backed local npm tarball before publish,
+`source=trusted-url` for a maintainer-owned enterprise/private mirror, or
+`source=artifact` for a prepared tarball uploaded by another GitHub Actions run.
+It is the GitHub-native
 replacement for most of the package/update coverage that previously required
 Parallels. Cross-OS release checks still matter for OS-specific onboarding,
 installer, and platform behavior, but package/update product validation should
@@ -766,17 +770,3 @@ alerts, and OTP handling observable and prevents repeated host alerts.
 - [`.github/workflows/full-release-validation.yml`](https://github.com/openclaw/openclaw/blob/main/.github/workflows/full-release-validation.yml)
 - [`.github/workflows/package-acceptance.yml`](https://github.com/openclaw/openclaw/blob/main/.github/workflows/package-acceptance.yml)
 - [`.github/workflows/openclaw-npm-release.yml`](https://github.com/openclaw/openclaw/blob/main/.github/workflows/openclaw-npm-release.yml)
-- [`.github/workflows/openclaw-release-checks.yml`](https://github.com/openclaw/openclaw/blob/main/.github/workflows/openclaw-release-checks.yml)
-- [`.github/workflows/openclaw-cross-os-release-checks-reusable.yml`](https://github.com/openclaw/openclaw/blob/main/.github/workflows/openclaw-cross-os-release-checks-reusable.yml)
-- [`scripts/resolve-openclaw-package-candidate.mjs`](https://github.com/openclaw/openclaw/blob/main/scripts/resolve-openclaw-package-candidate.mjs)
-- [`scripts/openclaw-npm-release-check.ts`](https://github.com/openclaw/openclaw/blob/main/scripts/openclaw-npm-release-check.ts)
-- [`scripts/package-mac-dist.sh`](https://github.com/openclaw/openclaw/blob/main/scripts/package-mac-dist.sh)
-- [`scripts/make_appcast.sh`](https://github.com/openclaw/openclaw/blob/main/scripts/make_appcast.sh)
-
-Maintainers use the private release docs in
-[`openclaw/maintainers/release/README.md`](https://github.com/openclaw/maintainers/blob/main/release/README.md)
-for the actual runbook.
-
-## Related
-
-- [Release channels](/install/development-channels)
