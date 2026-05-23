@@ -675,4 +675,48 @@ describe("selectAgentHarness", () => {
       failure: { reason: "unsupported_harness_compaction" },
     });
   });
+
+  it.each(["claude-cli", "google-gemini-cli"])(
+    "returns PI for explicit CLI runtime alias %s instead of throwing MissingAgentHarnessError",
+    (alias) => {
+      expect(
+        selectAgentHarness({
+          provider: "anthropic",
+          modelId: "sonnet-4.6",
+          agentHarnessRuntimeOverride: alias,
+        }).id,
+      ).toBe("pi");
+    },
+  );
+
+  it("returns PI for an explicit configured cliBackends id instead of throwing", () => {
+    const config = {
+      agents: {
+        defaults: {
+          cliBackends: {
+            "my-custom-cli": { command: "echo" },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    expect(
+      selectAgentHarness({
+        provider: "anthropic",
+        modelId: "sonnet-4.6",
+        agentHarnessRuntimeOverride: "my-custom-cli",
+        config,
+      }).id,
+    ).toBe("pi");
+  });
+
+  it("still throws MissingAgentHarnessError for an explicit non-CLI unknown runtime", () => {
+    expect(() =>
+      selectAgentHarness({
+        provider: "anthropic",
+        modelId: "sonnet-4.6",
+        agentHarnessRuntimeOverride: "clade-cli",
+      }),
+    ).toThrow('Requested agent harness "clade-cli" is not registered');
+  });
 });
