@@ -154,9 +154,13 @@ function addPluginLoadPath(cfg: OpenClawConfig, pluginPath: string): OpenClawCon
   
   const normalizedPluginPath = normalizeBundledLookupPath(pluginPath);
   for (const source of bundled.values()) {
+    // Check the current bundled path
+    if (normalizeBundledLookupPath(source.localPath) === normalizedPluginPath) {
+      return cfg;
+    }
+    // Also check legacy alias paths (e.g., extensions/ instead of dist/extensions/)
     for (const alias of buildBundledPluginLoadPathAliases(source.localPath)) {
       if (normalizeBundledLookupPath(alias.path) === normalizedPluginPath) {
-        // This is a bundled plugin path; skip adding it to load paths
         return cfg;
       }
     }
