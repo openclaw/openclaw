@@ -445,6 +445,25 @@ describe("node exec events", () => {
     );
   });
 
+  it("strips raw parentheses from exec.denied reasons before enqueue", async () => {
+    const ctx = buildCtx();
+    await handleNodeEvent(ctx, "node-4", {
+      event: "exec.denied",
+      payloadJSON: JSON.stringify({
+        sessionKey: "agent:demo:main",
+        runId: "run-paren-reason",
+        command: "uname -a",
+        reason: "approval-timeout (allowlist-miss)",
+      }),
+    });
+
+    expect(sanitizeInboundSystemTagsMock).toHaveBeenCalledWith("approval-timeout allowlist-miss");
+    expect(enqueueSystemEventMock).toHaveBeenCalledWith(
+      "Exec denied (node=node-4 id=run-paren-reason, approval-timeout allowlist-miss): uname -a",
+      { sessionKey: "agent:demo:main", contextKey: "exec:run-paren-reason", trusted: false },
+    );
+  });
+
   it("stores direct APNs registrations from node events", async () => {
     const ctx = buildCtx();
     await handleNodeEvent(ctx, "node-direct", {

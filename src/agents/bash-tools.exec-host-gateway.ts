@@ -479,7 +479,7 @@ export async function processGatewayAllowlist(
 
       if (baseDecision.timedOut && askFallback === "allowlist") {
         if (!analysisOk || !allowlistSatisfied) {
-          deniedReason = "approval-timeout (allowlist-miss)";
+          deniedReason = "approval-timeout: allowlist-miss";
         } else {
           approvedByAsk = true;
         }
