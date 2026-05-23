@@ -108,6 +108,7 @@ export type TelegramMessageContext = {
   skillFilter: TelegramMessageContextPayload["skillFilter"];
   sendTyping: () => Promise<void>;
   sendRecordVoice: () => Promise<void>;
+  initialTypingCueSent?: boolean;
   ackReactionPromise: Promise<boolean> | null;
   reactionApi: TelegramReactionApi | null;
   removeAckAfterReply: boolean;
@@ -366,6 +367,12 @@ export const buildTelegramMessageContext = async ({
     }))
   ) {
     return null;
+  }
+  const initialTypingCueSent = !isGroup;
+  if (initialTypingCueSent) {
+    void sendTyping().catch((err) => {
+      logVerbose(`telegram early direct typing cue failed for chat ${chatId}: ${String(err)}`);
+    });
   }
   const ensureConfiguredBindingReady = async (): Promise<boolean> => {
     if (!configuredBinding) {
@@ -641,6 +648,7 @@ export const buildTelegramMessageContext = async ({
     skillFilter,
     sendTyping,
     sendRecordVoice,
+    initialTypingCueSent,
     ackReactionPromise,
     reactionApi,
     removeAckAfterReply,

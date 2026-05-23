@@ -234,11 +234,20 @@ export function createAcpDispatchDeliveryCoordinator(params: {
     },
     toolMessageByCallId: new Map(),
   };
+  let hasPendingDirectBlockReplyDelivery = false;
+  const waitForPendingDirectBlockReplyDelivery = async () => {
+    if (!hasPendingDirectBlockReplyDelivery) {
+      return;
+    }
+    hasPendingDirectBlockReplyDelivery = false;
+    await waitForReplyDispatcherIdle(params.dispatcher, params.abortSignal);
+  };
   const settleDirectVisibleText = async () => {
     if (state.settledDirectVisibleText || state.queuedDirectVisibleTextDeliveries === 0) {
       return;
     }
     state.settledDirectVisibleText = true;
+    hasPendingDirectBlockReplyDelivery = false;
     await params.dispatcher.waitForIdle();
     const failedCounts = params.dispatcher.getFailedCounts();
     const failedVisibleCount = failedCounts.block + failedCounts.final;
@@ -440,6 +449,10 @@ export function createAcpDispatchDeliveryCoordinator(params: {
       return true;
     }
 
+    if (kind === "tool") {
+      await waitForPendingDirectBlockReplyDelivery();
+    }
+
     const tracksVisibleText = await shouldTreatDeliveredTextAsVisible({
       channel: directChannel,
       kind,
@@ -462,7 +475,7 @@ export function createAcpDispatchDeliveryCoordinator(params: {
       state.failedVisibleTextDelivery = true;
     }
     if (kind === "block" && delivered) {
-      await waitForReplyDispatcherIdle(params.dispatcher, params.abortSignal);
+      hasPendingDirectBlockReplyDelivery = true;
     }
     return delivered;
   };

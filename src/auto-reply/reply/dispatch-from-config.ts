@@ -1881,6 +1881,14 @@ export async function dispatchReplyFromConfig(
     const onPatchSummaryFromReplyOptions = params.replyOptions?.onPatchSummary;
     const allowSuppressedSourceProgressCallbacks =
       params.replyOptions?.allowProgressCallbacksWhenSourceDeliverySuppressed === true;
+    let hasPendingDirectBlockReplyDelivery = false;
+    const waitForPendingDirectBlockReplyDelivery = async (abortSignal?: AbortSignal) => {
+      if (!hasPendingDirectBlockReplyDelivery) {
+        return;
+      }
+      hasPendingDirectBlockReplyDelivery = false;
+      await waitForReplyDispatcherIdle(dispatcher, abortSignal);
+    };
     const shouldForwardProgressCallback = (options?: {
       forwardWhenSourceDeliverySuppressed?: boolean;
       requiresToolSummaryVisibility?: boolean;
@@ -1900,9 +1908,14 @@ export async function dispatchReplyFromConfig(
         forwardWhenSourceDeliverySuppressed?: boolean;
         requiresToolSummaryVisibility?: boolean;
         onForward?: (...args: Args) => void;
+        waitForDirectBlockReplyDelivery?: boolean;
       },
     ): ((...args: Args) => Promise<void>) | undefined => {
-      if (!callback && (!suppressAutomaticSourceDelivery || !canTrackSession)) {
+      if (
+        !callback &&
+        !options?.waitForDirectBlockReplyDelivery &&
+        (!suppressAutomaticSourceDelivery || !canTrackSession)
+      ) {
         return undefined;
       }
       return async (...args: Args) => {
@@ -1910,6 +1923,12 @@ export async function dispatchReplyFromConfig(
           return;
         }
         markProgress();
+        if (options?.waitForDirectBlockReplyDelivery) {
+          await waitForPendingDirectBlockReplyDelivery(dispatchAbortOperation?.abortSignal);
+          if (isDispatchOperationAborted()) {
+            return;
+          }
+        }
         if (shouldForwardProgressCallback(options)) {
           options?.onForward?.(...args);
           await callback?.(...args);
@@ -1946,10 +1965,12 @@ export async function dispatchReplyFromConfig(
             onToolStart: wrapProgressCallback(params.replyOptions?.onToolStart, {
               forwardWhenSourceDeliverySuppressed: true,
               requiresToolSummaryVisibility: true,
+              waitForDirectBlockReplyDelivery: true,
             }),
             onItemEvent: wrapProgressCallback(params.replyOptions?.onItemEvent, {
               forwardWhenSourceDeliverySuppressed: true,
               requiresToolSummaryVisibility: true,
+              waitForDirectBlockReplyDelivery: true,
               onForward: (payload) => {
                 if (hasFailedProgressStatus(payload)) {
                   markVisibleToolErrorProgress();
@@ -1959,6 +1980,7 @@ export async function dispatchReplyFromConfig(
             onCommandOutput: wrapProgressCallback(params.replyOptions?.onCommandOutput, {
               forwardWhenSourceDeliverySuppressed: true,
               requiresToolSummaryVisibility: true,
+              waitForDirectBlockReplyDelivery: true,
               onForward: (payload) => {
                 if (hasFailedProgressStatus(payload)) {
                   markVisibleToolErrorProgress();
@@ -1968,14 +1990,20 @@ export async function dispatchReplyFromConfig(
             onCompactionStart: wrapProgressCallback(params.replyOptions?.onCompactionStart, {
               forwardWhenSourceDeliverySuppressed: true,
               requiresToolSummaryVisibility: true,
+              waitForDirectBlockReplyDelivery: true,
             }),
             onCompactionEnd: wrapProgressCallback(params.replyOptions?.onCompactionEnd, {
               forwardWhenSourceDeliverySuppressed: true,
               requiresToolSummaryVisibility: true,
+              waitForDirectBlockReplyDelivery: true,
             }),
             onToolResult: (payload: ReplyPayload) => {
               markProgress();
               const run = async () => {
+                if (isDispatchOperationAborted()) {
+                  return;
+                }
+                await waitForPendingDirectBlockReplyDelivery(dispatchAbortOperation?.abortSignal);
                 if (isDispatchOperationAborted()) {
                   return;
                 }
@@ -2040,6 +2068,10 @@ export async function dispatchReplyFromConfig(
                 return;
               }
               markProgress();
+              await waitForPendingDirectBlockReplyDelivery(dispatchAbortOperation?.abortSignal);
+              if (isDispatchOperationAborted()) {
+                return;
+              }
               markInboundDedupeReplayUnsafe();
               if (
                 shouldForwardProgressCallback({
@@ -2062,6 +2094,10 @@ export async function dispatchReplyFromConfig(
                 return;
               }
               markProgress();
+              await waitForPendingDirectBlockReplyDelivery(dispatchAbortOperation?.abortSignal);
+              if (isDispatchOperationAborted()) {
+                return;
+              }
               markInboundDedupeReplayUnsafe();
               if (
                 shouldForwardProgressCallback({
@@ -2092,6 +2128,10 @@ export async function dispatchReplyFromConfig(
                 return;
               }
               markProgress();
+              await waitForPendingDirectBlockReplyDelivery(dispatchAbortOperation?.abortSignal);
+              if (isDispatchOperationAborted()) {
+                return;
+              }
               markInboundDedupeReplayUnsafe();
               if (
                 shouldForwardProgressCallback({
@@ -2198,7 +2238,7 @@ export async function dispatchReplyFromConfig(
                   markInboundDedupeReplayUnsafe();
                   const delivered = dispatcher.sendBlockReply(normalizedPayload);
                   if (delivered) {
-                    await waitForReplyDispatcherIdle(dispatcher, context?.abortSignal);
+                    hasPendingDirectBlockReplyDelivery = true;
                   }
                 }
               };
