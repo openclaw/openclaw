@@ -101,6 +101,7 @@ export async function updateSessionStoreAfterAgentRun(params: {
   const providerUsed = result.meta.agentMeta?.provider ?? fallbackProvider ?? defaultProvider;
   const agentHarnessId = normalizeOptionalString(result.meta.agentMeta?.agentHarnessId);
   const runtimeContextTokens = resolvePositiveInteger(result.meta.agentMeta?.contextTokens);
+  const contextBudgetStatus = result.meta.agentMeta?.contextBudgetStatus;
   const contextTokens =
     runtimeContextTokens !== undefined
       ? runtimeContextTokens
@@ -179,6 +180,9 @@ export async function updateSessionStoreAfterAgentRun(params: {
   next.abortedLastRun = result.meta.aborted ?? false;
   if (result.meta.systemPromptReport) {
     next.systemPromptReport = result.meta.systemPromptReport;
+  }
+  if (!preserveRuntimeModel) {
+    next.contextBudgetStatus = contextBudgetStatus;
   }
   if (hasNonzeroUsage(usage)) {
     const { estimateUsageCost, resolveModelCostConfig } = await getUsageFormatModule();
@@ -315,6 +319,7 @@ export async function recordCliCompactionInStore(params: {
     next.sessionFile = explicitNewSessionFile;
   }
   const tokensAfterCompaction = resolveNonNegativeNumber(params.tokensAfter);
+  next.contextBudgetStatus = undefined;
   if (tokensAfterCompaction !== undefined) {
     next.totalTokens = Math.floor(tokensAfterCompaction);
     next.totalTokensFresh = true;
