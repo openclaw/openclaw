@@ -1001,7 +1001,7 @@ export function createFollowupRunner(params: {
             });
           }
         }
-        if (run.verboseLevel && run.verboseLevel !== "off") {
+        if (shouldEmitVerboseProgress()) {
           const suffix = typeof count === "number" ? ` (count ${count})` : "";
           deliveryPayloads = [
             {

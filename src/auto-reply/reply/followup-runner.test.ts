@@ -1682,6 +1682,51 @@ describe("createFollowupRunner compaction", () => {
     expect(sessionStore.main.compactionCount).toBe(1);
   });
 
+  it("suppresses queued auto-compaction notice when verbose is turned off", async () => {
+    const storePath = path.join(
+      await fs.mkdtemp(path.join(tmpdir(), "openclaw-compaction-quiet-")),
+      "sessions.json",
+    );
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+      verboseLevel: "off",
+    };
+    const sessionStore: Record<string, SessionEntry> = {
+      main: sessionEntry,
+    };
+    const onBlockReply = vi.fn(async () => {});
+    registerFollowupTestSessionStore(storePath, sessionStore);
+
+    mockCompactionRun({
+      willRetry: true,
+      result: { payloads: [{ text: "final" }], meta: {} },
+    });
+
+    const runner = createFollowupRunner({
+      opts: { onBlockReply },
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      sessionEntry,
+      sessionStore,
+      sessionKey: "main",
+      storePath,
+      defaultModel: "anthropic/claude-opus-4-6",
+    });
+
+    const queued = createQueuedRun({
+      run: {
+        verboseLevel: "on",
+      },
+    });
+
+    await runner(queued);
+
+    expect(onBlockReply).toHaveBeenCalledTimes(1);
+    expectNoBlockReplyTextIncludes(onBlockReply, "Auto-compaction complete");
+    expect(sessionStore.main.compactionCount).toBe(1);
+  });
+
   it("tracks auto-compaction from embedded result metadata even when no compaction event is emitted", async () => {
     const storePath = path.join(
       await fs.mkdtemp(path.join(tmpdir(), "openclaw-compaction-meta-")),
