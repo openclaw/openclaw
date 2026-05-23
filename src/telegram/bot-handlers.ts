@@ -176,10 +176,10 @@ export const registerTelegramHandlers = ({
       if (hasText && hasControlCommand(text, cfg, { botUsername: entry.botUsername })) {
         return false;
       }
-      if (entry.debounceLane === "forward") {
-        return true;
-      }
-      return entry.allMedia.length === 0 && hasText;
+      // Debounce media messages too so rapid image/video sends from the
+      // same sender coalesce into one agent turn. The onFlush handler
+      // already merges both text and media arrays across debounced entries.
+      return hasText || entry.allMedia.length > 0;
     },
     onFlush: async (entries) => {
       const last = entries.at(-1);
