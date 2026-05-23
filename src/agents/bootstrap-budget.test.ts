@@ -104,27 +104,24 @@ describe("analyzeBootstrapBudget", () => {
 
 describe("bootstrap prompt warnings", () => {
   it("handles malformed truncation entries without names", () => {
+    const analysis = analyzeBootstrapBudget({
+      files: [
+        {
+          name: "TEMP.md",
+          path: "/tmp/unknown",
+          missing: false,
+          rawChars: 10,
+          injectedChars: 1,
+          truncated: true,
+        },
+      ],
+      bootstrapMaxChars: 5,
+      bootstrapTotalMaxChars: 5,
+    });
+    (analysis.truncatedFiles[0] as { name?: string }).name = undefined;
+
     const lines = formatBootstrapTruncationWarningLines({
-      analysis: {
-        files: [],
-        truncatedFiles: [
-          {
-            name: undefined,
-            path: "/tmp/unknown",
-            missing: false,
-            rawChars: 10,
-            injectedChars: 1,
-            truncated: true,
-            nearLimit: false,
-            causes: [],
-          } as unknown as ReturnType<typeof analyzeBootstrapBudget>["truncatedFiles"][number],
-        ],
-        nearLimitFiles: [],
-        totalRawChars: 10,
-        totalInjectedChars: 1,
-        totalNearLimit: false,
-        hasTruncation: true,
-      },
+      analysis,
     });
     expect(lines.join("\n")).toContain("10 raw -> 1 injected");
   });
