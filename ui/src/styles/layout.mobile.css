@@ -32,6 +32,14 @@
     row-gap: 0;
   }
 
+  .shell--chat-focus .content--chat .content-header {
+    min-height: 0;
+    max-height: 0;
+    padding-top: 0;
+    padding-bottom: 0;
+    overflow: hidden;
+  }
+
   .chat-controls__session-row {
     grid-template-columns:
       minmax(96px, 5fr) minmax(112px, 7fr) minmax(116px, 5fr)
@@ -112,7 +120,7 @@
   }
 
   .shell--chat-focus {
-    grid-template-rows: var(--shell-topbar-height) minmax(0, 1fr);
+    grid-template-rows: 0 minmax(0, 1fr);
   }
 
   .shell-nav,
