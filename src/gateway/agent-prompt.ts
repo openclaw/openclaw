@@ -1,5 +1,4 @@
 import { STREAM_ERROR_FALLBACK_TEXT } from "../agents/stream-message-shared.js";
-import { stripInternalMetadataForDisplay } from "../auto-reply/reply/display-text-sanitize.js";
 import { buildHistoryContextFromEntries, type HistoryEntry } from "../auto-reply/reply/history.js";
 import { extractTextFromChatContent } from "../shared/chat-content.js";
 
@@ -14,8 +13,7 @@ export type ConversationEntry = {
  * [object Object] if used directly in a template literal.
  */
 function safeBody(body: unknown): string {
-  const text = typeof body === "string" ? body : (extractTextFromChatContent(body) ?? "");
-  return stripInternalMetadataForDisplay(text);
+  return typeof body === "string" ? body : (extractTextFromChatContent(body) ?? "");
 }
 
 function toPromptEntry(entry: ConversationEntry): HistoryEntry | null {

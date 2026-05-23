@@ -135,4 +135,11 @@ describe("gateway agent prompt", () => {
     const prompt = buildAgentMessageFromConversationEntries([...entries]);
     expect(prompt).toContain(`User: ${STREAM_ERROR_FALLBACK_TEXT}`);
   });
+
+  it("preserves current user text that looks like internal display metadata", () => {
+    const body = "[Thu 2026-03-12 07:00 UTC] what happened then?";
+    expect(
+      buildAgentMessageFromConversationEntries([{ role: "user", entry: { sender: "User", body } }]),
+    ).toBe(body);
+  });
 });
