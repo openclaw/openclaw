@@ -449,6 +449,7 @@ function inspectLockPayload(
   payload: LockFilePayload | null,
   staleMs: number,
   nowMs: number,
+  maxHoldMs?: number,
 ): LockInspectionDetails {
   const pid = isValidLockNumber(payload?.pid) && payload.pid > 0 ? payload.pid : null;
   const pidAlive = pid !== null ? isPidAlive(pid) : false;
@@ -480,6 +481,9 @@ function inspectLockPayload(
     staleReasons.push("invalid-createdAt");
   } else if (ageMs > staleMs) {
     staleReasons.push("too-old");
+  }
+  if (typeof maxHoldMs === "number" && ageMs !== null && ageMs > maxHoldMs) {
+    staleReasons.push("hold-exceeded");
   }
 
   return {
@@ -616,8 +620,9 @@ function inspectLockPayloadForSession(params: {
   heldByThisProcess: boolean;
   reclaimLockWithoutStarttime: boolean;
   readOwnerProcessArgs: SessionLockOwnerProcessArgsReader;
+  maxHoldMs?: number;
 }): LockInspectionDetails {
-  const inspected = inspectLockPayload(params.payload, params.staleMs, params.nowMs);
+  const inspected = inspectLockPayload(params.payload, params.staleMs, params.nowMs, params.maxHoldMs);
   if (
     shouldTreatAsOrphanSelfLock({
       payload: params.payload,
@@ -770,6 +775,7 @@ export async function acquireSessionWriteLock(params: {
             heldByThisProcess,
             reclaimLockWithoutStarttime: true,
             readOwnerProcessArgs: readProcessArgsSync,
+            maxHoldMs,
           });
           return await shouldReclaimContendedLockFile(lockPath, inspected, staleMs, nowMs);
         },
