@@ -72,6 +72,10 @@ const browserActionsMocks = vi.hoisted(() => ({
   })),
   browserNavigate: vi.fn(async () => ({ ok: true })),
   browserPdfSave: vi.fn(async () => ({ ok: true, path: "/tmp/test.pdf" })),
+  browserRouteJson: vi.fn(async (_baseUrl: unknown, opts: { path?: string } = {}) => ({
+    ok: true,
+    path: opts.path,
+  })),
   browserScreenshotAction: vi.fn(async () => ({ ok: true, path: "/tmp/test.png" })),
 }));
 vi.mock("./browser/client-actions.js", () => browserActionsMocks);
@@ -318,6 +322,7 @@ function resetBrowserToolMocks() {
     browserNavigate: browserActionsMocks.browserNavigate as never,
     browserOpenTab: browserClientMocks.browserOpenTab as never,
     browserPdfSave: browserActionsMocks.browserPdfSave as never,
+    browserRouteJson: browserActionsMocks.browserRouteJson as never,
     browserProfiles: browserClientMocks.browserProfiles as never,
     browserScreenshotAction: browserActionsMocks.browserScreenshotAction as never,
     browserStart: browserClientMocks.browserStart as never,
@@ -1737,6 +1742,156 @@ describe("browser tool external content wrapping", () => {
     };
     expect(details.targetId).toBe("t1");
     expect(details.requestCount).toBe(1);
+  });
+
+  it("exposes Chrome MCP debug route families through browser tool actions", async () => {
+    const tool = createBrowserTool();
+
+    await tool.execute?.("call-1", {
+      action: "heap-snapshot",
+      operation: "summary",
+      path: "/tmp/heap.heapsnapshot",
+      profile: "user",
+    });
+    expect(browserActionsMocks.browserRouteJson).toHaveBeenLastCalledWith(undefined, {
+      method: "POST",
+      path: "/heap-snapshot/summary",
+      query: { profile: "user" },
+      body: expect.objectContaining({ path: "/tmp/heap.heapsnapshot" }),
+      timeoutMs: undefined,
+    });
+
+    await tool.execute?.("call-1", {
+      action: "lighthouse",
+      mode: "snapshot",
+      device: "desktop",
+      outputDirPath: "/tmp/lh",
+      profile: "user",
+    });
+    expect(browserActionsMocks.browserRouteJson).toHaveBeenLastCalledWith(undefined, {
+      method: "POST",
+      path: "/lighthouse",
+      query: { profile: "user" },
+      body: expect.objectContaining({
+        mode: "snapshot",
+        device: "desktop",
+        outputDirPath: "/tmp/lh",
+      }),
+      timeoutMs: undefined,
+    });
+
+    await tool.execute?.("call-1", {
+      action: "screencast",
+      operation: "stop",
+      targetId: "7",
+      profile: "user",
+    });
+    expect(browserActionsMocks.browserRouteJson).toHaveBeenLastCalledWith(undefined, {
+      method: "POST",
+      path: "/screencast/stop",
+      query: { profile: "user" },
+      body: expect.objectContaining({ targetId: "7" }),
+      timeoutMs: undefined,
+    });
+
+    await tool.execute?.("call-1", {
+      action: "extensions",
+      operation: "install",
+      path: "/tmp/ext",
+      profile: "user",
+    });
+    expect(browserActionsMocks.browserRouteJson).toHaveBeenLastCalledWith(undefined, {
+      method: "POST",
+      path: "/extensions/install",
+      query: { profile: "user" },
+      body: expect.objectContaining({ path: "/tmp/ext" }),
+      timeoutMs: undefined,
+    });
+
+    await tool.execute?.("call-1", {
+      action: "third-party-tools",
+      operation: "execute",
+      toolName: "react-devtools",
+      toolParams: { inspect: true },
+      profile: "user",
+    });
+    expect(browserActionsMocks.browserRouteJson).toHaveBeenLastCalledWith(undefined, {
+      method: "POST",
+      path: "/third-party-tools/execute",
+      query: { profile: "user" },
+      body: expect.objectContaining({ toolName: "react-devtools", toolParams: { inspect: true } }),
+      timeoutMs: undefined,
+    });
+
+    await tool.execute?.("call-1", {
+      action: "web-mcp-tools",
+      operation: "execute",
+      toolName: "page-tool",
+      input: { ok: true },
+      profile: "user",
+    });
+    expect(browserActionsMocks.browserRouteJson).toHaveBeenLastCalledWith(undefined, {
+      method: "POST",
+      path: "/web-mcp-tools/execute",
+      query: { profile: "user" },
+      body: expect.objectContaining({ toolName: "page-tool", input: { ok: true } }),
+      timeoutMs: undefined,
+    });
+
+    await tool.execute?.("call-1", { action: "console-message", msgid: 12, profile: "user" });
+    expect(browserActionsMocks.browserRouteJson).toHaveBeenLastCalledWith(undefined, {
+      method: "GET",
+      path: "/console/message",
+      query: { msgid: 12, profile: "user", targetId: undefined },
+      timeoutMs: undefined,
+    });
+
+    await tool.execute?.("call-1", { action: "request-detail", reqid: 13, profile: "user" });
+    expect(browserActionsMocks.browserRouteJson).toHaveBeenLastCalledWith(undefined, {
+      method: "GET",
+      path: "/requests/request",
+      query: {
+        profile: "user",
+        reqid: 13,
+        requestFilePath: undefined,
+        responseFilePath: undefined,
+        targetId: undefined,
+      },
+      timeoutMs: undefined,
+    });
+
+    await tool.execute?.("call-1", {
+      action: "trace",
+      operation: "insight",
+      insightSetId: "navigation-1",
+      insightName: "LCPBreakdown",
+      profile: "user",
+    });
+    expect(browserActionsMocks.browserRouteJson).toHaveBeenLastCalledWith(undefined, {
+      method: "POST",
+      path: "/trace/insight",
+      query: { profile: "user" },
+      body: expect.objectContaining({
+        insightName: "LCPBreakdown",
+        insightSetId: "navigation-1",
+      }),
+      timeoutMs: undefined,
+    });
+
+    await tool.execute?.("call-1", {
+      action: "emulate",
+      operation: "geolocation",
+      latitude: 49.2827,
+      longitude: -123.1207,
+      profile: "user",
+    });
+    expect(browserActionsMocks.browserRouteJson).toHaveBeenLastCalledWith(undefined, {
+      method: "POST",
+      path: "/set/geolocation",
+      query: { profile: "user" },
+      body: expect.objectContaining({ latitude: 49.2827, longitude: -123.1207 }),
+      timeoutMs: undefined,
+    });
   });
 });
 

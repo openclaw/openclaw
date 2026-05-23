@@ -14,4 +14,5 @@ export {
   browserConsoleMessages,
   browserNetworkRequests,
   browserPdfSave,
+  browserRouteJson,
 } from "./client-actions-observe.js";

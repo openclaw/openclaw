@@ -60,6 +60,33 @@ export async function browserNetworkRequests(
   }>(withBaseUrl(baseUrl, `/requests${suffix}`), { timeoutMs: 20000 });
 }
 
+export async function browserRouteJson<T = unknown>(
+  baseUrl: string | undefined,
+  opts: {
+    method: "GET" | "POST" | "DELETE";
+    path: string;
+    query?: Record<string, string | number | boolean | undefined>;
+    body?: unknown;
+    timeoutMs?: number;
+  },
+): Promise<T> {
+  const query = new URLSearchParams();
+  for (const [key, value] of Object.entries(opts.query ?? {})) {
+    if (value === undefined) {
+      continue;
+    }
+    query.set(key, String(value));
+  }
+  const suffix = query.toString() ? `?${query.toString()}` : "";
+  return await fetchBrowserJson<T>(withBaseUrl(baseUrl, `${opts.path}${suffix}`), {
+    method: opts.method,
+    ...(opts.body === undefined
+      ? {}
+      : { headers: { "Content-Type": "application/json" }, body: JSON.stringify(opts.body) }),
+    timeoutMs: opts.timeoutMs ?? 20000,
+  });
+}
+
 /** Save the current page as PDF through browser control. */
 export async function browserPdfSave(
   baseUrl: string | undefined,

@@ -236,4 +236,288 @@ export function registerBrowserDebugCommands(
         defaultRuntime.log(`TRACE:${shortenHomePath(result.path)}`);
       });
     });
+
+  trace
+    .command("insight")
+    .description("Analyze a Chrome DevTools performance trace insight")
+    .requiredOption("--insight-set-id <id>", "Insight set id")
+    .requiredOption("--insight-name <name>", "Insight name")
+    .option("--target-id <id>", "CDP target id (or unique prefix)")
+    .action(async (opts, cmd) => {
+      await withDebugContext(cmd, parentOpts, async ({ parent, profile }) => {
+        const result = await callDebugRequest(parent, {
+          method: "POST",
+          path: "/trace/insight",
+          query: resolveProfileQuery(profile),
+          body: {
+            targetId: normalizeOptionalString(opts.targetId),
+            insightSetId: normalizeOptionalString(opts.insightSetId),
+            insightName: normalizeOptionalString(opts.insightName),
+          },
+        });
+        if (printJsonResult(parent, result)) return;
+        defaultRuntime.writeJson(result);
+      });
+    });
+
+  const heap = browser.command("heap-snapshot").description("Chrome MCP heap snapshot tools");
+
+  heap
+    .command("take")
+    .description("Write a Chrome heap snapshot")
+    .option("--out <path>", "Output path within openclaw temp dir")
+    .option("--target-id <id>", "CDP target id (or unique prefix)")
+    .action(async (opts, cmd) => {
+      await withDebugContext(cmd, parentOpts, async ({ parent, profile }) => {
+        const result = await callDebugRequest(parent, {
+          method: "POST",
+          path: "/heap-snapshot/take",
+          query: resolveProfileQuery(profile),
+          body: {
+            targetId: normalizeOptionalString(opts.targetId),
+            path: normalizeOptionalString(opts.out),
+          },
+        });
+        if (printJsonResult(parent, result)) return;
+        defaultRuntime.log("heap snapshot written");
+      });
+    });
+
+  for (const [name, path] of [
+    ["summary", "/heap-snapshot/summary"],
+    ["details", "/heap-snapshot/details"],
+    ["class-nodes", "/heap-snapshot/class-nodes"],
+    ["retainers", "/heap-snapshot/retainers"],
+  ] as const) {
+    heap
+      .command(name)
+      .description(`Run Chrome MCP heap snapshot ${name}`)
+      .requiredOption("--path <path>", "Heap snapshot path")
+      .option("--id <id>", "Class id for class-nodes")
+      .option("--node-id <id>", "Node id for retainers")
+      .option("--page-idx <n>", "Page index")
+      .option("--page-size <n>", "Page size")
+      .action(async (opts, cmd) => {
+        await withDebugContext(cmd, parentOpts, async ({ parent, profile }) => {
+          const result = await callDebugRequest(parent, {
+            method: "POST",
+            path,
+            query: resolveProfileQuery(profile),
+            body: {
+              path: normalizeOptionalString(opts.path),
+              id: opts.id === undefined ? undefined : Number(opts.id),
+              nodeId: opts.nodeId === undefined ? undefined : Number(opts.nodeId),
+              pageIdx: opts.pageIdx === undefined ? undefined : Number(opts.pageIdx),
+              pageSize: opts.pageSize === undefined ? undefined : Number(opts.pageSize),
+            },
+          });
+          if (printJsonResult(parent, result)) return;
+          defaultRuntime.writeJson(result);
+        });
+      });
+  }
+
+  browser
+    .command("lighthouse")
+    .description("Run a Chrome MCP Lighthouse audit")
+    .option("--target-id <id>", "CDP target id (or unique prefix)")
+    .option("--mode <mode>", "navigation|snapshot")
+    .option("--device <device>", "desktop|mobile")
+    .option("--out-dir <path>", "Output directory path")
+    .action(async (opts, cmd) => {
+      await withDebugContext(cmd, parentOpts, async ({ parent, profile }) => {
+        const result = await callDebugRequest(parent, {
+          method: "POST",
+          path: "/lighthouse",
+          query: resolveProfileQuery(profile),
+          body: {
+            targetId: normalizeOptionalString(opts.targetId),
+            mode: normalizeOptionalString(opts.mode),
+            device: normalizeOptionalString(opts.device),
+            outputDirPath: normalizeOptionalString(opts.outDir),
+          },
+        });
+        if (printJsonResult(parent, result)) return;
+        defaultRuntime.writeJson(result);
+      });
+    });
+
+  const screencast = browser.command("screencast").description("Chrome MCP screencast tools");
+  screencast
+    .command("start")
+    .option("--target-id <id>", "CDP target id (or unique prefix)")
+    .option("--out <path>", "Output file path")
+    .action(async (opts, cmd) => {
+      await withDebugContext(cmd, parentOpts, async ({ parent, profile }) => {
+        const result = await callDebugRequest(parent, {
+          method: "POST",
+          path: "/screencast/start",
+          query: resolveProfileQuery(profile),
+          body: {
+            targetId: normalizeOptionalString(opts.targetId),
+            path: normalizeOptionalString(opts.out),
+          },
+        });
+        if (printJsonResult(parent, result)) return;
+        defaultRuntime.log("screencast started");
+      });
+    });
+  screencast
+    .command("stop")
+    .option("--target-id <id>", "CDP target id (or unique prefix)")
+    .action(async (opts, cmd) => {
+      await withDebugContext(cmd, parentOpts, async ({ parent, profile }) => {
+        const result = await callDebugRequest(parent, {
+          method: "POST",
+          path: "/screencast/stop",
+          query: resolveProfileQuery(profile),
+          body: { targetId: normalizeOptionalString(opts.targetId) },
+        });
+        if (printJsonResult(parent, result)) return;
+        defaultRuntime.log("screencast stopped");
+      });
+    });
+
+  const extensions = browser.command("extensions").description("Chrome MCP extension tools");
+  extensions.command("list").action(async (_opts, cmd) => {
+    await withDebugContext(cmd, parentOpts, async ({ parent, profile }) => {
+      const result = await callDebugRequest(parent, {
+        method: "GET",
+        path: "/extensions",
+        query: resolveProfileQuery(profile),
+      });
+      if (printJsonResult(parent, result)) return;
+      defaultRuntime.writeJson(result);
+    });
+  });
+  for (const [name, path, required] of [
+    ["install", "/extensions/install", "path"],
+    ["uninstall", "/extensions/uninstall", "id"],
+    ["reload", "/extensions/reload", "id"],
+    ["action", "/extensions/action", "id"],
+  ] as const) {
+    const command = extensions.command(name);
+    if (required === "path") command.requiredOption("--path <path>", "Extension path");
+    if (required === "id") command.requiredOption("--id <id>", "Extension id");
+    command.action(async (opts, cmd) => {
+      await withDebugContext(cmd, parentOpts, async ({ parent, profile }) => {
+        const result = await callDebugRequest(parent, {
+          method: "POST",
+          path,
+          query: resolveProfileQuery(profile),
+          body: { path: normalizeOptionalString(opts.path), id: normalizeOptionalString(opts.id) },
+        });
+        if (printJsonResult(parent, result)) return;
+        defaultRuntime.writeJson(result);
+      });
+    });
+  }
+  extensions
+    .command("tab-id")
+    .option("--target-id <id>", "CDP target id (or unique prefix)")
+    .action(async (opts, cmd) => {
+      await withDebugContext(cmd, parentOpts, async ({ parent, profile }) => {
+        const result = await callDebugRequest(parent, {
+          method: "GET",
+          path: "/extensions/tab-id",
+          query: {
+            ...resolveProfileQuery(profile),
+            targetId: normalizeOptionalString(opts.targetId),
+          },
+        });
+        if (printJsonResult(parent, result)) return;
+        defaultRuntime.writeJson(result);
+      });
+    });
+
+  for (const [commandName, listPath, executePath, jsonOption] of [
+    ["third-party-tools", "/third-party-tools", "/third-party-tools/execute", "paramsJson"],
+    ["web-mcp-tools", "/web-mcp-tools", "/web-mcp-tools/execute", "inputJson"],
+  ] as const) {
+    const group = browser.command(commandName).description(`Chrome MCP ${commandName}`);
+    group
+      .command("list")
+      .option("--target-id <id>", "CDP target id (or unique prefix)")
+      .action(async (opts, cmd) => {
+        await withDebugContext(cmd, parentOpts, async ({ parent, profile }) => {
+          const result = await callDebugRequest(parent, {
+            method: "GET",
+            path: listPath,
+            query: {
+              ...resolveProfileQuery(profile),
+              targetId: normalizeOptionalString(opts.targetId),
+            },
+          });
+          if (printJsonResult(parent, result)) return;
+          defaultRuntime.writeJson(result);
+        });
+      });
+    group
+      .command("execute")
+      .requiredOption("--tool-name <name>", "Tool name")
+      .option("--target-id <id>", "CDP target id (or unique prefix)")
+      .option("--json <json>", "Tool params/input JSON string")
+      .action(async (opts, cmd) => {
+        await withDebugContext(cmd, parentOpts, async ({ parent, profile }) => {
+          const result = await callDebugRequest(parent, {
+            method: "POST",
+            path: executePath,
+            query: resolveProfileQuery(profile),
+            body: {
+              targetId: normalizeOptionalString(opts.targetId),
+              toolName: normalizeOptionalString(opts.toolName),
+              [jsonOption]: normalizeOptionalString(opts.json),
+            },
+          });
+          if (printJsonResult(parent, result)) return;
+          defaultRuntime.writeJson(result);
+        });
+      });
+  }
+
+  browser
+    .command("console-message")
+    .description("Get one Chrome MCP console message by id")
+    .requiredOption("--msgid <id>", "Console message id")
+    .option("--target-id <id>", "CDP target id (or unique prefix)")
+    .action(async (opts, cmd) => {
+      await withDebugContext(cmd, parentOpts, async ({ parent, profile }) => {
+        const result = await callDebugRequest(parent, {
+          method: "GET",
+          path: "/console/message",
+          query: {
+            ...resolveProfileQuery(profile),
+            msgid: opts.msgid,
+            targetId: normalizeOptionalString(opts.targetId),
+          },
+        });
+        if (printJsonResult(parent, result)) return;
+        defaultRuntime.writeJson(result);
+      });
+    });
+
+  browser
+    .command("request-detail")
+    .description("Get one Chrome MCP network request by id")
+    .option("--reqid <id>", "Network request id")
+    .option("--target-id <id>", "CDP target id (or unique prefix)")
+    .option("--request-file <path>", "Write request details to path")
+    .option("--response-file <path>", "Write response details to path")
+    .action(async (opts, cmd) => {
+      await withDebugContext(cmd, parentOpts, async ({ parent, profile }) => {
+        const result = await callDebugRequest(parent, {
+          method: "GET",
+          path: "/requests/request",
+          query: {
+            ...resolveProfileQuery(profile),
+            reqid: opts.reqid,
+            targetId: normalizeOptionalString(opts.targetId),
+            requestFilePath: normalizeOptionalString(opts.requestFile),
+            responseFilePath: normalizeOptionalString(opts.responseFile),
+          },
+        });
+        if (printJsonResult(parent, result)) return;
+        defaultRuntime.writeJson(result);
+      });
+    });
 }
