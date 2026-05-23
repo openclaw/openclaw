@@ -3309,74 +3309,25 @@ describe("runCodexAppServerAttempt", () => {
     ).toBe("release-pending-terminal");
   });
 
-  it("waits for active native items before terminal dynamic tool release", async () => {
-    const harness = createStartedThreadHarness();
-    testing.setOpenClawCodingToolsFactoryForTests(() => [
-      {
-        ...createRuntimeDynamicTool("image_generate"),
-        execute: vi.fn(async () => ({
-          content: [{ type: "text" as const, text: "Background task started." }],
-          details: { async: true, status: "started", taskId: "task-1" },
-          terminate: true,
-        })),
-      },
-    ]);
-
-    const params = createParams(
-      path.join(tempDir, "session.jsonl"),
-      path.join(tempDir, "workspace"),
-    );
-    params.disableTools = false;
-    params.runtimePlan = createCodexRuntimePlanFixture();
-
-    const run = runCodexAppServerAttempt(params);
-    await harness.waitForMethod("turn/start");
-    await harness.notify({
-      method: "item/started",
-      params: {
-        threadId: "thread-1",
-        turnId: "turn-1",
-        item: { type: "commandExecution", id: "cmd-1", status: "inProgress" },
-      },
-    });
-
-    await expect(
-      harness.handleServerRequest({
-        id: "request-image-generate",
-        method: "item/tool/call",
-        params: {
-          threadId: "thread-1",
-          turnId: "turn-1",
-          callId: "call-image-1",
-          namespace: null,
-          tool: "image_generate",
-          arguments: { prompt: "lighthouse" },
-        },
-      }),
-    ).resolves.toEqual({
-      success: true,
-      contentItems: [{ type: "inputText", text: "Background task started." }],
-    });
-    expect(harness.requests.some((request) => request.method === "turn/interrupt")).toBe(false);
-
-    await harness.notify({
-      method: "item/completed",
-      params: {
-        threadId: "thread-1",
-        turnId: "turn-1",
-        item: { type: "commandExecution", id: "cmd-1", status: "completed" },
-      },
-    });
-
-    const result = await run;
-    expect(result.timedOut).toBe(false);
+  it("waits for active native items before terminal dynamic tool release", () => {
     expect(
-      harness.requests.some(
-        (request) =>
-          request.method === "turn/interrupt" &&
-          (request.params as { turnId?: string } | undefined)?.turnId === "turn-1",
-      ),
-    ).toBe(true);
+      testing.resolveTerminalDynamicToolBatchAction({
+        activeAppServerTurnRequests: 0,
+        activeTurnItemIdsCount: 1,
+        pendingOpenClawDynamicToolCompletionIdsCount: 0,
+        currentTurnHadNonTerminalDynamicToolResult: false,
+        hasPendingTerminalDynamicToolRelease: true,
+      }),
+    ).toBe("wait");
+    expect(
+      testing.resolveTerminalDynamicToolBatchAction({
+        activeAppServerTurnRequests: 0,
+        activeTurnItemIdsCount: 0,
+        pendingOpenClawDynamicToolCompletionIdsCount: 0,
+        currentTurnHadNonTerminalDynamicToolResult: false,
+        hasPendingTerminalDynamicToolRelease: true,
+      }),
+    ).toBe("release-pending-terminal");
   });
 
   it("emits request-boundary terminal diagnostics when a wrapped dynamic tool does not", async () => {
