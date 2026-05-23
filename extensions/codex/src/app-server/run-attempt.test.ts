@@ -3676,37 +3676,40 @@ describe("runCodexAppServerAttempt", () => {
   });
 
   it("passes normalized channel context to app-server dynamic tool result hooks", async () => {
-    const harness = createStartedThreadHarness();
     const afterToolCall = vi.fn();
     initializeGlobalHookRunner(
       createMockPluginRegistry([{ hookName: "after_tool_call", handler: afterToolCall }]),
     );
-    testing.setOpenClawCodingToolsFactoryForTests(() => [createRuntimeDynamicTool("echo")]);
 
     const params = createParams(
       path.join(tempDir, "session.jsonl"),
       path.join(tempDir, "workspace"),
     );
-    params.disableTools = false;
-    params.runtimePlan = createCodexRuntimePlanFixture();
     params.messageChannel = "telegram";
     params.messageProvider = "telegram";
     params.currentChannelId = "telegram:-100123";
+    const sessionKey = "agent:main:session-1";
+    const hookChannelId = testing.resolveCodexAppServerHookChannelId(params, sessionKey);
 
-    const run = runCodexAppServerAttempt(params);
-    await harness.waitForMethod("thread/start");
-
-    await harness.handleServerRequest({
-      id: "request-echo-tool",
-      method: "item/tool/call",
-      params: {
-        threadId: "thread-1",
-        turnId: "turn-1",
-        callId: "call-echo-1",
-        namespace: null,
-        tool: "echo",
-        arguments: {},
+    const bridge = createCodexDynamicToolBridge({
+      tools: [createRuntimeDynamicTool("echo")],
+      signal: new AbortController().signal,
+      hookContext: {
+        agentId: "main",
+        sessionId: "session-1",
+        sessionKey,
+        runId: "run-1",
+        channelId: hookChannelId,
       },
+    });
+
+    await bridge.handleToolCall({
+      threadId: "thread-1",
+      turnId: "turn-1",
+      callId: "call-echo-1",
+      namespace: null,
+      tool: "echo",
+      arguments: {},
     });
 
     await vi.waitFor(() => {
@@ -3723,9 +3726,6 @@ describe("runCodexAppServerAttempt", () => {
         toolCallId: "call-echo-1",
       }),
     );
-
-    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
-    await run;
   });
 
   it("releases the session when Codex never completes after a dynamic tool response", async () => {

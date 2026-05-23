@@ -5638,6 +5638,7 @@ export const testing = {
   resolveCodexDynamicToolsLoading,
   rotateOversizedCodexAppServerStartupBinding,
   resolveCodexAppServerForOpenClawToolPolicy,
+  resolveCodexAppServerHookChannelId,
   resolveOpenClawCodingToolsSessionKeys,
   shouldProjectMirroredHistoryForCodexStart,
   shouldEnableCodexAppServerNativeToolSurface,
