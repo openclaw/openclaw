@@ -1940,9 +1940,12 @@ export async function dispatchReplyFromConfig(
                 if (!deliveryPayload) {
                   return;
                 }
+                if (sendPolicyDenied) {
+                  return;
+                }
                 const ttsMediaExempt =
                   !!deliveryPayload && resolveSendableOutboundReplyParts(deliveryPayload).hasMedia;
-                if (shouldSuppressProgressDelivery() && !ttsMediaExempt) {
+                if (!ttsMediaExempt && shouldSuppressProgressDelivery()) {
                   return;
                 }
                 if (isDispatchOperationAborted()) {
