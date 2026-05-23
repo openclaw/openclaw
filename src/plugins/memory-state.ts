@@ -297,9 +297,27 @@ function cloneMemoryPublicArtifact(
 export async function listActiveMemoryPublicArtifacts(params: {
   cfg: OpenClawConfig;
 }): Promise<MemoryPluginPublicArtifact[]> {
-  const artifacts =
+  // Try registered capability first
+  const registeredArtifacts =
     (await memoryPluginState.capability?.capability.publicArtifacts?.listArtifacts(params)) ?? [];
-  return artifacts.map(cloneMemoryPublicArtifact).toSorted((left, right) => {
+  
+  // If no artifacts from registered capability and memory slot is configured,
+  // try direct import from memory-core (fallback for CLI context)
+  if (registeredArtifacts.length === 0) {
+    const memorySlot = params.cfg?.plugins?.slots?.memory;
+    if (memorySlot === "memory-core" || memorySlot?.startsWith("memory-core/")) {
+      try {
+        const memoryCoreModule = await import("../../extensions/memory-core/src/public-artifacts.js");
+        if (typeof memoryCoreModule.listMemoryCorePublicArtifacts === "function") {
+          return memoryCoreModule.listMemoryCorePublicArtifacts(params);
+        }
+      } catch {
+        // Fall through to return empty/sorted registered artifacts
+      }
+    }
+  }
+  
+  return registeredArtifacts.map(cloneMemoryPublicArtifact).toSorted((left, right) => {
     const workspaceOrder = left.workspaceDir.localeCompare(right.workspaceDir);
     if (workspaceOrder !== 0) {
       return workspaceOrder;
