@@ -2017,10 +2017,11 @@ describe("image tool MiniMax VLM routing", () => {
 
   it("accepts images[] for multi-image requests", async () => {
     const { fetch, tool } = await createMinimaxVlmFixture({ status_code: 0, status_msg: "" });
+    const secondPngB64 = createLargeColorBlockPng(2).toString("base64");
 
     const res = await tool.execute("t1", {
       prompt: "Compare these images.",
-      images: [`data:image/png;base64,${pngB64}`, `data:image/gif;base64,${ONE_PIXEL_GIF_B64}`],
+      images: [`data:image/png;base64,${pngB64}`, `data:image/png;base64,${secondPngB64}`],
     });
 
     expect(fetch).toHaveBeenCalledTimes(2);
@@ -2034,14 +2035,15 @@ describe("image tool MiniMax VLM routing", () => {
 
   it("combines image + images with dedupe and enforces maxImages", async () => {
     const { fetch, tool } = await createMinimaxVlmFixture({ status_code: 0, status_msg: "" });
+    const secondPngB64 = createLargeColorBlockPng(2).toString("base64");
 
     const deduped = await tool.execute("t1", {
       prompt: "Compare these images.",
       image: `data:image/png;base64,${pngB64}`,
       images: [
         `data:image/png;base64,${pngB64}`,
-        `data:image/gif;base64,${ONE_PIXEL_GIF_B64}`,
-        `data:image/gif;base64,${ONE_PIXEL_GIF_B64}`,
+        `data:image/png;base64,${secondPngB64}`,
+        `data:image/png;base64,${secondPngB64}`,
       ],
     });
 

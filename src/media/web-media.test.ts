@@ -132,6 +132,14 @@ describe("loadWebMedia", () => {
     };
   }
 
+  function createGifHeader(width: number, height: number): Buffer {
+    const buffer = Buffer.alloc(10);
+    buffer.write("GIF89a", 0, "ascii");
+    buffer.writeUInt16LE(width, 6);
+    buffer.writeUInt16LE(height, 8);
+    return buffer;
+  }
+
   function readJpegDimensions(buffer: Buffer): { width: number; height: number } {
     let offset = 2;
     while (offset + 9 < buffer.length) {
@@ -529,6 +537,33 @@ describe("loadWebMedia", () => {
         }),
       ).rejects.toThrow(/Optional dependency sharp is required/);
     });
+  });
+
+  it("preserves in-limit GIF buffers when optimizing direct image buffers", async () => {
+    const { optimizeImageBufferForWebMedia } = await import("./web-media.js");
+    const buffer = createGifHeader(16, 16);
+    const result = await optimizeImageBufferForWebMedia({
+      buffer,
+      contentType: "image/gif",
+      maxBytes: 1024,
+      imageCompression: { models: [{ maxSidePx: 64 }] },
+    });
+
+    expect(result.kind).toBe("image");
+    expect(result.contentType).toBe("image/gif");
+    expect(result.buffer.equals(buffer)).toBe(true);
+  });
+
+  it("does not bypass model dimensions for GIF buffers", async () => {
+    const { optimizeImageBufferForWebMedia } = await import("./web-media.js");
+    await expect(
+      optimizeImageBufferForWebMedia({
+        buffer: createGifHeader(1600, 1600),
+        contentType: "image/gif",
+        maxBytes: 1024,
+        imageCompression: { models: [{ maxSidePx: 512 }] },
+      }),
+    ).rejects.toThrow(/dimensions exceed model image limits/i);
   });
 
   it("applies model image maxBytes to the effective image cap", async () => {

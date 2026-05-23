@@ -475,6 +475,18 @@ function imageSatisfiesHardDimensionPolicy(
   );
 }
 
+function assertImageSatisfiesHardDimensionPolicy(
+  buffer: Buffer,
+  policy?: ImageCompressionPolicy,
+): void {
+  if (imageSatisfiesHardDimensionPolicy(buffer, policy)) {
+    return;
+  }
+  const meta = readImageMetadataFromHeader(buffer);
+  const detail = meta ? `: ${meta.width}x${meta.height}` : "";
+  throw new Error(`Image dimensions exceed model image limits${detail}`);
+}
+
 export function effectiveImageBytesCap(
   baseCap: number | undefined,
   policy?: ImageCompressionPolicy,
@@ -591,6 +603,18 @@ export async function optimizeImageBufferForWebMedia(params: {
 }): Promise<WebMediaResult> {
   const baseCap = params.maxBytes ?? maxBytesForKind("image");
   const cap = effectiveImageBytesCap(baseCap, params.imageCompression) ?? baseCap;
+  if (params.contentType === "image/gif") {
+    if (params.buffer.length > cap) {
+      throw new Error(formatCapLimit("GIF", cap, params.buffer.length));
+    }
+    assertImageSatisfiesHardDimensionPolicy(params.buffer, params.imageCompression);
+    return {
+      buffer: params.buffer,
+      contentType: params.contentType,
+      kind: "image",
+      fileName: params.fileName,
+    };
+  }
   const meta = { contentType: params.contentType, fileName: params.fileName };
   let optimized: OptimizedImage;
   try {
@@ -743,6 +767,7 @@ async function loadWebMediaInternal(
         if (params.buffer.length > imageCap) {
           throw new Error(formatCapLimit(isGif ? "GIF" : "Media", imageCap, params.buffer.length));
         }
+        assertImageSatisfiesHardDimensionPolicy(params.buffer, imageCompression);
         return {
           buffer: params.buffer,
           contentType: params.contentType,
