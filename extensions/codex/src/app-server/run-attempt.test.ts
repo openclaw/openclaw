@@ -50,6 +50,10 @@ import {
   resolveCodexPluginsPolicy,
 } from "./config.js";
 import {
+  emitDynamicToolStartedDiagnostic,
+  emitDynamicToolTerminalDiagnostic,
+} from "./dynamic-tool-diagnostics.js";
+import {
   CODEX_OPENCLAW_DYNAMIC_TOOL_NAMESPACE,
   createCodexDynamicToolBridge,
 } from "./dynamic-tools.js";
@@ -63,7 +67,7 @@ import {
   resolveCodexPluginAppCacheEndpoint,
 } from "./plugin-app-cache-key.js";
 import { buildCodexPluginThreadConfig } from "./plugin-thread-config.js";
-import type { CodexServerNotification } from "./protocol.js";
+import type { CodexDynamicToolCallParams, CodexServerNotification } from "./protocol.js";
 import {
   readRecentCodexRateLimits,
   rememberCodexRateLimits,
@@ -3170,54 +3174,40 @@ describe("runCodexAppServerAttempt", () => {
     expect(activeDiagnosticToolKeys(diagnosticEvents)).toEqual(new Set());
   });
 
-  it("clears dynamic tool diagnostics after successful app-server tool responses", async () => {
-    const harness = createStartedThreadHarness();
+  it("clears dynamic tool diagnostics after successful terminal responses", async () => {
     const diagnosticEvents: DiagnosticEventPayload[] = [];
     const unsubscribeDiagnostics = onInternalDiagnosticEvent((event) =>
       diagnosticEvents.push(event),
     );
-    testing.setOpenClawCodingToolsFactoryForTests(() => [createRuntimeDynamicTool("echo")]);
-
-    const params = createParams(
-      path.join(tempDir, "session.jsonl"),
-      path.join(tempDir, "workspace"),
-    );
-    const abortController = new AbortController();
-    params.abortSignal = abortController.signal;
-    params.disableTools = false;
-    params.runtimePlan = createCodexRuntimePlanFixture();
-
-    const run = runCodexAppServerAttempt(params);
-    void run.catch(() => undefined);
-    let runSettled = false;
-    let diagnosticsSubscribed = true;
     try {
-      await harness.waitForMethod("thread/start", 10_000);
+      const call = {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        callId: "call-echo-1",
+        namespace: null,
+        tool: "echo",
+        arguments: {},
+      } satisfies CodexDynamicToolCallParams;
 
-      const toolResult = (await harness.handleServerRequest({
-        id: "request-echo-tool",
-        method: "item/tool/call",
-        params: {
-          threadId: "thread-1",
-          turnId: "turn-1",
-          callId: "call-echo-1",
-          namespace: null,
-          tool: "echo",
-          arguments: {},
-        },
-      })) as {
-        contentItems?: Array<{ text?: string; type?: string }>;
-        success?: boolean;
-      };
-
-      expect(toolResult.success).toBe(true);
-      expect(toolResult.contentItems?.[0]).toEqual({
-        type: "inputText",
-        text: "echo done",
+      emitDynamicToolStartedDiagnostic({
+        call,
+        runId: "run-1",
+        sessionId: "session-1",
+        sessionKey: "agent:main:session-1",
       });
+      emitDynamicToolTerminalDiagnostic({
+        call,
+        runId: "run-1",
+        sessionId: "session-1",
+        sessionKey: "agent:main:session-1",
+        durationMs: 1,
+        response: {
+          success: true,
+          contentItems: [{ type: "inputText", text: "echo done" }],
+        },
+      });
+
       await flushDiagnosticEvents();
-      unsubscribeDiagnostics();
-      diagnosticsSubscribed = false;
 
       const toolDiagnosticEvents = diagnosticEvents.filter(
         (
@@ -3248,22 +3238,8 @@ describe("runCodexAppServerAttempt", () => {
         toolDiagnosticEventSummaries.filter((event) => event.type === "tool.execution.started"),
       ).toHaveLength(1);
       expect(activeDiagnosticToolKeys(diagnosticEvents)).toEqual(new Set());
-
-      harness.close();
-      abortController.abort(new Error("test complete"));
-      await drainPromiseForTest(run, 10_000, "Codex diagnostic test run cleanup");
-      runSettled = true;
     } finally {
-      if (diagnosticsSubscribed) {
-        unsubscribeDiagnostics();
-      }
-      if (!runSettled) {
-        harness.close();
-        abortController.abort(new Error("test cleanup"));
-        await drainPromiseForTest(run, 1_000, "Codex diagnostic test failure cleanup").catch(
-          () => undefined,
-        );
-      }
+      unsubscribeDiagnostics();
     }
   });
 
