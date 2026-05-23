@@ -37,20 +37,18 @@ const AllowDenyChannelRuleMatchSchema: z.ZodType<AllowDenyChannelRuleMatchShape>
   })
   .strict();
 
-const SessionSendPolicyRuleMatchSchema: z.ZodType<SessionSendPolicyRuleMatchShape> = z.lazy(() =>
-  z
-    .object({
-      channel: z.string().optional(),
-      chatType: AllowDenyChatTypeSchema,
-      keyPrefix: z.string().optional(),
-      rawKeyPrefix: z.string().optional(),
-      peerEquals: AllowDenyPeerEqualsSchema.optional(),
-      invert: z.boolean().optional(),
-      allOf: z.array(SessionSendPolicyRuleMatchSchema).optional(),
-      anyOf: z.array(SessionSendPolicyRuleMatchSchema).optional(),
-    })
-    .strict(),
-);
+const SessionSendPolicyRuleMatchSchema: z.ZodType<SessionSendPolicyRuleMatchShape> = z
+  .object({
+    channel: z.string().optional(),
+    chatType: AllowDenyChatTypeSchema,
+    keyPrefix: z.string().optional(),
+    rawKeyPrefix: z.string().optional(),
+    peerEquals: AllowDenyPeerEqualsSchema.optional(),
+    invert: z.boolean().optional(),
+    allOf: z.array(z.lazy(() => SessionSendPolicyRuleMatchSchema)).optional(),
+    anyOf: z.array(z.lazy(() => SessionSendPolicyRuleMatchSchema)).optional(),
+  })
+  .strict();
 
 function createAllowDenyRulesSchema<MatchShape>(matchSchema: z.ZodType<MatchShape>) {
   return z
