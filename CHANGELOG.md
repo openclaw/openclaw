@@ -62,6 +62,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Gateway/boot: run `BOOT.md` startup checks in an isolated boot session so gateway restarts do not overwrite the agent's main session mapping. (#85479)
 - WebChat: summarize internal message-tool source replies so tool cards no longer duplicate the visible reply body. (#84773) Thanks @jason-allen-oneal.
 - WebChat: scope the visible attachment button to its own composer file input so clicking Upload reliably opens the file picker. (#83952, fixes #47983) Thanks @jason-allen-oneal.
 - Gateway: preserve deferred lifecycle-error cleanup across later non-terminal events so provider timeouts can persist failed session state instead of leaving sessions stuck running. (#85256, fixes #63819) Thanks @samzong.
