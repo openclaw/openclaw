@@ -7,7 +7,10 @@ import { resolveStateDir } from "../config/paths.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
+import { resizeToJpeg } from "./media-services.js";
+import { encodePngRgba, fillPixel } from "./png-encode.js";
 
+let effectiveImageBytesCap: typeof import("./web-media.js").effectiveImageBytesCap;
 let LocalMediaAccessError: typeof import("./web-media.js").LocalMediaAccessError;
 let loadWebMedia: typeof import("./web-media.js").loadWebMedia;
 let loadWebMediaRaw: typeof import("./web-media.js").loadWebMediaRaw;
@@ -42,6 +45,7 @@ function installCanvasMediaResolver() {
 
 beforeAll(async () => {
   ({
+    effectiveImageBytesCap,
     LocalMediaAccessError,
     loadWebMedia,
     loadWebMediaRaw,
@@ -83,6 +87,43 @@ afterAll(async () => {
 });
 
 describe("loadWebMedia", () => {
+  function createLargeColorBlockPng(size: number): Buffer {
+    const buf = Buffer.alloc(size * size * 4, 255);
+    const centerStart = Math.floor(size * 0.25);
+    const centerEnd = Math.floor(size * 0.75);
+    for (let y = 0; y < size; y += 1) {
+      for (let x = 0; x < size; x += 1) {
+        const inCenter = x >= centerStart && x < centerEnd && y >= centerStart && y < centerEnd;
+        fillPixel(buf, x, y, size, inCenter ? 230 : 30, inCenter ? 40 : 110, inCenter ? 35 : 220);
+      }
+    }
+    return encodePngRgba(buf, size, size);
+  }
+
+  function readJpegDimensions(buffer: Buffer): { width: number; height: number } {
+    let offset = 2;
+    while (offset + 9 < buffer.length) {
+      if (buffer[offset] !== 0xff) {
+        offset += 1;
+        continue;
+      }
+      const marker = buffer[offset + 1];
+      offset += 2;
+      if (marker === 0xd8 || marker === 0xd9 || (marker >= 0xd0 && marker <= 0xd7)) {
+        continue;
+      }
+      const segmentLength = buffer.readUInt16BE(offset);
+      if (marker >= 0xc0 && marker <= 0xcf && ![0xc4, 0xc8, 0xcc].includes(marker)) {
+        return {
+          height: buffer.readUInt16BE(offset + 3),
+          width: buffer.readUInt16BE(offset + 5),
+        };
+      }
+      offset += segmentLength;
+    }
+    throw new Error("JPEG dimensions not found");
+  }
+
   function makeStallingFetch(firstChunk: Uint8Array) {
     return vi.fn(
       async () =>
@@ -417,6 +458,51 @@ describe("loadWebMedia", () => {
         },
       }),
     ).rejects.toThrow(/exceeds/i);
+  });
+
+  it("uses the strictest model image maxBytes across fallback candidates", () => {
+    expect(
+      effectiveImageBytesCap(16 * 1024 * 1024, {
+        models: [{ maxBytes: 8 * 1024 * 1024 }, {}, { maxBytes: 2 * 1024 * 1024 }],
+      }),
+    ).toBe(2 * 1024 * 1024);
+    expect(effectiveImageBytesCap(undefined, { models: [{ maxBytes: 1024 }] })).toBe(1024);
+  });
+
+  it("downscales oversized JPEGs to the resolved model side limit before returning media", async () => {
+    const sourcePng = createLargeColorBlockPng(1600);
+    const sourceJpeg = await resizeToJpeg({
+      buffer: sourcePng,
+      maxSide: 1600,
+      quality: 92,
+      withoutEnlargement: true,
+    });
+    expect(Math.max(...Object.values(readJpegDimensions(sourceJpeg)))).toBe(1600);
+
+    const largeImage = path.join(fixtureRoot, "large-center-red.jpg");
+    await fs.writeFile(largeImage, sourceJpeg);
+    const result = await loadWebMedia(largeImage, {
+      maxBytes: 16 * 1024 * 1024,
+      localRoots: [fixtureRoot],
+      imageCompression: {
+        quality: "high",
+        models: [{ maxSidePx: 512, preferredSidePx: 512 }],
+      },
+    });
+
+    expect(result.kind).toBe("image");
+    expect(result.contentType).toBe("image/jpeg");
+    const dimensions = readJpegDimensions(result.buffer);
+    expect(Math.max(dimensions.width, dimensions.height)).toBeLessThanOrEqual(512);
+  });
+
+  it("uses low default dimensions when model metadata is unavailable", async () => {
+    expect(
+      resolveImageCompressionGrid({
+        quality: "high",
+        models: [{}],
+      }).sides[0],
+    ).toBe(2048);
   });
 
   it("does not send original HEIC media when optional sharp conversion is unavailable", async () => {
