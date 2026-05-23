@@ -639,6 +639,71 @@ describe("registerPolicyDoctorChecks", () => {
     expect(evidence).not.toHaveProperty("authProfiles");
   });
 
+  it("includes global and per-agent alsoAllow in tool posture attestations", async () => {
+    const configPath = join(workspaceDir, "openclaw.jsonc");
+    const policy = { tools: { profiles: { allow: ["messaging"] } } };
+    const baselineConfig = {
+      tools: { profile: "messaging" },
+      agents: {
+        list: [
+          {
+            id: "reviewer",
+            tools: { profile: "messaging" },
+          },
+        ],
+      },
+    };
+    const acceptedAttestationHash = createPolicyAttestation({
+      ok: true,
+      checkedAt: "2026-05-10T20:00:00.000Z",
+      policyPath: "policy.jsonc",
+      policyHash: policyDocumentHash(policy),
+      evidence: collectPolicyEvidence(baselineConfig),
+      findings: [],
+    }).attestationHash;
+    const cfg = {
+      ...cfgWithPolicy({ expectedAttestationHash: acceptedAttestationHash }),
+      tools: { profile: "messaging", alsoAllow: ["exec"] },
+      agents: {
+        list: [
+          {
+            id: "reviewer",
+            tools: { profile: "messaging", alsoAllow: ["write"] },
+          },
+        ],
+      },
+    } as unknown as OpenClawConfig;
+    await fs.writeFile(configPath, "{}", "utf-8");
+    await fs.writeFile(join(workspaceDir, "policy.jsonc"), JSON.stringify(policy), "utf-8");
+
+    const result = await runPolicyChecks(ctx(configPath, cfg));
+    const evidence = collectPolicyEvidence(cfg as unknown as Record<string, unknown>);
+
+    expect(evidence.toolPosture).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: "tools-alsoAllow",
+          kind: "alsoAllow",
+          entries: ["exec"],
+          source: "oc://openclaw.config/tools/alsoAllow",
+        }),
+        expect.objectContaining({
+          id: "reviewer-alsoAllow",
+          kind: "alsoAllow",
+          entries: ["write"],
+          source: "oc://openclaw.config/agents/list/#0/tools/alsoAllow",
+        }),
+      ]),
+    );
+    expect(result.findings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          checkId: "policy/attestation-hash-mismatch",
+        }),
+      ]),
+    );
+  });
+
   it("reports configured channels denied by policy", async () => {
     const configPath = join(workspaceDir, "openclaw.jsonc");
     const cfg = {

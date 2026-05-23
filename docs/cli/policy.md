@@ -155,12 +155,12 @@ on the applicable defaults or agent and set `workspaceAccess` to `none` or
 policy. `agents.workspace.denyTools` supports `exec`, `process`, `write`,
 `edit`, and `apply_patch`; OpenClaw config `group:fs` covers file mutation tools
 and `group:runtime` covers shell/process tools. Tool posture policy observes
-`tools.profile`, `tools.allow`, `tools.deny`, `tools.fs.workspaceOnly`,
-`tools.exec.security`, `tools.exec.ask`, `tools.exec.host`,
-`tools.elevated.enabled`, and the same per-agent `agents.list[].tools.*`
-overrides. It does not read runtime/operator approval state such as
-exec-approvals.json, and it does not enforce tool calls at runtime. Secret
-evidence records
+`tools.profile`, `tools.allow`, `tools.alsoAllow`, `tools.deny`,
+`tools.fs.workspaceOnly`, `tools.exec.security`, `tools.exec.ask`,
+`tools.exec.host`, `tools.elevated.enabled`, and the same per-agent
+`agents.list[].tools.*` overrides. It does not read runtime/operator approval
+state such as exec-approvals.json, and it does not enforce tool calls at
+runtime. Secret evidence records
 provider/source posture and SecretRef metadata, never raw secret values. Policy
 does not read or attest per-agent credential stores such as `auth-profiles.json`;
 those stores remain owned by the existing auth and credential flows.

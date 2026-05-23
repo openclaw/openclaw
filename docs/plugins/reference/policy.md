@@ -35,8 +35,10 @@ can record for audit.
 
 Tool posture rules can require approved profiles, workspace-only filesystem
 tools, bounded exec security/ask/host settings, disabled elevated mode, and
-required tool deny entries. These checks observe config conformance only; they
-do not read runtime approval state or add runtime enforcement.
+required tool deny entries. The evidence also records additive `alsoAllow`
+entries because they can widen effective tool posture. These checks observe
+config conformance only; they do not read runtime approval state or add runtime
+enforcement.
 
 ## Related docs
 

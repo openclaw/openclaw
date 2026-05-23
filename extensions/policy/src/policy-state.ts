@@ -60,6 +60,7 @@ export type PolicyToolPostureEvidence = {
   readonly id: string;
   readonly kind:
     | "allow"
+    | "alsoAllow"
     | "deny"
     | "elevatedAllowFrom"
     | "elevatedEnabled"
@@ -882,6 +883,7 @@ function pushToolPostureEvidence(
   });
 
   pushToolPostureList(entries, params, "allow");
+  pushToolAlsoAllowPostureList(entries, params);
   pushToolPostureList(entries, params, "deny");
   pushToolFsPosture(entries, params);
   pushToolExecPosture(entries, params);
@@ -1041,6 +1043,28 @@ function pushToolPostureList(
     ...(params.agentId === undefined ? {} : { agentId: params.agentId }),
     entries: [...inheritedEntries, ...localEntries],
     explicit: localEntries.length > 0 || inheritedEntries.length > 0,
+  });
+}
+
+function pushToolAlsoAllowPostureList(
+  entries: PolicyToolPostureEvidence[],
+  params: ToolPostureParams,
+): void {
+  const localValue = params.tools.alsoAllow;
+  const inheritedValue = params.inheritedTools.alsoAllow;
+  const localConfigured = Array.isArray(localValue);
+  const inheritedConfigured = Array.isArray(inheritedValue);
+  const localEntries = localConfigured ? readStringArray(localValue) : [];
+  const inheritedEntries = inheritedConfigured ? readStringArray(inheritedValue) : [];
+  const inherited = !localConfigured && inheritedConfigured;
+  entries.push({
+    id: `${params.id}-alsoAllow`,
+    kind: "alsoAllow",
+    source: `${inherited ? params.inheritedSourceBase : params.sourceBase}/alsoAllow`,
+    scope: params.scope,
+    ...(params.agentId === undefined ? {} : { agentId: params.agentId }),
+    entries: inherited ? inheritedEntries : localEntries,
+    explicit: localConfigured || inheritedConfigured,
   });
 }
 
