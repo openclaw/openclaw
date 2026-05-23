@@ -178,6 +178,7 @@ import { resolveSandboxAgentId, resolveSandboxScopeKey, slugifySessionKey } from
 import type { SandboxConfig, SandboxDockerConfig, SandboxWorkspaceAccess } from "./types.js";
 import { validateSandboxSecurity } from "./validate-sandbox-security.js";
 import {
+  appendReadOnlyWorkspaceSkillMountArgs,
   appendWorkspaceMountArgs,
   formatReadOnlyWorkspaceSkillMountHashState,
   resolveReadOnlyWorkspaceSkillMounts,
@@ -571,8 +572,13 @@ async function createSandboxContainer(params: {
     workdir: cfg.workdir,
     workspaceAccess: params.workspaceAccess,
     readOnlyWorkspaceSkillMounts: params.readOnlyWorkspaceSkillMounts,
+    includeReadOnlyWorkspaceSkillMounts: false,
   });
   appendCustomBinds(args, cfg);
+  appendReadOnlyWorkspaceSkillMountArgs({
+    args,
+    readOnlyWorkspaceSkillMounts: params.readOnlyWorkspaceSkillMounts,
+  });
   args.push(cfg.image, "sleep", "infinity");
 
   await execDocker(args);
