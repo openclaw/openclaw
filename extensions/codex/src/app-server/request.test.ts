@@ -30,6 +30,21 @@ describe("requestCodexAppServerJson sandbox guard", () => {
     expect(sharedClientMocks.getSharedCodexAppServerClient).not.toHaveBeenCalled();
   });
 
+  it("fails closed before raw app-server bypass methods when exec host=node is active", async () => {
+    await expect(
+      requestCodexAppServerJson({
+        method: "command/exec",
+        requestParams: { command: ["sh", "-lc", "id"] },
+        config: { tools: { exec: { host: "node", node: "worker-1" } } },
+        sessionKey: "node-session",
+      }),
+    ).rejects.toThrow(
+      "Codex-native app-server method `command/exec` is unavailable because OpenClaw exec host=node is active for this session.",
+    );
+
+    expect(sharedClientMocks.getSharedCodexAppServerClient).not.toHaveBeenCalled();
+  });
+
   it("allows metadata methods in sandboxed sessions", async () => {
     const request = vi.fn(async () => ({ ok: true }));
     sharedClientMocks.getSharedCodexAppServerClient.mockResolvedValue({ request });
@@ -123,5 +138,28 @@ describe("requestCodexAppServerJson sandbox guard", () => {
     ).resolves.toEqual({ thread: { id: "thread-1" }, model: "gpt-5.5" });
 
     expect(request).toHaveBeenCalledWith("thread/start", params, { timeoutMs: 60_000 });
+  });
+
+  it("blocks thread starts with sandbox environments when exec host=node is active", async () => {
+    const params = {
+      cwd: "/workspace",
+      environments: [{ environmentId: "openclaw-sandbox-abc123", cwd: "/workspace" }],
+    };
+
+    await expect(
+      requestCodexAppServerJson({
+        method: "thread/start",
+        requestParams: params,
+        config: {
+          agents: { defaults: { sandbox: { mode: "all" } } },
+          tools: { exec: { host: "node", node: "worker-1" } },
+        },
+        sessionKey: "node-session",
+      }),
+    ).rejects.toThrow(
+      "Codex-native app-server method `thread/start` is unavailable because OpenClaw exec host=node is active for this session.",
+    );
+
+    expect(sharedClientMocks.getSharedCodexAppServerClient).not.toHaveBeenCalled();
   });
 });

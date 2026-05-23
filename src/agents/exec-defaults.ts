@@ -1,5 +1,4 @@
 import type { SessionEntry } from "../config/sessions.js";
-import { getSessionEntry } from "../config/sessions/store.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   loadExecApprovals,
@@ -138,38 +137,4 @@ export function resolveExecDefaults(params: {
       sandboxAvailable,
     }),
   };
-}
-
-export function resolveRuntimeExecDefaults(params: {
-  cfg?: OpenClawConfig;
-  sessionEntry?: SessionEntry;
-  agentId?: string;
-  sessionKey?: string;
-  sandboxAvailable?: boolean;
-  readRuntimeSessionEntry?: boolean;
-}): ReturnType<typeof resolveExecDefaults> {
-  return resolveExecDefaults({
-    ...params,
-    sessionEntry:
-      params.sessionEntry ??
-      (params.readRuntimeSessionEntry ? readRuntimeSessionEntryBestEffort(params) : undefined),
-  });
-}
-
-function readRuntimeSessionEntryBestEffort(params: {
-  agentId?: string;
-  sessionKey?: string;
-}): SessionEntry | undefined {
-  const sessionKey = params.sessionKey?.trim();
-  if (!sessionKey) {
-    return undefined;
-  }
-  try {
-    return getSessionEntry({
-      sessionKey,
-      agentId: params.agentId,
-    });
-  } catch {
-    return undefined;
-  }
 }

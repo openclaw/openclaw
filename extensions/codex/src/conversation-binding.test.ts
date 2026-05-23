@@ -13,18 +13,6 @@ const agentRuntimeMocks = vi.hoisted(() => ({
   resolveApiKeyForProfile: vi.fn(),
   resolveAuthProfileOrder: vi.fn(),
   resolveDefaultAgentDir: vi.fn(() => "/agent"),
-  resolveRuntimeExecDefaults: vi.fn(
-    (params?: { cfg?: { tools?: { exec?: { host?: string } } } }) => {
-      const host = params?.cfg?.tools?.exec?.host ?? "auto";
-      return {
-        host,
-        effectiveHost: host === "node" ? "node" : "gateway",
-        security: "full",
-        ask: "off",
-        canRequestNode: host !== "gateway",
-      };
-    },
-  ),
   resolvePersistedAuthProfileOwnerAgentDir: vi.fn(),
   resolveProviderIdForAuth: vi.fn((provider: string) => provider),
   saveAuthProfileStore: vi.fn(),
@@ -283,9 +271,11 @@ describe("codex conversation binding", () => {
         channel: "discord",
         isGroup: true,
         commandAuthorized: true,
+        sessionKey: "node-session",
       },
       {
         channelId: "discord",
+        sessionKey: "node-session",
         pluginBinding: {
           bindingId: "binding-1",
           pluginId: "codex",
@@ -304,6 +294,7 @@ describe("codex conversation binding", () => {
         },
       },
       {
+        config: { tools: { exec: { host: "node", node: "mb-m5" } } },
         resumeCodexCliSessionOnNode,
         timeoutMs: 1234,
       },
