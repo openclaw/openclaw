@@ -367,6 +367,70 @@ Security notes:
 - Same-UID peer check.
 - Challenge/response (nonce + HMAC token + request hash) + short TTL.
 
+## FAQ
+
+### When would `accountId` and `threadId` be used on an approval target?
+
+Use `accountId` when the channel has multiple configured identities and the approval prompt must
+leave through one specific account. Use `threadId` when the destination supports topics or
+threads and the prompt should stay inside that thread instead of the top-level chat.
+
+A concrete Telegram case is an operations supergroup with forum topics and two Telegram bot
+accounts. The `to` value names the supergroup, `accountId` selects the bot account, and `threadId`
+selects the forum topic:
+
+```json5
+{
+  approvals: {
+    exec: {
+      enabled: true,
+      mode: "targets",
+      targets: [
+        {
+          channel: "telegram",
+          to: "-1001234567890",
+          accountId: "ops-bot",
+          threadId: "77",
+        },
+      ],
+    },
+  },
+  channels: {
+    telegram: {
+      accounts: {
+        default: {
+          name: "Primary bot",
+          botToken: "env:TELEGRAM_PRIMARY_BOT_TOKEN",
+        },
+        "ops-bot": {
+          name: "Operations bot",
+          botToken: "env:TELEGRAM_OPS_BOT_TOKEN",
+        },
+      },
+    },
+  },
+}
+```
+
+With that setup, forwarded exec approvals are posted by the `ops-bot` Telegram account into topic
+`77` of chat `-1001234567890`. A target without `accountId` uses the channel's default account, and
+a target without `threadId` posts to the top-level destination.
+
+### When approvals are sent to a session, can anyone in that session approve them?
+
+No. Session delivery only controls where the prompt appears. It does not by itself authorize every
+participant in that chat to approve.
+
+For generic same-chat `/approve`, the sender must already be authorized for commands in that
+channel session. If the channel exposes explicit approval approvers, those approvers can authorize
+the `/approve` action even when they are not otherwise command-authorized in that session.
+
+Some channels are stricter. Discord, Telegram, Matrix, Slack native approval DMs, and similar
+native approval clients use their resolved approver lists for approval authorization. For example,
+a Telegram forum-topic approval prompt can be visible to everyone in the topic, but only numeric
+Telegram user IDs resolved from `channels.telegram.execApprovals.approvers` or
+`commands.ownerAllowFrom` can approve or deny it.
+
 ## Related
 
 - [Exec approvals](/tools/exec-approvals) — core policy and approval flow
