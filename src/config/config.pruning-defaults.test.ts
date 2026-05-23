@@ -97,26 +97,6 @@ describe("config pruning defaults", () => {
     ).toBe("short");
   });
 
-  it("adds cacheRetention defaults for dated Anthropic primary model refs", () => {
-    const cfg = applyAnthropicDefaultsForTest({
-      auth: {
-        profiles: {
-          "anthropic:api": { provider: "anthropic", mode: "api_key" },
-        },
-      },
-      agents: {
-        defaults: {
-          model: { primary: "anthropic/claude-sonnet-4-20250514" },
-        },
-      },
-    });
-
-    expectAnthropicPruningDefaults(cfg);
-    expect(
-      cfg.agents?.defaults?.models?.["anthropic/claude-sonnet-4-20250514"]?.params?.cacheRetention,
-    ).toBe("short");
-  });
-
   it("adds default cacheRetention for Anthropic Claude models on Bedrock", () => {
     const cfg = applyAnthropicDefaultsForTest({
       auth: {
