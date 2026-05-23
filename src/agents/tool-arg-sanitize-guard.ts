@@ -239,6 +239,18 @@ const RE_SENTINEL_CMD_PREFIX_DOUBLE = /<<\|(?=[^\s|>])/g;
 const RE_SENTINEL_PIPE_ORPHAN_DOUBLE = /<<\|/g;
 const RE_SENTINEL_PIPE_ORPHAN_SINGLE = /<\|/g;
 
+// R5d trailing-orphan (P2.24d, 2026-05-23): strip trailing "<|" / "<<|"
+// sequences (+ surrounding whitespace) at end-of-string. Reproduction case:
+// jsonl L98 — Gemma4 emitted write args.content ending in "\n<|" (sentinel
+// open token leaked at final emission, no closing "|>"). R1 sentinel regexes
+// require either a paired form or a non-empty suffix; trailing standalone
+// "<|" matches none of them. R5b would have caught it but is gated to
+// EXEC_CMD_SANITIZED_FIELDS only. Trailing-only is safer than global orphan
+// strip because legitimate prose mid-content "<|" (rare but possible in
+// markdown about tokens/syntax) is preserved. Applies to all sanitized
+// fields including markdown content.
+const RE_SENTINEL_TRAILING_ORPHAN = /(?:<<?\|+\s*)+$/;
+
 // R5c (P2.24c, 2026-05-22): strip stray ASCII control bytes that Gemma4
 // occasionally leaks alongside sentinel tokens (form-feed \x0c, vertical-tab
 // \x0b, etc.). Preserves \t (\x09), \n (\x0a), \r (\x0d) which are
@@ -312,6 +324,13 @@ export function sanitizeString(
       chain = chain
         .replace(RE_SENTINEL_PIPE_ORPHAN_DOUBLE, "")
         .replace(RE_SENTINEL_PIPE_ORPHAN_SINGLE, "");
+    }
+    // R5d trailing-orphan (P2.24d): unconditional trailing "<|" strip for
+    // all sanitized fields (including content/text/body/message). Safe
+    // because mid-content "<|" is preserved; only end-of-string is touched.
+    // Path fields skip (R4 path-quote-strip handles trailing prefix forms).
+    if (!options.isPath) {
+      chain = chain.replace(RE_SENTINEL_TRAILING_ORPHAN, "");
     }
     const next = chain;
     if (next !== before) {

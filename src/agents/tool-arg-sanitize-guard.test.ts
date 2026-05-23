@@ -610,3 +610,94 @@ describe("tool-arg-sanitize-guard P2.24c — orphan prefix + control char strip"
     expect(r.mutations.some((m) => m.rule === "sentinel")).toBe(true);
   });
 });
+
+describe("R5d trailing-orphan sentinel (P2.24d, gemma write-content live regression)", () => {
+  // Live failure case: 2026-05-23 12:44 KST.
+  // Gemma4 NVFP4 write tool args.content ended with "\n<|" because the
+  // sentinel open-token leaked at final emission. R1 sentinel regexes
+  // require paired form or non-empty suffix; R5b orphan strip is gated
+  // to EXEC_CMD fields. Result: a 568-byte markdown template was written
+  // with literal "<|" appended at end-of-file.
+  //
+  // jsonl: agents/gemma/sessions/e8d2bd03-3cee-48d5-b380-4bdc1dc92756.jsonl L98
+  //   toolName: "write"
+  //   arguments.content ends with: "...작성하세요)*\n<|"
+  //   arguments.file_path: clean (R4 caught it)
+  //   toolResult: isError=false (write succeeded; only content was tainted)
+
+  it("R5d-1 strips trailing <| from content field", () => {
+    const r = sanitizeString("# Heading\n\nBody text.\n<|", "content", baseCfg);
+    expect(r.value).toBe("# Heading\n\nBody text.\n");
+    expect(r.mutations.some((m) => m.rule === "sentinel")).toBe(true);
+  });
+
+  it("R5d-2 strips trailing <<| from content field", () => {
+    const r = sanitizeString("text\n<<|", "content", baseCfg);
+    expect(r.value).toBe("text\n");
+  });
+
+  it("R5d-3 strips trailing <| and trailing whitespace, preserves leading whitespace before sentinel", () => {
+    // Whitespace BEFORE the sentinel is preserved (could be legitimate
+    // body indentation). Whitespace AFTER the sentinel is stripped.
+    const r = sanitizeString("text   <|  \n  ", "body", baseCfg);
+    expect(r.value).toBe("text   ");
+  });
+
+  it("R5d-4 strips trailing <| from text/message/prompt fields", () => {
+    expect(sanitizeString("foo<|", "text", baseCfg).value).toBe("foo");
+    expect(sanitizeString("foo<|", "message", baseCfg).value).toBe("foo");
+    expect(sanitizeString("foo<|", "prompt", baseCfg).value).toBe("foo");
+    expect(sanitizeString("foo<|", "query", baseCfg).value).toBe("foo");
+  });
+
+  it("R5d-5 preserves mid-content <| (legitimate prose about tokens)", () => {
+    // Markdown about LLM tokens may legitimately contain "<|".
+    const input = "The token <|im_start|> opens a turn.\n";
+    const r = sanitizeString(input, "content", baseCfg);
+    // R1 paired "<|im_start|>" should be stripped by RE_SENTINEL_OPEN_SINGLE.
+    // The result should NOT have trailing strip activity beyond R1.
+    expect(r.value).toBe("The token  opens a turn.\n");
+  });
+
+  it("R5d-6 does not touch mid-content <| followed by whitespace (when not at end)", () => {
+    // "<|" followed by whitespace escapes R1.x RE_SENTINEL_CMD_PREFIX
+    // (which requires [^\s|>] lookahead). R5b is gated to EXEC_CMD fields
+    // so content escapes that too. R5d targets end-of-string only — when
+    // "<|" is mid-content with a trailing tail after it, R5d must not
+    // touch it. Verifies R5d is anchored to $.
+    const r = sanitizeString("prefix <| midfix suffix", "content", baseCfg);
+    expect(r.value).toBe("prefix <| midfix suffix");
+  });
+
+  it("R5d-7 multiple trailing <| forms collapsed", () => {
+    const r = sanitizeString("text\n<|<|<|", "content", baseCfg);
+    expect(r.value).toBe("text\n");
+  });
+
+  it("R5d-8 trailing <| through sanitizeToolArgs on write tool", () => {
+    const args = {
+      file_path: "memory/notes.md",
+      content: "# Notes\n\nBody.\n<|",
+    };
+    const res = sanitizeToolArgs(args, "write", baseCfg);
+    expect(res.changed).toBe(true);
+    expect((res.args as { content: string }).content).toBe("# Notes\n\nBody.\n");
+    expect((res.args as { file_path: string }).file_path).toBe("memory/notes.md");
+  });
+
+  it("R5d-9 path field skipped (R4 handles path-style sentinel prefix)", () => {
+    // Trailing "<|" on a path field — R5d skips (options.isPath = true),
+    // but R4 path-quote-strip handles it at the start (not end). For end-
+    // of-string trailing case, R5d skip is correct: paths shouldn't have
+    // trailing "<|" patterns from real models.
+    const r = sanitizeString("memory/file.md", "file_path", baseCfg);
+    expect(r.value).toBe("memory/file.md");
+  });
+
+  it("R5d-10 trailing-only does NOT affect command field beyond R5b", () => {
+    // command field already gets R5b global orphan strip. R5d should
+    // be a no-op for command fields where R5b already cleaned up.
+    const r = sanitizeString("echo hi\n<|", "command", baseCfg);
+    expect(r.value).toBe("echo hi\n");
+  });
+});
