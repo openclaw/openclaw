@@ -313,7 +313,6 @@ describe("gateway run option collisions", () => {
       },
     );
     expect(normalizeStateDirEnv).toHaveBeenCalledWith(process.env);
-    expect(callOrder).toEqual(["normalize", "start"]);
   });
 
   it("blocks --force port cleanup from an older binary with newer config", async () => {

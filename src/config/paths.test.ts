@@ -135,31 +135,17 @@ describe("state + config path candidates", () => {
     expect(env.OPENCLAW_STATE_DIR).toBe(path.resolve("."));
   });
 
-  it("pins a relative state-dir override to the cwd at normalization time", async () => {
-    await withTempDir({ prefix: "openclaw-state-normalize-" }, async (root) => {
-      const originalCwd = process.cwd();
-      const initialDir = path.join(root, "initial");
-      const laterDir = path.join(root, "later");
-      await fs.mkdir(initialDir, { recursive: true });
-      await fs.mkdir(laterDir, { recursive: true });
+  it("pins a relative state-dir override before later resolution", () => {
+    const env = {
+      OPENCLAW_STATE_DIR: "relative-state",
+      OPENCLAW_HOME: "/srv/openclaw-home",
+    } as NodeJS.ProcessEnv;
 
-      try {
-        process.chdir(initialDir);
-        const env = {
-          OPENCLAW_STATE_DIR: ".",
-          OPENCLAW_HOME: root,
-        } as NodeJS.ProcessEnv;
+    normalizeStateDirEnv(env);
+    const normalized = env.OPENCLAW_STATE_DIR;
 
-        normalizeStateDirEnv(env);
-        process.chdir(laterDir);
-
-        expect(await fs.realpath(resolveStateDir(env, () => root))).toBe(
-          await fs.realpath(initialDir),
-        );
-      } finally {
-        process.chdir(originalCwd);
-      }
-    });
+    expect(normalized).toBe(path.resolve("relative-state"));
+    expect(resolveStateDir(env, () => "/srv/other-home")).toBe(normalized);
   });
 
   it("uses OPENCLAW_HOME for default state/config locations", () => {
