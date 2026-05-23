@@ -43,6 +43,7 @@ function isFastTestMode() {
 type SubagentOutputSnapshot = {
   latestAssistantText?: string;
   latestSilentText?: string;
+  latestToolCallCount?: number;
   waitingForContinuation?: boolean;
 };
 
@@ -105,6 +106,26 @@ function extractSubagentAssistantText(message: unknown): string {
   return extractAssistantText(message) ?? "";
 }
 
+function countAssistantToolCalls(message: unknown): number {
+  if (!message || typeof message !== "object") {
+    return 0;
+  }
+  const content = (message as { content?: unknown }).content;
+  const contentToolCalls = Array.isArray(content)
+    ? content.filter(
+        (block) =>
+          block &&
+          typeof block === "object" &&
+          ((block as { type?: unknown }).type === "toolCall" ||
+            (block as { type?: unknown }).type === "tool_use"),
+      ).length
+    : 0;
+  const toolCalls =
+    (message as { toolCalls?: unknown; tool_calls?: unknown }).toolCalls ??
+    (message as { tool_calls?: unknown }).tool_calls;
+  return contentToolCalls + (Array.isArray(toolCalls) ? toolCalls.length : 0);
+}
+
 function summarizeSubagentOutputHistory(messages: Array<unknown>): SubagentOutputSnapshot {
   const snapshot: SubagentOutputSnapshot = {};
   let previousAssistantCalledYield = false;
@@ -123,6 +144,8 @@ function summarizeSubagentOutputHistory(messages: Array<unknown>): SubagentOutpu
       }
       const text = extractSubagentAssistantText(message).trim();
       if (!text) {
+        snapshot.latestToolCallCount =
+          (snapshot.latestToolCallCount ?? 0) + countAssistantToolCalls(message);
         snapshot.waitingForContinuation = false;
         previousAssistantCalledYield = false;
         continue;
@@ -161,6 +184,9 @@ function selectSubagentOutputText(snapshot: SubagentOutputSnapshot): string | un
   }
   if (snapshot.latestAssistantText) {
     return snapshot.latestAssistantText;
+  }
+  if (snapshot.latestToolCallCount && snapshot.latestToolCallCount > 0) {
+    return `${snapshot.latestToolCallCount} tool call(s) made without visible output.`;
   }
   return undefined;
 }
