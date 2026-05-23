@@ -2383,7 +2383,7 @@ describe("runCodexAppServerAttempt", () => {
         ? [createRuntimeDynamicTool("heartbeat_respond")]
         : []),
     ]);
-    const request = vi.fn(async (method: string) => {
+    const request = vi.fn(async (method: string, _params?: unknown) => {
       if (method === "thread/start") {
         return threadStartResult("thread-1");
       }
@@ -2458,7 +2458,7 @@ describe("runCodexAppServerAttempt", () => {
         ? [createRuntimeDynamicTool("heartbeat_respond")]
         : []),
     ]);
-    const request = vi.fn(async (method: string) => {
+    const request = vi.fn(async (method: string, _params?: unknown) => {
       if (method === "thread/start") {
         return threadStartResult("thread-1");
       }
