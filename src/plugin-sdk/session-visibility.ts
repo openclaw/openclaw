@@ -94,6 +94,50 @@ export function resolveSandboxSessionToolsVisibility(cfg: OpenClawConfig): "spaw
   return cfg.agents?.defaults?.sandbox?.sessionToolsVisibility ?? "spawned";
 }
 
+/**
+ * Linear-time case-insensitive glob matcher.  Splits the pattern on `*` and
+ * checks that all segments appear in order inside `value` with the first
+ * anchored to the start and the last anchored to the end.  O(n·k) where
+ * n = value length and k = segment count, avoiding the polynomial
+ * backtracking that `new RegExp("^.*a.*b.*$")` causes with multiple wildcards.
+ */
+function matchesWildcardCaseInsensitive(pattern: string, value: string): boolean {
+  const parts = pattern.toLowerCase().split("*");
+  const lower = value.toLowerCase();
+
+  // First part must be a prefix.
+  const first = parts[0];
+  let pos = 0;
+  if (first) {
+    if (!lower.startsWith(first)) {
+      return false;
+    }
+    pos = first.length;
+  }
+
+  // Last part must be a suffix.
+  const last = parts[parts.length - 1];
+  const endBound = last ? lower.length - last.length : lower.length;
+  if (last && (!lower.endsWith(last) || endBound < pos)) {
+    return false;
+  }
+
+  // Interior parts must appear in order between prefix end and suffix start.
+  for (let i = 1; i < parts.length - 1; i++) {
+    const part = parts[i];
+    if (!part) {
+      continue;
+    }
+    const idx = lower.indexOf(part, pos);
+    if (idx === -1 || idx + part.length > endBound) {
+      return false;
+    }
+    pos = idx + part.length;
+  }
+
+  return true;
+}
+
 export function createAgentToAgentPolicy(cfg: OpenClawConfig): AgentToAgentPolicy {
   const routingA2A = cfg.tools?.agentToAgent;
   const enabled = routingA2A?.enabled === true;
@@ -115,9 +159,7 @@ export function createAgentToAgentPolicy(cfg: OpenClawConfig): AgentToAgentPolic
       if (!raw.includes("*")) {
         return raw === agentId;
       }
-      const escaped = raw.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-      const re = new RegExp(`^${escaped.replaceAll("\\*", ".*")}$`, "i");
-      return re.test(agentId);
+      return matchesWildcardCaseInsensitive(raw, agentId);
     });
   };
   const isAllowed = (requesterAgentId: string, targetAgentId: string) => {
