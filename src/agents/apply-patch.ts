@@ -1,7 +1,7 @@
 import syncFs from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
-import type { AgentTool } from "@mariozechner/pi-agent-core";
+import type { AgentTool } from "@earendil-works/pi-agent-core";
 import { Type } from "typebox";
 import { openRootFile, type RootFileOpenResult } from "../infra/boundary-file-read.js";
 import { root as fsRoot } from "../infra/fs-safe.js";
@@ -187,9 +187,18 @@ export async function applyPatch(
       const moveTarget = await resolvePatchPath(hunk.movePath, options);
       await assertPatchParentPath(moveTarget, options);
       await ensureDir(moveTarget, options);
-      await writeResolvedPatchFile(moveTarget, applied, options);
-      await removeResolvedPatchFile(target, options);
-      recordSummary(summary, seen, "modified", moveTarget.display);
+      const moveResolvesToSource =
+        path.resolve(moveTarget.resolved) === path.resolve(target.resolved);
+      await writeResolvedPatchFile(moveResolvesToSource ? target : moveTarget, applied, options);
+      if (!moveResolvesToSource) {
+        await removeResolvedPatchFile(target, options);
+      }
+      recordSummary(
+        summary,
+        seen,
+        "modified",
+        moveResolvesToSource ? target.display : moveTarget.display,
+      );
     } else {
       await writeResolvedPatchFile(target, applied, options);
       recordSummary(summary, seen, "modified", target.display);
@@ -354,7 +363,7 @@ async function assertNoExistingParentAliases(params: { parentPath: string; rootP
   const rootPath = path.resolve(params.rootPath);
   const parentPath = path.resolve(params.parentPath);
   const relative = path.relative(rootPath, parentPath);
-  if (!relative || relative === "" || relative.startsWith("..") || path.isAbsolute(relative)) {
+  if (!relative || relative === "" || relativePathEscapesRoot(relative)) {
     return;
   }
 
@@ -484,10 +493,19 @@ function toDisplayPath(resolved: string, cwd: string): string {
   if (!relative || relative === "") {
     return path.basename(resolved);
   }
-  if (relative.startsWith("..") || path.isAbsolute(relative)) {
+  if (relativePathEscapesRoot(relative)) {
     return resolved;
   }
   return relative;
+}
+
+function relativePathEscapesRoot(relativePath: string): boolean {
+  return (
+    relativePath === ".." ||
+    relativePath.startsWith("../") ||
+    relativePath.startsWith("..\\") ||
+    path.isAbsolute(relativePath)
+  );
 }
 
 function parsePatchText(input: string): { hunks: Hunk[]; patch: string } {

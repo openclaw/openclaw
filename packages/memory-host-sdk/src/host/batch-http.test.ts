@@ -11,7 +11,30 @@ type RetryOptions = {
   shouldRetry: (err: unknown) => boolean;
 };
 
-function requireRetryOptions(call: unknown[] | undefined): RetryOptions {
+type PostJsonParams = {
+  url?: unknown;
+  headers?: unknown;
+  body?: unknown;
+  errorPrefix?: unknown;
+  attachStatus?: unknown;
+};
+
+function requirePostJsonParams(
+  postJsonMock: ReturnType<typeof vi.mocked<typeof import("./post-json.js").postJson>>,
+): PostJsonParams {
+  const [call] = postJsonMock.mock.calls;
+  if (!call) {
+    throw new Error("expected postJson call");
+  }
+  const [params] = call;
+  if (typeof params !== "object" || params === null || Array.isArray(params)) {
+    throw new Error("expected postJson params to be an object");
+  }
+  return params;
+}
+
+function requireFirstRetryOptions(retryAsyncMock: ReturnType<typeof vi.fn>): RetryOptions {
+  const call = retryAsyncMock.mock.calls[0];
   const options = call?.[1] as RetryOptions | undefined;
   if (!options) {
     throw new Error("expected retry options");
@@ -49,14 +72,14 @@ describe("postJsonWithRetry", () => {
     });
 
     expect(result).toEqual({ ok: true, ids: [1, 2] });
-    const postJsonParams = postJsonMock.mock.calls[0]?.[0];
-    expect(postJsonParams?.url).toBe("https://memory.example/v1/batch");
-    expect(postJsonParams?.headers).toEqual({ Authorization: "Bearer test" });
-    expect(postJsonParams?.body).toEqual({ chunks: ["a", "b"] });
-    expect(postJsonParams?.errorPrefix).toBe("memory batch failed");
-    expect(postJsonParams?.attachStatus).toBe(true);
+    const postJsonParams = requirePostJsonParams(postJsonMock);
+    expect(postJsonParams.url).toBe("https://memory.example/v1/batch");
+    expect(postJsonParams.headers).toEqual({ Authorization: "Bearer test" });
+    expect(postJsonParams.body).toEqual({ chunks: ["a", "b"] });
+    expect(postJsonParams.errorPrefix).toBe("memory batch failed");
+    expect(postJsonParams.attachStatus).toBe(true);
 
-    const retryOptions = requireRetryOptions(retryAsyncMock.mock.calls[0]);
+    const retryOptions = requireFirstRetryOptions(retryAsyncMock);
     expect(retryOptions.attempts).toBe(3);
     expect(retryOptions.minDelayMs).toBe(300);
     expect(retryOptions.maxDelayMs).toBe(2000);
@@ -84,7 +107,7 @@ describe("postJsonWithRetry", () => {
     }
 
     expect(error).toBeInstanceOf(Error);
-    expect((error as Error).message).toContain("memory batch failed: 503 backend down");
+    expect((error as Error).message).toBe("memory batch failed: 503 backend down");
     expect((error as { status?: unknown }).status).toBe(503);
   });
 });

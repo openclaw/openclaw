@@ -24,6 +24,38 @@ describe("OpenClawSchema talk validation", () => {
     ).toThrow(/consultThinkingLevel/i);
   });
 
+  it("accepts additional realtime Talk instructions", () => {
+    expect(() =>
+      OpenClawSchema.parse({
+        talk: {
+          realtime: {
+            provider: "openai",
+            providers: {
+              openai: {
+                model: "gpt-realtime",
+                voice: "alloy",
+              },
+            },
+            instructions: "Speak with crisp diction.",
+            consultRouting: "force-agent-consult",
+          },
+        },
+      }),
+    ).not.toThrow();
+  });
+
+  it("rejects invalid realtime Talk consult routing", () => {
+    expect(() =>
+      OpenClawSchema.parse({
+        talk: {
+          realtime: {
+            consultRouting: "always",
+          },
+        },
+      }),
+    ).toThrow(/consultRouting/i);
+  });
+
   it.each([
     ["boolean", true],
     ["string", "1500"],

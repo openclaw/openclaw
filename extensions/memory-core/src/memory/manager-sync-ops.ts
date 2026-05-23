@@ -33,7 +33,7 @@ import {
   type MemorySource,
   type MemorySyncProgressUpdate,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   createEmbeddingProvider,
   type EmbeddingProvider,
@@ -53,12 +53,22 @@ import {
   type MemoryIndexMeta,
 } from "./manager-reindex-state.js";
 import { shouldSyncSessionsForReindex } from "./manager-session-reindex.js";
-import { resolveMemorySessionSyncPlan } from "./manager-session-sync-state.js";
+import {
+  resolveMemorySessionStartupDirtyFiles,
+  resolveMemorySessionSyncPlan,
+  type MemorySessionStartupFileState,
+} from "./manager-session-sync-state.js";
 import {
   loadMemorySourceFileState,
   resolveMemorySourceExistingHash,
 } from "./manager-source-state.js";
 import { runMemoryTargetedSessionSync } from "./manager-targeted-sync.js";
+import {
+  recordMemoryWatchEventPath,
+  settleMemoryWatchEventPaths,
+  type MemoryWatchEventStats,
+  type MemoryWatchSettleQueue,
+} from "./watch-settle.js";
 
 type MemorySyncProgressState = {
   completed: number;
@@ -82,6 +92,7 @@ const FTS_TABLE = "chunks_fts";
 const EMBEDDING_CACHE_TABLE = "embedding_cache";
 const SESSION_DIRTY_DEBOUNCE_MS = 5000;
 const SESSION_DELTA_READ_CHUNK_BYTES = 64 * 1024;
+const SESSION_SYNC_YIELD_EVERY = 10;
 const VECTOR_LOAD_TIMEOUT_MS = 30_000;
 const IGNORED_MEMORY_WATCH_DIR_NAMES = new Set([
   ".git",
@@ -140,6 +151,18 @@ export function runDetachedMemorySync(sync: () => Promise<void>, reason: "interv
   });
 }
 
+function createSessionSyncYield(total: number): () => Promise<void> {
+  let completed = 0;
+  return async () => {
+    completed += 1;
+    if (completed < total && completed % SESSION_SYNC_YIELD_EVERY === 0) {
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+    }
+  };
+}
+
 export abstract class MemoryManagerSyncOps {
   protected abstract readonly cfg: OpenClawConfig;
   protected abstract readonly agentId: string;
@@ -179,6 +202,7 @@ export abstract class MemoryManagerSyncOps {
   protected intervalTimer: NodeJS.Timeout | null = null;
   protected closed = false;
   protected dirty = false;
+  protected pendingWatchPaths: MemoryWatchSettleQueue = new Map();
   protected sessionsDirty = false;
   protected sessionsDirtyFiles = new Set<string>();
   protected sessionPendingFiles = new Set<string>();
@@ -437,12 +461,9 @@ export abstract class MemoryManagerSyncOps {
       ignoreInitial: true,
       ignored: (watchPath, stats) =>
         shouldIgnoreMemoryWatchPath(watchPath, stats, this.settings.multimodal),
-      awaitWriteFinish: {
-        stabilityThreshold: this.settings.sync.watchDebounceMs,
-        pollInterval: 100,
-      },
     });
-    const markDirty = () => {
+    const markDirty = (watchPath?: string, stats?: MemoryWatchEventStats) => {
+      recordMemoryWatchEventPath(this.pendingWatchPaths, watchPath, stats);
       this.dirty = true;
       this.scheduleWatchSync();
     };
@@ -472,6 +493,73 @@ export abstract class MemoryManagerSyncOps {
       }
       this.scheduleSessionDirty(sessionFile);
     });
+  }
+
+  protected ensureSessionStartupCatchup(): void {
+    if (!this.sources.has("sessions")) {
+      return;
+    }
+    void this.runSessionStartupCatchup().catch((err) => {
+      log.warn("memory session startup catch-up failed: " + String(err));
+    });
+  }
+
+  protected async markSessionStartupCatchupDirtyFiles(): Promise<string[]> {
+    if (!this.sources.has("sessions") || this.closed) {
+      return [];
+    }
+    const files = await listSessionFilesForAgent(this.agentId);
+    if (files.length === 0 || this.closed) {
+      return [];
+    }
+    const existingRows = loadMemorySourceFileState({
+      db: this.db,
+      source: "sessions",
+    }).rows;
+    const fileStates = (
+      await runWithConcurrency(
+        files.map((file) => async (): Promise<MemorySessionStartupFileState | null> => {
+          try {
+            const stat = await fs.stat(file);
+            if (!stat.isFile()) {
+              return null;
+            }
+            return {
+              absPath: file,
+              path: sessionPathForFile(file),
+              mtimeMs: stat.mtimeMs,
+              size: stat.size,
+            };
+          } catch (err) {
+            if (isFileMissingError(err)) {
+              return null;
+            }
+            throw err;
+          }
+        }),
+        this.getIndexConcurrency(),
+      )
+    ).filter((file): file is MemorySessionStartupFileState => file !== null);
+    const dirtyFiles = resolveMemorySessionStartupDirtyFiles({ files: fileStates, existingRows });
+    if (dirtyFiles.length === 0 || this.closed) {
+      return dirtyFiles;
+    }
+    for (const file of dirtyFiles) {
+      this.sessionsDirtyFiles.add(file);
+    }
+    this.sessionsDirty = true;
+    return dirtyFiles;
+  }
+
+  protected async runSessionStartupCatchup(): Promise<string[]> {
+    const dirtyFiles = await this.markSessionStartupCatchupDirtyFiles();
+    if (dirtyFiles.length === 0 || this.closed) {
+      return dirtyFiles;
+    }
+    void this.sync({ reason: "session-startup-catchup" }).catch((err) => {
+      log.warn("memory sync failed (session-startup-catchup): " + String(err));
+    });
+    return dirtyFiles;
   }
 
   private scheduleSessionDirty(sessionFile: string) {
@@ -696,7 +784,21 @@ export abstract class MemoryManagerSyncOps {
     }
     this.watchTimer = setTimeout(() => {
       this.watchTimer = null;
-      runDetachedMemorySync(() => this.sync({ reason: "watch" }), "watch");
+      runDetachedMemorySync(async () => {
+        if (this.closed) {
+          return;
+        }
+        if (!(await settleMemoryWatchEventPaths(this.pendingWatchPaths))) {
+          if (!this.closed) {
+            this.scheduleWatchSync();
+          }
+          return;
+        }
+        if (this.closed) {
+          return;
+        }
+        await this.sync({ reason: "watch" });
+      }, "watch");
     }, this.settings.sync.watchDebounceMs);
   }
 
@@ -870,53 +972,58 @@ export abstract class MemoryManagerSyncOps {
       });
     }
 
+    const yieldAfterSessionFile = createSessionSyncYield(files.length);
     const tasks = files.map((absPath) => async () => {
-      if (!indexAll && !this.sessionsDirtyFiles.has(absPath)) {
-        if (params.progress) {
-          params.progress.completed += 1;
-          params.progress.report({
-            completed: params.progress.completed,
-            total: params.progress.total,
-          });
+      try {
+        if (!indexAll && !this.sessionsDirtyFiles.has(absPath)) {
+          if (params.progress) {
+            params.progress.completed += 1;
+            params.progress.report({
+              completed: params.progress.completed,
+              total: params.progress.total,
+            });
+          }
+          return;
         }
-        return;
-      }
-      const entry = await buildSessionEntry(absPath);
-      if (!entry) {
-        if (params.progress) {
-          params.progress.completed += 1;
-          params.progress.report({
-            completed: params.progress.completed,
-            total: params.progress.total,
-          });
+        const entry = await buildSessionEntry(absPath);
+        if (!entry) {
+          if (params.progress) {
+            params.progress.completed += 1;
+            params.progress.report({
+              completed: params.progress.completed,
+              total: params.progress.total,
+            });
+          }
+          return;
         }
-        return;
-      }
-      const existingHash = resolveMemorySourceExistingHash({
-        db: this.db,
-        source: "sessions",
-        path: entry.path,
-        existingHashes,
-      });
-      if (!params.needsFullReindex && existingHash === entry.hash) {
-        if (params.progress) {
-          params.progress.completed += 1;
-          params.progress.report({
-            completed: params.progress.completed,
-            total: params.progress.total,
-          });
-        }
-        this.resetSessionDelta(absPath, entry.size);
-        return;
-      }
-      await this.indexFile(entry, { source: "sessions", content: entry.content });
-      this.resetSessionDelta(absPath, entry.size);
-      if (params.progress) {
-        params.progress.completed += 1;
-        params.progress.report({
-          completed: params.progress.completed,
-          total: params.progress.total,
+        const existingHash = resolveMemorySourceExistingHash({
+          db: this.db,
+          source: "sessions",
+          path: entry.path,
+          existingHashes,
         });
+        if (!params.needsFullReindex && existingHash === entry.hash) {
+          if (params.progress) {
+            params.progress.completed += 1;
+            params.progress.report({
+              completed: params.progress.completed,
+              total: params.progress.total,
+            });
+          }
+          this.resetSessionDelta(absPath, entry.size);
+          return;
+        }
+        await this.indexFile(entry, { source: "sessions", content: entry.content });
+        this.resetSessionDelta(absPath, entry.size);
+        if (params.progress) {
+          params.progress.completed += 1;
+          params.progress.report({
+            completed: params.progress.completed,
+            total: params.progress.total,
+          });
+        }
+      } finally {
+        await yieldAfterSessionFile();
       }
     });
     await runWithConcurrency(tasks, this.getIndexConcurrency());
@@ -927,25 +1034,31 @@ export abstract class MemoryManagerSyncOps {
       return;
     }
 
-    for (const stale of existingRows ?? []) {
-      if (activePaths.has(stale.path)) {
-        continue;
-      }
-      deleteFileByPathAndSource.run(stale.path, "sessions");
-      if (deleteVectorRowsByPathAndSource) {
-        try {
-          deleteVectorRowsByPathAndSource.run(stale.path, "sessions");
-        } catch {}
-      }
-      deleteChunksByPathAndSource.run(stale.path, "sessions");
-      if (deleteFtsRowsByPathSourceAndModel) {
-        try {
-          deleteFtsRowsByPathSourceAndModel.run(
-            stale.path,
-            "sessions",
-            this.provider?.model ?? "fts-only",
-          );
-        } catch {}
+    const staleRows = existingRows ?? [];
+    const yieldAfterStaleSessionRow = createSessionSyncYield(staleRows.length);
+    for (const stale of staleRows) {
+      try {
+        if (activePaths.has(stale.path)) {
+          continue;
+        }
+        deleteFileByPathAndSource.run(stale.path, "sessions");
+        if (deleteVectorRowsByPathAndSource) {
+          try {
+            deleteVectorRowsByPathAndSource.run(stale.path, "sessions");
+          } catch {}
+        }
+        deleteChunksByPathAndSource.run(stale.path, "sessions");
+        if (deleteFtsRowsByPathSourceAndModel) {
+          try {
+            deleteFtsRowsByPathSourceAndModel.run(
+              stale.path,
+              "sessions",
+              this.provider?.model ?? "fts-only",
+            );
+          } catch {}
+        }
+      } finally {
+        await yieldAfterStaleSessionRow();
       }
     }
   }
@@ -1003,6 +1116,9 @@ export abstract class MemoryManagerSyncOps {
     });
     const targetSessionFiles = this.normalizeTargetSessionFiles(params?.sessionFiles);
     const hasTargetSessionFiles = targetSessionFiles !== null;
+    if (params?.reason === "cli" && !params.force && !hasTargetSessionFiles) {
+      await this.markSessionStartupCatchupDirtyFiles();
+    }
     const targetedSessionSync = await runMemoryTargetedSessionSync({
       hasSessionSource: this.sources.has("sessions"),
       targetSessionFiles,

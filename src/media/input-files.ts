@@ -7,7 +7,7 @@ import {
   normalizeOptionalString,
 } from "../shared/string-coerce.js";
 import { canonicalizeBase64, estimateBase64DecodedBytes } from "./base64.js";
-import { convertHeicToJpeg } from "./image-ops.js";
+import { convertHeicToJpeg } from "./media-services.js";
 import { detectMime } from "./mime.js";
 import { extractPdfContent, type PdfExtractedImage } from "./pdf-extract.js";
 import { readResponseWithLimit } from "./read-response-with-limit.js";
@@ -272,6 +272,20 @@ async function normalizeInputImage(params: {
   };
 }
 
+async function resolveInputFileMime(params: {
+  buffer: Buffer;
+  declaredMime?: string;
+}): Promise<string | undefined> {
+  const sniffedMime = normalizeMimeType(await detectMime({ buffer: params.buffer }));
+  if (!sniffedMime) {
+    return params.declaredMime;
+  }
+  if (sniffedMime === "application/octet-stream") {
+    return params.declaredMime ?? sniffedMime;
+  }
+  return sniffedMime;
+}
+
 export async function extractImageContentFromSource(
   source: InputImageSource,
   limits: InputImageLimits,
@@ -366,6 +380,8 @@ export async function extractFileContentFromSource(params: {
   if (buffer.byteLength > limits.maxBytes) {
     throw new Error(`File too large: ${buffer.byteLength} bytes (limit: ${limits.maxBytes} bytes)`);
   }
+
+  mimeType = await resolveInputFileMime({ buffer, declaredMime: mimeType });
 
   if (!mimeType) {
     throw new Error("input_file missing media type");

@@ -49,9 +49,19 @@ function resolveAvailableKnownChannel(params: {
   if (!normalized) {
     return undefined;
   }
+  // Pass `allowBootstrap: true` so the in-agent message tool path can resolve
+  // outbound channels in processes where external channel adapters have not
+  // been eagerly loaded (e.g. `openclaw agent --local`). Already-loaded and
+  // bundled plugins still resolve through side-effect-free fast paths first.
+  // Without the bootstrap fallback, official external channels can surface as
+  // the recurring "Channel is unavailable" error on `--local`-routed
+  // dispatches that the CLI send-path could deliver to.
+  // Adjacent to #77254 (cron-announce / final-reply paths); this closes the
+  // remaining in-agent caller in the same family.
   return resolveOutboundChannelPlugin({
     channel: normalized,
     cfg: params.cfg,
+    allowBootstrap: true,
   })
     ? normalized
     : undefined;
@@ -100,6 +110,21 @@ function formatMissingOfficialExternalChannelsMessage(
   const labels = hints.map((hint) => hint.label).join(", ");
   const installCommands = hints.map((hint) => hint.installCommand).join("; ");
   return `Configured official external channels ${labels} are missing their plugins. Run: openclaw doctor --fix, or install individually: ${installCommands}.`;
+}
+
+function formatNoConfiguredChannelsMessage(): string {
+  return [
+    "Channel is required (no configured channels detected).",
+    "Run openclaw channels add to configure one, or pass --channel <channel> after enabling a channel.",
+    "Use openclaw channels list --all to see available channel ids.",
+  ].join(" ");
+}
+
+function formatMultipleConfiguredChannelsMessage(configured: readonly string[]): string {
+  return [
+    `Channel is required when multiple channels are configured: ${configured.join(", ")}.`,
+    "Pass --channel <channel> to choose one.",
+  ].join(" ");
 }
 
 function isAccountEnabled(account: unknown): boolean {
@@ -263,15 +288,14 @@ export async function resolveMessageChannelSelection(params: {
         `Channel is required (no available channels detected). ${formatMissingOfficialExternalChannelsMessage(repairHints)}`,
       );
     }
-    throw new Error("Channel is required (no configured channels detected).");
+    throw new Error(formatNoConfiguredChannelsMessage());
   }
-  throw new Error(
-    `Channel is required when multiple channels are configured: ${configured.join(", ")}`,
-  );
+  throw new Error(formatMultipleConfiguredChannelsMessage(configured));
 }
 
-export const __testing = {
+export const testing = {
   resetLoggedChannelSelectionErrors() {
     loggedChannelSelectionErrors.clear();
   },
 };
+export { testing as __testing };

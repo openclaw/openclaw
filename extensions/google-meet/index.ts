@@ -6,7 +6,7 @@ import {
   type GatewayRequestHandlerOptions,
 } from "openclaw/plugin-sdk/gateway-runtime";
 import { definePluginEntry, type OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { Type } from "typebox";
 import {
   buildGoogleMeetCalendarDayWindow,
@@ -383,7 +383,7 @@ const googleMeetToolDeps = {
   platform: () => process.platform,
 };
 
-export const __testing = {
+export const testing = {
   setCallGatewayFromCliForTests(next?: typeof callGatewayFromCli): void {
     googleMeetToolDeps.callGatewayFromCli = next ?? callGatewayFromCli;
   },
@@ -392,6 +392,9 @@ export const __testing = {
   },
   isGoogleMeetAgentToolActionUnsupportedOnHost,
 };
+
+/** @deprecated Use `testing`. */
+export { testing as __testing };
 
 type GoogleMeetGatewayToolAction =
   | "join"

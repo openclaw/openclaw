@@ -9,11 +9,15 @@ import {
   isPackageScriptOnlyChange,
 } from "../../scripts/changed-lanes.mjs";
 import {
-  buildChangedCheckTestboxArgs,
+  buildChangedCheckCrabboxArgs,
   createChangedCheckChildEnv,
   createChangedCheckPlan,
-  shouldDelegateChangedCheckToTestbox,
+  createPnpmManagedCommand,
+  shouldDelegateChangedCheckToCrabbox,
+  shouldRunShrinkwrapGuard,
+  createShrinkwrapGuardCommand,
 } from "../../scripts/check-changed.mjs";
+import { isDirectRunPath } from "../../scripts/lib/direct-run.mjs";
 import { cleanupTempDirs, makeTempRepoRoot } from "../helpers/temp-repo.js";
 
 const tempDirs: string[] = [];
@@ -69,6 +73,23 @@ afterEach(() => {
 });
 
 describe("scripts/changed-lanes", () => {
+  it("detects direct script execution from Windows argv paths", () => {
+    expect(
+      isDirectRunPath(
+        "C:\\repo\\scripts\\check-changed.mjs",
+        "c:\\repo\\scripts\\check-changed.mjs",
+        "win32",
+      ),
+    ).toBe(true);
+    expect(
+      isDirectRunPath(
+        "C:\\repo\\scripts\\changed-lanes.mjs",
+        "C:\\repo\\scripts\\check-changed.mjs",
+        "win32",
+      ),
+    ).toBe(false);
+  });
+
   it("includes untracked worktree files in the default local diff", () => {
     const dir = makeTempRepoRoot(tempDirs, "openclaw-changed-lanes-");
     git(dir, ["init", "-q", "--initial-branch=main"]);
@@ -102,6 +123,43 @@ describe("scripts/changed-lanes", () => {
 
     expect(result.paths).toEqual(["scripts/new-check.mjs"]);
     expectLanes(result.lanes, { tooling: true });
+  });
+
+  it("ignores local Crabbox metadata in the default local diff", () => {
+    const dir = makeTempRepoRoot(tempDirs, "openclaw-changed-lanes-crabbox-");
+    git(dir, ["init", "-q", "--initial-branch=main"]);
+    writeFileSync(path.join(dir, ".gitignore"), ".crabbox/\n", "utf8");
+    writeFileSync(path.join(dir, "README.md"), "initial\n", "utf8");
+    git(dir, ["add", ".gitignore", "README.md"]);
+    git(dir, [
+      "-c",
+      "user.email=test@example.com",
+      "-c",
+      "user.name=Test User",
+      "commit",
+      "-q",
+      "-m",
+      "initial",
+    ]);
+
+    mkdirSync(path.join(dir, ".crabbox"), { recursive: true });
+    writeFileSync(path.join(dir, ".crabbox", "capture-files.txt"), "stdout.log\n", "utf8");
+    writeFileSync(path.join(dir, ".crabbox", "capture-manifest.txt"), "stdout.log\t12\n", "utf8");
+
+    const output = execFileSync(
+      process.execPath,
+      [path.join(repoRoot, "scripts", "changed-lanes.mjs"), "--json", "--base", "HEAD"],
+      {
+        cwd: dir,
+        encoding: "utf8",
+        env: createNestedGitEnv(),
+      },
+    );
+
+    const result = parseChangedLaneOutput(output);
+
+    expect(result.paths).toEqual([]);
+    expectLanes(result.lanes, {});
   });
 
   it("includes deleted worktree files in the default local diff", () => {
@@ -241,19 +299,73 @@ describe("scripts/changed-lanes", () => {
     });
   });
 
+  it("runs remote Testbox changed-check children through Corepack pnpm", () => {
+    const command = createPnpmManagedCommand(
+      { name: "conflict markers", args: ["check:no-conflict-markers"] },
+      { OPENCLAW_TESTBOX_REMOTE_RUN: "1", PATH: "/usr/bin" },
+    );
+
+    expect(command.bin).toBe("corepack");
+    expect(command.args).toEqual(["pnpm", "check:no-conflict-markers"]);
+    expect(command.env?.PATH).not.toBe("/usr/bin");
+    expect(command.env?.PATH).toContain("/usr/bin");
+  });
+
+  it("runs CI changed-check children through Corepack pnpm", () => {
+    const command = createPnpmManagedCommand(
+      { name: "conflict markers", args: ["check:no-conflict-markers"] },
+      { CI: "1", PATH: "/usr/bin" },
+    );
+
+    expect(command.bin).toBe("corepack");
+    expect(command.args).toEqual(["pnpm", "check:no-conflict-markers"]);
+  });
+
+  it("keeps local changed-check children on the repo pnpm shim", () => {
+    const command = createPnpmManagedCommand(
+      { name: "conflict markers", args: ["check:no-conflict-markers"] },
+      { PATH: "/usr/bin" },
+    );
+
+    expect(command.bin).toBe("pnpm");
+    expect(command.args).toEqual(["check:no-conflict-markers"]);
+  });
+
   it("delegates local Testbox-mode changed gates before running locally", () => {
     expect(
-      shouldDelegateChangedCheckToTestbox(["--base", "origin/main"], {
+      shouldDelegateChangedCheckToCrabbox(["--base", "origin/main"], {
         OPENCLAW_TESTBOX: "1",
         PATH: "/usr/bin",
       }),
     ).toBe(true);
 
-    expect(buildChangedCheckTestboxArgs(["--base", "origin/main", "--head", "HEAD"])).toEqual([
-      "testbox:run",
+    expect(buildChangedCheckCrabboxArgs(["--base", "origin/main", "--head", "HEAD"])).toEqual([
+      "crabbox:run",
       "--",
+      "--provider",
+      "blacksmith-testbox",
+      "--blacksmith-org",
+      "openclaw",
+      "--blacksmith-workflow",
+      ".github/workflows/ci-check-testbox.yml",
+      "--blacksmith-job",
+      "check",
+      "--blacksmith-ref",
+      "main",
+      "--idle-timeout",
+      "90m",
+      "--ttl",
+      "240m",
+      "--timing-json",
+      "--",
+      "CI=1",
+      "NODE_OPTIONS=--max-old-space-size=4096",
+      "OPENCLAW_TEST_PROJECTS_PARALLEL=6",
+      "OPENCLAW_VITEST_MAX_WORKERS=1",
+      "OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS=900000",
       "OPENCLAW_TESTBOX=1",
       "OPENCLAW_TESTBOX_REMOTE_RUN=1",
+      "corepack",
       "pnpm",
       "check:changed",
       "--base",
@@ -264,15 +376,15 @@ describe("scripts/changed-lanes", () => {
   });
 
   it("does not delegate dry-run, CI, or already-remote changed gates", () => {
-    expect(shouldDelegateChangedCheckToTestbox(["--dry-run"], { OPENCLAW_TESTBOX: "1" })).toBe(
+    expect(shouldDelegateChangedCheckToCrabbox(["--dry-run"], { OPENCLAW_TESTBOX: "1" })).toBe(
       false,
     );
     expect(
-      shouldDelegateChangedCheckToTestbox([], { OPENCLAW_TESTBOX: "1", GITHUB_ACTIONS: "true" }),
+      shouldDelegateChangedCheckToCrabbox([], { OPENCLAW_TESTBOX: "1", GITHUB_ACTIONS: "true" }),
     ).toBe(false);
-    expect(shouldDelegateChangedCheckToTestbox([], { OPENCLAW_TESTBOX: "1", CI: "1" })).toBe(false);
+    expect(shouldDelegateChangedCheckToCrabbox([], { OPENCLAW_TESTBOX: "1", CI: "1" })).toBe(false);
     expect(
-      shouldDelegateChangedCheckToTestbox([], {
+      shouldDelegateChangedCheckToCrabbox([], {
         OPENCLAW_TESTBOX: "1",
         OPENCLAW_TESTBOX_REMOTE_RUN: "1",
       }),
@@ -452,6 +564,8 @@ describe("scripts/changed-lanes", () => {
       "guarded extension wildcard re-exports",
       "plugin-sdk wildcard re-exports",
       "duplicate scan target coverage",
+      "dependency pin guard",
+      "package patch guard",
       "typecheck core tests",
       "lint core",
       "lint scripts",
@@ -469,6 +583,7 @@ describe("scripts/changed-lanes", () => {
         "scripts/test-live-codex-harness-docker.sh",
         "scripts/test-live-gateway-models-docker.sh",
         "scripts/test-live-models-docker.sh",
+        "scripts/test-live-subagent-announce-docker.sh",
       ],
     });
     const schedulerDryRun = plan.commands.find(
@@ -731,6 +846,9 @@ describe("scripts/changed-lanes", () => {
       "lint:extensions:no-guarded-wildcard-reexports",
       "lint:extensions:no-plugin-sdk-wildcard-reexports",
       "dup:check:coverage",
+      "deps:pins:check",
+      "scripts/generate-npm-shrinkwrap.mjs",
+      "deps:patches:check",
       "release-metadata:check",
       "ios:version:check",
       "config:schema:check",
@@ -748,6 +866,27 @@ describe("scripts/changed-lanes", () => {
       docs: true,
     });
     expect(plan.commands.map((command) => command.args[0])).not.toContain("release-metadata:check");
+  });
+
+  it("runs the npm shrinkwrap guard for dependency package surfaces", () => {
+    expect(
+      shouldRunShrinkwrapGuard([
+        "npm-shrinkwrap.json",
+        "extensions/slack/npm-shrinkwrap.json",
+        "extensions/slack/package.json",
+        "scripts/generate-npm-shrinkwrap.mjs",
+      ]),
+    ).toBe(true);
+
+    const result = detectChangedLanes(["extensions/slack/package.json"]);
+    const plan = createChangedCheckPlan(result);
+    const shrinkwrapGuard = createShrinkwrapGuardCommand(["extensions/slack/package.json"]);
+
+    expect(
+      shrinkwrapGuard?.args.some((arg) => arg.replaceAll("\\", "/").endsWith("extensions/slack")),
+    ).toBe(true);
+    expect(plan.commands.map((command) => command.name)).toContain("npm shrinkwrap guard");
+    expect(plan.commands.map((command) => command.args[0])).not.toContain("deps:shrinkwrap:check");
   });
 
   it("guards release metadata package changes to the top-level version field", () => {
@@ -837,6 +976,41 @@ describe("scripts/changed-lanes", () => {
       apps: true,
     });
     expect(plan.commands.map((command) => command.args[0])).not.toContain("tsgo:all");
+  });
+
+  it("keeps app lint explicit when non-macOS hosts lack SwiftLint", () => {
+    const result = detectChangedLanes([
+      "apps/shared/OpenClawKit/Sources/OpenClawProtocol/GatewayModels.swift",
+    ]);
+    const plan = createChangedCheckPlan(result, {
+      env: { PATH: "/usr/bin" },
+      platform: "linux",
+      swiftlintAvailable: false,
+    });
+
+    expectLanes(result.lanes, {
+      apps: true,
+    });
+    expect(plan.commands.map((command) => command.args[0])).not.toContain("lint:apps");
+    expect(plan.commands).toContainEqual(
+      expect.objectContaining({
+        name: "lint apps (swiftlint unavailable on this host)",
+        bin: "node",
+      }),
+    );
+  });
+
+  it("runs app lint when SwiftLint is available in Testbox", () => {
+    const result = detectChangedLanes([
+      "apps/shared/OpenClawKit/Sources/OpenClawProtocol/GatewayModels.swift",
+    ]);
+    const plan = createChangedCheckPlan(result, {
+      env: { OPENCLAW_TESTBOX_REMOTE_RUN: "1", PATH: "/usr/bin" },
+      platform: "linux",
+      swiftlintAvailable: true,
+    });
+
+    expect(plan.commands.map((command) => command.args[0])).toContain("lint:apps");
   });
 
   it("routes legacy root asset deletions as tooling during root cleanup", () => {
@@ -931,6 +1105,8 @@ describe("scripts/changed-lanes", () => {
         args: ["lint:extensions:no-plugin-sdk-wildcard-reexports"],
       },
       { name: "duplicate scan target coverage", args: ["dup:check:coverage"] },
+      { name: "dependency pin guard", args: ["deps:pins:check"] },
+      { name: "package patch guard", args: ["deps:patches:check"] },
     ]);
   });
 
@@ -951,6 +1127,8 @@ describe("scripts/changed-lanes", () => {
         args: ["lint:extensions:no-plugin-sdk-wildcard-reexports"],
       },
       { name: "duplicate scan target coverage", args: ["dup:check:coverage"] },
+      { name: "dependency pin guard", args: ["deps:pins:check"] },
+      { name: "package patch guard", args: ["deps:patches:check"] },
     ]);
   });
 });

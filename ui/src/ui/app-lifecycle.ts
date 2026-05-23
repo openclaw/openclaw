@@ -42,6 +42,8 @@ type LifecycleHost = {
   realtimeTalkStatus?: string;
   realtimeTalkDetail?: string | null;
   realtimeTalkTranscript?: string | null;
+  realtimeTalkConversation?: unknown[];
+  resetRealtimeTalkConversation?: () => void;
   chatLoading: boolean;
   chatMessages: unknown[];
   chatToolMessages: unknown[];
@@ -52,6 +54,7 @@ type LifecycleHost = {
   chatScrollFrame?: number | null;
   chatScrollTimeout?: number | null;
   logsScrollFrame?: number | null;
+  sessionsChangedReloadTimer?: number | ReturnType<typeof globalThis.setTimeout> | null;
   controlUiTabPaintSeq?: number;
   controlUiResponsivenessObserver?: { disconnect: () => void } | null;
   popStateHandler: () => void;
@@ -72,7 +75,9 @@ export function handleConnected(host: LifecycleHost) {
     }
     connectGateway(host as unknown as Parameters<typeof connectGateway>[0]);
   });
-  startNodesPolling(host as unknown as Parameters<typeof startNodesPolling>[0]);
+  if (host.tab === "nodes") {
+    startNodesPolling(host as unknown as Parameters<typeof startNodesPolling>[0]);
+  }
   if (host.tab === "logs") {
     startLogsPolling(host as unknown as Parameters<typeof startLogsPolling>[0]);
   }
@@ -100,6 +105,14 @@ function clearHostTimeout(timeout: number | null | undefined) {
   }
 }
 
+function clearHostGlobalTimeout(
+  timeout: number | ReturnType<typeof globalThis.setTimeout> | null | undefined,
+) {
+  if (timeout != null) {
+    globalThis.clearTimeout(timeout);
+  }
+}
+
 export function handleDisconnected(host: LifecycleHost) {
   host.connectGeneration += 1;
   host.controlUiTabPaintSeq = (host.controlUiTabPaintSeq ?? 0) + 1;
@@ -113,12 +126,15 @@ export function handleDisconnected(host: LifecycleHost) {
   host.logsScrollFrame = null;
   clearHostTimeout(host.chatScrollTimeout);
   host.chatScrollTimeout = null;
+  clearHostGlobalTimeout(host.sessionsChangedReloadTimer);
+  host.sessionsChangedReloadTimer = null;
   host.realtimeTalkSession?.stop();
   host.realtimeTalkSession = null;
   host.realtimeTalkActive = false;
   host.realtimeTalkStatus = "idle";
   host.realtimeTalkDetail = null;
   host.realtimeTalkTranscript = null;
+  host.resetRealtimeTalkConversation?.();
   host.client?.stop();
   host.client = null;
   host.connected = false;
@@ -139,6 +155,7 @@ export function handleUpdated(host: LifecycleHost, changed: Map<PropertyKey, unk
       changed.has("chatToolMessages") ||
       changed.has("chatStream") ||
       changed.has("chatLoading") ||
+      changed.has("realtimeTalkConversation") ||
       changed.has("tab"))
   ) {
     const forcedByTab = changed.has("tab");

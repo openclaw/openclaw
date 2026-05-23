@@ -127,9 +127,11 @@ export function buildTalkRealtimeConfig(config: OpenClawConfig, requestedProvide
     },
     model: normalizeOptionalString(talkRealtime?.model),
     voice: normalizeOptionalString(talkRealtime?.voice),
+    instructions: normalizeOptionalString(talkRealtime?.instructions),
     mode: normalizeOptionalLowercaseString(talkRealtime?.mode),
     transport: normalizeOptionalLowercaseString(talkRealtime?.transport),
     brain: normalizeOptionalLowercaseString(talkRealtime?.brain),
+    consultRouting: normalizeOptionalLowercaseString(talkRealtime?.consultRouting),
   };
 }
 
@@ -210,24 +212,105 @@ export function resolveConfiguredRealtimeTranscriptionProvider(params: {
   throw new Error("No realtime transcription provider registered");
 }
 
-export function buildRealtimeInstructions(): string {
-  return `You are OpenClaw's realtime voice interface. Keep spoken replies concise. If the user asks for code, repository state, tools, files, current OpenClaw context, or deeper reasoning, call ${REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME} and then summarize the result naturally.`;
+const DEFAULT_REALTIME_INSTRUCTIONS = [
+  "You are OpenClaw's realtime voice interface. Keep spoken replies concise.",
+  `If the user asks for code, repository state, files, current OpenClaw context, tool-backed actions, or deeper reasoning, call ${REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME} and then summarize the result naturally.`,
+  `Do not claim you cannot use tools, perform actions, or reach OpenClaw unless ${REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME} returns that failure.`,
+  `When ${REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME} is in progress, speak one brief acknowledgement such as "Let me check that for you", then wait for the final OpenClaw result before answering with the actual result.`,
+].join(" ");
+
+export function buildRealtimeInstructions(configuredInstructions?: string): string {
+  const extra = normalizeOptionalString(configuredInstructions);
+  if (!extra) {
+    return DEFAULT_REALTIME_INSTRUCTIONS;
+  }
+  return `${DEFAULT_REALTIME_INSTRUCTIONS}\n\nAdditional realtime instructions:\n${extra}`;
+}
+
+type RealtimeVoiceLaunchOptions = {
+  model?: string;
+  voice?: string;
+  vadThreshold?: number;
+  silenceDurationMs?: number;
+  prefixPaddingMs?: number;
+  reasoningEffort?: string;
+};
+
+type RealtimeVoiceLaunchOptionInput = {
+  model?: unknown;
+  voice?: unknown;
+  vadThreshold?: unknown;
+  silenceDurationMs?: unknown;
+  prefixPaddingMs?: unknown;
+  reasoningEffort?: unknown;
+};
+
+export function buildRealtimeVoiceLaunchOptions(params: {
+  requested: RealtimeVoiceLaunchOptionInput;
+  defaults: RealtimeVoiceLaunchOptions;
+}): RealtimeVoiceLaunchOptions {
+  const options = pickRealtimeVoiceLaunchOptions(params.defaults);
+  return {
+    ...options,
+    ...pickRealtimeVoiceLaunchOptions(params.requested),
+  };
 }
 
 export function withRealtimeBrowserOverrides(
   providerConfig: RealtimeVoiceProviderConfig,
-  params: { model?: string; voice?: string },
+  params: RealtimeVoiceLaunchOptionInput,
 ): RealtimeVoiceProviderConfig {
   const overrides: RealtimeVoiceProviderConfig = {};
   const model = normalizeOptionalString(params.model);
   const voice = normalizeOptionalString(params.voice);
+  const reasoningEffort = normalizeOptionalString(params.reasoningEffort);
   if (model) {
     overrides.model = model;
   }
   if (voice) {
     overrides.voice = voice;
   }
+  if (typeof params.vadThreshold === "number" && Number.isFinite(params.vadThreshold)) {
+    overrides.vadThreshold = params.vadThreshold;
+  }
+  if (typeof params.silenceDurationMs === "number" && Number.isFinite(params.silenceDurationMs)) {
+    overrides.silenceDurationMs = params.silenceDurationMs;
+  }
+  if (typeof params.prefixPaddingMs === "number" && Number.isFinite(params.prefixPaddingMs)) {
+    overrides.prefixPaddingMs = params.prefixPaddingMs;
+  }
+  if (reasoningEffort) {
+    overrides.reasoningEffort = reasoningEffort;
+  }
   return Object.keys(overrides).length > 0 ? { ...providerConfig, ...overrides } : providerConfig;
+}
+
+function pickRealtimeVoiceLaunchOptions(
+  params: RealtimeVoiceLaunchOptionInput,
+): RealtimeVoiceLaunchOptions {
+  const options: RealtimeVoiceLaunchOptions = {};
+  const model = normalizeOptionalString(params.model);
+  const voice = normalizeOptionalString(params.voice);
+  const reasoningEffort = normalizeOptionalString(params.reasoningEffort);
+  if (model) {
+    options.model = model;
+  }
+  if (voice) {
+    options.voice = voice;
+  }
+  if (typeof params.vadThreshold === "number" && Number.isFinite(params.vadThreshold)) {
+    options.vadThreshold = params.vadThreshold;
+  }
+  if (typeof params.silenceDurationMs === "number" && Number.isFinite(params.silenceDurationMs)) {
+    options.silenceDurationMs = params.silenceDurationMs;
+  }
+  if (typeof params.prefixPaddingMs === "number" && Number.isFinite(params.prefixPaddingMs)) {
+    options.prefixPaddingMs = params.prefixPaddingMs;
+  }
+  if (reasoningEffort) {
+    options.reasoningEffort = reasoningEffort;
+  }
+  return options;
 }
 
 export function isUnsupportedBrowserWebRtcSession(session: RealtimeVoiceBrowserSession): boolean {

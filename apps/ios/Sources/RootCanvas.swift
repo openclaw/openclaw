@@ -1,3 +1,4 @@
+import OpenClawKit
 import OpenClawProtocol
 import SwiftUI
 import UIKit
@@ -14,6 +15,7 @@ struct RootCanvas: View {
     @AppStorage("onboarding.requestID") private var onboardingRequestID: Int = 0
     @AppStorage("gateway.onboardingComplete") private var onboardingComplete: Bool = false
     @AppStorage("gateway.hasConnectedOnce") private var hasConnectedOnce: Bool = false
+    @AppStorage("node.instanceId") private var instanceId: String = UUID().uuidString
     @AppStorage("gateway.preferredStableID") private var preferredGatewayStableID: String = ""
     @AppStorage("gateway.manual.enabled") private var manualGatewayEnabled: Bool = false
     @AppStorage("gateway.manual.host") private var manualGatewayHost: String = ""
@@ -101,6 +103,9 @@ struct RootCanvas: View {
                 },
                 retryGatewayConnection: {
                     Task { await self.gatewayController.connectLastKnown() }
+                },
+                resetOnboarding: {
+                    self.resetOnboardingFromGatewayProblem()
                 })
                 .preferredColorScheme(.dark)
 
@@ -428,6 +433,13 @@ struct RootCanvas: View {
         guard shouldPresent else { return }
         self.presentedSheet = .quickSetup
     }
+
+    private func resetOnboardingFromGatewayProblem() {
+        GatewayOnboardingReset.reset(appModel: self.appModel, instanceId: self.instanceId)
+        self.presentedSheet = nil
+        self.onboardingAllowSkip = false
+        self.showOnboarding = true
+    }
 }
 
 private struct HomeCanvasPayload: Codable {
@@ -454,6 +466,7 @@ private struct HomeCanvasAgentCard: Codable {
 
 private struct CanvasContent: View {
     @Environment(NodeAppModel.self) private var appModel
+    @Environment(GatewayConnectionController.self) private var gatewayController
     @AppStorage("talk.enabled") private var talkEnabled: Bool = false
     @AppStorage("talk.button.enabled") private var talkButtonEnabled: Bool = true
     @State private var showGatewayActions: Bool = false
@@ -467,6 +480,7 @@ private struct CanvasContent: View {
     var openChat: () -> Void
     var openSettings: () -> Void
     var retryGatewayConnection: () -> Void
+    var resetOnboarding: () -> Void
 
     private var brightenButtons: Bool {
         self.systemColorScheme == .light
@@ -522,13 +536,9 @@ private struct CanvasContent: View {
             {
                 GatewayProblemBanner(
                     problem: gatewayProblem,
-                    primaryActionTitle: gatewayProblem.retryable ? "Retry" : "Open Settings",
+                    primaryActionTitle: self.gatewayProblemPrimaryActionTitle(gatewayProblem),
                     onPrimaryAction: {
-                        if gatewayProblem.retryable {
-                            self.retryGatewayConnection()
-                        } else {
-                            self.openSettings()
-                        }
+                        self.handleGatewayProblemPrimaryAction(gatewayProblem)
                     },
                     onShowDetails: {
                         self.showGatewayProblemDetails = true
@@ -556,9 +566,9 @@ private struct CanvasContent: View {
             if let gatewayProblem = self.appModel.lastGatewayProblem {
                 GatewayProblemDetailsSheet(
                     problem: gatewayProblem,
-                    primaryActionTitle: "Open Settings",
+                    primaryActionTitle: self.gatewayProblemPrimaryActionTitle(gatewayProblem),
                     onPrimaryAction: {
-                        self.openSettings()
+                        self.handleGatewayProblemPrimaryAction(gatewayProblem)
                     })
             }
         }
@@ -576,6 +586,24 @@ private struct CanvasContent: View {
             voiceWakeEnabled: self.voiceWakeEnabled,
             cameraHUDText: self.cameraHUDText,
             cameraHUDKind: self.cameraHUDKind)
+    }
+
+    private func gatewayProblemPrimaryActionTitle(_ problem: GatewayConnectionProblem) -> String {
+        if problem.canTrustRotatedCertificate { return "Trust certificate" }
+        if problem.suggestsOnboardingReset { return "Reset onboarding" }
+        return problem.retryable ? "Retry" : "Open Settings"
+    }
+
+    private func handleGatewayProblemPrimaryAction(_ problem: GatewayConnectionProblem) {
+        if problem.canTrustRotatedCertificate {
+            Task { await self.gatewayController.trustRotatedGatewayCertificate(from: problem) }
+        } else if problem.suggestsOnboardingReset {
+            self.resetOnboarding()
+        } else if problem.retryable {
+            self.retryGatewayConnection()
+        } else {
+            self.openSettings()
+        }
     }
 }
 

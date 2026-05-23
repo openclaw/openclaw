@@ -6,12 +6,11 @@ function requireAttackSurfaceSummary(
   findings: ReturnType<typeof collectAttackSurfaceSummaryFindings>,
 ) {
   const summary = findings.find((f) => f.checkId === "summary.attack_surface");
-  expect(summary).toEqual(
-    expect.objectContaining({ checkId: "summary.attack_surface", severity: "info" }),
-  );
   if (!summary) {
     throw new Error("Expected attack surface summary finding");
   }
+  expect(summary.checkId).toBe("summary.attack_surface");
+  expect(summary.severity).toBe("info");
   return summary;
 }
 
@@ -27,6 +26,15 @@ describe("security audit attack surface summary", () => {
     const findings = collectAttackSurfaceSummaryFindings(cfg);
     const summary = requireAttackSurfaceSummary(findings);
 
-    expect(summary.detail).toContain("trust model: personal assistant");
+    expect(summary.detail).toBe(
+      [
+        "groups: open=1, allowlist=1",
+        "tools.elevated: enabled",
+        "hooks.webhooks: enabled",
+        "hooks.internal: disabled",
+        "browser control: enabled",
+        "trust model: personal assistant (one trusted operator boundary), not hostile multi-tenant on one shared gateway",
+      ].join("\n"),
+    );
   });
 });

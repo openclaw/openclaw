@@ -13,6 +13,7 @@ import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot
 import { clearSecretsRuntimeSnapshot } from "../secrets/runtime.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
 import { resolveOptionalMediaToolFactoryPlan } from "./openclaw-tools.media-factory-plan.js";
+import { DEFAULT_PLUGIN_TOOLS_ALLOWLIST_ENTRY } from "./tool-policy.js";
 import * as pdfModelConfigModule from "./tools/pdf-tool.model-config.js";
 
 type CreateOpenClawToolsOptions = Parameters<
@@ -47,6 +48,7 @@ function createPlugin(params: {
   imageGenerationProviderMetadata?: PluginManifestRecord["imageGenerationProviderMetadata"];
   videoGenerationProviderMetadata?: PluginManifestRecord["videoGenerationProviderMetadata"];
   musicGenerationProviderMetadata?: PluginManifestRecord["musicGenerationProviderMetadata"];
+  providerAuthEnvVars?: PluginManifestRecord["providerAuthEnvVars"];
   setupProviders?: Array<{ id: string; envVars?: string[] }>;
 }): PluginManifestRecord {
   return {
@@ -64,6 +66,7 @@ function createPlugin(params: {
     imageGenerationProviderMetadata: params.imageGenerationProviderMetadata,
     videoGenerationProviderMetadata: params.videoGenerationProviderMetadata,
     musicGenerationProviderMetadata: params.musicGenerationProviderMetadata,
+    providerAuthEnvVars: params.providerAuthEnvVars,
     setup: params.setupProviders ? { providers: params.setupProviders } : undefined,
   };
 }
@@ -201,6 +204,36 @@ describe("optional media tool factory planning", () => {
     });
   });
 
+  it("does not plan media factories from workspace-scoped metadata without workspace context", () => {
+    const config: OpenClawConfig = {};
+    installSnapshot(
+      config,
+      [
+        createPlugin({
+          id: "image-owner",
+          contracts: { imageGenerationProviders: ["image-owner"] },
+          setupProviders: [{ id: "image-owner", envVars: ["IMAGE_OWNER_API_KEY"] }],
+        }),
+      ],
+      undefined,
+      "/workspace/a",
+    );
+
+    expect(
+      resolveOptionalMediaToolFactoryPlan({
+        config,
+        authStore: createAuthStore(["image-owner"]),
+      }).imageGenerate,
+    ).toBe(false);
+    expect(
+      resolveOptionalMediaToolFactoryPlan({
+        config,
+        workspaceDir: "/workspace/a",
+        authStore: createAuthStore(["image-owner"]),
+      }).imageGenerate,
+    ).toBe(true);
+  });
+
   it("keeps explicit model configs on the factory path", () => {
     const config: OpenClawConfig = {
       agents: {
@@ -224,6 +257,75 @@ describe("optional media tool factory planning", () => {
       videoGenerate: true,
       musicGenerate: true,
       pdf: true,
+    });
+  });
+
+  it("preserves implicit allow-all from alsoAllow-only policies for built-in media factories", async () => {
+    const config: OpenClawConfig = {
+      agents: {
+        defaults: {
+          imageGenerationModel: { primary: "image-owner/model" },
+          videoGenerationModel: { primary: "video-owner/model" },
+          musicGenerationModel: { primary: "music-owner/model" },
+          pdfModel: { primary: "media-owner/model" },
+        },
+      },
+    };
+    const allowlistFromAlsoAllowOnlyPolicy = ["group:memory", DEFAULT_PLUGIN_TOOLS_ALLOWLIST_ENTRY];
+    installSnapshot(config, []);
+
+    expect(
+      resolveOptionalMediaToolFactoryPlan({
+        config,
+        authStore: createAuthStore(),
+        toolAllowlist: allowlistFromAlsoAllowOnlyPolicy,
+      }),
+    ).toEqual({
+      imageGenerate: true,
+      videoGenerate: true,
+      musicGenerate: true,
+      pdf: true,
+    });
+
+    const toolNames = (
+      await createOpenClawToolsForTest({
+        config,
+        agentDir: "/tmp/openclaw-agent-main",
+        authProfileStore: createAuthStore(),
+        pluginToolAllowlist: allowlistFromAlsoAllowOnlyPolicy,
+      })
+    ).map((tool) => tool.name);
+    expect(toolNames).toContain("image_generate");
+    expect(toolNames).toContain("video_generate");
+    expect(toolNames).toContain("music_generate");
+    expect(toolNames).toContain("pdf");
+  });
+
+  it("keeps denylists authoritative when alsoAllow-only policies preserve factory construction", () => {
+    const config: OpenClawConfig = {
+      agents: {
+        defaults: {
+          imageGenerationModel: { primary: "image-owner/model" },
+          videoGenerationModel: { primary: "video-owner/model" },
+          musicGenerationModel: { primary: "music-owner/model" },
+          pdfModel: { primary: "media-owner/model" },
+        },
+      },
+    };
+    installSnapshot(config, []);
+
+    expect(
+      resolveOptionalMediaToolFactoryPlan({
+        config,
+        authStore: createAuthStore(),
+        toolAllowlist: [DEFAULT_PLUGIN_TOOLS_ALLOWLIST_ENTRY],
+        toolDenylist: ["video_generate", "pdf"],
+      }),
+    ).toEqual({
+      imageGenerate: true,
+      videoGenerate: false,
+      musicGenerate: true,
+      pdf: false,
     });
   });
 
@@ -379,6 +481,28 @@ describe("optional media tool factory planning", () => {
       musicGenerate: true,
       pdf: true,
     });
+  });
+
+  it("keeps manifest provider auth env aliases on the music factory path", () => {
+    const config: OpenClawConfig = {};
+    installSnapshot(config, [
+      createPlugin({
+        id: "minimax",
+        contracts: { musicGenerationProviders: ["minimax", "minimax-portal"] },
+        providerAuthEnvVars: {
+          minimax: ["MINIMAX_CODE_PLAN_KEY", "MINIMAX_CODING_API_KEY", "MINIMAX_API_KEY"],
+          "minimax-portal": ["MINIMAX_OAUTH_TOKEN", "MINIMAX_API_KEY"],
+        },
+      }),
+    ]);
+    vi.stubEnv("MINIMAX_API_KEY", "minimax-key");
+
+    expect(
+      resolveOptionalMediaToolFactoryPlan({
+        config,
+        authStore: createAuthStore(),
+      }).musicGenerate,
+    ).toBe(true);
   });
 
   it("defers PDF model resolution from the tool-prep hot path", async () => {

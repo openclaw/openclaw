@@ -5,10 +5,11 @@ import { createSandboxTestContext } from "openclaw/plugin-sdk/test-fixtures";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenShellSandboxBackend } from "./backend.js";
 import {
+  applyGatewayEndpointToSshConfig,
   buildExecRemoteCommand,
   buildOpenShellBaseArgv,
   resolveOpenShellCommand,
-  setBundledOpenShellCommandResolverForTest,
+  runOpenShellCli,
   shellEscape,
 } from "./cli.js";
 import { resolveOpenShellPluginConfig } from "./config.js";
@@ -20,8 +21,15 @@ const cliMocks = vi.hoisted(() => ({
 let createOpenShellSandboxBackendManager: typeof import("./backend.js").createOpenShellSandboxBackendManager;
 
 describe("openshell cli helpers", () => {
+  const originalEnv = { ...process.env };
+
   afterEach(() => {
-    setBundledOpenShellCommandResolverForTest();
+    for (const key of Object.keys(process.env)) {
+      if (!(key in originalEnv)) {
+        delete process.env[key];
+      }
+    }
+    Object.assign(process.env, originalEnv);
   });
 
   it("builds base argv with gateway overrides", () => {
@@ -39,18 +47,17 @@ describe("openshell cli helpers", () => {
     ]);
   });
 
-  it("prefers the bundled openshell command when available", () => {
-    setBundledOpenShellCommandResolverForTest(() => "/tmp/node_modules/.bin/openshell");
+  it("uses the configured NVIDIA OpenShell CLI command directly", () => {
     const config = resolveOpenShellPluginConfig(undefined);
 
-    expect(resolveOpenShellCommand("openshell")).toBe("/tmp/node_modules/.bin/openshell");
-    expect(buildOpenShellBaseArgv(config)).toEqual(["/tmp/node_modules/.bin/openshell"]);
+    expect(resolveOpenShellCommand("openshell")).toBe("openshell");
+    expect(buildOpenShellBaseArgv(config)).toEqual(["openshell"]);
   });
 
-  it("falls back to the PATH command when no bundled openshell is present", () => {
-    setBundledOpenShellCommandResolverForTest(() => null);
-
-    expect(resolveOpenShellCommand("openshell")).toBe("openshell");
+  it("preserves an explicit NVIDIA OpenShell CLI path", () => {
+    expect(resolveOpenShellCommand("/opt/openshell/bin/openshell")).toBe(
+      "/opt/openshell/bin/openshell",
+    );
   });
 
   it("shell escapes single quotes", () => {
@@ -68,6 +75,70 @@ describe("openshell cli helpers", () => {
     expect(command).toContain(`'env'`);
     expect(command).toContain(`'TOKEN=abc 123'`);
     expect(command).toContain(`'cd '"'"'/sandbox/project'"'"' && pwd && printenv TOKEN'`);
+  });
+
+  it("passes direct gateway endpoints to openshell commands without registration", async () => {
+    const calls: string[][] = [];
+    const openshellCommand = await makeExecutable({
+      name: "openshell",
+      script: ["#!/bin/sh", `printf '%s\\n' "$*" >> "__LOG__"`, "exit 0"].join("\n"),
+    });
+
+    await runOpenShellCli({
+      context: {
+        sandboxName: "demo",
+        config: resolveOpenShellPluginConfig({
+          command: openshellCommand,
+          gateway: "alice",
+          gatewayEndpoint: "http://openshell.openshell-alice.svc.cluster.local:8080",
+        }),
+      },
+      args: ["sandbox", "get", "demo"],
+    });
+
+    const log = await fs.readFile(process.env.OPEN_SHELL_CLI_TEST_LOG as string, "utf8");
+    for (const line of log.trim().split("\n")) {
+      calls.push(line.split(" "));
+    }
+    expect(calls[0]).toEqual([
+      "--gateway",
+      "alice",
+      "--gateway-endpoint",
+      "http://openshell.openshell-alice.svc.cluster.local:8080",
+      "sandbox",
+      "get",
+      "demo",
+    ]);
+  });
+
+  it("adds direct gateway endpoints to generated ssh proxy configs", () => {
+    const configText = [
+      "Host openshell-demo",
+      "    User sandbox",
+      "    ProxyCommand /usr/local/bin/openshell ssh-proxy --gateway-name alice --name demo",
+      "",
+    ].join("\n");
+
+    expect(
+      applyGatewayEndpointToSshConfig({
+        configText,
+        gatewayEndpoint: "http://openshell.openshell-alice.svc.cluster.local:8080",
+      }),
+    ).toContain(
+      "ProxyCommand /usr/local/bin/openshell ssh-proxy --gateway-name alice --name demo --server 'http://openshell.openshell-alice.svc.cluster.local:8080'",
+    );
+  });
+
+  it("leaves ssh proxy configs with an explicit endpoint unchanged", () => {
+    const configText =
+      "Host openshell-demo\n    ProxyCommand openshell ssh-proxy --gateway-name alice --name demo --server 'http://existing'\n";
+
+    expect(
+      applyGatewayEndpointToSshConfig({
+        configText,
+        gatewayEndpoint: "http://replacement",
+      }),
+    ).toBe(configText);
   });
 });
 
@@ -137,13 +208,15 @@ describe("openshell backend manager", () => {
       actualConfigLabel: "custom-source",
       configLabelMatch: true,
     });
+    const expectedConfig = resolveOpenShellPluginConfig({
+      command: "openshell",
+      from: "custom-source",
+    });
     expect(cliMocks.runOpenShellCli).toHaveBeenCalledWith({
-      context: expect.objectContaining({
+      context: {
         sandboxName: "openclaw-session-1234",
-        config: expect.objectContaining({
-          from: "custom-source",
-        }),
-      }),
+        config: expectedConfig,
+      },
       args: ["sandbox", "get", "openclaw-session-1234"],
     });
   });
@@ -176,14 +249,15 @@ describe("openshell backend manager", () => {
       config: {},
     });
 
+    const expectedConfig = resolveOpenShellPluginConfig({
+      command: "/usr/local/bin/openshell",
+      gateway: "lab",
+    });
     expect(cliMocks.runOpenShellCli).toHaveBeenCalledWith({
-      context: expect.objectContaining({
+      context: {
         sandboxName: "openclaw-session-5678",
-        config: expect.objectContaining({
-          command: "/usr/local/bin/openshell",
-          gateway: "lab",
-        }),
-      }),
+        config: expectedConfig,
+      },
       args: ["sandbox", "delete", "openclaw-session-5678"],
     });
   });
@@ -195,6 +269,27 @@ async function makeTempDir(prefix: string) {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), prefix));
   tempDirs.push(dir);
   return dir;
+}
+
+async function makeExecutable(params: { name: string; script: string }): Promise<string> {
+  const dir = await makeTempDir("openclaw-openshell-bin-");
+  const file = path.join(dir, params.name);
+  const logPath = path.join(dir, "openshell.log");
+  await fs.writeFile(file, params.script.replaceAll("__LOG__", logPath), { mode: 0o755 });
+  await fs.chmod(file, 0o755);
+  process.env.OPEN_SHELL_CLI_TEST_LOG = logPath;
+  return file;
+}
+
+async function expectPathMissing(targetPath: string): Promise<void> {
+  let error: unknown;
+  try {
+    await fs.stat(targetPath);
+  } catch (caught) {
+    error = caught;
+  }
+  expect(error).toBeInstanceOf(Error);
+  expect((error as NodeJS.ErrnoException).code).toBe("ENOENT");
 }
 
 afterEach(async () => {
@@ -273,9 +368,7 @@ describe("openshell fs bridges", () => {
         mkdir: true,
       }),
     ).rejects.toThrow("Sandbox path escapes allowed mounts");
-    await expect(fs.stat(path.join(outsideDir, "escape.txt"))).rejects.toMatchObject({
-      code: "ENOENT",
-    });
+    await expectPathMissing(path.join(outsideDir, "escape.txt"));
     await expect(fs.readdir(outsideDir)).resolves.toStrictEqual([]);
     expect(backend.syncLocalPathToRemote).not.toHaveBeenCalled();
   });

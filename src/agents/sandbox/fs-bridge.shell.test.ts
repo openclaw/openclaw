@@ -13,11 +13,11 @@ import {
 } from "./fs-bridge.test-helpers.js";
 
 function expectNoScriptsContaining(scripts: string[], needle: string) {
-  expect(scripts.some((script) => script.includes(needle))).toBe(false);
+  expect(scripts.join("\n")).not.toContain(needle);
 }
 
 function expectSomeScriptContaining(scripts: string[], needle: string) {
-  expect(scripts.some((script) => script.includes(needle))).toBe(true);
+  expect(scripts.join("\n")).toContain(needle);
 }
 
 function countMatching<T>(items: readonly T[], predicate: (item: T) => boolean): number {
@@ -54,7 +54,7 @@ describe("sandbox fs bridge shell compatibility", () => {
       await bridge.rename({ from: "a.txt", to: "c.txt" });
       await bridge.stat({ filePath: "c.txt" });
 
-      expect(mockedExecDockerRaw).toHaveBeenCalled();
+      expect(mockedExecDockerRaw).toHaveBeenCalledTimes(19);
 
       const scripts = getScriptsFromCalls();
       const executables = mockedExecDockerRaw.mock.calls.map(([args]) => args[3] ?? "");

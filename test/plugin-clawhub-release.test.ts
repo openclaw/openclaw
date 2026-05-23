@@ -61,7 +61,7 @@ describe("collectClawHubPublishablePluginPackages", () => {
     });
 
     expect(() => collectClawHubPublishablePluginPackages(repoDir)).toThrow(
-      "openclaw.compat.pluginApi is required for external code plugins published to ClawHub.",
+      "openclaw.compat.pluginApi is required for external code plugin packages.",
     );
   });
 
@@ -379,7 +379,7 @@ describe("collectClawHubOpenClawOwnerErrors", () => {
       ],
       registryBaseUrl: "https://clawhub.ai",
       fetchImpl: async (url) => {
-        const pathname = new URL(String(url)).pathname;
+        const pathname = new URL(url instanceof Request ? url.url : url).pathname;
         if (pathname.includes("%40openclaw%2Fmissing-plugin")) {
           return new Response("not found", { status: 404 });
         }

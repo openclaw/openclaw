@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveInstalledPluginIndexPolicyHash } from "./installed-plugin-index-policy.js";
 import type { PluginManifestRecord, PluginManifestRegistry } from "./manifest-registry.js";
+import { clearLoadPluginMetadataSnapshotMemo } from "./plugin-metadata-snapshot.js";
 import type { PluginRegistrySnapshot } from "./plugin-registry.js";
 
 const listPotentialConfiguredChannelIds = vi.hoisted(() => vi.fn());
@@ -141,18 +142,23 @@ async function expectStaleMetadataSnapshotRebuild(params: {
   });
 
   expect(loadPluginManifestRegistryForInstalledIndex).toHaveBeenCalledOnce();
-  expect(loadPluginManifestRegistryForInstalledIndex).toHaveBeenCalledWith(
-    expect.objectContaining({
-      index: requestedIndex,
-      config: params.config,
-      env: requestedEnv,
-    }),
-  );
+  expect(loadPluginManifestRegistryForInstalledIndex.mock.calls).toEqual([
+    [
+      {
+        index: requestedIndex,
+        config: params.config,
+        workspaceDir: undefined,
+        env: requestedEnv,
+        includeDisabled: true,
+      },
+    ],
+  ]);
   return { table, requestedRegistry };
 }
 
 describe("loadPluginLookUpTable", () => {
   beforeEach(() => {
+    clearLoadPluginMetadataSnapshotMemo();
     listPotentialConfiguredChannelIds
       .mockReset()
       .mockImplementation((config: OpenClawConfig) => Object.keys(config.channels ?? {}));
@@ -192,7 +198,7 @@ describe("loadPluginLookUpTable", () => {
             },
           },
         },
-        cliBackends: ["codex-cli"],
+        cliBackends: [],
         setup: {
           providers: [{ id: "openai" }],
         },
@@ -224,12 +230,10 @@ describe("loadPluginLookUpTable", () => {
 
     expect(table.manifestRegistry).toBe(manifestRegistry);
     expect(table.diagnostics).toEqual([indexDiagnostic, manifestDiagnostic]);
-    expect(table.metrics).toMatchObject({
-      indexPluginCount: 2,
-      manifestPluginCount: 2,
-      startupPluginCount: 1,
-      deferredChannelPluginCount: 0,
-    });
+    expect(table.metrics.indexPluginCount).toBe(2);
+    expect(table.metrics.manifestPluginCount).toBe(2);
+    expect(table.metrics.startupPluginCount).toBe(1);
+    expect(table.metrics.deferredChannelPluginCount).toBe(0);
     for (const metricName of [
       "registrySnapshotMs",
       "manifestRegistryMs",
@@ -246,7 +250,7 @@ describe("loadPluginLookUpTable", () => {
     expect(table.owners.providers.get("openai")).toEqual(["openai"]);
     expect(table.owners.modelCatalogProviders.get("openai")).toEqual(["openai"]);
     expect(table.owners.modelCatalogProviders.get("azure-openai-responses")).toEqual(["openai"]);
-    expect(table.owners.cliBackends.get("codex-cli")).toEqual(["openai"]);
+    expect(table.owners.cliBackends.get("codex-cli")).toBeUndefined();
     expect(table.owners.setupProviders.get("openai")).toEqual(["openai"]);
     expect(table.owners.commandAliases.get("telegram-send")).toEqual(["telegram"]);
     expect(table.owners.contracts.get("tools")).toEqual(["telegram"]);
@@ -351,12 +355,17 @@ describe("loadPluginLookUpTable", () => {
     });
 
     expect(loadPluginManifestRegistryForInstalledIndex).toHaveBeenCalledOnce();
-    expect(loadPluginManifestRegistryForInstalledIndex).toHaveBeenCalledWith(
-      expect.objectContaining({
-        index: requestedIndex,
-        config: requestedConfig,
-      }),
-    );
+    expect(loadPluginManifestRegistryForInstalledIndex.mock.calls).toEqual([
+      [
+        {
+          index: requestedIndex,
+          config: requestedConfig,
+          workspaceDir: undefined,
+          env: {},
+          includeDisabled: true,
+        },
+      ],
+    ]);
   });
 
   it("rebuilds when a provided metadata snapshot has stale plugin load paths", async () => {
@@ -402,12 +411,17 @@ describe("loadPluginLookUpTable", () => {
     });
 
     expect(loadPluginManifestRegistryForInstalledIndex).toHaveBeenCalledOnce();
-    expect(loadPluginManifestRegistryForInstalledIndex).toHaveBeenCalledWith(
-      expect.objectContaining({
-        index,
-        config: requestedConfig,
-      }),
-    );
+    expect(loadPluginManifestRegistryForInstalledIndex.mock.calls).toEqual([
+      [
+        {
+          index,
+          config: requestedConfig,
+          workspaceDir: undefined,
+          env: {},
+          includeDisabled: true,
+        },
+      ],
+    ]);
   });
 
   it("rebuilds when a provided metadata snapshot has stale env-resolved plugin load paths", async () => {

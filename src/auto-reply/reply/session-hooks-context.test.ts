@@ -135,6 +135,34 @@ async function initStoredSessionState(params: {
   });
 }
 
+function expectFields(value: unknown, expected: Record<string, unknown>): void {
+  if (!value || typeof value !== "object") {
+    throw new Error("expected fields object");
+  }
+  const record = value as Record<string, unknown>;
+  for (const [key, expectedValue] of Object.entries(expected)) {
+    expect(record[key], key).toEqual(expectedValue);
+  }
+}
+
+function requireHookCall(
+  mock: ReturnType<typeof vi.fn>,
+  label: string,
+): readonly [Record<string, unknown>, Record<string, unknown> | undefined] {
+  const call = mock.mock.calls[0];
+  if (!call) {
+    throw new Error(`expected ${label} hook call`);
+  }
+  const [event, context] = call;
+  if (!event || typeof event !== "object") {
+    throw new Error(`expected ${label} hook event`);
+  }
+  if (context !== undefined && (!context || typeof context !== "object")) {
+    throw new Error(`expected ${label} hook context`);
+  }
+  return [event as Record<string, unknown>, context as Record<string, unknown> | undefined];
+}
+
 describe("session hook context wiring", () => {
   beforeEach(() => {
     hookRunnerMocks.hasHooks.mockReset();
@@ -167,10 +195,9 @@ describe("session hook context wiring", () => {
     });
 
     expect(hookRunnerMocks.runSessionStart).toHaveBeenCalledTimes(1);
-    const [event, context] = hookRunnerMocks.runSessionStart.mock.calls[0] ?? [];
-    expect(event).toMatchObject({ sessionKey });
-    expect(context).toMatchObject({ sessionKey, agentId: "main" });
-    expect(context).toMatchObject({ sessionId: event?.sessionId });
+    const [event, context] = requireHookCall(hookRunnerMocks.runSessionStart, "session_start");
+    expectFields(event, { sessionKey });
+    expectFields(context, { sessionKey, agentId: "main", sessionId: event?.sessionId });
   });
 
   it("passes sessionKey to session_end hook context on reset", async () => {
@@ -190,20 +217,22 @@ describe("session hook context wiring", () => {
 
     expect(hookRunnerMocks.runSessionEnd).toHaveBeenCalledTimes(1);
     expect(hookRunnerMocks.runSessionStart).toHaveBeenCalledTimes(1);
-    const [event, context] = hookRunnerMocks.runSessionEnd.mock.calls[0] ?? [];
-    expect(event).toMatchObject({
+    const [event, context] = requireHookCall(hookRunnerMocks.runSessionEnd, "session_end");
+    expectFields(event, {
       sessionKey,
       reason: "new",
       transcriptArchived: true,
     });
-    expect(context).toMatchObject({ sessionKey, agentId: "main" });
-    expect(context).toMatchObject({ sessionId: event?.sessionId });
+    expectFields(context, { sessionKey, agentId: "main", sessionId: event?.sessionId });
     expect(event?.sessionFile).toContain(".jsonl.reset.");
 
-    const [startEvent, startContext] = hookRunnerMocks.runSessionStart.mock.calls[0] ?? [];
-    expect(startEvent).toMatchObject({ resumedFrom: "old-session" });
+    const [startEvent, startContext] = requireHookCall(
+      hookRunnerMocks.runSessionStart,
+      "session_start",
+    );
+    expectFields(startEvent, { resumedFrom: "old-session" });
     expect(event?.nextSessionId).toBe(startEvent?.sessionId);
-    expect(startContext).toMatchObject({ sessionId: startEvent?.sessionId });
+    expectFields(startContext, { sessionId: startEvent?.sessionId });
   });
 
   it("marks explicit /reset rollovers with reason reset", async () => {
@@ -222,8 +251,8 @@ describe("session hook context wiring", () => {
       commandAuthorized: true,
     });
 
-    const [event] = hookRunnerMocks.runSessionEnd.mock.calls[0] ?? [];
-    expect(event).toMatchObject({ reason: "reset" });
+    const [event] = requireHookCall(hookRunnerMocks.runSessionEnd, "session_end");
+    expectFields(event, { reason: "reset" });
   });
 
   it("maps custom reset trigger aliases to the new-session reason", async () => {
@@ -247,8 +276,8 @@ describe("session hook context wiring", () => {
       commandAuthorized: true,
     });
 
-    const [event] = hookRunnerMocks.runSessionEnd.mock.calls[0] ?? [];
-    expect(event).toMatchObject({ reason: "new" });
+    const [event] = requireHookCall(hookRunnerMocks.runSessionEnd, "session_end");
+    expectFields(event, { reason: "new" });
   });
 
   it("marks daily stale rollovers and exposes the archived transcript path", async () => {
@@ -264,9 +293,9 @@ describe("session hook context wiring", () => {
         updatedAt: new Date(2026, 0, 18, 3, 0, 0).getTime(),
       });
 
-      const [event] = hookRunnerMocks.runSessionEnd.mock.calls[0] ?? [];
-      const [startEvent] = hookRunnerMocks.runSessionStart.mock.calls[0] ?? [];
-      expect(event).toMatchObject({
+      const [event] = requireHookCall(hookRunnerMocks.runSessionEnd, "session_end");
+      const [startEvent] = requireHookCall(hookRunnerMocks.runSessionStart, "session_start");
+      expectFields(event, {
         reason: "daily",
         transcriptArchived: true,
       });
@@ -294,8 +323,8 @@ describe("session hook context wiring", () => {
         },
       });
 
-      const [event] = hookRunnerMocks.runSessionEnd.mock.calls[0] ?? [];
-      expect(event).toMatchObject({ reason: "idle" });
+      const [event] = requireHookCall(hookRunnerMocks.runSessionEnd, "session_end");
+      expectFields(event, { reason: "idle" });
     } finally {
       vi.useRealTimers();
     }
@@ -319,8 +348,8 @@ describe("session hook context wiring", () => {
         },
       });
 
-      const [event] = hookRunnerMocks.runSessionEnd.mock.calls[0] ?? [];
-      expect(event).toMatchObject({ reason: "idle" });
+      const [event] = requireHookCall(hookRunnerMocks.runSessionEnd, "session_end");
+      expectFields(event, { reason: "idle" });
     } finally {
       vi.useRealTimers();
     }

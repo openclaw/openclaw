@@ -12,6 +12,36 @@ export type AgentHarnessAttemptParams =
   import("../pi-embedded-runner/run/types.js").EmbeddedRunAttemptParams;
 export type AgentHarnessAttemptResult =
   import("../pi-embedded-runner/run/types.js").EmbeddedRunAttemptResult;
+export type AgentHarnessSideQuestionParams = {
+  cfg: import("../../config/types.openclaw.js").OpenClawConfig;
+  agentDir: string;
+  provider: string;
+  model: string;
+  runtimeModel?: import("@earendil-works/pi-ai").Model<import("@earendil-works/pi-ai").Api>;
+  question: string;
+  sessionEntry: import("../../config/sessions.js").SessionEntry;
+  sessionStore?: Record<string, import("../../config/sessions.js").SessionEntry>;
+  sessionKey?: string;
+  storePath?: string;
+  resolvedThinkLevel?: import("../../auto-reply/thinking.js").ThinkLevel;
+  resolvedReasoningLevel: import("../../auto-reply/thinking.js").ReasoningLevel;
+  blockReplyChunking?: import("../pi-embedded-block-chunker.js").BlockReplyChunking;
+  resolvedBlockStreamingBreak?: "text_end" | "message_end";
+  opts?: import("../../auto-reply/get-reply-options.types.js").GetReplyOptions;
+  isNewSession: boolean;
+  sessionId: string;
+  sessionFile: string;
+  agentId?: string;
+  workspaceDir?: string;
+  messageChannel?: string;
+  messageProvider?: string;
+  currentChannelId?: string;
+  authProfileId?: string;
+  authProfileIdSource?: "auto" | "user";
+};
+export type AgentHarnessSideQuestionResult = {
+  text: string;
+};
 export type AgentHarnessCompactParams =
   import("../pi-embedded-runner/compact.types.js").CompactEmbeddedPiSessionParams;
 export type AgentHarnessCompactResult =
@@ -29,8 +59,8 @@ export type AgentHarnessResultClassification =
 
 export type AgentHarnessDeliveryDefaults = {
   /**
-   * Preferred default for visible source replies when user config has not
-   * explicitly selected automatic or message-tool delivery.
+   * @deprecated Prefer `messages.visibleReplies` / `messages.groupChat.visibleReplies`
+   * config. Kept for existing harness plugins.
    */
   sourceVisibleReplies?: "automatic" | "message_tool";
 };
@@ -39,9 +69,16 @@ export type AgentHarness = {
   id: string;
   label: string;
   pluginId?: string;
+  /**
+   * Context-engine host capabilities provided by this harness during agent
+   * runs. Harnesses that omit this are unsupported for engines that declare
+   * host requirements.
+   */
+  contextEngineHostCapabilities?: readonly import("../../context-engine/types.js").ContextEngineHostCapability[];
   deliveryDefaults?: AgentHarnessDeliveryDefaults;
   supports(ctx: AgentHarnessSupportContext): AgentHarnessSupport;
   runAttempt(params: AgentHarnessAttemptParams): Promise<AgentHarnessAttemptResult>;
+  runSideQuestion?(params: AgentHarnessSideQuestionParams): Promise<AgentHarnessSideQuestionResult>;
   classify?(
     result: AgentHarnessAttemptResult,
     ctx: AgentHarnessAttemptParams,

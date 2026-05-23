@@ -3,8 +3,9 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import {
-  _resetIMessageShortIdState,
+  resetIMessageShortIdState,
   findLatestIMessageEntryForChat,
+  isKnownFromMeIMessageMessageId,
   rememberIMessageReplyCache,
   resolveIMessageMessageId,
 } from "./monitor-reply-cache.js";
@@ -33,7 +34,7 @@ afterAll(() => {
 });
 
 beforeEach(() => {
-  _resetIMessageShortIdState();
+  resetIMessageShortIdState();
   // Belt-and-suspenders: also nuke the persisted file directly. The
   // _reset helper does this when OPENCLAW_STATE_DIR is set, but explicitly
   // clearing here protects the test from any future refactor of _reset's
@@ -110,6 +111,52 @@ describe("imessage short message id resolution", () => {
     expect(() => resolveIMessageMessageId("full-guid", { chatContext: { chatId: 99 } })).toThrow(
       "belongs to a different chat",
     );
+  });
+
+  it("recognizes only cached outbound message ids as own messages", () => {
+    rememberIMessageReplyCache({
+      accountId: "default",
+      messageId: "outbound-guid",
+      chatGuid: "any;-;+12069106512",
+      chatIdentifier: "+12069106512",
+      chatId: 3,
+      timestamp: Date.now(),
+      isFromMe: true,
+    });
+    rememberIMessageReplyCache({
+      accountId: "default",
+      messageId: "inbound-guid",
+      chatGuid: "any;-;+12069106512",
+      chatIdentifier: "+12069106512",
+      chatId: 3,
+      timestamp: Date.now(),
+      isFromMe: false,
+    });
+
+    expect(
+      isKnownFromMeIMessageMessageId("outbound-guid", {
+        accountId: "default",
+        chatGuid: "any;-;+12069106512",
+        chatIdentifier: "+12069106512",
+        chatId: 3,
+      }),
+    ).toBe(true);
+    expect(
+      isKnownFromMeIMessageMessageId("inbound-guid", {
+        accountId: "default",
+        chatGuid: "any;-;+12069106512",
+        chatIdentifier: "+12069106512",
+        chatId: 3,
+      }),
+    ).toBe(false);
+    expect(
+      isKnownFromMeIMessageMessageId("outbound-guid", {
+        accountId: "default",
+        chatGuid: "any;-;+12069106514",
+        chatIdentifier: "+12069106514",
+        chatId: 4,
+      }),
+    ).toBe(false);
   });
 });
 
@@ -361,12 +408,12 @@ describe("hydrate-on-resolve (post-restart short-id persistence)", () => {
     expect(issued.shortId).not.toBe("");
 
     // Simulate a restart: clear the in-memory state but leave the JSONL on
-    // disk. _resetIMessageShortIdState only deletes the persisted file when
+    // disk. resetIMessageShortIdState only deletes the persisted file when
     // OPENCLAW_STATE_DIR is set, so we have to keep the file ourselves
     // since this test runs under the suite's temp state dir.
     const cachePath = path.join(tempStateDir, "imessage", "reply-cache.jsonl");
     const persisted = fs.readFileSync(cachePath, "utf8");
-    _resetIMessageShortIdState();
+    resetIMessageShortIdState();
     fs.mkdirSync(path.dirname(cachePath), { recursive: true });
     fs.writeFileSync(cachePath, persisted, "utf8");
 

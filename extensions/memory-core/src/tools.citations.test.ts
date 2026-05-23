@@ -4,6 +4,7 @@ import {
   clearMemoryPluginState,
   registerMemoryCorpusSupplement,
 } from "openclaw/plugin-sdk/memory-host-core";
+import { readMemoryHostEvents } from "openclaw/plugin-sdk/memory-host-events";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   getMemorySearchManagerMockCalls,
@@ -246,7 +247,22 @@ describe("memory tools", () => {
         },
       ]);
 
-      const tool = createMemorySearchToolOrThrow();
+      const tool = createMemorySearchToolOrThrow({
+        config: asOpenClawConfig({
+          agents: { list: [{ id: "main", default: true }] },
+          plugins: {
+            entries: {
+              "memory-core": {
+                config: {
+                  dreaming: {
+                    enabled: true,
+                  },
+                },
+              },
+            },
+          },
+        }),
+      });
       await tool.execute("call_recall_persist", { query: "glacier backup" });
 
       const storePath = path.join(workspaceDir, "memory", ".dreams", "short-term-recall.json");
@@ -256,10 +272,20 @@ describe("memory tools", () => {
       };
       const entries = Object.values(store.entries ?? {});
       expect(entries).toHaveLength(1);
-      expect(entries[0]).toMatchObject({
-        path: "memory/2026-04-03.md",
-        recallCount: 1,
+      const entry = entries[0];
+      expect(entry?.path).toBe("memory/2026-04-03.md");
+      expect(entry?.recallCount).toBe(1);
+      const events = await waitFor(async () => {
+        const memoryEvents = await readMemoryHostEvents({ workspaceDir });
+        expect(memoryEvents).toHaveLength(1);
+        return memoryEvents;
       });
+      const event = events[0];
+      expect(event?.type).toBe("memory.recall.recorded");
+      if (!event || event.type !== "memory.recall.recorded") {
+        throw new Error("expected memory recall recorded event");
+      }
+      expect(event.query).toBe("glacier backup");
     } finally {
       await fs.rm(workspaceDir, { recursive: true, force: true });
     }
@@ -283,7 +309,7 @@ describe("memory tools", () => {
     const tool = createMemorySearchToolOrThrow();
     const result = await tool.execute("call_wiki_only", { query: "alpha", corpus: "wiki" });
 
-    expect(result.details).toMatchObject({
+    expect(result.details).toStrictEqual({
       results: [
         {
           corpus: "wiki",
@@ -294,6 +320,12 @@ describe("memory tools", () => {
           snippet: "Alpha wiki entry",
         },
       ],
+      citations: "auto",
+      debug: undefined,
+      fallback: undefined,
+      mode: undefined,
+      model: undefined,
+      provider: undefined,
     });
     expect(getMemorySearchManagerMockCalls()).toBe(0);
   });

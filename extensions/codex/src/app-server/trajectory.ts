@@ -10,8 +10,9 @@ import {
   appendRegularFile,
   resolveRegularFileAppendFlags,
 } from "openclaw/plugin-sdk/security-runtime";
+import { resolveCodexLocalRuntimeAttribution } from "./local-runtime-attribution.js";
 
-type CodexTrajectoryRecorder = {
+export type CodexTrajectoryRecorder = {
   filePath: string;
   recordEvent: (type: string, data?: Record<string, unknown>) => void;
   flush: () => Promise<void>;
@@ -163,6 +164,7 @@ export function createCodexTrajectoryRecorder(
   });
   let queue = Promise.resolve();
   let seq = 0;
+  const attribution = resolveCodexLocalRuntimeAttribution(params.attempt);
 
   return {
     filePath,
@@ -180,9 +182,9 @@ export function createCodexTrajectoryRecorder(
         sessionKey: params.attempt.sessionKey,
         runId: params.attempt.runId,
         workspaceDir: params.cwd,
-        provider: params.attempt.provider,
+        provider: attribution.provider,
         modelId: params.attempt.modelId,
-        modelApi: params.attempt.model.api,
+        modelApi: attribution.api,
         data: data ? sanitizeValue(data) : undefined,
       };
       const line = boundedTrajectoryLine(event);

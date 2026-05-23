@@ -11,13 +11,18 @@ import type {
   ChannelMessageActionName,
 } from "openclaw/plugin-sdk/channel-contract";
 import { createLazyRuntimeNamedExport } from "openclaw/plugin-sdk/lazy-runtime";
-import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/text-runtime";
+import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
+import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { extractToolSend } from "openclaw/plugin-sdk/tool-send";
 import { resolveIMessageAccount } from "./accounts.js";
 import { IMESSAGE_ACTION_NAMES, IMESSAGE_ACTIONS } from "./actions-contract.js";
 import { DEFAULT_IMESSAGE_PROBE_TIMEOUT_MS } from "./constants.js";
 import { describeIMessageMessageTool } from "./message-tool-api.js";
-import { findLatestIMessageEntryForChat, type IMessageChatContext } from "./monitor-reply-cache.js";
+import {
+  findLatestIMessageEntryForChat,
+  rememberIMessageReplyCache,
+  type IMessageChatContext,
+} from "./monitor-reply-cache.js";
 import { getCachedIMessagePrivateApiStatus } from "./probe.js";
 import { parseIMessageTarget, type IMessageTarget } from "./targets.js";
 
@@ -25,6 +30,8 @@ const loadIMessageActionsRuntime = createLazyRuntimeNamedExport(
   () => import("./actions.runtime.js"),
   "imessageActionsRuntime",
 );
+
+const log = createSubsystemLogger("channels/imessage");
 
 const providerId = "imessage";
 
@@ -34,6 +41,24 @@ const SUPPORTED_ACTIONS = new Set<ChannelMessageActionName>([
 ]);
 function readMessageText(params: Record<string, unknown>): string | undefined {
   return readStringParam(params, "text") ?? readStringParam(params, "message");
+}
+
+function rememberOutboundBridgeMessage(params: {
+  accountId: string;
+  messageId?: string;
+  chatGuid: string;
+}): void {
+  const messageId = params.messageId?.trim();
+  if (!messageId || messageId === "ok" || messageId === "unknown") {
+    return;
+  }
+  rememberIMessageReplyCache({
+    accountId: params.accountId,
+    messageId,
+    chatGuid: params.chatGuid,
+    timestamp: Date.now(),
+    isFromMe: true,
+  });
 }
 
 /**
@@ -398,6 +423,15 @@ export const imessageMessageActions: ChannelMessageActionAdapter = {
         );
       }
       if (!privateApiStatus?.available) {
+        // Surface the silent-drop case: the throw becomes a tool-result
+        // `success:false`, which the model may or may not relay clearly to the
+        // user. Without a log line, an operator has no signal that a reply
+        // disappeared — they only see "channel: running" in `channels status`.
+        // Common cause: gateway restart un-injects the imsg-bridge-helper.dylib
+        // from Messages.app while imsg rpc keeps running.
+        log.warn(
+          `iMessage ${action} blocked: private API bridge unavailable (accountId=${account.accountId}, cliPath=${cliPathForProbe}). Run \`imsg launch\` to re-inject the dylib, then \`openclaw channels status\` to refresh.`,
+        );
         throw new Error(
           `iMessage ${action} requires the imsg private API bridge. Run imsg launch, then openclaw channels status to refresh capability detection.`,
         );
@@ -545,6 +579,11 @@ export const imessageMessageActions: ChannelMessageActionAdapter = {
         attachment: attachment?.spec ?? undefined,
         options: { ...opts, chatGuid: resolvedChatGuid },
       });
+      rememberOutboundBridgeMessage({
+        accountId: account.accountId,
+        messageId: result.messageId,
+        chatGuid: resolvedChatGuid,
+      });
       return jsonResult({ ok: true, messageId: result.messageId, repliedTo: resolvedMessageId });
     }
 
@@ -563,6 +602,11 @@ export const imessageMessageActions: ChannelMessageActionAdapter = {
         text,
         effectId,
         options: { ...opts, chatGuid: resolvedChatGuid },
+      });
+      rememberOutboundBridgeMessage({
+        accountId: account.accountId,
+        messageId: result.messageId,
+        chatGuid: resolvedChatGuid,
       });
       return jsonResult({ ok: true, messageId: result.messageId, effect: effectId });
     }
@@ -640,6 +684,11 @@ export const imessageMessageActions: ChannelMessageActionAdapter = {
         filename,
         asVoice: asVoice ?? undefined,
         options: { ...opts, chatGuid: resolvedChatGuid },
+      });
+      rememberOutboundBridgeMessage({
+        accountId: account.accountId,
+        messageId: result.messageId,
+        chatGuid: resolvedChatGuid,
       });
       return jsonResult({ ok: true, messageId: result.messageId });
     }

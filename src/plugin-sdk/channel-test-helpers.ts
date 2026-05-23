@@ -20,7 +20,11 @@ export {
 } from "./test-helpers/outbound-delivery.js";
 /** @deprecated Direct outbound delivery is runtime substrate; use channel message runtime helpers. */
 export { deliverOutboundPayloads } from "./test-helpers/outbound-delivery.js";
-export { createPluginRuntimeMock } from "./test-helpers/plugin-runtime-mock.js";
+export {
+  createPluginRuntimeMediaMock,
+  createPluginRuntimeMock,
+  type PluginRuntimeMediaMock,
+} from "./test-helpers/plugin-runtime-mock.js";
 export {
   createSendCfgThreadingRuntime,
   expectProvidedCfgSkipsRuntimeLoad,
@@ -47,3 +51,4 @@ export {
   formatLocalEnvelopeTimestamp,
 } from "./test-helpers/envelope-timestamp.js";
 export { expectPairingReplyText, extractPairingCode } from "./test-helpers/pairing-reply.js";
+export { stripAnsi } from "../terminal/ansi.js";

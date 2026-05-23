@@ -1,7 +1,6 @@
 import type {
   AllowlistMatch,
   ChannelGroupContext,
-  GroupPolicy,
   GroupToolPolicyConfig,
   MSTeamsChannelConfig,
   MSTeamsConfig,
@@ -10,7 +9,6 @@ import type {
 } from "../runtime-api.js";
 import {
   buildChannelKeyCandidates,
-  evaluateSenderGroupAccessForPolicy,
   normalizeChannelSlug,
   resolveAllowlistMatchSimple,
   resolveToolsBySender,
@@ -244,19 +242,4 @@ export function resolveMSTeamsReplyPolicy(params: {
     explicitReplyStyle ?? (requireMention ? "thread" : "top-level");
 
   return { requireMention, replyStyle };
-}
-
-export function isMSTeamsGroupAllowed(params: {
-  groupPolicy: GroupPolicy;
-  allowFrom: Array<string | number>;
-  senderId: string;
-  senderName?: string | null;
-  allowNameMatching?: boolean;
-}): boolean {
-  return evaluateSenderGroupAccessForPolicy({
-    groupPolicy: params.groupPolicy,
-    groupAllowFrom: params.allowFrom.map((entry) => String(entry)),
-    senderId: params.senderId,
-    isSenderAllowed: () => resolveMSTeamsAllowlistMatch(params).allowed,
-  }).allowed;
 }

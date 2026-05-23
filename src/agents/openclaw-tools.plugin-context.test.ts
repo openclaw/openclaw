@@ -10,12 +10,10 @@ describe("openclaw plugin tool context", () => {
       options: {
         config: {} as never,
         requesterSenderId: "trusted-sender",
-        senderIsOwner: true,
       },
     });
 
     expect(result.context.requesterSenderId).toBe("trusted-sender");
-    expect(result.context.senderIsOwner).toBe(true);
   });
 
   it("forwards fs policy for plugin tool sandbox enforcement", () => {
@@ -40,6 +38,38 @@ describe("openclaw plugin tool context", () => {
 
     expect(result.context.sessionKey).toBe("agent:main:telegram:direct:12345");
     expect(result.context.sessionId).toBe("a1b2c3d4-e5f6-7890-abcd-ef1234567890");
+  });
+
+  it("forwards runtime-owned active model metadata", () => {
+    const result = resolveOpenClawPluginToolInputs({
+      options: {
+        config: {} as never,
+        modelProvider: " local-provider ",
+        modelId: " local-model ",
+      },
+    });
+
+    expect(result.context.activeModel).toStrictEqual({
+      provider: "local-provider",
+      modelId: "local-model",
+      modelRef: "local-provider/local-model",
+    });
+  });
+
+  it("does not duplicate provider-qualified active model refs", () => {
+    const result = resolveOpenClawPluginToolInputs({
+      options: {
+        config: {} as never,
+        modelProvider: "openrouter",
+        modelId: "openrouter/auto",
+      },
+    });
+
+    expect(result.context.activeModel).toStrictEqual({
+      provider: "openrouter",
+      modelId: "openrouter/auto",
+      modelRef: "openrouter/auto",
+    });
   });
 
   it("infers the default agent workspace when workspaceDir is omitted", () => {

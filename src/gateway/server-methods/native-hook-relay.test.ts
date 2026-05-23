@@ -1,9 +1,9 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { __testing, registerNativeHookRelay } from "../../agents/harness/native-hook-relay.js";
+import { testing, registerNativeHookRelay } from "../../agents/harness/native-hook-relay.js";
 import { nativeHookRelayHandlers } from "./native-hook-relay.js";
 
 afterEach(() => {
-  __testing.clearNativeHookRelaysForTests();
+  testing.clearNativeHookRelaysForTests();
 });
 
 describe("native hook relay gateway method", () => {
@@ -35,7 +35,7 @@ describe("native hook relay gateway method", () => {
     });
 
     expect(respond).toHaveBeenCalledWith(true, { stdout: "", stderr: "", exitCode: 0 });
-    expect(__testing.getNativeHookRelayInvocationsForTests()).toHaveLength(1);
+    expect(testing.getNativeHookRelayInvocationsForTests()).toHaveLength(1);
   });
 
   it("rejects unknown relay ids", async () => {
@@ -55,14 +55,13 @@ describe("native hook relay gateway method", () => {
       context: {} as never,
     });
 
-    expect(respond).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({
-        code: "INVALID_REQUEST",
-        message: expect.stringContaining("not found"),
-      }),
-    );
+    const call = respond.mock.calls.at(0) as
+      | [boolean, unknown, { code?: string; message?: string }]
+      | undefined;
+    expect(call?.[0]).toBe(false);
+    expect(call?.[1]).toBeUndefined();
+    expect(call?.[2]?.code).toBe("INVALID_REQUEST");
+    expect(call?.[2]?.message).toContain("not found");
   });
 });
 

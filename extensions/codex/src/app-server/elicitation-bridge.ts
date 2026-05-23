@@ -40,7 +40,13 @@ const MCP_TOOL_APPROVAL_CONNECTOR_NAME_KEY = "connector_name";
 const MCP_TOOL_APPROVAL_TOOL_TITLE_KEY = "tool_title";
 const MCP_TOOL_APPROVAL_TOOL_DESCRIPTION_KEY = "tool_description";
 const MCP_TOOL_APPROVAL_TOOL_PARAMS_DISPLAY_KEY = "tool_params_display";
+const MCP_TOOL_APPROVAL_SOURCE_KEY = "source";
+const MCP_TOOL_APPROVAL_CONNECTOR_SOURCE = "connector";
+const CODEX_APPS_SERVER_NAME = "codex_apps";
+const COMPUTER_USE_APPROVAL_TITLE = "Computer Use approval";
+const EMPTY_OBJECT_SCHEMA: JsonObject = { type: "object", properties: {} };
 const PLUGIN_APP_ID_META_KEYS = ["app_id", "appId", "codex_app_id", "codexAppId"];
+const PLUGIN_CONNECTOR_ID_META_KEYS = ["connector_id", "connectorId"];
 const PLUGIN_NAME_META_KEYS = ["plugin_name", "pluginName", "codex_plugin_name", "codexPluginName"];
 const PLUGIN_CONFIG_KEY_META_KEYS = ["config_key", "configKey", "codex_config_key"];
 const PLUGIN_MARKETPLACE_NAME_META_KEYS = [
@@ -78,6 +84,7 @@ export async function handleCodexAppServerElicitationRequest(params: {
   threadId: string;
   turnId: string;
   pluginAppPolicyContext?: PluginAppPolicyContext;
+  computerUseMcpServerName?: string;
   signal?: AbortSignal;
 }): Promise<JsonValue | undefined> {
   const requestParams = isJsonObject(params.requestParams) ? params.requestParams : undefined;
@@ -106,7 +113,9 @@ export async function handleCodexAppServerElicitationRequest(params: {
     return buildPluginPolicyElicitationResponse(pluginResolution.entry, requestParams);
   }
 
-  const approvalPrompt = readBridgeableApprovalElicitation(requestParams);
+  const approvalPrompt =
+    readComputerUseApprovalElicitation(requestParams, params.computerUseMcpServerName) ??
+    readBridgeableApprovalElicitation(requestParams);
   if (!approvalPrompt) {
     return undefined;
   }
@@ -145,19 +154,31 @@ function resolvePluginElicitation(params: {
   if (!requestParams) {
     return { kind: "not_plugin" };
   }
-  const meta = isJsonObject(requestParams._meta) ? requestParams._meta : {};
+  const meta = isJsonObject(requestParams["_meta"]) ? requestParams["_meta"] : {};
   const context = params.pluginAppPolicyContext;
   const entries = context ? Object.values(context.apps) : [];
 
   const appId =
     readFirstString(meta, PLUGIN_APP_ID_META_KEYS) ??
     readFirstString(requestParams, PLUGIN_APP_ID_META_KEYS);
+  const connectorId = readFirstString(meta, PLUGIN_CONNECTOR_ID_META_KEYS);
+  const isCodexConnectorApproval = isCodexConnectorApprovalElicitation(requestParams, meta);
+  if (isCodexConnectorApproval && appId && connectorId && appId !== connectorId) {
+    return { kind: "decline", reason: "app_id_connector_id_mismatch" };
+  }
   if (appId) {
     if (!context) {
       return { kind: "decline", reason: "missing_policy_context" };
     }
     const entry = context.apps[appId];
     return uniquePluginMatch(entry ? [entry] : [], "app_id");
+  }
+  if (isCodexConnectorApproval && connectorId) {
+    if (!context) {
+      return { kind: "decline", reason: "missing_policy_context" };
+    }
+    const entry = context.apps[connectorId];
+    return uniquePluginMatch(entry ? [entry] : [], "connector_id");
   }
 
   const serverName = readString(requestParams, "serverName");
@@ -183,6 +204,14 @@ function resolvePluginElicitation(params: {
   }
 
   return { kind: "not_plugin" };
+}
+
+function isCodexConnectorApprovalElicitation(requestParams: JsonObject, meta: JsonObject): boolean {
+  return (
+    readString(requestParams, "serverName") === CODEX_APPS_SERVER_NAME &&
+    readString(meta, MCP_TOOL_APPROVAL_KIND_KEY) === MCP_TOOL_APPROVAL_KIND &&
+    readString(meta, MCP_TOOL_APPROVAL_SOURCE_KEY) === MCP_TOOL_APPROVAL_CONNECTOR_SOURCE
+  );
 }
 
 function resolvePluginStableMetadataMatch(params: {
@@ -269,7 +298,7 @@ function buildPluginPolicyElicitationResponse(
     logPluginElicitationDecline("unsupported_schema", requestParams);
     return declineElicitationResponse();
   }
-  const meta = isJsonObject(requestParams._meta) ? requestParams._meta : {};
+  const meta = isJsonObject(requestParams["_meta"]) ? requestParams["_meta"] : {};
   const response = buildElicitationResponse(requestParams.requestedSchema, meta, "approved-once");
   if (isJsonObject(response) && response.action === "accept") {
     return response;
@@ -296,8 +325,8 @@ function readBridgeableApprovalElicitation(
   if (
     !requestParams ||
     readString(requestParams, "mode") !== "form" ||
-    !isJsonObject(requestParams._meta) ||
-    requestParams._meta[MCP_TOOL_APPROVAL_KIND_KEY] !== MCP_TOOL_APPROVAL_KIND ||
+    !isJsonObject(requestParams["_meta"]) ||
+    requestParams["_meta"][MCP_TOOL_APPROVAL_KIND_KEY] !== MCP_TOOL_APPROVAL_KIND ||
     !isJsonObject(requestParams.requestedSchema)
   ) {
     return undefined;
@@ -317,12 +346,52 @@ function readBridgeableApprovalElicitation(
     title,
     description: buildApprovalDescription({
       title,
-      meta: requestParams._meta,
+      meta: requestParams["_meta"],
       requestedSchema,
       serverName: sanitizeOptionalDisplayText(readString(requestParams, "serverName")),
     }),
     requestedSchema,
-    meta: requestParams._meta,
+    meta: requestParams["_meta"],
+  };
+}
+
+function readComputerUseApprovalElicitation(
+  requestParams: JsonObject | undefined,
+  expectedServerName: string | undefined,
+): BridgeableApprovalElicitation | undefined {
+  const serverName = readString(requestParams, "serverName");
+  if (
+    !serverName ||
+    !expectedServerName ||
+    serverName !== expectedServerName ||
+    readString(requestParams, "mode") !== "form"
+  ) {
+    return undefined;
+  }
+
+  const requestedSchema = isJsonObject(requestParams?.requestedSchema)
+    ? requestParams.requestedSchema
+    : EMPTY_OBJECT_SCHEMA;
+  if (
+    readString(requestedSchema, "type") !== "object" ||
+    !isJsonObject(requestedSchema.properties)
+  ) {
+    return undefined;
+  }
+
+  const meta = isJsonObject(requestParams?.["_meta"]) ? requestParams["_meta"] : {};
+  const title =
+    sanitizeDisplayText(readString(requestParams, "message") ?? "") || COMPUTER_USE_APPROVAL_TITLE;
+  return {
+    title,
+    description: buildApprovalDescription({
+      title,
+      meta,
+      requestedSchema,
+      serverName: sanitizeOptionalDisplayText(serverName),
+    }),
+    requestedSchema,
+    meta,
   };
 }
 

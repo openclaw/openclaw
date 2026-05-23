@@ -1,13 +1,14 @@
 ---
-summary: "fal image and video generation setup in OpenClaw"
+summary: "fal image, video, and music generation setup in OpenClaw"
 title: "Fal"
 read_when:
   - You want to use fal image generation in OpenClaw
   - You need the FAL_KEY auth flow
-  - You want fal defaults for image_generate or video_generate
+  - You want fal defaults for image_generate, video_generate, or music_generate
 ---
 
-OpenClaw ships a bundled `fal` provider for hosted image and video generation.
+OpenClaw ships a bundled `fal` provider for hosted image, video, and music
+generation.
 
 | Property | Value                                                         |
 | -------- | ------------------------------------------------------------- |
@@ -43,17 +44,19 @@ OpenClaw ships a bundled `fal` provider for hosted image and video generation.
 The bundled `fal` image-generation provider defaults to
 `fal/fal-ai/flux/dev`.
 
-| Capability     | Value                      |
-| -------------- | -------------------------- |
-| Max images     | 4 per request              |
-| Edit mode      | Enabled, 1 reference image |
-| Size overrides | Supported                  |
-| Aspect ratio   | Supported                  |
-| Resolution     | Supported                  |
-| Output format  | `png` or `jpeg`            |
+| Capability     | Value                                                       |
+| -------------- | ----------------------------------------------------------- |
+| Max images     | 4 per request                                               |
+| Edit mode      | Flux: 1 reference image; GPT Image 2: 10; Nano Banana 2: 14 |
+| Size overrides | Supported                                                   |
+| Aspect ratio   | Supported for generate and GPT Image 2/Nano Banana 2 edit   |
+| Resolution     | Supported                                                   |
+| Output format  | `png` or `jpeg`                                             |
 
 <Warning>
-The fal image edit endpoint does **not** support `aspectRatio` overrides.
+Flux image-to-image requests do **not** support `aspectRatio` overrides. GPT
+Image 2 and Nano Banana 2 edit requests use fal's `/edit` endpoint and accept
+aspect-ratio hints.
 </Warning>
 
 Use `outputFormat: "png"` when you want PNG output. fal does not declare an
@@ -149,6 +152,35 @@ The bundled `fal` video-generation provider defaults to
   </Accordion>
 </AccordionGroup>
 
+## Music generation
+
+The bundled `fal` plugin also registers a music-generation provider for the
+shared `music_generate` tool.
+
+| Capability    | Value                                                                                                  |
+| ------------- | ------------------------------------------------------------------------------------------------------ |
+| Default model | `fal/fal-ai/minimax-music/v2.6`                                                                        |
+| Models        | `fal-ai/minimax-music/v2.6`, `fal-ai/ace-step/prompt-to-audio`, `fal-ai/stable-audio-25/text-to-audio` |
+| Runtime       | Synchronous request plus generated audio download                                                      |
+
+Use fal as the default music provider:
+
+```json5
+{
+  agents: {
+    defaults: {
+      musicGenerationModel: {
+        primary: "fal/fal-ai/minimax-music/v2.6",
+      },
+    },
+  },
+}
+```
+
+`fal-ai/minimax-music/v2.6` supports explicit lyrics and instrumental mode.
+ACE-Step and Stable Audio are prompt-to-audio endpoints; choose them with the
+`model` override when you want those model families.
+
 <Tip>
 Use `openclaw models list --provider fal` to see the full list of available fal
 models, including any recently added entries.
@@ -163,7 +195,10 @@ models, including any recently added entries.
   <Card title="Video generation" href="/tools/video-generation" icon="video">
     Shared video tool parameters and provider selection.
   </Card>
+  <Card title="Music generation" href="/tools/music-generation" icon="music">
+    Shared music tool parameters and provider selection.
+  </Card>
   <Card title="Configuration reference" href="/gateway/config-agents#agent-defaults" icon="gear">
-    Agent defaults including image and video model selection.
+    Agent defaults including image, video, and music model selection.
   </Card>
 </CardGroup>

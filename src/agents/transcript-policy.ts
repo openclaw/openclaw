@@ -7,10 +7,7 @@ import type { ProviderRuntimeModel } from "../plugins/provider-runtime-model.typ
 import type { ProviderReplayPolicy } from "../plugins/types.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { normalizeProviderId } from "./model-selection.js";
-import {
-  isGemma4ModelRequiringReasoningStrip,
-  isGoogleModelApi,
-} from "./pi-embedded-helpers/google.js";
+import { isGoogleModelApi } from "./pi-embedded-helpers/google.js";
 import type { ToolCallIdMode } from "./tool-call-id.js";
 
 export type TranscriptSanitizeMode = "full" | "images-only";
@@ -84,6 +81,11 @@ function isClaudeFamilyModelId(modelId?: string | null): boolean {
   return /(?:^|[./:_-])claude(?:$|[./:_-])/.test(id);
 }
 
+function modelDisablesReasoningEffort(model?: ProviderRuntimeModel): boolean {
+  const compat = model?.compat as { supportsReasoningEffort?: boolean } | undefined;
+  return compat?.supportsReasoningEffort === false;
+}
+
 /**
  * Provides a narrow replay-policy fallback for providers that do not have an
  * owning runtime plugin.
@@ -94,6 +96,7 @@ function isClaudeFamilyModelId(modelId?: string | null): boolean {
 function buildUnownedProviderTransportReplayFallback(params: {
   modelApi?: string | null;
   modelId?: string | null;
+  model?: ProviderRuntimeModel;
 }): ProviderReplayPolicy | undefined {
   const isGoogle = isGoogleModelApi(params.modelApi);
   const isAnthropic = isAnthropicApi(params.modelApi);
@@ -137,16 +140,49 @@ function buildUnownedProviderTransportReplayFallback(params: {
     ...(isAnthropic && modelId.includes("claude")
       ? { dropThinkingBlocks: !shouldPreserveThinkingBlocks(modelId) }
       : {}),
-    ...(isStrictOpenAiCompatible && isGemma4ModelRequiringReasoningStrip(modelId)
-      ? { dropReasoningFromHistory: true }
+    ...(isAnthropic && modelDisablesReasoningEffort(params.model)
+      ? { dropThinkingBlocks: true }
+      : {}),
+    ...(isStrictOpenAiCompatible
+      ? { dropReasoningFromHistory: !requiresReasoningContentReplay(params.modelId) }
       : {}),
     ...(isGoogle || isStrictOpenAiCompatible ? { applyAssistantFirstOrderingFix: true } : {}),
     ...(isGoogle || isStrictOpenAiCompatible ? { validateGeminiTurns: true } : {}),
     ...(isAnthropic || isStrictOpenAiCompatible || isClaudeOpenAiResponses
       ? { validateAnthropicTurns: true }
       : {}),
-    ...(isGoogle || isAnthropic ? { allowSyntheticToolResults: true } : {}),
+    ...(isGoogle || isAnthropic || isOpenAiResponsesCompatibleApi(params.modelApi)
+      ? { allowSyntheticToolResults: true }
+      : {}),
   };
+}
+
+const REASONING_CONTENT_REPLAY_MODEL_IDS = new Set([
+  "kimi-for-coding",
+  "kimi-k2.5",
+  "kimi-k2.6",
+  "kimi-k2-thinking",
+  "kimi-k2-thinking-turbo",
+  "mimo-v2-pro",
+  "mimo-v2-omni",
+  "mimo-v2.5",
+  "mimo-v2.5-pro",
+  "mimo-v2.6-pro",
+]);
+
+function requiresReasoningContentReplay(modelId: string | null | undefined): boolean {
+  const normalized = normalizeLowercaseStringOrEmpty(modelId);
+  if (!normalized) {
+    return false;
+  }
+  const parts = normalized.split("/").filter(Boolean);
+  const finalPart = parts[parts.length - 1] ?? normalized;
+  const candidates = [finalPart];
+  const colonParts = finalPart.split(":").filter(Boolean);
+  if (colonParts.length > 1) {
+    candidates.push(colonParts[0] ?? "", colonParts[colonParts.length - 1] ?? "");
+  }
+  return candidates.some((candidate) => REASONING_CONTENT_REPLAY_MODEL_IDS.has(candidate));
 }
 
 function mergeTranscriptPolicy(
@@ -213,6 +249,7 @@ function resolveTranscriptPolicyCacheKey(params: {
   modelApi?: string | null;
   provider: string;
   modelId?: string | null;
+  model?: ProviderRuntimeModel;
   config: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
@@ -221,6 +258,7 @@ function resolveTranscriptPolicyCacheKey(params: {
     provider: params.provider,
     modelApi: params.modelApi ?? "",
     modelId: params.modelId ?? "",
+    dropsThinkingForReasoningCompat: modelDisablesReasoningEffort(params.model),
     workspaceDir: params.workspaceDir ?? "",
     pluginControlPlane: resolvePluginControlPlaneFingerprint({
       config: params.config,
@@ -280,6 +318,7 @@ export function resolveTranscriptPolicy(params: {
         buildUnownedProviderTransportReplayFallback({
           modelApi: params.modelApi,
           modelId: params.modelId,
+          model: params.model,
         }),
       );
   if (cacheConfig && cacheKey) {

@@ -23,8 +23,11 @@ SKIP_PREVIOUS="${OPENCLAW_INSTALL_E2E_SKIP_PREVIOUS:-0}"
 OPENAI_API_KEY="${OPENAI_API_KEY:-}"
 ANTHROPIC_API_KEY="${ANTHROPIC_API_KEY:-}"
 ANTHROPIC_API_TOKEN="${ANTHROPIC_API_TOKEN:-}"
-AGENT_TURN_TIMEOUT_SECONDS="${OPENCLAW_INSTALL_E2E_AGENT_TURN_TIMEOUT_SECONDS:-600}"
+AGENT_TURN_TIMEOUT_SECONDS="${OPENCLAW_INSTALL_E2E_AGENT_TURN_TIMEOUT_SECONDS:-300}"
 AGENT_TURNS_PARALLEL="${OPENCLAW_INSTALL_E2E_AGENT_TURNS_PARALLEL:-1}"
+AGENT_TOOL_SMOKE="${OPENCLAW_INSTALL_E2E_AGENT_TOOL_SMOKE:-1}"
+OPENAI_AGENT_MODEL="${OPENCLAW_INSTALL_E2E_OPENAI_MODEL:-openai/gpt-5.5}"
+OPENAI_PROVIDER_TIMEOUT_SECONDS="${OPENCLAW_INSTALL_E2E_OPENAI_PROVIDER_TIMEOUT_SECONDS:-${AGENT_TURN_TIMEOUT_SECONDS}}"
 
 time_phase() {
   local name="$1"
@@ -294,6 +297,8 @@ NODE
 }
 
 RUN_AGENT_TURN_BG_PID=""
+AGENT_TURN_BILLING_DRIFT_STATUS=42
+CURRENT_AGENT_MODEL_PROVIDER=""
 
 run_agent_turn_logged() {
   local label="$1"
@@ -305,8 +310,31 @@ run_agent_turn_logged() {
   SESSION_JSONL="$(session_jsonl_path "$profile" "$session_id")"
   started_at="$(date +%s)"
   echo "==> Agent turn start: $label ($profile)"
-  run_agent_turn "$profile" "$session_id" "$prompt" "$out_json"
+  local status=0
+  run_agent_turn "$profile" "$session_id" "$prompt" "$out_json" || status="$?"
+  if [[ "$status" -ne 0 ]]; then
+    if agent_turn_outputs_include_billing_drift "$CURRENT_AGENT_MODEL_PROVIDER" "$out_json"; then
+      return "$AGENT_TURN_BILLING_DRIFT_STATUS"
+    fi
+    return "$status"
+  fi
   echo "==> Agent turn passed: $label ($profile, $(($(date +%s) - started_at))s)"
+}
+
+skip_profile_for_billing_drift() {
+  local profile="$1"
+  echo "SKIP: Anthropic billing drift during installer agent tool smoke ($profile)"
+  cleanup_profile
+  trap - EXIT
+}
+
+run_agent_turn_logged_or_skip_profile() {
+  local status=0
+  run_agent_turn_logged "$@" || status="$?"
+  if [[ "$status" -eq "$AGENT_TURN_BILLING_DRIFT_STATUS" ]]; then
+    skip_profile_for_billing_drift "$2"
+  fi
+  return "$status"
 }
 
 run_agent_turn_bg() {
@@ -331,6 +359,21 @@ wait_agent_turn_batch() {
     fi
   done
   return "$failed"
+}
+
+agent_turn_outputs_include_billing_drift() {
+  local provider="$1"
+  shift
+  if [[ "$provider" != "anthropic" ]]; then
+    return 1
+  fi
+  local output
+  for output in "$@"; do
+    if [[ -f "$output" ]] && grep -Eiq "credit balance is too low|billing has been disabled|insufficient credit|monthly limit exceeded" "$output"; then
+      return 0
+    fi
+  done
+  return 1
 }
 
 dump_profile_debug() {
@@ -533,6 +576,7 @@ run_profile() {
   local port="$2"
   local workspace="$3"
   local agent_model_provider="$4" # "openai"|"anthropic"
+  CURRENT_AGENT_MODEL_PROVIDER="$agent_model_provider"
 
   phase_mark_start "Onboard ($profile)"
 	  if [[ "$agent_model_provider" == "openai" ]]; then
@@ -604,8 +648,10 @@ run_profile() {
   local image_model
   if [[ "$agent_model_provider" == "openai" ]]; then
     agent_model="$(set_agent_model "$profile" \
+      "$OPENAI_AGENT_MODEL" \
       "openai/gpt-5.5" \
       "openai/gpt-5.4-mini")"
+    openclaw --profile "$profile" config set models.providers.openai "{\"baseUrl\":\"https://api.openai.com/v1\",\"models\":[],\"timeoutSeconds\":${OPENAI_PROVIDER_TIMEOUT_SECONDS},\"agentRuntime\":{\"id\":\"pi\"}}" --strict-json >/dev/null
     image_model="$(set_image_model "$profile" \
       "openai/gpt-5.4-image-2")"
   else
@@ -648,7 +694,6 @@ run_profile() {
   trap cleanup_profile EXIT
   phase_mark_passed "Start gateway ($profile)"
 
-  TURN1_JSON="/tmp/agent-${profile}-1.json"
   TURN2_JSON="/tmp/agent-${profile}-2.json"
   TURN2B_JSON="/tmp/agent-${profile}-2b.json"
   TURN3_JSON="/tmp/agent-${profile}-3.json"
@@ -670,11 +715,15 @@ run_profile() {
   fi
   phase_mark_passed "Wait for health ($profile)"
 
+  if [[ "$AGENT_TOOL_SMOKE" == "0" ]]; then
+    echo "Skip agent tool smoke ($profile, OPENCLAW_INSTALL_E2E_AGENT_TOOL_SMOKE=0)"
+    cleanup_profile
+    trap - EXIT
+    return 0
+  fi
+
   phase_mark_start "Agent turns ($profile)"
 
-  TURN1_SESSION_ID="${SESSION_ID_PREFIX}-read-proof"
-  local prompt1
-  prompt1="Use the read tool (not exec) to read ${PROOF_TXT}. Reply with the exact contents only (no extra whitespace)."
   local prompt2
   prompt2=$'Use the write tool (not exec) to write exactly this string into '"${PROOF_COPY}"$':\n'"${PROOF_VALUE}"$'\nReply with exactly: WROTE'
   local prompt3
@@ -687,10 +736,11 @@ run_profile() {
   TURN3_SESSION_ID="${SESSION_ID_PREFIX}-exec-hostname"
   TURN3B_SESSION_ID="${SESSION_ID_PREFIX}-write-hostname"
   TURN4_SESSION_ID="${SESSION_ID_PREFIX}-image-write"
+  # The read tool is verified below by reading the generated copy. Keep the
+  # initial parallel batch focused so slow hosted providers do not burn one
+  # redundant agent turn during release package acceptance.
   if [[ "$AGENT_TURNS_PARALLEL" == "1" ]]; then
     local turn_pids=()
-    run_agent_turn_bg "read proof" "$profile" "$TURN1_SESSION_ID" "$prompt1" "$TURN1_JSON"
-    turn_pids+=("$RUN_AGENT_TURN_BG_PID")
     run_agent_turn_bg "write proof copy" "$profile" "$TURN2_SESSION_ID" "$prompt2" "$TURN2_JSON"
     turn_pids+=("$RUN_AGENT_TURN_BG_PID")
     run_agent_turn_bg "exec hostname" "$profile" "$TURN3_SESSION_ID" "$prompt3" "$TURN3_JSON"
@@ -699,22 +749,35 @@ run_profile() {
     turn_pids+=("$RUN_AGENT_TURN_BG_PID")
     run_agent_turn_bg "image write" "$profile" "$TURN4_SESSION_ID" "$prompt4" "$TURN4_JSON"
     turn_pids+=("$RUN_AGENT_TURN_BG_PID")
-    wait_agent_turn_batch "${turn_pids[@]}"
+    if ! wait_agent_turn_batch "${turn_pids[@]}"; then
+      if agent_turn_outputs_include_billing_drift "$agent_model_provider" "$TURN2_JSON" "$TURN3_JSON" "$TURN3B_JSON" "$TURN4_JSON"; then
+        skip_profile_for_billing_drift "$profile"
+        return 0
+      fi
+      return 1
+    fi
   else
-    run_agent_turn_logged "read proof" "$profile" "$TURN1_SESSION_ID" "$prompt1" "$TURN1_JSON"
-    run_agent_turn_logged "write proof copy" "$profile" "$TURN2_SESSION_ID" "$prompt2" "$TURN2_JSON"
-    run_agent_turn_logged "exec hostname" "$profile" "$TURN3_SESSION_ID" "$prompt3" "$TURN3_JSON"
-    run_agent_turn_logged "write hostname" "$profile" "$TURN3B_SESSION_ID" "$prompt3b" "$TURN3B_JSON"
-    run_agent_turn_logged "image write" "$profile" "$TURN4_SESSION_ID" "$prompt4" "$TURN4_JSON"
-  fi
-
-  assert_agent_json_has_text "$TURN1_JSON"
-  assert_agent_json_ok "$TURN1_JSON" "$agent_model_provider"
-  local reply1
-  reply1="$(extract_matching_text "$TURN1_JSON" "$PROOF_VALUE" | tr -d '\r\n')"
-  if [[ "$reply1" != "$PROOF_VALUE" ]]; then
-    echo "ERROR: agent did not read proof.txt correctly ($profile): $reply1" >&2
-    exit 1
+    local turn_status=0
+    run_agent_turn_logged_or_skip_profile "write proof copy" "$profile" "$TURN2_SESSION_ID" "$prompt2" "$TURN2_JSON" || turn_status="$?"
+    if [[ "$turn_status" -ne 0 ]]; then
+      [[ "$turn_status" -eq "$AGENT_TURN_BILLING_DRIFT_STATUS" ]] && return 0
+      return "$turn_status"
+    fi
+    run_agent_turn_logged_or_skip_profile "exec hostname" "$profile" "$TURN3_SESSION_ID" "$prompt3" "$TURN3_JSON" || turn_status="$?"
+    if [[ "$turn_status" -ne 0 ]]; then
+      [[ "$turn_status" -eq "$AGENT_TURN_BILLING_DRIFT_STATUS" ]] && return 0
+      return "$turn_status"
+    fi
+    run_agent_turn_logged_or_skip_profile "write hostname" "$profile" "$TURN3B_SESSION_ID" "$prompt3b" "$TURN3B_JSON" || turn_status="$?"
+    if [[ "$turn_status" -ne 0 ]]; then
+      [[ "$turn_status" -eq "$AGENT_TURN_BILLING_DRIFT_STATUS" ]] && return 0
+      return "$turn_status"
+    fi
+    run_agent_turn_logged_or_skip_profile "image write" "$profile" "$TURN4_SESSION_ID" "$prompt4" "$TURN4_JSON" || turn_status="$?"
+    if [[ "$turn_status" -ne 0 ]]; then
+      [[ "$turn_status" -eq "$AGENT_TURN_BILLING_DRIFT_STATUS" ]] && return 0
+      return "$turn_status"
+    fi
   fi
 
   assert_agent_json_has_text "$TURN2_JSON"
@@ -726,9 +789,14 @@ run_profile() {
     exit 1
   fi
   TURN2B_SESSION_ID="${SESSION_ID_PREFIX}-read-copy"
-  run_agent_turn_logged "read proof copy" "$profile" "$TURN2B_SESSION_ID" \
+  local read_turn_status=0
+  run_agent_turn_logged_or_skip_profile "read proof copy" "$profile" "$TURN2B_SESSION_ID" \
     "Use the read tool (not exec) to read ${PROOF_COPY}. Reply with the exact contents only (no extra whitespace)." \
-    "$TURN2B_JSON"
+    "$TURN2B_JSON" || read_turn_status="$?"
+  if [[ "$read_turn_status" -ne 0 ]]; then
+    [[ "$read_turn_status" -eq "$AGENT_TURN_BILLING_DRIFT_STATUS" ]] && return 0
+    return "$read_turn_status"
+  fi
   assert_agent_json_has_text "$TURN2B_JSON"
   assert_agent_json_ok "$TURN2B_JSON" "$agent_model_provider"
   local reply2
@@ -770,7 +838,6 @@ run_profile() {
   phase_mark_start "Verify tool usage via session transcript ($profile)"
   # Give the gateway a moment to flush transcripts.
   sleep 1
-  assert_session_used_tools "$(session_jsonl_path "$profile" "$TURN1_SESSION_ID")" read
   assert_session_used_tools "$(session_jsonl_path "$profile" "$TURN2_SESSION_ID")" write
   assert_session_used_tools "$(session_jsonl_path "$profile" "$TURN2B_SESSION_ID")" read
   assert_session_used_tools "$(session_jsonl_path "$profile" "$TURN3_SESSION_ID")" exec

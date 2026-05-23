@@ -55,6 +55,14 @@ describe("media understanding attachments SSRF", () => {
     vi.restoreAllMocks();
   });
 
+  function requireFirstOpenCall(openSpy: ReturnType<typeof vi.spyOn>): unknown[] {
+    const [call] = openSpy.mock.calls;
+    if (!call) {
+      throw new Error("expected fs.open call");
+    }
+    return call;
+  }
+
   it("blocks private IP URLs before fetching", async () => {
     const fetchSpy = vi.fn();
     globalThis.fetch = withFetchPreconnect(fetchSpy);
@@ -97,6 +105,28 @@ describe("media understanding attachments SSRF", () => {
       size: 5,
     });
     expect(fetchSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("uses fetched content type instead of wildcard selection hints", async () => {
+    const url = "http://198.18.0.153/image";
+    const fetchSpy = vi.fn().mockResolvedValue(
+      new Response("image", {
+        headers: { "content-type": "image/png" },
+      }),
+    );
+    globalThis.fetch = withFetchPreconnect(fetchSpy);
+    const cache = new MediaAttachmentCache([{ index: 0, url, mime: "image/*" }], {
+      ssrfPolicy: { allowRfc2544BenchmarkRange: true },
+    });
+
+    const result = await cache.getBuffer({
+      attachmentIndex: 0,
+      maxBytes: 1024,
+      timeoutMs: 1000,
+    });
+
+    expect(result.mime).toBe("image/png");
+    expect(result.fileName).toBe("image.png");
   });
 
   it("reads local attachments inside configured roots", async () => {
@@ -212,7 +242,7 @@ describe("media understanding attachments SSRF", () => {
         await cache.getBuffer({ attachmentIndex: 0, maxBytes: 1024, timeoutMs: 1000 });
 
         expect(openSpy).toHaveBeenCalled();
-        const [openedPath, openedFlags] = openSpy.mock.calls[0] ?? [];
+        const [openedPath, openedFlags] = requireFirstOpenCall(openSpy);
         expect(await fs.realpath(String(openedPath)).catch(() => String(openedPath))).toBe(
           canonicalAttachmentPath,
         );

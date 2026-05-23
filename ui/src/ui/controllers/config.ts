@@ -6,6 +6,7 @@ import { coerceFormValues } from "./config/form-coerce.ts";
 import {
   cloneConfigObject,
   removePathValue,
+  sanitizeRedactedFormForSubmit,
   serializeConfigForm,
   setPathValue,
 } from "./config/form-utils.ts";
@@ -39,6 +40,8 @@ export type ConfigState = {
   updateStatusBanner: { tone: "danger" | "warn" | "info"; text: string } | null;
   lastError: string | null;
 };
+
+const autoAllowlistedPluginIdsByState = new WeakMap<ConfigState, Set<string>>();
 
 export type LoadConfigOptions = {
   discardPendingChanges?: boolean;
@@ -118,6 +121,7 @@ export function applyConfigSnapshot(
     state.configRawOriginal = rawFromSnapshot;
     state.configFormDirty = false;
     state.configDraftBaseHash = snapshot.hash ?? null;
+    autoAllowlistedPluginIdsByState.delete(state);
   } else {
     state.configDraftBaseHash = draftBaseHash;
   }
@@ -149,7 +153,12 @@ function serializeFormForSubmit(state: ConfigState): string {
   const form = schema
     ? (coerceFormValues(state.configForm, schema) as Record<string, unknown>)
     : state.configForm;
-  return serializeConfigForm(form);
+  const sanitized = sanitizeRedactedFormForSubmit(
+    form,
+    state.configFormOriginal,
+    state.configRawOriginal,
+  );
+  return serializeConfigForm(sanitized);
 }
 
 type ConfigSubmitMethod = "config.set" | "config.apply";
@@ -210,6 +219,7 @@ async function submitConfigChange(
     await state.client.request(method, { raw, baseHash, ...extraParams });
     state.configFormDirty = false;
     state.configDraftBaseHash = null;
+    autoAllowlistedPluginIdsByState.delete(state);
     await loadConfig(state);
     return true;
   } catch (err) {
@@ -279,12 +289,88 @@ function mutateConfigForm(state: ConfigState, mutate: (draft: Record<string, unk
   syncConfigDraft(state, base);
 }
 
+function trackAutoAllowlistedPluginId(state: ConfigState, pluginId: string) {
+  const pluginIds = autoAllowlistedPluginIdsByState.get(state);
+  if (pluginIds) {
+    pluginIds.add(pluginId);
+  } else {
+    autoAllowlistedPluginIdsByState.set(state, new Set([pluginId]));
+  }
+}
+
+function untrackAutoAllowlistedPluginId(state: ConfigState, pluginId: string) {
+  const pluginIds = autoAllowlistedPluginIdsByState.get(state);
+  if (!pluginIds) {
+    return;
+  }
+  pluginIds.delete(pluginId);
+  if (pluginIds.size === 0) {
+    autoAllowlistedPluginIdsByState.delete(state);
+  }
+}
+
+function syncEnabledPluginAllowlist(
+  state: ConfigState,
+  draft: Record<string, unknown>,
+  path: Array<string | number>,
+  value: unknown,
+) {
+  if (
+    path.length !== 4 ||
+    path[0] !== "plugins" ||
+    path[1] !== "entries" ||
+    typeof path[2] !== "string" ||
+    path[3] !== "enabled"
+  ) {
+    return;
+  }
+  const pluginId = path[2];
+  const plugins =
+    draft.plugins && typeof draft.plugins === "object" && !Array.isArray(draft.plugins)
+      ? (draft.plugins as Record<string, unknown>)
+      : null;
+  const allow = Array.isArray(plugins?.allow) ? plugins.allow : null;
+  if (!allow) {
+    untrackAutoAllowlistedPluginId(state, pluginId);
+    return;
+  }
+  if (value === true) {
+    if (allow.includes(pluginId)) {
+      return;
+    }
+    if (allow.length === 0) {
+      untrackAutoAllowlistedPluginId(state, pluginId);
+      return;
+    }
+    setPathValue(draft, ["plugins", "allow"], [...allow, pluginId]);
+    trackAutoAllowlistedPluginId(state, pluginId);
+    return;
+  }
+  const autoAllowlistedPluginIds = autoAllowlistedPluginIdsByState.get(state);
+  if (!autoAllowlistedPluginIds?.has(pluginId)) {
+    return;
+  }
+  setPathValue(
+    draft,
+    ["plugins", "allow"],
+    allow.filter((entry) => entry !== pluginId),
+  );
+  untrackAutoAllowlistedPluginId(state, pluginId);
+}
+
 export function updateConfigFormValue(
   state: ConfigState,
   path: Array<string | number>,
   value: unknown,
 ) {
-  mutateConfigForm(state, (draft) => setPathValue(draft, path, value));
+  mutateConfigForm(state, (draft) => {
+    setPathValue(draft, path, value);
+    if (path[0] === "plugins" && path[1] === "allow") {
+      autoAllowlistedPluginIdsByState.delete(state);
+      return;
+    }
+    syncEnabledPluginAllowlist(state, draft, path, value);
+  });
 }
 
 export function stageConfigPreset(state: ConfigState, patch: Record<string, unknown>) {
@@ -315,6 +401,7 @@ export function resetConfigPendingChanges(state: ConfigState) {
     serializeConfigForm(state.configFormOriginal ?? state.configSnapshot?.config ?? {});
   state.configFormDirty = false;
   state.configDraftBaseHash = state.configSnapshot?.hash ?? null;
+  autoAllowlistedPluginIdsByState.delete(state);
 }
 
 export function removeConfigFormValue(state: ConfigState, path: Array<string | number>) {

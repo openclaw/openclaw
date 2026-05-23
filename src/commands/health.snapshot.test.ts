@@ -42,6 +42,12 @@ type DiscordHealthAccount = {
   configured: boolean;
 };
 
+type IMessageHealthAccount = {
+  accountId: string;
+  enabled: boolean;
+  configured: boolean;
+};
+
 async function loadFreshHealthModulesForTest() {
   vi.doMock("../config/config.js", () => ({
     getRuntimeConfig: () => testConfig,
@@ -405,6 +411,43 @@ function createDiscordHealthPlugin(): HealthTestPlugin {
   };
 }
 
+function createIMessageHealthPlugin(): HealthTestPlugin {
+  return {
+    ...createChannelTestPluginBase({ id: "imessage", label: "iMessage" }),
+    config: {
+      listAccountIds: () => ["default"],
+      resolveAccount: (_cfg, accountId) => ({
+        accountId: accountId?.trim() || "default",
+        enabled: true,
+        configured: true,
+      }),
+      inspectAccount: (_cfg, accountId) => ({
+        accountId: accountId?.trim() || "default",
+        enabled: true,
+        configured: true,
+      }),
+      isEnabled: (account) => (account as IMessageHealthAccount).enabled,
+      isConfigured: (account) => (account as IMessageHealthAccount).configured,
+    },
+    status: {
+      buildChannelSummary: ({ snapshot }) => ({
+        accountId: snapshot.accountId,
+        configured: Boolean(snapshot.configured),
+        ...(snapshot.probe && typeof snapshot.probe === "object" ? { probe: snapshot.probe } : {}),
+      }),
+      probeAccount: async () => ({
+        ok: false,
+        error:
+          "imsg cannot access /Users/alice/Library/Messages/chat.db. Grant Full Disk Access to the Gateway/launcher process and restart Gateway. privateApi=/tmp/openclaw/private.sock",
+        privateApi: {
+          rpcCommand: "imsg rpc --json",
+          diagnostics: "sensitive transport details",
+        },
+      }),
+    },
+  };
+}
+
 describe("getHealthSnapshot", () => {
   beforeAll(async () => {
     ({
@@ -514,8 +557,8 @@ describe("getHealthSnapshot", () => {
     expect(telegram.probe?.ok).toBe(true);
     expect(telegram.probe?.bot?.username).toBe("bot");
     expect(telegram.probe?.webhook?.url).toMatch(/^https:/);
-    expect(calls).toEqual(expect.arrayContaining([expect.stringContaining("/getMe")]));
-    expect(calls).toEqual(expect.arrayContaining([expect.stringContaining("/getWebhookInfo")]));
+    expect(calls.join("\n")).toContain("/getMe");
+    expect(calls.join("\n")).toContain("/getWebhookInfo");
 
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-health-"));
     const tokenFile = path.join(tmpDir, "telegram-token");
@@ -527,9 +570,7 @@ describe("getHealthSnapshot", () => {
       );
       expect(tokenFileProbe.telegram.configured).toBe(true);
       expect(tokenFileProbe.telegram.probe?.ok).toBe(true);
-      expect(tokenFileProbe.calls).toEqual(
-        expect.arrayContaining([expect.stringContaining("bott-file/getMe")]),
-      );
+      expect(tokenFileProbe.calls.join("\n")).toContain("bott-file/getMe");
     } finally {
       fs.rmSync(tmpDir, { recursive: true, force: true });
     }
@@ -625,13 +666,11 @@ describe("getHealthSnapshot", () => {
     expect(discord.connected).toBe(true);
     expect(discord.tokenSource).toBe("config");
     expect(discord.tokenStatus).toBe("available");
-    expect(discord.accounts?.default).toMatchObject({
-      configured: true,
-      running: true,
-      connected: true,
-      tokenSource: "config",
-      tokenStatus: "available",
-    });
+    expect(discord.accounts?.default?.configured).toBe(true);
+    expect(discord.accounts?.default?.running).toBe(true);
+    expect(discord.accounts?.default?.connected).toBe(true);
+    expect(discord.accounts?.default?.tokenSource).toBe("config");
+    expect(discord.accounts?.default?.tokenStatus).toBe("available");
   });
 
   it("preserves plugin-derived configured state for unavailable SecretRef credentials", async () => {
@@ -680,11 +719,9 @@ describe("getHealthSnapshot", () => {
     expect(discord.configured).toBe(true);
     expect(discord.tokenSource).toBe("config");
     expect(discord.tokenStatus).toBe("configured_unavailable");
-    expect(discord.accounts?.default).toMatchObject({
-      configured: true,
-      tokenSource: "config",
-      tokenStatus: "configured_unavailable",
-    });
+    expect(discord.accounts?.default?.configured).toBe(true);
+    expect(discord.accounts?.default?.tokenSource).toBe("config");
+    expect(discord.accounts?.default?.tokenStatus).toBe("configured_unavailable");
   });
 
   it("omits secret runtime fields and raw probe payloads from non-sensitive health snapshots", async () => {
@@ -748,6 +785,75 @@ describe("getHealthSnapshot", () => {
     expect(telegram.accounts?.default?.connected).toBe(true);
     expect(telegram.accounts?.default?.probe).toBeUndefined();
     expect(telegram.accounts?.default?.channelAccessToken).toBeUndefined();
+  });
+
+  it("keeps redacted failed probes in non-sensitive health snapshots", async () => {
+    healthPluginsForTest = [createIMessageHealthPlugin()];
+    testConfig = { channels: { imessage: { enabled: true } } };
+    testStore = {};
+
+    const snap = await getHealthSnapshot({
+      timeoutMs: 25,
+      includeSensitive: false,
+    });
+    const imessage = snap.channels.imessage as {
+      configured?: boolean;
+      probe?: {
+        ok?: boolean;
+        error?: string;
+        privateApi?: unknown;
+      };
+      accounts?: Record<
+        string,
+        {
+          probe?: {
+            ok?: boolean;
+            error?: string;
+            privateApi?: unknown;
+          };
+        }
+      >;
+    };
+
+    expect(imessage.configured).toBe(true);
+    expect(imessage.probe).toEqual({
+      ok: false,
+      error:
+        "imsg cannot access ~/Library/Messages/chat.db. Grant Full Disk Access to the Gateway/launcher process and restart Gateway.",
+    });
+    expect(imessage.probe?.privateApi).toBeUndefined();
+    expect(imessage.accounts?.default?.probe).toEqual({
+      ok: false,
+      error:
+        "imsg cannot access ~/Library/Messages/chat.db. Grant Full Disk Access to the Gateway/launcher process and restart Gateway.",
+    });
+    expect(imessage.accounts?.default?.probe?.privateApi).toBeUndefined();
+  });
+
+  it("omits generic failed probe errors from non-sensitive health snapshots", async () => {
+    testConfig = { channels: { telegram: { botToken: "bad-token" } } };
+    testStore = {};
+    vi.stubEnv("DISCORD_BOT_TOKEN", "");
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        throw new Error("network down with private diagnostic");
+      }),
+    );
+
+    const snap = await getHealthSnapshot({
+      timeoutMs: 25,
+      includeSensitive: false,
+    });
+    const telegram = snap.channels.telegram as {
+      configured?: boolean;
+      probe?: unknown;
+      accounts?: Record<string, { probe?: unknown }>;
+    };
+
+    expect(telegram.configured).toBe(true);
+    expect(telegram.probe).toBeUndefined();
+    expect(telegram.accounts?.default?.probe).toBeUndefined();
   });
 
   it("returns structured telegram probe errors", async () => {

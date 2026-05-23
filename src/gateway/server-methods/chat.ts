@@ -1,11 +1,17 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import type { AgentMessage } from "@mariozechner/pi-agent-core";
-import { CURRENT_SESSION_VERSION } from "@mariozechner/pi-coding-agent";
-import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
+import type { AgentMessage } from "@earendil-works/pi-agent-core";
+import { CURRENT_SESSION_VERSION } from "@earendil-works/pi-coding-agent";
+import {
+  buildTtsSupplementMediaPayload,
+  getReplyPayloadTtsSupplement,
+  isReplyPayloadTtsSupplement,
+  resolveSendableOutboundReplyParts,
+} from "openclaw/plugin-sdk/reply-payload";
 import { resolveAgentWorkspaceDir, resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { rewriteTranscriptEntriesInSessionFile } from "../../agents/pi-embedded-runner/transcript-rewrite.js";
+import { resolveProviderIdForAuth } from "../../agents/provider-auth-aliases.js";
 import { ensureSandboxWorkspaceForSession } from "../../agents/sandbox/context.js";
 import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
 import { dispatchInboundMessage } from "../../auto-reply/dispatch.js";
@@ -15,6 +21,7 @@ import { stageSandboxMedia } from "../../auto-reply/reply/stage-sandbox-media.js
 import type { MsgContext, TemplateContext } from "../../auto-reply/templating.js";
 import { extractCanvasFromText } from "../../chat/canvas-render.js";
 import { resolveSessionFilePath } from "../../config/sessions.js";
+import { streamSessionTranscriptLines } from "../../config/sessions/transcript-stream.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   measureDiagnosticsTimelineSpan,
@@ -38,12 +45,14 @@ import {
   saveMediaBuffer,
 } from "../../media/store.js";
 import { createChannelMessageReplyPipeline } from "../../plugin-sdk/channel-message.js";
+import type { ChannelRouteRef } from "../../plugin-sdk/channel-route.js";
 import { isPluginOwnedSessionBindingRecord } from "../../plugins/conversation-binding.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { normalizeInputProvenance, type InputProvenance } from "../../sessions/input-provenance.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
 import { parseAgentSessionKey } from "../../sessions/session-key-utils.js";
 import { emitSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
+import { deliveryContextFromSession } from "../../utils/delivery-context.shared.js";
 import {
   stripInlineDirectiveTagsForDisplay,
   sanitizeReplyDirectiveId,
@@ -61,6 +70,7 @@ import {
   type ChatAbortOps,
   isChatStopCommandText,
   registerChatAbortController,
+  updateChatRunProvider,
 } from "../chat-abort.js";
 import {
   type ChatImageContent,
@@ -117,7 +127,10 @@ import { injectTimestamp, timestampOptsFromConfig } from "./agent-timestamp.js";
 import { setGatewayDedupeEntry } from "./agent-wait-dedupe.js";
 import { normalizeRpcAttachmentsToChatAttachments } from "./attachment-normalize.js";
 import { normalizeWebchatReplyMediaPathsForDisplay } from "./chat-reply-media.js";
-import { appendInjectedAssistantMessageToTranscript } from "./chat-transcript-inject.js";
+import {
+  appendInjectedAssistantMessageToTranscript,
+  type GatewayInjectedTtsSupplementMarker,
+} from "./chat-transcript-inject.js";
 import {
   buildWebchatAssistantMessageFromReplyPayloads,
   buildWebchatAudioContentBlocksFromReplyPayloads,
@@ -150,6 +163,25 @@ type ChatAbortRequester = {
   isAdmin: boolean;
 };
 
+type PreRegisteredAgentDedupePayload = {
+  dedupeKeys?: unknown;
+  ownerConnId?: unknown;
+  ownerDeviceId?: unknown;
+  runId?: unknown;
+  sessionKey?: unknown;
+  status?: unknown;
+};
+
+type PreRegisteredAgentRun = {
+  runId: string;
+  sessionKey: string;
+  payload: PreRegisteredAgentDedupePayload;
+};
+
+function normalizeUnknownText(value: unknown): string | undefined {
+  return typeof value === "string" ? normalizeOptionalText(value) : undefined;
+}
+
 /** True when a reply payload carries at least one media reference (mediaUrl or mediaUrls). */
 function isMediaBearingPayload(payload: ReplyPayload): boolean {
   if (payload.isReasoning === true) {
@@ -164,16 +196,51 @@ function isMediaBearingPayload(payload: ReplyPayload): boolean {
   return false;
 }
 
-function isTtsSupplementPayload(payload: ReplyPayload): boolean {
+function stripVisibleTextFromTtsSupplement(payload: ReplyPayload): ReplyPayload {
+  return isReplyPayloadTtsSupplement(payload) ? buildTtsSupplementMediaPayload(payload) : payload;
+}
+
+function resolveTtsSupplementMarkerText(text: string): string {
+  const trimmed = text.trim();
+  const projected = projectChatDisplayMessage(
+    {
+      role: "assistant",
+      content: [{ type: "text", text: trimmed }],
+    },
+    { maxChars: Number.MAX_SAFE_INTEGER },
+  );
+  const projectedContent = Array.isArray(projected?.content)
+    ? (projected.content as AssistantDisplayContentBlock[])
+    : undefined;
   return (
-    typeof payload.spokenText === "string" &&
-    payload.spokenText.trim().length > 0 &&
-    isMediaBearingPayload(payload)
+    extractAssistantDisplayTextFromContent(projectedContent) ??
+    (typeof projected?.text === "string" ? projected.text.trim() : undefined) ??
+    trimmed
   );
 }
 
-function stripVisibleTextFromTtsSupplement(payload: ReplyPayload): ReplyPayload {
-  return isTtsSupplementPayload(payload) ? { ...payload, text: undefined } : payload;
+function buildTtsSupplementTranscriptMarker(
+  payload: ReplyPayload,
+): GatewayInjectedTtsSupplementMarker | undefined {
+  const supplement = getReplyPayloadTtsSupplement(payload);
+  if (!supplement) {
+    return undefined;
+  }
+  const visibleText = resolveTtsSupplementMarkerText(
+    payload.text?.trim() || supplement.spokenText.trim(),
+  );
+  return {
+    textSha256: createHash("sha256").update(visibleText).digest("hex"),
+  };
+}
+
+function buildMediaOnlyTtsSupplementTranscriptMarker(
+  payload: ReplyPayload,
+): GatewayInjectedTtsSupplementMarker | undefined {
+  if (payload.text?.trim()) {
+    return undefined;
+  }
+  return buildTtsSupplementTranscriptMarker(payload);
 }
 
 async function buildWebchatAssistantMediaMessage(
@@ -218,6 +285,7 @@ const CHANNEL_AGNOSTIC_SESSION_SCOPES = new Set([
 const CHANNEL_SCOPED_SESSION_SHAPES = new Set(["direct", "dm", "group", "channel"]);
 
 type ChatSendDeliveryEntry = {
+  route?: ChannelRouteRef;
   deliveryContext?: {
     channel?: string;
     to?: string;
@@ -589,19 +657,18 @@ function resolveChatSendOriginatingRoute(params: {
     };
   }
 
+  const sessionDeliveryContext = deliveryContextFromSession(params.entry);
   const routeChannelCandidate = normalizeMessageChannel(
-    params.entry?.deliveryContext?.channel ??
-      params.entry?.lastChannel ??
-      params.entry?.origin?.provider,
+    sessionDeliveryContext?.channel ?? params.entry?.lastChannel ?? params.entry?.origin?.provider,
   );
-  const routeToCandidate = params.entry?.deliveryContext?.to ?? params.entry?.lastTo;
+  const routeToCandidate = sessionDeliveryContext?.to ?? params.entry?.lastTo;
   const routeAccountIdCandidate =
-    params.entry?.deliveryContext?.accountId ??
+    sessionDeliveryContext?.accountId ??
     params.entry?.lastAccountId ??
     params.entry?.origin?.accountId ??
     undefined;
   const routeThreadIdCandidate =
-    params.entry?.deliveryContext?.threadId ??
+    sessionDeliveryContext?.threadId ??
     params.entry?.lastThreadId ??
     params.entry?.origin?.threadId;
   if (params.sessionKey.length > CHAT_SEND_SESSION_KEY_MAX_LENGTH) {
@@ -1356,14 +1423,14 @@ async function transcriptHasIdempotencyKey(
   idempotencyKey: string,
 ): Promise<boolean> {
   try {
-    const lines = (await fs.promises.readFile(transcriptPath, "utf-8")).split(/\r?\n/);
-    for (const line of lines) {
-      if (!line.trim()) {
+    for await (const line of streamSessionTranscriptLines(transcriptPath)) {
+      try {
+        const parsed = JSON.parse(line) as { message?: { idempotencyKey?: unknown } };
+        if (parsed?.message?.idempotencyKey === idempotencyKey) {
+          return true;
+        }
+      } catch {
         continue;
-      }
-      const parsed = JSON.parse(line) as { message?: { idempotencyKey?: unknown } };
-      if (parsed?.message?.idempotencyKey === idempotencyKey) {
-        return true;
       }
     }
     return false;
@@ -1387,6 +1454,7 @@ async function appendAssistantTranscriptMessage(params: {
     origin: AbortOrigin;
     runId: string;
   };
+  ttsSupplement?: GatewayInjectedTtsSupplementMarker;
   cfg?: OpenClawConfig;
 }): Promise<TranscriptAppendResult> {
   const transcriptPath = resolveTranscriptPath({
@@ -1426,6 +1494,7 @@ async function appendAssistantTranscriptMessage(params: {
     content: params.content,
     idempotencyKey: params.idempotencyKey,
     abortMeta: params.abortMeta,
+    ttsSupplement: params.ttsSupplement,
     config: params.cfg,
   });
 }
@@ -1494,6 +1563,9 @@ function createChatAbortOps(context: GatewayRequestContext): ChatAbortOps {
     chatRunBuffers: context.chatRunBuffers,
     chatDeltaSentAt: context.chatDeltaSentAt,
     chatDeltaLastBroadcastLen: context.chatDeltaLastBroadcastLen,
+    chatDeltaLastBroadcastText: context.chatDeltaLastBroadcastText,
+    agentDeltaSentAt: context.agentDeltaSentAt,
+    bufferedAgentEvents: context.bufferedAgentEvents,
     chatAbortedRuns: context.chatAbortedRuns,
     removeChatRun: context.removeChatRun,
     agentRunSeq: context.agentRunSeq,
@@ -1576,25 +1648,183 @@ function canRequesterAbortChatRun(
   return false;
 }
 
-function resolveAuthorizedRunIdsForSession(params: {
-  chatAbortControllers: Map<string, ChatAbortControllerEntry>;
+function canRequesterAbortChatRunWithoutSessionMatch(
+  entry: ChatAbortControllerEntry,
+  requester: ChatAbortRequester,
+): boolean {
+  if (requester.isAdmin) {
+    return true;
+  }
+  const ownerDeviceId = normalizeOptionalText(entry.ownerDeviceId);
+  const ownerConnId = normalizeOptionalText(entry.ownerConnId);
+  return Boolean(
+    (ownerDeviceId && requester.deviceId && ownerDeviceId === requester.deviceId) ||
+    (ownerConnId && requester.connId && ownerConnId === requester.connId),
+  );
+}
+
+function readPreRegisteredAgentDedupePayloadForSession(params: {
+  entry: GatewayRequestContext["dedupe"] extends Map<string, infer T> ? T | undefined : never;
+  runId: string;
   sessionKey: string;
+}): PreRegisteredAgentDedupePayload | undefined {
+  if (!params.entry?.ok) {
+    return undefined;
+  }
+  const payload = params.entry.payload as PreRegisteredAgentDedupePayload | undefined;
+  if (payload?.status !== "accepted") {
+    return undefined;
+  }
+  const payloadRunId = normalizeUnknownText(payload.runId);
+  if (payloadRunId && payloadRunId !== params.runId) {
+    return undefined;
+  }
+  return normalizeUnknownText(payload.sessionKey) === params.sessionKey ? payload : undefined;
+}
+
+function readPreRegisteredAgentRun(params: {
+  key: string;
+  entry: GatewayRequestContext["dedupe"] extends Map<string, infer T> ? T | undefined : never;
+}): PreRegisteredAgentRun | undefined {
+  if (!params.key.startsWith("agent:") || !params.entry?.ok) {
+    return undefined;
+  }
+  const payload = params.entry.payload as PreRegisteredAgentDedupePayload | undefined;
+  if (payload?.status !== "accepted") {
+    return undefined;
+  }
+  const runId = normalizeUnknownText(payload.runId) ?? normalizeOptionalText(params.key.slice(6));
+  const sessionKey = normalizeUnknownText(payload.sessionKey);
+  if (!runId || !sessionKey) {
+    return undefined;
+  }
+  return { runId, sessionKey, payload };
+}
+
+function canRequesterAbortPreRegisteredAgentRun(
+  payload: PreRegisteredAgentDedupePayload,
+  requester: ChatAbortRequester,
+): boolean {
+  return canRequesterAbortChatRun(
+    {
+      controller: new AbortController(),
+      sessionId: "",
+      sessionKey: normalizeUnknownText(payload.sessionKey) ?? "",
+      startedAtMs: 0,
+      expiresAtMs: 0,
+      ownerConnId: normalizeUnknownText(payload.ownerConnId),
+      ownerDeviceId: normalizeUnknownText(payload.ownerDeviceId),
+      kind: "agent",
+    },
+    requester,
+  );
+}
+
+function resolvePreRegisteredAgentDedupeKeys(
+  payload: PreRegisteredAgentDedupePayload,
+  runId: string,
+): string[] {
+  const keys = [`agent:${runId}`];
+  const payloadKeys = Array.isArray(payload.dedupeKeys) ? payload.dedupeKeys : [];
+  for (const key of payloadKeys) {
+    const normalized = normalizeUnknownText(key);
+    if (normalized?.startsWith("agent:")) {
+      keys.push(normalized);
+    }
+  }
+  return [...new Set(keys)];
+}
+
+function writePreRegisteredAgentAbort(params: {
+  context: GatewayRequestContext;
+  runId: string;
+  sessionKey: string;
+  payload: PreRegisteredAgentDedupePayload;
+  stopReason: string;
+  endedAt?: number;
+}) {
+  const endedAt = params.endedAt ?? Date.now();
+  for (const key of resolvePreRegisteredAgentDedupeKeys(params.payload, params.runId)) {
+    setGatewayDedupeEntry({
+      dedupe: params.context.dedupe,
+      key,
+      entry: {
+        ts: endedAt,
+        ok: true,
+        payload: {
+          runId: params.runId,
+          sessionKey: params.sessionKey,
+          status: "timeout" as const,
+          summary: "aborted",
+          stopReason: params.stopReason,
+          endedAt,
+        },
+      },
+    });
+  }
+}
+
+function resolveAuthorizedPreRegisteredAgentRunsForSessionKeys(params: {
+  context: GatewayRequestContext;
+  sessionKeys: Iterable<string>;
   requester: ChatAbortRequester;
 }) {
-  const authorizedRunIds: string[] = [];
+  const sessionKeys = new Set(
+    Array.from(params.sessionKeys, (sessionKey) => normalizeOptionalText(sessionKey)).filter(
+      (sessionKey): sessionKey is string => Boolean(sessionKey),
+    ),
+  );
+  const authorizedByRunId = new Map<string, PreRegisteredAgentRun>();
   let matchedSessionRuns = 0;
-  for (const [runId, active] of params.chatAbortControllers) {
-    if (active.sessionKey !== params.sessionKey) {
+  for (const [key, entry] of params.context.dedupe) {
+    const run = readPreRegisteredAgentRun({ key, entry });
+    if (!run || !sessionKeys.has(run.sessionKey)) {
+      continue;
+    }
+    if (params.context.chatAbortControllers.has(run.runId)) {
       continue;
     }
     matchedSessionRuns += 1;
-    if (canRequesterAbortChatRun(active, params.requester)) {
-      authorizedRunIds.push(runId);
+    if (canRequesterAbortPreRegisteredAgentRun(run.payload, params.requester)) {
+      authorizedByRunId.set(run.runId, run);
     }
   }
   return {
     matchedSessionRuns,
-    authorizedRunIds,
+    authorizedRuns: [...authorizedByRunId.values()],
+  };
+}
+
+function resolveAuthorizedRunsForSessionKeys(params: {
+  chatAbortControllers: Map<string, ChatAbortControllerEntry>;
+  sessionKeys: Iterable<string>;
+  sessionIds?: Iterable<string | undefined>;
+  requester: ChatAbortRequester;
+}) {
+  const sessionKeys = new Set(
+    Array.from(params.sessionKeys, (sessionKey) => normalizeOptionalText(sessionKey)).filter(
+      (sessionKey): sessionKey is string => Boolean(sessionKey),
+    ),
+  );
+  const sessionIds = new Set(
+    Array.from(params.sessionIds ?? [], (sessionId) => normalizeOptionalText(sessionId)).filter(
+      (sessionId): sessionId is string => Boolean(sessionId),
+    ),
+  );
+  const authorizedRuns: Array<{ runId: string; sessionKey: string }> = [];
+  let matchedSessionRuns = 0;
+  for (const [runId, active] of params.chatAbortControllers) {
+    if (!sessionKeys.has(active.sessionKey) && !sessionIds.has(active.sessionId)) {
+      continue;
+    }
+    matchedSessionRuns += 1;
+    if (canRequesterAbortChatRun(active, params.requester)) {
+      authorizedRuns.push({ runId, sessionKey: active.sessionKey });
+    }
+  }
+  return {
+    matchedSessionRuns,
+    authorizedRuns,
   };
 }
 
@@ -1602,23 +1832,36 @@ async function abortChatRunsForSessionKeyWithPartials(params: {
   context: GatewayRequestContext;
   ops: ChatAbortOps;
   sessionKey: string;
+  sessionKeyAliases?: string[];
+  sessionId?: string;
+  persistSessionKey?: string;
   abortOrigin: AbortOrigin;
   stopReason?: string;
   requester: ChatAbortRequester;
 }): Promise<{ aborted: boolean; runIds: string[]; unauthorized: boolean }> {
-  const { matchedSessionRuns, authorizedRunIds } = resolveAuthorizedRunIdsForSession({
+  const sessionKeys = [params.sessionKey, ...(params.sessionKeyAliases ?? [])];
+  const { matchedSessionRuns, authorizedRuns } = resolveAuthorizedRunsForSessionKeys({
     chatAbortControllers: params.context.chatAbortControllers,
-    sessionKey: params.sessionKey,
+    sessionKeys,
+    sessionIds: [params.sessionId],
     requester: params.requester,
   });
-  if (authorizedRunIds.length === 0) {
+  const {
+    matchedSessionRuns: matchedPendingAgentRuns,
+    authorizedRuns: authorizedPendingAgentRuns,
+  } = resolveAuthorizedPreRegisteredAgentRunsForSessionKeys({
+    context: params.context,
+    sessionKeys,
+    requester: params.requester,
+  });
+  if (authorizedRuns.length === 0 && authorizedPendingAgentRuns.length === 0) {
     return {
       aborted: false,
       runIds: [],
-      unauthorized: matchedSessionRuns > 0,
+      unauthorized: matchedSessionRuns > 0 || matchedPendingAgentRuns > 0,
     };
   }
-  const authorizedRunIdSet = new Set(authorizedRunIds);
+  const authorizedRunIdSet = new Set(authorizedRuns.map((run) => run.runId));
   const snapshots = collectSessionAbortPartials({
     chatAbortControllers: params.context.chatAbortControllers,
     chatRunBuffers: params.context.chatRunBuffers,
@@ -1626,21 +1869,34 @@ async function abortChatRunsForSessionKeyWithPartials(params: {
     abortOrigin: params.abortOrigin,
   });
   const runIds: string[] = [];
-  for (const runId of authorizedRunIds) {
+  for (const { runId, sessionKey } of authorizedRuns) {
     const res = abortChatRunById(params.ops, {
       runId,
-      sessionKey: params.sessionKey,
+      sessionKey,
       stopReason: params.stopReason,
     });
     if (res.aborted) {
       runIds.push(runId);
     }
   }
+  const endedAt = Date.now();
+  const stopReason = params.stopReason ?? "rpc";
+  for (const { runId, sessionKey, payload } of authorizedPendingAgentRuns) {
+    writePreRegisteredAgentAbort({
+      context: params.context,
+      runId,
+      sessionKey,
+      payload,
+      stopReason,
+      endedAt,
+    });
+    runIds.push(runId);
+  }
   const res = { aborted: runIds.length > 0, runIds, unauthorized: false };
   if (res.aborted) {
     await persistAbortedPartials({
       context: params.context,
-      sessionKey: params.sessionKey,
+      sessionKey: params.persistSessionKey ?? params.sessionKey,
       snapshots,
     });
   }
@@ -1845,10 +2101,34 @@ export const chatHandlers: GatewayRequestHandlers = {
 
     const active = context.chatAbortControllers.get(runId);
     if (!active) {
+      const pendingAgentEntry = context.dedupe.get(`agent:${runId}`);
+      const pendingAgentPayload = readPreRegisteredAgentDedupePayloadForSession({
+        entry: pendingAgentEntry,
+        runId,
+        sessionKey: rawSessionKey,
+      });
+      if (pendingAgentPayload) {
+        if (!canRequesterAbortPreRegisteredAgentRun(pendingAgentPayload, requester)) {
+          respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "unauthorized"));
+          return;
+        }
+        writePreRegisteredAgentAbort({
+          context,
+          runId,
+          sessionKey: rawSessionKey,
+          payload: pendingAgentPayload,
+          stopReason: "rpc",
+        });
+        respond(true, { ok: true, aborted: true, runIds: [runId] });
+        return;
+      }
       respond(true, { ok: true, aborted: false, runIds: [] });
       return;
     }
-    if (active.sessionKey !== rawSessionKey) {
+    if (
+      active.sessionKey !== rawSessionKey &&
+      !canRequesterAbortChatRunWithoutSessionMatch(active, requester)
+    ) {
       respond(
         false,
         undefined,
@@ -1864,13 +2144,13 @@ export const chatHandlers: GatewayRequestHandlers = {
     const partialText = context.chatRunBuffers.get(runId);
     const res = abortChatRunById(ops, {
       runId,
-      sessionKey: rawSessionKey,
+      sessionKey: active.sessionKey,
       stopReason: "rpc",
     });
     if (res.aborted && partialText && partialText.trim()) {
       await persistAbortedPartials({
         context,
-        sessionKey: rawSessionKey,
+        sessionKey: active.sessionKey,
         snapshots: [
           {
             runId,
@@ -2009,6 +2289,10 @@ export const chatHandlers: GatewayRequestHandlers = {
       sessionKey,
       config: cfg,
     });
+    const resolvedSessionModel = resolveSessionModelRef(cfg, entry, agentId);
+    const resolvedSessionAuthProvider = resolveProviderIdForAuth(resolvedSessionModel.provider, {
+      config: cfg,
+    });
     let parsedMessage = inboundMessage;
     let parsedImages: ChatImageContent[] = [];
     let imageOrder: PromptImageOrderEntry[] = [];
@@ -2044,6 +2328,9 @@ export const chatHandlers: GatewayRequestHandlers = {
         context,
         ops: createChatAbortOps(context),
         sessionKey: rawSessionKey,
+        sessionKeyAliases: sessionKey === rawSessionKey ? undefined : [sessionKey],
+        sessionId: entry?.sessionId,
+        persistSessionKey: sessionKey,
         abortOrigin: "stop-command",
         stopReason: "stop",
         requester: resolveChatAbortRequester(client),
@@ -2109,18 +2396,17 @@ export const chatHandlers: GatewayRequestHandlers = {
         await measureDiagnosticsTimelineSpan(
           "gateway.chat_send.prepare_attachments",
           async () => {
-            const modelRef = resolveSessionModelRef(cfg, entry, agentId);
             const supportsSessionModelImages = await resolveGatewayModelSupportsImages({
               loadGatewayModelCatalog: context.loadGatewayModelCatalog,
-              provider: modelRef.provider,
-              model: modelRef.model,
+              provider: resolvedSessionModel.provider,
+              model: resolvedSessionModel.model,
             });
-            // Bound plugin sessions own the real recipient model, so keep image
-            // attachments even when the parent OpenClaw session model is text-only.
-            const supportsImages =
-              supportsSessionModelImages ||
+            const explicitOriginSupportsInlineImages =
               explicitOriginTargetsAcpSession(explicitOriginResult.value) ||
               explicitOriginTargetsPlugin;
+            // Bound plugin sessions own the real recipient model, so keep image
+            // attachments even when the parent OpenClaw session model is text-only.
+            const supportsImages = supportsSessionModelImages || explicitOriginSupportsInlineImages;
             const routeImageOffloadsAsMediaPaths = !supportsImages;
             const parsed = await parseMessageWithAttachments(
               inboundMessage,
@@ -2191,6 +2477,8 @@ export const chatHandlers: GatewayRequestHandlers = {
         now,
         ownerConnId: normalizeOptionalText(client?.connId),
         ownerDeviceId: normalizeOptionalText(client?.connect?.device?.id),
+        providerId: resolvedSessionModel.provider,
+        authProviderId: resolvedSessionAuthProvider,
         kind: "chat-send",
       });
       if (!activeRunAbort.registered) {
@@ -2267,6 +2555,19 @@ export const chatHandlers: GatewayRequestHandlers = {
         ChatType: "direct",
         ...(commandSource ? { CommandSource: commandSource } : {}),
         CommandAuthorized: true,
+        CommandTurn: commandSource
+          ? {
+              kind: "text-slash",
+              source: commandSource,
+              authorized: true,
+              body: commandBody,
+            }
+          : {
+              kind: "normal",
+              source: "message",
+              authorized: false,
+              body: commandBody,
+            },
         MessageSid: clientRunId,
         ...(!isOperatorUiClient(clientInfo)
           ? {
@@ -2351,6 +2652,13 @@ export const chatHandlers: GatewayRequestHandlers = {
         })();
         await userTranscriptUpdatePromise;
       };
+      const emitUserTranscriptUpdateAfterAgentRun = async () => {
+        await emitUserTranscriptUpdate().catch((transcriptErr) => {
+          context.logGateway.warn(
+            `webchat user transcript update failed after agent run: ${formatForLog(transcriptErr)}`,
+          );
+        });
+      };
       let transcriptMediaRewriteDone = false;
       const rewriteUserTranscriptMedia = async () => {
         if (transcriptMediaRewriteDone) {
@@ -2383,6 +2691,7 @@ export const chatHandlers: GatewayRequestHandlers = {
         if (!agentRunStarted || appendedWebchatAgentMedia || !isMediaBearingPayload(payload)) {
           return;
         }
+        const ttsSupplementMarker = buildTtsSupplementTranscriptMarker(payload);
         const [transcriptPayload] = await normalizeWebchatReplyMediaPathsForDisplay({
           cfg,
           sessionKey,
@@ -2449,6 +2758,7 @@ export const chatHandlers: GatewayRequestHandlers = {
           agentId,
           createIfMissing: true,
           idempotencyKey: `${clientRunId}:assistant-media`,
+          ttsSupplement: ttsSupplementMarker,
           cfg,
         });
         if (appended.ok) {
@@ -2528,7 +2838,16 @@ export const chatHandlers: GatewayRequestHandlers = {
                   }
                 }
               },
-              onModelSelected,
+              onModelSelected: (modelSelection) => {
+                updateChatRunProvider(context.chatAbortControllers, {
+                  runId: clientRunId,
+                  providerId: modelSelection.provider,
+                  authProviderId: resolveProviderIdForAuth(modelSelection.provider, {
+                    config: cfg,
+                  }),
+                });
+                onModelSelected(modelSelection);
+              },
             },
           }),
         {
@@ -2542,6 +2861,16 @@ export const chatHandlers: GatewayRequestHandlers = {
             "gateway.chat_send.post_dispatch",
             async () => {
               await rewriteUserTranscriptMedia();
+              const returnedAgentErrorPayloads = agentRunStarted
+                ? deliveredReplies
+                    .map((entry) => entry.payload)
+                    .filter((payload) => payload.isError)
+                : [];
+              const returnedAgentErrorMessage =
+                returnedAgentErrorPayloads
+                  .map((payload) => payload.text?.trim())
+                  .filter((text): text is string => Boolean(text))
+                  .join(" | ") || undefined;
               // WebChat persistence has two owners. Agent runs persist model-visible turns
               // through Pi's SessionManager; this dispatcher only owns live delivery payloads.
               // Do not blindly mirror agent-run final payloads into JSONL or chat.history can
@@ -2627,6 +2956,11 @@ export const chatHandlers: GatewayRequestHandlers = {
                     },
                   });
                   const hasSensitiveMedia = hasSensitiveMediaPayload(finalPayloads);
+                  const ttsSupplementMarker = finalPayloads
+                    .map((payload) => buildMediaOnlyTtsSupplementTranscriptMarker(payload))
+                    .find((marker): marker is GatewayInjectedTtsSupplementMarker =>
+                      Boolean(marker),
+                    );
                   const persistedAssistantContent = replaceAssistantContentTextBlocks(
                     hasSensitiveMedia
                       ? await buildAssistantDisplayContentFromReplyPayloads({
@@ -2683,6 +3017,8 @@ export const chatHandlers: GatewayRequestHandlers = {
                       sessionFile: latestEntry?.sessionFile,
                       agentId,
                       createIfMissing: true,
+                      idempotencyKey: clientRunId,
+                      ttsSupplement: ttsSupplementMarker,
                       cfg,
                     });
                     if (appended.ok) {
@@ -2714,6 +3050,9 @@ export const chatHandlers: GatewayRequestHandlers = {
                             : {}),
                         ...(fallbackText ? { text: fallbackText } : {}),
                         timestamp: now,
+                        ...(ttsSupplementMarker
+                          ? { openclawTtsSupplement: ttsSupplementMarker }
+                          : {}),
                         // Keep this compatible with Pi stopReason enums even though this message isn't
                         // persisted to the transcript due to the append failure.
                         stopReason: "stop",
@@ -2728,21 +3067,42 @@ export const chatHandlers: GatewayRequestHandlers = {
                     message,
                   });
                 }
-              } else if (!hasBeforeAgentRunGate) {
-                await emitUserTranscriptUpdate().catch((transcriptErr) => {
-                  context.logGateway.warn(
-                    `webchat user transcript update failed after agent run: ${formatForLog(transcriptErr)}`,
-                  );
+              } else if (returnedAgentErrorPayloads.length > 0) {
+                if (!hasBeforeAgentRunGate) {
+                  await emitUserTranscriptUpdateAfterAgentRun();
+                }
+                broadcastChatError({
+                  context,
+                  runId: clientRunId,
+                  sessionKey,
+                  errorMessage: returnedAgentErrorMessage,
                 });
+              } else if (!hasBeforeAgentRunGate) {
+                await emitUserTranscriptUpdateAfterAgentRun();
               }
               if (!context.chatAbortedRuns.has(clientRunId)) {
+                const returnedAgentError =
+                  returnedAgentErrorPayloads.length > 0
+                    ? errorShape(
+                        ErrorCodes.UNAVAILABLE,
+                        returnedAgentErrorMessage ?? "agent returned an error payload",
+                      )
+                    : undefined;
                 setGatewayDedupeEntry({
                   dedupe: context.dedupe,
                   key: `chat:${clientRunId}`,
                   entry: {
                     ts: Date.now(),
-                    ok: true,
-                    payload: { runId: clientRunId, status: "ok" as const },
+                    ok: returnedAgentErrorPayloads.length === 0,
+                    payload:
+                      returnedAgentErrorPayloads.length > 0
+                        ? {
+                            runId: clientRunId,
+                            status: "error" as const,
+                            summary: returnedAgentErrorMessage ?? "agent returned an error payload",
+                          }
+                        : { runId: clientRunId, status: "ok" as const },
+                    ...(returnedAgentError ? { error: returnedAgentError } : {}),
                   },
                 });
               }

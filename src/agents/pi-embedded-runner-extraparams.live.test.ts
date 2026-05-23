@@ -1,8 +1,9 @@
-import type { Model } from "@mariozechner/pi-ai";
-import { getModel, streamSimple } from "@mariozechner/pi-ai";
+import type { Model } from "@earendil-works/pi-ai";
+import { getModel, streamSimple } from "@earendil-works/pi-ai";
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { isLiveTestEnabled } from "./live-test-helpers.js";
+import { isLiveBillingDrift } from "./live-test-provider-drift.js";
 import { applyExtraParamsToAgent } from "./pi-embedded-runner.js";
 
 const OPENAI_KEY = process.env.OPENAI_API_KEY ?? "";
@@ -14,7 +15,7 @@ const describeLive = LIVE && OPENAI_KEY ? describe : describe.skip;
 const describeAnthropicLive = ANTHROPIC_LIVE && ANTHROPIC_KEY ? describe : describe.skip;
 
 describeLive("pi embedded extra params (live)", () => {
-  it("applies config maxTokens to openai streamFn", async () => {
+  it("applies config max_completion_tokens alias to openai streamFn", async () => {
     const model = getModel("openai", "gpt-5.4") as unknown as Model<"openai-completions">;
 
     const cfg: OpenClawConfig = {
@@ -24,7 +25,7 @@ describeLive("pi embedded extra params (live)", () => {
             "openai/gpt-5.4": {
               // OpenAI Responses enforces a minimum max_output_tokens of 16.
               params: {
-                maxTokens: 16,
+                max_completion_tokens: 16,
               },
             },
           },
@@ -61,7 +62,7 @@ describeLive("pi embedded extra params (live)", () => {
 
     expect(stopReason).toBeTypeOf("string");
     expect(outputTokens).toBeTypeOf("number");
-    // Should respect maxTokens from config (16) — allow a small buffer for provider rounding.
+    // Should respect max_completion_tokens from config (16) — allow a small buffer for provider rounding.
     expect(outputTokens ?? 0).toBeLessThanOrEqual(20);
   }, 30_000);
 
@@ -125,15 +126,26 @@ describeAnthropicLive("pi embedded extra params (anthropic live)", () => {
         stop_reason?: string;
         usage?: { service_tier?: string };
       };
-      expect(res.ok, json.error?.message ?? `HTTP ${res.status}`).toBe(true);
+      const errorMessage = json.error?.message ?? `HTTP ${res.status}`;
+      if (!res.ok && isLiveBillingDrift(errorMessage)) {
+        console.warn(`[anthropic:live] skip service_tier ${serviceTier}: billing drift`);
+        return null;
+      }
+      expect(res.ok, errorMessage).toBe(true);
       return json;
     };
 
     const standard = await runProbe("standard_only");
+    if (!standard) {
+      return;
+    }
     expect(standard.usage?.service_tier).toBe("standard");
     expect(standard.stop_reason).toBe("end_turn");
 
     const fast = await runProbe("auto");
+    if (!fast) {
+      return;
+    }
     expect(["standard", "priority"]).toContain(fast.usage?.service_tier);
     expect(fast.stop_reason).toBe("end_turn");
   }, 45_000);

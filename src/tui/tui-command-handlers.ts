@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type { Component, SelectItem, TUI } from "@mariozechner/pi-tui";
+import type { Component, SelectItem, TUI } from "@earendil-works/pi-tui";
 import { modelKey } from "../agents/model-ref-shared.js";
 import { normalizeGroupActivation } from "../auto-reply/group-activation.js";
 import {
@@ -632,6 +632,19 @@ export function createCommandHandlers(context: CommandHandlerContext) {
       return;
     }
     const isBtw = isBtwCommand(text);
+    const canQueueBehindLocalFinishingTurn =
+      opts.local === true && state.activityStatus === "finishing context";
+    if (
+      !isBtw &&
+      (!canQueueBehindLocalFinishingTurn ||
+        state.pendingChatRunId ||
+        state.pendingOptimisticUserMessage) &&
+      (state.activeChatRunId || state.pendingChatRunId || state.pendingOptimisticUserMessage)
+    ) {
+      chatLog.addSystem("agent is busy — press Esc to abort before sending a new message");
+      tui.requestRender();
+      return;
+    }
     const runId = randomUUID();
     try {
       if (!isBtw) {

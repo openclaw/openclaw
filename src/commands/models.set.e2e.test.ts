@@ -9,8 +9,17 @@ vi.mock("./models/shared.js", async () => {
   const actual = await vi.importActual<typeof import("./models/shared.js")>("./models/shared.js");
   return {
     ...actual,
-    updateConfig: async (mutator: (cfg: Record<string, unknown>) => Record<string, unknown>) => {
-      const next = mutator(structuredClone(mocks.currentConfig));
+    updateConfig: async (
+      mutator: (
+        cfg: Record<string, unknown>,
+        context: {
+          runtimeConfig: Record<string, unknown>;
+        },
+      ) => Record<string, unknown>,
+    ) => {
+      const sourceConfig = structuredClone(mocks.currentConfig);
+      const runtimeConfig = structuredClone(mocks.currentConfig);
+      const next = mutator(sourceConfig, { runtimeConfig });
       mocks.writtenConfig = next;
       return next;
     },
@@ -110,6 +119,15 @@ describe("models set + fallbacks", () => {
     await modelsSetCommand("openrouter/hunter-alpha", runtime);
 
     expectWrittenPrimaryModel("openrouter/hunter-alpha");
+  });
+
+  it("normalizes retired Google Gemini preview ids in models set", async () => {
+    mockConfigSnapshot({});
+    const runtime = makeRuntime();
+
+    await modelsSetCommand("google/gemini-3-pro-preview", runtime);
+
+    expectWrittenPrimaryModel("google/gemini-3.1-pro-preview");
   });
 
   it("migrates legacy duplicated OpenRouter keys on write", async () => {

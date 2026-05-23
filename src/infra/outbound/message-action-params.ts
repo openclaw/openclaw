@@ -6,6 +6,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { root } from "../../infra/fs-safe.js";
 import { basenameFromMediaSource } from "../../infra/local-file-access.js";
 import { resolveChannelAccountMediaMaxMb } from "../../media/configured-max-bytes.js";
+import { basenameFromAnyPath } from "../../media/file-name.js";
 import {
   buildOutboundMediaLoadOptions,
   resolveOutboundMediaAccess,
@@ -131,8 +132,9 @@ function inferAttachmentFilename(params: {
   const mediaHint = params.mediaHint?.trim();
   if (mediaHint) {
     const base = basenameFromMediaSource(mediaHint);
-    if (base) {
-      return base;
+    const safeBase = base ? basenameFromAnyPath(base) : undefined;
+    if (safeBase) {
+      return safeBase;
     }
   }
   const ext = params.contentType ? extensionForMime(params.contentType) : undefined;
@@ -202,9 +204,11 @@ export function resolveAttachmentMediaPolicy(params: {
 function buildAttachmentMediaLoadOptions(params: {
   policy: AttachmentMediaPolicy;
   maxBytes?: number;
+  optimizeImages?: boolean;
 }):
   | {
       maxBytes?: number;
+      optimizeImages?: boolean;
       sandboxValidated: true;
       readFile: (filePath: string) => Promise<Buffer>;
     }
@@ -213,6 +217,7 @@ function buildAttachmentMediaLoadOptions(params: {
       localRoots?: readonly string[] | "any";
       readFile?: OutboundMediaReadFile;
       hostReadCapability?: boolean;
+      optimizeImages?: boolean;
     } {
   if (params.policy.mode === "sandbox") {
     const sandboxRoot = params.policy.sandboxRoot.trim();
@@ -223,6 +228,7 @@ function buildAttachmentMediaLoadOptions(params: {
     };
     return {
       maxBytes: params.maxBytes,
+      ...(params.optimizeImages !== undefined ? { optimizeImages: params.optimizeImages } : {}),
       sandboxValidated: true,
       readFile: readSandboxFile,
     };
@@ -232,6 +238,7 @@ function buildAttachmentMediaLoadOptions(params: {
     mediaAccess: params.policy.mediaAccess,
     mediaLocalRoots: params.policy.mediaLocalRoots,
     mediaReadFile: params.policy.mediaReadFile,
+    optimizeImages: params.optimizeImages,
   });
 }
 
@@ -245,6 +252,7 @@ async function hydrateAttachmentPayload(params: {
   mediaHint?: string | null;
   fileHint?: string | null;
   mediaPolicy: AttachmentMediaPolicy;
+  optimizeImages?: boolean;
 }) {
   const contentTypeParam = params.contentTypeParam ?? undefined;
   const rawBuffer = readStringParam(params.args, "buffer", { trim: false });
@@ -270,7 +278,11 @@ async function hydrateAttachmentPayload(params: {
     });
     const media = await loadWebMedia(
       mediaSource,
-      buildAttachmentMediaLoadOptions({ policy: params.mediaPolicy, maxBytes }),
+      buildAttachmentMediaLoadOptions({
+        policy: params.mediaPolicy,
+        maxBytes,
+        optimizeImages: params.optimizeImages,
+      }),
     );
     params.args.buffer = media.buffer.toString("base64");
     if (!contentTypeParam && media.contentType) {
@@ -347,6 +359,7 @@ async function hydrateAttachmentActionPayload(params: {
   /** If caption is missing, copy message -> caption. */
   allowMessageCaptionFallback?: boolean;
   mediaPolicy: AttachmentMediaPolicy;
+  optimizeImages?: boolean;
 }): Promise<void> {
   const mediaHint = readAttachmentMediaHint(params.args);
   const fileHint = readAttachmentFileHint(params.args);
@@ -371,6 +384,7 @@ async function hydrateAttachmentActionPayload(params: {
     mediaHint,
     fileHint,
     mediaPolicy: params.mediaPolicy,
+    optimizeImages: params.optimizeImages,
   });
 }
 
@@ -396,6 +410,10 @@ export async function hydrateAttachmentParamsForAction(params: {
   ) {
     return;
   }
+  const forceDocument =
+    readBooleanParamShared(params.args, "forceDocument") ??
+    readBooleanParamShared(params.args, "asDocument") ??
+    false;
   await hydrateAttachmentActionPayload({
     cfg: params.cfg,
     channel: params.channel,
@@ -403,6 +421,7 @@ export async function hydrateAttachmentParamsForAction(params: {
     args: params.args,
     dryRun: params.dryRun,
     mediaPolicy: params.mediaPolicy,
+    optimizeImages: shouldHydrateUploadFile && forceDocument ? false : undefined,
     allowMessageCaptionFallback: params.action === "sendAttachment" || shouldHydrateUploadFile,
   });
 }

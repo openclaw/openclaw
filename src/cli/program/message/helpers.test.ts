@@ -22,7 +22,7 @@ const { ensurePluginRegistryLoaded } = await import("../../plugin-registry.js");
 
 const hasHooksMock = vi.fn((_hookName: string) => false);
 const runGatewayStopMock = vi.fn(
-  async (_event: { reason?: string }, _ctx: Record<string, unknown>) => {},
+  async (eventValue: { reason?: string }, _ctx: Record<string, unknown>) => {},
 );
 const runGlobalGatewayStopSafelyMock = vi.fn(
   async (params: {
@@ -93,6 +93,30 @@ function expectNoAccountFieldInPassedOptions() {
   expect(passedOpts).not.toHaveProperty("account");
 }
 
+function requireRecord(value: unknown, label: string): Record<string, unknown> {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new Error(`expected ${label} to be an object`);
+  }
+  return value as Record<string, unknown>;
+}
+
+function expectMessageCommandOptions(expected: Record<string, unknown>, callIndex = 0): void {
+  const call = (messageCommandMock.mock.calls as unknown[][])[callIndex];
+  if (!call) {
+    throw new Error(`expected messageCommand call ${callIndex}`);
+  }
+  const options = requireRecord(call[0], `messageCommand options ${callIndex}`);
+  for (const [key, expectedValue] of Object.entries(expected)) {
+    expect(options[key], `messageCommand options.${key}`).toEqual(expectedValue);
+  }
+  if (call[1] == null) {
+    throw new Error("expected messageCommand runtime");
+  }
+  if (call[2] == null) {
+    throw new Error("expected messageCommand deps");
+  }
+}
+
 describe("runMessageAction", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -141,16 +165,12 @@ describe("runMessageAction", () => {
     await runSendAction({ target: "channel:12345" });
 
     expect(ensurePluginRegistryLoaded).not.toHaveBeenCalled();
-    expect(messageCommandMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        action: "send",
-        channel: "discord",
-        target: "channel:12345",
-        message: "hi",
-      }),
-      expect.anything(),
-      expect.anything(),
-    );
+    expectMessageCommandOptions({
+      action: "send",
+      channel: "discord",
+      target: "channel:12345",
+      message: "hi",
+    });
     expect(exitMock).toHaveBeenCalledWith(0);
   });
 
@@ -168,15 +188,11 @@ describe("runMessageAction", () => {
       scope: "configured-channels",
       onlyChannelIds: ["telegram"],
     });
-    expect(messageCommandMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        action: "broadcast",
-        targets: ["telegram:1", "telegram:2"],
-        message: "hi",
-      }),
-      expect.anything(),
-      expect.anything(),
-    );
+    expectMessageCommandOptions({
+      action: "broadcast",
+      targets: ["telegram:1", "telegram:2"],
+      message: "hi",
+    });
   });
 
   it("keeps unknown actions on the local preload path", async () => {
@@ -194,13 +210,7 @@ describe("runMessageAction", () => {
       scope: "configured-channels",
       onlyChannelIds: ["discord"],
     });
-    expect(messageCommandMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        action: "custom-action",
-      }),
-      expect.anything(),
-      expect.anything(),
-    );
+    expectMessageCommandOptions({ action: "custom-action" });
   });
 
   it("preloads when the scoped channel plugin is not cheaply available", async () => {
@@ -218,15 +228,11 @@ describe("runMessageAction", () => {
     await runSendAction({ channel: undefined, target: "telegram:12345" });
 
     expect(ensurePluginRegistryLoaded).not.toHaveBeenCalled();
-    expect(messageCommandMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        action: "send",
-        target: "telegram:12345",
-        message: "hi",
-      }),
-      expect.anything(),
-      expect.anything(),
-    );
+    expectMessageCommandOptions({
+      action: "send",
+      target: "telegram:12345",
+      message: "hi",
+    });
     expect(exitMock).toHaveBeenCalledWith(0);
   });
 
@@ -242,21 +248,17 @@ describe("runMessageAction", () => {
     });
 
     expect(ensurePluginRegistryLoaded).not.toHaveBeenCalled();
-    expect(messageCommandMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        action: "send",
-        channel: "telegram",
-        accountId: "default",
-        target: "@ops",
-        message: "hi",
-        media: "./diagram.png",
-        presentation: '{"blocks":[{"type":"buttons","buttons":[{"label":"OK","value":"ok"}]}]}',
-        delivery: '{"pin":true}',
-        forceDocument: true,
-      }),
-      expect.anything(),
-      expect.anything(),
-    );
+    expectMessageCommandOptions({
+      action: "send",
+      channel: "telegram",
+      accountId: "default",
+      target: "@ops",
+      message: "hi",
+      media: "./diagram.png",
+      presentation: '{"blocks":[{"type":"buttons","buttons":[{"label":"OK","value":"ok"}]}]}',
+      delivery: '{"pin":true}',
+      forceDocument: true,
+    });
     expectNoAccountFieldInPassedOptions();
     expect(exitMock).toHaveBeenCalledWith(0);
   });
@@ -272,7 +274,7 @@ describe("runMessageAction", () => {
       scope: "configured-channels",
       onlyChannelIds: ["telegram"],
     });
-    expect(messageCommandMock).toHaveBeenCalled();
+    expect(messageCommandMock).toHaveBeenCalledTimes(1);
   });
 
   it("loads configured channel plugins for mixed broadcast target prefixes", async () => {
@@ -419,17 +421,13 @@ describe("runMessageAction", () => {
       }),
     ).rejects.toThrow("exit");
 
-    expect(messageCommandMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        action: "poll",
-        channel: "discord",
-        target: "456",
-        accountId: "acct-1",
-        message: "hi",
-      }),
-      expect.anything(),
-      expect.anything(),
-    );
+    expectMessageCommandOptions({
+      action: "poll",
+      channel: "discord",
+      target: "456",
+      accountId: "acct-1",
+      message: "hi",
+    });
     // account key should be stripped in favor of accountId
     expectNoAccountFieldInPassedOptions();
   });
@@ -446,16 +444,12 @@ describe("runMessageAction", () => {
       }),
     ).rejects.toThrow("exit");
 
-    expect(messageCommandMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        action: "send",
-        channel: "discord",
-        target: "789",
-        accountId: undefined,
-      }),
-      expect.anything(),
-      expect.anything(),
-    );
+    expectMessageCommandOptions({
+      action: "send",
+      channel: "discord",
+      target: "789",
+      accountId: undefined,
+    });
     expectNoAccountFieldInPassedOptions();
   });
 });

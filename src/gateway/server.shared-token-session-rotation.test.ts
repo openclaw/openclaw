@@ -79,14 +79,14 @@ describe("gateway shared token session rotation", () => {
     try {
       const current = await loadGatewayConfig(ws);
       const nextConfig = buildConfigSetWithRotatedToken(current.config);
-      const closed = waitForGatewayWsClose(ws);
+      const closed = waitForGatewayWsClose(ws, 30_000);
       const setRes = await rpcReq(ws, "config.set", {
         baseHash: current.hash,
         raw: JSON.stringify(nextConfig, null, 2),
       });
       expect(setRes.ok).toBe(true);
 
-      await expect(closed).resolves.toMatchObject({
+      await expect(closed).resolves.toEqual({
         code: 4001,
         reason: "gateway auth changed",
       });

@@ -11,6 +11,16 @@ function progressLine(index: number) {
   };
 }
 
+function expectProgressBlock(block: unknown, label: string, detail: string) {
+  expect(block).toEqual({
+    type: "section",
+    fields: [
+      { type: "mrkdwn", text: `🛠️ *${label}*` },
+      { type: "mrkdwn", text: detail },
+    ],
+  });
+}
+
 describe("buildSlackProgressDraftBlocks", () => {
   it("renders structured progress lines as compact Block Kit fields", () => {
     expect(
@@ -42,8 +52,9 @@ describe("buildSlackProgressDraftBlocks", () => {
     ]);
   });
 
-  it("compacts long rich details independently from the text fallback", () => {
+  it("uses the configured max line chars for rich progress details", () => {
     const blocks = buildSlackProgressDraftBlocks({
+      maxLineChars: 64,
       lines: [
         {
           kind: "tool",
@@ -59,7 +70,10 @@ describe("buildSlackProgressDraftBlocks", () => {
       type: "section",
       fields: [
         { type: "mrkdwn", text: "🛠️ *Exec*" },
-        { type: "mrkdwn", text: "run tests in /Users/ex…es/very/deep/path/example" },
+        {
+          type: "mrkdwn",
+          text: "run tests in /Users/example/P…aw/packages/very/deep/path/example",
+        },
       ],
     });
   });
@@ -70,26 +84,14 @@ describe("buildSlackProgressDraftBlocks", () => {
       lines: Array.from({ length: 60 }, (_value, index) => progressLine(index)),
     });
     expect(blocksWithLabel).toHaveLength(50);
-    expect(blocksWithLabel?.[0]).toMatchObject({
-      type: "section",
-      fields: [{ text: "🛠️ *Exec 10*" }, { text: "run 10" }],
-    });
-    expect(blocksWithLabel?.at(-1)).toMatchObject({
-      type: "section",
-      fields: [{ text: "🛠️ *Exec 59*" }, { text: "run 59" }],
-    });
+    expectProgressBlock(blocksWithLabel?.[0], "Exec 10", "run 10");
+    expectProgressBlock(blocksWithLabel?.at(-1), "Exec 59", "run 59");
 
     const blocksWithoutLabel = buildSlackProgressDraftBlocks({
       lines: Array.from({ length: 60 }, (_value, index) => progressLine(index)),
     });
     expect(blocksWithoutLabel).toHaveLength(50);
-    expect(blocksWithoutLabel?.[0]).toMatchObject({
-      type: "section",
-      fields: [{ text: "🛠️ *Exec 10*" }, { text: "run 10" }],
-    });
-    expect(blocksWithoutLabel?.at(-1)).toMatchObject({
-      type: "section",
-      fields: [{ text: "🛠️ *Exec 59*" }, { text: "run 59" }],
-    });
+    expectProgressBlock(blocksWithoutLabel?.[0], "Exec 10", "run 10");
+    expectProgressBlock(blocksWithoutLabel?.at(-1), "Exec 59", "run 59");
   });
 });

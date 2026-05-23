@@ -1,4 +1,9 @@
-import { MODEL_APIS, type ModelApi, type ModelCompatConfig } from "../config/types.models.js";
+import {
+  MODEL_APIS,
+  isModelThinkingFormat,
+  type ModelApi,
+  type ModelCompatConfig,
+} from "../config/types.models.js";
 import { isBlockedObjectKey } from "../infra/prototype-keys.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { normalizeTrimmedStringList } from "../shared/string-normalization.js";
@@ -169,6 +174,7 @@ function normalizeModelCatalogCompat(value: unknown): ModelCompatConfig | undefi
     "supportsTools",
     "supportsStrictMode",
     "requiresStringContent",
+    "strictMessageKeys",
     "requiresToolResultName",
     "requiresAssistantAfterToolResult",
     "requiresThinkingAsText",
@@ -219,14 +225,7 @@ function normalizeModelCatalogCompat(value: unknown): ModelCompatConfig | undefi
   }
 
   const thinkingFormat = normalizeOptionalString(value.thinkingFormat) ?? "";
-  if (
-    thinkingFormat === "openai" ||
-    thinkingFormat === "openrouter" ||
-    thinkingFormat === "deepseek" ||
-    thinkingFormat === "qwen" ||
-    thinkingFormat === "qwen-chat-template" ||
-    thinkingFormat === "zai"
-  ) {
+  if (isModelThinkingFormat(thinkingFormat)) {
     compat.thinkingFormat = thinkingFormat;
   }
 
@@ -426,11 +425,13 @@ export function normalizeModelCatalog(
   const aliases = normalizeModelCatalogAliases(value.aliases, ownedProviders);
   const suppressions = normalizeModelCatalogSuppressions(value.suppressions);
   const discovery = normalizeModelCatalogDiscovery(value.discovery, ownedProviders);
+  const runtimeAugment = value.runtimeAugment === true;
   const catalog = {
     ...(providers ? { providers } : {}),
     ...(aliases ? { aliases } : {}),
     ...(suppressions ? { suppressions } : {}),
     ...(discovery ? { discovery } : {}),
+    ...(runtimeAugment ? { runtimeAugment } : {}),
   } satisfies ModelCatalog;
   return Object.keys(catalog).length > 0 ? catalog : undefined;
 }

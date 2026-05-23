@@ -173,8 +173,8 @@ WRAP
     fi
     droid --version
     if [ -z "${FACTORY_API_KEY:-}" ]; then
-      echo "SKIP: Droid Docker ACP bind requires FACTORY_API_KEY; Factory OAuth/keyring auth in ~/.factory is not portable into the container." >&2
-      exit 0
+      echo "ERROR: Droid Docker ACP bind requires FACTORY_API_KEY; Factory OAuth/keyring auth in ~/.factory is not portable into the container." >&2
+      exit 1
     fi
     ;;
   gemini)
@@ -232,7 +232,7 @@ openclaw_live_stage_state_dir "$tmp_dir/.openclaw-state"
 openclaw_live_prepare_staged_config
 cd "$tmp_dir"
 export OPENCLAW_LIVE_ACP_BIND_AGENT_COMMAND="${OPENCLAW_LIVE_ACP_BIND_AGENT_COMMAND:-}"
-pnpm test:live src/gateway/gateway-acp-bind.live.test.ts
+node scripts/test-live.mjs -- src/gateway/gateway-acp-bind.live.test.ts
 EOF
 
 openclaw_live_acp_bind_append_build_extension acpx
@@ -306,8 +306,8 @@ for ACP_AGENT in "${ACP_AGENTS[@]}"; do
     echo "==> Profile file: $PROFILE_STATUS"
     echo "==> Auth dirs: ${AUTH_DIRS_CSV:-none}"
     echo "==> Auth files: ${AUTH_FILES_CSV:-none}"
-    echo "SKIP: Droid Docker ACP bind requires FACTORY_API_KEY; Factory OAuth/keyring auth in ~/.factory is not portable into the container." >&2
-    continue
+    echo "ERROR: Droid Docker ACP bind requires FACTORY_API_KEY; Factory OAuth/keyring auth in ~/.factory is not portable into the container." >&2
+    exit 1
   fi
 
   EXTERNAL_AUTH_MOUNTS=()

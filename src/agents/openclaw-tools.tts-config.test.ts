@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { __testing, createOpenClawTools } from "./openclaw-tools.js";
+import { testing, createOpenClawTools } from "./openclaw-tools.js";
 import type { AnyAgentTool } from "./tools/common.js";
 
 const mocks = vi.hoisted(() => {
@@ -162,7 +162,7 @@ describe("createOpenClawTools TTS config wiring", () => {
       },
     } satisfies OpenClawConfig;
 
-    __testing.setDepsForTest({ config: injectedConfig });
+    testing.setDepsForTest({ config: injectedConfig });
 
     try {
       const tool = createOpenClawTools({
@@ -180,12 +180,12 @@ describe("createOpenClawTools TTS config wiring", () => {
       expect(ttsParams?.text).toBe("hello from config");
       expect(ttsParams?.cfg).toBe(injectedConfig);
     } finally {
-      __testing.setDepsForTest();
+      testing.setDepsForTest();
     }
   });
 
   it("keeps direct TTS tool guidance explicit even when the tool is available", async () => {
-    __testing.setDepsForTest({ config: {} });
+    testing.setDepsForTest({ config: {} });
 
     try {
       const tool = createOpenClawTools({
@@ -200,7 +200,7 @@ describe("createOpenClawTools TTS config wiring", () => {
       expect(tool.description).toContain("Use only for explicit audio intent");
       expect(tool.description).toContain("Never use for ordinary text replies");
     } finally {
-      __testing.setDepsForTest();
+      testing.setDepsForTest();
     }
   });
 
@@ -211,7 +211,7 @@ describe("createOpenClawTools TTS config wiring", () => {
       },
     } satisfies OpenClawConfig;
 
-    __testing.setDepsForTest({ config: injectedConfig });
+    testing.setDepsForTest({ config: injectedConfig });
 
     try {
       const tool = createOpenClawTools({
@@ -230,7 +230,7 @@ describe("createOpenClawTools TTS config wiring", () => {
       expect(ttsParams?.text).toBe("hello from reader");
       expect(ttsParams?.agentId).toBe("reader");
     } finally {
-      __testing.setDepsForTest();
+      testing.setDepsForTest();
     }
   });
 
@@ -294,7 +294,7 @@ describe("createOpenClawTools TTS config wiring", () => {
       },
     } satisfies OpenClawConfig;
 
-    __testing.setDepsForTest({ config: injectedConfig });
+    testing.setDepsForTest({ config: injectedConfig });
 
     try {
       const tool = createOpenClawTools({
@@ -316,7 +316,7 @@ describe("createOpenClawTools TTS config wiring", () => {
       expect(ttsParams?.channel).toBe("feishu");
       expect(ttsParams?.accountId).toBe("feishu-main");
     } finally {
-      __testing.setDepsForTest();
+      testing.setDepsForTest();
     }
   });
 });

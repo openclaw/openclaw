@@ -18,6 +18,8 @@ import {
   runtimeForLogger,
   type SubsystemLogger,
 } from "../logging/subsystem.js";
+import { withPluginHttpRouteRegistry } from "../plugins/http-registry.js";
+import type { PluginRegistry } from "../plugins/registry.js";
 import { resolveAccountEntry, resolveNormalizedAccountEntry } from "../routing/account-lookup.js";
 import {
   DEFAULT_ACCOUNT_ID,
@@ -38,6 +40,13 @@ const CHANNEL_RESTART_POLICY: BackoffPolicy = {
 const MAX_RESTART_ATTEMPTS = 10;
 const CHANNEL_STOP_ABORT_TIMEOUT_MS = 5_000;
 const CHANNEL_STARTUP_CONCURRENCY = 4;
+
+function waitForChannelStartupHandoff(): Promise<void> {
+  return new Promise((resolve) => {
+    const handle = setImmediate(resolve);
+    handle.unref?.();
+  });
+}
 
 type ChannelRuntimeStore = {
   aborts: Map<string, AbortController>;
@@ -180,17 +189,35 @@ type ChannelManagerOptions = {
    * the full reply/routing/session runtime graph onto the critical path.
    */
   resolveStartupChannelRuntime?: () => ChannelRuntimeSurface | Promise<ChannelRuntimeSurface>;
+  getPluginHttpRouteRegistry?: () => PluginRegistry;
   startupTrace?: GatewayStartupTrace;
+  deferStartupAccountStartsUntil?: Promise<void>;
 };
 
 type StartChannelOptions = {
   preserveRestartAttempts?: boolean;
   preserveManualStop?: boolean;
+  deferAccountStartUntil?: Promise<void>;
 };
 
 type StopChannelOptions = {
   manual?: boolean;
 };
+
+async function waitForDeferredAccountStart(
+  deferred: Promise<void>,
+  abortSignal: AbortSignal,
+): Promise<void> {
+  if (abortSignal.aborted) {
+    return;
+  }
+  await Promise.race([
+    deferred,
+    new Promise<void>((resolve) => {
+      abortSignal.addEventListener("abort", () => resolve(), { once: true });
+    }),
+  ]);
+}
 
 export type ChannelManager = {
   getRuntimeSnapshot: () => ChannelRuntimeSnapshot;
@@ -212,6 +239,7 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
     channelRuntime,
     resolveChannelRuntime,
     resolveStartupChannelRuntime,
+    getPluginHttpRouteRegistry,
     startupTrace,
   } = opts;
 
@@ -512,21 +540,36 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
             lastError: null,
             reconnectAttempts: preserveRestartAttempts ? (restartAttempts.get(rKey) ?? 0) : 0,
           });
-          const task = Promise.resolve().then(() =>
-            measureStartup(`channels.${channelId}.start-account`, () =>
-              startAccount({
-                cfg,
-                accountId: id,
-                account,
-                runtime,
-                abortSignal: abort.signal,
-                log,
-                getStatus: () => getRuntime(channelId, id),
-                setStatus: (next) => setRuntime(channelId, id, next),
-                ...(channelRuntimeForTask ? { channelRuntime: channelRuntimeForTask } : {}),
-              }),
-            ),
-          );
+          const task = Promise.resolve().then(async () => {
+            if (opts.deferAccountStartUntil) {
+              await waitForDeferredAccountStart(opts.deferAccountStartUntil, abort.signal);
+            } else if (startupTrace) {
+              await waitForChannelStartupHandoff();
+            }
+            if (abort.signal.aborted || manuallyStopped.has(rKey)) {
+              return;
+            }
+            let startAccountTask: ReturnType<typeof startAccount> | undefined;
+            await measureStartup(`channels.${channelId}.start-account-handoff`, () => {
+              const runStartAccount = () =>
+                startAccount({
+                  cfg,
+                  accountId: id,
+                  account,
+                  runtime,
+                  abortSignal: abort.signal,
+                  log,
+                  getStatus: () => getRuntime(channelId, id),
+                  setStatus: (next) => setRuntime(channelId, id, next),
+                  ...(channelRuntimeForTask ? { channelRuntime: channelRuntimeForTask } : {}),
+                });
+              const routeRegistry = getPluginHttpRouteRegistry?.();
+              startAccountTask = routeRegistry
+                ? withPluginHttpRouteRegistry(routeRegistry, runStartAccount)
+                : runStartAccount();
+            });
+            await startAccountTask;
+          });
           const trackedPromise = task
             .then(() => {
               if (abort.signal.aborted || manuallyStopped.has(rKey)) {
@@ -735,18 +778,39 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
   };
 
   const startChannels = async () => {
-    await runTasksWithConcurrency({
-      limit: CHANNEL_STARTUP_CONCURRENCY,
-      tasks: [...listChannelPlugins()].map((plugin) => async () => {
-        try {
-          await measureStartup(`channels.${plugin.id}.start`, () => startChannel(plugin.id));
-        } catch (err) {
-          ensureChannelLog(plugin.id).error?.(
-            `[${plugin.id}] channel startup failed: ${formatErrorMessage(err)}`,
-          );
-        }
-      }),
-    });
+    let releaseAccountStarts: (() => void) | undefined;
+    const deferAccountStartUntil =
+      opts.deferStartupAccountStartsUntil ??
+      (startupTrace
+        ? new Promise<void>((resolve) => {
+            releaseAccountStarts = () => {
+              const handle = setImmediate(resolve);
+              handle.unref?.();
+            };
+          })
+        : undefined);
+    try {
+      await runTasksWithConcurrency({
+        limit: CHANNEL_STARTUP_CONCURRENCY,
+        tasks: [...listChannelPlugins()].map((plugin) => async () => {
+          try {
+            await measureStartup(`channels.${plugin.id}.start`, () =>
+              startChannelInternal(
+                plugin.id,
+                undefined,
+                deferAccountStartUntil ? { deferAccountStartUntil } : {},
+              ),
+            );
+          } catch (err) {
+            ensureChannelLog(plugin.id).error?.(
+              `[${plugin.id}] channel startup failed: ${formatErrorMessage(err)}`,
+            );
+          }
+        }),
+      });
+    } finally {
+      releaseAccountStarts?.();
+    }
   };
 
   const markChannelLoggedOut = (channelId: ChannelId, cleared: boolean, accountId?: string) => {
@@ -815,11 +879,11 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
     return { channels, channelAccounts };
   };
 
-  const isManuallyStopped_ = (channelId: ChannelId, accountId: string): boolean => {
+  const isManuallyStoppedFlag = (channelId: ChannelId, accountId: string): boolean => {
     return manuallyStopped.has(restartKey(channelId, accountId));
   };
 
-  const resetRestartAttempts_ = (channelId: ChannelId, accountId: string): void => {
+  const resetRestartAttemptsForTest = (channelId: ChannelId, accountId: string): void => {
     restartAttempts.delete(restartKey(channelId, accountId));
   };
 
@@ -829,8 +893,8 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
     startChannel,
     stopChannel,
     markChannelLoggedOut,
-    isManuallyStopped: isManuallyStopped_,
-    resetRestartAttempts: resetRestartAttempts_,
+    isManuallyStopped: isManuallyStoppedFlag,
+    resetRestartAttempts: resetRestartAttemptsForTest,
     isHealthMonitorEnabled,
   };
 }

@@ -1,5 +1,11 @@
+import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
 import { AcpRuntimeError, withAcpRuntimeErrorBoundary } from "../runtime/errors.js";
-import type { AcpRuntime, AcpRuntimeCapabilities, AcpRuntimeHandle } from "../runtime/types.js";
+import type {
+  AcpRuntime,
+  AcpRuntimeCapabilities,
+  AcpRuntimeHandle,
+  AcpRuntimeStatus,
+} from "../runtime/types.js";
 import type { SessionAcpMeta } from "./manager.types.js";
 import { createUnsupportedControlError } from "./manager.utils.js";
 import type { CachedRuntimeState } from "./runtime-cache.js";
@@ -10,9 +16,66 @@ import {
   resolveRuntimeOptionsFromMeta,
 } from "./runtime-options.js";
 
+const OPTIONAL_TIMEOUT_CONFIG_KEYS = new Set(["timeout", "timeout_seconds"]);
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
+}
+
+function extractConfigOptionKeys(value: unknown): string[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value
+    .map((entry) => {
+      if (typeof entry === "string") {
+        return normalizeText(entry);
+      }
+      const record = asRecord(entry);
+      return normalizeText(record?.id ?? record?.key);
+    })
+    .filter(Boolean) as string[];
+}
+
+function extractRuntimeStatusConfigOptionKeys(status: AcpRuntimeStatus | undefined): string[] {
+  const details = asRecord(status?.details);
+  return [
+    ...extractConfigOptionKeys(details?.configOptions),
+    ...extractConfigOptionKeys(details?.config_options),
+  ];
+}
+
+function isOptionalTimeoutConfigKey(key: string): boolean {
+  return OPTIONAL_TIMEOUT_CONFIG_KEYS.has(normalizeLowercaseStringOrEmpty(key));
+}
+
+function isUnsupportedOptionalTimeoutConfigRejection(key: string, error: unknown): boolean {
+  if (!isOptionalTimeoutConfigKey(key)) {
+    return false;
+  }
+  const errorCode = error && typeof error === "object" ? (error as { code?: unknown }).code : null;
+  if (errorCode === "ACP_BACKEND_UNSUPPORTED_CONTROL") {
+    return true;
+  }
+  const message =
+    error instanceof Error ? error.message : typeof error === "string" ? error : String(error);
+  const normalized = normalizeLowercaseStringOrEmpty(message);
+  return (
+    normalized.includes("session/set_config_option") &&
+    (normalized.includes("-32602") ||
+      normalized.includes("invalid params") ||
+      normalized.includes("unsupported") ||
+      normalized.includes("not supported") ||
+      normalized.includes("not implement"))
+  );
+}
+
 export async function resolveManagerRuntimeCapabilities(params: {
   runtime: AcpRuntime;
   handle: AcpRuntimeHandle;
+  includeStatusConfigOptionKeys?: boolean;
 }): Promise<AcpRuntimeCapabilities> {
   let reported: AcpRuntimeCapabilities | undefined;
   if (params.runtime.getCapabilities) {
@@ -32,12 +95,30 @@ export async function resolveManagerRuntimeCapabilities(params: {
   if (params.runtime.getStatus) {
     controls.add("session/status");
   }
-  const normalizedKeys = (reported?.configOptionKeys ?? [])
-    .map((entry) => normalizeText(entry))
-    .filter(Boolean) as string[];
+  const normalizedKeys = new Set(
+    (reported?.configOptionKeys ?? [])
+      .map((entry) => normalizeText(entry))
+      .filter(Boolean) as string[],
+  );
+  if (
+    normalizedKeys.size === 0 &&
+    params.includeStatusConfigOptionKeys &&
+    params.runtime.getStatus
+  ) {
+    try {
+      const status = await params.runtime.getStatus({ handle: params.handle });
+      for (const key of extractRuntimeStatusConfigOptionKeys(status)) {
+        normalizedKeys.add(key);
+      }
+    } catch {
+      // Status-derived option keys are an optional refinement. Keep the
+      // capability result usable for runtimes that expose controls but cannot
+      // answer status before a turn.
+    }
+  }
   return {
     controls: [...controls].toSorted(),
-    ...(normalizedKeys.length > 0 ? { configOptionKeys: normalizedKeys } : {}),
+    ...(normalizedKeys.size > 0 ? { configOptionKeys: [...normalizedKeys] } : {}),
   };
 }
 
@@ -55,17 +136,19 @@ export async function applyManagerRuntimeControls(params: {
     return;
   }
 
+  const needsConfigOptionKeys = buildRuntimeConfigOptionPairs(options).length > 0;
   const capabilities = await resolveManagerRuntimeCapabilities({
     runtime: params.runtime,
     handle: params.handle,
+    includeStatusConfigOptionKeys: needsConfigOptionKeys,
   });
   const backend = params.handle.backend || params.meta.backend;
   const runtimeMode = normalizeText(options.runtimeMode);
-  const configOptions = buildRuntimeConfigOptionPairs(options);
+  const configOptions = buildRuntimeConfigOptionPairs(options, capabilities.configOptionKeys);
   const advertisedKeys = new Set(
     (capabilities.configOptionKeys ?? [])
-      .map((entry) => normalizeText(entry))
-      .filter(Boolean) as string[],
+      .map((entry) => normalizeLowercaseStringOrEmpty(entry))
+      .filter(Boolean),
   );
 
   await withAcpRuntimeErrorBoundary({
@@ -94,17 +177,27 @@ export async function applyManagerRuntimeControls(params: {
           });
         }
         for (const [key, value] of configOptions) {
-          if (advertisedKeys.size > 0 && !advertisedKeys.has(key)) {
+          if (
+            advertisedKeys.size > 0 &&
+            !advertisedKeys.has(normalizeLowercaseStringOrEmpty(key))
+          ) {
             throw new AcpRuntimeError(
               "ACP_BACKEND_UNSUPPORTED_CONTROL",
               `ACP backend "${backend}" does not accept config key "${key}".`,
             );
           }
-          await params.runtime.setConfigOption({
-            handle: params.handle,
-            key,
-            value,
-          });
+          try {
+            await params.runtime.setConfigOption({
+              handle: params.handle,
+              key,
+              value,
+            });
+          } catch (error) {
+            if (isUnsupportedOptionalTimeoutConfigRejection(key, error)) {
+              continue;
+            }
+            throw error;
+          }
         }
       }
     },

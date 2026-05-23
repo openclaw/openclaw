@@ -1,8 +1,8 @@
-import type { StreamFn } from "@mariozechner/pi-agent-core";
+import type { StreamFn } from "@earendil-works/pi-agent-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createPiAiStreamSimpleMock } from "../../../test/helpers/agents/pi-ai-stream-simple-mock.js";
 import { isOpenRouterAnthropicModelRef } from "./anthropic-family-cache-semantics.js";
-import { __testing as extraParamsTesting, applyExtraParamsToAgent } from "./extra-params.js";
+import { testing as extraParamsTesting, applyExtraParamsToAgent } from "./extra-params.js";
 import { resolveCacheRetention } from "./prompt-cache-retention.js";
 
 function applyAndExpectWrapped(params: {
@@ -39,7 +39,7 @@ vi.mock("./logger.js", () => ({
   },
 }));
 
-vi.mock("@mariozechner/pi-ai", () => createPiAiStreamSimpleMock());
+vi.mock("@earendil-works/pi-ai", () => createPiAiStreamSimpleMock());
 
 beforeEach(() => {
   extraParamsTesting.setProviderRuntimeDepsForTest({

@@ -20,12 +20,17 @@ import {
   type SsrFPolicy,
   ssrfPolicyFromDangerouslyAllowPrivateNetwork,
 } from "openclaw/plugin-sdk/ssrf-runtime";
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 
 const DEFAULT_FAL_BASE_URL = "https://fal.run";
 const DEFAULT_FAL_IMAGE_MODEL = "fal-ai/flux/dev";
 const DEFAULT_FAL_EDIT_SUBPATH = "image-to-image";
 const DEFAULT_OUTPUT_FORMAT = "png";
+const GPT_IMAGE_EDIT_MAX_INPUT_IMAGES = 10;
+const NANO_BANANA_EDIT_MAX_INPUT_IMAGES = 14;
 const FAL_OUTPUT_FORMATS = ["png", "jpeg"] as const;
 const FAL_SUPPORTED_SIZES = [
   "1024x1024",
@@ -36,15 +41,7 @@ const FAL_SUPPORTED_SIZES = [
 ] as const;
 const FAL_SUPPORTED_ASPECT_RATIOS = ["1:1", "4:3", "3:4", "16:9", "9:16"] as const;
 
-type FalGeneratedImage = {
-  url?: string;
-  content_type?: string;
-};
-
-type FalImageGenerationResponse = {
-  images?: FalGeneratedImage[];
-  prompt?: string;
-};
+const FAL_IMAGE_MALFORMED_RESPONSE = "fal image generation response malformed";
 
 type FalImageSize = string | { width: number; height: number };
 type FalNetworkPolicy = {
@@ -55,7 +52,7 @@ type FalNetworkPolicy = {
 
 let falFetchGuard = fetchWithSsrFGuard;
 
-export function _setFalFetchGuardForTesting(impl: typeof fetchWithSsrFGuard | null): void {
+export function setFalFetchGuardForTesting(impl: typeof fetchWithSsrFGuard | null): void {
   falFetchGuard = impl ?? fetchWithSsrFGuard;
 }
 
@@ -63,6 +60,34 @@ function matchesTrustedHostSuffix(hostname: string, trustedSuffix: string): bool
   const normalizedHost = normalizeLowercaseStringOrEmpty(hostname);
   const normalizedSuffix = normalizeLowercaseStringOrEmpty(trustedSuffix);
   return normalizedHost === normalizedSuffix || normalizedHost.endsWith(`.${normalizedSuffix}`);
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value && typeof value === "object" && !Array.isArray(value));
+}
+
+function parseFalImageGenerationResponse(payload: unknown): {
+  images: Record<string, unknown>[];
+  prompt?: string;
+} {
+  if (!isRecord(payload)) {
+    throw new Error(FAL_IMAGE_MALFORMED_RESPONSE);
+  }
+  const rawImages = payload.images;
+  if (rawImages === undefined || rawImages === null) {
+    return { images: [], prompt: normalizeOptionalString(payload.prompt) };
+  }
+  if (!Array.isArray(rawImages)) {
+    throw new Error(FAL_IMAGE_MALFORMED_RESPONSE);
+  }
+  const images: Record<string, unknown>[] = [];
+  for (const entry of rawImages) {
+    if (!isRecord(entry)) {
+      throw new Error(FAL_IMAGE_MALFORMED_RESPONSE);
+    }
+    images.push(entry);
+  }
+  return { images, prompt: normalizeOptionalString(payload.prompt) };
 }
 
 function resolveFalNetworkPolicy(params: {
@@ -97,11 +122,15 @@ function ensureFalModelPath(model: string | undefined, hasInputImages: boolean):
     return trimmed;
   }
   if (
-    trimmed.endsWith(`/${DEFAULT_FAL_EDIT_SUBPATH}`) ||
     trimmed.endsWith("/edit") ||
+    trimmed.endsWith(`/${DEFAULT_FAL_EDIT_SUBPATH}`) ||
     trimmed.includes("/image-to-image/")
   ) {
     return trimmed;
+  }
+  // GPT Image 2 and Nano Banana 2 use /edit; Flux uses /image-to-image.
+  if (trimmed.startsWith("openai/gpt-image-") || trimmed.startsWith("fal-ai/nano-banana-")) {
+    return `${trimmed}/edit`;
   }
   return `${trimmed}/${DEFAULT_FAL_EDIT_SUBPATH}`;
 }
@@ -196,7 +225,10 @@ function resolveFalImageSize(params: {
 
   const normalizedAspectRatio = params.aspectRatio?.trim();
   if (normalizedAspectRatio && params.hasInputImages) {
-    throw new Error("fal image edit endpoint does not support aspectRatio overrides");
+    return (
+      aspectRatioToEnum(normalizedAspectRatio) ??
+      aspectRatioToDimensions(normalizedAspectRatio, 1024)
+    );
   }
 
   const edge = mapResolutionToEdge(params.resolution);
@@ -268,9 +300,9 @@ export function buildFalImageGenerationProvider(): ImageGenerationProvider {
       edit: {
         enabled: true,
         maxCount: 4,
-        maxInputImages: 1,
+        maxInputImages: GPT_IMAGE_EDIT_MAX_INPUT_IMAGES,
         supportsSize: true,
-        supportsAspectRatio: false,
+        supportsAspectRatio: true,
         supportsResolution: true,
       },
       geometry: {
@@ -292,11 +324,8 @@ export function buildFalImageGenerationProvider(): ImageGenerationProvider {
       if (!auth.apiKey) {
         throw new Error("fal API key missing");
       }
-      if ((req.inputImages?.length ?? 0) > 1) {
-        throw new Error("fal image generation currently supports at most one reference image");
-      }
-
-      const hasInputImages = (req.inputImages?.length ?? 0) > 0;
+      const inputImageCount = req.inputImages?.length ?? 0;
+      const hasInputImages = inputImageCount > 0;
       const imageSize = resolveFalImageSize({
         size: req.size,
         resolution: req.resolution,
@@ -304,6 +333,39 @@ export function buildFalImageGenerationProvider(): ImageGenerationProvider {
         hasInputImages,
       });
       const model = ensureFalModelPath(req.model, hasInputImages);
+
+      const isGptImageEditModel = model.startsWith("openai/gpt-image-");
+      const isNanoBananaEditModel = model.startsWith("fal-ai/nano-banana-");
+      if (
+        hasInputImages &&
+        isGptImageEditModel &&
+        inputImageCount > GPT_IMAGE_EDIT_MAX_INPUT_IMAGES
+      ) {
+        throw new Error(
+          `fal GPT Image edit supports at most ${GPT_IMAGE_EDIT_MAX_INPUT_IMAGES} reference images (requested ${inputImageCount})`,
+        );
+      }
+      if (
+        hasInputImages &&
+        isNanoBananaEditModel &&
+        inputImageCount > NANO_BANANA_EDIT_MAX_INPUT_IMAGES
+      ) {
+        throw new Error(
+          `fal Nano Banana edit supports at most ${NANO_BANANA_EDIT_MAX_INPUT_IMAGES} reference images (requested ${inputImageCount})`,
+        );
+      }
+
+      // Flux/custom edit endpoints use the singular image_url contract.
+      if (hasInputImages && !isGptImageEditModel && !isNanoBananaEditModel) {
+        if (inputImageCount > 1) {
+          throw new Error(
+            "fal flux image generation currently supports at most one reference image",
+          );
+        }
+        if (req.aspectRatio) {
+          throw new Error("fal flux image edit endpoint does not support aspectRatio overrides");
+        }
+      }
       const explicitBaseUrl = req.cfg?.models?.providers?.fal?.baseUrl?.trim();
       const { baseUrl, allowPrivateNetwork, headers, dispatcherPolicy } =
         resolveProviderHttpRequestConfig({
@@ -325,7 +387,17 @@ export function buildFalImageGenerationProvider(): ImageGenerationProvider {
         output_format: req.outputFormat ?? DEFAULT_OUTPUT_FORMAT,
       };
       if (imageSize !== undefined) {
-        requestBody.image_size = imageSize;
+        // NB2 edit uses its own geometry schema; GPT Image 2 and Flux use image_size
+        if (model.startsWith("fal-ai/nano-banana-") && hasInputImages) {
+          if (req.aspectRatio) {
+            requestBody.aspect_ratio = req.aspectRatio;
+          }
+          if (req.resolution) {
+            requestBody.resolution = req.resolution;
+          }
+        } else {
+          requestBody.image_size = imageSize;
+        }
       }
 
       if (hasInputImages) {
@@ -333,7 +405,12 @@ export function buildFalImageGenerationProvider(): ImageGenerationProvider {
         if (!input) {
           throw new Error("fal image edit request missing reference image");
         }
-        requestBody.image_url = toImageDataUrl(input);
+        // GPT Image 2 and NB2 use image_urls (array); Flux uses image_url (singular)
+        if (isGptImageEditModel || isNanoBananaEditModel) {
+          requestBody.image_urls = req.inputImages!.map((img) => toImageDataUrl(img));
+        } else {
+          requestBody.image_url = toImageDataUrl(input);
+        }
       }
       const { response, release } = await falFetchGuard({
         url: `${baseUrl}/${model}`,
@@ -350,13 +427,13 @@ export function buildFalImageGenerationProvider(): ImageGenerationProvider {
       try {
         await assertOkOrThrowHttpError(response, "fal image generation failed");
 
-        const payload = (await response.json()) as FalImageGenerationResponse;
+        const payload = parseFalImageGenerationResponse(await response.json());
         const images: GeneratedImageAsset[] = [];
         let imageIndex = 0;
-        for (const entry of payload.images ?? []) {
-          const url = entry.url?.trim();
+        for (const entry of payload.images) {
+          const url = normalizeOptionalString(entry.url);
           if (!url) {
-            continue;
+            throw new Error(FAL_IMAGE_MALFORMED_RESPONSE);
           }
           const downloaded = await fetchImageBuffer(url, networkPolicy);
           imageIndex += 1;
@@ -364,7 +441,7 @@ export function buildFalImageGenerationProvider(): ImageGenerationProvider {
             buffer: downloaded.buffer,
             mimeType: downloaded.mimeType,
             fileName: `image-${imageIndex}.${imageFileExtensionForMimeType(
-              downloaded.mimeType || entry.content_type,
+              downloaded.mimeType || normalizeOptionalString(entry.content_type),
             )}`,
           });
         }

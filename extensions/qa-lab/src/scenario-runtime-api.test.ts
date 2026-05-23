@@ -48,6 +48,11 @@ function createDeps(overrides?: Partial<QaScenarioRuntimeDeps>): QaScenarioRunti
     readEffectiveTools: fn,
     readSkillStatus: fn,
     readRawQaSessionStore: fn,
+    readGatewayLogs: fn,
+    markGatewayLogCursor: fn,
+    scanGatewayLogSentinels: fn,
+    assertNoGatewayLogSentinels: fn,
+    readSessionTranscriptSummary: fn,
     runQaCli: fn,
     extractMediaPathFromText: fn,
     resolveGeneratedImagePath: fn,
@@ -64,6 +69,7 @@ function createDeps(overrides?: Partial<QaScenarioRuntimeDeps>): QaScenarioRunti
     runAgentPrompt: fn,
     ensureImageGenerationConfigured: fn,
     handleQaAction: fn,
+    runRuntimeToolFixture: fn,
     extractQaToolPayload: fn,
     formatMemoryDreamingDay: fn,
     resolveSessionTranscriptsDirForAgent: fn,
@@ -77,7 +83,7 @@ function createDeps(overrides?: Partial<QaScenarioRuntimeDeps>): QaScenarioRunti
     hasDiscoveryLabels: fn,
     reportsDiscoveryScopeLeak: fn,
     reportsMissingDiscoveryFiles: fn,
-    hasModelSwitchContinuityEvidence: fn,
+    hasModelSwitchContinuitySignal: fn,
     ...overrides,
   };
 }
@@ -155,6 +161,9 @@ describe("createQaScenarioRuntimeApi", () => {
     expect(api.config).toEqual({ expected: "value" });
     expect(api.waitForCondition).toBe(waitForCondition);
     expect(api.waitForChannelReady).toBe(api.waitForTransportReady);
+    expect(api.markGatewayLogCursor).toBe(deps.markGatewayLogCursor);
+    expect(api.assertNoGatewayLogSentinels).toBe(deps.assertNoGatewayLogSentinels);
+    expect(api.readSessionTranscriptSummary).toBe(deps.readSessionTranscriptSummary);
     for (const toolName of browserAndWebRuntimeTools) {
       expect(api[toolName]).toBe(deps[toolName]);
     }
@@ -172,8 +181,8 @@ describe("createQaScenarioRuntimeApi", () => {
       to: "dm:qa-operator",
       text: "hi",
     });
-    expect(inbound.id).toEqual(expect.stringMatching(/\S/));
-    expect(outbound.id).toEqual(expect.stringMatching(/\S/));
+    expect(inbound.id.trim()).not.toBe("");
+    expect(outbound.id.trim()).not.toBe("");
     api.readTransportMessage({ accountId: "qa-channel", messageId: outbound.id });
     await api.reset();
     await api.resetBus();

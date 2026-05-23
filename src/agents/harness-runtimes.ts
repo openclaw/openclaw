@@ -1,8 +1,7 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
 import { isRecord } from "../utils.js";
-import { resolveModelRuntimePolicy } from "./model-runtime-policy.js";
-import { modelSelectionShouldEnsureCodexPlugin } from "./openai-codex-routing.js";
+import { resolveAgentHarnessPolicy } from "./harness/policy.js";
 import { normalizeEmbeddedAgentRuntime } from "./pi-embedded-runner/runtime.js";
 import { normalizeProviderId } from "./provider-id.js";
 
@@ -38,6 +37,12 @@ function listAgentModelRefs(value: unknown): string[] {
   return refs;
 }
 
+function pushAgentModelRefs(refs: string[], value: unknown): void {
+  for (const ref of listAgentModelRefs(value)) {
+    refs.push(ref);
+  }
+}
+
 function parseConfiguredModelRef(
   value: unknown,
 ): { provider: string; modelId: string } | undefined {
@@ -55,21 +60,27 @@ function parseConfiguredModelRef(
   };
 }
 
-function hasOpenAIModelRef(config: OpenClawConfig, value: unknown, agentId?: string): boolean {
-  return listAgentModelRefs(value).some((ref) => {
-    if (!modelSelectionShouldEnsureCodexPlugin({ model: ref, config })) {
-      return false;
-    }
-    const parsed = parseConfiguredModelRef(ref);
-    const policy = resolveModelRuntimePolicy({
-      config,
-      provider: parsed?.provider,
-      modelId: parsed?.modelId,
-      agentId,
-    });
-    const runtime = normalizeRuntimeId(policy.policy?.id);
-    return !runtime || runtime === "auto" || runtime === "codex";
+function resolveConfiguredModelHarnessRuntime(params: {
+  config: OpenClawConfig;
+  includeImplicitRuntimePreferences: boolean;
+  modelRef: string;
+  agentId?: string;
+}): string | undefined {
+  const parsed = parseConfiguredModelRef(params.modelRef);
+  if (!parsed) {
+    return undefined;
+  }
+  const policy = resolveAgentHarnessPolicy({
+    config: params.config,
+    provider: parsed.provider,
+    modelId: parsed.modelId,
+    agentId: params.agentId,
   });
+  if (!params.includeImplicitRuntimePreferences && policy.runtimeSource === "implicit") {
+    return undefined;
+  }
+  const runtime = normalizeRuntimeId(policy.runtime);
+  return runtime && runtime !== "auto" && runtime !== "pi" ? runtime : undefined;
 }
 
 function pushConfiguredModelRuntimeIds(config: OpenClawConfig, runtimes: Set<string>): void {
@@ -102,8 +113,55 @@ function pushConfiguredModelRuntimeIds(config: OpenClawConfig, runtimes: Set<str
     }
   };
   pushModelMapRuntimeIds(config.agents?.defaults?.models);
-  for (const agent of config.agents?.list ?? []) {
-    pushModelMapRuntimeIds(agent.models);
+  const agents = Array.isArray(config.agents?.list) ? config.agents.list : [];
+  for (const agent of agents) {
+    pushModelMapRuntimeIds(isRecord(agent) ? agent.models : undefined);
+  }
+}
+
+function pushConfiguredAgentModelRuntimeIds(
+  config: OpenClawConfig,
+  runtimes: Set<string>,
+  includeImplicitRuntimePreferences: boolean,
+): void {
+  const pushModelRefs = (modelRefs: string[], agentId?: string) => {
+    for (const modelRef of modelRefs) {
+      const runtime = resolveConfiguredModelHarnessRuntime({
+        config,
+        includeImplicitRuntimePreferences,
+        modelRef,
+        agentId,
+      });
+      if (runtime) {
+        runtimes.add(runtime);
+      }
+    }
+  };
+  const pushModelMapRefs = (models: unknown, agentId?: string) => {
+    if (!isRecord(models)) {
+      return;
+    }
+    pushModelRefs(Object.keys(models), agentId);
+  };
+
+  const defaultsModel = config.agents?.defaults?.model;
+  const defaultsModelRefs: string[] = [];
+  pushAgentModelRefs(defaultsModelRefs, defaultsModel);
+  pushModelRefs(defaultsModelRefs);
+  pushModelMapRefs(config.agents?.defaults?.models);
+
+  if (!Array.isArray(config.agents?.list)) {
+    return;
+  }
+  for (const agent of config.agents.list) {
+    if (!isRecord(agent)) {
+      continue;
+    }
+    const agentId = typeof agent.id === "string" ? agent.id : undefined;
+    const selectedModelRefs: string[] = [];
+    pushAgentModelRefs(selectedModelRefs, agent.model ?? defaultsModel);
+    pushModelRefs(selectedModelRefs, agentId);
+    pushModelMapRefs(agent.models, agentId);
   }
 }
 
@@ -116,13 +174,15 @@ function pushLegacyAgentRuntimeIds(config: OpenClawConfig, runtimes: Set<string>
   };
 
   pushRuntimeId(config.agents?.defaults?.agentRuntime?.id);
-  for (const agent of config.agents?.list ?? []) {
+  const agents = Array.isArray(config.agents?.list) ? config.agents.list : [];
+  for (const agent of agents) {
     pushRuntimeId(agent.agentRuntime?.id);
   }
 }
 
 export type ConfiguredAgentHarnessRuntimeOptions = {
   includeEnvRuntime?: boolean;
+  includeImplicitRuntimePreferences?: boolean;
   includeLegacyAgentRuntimes?: boolean;
 };
 
@@ -133,12 +193,8 @@ export function collectConfiguredAgentHarnessRuntimes(
 ): string[] {
   const runtimes = new Set<string>();
   const includeEnvRuntime = options.includeEnvRuntime ?? true;
+  const includeImplicitRuntimePreferences = options.includeImplicitRuntimePreferences ?? true;
   const includeLegacyAgentRuntimes = options.includeLegacyAgentRuntimes ?? true;
-  const pushCodexForOpenAIModel = (model: unknown, agentId?: string) => {
-    if (hasOpenAIModelRef(config, model, agentId)) {
-      runtimes.add("codex");
-    }
-  };
 
   if (includeEnvRuntime) {
     const envRuntime = normalizeRuntimeId(env.OPENCLAW_AGENT_RUNTIME);
@@ -150,19 +206,7 @@ export function collectConfiguredAgentHarnessRuntimes(
   if (includeLegacyAgentRuntimes) {
     pushLegacyAgentRuntimeIds(config, runtimes);
   }
-  const defaultsModel = config.agents?.defaults?.model;
-  pushCodexForOpenAIModel(defaultsModel);
-  if (Array.isArray(config.agents?.list)) {
-    for (const agent of config.agents.list) {
-      if (!isRecord(agent)) {
-        continue;
-      }
-      pushCodexForOpenAIModel(
-        agent.model ?? defaultsModel,
-        typeof agent.id === "string" ? agent.id : undefined,
-      );
-    }
-  }
+  pushConfiguredAgentModelRuntimeIds(config, runtimes, includeImplicitRuntimePreferences);
 
   return [...runtimes].toSorted((left, right) => left.localeCompare(right));
 }

@@ -40,16 +40,30 @@ function createStubPty(pid = 1234) {
 }
 
 function expectSpawnEnv() {
-  const spawnOptions = spawnMock.mock.calls[0]?.[2] as { env?: Record<string, string> };
-  return spawnOptions?.env;
+  const options = firstSpawnCall()[2];
+  if (options === undefined) {
+    return undefined;
+  }
+  if (typeof options !== "object" || options === null || Array.isArray(options)) {
+    throw new Error("expected spawn options to be an object");
+  }
+  return (options as { env?: Record<string, string> }).env;
 }
 
 function expectSpawnCommand() {
-  return spawnMock.mock.calls[0]?.[0] as string | undefined;
+  return firstSpawnCall()[0] as string;
 }
 
 function expectSpawnArgs() {
-  return spawnMock.mock.calls[0]?.[1] as string[] | undefined;
+  return firstSpawnCall()[1] as string[];
+}
+
+function firstSpawnCall(): unknown[] {
+  const [call] = spawnMock.mock.calls;
+  if (!call) {
+    throw new Error("expected spawn call");
+  }
+  return call;
 }
 
 describe("createPtyAdapter", () => {
@@ -153,6 +167,29 @@ describe("createPtyAdapter", () => {
     expect(stub.onExit).toHaveBeenCalledTimes(1);
     stub.emitExit({ exitCode: 3, signal: 0 });
     await expect(adapter.wait()).resolves.toEqual({ code: 3, signal: null });
+    expect(adapter.stdin?.destroyed).toBe(true);
+    expect(adapter.stdin?.writable).toBe(false);
+  });
+
+  it("reports stdin as non-writable after EOF or dispose", async () => {
+    const stub = createStubPty();
+    spawnMock.mockReturnValue(stub);
+
+    const adapter = await createPtyAdapter({
+      shell: "bash",
+      args: ["-lc", "cat"],
+    });
+
+    expect(adapter.stdin?.writable).toBe(true);
+    expect(adapter.stdin?.writableEnded).toBe(false);
+
+    adapter.stdin?.end();
+    expect(stub.write).toHaveBeenCalledWith(process.platform === "win32" ? "\x1a" : "\x04");
+    expect(adapter.stdin?.writable).toBe(false);
+    expect(adapter.stdin?.writableEnded).toBe(true);
+
+    adapter.dispose();
+    expect(adapter.stdin?.destroyed).toBe(true);
   });
 
   it("disposes PTY listeners", async () => {

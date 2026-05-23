@@ -30,14 +30,26 @@ async function createTempSessionPath() {
   return { dir, file: path.join(dir, "session.jsonl") };
 }
 
-function requireBackupPath(result: { backupPath?: string }): string {
-  if (!result.backupPath) {
-    throw new Error("expected session repair backup path");
+async function expectNoRetainedBackup(
+  file: string,
+  result: { backupPath?: string },
+): Promise<void> {
+  expect(result.backupPath).toBeUndefined();
+  const siblings = await fs.readdir(path.dirname(file));
+  const leftover = siblings.filter((name) => name.includes(".bak-"));
+  expect(leftover).toEqual([]);
+}
+
+function requireFirstLogMessage(log: ReturnType<typeof vi.fn>): string {
+  const message = log.mock.calls[0]?.[0];
+  if (typeof message !== "string") {
+    throw new Error("expected first log message");
   }
-  return result.backupPath;
+  return message;
 }
 
 afterEach(async () => {
+  vi.restoreAllMocks();
   await Promise.all(tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })));
 });
 
@@ -52,13 +64,53 @@ describe("repairSessionFileIfNeeded", () => {
     const result = await repairSessionFileIfNeeded({ sessionFile: file });
     expect(result.repaired).toBe(true);
     expect(result.droppedLines).toBe(1);
-    const backupPath = requireBackupPath(result);
 
     const repaired = await fs.readFile(file, "utf-8");
-    expect(repaired.trim().split("\n")).toHaveLength(2);
+    const repairedLines = repaired
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line));
+    expect(repairedLines).toEqual([header, message]);
 
-    const backup = await fs.readFile(backupPath, "utf-8");
-    expect(backup).toBe(content);
+    await expectNoRetainedBackup(file, result);
+  });
+
+  it("does not accumulate backups across repeated repairs of a persistently corrupted file", async () => {
+    // Regression for #80960: a stuck session with a writer that keeps
+    // appending a malformed line caused every repair invocation to leave a
+    // ~1.8 MB `.bak-<pid>-<ts>` snapshot, accumulating 2,180 files / 2.1 GB
+    // on a single agent over ~25 hours.
+    const { file } = await createTempSessionPath();
+    const { header, message } = buildSessionHeaderAndMessage();
+    const malformedTail = '{"type":"message"';
+
+    for (let i = 0; i < 5; i++) {
+      const content = `${JSON.stringify(header)}\n${JSON.stringify(message)}\n${malformedTail}`;
+      await fs.writeFile(file, content, "utf-8");
+      const result = await repairSessionFileIfNeeded({ sessionFile: file });
+      expect(result.repaired).toBe(true);
+      expect(result.droppedLines).toBe(1);
+      await expectNoRetainedBackup(file, result);
+    }
+  });
+
+  it("reports retained backup path when successful repair backup cleanup fails", async () => {
+    const { file } = await createTempSessionPath();
+    const { header, message } = buildSessionHeaderAndMessage();
+    const content = `${JSON.stringify(header)}\n${JSON.stringify(message)}\n{"type":"message"`;
+    await fs.writeFile(file, content, "utf-8");
+    vi.spyOn(fs, "unlink").mockRejectedValueOnce(new Error("simulated cleanup failure"));
+
+    const debug = vi.fn();
+    const result = await repairSessionFileIfNeeded({ sessionFile: file, debug });
+
+    expect(result.repaired).toBe(true);
+    expect(result.backupPath).toMatch(/session\.jsonl\.bak-/);
+    expect(debug.mock.calls.some(([message]) => String(message).includes("cleanup failed"))).toBe(
+      true,
+    );
+    const siblings = await fs.readdir(path.dirname(file));
+    expect(siblings.filter((name) => name.includes(".bak-"))).toHaveLength(1);
   });
 
   it("does not drop CRLF-terminated JSONL lines", async () => {
@@ -89,7 +141,7 @@ describe("repairSessionFileIfNeeded", () => {
     expect(result.repaired).toBe(false);
     expect(result.reason).toBe("invalid session header");
     expect(warn).toHaveBeenCalledTimes(1);
-    expect(warn.mock.calls[0]?.[0]).toContain("invalid session header");
+    expect(requireFirstLogMessage(warn)).toContain("invalid session header");
   });
 
   it("returns a detailed reason when read errors are not ENOENT", async () => {
@@ -139,9 +191,9 @@ describe("repairSessionFileIfNeeded", () => {
     expect(result.repaired).toBe(true);
     expect(result.droppedLines).toBe(0);
     expect(result.rewrittenAssistantMessages).toBe(1);
-    await expect(fs.readFile(requireBackupPath(result), "utf-8")).resolves.toBe(original);
+    await expectNoRetainedBackup(file, result);
     expect(debug).toHaveBeenCalledTimes(1);
-    const debugMessage = debug.mock.calls[0]?.[0] as string;
+    const debugMessage = requireFirstLogMessage(debug);
     expect(debugMessage).toContain("rewrote 1 assistant message(s)");
     expect(debugMessage).not.toContain("dropped");
 
@@ -178,7 +230,7 @@ describe("repairSessionFileIfNeeded", () => {
     expect(result.repaired).toBe(true);
     expect(result.rewrittenUserMessages).toBe(1);
     expect(result.droppedBlankUserMessages).toBe(0);
-    expect(debug.mock.calls[0]?.[0]).toContain("rewrote 1 user message(s)");
+    expect(requireFirstLogMessage(debug)).toContain("rewrote 1 user message(s)");
 
     const repaired = await fs.readFile(file, "utf-8");
     const repairedLines = repaired.trim().split("\n");
@@ -275,7 +327,7 @@ describe("repairSessionFileIfNeeded", () => {
     expect(result.repaired).toBe(true);
     expect(result.droppedLines).toBe(1);
     expect(result.rewrittenAssistantMessages).toBe(1);
-    const debugMessage = debug.mock.calls[0]?.[0] as string;
+    const debugMessage = requireFirstLogMessage(debug);
     expect(debugMessage).toContain("dropped 1 malformed line(s)");
     expect(debugMessage).toContain("rewrote 1 assistant message(s)");
   });
@@ -470,6 +522,141 @@ describe("repairSessionFileIfNeeded", () => {
     expect(after).toBe(original);
   });
 
+  it("inserts missing code-mode tool results before replay repair has to synthesize them", async () => {
+    const { file } = await createTempSessionPath();
+    const { header, message } = buildSessionHeaderAndMessage();
+    const toolCallAssistant = {
+      type: "message",
+      id: "msg-asst-process",
+      parentId: "msg-1",
+      timestamp: new Date().toISOString(),
+      message: {
+        role: "assistant",
+        provider: "openai-codex",
+        model: "gpt-5.5",
+        api: "openai-codex-responses",
+        content: [
+          { type: "text", text: "Process List" },
+          {
+            type: "toolCall",
+            id: "call_process|fc_1",
+            name: "process",
+            arguments: { action: "poll", sessionId: "wild-wharf", timeout: 30_000 },
+          },
+        ],
+        stopReason: "toolUse",
+      },
+    };
+    const deliveryMirror = {
+      type: "message",
+      id: "msg-delivery",
+      parentId: "msg-asst-process",
+      timestamp: new Date().toISOString(),
+      message: {
+        role: "assistant",
+        provider: "openclaw",
+        model: "delivery-mirror",
+        api: "openai-responses",
+        content: [{ type: "text", text: "Process: `wild-wharf`" }],
+        stopReason: "stop",
+      },
+    };
+    const original = `${JSON.stringify(header)}\n${JSON.stringify(message)}\n${JSON.stringify(toolCallAssistant)}\n${JSON.stringify(deliveryMirror)}\n`;
+    await fs.writeFile(file, original, "utf-8");
+
+    const result = await repairSessionFileIfNeeded({ sessionFile: file });
+
+    expect(result.repaired).toBe(true);
+    expect(result.insertedToolResults).toBe(1);
+    await expectNoRetainedBackup(file, result);
+
+    const lines = (await fs.readFile(file, "utf-8")).trimEnd().split("\n");
+    expect(lines).toHaveLength(5);
+    const inserted = JSON.parse(lines[3]);
+    expect(inserted.type).toBe("message");
+    expect(inserted.parentId).toBe("msg-asst-process");
+    expect(inserted.message.role).toBe("toolResult");
+    expect(inserted.message.toolCallId).toBe("call_process|fc_1");
+    expect(inserted.message.toolName).toBe("process");
+    expect(inserted.message.isError).toBe(true);
+    expect(inserted.message.content[0].text).toBe("aborted");
+    expect(JSON.parse(lines[4])).toEqual(deliveryMirror);
+  });
+
+  it("does not duplicate code-mode tool results that are already persisted", async () => {
+    const { file } = await createTempSessionPath();
+    const { header, message } = buildSessionHeaderAndMessage();
+    const toolCallAssistant = {
+      type: "message",
+      id: "msg-asst-exec",
+      parentId: "msg-1",
+      timestamp: new Date().toISOString(),
+      message: {
+        role: "assistant",
+        provider: "openai-codex",
+        model: "gpt-5.5",
+        api: "openai-codex-responses",
+        content: [{ type: "toolCall", id: "call_exec|fc_1", name: "exec", arguments: {} }],
+        stopReason: "toolUse",
+      },
+    };
+    const toolResult = {
+      type: "message",
+      id: "msg-tool-result",
+      parentId: "msg-asst-exec",
+      timestamp: new Date().toISOString(),
+      message: {
+        role: "toolResult",
+        toolCallId: "call_exec|fc_1",
+        toolName: "exec",
+        content: [{ type: "text", text: "ok" }],
+        isError: false,
+      },
+    };
+    const original = `${JSON.stringify(header)}\n${JSON.stringify(message)}\n${JSON.stringify(toolCallAssistant)}\n${JSON.stringify(toolResult)}\n`;
+    await fs.writeFile(file, original, "utf-8");
+
+    const result = await repairSessionFileIfNeeded({ sessionFile: file });
+
+    expect(result.repaired).toBe(false);
+    expect(result.insertedToolResults ?? 0).toBe(0);
+    const after = await fs.readFile(file, "utf-8");
+    expect(after).toBe(original);
+  });
+
+  it.each(["error", "aborted"] as const)(
+    "does not insert missing code-mode tool results for %s assistant turns",
+    async (stopReason) => {
+      const { file } = await createTempSessionPath();
+      const { header, message } = buildSessionHeaderAndMessage();
+      const incompleteAssistant = {
+        type: "message",
+        id: `msg-asst-${stopReason}`,
+        parentId: "msg-1",
+        timestamp: new Date().toISOString(),
+        message: {
+          role: "assistant",
+          provider: "openai-codex",
+          model: "gpt-5.5",
+          api: "openai-codex-responses",
+          content: [
+            { type: "toolCall", id: `call_${stopReason}|fc_1`, name: "exec", arguments: {} },
+          ],
+          stopReason,
+        },
+      };
+      const original = `${JSON.stringify(header)}\n${JSON.stringify(message)}\n${JSON.stringify(incompleteAssistant)}\n`;
+      await fs.writeFile(file, original, "utf-8");
+
+      const result = await repairSessionFileIfNeeded({ sessionFile: file });
+
+      expect(result.repaired).toBe(false);
+      expect(result.insertedToolResults ?? 0).toBe(0);
+      const after = await fs.readFile(file, "utf-8");
+      expect(after).toBe(original);
+    },
+  );
+
   it("preserves final text assistant turn that follows a tool-call/tool-result pair", async () => {
     // Regression: a trailing assistant message with stopReason "stop" that follows a
     // tool-call turn and its matching tool-result must never be trimmed by the repair
@@ -625,7 +812,7 @@ describe("repairSessionFileIfNeeded", () => {
 
     expect(result.repaired).toBe(true);
     expect(result.droppedLines).toBe(3);
-    await expect(fs.readFile(requireBackupPath(result), "utf-8")).resolves.toBe(`${content}\n`);
+    await expectNoRetainedBackup(file, result);
 
     const after = await fs.readFile(file, "utf-8");
     const lines = after.trimEnd().split("\n");
@@ -668,7 +855,7 @@ describe("repairSessionFileIfNeeded", () => {
 
     const after = await fs.readFile(file, "utf-8");
     const lines = after.trimEnd().split("\n");
-    expect(lines).toHaveLength(2);
+    expect(lines.map((line) => JSON.parse(line))).toEqual([header, message]);
   });
 
   it("preserves non-`message` envelope types (e.g. compactionSummary, custom) without role inspection", async () => {

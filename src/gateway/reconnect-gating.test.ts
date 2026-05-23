@@ -51,10 +51,31 @@ describe("isNonRecoverableAuthError", () => {
     ).toBe(true);
   });
 
+  it("blocks reconnect for AUTH_SCOPE_MISMATCH", () => {
+    expect(isNonRecoverableAuthError(makeError(ConnectErrorDetailCodes.AUTH_SCOPE_MISMATCH))).toBe(
+      true,
+    );
+  });
+
   it("blocks reconnect for PAIRING_REQUIRED", () => {
     expect(isNonRecoverableAuthError(makeError(ConnectErrorDetailCodes.PAIRING_REQUIRED))).toBe(
       true,
     );
+  });
+
+  it("allows reconnect for PAIRING_REQUIRED when retry hints keep reconnect active", () => {
+    expect(
+      isNonRecoverableAuthError({
+        code: "connect_failed",
+        message: "auth failed",
+        details: {
+          code: ConnectErrorDetailCodes.PAIRING_REQUIRED,
+          reason: "not-paired",
+          recommendedNextStep: "wait_then_retry",
+          pauseReconnect: false,
+        },
+      }),
+    ).toBe(false);
   });
 
   it("allows reconnect for AUTH_TOKEN_MISMATCH (device-token fallback flow)", () => {

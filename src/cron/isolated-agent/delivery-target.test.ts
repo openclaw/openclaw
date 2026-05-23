@@ -8,8 +8,17 @@ import {
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
 
+const { extractDeliveryInfoMock } = vi.hoisted(() => ({
+  extractDeliveryInfoMock: vi.fn(),
+}));
+
 vi.mock("../../config/sessions/main-session.js", () => ({
+  canonicalizeMainSessionAlias: vi.fn(({ sessionKey }) => sessionKey),
   resolveAgentMainSessionKey: vi.fn().mockReturnValue("agent:test:main"),
+}));
+
+vi.mock("../../config/sessions/delivery-info.js", () => ({
+  extractDeliveryInfo: extractDeliveryInfoMock,
 }));
 
 vi.mock("../../config/sessions/paths.js", () => ({
@@ -18,6 +27,7 @@ vi.mock("../../config/sessions/paths.js", () => ({
 
 vi.mock("../../config/sessions/store-load.js", () => ({
   loadSessionStore: vi.fn().mockReturnValue({}),
+  readSessionEntry: vi.fn(),
 }));
 
 vi.mock("../../infra/outbound/channel-selection.runtime.js", () => ({
@@ -39,6 +49,7 @@ vi.mock("../../infra/outbound/targets.runtime.js", () => ({
 }));
 const mockedModuleIds = [
   "../../config/sessions/main-session.js",
+  "../../config/sessions/delivery-info.js",
   "../../config/sessions/paths.js",
   "../../config/sessions/store-load.js",
   "../../infra/outbound/channel-selection.runtime.js",
@@ -47,7 +58,7 @@ const mockedModuleIds = [
   "../../pairing/allow-from-store-read.js",
 ];
 
-import { loadSessionStore } from "../../config/sessions/store-load.js";
+import { loadSessionStore, readSessionEntry } from "../../config/sessions/store-load.js";
 import { resolveMessageChannelSelection } from "../../infra/outbound/channel-selection.runtime.js";
 import { maybeResolveIdLikeTarget } from "../../infra/outbound/target-id-resolution.js";
 import { resolveOutboundTarget } from "../../infra/outbound/targets.runtime.js";
@@ -102,10 +113,14 @@ const normalizeTelegramTargetForDeliveryTest = vi.fn((raw: string): string | und
 
 beforeEach(() => {
   resetPluginRuntimeStateForTest();
+  extractDeliveryInfoMock.mockReset();
+  extractDeliveryInfoMock.mockReturnValue({ deliveryContext: undefined, threadId: undefined });
   normalizeTelegramTargetForDeliveryTest.mockClear();
   vi.mocked(readChannelAllowFromStoreEntriesSync).mockReset();
   vi.mocked(readChannelAllowFromStoreEntriesSync).mockReturnValue([]);
   vi.mocked(resolveOutboundTarget).mockReset();
+  vi.mocked(loadSessionStore).mockReset().mockReturnValue({});
+  vi.mocked(readSessionEntry).mockReset().mockReturnValue(undefined);
   setActivePluginRegistry(
     createTestRegistry([
       {
@@ -182,6 +197,7 @@ type SessionStore = ReturnType<typeof loadSessionStore>;
 
 function setSessionStore(store: SessionStore) {
   vi.mocked(loadSessionStore).mockReturnValue(store);
+  vi.mocked(readSessionEntry).mockImplementation((_storePath, sessionKey) => store[sessionKey]);
 }
 
 function setMainSessionEntry(entry?: SessionStore[string]) {
@@ -230,6 +246,21 @@ async function resolveLastTarget(cfg: OpenClawConfig) {
 }
 
 describe("resolveDeliveryTarget", () => {
+  it("uses session-entry snapshot reads for implicit last delivery lookup", async () => {
+    setLastSessionEntry({
+      sessionId: "sess-w1",
+      lastChannel: "alpha",
+      lastTo: "room-allowed",
+    });
+
+    const result = await resolveLastTarget(makeCfg({ channels: { alpha: { allowFrom: [] } } }));
+
+    expect(result.channel).toBe("alpha");
+    expect(result.to).toBe("room-allowed");
+    expect(readSessionEntry).toHaveBeenCalledWith("/tmp/test-store.json", "agent:test:main");
+    expect(loadSessionStore).not.toHaveBeenCalled();
+  });
+
   it("reroutes implicit delivery to an authorized allowFrom recipient", async () => {
     setLastSessionEntry({
       sessionId: "sess-w1",
@@ -383,19 +414,20 @@ describe("resolveDeliveryTarget", () => {
       source: "directory",
     });
 
-    const result = await resolveDeliveryTarget(makeCfg({ bindings: [] }), AGENT_ID, {
+    const cfg = makeCfg({ bindings: [] });
+    const result = await resolveDeliveryTarget(cfg, AGENT_ID, {
       channel: "forum",
       to: "123456789",
     });
 
     expect(result.ok).toBe(true);
     expect(result.to).toBe("user:123456789");
-    expect(maybeResolveIdLikeTarget).toHaveBeenCalledWith(
-      expect.objectContaining({
-        channel: "forum",
-        input: "123456789",
-      }),
-    );
+    expect(maybeResolveIdLikeTarget).toHaveBeenCalledWith({
+      cfg,
+      channel: "forum",
+      input: "123456789",
+      accountId: undefined,
+    });
   });
 
   it("skips id-like target normalization for dry-run delivery previews", async () => {
@@ -433,24 +465,29 @@ describe("resolveDeliveryTarget", () => {
     );
     vi.mocked(resolveOutboundTarget).mockReturnValueOnce({ ok: true, to: "room:default" });
 
-    const result = await resolveDeliveryTarget(makeCfg({ bindings: [] }), AGENT_ID, {
+    const cfg = makeCfg({ bindings: [] });
+    const result = await resolveDeliveryTarget(cfg, AGENT_ID, {
       channel: "forum",
       to: "room:default",
     });
 
-    expect(result).toEqual(
-      expect.objectContaining({
-        ok: true,
-        channel: "forum",
-        to: "room:default",
-      }),
-    );
-    expect(resolveOutboundTarget).toHaveBeenCalledWith(
-      expect.objectContaining({
-        channel: "forum",
-        to: "room:default",
-      }),
-    );
+    expect(result).toEqual({
+      ok: true,
+      channel: "forum",
+      to: "room:default",
+      accountId: undefined,
+      threadId: undefined,
+      mode: "explicit",
+    });
+    expect(resolveOutboundTarget).toHaveBeenCalledWith({
+      channel: "forum",
+      to: "room:default",
+      cfg,
+      accountId: undefined,
+      mode: "explicit",
+      allowFrom: undefined,
+      allowBootstrap: true,
+    });
   });
 
   it("returns an unresolved target when loaded target resolution throws", async () => {
@@ -718,6 +755,76 @@ describe("resolveDeliveryTarget", () => {
     expect(result.threadId).toBe(42);
   });
 
+  it("prefers stored deliveryContext lookup over exact session-store entries", async () => {
+    extractDeliveryInfoMock.mockReturnValueOnce({
+      deliveryContext: {
+        channel: "alpha",
+        to: "RoomMixedCase",
+        accountId: "primary",
+        threadId: "thread-old-stored",
+      },
+      threadId: "thread-stored",
+    });
+    setSessionStore({
+      "agent:test:thread:42": {
+        sessionId: "thread-session",
+        updatedAt: 2000,
+        lastChannel: "alpha",
+        lastTo: "room-lowercase",
+        lastThreadId: "thread-old",
+      },
+    } as SessionStore);
+
+    const result = await resolveDeliveryTarget(makeCfg({ bindings: [] }), AGENT_ID, {
+      channel: "last",
+      sessionKey: "agent:test:thread:42",
+      to: undefined,
+    });
+
+    expect(result).toMatchObject({
+      ok: true,
+      channel: "alpha",
+      to: "RoomMixedCase",
+      accountId: "primary",
+      threadId: "thread-stored",
+    });
+  });
+
+  it("scopes unqualified stored delivery lookups to the job agent", async () => {
+    extractDeliveryInfoMock.mockImplementation((sessionKey: string) =>
+      sessionKey === "agent:agent-b:main"
+        ? {
+            deliveryContext: {
+              channel: "alpha",
+              to: "ops-room",
+            },
+            threadId: undefined,
+          }
+        : {
+            deliveryContext: {
+              channel: "alpha",
+              to: "default-room",
+            },
+            threadId: undefined,
+          },
+    );
+
+    const result = await resolveDeliveryTarget(makeCfg({ bindings: [] }), AGENT_ID, {
+      channel: "last",
+      sessionKey: "main",
+      to: undefined,
+    });
+
+    expect(extractDeliveryInfoMock).toHaveBeenCalledWith("agent:agent-b:main", {
+      cfg: expect.any(Object),
+    });
+    expect(result).toMatchObject({
+      ok: true,
+      channel: "alpha",
+      to: "ops-room",
+    });
+  });
+
   it("falls back to the main session entry when the requested sessionKey is missing", async () => {
     setSessionStore({
       "agent:test:main": {
@@ -808,6 +915,19 @@ describe("resolveDeliveryTarget", () => {
     expect(result.ok).toBe(true);
     expect(result.to).toBe("63448508");
     expect(result.threadId).toBe(1008013);
+  });
+
+  it("parses plugin-owned numeric topic shorthand into delivery threadId", async () => {
+    setMainSessionEntry(undefined);
+
+    const result = await resolveDeliveryTarget(makeCfg({ bindings: [] }), AGENT_ID, {
+      channel: "telegram",
+      to: "-100200300:77",
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.to).toBe("-100200300");
+    expect(result.threadId).toBe(77);
   });
 
   it("prefers explicit telegram :topic: targets over session-derived threadId", async () => {

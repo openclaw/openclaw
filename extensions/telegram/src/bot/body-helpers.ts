@@ -1,9 +1,9 @@
-import type { Chat, Message, MessageOrigin, User } from "@grammyjs/types";
+import type { Chat, Message, MessageOrigin, User } from "grammy/types";
 import type { NormalizedLocation } from "openclaw/plugin-sdk/channel-inbound";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
-} from "openclaw/plugin-sdk/text-runtime";
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 
 type TelegramMediaMessage = Pick<
   Message,

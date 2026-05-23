@@ -100,6 +100,24 @@ describe("resolveBuildAllStep", () => {
     });
   });
 
+  it("can route pnpm script steps through direct node entrypoints", () => {
+    const step = getBuildAllStep("plugins:assets:build");
+
+    const result = resolveBuildAllStep(step, {
+      nodeExecPath: "/custom/node",
+      env: { OPENCLAW_BUILD_ALL_NO_PNPM: "1" },
+    });
+
+    expect(result).toEqual({
+      command: "/custom/node",
+      args: ["scripts/bundled-plugin-assets.mjs", "--phase", "build"],
+      options: {
+        stdio: "inherit",
+        env: { OPENCLAW_BUILD_ALL_NO_PNPM: "1" },
+      },
+    });
+  });
+
   it("adds heap headroom for plugin-sdk dts on Windows", () => {
     const step = getBuildAllStep("build:plugin-sdk:dts");
 
@@ -123,6 +141,13 @@ describe("resolveBuildAllStep", () => {
         windowsVerbatimArguments: undefined,
       },
     });
+  });
+
+  it("keeps plugin-sdk dts cache metadata aligned with declaration inputs", () => {
+    const step = getBuildAllStep("build:plugin-sdk:dts");
+
+    expect(step.cache?.inputs).toEqual(expect.arrayContaining(["packages/memory-host-sdk/src"]));
+    expect(step.cache?.outputs).toEqual(expect.arrayContaining(["dist/plugin-sdk/packages"]));
   });
 });
 
@@ -159,6 +184,18 @@ describe("resolveBuildAllSteps", () => {
       "runtime-postbuild",
       "build-stamp",
       "runtime-postbuild-stamp",
+    ]);
+  });
+
+  it("uses a CLI startup profile without generated plugin assets", () => {
+    expect(resolveBuildAllSteps("cliStartup").map((step) => step.label)).toEqual([
+      "tsdown",
+      "check-cli-bootstrap-imports",
+      "runtime-postbuild",
+      "build-stamp",
+      "runtime-postbuild-stamp",
+      "write-cli-startup-metadata",
+      "write-cli-compat",
     ]);
   });
 

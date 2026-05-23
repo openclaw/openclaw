@@ -47,6 +47,7 @@ describe("talk normalization", () => {
         mode: "realtime",
         transport: "webrtc",
         brain: "agent-consult",
+        consultRouting: "force-agent-consult",
       },
       interruptOnSpeech: true,
     });
@@ -71,6 +72,7 @@ describe("talk normalization", () => {
         mode: "realtime",
         transport: "webrtc",
         brain: "agent-consult",
+        consultRouting: "force-agent-consult",
       },
       interruptOnSpeech: true,
     });
@@ -131,6 +133,24 @@ describe("talk normalization", () => {
       speechLocale: "ru-RU",
       interruptOnSpeech: true,
     });
+  });
+
+  it("preserves normalized realtime instructions in talk.config payloads", () => {
+    const payload = buildTalkConfigResponse({
+      realtime: {
+        provider: "openai",
+        providers: {
+          openai: {
+            model: "gpt-realtime",
+            voice: "alloy",
+          },
+        },
+        instructions: " Speak with crisp diction. ",
+      },
+    });
+
+    expect(payload?.realtime?.provider).toBe("openai");
+    expect(payload?.realtime?.instructions).toBe("Speak with crisp diction.");
   });
 
   it("does not report an active provider when the configured speech provider cannot resolve", () => {

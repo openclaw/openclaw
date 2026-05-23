@@ -21,7 +21,7 @@ describe("manifest command aliases", () => {
     ]);
   });
 
-  it("resolves aliases without treating plugin ids as command aliases", () => {
+  it("resolves explicit same-id aliases without treating other plugin ids as aliases", () => {
     const registry = {
       plugins: [
         {
@@ -33,6 +33,10 @@ describe("manifest command aliases", () => {
           enabledByDefault: true,
           commandAliases: [{ name: "legacy-memory" }],
         },
+        {
+          id: "matrix",
+          commandAliases: [{ name: "matrix" }],
+        },
       ],
     };
 
@@ -41,10 +45,14 @@ describe("manifest command aliases", () => {
     );
     expect(
       resolveManifestCommandAliasOwnerInRegistry({ command: "legacy-memory", registry }),
-    ).toMatchObject({
+    ).toEqual({
+      name: "legacy-memory",
       pluginId: "memory",
       enabledByDefault: true,
-      name: "legacy-memory",
+    });
+    expect(resolveManifestCommandAliasOwnerInRegistry({ command: "matrix", registry })).toEqual({
+      name: "matrix",
+      pluginId: "matrix",
     });
   });
 
@@ -62,11 +70,12 @@ describe("manifest command aliases", () => {
       ],
     };
 
-    expect(resolveManifestToolOwnerInRegistry({ toolName: "lcm_recent", registry })).toMatchObject({
-      pluginId: "lossless-claw",
+    expect(resolveManifestToolOwnerInRegistry({ toolName: "lcm_recent", registry })).toEqual({
       toolName: "lcm_recent",
+      pluginId: "lossless-claw",
     });
-    expect(resolveManifestToolOwnerInRegistry({ toolName: "LCM_Recent", registry })).toMatchObject({
+    expect(resolveManifestToolOwnerInRegistry({ toolName: "LCM_Recent", registry })).toEqual({
+      toolName: "lcm_recent",
       pluginId: "lossless-claw",
     });
     expect(

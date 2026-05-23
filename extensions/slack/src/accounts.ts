@@ -1,6 +1,7 @@
 import {
   createAccountListHelpers,
   DEFAULT_ACCOUNT_ID,
+  hasConfiguredAccountValue,
   normalizeAccountId,
   resolveMergedAccountConfig,
   type OpenClawConfig,
@@ -13,7 +14,7 @@ import {
   type ChannelDmPolicy,
 } from "openclaw/plugin-sdk/channel-config-helpers";
 import { resolveAccountEntry } from "openclaw/plugin-sdk/routing";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { SlackAccountSurfaceFields } from "./account-surface-fields.js";
 import type { SlackAccountConfig } from "./runtime-api.js";
 import { resolveSlackAppToken, resolveSlackBotToken, resolveSlackUserToken } from "./token.js";
@@ -40,7 +41,24 @@ export type SlackConfigAccessorAccount = {
   defaultTo: string | undefined;
 };
 
-const { listAccountIds, resolveDefaultAccountId } = createAccountListHelpers("slack");
+const { listAccountIds, resolveDefaultAccountId } = createAccountListHelpers("slack", {
+  hasImplicitDefaultAccount: (cfg) => {
+    const slack = cfg.channels?.slack;
+    const hasBotToken =
+      hasConfiguredAccountValue(slack?.botToken) ||
+      hasConfiguredAccountValue(process.env.SLACK_BOT_TOKEN);
+    if (!hasBotToken) {
+      return false;
+    }
+    if (slack?.mode === "http") {
+      return hasConfiguredAccountValue(slack.signingSecret);
+    }
+    return (
+      hasConfiguredAccountValue(slack?.appToken) ||
+      hasConfiguredAccountValue(process.env.SLACK_APP_TOKEN)
+    );
+  },
+});
 export const listSlackAccountIds = listAccountIds;
 export const resolveDefaultSlackAccountId = resolveDefaultAccountId;
 
@@ -59,6 +77,7 @@ export function mergeSlackAccountConfig(
     channelConfig: cfg.channels?.slack as SlackAccountConfig,
     accounts: cfg.channels?.slack?.accounts as Record<string, Partial<SlackAccountConfig>>,
     accountId,
+    nestedObjectKeys: ["botLoopProtection"],
   });
 }
 

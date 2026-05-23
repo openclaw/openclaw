@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import type { OAuthCredentials } from "@mariozechner/pi-ai";
+import type { OAuthCredentials } from "@earendil-works/pi-ai";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   applyAuthProfileConfig,
@@ -33,36 +33,45 @@ vi.mock("../config/paths.js", () => ({
 vi.mock("../agents/auth-profiles/profiles.js", async () => {
   const fs = await import("node:fs");
   const path = await import("node:path");
-  return {
-    upsertAuthProfile: (params: { profileId: string; credential: unknown; agentDir?: string }) => {
-      const stateDir = process.env.OPENCLAW_STATE_DIR ?? "/tmp/openclaw-state";
-      const agentDir = params.agentDir ?? path.join(stateDir, "agents", "main", "agent");
-      const file = path.join(agentDir, "auth-profiles.json");
-      fs.mkdirSync(agentDir, { recursive: true });
-      const existing = (() => {
-        try {
-          return JSON.parse(fs.readFileSync(file, "utf8")) as {
-            version?: number;
-            profiles?: Record<string, unknown>;
-          };
-        } catch {
-          return { version: 1, profiles: {} };
-        }
-      })();
-      fs.writeFileSync(
-        file,
-        `${JSON.stringify(
-          {
-            version: existing.version ?? 1,
-            profiles: {
-              ...existing.profiles,
-              [params.profileId]: params.credential,
-            },
+  const upsert = (params: { profileId: string; credential: unknown; agentDir?: string }) => {
+    const stateDir = process.env.OPENCLAW_STATE_DIR ?? "/tmp/openclaw-state";
+    const agentDir = params.agentDir ?? path.join(stateDir, "agents", "main", "agent");
+    const file = path.join(agentDir, "auth-profiles.json");
+    fs.mkdirSync(agentDir, { recursive: true });
+    const existing = (() => {
+      try {
+        return JSON.parse(fs.readFileSync(file, "utf8")) as {
+          version?: number;
+          profiles?: Record<string, unknown>;
+        };
+      } catch {
+        return { version: 1, profiles: {} };
+      }
+    })();
+    fs.writeFileSync(
+      file,
+      `${JSON.stringify(
+        {
+          version: existing.version ?? 1,
+          profiles: {
+            ...existing.profiles,
+            [params.profileId]: params.credential,
           },
-          null,
-          2,
-        )}\n`,
-      );
+        },
+        null,
+        2,
+      )}\n`,
+    );
+  };
+  return {
+    upsertAuthProfile: upsert,
+    upsertAuthProfileWithLock: async (params: {
+      profileId: string;
+      credential: unknown;
+      agentDir?: string;
+    }) => {
+      upsert(params);
+      return { version: 1, profiles: {} };
     },
   };
 });
@@ -80,6 +89,31 @@ vi.mock("../agents/provider-auth-aliases.js", () => ({
 vi.mock("../secrets/provider-env-vars.js", () => ({
   getProviderEnvVars: vi.fn((provider: string) => providerEnvVarsById[provider] ?? []),
 }));
+
+function requireRecord(value: unknown, label: string): Record<string, unknown> {
+  if (!value || typeof value !== "object") {
+    throw new Error(`expected ${label}`);
+  }
+  return value as Record<string, unknown>;
+}
+
+function expectFields(value: unknown, expected: Record<string, unknown>, label = "record") {
+  const record = requireRecord(value, label);
+  for (const [key, expectedValue] of Object.entries(expected)) {
+    expect(record[key], key).toEqual(expectedValue);
+  }
+  return record;
+}
+
+async function expectMissingFile(readPromise: Promise<unknown>) {
+  try {
+    await readPromise;
+  } catch (error) {
+    expectFields(error, { code: "ENOENT" }, "read error");
+    return;
+  }
+  throw new Error("Expected file read to fail with ENOENT");
+}
 
 describe("writeOAuthCredentials", () => {
   const lifecycle = createAuthTestLifecycle([
@@ -112,15 +146,13 @@ describe("writeOAuthCredentials", () => {
     const parsed = await readAuthProfilesForAgent<{
       profiles?: Record<string, OAuthCredentials & { type?: string }>;
     }>(defaultAgentDir);
-    expect(parsed.profiles?.["openai-codex:default"]).toMatchObject({
+    expectFields(parsed.profiles?.["openai-codex:default"], {
       refresh: "refresh-token",
       access: "access-token",
       type: "oauth",
     });
 
-    await expect(
-      fs.readFile(path.join(env.agentDir, "auth-profiles.json"), "utf8"),
-    ).rejects.toMatchObject({ code: "ENOENT" });
+    await expectMissingFile(fs.readFile(path.join(env.agentDir, "auth-profiles.json"), "utf8"));
   });
 
   it("writes OAuth credentials to all sibling agent dirs when syncSiblingAgents=true", async () => {
@@ -152,7 +184,7 @@ describe("writeOAuthCredentials", () => {
       const parsed = JSON.parse(raw) as {
         profiles?: Record<string, OAuthCredentials & { type?: string }>;
       };
-      expect(parsed.profiles?.["openai-codex:default"]).toMatchObject({
+      expectFields(parsed.profiles?.["openai-codex:default"], {
         refresh: "refresh-sync",
         access: "access-sync",
         type: "oauth",
@@ -184,14 +216,12 @@ describe("writeOAuthCredentials", () => {
     const kidParsed = JSON.parse(kidRaw) as {
       profiles?: Record<string, OAuthCredentials & { type?: string }>;
     };
-    expect(kidParsed.profiles?.["openai-codex:default"]).toMatchObject({
+    expectFields(kidParsed.profiles?.["openai-codex:default"], {
       access: "access-kid",
       type: "oauth",
     });
 
-    await expect(fs.readFile(authProfilePathFor(mainAgentDir), "utf8")).rejects.toMatchObject({
-      code: "ENOENT",
-    });
+    await expectMissingFile(fs.readFile(authProfilePathFor(mainAgentDir), "utf8"));
   });
 
   it("syncs siblings from explicit agentDir outside OPENCLAW_STATE_DIR", async () => {
@@ -223,7 +253,7 @@ describe("writeOAuthCredentials", () => {
       const parsed = JSON.parse(raw) as {
         profiles?: Record<string, OAuthCredentials & { type?: string }>;
       };
-      expect(parsed.profiles?.["openai-codex:default"]).toMatchObject({
+      expectFields(parsed.profiles?.["openai-codex:default"], {
         refresh: "refresh-ext",
         access: "access-ext",
         type: "oauth",
@@ -232,9 +262,7 @@ describe("writeOAuthCredentials", () => {
 
     // Global state dir should NOT have credentials written
     const globalMain = path.join(tempStateDir, "agents", "main", "agent");
-    await expect(fs.readFile(authProfilePathFor(globalMain), "utf8")).rejects.toMatchObject({
-      code: "ENOENT",
-    });
+    await expectMissingFile(fs.readFile(authProfilePathFor(globalMain), "utf8"));
   });
 });
 
@@ -280,11 +308,11 @@ describe("upsertApiKeyProfile secret refs", () => {
     });
     upsertApiKeyProfile({ provider: "openai", input: "sk-openai-env", agentDir: env.agentDir });
 
-    expect(await readProfile(env.agentDir, "moonshot:default")).toMatchObject({
+    expectFields(await readProfile(env.agentDir, "moonshot:default"), {
       key: "sk-moonshot-env",
     });
     expect((await readProfile(env.agentDir, "moonshot:default"))?.keyRef).toBeUndefined();
-    expect(await readProfile(env.agentDir, "openai:default")).toMatchObject({
+    expectFields(await readProfile(env.agentDir, "openai:default"), {
       key: "sk-openai-env",
     });
     expect((await readProfile(env.agentDir, "openai:default"))?.keyRef).toBeUndefined();
@@ -315,18 +343,18 @@ describe("upsertApiKeyProfile secret refs", () => {
       profileId: "moonshot:plain",
     });
 
-    expect(await readProfile(env.agentDir, "moonshot:default")).toMatchObject({
+    expectFields(await readProfile(env.agentDir, "moonshot:default"), {
       keyRef: { source: "env", provider: "default", id: "MOONSHOT_API_KEY" },
     });
     expect((await readProfile(env.agentDir, "moonshot:default"))?.key).toBeUndefined();
-    expect(await readProfile(env.agentDir, "openai:default")).toMatchObject({
+    expectFields(await readProfile(env.agentDir, "openai:default"), {
       keyRef: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
     });
     expect((await readProfile(env.agentDir, "openai:default"))?.key).toBeUndefined();
-    expect(await readProfile(env.agentDir, "moonshot:inline")).toMatchObject({
+    expectFields(await readProfile(env.agentDir, "moonshot:inline"), {
       keyRef: { source: "env", provider: "default", id: "MOONSHOT_API_KEY" },
     });
-    expect(await readProfile(env.agentDir, "moonshot:plain")).toMatchObject({
+    expectFields(await readProfile(env.agentDir, "moonshot:plain"), {
       key: "sk-moonshot-plaintext",
     });
     expect((await readProfile(env.agentDir, "moonshot:plain"))?.keyRef).toBeUndefined();
@@ -364,21 +392,21 @@ describe("upsertApiKeyProfile secret refs", () => {
       });
     }
 
-    expect(await readProfile(env.agentDir, "cloudflare-ai-gateway:default")).toMatchObject({
+    expectFields(await readProfile(env.agentDir, "cloudflare-ai-gateway:default"), {
       keyRef: { source: "env", provider: "default", id: "CLOUDFLARE_AI_GATEWAY_API_KEY" },
       metadata: { accountId: "account-1", gatewayId: "gateway-1" },
     });
     expect((await readProfile(env.agentDir, "cloudflare-ai-gateway:default"))?.key).toBeUndefined();
-    expect(await readProfile(env.agentDir, "volcengine:default")).toMatchObject({
+    expectFields(await readProfile(env.agentDir, "volcengine:default"), {
       keyRef: { source: "env", provider: "default", id: "VOLCANO_ENGINE_API_KEY" },
     });
-    expect(await readProfile(env.agentDir, "byteplus:default")).toMatchObject({
+    expectFields(await readProfile(env.agentDir, "byteplus:default"), {
       keyRef: { source: "env", provider: "default", id: "BYTEPLUS_API_KEY" },
     });
-    expect(await readProfile(env.agentDir, "opencode:default")).toMatchObject({
+    expectFields(await readProfile(env.agentDir, "opencode:default"), {
       keyRef: { source: "env", provider: "default", id: "OPENCODE_API_KEY" },
     });
-    expect(await readProfile(env.agentDir, "opencode-go:default")).toMatchObject({
+    expectFields(await readProfile(env.agentDir, "opencode-go:default"), {
       keyRef: { source: "env", provider: "default", id: "OPENCODE_API_KEY" },
     });
   });
@@ -405,15 +433,13 @@ describe("upsertApiKeyProfile", () => {
     const parsed = await readAuthProfilesForAgent<{
       profiles?: Record<string, { type?: string; provider?: string; key?: string }>;
     }>(defaultAgentDir);
-    expect(parsed.profiles?.["minimax:default"]).toMatchObject({
+    expectFields(parsed.profiles?.["minimax:default"], {
       type: "api_key",
       provider: "minimax",
       key: "sk-minimax-test",
     });
 
-    await expect(
-      fs.readFile(path.join(env.agentDir, "auth-profiles.json"), "utf8"),
-    ).rejects.toMatchObject({ code: "ENOENT" });
+    await expectMissingFile(fs.readFile(path.join(env.agentDir, "auth-profiles.json"), "utf8"));
   });
 });
 

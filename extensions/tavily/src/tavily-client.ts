@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   DEFAULT_CACHE_TTL_MINUTES,
   normalizeCacheKey,
@@ -82,8 +82,19 @@ async function postTavilyJson(params: {
       errorLabel: params.errorLabel,
       extraHeaders: { "X-Client-Source": "openclaw" },
     },
-    async (response) => (await response.json()) as Record<string, unknown>,
+    async (response) => readTavilyJsonResponse(response, params.errorLabel),
   );
+}
+
+async function readTavilyJsonResponse(
+  response: Response,
+  label: string,
+): Promise<Record<string, unknown>> {
+  try {
+    return (await response.json()) as Record<string, unknown>;
+  } catch (cause) {
+    throw new Error(`${label}: malformed JSON response`, { cause });
+  }
 }
 
 export async function runTavilySearch(
@@ -295,6 +306,8 @@ export async function runTavilyExtract(
   return result;
 }
 
-export const __testing = {
+export const testing = {
+  readTavilyJsonResponse,
   resolveEndpoint,
 };
+export { testing as __testing };

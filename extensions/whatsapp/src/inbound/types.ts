@@ -1,4 +1,4 @@
-import type { AnyMessageContent, MiscMessageGenerationOptions } from "@whiskeysockets/baileys";
+import type { AnyMessageContent, MiscMessageGenerationOptions } from "baileys";
 import type { NormalizedLocation } from "openclaw/plugin-sdk/channel-inbound";
 import type { PollInput } from "openclaw/plugin-sdk/poll-runtime";
 import type { WhatsAppIdentity, WhatsAppReplyContext, WhatsAppSelfIdentity } from "../identity.js";
@@ -21,6 +21,7 @@ export type ActiveWebSendOptions = {
   gifPlayback?: boolean;
   accountId?: string;
   fileName?: string;
+  asDocument?: boolean;
 };
 
 export type ActiveWebListener = {

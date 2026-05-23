@@ -126,6 +126,7 @@ describe("wide-area DNS-SD zone rendering", () => {
         instanceLabel: " Studio London ",
         gatewayTlsEnabled: true,
         gatewayTlsFingerprintSha256: "abc123",
+        gatewayDirectReachable: true,
         tailnetDns: " tailnet.ts.net ",
         cliPath: " /opt/homebrew/bin/openclaw ",
       },
@@ -136,6 +137,7 @@ describe("wide-area DNS-SD zone rendering", () => {
         `displayName=Mac Studio (OpenClaw)`,
         `gatewayTls=1`,
         `gatewayTlsSha256=abc123`,
+        `gatewayDirectReachable=1`,
         `tailnetDns=tailnet.ts.net`,
         `cliPath=/opt/homebrew/bin/openclaw`,
       ],
@@ -184,9 +186,13 @@ describe("wide-area DNS zone writes", () => {
       zonePath: getWideAreaZonePath("openclaw.internal."),
       changed: true,
     });
+    const expectedZoneText = renderWideAreaGatewayZoneText({
+      ...makeZoneOpts({ gatewayTlsEnabled: true, gatewayTlsFingerprintSha256: "abc123" }),
+      serial: 2026031305,
+    });
     expect(writeSpy).toHaveBeenCalledWith(
       getWideAreaZonePath("openclaw.internal."),
-      expect.stringContaining("@ IN SOA ns1 hostmaster 2026031305 7200 3600 1209600 60"),
+      expectedZoneText,
       "utf-8",
     );
   });

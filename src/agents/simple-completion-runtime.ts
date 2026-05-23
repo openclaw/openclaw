@@ -3,15 +3,17 @@ import {
   type Api,
   type Model,
   type ThinkingLevel as SimpleCompletionThinkingLevel,
-} from "@mariozechner/pi-ai";
+} from "@earendil-works/pi-ai";
 import type { ThinkLevel } from "../auto-reply/thinking.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { prepareProviderRuntimeAuth } from "../plugins/provider-runtime.runtime.js";
 import { resolveAgentDir, resolveAgentEffectiveModelPrimary } from "./agent-scope.js";
 import { DEFAULT_PROVIDER } from "./defaults.js";
+import { resolveAgentHarnessPolicy } from "./harness/policy.js";
 import {
   applyLocalNoAuthHeaderOverride,
+  formatMissingAuthError,
   getApiKeyForModel,
   type ResolvedProviderAuth,
 } from "./model-auth.js";
@@ -21,6 +23,7 @@ import {
   resolveDefaultModelForAgent,
   resolveModelRefFromString,
 } from "./model-selection.js";
+import { OPENAI_CODEX_PROVIDER_ID, isOpenAIProvider } from "./openai-codex-routing.js";
 import { resolveModel, resolveModelAsync } from "./pi-embedded-runner/model.js";
 import { prepareModelForSimpleCompletion } from "./simple-completion-transport.js";
 
@@ -55,6 +58,8 @@ export type PreparedSimpleCompletionModel =
 export type AgentSimpleCompletionSelection = {
   provider: string;
   modelId: string;
+  /** Provider used for auth/transport when runtime policy redirects the logical model ref. */
+  runtimeProvider?: string;
   profileId?: string;
   agentDir: string;
 };
@@ -102,9 +107,33 @@ export function resolveSimpleCompletionSelectionForAgent(params: {
   return {
     provider,
     modelId,
+    ...resolveSimpleCompletionRuntimeProvider({
+      cfg: params.cfg,
+      agentId: params.agentId,
+      provider,
+      modelId,
+    }),
     profileId: split?.profile || undefined,
     agentDir: resolveAgentDir(params.cfg, params.agentId),
   };
+}
+
+function resolveSimpleCompletionRuntimeProvider(params: {
+  cfg: OpenClawConfig;
+  agentId: string;
+  provider: string;
+  modelId: string;
+}): Pick<AgentSimpleCompletionSelection, "runtimeProvider"> {
+  if (!isOpenAIProvider(params.provider)) {
+    return {};
+  }
+  const policy = resolveAgentHarnessPolicy({
+    provider: params.provider,
+    modelId: params.modelId,
+    config: params.cfg,
+    agentId: params.agentId,
+  });
+  return policy.runtime === "codex" ? { runtimeProvider: OPENAI_CODEX_PROVIDER_ID } : {};
 }
 
 async function setRuntimeApiKeyForCompletion(params: {
@@ -169,14 +198,21 @@ export async function prepareSimpleCompletionModel(params: {
   allowMissingApiKeyModes?: ReadonlyArray<AllowedMissingApiKeyMode>;
   allowBundledStaticCatalogFallback?: boolean;
   skipPiDiscovery?: boolean;
+  modelResolver?: typeof resolveModelAsync;
 }): Promise<PreparedSimpleCompletionModel> {
   const resolved = params.skipPiDiscovery
-    ? await resolveModelAsync(params.provider, params.modelId, params.agentDir, params.cfg, {
-        ...(params.allowBundledStaticCatalogFallback !== undefined
-          ? { allowBundledStaticCatalogFallback: params.allowBundledStaticCatalogFallback }
-          : {}),
-        skipPiDiscovery: true,
-      })
+    ? await (params.modelResolver ?? resolveModelAsync)(
+        params.provider,
+        params.modelId,
+        params.agentDir,
+        params.cfg,
+        {
+          ...(params.allowBundledStaticCatalogFallback !== undefined
+            ? { allowBundledStaticCatalogFallback: params.allowBundledStaticCatalogFallback }
+            : {}),
+          skipPiDiscovery: true,
+        },
+      )
     : resolveModel(params.provider, params.modelId, params.agentDir, params.cfg);
   if (!resolved.model) {
     return {
@@ -207,7 +243,7 @@ export async function prepareSimpleCompletionModel(params: {
     })
   ) {
     return {
-      error: `No API key resolved for provider "${resolved.model.provider}" (auth mode: ${auth.mode}).`,
+      error: formatMissingAuthError(auth, resolved.model.provider),
       auth,
     };
   }
@@ -253,6 +289,7 @@ export async function prepareSimpleCompletionModelForAgent(params: {
   allowMissingApiKeyModes?: ReadonlyArray<AllowedMissingApiKeyMode>;
   allowBundledStaticCatalogFallback?: boolean;
   skipPiDiscovery?: boolean;
+  modelResolver?: typeof resolveModelAsync;
 }): Promise<PreparedSimpleCompletionModelForAgent> {
   const selection = resolveSimpleCompletionSelectionForAgent({
     cfg: params.cfg,
@@ -266,7 +303,7 @@ export async function prepareSimpleCompletionModelForAgent(params: {
   }
   const prepared = await prepareSimpleCompletionModel({
     cfg: params.cfg,
-    provider: selection.provider,
+    provider: selection.runtimeProvider ?? selection.provider,
     modelId: selection.modelId,
     agentDir: selection.agentDir,
     profileId: selection.profileId,
@@ -276,6 +313,7 @@ export async function prepareSimpleCompletionModelForAgent(params: {
       ? { allowBundledStaticCatalogFallback: params.allowBundledStaticCatalogFallback }
       : {}),
     skipPiDiscovery: params.skipPiDiscovery,
+    modelResolver: params.modelResolver,
   });
   if ("error" in prepared) {
     return {

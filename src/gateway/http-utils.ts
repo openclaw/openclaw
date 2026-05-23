@@ -1,12 +1,8 @@
 import { randomUUID } from "node:crypto";
 import type { IncomingMessage } from "node:http";
 import { resolveDefaultAgentId } from "../agents/agent-scope.js";
-import {
-  buildAllowedModelSet,
-  modelKey,
-  parseModelRef,
-  resolveDefaultModelForAgent,
-} from "../agents/model-selection.js";
+import { modelKey, parseModelRef, resolveDefaultModelForAgent } from "../agents/model-selection.js";
+import { createModelVisibilityPolicy } from "../agents/model-visibility-policy.js";
 import { getRuntimeConfig } from "../config/io.js";
 import { buildAgentMainSessionKey, normalizeAgentId } from "../routing/session-key.js";
 import {
@@ -28,6 +24,7 @@ export {
   resolveHttpSenderIsOwner,
   resolveOpenAiCompatibleHttpOperatorScopes,
   resolveOpenAiCompatibleHttpSenderIsOwner,
+  resolveSharedSecretHttpOperatorScopes,
   resolveTrustedHttpOperatorScopes,
   type AuthorizedGatewayHttpRequest,
   type GatewayHttpRequestAuthCheckResult,
@@ -96,14 +93,14 @@ export async function resolveOpenAiCompatModelOverride(params: {
   }
 
   const catalog = await loadGatewayModelCatalog();
-  const allowed = buildAllowedModelSet({
+  const policy = createModelVisibilityPolicy({
     cfg,
     catalog,
     defaultProvider,
     agentId: params.agentId,
   });
   const normalized = modelKey(parsed.provider, parsed.model);
-  if (!allowed.allowAny && !allowed.allowedKeys.has(normalized)) {
+  if (!policy.allowsKey(normalized)) {
     return {
       errorMessage: `Model '${normalized}' is not allowed for agent '${params.agentId}'.`,
     };

@@ -2,11 +2,15 @@ import crypto from "node:crypto";
 import { shouldLogVerbose } from "../../globals.js";
 import { emitAgentEvent } from "../../infra/agent-events.js";
 import { isTruthyEnvValue } from "../../infra/env.js";
+import {
+  resolveEventSessionKeyForPolicy,
+  resolveEventSessionRoutingPolicy,
+  scopedHeartbeatWakeOptionsForPolicy,
+} from "../../infra/event-session-routing.js";
 import { requestHeartbeat as requestHeartbeatImpl } from "../../infra/heartbeat-wake.js";
 import { sanitizeHostExecEnv } from "../../infra/host-env-security.js";
 import { enqueueSystemEvent as enqueueSystemEventImpl } from "../../infra/system-events.js";
 import { getProcessSupervisor as getProcessSupervisorImpl } from "../../process/supervisor/index.js";
-import { scopedHeartbeatWakeOptions } from "../../routing/session-key.js";
 import { appendBootstrapPromptWarning } from "../bootstrap-budget.js";
 import {
   createCliJsonlStreamingParser,
@@ -206,7 +210,6 @@ function buildCliEnvMcpLog(childEnv: Record<string, string>): string {
     `agentId=${childEnv.OPENCLAW_MCP_AGENT_ID || "<empty>"}`,
     `accountId=${childEnv.OPENCLAW_MCP_ACCOUNT_ID || "<empty>"}`,
     `messageChannel=${childEnv.OPENCLAW_MCP_MESSAGE_CHANNEL || "<empty>"}`,
-    `senderIsOwner=${childEnv.OPENCLAW_MCP_SENDER_IS_OWNER || "<empty>"}`,
   ].join(" ");
 }
 
@@ -427,11 +430,7 @@ export async function executePreparedCliRun(
           });
           cliBackendLog.info(`cli argv: ${backend.command} ${logArgs.join(" ")}`);
           cliBackendLog.info(`cli env auth: ${buildCliEnvAuthLog(env)}`);
-          if (
-            env.OPENCLAW_MCP_TOKEN ||
-            env.OPENCLAW_MCP_SESSION_KEY ||
-            env.OPENCLAW_MCP_SENDER_IS_OWNER
-          ) {
+          if (env.OPENCLAW_MCP_TOKEN || env.OPENCLAW_MCP_SESSION_KEY || env.OPENCLAW_MCP_AGENT_ID) {
             cliBackendLog.info(`cli env mcp: ${buildCliEnvMcpLog(env)}`);
           }
         }
@@ -448,6 +447,12 @@ export async function executePreparedCliRun(
           if (!hasJsonlOutput) {
             throw new Error("Claude live session requires JSONL streaming parser");
           }
+          params.onExecutionPhase?.({
+            phase: "process_spawned",
+            provider: params.provider,
+            model: context.modelId,
+            backend: context.backendResolved.id,
+          });
           claudeSkillsPluginCleanupOwned = true;
           const ownedPreparedBackendCleanup = context.preparedBackend.cleanup;
           context.preparedBackend.cleanup = undefined;
@@ -529,6 +534,12 @@ export async function executePreparedCliRun(
         let stderrParseBuffer: Buffer = Buffer.alloc(0);
         let stderrParseExceeded = false;
 
+        params.onExecutionPhase?.({
+          phase: "process_spawned",
+          provider: params.provider,
+          model: context.modelId,
+          backend: context.backendResolved.id,
+        });
         const managedRun = await supervisor.spawn({
           sessionId: params.sessionId,
           backendId: context.backendResolved.id,
@@ -628,13 +639,25 @@ export async function executePreparedCliRun(
                 "It may have been waiting for interactive input or an approval prompt.",
                 "For Claude Code, prefer --permission-mode bypassPermissions --print.",
               ].join(" ");
-              executeDeps.enqueueSystemEvent(stallNotice, { sessionKey: params.sessionKey });
+              const eventRouting = resolveEventSessionRoutingPolicy({
+                cfg: params.config,
+                sessionKey: params.sessionKey,
+                channel: params.messageProvider,
+                accountId: params.agentAccountId,
+              });
+              executeDeps.enqueueSystemEvent(stallNotice, {
+                sessionKey: resolveEventSessionKeyForPolicy(params.sessionKey, eventRouting),
+              });
               executeDeps.requestHeartbeat(
-                scopedHeartbeatWakeOptions(params.sessionKey, {
-                  source: "cli-watchdog",
-                  intent: "event",
-                  reason: "cli:watchdog:stall",
-                }),
+                scopedHeartbeatWakeOptionsForPolicy(
+                  params.sessionKey,
+                  {
+                    source: "cli-watchdog",
+                    intent: "event",
+                    reason: "cli:watchdog:stall",
+                  },
+                  eventRouting,
+                ),
               );
             }
             throw new FailoverError(timeoutReason, {

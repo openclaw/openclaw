@@ -1,4 +1,4 @@
-import type { AuthConfig } from "openclaw/plugin-sdk/config-types";
+import type { AuthConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   applyAuthProfileConfig,
   buildApiKeyCredential,
@@ -9,7 +9,7 @@ import type { ModelApi, ModelProviderConfig } from "openclaw/plugin-sdk/provider
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
-} from "openclaw/plugin-sdk/text-runtime";
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 
 export const PROVIDER_ID = "microsoft-foundry";
 export const DEFAULT_API = "openai-completions";
@@ -121,6 +121,7 @@ export function usesFoundryResponsesByDefault(value?: string | null): boolean {
     normalized.startsWith("o1") ||
     normalized.startsWith("o3") ||
     normalized.startsWith("o4") ||
+    normalized.startsWith("deepseek-v4") ||
     normalized === "computer-use-preview"
   );
 }

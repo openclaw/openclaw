@@ -72,8 +72,9 @@ describe("telegram bot message processor", () => {
 
   async function processSampleMessage(
     processMessage: ReturnType<typeof createTelegramMessageProcessor>,
+    lifecycle?: import("./bot-message.js").TelegramMessageProcessorLifecycle,
   ) {
-    await processMessage(
+    return await processMessage(
       {
         message: {
           chat: { id: 123, type: "private", title: "chat" },
@@ -83,6 +84,10 @@ describe("telegram bot message processor", () => {
       [],
       [],
       {},
+      undefined,
+      undefined,
+      undefined,
+      lifecycle,
     );
   }
 
@@ -126,7 +131,7 @@ describe("telegram bot message processor", () => {
     );
 
     const processMessage = createTelegramMessageProcessor(baseDeps);
-    await processSampleMessage(processMessage);
+    await expect(processSampleMessage(processMessage)).resolves.toBe(true);
 
     expect(sendTyping).toHaveBeenCalledTimes(1);
     expect(dispatchTelegramMessage).toHaveBeenCalledTimes(1);
@@ -138,10 +143,66 @@ describe("telegram bot message processor", () => {
     );
   });
 
+  it("runs the dispatch-start lifecycle after context creation and before dispatch", async () => {
+    const sendTyping = vi.fn().mockResolvedValue(undefined);
+    const onDispatchStart = vi.fn(async () => undefined);
+    buildTelegramMessageContext.mockResolvedValue(
+      createMessageContext({
+        sendTyping,
+      }),
+    );
+
+    const processMessage = createTelegramMessageProcessor(baseDeps);
+    await expect(processSampleMessage(processMessage, { onDispatchStart })).resolves.toBe(true);
+
+    expect(sendTyping).toHaveBeenCalledTimes(1);
+    expect(onDispatchStart).toHaveBeenCalledTimes(1);
+    expect(dispatchTelegramMessage).toHaveBeenCalledTimes(1);
+    expect(sendTyping.mock.invocationCallOrder[0]).toBeLessThan(
+      onDispatchStart.mock.invocationCallOrder[0],
+    );
+    expect(onDispatchStart.mock.invocationCallOrder[0]).toBeLessThan(
+      dispatchTelegramMessage.mock.invocationCallOrder[0],
+    );
+  });
+
+  it("does not run the dispatch-start lifecycle when no context is produced", async () => {
+    const onDispatchStart = vi.fn(async () => undefined);
+    buildTelegramMessageContext.mockResolvedValue(null);
+
+    const processMessage = createTelegramMessageProcessor(baseDeps);
+    await expect(processSampleMessage(processMessage, { onDispatchStart })).resolves.toBe(false);
+
+    expect(onDispatchStart).not.toHaveBeenCalled();
+    expect(dispatchTelegramMessage).not.toHaveBeenCalled();
+  });
+
+  it("does not send early typing cues for room events", async () => {
+    const sendTyping = vi.fn().mockResolvedValue(undefined);
+    buildTelegramMessageContext.mockResolvedValue(
+      createMessageContext({
+        sendTyping,
+        ctxPayload: {
+          From: "telegram:123",
+          To: "telegram:123",
+          ChatType: "group",
+          RawBody: "ambient",
+          InboundEventKind: "room_event",
+        },
+      }),
+    );
+
+    const processMessage = createTelegramMessageProcessor(baseDeps);
+    await expect(processSampleMessage(processMessage)).resolves.toBe(true);
+
+    expect(sendTyping).not.toHaveBeenCalled();
+    expect(dispatchTelegramMessage).toHaveBeenCalledTimes(1);
+  });
+
   it("skips dispatch when no context is produced", async () => {
     buildTelegramMessageContext.mockResolvedValue(null);
     const processMessage = createTelegramMessageProcessor(baseDeps);
-    await processSampleMessage(processMessage);
+    await expect(processSampleMessage(processMessage)).resolves.toBe(false);
     expect(dispatchTelegramMessage).not.toHaveBeenCalled();
     expect(telegramInboundInfo).not.toHaveBeenCalled();
   });
@@ -175,7 +236,7 @@ describe("telegram bot message processor", () => {
     );
 
     const processMessage = createTelegramMessageProcessor(baseDeps);
-    await processSampleMessage(processMessage);
+    await expect(processSampleMessage(processMessage)).resolves.toBe(true);
 
     expect(sendTyping).toHaveBeenCalledTimes(1);
     expect(dispatchTelegramMessage).toHaveBeenCalledTimes(1);
@@ -191,14 +252,16 @@ describe("telegram bot message processor", () => {
       },
       sendMessage,
     );
-    await expect(processSampleMessage(processMessage)).resolves.toBeUndefined();
+    await expect(processSampleMessage(processMessage)).resolves.toBe(true);
 
     expect(sendMessage).toHaveBeenCalledWith(
       123,
       "Something went wrong while processing your request. Please try again.",
       { message_thread_id: 456 },
     );
-    expect(runtimeError).toHaveBeenCalledWith(expect.stringContaining("dispatch exploded"));
+    expect(runtimeError).toHaveBeenCalledWith(
+      "telegram message processing failed: Error: dispatch exploded",
+    );
   });
 
   it("omits message_thread_id for General-topic fallback replies", async () => {
@@ -211,7 +274,7 @@ describe("telegram bot message processor", () => {
       },
       sendMessage,
     );
-    await expect(processSampleMessage(processMessage)).resolves.toBeUndefined();
+    await expect(processSampleMessage(processMessage)).resolves.toBe(true);
 
     expect(sendMessage).toHaveBeenCalledWith(
       123,
@@ -229,13 +292,15 @@ describe("telegram bot message processor", () => {
       },
       sendMessage,
     );
-    await expect(processSampleMessage(processMessage)).resolves.toBeUndefined();
+    await expect(processSampleMessage(processMessage)).resolves.toBe(true);
 
     expect(sendMessage).toHaveBeenCalledWith(
       123,
       "Something went wrong while processing your request. Please try again.",
       undefined,
     );
-    expect(runtimeError).toHaveBeenCalledWith(expect.stringContaining("dispatch exploded"));
+    expect(runtimeError).toHaveBeenCalledWith(
+      "telegram message processing failed: Error: dispatch exploded",
+    );
   });
 });

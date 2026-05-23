@@ -9,6 +9,11 @@ type StaticModelRef = {
   model: string;
 };
 
+export type ProviderModelIdNormalizationOptions = {
+  allowManifestNormalization?: boolean;
+  manifestPlugins?: readonly Pick<PluginManifestRecord, "modelIdNormalization">[];
+};
+
 export function modelKey(provider: string, model: string): string {
   const providerId = provider.trim();
   const modelId = model.trim();
@@ -28,10 +33,7 @@ export function modelKey(provider: string, model: string): string {
 export function normalizeStaticProviderModelId(
   provider: string,
   model: string,
-  options: {
-    allowManifestNormalization?: boolean;
-    manifestPlugins?: readonly Pick<PluginManifestRecord, "modelIdNormalization">[];
-  } = {},
+  options: ProviderModelIdNormalizationOptions = {},
 ): string {
   const normalizedProvider = normalizeProviderId(provider);
   if (options.allowManifestNormalization === false) {
@@ -56,11 +58,25 @@ function normalizeBuiltInProviderModelId(provider: string, model: string): strin
   return model;
 }
 
-export function normalizeConfiguredProviderCatalogModelId(provider: string, model: string): string {
-  const providerModel = normalizeStaticProviderModelId(provider, model);
+export function normalizeConfiguredProviderCatalogModelId(
+  provider: string,
+  model: string,
+  options: ProviderModelIdNormalizationOptions = {},
+): string {
+  const providerModel = normalizeStaticProviderModelId(provider, model, options);
   const googlePrefix = "google/";
   if (!providerModel.startsWith(googlePrefix)) {
-    return providerModel;
+    const slash = providerModel.indexOf("/");
+    if (slash <= 0 || slash >= providerModel.length - 1) {
+      return providerModel;
+    }
+    const prefix = providerModel.slice(0, slash + 1);
+    const suffix = providerModel.slice(slash + 1);
+    if (!suffix.startsWith(googlePrefix)) {
+      return providerModel;
+    }
+    const normalizedSuffix = normalizeGooglePreviewModelId(suffix);
+    return normalizedSuffix === suffix ? providerModel : `${prefix}${normalizedSuffix}`;
   }
   const modelId = providerModel.slice(googlePrefix.length);
   const normalizedModelId = normalizeGooglePreviewModelId(modelId);

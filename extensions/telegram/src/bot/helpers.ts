@@ -1,4 +1,4 @@
-import type { Chat, Message } from "@grammyjs/types";
+import type { Chat, Message } from "grammy/types";
 import { formatLocationText } from "openclaw/plugin-sdk/channel-inbound";
 import {
   resolveCommandAuthorization,
@@ -11,10 +11,10 @@ import type {
   TelegramGroupConfig,
   TelegramDmThreadReplies,
   TelegramTopicConfig,
-} from "openclaw/plugin-sdk/config-types";
+} from "openclaw/plugin-sdk/config-contracts";
 import { readChannelAllowFromStore } from "openclaw/plugin-sdk/conversation-runtime";
 import { normalizeAccountId } from "openclaw/plugin-sdk/routing";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { expandTelegramAllowFromWithAccessGroups } from "../access-groups.js";
 import { firstDefined, normalizeAllowFrom, type NormalizedAllowFrom } from "../bot-access.js";
 import { normalizeTelegramReplyToMessageId } from "../outbound-params.js";
@@ -121,18 +121,35 @@ export function extractTelegramForumFlag(value: unknown): boolean | undefined {
   return typeof forum === "boolean" ? forum : undefined;
 }
 
+export function resolveTelegramMessageForumFlagHint(params: {
+  chatType?: Chat["type"];
+  isForum?: boolean;
+  isTopicMessage?: boolean;
+}): boolean | undefined {
+  if (params.chatType === "supergroup" && params.isTopicMessage === true) {
+    return true;
+  }
+  return typeof params.isForum === "boolean" ? params.isForum : undefined;
+}
+
 export async function resolveTelegramForumFlag(params: {
   chatId: string | number;
   chatType?: Chat["type"];
   isGroup: boolean;
   isForum?: boolean;
+  isTopicMessage?: boolean;
   getChat?: TelegramGetChat;
 }): Promise<boolean> {
-  if (typeof params.isForum === "boolean") {
+  const forumHint = resolveTelegramMessageForumFlagHint({
+    chatType: params.chatType,
+    isForum: params.isForum,
+    isTopicMessage: params.isTopicMessage,
+  });
+  if (typeof forumHint === "boolean") {
     if (params.isGroup && params.chatType === "supergroup") {
-      cacheTelegramForumFlag(params.chatId, params.isForum);
+      cacheTelegramForumFlag(params.chatId, forumHint);
     }
-    return params.isForum;
+    return forumHint;
   }
   if (!params.isGroup || params.chatType !== "supergroup" || !params.getChat) {
     return false;
@@ -337,6 +354,20 @@ export function buildTelegramRoutingTarget(
     return base;
   }
   return `${base}:topic:${messageThreadId}`;
+}
+
+/**
+ * Build the canonical Telegram inbound origin used by queued follow-up routing.
+ * DM thread ids remain metadata-only; real forum topics must be in-band.
+ */
+export function buildTelegramInboundOriginTarget(
+  chatId: number | string,
+  thread?: TelegramThreadSpec | null,
+): string {
+  if (thread?.scope !== "forum") {
+    return `telegram:${chatId}`;
+  }
+  return buildTelegramRoutingTarget(chatId, thread);
 }
 
 /**

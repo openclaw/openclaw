@@ -1,4 +1,4 @@
-import type { AgentSession } from "@mariozechner/pi-coding-agent";
+import type { AgentSession } from "@earendil-works/pi-coding-agent";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { clearMemoryPluginState, registerMemoryPromptSection } from "../../plugins/memory-state.js";
 import {
@@ -49,7 +49,7 @@ describe("applySystemPromptOverrideToSession", () => {
     const { mutable } = applyAndGetMutableSession(prompt);
 
     expect(mutable.agent.state.systemPrompt).toBe(prompt);
-    expect(mutable._baseSystemPrompt).toBe(prompt);
+    expect(mutable["_baseSystemPrompt"]).toBe(prompt);
   });
 
   it("trims whitespace from string overrides", () => {
@@ -67,7 +67,7 @@ describe("applySystemPromptOverrideToSession", () => {
 
   it("sets _rebuildSystemPrompt that returns the override", () => {
     const { mutable } = applyAndGetMutableSession("rebuild test");
-    expect(mutable._rebuildSystemPrompt?.(["tool1"])).toBe("rebuild test");
+    expect(mutable["_rebuildSystemPrompt"]?.(["tool1"])).toBe("rebuild test");
   });
 });
 
@@ -130,6 +130,33 @@ describe("buildEmbeddedSystemPrompt", () => {
     expect(prompt).toContain("Mode: prefer");
   });
 
+  it("forwards the subagent prompt surface to embedded prompt rendering", () => {
+    const prompt = buildEmbeddedSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      reasoningTagHint: false,
+      promptSurface: "subagent",
+      runtimeInfo: {
+        host: "local",
+        os: "darwin",
+        arch: "arm64",
+        node: process.version,
+        model: "gpt-5.4",
+        provider: "openai",
+      },
+      tools: [{ name: "sessions_spawn" } as never],
+      nativeCommandGuidanceLines: ["Subagent-only command guidance."],
+      modelAliasLines: [],
+      userTimezone: "UTC",
+    });
+
+    expect(prompt).toContain("- sessions_spawn");
+    expect(prompt).not.toContain("Pi lists the standard tools above");
+    expect(prompt).not.toContain("For long waits, avoid rapid poll loops");
+    expect(prompt).not.toContain("Larger work: use `sessions_spawn`");
+    expect(prompt).not.toContain("Do not poll `subagents list` / `sessions_list` in a loop");
+    expect(prompt).toContain("Subagent-only command guidance.");
+  });
+
   it("can omit base memory guidance for non-legacy context engines", () => {
     registerMemoryPromptSection(() => ["## Memory Recall", "Use memory carefully.", ""]);
 
@@ -185,7 +212,8 @@ describe("buildEmbeddedSystemPrompt", () => {
 
     expect(prompt).toContain("Active background exec sessions in this scope:");
     expect(prompt).toContain("sess-active running pid=1234 cwd=/tmp/work :: sleep 600");
-    expect(prompt).toContain("process tool with a sessionId");
+    expect(prompt).toContain("Use process log before interactive input");
+    expect(prompt).toContain("waitingForInput/stdinWritable");
     expect(prompt).toContain("process list");
   });
 });

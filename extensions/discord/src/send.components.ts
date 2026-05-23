@@ -1,6 +1,6 @@
 import { ChannelType } from "discord-api-types/v10";
 import { recordChannelActivity } from "openclaw/plugin-sdk/channel-activity-runtime";
-import type { MarkdownTableMode, OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import type { MarkdownTableMode, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { OutboundMediaAccess } from "openclaw/plugin-sdk/media-runtime";
 import { requireRuntimeConfig } from "openclaw/plugin-sdk/plugin-config-runtime";
 import type { ChunkMode } from "openclaw/plugin-sdk/reply-chunking";
@@ -164,17 +164,29 @@ type DiscordComponentSendOpts = {
   maxLinesPerMessage?: number;
   tableMode?: MarkdownTableMode;
   chunkMode?: ChunkMode;
+  suppressEmbeds?: boolean;
 };
 
 export function registerBuiltDiscordComponentMessage(params: {
   buildResult: DiscordComponentBuildResult;
   messageId: string;
+  ttlMs?: number;
 }): void {
   registerDiscordComponentEntries({
     entries: params.buildResult.entries,
     modals: params.buildResult.modals,
     messageId: params.messageId,
+    ttlMs: params.ttlMs,
   });
+}
+
+function resolveDiscordComponentRegistryTtlMs(
+  accountConfig: { agentComponents?: { ttlMs?: number } } | undefined,
+): number | undefined {
+  const ttlMs = accountConfig?.agentComponents?.ttlMs;
+  return typeof ttlMs === "number" && Number.isFinite(ttlMs) && ttlMs > 0
+    ? Math.floor(ttlMs)
+    : undefined;
 }
 
 async function buildDiscordComponentPayload(params: {
@@ -271,6 +283,7 @@ export async function sendDiscordComponentMessage(
       maxLinesPerMessage: opts.maxLinesPerMessage,
       tableMode: opts.tableMode,
       chunkMode: opts.chunkMode,
+      ...(opts.suppressEmbeds === undefined ? {} : { suppressEmbeds: opts.suppressEmbeds }),
     });
   }
 
@@ -314,6 +327,7 @@ export async function sendDiscordComponentMessage(
   registerBuiltDiscordComponentMessage({
     buildResult,
     messageId: result.id,
+    ttlMs: resolveDiscordComponentRegistryTtlMs(accountInfo.config),
   });
 
   recordChannelActivity({
@@ -369,6 +383,7 @@ export async function editDiscordComponentMessage(
   registerBuiltDiscordComponentMessage({
     buildResult,
     messageId: result.id ?? messageId,
+    ttlMs: resolveDiscordComponentRegistryTtlMs(accountInfo.config),
   });
 
   recordChannelActivity({

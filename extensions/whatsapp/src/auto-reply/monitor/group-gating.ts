@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   getPrimaryIdentityId,
   getReplyContext,
@@ -17,7 +17,7 @@ import {
   implicitMentionKindWhen,
   normalizeE164,
   parseActivationCommand,
-  recordPendingHistoryEntryIfEnabled,
+  createChannelHistoryWindow,
   resolveInboundMentionDecision,
 } from "./group-gating.runtime.js";
 import { noteGroupMember } from "./group-members.js";
@@ -73,8 +73,7 @@ function recordPendingGroupHistoryEntry(params: {
         senderIdentity.e164 ??
         getPrimaryIdentityId(senderIdentity) ??
         "Unknown");
-  recordPendingHistoryEntryIfEnabled({
-    historyMap: params.groupHistories,
+  createChannelHistoryWindow({ historyMap: params.groupHistories }).record({
     historyKey: params.groupHistoryKey,
     limit: params.groupHistoryLimit,
     entry: {
@@ -115,7 +114,9 @@ export async function applyGroupGating(params: ApplyGroupGatingParams) {
     params.conversationId,
   );
   if (conversationGroupPolicy.allowlistEnabled && !conversationGroupPolicy.allowed) {
-    params.logVerbose(`Skipping group message ${params.conversationId} (not in allowlist)`);
+    params.logVerbose(
+      `Dropping message from unregistered WhatsApp group ${params.conversationId}. Add the group JID to channels.whatsapp.groups, or add "*" there to admit all groups. Sender authorization still applies.`,
+    );
     return { shouldProcess: false };
   }
 

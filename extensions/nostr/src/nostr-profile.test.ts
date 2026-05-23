@@ -203,14 +203,10 @@ describe("validateProfile", () => {
 
     const result = validateProfile(profile);
 
-    expect(result).toMatchObject({
-      valid: true,
-      profile: {
-        name: "validuser",
-        about: "A valid user",
-        picture: "https://example.com/pic.png",
-      },
-    });
+    expect(result.valid).toBe(true);
+    expect(result.profile?.name).toBe("validuser");
+    expect(result.profile?.about).toBe("A valid user");
+    expect(result.profile?.picture).toBe("https://example.com/pic.png");
     expect(result).not.toHaveProperty("errors");
   });
 
@@ -223,7 +219,7 @@ describe("validateProfile", () => {
     const result = validateProfile(profile);
 
     expect(result.valid).toBe(false);
-    expect(result.errors).toEqual(expect.arrayContaining([expect.stringContaining("https://")]));
+    expect(result.errors).toEqual(["picture: URL must use https:// protocol"]);
   });
 
   it("rejects profile with javascript: URL", () => {
@@ -256,7 +252,7 @@ describe("validateProfile", () => {
     const result = validateProfile(profile);
 
     expect(result.valid).toBe(false);
-    expect(result.errors).toEqual(expect.arrayContaining([expect.stringContaining("256")]));
+    expect(result.errors).toEqual(["name: Too big: expected string to have <=256 characters"]);
   });
 
   it("rejects about exceeding 2000 characters", () => {
@@ -267,7 +263,7 @@ describe("validateProfile", () => {
     const result = validateProfile(profile);
 
     expect(result.valid).toBe(false);
-    expect(result.errors).toEqual(expect.arrayContaining([expect.stringContaining("2000")]));
+    expect(result.errors).toEqual(["about: Too big: expected string to have <=2000 characters"]);
   });
 
   it("accepts empty profile", () => {

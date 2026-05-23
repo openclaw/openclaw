@@ -39,7 +39,12 @@ vi.mock("./app-scroll.ts", () => ({
   scheduleLogsScroll: vi.fn(),
 }));
 
-import { handleConnected } from "./app-lifecycle.ts";
+import { handleConnected, handleUpdated } from "./app-lifecycle.ts";
+import { startNodesPolling } from "./app-polling.ts";
+import { scheduleChatScroll } from "./app-scroll.ts";
+
+const startNodesPollingMock = vi.mocked(startNodesPolling);
+const scheduleChatScrollMock = vi.mocked(scheduleChatScroll);
 
 function createDeferred() {
   let resolve: (() => void) | undefined;
@@ -68,7 +73,7 @@ function createHost() {
     chatLoading: false,
     chatMessages: [],
     chatToolMessages: [],
-    chatStream: "",
+    chatStream: "" as string | null,
     logsAutoFollow: false,
     logsAtBottom: true,
     logsEntries: [],
@@ -82,6 +87,8 @@ describe("handleConnected", () => {
     applySettingsFromUrlMock.mockReset();
     connectGatewayMock.mockReset();
     loadBootstrapMock.mockReset();
+    startNodesPollingMock.mockReset();
+    scheduleChatScrollMock.mockReset();
     vi.stubGlobal("window", {
       addEventListener: vi.fn(),
     });
@@ -128,5 +135,30 @@ describe("handleConnected", () => {
     expect(applySettingsFromUrlMock.mock.invocationCallOrder[0]).toBeLessThan(
       loadBootstrapMock.mock.invocationCallOrder[0],
     );
+  });
+
+  it("starts Nodes polling only when the Nodes tab is active on connect", () => {
+    loadBootstrapMock.mockResolvedValue(undefined);
+    const chatHost = createHost();
+
+    handleConnected(chatHost as never);
+    expect(startNodesPollingMock).not.toHaveBeenCalled();
+
+    const nodesHost = createHost();
+    nodesHost.tab = "nodes";
+    handleConnected(nodesHost as never);
+    expect(startNodesPollingMock).toHaveBeenCalledWith(nodesHost);
+  });
+
+  it("keeps realtime Talk turns pinned in the chat flow", () => {
+    const host = createHost();
+    host.chatStream = null;
+
+    handleUpdated(
+      host as unknown as Parameters<typeof handleUpdated>[0],
+      new Map<PropertyKey, unknown>([["realtimeTalkConversation", []]]),
+    );
+
+    expect(scheduleChatScrollMock).toHaveBeenCalledWith(host, true);
   });
 });

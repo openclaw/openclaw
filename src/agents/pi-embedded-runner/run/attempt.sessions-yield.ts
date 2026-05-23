@@ -1,4 +1,4 @@
-import type { AgentMessage } from "@mariozechner/pi-agent-core";
+import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import { log } from "../logger.js";
 
 const SESSIONS_YIELD_INTERRUPT_CUSTOM_TYPE = "openclaw.sessions_yield_interrupt";
@@ -216,6 +216,6 @@ export function stripSessionsYieldArtifacts(activeSession: {
     changed = true;
   }
   if (changed) {
-    sessionManager._rewriteFile?.();
+    sessionManager["_rewriteFile"]?.();
   }
 }

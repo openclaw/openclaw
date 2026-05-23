@@ -1,4 +1,4 @@
-import { createAssistantMessageEventStream, type Model } from "@mariozechner/pi-ai";
+import { createAssistantMessageEventStream, type Model } from "@earendil-works/pi-ai";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import type { AnthropicVertexStreamDeps } from "./stream-runtime.js";
 
@@ -44,6 +44,24 @@ const CACHE_BOUNDARY_PROMPT = `Stable prefix${SYSTEM_PROMPT_CACHE_BOUNDARY}Dynam
 
 type PayloadHook = (payload: unknown, payloadModel: unknown) => Promise<unknown>;
 
+function streamAnthropicCall(streamAnthropicMock: ReturnType<typeof vi.fn>): unknown[] {
+  const call = streamAnthropicMock.mock.calls[0];
+  if (!call) {
+    throw new Error("Expected streamAnthropic call");
+  }
+  return call;
+}
+
+function streamTransportOptions(
+  streamAnthropicMock: ReturnType<typeof vi.fn>,
+): Record<string, unknown> {
+  const options = streamAnthropicCall(streamAnthropicMock)[2];
+  if (!options || typeof options !== "object") {
+    throw new Error("Expected streamAnthropic transport options");
+  }
+  return options as Record<string, unknown>;
+}
+
 function captureCacheBoundaryPayloadHook(
   onPayload: PayloadHook,
   deps: AnthropicVertexStreamDeps,
@@ -64,11 +82,9 @@ function captureCacheBoundaryPayloadHook(
     } as never,
   );
 
-  const transportOptions = streamAnthropicMock.mock.calls[0]?.[2] as {
-    onPayload?: PayloadHook;
-  };
+  const transportOptions = streamTransportOptions(streamAnthropicMock);
 
-  return { model, onPayload: transportOptions.onPayload };
+  return { model, onPayload: transportOptions.onPayload as PayloadHook | undefined };
 }
 
 function buildExpectedCacheBoundaryPayload(messageText: string) {
@@ -141,13 +157,7 @@ describe("createAnthropicVertexStreamFn", () => {
 
     void streamFn(model, { messages: [] }, {});
 
-    expect(streamAnthropicMock).toHaveBeenCalledWith(
-      model,
-      { messages: [] },
-      expect.objectContaining({
-        maxTokens: 128000,
-      }),
-    );
+    expect(streamTransportOptions(streamAnthropicMock).maxTokens).toBe(128000);
   });
 
   it("clamps explicit maxTokens to the selected model limit", () => {
@@ -157,13 +167,7 @@ describe("createAnthropicVertexStreamFn", () => {
 
     void streamFn(model, { messages: [] }, { maxTokens: 999999 });
 
-    expect(streamAnthropicMock).toHaveBeenCalledWith(
-      model,
-      { messages: [] },
-      expect.objectContaining({
-        maxTokens: 128000,
-      }),
-    );
+    expect(streamTransportOptions(streamAnthropicMock).maxTokens).toBe(128000);
   });
 
   it("maps xhigh reasoning to max effort for adaptive Opus models", () => {
@@ -173,14 +177,9 @@ describe("createAnthropicVertexStreamFn", () => {
 
     void streamFn(model, { messages: [] }, { reasoning: "xhigh" });
 
-    expect(streamAnthropicMock).toHaveBeenCalledWith(
-      model,
-      { messages: [] },
-      expect.objectContaining({
-        thinkingEnabled: true,
-        effort: "max",
-      }),
-    );
+    const transportOptions = streamTransportOptions(streamAnthropicMock);
+    expect(transportOptions.thinkingEnabled).toBe(true);
+    expect(transportOptions.effort).toBe("max");
   });
 
   it("maps xhigh reasoning to xhigh effort for Opus 4.7", () => {
@@ -190,14 +189,9 @@ describe("createAnthropicVertexStreamFn", () => {
 
     void streamFn(model, { messages: [] }, { reasoning: "xhigh" });
 
-    expect(streamAnthropicMock).toHaveBeenCalledWith(
-      model,
-      { messages: [] },
-      expect.objectContaining({
-        thinkingEnabled: true,
-        effort: "xhigh",
-      }),
-    );
+    const transportOptions = streamTransportOptions(streamAnthropicMock);
+    expect(transportOptions.thinkingEnabled).toBe(true);
+    expect(transportOptions.effort).toBe("xhigh");
   });
 
   it("applies Anthropic cache-boundary shaping before forwarding payload hooks", async () => {
@@ -266,13 +260,12 @@ describe("createAnthropicVertexStreamFn", () => {
 
     void streamFn(model, { messages: [] }, { maxTokens: Number.NaN });
 
-    expect(streamAnthropicMock).toHaveBeenCalledWith(
-      model,
-      { messages: [] },
-      expect.not.objectContaining({
-        maxTokens: expect.anything(),
-      }),
-    );
+    expect(streamAnthropicMock).toHaveBeenCalledTimes(1);
+    const [calledModel, payload, transportOptions] = streamAnthropicCall(streamAnthropicMock);
+    expect(calledModel).toBe(model);
+    expect(payload).toEqual({ messages: [] });
+    expect(transportOptions).toBeTypeOf("object");
+    expect(Object.hasOwn(transportOptions as object, "maxTokens")).toBe(false);
   });
 });
 

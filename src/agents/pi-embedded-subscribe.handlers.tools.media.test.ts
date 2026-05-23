@@ -40,7 +40,7 @@ function createMockContext(overrides?: {
       deterministicApprovalPromptPending: false,
       deterministicApprovalPromptSent: false,
     },
-    log: { debug: vi.fn(), warn: vi.fn() },
+    log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn() },
     builtinToolNames: overrides?.builtinToolNames,
     shouldEmitToolResult: vi.fn(() => false),
     shouldEmitToolOutput: vi.fn(() => overrides?.shouldEmitToolOutput ?? false),
@@ -70,6 +70,15 @@ function createMockContext(overrides?: {
     getUsageTotals: vi.fn(() => undefined),
     getCompactionCount: vi.fn(() => 0),
   } as unknown as EmbeddedPiSubscribeContext;
+}
+
+function firstEmitToolOutputCall(ctx: EmbeddedPiSubscribeContext) {
+  expect(ctx.emitToolOutput).toHaveBeenCalledTimes(1);
+  const call = vi.mocked(ctx.emitToolOutput).mock.calls[0];
+  if (!call) {
+    throw new Error("expected emitToolOutput call");
+  }
+  return call;
 }
 
 async function emitPngMediaToolResult(
@@ -293,7 +302,7 @@ describe("handleToolExecutionEnd media emission", () => {
     // onToolResult should NOT be called by the new media path (emitToolOutput handles it).
     // It may be called by emitToolOutput, but the new block should not fire.
     // Verify emitToolOutput was called instead.
-    expect(ctx.emitToolOutput).toHaveBeenCalled();
+    expect(ctx.emitToolOutput).toHaveBeenCalledTimes(1);
     expect(ctx.state.pendingToolMediaUrls).toStrictEqual([]);
   });
 
@@ -379,7 +388,7 @@ describe("handleToolExecutionEnd media emission", () => {
       },
     });
 
-    expect(ctx.emitToolOutput).toHaveBeenCalled();
+    expect(ctx.emitToolOutput).toHaveBeenCalledTimes(1);
     expect(ctx.state.pendingToolMediaUrls).toStrictEqual([]);
     expect(ctx.state.pendingToolAudioAsVoice).toBe(false);
   });
@@ -408,9 +417,7 @@ describe("handleToolExecutionEnd media emission", () => {
       },
     });
 
-    expect(ctx.emitToolOutput).toHaveBeenCalledTimes(1);
-    const emitToolOutput = vi.mocked(ctx.emitToolOutput);
-    const [toolName, summary, output, options] = emitToolOutput.mock.calls[0] ?? [];
+    const [toolName, summary, output, options] = firstEmitToolOutputCall(ctx);
     expect(toolName).toBe("tts");
     expect(summary).toBeUndefined();
     expect(output).toBe("remote tool output");
@@ -452,14 +459,14 @@ describe("handleToolExecutionEnd media emission", () => {
   it("does not queue structured media already emitted in plain verbose output", async () => {
     const ctx = await handleVerboseGeneratedImage("plain");
 
-    expect(ctx.emitToolOutput).toHaveBeenCalled();
+    expect(ctx.emitToolOutput).toHaveBeenCalledTimes(1);
     expect(ctx.state.pendingToolMediaUrls).toStrictEqual([]);
   });
 
   it("queues structured media once for markdown verbose output", async () => {
     const ctx = await handleVerboseGeneratedImage("markdown");
 
-    expect(ctx.emitToolOutput).toHaveBeenCalled();
+    expect(ctx.emitToolOutput).toHaveBeenCalledTimes(1);
     expect(ctx.state.pendingToolMediaUrls).toEqual(["/tmp/generated.png"]);
   });
 
@@ -484,9 +491,7 @@ describe("handleToolExecutionEnd media emission", () => {
         shouldEmitToolOutput: true,
       });
 
-      expect(ctx.emitToolOutput).toHaveBeenCalledTimes(1);
-      const emitToolOutput = vi.mocked(ctx.emitToolOutput);
-      const [calledToolName, summary, output, options] = emitToolOutput.mock.calls[0] ?? [];
+      const [calledToolName, summary, output, options] = firstEmitToolOutputCall(ctx);
       expect(calledToolName).toBe(toolName);
       expect(summary).toBeUndefined();
       expect(output).toBe(providerInventoryText);

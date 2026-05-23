@@ -15,26 +15,8 @@ const configMocks = vi.hoisted(() => ({
 }));
 const pluginManifestRegistry = vi.hoisted(() => ({ plugins: [], diagnostics: [] }));
 const pluginMetadataSnapshot = vi.hoisted(
-  (): PluginMetadataSnapshot => ({
-    policyHash: "policy",
-    index: {
-      version: 1,
-      hostContractVersion: "test",
-      compatRegistryVersion: "test",
-      migrationVersion: 1,
-      policyHash: "policy",
-      generatedAtMs: 0,
-      installRecords: {},
-      plugins: [],
-      diagnostics: [],
-    },
-    registryDiagnostics: [],
-    manifestRegistry: pluginManifestRegistry,
-    plugins: [],
-    diagnostics: [],
-    byPluginId: new Map(),
-    normalizePluginId: (pluginId) => pluginId,
-    owners: {
+  (): PluginMetadataSnapshot => {
+    const emptyOwners = {
       channels: new Map(),
       channelConfigs: new Map(),
       providers: new Map(),
@@ -43,16 +25,38 @@ const pluginMetadataSnapshot = vi.hoisted(
       setupProviders: new Map(),
       commandAliases: new Map(),
       contracts: new Map(),
-    },
-    metrics: {
+    };
+    const zeroMetrics = {
       registrySnapshotMs: 0,
       manifestRegistryMs: 0,
       ownerMapsMs: 0,
       totalMs: 0,
       indexPluginCount: 0,
       manifestPluginCount: 0,
-    },
-  }),
+    };
+    return {
+      policyHash: "policy",
+      index: {
+        version: 1,
+        hostContractVersion: "test",
+        compatRegistryVersion: "test",
+        migrationVersion: 1,
+        policyHash: "policy",
+        generatedAtMs: 0,
+        installRecords: {},
+        plugins: [],
+        diagnostics: [],
+      },
+      registryDiagnostics: [],
+      manifestRegistry: pluginManifestRegistry,
+      plugins: [],
+      diagnostics: [],
+      byPluginId: new Map(),
+      normalizePluginId: (pluginId) => pluginId,
+      owners: emptyOwners,
+      metrics: zeroMetrics,
+    };
+  },
 );
 vi.mock("../config/io.js", () => ({
   readConfigFileSnapshot: vi.fn(),
@@ -155,7 +159,10 @@ function installConfigIoMockDefaults() {
     }
     return snapshot.valid ? { snapshot, pluginMetadataSnapshot } : { snapshot };
   });
-  writeConfig.mockResolvedValue(undefined);
+  writeConfig.mockResolvedValue({
+    persistedHash: "test-persisted-hash",
+    persistedConfig: validConfig,
+  });
 }
 
 describe("gateway startup config validation", () => {
@@ -450,7 +457,7 @@ describe("gateway startup config validation", () => {
         log: { info: vi.fn(), warn: vi.fn() },
       }),
     ).rejects.toThrow(
-      `Invalid config at ${configPath}.\ngateway.mode: Expected 'local' or 'remote'\nRun "openclaw doctor --fix" to repair, then retry.`,
+      `Invalid config at ${configPath}.\ngateway.mode: Expected 'local' or 'remote'\nRun "openclaw doctor --fix" to repair, then retry.\nIf startup is still blocked, inspect the adjacent .bak backup before restoring it manually.`,
     );
   });
 

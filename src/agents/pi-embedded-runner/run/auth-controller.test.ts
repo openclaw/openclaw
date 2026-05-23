@@ -1,4 +1,4 @@
-import type { Api, Model } from "@mariozechner/pi-ai";
+import type { Api, Model } from "@earendil-works/pi-ai";
 import { beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 import type { AuthProfileStore } from "../../auth-profiles.js";
 import type { RuntimeAuthState } from "./helpers.js";
@@ -179,7 +179,7 @@ describe("createEmbeddedRunAuthController", () => {
 
     await controller.initializeAuthProfile();
 
-    const apiKeyParams = mocks.getApiKeyForModel.mock.calls[0]?.[0] as
+    const apiKeyParams = mocks.getApiKeyForModel.mock.calls.at(0)?.[0] as
       | { agentDir?: string; workspaceDir?: string }
       | undefined;
     expect(apiKeyParams?.agentDir).toBe("/tmp/agent");
@@ -196,6 +196,30 @@ describe("createEmbeddedRunAuthController", () => {
     expect(harness.runtimeAuthState?.sourceApiKey).toBe("source-api-key");
     expect(harness.runtimeAuthState?.authMode).toBe("api-key");
     expect(harness.runtimeAuthState?.profileId).toBe("default");
+  });
+
+  it("includes the checked credential source when an api key is missing", async () => {
+    const harness = createMutableAuthControllerHarness();
+    const setRuntimeApiKey = vi.fn<(provider: string, apiKey: string) => void>();
+
+    mocks.getApiKeyForModel.mockResolvedValue({
+      mode: "api-key",
+      source: "models.providers.custom-openai",
+    });
+
+    const controller = createMutableEmbeddedRunAuthController({
+      harness,
+      setRuntimeApiKey,
+    });
+
+    await expect(controller.initializeAuthProfile()).rejects.toThrow(
+      'No API key resolved for provider "custom-openai" (auth mode: api-key, checked: models.providers.custom-openai).',
+    );
+    expect(setRuntimeApiKey).not.toHaveBeenCalled();
+    expect(harness.apiKeyInfo).toMatchObject({
+      mode: "api-key",
+      source: "models.providers.custom-openai",
+    });
   });
 
   it("rejects privileged runtime transport overrides on the first auth exchange", async () => {
@@ -494,9 +518,7 @@ describe("createEmbeddedRunAuthController", () => {
       expect(setRuntimeApiKey).toHaveBeenCalledWith("custom-openai", "__aws_sdk_auth__");
       expect(harness.runtimeAuthState).toBeNull();
       expect(warn).toHaveBeenCalledWith(
-        expect.stringContaining(
-          "prepareProviderRuntimeAuth failed for custom-openai, falling back to sentinel: No runtime auth plugin",
-        ),
+        "prepareProviderRuntimeAuth failed for custom-openai, falling back to sentinel: No runtime auth plugin",
       );
     });
   });
