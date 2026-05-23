@@ -67,9 +67,11 @@ function spawnDockerProcess(command: string, args: string[]) {
   } else if (
     (args[0] === "rm" && args[1] === "-f") ||
     (args[0] === "image" && args[1] === "inspect") ||
-    args[0] === "create" ||
-    args[0] === "start"
+    args[0] === "create"
   ) {
+    code = 0;
+  } else if (args[0] === "start") {
+    spawnState.inspectRunning = true;
     code = 0;
   } else {
     code = 1;
@@ -328,6 +330,178 @@ describe("ensureSandboxContainer config-hash recreation", () => {
     const customMountIdx = bindArgs.indexOf("/tmp/workspace-shared/USER.md:/workspace/USER.md:ro");
     expect(workspaceMountIdx).toBeGreaterThanOrEqual(0);
     expect(customMountIdx).toBeGreaterThan(workspaceMountIdx);
+  });
+
+  it.each([
+    { strategy: "named" as const, source: "openclaw-cache" },
+    { strategy: "ephemeral" as const },
+  ])(
+    "rejects reserved volume targets for $strategy strategy by default",
+    async ({ strategy, source }) => {
+      const workspaceDir = "/tmp/workspace";
+      const cfg = createSandboxConfig([]);
+      cfg.docker.dangerouslyAllowReservedContainerTargets = false;
+      cfg.docker.volumes = [
+        {
+          strategy,
+          source,
+          target: "/workspace",
+        },
+      ];
+
+      spawnState.inspectRunning = false;
+      spawnState.labelHash = "";
+      registryMocks.readRegistryEntry.mockResolvedValue(null);
+      registryMocks.updateRegistry.mockResolvedValue(undefined);
+
+      await expect(
+        ensureSandboxContainer({
+          sessionKey: "agent:main:session-1",
+          workspaceDir,
+          agentWorkspaceDir: workspaceDir,
+          cfg,
+        }),
+      ).rejects.toThrow(/reserved container path/);
+
+      const createCall = spawnState.calls.find(
+        (call) => call.command === "docker" && call.args[0] === "create",
+      );
+      expect(createCall).toBeUndefined();
+    },
+  );
+
+  it("starts as root only to initialize writable docker volume ownership before dropping to the sandbox user", async () => {
+    const workspaceDir = "/tmp/workspace";
+    const cfg = createSandboxConfig([]);
+    cfg.docker.user = "1000:1001";
+    cfg.docker.volumes = [
+      { strategy: "ephemeral", target: "/proof/ephemeral" },
+      { strategy: "named", source: "openclaw-cache", target: "/proof/named" },
+      { strategy: "bind", source: "/tmp/workspace/cache", target: "/proof/bind" },
+      { strategy: "named", source: "readonly-cache", target: "/proof/readonly", readOnly: true },
+    ];
+
+    spawnState.inspectRunning = false;
+    spawnState.labelHash = "";
+    registryMocks.readRegistryEntry.mockResolvedValue(null);
+    registryMocks.updateRegistry.mockResolvedValue(undefined);
+
+    const createCall = await ensureSandboxCreateCallForTest({ cfg, workspaceDir });
+
+    expect(collectDockerFlagValues(createCall.args, "--user")).toEqual(["0:0"]);
+    expect(collectDockerFlagValues(createCall.args, "--cap-add")).toEqual([
+      "CHOWN",
+      "SETUID",
+      "SETGID",
+    ]);
+    expect(collectDockerFlagValues(createCall.args, "--mount")).toEqual([
+      "type=volume,target=/proof/ephemeral",
+      "type=volume,source=openclaw-cache,target=/proof/named",
+      "type=bind,source=/tmp/workspace/cache,target=/proof/bind",
+      "type=volume,source=readonly-cache,target=/proof/readonly,readonly",
+    ]);
+
+    const command = createCall.args.at(-1);
+    expect(command).toContain("setpriv");
+    expect(command).toContain("chown");
+    expect(command).toContain("/proof/ephemeral");
+    expect(command).toContain("/proof/named");
+    expect(command).not.toContain("/proof/bind");
+    expect(command).not.toContain("/proof/readonly");
+    expect(command).toContain("sleep infinity");
+  });
+
+  it("rejects comma-delimited docker volume mount source injection before create", async () => {
+    const workspaceDir = "/tmp/workspace";
+    const cfg = createSandboxConfig([]);
+    cfg.docker.volumes = [
+      {
+        strategy: "named",
+        source: "cache,type=bind,source=/etc",
+        target: "/cache",
+      },
+    ];
+
+    spawnState.inspectRunning = false;
+    spawnState.labelHash = "";
+    registryMocks.readRegistryEntry.mockResolvedValue(null);
+    registryMocks.updateRegistry.mockResolvedValue(undefined);
+
+    await expect(
+      ensureSandboxContainer({
+        sessionKey: "agent:main:session-1",
+        workspaceDir,
+        agentWorkspaceDir: workspaceDir,
+        cfg,
+      }),
+    ).rejects.toThrow(/must not contain ","/);
+
+    const createCall = spawnState.calls.find(
+      (call) => call.command === "docker" && call.args[0] === "create",
+    );
+    expect(createCall).toBeUndefined();
+  });
+
+  it("rejects comma-delimited docker volume mount target injection before create", async () => {
+    const workspaceDir = "/tmp/workspace";
+    const cfg = createSandboxConfig([]);
+    cfg.docker.volumes = [
+      {
+        strategy: "bind",
+        source: "/tmp/cache",
+        target: "/cache,target=/workspace",
+      },
+    ];
+
+    spawnState.inspectRunning = false;
+    spawnState.labelHash = "";
+    registryMocks.readRegistryEntry.mockResolvedValue(null);
+    registryMocks.updateRegistry.mockResolvedValue(undefined);
+
+    await expect(
+      ensureSandboxContainer({
+        sessionKey: "agent:main:session-1",
+        workspaceDir,
+        agentWorkspaceDir: workspaceDir,
+        cfg,
+      }),
+    ).rejects.toThrow(/must not contain ","/);
+
+    const createCall = spawnState.calls.find(
+      (call) => call.command === "docker" && call.args[0] === "create",
+    );
+    expect(createCall).toBeUndefined();
+  });
+
+  it("rejects bind volume sources outside allowed roots without legacy bind parsing", async () => {
+    const workspaceDir = "/tmp/workspace";
+    const cfg = createSandboxConfig([]);
+    cfg.docker.volumes = [
+      {
+        strategy: "bind",
+        source: "/tmp/workspace:/outside",
+        target: "/cache",
+      },
+    ];
+
+    spawnState.inspectRunning = false;
+    spawnState.labelHash = "";
+    registryMocks.readRegistryEntry.mockResolvedValue(null);
+    registryMocks.updateRegistry.mockResolvedValue(undefined);
+
+    await expect(
+      ensureSandboxContainer({
+        sessionKey: "agent:main:session-1",
+        workspaceDir,
+        agentWorkspaceDir: workspaceDir,
+        cfg,
+      }),
+    ).rejects.toThrow(/outside allowed roots/);
+
+    const createCall = spawnState.calls.find(
+      (call) => call.command === "docker" && call.args[0] === "create",
+    );
+    expect(createCall).toBeUndefined();
   });
 
   it.each([

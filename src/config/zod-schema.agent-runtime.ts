@@ -52,6 +52,10 @@ function validateSandboxBindEntries(
   }
 }
 
+function hasDockerMountFieldSeparator(value: string | undefined): boolean {
+  return value?.includes(",") === true;
+}
+
 export const AgentRunRetriesConfigSchema = z
   .object({
     base: z.number().int().positive().optional(),
@@ -194,6 +198,18 @@ const SandboxDockerSchema = z
     dns: z.array(z.string()).optional(),
     extraHosts: z.array(z.string()).optional(),
     binds: z.array(z.string()).optional(),
+    volumes: z
+      .array(
+        z
+          .object({
+            source: z.string().optional(),
+            target: z.string(),
+            strategy: z.union([z.literal("ephemeral"), z.literal("named"), z.literal("bind")]),
+            readOnly: z.boolean().optional(),
+          })
+          .strict(),
+      )
+      .optional(),
     dangerouslyAllowReservedContainerTargets: z.boolean().optional(),
     dangerouslyAllowExternalBindSources: z.boolean().optional(),
     dangerouslyAllowContainerNamespaceJoin: z.boolean().optional(),
@@ -201,6 +217,65 @@ const SandboxDockerSchema = z
   .strict()
   .superRefine((data, ctx) => {
     validateSandboxBindEntries(data.binds, ctx);
+    if (data.volumes) {
+      for (let i = 0; i < data.volumes.length; i += 1) {
+        const vol = data.volumes[i];
+        const target = vol?.target?.trim() ?? "";
+        if (!target || !target.startsWith("/")) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ["volumes", i, "target"],
+            message: "Sandbox security: volume target must be an absolute POSIX path.",
+          });
+        } else if (hasDockerMountFieldSeparator(target)) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ["volumes", i, "target"],
+            message:
+              'Sandbox security: volume target must not contain "," because Docker --mount parses comma-separated key/value fields.',
+          });
+        }
+        const source = vol?.source?.trim();
+        if (vol.strategy === "bind") {
+          if (!source || !isSandboxHostPathAbsolute(source)) {
+            ctx.addIssue({
+              code: z.ZodIssueCode.custom,
+              path: ["volumes", i, "source"],
+              message:
+                "Sandbox security: bind volume strategy requires an absolute POSIX or Windows drive-letter source path.",
+            });
+          } else if (hasDockerMountFieldSeparator(source)) {
+            ctx.addIssue({
+              code: z.ZodIssueCode.custom,
+              path: ["volumes", i, "source"],
+              message:
+                'Sandbox security: bind volume source must not contain "," because Docker --mount parses comma-separated key/value fields.',
+            });
+          }
+        } else if (vol.strategy === "named") {
+          if (!source) {
+            ctx.addIssue({
+              code: z.ZodIssueCode.custom,
+              path: ["volumes", i, "source"],
+              message: "Sandbox config: named volume strategy requires source (volume name).",
+            });
+          } else if (hasDockerMountFieldSeparator(source)) {
+            ctx.addIssue({
+              code: z.ZodIssueCode.custom,
+              path: ["volumes", i, "source"],
+              message:
+                'Sandbox security: named volume source must not contain "," because Docker --mount parses comma-separated key/value fields.',
+            });
+          }
+        } else if (source) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ["volumes", i, "source"],
+            message: "Sandbox config: ephemeral strategy must not set source.",
+          });
+        }
+      }
+    }
     const blockedNetworkReason = getBlockedNetworkModeReason({
       network: data.network,
       allowContainerNamespaceJoin: data.dangerouslyAllowContainerNamespaceJoin === true,

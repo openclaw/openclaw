@@ -684,4 +684,25 @@ describe("ensureSandboxBrowser create args", () => {
       false,
     );
   });
+
+  it("applies sandbox.docker.volumes to browser sandbox create args", async () => {
+    const cfg = buildConfig(false);
+    cfg.docker.volumes = [
+      { strategy: "named", source: "openclaw-cache", target: "/cache" },
+      { strategy: "ephemeral", target: "/tmp/browser-cache" },
+    ];
+
+    await ensureSandboxBrowser({
+      scopeKey: "session:test",
+      workspaceDir: "/tmp/workspace",
+      agentWorkspaceDir: "/tmp/workspace",
+      cfg,
+    });
+
+    const createArgs = findDockerArgsCall(dockerMocks.execDocker.mock.calls, "create");
+    const mountArgs = collectDockerFlagValues(createArgs ?? [], "--mount");
+
+    expect(mountArgs).toContain("type=volume,source=openclaw-cache,target=/cache");
+    expect(mountArgs).toContain("type=volume,target=/tmp/browser-cache");
+  });
 });

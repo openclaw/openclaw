@@ -166,6 +166,7 @@ export function execDockerRaw(
 }
 
 import { formatCliCommand } from "../../cli/command-format.js";
+import type { SandboxDockerVolumeSetting } from "../../config/types.sandbox.js";
 import { markOpenClawExecEnv } from "../../infra/openclaw-exec-env.js";
 import { defaultRuntime } from "../../runtime.js";
 import {
@@ -342,6 +343,20 @@ async function inspectDockerImage(image: string): Promise<"exists" | "missing"> 
   throw new Error(`Failed to inspect sandbox image: ${stderr}`);
 }
 
+export async function readDockerImageUser(image: string): Promise<string | undefined> {
+  const result = await execDocker(["image", "inspect", "-f", "{{.Config.User}}", image], {
+    allowFailure: true,
+  });
+  if (result.code !== 0) {
+    const stderr = result.stderr.trim();
+    if (isDockerDaemonUnavailable(stderr)) {
+      throw new Error(formatDockerDaemonUnavailableError(stderr));
+    }
+    throw new Error(`Failed to inspect sandbox image user: ${stderr}`);
+  }
+  return normalizeDockerUser(result.stdout);
+}
+
 export async function ensureDockerImage(image: string) {
   const imageState = await inspectDockerImage(image);
   if (imageState === "exists") {
@@ -376,6 +391,24 @@ function normalizeDockerLimit(value?: string | number) {
   return trimmed ? trimmed : undefined;
 }
 
+function normalizeDockerUser(value?: string | null): string | undefined {
+  const trimmed = value?.trim();
+  return trimmed ? trimmed : undefined;
+}
+
+function isRootDockerUser(user: string | undefined): boolean {
+  if (!user) {
+    return true;
+  }
+  return user === "0" || user === "0:0" || user === "root" || user === "root:root";
+}
+
+export async function resolveDockerSandboxExecUser(
+  cfg: SandboxDockerConfig,
+): Promise<string | undefined> {
+  return normalizeDockerUser(cfg.user) ?? (await readDockerImageUser(cfg.image));
+}
+
 function formatUlimitValue(
   name: string,
   value: string | number | { soft?: number; hard?: number },
@@ -401,6 +434,84 @@ function formatUlimitValue(
   return `${name}=${soft}:${hard}`;
 }
 
+function normalizeDockerMountValue(value: string | undefined, field: "source" | "target"): string {
+  const trimmed = value?.trim() ?? "";
+  if (trimmed.includes(",")) {
+    throw new Error(
+      `Sandbox security: docker volume ${field} must not contain "," because Docker --mount parses comma-separated key/value fields.`,
+    );
+  }
+  return trimmed;
+}
+
+function shellSingleQuote(value: string): string {
+  return `'${value.replaceAll("'", "'\"'\"'")}'`;
+}
+
+function getWritableDockerVolumeTargets(cfg: SandboxDockerConfig): string[] {
+  const targets = new Set<string>();
+  for (const volume of cfg.volumes ?? []) {
+    if (volume.readOnly || volume.strategy === "bind") {
+      continue;
+    }
+    const target = normalizeDockerMountValue(volume.target, "target");
+    if (target) {
+      targets.add(target);
+    }
+  }
+  return [...targets];
+}
+
+function buildVolumeOwnershipInitCommand(params: { user: string; targets: string[] }): string {
+  const targetArgs = params.targets.map(shellSingleQuote).join(" ");
+  const user = shellSingleQuote(params.user);
+  return [
+    "set -eu",
+    "if ! command -v setpriv >/dev/null 2>&1; then echo 'OpenClaw sandbox volume setup requires setpriv in the sandbox image.' >&2; exit 126; fi",
+    `openclaw_user=${user}`,
+    `set -- ${targetArgs}`,
+    'user_part="${openclaw_user%%:*}"',
+    'group_part="${openclaw_user#*:}"',
+    'if [ "$group_part" = "$openclaw_user" ]; then group_part=""; fi',
+    'case "$user_part" in ""|root) uid=0 ;; *[!0-9]*) uid="$(id -u "$user_part")" ;; *) uid="$user_part" ;; esac',
+    'if [ -n "$group_part" ]; then case "$group_part" in root) gid=0 ;; *[!0-9]*) gid="$(getent group "$group_part" | cut -d: -f3)" ;; *) gid="$group_part" ;; esac; else gid="$(id -g "$user_part" 2>/dev/null || printf 0)"; fi',
+    'for target do mkdir -p "$target"; chown "$uid:$gid" "$target"; done',
+    'exec setpriv --reuid "$uid" --regid "$gid" --clear-groups sleep infinity',
+  ].join("; ");
+}
+
+export function appendVolumeMounts(args: string[], cfg: SandboxDockerConfig): void {
+  for (const volume of cfg.volumes ?? []) {
+    const target = normalizeDockerMountValue(volume.target, "target");
+    if (!target) {
+      continue;
+    }
+    if (volume.strategy === "ephemeral") {
+      args.push("--mount", `type=volume,target=${target}${volume.readOnly ? ",readonly" : ""}`);
+      continue;
+    }
+    if (volume.strategy === "named") {
+      const source = normalizeDockerMountValue(volume.source, "source");
+      if (!source) {
+        continue;
+      }
+      args.push(
+        "--mount",
+        `type=volume,source=${source},target=${target}${volume.readOnly ? ",readonly" : ""}`,
+      );
+      continue;
+    }
+    const source = normalizeDockerMountValue(volume.source, "source");
+    if (!source) {
+      continue;
+    }
+    args.push(
+      "--mount",
+      `type=bind,source=${source},target=${target}${volume.readOnly ? ",readonly" : ""}`,
+    );
+  }
+}
+
 export function buildSandboxCreateArgs(params: {
   name: string;
   cfg: SandboxDockerConfig;
@@ -413,6 +524,8 @@ export function buildSandboxCreateArgs(params: {
   allowSourcesOutsideAllowedRoots?: boolean;
   allowReservedContainerTargets?: boolean;
   allowContainerNamespaceJoin?: boolean;
+  userOverride?: string;
+  capAdd?: string[];
   /**
    * @deprecated Docker container creation now treats cfg.env as explicit sandbox
    * configuration and ignores host-env name filters. This field is kept so SDK
@@ -420,16 +533,18 @@ export function buildSandboxCreateArgs(params: {
    */
   envSanitizationOptions?: EnvSanitizationOptions;
 }) {
-  // Runtime security validation: blocks dangerous bind mounts, network modes, and profiles.
+  const allowReservedContainerTargets =
+    params.allowReservedContainerTargets ??
+    params.cfg.dangerouslyAllowReservedContainerTargets === true;
+
+  // Runtime security validation: blocks dangerous mounts, network modes, and profiles.
   validateSandboxSecurity({
     ...params.cfg,
     allowedSourceRoots: params.bindSourceRoots,
     allowSourcesOutsideAllowedRoots:
       params.allowSourcesOutsideAllowedRoots ??
       params.cfg.dangerouslyAllowExternalBindSources === true,
-    allowReservedContainerTargets:
-      params.allowReservedContainerTargets ??
-      params.cfg.dangerouslyAllowReservedContainerTargets === true,
+    allowReservedContainerTargets,
     dangerouslyAllowContainerNamespaceJoin:
       params.allowContainerNamespaceJoin ??
       params.cfg.dangerouslyAllowContainerNamespaceJoin === true,
@@ -458,8 +573,10 @@ export function buildSandboxCreateArgs(params: {
   if (params.cfg.network) {
     args.push("--network", params.cfg.network);
   }
-  if (params.cfg.user) {
-    args.push("--user", params.cfg.user);
+  const createUser =
+    normalizeDockerUser(params.userOverride) ?? normalizeDockerUser(params.cfg.user);
+  if (createUser) {
+    args.push("--user", createUser);
   }
   const envSanitization = sanitizeExplicitSandboxEnvVars(params.cfg.env ?? {});
   if (envSanitization.blocked.length > 0) {
@@ -477,6 +594,9 @@ export function buildSandboxCreateArgs(params: {
   }
   for (const cap of params.cfg.capDrop) {
     args.push("--cap-drop", cap);
+  }
+  for (const cap of params.capAdd ?? []) {
+    args.push("--cap-add", cap);
   }
   args.push("--security-opt", "no-new-privileges");
   if (params.cfg.seccompProfile) {
@@ -547,6 +667,10 @@ async function createSandboxContainer(params: {
 }) {
   const { name, cfg, workspaceDir, scopeKey } = params;
   await ensureDockerImage(cfg.image);
+  const runtimeUser = await resolveDockerSandboxExecUser(cfg);
+  const writableVolumeTargets = getWritableDockerVolumeTargets(cfg);
+  const shouldInitializeVolumeOwnership =
+    writableVolumeTargets.length > 0 && !isRootDockerUser(runtimeUser);
 
   const args = buildSandboxCreateArgs({
     name,
@@ -555,6 +679,8 @@ async function createSandboxContainer(params: {
     configHash: params.configHash,
     includeBinds: false,
     bindSourceRoots: [workspaceDir, params.agentWorkspaceDir],
+    userOverride: shouldInitializeVolumeOwnership ? "0:0" : undefined,
+    capAdd: shouldInitializeVolumeOwnership ? ["CHOWN", "SETUID", "SETGID"] : undefined,
   });
   args.push("--workdir", cfg.workdir);
   appendWorkspaceMountArgs({
@@ -565,13 +691,40 @@ async function createSandboxContainer(params: {
     workspaceAccess: params.workspaceAccess,
   });
   appendCustomBinds(args, cfg);
-  args.push(cfg.image, "sleep", "infinity");
+  appendVolumeMounts(args, cfg);
+  if (shouldInitializeVolumeOwnership && runtimeUser) {
+    args.push(
+      cfg.image,
+      "/bin/sh",
+      "-lc",
+      buildVolumeOwnershipInitCommand({
+        user: runtimeUser,
+        targets: writableVolumeTargets,
+      }),
+    );
+  } else {
+    args.push(cfg.image, "sleep", "infinity");
+  }
 
   await execDocker(args);
   await execDocker(["start", name]);
+  if (shouldInitializeVolumeOwnership) {
+    const startedState = await dockerContainerState(name);
+    if (!startedState.running) {
+      throw new Error(
+        `Sandbox container ${name} exited during Docker volume ownership setup. ` +
+          "Writable anonymous and named Docker volumes require setpriv plus CHOWN, SETUID, and SETGID capability support in the sandbox image.",
+      );
+    }
+  }
 
   if (cfg.setupCommand?.trim()) {
-    await execDocker(["exec", "-i", name, "/bin/sh", "-lc", cfg.setupCommand]);
+    const setupArgs = ["exec", "-i"];
+    if (shouldInitializeVolumeOwnership && runtimeUser) {
+      setupArgs.push("--user", runtimeUser);
+    }
+    setupArgs.push(name, "/bin/sh", "-lc", cfg.setupCommand);
+    await execDocker(setupArgs);
   }
 }
 

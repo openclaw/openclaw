@@ -65,10 +65,14 @@ export function buildDockerExecArgs(params: {
   workdir?: string;
   env: Record<string, string>;
   tty: boolean;
+  user?: string;
 }) {
   const args = ["exec", "-i"];
   if (params.tty) {
     args.push("-t");
+  }
+  if (params.user) {
+    args.push("--user", params.user);
   }
   if (params.workdir) {
     args.push("-w", params.workdir);

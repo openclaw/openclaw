@@ -106,6 +106,9 @@ export async function createSshSandboxBackend(
   if ((params.cfg.docker.binds?.length ?? 0) > 0) {
     throw new Error("SSH sandbox backend does not support sandbox.docker.binds.");
   }
+  if ((params.cfg.docker.volumes?.length ?? 0) > 0) {
+    throw new Error("SSH sandbox backend does not support sandbox.docker.volumes.");
+  }
   const target = params.cfg.ssh.target;
   if (!target) {
     throw new Error('Sandbox backend "ssh" requires agents.defaults.sandbox.ssh.target.');

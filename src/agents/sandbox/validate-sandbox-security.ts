@@ -7,6 +7,7 @@
 
 import os from "node:os";
 import path from "node:path";
+import type { SandboxDockerVolumeSetting } from "../../config/types.sandbox.js";
 import { resolveRequiredHomeDir, resolveRequiredOsHomeDir } from "../../infra/home-dir.js";
 import { normalizeOptionalLowercaseString } from "../../shared/string-coerce.js";
 import { splitSandboxBindSpec } from "./bind-spec.js";
@@ -50,7 +51,10 @@ const BLOCKED_HOME_SUBPATHS = [
 
 const BLOCKED_SECCOMP_PROFILES = new Set(["unconfined"]);
 const BLOCKED_APPARMOR_PROFILES = new Set(["unconfined"]);
-const RESERVED_CONTAINER_TARGET_PATHS = ["/workspace", SANDBOX_AGENT_WORKSPACE_MOUNT];
+export const RESERVED_CONTAINER_TARGET_PATHS = [
+  "/workspace",
+  SANDBOX_AGENT_WORKSPACE_MOUNT,
+] as const;
 let blockedHostPathsCache:
   | {
       key: string;
@@ -79,6 +83,10 @@ type ParsedBindSpec = {
   source: string;
   target: string;
 };
+
+function hasDockerMountFieldSeparator(value: string | undefined): boolean {
+  return value?.includes(",") === true;
+}
 
 function parseBindSpec(bind: string): ParsedBindSpec {
   const trimmed = bind.trim();
@@ -245,8 +253,7 @@ function getOutsideAllowedRootsReason(
   };
 }
 
-function getReservedTargetReason(bind: string): BlockedBindReason | null {
-  const targetRaw = parseBindTargetPath(bind);
+export function getReservedContainerTargetReason(targetRaw: string): BlockedBindReason | null {
   if (!targetRaw || !targetRaw.startsWith("/")) {
     return null;
   }
@@ -261,6 +268,10 @@ function getReservedTargetReason(bind: string): BlockedBindReason | null {
     }
   }
   return null;
+}
+
+function getReservedTargetReason(bind: string): BlockedBindReason | null {
+  return getReservedContainerTargetReason(parseBindTargetPath(bind));
 }
 
 function enforceSourcePathPolicy(params: {
@@ -307,6 +318,40 @@ function formatBindBlockedError(params: { bind: string; reason: BlockedBindReaso
   return new Error(
     `Sandbox security: bind mount "${params.bind}" ${verb} blocked path "${params.reason.blockedPath}". ` +
       "Mounting system directories, credential paths, or Docker socket paths into sandbox containers is not allowed. " +
+      "Use project-specific paths instead (e.g. /home/user/myproject).",
+  );
+}
+
+function formatVolumeBlockedError(params: {
+  volume: SandboxDockerVolumeSetting;
+  sourcePath?: string;
+  reason: BlockedBindReason;
+}): Error {
+  const target = params.volume.target.trim();
+  if (params.reason.kind === "non_absolute") {
+    return new Error(
+      `Sandbox security: bind volume source "${params.reason.sourcePath}" for target "${target}" uses a non-absolute source path. ` +
+        "Only absolute POSIX or Windows drive-letter paths are supported for sandbox bind volumes.",
+    );
+  }
+  if (params.reason.kind === "outside_allowed_roots") {
+    return new Error(
+      `Sandbox security: bind volume source "${params.reason.sourcePath}" for target "${target}" is outside allowed roots ` +
+        `(${params.reason.allowedRoots.join(", ")}). Use a dangerous override only when you fully trust this runtime.`,
+    );
+  }
+  if (params.reason.kind === "reserved_target") {
+    return new Error(
+      `Sandbox security: volume target "${target}" for strategy "${params.volume.strategy}" targets reserved container path ` +
+        `"${params.reason.reservedPath}" (resolved target: "${params.reason.targetPath}"). ` +
+        "This can shadow OpenClaw sandbox mounts. Use a dangerous override only when you fully trust this runtime.",
+    );
+  }
+  const sourcePath = params.sourcePath ?? params.volume.source?.trim() ?? "";
+  const verb = params.reason.kind === "covers" ? "covers" : "targets";
+  return new Error(
+    `Sandbox security: bind volume source "${sourcePath}" for target "${target}" ${verb} blocked path ` +
+      `"${params.reason.blockedPath}". Mounting system directories, credential paths, or Docker socket paths into sandbox containers is not allowed. ` +
       "Use project-specific paths instead (e.g. /home/user/myproject).",
   );
 }
@@ -368,6 +413,105 @@ export function validateBindMounts(
   }
 }
 
+export function validateDockerVolumes(
+  volumes: SandboxDockerVolumeSetting[] | undefined,
+  options?: ValidateBindMountsOptions,
+): void {
+  if (!volumes?.length) {
+    return;
+  }
+
+  const allowedRoots = normalizeAllowedRoots(options?.allowedSourceRoots);
+  const blockedHostPaths = getBlockedHostPaths();
+
+  for (const volume of volumes) {
+    const target = volume.target?.trim() ?? "";
+    if (!target.startsWith("/")) {
+      throw new Error("Sandbox security: docker volume target must be an absolute POSIX path.");
+    }
+    if (hasDockerMountFieldSeparator(target)) {
+      throw new Error(
+        'Sandbox security: docker volume target must not contain "," because Docker --mount parses comma-separated key/value fields.',
+      );
+    }
+
+    if (!options?.allowReservedContainerTargets) {
+      const reservedTarget = getReservedContainerTargetReason(target);
+      if (reservedTarget) {
+        throw formatVolumeBlockedError({ volume, reason: reservedTarget });
+      }
+    }
+
+    const source = volume.source?.trim() ?? "";
+    if (hasDockerMountFieldSeparator(source)) {
+      throw new Error(
+        `Sandbox security: docker volume source for target "${target}" must not contain "," because Docker --mount parses comma-separated key/value fields.`,
+      );
+    }
+
+    if (volume.strategy === "ephemeral") {
+      continue;
+    }
+    if (!source) {
+      throw new Error(
+        `Sandbox security: ${volume.strategy} volume strategy requires source for target "${target}".`,
+      );
+    }
+    if (volume.strategy === "named") {
+      continue;
+    }
+
+    if (!isSandboxHostPathAbsolute(source)) {
+      throw formatVolumeBlockedError({
+        volume,
+        reason: { kind: "non_absolute", sourcePath: source },
+      });
+    }
+
+    const sourceNormalized = normalizeHostPath(source);
+    enforceVolumeSourcePathPolicy({
+      volume,
+      sourcePath: sourceNormalized,
+      allowedRoots,
+      blockedHostPaths,
+      allowSourcesOutsideAllowedRoots: options?.allowSourcesOutsideAllowedRoots === true,
+    });
+
+    const sourceCanonical = resolveSandboxHostPathViaExistingAncestor(sourceNormalized);
+    enforceVolumeSourcePathPolicy({
+      volume,
+      sourcePath: sourceCanonical,
+      allowedRoots,
+      blockedHostPaths,
+      allowSourcesOutsideAllowedRoots: options?.allowSourcesOutsideAllowedRoots === true,
+    });
+  }
+}
+
+function enforceVolumeSourcePathPolicy(params: {
+  volume: SandboxDockerVolumeSetting;
+  sourcePath: string;
+  allowedRoots: string[];
+  blockedHostPaths: string[];
+  allowSourcesOutsideAllowedRoots: boolean;
+}): void {
+  const blockedReason = getBlockedReasonForSourcePath(params.sourcePath, params.blockedHostPaths);
+  if (blockedReason) {
+    throw formatVolumeBlockedError({
+      volume: params.volume,
+      sourcePath: params.sourcePath,
+      reason: blockedReason,
+    });
+  }
+  if (params.allowSourcesOutsideAllowedRoots) {
+    return;
+  }
+  const allowedReason = getOutsideAllowedRootsReason(params.sourcePath, params.allowedRoots);
+  if (allowedReason) {
+    throw formatVolumeBlockedError({ volume: params.volume, reason: allowedReason });
+  }
+}
+
 export function validateNetworkMode(
   network: string | undefined,
   options?: ValidateNetworkModeOptions,
@@ -416,6 +560,7 @@ export function validateApparmorProfile(profile: string | undefined): void {
 export function validateSandboxSecurity(
   cfg: {
     binds?: string[];
+    volumes?: SandboxDockerVolumeSetting[];
     network?: string;
     seccompProfile?: string;
     apparmorProfile?: string;
@@ -423,6 +568,7 @@ export function validateSandboxSecurity(
   } & ValidateBindMountsOptions,
 ): void {
   validateBindMounts(cfg.binds, cfg);
+  validateDockerVolumes(cfg.volumes, cfg);
   validateNetworkMode(cfg.network, {
     allowContainerNamespaceJoin: cfg.dangerouslyAllowContainerNamespaceJoin === true,
   });

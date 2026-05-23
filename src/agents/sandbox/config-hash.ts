@@ -2,6 +2,7 @@ import { hashTextSha256 } from "./hash.js";
 import type { SandboxBrowserConfig, SandboxDockerConfig, SandboxWorkspaceAccess } from "./types.js";
 
 export const SANDBOX_DOCKER_EXPLICIT_ENV_POLICY_EPOCH = "explicit-config-env-v1";
+export const SANDBOX_DOCKER_VOLUME_OWNERSHIP_EPOCH = "volume-ownership-v1";
 
 type SandboxHashInput = {
   docker: SandboxDockerConfig;
@@ -54,7 +55,15 @@ function normalizeForHash(value: unknown): unknown {
 }
 
 export function computeSandboxConfigHash(input: SandboxHashInput): string {
-  return computeHash(input);
+  const hasWritableDockerVolumes = input.docker.volumes?.some(
+    (volume) => volume.strategy !== "bind" && volume.readOnly !== true,
+  );
+  return computeHash({
+    ...input,
+    dockerVolumeOwnershipEpoch: hasWritableDockerVolumes
+      ? SANDBOX_DOCKER_VOLUME_OWNERSHIP_EPOCH
+      : undefined,
+  });
 }
 
 export function computeSandboxBrowserConfigHash(input: SandboxBrowserHashInput): string {

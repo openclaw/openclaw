@@ -68,6 +68,20 @@ describe("buildDockerExecArgs", () => {
     expect(args).toContain("/workspace");
   });
 
+  it("includes explicit docker exec user when specified", () => {
+    const args = buildDockerExecArgs({
+      containerName: "test-container",
+      command: "id",
+      env: { HOME: "/home/user" },
+      tty: false,
+      user: "1000:1001",
+    });
+
+    expect(args).toContain("--user");
+    expect(args).toContain("1000:1001");
+    expect(args.indexOf("--user")).toBeLessThan(args.indexOf("test-container"));
+  });
+
   it("uses login shell for consistent environment", () => {
     const args = buildDockerExecArgs({
       containerName: "test-container",

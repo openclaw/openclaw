@@ -11,6 +11,7 @@ import {
   ensureSandboxContainer,
   execDocker,
   execDockerRaw,
+  resolveDockerSandboxExecUser,
 } from "./docker.js";
 
 function resolveConfiguredDockerRuntimeImage(params: {
@@ -38,11 +39,13 @@ export async function createDockerSandboxBackend(
     agentWorkspaceDir: params.agentWorkspaceDir,
     cfg: params.cfg,
   });
+  const user = await resolveDockerSandboxExecUser(params.cfg.docker);
   return createDockerSandboxBackendHandle({
     containerName,
     workdir: params.cfg.docker.workdir,
     env: params.cfg.docker.env,
     image: params.cfg.docker.image,
+    user,
   });
 }
 
@@ -51,6 +54,7 @@ function createDockerSandboxBackendHandle(params: {
   workdir: string;
   env?: Record<string, string>;
   image: string;
+  user?: string;
 }): SandboxBackendHandle {
   return {
     id: "docker",
@@ -73,6 +77,7 @@ function createDockerSandboxBackendHandle(params: {
             workdir: workdir ?? params.workdir,
             env,
             tty: usePty,
+            user: params.user,
           }),
         ],
         env: process.env,
@@ -82,6 +87,7 @@ function createDockerSandboxBackendHandle(params: {
     runShellCommand(command) {
       return runDockerSandboxShellCommand({
         containerName: params.containerName,
+        user: params.user,
         ...command,
       });
     },
@@ -91,17 +97,14 @@ function createDockerSandboxBackendHandle(params: {
 export function runDockerSandboxShellCommand(
   params: {
     containerName: string;
+    user?: string;
   } & SandboxBackendCommandParams,
 ) {
-  const dockerArgs = [
-    "exec",
-    "-i",
-    params.containerName,
-    "sh",
-    "-c",
-    params.script,
-    "openclaw-sandbox-fs",
-  ];
+  const dockerArgs = ["exec", "-i"];
+  if (params.user) {
+    dockerArgs.push("--user", params.user);
+  }
+  dockerArgs.push(params.containerName, "sh", "-c", params.script, "openclaw-sandbox-fs");
   if (params.args?.length) {
     dockerArgs.push(...params.args);
   }

@@ -6,6 +6,7 @@ import { resolveSandboxHostPathViaExistingAncestor } from "./host-paths.js";
 import {
   getBlockedBindReason,
   validateBindMounts,
+  validateDockerVolumes,
   validateNetworkMode,
   validateSeccompProfile,
   validateApparmorProfile,
@@ -324,6 +325,63 @@ describe("validateBindMounts", () => {
   });
 });
 
+describe("validateDockerVolumes", () => {
+  it("validates bind volume sources as structured host paths", () => {
+    const allowedRoot = mkdtempSync(join(tmpdir(), "openclaw-volume-allowed-"));
+    const source = `${allowedRoot}:/outside`;
+
+    expect(() =>
+      validateDockerVolumes(
+        [
+          {
+            strategy: "bind",
+            source,
+            target: "/data",
+          },
+        ],
+        { allowedSourceRoots: [allowedRoot] },
+      ),
+    ).toThrow(/outside allowed roots/);
+  });
+
+  it("allows Windows drive-letter bind volume sources inside allowed roots", () => {
+    expect(
+      validateDockerVolumes(
+        [
+          {
+            strategy: "bind",
+            source: "D:\\data\\openclaw\\cache",
+            target: "/cache",
+          },
+        ],
+        { allowedSourceRoots: ["D:/data/openclaw"] },
+      ),
+    ).toBeUndefined();
+  });
+
+  it("blocks reserved targets for named and ephemeral volumes by default", () => {
+    expect(() =>
+      validateDockerVolumes([{ strategy: "named", source: "cache", target: "/workspace" }]),
+    ).toThrow(/reserved container path/);
+    expect(() =>
+      validateDockerVolumes([{ strategy: "ephemeral", target: "/agent/cache" }]),
+    ).toThrow(/reserved container path/);
+  });
+
+  it("rejects Docker mount field separators before args are assembled", () => {
+    expect(() =>
+      validateDockerVolumes([
+        { strategy: "named", source: "cache,type=bind,source=/etc", target: "/cache" },
+      ]),
+    ).toThrow(/must not contain ","/);
+    expect(() =>
+      validateDockerVolumes([
+        { strategy: "bind", source: "/tmp/cache", target: "/cache,target=/etc" },
+      ]),
+    ).toThrow(/must not contain ","/);
+  });
+});
+
 function normalizePathForSnapshot(input: string): string {
   return resolveSandboxHostPathViaExistingAncestor(input).replaceAll("\\", "/");
 }
@@ -409,6 +467,8 @@ describe("validateSandboxSecurity", () => {
     expect(
       validateSandboxSecurity({
         binds: [`${projectRoot}:/src:rw`],
+        volumes: [{ strategy: "bind", source: join(projectRoot, "cache"), target: "/cache" }],
+        allowedSourceRoots: [projectRoot],
         network: "none",
         seccompProfile: "/tmp/seccomp.json",
         apparmorProfile: "openclaw-sandbox",

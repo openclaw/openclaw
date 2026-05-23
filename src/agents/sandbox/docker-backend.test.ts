@@ -19,7 +19,8 @@ vi.mock("./docker.js", async () => {
   };
 });
 
-const { dockerSandboxBackendManager } = await import("./docker-backend.js");
+const { dockerSandboxBackendManager, runDockerSandboxShellCommand } =
+  await import("./docker-backend.js");
 
 function createConfig(): OpenClawConfig {
   return {
@@ -187,5 +188,28 @@ describe("docker sandbox backend manager", () => {
         config: createConfig(),
       }),
     ).resolves.toBeUndefined();
+  });
+
+  it("runs backend shell commands as the resolved sandbox user", async () => {
+    dockerMocks.execDockerRaw.mockResolvedValueOnce({
+      code: 0,
+      stdout: Buffer.from(""),
+      stderr: Buffer.from(""),
+    });
+
+    await runDockerSandboxShellCommand({
+      containerName: "sandbox-1",
+      user: "1000:1001",
+      script: "id",
+    });
+
+    expect(dockerMocks.execDockerRaw).toHaveBeenCalledWith(
+      ["exec", "-i", "--user", "1000:1001", "sandbox-1", "sh", "-c", "id", "openclaw-sandbox-fs"],
+      {
+        allowFailure: undefined,
+        input: undefined,
+        signal: undefined,
+      },
+    );
   });
 });
