@@ -92,10 +92,20 @@ Welcome to the lobster tank! 🦞
 ## How to Contribute
 
 1. **Bugs & small fixes** → Open a PR!
-2. **New features / architecture** → Start a [GitHub Issue](https://github.com/openclaw/openclaw/issues/new/choose) or ask in Discord first. Most features are not accepted and should be third party plugins instead using our plugin SDK.
-3. **Refactor-only PRs** → Don't open a PR. We are not accepting refactor-only changes unless a maintainer explicitly asks for them as part of a concrete fix.
+2. **New features / architecture** → Start a [GitHub Issue](https://github.com/openclaw/openclaw/issues/new/choose) or ask in Discord first.
+3. **Proof requirement** → Include real behavior evidence (screenshots, terminal output, logs). See [Before You PR](#before-you-pr).
 4. **Test/CI-only PRs for known `main` failures** → Don't open a PR. The Maintainer team is already tracking those failures, and PRs that only tweak tests or CI to chase them will be closed unless they are required to validate a new fix.
 5. **Questions** → Discord [#help](https://discord.com/channels/1456350064065904867/1459642797895319552) / [#users-helping-users](https://discord.com/channels/1456350064065904867/1459007081603403828)
+
+### Output Formats
+
+OpenClaw commands support `--output` flag for machine-readable output:
+
+```bash
+openclaw status --output json    # JSON output
+openclaw status --output yaml    # YAML output
+openclaw status --output table   # Table format (default)
+```
 
 ## PR Limits
 
