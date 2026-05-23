@@ -375,7 +375,7 @@ describe("openai video generation provider", () => {
       },
     });
 
-    expect(result.videos[0]?.buffer.toString()).toBe("mp4-bytes");
+    expect(result.videos[0]?.buffer?.toString()).toBe("mp4-bytes");
     expect(executeProviderOperationWithRetryMock).toHaveBeenCalledWith(
       expect.objectContaining({ provider: "openai", stage: "download" }),
     );
