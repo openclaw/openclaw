@@ -83,11 +83,40 @@ export type ClaudeDynamicToolBridge = {
   ) => Promise<DynamicToolCallResponse>;
 };
 
+export type ClaudeDynamicToolsLoading = "searchable" | "direct";
+
+/**
+ * Tool namespace for searchable (deferred-loadable) dynamic tools.
+ * Mirrors codex's CODEX_OPENCLAW_DYNAMIC_TOOL_NAMESPACE. The Anthropic
+ * SDK doesn't yet honor namespaces or deferLoading at runtime — these
+ * fields are forwarded as protocol metadata so they're correct when
+ * the SDK grows support (or when the server adds a search-meta-tool
+ * over MCP).
+ */
+export const CLAUDE_OPENCLAW_DYNAMIC_TOOL_NAMESPACE = "openclaw";
+
+/**
+ * Names that must always be registered eagerly even in "searchable"
+ * mode — agents need them callable without a search-tool hop. Mirrors
+ * codex's ALWAYS_DIRECT_DYNAMIC_TOOL_NAMES.
+ */
+const ALWAYS_DIRECT_DYNAMIC_TOOL_NAMES = new Set<string>(["sessions_yield"]);
+
 export function createClaudeDynamicToolBridge(params: {
   tools: AnyAgentTool[];
   signal?: AbortSignal;
   excludeNames?: Iterable<string>;
   hookContext?: ClaudeDynamicToolHookContext;
+  /**
+   * "direct" registers every tool eagerly with the SDK (current default
+   * behavior and what every existing call site does); "searchable" marks
+   * non-direct tools as deferred-loadable so the SDK / MCP layer can
+   * lazy-load them when it grows support. Defaults to "direct" to
+   * preserve current behavior — flip to "searchable" once server-side
+   * deferred-loading lands.
+   */
+  loading?: ClaudeDynamicToolsLoading;
+  directToolNames?: Iterable<string>;
 }): ClaudeDynamicToolBridge {
   const excluded = new Set([...(params.excludeNames ?? [])].map((n) => n.trim()).filter(Boolean));
   const hookContext = params.hookContext ?? {};
@@ -112,12 +141,27 @@ export function createClaudeDynamicToolBridge(params: {
       return wrapToolWithBeforeToolCallHook(tool, hookContext, { emitDiagnostics: false });
     });
   const toolsByName = new Map(wrappedTools.map((t) => [t.name, t]));
-  const specs: DynamicToolSpec[] = wrappedTools.map((tool) => ({
-    name: tool.name,
-    description: tool.description ?? "",
-    // TypeBox schemas are JSON-Schema-shaped; ship verbatim.
-    inputSchema: (tool.parameters ?? { type: "object", additionalProperties: true }) as JsonValue,
-  }));
+  const loading: ClaudeDynamicToolsLoading = params.loading ?? "direct";
+  const directToolNames = new Set<string>([
+    ...ALWAYS_DIRECT_DYNAMIC_TOOL_NAMES,
+    ...(params.directToolNames ?? []),
+  ]);
+  const specs: DynamicToolSpec[] = wrappedTools.map((tool) => {
+    const base: DynamicToolSpec = {
+      name: tool.name,
+      description: tool.description ?? "",
+      // TypeBox schemas are JSON-Schema-shaped; ship verbatim.
+      inputSchema: (tool.parameters ?? { type: "object", additionalProperties: true }) as JsonValue,
+    };
+    if (loading === "direct" || directToolNames.has(tool.name)) {
+      return base;
+    }
+    return {
+      ...base,
+      namespace: CLAUDE_OPENCLAW_DYNAMIC_TOOL_NAMESPACE,
+      deferLoading: true,
+    };
+  });
   const telemetry: ClaudeDynamicToolTelemetry = {
     didSendViaMessagingTool: false,
     messagingToolSentTexts: [],

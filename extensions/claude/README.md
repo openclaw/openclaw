@@ -82,39 +82,109 @@ This extension registers `/claude` with subcommands:
   fallback to `agents.defaults.contextLimits.toolResultMaxChars` and then
   to the 16 000-char default (`src/app-server/dynamic-tools.ts`).
 
-## Known limitations
+## Codex parity status
 
-- **Tool-catalog change resets conversation transcript.** When the
-  active dynamic-tool catalog changes mid-session (plugin
-  enabled/disabled/upgraded, allowlist edited, sandbox toggled), the
-  bridge calls `thread/start` rather than `thread/resume` and the
-  underlying Claude Agent SDK's session transcript resets. The SDK's
-  MCP server registration happens at `thread/start` and isn't
-  refreshable on resume, so an in-place patch isn't possible today.
-  Tracked at `src/app-server/thread-lifecycle.ts` (KNOWN LIMITATION
-  docblock). Mitigations under consideration: (a) extend the server
-  to support `thread/fork` semantics that carry the SDK transcript
-  forward across catalog changes, or (b) get SDK support for
-  refreshable MCP registration. In practice catalog churn is rare for
-  stable plugin sets, so this is most visible after plugin upgrades.
+This bridge mirrors the codex extension's architecture so reasoning
+about either is reasoning about both. The status table below splits
+parity into three buckets so temporary gaps aren't mistaken for
+permanent limitations, and permanent SDK surface differences aren't
+treated as endless TODOs.
 
-- **Scope migration pending**: `@zeroaltitude/openclaw-claude-bridge` is a
-  fork-preview publish path. Once the upstream OpenClaw PR lands and
-  maintainers republish under `@openclaw/openclaw-claude-bridge`, this
-  package's dependency declaration will switch.
+### Implemented parity
 
-- **Codex middleware — three deferred items**: the dynamic-tool path
-  here implements aggregate `toolResultMaxChars` budgeting (see
-  "Aggregate tool-result cap" above), but three pieces of codex's
-  middleware chain are not yet ported:
-  - `createAgentToolResultMiddlewareRunner({ runtime: "claude" })`
-    wiring — needs the middleware registry to recognize the "claude"
-    runtime label so reply/audit middlewares can target this bridge.
-  - `messagingToolSourceReplyPayloads` telemetry — needs an
-    equivalent reply-source pipeline on the claude side so messaging
-    tools can attribute outbound payloads back to a source message.
-  - Namespace / `deferLoading` for searchable dynamic tools — needs
-    server-side support before the bridge can declare a namespace
-    or mark tools as deferred-loaded.
+- **Three-piece architecture** — in-tree bridge + plugin manifest +
+  external JSON-RPC server, mirroring codex.
+- **JSON-RPC over stdio** — same wire shape as
+  `@openai/codex`'s app-server protocol.
+- **Doctor contract** — `doctor-contract-api.ts` exports the
+  legacy-config rules and session-route ownership facts
+  `openclaw doctor` consumes.
+- **`/claude` slash commands** — `status`, `version`, `threads`,
+  `resume`, `help`.
+- **Rate-limit surfacing**, **image payload sanitizer**, **plugin
+  inventory + thread config fingerprint** — all server-side; see
+  "Hot-path features" above.
+- **Vision-tools filter** — bridge-side strip of redundant `image`
+  tool when the model has native vision.
+- **Event projection** — codex-style item/started + item/completed
+  - delta accumulator extracted into
+    `src/app-server/event-projector.ts`.
+- **Transcript mirroring** — `src/app-server/transcript-mirror.ts`
+  appends turn output with stable
+  `claude/${threadId}/${turnId}/...` idempotency keys; replays /
+  crash recovery skip already-appended entries.
+- **Aggregate `toolResultMaxChars` budgeting** — reads from
+  `agents.list[].contextLimits.toolResultMaxChars` with fallback
+  to `agents.defaults`, default 16 000 chars; budget runs across
+  all text blocks in a single tool result, matching codex's
+  `convertToolContents` algorithm.
+- **Zod-validated protocol boundaries** — `protocol-validators.ts`
+  enforces shape on inbound notifications + outbound requests.
+- **Tool-result middleware** — `createAgentToolResultMiddlewareRunner({ runtime: "claude" })`
+  is wired into the bridge so plugins can register tool-result
+  middlewares scoped to claude.
+- **Messaging source-reply telemetry** —
+  `messagingToolSourceReplyPayloads` is captured and forwarded
+  through `ClaudeDynamicToolTelemetry`, matching codex's
+  source-reply attribution path.
+- **`thread/fork` for catalog drift** — when the dynamic-tool
+  catalog changes mid-session, the bridge calls `thread/fork`
+  (with new tools + fingerprint as overrides) instead of
+  `thread/start`. The server's fork handler copies the parent's
+  `messages.jsonl` so transcript continuity is preserved across
+  the rotation.
+- **Legacy state migration** — first launch auto-renames the
+  pre-rename `~/.openclaw/state/claude-app-server` dir to
+  `~/.openclaw/state/claude-bridge`.
+- **Real-runtime proof script** —
+  `src/app-server/bridge.live.test.ts` (gated by
+  `OPENCLAW_LIVE_TEST=1`) covers spawn / initialize / thread
+  lifecycle / mirror replay; with `ANTHROPIC_API_KEY` set it also
+  exercises a real dynamic-tool round-trip and a real approval
+  request.
 
-  Tracked in beads `openclaw-7w9`.
+### Planned bridge work
+
+- **Scope migration** — `@zeroaltitude/openclaw-claude-bridge` is a
+  fork-preview publish path. Once the upstream OpenClaw PR lands
+  and maintainers republish under `@openclaw/openclaw-claude-bridge`,
+  this package's dependency declaration switches.
+
+- **Server-side deferred-loading runtime** — the bridge spec type
+  carries `namespace` + `deferLoading` flags (see
+  `extensions/claude/src/app-server/types.ts:DynamicToolSpec` and
+  `createClaudeDynamicToolBridge({ loading: "searchable" })`), but
+  the server's MCP layer registers every tool eagerly regardless.
+  To actually skip eager registration, the server needs either
+  SDK-side deferred-loading support (see SDK differences below) or
+  a search-meta-tool that exposes deferred tools on demand.
+
+### True SDK surface differences
+
+These are gaps in the Anthropic `@anthropic-ai/claude-agent-sdk`
+itself; the bridge cannot close them without an SDK change. Listed
+here so they aren't relitigated as bridge bugs.
+
+- **MCP registration is set at thread-start and not refreshable
+  on resume.** This is why catalog drift requires `thread/fork`
+  (which creates a new SDK session) instead of an in-place
+  `thread/resume`. Codex's app-server doesn't have this
+  constraint because the OpenAI SDK handles tool refresh
+  differently.
+
+- **No native deferred-loading or namespaced tool routing.**
+  Codex's OpenAI SDK natively understands `deferLoading: true` and
+  namespaced tool addressing (`<namespace>.<name>`) so it can
+  defer tool loading until the agent searches for them. The
+  Anthropic SDK loads all MCP-registered tools eagerly. Until
+  this changes (or the server grows a search-meta-tool), the
+  `loading: "searchable"` mode flows the metadata through the
+  protocol but doesn't actually defer registration.
+
+- **No native source-reply delivery mode plumbing.** Codex's app
+  server exposes a `sourceReplyDeliveryMode` setting that
+  influences how messaging-tool outputs get routed. The Anthropic
+  SDK has no equivalent surface; the bridge captures the
+  source-reply payload in telemetry (so OpenClaw's outbound
+  pipeline can use it) but cannot honor a per-thread delivery-mode
+  contract end-to-end inside the SDK.

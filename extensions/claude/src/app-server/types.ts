@@ -44,6 +44,24 @@ export type DynamicToolSpec = {
   name: string;
   description: string;
   inputSchema: JsonValue;
+  /**
+   * Optional MCP namespace for the tool. Used by codex-style searchable
+   * tool routing: clients that group deferred-loadable tools under a
+   * namespace can address them as `<namespace>.<name>`. The claude bridge
+   * sets this to "openclaw" for searchable tools so SDK consumers that
+   * grow namespace support can find them without eager registration.
+   */
+  namespace?: string;
+  /**
+   * Hint to the SDK / MCP layer that this tool should NOT be registered
+   * eagerly at thread/start — it should be discoverable on demand via a
+   * search/lookup tool. The Anthropic claude-agent-sdk does not yet
+   * implement deferred loading natively (see KNOWN LIMITATION in
+   * extensions/claude/README.md); the flag is forwarded so that future
+   * SDK support, or a server-side search-meta-tool implementation, can
+   * honor it without a protocol bump.
+   */
+  deferLoading?: boolean;
 };
 
 export type DynamicToolCallParams = {

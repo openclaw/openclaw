@@ -105,6 +105,54 @@ describe("resolveClaudeDynamicToolResultMaxChars", () => {
   });
 });
 
+describe("searchable / direct loading + namespace metadata", () => {
+  it("emits no namespace/deferLoading when loading=direct (default)", () => {
+    const bridge = createClaudeDynamicToolBridge({
+      tools: [makeTool("openclaw_a", null), makeTool("openclaw_b", null)],
+    });
+    for (const spec of bridge.specs) {
+      expect(spec.namespace).toBeUndefined();
+      expect(spec.deferLoading).toBeUndefined();
+    }
+  });
+
+  it("sets namespace + deferLoading on every spec when loading=searchable", () => {
+    const bridge = createClaudeDynamicToolBridge({
+      tools: [makeTool("openclaw_a", null), makeTool("openclaw_b", null)],
+      loading: "searchable",
+    });
+    for (const spec of bridge.specs) {
+      expect(spec.namespace).toBe("openclaw");
+      expect(spec.deferLoading).toBe(true);
+    }
+  });
+
+  it("keeps explicit directToolNames eagerly registered in searchable mode", () => {
+    const bridge = createClaudeDynamicToolBridge({
+      tools: [makeTool("openclaw_lazy", null), makeTool("openclaw_eager", null)],
+      loading: "searchable",
+      directToolNames: ["openclaw_eager"],
+    });
+    const lazy = bridge.specs.find((s) => s.name === "openclaw_lazy");
+    const eager = bridge.specs.find((s) => s.name === "openclaw_eager");
+    expect(lazy?.deferLoading).toBe(true);
+    expect(lazy?.namespace).toBe("openclaw");
+    expect(eager?.deferLoading).toBeUndefined();
+    expect(eager?.namespace).toBeUndefined();
+  });
+
+  it("preserves the ALWAYS_DIRECT allowlist (sessions_yield) even in searchable mode", () => {
+    const bridge = createClaudeDynamicToolBridge({
+      tools: [makeTool("sessions_yield", null), makeTool("other_tool", null)],
+      loading: "searchable",
+    });
+    const yieldSpec = bridge.specs.find((s) => s.name === "sessions_yield");
+    const otherSpec = bridge.specs.find((s) => s.name === "other_tool");
+    expect(yieldSpec?.deferLoading).toBeUndefined();
+    expect(otherSpec?.deferLoading).toBe(true);
+  });
+});
+
 describe("dynamic-tool result aggregate budgeting", () => {
   it("passes a single-block result through unchanged when under the cap", async () => {
     const bridge = createClaudeDynamicToolBridge({
