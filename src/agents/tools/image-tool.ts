@@ -284,26 +284,6 @@ function pickMaxBytes(cfg?: OpenClawConfig, maxBytesMb?: number): number | undef
   return undefined;
 }
 
-function hasImageDimensionPolicy(policy?: ImageCompressionPolicy): boolean {
-  return Boolean(
-    policy?.models?.some(
-      (model) =>
-        (typeof model.maxSidePx === "number" && model.maxSidePx > 0) ||
-        (typeof model.maxPixels === "number" && model.maxPixels > 0) ||
-        (typeof model.preferredSidePx === "number" && model.preferredSidePx > 0),
-    ),
-  );
-}
-
-function hasImageOptimizationPolicy(policy?: ImageCompressionPolicy): boolean {
-  return (
-    hasImageDimensionPolicy(policy) ||
-    Boolean(
-      policy?.models?.some((model) => typeof model.maxBytes === "number" && model.maxBytes > 0),
-    )
-  );
-}
-
 function resolveCompressionModelCandidates(params: {
   cfg?: OpenClawConfig;
   imageModelConfig?: ImageModelConfig | null;
@@ -793,9 +773,6 @@ export function createImageTool(options?: {
         const media = isDataUrl
           ? await (async () => {
               const decoded = decodeDataUrl(resolvedImage, { maxBytes });
-              if (!hasImageOptimizationPolicy(imageCompression)) {
-                return decoded;
-              }
               return await optimizeImageBufferForWebMedia({
                 buffer: decoded.buffer,
                 contentType: decoded.mimeType,

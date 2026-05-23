@@ -21,6 +21,7 @@ import {
   hasAlphaChannel,
   isImageProcessorUnavailableError,
   optimizeImageToPng,
+  readImageMetadataFromHeader,
   resizeToJpeg,
 } from "./media-services.js";
 import {
@@ -447,6 +448,33 @@ function imageMaxBytesForPolicy(policy?: ImageCompressionPolicy): number | undef
   return maxBytes?.length ? Math.min(...maxBytes) : undefined;
 }
 
+function imageSatisfiesHardDimensionPolicy(
+  buffer: Buffer,
+  policy?: ImageCompressionPolicy,
+): boolean {
+  const models = policy?.models ?? [];
+  const hardMaxSides = models
+    .map((model) => positiveInteger(model.maxSidePx))
+    .filter((value): value is number => value !== undefined);
+  const hardMaxPixels = models
+    .map((model) => positiveInteger(model.maxPixels))
+    .filter((value): value is number => value !== undefined);
+  if (hardMaxSides.length === 0 && hardMaxPixels.length === 0) {
+    return true;
+  }
+
+  const meta = readImageMetadataFromHeader(buffer);
+  if (!meta) {
+    return false;
+  }
+  const maxSide = Math.max(meta.width, meta.height);
+  const pixels = meta.width * meta.height;
+  return (
+    (hardMaxSides.length === 0 || maxSide <= Math.min(...hardMaxSides)) &&
+    (hardMaxPixels.length === 0 || pixels <= Math.min(...hardMaxPixels))
+  );
+}
+
 export function effectiveImageBytesCap(
   baseCap: number | undefined,
   policy?: ImageCompressionPolicy,
@@ -576,7 +604,8 @@ export async function optimizeImageBufferForWebMedia(params: {
     if (
       isImageProcessorUnavailableError(err) &&
       !isHeicSource(meta) &&
-      params.buffer.length <= cap
+      params.buffer.length <= cap &&
+      imageSatisfiesHardDimensionPolicy(params.buffer, params.imageCompression)
     ) {
       if (shouldLogVerbose()) {
         logVerbose(
@@ -661,7 +690,8 @@ async function loadWebMediaInternal(
       if (
         isImageProcessorUnavailableError(err) &&
         !isHeicSource(meta ?? {}) &&
-        buffer.length <= cap
+        buffer.length <= cap &&
+        imageSatisfiesHardDimensionPolicy(buffer, imageCompression)
       ) {
         if (shouldLogVerbose()) {
           logVerbose(

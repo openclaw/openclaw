@@ -224,7 +224,6 @@ async function withTempAgentDir<T>(run: (agentDir: string) => Promise<T>): Promi
 const ONE_PIXEL_PNG_B64 =
   "iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAIAAAAlC+aJAAAAIGNIUk0AAHomAACAhAAA+gAAAIDoAAB1MAAA6mAAADqYAAAXcJy6UTwAAAAGYktHRAD/AP8A/6C9p5MAAAAHdElNRQfqBBsGAQr00ED3AAAAJXRFWHRkYXRlOmNyZWF0ZQAyMDI2LTA0LTI3VDA2OjAxOjEwKzAwOjAwPU3tXwAAACV0RVh0ZGF0ZTptb2RpZnkAMjAyNi0wNC0yN1QwNjowMToxMCswMDowMEwQVeMAAAAodEVYdGRhdGU6dGltZXN0YW1wADIwMjYtMDQtMjdUMDY6MDE6MTArMDA6MDAbBXQ8AAAAeElEQVRo3u3awQnDQBAEwT2Q8w/YAikIP5rF1RFMca+FO8/s7rrnqjcA1BsA6g0A9QaAesOfA77zqTf8Blj/AgAAAAAAAJsDqAOoA6gDqAOoc9TXAdQB1AHUAdQB1AHUAdQB1AHU7Qc46gEAAAAANrcecGZ2f8B/ASYSQPlKoEJ/AAAAAElFTkSuQmCC";
 const ONE_PIXEL_GIF_B64 = "R0lGODlhAQABAIABAP///wAAACwAAAAAAQABAAACAkQBADs=";
-const ONE_PIXEL_JPEG_B64 = "QUJDRA==";
 
 function createLargeColorBlockPng(size: number): Buffer {
   const buf = Buffer.alloc(size * size * 4, 255);
@@ -1418,7 +1417,7 @@ describe("image tool implicit imageModel config", () => {
       ).toBe(true);
       expect(userContent.some((block) => block.type === "image_url")).toBe(true);
       expect(userContent.find((block) => block.type === "image_url")?.image_url?.url).toContain(
-        "data:image/png;base64,",
+        "data:image/",
       );
       expect(bodyRaw).not.toContain('"role":"developer"');
       expectToolText(result, "ok moonshot");
@@ -1915,6 +1914,52 @@ describe("image tool data URL support", () => {
       );
     });
   });
+
+  it("applies configured image quality to data URLs without model media metadata", async () => {
+    await withTempAgentDir(async (agentDir) => {
+      let observedDimensions: { width: number; height: number } | undefined;
+      installImageUnderstandingProviderStubs({
+        id: "openai",
+        capabilities: ["image"],
+        describeImage: async (params) => {
+          observedDimensions =
+            params.mime === "image/png"
+              ? readPngDimensions(params.buffer)
+              : readJpegDimensions(params.buffer);
+          return { text: "ok", model: params.model };
+        },
+      });
+      const cfg: OpenClawConfig = {
+        agents: {
+          defaults: {
+            imageModel: { primary: "openai/plain-vision" },
+            imageQuality: "efficient",
+          },
+        },
+        models: {
+          providers: {
+            openai: {
+              api: "openai-responses",
+              apiKey: "test-key",
+              baseUrl: "https://api.openai.com/v1",
+              models: [makeModelDefinition("plain-vision", ["text", "image"])],
+            },
+          },
+        },
+      };
+      const tool = createRequiredImageTool({ config: cfg, agentDir });
+      const source = createLargeColorBlockPng(1600);
+      await expectImageToolExecOk(tool, `data:image/png;base64,${source.toString("base64")}`);
+
+      expect(observedDimensions).toBeDefined();
+      if (!observedDimensions) {
+        throw new Error("expected observed data URL dimensions");
+      }
+      expect(Math.max(observedDimensions.width, observedDimensions.height)).toBeLessThanOrEqual(
+        1280,
+      );
+    });
+  });
 });
 
 describe("image tool MiniMax VLM routing", () => {
@@ -1964,7 +2009,7 @@ describe("image tool MiniMax VLM routing", () => {
     expect(init?.method).toBe("POST");
     expect((init?.headers as Record<string, string>)?.Authorization).toBe("Bearer minimax-test");
     expect(String(init?.body)).toContain('"prompt":"Describe the image."');
-    expect(String(init?.body)).toContain('"image_url":"data:image/png;base64,');
+    expect(String(init?.body)).toContain('"image_url":"data:image/');
 
     const text = res.content?.find((b) => b.type === "text")?.text ?? "";
     expect(text).toBe("ok");
@@ -1975,7 +2020,7 @@ describe("image tool MiniMax VLM routing", () => {
 
     const res = await tool.execute("t1", {
       prompt: "Compare these images.",
-      images: [`data:image/png;base64,${pngB64}`, `data:image/jpeg;base64,${ONE_PIXEL_JPEG_B64}`],
+      images: [`data:image/png;base64,${pngB64}`, `data:image/gif;base64,${ONE_PIXEL_GIF_B64}`],
     });
 
     expect(fetch).toHaveBeenCalledTimes(2);
@@ -1995,8 +2040,8 @@ describe("image tool MiniMax VLM routing", () => {
       image: `data:image/png;base64,${pngB64}`,
       images: [
         `data:image/png;base64,${pngB64}`,
-        `data:image/jpeg;base64,${ONE_PIXEL_JPEG_B64}`,
-        `data:image/jpeg;base64,${ONE_PIXEL_JPEG_B64}`,
+        `data:image/gif;base64,${ONE_PIXEL_GIF_B64}`,
+        `data:image/gif;base64,${ONE_PIXEL_GIF_B64}`,
       ],
     });
 

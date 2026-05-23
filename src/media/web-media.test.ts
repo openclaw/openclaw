@@ -435,7 +435,8 @@ describe("loadWebMedia", () => {
 
   async function withUnavailableImageOptimizer<T>(fn: () => Promise<T>): Promise<T> {
     vi.resetModules();
-    vi.doMock("./media-services.js", () => ({
+    vi.doMock("./media-services.js", async (importOriginal) => ({
+      ...(await importOriginal<typeof import("./media-services.js")>()),
       convertHeicToJpeg: vi.fn(async (buffer: Buffer) => buffer),
       hasAlphaChannel: vi.fn(async () => {
         throw new Error(
@@ -511,6 +512,20 @@ describe("loadWebMedia", () => {
           contentType: "image/png",
           maxBytes: 8,
           imageCompression: { models: [{ maxSidePx: 1024 }] },
+        }),
+      ).rejects.toThrow(/Optional dependency sharp is required/);
+    });
+  });
+
+  it("does not bypass model dimensions when optional sharp optimization is unavailable", async () => {
+    await withUnavailableImageOptimizer(async () => {
+      const { optimizeImageBufferForWebMedia } = await import("./web-media.js");
+      await expect(
+        optimizeImageBufferForWebMedia({
+          buffer: createLargeColorBlockPng(1600),
+          contentType: "image/png",
+          maxBytes: 16 * 1024 * 1024,
+          imageCompression: { models: [{ maxSidePx: 512 }] },
         }),
       ).rejects.toThrow(/Optional dependency sharp is required/);
     });

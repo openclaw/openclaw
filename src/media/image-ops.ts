@@ -536,7 +536,7 @@ function readJpegMetadata(buffer: Buffer): ImageMetadata | null {
   return null;
 }
 
-function readImageMetadataFromHeader(buffer: Buffer): ImageMetadata | null {
+export function readImageMetadataFromHeader(buffer: Buffer): ImageMetadata | null {
   return (
     readPngMetadata(buffer) ??
     readGifMetadata(buffer) ??
