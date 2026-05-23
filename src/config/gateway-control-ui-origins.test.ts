@@ -1,5 +1,37 @@
 import { describe, expect, it } from "vitest";
-import { ensureControlUiAllowedOriginsForNonLoopbackBind } from "./gateway-control-ui-origins.js";
+import {
+  buildDefaultControlUiAllowedOrigins,
+  ensureControlUiAllowedOriginsForNonLoopbackBind,
+  hasConfiguredControlUiAllowedOrigins,
+} from "./gateway-control-ui-origins.js";
+
+describe("buildDefaultControlUiAllowedOrigins", () => {
+  it("seeds loopback origins only for non-loopback bind modes", () => {
+    expect(
+      buildDefaultControlUiAllowedOrigins({
+        port: 1455,
+        bind: "custom",
+        customBindHost: "gateway.example.test",
+      }),
+    ).toEqual(["http://localhost:1455", "http://127.0.0.1:1455"]);
+  });
+
+  it("does not infer LAN or wildcard browser origins from bind mode", () => {
+    expect(
+      buildDefaultControlUiAllowedOrigins({
+        port: 1455,
+        bind: "lan",
+      }),
+    ).not.toContain("http://0.0.0.0:1455");
+    expect(
+      buildDefaultControlUiAllowedOrigins({
+        port: 1455,
+        bind: "custom",
+        customBindHost: "192.0.2.10",
+      }),
+    ).not.toContain("http://192.0.2.10:1455");
+  });
+});
 
 describe("ensureControlUiAllowedOriginsForNonLoopbackBind", () => {
   it("seeds Fly-style runtime bind and port when config is empty", () => {
@@ -66,6 +98,20 @@ describe("ensureControlUiAllowedOriginsForNonLoopbackBind", () => {
     expect(result.seededOrigins).toEqual(["http://localhost:18789", "http://127.0.0.1:18789"]);
   });
 
+  it("does not add custom bind hosts to automatic origins", () => {
+    const result = ensureControlUiAllowedOriginsForNonLoopbackBind({
+      gateway: {
+        bind: "custom",
+        customBindHost: "gateway.example.test",
+        port: 2444,
+      },
+    });
+
+    expect(result.bind).toBe("custom");
+    expect(result.seededOrigins).toEqual(["http://localhost:2444", "http://127.0.0.1:2444"]);
+    expect(result.seededOrigins).not.toContain("http://gateway.example.test:2444");
+  });
+
   it("does not overwrite explicit allowed origins", () => {
     const result = ensureControlUiAllowedOriginsForNonLoopbackBind(
       {
@@ -85,5 +131,25 @@ describe("ensureControlUiAllowedOriginsForNonLoopbackBind", () => {
     expect(result.config.gateway?.controlUi?.allowedOrigins).toEqual([
       "https://control.example.com",
     ]);
+  });
+});
+
+describe("hasConfiguredControlUiAllowedOrigins", () => {
+  it("treats explicit host-header fallback as configured", () => {
+    expect(
+      hasConfiguredControlUiAllowedOrigins({
+        allowedOrigins: [],
+        dangerouslyAllowHostHeaderOriginFallback: true,
+      }),
+    ).toBe(true);
+  });
+
+  it("ignores empty origin strings", () => {
+    expect(
+      hasConfiguredControlUiAllowedOrigins({
+        allowedOrigins: ["", "   "],
+        dangerouslyAllowHostHeaderOriginFallback: false,
+      }),
+    ).toBe(false);
   });
 });
