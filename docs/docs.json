@@ -1666,7 +1666,8 @@
                       "cli/flows",
                       "cli/node",
                       "cli/nodes",
-                      "cli/sandbox"
+                      "cli/sandbox",
+                      "cli/tools"
                     ]
                   },
                   {

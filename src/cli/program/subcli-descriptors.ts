@@ -23,6 +23,11 @@ const subCliCommandCatalog = defineCommandDescriptorCatalog([
     hasSubcommands: true,
   },
   {
+    name: "tools",
+    description: "Invoke Gateway tools and execute tool plans",
+    hasSubcommands: true,
+  },
+  {
     name: "models",
     description: "List, scan, and set model providers",
     hasSubcommands: true,
