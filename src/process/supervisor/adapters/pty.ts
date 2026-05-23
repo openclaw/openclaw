@@ -183,10 +183,20 @@ export async function createPtyAdapter(params: {
     return waitPromise;
   };
 
-  const kill = (signal: NodeJS.Signals = "SIGKILL") => {
+  const kill = (signal: NodeJS.Signals = "SIGKILL", options?: { graceMs?: number }) => {
     try {
       if (signal === "SIGKILL" && typeof pty.pid === "number" && pty.pid > 0) {
-        killProcessTree(pty.pid);
+        if (options?.graceMs === undefined) {
+          killProcessTree(pty.pid);
+        } else {
+          killProcessTree(pty.pid, { graceMs: options.graceMs });
+        }
+      } else if (signal === "SIGTERM" && typeof pty.pid === "number" && pty.pid > 0) {
+        if (options?.graceMs === undefined) {
+          killProcessTree(pty.pid);
+        } else {
+          killProcessTree(pty.pid, { graceMs: options.graceMs });
+        }
       } else if (process.platform === "win32") {
         pty.kill();
       } else {

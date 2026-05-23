@@ -357,14 +357,21 @@ export async function createChildAdapter(params: {
   // gateway's process group regardless of intent, so the kill must avoid
   // group-kill. (#71662 follow-up — caught by Greptile review)
   const childIsDetached = useDetached && !spawned.usedFallback;
-  const kill = (signal?: NodeJS.Signals) => {
+  const killProcessTreeForChild = (pid: number, graceMs?: number) => {
+    const opts =
+      graceMs === undefined
+        ? { detached: childIsDetached }
+        : { detached: childIsDetached, graceMs };
+    killProcessTree(pid, opts);
+  };
+  const kill = (signal?: NodeJS.Signals, options?: { graceMs?: number }) => {
     const pid = child.pid ?? undefined;
     if (signal === undefined || signal === "SIGKILL") {
       if (pid) {
         // Pass through whether the child is actually detached. Without this,
         // `killProcessTree` group-kills via `-pid` and takes out the gateway's
         // own process group along with the child. (#71662)
-        killProcessTree(pid, { detached: childIsDetached });
+        killProcessTreeForChild(pid, options?.graceMs);
       }
       try {
         child.kill("SIGKILL");
@@ -372,6 +379,10 @@ export async function createChildAdapter(params: {
         // ignore kill errors
       }
       scheduleForceKillWaitFallback("SIGKILL");
+      return;
+    }
+    if (signal === "SIGTERM" && pid) {
+      killProcessTreeForChild(pid, options?.graceMs);
       return;
     }
     try {

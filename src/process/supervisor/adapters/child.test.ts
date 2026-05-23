@@ -204,13 +204,47 @@ describe("createChildAdapter", () => {
     }
   });
 
-  it("uses direct child.kill for non-SIGKILL signals", async () => {
+  it("uses process-tree kill for graceful SIGTERM cancellation", async () => {
     const { adapter, killMock } = await createAdapterHarness({ pid: 7654 });
 
-    adapter.kill("SIGTERM");
+    adapter.kill("SIGTERM", { graceMs: 5_000 });
+
+    const expectedDetached = process.platform !== "win32" && !process.env.OPENCLAW_SERVICE_MARKER;
+    expect(killProcessTreeMock).toHaveBeenCalledWith(7654, {
+      detached: expectedDetached,
+      graceMs: 5_000,
+    });
+    expect(killMock).not.toHaveBeenCalled();
+  });
+
+  it("passes detached:false to process-tree SIGTERM when spawn fell back to no-detach", async () => {
+    const { child, killMock } = createStubChild(8765);
+    spawnWithFallbackMock.mockResolvedValue({
+      child,
+      usedFallback: true,
+      fallbackLabel: "no-detach",
+    });
+    const adapter = await createChildAdapter({
+      argv: ["node", "-e", "setTimeout(() => {}, 1000)"],
+      stdinMode: "pipe-open",
+    });
+
+    adapter.kill("SIGTERM", { graceMs: 5_000 });
+
+    expect(killProcessTreeMock).toHaveBeenCalledWith(8765, {
+      detached: false,
+      graceMs: 5_000,
+    });
+    expect(killMock).not.toHaveBeenCalled();
+  });
+
+  it("uses direct child.kill for non-SIGTERM and non-SIGKILL signals", async () => {
+    const { adapter, killMock } = await createAdapterHarness({ pid: 7654 });
+
+    adapter.kill("SIGINT");
 
     expect(killProcessTreeMock).not.toHaveBeenCalled();
-    expect(killMock).toHaveBeenCalledWith("SIGTERM");
+    expect(killMock).toHaveBeenCalledWith("SIGINT");
   });
 
   it("preserves inherited stdin when no input pipe is requested", async () => {

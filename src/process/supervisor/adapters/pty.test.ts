@@ -85,7 +85,7 @@ describe("createPtyAdapter", () => {
     vi.clearAllMocks();
   });
 
-  it("forwards explicit signals to node-pty kill on non-Windows", async () => {
+  it("forwards non-SIGTERM explicit signals to node-pty kill on non-Windows", async () => {
     const originalPlatform = Object.getOwnPropertyDescriptor(process, "platform");
     Object.defineProperty(process, "platform", { value: "linux", configurable: true });
     try {
@@ -96,14 +96,27 @@ describe("createPtyAdapter", () => {
         args: ["-lc", "sleep 10"],
       });
 
-      adapter.kill("SIGTERM");
-      expect(ptyKillMock).toHaveBeenCalledWith("SIGTERM");
+      adapter.kill("SIGINT");
+      expect(ptyKillMock).toHaveBeenCalledWith("SIGINT");
       expect(killProcessTreeMock).not.toHaveBeenCalled();
     } finally {
       if (originalPlatform) {
         Object.defineProperty(process, "platform", originalPlatform);
       }
     }
+  });
+
+  it("uses process-tree kill for graceful SIGTERM cancellation", async () => {
+    spawnMock.mockReturnValue(createStubPty(1234));
+
+    const adapter = await createPtyAdapter({
+      shell: "bash",
+      args: ["-lc", "sleep 10"],
+    });
+
+    adapter.kill("SIGTERM", { graceMs: 5_000 });
+    expect(killProcessTreeMock).toHaveBeenCalledWith(1234, { graceMs: 5_000 });
+    expect(ptyKillMock).not.toHaveBeenCalled();
   });
 
   it("uses process-tree kill for SIGKILL by default", async () => {
@@ -272,7 +285,7 @@ describe("createPtyAdapter", () => {
     expect(expectSpawnEnv()).toEqual({ FOO: "bar", COUNT: "12" });
   });
 
-  it("does not pass a signal to node-pty on Windows", async () => {
+  it("does not pass non-SIGTERM explicit signals to node-pty on Windows", async () => {
     const originalPlatform = Object.getOwnPropertyDescriptor(process, "platform");
     Object.defineProperty(process, "platform", { value: "win32", configurable: true });
     try {
@@ -283,7 +296,7 @@ describe("createPtyAdapter", () => {
         args: ["-NoLogo"],
       });
 
-      adapter.kill("SIGTERM");
+      adapter.kill("SIGINT");
       expect(ptyKillMock).toHaveBeenCalledWith(undefined);
       expect(killProcessTreeMock).not.toHaveBeenCalled();
     } finally {

@@ -176,7 +176,7 @@ export function createProcessSupervisor(): ProcessSupervisor {
         if (settled || forceKillTimer) {
           return;
         }
-        adapter.kill("SIGTERM");
+        adapter.kill("SIGTERM", { graceMs: GRACEFUL_CANCEL_TIMEOUT_MS });
         forceKillTimer = setTimeout(() => {
           if (!settled) {
             adapter.kill("SIGKILL");
