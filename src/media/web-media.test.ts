@@ -100,6 +100,38 @@ describe("loadWebMedia", () => {
     return encodePngRgba(buf, size, size);
   }
 
+  function createLargeTransparentColorBlockPng(size: number): Buffer {
+    const buf = Buffer.alloc(size * size * 4, 0);
+    const centerStart = Math.floor(size * 0.25);
+    const centerEnd = Math.floor(size * 0.75);
+    for (let y = 0; y < size; y += 1) {
+      for (let x = 0; x < size; x += 1) {
+        const inCenter = x >= centerStart && x < centerEnd && y >= centerStart && y < centerEnd;
+        fillPixel(
+          buf,
+          x,
+          y,
+          size,
+          inCenter ? 230 : 30,
+          inCenter ? 40 : 110,
+          inCenter ? 35 : 220,
+          inCenter ? 255 : 96,
+        );
+      }
+    }
+    return encodePngRgba(buf, size, size);
+  }
+
+  function readPngDimensions(buffer: Buffer): { width: number; height: number } {
+    if (buffer.length < 24 || buffer.toString("ascii", 12, 16) !== "IHDR") {
+      throw new Error("PNG dimensions not found");
+    }
+    return {
+      width: buffer.readUInt32BE(16),
+      height: buffer.readUInt32BE(20),
+    };
+  }
+
   function readJpegDimensions(buffer: Buffer): { width: number; height: number } {
     let offset = 2;
     while (offset + 9 < buffer.length) {
@@ -493,6 +525,27 @@ describe("loadWebMedia", () => {
     expect(result.kind).toBe("image");
     expect(result.contentType).toBe("image/jpeg");
     const dimensions = readJpegDimensions(result.buffer);
+    expect(Math.max(dimensions.width, dimensions.height)).toBeLessThanOrEqual(512);
+  });
+
+  it("downscales alpha PNGs to the resolved model side limit before returning media", async () => {
+    const sourcePng = createLargeTransparentColorBlockPng(1600);
+    expect(Math.max(...Object.values(readPngDimensions(sourcePng)))).toBe(1600);
+
+    const largeImage = path.join(fixtureRoot, "large-transparent.png");
+    await fs.writeFile(largeImage, sourcePng);
+    const result = await loadWebMedia(largeImage, {
+      maxBytes: 16 * 1024 * 1024,
+      localRoots: [fixtureRoot],
+      imageCompression: {
+        quality: "high",
+        models: [{ maxSidePx: 512, preferredSidePx: 512 }],
+      },
+    });
+
+    expect(result.kind).toBe("image");
+    expect(result.contentType).toBe("image/png");
+    const dimensions = readPngDimensions(result.buffer);
     expect(Math.max(dimensions.width, dimensions.height)).toBeLessThanOrEqual(512);
   });
 

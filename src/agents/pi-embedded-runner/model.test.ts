@@ -542,6 +542,58 @@ describe("resolveModel", () => {
     expect(discoverModels).not.toHaveBeenCalled();
   });
 
+  it("merges bundled static media input into resolved models when opted in", async () => {
+    mockDiscoveredModel(discoverModels, {
+      provider: "openai",
+      modelId: "gpt-5.5-pro",
+      templateModel: {
+        id: "gpt-5.5-pro",
+        name: "GPT-5.5 Pro",
+        provider: "openai",
+        api: "openai-responses",
+        baseUrl: "https://api.openai.com/v1",
+        reasoning: true,
+        input: ["text", "image"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 272_000,
+        maxTokens: 128_000,
+      },
+    });
+    resolveBundledStaticCatalogModelMock.mockReturnValueOnce({
+      provider: "openai",
+      id: "gpt-5.5-pro",
+      name: "GPT-5.5 Pro",
+      api: "openai-responses",
+      baseUrl: "https://api.openai.com/v1",
+      reasoning: true,
+      input: ["text", "image"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 272_000,
+      maxTokens: 128_000,
+      mediaInput: {
+        image: { maxSidePx: 6000, preferredSidePx: 2048, tokenMode: "detail" },
+      },
+    });
+
+    const result = await resolveModelAsync("openai", "gpt-5.5-pro", "/tmp/agent", undefined, {
+      allowBundledStaticCatalogFallback: true,
+      authStorage: { mocked: true } as never,
+      modelRegistry: discoverModels({ mocked: true } as never, "/tmp/agent"),
+      runtimeHooks: createRuntimeHooks(),
+      skipPiDiscovery: true,
+    });
+
+    expect((expectResolvedModel(result) as { mediaInput?: unknown }).mediaInput).toEqual({
+      image: { maxSidePx: 6000, preferredSidePx: 2048, tokenMode: "detail" },
+    });
+    expect(resolveBundledStaticCatalogModelMock).toHaveBeenCalledWith({
+      provider: "openai",
+      modelId: "gpt-5.5-pro",
+      cfg: undefined,
+      workspaceDir: undefined,
+    });
+  });
+
   it("merges configured media input with discovered model metadata", () => {
     mockDiscoveredModel(discoverModels, {
       provider: "custom",

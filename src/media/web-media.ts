@@ -523,7 +523,8 @@ async function optimizeImageWithFallback(params: {
   const hasAlpha = isPng && (await hasAlphaChannel(buffer));
 
   if (hasAlpha) {
-    const optimized = await optimizeImageToPng(buffer, cap);
+    const grid = resolveImageCompressionGrid(params.imageCompression);
+    const optimized = await optimizeImageToPng(buffer, cap, { sides: grid.sides });
     if (optimized.buffer.length <= cap) {
       return { ...optimized, format: "png" };
     }

@@ -1302,6 +1302,18 @@ export async function resolveModelAsync(
       });
     }
   }
+  if (model && options?.allowBundledStaticCatalogFallback) {
+    const staticCatalogModel = resolveBundledStaticCatalogModel({
+      provider: normalizedRef.provider,
+      modelId: normalizedRef.model,
+      cfg,
+      workspaceDir,
+    });
+    const mediaInput = mergeModelMediaInput(staticCatalogModel?.mediaInput, model.mediaInput);
+    if (mediaInput) {
+      model = { ...model, mediaInput };
+    }
+  }
   if (model) {
     return { model, authStorage, modelRegistry };
   }
