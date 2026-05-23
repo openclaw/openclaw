@@ -46,17 +46,17 @@ export function ensureControlUiAllowedOriginsForNonLoopbackBind(
   opts?: {
     defaultPort?: number;
     requireControlUiEnabled?: boolean;
-    /** Resolved runtime bind override. Mirrors Gateway runtime precedence:
-     *  explicit CLI/runtime bind wins over gateway.bind. */
+    // Resolved runtime bind override. Mirrors Gateway runtime precedence:
+    // explicit CLI/runtime bind wins over gateway.bind.
     runtimeBind?: unknown;
-    /** Resolved runtime port override. Mirrors Gateway runtime precedence:
-     *  explicit CLI/runtime port wins over gateway.port. */
+    // Resolved runtime port override. Mirrors Gateway runtime precedence:
+    // explicit CLI/runtime port wins over gateway.port.
     runtimePort?: unknown;
-    /** Optional container-detection callback.  When provided and `gateway.bind`
-     *  is unset, the function is called to determine whether the runtime will
-     *  choose the container-friendly bind mode so loopback Control UI origins
-     *  can be prepared proactively.  Keeping this as an injected callback avoids
-     *  a hard dependency from the config layer on the gateway runtime layer. */
+    // Optional container-detection callback.  When provided and `gateway.bind`
+    // is unset, the function is called to determine whether the runtime will
+    // choose the container-friendly bind mode so loopback Control UI origins
+    // can be prepared proactively.  Keeping this as an injected callback avoids
+    // a hard dependency from the config layer on the gateway runtime layer.
     isContainerEnvironment?: () => boolean;
   },
 ): {
