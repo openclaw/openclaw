@@ -3851,39 +3851,44 @@ describe("runCodexAppServerAttempt", () => {
   });
 
   it("marks executed dynamic-tool completion-idle timeouts as replay-invalid", async () => {
-    testing.setOpenClawCodingToolsFactoryForTests(() => [createRuntimeDynamicTool("echo")]);
-    const harness = createStartedThreadHarness();
     const params = createParams(
       path.join(tempDir, "session.jsonl"),
       path.join(tempDir, "workspace"),
     );
-    params.disableTools = false;
-    params.runtimePlan = createCodexRuntimePlanFixture();
-    params.timeoutMs = 200;
-
-    const run = runCodexAppServerAttempt(params, {
-      pluginConfig: { appServer: { turnCompletionIdleTimeoutMs: 5 } },
-      turnAssistantCompletionIdleTimeoutMs: 1_000,
+    const projector = new CodexAppServerEventProjector(params, "thread-1", "turn-1");
+    const bridge = createCodexDynamicToolBridge({
+      tools: [createRuntimeDynamicTool("echo")],
+      signal: new AbortController().signal,
     });
-    await harness.waitForMethod("turn/start");
-    const toolResult = (await harness.handleServerRequest({
-      id: "request-echo-tool",
-      method: "item/tool/call",
-      params: {
-        threadId: "thread-1",
-        turnId: "turn-1",
-        callId: "call-echo-1",
-        namespace: null,
-        tool: "echo",
-        arguments: {},
-      },
-    })) as { success?: boolean };
-    expect(toolResult.success).toBe(true);
+    const call = {
+      threadId: "thread-1",
+      turnId: "turn-1",
+      callId: "call-echo-1",
+      namespace: null,
+      tool: "echo",
+      arguments: {},
+    };
+    projector.recordDynamicToolCall(call);
 
-    const result = await run;
+    const toolResult = await bridge.handleToolCall(call);
+    projector.recordDynamicToolResult({
+      callId: call.callId,
+      tool: call.tool,
+      success: toolResult.success,
+      terminalType: toolResult.diagnosticTerminalType ?? "completed",
+      sideEffectEvidence: toolResult.sideEffectEvidence === true,
+      contentItems: toolResult.contentItems,
+    });
+
+    const result = projector.buildResult(bridge.telemetry);
 
     expect(result.replayMetadata).toEqual({ hadPotentialSideEffects: true, replaySafe: false });
-    expect(result.promptTimeoutOutcome).toEqual({
+    expect(
+      testing.buildCodexAppServerPromptTimeoutOutcome({
+        result,
+        turnCompletionIdleTimedOut: true,
+      }),
+    ).toEqual({
       message:
         "Codex stopped before confirming the turn was complete. Some work may already have been performed; verify the current state before retrying.",
       replayInvalid: true,
