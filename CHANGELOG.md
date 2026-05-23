@@ -65,6 +65,7 @@ Docs: https://docs.openclaw.ai
 - Checks/Windows: run managed child commands through explicit `cmd.exe` wrapping instead of Node shell mode with argv, avoiding Node 24 subprocess deprecation warnings during changed checks.
 - Models: prune retired Groq, GitHub Copilot, OpenAI, xAI, and old Claude catalog entries, with doctor migration to upgrade existing configs to current provider refs.
 - Doctor/update: recognize junction-backed source checkouts as git installs by comparing canonical paths before showing package-manager update guidance. Fixes #82215. Thanks @igormf.
+- Channels: honor `/verbose on` for tool/progress summaries across direct chats, groups, channels, and forum topics while preserving quiet default behavior. (#85488) Thanks @kurplunkin.
 - CLI/skills: show an all-ready note with next-step commands when skill setup has no missing dependencies to install. (#85032) Thanks @aniruddhaadak80.
 - Microsoft Foundry: route DeepSeek V4 Pro and Flash models through the Foundry Responses API while keeping older DeepSeek models on their existing path. (#85549) Thanks @roslinmahmud.
 - Status/usage: show configured cost estimates for AWS SDK models in full usage output while keeping token-only usage replies cost-free. (#85619) Thanks @ItsOtherMauridian.
