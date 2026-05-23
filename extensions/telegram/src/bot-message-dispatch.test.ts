@@ -8,12 +8,17 @@ import {
   createTestDraftStream,
 } from "./draft-stream.test-helpers.js";
 import { notifyTelegramInboundEventOutboundSuccess } from "./inbound-event-delivery.js";
+import { createTelegramLongTurnDeliveryState } from "./long-turn-delivery.js";
 import {
   buildTelegramConversationContext,
   createTelegramMessageCache,
   resolveTelegramMessageCachePath,
 } from "./message-cache.js";
 import { recordOutboundMessageForPromptContext as recordOutboundMessageForPromptContextActual } from "./outbound-message-context.js";
+import {
+  getTelegramReplyFenceSizeForTests,
+  supersedeTelegramReplyFence,
+} from "./telegram-reply-fence.js";
 
 type DispatchReplyWithBufferedBlockDispatcherArgs = Parameters<
   TelegramBotDeps["dispatchReplyWithBufferedBlockDispatcher"]
@@ -482,6 +487,8 @@ describe("dispatchTelegramMessage draft streaming", () => {
     bot?: Bot;
     replyToMode?: Parameters<typeof dispatchTelegramMessage>[0]["replyToMode"];
     textLimit?: number;
+    runId?: string;
+    longTurnDeliveryState?: Parameters<typeof dispatchTelegramMessage>[0]["longTurnDeliveryState"];
   }) {
     const bot = params.bot ?? createBot();
     await dispatchTelegramMessage({
@@ -495,6 +502,8 @@ describe("dispatchTelegramMessage draft streaming", () => {
       telegramCfg: params.telegramCfg ?? {},
       telegramDeps: params.telegramDeps ?? telegramDepsForTest,
       opts: { token: "token" },
+      runId: params.runId,
+      longTurnDeliveryState: params.longTurnDeliveryState,
     });
   }
 
@@ -3738,6 +3747,389 @@ describe("dispatchTelegramMessage draft streaming", () => {
         ctxPayload: createDirectSessionPayload(),
       }),
       streamMode: "off",
+    });
+
+    expect(deliverReplies).not.toHaveBeenCalled();
+  });
+
+  it("reports deferred dispatch failures with run context instead of generic fallback", async () => {
+    const longTurnDeliveryState = createTelegramLongTurnDeliveryState({
+      runId: "run-long",
+      agentId: "default",
+      accountId: "default",
+      sessionKey: "agent:test:telegram:direct:123",
+      chatId: "123",
+      threadId: 777,
+    });
+    longTurnDeliveryState.markDeferred();
+    dispatchReplyWithBufferedBlockDispatcher.mockRejectedValue(new Error("provider down"));
+
+    await dispatchWithContext({
+      context: createContext({
+        ctxPayload: createDirectSessionPayload(),
+      }),
+      streamMode: "off",
+      runId: "run-long",
+      longTurnDeliveryState,
+    });
+
+    const dispatchParams = mockCallArg(dispatchReplyWithBufferedBlockDispatcher) as {
+      replyOptions?: { runId?: string };
+    };
+    expect(dispatchParams.replyOptions?.runId).toBe("run-long");
+    const reply = expectDeliveredReply(0, {}, 0) as { text?: string };
+    expect(reply.text).toContain("The deferred run did not complete successfully.");
+    expect(reply.text).toContain("Run: run-long");
+    expect(reply.text).toContain("Agent: default");
+    expect(reply.text).toContain("Session: agent:test:telegram:direct:123");
+    expect(reply.text).toContain("Target: telegram:123/777");
+    expect(reply.text).not.toContain("provider down");
+    expect(reply.text).not.toContain("Something went wrong");
+  });
+
+  it("releases deferred reply fences when failure fallback delivery throws", async () => {
+    const longTurnDeliveryState = createTelegramLongTurnDeliveryState({
+      runId: "run-failed-send",
+      agentId: "default",
+      accountId: "default",
+      sessionKey: "agent:test:telegram:direct:123",
+      chatId: "123",
+      threadId: 777,
+    });
+    longTurnDeliveryState.markDeferred();
+    dispatchReplyWithBufferedBlockDispatcher.mockRejectedValue(new Error("provider down"));
+    deliverReplies.mockRejectedValueOnce(new Error("telegram send failed"));
+
+    await expect(
+      dispatchWithContext({
+        context: createContext({
+          ctxPayload: createDirectSessionPayload(),
+        }),
+        streamMode: "off",
+        runId: "run-failed-send",
+        longTurnDeliveryState,
+      }),
+    ).rejects.toThrow("telegram send failed");
+
+    expect(getTelegramReplyFenceSizeForTests()).toBe(0);
+  });
+
+  it("does not deliver deferred failure fallback after explicit supersede during deferral notice", async () => {
+    const longTurnDeliveryState = createTelegramLongTurnDeliveryState({
+      runId: "run-failed-aborted",
+      agentId: "default",
+      accountId: "default",
+      sessionKey: "agent:test:telegram:direct:123",
+      chatId: "123",
+      threadId: 777,
+    });
+    longTurnDeliveryState.markDeferralPending();
+    dispatchReplyWithBufferedBlockDispatcher.mockRejectedValue(new Error("provider down"));
+
+    const run = dispatchWithContext({
+      context: createContext({
+        ctxPayload: createDirectSessionPayload(),
+      }),
+      streamMode: "off",
+      runId: "run-failed-aborted",
+      longTurnDeliveryState,
+    });
+    await vi.waitFor(() => {
+      expect(dispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalledTimes(1);
+    });
+
+    expect(supersedeTelegramReplyFence("agent:test:telegram:direct:123")).toBe(true);
+    longTurnDeliveryState.markDeferred();
+    await run;
+
+    expect(deliverReplies).not.toHaveBeenCalled();
+  });
+
+  it("waits for the deferral notice before delivering deferred finals", async () => {
+    const longTurnDeliveryState = createTelegramLongTurnDeliveryState({
+      runId: "run-race",
+      agentId: "default",
+      accountId: "default",
+      sessionKey: "agent:test:telegram:direct:123",
+      chatId: "123",
+      threadId: 777,
+    });
+    longTurnDeliveryState.markDeferralPending();
+    let signalFinalReady: (() => void) | undefined;
+    const finalReady = new Promise<void>((resolve) => {
+      signalFinalReady = resolve;
+    });
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+      signalFinalReady?.();
+      await dispatcherOptions.deliver({ text: "Done after deferral" }, { kind: "final" });
+      return { queuedFinal: true };
+    });
+
+    const run = dispatchWithContext({
+      context: createContext({
+        ctxPayload: createDirectSessionPayload(),
+      }),
+      streamMode: "off",
+      runId: "run-race",
+      longTurnDeliveryState,
+    });
+    await finalReady;
+    await Promise.resolve();
+
+    expect(deliverReplies).not.toHaveBeenCalled();
+
+    longTurnDeliveryState.markDeferred();
+    await run;
+
+    expectDeliveredReply(0, { text: "Done after deferral" }, 0);
+  });
+
+  it("waits for the deferral notice before finalizing streamed deferred text", async () => {
+    const longTurnDeliveryState = createTelegramLongTurnDeliveryState({
+      runId: "run-stream-race",
+      agentId: "default",
+      accountId: "default",
+      sessionKey: "agent:test:telegram:direct:123",
+      chatId: "123",
+      threadId: 777,
+    });
+    longTurnDeliveryState.markDeferralPending();
+    let signalFinalReady: (() => void) | undefined;
+    const finalReady = new Promise<void>((resolve) => {
+      signalFinalReady = resolve;
+    });
+    const { answerDraftStream } = setupDraftStreams();
+    const finalText = "Done after deferral with enough text for an answer draft";
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+      signalFinalReady?.();
+      await dispatcherOptions.deliver({ text: finalText }, { kind: "final" });
+      return { queuedFinal: true };
+    });
+
+    const run = dispatchWithContext({
+      context: createContext({
+        ctxPayload: createDirectSessionPayload(),
+      }),
+      streamMode: "partial",
+      runId: "run-stream-race",
+      longTurnDeliveryState,
+    });
+    await finalReady;
+    await Promise.resolve();
+
+    expect(answerDraftStream.update).not.toHaveBeenCalled();
+
+    longTurnDeliveryState.markDeferred();
+    await run;
+
+    expect(answerDraftStream.update).toHaveBeenCalledWith(finalText);
+  });
+
+  it("does not deliver a deferred final after explicit supersede while waiting on deferral notice", async () => {
+    const longTurnDeliveryState = createTelegramLongTurnDeliveryState({
+      runId: "run-aborted",
+      agentId: "default",
+      accountId: "default",
+      sessionKey: "agent:test:telegram:direct:123",
+      chatId: "123",
+      threadId: 777,
+    });
+    longTurnDeliveryState.markDeferralPending();
+    let signalFinalReady: (() => void) | undefined;
+    const finalReady = new Promise<void>((resolve) => {
+      signalFinalReady = resolve;
+    });
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+      signalFinalReady?.();
+      await dispatcherOptions.deliver({ text: "Should not deliver" }, { kind: "final" });
+      return { queuedFinal: true };
+    });
+
+    const run = dispatchWithContext({
+      context: createContext({
+        ctxPayload: createDirectSessionPayload(),
+      }),
+      streamMode: "off",
+      runId: "run-aborted",
+      longTurnDeliveryState,
+    });
+    await finalReady;
+
+    expect(supersedeTelegramReplyFence("agent:test:telegram:direct:123")).toBe(true);
+    longTurnDeliveryState.markDeferred();
+    await run;
+
+    expect(deliverReplies).not.toHaveBeenCalled();
+  });
+
+  it("keeps deferred finals deliverable after a later normal message supersedes the lane", async () => {
+    const longTurnDeliveryState = createTelegramLongTurnDeliveryState({
+      runId: "run-old",
+      agentId: "default",
+      accountId: "default",
+      sessionKey: "agent:test:telegram:direct:123",
+      chatId: "123",
+      threadId: 777,
+    });
+    longTurnDeliveryState.markDeferralPending();
+    longTurnDeliveryState.markDeferred();
+    let releaseOldFinal: (() => void) | undefined;
+    let signalOldRunning: (() => void) | undefined;
+    const oldFinalGate = new Promise<void>((resolve) => {
+      releaseOldFinal = resolve;
+    });
+    const oldRunning = new Promise<void>((resolve) => {
+      signalOldRunning = resolve;
+    });
+    dispatchReplyWithBufferedBlockDispatcher
+      .mockImplementationOnce(async ({ dispatcherOptions }) => {
+        signalOldRunning?.();
+        await oldFinalGate;
+        await dispatcherOptions.deliver({ text: "Old deferred final" }, { kind: "final" });
+        return { queuedFinal: true };
+      })
+      .mockImplementationOnce(async ({ dispatcherOptions }) => {
+        await dispatcherOptions.deliver({ text: "New normal final" }, { kind: "final" });
+        return { queuedFinal: true };
+      });
+
+    const oldRun = dispatchWithContext({
+      context: createContext({
+        ctxPayload: {
+          ...createDirectSessionPayload(),
+          RawBody: "old long request",
+        } as TelegramMessageContext["ctxPayload"],
+      }),
+      streamMode: "off",
+      runId: "run-old",
+      longTurnDeliveryState,
+    });
+    await oldRunning;
+
+    const newRun = dispatchWithContext({
+      context: createContext({
+        ctxPayload: {
+          ...createDirectSessionPayload(),
+          RawBody: "new normal request",
+        } as TelegramMessageContext["ctxPayload"],
+      }),
+      streamMode: "off",
+      runId: "run-new",
+    });
+    await newRun;
+
+    releaseOldFinal?.();
+    await oldRun;
+
+    const deliveredTexts = deliverReplies.mock.calls.flatMap((call) =>
+      ((call[0] as { replies?: Array<{ text?: string }> }).replies ?? []).map(
+        (reply) => reply.text,
+      ),
+    );
+    expect(deliveredTexts).toContain("New normal final");
+    expect(deliveredTexts).toContain("Old deferred final");
+  });
+
+  it("reports deferred turns that finish without a final response", async () => {
+    const longTurnDeliveryState = createTelegramLongTurnDeliveryState({
+      runId: "run-empty",
+      agentId: "default",
+      accountId: "default",
+      sessionKey: "agent:test:telegram:direct:123",
+      chatId: "123",
+      threadId: 777,
+    });
+    longTurnDeliveryState.markDeferred();
+    dispatchReplyWithBufferedBlockDispatcher.mockResolvedValue({
+      queuedFinal: false,
+      counts: { block: 0, final: 0, tool: 0 },
+    });
+
+    await dispatchWithContext({
+      context: createContext({
+        ctxPayload: createDirectSessionPayload(),
+      }),
+      streamMode: "off",
+      runId: "run-empty",
+      longTurnDeliveryState,
+    });
+
+    const reply = expectDeliveredReply(0, {}, 0) as { text?: string };
+    expect(reply.text).toContain("The deferred run finished, but no final response was delivered.");
+    expect(reply.text).toContain("Run: run-empty");
+    expect(reply.text).toContain("Target: telegram:123/777");
+    expect(reply.text).not.toContain("No response generated");
+  });
+
+  it("completes deferred direct-chat silent finals without empty-response diagnostics", async () => {
+    const longTurnDeliveryState = createTelegramLongTurnDeliveryState({
+      runId: "run-silent",
+      agentId: "default",
+      accountId: "default",
+      sessionKey: "agent:test:telegram:direct:123",
+      chatId: "123",
+      threadId: 777,
+    });
+    longTurnDeliveryState.markDeferred();
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+      dispatcherOptions.onSkip?.({ text: "NO_REPLY" }, { kind: "final", reason: "silent" });
+      return {
+        queuedFinal: false,
+        counts: { block: 0, final: 0, tool: 0 },
+      };
+    });
+
+    await dispatchWithContext({
+      context: createContext({
+        ctxPayload: createDirectSessionPayload(),
+      }),
+      streamMode: "off",
+      runId: "run-silent",
+      longTurnDeliveryState,
+    });
+
+    const reply = expectDeliveredReply(0, {}, 0) as { text?: string };
+    expect(reply.text).toContain("The deferred run completed without sending a visible reply.");
+    expect(reply.text).toContain("Run: run-silent");
+    expect(reply.text).toContain("Target: telegram:123/777");
+    expect(reply.text).not.toContain("no final response was delivered");
+  });
+
+  it("does not report deferred empty-response diagnostics to groups", async () => {
+    const longTurnDeliveryState = createTelegramLongTurnDeliveryState({
+      runId: "run-empty-group",
+      agentId: "default",
+      accountId: "default",
+      sessionKey: "agent:test:telegram:group:-1001234",
+      chatId: "-1001234",
+      threadId: undefined,
+    });
+    longTurnDeliveryState.markDeferred();
+    dispatchReplyWithBufferedBlockDispatcher.mockResolvedValue({
+      queuedFinal: false,
+      counts: { block: 0, final: 0, tool: 0 },
+    });
+
+    await dispatchWithContext({
+      context: createContext({
+        chatId: -1001234,
+        isGroup: true,
+        ctxPayload: {
+          SessionKey: "agent:test:telegram:group:-1001234",
+          ChatType: "group",
+        } as TelegramMessageContext["ctxPayload"],
+        primaryCtx: {
+          message: { chat: { id: -1001234, type: "supergroup" } },
+        } as unknown as TelegramMessageContext["primaryCtx"],
+        msg: {
+          chat: { id: -1001234, type: "supergroup" },
+          message_id: 456,
+        } as unknown as TelegramMessageContext["msg"],
+        threadSpec: { id: undefined, scope: "none" },
+      }),
+      streamMode: "off",
+      runId: "run-empty-group",
+      longTurnDeliveryState,
     });
 
     expect(deliverReplies).not.toHaveBeenCalled();

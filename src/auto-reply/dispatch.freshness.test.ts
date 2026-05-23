@@ -21,6 +21,19 @@ vi.mock("./reply/dispatch-from-config.js", () => ({
 }));
 
 const { dispatchInboundMessageWithBufferedDispatcher } = await import("./dispatch.js");
+const INTERNAL_FOREGROUND_REPLY_FRESHNESS_POLICY_KEY = Symbol.for(
+  "openclaw.internal.foregroundReplyFreshnessPolicy",
+);
+
+type BufferedReplyOptions = NonNullable<
+  Parameters<typeof dispatchInboundMessageWithBufferedDispatcher>[0]["replyOptions"]
+>;
+
+type BufferedReplyOptionsWithInternalFreshness = BufferedReplyOptions & {
+  [INTERNAL_FOREGROUND_REPLY_FRESHNESS_POLICY_KEY]?: {
+    allowSupersededDelivery?: () => boolean;
+  };
+};
 
 type Delivery = {
   kind: "tool" | "block" | "final";
@@ -134,6 +147,63 @@ describe("foreground reply freshness", () => {
       counts: { tool: 0, block: 0, final: 0 },
     });
     expect(deliveries).toEqual([{ kind: "final", text: "new final" }]);
+  });
+
+  it("allows protected older foreground finals after a newer inbound event starts", async () => {
+    const deliveries: Delivery[] = [];
+    const olderStarted = createDeferred<void>();
+    const releaseOlderFinal = createDeferred<void>();
+
+    hoisted.dispatchReplyFromConfigMock.mockImplementation(
+      async (params: DispatchReplyFromConfigParams) => {
+        if (params.ctx.MessageSid === "old-message") {
+          olderStarted.resolve();
+          await releaseOlderFinal.promise;
+          params.dispatcher.sendFinalReply({ text: "old final" });
+          return queuedFinalResult();
+        }
+        if (params.ctx.MessageSid === "new-message") {
+          params.dispatcher.sendFinalReply({ text: "new final" });
+          return queuedFinalResult();
+        }
+        throw new Error(`unexpected test message ${params.ctx.MessageSid ?? "<missing>"}`);
+      },
+    );
+
+    const protectedReplyOptions = {
+      runId: "old-message",
+      [INTERNAL_FOREGROUND_REPLY_FRESHNESS_POLICY_KEY]: {
+        allowSupersededDelivery: () => true,
+      },
+    } satisfies BufferedReplyOptionsWithInternalFreshness;
+    const olderDispatch = dispatchInboundMessageWithBufferedDispatcher({
+      ctx: buildForegroundCtx({ MessageSid: "old-message" }),
+      cfg: {} as OpenClawConfig,
+      dispatcherOptions: {
+        deliver: async (payload: ReplyPayload, info: { kind: Delivery["kind"] }) => {
+          deliveries.push({ kind: info.kind, text: payload.text });
+        },
+      },
+      replyOptions: protectedReplyOptions,
+    });
+    await olderStarted.promise;
+
+    await expect(
+      dispatchWithDeliveries(buildForegroundCtx({ MessageSid: "new-message" }), deliveries),
+    ).resolves.toEqual({
+      queuedFinal: true,
+      counts: { tool: 0, block: 0, final: 1 },
+    });
+
+    releaseOlderFinal.resolve();
+    await expect(olderDispatch).resolves.toEqual({
+      queuedFinal: true,
+      counts: { tool: 0, block: 0, final: 1 },
+    });
+    expect(deliveries).toEqual([
+      { kind: "final", text: "new final" },
+      { kind: "final", text: "old final" },
+    ]);
   });
 
   it("keeps an older foreground final when a newer inbound has no visible delivery while beforeDeliver is pending", async () => {

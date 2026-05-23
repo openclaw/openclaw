@@ -119,6 +119,13 @@ import {
   type LaneDeliveryResult,
   type LaneName,
 } from "./lane-delivery.js";
+import {
+  buildTelegramDeferredRunEmptyResponseText,
+  buildTelegramDeferredRunFailureText,
+  buildTelegramDeferredRunSilentCompletionText,
+  formatTelegramDeferredRunTarget,
+  type TelegramLongTurnDeliveryState,
+} from "./long-turn-delivery.js";
 import { createNativeTelegramToolProgressDraft } from "./native-tool-progress-draft.js";
 import { recordOutboundMessageForPromptContext } from "./outbound-message-context.js";
 import {
@@ -135,10 +142,11 @@ import {
   endTelegramReplyFence,
   getTelegramReplyFenceSizeForTests,
   isTelegramReplyFenceSuperseded,
+  protectTelegramReplyFenceAbortControllerFromNormalSupersede,
   releaseTelegramReplyFenceAbortController,
   resetTelegramReplyFenceForTests,
+  resolveTelegramReplyFenceSupersedeMode,
   resolveTelegramReplyFenceKey,
-  shouldSupersedeTelegramReplyFence,
   supersedeTelegramReplyFence,
 } from "./telegram-reply-fence.js";
 
@@ -147,6 +155,19 @@ export { getTelegramReplyFenceSizeForTests, resetTelegramReplyFenceForTests };
 
 const EMPTY_RESPONSE_FALLBACK = "No response generated. Please try again.";
 const silentReplyDispatchLogger = createSubsystemLogger("telegram/silent-reply-dispatch");
+const INTERNAL_FOREGROUND_REPLY_FRESHNESS_POLICY_KEY = Symbol.for(
+  "openclaw.internal.foregroundReplyFreshnessPolicy",
+);
+
+type TelegramForegroundReplyFreshnessPolicy = {
+  allowSupersededDelivery?: () => boolean;
+};
+
+type TelegramReplyOptionsWithInternalFreshness = NonNullable<
+  Parameters<TelegramBotDeps["dispatchReplyWithBufferedBlockDispatcher"]>[0]["replyOptions"]
+> & {
+  [INTERNAL_FOREGROUND_REPLY_FRESHNESS_POLICY_KEY]?: TelegramForegroundReplyFreshnessPolicy;
+};
 
 /** Minimum chars before sending first streaming message (improves push notification UX) */
 const DRAFT_MIN_INITIAL_CHARS = 30;
@@ -245,6 +266,8 @@ type DispatchTelegramMessageParams = {
   telegramCfg: TelegramAccountConfig;
   telegramDeps?: TelegramBotDeps;
   opts: Pick<TelegramBotOptions, "token" | "mediaMaxMb">;
+  runId?: string;
+  longTurnDeliveryState?: TelegramLongTurnDeliveryState;
 };
 
 type TelegramReasoningLevel = "off" | "on" | "stream";
@@ -676,6 +699,8 @@ export const dispatchTelegramMessage = async ({
   telegramCfg,
   telegramDeps: injectedTelegramDeps,
   opts,
+  runId,
+  longTurnDeliveryState,
 }: DispatchTelegramMessageParams) => {
   const dispatchStartedAt = Date.now();
   const dispatchContext = resolveDispatchTelegramContext({ cfg, context });
@@ -703,6 +728,12 @@ export const dispatchTelegramMessage = async ({
     statusReactionController: rawStatusReactionController,
   } = dispatchContext;
   const isRoomEvent = ctxPayload.InboundEventKind === "room_event";
+  const deferredRunTarget = longTurnDeliveryState
+    ? formatTelegramDeferredRunTarget({
+        chatId,
+        threadId: threadSpec.id,
+      })
+    : undefined;
   const statusReactionController = isRoomEvent ? null : rawStatusReactionController;
   const statusReactionTiming = {
     ...DEFAULT_TIMING,
@@ -766,6 +797,7 @@ export const dispatchTelegramMessage = async ({
   let dispatchWasSuperseded = false;
   const isDispatchSuperseded = () =>
     replyFenceGeneration !== undefined &&
+    !(longTurnDeliveryState?.isDeferred() === true && !replyAbortController.signal.aborted) &&
     isTelegramReplyFenceSuperseded({
       key: activeReplyFenceKey,
       generation: replyFenceGeneration,
@@ -1199,7 +1231,8 @@ export const dispatchTelegramMessage = async ({
 
   const chunkMode = resolveChunkMode(cfg, "telegram", route.accountId);
 
-  const supersedeReplyFence = shouldSupersedeTelegramReplyFence(ctxPayload);
+  const supersedeReplyFenceMode = resolveTelegramReplyFenceSupersedeMode(ctxPayload);
+  const supersedeReplyFence = supersedeReplyFenceMode !== "none";
   activeReplyFenceKey = supersedeReplyFence
     ? replyFenceKey.activeKey
     : buildTelegramNonInterruptingReplyFenceKey({
@@ -1212,8 +1245,16 @@ export const dispatchTelegramMessage = async ({
   replyFenceGeneration = beginTelegramReplyFence({
     key: activeReplyFenceKey,
     supersede: supersedeReplyFence,
+    supersedeMode: supersedeReplyFenceMode === "abort" ? "abort" : "normal",
     abortController: replyAbortController,
     laneKey: scopedReplyFenceLaneKey,
+  });
+  longTurnDeliveryState?.setCanSendDeferralNotice(() => !isDispatchSuperseded());
+  longTurnDeliveryState?.onDeferralPending(() => {
+    protectTelegramReplyFenceAbortControllerFromNormalSupersede(
+      activeReplyFenceKey,
+      replyAbortController,
+    );
   });
 
   const implicitQuoteReplyTargetId =
@@ -1324,6 +1365,7 @@ export const dispatchTelegramMessage = async ({
   let queuedFinal = false;
   let suppressSilentReplyFallback = false;
   let hadErrorReplyFailureOrSkip = false;
+  let hadIntentionalSilentReplySkip = false;
   let isFirstTurnInSession = false;
   let dispatchError: unknown;
 
@@ -1419,6 +1461,15 @@ export const dispatchTelegramMessage = async ({
     ) => {
       if (isDispatchSuperseded()) {
         return false;
+      }
+      if (options?.durable) {
+        if (longTurnDeliveryState?.isDeferred() !== true) {
+          longTurnDeliveryState?.markFinalDeliveryStarted();
+        }
+        await longTurnDeliveryState?.waitForDeferralNotice();
+        if (isDispatchSuperseded()) {
+          return false;
+        }
       }
       const deliverablePayload = applyQuoteReplyTarget(payload);
       const silent = options?.silent ?? (silentErrorReplies && payload.isError === true);
@@ -1700,7 +1751,14 @@ export const dispatchTelegramMessage = async ({
                       answerPayload: ReplyPayload,
                       text: string,
                       buttons?: TelegramInlineButtons,
-                    ) => {
+                    ): Promise<LaneDeliveryResult> => {
+                      if (longTurnDeliveryState?.isDeferred() !== true) {
+                        longTurnDeliveryState?.markFinalDeliveryStarted();
+                      }
+                      await longTurnDeliveryState?.waitForDeferralNotice();
+                      if (isDispatchSuperseded()) {
+                        return { kind: "skipped" };
+                      }
                       const finalText = await resolveTranscriptBackedFinalText(text);
                       if (streamMode === "progress") {
                         return deliverProgressModeFinalAnswer(answerPayload, finalText);
@@ -1857,7 +1915,9 @@ export const dispatchTelegramMessage = async ({
                     if (payload.isError === true) {
                       hadErrorReplyFailureOrSkip = true;
                     }
-                    if (info.reason !== "silent") {
+                    if (info.reason === "silent") {
+                      hadIntentionalSilentReplySkip = true;
+                    } else {
                       deliveryState.markNonSilentSkip();
                     }
                   },
@@ -1889,6 +1949,16 @@ export const dispatchTelegramMessage = async ({
                   },
                 },
                 replyOptions: {
+                  runId,
+                  ...(longTurnDeliveryState
+                    ? {
+                        [INTERNAL_FOREGROUND_REPLY_FRESHNESS_POLICY_KEY]: {
+                          allowSupersededDelivery: () =>
+                            longTurnDeliveryState.isDeferred() &&
+                            !replyAbortController.signal.aborted,
+                        },
+                      }
+                    : {}),
                   skillFilter,
                   disableBlockStreaming,
                   abortSignal: replyAbortController.signal,
@@ -2061,7 +2131,7 @@ export const dispatchTelegramMessage = async ({
                       }
                     : undefined,
                   onModelSelected,
-                },
+                } satisfies TelegramReplyOptionsWithInternalFreshness,
               });
             },
           }),
@@ -2102,16 +2172,277 @@ export const dispatchTelegramMessage = async ({
     }
   } finally {
     dispatchWasSuperseded = isDispatchSuperseded();
-    releaseReplyFence();
+    if (!(longTurnDeliveryState?.isDeferred() === true && !dispatchWasSuperseded)) {
+      releaseReplyFence();
+    }
     endTelegramInboundEventDeliveryCorrelation();
   }
-  if (dispatchWasSuperseded) {
-    if (statusReactionController) {
-      void finalizeTelegramStatusReaction({ outcome: "done", hasFinalResponse: true }).catch(
+  try {
+    if (dispatchWasSuperseded) {
+      if (statusReactionController) {
+        void finalizeTelegramStatusReaction({ outcome: "done", hasFinalResponse: true }).catch(
+          (err: unknown) => {
+            logVerbose(`telegram: status reaction finalize failed: ${String(err)}`);
+          },
+        );
+      } else {
+        removeAckReactionAfterReply({
+          removeAfterReply: removeAckAfterReply,
+          ackReactionPromise,
+          ackReactionValue: ackReactionPromise ? "ack" : null,
+          remove: () =>
+            (reactionApi?.(chatId, msg.message_id ?? 0, []) ?? Promise.resolve()).then(() => {}),
+          onError: (err) => {
+            if (!msg.message_id) {
+              return;
+            }
+            logAckFailure({
+              log: logVerbose,
+              channel: "telegram",
+              target: `${chatId}/${msg.message_id}`,
+              error: err,
+            });
+          },
+        });
+      }
+      if (!isRoomEvent || deliveryState.snapshot().delivered) {
+        clearGroupHistory();
+      }
+      releaseReplyFence();
+      return;
+    }
+    let sentFallback = false;
+    let sentDeferredSilentCompletion = false;
+    const deliverySummary = deliveryState.snapshot();
+    const wasDeferredRun = longTurnDeliveryState?.isDeferred() === true;
+    const shouldSendFailureFallback =
+      !isRoomEvent &&
+      (dispatchError ||
+        (!deliverySummary.delivered &&
+          (deliverySummary.skippedNonSilent > 0 || deliverySummary.failedNonSilent > 0)));
+    if (shouldSendFailureFallback) {
+      const fallbackText = dispatchError
+        ? wasDeferredRun && deferredRunTarget && longTurnDeliveryState
+          ? buildTelegramDeferredRunFailureText({
+              runId: longTurnDeliveryState.runId,
+              agentId: longTurnDeliveryState.agentId,
+              sessionKey: longTurnDeliveryState.sessionKey,
+              target: deferredRunTarget,
+            })
+          : "Something went wrong while processing your request. Please try again."
+        : wasDeferredRun && !isGroup && deferredRunTarget && longTurnDeliveryState
+          ? buildTelegramDeferredRunEmptyResponseText({
+              runId: longTurnDeliveryState.runId,
+              agentId: longTurnDeliveryState.agentId,
+              sessionKey: longTurnDeliveryState.sessionKey,
+              target: deferredRunTarget,
+            })
+          : EMPTY_RESPONSE_FALLBACK;
+      if (longTurnDeliveryState?.isDeferred() !== true) {
+        longTurnDeliveryState?.markFinalDeliveryStarted();
+      }
+      await longTurnDeliveryState?.waitForDeferralNotice();
+      if (isDispatchSuperseded()) {
+        releaseReplyFence();
+        return;
+      }
+      const result = await (telegramDeps.deliverReplies ?? deliverReplies)({
+        replies: [{ text: fallbackText }],
+        ...deliveryBaseOptions,
+        silent: silentErrorReplies && (dispatchError != null || hadErrorReplyFailureOrSkip),
+        mediaLoader: telegramDeps.loadWebMedia,
+      });
+      sentFallback = result.delivered;
+    }
+
+    if (
+      !sentFallback &&
+      wasDeferredRun &&
+      hadIntentionalSilentReplySkip &&
+      deferredRunTarget &&
+      longTurnDeliveryState &&
+      !dispatchError &&
+      !deliverySummary.delivered &&
+      !suppressSilentReplyFallback &&
+      !queuedFinal &&
+      !isGroup &&
+      !isRoomEvent
+    ) {
+	      if (!longTurnDeliveryState.isDeferred()) {
+        longTurnDeliveryState.markFinalDeliveryStarted();
+      }
+      await longTurnDeliveryState.waitForDeferralNotice();
+      if (isDispatchSuperseded()) {
+        releaseReplyFence();
+        return;
+      }
+      const result = await (telegramDeps.deliverReplies ?? deliverReplies)({
+        replies: [
+          {
+            text: buildTelegramDeferredRunSilentCompletionText({
+              runId: longTurnDeliveryState.runId,
+              agentId: longTurnDeliveryState.agentId,
+              sessionKey: longTurnDeliveryState.sessionKey,
+              target: deferredRunTarget,
+            }),
+          },
+        ],
+        ...deliveryBaseOptions,
+        silent: false,
+        mediaLoader: telegramDeps.loadWebMedia,
+      });
+      sentFallback = result.delivered;
+      sentDeferredSilentCompletion = result.delivered;
+    }
+
+    if (
+      !sentFallback &&
+      wasDeferredRun &&
+      deferredRunTarget &&
+      longTurnDeliveryState &&
+      !dispatchError &&
+      !deliverySummary.delivered &&
+      !suppressSilentReplyFallback &&
+      !hadIntentionalSilentReplySkip &&
+      !queuedFinal &&
+      !isGroup &&
+      !isRoomEvent
+    ) {
+	      if (!longTurnDeliveryState.isDeferred()) {
+        longTurnDeliveryState.markFinalDeliveryStarted();
+      }
+      await longTurnDeliveryState.waitForDeferralNotice();
+      if (isDispatchSuperseded()) {
+        releaseReplyFence();
+        return;
+      }
+      const result = await (telegramDeps.deliverReplies ?? deliverReplies)({
+        replies: [
+          {
+            text: buildTelegramDeferredRunEmptyResponseText({
+              runId: longTurnDeliveryState.runId,
+              agentId: longTurnDeliveryState.agentId,
+              sessionKey: longTurnDeliveryState.sessionKey,
+              target: deferredRunTarget,
+            }),
+          },
+        ],
+        ...deliveryBaseOptions,
+        silent: false,
+        mediaLoader: telegramDeps.loadWebMedia,
+      });
+      sentFallback = result.delivered;
+    }
+
+    if (
+      !sentFallback &&
+      !dispatchError &&
+      !deliverySummary.delivered &&
+      !suppressSilentReplyFallback &&
+      !queuedFinal &&
+      isGroup
+    ) {
+      const policySessionKey =
+        ctxPayload.CommandSource === "native"
+          ? (ctxPayload.CommandTargetSessionKey ?? ctxPayload.SessionKey)
+          : ctxPayload.SessionKey;
+      const silentReplyFallback = projectOutboundPayloadPlanForDelivery(
+        createOutboundPayloadPlan([{ text: "NO_REPLY" }], {
+          cfg,
+          sessionKey: policySessionKey,
+          surface: "telegram",
+        }),
+      );
+      if (silentReplyFallback.length > 0) {
+        const result = await (telegramDeps.deliverReplies ?? deliverReplies)({
+          replies: silentReplyFallback,
+          ...deliveryBaseOptions,
+          silent: false,
+          mediaLoader: telegramDeps.loadWebMedia,
+        });
+        sentFallback = result.delivered;
+      }
+      silentReplyDispatchLogger.debug("telegram turn ended without visible final response", {
+        hasSessionKey: Boolean(policySessionKey),
+        hasChatId: chatId != null,
+        queuedFinal,
+        sentFallback,
+      });
+    }
+
+    const hasFinalResponse =
+      deliverySummary.delivered || sentFallback || suppressSilentReplyFallback || queuedFinal;
+
+    if (statusReactionController && !hasFinalResponse) {
+      void finalizeTelegramStatusReaction({ outcome: "error", hasFinalResponse: false }).catch(
         (err: unknown) => {
-          logVerbose(`telegram: status reaction finalize failed: ${String(err)}`);
+          logVerbose(`telegram: status reaction error finalize failed: ${String(err)}`);
         },
       );
+    }
+
+    const shouldClearGroupHistory =
+      !isRoomEvent || deliverySummary.delivered || sentFallback || queuedFinal;
+
+    if (!hasFinalResponse) {
+      if (!shouldClearGroupHistory) {
+        releaseReplyFence();
+        return;
+      }
+      clearGroupHistory();
+      releaseReplyFence();
+      return;
+    }
+
+    // Fire-and-forget: auto-rename DM topic on first message.
+    if (isDmTopic && isFirstTurnInSession) {
+      const userMessage = (ctxPayload.RawBody ?? ctxPayload.Body ?? "").slice(0, 500);
+      if (userMessage.trim()) {
+        const agentDir = resolveAgentDir(cfg, route.agentId);
+        const directAutoTopicLabel =
+          !isGroup && groupConfig && "autoTopicLabel" in groupConfig
+            ? groupConfig.autoTopicLabel
+            : undefined;
+        const accountAutoTopicLabel = telegramCfg?.autoTopicLabel;
+        const autoTopicConfig = resolveAutoTopicLabelConfig(
+          directAutoTopicLabel,
+          accountAutoTopicLabel,
+        );
+        if (autoTopicConfig) {
+          const topicThreadId = threadSpec.id!;
+          void (async () => {
+            try {
+              const label = await generateTopicLabel({
+                userMessage,
+                prompt: autoTopicConfig.prompt,
+                cfg,
+                agentId: route.agentId,
+                agentDir,
+              });
+              if (!label) {
+                logVerbose("auto-topic-label: LLM returned empty label");
+                return;
+              }
+              logVerbose(`auto-topic-label: generated label (len=${label.length})`);
+              await bot.api.editForumTopic(chatId, topicThreadId, { name: label });
+              logVerbose(`auto-topic-label: renamed topic ${chatId}/${topicThreadId}`);
+            } catch (err) {
+              logVerbose(`auto-topic-label: failed: ${formatErrorMessage(err)}`);
+            }
+          })();
+        }
+      }
+    }
+
+    if (statusReactionController) {
+      const statusReactionOutcome =
+        dispatchError || (sentFallback && !sentDeferredSilentCompletion) ? "error" : "done";
+      void finalizeTelegramStatusReaction({
+        outcome: statusReactionOutcome,
+        hasFinalResponse: true,
+      }).catch((err: unknown) => {
+        logVerbose(`telegram: status reaction finalize failed: ${String(err)}`);
+      });
     } else {
       removeAckReactionAfterReply({
         removeAfterReply: removeAckAfterReply,
@@ -2132,158 +2463,10 @@ export const dispatchTelegramMessage = async ({
         },
       });
     }
-    if (!isRoomEvent || deliveryState.snapshot().delivered) {
+    if (shouldClearGroupHistory) {
       clearGroupHistory();
     }
-    return;
-  }
-  let sentFallback = false;
-  const deliverySummary = deliveryState.snapshot();
-  const shouldSendFailureFallback =
-    !isRoomEvent &&
-    (dispatchError ||
-      (!deliverySummary.delivered &&
-        (deliverySummary.skippedNonSilent > 0 || deliverySummary.failedNonSilent > 0)));
-  if (shouldSendFailureFallback) {
-    const fallbackText = dispatchError
-      ? "Something went wrong while processing your request. Please try again."
-      : EMPTY_RESPONSE_FALLBACK;
-    const result = await (telegramDeps.deliverReplies ?? deliverReplies)({
-      replies: [{ text: fallbackText }],
-      ...deliveryBaseOptions,
-      silent: silentErrorReplies && (dispatchError != null || hadErrorReplyFailureOrSkip),
-      mediaLoader: telegramDeps.loadWebMedia,
-    });
-    sentFallback = result.delivered;
-  }
-
-  if (
-    !sentFallback &&
-    !dispatchError &&
-    !deliverySummary.delivered &&
-    !suppressSilentReplyFallback &&
-    !queuedFinal &&
-    isGroup
-  ) {
-    const policySessionKey =
-      ctxPayload.CommandSource === "native"
-        ? (ctxPayload.CommandTargetSessionKey ?? ctxPayload.SessionKey)
-        : ctxPayload.SessionKey;
-    const silentReplyFallback = projectOutboundPayloadPlanForDelivery(
-      createOutboundPayloadPlan([{ text: "NO_REPLY" }], {
-        cfg,
-        sessionKey: policySessionKey,
-        surface: "telegram",
-      }),
-    );
-    if (silentReplyFallback.length > 0) {
-      const result = await (telegramDeps.deliverReplies ?? deliverReplies)({
-        replies: silentReplyFallback,
-        ...deliveryBaseOptions,
-        silent: false,
-        mediaLoader: telegramDeps.loadWebMedia,
-      });
-      sentFallback = result.delivered;
-    }
-    silentReplyDispatchLogger.debug("telegram turn ended without visible final response", {
-      hasSessionKey: Boolean(policySessionKey),
-      hasChatId: chatId != null,
-      queuedFinal,
-      sentFallback,
-    });
-  }
-
-  const hasFinalResponse =
-    deliverySummary.delivered || sentFallback || suppressSilentReplyFallback || queuedFinal;
-
-  if (statusReactionController && !hasFinalResponse) {
-    void finalizeTelegramStatusReaction({ outcome: "error", hasFinalResponse: false }).catch(
-      (err: unknown) => {
-        logVerbose(`telegram: status reaction error finalize failed: ${String(err)}`);
-      },
-    );
-  }
-
-  const shouldClearGroupHistory =
-    !isRoomEvent || deliverySummary.delivered || sentFallback || queuedFinal;
-
-  if (!hasFinalResponse) {
-    if (!shouldClearGroupHistory) {
-      return;
-    }
-    clearGroupHistory();
-    return;
-  }
-
-  // Fire-and-forget: auto-rename DM topic on first message.
-  if (isDmTopic && isFirstTurnInSession) {
-    const userMessage = (ctxPayload.RawBody ?? ctxPayload.Body ?? "").slice(0, 500);
-    if (userMessage.trim()) {
-      const agentDir = resolveAgentDir(cfg, route.agentId);
-      const directAutoTopicLabel =
-        !isGroup && groupConfig && "autoTopicLabel" in groupConfig
-          ? groupConfig.autoTopicLabel
-          : undefined;
-      const accountAutoTopicLabel = telegramCfg?.autoTopicLabel;
-      const autoTopicConfig = resolveAutoTopicLabelConfig(
-        directAutoTopicLabel,
-        accountAutoTopicLabel,
-      );
-      if (autoTopicConfig) {
-        const topicThreadId = threadSpec.id!;
-        void (async () => {
-          try {
-            const label = await generateTopicLabel({
-              userMessage,
-              prompt: autoTopicConfig.prompt,
-              cfg,
-              agentId: route.agentId,
-              agentDir,
-            });
-            if (!label) {
-              logVerbose("auto-topic-label: LLM returned empty label");
-              return;
-            }
-            logVerbose(`auto-topic-label: generated label (len=${label.length})`);
-            await bot.api.editForumTopic(chatId, topicThreadId, { name: label });
-            logVerbose(`auto-topic-label: renamed topic ${chatId}/${topicThreadId}`);
-          } catch (err) {
-            logVerbose(`auto-topic-label: failed: ${formatErrorMessage(err)}`);
-          }
-        })();
-      }
-    }
-  }
-
-  if (statusReactionController) {
-    const statusReactionOutcome = dispatchError || sentFallback ? "error" : "done";
-    void finalizeTelegramStatusReaction({
-      outcome: statusReactionOutcome,
-      hasFinalResponse: true,
-    }).catch((err: unknown) => {
-      logVerbose(`telegram: status reaction finalize failed: ${String(err)}`);
-    });
-  } else {
-    removeAckReactionAfterReply({
-      removeAfterReply: removeAckAfterReply,
-      ackReactionPromise,
-      ackReactionValue: ackReactionPromise ? "ack" : null,
-      remove: () =>
-        (reactionApi?.(chatId, msg.message_id ?? 0, []) ?? Promise.resolve()).then(() => {}),
-      onError: (err) => {
-        if (!msg.message_id) {
-          return;
-        }
-        logAckFailure({
-          log: logVerbose,
-          channel: "telegram",
-          target: `${chatId}/${msg.message_id}`,
-          error: err,
-        });
-      },
-    });
-  }
-  if (shouldClearGroupHistory) {
-    clearGroupHistory();
+  } finally {
+    releaseReplyFence();
   }
 };

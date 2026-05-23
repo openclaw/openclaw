@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   beginTelegramReplyFence,
   buildTelegramNonInterruptingReplyFenceKey,
+  protectTelegramReplyFenceAbortControllerFromNormalSupersede,
   resetTelegramReplyFenceForTests,
   shouldSupersedeTelegramReplyFence,
   supersedeTelegramReplyFence,
@@ -132,6 +133,66 @@ describe("telegram reply fence supersede", () => {
     expect(supersedeTelegramReplyFence(activeKey)).toBe(true);
     expect(mainController.signal.aborted).toBe(true);
     expect(sideController.signal.aborted).toBe(true);
+    resetTelegramReplyFenceForTests();
+  });
+
+  it("protects deferred controllers from normal supersede but not explicit aborts", () => {
+    resetTelegramReplyFenceForTests();
+    const activeKey = "agent:main:telegram:direct:123";
+    const deferredController = new AbortController();
+    const nextController = new AbortController();
+    beginTelegramReplyFence({
+      key: activeKey,
+      supersede: true,
+      abortController: deferredController,
+    });
+    protectTelegramReplyFenceAbortControllerFromNormalSupersede(activeKey, deferredController);
+
+    beginTelegramReplyFence({
+      key: activeKey,
+      supersede: true,
+      supersedeMode: "normal",
+      abortController: nextController,
+    });
+
+    expect(deferredController.signal.aborted).toBe(false);
+    expect(nextController.signal.aborted).toBe(false);
+
+    expect(supersedeTelegramReplyFence(activeKey)).toBe(true);
+    expect(deferredController.signal.aborted).toBe(true);
+    expect(nextController.signal.aborted).toBe(true);
+    resetTelegramReplyFenceForTests();
+  });
+
+  it("protects deferred child controllers from normal base supersede", () => {
+    resetTelegramReplyFenceForTests();
+    const activeKey = "agent:main:telegram:group:-100123";
+    const childKey = buildTelegramNonInterruptingReplyFenceKey({
+      activeKey,
+      laneKey: "default\0telegram:-100123:btw:100",
+    });
+    const deferredController = new AbortController();
+    const nextController = new AbortController();
+    beginTelegramReplyFence({
+      key: childKey,
+      supersede: false,
+      abortController: deferredController,
+    });
+    protectTelegramReplyFenceAbortControllerFromNormalSupersede(childKey, deferredController);
+
+    beginTelegramReplyFence({
+      key: activeKey,
+      supersede: true,
+      supersedeMode: "normal",
+      abortController: nextController,
+    });
+
+    expect(deferredController.signal.aborted).toBe(false);
+    expect(nextController.signal.aborted).toBe(false);
+
+    expect(supersedeTelegramReplyFence(activeKey)).toBe(true);
+    expect(deferredController.signal.aborted).toBe(true);
+    expect(nextController.signal.aborted).toBe(true);
     resetTelegramReplyFenceForTests();
   });
 });

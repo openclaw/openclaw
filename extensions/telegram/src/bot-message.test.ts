@@ -1,5 +1,6 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { TelegramBotDeps } from "./bot-deps.js";
+import { TELEGRAM_LONG_TURN_SOFT_DEADLINE_MS } from "./long-turn-delivery.js";
 
 const buildTelegramMessageContext = vi.hoisted(() => vi.fn());
 const dispatchTelegramMessage = vi.hoisted(() => vi.fn());
@@ -38,7 +39,7 @@ describe("telegram bot message processor", () => {
 
   beforeEach(() => {
     buildTelegramMessageContext.mockClear();
-    dispatchTelegramMessage.mockClear();
+    dispatchTelegramMessage.mockReset();
     telegramInboundInfo.mockClear();
     upsertChannelPairingRequest.mockClear();
   });
@@ -141,6 +142,246 @@ describe("telegram bot message processor", () => {
     expect(telegramInboundInfo).toHaveBeenCalledWith(
       "Inbound message telegram:123 -> @openclaw_bot (direct, 11 chars)",
     );
+  });
+
+  it("defers long-running message turns after the soft deadline", async () => {
+    vi.useFakeTimers();
+    const sendMessage = vi.fn().mockResolvedValue(undefined);
+    let resolveDispatch: (() => void) | undefined;
+    buildTelegramMessageContext.mockResolvedValue(
+      createMessageContext({
+        threadSpec: { id: 456, scope: "forum" },
+      }),
+    );
+    dispatchTelegramMessage.mockReturnValue(
+      new Promise<void>((resolve) => {
+        resolveDispatch = resolve;
+      }),
+    );
+    const processMessage = createTelegramMessageProcessor({
+      ...baseDeps,
+      bot: { api: { sendMessage } },
+    } as unknown as Parameters<typeof createTelegramMessageProcessor>[0]);
+
+    try {
+      const processPromise = processSampleMessage(processMessage);
+      await vi.advanceTimersByTimeAsync(TELEGRAM_LONG_TURN_SOFT_DEADLINE_MS - 1);
+      expect(sendMessage).not.toHaveBeenCalled();
+
+      await vi.advanceTimersByTimeAsync(1);
+      await expect(processPromise).resolves.toBe(true);
+
+      const dispatchParams = dispatchTelegramMessage.mock.calls[0]?.[0] as
+        | {
+            runId?: string;
+            longTurnDeliveryState?: { runId: string; isDeferred: () => boolean };
+          }
+        | undefined;
+      const runId = dispatchParams?.runId;
+      expect(runId).toEqual(expect.any(String));
+      expect(dispatchParams?.longTurnDeliveryState?.runId).toBe(runId);
+      expect(dispatchParams?.longTurnDeliveryState?.isDeferred()).toBe(true);
+      expect(sendMessage).toHaveBeenCalledWith(
+        123,
+        `Still working on this. I will reply here when the run completes.\n\nRun: ${runId}`,
+        { message_thread_id: 456 },
+      );
+
+      resolveDispatch?.();
+      await Promise.resolve();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not send a deferral notice when final delivery already started", async () => {
+    vi.useFakeTimers();
+    const sendMessage = vi.fn().mockResolvedValue(undefined);
+    let resolveDispatch: (() => void) | undefined;
+    let processResolved = false;
+    buildTelegramMessageContext.mockResolvedValue(
+      createMessageContext({
+        threadSpec: { id: 456, scope: "forum" },
+      }),
+    );
+    dispatchTelegramMessage.mockImplementation((params) => {
+      (
+        params as {
+          longTurnDeliveryState?: { markFinalDeliveryStarted: () => void };
+        }
+      ).longTurnDeliveryState?.markFinalDeliveryStarted();
+      return new Promise<void>((resolve) => {
+        resolveDispatch = resolve;
+      });
+    });
+    const processMessage = createTelegramMessageProcessor({
+      ...baseDeps,
+      bot: { api: { sendMessage } },
+    } as unknown as Parameters<typeof createTelegramMessageProcessor>[0]);
+
+    try {
+      const processPromise = processSampleMessage(processMessage).then((result) => {
+        processResolved = true;
+        return result;
+      });
+      await vi.advanceTimersByTimeAsync(TELEGRAM_LONG_TURN_SOFT_DEADLINE_MS);
+
+      expect(sendMessage).not.toHaveBeenCalled();
+      expect(processResolved).toBe(false);
+
+      resolveDispatch?.();
+      await expect(processPromise).resolves.toBe(true);
+      expect(sendMessage).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not send a deferral notice when dispatch is no longer deliverable", async () => {
+    vi.useFakeTimers();
+    const sendMessage = vi.fn().mockResolvedValue(undefined);
+    let resolveDispatch: (() => void) | undefined;
+    let processResolved = false;
+    buildTelegramMessageContext.mockResolvedValue(
+      createMessageContext({
+        threadSpec: { id: 456, scope: "forum" },
+      }),
+    );
+    dispatchTelegramMessage.mockImplementation((params) => {
+      (
+        params as {
+          longTurnDeliveryState?: { setCanSendDeferralNotice: (check: () => boolean) => void };
+        }
+      ).longTurnDeliveryState?.setCanSendDeferralNotice(() => false);
+      return new Promise<void>((resolve) => {
+        resolveDispatch = resolve;
+      });
+    });
+    const processMessage = createTelegramMessageProcessor({
+      ...baseDeps,
+      bot: { api: { sendMessage } },
+    } as unknown as Parameters<typeof createTelegramMessageProcessor>[0]);
+
+    try {
+      const processPromise = processSampleMessage(processMessage).then((result) => {
+        processResolved = true;
+        return result;
+      });
+      await vi.advanceTimersByTimeAsync(TELEGRAM_LONG_TURN_SOFT_DEADLINE_MS);
+
+      expect(sendMessage).not.toHaveBeenCalled();
+      expect(processResolved).toBe(false);
+
+      resolveDispatch?.();
+      await expect(processPromise).resolves.toBe(true);
+      expect(sendMessage).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not defer group turns before visible reply eligibility is known", async () => {
+    vi.useFakeTimers();
+    const sendMessage = vi.fn().mockResolvedValue(undefined);
+    let resolveDispatch: (() => void) | undefined;
+    let processResolved = false;
+    buildTelegramMessageContext.mockResolvedValue(
+      createMessageContext({
+        isGroup: true,
+        threadSpec: { id: undefined, scope: "none" },
+        ctxPayload: {
+          From: "telegram:group:-100",
+          To: "@openclaw_bot",
+          ChatType: "group",
+          RawBody: "@bot think for a while",
+        },
+      }),
+    );
+    dispatchTelegramMessage.mockReturnValue(
+      new Promise<void>((resolve) => {
+        resolveDispatch = resolve;
+      }),
+    );
+    const processMessage = createTelegramMessageProcessor({
+      ...baseDeps,
+      bot: { api: { sendMessage } },
+    } as unknown as Parameters<typeof createTelegramMessageProcessor>[0]);
+
+    try {
+      const processPromise = processSampleMessage(processMessage).then((result) => {
+        processResolved = true;
+        return result;
+      });
+      await vi.advanceTimersByTimeAsync(TELEGRAM_LONG_TURN_SOFT_DEADLINE_MS);
+
+      expect(sendMessage).not.toHaveBeenCalled();
+      expect(processResolved).toBe(false);
+
+      resolveDispatch?.();
+      await expect(processPromise).resolves.toBe(true);
+      expect(sendMessage).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("reports deferred background dispatch failures with run context", async () => {
+    vi.useFakeTimers();
+    let resolveFailureSend: (() => void) | undefined;
+    const failureSent = new Promise<void>((resolve) => {
+      resolveFailureSend = resolve;
+    });
+    const sendMessage = vi.fn(async (_chatId: number, _text: string, _options?: unknown) => {
+      if (sendMessage.mock.calls.length === 2) {
+        resolveFailureSend?.();
+      }
+    });
+    let rejectDispatch: ((error: unknown) => void) | undefined;
+    buildTelegramMessageContext.mockResolvedValue(
+      createMessageContext({
+        threadSpec: { id: 456, scope: "forum" },
+      }),
+    );
+    dispatchTelegramMessage.mockReturnValue(
+      new Promise<void>((_resolve, reject) => {
+        rejectDispatch = reject;
+      }),
+    );
+    const runtimeError = vi.fn();
+    const processMessage = createTelegramMessageProcessor({
+      ...baseDeps,
+      bot: { api: { sendMessage } },
+      runtime: { error: runtimeError },
+    } as unknown as Parameters<typeof createTelegramMessageProcessor>[0]);
+
+    try {
+      const processPromise = processSampleMessage(processMessage);
+      await vi.advanceTimersByTimeAsync(TELEGRAM_LONG_TURN_SOFT_DEADLINE_MS);
+      await expect(processPromise).resolves.toBe(true);
+
+      const dispatchParams = dispatchTelegramMessage.mock.calls[0]?.[0] as
+        | { runId?: string }
+        | undefined;
+      const runId = dispatchParams?.runId;
+      expect(sendMessage).toHaveBeenCalledTimes(1);
+
+      rejectDispatch?.(new Error("provider down"));
+      await failureSent;
+
+      expect(sendMessage).toHaveBeenCalledTimes(2);
+      expect(sendMessage.mock.calls[1]?.[1]).toContain(
+        "The deferred run did not complete successfully.",
+      );
+      expect(sendMessage.mock.calls[1]?.[1]).toContain(`Run: ${runId}`);
+      expect(sendMessage.mock.calls[1]?.[1]).not.toContain("provider down");
+      expect(sendMessage.mock.calls[1]?.[1]).not.toContain("Something went wrong");
+      expect(sendMessage.mock.calls[1]?.[2]).toEqual({ message_thread_id: 456 });
+      expect(runtimeError).toHaveBeenCalledWith(
+        "telegram deferred dispatch failed: Error: provider down",
+      );
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("runs the dispatch-start lifecycle after context creation and before dispatch", async () => {

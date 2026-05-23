@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import type { ReplyToMode } from "openclaw/plugin-sdk/config-contracts";
 import type { TelegramAccountConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
@@ -19,6 +20,13 @@ import { dispatchTelegramMessage } from "./bot-message-dispatch.js";
 import type { TelegramBotOptions } from "./bot.types.js";
 import { buildTelegramThreadParams } from "./bot/helpers.js";
 import type { TelegramContext, TelegramStreamMode } from "./bot/types.js";
+import {
+  buildTelegramDeferredRunFailureText,
+  buildTelegramLongTurnDeferralText,
+  createTelegramLongTurnDeliveryState,
+  formatTelegramDeferredRunTarget,
+  TELEGRAM_LONG_TURN_SOFT_DEADLINE_MS,
+} from "./long-turn-delivery.js";
 import type { TelegramReplyChainEntry } from "./message-cache.js";
 
 const telegramInboundLog = createSubsystemLogger("gateway/channels/telegram").child("inbound");
@@ -50,6 +58,8 @@ type TelegramMessageProcessorDeps = Omit<
 export type TelegramMessageProcessorLifecycle = {
   onDispatchStart?: () => Promise<void> | void;
 };
+
+type TelegramDispatchOutcome = { status: "completed" } | { status: "failed"; error: unknown };
 
 export const createTelegramMessageProcessor = (deps: TelegramMessageProcessorDeps) => {
   const {
@@ -178,18 +188,101 @@ export const createTelegramMessageProcessor = (deps: TelegramMessageProcessorDep
     );
     await lifecycle?.onDispatchStart?.();
     try {
-      await dispatchTelegramMessage({
-        context,
-        bot,
-        cfg,
-        runtime,
-        replyToMode,
-        streamMode,
-        textLimit,
-        telegramCfg,
-        telegramDeps,
-        opts,
+      const longTurnDeliveryState = createTelegramLongTurnDeliveryState({
+        runId: randomUUID(),
+        agentId: context.route.agentId,
+        accountId: context.route.accountId,
+        sessionKey: context.ctxPayload.SessionKey,
+        chatId: String(context.chatId),
+        threadId: context.threadSpec?.id,
       });
+      const dispatchPromise = Promise.resolve().then(() =>
+        dispatchTelegramMessage({
+          context,
+          bot,
+          cfg,
+          runtime,
+          replyToMode,
+          streamMode,
+          textLimit,
+          telegramCfg,
+          telegramDeps,
+          opts,
+          runId: longTurnDeliveryState.runId,
+          longTurnDeliveryState,
+        }),
+      );
+      const dispatchOutcome: Promise<TelegramDispatchOutcome> = dispatchPromise.then(
+        () => ({ status: "completed" }),
+        (error: unknown) => ({ status: "failed", error }),
+      );
+      const canDefer = context.ctxPayload.InboundEventKind !== "room_event" && !context.isGroup;
+      let softDeadlineTimer: ReturnType<typeof setTimeout> | undefined;
+      const softDeadline = canDefer
+        ? new Promise<"soft-deadline">((resolve) => {
+            softDeadlineTimer = setTimeout(
+              () => resolve("soft-deadline"),
+              TELEGRAM_LONG_TURN_SOFT_DEADLINE_MS,
+            );
+          })
+        : undefined;
+      const firstOutcome = softDeadline
+        ? await Promise.race([dispatchOutcome, softDeadline])
+        : await dispatchOutcome;
+      if (softDeadlineTimer) {
+        clearTimeout(softDeadlineTimer);
+      }
+      if (firstOutcome === "soft-deadline") {
+        if (
+          longTurnDeliveryState.hasFinalDeliveryStarted() ||
+          !longTurnDeliveryState.canSendDeferralNotice()
+        ) {
+          const finalOutcome = await dispatchOutcome;
+          if (finalOutcome.status === "failed") {
+            throw finalOutcome.error;
+          }
+          return true;
+        }
+        longTurnDeliveryState.markDeferralPending();
+        const target = formatTelegramDeferredRunTarget({
+          chatId: context.chatId,
+          threadId: context.threadSpec?.id,
+        });
+        void dispatchOutcome.then(async (outcome) => {
+          if (outcome.status === "completed") {
+            return;
+          }
+          await longTurnDeliveryState.waitForDeferralNotice();
+          runtime.error?.(danger(`telegram deferred dispatch failed: ${String(outcome.error)}`));
+          try {
+            await bot.api.sendMessage(
+              context.chatId,
+              buildTelegramDeferredRunFailureText({
+                runId: longTurnDeliveryState.runId,
+                agentId: longTurnDeliveryState.agentId,
+                sessionKey: longTurnDeliveryState.sessionKey,
+                target,
+              }),
+              buildTelegramThreadParams(context.threadSpec),
+            );
+          } catch {}
+        });
+        try {
+          await bot.api.sendMessage(
+            context.chatId,
+            buildTelegramLongTurnDeferralText({ runId: longTurnDeliveryState.runId }),
+            buildTelegramThreadParams(context.threadSpec),
+          );
+        } catch (err) {
+          runtime.error?.(danger(`telegram long-turn deferral failed: ${String(err)}`));
+        } finally {
+          longTurnDeliveryState.markDeferred();
+        }
+        return true;
+      }
+      if (firstOutcome.status === "failed") {
+        throw firstOutcome.error;
+      }
       if (ingressDebugEnabled && ingressReceivedAtMs) {
         logVerbose(
           `telegram ingress: chatId=${context.chatId} dispatchCompleteMs=${Date.now() - ingressReceivedAtMs}` +

@@ -48,6 +48,17 @@ type ForegroundReplyFenceSnapshot = {
 };
 
 const foregroundReplyFenceByKey = new Map<string, ForegroundReplyFenceState>();
+const INTERNAL_FOREGROUND_REPLY_FRESHNESS_POLICY_KEY = Symbol.for(
+  "openclaw.internal.foregroundReplyFreshnessPolicy",
+);
+
+type ForegroundReplyFreshnessPolicy = {
+  allowSupersededDelivery?: () => boolean;
+};
+
+type ReplyOptionsWithInternalForegroundFreshness = Omit<GetReplyOptions, "onBlockReply"> & {
+  [INTERNAL_FOREGROUND_REPLY_FRESHNESS_POLICY_KEY]?: ForegroundReplyFreshnessPolicy;
+};
 
 function normalizeForegroundReplyFencePart(value: unknown): string | undefined {
   if (typeof value !== "string") {
@@ -231,6 +242,34 @@ async function runForegroundReplyFenceSettledDelivery(
     }
     throw err;
   }
+}
+
+function allowsSupersededForegroundDelivery(
+  policy: ForegroundReplyFreshnessPolicy | undefined,
+): boolean {
+  try {
+    return policy?.allowSupersededDelivery?.() === true;
+  } catch {
+    return false;
+  }
+}
+
+function resolveForegroundReplyFreshnessPolicy(
+  replyOptions: Omit<GetReplyOptions, "onBlockReply"> | undefined,
+): ForegroundReplyFreshnessPolicy | undefined {
+  return (replyOptions as ReplyOptionsWithInternalForegroundFreshness | undefined)?.[
+    INTERNAL_FOREGROUND_REPLY_FRESHNESS_POLICY_KEY
+  ];
+}
+
+async function shouldCancelForegroundDelivery(params: {
+  snapshot: ForegroundReplyFenceSnapshot | undefined;
+  policy: ForegroundReplyFreshnessPolicy | undefined;
+}): Promise<boolean> {
+  if (allowsSupersededForegroundDelivery(params.policy)) {
+    return false;
+  }
+  return await shouldCancelForegroundReplyDelivery(params.snapshot);
 }
 
 function endForegroundReplyFence(snapshot: ForegroundReplyFenceSnapshot): void {
@@ -439,7 +478,12 @@ export async function dispatchInboundMessageWithBufferedDispatcher(params: {
   const beforeDeliver: ReplyDispatchBeforeDeliver | undefined =
     foregroundReplyFence || configuredBeforeDeliver
       ? async (payload, info) => {
-          if (await shouldCancelForegroundReplyDelivery(foregroundReplyFence)) {
+          if (
+            await shouldCancelForegroundDelivery({
+              snapshot: foregroundReplyFence,
+              policy: resolveForegroundReplyFreshnessPolicy(params.replyOptions),
+            })
+          ) {
             return null;
           }
           const deliverPayload = configuredBeforeDeliver
@@ -447,7 +491,10 @@ export async function dispatchInboundMessageWithBufferedDispatcher(params: {
             : payload;
           if (
             !deliverPayload ||
-            (await shouldCancelForegroundReplyDelivery(foregroundReplyFence))
+            (await shouldCancelForegroundDelivery({
+              snapshot: foregroundReplyFence,
+              policy: resolveForegroundReplyFreshnessPolicy(params.replyOptions),
+            }))
           ) {
             return null;
           }
