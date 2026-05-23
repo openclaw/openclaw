@@ -1,10 +1,8 @@
-import {
-  parseExplicitTargetForLoadedChannel,
-  type ParsedChannelExplicitTarget,
-} from "../../channels/plugins/target-parsing-loaded.js";
+import { parseExplicitTargetForLoadedChannel } from "../../channels/plugins/target-parsing-loaded.js";
 import type { ChannelOutboundTargetMode } from "../../channels/plugins/types.public.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import {
+  type ChannelRouteExplicitTargetParser,
   channelRouteTargetsShareConversation,
   resolveChannelRouteTargetWithParser,
 } from "../../plugin-sdk/channel-route.js";
@@ -33,12 +31,9 @@ export type SessionDeliveryTarget = {
   lastThreadId?: string | number;
 };
 
-export type ExplicitTargetParser = (
-  channel: string,
-  rawTarget: string,
-) => ParsedChannelExplicitTarget | null;
+export type ExplicitTargetParser = ChannelRouteExplicitTargetParser;
 
-function resolveRouteTarget(params: {
+function resolveParsedRouteTarget(params: {
   channel: string;
   rawTarget?: string | null;
   fallbackThreadId?: string | number | null;
@@ -50,7 +45,7 @@ function resolveRouteTarget(params: {
   });
 }
 
-function parseExplicitTargetWithPlugin(params: {
+function parseExplicitDeliveryTarget(params: {
   channel?: DeliverableMessageChannel;
   fallbackChannel?: DeliverableMessageChannel;
   raw?: string;
@@ -91,7 +86,7 @@ export function resolveSessionDeliveryTarget(params: {
   const sessionLastChannel =
     context?.channel && isDeliverableMessageChannel(context.channel) ? context.channel : undefined;
   const parsedSessionTarget = sessionLastChannel
-    ? resolveRouteTarget({
+    ? resolveParsedRouteTarget({
         channel: sessionLastChannel,
         rawTarget: context?.to,
         fallbackThreadId: context?.threadId,
@@ -102,7 +97,7 @@ export function resolveSessionDeliveryTarget(params: {
   const hasTurnSourceChannel = params.turnSourceChannel != null;
   const parsedTurnSourceTarget =
     hasTurnSourceChannel && params.turnSourceChannel
-      ? resolveRouteTarget({
+      ? resolveParsedRouteTarget({
           channel: params.turnSourceChannel,
           rawTarget: params.turnSourceTo,
           fallbackThreadId: params.turnSourceThreadId,
@@ -155,7 +150,7 @@ export function resolveSessionDeliveryTarget(params: {
   }
 
   let explicitTo = rawExplicitTo;
-  const parsedExplicitTarget = parseExplicitTargetWithPlugin({
+  const parsedExplicitTarget = parseExplicitDeliveryTarget({
     channel,
     fallbackChannel: !channel ? lastChannel : undefined,
     raw: rawExplicitTo,

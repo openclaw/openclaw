@@ -1,4 +1,3 @@
-import { parseExplicitTargetForLoadedChannel } from "../../channels/plugins/target-parsing-loaded.js";
 import type { ChannelId } from "../../channels/plugins/types.public.js";
 import { resolveAgentMainSessionKey } from "../../config/sessions/main-session.js";
 import { resolveStorePath } from "../../config/sessions/paths.js";
@@ -67,7 +66,7 @@ async function resolveOutboundTargetWithRuntime(
 function normalizeTargetForThreadCarry(
   channel: Exclude<OutboundChannel, "none"> | undefined,
   to: string | undefined,
-  parseExplicitTarget?: ExplicitTargetParser,
+  parseExplicitTarget: ExplicitTargetParser,
 ): string | undefined {
   if (!channel || !to) {
     return undefined;
@@ -78,10 +77,7 @@ function normalizeTargetForThreadCarry(
     if (!comparable) {
       return undefined;
     }
-    const parsed = (parseExplicitTarget ?? parseExplicitTargetForLoadedChannel)(
-      channel,
-      comparable,
-    );
+    const parsed = parseExplicitTarget(channel, comparable);
     const base = parsed?.to ?? comparable;
     return normalizeTargetForProvider(channel, base) ?? base;
   } catch {
@@ -93,7 +89,7 @@ function deliveryTargetsShareThreadRoute(params: {
   channel: Exclude<OutboundChannel, "none"> | undefined;
   to: string | undefined;
   lastTo: string | undefined;
-  parseExplicitTarget?: ExplicitTargetParser;
+  parseExplicitTarget: ExplicitTargetParser;
 }): boolean {
   if (!params.to || !params.lastTo) {
     return false;
