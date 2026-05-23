@@ -385,6 +385,61 @@ describe("parseCliJsonl", () => {
     });
   });
 
+  it("does not replace Claude message_start cache usage with message_delta output usage", () => {
+    const result = parseCliJsonl(
+      [
+        JSON.stringify({ type: "init", session_id: "session-stream-usage" }),
+        JSON.stringify({
+          type: "stream_event",
+          event: {
+            type: "message_start",
+            message: {
+              usage: {
+                input_tokens: 150,
+                output_tokens: 1,
+                cache_read_input_tokens: 27_142,
+              },
+            },
+          },
+        }),
+        JSON.stringify({
+          type: "stream_event",
+          event: {
+            type: "message_delta",
+            usage: {
+              output_tokens: 6,
+            },
+          },
+        }),
+        JSON.stringify({
+          type: "result",
+          session_id: "session-stream-usage",
+          result: "Claude says hello",
+          usage: {
+            input_tokens: 300,
+            output_tokens: 10,
+            cache_read_input_tokens: 45_641,
+          },
+        }),
+      ].join("\n"),
+      {
+        command: "claude",
+        output: "jsonl",
+        sessionIdFields: ["session_id"],
+      },
+      "claude-cli",
+    );
+
+    expect(result?.usage?.cacheRead).toBe(45_641);
+    expect(result?.lastCallUsage).toEqual({
+      input: 150,
+      output: 1,
+      cacheRead: 27_142,
+      cacheWrite: undefined,
+      total: undefined,
+    });
+  });
+
   it("preserves Claude session metadata even when the final result text is empty", () => {
     const result = parseCliJsonl(
       [

@@ -173,9 +173,6 @@ function readClaudeAssistantUsage(parsed: Record<string, unknown>): CliUsage | u
     ) {
       return toCliUsage(event.message.usage);
     }
-    if (event.type === "message_delta" && isRecord(event.usage)) {
-      return toCliUsage(event.usage);
-    }
   }
   return undefined;
 }
