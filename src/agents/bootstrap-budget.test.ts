@@ -103,6 +103,32 @@ describe("analyzeBootstrapBudget", () => {
 });
 
 describe("bootstrap prompt warnings", () => {
+  it("handles malformed truncation entries without names", () => {
+    const lines = formatBootstrapTruncationWarningLines({
+      analysis: {
+        files: [],
+        truncatedFiles: [
+          {
+            name: undefined,
+            path: "/tmp/unknown",
+            missing: false,
+            rawChars: 10,
+            injectedChars: 1,
+            truncated: true,
+            nearLimit: false,
+            causes: [],
+          } as unknown as ReturnType<typeof analyzeBootstrapBudget>["truncatedFiles"][number],
+        ],
+        nearLimitFiles: [],
+        totalRawChars: 10,
+        totalInjectedChars: 1,
+        totalNearLimit: false,
+        hasTruncation: true,
+      },
+    });
+    expect(lines.join("\n")).toContain("10 raw -> 1 injected");
+  });
+
   it("appends warning details to the turn prompt instead of mutating the system prompt", () => {
     const prompt = appendBootstrapPromptWarning("Please continue.", [
       "AGENTS.md: 200 raw -> 0 injected",
