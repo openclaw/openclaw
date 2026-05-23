@@ -1186,7 +1186,7 @@ describe("buildGatewayInstallPlan — dotenv merge", () => {
       serviceEnvironment: {
         HOME: "/from-service",
         OPENCLAW_PORT: "3000",
-        PATH: "/managed/bin:/usr/bin",
+        PATH: ["/managed/bin", "/usr/bin"].map((p) => path.normalize(p)).join(path.delimiter),
         TMPDIR: "/tmp",
       },
     });
@@ -1207,7 +1207,9 @@ describe("buildGatewayInstallPlan — dotenv merge", () => {
           `${process.cwd()}/evil-bin`,
           "/custom/go/bin",
           "/usr/bin",
-        ].join(path.delimiter),
+        ]
+          .map((p) => path.normalize(p))
+          .join(path.delimiter),
         GOBIN: "/Users/test/.local/gopath/bin",
         BLOGWATCHER_HOME: "/Users/test/.blogwatcher",
         NODE_OPTIONS: "--require /tmp/evil.js",
@@ -1216,7 +1218,11 @@ describe("buildGatewayInstallPlan — dotenv merge", () => {
       },
     });
 
-    expect(plan.environment.PATH).toBe("/managed/bin:/usr/bin:/custom/go/bin");
+    expect(plan.environment.PATH).toBe(
+      ["/managed/bin", "/usr/bin", "/custom/go/bin"]
+        .map((p) => path.normalize(p))
+        .join(path.delimiter),
+    );
     expect(plan.environment.GOBIN).toBe("/Users/test/.local/gopath/bin");
     expect(plan.environment.BLOGWATCHER_HOME).toBe("/Users/test/.blogwatcher");
     expect(plan.environment.NODE_OPTIONS).toBeUndefined();
@@ -1229,7 +1235,9 @@ describe("buildGatewayInstallPlan — dotenv merge", () => {
       serviceEnvironment: {
         HOME: "/from-service",
         OPENCLAW_PORT: "3000",
-        PATH: "/usr/local/bin:/usr/bin:/bin",
+        PATH: ["/usr/local/bin", "/usr/bin", "/bin"]
+          .map((p) => path.normalize(p))
+          .join(path.delimiter),
         TMPDIR: "/tmp",
       },
     });
@@ -1253,11 +1261,17 @@ describe("buildGatewayInstallPlan — dotenv merge", () => {
           "/opt/pnpm/bin",
           "/custom/go/bin",
           "/usr/bin",
-        ].join(path.delimiter),
+        ]
+          .map((p) => path.normalize(p))
+          .join(path.delimiter),
       },
     });
 
-    expect(plan.environment.PATH).toBe("/usr/local/bin:/usr/bin:/bin:/custom/go/bin");
+    expect(plan.environment.PATH).toBe(
+      ["/usr/local/bin", "/usr/bin", "/bin", "/custom/go/bin"]
+        .map((p) => path.normalize(p))
+        .join(path.delimiter),
+    );
   });
 
   it("drops existing PATH entries that resolve through symlinks into temp dirs", async () => {
@@ -1265,22 +1279,22 @@ describe("buildGatewayInstallPlan — dotenv merge", () => {
       serviceEnvironment: {
         HOME: "/from-service",
         OPENCLAW_PORT: "3000",
-        PATH: "/managed/bin:/usr/bin",
+        PATH: ["/managed/bin", "/usr/bin"].map((p) => path.normalize(p)).join(path.delimiter),
         TMPDIR: "/tmp",
       },
     });
     const realpathNative = vi.spyOn(fs.realpathSync, "native").mockImplementation((candidate) => {
-      const value = String(candidate);
-      if (value === "/opt/safe/bin") {
-        return "/tmp/evil/bin";
+      const resolvedCandidate = path.resolve(String(candidate));
+      if (resolvedCandidate === path.resolve("/opt/safe/bin")) {
+        return path.resolve(path.join(os.tmpdir(), "evil/bin"));
       }
-      if (value === "/opt/safe") {
-        return "/tmp/evil";
+      if (resolvedCandidate === path.resolve("/opt/safe")) {
+        return path.resolve(path.join(os.tmpdir(), "evil"));
       }
-      if (value === "/opt/safe/missing-bin") {
+      if (resolvedCandidate === path.resolve("/opt/safe/missing-bin")) {
         throw Object.assign(new Error("missing"), { code: "ENOENT" });
       }
-      return value;
+      return String(candidate);
     });
 
     try {
@@ -1290,11 +1304,17 @@ describe("buildGatewayInstallPlan — dotenv merge", () => {
         runtime: "node",
         platform: "linux",
         existingEnvironment: {
-          PATH: "/opt/safe/bin:/opt/safe/missing-bin:/custom/go/bin:/usr/bin",
+          PATH: ["/opt/safe/bin", "/opt/safe/missing-bin", "/custom/go/bin", "/usr/bin"]
+            .map((p) => path.normalize(p))
+            .join(path.delimiter),
         },
       });
 
-      expect(plan.environment.PATH).toBe("/managed/bin:/usr/bin:/custom/go/bin");
+      expect(plan.environment.PATH).toBe(
+        ["/managed/bin", "/usr/bin", "/custom/go/bin"]
+          .map((p) => path.normalize(p))
+          .join(path.delimiter),
+      );
     } finally {
       realpathNative.mockRestore();
     }
@@ -1306,7 +1326,7 @@ describe("buildGatewayInstallPlan — dotenv merge", () => {
       serviceEnvironment: {
         HOME: cwd,
         OPENCLAW_PORT: "3000",
-        PATH: "/managed/bin:/usr/bin",
+        PATH: ["/managed/bin", "/usr/bin"].map((p) => path.normalize(p)).join(path.delimiter),
         TMPDIR: "/tmp",
       },
     });
@@ -1317,11 +1337,17 @@ describe("buildGatewayInstallPlan — dotenv merge", () => {
       runtime: "node",
       platform: "linux",
       existingEnvironment: {
-        PATH: `${cwd}/evil-bin:/custom/go/bin:/usr/bin`,
+        PATH: [path.join(cwd, "evil-bin"), "/custom/go/bin", "/usr/bin"]
+          .map((p) => path.normalize(p))
+          .join(path.delimiter),
       },
     });
 
-    expect(plan.environment.PATH).toBe("/managed/bin:/usr/bin:/custom/go/bin");
+    expect(plan.environment.PATH).toBe(
+      ["/managed/bin", "/usr/bin", "/custom/go/bin"]
+        .map((p) => path.normalize(p))
+        .join(path.delimiter),
+    );
   });
 
   it("drops keys that were previously tracked as managed service env", async () => {
@@ -1329,7 +1355,7 @@ describe("buildGatewayInstallPlan — dotenv merge", () => {
       serviceEnvironment: {
         HOME: "/from-service",
         OPENCLAW_PORT: "3000",
-        PATH: "/managed/bin:/usr/bin",
+        PATH: ["/managed/bin", "/usr/bin"].map((p) => path.normalize(p)).join(path.delimiter),
       },
     });
 
@@ -1339,7 +1365,7 @@ describe("buildGatewayInstallPlan — dotenv merge", () => {
       runtime: "node",
       platform: "linux",
       existingEnvironment: {
-        PATH: "/custom/go/bin:/usr/bin",
+        PATH: ["/custom/go/bin", "/usr/bin"].map((p) => path.normalize(p)).join(path.delimiter),
         GOBIN: "/Users/test/.local/gopath/bin",
         BLOGWATCHER_HOME: "/Users/test/.blogwatcher",
         GOPATH: "/Users/test/.local/gopath",
@@ -1347,7 +1373,11 @@ describe("buildGatewayInstallPlan — dotenv merge", () => {
       },
     });
 
-    expect(plan.environment.PATH).toBe("/managed/bin:/usr/bin:/custom/go/bin");
+    expect(plan.environment.PATH).toBe(
+      ["/managed/bin", "/usr/bin", "/custom/go/bin"]
+        .map((p) => path.normalize(p))
+        .join(path.delimiter),
+    );
     expect(plan.environment.GOBIN).toBeUndefined();
     expect(plan.environment.BLOGWATCHER_HOME).toBe("/Users/test/.blogwatcher");
     expect(plan.environment.GOPATH).toBeUndefined();

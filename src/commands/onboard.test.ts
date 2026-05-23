@@ -23,6 +23,10 @@ vi.mock("../config/config.js", () => ({
   readConfigFileSnapshot: mocks.readConfigFileSnapshot,
 }));
 
+vi.mock("../infra/runtime-guard.js", () => ({
+  assertSupportedRuntime: vi.fn(),
+}));
+
 vi.mock("./onboard-helpers.js", () => ({
   DEFAULT_WORKSPACE: "~/.openclaw/workspace",
   handleReset: mocks.handleReset,

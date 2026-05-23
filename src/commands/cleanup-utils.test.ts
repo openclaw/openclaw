@@ -94,10 +94,10 @@ describe("cleanup path removals", () => {
       { dryRun: true },
     );
 
-    expect(runtime.log.mock.calls.map(([line]) => line.replaceAll("\\", "/"))).toEqual([
-      "[dry-run] remove /tmp/openclaw-cleanup/state",
-      "[dry-run] remove /tmp/openclaw-cleanup/oauth",
-    ]);
+    const cleanTmpRoot = tmpRoot.replace(/^[a-zA-Z]:/, "").replaceAll("\\", "/");
+    expect(
+      runtime.log.mock.calls.map(([line]) => line.replaceAll("\\", "/").replace(/[a-zA-Z]:/, "")),
+    ).toEqual([`[dry-run] remove ${cleanTmpRoot}/state`, `[dry-run] remove ${cleanTmpRoot}/oauth`]);
   });
 
   it("removes every workspace directory", async () => {

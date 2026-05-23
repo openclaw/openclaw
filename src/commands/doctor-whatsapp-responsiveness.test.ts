@@ -22,25 +22,30 @@ describe("doctor WhatsApp responsiveness", () => {
   });
 
   it("lists only verified local TUI processes", () => {
-    spawnSyncMock.mockReturnValue({
-      status: 0,
-      stdout: [
-        " 101 openclaw-tui",
-        " 102 /usr/bin/node /usr/lib/node_modules/openclaw/dist/index.js gateway --port 18789",
-        " 103 openclaw channels",
-        " 104 openclaw tui --local",
-        " 105 /usr/bin/openclaw chat",
-        " 106 helper --note 'openclaw tui'",
-        " 107 openclaw-helper openclaw terminal",
-        " 108 openclaw --flag tui",
-      ].join("\n"),
-    });
+    const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("linux");
+    try {
+      spawnSyncMock.mockReturnValue({
+        status: 0,
+        stdout: [
+          " 101 openclaw-tui",
+          " 102 /usr/bin/node /usr/lib/node_modules/openclaw/dist/index.js gateway --port 18789",
+          " 103 openclaw channels",
+          " 104 openclaw tui --local",
+          " 105 /usr/bin/openclaw chat",
+          " 106 helper --note 'openclaw tui'",
+          " 107 openclaw-helper openclaw terminal",
+          " 108 openclaw --flag tui",
+        ].join("\n"),
+      });
 
-    expect(listLocalTuiProcesses()).toEqual([
-      { pid: 101, command: "openclaw-tui" },
-      { pid: 104, command: "openclaw tui --local" },
-      { pid: 105, command: "/usr/bin/openclaw chat" },
-    ]);
+      expect(listLocalTuiProcesses()).toEqual([
+        { pid: 101, command: "openclaw-tui" },
+        { pid: 104, command: "openclaw tui --local" },
+        { pid: 105, command: "/usr/bin/openclaw chat" },
+      ]);
+    } finally {
+      platformSpy.mockRestore();
+    }
   });
 
   it("terminates stale local TUI processes with a kill fallback", async () => {
