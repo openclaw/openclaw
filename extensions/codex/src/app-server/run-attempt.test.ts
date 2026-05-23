@@ -87,6 +87,7 @@ import { createCodexTestModel } from "./test-support.js";
 import {
   buildContextEngineBinding,
   buildTurnCollaborationMode,
+  buildThreadStartParams,
   buildThreadResumeParams,
   buildTurnStartParams,
   startOrResumeThread,
@@ -1186,7 +1187,7 @@ describe("runCodexAppServerAttempt", () => {
     );
   });
 
-  it("starts active OpenClaw sandbox threads with Codex native execution disabled", async () => {
+  it("builds active OpenClaw sandbox turns with Codex native execution disabled", async () => {
     testing.setOpenClawCodingToolsFactoryForTests(() => [
       createRuntimeDynamicTool("exec"),
       createRuntimeDynamicTool("process"),
@@ -1195,57 +1196,47 @@ describe("runCodexAppServerAttempt", () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
     const params = createParams(sessionFile, workspaceDir);
-    params.sessionKey = `agent:main:${path.basename(tempDir)}:sandbox`;
     params.disableTools = false;
     params.runtimePlan = createCodexRuntimePlanFixture();
-    const sandbox = {
-      enabled: true,
-      backendId: "codex-test-sandbox",
-      workspaceAccess: "rw",
-    } as never;
-    const nativeToolSurfaceEnabled = testing.shouldEnableCodexAppServerNativeToolSurface(
-      params,
-      sandbox,
-    );
+    params.config = createCodexSandboxTestConfig();
+    const sandboxSessionKey = params.sessionKey;
+    if (!sandboxSessionKey) {
+      throw new Error("createParams must provide a sessionKey for Codex dynamic tool tests.");
+    }
     const dynamicTools = await testing.buildDynamicTools({
       params,
       resolvedWorkspace: workspaceDir,
       effectiveWorkspace: workspaceDir,
-      sandboxSessionKey: params.sessionKey!,
-      sandbox,
-      nativeToolSurfaceEnabled,
+      sandboxSessionKey,
+      sandbox: {
+        enabled: true,
+        backendId: "docker",
+        docker: { binds: ["/tmp/openclaw-data:/data:rw"] },
+      } as never,
+      nativeToolSurfaceEnabled: false,
       runAbortController: new AbortController(),
       sessionAgentId: "main",
-      pluginConfig: {},
+      pluginConfig: { appServer: { mode: "yolo" } },
       onYieldDetected: () => undefined,
     });
-    const request = vi.fn(async (method: string, _requestParams?: unknown) => {
-      if (method === "thread/start") {
-        return threadStartResult();
-      }
-      throw new Error(`unexpected method: ${method}`);
+    const appServer = resolveCodexAppServerRuntimeOptions({
+      pluginConfig: { appServer: { mode: "yolo" } },
+      env: {},
+      requirementsToml: null,
     });
-
-    await startOrResumeThread({
-      client: { request } as never,
-      params,
+    const startParams = buildThreadStartParams(params, {
       cwd: workspaceDir,
-      dynamicTools: dynamicTools as never,
-      appServer: createThreadLifecycleAppServerOptions(),
-      nativeCodeModeEnabled: nativeToolSurfaceEnabled,
+      dynamicTools,
+      appServer,
+      nativeCodeModeEnabled: false,
       nativeCodeModeOnlyEnabled: false,
-      userMcpServersEnabled: nativeToolSurfaceEnabled,
       environmentSelection: [],
     });
-
-    const startRequest = request.mock.calls.find(([method]) => method === "thread/start");
-    const startParams = startRequest?.[1] as Record<string, unknown> | undefined;
-    const startConfig = startParams?.config as Record<string, unknown> | undefined;
-    const startDynamicTools = startParams?.dynamicTools as Array<{ name: string }> | undefined;
-    expect(startConfig?.["features.code_mode"]).toBe(false);
-    expect(startConfig?.["features.code_mode_only"]).toBe(false);
-    expect(startParams?.environments).toEqual([]);
-    expect(startDynamicTools?.map((tool) => tool.name)).toEqual([
+    const startConfig = startParams.config as Record<string, unknown>;
+    expect(startConfig["features.code_mode"]).toBe(false);
+    expect(startConfig["features.code_mode_only"]).toBe(false);
+    expect(startParams.environments).toEqual([]);
+    expect(startParams.dynamicTools?.map((tool) => tool.name)).toEqual([
       "message",
       "sandbox_exec",
       "sandbox_process",
