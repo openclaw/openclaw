@@ -732,5 +732,8 @@ describe("buildCliSessionHistoryPrompt", () => {
     expect(renderedHistory.length).toBeLessThanOrEqual(maxHistoryChars);
     // Marker is still present so the prompt announces what was discarded.
     expect(prompt).toContain("[OpenClaw reseed history truncated; older turns dropped]");
+    // Near-cap summaries still reserve room for the newest exact turns.
+    expect(prompt).toContain("POST_SUMMARY_TAIL_USER");
+    expect(prompt).toContain("POST_SUMMARY_TAIL_ASSISTANT");
   });
 });

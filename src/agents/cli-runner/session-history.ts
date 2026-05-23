@@ -167,6 +167,18 @@ export function buildCliSessionHistoryPrompt(params: {
     .trim();
 
   const truncationMarker = "[OpenClaw reseed history truncated; older turns dropped]";
+  const renderTruncatedSummaryWithTail = (renderedSummary: string): string => {
+    const tailBudget =
+      tailRaw.length > 0 ? Math.min(tailRaw.length, Math.floor(maxHistoryChars / 2)) : 0;
+    const separatorBudget = tailBudget > 0 ? 2 : 1;
+    const summaryBudget = Math.max(
+      0,
+      maxHistoryChars - truncationMarker.length - separatorBudget - tailBudget,
+    );
+    const summaryTruncated = renderedSummary.slice(0, summaryBudget).trimEnd();
+    const tailTruncated = tailBudget > 0 ? tailRaw.slice(-tailBudget).trimStart() : "";
+    return [truncationMarker, summaryTruncated, tailTruncated].filter(Boolean).join("\n");
+  };
 
   let renderedHistory: string;
   if (summaryRendered) {
@@ -177,41 +189,19 @@ export function buildCliSessionHistoryPrompt(params: {
     // reseeding fresh CLI sessions with unexpectedly huge prompts.
     if (summaryRendered.length >= maxHistoryChars) {
       // Truncate the summary to fit the budget (less the marker line),
-      // keeping the head — compaction summaries are typically structured
-      // overview-first, and the leading orientation is high-value recovery
-      // context. Still reserve budget for the post-summary tail so recent
-      // exact turns survive even when the summary itself is oversize.
-      const tailBudget =
-        tailRaw.length > 0 ? Math.min(tailRaw.length, Math.floor(maxHistoryChars / 2)) : 0;
-      const separatorBudget = tailBudget > 0 ? 2 : 1;
-      const summaryBudget = Math.max(
-        0,
-        maxHistoryChars - truncationMarker.length - separatorBudget - tailBudget,
-      );
-      const summaryTruncated = summaryRendered.slice(0, summaryBudget).trimEnd();
-      const tailTruncated = tailBudget > 0 ? tailRaw.slice(-tailBudget).trimStart() : "";
-      renderedHistory = [truncationMarker, summaryTruncated, tailTruncated]
-        .filter(Boolean)
-        .join("\n");
+      // keeping the head. Still reserve budget for the post-summary tail so
+      // recent exact turns survive even when the summary itself is oversize.
+      renderedHistory = renderTruncatedSummaryWithTail(summaryRendered);
     } else if (tailRaw.length === 0) {
       renderedHistory = summaryRendered;
     } else {
       const summaryBlock = `${summaryRendered}\n\n`;
       const remainingBudget = maxHistoryChars - summaryBlock.length;
       if (remainingBudget <= 0) {
-        // `tailRaw.slice(-0)` would return the entire tail (JS quirk:
-        // `-0 === 0`), so guard explicitly. The summary plus its
-        // separator already meets or exceeds the cap, so the tail must
-        // drop. The summary itself must also be truncated so that
-        // `summary + separator + marker` stays within budget — appending
-        // the marker after a full-budget summary block would otherwise
-        // blow past `maxHistoryChars` (a 199-char summary under a
-        // 200-char cap would render a 257-char history block).
-        const summaryBudget = Math.max(0, maxHistoryChars - truncationMarker.length - 2);
-        const summaryTruncated = summaryRendered.slice(0, summaryBudget).trimEnd();
-        renderedHistory = summaryTruncated
-          ? `${summaryTruncated}\n\n${truncationMarker}`
-          : truncationMarker;
+        // The summary plus separator already consumes the cap. Reuse the
+        // oversize-summary path so recent post-summary turns still get
+        // reserved tail budget instead of being dropped wholesale.
+        renderedHistory = renderTruncatedSummaryWithTail(summaryRendered);
       } else if (tailRaw.length > remainingBudget) {
         renderedHistory = `${summaryBlock}${truncationMarker}\n${tailRaw.slice(-remainingBudget).trimStart()}`;
       } else {
