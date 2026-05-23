@@ -140,6 +140,7 @@ const agentEventMocks = vi.hoisted(() => ({
 const ttsMocks = vi.hoisted(() => {
   const state = {
     synthesizeFinalAudio: false,
+    synthesizeToolAudio: false,
   };
   return {
     state,
@@ -157,6 +158,19 @@ const ttsMocks = vi.hoisted(() => {
         return {
           ...params.payload,
           mediaUrl: "https://example.com/tts-synth.opus",
+          audioAsVoice: true,
+          trustedLocalMedia: true,
+        };
+      }
+      if (
+        state.synthesizeToolAudio &&
+        params.kind === "tool" &&
+        typeof params.payload?.text === "string" &&
+        params.payload.text.trim()
+      ) {
+        return {
+          ...params.payload,
+          mediaUrl: "https://example.com/tts-tool.opus",
           audioAsVoice: true,
           trustedLocalMedia: true,
         };
@@ -891,6 +905,7 @@ describe("dispatchReplyFromConfig", () => {
     threadInfoMocks.parseSessionThreadInfo.mockReset();
     threadInfoMocks.parseSessionThreadInfo.mockImplementation(parseGenericThreadSessionInfo);
     ttsMocks.state.synthesizeFinalAudio = false;
+    ttsMocks.state.synthesizeToolAudio = false;
     ttsMocks.maybeApplyTtsToPayload.mockClear();
     ttsMocks.normalizeTtsAutoMode.mockClear();
     ttsMocks.resolveTtsConfig.mockClear();
@@ -1460,6 +1475,35 @@ describe("dispatchReplyFromConfig", () => {
     await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
     expect(dispatcher.sendToolResult).toHaveBeenCalledWith({ text: "tool output" });
     expect(dispatcher.sendFinalReply).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not synthesize hidden text-only tool summaries into TTS media", async () => {
+    setNoAbort();
+    ttsMocks.state.synthesizeToolAudio = true;
+    const cfg = emptyConfig;
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "telegram",
+      ChatType: "direct",
+    });
+
+    const replyResolver = async (
+      _ctx: MsgContext,
+      opts?: GetReplyOptions,
+      _cfg?: OpenClawConfig,
+    ) => {
+      const onToolResult = requireToolResultHandler(opts?.onToolResult);
+      await onToolResult({ text: "tool output" });
+      return { text: "done" } satisfies ReplyPayload;
+    };
+
+    await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
+
+    expect(ttsMocks.maybeApplyTtsToPayload).not.toHaveBeenCalledWith(
+      expect.objectContaining({ kind: "tool" }),
+    );
+    expect(dispatcher.sendToolResult).not.toHaveBeenCalled();
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith({ text: "done" });
   });
 
   it("suppresses late text-only tool results after final delivery starts", async () => {

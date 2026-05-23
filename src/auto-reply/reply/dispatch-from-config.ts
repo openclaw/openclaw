@@ -1989,8 +1989,12 @@ export async function dispatchReplyFromConfig(
                 if (shouldSuppressProgressDelivery()) {
                   return;
                 }
+                const visibleToolPayload = resolveToolDeliveryPayload(payload);
+                if (!visibleToolPayload) {
+                  return;
+                }
                 const ttsPayload = await maybeApplyTtsToReplyPayload({
-                  payload,
+                  payload: visibleToolPayload,
                   cfg,
                   channel: deliveryChannel,
                   kind: "tool",
