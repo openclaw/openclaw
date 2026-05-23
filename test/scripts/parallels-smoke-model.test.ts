@@ -463,6 +463,11 @@ console.log(JSON.stringify(result));
     expect(combined).toContain("MinGit-");
     expect(combined).toContain("portable-git");
     expect(combined).toContain("where.exe git.exe");
+    expect(windowsGit.indexOf('"MinGit-2.53.0.2-64-bit.zip"')).toBeLessThan(
+      windowsGit.indexOf('"MinGit-2.53.0.2-arm64.zip"'),
+    );
+    expect(windowsGit).toContain('if "-64-bit." in name:');
+    expect(windowsGit).toContain('elif "-arm64." in name:');
   });
 
   it("preseeds dev update channel before stable-to-dev update lanes", () => {
