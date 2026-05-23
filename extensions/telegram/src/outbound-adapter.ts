@@ -22,7 +22,7 @@ import { resolveTelegramInlineButtons } from "./button-types.js";
 import { markdownToTelegramHtmlChunks, splitTelegramHtmlChunks } from "./format.js";
 import { resolveTelegramInteractiveTextFallback } from "./interactive-fallback.js";
 import { parseTelegramReplyToMessageId, parseTelegramThreadId } from "./outbound-params.js";
-import { normalizeTelegramOutboundTarget } from "./targets.js";
+import { normalizeTelegramOutboundTarget, parseTelegramTarget } from "./targets.js";
 
 export const TELEGRAM_TEXT_CHUNK_LIMIT = 4000;
 export const TELEGRAM_POLL_OPTION_LIMIT = 10;
@@ -230,7 +230,8 @@ export function createTelegramOutboundAdapter(
     pinDeliveredMessage: async ({ cfg, target, messageId, pin }) => {
       const { pinMessageTelegram } = await loadSendModule();
       const outboundTo = normalizeTelegramOutboundTarget(target.to);
-      await pinMessageTelegram(outboundTo, messageId, {
+      const pinTarget = parseTelegramTarget(outboundTo);
+      await pinMessageTelegram(pinTarget.chatId, messageId, {
         cfg,
         accountId: target.accountId ?? undefined,
         notify: pin.notify,

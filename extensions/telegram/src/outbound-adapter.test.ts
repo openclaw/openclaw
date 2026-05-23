@@ -591,4 +591,23 @@ describe("telegramOutbound", () => {
     expect(options.accountId).toBe("ops");
     expect(options.notify).toBe(false);
   });
+
+  it("normalizes legacy durable group retry topic targets before Telegram pinning", async () => {
+    pinMessageTelegramMock.mockResolvedValueOnce({
+      ok: true,
+      messageId: "tg-topic-retry",
+      chatId: "-1001234567890",
+    });
+
+    await telegramOutbound.pinDeliveredMessage?.({
+      cfg: {} as never,
+      target: { channel: "telegram", to: "group:-1001234567890:topic:77", accountId: "ops" },
+      messageId: "tg-topic-retry",
+      pin: { enabled: true, notify: false },
+    });
+
+    const options = callOptionsAt(pinMessageTelegramMock, 0, "-1001234567890", "tg-topic-retry");
+    expect(options.accountId).toBe("ops");
+    expect(options.notify).toBe(false);
+  });
 });
