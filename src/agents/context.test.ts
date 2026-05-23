@@ -287,7 +287,7 @@ describe("resolveContextTokensForModel", () => {
     expect(result).toBe(16_000);
   });
 
-  it("returns 1M context when anthropic context1m is enabled for opus/sonnet", () => {
+  it("returns 1M context when anthropic context1m is enabled for a GA 1M model", () => {
     const result = resolveContextTokensForModel({
       cfg: {
         models: {
@@ -317,7 +317,7 @@ describe("resolveContextTokensForModel", () => {
     expect(result).toBe(ANTHROPIC_CONTEXT_1M_TOKENS);
   });
 
-  it("returns 1M context when claude-cli context1m is enabled for opus/sonnet", () => {
+  it("returns 1M context when claude-cli context1m is enabled for a GA 1M model", () => {
     const result = resolveContextTokensForModel({
       cfg: {
         models: {
@@ -347,7 +347,7 @@ describe("resolveContextTokensForModel", () => {
     expect(result).toBe(ANTHROPIC_CONTEXT_1M_TOKENS);
   });
 
-  it("returns 1M context for Anthropic opus/sonnet 4 even without context1m", () => {
+  it("returns 1M context for GA-capable Anthropic 4.x models even without context1m", () => {
     const result = resolveContextTokensForModel({
       cfg: {
         models: {
@@ -396,6 +396,36 @@ describe("resolveContextTokensForModel", () => {
     });
 
     expect(result).toBe(ANTHROPIC_CONTEXT_1M_TOKENS);
+  });
+
+  it("keeps older Anthropic Sonnet 4.x models at the configured window when context1m is set", () => {
+    const result = resolveContextTokensForModel({
+      cfg: {
+        models: {
+          providers: {
+            anthropic: {
+              baseUrl: "https://api.anthropic.com",
+              models: [testModelContextWindow("claude-sonnet-4-5", 200_000)],
+            },
+          },
+        },
+        agents: {
+          defaults: {
+            models: {
+              "anthropic/claude-sonnet-4-5": {
+                params: { context1m: true },
+              },
+            },
+          },
+        },
+      },
+      provider: "anthropic",
+      model: "claude-sonnet-4-5",
+      fallbackContextTokens: 200_000,
+      allowAsyncLoad: false,
+    });
+
+    expect(result).toBe(200_000);
   });
 
   it("does not force 1M context for non-opus/sonnet Anthropic models", () => {

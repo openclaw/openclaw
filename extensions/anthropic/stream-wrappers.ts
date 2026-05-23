@@ -19,7 +19,14 @@ import {
 const log = createSubsystemLogger("anthropic-stream");
 
 const ANTHROPIC_CONTEXT_1M_BETA_LEGACY = "context-1m-2025-08-07";
-const ANTHROPIC_1M_MODEL_PREFIXES = ["claude-opus-4", "claude-sonnet-4"] as const;
+const ANTHROPIC_GA_1M_MODEL_PREFIXES = [
+  "claude-opus-4-6",
+  "claude-opus-4.6",
+  "claude-opus-4-7",
+  "claude-opus-4.7",
+  "claude-sonnet-4-6",
+  "claude-sonnet-4.6",
+] as const;
 const PI_AI_DEFAULT_ANTHROPIC_BETAS = [
   "fine-grained-tool-streaming-2025-05-14",
   "interleaved-thinking-2025-05-14",
@@ -34,7 +41,7 @@ type AnthropicServiceTier = "auto" | "standard_only";
 
 function isAnthropic1MModel(modelId: string): boolean {
   const normalized = normalizeLowercaseStringOrEmpty(modelId);
-  return ANTHROPIC_1M_MODEL_PREFIXES.some((prefix) => normalized.startsWith(prefix));
+  return ANTHROPIC_GA_1M_MODEL_PREFIXES.some((prefix) => normalized.startsWith(prefix));
 }
 
 function parseHeaderList(value: unknown): string[] {
@@ -112,8 +119,8 @@ export function resolveAnthropicBetas(
     }
   }
 
-  // 1M context is GA. Keep context1m as a context-sizing opt-in, but do not
-  // send the retired beta even if it remains in older user config.
+  // Newer Claude 4.x 1M context is GA. Keep context1m as a context-sizing
+  // opt-in, but do not send the retired beta even if it remains in older config.
   betas.delete(ANTHROPIC_CONTEXT_1M_BETA_LEGACY);
 
   return betas.size > 0 ? [...betas] : undefined;

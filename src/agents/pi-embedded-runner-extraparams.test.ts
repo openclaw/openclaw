@@ -225,6 +225,10 @@ function isAnthropicOauthApiKey(apiKey: unknown): boolean {
   return typeof apiKey === "string" && apiKey.startsWith("sk-ant-oat");
 }
 
+function isAnthropicGa1MModel(modelId: string): boolean {
+  return /^(claude-opus-4[-.]6|claude-opus-4[-.]7|claude-sonnet-4[-.]6)/i.test(modelId);
+}
+
 function isDirectAnthropicModel(model: { provider?: string; baseUrl?: string }): boolean {
   const baseUrl = typeof model.baseUrl === "string" ? model.baseUrl : "";
   return model.provider === "anthropic" && (!baseUrl || baseUrl.includes("api.anthropic.com"));
@@ -385,7 +389,7 @@ function installFullProviderRuntimeDepsForTest() {
         if (
           anthropicBetas.length ||
           (params.context.extraParams?.context1m === true &&
-            /(opus|sonnet)/i.test(params.context.modelId))
+            isAnthropicGa1MModel(params.context.modelId))
         ) {
           streamFn = createAnthropicBetaHeadersWrapper(streamFn, anthropicBetas);
         }

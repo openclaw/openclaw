@@ -197,7 +197,7 @@ override only `cacheRetention` and inherit other model defaults unchanged.
 ### Example: enable Anthropic 1M context
 
 OpenClaw can request Anthropic's 1M context window when you enable `context1m`
-on supported Opus or Sonnet models.
+on GA-capable Claude 4.x models such as Opus 4.6, Opus 4.7, and Sonnet 4.6.
 
 ```yaml
 agents:
@@ -208,8 +208,9 @@ agents:
           context1m: true
 ```
 
-This keeps the larger context window as an explicit opt-in. OpenClaw no longer
-sends Anthropic's retired `context-1m-2025-08-07` beta header for this setting.
+This keeps the larger context window as an explicit opt-in on eligible models.
+OpenClaw no longer sends Anthropic's retired `context-1m-2025-08-07` beta header
+for this setting.
 
 This only applies when `context1m: true` is set on that model entry.
 
