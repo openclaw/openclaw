@@ -3141,7 +3141,7 @@ describe("persistSessionUsageUpdate", () => {
     expect(stored[sessionKey].outputTokens).toBe(456);
   });
 
-  it("keeps non-clamped lastCallUsage totalTokens when exceeding context window", async () => {
+  it("clamps lastCallUsage totalTokens to context window when inflated (#85573)", async () => {
     const storePath = await createStorePath("openclaw-usage-");
     const sessionKey = "main";
     await seedSessionStore({
@@ -3158,8 +3158,11 @@ describe("persistSessionUsageUpdate", () => {
       contextTokensUsed: 200_000,
     });
 
+    // Previously returned 250_000 (unclamped).  Now clamped at context
+    // window because a single-turn prompt snapshot cannot physically
+    // exceed contextTokensUsed.
     const stored = JSON.parse(await fs.readFile(storePath, "utf-8"));
-    expect(stored[sessionKey].totalTokens).toBe(250_000);
+    expect(stored[sessionKey].totalTokens).toBe(200_000);
     expect(stored[sessionKey].totalTokensFresh).toBe(true);
   });
 

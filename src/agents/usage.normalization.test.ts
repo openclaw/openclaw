@@ -94,7 +94,11 @@ describe("normalizeUsage", () => {
     expect(hasNonzeroUsage({ total: 1 })).toBe(true);
   });
 
-  it("does not clamp derived session total tokens to the context window", () => {
+  it("clamps derived session total tokens to context window when inflated (#85573)", () => {
+    // Previously unclamped (returned 2_400_027).  Now clamped because a
+    // single-turn prompt snapshot cannot physically exceed the model's
+    // context window.  The inflated cacheRead (from claude-cli summing
+    // across tool sub-calls) would trip the preemptive compaction gate.
     expect(
       deriveSessionTotalTokens({
         usage: {
@@ -105,7 +109,7 @@ describe("normalizeUsage", () => {
         },
         contextTokens: 200_000,
       }),
-    ).toBe(2_400_027);
+    ).toBe(200_000);
   });
 
   it("uses prompt tokens when within context window", () => {
