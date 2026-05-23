@@ -99,6 +99,47 @@ describe("appendWorkspaceMountArgs", () => {
     ]);
   });
 
+  it.runIf(process.platform !== "win32")("does not overlay symlinked workspace skill roots", () => {
+    const agentWorkspaceDir = makeTempWorkspace();
+    const outsideDir = makeTempWorkspace();
+    fs.mkdirSync(path.join(outsideDir, "demo"), { recursive: true });
+    fs.symlinkSync(outsideDir, path.join(agentWorkspaceDir, "skills"), "dir");
+
+    const args: string[] = [];
+    appendWorkspaceMountArgs({
+      args,
+      workspaceDir: agentWorkspaceDir,
+      agentWorkspaceDir,
+      workdir: "/workspace",
+      workspaceAccess: "rw",
+    });
+
+    const mounts = args.filter((arg) => arg.startsWith(agentWorkspaceDir));
+    expect(mounts).toEqual([`${agentWorkspaceDir}:/workspace:z`]);
+  });
+
+  it.runIf(process.platform !== "win32")(
+    "does not overlay skill roots through a symlinked parent",
+    () => {
+      const agentWorkspaceDir = makeTempWorkspace();
+      const outsideDir = makeTempWorkspace();
+      fs.mkdirSync(path.join(outsideDir, "skills", "demo"), { recursive: true });
+      fs.symlinkSync(outsideDir, path.join(agentWorkspaceDir, ".agents"), "dir");
+
+      const args: string[] = [];
+      appendWorkspaceMountArgs({
+        args,
+        workspaceDir: agentWorkspaceDir,
+        agentWorkspaceDir,
+        workdir: "/workspace",
+        workspaceAccess: "rw",
+      });
+
+      const mounts = args.filter((arg) => arg.startsWith(agentWorkspaceDir));
+      expect(mounts).toEqual([`${agentWorkspaceDir}:/workspace:z`]);
+    },
+  );
+
   it("overlays project .agents skills read-only when workspaceAccess is rw", () => {
     const agentWorkspaceDir = makeTempWorkspace();
     fs.mkdirSync(path.join(agentWorkspaceDir, ".agents", "skills", "demo"), {

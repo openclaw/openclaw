@@ -1,4 +1,3 @@
-import fs from "node:fs";
 import path from "node:path";
 import { isPathInside } from "../../infra/path-guards.js";
 import type {
@@ -14,6 +13,7 @@ import {
   normalizeContainerPath as normalizeSandboxContainerPath,
   relativePathEscapesContainerRoot,
 } from "./path-utils.js";
+import { isExistingWorkspaceSkillMountSource } from "./workspace-mounts.js";
 
 type RemoteMountSource = "workspace" | "agent" | "protectedSkill";
 
@@ -272,7 +272,9 @@ class RemoteShellSandboxFsBridge implements SandboxFsBridge {
           localRoot: agentRoot,
           workspaceContainerRoot,
           agentContainerRoot,
-          includeAgentMount: path.resolve(this.sandbox.agentWorkspaceDir) !== path.resolve(this.sandbox.workspaceDir),
+          includeAgentMount:
+            path.resolve(this.sandbox.agentWorkspaceDir) !==
+            path.resolve(this.sandbox.workspaceDir),
         }),
       );
     }
@@ -315,9 +317,13 @@ class RemoteShellSandboxFsBridge implements SandboxFsBridge {
         const cwdContainer = normalizeContainerPath(cwdPosix);
         const cwdMount = this.resolveMountByContainerPath(mounts, cwdContainer);
         if (cwdMount) {
+          const containerPath = normalizeContainerPath(
+            path.posix.resolve(cwdContainer, inputPosix),
+          );
+          const targetMount = this.resolveMountByContainerPath(mounts, containerPath) ?? cwdMount;
           return this.toResolvedPath({
-            mount: cwdMount,
-            containerPath: normalizeContainerPath(path.posix.resolve(cwdContainer, inputPosix)),
+            mount: targetMount,
+            containerPath,
           });
         }
       }
@@ -564,15 +570,12 @@ function buildRemoteProtectedSkillMounts(params: {
       },
     );
   }
-  return mounts.filter((mount) => isExistingDirectory(mount.localRoot));
-}
-
-function isExistingDirectory(dir: string): boolean {
-  try {
-    return fs.statSync(dir).isDirectory();
-  } catch {
-    return false;
-  }
+  return mounts.filter((mount) =>
+    isExistingWorkspaceSkillMountSource({
+      agentWorkspaceDir: params.localRoot,
+      hostPath: mount.localRoot,
+    }),
+  );
 }
 
 function compareRemoteMountsByContainerPath(a: MountInfo, b: MountInfo): number {
