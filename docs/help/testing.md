@@ -817,7 +817,7 @@ MCP runtime, executes the tool, then verifies `coding` and `messaging` keep
 `bundle-mcp` tools while `minimal` and `tools.deny: ["bundle-mcp"]` filter them.
 `test:docker:cron-mcp-cleanup` is deterministic and does not need a live model
 key. It starts a seeded Gateway with a real stdio MCP probe server, runs an
-isolated cron turn and a `/subagents spawn` one-shot child turn, then verifies
+isolated cron turn and a `sessions_spawn` one-shot child turn, then verifies
 the MCP child process exits after each run.
 
 Manual ACP plain-language thread smoke (not CI):
