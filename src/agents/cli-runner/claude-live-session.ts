@@ -10,8 +10,22 @@ import {
 } from "../cli-output.js";
 import { FailoverError, resolveFailoverStatus } from "../failover-error.js";
 import { classifyFailoverReason } from "../pi-embedded-helpers.js";
+import { startClaudeSubagentActivityMonitor } from "./claude-subagent-progress.js";
 import { cliBackendLog } from "./log.js";
 import type { PreparedCliRunContext } from "./types.js";
+
+function extractCliSessionIdFromArgv(argv: readonly string[]): string | undefined {
+  for (let i = 0; i < argv.length - 1; i += 1) {
+    const flag = argv[i];
+    if (flag === "--session-id" || flag === "--resume" || flag === "-r") {
+      const value = argv[i + 1];
+      if (typeof value === "string" && value.length > 0) {
+        return value;
+      }
+    }
+  }
+  return undefined;
+}
 
 type ProcessSupervisor = ReturnType<
   typeof import("../../process/supervisor/index.js").getProcessSupervisor
@@ -42,6 +56,7 @@ type ClaudeLiveSession = {
   currentTurn: ClaudeLiveTurn | null;
   drainTimer: NodeJS.Timeout | null;
   drainingAbortedTurn: boolean;
+  subagentMonitor: { stop: () => void } | null;
   idleTimer: NodeJS.Timeout | null;
   cleanup: () => Promise<void>;
   cleanupDone: boolean;
@@ -608,6 +623,10 @@ function handleClaudeStdout(session: ClaudeLiveSession, chunk: string) {
 
 function handleClaudeExit(session: ClaudeLiveSession, exitCode: number | null): void {
   session.closing = true;
+  if (session.subagentMonitor) {
+    session.subagentMonitor.stop();
+    session.subagentMonitor = null;
+  }
   if (session.idleTimer) {
     clearTimeout(session.idleTimer);
     session.idleTimer = null;
@@ -723,6 +742,16 @@ async function createClaudeLiveSession(params: {
       }
     },
   });
+  const liveCliSessionId = extractCliSessionIdFromArgv(params.argv);
+  const subagentMonitor = liveCliSessionId
+    ? startClaudeSubagentActivityMonitor({
+        sessionId: params.context.params.sessionId,
+        sessionKey: params.context.params.sessionKey,
+        runId: params.context.params.runId,
+        workspaceDir: params.context.workspaceDir,
+        cliSessionId: liveCliSessionId,
+      })
+    : null;
   session = {
     key: params.key,
     fingerprint: params.fingerprint,
@@ -735,6 +764,7 @@ async function createClaudeLiveSession(params: {
     currentTurn: null,
     drainTimer: null,
     drainingAbortedTurn: false,
+    subagentMonitor,
     idleTimer: null,
     cleanup: params.cleanup,
     cleanupDone: false,
