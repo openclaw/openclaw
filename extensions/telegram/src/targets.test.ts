@@ -32,12 +32,20 @@ describe("stripTelegramInternalPrefixes", () => {
     expect(stripTelegramInternalPrefixes("telegram:group:-100123")).toBe("-100123");
   });
 
-  it("does not strip group prefix without telegram prefix", () => {
-    expect(stripTelegramInternalPrefixes("group:-100123")).toBe("group:-100123");
+  it("strips group prefix without telegram prefix (regression fix for #85640)", () => {
+    expect(stripTelegramInternalPrefixes("group:-100123")).toBe("-100123");
   });
 
   it("is idempotent", () => {
     expect(stripTelegramInternalPrefixes("@mychannel")).toBe("@mychannel");
+  });
+
+  it("strips channel prefix without telegram prefix (regression fix for #85640)", () => {
+    expect(stripTelegramInternalPrefixes("channel:-100456")).toBe("-100456");
+  });
+
+  it("strips user prefix without telegram prefix (regression fix for #85640)", () => {
+    expect(stripTelegramInternalPrefixes("user:123456789")).toBe("123456789");
   });
 });
 

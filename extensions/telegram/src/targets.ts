@@ -16,9 +16,12 @@ export function stripTelegramInternalPrefixes(to: string): string {
         strippedTelegramPrefix = true;
         return trimmed.replace(/^(telegram|tg):/i, "").trim();
       }
-      // Legacy internal form: `telegram:group:<id>` (still emitted by session keys).
-      if (strippedTelegramPrefix && /^group:/i.test(trimmed)) {
-        return trimmed.replace(/^group:/i, "").trim();
+      // Strip kind prefixes (group:, channel:, user:) that can appear in
+      // retry payloads as bare prefixes without a preceding provider
+      // prefix. Matches the legacy internal form `telegram:group:<id>`
+      // still emitted by session keys. See #85640.
+      if (/^(group|channel|user):/i.test(trimmed)) {
+        return trimmed.replace(/^(group|channel|user):/i, "").trim();
       }
       return trimmed;
     })();
