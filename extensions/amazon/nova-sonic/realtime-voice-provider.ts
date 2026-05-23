@@ -31,8 +31,11 @@ function normalizeConfig(raw: Record<string, unknown>): NovaSonicProviderConfig 
  * Config is read from the parent `amazon` plugin's `novaSonic` key.
  */
 export function buildNovaSonicVoiceProvider(
-  _pluginConfig?: Record<string, unknown>,
-): RealtimeVoiceProviderPlugin {
+  pluginConfig?: Record<string, unknown>,
+): RealtimeVoiceProviderPlugin | null {
+  const novaSonicConfig = (pluginConfig?.novaSonic ?? {}) as Record<string, unknown>;
+  const config = normalizeConfig(novaSonicConfig);
+  if (!config.enabled) return null;
   return {
     id: "amazon-nova-sonic",
     label: "Amazon Nova Sonic",

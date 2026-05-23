@@ -12,7 +12,7 @@ The **Amazon** plugin bundles three AWS AI services into a single extension:
 
 | Service          | Capability      | Default Model / Voice        |
 | ---------------- | --------------- | ---------------------------- |
-| Amazon Polly     | TTS (speech)    | `neural` engine, `Joanna`    |
+| Amazon Polly     | TTS (speech)    | `generative` engine, `Ruth`    |
 | Amazon Transcribe| STT (audio)     | Streaming transcription      |
 | Nova Sonic       | Realtime voice  | `amazon.nova-sonic-v1:0`, `tiffany` |
 
@@ -53,8 +53,8 @@ plugin will work.
               "polly": {
                 "enabled": true,
                 "region": "us-east-1",
-                "voice": "Joanna",
-                "engine": "neural"
+                "voice": "Ruth",
+                "engine": "generative"
               },
               "transcribe": {
                 "enabled": true,
@@ -84,8 +84,8 @@ plugin will work.
 | --------- | ------------ | ------------------------------------ |
 | `enabled` | `true`       | Enable/disable Polly TTS             |
 | `region`  | `us-east-1`  | AWS region                           |
-| `voice`   | `Joanna`     | Polly voice ID                       |
-| `engine`  | `neural`     | `neural` or `standard`               |
+| `voice`   | `Ruth`       | Polly voice ID                       |
+| `engine`  | `generative` | `generative`, `neural`, or `standard`|
 
 ### Transcribe (STT)
 

@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import {
   BedrockRuntimeClient,
   InvokeModelWithBidirectionalStreamCommand,
@@ -34,13 +35,7 @@ function encodeEvent(event: unknown): Uint8Array {
   return new TextEncoder().encode(JSON.stringify(event));
 }
 
-function generateUUID(): string {
-  return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, (c) => {
-    const r = (Math.random() * 16) | 0;
-    const v = c === "x" ? r : (r & 0x3) | 0x8;
-    return v.toString(16);
-  });
-}
+
 
 export class NovaSonicVoiceBridge implements RealtimeVoiceBridge {
   private client: BedrockRuntimeClient;
@@ -118,7 +113,7 @@ export class NovaSonicVoiceBridge implements RealtimeVoiceBridge {
   }
 
   submitToolResult(callId: string, result: unknown): void {
-    const contentName = generateUUID();
+    const contentName = randomUUID();
     // Send tool result as a text content block
     this.enqueueEvent({
       event: {
@@ -208,6 +203,9 @@ export class NovaSonicVoiceBridge implements RealtimeVoiceBridge {
             topP: 0.9,
             temperature: this.config.temperature ?? 0.7,
           },
+          turnDetectionConfiguration: {
+            endpointingSensitivity: "MEDIUM",
+          },
         },
       },
     };
@@ -222,10 +220,13 @@ export class NovaSonicVoiceBridge implements RealtimeVoiceBridge {
             mediaType: "text/plain",
           },
           audioOutputConfiguration: {
-            encoding: "pcm",
+            mediaType: "audio/lpcm",
             sampleRateHertz: 24000,
+            sampleSizeBits: 16,
             channelCount: 1,
             voiceId: this.config.voice,
+            encoding: "base64",
+            audioType: "SPEECH",
           },
           ...(this.config.tools && this.config.tools.length > 0
             ? {
@@ -250,7 +251,7 @@ export class NovaSonicVoiceBridge implements RealtimeVoiceBridge {
       return [];
     }
 
-    const contentName = generateUUID();
+    const contentName = randomUUID();
     return [
       {
         event: {
@@ -291,9 +292,12 @@ export class NovaSonicVoiceBridge implements RealtimeVoiceBridge {
           type: "AUDIO",
           role: "USER",
           audioInputConfiguration: {
-            encoding: "pcm",
+            mediaType: "audio/lpcm",
             sampleRateHertz: 16000,
+            sampleSizeBits: 16,
             channelCount: 1,
+            encoding: "base64",
+            audioType: "SPEECH",
           },
         },
       },
@@ -301,8 +305,8 @@ export class NovaSonicVoiceBridge implements RealtimeVoiceBridge {
   }
 
   private async doConnect(): Promise<void> {
-    this.promptName = generateUUID();
-    this.audioContentName = generateUUID();
+    this.promptName = randomUUID();
+    this.audioContentName = randomUUID();
 
     const sessionStartEvent = this.buildSessionStartEvent();
     const promptStartEvent = this.buildPromptStartEvent(this.promptName);

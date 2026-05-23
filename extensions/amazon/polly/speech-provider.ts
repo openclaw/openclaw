@@ -116,8 +116,10 @@ async function convertToOpusOgg(inputBuffer: Buffer): Promise<Buffer> {
  */
 export function buildPollySpeechProvider(
   pluginConfig?: Record<string, unknown>,
-): SpeechProviderPlugin {
+): SpeechProviderPlugin | null {
   const pollyConfig = (pluginConfig?.polly ?? {}) as Record<string, unknown>;
+  const config = readPollyConfig(pollyConfig);
+  if (!config.enabled) return null;
 
   return {
     id: "amazon-polly",
