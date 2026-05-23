@@ -55,6 +55,10 @@ import {
 } from "./dynamic-tools.js";
 import * as elicitationBridge from "./elicitation-bridge.js";
 import {
+  CodexAppServerEventProjector,
+  type CodexAppServerToolTelemetry,
+} from "./event-projector.js";
+import {
   buildCodexPluginAppCacheKey,
   resolveCodexPluginAppCacheEndpoint,
 } from "./plugin-app-cache-key.js";
@@ -666,6 +670,15 @@ function createRuntimeDynamicTool(name: string): RuntimeDynamicToolForTest {
       content: [{ type: "text" as const, text: `${name} done` }],
       details: {},
     })),
+  };
+}
+
+function buildEmptyCodexToolTelemetry(): CodexAppServerToolTelemetry {
+  return {
+    didSendViaMessagingTool: false,
+    messagingToolSentTexts: [],
+    messagingToolSentMediaUrls: [],
+    messagingToolSentTargets: [],
   };
 }
 
@@ -2657,28 +2670,31 @@ describe("runCodexAppServerAttempt", () => {
   });
 
   it("returns a run context report without deferred Codex dynamic tool schemas", async () => {
-    testing.setOpenClawCodingToolsFactoryForTests(() => [
-      createRuntimeDynamicTool("message"),
-      createRuntimeDynamicTool("web_search"),
-    ]);
-    const harness = createStartedThreadHarness();
     const params = createParams(
       path.join(tempDir, "session.jsonl"),
       path.join(tempDir, "workspace"),
     );
-    params.disableTools = false;
-    params.runtimePlan = createCodexRuntimePlanFixture();
-    params.sourceReplyDeliveryMode = "message_tool_only";
-    params.toolsAllow = ["message", "web_search"];
-
-    const run = runCodexAppServerAttempt(params, {
-      pluginConfig: { appServer: { mode: "yolo" } },
+    const toolBridge = createCodexDynamicToolBridge({
+      tools: [createRuntimeDynamicTool("message"), createRuntimeDynamicTool("web_search")],
+      signal: new AbortController().signal,
+      directToolNames: ["message"],
     });
-    await harness.waitForMethod("turn/start", 120_000);
-    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
-    const result = await run;
 
-    const report = result.systemPromptReport;
+    const report = testing.buildCodexSystemPromptReport({
+      attempt: params,
+      sessionKey: params.sessionKey ?? "agent:main:session-1",
+      workspaceDir: params.workspaceDir ?? tempDir,
+      developerInstructions: "test developer instructions",
+      workspaceBootstrapContext: {
+        bootstrapFiles: [],
+        contextFiles: [],
+        promptContextFiles: [],
+        developerInstructionFiles: [],
+        heartbeatReferenceFiles: [],
+      },
+      skillsPrompt: "",
+      tools: toolBridge.availableSpecs,
+    });
     expect(report?.source).toBe("run");
     expect(report?.provider).toBe("codex");
     expect(report?.model).toBe("gpt-5.4-codex");
@@ -2692,46 +2708,24 @@ describe("runCodexAppServerAttempt", () => {
   });
 
   it("keeps searchable Codex dynamic tools canonical in mirrored transcript snapshots", async () => {
-    testing.setOpenClawCodingToolsFactoryForTests(() => [createRuntimeDynamicTool("wiki_status")]);
-    const harness = createStartedThreadHarness();
     const params = createParams(
       path.join(tempDir, "session.jsonl"),
       path.join(tempDir, "workspace"),
     );
-    params.disableTools = false;
-    params.runtimePlan = createCodexRuntimePlanFixture();
-    params.toolsAllow = ["wiki_status"];
-
-    const run = runCodexAppServerAttempt(params, {
-      pluginConfig: {
-        codexDynamicToolsLoading: "searchable",
-        appServer: { mode: "yolo" },
-      },
+    const projector = new CodexAppServerEventProjector(params, "thread-1", "turn-1");
+    projector.recordDynamicToolCall({
+      callId: "call-wiki-status-1",
+      tool: "wiki_status",
+      arguments: { topic: "README.md" },
     });
-    await harness.waitForMethod("turn/start", 120_000);
-
-    const toolResult = (await harness.handleServerRequest({
-      id: "request-tool-wiki-status",
-      method: "item/tool/call",
-      params: {
-        threadId: "thread-1",
-        turnId: "turn-1",
-        callId: "call-wiki-status-1",
-        namespace: CODEX_OPENCLAW_DYNAMIC_TOOL_NAMESPACE,
-        tool: "wiki_status",
-        arguments: { topic: "README.md" },
-      },
-    })) as {
-      contentItems?: Array<{ text?: string; type?: string }>;
-      success?: boolean;
-    };
-    expect(toolResult).toEqual({
+    projector.recordDynamicToolResult({
+      callId: "call-wiki-status-1",
+      tool: "wiki_status",
       success: true,
+      terminalType: "completed",
       contentItems: [{ type: "inputText", text: "wiki_status done" }],
     });
-
-    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
-    const result = await run;
+    const result = projector.buildResult(buildEmptyCodexToolTelemetry());
 
     expect(result.messagesSnapshot.map((message) => message.role)).toEqual([
       "user",
