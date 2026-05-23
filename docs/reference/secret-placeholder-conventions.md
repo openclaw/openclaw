@@ -18,7 +18,7 @@ Use placeholders that are human-readable but do not resemble real secrets.
 
 ## Avoid these patterns in docs
 
-- Private key sentinels such as `-----BEGIN PRIVATE KEY-----`.
+- Literal PEM private-key header or footer text.
 - Prefixes that resemble live credentials, for example `sk-...`, `xoxb-...`, `AKIA...`.
 - Realistic-looking bearer tokens copied from runtime logs.
 
