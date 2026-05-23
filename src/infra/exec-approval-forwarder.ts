@@ -582,7 +582,7 @@ function createApprovalHandlers<
         });
       })().catch((err) => {
         log.error(
-          `exec approvals: failed to deliver expiry notification for ${requestId}: ${String(err)}`,
+          `${params.strategy.kind} approvals: failed to deliver expiry notification for ${requestId}: ${String(err)}`,
         );
       });
     }, expiresInMs);
