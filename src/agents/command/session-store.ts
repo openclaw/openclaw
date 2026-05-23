@@ -319,6 +319,7 @@ export async function recordCliCompactionInStore(params: {
     next.sessionFile = explicitNewSessionFile;
   }
   const tokensAfterCompaction = resolveNonNegativeNumber(params.tokensAfter);
+  next.contextBudgetStatus = undefined;
   if (tokensAfterCompaction !== undefined) {
     next.totalTokens = Math.floor(tokensAfterCompaction);
     next.totalTokensFresh = true;

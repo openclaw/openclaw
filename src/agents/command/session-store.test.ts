@@ -1424,6 +1424,25 @@ describe("recordCliCompactionInStore", () => {
           outputTokens: 100,
           cacheRead: 2_900,
           cacheWrite: 0,
+          contextBudgetStatus: {
+            schemaVersion: 1,
+            source: "pre-prompt-estimate",
+            updatedAt: 123,
+            provider: "codex",
+            model: "gpt-5.5",
+            route: "fits",
+            shouldCompact: false,
+            estimatedPromptTokens: 18_000,
+            contextTokenBudget: 32_000,
+            promptBudgetBeforeReserve: 28_000,
+            reserveTokens: 4_000,
+            effectiveReserveTokens: 4_000,
+            remainingPromptBudgetTokens: 10_000,
+            overflowTokens: 0,
+            toolResultReducibleChars: 0,
+            messageCount: 4,
+            unwindowedMessageCount: 4,
+          },
           cliSessionBindings: {
             codex: {
               sessionId: "stale-cli-session",
@@ -1452,10 +1471,12 @@ describe("recordCliCompactionInStore", () => {
       expect(sessionStore[sessionKey]?.outputTokens).toBeUndefined();
       expect(sessionStore[sessionKey]?.cacheRead).toBeUndefined();
       expect(sessionStore[sessionKey]?.cacheWrite).toBeUndefined();
+      expect(sessionStore[sessionKey]?.contextBudgetStatus).toBeUndefined();
       expect(sessionStore[sessionKey]?.cliSessionBindings?.codex).toBeUndefined();
       expect(sessionStore[sessionKey]?.cliSessionIds?.codex).toBeUndefined();
       expect(persisted[sessionKey]?.totalTokens).toBe(0);
       expect(persisted[sessionKey]?.totalTokensFresh).toBe(true);
+      expect(persisted[sessionKey]?.contextBudgetStatus).toBeUndefined();
     });
   });
 
@@ -1473,6 +1494,25 @@ describe("recordCliCompactionInStore", () => {
           outputTokens: 100,
           cacheRead: 6_900,
           cacheWrite: 0,
+          contextBudgetStatus: {
+            schemaVersion: 1,
+            source: "pre-prompt-estimate",
+            updatedAt: 123,
+            provider: "codex",
+            model: "gpt-5.5",
+            route: "compact_only",
+            shouldCompact: true,
+            estimatedPromptTokens: 48_000,
+            contextTokenBudget: 32_000,
+            promptBudgetBeforeReserve: 28_000,
+            reserveTokens: 4_000,
+            effectiveReserveTokens: 4_000,
+            remainingPromptBudgetTokens: 0,
+            overflowTokens: 20_000,
+            toolResultReducibleChars: 0,
+            messageCount: 40,
+            unwindowedMessageCount: 40,
+          },
         },
       };
       await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2));
@@ -1492,8 +1532,10 @@ describe("recordCliCompactionInStore", () => {
       expect(sessionStore[sessionKey]?.outputTokens).toBeUndefined();
       expect(sessionStore[sessionKey]?.cacheRead).toBeUndefined();
       expect(sessionStore[sessionKey]?.cacheWrite).toBeUndefined();
+      expect(sessionStore[sessionKey]?.contextBudgetStatus).toBeUndefined();
       expect(persisted[sessionKey]?.totalTokens).toBe(37_000);
       expect(persisted[sessionKey]?.totalTokensFresh).toBe(false);
+      expect(persisted[sessionKey]?.contextBudgetStatus).toBeUndefined();
     });
   });
 
