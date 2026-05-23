@@ -23,6 +23,7 @@ import { stageSandboxMedia } from "../../auto-reply/reply/stage-sandbox-media.js
 import type { MsgContext, TemplateContext } from "../../auto-reply/templating.js";
 import { extractCanvasFromText } from "../../chat/canvas-render.js";
 import { resolveSessionFilePath } from "../../config/sessions.js";
+import { appendSessionTranscriptMessage } from "../../config/sessions/transcript-append.js";
 import { streamSessionTranscriptLines } from "../../config/sessions/transcript-stream.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
@@ -2672,14 +2673,30 @@ export const chatHandlers: GatewayRequestHandlers = {
                 return;
               }
               const persistedImages = await persistedImagesPromise;
+              const userMessage = buildChatSendTranscriptMessage({
+                message: parsedMessage,
+                savedImages: persistedImages,
+                timestamp: now,
+              });
+              // Call sites that invoke emitUserTranscriptUpdate are gated on
+              // !hasBeforeAgentRunGate, so this append never collides with
+              // attempt.ts's redacted-user-message write on the hook-block path.
+              // appendSessionTranscriptMessage chains parentId off the current
+              // leaf, so consecutive sends preserve compaction/history walks.
+              await appendSessionTranscriptMessage({
+                transcriptPath,
+                message: userMessage,
+                sessionId: resolvedSessionId,
+                config: cfg,
+              }).catch((err) => {
+                context.logGateway.warn(
+                  `webchat user transcript append failed: ${formatForLog(err)}`,
+                );
+              });
               emitSessionTranscriptUpdate({
                 sessionFile: transcriptPath,
                 sessionKey,
-                message: buildChatSendTranscriptMessage({
-                  message: parsedMessage,
-                  savedImages: persistedImages,
-                  timestamp: now,
-                }),
+                message: userMessage,
               });
             },
             {
