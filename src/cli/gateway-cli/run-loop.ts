@@ -716,7 +716,10 @@ export async function runGatewayLoop(params: {
         restartIntent?.reason,
         restartIntent ?? undefined,
       );
-    })();
+    })().catch((err: unknown) => {
+      gatewayLog.error(`failed to handle SIGTERM: ${String(err)}`);
+      request("stop", "SIGTERM");
+    });
   };
   const onSigint = () => {
     gatewayLog.info("signal SIGINT received");

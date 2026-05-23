@@ -45,12 +45,41 @@ GitHub may mark superseded jobs as `cancelled` when a newer push lands on the sa
 
 The `ci-timings-summary` job uploads a compact `ci-timings-summary` artifact for each non-draft CI run. It records wall time, queue time, slowest jobs, and failed jobs for the current run, so CI health checks do not need to scrape the full Actions payload repeatedly.
 
+## Real behavior proof
+
+External contributor PRs run a `Real behavior proof` gate from
+`.github/workflows/real-behavior-proof.yml`. The workflow checks out the trusted
+base commit and evaluates the PR body only; it does not execute code from the
+contributor branch.
+
+The gate applies to PR authors who are not repository owners, members,
+collaborators, or bots. It passes when the PR body contains a
+`Real behavior proof` section with filled values for:
+
+- `Behavior or issue addressed`
+- `Real environment tested`
+- `Exact steps or command run after this patch`
+- `Evidence after fix`
+- `Observed result after fix`
+- `What was not tested`
+
+The evidence must show the changed behavior after the patch in a real OpenClaw
+setup. Screenshots, recordings, terminal captures, console output, copied live
+output, redacted runtime logs, and linked artifacts all count. Unit tests, mocks,
+snapshots, lint, typechecks, and CI results are useful supporting verification,
+but they do not satisfy this gate by themselves.
+
+When the check fails, update the PR body instead of pushing another code commit.
+Maintainers can apply `proof: override` only when the proof gate should not
+apply to that PR.
+
 ## Scope and routing
 
 Scope logic lives in `scripts/ci-changed-scope.mjs` and is covered by unit tests in `src/scripts/ci-changed-scope.test.ts`. Manual dispatch skips changed-scope detection and makes the preflight manifest act as if every scoped area changed.
 
 - **CI workflow edits** validate the Node CI graph plus workflow linting, but do not force Windows, Android, or macOS native builds by themselves; those platform lanes stay scoped to platform source changes.
 - **Docs on `main` pushes** are checked by the standalone `Docs` workflow with the same ClawHub docs mirror used by CI, so mixed code+docs pushes do not also queue the CI `check-docs` shard. Pull requests and manual CI still run `check-docs` from CI when docs changed.
+- **TUI PTY** is a focused workflow for TUI changes. It runs `node scripts/run-vitest.mjs run --config test/vitest/vitest.tui-pty.config.ts` on Linux Node 24 for `src/tui/**`, the watch harness, package script, lockfile, and workflow edits. The required lane uses a deterministic `TuiBackend` fixture; the slower `tui --local` smoke is opt-in with `OPENCLAW_TUI_PTY_INCLUDE_LOCAL=1` and mocks only the external model endpoint.
 - **CI routing-only edits, selected cheap core-test fixture edits, and narrow plugin contract helper/test-routing edits** use a fast Node-only manifest path: `preflight`, security, and a single `checks-fast-core` task. That path skips build artifacts, Node 22 compatibility, channel contracts, full core shards, bundled-plugin shards, and additional guard matrices when the change is limited to the routing or helper surfaces the fast task exercises directly.
 - **Windows Node checks** are scoped to Windows-specific process/path wrappers, npm/pnpm/UI runner helpers, package manager config, and the CI workflow surfaces that execute that lane; unrelated source, plugin, install-smoke, and test-only changes stay on the Linux Node lanes.
 
@@ -114,6 +143,7 @@ pnpm check:timed                              # same gate with per-stage timings
 pnpm build:strict-smoke
 pnpm check:architecture
 pnpm test:gateway:watch-regression
+node scripts/run-vitest.mjs run --config test/vitest/vitest.tui-pty.config.ts
 pnpm test                                     # vitest tests
 pnpm test:changed                             # cheap smart changed Vitest targets
 pnpm test:channels
@@ -248,7 +278,8 @@ Use `Package Acceptance` when the question is "does this installable OpenClaw pa
 
 - `source=npm` accepts only `openclaw@beta`, `openclaw@latest`, or an exact OpenClaw release version such as `openclaw@2026.4.27-beta.2`. Use this for published prerelease/stable acceptance.
 - `source=ref` packs a trusted `package_ref` branch, tag, or full commit SHA. The resolver fetches OpenClaw branches/tags, verifies the selected commit is reachable from repository branch history or a release tag, installs deps in a detached worktree, and packs it with `scripts/package-openclaw-for-docker.mjs`.
-- `source=url` downloads an HTTPS `.tgz`; `package_sha256` is required.
+- `source=url` downloads a public HTTPS `.tgz`; `package_sha256` is required. This path rejects URL credentials, non-default HTTPS ports, private/internal/special-use hostnames or resolved IPs, and redirects outside the same public safety policy.
+- `source=trusted-url` downloads an HTTPS `.tgz` from a named trusted-source policy in `.github/package-trusted-sources.json`; `package_sha256` and `trusted_source_id` are required. Use this only for maintainer-owned enterprise mirrors or private package repositories that need configured hosts, ports, path prefixes, redirect hosts, or private-network resolution. If the policy declares bearer auth, the workflow uses the fixed `OPENCLAW_TRUSTED_PACKAGE_TOKEN` secret; URL-embedded credentials are still rejected.
 - `source=artifact` downloads one `.tgz` from `artifact_run_id` and `artifact_name`; `package_sha256` is optional but should be supplied for externally shared artifacts.
 
 Keep `workflow_ref` and `package_ref` separate. `workflow_ref` is the trusted workflow/harness code that runs the test. `package_ref` is the source commit that gets packed when `source=ref`. This lets the current test harness validate older trusted source commits without running old workflow logic.
@@ -308,6 +339,16 @@ gh workflow run package-acceptance.yml \
   -f workflow_ref=main \
   -f source=url \
   -f package_url=https://example.com/openclaw-current.tgz \
+  -f package_sha256=<64-char-sha256> \
+  -f suite_profile=smoke
+
+# Validate a tarball from a named trusted private mirror policy.
+gh workflow run package-acceptance.yml \
+  --ref main \
+  -f workflow_ref=main \
+  -f source=trusted-url \
+  -f trusted_source_id=enterprise-artifactory \
+  -f package_url=https://packages.example.internal:8443/artifactory/openclaw/openclaw-current.tgz \
   -f package_sha256=<64-char-sha256> \
   -f suite_profile=smoke
 

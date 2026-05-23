@@ -374,17 +374,19 @@ async function assertModelFallbackCandidateHarnessAvailable(
   if (isCliAgentRuntime(agentRuntime, params.cfg)) {
     return;
   }
+  if (
+    agentRuntime === "auto" ||
+    agentRuntime === "pi" ||
+    (agentRuntime === "codex" && agentRuntimeSource === "implicit")
+  ) {
+    return;
+  }
   await params.prepareAgentHarnessRuntime?.({
     provider: params.provider,
     model: params.model,
     agentHarnessRuntimeOverride,
   });
-  if (
-    agentRuntime !== "auto" &&
-    agentRuntime !== "pi" &&
-    !(agentRuntime === "codex" && agentRuntimeSource === "implicit") &&
-    !getRegisteredAgentHarness(agentRuntime)
-  ) {
+  if (!getRegisteredAgentHarness(agentRuntime)) {
     throw new MissingAgentHarnessError(agentRuntime);
   }
 }

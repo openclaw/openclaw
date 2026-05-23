@@ -414,10 +414,6 @@ function resolveHarnessDefaultParentSessionKey(params: {
 function resolveTurnModelOverride(
   replyOptions: DispatchFromConfigParams["replyOptions"],
 ): string | undefined {
-  const modelOverride = normalizeOptionalString(replyOptions?.modelOverride);
-  if (modelOverride) {
-    return modelOverride;
-  }
   if (replyOptions?.isHeartbeat !== true) {
     return undefined;
   }

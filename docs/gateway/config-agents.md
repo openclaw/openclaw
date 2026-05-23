@@ -723,6 +723,7 @@ Prunes **old tool results** from in-memory context before sending to the LLM. Do
 - `mode: "cache-ttl"` enables pruning passes.
 - `ttl` controls how often pruning can run again (after the last cache touch).
 - Pruning soft-trims oversized tool results first, then hard-clears older tool results if needed.
+- `softTrimRatio` and `hardClearRatio` accept values from `0.0` through `1.0`; config validation rejects values outside that range.
 
 **Soft-trim** keeps beginning + end and inserts `...` in the middle.
 
@@ -1396,7 +1397,7 @@ Batches rapid text-only messages from the same sender into a single agent turn. 
       auto: "always", // off | always | inbound | tagged
       mode: "final", // final | all
       provider: "elevenlabs",
-      summaryModel: "openai/gpt-4.1-mini",
+      summaryModel: "openai/gpt-5.4-mini",
       modelOverrides: { enabled: true },
       maxTextLength: 4000,
       timeoutMs: 30000,
