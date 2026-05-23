@@ -1430,6 +1430,45 @@ describe("buildStatusMessage", () => {
     expect(normalized).not.toContain("Reason: session override");
   });
 
+  it("hides cost when api-key selected but oauth active via runtime alias", () => {
+    const text = buildStatusMessage({
+      config: {
+        models: {
+          providers: {
+            claudecli: {
+              models: [
+                {
+                  id: "claude-opus-4-6",
+                  cost: {
+                    input: 1,
+                    output: 1,
+                    cacheRead: 0,
+                    cacheWrite: 0,
+                  },
+                },
+              ],
+            },
+          },
+        },
+      } as unknown as OpenClawConfig,
+      agent: { model: "anthropic/claude-opus-4-6" },
+      sessionEntry: {
+        sessionId: "c1",
+        updatedAt: 0,
+        inputTokens: 10,
+        model: "claude-cli/claude-opus-4-6",
+      },
+      sessionKey: "agent:main:main",
+      sessionScope: "per-sender",
+      queue: { mode: "collect", depth: 0 },
+      modelAuth: "api-key",
+      activeModelAuth: "oauth",
+    });
+
+    expect(text).not.toContain("💵 Cost:");
+    expect(text).toContain("🔑 oauth");
+  });
+
   it("handles missing agent config gracefully", () => {
     const text = buildStatusMessage({
       agent: {},
