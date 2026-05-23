@@ -94,9 +94,15 @@ describe("gateway startup primary model warmup", () => {
   });
 
   it("honors the startup model prewarm skip env", () => {
-    expect(shouldSkipStartupModelPrewarm({})).toBe(false);
+    expect(shouldSkipStartupModelPrewarm({})).toBe(true);
     expect(
       shouldSkipStartupModelPrewarm({
+        OPENCLAW_STARTUP_MODEL_PREWARM: "1",
+      }),
+    ).toBe(false);
+    expect(
+      shouldSkipStartupModelPrewarm({
+        OPENCLAW_STARTUP_MODEL_PREWARM: "1",
         OPENCLAW_SKIP_STARTUP_MODEL_PREWARM: "1",
       }),
     ).toBe(true);

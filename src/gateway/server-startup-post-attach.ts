@@ -30,6 +30,7 @@ const PRIMARY_MODEL_PREWARM_TIMEOUT_MS = 5_000;
 const STARTUP_PROVIDER_DISCOVERY_TIMEOUT_MS = 5_000;
 const PROVIDER_AUTH_PREWARM_START_DELAY_MS = 1_000;
 const PROVIDER_AUTH_REWARM_DELAY_MS = 1_000;
+const ENABLE_STARTUP_MODEL_PREWARM_ENV = "OPENCLAW_STARTUP_MODEL_PREWARM";
 const SKIP_STARTUP_MODEL_PREWARM_ENV = "OPENCLAW_SKIP_STARTUP_MODEL_PREWARM";
 const QMD_STARTUP_IDLE_DELAY_MS = 120_000;
 const RESTART_SENTINEL_FILENAME = "restart-sentinel.json";
@@ -102,7 +103,11 @@ function shouldCheckRestartSentinel(env: NodeJS.ProcessEnv = process.env): boole
 
 function shouldSkipStartupModelPrewarm(env: NodeJS.ProcessEnv = process.env): boolean {
   const raw = env[SKIP_STARTUP_MODEL_PREWARM_ENV]?.trim().toLowerCase();
-  return raw === "1" || raw === "true" || raw === "yes" || raw === "on";
+  if (raw === "1" || raw === "true" || raw === "yes" || raw === "on") {
+    return true;
+  }
+  const enabled = env[ENABLE_STARTUP_MODEL_PREWARM_ENV]?.trim().toLowerCase();
+  return !(enabled === "1" || enabled === "true" || enabled === "yes" || enabled === "on");
 }
 
 function resolveGatewayMemoryStartupPolicy(cfg: OpenClawConfig): GatewayMemoryStartupPolicy {
@@ -527,22 +532,24 @@ function schedulePrimaryModelPrewarm(
     workspaceDir?: string;
     log: { warn: (msg: string) => void };
     startupTrace?: GatewayStartupTrace;
+    deferUntil?: Promise<void>;
   },
   prewarm: typeof prewarmConfiguredPrimaryModel = prewarmConfiguredPrimaryModel,
 ): void {
   if (shouldSkipStartupModelPrewarm()) {
     return;
   }
-  void measureStartup(params.startupTrace, "sidecars.model-prewarm", () =>
-    prewarmConfiguredPrimaryModelWithTimeout(
+  void measureStartup(params.startupTrace, "sidecars.model-prewarm", async () => {
+    await params.deferUntil;
+    await prewarmConfiguredPrimaryModelWithTimeout(
       {
         cfg: params.cfg,
         ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
         log: params.log,
       },
       prewarm,
-    ),
-  ).catch((err) => {
+    );
+  }).catch((err) => {
     params.log.warn(`startup model warmup failed: ${String(err)}`);
   });
 }
@@ -563,6 +570,7 @@ export async function startGatewaySidecars(params: {
   };
   logChannels: { info: (msg: string) => void; error: (msg: string) => void };
   startupTrace?: GatewayStartupTrace;
+  deferModelPrewarmUntil?: Promise<void>;
 }) {
   const postReadySidecars: GatewayPostReadySidecarHandle[] = [];
 
@@ -624,6 +632,7 @@ export async function startGatewaySidecars(params: {
             workspaceDir: params.defaultWorkspaceDir,
             log: params.log,
             startupTrace: params.startupTrace,
+            deferUntil: params.deferModelPrewarmUntil,
           },
           params.prewarmPrimaryModel,
         );
@@ -1004,6 +1013,7 @@ export async function startGatewayPostAttachRuntime(
       delayMs?: number;
       getConfig?: () => OpenClawConfig;
     };
+    deferModelPrewarmUntil?: Promise<void>;
   },
   runtimeDeps: GatewayPostAttachRuntimeDeps = defaultGatewayPostAttachRuntimeDeps,
 ) {
@@ -1091,6 +1101,7 @@ export async function startGatewayPostAttachRuntime(
             logChannels: params.logChannels,
             startupTrace: params.startupTrace,
             onPluginServices: reportPluginServices,
+            deferModelPrewarmUntil: params.deferModelPrewarmUntil,
           }),
         );
         const loaderStatsAfter = getPluginModuleLoaderStats();

@@ -1091,7 +1091,11 @@ describe("startGatewayPostAttachRuntime", () => {
 
   it("starts channels without waiting for primary model prewarm completion", async () => {
     await withEnvAsync(
-      { OPENCLAW_SKIP_CHANNELS: undefined, OPENCLAW_SKIP_PROVIDERS: undefined },
+      {
+        OPENCLAW_SKIP_CHANNELS: undefined,
+        OPENCLAW_SKIP_PROVIDERS: undefined,
+        OPENCLAW_STARTUP_MODEL_PREWARM: "1",
+      },
       async () => {
         let resolvePrewarm: (() => void) | undefined;
         const prewarmPrimaryModel = vi.fn(
