@@ -414,7 +414,7 @@ export function createFollowupRunner(params: {
         run.verboseLevel === "full" && !shouldSuppressDefaultToolProgressMessages();
       let observedVisibleToolErrorProgress = false;
       const markVisibleToolErrorProgress = () => {
-        if (shouldEmitToolResultProgress()) {
+        if (run.verboseLevel === "on" && shouldEmitToolResultProgress()) {
           observedVisibleToolErrorProgress = true;
         }
       };
