@@ -1,9 +1,12 @@
+import fs from "node:fs";
 import path from "node:path";
 import { MANIFEST_KEY } from "../../compat/legacy-names.js";
+import type { PluginInstallRecord } from "../../config/types.plugins.js";
 import { tryReadJsonSync } from "../../infra/json-files.js";
 import { isPrereleaseSemverVersion, parseRegistryNpmSpec } from "../../infra/npm-registry-spec.js";
 import { resolveOpenClawPackageRootSync } from "../../infra/openclaw-root.js";
 import { listChannelCatalogEntries } from "../../plugins/channel-catalog-registry.js";
+import type { PluginDiscoveryResult } from "../../plugins/discovery.js";
 import {
   describePluginInstallSource,
   type PluginInstallSourceInfo,
@@ -52,6 +55,8 @@ type CatalogOptions = {
   officialCatalogPaths?: string[];
   env?: NodeJS.ProcessEnv;
   excludeWorkspace?: boolean;
+  installRecords?: Record<string, PluginInstallRecord>;
+  discovery?: PluginDiscoveryResult;
 };
 
 const ORIGIN_PRIORITY: Record<PluginOrigin, number> = {
@@ -72,7 +77,13 @@ type ExternalCatalogEntry = {
 
 const ENV_CATALOG_PATHS = ["OPENCLAW_PLUGIN_CATALOG_PATHS", "OPENCLAW_MPM_CATALOG_PATHS"];
 const OFFICIAL_CHANNEL_CATALOG_RELATIVE_PATH = path.join("dist", "channel-catalog.json");
+type CatalogEntriesCacheEntry = {
+  fingerprint: string;
+  entries: ExternalCatalogEntry[] | null;
+};
+
 const officialCatalogEntriesByPath = new Map<string, ExternalCatalogEntry[] | null>();
+const externalCatalogEntriesByPath = new Map<string, CatalogEntriesCacheEntry>();
 
 type ManifestKey = typeof MANIFEST_KEY;
 
@@ -129,17 +140,43 @@ function loadExternalCatalogEntries(options: CatalogOptions): ExternalCatalogEnt
   const paths = resolveExternalCatalogPaths(options).map((rawPath) =>
     resolveUserPath(rawPath, options.env ?? process.env),
   );
-  return loadCatalogEntriesFromPaths(paths);
+  return loadCatalogEntriesFromPaths(paths, externalCatalogEntriesByPath);
 }
 
-function loadCatalogEntriesFromPaths(paths: Iterable<string>): ExternalCatalogEntry[] {
+function fingerprintCatalogPath(filePath: string): string {
+  try {
+    const stat = fs.statSync(filePath, { bigint: true });
+    const kind = stat.isFile() ? "file" : stat.isDirectory() ? "dir" : "other";
+    return [kind, stat.size.toString(), stat.mtimeNs.toString(), stat.ctimeNs.toString()].join(":");
+  } catch {
+    return "missing";
+  }
+}
+
+function readCatalogEntriesFromPath(resolvedPath: string): ExternalCatalogEntry[] | null {
+  const payload = tryReadJsonSync(resolvedPath);
+  return payload === null ? null : parseCatalogEntries(payload);
+}
+
+function loadCatalogEntriesFromPaths(
+  paths: Iterable<string>,
+  cache?: Map<string, CatalogEntriesCacheEntry>,
+): ExternalCatalogEntry[] {
   const entries: ExternalCatalogEntry[] = [];
   for (const resolvedPath of paths) {
-    const payload = tryReadJsonSync(resolvedPath);
-    if (payload === null) {
+    const fingerprint = cache ? fingerprintCatalogPath(resolvedPath) : undefined;
+    const cached = fingerprint ? cache?.get(resolvedPath) : undefined;
+    const parsed =
+      cached && cached.fingerprint === fingerprint
+        ? cached.entries
+        : readCatalogEntriesFromPath(resolvedPath);
+    if (cache && fingerprint) {
+      cache.set(resolvedPath, { fingerprint, entries: parsed });
+    }
+    if (parsed === null) {
       continue;
     }
-    entries.push(...parseCatalogEntries(payload));
+    entries.push(...parsed);
   }
   return entries;
 }
@@ -399,6 +436,8 @@ export function listChannelPluginCatalogEntries(
   const manifestEntries = listChannelCatalogEntries({
     workspaceDir: options.workspaceDir,
     env: options.env,
+    installRecords: options.installRecords,
+    discovery: options.discovery,
   });
   const resolved = new Map<string, { entry: ChannelPluginCatalogEntry; priority: number }>();
 
