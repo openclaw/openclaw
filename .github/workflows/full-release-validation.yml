@@ -301,6 +301,14 @@ jobs:
             echo "Dispatched ${workflow}: https://github.com/${GITHUB_REPOSITORY}/actions/runs/${run_id}"
             echo "run_id=${run_id}" >> "$GITHUB_OUTPUT"
 
+            fetch_child_run_json() {
+              gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}"
+            }
+
+            fetch_child_jobs() {
+              gh api --paginate "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}/jobs?per_page=100" --jq '.jobs[]'
+            }
+
             cancel_child() {
               if [[ -n "${run_id:-}" ]]; then
                 echo "Cancelling child workflow ${workflow}: ${run_id}" >&2
@@ -311,26 +319,26 @@ jobs:
 
             poll_count=0
             while true; do
-              status="$(gh run view "$run_id" --json status --jq '.status')"
+              status="$(fetch_child_run_json | jq -r '.status')"
               if [[ "$status" == "completed" ]]; then
                 break
               fi
               poll_count=$((poll_count + 1))
               if (( poll_count % 10 == 0 )); then
                 echo "Still waiting on ${workflow}: https://github.com/${GITHUB_REPOSITORY}/actions/runs/${run_id}"
-                gh run view "$run_id" --json jobs --jq '.jobs[] | select(.status != "completed") | {name, status, url}' || true
+                fetch_child_jobs | jq 'select(.status != "completed") | {name, status, url: .html_url}' || true
               fi
               sleep 30
             done
             trap - EXIT INT TERM
 
-            conclusion="$(gh run view "$run_id" --json conclusion --jq '.conclusion')"
-            url="$(gh run view "$run_id" --json url --jq '.url')"
+            conclusion="$(fetch_child_run_json | jq -r '.conclusion // ""')"
+            url="$(fetch_child_run_json | jq -r '.html_url')"
             echo "${workflow} finished with ${conclusion}: ${url}"
             echo "url=${url}" >> "$GITHUB_OUTPUT"
             echo "conclusion=${conclusion}" >> "$GITHUB_OUTPUT"
             if [[ "$conclusion" != "success" ]]; then
-              gh run view "$run_id" --json jobs --jq '.jobs[] | select(.conclusion != "success" and .conclusion != "skipped") | {name, conclusion, url}' || true
+              fetch_child_jobs | jq 'select(.conclusion != "success" and .conclusion != "skipped") | {name, conclusion, url: .html_url}' || true
               exit 1
             fi
           }
@@ -401,6 +409,14 @@ jobs:
             echo "Dispatched ${workflow}: https://github.com/${GITHUB_REPOSITORY}/actions/runs/${run_id}"
             echo "run_id=${run_id}" >> "$GITHUB_OUTPUT"
 
+            fetch_child_run_json() {
+              gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}"
+            }
+
+            fetch_child_jobs() {
+              gh api --paginate "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}/jobs?per_page=100" --jq '.jobs[]'
+            }
+
             cancel_child() {
               if [[ -n "${run_id:-}" ]]; then
                 echo "Cancelling child workflow ${workflow}: ${run_id}" >&2
@@ -411,26 +427,26 @@ jobs:
 
             poll_count=0
             while true; do
-              status="$(gh run view "$run_id" --json status --jq '.status')"
+              status="$(fetch_child_run_json | jq -r '.status')"
               if [[ "$status" == "completed" ]]; then
                 break
               fi
               poll_count=$((poll_count + 1))
               if (( poll_count % 10 == 0 )); then
                 echo "Still waiting on ${workflow}: https://github.com/${GITHUB_REPOSITORY}/actions/runs/${run_id}"
-                gh run view "$run_id" --json jobs --jq '.jobs[] | select(.status != "completed") | {name, status, url}' || true
+                fetch_child_jobs | jq 'select(.status != "completed") | {name, status, url: .html_url}' || true
               fi
               sleep 30
             done
             trap - EXIT INT TERM
 
-            conclusion="$(gh run view "$run_id" --json conclusion --jq '.conclusion')"
-            url="$(gh run view "$run_id" --json url --jq '.url')"
+            conclusion="$(fetch_child_run_json | jq -r '.conclusion // ""')"
+            url="$(fetch_child_run_json | jq -r '.html_url')"
             echo "${workflow} finished with ${conclusion}: ${url}"
             echo "url=${url}" >> "$GITHUB_OUTPUT"
             echo "conclusion=${conclusion}" >> "$GITHUB_OUTPUT"
             if [[ "$conclusion" != "success" ]]; then
-              gh run view "$run_id" --json jobs --jq '.jobs[] | select(.conclusion != "success" and .conclusion != "skipped") | {name, conclusion, url}' || true
+              fetch_child_jobs | jq 'select(.conclusion != "success" and .conclusion != "skipped") | {name, conclusion, url: .html_url}' || true
               exit 1
             fi
           }
@@ -511,6 +527,14 @@ jobs:
             echo "Dispatched ${workflow}: https://github.com/${GITHUB_REPOSITORY}/actions/runs/${run_id}"
             echo "run_id=${run_id}" >> "$GITHUB_OUTPUT"
 
+            fetch_child_run_json() {
+              gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}"
+            }
+
+            fetch_child_jobs() {
+              gh api --paginate "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}/jobs?per_page=100" --jq '.jobs[]'
+            }
+
             release_check_blocking_job() {
               case "$1" in
                 "resolve_target" | \
@@ -561,20 +585,25 @@ jobs:
 
             poll_count=0
             while true; do
-              status="$(gh run view "$run_id" --json status --jq '.status')"
+              status="$(fetch_child_run_json | jq -r '.status')"
               if [[ "$status" == "completed" ]]; then
                 break
               fi
               poll_count=$((poll_count + 1))
               if (( poll_count % 10 == 0 )); then
                 echo "Still waiting on ${workflow}: https://github.com/${GITHUB_REPOSITORY}/actions/runs/${run_id}"
-                gh run view "$run_id" --json jobs --jq '.jobs[] | select(.status != "completed") | {name, status, url}' || true
+                fetch_child_jobs | jq 'select(.status != "completed") | {name, status, url: .html_url}' || true
               fi
               sleep 30
             done
             trap - EXIT INT TERM
 
-            run_json="$(gh run view "$run_id" --json conclusion,url,jobs)"
+            jobs_json="$(fetch_child_jobs | jq -s '{jobs: [.[] | {name, conclusion, url: .html_url}]}')"
+            run_json="$(
+              jq -s '.[0] + .[1]' \
+                <(fetch_child_run_json | jq '{conclusion: (.conclusion // ""), url: .html_url}') \
+                <(printf '%s\n' "$jobs_json")
+            )"
             conclusion="$(jq -r '.conclusion' <<< "$run_json")"
             url="$(jq -r '.url' <<< "$run_json")"
             echo "${workflow} finished with ${conclusion}: ${url}"
