@@ -1,6 +1,8 @@
 import fs from "node:fs";
 import path from "node:path";
+import { isPathInside } from "../../infra/path-guards.js";
 import { SANDBOX_AGENT_WORKSPACE_MOUNT } from "./constants.js";
+import { resolveSandboxHostPathViaExistingAncestor } from "./host-paths.js";
 import type { SandboxWorkspaceAccess } from "./types.js";
 
 export const SANDBOX_MOUNT_FORMAT_VERSION = 3;
@@ -27,12 +29,23 @@ function containerJoin(root: string, ...parts: string[]): string {
   return suffix ? `${normalizedRoot}/${suffix}` : normalizedRoot;
 }
 
-function isExistingDirectory(dir: string): boolean {
+export function isExistingWorkspaceSkillMountSource(params: {
+  agentWorkspaceDir: string;
+  hostPath: string;
+}): boolean {
   try {
-    return fs.statSync(dir).isDirectory();
+    if (!fs.lstatSync(params.hostPath).isDirectory()) {
+      return false;
+    }
   } catch {
     return false;
   }
+
+  const agentRoot = resolveSandboxHostPathViaExistingAncestor(
+    path.resolve(params.agentWorkspaceDir),
+  );
+  const canonicalSource = resolveSandboxHostPathViaExistingAncestor(path.resolve(params.hostPath));
+  return isPathInside(agentRoot, canonicalSource);
 }
 
 export function resolveReadOnlyWorkspaceSkillMounts(params: {
@@ -56,7 +69,12 @@ export function resolveReadOnlyWorkspaceSkillMounts(params: {
     },
   ];
 
-  return mounts.filter((mount) => isExistingDirectory(mount.hostPath));
+  return mounts.filter((mount) =>
+    isExistingWorkspaceSkillMountSource({
+      agentWorkspaceDir: params.agentWorkspaceDir,
+      hostPath: mount.hostPath,
+    }),
+  );
 }
 
 export function formatReadOnlyWorkspaceSkillMountHashState(
