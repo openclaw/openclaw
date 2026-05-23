@@ -542,4 +542,17 @@ export type GatewayConfig = {
    * the rolling window expires. Default: 10.
    */
   channelMaxRestartsPerHour?: number;
+  /**
+   * Offload LLM API fetch() calls to a worker_threads pool to prevent
+   * event-loop starvation on the main gateway thread during long-running
+   * streaming model responses.
+   */
+  modelWorkerPool?: {
+    /** Enable the model worker pool. Default: false. */
+    enabled?: boolean;
+    /** Maximum number of worker threads. Default: 4. */
+    maxWorkers?: number;
+    /** Per-request timeout in milliseconds. Default: 300000 (5 min). */
+    timeoutMs?: number;
+  };
 };

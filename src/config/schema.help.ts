@@ -105,6 +105,12 @@ export const FIELD_HELP: Record<string, string> = {
     "How many minutes a connected channel can go without provider-proven transport activity before the health monitor treats it as a stale socket and triggers a restart. Default: 30.",
   "gateway.channelMaxRestartsPerHour":
     "Maximum number of health-monitor-initiated channel restarts allowed within a rolling one-hour window. Once hit, further restarts are skipped until the window expires. Default: 10.",
+  "gateway.modelWorkerPool.enabled":
+    "Offload LLM API fetch() calls to a worker_threads pool to prevent event-loop starvation on the main gateway thread. When enabled, model streaming responses are isolated from gateway I/O processing.",
+  "gateway.modelWorkerPool.maxWorkers":
+    "Maximum number of worker threads in the model worker pool. Each worker handles one concurrent model API call. Default: 4.",
+  "gateway.modelWorkerPool.timeoutMs":
+    "Per-request timeout for model worker pool fetch calls. Workers that exceed this timeout are returned to the pool and the request falls back to the main thread. Default: 300000 (5 min).",
   "gateway.tailscale":
     "Tailscale integration settings for Serve/Funnel exposure and lifecycle handling on gateway start/exit. Keep off unless your deployment intentionally relies on Tailscale ingress.",
   "gateway.tailscale.mode":
