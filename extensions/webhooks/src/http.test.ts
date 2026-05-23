@@ -1020,6 +1020,354 @@ describe("createTaskFlowWebhookRequestHandler", () => {
     expect(parsed.result.task.label).toBe("ENG-123");
   });
 
+  it("accepts enterprise app webhook payloads through configured agent routes", async () => {
+    type EnterpriseWebhookCase = {
+      routeId: string;
+      event: string;
+      idempotencyKey: string;
+      auth:
+        | { mode: "bearer" }
+        | { mode: "header"; header: string }
+        | { mode: "hmac-sha256"; header: string; prefix?: string };
+      eventConfig?: WebhookTarget["event"];
+      idempotency?: WebhookTarget["idempotency"];
+      prompt: string;
+      body: Record<string, unknown>;
+      expectPrompt: string;
+    };
+
+    const cases: EnterpriseWebhookCase[] = [
+      {
+        routeId: "github_pr_review",
+        event: "pull_request_review",
+        idempotencyKey: "gh-delivery-1",
+        auth: { mode: "hmac-sha256", header: "x-hub-signature-256", prefix: "sha256=" },
+        eventConfig: { header: "x-github-event" },
+        idempotency: { header: "x-github-delivery", ttlMs: 60_000 },
+        prompt: "Review GitHub PR #{pull_request.number}: {pull_request.title}",
+        body: { action: "submitted", pull_request: { number: 42, title: "Webhook docs" } },
+        expectPrompt: "Review GitHub PR #42: Webhook docs",
+      },
+      {
+        routeId: "gitlab_merge_request",
+        event: "Merge Request Hook",
+        idempotencyKey: "gl-uuid-1",
+        auth: { mode: "header", header: "x-gitlab-token" },
+        eventConfig: { header: "x-gitlab-event" },
+        idempotency: { header: "x-gitlab-event-uuid", ttlMs: 60_000 },
+        prompt: "Review GitLab MR !{object_attributes.iid}: {object_attributes.title}",
+        body: { object_attributes: { iid: 7, title: "Add webhook integration" } },
+        expectPrompt: "Review GitLab MR !7: Add webhook integration",
+      },
+      {
+        routeId: "jira_issue",
+        event: "jira:issue_updated",
+        idempotencyKey: "jira-event-1",
+        auth: { mode: "bearer" },
+        eventConfig: { payloadPath: "webhookEvent" },
+        idempotency: { payloadPath: "webhookEventId", ttlMs: 60_000 },
+        prompt: "Triage Jira {issue.key}: {issue.fields.summary}",
+        body: {
+          webhookEvent: "jira:issue_updated",
+          webhookEventId: "jira-event-1",
+          issue: { key: "ENG-9", fields: { summary: "Deploy failed" } },
+        },
+        expectPrompt: "Triage Jira ENG-9: Deploy failed",
+      },
+      {
+        routeId: "pagerduty_incident",
+        event: "incident.triggered",
+        idempotencyKey: "pd-event-1",
+        auth: { mode: "bearer" },
+        eventConfig: { payloadPath: "event.event_type" },
+        idempotency: { payloadPath: "event.id", ttlMs: 60_000 },
+        prompt: "Handle PagerDuty {event.data.id}: {event.data.title}",
+        body: { event: { id: "pd-event-1", event_type: "incident.triggered", data: { id: "P123", title: "API latency" } } },
+        expectPrompt: "Handle PagerDuty P123: API latency",
+      },
+      {
+        routeId: "sentry_issue",
+        event: "issue",
+        idempotencyKey: "sentry-event-1",
+        auth: { mode: "header", header: "x-openclaw-sentry-token" },
+        eventConfig: { header: "x-sentry-hook-resource" },
+        idempotency: { payloadPath: "id", ttlMs: 60_000 },
+        prompt: "Investigate Sentry {project_slug}: {event.title}",
+        body: { id: "sentry-event-1", project_slug: "api", event: { title: "TypeError in checkout" } },
+        expectPrompt: "Investigate Sentry api: TypeError in checkout",
+      },
+      {
+        routeId: "datadog_monitor",
+        event: "query_alert",
+        idempotencyKey: "dd-alert-1",
+        auth: { mode: "header", header: "x-openclaw-datadog-token" },
+        eventConfig: { payloadPath: "alert_type" },
+        idempotency: { payloadPath: "id", ttlMs: 60_000 },
+        prompt: "Analyze Datadog monitor {id}: {title}",
+        body: { id: "dd-alert-1", alert_type: "query_alert", title: "CPU high" },
+        expectPrompt: "Analyze Datadog monitor dd-alert-1: CPU high",
+      },
+      {
+        routeId: "stripe_event",
+        event: "invoice.payment_failed",
+        idempotencyKey: "evt_stripe_1",
+        auth: { mode: "header", header: "x-openclaw-stripe-token" },
+        eventConfig: { payloadPath: "type" },
+        idempotency: { payloadPath: "id", ttlMs: 60_000 },
+        prompt: "Follow up Stripe {type} for {data.object.customer}",
+        body: { id: "evt_stripe_1", type: "invoice.payment_failed", data: { object: { customer: "cus_123" } } },
+        expectPrompt: "Follow up Stripe invoice.payment_failed for cus_123",
+      },
+      {
+        routeId: "shopify_order",
+        event: "orders/create",
+        idempotencyKey: "shopify-order-1",
+        auth: { mode: "header", header: "x-openclaw-shopify-token" },
+        eventConfig: { header: "x-shopify-topic" },
+        idempotency: { header: "x-shopify-webhook-id", ttlMs: 60_000 },
+        prompt: "Review Shopify order {id} for {customer.email}",
+        body: { id: 1001, customer: { email: "buyer@example.com" } },
+        expectPrompt: "Review Shopify order 1001 for buyer@example.com",
+      },
+      {
+        routeId: "hubspot_deal",
+        event: "deal.propertyChange",
+        idempotencyKey: "hubspot-event-1",
+        auth: { mode: "bearer" },
+        eventConfig: { payloadPath: "subscriptionType" },
+        idempotency: { payloadPath: "eventId", ttlMs: 60_000 },
+        prompt: "Update HubSpot deal {objectId}: {propertyName}",
+        body: { eventId: "hubspot-event-1", subscriptionType: "deal.propertyChange", objectId: "deal-9", propertyName: "dealstage" },
+        expectPrompt: "Update HubSpot deal deal-9: dealstage",
+      },
+      {
+        routeId: "salesforce_change",
+        event: "CaseChangeEvent",
+        idempotencyKey: "sf-commit-1",
+        auth: { mode: "bearer" },
+        eventConfig: { payloadPath: "ChangeEventHeader.entityName" },
+        idempotency: { payloadPath: "ChangeEventHeader.commitNumber", ttlMs: 60_000 },
+        prompt: "Review Salesforce {ChangeEventHeader.entityName} {CaseNumber}: {Subject}",
+        body: { ChangeEventHeader: { entityName: "CaseChangeEvent", commitNumber: "sf-commit-1" }, CaseNumber: "00042", Subject: "Renewal risk" },
+        expectPrompt: "Review Salesforce CaseChangeEvent 00042: Renewal risk",
+      },
+      {
+        routeId: "servicenow_incident",
+        event: "incident.updated",
+        idempotencyKey: "snow-event-1",
+        auth: { mode: "bearer" },
+        eventConfig: { payloadPath: "event.name" },
+        idempotency: { payloadPath: "sys_id", ttlMs: 60_000 },
+        prompt: "Act on ServiceNow {number}: {short_description}",
+        body: { sys_id: "snow-event-1", event: { name: "incident.updated" }, number: "INC001", short_description: "VPN outage" },
+        expectPrompt: "Act on ServiceNow INC001: VPN outage",
+      },
+      {
+        routeId: "zendesk_ticket",
+        event: "ticket.updated",
+        idempotencyKey: "zd-ticket-1",
+        auth: { mode: "bearer" },
+        eventConfig: { payloadPath: "type" },
+        idempotency: { payloadPath: "id", ttlMs: 60_000 },
+        prompt: "Summarize Zendesk ticket {ticket.id}: {ticket.subject}",
+        body: { id: "zd-ticket-1", type: "ticket.updated", ticket: { id: 88, subject: "Refund request" } },
+        expectPrompt: "Summarize Zendesk ticket 88: Refund request",
+      },
+      {
+        routeId: "slack_workflow",
+        event: "workflow_step",
+        idempotencyKey: "slack-event-1",
+        auth: { mode: "bearer" },
+        eventConfig: { payloadPath: "type" },
+        idempotency: { payloadPath: "event_id", ttlMs: 60_000 },
+        prompt: "Process Slack workflow {workflow.name} from {user.id}",
+        body: { event_id: "slack-event-1", type: "workflow_step", workflow: { name: "Approve deploy" }, user: { id: "U123" } },
+        expectPrompt: "Process Slack workflow Approve deploy from U123",
+      },
+      {
+        routeId: "teams_power_automate",
+        event: "approval.requested",
+        idempotencyKey: "teams-trigger-1",
+        auth: { mode: "bearer" },
+        eventConfig: { payloadPath: "eventType" },
+        idempotency: { payloadPath: "triggerId", ttlMs: 60_000 },
+        prompt: "Handle Teams approval {approval.id}: {approval.title}",
+        body: { triggerId: "teams-trigger-1", eventType: "approval.requested", approval: { id: "APR-1", title: "Vendor spend" } },
+        expectPrompt: "Handle Teams approval APR-1: Vendor spend",
+      },
+      {
+        routeId: "notion_page",
+        event: "page.updated",
+        idempotencyKey: "notion-event-1",
+        auth: { mode: "bearer" },
+        eventConfig: { payloadPath: "type" },
+        idempotency: { payloadPath: "id", ttlMs: 60_000 },
+        prompt: "Review Notion page {entity.id}: {entity.title}",
+        body: { id: "notion-event-1", type: "page.updated", entity: { id: "page-1", title: "Launch plan" } },
+        expectPrompt: "Review Notion page page-1: Launch plan",
+      },
+      {
+        routeId: "airtable_record",
+        event: "record.created",
+        idempotencyKey: "airtable-webhook-1",
+        auth: { mode: "bearer" },
+        eventConfig: { payloadPath: "action" },
+        idempotency: { payloadPath: "webhook.id", ttlMs: 60_000 },
+        prompt: "Inspect Airtable {base.id}/{table.id}: {record.id}",
+        body: { action: "record.created", webhook: { id: "airtable-webhook-1" }, base: { id: "app123" }, table: { id: "tbl123" }, record: { id: "rec123" } },
+        expectPrompt: "Inspect Airtable app123/tbl123: rec123",
+      },
+      {
+        routeId: "google_forms",
+        event: "form.submit",
+        idempotencyKey: "forms-response-1",
+        auth: { mode: "bearer" },
+        eventConfig: { payloadPath: "eventType" },
+        idempotency: { payloadPath: "responseId", ttlMs: 60_000 },
+        prompt: "Process Google Forms {formId}: {answers.summary}",
+        body: { eventType: "form.submit", responseId: "forms-response-1", formId: "form-9", answers: { summary: "Access request" } },
+        expectPrompt: "Process Google Forms form-9: Access request",
+      },
+      {
+        routeId: "jenkins_build",
+        event: "build.completed",
+        idempotencyKey: "jenkins-build-1",
+        auth: { mode: "header", header: "x-jenkins-token" },
+        eventConfig: { payloadPath: "event" },
+        idempotency: { payloadPath: "build.id", ttlMs: 60_000 },
+        prompt: "Investigate Jenkins {job.name} build {build.number}: {build.status}",
+        body: { event: "build.completed", job: { name: "deploy-prod" }, build: { id: "jenkins-build-1", number: 321, status: "FAILURE" } },
+        expectPrompt: "Investigate Jenkins deploy-prod build 321: FAILURE",
+      },
+      {
+        routeId: "argocd_app",
+        event: "app.sync.failed",
+        idempotencyKey: "argo-app-1",
+        auth: { mode: "bearer" },
+        eventConfig: { payloadPath: "event" },
+        idempotency: { payloadPath: "app.metadata.uid", ttlMs: 60_000 },
+        prompt: "Repair Argo CD {app.metadata.name}: {app.status.sync.status}",
+        body: { event: "app.sync.failed", app: { metadata: { uid: "argo-app-1", name: "payments" }, status: { sync: { status: "OutOfSync" } } } },
+        expectPrompt: "Repair Argo CD payments: OutOfSync",
+      },
+      {
+        routeId: "alertmanager",
+        event: "firing",
+        idempotencyKey: "alert-group-1",
+        auth: { mode: "bearer" },
+        eventConfig: { payloadPath: "status" },
+        idempotency: { payloadPath: "groupKey", ttlMs: 60_000 },
+        prompt: "Correlate Alertmanager {commonLabels.alertname}: {status}",
+        body: { status: "firing", groupKey: "alert-group-1", commonLabels: { alertname: "HighErrorRate" } },
+        expectPrompt: "Correlate Alertmanager HighErrorRate: firing",
+      },
+    ];
+
+    expect(cases).toHaveLength(20);
+
+    for (const app of cases) {
+      const scheduleSessionTurn = vi.fn(async (params) => ({
+        id: `job-${app.routeId}`,
+        pluginId: "webhooks",
+        sessionKey: params.sessionKey,
+        kind: "session-turn",
+      }));
+      const target: WebhookTarget = {
+        routeId: app.routeId,
+        path: `/plugins/webhooks/${app.routeId}`,
+        dispatchMode: "agent",
+        auth:
+          app.auth.mode === "bearer"
+            ? { mode: "bearer", prefix: "Bearer", secret: "shared-secret" }
+            : app.auth.mode === "header"
+              ? { mode: "header", header: app.auth.header, secret: "shared-secret" }
+              : {
+                  mode: "hmac-sha256",
+                  header: app.auth.header,
+                  prefix: app.auth.prefix,
+                  secret: "shared-secret",
+                },
+        event: app.eventConfig ?? {},
+        events: [app.event],
+        idempotency: app.idempotency,
+        prompt: app.prompt,
+        skills: ["enterprise-webhook-triage"],
+        sessionKey: "agent:main:main",
+        agent: {
+          deliveryMode: "none",
+          delayMs: 1,
+          nameTemplate: `${app.routeId}-{eventType}`,
+          tagTemplate: `${app.routeId}-{idempotencyKey}`,
+        },
+      };
+      const handler = createHandlerWithTarget(target, {} as OpenClawConfig, {
+        scheduleSessionTurn,
+      });
+
+      const headers: Record<string, string> = {};
+      if (app.eventConfig?.header) {
+        headers[app.eventConfig.header] = app.event;
+      }
+      if (app.idempotency?.header) {
+        headers[app.idempotency.header] = app.idempotencyKey;
+      }
+
+      let res;
+      if (app.auth.mode === "hmac-sha256") {
+        const rawBody = JSON.stringify(app.body);
+        const signature = createHmac("sha256", "shared-secret").update(rawBody).digest("hex");
+        const req = createRawJsonRequest({
+          path: target.path,
+          rawBody,
+          headers: {
+            ...headers,
+            [app.auth.header]: `${app.auth.prefix ?? ""}${signature}`,
+          },
+        });
+        res = createMockServerResponse();
+        await handler(req, res);
+      } else {
+        res = await dispatchJsonRequest({
+          handler,
+          path: target.path,
+          headers: {
+            ...headers,
+            ...(app.auth.mode === "bearer"
+              ? { authorization: "Bearer shared-secret" }
+              : { [app.auth.header]: "shared-secret" }),
+          },
+          body: app.body,
+        });
+      }
+
+      expect(res.statusCode, app.routeId).toBe(202);
+      expect(parseJsonBody(res), app.routeId).toEqual({
+        ok: true,
+        routeId: app.routeId,
+        result: {
+          action: "agent_dispatch",
+          sessionKey: "agent:main:main",
+          jobId: `job-${app.routeId}`,
+        },
+      });
+      expect(scheduleSessionTurn, app.routeId).toHaveBeenCalledTimes(1);
+      expect(scheduleSessionTurn.mock.calls[0]?.[0], app.routeId).toMatchObject({
+        sessionKey: "agent:main:main",
+        deliveryMode: "none",
+        delayMs: 1,
+        deleteAfterRun: true,
+        name: `${app.routeId}-${app.event}`,
+        tag: `${app.routeId}-${app.idempotencyKey}`,
+      });
+      expect(scheduleSessionTurn.mock.calls[0]?.[0].message, app.routeId).toContain(
+        app.expectPrompt,
+      );
+      expect(scheduleSessionTurn.mock.calls[0]?.[0].message, app.routeId).toContain(
+        "Use these OpenClaw skills when useful: enterprise-webhook-triage",
+      );
+    }
+  });
+
   it("uses the durable idempotency store before dispatching side effects", async () => {
     const registerIfAbsent = vi.fn(async () => false);
     const scheduleSessionTurn = vi.fn(async (params) => ({

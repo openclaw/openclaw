@@ -1229,6 +1229,7 @@
                   "plugins/codex-computer-use",
                   "plugins/google-meet",
                   "plugins/webhooks",
+                  "plugins/webhooks-enterprise-integrations",
                   "plugins/admin-http-rpc",
                   "plugins/voice-call",
                   "plugins/memory-wiki",

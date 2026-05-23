@@ -411,6 +411,7 @@ responses.
 
 ## Related docs
 
+- [Enterprise webhook integrations](/plugins/webhooks-enterprise-integrations)
 - [Plugin runtime SDK](/plugins/sdk-runtime)
 - [Hooks and webhooks overview](/automation/hooks)
 - [CLI webhooks](/cli/webhooks)
