@@ -64,6 +64,14 @@ function parseTelegramTargetForTest(raw: string): {
       chatType: "group",
     };
   }
+  const slashPair = /^(-?\d+)\/(\d+)$/i.exec(trimmed);
+  if (slashPair) {
+    return {
+      chatId: slashPair[1],
+      messageThreadId: Number.parseInt(slashPair[2], 10),
+      chatType: slashPair[1].startsWith("-") ? "group" : "direct",
+    };
+  }
   return {
     chatId: trimmed,
     chatType: trimmed.startsWith("-") ? "group" : "unknown",
