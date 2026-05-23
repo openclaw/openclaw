@@ -1028,6 +1028,61 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     expect(assistantEntries).toStrictEqual([]);
   });
 
+  it("does not duplicate media-bearing internal-ui source replies in the transcript", async () => {
+    createTranscriptFixture("openclaw-chat-send-agent-source-reply-media-");
+    mockState.triggerAgentRunStart = true;
+    const sourceReply = setReplyPayloadMetadata(
+      {
+        text: "Codex source reply with media",
+        mediaUrls: ["https://example.com/chart.png"],
+      },
+      {
+        sourceReplyTranscriptMirror: {
+          sessionKey: "main",
+          text: "Codex source reply with media",
+          mediaUrls: ["https://example.com/chart.png"],
+          idempotencyKey: "idem-agent-source-reply-media:internal-source-reply:0",
+        },
+      },
+    );
+    mockState.dispatchedReplies = [
+      {
+        kind: "final",
+        payload: sourceReply,
+      },
+    ];
+    const respond = vi.fn();
+    const context = createChatContext();
+
+    const broadcast = await runNonStreamingChatSend({
+      context,
+      respond,
+      idempotencyKey: "idem-agent-source-reply-media",
+      message: "hello from codex",
+    });
+
+    expect(broadcast).toMatchObject({
+      runId: "idem-agent-source-reply-media",
+      sessionKey: "main",
+      state: "final",
+    });
+    expect(extractFirstTextBlock(broadcast)).toBe("Codex source reply with media");
+    const assistantUpdates = mockState.emittedTranscriptUpdates.filter(
+      (update) =>
+        typeof update.message === "object" &&
+        update.message !== null &&
+        (update.message as { role?: unknown }).role === "assistant",
+    );
+    expect(assistantUpdates).toStrictEqual([]);
+    const transcriptLines = readTranscriptJsonLines(mockState.transcriptPath);
+    const assistantEntries = transcriptLines.filter(
+      (entry) =>
+        (entry as { message?: { role?: string } }).message?.role === "assistant" ||
+        (entry as { role?: string }).role === "assistant",
+    );
+    expect(assistantEntries).toStrictEqual([]);
+  });
+
   it("does not broadcast an error terminal after an internal-ui source reply final", async () => {
     createTranscriptFixture("openclaw-chat-send-agent-source-reply-error-");
     mockState.triggerAgentRunStart = true;

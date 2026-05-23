@@ -2695,6 +2695,9 @@ export const chatHandlers: GatewayRequestHandlers = {
         if (!agentRunStarted || appendedWebchatAgentMedia || !isMediaBearingPayload(payload)) {
           return;
         }
+        if (isSourceReplyTranscriptMirrorPayload(payload)) {
+          return;
+        }
         const ttsSupplementMarker = buildTtsSupplementTranscriptMarker(payload);
         const [transcriptPayload] = await normalizeWebchatReplyMediaPathsForDisplay({
           cfg,
