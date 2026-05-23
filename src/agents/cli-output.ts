@@ -16,6 +16,7 @@ export type CliOutput = {
   rawText?: string;
   sessionId?: string;
   usage?: CliUsage;
+  lastCallUsage?: CliUsage;
   finalPromptText?: string;
 };
 
@@ -155,6 +156,26 @@ function readCliUsage(parsed: Record<string, unknown>): CliUsage | undefined {
   }
   if (isRecord(parsed.stats)) {
     return toCliUsage(parsed.stats);
+  }
+  return undefined;
+}
+
+function readClaudeAssistantUsage(parsed: Record<string, unknown>): CliUsage | undefined {
+  if (parsed.type === "assistant" && isRecord(parsed.message) && isRecord(parsed.message.usage)) {
+    return toCliUsage(parsed.message.usage);
+  }
+  if (parsed.type === "stream_event" && isRecord(parsed.event)) {
+    const event = parsed.event;
+    if (
+      event.type === "message_start" &&
+      isRecord(event.message) &&
+      isRecord(event.message.usage)
+    ) {
+      return toCliUsage(event.message.usage);
+    }
+    if (event.type === "message_delta" && isRecord(event.usage)) {
+      return toCliUsage(event.usage);
+    }
   }
   return undefined;
 }
@@ -326,6 +347,7 @@ function parseClaudeCliJsonlResult(params: {
   parsed: Record<string, unknown>;
   sessionId?: string;
   usage?: CliUsage;
+  lastCallUsage?: CliUsage;
 }): CliOutput | null {
   if (!usesClaudeStreamJsonDialect(params)) {
     return null;
@@ -337,11 +359,21 @@ function parseClaudeCliJsonlResult(params: {
   ) {
     const resultText = unwrapNestedCliResultText(params.parsed.result).trim();
     if (resultText) {
-      return { text: resultText, sessionId: params.sessionId, usage: params.usage };
+      return {
+        text: resultText,
+        sessionId: params.sessionId,
+        usage: params.usage,
+        ...(params.lastCallUsage ? { lastCallUsage: params.lastCallUsage } : {}),
+      };
     }
     // Claude may finish with an empty result after tool-only work. Keep the
     // resolved session handle and usage instead of dropping them.
-    return { text: "", sessionId: params.sessionId, usage: params.usage };
+    return {
+      text: "",
+      sessionId: params.sessionId,
+      usage: params.usage,
+      ...(params.lastCallUsage ? { lastCallUsage: params.lastCallUsage } : {}),
+    };
   }
   return null;
 }
@@ -388,6 +420,7 @@ export function createCliJsonlStreamingParser(params: {
   let assistantText = "";
   let sessionId: string | undefined;
   let usage: CliUsage | undefined;
+  let lastCallUsage: CliUsage | undefined;
   let output: CliOutput | null = null;
   const texts: string[] = [];
 
@@ -395,6 +428,9 @@ export function createCliJsonlStreamingParser(params: {
     sessionId = pickCliSessionId(parsed, params.backend) ?? sessionId;
     if (!sessionId && typeof parsed.thread_id === "string") {
       sessionId = parsed.thread_id.trim();
+    }
+    if (usesClaudeStreamJsonDialect(params)) {
+      lastCallUsage = readClaudeAssistantUsage(parsed) ?? lastCallUsage;
     }
     usage = readCliUsage(parsed) ?? usage;
 
@@ -404,6 +440,7 @@ export function createCliJsonlStreamingParser(params: {
       parsed,
       sessionId,
       usage,
+      lastCallUsage,
     });
     if (result) {
       output = result;
@@ -496,6 +533,7 @@ export function parseCliJsonl(
   }
   let sessionId: string | undefined;
   let usage: CliUsage | undefined;
+  let lastCallUsage: CliUsage | undefined;
   const texts: string[] = [];
   for (const line of lines) {
     for (const parsed of parseJsonRecordCandidates(line)) {
@@ -505,6 +543,9 @@ export function parseCliJsonl(
       if (!sessionId && typeof parsed.thread_id === "string") {
         sessionId = parsed.thread_id.trim();
       }
+      if (usesClaudeStreamJsonDialect({ backend, providerId })) {
+        lastCallUsage = readClaudeAssistantUsage(parsed) ?? lastCallUsage;
+      }
       usage = readCliUsage(parsed) ?? usage;
 
       const claudeResult = parseClaudeCliJsonlResult({
@@ -513,6 +554,7 @@ export function parseCliJsonl(
         parsed,
         sessionId,
         usage,
+        lastCallUsage,
       });
       if (claudeResult) {
         return claudeResult;

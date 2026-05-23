@@ -322,6 +322,69 @@ describe("parseCliJsonl", () => {
     });
   });
 
+  it("uses latest Claude assistant usage as lastCallUsage when result usage is aggregate", () => {
+    const result = parseCliJsonl(
+      [
+        JSON.stringify({ type: "init", session_id: "session-cache-sum" }),
+        JSON.stringify({
+          type: "assistant",
+          message: {
+            usage: {
+              input_tokens: 100,
+              output_tokens: 4,
+              cache_read_input_tokens: 18_499,
+            },
+          },
+        }),
+        JSON.stringify({
+          type: "assistant",
+          message: {
+            usage: {
+              input_tokens: 120,
+              output_tokens: 6,
+              cache_read_input_tokens: 27_142,
+            },
+          },
+        }),
+        JSON.stringify({
+          type: "result",
+          session_id: "session-cache-sum",
+          result: "Claude says hello",
+          usage: {
+            input_tokens: 220,
+            output_tokens: 10,
+            cache_read_input_tokens: 45_641,
+          },
+        }),
+      ].join("\n"),
+      {
+        command: "claude",
+        output: "jsonl",
+        sessionIdFields: ["session_id"],
+      },
+      "claude-cli",
+    );
+
+    expect(result).toEqual({
+      text: "Claude says hello",
+      sessionId: "session-cache-sum",
+      usage: {
+        input: 220,
+        output: 10,
+        cacheRead: 45_641,
+        cacheWrite: undefined,
+        total: undefined,
+      },
+      lastCallUsage: {
+        input: 120,
+        output: 6,
+        cacheRead: 27_142,
+        cacheWrite: undefined,
+        total: undefined,
+      },
+    });
+  });
+
   it("preserves Claude session metadata even when the final result text is empty", () => {
     const result = parseCliJsonl(
       [
@@ -444,7 +507,12 @@ describe("createCliJsonlStreamingParser", () => {
     parser.finish();
 
     expect(deltas).toEqual([
-      { text: "hello", delta: "hello", sessionId: "session-stream", usage: undefined },
+      {
+        text: "hello",
+        delta: "hello",
+        sessionId: "session-stream",
+        usage: undefined,
+      },
     ]);
   });
 });
