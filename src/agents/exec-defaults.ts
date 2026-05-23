@@ -153,6 +153,7 @@ export function resolveExecDefaults(params: {
   agentId?: string;
   sessionKey?: string;
   sandboxAvailable?: boolean;
+  elevatedRequested?: boolean;
 }): {
   host: ExecTarget;
   effectiveHost: ExecHost;
@@ -170,7 +171,7 @@ export function resolveExecDefaults(params: {
   });
   const resolved = resolveExecTarget({
     configuredTarget: host,
-    elevatedRequested: false,
+    elevatedRequested: params.elevatedRequested === true,
     sandboxAvailable,
   });
   const approvalDefaults =

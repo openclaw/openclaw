@@ -179,6 +179,37 @@ describe("buildEmbeddedSandboxInfo", () => {
     });
   });
 
+  it("uses elevated host policy when sandbox is active and exec policy is unset", () => {
+    const sandbox = createSandboxContext();
+    const execPolicy = resolveEmbeddedSandboxInfoExecPolicy({
+      config: {
+        tools: {
+          exec: {
+            host: "auto",
+          },
+        },
+      },
+      agentId: "main",
+      sandboxAvailable: true,
+    });
+
+    expect(
+      buildEmbeddedSandboxInfo(
+        sandbox,
+        {
+          enabled: true,
+          allowed: true,
+          defaultLevel: "full",
+        },
+        execPolicy,
+      )?.elevated,
+    ).toEqual({
+      allowed: true,
+      defaultLevel: "full",
+      fullAccessAvailable: true,
+    });
+  });
+
   it("marks full access unavailable when host approval defaults deny execution", () => {
     const sandbox = createSandboxContext();
 

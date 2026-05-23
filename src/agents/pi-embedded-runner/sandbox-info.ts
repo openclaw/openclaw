@@ -92,6 +92,7 @@ export function resolveEmbeddedSandboxInfoExecPolicy(params: {
     agentId: params.agentId,
     sessionKey: params.sessionKey,
     sandboxAvailable: params.sandboxAvailable,
+    elevatedRequested: true,
     sessionEntry: buildSessionEntryForExecOverrides(params.execOverrides),
   });
   return {
