@@ -92,6 +92,9 @@ type EmbeddedPiAgentParams = {
 };
 
 type CompactEmbeddedPiSessionParams = {
+  agentId?: string;
+  authProfileId?: string;
+  contextTokenBudget?: number;
   sessionKey?: string;
   sandboxSessionKey?: string;
   currentTokenCount?: number;
@@ -938,6 +941,37 @@ describe("runMemoryFlushIfNeeded", () => {
 
     expect(compactEmbeddedPiSessionMock).toHaveBeenCalledTimes(1);
     expect(incrementCompactionCountMock).not.toHaveBeenCalled();
+  });
+
+  it("passes resolved context budget and auth profile to preflight compaction", async () => {
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+      totalTokens: 245_000,
+      totalTokensFresh: true,
+      compactionCount: 0,
+    };
+
+    await runPreflightCompactionIfNeeded({
+      cfg: { agents: { defaults: { compaction: { memoryFlush: {} } } } },
+      followupRun: createTestFollowupRun({
+        authProfileId: "openai-codex:claude@martian.engineering",
+        provider: "openai",
+        model: "gpt-5.5",
+        sessionKey: "agent:main:main",
+      }),
+      defaultModel: "openai/gpt-5.5",
+      agentCfgContextTokens: 258_000,
+      sessionEntry,
+      sessionStore: { "agent:main:main": sessionEntry },
+      sessionKey: "agent:main:main",
+      isHeartbeat: false,
+      replyOperation: createReplyOperation(),
+    });
+
+    const compactCall = requireCompactEmbeddedPiSessionCall();
+    expect(compactCall.authProfileId).toBe("openai-codex:claude@martian.engineering");
+    expect(compactCall.contextTokenBudget).toBe(258_000);
   });
 
   it("updates the active preflight run after transcript rotation", async () => {

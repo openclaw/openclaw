@@ -172,6 +172,26 @@ describe("runtime.llm.complete", () => {
     });
   });
 
+  it("passes the active auth profile to context-engine completions", async () => {
+    const runtimeContext = resolveContextEngineCapabilities({
+      config: cfg,
+      sessionKey: "agent:ada:session:abc",
+      authProfileId: "openai-codex:claude@martian.engineering",
+      purpose: "context-engine.compaction",
+    });
+
+    await runtimeContext.llm!.complete({
+      messages: [{ role: "user", content: "summarize" }],
+    });
+
+    expectSingleCallFirstArg(hoisted.prepareSimpleCompletionModelForAgent, {
+      cfg,
+      agentId: "ada",
+      preferredProfile: "openai-codex:claude@martian.engineering",
+      allowMissingApiKeyModes: ["aws-sdk"],
+    });
+  });
+
   it("uses trusted context-engine attribution inside plugin runtime scope", async () => {
     const runtimeContext = resolveContextEngineCapabilities({
       config: cfg,

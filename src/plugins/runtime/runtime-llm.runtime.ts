@@ -26,6 +26,7 @@ export type RuntimeLlmAuthority = {
   pluginIdForPolicy?: string;
   sessionKey?: string;
   agentId?: string;
+  preferredProfile?: string;
   requiresBoundAgent?: boolean;
   allowAgentIdOverride?: boolean;
   allowModelOverride?: boolean;
@@ -418,6 +419,7 @@ export function createRuntimeLlm(options: CreateRuntimeLlmOptions = {}): PluginR
         cfg,
         agentId,
         modelRef: params.model,
+        preferredProfile: options.authority?.preferredProfile,
         allowMissingApiKeyModes: ["aws-sdk"],
       });
 

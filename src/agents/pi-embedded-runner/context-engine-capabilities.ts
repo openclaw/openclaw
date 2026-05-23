@@ -15,6 +15,7 @@ export type ResolveContextEngineCapabilitiesParams = {
   config?: OpenClawConfig;
   sessionKey?: string;
   agentId?: string;
+  authProfileId?: string;
   contextEnginePluginId?: string;
   purpose: string;
 };
@@ -73,6 +74,7 @@ export function resolveContextEngineCapabilities(
             requiresBoundAgent: true,
             ...(sessionKey ? { sessionKey } : {}),
             ...(agentId ? { agentId } : {}),
+            ...(params.authProfileId ? { preferredProfile: params.authProfileId } : {}),
             ...(contextEnginePluginId ? { pluginIdForPolicy: contextEnginePluginId } : {}),
             allowAgentIdOverride: false,
             allowModelOverride: false,
