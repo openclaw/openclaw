@@ -31,6 +31,7 @@ const LIVE_DOCKER_AUTH_SHELL_TARGETS = [
 const SHRINKWRAP_POLICY_PATH_RE =
   /^(?:npm-shrinkwrap\.json|package\.json|pnpm-lock\.yaml|pnpm-workspace\.yaml|scripts\/generate-npm-shrinkwrap\.mjs|extensions\/[^/]+\/(?:package\.json|npm-shrinkwrap\.json))$/u;
 let corepackPnpmShimDir;
+let corepackPnpmHomeDir;
 
 export function createChangedCheckChildEnv(baseEnv = process.env) {
   const resolvedBaseEnv = resolveLocalHeavyCheckEnv(baseEnv);
@@ -399,8 +400,15 @@ function prependCorepackPnpmShim(env) {
   const { npm_execpath: _npmExecPath, ...sanitizedEnv } = env;
   return {
     ...sanitizedEnv,
+    COREPACK_ENABLE_DOWNLOAD_PROMPT: sanitizedEnv.COREPACK_ENABLE_DOWNLOAD_PROMPT ?? "0",
+    COREPACK_HOME: sanitizedEnv.COREPACK_HOME ?? ensureCorepackPnpmHomeDir(),
     PATH: [shimDir, env.PATH ?? env.Path ?? ""].filter(Boolean).join(path.delimiter),
   };
+}
+
+function ensureCorepackPnpmHomeDir() {
+  corepackPnpmHomeDir ??= mkdtempSync(path.join(tmpdir(), "openclaw-corepack-home-"));
+  return corepackPnpmHomeDir;
 }
 
 function ensureCorepackPnpmShimDir() {

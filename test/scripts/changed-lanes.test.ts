@@ -311,6 +311,8 @@ describe("scripts/changed-lanes", () => {
 
     expect(command.bin).toBe("corepack");
     expect(command.args).toEqual(["pnpm", "check:no-conflict-markers"]);
+    expect(command.env?.COREPACK_ENABLE_DOWNLOAD_PROMPT).toBe("0");
+    expect(command.env?.COREPACK_HOME).toContain("openclaw-corepack-home-");
     expect(command.env?.npm_execpath).toBeUndefined();
     expect(command.env?.PATH).not.toBe("/usr/bin");
     expect(command.env?.PATH).toContain("/usr/bin");
