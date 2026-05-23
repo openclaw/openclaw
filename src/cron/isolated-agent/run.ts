@@ -333,7 +333,11 @@ function canPromptForMessageTool(params: {
   if (!params.sourceDelivery.messageTool.enabled) {
     return false;
   }
-  return !params.toolsAllow?.length || params.toolsAllow.includes("message");
+  return (
+    params.toolsAllow === undefined ||
+    params.toolsAllow.includes("*") ||
+    params.toolsAllow.includes("message")
+  );
 }
 
 function hasExplicitCronDeliveryTarget(plan: CronDeliveryPlan): boolean {
