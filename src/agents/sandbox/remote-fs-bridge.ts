@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import path from "node:path";
 import { isPathInside } from "../../infra/path-guards.js";
 import type {
@@ -563,7 +564,15 @@ function buildRemoteProtectedSkillMounts(params: {
       },
     );
   }
-  return mounts;
+  return mounts.filter((mount) => isExistingDirectory(mount.localRoot));
+}
+
+function isExistingDirectory(dir: string): boolean {
+  try {
+    return fs.statSync(dir).isDirectory();
+  } catch {
+    return false;
+  }
 }
 
 function compareRemoteMountsByContainerPath(a: MountInfo, b: MountInfo): number {
