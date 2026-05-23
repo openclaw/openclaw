@@ -88,6 +88,11 @@ export function getConnectorPreset(
         args: [presetPath(root, "modbus", "modbus-bridge.py")],
         env: { CLAWORKS_MODBUS_SIMULATE: "1" },
       };
+    case "database-poll":
+      return {
+        command: process.execPath,
+        args: [presetPath(root, "database-poll", "database-poll-bridge.mjs")],
+      };
     default:
       return null;
   }

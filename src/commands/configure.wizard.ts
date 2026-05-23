@@ -5,7 +5,12 @@ import { describeCodexNativeWebSearch } from "../agents/codex-native-web-search.
 import { formatCliCommand } from "../cli/command-format.js";
 import { formatPortRangeHint } from "../cli/error-format.js";
 import { commitConfigWithPendingPluginInstalls } from "../cli/plugins-install-record-commit.js";
-import { resolveProductConfigureIntro } from "../cli/product-surface.js";
+import {
+  productizeUserCopy,
+  resolveProductConfigPathHint,
+  resolveProductConfigureIntro,
+  resolveProductLocalGatewayWsUrl,
+} from "../cli/product-surface.js";
 import { readConfigFileSnapshot, resolveGatewayPort } from "../config/config.js";
 import { logConfigUpdated } from "../config/logging.js";
 import { ConfigMutationConflictError } from "../config/mutate.js";
@@ -152,11 +157,13 @@ async function runGatewayHealthCheck(params: {
   } catch (err) {
     params.runtime.error(formatHealthCheckFailure(err));
     note(
-      [
-        "Docs:",
-        "https://docs.openclaw.ai/gateway/health",
-        "https://docs.openclaw.ai/gateway/troubleshooting",
-      ].join("\n"),
+      productizeUserCopy(
+        [
+          "Docs:",
+          "https://docs.openclaw.ai/gateway/health",
+          "https://docs.openclaw.ai/gateway/troubleshooting",
+        ].join("\n"),
+      ),
       "Health check help",
     );
   }
@@ -195,7 +202,9 @@ async function promptChannelMode(runtime: RuntimeEnv): Promise<ChannelsWizardMod
         {
           value: "remove",
           label: "Remove channel config",
-          hint: "Delete channel tokens/settings from openclaw.json",
+          hint: productizeUserCopy(
+            `Delete channel tokens/settings from ${resolveProductConfigPathHint()}`,
+          ),
         },
       ],
       initialValue: "configure",
@@ -391,17 +400,21 @@ export async function runConfigureWizard(
       note(summarizeExistingConfig(baseConfig), title);
       if (!snapshot.valid && snapshot.issues.length > 0) {
         note(
-          [
-            ...snapshot.issues.map((iss) => `- ${iss.path}: ${iss.message}`),
-            "",
-            "Docs: https://docs.openclaw.ai/gateway/configuration",
-          ].join("\n"),
+          productizeUserCopy(
+            [
+              ...snapshot.issues.map((iss) => `- ${iss.path}: ${iss.message}`),
+              "",
+              "Docs: https://docs.openclaw.ai/gateway/configuration",
+            ].join("\n"),
+          ),
           "Config issues",
         );
       }
       if (!snapshot.valid) {
         outro(
-          `Config invalid. Run \`${formatCliCommand("openclaw doctor")}\` to repair it, then re-run configure.`,
+          productizeUserCopy(
+            `Config invalid. Run \`${formatCliCommand("claworks doctor")}\` to repair it, then re-run configure.`,
+          ),
         );
         runtime.exit(1);
         return;
@@ -415,7 +428,7 @@ export async function runConfigureWizard(
       selectedSections.includes("daemon") ||
       selectedSections.includes("health");
     const promptGatewayRunMode = async (): Promise<OnboardMode> => {
-      const localUrl = "ws://127.0.0.1:18789";
+      const localUrl = resolveProductLocalGatewayWsUrl();
       const remoteUrl = normalizeOptionalString(baseConfig.gateway?.remote?.url) ?? "";
       const localProbePromise = (async () => {
         const [baseLocalProbeToken, baseLocalProbePassword] = await Promise.all([

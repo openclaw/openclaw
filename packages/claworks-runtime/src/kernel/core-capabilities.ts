@@ -20,6 +20,11 @@ import { createAutoConnectManager } from "../claworks/auto-connect.js";
 import { createHarnessSync } from "../claworks/harness-sync.js";
 import { buildHealthPayload } from "../claworks/health.js";
 import type { ClaworksRuntime } from "../claworks/runtime-types.js";
+import type {
+  FieldDefinition,
+  FsmDefinition,
+  ObjectTypeDefinition,
+} from "../planes/data/ontology-types.js";
 import { BRIDGE_LLM } from "./bridge-registry.js";
 import {
   createCapabilityRegistry,
@@ -29,6 +34,7 @@ import {
 import { createEnvironmentScanner } from "./environment-scanner.js";
 import { createEvolveEngine, type EvolveProposal, type EvolveResult } from "./evolve-engine.js";
 import { createRobotSwarm, makeSwarmCapabilities } from "./robot-swarm.js";
+import type { DecisionTable } from "./rule-engine.js";
 import { SystemPromptBuilder } from "./system-prompt-builder.js";
 
 // ── system.* ─────────────────────────────────────────────────────────────
@@ -1001,10 +1007,21 @@ function makePerceiveIntentDescriptor(runtime: ClaworksRuntime): CapabilityDescr
                 extracted: { type: "object" as const, description: "提取的实体" },
               },
             };
-            const { data } = await runtime.structuredOutput.complete(prompt, intentSchema, {
-              maxRetries: 3,
-              fallback: { intent: "unknown", confidence: 0, extracted: {} },
-            });
+            // 优先 voting（3路采样多数投票），显著提升弱模型分类准确率。
+            // 仅当 classify 模型与默认模型相同时跳过（避免强模型多余开销）。
+            const classifyModel = runtime.modelRouter?.resolveForTask("classify");
+            const defaultModel = runtime.modelRouter?.resolveForTask("chat");
+            const useVoting = !!classifyModel && classifyModel !== defaultModel;
+            const { data } = useVoting
+              ? await runtime.structuredOutput.completeWithVoting(prompt, intentSchema, {
+                  votes: 3,
+                  voteField: "intent",
+                  fallback: { intent: "unknown", confidence: 0, extracted: {} },
+                })
+              : await runtime.structuredOutput.complete(prompt, intentSchema, {
+                  maxRetries: 3,
+                  fallback: { intent: "unknown", confidence: 0, extracted: {} },
+                });
             const intent = String(data.intent ?? "");
             if (intent && intent !== "unknown") {
               const hit = {
@@ -2490,6 +2507,14 @@ export function createCoreCapabilityRegistry(runtime: ClaworksRuntime): Capabili
     makeRobotRelationsDescriptor(runtime),
     makeRobotAddRelationDescriptor(runtime),
     makeRobotIntroduceDescriptor(runtime),
+
+    // Lo: Ontology Bootstrap（本体自举：从 CSV/OpenAPI/自然语言生成 ObjectType）
+    makeOntologyBootstrapFromCsvDescriptor(runtime),
+    makeOntologyBootstrapFromOpenApiDescriptor(runtime),
+    makeOntologyBootstrapFromDescriptionDescriptor(runtime),
+
+    // Lrule: Rule Engine 运行时注册（将 DecisionTable 热加载到 RuleEngine）
+    makeRuleEngineRegisterTableDescriptor(runtime),
   ];
 
   registry.registerAll(descriptors);
@@ -2504,4 +2529,344 @@ export function createCoreCapabilityRegistry(runtime: ClaworksRuntime): Capabili
   registry.register(makeSystemDescribeDescriptor(registry));
 
   return registry;
+}
+
+// ── Lo: Ontology Bootstrap（本体自举）─────────────────────────────────────
+// 将 CSV / OpenAPI / 自然语言描述转化为 ObjectTypeDefinition，
+// 注册到 OntologyEngine 供后续 object.* capability 直接使用。
+// 类型严格对齐 ontology-types.ts：FieldDefinition.type 只能是
+//   "string" | "number" | "boolean" | "date" | "enum" | "ref"
+// FsmDefinition.transitions[].event 为事件名字符串（非 on/action 等别称）
+
+const VALID_FIELD_TYPES = new Set<string>(["string", "number", "boolean", "date", "enum", "ref"]);
+
+function normalizeFieldType(raw: string): FieldDefinition["type"] {
+  const t = raw.toLowerCase();
+  if (t === "integer" || t === "int" || t === "float" || t === "double") return "number";
+  if (t === "bool") return "boolean";
+  if (t === "datetime" || t === "timestamp") return "date";
+  if (VALID_FIELD_TYPES.has(t)) return t as FieldDefinition["type"];
+  return "string";
+}
+
+function makeOntologyBootstrapFromCsvDescriptor(runtime: ClaworksRuntime): CapabilityDescriptor {
+  return {
+    id: "ontology.bootstrap_from_csv",
+    verb: "create",
+    description: "解析 CSV 文本（首行为字段名）自动推断并注册 ObjectType 本体定义",
+    owner: { kind: "core" },
+    paramsSchema: {
+      type: "object",
+      required: ["csv_text", "type_name"],
+      properties: {
+        csv_text: { type: "string", description: "包含表头行的 CSV 文本" },
+        type_name: { type: "string", description: "生成的 ObjectType 名称" },
+        pack: { type: "string", description: "归属 Pack（默认 'runtime'）" },
+        description: { type: "string" },
+      },
+    },
+    handler: async (_ctx, params) => {
+      const csvText = String(params.csv_text ?? "");
+      const typeName = String(params.type_name ?? "").trim();
+      if (!typeName || !csvText) return { status: "error", reason: "type_name / csv_text 必填" };
+
+      const lines = csvText.trim().split(/\r?\n/);
+      if (lines.length < 2) return { status: "error", reason: "CSV 至少需要表头行 + 1 行数据" };
+
+      const headers = lines[0]!.split(",").map((h) => h.trim());
+      const sample = lines[1]!.split(",").map((v) => v.trim());
+
+      const fields: FieldDefinition[] = headers.map((name, i) => {
+        const val = sample[i] ?? "";
+        let type: FieldDefinition["type"] = "string";
+        if (!Number.isNaN(Number(val)) && val !== "") type = "number";
+        else if (val.toLowerCase() === "true" || val.toLowerCase() === "false") type = "boolean";
+        return { name, type, required: false };
+      });
+
+      const def: ObjectTypeDefinition = {
+        name: typeName,
+        description: String(params.description ?? `由 CSV 自举生成：${typeName}`),
+        pack: String(params.pack ?? "runtime"),
+        primaryKey: fields[0]?.name ?? "id",
+        fields,
+        actions: [],
+      };
+
+      if (!runtime.ontologyEngine?.registerType) {
+        return { status: "error", reason: "OntologyEngine 未初始化" };
+      }
+      runtime.ontologyEngine.registerType(def);
+      return { status: "ok", type_name: typeName, fields: fields.length };
+    },
+  };
+}
+
+function makeOntologyBootstrapFromOpenApiDescriptor(
+  runtime: ClaworksRuntime,
+): CapabilityDescriptor {
+  return {
+    id: "ontology.bootstrap_from_openapi",
+    verb: "create",
+    description: "解析 OpenAPI JSON/YAML 片段（schemas 段）批量注册 ObjectType 本体定义",
+    owner: { kind: "core" },
+    paramsSchema: {
+      type: "object",
+      required: ["openapi_json"],
+      properties: {
+        openapi_json: {
+          type: "string",
+          description: "OpenAPI JSON 字符串（包含 components.schemas）",
+        },
+        pack: { type: "string", description: "归属 Pack（默认 'runtime'）" },
+        only_names: {
+          type: "array",
+          items: { type: "string" },
+          description: "仅导入指定 schema 名（留空导入全部）",
+        },
+      },
+    },
+    handler: async (_ctx, params) => {
+      const raw = String(params.openapi_json ?? "");
+      const packName = String(params.pack ?? "runtime");
+      const only = Array.isArray(params.only_names) ? (params.only_names as string[]) : [];
+
+      if (!runtime.ontologyEngine?.registerType) {
+        return { status: "error", reason: "OntologyEngine 未初始化" };
+      }
+
+      let parsed: Record<string, unknown>;
+      try {
+        parsed = JSON.parse(raw) as Record<string, unknown>;
+      } catch {
+        return { status: "error", reason: "无法解析 OpenAPI JSON" };
+      }
+
+      const schemasRaw =
+        ((parsed?.components as Record<string, unknown>)?.schemas as Record<string, unknown>) ??
+        (parsed?.definitions as Record<string, unknown>) ??
+        {};
+
+      const registered: string[] = [];
+      for (const [schemaName, schemaDef] of Object.entries(schemasRaw)) {
+        if (only.length > 0 && !only.includes(schemaName)) continue;
+        const schema = schemaDef as Record<string, unknown>;
+        const propsRaw = (schema.properties as Record<string, Record<string, string>>) ?? {};
+        const required = Array.isArray(schema.required) ? (schema.required as string[]) : [];
+
+        const fields: FieldDefinition[] = Object.entries(propsRaw).map(([fieldName, fieldDef]) => {
+          const rawType = String((fieldDef.type ?? fieldDef["$ref"]) ? "ref" : "string");
+          const type = normalizeFieldType(rawType);
+          return {
+            name: fieldName,
+            type,
+            required: required.includes(fieldName),
+            ...(fieldDef.enum
+              ? { enumValues: fieldDef.enum as string[], type: "enum" as const }
+              : {}),
+          };
+        });
+
+        const def: ObjectTypeDefinition = {
+          name: schemaName,
+          description: String(schema.description ?? `由 OpenAPI 导入：${schemaName}`),
+          pack: packName,
+          primaryKey: required[0] ?? fields[0]?.name ?? "id",
+          fields,
+          actions: [],
+        };
+        runtime.ontologyEngine.registerType(def);
+        registered.push(schemaName);
+      }
+
+      return { status: "ok", registered_count: registered.length, types: registered };
+    },
+  };
+}
+
+function makeOntologyBootstrapFromDescriptionDescriptor(
+  runtime: ClaworksRuntime,
+): CapabilityDescriptor {
+  return {
+    id: "ontology.bootstrap_from_description",
+    verb: "create",
+    description: "通过自然语言描述（借助 LLM）生成并注册 ObjectType 本体定义",
+    owner: { kind: "core" },
+    paramsSchema: {
+      type: "object",
+      required: ["description"],
+      properties: {
+        description: {
+          type: "string",
+          description:
+            "自然语言描述业务对象，例如：「设备工单，包含编号、设备ID、故障类型、状态（pending/open/closed）、优先级（1-5）」",
+        },
+        type_name: { type: "string", description: "ObjectType 名称（LLM 可推断）" },
+        pack: { type: "string", description: "归属 Pack（默认 'runtime'）" },
+      },
+    },
+    handler: async (_ctx, params) => {
+      const description = String(params.description ?? "");
+      const packName = String(params.pack ?? "runtime");
+      if (!description) return { status: "error", reason: "description 不能为空" };
+
+      if (!runtime.ontologyEngine?.registerType) {
+        return { status: "error", reason: "OntologyEngine 未初始化" };
+      }
+
+      const llmFn = runtime.bridges?.get(BRIDGE_LLM)?.complete ?? runtime.llmComplete;
+      if (!llmFn) return { status: "error", reason: "LLM 未配置，无法从描述生成本体" };
+
+      const schema = {
+        type: "object" as const,
+        required: ["type_name", "fields"],
+        properties: {
+          type_name: { type: "string" as const },
+          description: { type: "string" as const },
+          primary_key: { type: "string" as const },
+          fields: {
+            type: "array" as const,
+            items: {
+              type: "object" as const,
+              required: ["name", "type"],
+              properties: {
+                name: { type: "string" as const },
+                type: { type: "string" as const },
+                required: { type: "boolean" as const },
+                enum_values: { type: "array" as const, items: { type: "string" as const } },
+              },
+            },
+          },
+          fsm: {
+            type: "object" as const,
+            properties: {
+              field: { type: "string" as const },
+              initial: { type: "string" as const },
+              states: { type: "array" as const, items: { type: "string" as const } },
+              transitions: {
+                type: "array" as const,
+                items: {
+                  type: "object" as const,
+                  properties: {
+                    from: { type: "string" as const },
+                    event: { type: "string" as const },
+                    to: { type: "string" as const },
+                  },
+                },
+              },
+            },
+          },
+        },
+      };
+
+      const prompt = `根据以下业务对象描述，生成标准 ObjectType 定义（JSON）：
+
+描述：${description}
+
+要求：
+- fields[].type 只能是：string | number | boolean | date | enum | ref
+- 如有状态字段，生成 fsm.transitions，每条 transition 必须有 event 字段（表示触发事件名，如 "submit" "approve"）
+- 输出纯 JSON，不要 markdown 代码块`;
+
+      try {
+        const { tryParseJson } = await import("../planes/orch/function-executor.js");
+        const result = await llmFn({ prompt });
+        const data = tryParseJson(result.text) as Record<string, unknown> | null;
+        if (!data || typeof data.type_name !== "string") {
+          return { status: "error", reason: "LLM 未返回合法 JSON", raw: result.text.slice(0, 200) };
+        }
+
+        const typeName = String(params.type_name ?? data.type_name ?? "Unknown");
+        const rawFields = Array.isArray(data.fields)
+          ? (data.fields as Record<string, unknown>[])
+          : [];
+
+        const fields: FieldDefinition[] = rawFields.map((f) => {
+          const type = normalizeFieldType(String(f.type ?? "string"));
+          const fd: FieldDefinition = {
+            name: String(f.name ?? "field"),
+            type,
+            required: Boolean(f.required),
+          };
+          if (type === "enum" && Array.isArray(f.enum_values)) {
+            fd.enumValues = f.enum_values as string[];
+          }
+          return fd;
+        });
+
+        let fsm: FsmDefinition | undefined;
+        if (data.fsm && typeof data.fsm === "object") {
+          const rawFsm = data.fsm as Record<string, unknown>;
+          const transitions = Array.isArray(rawFsm.transitions)
+            ? (rawFsm.transitions as Record<string, unknown>[]).map((t) => ({
+                from: String(t.from ?? "*"),
+                event: String(t.event ?? t.action ?? t.on ?? "change"),
+                to: String(t.to ?? ""),
+              }))
+            : [];
+          fsm = {
+            field: String(rawFsm.field ?? "status"),
+            initial: String(rawFsm.initial ?? ""),
+            states: Array.isArray(rawFsm.states) ? (rawFsm.states as string[]) : [],
+            transitions,
+          };
+        }
+
+        const def: ObjectTypeDefinition = {
+          name: typeName,
+          description: String(data.description ?? description.slice(0, 120)),
+          pack: packName,
+          primaryKey: String(data.primary_key ?? fields[0]?.name ?? "id"),
+          fields,
+          actions: [],
+          fsm,
+        };
+
+        runtime.ontologyEngine.registerType(def);
+        return { status: "ok", type_name: typeName, fields: fields.length, has_fsm: !!fsm };
+      } catch (e) {
+        return { status: "error", reason: String(e) };
+      }
+    },
+  };
+}
+
+// ── Lrule: Rule Engine 运行时注册──────────────────────────────────────────
+function makeRuleEngineRegisterTableDescriptor(runtime: ClaworksRuntime): CapabilityDescriptor {
+  return {
+    id: "rule_engine.register_table",
+    verb: "create",
+    description:
+      "将决策表 JSON 热加载到 RuleEngine（可由 sop_to_rules Playbook 或 Playbook 步骤调用）",
+    owner: { kind: "core" },
+    paramsSchema: {
+      type: "object",
+      required: ["table"],
+      properties: {
+        table: {
+          type: "object",
+          description:
+            "DecisionTable JSON，包含 id/name/rules[]（条件+动作）。条件 op 支持 eq/neq/gt/gte/lt/lte/contains/regex。",
+        },
+      },
+    },
+    handler: async (_ctx, params) => {
+      const table = params.table as DecisionTable | null;
+      if (!table || typeof table !== "object" || !table.id) {
+        return { status: "error", reason: "table 参数无效，必须包含 id 字段" };
+      }
+      if (!runtime.ruleEngine) {
+        return { status: "error", reason: "RuleEngine 未初始化" };
+      }
+      if (typeof runtime.ruleEngine.registerTable !== "function") {
+        return { status: "error", reason: "RuleEngine 版本不支持 registerTable" };
+      }
+      runtime.ruleEngine.registerTable(table as Record<string, unknown>);
+      return {
+        status: "ok",
+        table_id: table.id,
+        rules_count: Array.isArray(table.rules) ? table.rules.length : 0,
+      };
+    },
+  };
 }

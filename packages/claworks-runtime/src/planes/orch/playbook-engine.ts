@@ -64,6 +64,9 @@ export interface PlaybookEngine {
   setNotify(fn: NotifyFn | undefined): void;
   setConnectorInvoke(fn: ConnectorInvokeFn | undefined): void;
   setPublishAnomaly(fn: ((payload: Record<string, unknown>) => Promise<void>) | undefined): void;
+  setContextEngine(
+    engine: import("../../kernel/context-engine.js").ContextEngine | undefined,
+  ): void;
 }
 
 export type PlaybookEngineDeps = {
@@ -101,6 +104,12 @@ export type PlaybookEngineDeps = {
   productionMode?: boolean;
   /** 发布异常事件 */
   publishAnomaly?: (payload: Record<string, unknown>) => Promise<void>;
+  /**
+   * 对话上下文引擎（可选）。
+   * 提供后，Playbook 启动时自动将最近 N 轮对话历史注入为 _session 变量，
+   * 供 LLM 步骤通过 {{_session.history}} 使用，无需在 Playbook 内额外查询。
+   */
+  contextEngine?: import("../../kernel/context-engine.js").ContextEngine;
 };
 
 type RunRow = {
@@ -211,6 +220,12 @@ export function createPlaybookEngine(deps: PlaybookEngineDeps): PlaybookEngine {
         _robot_name: deps.robot.name,
         _robot_id: deps.robot.id ?? deps.robot.name,
         steps: {},
+        // 自动注入会话历史：Playbook 通过 {{_session.history}} 获取最近对话
+        // 避免每个 LLM 步骤重复查询，符合"热路径预计算"原则
+        _session: buildSessionContext(
+          String(input.session_id ?? input.sessionId ?? ""),
+          deps.contextEngine,
+        ),
       },
       objectStore: deps.objectStore,
       kb: deps.kb,
@@ -398,6 +413,10 @@ export function createPlaybookEngine(deps: PlaybookEngineDeps): PlaybookEngine {
 
     setPublishAnomaly(fn) {
       publishAnomaly = fn;
+    },
+
+    setContextEngine(engine) {
+      deps.contextEngine = engine;
     },
 
     async trigger(playbookId, input, partialCtx) {
@@ -663,5 +682,35 @@ function rowToRun(row: RunRow): PlaybookRun {
     output: row.output ? (JSON.parse(row.output) as Record<string, unknown>) : undefined,
     error: row.error ?? undefined,
     steps: logs,
+  };
+}
+
+/**
+ * 从 ContextEngine 构建会话上下文摘要，注入为 _session 变量。
+ *
+ * 数据形态（Playbook 中可直接访问）：
+ *   {{_session.session_id}}        — 会话 ID
+ *   {{_session.turn_count}}        — 历史轮次数
+ *   {{_session.history_text}}      — 可直接粘贴进 Prompt 的文本格式历史
+ *   {{_session.history}}           — 原始轮次数组（role/content/timestamp）
+ */
+function buildSessionContext(
+  sessionId: string,
+  contextEngine?: import("../../kernel/context-engine.js").ContextEngine,
+): Record<string, unknown> {
+  if (!sessionId || !contextEngine) {
+    return { session_id: sessionId, turn_count: 0, history: [], history_text: "" };
+  }
+
+  const turns = contextEngine.getRecent(sessionId, 10);
+  const historyText = turns
+    .map((t) => `[${t.role === "user" ? "用户" : "机器人"}] ${t.content}`)
+    .join("\n");
+
+  return {
+    session_id: sessionId,
+    turn_count: turns.length,
+    history: turns,
+    history_text: historyText,
   };
 }

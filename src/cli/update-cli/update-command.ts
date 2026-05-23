@@ -28,7 +28,11 @@ import { asResolvedSourceConfig, asRuntimeConfig } from "../../config/materializ
 import { CONFIG_PATH, resolveIncludeRoots } from "../../config/paths.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../../config/types.plugins.js";
-import { GATEWAY_SERVICE_KIND, GATEWAY_SERVICE_MARKER } from "../../daemon/constants.js";
+import {
+  GATEWAY_SERVICE_KIND,
+  GATEWAY_SERVICE_MARKER,
+  resolveGatewayServiceMarker,
+} from "../../daemon/constants.js";
 import { resolveGatewayInstallEntrypoint } from "../../daemon/gateway-entrypoint.js";
 import { disableCurrentOpenClawUpdateLaunchdJob } from "../../daemon/launchd.js";
 import { resolveGatewayRestartLogPath } from "../../daemon/restart-logs.js";
@@ -891,7 +895,8 @@ async function maybeRestartServiceAfterFailedPackageUpdate(params: {
 function isRunningInsideGatewayService(
   env: Record<string, string | undefined> = process.env,
 ): boolean {
-  if (env.OPENCLAW_SERVICE_MARKER?.trim() !== GATEWAY_SERVICE_MARKER) {
+  const marker = env.OPENCLAW_SERVICE_MARKER?.trim();
+  if (marker !== GATEWAY_SERVICE_MARKER && marker !== resolveGatewayServiceMarker(env)) {
     return false;
   }
   const serviceKind = env.OPENCLAW_SERVICE_KIND?.trim();

@@ -15,6 +15,7 @@ import {
   isPersonalWorkProfile,
   repairPersonalEnterpriseProfile,
 } from "./personal-enterprise-repair.js";
+import { isClaworksProductionMode } from "./product-env.js";
 
 /** OpenClaw personal install default; ClaWorks product must not bind here. */
 export const OPENCLAW_RESERVED_GATEWAY_PORT = 18_789;
@@ -33,6 +34,53 @@ export type ProductConfigRepairResult = {
   actions: string[];
   warnings: string[];
 };
+
+const OT_SIMULATE_PRESET_SUFFIX = "-simulate";
+
+/** Normalize OT connector presets for production (no simulate / no *-simulate presets). */
+export function repairOtConnectorSimulateFlags(
+  connectors: Record<string, { simulate?: boolean; preset?: string }> | undefined,
+  opts: { productionMode?: boolean; env?: NodeJS.ProcessEnv } = {},
+): {
+  connectors: Record<string, { simulate?: boolean; preset?: string }>;
+  actions: string[];
+  changed: boolean;
+} {
+  const env = opts.env ?? process.env;
+  const enforceProduction =
+    opts.productionMode === true ||
+    env.CLAWORKS_PRODUCTION === "1" ||
+    env.CLAWORKS_INIT_SECURE === "1";
+  if (!connectors) {
+    return { connectors: {}, actions: [], changed: false };
+  }
+  const next = { ...connectors };
+  let changed = false;
+  const actions: string[] = [];
+  for (const [id, raw] of Object.entries(next)) {
+    if (!raw || typeof raw !== "object") {
+      continue;
+    }
+    const entry = { ...raw };
+    let entryChanged = false;
+    if (typeof entry.preset === "string" && entry.preset.endsWith(OT_SIMULATE_PRESET_SUFFIX)) {
+      entry.preset = entry.preset.slice(0, -OT_SIMULATE_PRESET_SUFFIX.length);
+      entry.simulate = false;
+      entryChanged = true;
+      actions.push(`connectors.${id}.preset → ${entry.preset} (removed -simulate suffix)`);
+    }
+    if (enforceProduction && entry.simulate === true) {
+      entry.simulate = false;
+      entryChanged = true;
+      actions.push(`connectors.${id}.simulate = false (production)`);
+    }
+    if (entryChanged) {
+      next[id] = entry;
+      changed = true;
+    }
+  }
+  return { connectors: next, actions, changed };
+}
 
 const LEGACY_L0_PACK = "core";
 const NEW_L0_PACK = "base";
@@ -474,18 +522,17 @@ export function repairClaworksRobotPluginConfig(
     changed = true;
   }
 
-  if (pluginConfig.production_mode === true) {
-    const connectorEntries = (pluginConfig.connectors ?? {}) as Record<
-      string,
-      { simulate?: boolean; preset?: string }
-    >;
-    for (const [id, entry] of Object.entries(connectorEntries)) {
-      if (entry?.simulate === true) {
-        entry.simulate = false;
-        actions.push(`connectors.${id}.simulate = false (production_mode)`);
-        changed = true;
-      }
-    }
+  const otRepair = repairOtConnectorSimulateFlags(
+    pluginConfig.connectors as Record<string, { simulate?: boolean; preset?: string }> | undefined,
+    {
+      productionMode:
+        pluginConfig.production_mode === true || isClaworksProductionMode(pluginConfig),
+    },
+  );
+  if (otRepair.changed) {
+    pluginConfig.connectors = otRepair.connectors;
+    actions.push(...otRepair.actions);
+    changed = true;
   }
 
   const seed = seedPacksToStateDir({

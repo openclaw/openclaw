@@ -1,4 +1,5 @@
 import { isRootVersionInvocation } from "./cli/argv.js";
+import { resolveCliName, resolveCliProductTitle } from "./cli/cli-name.js";
 import { resolveCliContainerTarget } from "./cli/container-target.js";
 
 export function tryHandleRootVersionFastPath(
@@ -45,7 +46,8 @@ export function tryHandleRootVersionFastPath(
   resolveVersion()
     .then(({ VERSION, resolveCommitHash }) => {
       const commit = resolveCommitHash({ moduleUrl: deps.moduleUrl ?? import.meta.url });
-      output(commit ? `OpenClaw ${VERSION} (${commit})` : `OpenClaw ${VERSION}`);
+      const productTitle = resolveCliProductTitle(resolveCliName(argv, deps.env));
+      output(commit ? `${productTitle} ${VERSION} (${commit})` : `${productTitle} ${VERSION}`);
       exit(0);
     })
     .catch(onError);

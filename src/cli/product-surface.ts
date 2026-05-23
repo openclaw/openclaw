@@ -105,6 +105,19 @@ export function resolveProductTuiTitle(env: NodeJS.ProcessEnv = process.env): st
   return `${resolveProductCliName(env)} tui`;
 }
 
+export function resolveProductLocalGatewayWsUrl(env: NodeJS.ProcessEnv = process.env): string {
+  return `ws://127.0.0.1:${resolveProductDefaultGatewayPort(env)}`;
+}
+
+export function resolveProductLocalGatewayHttpUrl(env: NodeJS.ProcessEnv = process.env): string {
+  return `http://127.0.0.1:${resolveProductDefaultGatewayPort(env)}`;
+}
+
+/** User-visible wizard/configure copy with ClaWorks port/path/cli substitutions. */
+export function productizeUserCopy(value: string, env: NodeJS.ProcessEnv = process.env): string {
+  return applyProductSurfaceCopy(value, env);
+}
+
 /** Rewrite user-visible strings for ClaWorks product mode. */
 export function applyProductSurfaceCopy(
   value: string,

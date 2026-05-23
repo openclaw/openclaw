@@ -5,6 +5,7 @@ import {
   GATEWAY_SERVICE_KIND,
   GATEWAY_SERVICE_MARKER,
   resolveGatewayLaunchAgentLabel,
+  resolveGatewayServiceMarker,
   resolveGatewaySystemdServiceName,
   resolveGatewayWindowsTaskName,
 } from "./constants.js";
@@ -114,7 +115,10 @@ function hasGatewayServiceMarker(content: string): boolean {
   const lower = normalizeLowercaseStringOrEmpty(content);
   const markerKeys = ["openclaw_service_marker"];
   const kindKeys = ["openclaw_service_kind"];
-  const markerValues = [normalizeLowercaseStringOrEmpty(GATEWAY_SERVICE_MARKER)];
+  const markerValues = [
+    normalizeLowercaseStringOrEmpty(GATEWAY_SERVICE_MARKER),
+    normalizeLowercaseStringOrEmpty(resolveGatewayServiceMarker()),
+  ].filter((v, i, a) => a.indexOf(v) === i);
   const hasMarkerKey = markerKeys.some((key) => lower.includes(key));
   const hasKindKey = kindKeys.some((key) => lower.includes(key));
   const hasMarkerValue = markerValues.some((value) => lower.includes(value));

@@ -1,4 +1,5 @@
 import { formatPortRangeHint } from "../cli/error-format.js";
+import { productizeUserCopy } from "../cli/product-surface.js";
 import { resolveGatewayPort } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isValidEnvSecretRefId, type SecretInput } from "../config/types.secrets.js";
@@ -225,7 +226,10 @@ export async function promptGatewayConfig(
         }),
         id: envVarName,
       };
-      note(`Validated ${envVarName}. OpenClaw will store a token SecretRef.`, "Gateway token");
+      note(
+        productizeUserCopy(`Validated ${envVarName}. ClaWorks will store a token SecretRef.`),
+        "Gateway token",
+      );
     } else {
       const tokenInput = guardCancel(
         await text({
@@ -253,7 +257,9 @@ export async function promptGatewayConfig(
   if (authMode === "trusted-proxy") {
     note(
       [
-        "Trusted proxy mode: OpenClaw trusts user identity from a reverse proxy.",
+        productizeUserCopy(
+          "Trusted proxy mode: ClaWorks trusts user identity from a reverse proxy.",
+        ),
         "The proxy must authenticate users and pass identity via headers.",
         "Only requests from specified proxy IPs will be trusted.",
         "",

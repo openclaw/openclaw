@@ -92,5 +92,26 @@ export type ClaworksRobotConfig = {
     /** 对话模型（chat completion） */
     chat?: string;
   };
+  /**
+   * 独立部署直连 LLM 配置（不依赖 OpenClaw/claworks-robot）。
+   * 支持任意 OpenAI 兼容接口（Ollama / Qwen / DeepSeek / LocalAI 等）。
+   *
+   * 企业私域最小配置：
+   *   llm:
+   *     base_url: http://gpu-server:11434/v1
+   *     model: qwen2.5:14b
+   *
+   * 如果不设置，运行时自动探测环境变量：
+   *   CLAWORKS_LLM_BASE_URL / CLAWORKS_LLM_API_KEY / CLAWORKS_LLM_MODEL
+   *   OPENAI_API_KEY / ANTHROPIC_API_KEY / OLLAMA_BASE_URL
+   */
+  llm?: {
+    /** OpenAI 兼容 Base URL（如 http://localhost:11434/v1） */
+    base_url?: string;
+    /** API Key（本地 Ollama 可留空） */
+    api_key?: string;
+    /** 模型名称（如 qwen2.5:14b / gpt-4o-mini / claude-3-5-haiku-20241022） */
+    model?: string;
+  };
   connectors?: Record<string, ConnectorConfigInput>;
 };

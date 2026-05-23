@@ -253,6 +253,7 @@ export type ClaworksRuntime = {
     ): Array<{ id: string; triggered: boolean; action?: string }>;
     listRules(): Array<{ id: string; name?: string; condition: string; action?: string }>;
     addRule(rule: Record<string, unknown>): void;
+    registerTable?(table: Record<string, unknown>): void;
     [key: string]: unknown;
   };
 

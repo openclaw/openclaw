@@ -9,9 +9,12 @@
  *   加载到运行时，而不是硬编码在这里。
  *
  * 三层架构：
- *   第一层（Core Runtime）：此文件 — 通用机器人能力，绝不含业务逻辑
- *   第二层（通用 Pack）：claworks-packs/base — 通用业务能力（work_order, alarm 等）
- *   第三层（行业 Pack）：claworks-packs/industrial — 行业专属能力（shift, equipment 等）
+ *   第一层（Platform Runtime）：此文件 — 平台内置能力，绝不含业务逻辑
+ *   第二层（基础 Pack）：claworks-packs/base — 业务基础 Playbook 及可选 Pack capabilities
+ *   第三层（行业 Pack）：claworks-packs/industrial 等 — 行业专属 Playbook 及 Pack capabilities
+ *
+ * 注意：Pack 不是插件（Plugin）。Pack 由 PackLoader 加载贡献 Playbook/ObjectType/capability；
+ * Plugin 是向宿主进程（OpenClaw Gateway）注册服务的代码模块，仅 extensions/claworks-robot 是 Plugin。
  *
  * 能力清单（A 类：保留在核心）：
  *   L10 reasoning.*   推理（思考、分解、评估）
@@ -3153,7 +3156,7 @@ export function makeSystemCapabilities(runtime: ClaworksRuntime): CapabilityDesc
               reloaded_at: new Date().toISOString(),
             })
             .catch(() => undefined);
-          // 尝试调用 packLoader 的非标准 reload（如 pack 插件注入了扩展方法）
+          // 尝试调用 packLoader 的非标准 reload（如宿主注入了 reload 扩展方法）
           const loaderAny = runtime.packLoader as unknown as { reload?: () => Promise<unknown> };
           if (typeof loaderAny.reload === "function") {
             await loaderAny.reload();

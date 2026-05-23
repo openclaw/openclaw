@@ -7,21 +7,30 @@
  *   2. YAML + JS 入口（混合模式）— YAML + index.ts/entry 字段
  *   3. 只有 JS（纯代码 Pack）— index.ts 导出 PackFactory
  *
- * ## OpenClaw 插件 SDK 对齐说明
+ * ## Pack 的本质
  *
- * ClaWorks Pack SDK 与 OpenClaw Plugin SDK 保持相同的核心扩展点语义：
+ * Pack **不是插件（Plugin）**。二者在软件工程中含义不同，不可混用：
  *
- * | OpenClaw Plugin SDK              | ClaWorks Pack SDK              | 说明 |
- * |----------------------------------|--------------------------------|------|
- * | `PluginToolMetadataRegistration` | `capabilities`                 | 注册可调用的能力/工具 |
- * | `PluginSessionActionRegistration`| `actionHandlers`               | 处理 action 调用 |
- * | `PluginRuntimeLifecycleRegistration` | `onLoad` / `onUnload`     | 生命周期钩子 |
- * | `PluginAgentEventSubscriptionRegistration` | `hooks`            | 事件订阅 |
- * | `OpenClawPluginDefinition`       | `claworks.pack.json`           | 清单声明 |
- * | （无直接对应）                    | `scripts`                      | 纯代码脚本（ClaWorks 特有） |
- * | （无直接对应）                    | `scaffolds`                    | LLM 提示模板（ClaWorks 特有） |
- * | （无直接对应）                    | `intentMappings`               | IM 意图路由（ClaWorks 特有） |
- * | （无直接对应）                    | `playbooks` / `objectTypes`    | 本体声明（ClaWorks 特有） |
+ *   - **Plugin（插件）**：向宿主进程注册可执行行为的代码模块。
+ *     ClaWorks 生态中唯一的插件是 `extensions/claworks-robot`，
+ *     它作为 OpenClaw Plugin 向 OpenClaw Gateway 注册机器人服务。
+ *
+ *   - **Pack（包/内容包）**：向 ClaWorks 机器人运行时贡献业务领域知识的
+ *     内容包。主体是 YAML（Ontology、Playbook），可附带可选 TS 代码
+ *     （`PackFactory`：actionHandlers、intentMappings、capabilities）。
+ *     Pack 由 PackLoader 加载进运行时，不向任何宿主进程注册自身。
+ *     类比：Ansible Role、Helm Chart、VS Code Extension Pack。
+ *
+ * Pack 贡献点（PackContribution）：
+ *   - `playbooks`      — YAML Playbook 定义（主体，业务编排）
+ *   - `objectTypes`    — YAML ObjectType 定义（领域本体/数据模型）
+ *   - `capabilities`   — 可选代码：注册到 CapabilityRegistry 的额外能力
+ *   - `actionHandlers` — 可选代码：处理 action 事件
+ *   - `intentMappings` — 可选代码：IM 意图 → 事件路由
+ *   - `scripts`        — 可选代码：纯代码脚本
+ *   - `scaffolds`      — 可选代码：LLM 提示模板
+ *   - `hooks`          — 可选代码：事件订阅
+ *   - `onLoad` / `onUnload` — 生命周期钩子
  *
  * 使用示例：
  *

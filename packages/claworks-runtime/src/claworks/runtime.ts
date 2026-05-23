@@ -9,6 +9,7 @@ import { createCoreCapabilityRegistry } from "../kernel/core-capabilities.js";
 import { createEventKernel, type EventKernel } from "../kernel/event-kernel.js";
 import { CW_EVENTS } from "../kernel/event-names.js";
 import { EvolutionSyncManager } from "../kernel/evolution-sync.js";
+import { createEvolveEngine } from "../kernel/evolve-engine.js";
 import { registerExtensionCapabilities } from "../kernel/extension-capabilities.js";
 import { createHookEngine } from "../kernel/hook-engine.js";
 import { createIngressRouter, DEFAULT_INGRESS_POLICIES } from "../kernel/ingress.js";
@@ -39,6 +40,7 @@ import type {
   ScriptRunFn,
   SubagentRunFn,
 } from "../planes/orch/step-executor.js";
+import { createDirectLlmBridge } from "./direct-llm-bridge.js";
 import { applyIngressPublish } from "./ingress-publish.js";
 import { createModelRouter } from "./model-router.js";
 import { appendObservationEvent, markRuntimeStarted } from "./observability.js";
@@ -76,6 +78,20 @@ export async function createClaworksRuntime(
     skillRun?: SkillRunFn;
   },
 ): Promise<ClaworksRuntime> {
+  // 独立部署：外部未注入 llmComplete 时，自动探测直连 LLM（Ollama / OpenAI / Anthropic）
+  // 企业私域只需设置 CLAWORKS_LLM_BASE_URL + CLAWORKS_LLM_API_KEY 即可，无需 OpenClaw
+  if (!opts?.llmComplete) {
+    const directBridge = createDirectLlmBridge({
+      base_url: config.llm?.base_url,
+      api_key: config.llm?.api_key,
+      model: config.llm?.model,
+    });
+    if (directBridge) {
+      opts = { ...opts, llmComplete: directBridge };
+      opts?.logger?.("[claworks] 独立 LLM bridge 已启用（直连模式）");
+    }
+  }
+
   const dbUrl = config.data?.database_url ?? `sqlite://${join(homedir(), ".claworks", "robot.db")}`;
   const { db, close, dialect, note } = openDatabase(dbUrl);
   if (note) {
@@ -355,6 +371,9 @@ export async function createClaworksRuntime(
   // 初始化脚手架引擎（强模型离线预生成，弱模型在线填空执行）
   runtime.scaffoldEngine = createScaffoldEngine(runtime);
 
+  // 初始化进化引擎（分析失败案例 → 提出 Playbook/能力改进建议 → 写入 Scaffold）
+  runtime.evolveEngine = createEvolveEngine(runtime);
+
   // 初始化对话上下文引擎（多轮会话记忆，跨消息追踪对话历史）
   runtime.contextEngine = createContextEngine({
     llmComplete: opts?.llmComplete
@@ -364,6 +383,10 @@ export async function createClaworksRuntime(
         }
       : undefined,
   });
+
+  // 将对话上下文引擎绑定到 Playbook 引擎（延迟绑定，contextEngine 初始化在 playbookEngine 之后）
+  // 效果：每次 Playbook 执行时自动注入 _session 变量（最近 10 轮对话历史）
+  runtime.playbookEngine.setContextEngine(runtime.contextEngine);
 
   // 初始化用户画像存储（记忆用户偏好风格、近期话题，持久化到 SQLite）
   runtime.userProfileStore = createUserProfileStore(db);

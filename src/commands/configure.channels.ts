@@ -1,5 +1,6 @@
 import { listChatChannels } from "../channels/chat-meta.js";
 import { formatCliCommand } from "../cli/command-format.js";
+import { productizeUserCopy, resolveProductConfigPathHint } from "../cli/product-surface.js";
 import { CONFIG_PATH } from "../config/config.js";
 import { isBlockedObjectKey } from "../config/prototype-keys.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -76,10 +77,12 @@ export async function removeChannelConfigWizard(
     const configured = listConfiguredChannelRemovalChoices(next);
     if (configured.length === 0) {
       note(
-        [
-          "No channel config found in openclaw.json.",
-          `Tip: \`${formatCliCommand("openclaw channels status")}\` shows what is configured and enabled.`,
-        ].join("\n"),
+        productizeUserCopy(
+          [
+            `No channel config found in ${resolveProductConfigPathHint()}.`,
+            `Tip: \`${formatCliCommand("claworks channels status")}\` shows what is configured and enabled.`,
+          ].join("\n"),
+        ),
         "Remove channel",
       );
       return next;

@@ -424,6 +424,70 @@ export function createClaworksRestHandler(
         return true;
       }
 
+      // POST /v1/playbooks/{id}/simulate — Playbook 干跑模拟（MockObjectStore，不落库）
+      if (method === "POST" && parts[1] === "playbooks" && parts[2] && parts[3] === "simulate") {
+        const playbookId = parts[2];
+        const body = (await readJsonBody(req)) as {
+          vars?: Record<string, unknown>;
+          event?: Record<string, unknown>;
+        } | null;
+        const vars = body?.vars ?? {};
+        const event = body?.event ?? { type: `manual.simulate.${playbookId}` };
+
+        const playbooks = runtime.playbookEngine?.listPlaybooks?.() ?? [];
+        const pb = playbooks.find(
+          (p: { id: string }) => p.id === playbookId || p.id === `process.${playbookId}`,
+        );
+        if (!pb) {
+          notFound(res);
+          return true;
+        }
+
+        const { createMockObjectStore, createPlaybookSimulator } =
+          await import("../../planes/orch/playbook-simulator.js");
+
+        const simulator = createPlaybookSimulator(async (pid, initVars, trigEvent, mockStore) => {
+          const steps: import("../../planes/orch/playbook-simulator.js").SimulateStepLog[] = [];
+          try {
+            // 在沙盒 runtime 副本上运行：objectStore 替换为 mock，禁用真实通知
+            const sandboxRuntime = Object.create(runtime) as typeof runtime;
+            sandboxRuntime.objectStore = mockStore;
+            // 使用沙盒 runtime 直接触发 playbook
+            const playbookEngine = runtime.playbookEngine;
+            if (!playbookEngine) throw new Error("PlaybookEngine 未初始化");
+            const runId = await playbookEngine.trigger(pid, trigEvent, {
+              userId: "simulator",
+              channelId: "simulate",
+              additionalVars: { ...initVars, _simulate: true, _mock_store: mockStore },
+              subjectType: "system",
+              subjectId: "simulator",
+            });
+            const run = runId ? await playbookEngine.getRun(runId) : null;
+            if (run?.steps) {
+              for (let i = 0; i < run.steps.length; i++) {
+                const s = run.steps[i];
+                steps.push({
+                  step: i,
+                  type: String(s?.type ?? "unknown"),
+                  name: String(s?.name ?? ""),
+                  status: s?.status === "error" ? "error" : "ok",
+                  durationMs: typeof s?.durationMs === "number" ? s.durationMs : 0,
+                  output: s?.output,
+                  error: s?.error,
+                });
+              }
+            }
+            return { steps, error: run?.error };
+          } catch (e) {
+            return { steps, error: String(e) };
+          }
+        });
+
+        const result = await simulator.simulate(playbookId, vars, event);
+        sendJson(res, 200, result);
+        return true;
+      }
+
       async function handleHitlSubmit(runId: string): Promise<boolean> {
         const rbacResult = checkRbac(runtime, auth, "hitl.resolve", `run:${runId}`);
         if (!rbacResult.allowed) {

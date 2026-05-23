@@ -69,5 +69,6 @@ export {
   hasPackSourcesAvailable,
   isClaworksRobotConfigPresent,
   repairClaworksJsonConfig,
+  repairOtConnectorSimulateFlags,
   type ProductConfigRepairResult,
 } from "./claworks/product-config-repair.js";

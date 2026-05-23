@@ -22,6 +22,7 @@ import type {
   VerboseLevel,
 } from "../auto-reply/thinking.js";
 import { resolveChannelModelOverride } from "../channels/model-overrides.js";
+import { resolveCliName, resolveCliProductEmoji, resolveCliProductTitle } from "../cli/cli-name.js";
 import {
   resolveMainSessionKey,
   resolveSessionFilePath,
@@ -931,7 +932,10 @@ export function buildStatusMessage(args: StatusArgs): string {
       } (${fallbackState.reason ?? "selected model unavailable"})`
     : null;
   const commit = resolveCommitHash({ moduleUrl: import.meta.url });
-  const versionLine = `🦞 OpenClaw ${VERSION}${commit ? ` (${commit})` : ""}`;
+  const _cliName = resolveCliName();
+  const _productTitle = resolveCliProductTitle(_cliName);
+  const _productEmoji = resolveCliProductEmoji(_cliName);
+  const versionLine = `${_productEmoji} ${_productTitle} ${VERSION}${commit ? ` (${commit})` : ""}`;
   const usagePair = formatUsagePair(inputTokens, outputTokens);
   const cacheLine = formatCacheLine(inputTokens, cacheRead, cacheWrite);
   const costLine = costLabel ? `💵 Cost: ${costLabel}` : null;

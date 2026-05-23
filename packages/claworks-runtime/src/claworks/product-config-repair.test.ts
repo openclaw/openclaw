@@ -9,6 +9,7 @@ import {
   hasPackSourcesAvailable,
   repairClaworksJsonConfig,
   repairClaworksRobotPluginConfig,
+  repairOtConnectorSimulateFlags,
   repairProductPluginsAllow,
   repairVectorKnowledgeBase,
   seedPacksToStateDir,
@@ -163,5 +164,17 @@ describe("product-config-repair", () => {
       }
     ).entries["claworks-robot"].config.notify;
     expect(notify.targets[0]?.to).toBe("ou_test");
+  });
+
+  it("repairOtConnectorSimulateFlags strips simulate presets in production", () => {
+    const connectors = {
+      plant: { preset: "mqtt-simulate", simulate: true, enabled: true },
+      line: { preset: "mqtt", simulate: true, enabled: true },
+    };
+    const result = repairOtConnectorSimulateFlags(connectors, { productionMode: true });
+    expect(result.changed).toBe(true);
+    expect(result.connectors.plant.preset).toBe("mqtt");
+    expect(result.connectors.plant.simulate).toBe(false);
+    expect(result.connectors.line.simulate).toBe(false);
   });
 });

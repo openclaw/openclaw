@@ -1,6 +1,7 @@
 import { normalizeProviderId } from "../agents/provider-id.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { commitConfigWriteWithPendingPluginInstalls } from "../cli/plugins-install-record-commit.js";
+import { productizeUserCopy } from "../cli/product-surface.js";
 import type {
   AuthChoice,
   GatewayAuthChoice,
@@ -211,7 +212,9 @@ export async function runSetupWizard(
       );
     }
     await prompter.outro(
-      `Config invalid. Run \`${formatCliCommand("openclaw doctor")}\` to repair it, then re-run setup.`,
+      productizeUserCopy(
+        `Config invalid. Run \`${formatCliCommand("claworks doctor")}\` to repair it, then re-run setup.`,
+      ),
     );
     runtime.exit(1);
     return;
@@ -222,24 +225,26 @@ export async function runSetupWizard(
     : [];
   if (compatibilityNotices.length > 0) {
     await prompter.note(
-      [
-        `Detected ${compatibilityNotices.length} plugin compatibility notice${compatibilityNotices.length === 1 ? "" : "s"} in the current config.`,
-        ...compatibilityNotices
-          .slice(0, 4)
-          .map((notice) => `- ${formatPluginCompatibilityNotice(notice)}`),
-        ...(compatibilityNotices.length > 4
-          ? [`- ... +${compatibilityNotices.length - 4} more`]
-          : []),
-        "",
-        `Review: ${formatCliCommand("openclaw doctor")}`,
-        `Inspect: ${formatCliCommand("openclaw plugins inspect --all")}`,
-      ].join("\n"),
+      productizeUserCopy(
+        [
+          `Detected ${compatibilityNotices.length} plugin compatibility notice${compatibilityNotices.length === 1 ? "" : "s"} in the current config.`,
+          ...compatibilityNotices
+            .slice(0, 4)
+            .map((notice) => `- ${formatPluginCompatibilityNotice(notice)}`),
+          ...(compatibilityNotices.length > 4
+            ? [`- ... +${compatibilityNotices.length - 4} more`]
+            : []),
+          "",
+          `Review: ${formatCliCommand("claworks doctor")}`,
+          `Inspect: ${formatCliCommand("claworks plugins inspect --all")}`,
+        ].join("\n"),
+      ),
       t("wizard.setup.pluginCompatibilityTitle"),
     );
   }
 
   const quickstartHint = t("wizard.setup.flowQuickstartHint", {
-    command: formatCliCommand("openclaw configure"),
+    command: formatCliCommand("claworks configure"),
   });
   const manualHint = t("wizard.setup.flowAdvancedHint");
   const migrationDetections = await detectSetupMigrationSources({ config: baseConfig, runtime });
@@ -260,7 +265,9 @@ export async function runSetupWizard(
     normalizedExplicitFlow !== "import"
   ) {
     runtime.error(
-      "Invalid --flow. Use quickstart, manual, advanced, or import. Example: openclaw onboard --flow quickstart",
+      productizeUserCopy(
+        "Invalid --flow. Use quickstart, manual, advanced, or import. Example: claworks onboard --flow quickstart",
+      ),
     );
     runtime.exit(1);
     return;

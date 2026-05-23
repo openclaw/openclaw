@@ -5,7 +5,7 @@ import { isRich, theme } from "../../terminal/theme.js";
 import { escapeRegExp } from "../../utils.js";
 import { hasFlag, hasRootVersionAlias } from "../argv.js";
 import { formatCliBannerLine, hasEmittedCliBanner } from "../banner.js";
-import { replaceCliName, resolveCliName } from "../cli-name.js";
+import { replaceCliName, resolveCliName, resolveCliProductTitle } from "../cli-name.js";
 import { CLI_LOG_LEVEL_VALUES, parseCliLogLevelOption } from "../log-level-option.js";
 import type { ProgramContext } from "./context.js";
 import { getCoreCliCommandsWithSubcommands } from "./core-command-descriptors.js";
@@ -114,8 +114,11 @@ export function configureProgramHelp(program: Command, ctx: ProgramContext) {
     hasRootVersionAlias(process.argv)
   ) {
     const commit = resolveCommitHash({ moduleUrl: import.meta.url });
+    const productTitle = resolveCliProductTitle(CLI_NAME);
     console.log(
-      commit ? `OpenClaw ${ctx.programVersion} (${commit})` : `OpenClaw ${ctx.programVersion}`,
+      commit
+        ? `${productTitle} ${ctx.programVersion} (${commit})`
+        : `${productTitle} ${ctx.programVersion}`,
     );
     process.exit(0);
   }
