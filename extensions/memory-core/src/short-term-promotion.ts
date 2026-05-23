@@ -4,7 +4,6 @@ import path from "node:path";
 import type { MemorySearchResult } from "openclaw/plugin-sdk/memory-core-host-runtime-files";
 import { formatMemoryDreamingDay } from "openclaw/plugin-sdk/memory-core-host-status";
 import { appendMemoryHostEvent } from "openclaw/plugin-sdk/memory-host-events";
-import { privateFileStore } from "openclaw/plugin-sdk/security-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   deriveConceptTags,
@@ -12,6 +11,11 @@ import {
   summarizeConceptTagScriptCoverage,
   type ConceptTagScriptCoverage,
 } from "./concept-vocabulary.js";
+import {
+  ensureDreamingPrivateArtifactsDirForWorkspace,
+  readDreamingPrivateJsonIfExists,
+  writeDreamingPrivateJson,
+} from "./dreaming-private-store.js";
 import { asRecord } from "./dreaming-shared.js";
 import { compactMemoryForBudget, DEFAULT_MEMORY_FILE_MAX_CHARS } from "./memory-budget.js";
 
@@ -660,8 +664,7 @@ async function ensureShortTermArtifactsDir(workspaceDir: string): Promise<void> 
     await existing;
     return;
   }
-  const ensuring = fs
-    .mkdir(artifactsDir, { recursive: true })
+  const ensuring = ensureDreamingPrivateArtifactsDirForWorkspace(workspaceDir)
     .then(() => undefined)
     .catch((err) => {
       ensuredShortTermDirs.delete(artifactsDir);
@@ -783,7 +786,7 @@ async function withShortTermLock<T>(workspaceDir: string, task: () => Promise<T>
 async function readStore(workspaceDir: string, nowIso: string): Promise<ShortTermRecallStore> {
   try {
     return normalizeStore(
-      await privateFileStore(workspaceDir).readJsonIfExists(SHORT_TERM_STORE_RELATIVE_PATH),
+      await readDreamingPrivateJsonIfExists(workspaceDir, SHORT_TERM_STORE_RELATIVE_PATH),
       nowIso,
     );
   } catch (err) {
@@ -855,7 +858,7 @@ async function readPhaseSignalStore(
 ): Promise<ShortTermPhaseSignalStore> {
   try {
     return normalizePhaseSignalStore(
-      await privateFileStore(workspaceDir).readJsonIfExists(SHORT_TERM_PHASE_SIGNAL_RELATIVE_PATH),
+      await readDreamingPrivateJsonIfExists(workspaceDir, SHORT_TERM_PHASE_SIGNAL_RELATIVE_PATH),
       nowIso,
     );
   } catch {
@@ -868,16 +871,12 @@ async function writePhaseSignalStore(
   store: ShortTermPhaseSignalStore,
 ): Promise<void> {
   await ensureShortTermArtifactsDir(workspaceDir);
-  await privateFileStore(workspaceDir).writeJson(SHORT_TERM_PHASE_SIGNAL_RELATIVE_PATH, store, {
-    trailingNewline: true,
-  });
+  await writeDreamingPrivateJson(workspaceDir, SHORT_TERM_PHASE_SIGNAL_RELATIVE_PATH, store);
 }
 
 async function writeStore(workspaceDir: string, store: ShortTermRecallStore): Promise<void> {
   await ensureShortTermArtifactsDir(workspaceDir);
-  await privateFileStore(workspaceDir).writeJson(SHORT_TERM_STORE_RELATIVE_PATH, store, {
-    trailingNewline: true,
-  });
+  await writeDreamingPrivateJson(workspaceDir, SHORT_TERM_STORE_RELATIVE_PATH, store);
 }
 
 export function isShortTermMemoryPath(filePath: string): boolean {
