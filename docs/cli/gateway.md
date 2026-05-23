@@ -334,7 +334,11 @@ If you pass `--url`, that explicit target is added ahead of both. Human output l
 - `Local loopback`
 
 <Note>
+<<<<<<< HEAD
 If multiple distinct gateways are reachable, it prints all of them. Probe dedupes alternate transports that report the same gateway identity and logical port, such as an SSH tunnel plus the configured remote URL for the same gateway. Multiple gateways are supported when you use isolated profiles/ports (e.g., a rescue bot), but most installs still run a single gateway.
+=======
+If multiple probe targets are reachable, it prints all of them. An SSH tunnel and the configured remote URL can both point at the same gateway; `multiple_gateways` is reserved for distinct or identity-ambiguous reachable gateways. Multiple gateways are supported when you use isolated profiles/ports (e.g., a rescue bot), but most installs still run a single gateway.
+>>>>>>> 226af531e35 (docs(gateway): clarify multiple gateway identity warnings)
 </Note>
 
 ```bash
@@ -379,7 +383,11 @@ openclaw gateway probe --json
   </Accordion>
   <Accordion title="Common warning codes">
     - `ssh_tunnel_failed`: SSH tunnel setup failed; the command fell back to direct probes.
+<<<<<<< HEAD
     - `multiple_gateways`: more than one distinct gateway identity or logical port was reachable; alternate transports to the same gateway are deduped before this warning is emitted.
+=======
+    - `multiple_gateways`: distinct gateway identities were reachable, or OpenClaw could not prove reachable targets are the same gateway. An SSH tunnel plus configured remote URL to the same gateway does not trigger this warning.
+>>>>>>> 226af531e35 (docs(gateway): clarify multiple gateway identity warnings)
     - `auth_secretref_unresolved`: a configured auth SecretRef could not be resolved for a failed target.
     - `probe_scope_limited`: WebSocket connect succeeded, but the read probe was limited by missing `operator.read`.
 
