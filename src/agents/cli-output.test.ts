@@ -328,7 +328,17 @@ describe("parseCliJsonl", () => {
         JSON.stringify({ type: "init", session_id: "session-stream" }),
         JSON.stringify({
           type: "assistant",
-          usage: { input_tokens: 10, output_tokens: 5, cache_read_input_tokens: 100 },
+          message: {
+            id: "msg-1",
+            usage: { input_tokens: 10, output_tokens: 5, cache_read_input_tokens: 100 },
+          },
+        }),
+        JSON.stringify({
+          type: "assistant",
+          message: {
+            id: "msg-2",
+            usage: { input_tokens: 11, output_tokens: 6, cache_read_input_tokens: 125 },
+          },
         }),
         JSON.stringify({
           type: "result",
@@ -346,9 +356,9 @@ describe("parseCliJsonl", () => {
     );
 
     expect(result?.usage).toEqual({
-      input: 10,
-      output: 5,
-      cacheRead: 100,
+      input: 11,
+      output: 6,
+      cacheRead: 125,
       cacheWrite: undefined,
       total: undefined,
     });
@@ -497,7 +507,17 @@ describe("createCliJsonlStreamingParser", () => {
         JSON.stringify({ type: "init", session_id: "session-stream" }),
         JSON.stringify({
           type: "assistant",
-          usage: { input_tokens: 10, output_tokens: 5, cache_read_input_tokens: 100 },
+          message: {
+            id: "msg-1",
+            usage: { input_tokens: 10, output_tokens: 5, cache_read_input_tokens: 100 },
+          },
+        }),
+        JSON.stringify({
+          type: "assistant",
+          message: {
+            id: "msg-2",
+            usage: { input_tokens: 11, output_tokens: 6, cache_read_input_tokens: 125 },
+          },
         }),
         JSON.stringify({
           type: "result",
@@ -510,9 +530,9 @@ describe("createCliJsonlStreamingParser", () => {
 
     const output = parser.getOutput();
     expect(output?.usage).toEqual({
-      input: 10,
-      output: 5,
-      cacheRead: 100,
+      input: 11,
+      output: 6,
+      cacheRead: 125,
       cacheWrite: undefined,
       total: undefined,
     });

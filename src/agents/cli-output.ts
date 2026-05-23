@@ -39,12 +39,12 @@ function usesClaudeStreamJsonDialect(params: {
   );
 }
 
-function shouldReadCliJsonlUsage(params: {
+function isClaudeStreamJsonResult(params: {
   backend: CliBackendConfig;
   providerId: string;
   parsed: Record<string, unknown>;
 }): boolean {
-  return !(usesClaudeStreamJsonDialect(params) && params.parsed.type === "result");
+  return usesClaudeStreamJsonDialect(params) && params.parsed.type === "result";
 }
 
 function extractJsonObjectCandidates(raw: string): string[] {
@@ -155,6 +155,12 @@ function toCliUsage(raw: Record<string, unknown>): CliUsage | undefined {
 }
 
 function readCliUsage(parsed: Record<string, unknown>): CliUsage | undefined {
+  if (isRecord(parsed.message) && isRecord(parsed.message.usage)) {
+    const usage = toCliUsage(parsed.message.usage);
+    if (usage) {
+      return usage;
+    }
+  }
   if (isRecord(parsed.usage)) {
     const usage = toCliUsage(parsed.usage);
     if (usage) {
@@ -404,18 +410,15 @@ export function createCliJsonlStreamingParser(params: {
     if (!sessionId && typeof parsed.thread_id === "string") {
       sessionId = parsed.thread_id.trim();
     }
-    // Claude stream-json result events report cumulative cache_read across all
-    // tool sub-calls. Keep them only as a fallback when no assistant usage
-    // arrived, but do not let them overwrite per-call assistant usage.
-    if (
-      shouldReadCliJsonlUsage({
+    const nextUsage = readCliUsage(parsed);
+    const shouldUseUsage =
+      !isClaudeStreamJsonResult({
         backend: params.backend,
         providerId: params.providerId,
         parsed,
-      }) ||
-      !usage
-    ) {
-      usage = readCliUsage(parsed) ?? usage;
+      }) || !usage;
+    if (shouldUseUsage) {
+      usage = nextUsage ?? usage;
     }
 
     const result = parseClaudeCliJsonlResult({
@@ -525,8 +528,10 @@ export function parseCliJsonl(
       if (!sessionId && typeof parsed.thread_id === "string") {
         sessionId = parsed.thread_id.trim();
       }
-      if (shouldReadCliJsonlUsage({ backend, providerId, parsed }) || !usage) {
-        usage = readCliUsage(parsed) ?? usage;
+      const nextUsage = readCliUsage(parsed);
+      const shouldUseUsage = !isClaudeStreamJsonResult({ backend, providerId, parsed }) || !usage;
+      if (shouldUseUsage) {
+        usage = nextUsage ?? usage;
       }
 
       const claudeResult = parseClaudeCliJsonlResult({
