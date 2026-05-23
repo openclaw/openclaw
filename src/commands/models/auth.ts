@@ -52,6 +52,7 @@ import {
   normalizeStringifiedOptionalString,
 } from "../../shared/string-coerce.js";
 import { stylePromptHint, stylePromptMessage } from "../../terminal/prompt-style.js";
+import { normalizeSecretInput } from "../../utils/normalize-secret-input.js";
 import { createClackPrompter } from "../../wizard/clack-prompter.js";
 import { validateAnthropicSetupToken } from "../auth-token.js";
 import { repairCodexRuntimePluginInstallForModelSelection } from "../codex-runtime-plugin-install.js";
@@ -118,12 +119,12 @@ async function readPastedSecret(params: {
   const input = process.stdin.isTTY
     ? await (params.masked ? password(promptParams) : text(promptParams))
     : await readPipedStdin();
-  const trimmed = input.trim();
-  const validationMessage = params.validate?.(trimmed);
+  const normalized = normalizeSecretInput(input);
+  const validationMessage = params.validate?.(normalized);
   if (validationMessage) {
     throw new Error(validationMessage);
   }
-  return trimmed;
+  return normalized;
 }
 
 function resolveDefaultTokenProfileId(provider: string): string {

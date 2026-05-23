@@ -1252,6 +1252,20 @@ describe("modelsAuthLoginCommand", () => {
     expect(mocks.updateConfig).not.toHaveBeenCalled();
   });
 
+  it("rejects line-wrapped piped OpenAI API keys as OpenAI Codex token material", async () => {
+    const runtime = createRuntime();
+    restoreStdin?.();
+    restoreStdin = withPipedStdin("sk-openai-\ncodex-api-key-value\n");
+
+    await expect(
+      modelsAuthPasteTokenCommand({ provider: "openai-codex" }, runtime),
+    ).rejects.toThrow("paste-api-key --provider openai-codex");
+
+    expect(mocks.clackText).not.toHaveBeenCalled();
+    expect(mocks.upsertAuthProfileWithLock).not.toHaveBeenCalled();
+    expect(mocks.updateConfig).not.toHaveBeenCalled();
+  });
+
   it("writes pasted API keys to the requested agent store", async () => {
     const runtime = createRuntime();
     useCoderAgentConfig();
@@ -1282,6 +1296,29 @@ describe("modelsAuthLoginCommand", () => {
     const runtime = createRuntime();
     restoreStdin?.();
     restoreStdin = withPipedStdin("sk-openai-codex-api-key-value\n");
+
+    await modelsAuthPasteApiKeyCommand({ provider: "openai-codex" }, runtime);
+
+    expect(mocks.clackPassword).not.toHaveBeenCalled();
+    expect(mocks.upsertAuthProfileWithLock).toHaveBeenCalledWith({
+      profileId: "openai-codex:manual",
+      credential: {
+        type: "api_key",
+        provider: "openai-codex",
+        key: "sk-openai-codex-api-key-value",
+      },
+      agentDir: "/tmp/openclaw/agents/main",
+    });
+    expect(lastUpdatedConfig?.auth?.profiles?.["openai-codex:manual"]).toEqual({
+      provider: "openai-codex",
+      mode: "api_key",
+    });
+  });
+
+  it("normalizes line-wrapped piped OpenAI Codex API keys before storing", async () => {
+    const runtime = createRuntime();
+    restoreStdin?.();
+    restoreStdin = withPipedStdin("sk-openai-\ncodex-api-key-value\n");
 
     await modelsAuthPasteApiKeyCommand({ provider: "openai-codex" }, runtime);
 
