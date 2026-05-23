@@ -202,6 +202,11 @@ describe("handleModelsCommand", () => {
     expect(result?.reply?.text).toContain("Use: /models <provider>");
     expect(result?.reply?.text).toContain("Switch: /model <provider/model>");
     expect(result?.reply?.text).not.toContain("Add: /models add");
+    expect(result?.reply?.interactive?.blocks).toContainEqual({
+      type: "select",
+      placeholder: "Providers",
+      options: expect.arrayContaining([{ label: "anthropic (2)", value: "/models anthropic" }]),
+    });
     const authCheckerParams = firstAuthCheckerParams();
     expect(authCheckerParams?.workspaceDir).toBe("/tmp");
   });
@@ -255,6 +260,8 @@ describe("handleModelsCommand", () => {
     expect(allListResult?.reply?.text).toContain("Models (openai) — showing 1-2 of 2 (page 1/1)");
     expect(allListResult?.reply?.text).toContain("- openai/gpt-4.1");
     expect(allListResult?.reply?.text).toContain("- openai/gpt-4.1-mini");
+    expect(allListResult?.reply?.interactive).toBeUndefined();
+    expect(allListResult?.reply?.presentation).toBeUndefined();
   });
 
   it("does not re-add the default provider when provider visibility is restricted", async () => {

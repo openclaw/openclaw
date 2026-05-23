@@ -72,6 +72,8 @@ export type ChatCommandDefinition = {
   category?: CommandCategory;
   /** Progressive disclosure tier. Defaults to "standard" when omitted. */
   tier?: CommandTier;
+  /** True for commands whose handler already requires an owner sender. */
+  requiresOwner?: boolean;
 };
 
 export type NativeCommandSpec = {

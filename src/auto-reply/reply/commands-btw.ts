@@ -1,5 +1,6 @@
 import { resolveAgentDir, resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { runBtwSideQuestion } from "../../agents/btw.js";
+import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { extractBtwQuestion } from "./btw-command.js";
 import { rejectUnauthorizedCommand } from "./command-gates.js";
 import type { CommandHandler } from "./commands-types.js";
@@ -26,7 +27,11 @@ export const handleBtwCommand: CommandHandler = async (params, allowTextCommands
     };
   }
 
-  const targetSessionEntry = params.sessionStore?.[params.sessionKey] ?? params.sessionEntry;
+  const targetSessionKey =
+    normalizeOptionalString(params.ctx.CommandTargetSessionKey) ?? params.sessionKey;
+  const targetSessionEntry =
+    (targetSessionKey ? params.sessionStore?.[targetSessionKey] : undefined) ??
+    (targetSessionKey === params.sessionKey ? params.sessionEntry : undefined);
 
   if (!targetSessionEntry?.sessionId) {
     return {
@@ -35,8 +40,8 @@ export const handleBtwCommand: CommandHandler = async (params, allowTextCommands
     };
   }
 
-  const sessionAgentId = params.sessionKey
-    ? resolveSessionAgentId({ sessionKey: params.sessionKey, config: params.cfg })
+  const sessionAgentId = targetSessionKey
+    ? resolveSessionAgentId({ sessionKey: targetSessionKey, config: params.cfg })
     : params.agentId;
   const agentDir =
     (sessionAgentId ? resolveAgentDir(params.cfg, sessionAgentId) : undefined) ?? params.agentDir;
@@ -62,7 +67,7 @@ export const handleBtwCommand: CommandHandler = async (params, allowTextCommands
       question,
       sessionEntry: targetSessionEntry,
       sessionStore: params.sessionStore,
-      sessionKey: params.sessionKey,
+      sessionKey: targetSessionKey,
       storePath: params.storePath,
       // BTW is intentionally a quick side question, so do not inherit slower
       // session-level think/reasoning settings from the main run.

@@ -38,6 +38,7 @@ type DefineChatCommandInput = {
   category?: CommandCategory;
   /** Progressive disclosure tier. Defaults to "standard". */
   tier?: CommandTier;
+  requiresOwner?: boolean;
 };
 
 export function defineChatCommand(command: DefineChatCommandInput): ChatCommandDefinition {
@@ -62,6 +63,7 @@ export function defineChatCommand(command: DefineChatCommandInput): ChatCommandD
     scope,
     category: command.category,
     tier: command.tier,
+    requiresOwner: command.requiresOwner,
   };
 }
 
@@ -225,6 +227,7 @@ export function buildBuiltinChatCommands(
       acceptsArgs: true,
       category: "status",
       tier: "standard",
+      requiresOwner: true,
       args: [
         {
           name: "note",
@@ -259,6 +262,7 @@ export function buildBuiltinChatCommands(
       scope: "text",
       category: "management",
       tier: "power",
+      requiresOwner: true,
     }),
     defineChatCommand({
       key: "approve",
@@ -313,6 +317,7 @@ export function buildBuiltinChatCommands(
       acceptsArgs: true,
       category: "status",
       tier: "essential",
+      requiresOwner: true,
       args: [
         {
           name: "path",
@@ -522,6 +527,7 @@ export function buildBuiltinChatCommands(
       textAlias: "/config",
       category: "management",
       tier: "power",
+      requiresOwner: true,
       args: [
         {
           name: "action",
@@ -551,6 +557,7 @@ export function buildBuiltinChatCommands(
       textAlias: "/mcp",
       category: "management",
       tier: "power",
+      requiresOwner: true,
       args: [
         {
           name: "action",
@@ -580,6 +587,7 @@ export function buildBuiltinChatCommands(
       textAliases: ["/plugins", "/plugin"],
       category: "management",
       tier: "power",
+      requiresOwner: true,
       args: [
         {
           name: "action",
@@ -603,6 +611,7 @@ export function buildBuiltinChatCommands(
       textAlias: "/debug",
       category: "management",
       tier: "power",
+      requiresOwner: true,
       args: [
         {
           name: "action",
@@ -657,6 +666,7 @@ export function buildBuiltinChatCommands(
       textAlias: "/restart",
       category: "tools",
       tier: "power",
+      requiresOwner: true,
     }),
     defineChatCommand({
       key: "activation",
@@ -682,6 +692,7 @@ export function buildBuiltinChatCommands(
       textAlias: "/send",
       category: "management",
       tier: "power",
+      requiresOwner: true,
       args: [
         {
           name: "mode",
@@ -767,6 +778,7 @@ export function buildBuiltinChatCommands(
       textAlias: "/trace",
       category: "options",
       tier: "power",
+      requiresOwner: true,
       args: [
         {
           name: "mode",

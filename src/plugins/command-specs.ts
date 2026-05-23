@@ -6,6 +6,15 @@ import { pluginCommandSupportsChannel } from "./command-registration.js";
 import { pluginCommands } from "./command-registry-state.js";
 import type { OpenClawPluginCommandDefinition } from "./types.js";
 
+type PluginCommandSpec = {
+  name: string;
+  description: string;
+  descriptionLocalizations?: Record<string, string>;
+  acceptsArgs: boolean;
+  requireAuth?: boolean;
+  requiredScopes?: string[];
+};
+
 function resolvePluginNativeName(
   command: OpenClawPluginCommandDefinition,
   provider?: string,
@@ -30,12 +39,7 @@ export function getPluginCommandSpecs(
     workspaceDir?: string;
     config?: OpenClawConfig;
   } = {},
-): Array<{
-  name: string;
-  description: string;
-  descriptionLocalizations?: Record<string, string>;
-  acceptsArgs: boolean;
-}> {
+): PluginCommandSpec[] {
   const providerName = normalizeOptionalLowercaseString(provider);
   const commandDefaults =
     providerName && options.config
@@ -55,25 +59,21 @@ export function getPluginCommandSpecs(
 }
 
 /** Resolve plugin command specs for a provider's native naming surface without support gating. */
-export function listProviderPluginCommandSpecs(provider?: string): Array<{
-  name: string;
-  description: string;
-  descriptionLocalizations?: Record<string, string>;
-  acceptsArgs: boolean;
-}> {
+export function listProviderPluginCommandSpecs(provider?: string): PluginCommandSpec[] {
   return Array.from(pluginCommands.values())
     .filter((cmd) => pluginCommandSupportsChannel(cmd, provider))
     .map((cmd) => {
-      const spec: {
-        name: string;
-        description: string;
-        descriptionLocalizations?: Record<string, string>;
-        acceptsArgs: boolean;
-      } = {
+      const spec: PluginCommandSpec = {
         name: resolvePluginNativeName(cmd, provider),
         description: cmd.description,
         acceptsArgs: cmd.acceptsArgs ?? false,
       };
+      if (cmd.requireAuth === false) {
+        spec.requireAuth = false;
+      }
+      if (cmd.requiredScopes?.length) {
+        spec.requiredScopes = [...cmd.requiredScopes];
+      }
       if (cmd.descriptionLocalizations) {
         spec.descriptionLocalizations = cmd.descriptionLocalizations;
       }

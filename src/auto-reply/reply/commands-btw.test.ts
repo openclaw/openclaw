@@ -306,4 +306,40 @@ describe("handleBtwCommand", () => {
       reply: { text: "target context", btw: { question: "what changed?" } },
     });
   });
+
+  it("prefers CommandTargetSessionKey over the native slash transport session", async () => {
+    const params = buildParams("/btw what changed?");
+    params.sessionKey = "agent:main:clickclack:service:wsp_1:slash:usr_human";
+    params.ctx.CommandSource = "native";
+    params.ctx.CommandTargetSessionKey = "agent:main:clickclack:channel:channel:chn_general";
+    params.sessionEntry = {
+      sessionId: "slash-transport-session",
+      updatedAt: Date.now(),
+    };
+    params.sessionStore = {
+      "agent:main:clickclack:service:wsp_1:slash:usr_human": {
+        sessionId: "slash-transport-session",
+        updatedAt: Date.now(),
+      },
+      "agent:main:clickclack:channel:channel:chn_general": {
+        sessionId: "clickclack-channel-session",
+        updatedAt: Date.now(),
+      },
+    };
+    runBtwSideQuestionMock.mockResolvedValue({ text: "target context" });
+
+    const result = await handleBtwCommand(params, true);
+
+    const sideQuestionArgs = mockFirstObjectArg(runBtwSideQuestionMock);
+    expectObjectFields(sideQuestionArgs, {
+      sessionKey: "agent:main:clickclack:channel:channel:chn_general",
+    });
+    expectObjectFields(sideQuestionArgs.sessionEntry, {
+      sessionId: "clickclack-channel-session",
+    });
+    expect(result).toEqual({
+      shouldContinue: false,
+      reply: { text: "target context", btw: { question: "what changed?" } },
+    });
+  });
 });

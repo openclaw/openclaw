@@ -169,6 +169,7 @@ describe("dispatchReplyFromConfig reply_dispatch hook", () => {
     expect(hookMocks.runner.runReplyDispatch).toHaveBeenCalled();
     expect(result).toEqual({
       queuedFinal: false,
+      deliveredOutOfBand: false,
       counts: { tool: 0, block: 0, final: 0 },
     });
   });

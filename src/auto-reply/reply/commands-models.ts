@@ -471,6 +471,84 @@ function buildProviderInfos(params: {
   }));
 }
 
+function buildModelsProviderPresentation(params: {
+  providers: string[];
+  byProvider: ReadonlyMap<string, ReadonlySet<string>>;
+}): Pick<ReplyPayload, "presentation" | "interactive"> | undefined {
+  const options = params.providers.map((provider) => ({
+    label: `${provider} (${params.byProvider.get(provider)?.size ?? 0})`,
+    value: `/models ${provider}`,
+  }));
+  if (options.length === 0) {
+    return undefined;
+  }
+  return {
+    presentation: {
+      title: "Select a provider",
+      tone: "info",
+      blocks: [
+        { type: "text", text: "Choose a provider to browse available models." },
+        { type: "select", placeholder: "Providers", options },
+      ],
+    },
+    interactive: {
+      blocks: [{ type: "select", placeholder: "Providers", options }],
+    },
+  };
+}
+
+function buildModelsListPresentation(params: {
+  provider: string;
+  pageModels: string[];
+  safePage: number;
+  pageCount: number;
+}): Pick<ReplyPayload, "presentation" | "interactive"> | undefined {
+  const options = params.pageModels.map((model) => ({
+    label: model,
+    value: `/model ${params.provider}/${model}`,
+  }));
+  if (options.length === 0) {
+    return undefined;
+  }
+  const selectBlock = {
+    type: "select" as const,
+    placeholder: `Models (${params.provider})`,
+    options,
+  };
+  const buttons = [];
+  if (params.safePage > 1) {
+    buttons.push({
+      label: "Previous",
+      value: `/models list ${params.provider} ${params.safePage - 1}`,
+      style: "secondary" as const,
+    });
+  }
+  if (params.safePage < params.pageCount) {
+    buttons.push({
+      label: "Next",
+      value: `/models list ${params.provider} ${params.safePage + 1}`,
+      style: "secondary" as const,
+    });
+  }
+  const presentationBlocks: NonNullable<ReplyPayload["presentation"]>["blocks"] = [selectBlock];
+  const interactiveBlocks: NonNullable<ReplyPayload["interactive"]>["blocks"] = [selectBlock];
+  if (buttons.length > 0) {
+    const buttonBlock = { type: "buttons" as const, buttons };
+    presentationBlocks.push(buttonBlock);
+    interactiveBlocks.push(buttonBlock);
+  }
+  return {
+    presentation: {
+      title: `Models (${params.provider})`,
+      tone: "info",
+      blocks: presentationBlocks,
+    },
+    interactive: {
+      blocks: interactiveBlocks,
+    },
+  };
+}
+
 export async function resolveModelsCommandReply(params: {
   cfg: OpenClawConfig;
   commandBodyNormalized: string;
@@ -512,10 +590,12 @@ export async function resolveModelsCommandReply(params: {
       return {
         text: "Select a provider:",
         channelData,
+        ...buildModelsProviderPresentation({ providers, byProvider }),
       };
     }
     return {
       text: buildModelsMenuText({ providers, byProvider }),
+      ...buildModelsProviderPresentation({ providers, byProvider }),
     };
   }
 
@@ -533,10 +613,12 @@ export async function resolveModelsCommandReply(params: {
       return {
         text: "Select a provider:",
         channelData,
+        ...buildModelsProviderPresentation({ providers, byProvider }),
       };
     }
     return {
       text: buildModelsMenuText({ providers, byProvider }),
+      ...buildModelsProviderPresentation({ providers, byProvider }),
     };
   }
 
@@ -641,7 +723,10 @@ export async function resolveModelsCommandReply(params: {
   if (!all) {
     lines.push(`All: /models list ${provider} all`);
   }
-  return { text: lines.join("\n") };
+  return {
+    text: lines.join("\n"),
+    ...(all ? {} : buildModelsListPresentation({ provider, pageModels, safePage, pageCount })),
+  };
 }
 
 export const handleModelsCommand: CommandHandler = async (params, allowTextCommands) => {
