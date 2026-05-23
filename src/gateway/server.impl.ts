@@ -1592,7 +1592,6 @@ export async function startGatewayServer(
             startupTrace,
             deferSidecars: opts.deferStartupSidecars === true,
             providerAuthPrewarm: { getConfig: getRuntimeConfig },
-            deferModelPrewarmUntil: startupAccountStartsReady,
           }),
       ),
     ));

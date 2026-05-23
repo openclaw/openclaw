@@ -56,8 +56,8 @@ Docs: https://docs.openclaw.ai
 - Twitch: keep stale message-handler cleanup callbacks from removing newer handler registrations for the same account, preserving inbound message delivery after reconnects. Fixes #83888. (#85425) Thanks @alkor2000.
 - Memory/LanceDB: expose public memory artifacts through the active memory provider bridge so memory-wiki imports durable memory files, daily notes, dream reports, and event logs without depending on memory-core internals. Fixes #83604. (#85060) Thanks @brokemac79.
 - Docker setup: stop printing the Gateway bearer token in setup logs and printed follow-up commands.
-- Gateway: defer channel account startup work until HTTP readiness and make startup model prewarm opt-in, avoiding startup event-loop stalls and timer-delay warnings.
-- Models/perf: reuse plugin metadata during models.json planning, keep bundled catalog augmentation manifest/static, and use static provider catalogs for metadata-only startup discovery so provider model normalization, auth discovery, and Gateway model warmup do not reload broad plugin runtimes.
+- Gateway: defer channel account startup work until HTTP readiness and remove startup model prewarm, avoiding startup event-loop stalls and timer-delay warnings.
+- Models/perf: reuse plugin metadata during models.json planning, keep bundled catalog augmentation manifest/static, and use static provider catalogs for metadata-only startup discovery so provider model normalization, auth discovery, and Gateway startup metadata do not reload broad plugin runtimes.
 - Agents: let embedded compaction fallback retries proceed when PI-compatible candidates do not need agent harness plugin preparation.
 - Agents/tools: honor configured custom provider API keys when deciding whether media, image-generation, video-generation, music-generation, and PDF tools are available. (#85570)
 - StepFun: stop advertising stale generic API key auth choices so onboarding only offers runtime-backed Standard and Step Plan choices.
