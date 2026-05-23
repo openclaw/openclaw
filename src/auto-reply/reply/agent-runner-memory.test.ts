@@ -461,6 +461,46 @@ describe("runMemoryFlushIfNeeded", () => {
     expect(payload?.text?.endsWith("…")).toBe(true);
   });
 
+  it("completes the flush turn without throwing when an embedded run returns a visible error payload and no onVisibleErrorPayloads callback is supplied", async () => {
+    // Covers the post-reply dispatch site (agent-runner.ts) which calls
+    // runMemoryFlushIfNeeded without onVisibleErrorPayloads. Previously the
+    // visible error payload was silently dropped; the flush body now forwards
+    // it to logVerbose. We exercise the no-callback path to ensure the flush
+    // run still completes cleanly.
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+      totalTokens: 80_000,
+      compactionCount: 1,
+    };
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [
+        {
+          text: "⚠️ write failed: Memory flush writes are restricted to memory/2023-11-14.md; use that path only.",
+          isError: true,
+        },
+      ],
+      meta: {},
+    });
+
+    await expect(
+      runMemoryFlushIfNeeded({
+        cfg: { agents: { defaults: { compaction: { memoryFlush: {} } } } },
+        followupRun: createTestFollowupRun(),
+        sessionCtx: { Provider: "whatsapp" } as unknown as TemplateContext,
+        defaultModel: "anthropic/claude-opus-4-6",
+        agentCfgContextTokens: 100_000,
+        resolvedVerboseLevel: "off",
+        sessionEntry,
+        sessionStore: { main: sessionEntry },
+        sessionKey: "main",
+        isHeartbeat: false,
+        replyOperation: createReplyOperation(),
+        // intentionally omit onVisibleErrorPayloads
+      }),
+    ).resolves.toBeDefined();
+  });
+
   it("does not surface user-abort errors as visible payloads (regression: #80755)", async () => {
     const sessionEntry: SessionEntry = {
       sessionId: "session",
