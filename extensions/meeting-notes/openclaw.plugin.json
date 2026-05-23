@@ -2,7 +2,8 @@
   "id": "meeting-notes",
   "enabledByDefault": true,
   "activation": {
-    "onStartup": true,
+    "onStartup": false,
+    "onConfigPaths": ["plugins.entries.meeting-notes.config.autoStart"],
     "onCommands": ["meeting-notes"]
   },
   "name": "Meeting Notes",
