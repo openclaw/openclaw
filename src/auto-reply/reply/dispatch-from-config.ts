@@ -379,10 +379,6 @@ const createShouldEmitVerboseProgress = (params: {
   };
   return {
     shouldEmit: () => resolveLevel() !== "off",
-    shouldEmitExplicit: () => {
-      const explicitLevel = resolveCurrentExplicitLevel();
-      return explicitLevel != null && explicitLevel !== "off";
-    },
     shouldEmitFull: () => resolveLevel() === "full",
   };
 };
@@ -1497,16 +1493,11 @@ export async function dispatchReplyFromConfig(
     // so /stop can abort pre-run and in-run stalls through the same session lane.
     ensureDispatchReplyOperation();
 
-    const chatType = normalizeChatType(ctx.ChatType);
-    const isSlackNonDirectSurface =
-      (ctx.Surface === "slack" || ctx.Provider === "slack") && chatType !== "direct";
-    const isGroupChat = chatType === "group";
-    const isForumTopic = ctx.IsForum === true;
-    const shouldAllowGroupVerboseProgress = () =>
-      isGroupChat && !isForumTopic && verboseProgress.shouldEmitExplicit();
-    const shouldSendVerboseProgressMessages = () =>
-      !isSlackNonDirectSurface &&
-      (!isGroupChat || isForumTopic || shouldAllowGroupVerboseProgress());
+    const suppressDefaultToolProgressMessages =
+      params.replyOptions?.suppressDefaultToolProgressMessages === true;
+    const shouldSuppressDefaultToolProgressMessages = () =>
+      suppressDefaultToolProgressMessages && !shouldEmitVerboseProgress();
+    const shouldSendVerboseProgressMessages = () => !shouldSuppressDefaultToolProgressMessages();
     const shouldSendToolSummaries = () => shouldSendVerboseProgressMessages();
     const shouldSendToolStartStatuses = false;
     const shouldDeliverVerboseProgressDespiteSourceSuppression = () =>
@@ -1851,10 +1842,6 @@ export async function dispatchReplyFromConfig(
       originatingChannel: routeReplyChannel,
       systemEvent: shouldRouteToOriginating,
     });
-    const suppressDefaultToolProgressMessages =
-      params.replyOptions?.suppressDefaultToolProgressMessages === true;
-    const shouldSuppressDefaultToolProgressMessages = () =>
-      suppressDefaultToolProgressMessages && !shouldEmitVerboseProgress();
     const shouldSuppressProgressDelivery = () =>
       sendPolicyDenied ||
       (suppressDelivery && !shouldDeliverVerboseProgressDespiteSourceSuppression());
@@ -1864,12 +1851,10 @@ export async function dispatchReplyFromConfig(
       shouldSendVerboseProgressMessages() &&
       ctx.InboundEventKind !== "room_event" &&
       !shouldSuppressProgressDelivery();
-    const hasDynamicallyGatedGroupVerboseProgress = isGroupChat && !isForumTopic;
+    const hasLiveVerboseProgressGate = suppressDefaultToolProgressMessages && canTrackSession;
     const suppressToolErrorWarnings =
       params.replyOptions?.suppressToolErrorWarnings ??
-      (hasVisibleRegularVerboseToolProgress && !hasDynamicallyGatedGroupVerboseProgress
-        ? true
-        : undefined);
+      (hasVisibleRegularVerboseToolProgress && !hasLiveVerboseProgressGate ? true : undefined);
     const onToolResultFromReplyOptions = params.replyOptions?.onToolResult;
     const onPlanUpdateFromReplyOptions = params.replyOptions?.onPlanUpdate;
     const onApprovalEventFromReplyOptions = params.replyOptions?.onApprovalEvent;
