@@ -701,3 +701,43 @@ describe("R5d trailing-orphan sentinel (P2.24d, gemma write-content live regress
     expect(r.value).toBe("echo hi\n");
   });
 });
+
+describe("R5e trailing-lt (P2.24e, bare trailing < on path fields)", () => {
+  it("R5e-1 strips trailing < from file_path (live regression: edit args)", () => {
+    // e8d2bd03 jsonl: edit args file_path = "~/projects/openclaw/.../visit_logs.md<"
+    const r = sanitizeString("memory/visit_logs.md<", "file_path", baseCfg, { isPath: true });
+    expect(r.value).toBe("memory/visit_logs.md");
+    expect(r.mutations.some((m) => m.rule === "path-quote-strip")).toBe(true);
+  });
+
+  it("R5e-2 strips multiple trailing < from path", () => {
+    const r = sanitizeString("memory/foo.md<<", "file_path", baseCfg, { isPath: true });
+    expect(r.value).toBe("memory/foo.md");
+  });
+
+  it("R5e-3 does not touch normal path without trailing <", () => {
+    const r = sanitizeString("memory/aurora-somin-plan-2026-05-22.md", "file_path", baseCfg, {
+      isPath: true,
+    });
+    expect(r.value).toBe("memory/aurora-somin-plan-2026-05-22.md");
+    expect(r.mutations.length).toBe(0);
+  });
+
+  it("R5e-4 sanitizeToolArgs catches file_path ending in < (edit tool)", () => {
+    const args = {
+      file_path: "memory/visit_logs.md<",
+      oldText: "some text",
+      newText: "new text",
+    };
+    const result = sanitizeToolArgs(args, "edit");
+    expect(result.args.file_path).toBe("memory/visit_logs.md");
+    expect(result.changed).toBe(true);
+  });
+
+  it("R5e-5 non-path content field trailing < is preserved (legitimate prose)", () => {
+    // In non-path fields, trailing "<" is not stripped (only path fields).
+    // A content field could end in a math inequality "x < y" which is fine.
+    const r = sanitizeString("x < y means smaller", "content", baseCfg);
+    expect(r.value).toBe("x < y means smaller");
+  });
+});

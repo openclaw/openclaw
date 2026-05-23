@@ -408,6 +408,14 @@ export function sanitizeString(
     if (next.endsWith('"') || next.endsWith("'")) {
       next = next.slice(0, -1).trim();
     }
+    // R5e trailing-lt (P2.24e, 2026-05-23): strip trailing "<" from path fields.
+    // Live reproduction: edit args file_path ended in "visit_logs.md<" — the
+    // Gemma4 sampler leaked the opening "<" of a sentinel token at end-of-field
+    // without any following "|". R5d targets "<|" form; a bare "<" at end of a
+    // filesystem path is never legitimate (paths don't end in "<").
+    while (next.endsWith("<")) {
+      next = next.slice(0, -1).trimEnd();
+    }
     if (next !== before) {
       mutations.push({
         field,
