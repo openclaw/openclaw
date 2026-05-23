@@ -9,8 +9,9 @@ title: "Enterprise webhook validation and deployment"
 
 The Webhooks plugin lets enterprise systems trigger OpenClaw through
 authenticated HTTP routes. This page records the validation coverage for common
-application patterns, explains how those applications should connect, and
-clarifies when a public ingress path is required.
+application patterns, compares the implementation with adjacent agent systems,
+explains how those applications should connect, and clarifies when a public
+ingress path is required.
 
 The short version: the sender must be able to reach the specific webhook URL.
 That URL can be public HTTPS, private VPC HTTPS, localhost, or a relay endpoint.
@@ -30,6 +31,8 @@ The enterprise webhook implementation was verified with three layers:
 - Edge-case tests for authentication failure, event allowlists, duplicate
   deliveries, missing template fields, raw payload preservation, and
   route-specific authentication on shared paths.
+- Array payload-path coverage for batched webhooks, where `events.0.type` and
+  `events.0.id` resolve to event type and idempotency key.
 - A live GitHub end-to-end run where a repository webhook delivered
   `pull_request` and `pull_request_review` events to a local Gateway through a
   public HTTPS tunnel, and OpenClaw scheduled matching `plugin:webhooks` agent
@@ -41,7 +44,31 @@ The focused verification command was:
 node scripts/run-vitest.mjs run --config test/vitest/vitest.extension-misc.config.ts extensions/webhooks/src/config.test.ts extensions/webhooks/src/http.test.ts extensions/webhooks/index.test.ts
 ```
 
-The test suite passed 43 targeted Webhooks plugin tests.
+The test suite passed 44 targeted Webhooks plugin tests.
+
+A local HTTP smoke test also posted real HTTP requests to a running Node server
+using the Webhooks plugin handler. The first batched event returned `ack` with
+`eventType: "record.updated"` and `idempotencyKey: "evt-array-smoke-1"`;
+replaying the same request returned `duplicate: true`.
+
+## Source comparison
+
+The comparison below is based on the local source trees for Hermes Agent,
+OpenClaw, Claude Code, and Codex.
+
+| System | Webhook surface | Auth and filtering | Dispatch model | Fit |
+| --- | --- | --- | --- | --- |
+| Hermes Agent | A generic `gateway/platforms/webhook.py` adapter exposes `/webhooks/{route_name}` with static and dynamic routes. Telegram and Feishu also have channel-specific webhook modes. | HMAC-style signature checks, GitLab token support, route event allowlists, route rate limits, body limits, and in-memory idempotency. | Converts a webhook into a messaging `MessageEvent`, starts an agent run, and stores delivery metadata so the final agent response can be logged, posted to GitHub, or delivered to another platform. | Strong for agent-as-chat-platform semantics and response delivery. Less typed, more route-specific behavior lives inside one adapter. |
+| OpenClaw | A bundled Webhooks plugin registers exact Gateway HTTP routes such as `/plugins/webhooks/github-pr-review`. | Per-route bearer, header, or `hmac-sha256` auth; route-specific auth even on shared paths; event allowlists; body, rate, and in-flight guards; persistent idempotency when plugin state is available with in-memory fallback. | Dispatches to `ack`, managed TaskFlow, scheduled agent turn, or channel delivery. Prompt rendering supports body, headers, raw JSON, event type, idempotency key, and array payload paths. | Strong for enterprise ingress because routes are typed plugin config and core remains plugin-agnostic. |
+| Claude Code | Feature-gated GitHub PR activity integration. Source references include `KAIROS_GITHUB_WEBHOOKS`, `SubscribePRTool`, `subscribe_pr_activity`, and `<github-webhook-activity>` message rendering. | The checked local tree shows client/tool and rendering hooks, not a generic webhook receiver implementation in the CLI source. | GitHub PR events arrive as user messages in the Claude Code session. The coordinator prompt says mergeability still needs polling because GitHub does not webhook that state. | Narrow PR-subscription workflow, not general enterprise webhook ingress. |
+| Codex | The local app-server source exposes protocol operations such as `review/start` over the app-server transport. It also has authenticated WebSocket/app-server transport code, but no generic webhook receiver comparable to Hermes or OpenClaw. | App-server auth protects Codex protocol transport; it is not vendor webhook verification. | Clients call Codex protocol methods such as review start, command exec, and thread operations. | Strong protocol/server integration, but webhook ingestion belongs in an external bridge or host application. |
+
+The main product difference is where the external event becomes agent input.
+Hermes treats generic webhooks as a messaging platform. Claude Code treats PR
+activity as a specialized subscribed message stream. Codex exposes review and
+execution protocol methods that another service can call. OpenClaw makes webhook
+ingress a Gateway plugin, so enterprise applications can connect without adding
+vendor policy to core runtime code.
 
 ## Application connection matrix
 

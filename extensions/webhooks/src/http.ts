@@ -614,18 +614,7 @@ function readPayloadPath(value: unknown, path: string | undefined): unknown {
   if (!path) {
     return undefined;
   }
-  let current = value;
-  for (const rawSegment of path.split(".")) {
-    const segment = rawSegment.trim();
-    if (!segment || BLOCKED_PATH_SEGMENTS.has(segment)) {
-      return undefined;
-    }
-    if (current === null || typeof current !== "object" || Array.isArray(current)) {
-      return undefined;
-    }
-    current = (current as Record<string, unknown>)[segment];
-  }
-  return current;
+  return readTemplatePath(value, path);
 }
 
 function readTemplatePath(value: unknown, path: string): unknown {

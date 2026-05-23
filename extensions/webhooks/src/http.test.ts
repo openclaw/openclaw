@@ -670,6 +670,66 @@ describe("createTaskFlowWebhookRequestHandler", () => {
     });
   });
 
+  it("resolves event and idempotency payload paths through arrays", async () => {
+    const target: WebhookTarget = {
+      routeId: "batched",
+      path: "/plugins/webhooks/batched",
+      dispatchMode: "ack",
+      auth: {
+        mode: "bearer",
+        prefix: "Bearer",
+        secret: "shared-secret",
+      },
+      event: {
+        payloadPath: "events.0.type",
+      },
+      idempotency: {
+        payloadPath: "events.0.id",
+        ttlMs: 60_000,
+      },
+    };
+    const handler = createHandlerWithTarget(target);
+
+    const first = await dispatchJsonRequest({
+      handler,
+      path: target.path,
+      headers: {
+        authorization: "Bearer shared-secret",
+      },
+      body: {
+        events: [{ id: "evt-array-1", type: "record.updated" }],
+      },
+    });
+    const second = await dispatchJsonRequest({
+      handler,
+      path: target.path,
+      headers: {
+        authorization: "Bearer shared-secret",
+      },
+      body: {
+        events: [{ id: "evt-array-1", type: "record.updated" }],
+      },
+    });
+
+    expect(first.statusCode).toBe(200);
+    expect(parseJsonBody(first)).toEqual({
+      ok: true,
+      routeId: "batched",
+      result: {
+        action: "ack",
+        eventType: "record.updated",
+        idempotencyKey: "evt-array-1",
+      },
+    });
+    expect(second.statusCode).toBe(200);
+    expect(parseJsonBody(second)).toEqual({
+      ok: true,
+      routeId: "batched",
+      duplicate: true,
+      idempotencyKey: "evt-array-1",
+    });
+  });
+
   it("schedules an agent turn from a templated webhook payload", async () => {
     const scheduleSessionTurn = vi.fn(async (params) => ({
       id: "job-1",
