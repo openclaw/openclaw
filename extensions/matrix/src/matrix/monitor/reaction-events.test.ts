@@ -164,15 +164,17 @@ describe("matrix approval reactions", () => {
       client,
       core,
       targetEventId: "$msg-1",
-      reactionKey: "👍",
+      reactionKey: "needs-review",
     });
 
     expect(resolveMatrixApproval).not.toHaveBeenCalled();
     expect(core.system.enqueueSystemEvent).toHaveBeenCalledWith(
-      "Matrix reaction added: 👍 by Owner on msg $msg-1",
+      "Matrix reaction added: needs-review by Owner on msg $msg-1",
       {
         sessionKey: "agent:main:matrix:channel:!ops:example.org",
-        contextKey: "matrix:reaction:add:!ops:example.org:$msg-1:@owner:example.org:👍",
+        contextKey: "matrix:reaction:add:!ops:example.org:$msg-1:@owner:example.org:needs-review",
+        forceSenderIsOwnerFalse: true,
+        trusted: false,
       },
     );
   });
