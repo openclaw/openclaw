@@ -20,7 +20,6 @@ import {
   type CodexAppServerEventProjectorOptions,
   type CodexAppServerToolTelemetry,
 } from "./event-projector.js";
-import { CodexNativeSubagentTaskMirror } from "./native-subagent-task-mirror.js";
 import { rememberCodexRateLimits, resetCodexRateLimitCacheForTests } from "./rate-limit-cache.js";
 import { createCodexTestModel } from "./test-support.js";
 
@@ -252,11 +251,15 @@ function rateLimitsUpdated(resetsAt: number): ProjectorNotification {
 }
 
 function turnCompleted(items: unknown[] = []): ProjectorNotification {
+  return turnWithStatus("completed", items);
+}
+
+function turnWithStatus(status: string, items: unknown[] = []): ProjectorNotification {
   return {
     method: "turn/completed",
     params: {
       threadId: THREAD_ID,
-      turn: { id: TURN_ID, status: "completed", items },
+      turn: { id: TURN_ID, status, items },
     },
   } as ProjectorNotification;
 }
@@ -305,6 +308,22 @@ describe("CodexAppServerEventProjector", () => {
       total: 12,
     });
     expect(result.replayMetadata.replaySafe).toBe(true);
+  });
+
+  it("suppresses mirrored user prompt when the inbound message was already persisted", async () => {
+    const params = await createParams();
+    const projector = await createProjector({
+      ...params,
+      suppressNextUserMessagePersistence: true,
+    });
+    await projector.handleNotification(
+      turnCompleted([{ type: "agentMessage", id: "msg-1", text: "retry result" }]),
+    );
+
+    const result = projector.buildResult(buildEmptyToolTelemetry());
+
+    expect(result.messagesSnapshot.map((message) => message.role)).toEqual(["assistant"]);
+    expect(JSON.stringify(result.messagesSnapshot)).not.toContain(params.prompt);
   });
 
   it("records canonical OpenAI Codex app-server turns with Codex local attribution", async () => {
@@ -570,6 +589,79 @@ describe("CodexAppServerEventProjector", () => {
 
     expect(result.assistantTexts).toEqual([]);
     expect(result.lastAssistant).toBeUndefined();
+  });
+
+  it("does not treat app-server interrupted status as a user cancellation by itself", async () => {
+    const projector = await createProjector();
+
+    await projector.handleNotification(turnWithStatus("interrupted"));
+
+    const result = projector.buildResult(buildEmptyToolTelemetry());
+
+    expect(result.aborted).toBe(false);
+    expect(result.externalAbort).toBe(false);
+    expect(result.timedOut).toBe(false);
+    expect(result.promptError).toBeNull();
+    expect(result.assistantTexts).toEqual([]);
+    expect(result.lastAssistant).toBeUndefined();
+  });
+
+  it("keeps sparse successful bash output eligible for the no-visible-answer guard", async () => {
+    const projector = await createProjector();
+
+    await projector.handleNotification(
+      turnWithStatus("interrupted", [
+        {
+          type: "commandExecution",
+          id: "cmd-empty-output",
+          command:
+            "ps -eo pid,ppid,stat,cmd | rg 'venv-roadmap|pytest|run_security_contract_validation|validate_public_install|git push|apply_patch' || true",
+          cwd: "/workspace",
+          processId: null,
+          source: "agent",
+          status: "completed",
+          commandActions: [],
+          aggregatedOutput: "",
+          exitCode: 0,
+          durationMs: 42,
+        },
+      ]),
+    );
+
+    const result = projector.buildResult(buildEmptyToolTelemetry());
+
+    expect(result.aborted).toBe(false);
+    expect(result.assistantTexts).toEqual([]);
+    expect(result.toolMetas).toEqual([
+      expect.objectContaining({ toolName: "bash", meta: expect.stringContaining("workspace") }),
+    ]);
+  });
+
+  it("keeps explicit cancellation marked aborted for interrupted tool-only turns", async () => {
+    const projector = await createProjector();
+    projector.markAborted();
+
+    await projector.handleNotification(
+      turnWithStatus("interrupted", [
+        {
+          type: "commandExecution",
+          id: "cmd-cancelled",
+          command: "/bin/bash -lc true",
+          cwd: "/workspace",
+          processId: null,
+          source: "agent",
+          status: "completed",
+          commandActions: [],
+          aggregatedOutput: "",
+          exitCode: 0,
+          durationMs: 12,
+        },
+      ]),
+    );
+
+    const result = projector.buildResult(buildEmptyToolTelemetry());
+    expect(result.aborted).toBe(true);
+    expect(result.assistantTexts).toEqual([]);
   });
 
   it("does not fail a completed reply after a retryable app-server error notification", async () => {
@@ -901,36 +993,6 @@ describe("CodexAppServerEventProjector", () => {
 
     const result = projector.buildResult(buildEmptyToolTelemetry());
     expect(result.assistantTexts).toStrictEqual([]);
-  });
-
-  it("mirrors native subagent notifications before current-turn filtering", async () => {
-    const projector = await createProjector({
-      ...(await createParams()),
-      sessionKey: "agent:main:main",
-    } as EmbeddedRunAttemptParams);
-    const mirrorSpy = vi.spyOn(CodexNativeSubagentTaskMirror.prototype, "handleNotification");
-    const notification = {
-      method: "item/completed",
-      params: {
-        threadId: THREAD_ID,
-        turnId: "child-turn",
-        item: {
-          type: "collabAgentToolCall",
-          tool: "spawnAgent",
-          senderThreadId: THREAD_ID,
-          receiverThreadIds: ["child-thread"],
-          agentsStates: {
-            "child-thread": { status: "completed", message: "done" },
-          },
-        },
-      },
-    } as ProjectorNotification;
-
-    await projector.handleNotification(notification);
-
-    expect(mirrorSpy).toHaveBeenCalledWith(notification);
-    const result = projector.buildResult(buildEmptyToolTelemetry());
-    expect(result.assistantTexts).toEqual([]);
   });
 
   it("ignores notifications that omit top-level thread and turn ids", async () => {
@@ -1885,7 +1947,88 @@ describe("CodexAppServerEventProjector", () => {
     expect(event.params).toEqual({ query: "native tool observability" });
     expect(event.runId).toBe("run-1");
     expect(event.toolCallId).toBe("search-observed");
-    expect(event.result).toEqual({ status: "completed" });
+    expect(event.result).toEqual({
+      status: "completed",
+      durationMs: 5,
+      query: "native tool observability",
+    });
+  });
+
+  it("uses Codex web search action metadata when the top-level query is empty", async () => {
+    const afterToolCall = vi.fn();
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([{ hookName: "after_tool_call", handler: afterToolCall }]),
+    );
+    const projector = await createProjector();
+
+    await projector.handleNotification(
+      forCurrentTurn("item/completed", {
+        item: {
+          type: "webSearch",
+          id: "search-observed",
+          query: "",
+          action: {
+            type: "search",
+            query: "native action query",
+            queries: ["native action query", "secondary query"],
+          },
+          status: "completed",
+          durationMs: 5,
+        },
+      }),
+    );
+
+    await vi.waitFor(() => expect(afterToolCall).toHaveBeenCalledTimes(1));
+    const event = requireRecord(
+      mockCallArg(afterToolCall, 0, 0, "after_tool_call event"),
+      "after_tool_call event",
+    );
+    expect(event.toolName).toBe("web_search");
+    expect(event.params).toEqual({
+      query: "native action query",
+      queries: ["native action query", "secondary query"],
+    });
+    expect(event.result).toEqual({
+      status: "completed",
+      durationMs: 5,
+      query: "native action query",
+      queries: ["native action query", "secondary query"],
+    });
+  });
+
+  it("marks unavailable Codex web search queries explicitly", async () => {
+    const afterToolCall = vi.fn();
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([{ hookName: "after_tool_call", handler: afterToolCall }]),
+    );
+    const projector = await createProjector();
+
+    await projector.handleNotification(
+      forCurrentTurn("item/completed", {
+        item: {
+          type: "webSearch",
+          id: "search-observed",
+          query: "",
+          action: { type: "other" },
+          status: "completed",
+        },
+      }),
+    );
+
+    await vi.waitFor(() => expect(afterToolCall).toHaveBeenCalledTimes(1));
+    const event = requireRecord(
+      mockCallArg(afterToolCall, 0, 0, "after_tool_call event"),
+      "after_tool_call event",
+    );
+    expect(event.params).toEqual({
+      action: "other",
+      queryUnavailable: true,
+    });
+    expect(event.result).toEqual({
+      status: "completed",
+      action: "other",
+      queryUnavailable: true,
+    });
   });
 
   it("records dynamic OpenClaw tool calls in mirrored transcript snapshots", async () => {
@@ -1936,6 +2079,40 @@ describe("CodexAppServerEventProjector", () => {
     expect(toolResultContent.toolName).toBe("browser");
     expect(toolResultContent.toolCallId).toBe("call-browser-1");
     expect(toolResultContent.content).toBe("opened");
+  });
+
+  it("does not mirror Codex-native web searches into transcript snapshots", async () => {
+    const projector = await createProjector();
+
+    await projector.handleNotification(
+      forCurrentTurn("item/completed", {
+        item: {
+          type: "webSearch",
+          id: "search-observed",
+          status: "completed",
+          durationMs: 5,
+        },
+      }),
+    );
+
+    const result = projector.buildResult(buildEmptyToolTelemetry());
+
+    expect(
+      result.messagesSnapshot.some((message) => {
+        const record = message as unknown as Record<string, unknown>;
+        if (record.role === "toolResult") {
+          return true;
+        }
+        const content = Array.isArray(record.content) ? record.content : [];
+        return content.some((entry) => {
+          return (
+            typeof entry === "object" &&
+            entry !== null &&
+            (entry as Record<string, unknown>).type === "toolCall"
+          );
+        });
+      }),
+    ).toBe(false);
   });
 
   it("emits verbose summaries for transcript-recorded dynamic tool calls", async () => {
@@ -1991,6 +2168,95 @@ describe("CodexAppServerEventProjector", () => {
     expect(payload.text).toContain("```txt\nopened\n```");
   });
 
+  it("keeps side-effect evidence for dynamic tools that error after execution", async () => {
+    const projector = await createProjector();
+
+    projector.recordDynamicToolCall({
+      callId: "call-process-kill",
+      tool: "process",
+      arguments: { action: "kill", sessionId: "session-1" },
+    });
+    projector.recordDynamicToolResult({
+      callId: "call-process-kill",
+      tool: "process",
+      success: false,
+      terminalType: "error",
+      sideEffectEvidence: true,
+      contentItems: [{ type: "inputText", text: "process exited" }],
+    });
+
+    const result = projector.buildResult(buildEmptyToolTelemetry());
+
+    expect(result.replayMetadata).toEqual({ hadPotentialSideEffects: true, replaySafe: false });
+  });
+
+  it("does not keep side-effect evidence for pre-execution dynamic tool errors", async () => {
+    const projector = await createProjector();
+
+    projector.recordDynamicToolCall({
+      callId: "call-unknown-message",
+      tool: "message",
+      arguments: { action: "send", text: "hello" },
+    });
+    projector.recordDynamicToolResult({
+      callId: "call-unknown-message",
+      tool: "message",
+      success: false,
+      terminalType: "error",
+      contentItems: [{ type: "inputText", text: "Unknown OpenClaw tool: message" }],
+    });
+
+    const result = projector.buildResult(buildEmptyToolTelemetry());
+
+    expect(result.replayMetadata).toEqual({ hadPotentialSideEffects: false, replaySafe: true });
+  });
+
+  it("does not mark blocked dynamic tools as side-effecting", async () => {
+    const projector = await createProjector();
+
+    projector.recordDynamicToolCall({
+      callId: "call-bash-blocked",
+      tool: "bash",
+      arguments: { command: "touch blocked.txt" },
+    });
+    projector.recordDynamicToolResult({
+      callId: "call-bash-blocked",
+      tool: "bash",
+      success: false,
+      terminalType: "blocked",
+      sideEffectEvidence: true,
+      contentItems: [{ type: "inputText", text: "blocked" }],
+    });
+
+    const result = projector.buildResult(buildEmptyToolTelemetry());
+
+    expect(result.replayMetadata).toEqual({ hadPotentialSideEffects: false, replaySafe: true });
+  });
+
+  it("treats completed native MCP tool calls as side-effect evidence", async () => {
+    const projector = await createProjector();
+
+    await projector.handleNotification({
+      method: "item/completed",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        item: {
+          id: "mcp-1",
+          type: "mcpToolCall",
+          server: "github",
+          tool: "create_issue",
+          status: "completed",
+          arguments: { title: "check replay safety" },
+        },
+      },
+    });
+
+    const result = projector.buildResult(buildEmptyToolTelemetry());
+
+    expect(result.replayMetadata).toEqual({ hadPotentialSideEffects: true, replaySafe: false });
+  });
+
   it("suppresses transcript progress for message-like tools", async () => {
     const onAgentEvent = vi.fn();
     const onToolResult = vi.fn();
@@ -2021,7 +2287,7 @@ describe("CodexAppServerEventProjector", () => {
     expect(onToolResult).not.toHaveBeenCalled();
   });
 
-  it("suppresses transcript progress for activity-log bash commands", async () => {
+  it("does not parse shell command text to suppress transcript progress", async () => {
     const onAgentEvent = vi.fn();
     const onToolResult = vi.fn();
     const projector = await createProjector({
@@ -2047,12 +2313,11 @@ describe("CodexAppServerEventProjector", () => {
       contentItems: [{ type: "inputText", text: "Logged: [web_search] Grilled salmon research" }],
     });
 
-    const toolEvents = onAgentEvent.mock.calls.filter(([event]) => {
-      const record = requireRecord(event, "agent event");
-      return record.stream === "tool";
-    });
-    expect(toolEvents).toHaveLength(0);
-    expect(onToolResult).not.toHaveBeenCalled();
+    expect(onAgentEvent).not.toHaveBeenCalled();
+    const toolProgressText = onToolResult.mock.calls
+      .map(([payload]) => (payload as { text?: string }).text ?? "")
+      .join("\n");
+    expect(toolProgressText).toContain("log_activity.sh");
 
     const result = projector.buildResult(buildEmptyToolTelemetry());
     expect(result.messagesSnapshot.some((message) => message.role === "toolResult")).toBe(true);
@@ -2425,6 +2690,36 @@ describe("CodexAppServerEventProjector", () => {
     });
     expect(onToolResult).toHaveBeenNthCalledWith(2, {
       text: "📖 Read: `from README.md`\n```txt\nfile contents\n```",
+    });
+  });
+
+  it("marks failed completed tool output as error progress", async () => {
+    const onToolResult = vi.fn();
+    const projector = await createProjector({
+      ...(await createParams()),
+      verboseLevel: "full",
+      onToolResult,
+    });
+
+    await projector.handleNotification(
+      turnCompleted([
+        {
+          type: "dynamicToolCall",
+          id: "tool-1",
+          namespace: null,
+          tool: "bash",
+          arguments: { command: "ls /tmp/missing" },
+          status: "failed",
+          contentItems: [{ type: "inputText", text: "No such file or directory" }],
+          success: false,
+          durationMs: 12,
+        },
+      ]),
+    );
+
+    expect(onToolResult).toHaveBeenNthCalledWith(2, {
+      text: "🛠️ `list files in /tmp/missing`\n```txt\nNo such file or directory\n```",
+      isError: true,
     });
   });
 

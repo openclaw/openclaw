@@ -6,12 +6,15 @@ import { resolveTwitchToken } from "./token.js";
 import type { ChannelLogSink, TwitchAccountConfig, TwitchChatMessage } from "./types.js";
 import { normalizeToken } from "./utils/twitch.js";
 
+const TWITCH_CHAT_AUTH_INTENTS = ["chat"];
+
 /**
  * Manages Twitch chat client connections
  */
 export class TwitchClientManager {
   private clients = new Map<string, ChatClient>();
   private messageHandlers = new Map<string, (message: TwitchChatMessage) => void>();
+  private messageHandlerTokens = new Map<string, symbol>();
 
   constructor(private logger: ChannelLogSink) {}
 
@@ -33,12 +36,15 @@ export class TwitchClientManager {
       });
 
       await authProvider
-        .addUserForToken({
-          accessToken: normalizedToken,
-          refreshToken: account.refreshToken ?? null,
-          expiresIn: account.expiresIn ?? null,
-          obtainmentTimestamp: account.obtainmentTimestamp ?? Date.now(),
-        })
+        .addUserForToken(
+          {
+            accessToken: normalizedToken,
+            refreshToken: account.refreshToken ?? null,
+            expiresIn: account.expiresIn ?? null,
+            obtainmentTimestamp: account.obtainmentTimestamp ?? Date.now(),
+          },
+          TWITCH_CHAT_AUTH_INTENTS,
+        )
         .then((userId) => {
           this.logger.info(
             `Added user ${userId} to RefreshingAuthProvider for ${account.username}`,
@@ -199,9 +205,16 @@ export class TwitchClientManager {
     handler: (message: TwitchChatMessage) => void,
   ): () => void {
     const key = this.getAccountKey(account);
+    const token = Symbol(key);
     this.messageHandlers.set(key, handler);
+    this.messageHandlerTokens.set(key, token);
     return () => {
-      this.messageHandlers.delete(key);
+      // Only remove the exact registration this cleanup closure owns. A later
+      // onMessage() may reuse the same callback function for the same account.
+      if (this.messageHandlerTokens.get(key) === token) {
+        this.messageHandlers.delete(key);
+        this.messageHandlerTokens.delete(key);
+      }
     };
   }
 
@@ -216,6 +229,7 @@ export class TwitchClientManager {
       client.quit();
       this.clients.delete(key);
       this.messageHandlers.delete(key);
+      this.messageHandlerTokens.delete(key);
       this.logger.info(`Disconnected ${key}`);
     }
   }
@@ -227,6 +241,7 @@ export class TwitchClientManager {
     this.clients.forEach((client) => client.quit());
     this.clients.clear();
     this.messageHandlers.clear();
+    this.messageHandlerTokens.clear();
     this.logger.info(" Disconnected all clients");
   }
 

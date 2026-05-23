@@ -1,12 +1,14 @@
 import { normalizeProviderId } from "../../agents/provider-id.js";
 import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
 import { loadBundledCapabilityRuntimeRegistry } from "../bundled-capability-runtime.js";
+import { discoverOpenClawPlugins } from "../discovery.js";
 import { loadPluginManifestRegistry } from "../manifest-registry.js";
 import { resolveManifestContractPluginIds } from "../plugin-registry.js";
 import { resolveBundledExplicitProviderContractsFromPublicArtifacts } from "../provider-contract-public-artifacts.js";
 import type {
   ImageGenerationProviderPlugin,
   MediaUnderstandingProviderPlugin,
+  MeetingNotesSourceProviderPlugin,
   MusicGenerationProviderPlugin,
   ProviderPlugin,
   RealtimeTranscriptionProviderPlugin,
@@ -51,6 +53,8 @@ type RealtimeTranscriptionProviderContractEntry =
 type RealtimeVoiceProviderContractEntry = CapabilityContractEntry<RealtimeVoiceProviderPlugin>;
 type MediaUnderstandingProviderContractEntry =
   CapabilityContractEntry<MediaUnderstandingProviderPlugin>;
+type MeetingNotesSourceProviderContractEntry =
+  CapabilityContractEntry<MeetingNotesSourceProviderPlugin>;
 type ImageGenerationProviderContractEntry = CapabilityContractEntry<ImageGenerationProviderPlugin>;
 type VideoGenerationProviderContractEntry = CapabilityContractEntry<VideoGenerationProviderPlugin>;
 type MusicGenerationProviderContractEntry = CapabilityContractEntry<MusicGenerationProviderPlugin>;
@@ -58,10 +62,12 @@ type MusicGenerationProviderContractEntry = CapabilityContractEntry<MusicGenerat
 type PluginRegistrationContractEntry = BundledPluginContractSnapshot;
 
 type ManifestContractKey =
+  | "embeddingProviders"
   | "speechProviders"
   | "realtimeTranscriptionProviders"
   | "realtimeVoiceProviders"
   | "mediaUnderstandingProviders"
+  | "meetingNotesSourceProviders"
   | "documentExtractors"
   | "imageGenerationProviders"
   | "videoGenerationProviders"
@@ -92,10 +98,12 @@ function resolveBundledManifestContracts(): PluginRegistrationContractEntry[] {
       cliBackendIds: [...entry.cliBackendIds],
       providerIds: [...entry.providerIds],
       providerAuthEnvVars: normalizeProviderAuthEnvVars(entry.providerAuthEnvVars),
+      embeddingProviderIds: [...entry.embeddingProviderIds],
       speechProviderIds: [...entry.speechProviderIds],
       realtimeTranscriptionProviderIds: [...entry.realtimeTranscriptionProviderIds],
       realtimeVoiceProviderIds: [...entry.realtimeVoiceProviderIds],
       mediaUnderstandingProviderIds: [...entry.mediaUnderstandingProviderIds],
+      meetingNotesSourceProviderIds: [...entry.meetingNotesSourceProviderIds],
       documentExtractorIds: [...entry.documentExtractorIds],
       imageGenerationProviderIds: [...entry.imageGenerationProviderIds],
       videoGenerationProviderIds: [...entry.videoGenerationProviderIds],
@@ -113,10 +121,12 @@ function resolveBundledManifestContracts(): PluginRegistrationContractEntry[] {
         plugin.origin === "bundled" &&
         (plugin.cliBackends.length > 0 ||
           plugin.providers.length > 0 ||
+          (plugin.contracts?.embeddingProviders?.length ?? 0) > 0 ||
           (plugin.contracts?.speechProviders?.length ?? 0) > 0 ||
           (plugin.contracts?.realtimeTranscriptionProviders?.length ?? 0) > 0 ||
           (plugin.contracts?.realtimeVoiceProviders?.length ?? 0) > 0 ||
           (plugin.contracts?.mediaUnderstandingProviders?.length ?? 0) > 0 ||
+          (plugin.contracts?.meetingNotesSourceProviders?.length ?? 0) > 0 ||
           (plugin.contracts?.documentExtractors?.length ?? 0) > 0 ||
           (plugin.contracts?.imageGenerationProviders?.length ?? 0) > 0 ||
           (plugin.contracts?.videoGenerationProviders?.length ?? 0) > 0 ||
@@ -132,6 +142,7 @@ function resolveBundledManifestContracts(): PluginRegistrationContractEntry[] {
       cliBackendIds: uniqueStrings(plugin.cliBackends),
       providerIds: uniqueStrings(plugin.providers),
       providerAuthEnvVars: normalizeProviderAuthEnvVars(plugin.providerAuthEnvVars),
+      embeddingProviderIds: uniqueStrings(plugin.contracts?.embeddingProviders ?? []),
       speechProviderIds: uniqueStrings(plugin.contracts?.speechProviders ?? []),
       realtimeTranscriptionProviderIds: uniqueStrings(
         plugin.contracts?.realtimeTranscriptionProviders ?? [],
@@ -139,6 +150,9 @@ function resolveBundledManifestContracts(): PluginRegistrationContractEntry[] {
       realtimeVoiceProviderIds: uniqueStrings(plugin.contracts?.realtimeVoiceProviders ?? []),
       mediaUnderstandingProviderIds: uniqueStrings(
         plugin.contracts?.mediaUnderstandingProviders ?? [],
+      ),
+      meetingNotesSourceProviderIds: uniqueStrings(
+        plugin.contracts?.meetingNotesSourceProviders ?? [],
       ),
       documentExtractorIds: uniqueStrings(plugin.contracts?.documentExtractors ?? []),
       imageGenerationProviderIds: uniqueStrings(plugin.contracts?.imageGenerationProviders ?? []),
@@ -186,6 +200,8 @@ function resolveBundledManifestPluginIdsForContract(contract: ManifestContractKe
     resolveBundledManifestContracts()
       .filter((entry) => {
         switch (contract) {
+          case "embeddingProviders":
+            return entry.embeddingProviderIds.length > 0;
           case "speechProviders":
             return entry.speechProviderIds.length > 0;
           case "realtimeTranscriptionProviders":
@@ -194,6 +210,8 @@ function resolveBundledManifestPluginIdsForContract(contract: ManifestContractKe
             return entry.realtimeVoiceProviderIds.length > 0;
           case "mediaUnderstandingProviders":
             return entry.mediaUnderstandingProviderIds.length > 0;
+          case "meetingNotesSourceProviders":
+            return entry.meetingNotesSourceProviderIds.length > 0;
           case "documentExtractors":
             return entry.documentExtractorIds.length > 0;
           case "imageGenerationProviders":
@@ -255,12 +273,14 @@ function loadScopedCapabilityRuntimeRegistryEntries<T>(params: {
     plugin: BundledCapabilityRuntimeRegistry["plugins"][number],
   ) => readonly string[];
 }): T[] {
+  const discovery = discoverOpenClawPlugins({});
   let lastFailure: Error | undefined;
 
   for (let attempt = 0; attempt < 2; attempt += 1) {
     const registry = loadBundledCapabilityRuntimeRegistry({
       pluginIds: [params.pluginId],
       pluginSdkResolution: "dist",
+      discovery,
     });
     const entries = params.loadEntries(registry);
     if (entries.length > 0) {
@@ -541,6 +561,16 @@ function loadMediaUnderstandingProviderContractRegistry(): MediaUnderstandingPro
       }));
 }
 
+function loadMeetingNotesSourceProviderContractRegistry(): MeetingNotesSourceProviderContractEntry[] {
+  return loadBundledCapabilityRuntimeRegistry({
+    pluginIds: resolveBundledManifestPluginIdsForContract("meetingNotesSourceProviders"),
+    pluginSdkResolution: "dist",
+  }).meetingNotesSourceProviders.map((entry) => ({
+    pluginId: entry.pluginId,
+    provider: entry.provider,
+  }));
+}
+
 function loadImageGenerationProviderContractRegistry(): ImageGenerationProviderContractEntry[] {
   return process.env.VITEST
     ? loadVitestImageGenerationProviderContractRegistry()
@@ -700,6 +730,8 @@ export const realtimeVoiceProviderContractRegistry: RealtimeVoiceProviderContrac
   createLazyArrayView(loadRealtimeVoiceProviderContractRegistry);
 export const mediaUnderstandingProviderContractRegistry: MediaUnderstandingProviderContractEntry[] =
   createLazyArrayView(loadMediaUnderstandingProviderContractRegistry);
+export const meetingNotesSourceProviderContractRegistry: MeetingNotesSourceProviderContractEntry[] =
+  createLazyArrayView(loadMeetingNotesSourceProviderContractRegistry);
 export const imageGenerationProviderContractRegistry: ImageGenerationProviderContractEntry[] =
   createLazyArrayView(loadImageGenerationProviderContractRegistry);
 export const videoGenerationProviderContractRegistry: VideoGenerationProviderContractEntry[] =

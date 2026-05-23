@@ -119,8 +119,10 @@ than Telegram-visible behavior`. Use this manifest shape and do not create
    `$OPENCLAW_TELEGRAM_USER_DRIVER_SCRIPT`, the workflow-provided `crabbox`
    binary, and the workflow-provided local `ffmpeg`/`ffprobe`; do not generate,
    install, or patch replacement proof tooling during the run. Use the same
-   proof idea for baseline and candidate. You may iterate and rerun if the
-   visual result is not convincing.
+   proof idea for baseline and candidate. Let `start` return or fail on its
+   own; do not kill it while Crabbox is still waiting for bootstrap. Use a long
+   command timeout for `start`, `send`, `view`, and `finish`. You may iterate
+   and rerun if the visual result is not convincing.
 7. Open Telegram Desktop directly to the newest relevant message with the
    runner `view` command before finishing each recording. Keep the chat scrolled
    to the bottom so new proof messages appear in-frame.

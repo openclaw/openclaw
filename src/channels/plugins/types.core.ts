@@ -25,9 +25,7 @@ export type ChannelExposure = {
 export type ChannelOutboundTargetMode = "explicit" | "implicit" | "heartbeat";
 
 /** Agent tool registered by a channel plugin. */
-export type ChannelAgentTool = AgentTool<TSchema, unknown> & {
-  ownerOnly?: boolean;
-};
+export type ChannelAgentTool = AgentTool<TSchema, unknown>;
 
 /** Lazy agent-tool factory used when tool availability depends on config. */
 export type ChannelAgentToolFactory = (params: { cfg?: OpenClawConfig }) => ChannelAgentTool[];
@@ -563,6 +561,11 @@ export type ChannelMessagingAdapter = {
     id: string;
     threadId?: string | null;
   }) => string | undefined;
+  /**
+   * @deprecated Use `targetResolver` for target id normalization and
+   * `resolveOutboundSessionRoute` for session/thread identity. This remains for
+   * compatibility with older route parsing helpers.
+   */
   parseExplicitTarget?: (params: { raw: string }) => {
     to: string;
     threadId?: string | number;
@@ -682,6 +685,7 @@ export type ChannelMessageActionContext = {
    * never be sourced from tool/model-controlled params.
    */
   requesterSenderId?: string | null;
+  /** Trusted owner identity bit from command/channel-action auth. */
   senderIsOwner?: boolean;
   sessionKey?: string | null;
   sessionId?: string | null;

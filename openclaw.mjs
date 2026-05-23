@@ -328,11 +328,90 @@ const buildMissingEntryErrorMessage = async () => {
 const isBareRootHelpInvocation = (argv) =>
   argv.length === 3 && (argv[2] === "--help" || argv[2] === "-h");
 
-const isBrowserHelpInvocation = (argv) =>
-  argv.length === 4 && argv[2] === "browser" && (argv[3] === "--help" || argv[3] === "-h");
+const resolvePrecomputedCommandHelp = (argv) => {
+  if (argv.length !== 4 || (argv[3] !== "--help" && argv[3] !== "-h")) {
+    return null;
+  }
+  if (argv[2] === "browser") {
+    return { command: "browser", metadataKey: "browserHelpText" };
+  }
+  if (argv[2] === "secrets") {
+    return { command: "secrets", metadataKey: "secretsHelpText" };
+  }
+  if (argv[2] === "nodes") {
+    return { command: "nodes", metadataKey: "nodesHelpText" };
+  }
+  return null;
+};
 
 const isHelpFastPathDisabled = () =>
   process.env.OPENCLAW_DISABLE_CLI_STARTUP_HELP_FAST_PATH === "1";
+
+const normalizeLauncherHomeValue = (value) => {
+  const trimmed = value?.trim();
+  return trimmed && trimmed !== "undefined" && trimmed !== "null" ? trimmed : undefined;
+};
+
+const resolveLauncherOsHomeDir = () =>
+  normalizeLauncherHomeValue(process.env.HOME) ??
+  normalizeLauncherHomeValue(process.env.USERPROFILE) ??
+  os.homedir();
+
+const resolveLauncherHomeDir = () => {
+  const explicit = normalizeLauncherHomeValue(process.env.OPENCLAW_HOME);
+  const rawHome =
+    explicit && (explicit === "~" || explicit.startsWith("~/") || explicit.startsWith("~\\"))
+      ? explicit.replace(/^~(?=$|[\\/])/, resolveLauncherOsHomeDir())
+      : (explicit ?? resolveLauncherOsHomeDir());
+  return path.resolve(rawHome);
+};
+
+const resolveLauncherUserPath = (input) => {
+  if (input === "~") {
+    return resolveLauncherHomeDir();
+  }
+  if (input.startsWith("~/") || input.startsWith("~\\")) {
+    return path.join(resolveLauncherHomeDir(), input.slice(2));
+  }
+  return path.resolve(input);
+};
+
+const resolveLauncherConfigPaths = () => {
+  const explicit = process.env.OPENCLAW_CONFIG_PATH?.trim();
+  if (explicit) {
+    return [resolveLauncherUserPath(explicit)];
+  }
+  const stateOverride = process.env.OPENCLAW_STATE_DIR?.trim();
+  if (stateOverride) {
+    const stateDir = resolveLauncherUserPath(stateOverride);
+    return [path.join(stateDir, "openclaw.json"), path.join(stateDir, "clawdbot.json")];
+  }
+  const homeDir = resolveLauncherHomeDir();
+  return [
+    path.join(homeDir, ".openclaw", "openclaw.json"),
+    path.join(homeDir, ".openclaw", "clawdbot.json"),
+    path.join(homeDir, ".clawdbot", "openclaw.json"),
+    path.join(homeDir, ".clawdbot", "clawdbot.json"),
+  ];
+};
+
+const shouldDeferRootHelpToRuntimeEntry = () => {
+  if (
+    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR?.trim() ||
+    process.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS?.trim()
+  ) {
+    return true;
+  }
+  for (const configPath of resolveLauncherConfigPaths()) {
+    try {
+      const raw = readFileSync(configPath, "utf8");
+      return /\bplugins\b|\$include\b/.test(raw);
+    } catch {
+      continue;
+    }
+  }
+  return false;
+};
 
 const loadPrecomputedHelpText = (key) => {
   try {
@@ -349,6 +428,9 @@ const tryOutputBareRootHelp = async () => {
   if (!isBareRootHelpInvocation(process.argv)) {
     return false;
   }
+  if (shouldDeferRootHelpToRuntimeEntry()) {
+    return false;
+  }
   const precomputed = loadPrecomputedHelpText("rootHelpText");
   if (precomputed) {
     process.stdout.write(precomputed);
@@ -358,7 +440,7 @@ const tryOutputBareRootHelp = async () => {
     try {
       const mod = await import(specifier);
       if (typeof mod.outputRootHelp === "function") {
-        mod.outputRootHelp();
+        await mod.outputRootHelp();
         return true;
       }
     } catch (err) {
@@ -371,11 +453,15 @@ const tryOutputBareRootHelp = async () => {
   return false;
 };
 
-const tryOutputBrowserHelp = () => {
-  if (!isBrowserHelpInvocation(process.argv)) {
+const tryOutputPrecomputedCommandHelp = () => {
+  const commandHelp = resolvePrecomputedCommandHelp(process.argv);
+  if (!commandHelp) {
     return false;
   }
-  const precomputed = loadPrecomputedHelpText("browserHelpText");
+  if (commandHelp.command === "nodes" && shouldDeferRootHelpToRuntimeEntry()) {
+    return false;
+  }
+  const precomputed = loadPrecomputedHelpText(commandHelp.metadataKey);
   if (!precomputed) {
     return false;
   }
@@ -386,7 +472,7 @@ const tryOutputBrowserHelp = () => {
 if (!waitingForCompileCacheRespawn) {
   if (!isHelpFastPathDisabled() && (await tryOutputBareRootHelp())) {
     // OK
-  } else if (!isHelpFastPathDisabled() && tryOutputBrowserHelp()) {
+  } else if (!isHelpFastPathDisabled() && tryOutputPrecomputedCommandHelp()) {
     // OK
   } else {
     await installProcessWarningFilter();

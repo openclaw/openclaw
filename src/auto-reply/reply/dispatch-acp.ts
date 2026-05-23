@@ -386,6 +386,7 @@ export async function tryDispatchAcpReply(params: {
     originatingChannel: params.originatingChannel,
     originatingTo: params.originatingTo,
     onReplyStart: params.onReplyStart,
+    abortSignal: params.abortSignal,
   });
 
   const identityPendingBeforeTurn = isSessionIdentityPending(
@@ -470,6 +471,7 @@ export async function tryDispatchAcpReply(params: {
         await applyMediaUnderstanding({
           ctx: params.ctx,
           cfg: params.cfg,
+          agentId: acpAgentId,
           agentDir: resolveAgentDir(params.cfg, acpAgentId),
           workspaceDir: resolveAgentWorkspaceDir(params.cfg, acpAgentId),
         });

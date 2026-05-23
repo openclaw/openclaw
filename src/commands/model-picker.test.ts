@@ -83,7 +83,18 @@ const hasRuntimeAvailableProviderAuth = vi.hoisted(() =>
     },
   ),
 );
+const createRuntimeProviderAuthLookup = vi.hoisted(() =>
+  vi.fn(() => ({
+    envApiKey: {
+      aliasMap: {},
+      candidateMap: {},
+      authEvidenceMap: {},
+    },
+    syntheticAuthProviderRefs: [],
+  })),
+);
 vi.mock("../agents/model-auth.js", () => ({
+  createRuntimeProviderAuthLookup,
   resolveEnvApiKey,
   hasUsableCustomProviderApiKey,
   hasRuntimeAvailableProviderAuth,
@@ -1446,6 +1457,16 @@ describe("applyModelAllowlist", () => {
       "google/gemini-3.1-pro-preview": { alias: "gemini" },
       "google-gemini-cli/gemini-3.1-pro-preview": {},
       "openrouter/google/gemini-3.1-pro-preview": {},
+    });
+  });
+
+  it("keeps non-Google provider Gemini-looking refs unchanged while writing selected models", () => {
+    const config = {} as OpenClawConfig;
+
+    const next = applyModelAllowlist(config, ["litellm/gemini-3-flash", "litellm/gemini-3.1-pro"]);
+    expect(next.agents?.defaults?.models).toEqual({
+      "litellm/gemini-3-flash": {},
+      "litellm/gemini-3.1-pro": {},
     });
   });
 

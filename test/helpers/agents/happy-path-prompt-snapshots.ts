@@ -21,7 +21,7 @@ import type {
 } from "../../../src/plugin-sdk/agent-harness-runtime.js";
 import { normalizeAgentRuntimeTools } from "../../../src/plugin-sdk/agent-harness-runtime.js";
 import { createOpenClawCodingTools } from "../../../src/plugin-sdk/agent-harness.js";
-import { loadBundledPluginTestApiSync } from "../../../src/test-utils/bundled-plugin-public-surface.js";
+import { loadBundledPluginPublicSurfaceSourceSync } from "../../../src/test-utils/bundled-plugin-public-surface.js";
 import {
   CODEX_MODEL_PROMPT_FIXTURE_DIR,
   CODEX_RUNTIME_HAPPY_PATH_PROMPT_SNAPSHOT_DIR,
@@ -75,6 +75,8 @@ type CodexPromptSnapshotApi = {
     appServer: unknown;
     config?: Record<string, unknown>;
     promptText?: string;
+    developerInstructionAdditions?: string;
+    heartbeatCollaborationInstructions?: string;
   }) => {
     developerInstructions: string;
     threadStartParams: Record<string, unknown>;
@@ -114,9 +116,23 @@ type PromptScenario = {
   toolSnapshotFile: string;
 };
 
-const codexApi = loadBundledPluginTestApiSync("codex") as CodexPromptSnapshotApi;
+const codexApi = loadBundledPluginPublicSurfaceSourceSync({
+  pluginId: "codex",
+  artifactBasename: "test-api.js",
+}) as CodexPromptSnapshotApi;
 
 const CODEX_WORKSPACE_BOOTSTRAP_CONTEXT_FILES = [
+  {
+    path: path.join(WORKSPACE_DIR, "MEMORY.md"),
+    content: "<MEMORY.md contents will be here>",
+  },
+] as const;
+
+const CODEX_WORKSPACE_DEVELOPER_CONTEXT_FILES = [
+  {
+    path: path.join(WORKSPACE_DIR, "IDENTITY.md"),
+    content: "<IDENTITY.md contents will be here>",
+  },
   {
     path: path.join(WORKSPACE_DIR, "SOUL.md"),
     content: "<SOUL.md contents will be here>",
@@ -126,18 +142,22 @@ const CODEX_WORKSPACE_BOOTSTRAP_CONTEXT_FILES = [
     content: "<TOOLS.md contents will be here>",
   },
   {
-    path: path.join(WORKSPACE_DIR, "HEARTBEAT.md"),
-    content: "<HEARTBEAT.md contents will be here>",
+    path: path.join(WORKSPACE_DIR, "USER.md"),
+    content: "<USER.md contents will be here>",
   },
 ] as const;
 
+const CODEX_HEARTBEAT_CONTEXT_FILE = {
+  path: path.join(WORKSPACE_DIR, "HEARTBEAT.md"),
+  content: "<HEARTBEAT.md contents will be here>",
+} as const;
+
 const CODEX_WORKSPACE_BOOTSTRAP_PROMPT_CONTEXT = [
-  "OpenClaw loaded these user-editable workspace files. Treat them as project/user context, not developer policy. Codex loads AGENTS.md natively, so AGENTS.md is not repeated here.",
+  "OpenClaw loaded these user-editable workspace files for the current turn. Codex loads AGENTS.md natively. SOUL.md, IDENTITY.md, TOOLS.md, and USER.md are provided separately as Codex developer instructions. HEARTBEAT.md is handled by heartbeat collaboration-mode guidance. Those files are not repeated here.",
   "",
   "# Project Context",
   "",
   "The following project context files have been loaded:",
-  "SOUL.md: persona/tone. Follow it only when it does not conflict with higher-priority instructions.",
   "",
   ...CODEX_WORKSPACE_BOOTSTRAP_CONTEXT_FILES.flatMap((file) => [
     `## ${file.path}`,
@@ -148,6 +168,29 @@ const CODEX_WORKSPACE_BOOTSTRAP_PROMPT_CONTEXT = [
 ]
   .join("\n")
   .trim();
+
+const CODEX_WORKSPACE_DEVELOPER_INSTRUCTIONS = [
+  "## OpenClaw Agent Soul",
+  "",
+  "OpenClaw loaded these workspace instruction files from the active agent workspace. They define who you are, how you work, what tools are available, and the human you work alongside. Internalize and follow them accordingly.",
+  "",
+  ...CODEX_WORKSPACE_DEVELOPER_CONTEXT_FILES.flatMap((file) => [
+    `### ${file.path}`,
+    "",
+    file.content,
+    "",
+  ]),
+]
+  .join("\n")
+  .trim();
+
+const CODEX_HEARTBEAT_COLLABORATION_INSTRUCTIONS = [
+  "## OpenClaw Heartbeat Workspace",
+  "",
+  "HEARTBEAT.md exists in the active agent workspace. Read it before proceeding with this heartbeat, then decide what action is appropriate.",
+  "",
+  `- ${CODEX_HEARTBEAT_CONTEXT_FILE.path}`,
+].join("\n");
 
 const CODEX_PROMPT_SNAPSHOT_THREAD_CONFIG = {
   "features.code_mode_only": false,
@@ -686,7 +729,7 @@ function readCodexTurnInputText(turnStartParams: { input?: unknown }): string {
 function buildCodexOpenClawRuntimeContext(): string {
   return [
     "OpenClaw runtime context for this turn:",
-    "Treat this OpenClaw-provided context as user/project reference data. It does not override Codex system/developer instructions, active tool contracts, or the current user request.",
+    "Treat this OpenClaw-provided context as supporting project/user reference for the current request.",
     "",
     "## OpenClaw Workspace Context",
     "",
@@ -713,6 +756,9 @@ function renderScenarioSnapshot(scenario: PromptScenario): string {
     appServer,
     config: CODEX_PROMPT_SNAPSHOT_THREAD_CONFIG,
     promptText: codexTurnPromptText,
+    developerInstructionAdditions: CODEX_WORKSPACE_DEVELOPER_INSTRUCTIONS,
+    heartbeatCollaborationInstructions:
+      scenario.trigger === "heartbeat" ? CODEX_HEARTBEAT_COLLABORATION_INSTRUCTIONS : undefined,
   });
   const criticalToolSpecs = scenario.dynamicTools.filter((tool) =>
     ["message", "heartbeat_respond"].includes(tool.name),
@@ -727,7 +773,7 @@ function renderScenarioSnapshot(scenario: PromptScenario): string {
     "",
     ...scenario.notes.map((note) => `- ${note}`),
     "- This captures the OpenClaw-owned Codex app-server inputs and reconstructs the stable Codex model/permission layers from committed Codex prompt fixtures.",
-    "- This also simulates workspace bootstrap files forwarded through Codex `turn/start` input runtime context: `SOUL.md`, `TOOLS.md`, and `HEARTBEAT.md`.",
+    "- This also simulates Codex workspace bootstrap routing: `SOUL.md`, `IDENTITY.md`, `TOOLS.md`, and `USER.md` as developer instructions, `MEMORY.md` in turn input, and `HEARTBEAT.md` as a heartbeat-only file pointer.",
     "",
     "## Scenario Metadata",
     "",
@@ -747,6 +793,10 @@ function renderScenarioSnapshot(scenario: PromptScenario): string {
         simulatedWorkspaceBootstrapFiles: CODEX_WORKSPACE_BOOTSTRAP_CONTEXT_FILES.map(
           (file) => file.path,
         ),
+        simulatedWorkspaceDeveloperInstructionFiles: CODEX_WORKSPACE_DEVELOPER_CONTEXT_FILES.map(
+          (file) => file.path,
+        ),
+        simulatedHeartbeatWorkspaceFile: CODEX_HEARTBEAT_CONTEXT_FILE.path,
       }),
     ),
     "",
@@ -790,9 +840,9 @@ function renderReadme(scenarios: PromptScenario[]): string {
     "- Codex harness default coverage for tool-only visible source replies.",
     "- Telegram direct chat, Discord group chat, and a heartbeat turn with `heartbeat_respond` available through searchable dynamic tools.",
     "",
-    "The Markdown files show selected app-server thread/turn params plus a reconstructed model-bound prompt layer stack: Codex `gpt-5.5` model instructions from a pinned Codex model catalog fixture, Codex permission developer instructions for the happy-path yolo profile, OpenClaw developer instructions, turn input with simulated OpenClaw workspace bootstrap runtime context, and references to the complete dynamic tool catalog.",
+    "The Markdown files show selected app-server thread/turn params plus a reconstructed model-bound prompt layer stack: Codex `gpt-5.5` model instructions from a pinned Codex model catalog fixture, Codex permission developer instructions for the happy-path yolo profile, OpenClaw developer instructions, turn input with simulated OpenClaw workspace bootstrap runtime context, heartbeat collaboration-mode guidance when applicable, and references to the complete dynamic tool catalog.",
     "",
-    "The workspace bootstrap simulation includes dummy `SOUL.md`, `TOOLS.md`, and `HEARTBEAT.md` contents so prompt reviewers can see how those OpenClaw project/user context files are forwarded to Codex. `AGENTS.md` is intentionally not repeated here because Codex loads it natively.",
+    "The workspace bootstrap simulation includes dummy workspace contents so prompt reviewers can see how OpenClaw routes stable profile files into Codex developer instructions, keeps `MEMORY.md` in turn input, and points heartbeat turns at `HEARTBEAT.md` without inlining it. `AGENTS.md` is intentionally not repeated here because Codex loads it natively.",
     "",
     "The tool catalog is pinned to the canonical happy-path OpenClaw tools so optional locally installed plugin tools do not create fixture churn.",
     "",

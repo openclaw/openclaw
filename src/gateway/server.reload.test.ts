@@ -58,6 +58,8 @@ const hoisted = vi.hoisted(() => {
   const startGmailWatcher = vi.fn(async () => ({ started: true }));
   const stopGmailWatcher = vi.fn(async () => {});
   const resetModelCatalogCache = vi.fn();
+  const clearCurrentProviderAuthState = vi.fn();
+  const warmCurrentProviderAuthState = vi.fn(async (_cfg: unknown) => {});
   const disposeAllSessionMcpRuntimes = vi.fn(async () => {});
   const resolveOpenClawPackageRootSync = vi.fn((_params: unknown) => "/package");
 
@@ -162,6 +164,8 @@ const hoisted = vi.hoisted(() => {
     startGmailWatcher,
     stopGmailWatcher,
     resetModelCatalogCache,
+    clearCurrentProviderAuthState,
+    warmCurrentProviderAuthState,
     disposeAllSessionMcpRuntimes,
     resolveOpenClawPackageRootSync,
     providerManager,
@@ -202,6 +206,11 @@ vi.mock("../agents/model-catalog.js", async () => {
     }),
   };
 });
+
+vi.mock("../agents/model-provider-auth.js", () => ({
+  clearCurrentProviderAuthState: hoisted.clearCurrentProviderAuthState,
+  warmCurrentProviderAuthState: hoisted.warmCurrentProviderAuthState,
+}));
 
 vi.mock("../agents/pi-bundle-mcp-tools.js", async () => {
   const actual = await vi.importActual<typeof import("../agents/pi-bundle-mcp-tools.js")>(
@@ -334,6 +343,9 @@ describe("gateway hot reload", () => {
     hoisted.activeTaskBlockers.length = 0;
     embeddedRunMock.activeIds.clear();
     hoisted.resetModelCatalogCache.mockReset();
+    hoisted.clearCurrentProviderAuthState.mockReset();
+    hoisted.warmCurrentProviderAuthState.mockReset();
+    hoisted.warmCurrentProviderAuthState.mockResolvedValue(undefined);
     hoisted.disposeAllSessionMcpRuntimes.mockReset();
     hoisted.disposeAllSessionMcpRuntimes.mockResolvedValue(undefined);
     hoisted.resolveOpenClawPackageRootSync.mockClear();
@@ -475,7 +487,6 @@ describe("gateway hot reload", () => {
       hoisted.providerManager.startChannel.mockClear();
       hoisted.activeEmbeddedRunCount.value = 1;
       embeddedRunMock.activeIds.add("reload-stuck");
-      vi.useFakeTimers();
       const reloadPromise = onHotReload?.(
         {
           changedPaths: ["channels.discord.token"],
@@ -490,23 +501,19 @@ describe("gateway hot reload", () => {
           noopPaths: [],
         },
         {
-          gateway: { reload: { deferralTimeoutMs: 1_000 } },
+          gateway: { reload: { deferralTimeoutMs: 1 } },
           channels: { discord: { token: "token" } },
         },
       );
       try {
         await Promise.resolve();
-        await vi.advanceTimersByTimeAsync(500);
         expect(hoisted.providerManager.stopChannel).not.toHaveBeenCalled();
         expect(hoisted.providerManager.startChannel).not.toHaveBeenCalled();
 
-        await vi.advanceTimersByTimeAsync(500);
         await reloadPromise;
       } finally {
         hoisted.activeEmbeddedRunCount.value = 0;
         embeddedRunMock.activeIds.clear();
-        await vi.advanceTimersByTimeAsync(500).catch(() => {});
-        vi.useRealTimers();
         await reloadPromise?.catch(() => {});
       }
 

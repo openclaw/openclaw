@@ -1,4 +1,10 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import {
+  resolveTargetPrefixedChannel,
+  stripTargetKindPrefix,
+  stripTargetProviderPrefix,
+  stripTargetTopicSuffix,
+} from "../infra/outbound/channel-target-prefix.js";
 import { resolveConversationIdFromTargets } from "../infra/outbound/conversation-id.js";
 import { normalizeConversationTargetRef } from "../infra/outbound/session-binding-normalization.js";
 import { stringifyRouteThreadId } from "../plugin-sdk/channel-route.js";
@@ -9,7 +15,7 @@ import {
   normalizeOptionalString,
 } from "../shared/string-coerce.js";
 import { getLoadedChannelPlugin, normalizeChannelId } from "./plugins/index.js";
-import { parseExplicitTargetForChannel } from "./plugins/target-parsing.js";
+import { resolveExplicitDeliveryTargetCompat } from "./plugins/target-parsing-loaded.js";
 import {
   resolveBundledChannelThreadBindingDefaultPlacement,
   resolveBundledChannelThreadBindingInboundConversation,
@@ -165,6 +171,30 @@ function resolveBindingAccountId(params: {
   );
 }
 
+function resolveFallbackConversationTargetId(params: {
+  rawTarget: string;
+  allowNumericTopicShorthand?: boolean;
+}): string | undefined {
+  const { allowNumericTopicShorthand = false } = params;
+  const target = normalizeOptionalString(params.rawTarget);
+  if (!target) {
+    return undefined;
+  }
+  const withoutKind = stripTargetKindPrefix(target);
+  const withoutTopic = stripTargetTopicSuffix(withoutKind, {
+    allowNumericShorthand: allowNumericTopicShorthand,
+  });
+  return (
+    resolveConversationIdFromTargets({
+      targets: [withoutTopic],
+    }) ??
+    (withoutTopic !== target ? withoutTopic : undefined) ??
+    resolveConversationIdFromTargets({
+      targets: [target],
+    })
+  );
+}
+
 function resolveChannelTargetId(params: {
   channel: string;
   target?: string | null;
@@ -186,20 +216,38 @@ function resolveChannelTargetId(params: {
     return target;
   }
 
-  const explicitConversationId = resolveConversationIdFromTargets({
-    targets: [target],
-  });
-  if (explicitConversationId) {
-    return explicitConversationId;
+  const prefixedChannel = resolveTargetPrefixedChannel(target);
+  if (!prefixedChannel || prefixedChannel !== params.channel) {
+    const explicitConversationId = resolveFallbackConversationTargetId({
+      rawTarget: target,
+      allowNumericTopicShorthand: params.channel === "telegram",
+    });
+    if (explicitConversationId) {
+      return explicitConversationId;
+    }
   }
 
-  const parsed = parseExplicitTargetForChannel(params.channel, target);
-  const parsedTarget = normalizeOptionalString(parsed?.to);
-  if (parsedTarget) {
+  const normalizedTarget = normalizeOptionalString(
+    resolveRuntimeChannelPlugin(params.channel)?.messaging?.normalizeTarget?.(target),
+  );
+  if (normalizedTarget) {
+    const withoutProvider = stripTargetProviderPrefix(normalizedTarget, params.channel);
+    const conversationId = resolveFallbackConversationTargetId({
+      rawTarget: withoutProvider,
+      allowNumericTopicShorthand: params.channel === "telegram",
+    });
+    return conversationId || withoutProvider || normalizedTarget;
+  }
+
+  const parsedTarget = resolveExplicitDeliveryTargetCompat({
+    channel: params.channel,
+    rawTarget: target,
+  });
+  if (parsedTarget?.to) {
     return (
       resolveConversationIdFromTargets({
-        targets: [parsedTarget],
-      }) ?? parsedTarget
+        targets: [parsedTarget.to],
+      }) ?? parsedTarget.to
     );
   }
 

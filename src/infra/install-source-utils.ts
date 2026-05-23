@@ -5,7 +5,7 @@ import { runCommandWithTimeout } from "../process/exec.js";
 import { resolveUserPath } from "../utils.js";
 import { resolveArchiveKind } from "./archive.js";
 import { pathExists } from "./fs-safe.js";
-import { applyNpmFreshnessBypassEnv } from "./npm-install-env.js";
+import { applyNpmFreshnessBypassEnv, type NpmProjectInstallEnvOptions } from "./npm-install-env.js";
 import { withTempWorkspace } from "./private-temp-workspace.js";
 
 export type NpmSpecResolution = {
@@ -37,12 +37,14 @@ export function buildNpmResolutionFields(resolution?: NpmSpecResolution): NpmRes
   };
 }
 
-export function createNpmMetadataEnv(): NodeJS.ProcessEnv {
+export function createNpmMetadataEnv(
+  scope: Pick<NpmProjectInstallEnvOptions, "npmConfigCwd"> = {},
+): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = {
     COREPACK_ENABLE_DOWNLOAD_PROMPT: "0",
     NPM_CONFIG_IGNORE_SCRIPTS: "true",
   };
-  applyNpmFreshnessBypassEnv(env);
+  applyNpmFreshnessBypassEnv(env, new Date(), scope);
   return env;
 }
 
@@ -286,7 +288,7 @@ export async function packNpmSpecToArchive(params: {
     {
       timeoutMs: Math.max(params.timeoutMs, 300_000),
       cwd: params.cwd,
-      env: createNpmMetadataEnv(),
+      env: createNpmMetadataEnv({ npmConfigCwd: params.cwd }),
     },
   );
   if (res.code !== 0) {
@@ -346,10 +348,13 @@ export async function resolveNpmPackArchiveMetadata(params: {
     return archivePathResult;
   }
   const archivePath = archivePathResult.path;
+  const archiveStat = await fs.stat(archivePath).catch(() => null);
+  const archiveMetadataTimeoutMs =
+    archiveStat && archiveStat.size > 100 * 1024 * 1024 ? 300_000 : 60_000;
   const res = await runCommandWithTimeout(
     ["npm", "pack", archivePath, "--ignore-scripts", "--dry-run", "--json"],
     {
-      timeoutMs: Math.max(params.timeoutMs ?? 60_000, 60_000),
+      timeoutMs: Math.max(params.timeoutMs ?? archiveMetadataTimeoutMs, archiveMetadataTimeoutMs),
       env: createNpmMetadataEnv(),
     },
   );

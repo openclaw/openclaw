@@ -96,6 +96,7 @@ OpenClaw also injects context markers into spawned child processes:
 - `OPENCLAW_SHELL=acp`: set for ACP runtime backend process spawns (for example `acpx`).
 - `OPENCLAW_SHELL=acp-client`: set for `openclaw acp client` when it spawns the ACP bridge process.
 - `OPENCLAW_SHELL=tui-local`: set for local TUI `!` shell commands.
+- `OPENCLAW_CLI=1`: set for child processes spawned by the CLI entry point.
 
 These are runtime markers (not required user config). They can be used in shell/profile logic
 to apply context-specific rules.
@@ -158,7 +159,7 @@ shorthand values.
 
 When set, `OPENCLAW_HOME` replaces the system home directory (`$HOME` / `os.homedir()`) for all internal path resolution. This enables full filesystem isolation for headless service accounts.
 
-**Precedence:** `OPENCLAW_HOME` > `$HOME` > `USERPROFILE` > `os.homedir()`
+**Precedence:** `OPENCLAW_HOME` > `$HOME` > `USERPROFILE` > Termux `PREFIX` home fallback on Android > `os.homedir()`
 
 **Example** (macOS LaunchDaemon):
 
@@ -170,7 +171,7 @@ When set, `OPENCLAW_HOME` replaces the system home directory (`$HOME` / `os.home
 </dict>
 ```
 
-`OPENCLAW_HOME` can also be set to a tilde path (e.g. `~/svc`), which gets expanded using `$HOME` before use.
+`OPENCLAW_HOME` can also be set to a tilde path (e.g. `~/svc`), which gets expanded using the same OS home fallback chain before use.
 
 ## nvm users: web_fetch TLS failures
 

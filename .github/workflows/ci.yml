@@ -81,7 +81,7 @@ jobs:
           ref: ${{ inputs.target_ref || github.sha }}
           fetch-depth: 1
           fetch-tags: false
-          persist-credentials: false
+          persist-credentials: true
           submodules: false
 
       - name: Resolve checkout SHA
@@ -304,7 +304,7 @@ jobs:
           ref: ${{ inputs.target_ref || github.sha }}
           fetch-depth: 1
           fetch-tags: false
-          persist-credentials: false
+          persist-credentials: true
           submodules: false
 
       - name: Ensure security base commit
@@ -416,8 +416,6 @@ jobs:
           set -euo pipefail
 
           workdir="$GITHUB_WORKSPACE"
-          auth_header="$(printf 'x-access-token:%s' "$CHECKOUT_TOKEN" | base64 | tr -d '\n')"
-
           reset_checkout_dir() {
             mkdir -p "$workdir"
             find "$workdir" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
@@ -429,12 +427,11 @@ jobs:
             reset_checkout_dir
             git init "$workdir" >/dev/null
             git config --global --add safe.directory "$workdir"
-            git -C "$workdir" remote add origin "https://github.com/${CHECKOUT_REPO}"
+            git -C "$workdir" remote add origin "https://x-access-token:${CHECKOUT_TOKEN}@github.com/${CHECKOUT_REPO}.git"
             git -C "$workdir" config gc.auto 0
 
             timeout --signal=TERM 30s git -C "$workdir" \
               -c protocol.version=2 \
-              -c "http.https://github.com/.extraheader=AUTHORIZATION: basic ${auth_header}" \
               fetch --no-tags --prune --no-recurse-submodules --depth=1 origin \
               "+${CHECKOUT_SHA}:refs/remotes/origin/ci-target" || return 1
 
@@ -627,8 +624,6 @@ jobs:
           set -euo pipefail
 
           workdir="$GITHUB_WORKSPACE"
-          auth_header="$(printf 'x-access-token:%s' "$CHECKOUT_TOKEN" | base64 | tr -d '\n')"
-
           reset_checkout_dir() {
             mkdir -p "$workdir"
             find "$workdir" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
@@ -640,12 +635,11 @@ jobs:
             reset_checkout_dir
             git init "$workdir" >/dev/null
             git config --global --add safe.directory "$workdir"
-            git -C "$workdir" remote add origin "https://github.com/${CHECKOUT_REPO}"
+            git -C "$workdir" remote add origin "https://x-access-token:${CHECKOUT_TOKEN}@github.com/${CHECKOUT_REPO}.git"
             git -C "$workdir" config gc.auto 0
 
             timeout --signal=TERM 30s git -C "$workdir" \
               -c protocol.version=2 \
-              -c "http.https://github.com/.extraheader=AUTHORIZATION: basic ${auth_header}" \
               fetch --no-tags --prune --no-recurse-submodules --depth=1 origin \
               "+${CHECKOUT_SHA}:refs/remotes/origin/ci-target" || return 1
 
@@ -717,8 +711,6 @@ jobs:
           set -euo pipefail
 
           workdir="$GITHUB_WORKSPACE"
-          auth_header="$(printf 'x-access-token:%s' "$CHECKOUT_TOKEN" | base64 | tr -d '\n')"
-
           reset_checkout_dir() {
             mkdir -p "$workdir"
             find "$workdir" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
@@ -730,12 +722,11 @@ jobs:
             reset_checkout_dir
             git init "$workdir" >/dev/null
             git config --global --add safe.directory "$workdir"
-            git -C "$workdir" remote add origin "https://github.com/${CHECKOUT_REPO}"
+            git -C "$workdir" remote add origin "https://x-access-token:${CHECKOUT_TOKEN}@github.com/${CHECKOUT_REPO}.git"
             git -C "$workdir" config gc.auto 0
 
             timeout --signal=TERM 30s git -C "$workdir" \
               -c protocol.version=2 \
-              -c "http.https://github.com/.extraheader=AUTHORIZATION: basic ${auth_header}" \
               fetch --no-tags --prune --no-recurse-submodules --depth=1 origin \
               "+${CHECKOUT_SHA}:refs/remotes/origin/ci-target" || return 1
 
@@ -801,8 +792,6 @@ jobs:
           set -euo pipefail
 
           workdir="$GITHUB_WORKSPACE"
-          auth_header="$(printf 'x-access-token:%s' "$CHECKOUT_TOKEN" | base64 | tr -d '\n')"
-
           reset_checkout_dir() {
             mkdir -p "$workdir"
             find "$workdir" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
@@ -814,12 +803,11 @@ jobs:
             reset_checkout_dir
             git init "$workdir" >/dev/null
             git config --global --add safe.directory "$workdir"
-            git -C "$workdir" remote add origin "https://github.com/${CHECKOUT_REPO}"
+            git -C "$workdir" remote add origin "https://x-access-token:${CHECKOUT_TOKEN}@github.com/${CHECKOUT_REPO}.git"
             git -C "$workdir" config gc.auto 0
 
             timeout --signal=TERM 30s git -C "$workdir" \
               -c protocol.version=2 \
-              -c "http.https://github.com/.extraheader=AUTHORIZATION: basic ${auth_header}" \
               fetch --no-tags --prune --no-recurse-submodules --depth=1 origin \
               "+${CHECKOUT_SHA}:refs/remotes/origin/ci-target" || return 1
 
@@ -882,8 +870,6 @@ jobs:
           set -euo pipefail
 
           workdir="$GITHUB_WORKSPACE"
-          auth_header="$(printf 'x-access-token:%s' "$CHECKOUT_TOKEN" | base64 | tr -d '\n')"
-
           reset_checkout_dir() {
             mkdir -p "$workdir"
             find "$workdir" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
@@ -895,12 +881,11 @@ jobs:
             reset_checkout_dir
             git init "$workdir" >/dev/null
             git config --global --add safe.directory "$workdir"
-            git -C "$workdir" remote add origin "https://github.com/${CHECKOUT_REPO}"
+            git -C "$workdir" remote add origin "https://x-access-token:${CHECKOUT_TOKEN}@github.com/${CHECKOUT_REPO}.git"
             git -C "$workdir" config gc.auto 0
 
             timeout --signal=TERM 30s git -C "$workdir" \
               -c protocol.version=2 \
-              -c "http.https://github.com/.extraheader=AUTHORIZATION: basic ${auth_header}" \
               fetch --no-tags --prune --no-recurse-submodules --depth=1 origin \
               "+${CHECKOUT_SHA}:refs/remotes/origin/ci-target" || return 1
 
@@ -924,7 +909,6 @@ jobs:
         uses: ./.github/actions/setup-node-env
         with:
           node-version: "22.19.0"
-          cache-key-suffix: "node22-pnpm11"
           install-bun: "false"
 
       - name: Configure Node test resources
@@ -962,8 +946,6 @@ jobs:
           set -euo pipefail
 
           workdir="$GITHUB_WORKSPACE"
-          auth_header="$(printf 'x-access-token:%s' "$CHECKOUT_TOKEN" | base64 | tr -d '\n')"
-
           reset_checkout_dir() {
             mkdir -p "$workdir"
             find "$workdir" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
@@ -975,12 +957,11 @@ jobs:
             reset_checkout_dir
             git init "$workdir" >/dev/null
             git config --global --add safe.directory "$workdir"
-            git -C "$workdir" remote add origin "https://github.com/${CHECKOUT_REPO}"
+            git -C "$workdir" remote add origin "https://x-access-token:${CHECKOUT_TOKEN}@github.com/${CHECKOUT_REPO}.git"
             git -C "$workdir" config gc.auto 0
 
             timeout --signal=TERM 30s git -C "$workdir" \
               -c protocol.version=2 \
-              -c "http.https://github.com/.extraheader=AUTHORIZATION: basic ${auth_header}" \
               fetch --no-tags --prune --no-recurse-submodules --depth=1 origin \
               "+${CHECKOUT_SHA}:refs/remotes/origin/ci-target" || return 1
 
@@ -1004,7 +985,6 @@ jobs:
         uses: ./.github/actions/setup-node-env
         with:
           node-version: "${{ matrix.node_version || '24.x' }}"
-          cache-key-suffix: "${{ matrix.cache_key_suffix || 'node24-pnpm11' }}"
           install-bun: "false"
 
       - name: Configure Node test resources
@@ -1089,8 +1069,6 @@ jobs:
           set -euo pipefail
 
           workdir="$GITHUB_WORKSPACE"
-          auth_header="$(printf 'x-access-token:%s' "$CHECKOUT_TOKEN" | base64 | tr -d '\n')"
-
           reset_checkout_dir() {
             mkdir -p "$workdir"
             find "$workdir" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
@@ -1102,12 +1080,11 @@ jobs:
             reset_checkout_dir
             git init "$workdir" >/dev/null
             git config --global --add safe.directory "$workdir"
-            git -C "$workdir" remote add origin "https://github.com/${CHECKOUT_REPO}"
+            git -C "$workdir" remote add origin "https://x-access-token:${CHECKOUT_TOKEN}@github.com/${CHECKOUT_REPO}.git"
             git -C "$workdir" config gc.auto 0
 
             timeout --signal=TERM 30s git -C "$workdir" \
               -c protocol.version=2 \
-              -c "http.https://github.com/.extraheader=AUTHORIZATION: basic ${auth_header}" \
               fetch --no-tags --prune --no-recurse-submodules --depth=1 origin \
               "+${CHECKOUT_SHA}:refs/remotes/origin/ci-target" || return 1
 
@@ -1145,6 +1122,7 @@ jobs:
               pnpm tool-display:check
               pnpm check:host-env-policy:swift
               pnpm dup:check:coverage
+              pnpm deps:shrinkwrap:check
               pnpm deps:patches:check
               pnpm lint:webhook:no-low-level-body-read
               pnpm lint:auth:no-pairing-store-group
@@ -1222,8 +1200,6 @@ jobs:
           set -euo pipefail
 
           workdir="$GITHUB_WORKSPACE"
-          auth_header="$(printf 'x-access-token:%s' "$CHECKOUT_TOKEN" | base64 | tr -d '\n')"
-
           reset_checkout_dir() {
             mkdir -p "$workdir"
             find "$workdir" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
@@ -1235,12 +1211,11 @@ jobs:
             reset_checkout_dir
             git init "$workdir" >/dev/null
             git config --global --add safe.directory "$workdir"
-            git -C "$workdir" remote add origin "https://github.com/${CHECKOUT_REPO}"
+            git -C "$workdir" remote add origin "https://x-access-token:${CHECKOUT_TOKEN}@github.com/${CHECKOUT_REPO}.git"
             git -C "$workdir" config gc.auto 0
 
             timeout --signal=TERM 30s git -C "$workdir" \
               -c protocol.version=2 \
-              -c "http.https://github.com/.extraheader=AUTHORIZATION: basic ${auth_header}" \
               fetch --no-tags --prune --no-recurse-submodules --depth=1 origin \
               "+${CHECKOUT_SHA}:refs/remotes/origin/ci-target" || return 1
 
@@ -1375,8 +1350,6 @@ jobs:
           set -euo pipefail
 
           workdir="$GITHUB_WORKSPACE"
-          auth_header="$(printf 'x-access-token:%s' "$CHECKOUT_TOKEN" | base64 | tr -d '\n')"
-
           reset_checkout_dir() {
             mkdir -p "$workdir"
             find "$workdir" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
@@ -1388,12 +1361,11 @@ jobs:
             reset_checkout_dir
             git init "$workdir" >/dev/null
             git config --global --add safe.directory "$workdir"
-            git -C "$workdir" remote add origin "https://github.com/${CHECKOUT_REPO}"
+            git -C "$workdir" remote add origin "https://x-access-token:${CHECKOUT_TOKEN}@github.com/${CHECKOUT_REPO}.git"
             git -C "$workdir" config gc.auto 0
 
             timeout --signal=TERM 30s git -C "$workdir" \
               -c protocol.version=2 \
-              -c "http.https://github.com/.extraheader=AUTHORIZATION: basic ${auth_header}" \
               fetch --no-tags --prune --no-recurse-submodules --depth=1 origin \
               "+${CHECKOUT_SHA}:refs/remotes/origin/ci-target" || return 1
 
@@ -1424,7 +1396,7 @@ jobs:
           repository: openclaw/clawhub
           path: clawhub-source
           fetch-depth: 1
-          persist-credentials: false
+          persist-credentials: true
 
       - name: Check docs
         env:
@@ -1443,7 +1415,7 @@ jobs:
         uses: actions/checkout@v6
         with:
           ref: ${{ needs.preflight.outputs.checkout_revision }}
-          persist-credentials: false
+          persist-credentials: true
           submodules: false
 
       - name: Setup Python
@@ -1486,7 +1458,7 @@ jobs:
         uses: actions/checkout@v6
         with:
           ref: ${{ needs.preflight.outputs.checkout_revision }}
-          persist-credentials: false
+          persist-credentials: true
           submodules: false
 
       - name: Try to exclude workspace from Windows Defender (best-effort)
@@ -1514,14 +1486,10 @@ jobs:
           node-version: 24.x
           check-latest: false
 
-      - name: Setup pnpm + cache store
-        id: pnpm-cache
+      - name: Setup pnpm
         uses: ./.github/actions/setup-pnpm-store-cache
         with:
-          pnpm-version: "11.0.8"
-          cache-key-suffix: "node24-pnpm11"
-          use-restore-keys: "false"
-          use-actions-cache: "true"
+          node-version: 24.x
 
       - name: Runtime versions
         run: |
@@ -1548,14 +1516,6 @@ jobs:
           # Persist Windows-native postinstall outputs in the pnpm store so restored
           # caches can skip repeated rebuild/download work on later shards/runs.
           pnpm install --frozen-lockfile --prefer-offline --ignore-scripts=false --config.engine-strict=false --config.enable-pre-post-scripts=true --config.side-effects-cache=true || pnpm install --frozen-lockfile --prefer-offline --ignore-scripts=false --config.engine-strict=false --config.enable-pre-post-scripts=true --config.side-effects-cache=true
-
-      - name: Save pnpm store cache
-        if: steps.pnpm-cache.outputs.cache-enabled == 'true' && steps.pnpm-cache.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v5
-        continue-on-error: true
-        with:
-          path: ${{ steps.pnpm-cache.outputs.store-path }}
-          key: ${{ steps.pnpm-cache.outputs.primary-key }}
 
       - name: Run ${{ matrix.task }} (${{ matrix.runtime }})
         env:
@@ -1591,7 +1551,7 @@ jobs:
         uses: actions/checkout@v6
         with:
           ref: ${{ needs.preflight.outputs.checkout_revision }}
-          persist-credentials: false
+          persist-credentials: true
           submodules: false
 
       - name: Setup Node environment
@@ -1632,7 +1592,7 @@ jobs:
         uses: actions/checkout@v6
         with:
           ref: ${{ needs.preflight.outputs.checkout_revision }}
-          persist-credentials: false
+          persist-credentials: true
           submodules: false
 
       - name: Install XcodeGen / SwiftLint / SwiftFormat
@@ -1738,8 +1698,6 @@ jobs:
           set -euo pipefail
 
           workdir="$GITHUB_WORKSPACE"
-          auth_header="$(printf 'x-access-token:%s' "$CHECKOUT_TOKEN" | base64 | tr -d '\n')"
-
           reset_checkout_dir() {
             mkdir -p "$workdir"
             find "$workdir" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
@@ -1751,12 +1709,11 @@ jobs:
             reset_checkout_dir
             git init "$workdir" >/dev/null
             git config --global --add safe.directory "$workdir"
-            git -C "$workdir" remote add origin "https://github.com/${CHECKOUT_REPO}"
+            git -C "$workdir" remote add origin "https://x-access-token:${CHECKOUT_TOKEN}@github.com/${CHECKOUT_REPO}.git"
             git -C "$workdir" config gc.auto 0
 
             timeout --signal=TERM 30s git -C "$workdir" \
               -c protocol.version=2 \
-              -c "http.https://github.com/.extraheader=AUTHORIZATION: basic ${auth_header}" \
               fetch --no-tags --prune --no-recurse-submodules --depth=1 origin \
               "+${CHECKOUT_SHA}:refs/remotes/origin/ci-target" || return 1
 

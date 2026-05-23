@@ -45,6 +45,7 @@ import type { QaTransportAdapter } from "./qa-transport.js";
 
 export type { QaCliBackendAuthMode } from "./providers/env.js";
 const QA_GATEWAY_CHILD_STARTUP_MAX_ATTEMPTS = 5;
+const QA_GATEWAY_CHILD_RPC_STARTUP_TIMEOUT_MS = 30_000;
 const QA_GATEWAY_CHILD_RPC_RETRY_HEALTH_TIMEOUT_MS = 60_000;
 const QA_GATEWAY_CHILD_RESTART_BOUNDARY_TIMEOUT_MS = 90_000;
 const QA_GATEWAY_CHILD_BLOCKED_SECRET_ENV_VARS = Object.freeze([
@@ -218,7 +219,6 @@ export function buildQaRuntimeEnv(params: {
     OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1",
     OPENCLAW_SKIP_GMAIL_WATCHER: "1",
     OPENCLAW_SKIP_CANVAS_HOST: "1",
-    OPENCLAW_SKIP_STARTUP_MODEL_PREWARM: "1",
     OPENCLAW_NO_RESPAWN: "1",
     OPENCLAW_TEST_FAST: "1",
     OPENCLAW_QA_PARENT_PID: String(process.pid),
@@ -793,7 +793,13 @@ export async function startQaGatewayChild(params: {
           let lastRpcStartupError: unknown = null;
           for (let rpcAttempt = 1; rpcAttempt <= 4; rpcAttempt += 1) {
             try {
-              await attemptRpcClient.request("config.get", {}, { timeoutMs: 10_000 });
+              await attemptRpcClient.request(
+                "config.get",
+                {},
+                {
+                  timeoutMs: QA_GATEWAY_CHILD_RPC_STARTUP_TIMEOUT_MS,
+                },
+              );
               rpcReady = true;
               break;
             } catch (error) {
@@ -887,7 +893,13 @@ export async function startQaGatewayChild(params: {
           let lastRpcStartupError: unknown = null;
           for (let rpcAttempt = 1; rpcAttempt <= 4; rpcAttempt += 1) {
             try {
-              await nextRpcClient.request("config.get", {}, { timeoutMs: 10_000 });
+              await nextRpcClient.request(
+                "config.get",
+                {},
+                {
+                  timeoutMs: QA_GATEWAY_CHILD_RPC_STARTUP_TIMEOUT_MS,
+                },
+              );
               rpcReady = true;
               break;
             } catch (error) {

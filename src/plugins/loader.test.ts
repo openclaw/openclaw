@@ -27,6 +27,11 @@ import { clearPluginCommands } from "./command-registry-state.js";
 import { getPluginCommandSpecs } from "./command-specs.js";
 import { listCompactionProviderIds } from "./compaction-provider.js";
 import {
+  getEmbeddingProvider,
+  listEmbeddingProviders,
+  registerEmbeddingProvider,
+} from "./embedding-providers.js";
+import {
   getGlobalHookRunner,
   getGlobalPluginRegistry,
   resetGlobalHookRunner,
@@ -1111,6 +1116,106 @@ describe("loadOpenClawPlugins", () => {
 
     expect(fs.existsSync(path.join(aliasDir, "sentinel.txt"))).toBe(true);
     expect(fs.readFileSync(path.join(aliasDir, "core.js"), "utf8")).toContain("core.js");
+  });
+
+  it("keeps private local-only plugin-sdk artifacts out of package dist aliases", () => {
+    const packageRoot = makeTempDir();
+    const distRoot = path.join(packageRoot, "dist");
+    const pluginSdkDir = path.join(distRoot, "plugin-sdk");
+    const aliasRoot = path.join(distRoot, "extensions", "node_modules", "openclaw");
+    const aliasDir = path.join(aliasRoot, "plugin-sdk");
+    mkdirSafe(pluginSdkDir);
+    mkdirSafe(aliasDir);
+    fs.writeFileSync(
+      path.join(packageRoot, "package.json"),
+      JSON.stringify(
+        {
+          name: "openclaw",
+          version: "2026.4.22",
+          type: "module",
+          exports: {
+            "./plugin-sdk": "./dist/plugin-sdk/index.js",
+            "./plugin-sdk/string-coerce-runtime": "./dist/plugin-sdk/string-coerce-runtime.js",
+          },
+        },
+        null,
+        2,
+      ),
+      "utf8",
+    );
+    fs.writeFileSync(path.join(pluginSdkDir, "index.js"), "export const root = true;\n", "utf8");
+    fs.writeFileSync(
+      path.join(pluginSdkDir, "string-coerce-runtime.js"),
+      "export const publicRuntime = true;\n",
+      "utf8",
+    );
+    fs.writeFileSync(
+      path.join(pluginSdkDir, "ssrf-runtime-internal.js"),
+      "export const internal = true;\n",
+      "utf8",
+    );
+    fs.writeFileSync(
+      path.join(aliasDir, "ssrf-runtime-internal.js"),
+      "export const staleInternal = true;\n",
+      "utf8",
+    );
+
+    ensureOpenClawPluginSdkAlias(distRoot);
+
+    const aliasPackage = JSON.parse(
+      fs.readFileSync(path.join(aliasRoot, "package.json"), "utf8"),
+    ) as { exports?: Record<string, string> };
+    expect(aliasPackage.exports).toEqual({
+      "./plugin-sdk": "./plugin-sdk/index.js",
+      "./plugin-sdk/string-coerce-runtime": "./plugin-sdk/string-coerce-runtime.js",
+    });
+    expect(fs.existsSync(path.join(aliasDir, "index.js"))).toBe(true);
+    expect(fs.existsSync(path.join(aliasDir, "string-coerce-runtime.js"))).toBe(true);
+    expect(fs.existsSync(path.join(aliasDir, "ssrf-runtime-internal.js"))).toBe(false);
+  });
+
+  it("keeps private local-only plugin-sdk artifacts out of legacy package dist aliases", () => {
+    const packageRoot = makeTempDir();
+    const distRoot = path.join(packageRoot, "dist");
+    const pluginSdkDir = path.join(distRoot, "plugin-sdk");
+    const aliasRoot = path.join(distRoot, "extensions", "node_modules", "openclaw");
+    const aliasDir = path.join(aliasRoot, "plugin-sdk");
+    mkdirSafe(pluginSdkDir);
+    mkdirSafe(aliasDir);
+    fs.writeFileSync(
+      path.join(packageRoot, "package.json"),
+      JSON.stringify({ name: "openclaw", version: "2026.4.22", type: "module" }, null, 2),
+      "utf8",
+    );
+    fs.writeFileSync(path.join(pluginSdkDir, "index.js"), "export const root = true;\n", "utf8");
+    fs.writeFileSync(
+      path.join(pluginSdkDir, "string-coerce-runtime.js"),
+      "export const publicRuntime = true;\n",
+      "utf8",
+    );
+    fs.writeFileSync(
+      path.join(pluginSdkDir, "ssrf-runtime-internal.js"),
+      "export const internal = true;\n",
+      "utf8",
+    );
+    fs.writeFileSync(
+      path.join(aliasDir, "ssrf-runtime-internal.js"),
+      "export const staleInternal = true;\n",
+      "utf8",
+    );
+
+    ensureOpenClawPluginSdkAlias(distRoot);
+
+    const aliasPackage = JSON.parse(
+      fs.readFileSync(path.join(aliasRoot, "package.json"), "utf8"),
+    ) as { exports?: Record<string, string> };
+    expect(aliasPackage.exports).toEqual({
+      "./plugin-sdk": "./plugin-sdk/index.js",
+      "./plugin-sdk/string-coerce-runtime": "./plugin-sdk/string-coerce-runtime.js",
+    });
+    expect(fs.existsSync(path.join(aliasDir, "index.js"))).toBe(true);
+    expect(fs.existsSync(path.join(aliasDir, "string-coerce-runtime.js"))).toBe(true);
+    expect(fs.existsSync(path.join(aliasDir, "ssrf-runtime-internal.js"))).toBe(false);
   });
 
   it("disables bundled plugins by default", () => {
@@ -2787,6 +2892,132 @@ module.exports = { id: "throws-after-import", register() {} };`,
     expect(resolveMemoryFlushPlan({})?.relativePath).toBe("memory/active.md");
     expect(getMemoryRuntime()).toBe(activeRuntime);
     expect(listMemoryEmbeddingProviders().map((adapter) => adapter.id)).toEqual(["active"]);
+  });
+
+  it("does not replace active embedding providers during non-activating loads", () => {
+    useNoBundledPlugins();
+    registerEmbeddingProvider({
+      id: "active",
+      create: async () => ({ provider: null }),
+    });
+    const plugin = writePlugin({
+      id: "snapshot-embedding",
+      filename: "snapshot-embedding.cjs",
+      body: `module.exports = {
+        id: "snapshot-embedding",
+        register(api) {
+          api.registerEmbeddingProvider({
+            id: "snapshot",
+            create: async () => ({ provider: null }),
+          });
+        },
+      };`,
+    });
+    updatePluginManifest(plugin, {
+      contracts: { embeddingProviders: ["snapshot"] },
+    });
+
+    const scoped = loadOpenClawPlugins({
+      cache: false,
+      activate: false,
+      workspaceDir: plugin.dir,
+      config: {
+        plugins: {
+          load: { paths: [plugin.file] },
+          allow: ["snapshot-embedding"],
+        },
+      },
+      onlyPluginIds: ["snapshot-embedding"],
+    });
+
+    expect(scoped.plugins.find((entry) => entry.id === "snapshot-embedding")?.status).toBe(
+      "loaded",
+    );
+    expect(scoped.embeddingProviders.map((entry) => entry.provider.id)).toEqual(["snapshot"]);
+    expect(listEmbeddingProviders().map((adapter) => adapter.id)).toEqual(["active"]);
+    expect(getEmbeddingProvider("snapshot")).toBeUndefined();
+  });
+
+  it("allows non-activating embedding provider snapshots to reuse active ids", () => {
+    useNoBundledPlugins();
+    registerEmbeddingProvider({
+      id: "shared",
+      create: async () => ({ provider: null }),
+    });
+    const plugin = writePlugin({
+      id: "snapshot-shared-embedding",
+      filename: "snapshot-shared-embedding.cjs",
+      body: `module.exports = {
+        id: "snapshot-shared-embedding",
+        register(api) {
+          api.registerEmbeddingProvider({
+            id: "shared",
+            create: async () => ({ provider: null }),
+          });
+        },
+      };`,
+    });
+    updatePluginManifest(plugin, {
+      contracts: { embeddingProviders: ["shared"] },
+    });
+
+    const scoped = loadOpenClawPlugins({
+      cache: false,
+      activate: false,
+      workspaceDir: plugin.dir,
+      config: {
+        plugins: {
+          load: { paths: [plugin.file] },
+          allow: ["snapshot-shared-embedding"],
+        },
+      },
+      onlyPluginIds: ["snapshot-shared-embedding"],
+    });
+
+    expect(scoped.plugins.find((entry) => entry.id === "snapshot-shared-embedding")?.status).toBe(
+      "loaded",
+    );
+    expect(scoped.embeddingProviders.map((entry) => entry.provider.id)).toEqual(["shared"]);
+    expect(listEmbeddingProviders().map((adapter) => adapter.id)).toEqual(["shared"]);
+    expect(getEmbeddingProvider("shared")?.id).toBe("shared");
+  });
+
+  it("clears newly-registered embedding providers when plugin register fails", () => {
+    useNoBundledPlugins();
+    const plugin = writePlugin({
+      id: "failing-embedding",
+      filename: "failing-embedding.cjs",
+      body: `module.exports = {
+        id: "failing-embedding",
+        register(api) {
+          api.registerEmbeddingProvider({
+            id: "failed",
+            create: async () => ({ provider: null }),
+          });
+          throw new Error("embedding register failed");
+        },
+      };`,
+    });
+    updatePluginManifest(plugin, {
+      contracts: { embeddingProviders: ["failed"] },
+    });
+
+    const registry = loadOpenClawPlugins({
+      cache: false,
+      workspaceDir: plugin.dir,
+      config: {
+        plugins: {
+          load: { paths: [plugin.file] },
+          allow: ["failing-embedding"],
+        },
+      },
+      onlyPluginIds: ["failing-embedding"],
+    });
+
+    expect(registry.plugins.find((entry) => entry.id === "failing-embedding")?.status).toBe(
+      "error",
+    );
+    expect(listEmbeddingProviders()).toStrictEqual([]);
   });
 
   it("clears newly-registered memory plugin registries when plugin register fails", () => {

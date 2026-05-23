@@ -378,6 +378,7 @@ async function resolveTelegramNativeCommandThreadContext(params: {
     chatType: msg.chat.type,
     isGroup,
     isForum: extractTelegramForumFlag(msg.chat),
+    isTopicMessage: msg.is_topic_message,
     getChat,
   });
   const threadSpec = resolveTelegramThreadSpec({
@@ -428,7 +429,8 @@ export type RegisterTelegramHandlerParams = {
     replyMedia?: TelegramMediaRef[],
     replyChain?: import("./message-cache.js").TelegramReplyChainEntry[],
     promptContext?: import("./bot-message-context.types.js").TelegramPromptContextEntry[],
-  ) => Promise<void>;
+    lifecycle?: import("./bot-message.js").TelegramMessageProcessorLifecycle,
+  ) => Promise<boolean>;
   logger: ReturnType<typeof getChildLogger>;
 };
 
@@ -465,6 +467,7 @@ export type RegisterTelegramNativeCommandsParams = {
   groupAllowFrom?: Array<string | number>;
   replyToMode: ReplyToMode;
   textLimit: number;
+  mediaMaxBytes?: number;
   useAccessGroups: boolean;
   nativeEnabled: boolean;
   nativeSkillsEnabled: boolean;
@@ -691,6 +694,7 @@ export const registerTelegramNativeCommands = ({
   groupAllowFrom,
   replyToMode,
   textLimit,
+  mediaMaxBytes,
   useAccessGroups,
   nativeEnabled,
   nativeSkillsEnabled,
@@ -931,6 +935,7 @@ export const registerTelegramNativeCommands = ({
     runtime,
     bot,
     mediaLocalRoots: params.mediaLocalRoots,
+    mediaMaxBytes,
     replyToMode,
     textLimit,
     thread: params.threadSpec,
