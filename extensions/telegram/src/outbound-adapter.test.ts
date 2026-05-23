@@ -381,6 +381,71 @@ describe("telegramOutbound", () => {
     expect(options.textMode).toBeUndefined();
   });
 
+  it("normalizes legacy durable group retry targets before Telegram sends", async () => {
+    sendMessageTelegramMock.mockResolvedValueOnce({
+      messageId: "tg-group-retry",
+      chatId: "-1001234567890",
+    });
+
+    await telegramOutbound.sendText!({
+      cfg: {} as never,
+      to: "group:-1001234567890",
+      text: "retry reminder",
+      deps: { sendTelegram: sendMessageTelegramMock },
+    });
+
+    lastCallOptions(sendMessageTelegramMock, "-1001234567890", "retry reminder");
+  });
+
+  it("keeps numeric durable retry targets unchanged", async () => {
+    sendMessageTelegramMock.mockResolvedValueOnce({
+      messageId: "tg-direct-retry",
+      chatId: "123456789",
+    });
+
+    await telegramOutbound.sendText!({
+      cfg: {} as never,
+      to: "123456789",
+      text: "retry direct",
+      deps: { sendTelegram: sendMessageTelegramMock },
+    });
+
+    lastCallOptions(sendMessageTelegramMock, "123456789", "retry direct");
+  });
+
+  it("normalizes legacy durable group retry targets with topic suffixes", async () => {
+    sendMessageTelegramMock.mockResolvedValueOnce({
+      messageId: "tg-topic-retry",
+      chatId: "-1001234567890",
+    });
+
+    await telegramOutbound.sendPayload!({
+      cfg: {} as never,
+      to: "group:-1001234567890:topic:77",
+      text: "",
+      payload: { text: "topic retry" },
+      deps: { sendTelegram: sendMessageTelegramMock },
+    });
+
+    lastCallOptions(sendMessageTelegramMock, "-1001234567890:topic:77", "topic retry");
+  });
+
+  it("does not make non-numeric legacy group targets look valid", async () => {
+    sendMessageTelegramMock.mockResolvedValueOnce({
+      messageId: "tg-invalid-retry",
+      chatId: "group:not-a-number",
+    });
+
+    await telegramOutbound.sendText!({
+      cfg: {} as never,
+      to: "group:not-a-number",
+      text: "bad retry target",
+      deps: { sendTelegram: sendMessageTelegramMock },
+    });
+
+    lastCallOptions(sendMessageTelegramMock, "group:not-a-number", "bad retry target");
+  });
+
   it("forwards audioAsVoice payload media to Telegram voice sends", async () => {
     sendMessageTelegramMock.mockResolvedValueOnce({ messageId: "tg-voice", chatId: "12345" });
 
