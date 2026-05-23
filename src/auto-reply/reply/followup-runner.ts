@@ -391,7 +391,8 @@ export function createFollowupRunner(params: {
       if (run !== effectiveQueued.run) {
         effectiveQueued = { ...effectiveQueued, run };
       }
-      const shouldEmitVerboseProgress = () => run.verboseLevel !== "off";
+      const shouldEmitVerboseProgress = () =>
+        run.verboseLevel === "on" || run.verboseLevel === "full";
       const shouldSuppressDefaultToolProgressMessages = () =>
         opts?.suppressDefaultToolProgressMessages !== false && !shouldEmitVerboseProgress();
       const shouldEmitToolResultProgress = () =>
@@ -759,7 +760,7 @@ export function createFollowupRunner(params: {
                   enqueueProgressDelivery(async () => {
                     if (
                       run.sourceReplyDeliveryMode === "message_tool_only" &&
-                      run.verboseLevel === "off"
+                      !shouldEmitToolResultProgress()
                     ) {
                       return;
                     }
