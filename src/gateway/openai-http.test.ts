@@ -3,18 +3,18 @@ import http from "node:http";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { createClientToolNameConflictError } from "../agents/agent-tool-definition-adapter.js";
-import { FailoverError } from "../agents/failover-error.js";
-import { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
-import * as ssrf from "../infra/net/ssrf.js";
-import * as ip from "../shared/net/ip.js";
 import {
   createStubSessionHarness,
   emitAssistantTextDelta,
 } from "../agents/embedded-agent-subscribe.e2e-harness.js";
 import { subscribeEmbeddedAgentSession } from "../agents/embedded-agent-subscribe.js";
+import { FailoverError } from "../agents/failover-error.js";
 import { HISTORY_CONTEXT_MARKER } from "../auto-reply/reply/history.js";
 import { CURRENT_MESSAGE_MARKER } from "../auto-reply/reply/mentions.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
+import { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
+import * as ssrf from "../infra/net/ssrf.js";
+import * as ip from "../shared/net/ip.js";
 import { buildAssistantDeltaResult } from "./test-helpers.agent-results.js";
 import {
   agentCommand,
@@ -2446,13 +2446,22 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
         });
       });
       await new Promise<void>((resolve) => hangingServer.listen(0, resolve));
-      const addressInfo = hangingServer.address() as { address: string; port: number; family: string };
-      const hostIp = addressInfo.family === "IPv6" ? `[${addressInfo.address}]` : addressInfo.address;
+      const addressInfo = hangingServer.address() as {
+        address: string;
+        port: number;
+        family: string;
+      };
+      const hostIp =
+        addressInfo.family === "IPv6" ? `[${addressInfo.address}]` : addressInfo.address;
       const hangingPort = addressInfo.port;
 
       // Mock the lowest-level IP block checks (cross-module boundary) to bypass SSRF loopback protections in ESM
-      const isBlockedIpv4Spy = vi.spyOn(ip, "isBlockedSpecialUseIpv4Address").mockReturnValue(false);
-      const isBlockedIpv6Spy = vi.spyOn(ip, "isBlockedSpecialUseIpv6Address").mockReturnValue(false);
+      const isBlockedIpv4Spy = vi
+        .spyOn(ip, "isBlockedSpecialUseIpv4Address")
+        .mockReturnValue(false);
+      const isBlockedIpv6Spy = vi
+        .spyOn(ip, "isBlockedSpecialUseIpv6Address")
+        .mockReturnValue(false);
 
       agentCommand.mockClear();
       agentCommand.mockImplementationOnce(

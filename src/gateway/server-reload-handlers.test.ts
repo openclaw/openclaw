@@ -333,6 +333,7 @@ describe("gateway restart deferral preflight", () => {
         webTools: {},
       };
     });
+    hoisted.activeEmbeddedRunCount.value = 1;
     vi.useFakeTimers();
     const reloadPromise = applyHotReload(
       {
@@ -431,6 +432,7 @@ describe("gateway restart deferral preflight", () => {
         webTools: {},
       };
     });
+    hoisted.activeEmbeddedRunCount.value = 1;
     vi.useFakeTimers();
     const reloadPromise = applyHotReload(
       {
@@ -530,6 +532,7 @@ describe("gateway restart deferral preflight", () => {
         webTools: {},
       };
     });
+    hoisted.activeEmbeddedRunCount.value = 1;
     vi.useFakeTimers();
     const reloadPromise = applyHotReload(
       {
@@ -628,6 +631,7 @@ describe("gateway restart deferral preflight", () => {
         webTools: {},
       };
     });
+    hoisted.activeEmbeddedRunCount.value = 1;
     vi.useFakeTimers();
     const reloadPromise = applyHotReload(
       {
