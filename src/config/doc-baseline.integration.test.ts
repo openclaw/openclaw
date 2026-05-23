@@ -118,6 +118,29 @@ describe("config doc baseline integration", () => {
     expect(keyPrefixEntry.sensitive).toBe(false);
   });
 
+  it("keeps recursive send-policy match paths visible in generated metadata", async () => {
+    const byPath = await getSharedByPath();
+
+    expect(requireEntry(byPath, "session.sendPolicy.rules.*.match.keyPrefix").path).toBe(
+      "session.sendPolicy.rules.*.match.keyPrefix",
+    );
+    expect(requireEntry(byPath, "session.sendPolicy.rules.*.match.rawKeyPrefix").path).toBe(
+      "session.sendPolicy.rules.*.match.rawKeyPrefix",
+    );
+    expect(requireEntry(byPath, "session.sendPolicy.rules.*.match.peerEquals").path).toBe(
+      "session.sendPolicy.rules.*.match.peerEquals",
+    );
+    expect(requireEntry(byPath, "session.sendPolicy.rules.*.match.invert").path).toBe(
+      "session.sendPolicy.rules.*.match.invert",
+    );
+    expect(requireEntry(byPath, "session.sendPolicy.rules.*.match.allOf").hasChildren).toBe(
+      true,
+    );
+    expect(requireEntry(byPath, "session.sendPolicy.rules.*.match.anyOf").hasChildren).toBe(
+      true,
+    );
+  });
+
   it("walks union branches for nested config keys", async () => {
     const byPath = await getSharedByPath();
 
