@@ -1206,6 +1206,7 @@ describe("plugin-sdk subpath exports", () => {
     expectSourceOmitsImportPattern("provider-setup", "./vllm.js");
     expectSourceOmitsImportPattern("provider-setup", "./sglang.js");
     expectSourceMentions("provider-auth", [
+      "applyProviderAuthConfigPatch",
       "buildOauthProviderAuthResult",
       "generateHexPkceVerifierChallenge",
       "generatePkceVerifierChallenge",
