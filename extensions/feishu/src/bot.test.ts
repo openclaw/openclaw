@@ -1003,7 +1003,9 @@ describe("handleFeishuMessage command authorization", () => {
             withReplyDispatcher: mockWithReplyDispatcher as never,
           },
           commands: {
-            isControlCommandMessage: vi.fn((body: string) => body.trim().startsWith("/")),
+            isControlCommandMessage: vi.fn((body?: string) =>
+              Boolean(body?.trim().startsWith("/")),
+            ),
             shouldComputeCommandAuthorized: mockShouldComputeCommandAuthorized,
             resolveCommandAuthorizedFromAuthorizers: mockResolveCommandAuthorizedFromAuthorizers,
           },
