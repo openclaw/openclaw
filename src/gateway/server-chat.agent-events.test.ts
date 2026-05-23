@@ -2855,7 +2855,9 @@ describe("agent event handler", () => {
       // Look for spawnedByCache among the captured Maps: keys are subagent sessionKey,
       // values are strings (spawnedBy) or null.
       const looksLikeSpawnedByCache = (m: Map<unknown, unknown>): boolean => {
-        if (m.size === 0) return false;
+        if (m.size === 0) {
+          return false;
+        }
         for (const [k, v] of m.entries()) {
           const keyOk = typeof k === "string" && /^agent:[^:]+:subagent:/.test(k);
           const valOk = typeof v === "string" || v === null;
