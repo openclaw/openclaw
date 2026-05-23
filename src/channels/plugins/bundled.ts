@@ -94,7 +94,9 @@ type BundledChannelLoadContext = {
 
 const log = createSubsystemLogger("channels");
 const MAX_BUNDLED_CHANNEL_LOAD_CONTEXTS = 32;
+const MAX_BUNDLED_CHANNEL_BOUNDARY_ROOTS = 256;
 const bundledChannelLoadContextsByRoot = new Map<string, BundledChannelLoadContext>();
+const bundledChannelBoundaryRoots = new Map<string, string>();
 const sourceBundledEntryLoaderCache: PluginModuleLoaderCache = new Map();
 
 function isSourceModulePath(modulePath: string): boolean {
@@ -161,27 +163,55 @@ function resolveBundledChannelBoundaryRoot(params: {
   metadata: BundledChannelPluginMetadata;
   modulePath: string;
 }): string {
+  const cacheKey = [
+    params.packageRoot,
+    params.pluginsDir ?? "",
+    params.metadata.dirName,
+    params.modulePath,
+  ].join("\0");
+  const cached = bundledChannelBoundaryRoots.get(cacheKey);
+  if (cached) {
+    bundledChannelBoundaryRoots.delete(cacheKey);
+    bundledChannelBoundaryRoots.set(cacheKey, cached);
+    return cached;
+  }
   const isModuleUnderRoot = (root: string) => isPathInside(path.resolve(root), params.modulePath);
   const overrideRoot = params.pluginsDir
     ? path.resolve(params.pluginsDir, params.metadata.dirName)
     : null;
+  let boundaryRoot: string;
   if (overrideRoot && isModuleUnderRoot(overrideRoot)) {
-    return overrideRoot;
+    boundaryRoot = overrideRoot;
+  } else {
+    const distRoot = path.resolve(
+      params.packageRoot,
+      "dist",
+      "extensions",
+      params.metadata.dirName,
+    );
+    if (isModuleUnderRoot(distRoot)) {
+      boundaryRoot = distRoot;
+    } else {
+      const distRuntimeRoot = path.resolve(
+        params.packageRoot,
+        "dist-runtime",
+        "extensions",
+        params.metadata.dirName,
+      );
+      boundaryRoot = isModuleUnderRoot(distRuntimeRoot)
+        ? distRuntimeRoot
+        : path.resolve(params.packageRoot, "extensions", params.metadata.dirName);
+    }
   }
-  const distRoot = path.resolve(params.packageRoot, "dist", "extensions", params.metadata.dirName);
-  if (isModuleUnderRoot(distRoot)) {
-    return distRoot;
+  bundledChannelBoundaryRoots.set(cacheKey, boundaryRoot);
+  while (bundledChannelBoundaryRoots.size > MAX_BUNDLED_CHANNEL_BOUNDARY_ROOTS) {
+    const oldestKey = bundledChannelBoundaryRoots.keys().next().value;
+    if (oldestKey === undefined) {
+      break;
+    }
+    bundledChannelBoundaryRoots.delete(oldestKey);
   }
-  const distRuntimeRoot = path.resolve(
-    params.packageRoot,
-    "dist-runtime",
-    "extensions",
-    params.metadata.dirName,
-  );
-  if (isModuleUnderRoot(distRuntimeRoot)) {
-    return distRuntimeRoot;
-  }
-  return path.resolve(params.packageRoot, "extensions", params.metadata.dirName);
+  return boundaryRoot;
 }
 
 function resolveBundledChannelScanDir(rootScope: BundledChannelRootScope): string | undefined {
