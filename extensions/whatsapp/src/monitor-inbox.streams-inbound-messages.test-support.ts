@@ -892,6 +892,73 @@ describe("web monitor inbox", () => {
     }
   });
 
+  // VE-513 PN/LID normalization: Baileys sockets may expose self identity in
+  // different forms across reconnects (PN JID `<n>@s.whatsapp.net` vs LID
+  // `<x>@lid`). The fallback must recognize the same account when one side
+  // reports only PN and the other only LID, because the captured reply
+  // shouldn't be dropped just because the identity form rotated.
+  it("accepts successor-controller fallback when only the LID-vs-PN form differs for the same account e164", async () => {
+    const onMessage = vi.fn(async () => undefined);
+    const socketRefA = createSocketRef();
+
+    let aShouldRetryDisconnect = true;
+    const { listener: listenerA, sock: sockA } = await startInboxMonitor(
+      onMessage as InboxOnMessage,
+      {
+        socketRef: socketRefA,
+        shouldRetryDisconnect: () => aShouldRetryDisconnect,
+        disconnectRetryPolicy: {
+          initialMs: 1,
+          maxMs: 1,
+          factor: 1,
+          jitter: 0,
+          maxAttempts: 1,
+        },
+      },
+    );
+
+    sockA.ev.emit(
+      "messages.upsert",
+      buildNotifyMessageUpsert({
+        id: nextMessageId("outbound-successor-lid"),
+        remoteJid: "999@s.whatsapp.net",
+        text: "ping",
+        timestamp: 1_700_000_000,
+        pushName: "Tester",
+      }),
+    );
+    await waitForMessageCalls(onMessage, 1);
+    const inbound = inboundMessage(onMessage) as { reply: (text: string) => Promise<void> };
+
+    socketRefA.current = null;
+    aShouldRetryDisconnect = false;
+
+    // The mock harness socket has user.id="123@s.whatsapp.net" (PN JID, no
+    // lid). The successor reports only the LID form. Both resolve to the same
+    // synthetic e164 via resolveComparableIdentity, so identitiesOverlap
+    // accepts the fallback. (resolveComparableIdentity preserves an explicit
+    // e164 on the input over deriving from the JID via authDir lookup.)
+    const sharedE164 = "+123";
+    const sockB = {
+      sendMessage: vi.fn(async () => ({ key: { id: "post-restart-lid-msg-id" } })),
+    };
+    const handleB = {
+      getActiveListener: () => null,
+      getCurrentSock: () => sockB as never,
+      getSelfIdentity: () => ({ jid: null, lid: "12300:1@lid", e164: sharedE164 }),
+    } as never;
+    registerWhatsAppConnectionController(DEFAULT_ACCOUNT_ID, handleB);
+
+    try {
+      await inbound.reply("pong");
+      expect(sockB.sendMessage).toHaveBeenCalledTimes(1);
+      expect(sockB.sendMessage).toHaveBeenCalledWith("999@s.whatsapp.net", { text: "pong" });
+    } finally {
+      unregisterWhatsAppConnectionController(DEFAULT_ACCOUNT_ID, handleB);
+      await listenerA.close();
+    }
+  });
+
   // VE-513 session-safety guard: if the registered successor controller has been
   // re-linked to a different WhatsApp identity (different self JID), the
   // captured reply must fail closed rather than route through the wrong number.
