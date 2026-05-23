@@ -76,6 +76,7 @@ describe("waitForAgentJob", () => {
     startedAt: number;
     endedAt: number;
     aborted?: boolean;
+    stopReason?: string;
   }) {
     const runId = `${params.runIdPrefix}-${Date.now()}-${Math.random().toString(36).slice(2)}`;
     const waitPromise = waitForAgentJob({ runId, timeoutMs: 1_000 });
@@ -88,7 +89,12 @@ describe("waitForAgentJob", () => {
     emitAgentEvent({
       runId,
       stream: "lifecycle",
-      data: { phase: "end", endedAt: params.endedAt, aborted: params.aborted },
+      data: {
+        phase: "end",
+        endedAt: params.endedAt,
+        aborted: params.aborted,
+        ...(params.stopReason ? { stopReason: params.stopReason } : {}),
+      },
     });
 
     return waitPromise;
@@ -141,6 +147,22 @@ describe("waitForAgentJob", () => {
       status: "ok",
       startedAt: 300,
       endedAt: 400,
+    });
+  });
+
+  it("maps aborted stop reasons to error snapshots instead of ok", async () => {
+    const snapshot = await runLifecycleScenario({
+      runIdPrefix: "run-aborted-stop-reason",
+      startedAt: 410,
+      endedAt: 420,
+      stopReason: "aborted",
+    });
+    expectRecordFields(snapshot, {
+      status: "error",
+      startedAt: 410,
+      endedAt: 420,
+      stopReason: "aborted",
+      error: "agent run aborted",
     });
   });
 
