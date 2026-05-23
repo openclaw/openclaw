@@ -2410,7 +2410,8 @@ export async function runCodexAppServerAttempt(
       notification.method === "item/completed" &&
       activeTurnItemIds.size === 0 &&
       !trackedDynamicToolCompletion &&
-      !assistantCompletionCanRelease;
+      !assistantCompletionCanRelease &&
+      !isReasoningItemCompletionNotification(notification);
     if (isCurrentTurnNotification && notification.method === "error") {
       if (isRetryableErrorNotification(notification.params)) {
         disarmTurnCompletionIdleWatch();
@@ -4822,6 +4823,14 @@ function isCompletedAssistantNotification(notification: CodexServerNotification)
     readString(item, "type") === "agentMessage" &&
     readString(item, "phase") !== "commentary",
   );
+}
+
+function isReasoningItemCompletionNotification(notification: CodexServerNotification): boolean {
+  if (!isJsonObject(notification.params) || notification.method !== "item/completed") {
+    return false;
+  }
+  const item = isJsonObject(notification.params.item) ? notification.params.item : undefined;
+  return item ? readString(item, "type") === "reasoning" : false;
 }
 
 function isAssistantCompletionReleaseNotification(
