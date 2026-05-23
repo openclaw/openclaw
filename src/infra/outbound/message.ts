@@ -5,7 +5,6 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { OutboundMediaAccess } from "../../media/load-options.js";
 import type { PollInput } from "../../polls.js";
 import { normalizePollInput } from "../../polls.js";
-import { resolveSendPolicyDetailed } from "../../sessions/send-policy.js";
 import {
   GATEWAY_CLIENT_MODES,
   GATEWAY_CLIENT_NAMES,
@@ -190,6 +189,19 @@ function resolveRequiredPlugin(channel: string, cfg: OpenClawConfig) {
   return plugin;
 }
 
+function cfgWithoutSendPolicy(cfg: OpenClawConfig): OpenClawConfig {
+  if (!cfg.session?.sendPolicy) {
+    return cfg;
+  }
+  return {
+    ...cfg,
+    session: {
+      ...cfg.session,
+      sendPolicy: undefined,
+    },
+  };
+}
+
 function payloadRequiresDurablePayloadTransport(payload: ReplyPayload): boolean {
   return (
     payload.presentation !== undefined ||
@@ -318,6 +330,7 @@ async function resolveGatewayIdempotencyKey(idempotencyKey?: string): Promise<st
 
 export async function sendMessage(params: MessageSendParams): Promise<MessageSendResult> {
   const cfg = await resolveMessageConfig(params.cfg);
+  const explicitDeliveryCfg = cfgWithoutSendPolicy(cfg);
   const channel = await resolveRequiredChannel({ cfg, channel: params.channel });
   const plugin = resolveRequiredPlugin(channel, cfg);
   const deliveryMode = plugin.outbound?.deliveryMode ?? "direct";
@@ -376,7 +389,7 @@ export async function sendMessage(params: MessageSendParams): Promise<MessageSen
     });
     if (params.queuePolicy === "required") {
       await assertRequiredMessageSendDurability({
-        cfg,
+        cfg: explicitDeliveryCfg,
         channel: outboundChannel,
         payloads: normalizedPayloads,
         replyToId: params.replyToId,
@@ -385,7 +398,7 @@ export async function sendMessage(params: MessageSendParams): Promise<MessageSen
       });
     }
     const send = await sendDurableMessageBatch({
-      cfg,
+      cfg: explicitDeliveryCfg,
       channel: outboundChannel,
       to: resolvedTarget.to,
       session: outboundSession,
@@ -424,23 +437,6 @@ export async function sendMessage(params: MessageSendParams): Promise<MessageSen
       mediaUrl: primaryMediaUrl,
       mediaUrls: mirrorMediaUrls.length ? mirrorMediaUrls : undefined,
       result: results.at(-1),
-    };
-  }
-
-  const gatewaySendPolicyDecision = resolveSendPolicyDetailed({
-    cfg,
-    sessionKey: params.requesterSessionKey ?? params.mirror?.sessionKey,
-    channel,
-    inboundPeer: params.inboundPeer,
-    outboundPeer: params.to,
-  });
-  if (gatewaySendPolicyDecision.decision === "deny") {
-    return {
-      channel,
-      to: params.to,
-      via: "gateway",
-      mediaUrl: primaryMediaUrl,
-      mediaUrls: mirrorMediaUrls.length ? mirrorMediaUrls : undefined,
     };
   }
 
