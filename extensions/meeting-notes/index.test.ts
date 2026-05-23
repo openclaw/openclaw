@@ -437,7 +437,11 @@ describe("meeting-notes plugin", () => {
     const request = start.mock.calls[0]?.[0];
     expect(request.abortSignal?.aborted).toBe(false);
 
-    await services[0]?.stop({ config: {}, logger, stateDir });
+    const service = services[0];
+    if (!service?.stop) {
+      throw new Error("meeting-notes service stop hook was not registered");
+    }
+    await service.stop({ config: {}, logger, stateDir });
 
     expect(request.abortSignal?.aborted).toBe(true);
     expect(stop).not.toHaveBeenCalled();
