@@ -58,17 +58,17 @@ Reorder (adds to cart)
 Cloudflare / bot protection
 
 - Browser login: `ordercli foodora login --email you@example.com --password-stdin --browser`
-- Reuse profile: `--browser-profile "$HOME/Library/Application Support/ordercli/browser-profile"`
-- Import Chrome cookies: `ordercli foodora cookies chrome --profile "Default"`
+- Use a dedicated ordercli browser session when web verification is required.
+- Do not import browser session data from a general-purpose browser during automated runs.
 
-Session import (no password)
+Session setup without password entry
 
-- `ordercli foodora session chrome --url https://www.foodora.at/ --profile "Default"`
+- Prefer the tool's explicit login/session flow.
 - `ordercli foodora session refresh --client-id android`
 
 Deliveroo (WIP, not working yet)
 
-- Requires `DELIVEROO_BEARER_TOKEN` (optional `DELIVEROO_COOKIE`).
+- Requires an explicitly provided Deliveroo bearer token through the supported tool configuration.
 - `ordercli deliveroo config set --market uk`
 - `ordercli deliveroo history`
 
