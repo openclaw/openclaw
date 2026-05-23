@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ConfigWriteNotification } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { consumeGatewaySigusr1RestartIntent } from "../infra/restart.js";
@@ -46,6 +46,7 @@ const hoisted = vi.hoisted(() => ({
   clearCurrentProviderAuthState: vi.fn(() => {}),
   warmCurrentProviderAuthStateOffMainThread: vi.fn(async (_cfg: OpenClawConfig) => {}),
   disposeAllSessionMcpRuntimes: vi.fn(async () => {}),
+  prepareSecretsRuntimeSnapshot: vi.fn(),
 }));
 
 vi.mock("../hooks/gmail-watcher.js", () => ({
@@ -123,6 +124,14 @@ vi.mock("../agents/agent-bundle-mcp-tools.js", () => ({
   disposeAllSessionMcpRuntimes: hoisted.disposeAllSessionMcpRuntimes,
 }));
 
+vi.mock("../secrets/runtime.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../secrets/runtime.js")>();
+  return {
+    ...actual,
+    prepareSecretsRuntimeSnapshot: hoisted.prepareSecretsRuntimeSnapshot,
+  };
+});
+
 function createReloadHandlersForTest(logReload = { info: vi.fn(), warn: vi.fn() }) {
   const cron = { start: vi.fn(async () => {}), stop: vi.fn() };
   const heartbeatRunner = {
@@ -157,6 +166,12 @@ function createReloadHandlersForTest(logReload = { info: vi.fn(), warn: vi.fn() 
   });
 }
 
+beforeEach(async () => {
+  const { prepareSecretsRuntimeSnapshot: originalFn } =
+    await vi.importActual<typeof import("../secrets/runtime.js")>("../secrets/runtime.js");
+  hoisted.prepareSecretsRuntimeSnapshot.mockImplementation(originalFn);
+});
+
 afterEach(() => {
   vi.useRealTimers();
   hoisted.startGmailWatcherWithLogs.mockClear();
@@ -174,6 +189,7 @@ afterEach(() => {
   hoisted.warmCurrentProviderAuthStateOffMainThread.mockClear();
   hoisted.disposeAllSessionMcpRuntimes.mockClear();
   hoisted.disposeAllSessionMcpRuntimes.mockResolvedValue(undefined);
+  hoisted.prepareSecretsRuntimeSnapshot.mockClear();
 });
 
 describe("gateway hot reload model state", () => {
@@ -308,7 +324,15 @@ describe("gateway restart deferral preflight", () => {
       logReload: { info: vi.fn(), warn: vi.fn() },
       createHealthMonitor: () => null,
     });
-    hoisted.activeEmbeddedRunCount.value = 1;
+    hoisted.prepareSecretsRuntimeSnapshot.mockImplementation(async (params) => {
+      return {
+        sourceConfig: params.config,
+        config: params.config,
+        authStores: [],
+        warnings: [],
+        webTools: {},
+      };
+    });
     vi.useFakeTimers();
     const reloadPromise = applyHotReload(
       {
@@ -398,7 +422,15 @@ describe("gateway restart deferral preflight", () => {
       logReload,
       createHealthMonitor: () => null,
     });
-    hoisted.activeEmbeddedRunCount.value = 1;
+    hoisted.prepareSecretsRuntimeSnapshot.mockImplementation(async (params) => {
+      return {
+        sourceConfig: params.config,
+        config: params.config,
+        authStores: [],
+        warnings: [],
+        webTools: {},
+      };
+    });
     vi.useFakeTimers();
     const reloadPromise = applyHotReload(
       {
@@ -489,7 +521,15 @@ describe("gateway restart deferral preflight", () => {
       logReload,
       createHealthMonitor: () => null,
     });
-    hoisted.activeEmbeddedRunCount.value = 1;
+    hoisted.prepareSecretsRuntimeSnapshot.mockImplementation(async (params) => {
+      return {
+        sourceConfig: params.config,
+        config: params.config,
+        authStores: [],
+        warnings: [],
+        webTools: {},
+      };
+    });
     vi.useFakeTimers();
     const reloadPromise = applyHotReload(
       {
@@ -579,7 +619,15 @@ describe("gateway restart deferral preflight", () => {
       logReload: { info: vi.fn(), warn: vi.fn() },
       createHealthMonitor: () => null,
     });
-    hoisted.activeEmbeddedRunCount.value = 1;
+    hoisted.prepareSecretsRuntimeSnapshot.mockImplementation(async (params) => {
+      return {
+        sourceConfig: params.config,
+        config: params.config,
+        authStores: [],
+        warnings: [],
+        webTools: {},
+      };
+    });
     vi.useFakeTimers();
     const reloadPromise = applyHotReload(
       {
@@ -647,6 +695,15 @@ describe("gateway restart deferral preflight", () => {
       runtime: "cron",
       label: "nightly sync",
       title: "refresh all accounts",
+    });
+    hoisted.prepareSecretsRuntimeSnapshot.mockImplementation(async (params) => {
+      return {
+        sourceConfig: params.config,
+        config: params.config,
+        authStores: [],
+        warnings: [],
+        webTools: {},
+      };
     });
     const signalSpy = vi.fn();
     process.once("SIGUSR1", signalSpy);
@@ -728,6 +785,15 @@ describe("gateway restart deferral preflight", () => {
       taskId: "task-running-1",
       status: "running",
       runtime: "subagent",
+    });
+    hoisted.prepareSecretsRuntimeSnapshot.mockImplementation(async (params) => {
+      return {
+        sourceConfig: params.config,
+        config: params.config,
+        authStores: [],
+        warnings: [],
+        webTools: {},
+      };
     });
     const signalSpy = vi.fn();
     process.once("SIGUSR1", signalSpy);
