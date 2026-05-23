@@ -434,8 +434,10 @@ export async function buildReplyPayloads(params: {
         originatingTo: params.originatingTo,
       }),
     );
+  const currentRouteHasExplicitMessageToolTextEvidence =
+    messagingToolPayloadDedupe.matchingRoute && hasNonEmptyStringArray(sentTextsForDedupe);
   const heartbeatMessageToolDeliveryEvidence =
-    params.isHeartbeat && messagingToolPayloadDedupe.matchingRoute
+    params.isHeartbeat && currentRouteHasExplicitMessageToolTextEvidence
       ? { sentTexts: sentTextsForDedupe, requireTextMatch: false }
       : params.isHeartbeat && currentRouteHasImplicitMessageToolTextEvidence
         ? { sentTexts: messagingToolSentTexts, requireTextMatch: true }

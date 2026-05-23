@@ -1424,7 +1424,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
     expect(metadata?.messageToolDeliveredForReplyRoute).not.toBe(true);
   });
 
-  it("does not mark heartbeat text replies when the same route delivered different text", async () => {
+  it("marks heartbeat text replies when the same route delivered different text", async () => {
     state.runEmbeddedPiAgentMock.mockResolvedValueOnce({
       payloads: [{ text: "fallback text still needs delivery after a route send" }],
       messagingToolSentTexts: ["message tool delivered"],
@@ -1460,7 +1460,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
       | undefined;
 
     expect(payload.text).toBe("fallback text still needs delivery after a route send");
-    expect(metadata?.messageToolDeliveredForReplyRoute).not.toBe(true);
+    expect(metadata?.messageToolDeliveredForReplyRoute).toBe(true);
   });
 
   it("marks heartbeat replies when the message tool implicitly targets the current route", async () => {

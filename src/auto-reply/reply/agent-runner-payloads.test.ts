@@ -273,6 +273,33 @@ describe("buildReplyPayloads media filter integration", () => {
     expect(getReplyPayloadMetadata(replyPayloads[0])?.messageToolDeliveredForReplyRoute).toBe(true);
   });
 
+  it("keeps heartbeat text when same-route message-tool delivery was media-only", async () => {
+    const { replyPayloads } = await buildReplyPayloads({
+      ...baseParams,
+      isHeartbeat: true,
+      payloads: [{ text: "fallback text still needs delivery after an attachment" }],
+      messageProvider: genericRoute.provider,
+      originatingChannel: genericRoute.provider,
+      originatingTo: genericRoute.to,
+      accountId: genericRoute.accountId,
+      messagingToolSentTargets: [
+        {
+          tool: "message",
+          provider: genericRoute.provider,
+          accountId: genericRoute.accountId,
+          to: genericRoute.to,
+          mediaUrls: ["file:///tmp/heartbeat-proof.png"],
+        },
+      ],
+    });
+
+    expect(replyPayloads).toHaveLength(1);
+    expect(replyPayloads[0]?.text).toBe("fallback text still needs delivery after an attachment");
+    expect(getReplyPayloadMetadata(replyPayloads[0])?.messageToolDeliveredForReplyRoute).not.toBe(
+      true,
+    );
+  });
+
   it("marks implicit current-route heartbeat text duplicates only without target records", async () => {
     const { replyPayloads } = await buildReplyPayloads({
       ...baseParams,
