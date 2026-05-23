@@ -307,6 +307,26 @@ describe("chrome MCP page parsing", () => {
     ]);
   });
 
+  it("runs Windows Chrome MCP tree cleanup before closing the stdio client", async () => {
+    const session = createFakeSession();
+    Object.assign(session, { ownsProcessTree: true });
+    const closeOrder: string[] = [];
+    session.client.close = vi.fn(async () => {
+      closeOrder.push("client.close");
+    }) as typeof session.client.close;
+    setChromeMcpProcessCleanupDepsForTest({
+      platform: "win32",
+      taskkillProcessTree: vi.fn(async (pid) => {
+        closeOrder.push(`taskkill:${pid}`);
+      }),
+    });
+    setChromeMcpSessionFactoryForTest(async () => session);
+
+    await ensureChromeMcpAvailable("chrome-live", undefined, { ephemeral: true });
+
+    expect(closeOrder).toEqual(["taskkill:123", "client.close"]);
+  });
+
   it("redacts remote CDP URL secrets from attach failures", async () => {
     const secretToken = "browserless-secret-token-1234567890"; // pragma: allowlist secret
     const user = "browser-user";
