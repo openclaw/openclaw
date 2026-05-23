@@ -2550,6 +2550,7 @@ describe("dispatchReplyFromConfig", () => {
       verboseLevel: "on",
     };
     const dispatcher = createDispatcher();
+    const onCommandOutput = vi.fn();
     const ctx = buildTestCtx({
       Provider: "telegram",
       ChatType: "direct",
@@ -2559,7 +2560,12 @@ describe("dispatchReplyFromConfig", () => {
     const replyResolver = vi.fn(async (_ctx: MsgContext, opts?: GetReplyOptions) => {
       receivedOptions = opts;
       expect(opts?.shouldSuppressToolErrorWarnings?.()).toBeUndefined();
-      await opts?.onToolResult?.({ text: "raw failed command output", isError: true });
+      await opts?.onCommandOutput?.({
+        phase: "end",
+        name: "exec",
+        status: "failed",
+        exitCode: 1,
+      });
       return { text: "done" } satisfies ReplyPayload;
     });
 
@@ -2568,8 +2574,15 @@ describe("dispatchReplyFromConfig", () => {
       cfg: emptyConfig,
       dispatcher,
       replyResolver,
+      replyOptions: { onCommandOutput },
     });
 
+    expect(onCommandOutput).toHaveBeenCalledWith({
+      phase: "end",
+      name: "exec",
+      status: "failed",
+      exitCode: 1,
+    });
     expect(receivedOptions?.suppressToolErrorWarnings).toBeUndefined();
     expect(receivedOptions?.shouldSuppressToolErrorWarnings?.()).toBe(true);
     expect(dispatcher.sendFinalReply).toHaveBeenCalledWith({ text: "done" });
@@ -2584,6 +2597,7 @@ describe("dispatchReplyFromConfig", () => {
       verboseLevel: "on",
     };
     const dispatcher = createDispatcher();
+    const onItemEvent = vi.fn();
     const ctx = buildTestCtx({
       Provider: "whatsapp",
       Surface: "whatsapp",
@@ -2595,7 +2609,12 @@ describe("dispatchReplyFromConfig", () => {
     const replyResolver = vi.fn(async (_ctx: MsgContext, opts?: GetReplyOptions) => {
       receivedOptions = opts;
       expect(opts?.shouldSuppressToolErrorWarnings?.()).toBeUndefined();
-      await opts?.onToolResult?.({ text: "raw failed command output", isError: true });
+      await opts?.onItemEvent?.({
+        itemId: "item-1",
+        kind: "tool",
+        name: "exec",
+        status: "failed",
+      });
       return { text: "done" } satisfies ReplyPayload;
     });
 
@@ -2604,8 +2623,15 @@ describe("dispatchReplyFromConfig", () => {
       cfg: automaticGroupReplyConfig,
       dispatcher,
       replyResolver,
+      replyOptions: { onItemEvent },
     });
 
+    expect(onItemEvent).toHaveBeenCalledWith({
+      itemId: "item-1",
+      kind: "tool",
+      name: "exec",
+      status: "failed",
+    });
     expect(receivedOptions?.suppressToolErrorWarnings).toBeUndefined();
     expect(receivedOptions?.shouldSuppressToolErrorWarnings?.()).toBe(true);
     expect(dispatcher.sendFinalReply).toHaveBeenCalledWith({ text: "done" });
@@ -2620,6 +2646,7 @@ describe("dispatchReplyFromConfig", () => {
       verboseLevel: "off",
     };
     const dispatcher = createDispatcher();
+    const onCommandOutput = vi.fn();
     const ctx = buildTestCtx({
       Provider: "telegram",
       ChatType: "direct",
@@ -2628,7 +2655,12 @@ describe("dispatchReplyFromConfig", () => {
     let receivedOptions: GetReplyOptions | undefined;
     const replyResolver = vi.fn(async (_ctx: MsgContext, opts?: GetReplyOptions) => {
       receivedOptions = opts;
-      await opts?.onToolResult?.({ text: "raw failed command output", isError: true });
+      await opts?.onCommandOutput?.({
+        phase: "end",
+        name: "exec",
+        status: "failed",
+        exitCode: 1,
+      });
       sessionStoreMocks.currentEntry = {
         ...(sessionStoreMocks.currentEntry ?? {}),
         verboseLevel: "on",
@@ -2643,10 +2675,12 @@ describe("dispatchReplyFromConfig", () => {
       dispatcher,
       replyResolver,
       replyOptions: {
+        onCommandOutput,
         sourceReplyDeliveryMode: "message_tool_only",
       },
     });
 
+    expect(onCommandOutput).not.toHaveBeenCalled();
     expect(receivedOptions?.suppressToolErrorWarnings).toBeUndefined();
     expect(receivedOptions?.shouldSuppressToolErrorWarnings?.()).toBeUndefined();
     expect(dispatcher.sendToolResult).not.toHaveBeenCalled();

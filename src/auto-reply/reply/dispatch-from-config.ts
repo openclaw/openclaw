@@ -1854,6 +1854,20 @@ export async function dispatchReplyFromConfig(
     const hasLiveVerboseProgressGate = suppressDefaultToolProgressMessages && canTrackSession;
     let observedVisibleToolErrorProgress =
       hasVisibleRegularVerboseToolProgress() && !hasLiveVerboseProgressGate;
+    const markVisibleToolErrorProgress = () => {
+      if (hasVisibleRegularVerboseToolProgress()) {
+        observedVisibleToolErrorProgress = true;
+      }
+    };
+    const hasFailedProgressStatus = (payload: {
+      phase?: string;
+      status?: string;
+      exitCode?: number | null;
+    }) =>
+      payload.phase === "error" ||
+      payload.status === "failed" ||
+      payload.status === "error" ||
+      (typeof payload.exitCode === "number" && payload.exitCode !== 0);
     const shouldSuppressToolErrorWarnings = () =>
       params.replyOptions?.suppressToolErrorWarnings ??
       (observedVisibleToolErrorProgress ? true : undefined);
@@ -1884,6 +1898,7 @@ export async function dispatchReplyFromConfig(
       options?: {
         forwardWhenSourceDeliverySuppressed?: boolean;
         requiresToolSummaryVisibility?: boolean;
+        onForward?: (...args: Args) => void;
       },
     ): ((...args: Args) => Promise<void>) | undefined => {
       if (!callback && (!suppressAutomaticSourceDelivery || !canTrackSession)) {
@@ -1895,6 +1910,7 @@ export async function dispatchReplyFromConfig(
         }
         markProgress();
         if (shouldForwardProgressCallback(options)) {
+          options?.onForward?.(...args);
           await callback?.(...args);
         }
       };
@@ -1933,10 +1949,20 @@ export async function dispatchReplyFromConfig(
             onItemEvent: wrapProgressCallback(params.replyOptions?.onItemEvent, {
               forwardWhenSourceDeliverySuppressed: true,
               requiresToolSummaryVisibility: true,
+              onForward: (payload) => {
+                if (hasFailedProgressStatus(payload)) {
+                  markVisibleToolErrorProgress();
+                }
+              },
             }),
             onCommandOutput: wrapProgressCallback(params.replyOptions?.onCommandOutput, {
               forwardWhenSourceDeliverySuppressed: true,
               requiresToolSummaryVisibility: true,
+              onForward: (payload) => {
+                if (hasFailedProgressStatus(payload)) {
+                  markVisibleToolErrorProgress();
+                }
+              },
             }),
             onCompactionStart: wrapProgressCallback(params.replyOptions?.onCompactionStart, {
               forwardWhenSourceDeliverySuppressed: true,
@@ -1948,8 +1974,8 @@ export async function dispatchReplyFromConfig(
             }),
             onToolResult: (payload: ReplyPayload) => {
               markProgress();
-              if (payload.isError === true && hasVisibleRegularVerboseToolProgress()) {
-                observedVisibleToolErrorProgress = true;
+              if (payload.isError === true) {
+                markVisibleToolErrorProgress();
               }
               const run = async () => {
                 if (isDispatchOperationAborted()) {
