@@ -574,4 +574,54 @@ describe("main-session-restart-recovery", () => {
     expect(store["agent:main:main"]?.status).toBe("failed");
     expect(store["agent:main:main"]?.abortedLastRun).toBe(true);
   });
+
+  it("sends a visible notice before failing an unresumable chat-bound main session", async () => {
+    const sessionsDir = await makeSessionsDir();
+    await writeStore(sessionsDir, {
+      "agent:main:telegram:group:12345": {
+        sessionId: "main-session",
+        updatedAt: Date.now() - 10_000,
+        status: "running",
+        abortedLastRun: true,
+        deliveryContext: {
+          channel: "telegram",
+          to: "group:12345",
+          accountId: "default",
+          threadId: "topic-1",
+        },
+      },
+    });
+    await writeTranscript(sessionsDir, "main-session", [
+      { role: "user", content: "do the thing" },
+      { role: "assistant", content: "partial answer" },
+    ]);
+
+    const result = await recoverRestartAbortedMainSessions({ stateDir: tmpDir });
+
+    expect(result).toEqual({ recovered: 0, failed: 1, skipped: 0 });
+    expect(callGateway).toHaveBeenCalledOnce();
+    const gatewayCall = vi.mocked(callGateway).mock.calls[0]?.[0] as
+      | { method?: string; params?: Record<string, unknown> }
+      | undefined;
+    expect(gatewayCall?.method).toBe("message.action");
+    expect(gatewayCall?.params).toMatchObject({
+      channel: "telegram",
+      action: "send",
+      accountId: "default",
+      sessionKey: "agent:main:telegram:group:12345",
+      sessionId: "main-session",
+    });
+    expect(gatewayCall?.params?.params).toMatchObject({
+      to: "group:12345",
+      threadId: "topic-1",
+      bestEffort: true,
+    });
+    expect(String((gatewayCall?.params?.params as Record<string, unknown>)?.message)).toContain(
+      "couldn't safely resume",
+    );
+
+    const store = loadSessionStore(path.join(sessionsDir, "sessions.json"));
+    expect(store["agent:main:telegram:group:12345"]?.status).toBe("failed");
+    expect(store["agent:main:telegram:group:12345"]?.abortedLastRun).toBe(true);
+  });
 });
