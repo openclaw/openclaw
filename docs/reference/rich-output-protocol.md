@@ -45,7 +45,7 @@ Keep `MEDIA:` on its own line, in plain text, with no surrounding formatting.
 
 Plain Markdown image syntax stays text by default. Channels that intentionally
 map Markdown image replies to media attachments opt in at their outbound
-adapter; Telegram does this so `![alt](url)` can still become a media reply.
+adapter; Telegram does this so `![alt](https://example.com/image.png)` can still become a media reply.
 
 These directives are separate. `MEDIA:` and reply/voice tags remain delivery metadata; `[embed ...]` is the web-only rich render path.
 Trusted tool-result media uses the same `MEDIA:` / `[[audio_as_voice]]` parser before delivery, so text tool outputs can still mark an audio attachment as a voice note.
