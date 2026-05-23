@@ -295,6 +295,29 @@ describe("runReplyAgent runtime config", () => {
     );
   });
 
+  it("dispatches the post-reply memory flush from the reply path's finally block even when the agent turn throws", async () => {
+    const { followupRun, replyParams } = createDirectRuntimeReplyParams({
+      shouldFollowup: false,
+      isActive: false,
+    });
+    followupRun.run.sessionKey = "agent:main:main";
+    replyParams.sessionKey = "agent:main:main";
+    runPreflightCompactionIfNeededMock.mockResolvedValue(undefined);
+    const turnError = new Error("agent turn exploded");
+    runAgentTurnWithFallbackMock.mockRejectedValue(turnError);
+
+    await runReplyAgent(replyParams).catch(() => undefined);
+
+    expect(runAgentTurnWithFallbackMock).toHaveBeenCalledTimes(1);
+    // Flush is still dispatched because the reply path was reached
+    // (set right before runAgentTurnWithFallback was invoked).
+    expect(runMemoryFlushIfNeededMock).toHaveBeenCalledTimes(1);
+    expect(registerPendingMemoryFlushMock).toHaveBeenCalledTimes(1);
+    expect(runAgentTurnWithFallbackMock.mock.invocationCallOrder[0]).toBeLessThan(
+      runMemoryFlushIfNeededMock.mock.invocationCallOrder[0] ?? Number.MAX_SAFE_INTEGER,
+    );
+  });
+
   it("does not block the start of the user-visible reply on a pending memory flush", async () => {
     const { followupRun, replyParams } = createDirectRuntimeReplyParams({
       shouldFollowup: false,

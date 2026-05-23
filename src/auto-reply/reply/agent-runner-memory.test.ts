@@ -2061,7 +2061,16 @@ describe("runPreflightCompactionIfNeeded pending-flush barrier", () => {
     expect(compactEmbeddedPiSessionMock).toHaveBeenCalledTimes(1);
   });
 
-  it("proceeds with compaction after the barrier times out on a hung flush", async () => {
+  // The barrier inside runPreflightCompactionIfNeeded uses the default
+  // 30 s timeout baked into awaitPendingMemoryFlush. Exercising that real
+  // timeout from a unit test is impractical, so the timeout bound itself
+  // is covered at the helper level (see
+  // "awaitPendingMemoryFlush proceeds after timeout when the flush hangs"
+  // in the registry describe block above, which uses a configurable short
+  // timeoutMs). Here we assert only that the barrier blocks until the
+  // pending flush settles and then compaction proceeds — i.e., the
+  // barrier is correctly wired into the preflight function entry.
+  it("returns from the barrier once the pending flush settles, then runs compaction", async () => {
     const storePath = path.join(rootDir, "sessions.json");
     const sessionKey = "main";
     const sessionEntry: SessionEntry = {
@@ -2074,14 +2083,6 @@ describe("runPreflightCompactionIfNeeded pending-flush barrier", () => {
     const sessionStore = { [sessionKey]: sessionEntry };
     await writeTestSessionStore(storePath, sessionKey, sessionEntry);
 
-    // Register a never-resolving flush. The barrier's internal default timeout
-    // is 30s; we cannot wait that long in a test. Instead we register and then
-    // immediately observe that compaction does NOT run on the first preflight
-    // call within a short window, then we resolve the flush manually to let
-    // preflight finish quickly. This still demonstrates the barrier is
-    // serialized but proves the bound is finite (covered by the registry
-    // test above that exercises a real timeout with a short configured
-    // timeoutMs value).
     let resolveFlush: () => void = () => {};
     const flushPromise = new Promise<void>((resolve) => {
       resolveFlush = resolve;
