@@ -121,6 +121,31 @@ export type SpawnAcpParams = {
   attachments?: AcpTurnAttachment[];
 };
 
+type GatewayImageAttachmentInput = {
+  type: "image";
+  source: {
+    type: "base64";
+    media_type: string;
+    data: string;
+  };
+};
+
+function toGatewayImageAttachments(
+  attachments: AcpTurnAttachment[] | undefined,
+): GatewayImageAttachmentInput[] | undefined {
+  if (!attachments || attachments.length === 0) {
+    return undefined;
+  }
+  return attachments.map((attachment) => ({
+    type: "image",
+    source: {
+      type: "base64",
+      media_type: attachment.mediaType,
+      data: attachment.data,
+    },
+  }));
+}
+
 export type SpawnAcpContext = {
   agentSessionKey?: string;
   agentChannel?: string;
@@ -1447,6 +1472,7 @@ export async function spawnAcpDirect(
       emitStartNotice: false,
     });
   }
+  const gatewayAttachments = toGatewayImageAttachments(params.attachments);
   try {
     const response = await callGateway({
       method: "agent",
@@ -1463,9 +1489,7 @@ export async function spawnAcpDirect(
         acpTurnSource: "manual_spawn",
         ...(params.runTimeoutSeconds != null ? { timeout: params.runTimeoutSeconds } : {}),
         label: params.label || undefined,
-        ...(params.attachments && params.attachments.length > 0
-          ? { attachments: params.attachments }
-          : {}),
+        ...(gatewayAttachments ? { attachments: gatewayAttachments } : {}),
       },
       timeoutMs: 10_000,
     });

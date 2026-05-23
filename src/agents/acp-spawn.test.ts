@@ -1010,7 +1010,12 @@ describe("spawnAcpDirect", () => {
 
     expectAcceptedSpawn(result);
     const agentCall = findAgentGatewayCall();
-    expect(agentCall?.params?.attachments).toEqual([{ mediaType: "image/png", data: imageBase64 }]);
+    expect(agentCall?.params?.attachments).toEqual([
+      {
+        type: "image",
+        source: { type: "base64", media_type: "image/png", data: imageBase64 },
+      },
+    ]);
   });
 
   it("omits attachments from gateway call when none are provided", async () => {

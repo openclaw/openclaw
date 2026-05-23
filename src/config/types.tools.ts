@@ -359,6 +359,19 @@ export type FsToolsConfig = {
   workspaceOnly?: boolean;
 };
 
+export type SessionsSpawnToolsConfig = {
+  attachments?: {
+    /** Enable inline attachments for sessions_spawn. */
+    enabled?: boolean;
+    /** Allow runtime="acp" to forward image attachments inline to ACP runtimes. */
+    acpEnabled?: boolean;
+    maxTotalBytes?: number;
+    maxFiles?: number;
+    maxFileBytes?: number;
+    retainOnSessionKeep?: boolean;
+  };
+};
+
 export type AgentToolsConfig = {
   /** Base tool profile applied before allow/deny lists. */
   profile?: ToolProfileId;
@@ -690,6 +703,8 @@ export type ToolsConfig = {
   toolSearch?: ToolSearchConfig;
   /** Generic code mode: expose exec/wait and hide normal tools behind a QuickJS catalog bridge. */
   codeMode?: CodeModeConfig;
+  /** sessions_spawn tool configuration. */
+  sessions_spawn?: SessionsSpawnToolsConfig;
   /** Sub-agent tool policy defaults (deny wins). */
   subagents?: {
     tools?: {
