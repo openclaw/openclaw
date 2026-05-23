@@ -3,12 +3,14 @@ import http from "node:http";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { createClientToolNameConflictError } from "../agents/agent-tool-definition-adapter.js";
+import { FailoverError } from "../agents/failover-error.js";
+import { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
+import * as ssrf from "../infra/net/ssrf.js";
 import {
   createStubSessionHarness,
   emitAssistantTextDelta,
 } from "../agents/embedded-agent-subscribe.e2e-harness.js";
 import { subscribeEmbeddedAgentSession } from "../agents/embedded-agent-subscribe.js";
-import { FailoverError } from "../agents/failover-error.js";
 import { HISTORY_CONTEXT_MARKER } from "../auto-reply/reply/history.js";
 import { CURRENT_MESSAGE_MARKER } from "../auto-reply/reply/mentions.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
@@ -2434,12 +2436,34 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
       const port = enabledPort;
       let serverAbortSignal: AbortSignal | undefined;
 
+      let serverSocketClosed = false;
+      let serverConnectionReceived = false;
+      const hangingServer = http.createServer((req, res) => {
+        serverConnectionReceived = true;
+        req.on("close", () => {
+          serverSocketClosed = true;
+        });
+      });
+      await new Promise<void>((resolve) => hangingServer.listen(0, resolve));
+      const addressInfo = hangingServer.address() as { address: string; port: number; family: string };
+      const hostIp = addressInfo.family === "IPv6" ? `[${addressInfo.address}]` : addressInfo.address;
+      const hangingPort = addressInfo.port;
+
+      const isPrivateIpSpy = vi.spyOn(ssrf, "isPrivateIpAddress").mockReturnValue(false);
+
       agentCommand.mockClear();
       agentCommand.mockImplementationOnce(
         (opts: unknown) =>
           new Promise<undefined>((resolve) => {
             const signal = (opts as { abortSignal?: AbortSignal } | undefined)?.abortSignal;
             serverAbortSignal = signal;
+
+            // Simulate the agent's outbound fetch to verify the Hard-Kill teardown logic
+            // actually invokes dispatcher.destroy() when the abort signal fires.
+            fetchWithSsrFGuard({ url: `http://${hostIp === "::" ? "[::1]" : hostIp === "0.0.0.0" ? "127.0.0.1" : hostIp}:${hangingPort}`, signal }).catch((e) => {
+              expect.fail("fetchWithSsrFGuard threw: " + String(e));
+            });
+
             if (signal?.aborted) {
               resolve(undefined);
               return;
@@ -2468,17 +2492,24 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
 
       await vi.waitFor(() => {
         expect(agentCommand).toHaveBeenCalledTimes(1);
+        expect(serverConnectionReceived).toBe(true);
       });
 
       // Simulate client disconnect to trigger the abort controller and Hard-Kill
       clientReq.destroy();
 
-      await vi.waitFor(
-        () => {
-          expect(serverAbortSignal?.aborted).toBe(true);
-        },
-        { timeout: 5_000, interval: 50 },
-      );
+      try {
+        await vi.waitFor(
+          () => {
+            expect(serverAbortSignal?.aborted).toBe(true);
+            expect(serverSocketClosed).toBe(true);
+            isPrivateIpSpy.mockRestore();
+          },
+          { timeout: 5_000, interval: 50 },
+        );
+      } finally {
+        hangingServer.close();
+      }
     },
   );
 });
