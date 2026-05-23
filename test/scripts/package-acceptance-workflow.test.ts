@@ -255,6 +255,9 @@ describe("package acceptance workflow", () => {
     expect(workflow).toContain(
       '[[ "$CHILD_WORKFLOW_REF" == release-ci/* && -n "${TARGET_SHA// }" && "$head_sha" != "$TARGET_SHA" ]]',
     );
+    expect(workflow).toContain(
+      'gh_with_retry workflow run "$workflow" --ref "$CHILD_WORKFLOW_REF" "$@"',
+    );
     expect(workflow).toContain("child run used ${head_sha}, expected ${TARGET_SHA}");
     expect(workflow).toContain(
       "Dispatch Full Release Validation from a ref pinned to the target SHA",
