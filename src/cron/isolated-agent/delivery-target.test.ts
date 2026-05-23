@@ -917,12 +917,12 @@ describe("resolveDeliveryTarget", () => {
     expect(result.threadId).toBe(1008013);
   });
 
-  it("parses plugin-owned slash topic targets into delivery threadId", async () => {
+  it("parses plugin-owned numeric topic shorthand into delivery threadId", async () => {
     setMainSessionEntry(undefined);
 
     const result = await resolveDeliveryTarget(makeCfg({ bindings: [] }), AGENT_ID, {
       channel: "telegram",
-      to: "-100200300/77",
+      to: "-100200300:77",
     });
 
     expect(result.ok).toBe(true);

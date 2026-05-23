@@ -62,12 +62,12 @@ function parseTelegramTargetForTest(raw: string): {
   const trimmed = raw.trim();
   const withoutPrefix = trimmed.replace(/^telegram:/i, "").trim();
   const topicMatch = withoutPrefix.match(/^(.*):topic:(\d+)$/i);
-  const slashMatch = withoutPrefix.match(/^(-?\d+)\/(\d+)$/i);
-  const chatId = topicMatch?.[1]?.trim() || slashMatch?.[1] || withoutPrefix;
+  const colonMatch = withoutPrefix.match(/^(-?\d+):(\d+)$/i);
+  const chatId = topicMatch?.[1]?.trim() || colonMatch?.[1] || withoutPrefix;
   const messageThreadId = topicMatch?.[2]
     ? Number.parseInt(topicMatch[2], 10)
-    : slashMatch?.[2]
-      ? Number.parseInt(slashMatch[2], 10)
+    : colonMatch?.[2]
+      ? Number.parseInt(colonMatch[2], 10)
       : undefined;
   const numericId = chatId.startsWith("-") ? chatId.slice(1) : chatId;
   const chatType =

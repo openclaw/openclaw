@@ -74,7 +74,6 @@ export function normalizeTelegramLookupTarget(raw: string): string | undefined {
  *
  * Supported formats:
  * - `chatId` (plain chat ID, t.me link, @username, or internal prefixes like `telegram:...`)
- * - `chatId/topicId` (legacy numeric topic/thread ID)
  * - `chatId:topicId` (numeric topic/thread ID)
  * - `chatId:topic:topicId` (explicit topic marker; preferred)
  */
@@ -98,15 +97,6 @@ export function parseTelegramTarget(to: string): TelegramTarget {
       chatId: topicMatch[1],
       messageThreadId: Number.parseInt(topicMatch[2], 10),
       chatType: resolveTelegramChatType(topicMatch[1]),
-    };
-  }
-
-  const slashMatch = /^(-?\d+)\/(\d+)$/.exec(normalized);
-  if (slashMatch) {
-    return {
-      chatId: slashMatch[1],
-      messageThreadId: Number.parseInt(slashMatch[2], 10),
-      chatType: resolveTelegramChatType(slashMatch[1]),
     };
   }
 
