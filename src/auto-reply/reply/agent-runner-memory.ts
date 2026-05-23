@@ -780,16 +780,41 @@ export async function runPreflightCompactionIfNeeded(params: {
   }
 
   // Pre-compaction barrier: if the previous turn dispatched a near-threshold
-  // memory flush that has not yet completed, await it before reading session
-  // state for the current preflight. The flush's embedded run can itself
-  // trigger a compaction that mutates sessionId; allowing this preflight's
-  // compaction to interleave would split session writes across two sessionIds.
-  // Best-effort: a hung flush is bounded by the timeout in
+  // memory flush that has not yet completed, await it before evaluating any
+  // compaction state for the current preflight. The flush's embedded run can
+  // itself trigger a compaction that mutates sessionId; allowing this
+  // preflight's compaction to interleave would split session writes across
+  // two sessionIds. Best-effort: a hung flush is bounded by the timeout in
   // awaitPendingMemoryFlush so compaction is not permanently blocked.
   await awaitPendingMemoryFlush(params.sessionKey);
-  entry = params.sessionStore?.[params.sessionKey] ?? entry;
+  const refreshedEntryAfterBarrier = params.sessionStore?.[params.sessionKey];
+  if (refreshedEntryAfterBarrier) {
+    entry = refreshedEntryAfterBarrier;
+  }
   if (!entry?.sessionId) {
     return entry ?? params.sessionEntry;
+  }
+  // If the prior flush's internal compaction rotated the active sessionId
+  // and the active run still references the pre-flush id, rebind here so
+  // downstream callers in the orchestrator (and the reply turn that follows
+  // this preflight on the current turn) see the post-flush sessionId even
+  // when the current preflight does not itself compact.
+  if (params.followupRun.run.sessionId && entry.sessionId !== params.followupRun.run.sessionId) {
+    const previousSessionId = params.followupRun.run.sessionId;
+    params.followupRun.run.sessionId = entry.sessionId;
+    params.replyOperation.updateSessionId(entry.sessionId);
+    if (entry.sessionFile) {
+      params.followupRun.run.sessionFile = entry.sessionFile;
+    }
+    const queueKey = params.followupRun.run.sessionKey ?? params.sessionKey;
+    if (queueKey) {
+      memoryDeps.refreshQueuedFollowupSession({
+        key: queueKey,
+        previousSessionId,
+        nextSessionId: entry.sessionId,
+        nextSessionFile: entry.sessionFile,
+      });
+    }
   }
 
   const contextWindowTokens = resolveMemoryFlushContextWindowTokens({
@@ -1336,7 +1361,19 @@ export async function runMemoryFlushIfNeeded(params: {
         });
         const visibleErrorPayloads = resolveVisibleMemoryFlushErrorPayloads(result.payloads);
         if (visibleErrorPayloads.length > 0) {
-          params.onVisibleErrorPayloads?.(visibleErrorPayloads);
+          if (params.onVisibleErrorPayloads) {
+            params.onVisibleErrorPayloads(visibleErrorPayloads);
+          } else {
+            // No caller-supplied surface for visible flush error payloads
+            // (e.g. the post-reply dispatch from the reply orchestrator).
+            // Record them so they are not silently dropped.
+            for (const payload of visibleErrorPayloads) {
+              const text = normalizeOptionalString(payload.text);
+              if (text) {
+                logVerbose(`memory flush visible error payload (dropped): ${text}`);
+              }
+            }
+          }
         }
         if (result.meta?.agentMeta?.sessionId) {
           postCompactionSessionId = result.meta.agentMeta.sessionId;

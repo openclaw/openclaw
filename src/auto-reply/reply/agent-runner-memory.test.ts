@@ -2116,6 +2116,67 @@ describe("runPreflightCompactionIfNeeded pending-flush barrier", () => {
     expect(compactEmbeddedPiSessionMock).toHaveBeenCalledTimes(1);
   });
 
+  it("rebinds the active run sessionId after the barrier when the prior flush rotated it, even if no compaction runs this turn", async () => {
+    const storePath = path.join(rootDir, "sessions.json");
+    const sessionKey = "main";
+    // The session store reflects the post-flush state (sessionId rotated).
+    const rotatedSessionEntry: SessionEntry = {
+      sessionId: "session-rotated-by-prior-flush",
+      updatedAt: Date.now(),
+      // Low tokens: this turn will NOT trigger compaction. Verifies that the
+      // rebind happens even on the no-compaction path.
+      totalTokens: 1,
+      totalTokensFresh: true,
+      compactionCount: 1,
+    };
+    const sessionStore = { [sessionKey]: rotatedSessionEntry };
+    await writeTestSessionStore(storePath, sessionKey, rotatedSessionEntry);
+
+    // Caller still holds the pre-flush sessionId on the active followup run.
+    const followupRun = createTestFollowupRun();
+    followupRun.run.sessionId = "session-pre-flush";
+
+    // Register a pending flush that resolves immediately to keep the test fast.
+    registerPendingMemoryFlush(sessionKey, Promise.resolve());
+
+    const replyOperation = createReplyOperation();
+    const updateSessionIdMock = replyOperation.updateSessionId as ReturnType<typeof vi.fn>;
+    const refreshQueuedFollowupSessionMock = vi.fn();
+    setAgentRunnerMemoryTestDeps({
+      compactEmbeddedPiSession: compactEmbeddedPiSessionMock as never,
+      refreshQueuedFollowupSession: refreshQueuedFollowupSessionMock as never,
+      incrementCompactionCount: incrementCompactionCountMock as never,
+      registerAgentRunContext: vi.fn() as never,
+      randomUUID: () => "00000000-0000-0000-0000-000000000003",
+      now: () => 1_700_000_000_000,
+    });
+
+    const returnedEntry = await runPreflightCompactionIfNeeded({
+      cfg: { agents: { defaults: { compaction: { memoryFlush: {} } } } },
+      followupRun,
+      defaultModel: "anthropic/claude-opus-4-6",
+      agentCfgContextTokens: 100_000,
+      sessionEntry: undefined,
+      sessionStore,
+      sessionKey,
+      storePath,
+      isHeartbeat: false,
+      replyOperation,
+    });
+
+    expect(returnedEntry?.sessionId).toBe("session-rotated-by-prior-flush");
+    expect(followupRun.run.sessionId).toBe("session-rotated-by-prior-flush");
+    expect(updateSessionIdMock).toHaveBeenCalledWith("session-rotated-by-prior-flush");
+    expect(refreshQueuedFollowupSessionMock).toHaveBeenCalledWith({
+      key: followupRun.run.sessionKey ?? sessionKey,
+      previousSessionId: "session-pre-flush",
+      nextSessionId: "session-rotated-by-prior-flush",
+      nextSessionFile: rotatedSessionEntry.sessionFile,
+    });
+    // No compaction was triggered this turn.
+    expect(compactEmbeddedPiSessionMock).not.toHaveBeenCalled();
+  });
+
   it("does not block heartbeat preflight on a pending flush", async () => {
     const storePath = path.join(rootDir, "sessions.json");
     const sessionKey = "main";
