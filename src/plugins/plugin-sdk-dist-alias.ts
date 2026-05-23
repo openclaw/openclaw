@@ -43,7 +43,7 @@ function collectLegacyPublicPluginSdkDistFileNames(distRoot: string): Set<string
 function readPrivateLocalOnlyPluginSdkDistFileNames(distRoot: string): Set<string> {
   const packageRoot = path.dirname(path.resolve(distRoot));
   const privateFileNames = new Set<string>(PRIVATE_LOCAL_ONLY_PLUGIN_SDK_DIST_FILE_NAME_FALLBACK);
-  const subpaths = tryReadJsonSync<unknown>(
+  const subpaths = tryReadJsonSync(
     path.join(packageRoot, "scripts", "lib", "plugin-sdk-private-local-only-subpaths.json"),
   );
   if (!Array.isArray(subpaths)) {

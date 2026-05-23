@@ -98,6 +98,16 @@ function expectDispatcherAttached(value: unknown): void {
   expect(getDispatcherClassName(value)).toMatch(/^(Agent|Mock)$/u);
 }
 
+function getFetchInputUrl(input: RequestInfo | URL): string {
+  if (typeof input === "string") {
+    return input;
+  }
+  if (input instanceof URL) {
+    return input.href;
+  }
+  return input.url;
+}
+
 function firstMockCall<T extends unknown[]>(mock: { mock: { calls: T[] } }): T | undefined {
   return mock.mock.calls[0];
 }
@@ -1539,7 +1549,7 @@ describe("fetchWithSsrFGuard hardening", () => {
     const fetchImpl = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const requestInit = init as RequestInit & { dispatcher?: unknown };
       expectDispatcherAttached(requestInit.dispatcher);
-      const url = input.toString();
+      const url = getFetchInputUrl(input);
       if (url === "http://127.0.0.1:11434/api/embed") {
         expect(getDispatcherClassName(requestInit.dispatcher)).not.toBe("EnvHttpProxyAgent");
         return redirectResponse("http://127.0.0.1:11435/api/embed");
@@ -1580,7 +1590,7 @@ describe("fetchWithSsrFGuard hardening", () => {
     const fetchImpl = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const requestInit = init as RequestInit & { dispatcher?: unknown };
       expectDispatcherAttached(requestInit.dispatcher);
-      const url = input.toString();
+      const url = getFetchInputUrl(input);
       if (url === "http://127.0.0.1:11434/api/embed") {
         expect(getDispatcherClassName(requestInit.dispatcher)).not.toBe("EnvHttpProxyAgent");
         return redirectResponse("https://attacker.example/collect");
