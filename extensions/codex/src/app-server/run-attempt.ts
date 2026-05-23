@@ -52,11 +52,7 @@ import {
   type NativeHookRelayEvent,
   type NativeHookRelayRegistrationHandle,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
-import {
-  markAuthProfileBlockedUntil,
-  resolveAgentConfig,
-  resolveAgentDir,
-} from "openclaw/plugin-sdk/agent-runtime";
+import { markAuthProfileBlockedUntil, resolveAgentDir } from "openclaw/plugin-sdk/agent-runtime";
 import {
   emitTrustedDiagnosticEvent,
   hasPendingInternalDiagnosticEvent,
@@ -120,6 +116,7 @@ import {
   CodexAppServerEventProjector,
   shouldEmitTranscriptToolProgress,
 } from "./event-projector.js";
+import { resolveCodexNativeExecutionPolicy } from "./native-execution-policy.js";
 import {
   buildCodexNativeHookRelayDisabledConfig,
   buildCodexNativeHookRelayConfig,
@@ -956,16 +953,22 @@ export async function runCodexAppServerAttempt(
     : resolveCodexAppServerEnvApiKeyCacheKey({
         startOptions: appServer.start,
       });
+  const nodeExecBlocksNativeExecution = isCodexNativeExecutionBlockedByNodeExecHost(params, {
+    agentId: sessionAgentId,
+    runtimeSessionKey: sandboxSessionKey,
+    sandbox,
+  });
   const bundleMcpThreadConfig = await loadCodexBundleMcpThreadConfig({
     workspaceDir: effectiveWorkspace,
     cfg: params.config,
     toolsEnabled: supportsModelTools(params.model),
     disableTools: params.disableTools,
-    toolsAllow: params.toolsAllow,
+    toolsAllow: nodeExecBlocksNativeExecution ? [] : params.toolsAllow,
   });
   const sandboxExecServerEnabled = isCodexSandboxExecServerEnabled(pluginConfig);
   const nativeToolSurfaceEnabled = shouldEnableCodexAppServerNativeToolSurface(params, sandbox, {
     agentId: sessionAgentId,
+    runtimeSessionKey: sandboxSessionKey,
     sandboxExecServerEnabled,
   });
   for (const diagnostic of bundleMcpThreadConfig.diagnostics) {
@@ -3953,12 +3956,22 @@ function includeForcedCodexDynamicToolAllow(
 function shouldEnableCodexAppServerNativeToolSurface(
   params: EmbeddedRunAttemptParams,
   sandbox?: OpenClawSandboxContext,
-  options: { agentId?: string; sandboxExecServerEnabled?: boolean } = {},
+  options: {
+    agentId?: string;
+    runtimeSessionKey?: string;
+    sandboxExecServerEnabled?: boolean;
+  } = {},
 ): boolean {
   if (isCodexMemoryFlushRun(params)) {
     return false;
   }
-  if (isEffectiveExecHostNode(params, options.agentId)) {
+  if (
+    isCodexNativeExecutionBlockedByNodeExecHost(params, {
+      agentId: options.agentId,
+      runtimeSessionKey: options.runtimeSessionKey,
+      sandbox,
+    })
+  ) {
     return false;
   }
   const toolsAllow = includeForcedCodexDynamicToolAllow(params.toolsAllow, params);
@@ -3974,11 +3987,34 @@ function shouldEnableCodexAppServerNativeToolSurface(
   );
 }
 
-function isEffectiveExecHostNode(params: EmbeddedRunAttemptParams, agentId?: string): boolean {
-  const agentExec =
-    params.config && agentId ? resolveAgentConfig(params.config, agentId)?.tools?.exec : undefined;
+function isCodexNativeExecutionBlockedByNodeExecHost(
+  params: EmbeddedRunAttemptParams,
+  options: {
+    agentId?: string;
+    runtimeSessionKey?: string;
+    sandbox?: OpenClawSandboxContext;
+  } = {},
+): boolean {
+  return !resolveCodexNativeExecutionPolicy({
+    config: params.config,
+    sessionKey: resolveCodexRuntimePolicySessionKey(params, options.runtimeSessionKey),
+    sessionId: params.sessionId,
+    agentId: options.agentId,
+    execOverrides: params.execOverrides,
+    sandboxAvailable: options.sandbox?.enabled,
+    readRuntimeSessionEntry: true,
+  }).nativeToolSurfaceAllowed;
+}
+
+function resolveCodexRuntimePolicySessionKey(
+  params: EmbeddedRunAttemptParams,
+  runtimeSessionKey?: string,
+): string | undefined {
   return (
-    (params.execOverrides?.host ?? agentExec?.host ?? params.config?.tools?.exec?.host) === "node"
+    runtimeSessionKey?.trim() ||
+    params.sandboxSessionKey?.trim() ||
+    params.sessionKey?.trim() ||
+    params.sessionId
   );
 }
 
@@ -4133,7 +4169,13 @@ function shouldExposeSandboxExecDynamicTool(input: DynamicToolBuildParams): bool
   if (isCodexMemoryFlushRun(input.params)) {
     return false;
   }
-  if (isEffectiveExecHostNode(input.params, input.sessionAgentId)) {
+  if (
+    isCodexNativeExecutionBlockedByNodeExecHost(input.params, {
+      agentId: input.sessionAgentId,
+      runtimeSessionKey: input.sandboxSessionKey,
+      sandbox: input.sandbox,
+    })
+  ) {
     return false;
   }
   const backendId = input.sandbox?.enabled ? input.sandbox.backendId.trim().toLowerCase() : "";
@@ -4159,7 +4201,11 @@ function addNodeShellDynamicToolsIfNeeded(
 ): OpenClawDynamicTool[] {
   if (
     isCodexMemoryFlushRun(input.params) ||
-    !isEffectiveExecHostNode(input.params, input.sessionAgentId)
+    !isCodexNativeExecutionBlockedByNodeExecHost(input.params, {
+      agentId: input.sessionAgentId,
+      runtimeSessionKey: input.sandboxSessionKey,
+      sandbox: input.sandbox,
+    })
   ) {
     return filteredTools;
   }

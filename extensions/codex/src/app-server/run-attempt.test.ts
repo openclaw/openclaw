@@ -931,6 +931,35 @@ describe("runCodexAppServerAttempt", () => {
     });
 
     expect(tools.map((tool) => tool.name)).toEqual(["message", "exec", "process"]);
+
+    const runtimePolicySessionFile = path.join(tempDir, "runtime-policy-session.jsonl");
+    const runtimePolicyParams = createParams(runtimePolicySessionFile, workspaceDir);
+    runtimePolicyParams.disableTools = false;
+    runtimePolicyParams.runtimePlan = createCodexRuntimePlanFixture();
+    runtimePolicyParams.sessionKey = "agent:main:session-1";
+    runtimePolicyParams.sandboxSessionKey = "agent:policy:session-1";
+    runtimePolicyParams.config = {
+      agents: {
+        list: [
+          { id: "main", tools: { exec: { host: "gateway" } } },
+          { id: "policy", tools: { exec: { host: "node", node: "worker-1" } } },
+        ],
+      },
+    } as never;
+    const runtimePolicyTools = await testing.buildDynamicTools({
+      params: runtimePolicyParams,
+      resolvedWorkspace: workspaceDir,
+      effectiveWorkspace: workspaceDir,
+      sandboxSessionKey: "agent:policy:session-1",
+      sandbox: { enabled: false, backendId: "docker" } as never,
+      nativeToolSurfaceEnabled: false,
+      runAbortController: new AbortController(),
+      sessionAgentId: "policy",
+      pluginConfig: {},
+      onYieldDetected: () => undefined,
+    });
+
+    expect(runtimePolicyTools.map((tool) => tool.name)).toEqual(["message", "exec", "process"]);
   });
 
   it("exposes Docker sandbox shell tools when native Code Mode cannot honor sandbox paths", async () => {
@@ -1916,6 +1945,16 @@ describe("runCodexAppServerAttempt", () => {
 
     expect(testing.shouldEnableCodexAppServerNativeToolSurface(globalParams)).toBe(false);
 
+    const autoOverrideParams = createParams(
+      path.join(tempDir, "auto-override-session.jsonl"),
+      workspaceDir,
+    );
+    autoOverrideParams.disableTools = false;
+    autoOverrideParams.config = { tools: { exec: { host: "node" } } } as never;
+    autoOverrideParams.execOverrides = { host: "auto" };
+
+    expect(testing.shouldEnableCodexAppServerNativeToolSurface(autoOverrideParams)).toBe(true);
+
     const agentParams = createParams(path.join(tempDir, "agent-session.jsonl"), workspaceDir);
     agentParams.disableTools = false;
     agentParams.config = {
@@ -1929,6 +1968,24 @@ describe("runCodexAppServerAttempt", () => {
         agentId: "main",
       }),
     ).toBe(false);
+
+    const runtimePolicyParams = createParams(
+      path.join(tempDir, "runtime-policy-session.jsonl"),
+      workspaceDir,
+    );
+    runtimePolicyParams.disableTools = false;
+    runtimePolicyParams.sessionKey = "agent:main:session-1";
+    runtimePolicyParams.sandboxSessionKey = "agent:policy:session-1";
+    runtimePolicyParams.config = {
+      agents: {
+        list: [
+          { id: "main", tools: { exec: { host: "gateway" } } },
+          { id: "policy", tools: { exec: { host: "node", node: "worker-1" } } },
+        ],
+      },
+    } as never;
+
+    expect(testing.shouldEnableCodexAppServerNativeToolSurface(runtimePolicyParams)).toBe(false);
   });
 
   it("disables Codex native tool surfaces whenever an OpenClaw sandbox is active", () => {

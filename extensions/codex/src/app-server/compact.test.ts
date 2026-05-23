@@ -66,6 +66,16 @@ function startSandboxedCompaction(sessionFile: string) {
   });
 }
 
+function startNodeExecCompaction(sessionFile: string) {
+  return maybeCompactCodexAppServerSession({
+    sessionId: "session-1",
+    sessionKey: "agent:main:session-1",
+    sessionFile,
+    workspaceDir: tempDir,
+    config: { tools: { exec: { host: "node", node: "worker-1" } } },
+  });
+}
+
 type CompactResult = NonNullable<Awaited<ReturnType<typeof maybeCompactCodexAppServerSession>>>;
 
 function requireCompactResult(result: CompactResult | undefined): CompactResult {
@@ -146,6 +156,21 @@ describe("maybeCompactCodexAppServerSession", () => {
     expect(result.compacted).toBe(false);
     expect(result.reason).toContain(
       "Codex-native native compaction is unavailable because OpenClaw sandboxing is active for this session.",
+    );
+    expect(fake.request).not.toHaveBeenCalled();
+  });
+
+  it("blocks native app-server compaction when exec host=node is active", async () => {
+    const fake = createFakeCodexClient();
+    setCodexAppServerClientFactoryForTest(async () => fake.client);
+    const sessionFile = await writeTestBinding();
+
+    const result = requireCompactResult(await startNodeExecCompaction(sessionFile));
+
+    expect(result.ok).toBe(false);
+    expect(result.compacted).toBe(false);
+    expect(result.reason).toContain(
+      "Codex-native native compaction is unavailable because OpenClaw exec host=node is active for this session.",
     );
     expect(fake.request).not.toHaveBeenCalled();
   });
