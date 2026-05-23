@@ -66,27 +66,13 @@ import { resolveClaudeAppServerConfig, type ResolvedClaudeAppServerConfig } from
 import { createClaudeDynamicToolBridge, type ClaudeDynamicToolBridge } from "./dynamic-tools.js";
 import { ClaudeAppServerEventProjector } from "./event-projector.js";
 import {
-  assertThreadStartResponse,
   assertTurnStartParams,
   assertTurnStartResponse,
   readDynamicToolCallParams,
 } from "./protocol-validators.js";
 import { startOrResumeClaudeThread } from "./thread-lifecycle.js";
-import {
-  readClaudeAppServerBinding,
-  writeClaudeAppServerBinding,
-  type ClaudeAppServerBinding,
-} from "./thread-store.js";
 import { mirrorClaudeAppServerTranscript } from "./transcript-mirror.js";
-import type {
-  ApprovalPolicy,
-  DynamicToolCallParams,
-  JsonValue,
-  ThreadStartParams,
-  Turn,
-  TurnStartParams,
-  UserInput,
-} from "./types.js";
+import type { ApprovalPolicy, JsonValue, TurnStartParams, UserInput } from "./types.js";
 import { filterToolsForVisionInputs, modelSupportsVision } from "./vision-tools.js";
 
 export type RunClaudeAppServerAttemptOptions = {

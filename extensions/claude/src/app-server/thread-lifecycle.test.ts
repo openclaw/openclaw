@@ -35,6 +35,8 @@ function makeBridge(): ClaudeDynamicToolBridge {
 function makeClient(opts: {
   threadStartResponse?: unknown;
   threadResumeError?: unknown;
+  threadForkResponse?: unknown;
+  threadForkError?: unknown;
 }): ClaudeAppServerClient {
   const request = vi.fn(async (method: string) => {
     if (method === "thread/start") {
@@ -52,6 +54,19 @@ function makeClient(opts: {
         throw opts.threadResumeError;
       }
       return { thread: { id: "thr_resumed_001" } };
+    }
+    if (method === "thread/fork") {
+      if (opts.threadForkError) {
+        throw opts.threadForkError;
+      }
+      return (
+        opts.threadForkResponse ?? {
+          thread: { id: "thr_forked_001" },
+          model: "claude-sonnet-4-6",
+          modelProvider: "anthropic",
+          cwd: "/tmp",
+        }
+      );
     }
     return {};
   });
@@ -140,14 +155,59 @@ describe("startOrResumeClaudeThread", () => {
     expect(result.threadId).toBe("thr_existing_001");
   });
 
-  it("rotates to a fresh thread when dynamic-tools fingerprint changes", async () => {
+  it("forks the thread when dynamic-tools fingerprint changes (transcript preserved)", async () => {
     await seedBinding(sessionFile, {
       threadId: "thr_existing_002",
       dynamicToolsFingerprint: "fp-OLD",
       developerInstructionsFingerprint: STABLE_DEVINSTRUCTIONS_FP,
     });
+    const request = vi.fn(async (method: string) => {
+      if (method === "thread/fork") {
+        return { thread: { id: "thr_after_fork" } };
+      }
+      return {};
+    });
+    const client = { request } as unknown as ClaudeAppServerClient;
+    const result = await startOrResumeClaudeThread({
+      client,
+      params: makeParams(sessionFile),
+      cfg: BASE_CFG,
+      bridge: makeBridge(),
+      developerInstructions: "x",
+      developerInstructionsFingerprint: STABLE_DEVINSTRUCTIONS_FP,
+      dynamicToolsFingerprint: STABLE_DYNAMIC_TOOLS_FP,
+      effectiveWorkspace: "/tmp/ws",
+      nativeDisallowedTools: [],
+    });
+    expect(result.outcome).toBe("forked");
+    expect(result.threadId).toBe("thr_after_fork");
+    expect(result.forkedFromThreadId).toBe("thr_existing_002");
+    expect(result.rotationReason).toContain("dynamic tool catalog changed");
+    expect(request).toHaveBeenCalledWith(
+      "thread/fork",
+      expect.objectContaining({
+        threadId: "thr_existing_002",
+        dynamicToolsFingerprint: STABLE_DYNAMIC_TOOLS_FP,
+      }),
+    );
+    // No thread/start should fire: this is a fork, not a fresh rotation.
+    expect(request).not.toHaveBeenCalledWith("thread/start", expect.anything());
+    // Binding sidecar rotates to the forked thread id with the new fingerprint.
+    const binding = await readClaudeAppServerBinding(sessionFile);
+    expect(binding?.threadId).toBe("thr_after_fork");
+    expect(binding?.dynamicToolsFingerprint).toBe(STABLE_DYNAMIC_TOOLS_FP);
+  });
+
+  it("falls back to fresh thread/start when thread/fork reports thread-not-found", async () => {
+    await seedBinding(sessionFile, {
+      threadId: "thr_gone",
+      dynamicToolsFingerprint: "fp-OLD",
+      developerInstructionsFingerprint: STABLE_DEVINSTRUCTIONS_FP,
+    });
+    const forkNotFound = Object.assign(new Error("thread not found"), { code: -32004 });
     const client = makeClient({
-      threadStartResponse: { thread: { id: "thr_after_rotate" } },
+      threadForkError: forkNotFound,
+      threadStartResponse: { thread: { id: "thr_fork_fallback" } },
     });
     const result = await startOrResumeClaudeThread({
       client,
@@ -161,8 +221,32 @@ describe("startOrResumeClaudeThread", () => {
       nativeDisallowedTools: [],
     });
     expect(result.outcome).toBe("started");
-    expect(result.threadId).toBe("thr_after_rotate");
+    expect(result.threadId).toBe("thr_fork_fallback");
     expect(result.rotationReason).toContain("dynamic tool catalog changed");
+    expect(result.forkedFromThreadId).toBeUndefined();
+  });
+
+  it("propagates non-thread-not-found errors from thread/fork", async () => {
+    await seedBinding(sessionFile, {
+      threadId: "thr_a",
+      dynamicToolsFingerprint: "fp-OLD",
+      developerInstructionsFingerprint: STABLE_DEVINSTRUCTIONS_FP,
+    });
+    const transportError = new Error("ECONNRESET");
+    const client = makeClient({ threadForkError: transportError });
+    await expect(
+      startOrResumeClaudeThread({
+        client,
+        params: makeParams(sessionFile),
+        cfg: BASE_CFG,
+        bridge: makeBridge(),
+        developerInstructions: "x",
+        developerInstructionsFingerprint: STABLE_DEVINSTRUCTIONS_FP,
+        dynamicToolsFingerprint: STABLE_DYNAMIC_TOOLS_FP,
+        effectiveWorkspace: "/tmp/ws",
+        nativeDisallowedTools: [],
+      }),
+    ).rejects.toThrow("ECONNRESET");
   });
 
   it("falls back to fresh start when thread/resume reports thread-not-found", async () => {

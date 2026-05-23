@@ -75,14 +75,25 @@ export type ThreadLifecycleOutcome = {
   threadId: string;
   /**
    * "resumed" if the thread existed and was patched in-place;
-   * "started"  if a fresh thread/start was issued.
+   * "forked"  if catalog drift triggered a thread/fork (transcript
+   *           carried forward, new tools registered with the fresh
+   *           SDK session);
+   * "started" if a fresh thread/start was issued (first turn for the
+   *           session, or fork fell back to start because the parent
+   *           thread was gone server-side).
    */
-  outcome: "resumed" | "started";
+  outcome: "resumed" | "forked" | "started";
   /**
-   * Populated when outcome="started" AND the rotation was driven by a
-   * binding-compatibility check (vs first-ever turn for this session).
+   * Populated when outcome="forked" or outcome="started" with a binding
+   * present (vs first-ever turn for this session).
    */
   rotationReason?: string;
+  /**
+   * Set when outcome="forked": the parent thread id the new thread was
+   * forked from. Lets callers (transcript mirror, logging) tag
+   * continuity-relevant context.
+   */
+  forkedFromThreadId?: string;
 };
 
 /**
@@ -130,11 +141,41 @@ export async function startOrResumeClaudeThread(
       });
     }
   } else if (existing && rotationReason) {
-    embeddedAgentLog.info("claude-bridge: rotating thread (transcript will reset)", {
-      sessionFile,
-      previousThreadId: existing.threadId,
-      reason: rotationReason,
-    });
+    embeddedAgentLog.info(
+      "claude-bridge: rotating thread via thread/fork (transcript preserved, new SDK session)",
+      {
+        sessionFile,
+        previousThreadId: existing.threadId,
+        reason: rotationReason,
+      },
+    );
+    try {
+      const forkedThreadId = await forkThreadOnCatalogDrift({
+        client,
+        existing,
+        params,
+        cfg,
+        bridge,
+        developerInstructions,
+        developerInstructionsFingerprint,
+        dynamicToolsFingerprint,
+        effectiveWorkspace,
+      });
+      return {
+        threadId: forkedThreadId,
+        outcome: "forked",
+        rotationReason,
+        forkedFromThreadId: existing.threadId,
+      };
+    } catch (err) {
+      if (!isThreadNotFound(err)) {
+        throw err;
+      }
+      embeddedAgentLog.warn(
+        "claude-bridge: thread/fork hit thread-not-found; falling back to fresh thread/start",
+        { sessionFile, previousThreadId: existing.threadId },
+      );
+    }
   }
 
   const threadId = await startFreshThread({
@@ -225,6 +266,60 @@ async function tryResumeWithPatch(args: {
     });
   }
   return existing.threadId;
+}
+
+// ── fork path: thread/fork with new catalog, transcript carried forward ────
+
+async function forkThreadOnCatalogDrift(args: {
+  client: ClaudeAppServerClient;
+  existing: ClaudeAppServerBinding;
+  params: EmbeddedRunAttemptParams;
+  cfg: ResolvedClaudeAppServerConfig;
+  bridge: ClaudeDynamicToolBridge;
+  developerInstructions: string;
+  developerInstructionsFingerprint: string;
+  dynamicToolsFingerprint: string;
+  effectiveWorkspace: string;
+}): Promise<string> {
+  const {
+    client,
+    existing,
+    params,
+    cfg,
+    bridge,
+    developerInstructions,
+    developerInstructionsFingerprint,
+    dynamicToolsFingerprint,
+    effectiveWorkspace,
+  } = args;
+
+  const forkParams = {
+    threadId: existing.threadId,
+    cwd: effectiveWorkspace,
+    model: params.modelId,
+    modelProvider: "anthropic",
+    baseInstructions: developerInstructions,
+    dynamicTools: bridge.specs,
+    dynamicToolsFingerprint,
+  };
+  const rawResponse = await client.request<unknown>("thread/fork", forkParams);
+  const response = assertThreadStartResponse(rawResponse);
+  const newThreadId = response.thread.id;
+
+  if (params.sessionFile) {
+    await writeClaudeAppServerBinding(params.sessionFile, {
+      threadId: newThreadId,
+      cwd: effectiveWorkspace,
+      model: params.modelId,
+      modelProvider: "anthropic",
+      approvalPolicy: cfg.appServer.approvalPolicy,
+      approvalsReviewer: "user",
+      sandbox: cfg.appServer.sandbox,
+      developerInstructionsFingerprint,
+      dynamicToolsFingerprint,
+    });
+  }
+  return newThreadId;
 }
 
 // ── start path: fresh thread/start + binding persistence ────────────────────

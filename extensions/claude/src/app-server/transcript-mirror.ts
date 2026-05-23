@@ -41,10 +41,13 @@ export type ClaudeTranscriptMirrorParams = {
   turnId: string;
   /**
    * "started" if startOrResumeClaudeThread issued a fresh thread/start;
-   * "resumed" if it patched an existing binding. Tagged into the first
-   * mirrored assistant message so replay tooling can distinguish.
+   * "resumed" if it patched an existing binding;
+   * "forked"  if catalog drift triggered a thread/fork (transcript
+   *           carried forward from the parent; new SDK session).
+   * Tagged into the first mirrored assistant message so replay tooling
+   * can distinguish.
    */
-  lifecycleOutcome: "started" | "resumed";
+  lifecycleOutcome: "started" | "resumed" | "forked";
   acc: ProjectorAccumulator;
   config?: SessionWriteLockAcquireTimeoutConfig;
 };
@@ -138,7 +141,7 @@ async function readTranscriptIdempotencyKeys(sessionFile: string): Promise<Set<s
 export function buildMirrorMessages(params: {
   threadId: string;
   turnId: string;
-  lifecycleOutcome: "started" | "resumed";
+  lifecycleOutcome: "started" | "resumed" | "forked";
   acc: ProjectorAccumulator;
 }): AgentMessage[] {
   const out: AgentMessage[] = [];

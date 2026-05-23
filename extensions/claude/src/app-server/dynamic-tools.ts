@@ -147,20 +147,17 @@ export function createClaudeDynamicToolBridge(params: {
     ...(params.directToolNames ?? []),
   ]);
   const specs: DynamicToolSpec[] = wrappedTools.map((tool) => {
-    const base: DynamicToolSpec = {
+    const spec: DynamicToolSpec = {
       name: tool.name,
       description: tool.description ?? "",
       // TypeBox schemas are JSON-Schema-shaped; ship verbatim.
       inputSchema: (tool.parameters ?? { type: "object", additionalProperties: true }) as JsonValue,
     };
-    if (loading === "direct" || directToolNames.has(tool.name)) {
-      return base;
+    if (loading !== "direct" && !directToolNames.has(tool.name)) {
+      spec.namespace = CLAUDE_OPENCLAW_DYNAMIC_TOOL_NAMESPACE;
+      spec.deferLoading = true;
     }
-    return {
-      ...base,
-      namespace: CLAUDE_OPENCLAW_DYNAMIC_TOOL_NAMESPACE,
-      deferLoading: true,
-    };
+    return spec;
   });
   const telemetry: ClaudeDynamicToolTelemetry = {
     didSendViaMessagingTool: false,

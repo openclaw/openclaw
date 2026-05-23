@@ -77,13 +77,6 @@ const dynamicToolsConfigSchema = z
   })
   .strict();
 
-const pluginConfigSchema = z
-  .object({
-    appServer: appServerConfigSchema.optional(),
-    dynamicTools: dynamicToolsConfigSchema.optional(),
-  })
-  .strict();
-
 // ── public types ────────────────────────────────────────────────────────────
 
 export type ClaudeAppServerRuntimeConfig = {

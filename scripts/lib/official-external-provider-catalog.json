@@ -15,7 +15,10 @@
             "id": "amazon-bedrock",
             "name": "Amazon Bedrock",
             "docs": "/providers/bedrock",
-            "categories": ["cloud", "llm"]
+            "categories": [
+              "cloud",
+              "llm"
+            ]
           }
         ],
         "install": {
@@ -40,7 +43,10 @@
             "id": "amazon-bedrock-mantle",
             "name": "Amazon Bedrock Mantle",
             "docs": "/providers/bedrock-mantle",
-            "categories": ["cloud", "llm"]
+            "categories": [
+              "cloud",
+              "llm"
+            ]
           }
         ],
         "install": {
@@ -65,30 +71,16 @@
             "id": "anthropic-vertex",
             "name": "Anthropic Vertex",
             "docs": "/providers/models",
-            "categories": ["cloud", "llm"]
+            "categories": [
+              "cloud",
+              "llm"
+            ]
           }
         ],
         "install": {
           "npmSpec": "@openclaw/anthropic-vertex-provider",
           "defaultChoice": "npm",
           "minHostVersion": ">=2026.5.12-beta.1"
-        }
-      }
-    },
-    {
-      "name": "@openclaw/claude",
-      "description": "OpenClaw Claude harness plugin — delegates Anthropic turns to @openclaw/claude-app-server via codex-shaped JSON-RPC over stdio.",
-      "source": "official",
-      "kind": "harness",
-      "openclaw": {
-        "plugin": {
-          "id": "claude",
-          "label": "Claude"
-        },
-        "install": {
-          "npmSpec": "@openclaw/claude",
-          "defaultChoice": "npm",
-          "minHostVersion": ">=2026.5.1-beta.1"
         }
       }
     },
@@ -107,7 +99,10 @@
             "id": "codex",
             "name": "Codex",
             "docs": "/providers/models",
-            "categories": ["cloud", "llm"],
+            "categories": [
+              "cloud",
+              "llm"
+            ],
             "authChoices": [
               {
                 "method": "app-server",
@@ -118,7 +113,9 @@
                 "groupId": "codex",
                 "groupLabel": "Codex",
                 "groupHint": "Codex app-server model provider",
-                "onboardingScopes": ["text-inference"]
+                "onboardingScopes": [
+                  "text-inference"
+                ]
               }
             ]
           }
