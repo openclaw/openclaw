@@ -19,7 +19,6 @@ const deprecatedTargetParserCallPattern =
   /\.parseExplicitTarget\?\.\s*\(|parseExplicitTargetFor(?:Channel|LoadedChannel)\s*\(|resolveRouteTargetFor(?:Channel|LoadedChannel)\s*\(/u;
 const deprecatedTargetParserCompatFiles = new Set([
   "src/auto-reply/reply/group-id.ts",
-  "src/channels/plugins/target-parsing.ts",
   "src/channels/plugins/target-parsing-loaded.ts",
   "src/channels/plugins/target-parsing.test.ts",
   "src/infra/outbound/outbound-session.ts",
@@ -192,16 +191,6 @@ const knownDeprecatedSurfaceMarkers = [
     code: "channel-explicit-target-parser",
     file: "src/channels/plugins/target-parsing-loaded.ts",
     marker: "resolveRouteTargetForLoadedChannel",
-  },
-  {
-    code: "channel-explicit-target-parser",
-    file: "src/channels/plugins/target-parsing.ts",
-    marker: "parseExplicitTargetForChannel",
-  },
-  {
-    code: "channel-explicit-target-parser",
-    file: "src/channels/plugins/target-parsing.ts",
-    marker: "resolveRouteTargetForChannel",
   },
   {
     code: "channel-messaging-targets-subpath",

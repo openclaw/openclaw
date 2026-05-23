@@ -475,9 +475,8 @@ releases.
     cron delivery, and session routing.
 
     Do not add new uses of `ChannelMessagingAdapter.parseExplicitTarget` or
-    the parser-backed route helpers (`parseExplicitTargetForChannel`,
-    `parseExplicitTargetForLoadedChannel`, `resolveRouteTargetForChannel`, or
-    `resolveRouteTargetForLoadedChannel`) or
+    the parser-backed loaded-route helpers (`parseExplicitTargetForLoadedChannel`
+    or `resolveRouteTargetForLoadedChannel`) or
     `resolveChannelRouteTargetWithParser(...)` from `plugin-sdk/channel-route`.
     Those hooks are deprecated and remain only for older plugins during the
     migration window. New channel plugins should use
