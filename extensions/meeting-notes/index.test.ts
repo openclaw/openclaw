@@ -1,9 +1,9 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import type { AnyAgentTool, OpenClawPluginService } from "openclaw/plugin-sdk/plugin-entry";
+import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { AnyAgentTool, OpenClawPluginService } from "../../src/plugin-sdk/plugin-entry.js";
-import { createTestPluginApi } from "../../src/plugin-sdk/plugin-test-api.js";
 import { MeetingNotesStore } from "./src/store.js";
 
 const { getMeetingNotesSourceProviderMock } = vi.hoisted(() => ({
@@ -11,15 +11,7 @@ const { getMeetingNotesSourceProviderMock } = vi.hoisted(() => ({
 }));
 
 vi.mock("openclaw/plugin-sdk/meeting-notes", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../src/plugin-sdk/meeting-notes.js")>();
-  return {
-    ...actual,
-    getMeetingNotesSourceProvider: getMeetingNotesSourceProviderMock,
-  };
-});
-
-vi.mock("../../src/plugin-sdk/meeting-notes.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../src/plugin-sdk/meeting-notes.js")>();
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/meeting-notes")>();
   return {
     ...actual,
     getMeetingNotesSourceProvider: getMeetingNotesSourceProviderMock,
