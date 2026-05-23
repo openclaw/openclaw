@@ -2316,4 +2316,19 @@ describe("image compression policy", () => {
       models: [{ maxSidePx: 1568, preferredSidePx: 1568, tokenMode: "provider" }],
     });
   });
+
+  it("resolves providerless overrides before reading compression metadata", async () => {
+    await expect(
+      testing.resolveImageCompressionPolicy({
+        cfg: cfgWithImageModelMetadata,
+        imageModelConfig: {
+          primary: "anthropic/claude-opus-4-6",
+        },
+        modelOverride: "gpt-5.5",
+        imageCount: 1,
+      }),
+    ).resolves.toMatchObject({
+      models: [{ maxSidePx: 6000, preferredSidePx: 2048, tokenMode: "detail" }],
+    });
+  });
 });

@@ -31,6 +31,10 @@ import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.
 import { resolveUserPath } from "../../utils.js";
 import type { AuthProfileStore } from "../auth-profiles/types.js";
 import { isMinimaxVlmProvider } from "../minimax-vlm.js";
+import {
+  resolveImageFallbackCandidates,
+  resolveImageFallbackDefaultProvider,
+} from "../model-fallback.js";
 import { resolveModelAsync } from "../pi-embedded-runner/model.js";
 import {
   coerceImageAssistantText,
@@ -280,42 +284,29 @@ function pickMaxBytes(cfg?: OpenClawConfig, maxBytesMb?: number): number | undef
   return undefined;
 }
 
-function splitModelRef(ref: string | undefined): { provider?: string; model?: string } {
-  const trimmed = ref?.trim();
-  if (!trimmed) {
-    return {};
-  }
-  const separator = trimmed.indexOf("/");
-  if (separator <= 0 || separator === trimmed.length - 1) {
-    return { model: trimmed };
-  }
-  return {
-    provider: trimmed.slice(0, separator),
-    model: trimmed.slice(separator + 1),
-  };
-}
-
-function resolveCompressionModelRefs(params: {
+function resolveCompressionModelCandidates(params: {
   cfg?: OpenClawConfig;
   imageModelConfig?: ImageModelConfig | null;
   modelOverride?: string;
-}): string[] {
-  const refs: string[] = [];
+}): Array<{ provider: string; model: string }> {
   const overrideConfig = resolveImageModelConfigForOverride({
     cfg: params.cfg,
     modelOverride: params.modelOverride,
   });
-  const primary = overrideConfig?.primary ?? params.imageModelConfig?.primary;
-  if (primary?.trim()) {
-    refs.push(primary.trim());
-  }
-  for (const fallback of params.imageModelConfig?.fallbacks ?? []) {
-    const trimmed = fallback.trim();
-    if (trimmed) {
-      refs.push(trimmed);
-    }
-  }
-  return [...new Set(refs)];
+  const configuredImageModelConfig = params.imageModelConfig
+    ? resolveConfiguredImageModelRefs({
+        cfg: params.cfg,
+        imageModelConfig: params.imageModelConfig,
+      })
+    : null;
+  const effectiveImageModelConfig = overrideConfig ?? configuredImageModelConfig;
+  const effectiveCfg = effectiveImageModelConfig
+    ? applyImageModelConfigDefaults(params.cfg, effectiveImageModelConfig)
+    : params.cfg;
+  return resolveImageFallbackCandidates({
+    cfg: effectiveCfg,
+    defaultProvider: resolveImageFallbackDefaultProvider(effectiveCfg),
+  });
 }
 
 async function resolveImageCompressionPolicy(params: {
@@ -326,18 +317,14 @@ async function resolveImageCompressionPolicy(params: {
   agentDir?: string;
   workspaceDir?: string;
 }): Promise<ImageCompressionPolicy> {
-  const modelRefs = resolveCompressionModelRefs(params);
+  const modelCandidates = resolveCompressionModelCandidates(params);
   const quality = params.cfg?.agents?.defaults?.imageQuality;
   const models: ImageCompressionModelPolicy[] = await Promise.all(
-    modelRefs.map(async (modelRef): Promise<ImageCompressionModelPolicy> => {
-      const parsed = splitModelRef(modelRef);
-      if (!parsed.provider || !parsed.model) {
-        return {};
-      }
+    modelCandidates.map(async (candidate): Promise<ImageCompressionModelPolicy> => {
       try {
         const resolved = await resolveModelAsync(
-          parsed.provider,
-          parsed.model,
+          candidate.provider,
+          candidate.model,
           params.agentDir,
           params.cfg,
           {
