@@ -277,8 +277,8 @@ importers:
         specifier: 0.14.0
         version: 0.14.0
       acpx:
-        specifier: 0.8.0
-        version: 0.8.0
+        specifier: 0.10.0
+        version: 0.10.0
       zod:
         specifier: 4.4.3
         version: 4.4.3
@@ -1809,11 +1809,6 @@ packages:
   '@agentclientprotocol/claude-agent-acp@0.36.1':
     resolution: {integrity: sha512-836UDBbfKNdwLCjyY2NNzHBaH2iQZrg2XqMSdD07wPY+iA9vocy1uw5MWv4AZB4B4JRZPJJxZ0wZryyacAyv5w==}
     hasBin: true
-
-  '@agentclientprotocol/sdk@0.21.1':
-    resolution: {integrity: sha512-ZTLH+o9QxcZDLX/9ww+W7C2iExnXFM+vD/uGFVSlR61Kzj9FaxUqBC6Rv/kwgA7qVWYUEI9c5ZNqCuO9PM4rKg==}
-    peerDependencies:
-      zod: ^3.25.0 || ^4.0.0
 
   '@agentclientprotocol/sdk@0.22.0':
     resolution: {integrity: sha512-mnkpiuEfGm7/snhWbrRhe3Hk+WDDjv7U2N/Ql0XiThl9zg7T984dPH8Tich4wlBQnaaXTV4Fl5OQSe2pa9hoFA==}
@@ -4220,8 +4215,8 @@ packages:
     engines: {node: '>=0.4.0'}
     hasBin: true
 
-  acpx@0.8.0:
-    resolution: {integrity: sha512-mI8ma3sDz8QfI2c40iiOAQ3iklpdv0XB7YFieOIcZZWw8dBTGsbFn4qqgbKQjDBX8S/yIWiKvmqi5j/L8c2kUQ==}
+  acpx@0.10.0:
+    resolution: {integrity: sha512-hd48XV03gG3sd409T1lDrOKJTTz1ap4g0wrndXjxQ590tN85pBYlvfNLyerybvGRrtUGsZjNdt99r1jpIt6ukA==}
     engines: {node: '>=22.13.0'}
     hasBin: true
 
@@ -7171,10 +7166,6 @@ snapshots:
       - '@anthropic-ai/sdk'
       - '@modelcontextprotocol/sdk'
 
-  '@agentclientprotocol/sdk@0.21.1(zod@4.4.3)':
-    dependencies:
-      zod: 4.4.3
-
   '@agentclientprotocol/sdk@0.22.0(zod@4.4.3)':
     dependencies:
       zod: 4.4.3
@@ -9773,9 +9764,9 @@ snapshots:
 
   acorn@8.16.0: {}
 
-  acpx@0.8.0:
+  acpx@0.10.0:
     dependencies:
-      '@agentclientprotocol/sdk': 0.21.1(zod@4.4.3)
+      '@agentclientprotocol/sdk': 0.22.1(zod@4.4.3)
       commander: 14.0.3
       skillflag: 0.1.4
       tsx: 4.22.3
