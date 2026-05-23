@@ -32,15 +32,13 @@ export function buildDefaultControlUiAllowedOrigins(params: {
   bind: unknown;
   customBindHost?: string;
 }): string[] {
-  const origins = new Set<string>([
+  // Safe automatic defaults are loopback-only.  Non-loopback gateway binds still
+  // need CORS protection, but LAN/tailnet/custom browser origins must be
+  // configured explicitly by the operator instead of inferred from bind mode.
+  return [
     `http://localhost:${params.port}`,
     `http://127.0.0.1:${params.port}`,
-  ]);
-  const customBindHost = params.customBindHost?.trim();
-  if (params.bind === "custom" && customBindHost) {
-    origins.add(`http://${customBindHost}:${params.port}`);
-  }
-  return [...origins];
+  ];
 }
 
 export function ensureControlUiAllowedOriginsForNonLoopbackBind(
