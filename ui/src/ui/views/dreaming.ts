@@ -540,9 +540,9 @@ function formatMemoryPalaceClusterSummary(cluster: WikiMemoryPalace["clusters"][
   }
   if (cluster.questionCount > 0) {
     const questionPageCount = cluster.items.filter((item) => item.questionCount > 0).length;
-    parts.push(
-      `${formatCount(cluster.questionCount, "open question")} on ${formatCount(questionPageCount, "page")}`,
-    );
+    const questionPageSuffix =
+      questionPageCount > 0 ? ` on ${formatCount(questionPageCount, "page")}` : "";
+    parts.push(`${formatCount(cluster.questionCount, "open question")}${questionPageSuffix}`);
   }
   if (cluster.contradictionCount > 0) {
     parts.push(formatCount(cluster.contradictionCount, "contradiction"));
