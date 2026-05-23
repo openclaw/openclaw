@@ -96,6 +96,11 @@ import {
 let tempDir: string;
 let codexAppServerClientFactoryForTest: CodexAppServerClientFactory | undefined;
 const fastWait = { interval: 1, timeout: 5_000 } as const;
+const appServerHarnessWait = { interval: 1, timeout: 120_000 } as const;
+const activeAppServerAttemptsForTest = new Set<{
+  abortController?: AbortController;
+  promise: Promise<unknown>;
+}>();
 
 type RunCodexAppServerAttemptOptions = NonNullable<
   Parameters<typeof runCodexAppServerAttemptImpl>[1]
@@ -150,10 +155,38 @@ function runCodexAppServerAttempt(
   options: RunCodexAppServerAttemptOptions = {},
 ) {
   const clientFactory = options.clientFactory ?? codexAppServerClientFactoryForTest;
-  return runCodexAppServerAttemptImpl(
-    params,
+  const abortController = params.abortSignal ? undefined : new AbortController();
+  const trackedParams = abortController
+    ? ({ ...params, abortSignal: abortController.signal } as EmbeddedRunAttemptParams)
+    : params;
+  const entry = {
+    abortController,
+    promise: undefined as unknown as Promise<unknown>,
+  };
+  const promise = runCodexAppServerAttemptImpl(
+    trackedParams,
     clientFactory ? { ...options, clientFactory } : options,
-  );
+  ).finally(() => {
+    activeAppServerAttemptsForTest.delete(entry);
+  });
+  entry.promise = promise;
+  activeAppServerAttemptsForTest.add(entry);
+  promise.catch(() => undefined);
+  return promise;
+}
+
+async function drainActiveAppServerAttemptsForTest(): Promise<void> {
+  const attempts = [...activeAppServerAttemptsForTest];
+  if (attempts.length === 0) {
+    return;
+  }
+  for (const attempt of attempts) {
+    attempt.abortController?.abort("test_cleanup");
+  }
+  await Promise.race([
+    Promise.allSettled(attempts.map((attempt) => attempt.promise)),
+    new Promise<void>((resolve) => setTimeout(resolve, 5_000)),
+  ]);
 }
 
 function createParams(sessionFile: string, workspaceDir: string): EmbeddedRunAttemptParams {
@@ -367,7 +400,7 @@ function createAppServerHarness(
   const waitForServerRequestHandler = async () => {
     await vi.waitFor(() => expect(handleServerRequest).toBeTypeOf("function"), {
       interval: 1,
-      timeout: 30_000,
+      timeout: appServerHarnessWait.timeout,
     });
     return handleServerRequest!;
   };
@@ -375,7 +408,7 @@ function createAppServerHarness(
   return {
     request,
     requests,
-    async waitForMethod(method: string, timeoutMs = 30_000) {
+    async waitForMethod(method: string, timeoutMs = appServerHarnessWait.timeout) {
       await vi.waitFor(
         () => {
           if (!requests.some((entry) => entry.method === method)) {
@@ -837,6 +870,8 @@ describe("runCodexAppServerAttempt", () => {
   });
 
   afterEach(async () => {
+    await drainActiveAppServerAttemptsForTest();
+    await closeCodexSandboxExecServersForTests();
     resetCodexAppServerClientFactoryForTest();
     testing.resetOpenClawCodingToolsFactoryForTests();
     resetCodexRateLimitCacheForTests();
