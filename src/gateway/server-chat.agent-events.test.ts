@@ -2800,4 +2800,76 @@ describe("agent event handler", () => {
       }
     });
   });
+
+  describe("spawnedByCache memory leak", () => {
+    // Прямой тест утечки: измеряем size самого spawnedByCache после N прогонов
+    // с уникальными sessionKey.
+    //
+    // spawnedByCache живёт в замыкании createAgentEventHandler — снаружи
+    // обратиться к нему нельзя. Поэтому на время вызова createHarness() подменяем
+    // глобальный Map на класс-обёртку, который пушит каждый созданный экземпляр
+    // в массив. Сразу после создания handler'а восстанавливаем оригинальный Map.
+    //
+    // Среди пойманных Map'ов spawnedByCache идентифицируется однозначно:
+    // это единственный Map, у которого ключ — sessionKey формата
+    // "agent:*:subagent:*", а значение — строка spawnedBy.
+    //
+    // Без фикса: после N прогонов size === N (каждая запись осела).
+    // С фиксом: size === 0 (каждая запись удалена на lifecycle:end).
+    it("spawnedByCache size stays at 0 after N runs with unique sessionKeys", () => {
+      const trackedMaps: Map<unknown, unknown>[] = [];
+      const OriginalMap = global.Map;
+      class TrackedMap<K, V> extends OriginalMap<K, V> {
+        constructor(entries?: readonly (readonly [K, V])[] | null) {
+          super(entries ?? undefined);
+          trackedMaps.push(this as unknown as Map<unknown, unknown>);
+        }
+      }
+      // @ts-expect-error — временная подмена глобального конструктора
+      global.Map = TrackedMap;
+      let handler: ReturnType<typeof createHarness>["handler"];
+      let chatRunState: ReturnType<typeof createHarness>["chatRunState"];
+      try {
+        ({ handler, chatRunState } = createHarness());
+      } finally {
+        global.Map = OriginalMap;
+      }
+
+      vi.mocked(loadGatewaySessionRow).mockImplementation((key: string) => ({
+        key,
+        kind: "direct",
+        updatedAt: null,
+        spawnedBy: "agent:conductor:main",
+      }));
+
+      const N = 500;
+      for (let i = 0; i < N; i++) {
+        const sessionKey = `agent:coder:subagent:unique-${i}`;
+        const runId = `run-${i}`;
+        chatRunState.registry.add(runId, { sessionKey, clientRunId: `c-${i}` });
+        handler({ runId, seq: 1, stream: "lifecycle", ts: Date.now(), data: { phase: "start" }, sessionKey });
+        handler({ runId, seq: 2, stream: "assistant", ts: Date.now(), data: { text: "x" }, sessionKey });
+        handler({ runId, seq: 3, stream: "lifecycle", ts: Date.now(), data: { phase: "end" }, sessionKey });
+      }
+
+      // Ищем spawnedByCache среди пойманных Map'ов: ключи — subagent sessionKey,
+      // значения — строка spawnedBy либо null.
+      const looksLikeSpawnedByCache = (m: Map<unknown, unknown>): boolean => {
+        if (m.size === 0) return false;
+        for (const [k, v] of m.entries()) {
+          const keyOk = typeof k === "string" && /^agent:[^:]+:subagent:/.test(k);
+          const valOk = typeof v === "string" || v === null;
+          return keyOk && valOk;
+        }
+        return false;
+      };
+      const leakingCaches = trackedMaps.filter(looksLikeSpawnedByCache);
+      const maxLeakedSize = leakingCaches.reduce((m, c) => Math.max(m, c.size), 0);
+
+      // Если фикс работает — spawnedByCache пуст (все записи удалены),
+      // поэтому фильтр его не находит, maxLeakedSize = 0.
+      // Если фикс не работает — найдётся Map с N записями.
+      expect(maxLeakedSize).toBe(0);
+    });
+  });
 });
