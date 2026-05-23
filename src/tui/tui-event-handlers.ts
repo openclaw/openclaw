@@ -14,6 +14,8 @@ type EventHandlerChatLog = {
     options?: { partial?: boolean; isError?: boolean },
   ) => void;
   addSystem: (text: string) => void;
+  addPendingSystem: (runId: string, text: string) => void;
+  dismissPendingSystem: (runId: string) => void;
   updateAssistant: (text: string, runId: string) => void;
   finalizeAssistant: (text: string, runId: string) => void;
   dropAssistant: (runId: string) => void;
@@ -72,6 +74,7 @@ export function createEventHandlers(context: EventHandlerContext) {
   } = context;
   const finalizedRuns = new Map<string, number>();
   const sessionRuns = new Map<string, number>();
+  const postFinalizingRuns = new Map<string, number>();
   let streamAssembler = new TuiStreamAssembler();
   let lastSessionKey = state.currentSessionKey;
   let pendingHistoryRefresh = false;
@@ -131,7 +134,7 @@ export function createEventHandlers(context: EventHandlerContext) {
         return;
       }
       flushPendingHistoryRefreshIfIdle();
-      chatLog.addSystem(STREAMING_WATCHDOG_USER_MESSAGE);
+      chatLog.addPendingSystem(runId, STREAMING_WATCHDOG_USER_MESSAGE);
       tui.requestRender();
     }, streamingWatchdogMs);
     const maybeUnref = (streamingWatchdogTimer as { unref?: () => void }).unref;
@@ -170,6 +173,7 @@ export function createEventHandlers(context: EventHandlerContext) {
     lastSessionKey = state.currentSessionKey;
     finalizedRuns.clear();
     sessionRuns.clear();
+    postFinalizingRuns.clear();
     streamAssembler = new TuiStreamAssembler();
     pendingHistoryRefresh = false;
     state.pendingOptimisticUserMessage = false;
@@ -231,6 +235,11 @@ export function createEventHandlers(context: EventHandlerContext) {
     sessionRuns.delete(runId);
     streamAssembler.drop(runId);
     pruneRunMap(finalizedRuns);
+  };
+
+  const notePostFinalizingRun = (runId: string) => {
+    postFinalizingRuns.set(runId, Date.now());
+    pruneRunMap(postFinalizingRuns);
   };
 
   const clearActiveRunIfMatch = (runId: string) => {
@@ -391,6 +400,7 @@ export function createEventHandlers(context: EventHandlerContext) {
     if (reconnectPendingRunId === evt.runId) {
       reconnectPendingRunId = null;
     }
+    chatLog.dismissPendingSystem(evt.runId);
     noteSessionRun(evt.runId);
     if (!state.activeChatRunId && !isLocalBtwRunId?.(evt.runId)) {
       state.activeChatRunId = evt.runId;
@@ -510,7 +520,7 @@ export function createEventHandlers(context: EventHandlerContext) {
       tui.requestRender();
       return;
     }
-    const isKnownRun = isActiveRun || isSessionRun || finalizedRuns.has(evt.runId);
+    const isKnownRun = isActiveRun || isPendingRun || isSessionRun || finalizedRuns.has(evt.runId);
     if (!isKnownRun) {
       return;
     }
@@ -553,20 +563,54 @@ export function createEventHandlers(context: EventHandlerContext) {
       return;
     }
     if (evt.stream === "lifecycle") {
-      if (!isActiveRun) {
-        return;
+      if (isPendingRun) {
+        noteSessionRun(evt.runId);
+        state.activeChatRunId = evt.runId;
+        state.pendingChatRunId = null;
+        if (state.pendingOptimisticUserMessage) {
+          if (localMode) {
+            noteLocalRunId?.(evt.runId);
+          }
+          state.pendingOptimisticUserMessage = false;
+        }
       }
       const phase = typeof evt.data?.phase === "string" ? evt.data.phase : "";
-      if (phase && phase !== "end" && phase !== "error") {
+      const isPostFinalizingRun = postFinalizingRuns.has(evt.runId);
+      const isPostFinalTerminalPhase =
+        isPostFinalizingRun && (phase === "end" || phase === "error");
+      if (!isActiveRun && !isPendingRun && phase !== "finishing" && !isPostFinalTerminalPhase) {
+        return;
+      }
+      const canUpdateActivityStatus = !hasConcurrentActiveRun(evt.runId);
+      if (phase && phase !== "end" && phase !== "error" && phase !== "finishing") {
         armStreamingWatchdog(evt.runId);
       }
       if (phase === "start") {
+        if (!canUpdateActivityStatus) {
+          return;
+        }
         setActivityStatus("running");
       }
+      if (phase === "finishing") {
+        notePostFinalizingRun(evt.runId);
+        if (!canUpdateActivityStatus) {
+          return;
+        }
+        clearStreamingWatchdog();
+        setActivityStatus("finishing context");
+      }
       if (phase === "end") {
+        postFinalizingRuns.delete(evt.runId);
+        if (!canUpdateActivityStatus) {
+          return;
+        }
         setActivityStatus("idle");
       }
       if (phase === "error") {
+        postFinalizingRuns.delete(evt.runId);
+        if (!canUpdateActivityStatus) {
+          return;
+        }
         setActivityStatus("error");
       }
       tui.requestRender();

@@ -108,7 +108,13 @@ describe("waitForAgentJob", () => {
       emitAgentEvent({
         runId,
         stream: "lifecycle",
-        data: { phase: "end", endedAt: 200, aborted: true },
+        data: {
+          phase: "end",
+          endedAt: 200,
+          aborted: true,
+          timeoutPhase: "provider",
+          providerStarted: true,
+        },
       });
 
       await vi.advanceTimersByTimeAsync(15_000);
@@ -117,6 +123,8 @@ describe("waitForAgentJob", () => {
         status: "timeout",
         startedAt: 100,
         endedAt: 200,
+        timeoutPhase: "provider",
+        providerStarted: true,
       });
     } finally {
       vi.useRealTimers();
@@ -133,6 +141,37 @@ describe("waitForAgentJob", () => {
       status: "ok",
       startedAt: 300,
       endedAt: 400,
+    });
+  });
+
+  it("maps blocked lifecycle end events to error snapshots", async () => {
+    const runId = `run-blocked-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    const waitPromise = waitForAgentJob({ runId, timeoutMs: 1_000 });
+
+    emitAgentEvent({
+      runId,
+      stream: "lifecycle",
+      data: { phase: "start", startedAt: 450 },
+    });
+    emitAgentEvent({
+      runId,
+      stream: "lifecycle",
+      data: {
+        phase: "end",
+        startedAt: 450,
+        endedAt: 500,
+        livenessState: "blocked",
+        error: "Context overflow: prompt too large for the model.",
+      },
+    });
+
+    const snapshot = await waitPromise;
+    expectRecordFields(snapshot, {
+      status: "error",
+      startedAt: 450,
+      endedAt: 500,
+      error: "Context overflow: prompt too large for the model.",
+      livenessState: "blocked",
     });
   });
 
@@ -494,6 +533,35 @@ describe("sanitizeChatHistoryMessages", () => {
           },
           { type: "text", text: "Checking." },
         ],
+        timestamp: 1,
+      },
+    ]);
+  });
+
+  it("preserves OpenAI-compatible assistant usage aliases for display context", () => {
+    const result = sanitizeChatHistoryMessages([
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "done" }],
+        usage: {
+          prompt_tokens: 11,
+          completion_tokens: 1,
+          total_tokens: 12,
+          provider_payload: "discard",
+        },
+        timestamp: 1,
+      },
+    ]);
+
+    expect(result).toEqual([
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "done" }],
+        usage: {
+          prompt_tokens: 11,
+          completion_tokens: 1,
+          total_tokens: 12,
+        },
         timestamp: 1,
       },
     ]);

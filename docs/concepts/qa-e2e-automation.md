@@ -165,6 +165,25 @@ With `--gateway-setup`, Mantis leaves a persistent OpenClaw Slack gateway
 running inside the VM on port `38973`; without it, the command runs the normal
 bot-to-bot Slack QA lane and exits after artifact capture.
 
+To prove native Slack approval UI with desktop evidence, run the Mantis approval
+checkpoint mode:
+
+```bash
+pnpm openclaw qa mantis slack-desktop-smoke \
+  --approval-checkpoints \
+  --credential-source convex \
+  --credential-role maintainer
+```
+
+This mode is mutually exclusive with `--gateway-setup`. It runs the Slack
+approval scenarios, rejects non-approval scenario ids, waits at each pending and
+resolved approval state, renders the observed Slack API message into
+`approval-checkpoints/<scenario>-pending.png` and
+`approval-checkpoints/<scenario>-resolved.png`, then fails if any checkpoint,
+message evidence, acknowledgement, or rendered screenshot is missing or empty.
+Cold CI leases may still show Slack sign-in in `slack-desktop-smoke.png`; the
+approval checkpoint images are the visual proof for this lane.
+
 The operator checklist, GitHub workflow dispatch command, evidence-comment
 contract, hydrate-mode decision table, timing interpretation, and failure
 handling steps live in [Mantis Slack Desktop Runbook](/concepts/mantis-slack-desktop-runbook).
@@ -400,8 +419,13 @@ Required env when `--credential-source env`:
 Optional:
 
 - `OPENCLAW_QA_SLACK_CAPTURE_CONTENT=1` keeps message bodies in observed-message artifacts.
+- `OPENCLAW_QA_SLACK_APPROVAL_CHECKPOINT_DIR` enables visual approval
+  checkpoints for Mantis. The runner writes `<scenario>.pending.json` and
+  `<scenario>.resolved.json`, then waits for matching `.ack.json` files.
+- `OPENCLAW_QA_SLACK_APPROVAL_CHECKPOINT_TIMEOUT_MS` overrides the checkpoint
+  acknowledgement timeout. The default is `120000`.
 
-Scenarios (`extensions/qa-lab/src/live-transports/slack/slack-live.runtime.ts:39`):
+Scenarios (`extensions/qa-lab/src/live-transports/slack/slack-live.runtime.ts`):
 
 - `slack-canary`
 - `slack-mention-gating`
@@ -410,12 +434,22 @@ Scenarios (`extensions/qa-lab/src/live-transports/slack/slack-live.runtime.ts:39
 - `slack-restart-resume`
 - `slack-thread-follow-up`
 - `slack-thread-isolation`
+- `slack-approval-exec-native` - opt-in native Slack exec approval scenario.
+  Requests an exec approval through the gateway, verifies the Slack message has
+  native approval buttons, resolves it, and verifies the resolved Slack update.
+- `slack-approval-plugin-native` - opt-in native Slack plugin approval scenario.
+  Enables exec and plugin approval forwarding together so plugin events are not
+  suppressed by exec approval routing, then verifies the same pending/resolved
+  native Slack UI path.
 
 Output artifacts:
 
 - `slack-qa-report.md`
 - `slack-qa-summary.json`
 - `slack-qa-observed-messages.json` - bodies redacted unless `OPENCLAW_QA_SLACK_CAPTURE_CONTENT=1`.
+- `approval-checkpoints/` - only when Mantis sets
+  `OPENCLAW_QA_SLACK_APPROVAL_CHECKPOINT_DIR`; contains checkpoint JSON,
+  acknowledgement JSON, and pending/resolved screenshots.
 
 #### Setting up the Slack workspace
 

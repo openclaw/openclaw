@@ -37,6 +37,7 @@ function resolveTaskName(env: GatewayServiceEnv): string {
 
 function shouldFallbackToStartupEntry(params: { code: number; detail: string }): boolean {
   return (
+    params.code === 1 ||
     /(?:access is denied|acceso denegado)/i.test(params.detail) ||
     params.code === 124 ||
     /schtasks timed out/i.test(params.detail) ||
@@ -50,6 +51,11 @@ export function resolveTaskScriptPath(env: GatewayServiceEnv): string {
     return override;
   }
   const scriptName = env.OPENCLAW_TASK_SCRIPT_NAME?.trim() || "gateway.cmd";
+  if (/[/\\]|\.\./.test(scriptName)) {
+    throw new Error(
+      `OPENCLAW_TASK_SCRIPT_NAME must be a file name only, not a path: ${scriptName}`,
+    );
+  }
   const stateDir = resolveGatewayStateDir(env);
   return path.join(stateDir, scriptName);
 }
@@ -249,7 +255,7 @@ const UNKNOWN_STATUS_DETAIL =
 const SCHEDULED_TASK_FALLBACK_POLL_MS = 250;
 const SCHEDULED_TASK_FALLBACK_TIMEOUT_MS = 15_000;
 
-export function deriveScheduledTaskRuntimeStatus(parsed: ScheduledTaskInfo): {
+function deriveScheduledTaskRuntimeStatus(parsed: ScheduledTaskInfo): {
   status: GatewayServiceRuntime["status"];
   detail?: string;
 } {

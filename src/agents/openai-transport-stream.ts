@@ -32,6 +32,7 @@ import { resolveProviderTransportTurnStateWithPlugin } from "../plugins/provider
 import { buildCopilotDynamicHeaders, hasCopilotVisionInput } from "./copilot-dynamic-headers.js";
 import { createDeepSeekTextFilter } from "./deepseek-text-filter.js";
 import { resolveMaxTokensParam } from "./model-max-tokens-params.js";
+import { supportsModelTools } from "./model-tool-support.js";
 import {
   emitModelTransportDebug,
   resolveModelPayloadDebugMode,
@@ -69,7 +70,11 @@ import {
 import { sanitizeResponsesImagePayload } from "./responses-image-payload-sanitizer.js";
 import { stripSystemPromptCacheBoundary } from "./system-prompt-cache-boundary.js";
 import { transformTransportMessages } from "./transport-message-transform.js";
-import { mergeTransportMetadata, sanitizeTransportPayloadText } from "./transport-stream-shared.js";
+import {
+  assignTransportErrorDetails,
+  mergeTransportMetadata,
+  sanitizeTransportPayloadText,
+} from "./transport-stream-shared.js";
 
 const DEFAULT_AZURE_OPENAI_API_VERSION = "preview";
 const OPENAI_CODEX_RESPONSES_EMPTY_INPUT_TEXT = " ";
@@ -81,6 +86,7 @@ const RESPONSE_FAILED_NO_DETAILS_MESSAGE = "Unknown error (no error details in r
 const MAX_OPENAI_STRICT_TOOL_DOWNGRADE_DIAGNOSTIC_KEYS = 256;
 const OPENAI_RESPONSES_REASONING_REPLAY_META_KEY = "__openclaw_replay";
 const OPENAI_RESPONSES_REASONING_REPLAY_BLOCK_META_KEY = "openclawReasoningReplay";
+const OPENAI_RESPONSES_REPLAY_ITEM_ID_MAX_LENGTH = 64;
 const log = createSubsystemLogger("openai-transport");
 const loggedOpenAIStrictToolDowngradeDiagnosticKeys = new Set<string>();
 
@@ -203,6 +209,7 @@ type MutableAssistantOutput = {
     output: number;
     cacheRead: number;
     cacheWrite: number;
+    reasoningTokens?: number;
     totalTokens: number;
     cost: { input: number; output: number; cacheRead: number; cacheWrite: number; total: number };
   };
@@ -210,6 +217,9 @@ type MutableAssistantOutput = {
   timestamp: number;
   responseId?: string;
   errorMessage?: string;
+  errorCode?: string;
+  errorType?: string;
+  errorBody?: string;
 };
 
 export { sanitizeTransportPayloadText } from "./transport-stream-shared.js";
@@ -940,6 +950,27 @@ function shortHash(value: string): string {
   return createHash("sha256").update(value).digest("hex").slice(0, 16);
 }
 
+function normalizeResponsesReplayItemId(
+  id: string | undefined,
+  prefix: string,
+): string | undefined {
+  if (!id) {
+    return undefined;
+  }
+  if (id.length <= OPENAI_RESPONSES_REPLAY_ITEM_ID_MAX_LENGTH) {
+    return id;
+  }
+  return `${prefix}_${shortHash(id)}`;
+}
+
+function isSafeResponsesReplayItemId(id: unknown): id is string {
+  return (
+    typeof id === "string" &&
+    id.length > 0 &&
+    id.length <= OPENAI_RESPONSES_REPLAY_ITEM_ID_MAX_LENGTH
+  );
+}
+
 function encodeTextSignatureV1(id: string, phase?: "commentary" | "final_answer"): string {
   return JSON.stringify({ v: 1, id, ...(phase ? { phase } : {}) });
 }
@@ -1091,6 +1122,12 @@ function convertResponsesMessages(
             if (!shouldReplayResponsesItemIds) {
               delete replayableReasoningItem.id;
             }
+            if (
+              model.provider === "github-copilot" &&
+              !isSafeResponsesReplayItemId(replayableReasoningItem.id)
+            ) {
+              continue;
+            }
             output.push(replayableReasoningItem as ResponseInputItem);
           }
         } else if (block.type === "text") {
@@ -1098,9 +1135,7 @@ function convertResponsesMessages(
           let msgId = shouldReplayResponsesItemIds
             ? (textSignature?.id ?? `msg_${msgIndex}`)
             : undefined;
-          if (msgId && msgId.length > 64) {
-            msgId = `msg_${shortHash(msgId)}`;
-          }
+          msgId = normalizeResponsesReplayItemId(msgId, "msg");
           const messageItem: ReplayableResponseOutputMessage = {
             type: "message",
             role: "assistant",
@@ -1504,6 +1539,7 @@ async function processResponsesStream(
             output_tokens?: number;
             total_tokens?: number;
             input_tokens_details?: { cached_tokens?: number };
+            output_tokens_details?: { reasoning_tokens?: number };
             service_tier?: ResponseCreateParamsStreaming["service_tier"];
             status?: string;
           }
@@ -1512,12 +1548,16 @@ async function processResponsesStream(
         const cachedTokens = usage.input_tokens_details?.cached_tokens || 0;
         const inputTokens = usage.input_tokens || 0;
         const outputTokens = usage.output_tokens || 0;
+        const reasoningTokens = usage.output_tokens_details?.reasoning_tokens;
         const input = Math.max(0, inputTokens - cachedTokens);
         output.usage = {
           input,
           output: outputTokens,
           cacheRead: cachedTokens,
           cacheWrite: 0,
+          ...(typeof reasoningTokens === "number" && Number.isFinite(reasoningTokens)
+            ? { reasoningTokens }
+            : {}),
           totalTokens: input + outputTokens + cachedTokens,
           cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
         };
@@ -1781,8 +1821,7 @@ export function createOpenAIResponsesTransportStreamFn(): StreamFn {
           `[responses] error provider=${model.provider} api=${model.api} model=${model.id} ` +
             summarizeOpenAITransportError(error),
         );
-        output.stopReason = options?.signal?.aborted ? "aborted" : "error";
-        output.errorMessage = error instanceof Error ? error.message : JSON.stringify(error);
+        assignTransportErrorDetails(output, error, options?.signal);
         stream.push({ type: "error", reason: output.stopReason as never, error: output as never });
         stream.end();
       }
@@ -2185,8 +2224,7 @@ export function createAzureOpenAIResponsesTransportStreamFn(): StreamFn {
           `[responses] error provider=${model.provider} api=${model.api} model=${model.id} ` +
             summarizeOpenAITransportError(error),
         );
-        output.stopReason = options?.signal?.aborted ? "aborted" : "error";
-        output.errorMessage = error instanceof Error ? error.message : JSON.stringify(error);
+        assignTransportErrorDetails(output, error, options?.signal);
         stream.push({ type: "error", reason: output.stopReason as never, error: output as never });
         stream.end();
       }
@@ -2380,8 +2418,7 @@ export function createOpenAICompletionsTransportStreamFn(): StreamFn {
         stream.push({ type: "done", reason: output.stopReason as never, message: output as never });
         stream.end();
       } catch (error) {
-        output.stopReason = options?.signal?.aborted ? "aborted" : "error";
-        output.errorMessage = error instanceof Error ? error.message : JSON.stringify(error);
+        assignTransportErrorDetails(output, error, options?.signal);
         stream.push({ type: "error", reason: output.stopReason as never, error: output as never });
         stream.end();
       }
@@ -2403,22 +2440,25 @@ async function processOpenAICompletionsStream(
   const deepSeekTextFilter = shouldFilterDeepSeekDsmlText(compat)
     ? createDeepSeekTextFilter()
     : null;
+  type ToolCallBlock = {
+    type: "toolCall";
+    id: string;
+    name: string;
+    arguments: Record<string, unknown>;
+    partialArgs: string;
+    thoughtSignature?: string;
+  };
   let currentBlock:
     | { type: "text"; text: string }
     | { type: "thinking"; thinking: string; thinkingSignature?: string }
-    | {
-        type: "toolCall";
-        id: string;
-        name: string;
-        arguments: Record<string, unknown>;
-        partialArgs: string;
-        thoughtSignature?: string;
-      }
+    | ToolCallBlock
     | null = null;
   let pendingPostToolCallDeltas: CompletionsReasoningDelta[] = [];
   let pendingPostToolCallBytes = 0;
-  let currentToolCallArgumentBytes = 0;
   let isFlushingPendingPostToolCallDeltas = false;
+  const toolCallBlocksByIndex = new Map<number, ToolCallBlock>();
+  const toolCallBlocksById = new Map<string, ToolCallBlock>();
+  const toolCallBlockBytes = new WeakMap<ToolCallBlock, number>();
   const blockIndex = () => output.content.length - 1;
   const measureUtf8Bytes = (text: string) => Buffer.byteLength(text, "utf8");
   const finishCurrentBlock = () => {
@@ -2427,11 +2467,11 @@ async function processOpenAICompletionsStream(
     }
     if (currentBlock.type === "toolCall") {
       currentBlock.arguments = parseStreamingJson(currentBlock.partialArgs);
-      const completed = {
-        ...currentBlock,
-        arguments: parseStreamingJson(currentBlock.partialArgs),
-      };
-      output.content[blockIndex()] = completed;
+    }
+  };
+  const finishAllToolCallBlocks = () => {
+    for (const block of toolCallBlocksByIndex.values()) {
+      block.arguments = parseStreamingJson(block.partialArgs);
     }
   };
   const queuePostToolCallDelta = (next: CompletionsReasoningDelta) => {
@@ -2609,11 +2649,12 @@ async function processOpenAICompletionsStream(
     }
     if (choiceDelta.tool_calls && choiceDelta.tool_calls.length > 0) {
       for (const toolCall of choiceDelta.tool_calls) {
-        if (
-          !currentBlock ||
-          currentBlock.type !== "toolCall" ||
-          (toolCall.id && currentBlock.id !== toolCall.id)
-        ) {
+        const streamIndex = typeof toolCall.index === "number" ? toolCall.index : undefined;
+        let block = streamIndex !== undefined ? toolCallBlocksByIndex.get(streamIndex) : undefined;
+        if (!block && toolCall.id) {
+          block = toolCallBlocksById.get(toolCall.id);
+        }
+        if (!block) {
           const switchingToolCall = currentBlock?.type === "toolCall";
           finishCurrentBlock();
           if (switchingToolCall) {
@@ -2621,7 +2662,7 @@ async function processOpenAICompletionsStream(
             flushPendingPostToolCallDeltas();
           }
           const initialSig = extractGoogleThoughtSignature(toolCall);
-          currentBlock = {
+          block = {
             type: "toolCall",
             id: toolCall.id || "",
             name: toolCall.function?.name || "",
@@ -2629,37 +2670,40 @@ async function processOpenAICompletionsStream(
             partialArgs: "",
             ...(initialSig ? { thoughtSignature: initialSig } : {}),
           };
-          currentToolCallArgumentBytes = 0;
-          output.content.push(currentBlock);
-          stream.push({ type: "toolcall_start", contentIndex: blockIndex(), partial: output });
+          output.content.push(block);
+          stream.push({
+            type: "toolcall_start",
+            contentIndex: output.content.indexOf(block),
+            partial: output,
+          });
         }
-        if (currentBlock.type !== "toolCall") {
-          continue;
+        if (streamIndex !== undefined && !toolCallBlocksByIndex.has(streamIndex)) {
+          toolCallBlocksByIndex.set(streamIndex, block);
         }
         if (toolCall.id) {
-          currentBlock.id = toolCall.id;
+          block.id = toolCall.id;
+          toolCallBlocksById.set(toolCall.id, block);
         }
+        currentBlock = block;
         if (toolCall.function?.name) {
-          currentBlock.name = toolCall.function.name;
+          block.name = toolCall.function.name;
         }
         const deltaSig = extractGoogleThoughtSignature(toolCall);
         if (deltaSig) {
-          currentBlock.thoughtSignature = deltaSig;
+          block.thoughtSignature = deltaSig;
         }
         if (toolCall.function?.arguments) {
           const nextArgumentBytes = measureUtf8Bytes(toolCall.function.arguments);
-          if (
-            currentToolCallArgumentBytes + nextArgumentBytes >
-            MAX_TOOL_CALL_ARGUMENT_BUFFER_BYTES
-          ) {
+          const currentBlockArgBytes = toolCallBlockBytes.get(block) ?? 0;
+          if (currentBlockArgBytes + nextArgumentBytes > MAX_TOOL_CALL_ARGUMENT_BUFFER_BYTES) {
             throw new Error("Exceeded tool-call argument buffer limit");
           }
-          currentToolCallArgumentBytes += nextArgumentBytes;
-          currentBlock.partialArgs += toolCall.function.arguments;
-          currentBlock.arguments = parseStreamingJson(currentBlock.partialArgs);
+          toolCallBlockBytes.set(block, currentBlockArgBytes + nextArgumentBytes);
+          block.partialArgs += toolCall.function.arguments;
+          block.arguments = parseStreamingJson(block.partialArgs);
           stream.push({
             type: "toolcall_delta",
-            contentIndex: blockIndex(),
+            contentIndex: output.content.indexOf(block),
             delta: toolCall.function.arguments,
             partial: output,
           });
@@ -2670,10 +2714,8 @@ async function processOpenAICompletionsStream(
     await cooperativeScheduler.afterEvent();
   }
   flushDeepSeekTextFilterAtEnd();
-  finishCurrentBlock();
-  if (currentBlock?.type === "toolCall") {
-    currentBlock = null;
-  }
+  finishAllToolCallBlocks();
+  currentBlock = null;
   flushPendingPostToolCallDeltas();
   const hasToolCalls = output.content.some((block) => block.type === "toolCall");
   if (output.stopReason === "toolUse" && !hasToolCalls) {
@@ -3346,19 +3388,21 @@ export function buildOpenAICompletionsParams(
   if (options?.responseFormat !== undefined) {
     params.response_format = options.responseFormat;
   }
-  if (context.tools) {
-    params.tools = convertTools(context.tools, compat, model);
-    if (options?.toolChoice) {
-      params.tool_choice = options.toolChoice;
-    } else if (
-      compatDetection.capabilities.usesExplicitProxyLikeEndpoint &&
-      Array.isArray(params.tools) &&
-      params.tools.length > 0
-    ) {
-      params.tool_choice = "auto";
+  if (supportsModelTools(model)) {
+    if (context.tools) {
+      params.tools = convertTools(context.tools, compat, model);
+      if (options?.toolChoice) {
+        params.tool_choice = options.toolChoice;
+      } else if (
+        compatDetection.capabilities.usesExplicitProxyLikeEndpoint &&
+        Array.isArray(params.tools) &&
+        params.tools.length > 0
+      ) {
+        params.tool_choice = "auto";
+      }
+    } else if (hasToolHistory(context.messages)) {
+      params.tools = [];
     }
-  } else if (hasToolHistory(context.messages)) {
-    params.tools = [];
   }
   const completionsReasoningEffort = resolveOpenAICompletionsReasoningEffort(options);
   const resolvedCompletionsReasoningEffort = completionsReasoningEffort
@@ -3410,11 +3454,15 @@ export function parseTransportChunkUsage(
   const promptTokens = rawUsage.prompt_tokens || 0;
   const input = Math.max(0, promptTokens - cachedTokens);
   const outputTokens = rawUsage.completion_tokens || 0;
+  const reasoningTokens = rawUsage.completion_tokens_details?.reasoning_tokens;
   const usage = {
     input,
     output: outputTokens,
     cacheRead: cachedTokens,
     cacheWrite: 0,
+    ...(typeof reasoningTokens === "number" && Number.isFinite(reasoningTokens)
+      ? { reasoningTokens }
+      : {}),
     totalTokens: input + outputTokens + cachedTokens,
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
   };
