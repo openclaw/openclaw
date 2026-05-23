@@ -4,7 +4,7 @@ import { applyAuthProfileConfig, type OpenClawConfig } from "openclaw/plugin-sdk
 export type HermesAuthProfileConfig = {
   profileId: string;
   provider: string;
-  mode: "api_key" | "oauth";
+  mode: "api_key" | "oauth" | "token";
   email?: string;
   displayName?: string;
 };
