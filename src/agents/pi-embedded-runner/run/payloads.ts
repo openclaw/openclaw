@@ -146,14 +146,18 @@ function resolveToolErrorWarningPolicy(params: {
   hasUserFacingErrorReply: boolean;
   hasUserFacingFailureAcknowledgement: boolean;
   suppressToolErrors: boolean;
-  suppressToolErrorWarnings?: boolean;
+  suppressToolErrorWarnings?: boolean | (() => boolean | undefined);
   isCronTrigger?: boolean;
   sessionKey: string;
   verboseLevel?: VerboseLevel;
 }): ToolErrorWarningPolicy {
   const normalizedToolName = normalizeOptionalLowercaseString(params.lastToolError.toolName) ?? "";
   const includeDetails = shouldIncludeToolErrorDetails(params);
-  if (params.suppressToolErrorWarnings) {
+  const suppressToolErrorWarnings =
+    typeof params.suppressToolErrorWarnings === "function"
+      ? params.suppressToolErrorWarnings() === true
+      : params.suppressToolErrorWarnings === true;
+  if (suppressToolErrorWarnings) {
     return { showWarning: false, includeDetails };
   }
   // sessions_send timeouts and errors are transient inter-session communication
@@ -197,7 +201,7 @@ export function buildEmbeddedRunPayloads(params: {
   reasoningLevel?: ReasoningLevel;
   thinkingLevel?: ThinkLevel;
   toolResultFormat?: ToolResultFormat;
-  suppressToolErrorWarnings?: boolean;
+  suppressToolErrorWarnings?: boolean | (() => boolean | undefined);
   inlineToolResultsAllowed: boolean;
   didSendViaMessagingTool?: boolean;
   messagingToolSourceReplyPayloads?: MessagingToolSourceReplyPayload[];

@@ -736,7 +736,8 @@ export function createFollowupRunner(params: {
                 thinkLevel: run.thinkLevel,
                 verboseLevel: run.verboseLevel,
                 reasoningLevel: run.reasoningLevel,
-                suppressToolErrorWarnings: opts?.suppressToolErrorWarnings,
+                suppressToolErrorWarnings:
+                  opts?.shouldSuppressToolErrorWarnings ?? opts?.suppressToolErrorWarnings,
                 execOverrides: run.execOverrides,
                 bashElevated: run.bashElevated,
                 timeoutMs: run.timeoutMs,

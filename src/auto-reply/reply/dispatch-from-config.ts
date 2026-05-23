@@ -1848,16 +1848,19 @@ export async function dispatchReplyFromConfig(
     const shouldSuppressProgressDelivery = () =>
       sendPolicyDenied ||
       (suppressDelivery && !shouldDeliverVerboseProgressDespiteSourceSuppression());
-    const hasVisibleRegularVerboseToolProgress =
+    const hasVisibleRegularVerboseToolProgress = () =>
       shouldEmitVerboseProgress() &&
       !shouldEmitFullVerboseProgress() &&
       shouldSendVerboseProgressMessages() &&
       ctx.InboundEventKind !== "room_event" &&
       !shouldSuppressProgressDelivery();
     const hasLiveVerboseProgressGate = suppressDefaultToolProgressMessages && canTrackSession;
+    const shouldSuppressToolErrorWarnings = () =>
+      params.replyOptions?.suppressToolErrorWarnings ??
+      (hasVisibleRegularVerboseToolProgress() ? true : undefined);
     const suppressToolErrorWarnings =
       params.replyOptions?.suppressToolErrorWarnings ??
-      (hasVisibleRegularVerboseToolProgress && !hasLiveVerboseProgressGate ? true : undefined);
+      (hasVisibleRegularVerboseToolProgress() && !hasLiveVerboseProgressGate ? true : undefined);
     const onToolResultFromReplyOptions = params.replyOptions?.onToolResult;
     const onPlanUpdateFromReplyOptions = params.replyOptions?.onPlanUpdate;
     const onApprovalEventFromReplyOptions = params.replyOptions?.onApprovalEvent;
@@ -1914,6 +1917,7 @@ export async function dispatchReplyFromConfig(
             ...getReplyOptions(),
             sourceReplyDeliveryMode,
             suppressToolErrorWarnings,
+            shouldSuppressToolErrorWarnings,
             typingPolicy: typing.typingPolicy,
             suppressTyping: typing.suppressTyping,
             onPartialReply: wrapProgressCallback(params.replyOptions?.onPartialReply),

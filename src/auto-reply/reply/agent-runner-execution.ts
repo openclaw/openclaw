@@ -1903,7 +1903,9 @@ export async function runAgentTurnWithFallback(params: {
                   return isMarkdownCapableMessageChannel(channel) ? "markdown" : "plain";
                 })(),
                 toolProgressDetail: params.toolProgressDetail,
-                suppressToolErrorWarnings: params.opts?.suppressToolErrorWarnings,
+                suppressToolErrorWarnings:
+                  params.opts?.shouldSuppressToolErrorWarnings ??
+                  params.opts?.suppressToolErrorWarnings,
                 disableTools: params.opts?.disableTools,
                 enableHeartbeatTool: params.opts?.enableHeartbeatTool,
                 forceHeartbeatTool: params.opts?.forceHeartbeatTool,

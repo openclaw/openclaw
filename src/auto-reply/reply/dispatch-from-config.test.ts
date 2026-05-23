@@ -1744,6 +1744,7 @@ describe("dispatchReplyFromConfig", () => {
     });
 
     expect(receivedOptions?.suppressToolErrorWarnings).toBeUndefined();
+    expect(receivedOptions?.shouldSuppressToolErrorWarnings?.()).toBeUndefined();
     expect(dispatcher.sendToolResult).not.toHaveBeenCalled();
     expect(dispatcher.sendFinalReply).toHaveBeenCalledTimes(1);
   });
@@ -2559,6 +2560,41 @@ describe("dispatchReplyFromConfig", () => {
     });
 
     expect(receivedOptions?.suppressToolErrorWarnings).toBe(true);
+    expect(receivedOptions?.shouldSuppressToolErrorWarnings?.()).toBe(true);
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith({ text: "done" });
+  });
+
+  it("suppresses terminal tool-error fallbacks in group sessions when verbose progress is visible", async () => {
+    setNoAbort();
+    sessionStoreMocks.currentEntry = {
+      sessionId: "s1",
+      updatedAt: 0,
+      sendPolicy: "allow",
+      verboseLevel: "on",
+    };
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "whatsapp",
+      Surface: "whatsapp",
+      ChatType: "group",
+      From: "whatsapp:group:123@g.us",
+      SessionKey: "agent:main:whatsapp:group:123@g.us",
+    });
+    let receivedOptions: GetReplyOptions | undefined;
+    const replyResolver = vi.fn(async (_ctx: MsgContext, opts?: GetReplyOptions) => {
+      receivedOptions = opts;
+      return { text: "done" } satisfies ReplyPayload;
+    });
+
+    await dispatchReplyFromConfig({
+      ctx,
+      cfg: automaticGroupReplyConfig,
+      dispatcher,
+      replyResolver,
+    });
+
+    expect(receivedOptions?.suppressToolErrorWarnings).toBeUndefined();
+    expect(receivedOptions?.shouldSuppressToolErrorWarnings?.()).toBe(true);
     expect(dispatcher.sendFinalReply).toHaveBeenCalledWith({ text: "done" });
   });
 
