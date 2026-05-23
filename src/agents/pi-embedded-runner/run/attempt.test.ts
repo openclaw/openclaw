@@ -131,6 +131,18 @@ describe("buildEmbeddedAttemptToolRunContext", () => {
   });
 });
 
+describe("resolveEmbeddedAttemptSessionWriteLockOptions", () => {
+  it("bounds post-prompt session lock max hold to compaction timeout instead of run timeout", () => {
+    const options = attemptTesting.resolveEmbeddedAttemptSessionWriteLockOptions({
+      config: {},
+      compactionTimeoutMs: 600_000,
+      env: {},
+    });
+
+    expect(options.maxHoldMs).toBe(720_000);
+  });
+});
+
 describe("buildCallableToolNamesForEmptyAllowlistCheck", () => {
   it("ignores auto-added Tool Search controls so bad allowlists still fail", () => {
     expect(
@@ -3627,7 +3639,6 @@ describe("buildAfterTurnRuntimeContext", () => {
           sessionId: "session-123",
           config: {} as OpenClawConfig,
           skillsSnapshot: undefined,
-          senderIsOwner: true,
           provider: "openai-codex",
           modelId: "gpt-5.4",
           thinkLevel: "off",
@@ -3666,7 +3677,6 @@ describe("buildAfterTurnRuntimeContext", () => {
         authProfileId: "openai:p1",
         config: {} as OpenClawConfig,
         skillsSnapshot: undefined,
-        senderIsOwner: true,
         provider: "openai-codex",
         modelId: "gpt-5.4",
         thinkLevel: "off",
@@ -3700,7 +3710,6 @@ describe("buildAfterTurnRuntimeContext", () => {
           },
         } as OpenClawConfig,
         skillsSnapshot: undefined,
-        senderIsOwner: true,
         provider: "openai-codex",
         modelId: "gpt-5.4",
         thinkLevel: "off",
@@ -3739,7 +3748,6 @@ describe("buildAfterTurnRuntimeContext", () => {
         authProfileId: "openai:p1",
         config: { plugins: { slots: { contextEngine: "lossless-claw" } } } as OpenClawConfig,
         skillsSnapshot: undefined,
-        senderIsOwner: true,
         provider: "openai-codex",
         modelId: "gpt-5.4",
         thinkLevel: "off",
@@ -3782,7 +3790,6 @@ describe("buildAfterTurnRuntimeContext", () => {
         authProfileId: "openai:p1",
         config: { plugins: { slots: { contextEngine: "lossless-claw" } } } as OpenClawConfig,
         skillsSnapshot: undefined,
-        senderIsOwner: true,
         provider: "openai-codex",
         modelId: "gpt-5.4",
         thinkLevel: "off",
@@ -3814,7 +3821,6 @@ describe("buildAfterTurnRuntimeContext", () => {
         authProfileId: "openai:p1",
         config: {} as OpenClawConfig,
         skillsSnapshot: undefined,
-        senderIsOwner: true,
         senderId: "user-123",
         provider: "openai-codex",
         modelId: "gpt-5.4",

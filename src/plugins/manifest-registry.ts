@@ -158,7 +158,9 @@ function resolveManifestPluginSourcePath(params: {
 export type PluginManifestContractListKey =
   | "speechProviders"
   | "externalAuthProviders"
+  | "embeddingProviders"
   | "mediaUnderstandingProviders"
+  | "meetingNotesSourceProviders"
   | "documentExtractors"
   | "realtimeVoiceProviders"
   | "realtimeTranscriptionProviders"
@@ -371,11 +373,13 @@ function mergeManifestContracts(
     "embeddedExtensionFactories",
     "agentToolResultMiddleware",
     "externalAuthProviders",
+    "embeddingProviders",
     "memoryEmbeddingProviders",
     "speechProviders",
     "realtimeTranscriptionProviders",
     "realtimeVoiceProviders",
     "mediaUnderstandingProviders",
+    "meetingNotesSourceProviders",
     "documentExtractors",
     "imageGenerationProviders",
     "videoGenerationProviders",

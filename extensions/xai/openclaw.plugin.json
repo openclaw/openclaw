@@ -10,8 +10,6 @@
     "providers": {
       "xai": {
         "aliases": {
-          "grok-4-fast-reasoning": "grok-4-fast",
-          "grok-4-1-fast-reasoning": "grok-4-1-fast",
           "grok-4.20-experimental-beta-0304-reasoning": "grok-4.20-beta-latest-reasoning",
           "grok-4.20-experimental-beta-0304-non-reasoning": "grok-4.20-beta-latest-non-reasoning",
           "grok-4.20-reasoning": "grok-4.20-beta-latest-reasoning",
@@ -78,7 +76,7 @@
   "uiHints": {
     "webSearch.apiKey": {
       "label": "Grok Search API Key",
-      "help": "xAI API key for Grok web search (fallback: XAI_API_KEY env var).",
+      "help": "Optional xAI API key for Grok web search; xAI OAuth or XAI_API_KEY can satisfy it.",
       "sensitive": true
     },
     "webSearch.model": {

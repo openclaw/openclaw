@@ -232,11 +232,23 @@ export function resolveLaunchAgentPlistPath(env: GatewayServiceEnv): string {
   return resolveLaunchAgentPlistPathForLabel(env, label);
 }
 
+function resolveLaunchAgentEnvironmentReadOptions(env: GatewayServiceEnv, label: string) {
+  return {
+    expectedEnvironmentWrapperPath: resolveLaunchAgentEnvWrapperPath(env, label),
+    expectedEnvironmentFilePath: resolveLaunchAgentEnvFilePath(env, label),
+    generatedEnvironmentLabel: label,
+  };
+}
+
 export async function readLaunchAgentProgramArguments(
   env: GatewayServiceEnv,
 ): Promise<GatewayServiceCommandConfig | null> {
+  const label = resolveLaunchAgentLabel({ env });
   const plistPath = resolveLaunchAgentPlistPath(env);
-  return readLaunchAgentProgramArgumentsFromFile(plistPath);
+  return readLaunchAgentProgramArgumentsFromFile(
+    plistPath,
+    resolveLaunchAgentEnvironmentReadOptions(env, label),
+  );
 }
 
 function buildLaunchAgentPlist({
@@ -406,6 +418,7 @@ function throwBootstrapGuiSessionError(params: {
       `LaunchAgent ${params.actionHint} requires a logged-in macOS GUI session for this user (${params.domain}).`,
       "This usually means you are running from SSH/headless context or as the wrong user (including sudo).",
       `Fix: sign in to the macOS desktop as the target user and rerun \`${params.actionHint}\`.`,
+      "For headless VM setups, enable auto-login for the target user so macOS creates the GUI session after boot.",
       "Headless deployments should use a dedicated logged-in user session or a custom LaunchDaemon (not shipped): https://docs.openclaw.ai/gateway",
     ].join("\n"),
   );
@@ -445,6 +458,12 @@ async function bootstrapLaunchAgentOrThrow(params: {
       domain: params.domain,
       actionHint: params.actionHint,
     });
+  }
+  if (isLaunchctlOperationAlreadyInProgress(detail)) {
+    const state = await probeLaunchAgentState(params.serviceTarget);
+    if (state.state === "running" || state.state === "stopped") {
+      return;
+    }
   }
   throw new Error(`launchctl bootstrap failed: ${detail}`);
 }
@@ -657,6 +676,14 @@ function isUnsupportedGuiDomain(detail: string): boolean {
   return (
     normalized.includes("domain does not support specified action") ||
     normalized.includes("bootstrap failed: 125")
+  );
+}
+
+function isLaunchctlOperationAlreadyInProgress(detail: string): boolean {
+  const normalized = normalizeLowercaseStringOrEmpty(detail);
+  return (
+    normalized.includes("operation already in progress") ||
+    normalized.includes("bootstrap failed: 37")
   );
 }
 
@@ -926,7 +953,10 @@ async function rewriteLaunchAgentPlistForRestart({
   label: string;
   plistPath: string;
 }): Promise<boolean> {
-  const existing = await readLaunchAgentProgramArgumentsFromFile(plistPath);
+  const existing = await readLaunchAgentProgramArgumentsFromFile(
+    plistPath,
+    resolveLaunchAgentEnvironmentReadOptions(env, label),
+  );
   if (!existing?.programArguments.length) {
     return false;
   }

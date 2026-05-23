@@ -702,6 +702,12 @@ export const DiscordAccountSchema = z
     agentComponents: z
       .object({
         enabled: z.boolean().optional(),
+        ttlMs: z
+          .number()
+          .int()
+          .positive()
+          .max(24 * 60 * 60 * 1000)
+          .optional(),
       })
       .strict()
       .optional(),
@@ -1198,6 +1204,7 @@ export const SignalAccountSchemaBase = z
     configWrites: z.boolean().optional(),
     account: z.string().optional(),
     accountUuid: z.string().optional(),
+    configPath: z.string().optional(),
     httpUrl: z.string().optional(),
     httpHost: z.string().optional(),
     httpPort: z.number().int().positive().optional(),

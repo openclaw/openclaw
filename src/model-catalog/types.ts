@@ -106,6 +106,7 @@ export type ModelCatalog = {
   aliases?: Record<string, ModelCatalogAlias>;
   suppressions?: ModelCatalogSuppression[];
   discovery?: Record<string, ModelCatalogDiscovery>;
+  runtimeAugment?: boolean;
 };
 
 export type NormalizedModelCatalogRow = {

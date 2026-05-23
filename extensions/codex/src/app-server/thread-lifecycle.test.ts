@@ -5,6 +5,7 @@ import {
   buildTurnStartParams,
   buildThreadResumeParams,
   buildThreadStartParams,
+  codexDynamicToolsFingerprint,
   resolveReasoningEffort,
 } from "./thread-lifecycle.js";
 
@@ -112,6 +113,35 @@ describe("Codex app-server native code mode config", () => {
     });
 
     expect(instructions).not.toContain("Deferred searchable OpenClaw dynamic tools available");
+  });
+
+  it("keeps durable dynamic tool fingerprints independent from presentation mode", () => {
+    const inputSchema = {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        text: { type: "string" },
+      },
+      required: ["text"],
+    };
+    const directFingerprint = codexDynamicToolsFingerprint([
+      {
+        name: "message",
+        description: "Send a visible message",
+        inputSchema,
+      },
+    ]);
+    const searchableFingerprint = codexDynamicToolsFingerprint([
+      {
+        name: "message",
+        description: "Load and send a visible message",
+        inputSchema,
+        namespace: "openclaw",
+        deferLoading: true,
+      },
+    ]);
+
+    expect(searchableFingerprint).toBe(directFingerprint);
   });
 
   it("keeps OpenClaw skill catalogs out of developer instructions", () => {
@@ -391,14 +421,14 @@ describe("Codex app-server model provider selection", () => {
 
 describe("resolveReasoningEffort (#71946)", () => {
   describe("modern Codex models (none/low/medium/high/xhigh enum)", () => {
-    it.each(["gpt-5.5", "gpt-5.4", "gpt-5.4-mini", "gpt-5.2"] as const)(
+    it.each(["gpt-5.5", "gpt-5.4", "gpt-5.4-mini"] as const)(
       "translates 'minimal' -> 'low' for %s so the first request is accepted",
       (modelId) => {
         expect(resolveReasoningEffort("minimal", modelId)).toBe("low");
       },
     );
 
-    it.each(["gpt-5.5", "gpt-5.4", "gpt-5.4-mini", "gpt-5.2"] as const)(
+    it.each(["gpt-5.5", "gpt-5.4", "gpt-5.4-mini"] as const)(
       "passes 'low' / 'medium' / 'high' / 'xhigh' through unchanged for %s",
       (modelId) => {
         expect(resolveReasoningEffort("low", modelId)).toBe("low");

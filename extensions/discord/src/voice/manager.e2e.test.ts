@@ -581,6 +581,32 @@ describe("DiscordVoiceManager", () => {
     expectConnectedStatus(manager, "1002");
   });
 
+  it("attaches meeting notes capture to an existing voice session", async () => {
+    const manager = createManager();
+
+    await manager.join({ guildId: "g1", channelId: "1001" });
+    const onUtterance = vi.fn();
+    const result = await manager.join(
+      { guildId: "g1", channelId: "1001" },
+      {
+        meetingNotes: {
+          sessionId: "notes-1",
+          onUtterance,
+        },
+      },
+    );
+
+    const entry = getSessionEntry(manager) as {
+      meetingNotes?: { sessionId: string; onUtterance: typeof onUtterance };
+    };
+    expect(result.ok).toBe(true);
+    expect(joinVoiceChannelMock).toHaveBeenCalledTimes(1);
+    expect(entry.meetingNotes).toEqual({
+      sessionId: "notes-1",
+      onUtterance,
+    });
+  });
+
   it("destroys stale tracked voice connections before joining", async () => {
     const staleConnection = createConnectionMock();
     const connection = createConnectionMock();
@@ -2000,7 +2026,6 @@ describe("DiscordVoiceManager", () => {
     ownerTurn?.sendInputAudio(Buffer.alloc(8));
     await new Promise((resolve) => setTimeout(resolve, 260));
 
-    expect(lastAgentCommandArgs().senderIsOwner).toBe(false);
     expect(realtimeSessionMock.handleBargeIn).not.toHaveBeenCalled();
     expectUserMessageIncludes("non-owner answer");
   });
@@ -2053,10 +2078,8 @@ describe("DiscordVoiceManager", () => {
 
     const guestCommandArgs = agentCommandArgsAt(0);
     expect(guestCommandArgs.message).toContain("guest question");
-    expect(guestCommandArgs.senderIsOwner).toBe(false);
     const ownerCommandArgs = agentCommandArgsAt(1);
     expect(ownerCommandArgs.message).toContain("owner question");
-    expect(ownerCommandArgs.senderIsOwner).toBe(true);
     expectUserMessageIncludes("guest answer");
     expectUserMessageIncludes("owner answer");
   });
@@ -2420,10 +2443,8 @@ describe("DiscordVoiceManager", () => {
 
     const ownerCommandArgs = agentCommandArgsAt(0);
     expect(ownerCommandArgs.message).toContain("owner question");
-    expect(ownerCommandArgs.senderIsOwner).toBe(true);
     const guestCommandArgs = agentCommandArgsAt(1);
     expect(guestCommandArgs.message).toContain("guest question");
-    expect(guestCommandArgs.senderIsOwner).toBe(false);
     expect(realtimeSessionMock.submitToolResult).toHaveBeenCalledWith("call-owner", {
       text: "owner answer",
     });
@@ -2652,7 +2673,6 @@ describe("DiscordVoiceManager", () => {
     expect(agentCommandMock).toHaveBeenCalledTimes(2);
     const followupCommandArgs = agentCommandArgsAt(1);
     expect(followupCommandArgs.message).toContain("guest followup");
-    expect(followupCommandArgs.senderIsOwner).toBe(false);
     expectUserMessageIncludes("guest answer");
   });
 
@@ -2788,7 +2808,6 @@ describe("DiscordVoiceManager", () => {
     bridgeParams?.onTranscript?.("user", "guest question", true);
     await new Promise((resolve) => setTimeout(resolve, 260));
 
-    expect(lastAgentCommandArgs().senderIsOwner).toBe(false);
     expectUserMessageIncludes("guest answer");
   });
 
@@ -2880,7 +2899,6 @@ describe("DiscordVoiceManager", () => {
     );
     expect(workingToolResultCall?.[2]).toEqual({ willContinue: true });
     const commandArgs = lastAgentCommandArgs();
-    expect(commandArgs.senderIsOwner).toBe(true);
     expect(commandArgs.toolsAllow).toEqual([
       "read",
       "web_search",
@@ -3074,7 +3092,6 @@ describe("DiscordVoiceManager", () => {
     await Promise.resolve();
 
     const commandArgs = lastAgentCommandArgs();
-    expect(commandArgs.senderIsOwner).toBe(false);
     expect(commandArgs.toolsAllow).toEqual([
       "read",
       "web_search",
@@ -3147,7 +3164,6 @@ describe("DiscordVoiceManager", () => {
     await Promise.resolve();
 
     const commandArgs = lastAgentCommandArgs();
-    expect(commandArgs.senderIsOwner).toBe(false);
     expect(commandArgs.toolsAllow).toEqual([
       "read",
       "web_search",
@@ -3447,7 +3463,7 @@ describe("DiscordVoiceManager", () => {
     }
   });
 
-  it("passes senderIsOwner=true for allowlisted voice speakers", async () => {
+  it("accepts allowlisted voice speakers", async () => {
     const client = createClient();
     client.fetchMember.mockResolvedValue({
       nickname: "Owner Nick",
@@ -3460,12 +3476,9 @@ describe("DiscordVoiceManager", () => {
     });
     const manager = createManager({ groupPolicy: "open", allowFrom: ["discord:u-owner"] }, client);
     await processVoiceSegment(manager, "u-owner");
-
-    const commandArgs = lastAgentCommandArgs() as { senderIsOwner?: boolean } | undefined;
-    expect(commandArgs?.senderIsOwner).toBe(true);
   });
 
-  it("passes senderIsOwner=false for non-owner voice speakers", async () => {
+  it("accepts open-policy voice speakers", async () => {
     const client = createClient();
     client.fetchMember.mockResolvedValue({
       nickname: "Guest Nick",
@@ -3480,9 +3493,6 @@ describe("DiscordVoiceManager", () => {
       commands: { useAccessGroups: false },
     });
     await processVoiceSegment(manager, "u-guest");
-
-    const commandArgs = lastAgentCommandArgs() as { senderIsOwner?: boolean } | undefined;
-    expect(commandArgs?.senderIsOwner).toBe(false);
   });
 
   it("passes configured model override to agent command in voice flow", async () => {

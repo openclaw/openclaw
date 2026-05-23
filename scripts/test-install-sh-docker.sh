@@ -403,6 +403,7 @@ else
     --platform "$SMOKE_PLATFORM" \
     ${UPDATE_DOCKER_HOST_ARGS[@]+"${UPDATE_DOCKER_HOST_ARGS[@]}"} \
     "${NPM_CACHE_DOCKER_ARGS[@]}" \
+    -v "$ROOT_DIR/scripts/install.sh:/tmp/openclaw-install.sh:ro" \
     -v "${LATEST_DIR}:/out" \
     -e OPENCLAW_INSTALL_URL="$INSTALL_URL" \
     -e OPENCLAW_INSTALL_PACKAGE="$PACKAGE_NAME" \
@@ -501,6 +502,7 @@ else
     -e OPENCLAW_INSTALL_PACKAGE="$PACKAGE_NAME" \
     -e OPENCLAW_INSTALL_METHOD=npm \
     -e OPENCLAW_INSTALL_EXPECT_VERSION="$LATEST_VERSION" \
+    -v "$ROOT_DIR/scripts/install.sh:/tmp/openclaw-install.sh:ro" \
     -e OPENCLAW_NO_ONBOARD=1 \
     -e OPENCLAW_NO_PROMPT=1 \
     -e DEBIAN_FRONTEND=noninteractive \
@@ -523,6 +525,7 @@ docker run --rm -t \
   --entrypoint /bin/bash \
   -e OPENCLAW_INSTALL_URL="$INSTALL_URL" \
   -e OPENCLAW_INSTALL_CLI_URL="$CLI_INSTALL_URL" \
+  -v "$ROOT_DIR/scripts/install-cli.sh:/tmp/openclaw-install-cli.sh:ro" \
   -e OPENCLAW_NO_ONBOARD=1 \
   -e OPENCLAW_NO_PROMPT=1 \
   -e DEBIAN_FRONTEND=noninteractive \

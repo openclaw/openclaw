@@ -178,6 +178,16 @@ function requireValue<T>(value: T | null | undefined, label: string): T {
   return value;
 }
 
+function createDeferred<T = void>() {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
+}
+
 function requireRecord(value: unknown, label: string): Record<string, unknown> {
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
     throw new Error(`expected ${label} to be an object`);
@@ -796,6 +806,27 @@ describe("createTelegramBot", () => {
         expect(sendMessageSpy.mock.calls.map((call) => String(call[1])).join("\n")).not.toContain(
           "reply:first",
         );
+
+        await runTelegramMiddlewareChain({
+          ctx: {
+            update: { update_id: 103 },
+            message: {
+              chat: { id: 7, type: "private" },
+              text: "first",
+              date: 1736380800,
+              message_id: 101,
+              from: { id: 42, first_name: "Ada" },
+            },
+            me: { username: "openclaw_bot" },
+            getFile: async () => ({}),
+          },
+          finalHandler: messageHandler,
+        });
+
+        const flushReplay = extractLatestDebounceFlush();
+        await flushReplay?.();
+        expect(startedBodies).toHaveLength(2);
+        expect(startedBodies[1]).toContain("first");
       } finally {
         setTimeoutSpy.mockRestore();
       }
@@ -1663,6 +1694,85 @@ describe("createTelegramBot", () => {
     expect(replySpy).toHaveBeenCalledTimes(1);
   });
 
+  it("dedupes a replayed Telegram message after handler recreation", async () => {
+    loadConfig.mockReturnValue({
+      channels: { telegram: { dmPolicy: "open", allowFrom: ["*"] } },
+    });
+
+    const replayedCtx = () => ({
+      update: { update_id: 8488601 },
+      message: {
+        chat: { id: 123, type: "private" },
+        from: { id: 456, username: "testuser" },
+        text: "replay me once",
+        date: 1736380800,
+        message_id: 42,
+      },
+      me: { username: "openclaw_bot" },
+      getFile: async () => ({ download: async () => new Uint8Array() }),
+    });
+
+    createTelegramBot({ token: "tok" });
+    await (getOnHandler("message") as (ctx: Record<string, unknown>) => Promise<void>)(
+      replayedCtx(),
+    );
+    expect(replySpy).toHaveBeenCalledTimes(1);
+
+    onSpy.mockClear();
+    createTelegramBot({ token: "tok" });
+    await (getOnHandler("message") as (ctx: Record<string, unknown>) => Promise<void>)(
+      replayedCtx(),
+    );
+
+    expect(replySpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("dedupes a replayed Telegram message after handler recreation while dispatch is pending", async () => {
+    loadConfig.mockReturnValue({
+      channels: { telegram: { dmPolicy: "open", allowFrom: ["*"] } },
+    });
+
+    const firstDispatchStarted = createDeferred();
+    const finishFirstDispatch = createDeferred();
+    replySpy.mockImplementationOnce(async (_ctx: MsgContext, opts?: GetReplyOptions) => {
+      await opts?.onReplyStart?.();
+      firstDispatchStarted.resolve();
+      await finishFirstDispatch.promise;
+      return undefined;
+    });
+
+    const replayedCtx = () => ({
+      update: { update_id: 8488602 },
+      message: {
+        chat: { id: 123, type: "private" },
+        from: { id: 456, username: "testuser" },
+        text: "replay while pending",
+        date: 1736380800,
+        message_id: 43,
+      },
+      me: { username: "openclaw_bot" },
+      getFile: async () => ({ download: async () => new Uint8Array() }),
+    });
+
+    createTelegramBot({ token: "tok" });
+    const firstRun = (getOnHandler("message") as (ctx: Record<string, unknown>) => Promise<void>)(
+      replayedCtx(),
+    );
+    await firstDispatchStarted.promise;
+    expect(replySpy).toHaveBeenCalledTimes(1);
+
+    onSpy.mockClear();
+    createTelegramBot({ token: "tok" });
+    await (getOnHandler("message") as (ctx: Record<string, unknown>) => Promise<void>)(
+      replayedCtx(),
+    );
+
+    expect(replySpy).toHaveBeenCalledTimes(1);
+    finishFirstDispatch.resolve();
+    await firstRun;
+    expect(replySpy).toHaveBeenCalledTimes(1);
+  });
+
   it("persists update offsets after successful dispatch completion", async () => {
     // For this test we need sequentialize(...) to behave like a normal middleware and call next().
     sequentializeSpy.mockImplementationOnce(
@@ -2510,6 +2620,72 @@ describe("createTelegramBot", () => {
     expect(group?.requireMention).toBe(false);
     expect(group?.allowFrom).toEqual(["123456789"]);
     expect(topicConfig).toEqual({});
+  });
+
+  it("uses topics.* as the default config for unmatched forum topics", () => {
+    const { groupConfig, topicConfig } = resolveTelegramScopedGroupConfig(
+      {
+        groupPolicy: "allowlist",
+        groups: {
+          "-1001234567890": {
+            allowFrom: ["999999999"],
+            topics: {
+              "*": { allowFrom: ["123456789"], agentId: "zu" },
+            },
+          },
+        },
+      },
+      -1001234567890,
+      77,
+    );
+
+    const group = groupConfig as TelegramGroupConfig | undefined;
+    expect(group?.allowFrom).toEqual(["999999999"]);
+    expect(topicConfig).toEqual({ allowFrom: ["123456789"], agentId: "zu" });
+  });
+
+  it("prefers exact topic config over topics.* fallback", () => {
+    const { topicConfig } = resolveTelegramScopedGroupConfig(
+      {
+        groupPolicy: "allowlist",
+        groups: {
+          "-1001234567890": {
+            topics: {
+              "*": { allowFrom: ["123456789"], agentId: "zu" },
+              "77": { allowFrom: ["555555555"], agentId: "main" },
+            },
+          },
+        },
+      },
+      -1001234567890,
+      77,
+    );
+
+    expect(topicConfig).toEqual({ allowFrom: ["555555555"], agentId: "main" });
+  });
+
+  it("inherits topics.* fields that exact topic config does not override", () => {
+    const { topicConfig } = resolveTelegramScopedGroupConfig(
+      {
+        groupPolicy: "allowlist",
+        groups: {
+          "-1001234567890": {
+            topics: {
+              "*": { allowFrom: ["123456789"], requireMention: false },
+              "77": { agentId: "main" },
+            },
+          },
+        },
+      },
+      -1001234567890,
+      77,
+    );
+
+    expect(topicConfig).toEqual({
+      allowFrom: ["123456789"],
+      requireMention: false,
+      agentId: "main",
+    });
   });
 
   it.each([

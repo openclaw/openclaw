@@ -68,6 +68,7 @@ export {
 } from "./failover-matches.js";
 
 const log = createSubsystemLogger("errors");
+const sandboxToolPolicyAuditMessages = new WeakSet<AssistantMessage>();
 
 export function isReasoningConstraintErrorMessage(raw: string): boolean {
   if (!raw) {
@@ -259,7 +260,7 @@ export type ProviderRuntimeFailureKind =
   | "refresh_contention"
   | "callback_timeout"
   | "callback_validation"
-  | "auth_html_403"
+  | "auth_html"
   | "upstream_html"
   | "proxy"
   | "rate_limit"
@@ -330,7 +331,7 @@ const INTERRUPTED_NETWORK_ERROR_RE =
 const REPLAY_INVALID_RE =
   /\bprevious_response_id\b.*\b(?:invalid|unknown|not found|does not exist|expired|mismatch)\b|\btool_(?:use|call)\.(?:input|arguments)\b.*\b(?:missing|required)\b|\bincorrect role information\b|\broles must alternate\b|\binput item id does not belong to this connection\b/i;
 const SANDBOX_BLOCKED_RE =
-  /\bapproval is required\b|\bapproval timed out\b|\bapproval was denied\b|\bblocked by sandbox\b|\bsandbox\b.*\b(?:blocked|denied|forbidden|disabled|not allowed)\b/i;
+  /\bapproval is required\b|\bapproval timed out\b|\bapproval was denied\b|\bblocked by sandbox\b|\bsandbox\b.*\b(?:blocked|denied|forbidden|disabled|not allowed)\b|\bexec denied\s*\(/i;
 const NO_BODY_HTTP_WRAPPER_RE =
   /^(?:no body(?: response)?|no response body|status code \(no body\))$/i;
 
@@ -758,6 +759,8 @@ function classifyFailoverReasonFromCode(raw: string | undefined): FailoverReason
     case "THROTTLINGEXCEPTION":
     case "THROTTLING_EXCEPTION":
       return "rate_limit";
+    case "DEACTIVATED_WORKSPACE":
+      return "auth_permanent";
     case "OVERLOADED":
     case "OVERLOADED_ERROR":
       return "overloaded";
@@ -919,6 +922,10 @@ export function classifyFailoverSignal(signal: FailoverSignal): FailoverClassifi
   const messageClassification = signal.message
     ? classifyFailoverClassificationFromMessage(signal.message, signal.provider)
     : null;
+  const codeReason = classifyFailoverReasonFromCode(signal.code);
+  if (codeReason === "auth_permanent") {
+    return toReasonClassification(codeReason);
+  }
   const statusClassification = classifyFailoverClassificationFromHttpStatus(
     inferredStatus,
     signal.message,
@@ -929,7 +936,6 @@ export function classifyFailoverSignal(signal: FailoverSignal): FailoverClassifi
   if (statusClassification) {
     return statusClassification;
   }
-  const codeReason = classifyFailoverReasonFromCode(signal.code);
   if (codeReason) {
     return toReasonClassification(codeReason);
   }
@@ -971,7 +977,7 @@ export function classifyProviderRuntimeFailureKind(
     return "proxy";
   }
   if (message && isHtmlErrorResponse(message, status)) {
-    return status === 403 ? "auth_html_403" : "upstream_html";
+    return status === 401 || status === 403 ? "auth_html" : "upstream_html";
   }
   const failoverClassification = classifyFailoverSignal({
     ...normalizedSignal,
@@ -1031,12 +1037,17 @@ export function formatAssistantErrorText(
     raw.match(/unknown tool[:\s]+["']?([a-z0-9_-]+)["']?/i) ??
     raw.match(/tool\s+["']?([a-z0-9_-]+)["']?\s+(?:not found|is not available)/i);
   if (unknownTool?.[1]) {
+    const audit = !sandboxToolPolicyAuditMessages.has(msg);
     const rewritten = formatSandboxToolPolicyBlockedMessage({
       cfg: opts?.cfg,
       sessionKey: opts?.sessionKey,
       toolName: unknownTool[1],
+      audit,
     });
     if (rewritten) {
+      if (audit) {
+        sandboxToolPolicyAuditMessages.add(msg);
+      }
       return rewritten;
     }
   }
@@ -1085,10 +1096,10 @@ export function formatAssistantErrorText(
     );
   }
 
-  if (providerRuntimeFailureKind === "auth_html_403") {
+  if (providerRuntimeFailureKind === "auth_html") {
     return (
-      "Authentication failed with an HTML 403 response from the provider. " +
-      "Re-authenticate and verify your provider account access."
+      "Authentication failed at the provider. " +
+      "Re-authenticate and verify your provider credentials and account access."
     );
   }
 

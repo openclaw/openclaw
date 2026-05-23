@@ -45,6 +45,7 @@ const {
   runQaCredentialsListCommand,
   runQaCredentialsRemoveCommand,
   runQaCoverageReportCommand,
+  runQaJsonlReplayCommand,
   runQaProviderServerCommand,
   runQaSuiteCommand,
   runQaTelegramCommand,
@@ -58,6 +59,7 @@ const {
   runQaCredentialsListCommand: vi.fn(),
   runQaCredentialsRemoveCommand: vi.fn(),
   runQaCoverageReportCommand: vi.fn(),
+  runQaJsonlReplayCommand: vi.fn(),
   runQaProviderServerCommand: vi.fn(),
   runQaSuiteCommand: vi.fn(),
   runQaTelegramCommand: vi.fn(),
@@ -113,6 +115,7 @@ vi.mock("./cli.runtime.js", () => ({
   runQaCredentialsListCommand,
   runQaCredentialsRemoveCommand,
   runQaCoverageReportCommand,
+  runQaJsonlReplayCommand,
   runQaProviderServerCommand,
   runQaSuiteCommand,
 }));
@@ -128,6 +131,7 @@ describe("qa cli registration", () => {
     runQaCredentialsListCommand.mockReset();
     runQaCredentialsRemoveCommand.mockReset();
     runQaCoverageReportCommand.mockReset();
+    runQaJsonlReplayCommand.mockReset();
     runQaProviderServerCommand.mockReset();
     runQaSuiteCommand.mockReset();
     runQaTelegramCommand.mockReset();
@@ -333,10 +337,14 @@ describe("qa cli registration", () => {
       "/tmp/crabbox",
       "--provider",
       "hetzner",
+      "--market",
+      "on-demand",
       "--machine-class",
       "beast",
       "--lease-id",
       "cbx_123abc",
+      "--fresh-pr",
+      "openclaw/openclaw#85141",
       "--idle-timeout",
       "45m",
       "--ttl",
@@ -365,11 +373,13 @@ describe("qa cli registration", () => {
       credentialRole: "maintainer",
       credentialSource: "env",
       fastMode: true,
+      freshPr: "openclaw/openclaw#85141",
       gatewaySetup: undefined,
       idleTimeout: "45m",
       keepLease: true,
       leaseId: "cbx_123abc",
       machineClass: "beast",
+      market: "on-demand",
       outputDir: ".artifacts/qa-e2e/mantis/slack-desktop",
       primaryModel: "openai/gpt-5.5",
       provider: "hetzner",
@@ -477,6 +487,33 @@ describe("qa cli registration", () => {
       tools: true,
       json: false,
       summary: ".artifacts/runtime-summary.json",
+    });
+  });
+
+  it("routes JSONL replay flags into the qa runtime command", async () => {
+    await program.parseAsync([
+      "node",
+      "openclaw",
+      "qa",
+      "jsonl-replay",
+      "--repo-root",
+      "/tmp/openclaw-repo",
+      "--transcripts",
+      "qa/scenarios/jsonl-replay",
+      "--runtime-pair",
+      "pi,codex",
+      "--provider-mode",
+      "mock-openai",
+      "--output-dir",
+      ".artifacts/qa-e2e/jsonl-replay-test",
+    ]);
+
+    expect(runQaJsonlReplayCommand).toHaveBeenCalledWith({
+      repoRoot: "/tmp/openclaw-repo",
+      transcripts: "qa/scenarios/jsonl-replay",
+      runtimePair: "pi,codex",
+      providerMode: "mock-openai",
+      outputDir: ".artifacts/qa-e2e/jsonl-replay-test",
     });
   });
 

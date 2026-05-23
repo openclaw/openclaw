@@ -23,6 +23,12 @@ Skills own workflows; root owns hard policy and routing.
 - Installers: sibling `../openclaw.ai`.
 - Scoped guides: `extensions/`, `src/{plugin-sdk,channels,plugins,gateway,gateway/protocol,agents}/`, `test/helpers*/`, `docs/`, `ui/`, `scripts/`.
 
+## Docs
+
+- Source docs: `docs/**`; publish repo: `openclaw/docs`; host: `https://docs.openclaw.ai`.
+- Flow: source -> `docs-sync-publish.yml` -> mirror build -> R2 -> Worker router.
+- Docs AI: `openclaw/ask-molty`; see its `AGENTS.md`.
+
 ## Architecture
 
 - Core stays plugin-agnostic. No bundled ids/defaults/policy in core when manifest/registry/capability contracts work.
@@ -161,6 +167,7 @@ Skills own workflows; root owns hard policy and routing.
 - Never commit real phone numbers, videos, credentials, live config.
 - Secrets: channel/provider creds in `~/.openclaw/credentials/`; model auth profiles in `~/.openclaw/agents/<agentId>/agent/auth-profiles.json`.
 - Dependency patches/overrides/vendor changes need explicit approval. `pnpm-workspace.yaml` patched dependencies use exact versions only.
+- Lockfiles/shrinkwrap are security surface: review `pnpm-lock.yaml`, `npm-shrinkwrap.json`, `package-lock.json`; root/plugin npm packages ship shrinkwrap, not package-lock.
 - Carbon pins owner-only: do not change `@buape/carbon` unless Shadow (`@thewilloftheshadow`, verified by `gh`) asks.
 - Releases/publish/version bumps need explicit approval. Use `$openclaw-release-maintainer`.
 - GHSA/advisories: `$openclaw-ghsa-maintainer` / `$security-triage`. Secret scanning: `$openclaw-secret-scanning-maintainer`.
