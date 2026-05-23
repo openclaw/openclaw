@@ -1046,6 +1046,36 @@ describe("tui-event-handlers: handleAgentEvent", () => {
     expect(chatLog.finalizeAssistant).not.toHaveBeenCalled();
   });
 
+  it("renders a late displayable final after an earlier empty final for the same run", () => {
+    const { state, chatLog, handleChatEvent } = createHandlersHarness({
+      state: { activeChatRunId: "run-source-reply" },
+    });
+
+    handleChatEvent({
+      runId: "run-source-reply",
+      sessionKey: state.currentSessionKey,
+      state: "final",
+    });
+    chatLog.dropAssistant.mockClear();
+    chatLog.finalizeAssistant.mockClear();
+
+    handleChatEvent({
+      runId: "run-source-reply",
+      sessionKey: state.currentSessionKey,
+      state: "final",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "Hey Shakker. I’m here." }],
+      },
+    });
+
+    expect(chatLog.dropAssistant).not.toHaveBeenCalled();
+    expect(chatLog.finalizeAssistant).toHaveBeenCalledWith(
+      "Hey Shakker. I’m here.",
+      "run-source-reply",
+    );
+  });
+
   it("reloads history when a local run ends without a displayable final message", () => {
     const { state, loadHistory, noteLocalRunId, handleChatEvent } = createHandlersHarness({
       state: { activeChatRunId: "run-local-silent" },
