@@ -35,7 +35,7 @@ on:
           - latest
 
 concurrency:
-  group: openclaw-npm-release-${{ github.event_name == 'workflow_dispatch' && format('{0}-{1}', inputs.tag, inputs.npm_dist_tag) || github.ref }}
+  group: ${{ github.event_name == 'workflow_dispatch' && inputs.preflight_only && format('openclaw-npm-release-{0}-{1}-preflight', inputs.tag, inputs.npm_dist_tag) || github.event_name == 'workflow_dispatch' && format('openclaw-npm-release-{0}-{1}-publish-{2}', inputs.tag, inputs.npm_dist_tag, github.run_id) || format('openclaw-npm-release-{0}', github.ref) }}
   cancel-in-progress: ${{ github.event_name == 'workflow_dispatch' && inputs.preflight_only && inputs.npm_dist_tag == 'alpha' }}
 
 env:
