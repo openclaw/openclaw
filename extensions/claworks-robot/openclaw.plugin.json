@@ -14,6 +14,39 @@
         "type": "object",
         "additionalProperties": false,
         "properties": {
+            "production_mode": {
+                "type": "boolean",
+                "description": "Production mode: stub Playbook steps fail-closed"
+            },
+            "api": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                    "api_key": { "type": "string" },
+                    "require_api_key": { "type": "boolean" },
+                    "mcp_require_auth": { "type": "boolean" }
+                }
+            },
+            "security": {
+                "type": "object",
+                "additionalProperties": true,
+                "properties": {
+                    "require_https_a2a": { "type": "boolean" },
+                    "ip_whitelist": {
+                        "type": "array",
+                        "items": { "type": "string" }
+                    }
+                }
+            },
+            "kernel": {
+                "type": "object",
+                "additionalProperties": true,
+                "properties": {
+                    "rate_limit_max_requests": { "type": "number" },
+                    "rate_limit_window_ms": { "type": "number" },
+                    "hitl_timeout_seconds": { "type": "number" }
+                }
+            },
             "robot": {
                 "type": "object",
                 "additionalProperties": true,
@@ -114,6 +147,10 @@
                         },
                         "enabled": {
                             "type": "boolean"
+                        },
+                        "simulate": {
+                            "type": "boolean",
+                            "description": "Use simulate preset variant for dev/test"
                         },
                         "command": {
                             "type": "string"

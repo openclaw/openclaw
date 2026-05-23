@@ -29,19 +29,21 @@
 
 ## MCP 工具清单（12）
 
-| 工具                          | 说明                          |
-| ----------------------------- | ----------------------------- |
-| `cw_publish_event`            | Ingress 统一发布              |
-| `cw_trigger_playbook`         | 手动触发 Playbook             |
-| `cw_reload_packs`             | 重载 Pack + RBAC/Ingress 同步 |
-| `cw_kb_search`                | KB 检索                       |
-| `cw_query_objects`            | ObjectStore 查询              |
-| `cw_list_playbooks`           | 列出 Playbook                 |
-| `cw_health`                   | doctor/健康                   |
-| `cw_get_identity`             | 机器人身份                    |
-| `cw_bridge_im_message`        | IM 意图桥                     |
-| `cw_list_runs` / `cw_get_run` | Run 查询                      |
-| `cw_submit_hitl`              | HITL 决策                     |
+| 工具                         | 说明                          |
+| ---------------------------- | ----------------------------- |
+| `cw_publish_event`           | Ingress 统一发布              |
+| `cw_trigger_playbook`        | 手动触发 Playbook             |
+| `cw_reload_packs`            | 重载 Pack + RBAC/Ingress 同步 |
+| `cw_kb_search`               | KB 检索                       |
+| `cw_query_objects`           | ObjectStore 查询              |
+| `cw_playbooks_list`          | 列出 Playbook（插件面推荐名） |
+| `cw_status`                  | doctor/健康（插件面）         |
+| `cw_get_identity`            | 机器人身份（仅宿主插件）      |
+| `cw_bridge_im_message`       | IM 意图桥（仅宿主）           |
+| `cw_playbook_runs`           | Run 查询（插件面）            |
+| `cw_hitl_approve` / `reject` | HITL 决策（插件面）           |
+
+> 上表含 **MCP stdio** 与 **OpenClaw 插件** 混合命名。插件 manifest 真源见 `CW-TOOLS-MATRIX.md`（远程 22 / 宿主 48）。
 
 ---
 
@@ -133,6 +135,22 @@ extensions/claworks-robot/   ← OpenClaw 薄插件（唯一仓内胶水）
 
 ---
 
+## 生产就绪强化（2026-05-22，Studio 除外）
+
+| 项                                         | 状态 | 说明                              |
+| ------------------------------------------ | ---- | --------------------------------- |
+| `production_mode` / fail-closed stub       | ✅   | step-executor + function-executor |
+| `CLAWORKS_INIT_SECURE=1` → production_mode | ✅   | `scripts/claworks-init.mjs`       |
+| REST 速率限制                              | ✅   | `router.ts` + `rate-limiter.ts`   |
+| Connector simulate 分离                    | ✅   | `preset` + `simulate: true`       |
+| A2A 超时/幂等/HTTPS                        | ✅   | `interfaces/a2a/client.ts`        |
+| LLM output_schema + voting                 | ✅   | Playbook `LlmStep`                |
+| Doctor 生产检查项                          | ✅   | security / production_mode        |
+| RBAC subjectId 前缀通配                    | ✅   | `role:admin:*` 等                 |
+| 生产部署文档                               | ✅   | `PRODUCTION-READINESS.md`         |
+
+---
+
 ## 设计文档尚未落地（对照 `docs/design/` + `ROADMAP.md`）
 
 | 项                                                    | 设计出处                             | 状态                                                                                          |
@@ -221,11 +239,11 @@ node --import tsx scripts/claworks-closed-loop-demo.mjs
 
 ## 三种对接接口完整性
 
-| 方式                 | 状态          | 备注                                                                          |
-| -------------------- | ------------- | ----------------------------------------------------------------------------- |
-| HTTP REST（方式A）   | ✅ 完全就绪   | `/v1/events`, `/v1/bridge/im`, `/v1/kb/*`, `/v1/objects/*`, `/v1/playbooks/*` |
-| MCP工具集成（方式B） | ✅ 代码完整   | `openclaw-claworks-extension` 20个 `cw_*` 工具，需安装到官方OpenClaw          |
-| A2A协议（方式C）     | ✅ 服务端就绪 | `/a2a/tasks/send` + `.well-known/agent.json`；`a2a_delegate` Playbook 步骤    |
+| 方式                 | 状态          | 备注                                                                                            |
+| -------------------- | ------------- | ----------------------------------------------------------------------------------------------- |
+| HTTP REST（方式A）   | ✅ 完全就绪   | `/v1/events`, `/v1/bridge/im`, `/v1/kb/*`, `/v1/objects/*`, `/v1/playbooks/*`                   |
+| MCP工具集成（方式B） | ✅ 代码完整   | `openclaw-claworks-extension` **22** 个 `cw_*` 工具（manifest 契约测试），需安装到官方 OpenClaw |
+| A2A协议（方式C）     | ✅ 服务端就绪 | `/a2a/tasks/send` + `.well-known/agent.json`；`a2a_delegate` Playbook 步骤                      |
 
 ---
 

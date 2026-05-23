@@ -32,6 +32,7 @@
     "CHANGELOG.md",
     "LICENSE",
     "openclaw.mjs",
+    "claworks.mjs",
     "pnpm-workspace.yaml",
     "README.md",
     "dist/",

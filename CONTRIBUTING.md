@@ -208,10 +208,10 @@ export default contribution;
 
 ### Publishing to claworks-packs
 
-1. Fork [`claworks/claworks-packs`](https://github.com/claworks/claworks-packs)
-2. Add your pack in `packs/your-pack-id/`
-3. Include `pack.json`, `README.md`, `LICENSE`, and `ontology/`
-4. Open a PR — a maintainer will review Pack quality and ontology consistency
+1. 在 sibling 仓 `claworks-packs/` 根目录新建 `<pack-id>/`（非 `claworks/contrib/packs/`）
+2. 包含 `claworks.pack.json`、`README.md`、`ontology/`（及可选 `src/index.ts`）
+3. 本地验证：`CLAWORKS_PACKS_DIR=../claworks-packs pnpm claworks:init`
+4. 参考示例：`claworks/contrib/examples/starter-pack/`（可复制结构，真源仍提交到 claworks-packs）
 
 ---
 

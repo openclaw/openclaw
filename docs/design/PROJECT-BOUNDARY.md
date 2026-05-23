@@ -14,18 +14,19 @@
 
 ## 本仓目录说明
 
-| 路径                                | 合理    | 说明                                                    |
-| ----------------------------------- | ------- | ------------------------------------------------------- |
-| `claworks.mjs`                      | ✅      | 产品 CLI 入口                                           |
-| `extensions/claworks-robot/`        | ✅      | 内核挂载插件                                            |
-| `packages/claworks-sdk/`            | ✅      | Pack 开发 SDK                                           |
-| `connectors/`                       | ✅      | OT 连接器子进程                                         |
-| `packs/`                            | ✅      | 运行时已安装 pack 占位（源码在 `claworks-packs/`）      |
-| `contrib/`                          | ✅      | 产品配置片段、白名单 JSON；`contrib/packs/` 仅 README   |
-| `docs/design/`                      | ✅      | 架构与迁移设计（REPO-STRUCTURE、MIGRATION-GUIDE 等）    |
-| `docs/design/legacy-from-openclaw/` | 📦 归档 | 从 openclaw 迁入的旧 ClawTwin 设计 SSOT                 |
-| `contrib/industrial-oilgas-skills/` | ⚠️ 精简 | 仅保留 capability 索引；完整设计见 legacy-from-openclaw |
-| `openclaw.mjs`                      | ⚠️ 兼容 | upstream 入口，长期可仅保留 claworks.mjs                |
+| 路径                                | 合理    | 说明                                                                   |
+| ----------------------------------- | ------- | ---------------------------------------------------------------------- |
+| `claworks.mjs`                      | ✅      | 产品 CLI 入口                                                          |
+| `extensions/claworks-robot/`        | ✅      | 内核挂载插件                                                           |
+| `packages/claworks-sdk/`            | ✅      | Pack 开发 SDK                                                          |
+| `connectors/`                       | ✅      | OT 连接器子进程                                                        |
+| `packs/`                            | ✅      | 运行时已安装 pack 占位（源码在 `claworks-packs/`）                     |
+| `contrib/`                          | ✅      | 产品配置片段、白名单 JSON；`contrib/packs/` 仅 README                  |
+| `docs/design/`                      | ✅      | 架构与迁移设计（REPO-STRUCTURE、MIGRATION-GUIDE 等）                   |
+| `docs/design/legacy-from-openclaw/` | 📦 归档 | 从 openclaw 迁入的旧 ClawTwin 设计 SSOT（含 industrial-oilgas-skills） |
+| `src/cli/product/`                  | ✅      | claworks 子命令、bootstrap、doctor、packs                              |
+| `src/config/claworks-*`             | ✅      | 产品 gateway / env / guard 配置                                        |
+| `openclaw.mjs`                      | ⚠️ 兼容 | upstream 入口，长期可仅保留 claworks.mjs                               |
 
 ## 已废弃（勿再开发）
 
@@ -33,15 +34,7 @@
 - `clawtwin-studio` — 旧 UI → 已归档
 - `openclaw/extensions/clawtwin|clawops|claworks` — 不应在 upstream 存在
 
-## 下一步实现（REPO-STRUCTURE 规划）
+## 运行时与 Pack
 
-**已实现（2026-05）**：EventKernel / DataPlane / OrchPlane 位于 `packages/claworks-runtime/src/`，见 [DIRECTORY-LAYOUT.md](./DIRECTORY-LAYOUT.md)。
-
-仍待本仓 `src/` 侧完善的部分：
-
-```
-src/cli/product/     ← claworks 子命令、bootstrap、doctor
-src/config/claworks-* ← 产品配置 guard / gateway 默认
-```
-
-Python 概念与 YAML 见 `docs/design/MIGRATION-GUIDE.md`。
+EventKernel / DataPlane / OrchPlane 位于 `packages/claworks-runtime/src/`（见 [DIRECTORY-LAYOUT.md](./DIRECTORY-LAYOUT.md)）。  
+Pack YAML 真源在 sibling `claworks-packs/`；Python 概念映射见 `docs/design/MIGRATION-GUIDE.md`。

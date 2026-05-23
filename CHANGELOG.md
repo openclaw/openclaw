@@ -6,7 +6,7 @@ Docs: https://docs.openclaw.ai
 
 ### Changes
 
-- ClaWorks: add `CW_EVENTS` constant map in `src/kernel/event-names.ts` covering all published/subscribed event names, eliminating hardcoded string literals across playbook triggers and kernel publishes.
+- ClaWorks: add `CW_EVENTS` constant map in `packages/claworks-runtime/src/kernel/event-names.ts` covering all published/subscribed event names, eliminating hardcoded string literals across playbook triggers and kernel publishes.
 - ClaWorks: add `skill.run` kernel capability so Playbook `kind: action` steps can invoke OpenClaw ClawHub Skills (AI reasoning via `runEmbeddedAgent`) in addition to the existing `kind: skill` step type.
 - ClaWorks: add `system.has_skill` and `system.list_skills` kernel capabilities to inspect available OpenClaw Skills and built-in ClaWorks scripts at runtime.
 - ClaWorks: store injected `skillRun` bridge function on the `ClaworksRuntime` object so `skill.run` capability and runtime introspection can reach it without casting.

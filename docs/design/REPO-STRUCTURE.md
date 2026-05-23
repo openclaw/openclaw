@@ -25,92 +25,26 @@ claworks-packs/                   行业扩展包                   依赖 clawo
 
 ### 目录结构
 
+> **实现真源（2026-05-22）**：见 [DIRECTORY-LAYOUT.md](./DIRECTORY-LAYOUT.md)。  
+> EventKernel / 三平面 / 对外接口在 **`packages/claworks-runtime/src/`**，不在 `src/kernel/`。  
+> 根 `package.json` 仍 `name: openclaw`（upstream 兼容）；产品 CLI 为 `claworks.mjs`。
+
 ```
 claworks/
-│
-├── claworks.mjs                    ← ClaWorks 启动器（替代 openclaw.mjs）
-├── package.json                    ← name: "claworks", bin: { claworks: ./claworks.mjs }
-├── pnpm-workspace.yaml             ← packages/*
-│
-├── src/                            ← 继承自 OpenClaw（不大改），新增 ClaWorks 目录
-│   ├── gateway/                    ← ✅ OpenClaw 原有，直接继承
-│   ├── plugins/                    ← ✅ OpenClaw 原有，直接继承
-│   ├── agents/                     ← ✅ OpenClaw 原有（含 Skills/subagent）
-│   ├── config/                     ← ✅ OpenClaw 原有
-│   ├── cli/                        ← ✅ OpenClaw 原有，新增 claworks 子命令
-│   ├── acp/                        ← ✅ OpenClaw 原有
-│   │
-│   ├── kernel/                     ← 🆕 ClaWorks EventKernel
-│   │   ├── event-bus.ts            ← EventBus（优先级队列）
-│   │   ├── matcher.ts              ← 事件→Playbook 匹配
-│   │   ├── scheduler.ts            ← Cron 触发（复用 gateway cron）
-│   │   ├── outbox.ts               ← 可靠投递
-│   │   └── index.ts
-│   │
-│   ├── planes/
-│   │   ├── data/                   ← 🆕 DataPlane
-│   │   │   ├── object-store.ts     ← ObjectStore（Drizzle ORM）
-│   │   │   ├── ontology-engine.ts  ← YAML schema 加载
-│   │   │   ├── kb.ts               ← 知识库（Phase 1: 全文；Phase 2: 向量）
-│   │   │   └── index.ts
-│   │   └── orch/                  ← 🆕 OrchPlane
-│   │       ├── playbook-engine.ts  ← Playbook 加载 + 触发
-│   │       ├── step-executor.ts    ← 8 种步骤类型执行
-│   │       ├── hitl-gate.ts        ← HITL 挂起/恢复
-│   │       ├── function-executor.ts← 单次 LLM 推理
-│   │       └── index.ts
-│   │
-│   └── interfaces/
-│       ├── a2a/                    ← 🆕 A2A Server
-│       │   ├── agent-card.ts       ← /.well-known/agent.json
-│       │   ├── task-handler.ts     ← POST /a2a/tasks
-│       │   ├── client.ts           ← 主动发 A2A 请求
-│       │   └── index.ts
-│       ├── mcp/                    ← 🆕 MCP Server（对外暴露工具）
-│       │   ├── server.ts
-│       │   └── index.ts
-│       └── connectors/             ← 🆕 OT Connector 管理
-│           ├── connector-manager.ts← 子进程管理（stdio NDJSON）
-│           └── index.ts
-│
-├── extensions/                     ← ClaWorks 自身的核心 Extension（保留必要的）
-│   ├── claworks-robot/             ← 🆕 主 Extension（挂载 EventKernel 为 registerService）
-│   │   ├── index.ts                ← 注册 kernel 服务 + 自我构建工具
-│   │   ├── openclaw.plugin.json
-│   │   ├── skills/
-│   │   │   ├── claworks-builder/   ← 自我构建 Skill
-│   │   │   │   └── SKILL.md
-│   │   │   └── claworks-ops/       ← 运维 Skill
-│   │   │       └── SKILL.md
-│   │   └── src/
-│   │       ├── self-build-tools.ts ← cw_write_playbook, cw_define_object_type
-│   │       └── status-tools.ts     ← cw_kernel_status, cw_playbook_runs
-│   │
-│   ├── openai/                     ← ✅ 继承 OpenClaw（LLM Provider）
-│   ├── anthropic/                  ← ✅ 继承 OpenClaw
-│   ├── feishu/                     ← ✅ 继承 OpenClaw（HITL 通知渠道）
-│   ├── telegram/                   ← ✅ 继承 OpenClaw
-│   └── ...（其他必要 provider/channel）
-│
-├── packages/
-│   ├── claworks-sdk/               ← 🆕 第三方 Pack 开发 SDK
-│   │   ├── src/
-│   │   │   ├── define-pack-entry.ts
-│   │   │   ├── pack-manifest.ts    ← claworks.pack.json 类型定义
-│   │   │   └── index.ts
-│   │   └── package.json            ← name: "@claworks/sdk"
-│   │
-│   └── claworks-client-internal/   ← 🆕 内部 HTTP 工具（供 claworks-robot 使用）
-│
-├── packs/                          ← Pack 安装目录（运行时，类比 ~/.openclaw/skills/）
-│   └── .gitkeep
-│
-├── docs/
-│   ├── design/                     ← 本设计文档目录
-│   └── reference/                  ← 开发者参考文档
-│
-└── UPSTREAM-SYNC.md                ← OpenClaw 上游同步策略
+├── claworks.mjs / openclaw.mjs     ← 产品 / upstream 双入口
+├── packages/claworks-runtime/      ← ★ 运行时真源（kernel, planes, interfaces）
+├── extensions/claworks-robot/      ← 进程内插件（48 cw_* 工具）
+├── packages/claworks-sdk/          ← @claworks/sdk
+├── packages/claworks-client/       ← @claworks/client（fork 内 HTTP/MCP）
+├── src/cli/product/                ← claworks 子 CLI
+├── src/config/claworks-*           ← 产品配置 seam
+├── connectors/                     ← OT 子进程
+├── contrib/                        ← 配置片段 + 示例（非 Pack 真源）
+├── packs/                          ← 运行时安装目录（git 空）
+└── docs/design/                    ← 设计文档
 ```
+
+历史规划中的 `src/kernel/` 树已废弃，勿再按该路径新建模块。
 
 ---
 
@@ -211,9 +145,9 @@ claworks-packs/
 │           ├── pump-alarm-diagnose.yaml
 │           └── inspection-trigger.yaml
 │
-└── oilgas/                         ← 油气行业（商业，闭源）
-    ├── claworks.pack.json
-    └── ontology/ ...
+└── domain-operations/              ← 领域运营（见 claworks.packs.json）
+
+> 规划中的 `oilgas/` 商业 Pack **尚未**纳入本仓；工业场景见 `process-industry/`、`industrial/`。
 ```
 
 ---

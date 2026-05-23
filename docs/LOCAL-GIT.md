@@ -39,7 +39,15 @@ pnpm test packages/claworks-runtime/src/claworks/product-config-repair.test.ts
 
 `.git/info/exclude` 已配置 `.cursor/`、`.agent-trace/` 等，不进入仓库。
 
-## 相关仓
+## 本地 Git 备份（不推 GitHub）
+
+```bash
+chmod +x ~/Projects/scripts/ecosystem-backup.sh
+~/Projects/scripts/ecosystem-backup.sh
+# 或指定目录：~/Projects/scripts/ecosystem-backup.sh ~/Backups/claworks-$(date +%Y%m%d)
+```
+
+为五仓创建 `git bundle` + 分支/HEAD 快照，并拷贝 `PROJECT-LAYOUT.md` 与 workspace 文件。
 
 | 仓                             | 分支            | 说明                            |
 | ------------------------------ | --------------- | ------------------------------- |
