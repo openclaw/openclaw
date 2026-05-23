@@ -578,6 +578,10 @@ export const ar: TranslationMap = {
     },
   },
   dreaming: {
+    agentSelect: {
+      label: "الوكيل",
+      ariaLabel: "Dreaming agent",
+    },
     tabs: {
       scene: "المشهد",
       diary: "اليوميات",

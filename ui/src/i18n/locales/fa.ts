@@ -585,6 +585,10 @@ export const fa: TranslationMap = {
     },
   },
   dreaming: {
+    agentSelect: {
+      label: "عامل",
+      ariaLabel: "Dreaming agent",
+    },
     tabs: {
       scene: "صحنه",
       diary: "دفترچه",

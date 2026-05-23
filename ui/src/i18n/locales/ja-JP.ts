@@ -588,6 +588,10 @@ export const ja_JP: TranslationMap = {
     },
   },
   dreaming: {
+    agentSelect: {
+      label: "エージェント",
+      ariaLabel: "Dreaming agent",
+    },
     tabs: {
       scene: "Scene",
       diary: "Diary",

@@ -582,6 +582,10 @@ export const vi: TranslationMap = {
     },
   },
   dreaming: {
+    agentSelect: {
+      label: "Agent",
+      ariaLabel: "Dreaming agent",
+    },
     tabs: {
       scene: "Cảnh",
       diary: "Nhật ký",

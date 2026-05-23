@@ -576,6 +576,10 @@ export const zh_TW: TranslationMap = {
     },
   },
   dreaming: {
+    agentSelect: {
+      label: "代理",
+      ariaLabel: "Dreaming agent",
+    },
     tabs: {
       scene: "場景",
       diary: "日誌",

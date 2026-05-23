@@ -1059,7 +1059,7 @@ type ChatAgentFilterOption = {
   label: string;
 };
 
-function resolveChatAgentFilterId(state: AppViewState, sessionKey: string): string {
+export function resolveChatAgentFilterId(state: AppViewState, sessionKey: string): string {
   const parsed = parseAgentSessionKey(sessionKey);
   return normalizeAgentId(parsed?.agentId ?? state.agentsList?.defaultId ?? "main");
 }
@@ -1072,7 +1072,7 @@ function isSessionKeyTiedToAgent(key: string, agentId: string, defaultAgentId: s
   return agentId === defaultAgentId;
 }
 
-function resolvePreferredSessionForAgent(state: AppViewState, agentId: string): string {
+export function resolvePreferredSessionForAgent(state: AppViewState, agentId: string): string {
   const normalizedAgentId = normalizeAgentId(agentId);
   if (resolveChatAgentFilterId(state, state.sessionKey) === normalizedAgentId) {
     return state.sessionKey;
@@ -1098,7 +1098,7 @@ function resolvePreferredSessionForAgent(state: AppViewState, agentId: string): 
   return buildAgentMainSessionKey({ agentId: normalizedAgentId });
 }
 
-function resolveChatAgentFilterOptions(state: AppViewState): ChatAgentFilterOption[] {
+export function resolveChatAgentFilterOptions(state: AppViewState): ChatAgentFilterOption[] {
   const seen = new Set<string>();
   const options: ChatAgentFilterOption[] = [];
   const add = (agentId: string) => {

@@ -398,6 +398,14 @@ function buildTimedWatchCommand(pidFilePath, timeFilePath, isolatedHomeDir, port
     };
   }
 
+  if (!fs.existsSync("/usr/bin/time")) {
+    return {
+      command: "/bin/sh",
+      args: ["-lc", shellSource],
+      env,
+    };
+  }
+
   return {
     command: "/usr/bin/time",
     args: [
@@ -467,7 +475,12 @@ async function runTimedWatch(options, outputDir) {
     stderr += String(chunk);
   });
 
+  let spawnError = null;
   const exitPromise = new Promise((resolve) => {
+    child.on("error", (error) => {
+      spawnError = error;
+      resolve({ code: null, signal: null, error: error.message });
+    });
     child.on("exit", (code, signal) => resolve({ code, signal }));
   });
 
@@ -517,12 +530,15 @@ async function runTimedWatch(options, outputDir) {
   const exit = (await exitPromise) ?? { code: null, signal: null };
   fs.writeFileSync(stdoutPath, stdout, "utf8");
   fs.writeFileSync(stderrPath, stderr, "utf8");
-  const timing = fs.existsSync(timeFilePath)
-    ? parseTimingFile(timeFilePath)
-    : { userSeconds: Number.NaN, sysSeconds: Number.NaN, elapsedSeconds: Number.NaN };
+  const timingFileMissing = !fs.existsSync(timeFilePath);
+  const timing = timingFileMissing
+    ? { userSeconds: Number.NaN, sysSeconds: Number.NaN, elapsedSeconds: Number.NaN }
+    : parseTimingFile(timeFilePath);
 
   return {
     exit,
+    spawnError: spawnError ? spawnError.message : null,
+    timingFileMissing,
     timing,
     readyBeforeWindow,
     idleCpuMs:
@@ -706,6 +722,8 @@ async function main() {
     addedPaths: diff.added.length,
     removedPaths: diff.removed.length,
     watchExit: watchResult.exit,
+    spawnError: watchResult.spawnError,
+    timingFileMissing: watchResult.timingFileMissing,
     timing: watchResult.timing,
   };
   fs.writeFileSync(
@@ -717,6 +735,14 @@ async function main() {
 
   const failures = [];
   const warnings = [];
+  if (watchResult.spawnError) {
+    failures.push(`gateway:watch failed to start: ${watchResult.spawnError}`);
+  }
+  if (watchResult.timingFileMissing) {
+    failures.push(
+      "failed to collect CPU timing from the bounded gateway:watch run; timing artifact is missing",
+    );
+  }
   if (watchTriggeredBuild && watchBuildReason === "dirty_watched_tree") {
     failures.push(
       "gateway:watch invalid local run: dirty watched source tree forced a rebuild during the watch window",

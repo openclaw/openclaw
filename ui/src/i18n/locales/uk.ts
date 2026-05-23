@@ -587,6 +587,10 @@ export const uk: TranslationMap = {
     },
   },
   dreaming: {
+    agentSelect: {
+      label: "Агент",
+      ariaLabel: "Dreaming agent",
+    },
     tabs: {
       scene: "Сцена",
       diary: "Щоденник",
