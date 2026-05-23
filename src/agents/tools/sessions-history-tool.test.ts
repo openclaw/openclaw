@@ -69,6 +69,36 @@ describe("sessions_history redaction", () => {
     expect((result.details as { contentRedacted?: unknown }).contentRedacted).toBe(true);
   });
 
+  it("filters delivery-mirror and gateway-injected messages from results", async () => {
+    useLoggingConfig("redaction-off.json", { redactSensitive: "off" });
+    const tool = createSessionsHistoryTool({
+      config: {},
+      callGateway: async <T = Record<string, unknown>>(request: CallGatewayRequest): Promise<T> => {
+        if (request.method === "chat.history") {
+          return {
+            messages: [
+              { role: "user", content: "hello" },
+              { role: "assistant", provider: "anthropic", model: "claude-sonnet-4-6", content: "real reply" },
+              { role: "assistant", provider: "openclaw", model: "delivery-mirror", content: "real reply" },
+              { role: "assistant", provider: "openclaw", model: "gateway-injected", content: "system note" },
+              { role: "user", content: "next message" },
+            ],
+          } as T;
+        }
+        return {} as T;
+      },
+    });
+
+    const result = await tool.execute("call-1", { sessionKey: "main", includeTools: true });
+    const messages = (result.details as { messages?: Array<Record<string, unknown>> }).messages ?? [];
+
+    expect(messages).toHaveLength(3);
+    expect(messages.map((m) => m.role)).toEqual(["user", "assistant", "user"]);
+    const assistantMsg = messages.find((m) => m.role === "assistant");
+    expect(assistantMsg).toBeDefined();
+    expect((assistantMsg as Record<string, unknown>).provider).toBe("anthropic");
+  });
+
   it("applies custom redaction patterns to recalled session text", async () => {
     useLoggingConfig("custom-patterns.json", {
       redactSensitive: "off",

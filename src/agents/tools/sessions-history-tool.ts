@@ -257,7 +257,14 @@ export function createSessionsHistoryTool(opts?: {
         params: { sessionKey: resolvedKey, limit },
       });
       const rawMessages = Array.isArray(result?.messages) ? result.messages : [];
-      const selectedMessages = includeTools ? rawMessages : stripToolMessages(rawMessages);
+      const withoutDeliveryMirrors = rawMessages.filter((msg) => {
+        if (!msg || typeof msg !== "object" || (msg as { role?: unknown }).role !== "assistant") {
+          return true;
+        }
+        const { provider, model } = msg as { provider?: unknown; model?: unknown };
+        return !(provider === "openclaw" && (model === "delivery-mirror" || model === "gateway-injected"));
+      });
+      const selectedMessages = includeTools ? withoutDeliveryMirrors : stripToolMessages(withoutDeliveryMirrors);
       const sanitizedMessages = selectedMessages.map((message) => sanitizeHistoryMessage(message));
       const contentTruncated = sanitizedMessages.some((entry) => entry.truncated);
       const contentRedacted = sanitizedMessages.some((entry) => entry.redacted);
