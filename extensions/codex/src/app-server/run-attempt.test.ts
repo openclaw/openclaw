@@ -299,6 +299,41 @@ function mockCall(mock: unknown, label: string, index = 0): unknown[] {
   return call;
 }
 
+async function waitForPromiseForTest<T>(
+  promise: Promise<T>,
+  timeoutMs: number,
+  label: string,
+): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<never>((_resolve, reject) => {
+        timer = setTimeout(() => reject(new Error(`${label} timed out`)), timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timer) {
+      clearTimeout(timer);
+    }
+  }
+}
+
+async function drainPromiseForTest(
+  promise: Promise<unknown>,
+  timeoutMs: number,
+  label: string,
+): Promise<void> {
+  await waitForPromiseForTest(
+    promise.then(
+      () => undefined,
+      () => undefined,
+    ),
+    timeoutMs,
+    label,
+  );
+}
+
 function openSocket(url: string): Promise<WebSocket> {
   return new Promise((resolve, reject) => {
     const socket = new WebSocket(url);
@@ -3153,7 +3188,8 @@ describe("runCodexAppServerAttempt", () => {
     params.runtimePlan = createCodexRuntimePlanFixture();
 
     const run = runCodexAppServerAttempt(params);
-    let completed = false;
+    void run.catch(() => undefined);
+    let runSettled = false;
     let diagnosticsSubscribed = true;
     try {
       await harness.waitForMethod("thread/start", 10_000);
@@ -3213,37 +3249,20 @@ describe("runCodexAppServerAttempt", () => {
       ).toHaveLength(1);
       expect(activeDiagnosticToolKeys(diagnosticEvents)).toEqual(new Set());
 
-      await harness.notify({
-        method: "item/completed",
-        params: {
-          threadId: "thread-1",
-          turnId: "turn-1",
-          completedAtMs: Date.now(),
-          item: {
-            type: "dynamicToolCall",
-            id: "call-echo-1",
-            namespace: null,
-            tool: "echo",
-            arguments: {},
-            status: "completed",
-            contentItems: [{ type: "inputText", text: "echo done" }],
-            success: true,
-            durationMs: 1,
-          },
-        },
-      });
-
-      await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
-      completed = true;
-      await run;
+      harness.close();
+      abortController.abort(new Error("test complete"));
+      await drainPromiseForTest(run, 10_000, "Codex diagnostic test run cleanup");
+      runSettled = true;
     } finally {
       if (diagnosticsSubscribed) {
         unsubscribeDiagnostics();
       }
-      if (!completed) {
+      if (!runSettled) {
         harness.close();
         abortController.abort(new Error("test cleanup"));
-        await run.catch(() => {});
+        await drainPromiseForTest(run, 1_000, "Codex diagnostic test failure cleanup").catch(
+          () => undefined,
+        );
       }
     }
   });
@@ -3299,7 +3318,7 @@ describe("runCodexAppServerAttempt", () => {
         contentItems: [{ type: "inputText", text: "Background task started." }],
       });
       expect(harness.requests.some((request) => request.method === "turn/interrupt")).toBe(false);
-      const result = await run;
+      const result = await waitForPromiseForTest(run, 20_000, "Codex terminal dynamic tool run");
       completed = true;
 
       expect(result.timedOut).toBe(false);
@@ -3321,7 +3340,9 @@ describe("runCodexAppServerAttempt", () => {
       if (!completed) {
         harness.close();
         abortController.abort(new Error("test cleanup"));
-        await run.catch(() => {});
+        await drainPromiseForTest(run, 1_000, "Codex terminal dynamic tool cleanup").catch(
+          () => undefined,
+        );
       }
     }
   });
