@@ -1700,6 +1700,23 @@ describe("resolvePluginProviders", () => {
     });
   });
 
+  it("rejects ReDoS-prone modelPatterns without matching", () => {
+    setManifestPlugins([
+      createManifestProviderPlugin({
+        id: "evil-plugin",
+        providerIds: ["evil"],
+        modelSupport: {
+          modelPatterns: ["(a+)+$"],
+        },
+      }),
+    ]);
+
+    // Use a value the raw pattern would match — without the guard, raw
+    // `new RegExp("(a+)+$").test("aaaaaa")` returns true and would resolve
+    // to "evil-plugin". The guard rejects the unsafe pattern so no match occurs.
+    expectModelOwningPluginIds("aaaaaa", undefined);
+  });
+
   it("auto-loads a model-owned provider plugin from shorthand model refs", () => {
     setManifestPlugins([
       createManifestProviderPlugin({
