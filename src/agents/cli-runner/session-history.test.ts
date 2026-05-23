@@ -647,15 +647,16 @@ describe("buildCliSessionHistoryPrompt", () => {
     expect(prompt).toContain("<next_user_message>\nnext ask\n</next_user_message>");
   });
 
-  it("caps oversize compaction summary; drops post-summary tail when summary alone exceeds the budget", () => {
+  it("caps oversize compaction summary while preserving recent post-summary tail", () => {
     // Two regressions covered here:
     // 1. `tailRaw.slice(-0)` would return the entire tail (JS quirk:
-    //    `String.prototype.slice(-0) === slice(0)`), defeating the cap
-    //    when the summary block consumes the budget.
+    //    `String.prototype.slice(-0) === slice(0)`), defeating the cap when
+    //    the summary block consumes the budget.
     // 2. Pinning the full summary as-is when the summary itself exceeds
     //    `maxHistoryChars` would blow past the cap that prevents
     //    reseeding fresh CLI sessions with unexpectedly huge prompts.
-    //    The summary must itself be truncated to fit the budget.
+    //    The summary must itself be truncated to fit the budget while still
+    //    preserving the recent post-summary exact turns.
     const summaryText = "OVERSIZE_SUMMARY_MARKER ".repeat(50).trim();
     const maxHistoryChars = 200;
     const prompt = buildCliSessionHistoryPrompt({
@@ -689,10 +690,10 @@ describe("buildCliSessionHistoryPrompt", () => {
     // The full untruncated summary must NOT appear — that would defeat
     // the cap.
     expect(prompt).not.toContain(summaryText);
-    // Post-summary content must be dropped — no leak from the
-    // `slice(-0) === full string` regression.
-    expect(prompt).not.toContain("POST_SUMMARY_USER_DROPPED");
-    expect(prompt).not.toContain("POST_SUMMARY_ASSISTANT_DROPPED");
+    // Post-summary exact turns are newer than the summary and must still
+    // survive inside the reserved tail budget.
+    expect(prompt).toContain("POST_SUMMARY_USER_DROPPED");
+    expect(prompt).toContain("POST_SUMMARY_ASSISTANT_DROPPED");
     expect(prompt).toContain("<next_user_message>\nnext ask\n</next_user_message>");
   });
 });

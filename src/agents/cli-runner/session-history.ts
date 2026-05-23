@@ -178,12 +178,21 @@ export function buildCliSessionHistoryPrompt(params: {
     if (summaryRendered.length >= maxHistoryChars) {
       // Truncate the summary to fit the budget (less the marker line),
       // keeping the head — compaction summaries are typically structured
-      // overview-first, and the leading orientation is the highest-value
-      // recovery context. Drop the post-summary tail entirely; with no
-      // headroom, none of it would survive anyway.
-      const summaryBudget = Math.max(0, maxHistoryChars - truncationMarker.length - 1);
+      // overview-first, and the leading orientation is high-value recovery
+      // context. Still reserve budget for the post-summary tail so recent
+      // exact turns survive even when the summary itself is oversize.
+      const tailBudget =
+        tailRaw.length > 0 ? Math.min(tailRaw.length, Math.floor(maxHistoryChars / 2)) : 0;
+      const separatorBudget = tailBudget > 0 ? 2 : 1;
+      const summaryBudget = Math.max(
+        0,
+        maxHistoryChars - truncationMarker.length - separatorBudget - tailBudget,
+      );
       const summaryTruncated = summaryRendered.slice(0, summaryBudget).trimEnd();
-      renderedHistory = `${truncationMarker}\n${summaryTruncated}`;
+      const tailTruncated = tailBudget > 0 ? tailRaw.slice(-tailBudget).trimStart() : "";
+      renderedHistory = [truncationMarker, summaryTruncated, tailTruncated]
+        .filter(Boolean)
+        .join("\n");
     } else if (tailRaw.length === 0) {
       renderedHistory = summaryRendered;
     } else {
