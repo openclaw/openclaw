@@ -1090,6 +1090,33 @@ describe("runGatewayLoop", () => {
     });
   });
 
+  it("marks the in-flight token consumed before routing SIGUSR1 with a restart intent", async () => {
+    vi.clearAllMocks();
+    consumeGatewayRestartIntentPayloadSync.mockReturnValueOnce({ reason: "config.patch" });
+
+    await withIsolatedSignals(async ({ captureSignal }) => {
+      const { close, start } = await createSignaledLoopHarness();
+      const sigusr1 = captureSignal("SIGUSR1");
+
+      sigusr1();
+      await waitForLoopCondition(
+        () => close.mock.calls.length > 0,
+        "expected close to be called as part of the restart",
+      );
+      await waitForLoopCondition(
+        () => start.mock.calls.length >= 2,
+        "expected start to be called a second time after restart",
+      );
+
+      expect(markGatewaySigusr1RestartHandled).toHaveBeenCalledTimes(1);
+      expect(markGatewaySigusr1RestartHandled.mock.invocationCallOrder[0]).toBeLessThan(
+        close.mock.invocationCallOrder[0]!,
+      );
+      expect(close).toHaveBeenCalledTimes(1);
+      expect(start).toHaveBeenCalledTimes(2);
+    });
+  });
+
   it("releases the lock before exiting on spawned restart", async () => {
     vi.clearAllMocks();
     peekGatewaySigusr1RestartReason.mockReturnValue(undefined);

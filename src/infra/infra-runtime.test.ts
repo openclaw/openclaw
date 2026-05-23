@@ -13,6 +13,7 @@ import {
   isGatewaySigusr1RestartExternallyAllowed,
   markGatewaySigusr1RestartHandled,
   peekGatewaySigusr1RestartReason,
+  resetGatewayRestartStateForInProcessRestart,
   scheduleGatewaySigusr1Restart,
   setGatewaySigusr1RestartPolicy,
   setPreRestartDeferralCheck,
@@ -459,6 +460,21 @@ describe("infra runtime", () => {
         await vi.advanceTimersByTimeAsync(0);
         expect(countSigusr1Emits(emitSpy.mock.calls)).toBe(2);
         expect(peekGatewaySigusr1RestartReason()).toBe("update.run");
+      } finally {
+        process.removeListener("SIGUSR1", handler);
+      }
+    });
+
+    it("aligns stale emit/consume token counters on in-process restart boundary", () => {
+      const handler = () => {};
+      process.on("SIGUSR1", handler);
+      try {
+        emitGatewayRestart();
+        // An unconsumed token permanently coalesces further restart requests.
+        expect(scheduleGatewaySigusr1Restart({ delayMs: 0, reason: "check" }).coalesced).toBe(true);
+        resetGatewayRestartStateForInProcessRestart();
+        // After boundary reset the tokens are aligned; requests go through.
+        expect(scheduleGatewaySigusr1Restart({ delayMs: 0, reason: "post-reset" }).coalesced).toBe(false);
       } finally {
         process.removeListener("SIGUSR1", handler);
       }
