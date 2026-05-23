@@ -56,6 +56,9 @@ export function createExistingSessionAgentSharedModule() {
     resolveTargetIdFromBody: vi.fn((body: Record<string, unknown>) =>
       typeof body.targetId === "string" ? body.targetId : undefined,
     ),
+    resolveTargetIdFromQuery: vi.fn((query: Record<string, unknown>) =>
+      typeof query.targetId === "string" ? query.targetId : undefined,
+    ),
     withPlaywrightRouteContext: vi.fn(),
     withRouteTabContext: vi.fn(
       async ({

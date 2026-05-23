@@ -9,10 +9,30 @@ import path from "node:path";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   analyzeChromeMcpPerformanceInsight,
+  executeChromeMcpThirdPartyDeveloperTool,
+  executeChromeMcpWebMcpTool,
+  getChromeMcpConsoleMessage,
+  getChromeMcpHeapSnapshotClassNodes,
+  getChromeMcpHeapSnapshotDetails,
+  getChromeMcpHeapSnapshotRetainers,
+  getChromeMcpHeapSnapshotSummary,
+  getChromeMcpNetworkRequest,
+  getChromeMcpTabId,
+  installChromeMcpExtension,
+  listChromeMcpExtensions,
   listChromeMcpConsoleMessages,
   listChromeMcpNetworkRequests,
+  listChromeMcpThirdPartyDeveloperTools,
+  listChromeMcpWebMcpTools,
+  reloadChromeMcpExtension,
+  runChromeMcpLighthouseAudit,
   startChromeMcpPerformanceTrace,
+  startChromeMcpScreencast,
   stopChromeMcpPerformanceTrace,
+  stopChromeMcpScreencast,
+  takeChromeMcpHeapSnapshot,
+  triggerChromeMcpExtensionAction,
+  uninstallChromeMcpExtension,
 } from "../chrome-mcp.js";
 import { getBrowserProfileCapabilities } from "../profile-capabilities.js";
 import type { PwAiModule } from "../pw-ai-module.js";
@@ -28,7 +48,7 @@ import {
 import { resolveWritableOutputPathOrRespond } from "./output-paths.js";
 import { DEFAULT_TRACE_DIR } from "./path-output.js";
 import type { BrowserRequest, BrowserResponse, BrowserRouteRegistrar } from "./types.js";
-import { asyncBrowserRoute, jsonError, toBoolean, toStringOrEmpty } from "./utils.js";
+import { asyncBrowserRoute, jsonError, toBoolean, toNumber, toStringOrEmpty } from "./utils.js";
 
 function browserDebugTargetPayload(
   targetId: string,
@@ -77,14 +97,34 @@ function consolePriority(level: string | undefined) {
   }
 }
 
-function filterConsoleMessagesByMinimumLevel<
-  T extends { type?: string },
->(messages: T[], level: string | undefined): T[] {
+function filterConsoleMessagesByMinimumLevel<T extends { type?: string }>(
+  messages: T[],
+  level: string | undefined,
+): T[] {
   if (!level) {
     return messages;
   }
   const min = consolePriority(level);
   return messages.filter((message) => consolePriority(message.type) >= min);
+}
+
+function requireChromeMcpProfile(
+  res: { status: (code: number) => { json: (body: unknown) => void } },
+  profileCtx: { profile: unknown },
+) {
+  if (!getBrowserProfileCapabilities(profileCtx.profile as never).usesChromeMcp) {
+    jsonError(res as never, 400, "this route is only supported for Chrome MCP profiles");
+    return false;
+  }
+  return true;
+}
+
+function parseMode(value: unknown): "navigation" | "snapshot" | undefined {
+  return value === "navigation" || value === "snapshot" ? value : undefined;
+}
+
+function parseDevice(value: unknown): "desktop" | "mobile" | undefined {
+  return value === "desktop" || value === "mobile" ? value : undefined;
 }
 
 /** Register browser debug endpoints on the control server. */
@@ -408,6 +448,640 @@ export function registerBrowserAgentDebugRoutes(
             insightName,
             ...(output ? { output } : {}),
           });
+        },
+      });
+    }),
+  );
+
+  app.post(
+    "/heap-snapshot/take",
+    asyncBrowserRoute(async (req, res) => {
+      const body = readBody(req);
+      const targetId = resolveTargetIdFromBody(body);
+      const out = toStringOrEmpty(body.path) || "";
+
+      await withRouteTabContext({
+        req,
+        res,
+        ctx,
+        targetId,
+        enforceCurrentUrlAllowed: true,
+        run: async ({ tab, profileCtx, resolveTabUrl }) => {
+          if (!requireChromeMcpProfile(res, profileCtx)) {
+            return;
+          }
+          const id = crypto.randomUUID();
+          const heapSnapshotPath = await resolveWritableOutputPathOrRespond({
+            res,
+            rootDir: DEFAULT_TRACE_DIR,
+            requestedPath: out,
+            scopeLabel: "heap snapshot directory",
+            defaultFileName: `browser-heapsnapshot-${id}.heapsnapshot`,
+            ensureRootDir: true,
+          });
+          if (!heapSnapshotPath) {
+            return;
+          }
+          const output = await takeChromeMcpHeapSnapshot({
+            profileName: profileCtx.profile.name,
+            profile: profileCtx.profile,
+            targetId: tab.targetId,
+            filePath: heapSnapshotPath,
+            timeoutMs: toNumber(body.timeoutMs),
+          });
+          const url = await resolveTabUrl(tab.url);
+          res.json({
+            ok: true,
+            targetId: tab.targetId,
+            ...(url ? { url } : {}),
+            path: path.resolve(heapSnapshotPath),
+            ...(output ? { output } : {}),
+          });
+        },
+      });
+    }),
+  );
+
+  app.post(
+    "/heap-snapshot/summary",
+    asyncBrowserRoute(async (req, res) => {
+      const body = readBody(req);
+      const filePath = toStringOrEmpty(body.path) || toStringOrEmpty(body.filePath);
+      if (!filePath) {
+        return jsonError(res, 400, "path is required");
+      }
+      await withRouteTabContext({
+        req,
+        res,
+        ctx,
+        targetId: resolveTargetIdFromBody(body),
+        enforceCurrentUrlAllowed: true,
+        run: async ({ profileCtx }) => {
+          if (!requireChromeMcpProfile(res, profileCtx)) {
+            return;
+          }
+          const result = await getChromeMcpHeapSnapshotSummary({
+            profileName: profileCtx.profile.name,
+            profile: profileCtx.profile,
+            filePath,
+            timeoutMs: toNumber(body.timeoutMs),
+          });
+          res.json({ ok: true, path: filePath, ...result });
+        },
+      });
+    }),
+  );
+
+  app.post(
+    "/heap-snapshot/details",
+    asyncBrowserRoute(async (req, res) => {
+      const body = readBody(req);
+      const filePath = toStringOrEmpty(body.path) || toStringOrEmpty(body.filePath);
+      if (!filePath) {
+        return jsonError(res, 400, "path is required");
+      }
+      await withRouteTabContext({
+        req,
+        res,
+        ctx,
+        targetId: resolveTargetIdFromBody(body),
+        enforceCurrentUrlAllowed: true,
+        run: async ({ profileCtx }) => {
+          if (!requireChromeMcpProfile(res, profileCtx)) {
+            return;
+          }
+          const result = await getChromeMcpHeapSnapshotDetails({
+            profileName: profileCtx.profile.name,
+            profile: profileCtx.profile,
+            filePath,
+            pageIdx: toNumber(body.pageIdx),
+            pageSize: toNumber(body.pageSize),
+            timeoutMs: toNumber(body.timeoutMs),
+          });
+          res.json({ ok: true, path: filePath, ...result });
+        },
+      });
+    }),
+  );
+
+  app.post(
+    "/heap-snapshot/class-nodes",
+    asyncBrowserRoute(async (req, res) => {
+      const body = readBody(req);
+      const filePath = toStringOrEmpty(body.path) || toStringOrEmpty(body.filePath);
+      const id = toNumber(body.id);
+      if (!filePath) {
+        return jsonError(res, 400, "path is required");
+      }
+      if (id === undefined) {
+        return jsonError(res, 400, "id is required");
+      }
+      await withRouteTabContext({
+        req,
+        res,
+        ctx,
+        targetId: resolveTargetIdFromBody(body),
+        enforceCurrentUrlAllowed: true,
+        run: async ({ profileCtx }) => {
+          if (!requireChromeMcpProfile(res, profileCtx)) {
+            return;
+          }
+          const result = await getChromeMcpHeapSnapshotClassNodes({
+            profileName: profileCtx.profile.name,
+            profile: profileCtx.profile,
+            filePath,
+            id,
+            pageIdx: toNumber(body.pageIdx),
+            pageSize: toNumber(body.pageSize),
+            timeoutMs: toNumber(body.timeoutMs),
+          });
+          res.json({ ok: true, path: filePath, id, ...result });
+        },
+      });
+    }),
+  );
+
+  app.post(
+    "/heap-snapshot/retainers",
+    asyncBrowserRoute(async (req, res) => {
+      const body = readBody(req);
+      const filePath = toStringOrEmpty(body.path) || toStringOrEmpty(body.filePath);
+      const nodeId = toNumber(body.nodeId);
+      if (!filePath) {
+        return jsonError(res, 400, "path is required");
+      }
+      if (nodeId === undefined) {
+        return jsonError(res, 400, "nodeId is required");
+      }
+      await withRouteTabContext({
+        req,
+        res,
+        ctx,
+        targetId: resolveTargetIdFromBody(body),
+        enforceCurrentUrlAllowed: true,
+        run: async ({ profileCtx }) => {
+          if (!requireChromeMcpProfile(res, profileCtx)) {
+            return;
+          }
+          const result = await getChromeMcpHeapSnapshotRetainers({
+            profileName: profileCtx.profile.name,
+            profile: profileCtx.profile,
+            filePath,
+            nodeId,
+            pageIdx: toNumber(body.pageIdx),
+            pageSize: toNumber(body.pageSize),
+            timeoutMs: toNumber(body.timeoutMs),
+          });
+          res.json({ ok: true, path: filePath, nodeId, ...result });
+        },
+      });
+    }),
+  );
+
+  app.post(
+    "/lighthouse",
+    asyncBrowserRoute(async (req, res) => {
+      const body = readBody(req);
+      await withRouteTabContext({
+        req,
+        res,
+        ctx,
+        targetId: resolveTargetIdFromBody(body),
+        enforceCurrentUrlAllowed: true,
+        run: async ({ tab, profileCtx, resolveTabUrl }) => {
+          if (!requireChromeMcpProfile(res, profileCtx)) {
+            return;
+          }
+          const result = await runChromeMcpLighthouseAudit({
+            profileName: profileCtx.profile.name,
+            profile: profileCtx.profile,
+            targetId: tab.targetId,
+            mode: parseMode(body.mode),
+            device: parseDevice(body.device),
+            outputDirPath: toStringOrEmpty(body.outputDirPath) || undefined,
+            timeoutMs: toNumber(body.timeoutMs),
+          });
+          const url = await resolveTabUrl(tab.url);
+          res.json({ ok: true, targetId: tab.targetId, ...(url ? { url } : {}), ...result });
+        },
+      });
+    }),
+  );
+
+  app.post(
+    "/screencast/start",
+    asyncBrowserRoute(async (req, res) => {
+      const body = readBody(req);
+      await withRouteTabContext({
+        req,
+        res,
+        ctx,
+        targetId: resolveTargetIdFromBody(body),
+        enforceCurrentUrlAllowed: true,
+        run: async ({ tab, profileCtx, resolveTabUrl }) => {
+          if (!requireChromeMcpProfile(res, profileCtx)) {
+            return;
+          }
+          const output = await startChromeMcpScreencast({
+            profileName: profileCtx.profile.name,
+            profile: profileCtx.profile,
+            targetId: tab.targetId,
+            filePath: toStringOrEmpty(body.path) || toStringOrEmpty(body.filePath) || undefined,
+            timeoutMs: toNumber(body.timeoutMs),
+          });
+          const url = await resolveTabUrl(tab.url);
+          res.json({ ok: true, targetId: tab.targetId, ...(url ? { url } : {}), output });
+        },
+      });
+    }),
+  );
+
+  app.post(
+    "/screencast/stop",
+    asyncBrowserRoute(async (req, res) => {
+      const body = readBody(req);
+      await withRouteTabContext({
+        req,
+        res,
+        ctx,
+        targetId: resolveTargetIdFromBody(body),
+        enforceCurrentUrlAllowed: true,
+        run: async ({ tab, profileCtx, resolveTabUrl }) => {
+          if (!requireChromeMcpProfile(res, profileCtx)) {
+            return;
+          }
+          const output = await stopChromeMcpScreencast({
+            profileName: profileCtx.profile.name,
+            profile: profileCtx.profile,
+            targetId: tab.targetId,
+            timeoutMs: toNumber(body.timeoutMs),
+          });
+          const url = await resolveTabUrl(tab.url);
+          res.json({ ok: true, targetId: tab.targetId, ...(url ? { url } : {}), output });
+        },
+      });
+    }),
+  );
+
+  app.get(
+    "/extensions",
+    asyncBrowserRoute(async (req, res) => {
+      await withRouteTabContext({
+        req,
+        res,
+        ctx,
+        targetId: resolveTargetIdFromQuery(req.query),
+        run: async ({ profileCtx }) => {
+          if (!requireChromeMcpProfile(res, profileCtx)) {
+            return;
+          }
+          const extensions = await listChromeMcpExtensions({
+            profileName: profileCtx.profile.name,
+            profile: profileCtx.profile,
+            timeoutMs: toNumber(req.query.timeoutMs),
+          });
+          res.json({ ok: true, extensions });
+        },
+      });
+    }),
+  );
+
+  app.post(
+    "/extensions/install",
+    asyncBrowserRoute(async (req, res) => {
+      const body = readBody(req);
+      const extensionPath = toStringOrEmpty(body.path);
+      if (!extensionPath) {
+        return jsonError(res, 400, "path is required");
+      }
+      await withRouteTabContext({
+        req,
+        res,
+        ctx,
+        targetId: resolveTargetIdFromBody(body),
+        run: async ({ profileCtx }) => {
+          if (!requireChromeMcpProfile(res, profileCtx)) {
+            return;
+          }
+          const output = await installChromeMcpExtension({
+            profileName: profileCtx.profile.name,
+            profile: profileCtx.profile,
+            path: extensionPath,
+            timeoutMs: toNumber(body.timeoutMs),
+          });
+          res.json({ ok: true, path: extensionPath, output });
+        },
+      });
+    }),
+  );
+
+  app.post(
+    "/extensions/uninstall",
+    asyncBrowserRoute(async (req, res) => {
+      const body = readBody(req);
+      const id = toStringOrEmpty(body.id);
+      if (!id) {
+        return jsonError(res, 400, "id is required");
+      }
+      await withRouteTabContext({
+        req,
+        res,
+        ctx,
+        targetId: resolveTargetIdFromBody(body),
+        run: async ({ profileCtx }) => {
+          if (!requireChromeMcpProfile(res, profileCtx)) {
+            return;
+          }
+          const output = await uninstallChromeMcpExtension({
+            profileName: profileCtx.profile.name,
+            profile: profileCtx.profile,
+            id,
+            timeoutMs: toNumber(body.timeoutMs),
+          });
+          res.json({ ok: true, id, output });
+        },
+      });
+    }),
+  );
+
+  app.post(
+    "/extensions/reload",
+    asyncBrowserRoute(async (req, res) => {
+      const body = readBody(req);
+      const id = toStringOrEmpty(body.id);
+      if (!id) {
+        return jsonError(res, 400, "id is required");
+      }
+      await withRouteTabContext({
+        req,
+        res,
+        ctx,
+        targetId: resolveTargetIdFromBody(body),
+        run: async ({ profileCtx }) => {
+          if (!requireChromeMcpProfile(res, profileCtx)) {
+            return;
+          }
+          const output = await reloadChromeMcpExtension({
+            profileName: profileCtx.profile.name,
+            profile: profileCtx.profile,
+            id,
+            timeoutMs: toNumber(body.timeoutMs),
+          });
+          res.json({ ok: true, id, output });
+        },
+      });
+    }),
+  );
+
+  app.post(
+    "/extensions/action",
+    asyncBrowserRoute(async (req, res) => {
+      const body = readBody(req);
+      const id = toStringOrEmpty(body.id);
+      if (!id) {
+        return jsonError(res, 400, "id is required");
+      }
+      await withRouteTabContext({
+        req,
+        res,
+        ctx,
+        targetId: resolveTargetIdFromBody(body),
+        run: async ({ profileCtx }) => {
+          if (!requireChromeMcpProfile(res, profileCtx)) {
+            return;
+          }
+          const output = await triggerChromeMcpExtensionAction({
+            profileName: profileCtx.profile.name,
+            profile: profileCtx.profile,
+            id,
+            timeoutMs: toNumber(body.timeoutMs),
+          });
+          res.json({ ok: true, id, output });
+        },
+      });
+    }),
+  );
+
+  app.get(
+    "/extensions/tab-id",
+    asyncBrowserRoute(async (req, res) => {
+      await withRouteTabContext({
+        req,
+        res,
+        ctx,
+        targetId: resolveTargetIdFromQuery(req.query),
+        enforceCurrentUrlAllowed: true,
+        run: async ({ tab, profileCtx, resolveTabUrl }) => {
+          if (!requireChromeMcpProfile(res, profileCtx)) {
+            return;
+          }
+          const tabId = await getChromeMcpTabId({
+            profileName: profileCtx.profile.name,
+            profile: profileCtx.profile,
+            targetId: tab.targetId,
+            timeoutMs: toNumber(req.query.timeoutMs),
+          });
+          const url = await resolveTabUrl(tab.url);
+          res.json({ ok: true, targetId: tab.targetId, ...(url ? { url } : {}), tabId });
+        },
+      });
+    }),
+  );
+
+  app.get(
+    "/third-party-tools",
+    asyncBrowserRoute(async (req, res) => {
+      await withRouteTabContext({
+        req,
+        res,
+        ctx,
+        targetId: resolveTargetIdFromQuery(req.query),
+        enforceCurrentUrlAllowed: true,
+        run: async ({ tab, profileCtx, resolveTabUrl }) => {
+          if (!requireChromeMcpProfile(res, profileCtx)) {
+            return;
+          }
+          const result = await listChromeMcpThirdPartyDeveloperTools({
+            profileName: profileCtx.profile.name,
+            profile: profileCtx.profile,
+            targetId: tab.targetId,
+            timeoutMs: toNumber(req.query.timeoutMs),
+          });
+          const url = await resolveTabUrl(tab.url);
+          res.json({ ok: true, targetId: tab.targetId, ...(url ? { url } : {}), ...result });
+        },
+      });
+    }),
+  );
+
+  app.post(
+    "/third-party-tools/execute",
+    asyncBrowserRoute(async (req, res) => {
+      const body = readBody(req);
+      const toolName = toStringOrEmpty(body.toolName);
+      if (!toolName) {
+        return jsonError(res, 400, "toolName is required");
+      }
+      await withRouteTabContext({
+        req,
+        res,
+        ctx,
+        targetId: resolveTargetIdFromBody(body),
+        enforceCurrentUrlAllowed: true,
+        run: async ({ tab, profileCtx, resolveTabUrl }) => {
+          if (!requireChromeMcpProfile(res, profileCtx)) {
+            return;
+          }
+          const result = await executeChromeMcpThirdPartyDeveloperTool({
+            profileName: profileCtx.profile.name,
+            profile: profileCtx.profile,
+            targetId: tab.targetId,
+            toolName,
+            paramsJson: toStringOrEmpty(body.paramsJson) || undefined,
+            toolParams:
+              body.toolParams &&
+              typeof body.toolParams === "object" &&
+              !Array.isArray(body.toolParams)
+                ? (body.toolParams as Record<string, unknown>)
+                : undefined,
+            timeoutMs: toNumber(body.timeoutMs),
+          });
+          const url = await resolveTabUrl(tab.url);
+          res.json({
+            ok: true,
+            targetId: tab.targetId,
+            ...(url ? { url } : {}),
+            toolName,
+            ...result,
+          });
+        },
+      });
+    }),
+  );
+
+  app.get(
+    "/web-mcp-tools",
+    asyncBrowserRoute(async (req, res) => {
+      await withRouteTabContext({
+        req,
+        res,
+        ctx,
+        targetId: resolveTargetIdFromQuery(req.query),
+        enforceCurrentUrlAllowed: true,
+        run: async ({ tab, profileCtx, resolveTabUrl }) => {
+          if (!requireChromeMcpProfile(res, profileCtx)) {
+            return;
+          }
+          const result = await listChromeMcpWebMcpTools({
+            profileName: profileCtx.profile.name,
+            profile: profileCtx.profile,
+            targetId: tab.targetId,
+            timeoutMs: toNumber(req.query.timeoutMs),
+          });
+          const url = await resolveTabUrl(tab.url);
+          res.json({ ok: true, targetId: tab.targetId, ...(url ? { url } : {}), ...result });
+        },
+      });
+    }),
+  );
+
+  app.post(
+    "/web-mcp-tools/execute",
+    asyncBrowserRoute(async (req, res) => {
+      const body = readBody(req);
+      const toolName = toStringOrEmpty(body.toolName);
+      if (!toolName) {
+        return jsonError(res, 400, "toolName is required");
+      }
+      await withRouteTabContext({
+        req,
+        res,
+        ctx,
+        targetId: resolveTargetIdFromBody(body),
+        enforceCurrentUrlAllowed: true,
+        run: async ({ tab, profileCtx, resolveTabUrl }) => {
+          if (!requireChromeMcpProfile(res, profileCtx)) {
+            return;
+          }
+          const result = await executeChromeMcpWebMcpTool({
+            profileName: profileCtx.profile.name,
+            profile: profileCtx.profile,
+            targetId: tab.targetId,
+            toolName,
+            inputJson: toStringOrEmpty(body.inputJson) || undefined,
+            input:
+              body.input && typeof body.input === "object" && !Array.isArray(body.input)
+                ? (body.input as Record<string, unknown>)
+                : undefined,
+            timeoutMs: toNumber(body.timeoutMs),
+          });
+          const url = await resolveTabUrl(tab.url);
+          res.json({
+            ok: true,
+            targetId: tab.targetId,
+            ...(url ? { url } : {}),
+            toolName,
+            ...result,
+          });
+        },
+      });
+    }),
+  );
+
+  app.get(
+    "/console/message",
+    asyncBrowserRoute(async (req, res) => {
+      const msgid = toNumber(req.query.msgid);
+      if (msgid === undefined) {
+        return jsonError(res, 400, "msgid is required");
+      }
+      await withRouteTabContext({
+        req,
+        res,
+        ctx,
+        targetId: resolveTargetIdFromQuery(req.query),
+        enforceCurrentUrlAllowed: true,
+        run: async ({ tab, profileCtx, resolveTabUrl }) => {
+          if (!requireChromeMcpProfile(res, profileCtx)) {
+            return;
+          }
+          const message = await getChromeMcpConsoleMessage({
+            profileName: profileCtx.profile.name,
+            profile: profileCtx.profile,
+            targetId: tab.targetId,
+            msgid,
+          });
+          const url = await resolveTabUrl(tab.url);
+          res.json({ ok: true, targetId: tab.targetId, ...(url ? { url } : {}), msgid, message });
+        },
+      });
+    }),
+  );
+
+  app.get(
+    "/requests/request",
+    asyncBrowserRoute(async (req, res) => {
+      const reqid = toNumber(req.query.reqid);
+      await withRouteTabContext({
+        req,
+        res,
+        ctx,
+        targetId: resolveTargetIdFromQuery(req.query),
+        enforceCurrentUrlAllowed: true,
+        run: async ({ tab, profileCtx, resolveTabUrl }) => {
+          if (!requireChromeMcpProfile(res, profileCtx)) {
+            return;
+          }
+          const request = await getChromeMcpNetworkRequest({
+            profileName: profileCtx.profile.name,
+            profile: profileCtx.profile,
+            targetId: tab.targetId,
+            reqid,
+            requestFilePath: toStringOrEmpty(req.query.requestFilePath) || undefined,
+            responseFilePath: toStringOrEmpty(req.query.responseFilePath) || undefined,
+          });
+          const url = await resolveTabUrl(tab.url);
+          res.json({ ok: true, targetId: tab.targetId, ...(url ? { url } : {}), reqid, request });
         },
       });
     }),

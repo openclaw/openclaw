@@ -14,23 +14,43 @@ const chromeMcpMocks = vi.hoisted(() => ({
   clickChromeMcpCoords: vi.fn(async () => {}),
   clickChromeMcpElement: vi.fn(async () => {}),
   emulateChromeMcpPage: vi.fn(async () => {}),
+  executeChromeMcpThirdPartyDeveloperTool: vi.fn(async () => ({ output: "3p executed" })),
+  executeChromeMcpWebMcpTool: vi.fn(async () => ({ output: "webmcp executed" })),
   evaluateChromeMcpScript: vi.fn(
     async (_params: { profileName: string; targetId: string; fn: string }) => true,
   ),
   fillChromeMcpElement: vi.fn(async () => {}),
+  getChromeMcpConsoleMessage: vi.fn(async () => ({ text: "detail" })),
+  getChromeMcpHeapSnapshotClassNodes: vi.fn(async () => ({ output: "class nodes" })),
+  getChromeMcpHeapSnapshotDetails: vi.fn(async () => ({ output: "details" })),
+  getChromeMcpHeapSnapshotRetainers: vi.fn(async () => ({ output: "retainers" })),
+  getChromeMcpHeapSnapshotSummary: vi.fn(async () => ({ output: "summary" })),
+  getChromeMcpNetworkRequest: vi.fn(async () => ({ url: "https://example.com/api" })),
+  getChromeMcpTabId: vi.fn(async () => "123"),
   handleChromeMcpDialog: vi.fn(async () => {
     throw new Error("No open dialog found");
   }),
+  installChromeMcpExtension: vi.fn(async () => "installed"),
+  listChromeMcpExtensions: vi.fn(async () => [{ id: "ext-1", name: "Extension" }]),
   navigateChromeMcpPage: vi.fn(async ({ url }: { url: string }) => ({ url })),
+  listChromeMcpThirdPartyDeveloperTools: vi.fn(async () => ({ output: "3p tools" })),
+  listChromeMcpWebMcpTools: vi.fn(async () => ({ output: "webmcp tools" })),
+  reloadChromeMcpExtension: vi.fn(async () => "reloaded"),
+  runChromeMcpLighthouseAudit: vi.fn(async () => ({ output: "lighthouse" })),
   startChromeMcpPerformanceTrace: vi.fn(async () => "The performance trace is being recorded."),
+  startChromeMcpScreencast: vi.fn(async () => "screencast started"),
   stopChromeMcpPerformanceTrace: vi.fn(async () => "The performance trace has been stopped."),
+  stopChromeMcpScreencast: vi.fn(async () => "screencast stopped"),
   takeChromeMcpScreenshot: vi.fn(async () => Buffer.from("png")),
+  takeChromeMcpHeapSnapshot: vi.fn(async () => "heap written"),
   takeChromeMcpSnapshot: vi.fn(async () => ({
     id: "root",
     role: "document",
     name: "Example",
     children: [{ id: "btn-1", role: "button", name: "Continue" }],
   })),
+  triggerChromeMcpExtensionAction: vi.fn(async () => "triggered"),
+  uninstallChromeMcpExtension: vi.fn(async () => "uninstalled"),
   waitForChromeMcpText: vi.fn(async () => {}),
 }));
 
@@ -47,18 +67,38 @@ vi.mock("../chrome-mcp.js", () => ({
   closeChromeMcpTab: vi.fn(async () => {}),
   dragChromeMcpElement: vi.fn(async () => {}),
   emulateChromeMcpPage: chromeMcpMocks.emulateChromeMcpPage,
+  executeChromeMcpThirdPartyDeveloperTool: chromeMcpMocks.executeChromeMcpThirdPartyDeveloperTool,
+  executeChromeMcpWebMcpTool: chromeMcpMocks.executeChromeMcpWebMcpTool,
   evaluateChromeMcpScript: chromeMcpMocks.evaluateChromeMcpScript,
   fillChromeMcpElement: chromeMcpMocks.fillChromeMcpElement,
   fillChromeMcpForm: vi.fn(async () => {}),
+  getChromeMcpConsoleMessage: chromeMcpMocks.getChromeMcpConsoleMessage,
+  getChromeMcpHeapSnapshotClassNodes: chromeMcpMocks.getChromeMcpHeapSnapshotClassNodes,
+  getChromeMcpHeapSnapshotDetails: chromeMcpMocks.getChromeMcpHeapSnapshotDetails,
+  getChromeMcpHeapSnapshotRetainers: chromeMcpMocks.getChromeMcpHeapSnapshotRetainers,
+  getChromeMcpHeapSnapshotSummary: chromeMcpMocks.getChromeMcpHeapSnapshotSummary,
+  getChromeMcpNetworkRequest: chromeMcpMocks.getChromeMcpNetworkRequest,
+  getChromeMcpTabId: chromeMcpMocks.getChromeMcpTabId,
   handleChromeMcpDialog: chromeMcpMocks.handleChromeMcpDialog,
   hoverChromeMcpElement: vi.fn(async () => {}),
+  installChromeMcpExtension: chromeMcpMocks.installChromeMcpExtension,
+  listChromeMcpExtensions: chromeMcpMocks.listChromeMcpExtensions,
   navigateChromeMcpPage: chromeMcpMocks.navigateChromeMcpPage,
+  listChromeMcpThirdPartyDeveloperTools: chromeMcpMocks.listChromeMcpThirdPartyDeveloperTools,
+  listChromeMcpWebMcpTools: chromeMcpMocks.listChromeMcpWebMcpTools,
+  reloadChromeMcpExtension: chromeMcpMocks.reloadChromeMcpExtension,
+  runChromeMcpLighthouseAudit: chromeMcpMocks.runChromeMcpLighthouseAudit,
   startChromeMcpPerformanceTrace: chromeMcpMocks.startChromeMcpPerformanceTrace,
+  startChromeMcpScreencast: chromeMcpMocks.startChromeMcpScreencast,
   pressChromeMcpKey: vi.fn(async () => {}),
   resizeChromeMcpPage: vi.fn(async () => {}),
   stopChromeMcpPerformanceTrace: chromeMcpMocks.stopChromeMcpPerformanceTrace,
+  stopChromeMcpScreencast: chromeMcpMocks.stopChromeMcpScreencast,
+  takeChromeMcpHeapSnapshot: chromeMcpMocks.takeChromeMcpHeapSnapshot,
   takeChromeMcpScreenshot: chromeMcpMocks.takeChromeMcpScreenshot,
   takeChromeMcpSnapshot: chromeMcpMocks.takeChromeMcpSnapshot,
+  triggerChromeMcpExtensionAction: chromeMcpMocks.triggerChromeMcpExtensionAction,
+  uninstallChromeMcpExtension: chromeMcpMocks.uninstallChromeMcpExtension,
   waitForChromeMcpText: chromeMcpMocks.waitForChromeMcpText,
 }));
 
@@ -155,6 +195,16 @@ function getDebugPostHandler(path: string) {
   return handler;
 }
 
+function getDebugGetHandler(path: string) {
+  const { app, getHandlers } = createBrowserRouteApp();
+  registerBrowserAgentDebugRoutes(app, {
+    state: () => ({ resolved: {} }),
+  } as never);
+  const handler = getHandlers.get(path);
+  expect(handler).toBeTypeOf("function");
+  return handler;
+}
+
 function requireRecord(value: unknown, label: string): Record<string, unknown> {
   if (!value || typeof value !== "object") {
     throw new Error(`expected ${label}`);
@@ -185,14 +235,36 @@ describe("existing-session browser routes", () => {
     chromeMcpMocks.clickChromeMcpCoords.mockClear();
     chromeMcpMocks.clickChromeMcpElement.mockClear();
     chromeMcpMocks.emulateChromeMcpPage.mockClear();
+    chromeMcpMocks.executeChromeMcpThirdPartyDeveloperTool.mockClear();
+    chromeMcpMocks.executeChromeMcpWebMcpTool.mockClear();
     chromeMcpMocks.evaluateChromeMcpScript.mockReset();
     chromeMcpMocks.fillChromeMcpElement.mockClear();
-    chromeMcpMocks.handleChromeMcpDialog.mockReset().mockRejectedValue(new Error("No open dialog found"));
+    chromeMcpMocks.getChromeMcpConsoleMessage.mockClear();
+    chromeMcpMocks.getChromeMcpHeapSnapshotClassNodes.mockClear();
+    chromeMcpMocks.getChromeMcpHeapSnapshotDetails.mockClear();
+    chromeMcpMocks.getChromeMcpHeapSnapshotRetainers.mockClear();
+    chromeMcpMocks.getChromeMcpHeapSnapshotSummary.mockClear();
+    chromeMcpMocks.getChromeMcpNetworkRequest.mockClear();
+    chromeMcpMocks.getChromeMcpTabId.mockClear();
+    chromeMcpMocks.handleChromeMcpDialog
+      .mockReset()
+      .mockRejectedValue(new Error("No open dialog found"));
+    chromeMcpMocks.installChromeMcpExtension.mockClear();
+    chromeMcpMocks.listChromeMcpExtensions.mockClear();
+    chromeMcpMocks.listChromeMcpThirdPartyDeveloperTools.mockClear();
+    chromeMcpMocks.listChromeMcpWebMcpTools.mockClear();
+    chromeMcpMocks.reloadChromeMcpExtension.mockClear();
+    chromeMcpMocks.runChromeMcpLighthouseAudit.mockClear();
     chromeMcpMocks.navigateChromeMcpPage.mockClear();
     chromeMcpMocks.startChromeMcpPerformanceTrace.mockClear();
+    chromeMcpMocks.startChromeMcpScreencast.mockClear();
     chromeMcpMocks.stopChromeMcpPerformanceTrace.mockClear();
+    chromeMcpMocks.stopChromeMcpScreencast.mockClear();
+    chromeMcpMocks.takeChromeMcpHeapSnapshot.mockClear();
     chromeMcpMocks.takeChromeMcpScreenshot.mockClear();
     chromeMcpMocks.takeChromeMcpSnapshot.mockClear();
+    chromeMcpMocks.triggerChromeMcpExtensionAction.mockClear();
+    chromeMcpMocks.uninstallChromeMcpExtension.mockClear();
     chromeMcpMocks.waitForChromeMcpText.mockClear();
     navigationGuardMocks.assertBrowserNavigationAllowed.mockClear();
     navigationGuardMocks.assertBrowserNavigationResultAllowed.mockClear();
@@ -784,6 +856,208 @@ describe("existing-session browser routes", () => {
     expectExistingSessionProfile(params.profile);
     expect(params.targetId).toBe("7");
     expect(String(params.filePath)).toMatch(/trace-output\.json\.gz$/);
+  });
+
+  it("routes existing-session heap snapshot debug routes through Chrome MCP", async () => {
+    const takeHandler = getDebugPostHandler("/heap-snapshot/take");
+    const takeResponse = createBrowserRouteResponse();
+    await takeHandler?.(
+      { params: {}, query: {}, body: { path: "heap.heapsnapshot" } },
+      takeResponse.res,
+    );
+
+    expect(takeResponse.statusCode).toBe(200);
+    expect(chromeMcpMocks.takeChromeMcpHeapSnapshot).toHaveBeenCalledWith({
+      profileName: "chrome-live",
+      profile: expect.objectContaining({ name: "chrome-live", driver: "existing-session" }),
+      targetId: "7",
+      filePath: expect.stringMatching(/heap\.heapsnapshot$/),
+      timeoutMs: undefined,
+    });
+
+    const summaryHandler = getDebugPostHandler("/heap-snapshot/summary");
+    await summaryHandler?.(
+      { params: {}, query: {}, body: { path: "/tmp/heap.heapsnapshot" } },
+      createBrowserRouteResponse().res,
+    );
+    expect(chromeMcpMocks.getChromeMcpHeapSnapshotSummary).toHaveBeenCalledWith({
+      profileName: "chrome-live",
+      profile: expect.objectContaining({ name: "chrome-live", driver: "existing-session" }),
+      filePath: "/tmp/heap.heapsnapshot",
+      timeoutMs: undefined,
+    });
+
+    await getDebugPostHandler("/heap-snapshot/details")?.(
+      { params: {}, query: {}, body: { path: "/tmp/heap.heapsnapshot", pageIdx: 1, pageSize: 25 } },
+      createBrowserRouteResponse().res,
+    );
+    expect(chromeMcpMocks.getChromeMcpHeapSnapshotDetails).toHaveBeenCalledWith(
+      expect.objectContaining({ filePath: "/tmp/heap.heapsnapshot", pageIdx: 1, pageSize: 25 }),
+    );
+
+    await getDebugPostHandler("/heap-snapshot/class-nodes")?.(
+      { params: {}, query: {}, body: { path: "/tmp/heap.heapsnapshot", id: 42 } },
+      createBrowserRouteResponse().res,
+    );
+    expect(chromeMcpMocks.getChromeMcpHeapSnapshotClassNodes).toHaveBeenCalledWith(
+      expect.objectContaining({ filePath: "/tmp/heap.heapsnapshot", id: 42 }),
+    );
+
+    await getDebugPostHandler("/heap-snapshot/retainers")?.(
+      { params: {}, query: {}, body: { path: "/tmp/heap.heapsnapshot", nodeId: 99 } },
+      createBrowserRouteResponse().res,
+    );
+    expect(chromeMcpMocks.getChromeMcpHeapSnapshotRetainers).toHaveBeenCalledWith(
+      expect.objectContaining({ filePath: "/tmp/heap.heapsnapshot", nodeId: 99 }),
+    );
+  });
+
+  it("routes existing-session lighthouse and screencast debug routes through Chrome MCP", async () => {
+    await getDebugPostHandler("/lighthouse")?.(
+      {
+        params: {},
+        query: {},
+        body: { mode: "snapshot", device: "desktop", outputDirPath: "/tmp/lh" },
+      },
+      createBrowserRouteResponse().res,
+    );
+    expect(chromeMcpMocks.runChromeMcpLighthouseAudit).toHaveBeenCalledWith({
+      profileName: "chrome-live",
+      profile: expect.objectContaining({ name: "chrome-live", driver: "existing-session" }),
+      targetId: "7",
+      mode: "snapshot",
+      device: "desktop",
+      outputDirPath: "/tmp/lh",
+      timeoutMs: undefined,
+    });
+
+    await getDebugPostHandler("/screencast/start")?.(
+      { params: {}, query: {}, body: { path: "/tmp/cast.webm" } },
+      createBrowserRouteResponse().res,
+    );
+    expect(chromeMcpMocks.startChromeMcpScreencast).toHaveBeenCalledWith(
+      expect.objectContaining({ targetId: "7", filePath: "/tmp/cast.webm" }),
+    );
+
+    await getDebugPostHandler("/screencast/stop")?.(
+      { params: {}, query: {}, body: {} },
+      createBrowserRouteResponse().res,
+    );
+    expect(chromeMcpMocks.stopChromeMcpScreencast).toHaveBeenCalledWith(
+      expect.objectContaining({ targetId: "7" }),
+    );
+  });
+
+  it("routes existing-session extension debug routes through Chrome MCP", async () => {
+    await getDebugGetHandler("/extensions")?.(
+      { params: {}, query: {}, body: {} },
+      createBrowserRouteResponse().res,
+    );
+    expect(chromeMcpMocks.listChromeMcpExtensions).toHaveBeenCalledWith({
+      profileName: "chrome-live",
+      profile: expect.objectContaining({ name: "chrome-live", driver: "existing-session" }),
+      timeoutMs: undefined,
+    });
+
+    await getDebugPostHandler("/extensions/install")?.(
+      { params: {}, query: {}, body: { path: "/tmp/ext" } },
+      createBrowserRouteResponse().res,
+    );
+    expect(chromeMcpMocks.installChromeMcpExtension).toHaveBeenCalledWith(
+      expect.objectContaining({ path: "/tmp/ext" }),
+    );
+
+    await getDebugPostHandler("/extensions/reload")?.(
+      { params: {}, query: {}, body: { id: "ext-1" } },
+      createBrowserRouteResponse().res,
+    );
+    expect(chromeMcpMocks.reloadChromeMcpExtension).toHaveBeenCalledWith(
+      expect.objectContaining({ id: "ext-1" }),
+    );
+
+    await getDebugPostHandler("/extensions/action")?.(
+      { params: {}, query: {}, body: { id: "ext-1" } },
+      createBrowserRouteResponse().res,
+    );
+    expect(chromeMcpMocks.triggerChromeMcpExtensionAction).toHaveBeenCalledWith(
+      expect.objectContaining({ id: "ext-1" }),
+    );
+
+    await getDebugPostHandler("/extensions/uninstall")?.(
+      { params: {}, query: {}, body: { id: "ext-1" } },
+      createBrowserRouteResponse().res,
+    );
+    expect(chromeMcpMocks.uninstallChromeMcpExtension).toHaveBeenCalledWith(
+      expect.objectContaining({ id: "ext-1" }),
+    );
+
+    await getDebugGetHandler("/extensions/tab-id")?.(
+      { params: {}, query: {}, body: {} },
+      createBrowserRouteResponse().res,
+    );
+    expect(chromeMcpMocks.getChromeMcpTabId).toHaveBeenCalledWith(
+      expect.objectContaining({ targetId: "7" }),
+    );
+  });
+
+  it("routes existing-session third-party and WebMCP debug routes through Chrome MCP", async () => {
+    await getDebugGetHandler("/third-party-tools")?.(
+      { params: {}, query: {}, body: {} },
+      createBrowserRouteResponse().res,
+    );
+    expect(chromeMcpMocks.listChromeMcpThirdPartyDeveloperTools).toHaveBeenCalledWith(
+      expect.objectContaining({ targetId: "7" }),
+    );
+
+    await getDebugPostHandler("/third-party-tools/execute")?.(
+      { params: {}, query: {}, body: { toolName: "react", toolParams: { inspect: true } } },
+      createBrowserRouteResponse().res,
+    );
+    expect(chromeMcpMocks.executeChromeMcpThirdPartyDeveloperTool).toHaveBeenCalledWith(
+      expect.objectContaining({ targetId: "7", toolName: "react", toolParams: { inspect: true } }),
+    );
+
+    await getDebugGetHandler("/web-mcp-tools")?.(
+      { params: {}, query: {}, body: {} },
+      createBrowserRouteResponse().res,
+    );
+    expect(chromeMcpMocks.listChromeMcpWebMcpTools).toHaveBeenCalledWith(
+      expect.objectContaining({ targetId: "7" }),
+    );
+
+    await getDebugPostHandler("/web-mcp-tools/execute")?.(
+      { params: {}, query: {}, body: { toolName: "tool", input: { ok: true } } },
+      createBrowserRouteResponse().res,
+    );
+    expect(chromeMcpMocks.executeChromeMcpWebMcpTool).toHaveBeenCalledWith(
+      expect.objectContaining({ targetId: "7", toolName: "tool", input: { ok: true } }),
+    );
+  });
+
+  it("routes existing-session console and network detail debug routes through Chrome MCP", async () => {
+    await getDebugGetHandler("/console/message")?.(
+      { params: {}, query: { msgid: "12" }, body: {} },
+      createBrowserRouteResponse().res,
+    );
+    expect(chromeMcpMocks.getChromeMcpConsoleMessage).toHaveBeenCalledWith({
+      profileName: "chrome-live",
+      profile: expect.objectContaining({ name: "chrome-live", driver: "existing-session" }),
+      targetId: "7",
+      msgid: 12,
+    });
+
+    await getDebugGetHandler("/requests/request")?.(
+      { params: {}, query: { reqid: "13", requestFilePath: "/tmp/request.txt" }, body: {} },
+      createBrowserRouteResponse().res,
+    );
+    expect(chromeMcpMocks.getChromeMcpNetworkRequest).toHaveBeenCalledWith({
+      profileName: "chrome-live",
+      profile: expect.objectContaining({ name: "chrome-live", driver: "existing-session" }),
+      targetId: "7",
+      reqid: 13,
+      requestFilePath: "/tmp/request.txt",
+      responseFilePath: undefined,
+    });
   });
 
   it("routes existing-session media color-scheme through Chrome MCP emulate", async () => {
