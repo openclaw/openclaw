@@ -36,6 +36,7 @@ import {
   extractThinkingFromTaggedText,
   promoteThinkingTagsToBlocks,
 } from "./pi-embedded-utils.js";
+import { ANNOUNCE_SKIP_TOKEN, REPLY_SKIP_TOKEN } from "./tools/sessions-send-tokens.js";
 
 function shouldSuppressAssistantVisibleOutput(message: AgentMessage | undefined): boolean {
   return resolveAssistantMessagePhase(message) === "commentary";
@@ -693,6 +694,17 @@ export function handleMessageEnd(
       : "";
   const trimmedReasoning = rawThinking ? rawThinking.trim() : "";
   const trimmedText = text.trim();
+  if (ctx.state.lastToolError) {
+    const isSilentAck =
+      isSilentReplyText(trimmedText, SILENT_REPLY_TOKEN) ||
+      trimmedText === REPLY_SKIP_TOKEN ||
+      trimmedText === ANNOUNCE_SKIP_TOKEN;
+    if (isSilentAck) {
+      ctx.log.warn(
+        `agent silently acked after tool error: tool=${ctx.state.lastToolError.toolName} ack=${trimmedText || "(empty)"}`,
+      );
+    }
+  }
   const parsedText = trimmedText
     ? parseReplyDirectives(splitTrailingDirective(trimmedText, { final: true }).text)
     : null;
