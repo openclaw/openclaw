@@ -1,6 +1,12 @@
 import { loadAuthProfileStoreWithoutExternalProfiles } from "openclaw/plugin-sdk/agent-runtime";
 import type { MigrationItem, MigrationProviderContext } from "openclaw/plugin-sdk/plugin-entry";
 import { updateAuthProfileStoreWithLock } from "openclaw/plugin-sdk/provider-auth";
+import {
+  applyAuthProfileConfigWithConflictCheck,
+  hasAuthProfileConfigConflict,
+  hasCurrentAuthProfileConfigConflict,
+  type HermesAuthProfileConfig,
+} from "./auth-config.js";
 import { parseEnv, readText } from "./helpers.js";
 import {
   createHermesSecretItem,
@@ -34,6 +40,15 @@ const SECRET_MAPPINGS: readonly SecretMapping[] = [
   { envVar: "DEEPSEEK_API_KEY", provider: "deepseek", profileId: "deepseek:hermes-import" },
 ] as const;
 
+function secretAuthProfileConfig(details: SecretMapping): HermesAuthProfileConfig {
+  return {
+    profileId: details.profileId,
+    provider: details.provider,
+    mode: "api_key",
+    displayName: "Hermes import",
+  };
+}
+
 export async function buildSecretItems(params: {
   ctx: MigrationProviderContext;
   source: HermesSource;
@@ -50,13 +65,18 @@ export async function buildSecretItems(params: {
     }
     seenProfiles.add(mapping.profileId);
     const existsAlready = Boolean(store.profiles[mapping.profileId]);
+    const configConflict = hasAuthProfileConfigConflict(
+      params.ctx.config,
+      secretAuthProfileConfig(mapping),
+      Boolean(params.ctx.overwrite),
+    );
     items.push(
       createHermesSecretItem({
         id: `secret:${mapping.provider}`,
         source: params.source.envPath,
         target: `${params.targets.agentDir}/auth-profiles.json#${mapping.profileId}`,
         includeSecrets: params.ctx.includeSecrets,
-        existsAlready: existsAlready && !params.ctx.overwrite,
+        existsAlready: (existsAlready && !params.ctx.overwrite) || configConflict,
         details: {
           envVar: mapping.envVar,
           provider: mapping.provider,
@@ -86,6 +106,10 @@ export async function applySecretItem(
   if (!key) {
     return hermesItemSkipped(item, HERMES_REASON_SECRET_NO_LONGER_PRESENT);
   }
+  const configProfile = secretAuthProfileConfig(details);
+  if (hasCurrentAuthProfileConfigConflict(ctx, configProfile)) {
+    return hermesItemConflict(item, HERMES_REASON_AUTH_PROFILE_EXISTS);
+  }
   let conflicted = false;
   let wrote = false;
   const store = await updateAuthProfileStoreWithLock({
@@ -114,5 +138,19 @@ export async function applySecretItem(
   if (!wrote && !ctx.overwrite) {
     return hermesItemConflict(item, HERMES_REASON_AUTH_PROFILE_EXISTS);
   }
-  return { ...item, status: "migrated" };
+  const configResult = await applyAuthProfileConfigWithConflictCheck({
+    ctx,
+    profile: configProfile,
+  });
+  if (configResult === "conflict") {
+    return hermesItemConflict(item, HERMES_REASON_AUTH_PROFILE_EXISTS);
+  }
+  return {
+    ...item,
+    status: "migrated",
+    details: {
+      ...item.details,
+      configUpdated: configResult === "configured",
+    },
+  };
 }
