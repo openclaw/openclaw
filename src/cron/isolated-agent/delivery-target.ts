@@ -1,4 +1,3 @@
-import { parseExplicitTargetForLoadedChannel } from "../../channels/plugins/target-parsing-loaded.js";
 import type { ChannelId } from "../../channels/plugins/types.public.js";
 import { resolveAgentMainSessionKey } from "../../config/sessions/main-session.js";
 import { resolveStorePath } from "../../config/sessions/paths.js";
@@ -9,7 +8,10 @@ import { formatErrorMessage } from "../../infra/errors.js";
 import { maybeResolveIdLikeTarget } from "../../infra/outbound/target-id-resolution.js";
 import { normalizeTargetForProvider } from "../../infra/outbound/target-normalization.js";
 import { tryResolveLoadedOutboundTarget } from "../../infra/outbound/targets-loaded.js";
-import { resolveSessionDeliveryTarget } from "../../infra/outbound/targets-session.js";
+import {
+  resolveSessionDeliveryTarget,
+  type ExplicitTargetParser,
+} from "../../infra/outbound/targets-session.js";
 import type { OutboundChannel } from "../../infra/outbound/targets.js";
 import { normalizeAccountId } from "../../routing/session-key.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
@@ -64,6 +66,7 @@ async function resolveOutboundTargetWithRuntime(
 function normalizeTargetForThreadCarry(
   channel: Exclude<OutboundChannel, "none"> | undefined,
   to: string | undefined,
+  parseExplicitTarget: ExplicitTargetParser,
 ): string | undefined {
   if (!channel || !to) {
     return undefined;
@@ -74,7 +77,7 @@ function normalizeTargetForThreadCarry(
     if (!comparable) {
       return undefined;
     }
-    const parsed = parseExplicitTargetForLoadedChannel(channel, comparable);
+    const parsed = parseExplicitTarget(channel, comparable);
     const base = parsed?.to ?? comparable;
     return normalizeTargetForProvider(channel, base) ?? base;
   } catch {
@@ -86,6 +89,7 @@ function deliveryTargetsShareThreadRoute(params: {
   channel: Exclude<OutboundChannel, "none"> | undefined;
   to: string | undefined;
   lastTo: string | undefined;
+  parseExplicitTarget: ExplicitTargetParser;
 }): boolean {
   if (!params.to || !params.lastTo) {
     return false;
@@ -93,8 +97,16 @@ function deliveryTargetsShareThreadRoute(params: {
   if (params.to === params.lastTo) {
     return true;
   }
-  const normalizedTo = normalizeTargetForThreadCarry(params.channel, params.to);
-  const normalizedLastTo = normalizeTargetForThreadCarry(params.channel, params.lastTo);
+  const normalizedTo = normalizeTargetForThreadCarry(
+    params.channel,
+    params.to,
+    params.parseExplicitTarget,
+  );
+  const normalizedLastTo = normalizeTargetForThreadCarry(
+    params.channel,
+    params.lastTo,
+    params.parseExplicitTarget,
+  );
   return Boolean(normalizedTo && normalizedLastTo && normalizedTo === normalizedLastTo);
 }
 
@@ -128,6 +140,13 @@ export async function resolveDeliveryTarget(
   const requestedChannel = typeof jobPayload.channel === "string" ? jobPayload.channel : "last";
   const explicitTo = typeof jobPayload.to === "string" ? jobPayload.to : undefined;
   const allowMismatchedLastTo = requestedChannel === "last";
+  const deliveryTargetRuntime = await loadDeliveryTargetRuntime();
+  const parseExplicitTarget: ExplicitTargetParser = (channel, rawTarget) =>
+    deliveryTargetRuntime.parseExplicitTargetForDelivery({
+      cfg,
+      channel,
+      rawTarget,
+    });
 
   const sessionCfg = cfg.session;
   const mainSessionKey = resolveAgentMainSessionKey({ cfg, agentId });
@@ -167,6 +186,7 @@ export async function resolveDeliveryTarget(
     explicitTo,
     explicitThreadId: jobPayload.threadId,
     allowMismatchedLastTo,
+    parseExplicitTarget,
   });
 
   let fallbackChannel: Exclude<OutboundChannel, "none"> | undefined;
@@ -197,6 +217,7 @@ export async function resolveDeliveryTarget(
         fallbackChannel,
         allowMismatchedLastTo,
         mode: preliminary.mode,
+        parseExplicitTarget,
       })
     : preliminary;
 
@@ -213,8 +234,11 @@ export async function resolveDeliveryTarget(
       : undefined;
   let accountId = explicitAccountId ?? resolved.accountId;
   if (!accountId && channel) {
-    const { resolveFirstBoundAccountId } = await loadDeliveryTargetRuntime();
-    accountId = resolveFirstBoundAccountId({ cfg, channelId: channel, agentId });
+    accountId = deliveryTargetRuntime.resolveFirstBoundAccountId({
+      cfg,
+      channelId: channel,
+      agentId,
+    });
   }
 
   // job.delivery.accountId takes highest precedence — explicitly set by the job author.
@@ -233,19 +257,10 @@ export async function resolveDeliveryTarget(
         channel,
         to: resolved.to,
         lastTo: resolved.lastTo,
+        parseExplicitTarget,
       }))
       ? resolved.threadId
       : undefined;
-
-  if (channel === "telegram" && typeof toCandidate === "string") {
-    const topicMatch = toCandidate.match(/:topic:(\d+)$/i);
-    if (topicMatch) {
-      if (jobPayload.threadId == null || jobPayload.threadId === "") {
-        threadId = Number(topicMatch[1]);
-      }
-      toCandidate = toCandidate.replace(/:topic:\d+$/i, "");
-    }
-  }
 
   if (!channel) {
     return {
@@ -263,8 +278,7 @@ export async function resolveDeliveryTarget(
 
   let effectiveAllowFrom: string[] | undefined;
   if (mode === "implicit") {
-    const { getLoadedChannelPluginForRead, mapAllowFromEntries } =
-      await loadDeliveryTargetRuntime();
+    const { getLoadedChannelPluginForRead, mapAllowFromEntries } = deliveryTargetRuntime;
     const channelPlugin = getLoadedChannelPluginForRead(channel);
     const resolvedAccountId = normalizeAccountId(accountId);
     const configuredAllowFromRaw = channelPlugin?.config.resolveAllowFrom?.({

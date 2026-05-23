@@ -917,6 +917,19 @@ describe("resolveDeliveryTarget", () => {
     expect(result.threadId).toBe(1008013);
   });
 
+  it("parses plugin-owned numeric topic shorthand into delivery threadId", async () => {
+    setMainSessionEntry(undefined);
+
+    const result = await resolveDeliveryTarget(makeCfg({ bindings: [] }), AGENT_ID, {
+      channel: "telegram",
+      to: "-100200300:77",
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.to).toBe("-100200300");
+    expect(result.threadId).toBe(77);
+  });
+
   it("prefers explicit telegram :topic: targets over session-derived threadId", async () => {
     setLastSessionEntry({
       sessionId: "sess-telegram-topic",

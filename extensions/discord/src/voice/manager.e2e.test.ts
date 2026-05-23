@@ -581,6 +581,32 @@ describe("DiscordVoiceManager", () => {
     expectConnectedStatus(manager, "1002");
   });
 
+  it("attaches meeting notes capture to an existing voice session", async () => {
+    const manager = createManager();
+
+    await manager.join({ guildId: "g1", channelId: "1001" });
+    const onUtterance = vi.fn();
+    const result = await manager.join(
+      { guildId: "g1", channelId: "1001" },
+      {
+        meetingNotes: {
+          sessionId: "notes-1",
+          onUtterance,
+        },
+      },
+    );
+
+    const entry = getSessionEntry(manager) as {
+      meetingNotes?: { sessionId: string; onUtterance: typeof onUtterance };
+    };
+    expect(result.ok).toBe(true);
+    expect(joinVoiceChannelMock).toHaveBeenCalledTimes(1);
+    expect(entry.meetingNotes).toEqual({
+      sessionId: "notes-1",
+      onUtterance,
+    });
+  });
+
   it("destroys stale tracked voice connections before joining", async () => {
     const staleConnection = createConnectionMock();
     const connection = createConnectionMock();

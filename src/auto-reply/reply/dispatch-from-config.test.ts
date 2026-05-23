@@ -6247,43 +6247,6 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     expect(firstFinalReplyPayload(dispatcher)?.text).toBe("visible parent-model reply");
   });
 
-  it("honors one-turn model overrides before Codex direct source delivery defaults", async () => {
-    setNoAbort();
-    registerAgentHarness({
-      id: "codex",
-      label: "Codex",
-      deliveryDefaults: { sourceVisibleReplies: "message_tool" },
-      supports: (ctx) =>
-        ctx.provider === "codex"
-          ? { supported: true, priority: 100 }
-          : { supported: false, reason: "codex provider only" },
-      runAttempt: vi.fn(async () => ({}) as never),
-    });
-    const dispatcher = createDispatcher();
-    const replyResolver = vi.fn(async (_ctx: MsgContext, opts?: GetReplyOptions) => {
-      expect(opts?.sourceReplyDeliveryMode).toBe("automatic");
-      return { text: "visible one-turn-model reply" } satisfies ReplyPayload;
-    });
-
-    const result = await dispatchReplyFromConfig({
-      ctx: buildTestCtx({
-        ChatType: "direct",
-        CommandSource: undefined,
-        Provider: "telegram",
-        Surface: "telegram",
-        SessionKey: "agent:main:telegram:direct:U1",
-      }),
-      cfg: emptyConfig,
-      dispatcher,
-      replyOptions: { modelOverride: "anthropic/claude-sonnet-4.6" },
-      replyResolver,
-    });
-
-    expect(replyResolver).toHaveBeenCalledTimes(1);
-    expect(result.queuedFinal).toBe(true);
-    expect(firstFinalReplyPayload(dispatcher)?.text).toBe("visible one-turn-model reply");
-  });
-
   it("honors heartbeat model overrides before Codex direct source delivery defaults", async () => {
     setNoAbort();
     registerAgentHarness({

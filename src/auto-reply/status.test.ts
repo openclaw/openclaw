@@ -105,6 +105,57 @@ describe("buildStatusMessage", () => {
     expect(normalized).toContain("Queue: collect");
   });
 
+  it("shows configured model costs for aws-sdk providers", () => {
+    const text = buildStatusMessage({
+      config: {
+        models: {
+          providers: {
+            "amazon-bedrock": {
+              auth: "aws-sdk",
+              models: [
+                {
+                  id: "us.anthropic.claude-sonnet-4-6",
+                  cost: {
+                    input: 3,
+                    output: 15,
+                    cacheRead: 0.3,
+                    cacheWrite: 3.75,
+                  },
+                },
+              ],
+            },
+          },
+        },
+      } as unknown as OpenClawConfig,
+      agent: {
+        model: "amazon-bedrock/us.anthropic.claude-sonnet-4-6",
+        contextTokens: 200_000,
+      },
+      sessionEntry: {
+        sessionId: "bedrock-session",
+        updatedAt: 0,
+        inputTokens: 1_000,
+        outputTokens: 2_000,
+        cacheRead: 500,
+        cacheWrite: 2_000,
+        totalTokens: 5_500,
+        contextTokens: 200_000,
+      },
+      sessionKey: "agent:main:main",
+      sessionScope: "per-sender",
+      queue: { mode: "collect", depth: 0 },
+      modelAuth: "aws-sdk",
+      activeModelAuth: "aws-sdk",
+      now: 10 * 60_000,
+    });
+    const normalized = normalizeTestText(text);
+
+    expect(normalized).toContain("Model: amazon-bedrock/us.anthropic.claude-sonnet-4-6");
+    expect(normalized).toContain("aws-sdk");
+    expect(normalized).toContain("Tokens: 1.0k in / 2.0k out");
+    expect(normalized).toContain("Cost: $0.04");
+  });
+
   it("does not render stale totalTokens as current context usage", () => {
     const text = buildStatusMessage({
       agent: {
@@ -1499,7 +1550,7 @@ describe("buildStatusMessage", () => {
     expect(lines[contextIndex + 1]).toContain("Usage: Claude 80% left (5h)");
   });
 
-  it("hides cost when not using an API key", () => {
+  it("shows configured model costs when not using an API key", () => {
     const text = buildStatusMessage({
       config: {
         models: {
@@ -1528,7 +1579,7 @@ describe("buildStatusMessage", () => {
       modelAuth: "oauth",
     });
 
-    expect(text).not.toContain("💵 Cost:");
+    expect(text).toContain("💵 Cost: $0.0000");
   });
 
   function writeTranscriptUsageLog(params: {

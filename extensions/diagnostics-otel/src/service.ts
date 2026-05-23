@@ -32,15 +32,25 @@ import {
 const DEFAULT_SERVICE_NAME = "openclaw";
 const DROPPED_OTEL_ATTRIBUTE_KEYS = new Set([
   "openclaw.callId",
+  "openclaw.call_id",
   "openclaw.chatId",
+  "openclaw.chat_id",
   "openclaw.messageId",
+  "openclaw.message_id",
   "openclaw.parentSpanId",
+  "openclaw.parent_span_id",
   "openclaw.runId",
+  "openclaw.run_id",
   "openclaw.sessionId",
+  "openclaw.session_id",
   "openclaw.sessionKey",
+  "openclaw.session_key",
   "openclaw.spanId",
+  "openclaw.span_id",
   "openclaw.toolCallId",
+  "openclaw.tool_call_id",
   "openclaw.traceId",
+  "openclaw.trace_id",
 ]);
 const LOW_CARDINALITY_VALUE_RE = /^[A-Za-z0-9_.:-]{1,120}$/u;
 const MAX_OTEL_CONTENT_ATTRIBUTE_CHARS = 4 * 1024;
@@ -997,6 +1007,10 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
       const toolLoopCounter = meter.createCounter("openclaw.tool.loop", {
         unit: "1",
         description: "Detected repetitive tool-call loop events",
+      });
+      const skillUsedCounter = meter.createCounter("openclaw.skill.used", {
+        unit: "1",
+        description: "Skills used by agent runs",
       });
       const modelCallDurationHistogram = meter.createHistogram("openclaw.model_call.duration_ms", {
         unit: "ms",
@@ -2263,9 +2277,43 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
         >,
       ): Record<string, string | number | boolean> => ({
         "openclaw.toolName": evt.toolName,
+        "openclaw.tool.source": lowCardinalityAttr(evt.toolSource, "core"),
         "gen_ai.tool.name": evt.toolName,
+        ...(evt.toolOwner ? { "openclaw.tool.owner": lowCardinalityAttr(evt.toolOwner) } : {}),
         ...paramsSummaryAttrs(evt.paramsSummary),
       });
+
+      const skillUsedAttrs = (
+        evt: Extract<DiagnosticEventPayload, { type: "skill.used" }>,
+      ): Record<string, string | number | boolean> => ({
+        "openclaw.skill.name": lowCardinalityAttr(evt.skillName, "skill"),
+        "openclaw.skill.source": lowCardinalityAttr(evt.skillSource),
+        "openclaw.skill.activation": lowCardinalityAttr(evt.activation),
+        ...(evt.agentId ? { "openclaw.agent": lowCardinalityAttr(evt.agentId) } : {}),
+        ...(evt.toolName ? { "openclaw.toolName": lowCardinalityAttr(evt.toolName, "tool") } : {}),
+      });
+
+      const recordSkillUsed = (
+        evt: Extract<DiagnosticEventPayload, { type: "skill.used" }>,
+        metadata: DiagnosticEventMetadata,
+      ) => {
+        if (!metadata.trusted) {
+          return;
+        }
+        const attrs = skillUsedAttrs(evt);
+        skillUsedCounter.add(1, attrs);
+        if (!tracesEnabled) {
+          return;
+        }
+        const spanAttrs: Record<string, string | number | boolean> = { ...attrs };
+        addRunAttrs(spanAttrs, evt);
+        const span = spanWithDuration("openclaw.skill.used", spanAttrs, 0, {
+          parentContext: activeTrustedParentContext(evt, metadata),
+          endTimeMs: evt.ts,
+        });
+        setSpanAttrs(span, spanAttrs);
+        span.end(evt.ts);
+      };
 
       const recordToolExecutionStarted = (
         evt: Extract<DiagnosticEventPayload, { type: "tool.execution.started" }>,
@@ -2288,10 +2336,7 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
         evt: Extract<DiagnosticEventPayload, { type: "tool.execution.completed" }>,
         metadata: DiagnosticEventMetadata,
       ) => {
-        const attrs = {
-          "openclaw.toolName": evt.toolName,
-          ...paramsSummaryAttrs(evt.paramsSummary),
-        };
+        const attrs = toolExecutionBaseAttrs(evt);
         toolExecutionDurationHistogram.record(evt.durationMs, attrs);
         if (!tracesEnabled) {
           return;
@@ -2320,9 +2365,8 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
         metadata: DiagnosticEventMetadata,
       ) => {
         const attrs = {
-          "openclaw.toolName": evt.toolName,
+          ...toolExecutionBaseAttrs(evt),
           "openclaw.errorCategory": lowCardinalityAttr(evt.errorCategory, "other"),
-          ...paramsSummaryAttrs(evt.paramsSummary),
         };
         toolExecutionDurationHistogram.record(evt.durationMs, attrs);
         if (!tracesEnabled) {
@@ -2657,6 +2701,9 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
               return;
             case "tool.execution.blocked":
               recordToolExecutionBlocked(evt, metadata);
+              return;
+            case "skill.used":
+              recordSkillUsed(evt, metadata);
               return;
             case "exec.process.completed":
               recordExecProcessCompleted(evt);

@@ -598,5 +598,7 @@ export {
   normalizeNpmVersionDrift,
   parsePnpmPackageKey,
   parseLockPackagePath,
+  packageJsonForShrinkwrap,
+  readShrinkwrapOverrides,
   shrinkwrapPackageDirsForChangedPaths,
 };
