@@ -255,6 +255,9 @@ describe("package acceptance workflow", () => {
     expect(workflow).toContain(
       '[[ "$CHILD_WORKFLOW_REF" == release-ci/* && -n "${TARGET_SHA// }" && "$head_sha" != "$TARGET_SHA" ]]',
     );
+    expect(workflow).toContain(
+      'gh_with_retry workflow run "$workflow" --ref "$CHILD_WORKFLOW_REF" "$@"',
+    );
     expect(workflow).toContain("child run used ${head_sha}, expected ${TARGET_SHA}");
     expect(workflow).toContain(
       "Dispatch Full Release Validation from a ref pinned to the target SHA",
@@ -872,7 +875,9 @@ describe("package artifact reuse", () => {
     const dispatchStep = workflowStep(npmTelegramJob, "Dispatch and monitor npm Telegram E2E");
 
     expect(workflow).toContain("CHILD_WORKFLOW_REF: ${{ github.ref_name }}");
-    expect(workflow).toContain('gh workflow run "$workflow" --ref "$CHILD_WORKFLOW_REF" "$@"');
+    expect(workflow).toContain(
+      'gh_with_retry workflow run "$workflow" --ref "$CHILD_WORKFLOW_REF" "$@"',
+    );
     expect(preparePackageJob.name).toBe("Prepare release package artifact");
     expect(preparePackageJob.needs).toEqual(["resolve_target", "docker_runtime_assets_preflight"]);
     expect(preparePackageJob.if).toContain("inputs.rerun_group == 'all'");

@@ -3147,86 +3147,105 @@ describe("runCodexAppServerAttempt", () => {
       path.join(tempDir, "session.jsonl"),
       path.join(tempDir, "workspace"),
     );
+    const abortController = new AbortController();
+    params.abortSignal = abortController.signal;
     params.disableTools = false;
     params.runtimePlan = createCodexRuntimePlanFixture();
 
     const run = runCodexAppServerAttempt(params);
-    await harness.waitForMethod("thread/start");
+    let completed = false;
+    let diagnosticsSubscribed = true;
+    try {
+      await harness.waitForMethod("thread/start", 10_000);
 
-    const toolResult = (await harness.handleServerRequest({
-      id: "request-echo-tool",
-      method: "item/tool/call",
-      params: {
-        threadId: "thread-1",
-        turnId: "turn-1",
-        callId: "call-echo-1",
-        namespace: null,
-        tool: "echo",
-        arguments: {},
-      },
-    })) as {
-      contentItems?: Array<{ text?: string; type?: string }>;
-      success?: boolean;
-    };
-
-    expect(toolResult.success).toBe(true);
-    expect(toolResult.contentItems?.[0]).toEqual({
-      type: "inputText",
-      text: "echo done",
-    });
-    await flushDiagnosticEvents();
-    unsubscribeDiagnostics();
-
-    const toolDiagnosticEvents = diagnosticEvents.filter(
-      (
-        event,
-      ): event is Extract<
-        DiagnosticEventPayload,
-        { type: "tool.execution.started" | "tool.execution.completed" | "tool.execution.error" }
-      > => event.type.startsWith("tool.execution."),
-    );
-    const toolDiagnosticEventSummaries = toolDiagnosticEvents.map((event) => ({
-      type: event.type,
-      toolName: event.toolName,
-      toolCallId: event.toolCallId,
-    }));
-    expect(toolDiagnosticEventSummaries).toContainEqual({
-      type: "tool.execution.started",
-      toolName: "echo",
-      toolCallId: "call-echo-1",
-    });
-    expect(toolDiagnosticEventSummaries.at(-1)).toEqual({
-      type: "tool.execution.completed",
-      toolName: "echo",
-      toolCallId: "call-echo-1",
-    });
-    expect(
-      toolDiagnosticEventSummaries.filter((event) => event.type === "tool.execution.started"),
-    ).toHaveLength(1);
-    expect(activeDiagnosticToolKeys(diagnosticEvents)).toEqual(new Set());
-
-    await harness.notify({
-      method: "item/completed",
-      params: {
-        threadId: "thread-1",
-        turnId: "turn-1",
-        completedAtMs: Date.now(),
-        item: {
-          type: "dynamicToolCall",
-          id: "call-echo-1",
+      const toolResult = (await harness.handleServerRequest({
+        id: "request-echo-tool",
+        method: "item/tool/call",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          callId: "call-echo-1",
           namespace: null,
           tool: "echo",
           arguments: {},
-          status: "completed",
-          contentItems: [{ type: "inputText", text: "echo done" }],
-          success: true,
-          durationMs: 1,
         },
-      },
-    });
+      })) as {
+        contentItems?: Array<{ text?: string; type?: string }>;
+        success?: boolean;
+      };
 
-    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
-    await run;
+      expect(toolResult.success).toBe(true);
+      expect(toolResult.contentItems?.[0]).toEqual({
+        type: "inputText",
+        text: "echo done",
+      });
+      await flushDiagnosticEvents();
+      unsubscribeDiagnostics();
+      diagnosticsSubscribed = false;
+
+      const toolDiagnosticEvents = diagnosticEvents.filter(
+        (
+          event,
+        ): event is Extract<
+          DiagnosticEventPayload,
+          {
+            type: "tool.execution.started" | "tool.execution.completed" | "tool.execution.error";
+          }
+        > => event.type.startsWith("tool.execution."),
+      );
+      const toolDiagnosticEventSummaries = toolDiagnosticEvents.map((event) => ({
+        type: event.type,
+        toolName: event.toolName,
+        toolCallId: event.toolCallId,
+      }));
+      expect(toolDiagnosticEventSummaries).toContainEqual({
+        type: "tool.execution.started",
+        toolName: "echo",
+        toolCallId: "call-echo-1",
+      });
+      expect(toolDiagnosticEventSummaries.at(-1)).toEqual({
+        type: "tool.execution.completed",
+        toolName: "echo",
+        toolCallId: "call-echo-1",
+      });
+      expect(
+        toolDiagnosticEventSummaries.filter((event) => event.type === "tool.execution.started"),
+      ).toHaveLength(1);
+      expect(activeDiagnosticToolKeys(diagnosticEvents)).toEqual(new Set());
+
+      await harness.notify({
+        method: "item/completed",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          completedAtMs: Date.now(),
+          item: {
+            type: "dynamicToolCall",
+            id: "call-echo-1",
+            namespace: null,
+            tool: "echo",
+            arguments: {},
+            status: "completed",
+            contentItems: [{ type: "inputText", text: "echo done" }],
+            success: true,
+            durationMs: 1,
+          },
+        },
+      });
+
+      await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+      completed = true;
+      await run;
+    } finally {
+      if (diagnosticsSubscribed) {
+        unsubscribeDiagnostics();
+      }
+      if (!completed) {
+        harness.close();
+        abortController.abort(new Error("test cleanup"));
+        await run.catch(() => {});
+      }
+    }
   });
 
   it("releases the turn after terminal dynamic tool responses", async () => {
@@ -3249,50 +3268,62 @@ describe("runCodexAppServerAttempt", () => {
       path.join(tempDir, "session.jsonl"),
       path.join(tempDir, "workspace"),
     );
+    const abortController = new AbortController();
+    params.abortSignal = abortController.signal;
     params.disableTools = false;
     params.runtimePlan = createCodexRuntimePlanFixture();
 
     const run = runCodexAppServerAttempt(params);
-    await harness.waitForMethod("turn/start");
+    let completed = false;
+    try {
+      await harness.waitForMethod("turn/start", 10_000);
 
-    const toolResult = (await harness.handleServerRequest({
-      id: "request-image-generate",
-      method: "item/tool/call",
-      params: {
-        threadId: "thread-1",
-        turnId: "turn-1",
-        callId: "call-image-1",
-        namespace: null,
-        tool: "image_generate",
-        arguments: { prompt: "lighthouse" },
-      },
-    })) as {
-      contentItems?: Array<{ text?: string; type?: string }>;
-      success?: boolean;
-    };
+      const toolResult = (await harness.handleServerRequest({
+        id: "request-image-generate",
+        method: "item/tool/call",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          callId: "call-image-1",
+          namespace: null,
+          tool: "image_generate",
+          arguments: { prompt: "lighthouse" },
+        },
+      })) as {
+        contentItems?: Array<{ text?: string; type?: string }>;
+        success?: boolean;
+      };
 
-    expect(toolResult).toEqual({
-      success: true,
-      contentItems: [{ type: "inputText", text: "Background task started." }],
-    });
-    expect(harness.requests.some((request) => request.method === "turn/interrupt")).toBe(false);
-    const result = await run;
+      expect(toolResult).toEqual({
+        success: true,
+        contentItems: [{ type: "inputText", text: "Background task started." }],
+      });
+      expect(harness.requests.some((request) => request.method === "turn/interrupt")).toBe(false);
+      const result = await run;
+      completed = true;
 
-    expect(result.timedOut).toBe(false);
-    expect(result.promptError).toBeNull();
-    expect(result.yieldDetected).toBe(true);
-    expect(result.messagesSnapshot.map((message) => message.role)).toEqual([
-      "user",
-      "assistant",
-      "toolResult",
-    ]);
-    expect(
-      harness.requests.some(
-        (request) =>
-          request.method === "turn/interrupt" &&
-          (request.params as { turnId?: string } | undefined)?.turnId === "turn-1",
-      ),
-    ).toBe(true);
+      expect(result.timedOut).toBe(false);
+      expect(result.promptError).toBeNull();
+      expect(result.yieldDetected).toBe(true);
+      expect(result.messagesSnapshot.map((message) => message.role)).toEqual([
+        "user",
+        "assistant",
+        "toolResult",
+      ]);
+      expect(
+        harness.requests.some(
+          (request) =>
+            request.method === "turn/interrupt" &&
+            (request.params as { turnId?: string } | undefined)?.turnId === "turn-1",
+        ),
+      ).toBe(true);
+    } finally {
+      if (!completed) {
+        harness.close();
+        abortController.abort(new Error("test cleanup"));
+        await run.catch(() => {});
+      }
+    }
   });
 
   it("keeps mixed dynamic tool batches running after one terminal result", async () => {
