@@ -7,16 +7,13 @@ import {
 } from "./subagent-announce-output.js";
 
 type CallGateway = typeof import("../gateway/call.js").callGateway;
-type ReadLatestAssistantReply = typeof import("./tools/agent-step.js").readLatestAssistantReply;
 
-function installOutputDeps(params: { messages: Array<unknown>; latestAssistantReply?: string }) {
+function installOutputDeps(params: { messages: Array<unknown> }) {
   const callGateway = vi.fn(async () => ({ messages: params.messages }));
-  const readLatestAssistantReply = vi.fn(async () => params.latestAssistantReply);
   testing.setDepsForTest({
     callGateway: callGateway as unknown as CallGateway,
-    readLatestAssistantReply: readLatestAssistantReply as unknown as ReadLatestAssistantReply,
   });
-  return { callGateway, readLatestAssistantReply };
+  return { callGateway };
 }
 
 function sessionsYieldTurn(message = "Waiting for subagent completion.") {
@@ -57,11 +54,10 @@ describe("readSubagentOutput", () => {
   it("does not treat a sessions_yield wait turn as subagent completion output", async () => {
     const deps = installOutputDeps({
       messages: sessionsYieldTurn(),
-      latestAssistantReply: "Waiting for subagent completion.",
     });
 
     await expect(readSubagentOutput("agent:main:subagent:child")).resolves.toBeUndefined();
-    expect(deps.readLatestAssistantReply).not.toHaveBeenCalled();
+    expect(deps.callGateway).toHaveBeenCalledOnce();
   });
 
   it("returns final assistant output that arrives after a sessions_yield wait turn", async () => {
@@ -79,7 +75,6 @@ describe("readSubagentOutput", () => {
           content: [{ type: "text", text: "Created /tmp/final-deck.pptx" }],
         },
       ],
-      latestAssistantReply: "Waiting for subagent completion.",
     });
 
     await expect(readSubagentOutput("agent:main:subagent:child")).resolves.toBe(
@@ -87,7 +82,7 @@ describe("readSubagentOutput", () => {
     );
   });
 
-  it("keeps normal tool-use assistant output when the tool is not sessions_yield", async () => {
+  it("returns only the latest assistant turn, not trailing tool output", async () => {
     installOutputDeps({
       messages: [
         {
@@ -98,12 +93,58 @@ describe("readSubagentOutput", () => {
             { type: "toolCall", id: "call-read", name: "read", arguments: {} },
           ],
         },
+        {
+          role: "toolResult",
+          content: "tool result should not become the child result",
+        },
       ],
     });
 
     await expect(readSubagentOutput("agent:main:subagent:child")).resolves.toBe(
       "Mapped the code path.",
     );
+  });
+
+  it("keeps earlier visible assistant text across a trailing empty assistant turn", async () => {
+    installOutputDeps({
+      messages: [
+        {
+          role: "assistant",
+          content: [{ type: "text", text: "Mapped the code path." }],
+        },
+        {
+          role: "assistant",
+          stopReason: "toolUse",
+          content: [{ type: "toolCall", id: "call-read", name: "read", arguments: {} }],
+        },
+        {
+          role: "toolResult",
+          content: "tool result should not become the child result",
+        },
+      ],
+    });
+
+    await expect(readSubagentOutput("agent:main:subagent:child")).resolves.toBe(
+      "Mapped the code path.",
+    );
+  });
+
+  it("does not fall back to tool output when the last assistant turn is empty", async () => {
+    installOutputDeps({
+      messages: [
+        {
+          role: "toolResult",
+          content: "tool output only",
+        },
+        {
+          role: "assistant",
+          stopReason: "stop",
+          content: [],
+        },
+      ],
+    });
+
+    await expect(readSubagentOutput("agent:main:subagent:child")).resolves.toBeUndefined();
   });
 });
 
