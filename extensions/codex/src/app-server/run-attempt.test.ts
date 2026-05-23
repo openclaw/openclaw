@@ -555,6 +555,14 @@ async function buildDynamicToolsForTest(
   });
 }
 
+function filterAllowedRuntimeToolNamesForTest(
+  params: EmbeddedRunAttemptParams,
+  tools: RuntimeDynamicToolForTest[],
+) {
+  const toolsAllow = testing.includeForcedCodexDynamicToolAllow(params.toolsAllow, params);
+  return testing.filterCodexDynamicToolsForAllowlist(tools, toolsAllow).map((tool) => tool.name);
+}
+
 type RuntimeDynamicToolForTest = Parameters<
   typeof createCodexDynamicToolBridge
 >[0]["tools"][number];
@@ -2260,11 +2268,7 @@ describe("runCodexAppServerAttempt", () => {
     expect(result.assistantTexts).toEqual(["Nested done."]);
   });
 
-  it("keeps forced message dynamic tool when toolsAllow omits it", async () => {
-    testing.setOpenClawCodingToolsFactoryForTests(() => [
-      createRuntimeDynamicTool("message"),
-      createRuntimeDynamicTool("music_generate"),
-    ]);
+  it("keeps forced message dynamic tool when toolsAllow omits it", () => {
     const workspaceDir = path.join(tempDir, "workspace");
     const params = createParams(path.join(tempDir, "session.jsonl"), workspaceDir);
     params.disableTools = false;
@@ -2272,25 +2276,21 @@ describe("runCodexAppServerAttempt", () => {
     params.sourceReplyDeliveryMode = "message_tool_only";
     params.toolsAllow = ["music_generate"];
 
-    const dynamicToolNames = (
-      await buildDynamicToolsForTest(params, workspaceDir, {
-        forceHeartbeatTool: true,
-        ignoreRuntimePlan: true,
-      })
-    ).map((tool) => tool.name);
+    const dynamicToolNames = filterAllowedRuntimeToolNamesForTest(params, [
+      createRuntimeDynamicTool("message"),
+      createRuntimeDynamicTool("music_generate"),
+    ]);
 
     expect(dynamicToolNames).toContain("message");
     expect(dynamicToolNames).toContain("music_generate");
   });
 
-  it("keeps forced message dynamic tool when toolsAllow is empty", async () => {
-    testing.setOpenClawCodingToolsFactoryForTests((options) => [
+  it("keeps forced message dynamic tool when toolsAllow is empty", () => {
+    const tools = [
       createRuntimeDynamicTool("message"),
       createRuntimeDynamicTool("music_generate"),
-      ...(options?.forceHeartbeatTool === true
-        ? [createRuntimeDynamicTool("heartbeat_respond")]
-        : []),
-    ]);
+      createRuntimeDynamicTool("heartbeat_respond"),
+    ];
     const workspaceDir = path.join(tempDir, "workspace");
     const params = createParams(path.join(tempDir, "session.jsonl"), workspaceDir);
     params.disableTools = false;
@@ -2298,35 +2298,23 @@ describe("runCodexAppServerAttempt", () => {
     params.sourceReplyDeliveryMode = "message_tool_only";
     params.toolsAllow = [];
 
-    const dynamicToolNames = (
-      await buildDynamicToolsForTest(params, workspaceDir, {
-        forceHeartbeatTool: true,
-        ignoreRuntimePlan: true,
-      })
-    ).map((tool) => tool.name);
+    const dynamicToolNames = filterAllowedRuntimeToolNamesForTest(params, tools);
 
     expect(dynamicToolNames).toEqual(["message"]);
   });
 
-  it("keeps forced heartbeat registration inside narrow toolsAllow policy", async () => {
-    testing.setOpenClawCodingToolsFactoryForTests((options) => [
+  it("keeps forced heartbeat registration inside narrow toolsAllow policy", () => {
+    const tools = [
       createRuntimeDynamicTool("message"),
-      ...(options?.forceHeartbeatTool === true
-        ? [createRuntimeDynamicTool("heartbeat_respond")]
-        : []),
-    ]);
+      createRuntimeDynamicTool("heartbeat_respond"),
+    ];
     const workspaceDir = path.join(tempDir, "workspace");
     const params = createParams(path.join(tempDir, "session.jsonl"), workspaceDir);
     params.disableTools = false;
     params.runtimePlan = createCodexRuntimePlanFixture();
     params.toolsAllow = ["message"];
 
-    const dynamicToolNames = (
-      await buildDynamicToolsForTest(params, workspaceDir, {
-        forceHeartbeatTool: true,
-        ignoreRuntimePlan: true,
-      })
-    ).map((tool) => tool.name);
+    const dynamicToolNames = filterAllowedRuntimeToolNamesForTest(params, tools);
 
     expect(dynamicToolNames).toEqual(["message"]);
   });

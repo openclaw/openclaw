@@ -5573,6 +5573,7 @@ export const testing = {
   buildDynamicTools,
   addSandboxShellDynamicToolsIfAvailable,
   filterCodexDynamicToolsForAllowlist,
+  includeForcedCodexDynamicToolAllow,
   filterToolsForVisionInputs,
   hasWildcardCodexToolsAllow,
   handleDynamicToolCallWithTimeout,
