@@ -218,6 +218,10 @@ export function resolvePdfModelConfigForTool(params: {
     agentDir: params.agentDir,
     authStore: params.authStore,
   });
+  const preferMinimaxTextExtraction =
+    providerOk &&
+    isMinimaxVlmProvider(primary.provider) &&
+    minimaxTextExtractionCandidates.length > 0;
 
   if (params.cfg?.models?.providers && typeof params.cfg.models.providers === "object") {
     for (const [providerKey, providerCfg] of Object.entries(params.cfg.models.providers)) {
@@ -254,24 +258,20 @@ export function resolvePdfModelConfigForTool(params: {
     }
   }
 
+  const fallbackCandidates = preferMinimaxTextExtraction
+    ? [...nativePdfCandidates, ...minimaxTextExtractionCandidates, ...genericImageCandidates]
+    : [...nativePdfCandidates, ...genericImageCandidates, ...minimaxTextExtractionCandidates];
+
   if (primary.provider === "google" && googleOk && providerVision && primarySupportsNativePdf) {
     preferred = providerVision;
   } else if (providerOk && primarySupportsNativePdf && (providerVision || providerDefault)) {
     preferred = providerVision ?? `${primary.provider}/${providerDefault}`;
   } else {
-    preferred =
-      nativePdfCandidates[0] ??
-      minimaxTextExtractionCandidates[0] ??
-      genericImageCandidates[0] ??
-      null;
+    preferred = fallbackCandidates[0] ?? null;
   }
 
   if (preferred?.trim()) {
-    for (const candidate of [
-      ...nativePdfCandidates,
-      ...minimaxTextExtractionCandidates,
-      ...genericImageCandidates,
-    ]) {
+    for (const candidate of fallbackCandidates) {
       if (candidate !== preferred) {
         addFallback(candidate);
       }
