@@ -52,7 +52,6 @@ import {
   stopChromeMcpPerformanceTrace,
   stopChromeMcpScreencast,
   takeChromeMcpHeapSnapshot,
-  takeChromeMcpSnapshot,
   takeChromeMcpScreenshot,
   takeChromeMcpSnapshot,
   triggerChromeMcpExtensionAction,
@@ -1075,7 +1074,37 @@ describe("chrome MCP page parsing", () => {
       "--autoConnect",
       "--experimentalStructuredContent",
       "--experimental-page-id-routing",
+      "--experimentalVision",
+      "--experimentalMemory",
+      "--experimentalScreencast",
+      "--experimentalInteropTools",
+      "--categoryExperimentalThirdParty",
+      "--categoryExperimentalWebmcp",
+      "--categoryExtensions",
       "--usage-statistics",
+    ]);
+  });
+
+  it("lets isolated Chrome MCP launch mode avoid auto-connect", () => {
+    expect(
+      buildChromeMcpArgs({
+        mcpArgs: ["--isolated", "--headless", "--no-usage-statistics"],
+      }),
+    ).toEqual([
+      "-y",
+      "chrome-devtools-mcp@latest",
+      "--experimentalStructuredContent",
+      "--experimental-page-id-routing",
+      "--experimentalVision",
+      "--experimentalMemory",
+      "--experimentalScreencast",
+      "--experimentalInteropTools",
+      "--categoryExperimentalThirdParty",
+      "--categoryExperimentalWebmcp",
+      "--categoryExtensions",
+      "--isolated",
+      "--headless",
+      "--no-usage-statistics",
     ]);
   });
 
@@ -1090,6 +1119,13 @@ describe("chrome MCP page parsing", () => {
       "--autoConnect",
       "--experimentalStructuredContent",
       "--experimental-page-id-routing",
+      "--experimentalVision",
+      "--experimentalMemory",
+      "--experimentalScreencast",
+      "--experimentalInteropTools",
+      "--categoryExperimentalThirdParty",
+      "--categoryExperimentalWebmcp",
+      "--categoryExtensions",
       "--no-usage-statistics",
     ]);
   });

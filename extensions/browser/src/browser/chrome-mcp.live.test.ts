@@ -329,7 +329,11 @@ async function optionalChromeMcpTool<T>(fn: () => Promise<T>): Promise<T | undef
   }
 }
 
-function createLiveBrowserConfig(profileName: string, fixture: LiveFixture): ResolvedBrowserConfig {
+function createLiveBrowserConfig(
+  profileName: string,
+  fixture: LiveFixture,
+  opts: { extensionPipeProfileName?: string } = {},
+): ResolvedBrowserConfig {
   return {
     enabled: true,
     evaluateEnabled: true,
@@ -356,6 +360,15 @@ function createLiveBrowserConfig(profileName: string, fixture: LiveFixture): Res
         cdpUrl: `http://127.0.0.1:${fixture.cdpPort}`,
         color: "#00AA00",
       },
+      ...(opts.extensionPipeProfileName
+        ? {
+            [opts.extensionPipeProfileName]: {
+              driver: "existing-session" as const,
+              mcpArgs: ["--isolated", "--headless", "--no-usage-statistics"],
+              color: "#AA00AA",
+            },
+          }
+        : {}),
     },
     tabCleanup: { enabled: false, idleMinutes: 0, maxTabsPerSession: 0, sweepMinutes: 0 },
     ssrfPolicy: { allowedHostnames: ["127.0.0.1"] },
@@ -363,10 +376,14 @@ function createLiveBrowserConfig(profileName: string, fixture: LiveFixture): Res
   };
 }
 
-function createLiveRouteJson(profileName: string, fixture: LiveFixture) {
+function createLiveRouteJson(
+  profileName: string,
+  fixture: LiveFixture,
+  opts: { extensionPipeProfileName?: string } = {},
+) {
   const state: BrowserServerState = {
     port: 0,
-    resolved: createLiveBrowserConfig(profileName, fixture),
+    resolved: createLiveBrowserConfig(profileName, fixture, opts),
     profiles: new Map(),
   };
   const ctx = createBrowserRouteContext({ getState: () => state });
@@ -798,6 +815,7 @@ describeLive("browser (live): Chrome MCP isolated local fixture", () => {
     async () => {
       const fixture = await startFixture();
       const profileName = "chrome-tool-surface-live";
+      const extensionPipeProfileName = "chrome-tool-surface-live-extensions-pipe";
       const profile: ChromeMcpProfileOptions = { cdpUrl: `http://127.0.0.1:${fixture.cdpPort}` };
       const coverage: Record<string, { status: "pass" | "unsupported"; note?: string }> = {};
       let targetId: string | undefined;
@@ -823,7 +841,7 @@ describeLive("browser (live): Chrome MCP isolated local fixture", () => {
         }
       };
       try {
-        const routeJson = createLiveRouteJson(profileName, fixture);
+        const routeJson = createLiveRouteJson(profileName, fixture, { extensionPipeProfileName });
         const routeImageResult = async (params: { path: string; label: string }) => ({
           content: [{ type: "text" as const, text: `IMAGE:${params.path}` }],
           details: { ok: true, path: params.path, label: params.label },
@@ -915,7 +933,9 @@ describeLive("browser (live): Chrome MCP isolated local fixture", () => {
               query: { profile: opts.profile },
               body: { targetId: opts.targetId },
             }),
-          getRuntimeConfig: () => ({ browser: createLiveBrowserConfig(profileName, fixture) }),
+          getRuntimeConfig: () => ({
+            browser: createLiveBrowserConfig(profileName, fixture, { extensionPipeProfileName }),
+          }),
           imageResultFromFile: routeImageResult,
         });
         browserToolActionTesting.setDepsForTest({
@@ -955,7 +975,9 @@ describeLive("browser (live): Chrome MCP isolated local fixture", () => {
               query: opts,
             }),
           imageResultFromFile: routeImageResult,
-          getRuntimeConfig: () => ({ browser: createLiveBrowserConfig(profileName, fixture) }),
+          getRuntimeConfig: () => ({
+            browser: createLiveBrowserConfig(profileName, fixture, { extensionPipeProfileName }),
+          }),
         });
 
         await expect(action({ action: "status" })).resolves.toEqual(
@@ -1140,7 +1162,15 @@ describeLive("browser (live): Chrome MCP isolated local fixture", () => {
         ).resolves.toEqual(expect.objectContaining({ ok: true }));
         mark("screencast:stop");
 
-        await tryAction("extensions:list", { action: "extensions", operation: "list" });
+        await expect(
+          executeBrowserToolAction({
+            profile: extensionPipeProfileName,
+            action: "extensions",
+            operation: "list",
+            timeoutMs: 20_000,
+          }),
+        ).resolves.toEqual(expect.objectContaining({ ok: true, extensions: expect.any(Array) }));
+        mark("extensions:list");
         await expect(action({ action: "extensions", operation: "tab-id" })).resolves.toEqual(
           expect.objectContaining({ ok: true, tabId: expect.any(String) }),
         );
@@ -1184,6 +1214,7 @@ describeLive("browser (live): Chrome MCP isolated local fixture", () => {
           lighthouse: { status: "pass" },
           "screencast:start": { status: "pass" },
           "screencast:stop": { status: "pass" },
+          "extensions:list": { status: "pass" },
           "extensions:tab-id": { status: "pass" },
           "act:evaluate": { status: "pass" },
           "act:close": { status: "pass" },
