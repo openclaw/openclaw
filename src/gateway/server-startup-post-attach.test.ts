@@ -996,25 +996,36 @@ describe("startGatewayPostAttachRuntime", () => {
     );
   });
 
-  it("starts and reports plugin services before channel startup completion", async () => {
+  it("starts and reports plugin services after channel startup completes", async () => {
     await withEnvAsync(
       { OPENCLAW_SKIP_CHANNELS: undefined, OPENCLAW_SKIP_PROVIDERS: undefined },
       async () => {
         let releaseChannels: (() => void) | undefined;
+        const events: string[] = [];
         const pluginServices = { stop: vi.fn(async () => {}) } as never;
         const onPluginServices = vi.fn();
         const onSidecarsReady = vi.fn();
         const startChannels = vi.fn(
           () =>
             new Promise<void>((resolve) => {
-              releaseChannels = resolve;
+              events.push("channels-start");
+              releaseChannels = () => {
+                events.push("channels-end");
+                resolve();
+              };
             }),
         );
-        hoisted.startPluginServices.mockResolvedValueOnce(pluginServices);
+        hoisted.startPluginServices.mockImplementationOnce(async () => {
+          events.push("plugin-services");
+          return pluginServices;
+        });
 
         await startGatewayPostAttachRuntime({
           ...createPostAttachParams({
             deferSidecars: true,
+            onChannelsStarted: async () => {
+              events.push("channels-started");
+            },
             onPluginServices,
             onSidecarsReady,
           }),
@@ -1023,9 +1034,9 @@ describe("startGatewayPostAttachRuntime", () => {
 
         await vi.waitFor(() => {
           expect(startChannels).toHaveBeenCalledTimes(1);
-          expect(hoisted.startPluginServices).toHaveBeenCalledTimes(1);
-          expect(onPluginServices).toHaveBeenCalledWith(pluginServices);
         });
+        expect(hoisted.startPluginServices).not.toHaveBeenCalled();
+        expect(onPluginServices).not.toHaveBeenCalled();
         expect(onSidecarsReady).not.toHaveBeenCalled();
 
         if (!releaseChannels) {
@@ -1033,9 +1044,113 @@ describe("startGatewayPostAttachRuntime", () => {
         }
         releaseChannels();
         await vi.waitFor(() => {
+          expect(hoisted.startPluginServices).toHaveBeenCalledTimes(1);
+          expect(onPluginServices).toHaveBeenCalledWith(pluginServices);
           expect(onSidecarsReady).toHaveBeenCalledTimes(1);
         });
+        expect(events).toEqual([
+          "channels-start",
+          "channels-end",
+          "channels-started",
+          "plugin-services",
+        ]);
         expect(onPluginServices).toHaveBeenCalledTimes(1);
+      },
+    );
+  });
+
+  it("does not start plugin services after deferred close starts during channel startup", async () => {
+    await withEnvAsync(
+      { OPENCLAW_SKIP_CHANNELS: undefined, OPENCLAW_SKIP_PROVIDERS: undefined },
+      async () => {
+        let closing = false;
+        let releaseChannels: (() => void) | undefined;
+        const onPluginServices = vi.fn();
+        const onSidecarsReady = vi.fn();
+        const startChannels = vi.fn(
+          () =>
+            new Promise<void>((resolve) => {
+              releaseChannels = resolve;
+            }),
+        );
+
+        await startGatewayPostAttachRuntime({
+          ...createPostAttachParams({
+            deferSidecars: true,
+            onPluginServices,
+            onSidecarsReady,
+          }),
+          startChannels,
+          isClosing: () => closing,
+        });
+
+        await vi.waitFor(() => {
+          expect(startChannels).toHaveBeenCalledTimes(1);
+        });
+        closing = true;
+
+        if (!releaseChannels) {
+          throw new Error("Expected channel startup release callback to be initialized");
+        }
+        releaseChannels();
+
+        await vi.waitFor(() => {
+          expect(onSidecarsReady).toHaveBeenCalledTimes(1);
+        });
+        expect(hoisted.startPluginServices).not.toHaveBeenCalled();
+        expect(onPluginServices).toHaveBeenCalledWith(null);
+      },
+    );
+  });
+
+  it("stops plugin services that finish starting after deferred close begins", async () => {
+    await withEnvAsync(
+      { OPENCLAW_SKIP_CHANNELS: undefined, OPENCLAW_SKIP_PROVIDERS: undefined },
+      async () => {
+        let shouldStartPluginServices = true;
+        let releasePluginServices: (() => void) | undefined;
+        const pluginServices = { stop: vi.fn(async () => {}) };
+        const onPluginServices = vi.fn();
+        hoisted.startPluginServices.mockImplementationOnce(
+          async () =>
+            await new Promise((resolve) => {
+              releasePluginServices = () => resolve(pluginServices);
+            }),
+        );
+
+        const sidecarsPromise = startGatewaySidecars({
+          cfg: { hooks: { internal: { enabled: false } } } as never,
+          pluginRegistry: createPostAttachParams().pluginRegistry,
+          defaultWorkspaceDir: "/tmp/openclaw-workspace",
+          deps: {} as never,
+          startChannels: vi.fn(async () => {}),
+          shouldStartPluginServices: () => shouldStartPluginServices,
+          onPluginServices,
+          log: { warn: vi.fn() },
+          logHooks: {
+            info: vi.fn(),
+            warn: vi.fn(),
+            error: vi.fn(),
+          },
+          logChannels: {
+            info: vi.fn(),
+            error: vi.fn(),
+          },
+        });
+
+        await vi.waitFor(() => {
+          expect(hoisted.startPluginServices).toHaveBeenCalledTimes(1);
+        });
+        shouldStartPluginServices = false;
+
+        if (!releasePluginServices) {
+          throw new Error("Expected plugin service release callback to be initialized");
+        }
+        releasePluginServices();
+        await expect(sidecarsPromise).resolves.toMatchObject({ pluginServices: null });
+
+        expect(pluginServices.stop).toHaveBeenCalledTimes(1);
+        expect(onPluginServices).toHaveBeenCalledWith(null);
       },
     );
   });
@@ -1079,6 +1194,14 @@ describe("startGatewayPostAttachRuntime", () => {
         );
 
         await vi.waitFor(() => {
+          expect(startChannels).toHaveBeenCalledTimes(1);
+        });
+
+        if (!releaseChannels) {
+          throw new Error("Expected channel startup release callback to be initialized");
+        }
+        releaseChannels();
+        await vi.waitFor(() => {
           expect(onPluginServices).toHaveBeenCalledWith(pluginServices);
         });
 
@@ -1087,11 +1210,6 @@ describe("startGatewayPostAttachRuntime", () => {
         }
         releaseStartupLog();
         await expect(runtimePromise).resolves.toMatchObject({ pluginServices });
-
-        if (!releaseChannels) {
-          throw new Error("Expected channel startup release callback to be initialized");
-        }
-        releaseChannels();
         await vi.waitFor(() => {
           expect(onSidecarsReady).toHaveBeenCalledTimes(1);
         });

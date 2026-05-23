@@ -26,6 +26,8 @@ type ActiveMeetingNotesSession = {
 const activeSessions = new Map<string, ActiveMeetingNotesSession>();
 const AUTO_START_RETRY_ATTEMPTS = 12;
 const AUTO_START_RETRY_MS = 5_000;
+const AUTO_START_STOP_TIMEOUT_MS = 5_000;
+const AUTO_START_PROVIDER_READY_TIMEOUT_MS = 30_000;
 
 function sameSessionIdentity(
   left: MeetingNotesSessionDescriptor,
@@ -95,6 +97,28 @@ function createStore(api: OpenClawPluginApi): MeetingNotesStore {
   return new MeetingNotesStore(path.join(api.runtime.state.resolveStateDir(), "meeting-notes"));
 }
 
+async function waitForPendingAutoStartsToSettle(
+  pendingStarts: Set<Promise<void>>,
+): Promise<boolean> {
+  if (pendingStarts.size === 0) {
+    return true;
+  }
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      Promise.allSettled([...pendingStarts]).then(() => true),
+      new Promise<boolean>((resolve) => {
+        timeout = setTimeout(() => resolve(false), AUTO_START_STOP_TIMEOUT_MS);
+        timeout.unref?.();
+      }),
+    ]);
+  } finally {
+    if (timeout) {
+      clearTimeout(timeout);
+    }
+  }
+}
+
 function sourceFromParams(params: Record<string, unknown>): MeetingNotesSourceLocator {
   const providerId = readStringParam(params, "providerId", { trim: true }) ?? "manual-transcript";
   return {
@@ -145,7 +169,12 @@ async function startMeetingNotes(params: {
   api: OpenClawPluginApi;
   store: MeetingNotesStore;
   rawParams: Record<string, unknown>;
+  abortSignal?: AbortSignal;
+  startupWaitMs?: number;
 }) {
+  if (params.abortSignal?.aborted) {
+    throw new Error("meeting notes start aborted");
+  }
   const source = sourceFromParams(params.rawParams);
   const provider = resolveSourceProvider(source.providerId, params.api);
   if (!provider?.start) {
@@ -161,10 +190,21 @@ async function startMeetingNotes(params: {
   const result = await provider.start({
     cfg: params.api.config,
     session,
+    abortSignal: params.abortSignal,
+    startupWaitMs: params.startupWaitMs,
     onUtterance: (utterance) => params.store.appendUtteranceForSession(session, utterance),
   });
   if (!result.ok) {
     throw new Error(result.error);
+  }
+  if (params.abortSignal?.aborted) {
+    await provider.stop?.({
+      cfg: params.api.config,
+      sessionId: session.sessionId,
+      source: session.source,
+      reason: "service-stop",
+    });
+    throw new Error("meeting notes start aborted");
   }
   activeSessions.set(session.sessionId, { session, providerId: provider.id });
   return toolText(`Meeting notes started: ${session.sessionId}`, {
@@ -379,6 +419,8 @@ export function createMeetingNotesAutoStartService(api: OpenClawPluginApi): Open
   let stopped = false;
   const timers = new Set<ReturnType<typeof setTimeout>>();
   const startedSessionIds = new Set<string>();
+  const pendingStartControllers = new Set<AbortController>();
+  const pendingStarts = new Set<Promise<void>>();
 
   const schedule = (run: () => void, delayMs: number) => {
     const timer = setTimeout(() => {
@@ -397,9 +439,13 @@ export function createMeetingNotesAutoStartService(api: OpenClawPluginApi): Open
     if (stopped || !entry.enabled || startedSessionIds.has(entry.sessionId ?? "")) {
       return;
     }
-    void startMeetingNotes({
+    const abortController = new AbortController();
+    pendingStartControllers.add(abortController);
+    const startTask = startMeetingNotes({
       api: serviceApi,
       store,
+      abortSignal: abortController.signal,
+      startupWaitMs: AUTO_START_PROVIDER_READY_TIMEOUT_MS,
       rawParams: {
         action: "start",
         ...entry,
@@ -413,7 +459,10 @@ export function createMeetingNotesAutoStartService(api: OpenClawPluginApi): Open
         }
       })
       .catch((err) => {
-        if (stopped || attempt >= AUTO_START_RETRY_ATTEMPTS) {
+        if (stopped) {
+          return;
+        }
+        if (attempt >= AUTO_START_RETRY_ATTEMPTS) {
           api.logger.warn(
             `meeting-notes autoStart failed provider=${entry.providerId}: ${
               err instanceof Error ? err.message : String(err)
@@ -422,7 +471,12 @@ export function createMeetingNotesAutoStartService(api: OpenClawPluginApi): Open
           return;
         }
         schedule(() => startEntry(entry, attempt + 1, serviceApi, store), AUTO_START_RETRY_MS);
+      })
+      .finally(() => {
+        pendingStartControllers.delete(abortController);
+        pendingStarts.delete(startTask);
       });
+    pendingStarts.add(startTask);
   };
 
   return {
@@ -452,6 +506,17 @@ export function createMeetingNotesAutoStartService(api: OpenClawPluginApi): Open
         clearTimeout(timer);
       }
       timers.clear();
+      for (const controller of pendingStartControllers) {
+        controller.abort();
+      }
+      const pendingStartsSettled = await waitForPendingAutoStartsToSettle(pendingStarts);
+      if (!pendingStartsSettled) {
+        api.logger.warn(
+          `meeting-notes autoStart stop timed out waiting for ${pendingStarts.size} pending start${
+            pendingStarts.size === 1 ? "" : "s"
+          }`,
+        );
+      }
       const serviceApi = { ...api, config: ctx.config };
       const store = new MeetingNotesStore(path.join(ctx.stateDir, "meeting-notes"));
       for (const sessionId of startedSessionIds) {

@@ -389,11 +389,58 @@ describe("meeting-notes plugin", () => {
         channelId: "channel-1",
       },
     });
+    expect(request.startupWaitMs).toBe(30_000);
     await expect(
       fs.readFile(
         path.join(stateDir, "meeting-notes", currentDateDir(), "standup", "metadata.json"),
         "utf8",
       ),
     ).resolves.toContain("Standup");
+  });
+
+  it("aborts pending auto-starts when the service stops", async () => {
+    const stateDir = await makeStateDir();
+    const stop = vi.fn(async () => ({ ok: true, sessionId: "standup" }));
+    const start = vi.fn(
+      async (request) =>
+        await new Promise((resolve) => {
+          request.abortSignal?.addEventListener(
+            "abort",
+            () => resolve({ ok: false, error: "aborted" }),
+            { once: true },
+          );
+        }),
+    );
+    getMeetingNotesSourceProviderMock.mockReturnValue({
+      id: "discord-voice",
+      name: "Discord Voice",
+      sourceKinds: ["live-audio"],
+      start,
+      stop,
+    });
+    const { services } = await createHarness(stateDir, {
+      autoStart: [
+        {
+          providerId: "discord-voice",
+          sessionId: "standup",
+          guildId: "guild-1",
+          channelId: "channel-1",
+        },
+      ],
+    });
+    const logger = { debug: vi.fn(), error: vi.fn(), info: vi.fn(), warn: vi.fn() };
+
+    await services[0]?.start({ config: {}, logger, stateDir });
+    await vi.waitFor(() => {
+      expect(start).toHaveBeenCalledOnce();
+    });
+    const request = start.mock.calls[0]?.[0];
+    expect(request.abortSignal?.aborted).toBe(false);
+
+    await services[0]?.stop({ config: {}, logger, stateDir });
+
+    expect(request.abortSignal?.aborted).toBe(true);
+    expect(stop).not.toHaveBeenCalled();
+    expect(logger.warn).not.toHaveBeenCalled();
   });
 });

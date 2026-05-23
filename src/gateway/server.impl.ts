@@ -1588,6 +1588,9 @@ export async function startGatewayServer(
             },
             getCronService: () =>
               runtimeState?.cronState.cron as PluginHookGatewayCronService | undefined,
+            onChannelsStarted: () => {
+              releaseStartupAccountStarts();
+            },
             onPluginServices: (pluginServices) => {
               runtimeState.pluginServices = pluginServices;
             },
@@ -1613,9 +1616,9 @@ export async function startGatewayServer(
             },
             onSidecarsReady: () => {
               startupSidecarsReady = true;
-              releaseStartupAccountStarts();
               activateScheduledServicesWhenReady();
             },
+            isClosing: () => closePreludeStarted,
             startupTrace,
             deferSidecars: opts.deferStartupSidecars === true,
             providerAuthPrewarm: { getConfig: getRuntimeConfig },

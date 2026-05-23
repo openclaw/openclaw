@@ -5,6 +5,10 @@ import type {
 import type { DiscordVoiceManager } from "./manager.js";
 
 const managersByAccountId = new Map<string, DiscordVoiceManager>();
+const managerWaiters = new Set<{
+  accountId?: string;
+  resolve: () => void;
+}>();
 
 export function setDiscordMeetingNotesVoiceManager(params: {
   accountId: string;
@@ -12,6 +16,11 @@ export function setDiscordMeetingNotesVoiceManager(params: {
 }): void {
   if (params.manager) {
     managersByAccountId.set(params.accountId, params.manager);
+    for (const waiter of managerWaiters) {
+      if (!waiter.accountId || waiter.accountId === params.accountId) {
+        waiter.resolve();
+      }
+    }
   } else {
     managersByAccountId.delete(params.accountId);
   }
@@ -25,15 +34,54 @@ function resolveManager(request: MeetingNotesStartRequest): DiscordVoiceManager 
   return [...managersByAccountId.values()][0];
 }
 
+async function waitForManager(
+  request: MeetingNotesStartRequest,
+): Promise<DiscordVoiceManager | undefined> {
+  const existing = resolveManager(request);
+  if (existing) {
+    return existing;
+  }
+  if (request.abortSignal?.aborted) {
+    return undefined;
+  }
+  const startupWaitMs = request.startupWaitMs ?? 0;
+  if (startupWaitMs <= 0) {
+    return undefined;
+  }
+  const accountId = request.session.source.accountId?.trim() || undefined;
+  await new Promise<void>((resolve) => {
+    const waiter = {
+      accountId,
+      resolve: () => {
+        clearTimeout(timer);
+        request.abortSignal?.removeEventListener("abort", waiter.resolve);
+        managerWaiters.delete(waiter);
+        resolve();
+      },
+    };
+    const timer = setTimeout(waiter.resolve, startupWaitMs);
+    timer.unref?.();
+    request.abortSignal?.addEventListener("abort", waiter.resolve, { once: true });
+    managerWaiters.add(waiter);
+  });
+  if (request.abortSignal?.aborted) {
+    return undefined;
+  }
+  return resolveManager(request);
+}
+
 export const discordVoiceMeetingNotesSourceProvider: MeetingNotesSourceProviderPlugin = {
   id: "discord-voice",
   aliases: ["discord"],
   name: "Discord Voice",
   sourceKinds: ["live-audio"],
   async start(request) {
-    const manager = resolveManager(request);
+    const manager = await waitForManager(request);
     if (!manager) {
       return { ok: false, error: "Discord voice manager is not available." };
+    }
+    if (request.abortSignal?.aborted) {
+      return { ok: false, error: "Discord meeting notes start aborted." };
     }
     const guildId = request.session.source.guildId?.trim();
     const channelId = request.session.source.channelId?.trim();
