@@ -97,7 +97,7 @@ class RemoteShellSandboxFsBridge implements SandboxFsBridge {
     signal?: AbortSignal;
   }): Promise<void> {
     const target = this.resolveTarget(params);
-    this.ensureWritable(target, "write files");
+    await this.ensureRemoteWritable(target, "write files", params.signal);
     const pinned = await this.resolvePinnedParent({
       containerPath: target.containerPath,
       action: "write files",
@@ -126,7 +126,7 @@ class RemoteShellSandboxFsBridge implements SandboxFsBridge {
 
   async mkdirp(params: { filePath: string; cwd?: string; signal?: AbortSignal }): Promise<void> {
     const target = this.resolveTarget(params);
-    this.ensureWritable(target, "create directories");
+    await this.ensureRemoteWritable(target, "create directories", params.signal);
     const relativePath = path.posix.relative(target.mountRootPath, target.containerPath);
     if (relativePathEscapesContainerRoot(relativePath)) {
       throw new Error(
@@ -147,7 +147,7 @@ class RemoteShellSandboxFsBridge implements SandboxFsBridge {
     signal?: AbortSignal;
   }): Promise<void> {
     const target = this.resolveTarget(params);
-    this.ensureWritable(target, "remove files");
+    await this.ensureRemoteWritable(target, "remove files", params.signal);
     const exists = await this.remotePathExists(target.containerPath, params.signal);
     if (!exists) {
       if (params.force === false) {
@@ -182,6 +182,8 @@ class RemoteShellSandboxFsBridge implements SandboxFsBridge {
     signal?: AbortSignal;
   }): Promise<void> {
     const { from, to } = this.resolveRenameTargets(params);
+    await this.ensureRemoteWritable(from, "rename files", params.signal);
+    await this.ensureRemoteWritable(to, "rename files", params.signal);
     const fromPinned = await this.resolvePinnedParent({
       containerPath: from.containerPath,
       action: "rename files",
@@ -382,6 +384,44 @@ class RemoteShellSandboxFsBridge implements SandboxFsBridge {
     if (this.sandbox.workspaceAccess !== "rw" || !target.writable) {
       throw new Error(`Sandbox path is read-only; cannot ${action}: ${target.containerPath}`);
     }
+  }
+
+  private async ensureRemoteWritable(
+    target: ResolvedRemotePath,
+    action: string,
+    signal?: AbortSignal,
+  ): Promise<void> {
+    this.ensureWritable(target, action);
+    const protectedRoot = this.findRemoteProtectedSkillRoot(target.containerPath);
+    if (protectedRoot && (await this.remotePathExists(protectedRoot, signal))) {
+      throw new Error(`Sandbox path is read-only; cannot ${action}: ${target.containerPath}`);
+    }
+  }
+
+  private findRemoteProtectedSkillRoot(containerPath: string): string | null {
+    const roots = this.getRemoteProtectedSkillRoots().toSorted((a, b) => b.length - a.length);
+    for (const root of roots) {
+      if (isPathInsideContainerRoot(root, containerPath)) {
+        return root;
+      }
+    }
+    return null;
+  }
+
+  private getRemoteProtectedSkillRoots(): string[] {
+    const workspaceContainerRoot = normalizeContainerPath(this.runtime.remoteWorkspaceDir);
+    const agentContainerRoot = normalizeContainerPath(this.runtime.remoteAgentWorkspaceDir);
+    const roots = [
+      path.posix.join(workspaceContainerRoot, "skills"),
+      path.posix.join(workspaceContainerRoot, ".agents", "skills"),
+    ];
+    if (path.resolve(this.sandbox.agentWorkspaceDir) !== path.resolve(this.sandbox.workspaceDir)) {
+      roots.push(
+        path.posix.join(agentContainerRoot, "skills"),
+        path.posix.join(agentContainerRoot, ".agents", "skills"),
+      );
+    }
+    return roots;
   }
 
   private async remotePathExists(containerPath: string, signal?: AbortSignal): Promise<boolean> {
