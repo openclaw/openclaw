@@ -128,6 +128,7 @@ Docs: https://docs.openclaw.ai
 - Windows installer: fail Git checkout installs when `pnpm install` or `pnpm build` fails instead of writing a wrapper to a missing CLI build.
 - Sessions: surface previous-transcript archive failures during `/new` rotation so disk rename errors are logged instead of silently hiding stranded transcript files. Fixes #81984. (#85586, from #82081) Thanks @0xghost42.
 - TUI/agents: mirror internal-ui message-tool replies into final chat output so message-tool-only agents remain visible in `openclaw tui`. Fixes #85538. Thanks @danpolasek.
+- Gateway/TUI: preserve source-reply metadata through reply normalization and emit message-tool-only agent replies over the live chat stream so `openclaw tui` renders Codex replies without waiting for a history refresh. Thanks @shakkernerd.
 - Agents: keep parallel OpenAI-compatible tool-call deltas in separate argument buffers so interleaved tool calls no longer corrupt streamed arguments. (#82263) Thanks @luna-system.
 - Memory/doctor: report missing or unusable QMD workspace directories as workspace failures instead of generic binary failures. (#63167) Thanks @sercada.
 - Debug proxy: record CONNECT client-socket errors and destroy the paired upstream socket so abrupt client disconnects no longer leak tunnel resources. (#82444) Thanks @SebTardif.
