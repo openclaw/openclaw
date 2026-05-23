@@ -1028,7 +1028,7 @@ describe("runCodexAppServerAttempt", () => {
     expect(instructions).not.toContain("OpenClaw main command guidance.");
   });
 
-  it("keeps OpenClaw skills out of Codex developer instructions", async () => {
+  it("routes OpenClaw skills through turn collaboration developer_instructions, not user input", async () => {
     const llmInput = vi.fn();
     initializeGlobalHookRunner(
       createMockPluginRegistry([{ hookName: "llm_input", handler: llmInput }]),
@@ -1057,11 +1057,20 @@ describe("runCodexAppServerAttempt", () => {
     const turnStart = harness.requests.find((request) => request.method === "turn/start");
     const turnStartParams = turnStart?.params as {
       input?: Array<{ text?: string }>;
+      collaborationMode?: { settings?: { developer_instructions?: string | null } };
     };
     const inputText = turnStartParams.input?.[0]?.text ?? "";
-    expect(inputText).toContain("## OpenClaw Skills");
-    expect(inputText).toContain("<available_skills>");
-    expect(inputText).toContain("Current user request:\nhello");
+    expect(inputText).not.toContain("## OpenClaw Skills");
+    expect(inputText).not.toContain("<available_skills>");
+    expect(inputText).not.toContain("OpenClaw workspace context for this turn:");
+    expect(inputText).toBe("hello");
+
+    const turnDeveloperInstructions =
+      turnStartParams.collaborationMode?.settings?.developer_instructions ?? "";
+    expect(turnDeveloperInstructions).toContain("## OpenClaw Skills");
+    expect(turnDeveloperInstructions).toContain("<available_skills>");
+    expect(turnDeveloperInstructions).toContain(params.skillsSnapshot.prompt);
+
     const [llmInputPayload] = mockCall(llmInput, "llm_input") as [{ prompt?: string }, unknown];
     expect(llmInputPayload.prompt).toBe(inputText);
     const trajectoryEvents = (
@@ -1834,7 +1843,7 @@ describe("runCodexAppServerAttempt", () => {
     expect(collaborationInstructions).not.toContain(heartbeatChecklist);
     expect(collaborationInstructions).not.toContain(memorySummary);
     const inputText = turnStartParams.input?.[0]?.text ?? "";
-    expect(inputText).toContain("OpenClaw runtime context for this turn:");
+    expect(inputText).toContain("OpenClaw workspace context for this turn:");
     expect(inputText).not.toContain("does not override Codex system/developer instructions");
     expect(inputText).not.toContain("not developer policy");
     expect(inputText).not.toContain(soulGuidance);

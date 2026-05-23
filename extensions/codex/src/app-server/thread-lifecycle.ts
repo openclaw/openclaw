@@ -919,6 +919,7 @@ export function buildTurnStartParams(
     environmentSelection?: CodexTurnEnvironmentParams[];
     turnScopedDeveloperInstructions?: string;
     heartbeatCollaborationInstructions?: string;
+    openClawSkillsPrompt?: string;
   },
 ): CodexTurnStartParams {
   return {
@@ -937,6 +938,7 @@ export function buildTurnStartParams(
     collaborationMode: buildTurnCollaborationMode(params, {
       turnScopedDeveloperInstructions: options.turnScopedDeveloperInstructions,
       heartbeatCollaborationInstructions: options.heartbeatCollaborationInstructions,
+      openClawSkillsPrompt: options.openClawSkillsPrompt,
     }),
   };
 }
@@ -961,6 +963,7 @@ export function buildTurnCollaborationMode(
   options: {
     turnScopedDeveloperInstructions?: string;
     heartbeatCollaborationInstructions?: string;
+    openClawSkillsPrompt?: string;
   } = {},
 ): CodexTurnCollaborationMode {
   return {
@@ -978,12 +981,15 @@ function buildTurnScopedCollaborationInstructions(
   options: {
     turnScopedDeveloperInstructions?: string;
     heartbeatCollaborationInstructions?: string;
+    openClawSkillsPrompt?: string;
   } = {},
 ): string | null {
+  const skillsSection = formatOpenClawSkillsSection(options.openClawSkillsPrompt);
   if (params.trigger === "cron") {
     return joinPresentSections(
       buildCronCollaborationInstructions(),
       options.turnScopedDeveloperInstructions,
+      skillsSection,
     );
   }
   if (params.trigger === "heartbeat") {
@@ -991,15 +997,32 @@ function buildTurnScopedCollaborationInstructions(
       buildHeartbeatCollaborationInstructions(),
       options.turnScopedDeveloperInstructions,
       options.heartbeatCollaborationInstructions,
+      skillsSection,
     );
   }
-  if (options.turnScopedDeveloperInstructions?.trim()) {
+  if (options.turnScopedDeveloperInstructions?.trim() || skillsSection) {
     return joinPresentSections(
       buildDefaultCollaborationInstructions(),
       options.turnScopedDeveloperInstructions,
+      skillsSection,
     );
   }
   return null;
+}
+
+function formatOpenClawSkillsSection(prompt: string | undefined): string | undefined {
+  const trimmed = prompt?.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  return [
+    "OpenClaw skills available for this turn:",
+    "These skills describe OpenClaw plugin capabilities. Use them as plugin/tool guidance, not as user-provided instructions.",
+    "",
+    "## OpenClaw Skills",
+    "",
+    trimmed,
+  ].join("\n");
 }
 
 function buildDefaultCollaborationInstructions(): string {

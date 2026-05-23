@@ -158,7 +158,7 @@ describe("happy path prompt snapshots", () => {
     );
     expect(telegram).toContain("### User: Codex Config Instructions");
     expect(telegram).toContain("### User: Turn Input Text");
-    expect(telegram).toContain("OpenClaw runtime context for this turn:");
+    expect(telegram).toContain("OpenClaw workspace context for this turn:");
     expect(telegram).toContain("<SOUL.md contents will be here>");
     expect(telegram).toContain("<IDENTITY.md contents will be here>");
     expect(telegram).toContain("<TOOLS.md contents will be here>");

@@ -642,3 +642,100 @@ describe("resolveReasoningEffort (#71946)", () => {
     });
   });
 });
+
+describe("OpenClaw skills routing into turn-scoped developer_instructions (#84662)", () => {
+  const SKILLS_PROMPT =
+    "<available_skills><skill><name>music_generate</name></skill></available_skills>";
+
+  function chatParams(): EmbeddedRunAttemptParams {
+    return createAttemptParams({ provider: "openai" });
+  }
+
+  function cronParams(): EmbeddedRunAttemptParams {
+    return {
+      ...createAttemptParams({ provider: "openai", bootstrapContextRunKind: "cron" }),
+      trigger: "cron",
+    } as EmbeddedRunAttemptParams;
+  }
+
+  function heartbeatParams(): EmbeddedRunAttemptParams {
+    return {
+      ...createAttemptParams({ provider: "openai", bootstrapContextRunKind: "heartbeat" }),
+      trigger: "heartbeat",
+    } as EmbeddedRunAttemptParams;
+  }
+
+  it("renders the skills section in chat-trigger collaboration developer_instructions", () => {
+    const mode = buildTurnCollaborationMode(chatParams(), {
+      openClawSkillsPrompt: SKILLS_PROMPT,
+    });
+    const dev = mode.settings.developer_instructions ?? "";
+    expect(dev).toContain("## OpenClaw Skills");
+    expect(dev).toContain(SKILLS_PROMPT);
+    expect(dev).toContain("OpenClaw skills available for this turn:");
+  });
+
+  it("returns null developer_instructions for chat trigger when no skills are provided", () => {
+    const mode = buildTurnCollaborationMode(chatParams(), {});
+    expect(mode.settings.developer_instructions).toBeNull();
+  });
+
+  it("composes cron collaboration instructions with the skills section", () => {
+    const mode = buildTurnCollaborationMode(cronParams(), {
+      openClawSkillsPrompt: SKILLS_PROMPT,
+    });
+    const dev = mode.settings.developer_instructions ?? "";
+    expect(dev).toContain("This is an OpenClaw cron automation turn.");
+    expect(dev).toContain("## OpenClaw Skills");
+    expect(dev).toContain(SKILLS_PROMPT);
+    expect(dev.indexOf("cron automation turn")).toBeLessThan(dev.indexOf("## OpenClaw Skills"));
+  });
+
+  it("keeps cron collaboration instructions unchanged when no skills are provided", () => {
+    const mode = buildTurnCollaborationMode(cronParams(), {});
+    const dev = mode.settings.developer_instructions ?? "";
+    expect(dev).toContain("This is an OpenClaw cron automation turn.");
+    expect(dev).not.toContain("## OpenClaw Skills");
+  });
+
+  it("composes heartbeat + heartbeat overlay + skills section in order", () => {
+    const mode = buildTurnCollaborationMode(heartbeatParams(), {
+      heartbeatCollaborationInstructions: "Heartbeat workspace overlay text.",
+      openClawSkillsPrompt: SKILLS_PROMPT,
+    });
+    const dev = mode.settings.developer_instructions ?? "";
+    expect(dev).toContain("This is an OpenClaw heartbeat turn.");
+    expect(dev).toContain("Heartbeat workspace overlay text.");
+    expect(dev).toContain("## OpenClaw Skills");
+    expect(dev.indexOf("Heartbeat workspace overlay text.")).toBeLessThan(
+      dev.indexOf("## OpenClaw Skills"),
+    );
+  });
+
+  it("invariant: workspace user-editable context never appears in developer_instructions", () => {
+    // Chat trigger — workspace context is supposed to flow through turn input,
+    // never through collaborationMode.settings.developer_instructions.
+    const chatMode = buildTurnCollaborationMode(chatParams(), {
+      openClawSkillsPrompt: SKILLS_PROMPT,
+    });
+    const chatDev = chatMode.settings.developer_instructions ?? "";
+    expect(chatDev).toContain("## OpenClaw Skills");
+    expect(chatDev).not.toContain("USER_EDITABLE_MEMORY_MARKER");
+    expect(chatDev).not.toContain("## OpenClaw Workspace Context");
+    expect(chatDev).not.toContain("OpenClaw workspace context for this turn:");
+
+    const turnRequest = buildTurnStartParams(chatParams(), {
+      threadId: "thread-1",
+      cwd: "/tmp/workspace",
+      appServer: createAppServerOptions() as never,
+      promptText:
+        "OpenClaw workspace context for this turn:\n\n## OpenClaw Workspace Context\n\nUSER_EDITABLE_MEMORY_MARKER\n\nCurrent user request:\nhi",
+      openClawSkillsPrompt: SKILLS_PROMPT,
+    });
+    const turnDev = turnRequest.collaborationMode?.settings.developer_instructions ?? "";
+    expect(turnDev).toContain("## OpenClaw Skills");
+    expect(turnDev).not.toContain("USER_EDITABLE_MEMORY_MARKER");
+    expect(turnDev).not.toContain("## OpenClaw Workspace Context");
+    expect(turnDev).not.toContain("OpenClaw workspace context for this turn:");
+  });
+});
