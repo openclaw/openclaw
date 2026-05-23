@@ -1108,6 +1108,42 @@ describe("registerPluginCommand", () => {
     expect(receivedCtx?.sessionId).toBe("session-123");
   });
 
+  it("passes a host-bound llm runtime through to plugin command handlers", async () => {
+    let receivedCtx:
+      | {
+          runtimeContext?: {
+            llm?: {
+              complete?: unknown;
+            };
+          };
+        }
+      | undefined;
+    const handler = async (ctx: typeof receivedCtx) => {
+      receivedCtx = ctx;
+      return { text: "ok" };
+    };
+
+    const result = await executePluginCommand({
+      command: {
+        name: "runtimecheck",
+        description: "Demo command",
+        acceptsArgs: false,
+        handler,
+        pluginId: "demo-plugin",
+      },
+      channel: "telegram",
+      senderId: "U123",
+      isAuthorizedSender: true,
+      sessionKey: "agent:main:telegram:direct:runtimecheck",
+      authProfileId: "openai-codex:claude@example.com",
+      commandBody: "/runtimecheck",
+      config: {} as never,
+    });
+
+    expect(result).toEqual({ text: "ok" });
+    expect(receivedCtx?.runtimeContext?.llm?.complete).toEqual(expect.any(Function));
+  });
+
   it("normalizes undefined plugin command handler results to an empty reply payload", async () => {
     const handler = async () => undefined as never;
 

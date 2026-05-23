@@ -34,6 +34,7 @@ import {
   requestPluginConversationBinding,
 } from "./conversation-binding.js";
 import { getActivePluginChannelRegistry } from "./runtime.js";
+import { createRuntimeLlm } from "./runtime/runtime-llm.runtime.js";
 import type {
   OpenClawPluginCommandDefinition,
   PluginCommandContext,
@@ -169,6 +170,44 @@ function resolveBindingConversationFromCommand(params: {
   });
 }
 
+function parsePluginCommandAgentId(sessionKey: string): string | undefined {
+  const parts = sessionKey.split(":");
+  return parts[0] === "agent" && parts[1]?.trim() ? parts[1].trim() : undefined;
+}
+
+function buildPluginCommandRuntimeContext(params: {
+  command: RegisteredPluginCommand;
+  config: OpenClawConfig;
+  sessionKey?: string;
+  authProfileId?: string;
+}): PluginCommandContext["runtimeContext"] {
+  const sessionKey = params.sessionKey?.trim();
+  const agentId = sessionKey ? parsePluginCommandAgentId(sessionKey) : undefined;
+  if (!sessionKey && !agentId && !params.authProfileId) {
+    return undefined;
+  }
+  return {
+    llm: createRuntimeLlm({
+      getConfig: () => params.config,
+      authority: {
+        caller: {
+          kind: "plugin",
+          id: params.command.pluginId,
+          name: params.command.pluginName,
+        },
+        pluginIdForPolicy: params.command.pluginId,
+        requiresBoundAgent: true,
+        ...(sessionKey ? { sessionKey } : {}),
+        ...(agentId ? { agentId } : {}),
+        ...(params.authProfileId ? { preferredProfile: params.authProfileId } : {}),
+        allowAgentIdOverride: false,
+        allowModelOverride: false,
+        allowComplete: true,
+      },
+    }),
+  };
+}
+
 /**
  * Execute a plugin command handler.
  *
@@ -187,6 +226,7 @@ export async function executePluginCommand(params: {
   sessionKey?: PluginCommandContext["sessionKey"];
   sessionId?: PluginCommandContext["sessionId"];
   sessionFile?: PluginCommandContext["sessionFile"];
+  authProfileId?: string;
   commandBody: string;
   config: OpenClawConfig;
   from?: PluginCommandContext["from"];
@@ -303,6 +343,12 @@ export async function executePluginCommand(params: {
     messageThreadId: params.messageThreadId,
     threadParentId: params.threadParentId,
     diagnosticsSessions: params.diagnosticsSessions,
+    runtimeContext: buildPluginCommandRuntimeContext({
+      command,
+      config,
+      sessionKey: params.sessionKey,
+      authProfileId: params.authProfileId,
+    }),
     ...(diagnosticsUploadApprovedForCommand === undefined
       ? {}
       : { diagnosticsUploadApproved: diagnosticsUploadApprovedForCommand }),
