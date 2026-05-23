@@ -345,6 +345,32 @@ describe("acquireSessionWriteLock", () => {
     expect(inspected.staleReasons).toEqual([]);
   });
 
+  it("does not reclaim an active in-process lock through max-hold acquisition", async () => {
+    await withTempSessionLockFile(async ({ sessionFile, lockPath }) => {
+      const lock = await acquireSessionWriteLock({ sessionFile, timeoutMs: 500, maxHoldMs: 1 });
+      await fs.writeFile(
+        lockPath,
+        JSON.stringify({
+          pid: process.pid,
+          createdAt: new Date(Date.now() - 30_000).toISOString(),
+          maxHoldMs: 1,
+        }),
+        "utf8",
+      );
+
+      await expect(
+        acquireSessionWriteLock({
+          sessionFile,
+          timeoutMs: 5,
+          staleMs: 60_000,
+          allowReentrant: false,
+        }),
+      ).rejects.toThrow(/session file locked/);
+      await expect(fs.access(lockPath)).resolves.toBeUndefined();
+      await lock.release();
+    });
+  });
+
   it("watchdog releases stale in-process locks", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-lock-"));
     const stderrSpy = vi.spyOn(process.stderr, "write").mockImplementation(() => true);

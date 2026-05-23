@@ -757,20 +757,21 @@ export async function acquireSessionWriteLock(params: {
             heldByThisProcess,
             reclaimLockWithoutStarttime: true,
             readOwnerProcessArgs: readProcessArgsSync,
-            respectMaxHold: true,
+            respectMaxHold: !heldByThisProcess,
           });
           return await shouldReclaimContendedLockFile(lockPath, inspected, staleMs, nowMs);
         },
         shouldRemoveStaleLock: async ({ lockPath, normalizedTargetPath, payload }) => {
           const nowMs = Date.now();
+          const heldByThisProcess = sessionLockHeldByThisProcess(normalizedTargetPath);
           const inspected = inspectLockPayloadForSession({
             payload: payload as LockFilePayload | null,
             staleMs,
             nowMs,
-            heldByThisProcess: sessionLockHeldByThisProcess(normalizedTargetPath),
+            heldByThisProcess,
             reclaimLockWithoutStarttime: true,
             readOwnerProcessArgs: readProcessArgsSync,
-            respectMaxHold: true,
+            respectMaxHold: !heldByThisProcess,
           });
           return await shouldReclaimContendedLockFile(lockPath, inspected, staleMs, nowMs);
         },
