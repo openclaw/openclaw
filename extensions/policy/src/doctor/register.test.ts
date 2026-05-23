@@ -2135,6 +2135,141 @@ describe("registerPolicyDoctorChecks", () => {
     );
   });
 
+  it("accepts sandbox-scoped tool denies for read-only agent workspace policy", async () => {
+    const configPath = join(workspaceDir, "openclaw.jsonc");
+    const cfg = {
+      ...cfgWithPolicy(),
+      tools: {
+        sandbox: { tools: { deny: ["group:runtime", "group:fs"] } },
+      },
+      agents: {
+        defaults: {
+          sandbox: { mode: "all", workspaceAccess: "ro" },
+        },
+        list: [
+          {
+            id: "locked",
+            sandbox: { workspaceAccess: "none" },
+            tools: { sandbox: { tools: { deny: ["group:runtime", "group:fs"] } } },
+          },
+        ],
+      },
+    } as unknown as OpenClawConfig;
+    await fs.writeFile(configPath, "{}", "utf-8");
+    await fs.writeFile(
+      join(workspaceDir, "policy.jsonc"),
+      JSON.stringify({
+        agents: {
+          workspace: {
+            allowedAccess: ["none", "ro"],
+            denyTools: ["exec", "process", "write", "edit", "apply_patch"],
+          },
+        },
+      }),
+      "utf-8",
+    );
+
+    registerPolicyDoctorChecks();
+    const result = await runDoctorLintChecks(ctx(configPath, cfg));
+    const evidence = collectPolicyEvidence(cfg as unknown as Record<string, unknown>);
+
+    expect(evidence.agentWorkspace).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: "agents-defaults-tool-exec",
+          denied: true,
+          source: "oc://openclaw.config/tools/sandbox/tools/deny",
+        }),
+        expect.objectContaining({
+          id: "locked-tool-apply_patch",
+          denied: true,
+          source: "oc://openclaw.config/agents/list/#0/tools/sandbox/tools/deny",
+        }),
+      ]),
+    );
+    expect(result.findings).toEqual([]);
+  });
+
+  it("accepts runtime tool deny globs for agent workspace policy", async () => {
+    const configPath = join(workspaceDir, "openclaw.jsonc");
+    const cfg = {
+      ...cfgWithPolicy(),
+      tools: {
+        deny: ["e*"],
+      },
+      agents: {
+        defaults: {
+          sandbox: { mode: "all", workspaceAccess: "ro" },
+        },
+      },
+    } as unknown as OpenClawConfig;
+    await fs.writeFile(configPath, "{}", "utf-8");
+    await fs.writeFile(
+      join(workspaceDir, "policy.jsonc"),
+      JSON.stringify({
+        agents: {
+          workspace: {
+            allowedAccess: ["ro"],
+            denyTools: ["exec"],
+          },
+        },
+      }),
+      "utf-8",
+    );
+
+    registerPolicyDoctorChecks();
+    const result = await runDoctorLintChecks(ctx(configPath, cfg));
+
+    expect(result.findings).toEqual([]);
+  });
+
+  it("reports sandbox tool deny overrides outside policy", async () => {
+    const configPath = join(workspaceDir, "openclaw.jsonc");
+    const cfg = {
+      ...cfgWithPolicy(),
+      tools: {
+        sandbox: { tools: { deny: ["exec"] } },
+      },
+      agents: {
+        defaults: {
+          sandbox: { mode: "all", workspaceAccess: "ro" },
+        },
+        list: [
+          {
+            id: "locked",
+            sandbox: { workspaceAccess: "none" },
+            tools: { sandbox: { tools: { deny: ["group:fs"] } } },
+          },
+        ],
+      },
+    } as unknown as OpenClawConfig;
+    await fs.writeFile(configPath, "{}", "utf-8");
+    await fs.writeFile(
+      join(workspaceDir, "policy.jsonc"),
+      JSON.stringify({
+        agents: {
+          workspace: {
+            allowedAccess: ["none", "ro"],
+            denyTools: ["exec"],
+          },
+        },
+      }),
+      "utf-8",
+    );
+
+    registerPolicyDoctorChecks();
+    const result = await runDoctorLintChecks(ctx(configPath, cfg));
+
+    expect(result.findings).toEqual([
+      expect.objectContaining({
+        checkId: "policy/agents-tool-not-denied",
+        message: "agent 'locked' does not deny required tool 'exec'.",
+        ocPath: "oc://openclaw.config/agents/list/#0/tools/deny",
+        requirement: "oc://policy.jsonc/agents/workspace/denyTools",
+      }),
+    ]);
+  });
+
   it("accepts read-only agent workspace policy with group denies", async () => {
     const configPath = join(workspaceDir, "openclaw.jsonc");
     const cfg = {
@@ -2172,6 +2307,54 @@ describe("registerPolicyDoctorChecks", () => {
     const result = await runDoctorLintChecks(ctx(configPath, cfg));
 
     expect(result.findings).toEqual([]);
+  });
+
+  it("reports read-only workspace policy when sandbox mode skips the main session", async () => {
+    const configPath = join(workspaceDir, "openclaw.jsonc");
+    const cfg = {
+      ...cfgWithPolicy(),
+      tools: {
+        sandbox: { tools: { deny: ["exec"] } },
+      },
+      agents: {
+        defaults: {
+          sandbox: { mode: "non-main", workspaceAccess: "ro" },
+        },
+      },
+    } as unknown as OpenClawConfig;
+    await fs.writeFile(configPath, "{}", "utf-8");
+    await fs.writeFile(
+      join(workspaceDir, "policy.jsonc"),
+      JSON.stringify({
+        agents: {
+          workspace: {
+            allowedAccess: ["ro"],
+            denyTools: ["exec"],
+          },
+        },
+      }),
+      "utf-8",
+    );
+
+    registerPolicyDoctorChecks();
+    const result = await runDoctorLintChecks(ctx(configPath, cfg));
+
+    expect(result.findings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          checkId: "policy/agents-workspace-access-denied",
+          message: "agents.defaults sandbox mode 'non-main' is not allowed by policy.",
+          ocPath: "oc://openclaw.config/agents/defaults/sandbox/mode",
+          requirement: "oc://policy.jsonc/agents/workspace/allowedAccess",
+        }),
+        expect.objectContaining({
+          checkId: "policy/agents-tool-not-denied",
+          message: "agents.defaults does not deny required tool 'exec'.",
+          ocPath: "oc://openclaw.config/tools/deny",
+          requirement: "oc://policy.jsonc/agents/workspace/denyTools",
+        }),
+      ]),
+    );
   });
 
   it("reports read-only workspace policy when sandbox mode is disabled", async () => {

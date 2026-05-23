@@ -697,6 +697,7 @@ function pushAgentWorkspaceEvidence(
   const explicitSandboxMode = readString(params.sandbox.mode);
   const inheritedSandboxMode = readString(params.inheritedSandbox.mode);
   const sandboxMode = explicitSandboxMode ?? inheritedSandboxMode ?? "off";
+  const sandboxModeCoversAgentMain = sandboxMode === "all";
   const sandboxModeSource =
     explicitSandboxMode !== undefined
       ? `${params.workspaceSourceBase}/sandbox/mode`
@@ -719,28 +720,73 @@ function pushAgentWorkspaceEvidence(
     value: explicitWorkspaceAccess ?? inheritedWorkspaceAccess ?? "none",
     sandboxMode,
     sandboxModeSource,
-    sandboxEnabled: sandboxMode !== "off",
+    sandboxEnabled: sandboxModeCoversAgentMain,
     explicit: explicitWorkspaceAccess !== undefined,
   });
 
   for (const tool of AGENT_WORKSPACE_POLICY_TOOLS) {
-    const inheritedDenied = toolListCoversTool(readStringArray(params.inheritedTools.deny), tool);
-    const localDenied = toolListCoversTool(readStringArray(params.tools.deny), tool);
+    const denyEvidence = agentWorkspaceToolDenyEvidence(params, tool, sandboxModeCoversAgentMain);
     entries.push({
       id: `${params.id}-tool-${tool}`,
       kind: "toolDeny",
-      source: localDenied
-        ? `${params.toolsSourceBase}/deny`
-        : inheritedDenied
-          ? `${params.inheritedToolsSourceBase}/deny`
-          : `${params.toolsSourceBase}/deny`,
+      source: denyEvidence.source,
       scope: params.scope,
       ...(params.agentId === undefined ? {} : { agentId: params.agentId }),
       tool,
-      denied: inheritedDenied || localDenied,
-      explicit: localDenied || inheritedDenied,
+      denied: denyEvidence.denied,
+      explicit: denyEvidence.denied,
     });
   }
+}
+
+function agentWorkspaceToolDenyEvidence(
+  params: {
+    readonly tools: Record<string, unknown>;
+    readonly inheritedTools: Record<string, unknown>;
+    readonly toolsSourceBase: string;
+    readonly inheritedToolsSourceBase: string;
+  },
+  tool: string,
+  sandboxModeCoversAgentMain: boolean,
+): { readonly denied: boolean; readonly source: string } {
+  const localSandboxToolDeny = configuredSandboxToolDenyEntries(params.tools);
+  const inheritedSandboxToolDeny = configuredSandboxToolDenyEntries(params.inheritedTools);
+  const sources = [
+    {
+      entries: readStringArray(params.tools.deny),
+      source: `${params.toolsSourceBase}/deny`,
+    },
+    {
+      entries: readStringArray(params.inheritedTools.deny),
+      source: `${params.inheritedToolsSourceBase}/deny`,
+    },
+    ...(sandboxModeCoversAgentMain
+      ? [
+          localSandboxToolDeny !== undefined
+            ? {
+                entries: localSandboxToolDeny,
+                source: `${params.toolsSourceBase}/sandbox/tools/deny`,
+              }
+            : {
+                entries: inheritedSandboxToolDeny ?? [],
+                source: `${params.inheritedToolsSourceBase}/sandbox/tools/deny`,
+              },
+        ]
+      : []),
+  ];
+  const match = sources.find((entry) => toolListCoversTool(entry.entries, tool));
+  if (match !== undefined) {
+    return { denied: true, source: match.source };
+  }
+  return { denied: false, source: `${params.toolsSourceBase}/deny` };
+}
+
+function configuredSandboxToolDenyEntries(
+  tools: Record<string, unknown>,
+): readonly string[] | undefined {
+  const sandbox = isRecord(tools.sandbox) ? tools.sandbox : {};
+  const sandboxTools = isRecord(sandbox.tools) ? sandbox.tools : {};
+  return Array.isArray(sandboxTools.deny) ? readStringArray(sandboxTools.deny) : undefined;
 }
 
 const AGENT_WORKSPACE_POLICY_TOOLS = ["exec", "process", "write", "edit", "apply_patch"] as const;
@@ -772,6 +818,11 @@ function normalizePolicyToolName(value: string): string {
   return normalized;
 }
 
+function policyToolGlobMatches(tool: string, pattern: string): boolean {
+  const escaped = pattern.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return new RegExp(`^${escaped.replaceAll("\\*", ".*")}$`).test(tool);
+}
+
 function toolListCoversTool(list: readonly string[], tool: string): boolean {
   for (const entry of list) {
     const normalized = normalizePolicyToolName(entry);
@@ -779,6 +830,9 @@ function toolListCoversTool(list: readonly string[], tool: string): boolean {
       return true;
     }
     if (POLICY_TOOL_GROUPS[normalized]?.includes(tool)) {
+      return true;
+    }
+    if (normalized.includes("*") && policyToolGlobMatches(tool, normalized)) {
       return true;
     }
   }
