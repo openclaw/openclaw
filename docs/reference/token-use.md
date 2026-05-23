@@ -194,31 +194,30 @@ agents:
 `agents.list[].params` merges on top of the selected model's `params`, so you can
 override only `cacheRetention` and inherit other model defaults unchanged.
 
-### Example: enable Anthropic 1M context beta header
+### Anthropic 1M context
 
-Anthropic's 1M context window is currently beta-gated. OpenClaw can inject the
-required `anthropic-beta` value when you enable `context1m` on supported Opus
-or Sonnet models.
+OpenClaw sizes GA-capable Claude 4.x models such as Opus 4.6, Opus 4.7, and
+Sonnet 4.6 with Anthropic's 1M context window. You do not need
+`params.context1m: true` for those models.
 
 ```yaml
 agents:
   defaults:
     models:
       "anthropic/claude-opus-4-6":
-        params:
-          context1m: true
+        alias: opus
 ```
 
-This maps to Anthropic's `context-1m-2025-08-07` beta header.
-
-This only applies when `context1m: true` is set on that model entry.
+Older configs can keep `context1m: true`, but OpenClaw no longer sends
+Anthropic's retired `context-1m-2025-08-07` beta header for this setting and
+does not expand unsupported older Claude models to 1M.
 
 Requirement: the credential must be eligible for long-context usage. If not,
 Anthropic responds with a provider-side rate limit error for that request.
 
 If you authenticate Anthropic with OAuth/subscription tokens (`sk-ant-oat-*`),
-OpenClaw skips the `context-1m-*` beta header because Anthropic currently
-rejects that combination with HTTP 401.
+OpenClaw preserves the OAuth-required Anthropic beta headers while stripping the
+retired `context-1m-*` beta if it remains in older config.
 
 ## Tips for reducing token pressure
 
