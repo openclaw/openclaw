@@ -55,3 +55,22 @@ export async function writeGatewayScript(
     "utf8",
   );
 }
+
+export async function writeNodeScript(
+  env: Record<string, string>,
+  port = Number(env.OPENCLAW_GATEWAY_PORT || "18789"),
+) {
+  env.OPENCLAW_SERVICE_KIND = "node";
+  const scriptPath = resolveTaskScriptPath(env);
+  await fs.mkdir(path.dirname(scriptPath), { recursive: true });
+  await fs.writeFile(
+    scriptPath,
+    [
+      "@echo off",
+      `set "OPENCLAW_SERVICE_KIND=node"`,
+      `"C:\\Program Files\\nodejs\\node.exe" "C:\\Users\\steipete\\AppData\\Roaming\\npm\\node_modules\\openclaw\\dist\\index.js" node run --host 127.0.0.1 --port ${port}`,
+      "",
+    ].join("\r\n"),
+    "utf8",
+  );
+}

@@ -9,6 +9,7 @@ import {
   schtasksResponses,
   withWindowsEnv,
   writeGatewayScript,
+  writeNodeScript,
 } from "./test-helpers/schtasks-fixtures.js";
 const findVerifiedGatewayListenerPidsOnPortSync = vi.hoisted(() =>
   vi.fn<(port: number) => number[]>(() => []),
@@ -90,6 +91,16 @@ async function withPreparedGatewayTask(
   });
 }
 
+async function withPreparedNodeTask(
+  run: (context: { env: Record<string, string>; stdout: PassThrough }) => Promise<void>,
+) {
+  await withWindowsEnv("openclaw-win-node-stop-", async ({ env }) => {
+    await writeNodeScript(env, GATEWAY_PORT);
+    const stdout = new PassThrough();
+    await run({ env, stdout });
+  });
+}
+
 beforeEach(() => {
   resetSchtasksBaseMocks();
   findVerifiedGatewayListenerPidsOnPortSync.mockReset();
@@ -133,7 +144,12 @@ describe("Scheduled Task stop/restart cleanup", () => {
         inspectPortUsage.mockResolvedValueOnce(busyPortUsage(4242));
       }
       inspectPortUsage
-        .mockResolvedValueOnce(busyPortUsage(5252))
+        .mockResolvedValueOnce(
+          busyPortUsage(5252, {
+            commandLine:
+              '"C:\\Program Files\\nodejs\\node.exe" "C:\\Users\\steipete\\AppData\\Roaming\\npm\\node_modules\\openclaw\\dist\\index.js" gateway --port 18789',
+          }),
+        )
         .mockResolvedValueOnce(freePortUsage());
 
       await stopScheduledTask({ env, stdout });
@@ -165,6 +181,64 @@ describe("Scheduled Task stop/restart cleanup", () => {
 
       expectGatewayTermination(6262);
       expect(inspectPortUsage).toHaveBeenCalledTimes(2);
+    });
+  });
+
+  it("does not kill unrelated listeners on the scheduled task port", async () => {
+    await withPreparedGatewayTask(async ({ env, stdout }) => {
+      pushSuccessfulSchtasksResponses(3);
+      findVerifiedGatewayListenerPidsOnPortSync.mockReturnValue([]);
+      inspectPortUsage.mockResolvedValue(busyPortUsage(7331, { command: "wslhost.exe" }));
+
+      await expect(stopScheduledTask({ env, stdout })).rejects.toThrow(
+        "gateway port 18789 is still busy after stop",
+      );
+
+      expect(killProcessTree).not.toHaveBeenCalled();
+      expect(inspectPortUsage.mock.calls.length).toBeGreaterThanOrEqual(28);
+    });
+  });
+
+  it("does not reclaim the remote gateway port when stopping a node task", async () => {
+    await withPreparedNodeTask(async ({ env, stdout }) => {
+      pushSuccessfulSchtasksResponses(3);
+      findVerifiedGatewayListenerPidsOnPortSync.mockReturnValue([4242]);
+      inspectPortUsage.mockResolvedValue(busyPortUsage(7331, { command: "wslhost.exe" }));
+
+      await stopScheduledTask({ env, stdout });
+
+      expect(findVerifiedGatewayListenerPidsOnPortSync).not.toHaveBeenCalled();
+      expect(inspectPortUsage).not.toHaveBeenCalled();
+      expect(killProcessTree).not.toHaveBeenCalled();
+      expect(schtasksCalls).toEqual([
+        ["/Query"],
+        ["/Query", "/TN", "OpenClaw Gateway"],
+        ["/End", "/TN", "OpenClaw Gateway"],
+      ]);
+    });
+  });
+
+  it("does not wait for the remote gateway port when restarting a node task", async () => {
+    await withPreparedNodeTask(async ({ env, stdout }) => {
+      pushSuccessfulSchtasksResponses(6);
+      findVerifiedGatewayListenerPidsOnPortSync.mockReturnValue([5151]);
+      inspectPortUsage.mockResolvedValue(busyPortUsage(7331, { command: "wslhost.exe" }));
+
+      await expect(restartScheduledTask({ env, stdout })).resolves.toEqual({
+        outcome: "completed",
+      });
+
+      expect(findVerifiedGatewayListenerPidsOnPortSync).not.toHaveBeenCalled();
+      expect(inspectPortUsage).not.toHaveBeenCalled();
+      expect(killProcessTree).not.toHaveBeenCalled();
+      expect(schtasksCalls).toEqual([
+        ["/Query"],
+        ["/Query", "/TN", "OpenClaw Gateway"],
+        ["/End", "/TN", "OpenClaw Gateway"],
+        ["/Run", "/TN", "OpenClaw Gateway"],
+        ["/Query"],
+        ["/Query", "/TN", "OpenClaw Gateway", "/V", "/FO", "LIST"],
+      ]);
     });
   });
 
