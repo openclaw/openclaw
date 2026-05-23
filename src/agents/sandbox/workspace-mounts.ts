@@ -83,7 +83,7 @@ export function formatReadOnlyWorkspaceSkillMountHashState(
   return mounts.map((mount) => `${mount.hostPath}:${mount.containerPath}:ro`);
 }
 
-function appendReadOnlyWorkspaceSkillMounts(params: {
+export function appendReadOnlyWorkspaceSkillMountArgs(params: {
   args: string[];
   readOnlyWorkspaceSkillMounts: readonly ReadOnlyWorkspaceSkillMount[];
 }): void {
@@ -106,6 +106,7 @@ export function appendWorkspaceMountArgs(params: {
   workdir: string;
   workspaceAccess: SandboxWorkspaceAccess;
   readOnlyWorkspaceSkillMounts?: readonly ReadOnlyWorkspaceSkillMount[];
+  includeReadOnlyWorkspaceSkillMounts?: boolean;
 }) {
   const { args, workspaceDir, agentWorkspaceDir, workdir, workspaceAccess } = params;
 
@@ -129,15 +130,17 @@ export function appendWorkspaceMountArgs(params: {
     );
   }
 
-  appendReadOnlyWorkspaceSkillMounts({
-    args,
-    readOnlyWorkspaceSkillMounts:
-      params.readOnlyWorkspaceSkillMounts ??
-      resolveReadOnlyWorkspaceSkillMounts({
-        workspaceDir,
-        agentWorkspaceDir,
-        workdir,
-        workspaceAccess,
-      }),
-  });
+  if (params.includeReadOnlyWorkspaceSkillMounts !== false) {
+    appendReadOnlyWorkspaceSkillMountArgs({
+      args,
+      readOnlyWorkspaceSkillMounts:
+        params.readOnlyWorkspaceSkillMounts ??
+        resolveReadOnlyWorkspaceSkillMounts({
+          workspaceDir,
+          agentWorkspaceDir,
+          workdir,
+          workspaceAccess,
+        }),
+    });
+  }
 }
