@@ -658,6 +658,15 @@ async function runBootstrapSizeHealth(ctx: DoctorHealthFlowContext): Promise<voi
   await noteBootstrapFileSize(ctx.cfg);
 }
 
+async function runHeartbeatTemplateRepairHealth(ctx: DoctorHealthFlowContext): Promise<void> {
+  const { maybeRepairHeartbeatTemplate } =
+    await import("../commands/doctor-heartbeat-template-repair.js");
+  await maybeRepairHeartbeatTemplate({
+    cfg: ctx.cfg,
+    shouldRepair: ctx.prompter.shouldRepair,
+  });
+}
+
 async function runShellCompletionHealth(ctx: DoctorHealthFlowContext): Promise<void> {
   const { doctorShellCompletion } = await import("../commands/doctor-completion.js");
   await doctorShellCompletion(ctx.runtime, ctx.prompter, {
@@ -1027,6 +1036,11 @@ export function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
       label: "Bootstrap size",
       healthCheckIds: ["core/doctor/bootstrap-size"],
       run: runBootstrapSizeHealth,
+    }),
+    createDoctorHealthContribution({
+      id: "doctor:heartbeat-template-repair",
+      label: "Heartbeat template repair",
+      run: runHeartbeatTemplateRepairHealth,
     }),
     createDoctorHealthContribution({
       id: "doctor:shell-completion",
