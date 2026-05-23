@@ -1099,6 +1099,21 @@ export abstract class MemoryManagerSyncOps {
     sessionFiles?: string[];
     progress?: (update: MemorySyncProgressUpdate) => void;
   }) {
+    // Guard: if an embedding provider is configured but currently unavailable,
+    // abort sync to prevent silently degrading the entire vector index to
+    // fts-only and wiping existing semantic vectors.
+    // See: https://github.com/openclaw/openclaw/issues/XXXXX
+    if (
+      this.requestedProvider &&
+      this.requestedProvider !== "none" &&
+      !this.provider
+    ) {
+      throw new Error(
+        `Memory sync aborted: embedding provider "${this.requestedProvider}" is configured but unavailable. ` +
+          `Refusing to run sync in fts-only fallback mode to protect existing vector index.`,
+      );
+    }
+
     const progress = params?.progress ? this.createSyncProgress(params.progress) : undefined;
     if (progress) {
       progress.report({
