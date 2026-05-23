@@ -240,6 +240,21 @@ describe("createTelegramDraftStream", () => {
     expect(api.deleteMessage).toHaveBeenCalledWith(123, 17);
   });
 
+  it("ignores updates after finalization", async () => {
+    const api = createMockDraftApi();
+    const stream = createDraftStream(api);
+
+    stream.update("Hello");
+    await stream.stop();
+
+    stream.update("stale update");
+    await stream.stop();
+
+    expect(api.sendMessage).toHaveBeenCalledTimes(1);
+    expect(api.sendMessage).toHaveBeenCalledWith(123, "Hello", undefined);
+    expect(api.editMessageText).not.toHaveBeenCalled();
+  });
+
   it("creates new message after forceNewMessage is called", async () => {
     const { api, stream } = createForceNewMessageHarness();
 
@@ -399,65 +414,75 @@ describe("createTelegramDraftStream", () => {
     });
   });
 
-  it("continues in a new message when rendered preview crosses maxChars", async () => {
+  it("keeps oversized non-final previews in the existing message", async () => {
     const api = createMockDraftApi();
-    api.sendMessage
-      .mockResolvedValueOnce({ message_id: 17 })
-      .mockResolvedValueOnce({ message_id: 42 });
-    const stream = createDraftStream(api, { maxChars: 20 });
+    const onSupersededPreview = vi.fn();
+    const stream = createDraftStream(api, { maxChars: 20, onSupersededPreview });
 
     stream.update("Hello world");
     await stream.flush();
     stream.update("Hello world foo bar baz qux");
     await stream.flush();
 
-    expect(api.sendMessage).toHaveBeenCalledTimes(2);
+    expect(api.sendMessage).toHaveBeenCalledTimes(1);
     expect(api.sendMessage).toHaveBeenNthCalledWith(1, 123, "Hello world", undefined);
-    expect(api.sendMessage).toHaveBeenNthCalledWith(2, 123, "foo bar baz qux", undefined);
+    expect(api.editMessageText).toHaveBeenCalledWith(123, 17, "Hello world foo bar");
+    expect(onSupersededPreview).not.toHaveBeenCalled();
+    expect(stream.lastDeliveredText?.()).toBe("Hello world foo bar");
   });
 
-  it("splits a first oversized rendered preview into chained messages", async () => {
+  it("bounds a first oversized non-final preview to one message", async () => {
     const api = createMockDraftApi();
-    api.sendMessage
-      .mockResolvedValueOnce({ message_id: 17 })
-      .mockResolvedValueOnce({ message_id: 42 });
-    const stream = createDraftStream(api, { maxChars: 10 });
+    const onSupersededPreview = vi.fn();
+    const stream = createDraftStream(api, { maxChars: 10, onSupersededPreview });
 
     stream.update("1234567890ABCDEFGHIJ");
     await stream.flush();
 
-    expect(api.sendMessage).toHaveBeenCalledTimes(2);
+    expect(api.sendMessage).toHaveBeenCalledTimes(1);
     expect(api.sendMessage).toHaveBeenNthCalledWith(1, 123, "1234567890", undefined);
-    expect(api.sendMessage).toHaveBeenNthCalledWith(2, 123, "ABCDEFGHIJ", undefined);
+    expect(api.editMessageText).not.toHaveBeenCalled();
+    expect(onSupersededPreview).not.toHaveBeenCalled();
+    expect(stream.lastDeliveredText?.()).toBe("1234567890");
   });
 
-  it("retains overflow preview pages", async () => {
+  it("splits and retains overflow pages during finalization", async () => {
     const api = createMockDraftApi();
     api.sendMessage
       .mockResolvedValueOnce({ message_id: 17 })
-      .mockResolvedValueOnce({ message_id: 42 });
+      .mockResolvedValueOnce({ message_id: 42 })
+      .mockResolvedValueOnce({ message_id: 43 });
     const onSupersededPreview = vi.fn();
-    const stream = createDraftStream(api, {
-      maxChars: 20,
-      onSupersededPreview,
-    });
+    const stream = createDraftStream(api, { maxChars: 10, onSupersededPreview });
 
-    stream.update("Hello world");
+    stream.update("1234567890ABCDEFGHIJklmnopqrst");
     await stream.flush();
-    stream.update("Hello world foo bar baz qux");
-    await stream.flush();
+    expect(api.sendMessage).toHaveBeenCalledTimes(1);
+    expect(onSupersededPreview).not.toHaveBeenCalled();
 
-    expect(onSupersededPreview).toHaveBeenCalledTimes(1);
-    const [supersededPreview] = onSupersededPreview.mock.calls.at(0) ?? [];
-    expect(supersededPreview).toEqual({
-      messageId: 17,
-      textSnapshot: "Hello world",
-      parseMode: undefined,
-      visibleSinceMs: supersededPreview.visibleSinceMs,
-      retain: true,
-    });
-    expect(typeof supersededPreview.visibleSinceMs).toBe("number");
-    expect(Number.isFinite(supersededPreview.visibleSinceMs)).toBe(true);
+    await stream.stop();
+
+    expect(api.sendMessage).toHaveBeenCalledTimes(3);
+    expect(api.sendMessage).toHaveBeenNthCalledWith(1, 123, "1234567890", undefined);
+    expect(api.sendMessage).toHaveBeenNthCalledWith(2, 123, "ABCDEFGHIJ", undefined);
+    expect(api.sendMessage).toHaveBeenNthCalledWith(3, 123, "klmnopqrst", undefined);
+    expect(api.editMessageText).not.toHaveBeenCalled();
+    expect(onSupersededPreview).toHaveBeenCalledTimes(2);
+    for (const [index, messageId, textSnapshot] of [
+      [0, 17, "1234567890"],
+      [1, 42, "ABCDEFGHIJ"],
+    ] as const) {
+      const [supersededPreview] = onSupersededPreview.mock.calls.at(index) ?? [];
+      expect(supersededPreview).toEqual({
+        messageId,
+        textSnapshot,
+        parseMode: undefined,
+        visibleSinceMs: supersededPreview.visibleSinceMs,
+        retain: true,
+      });
+      expect(typeof supersededPreview.visibleSinceMs).toBe("number");
+      expect(Number.isFinite(supersededPreview.visibleSinceMs)).toBe(true);
+    }
   });
 
   it("enforces maxChars after renderText expansion", async () => {

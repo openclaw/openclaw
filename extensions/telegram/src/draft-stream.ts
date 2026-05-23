@@ -116,7 +116,12 @@ export function createTelegramDraftStream(params: {
   let previewRevision = 0;
   let generation = 0;
   let deliveredTextOffset = 0;
-  let resetStreamToNewMessage: (options?: { keepPending?: boolean; resetOffset?: boolean }) => void;
+  let lastRequestedText = "";
+  let resetStreamToNewMessage: (options?: {
+    keepFinal?: boolean;
+    keepPending?: boolean;
+    resetOffset?: boolean;
+  }) => void;
   type PreviewSendParams = {
     renderedText: string;
     renderedParseMode: "HTML" | undefined;
@@ -197,11 +202,28 @@ export function createTelegramDraftStream(params: {
     if (!currentText) {
       return false;
     }
-    const rendered = renderTelegramDraftPreview(currentText, params.renderText);
-    const renderedText = rendered.text.trimEnd();
-    const renderedParseMode = rendered.parseMode;
+    let deliveredTextAfterSend = trimmed;
+    let rendered = renderTelegramDraftPreview(currentText, params.renderText);
+    let renderedText = rendered.text.trimEnd();
+    let renderedParseMode = rendered.parseMode;
     if (!renderedText) {
       return false;
+    }
+    if (renderedText.length > maxChars && !streamState.final) {
+      const chunkLength = findTelegramDraftChunkLength(currentText, maxChars, params.renderText);
+      const previewText = chunkLength > 0 ? currentText.slice(0, chunkLength).trimEnd() : "";
+      if (!previewText) {
+        streamState.stopped = true;
+        params.warn?.(
+          `telegram stream preview stopped (text length ${renderedText.length} > ${maxChars})`,
+        );
+        return false;
+      }
+      // Partial previews stay to one editable Telegram message; finalization owns paging.
+      deliveredTextAfterSend = `${trimmed.slice(0, deliveredTextOffset)}${previewText}`;
+      rendered = renderTelegramDraftPreview(previewText, params.renderText);
+      renderedText = rendered.text.trimEnd();
+      renderedParseMode = rendered.parseMode;
     }
     if (renderedText.length > maxChars) {
       if (lastDeliveredText.length > deliveredTextOffset) {
@@ -210,7 +232,7 @@ export function createTelegramDraftStream(params: {
         const supersededParseMode = lastSentParseMode;
         const supersededVisibleSinceMs = streamVisibleSinceMs;
         deliveredTextOffset = lastDeliveredText.length;
-        resetStreamToNewMessage({ keepPending: true, resetOffset: false });
+        resetStreamToNewMessage({ keepFinal: true, keepPending: true, resetOffset: false });
         if (typeof supersededMessageId === "number") {
           params.onSupersededPreview?.({
             messageId: supersededMessageId,
@@ -259,7 +281,7 @@ export function createTelegramDraftStream(params: {
       });
       if (sent) {
         previewRevision += 1;
-        lastDeliveredText = trimmed;
+        lastDeliveredText = deliveredTextAfterSend;
       }
       return sent;
     } catch (err) {
@@ -269,15 +291,39 @@ export function createTelegramDraftStream(params: {
     }
   };
 
-  const { loop, update, stop, stopForClear } = createFinalizableDraftStreamControlsForState({
+  const {
+    loop,
+    update: updateDraft,
+    stop: stopDraft,
+    stopForClear,
+  } = createFinalizableDraftStreamControlsForState({
     throttleMs,
     state: streamState,
     sendOrEditStreamMessage,
   });
 
+  const update = (text: string) => {
+    if (streamState.stopped || streamState.final) {
+      return;
+    }
+    lastRequestedText = text;
+    updateDraft(text);
+  };
+
+  const stop = async () => {
+    const requestedText = lastRequestedText.trimEnd();
+    if (requestedText && requestedText !== lastDeliveredText) {
+      streamState.final = true;
+      loop.update(lastRequestedText);
+    }
+    await stopDraft();
+  };
+
   resetStreamToNewMessage = (options) => {
     streamState.stopped = false;
-    streamState.final = false;
+    if (!options?.keepFinal) {
+      streamState.final = false;
+    }
     generation += 1;
     messageSendAttempted = false;
     streamMessageId = undefined;
@@ -288,6 +334,7 @@ export function createTelegramDraftStream(params: {
       deliveredTextOffset = 0;
     }
     if (!options?.keepPending) {
+      lastRequestedText = "";
       loop.resetPending();
     }
     loop.resetThrottleWindow();
