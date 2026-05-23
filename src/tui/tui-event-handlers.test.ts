@@ -1076,6 +1076,35 @@ describe("tui-event-handlers: handleAgentEvent", () => {
     );
   });
 
+  it("ignores duplicate empty final envelopes after a run already finalized empty", () => {
+    const { state, chatLog, loadHistory, handleChatEvent } = createHandlersHarness({
+      state: { activeChatRunId: "run-empty-replay" },
+    });
+
+    handleChatEvent({
+      runId: "run-empty-replay",
+      sessionKey: state.currentSessionKey,
+      state: "final",
+    });
+    chatLog.dropAssistant.mockClear();
+    chatLog.finalizeAssistant.mockClear();
+    loadHistory.mockClear();
+
+    handleChatEvent({
+      runId: "run-empty-replay",
+      sessionKey: state.currentSessionKey,
+      state: "final",
+      message: {
+        role: "assistant",
+        content: [],
+      },
+    });
+
+    expect(chatLog.dropAssistant).not.toHaveBeenCalled();
+    expect(chatLog.finalizeAssistant).not.toHaveBeenCalled();
+    expect(loadHistory).not.toHaveBeenCalled();
+  });
+
   it("reloads history when a local run ends without a displayable final message", () => {
     const { state, loadHistory, noteLocalRunId, handleChatEvent } = createHandlersHarness({
       state: { activeChatRunId: "run-local-silent" },

@@ -362,6 +362,45 @@ export function createEventHandlers(context: EventHandlerContext) {
     void loadHistory?.();
   };
 
+  const messageHasDisplayableNonTextContent = (message: unknown): boolean => {
+    if (!message || typeof message !== "object") {
+      return false;
+    }
+    const record = message as Record<string, unknown>;
+    if (typeof record.mediaUrl === "string" && record.mediaUrl.trim()) {
+      return true;
+    }
+    if (
+      Array.isArray(record.mediaUrls) &&
+      record.mediaUrls.some((media) => typeof media === "string" && media.trim())
+    ) {
+      return true;
+    }
+    if (!Array.isArray(record.content)) {
+      return false;
+    }
+    return record.content.some((block) => {
+      if (!block || typeof block !== "object") {
+        return false;
+      }
+      const type = (block as Record<string, unknown>).type;
+      return typeof type === "string" && type !== "text" && type !== "thinking";
+    });
+  };
+
+  const hasDisplayableFinalEvent = (evt: ChatEvent): boolean => {
+    if (typeof evt.errorMessage === "string" && evt.errorMessage.trim()) {
+      return true;
+    }
+    if (!evt.message) {
+      return false;
+    }
+    if (extractTextFromMessage(evt.message, { includeThinking: state.showThinking }).trim()) {
+      return true;
+    }
+    return messageHasDisplayableNonTextContent(evt.message);
+  };
+
   const isSameSessionKey = (left: string | undefined, right: string | undefined): boolean => {
     const normalizedLeft = normalizeLowercaseStringOrEmpty(left);
     const normalizedRight = normalizeLowercaseStringOrEmpty(right);
@@ -400,7 +439,7 @@ export function createEventHandlers(context: EventHandlerContext) {
       }
       if (evt.state === "final") {
         const hasLateDisplayableFinal =
-          Boolean(evt.message) && !finalizedRunsWithDisplay.has(evt.runId);
+          hasDisplayableFinalEvent(evt) && !finalizedRunsWithDisplay.has(evt.runId);
         if (!hasLateDisplayableFinal) {
           clearStaleStreamingIfNoTrackedRunRemains();
           return;
