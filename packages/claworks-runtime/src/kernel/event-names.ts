@@ -125,6 +125,20 @@ export const CW_EVENTS = {
 
   // ── User ──────────────────────────────────────────────────────────────
   USER_FIRST_INTERACTION: "user.first_interaction",
+
+  // ── Robot 自主巡逻 ────────────────────────────────────────────────────
+  /**
+   * 机器人自主巡逻心跳（周期性自动触发，默认每 5 分钟一次）。
+   *
+   * Pack 可以注册 trigger.event = "robot.patrol" 的 Playbook 来实现：
+   *   - 检查未处理的告警/工单
+   *   - 发送定期报告
+   *   - 监控系统状态
+   *   - 主动推送关键通知
+   *
+   * 这是机器人"自主性"的核心机制：不依赖外部触发，主动感知业务状态。
+   */
+  ROBOT_PATROL: "robot.patrol",
 } as const;
 
 export type CwEventType = (typeof CW_EVENTS)[keyof typeof CW_EVENTS];

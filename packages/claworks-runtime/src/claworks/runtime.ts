@@ -491,6 +491,30 @@ export async function startClaworksRuntime(runtime: ClaworksRuntime): Promise<vo
     packCount: runtime.loadedPacks.length,
     playbookCount: runtime.playbookEngine.list().length,
   });
+
+  // 启动自主巡逻定时器（机器人主动感知业务状态的核心机制）
+  // 周期：patrol_interval_ms（默认 5 分钟）
+  // Playbooks 可通过 trigger.event = "robot.patrol" 订阅巡逻事件
+  const patrolIntervalMs = runtime.config.robot?.patrol_interval_ms ?? 5 * 60 * 1000;
+  if (patrolIntervalMs > 0) {
+    const patrolTimer = setInterval(async () => {
+      await runtime.kernel
+        .publish(CW_EVENTS.ROBOT_PATROL, "runtime", {
+          robot_id: runtime.robot.name,
+          ts: new Date().toISOString(),
+        })
+        .catch((err) => {
+          runtime.logger?.(
+            `[claworks:patrol] 发布巡逻事件失败: ${err instanceof Error ? err.message : String(err)}`,
+          );
+        });
+    }, patrolIntervalMs);
+    // 注册到 runtime 停止时清理（通过 stop 事件）
+    runtime.kernel.bus.subscribe(CW_EVENTS.SYSTEM_RUNTIME_STOPPED, async () => {
+      clearInterval(patrolTimer);
+    });
+    runtime.logger?.(`[claworks:patrol] 自主巡逻已启动，间隔=${patrolIntervalMs}ms`);
+  }
 }
 
 function validateStartupConfig(config: ClaworksRobotConfig): string[] {

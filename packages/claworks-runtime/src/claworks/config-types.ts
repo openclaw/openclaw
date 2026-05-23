@@ -65,6 +65,12 @@ export type ClaworksRobotConfig = {
     language?: string;
     /** 是否启用自动学习（从对话中积累知识） */
     auto_learn?: boolean;
+    /**
+     * 自主巡逻间隔（毫秒，默认 300000 = 5分钟）。
+     * 设为 0 禁用巡逻。巡逻触发 robot.patrol 事件，
+     * Pack 通过 trigger.event = "robot.patrol" 的 Playbook 响应。
+     */
+    patrol_interval_ms?: number;
   };
   data?: {
     database_url?: string;
