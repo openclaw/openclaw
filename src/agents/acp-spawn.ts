@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import { getAcpSessionManager } from "../acp/control-plane/manager.js";
+import type { AcpTurnAttachment } from "../acp/control-plane/manager.types.js";
 import {
   cleanupFailedAcpSpawn,
   type AcpSpawnRuntimeCloseHandle,
@@ -117,6 +118,7 @@ export type SpawnAcpParams = {
   thread?: boolean;
   sandbox?: SpawnAcpSandboxMode;
   streamTo?: SpawnAcpStreamTarget;
+  attachments?: AcpTurnAttachment[];
 };
 
 export type SpawnAcpContext = {
@@ -1461,6 +1463,9 @@ export async function spawnAcpDirect(
         acpTurnSource: "manual_spawn",
         ...(params.runTimeoutSeconds != null ? { timeout: params.runTimeoutSeconds } : {}),
         label: params.label || undefined,
+        ...(params.attachments && params.attachments.length > 0
+          ? { attachments: params.attachments }
+          : {}),
       },
       timeoutMs: 10_000,
     });
