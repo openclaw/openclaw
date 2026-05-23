@@ -302,11 +302,16 @@ describe("scripts/changed-lanes", () => {
   it("runs remote Testbox changed-check children through Corepack pnpm", () => {
     const command = createPnpmManagedCommand(
       { name: "conflict markers", args: ["check:no-conflict-markers"] },
-      { OPENCLAW_TESTBOX_REMOTE_RUN: "1", PATH: "/usr/bin" },
+      {
+        OPENCLAW_TESTBOX_REMOTE_RUN: "1",
+        PATH: "/usr/bin",
+        npm_execpath: "/usr/local/global/stale/node_modules/pnpm/bin/pnpm.mjs",
+      },
     );
 
     expect(command.bin).toBe("corepack");
     expect(command.args).toEqual(["pnpm", "check:no-conflict-markers"]);
+    expect(command.env?.npm_execpath).toBeUndefined();
     expect(command.env?.PATH).not.toBe("/usr/bin");
     expect(command.env?.PATH).toContain("/usr/bin");
   });

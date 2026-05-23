@@ -350,6 +350,7 @@ Docs: https://docs.openclaw.ai
 - Memory/doctor: report missing or unusable QMD workspace directories as workspace failures instead of generic binary failures. (#63167) Thanks @sercada.
 - Debug proxy: record CONNECT client-socket errors and destroy the paired upstream socket so abrupt client disconnects no longer leak tunnel resources. (#82444) Thanks @SebTardif.
 - Diffs: continue hydrating later diff cards when one card fails so a single broken card no longer blanks the whole diff viewer. (#84775) Thanks @cosmopolitan033.
+- CI/Testbox: strip stale runner `npm_execpath` values from Corepack-routed changed-check children so remote `pnpm check:changed` does not jump to a deleted global pnpm store.
 - Mac app: use the native settings sidebar window chrome so the sidebar toggle stays on the left and content no longer clips under oversized titlebar padding.
 - QA-Lab/Codex: bundle auth/plugin fixture imports for flow scenarios and let terminal async media tools end Codex app-server turns without timing out. (#80397, refs #80323) Thanks @100yenadmin.
 - WhatsApp: persist inbound message delivery state through plugin state before dispatch and delay read receipts until handler completion, so retryable failures can redeliver without adding a plugin-local disk cache. Thanks @samzong.

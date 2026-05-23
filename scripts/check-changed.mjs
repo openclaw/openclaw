@@ -396,8 +396,9 @@ export function createPnpmManagedCommand(command, env = process.env) {
 
 function prependCorepackPnpmShim(env) {
   const shimDir = ensureCorepackPnpmShimDir();
+  const { npm_execpath: _npmExecPath, ...sanitizedEnv } = env;
   return {
-    ...env,
+    ...sanitizedEnv,
     PATH: [shimDir, env.PATH ?? env.Path ?? ""].filter(Boolean).join(path.delimiter),
   };
 }
