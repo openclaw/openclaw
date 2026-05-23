@@ -1,4 +1,5 @@
 import { PassThrough, type Readable } from "node:stream";
+import type { RealtimeVoiceAgentControlResult } from "openclaw/plugin-sdk/realtime-voice";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { ChannelType } from "../internal/discord.js";
 import { createVoiceCaptureState } from "./capture-state.js";
@@ -20,6 +21,7 @@ const {
   logVerboseMock,
   resolveConfiguredRealtimeVoiceProviderMock,
   createRealtimeVoiceBridgeSessionMock,
+  controlRealtimeVoiceAgentRunMock,
   realtimeSessionMock,
   decodeOpusStreamChunksMock,
   updateVoiceStateMock,
@@ -145,6 +147,20 @@ const {
       providerConfig: { model: "gpt-realtime-2", voice: "cedar" },
     })),
     createRealtimeVoiceBridgeSessionMock: vi.fn((_params?: unknown) => realtimeSessionMock),
+    controlRealtimeVoiceAgentRunMock: vi.fn<() => Promise<RealtimeVoiceAgentControlResult>>(
+      async () => ({
+        ok: false,
+        mode: "steer",
+        sessionKey: "discord:g1:c1",
+        active: false,
+        queued: false,
+        reason: "no_active_run",
+        message: "There is no active OpenClaw run to steer.",
+        speak: true,
+        show: true,
+        suppress: false,
+      }),
+    ),
     realtimeSessionMock,
     decodeOpusStreamChunksMock: vi.fn(),
     updateVoiceStateMock: vi.fn(),
@@ -219,6 +235,7 @@ vi.mock("openclaw/plugin-sdk/realtime-voice", async () => {
   return {
     ...actual,
     createRealtimeVoiceBridgeSession: createRealtimeVoiceBridgeSessionMock,
+    controlRealtimeVoiceAgentRun: controlRealtimeVoiceAgentRunMock,
     resolveConfiguredRealtimeVoiceProvider: resolveConfiguredRealtimeVoiceProviderMock,
   };
 });
@@ -334,6 +351,19 @@ describe("DiscordVoiceManager", () => {
     realtimeSessionMock.submitToolResult.mockClear();
     createRealtimeVoiceBridgeSessionMock.mockClear();
     createRealtimeVoiceBridgeSessionMock.mockReturnValue(realtimeSessionMock);
+    controlRealtimeVoiceAgentRunMock.mockReset();
+    controlRealtimeVoiceAgentRunMock.mockResolvedValue({
+      ok: false,
+      mode: "steer",
+      sessionKey: "discord:g1:c1",
+      active: false,
+      queued: false,
+      reason: "no_active_run",
+      message: "There is no active OpenClaw run to steer.",
+      speak: true,
+      show: true,
+      suppress: false,
+    });
     resolveConfiguredRealtimeVoiceProviderMock.mockClear();
     resolveConfiguredRealtimeVoiceProviderMock.mockReturnValue({
       provider: { id: "openai" },
@@ -1707,6 +1737,7 @@ describe("DiscordVoiceManager", () => {
     });
     const bridgeParams = lastRealtimeBridgeParams() as
       | {
+          audioSink?: { sendAudio: (audio: Buffer) => void };
           autoRespondToAudio?: boolean;
           instructions?: string;
           tools?: Array<{ name: string }>;
@@ -1724,6 +1755,11 @@ describe("DiscordVoiceManager", () => {
     expect(bridgeParams?.autoRespondToAudio).toBe(false);
     expect(bridgeParams?.instructions).toContain("same OpenClaw agent");
     expect(bridgeParams?.tools?.map((tool) => tool.name)).toContain("openclaw_agent_consult");
+    expect(bridgeParams?.tools?.map((tool) => tool.name)).toContain("openclaw_agent_control");
+    const player = getLastAudioPlayer();
+    bridgeParams?.audioSink?.sendAudio(Buffer.alloc(24_000));
+    expect(player.play).toHaveBeenCalled();
+    const stopCallsBeforeConsult = player.stop.mock.calls.length;
 
     bridgeParams?.onToolCall?.(
       {
@@ -1734,6 +1770,8 @@ describe("DiscordVoiceManager", () => {
       },
       realtimeSessionMock,
     );
+    expect(player.stop).toHaveBeenCalledTimes(stopCallsBeforeConsult + 1);
+    expect(player.stop).toHaveBeenLastCalledWith(true);
     await vi.waitFor(() =>
       expect(realtimeSessionMock.submitToolResult).toHaveBeenCalledWith("call-1", {
         text: "agent proxy answer",
@@ -1744,16 +1782,70 @@ describe("DiscordVoiceManager", () => {
     expect(commandArgs.model).toBe("openai-codex/gpt-5.5");
     expect(commandArgs.messageProvider).toBe("discord-voice");
     expect(commandArgs.toolsAllow).toBeUndefined();
-    const workingToolResultCall = mockCall(
-      realtimeSessionMock.submitToolResult as unknown as MockCallSource,
-      0,
-      "working tool result",
+    expect(realtimeSessionMock.submitToolResult).toHaveBeenCalledTimes(1);
+  });
+
+  it("handles semantic realtime agent-control tool calls in Discord VC", async () => {
+    controlRealtimeVoiceAgentRunMock.mockResolvedValueOnce({
+      ok: true,
+      mode: "steer",
+      sessionKey: "discord:g1:c1",
+      sessionId: "embedded-active",
+      active: true,
+      queued: true,
+      target: "embedded_run",
+      message: "Got it. I steered the active run.",
+      speak: true,
+      show: true,
+      suppress: false,
+    });
+    const manager = createManager({
+      groupPolicy: "open",
+      voice: {
+        enabled: true,
+        mode: "agent-proxy",
+        realtime: { provider: "openai" },
+      },
+    });
+
+    await manager.join({ guildId: "g1", channelId: "1001" });
+    const bridgeParams = lastRealtimeBridgeParams() as
+      | {
+          onToolCall?: (
+            event: {
+              itemId: string;
+              callId: string;
+              name: string;
+              args: unknown;
+            },
+            session: typeof realtimeSessionMock,
+          ) => void;
+        }
+      | undefined;
+
+    bridgeParams?.onToolCall?.(
+      {
+        itemId: "item-control",
+        callId: "call-control",
+        name: "openclaw_agent_control",
+        args: { text: "revísalo en WebUI", mode: "steer" },
+      },
+      realtimeSessionMock,
     );
-    expect(workingToolResultCall?.[0]).toBe("call-1");
-    expect(requireRecord(workingToolResultCall?.[1], "working tool result payload").status).toBe(
-      "working",
+
+    await vi.waitFor(() =>
+      expect(controlRealtimeVoiceAgentRunMock).toHaveBeenCalledWith({
+        sessionKey: "discord:g1:c1",
+        text: "revísalo en WebUI",
+        mode: "steer",
+      }),
     );
-    expect(workingToolResultCall?.[2]).toEqual({ willContinue: true });
+    await vi.waitFor(() =>
+      expect(realtimeSessionMock.submitToolResult).toHaveBeenCalledWith(
+        "call-control",
+        expect.objectContaining({ mode: "steer", queued: true }),
+      ),
+    );
   });
 
   it("does not require speaker context for internal exact-speech consults", async () => {
@@ -2028,6 +2120,155 @@ describe("DiscordVoiceManager", () => {
 
     expect(realtimeSessionMock.handleBargeIn).not.toHaveBeenCalled();
     expectUserMessageIncludes("non-owner answer");
+  });
+
+  it("routes active-run realtime transcripts to voice control before forced consults", async () => {
+    controlRealtimeVoiceAgentRunMock.mockResolvedValueOnce({
+      ok: true,
+      mode: "cancel",
+      sessionKey: "discord:g1:c1",
+      sessionId: "embedded-active",
+      active: true,
+      aborted: true,
+      message: "Cancelled the active OpenClaw run.",
+      speak: true,
+      show: true,
+      suppress: false,
+    });
+    const manager = createManager({
+      groupPolicy: "open",
+      voice: {
+        enabled: true,
+        mode: "agent-proxy",
+        realtime: { provider: "openai" },
+      },
+    });
+
+    await manager.join({ guildId: "g1", channelId: "1001" });
+    const player = getLastAudioPlayer();
+    const bridgeParams = lastRealtimeBridgeParams() as
+      | {
+          audioSink?: { sendAudio: (audio: Buffer) => void };
+          onTranscript?: (role: "user" | "assistant", text: string, isFinal: boolean) => void;
+        }
+      | undefined;
+
+    bridgeParams?.onTranscript?.("user", "cancel that", true);
+
+    await vi.waitFor(() =>
+      expect(controlRealtimeVoiceAgentRunMock).toHaveBeenCalledWith({
+        sessionKey: "discord:g1:c1",
+        text: "cancel that",
+      }),
+    );
+    expect(agentCommandMock).not.toHaveBeenCalled();
+    await vi.waitFor(() =>
+      expect(realtimeSessionMock.handleBargeIn).toHaveBeenCalledWith({
+        audioPlaybackActive: true,
+        force: true,
+      }),
+    );
+    await vi.waitFor(() => expectUserMessageIncludes("Cancelled the active OpenClaw run."));
+    expect(textToSpeechMock).not.toHaveBeenCalledWith(
+      expect.objectContaining({ text: "Cancelled the active OpenClaw run." }),
+    );
+
+    const stopCallsAfterControl = player.stop.mock.calls.length;
+    bridgeParams?.onTranscript?.("assistant", "Cancelled the active OpenClaw run.", true);
+    expect(player.stop).toHaveBeenCalledTimes(stopCallsAfterControl);
+    bridgeParams?.audioSink?.sendAudio(Buffer.alloc(24_000));
+    bridgeParams?.onTranscript?.("assistant", "Cancelled the active OpenClaw run.", true);
+    expect(player.stop).toHaveBeenCalledTimes(stopCallsAfterControl + 1);
+  });
+
+  it("preserves realtime forced consults when no active run accepts steering", async () => {
+    agentCommandMock.mockResolvedValueOnce({ payloads: [{ text: "normal answer" }] });
+    const manager = createManager({
+      groupPolicy: "open",
+      voice: {
+        enabled: true,
+        mode: "agent-proxy",
+        realtime: { provider: "openai" },
+      },
+    });
+
+    await manager.join({ guildId: "g1", channelId: "1001" });
+    const entry = getSessionEntry(manager) as {
+      realtime?: {
+        beginSpeakerTurn: (
+          context: { extraSystemPrompt?: string; senderIsOwner: boolean; speakerLabel: string },
+          userId: string,
+        ) => { close: () => void; sendInputAudio: (audio: Buffer) => void };
+      };
+    };
+    const turn = entry.realtime?.beginSpeakerTurn(
+      { extraSystemPrompt: undefined, senderIsOwner: true, speakerLabel: "Owner" },
+      "u-owner",
+    );
+    turn?.sendInputAudio(Buffer.alloc(8));
+    const bridgeParams = lastRealtimeBridgeParams() as
+      | {
+          onTranscript?: (role: "user" | "assistant", text: string, isFinal: boolean) => void;
+        }
+      | undefined;
+
+    bridgeParams?.onTranscript?.("user", "normal question", true);
+    await new Promise((resolve) => setTimeout(resolve, 260));
+
+    expect(lastAgentCommandArgs().message).toContain("normal question");
+    expectUserMessageIncludes("normal answer");
+  });
+
+  it("lets status questions fall back to normal realtime handling when no run is active", async () => {
+    agentCommandMock.mockResolvedValueOnce({ payloads: [{ text: "status answer" }] });
+    controlRealtimeVoiceAgentRunMock.mockResolvedValueOnce({
+      ok: true,
+      mode: "status",
+      sessionKey: "discord:g1:c1",
+      active: false,
+      message: "I'm not working on an active request right now.",
+      speak: true,
+      show: true,
+      suppress: false,
+    });
+    const manager = createManager({
+      groupPolicy: "open",
+      voice: {
+        enabled: true,
+        mode: "agent-proxy",
+        realtime: { provider: "openai" },
+      },
+    });
+
+    await manager.join({ guildId: "g1", channelId: "1001" });
+    const entry = getSessionEntry(manager) as {
+      realtime?: {
+        beginSpeakerTurn: (
+          context: { extraSystemPrompt?: string; senderIsOwner: boolean; speakerLabel: string },
+          userId: string,
+        ) => { close: () => void; sendInputAudio: (audio: Buffer) => void };
+      };
+    };
+    const turn = entry.realtime?.beginSpeakerTurn(
+      { extraSystemPrompt: undefined, senderIsOwner: true, speakerLabel: "Owner" },
+      "u-owner",
+    );
+    turn?.sendInputAudio(Buffer.alloc(8));
+    const bridgeParams = lastRealtimeBridgeParams() as
+      | {
+          onTranscript?: (role: "user" | "assistant", text: string, isFinal: boolean) => void;
+        }
+      | undefined;
+
+    bridgeParams?.onTranscript?.("user", "status of PR 123", true);
+    await new Promise((resolve) => setTimeout(resolve, 260));
+
+    expect(controlRealtimeVoiceAgentRunMock).toHaveBeenCalledWith({
+      sessionKey: "discord:g1:c1",
+      text: "status of PR 123",
+    });
+    expect(lastAgentCommandArgs().message).toContain("status of PR 123");
+    expectUserMessageIncludes("status answer");
   });
 
   it("keeps separate forced agent-proxy fallback timers for rapid transcripts", async () => {
@@ -2929,16 +3170,7 @@ describe("DiscordVoiceManager", () => {
       }),
     );
 
-    const workingToolResultCall = mockCall(
-      realtimeSessionMock.submitToolResult as unknown as MockCallSource,
-      0,
-      "working tool result",
-    );
-    expect(workingToolResultCall?.[0]).toBe("call-1");
-    expect(requireRecord(workingToolResultCall?.[1], "working tool result payload").status).toBe(
-      "working",
-    );
-    expect(workingToolResultCall?.[2]).toEqual({ willContinue: true });
+    expect(realtimeSessionMock.submitToolResult).toHaveBeenCalledTimes(1);
     const commandArgs = lastAgentCommandArgs();
     expect(commandArgs.toolsAllow).toEqual([
       "read",
@@ -3534,6 +3766,43 @@ describe("DiscordVoiceManager", () => {
       commands: { useAccessGroups: false },
     });
     await processVoiceSegment(manager, "u-guest");
+  });
+
+  it("routes active-run STT/TTS transcripts to voice control before agent turns", async () => {
+    controlRealtimeVoiceAgentRunMock.mockResolvedValueOnce({
+      ok: true,
+      mode: "steer",
+      sessionKey: "discord:g1:1001",
+      sessionId: "embedded-active",
+      active: true,
+      queued: true,
+      target: "embedded_run",
+      message: "Got it. I steered the active run.",
+      speak: true,
+      show: true,
+      suppress: false,
+    });
+    transcribeAudioFileMock.mockResolvedValueOnce({ text: "use the smaller implementation" });
+    const client = createClient();
+    client.fetchMember.mockResolvedValue({
+      nickname: "Owner Nick",
+      user: {
+        id: "u-owner",
+        username: "owner",
+        globalName: "Owner",
+        discriminator: "1234",
+      },
+    });
+    const manager = createManager({ groupPolicy: "open", allowFrom: ["discord:u-owner"] }, client);
+
+    await processVoiceSegment(manager, "u-owner");
+
+    expect(controlRealtimeVoiceAgentRunMock).toHaveBeenCalledWith({
+      sessionKey: "discord:g1:1001",
+      text: "use the smaller implementation",
+    });
+    expect(agentCommandMock).not.toHaveBeenCalled();
+    expect(lastTtsArgs().text).toBe("Got it. I steered the active run.");
   });
 
   it("passes configured model override to agent command in voice flow", async () => {
