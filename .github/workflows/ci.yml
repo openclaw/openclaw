@@ -81,7 +81,7 @@ jobs:
           ref: ${{ inputs.target_ref || github.sha }}
           fetch-depth: 1
           fetch-tags: false
-          persist-credentials: false
+          persist-credentials: true
           submodules: false
 
       - name: Resolve checkout SHA
@@ -304,7 +304,7 @@ jobs:
           ref: ${{ inputs.target_ref || github.sha }}
           fetch-depth: 1
           fetch-tags: false
-          persist-credentials: false
+          persist-credentials: true
           submodules: false
 
       - name: Ensure security base commit
@@ -1423,7 +1423,7 @@ jobs:
           repository: openclaw/clawhub
           path: clawhub-source
           fetch-depth: 1
-          persist-credentials: false
+          persist-credentials: true
 
       - name: Check docs
         env:
@@ -1442,7 +1442,7 @@ jobs:
         uses: actions/checkout@v6
         with:
           ref: ${{ needs.preflight.outputs.checkout_revision }}
-          persist-credentials: false
+          persist-credentials: true
           submodules: false
 
       - name: Setup Python
@@ -1485,7 +1485,7 @@ jobs:
         uses: actions/checkout@v6
         with:
           ref: ${{ needs.preflight.outputs.checkout_revision }}
-          persist-credentials: false
+          persist-credentials: true
           submodules: false
 
       - name: Try to exclude workspace from Windows Defender (best-effort)
@@ -1578,7 +1578,7 @@ jobs:
         uses: actions/checkout@v6
         with:
           ref: ${{ needs.preflight.outputs.checkout_revision }}
-          persist-credentials: false
+          persist-credentials: true
           submodules: false
 
       - name: Setup Node environment
@@ -1619,7 +1619,7 @@ jobs:
         uses: actions/checkout@v6
         with:
           ref: ${{ needs.preflight.outputs.checkout_revision }}
-          persist-credentials: false
+          persist-credentials: true
           submodules: false
 
       - name: Install XcodeGen / SwiftLint / SwiftFormat

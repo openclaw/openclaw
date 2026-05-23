@@ -134,7 +134,7 @@ jobs:
           ref: ${{ github.ref_name }}
           path: workflow
           fetch-depth: 1
-          persist-credentials: false
+          persist-credentials: true
           submodules: false
 
       - name: Resolve target SHA
@@ -232,7 +232,7 @@ jobs:
         with:
           ref: ${{ needs.resolve_target.outputs.sha }}
           fetch-depth: 1
-          persist-credentials: false
+          persist-credentials: true
 
       - name: Verify Docker runtime-assets prune path
         env:
@@ -767,7 +767,7 @@ jobs:
       - name: Checkout trusted workflow ref
         uses: actions/checkout@v6
         with:
-          persist-credentials: false
+          persist-credentials: true
           ref: ${{ github.ref_name }}
           fetch-depth: 0
 
