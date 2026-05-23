@@ -308,6 +308,12 @@ describe("ollama embedding provider", () => {
     await expect(provider.embedBatch(["a", "bb", "ccc"])).resolves.toHaveLength(3);
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(inputs).toEqual([["a", "bb", "ccc"]]);
+    expect(firstGuardedFetchCall()).toMatchObject({
+      url: "http://127.0.0.1:11434/api/embed",
+      policy: { allowedOrigins: ["http://127.0.0.1:11434"] },
+      configuredLocalOriginBaseUrl: "http://127.0.0.1:11434",
+      auditContext: "ollama-memory-embedding",
+    });
   });
 
   it("reports malformed embed JSON with a provider-owned error", async () => {
