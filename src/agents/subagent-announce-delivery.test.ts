@@ -1702,7 +1702,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     expect(sendMessage).not.toHaveBeenCalled();
   });
 
-  it("does not fallback when the agent result already contains generated media", async () => {
+  it("does not fallback when message-tool evidence already contains generated media", async () => {
     const callGateway = createGatewayMock({
       result: {
         payloads: [
@@ -1711,7 +1711,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
             mediaUrls: ["/tmp/generated-night-drive.mp3"],
           },
         ],
-        messagingToolSentTexts: ["The track is ready."],
+        messagingToolSentMediaUrls: ["/tmp/generated-night-drive.mp3"],
       },
     });
     const sendMessage = createSendMessageMock();
@@ -2102,6 +2102,69 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
         content: "The generated music is ready.",
         mediaUrls: ["/tmp/generated-night-drive.mp3"],
         idempotencyKey: "announce-channel-media-message-tool:generated-media-direct",
+      }),
+    );
+  });
+
+  it("directly delivers payload-only generated media when message tool sent text only", async () => {
+    const callGateway = createGatewayMock({
+      result: {
+        payloads: [
+          {
+            text: "The track is ready.",
+            mediaUrls: ["/tmp/generated-night-drive.mp3"],
+          },
+        ],
+        messagingToolSentTargets: [
+          {
+            tool: "message",
+            provider: "slack",
+            accountId: "acct-1",
+            to: "channel:C123",
+            text: "The track is ready.",
+          },
+        ],
+      },
+    });
+    const sendMessage = createSendMessageMock();
+    const result = await deliverSlackChannelAnnouncement({
+      callGateway,
+      sendMessage,
+      sessionId: "requester-session-channel",
+      isActive: false,
+      expectsCompletionMessage: true,
+      directIdempotencyKey: "announce-channel-media-text-only-message-tool",
+      sourceTool: "music_generate",
+      internalEvents: [
+        {
+          type: "task_completion",
+          source: "music_generation",
+          childSessionKey: "music_generate:task-123",
+          childSessionId: "task-123",
+          announceType: "music generation task",
+          taskLabel: "night-drive synthwave",
+          status: "ok",
+          statusLabel: "completed successfully",
+          result: "Generated 1 track.\nMEDIA:/tmp/generated-night-drive.mp3",
+          mediaUrls: ["/tmp/generated-night-drive.mp3"],
+          replyInstruction:
+            "Tell the user the music is ready and send it through the message tool.",
+        },
+      ],
+    });
+
+    expectRecordFields(result, {
+      delivered: true,
+      path: "direct",
+    });
+    expect(sendMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "slack",
+        accountId: "acct-1",
+        to: "channel:C123",
+        content: "The generated music is ready.",
+        mediaUrls: ["/tmp/generated-night-drive.mp3"],
+        idempotencyKey: "announce-channel-media-text-only-message-tool:generated-media-direct",
       }),
     );
   });

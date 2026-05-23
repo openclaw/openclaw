@@ -592,6 +592,24 @@ function hasGatewayAgentDeliveredExpectedMedia(
   return Boolean(result && hasDeliveredExpectedMedia(result, expectedMediaUrls));
 }
 
+function hasGatewayAgentMessagingToolDeliveredExpectedMedia(
+  response: unknown,
+  expectedMediaUrls: readonly string[],
+): boolean {
+  const expected = Array.from(
+    new Set(expectedMediaUrls.map((url) => url.trim()).filter((url) => url.length > 0)),
+  );
+  if (expected.length === 0) {
+    return true;
+  }
+  const result = getGatewayAgentResult(response);
+  if (!result) {
+    return false;
+  }
+  const delivered = new Set(collectMessagingToolDeliveredMediaUrls(result));
+  return expected.every((url) => delivered.has(url));
+}
+
 function getGatewayAgentCommandDeliveryFailure(response: unknown): string | undefined {
   const result = getGatewayAgentResult(response);
   return result ? getAgentCommandDeliveryFailure(result) : undefined;
@@ -977,7 +995,12 @@ async function sendSubagentAnnounceDirectly(params: {
     if (
       agentMediatedCompletion &&
       expectedMediaUrls.length > 0 &&
-      !hasGatewayAgentDeliveredExpectedMedia(directAnnounceResponse, expectedMediaUrls)
+      !(requiresMessageToolDelivery
+        ? hasGatewayAgentMessagingToolDeliveredExpectedMedia(
+            directAnnounceResponse,
+            expectedMediaUrls,
+          )
+        : hasGatewayAgentDeliveredExpectedMedia(directAnnounceResponse, expectedMediaUrls))
     ) {
       const generatedMediaDelivery = await tryGeneratedMediaDirectDelivery(directAnnounceResponse);
       if (generatedMediaDelivery) {
