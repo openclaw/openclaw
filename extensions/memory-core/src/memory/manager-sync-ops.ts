@@ -1100,18 +1100,23 @@ export abstract class MemoryManagerSyncOps {
     progress?: (update: MemorySyncProgressUpdate) => void;
   }) {
     // Guard: if an embedding provider is configured but currently unavailable,
-    // abort sync to prevent silently degrading the entire vector index to
-    // fts-only and wiping existing semantic vectors.
-    const configuredProvider = this.settings.provider;
-    if (
-      configuredProvider &&
-      configuredProvider !== "none" &&
-      !this.provider
-    ) {
-      throw new Error(
-        `Memory sync aborted: embedding provider "${configuredProvider}" is configured but unavailable. ` +
-          `Refusing to run sync in fts-only fallback mode to protect existing vector index.`,
-      );
+    // abort sync to prevent silently degrading an existing semantic vector index
+    // to fts-only and wiping existing semantic vectors.
+    // This only protects existing semantic indexes — fresh or already-fts-only
+    // indexes can safely sync without an embedding provider.
+    if (!this.provider) {
+      const existingMeta = this.readMeta();
+      if (
+        existingMeta &&
+        existingMeta.model !== "fts-only" &&
+        this.settings.provider &&
+        this.settings.provider !== "none"
+      ) {
+        throw new Error(
+          `Memory sync aborted: embedding provider "${this.settings.provider}" is configured but unavailable. ` +
+            `Refusing to run sync in fts-only fallback mode to protect existing vector index (current model: ${existingMeta.model}).`,
+        );
+      }
     }
 
     const progress = params?.progress ? this.createSyncProgress(params.progress) : undefined;
