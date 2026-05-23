@@ -50,7 +50,7 @@ function hasNonEmptyStringArray(value: unknown): value is string[] {
 
 function shouldMarkHeartbeatMessageToolDelivered(
   payload: ReplyPayload,
-  sentTexts: string[],
+  options: { requireTextMatch: boolean; sentTexts: string[] },
 ): boolean {
   if (payload.isError || payload.isFallbackNotice) {
     return false;
@@ -66,9 +66,10 @@ function shouldMarkHeartbeatMessageToolDelivered(
   if (sendable.text.includes(REPLY_MEDIA_FAILURE_WARNING)) {
     return false;
   }
-  return (
-    sendable.hasText && !sendable.hasMedia && isMessagingToolDuplicate(sendable.text, sentTexts)
-  );
+  if (!sendable.hasText || sendable.hasMedia) {
+    return false;
+  }
+  return !options.requireTextMatch || isMessagingToolDuplicate(sendable.text, options.sentTexts);
 }
 
 function requiresHeartbeatDelivery(payload: ReplyPayload): boolean {
@@ -78,15 +79,29 @@ function requiresHeartbeatDelivery(payload: ReplyPayload): boolean {
 function markHeartbeatMessageToolDeliveredPayloads(params: {
   payloads: ReplyPayload[];
   sentTexts: readonly string[];
+  requireTextMatch: boolean;
 }): ReplyPayload[] {
-  if (params.sentTexts.length === 0) {
+  if (params.requireTextMatch && params.sentTexts.length === 0) {
     return params.payloads;
   }
   const sentTexts = [...params.sentTexts];
+  const requireTextMatch =
+    params.requireTextMatch ||
+    params.payloads.filter((payload) =>
+      shouldMarkHeartbeatMessageToolDelivered(payload, {
+        sentTexts,
+        requireTextMatch: false,
+      }),
+    ).length > 1;
   let nextPayloads: ReplyPayload[] | undefined;
   for (let index = 0; index < params.payloads.length; index++) {
     const payload = params.payloads[index];
-    if (!shouldMarkHeartbeatMessageToolDelivered(payload, sentTexts)) {
+    if (
+      !shouldMarkHeartbeatMessageToolDelivered(payload, {
+        sentTexts,
+        requireTextMatch,
+      })
+    ) {
       if (nextPayloads) {
         nextPayloads.push(payload);
       }
@@ -419,12 +434,12 @@ export async function buildReplyPayloads(params: {
         originatingTo: params.originatingTo,
       }),
     );
-  const heartbeatMessageToolDeliveredSentTexts =
-    params.isHeartbeat && messagingToolPayloadDedupe.matchingRoute && sentTextsForDedupe.length > 0
-      ? sentTextsForDedupe
+  const heartbeatMessageToolDeliveryEvidence =
+    params.isHeartbeat && messagingToolPayloadDedupe.matchingRoute
+      ? { sentTexts: sentTextsForDedupe, requireTextMatch: false }
       : params.isHeartbeat && currentRouteHasImplicitMessageToolTextEvidence
-        ? messagingToolSentTexts
-        : [];
+        ? { sentTexts: messagingToolSentTexts, requireTextMatch: true }
+        : null;
   const messagingToolSentMediaUrls = dedupeMessagingToolPayloads
     ? await normalizeSentMediaUrlsForDedupe({
         sentMediaUrls: sentMediaUrlsForDedupe,
@@ -439,22 +454,21 @@ export async function buildReplyPayloads(params: {
         sentMediaUrls: messagingToolSentMediaUrls,
       })
     : silentFilteredPayloads;
-  const dedupedPayloads =
-    params.isHeartbeat && heartbeatMessageToolDeliveredSentTexts.length > 0
-      ? markHeartbeatMessageToolDeliveredPayloads({
-          payloads: mediaFilteredPayloads,
-          sentTexts: heartbeatMessageToolDeliveredSentTexts,
-        })
-      : params.isHeartbeat
-        ? mediaFilteredPayloads
-        : dedupeMessagingToolPayloads
-          ? (
-              dedupeRuntime ?? (await loadReplyPayloadsDedupeRuntime())
-            ).filterMessagingToolDuplicates({
+  const dedupedPayloads = heartbeatMessageToolDeliveryEvidence
+    ? markHeartbeatMessageToolDeliveredPayloads({
+        payloads: mediaFilteredPayloads,
+        ...heartbeatMessageToolDeliveryEvidence,
+      })
+    : params.isHeartbeat
+      ? mediaFilteredPayloads
+      : dedupeMessagingToolPayloads
+        ? (dedupeRuntime ?? (await loadReplyPayloadsDedupeRuntime())).filterMessagingToolDuplicates(
+            {
               payloads: mediaFilteredPayloads,
               sentTexts: sentTextsForDedupe,
-            })
-          : mediaFilteredPayloads;
+            },
+          )
+        : mediaFilteredPayloads;
   const isDirectlySentBlockPayload = (payload: ReplyPayload) =>
     Boolean(params.directlySentBlockKeys?.has(createBlockReplyContentKey(payload)));
   const preserveUnsentMediaAfterBlockStream = (payload: ReplyPayload): ReplyPayload | null => {
@@ -533,20 +547,18 @@ export async function buildReplyPayloads(params: {
           sentMediaUrls: blockSentMediaUrls,
         })
       : contentSuppressedPayloads;
-  const postMediaMarkedPayloads =
-    params.isHeartbeat && heartbeatMessageToolDeliveredSentTexts.length > 0
-      ? markHeartbeatMessageToolDeliveredPayloads({
-          payloads: filteredPayloads,
-          sentTexts: heartbeatMessageToolDeliveredSentTexts,
-        })
-      : filteredPayloads;
-  const deliveryFinalizedPayloads =
-    params.isHeartbeat && heartbeatMessageToolDeliveredSentTexts.length > 0
-      ? finalizeHeartbeatMessageToolDeliveredPayloads({
-          payloads: postMediaMarkedPayloads,
-          fallbackPayloads: dedupedPayloads,
-        })
-      : postMediaMarkedPayloads;
+  const postMediaMarkedPayloads = heartbeatMessageToolDeliveryEvidence
+    ? markHeartbeatMessageToolDeliveredPayloads({
+        payloads: filteredPayloads,
+        ...heartbeatMessageToolDeliveryEvidence,
+      })
+    : filteredPayloads;
+  const deliveryFinalizedPayloads = heartbeatMessageToolDeliveryEvidence
+    ? finalizeHeartbeatMessageToolDeliveredPayloads({
+        payloads: postMediaMarkedPayloads,
+        fallbackPayloads: dedupedPayloads,
+      })
+    : postMediaMarkedPayloads;
   const replyPayloads: ReplyPayload[] = [];
   for (const payload of deliveryFinalizedPayloads) {
     if (isRenderablePayload(payload)) {

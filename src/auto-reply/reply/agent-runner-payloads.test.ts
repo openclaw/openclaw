@@ -247,7 +247,7 @@ describe("buildReplyPayloads media filter integration", () => {
     expect(getReplyPayloadMetadata(replyPayloads[0])?.messageToolDeliveredForReplyRoute).toBe(true);
   });
 
-  it("keeps heartbeat text when same-route message-tool delivery used different text", async () => {
+  it("marks heartbeat text delivered when same-route message-tool delivery used different text", async () => {
     const { replyPayloads } = await buildReplyPayloads({
       ...baseParams,
       isHeartbeat: true,
@@ -270,9 +270,7 @@ describe("buildReplyPayloads media filter integration", () => {
 
     expect(replyPayloads).toHaveLength(1);
     expect(replyPayloads[0]?.text).toBe("fallback text still needs delivery");
-    expect(getReplyPayloadMetadata(replyPayloads[0])?.messageToolDeliveredForReplyRoute).not.toBe(
-      true,
-    );
+    expect(getReplyPayloadMetadata(replyPayloads[0])?.messageToolDeliveredForReplyRoute).toBe(true);
   });
 
   it("marks implicit current-route heartbeat text duplicates only without target records", async () => {

@@ -51,7 +51,6 @@ import { DEFAULT_HEARTBEAT_ACK_MAX_CHARS, stripHeartbeatToken } from "../heartbe
 import {
   getReplyPayloadMetadata,
   isReplyPayloadStatusNotice,
-  markReplyPayloadForMessageToolDeliveryForReplyRoute,
   markReplyPayloadForSourceSuppressionDelivery,
   setReplyPayloadMetadata,
 } from "../reply-payload.js";
