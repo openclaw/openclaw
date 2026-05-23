@@ -2180,7 +2180,9 @@ describe("runPreflightCompactionIfNeeded pending-flush barrier", () => {
     registerPendingMemoryFlush(sessionKey, Promise.resolve());
 
     const replyOperation = createReplyOperation();
-    const updateSessionIdMock = replyOperation.updateSessionId as ReturnType<typeof vi.fn>;
+    const updateSessionIdMock = (
+      replyOperation as unknown as { updateSessionId: ReturnType<typeof vi.fn> }
+    ).updateSessionId;
     const refreshQueuedFollowupSessionMock = vi.fn();
     setAgentRunnerMemoryTestDeps({
       compactEmbeddedPiSession: compactEmbeddedPiSessionMock as never,
