@@ -41,6 +41,7 @@ const MAX_SECRET_PROVIDER_EXEC_ARG_BYTES = 1024;
 const MAX_SECRET_PROVIDER_EXEC_TIMEOUT_MS = 120_000;
 const MAX_SECRET_PROVIDER_EXEC_OUTPUT_BYTES = 20 * 1024 * 1024;
 const MAX_SECRET_PROVIDER_EXEC_PASS_ENV = 128;
+const SECRET_PROVIDER_NODE_COMMAND_PLACEHOLDER = "${node}";
 
 type PluginManifestLoadCacheEntry = {
   result: PluginManifestLoadResult;
@@ -165,7 +166,7 @@ export type PluginManifestSecretProviderIntegration = {
   displayName?: string;
   description?: string;
   source: "exec";
-  command: string;
+  command: "${node}";
   args?: string[];
   timeoutMs?: number;
   noOutputTimeoutMs?: number;
@@ -174,7 +175,6 @@ export type PluginManifestSecretProviderIntegration = {
   env?: Record<string, string>;
   passEnv?: string[];
   allowInsecurePath?: boolean;
-  allowSymlinkCommand?: boolean;
 };
 
 export type PluginManifestActivationCapability = "provider" | "channel" | "tool" | "hook";
@@ -1293,7 +1293,7 @@ function normalizeManifestSecretProviderIntegrations(
       continue;
     }
     const command = normalizeOptionalString(rawIntegration.command);
-    if (rawIntegration.source !== "exec" || !command) {
+    if (rawIntegration.source !== "exec" || command !== SECRET_PROVIDER_NODE_COMMAND_PLACEHOLDER) {
       continue;
     }
     const providerAlias = normalizeOptionalString(rawIntegration.providerAlias);
@@ -1336,7 +1336,6 @@ function normalizeManifestSecretProviderIntegrations(
       ...(env ? { env } : {}),
       ...(passEnv ? { passEnv } : {}),
       ...(rawIntegration.allowInsecurePath === true ? { allowInsecurePath: true } : {}),
-      ...(rawIntegration.allowSymlinkCommand === true ? { allowSymlinkCommand: true } : {}),
     };
   }
   return Object.keys(normalized).length > 0 ? normalized : undefined;

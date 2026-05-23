@@ -31,6 +31,14 @@ import {
   isDangerousHostEnvVarName,
   normalizeEnvVarKey,
 } from "../infra/host-env-security.js";
+import {
+  loadPluginManifestRegistry,
+  type PluginManifestRegistry,
+} from "../plugins/manifest-registry.js";
+import {
+  isPluginIntegrationSecretProviderConfig,
+  resolveSecretProviderIntegrationConfig,
+} from "../secrets/provider-integrations.js";
 import { discoverConfigSecretTargets } from "../secrets/target-registry.js";
 import {
   emitDaemonInstallRuntimeWarning,
@@ -198,6 +206,7 @@ function collectExecSecretRefPassEnvServiceEnvVars(params: {
     return {};
   }
   const entries: Record<string, string> = {};
+  let manifestRegistry: Pick<PluginManifestRegistry, "plugins"> | undefined;
   for (const target of discoverConfigSecretTargets(params.config)) {
     if (!target.entry.includeInPlan) {
       continue;
@@ -214,7 +223,33 @@ function collectExecSecretRefPassEnvServiceEnvVars(params: {
     if (!provider || provider.source !== "exec") {
       continue;
     }
-    for (const rawKey of provider.passEnv ?? []) {
+    const execProvider = isPluginIntegrationSecretProviderConfig(provider)
+      ? (() => {
+          manifestRegistry ??= loadPluginManifestRegistry({
+            config: params.config,
+            env: params.env,
+          });
+          const resolved = resolveSecretProviderIntegrationConfig({
+            manifestRegistry,
+            providerAlias: ref.provider,
+            providerConfig: provider,
+            config: params.config,
+            env: params.env,
+          });
+          if (!resolved.ok) {
+            params.warn?.(
+              `Exec SecretRef plugin provider "${ref.provider}" could not be resolved for service environment planning: ${resolved.reason}`,
+              "Config SecretRef",
+            );
+            return undefined;
+          }
+          return resolved.providerConfig;
+        })()
+      : provider;
+    if (!execProvider) {
+      continue;
+    }
+    for (const rawKey of execProvider.passEnv ?? []) {
       const key = normalizeEnvVarKey(rawKey, { portable: true });
       if (!key) {
         params.warn?.(

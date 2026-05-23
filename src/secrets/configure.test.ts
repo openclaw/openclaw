@@ -140,11 +140,10 @@ describe("runSecretsConfigureInteractive", () => {
     expect(result.plan.targets).toEqual([]);
     expect(result.plan.providerUpserts?.vault).toEqual({
       source: "exec",
-      command: process.execPath,
-      args: [resolverPath],
-      passEnv: ["VAULT_ADDR", "VAULT_TOKEN"],
-      trustedDirs: [path.dirname(process.execPath), pluginRoot],
-      timeoutMs: 5000,
+      pluginIntegration: {
+        pluginId: "vault",
+        integrationId: "vault",
+      },
     });
     expect(runSecretsApplyMock).toHaveBeenCalledWith(
       expect.objectContaining({

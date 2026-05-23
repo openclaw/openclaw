@@ -1085,20 +1085,20 @@ Provider fields:
 
 Use `secretProviderIntegrations` when a plugin can publish a reusable SecretRef
 exec provider preset. OpenClaw reads this metadata before plugin runtime loads,
-materializes it into the existing `secrets.providers.<alias>` exec provider
-shape, and leaves actual secret resolution to the SecretRef runtime.
+stores plugin ownership in `secrets.providers.<alias>.pluginIntegration`, and
+leaves actual secret resolution to the SecretRef runtime.
 Presets are exposed only for bundled plugins and installed plugins discovered
 from the managed plugin install roots, such as git and ClawHub installs.
 
 ```json
 {
   "secretProviderIntegrations": {
-    "vault": {
-      "providerAlias": "vault",
-      "displayName": "Vault",
+    "secret-store": {
+      "providerAlias": "team-secrets",
+      "displayName": "Team secrets",
       "source": "exec",
       "command": "${node}",
-      "args": ["./bin/resolve-vault.mjs"]
+      "args": ["./bin/resolve-secrets.mjs"]
     }
   }
 }
@@ -1106,22 +1106,46 @@ from the managed plugin install roots, such as git and ClawHub installs.
 
 The map key is the integration id. If `providerAlias` is omitted, OpenClaw uses
 the integration id as the SecretRef provider alias. Provider aliases must match
-the normal SecretRef provider alias pattern, for example `vault` or
+the normal SecretRef provider alias pattern, for example `team-secrets` or
 `onepassword-work`.
 
-Only `source: "exec"` presets are currently supported. `command` is required
-and may be `${node}`. Non-Node commands must resolve inside the plugin root.
-When `command` is `${node}`, `args[0]` must be a `./` plugin-root-relative
-resolver script; OpenClaw materializes it to the current Node executable and
-the absolute in-plugin script path. Node options such as `--require`,
-`--import`, `--loader`, `--env-file`, `--eval`, and `--print` are not part of
-the manifest preset contract.
+When an operator selects the preset, OpenClaw writes a provider reference like:
+
+```json
+{
+  "secrets": {
+    "providers": {
+      "team-secrets": {
+        "source": "exec",
+        "pluginIntegration": {
+          "pluginId": "acme-secrets",
+          "integrationId": "secret-store"
+        }
+      }
+    }
+  }
+}
+```
+
+At startup/reload, OpenClaw resolves that provider by loading current plugin
+manifest metadata, checking that the owning plugin is installed and active, and
+materializing the exec command from the manifest. Disabling or removing the
+plugin revokes the provider for active SecretRefs. Operators who want standalone
+exec configuration can still write manual `command`/`args` providers directly.
+
+Only `source: "exec"` presets are currently supported. `command` must be
+`${node}`, and `args[0]` must be a `./` plugin-root-relative resolver script.
+OpenClaw materializes it at startup/reload to the current Node executable and
+the absolute in-plugin script path. Node options such as `--require`, `--import`,
+`--loader`, `--env-file`, `--eval`, and `--print` are not part of the manifest
+preset contract. Operators who need non-Node commands can configure standalone
+manual exec providers directly.
 
 OpenClaw derives `trustedDirs` for manifest presets from the plugin root and,
 for `${node}` presets, the current Node executable directory. Manifest-authored
 `trustedDirs` are ignored. Other exec provider options such as `timeoutMs`,
-`maxOutputBytes`, `jsonOnly`, `env`, `passEnv`, `allowInsecurePath`, and
-`allowSymlinkCommand` pass through to the normal SecretRef exec provider config.
+`maxOutputBytes`, `jsonOnly`, `env`, `passEnv`, and `allowInsecurePath` pass
+through to the normal SecretRef exec provider config.
 
 ## modelPricing reference
 
