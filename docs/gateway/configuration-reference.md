@@ -52,6 +52,7 @@ Moved to a dedicated page - see
   - `talk.consultFastMode`: one-shot fast-mode override for Control UI Talk realtime consults
   - `talk.speechLocale`: optional BCP 47 locale id for Talk speech recognition on iOS/macOS
   - `talk.silenceTimeoutMs`: when unset, Talk keeps the platform default pause window before sending the transcript (`700 ms on macOS and Android, 900 ms on iOS`)
+  - `talk.realtime.consultRouting`: Gateway relay fallback for finalized realtime Talk transcripts that skip `openclaw_agent_consult`
 
 ## Tools and custom providers
 
@@ -487,7 +488,7 @@ See [Inferred commitments](/concepts/commitments).
       // dangerouslyDisableDeviceAuth: false,
     },
     remote: {
-      url: "ws://gateway.tailnet:18789",
+      url: "ws://127.0.0.1:18789",
       transport: "ssh", // ssh | direct
       token: "your-token",
       // password: "your-password",
@@ -545,16 +546,11 @@ See [Inferred commitments](/concepts/commitments).
   checks `tailscale funnel status` before re-applying Serve at startup and skips
   it if an externally configured Funnel route already covers the gateway port.
   Default `false`.
-- `controlUi.allowedOrigins`: explicit browser-origin allowlist for Gateway WebSocket connects. Required when browser clients are expected from non-loopback origins.
+- `controlUi.allowedOrigins`: explicit browser-origin allowlist for Gateway WebSocket connects. Required for public non-loopback browser origins. Private same-origin LAN/Tailnet UI loads from loopback, RFC1918/link-local, `.local`, `.ts.net`, or Tailscale CGNAT hosts are accepted without enabling Host-header fallback.
 - `controlUi.chatMessageMaxWidth`: optional max-width for grouped Control UI chat messages. Accepts constrained CSS width values such as `960px`, `82%`, `min(1280px, 82%)`, and `calc(100% - 2rem)`.
 - `controlUi.dangerouslyAllowHostHeaderOriginFallback`: dangerous mode that enables Host-header origin fallback for deployments that intentionally rely on Host-header origin policy.
-- `remote.transport`: `ssh` (default) or `direct` (ws/wss). For `direct`, `remote.url` must be `ws://` or `wss://`.
-- `OPENCLAW_ALLOW_INSECURE_PRIVATE_WS=1`: client-side process-environment
-  break-glass override that allows plaintext `ws://` to trusted private-network
-  IPs; default remains loopback-only for plaintext. There is no `openclaw.json`
-  equivalent, and browser private-network config such as
-  `browser.ssrfPolicy.dangerouslyAllowPrivateNetwork` does not affect Gateway
-  WebSocket clients.
+- `remote.transport`: `ssh` (default) or `direct` (ws/wss). For `direct`, `remote.url` must be `wss://` for public hosts; plaintext `ws://` is accepted only for loopback, LAN, link-local, `.local`, `.ts.net`, and Tailscale CGNAT hosts.
+- `remote.remotePort`: gateway port on the remote SSH host. Defaults to `18789`; use this when the local tunnel port differs from the remote gateway port.
 - `gateway.remote.token` / `.password` are remote-client credential fields. They do not configure gateway auth by themselves.
 - `gateway.push.apns.relay.baseUrl`: base HTTPS URL for the external APNs relay used by official/TestFlight iOS builds after they publish relay-backed registrations to the gateway. This URL must match the relay URL compiled into the iOS build.
 - `gateway.push.apns.relay.timeoutMs`: gateway-to-relay send timeout in milliseconds. Defaults to `10000`.
@@ -1032,6 +1028,7 @@ Notes:
     flags: ["telegram.*"],
     stuckSessionWarnMs: 30000,
     stuckSessionAbortMs: 300000,
+    memoryPressureSnapshot: false,
 
     otel: {
       enabled: false,
@@ -1072,6 +1069,7 @@ Notes:
 - `flags`: array of flag strings enabling targeted log output (supports wildcards like `"telegram.*"` or `"*"`).
 - `stuckSessionWarnMs`: no-progress age threshold in ms for classifying long-running processing sessions as `session.long_running`, `session.stalled`, or `session.stuck`. Reply, tool, status, block, and ACP progress reset the timer; repeated `session.stuck` diagnostics back off while unchanged.
 - `stuckSessionAbortMs`: no-progress age threshold in ms before eligible stalled active work may be abort-drained for recovery. When unset, OpenClaw uses the safer extended embedded-run window of at least 5 minutes and 3x `stuckSessionWarnMs`.
+- `memoryPressureSnapshot`: captures a redacted pre-OOM stability snapshot when memory pressure reaches `critical` (default: `false`). Set to `true` to add the stability bundle file scan/write while keeping normal memory pressure events.
 - `otel.enabled`: enables the OpenTelemetry export pipeline (default: `false`). For the full configuration, signal catalog, and privacy model, see [OpenTelemetry export](/gateway/opentelemetry).
 - `otel.endpoint`: collector URL for OTel export.
 - `otel.tracesEndpoint` / `otel.metricsEndpoint` / `otel.logsEndpoint`: optional signal-specific OTLP endpoints. When set, they override `otel.endpoint` for that signal only.
@@ -1381,10 +1379,10 @@ Split config into multiple files:
 - Array of files: deep-merged in order (later overrides earlier).
 - Sibling keys: merged after includes (override included values).
 - Nested includes: up to 10 levels deep.
-- Paths: resolved relative to the including file, but must stay inside the top-level config directory (`dirname` of `openclaw.json`). Absolute/`../` forms are allowed only when they still resolve inside that boundary.
+- Paths: resolved relative to the including file, but must stay inside the top-level config directory (`dirname` of `openclaw.json`). Absolute/`../` forms are allowed only when they still resolve inside that boundary. Paths must not contain null bytes and must be strictly shorter than 4096 characters before and after resolution.
 - OpenClaw-owned writes that change only one top-level section backed by a single-file include write through to that included file. For example, `plugins install` updates `plugins: { $include: "./plugins.json5" }` in `plugins.json5` and leaves `openclaw.json` intact.
 - Root includes, include arrays, and includes with sibling overrides are read-only for OpenClaw-owned writes; those writes fail closed instead of flattening the config.
-- Errors: clear messages for missing files, parse errors, and circular includes.
+- Errors: clear messages for missing files, parse errors, circular includes, invalid path format, and excessive length.
 
 ---
 

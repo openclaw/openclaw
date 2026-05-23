@@ -13,6 +13,7 @@ import { DEFAULT_PROVIDER } from "./defaults.js";
 import { resolveAgentHarnessPolicy } from "./harness/policy.js";
 import {
   applyLocalNoAuthHeaderOverride,
+  formatMissingAuthError,
   getApiKeyForModel,
   type ResolvedProviderAuth,
 } from "./model-auth.js";
@@ -197,14 +198,21 @@ export async function prepareSimpleCompletionModel(params: {
   allowMissingApiKeyModes?: ReadonlyArray<AllowedMissingApiKeyMode>;
   allowBundledStaticCatalogFallback?: boolean;
   skipPiDiscovery?: boolean;
+  modelResolver?: typeof resolveModelAsync;
 }): Promise<PreparedSimpleCompletionModel> {
   const resolved = params.skipPiDiscovery
-    ? await resolveModelAsync(params.provider, params.modelId, params.agentDir, params.cfg, {
-        ...(params.allowBundledStaticCatalogFallback !== undefined
-          ? { allowBundledStaticCatalogFallback: params.allowBundledStaticCatalogFallback }
-          : {}),
-        skipPiDiscovery: true,
-      })
+    ? await (params.modelResolver ?? resolveModelAsync)(
+        params.provider,
+        params.modelId,
+        params.agentDir,
+        params.cfg,
+        {
+          ...(params.allowBundledStaticCatalogFallback !== undefined
+            ? { allowBundledStaticCatalogFallback: params.allowBundledStaticCatalogFallback }
+            : {}),
+          skipPiDiscovery: true,
+        },
+      )
     : resolveModel(params.provider, params.modelId, params.agentDir, params.cfg);
   if (!resolved.model) {
     return {
@@ -235,7 +243,7 @@ export async function prepareSimpleCompletionModel(params: {
     })
   ) {
     return {
-      error: `No API key resolved for provider "${resolved.model.provider}" (auth mode: ${auth.mode}).`,
+      error: formatMissingAuthError(auth, resolved.model.provider),
       auth,
     };
   }
@@ -281,6 +289,7 @@ export async function prepareSimpleCompletionModelForAgent(params: {
   allowMissingApiKeyModes?: ReadonlyArray<AllowedMissingApiKeyMode>;
   allowBundledStaticCatalogFallback?: boolean;
   skipPiDiscovery?: boolean;
+  modelResolver?: typeof resolveModelAsync;
 }): Promise<PreparedSimpleCompletionModelForAgent> {
   const selection = resolveSimpleCompletionSelectionForAgent({
     cfg: params.cfg,
@@ -304,6 +313,7 @@ export async function prepareSimpleCompletionModelForAgent(params: {
       ? { allowBundledStaticCatalogFallback: params.allowBundledStaticCatalogFallback }
       : {}),
     skipPiDiscovery: params.skipPiDiscovery,
+    modelResolver: params.modelResolver,
   });
   if ("error" in prepared) {
     return {

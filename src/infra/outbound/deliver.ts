@@ -8,6 +8,7 @@ import type {
   ChannelMessageSendLifecycleAdapter,
   ChannelMessageSendResult,
 } from "../../channels/message/types.js";
+import { adaptMessagePresentationForChannel } from "../../channels/plugins/outbound/interactive.js";
 import { loadChannelOutboundAdapter } from "../../channels/plugins/outbound/load.js";
 import type {
   ChannelDeliveryCapabilities,
@@ -143,6 +144,7 @@ type ChannelHandler = {
   normalizePayload?: (payload: ReplyPayload) => ReplyPayload | null;
   sendTextOnlyErrorPayloads?: boolean;
   renderPresentation?: (payload: ReplyPayload) => Promise<ReplyPayload | null>;
+  presentationCapabilities?: ChannelOutboundAdapter["presentationCapabilities"];
   pinDeliveredMessage?: (params: {
     target: ChannelOutboundTargetRef;
     messageId: string;
@@ -387,6 +389,7 @@ function createPluginHandler(
           })
       : undefined,
     sendTextOnlyErrorPayloads: outbound?.sendTextOnlyErrorPayloads === true,
+    presentationCapabilities: outbound?.presentationCapabilities,
     renderPresentation: outbound?.renderPresentation
       ? async (payload) => {
           const presentation = normalizeMessagePresentation(payload.presentation);
@@ -950,7 +953,14 @@ async function renderPresentationForDelivery(
   if (!presentation) {
     return payload;
   }
-  const rendered = handler.renderPresentation ? await handler.renderPresentation(payload) : null;
+  const adaptedPresentation = adaptMessagePresentationForChannel({
+    presentation,
+    capabilities: handler.presentationCapabilities,
+  });
+  const adaptedPayload = { ...payload, presentation: adaptedPresentation };
+  const rendered = handler.renderPresentation
+    ? await handler.renderPresentation(adaptedPayload)
+    : null;
   if (rendered) {
     const { presentation: _presentation, ...withoutPresentation } = rendered;
     return withoutPresentation;
@@ -960,7 +970,7 @@ async function renderPresentationForDelivery(
     ...withoutPresentation,
     text: renderMessagePresentationFallbackText({
       text: payload.text,
-      presentation,
+      presentation: adaptedPresentation,
     }),
   };
 }
@@ -1285,7 +1295,13 @@ async function deliverOutboundPayloadsWithQueueCleanup(
     }
     if (queueId) {
       if (hadPartialFailure) {
-        await failDelivery(queueId, "partial delivery failure (bestEffort)").catch(() => {});
+        await failDelivery(queueId, "partial delivery failure (bestEffort)").catch(
+          (err: unknown) => {
+            log.warn(
+              `failed to mark queued delivery ${queueId} as failed after partial failure; continuing best-effort delivery: ${formatErrorMessage(err)}`,
+            );
+          },
+        );
       } else {
         if (platformSendStarted) {
           await markQueuedPlatformOutcomeUnknown({
@@ -1315,7 +1331,11 @@ async function deliverOutboundPayloadsWithQueueCleanup(
       if (isDeliveryAbortError(err)) {
         await ackDelivery(queueId).catch(() => {});
       } else if (!platformResultsReturned) {
-        await failDelivery(queueId, formatErrorMessage(err)).catch(() => {});
+        await failDelivery(queueId, formatErrorMessage(err)).catch((failErr: unknown) => {
+          log.warn(
+            `failed to mark queued delivery ${queueId} as failed: ${formatErrorMessage(failErr)}`,
+          );
+        });
       }
     }
     throw err;

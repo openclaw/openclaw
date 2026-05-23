@@ -125,10 +125,12 @@ export function refreshQueuedFollowupSession(params: {
     Boolean(params.previousSessionId) &&
     Boolean(params.nextSessionId) &&
     params.previousSessionId !== params.nextSessionId;
-  const shouldRewriteSelection =
+  const shouldRewriteModelSelection =
     typeof params.nextProvider === "string" ||
     typeof params.nextModel === "string" ||
-    Object.hasOwn(params, "nextModelOverrideSource") ||
+    Object.hasOwn(params, "nextModelOverrideSource");
+  const shouldRewriteSelection =
+    shouldRewriteModelSelection ||
     Object.hasOwn(params, "nextAuthProfileId") ||
     Object.hasOwn(params, "nextAuthProfileIdSource");
   if (!shouldRewriteSession && !shouldRewriteSelection) {
@@ -152,6 +154,9 @@ export function refreshQueuedFollowupSession(params: {
       }
       if (typeof params.nextModel === "string") {
         run.model = params.nextModel;
+      }
+      if (shouldRewriteModelSelection) {
+        delete run.hasAutoFallbackProvenance;
       }
       if (Object.hasOwn(params, "nextModelOverrideSource")) {
         run.hasSessionModelOverride = Boolean(run.provider || run.model);

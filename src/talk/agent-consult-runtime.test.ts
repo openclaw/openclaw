@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { RunEmbeddedPiAgentParams } from "../agents/pi-embedded-runner/run/params.js";
 import {
-  __setRealtimeVoiceAgentConsultDepsForTest,
+  setRealtimeVoiceAgentConsultDepsForTest,
   consultRealtimeVoiceAgent,
   resolveRealtimeVoiceAgentConsultTools,
   resolveRealtimeVoiceAgentConsultToolsAllow,
@@ -42,6 +42,35 @@ function createAgentRuntime(payloads: unknown[] = [{ text: "Speak this." }]) {
       return await mutator(sessionStore);
     },
   );
+  const getSessionEntry = vi.fn(
+    (params: { sessionKey: string }) => sessionStore[params.sessionKey],
+  );
+  const patchSessionEntry = vi.fn(
+    async (params: {
+      sessionKey: string;
+      fallbackEntry?: Record<string, unknown>;
+      update: (
+        entry: Record<string, unknown>,
+      ) => Promise<Record<string, unknown> | null> | Record<string, unknown> | null;
+    }) => {
+      const existing = sessionStore[params.sessionKey] ?? params.fallbackEntry;
+      if (!existing) {
+        return null;
+      }
+      const patch = await params.update({ ...existing });
+      if (!patch) {
+        return existing;
+      }
+      const next = { ...existing, ...patch };
+      sessionStore[params.sessionKey] = next;
+      return next;
+    },
+  );
+  const upsertSessionEntry = vi.fn(
+    async (params: { sessionKey: string; entry: Record<string, unknown> }) => {
+      sessionStore[params.sessionKey] = { ...params.entry };
+    },
+  );
   return {
     runtime: {
       resolveAgentDir: vi.fn(() => "/tmp/agent"),
@@ -53,6 +82,9 @@ function createAgentRuntime(payloads: unknown[] = [{ text: "Speak this." }]) {
         loadSessionStore: vi.fn(() => sessionStore),
         saveSessionStore: vi.fn(async () => {}),
         updateSessionStore,
+        getSessionEntry,
+        patchSessionEntry,
+        upsertSessionEntry,
         resolveSessionFilePath: vi.fn(
           (_sessionId: string, entry?: { sessionFile?: string }) =>
             entry?.sessionFile ?? "/tmp/session.json",
@@ -91,7 +123,7 @@ function expectNonEmptyString(value: unknown) {
 
 describe("realtime voice agent consult runtime", () => {
   afterEach(() => {
-    __setRealtimeVoiceAgentConsultDepsForTest(null);
+    setRealtimeVoiceAgentConsultDepsForTest(null);
   });
 
   it("exposes the shared consult tool based on policy", () => {
@@ -238,7 +270,7 @@ describe("realtime voice agent consult runtime", () => {
       sessionId: "forked-session",
       sessionFile: "/tmp/forked.jsonl",
     }));
-    __setRealtimeVoiceAgentConsultDepsForTest({
+    setRealtimeVoiceAgentConsultDepsForTest({
       resolveParentForkDecision,
       forkSessionFromParent,
     });

@@ -59,8 +59,8 @@ function registerPlugCommand(params: PlugCommandHarnessParams = {}) {
   registerTelegramNativeCommands({
     ...createNativeCommandTestParams(params.cfg ?? {}, {
       bot: botHarness.bot,
-      ...params.registerOverrides,
     }),
+    ...params.registerOverrides,
   });
   const handler = botHarness.commandHandlers.get("plug");
   if (!handler) {
@@ -371,6 +371,7 @@ describe("registerTelegramNativeCommands", () => {
   });
 
   it("passes agent-scoped media roots for plugin command replies with media", async () => {
+    const mediaMaxBytes = 50 * 1024 * 1024;
     const cfg: OpenClawConfig = {
       agents: {
         list: [{ id: "main", default: true }, { id: "work" }],
@@ -384,11 +385,15 @@ describe("registerTelegramNativeCommands", () => {
         text: "with media",
         mediaUrl: "/tmp/workspace-work/render.png",
       },
+      registerOverrides: {
+        mediaMaxBytes,
+      } as Partial<Parameters<typeof registerTelegramNativeCommands>[0]>,
     });
 
     await handler(createPrivateCommandContext());
 
     const deliverParams = firstDeliverRepliesParams();
+    expect(deliverParams.mediaMaxBytes).toBe(mediaMaxBytes);
     const mediaLocalRoots = deliverParams.mediaLocalRoots as Array<string> | undefined;
     expect(mediaLocalRoots?.some((root) => /[\\/]\.openclaw[\\/]workspace-work$/.test(root))).toBe(
       true,
@@ -541,6 +546,37 @@ describe("registerTelegramNativeCommands", () => {
     expect(editMessageTelegram).not.toHaveBeenCalled();
     expect(deleteMessage).toHaveBeenCalledWith(100, 999);
     expect(replyAt(firstDeliverRepliesParams()).mediaUrl).toBe("/tmp/render.png");
+  });
+
+  it("falls back to a normal reply when a progress result has presentation controls", async () => {
+    const presentation = {
+      blocks: [
+        {
+          kind: "actions",
+          buttons: [{ label: "Approve", action: { type: "command", value: "/approve yes" } }],
+        },
+      ],
+    };
+    const { handler, sendMessage, deleteMessage } = registerPlugCommand({
+      args: "now",
+      command: {
+        nativeProgressMessages: { telegram: "Working on it..." },
+      },
+      result: {
+        text: "Approval required",
+        presentation,
+      },
+    });
+
+    await handler(createPrivateCommandContext({ match: "now" }));
+
+    expect(sendMessage).toHaveBeenCalledWith(100, "Working on it...", undefined);
+    expect(editMessageTelegram).not.toHaveBeenCalled();
+    expect(deleteMessage).toHaveBeenCalledWith(100, 999);
+    expect(replyAt(firstDeliverRepliesParams())).toMatchObject({
+      text: "Approval required",
+      presentation,
+    });
   });
 
   it("cleans up the progress placeholder before falling back after an edit failure", async () => {

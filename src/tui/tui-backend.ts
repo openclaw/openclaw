@@ -1,4 +1,6 @@
 import type {
+  CommandEntry,
+  CommandsListParams,
   SessionsListParams,
   SessionsPatchParams,
   SessionsPatchResult,
@@ -119,7 +121,7 @@ export type TuiBackend = {
   onDisconnected?: (reason: string) => void;
   onGap?: (info: { expected: number; received: number }) => void;
   start: () => void;
-  stop: () => void;
+  stop: () => void | Promise<void>;
   sendChat: (opts: ChatSendOptions) => Promise<{ runId: string }>;
   abortChat: (opts: {
     sessionKey: string;
@@ -132,9 +134,5 @@ export type TuiBackend = {
   resetSession: (key: string, reason?: "new" | "reset") => Promise<unknown>;
   getGatewayStatus: () => Promise<unknown>;
   listModels: () => Promise<TuiModelChoice[]>;
-  listExperimentalFlags?: () => Promise<TuiExperimentalFlagState[]>;
-  setExperimentalFlag?: (opts: {
-    path: string;
-    value: boolean;
-  }) => Promise<TuiExperimentalFlagUpdate>;
+  listCommands?: (opts?: CommandsListParams) => Promise<CommandEntry[]>;
 };

@@ -26,11 +26,17 @@ export function buildMicrosoftFoundryProvider(): ProviderPlugin {
     auth: [entraIdAuthMethod, apiKeyAuthMethod],
     onModelSelected: async (ctx) => {
       const providerConfig = ctx.config.models?.providers?.[PROVIDER_ID];
-      if (!providerConfig || !ctx.model.startsWith(`${PROVIDER_ID}/`)) {
+      if (
+        !providerConfig ||
+        !providerConfig.baseUrl?.trim() ||
+        !Array.isArray(providerConfig.models) ||
+        !ctx.model.startsWith(`${PROVIDER_ID}/`)
+      ) {
         return;
       }
       const selectedModelId = ctx.model.slice(`${PROVIDER_ID}/`.length);
-      const existingModel = providerConfig.models.find(
+      const configuredModels = providerConfig.models ?? [];
+      const existingModel = configuredModels.find(
         (model: { id: string }) => model.id === selectedModelId,
       );
       const selectedModelCapabilities = resolveFoundryModelCapabilities(
@@ -45,19 +51,20 @@ export function buildMicrosoftFoundryProvider(): ProviderPlugin {
       const selectedModelApi = isFoundryProviderApi(existingModel?.api)
         ? existingModel.api
         : providerConfig.api;
-      const nextModels = providerConfig.models.map((model) =>
-        model.id === selectedModelId
-          ? {
-              ...model,
-              name: selectedModelCapabilities.modelName,
-              api: selectedModelCapabilities.api,
-              input: selectedModelCapabilities.input,
-              ...(selectedModelCapabilities.compat
-                ? { compat: selectedModelCapabilities.compat }
-                : {}),
-            }
-          : model,
-      );
+      const nextModels = configuredModels.map((model) => {
+        if (model.id !== selectedModelId) {
+          return model;
+        }
+        const nextModel = Object.assign({}, model, {
+          name: selectedModelCapabilities.modelName,
+          api: selectedModelCapabilities.api,
+          input: selectedModelCapabilities.input,
+        });
+        if (selectedModelCapabilities.compat) {
+          nextModel.compat = selectedModelCapabilities.compat;
+        }
+        return nextModel;
+      });
       if (!nextModels.some((model) => model.id === selectedModelId)) {
         nextModels.push({
           id: selectedModelId,

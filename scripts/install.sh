@@ -18,7 +18,7 @@ NC='\033[0m' # No Color
 DEFAULT_TAGLINE="All your chats, one OpenClaw."
 NODE_DEFAULT_MAJOR=24
 NODE_MIN_MAJOR=22
-NODE_MIN_MINOR=14
+NODE_MIN_MINOR=19
 NODE_MIN_VERSION="${NODE_MIN_MAJOR}.${NODE_MIN_MINOR}"
 
 ORIGINAL_PATH="${PATH:-}"
@@ -90,6 +90,16 @@ is_non_interactive_shell() {
     return 1
 }
 
+has_controlling_tty() {
+    if [[ ! -r /dev/tty || ! -w /dev/tty ]]; then
+        return 1
+    fi
+    if ! { : </dev/tty; } 2>/dev/null; then
+        return 1
+    fi
+    return 0
+}
+
 gum_is_tty() {
     if [[ -n "${NO_COLOR:-}" ]]; then
         return 1
@@ -100,7 +110,7 @@ gum_is_tty() {
     if [[ -t 2 || -t 1 ]]; then
         return 0
     fi
-    if [[ -r /dev/tty && -w /dev/tty ]]; then
+    if has_controlling_tty; then
         return 0
     fi
     return 1
@@ -713,12 +723,23 @@ run_npm_global_install() {
     local spec="$1"
     local log="$2"
 
+    local freshness_flag="--min-release-age=0"
+    local min_release_age=""
+    min_release_age="$(env -u NPM_CONFIG_BEFORE -u npm_config_before npm config get min-release-age 2>/dev/null || true)"
+    if [[ -z "$min_release_age" || "$min_release_age" == "null" || "$min_release_age" == "undefined" ]]; then
+        local before_value=""
+        before_value="$(env -u NPM_CONFIG_MIN_RELEASE_AGE -u npm_config_min_release_age -u npm_config_min-release-age npm config get before 2>/dev/null || true)"
+        if [[ -n "$before_value" && "$before_value" != "null" && "$before_value" != "undefined" ]]; then
+            freshness_flag="--before=$(date -u '+%Y-%m-%dT%H:%M:%S.000Z')"
+        fi
+    fi
+
     local -a cmd
-    cmd=(env "SHARP_IGNORE_GLOBAL_LIBVIPS=$SHARP_IGNORE_GLOBAL_LIBVIPS" npm --loglevel "$NPM_LOGLEVEL")
+    cmd=(env -u NPM_CONFIG_BEFORE -u npm_config_before -u NPM_CONFIG_MIN_RELEASE_AGE -u npm_config_min_release_age -u npm_config_min-release-age "SHARP_IGNORE_GLOBAL_LIBVIPS=$SHARP_IGNORE_GLOBAL_LIBVIPS" npm --loglevel "$NPM_LOGLEVEL")
     if [[ -n "$NPM_SILENT_FLAG" ]]; then
         cmd+=("$NPM_SILENT_FLAG")
     fi
-    cmd+=(--no-fund --no-audit install -g "$spec")
+    cmd+=(--no-fund --no-audit "$freshness_flag" install -g "$spec")
     local cmd_display=""
     printf -v cmd_display '%q ' "${cmd[@]}"
     LAST_NPM_INSTALL_CMD="${cmd_display% }"
@@ -1026,7 +1047,7 @@ Options:
   --install-method, --method npm|git   Install via npm (default) or from a git checkout
   --npm                               Shortcut for --install-method npm
   --git, --github                     Shortcut for --install-method git
-  --version <version|dist-tag|spec>    npm install target (default: latest; use "main" for GitHub main)
+  --version <version|dist-tag|spec>    npm install target (default: latest)
   --beta                               Use beta if available, else latest
   --git-dir, --dir <path>             Checkout directory (default: ~/openclaw)
   --no-git-update                      Skip git pull for existing checkout
@@ -1039,7 +1060,7 @@ Options:
 
 Environment variables:
   OPENCLAW_INSTALL_METHOD=git|npm
-  OPENCLAW_VERSION=latest|next|main|<semver>|<spec>
+  OPENCLAW_VERSION=latest|next|<semver>|<spec>
   OPENCLAW_BETA=0|1
   OPENCLAW_GIT_DIR=...
   OPENCLAW_GIT_UPDATE=0|1
@@ -1055,7 +1076,7 @@ Examples:
   curl -fsSL --proto '=https' --tlsv1.2 https://openclaw.ai/install.sh | bash
   curl -fsSL --proto '=https' --tlsv1.2 https://openclaw.ai/install.sh | bash -s -- --no-onboard
   curl -fsSL --proto '=https' --tlsv1.2 https://openclaw.ai/install.sh | bash -s -- --no-onboard --verify
-  curl -fsSL --proto '=https' --tlsv1.2 https://openclaw.ai/install.sh | bash -s -- --version main
+  curl -fsSL --proto '=https' --tlsv1.2 https://openclaw.ai/install.sh | bash -s -- --install-method git --version main
   curl -fsSL --proto '=https' --tlsv1.2 https://openclaw.ai/install.sh | bash -s -- --install-method git --no-onboard
 EOF
 }
@@ -1141,7 +1162,7 @@ is_promptable() {
     if [[ "$NO_PROMPT" == "1" ]]; then
         return 1
     fi
-    if [[ -r /dev/tty && -w /dev/tty ]]; then
+    if has_controlling_tty; then
         return 0
     fi
     return 1
@@ -2423,6 +2444,23 @@ is_explicit_package_install_spec() {
     [[ "$value" == *"://"* || "$value" == *"#"* || "$value" =~ ^(file|github|git\+ssh|git\+https|git\+http|git\+file|npm): ]]
 }
 
+is_openclaw_source_package_install_spec() {
+    local value="${1:-}"
+    local normalized_value=""
+    normalized_value="$(to_lowercase_ascii "$value")"
+    normalized_value="${normalized_value#openclaw@}"
+
+    [[ "$normalized_value" == "main" ]] && return 0
+    [[ "$normalized_value" =~ ^github:openclaw/openclaw($|[#/]) ]] && return 0
+
+    normalized_value="${normalized_value#git+}"
+    [[ "$normalized_value" =~ ^https?://github\.com/openclaw/openclaw(\.git)?($|[?#]) ]] && return 0
+    [[ "$normalized_value" =~ ^ssh://git@github\.com[:/]openclaw/openclaw(\.git)?($|[?#]) ]] && return 0
+    [[ "$normalized_value" =~ ^git://github\.com/openclaw/openclaw(\.git)?($|[?#]) ]] && return 0
+    [[ "$normalized_value" =~ ^git@github\.com:openclaw/openclaw(\.git)?($|[?#]) ]] && return 0
+    return 1
+}
+
 can_resolve_registry_package_version() {
     local value="${1:-}"
     local normalized_value=""
@@ -2476,6 +2514,12 @@ install_openclaw() {
 
     if [[ -z "${OPENCLAW_VERSION}" ]]; then
         OPENCLAW_VERSION="latest"
+    fi
+
+    if is_openclaw_source_package_install_spec "${OPENCLAW_VERSION}"; then
+        ui_error "npm installs do not support OpenClaw GitHub source targets like '${OPENCLAW_VERSION}'."
+        ui_info "Use --install-method git --version main for the moving main checkout, or use latest, beta, an exact version, or a built .tgz package."
+        return 1
     fi
 
     local resolved_version=""
@@ -2566,7 +2610,7 @@ run_bootstrap_onboarding_if_needed() {
         return
     fi
 
-    if [[ ! -r /dev/tty || ! -w /dev/tty ]]; then
+    if ! is_promptable; then
         local user_claw
         user_claw="$(openclaw_command_for_user "${OPENCLAW_BIN:-}")"
         ui_info "BOOTSTRAP.md found but no TTY; run ${user_claw} onboard to finish setup"
@@ -2951,7 +2995,7 @@ main() {
         ui_kv "Switch to npm" "curl -fsSL --proto '=https' --tlsv1.2 https://openclaw.ai/install.sh | bash -s -- --install-method npm"
     elif [[ "$is_upgrade" == "true" ]]; then
         ui_info "Upgrade complete"
-        if [[ -r /dev/tty && -w /dev/tty ]]; then
+        if has_controlling_tty || [[ "$NO_ONBOARD" == "1" || "$NO_PROMPT" == "1" ]]; then
             local claw="${OPENCLAW_BIN:-}"
             if [[ -z "$claw" ]]; then
                 claw="$(resolve_openclaw_bin || true)"
@@ -2999,7 +3043,7 @@ main() {
             fi
             ui_info "Starting setup"
             echo ""
-            if [[ -r /dev/tty && -w /dev/tty ]]; then
+            if is_promptable; then
                 local claw="${OPENCLAW_BIN:-}"
                 if [[ -z "$claw" ]]; then
                     claw="$(resolve_openclaw_bin || true)"

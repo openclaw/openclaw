@@ -16,9 +16,13 @@ on:
         required: false
         type: string
       ref:
-        description: Commit SHA on main or a release branch to publish from; defaults to the workflow ref
+        description: Commit SHA on main, a release branch, or the matching Tideclaw alpha branch to publish from; defaults to the workflow ref
         required: false
         default: ""
+        type: string
+      release_publish_run_id:
+        description: Approved OpenClaw Release Publish workflow run id
+        required: false
         type: string
 
 concurrency:
@@ -28,7 +32,6 @@ concurrency:
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
   NODE_VERSION: "24.15.0"
-  PNPM_VERSION: "11.0.8"
   CLAWHUB_REGISTRY: "https://clawhub.ai"
   CLAWHUB_REPOSITORY: "openclaw/clawhub"
   # Pinned to a reviewed ClawHub commit so release behavior stays reproducible.
@@ -57,7 +60,6 @@ jobs:
         uses: ./.github/actions/setup-node-env
         with:
           node-version: ${{ env.NODE_VERSION }}
-          pnpm-version: ${{ env.PNPM_VERSION }}
           install-bun: "false"
 
       - name: Resolve checked-out ref
@@ -82,7 +84,9 @@ jobs:
           fi
           echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
-      - name: Validate ref is on main or a release branch
+      - name: Validate ref is on a trusted publish branch
+        env:
+          WORKFLOW_REF: ${{ github.ref }}
         run: |
           set -euo pipefail
           if git merge-base --is-ancestor HEAD origin/main; then
@@ -93,7 +97,14 @@ jobs:
               exit 0
             fi
           done < <(git for-each-ref --format='%(refname)' refs/remotes/origin/release)
-          echo "Plugin ClawHub publishes must target a commit reachable from main or release/*." >&2
+          if [[ "${WORKFLOW_REF}" =~ ^refs/heads/tideclaw/alpha/[0-9]{4}-[0-9]{2}-[0-9]{2}-[0-9]{4}Z$ ]]; then
+            alpha_branch="${WORKFLOW_REF#refs/heads/}"
+            git fetch --no-tags origin "+refs/heads/${alpha_branch}:refs/remotes/origin/${alpha_branch}"
+            if git merge-base --is-ancestor HEAD "refs/remotes/origin/${alpha_branch}"; then
+              exit 0
+            fi
+          fi
+          echo "Plugin ClawHub publishes must target a commit reachable from main, release/*, or the matching Tideclaw alpha branch." >&2
           exit 1
 
       - name: Validate publishable plugin metadata
@@ -168,11 +179,55 @@ jobs:
           echo "::error::One or more selected plugin versions already exist on ClawHub. Bump the version before running a real publish."
           exit 1
 
+      - name: Validate Tideclaw alpha plugin channels
+        if: startsWith(github.ref, 'refs/heads/tideclaw/alpha/')
+        run: |
+          set -euo pipefail
+          invalid="$(
+            jq -r '.candidates[]? | select(.publishTag != "alpha" or .channel != "alpha") | "- \(.packageName)@\(.version) [\(.publishTag)]"' .local/plugin-clawhub-release-plan.json
+          )"
+          if [[ -n "${invalid}" ]]; then
+            echo "Tideclaw alpha ClawHub publishes may only publish alpha plugin versions." >&2
+            printf '%s\n' "${invalid}" >&2
+            exit 1
+          fi
+
       - name: Verify OpenClaw ClawHub package ownership
         if: steps.plan.outputs.has_candidates == 'true'
         env:
           CLAWHUB_REGISTRY: ${{ env.CLAWHUB_REGISTRY }}
         run: node --import tsx scripts/plugin-clawhub-owner-preflight.ts .local/plugin-clawhub-release-plan.json
+
+  validate_release_publish_approval:
+    name: Validate release publish approval
+    needs: preview_plugins_clawhub
+    if: github.event_name == 'workflow_dispatch' && needs.preview_plugins_clawhub.outputs.has_candidates == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
+    steps:
+      - name: Validate release publish approval run
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_PUBLISH_RUN_ID: ${{ inputs.release_publish_run_id }}
+          EXPECTED_WORKFLOW_BRANCH: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          if [[ -z "${RELEASE_PUBLISH_RUN_ID// }" ]]; then
+            if [[ "${GITHUB_ACTOR}" == "github-actions[bot]" ]]; then
+              echo "Plugin ClawHub publish dispatched by another workflow must include release_publish_run_id." >&2
+              exit 1
+            fi
+            echo "Direct Plugin ClawHub Release dispatch; relying on this workflow's clawhub-plugin-release environment approval."
+            exit 0
+          fi
+          if [[ "${GITHUB_ACTOR}" != "github-actions[bot]" ]]; then
+            echo "Plugin ClawHub publish must be dispatched by the OpenClaw Release Publish workflow, not directly by ${GITHUB_ACTOR}." >&2
+            exit 1
+          fi
+          RUN_JSON="$(gh run view "$RELEASE_PUBLISH_RUN_ID" --repo "$GITHUB_REPOSITORY" --json workflowName,headBranch,event,status,conclusion,url)"
+          printf '%s' "$RUN_JSON" | node -e 'const fs = require("node:fs"); const run = JSON.parse(fs.readFileSync(0, "utf8")); const checks = [["workflowName", "OpenClaw Release Publish"], ["headBranch", process.env.EXPECTED_WORKFLOW_BRANCH], ["event", "workflow_dispatch"]]; for (const [key, expected] of checks) { if (run[key] !== expected) { console.error(`Referenced release publish run ${process.env.RELEASE_PUBLISH_RUN_ID} must have ${key}=${expected}, got ${run[key] ?? "<missing>"}.`); process.exit(1); } } if (run.status !== "in_progress") { console.error(`Referenced release publish run ${process.env.RELEASE_PUBLISH_RUN_ID} must still be in_progress, got ${run.status ?? "<missing>"}.`); process.exit(1); } if (run.conclusion) { console.error(`Referenced release publish run ${process.env.RELEASE_PUBLISH_RUN_ID} already concluded ${run.conclusion}.`); process.exit(1); } console.log(`Using release publish approval run ${process.env.RELEASE_PUBLISH_RUN_ID}: ${run.url}`);'
 
   preview_plugin_pack:
     needs: preview_plugins_clawhub
@@ -207,7 +262,6 @@ jobs:
         uses: ./.github/actions/setup-node-env
         with:
           node-version: ${{ env.NODE_VERSION }}
-          pnpm-version: ${{ env.PNPM_VERSION }}
           install-bun: "true"
           install-deps: "true"
 
@@ -267,11 +321,12 @@ jobs:
         run: bash scripts/plugin-clawhub-publish.sh --dry-run "${PACKAGE_DIR}"
 
   publish_plugins_clawhub:
-    needs: [preview_plugins_clawhub, preview_plugin_pack]
+    needs: [preview_plugins_clawhub, preview_plugin_pack, validate_release_publish_approval]
     if: github.event_name == 'workflow_dispatch' && needs.preview_plugins_clawhub.outputs.has_candidates == 'true'
     runs-on: ubuntu-latest
     environment: clawhub-plugin-release
     permissions:
+      actions: read
       contents: read
       id-token: write
     strategy:
@@ -301,7 +356,6 @@ jobs:
         uses: ./.github/actions/setup-node-env
         with:
           node-version: ${{ env.NODE_VERSION }}
-          pnpm-version: ${{ env.PNPM_VERSION }}
           install-bun: "true"
           install-deps: "true"
 

@@ -701,6 +701,71 @@ describe("managed npm root", () => {
     });
   });
 
+  it("does not promote nested bundled peer ranges without a root peer package", async () => {
+    const npmRoot = await makeTempRoot();
+    await fs.writeFile(
+      path.join(npmRoot, "package.json"),
+      `${JSON.stringify(
+        {
+          private: true,
+          dependencies: {
+            plugin: "file:./plugin.tgz",
+          },
+        },
+        null,
+        2,
+      )}\n`,
+    );
+
+    const runCommand = vi.fn(async (_args: string[], optionsOrTimeout: number | CommandOptions) => {
+      const options = requireCommandOptions(optionsOrTimeout, "npm peer plan");
+      if (!options.cwd) {
+        throw new Error("expected npm peer plan cwd");
+      }
+      await fs.writeFile(
+        path.join(options.cwd, "package-lock.json"),
+        `${JSON.stringify(
+          {
+            lockfileVersion: 3,
+            packages: {
+              "": {
+                dependencies: {
+                  plugin: "file:./plugin.tgz",
+                },
+              },
+              "node_modules/plugin": {
+                version: "1.0.0",
+              },
+              "node_modules/plugin/node_modules/runtime-lib": {
+                peerDependencies: {
+                  zod: "^4.0.0",
+                },
+                version: "1.0.0",
+              },
+              "node_modules/plugin/node_modules/zod": {
+                version: "4.4.3",
+              },
+            },
+          },
+          null,
+          2,
+        )}\n`,
+      );
+      return successfulSpawn;
+    });
+
+    await expect(syncManagedNpmRootPeerDependencies({ npmRoot, runCommand })).resolves.toBe(false);
+
+    await expect(
+      fs.readFile(path.join(npmRoot, "package.json"), "utf8").then((raw) => JSON.parse(raw)),
+    ).resolves.toEqual({
+      private: true,
+      dependencies: {
+        plugin: "file:./plugin.tgz",
+      },
+    });
+  });
+
   it("removes one managed dependency without dropping unrelated metadata", async () => {
     const npmRoot = await makeTempRoot();
     await fs.writeFile(
@@ -918,5 +983,121 @@ describe("managed npm root", () => {
     await expect(
       fs.readFile(path.join(hostPackageRoot, "package.json"), "utf8"),
     ).resolves.toContain("2026.5.12-beta.6");
+  });
+
+  it("scrubs managed ownership metadata without deleting a linked active host package", async () => {
+    const npmRoot = await makeTempRoot();
+    const hostPackageRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-host-package-"));
+    tempDirs.push(hostPackageRoot);
+    await fs.mkdir(path.join(npmRoot, "node_modules", ".bin"), { recursive: true });
+    await fs.writeFile(
+      path.join(hostPackageRoot, "package.json"),
+      `${JSON.stringify({ name: "openclaw", version: "2026.5.12-beta.6" })}\n`,
+    );
+    await fs.symlink(hostPackageRoot, path.join(npmRoot, "node_modules", "openclaw"), "dir");
+    await fs.writeFile(path.join(npmRoot, "node_modules", ".bin", "openclaw"), "shim");
+    await fs.writeFile(path.join(npmRoot, "node_modules", ".bin", "openclaw.cmd"), "cmd shim");
+    await fs.writeFile(path.join(npmRoot, "node_modules", ".bin", "openclaw.ps1"), "ps1 shim");
+    await fs.writeFile(
+      path.join(npmRoot, "node_modules", ".package-lock.json"),
+      `${JSON.stringify(
+        {
+          lockfileVersion: 3,
+          packages: {
+            "node_modules/openclaw": {
+              version: "2026.5.12-beta.6",
+            },
+          },
+        },
+        null,
+        2,
+      )}\n`,
+    );
+    await fs.writeFile(
+      path.join(npmRoot, "package.json"),
+      `${JSON.stringify(
+        {
+          private: true,
+          dependencies: {
+            openclaw: "2026.5.12-beta.6",
+            "@xdarkicex/openclaw-memory-libravdb": "1.4.69",
+          },
+        },
+        null,
+        2,
+      )}\n`,
+    );
+    await fs.writeFile(
+      path.join(npmRoot, "package-lock.json"),
+      `${JSON.stringify(
+        {
+          lockfileVersion: 3,
+          packages: {
+            "": {
+              dependencies: {
+                openclaw: "2026.5.12-beta.6",
+                "@xdarkicex/openclaw-memory-libravdb": "1.4.69",
+              },
+            },
+            "node_modules/openclaw": {
+              version: "2026.5.12-beta.6",
+            },
+            "node_modules/@xdarkicex/openclaw-memory-libravdb": {
+              version: "1.4.69",
+            },
+          },
+          dependencies: {
+            openclaw: {
+              version: "2026.5.12-beta.6",
+            },
+          },
+        },
+        null,
+        2,
+      )}\n`,
+    );
+
+    const runCommand = vi.fn().mockResolvedValue(successfulSpawn);
+    await expect(
+      repairManagedNpmRootOpenClawPeer({
+        npmRoot,
+        packageRoot: hostPackageRoot,
+        runCommand,
+      }),
+    ).resolves.toBe(true);
+
+    expect(runCommand).not.toHaveBeenCalled();
+    await expect(fs.realpath(path.join(npmRoot, "node_modules", "openclaw"))).resolves.toBe(
+      await fs.realpath(hostPackageRoot),
+    );
+    await expect(
+      fs.readFile(path.join(hostPackageRoot, "package.json"), "utf8"),
+    ).resolves.toContain("2026.5.12-beta.6");
+
+    const manifest = JSON.parse(await fs.readFile(path.join(npmRoot, "package.json"), "utf8")) as {
+      dependencies?: Record<string, string>;
+    };
+    expect(manifest.dependencies).toEqual({
+      "@xdarkicex/openclaw-memory-libravdb": "1.4.69",
+    });
+
+    const lockfile = JSON.parse(
+      await fs.readFile(path.join(npmRoot, "package-lock.json"), "utf8"),
+    ) as {
+      packages?: Record<string, { dependencies?: Record<string, string>; version?: string }>;
+      dependencies?: Record<string, unknown>;
+    };
+    expect(lockfile.packages?.[""]?.dependencies).toEqual({
+      "@xdarkicex/openclaw-memory-libravdb": "1.4.69",
+    });
+    expect(lockfile.packages?.["node_modules/openclaw"]).toBeUndefined();
+    expect(lockfile.packages?.["node_modules/@xdarkicex/openclaw-memory-libravdb"]?.version).toBe(
+      "1.4.69",
+    );
+    expect(lockfile.dependencies?.openclaw).toBeUndefined();
+    for (const binName of ["openclaw", "openclaw.cmd", "openclaw.ps1"]) {
+      await expectPathMissing(path.join(npmRoot, "node_modules", ".bin", binName));
+    }
+    await expectPathMissing(path.join(npmRoot, "node_modules", ".package-lock.json"));
   });
 });

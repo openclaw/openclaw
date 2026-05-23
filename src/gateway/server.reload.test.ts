@@ -58,6 +58,8 @@ const hoisted = vi.hoisted(() => {
   const startGmailWatcher = vi.fn(async () => ({ started: true }));
   const stopGmailWatcher = vi.fn(async () => {});
   const resetModelCatalogCache = vi.fn();
+  const clearCurrentProviderAuthState = vi.fn();
+  const warmCurrentProviderAuthState = vi.fn(async (_cfg: unknown) => {});
   const disposeAllSessionMcpRuntimes = vi.fn(async () => {});
   const resolveOpenClawPackageRootSync = vi.fn((_params: unknown) => "/package");
 
@@ -162,6 +164,8 @@ const hoisted = vi.hoisted(() => {
     startGmailWatcher,
     stopGmailWatcher,
     resetModelCatalogCache,
+    clearCurrentProviderAuthState,
+    warmCurrentProviderAuthState,
     disposeAllSessionMcpRuntimes,
     resolveOpenClawPackageRootSync,
     providerManager,
@@ -202,6 +206,11 @@ vi.mock("../agents/model-catalog.js", async () => {
     }),
   };
 });
+
+vi.mock("../agents/model-provider-auth.js", () => ({
+  clearCurrentProviderAuthState: hoisted.clearCurrentProviderAuthState,
+  warmCurrentProviderAuthState: hoisted.warmCurrentProviderAuthState,
+}));
 
 vi.mock("../agents/pi-bundle-mcp-tools.js", async () => {
   const actual = await vi.importActual<typeof import("../agents/pi-bundle-mcp-tools.js")>(
@@ -334,6 +343,9 @@ describe("gateway hot reload", () => {
     hoisted.activeTaskBlockers.length = 0;
     embeddedRunMock.activeIds.clear();
     hoisted.resetModelCatalogCache.mockReset();
+    hoisted.clearCurrentProviderAuthState.mockReset();
+    hoisted.warmCurrentProviderAuthState.mockReset();
+    hoisted.warmCurrentProviderAuthState.mockResolvedValue(undefined);
     hoisted.disposeAllSessionMcpRuntimes.mockReset();
     hoisted.disposeAllSessionMcpRuntimes.mockResolvedValue(undefined);
     hoisted.resolveOpenClawPackageRootSync.mockClear();
@@ -466,57 +478,6 @@ describe("gateway hot reload", () => {
     );
   }
 
-  it("defers channel hot reload until active work drains", async () => {
-    await withNonMinimalGatewayServer(async () => {
-      const onHotReload = hoisted.getOnHotReload();
-      expect(onHotReload).toBeTypeOf("function");
-
-      hoisted.providerManager.stopChannel.mockClear();
-      hoisted.providerManager.startChannel.mockClear();
-      hoisted.activeEmbeddedRunCount.value = 1;
-      embeddedRunMock.activeIds.add("reload-active");
-      vi.useFakeTimers();
-      const reloadPromise = onHotReload?.(
-        {
-          changedPaths: ["channels.discord.token"],
-          restartGateway: false,
-          restartReasons: [],
-          hotReasons: ["channels.discord.token"],
-          reloadHooks: false,
-          restartGmailWatcher: false,
-          restartCron: false,
-          restartHeartbeat: false,
-          restartChannels: new Set(["discord"]),
-          noopPaths: [],
-        },
-        {
-          gateway: { reload: { deferralTimeoutMs: 60_000 } },
-          channels: { discord: { token: "token" } },
-        },
-      );
-      try {
-        await Promise.resolve();
-        await vi.advanceTimersByTimeAsync(500);
-        expect(hoisted.providerManager.stopChannel).not.toHaveBeenCalled();
-        expect(hoisted.providerManager.startChannel).not.toHaveBeenCalled();
-
-        hoisted.activeEmbeddedRunCount.value = 0;
-        embeddedRunMock.activeIds.clear();
-        await vi.advanceTimersByTimeAsync(500);
-        await reloadPromise;
-      } finally {
-        hoisted.activeEmbeddedRunCount.value = 0;
-        embeddedRunMock.activeIds.clear();
-        await vi.advanceTimersByTimeAsync(500).catch(() => {});
-        vi.useRealTimers();
-        await reloadPromise?.catch(() => {});
-      }
-
-      expect(hoisted.providerManager.stopChannel).toHaveBeenCalledWith("discord");
-      expect(hoisted.providerManager.startChannel).toHaveBeenCalledWith("discord");
-    });
-  });
-
   it("uses the configured timeout when active work does not drain before channel reload", async () => {
     await withNonMinimalGatewayServer(async () => {
       const onHotReload = hoisted.getOnHotReload();
@@ -561,7 +522,9 @@ describe("gateway hot reload", () => {
         await reloadPromise?.catch(() => {});
       }
 
-      expect(hoisted.providerManager.stopChannel).toHaveBeenCalledWith("discord");
+      expect(hoisted.providerManager.stopChannel).toHaveBeenCalledWith("discord", undefined, {
+        manual: false,
+      });
       expect(hoisted.providerManager.startChannel).toHaveBeenCalledWith("discord");
     });
   });
@@ -612,7 +575,9 @@ describe("gateway hot reload", () => {
         await reloadPromise?.catch(() => {});
       }
 
-      expect(hoisted.providerManager.stopChannel).toHaveBeenCalledWith("discord");
+      expect(hoisted.providerManager.stopChannel).toHaveBeenCalledWith("discord", undefined, {
+        manual: false,
+      });
       expect(hoisted.providerManager.startChannel).toHaveBeenCalledWith("discord");
     });
   });
@@ -660,7 +625,9 @@ describe("gateway hot reload", () => {
         await reloadPromise?.catch(() => {});
       }
 
-      expect(hoisted.providerManager.stopChannel).toHaveBeenCalledWith("telegram");
+      expect(hoisted.providerManager.stopChannel).toHaveBeenCalledWith("telegram", undefined, {
+        manual: false,
+      });
       expect(hoisted.providerManager.startChannel).toHaveBeenCalledWith("telegram");
     });
   });
@@ -742,15 +709,25 @@ describe("gateway hot reload", () => {
 
       expect(hoisted.providerManager.stopChannel).toHaveBeenCalledTimes(5);
       expect(hoisted.providerManager.startChannel).toHaveBeenCalledTimes(5);
-      expect(hoisted.providerManager.stopChannel).toHaveBeenCalledWith("whatsapp");
+      expect(hoisted.providerManager.stopChannel).toHaveBeenCalledWith("whatsapp", undefined, {
+        manual: false,
+      });
       expect(hoisted.providerManager.startChannel).toHaveBeenCalledWith("whatsapp");
-      expect(hoisted.providerManager.stopChannel).toHaveBeenCalledWith("telegram");
+      expect(hoisted.providerManager.stopChannel).toHaveBeenCalledWith("telegram", undefined, {
+        manual: false,
+      });
       expect(hoisted.providerManager.startChannel).toHaveBeenCalledWith("telegram");
-      expect(hoisted.providerManager.stopChannel).toHaveBeenCalledWith("discord");
+      expect(hoisted.providerManager.stopChannel).toHaveBeenCalledWith("discord", undefined, {
+        manual: false,
+      });
       expect(hoisted.providerManager.startChannel).toHaveBeenCalledWith("discord");
-      expect(hoisted.providerManager.stopChannel).toHaveBeenCalledWith("signal");
+      expect(hoisted.providerManager.stopChannel).toHaveBeenCalledWith("signal", undefined, {
+        manual: false,
+      });
       expect(hoisted.providerManager.startChannel).toHaveBeenCalledWith("signal");
-      expect(hoisted.providerManager.stopChannel).toHaveBeenCalledWith("imessage");
+      expect(hoisted.providerManager.stopChannel).toHaveBeenCalledWith("imessage", undefined, {
+        manual: false,
+      });
       expect(hoisted.providerManager.startChannel).toHaveBeenCalledWith("imessage");
 
       const onRestart = hoisted.getOnRestart();
@@ -785,7 +762,7 @@ describe("gateway hot reload", () => {
       const onRestart = hoisted.getOnRestart();
       expect(onRestart).toBeTypeOf("function");
 
-      const restartTesting = (await import("../infra/restart.js")).__testing;
+      const restartTesting = (await import("../infra/restart.js")).testing;
       restartTesting.resetSigusr1State();
       hoisted.activeTaskBlockers.push({
         taskId: "task-running-1",

@@ -1,7 +1,9 @@
-import { readdirSync, readFileSync } from "node:fs";
+import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
+import { expectNoReaddirSyncDuring } from "../../test-utils/fs-scan-assertions.js";
+import { listGitTrackedFiles } from "../../test-utils/repo-files.js";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
 
@@ -69,12 +71,32 @@ const skippedExtensionScanDirs = new Set([
 ]);
 
 function readRepoFile(relativePath: string): string {
-  return readFileSync(path.join(repoRoot, ...relativePath.split("/")), "utf8");
+  return fs.readFileSync(path.join(repoRoot, ...relativePath.split("/")), "utf8");
+}
+
+function isScannableTsFile(relativePath: string): boolean {
+  const parts = relativePath.split("/");
+  return (
+    !parts.some((part) => skippedExtensionScanDirs.has(part)) &&
+    relativePath.endsWith(".ts") &&
+    !relativePath.endsWith(".d.ts")
+  );
+}
+
+function listGitTsFiles(relativeDir: string): string[] | null {
+  return (
+    listGitTrackedFiles({ repoRoot, pathspecs: relativeDir })?.filter(isScannableTsFile) ?? null
+  );
 }
 
 function listTsFiles(relativeDir: string): string[] {
+  const gitFiles = listGitTsFiles(relativeDir);
+  if (gitFiles) {
+    return gitFiles;
+  }
+
   const dir = path.join(repoRoot, ...relativeDir.split("/"));
-  return readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
+  return fs.readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
     const relativePath = path.posix.join(relativeDir, entry.name);
     if (entry.isDirectory()) {
       if (skippedExtensionScanDirs.has(entry.name)) {
@@ -82,7 +104,7 @@ function listTsFiles(relativeDir: string): string[] {
       }
       return listTsFiles(relativePath);
     }
-    if (!entry.isFile() || !entry.name.endsWith(".ts") || entry.name.endsWith(".d.ts")) {
+    if (!entry.isFile() || !isScannableTsFile(relativePath)) {
       return [];
     }
     return [relativePath];
@@ -103,6 +125,16 @@ function collectReplyHistoryBindings(source: string): Set<string> {
 }
 
 describe("message turn migration guardrails", () => {
+  it("lists plugin TypeScript files from git without walking extension roots", () => {
+    expectNoReaddirSyncDuring(() => {
+      const files = listTsFiles("extensions");
+
+      expect(files.length).toBeGreaterThan(0);
+      expect(files.every((file) => file.startsWith("extensions/"))).toBe(true);
+      expect(files.some((file) => file.endsWith(".d.ts"))).toBe(false);
+    });
+  });
+
   it("keeps migrated message paths off low-level reply-history helpers", () => {
     for (const file of migratedMessageTurnFiles) {
       const source = readRepoFile(file);

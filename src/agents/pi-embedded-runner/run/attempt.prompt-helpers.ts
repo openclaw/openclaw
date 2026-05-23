@@ -16,6 +16,7 @@ import { isCronSessionKey, isSubagentSessionKey } from "../../../routing/session
 import { joinPresentTextSegments } from "../../../shared/text/join-segments.js";
 import { listActiveProcessSessionReferences } from "../../bash-process-references.js";
 import { resolveHeartbeatPromptForSystemPrompt } from "../../heartbeat-system-prompt.js";
+import { buildActiveImageGenerationTaskPromptContextForSession } from "../../image-generation-task-status.js";
 import { buildActiveMusicGenerationTaskPromptContextForSession } from "../../music-generation-task-status.js";
 import { resolveProcessToolScopeKey } from "../../pi-tools.js";
 import { prependSystemPromptAdditionAfterCacheBoundary } from "../../system-prompt-cache-boundary.js";
@@ -339,7 +340,7 @@ function sanitizeStructuredJsonValue(
     copied += 1;
   }
   if (skipped > 0) {
-    output.__truncated = `${skipped} more keys`;
+    output["__truncated"] = `${skipped} more keys`;
   }
   seen.delete(value);
   return output;
@@ -479,6 +480,7 @@ export function resolveAttemptPrependSystemContext(params: {
   const activeMediaTaskPromptContexts =
     params.trigger === "user" || params.trigger === "manual"
       ? [
+          buildActiveImageGenerationTaskPromptContextForSession(params.sessionKey),
           buildActiveVideoGenerationTaskPromptContextForSession(params.sessionKey),
           buildActiveMusicGenerationTaskPromptContextForSession(params.sessionKey),
         ]
@@ -501,7 +503,6 @@ type AfterTurnRuntimeContextAttempt = Pick<
   | "currentMessageId"
   | "config"
   | "skillsSnapshot"
-  | "senderIsOwner"
   | "senderId"
   | "provider"
   | "modelId"
@@ -540,7 +541,6 @@ export function buildAfterTurnRuntimeContext(params: {
       agentDir: params.agentDir,
       config: params.attempt.config,
       skillsSnapshot: params.attempt.skillsSnapshot,
-      senderIsOwner: params.attempt.senderIsOwner,
       senderId: params.attempt.senderId,
       provider: params.attempt.provider,
       modelId: params.attempt.modelId,

@@ -48,6 +48,7 @@ type ReadCronRunLogPageOptions = {
   limit?: number;
   offset?: number;
   jobId?: string;
+  runId?: string;
   status?: CronRunLogStatusFilter;
   statuses?: CronRunStatus[];
   deliveryStatus?: CronDeliveryStatus;
@@ -392,9 +393,15 @@ function parseAllRunLogEntries(raw: string, opts?: { jobId?: string }): CronRunL
   return parsed;
 }
 
+function runIdMatches(entry: CronRunLogEntry, runId?: string): boolean {
+  const normalized = normalizeOptionalString(runId);
+  return !normalized || entry.runId === normalized;
+}
+
 function filterRunLogEntries(
   entries: CronRunLogEntry[],
   opts: {
+    runId?: string;
     statuses: CronRunStatus[] | null;
     deliveryStatuses: CronDeliveryStatus[] | null;
     query: string;
@@ -402,6 +409,9 @@ function filterRunLogEntries(
   },
 ): CronRunLogEntry[] {
   return entries.filter((entry) => {
+    if (!runIdMatches(entry, opts.runId)) {
+      return false;
+    }
     if (opts.statuses && (!entry.status || !opts.statuses.includes(entry.status))) {
       return false;
     }
@@ -431,6 +441,7 @@ export async function readCronRunLogEntriesPage(
   const sortDir: CronRunLogSortDir = opts?.sortDir === "asc" ? "asc" : "desc";
   const all = parseAllRunLogEntries(raw, { jobId: opts?.jobId });
   const filtered = filterRunLogEntries(all, {
+    runId: opts?.runId,
     statuses,
     deliveryStatuses,
     query,
@@ -517,6 +528,7 @@ export async function readCronRunLogEntriesPageAll(
   );
   const all = chunks.flat();
   const filtered = filterRunLogEntries(all, {
+    runId: opts.runId,
     statuses,
     deliveryStatuses,
     query,

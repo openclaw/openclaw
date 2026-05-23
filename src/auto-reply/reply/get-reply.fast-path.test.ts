@@ -61,6 +61,7 @@ registerGetReplyRuntimeOverrides(mocks);
 
 let getReplyFromConfig: typeof import("./get-reply.js").getReplyFromConfig;
 let resolveDefaultModelMock: typeof import("./directive-handling.defaults.js").resolveDefaultModel;
+let resolveModelRefFromStringMock: typeof import("../../agents/model-selection.js").resolveModelRefFromString;
 let loadConfigMock: typeof import("../../config/config.js").getRuntimeConfig;
 let runPreparedReplyMock: typeof import("./get-reply-run.js").runPreparedReply;
 
@@ -68,6 +69,8 @@ async function loadGetReplyRuntimeForTest() {
   ({ getReplyFromConfig } = await loadGetReplyModuleForTest({ cacheKey: import.meta.url }));
   ({ resolveDefaultModel: resolveDefaultModelMock } =
     await import("./directive-handling.defaults.js"));
+  ({ resolveModelRefFromString: resolveModelRefFromStringMock } =
+    await import("../../agents/model-selection.js"));
   ({ getRuntimeConfig: loadConfigMock } = await import("../../config/config.js"));
   ({ runPreparedReply: runPreparedReplyMock } = await import("./get-reply-run.js"));
 }
@@ -82,7 +85,12 @@ function requirePreparedReplyParams() {
 
 function requireDirectiveParams() {
   const directiveParams = mocks.resolveReplyDirectives.mock.calls[0]?.[0] as
-    | { sessionKey?: string; workspaceDir?: string }
+    | {
+        sessionKey?: string;
+        workspaceDir?: string;
+        provider?: string;
+        model?: string;
+      }
     | undefined;
   if (!directiveParams) {
     throw new Error("expected directive params");
@@ -115,6 +123,8 @@ describe("getReplyFromConfig fast test bootstrap", () => {
       defaultModel: "gpt-4o-mini",
       aliasIndex: emptyAliasIndex(),
     });
+    vi.mocked(resolveModelRefFromStringMock).mockReset();
+    vi.mocked(resolveModelRefFromStringMock).mockReturnValue(null);
     vi.mocked(loadConfigMock).mockReset();
     vi.mocked(runPreparedReplyMock).mockReset();
     vi.mocked(loadConfigMock).mockReturnValue({});

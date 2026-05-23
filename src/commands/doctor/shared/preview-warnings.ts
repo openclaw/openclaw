@@ -47,6 +47,16 @@ function hasPluginLoadPaths(cfg: OpenClawConfig): boolean {
   return hasRecord(load) && Array.isArray(load.paths) && load.paths.length > 0;
 }
 
+function hasSubagentAllowlistConfig(cfg: OpenClawConfig): boolean {
+  if (Array.isArray(cfg.agents?.defaults?.subagents?.allowAgents)) {
+    return true;
+  }
+  return listAgentRecords(cfg).some((agent) => {
+    const subagents = hasRecord(agent.subagents) ? agent.subagents : undefined;
+    return Array.isArray(subagents?.allowAgents);
+  });
+}
+
 function hasExplicitChannelPluginBlockerConfig(cfg: OpenClawConfig): boolean {
   if (cfg.plugins?.enabled === false) {
     return true;
@@ -221,7 +231,7 @@ function resolveSourceReplyMessageToolAvailability(params: {
 
 function sourceReplyRuntimeMayAllowMessageTool(cfg: OpenClawConfig): boolean {
   const groupPolicy = resolveGroupVisibleReplyProvenance(cfg);
-  if (hasChannels(cfg) && groupPolicy.value === "message_tool") {
+  if (groupPolicy.value === "message_tool") {
     return true;
   }
   if (cfg.messages?.visibleReplies === "message_tool") {
@@ -284,7 +294,7 @@ function resolveGroupVisibleReplyProvenance(cfg: OpenClawConfig): {
   return {
     path: "messages.groupChat.visibleReplies",
     provenance: "default",
-    value: "message_tool",
+    value: "automatic",
   };
 }
 
@@ -299,23 +309,15 @@ export function collectVisibleReplyToolPolicyWarnings(cfg: OpenClawConfig): stri
   const groupPolicy = resolveGroupVisibleReplyProvenance(cfg);
   const warnings: string[] = [];
   if (groupPolicy.value === "message_tool") {
-    if (groupPolicy.provenance === "default" && !hasChannels(cfg)) {
-      return warnings;
-    }
     const targets = collectMessageToolUnavailableTargets(cfg, { sourceReplyRuntimeGrant: true });
     if (targets.length === 0) {
       return warnings;
     }
-    const targetSummary = formatTargets(targets);
-    if (groupPolicy.provenance === "default") {
-      warnings.push(
-        `- messages.groupChat.visibleReplies defaults to "message_tool", but the message tool is unavailable for ${targetSummary}; OpenClaw falls back to automatic group/channel replies to avoid silent responses. Enable the message tool or set messages.groupChat.visibleReplies explicitly.`,
-      );
-    } else {
-      warnings.push(
-        `- ${groupPolicy.path} is set to "message_tool", but the message tool is unavailable for ${targetSummary}; OpenClaw falls back to automatic visible replies, so normal replies may post to the source chat. Enable the message tool or set ${groupPolicy.path} to "automatic".`,
-      );
-    }
+    warnings.push(
+      `- ${groupPolicy.path} is set to "message_tool", but the message tool is unavailable for ${formatTargets(
+        targets,
+      )}; OpenClaw falls back to automatic visible replies, so normal replies may post to the source chat. Enable the message tool or set ${groupPolicy.path} to "automatic".`,
+    );
   }
 
   const globalVisibleReplies = cfg.messages?.visibleReplies;
@@ -371,11 +373,17 @@ export function collectChannelBoundMessageToolPolicyWarnings(cfg: OpenClawConfig
   });
 }
 
-export async function collectDoctorPreviewWarnings(params: {
+export type DoctorPreviewNotes = {
+  infoNotes: string[];
+  warningNotes: string[];
+};
+
+export async function collectDoctorPreviewNotes(params: {
   cfg: OpenClawConfig;
   doctorFixCommand: string;
   env?: NodeJS.ProcessEnv;
-}): Promise<string[]> {
+}): Promise<DoctorPreviewNotes> {
+  const infoNotes: string[] = [];
   const warnings: string[] = [];
   const env = params.env ?? process.env;
   const hasChannelConfig = hasChannels(params.cfg);
@@ -443,9 +451,32 @@ export async function collectDoctorPreviewWarnings(params: {
   if (hasPluginConfig) {
     const { collectCodexRouteWarnings } = await import("./codex-route-warnings.js");
     warnings.push(...collectCodexRouteWarnings({ cfg: params.cfg, env }));
+
+    const { collectContextEngineHostCompatibilityWarnings } =
+      await import("./context-engine-host-compat.js");
+    warnings.push(
+      ...(await collectContextEngineHostCompatibilityWarnings({
+        cfg: params.cfg,
+        doctorFixCommand: params.doctorFixCommand,
+        env,
+      })),
+    );
   }
-  const { collectCodexNativeAssetWarnings } = await import("./codex-native-assets.js");
-  warnings.push(...(await collectCodexNativeAssetWarnings({ cfg: params.cfg, env })));
+  if (hasSubagentAllowlistConfig(params.cfg)) {
+    const { collectStaleSubagentAllowlistWarnings, scanStaleSubagentAllowlistReferences } =
+      await import("./stale-subagent-allowlist.js");
+    const staleSubagentAllowlistHits = scanStaleSubagentAllowlistReferences(params.cfg);
+    if (staleSubagentAllowlistHits.length > 0) {
+      warnings.push(
+        collectStaleSubagentAllowlistWarnings({
+          hits: staleSubagentAllowlistHits,
+          doctorFixCommand: params.doctorFixCommand,
+        }).join("\n"),
+      );
+    }
+  }
+  const { collectCodexNativeAssetInfoNotes } = await import("./codex-native-assets.js");
+  infoNotes.push(...(await collectCodexNativeAssetInfoNotes({ cfg: params.cfg, env })));
 
   if (hasPluginLoadPaths(params.cfg)) {
     const { collectBundledPluginLoadPathWarnings, scanBundledPluginLoadPathMigrations } =
@@ -540,5 +571,13 @@ export async function collectDoctorPreviewWarnings(params: {
     );
   }
 
-  return warnings;
+  return { infoNotes, warningNotes: warnings };
+}
+
+export async function collectDoctorPreviewWarnings(params: {
+  cfg: OpenClawConfig;
+  doctorFixCommand: string;
+  env?: NodeJS.ProcessEnv;
+}): Promise<string[]> {
+  return (await collectDoctorPreviewNotes(params)).warningNotes;
 }

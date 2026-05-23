@@ -8,8 +8,10 @@ import {
   formatChannelProgressDraftText,
   getChannelStreamingConfigObject,
   isChannelProgressDraftWorkToolName,
+  isPotentialTruncatedFinal,
   mergeChannelProgressDraftLine,
   resolveChannelPreviewStreamMode,
+  resolveChannelProgressDraftMaxLineChars,
   resolveChannelProgressDraftLabel,
   resolveChannelProgressDraftMaxLines,
   resolveChannelProgressDraftRender,
@@ -21,6 +23,8 @@ import {
   resolveChannelStreamingPreviewChunk,
   resolveChannelStreamingSuppressDefaultToolProgressMessages,
   resolveChannelStreamingPreviewToolProgress,
+  resolveTranscriptBackedChannelFinalText,
+  selectLongerFinalText,
 } from "./channel-streaming.js";
 
 describe("channel-streaming", () => {
@@ -140,6 +144,47 @@ describe("channel-streaming", () => {
     );
   });
 
+  it("selects a longer transcript candidate for ellipsis-truncated finals", async () => {
+    const fullAnswer =
+      "Here is the complete final answer with enough stable prefix text before the ellipsis and enough continuation text after it.";
+    const truncatedFinal =
+      "Here is the complete final answer with enough stable prefix text before the ellipsis...";
+
+    expect(isPotentialTruncatedFinal(truncatedFinal)).toBe(true);
+    expect(
+      selectLongerFinalText({
+        finalText: truncatedFinal,
+        candidateTexts: ["short", fullAnswer],
+      }),
+    ).toBe(fullAnswer);
+    await expect(
+      resolveTranscriptBackedChannelFinalText({
+        finalText: truncatedFinal,
+        resolveCandidateText: async () => fullAnswer,
+      }),
+    ).resolves.toBe(fullAnswer);
+  });
+
+  it("keeps intentional ellipsis finals when candidates do not prove truncation", async () => {
+    const finalText =
+      "Here is the complete final answer with enough stable prefix text before an intentional pause...";
+    const candidateText =
+      "Here is the complete final answer with enough stable prefix text before an intentional pause... then punctuation";
+
+    expect(
+      selectLongerFinalText({
+        finalText,
+        candidateTexts: [candidateText],
+      }),
+    ).toBeUndefined();
+    await expect(
+      resolveTranscriptBackedChannelFinalText({
+        finalText,
+        resolveCandidateText: async () => candidateText,
+      }),
+    ).resolves.toBe(finalText);
+  });
+
   it("suppresses standalone tool progress for active preview drafts", () => {
     expect(
       resolveChannelStreamingSuppressDefaultToolProgressMessages({
@@ -167,8 +212,7 @@ describe("channel-streaming", () => {
   });
 
   it("uses auto progress labels when no explicit label is configured", () => {
-    const invalidLabels = DEFAULT_PROGRESS_DRAFT_LABELS.filter((label) => !label.endsWith("..."));
-    expect(invalidLabels).toStrictEqual([]);
+    expect(DEFAULT_PROGRESS_DRAFT_LABELS[0]).toBe("Working");
     expect(resolveChannelProgressDraftLabel({ random: () => 0 })).toBe(
       DEFAULT_PROGRESS_DRAFT_LABELS[0],
     );
@@ -181,6 +225,17 @@ describe("channel-streaming", () => {
         random: () => 0,
       }),
     ).toBe(DEFAULT_PROGRESS_DRAFT_LABELS[0]);
+  });
+
+  it("separates progress labels from detail lines with a blank line", () => {
+    const entry = { streaming: { progress: { label: "Working" } } };
+
+    expect(
+      formatChannelProgressDraftText({
+        entry,
+        lines: ["🛠️ pgrep -fl Discord || true (agent)", "Discord is installed."],
+      }),
+    ).toBe("Working\n\n🛠️ pgrep -fl Discord || true (agent)\n• Discord is installed.");
   });
 
   it("supports explicit progress labels and custom label sets", () => {
@@ -203,8 +258,11 @@ describe("channel-streaming", () => {
   });
 
   it("formats bounded progress draft text", () => {
-    const entry = { streaming: { progress: { label: "Shelling", maxLines: 2, render: "rich" } } };
+    const entry = {
+      streaming: { progress: { label: "Shelling", maxLines: 2, maxLineChars: 80, render: "rich" } },
+    };
     expect(resolveChannelProgressDraftMaxLines(entry)).toBe(2);
+    expect(resolveChannelProgressDraftMaxLineChars(entry)).toBe(80);
     expect(resolveChannelProgressDraftRender(entry)).toBe("rich");
     expect(
       formatChannelProgressDraftText({
@@ -244,7 +302,7 @@ describe("channel-streaming", () => {
         entry: { streaming: { progress: { label: false } } },
         lines: line ? [line] : [],
       }),
-    ).toBe("🩹 1 modified; extensions/discord/src/monitor/message-handler.draft-prev…");
+    ).toBe("🩹 1 modified; extensions/discord/src/monitor/message-handler.draft-preview.ts");
   });
 
   it("bounds progress draft line length to reduce edit reflow", () => {
@@ -254,7 +312,18 @@ describe("channel-streaming", () => {
         lines: ["x".repeat(160)],
         formatLine: (line) => `\`${line}\``,
       }),
-    ).toBe(`Shelling\n• \`${"x".repeat(71)}…\``);
+    ).toBe(`Shelling\n\n• \`${"x".repeat(119)}…\``);
+  });
+
+  it("honors configured progress draft line length and cuts prose on word boundaries", () => {
+    expect(
+      formatChannelProgressDraftText({
+        entry: { streaming: { progress: { label: "Shelling", maxLineChars: 64 } } },
+        lines: [
+          "I'm checking whether the generated video exists or if the generator bailed while writing output.",
+        ],
+      }),
+    ).toBe("Shelling\n\n• I'm checking whether the generated video exists or if the…");
   });
 
   it("keeps compacted raw progress lines from leaking unmatched markdown backticks", () => {
@@ -275,7 +344,9 @@ describe("channel-streaming", () => {
       lines: line ? [line] : [],
     });
 
-    expect(text).toBe("Shelling\n🛠️ run node script…th/that/keeps/going/and/going/index…");
+    expect(text).toBe(
+      "Shelling\n\n🛠️ run node script…enclaw/some/really/deep/path/that/keeps/going/and/going/index…",
+    );
     expect(text.match(/`/g) ?? []).toHaveLength(0);
   });
 

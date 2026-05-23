@@ -27,7 +27,7 @@ Before installing a plugin, make sure you have:
 - network access to the selected source, such as ClawHub, npm, or a git host
 - any plugin-specific credentials, config keys, or operating-system tools named
   by that plugin's setup docs
-- permission to restart the Gateway that serves your channels
+- permission for the Gateway that serves your channels to reload or restart
 
 ## Quick start
 
@@ -82,15 +82,20 @@ Before installing a plugin, make sure you have:
 
   </Step>
 
-  <Step title="Restart the Gateway">
+  <Step title="Let the Gateway reload">
+    Installing, updating, or uninstalling plugin code requires a Gateway
+    restart. When a managed Gateway is already running with config reload
+    enabled, OpenClaw detects the changed plugin install record and restarts the
+    Gateway automatically. If the Gateway is not managed or reload is disabled,
+    restart it yourself:
+
     ```bash
     openclaw gateway restart
     ```
 
-    Installing, updating, or uninstalling plugin code requires a Gateway
-    restart. Enable and disable operations update config and refresh the cold
-    registry, but a restart is still the clearest verification path for live
-    runtime surfaces.
+    Enable and disable operations update config and refresh the cold registry.
+    A runtime inspect is still the clearest verification path for live runtime
+    surfaces.
 
   </Step>
 
@@ -190,6 +195,30 @@ Both formats appear in `openclaw plugins list`, `openclaw plugins inspect`,
 [Plugin bundles](/plugins/bundles) for the bundle compatibility boundary and
 [Building plugins](/plugins/building-plugins) for native plugin authoring.
 
+## Plugin hooks
+
+Plugins can register hooks at runtime, but there are two different APIs with
+different jobs.
+
+- Use typed hooks via `api.on(...)` for runtime lifecycle hooks. This is the
+  preferred surface for middleware, policy, message rewriting, prompt shaping,
+  and tool control.
+- Use `api.registerHook(...)` only when you want to participate in the internal
+  hook system described in [Hooks](/automation/hooks). This is mainly for coarse
+  command/lifecycle side effects and compatibility with existing HOOK-style
+  automation.
+
+Quick rule:
+
+- If the handler needs priority, merge semantics, or block/cancel behavior, use
+  typed plugin hooks.
+- If the handler just reacts to `command:new`, `command:reset`, `message:sent`,
+  or similar coarse events, `api.registerHook(...)` is fine.
+
+Plugin-managed internal hooks show up in `openclaw hooks list` with
+`plugin:<id>`. You cannot enable or disable them through `openclaw hooks`;
+enable or disable the plugin instead.
+
 ## Verify the active Gateway
 
 `openclaw plugins list` and plain `openclaw plugins inspect` read cold config,
@@ -204,9 +233,10 @@ openclaw plugins inspect <plugin-id> --runtime --json
 openclaw gateway restart
 ```
 
-On VPS or container installs, make sure the process you restart is the actual
-`openclaw gateway run` child that serves your channels, not only a wrapper or
-supervisor.
+Managed Gateways restart automatically after plugin install, update, and
+uninstall changes that alter plugin source. On VPS or container installs, make
+sure any manual restart targets the actual `openclaw gateway run` child that
+serves your channels, not only a wrapper or supervisor.
 
 ## Troubleshooting
 

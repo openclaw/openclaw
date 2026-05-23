@@ -56,6 +56,8 @@ If the browser is already paired and you change it from read access to write/adm
 
 Once approved, the device is remembered and won't require re-approval unless you revoke it with `openclaw devices revoke --device <id> --role <role>`. See [Devices CLI](/cli/devices) for token rotation and revocation.
 
+Paperclip agents that connect through the `openclaw_gateway` adapter use the same first-run approval flow. After the initial connection attempt, run `openclaw devices approve --latest` to preview the pending request, then rerun the printed `openclaw devices approve <requestId>` command to approve it. Pass explicit `--url` and `--token` values for a remote gateway. To keep approvals stable across restarts, configure a persistent `adapterConfig.devicePrivateKeyPem` in Paperclip instead of letting it generate a new ephemeral device identity each run.
+
 <Note>
 - Direct local loopback browser connections (`127.0.0.1` / `localhost`) are auto-approved.
 - Tailscale Serve can skip the pairing round trip for Control UI operator sessions when `gateway.auth.allowTailscale: true`, Tailscale identity verifies, and the browser presents its device identity.
@@ -215,7 +217,7 @@ Override the VAPID keypair through env vars on the Gateway process when you want
 
 - `OPENCLAW_VAPID_PUBLIC_KEY`
 - `OPENCLAW_VAPID_PRIVATE_KEY`
-- `OPENCLAW_VAPID_SUBJECT` (defaults to `mailto:openclaw@localhost`)
+- `OPENCLAW_VAPID_SUBJECT` (defaults to `https://openclaw.ai`)
 
 The Control UI uses these scope-gated Gateway methods to register and test browser subscriptions:
 
@@ -473,7 +475,7 @@ The Control UI is static files; the WebSocket target is configurable and can be 
     - When `gatewayUrl` is set, the UI does not fall back to config or environment credentials. Provide `token` (or `password`) explicitly. Missing explicit credentials is an error.
     - Use `wss://` when the Gateway is behind TLS (Tailscale Serve, HTTPS proxy, etc.).
     - `gatewayUrl` is only accepted in a top-level window (not embedded) to prevent clickjacking.
-    - Non-loopback Control UI deployments must set `gateway.controlUi.allowedOrigins` explicitly (full origins). This includes remote dev setups.
+    - Public non-loopback Control UI deployments must set `gateway.controlUi.allowedOrigins` explicitly (full origins). Private same-origin LAN/Tailnet loads from loopback, RFC1918/link-local, `.local`, `.ts.net`, or Tailscale CGNAT hosts are accepted without enabling Host-header fallback.
     - Gateway startup may seed local origins such as `http://localhost:<port>` and `http://127.0.0.1:<port>` from the effective runtime bind and port, but remote browser origins still need explicit entries.
     - Do not use `gateway.controlUi.allowedOrigins: ["*"]` except for tightly controlled local testing. It means allow any browser origin, not "match whatever host I am using."
     - `gateway.controlUi.dangerouslyAllowHostHeaderOriginFallback=true` enables Host-header origin fallback mode, but it is a dangerous security mode.

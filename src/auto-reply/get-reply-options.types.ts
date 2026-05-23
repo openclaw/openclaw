@@ -177,8 +177,9 @@ export type GetReplyOptions = {
   onModelSelected?: (ctx: ModelSelectedContext) => void;
   /**
    * Controls whether normal assistant replies are automatically delivered to
-   * the source conversation. `message_tool_only` keeps final/block/preview
-   * output private; visible channel output must come from the message tool.
+   * the source conversation. `message_tool_only` prefers message-tool visible
+   * delivery and keeps normal final text, block output, and preview output
+   * private unless dispatch explicitly marks a source reply as deliverable.
    */
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
   /** Starts delivery tracking when this turn later drains as a queued followup. */

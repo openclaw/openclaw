@@ -1158,7 +1158,7 @@ describe("runSetupWizard", () => {
       providerId: "openai-codex",
       methodId: "oauth",
       choiceId: "openai-codex",
-      choiceLabel: "OpenAI Codex Browser Login",
+      choiceLabel: "ChatGPT/Codex Browser Login",
     });
     resolvePluginSetupProvider.mockReturnValue({
       id: "openai-codex",
@@ -1166,7 +1166,7 @@ describe("runSetupWizard", () => {
       auth: [
         {
           id: "oauth",
-          label: "OpenAI Codex Browser Login",
+          label: "ChatGPT/Codex Browser Login",
           kind: "oauth",
           wizard: {
             modelSelection: {
