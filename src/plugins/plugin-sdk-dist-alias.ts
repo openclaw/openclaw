@@ -6,19 +6,48 @@ type OpenClawPackageJson = {
   exports?: Record<string, unknown>;
 };
 
+const PRIVATE_LOCAL_ONLY_PLUGIN_SDK_DIST_FILE_NAMES = new Set([
+  "codex-mcp-projection.js",
+  "codex-native-task-runtime.js",
+  "qa-channel.js",
+  "qa-channel-protocol.js",
+  "qa-lab.js",
+  "qa-runtime.js",
+  "ssrf-runtime-internal.js",
+  "test-utils.js",
+]);
+
 function isSafePluginSdkSubpathSegment(subpath: string): boolean {
   return /^[A-Za-z0-9][A-Za-z0-9_-]*$/.test(subpath);
+}
+
+function collectLegacyPublicPluginSdkDistFileNames(distRoot: string): Set<string> | undefined {
+  const pluginSdkDir = path.join(distRoot, "plugin-sdk");
+  if (!fs.existsSync(pluginSdkDir)) {
+    return undefined;
+  }
+  const fileNames = new Set<string>();
+  for (const entry of fs.readdirSync(pluginSdkDir, { withFileTypes: true })) {
+    if (!entry.isFile() || path.extname(entry.name) !== ".js") {
+      continue;
+    }
+    if (PRIVATE_LOCAL_ONLY_PLUGIN_SDK_DIST_FILE_NAMES.has(entry.name)) {
+      continue;
+    }
+    fileNames.add(entry.name);
+  }
+  return fileNames.size > 0 ? fileNames : undefined;
 }
 
 function readPublicPluginSdkDistFileNames(distRoot: string): Set<string> | undefined {
   const packageRoot = path.dirname(path.resolve(distRoot));
   const packageJson = tryReadJsonSync<OpenClawPackageJson>(path.join(packageRoot, "package.json"));
   if (!packageJson || typeof packageJson !== "object" || Array.isArray(packageJson)) {
-    return undefined;
+    return collectLegacyPublicPluginSdkDistFileNames(distRoot);
   }
   const packageExports = packageJson.exports;
   if (!packageExports || typeof packageExports !== "object" || Array.isArray(packageExports)) {
-    return undefined;
+    return collectLegacyPublicPluginSdkDistFileNames(distRoot);
   }
 
   const fileNames = new Set<string>();
@@ -36,7 +65,7 @@ function readPublicPluginSdkDistFileNames(distRoot: string): Set<string> | undef
     }
   }
 
-  return fileNames.size > 0 ? fileNames : undefined;
+  return fileNames.size > 0 ? fileNames : collectLegacyPublicPluginSdkDistFileNames(distRoot);
 }
 
 function buildRuntimePluginSdkPackageExports(
@@ -45,7 +74,6 @@ function buildRuntimePluginSdkPackageExports(
   if (!publicDistFileNames) {
     return {
       "./plugin-sdk": "./plugin-sdk/index.js",
-      "./plugin-sdk/*": "./plugin-sdk/*.js",
     };
   }
 

@@ -1115,6 +1115,12 @@ describe("plugin sdk alias helpers", () => {
       fixture.root,
       bundledDistPluginFile("ollama", "index.js"),
     );
+    const distRuntimeOllamaEntry = writePluginEntry(
+      fixture.root,
+      path.join("dist-runtime", "extensions", "ollama", "index.js"),
+    );
+    fs.writeFileSync(distOllamaEntry, entryBody, "utf-8");
+    fs.writeFileSync(distRuntimeOllamaEntry, entryBody, "utf-8");
     const { packageRoot: installedOllamaRoot, pluginEntry: installedOllamaEntry } =
       writeInstalledPluginEntry({
         installRoot: path.join(makeTempDir(), ".openclaw", "npm"),
@@ -1138,6 +1144,10 @@ describe("plugin sdk alias helpers", () => {
     const distAliases = withEnv(
       { OPENCLAW_ENABLE_PRIVATE_QA_CLI: undefined, NODE_ENV: undefined },
       () => buildPluginLoaderAliasMap(distOllamaEntry, undefined, undefined, "dist"),
+    );
+    const distRuntimeAliases = withEnv(
+      { OPENCLAW_ENABLE_PRIVATE_QA_CLI: undefined, NODE_ENV: undefined },
+      () => buildPluginLoaderAliasMap(distRuntimeOllamaEntry, undefined, undefined, "dist"),
     );
     const otherAliases = withEnv(
       { OPENCLAW_ENABLE_PRIVATE_QA_CLI: undefined, NODE_ENV: undefined },
@@ -1166,6 +1176,9 @@ describe("plugin sdk alias helpers", () => {
     expect(fs.realpathSync(distAliases["openclaw/plugin-sdk/ssrf-runtime-internal"] ?? "")).toBe(
       fs.realpathSync(distSsrFInternalPath),
     );
+    expect(
+      fs.realpathSync(distRuntimeAliases["openclaw/plugin-sdk/ssrf-runtime-internal"] ?? ""),
+    ).toBe(fs.realpathSync(distSsrFInternalPath));
     expect(otherAliases["openclaw/plugin-sdk/ssrf-runtime-internal"]).toBeUndefined();
     expect(privateQaOtherAliases["openclaw/plugin-sdk/ssrf-runtime-internal"]).toBeUndefined();
     expect(installedAliases["openclaw/plugin-sdk/ssrf-runtime-internal"]).toBeUndefined();
@@ -1180,6 +1193,15 @@ describe("plugin sdk alias helpers", () => {
     });
     const loadedOllama = ollamaLoader(sourceOllamaEntry) as { loadedSsrFInternal?: unknown };
     expect(loadedOllama.loadedSsrFInternal).toBe(true);
+
+    const distRuntimeLoader = createJiti(sourceLoaderBaseUrl, {
+      ...buildPluginLoaderJitiOptions(distRuntimeAliases),
+      tryNative: true,
+    });
+    const loadedDistRuntimeOllama = distRuntimeLoader(distRuntimeOllamaEntry) as {
+      loadedSsrFInternal?: unknown;
+    };
+    expect(loadedDistRuntimeOllama.loadedSsrFInternal).toBe(true);
 
     const otherLoader = createJiti(sourceLoaderBaseUrl, {
       ...buildPluginLoaderJitiOptions(privateQaOtherAliases),

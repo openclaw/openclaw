@@ -19,6 +19,7 @@ vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
   },
 }));
 
+// Import-resolution gating for this private helper is covered in sdk-alias.test.ts.
 vi.mock("openclaw/plugin-sdk/ssrf-runtime-internal", () => ({
   fetchConfiguredLocalOriginWithSsrFGuard: fetchConfiguredLocalOriginWithSsrFGuardMock,
 }));
