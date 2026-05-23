@@ -102,6 +102,7 @@ class RemoteShellSandboxFsBridge implements SandboxFsBridge {
       containerPath: target.containerPath,
       action: "write files",
       requireWritable: true,
+      signal: params.signal,
     });
     await this.assertNoHardlinkedFile({
       containerPath: target.containerPath,
@@ -160,6 +161,7 @@ class RemoteShellSandboxFsBridge implements SandboxFsBridge {
       action: "remove files",
       requireWritable: true,
       allowFinalSymlinkForUnlink: true,
+      signal: params.signal,
     });
     await this.runMutation({
       args: [
@@ -189,11 +191,13 @@ class RemoteShellSandboxFsBridge implements SandboxFsBridge {
       action: "rename files",
       requireWritable: true,
       allowFinalSymlinkForUnlink: true,
+      signal: params.signal,
     });
     const toPinned = await this.resolvePinnedParent({
       containerPath: to.containerPath,
       action: "rename files",
       requireWritable: true,
+      signal: params.signal,
     });
     await this.runMutation({
       args: [
@@ -392,9 +396,26 @@ class RemoteShellSandboxFsBridge implements SandboxFsBridge {
     signal?: AbortSignal,
   ): Promise<void> {
     this.ensureWritable(target, action);
-    const protectedRoot = this.findRemoteProtectedSkillRoot(target.containerPath);
-    if (protectedRoot && (await this.remotePathExists(protectedRoot, signal))) {
-      throw new Error(`Sandbox path is read-only; cannot ${action}: ${target.containerPath}`);
+    await this.assertRemoteProtectedPathWritable({
+      containerPath: target.containerPath,
+      action,
+      signal,
+    });
+  }
+
+  private async assertRemoteProtectedPathWritable(params: {
+    containerPath: string;
+    action: string;
+    displayPath?: string;
+    signal?: AbortSignal;
+  }): Promise<void> {
+    const protectedRoot = this.findRemoteProtectedSkillRoot(params.containerPath);
+    if (protectedRoot && (await this.remotePathExists(protectedRoot, params.signal))) {
+      throw new Error(
+        `Sandbox path is read-only; cannot ${params.action}: ${
+          params.displayPath ?? params.containerPath
+        }`,
+      );
     }
   }
 
@@ -503,6 +524,7 @@ class RemoteShellSandboxFsBridge implements SandboxFsBridge {
     action: string;
     requireWritable?: boolean;
     allowFinalSymlinkForUnlink?: boolean;
+    signal?: AbortSignal;
   }): Promise<{ mountRootPath: string; relativeParentPath: string; basename: string }> {
     const basename = path.posix.basename(params.containerPath);
     if (!basename || basename === "." || basename === "/") {
@@ -523,6 +545,14 @@ class RemoteShellSandboxFsBridge implements SandboxFsBridge {
       throw new Error(
         `Sandbox path is read-only; cannot ${params.action}: ${params.containerPath}`,
       );
+    }
+    if (params.requireWritable) {
+      await this.assertRemoteProtectedPathWritable({
+        containerPath: canonicalParent,
+        action: params.action,
+        displayPath: params.containerPath,
+        signal: params.signal,
+      });
     }
     const relativeParentPath = path.posix.relative(mount.containerRoot, canonicalParent);
     if (relativePathEscapesContainerRoot(relativeParentPath)) {
