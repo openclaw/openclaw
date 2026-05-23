@@ -332,6 +332,9 @@ function laneCredentialRequirements(poolLane) {
   if (poolLane.name === "install-e2e-anthropic") {
     credentials.push("anthropic");
   }
+  if (poolLane.name === "live-acp-bind-droid") {
+    credentials.push("factory");
+  }
   if (
     poolLane.name === "openwebui" ||
     poolLane.name === "openai-chat-tools" ||

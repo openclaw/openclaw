@@ -7,11 +7,16 @@ const LIVE_E2E_WORKFLOW = ".github/workflows/openclaw-live-and-e2e-checks-reusab
 const NPM_TELEGRAM_WORKFLOW = ".github/workflows/npm-telegram-beta-e2e.yml";
 const PACKAGE_JSON = "package.json";
 const SETUP_PNPM_STORE_CACHE_ACTION = ".github/actions/setup-pnpm-store-cache/action.yml";
+const DOCKER_E2E_PLAN_ACTION = ".github/actions/docker-e2e-plan/action.yml";
 const RELEASE_CHECKS_WORKFLOW = ".github/workflows/openclaw-release-checks.yml";
 const RELEASE_PUBLISH_WORKFLOW = ".github/workflows/openclaw-release-publish.yml";
 const FULL_RELEASE_VALIDATION_WORKFLOW = ".github/workflows/full-release-validation.yml";
 const QA_LIVE_TRANSPORTS_WORKFLOW = ".github/workflows/qa-live-transports-convex.yml";
 const UPDATE_MIGRATION_WORKFLOW = ".github/workflows/update-migration.yml";
+const CI_CHECK_TESTBOX_WORKFLOW = ".github/workflows/ci-check-testbox.yml";
+const CRABBOX_HYDRATE_WORKFLOW = ".github/workflows/crabbox-hydrate.yml";
+const SCHEDULED_LIVE_CHECKS_WORKFLOW = ".github/workflows/openclaw-scheduled-live-checks.yml";
+const CI_HYDRATE_LIVE_AUTH_SCRIPT = "scripts/ci-hydrate-live-auth.sh";
 const UPGRADE_SURVIVOR_RUN_SCRIPT = "scripts/e2e/lib/upgrade-survivor/run.sh";
 
 type WorkflowStep = {
@@ -612,6 +617,50 @@ describe("package artifact reuse", () => {
       'local scripts_dir="${OPENCLAW_LIVE_DOCKER_SCRIPTS_DIR:-/src/scripts}"',
     );
     expect(stage).toContain('node --import tsx "$scripts_dir/live-docker-normalize-config.ts"');
+  });
+
+  it("fails Droid ACP Docker live proof when Factory auth is missing", () => {
+    const script = readFileSync("scripts/test-live-acp-bind-docker.sh", "utf8");
+
+    expect(script).toContain(
+      "ERROR: Droid Docker ACP bind requires FACTORY_API_KEY; Factory OAuth/keyring auth in ~/.factory is not portable into the container.",
+    );
+    expect(script).not.toContain(
+      "SKIP: Droid Docker ACP bind requires FACTORY_API_KEY; Factory OAuth/keyring auth in ~/.factory is not portable into the container.",
+    );
+    expect(script).not.toMatch(
+      /Droid Docker ACP bind requires FACTORY_API_KEY[\s\S]{0,160}(exit 0|continue)/u,
+    );
+  });
+
+  it("plumbs Factory credentials through planned Docker E2E live lanes", () => {
+    const reusableWorkflow = readFileSync(LIVE_E2E_WORKFLOW, "utf8");
+    const releaseChecksWorkflow = readFileSync(RELEASE_CHECKS_WORKFLOW, "utf8");
+    const scheduledWorkflow = readFileSync(SCHEDULED_LIVE_CHECKS_WORKFLOW, "utf8");
+    const packageAcceptanceWorkflow = readFileSync(PACKAGE_ACCEPTANCE_WORKFLOW, "utf8");
+    const testboxWorkflow = readFileSync(CI_CHECK_TESTBOX_WORKFLOW, "utf8");
+    const crabboxHydrateWorkflow = readFileSync(CRABBOX_HYDRATE_WORKFLOW, "utf8");
+    const dockerPlanAction = readFileSync(DOCKER_E2E_PLAN_ACTION, "utf8");
+    const hydrateScript = readFileSync(CI_HYDRATE_LIVE_AUTH_SCRIPT, "utf8");
+
+    expect(hydrateScript).toContain("  FACTORY_API_KEY \\");
+    expect(dockerPlanAction).toContain('if [[ "$credentials" == *",factory,"* ]]; then');
+    expect(dockerPlanAction).toContain(
+      "FACTORY_API_KEY is required for selected Docker E2E lanes.",
+    );
+    for (const workflow of [
+      reusableWorkflow,
+      releaseChecksWorkflow,
+      scheduledWorkflow,
+      packageAcceptanceWorkflow,
+      testboxWorkflow,
+      crabboxHydrateWorkflow,
+    ]) {
+      expect(workflow).toContain("FACTORY_API_KEY: ${{ secrets.FACTORY_API_KEY }}");
+    }
+    expect(reusableWorkflow).toContain("FACTORY_API_KEY:\n        required: false");
+    expect(packageAcceptanceWorkflow).toContain("FACTORY_API_KEY:\n        required: false");
+    expect(reusableWorkflow).toContain('if [[ "$credentials" == *",factory,"* ]]; then');
   });
 
   it("allows the Telegram lane to run from reusable package acceptance artifacts", () => {

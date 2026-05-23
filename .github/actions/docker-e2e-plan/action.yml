@@ -150,3 +150,9 @@ runs:
           echo "ANTHROPIC_API_TOKEN or ANTHROPIC_API_KEY is required for selected Docker E2E lanes." >&2
           exit 1
         fi
+        if [[ "$credentials" == *",factory,"* ]]; then
+          [[ -n "${FACTORY_API_KEY:-}" ]] || {
+            echo "FACTORY_API_KEY is required for selected Docker E2E lanes." >&2
+            exit 1
+          }
+        fi
