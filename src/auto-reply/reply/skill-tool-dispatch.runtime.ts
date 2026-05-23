@@ -171,6 +171,13 @@ export function resolveSkillDispatchTools(params: {
     sandboxed: sandboxRuntime.sandboxed,
     requesterAgentIdOverride: params.agentId,
     requesterSenderId: params.senderId,
+    inboundPeer: [
+      params.ctx.From,
+      params.ctx.SenderId ?? params.senderId,
+      params.ctx.SenderUsername,
+      params.ctx.SenderE164,
+      params.ctx.OriginatingTo,
+    ].filter((peer): peer is string => typeof peer === "string" && peer.trim().length > 0),
     sessionId: params.sessionEntry?.sessionId,
     currentChannelId: params.currentChannelId,
     ...(beforeToolCallHookContext ? { beforeToolCallHookContext } : {}),

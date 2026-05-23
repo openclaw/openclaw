@@ -1635,6 +1635,14 @@ export const FIELD_HELP: Record<string, string> = {
     "Matches a normalized session-key prefix after internal key normalization steps in policy consumers. Use this for general prefix controls, and prefer rawKeyPrefix when exact full-key matching is required.",
   "session.sendPolicy.rules[].match.rawKeyPrefix":
     "Matches the raw, unnormalized session-key prefix for exact full-key policy targeting. Use this when normalized keyPrefix is too broad and you need agent-prefixed or transport-specific precision.",
+  "session.sendPolicy.rules[].match.peerEquals":
+    'Matches a relational peer predicate. Use "inboundPeer" to compare the outbound target with the trusted peer candidates from the current inbound turn.',
+  "session.sendPolicy.rules[].match.invert":
+    "Inverts this match object after its predicates are evaluated. Use with a narrow allOf wrapper when denying destinations that do not equal the inbound peer.",
+  "session.sendPolicy.rules[].match.allOf":
+    "Requires every nested send-policy match to pass. Use this to combine static scope checks such as channel or chatType with relational peer checks.",
+  "session.sendPolicy.rules[].match.anyOf":
+    "Requires at least one nested send-policy match to pass. Use this to express readable alternatives without broadening one match object.",
   "session.writeLock":
     "Groups session transcript write-lock controls. Tune only when legitimate transcript prep, cleanup, compaction, or mirror work contends longer than the default policies.",
   "session.writeLock.acquireTimeoutMs":

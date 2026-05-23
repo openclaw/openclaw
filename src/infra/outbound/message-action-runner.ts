@@ -33,6 +33,7 @@ import { resolveAgentScopedOutboundMediaAccess } from "../../media/read-capabili
 import { hasPollCreationParams } from "../../poll-params.js";
 import { resolvePollMaxSelections } from "../../polls.js";
 import { resolveFirstBoundAccountId } from "../../routing/bound-account-read.js";
+import { resolveSendPolicyDetailed } from "../../sessions/send-policy.js";
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
@@ -116,6 +117,7 @@ export type RunMessageActionParams = {
   requesterSenderName?: string | null;
   requesterSenderUsername?: string | null;
   requesterSenderE164?: string | null;
+  inboundPeer?: string | readonly string[] | null;
   senderIsOwner?: boolean;
   sessionId?: string;
   toolContext?: ChannelThreadingToolContext;
@@ -999,6 +1001,35 @@ async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActi
   }
   throwIfAborted(abortSignal);
 
+  if (
+    gateway &&
+    !dryRun &&
+    resolveSendPolicyDetailed({
+      cfg,
+      sessionKey: input.sessionKey ?? outboundRoute?.sessionKey,
+      channel,
+      inboundPeer: input.inboundPeer ?? undefined,
+      outboundPeer: to,
+    }).decision === "deny"
+  ) {
+    const suppressed = {
+      channel,
+      to,
+      via: "gateway" as const,
+      mediaUrl: sendPayload.mediaUrl ?? null,
+      mediaUrls: sendPayload.mediaUrls,
+    };
+    return {
+      kind: "send",
+      channel,
+      action,
+      to,
+      handledBy: "core",
+      payload: suppressed,
+      dryRun,
+    };
+  }
+
   const gatewayPluginAction = await runGatewayPluginMessageActionOrNull({
     cfg,
     params,
@@ -1035,6 +1066,7 @@ async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActi
       requesterSenderName: input.requesterSenderName ?? undefined,
       requesterSenderUsername: input.requesterSenderUsername ?? undefined,
       requesterSenderE164: input.requesterSenderE164 ?? undefined,
+      inboundPeer: input.inboundPeer ?? undefined,
       senderIsOwner: input.senderIsOwner,
       mediaAccess: ctx.mediaAccess,
       accountId: accountId ?? undefined,

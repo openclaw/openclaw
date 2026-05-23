@@ -408,6 +408,13 @@ export function createAcpDispatchDeliveryCoordinator(params: {
         requesterSenderName: params.ctx.SenderName,
         requesterSenderUsername: params.ctx.SenderUsername,
         requesterSenderE164: params.ctx.SenderE164,
+        inboundPeer: [
+          params.ctx.From,
+          params.ctx.SenderId,
+          params.ctx.SenderUsername,
+          params.ctx.SenderE164,
+          params.ctx.OriginatingTo,
+        ].filter((peer): peer is string => typeof peer === "string" && peer.trim().length > 0),
         threadId,
         cfg: params.cfg,
         mirror: false,

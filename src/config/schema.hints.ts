@@ -190,12 +190,29 @@ export function collectMatchingSchemaPaths(
   path: string,
   matchesPath: (path: string) => boolean,
   paths: Set<string> = new Set(),
+  state: { active: WeakSet<z.ZodType> } = { active: new WeakSet<z.ZodType>() },
 ): Set<string> {
   let currentSchema = schema;
+  const entered: z.ZodType[] = [];
+
+  if (state.active.has(currentSchema)) {
+    return paths;
+  }
 
   while (isUnwrappable(currentSchema)) {
+    if (state.active.has(currentSchema)) {
+      return paths;
+    }
+    state.active.add(currentSchema);
+    entered.push(currentSchema);
     currentSchema = currentSchema.unwrap();
   }
+
+  if (state.active.has(currentSchema)) {
+    return paths;
+  }
+  state.active.add(currentSchema);
+  entered.push(currentSchema);
 
   if (path && matchesPath(path)) {
     paths.add(path);
@@ -205,16 +222,22 @@ export function collectMatchingSchemaPaths(
     const shape = currentSchema.shape;
     for (const key in shape) {
       const nextPath = path ? `${path}.${key}` : key;
-      collectMatchingSchemaPaths(shape[key], nextPath, matchesPath, paths);
+      collectMatchingSchemaPaths(shape[key], nextPath, matchesPath, paths, state);
     }
     const catchallSchema = currentSchema["_def"].catchall as z.ZodType | undefined;
     if (catchallSchema && !(catchallSchema instanceof z.ZodNever)) {
       const nextPath = path ? `${path}.*` : "*";
-      collectMatchingSchemaPaths(catchallSchema, nextPath, matchesPath, paths);
+      collectMatchingSchemaPaths(catchallSchema, nextPath, matchesPath, paths, state);
     }
   } else if (currentSchema instanceof z.ZodArray) {
     const nextPath = path ? `${path}[]` : "[]";
-    collectMatchingSchemaPaths(currentSchema.element as z.ZodType, nextPath, matchesPath, paths);
+    collectMatchingSchemaPaths(
+      currentSchema.element as z.ZodType,
+      nextPath,
+      matchesPath,
+      paths,
+      state,
+    );
   } else if (currentSchema instanceof z.ZodRecord) {
     const nextPath = path ? `${path}.*` : "*";
     collectMatchingSchemaPaths(
@@ -222,17 +245,34 @@ export function collectMatchingSchemaPaths(
       nextPath,
       matchesPath,
       paths,
+      state,
     );
   } else if (
     currentSchema instanceof z.ZodUnion ||
     currentSchema instanceof z.ZodDiscriminatedUnion
   ) {
     for (const option of currentSchema.options) {
-      collectMatchingSchemaPaths(option as z.ZodType, path, matchesPath, paths);
+      collectMatchingSchemaPaths(option as z.ZodType, path, matchesPath, paths, state);
     }
   } else if (currentSchema instanceof z.ZodIntersection) {
-    collectMatchingSchemaPaths(currentSchema["_def"].left as z.ZodType, path, matchesPath, paths);
-    collectMatchingSchemaPaths(currentSchema["_def"].right as z.ZodType, path, matchesPath, paths);
+    collectMatchingSchemaPaths(
+      currentSchema["_def"].left as z.ZodType,
+      path,
+      matchesPath,
+      paths,
+      state,
+    );
+    collectMatchingSchemaPaths(
+      currentSchema["_def"].right as z.ZodType,
+      path,
+      matchesPath,
+      paths,
+      state,
+    );
+  }
+
+  for (const enteredSchema of entered) {
+    state.active.delete(enteredSchema);
   }
 
   return paths;
@@ -258,15 +298,32 @@ export function mapSensitivePaths(
   schema: z.ZodType,
   path: string,
   hints: ConfigUiHints,
+  state: { active: WeakSet<z.ZodType> } = { active: new WeakSet<z.ZodType>() },
 ): ConfigUiHints {
   let next = { ...hints };
   let currentSchema = schema;
   let isSensitive = sensitive.has(currentSchema);
+  const entered: z.ZodType[] = [];
+
+  if (state.active.has(currentSchema)) {
+    return next;
+  }
 
   while (isUnwrappable(currentSchema)) {
+    if (state.active.has(currentSchema)) {
+      return next;
+    }
+    state.active.add(currentSchema);
+    entered.push(currentSchema);
     currentSchema = currentSchema.unwrap();
     isSensitive ||= sensitive.has(currentSchema);
   }
+
+  if (state.active.has(currentSchema)) {
+    return next;
+  }
+  state.active.add(currentSchema);
+  entered.push(currentSchema);
 
   if (isSensitive) {
     next[path] = { ...next[path], sensitive: true };
@@ -278,29 +335,33 @@ export function mapSensitivePaths(
     const shape = currentSchema.shape;
     for (const key in shape) {
       const nextPath = path ? `${path}.${key}` : key;
-      next = mapSensitivePaths(shape[key], nextPath, next);
+      next = mapSensitivePaths(shape[key], nextPath, next, state);
     }
     const catchallSchema = currentSchema["_def"].catchall as z.ZodType | undefined;
     if (catchallSchema && !(catchallSchema instanceof z.ZodNever)) {
       const nextPath = path ? `${path}.*` : "*";
-      next = mapSensitivePaths(catchallSchema, nextPath, next);
+      next = mapSensitivePaths(catchallSchema, nextPath, next, state);
     }
   } else if (currentSchema instanceof z.ZodArray) {
     const nextPath = path ? `${path}[]` : "[]";
-    next = mapSensitivePaths(currentSchema.element as z.ZodType, nextPath, next);
+    next = mapSensitivePaths(currentSchema.element as z.ZodType, nextPath, next, state);
   } else if (currentSchema instanceof z.ZodRecord) {
     const nextPath = path ? `${path}.*` : "*";
-    next = mapSensitivePaths(currentSchema["_def"].valueType as z.ZodType, nextPath, next);
+    next = mapSensitivePaths(currentSchema["_def"].valueType as z.ZodType, nextPath, next, state);
   } else if (
     currentSchema instanceof z.ZodUnion ||
     currentSchema instanceof z.ZodDiscriminatedUnion
   ) {
     for (const option of currentSchema.options) {
-      next = mapSensitivePaths(option as z.ZodType, path, next);
+      next = mapSensitivePaths(option as z.ZodType, path, next, state);
     }
   } else if (currentSchema instanceof z.ZodIntersection) {
-    next = mapSensitivePaths(currentSchema["_def"].left as z.ZodType, path, next);
-    next = mapSensitivePaths(currentSchema["_def"].right as z.ZodType, path, next);
+    next = mapSensitivePaths(currentSchema["_def"].left as z.ZodType, path, next, state);
+    next = mapSensitivePaths(currentSchema["_def"].right as z.ZodType, path, next, state);
+  }
+
+  for (const enteredSchema of entered) {
+    state.active.delete(enteredSchema);
   }
 
   return next;

@@ -63,6 +63,45 @@ function normalizePeerList(raw?: string | readonly string[] | null): string[] {
   return peers;
 }
 
+function expandIdentityLinkedPeers(
+  cfg: OpenClawConfig,
+  peers: readonly string[],
+  channel?: string,
+): string[] {
+  if (peers.length === 0) {
+    return [];
+  }
+  const identityLinks = cfg.session?.identityLinks;
+  if (!identityLinks) {
+    return [...peers];
+  }
+  const expanded = new Set(peers);
+  const peerCandidates = new Set(peers);
+  const channelNorm = normalizeMatchValue(channel);
+  if (channelNorm) {
+    for (const peer of peers) {
+      peerCandidates.add(`${channelNorm}:${peer}`);
+    }
+  }
+  for (const [canonical, ids] of Object.entries(identityLinks)) {
+    const canonicalPeer = normalizePeer(canonical);
+    if (!canonicalPeer || !Array.isArray(ids)) {
+      continue;
+    }
+    const linkedPeers = ids
+      .map((id) => normalizePeer(id))
+      .filter((id): id is string => Boolean(id));
+    const linkedGroup = [canonicalPeer, ...linkedPeers];
+    if (!linkedGroup.some((peer) => peerCandidates.has(peer))) {
+      continue;
+    }
+    for (const peer of linkedGroup) {
+      expanded.add(peer);
+    }
+  }
+  return Array.from(expanded);
+}
+
 function stripAgentSessionKeyPrefix(key?: string): string | undefined {
   if (!key) {
     return undefined;
@@ -130,6 +169,7 @@ function evaluateSendPolicyMatch(params: {
   getChatType: () => SessionChatType | undefined;
   getInboundPeers: () => readonly string[];
   getOutboundPeer: () => string | undefined;
+  cfg: OpenClawConfig;
 }): MatchEvaluation {
   const match = params.match;
   const matchChannel = normalizeMatchValue(match.channel);
@@ -168,7 +208,8 @@ function evaluateSendPolicyMatch(params: {
       return { matches: false };
     }
 
-    const peerMatched = expectedPeers.includes(actualPeer);
+    const actualPeers = expandIdentityLinkedPeers(params.cfg, [actualPeer], params.getChannel());
+    const peerMatched = actualPeers.some((peer) => expectedPeers.includes(peer));
     if (!peerMatched) {
       cancelReason = createPeerMismatchReason({ expectedPeers, actualPeer });
     }
@@ -248,7 +289,11 @@ export function resolveSendPolicyDetailed(params: {
     return chatType;
   };
   const getInboundPeers = () => {
-    inboundPeers ??= normalizePeerList(params.inboundPeer);
+    inboundPeers ??= expandIdentityLinkedPeers(
+      params.cfg,
+      normalizePeerList(params.inboundPeer),
+      getChannel(),
+    );
     return inboundPeers;
   };
   const getOutboundPeer = () => {
@@ -271,6 +316,7 @@ export function resolveSendPolicyDetailed(params: {
       getChatType,
       getInboundPeers,
       getOutboundPeer,
+      cfg: params.cfg,
     });
 
     if (!matchResult.matches) {

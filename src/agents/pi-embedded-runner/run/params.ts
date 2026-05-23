@@ -70,6 +70,8 @@ export type RunEmbeddedPiAgentParams = {
   senderName?: string | null;
   senderUsername?: string | null;
   senderE164?: string | null;
+  /** Trusted inbound peer candidates from the originating message context. */
+  inboundPeer?: string | readonly string[] | null;
   /** Trusted sender identity bit for command/channel-action auth. */
   senderIsOwner?: boolean;
   /** Current channel ID for auto-threading (Slack). */

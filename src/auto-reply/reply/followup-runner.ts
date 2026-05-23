@@ -336,6 +336,12 @@ export function createFollowupRunner(params: {
           requesterSenderName: queued.run.senderName,
           requesterSenderUsername: queued.run.senderUsername,
           requesterSenderE164: queued.run.senderE164,
+          inboundPeer: [
+            queued.run.senderId,
+            queued.run.senderUsername,
+            queued.run.senderE164,
+            queued.originatingTo,
+          ].filter((peer): peer is string => typeof peer === "string" && peer.trim().length > 0),
           threadId: queued.originatingThreadId,
           cfg: runtimeConfig,
           mirror: options.mirror,
@@ -806,6 +812,14 @@ export function createFollowupRunner(params: {
                 senderName: run.senderName,
                 senderUsername: run.senderUsername,
                 senderE164: run.senderE164,
+                inboundPeer: [
+                  run.senderId,
+                  run.senderUsername,
+                  run.senderE164,
+                  queued.originatingTo,
+                ].filter(
+                  (peer): peer is string => typeof peer === "string" && peer.trim().length > 0,
+                ),
                 sessionFile: run.sessionFile,
                 agentDir: run.agentDir,
                 workspaceDir: run.workspaceDir,

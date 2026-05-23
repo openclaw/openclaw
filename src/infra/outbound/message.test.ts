@@ -185,6 +185,28 @@ describe("sendMessage", () => {
     );
   });
 
+  it("forwards inboundPeer into the outbound delivery session", async () => {
+    await sendMessage({
+      cfg: {},
+      channel: "forum",
+      to: "123456",
+      content: "hi",
+      inboundPeer: ["123456", "alias-123456"],
+      mirror: {
+        sessionKey: "agent:main:forum:direct:123456",
+      },
+    });
+
+    expectRecordFields(
+      expectDeliveryCallFields({}).session,
+      {
+        key: "agent:main:forum:direct:123456",
+        inboundPeer: ["123456", "alias-123456"],
+      },
+      "outbound session",
+    );
+  });
+
   it("forwards non-id requester sender fields into the outbound delivery session", async () => {
     await sendMessage({
       cfg: {},

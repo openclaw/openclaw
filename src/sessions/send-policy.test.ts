@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import type { SessionEntry } from "../config/sessions.js";
+import { createAllowDenyChannelRulesSchema } from "../config/zod-schema.allowdeny.js";
 import { SessionSendPolicySchema } from "../config/zod-schema.session.js";
 import { resolveSendPolicy, resolveSendPolicyDetailed } from "./send-policy.js";
 
@@ -87,6 +88,15 @@ describe("resolveSendPolicy", () => {
     ).toBe(true);
   });
 
+  it("keeps relational peer rules out of the shared allow/deny scope schema", () => {
+    expect(
+      createAllowDenyChannelRulesSchema().safeParse({
+        default: "allow",
+        rules: [{ action: "allow", match: { peerEquals: "inboundPeer" } }],
+      }).success,
+    ).toBe(false);
+  });
+
   it("matches outbound peers against the inbound peer", () => {
     const cfg = {
       session: {
@@ -111,6 +121,29 @@ describe("resolveSendPolicy", () => {
         outboundPeer: "user-2",
       }),
     ).toBe("deny");
+  });
+
+  it("matches inbound and outbound peer aliases through identityLinks", () => {
+    const cfg = {
+      session: {
+        identityLinks: {
+          canonical_user: ["telegram:123", "discord:456"],
+        },
+        sendPolicy: {
+          default: "deny",
+          rules: [{ action: "allow", match: { peerEquals: "inboundPeer" } }],
+        },
+      },
+    } as OpenClawConfig;
+
+    expect(
+      resolveSendPolicy({
+        cfg,
+        channel: "telegram",
+        inboundPeer: "123",
+        outboundPeer: "discord:456",
+      }),
+    ).toBe("allow");
   });
 
   it("denies mismatched peers with structured cancel metadata", () => {

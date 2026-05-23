@@ -290,6 +290,33 @@ describe("executeSendAction", () => {
     });
   });
 
+  it("forwards inboundPeer to sendMessage on core outbound path", async () => {
+    mocks.dispatchChannelMessageAction.mockResolvedValue(null);
+    mocks.sendMessage.mockResolvedValue({
+      channel: "demo-outbound",
+      to: "channel:123",
+      via: "direct",
+      mediaUrl: null,
+    });
+
+    await executeSendAction({
+      ctx: {
+        cfg: {},
+        channel: "demo-outbound",
+        params: {},
+        sessionKey: "agent:main:directchat:direct:channel:123",
+        inboundPeer: ["channel:123", "alias:123"],
+        dryRun: false,
+      },
+      to: "channel:123",
+      message: "hello",
+    });
+
+    expectSingleCallFields(mocks.sendMessage, {
+      inboundPeer: ["channel:123", "alias:123"],
+    });
+  });
+
   it("forwards non-id requester sender fields to sendMessage on core outbound path", async () => {
     mocks.dispatchChannelMessageAction.mockResolvedValue(null);
     mocks.sendMessage.mockResolvedValue({

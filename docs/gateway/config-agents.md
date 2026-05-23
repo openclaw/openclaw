@@ -1537,7 +1537,7 @@ Defaults for Talk mode (macOS/iOS/Android).
 
 ### `session.sendPolicy` peer routing guard
 
-`session.sendPolicy.rules[].match.peerEquals: "inboundPeer"` compares the outbound destination with the peer that originated the current turn. Use `invert: true` with a `deny` rule to suppress automatic replies when the agent is about to answer a different direct peer than the one that triggered the turn.
+`session.sendPolicy.rules[].match.peerEquals: "inboundPeer"` compares the outbound destination with the peer that originated the current turn. Use `invert: true` with a `deny` rule to suppress replies or explicit message-tool sends when the agent is about to answer a different direct peer than the one that triggered the turn.
 
 ```json5
 {
@@ -1561,4 +1561,4 @@ Defaults for Talk mode (macOS/iOS/Android).
 }
 ```
 
-When the inbound peer is unavailable, the relational predicate does not match. That keeps system turns such as heartbeat, cron, and internal recovery from being denied accidentally.
+When the inbound peer is unavailable, the relational predicate does not match. That keeps system turns such as heartbeat, cron, and internal recovery from being denied accidentally. `identityLinks` aliases are considered during peer comparison so linked provider identities can still route within the same person boundary.

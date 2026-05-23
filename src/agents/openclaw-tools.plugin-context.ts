@@ -19,6 +19,7 @@ export type OpenClawPluginToolOptions = {
   modelProvider?: string;
   modelId?: string;
   requesterSenderId?: string | null;
+  inboundPeer?: string | readonly string[] | null;
   requesterAgentIdOverride?: string;
   sessionId?: string;
   sandboxBrowserBridgeUrl?: string;
@@ -81,6 +82,7 @@ export function resolveOpenClawPluginToolInputs(params: {
       agentAccountId: options?.agentAccountId,
       deliveryContext,
       requesterSenderId: options?.requesterSenderId ?? undefined,
+      inboundPeer: options?.inboundPeer ?? undefined,
       sandboxed: options?.sandboxed,
     },
     allowGatewaySubagentBinding: options?.allowGatewaySubagentBinding,

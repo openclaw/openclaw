@@ -5,6 +5,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { OutboundMediaAccess } from "../../media/load-options.js";
 import type { PollInput } from "../../polls.js";
 import { normalizePollInput } from "../../polls.js";
+import { resolveSendPolicyDetailed } from "../../sessions/send-policy.js";
 import {
   GATEWAY_CLIENT_MODES,
   GATEWAY_CLIENT_NAMES,
@@ -70,6 +71,8 @@ type MessageSendParams = {
   requesterSenderUsername?: string;
   /** Originating sender E.164 phone number for e164-keyed sender policy matching. */
   requesterSenderE164?: string;
+  /** Trusted inbound peer candidates for same-peer send policy matching. */
+  inboundPeer?: string | readonly string[];
   channel?: string;
   mediaUrl?: string;
   mediaUrls?: string[];
@@ -369,6 +372,7 @@ export async function sendMessage(params: MessageSendParams): Promise<MessageSen
       requesterSenderName: params.requesterSenderName,
       requesterSenderUsername: params.requesterSenderUsername,
       requesterSenderE164: params.requesterSenderE164,
+      inboundPeer: params.inboundPeer,
     });
     if (params.queuePolicy === "required") {
       await assertRequiredMessageSendDurability({
@@ -420,6 +424,23 @@ export async function sendMessage(params: MessageSendParams): Promise<MessageSen
       mediaUrl: primaryMediaUrl,
       mediaUrls: mirrorMediaUrls.length ? mirrorMediaUrls : undefined,
       result: results.at(-1),
+    };
+  }
+
+  const gatewaySendPolicyDecision = resolveSendPolicyDetailed({
+    cfg,
+    sessionKey: params.requesterSessionKey ?? params.mirror?.sessionKey,
+    channel,
+    inboundPeer: params.inboundPeer,
+    outboundPeer: params.to,
+  });
+  if (gatewaySendPolicyDecision.decision === "deny") {
+    return {
+      channel,
+      to: params.to,
+      via: "gateway",
+      mediaUrl: primaryMediaUrl,
+      mediaUrls: mirrorMediaUrls.length ? mirrorMediaUrls : undefined,
     };
   }
 

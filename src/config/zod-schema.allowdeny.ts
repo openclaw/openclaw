@@ -19,13 +19,25 @@ export type AllowDenyChannelRuleMatchShape = {
   chatType?: "direct" | "group" | "channel" | "dm";
   keyPrefix?: string;
   rawKeyPrefix?: string;
-  peerEquals?: "inboundPeer";
-  invert?: boolean;
-  allOf?: AllowDenyChannelRuleMatchShape[];
-  anyOf?: AllowDenyChannelRuleMatchShape[];
 };
 
-const AllowDenyChannelRuleMatchSchema: z.ZodType<AllowDenyChannelRuleMatchShape> = z.lazy(() =>
+export type SessionSendPolicyRuleMatchShape = AllowDenyChannelRuleMatchShape & {
+  peerEquals?: "inboundPeer";
+  invert?: boolean;
+  allOf?: SessionSendPolicyRuleMatchShape[];
+  anyOf?: SessionSendPolicyRuleMatchShape[];
+};
+
+const AllowDenyChannelRuleMatchSchema: z.ZodType<AllowDenyChannelRuleMatchShape> = z
+  .object({
+    channel: z.string().optional(),
+    chatType: AllowDenyChatTypeSchema,
+    keyPrefix: z.string().optional(),
+    rawKeyPrefix: z.string().optional(),
+  })
+  .strict();
+
+const SessionSendPolicyRuleMatchSchema: z.ZodType<SessionSendPolicyRuleMatchShape> = z.lazy(() =>
   z
     .object({
       channel: z.string().optional(),
@@ -34,13 +46,13 @@ const AllowDenyChannelRuleMatchSchema: z.ZodType<AllowDenyChannelRuleMatchShape>
       rawKeyPrefix: z.string().optional(),
       peerEquals: AllowDenyPeerEqualsSchema.optional(),
       invert: z.boolean().optional(),
-      allOf: z.array(AllowDenyChannelRuleMatchSchema).optional(),
-      anyOf: z.array(AllowDenyChannelRuleMatchSchema).optional(),
+      allOf: z.array(SessionSendPolicyRuleMatchSchema).optional(),
+      anyOf: z.array(SessionSendPolicyRuleMatchSchema).optional(),
     })
     .strict(),
 );
 
-export function createAllowDenyChannelRulesSchema() {
+function createAllowDenyRulesSchema<MatchShape>(matchSchema: z.ZodType<MatchShape>) {
   return z
     .object({
       default: AllowDenyActionSchema.optional(),
@@ -49,7 +61,7 @@ export function createAllowDenyChannelRulesSchema() {
           z
             .object({
               action: AllowDenyActionSchema,
-              match: AllowDenyChannelRuleMatchSchema.optional(),
+              match: matchSchema.optional(),
             })
             .strict(),
         )
@@ -57,4 +69,12 @@ export function createAllowDenyChannelRulesSchema() {
     })
     .strict()
     .optional();
+}
+
+export function createAllowDenyChannelRulesSchema() {
+  return createAllowDenyRulesSchema(AllowDenyChannelRuleMatchSchema);
+}
+
+export function createSessionSendPolicySchema() {
+  return createAllowDenyRulesSchema(SessionSendPolicyRuleMatchSchema);
 }
