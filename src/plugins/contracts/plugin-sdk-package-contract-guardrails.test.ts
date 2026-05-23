@@ -692,6 +692,14 @@ describe("plugin-sdk package contract guardrails", () => {
     expect(collectPluginSdkPackageExports()).toEqual([...publicPluginSdkEntrypoints].toSorted());
   });
 
+  it("keeps configured local-origin fetch helpers out of deprecated infra-runtime", () => {
+    const source = fs.readFileSync(resolve(REPO_ROOT, "src/plugin-sdk/infra-runtime.ts"), "utf8");
+
+    expect(source).not.toMatch(/export\s+\*\s+from\s+["']\.\.\/infra\/net\/fetch-guard\.js["']/);
+    expect(source).not.toContain("fetchConfiguredLocalOriginWithSsrFGuard");
+    expect(source).not.toContain("GuardedFetchConfiguredLocalOriginOptions");
+  });
+
   it("keeps bundled plugin SDK compatibility subpaths explicitly classified", () => {
     const entrypoints = new Set(pluginSdkEntrypoints);
     const reserved = new Set<string>(reservedBundledPluginSdkEntrypoints);
