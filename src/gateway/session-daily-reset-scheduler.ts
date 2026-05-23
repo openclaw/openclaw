@@ -138,7 +138,7 @@ export async function resetStaleDailySessions(params: {
         !isDailyBoundaryStale({
           entry: resetEntry,
           dailyResetAt: freshness.dailyResetAt,
-          sessionStartedAt: lifecycle.sessionStartedAt,
+          lastInteractionAt: lifecycle.lastInteractionAt,
         })
       ) {
         continue;
@@ -181,7 +181,7 @@ export async function resetStaleDailySessions(params: {
         !isDailyBoundaryStale({
           entry: latestEntry,
           dailyResetAt: latestFreshness.dailyResetAt,
-          sessionStartedAt: latestLifecycle.sessionStartedAt,
+          lastInteractionAt: latestLifecycle.lastInteractionAt,
         })
       ) {
         continue;
@@ -204,15 +204,19 @@ export async function resetStaleDailySessions(params: {
 function isDailyBoundaryStale(params: {
   entry: SessionEntry;
   dailyResetAt: number | undefined;
-  sessionStartedAt?: number;
+  lastInteractionAt?: number;
 }): boolean {
   const dailyResetAt = params.dailyResetAt;
   if (dailyResetAt == null) {
     return false;
   }
-  const sessionStartedAt =
-    typeof params.sessionStartedAt === "number" ? params.sessionStartedAt : params.entry.updatedAt;
-  return sessionStartedAt < dailyResetAt;
+  const lastDailyActivityAt =
+    typeof params.lastInteractionAt === "number" &&
+    Number.isFinite(params.lastInteractionAt) &&
+    params.lastInteractionAt >= 0
+      ? Math.max(params.entry.updatedAt, params.lastInteractionAt)
+      : params.entry.updatedAt;
+  return lastDailyActivityAt < dailyResetAt;
 }
 
 function hasProviderOwnedSession(entry: SessionEntry | undefined, resetConfigured: boolean) {

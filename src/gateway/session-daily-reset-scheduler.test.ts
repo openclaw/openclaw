@@ -93,7 +93,7 @@ describe("daily session reset scheduler", () => {
   });
 
   it("does not use idle expiry to reset daily sessions before the daily boundary", async () => {
-    const sessionStartedAt = new Date(2026, 4, 19, 6, 0, 0, 0).getTime();
+    const sessionStartedAt = new Date(2026, 4, 18, 6, 0, 0, 0).getTime();
     const lastInteractionAt = new Date(2026, 4, 19, 6, 30, 0, 0).getTime();
     const beforeNoonReset = new Date(2026, 4, 19, 8, 0, 0, 0).getTime();
     const sessionKey = "agent:main:telegram:direct:user-1";
