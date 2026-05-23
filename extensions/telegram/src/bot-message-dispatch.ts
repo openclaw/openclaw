@@ -105,6 +105,7 @@ import {
   type LaneName,
 } from "./lane-delivery.js";
 import { createNativeTelegramToolProgressDraft } from "./native-tool-progress-draft.js";
+import { recordOutboundMessageForPromptContext } from "./outbound-message-context.js";
 import {
   createTelegramReasoningStepState,
   splitTelegramReasoningText,
@@ -1182,7 +1183,7 @@ export const dispatchTelegramMessage = async ({
       }
       return result.delivered;
     };
-    const emitPreviewFinalizedHook = (result: LaneDeliveryResult) => {
+    const emitPreviewFinalizedHook = async (result: LaneDeliveryResult) => {
       if (isDispatchSuperseded() || result.kind !== "preview-finalized") {
         return;
       }
@@ -1196,6 +1197,26 @@ export const dispatchTelegramMessage = async ({
         isGroup: deliveryBaseOptions.mirrorIsGroup,
         groupId: deliveryBaseOptions.mirrorGroupId,
       });
+      try {
+        await (
+          telegramDeps.recordOutboundMessageForPromptContext ??
+          recordOutboundMessageForPromptContext
+        )({
+          cfg,
+          account: { accountId: route.accountId },
+          chatId: deliveryBaseOptions.chatId,
+          message: { message_id: result.delivery.messageId },
+          messageId: result.delivery.messageId,
+          text: result.delivery.promptContextContent ?? result.delivery.content,
+          ...(threadSpec.id !== undefined ? { messageThreadId: threadSpec.id } : {}),
+        });
+      } catch (error) {
+        logVerbose(
+          `telegram: failed to record streamed reply for prompt context: ${formatErrorMessage(
+            error,
+          )}`,
+        );
+      }
       if (deliveryBaseOptions.transcriptMirror && result.delivery.content) {
         void deliveryBaseOptions
           .transcriptMirror({ text: result.delivery.content })
@@ -1472,7 +1493,7 @@ export const dispatchTelegramMessage = async ({
                               buttons: telegramButtons,
                             });
                       if (info.kind === "final") {
-                        emitPreviewFinalizedHook(result);
+                        await emitPreviewFinalizedHook(result);
                       }
                       blockDelivered = blockDelivered || result.kind !== "skipped";
                       if (segment.lane === "reasoning") {
