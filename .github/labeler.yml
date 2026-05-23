@@ -1,3 +1,8 @@
+"plugin: amazon":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/amazon/**"
+          - "docs/providers/amazon.md"
 "plugin: azure-speech":
   - changed-files:
       - any-glob-to-any-file:

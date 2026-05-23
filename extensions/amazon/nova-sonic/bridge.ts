@@ -34,10 +34,19 @@ function encodeEvent(event: unknown): Uint8Array {
   return new TextEncoder().encode(JSON.stringify(event));
 }
 
+function generateUUID(): string {
+  return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, (c) => {
+    const r = (Math.random() * 16) | 0;
+    const v = c === "x" ? r : (r & 0x3) | 0x8;
+    return v.toString(16);
+  });
+}
+
 export class NovaSonicVoiceBridge implements RealtimeVoiceBridge {
   private client: BedrockRuntimeClient;
   private connected = false;
   private intentionallyClosed = false;
+  private reconnecting = false;
   private reconnectAttempts = 0;
   private pendingAudio: Buffer[] = [];
   private inputStream: Array<{ chunk: { bytes: Uint8Array } }> = [];
@@ -45,6 +54,8 @@ export class NovaSonicVoiceBridge implements RealtimeVoiceBridge {
   private latestMediaTimestamp = 0;
   private responseStartTimestamp: number | null = null;
   private markQueue: string[] = [];
+  private promptName: string = "";
+  private audioContentName: string = "";
 
   constructor(private readonly config: NovaSonicBridgeConfig) {
     this.client = getBedrockClient(config.region);
@@ -52,6 +63,7 @@ export class NovaSonicVoiceBridge implements RealtimeVoiceBridge {
 
   async connect(): Promise<void> {
     this.intentionallyClosed = false;
+    this.reconnecting = false;
     this.reconnectAttempts = 0;
     await this.doConnect();
   }
@@ -68,8 +80,13 @@ export class NovaSonicVoiceBridge implements RealtimeVoiceBridge {
     const pcmAudio = mulawToPcm16(audio);
 
     this.enqueueEvent({
-      event: { type: "audioInput" },
-      data: { audioChunk: pcmAudio.toString("base64") },
+      event: {
+        audioInput: {
+          promptName: this.promptName,
+          contentName: this.audioContentName,
+          content: pcmAudio.toString("base64"),
+        },
+      },
     });
   }
 
@@ -90,17 +107,47 @@ export class NovaSonicVoiceBridge implements RealtimeVoiceBridge {
     }
     const silentPcm = Buffer.alloc(3200); // 100ms of silence at 16kHz 16-bit mono
     this.enqueueEvent({
-      event: { type: "audioInput" },
-      data: { audioChunk: silentPcm.toString("base64") },
+      event: {
+        audioInput: {
+          promptName: this.promptName,
+          contentName: this.audioContentName,
+          content: silentPcm.toString("base64"),
+        },
+      },
     });
   }
 
   submitToolResult(callId: string, result: unknown): void {
+    const contentName = generateUUID();
+    // Send tool result as a text content block
     this.enqueueEvent({
-      event: { type: "toolResult" },
-      data: {
-        toolUseId: callId,
-        content: [{ text: JSON.stringify(result) }],
+      event: {
+        contentStart: {
+          promptName: this.promptName,
+          contentName,
+          type: "TEXT",
+          role: "TOOL",
+          toolResultInputConfiguration: {
+            toolUseId: callId,
+          },
+        },
+      },
+    });
+    this.enqueueEvent({
+      event: {
+        textInput: {
+          promptName: this.promptName,
+          contentName,
+          content: JSON.stringify(result),
+        },
+      },
+    });
+    this.enqueueEvent({
+      event: {
+        contentEnd: {
+          promptName: this.promptName,
+          contentName,
+        },
       },
     });
   }
@@ -118,6 +165,31 @@ export class NovaSonicVoiceBridge implements RealtimeVoiceBridge {
   close(): void {
     this.intentionallyClosed = true;
     this.connected = false;
+    // Send proper close sequence
+    if (this.audioContentName) {
+      this.enqueueEvent({
+        event: {
+          contentEnd: {
+            promptName: this.promptName,
+            contentName: this.audioContentName,
+          },
+        },
+      });
+    }
+    if (this.promptName) {
+      this.enqueueEvent({
+        event: {
+          promptEnd: {
+            promptName: this.promptName,
+          },
+        },
+      });
+    }
+    this.enqueueEvent({
+      event: {
+        sessionEnd: {},
+      },
+    });
     this.inputResolve?.(true);
   }
 
@@ -127,51 +199,120 @@ export class NovaSonicVoiceBridge implements RealtimeVoiceBridge {
 
   // --- Private ---
 
-  private buildSessionConfig() {
+  private buildSessionStartEvent() {
     return {
-      event: { type: "sessionStart" },
-      data: {
-        inferenceConfig: {
-          maxTokens: this.config.maxTokens ?? 4096,
-          topP: 0.9,
-          temperature: this.config.temperature ?? 0.7,
-        },
-        requestConfig: {
-          inputAudioConfig: {
-            audioEncoding: "pcm",
-            sampleRateHertz: 16000,
-            channelCount: 1,
+      event: {
+        sessionStart: {
+          inferenceConfiguration: {
+            maxTokens: this.config.maxTokens ?? 4096,
+            topP: 0.9,
+            temperature: this.config.temperature ?? 0.7,
           },
-          outputAudioConfig: {
-            audioEncoding: "pcm",
+        },
+      },
+    };
+  }
+
+  private buildPromptStartEvent(promptName: string) {
+    return {
+      event: {
+        promptStart: {
+          promptName,
+          textOutputConfiguration: {
+            mediaType: "text/plain",
+          },
+          audioOutputConfiguration: {
+            encoding: "pcm",
             sampleRateHertz: 24000,
             channelCount: 1,
             voiceId: this.config.voice,
           },
-          sessionAttributes: {},
+          ...(this.config.tools && this.config.tools.length > 0
+            ? {
+                toolConfiguration: {
+                  tools: this.config.tools.map((t) => ({
+                    toolSpec: {
+                      name: t.name,
+                      description: t.description,
+                      inputSchema: { json: JSON.stringify(t.parameters) },
+                    },
+                  })),
+                },
+              }
+            : {}),
         },
-        ...(this.config.instructions ? { systemPrompt: { text: this.config.instructions } } : {}),
-        ...(this.config.tools && this.config.tools.length > 0
-          ? {
-              toolConfig: {
-                tools: this.config.tools.map((t) => ({
-                  toolSpec: {
-                    name: t.name,
-                    description: t.description,
-                    inputSchema: { json: t.parameters },
-                  },
-                })),
-              },
-            }
-          : {}),
+      },
+    };
+  }
+
+  private buildSystemPromptEvents(promptName: string): unknown[] {
+    if (!this.config.instructions) {
+      return [];
+    }
+
+    const contentName = generateUUID();
+    return [
+      {
+        event: {
+          contentStart: {
+            promptName,
+            contentName,
+            type: "TEXT",
+            role: "SYSTEM",
+          },
+        },
+      },
+      {
+        event: {
+          textInput: {
+            promptName,
+            contentName,
+            content: this.config.instructions,
+          },
+        },
+      },
+      {
+        event: {
+          contentEnd: {
+            promptName,
+            contentName,
+          },
+        },
+      },
+    ];
+  }
+
+  private buildAudioContentStartEvent(promptName: string, contentName: string) {
+    return {
+      event: {
+        contentStart: {
+          promptName,
+          contentName,
+          type: "AUDIO",
+          role: "USER",
+          audioInputConfiguration: {
+            encoding: "pcm",
+            sampleRateHertz: 16000,
+            channelCount: 1,
+          },
+        },
       },
     };
   }
 
   private async doConnect(): Promise<void> {
-    const sessionConfig = this.buildSessionConfig();
-    // Capture instance properties needed by the generator (generators cannot
-    // use arrow syntax, so direct `this` access is unavailable).
+    this.promptName = generateUUID();
+    this.audioContentName = generateUUID();
+
+    const sessionStartEvent = this.buildSessionStartEvent();
+    const promptStartEvent = this.buildPromptStartEvent(this.promptName);
+    const systemPromptEvents = this.buildSystemPromptEvents(this.promptName);
+    const audioContentStartEvent = this.buildAudioContentStartEvent(
+      this.promptName,
+      this.audioContentName,
+    );
+
+    // Capture instance properties needed by the generator
     const bridge = {
       intentionallyClosed: () => this.intentionallyClosed,
       inputStream: this.inputStream,
@@ -181,7 +322,18 @@ export class NovaSonicVoiceBridge implements RealtimeVoiceBridge {
     };
 
     async function* inputGenerator() {
-      yield { chunk: { bytes: encodeEvent(sessionConfig) } };
+      // 1. sessionStart
+      yield { chunk: { bytes: encodeEvent(sessionStartEvent) } };
+      // 2. promptStart
+      yield { chunk: { bytes: encodeEvent(promptStartEvent) } };
+      // 3. System prompt (contentStart TEXT/SYSTEM → textInput → contentEnd)
+      for (const evt of systemPromptEvents) {
+        yield { chunk: { bytes: encodeEvent(evt) } };
+      }
+      // 4. Audio content start (contentStart AUDIO/USER)
+      yield { chunk: { bytes: encodeEvent(audioContentStartEvent) } };
+
+      // 5. Stream audio input chunks and other events
       while (!bridge.intentionallyClosed()) {
         if (bridge.inputStream.length > 0) {
           const batch = bridge.inputStream.splice(0);
@@ -194,7 +346,14 @@ export class NovaSonicVoiceBridge implements RealtimeVoiceBridge {
           });
         }
       }
-      yield { chunk: { bytes: encodeEvent({ event: { type: "sessionEnd" } }) } };
+
+      // Drain any remaining items
+      if (bridge.inputStream.length > 0) {
+        const remaining = bridge.inputStream.splice(0);
+        for (const item of remaining) {
+          yield item;
+        }
+      }
     }
 
     try {
@@ -215,6 +374,7 @@ export class NovaSonicVoiceBridge implements RealtimeVoiceBridge {
       ]).finally(() => clearTimeout(connectTimer));
 
       this.connected = true;
+      this.reconnecting = false;
       this.reconnectAttempts = 0;
 
       for (const chunk of this.pendingAudio.splice(0)) {
@@ -234,6 +394,7 @@ export class NovaSonicVoiceBridge implements RealtimeVoiceBridge {
       return;
     }
     if (this.reconnectAttempts >= MAX_RECONNECT_ATTEMPTS) {
+      this.reconnecting = false;
       this.config.onClose?.("error");
       return;
     }
@@ -289,13 +450,18 @@ export class NovaSonicVoiceBridge implements RealtimeVoiceBridge {
     } catch (err) {
       if (!this.intentionallyClosed) {
         this.config.onError?.(err instanceof Error ? err : new Error(String(err)));
+        this.reconnecting = true;
         void this.attemptReconnect();
         return;
       }
     } finally {
       this.connected = false;
+      if (this.reconnecting) {
+        // Skip onClose — reconnect is in progress
+        return;
+      }
       if (!this.intentionallyClosed) {
-        this.config.onClose?.(this.intentionallyClosed ? "completed" : "error");
+        this.config.onClose?.("error");
       } else {
         this.config.onClose?.("completed");
       }
@@ -303,72 +469,91 @@ export class NovaSonicVoiceBridge implements RealtimeVoiceBridge {
   }
 
   private handleOutputEvent(event: {
-    event?: { type?: string };
-    data?: Record<string, unknown>;
+    event?: Record<string, unknown>;
   }): void {
-    const type = event.event?.type;
-    const data = event.data;
+    if (!event.event) {
+      return;
+    }
 
-    switch (type) {
-      case "audioOutput": {
-        const chunk = data?.audioChunk as string | undefined;
-        if (!chunk) {
-          return;
-        }
-        // Convert PCM output to mu-law for OpenClaw telephony
-        const pcmAudio = Buffer.from(chunk, "base64");
-        const mulawAudio = pcm16ToMulaw(pcmAudio);
-        this.config.onAudio(mulawAudio);
-        if (this.responseStartTimestamp === null) {
-          this.responseStartTimestamp = this.latestMediaTimestamp;
-        }
-        this.sendMark();
+    // The output events use the event type name as the key
+    const eventObj = event.event;
+
+    if (eventObj.audioOutput) {
+      const data = eventObj.audioOutput as Record<string, unknown>;
+      const chunk = data?.content as string | undefined;
+      if (!chunk) {
         return;
       }
+      // Convert PCM output to mu-law for OpenClaw telephony
+      const pcmAudio = Buffer.from(chunk, "base64");
+      const mulawAudio = pcm16ToMulaw(pcmAudio);
+      this.config.onAudio(mulawAudio);
+      if (this.responseStartTimestamp === null) {
+        this.responseStartTimestamp = this.latestMediaTimestamp;
+      }
+      this.sendMark();
+      return;
+    }
 
-      case "textOutput":
-      case "transcriptOutput": {
-        const text = (data?.text ?? data?.transcript) as string | undefined;
-        if (!text) {
-          return;
-        }
-        const role = (data?.role as string) === "user" ? "user" : "assistant";
-        const isFinal = (data?.isFinal as boolean) ?? type === "textOutput";
-        this.config.onTranscript?.(role, text, isFinal);
+    if (eventObj.textOutput) {
+      const data = eventObj.textOutput as Record<string, unknown>;
+      const text = data?.content as string | undefined;
+      if (!text) {
         return;
       }
+      const role = (data?.role as string) === "user" ? "user" : "assistant";
+      this.config.onTranscript?.(role, text, true);
+      return;
+    }
 
-      case "toolUse": {
-        const toolUseId = data?.toolUseId as string;
-        const name = data?.name as string;
-        if (toolUseId && name) {
-          this.config.onToolCall?.({
-            itemId: toolUseId,
-            callId: toolUseId,
-            name,
-            args: data?.input ?? {},
-          });
-        }
+    if (eventObj.transcriptOutput) {
+      const data = eventObj.transcriptOutput as Record<string, unknown>;
+      const text = data?.content as string | undefined;
+      if (!text) {
         return;
       }
+      const role = (data?.role as string) === "user" ? "user" : "assistant";
+      const isFinal = (data?.isFinal as boolean) ?? false;
+      this.config.onTranscript?.(role, text, isFinal);
+      return;
+    }
 
-      case "speechStarted":
+    if (eventObj.toolUse) {
+      const data = eventObj.toolUse as Record<string, unknown>;
+      const toolUseId = data?.toolUseId as string;
+      const name = data?.name as string;
+      if (toolUseId && name) {
+        this.config.onToolCall?.({
+          itemId: toolUseId,
+          callId: toolUseId,
+          name,
+          args: data?.input ?? {},
+        });
+      }
+      return;
+    }
+
+    if (eventObj.contentStart) {
+      const data = eventObj.contentStart as Record<string, unknown>;
+      if (data?.type === "AUDIO" && data?.role === "USER") {
+        // Speech activity detected (barge-in)
         this.handleBargeIn();
-        return;
+      }
+      return;
+    }
 
-      case "error":
-        this.config.onError?.(
-          new Error(`Nova Sonic: ${(data?.message as string) ?? "unknown error"}`),
-        );
-        return;
+    if (eventObj.error) {
+      const data = eventObj.error as Record<string, unknown>;
+      this.config.onError?.(
+        new Error(`Nova Sonic: ${(data?.message as string) ?? "unknown error"}`),
+      );
+      return;
+    }
 
-      case "sessionEnd":
-        this.connected = false;
-        this.config.onClose?.("completed");
-        return;
-
-      default:
-        return;
+    if (eventObj.sessionEnd) {
+      this.connected = false;
+      this.config.onClose?.("completed");
+      return;
     }
   }
 

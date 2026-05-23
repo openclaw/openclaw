@@ -9,7 +9,12 @@ export default definePluginEntry({
   description: "Amazon Polly (TTS), Transcribe (STT), Nova Sonic (realtime voice), and other AWS AI services.",
   register(api) {
     api.registerSpeechProvider(buildPollySpeechProvider(api.pluginConfig));
-    api.registerMediaUnderstandingProvider(buildTranscribeMediaProvider(api.pluginConfig));
+
+    const transcribeProvider = buildTranscribeMediaProvider(api.pluginConfig);
+    if (transcribeProvider) {
+      api.registerMediaUnderstandingProvider(transcribeProvider);
+    }
+
     api.registerRealtimeVoiceProvider(buildNovaSonicVoiceProvider(api.pluginConfig));
   },
 });

@@ -42,13 +42,18 @@ async function transcribe(
 /**
  * Build the Amazon Transcribe media understanding provider.
  * Config is read from the parent `amazon` plugin's `transcribe` key.
+ * Returns `null` when the provider is disabled via config.
  */
 export function buildTranscribeMediaProvider(
   pluginConfig?: Record<string, unknown>,
-): MediaUnderstandingProvider {
+): MediaUnderstandingProvider | null {
   const config = readTranscribeConfig(
     (pluginConfig?.transcribe ?? {}) as Record<string, unknown>,
   );
+
+  if (!config.enabled) {
+    return null;
+  }
 
   return {
     id: "amazon-transcribe",
