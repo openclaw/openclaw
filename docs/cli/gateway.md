@@ -334,7 +334,7 @@ If you pass `--url`, that explicit target is added ahead of both. Human output l
 - `Local loopback`
 
 <Note>
-If multiple gateways are reachable, it prints all of them. Multiple gateways are supported when you use isolated profiles/ports (e.g., a rescue bot), but most installs still run a single gateway.
+If multiple distinct gateways are reachable, it prints all of them. Probe dedupes alternate transports that report the same gateway identity and logical port, such as an SSH tunnel plus the configured remote URL for the same gateway. Multiple gateways are supported when you use isolated profiles/ports (e.g., a rescue bot), but most installs still run a single gateway.
 </Note>
 
 ```bash
@@ -379,7 +379,7 @@ openclaw gateway probe --json
   </Accordion>
   <Accordion title="Common warning codes">
     - `ssh_tunnel_failed`: SSH tunnel setup failed; the command fell back to direct probes.
-    - `multiple_gateways`: more than one target was reachable; this is unusual unless you intentionally run isolated profiles, such as a rescue bot.
+    - `multiple_gateways`: more than one distinct gateway identity or logical port was reachable; alternate transports to the same gateway are deduped before this warning is emitted.
     - `auth_secretref_unresolved`: a configured auth SecretRef could not be resolved for a failed target.
     - `probe_scope_limited`: WebSocket connect succeeded, but the read probe was limited by missing `operator.read`.
 

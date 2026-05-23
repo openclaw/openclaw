@@ -23,6 +23,45 @@ export type GatewayStatusWarning = {
 const noReachableGatewayDiagnostic =
   "No gateway answered any probe and Bonjour discovery returned no local gateways. Run `openclaw gateway status --deep --require-rpc` to inspect service state, config paths, listener owners, and logs; include `ss -ltnp` or `lsof -nP -iTCP:<port> -sTCP:LISTEN` for the configured port when filing a report.";
 
+function gatewayTargetPort(entry: GatewayStatusProbedTarget): string | null {
+  if (entry.target.kind === "sshTunnel") {
+    return String(entry.target.tunnel?.remotePort ?? "");
+  }
+  try {
+    const url = new URL(entry.target.url);
+    return url.port || (url.protocol === "wss:" ? "443" : url.protocol === "ws:" ? "80" : null);
+  } catch {
+    return null;
+  }
+}
+
+function gatewaySelfIdentityKey(entry: GatewayStatusProbedTarget): string | null {
+  if (!entry.self) {
+    return null;
+  }
+  const host = typeof entry.self.host === "string" ? entry.self.host.trim().toLowerCase() : "";
+  const ip = typeof entry.self.ip === "string" ? entry.self.ip.trim().toLowerCase() : "";
+  const port = gatewayTargetPort(entry);
+  if (!host && !ip) {
+    return null;
+  }
+  if (!port) {
+    return null;
+  }
+  return `${host}\0${ip}\0${port}`;
+}
+
+function hasMultipleReachableGatewayIdentities(reachable: GatewayStatusProbedTarget[]): boolean {
+  if (reachable.length <= 1) {
+    return false;
+  }
+  const identityKeys = reachable.map((entry) => gatewaySelfIdentityKey(entry));
+  if (identityKeys.some((key) => key === null)) {
+    return true;
+  }
+  return new Set(identityKeys).size > 1;
+}
+
 function readModelPricingDegradedDetail(health: unknown): string | null {
   if (!health || typeof health !== "object") {
     return null;
@@ -91,7 +130,7 @@ export function buildGatewayStatusWarnings(params: {
       targetIds: params.probed.map((entry) => entry.target.id),
     });
   }
-  if (reachable.length > 1) {
+  if (hasMultipleReachableGatewayIdentities(reachable)) {
     // Multiple reachable gateways are valid for isolated profiles but surprising
     // enough to call out before users debug against the wrong process.
     warnings.push({
