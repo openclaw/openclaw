@@ -403,7 +403,6 @@ export type PluginHookReplyDispatchEvent = {
   originatingChannel?: string;
   originatingTo?: string;
   shouldSendToolSummaries: boolean;
-  shouldSendToolSummariesNow?: () => boolean;
   sendPolicy: "allow" | "deny";
   isTailDispatch?: boolean;
 };

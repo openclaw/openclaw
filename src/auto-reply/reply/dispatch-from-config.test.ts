@@ -1683,6 +1683,160 @@ describe("dispatchReplyFromConfig", () => {
     expect(dispatcher.sendFinalReply).toHaveBeenCalledTimes(1);
   });
 
+  it("keeps tool-error fallbacks available when group verbose is disabled during the run", async () => {
+    setNoAbort();
+    sessionStoreMocks.currentEntry = {
+      verboseLevel: "on",
+    };
+    const cfg = automaticGroupReplyConfig;
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "whatsapp",
+      Surface: "whatsapp",
+      ChatType: "group",
+      From: "whatsapp:group:789@g.us",
+      SessionKey: "agent:main:whatsapp:group:789@g.us",
+    });
+    let receivedOptions: GetReplyOptions | undefined;
+
+    const replyResolver = async (
+      _ctx: MsgContext,
+      opts?: GetReplyOptions,
+      _cfg?: OpenClawConfig,
+    ) => {
+      receivedOptions = opts;
+      const onToolResult = requireToolResultHandler(opts?.onToolResult);
+      sessionStoreMocks.currentEntry = {
+        verboseLevel: "off",
+      };
+      await onToolResult({ text: "🔧 exec: failed", isError: true });
+      return { text: "done" } satisfies ReplyPayload;
+    };
+
+    await dispatchReplyFromConfig({
+      ctx,
+      cfg,
+      dispatcher,
+      replyResolver,
+      replyOptions: { suppressDefaultToolProgressMessages: true },
+    });
+
+    expect(receivedOptions?.suppressToolErrorWarnings).toBeUndefined();
+    expect(dispatcher.sendToolResult).not.toHaveBeenCalled();
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledTimes(1);
+  });
+
+  it("suppresses channel-owned group progress callbacks while verbose is off", async () => {
+    setNoAbort();
+    sessionStoreMocks.currentEntry = {
+      verboseLevel: "off",
+    };
+    const cfg = automaticGroupReplyConfig;
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "telegram",
+      Surface: "telegram",
+      ChatType: "group",
+      From: "telegram:group:-100123",
+      SessionKey: "agent:main:telegram:group:-100123",
+    });
+    const onToolStart = vi.fn();
+    const onItemEvent = vi.fn();
+    const onPlanUpdate = vi.fn();
+    const onApprovalEvent = vi.fn();
+    const onCommandOutput = vi.fn();
+    const onPatchSummary = vi.fn();
+    const onCompactionStart = vi.fn();
+    const onCompactionEnd = vi.fn();
+    const onToolResult = vi.fn();
+
+    const replyResolver = async (
+      _ctx: MsgContext,
+      opts?: GetReplyOptions,
+      _cfg?: OpenClawConfig,
+    ) => {
+      await opts?.onToolStart?.({ name: "exec", phase: "start" });
+      await opts?.onItemEvent?.({ itemId: "1", kind: "tool", progressText: "running exec" });
+      await opts?.onPlanUpdate?.({ phase: "update", steps: ["Run command"] });
+      await opts?.onApprovalEvent?.({ phase: "requested", command: "pnpm test" });
+      await opts?.onCommandOutput?.({ phase: "end", name: "exec", status: "ok", exitCode: 0 });
+      await opts?.onPatchSummary?.({ phase: "end", summary: "1 modified" });
+      await opts?.onCompactionStart?.();
+      await opts?.onCompactionEnd?.();
+      await opts?.onToolResult?.({ text: "🔧 exec: ok" });
+      return { text: "done" } satisfies ReplyPayload;
+    };
+
+    await dispatchReplyFromConfig({
+      ctx,
+      cfg,
+      dispatcher,
+      replyResolver,
+      replyOptions: {
+        suppressDefaultToolProgressMessages: true,
+        onToolStart,
+        onItemEvent,
+        onPlanUpdate,
+        onApprovalEvent,
+        onCommandOutput,
+        onPatchSummary,
+        onCompactionStart,
+        onCompactionEnd,
+        onToolResult,
+      },
+    });
+
+    expect(onToolStart).not.toHaveBeenCalled();
+    expect(onItemEvent).not.toHaveBeenCalled();
+    expect(onPlanUpdate).not.toHaveBeenCalled();
+    expect(onApprovalEvent).not.toHaveBeenCalled();
+    expect(onCommandOutput).not.toHaveBeenCalled();
+    expect(onPatchSummary).not.toHaveBeenCalled();
+    expect(onCompactionStart).not.toHaveBeenCalled();
+    expect(onCompactionEnd).not.toHaveBeenCalled();
+    expect(onToolResult).not.toHaveBeenCalled();
+    expect(dispatcher.sendToolResult).not.toHaveBeenCalled();
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledTimes(1);
+  });
+
+  it("exposes live group tool-summary state to reply_dispatch hooks", async () => {
+    setNoAbort();
+    sessionStoreMocks.currentEntry = {
+      verboseLevel: "off",
+    };
+    const cfg = automaticGroupReplyConfig;
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "matrix",
+      Surface: "matrix",
+      ChatType: "group",
+      From: "matrix:!room:test",
+      SessionKey: "agent:main:matrix:group:!room:test",
+    });
+    let initialHookState: boolean | undefined;
+    let updatedHookState: boolean | undefined;
+    hookMocks.runner.runReplyDispatch.mockImplementationOnce(async (event: unknown) => {
+      const replyDispatchEvent = event as { shouldSendToolSummaries: boolean };
+      initialHookState = replyDispatchEvent.shouldSendToolSummaries;
+      sessionStoreMocks.currentEntry = {
+        verboseLevel: "on",
+      };
+      updatedHookState = replyDispatchEvent.shouldSendToolSummaries;
+      return undefined;
+    });
+
+    await dispatchReplyFromConfig({
+      ctx,
+      cfg,
+      dispatcher,
+      replyResolver: async () => ({ text: "hi" }) satisfies ReplyPayload,
+    });
+
+    expect(initialHookState).toBe(false);
+    expect(updatedHookState).toBe(true);
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledTimes(1);
+  });
+
   it("normalizes tool-result media before delivery and drops blocked file URLs", async () => {
     setNoAbort();
     replyMediaPathMocks.createReplyMediaPathNormalizer.mockReturnValue(

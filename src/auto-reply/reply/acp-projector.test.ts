@@ -311,6 +311,55 @@ describe("createAcpReplyProjector", () => {
     expect(deliveries).toEqual([{ kind: "final", text: "done" }]);
   });
 
+  it("preserves final-only text boundary when a buffered tool summary is dropped", async () => {
+    let allowToolSummaries = true;
+    const deliveries: Delivery[] = [];
+    const projector = createAcpReplyProjector({
+      cfg: createCfg({
+        acp: {
+          enabled: true,
+          stream: {
+            deliveryMode: "final_only",
+            hiddenBoundarySeparator: "space",
+            tagVisibility: {
+              tool_call: true,
+            },
+          },
+        },
+      }),
+      shouldSendToolSummaries: true,
+      shouldSendToolSummariesNow: () => allowToolSummaries,
+      deliver: async (kind, payload) => {
+        deliveries.push({ kind, text: payload.text });
+        return true;
+      },
+    });
+
+    await projector.onEvent({
+      type: "text_delta",
+      text: "fallback.",
+      tag: "agent_message_chunk",
+    });
+    await projector.onEvent({
+      type: "tool_call",
+      tag: "tool_call",
+      toolCallId: "tool-dropped-before-flush",
+      status: "in_progress",
+      title: "Run test",
+      text: "Run test (in_progress)",
+    });
+    await projector.onEvent({
+      type: "text_delta",
+      text: "I don't",
+      tag: "agent_message_chunk",
+    });
+    allowToolSummaries = false;
+
+    await projector.onEvent({ type: "done" });
+
+    expect(deliveries).toEqual([{ kind: "final", text: "fallback. I don't" }]);
+  });
+
   it("does not suppress identical short text across terminal turn boundaries", async () => {
     const { deliveries, projector } = createProjectorHarness(
       createLiveCfgOverrides({

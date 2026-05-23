@@ -408,6 +408,7 @@ export function createAcpReplyProjector(params: {
         payload: { text: toolSummary },
         meta: deliveryMeta,
       });
+      markHiddenToolBoundary(event);
     } else {
       await flush(true);
       await params.deliver("tool", { text: toolSummary }, deliveryMeta);
