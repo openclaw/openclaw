@@ -176,29 +176,6 @@ function hasNonEmptyArray<T>(value: T[] | undefined): value is T[] {
   return Array.isArray(value) && value.length > 0;
 }
 
-function projectMessagingToolDeliveryEvidence(
-  result: RunResult,
-): Pick<
-  AgentCommandDeliveryResult,
-  | "didSendViaMessagingTool"
-  | "messagingToolSentTexts"
-  | "messagingToolSentMediaUrls"
-  | "messagingToolSentTargets"
-> {
-  return {
-    ...(result.didSendViaMessagingTool === true ? { didSendViaMessagingTool: true } : {}),
-    ...(hasNonEmptyStringArray(result.messagingToolSentTexts)
-      ? { messagingToolSentTexts: result.messagingToolSentTexts }
-      : {}),
-    ...(hasNonEmptyStringArray(result.messagingToolSentMediaUrls)
-      ? { messagingToolSentMediaUrls: result.messagingToolSentMediaUrls }
-      : {}),
-    ...(hasNonEmptyArray(result.messagingToolSentTargets)
-      ? { messagingToolSentTargets: result.messagingToolSentTargets }
-      : {}),
-  };
-}
-
 function buildDeliveryResult(params: {
   payloads: AgentCommandDeliveryResult["payloads"];
   meta: AgentCommandDeliveryResult["meta"];
@@ -209,7 +186,16 @@ function buildDeliveryResult(params: {
   return {
     payloads: params.payloads,
     meta: params.meta,
-    ...projectMessagingToolDeliveryEvidence(params.result),
+    ...(params.result.didSendViaMessagingTool === true ? { didSendViaMessagingTool: true } : {}),
+    ...(hasNonEmptyStringArray(params.result.messagingToolSentTexts)
+      ? { messagingToolSentTexts: params.result.messagingToolSentTexts }
+      : {}),
+    ...(hasNonEmptyStringArray(params.result.messagingToolSentMediaUrls)
+      ? { messagingToolSentMediaUrls: params.result.messagingToolSentMediaUrls }
+      : {}),
+    ...(hasNonEmptyArray(params.result.messagingToolSentTargets)
+      ? { messagingToolSentTargets: params.result.messagingToolSentTargets }
+      : {}),
     ...(params.deliverySucceeded !== undefined
       ? { deliverySucceeded: params.deliverySucceeded }
       : {}),
@@ -647,7 +633,6 @@ export async function deliverAgentCommandResult(
   const outboundPayloadPlan = createOutboundPayloadPlan(mediaNormalizedReplyPayloads);
   const normalizedPayloads = projectOutboundPayloadPlanForJson(outboundPayloadPlan);
   const resultMeta = mergeResultMetaOverrides(result.meta, opts.resultMetaOverrides);
-  const messagingToolDeliveryEvidence = projectMessagingToolDeliveryEvidence(result);
   const emitJsonEnvelope = (status?: AgentCommandDeliveryStatus) => {
     if (!opts.json) {
       return;
@@ -657,7 +642,6 @@ export async function deliverAgentCommandResult(
         payloads: normalizedPayloads,
         meta: resultMeta,
       }),
-      ...messagingToolDeliveryEvidence,
       ...(status ? { deliveryStatus: status } : {}),
     });
   };

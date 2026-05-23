@@ -886,7 +886,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     expect(callGateway).not.toHaveBeenCalled();
   });
 
-  it("does not also direct-run a queued message-tool-only active completion", async () => {
+  it("does not also direct-run a queued active completion", async () => {
     const callGateway = createGatewayMock();
     const queueEmbeddedPiMessageWithOutcome = createQueueOutcomeMock(true);
     const result = await deliverSlackThreadAnnouncement({
@@ -1225,36 +1225,18 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     });
 
     expectRecordFields(result, {
-      delivered: false,
+      delivered: true,
       path: "direct",
-      error: "completion agent did not produce a visible reply",
     });
     expect(sendMessage).not.toHaveBeenCalled();
   });
 
-  it("forces message-tool thread completions after transcript-wait wake falls stale", async () => {
-    const callGateway = createGatewaySequenceMock([
-      {
-        result: {
-          payloads: [],
-        },
+  it("treats stale thread subagent completions as delivered after parent handoff", async () => {
+    const callGateway = createGatewayMock({
+      result: {
+        payloads: [],
       },
-      {
-        result: {
-          payloads: [],
-          messagingToolSentTargets: [
-            {
-              tool: "message",
-              provider: "slack",
-              accountId: "acct-1",
-              to: "channel:C123",
-              threadId: "171.222",
-              text: "The background task completed.",
-            },
-          ],
-        },
-      },
-    ]);
+    });
     const sendMessage = createSendMessageMock();
     const queueEmbeddedPiMessageWithOutcome = createQueueOutcomeSequenceMock([
       "transcript_commit_wait_unsupported",
@@ -1288,22 +1270,13 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
       delivered: true,
       path: "direct",
     });
-    expect(callGateway).toHaveBeenCalledTimes(2);
+    expect(callGateway).toHaveBeenCalledTimes(1);
     expectGatewayAgentParams(callGateway, {
       deliver: true,
       channel: "slack",
       accountId: "acct-1",
       to: "channel:C123",
       threadId: "171.222",
-    });
-    expectRecordFields(mockCallArg(callGateway, 1).params, {
-      deliver: false,
-      channel: "slack",
-      accountId: "acct-1",
-      to: "channel:C123",
-      threadId: "171.222",
-      sourceReplyDeliveryMode: "message_tool_only",
-      idempotencyKey: "announce-thread-fallback-empty:message-tool",
     });
     expect(queueEmbeddedPiMessageWithOutcome).toHaveBeenCalledTimes(2);
     expect(queueEmbeddedPiMessageWithOutcome).toHaveBeenNthCalledWith(
@@ -1574,27 +1547,21 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
 
     expectRecordFields(result, {
       delivered: true,
-      path: "steered",
+      path: "direct",
       phases: [
         {
           phase: "direct-primary",
-          delivered: false,
-          path: "direct",
-          error: "completion agent did not produce a visible reply",
-        },
-        {
-          phase: "steer-fallback",
           delivered: true,
-          path: "steered",
+          path: "direct",
           error: undefined,
         },
       ],
     });
-    expect(queueEmbeddedPiMessageWithOutcome).toHaveBeenCalledTimes(2);
+    expect(queueEmbeddedPiMessageWithOutcome).toHaveBeenCalledTimes(1);
     expect(callGateway).toHaveBeenCalledTimes(1);
   });
 
-  it("reports message-tool failure when stale thread completion remains invisible", async () => {
+  it("does not fail stale thread subagent completions only because the parent stayed private", async () => {
     const callGateway = createGatewayMock({
       result: {
         payloads: [],
@@ -1630,11 +1597,10 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     });
 
     expectRecordFields(result, {
-      delivered: false,
+      delivered: true,
       path: "direct",
-      error: "completion agent did not deliver through the message tool",
     });
-    expect(callGateway).toHaveBeenCalledTimes(2);
+    expect(callGateway).toHaveBeenCalledTimes(1);
     expect(sendMessage).not.toHaveBeenCalled();
   });
 
@@ -1736,7 +1702,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     expect(sendMessage).not.toHaveBeenCalled();
   });
 
-  it("directly delivers generated media when only the invisible final payload has media", async () => {
+  it("does not fallback when the agent result already contains generated media", async () => {
     const callGateway = createGatewayMock({
       result: {
         payloads: [
@@ -1775,16 +1741,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
       delivered: true,
       path: "direct",
     });
-    expect(sendMessage).toHaveBeenCalledWith(
-      expect.objectContaining({
-        channel: "discord",
-        accountId: "acct-1",
-        to: "dm:U123",
-        content: "The generated music is ready.",
-        mediaUrls: ["/tmp/generated-night-drive.mp3"],
-        idempotencyKey: "announce-dm-fallback-empty:generated-media-direct",
-      }),
-    );
+    expect(sendMessage).not.toHaveBeenCalled();
   });
 
   it("requires generated media completion DMs to use the message tool", async () => {
@@ -2470,7 +2427,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     expect(sendMessage).not.toHaveBeenCalled();
   });
 
-  it("reports channel message-tool failure when stale completion remains invisible", async () => {
+  it("does not fail stale channel subagent completions only because the parent stayed private", async () => {
     const callGateway = createGatewayMock({
       result: {
         payloads: [],
@@ -2506,18 +2463,19 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     });
 
     expectRecordFields(result, {
-      delivered: false,
+      delivered: true,
       path: "direct",
-      error: "completion agent did not deliver through the message tool",
     });
-    expect(callGateway).toHaveBeenCalledTimes(2);
+    expect(callGateway).toHaveBeenCalledTimes(1);
     expect(sendMessage).not.toHaveBeenCalled();
   });
 
-  it("requires message-tool delivery for configured channel subagent completions", async () => {
+  it("keeps configured channel subagent completions on parent message-tool handoff", async () => {
     const callGateway = createGatewayMock({
       result: {
         payloads: [{ text: "The subagent is done." }],
+        didSendViaMessagingTool: true,
+        messagingToolSentTexts: ["The subagent is done."],
       },
     });
     const queueEmbeddedPiMessageWithOutcome = createQueueOutcomeMock(false);
@@ -2547,9 +2505,8 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     });
 
     expectRecordFields(result, {
-      delivered: false,
+      delivered: true,
       path: "direct",
-      error: "completion agent did not deliver through the message tool",
     });
     expectGatewayAgentParams(callGateway, {
       deliver: false,
@@ -2561,29 +2518,51 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     });
   });
 
-  it("retries Telegram forum-topic subagent completions when the announce agent returns private final text", async () => {
-    const callGateway = createGatewaySequenceMock([
-      {
-        result: {
-          payloads: [{ text: "The delegated task is complete." }],
-        },
+  it("fails configured channel subagent completions when parent skips required message tool", async () => {
+    const callGateway = createGatewayMock({
+      result: {
+        payloads: [{ text: "The subagent is done." }],
       },
-      {
-        result: {
-          payloads: [],
-          messagingToolSentTargets: [
-            {
-              tool: "message",
-              provider: "telegram",
-              accountId: "bot-1",
-              to: "telegram:-1003871627242",
-              threadId: "6823",
-              text: "The delegated task is complete.",
-            },
-          ],
+    });
+    const queueEmbeddedPiMessageWithOutcome = createQueueOutcomeMock(false);
+    const result = await deliverSlackChannelAnnouncement({
+      callGateway,
+      sessionId: "requester-session-channel",
+      isActive: false,
+      expectsCompletionMessage: true,
+      directIdempotencyKey: "announce-channel-subagent-message-tool-missing",
+      sourceTool: "subagent_announce",
+      runtimeConfig: { messages: { groupChat: { visibleReplies: "message_tool" } } },
+      queueEmbeddedPiMessageWithOutcome,
+      internalEvents: [
+        {
+          type: "task_completion",
+          source: "subagent",
+          childSessionKey: "agent:worker:subagent:child",
+          childSessionId: "child-session-id",
+          announceType: "subagent task",
+          taskLabel: "channel completion smoke",
+          status: "ok",
+          statusLabel: "completed successfully",
+          result: "child completion output",
+          replyInstruction: "Summarize the result.",
         },
+      ],
+    });
+
+    expectRecordFields(result, {
+      delivered: false,
+      path: "direct",
+      error: "completion agent did not use the message tool for message-tool-only delivery",
+    });
+  });
+
+  it("delivers Telegram forum-topic subagent completions through the normal parent handoff", async () => {
+    const callGateway = createGatewayMock({
+      result: {
+        payloads: [{ text: "The delegated task is complete." }],
       },
-    ]);
+    });
 
     const result = await deliverTelegramDirectMessageCompletion({
       callGateway,
@@ -2615,25 +2594,14 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
       delivered: true,
       path: "direct",
     });
-    expect(callGateway).toHaveBeenCalledTimes(2);
+    expect(callGateway).toHaveBeenCalledTimes(1);
     expectGatewayAgentParams(callGateway, {
-      deliver: false,
+      deliver: true,
       channel: "telegram",
       accountId: "bot-1",
       to: "telegram:-1003871627242",
       threadId: "6823",
-      sourceReplyDeliveryMode: "message_tool_only",
     });
-    const retryParams = expectRecordFields(mockCallArg(callGateway, 1).params, {
-      deliver: false,
-      channel: "telegram",
-      accountId: "bot-1",
-      to: "telegram:-1003871627242",
-      threadId: "6823",
-      sourceReplyDeliveryMode: "message_tool_only",
-      idempotencyKey: "announce-telegram-dm-fallback:message-tool",
-    });
-    expect(retryParams.extraSystemPrompt).toContain('message(action="send")');
   });
 
   it("keeps automatic final delivery for direct subagent completions", async () => {

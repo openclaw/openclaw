@@ -64,13 +64,12 @@ const slackRegistry = createTestRegistry([
 ]);
 
 function createResult(overrides: Partial<RunResult> = {}): RunResult {
-  const { meta, ...rest } = overrides;
   return {
     meta: {
       durationMs: 1,
-      ...meta,
+      ...overrides.meta,
     },
-    ...rest,
+    ...(overrides.payloads ? { payloads: overrides.payloads } : {}),
   } as RunResult;
 }
 
@@ -823,46 +822,6 @@ describe("normalizeAgentCommandReplyPayloads", () => {
       succeeded: true,
       reason: "no_visible_payload",
     });
-    expect(deliverOutboundPayloadsMock).not.toHaveBeenCalled();
-  });
-
-  it("preserves message-tool delivery evidence when no visible payload is returned", async () => {
-    const delivered = await deliverAgentCommandResult({
-      cfg: {} as OpenClawConfig,
-      deps: {} as CliDeps,
-      runtime: { log: vi.fn(), error: vi.fn() } as never,
-      opts: {
-        message: "go",
-        deliver: true,
-        replyChannel: "slack",
-        replyTo: "#general",
-      } as AgentCommandOpts,
-      outboundSession: undefined,
-      sessionEntry: undefined,
-      payloads: [],
-      result: createResult({
-        didSendViaMessagingTool: true,
-        messagingToolSentTexts: ["done"],
-        messagingToolSentTargets: [
-          {
-            tool: "message",
-            provider: "slack",
-            to: "channel:C1",
-          },
-        ],
-      }),
-    });
-
-    expect(delivered.deliverySucceeded).toBe(true);
-    expect(delivered.didSendViaMessagingTool).toBe(true);
-    expect(delivered.messagingToolSentTexts).toStrictEqual(["done"]);
-    expect(delivered.messagingToolSentTargets).toStrictEqual([
-      {
-        tool: "message",
-        provider: "slack",
-        to: "channel:C1",
-      },
-    ]);
     expect(deliverOutboundPayloadsMock).not.toHaveBeenCalled();
   });
 

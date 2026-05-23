@@ -1,6 +1,5 @@
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import { formatBlockedLivenessError, isBlockedLivenessState } from "../shared/agent-liveness.js";
-import { extractTextFromChatContent } from "../shared/chat-content.js";
 import { wrapPromptDataBlock } from "./sanitize-for-prompt.js";
 import {
   captureSubagentCompletionReplyUsing,
@@ -14,7 +13,6 @@ import {
   resolveStorePath,
 } from "./subagent-announce.runtime.js";
 import { assistantCallsSessionsYield, isSessionsYieldToolResult } from "./subagent-yield-output.js";
-import { readLatestAssistantReply } from "./tools/agent-step.js";
 import { extractAssistantText, sanitizeTextContent } from "./tools/session-message-text.js";
 import { isAnnounceSkip } from "./tools/sessions-send-tokens.js";
 
@@ -24,7 +22,6 @@ type SubagentAnnounceOutputDeps = {
   callGateway: typeof callGateway;
   getRuntimeConfig: typeof getRuntimeConfig;
   readSessionEntry: typeof readSessionEntry;
-  readLatestAssistantReply: typeof readLatestAssistantReply;
   resolveAgentIdFromSessionKey: typeof resolveAgentIdFromSessionKey;
   resolveStorePath: typeof resolveStorePath;
 };
@@ -33,7 +30,6 @@ const defaultSubagentAnnounceOutputDeps: SubagentAnnounceOutputDeps = {
   callGateway,
   getRuntimeConfig,
   readSessionEntry,
-  readLatestAssistantReply,
   resolveAgentIdFromSessionKey,
   resolveStorePath,
 };
@@ -44,17 +40,9 @@ function isFastTestMode() {
   return process.env.OPENCLAW_TEST_FAST === "1";
 }
 
-type ToolResultMessage = {
-  role?: unknown;
-  content?: unknown;
-};
-
 type SubagentOutputSnapshot = {
   latestAssistantText?: string;
   latestSilentText?: string;
-  latestRawText?: string;
-  assistantFragments: string[];
-  toolCallCount: number;
   waitingForContinuation?: boolean;
 };
 
@@ -102,116 +90,23 @@ export function withSubagentOutcomeTiming(
   return { ...outcome, ...nextTiming };
 }
 
-function extractToolResultText(content: unknown): string {
-  if (typeof content === "string") {
-    return sanitizeTextContent(content);
-  }
-  if (content && typeof content === "object" && !Array.isArray(content)) {
-    const obj = content as {
-      text?: unknown;
-      output?: unknown;
-      content?: unknown;
-      result?: unknown;
-      error?: unknown;
-      summary?: unknown;
-    };
-    if (typeof obj.text === "string") {
-      return sanitizeTextContent(obj.text);
-    }
-    if (typeof obj.output === "string") {
-      return sanitizeTextContent(obj.output);
-    }
-    if (typeof obj.content === "string") {
-      return sanitizeTextContent(obj.content);
-    }
-    if (typeof obj.result === "string") {
-      return sanitizeTextContent(obj.result);
-    }
-    if (typeof obj.error === "string") {
-      return sanitizeTextContent(obj.error);
-    }
-    if (typeof obj.summary === "string") {
-      return sanitizeTextContent(obj.summary);
-    }
-  }
-  if (!Array.isArray(content)) {
-    return "";
-  }
-  const joined = extractTextFromChatContent(content, {
-    sanitizeText: sanitizeTextContent,
-    normalizeText: (text) => text,
-    joinWith: "\n",
-  });
-  return joined?.trim() ?? "";
-}
-
-function extractInlineTextContent(content: unknown): string {
-  if (!Array.isArray(content)) {
-    return "";
-  }
-  return (
-    extractTextFromChatContent(content, {
-      sanitizeText: sanitizeTextContent,
-      normalizeText: (text) => text.trim(),
-      joinWith: "",
-    }) ?? ""
-  );
-}
-
-function extractSubagentOutputText(message: unknown): string {
+function extractSubagentAssistantText(message: unknown): string {
   if (!message || typeof message !== "object") {
     return "";
   }
   const role = (message as { role?: unknown }).role;
+  if (role !== "assistant") {
+    return "";
+  }
   const content = (message as { content?: unknown }).content;
-  if (role === "assistant") {
-    if (typeof content === "string") {
-      return sanitizeTextContent(content);
-    }
-    return extractAssistantText(message) ?? "";
+  if (typeof content === "string") {
+    return sanitizeTextContent(content);
   }
-  if (role === "toolResult" || role === "tool") {
-    return extractToolResultText((message as ToolResultMessage).content);
-  }
-  if (role == null) {
-    if (typeof content === "string") {
-      return sanitizeTextContent(content);
-    }
-    if (Array.isArray(content)) {
-      return extractInlineTextContent(content);
-    }
-  }
-  return "";
-}
-
-function countAssistantToolCalls(content: unknown): number {
-  if (!Array.isArray(content)) {
-    return 0;
-  }
-  let count = 0;
-  for (const block of content) {
-    if (!block || typeof block !== "object") {
-      continue;
-    }
-    const type = (block as { type?: unknown }).type;
-    if (
-      type === "toolCall" ||
-      type === "tool_use" ||
-      type === "toolUse" ||
-      type === "functionCall" ||
-      type === "function_call"
-    ) {
-      count += 1;
-    }
-  }
-  return count;
+  return extractAssistantText(message) ?? "";
 }
 
 function summarizeSubagentOutputHistory(messages: Array<unknown>): SubagentOutputSnapshot {
-  const snapshot: SubagentOutputSnapshot = {
-    assistantFragments: [],
-    toolCallCount: 0,
-  };
+  const snapshot: SubagentOutputSnapshot = {};
   let previousAssistantCalledYield = false;
   for (const message of messages) {
     if (!message || typeof message !== "object") {
@@ -219,82 +114,45 @@ function summarizeSubagentOutputHistory(messages: Array<unknown>): SubagentOutpu
     }
     const role = (message as { role?: unknown }).role;
     if (role === "assistant") {
-      snapshot.toolCallCount += countAssistantToolCalls((message as { content?: unknown }).content);
       if (assistantCallsSessionsYield(message)) {
         snapshot.latestAssistantText = undefined;
-        snapshot.latestRawText = undefined;
         snapshot.latestSilentText = undefined;
-        snapshot.assistantFragments = [];
         snapshot.waitingForContinuation = true;
         previousAssistantCalledYield = true;
         continue;
       }
-      const text = extractSubagentOutputText(message).trim();
+      const text = extractSubagentAssistantText(message).trim();
       if (!text) {
+        snapshot.waitingForContinuation = false;
         previousAssistantCalledYield = false;
         continue;
       }
       if (isAnnounceSkip(text) || isSilentReplyText(text, SILENT_REPLY_TOKEN)) {
         snapshot.latestSilentText = text;
         snapshot.latestAssistantText = undefined;
-        snapshot.assistantFragments = [];
         snapshot.waitingForContinuation = false;
         previousAssistantCalledYield = false;
         continue;
       }
       snapshot.latestSilentText = undefined;
       snapshot.latestAssistantText = text;
-      snapshot.assistantFragments.push(text);
       snapshot.waitingForContinuation = false;
       previousAssistantCalledYield = false;
       continue;
     }
     if (isSessionsYieldToolResult(message, previousAssistantCalledYield)) {
       snapshot.latestAssistantText = undefined;
-      snapshot.latestRawText = undefined;
       snapshot.latestSilentText = undefined;
-      snapshot.assistantFragments = [];
       snapshot.waitingForContinuation = true;
       previousAssistantCalledYield = false;
       continue;
-    }
-    const text = extractSubagentOutputText(message).trim();
-    if (text) {
-      snapshot.latestRawText = text;
-      snapshot.waitingForContinuation = false;
     }
     previousAssistantCalledYield = false;
   }
   return snapshot;
 }
 
-function formatSubagentPartialProgress(
-  snapshot: SubagentOutputSnapshot,
-  outcome?: SubagentRunOutcome,
-): string | undefined {
-  if (snapshot.latestSilentText) {
-    return undefined;
-  }
-  const timedOut = outcome?.status === "timeout";
-  if (snapshot.assistantFragments.length === 0 && (!timedOut || snapshot.toolCallCount === 0)) {
-    return undefined;
-  }
-  const parts: string[] = [];
-  if (timedOut && snapshot.toolCallCount > 0) {
-    parts.push(
-      `[Partial progress: ${snapshot.toolCallCount} tool call(s) executed before timeout]`,
-    );
-  }
-  if (snapshot.assistantFragments.length > 0) {
-    parts.push(snapshot.assistantFragments.slice(-3).join("\n\n---\n\n"));
-  }
-  return parts.join("\n\n") || undefined;
-}
-
-function selectSubagentOutputText(
-  snapshot: SubagentOutputSnapshot,
-  outcome?: SubagentRunOutcome,
-): string | undefined {
+function selectSubagentOutputText(snapshot: SubagentOutputSnapshot): string | undefined {
   if (snapshot.waitingForContinuation) {
     return undefined;
   }
@@ -304,16 +162,12 @@ function selectSubagentOutputText(
   if (snapshot.latestAssistantText) {
     return snapshot.latestAssistantText;
   }
-  const partialProgress = formatSubagentPartialProgress(snapshot, outcome);
-  if (partialProgress) {
-    return partialProgress;
-  }
-  return snapshot.latestRawText;
+  return undefined;
 }
 
 export async function readSubagentOutput(
   sessionKey: string,
-  outcome?: SubagentRunOutcome,
+  _outcome?: SubagentRunOutcome,
 ): Promise<string | undefined> {
   const history = await subagentAnnounceOutputDeps.callGateway({
     method: "chat.history",
@@ -321,18 +175,11 @@ export async function readSubagentOutput(
   });
   const messages = Array.isArray(history?.messages) ? history.messages : [];
   const snapshot = summarizeSubagentOutputHistory(messages);
-  const selected = selectSubagentOutputText(snapshot, outcome);
+  const selected = selectSubagentOutputText(snapshot);
   if (selected?.trim()) {
     return selected;
   }
-  if (snapshot.waitingForContinuation) {
-    return undefined;
-  }
-  const latestAssistant = await subagentAnnounceOutputDeps.readLatestAssistantReply({
-    sessionKey,
-    limit: 100,
-  });
-  return latestAssistant?.trim() ? latestAssistant : undefined;
+  return undefined;
 }
 
 export async function readLatestSubagentOutputWithRetry(params: {
