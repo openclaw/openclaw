@@ -28,6 +28,7 @@ Docs: https://docs.openclaw.ai
 - Maintainer skills: exclude plugin SDK/API boundary work from `openclaw-landable-bug-sweep` so bugbash sweeps stay focused on small paper-cut fixes.
 - QA-Lab/diagnostics: extend the OpenTelemetry smoke harness to prove trace, metric, and log export, and add first-class Prometheus and observability smoke aliases.
 - Plugin SDK: add a generic channel-message poll sender so channel plugins can expose poll delivery without depending on channel-specific SDK facades.
+- Plugin SDK/cron delivery: route cron delivery through the modern target resolver and outbound session-route APIs, deprecate parser-backed target helpers and `plugin-sdk/messaging-targets`, and move bundled callers to `plugin-sdk/channel-targets`.
 - Crabbox: keep the local wrapper's provider validation synced with the installed Crabbox binary while preserving supported aliases such as `docker` and `blacksmith`. (#85302) Thanks @hxy91819.
 - Maintainer skills: add `openclaw-landable-bug-sweep` for producing five small, reviewed, CI-green OpenClaw bugfix PRs from issue/PR sweeps.
 - Control UI/chat: add search and Load More pagination to the chat session picker, keeping initial session loads bounded while making older conversations reachable. (#85237) Thanks @amknight.
@@ -57,6 +58,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Ollama: bypass the managed proxy for configured local embedding origins while keeping SSRF guardrails on unconfigured targets. Thanks @Kaspre.
 - Checks/Windows: route full `pnpm check` stage commands through the managed child runner so Windows avoids Node shell-argv deprecation warnings there too.
 - Checks/Windows: run managed child commands through explicit `cmd.exe` wrapping instead of Node shell mode with argv, avoiding Node 24 subprocess deprecation warnings during changed checks.
 - Models: prune retired Groq, GitHub Copilot, OpenAI, xAI, and old Claude catalog entries, with doctor migration to upgrade existing configs to current provider refs.

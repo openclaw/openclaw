@@ -467,16 +467,23 @@ releases.
     | `channelRouteIdentityKey(...)` | `channelRouteDedupeKey(...)` |
     | `channelRouteKey(...)` | `channelRouteCompactKey(...)` |
     | `ComparableChannelTarget` | `ChannelRouteParsedTarget` |
-    | `resolveComparableTargetForChannel(...)` | `resolveRouteTargetForChannel(...)` |
-    | `resolveComparableTargetForLoadedChannel(...)` | `resolveRouteTargetForLoadedChannel(...)` |
     | `comparableChannelTargetsMatch(...)` | `channelRouteTargetsMatchExact(...)` |
     | `comparableChannelTargetsShareRoute(...)` | `channelRouteTargetsShareConversation(...)` |
 
     The modern route helpers normalize `{ channel, to, accountId, threadId }`
     consistently across native approvals, reply suppression, inbound dedupe,
-    cron delivery, and session routing. If your plugin owns custom target
-    grammar, use `resolveChannelRouteTargetWithParser(...)` to adapt that
-    parser into the same route target contract.
+    cron delivery, and session routing.
+
+    Do not add new uses of `ChannelMessagingAdapter.parseExplicitTarget` or
+    the parser-backed loaded-route helpers (`parseExplicitTargetForLoadedChannel`
+    or `resolveRouteTargetForLoadedChannel`) or
+    `resolveChannelRouteTargetWithParser(...)` from `plugin-sdk/channel-route`.
+    Those hooks are deprecated and remain only for older plugins during the
+    migration window. New channel plugins should use
+    `messaging.targetResolver.resolveTarget(...)` for target id normalization
+    and directory-miss fallback, `messaging.inferTargetChatType(...)` when core
+    needs an early peer kind, and `messaging.resolveOutboundSessionRoute(...)`
+    for provider-native session and thread identity.
 
   </Step>
 
@@ -518,7 +525,7 @@ releases.
   | `plugin-sdk/channel-lifecycle` | Account status and draft stream lifecycle helpers | `createAccountStatusSink`, draft preview finalization helpers |
   | `plugin-sdk/inbound-envelope` | Inbound envelope helpers | Shared route + envelope builder helpers |
   | `plugin-sdk/inbound-reply-dispatch` | Inbound reply helpers | Shared record-and-dispatch helpers |
-  | `plugin-sdk/messaging-targets` | Messaging target parsing | Target parsing/matching helpers |
+  | `plugin-sdk/messaging-targets` | Deprecated target parsing import path | Use `plugin-sdk/channel-targets` for generic target parsing helpers, `plugin-sdk/channel-route` for route comparison, and plugin-owned `messaging.targetResolver` / `messaging.resolveOutboundSessionRoute` for provider-specific target resolution |
   | `plugin-sdk/outbound-media` | Outbound media helpers | Shared outbound media loading |
   | `plugin-sdk/outbound-send-deps` | Outbound send dependency helpers | Lightweight `resolveOutboundSendDep` lookup without importing the full outbound runtime |
   | `plugin-sdk/outbound-runtime` | Outbound runtime helpers | Outbound delivery, identity/send delegate, session, formatting, and payload planning helpers |
