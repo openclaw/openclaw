@@ -105,6 +105,7 @@ Docs: https://docs.openclaw.ai
 - Control UI/chat: convert pasted `data:image/...;base64,...` clipboard text into an image attachment instead of dumping the payload into the composer. Fixes #62604. Thanks @cpwilhelmi.
 - Providers/Gemini: strip fractional seconds from web-search time range filters so Gemini accepts freshness-bound search requests. (#85071) Thanks @Noerr.
 - OpenAI Codex: preserve image input support for sparse `openai-codex/gpt-5.5` catalog rows. (#85095) Thanks @sercada.
+- CLI/models: add a piped or pasted API-key path for OpenAI Codex auth and warn when API keys are pasted into token-mode auth. (#85533) Thanks @joshavant.
 - Plugins/discovery: strip `-plugin` package suffixes when deriving plugin id hints so package names line up with manifest ids. (#85170) Thanks @JulyanXu.
 - Tlon: stop advertising a non-existent agent tool contract in the plugin manifest.
 - Telegram: preserve fenced code block languages through Markdown rendering so Telegram receives `language-*` code classes. (#85209) Thanks @leno23.
