@@ -3,11 +3,16 @@ import fsSync from "node:fs";
 import path from "node:path";
 import "./monitor-inbox.test-harness.js";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  registerWhatsAppConnectionController,
+  unregisterWhatsAppConnectionController,
+} from "./connection-controller-registry.js";
 import { WhatsAppRetryableInboundError } from "./inbound/dedupe.js";
 import { WHATSAPP_GROUP_METADATA_CACHE_MAX_ENTRIES } from "./inbound/monitor.js";
 import {
   type InboxMonitorOptions,
   buildNotifyMessageUpsert,
+  DEFAULT_ACCOUNT_ID,
   failNextWhatsAppPluginStateRegisterIfAbsent,
   getAuthDir,
   getSock,
@@ -807,6 +812,78 @@ describe("web monitor inbox", () => {
     expect(sleepWithAbortMock).toHaveBeenCalledTimes(11);
 
     await listener.close();
+  });
+
+  // VE-513: when the gateway's channel-health-monitor tears down controller A
+  // mid-run (shutdown nulls A.socketRef and aborts A.disconnectRetries), then a
+  // fresh controller B registers for the same accountId, an in-flight inbound's
+  // captured reply closure must route through B's socket via the registry instead
+  // of throwing RECONNECT_IN_PROGRESS. Before the registry fallback was added,
+  // sendTrackedMessage only knew its own controller's socketRef and the captured
+  // reply was permanently broken.
+  it("routes the captured reply through a successor controller when the original controller's socket is gone", async () => {
+    const onMessage = vi.fn(async () => undefined);
+    const socketRefA = createSocketRef();
+
+    let aShouldRetryDisconnect = true;
+    const { listener: listenerA, sock: sockA } = await startInboxMonitor(
+      onMessage as InboxOnMessage,
+      {
+        socketRef: socketRefA,
+        shouldRetryDisconnect: () => aShouldRetryDisconnect,
+        disconnectRetryPolicy: {
+          initialMs: 1,
+          maxMs: 1,
+          factor: 1,
+          jitter: 0,
+          maxAttempts: 1,
+        },
+      },
+    );
+
+    sockA.ev.emit(
+      "messages.upsert",
+      buildNotifyMessageUpsert({
+        id: nextMessageId("outbound-successor"),
+        remoteJid: "999@s.whatsapp.net",
+        text: "ping",
+        timestamp: 1_700_000_000,
+        pushName: "Tester",
+      }),
+    );
+    await waitForMessageCalls(onMessage, 1);
+    const inbound = inboundMessage(onMessage) as { reply: (text: string) => Promise<void> };
+
+    // Register controller A's handle (mirrors what WhatsAppConnectionController
+    // does on construction).
+    const handleA = { getActiveListener: () => null, getCurrentSock: () => null } as never;
+    registerWhatsAppConnectionController(DEFAULT_ACCOUNT_ID, handleA);
+
+    // === Simulate health-monitor-driven shutdown of controller A ===
+    socketRefA.current = null;
+    aShouldRetryDisconnect = false;
+    unregisterWhatsAppConnectionController(DEFAULT_ACCOUNT_ID, handleA);
+
+    // === Successor controller B comes up with its OWN socket and registers ===
+    const sockB = {
+      sendMessage: vi.fn(async () => ({ key: { id: "post-restart-msg-id" } })),
+    };
+    const handleB = {
+      getActiveListener: () => null,
+      getCurrentSock: () => sockB as never,
+    } as never;
+    registerWhatsAppConnectionController(DEFAULT_ACCOUNT_ID, handleB);
+
+    try {
+      await inbound.reply("pong");
+
+      // Captured A reply routed through B via the registry handle.
+      expect(sockB.sendMessage).toHaveBeenCalledTimes(1);
+      expect(sockB.sendMessage).toHaveBeenCalledWith("999@s.whatsapp.net", { text: "pong" });
+    } finally {
+      unregisterWhatsAppConnectionController(DEFAULT_ACCOUNT_ID, handleB);
+      await listenerA.close();
+    }
   });
 
   it("deduplicates redelivered messages by id", async () => {

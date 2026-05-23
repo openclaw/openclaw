@@ -21,6 +21,7 @@ import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { maybeResolveWhatsAppApprovalReaction } from "../approval-reactions.js";
 import { readWebSelfIdentityForDecision, WhatsAppAuthUnstableError } from "../auth-store.js";
+import { getRegisteredWhatsAppConnectionController } from "../connection-controller-registry.js";
 import { getPrimaryIdentityId, resolveComparableIdentity } from "../identity.js";
 import { addWhatsAppImagePreviewFields } from "../image-preview.js";
 import { cacheInboundMessageMeta } from "../quoted-message.js";
@@ -222,7 +223,20 @@ export async function attachWebInboxToSocket(
   if (options.socketRef) {
     options.socketRef.current = sock;
   }
-  const getCurrentSock = () => (options.socketRef ? options.socketRef.current : sock);
+  // When this monitor's own controller has been shutdown (socketRef nulled) but a
+  // successor controller for the same accountId is already registered with a live
+  // socket, return the successor's socket. This recovers in-flight outbound
+  // operations whose closures were bound to the old controller's socketRef before
+  // a channel-health-monitor restart cycle.
+  const getCurrentSock = (): WASocket | null => {
+    if (!options.socketRef) {
+      return sock;
+    }
+    if (options.socketRef.current) {
+      return options.socketRef.current;
+    }
+    return getRegisteredWhatsAppConnectionController(options.accountId)?.getCurrentSock() ?? null;
+  };
   const shouldRetryDisconnect = () => options.shouldRetryDisconnect?.() === true;
   const disconnectRetryPolicy = options.disconnectRetryPolicy ?? DEFAULT_RECONNECT_POLICY;
   const sendRetryMaxAttempts =
