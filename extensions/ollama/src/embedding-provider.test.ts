@@ -142,6 +142,7 @@ describe("ollama embedding provider", () => {
       url: "http://127.0.0.1:11434/api/embed",
       policy: { allowedOrigins: ["http://127.0.0.1:11434"] },
       configuredLocalOriginBaseUrl: "http://127.0.0.1:11434",
+      auditContext: "ollama-memory-embedding",
     });
   });
 
@@ -163,6 +164,7 @@ describe("ollama embedding provider", () => {
       url: "https://ollama.com/api/embed",
       policy: { allowedOrigins: ["https://ollama.com"] },
       configuredLocalOriginBaseUrl: "https://ollama.com",
+      auditContext: "ollama-memory-embedding",
     });
   });
 

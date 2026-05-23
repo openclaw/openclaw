@@ -1414,7 +1414,7 @@ describe("fetchWithSsrFGuard hardening", () => {
       fetchImpl,
       lookupFn: createLoopbackLookup(),
       policy: { allowedOrigins: ["http://127.0.0.1:11434"] },
-      configuredLocalOriginBaseUrl: "http://127.1:11434",
+      configuredLocalOriginBaseUrl: "http://127.0.0.1:11434",
     });
 
     expect(result.finalUrl).toBe("http://127.1:11434/api/embed");
