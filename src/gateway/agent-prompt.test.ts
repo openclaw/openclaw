@@ -100,6 +100,7 @@ describe("gateway agent prompt", () => {
       { role: "user", entry: { sender: "User", body: "first" } },
       {
         role: "assistant",
+        internalStreamError: true,
         entry: {
           sender: "Assistant",
           body: [{ type: "text", text: STREAM_ERROR_FALLBACK_TEXT }] as unknown as string,
@@ -134,6 +135,16 @@ describe("gateway agent prompt", () => {
 
     const prompt = buildAgentMessageFromConversationEntries([...entries]);
     expect(prompt).toContain(`User: ${STREAM_ERROR_FALLBACK_TEXT}`);
+  });
+
+  it("preserves exact stream-error placeholder text from assistant history without provenance", () => {
+    const entries = [
+      { role: "assistant", entry: { sender: "Assistant", body: STREAM_ERROR_FALLBACK_TEXT } },
+      { role: "user", entry: { sender: "User", body: "next" } },
+    ] as const;
+
+    const prompt = buildAgentMessageFromConversationEntries([...entries]);
+    expect(prompt).toContain(`Assistant: ${STREAM_ERROR_FALLBACK_TEXT}`);
   });
 
   it("preserves current user text that looks like internal display metadata", () => {

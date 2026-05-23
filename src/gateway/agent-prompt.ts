@@ -5,6 +5,7 @@ import { extractTextFromChatContent } from "../shared/chat-content.js";
 export type ConversationEntry = {
   role: "user" | "assistant" | "tool";
   entry: HistoryEntry;
+  internalStreamError?: boolean;
 };
 
 /**
@@ -18,7 +19,11 @@ function safeBody(body: unknown): string {
 
 function toPromptEntry(entry: ConversationEntry): HistoryEntry | null {
   const body = safeBody(entry.entry.body);
-  if (entry.role === "assistant" && body.trim() === STREAM_ERROR_FALLBACK_TEXT) {
+  if (
+    entry.role === "assistant" &&
+    entry.internalStreamError === true &&
+    body.trim() === STREAM_ERROR_FALLBACK_TEXT
+  ) {
     return null;
   }
   return {
