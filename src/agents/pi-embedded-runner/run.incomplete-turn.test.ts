@@ -502,7 +502,7 @@ describe("runEmbeddedPiAgent incomplete-turn safety", () => {
     expectWarnMessageWith("reasoning-only assistant turn detected");
   });
 
-  it("returns NO_REPLY without retrying reasoning-only assistant turns when silence is allowed", async () => {
+  it("retries reasoning-only assistant turns even when silence is allowed (group chat)", async () => {
     mockedClassifyFailoverReason.mockReturnValue(null);
     mockedRunEmbeddedAttempt.mockResolvedValueOnce(
       makeAttemptResult({
@@ -522,8 +522,20 @@ describe("runEmbeddedPiAgent incomplete-turn safety", () => {
         } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
       }),
     );
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({
+        assistantTexts: ["Visible answer after retry."],
+        lastAssistant: {
+          role: "assistant",
+          stopReason: "end_turn",
+          provider: "openai-codex",
+          model: "gpt-5.5",
+          content: [{ type: "text", text: "Visible answer after retry." }],
+        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+      }),
+    );
 
-    const result = await runEmbeddedPiAgent({
+    await runEmbeddedPiAgent({
       ...overflowBaseRunParams,
       allowEmptyAssistantReplyAsSilent: true,
       provider: "openai-codex",
@@ -531,14 +543,12 @@ describe("runEmbeddedPiAgent incomplete-turn safety", () => {
       runId: "run-reasoning-only-silent",
     });
 
-    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
-    const onlyCall = runAttemptCall(0);
-    expect(onlyCall.prompt).not.toContain(REASONING_ONLY_RETRY_INSTRUCTION);
-    expect(onlyCall.prompt).not.toContain(EMPTY_RESPONSE_RETRY_INSTRUCTION);
-    expectNoWarnMessageWith("reasoning-only assistant turn detected");
-    expect(result.payloads).toEqual([{ text: "NO_REPLY" }]);
-    expect(result.meta.terminalReplyKind).toBe("silent-empty");
-    expect(result.meta.livenessState).toBe("working");
+    // Reasoning-only turns should trigger retry even in group chats
+    // where allowEmptyAssistantReplyAsSilent is true.
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
+    const secondCall = runAttemptCall(1);
+    expect(secondCall.prompt).toContain(REASONING_ONLY_RETRY_INSTRUCTION);
+    expectWarnMessageWith("reasoning-only assistant turn detected");
   });
 
   it("does not retry or warn on reasoning-only turns when a messaging tool already delivered", async () => {
@@ -2229,7 +2239,7 @@ describe("runEmbeddedPiAgent incomplete-turn safety", () => {
     ).toBe(false);
   });
 
-  it("treats reasoning-only assistant turns as silent only when the caller allows it", () => {
+  it("does not treat reasoning-only assistant turns as silent — they should be retried", () => {
     const attempt = makeAttemptResult({
       assistantTexts: [],
       lastAssistant: {
@@ -2247,6 +2257,9 @@ describe("runEmbeddedPiAgent incomplete-turn safety", () => {
       } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
     });
 
+    // Reasoning-only turns are model errors that should trigger the
+    // reasoning-only retry mechanism, not be silently absorbed — even
+    // in group chats where allowEmptyAssistantReplyAsSilent is true.
     expect(
       shouldTreatEmptyAssistantReplyAsSilent({
         allowEmptyAssistantReplyAsSilent: true,
@@ -2255,7 +2268,7 @@ describe("runEmbeddedPiAgent incomplete-turn safety", () => {
         timedOut: false,
         attempt,
       }),
-    ).toBe(true);
+    ).toBe(false);
     expect(
       shouldTreatEmptyAssistantReplyAsSilent({
         allowEmptyAssistantReplyAsSilent: false,

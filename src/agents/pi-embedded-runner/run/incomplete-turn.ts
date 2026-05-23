@@ -476,7 +476,10 @@ function isNonVisibleAssistantTurnEligibleForSilentReply(params: {
   ) {
     return false;
   }
-  return isReasoningOnlyAssistantTurn(assistant);
+  // Reasoning-only turns (thinking blocks but no text) are model errors that
+  // should be retried via resolveReasoningOnlyRetryInstruction, not silently
+  // absorbed.  Only truly empty responses are eligible for silent reply.
+  return false;
 }
 
 function shouldSkipPlanningOnlyRetry(params: {
