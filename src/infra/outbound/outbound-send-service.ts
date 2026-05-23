@@ -11,7 +11,6 @@ import { appendAssistantMessageToSessionTranscript } from "../../config/sessions
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { OutboundMediaAccess, OutboundMediaReadFile } from "../../media/load-options.js";
 import { resolveAgentScopedOutboundMediaAccess } from "../../media/read-capability.js";
-import { resolveSendPolicyDetailed } from "../../sessions/send-policy.js";
 import type { GatewayClientMode, GatewayClientName } from "../../utils/message-channel.js";
 import { throwIfAborted } from "./abort.js";
 import { resolveOutboundChannelPlugin } from "./channel-resolution.js";
@@ -181,17 +180,6 @@ async function tryHandleWithPluginAction(params: {
   };
 }
 
-function canHandleWithPluginAction(params: {
-  ctx: OutboundSendContext;
-  action: "send" | "poll";
-}): boolean {
-  if (params.ctx.dryRun) {
-    return false;
-  }
-  const plugin = resolveOutboundChannelPlugin({ channel: params.ctx.channel, cfg: params.ctx.cfg });
-  return Boolean(plugin?.actions?.handleAction);
-}
-
 function createChannelActionContext(params: {
   ctx: OutboundSendContext;
   action: "send" | "poll";
@@ -217,34 +205,6 @@ function createChannelActionContext(params: {
     toolContext: params.ctx.toolContext,
     dryRun: params.ctx.dryRun,
   };
-}
-
-function createSuppressedSendResult(params: {
-  ctx: OutboundSendContext;
-  to: string;
-  mediaUrl?: string;
-  mediaUrls?: string[];
-}): MessageSendResult {
-  return {
-    channel: params.ctx.channel,
-    to: params.to,
-    via: params.ctx.gateway ? "gateway" : "direct",
-    mediaUrl: params.mediaUrl ?? null,
-    mediaUrls: params.mediaUrls,
-    dryRun: params.ctx.dryRun || undefined,
-  };
-}
-
-function resolveSendPolicySuppression(params: { ctx: OutboundSendContext; to: string }): boolean {
-  return (
-    resolveSendPolicyDetailed({
-      cfg: params.ctx.cfg,
-      sessionKey: params.ctx.sessionKey ?? params.ctx.mirror?.sessionKey,
-      channel: params.ctx.channel,
-      inboundPeer: params.ctx.inboundPeer,
-      outboundPeer: params.to,
-    }).decision === "deny"
-  );
 }
 
 async function tryPreparePluginSendPayload(params: {
@@ -318,23 +278,6 @@ export async function executeSendAction(params: {
       payloads: [preparedPayload],
     });
 
-    return {
-      handledBy: "core",
-      payload: result,
-      sendResult: result,
-    };
-  }
-
-  if (
-    canHandleWithPluginAction({ ctx: params.ctx, action: "send" }) &&
-    resolveSendPolicySuppression({ ctx: params.ctx, to: params.to })
-  ) {
-    const result = createSuppressedSendResult({
-      ctx: params.ctx,
-      to: params.to,
-      mediaUrl: params.mediaUrl,
-      mediaUrls: params.mediaUrls,
-    });
     return {
       handledBy: "core",
       payload: result,
