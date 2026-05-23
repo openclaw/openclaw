@@ -317,14 +317,30 @@ describe("acquireSessionWriteLock", () => {
       {
         pid: process.pid,
         createdAt: new Date(nowMs - 30_000).toISOString(),
+        maxHoldMs: 10_000,
       },
       60_000,
       nowMs,
-      10_000,
     );
 
     expect(inspected.stale).toBe(true);
     expect(inspected.staleReasons).toEqual(["hold-exceeded"]);
+  });
+
+  it("keeps live lock payloads fresh until their recorded holder max hold expires", () => {
+    const nowMs = Date.now();
+    const inspected = testing.inspectLockPayloadForTest(
+      {
+        pid: process.pid,
+        createdAt: new Date(nowMs - 30_000).toISOString(),
+        maxHoldMs: 60_000,
+      },
+      60_000,
+      nowMs,
+    );
+
+    expect(inspected.stale).toBe(false);
+    expect(inspected.staleReasons).toEqual([]);
   });
 
   it("watchdog releases stale in-process locks", async () => {

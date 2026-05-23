@@ -12,6 +12,7 @@ type LockFilePayload = {
   createdAt?: string;
   /** Process start time in clock ticks (from /proc/pid/stat field 22). */
   starttime?: number;
+  maxHoldMs?: number;
 };
 
 function isValidLockNumber(value: unknown): value is number {
@@ -378,6 +379,9 @@ async function readLockPayload(lockPath: string): Promise<LockFilePayload | null
     if (isValidLockNumber(parsed.starttime)) {
       payload.starttime = parsed.starttime;
     }
+    if (isValidLockNumber(parsed.maxHoldMs) && parsed.maxHoldMs > 0) {
+      payload.maxHoldMs = parsed.maxHoldMs;
+    }
     return payload;
   } catch {
     return null;
@@ -449,7 +453,6 @@ function inspectLockPayload(
   payload: LockFilePayload | null,
   staleMs: number,
   nowMs: number,
-  maxHoldMs?: number,
 ): LockInspectionDetails {
   const pid = isValidLockNumber(payload?.pid) && payload.pid > 0 ? payload.pid : null;
   const pidAlive = pid !== null ? isPidAlive(pid) : false;
@@ -482,7 +485,9 @@ function inspectLockPayload(
   } else if (ageMs > staleMs) {
     staleReasons.push("too-old");
   }
-  if (typeof maxHoldMs === "number" && ageMs !== null && ageMs > maxHoldMs) {
+  const holderMaxHoldMs =
+    isValidLockNumber(payload?.maxHoldMs) && payload.maxHoldMs > 0 ? payload.maxHoldMs : undefined;
+  if (typeof holderMaxHoldMs === "number" && ageMs !== null && ageMs > holderMaxHoldMs) {
     staleReasons.push("hold-exceeded");
   }
 
@@ -560,7 +565,6 @@ async function removeReportedStaleLockIfStillStale(params: {
   lockPath: string;
   normalizedSessionFile: string;
   staleMs: number;
-  maxHoldMs?: number;
   readOwnerProcessArgs?: SessionLockOwnerProcessArgsReader;
 }): Promise<boolean> {
   const nowMs = Date.now();
@@ -582,7 +586,6 @@ async function removeReportedStaleLockIfStillStale(params: {
     heldByThisProcess: sessionLockHeldByThisProcess(params.normalizedSessionFile),
     reclaimLockWithoutStarttime: true,
     readOwnerProcessArgs: params.readOwnerProcessArgs ?? readProcessArgsSync,
-    maxHoldMs: params.maxHoldMs,
   });
   if (!(await shouldReclaimContendedLockFile(params.lockPath, inspected, params.staleMs, nowMs))) {
     return false;
@@ -622,14 +625,8 @@ function inspectLockPayloadForSession(params: {
   heldByThisProcess: boolean;
   reclaimLockWithoutStarttime: boolean;
   readOwnerProcessArgs: SessionLockOwnerProcessArgsReader;
-  maxHoldMs?: number;
 }): LockInspectionDetails {
-  const inspected = inspectLockPayload(
-    params.payload,
-    params.staleMs,
-    params.nowMs,
-    params.maxHoldMs,
-  );
+  const inspected = inspectLockPayload(params.payload, params.staleMs, params.nowMs);
   if (
     shouldTreatAsOrphanSelfLock({
       payload: params.payload,
@@ -769,7 +766,7 @@ export async function acquireSessionWriteLock(params: {
         payload: () => {
           const createdAt = new Date().toISOString();
           const starttime = resolveProcessStartTimeForLock(process.pid);
-          const lockPayload: LockFilePayload = { pid: process.pid, createdAt };
+          const lockPayload: LockFilePayload = { pid: process.pid, createdAt, maxHoldMs };
           if (starttime !== null) {
             lockPayload.starttime = starttime;
           }
@@ -783,7 +780,6 @@ export async function acquireSessionWriteLock(params: {
             heldByThisProcess,
             reclaimLockWithoutStarttime: true,
             readOwnerProcessArgs: readProcessArgsSync,
-            maxHoldMs,
           });
           return await shouldReclaimContendedLockFile(lockPath, inspected, staleMs, nowMs);
         },
@@ -797,7 +793,6 @@ export async function acquireSessionWriteLock(params: {
             lockPath: staleLockPath,
             normalizedSessionFile,
             staleMs,
-            maxHoldMs,
           })
         ) {
           continue;
