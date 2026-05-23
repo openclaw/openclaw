@@ -58,15 +58,13 @@ describe("chat layout styles", () => {
     expect(css).toContain("height: 22px;");
   });
 
-  it("keeps chat session picker glyphs color-aware", () => {
+  it("keeps chat session picker search icon buttons fixed size", () => {
     const css = readLayoutCss();
 
-    expect(css).toMatch(
-      /\.chat-controls__session-trigger-icon svg \{[\s\S]*stroke: currentColor;[\s\S]*fill: none;/,
-    );
-    expect(css).toMatch(
-      /\.chat-session-picker__option-check svg \{[\s\S]*stroke: currentColor;[\s\S]*fill: none;/,
-    );
+    expect(css).toContain(".chat-session-picker .chat-session-picker__icon-button.btn--icon {");
+    expect(css).toContain("flex: 0 0 36px;");
+    expect(css).toContain("width: 36px;");
+    expect(css).toContain("min-width: 36px;");
   });
 
   it("keeps composer controls labeled and large enough without shrinking mobile taps", () => {
