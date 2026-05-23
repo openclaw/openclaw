@@ -63,17 +63,21 @@ describe("applyDiscoveredContextWindows", () => {
     expect(cache.get("gpt-5.4")).toBe(272_000);
   });
 
-  it("upgrades claude opus 4.7 variants to 1M when discovery still reports 200k", () => {
+  it("upgrades claude-cli GA 1M variants when discovery still reports 200k", () => {
     const cache = new Map<string, number>();
     applyDiscoveredContextWindows({
       cache,
-      models: [{ id: "claude-cli/claude-opus-4.7-20260219", contextWindow: 200_000 }],
+      models: [
+        { id: "claude-cli/claude-opus-4.7-20260219", contextWindow: 200_000 },
+        { id: "claude-cli/claude-sonnet-4-6", contextWindow: 200_000 },
+      ],
     });
 
     expect(cache.get("claude-cli/claude-opus-4.7-20260219")).toBe(ANTHROPIC_CONTEXT_1M_TOKENS);
+    expect(cache.get("claude-cli/claude-sonnet-4-6")).toBe(ANTHROPIC_CONTEXT_1M_TOKENS);
   });
 
-  it("does not upgrade non-Anthropic opus 4.7 variants from discovery", () => {
+  it("does not upgrade non-Anthropic GA 1M model ids from discovery", () => {
     const cache = new Map<string, number>();
     applyDiscoveredContextWindows({
       cache,
@@ -83,7 +87,7 @@ describe("applyDiscoveredContextWindows", () => {
     expect(cache.get("github-copilot/claude-opus-4.7")).toBe(128_000);
   });
 
-  it("does not upgrade provider-qualified anthropic opus 4.7 discovery ids without verified ownership", () => {
+  it("does not upgrade provider-qualified anthropic GA 1M discovery ids without verified ownership", () => {
     const cache = new Map<string, number>();
     applyDiscoveredContextWindows({
       cache,
@@ -93,7 +97,7 @@ describe("applyDiscoveredContextWindows", () => {
     expect(cache.get("anthropic/claude-opus-4.7-20260219")).toBe(200_000);
   });
 
-  it("upgrades provider-owned anthropic opus 4.7 discovery ids", () => {
+  it("upgrades provider-owned anthropic GA 1M discovery ids", () => {
     const cache = new Map<string, number>();
     applyDiscoveredContextWindows({
       cache,
@@ -109,7 +113,7 @@ describe("applyDiscoveredContextWindows", () => {
     expect(cache.get("anthropic/claude-opus-4.7-20260219")).toBe(ANTHROPIC_CONTEXT_1M_TOKENS);
   });
 
-  it("does not upgrade bare opus 4.7 discovery ids without verified ownership", () => {
+  it("does not upgrade bare GA 1M discovery ids without verified ownership", () => {
     const cache = new Map<string, number>();
     applyDiscoveredContextWindows({
       cache,
