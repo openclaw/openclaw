@@ -124,7 +124,7 @@ For contributors or anyone who wants to run from a local checkout:
 ```bash
 git clone https://github.com/openclaw/openclaw.git
 cd openclaw
-pnpm install && pnpm build && pnpm ui:build
+pnpm install && pnpm build
 pnpm link --global
 openclaw onboard --install-daemon
 ```

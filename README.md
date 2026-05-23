@@ -239,7 +239,7 @@ pnpm install
 # First run only (or after resetting local OpenClaw config/workspace)
 pnpm openclaw setup
 
-# Optional: prebuild Control UI before first startup
+# Optional: prebuild Control UI before first startup or after UI-only changes
 pnpm ui:build
 
 # Dev loop (auto-reload on source/config changes)
@@ -250,8 +250,9 @@ If you need a built `dist/` from the checkout (for Node, packaging, or release v
 
 ```bash
 pnpm build
-pnpm ui:build
 ```
+
+`pnpm build` also generates `dist/control-ui/*`; the Control UI build runs after the `tsdown` step because `tsdown` cleans `dist`.
 
 `pnpm openclaw setup` writes the local config/workspace needed for `pnpm gateway:watch`. It is safe to re-run, but you normally only need it on first setup or after resetting local state. `pnpm gateway:watch` does not rebuild `dist/control-ui`, so rerun `pnpm ui:build` after `ui/` changes or use `pnpm ui:dev` when iterating on the Control UI. If you want this checkout to run onboarding directly, use `pnpm openclaw onboard --install-daemon`.
 

@@ -677,10 +677,10 @@ export function resolveMissingPackBuildHint(missing: readonly string[]): string 
   }
 
   if (needsControlUiBuild && needsRuntimeBuild) {
-    return "release-check: build and Control UI artifacts are missing. Run `pnpm build && pnpm ui:build` before `pnpm release:check`.";
+    return "release-check: build and Control UI artifacts are missing. Run `pnpm build` before `pnpm release:check`.";
   }
   if (needsControlUiBuild) {
-    return "release-check: Control UI artifacts are missing. Run `pnpm ui:build` before `pnpm release:check`.";
+    return "release-check: Control UI artifacts are missing. Run `pnpm build` before `pnpm release:check`.";
   }
   return "release-check: build artifacts are missing. Run `pnpm build` before `pnpm release:check`.";
 }

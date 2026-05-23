@@ -65,7 +65,7 @@ the maintainer-only release runbook.
    exports, and plugin SDK API baseline in the right order. Commit any generated
    drift before tagging. Then run the local deterministic preflight:
    `pnpm check:test-types`, `pnpm check:architecture`,
-   `pnpm build && pnpm ui:build`, and `pnpm release:check`.
+   `pnpm build`, and `pnpm release:check`.
 6. Run `OpenClaw NPM Release` with `preflight_only=true`. Before a tag exists,
    a full 40-character release-branch SHA is allowed for validation-only
    preflight. The preflight generates dependency release evidence for the
@@ -130,9 +130,8 @@ vYYYY.M.D-beta.N` from the matching `release/YYYY.M.D` branch. The helper runs
   covered outside the faster local `pnpm check` gate
 - Run `pnpm check:architecture` before release preflight so the broader import
   cycle and architecture boundary checks are green outside the faster local gate
-- Run `pnpm build && pnpm ui:build` before `pnpm release:check` so the expected
-  `dist/*` release artifacts and Control UI bundle exist for the pack
-  validation step
+- Run `pnpm build` before `pnpm release:check` so the expected `dist/*`
+  release artifacts and Control UI bundle exist for the pack validation step
 - Run `pnpm release:prep` after the root version bump and before tagging. It
   runs every deterministic release generator that commonly drifts after a
   version/config/API change: plugin versions, plugin inventory, base config
