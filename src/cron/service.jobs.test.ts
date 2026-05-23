@@ -394,14 +394,14 @@ describe("applyJobPatch", () => {
   });
 
   it("preserves raw channel delivery targets for plugin-owned validation", () => {
-    const job = createIsolatedAgentTurnJob("job-channel-target", {
+    const job = createIsolatedAgentTurnJob("job-telegram-invalid", {
       mode: "announce",
       channel: "telegram",
-      to: "channel-owned-target",
+      to: "-10012345/6789",
     });
 
     applyJobPatch(job, { enabled: true });
-    expect(job.delivery?.to).toBe("channel-owned-target");
+    expect(job.delivery?.to).toBe("-10012345/6789");
   });
 
   it.each([
