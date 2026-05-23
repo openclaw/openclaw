@@ -1001,6 +1001,452 @@ describe("applySessionsChangedEvent", () => {
     expect(requestUpdate).toHaveBeenCalled();
   });
 
+  it("ignores a terminal patch that only has a mismatched internal run id", () => {
+    const requestUpdate = vi.fn();
+    const state: SessionsState & {
+      sessionKey: string;
+      chatRunId: string | null;
+      chatStream: string | null;
+      chatStreamStartedAt: number | null;
+      requestUpdate: () => void;
+    } = {
+      ...createState(async () => undefined, {
+        sessionsResult: {
+          ts: 1,
+          path: "(multiple)",
+          count: 1,
+          defaults: { modelProvider: null, model: null, contextTokens: null },
+          sessions: [
+            {
+              key: "agent:super:main",
+              kind: "direct",
+              updatedAt: 1,
+              hasActiveRun: true,
+              status: "running",
+            },
+          ],
+        },
+      }),
+      sessionKey: "agent:super:main",
+      chatRunId: "client-run-1",
+      chatStream: "",
+      chatStreamStartedAt: 10,
+      requestUpdate,
+    };
+
+    const applied = applySessionsChangedEvent(state, {
+      sessionKey: "agent:super:main",
+      sessionId: "sess-main",
+      runId: "agent-run-1",
+      status: "done",
+      hasActiveRun: false,
+      startedAt: 10,
+      endedAt: 20,
+      updatedAt: 21,
+      ts: 21,
+    });
+
+    expect(applied).toEqual({ applied: false });
+    expect(state.sessionsResult?.sessions[0]).toMatchObject({
+      status: "running",
+      hasActiveRun: true,
+    });
+    expect(state.chatRunId).toBe("client-run-1");
+    expect(state.chatStream).toBe("");
+    expect(state.chatStreamStartedAt).toBe(10);
+    expect(requestUpdate).not.toHaveBeenCalled();
+  });
+
+  it("ignores an old terminal lifecycle patch after a newer run starts", () => {
+    const requestUpdate = vi.fn();
+    const state: SessionsState & {
+      sessionKey: string;
+      chatRunId: string | null;
+      chatStream: string | null;
+      chatStreamStartedAt: number | null;
+      requestUpdate: () => void;
+    } = {
+      ...createState(async () => undefined, {
+        sessionsResult: {
+          ts: 2_000,
+          path: "(multiple)",
+          count: 1,
+          defaults: { modelProvider: null, model: null, contextTokens: null },
+          sessions: [
+            {
+              key: "agent:super:main",
+              kind: "direct",
+              updatedAt: 2_000,
+              hasActiveRun: true,
+              status: "running",
+              startedAt: 2_000,
+            },
+          ],
+        },
+      }),
+      sessionKey: "agent:super:main",
+      chatRunId: "new-run",
+      chatStream: "",
+      chatStreamStartedAt: 2_000,
+      requestUpdate,
+    };
+
+    const applied = applySessionsChangedEvent(state, {
+      sessionKey: "agent:super:main",
+      sessionId: "sess-main",
+      runId: "old-run",
+      status: "done",
+      hasActiveRun: false,
+      startedAt: 900,
+      endedAt: 1_700,
+      updatedAt: 1_700,
+      ts: 2_500,
+    });
+
+    expect(applied).toEqual({ applied: false });
+    expect(state.sessionsResult?.sessions[0]).toMatchObject({
+      status: "running",
+      startedAt: 2_000,
+      hasActiveRun: true,
+    });
+    expect(state.chatRunId).toBe("new-run");
+    expect(requestUpdate).not.toHaveBeenCalled();
+  });
+
+  it("ignores an old terminal lifecycle patch after a newer run completes", () => {
+    const requestUpdate = vi.fn();
+    const state: SessionsState & {
+      sessionKey: string;
+      chatRunId: string | null;
+      chatStream: string | null;
+      chatStreamStartedAt: number | null;
+      requestUpdate: () => void;
+    } = {
+      ...createState(async () => undefined, {
+        sessionsResult: {
+          ts: 3_000,
+          path: "(multiple)",
+          count: 1,
+          defaults: { modelProvider: null, model: null, contextTokens: null },
+          sessions: [
+            {
+              key: "agent:super:main",
+              kind: "direct",
+              updatedAt: 3_000,
+              hasActiveRun: false,
+              status: "done",
+              startedAt: 2_000,
+              endedAt: 2_500,
+            },
+          ],
+        },
+      }),
+      sessionKey: "agent:super:main",
+      chatRunId: null,
+      chatStream: null,
+      chatStreamStartedAt: null,
+      requestUpdate,
+    };
+
+    const applied = applySessionsChangedEvent(state, {
+      sessionKey: "agent:super:main",
+      sessionId: "sess-main",
+      runId: "old-run",
+      status: "failed",
+      hasActiveRun: false,
+      startedAt: 900,
+      endedAt: 1_700,
+      updatedAt: 1_700,
+      ts: 3_500,
+    });
+
+    expect(applied).toEqual({ applied: false });
+    expect(state.sessionsResult?.sessions[0]).toMatchObject({
+      status: "done",
+      startedAt: 2_000,
+      endedAt: 2_500,
+      hasActiveRun: false,
+    });
+    expect(requestUpdate).not.toHaveBeenCalled();
+  });
+
+  it("ignores an older terminal patch for the same stored run", () => {
+    const requestUpdate = vi.fn();
+    const state: SessionsState & {
+      sessionKey: string;
+      chatRunId: string | null;
+      chatStream: string | null;
+      chatStreamStartedAt: number | null;
+      requestUpdate: () => void;
+    } = {
+      ...createState(async () => undefined, {
+        sessionsResult: {
+          ts: 300,
+          path: "(multiple)",
+          count: 1,
+          defaults: { modelProvider: null, model: null, contextTokens: null },
+          sessions: [
+            {
+              key: "agent:super:main",
+              kind: "direct",
+              updatedAt: 300,
+              hasActiveRun: false,
+              status: "done",
+              startedAt: 100,
+              endedAt: 300,
+            },
+          ],
+        },
+      }),
+      sessionKey: "agent:super:main",
+      chatRunId: null,
+      chatStream: null,
+      chatStreamStartedAt: null,
+      requestUpdate,
+    };
+
+    const applied = applySessionsChangedEvent(state, {
+      sessionKey: "agent:super:main",
+      sessionId: "sess-main",
+      runId: "run-1",
+      status: "failed",
+      hasActiveRun: false,
+      startedAt: 100,
+      endedAt: 200,
+      updatedAt: 200,
+      ts: 350,
+    });
+
+    expect(applied).toEqual({ applied: false });
+    expect(state.sessionsResult?.sessions[0]).toMatchObject({
+      status: "done",
+      startedAt: 100,
+      endedAt: 300,
+      hasActiveRun: false,
+    });
+    expect(requestUpdate).not.toHaveBeenCalled();
+  });
+
+  it("ignores a terminal patch from an overlapping older run", () => {
+    const requestUpdate = vi.fn();
+    const state: SessionsState & {
+      sessionKey: string;
+      chatRunId: string | null;
+      chatStream: string | null;
+      chatStreamStartedAt: number | null;
+      requestUpdate: () => void;
+    } = {
+      ...createState(async () => undefined, {
+        sessionsResult: {
+          ts: 150,
+          path: "(multiple)",
+          count: 1,
+          defaults: { modelProvider: null, model: null, contextTokens: null },
+          sessions: [
+            {
+              key: "agent:super:main",
+              kind: "direct",
+              updatedAt: 150,
+              hasActiveRun: true,
+              status: "running",
+              startedAt: 150,
+            },
+          ],
+        },
+      }),
+      sessionKey: "agent:super:main",
+      chatRunId: "run-new",
+      chatStream: "",
+      chatStreamStartedAt: 150,
+      requestUpdate,
+    };
+
+    const applied = applySessionsChangedEvent(state, {
+      sessionKey: "agent:super:main",
+      sessionId: "sess-main",
+      runId: "run-old",
+      status: "done",
+      hasActiveRun: false,
+      startedAt: 100,
+      endedAt: 200,
+      updatedAt: 200,
+      ts: 200,
+    });
+
+    expect(applied).toEqual({ applied: false });
+    expect(state.sessionsResult?.sessions[0]).toMatchObject({
+      status: "running",
+      startedAt: 150,
+      hasActiveRun: true,
+    });
+    expect(state.chatRunId).toBe("run-new");
+    expect(requestUpdate).not.toHaveBeenCalled();
+  });
+
+  it("ignores a terminal patch without start time from a previous active run", () => {
+    const requestUpdate = vi.fn();
+    const state: SessionsState & {
+      sessionKey: string;
+      chatRunId: string | null;
+      chatStream: string | null;
+      chatStreamStartedAt: number | null;
+      requestUpdate: () => void;
+    } = {
+      ...createState(async () => undefined, {
+        sessionsResult: {
+          ts: 150,
+          path: "(multiple)",
+          count: 1,
+          defaults: { modelProvider: null, model: null, contextTokens: null },
+          sessions: [
+            {
+              key: "agent:super:main",
+              kind: "direct",
+              updatedAt: 150,
+              hasActiveRun: true,
+              status: "running",
+              startedAt: 150,
+            },
+          ],
+        },
+      }),
+      sessionKey: "agent:super:main",
+      chatRunId: "run-new",
+      chatStream: "",
+      chatStreamStartedAt: 150,
+      requestUpdate,
+    };
+
+    const applied = applySessionsChangedEvent(state, {
+      sessionKey: "agent:super:main",
+      sessionId: "sess-main",
+      runId: "run-old",
+      status: "done",
+      hasActiveRun: false,
+      endedAt: 200,
+      updatedAt: 200,
+      ts: 200,
+    });
+
+    expect(applied).toEqual({ applied: false });
+    expect(state.sessionsResult?.sessions[0]).toMatchObject({
+      status: "running",
+      startedAt: 150,
+      hasActiveRun: true,
+    });
+    expect(state.chatRunId).toBe("run-new");
+    expect(requestUpdate).not.toHaveBeenCalled();
+  });
+
+  it("ignores a terminal patch from another run with the same start time", () => {
+    const requestUpdate = vi.fn();
+    const state: SessionsState & {
+      sessionKey: string;
+      chatRunId: string | null;
+      chatStream: string | null;
+      chatStreamStartedAt: number | null;
+      requestUpdate: () => void;
+    } = {
+      ...createState(async () => undefined, {
+        sessionsResult: {
+          ts: 150,
+          path: "(multiple)",
+          count: 1,
+          defaults: { modelProvider: null, model: null, contextTokens: null },
+          sessions: [
+            {
+              key: "agent:super:main",
+              kind: "direct",
+              updatedAt: 150,
+              hasActiveRun: true,
+              status: "running",
+              startedAt: 150,
+            },
+          ],
+        },
+      }),
+      sessionKey: "agent:super:main",
+      chatRunId: "run-new",
+      chatStream: "",
+      chatStreamStartedAt: 150,
+      requestUpdate,
+    };
+
+    const applied = applySessionsChangedEvent(state, {
+      sessionKey: "agent:super:main",
+      sessionId: "sess-main",
+      runId: "run-old",
+      status: "done",
+      hasActiveRun: false,
+      startedAt: 150,
+      endedAt: 250,
+      updatedAt: 250,
+      ts: 250,
+    });
+
+    expect(applied).toEqual({ applied: false });
+    expect(state.sessionsResult?.sessions[0]).toMatchObject({
+      status: "running",
+      startedAt: 150,
+      hasActiveRun: true,
+    });
+    expect(state.chatRunId).toBe("run-new");
+    expect(requestUpdate).not.toHaveBeenCalled();
+  });
+
+  it("does not clear the local run for a newer terminal patch from another run id", () => {
+    const requestUpdate = vi.fn();
+    const state: SessionsState & {
+      sessionKey: string;
+      chatRunId: string | null;
+      chatStream: string | null;
+      chatStreamStartedAt: number | null;
+      requestUpdate: () => void;
+    } = {
+      ...createState(async () => undefined, {
+        sessionsResult: {
+          ts: 100,
+          path: "(multiple)",
+          count: 1,
+          defaults: { modelProvider: null, model: null, contextTokens: null },
+          sessions: [
+            {
+              key: "agent:super:main",
+              kind: "direct",
+              updatedAt: 100,
+              hasActiveRun: true,
+              status: "running",
+              startedAt: 100,
+            },
+          ],
+        },
+      }),
+      sessionKey: "agent:super:main",
+      chatRunId: "local-run",
+      chatStream: "",
+      chatStreamStartedAt: 100,
+      requestUpdate,
+    };
+
+    const applied = applySessionsChangedEvent(state, {
+      sessionKey: "agent:super:main",
+      sessionId: "sess-main",
+      runId: "other-run",
+      status: "done",
+      hasActiveRun: false,
+      startedAt: 150,
+      endedAt: 220,
+      updatedAt: 220,
+      ts: 220,
+    });
+
+    expect(applied).toEqual({ applied: true, change: "updated" });
+    expect(state.chatRunId).toBe("local-run");
+    expect(state.chatStream).toBe("");
+    expect(state.chatStreamStartedAt).toBe(100);
+    expect(requestUpdate).not.toHaveBeenCalled();
+  });
+
   it("does not clear a new local run from a send patch with stale terminal status", () => {
     const requestUpdate = vi.fn();
     const state: SessionsState & {
@@ -1040,11 +1486,17 @@ describe("applySessionsChangedEvent", () => {
       reason: "send",
       status: "done",
       hasActiveRun: true,
+      startedAt: 1,
+      label: "patched while active",
       updatedAt: 4,
       ts: 4,
     });
 
     expect(applied).toEqual({ applied: true, change: "updated" });
+    expect(state.sessionsResult?.sessions[0]).toMatchObject({
+      label: "patched while active",
+      hasActiveRun: true,
+    });
     expect(state.chatRunId).toBe("run-new");
     expect(state.chatStream).toBe("");
     expect(state.chatStreamStartedAt).toBe(3);
@@ -1144,7 +1596,11 @@ describe("applySessionsChangedEvent", () => {
       ts: 2,
     });
 
-    expect(applied).toEqual({ applied: true, change: "updated" });
+    expect(applied).toEqual({ applied: false });
+    expect(state.sessionsResult?.sessions[0]).toMatchObject({
+      status: "running",
+      hasActiveRun: true,
+    });
     expect(state.chatRunId).toBe("run-new");
     expect(state.chatStream).toBe("");
     expect(state.chatStreamStartedAt).toBe(3);

@@ -1413,6 +1413,7 @@ export const agentHandlers: GatewayRequestHandlers = {
                   endedAt: undefined,
                   runtimeMs: undefined,
                   abortedLastRun: undefined,
+                  lifecycleRunId: undefined,
                   sessionFile: undefined,
                 }
               : {}),

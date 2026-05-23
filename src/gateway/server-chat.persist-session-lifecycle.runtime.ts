@@ -1,1 +1,4 @@
-export { persistGatewaySessionLifecycleEvent } from "./session-lifecycle-state.js";
+export {
+  persistGatewaySessionLifecycleEvent,
+  resolveGatewaySessionLifecycleStoreTarget,
+} from "./session-lifecycle-state.js";

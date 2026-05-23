@@ -240,6 +240,8 @@ export type SessionEntry = {
   runtimeMs?: number;
   /** Final persisted subagent run status, used after in-memory run archival. */
   status?: "running" | "done" | "failed" | "killed" | "timeout";
+  /** Agent run id that last wrote session lifecycle state. */
+  lifecycleRunId?: string;
   /**
    * Session-level stop cutoff captured when /stop is received.
    * Messages at/before this boundary are skipped to avoid replaying

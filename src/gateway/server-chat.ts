@@ -20,7 +20,10 @@ import type {
   ToolEventRecipientRegistry,
 } from "./server-chat-state.js";
 import { loadGatewaySessionRow } from "./server-chat.load-gateway-session-row.runtime.js";
-import { persistGatewaySessionLifecycleEvent } from "./server-chat.persist-session-lifecycle.runtime.js";
+import {
+  persistGatewaySessionLifecycleEvent,
+  resolveGatewaySessionLifecycleStoreTarget,
+} from "./server-chat.persist-session-lifecycle.runtime.js";
 import { deriveGatewaySessionLifecycleSnapshot } from "./session-lifecycle-state.js";
 import { loadSessionEntry } from "./session-utils.js";
 import { formatForLog } from "./ws-log.js";
@@ -230,6 +233,10 @@ export function createAgentEventHandler({
   isChatSendRunActive = () => false,
 }: AgentEventHandlerOptions) {
   const pendingTerminalLifecycleErrors = new Map<string, NodeJS.Timeout>();
+  const latestLifecycleStartBySessionKey = new Map<
+    string,
+    { runId: string; startedAt: number | undefined }
+  >();
 
   type AgentTextThrottleStream = "assistant" | "thinking";
 
@@ -265,6 +272,47 @@ export function createAgentEventHandler({
     }
     clearTimeout(pending);
     pendingTerminalLifecycleErrors.delete(runId);
+  };
+
+  const resolveLifecycleSessionKey = (sessionKey: string) =>
+    resolveGatewaySessionLifecycleStoreTarget({ sessionKey })?.sessionKey ?? sessionKey;
+
+  const resolveLifecycleStartTimestamp = (evt: AgentEventPayload): number | undefined => {
+    const startedAt = evt.data?.startedAt;
+    if (typeof startedAt === "number" && Number.isFinite(startedAt)) {
+      return startedAt;
+    }
+    return Number.isFinite(evt.ts) ? evt.ts : undefined;
+  };
+
+  const resolveLifecycleTerminalTimestamp = (evt: AgentEventPayload): number | undefined => {
+    const endedAt = evt.data?.endedAt;
+    if (typeof endedAt === "number" && Number.isFinite(endedAt)) {
+      return endedAt;
+    }
+    return Number.isFinite(evt.ts) ? evt.ts : undefined;
+  };
+
+  const recordLifecycleStart = (sessionKey: string, evt: AgentEventPayload) => {
+    latestLifecycleStartBySessionKey.set(resolveLifecycleSessionKey(sessionKey), {
+      runId: evt.runId,
+      startedAt: resolveLifecycleStartTimestamp(evt),
+    });
+  };
+
+  const hasNewerLifecycleStart = (sessionKey: string, evt: AgentEventPayload): boolean => {
+    const latestStart = latestLifecycleStartBySessionKey.get(
+      resolveLifecycleSessionKey(sessionKey),
+    );
+    if (!latestStart || latestStart.runId === evt.runId) {
+      return false;
+    }
+    const terminalAt = resolveLifecycleTerminalTimestamp(evt);
+    return (
+      latestStart.startedAt === undefined ||
+      terminalAt === undefined ||
+      latestStart.startedAt >= terminalAt
+    );
   };
 
   // Only subagent/acp keys can carry spawnedBy (mirrors supportsSpawnLineage in
@@ -362,6 +410,41 @@ export function createAgentEventHandler({
     };
   };
 
+  const broadcastLifecycleSessionChanged = (params: {
+    sessionKey: string;
+    lifecyclePhase: string;
+    event: AgentEventPayload;
+    eventRunId: string;
+    dropIfSlow: boolean;
+  }) => {
+    const sessionEventConnIds = sessionEventSubscribers.getAll();
+    if (sessionEventConnIds.size === 0) {
+      return;
+    }
+    const snapshot = buildSessionEventSnapshot(
+      resolveGatewaySessionLifecycleStoreTarget({ sessionKey: params.sessionKey })?.sessionKey ??
+        params.sessionKey,
+      params.event,
+    );
+    const broadcastSessionKey =
+      snapshot.session?.key && typeof snapshot.session.key === "string"
+        ? snapshot.session.key
+        : params.sessionKey;
+    broadcastToConnIds(
+      "sessions.changed",
+      {
+        sessionKey: broadcastSessionKey,
+        phase: params.lifecyclePhase,
+        runId: params.event.runId,
+        ...(params.eventRunId !== params.event.runId ? { clientRunId: params.eventRunId } : {}),
+        ts: params.event.ts,
+        ...snapshot,
+      },
+      sessionEventConnIds,
+      params.dropIfSlow ? { dropIfSlow: true } : undefined,
+    );
+  };
+
   const finalizeLifecycleEvent = (
     evt: AgentEventPayload,
     opts?: { skipChatErrorFinal?: boolean },
@@ -436,23 +519,23 @@ export function createAgentEventHandler({
     agentRunSeq.delete(clientRunId);
 
     if (sessionKey) {
-      void persistGatewaySessionLifecycleEvent({ sessionKey, event: evt }).catch(() => undefined);
-      const sessionEventConnIds = sessionEventSubscribers.getAll();
-      if (sessionEventConnIds.size > 0) {
-        broadcastToConnIds(
-          "sessions.changed",
-          {
+      void persistGatewaySessionLifecycleEvent({ sessionKey, event: evt })
+        .catch(() => false)
+        .then((lifecycleApplied) => {
+          if (!lifecycleApplied) {
+            return;
+          }
+          if (hasNewerLifecycleStart(sessionKey, evt)) {
+            return;
+          }
+          broadcastLifecycleSessionChanged({
             sessionKey,
-            phase: lifecyclePhase,
-            runId: evt.runId,
-            ...(eventRunId !== evt.runId ? { clientRunId: eventRunId } : {}),
-            ts: evt.ts,
-            ...buildSessionEventSnapshot(sessionKey, evt),
-          },
-          sessionEventConnIds,
-          { dropIfSlow: true },
-        );
-      }
+            lifecyclePhase,
+            event: evt,
+            eventRunId,
+            dropIfSlow: false,
+          });
+        });
     }
   };
 
@@ -803,10 +886,22 @@ export function createAgentEventHandler({
     }
   };
 
+  const shouldClearPendingTerminalLifecycleError = (
+    evt: AgentEventPayload,
+    lifecyclePhase: string | null,
+  ) => {
+    if (evt.stream !== "lifecycle" || lifecyclePhase === "error") {
+      return false;
+    }
+    return !(
+      lifecyclePhase === "fallback_step" && evt.data?.fallbackStepFinalOutcome === "chain_exhausted"
+    );
+  };
+
   return (evt: AgentEventPayload) => {
     const lifecyclePhase =
       evt.stream === "lifecycle" && typeof evt.data?.phase === "string" ? evt.data.phase : null;
-    if (evt.stream !== "lifecycle" || lifecyclePhase !== "error") {
+    if (shouldClearPendingTerminalLifecycleError(evt, lifecyclePhase)) {
       clearPendingTerminalLifecycleError(evt.runId);
     }
 
@@ -978,23 +1073,15 @@ export function createAgentEventHandler({
     }
 
     if (sessionKey && lifecyclePhase === "start") {
+      recordLifecycleStart(sessionKey, evt);
       void persistGatewaySessionLifecycleEvent({ sessionKey, event: evt }).catch(() => undefined);
-      const sessionEventConnIds = sessionEventSubscribers.getAll();
-      if (sessionEventConnIds.size > 0) {
-        broadcastToConnIds(
-          "sessions.changed",
-          {
-            sessionKey,
-            phase: lifecyclePhase,
-            runId: evt.runId,
-            ...(eventRunId !== evt.runId ? { clientRunId: eventRunId } : {}),
-            ts: evt.ts,
-            ...buildSessionEventSnapshot(sessionKey, evt),
-          },
-          sessionEventConnIds,
-          { dropIfSlow: true },
-        );
-      }
+      broadcastLifecycleSessionChanged({
+        sessionKey,
+        lifecyclePhase,
+        event: evt,
+        eventRunId,
+        dropIfSlow: true,
+      });
     }
   };
 }

@@ -20,7 +20,7 @@ import { createReplyDispatcher } from "../../auto-reply/reply/reply-dispatcher.j
 import { stageSandboxMedia } from "../../auto-reply/reply/stage-sandbox-media.js";
 import type { MsgContext, TemplateContext } from "../../auto-reply/templating.js";
 import { extractCanvasFromText } from "../../chat/canvas-render.js";
-import { resolveSessionFilePath } from "../../config/sessions.js";
+import { loadSessionStore, resolveSessionFilePath } from "../../config/sessions.js";
 import { streamSessionTranscriptLines } from "../../config/sessions/transcript-stream.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
@@ -112,9 +112,16 @@ import {
 } from "../protocol/index.js";
 import { CHAT_SEND_SESSION_KEY_MAX_LENGTH } from "../protocol/schema/primitives.js";
 import { getMaxChatHistoryMessagesBytes } from "../server-constants.js";
+import {
+  deriveGatewaySessionLifecycleSnapshot,
+  persistGatewaySessionLifecycleEvent,
+  resolveGatewaySessionLifecycleStoreTarget,
+} from "../session-lifecycle-state.js";
 import { readSessionTranscriptIndex } from "../session-transcript-index.fs.js";
 import {
+  buildGatewaySessionRow,
   capArrayByJsonBytes,
+  loadGatewaySessionRow,
   loadSessionEntry,
   resolveGatewayModelSupportsImages,
   resolveGatewaySessionThinkingDefault,
@@ -181,6 +188,23 @@ type PreRegisteredAgentRun = {
 function normalizeUnknownText(value: unknown): string | undefined {
   return typeof value === "string" ? normalizeOptionalText(value) : undefined;
 }
+
+type ChatSendSessionLifecycleStoreTarget = NonNullable<
+  ReturnType<typeof resolveGatewaySessionLifecycleStoreTarget>
+>;
+type ChatSendSessionLifecycleEvent = Parameters<
+  typeof deriveGatewaySessionLifecycleSnapshot
+>[0]["event"];
+type ChatSendDispatchErrorLifecycleEvent = {
+  runId: string;
+  ts: number;
+  data: {
+    phase: "error";
+    startedAt: number;
+    endedAt: number;
+    error: string;
+  };
+};
 
 /** True when a reply payload carries at least one media reference (mediaUrl or mediaUrls). */
 function isMediaBearingPayload(payload: ReplyPayload): boolean {
@@ -1928,6 +1952,180 @@ function broadcastChatFinal(params: {
   params.context.agentRunSeq.delete(params.runId);
 }
 
+function findOtherActiveChatRunForSession(params: {
+  context: Pick<GatewayRequestContext, "chatAbortControllers">;
+  currentController: AbortController;
+  currentRunId: string;
+  lifecycleStoreTarget?: ChatSendSessionLifecycleStoreTarget;
+  rawSessionKey: string;
+  sessionId?: string;
+  sessionKey: string;
+}): ChatAbortControllerEntry | undefined {
+  let newestActiveRun: ChatAbortControllerEntry | undefined;
+  for (const [runId, active] of params.context.chatAbortControllers) {
+    if (runId === params.currentRunId || active.controller === params.currentController) {
+      continue;
+    }
+    let matchesSession = false;
+    if (active.sessionKey === params.rawSessionKey || active.sessionKey === params.sessionKey) {
+      matchesSession = true;
+    } else if (params.sessionId && active.sessionId === params.sessionId) {
+      matchesSession = true;
+    } else if (params.lifecycleStoreTarget) {
+      const activeLifecycleStoreTarget = resolveGatewaySessionLifecycleStoreTarget({
+        sessionKey: active.sessionKey,
+      });
+      matchesSession =
+        activeLifecycleStoreTarget?.storePath === params.lifecycleStoreTarget.storePath &&
+        activeLifecycleStoreTarget.sessionKey === params.lifecycleStoreTarget.sessionKey;
+    }
+    if (matchesSession && (!newestActiveRun || active.startedAtMs > newestActiveRun.startedAtMs)) {
+      newestActiveRun = active;
+    }
+  }
+  return newestActiveRun;
+}
+
+function loadChatSendLifecycleSnapshotRow(params: {
+  cfg: OpenClawConfig;
+  lifecycleStoreTarget?: ChatSendSessionLifecycleStoreTarget;
+  rowKey: string;
+}) {
+  if (!params.lifecycleStoreTarget) {
+    return loadGatewaySessionRow(params.rowKey);
+  }
+  const store = loadSessionStore(params.lifecycleStoreTarget.storePath);
+  const entry = store[params.lifecycleStoreTarget.sessionKey];
+  if (!entry) {
+    return loadGatewaySessionRow(params.rowKey);
+  }
+  return buildGatewaySessionRow({
+    cfg: params.cfg,
+    storePath: params.lifecycleStoreTarget.storePath,
+    store,
+    key: params.rowKey,
+    entry,
+  });
+}
+
+function buildChatSendSessionLifecycleSnapshot(params: {
+  cfg: OpenClawConfig;
+  lifecycleStoreTarget?: ChatSendSessionLifecycleStoreTarget;
+  sessionKey: string;
+  event?: ChatSendSessionLifecycleEvent;
+  activeRun?: Pick<ChatAbortControllerEntry, "startedAtMs">;
+}) {
+  const row = loadChatSendLifecycleSnapshotRow({
+    cfg: params.cfg,
+    lifecycleStoreTarget: params.lifecycleStoreTarget,
+    rowKey: params.sessionKey,
+  });
+  if (!row) {
+    return undefined;
+  }
+  const lifecyclePatch = params.activeRun
+    ? {
+        updatedAt: Math.max(row.updatedAt ?? 0, params.activeRun.startedAtMs),
+        status: "running" as const,
+        startedAt: params.activeRun.startedAtMs,
+        endedAt: undefined,
+        runtimeMs: undefined,
+        abortedLastRun: false,
+      }
+    : params.event
+      ? deriveGatewaySessionLifecycleSnapshot({
+          session: {
+            updatedAt: row.updatedAt ?? undefined,
+            status: row.status,
+            startedAt: row.startedAt,
+            endedAt: row.endedAt,
+            runtimeMs: row.runtimeMs,
+            abortedLastRun: row.abortedLastRun,
+          },
+          event: params.event,
+        })
+      : {};
+  return {
+    ...row,
+    ...lifecyclePatch,
+    hasActiveRun: params.activeRun !== undefined,
+  };
+}
+
+async function emitChatSendDispatchErrorSessionLifecycle(params: {
+  context: Pick<
+    GatewayRequestContext,
+    "broadcastToConnIds" | "getSessionEventSubscriberConnIds" | "logGateway"
+  >;
+  cfg: OpenClawConfig;
+  rawSessionKey: string;
+  sessionKey: string;
+  backingSessionId?: string;
+  clientRunId: string;
+  lifecycleStoreTarget?: ChatSendSessionLifecycleStoreTarget;
+  lifecycleErrorEvent: ChatSendDispatchErrorLifecycleEvent;
+  activeRun?: Pick<ChatAbortControllerEntry, "startedAtMs">;
+}) {
+  const { lifecycleErrorEvent } = params;
+  const endedAt = lifecycleErrorEvent.ts;
+  const lifecycleStartedAt = lifecycleErrorEvent.data.startedAt;
+  const hasActiveRun = params.activeRun !== undefined;
+
+  if (!hasActiveRun) {
+    const lifecycleApplied = await persistGatewaySessionLifecycleEvent({
+      sessionKey: params.rawSessionKey,
+      event: lifecycleErrorEvent,
+    }).catch((persistErr) => {
+      params.context.logGateway.warn(
+        `webchat session lifecycle persist failed after error: ${formatForLog(persistErr)}`,
+      );
+      return false;
+    });
+    if (!lifecycleApplied) {
+      return;
+    }
+  }
+
+  const sessionEventConnIds = params.context.getSessionEventSubscriberConnIds();
+  if (sessionEventConnIds.size === 0) {
+    return;
+  }
+
+  const broadcastSessionKey = params.sessionKey;
+  const session = buildChatSendSessionLifecycleSnapshot({
+    cfg: params.cfg,
+    lifecycleStoreTarget: params.lifecycleStoreTarget,
+    sessionKey: broadcastSessionKey,
+    event: hasActiveRun ? undefined : lifecycleErrorEvent,
+    activeRun: params.activeRun,
+  });
+  const terminalSessionFields = hasActiveRun
+    ? {}
+    : {
+        updatedAt: endedAt,
+        status: "failed" as const,
+        startedAt: lifecycleStartedAt,
+        endedAt,
+        runtimeMs: Math.max(0, endedAt - lifecycleStartedAt),
+        abortedLastRun: false,
+      };
+  params.context.broadcastToConnIds(
+    "sessions.changed",
+    {
+      sessionKey: broadcastSessionKey,
+      ...(session ? { session } : {}),
+      phase: "error",
+      runId: params.clientRunId,
+      ts: endedAt,
+      sessionId: session?.sessionId ?? params.backingSessionId,
+      ...terminalSessionFields,
+      hasActiveRun,
+    },
+    sessionEventConnIds,
+    { dropIfSlow: true },
+  );
+}
+
 function isBtwReplyPayload(payload: ReplyPayload | undefined): payload is ReplyPayload & {
   btw: { question: string };
   text: string;
@@ -2607,6 +2805,10 @@ export const chatHandlers: GatewayRequestHandlers = {
       let appendedWebchatAgentMedia = false;
       let userTranscriptUpdatePromise: Promise<void> | null = null;
       let agentRunStarted = false;
+      let pendingSessionLifecycleError: {
+        lifecycleStoreTarget: ChatSendSessionLifecycleStoreTarget | undefined;
+        lifecycleErrorEvent: ChatSendDispatchErrorLifecycleEvent;
+      } | null = null;
       const hasBeforeAgentRunGate = getGlobalHookRunner()?.hasHooks("before_agent_run") === true;
       const emitUserTranscriptUpdate = async () => {
         if (userTranscriptUpdatePromise) {
@@ -3130,6 +3332,27 @@ export const chatHandlers: GatewayRequestHandlers = {
             );
           });
           const error = errorShape(ErrorCodes.UNAVAILABLE, String(err));
+          if (!activeRunAbort.controller.signal.aborted && !agentRunStarted) {
+            const endedAt = Date.now();
+            const lifecycleStartedAt = activeRunAbort.entry?.startedAtMs ?? now;
+            const lifecycleErrorEvent = {
+              runId: clientRunId,
+              ts: endedAt,
+              data: {
+                phase: "error" as const,
+                startedAt: lifecycleStartedAt,
+                endedAt,
+                error: String(err),
+              },
+            };
+            const lifecycleStoreTarget = resolveGatewaySessionLifecycleStoreTarget({
+              sessionKey: rawSessionKey,
+            });
+            pendingSessionLifecycleError = {
+              lifecycleStoreTarget,
+              lifecycleErrorEvent,
+            };
+          }
           setGatewayDedupeEntry({
             dedupe: context.dedupe,
             key: `chat:${clientRunId}`,
@@ -3154,6 +3377,33 @@ export const chatHandlers: GatewayRequestHandlers = {
         .finally(() => {
           activeRunAbort.cleanup();
           context.removeChatRun(clientRunId, clientRunId, sessionKey);
+          if (pendingSessionLifecycleError) {
+            const { lifecycleStoreTarget, lifecycleErrorEvent } = pendingSessionLifecycleError;
+            const activeRun = findOtherActiveChatRunForSession({
+              context,
+              currentController: activeRunAbort.controller,
+              currentRunId: clientRunId,
+              lifecycleStoreTarget,
+              rawSessionKey,
+              sessionId: backingSessionId,
+              sessionKey,
+            });
+            void emitChatSendDispatchErrorSessionLifecycle({
+              context,
+              cfg,
+              rawSessionKey,
+              sessionKey,
+              backingSessionId,
+              clientRunId,
+              lifecycleStoreTarget,
+              lifecycleErrorEvent,
+              activeRun,
+            }).catch((lifecycleErr) => {
+              context.logGateway.warn(
+                `webchat session lifecycle update failed after error cleanup: ${formatForLog(lifecycleErr)}`,
+              );
+            });
+          }
         });
     } catch (err) {
       context.chatAbortControllers.delete(clientRunId);

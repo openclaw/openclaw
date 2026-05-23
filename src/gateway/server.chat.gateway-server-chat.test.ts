@@ -306,6 +306,261 @@ describe("gateway server chat", () => {
     }
   });
 
+  test("sessions.steer interrupts active runs registered with a raw main alias", async () => {
+    await withMainSessionStore(async () => {
+      testState.sessionConfig = { mainKey: "work" };
+      try {
+        await writeSessionStore({
+          entries: {
+            work: {
+              sessionId: "sess-work",
+              updatedAt: Date.now(),
+            },
+          },
+        });
+        let activeRunAborted = false;
+        dispatchInboundMessageMock
+          .mockImplementationOnce(async (...args: unknown[]) => {
+            const [params] = args as [
+              {
+                replyOptions: {
+                  abortSignal?: AbortSignal;
+                };
+              },
+            ];
+            await new Promise<void>((resolve) => {
+              if (params.replyOptions.abortSignal?.aborted) {
+                resolve();
+                return;
+              }
+              params.replyOptions.abortSignal?.addEventListener("abort", () => resolve(), {
+                once: true,
+              });
+            });
+            activeRunAborted = true;
+            throw new Error("provider stopped after steering");
+          })
+          .mockResolvedValueOnce(undefined);
+
+        const activeRes = await rpcReq(ws, "chat.send", {
+          sessionKey: "work",
+          message: "run: long task",
+          idempotencyKey: "idem-steer-alias-active-1",
+        });
+        expect(activeRes.ok).toBe(true);
+        await vi.waitFor(() => {
+          expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(1);
+        });
+
+        const steerRes = await rpcReq(ws, "sessions.steer", {
+          key: "agent:main:work",
+          message: "follow-up after abort",
+          idempotencyKey: "idem-steer-alias-next-1",
+        });
+        expect(steerRes.ok).toBe(true);
+        expect(steerRes.payload?.interruptedActiveRun).toBe(true);
+        await vi.waitFor(() => {
+          expect(activeRunAborted).toBe(true);
+        });
+      } finally {
+        testState.sessionConfig = undefined;
+      }
+    });
+  });
+
+  test("sessions.steer interrupts every active alias for the same session", async () => {
+    await withMainSessionStore(async () => {
+      testState.sessionConfig = { mainKey: "work" };
+      try {
+        await writeSessionStore({
+          entries: {
+            work: {
+              sessionId: "sess-work",
+              updatedAt: Date.now(),
+            },
+          },
+        });
+        const abortedSessionKeys = new Set<string>();
+        const blockUntilAborted =
+          (sessionKey: string) =>
+          async (...args: unknown[]) => {
+            const [params] = args as [
+              {
+                replyOptions: {
+                  abortSignal?: AbortSignal;
+                };
+              },
+            ];
+            await new Promise<void>((resolve) => {
+              if (params.replyOptions.abortSignal?.aborted) {
+                resolve();
+                return;
+              }
+              params.replyOptions.abortSignal?.addEventListener("abort", () => resolve(), {
+                once: true,
+              });
+            });
+            abortedSessionKeys.add(sessionKey);
+            throw new Error(`provider stopped after steering ${sessionKey}`);
+          };
+        dispatchInboundMessageMock
+          .mockImplementationOnce(blockUntilAborted("work"))
+          .mockImplementationOnce(blockUntilAborted("agent:main:work"))
+          .mockResolvedValueOnce(undefined);
+
+        const rawActiveRes = await rpcReq(ws, "chat.send", {
+          sessionKey: "work",
+          message: "run: long task from raw key",
+          idempotencyKey: "idem-steer-all-aliases-raw",
+        });
+        expect(rawActiveRes.ok).toBe(true);
+        const canonicalActiveRes = await rpcReq(ws, "chat.send", {
+          sessionKey: "agent:main:work",
+          message: "run: long task from canonical key",
+          idempotencyKey: "idem-steer-all-aliases-canonical",
+        });
+        expect(canonicalActiveRes.ok).toBe(true);
+        await vi.waitFor(() => {
+          expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(2);
+        });
+
+        const steerRes = await rpcReq(ws, "sessions.steer", {
+          key: "agent:main:work",
+          message: "follow-up after aborting all aliases",
+          idempotencyKey: "idem-steer-all-aliases-next",
+        });
+        expect(steerRes.ok).toBe(true);
+        expect(steerRes.payload?.interruptedActiveRun).toBe(true);
+        await vi.waitFor(() => {
+          expect([...abortedSessionKeys].sort()).toEqual(["agent:main:work", "work"]);
+        });
+      } finally {
+        testState.sessionConfig = undefined;
+      }
+    });
+  });
+
+  test("sessions.steer skips unauthorized active runs and interrupts owned runs", async () => {
+    await withMainSessionStore(async (dir) => {
+      testState.sessionConfig = { mainKey: "work" };
+      let ownerWs: WebSocket | undefined;
+      let otherWs: WebSocket | undefined;
+      let releaseOwnerRun: (() => void) | undefined;
+      let releaseOtherRun: (() => void) | undefined;
+      try {
+        await writeSessionStore({
+          entries: {
+            work: {
+              sessionId: "sess-work",
+              updatedAt: Date.now(),
+            },
+          },
+        });
+        ownerWs = new WebSocket(`ws://127.0.0.1:${port}`);
+        otherWs = new WebSocket(`ws://127.0.0.1:${port}`);
+        trackConnectChallengeNonce(ownerWs);
+        trackConnectChallengeNonce(otherWs);
+        await Promise.all([
+          new Promise<void>((resolve) => ownerWs?.once("open", resolve)),
+          new Promise<void>((resolve) => otherWs?.once("open", resolve)),
+        ]);
+        await connectOk(ownerWs, {
+          scopes: ["operator.write"],
+          deviceIdentityPath: path.join(dir, "owner-device.json"),
+        });
+        await connectOk(otherWs, {
+          scopes: ["operator.write"],
+          deviceIdentityPath: path.join(dir, "other-device.json"),
+        });
+
+        const abortedRunIds = new Set<string>();
+        const blockUntilAbortedOrReleased =
+          (runId: string, captureRelease: (release: () => void) => void) =>
+          async (...args: unknown[]) => {
+            const [params] = args as [
+              {
+                replyOptions: {
+                  abortSignal?: AbortSignal;
+                };
+              },
+            ];
+            const aborted = await new Promise<boolean>((resolve) => {
+              if (params.replyOptions.abortSignal?.aborted) {
+                resolve(true);
+                return;
+              }
+              params.replyOptions.abortSignal?.addEventListener("abort", () => resolve(true), {
+                once: true,
+              });
+              captureRelease(() => resolve(false));
+            });
+            if (aborted) {
+              abortedRunIds.add(runId);
+              throw new Error(`provider stopped after steering ${runId}`);
+            }
+          };
+        dispatchInboundMessageMock
+          .mockImplementationOnce(
+            blockUntilAbortedOrReleased("run-owner", (release) => {
+              releaseOwnerRun = release;
+            }),
+          )
+          .mockImplementationOnce(
+            blockUntilAbortedOrReleased("run-other", (release) => {
+              releaseOtherRun = release;
+            }),
+          )
+          .mockResolvedValueOnce(undefined);
+
+        const ownerActiveRes = await rpcReq(ownerWs, "chat.send", {
+          sessionKey: "work",
+          message: "run: owned long task",
+          idempotencyKey: "idem-steer-mixed-owner-owned",
+        });
+        expect(ownerActiveRes.ok).toBe(true);
+        await vi.waitFor(() => {
+          expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(1);
+        });
+        await new Promise((resolve) => setTimeout(resolve, 5));
+
+        const otherActiveRes = await rpcReq(otherWs, "chat.send", {
+          sessionKey: "agent:main:work",
+          message: "run: other client long task",
+          idempotencyKey: "idem-steer-mixed-owner-other",
+        });
+        expect(otherActiveRes.ok).toBe(true);
+        await vi.waitFor(() => {
+          expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(2);
+        });
+
+        const steerRes = await rpcReq(ownerWs, "sessions.steer", {
+          key: "agent:main:work",
+          message: "follow-up after aborting owned run",
+          idempotencyKey: "idem-steer-mixed-owner-next",
+        });
+        expect(steerRes.ok).toBe(true);
+        expect(steerRes.payload?.interruptedActiveRun).toBe(true);
+        await vi.waitFor(() => {
+          expect([...abortedRunIds]).toEqual(["run-owner"]);
+        });
+
+        releaseOtherRun?.();
+        const waitRes = await rpcReq(otherWs, "agent.wait", {
+          runId: "idem-steer-mixed-owner-other",
+          timeoutMs: 1_000,
+        });
+        expect(waitRes.ok).toBe(true);
+        expect(waitRes.payload?.status).toBe("ok");
+      } finally {
+        releaseOwnerRun?.();
+        releaseOtherRun?.();
+        ownerWs?.close();
+        otherWs?.close();
+        testState.sessionConfig = undefined;
+      }
+    });
+  });
+
   test("sessions.abort stops active dashboard runs", async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-sessions-abort-"));
     testState.sessionStorePath = path.join(dir, "sessions.json");
@@ -1114,6 +1369,478 @@ describe("gateway server chat", () => {
       expect(historyRes.ok).toBe(true);
       const historyTexts = collectHistoryTextValues(historyRes.payload?.messages ?? []);
       expect(historyTexts).toEqual(["main thread context"]);
+    });
+  });
+
+  test("marks a running webchat session failed when dispatch rejects before a reply", async () => {
+    await withMainSessionStore(async (dir) => {
+      await writeSessionStore({
+        entries: {
+          main: {
+            sessionId: "sess-main",
+            updatedAt: 1_000,
+            status: "running",
+            startedAt: 900,
+          },
+        },
+      });
+      const subscribeRes = await rpcReq(ws, "sessions.subscribe", {});
+      expect(subscribeRes.ok).toBe(true);
+      dispatchInboundMessageMock.mockRejectedValueOnce(new Error("provider rejected request"));
+
+      const changedPromise = onceMessage(
+        ws,
+        (o) =>
+          o.type === "event" &&
+          o.event === "sessions.changed" &&
+          o.payload?.phase === "error" &&
+          o.payload?.runId === "idem-dispatch-error-1",
+        8_000,
+      );
+      const errorPromise = onceMessage(
+        ws,
+        (o) =>
+          o.type === "event" &&
+          o.event === "chat" &&
+          o.payload?.state === "error" &&
+          o.payload?.runId === "idem-dispatch-error-1",
+        8_000,
+      );
+      const res = await rpcReq(ws, "chat.send", {
+        sessionKey: "main",
+        message: "run: pwd",
+        idempotencyKey: "idem-dispatch-error-1",
+      });
+      expect(res.ok).toBe(true);
+      const changedEvent = await changedPromise;
+      await errorPromise;
+
+      const changedPayload = expectRecordFields(changedEvent.payload, {
+        sessionKey: "agent:main:main",
+        sessionId: "sess-main",
+        status: "failed",
+        hasActiveRun: false,
+      });
+      expectRecordFields(changedPayload.session, {
+        key: "agent:main:main",
+        sessionId: "sess-main",
+        status: "failed",
+        hasActiveRun: false,
+      });
+
+      const sessionsRes = await rpcReq<{ sessions?: unknown[] }>(ws, "sessions.list", {});
+      expect(sessionsRes.ok).toBe(true);
+      const session = sessionsRes.payload?.sessions?.find(
+        (row): row is Record<string, unknown> =>
+          Boolean(row) &&
+          typeof row === "object" &&
+          (row as { key?: unknown }).key === "agent:main:main",
+      );
+      const sessionRecord = expectRecordFields(session, {
+        status: "failed",
+        hasActiveRun: false,
+      });
+      expect(typeof sessionRecord.startedAt).toBe("number");
+      expect(typeof sessionRecord.endedAt).toBe("number");
+      expect(typeof sessionRecord.runtimeMs).toBe("number");
+
+      const store = JSON.parse(
+        await fs.readFile(path.join(dir, "sessions.json"), "utf-8"),
+      ) as Record<string, Record<string, unknown>>;
+      expect(store["agent:main:main"]?.lifecycleRunId).toBe("idem-dispatch-error-1");
+    });
+  });
+
+  test("marks a webchat session failed after overlapping dispatches reject before replies", async () => {
+    await withMainSessionStore(async () => {
+      await writeSessionStore({
+        entries: {
+          main: {
+            sessionId: "sess-main",
+            updatedAt: 1_000,
+            status: "running",
+            startedAt: 900,
+          },
+        },
+      });
+      let rejectDispatches: ((err: Error) => void) | undefined;
+      const dispatchBarrier = new Promise<never>((_, reject) => {
+        rejectDispatches = reject;
+      });
+      let dispatchCount = 0;
+      dispatchInboundMessageMock.mockImplementation(async () => {
+        dispatchCount += 1;
+        if (dispatchCount === 2) {
+          rejectDispatches?.(new Error("provider rejected concurrent requests"));
+        }
+        await dispatchBarrier;
+      });
+
+      const firstRes = rpcReq(ws, "chat.send", {
+        sessionKey: "main",
+        message: "run: first task",
+        idempotencyKey: "idem-dispatch-error-concurrent-1",
+      });
+      const secondRes = rpcReq(ws, "chat.send", {
+        sessionKey: "main",
+        message: "run: second task",
+        idempotencyKey: "idem-dispatch-error-concurrent-2",
+      });
+
+      await expect(firstRes).resolves.toMatchObject({ ok: true });
+      await expect(secondRes).resolves.toMatchObject({ ok: true });
+      await vi.waitFor(() => {
+        expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(2);
+      });
+
+      await vi.waitFor(async () => {
+        const sessionsRes = await rpcReq<{ sessions?: unknown[] }>(ws, "sessions.list", {});
+        expect(sessionsRes.ok).toBe(true);
+        const session = sessionsRes.payload?.sessions?.find(
+          (row): row is Record<string, unknown> =>
+            Boolean(row) &&
+            typeof row === "object" &&
+            (row as { key?: unknown }).key === "agent:main:main",
+        );
+        expectRecordFields(session, {
+          status: "failed",
+          hasActiveRun: false,
+        });
+      });
+    });
+  });
+
+  test("keeps a webchat session running when one dispatch fails but another run is active", async () => {
+    await withMainSessionStore(async () => {
+      const newerUpdatedAt = Date.now() + 60_000;
+      await writeSessionStore({
+        entries: {
+          main: {
+            sessionId: "sess-main",
+            updatedAt: newerUpdatedAt,
+            status: "done",
+            startedAt: 700,
+            endedAt: 900,
+            runtimeMs: 200,
+          },
+        },
+      });
+      const subscribeRes = await rpcReq(ws, "sessions.subscribe", {});
+      expect(subscribeRes.ok).toBe(true);
+      let finishActiveDispatch: (() => void) | undefined;
+      const activeDispatchFinished = new Promise<void>((resolve) => {
+        finishActiveDispatch = resolve;
+      });
+      dispatchInboundMessageMock
+        .mockImplementationOnce(async () => {
+          await activeDispatchFinished;
+        })
+        .mockRejectedValueOnce(new Error("provider rejected request"));
+
+      const activeRes = await rpcReq(ws, "chat.send", {
+        sessionKey: "main",
+        message: "run: long task",
+        idempotencyKey: "idem-dispatch-active-1",
+      });
+      expect(activeRes.ok).toBe(true);
+      await vi.waitFor(() => {
+        expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(1);
+      });
+
+      const changedPromise = onceMessage(
+        ws,
+        (o) =>
+          o.type === "event" &&
+          o.event === "sessions.changed" &&
+          o.payload?.phase === "error" &&
+          o.payload?.runId === "idem-dispatch-error-active-1",
+        8_000,
+      );
+      const errorPromise = onceMessage(
+        ws,
+        (o) =>
+          o.type === "event" &&
+          o.event === "chat" &&
+          o.payload?.state === "error" &&
+          o.payload?.runId === "idem-dispatch-error-active-1",
+        8_000,
+      );
+      const failedRes = await rpcReq(ws, "chat.send", {
+        sessionKey: "main",
+        message: "run: pwd",
+        idempotencyKey: "idem-dispatch-error-active-1",
+      });
+      expect(failedRes.ok).toBe(true);
+      const changedEvent = await changedPromise;
+      await errorPromise;
+
+      const changedPayload = expectRecordFields(changedEvent.payload, {
+        sessionKey: "agent:main:main",
+        sessionId: "sess-main",
+        hasActiveRun: true,
+      });
+      expect(changedPayload.status).not.toBe("failed");
+      const changedSession = expectRecordFields(changedPayload.session, {
+        key: "agent:main:main",
+        sessionId: "sess-main",
+        status: "running",
+        hasActiveRun: true,
+      });
+      expect(Number(changedSession.startedAt)).toBeGreaterThan(900);
+      expect(changedSession.updatedAt).toBe(newerUpdatedAt);
+      expect(changedPayload.session).not.toHaveProperty("endedAt");
+      expect(changedPayload.session).not.toHaveProperty("runtimeMs");
+
+      const sessionsRes = await rpcReq<{ sessions?: unknown[] }>(ws, "sessions.list", {});
+      expect(sessionsRes.ok).toBe(true);
+      const session = sessionsRes.payload?.sessions?.find(
+        (row): row is Record<string, unknown> =>
+          Boolean(row) &&
+          typeof row === "object" &&
+          (row as { key?: unknown }).key === "agent:main:main",
+      );
+      const listedSession = expectRecordFields(session, {
+        status: "running",
+        hasActiveRun: true,
+      });
+      expect(Number(listedSession.startedAt)).toBeGreaterThan(900);
+      expect(listedSession.updatedAt).toBe(newerUpdatedAt);
+
+      finishActiveDispatch?.();
+      await vi.waitFor(() => {
+        expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(2);
+      });
+    });
+  });
+
+  test("projects the newest active run after a dispatch fails with multiple active runs", async () => {
+    await withMainSessionStore(async () => {
+      const nowSpy = vi.spyOn(Date, "now").mockReturnValue(5_000);
+      let finishActiveDispatches: (() => void) | undefined;
+      try {
+        await writeSessionStore({
+          entries: {
+            main: {
+              sessionId: "sess-main",
+              updatedAt: 1_000,
+              status: "done",
+              startedAt: 700,
+              endedAt: 900,
+              runtimeMs: 200,
+            },
+          },
+        });
+        const subscribeRes = await rpcReq(ws, "sessions.subscribe", {});
+        expect(subscribeRes.ok).toBe(true);
+        const activeDispatchesFinished = new Promise<void>((resolve) => {
+          finishActiveDispatches = resolve;
+        });
+        let dispatchCount = 0;
+        dispatchInboundMessageMock.mockImplementation(async () => {
+          dispatchCount += 1;
+          if (dispatchCount === 3) {
+            throw new Error("provider rejected request");
+          }
+          await activeDispatchesFinished;
+        });
+
+        nowSpy.mockReturnValue(10_000);
+        const firstActiveRes = await rpcReq(ws, "chat.send", {
+          sessionKey: "main",
+          message: "run: first long task",
+          idempotencyKey: "idem-dispatch-active-old",
+        });
+        expect(firstActiveRes.ok).toBe(true);
+        await vi.waitFor(() => {
+          expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(1);
+        });
+
+        nowSpy.mockReturnValue(20_000);
+        const secondActiveRes = await rpcReq(ws, "chat.send", {
+          sessionKey: "main",
+          message: "run: second long task",
+          idempotencyKey: "idem-dispatch-active-new",
+        });
+        expect(secondActiveRes.ok).toBe(true);
+        await vi.waitFor(() => {
+          expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(2);
+        });
+
+        const changedPromise = onceMessage(
+          ws,
+          (o) =>
+            o.type === "event" &&
+            o.event === "sessions.changed" &&
+            o.payload?.phase === "error" &&
+            o.payload?.runId === "idem-dispatch-error-with-two-active",
+          8_000,
+        );
+        nowSpy.mockReturnValue(30_000);
+        const failedRes = await rpcReq(ws, "chat.send", {
+          sessionKey: "main",
+          message: "run: pwd",
+          idempotencyKey: "idem-dispatch-error-with-two-active",
+        });
+        expect(failedRes.ok).toBe(true);
+
+        const changedEvent = await changedPromise;
+        const changedPayload = expectRecordFields(changedEvent.payload, {
+          sessionKey: "agent:main:main",
+          sessionId: "sess-main",
+        });
+        const changedSession = expectRecordFields(changedPayload.session, {
+          key: "agent:main:main",
+          status: "running",
+          hasActiveRun: true,
+          startedAt: 20_000,
+          updatedAt: 20_000,
+        });
+        expect(changedSession).not.toHaveProperty("endedAt");
+        expect(changedSession).not.toHaveProperty("runtimeMs");
+        finishActiveDispatches?.();
+      } finally {
+        finishActiveDispatches?.();
+        nowSpy.mockRestore();
+      }
+    });
+  });
+
+  test("broadcasts dispatch-error lifecycle updates with the matched legacy main row key", async () => {
+    await withMainSessionStore(async (dir) => {
+      testState.sessionConfig = { mainKey: "work" };
+      testState.agentsConfig = {
+        list: [{ id: "ops", default: true }],
+      };
+      try {
+        await writeSessionStore({
+          entries: {
+            "agent:main:work": {
+              sessionId: "sess-legacy-main",
+              updatedAt: 1_000,
+              status: "running",
+              startedAt: 900,
+            },
+          },
+        });
+        const subscribeRes = await rpcReq(ws, "sessions.subscribe", {});
+        expect(subscribeRes.ok).toBe(true);
+        dispatchInboundMessageMock.mockRejectedValueOnce(new Error("provider rejected request"));
+
+        const changedPromise = onceMessage(
+          ws,
+          (o) =>
+            o.type === "event" &&
+            o.event === "sessions.changed" &&
+            o.payload?.phase === "error" &&
+            o.payload?.runId === "idem-dispatch-error-legacy-1",
+          8_000,
+        );
+        const res = await rpcReq(ws, "chat.send", {
+          sessionKey: "agent:ops:work",
+          message: "run: pwd",
+          idempotencyKey: "idem-dispatch-error-legacy-1",
+        });
+        expect(res.ok).toBe(true);
+
+        const changedEvent = await changedPromise;
+        const changedPayload = expectRecordFields(changedEvent.payload, {
+          sessionKey: "agent:ops:work",
+          sessionId: "sess-legacy-main",
+          status: "failed",
+          hasActiveRun: false,
+        });
+        expectRecordFields(changedPayload.session, {
+          key: "agent:ops:work",
+          sessionId: "sess-legacy-main",
+          status: "failed",
+          hasActiveRun: false,
+        });
+
+        const store = JSON.parse(
+          await fs.readFile(path.join(dir, "sessions.json"), "utf-8"),
+        ) as Record<string, Record<string, unknown>>;
+        expect(store["agent:main:work"]?.status).toBe("failed");
+        expect(store["agent:ops:work"]).toBeUndefined();
+      } finally {
+        testState.sessionConfig = undefined;
+        testState.agentsConfig = undefined;
+      }
+    });
+  });
+
+  test("keeps an aborted webchat dispatch rejection from overwriting lifecycle state", async () => {
+    await withMainSessionStore(async () => {
+      await writeSessionStore({
+        entries: {
+          main: {
+            sessionId: "sess-main",
+            updatedAt: 1_000,
+            status: "running",
+            startedAt: 900,
+          },
+        },
+      });
+      let dispatchFinished: (() => void) | undefined;
+      const dispatchFinishedPromise = new Promise<void>((resolve) => {
+        dispatchFinished = resolve;
+      });
+      dispatchInboundMessageMock.mockImplementationOnce(async (...args: unknown[]) => {
+        const [params] = args as [
+          {
+            replyOptions: {
+              abortSignal?: AbortSignal;
+            };
+          },
+        ];
+        await new Promise<void>((resolve) => {
+          if (params.replyOptions.abortSignal?.aborted) {
+            resolve();
+            return;
+          }
+          params.replyOptions.abortSignal?.addEventListener("abort", () => resolve(), {
+            once: true,
+          });
+        });
+        dispatchFinished?.();
+        throw new Error("provider rejected after abort");
+      });
+
+      const abortedPromise = onceMessage(
+        ws,
+        (o) =>
+          o.type === "event" &&
+          o.event === "chat" &&
+          o.payload?.state === "aborted" &&
+          o.payload?.runId === "idem-dispatch-abort-1",
+        8_000,
+      );
+      const res = await rpcReq(ws, "chat.send", {
+        sessionKey: "main",
+        message: "run: pwd",
+        idempotencyKey: "idem-dispatch-abort-1",
+      });
+      expect(res.ok).toBe(true);
+      expect(res.payload?.status).toBe("started");
+      await vi.waitFor(() => {
+        expect(dispatchInboundMessageMock).toHaveBeenCalled();
+      });
+
+      await abortChatRun("idem-dispatch-abort-1");
+      await abortedPromise;
+      await dispatchFinishedPromise;
+
+      await vi.waitFor(async () => {
+        const sessionsRes = await rpcReq<{ sessions?: unknown[] }>(ws, "sessions.list", {});
+        expect(sessionsRes.ok).toBe(true);
+        const session = sessionsRes.payload?.sessions?.find(
+          (row): row is Record<string, unknown> =>
+            Boolean(row) &&
+            typeof row === "object" &&
+            (row as { key?: unknown }).key === "agent:main:main",
+        );
+        expect(session?.hasActiveRun).toBe(false);
+        expect(session?.status).not.toBe("failed");
+      });
     });
   });
 

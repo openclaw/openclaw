@@ -48,6 +48,7 @@ import {
   normalizeOptionalString,
   readStringValue,
 } from "../../shared/string-coerce.js";
+import type { ChatAbortControllerEntry } from "../chat-abort.js";
 import { ADMIN_SCOPE } from "../operator-scopes.js";
 import { GATEWAY_CLIENT_IDS } from "../protocol/client-info.js";
 import {
@@ -80,6 +81,7 @@ import {
   getSessionCompactionCheckpoint,
   listSessionCompactionCheckpoints,
 } from "../session-compaction-checkpoints.js";
+import { resolveGatewaySessionLifecycleStoreTarget } from "../session-lifecycle-state.js";
 import { triggerSessionPatchHook } from "../session-patch-hooks.js";
 import {
   resolveSessionStoreAgentId,
@@ -106,6 +108,7 @@ import {
   resolveSessionDisplayModelIdentityRef,
   resolveSessionModelRef,
   resolveSessionTranscriptCandidates,
+  type GatewaySessionRow,
   type SessionsPatchResult,
   type SessionsPreviewEntry,
   type SessionsPreviewResult,
@@ -265,6 +268,81 @@ function shouldAttachPendingMessageSeq(params: { payload: unknown; cached?: bool
   return status === "started";
 }
 
+function projectSessionRowWithActiveRun<
+  T extends {
+    updatedAt?: unknown;
+    status?: unknown;
+    startedAt?: unknown;
+    hasActiveRun?: boolean;
+    endedAt?: unknown;
+    runtimeMs?: unknown;
+    abortedLastRun?: boolean;
+  },
+>(row: T, activeRun: Pick<ChatAbortControllerEntry, "startedAtMs">) {
+  const startedAt = activeRun.startedAtMs;
+  const rowUpdatedAt =
+    typeof row.updatedAt === "number" && Number.isFinite(row.updatedAt) ? row.updatedAt : 0;
+  return {
+    ...row,
+    updatedAt: Math.max(rowUpdatedAt, startedAt),
+    status: "running" as const,
+    startedAt,
+    hasActiveRun: true,
+    endedAt: undefined,
+    runtimeMs: undefined,
+    abortedLastRun: false,
+  };
+}
+
+function projectSessionStoreWithActiveRuns(params: {
+  store: Record<string, SessionEntry>;
+  activeSessionRuns: Map<string, ChatAbortControllerEntry>;
+}): Record<string, SessionEntry> {
+  let projectedStore: Record<string, SessionEntry> | undefined;
+  for (const [key, entry] of Object.entries(params.store)) {
+    const activeRun = params.activeSessionRuns.get(key);
+    if (!activeRun) {
+      continue;
+    }
+    projectedStore ??= { ...params.store };
+    projectedStore[key] = projectSessionRowWithActiveRun(entry, activeRun);
+  }
+  return projectedStore ?? params.store;
+}
+
+function activeRunProjectionChanged(params: {
+  projectedActiveRuns: Map<string, ChatAbortControllerEntry>;
+  currentActiveRuns: Map<string, ChatAbortControllerEntry>;
+}): boolean {
+  if (params.projectedActiveRuns.size !== params.currentActiveRuns.size) {
+    return true;
+  }
+  for (const [sessionKey, projectedRun] of params.projectedActiveRuns) {
+    const currentRun = params.currentActiveRuns.get(sessionKey);
+    if (
+      !currentRun ||
+      currentRun.sessionId !== projectedRun.sessionId ||
+      currentRun.startedAtMs !== projectedRun.startedAtMs
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function projectSessionRowsWithActiveRuns(params: {
+  sessions: GatewaySessionRow[];
+  activeSessionRuns: Map<string, ChatAbortControllerEntry>;
+}): GatewaySessionRow[] {
+  return params.sessions.map((session) => {
+    const activeRun = params.activeSessionRuns.get(session.key);
+    if (!activeRun) {
+      return { ...session, hasActiveRun: false };
+    }
+    return projectSessionRowWithActiveRun(session, activeRun);
+  });
+}
+
 function emitSessionsChanged(
   context: Pick<
     GatewayRequestContext,
@@ -276,7 +354,19 @@ function emitSessionsChanged(
   if (connIds.size === 0) {
     return;
   }
-  const sessionRow = payload.sessionKey ? loadGatewaySessionRow(payload.sessionKey) : null;
+  const loadedSessionRow = payload.sessionKey ? loadGatewaySessionRow(payload.sessionKey) : null;
+  const activeRun = loadedSessionRow
+    ? resolveTrackedActiveSessionRun({
+        context,
+        requestedKey: payload.sessionKey ?? loadedSessionRow.key,
+        canonicalKey: loadedSessionRow.key,
+      })
+    : undefined;
+  const hasActiveRun = activeRun !== undefined;
+  const sessionRow =
+    loadedSessionRow && activeRun
+      ? projectSessionRowWithActiveRun(loadedSessionRow, activeRun)
+      : loadedSessionRow;
   context.broadcastToConnIds(
     "sessions.changed",
     {
@@ -327,11 +417,7 @@ function emitSessionsChanged(
             modelProvider: sessionRow.modelProvider,
             model: sessionRow.model,
             status: sessionRow.status,
-            hasActiveRun: hasTrackedActiveSessionRun({
-              context,
-              requestedKey: payload.sessionKey ?? sessionRow.key,
-              canonicalKey: sessionRow.key,
-            }),
+            hasActiveRun,
             startedAt: sessionRow.startedAt,
             endedAt: sessionRow.endedAt,
             runtimeMs: sessionRow.runtimeMs,
@@ -412,6 +498,7 @@ function cloneCheckpointSessionEntry(params: {
     endedAt: undefined,
     runtimeMs: undefined,
     status: undefined,
+    lifecycleRunId: undefined,
     inputTokens: undefined,
     outputTokens: undefined,
     cacheRead: undefined,
@@ -630,28 +717,81 @@ function resolveScopedAbortKey(params: {
   });
 }
 
-function collectTrackedActiveSessionRunKeys(
-  context: Partial<Pick<GatewayRequestContext, "chatAbortControllers">>,
-): Set<string> {
-  const keys = new Set<string>();
-  if (!(context.chatAbortControllers instanceof Map)) {
-    return keys;
+type TrackedActiveSessionRun = {
+  runId: string;
+  active: ChatAbortControllerEntry;
+};
+
+function collectActiveSessionRunTargetKeys(active: ChatAbortControllerEntry): string[] {
+  const sessionKey = normalizeOptionalString(active.sessionKey);
+  if (!sessionKey) {
+    return [];
   }
-  for (const active of context.chatAbortControllers.values()) {
-    if (typeof active.sessionKey === "string" && active.sessionKey.trim()) {
-      keys.add(active.sessionKey);
-    }
+  const keys = new Set<string>([sessionKey, loadSessionEntry(sessionKey).canonicalKey]);
+  const lifecycleStoreTarget = resolveGatewaySessionLifecycleStoreTarget({ sessionKey });
+  if (lifecycleStoreTarget) {
+    keys.add(lifecycleStoreTarget.sessionKey);
   }
-  return keys;
+  return [...keys];
 }
 
-function hasTrackedActiveSessionRun(params: {
+function collectTrackedActiveSessionRunsByKey(
+  context: Partial<Pick<GatewayRequestContext, "chatAbortControllers">>,
+): Map<string, ChatAbortControllerEntry> {
+  const activeRunsBySessionKey = new Map<string, ChatAbortControllerEntry>();
+  const rememberActiveRun = (sessionKey: string, active: ChatAbortControllerEntry) => {
+    const existing = activeRunsBySessionKey.get(sessionKey);
+    if (!existing || active.startedAtMs > existing.startedAtMs) {
+      activeRunsBySessionKey.set(sessionKey, active);
+    }
+  };
+  if (!(context.chatAbortControllers instanceof Map)) {
+    return activeRunsBySessionKey;
+  }
+  for (const active of context.chatAbortControllers.values()) {
+    for (const sessionKey of collectActiveSessionRunTargetKeys(active)) {
+      rememberActiveRun(sessionKey, active);
+    }
+  }
+  return activeRunsBySessionKey;
+}
+
+function collectTrackedActiveSessionRuns(params: {
   context: Partial<Pick<GatewayRequestContext, "chatAbortControllers">>;
   requestedKey: string;
   canonicalKey: string;
-}): boolean {
-  const activeSessionKeys = collectTrackedActiveSessionRunKeys(params.context);
-  return activeSessionKeys.has(params.canonicalKey) || activeSessionKeys.has(params.requestedKey);
+  sessionId?: string;
+}): TrackedActiveSessionRun[] {
+  if (!(params.context.chatAbortControllers instanceof Map)) {
+    return [];
+  }
+  const targetKeys = new Set([params.requestedKey, params.canonicalKey]);
+  const targetSessionId = normalizeOptionalString(params.sessionId);
+  const matches: TrackedActiveSessionRun[] = [];
+  for (const [runId, active] of params.context.chatAbortControllers) {
+    const matchesSessionId =
+      targetSessionId !== undefined &&
+      normalizeOptionalString(active.sessionId) === targetSessionId;
+    const matchesSessionKey = collectActiveSessionRunTargetKeys(active).some((sessionKey) =>
+      targetKeys.has(sessionKey),
+    );
+    if (matchesSessionId || matchesSessionKey) {
+      matches.push({ runId, active });
+    }
+  }
+  return matches.toSorted((a, b) => b.active.startedAtMs - a.active.startedAtMs);
+}
+
+function resolveTrackedActiveSessionRun(params: {
+  context: Partial<Pick<GatewayRequestContext, "chatAbortControllers">>;
+  requestedKey: string;
+  canonicalKey: string;
+}): ChatAbortControllerEntry | undefined {
+  return collectTrackedActiveSessionRuns(params)[0]?.active;
+}
+
+function isUnauthorizedAbortError(error: ReturnType<typeof errorShape> | undefined): boolean {
+  return error?.code === ErrorCodes.INVALID_REQUEST && error.message === "unauthorized";
 }
 
 async function interruptSessionRunIfActive(params: {
@@ -663,11 +803,13 @@ async function interruptSessionRunIfActive(params: {
   canonicalKey: string;
   sessionId?: string;
 }): Promise<{ interrupted: boolean; error?: ReturnType<typeof errorShape> }> {
-  const hasTrackedRun = hasTrackedActiveSessionRun({
+  const activeRuns = collectTrackedActiveSessionRuns({
     context: params.context,
     requestedKey: params.requestedKey,
     canonicalKey: params.canonicalKey,
+    sessionId: params.sessionId,
   });
+  const hasTrackedRun = activeRuns.length > 0;
   const hasEmbeddedRun =
     typeof params.sessionId === "string" && params.sessionId
       ? isEmbeddedPiRunActive(params.sessionId)
@@ -678,33 +820,43 @@ async function interruptSessionRunIfActive(params: {
   }
 
   if (hasTrackedRun) {
-    let abortOk = true;
-    let abortError: ReturnType<typeof errorShape> | undefined;
-    const abortSessionKey = resolveAbortSessionKey({
-      context: params.context,
-      requestedKey: params.requestedKey,
-      canonicalKey: params.canonicalKey,
-    });
+    let interruptedTrackedRun = false;
+    let unauthorizedError: ReturnType<typeof errorShape> | undefined;
+    for (const activeRun of activeRuns) {
+      let abortOk = true;
+      let abortError: ReturnType<typeof errorShape> | undefined;
+      await chatHandlers["chat.abort"]({
+        req: params.req,
+        params: {
+          sessionKey: activeRun.active.sessionKey,
+          runId: activeRun.runId,
+        },
+        respond: (ok, _payload, error) => {
+          abortOk = ok;
+          abortError = error;
+        },
+        context: params.context,
+        client: params.client,
+        isWebchatConnect: params.isWebchatConnect,
+      });
 
-    await chatHandlers["chat.abort"]({
-      req: params.req,
-      params: {
-        sessionKey: abortSessionKey,
-      },
-      respond: (ok, _payload, error) => {
-        abortOk = ok;
-        abortError = error;
-      },
-      context: params.context,
-      client: params.client,
-      isWebchatConnect: params.isWebchatConnect,
-    });
-
-    if (!abortOk) {
+      if (!abortOk) {
+        if (isUnauthorizedAbortError(abortError)) {
+          unauthorizedError = abortError;
+          continue;
+        }
+        return {
+          interrupted: true,
+          error:
+            abortError ?? errorShape(ErrorCodes.UNAVAILABLE, "failed to interrupt active session"),
+        };
+      }
+      interruptedTrackedRun = true;
+    }
+    if (!interruptedTrackedRun && !hasEmbeddedRun) {
       return {
         interrupted: true,
-        error:
-          abortError ?? errorShape(ErrorCodes.UNAVAILABLE, "failed to interrupt active session"),
+        error: unauthorizedError ?? errorShape(ErrorCodes.INVALID_REQUEST, "unauthorized"),
       };
     }
   }
@@ -713,7 +865,12 @@ async function interruptSessionRunIfActive(params: {
     abortEmbeddedPiRun(params.sessionId);
   }
 
-  clearSessionQueues([params.requestedKey, params.canonicalKey, params.sessionId]);
+  clearSessionQueues([
+    params.requestedKey,
+    params.canonicalKey,
+    params.sessionId,
+    ...activeRuns.map((run) => run.active.sessionKey),
+  ]);
 
   if (hasEmbeddedRun && params.sessionId) {
     const ended = await waitForEmbeddedPiRunEnd(params.sessionId, 15_000);
@@ -912,6 +1069,11 @@ export const sessionsHandlers: GatewayRequestHandlers = {
         const listStore = configuredAgentsOnly
           ? filterSessionStoreToConfiguredAgents(cfg, store)
           : store;
+        const activeSessionRuns = collectTrackedActiveSessionRunsByKey(context);
+        const activeProjectedListStore = projectSessionStoreWithActiveRuns({
+          store: listStore,
+          activeSessionRuns,
+        });
         const modelCatalog = await measureDiagnosticsTimelineSpan(
           "gateway.sessions.list.model_catalog",
           () => loadOptionalSessionsListModelCatalog(context),
@@ -920,13 +1082,13 @@ export const sessionsHandlers: GatewayRequestHandlers = {
             phase: "sessions.list",
           },
         );
-        const result = await measureDiagnosticsTimelineSpan(
+        let result = await measureDiagnosticsTimelineSpan(
           "gateway.sessions.list.rows",
           () =>
             listSessionsFromStoreAsync({
               cfg,
               storePath,
-              store: listStore,
+              store: activeProjectedListStore,
               modelCatalog,
               opts: p,
             }),
@@ -934,20 +1096,66 @@ export const sessionsHandlers: GatewayRequestHandlers = {
             config: cfg,
             phase: "sessions.list",
             attributes: {
-              storeEntries: Object.keys(listStore).length,
+              storeEntries: Object.keys(activeProjectedListStore).length,
             },
           },
         );
+        const currentActiveSessionRuns = collectTrackedActiveSessionRunsByKey(context);
+        if (
+          activeRunProjectionChanged({
+            projectedActiveRuns: activeSessionRuns,
+            currentActiveRuns: currentActiveSessionRuns,
+          })
+        ) {
+          const { storePath: refreshedStorePath, store: refreshedStore } =
+            measureDiagnosticsTimelineSpanSync(
+              "gateway.sessions.list.store_reload",
+              () =>
+                loadCombinedSessionStoreForGateway(cfg, {
+                  agentId: p.agentId,
+                }),
+              {
+                config: cfg,
+                phase: "sessions.list",
+                attributes: {
+                  agentId: p.agentId ?? null,
+                  configuredAgentsOnly,
+                },
+              },
+            );
+          const refreshedListStore = configuredAgentsOnly
+            ? filterSessionStoreToConfiguredAgents(cfg, refreshedStore)
+            : refreshedStore;
+          const refreshedActiveProjectedListStore = projectSessionStoreWithActiveRuns({
+            store: refreshedListStore,
+            activeSessionRuns: currentActiveSessionRuns,
+          });
+          result = await measureDiagnosticsTimelineSpan(
+            "gateway.sessions.list.rows_reload",
+            () =>
+              listSessionsFromStoreAsync({
+                cfg,
+                storePath: refreshedStorePath,
+                store: refreshedActiveProjectedListStore,
+                modelCatalog,
+                opts: p,
+              }),
+            {
+              config: cfg,
+              phase: "sessions.list",
+              attributes: {
+                storeEntries: Object.keys(refreshedActiveProjectedListStore).length,
+              },
+            },
+          );
+        }
         const sessions = measureDiagnosticsTimelineSpanSync(
           "gateway.sessions.list.active_run_flags",
-          () => {
-            const activeSessionKeys = collectTrackedActiveSessionRunKeys(context);
-            return result.sessions.map((session) =>
-              Object.assign({}, session, {
-                hasActiveRun: activeSessionKeys.has(session.key),
-              }),
-            );
-          },
+          () =>
+            projectSessionRowsWithActiveRuns({
+              sessions: result.sessions,
+              activeSessionRuns: currentActiveSessionRuns,
+            }),
           {
             config: cfg,
             phase: "sessions.list",

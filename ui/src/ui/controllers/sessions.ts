@@ -81,11 +81,23 @@ function hasCurrentChatSession(
 
 function sessionPatchTargetsCurrentChatRun(
   state: SessionsState & { sessionKey: string },
-  options: { changedSessionKey: string; eventRunId?: string },
+  options: {
+    changedSessionKey: string;
+    eventRunId?: string;
+    terminalRunStartedAt?: number | null;
+    hasActiveRun?: boolean;
+  },
 ): boolean {
   if (state.sessionKey !== options.changedSessionKey) {
     return false;
   }
+  const terminalPatchTargetsCurrentRun =
+    options.hasActiveRun === false &&
+    typeof state.chatStreamStartedAt === "number" &&
+    Number.isFinite(state.chatStreamStartedAt) &&
+    typeof options.terminalRunStartedAt === "number" &&
+    Number.isFinite(options.terminalRunStartedAt) &&
+    options.terminalRunStartedAt >= state.chatStreamStartedAt;
   if (
     options.eventRunId !== undefined &&
     state.chatRunId &&
@@ -94,7 +106,7 @@ function sessionPatchTargetsCurrentChatRun(
     return false;
   }
   if (options.eventRunId === undefined && state.chatRunId) {
-    return false;
+    return terminalPatchTargetsCurrentRun;
   }
   return true;
 }
@@ -151,6 +163,84 @@ function takePendingSessionsLoad(
   const pending = control.pending;
   control.pending = null;
   return pending;
+}
+
+function finiteNumber(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+function isTerminalSessionPatch(source: Record<string, unknown>): boolean {
+  if (source.hasActiveRun === true) {
+    return false;
+  }
+  return (
+    source.hasActiveRun === false ||
+    source.status === "done" ||
+    source.status === "failed" ||
+    source.status === "killed" ||
+    source.status === "timeout"
+  );
+}
+
+function isTerminalSessionStatus(status: unknown): boolean {
+  return status === "done" || status === "failed" || status === "killed" || status === "timeout";
+}
+
+function resolveExistingTerminalAt(existing?: GatewaySessionRow): number | null {
+  if (!existing || existing.hasActiveRun === true || !isTerminalSessionStatus(existing.status)) {
+    return null;
+  }
+  return finiteNumber(existing.endedAt) ?? finiteNumber(existing.updatedAt);
+}
+
+function resolveSourceTerminalAt(source: Record<string, unknown>): number | null {
+  return finiteNumber(source.endedAt) ?? finiteNumber(source.updatedAt) ?? finiteNumber(source.ts);
+}
+
+function terminalPatchPredatesExistingRun(params: {
+  currentChatRunId?: string | null;
+  currentChatStartedAt?: number | null;
+  eventRunId?: string;
+  existing?: GatewaySessionRow;
+  terminalRunStartedAt: number | null;
+  source: Record<string, unknown>;
+}): boolean {
+  if (!isTerminalSessionPatch(params.source)) {
+    return false;
+  }
+  const existingStartedAt = finiteNumber(params.existing?.startedAt);
+  if (
+    existingStartedAt !== null &&
+    params.terminalRunStartedAt !== null &&
+    params.terminalRunStartedAt < existingStartedAt
+  ) {
+    return true;
+  }
+  const existingTerminalAt = resolveExistingTerminalAt(params.existing);
+  const sourceTerminalAt = resolveSourceTerminalAt(params.source);
+  if (
+    existingTerminalAt !== null &&
+    sourceTerminalAt !== null &&
+    sourceTerminalAt < existingTerminalAt &&
+    (params.terminalRunStartedAt === null || params.terminalRunStartedAt === existingStartedAt)
+  ) {
+    return true;
+  }
+  const currentChatStartedAt = finiteNumber(params.currentChatStartedAt);
+  if (!params.currentChatRunId || currentChatStartedAt === null) {
+    return false;
+  }
+  if (params.terminalRunStartedAt !== null) {
+    if (params.terminalRunStartedAt < currentChatStartedAt) {
+      return true;
+    }
+    return (
+      params.terminalRunStartedAt === currentChatStartedAt &&
+      params.eventRunId !== undefined &&
+      params.eventRunId !== params.currentChatRunId
+    );
+  }
+  return params.eventRunId !== undefined && params.eventRunId !== params.currentChatRunId;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -380,6 +470,25 @@ export function applySessionsChangedEvent(
   }
   const previousCheckpointSignature = checkpointSummarySignature(existing);
   const fallbackKind = normalizeSessionKind(source.kind) ?? existing?.kind ?? "unknown";
+  const terminalRunStartedAt = finiteNumber(source.startedAt);
+  const eventRunId =
+    typeof payload.clientRunId === "string" && payload.clientRunId.trim()
+      ? payload.clientRunId.trim()
+      : typeof payload.runId === "string" && payload.runId.trim()
+        ? payload.runId.trim()
+        : undefined;
+  if (
+    terminalPatchPredatesExistingRun({
+      currentChatRunId: hasCurrentChatSession(state) ? state.chatRunId : null,
+      currentChatStartedAt: hasCurrentChatSession(state) ? state.chatStreamStartedAt : null,
+      eventRunId,
+      existing,
+      terminalRunStartedAt,
+      source,
+    })
+  ) {
+    return { applied: false };
+  }
   const nextRow: GatewaySessionRow = {
     ...(existing ?? { key, kind: fallbackKind, updatedAt: null }),
     key,
@@ -422,12 +531,6 @@ export function applySessionsChangedEvent(
       : [nextRow, ...previousRows];
   const sessions = nextRows.toSorted(compareSessionRowsByUpdatedAt);
   const eventTs = typeof payload.ts === "number" && Number.isFinite(payload.ts) ? payload.ts : null;
-  const eventRunId =
-    typeof payload.clientRunId === "string" && payload.clientRunId.trim()
-      ? payload.clientRunId.trim()
-      : typeof payload.runId === "string" && payload.runId.trim()
-        ? payload.runId.trim()
-        : undefined;
   state.sessionsResult = {
     ...state.sessionsResult,
     ts: eventTs == null ? state.sessionsResult.ts : Math.max(state.sessionsResult.ts, eventTs),
@@ -437,7 +540,12 @@ export function applySessionsChangedEvent(
   const clearedChatRun =
     nextRow.hasActiveRun !== true &&
     hasCurrentChatSession(state) &&
-    sessionPatchTargetsCurrentChatRun(state, { changedSessionKey: key, eventRunId }) &&
+    sessionPatchTargetsCurrentChatRun(state, {
+      changedSessionKey: key,
+      eventRunId,
+      terminalRunStartedAt,
+      hasActiveRun: nextRow.hasActiveRun,
+    }) &&
     reconcileChatRunFromCurrentSessionRow(state);
 
   if (previousCheckpointSignature !== checkpointSummarySignature(nextRow)) {
