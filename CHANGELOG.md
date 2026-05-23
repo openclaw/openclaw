@@ -53,6 +53,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- CLI/tasks: reject partially numeric `openclaw tasks audit --limit` values so audit limits must be real positive integers instead of accepting strings like `5abc`. (#84901) Thanks @jbetala7.
 - Twitch: keep stale message-handler cleanup callbacks from removing newer handler registrations for the same account, preserving inbound message delivery after reconnects. Fixes #83888. (#85425) Thanks @alkor2000.
 - Memory/LanceDB: expose public memory artifacts through the active memory provider bridge so memory-wiki imports durable memory files, daily notes, dream reports, and event logs without depending on memory-core internals. Fixes #83604. (#85060) Thanks @brokemac79.
 - Docker setup: stop printing the Gateway bearer token in setup logs and printed follow-up commands.
