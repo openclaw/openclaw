@@ -164,13 +164,9 @@ export function setupIsolatedAgentTurnMocks(params?: { fast?: boolean }): void {
           id: "telegram",
           outbound: telegramOutboundForTest,
           messaging: {
-            parseExplicitTarget: ({ raw }) => {
-              const target = parseTelegramTargetForTest(raw);
-              return {
-                to: target.chatId,
-                threadId: target.messageThreadId,
-                chatType: target.chatType === "unknown" ? undefined : target.chatType,
-              };
+            inferTargetChatType: ({ to }) => {
+              const target = parseTelegramTargetForTest(to);
+              return target.chatType === "unknown" ? undefined : target.chatType;
             },
           },
         }),
