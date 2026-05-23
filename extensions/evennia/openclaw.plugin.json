@@ -35,7 +35,17 @@
                 "startRoom": { "type": "string" },
                 "allowFrom": { "type": "array", "items": { "type": "string" } },
                 "allowedRooms": { "type": "array", "items": { "type": "string" } },
-                "respondToAmbientMentions": { "type": "boolean" }
+                "respondToAmbientMentions": { "type": "boolean" },
+                "autonomy": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "enabled": { "type": "boolean" },
+                    "intervalMs": { "type": "number" },
+                    "idleChance": { "type": "number", "minimum": 0, "maximum": 1 },
+                    "commands": { "type": "array", "items": { "type": "string" } }
+                  }
+                }
               },
               "required": ["username", "passwordFile"]
             }

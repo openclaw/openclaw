@@ -66,6 +66,7 @@ export class EvenniaClient {
     this.ws.addEventListener("message", (ev) => this.handleMessage(String(ev.data)));
   }
   close() { try { this.ws?.close(); } catch {} }
+  isClosed() { return !this.ws || this.ws.readyState === WebSocket.CLOSING || this.ws.readyState === WebSocket.CLOSED; }
   async command(text) {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) throw new Error("Evennia websocket is not open");
     this.ws.send(JSON.stringify(["text", [text], {}]));
