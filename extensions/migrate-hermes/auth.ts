@@ -325,9 +325,8 @@ export async function buildAuthItems(params: {
       oauthAuthProfileConfig(profileId, profile.credential),
       Boolean(params.ctx.overwrite),
     );
-    const conflict = Boolean(
-      ((targetExists && !matchedProfileId && !params.ctx.overwrite) || configConflict) && !skipped,
-    );
+    const conflict =
+      ((targetExists && !matchedProfileId && !params.ctx.overwrite) || configConflict) && !skipped;
     const itemId =
       profiles.length === 1
         ? `auth:${OPENAI_CODEX_PROVIDER_ID}`

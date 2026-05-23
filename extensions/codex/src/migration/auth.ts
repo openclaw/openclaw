@@ -316,7 +316,7 @@ function hasCurrentAuthProfileConfigConflict(
   ctx: MigrationProviderContext,
   profile: CodexAuthProfileConfig,
 ): boolean {
-  let config = ctx.config as OpenClawConfig;
+  let config = ctx.config;
   try {
     config = (ctx.runtime?.config?.current?.() as OpenClawConfig | undefined) ?? config;
   } catch {
@@ -454,12 +454,12 @@ async function applyCodexAuthProfileConfig(
       base: "runtime",
       afterWrite: { mode: "auto" },
       mutate(draft) {
-        const current = draft as OpenClawConfig;
+        const current = draft;
         if (hasAuthProfileConfigConflict(current, profile, Boolean(ctx.overwrite))) {
           throw new CodexAuthConfigConflict();
         }
         const next = applyConfig(current);
-        replaceConfigDraft(draft as OpenClawConfig, next);
+        replaceConfigDraft(draft, next);
       },
     });
     return "configured";
@@ -511,14 +511,13 @@ export async function buildCodexAuthItems(params: {
     const configProfile = authProfileConfigForCredential(credential, profileId);
     const configConflict = configProfile
       ? hasAuthProfileConfigConflict(
-          params.ctx.config as OpenClawConfig,
+          params.ctx.config,
           configProfile,
           Boolean(params.ctx.overwrite),
         )
       : false;
-    const conflict = Boolean(
-      ((targetExists && !matchedExisting && !params.ctx.overwrite) || configConflict) && !skipped,
-    );
+    const conflict =
+      ((targetExists && !matchedExisting && !params.ctx.overwrite) || configConflict) && !skipped;
     return createMigrationItem({
       id: `auth:${credential.provider}`,
       kind: "auth",
@@ -670,8 +669,8 @@ export async function buildCodexAuthConfigPatchItems(params: {
   }
   const next =
     credential.kind === "oauth"
-      ? applyOAuthConfigToConfig(ctx.config as OpenClawConfig, credential, profileId)
-      : applyApiKeyConfigToConfig(ctx.config as OpenClawConfig, credential, profileId);
+      ? applyOAuthConfigToConfig(ctx.config, credential, profileId)
+      : applyApiKeyConfigToConfig(ctx.config, credential, profileId);
   const items: MigrationItem[] = [];
   if (next.auth) {
     items.push(
