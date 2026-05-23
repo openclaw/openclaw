@@ -58,11 +58,20 @@ async function runSandboxHttpRequest(
     const stderr = result.stderr.toString("utf8").trim();
     throw new Error(stderr || `sandbox http/request failed with code ${result.code}`);
   }
-  const parsed = JSON.parse(result.stdout.toString("utf8")) as {
+  const stdout = result.stdout.toString("utf8").trim();
+  if (!stdout) {
+    throw new Error("sandbox http/request returned an empty response envelope");
+  }
+  let parsed: {
     status?: unknown;
     headers?: unknown;
     bodyBase64?: unknown;
   };
+  try {
+    parsed = JSON.parse(stdout) as typeof parsed;
+  } catch {
+    throw new Error("sandbox http/request returned an invalid JSON response envelope");
+  }
   if (typeof parsed.status !== "number" || !Array.isArray(parsed.headers)) {
     throw new Error("sandbox http/request returned an invalid response envelope");
   }

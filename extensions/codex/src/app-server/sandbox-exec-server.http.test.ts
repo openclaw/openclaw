@@ -64,6 +64,58 @@ describe("OpenClaw Codex sandbox exec-server HTTP", () => {
     socket.close();
   });
 
+  it("reports empty sandbox HTTP response envelopes", async () => {
+    const runShellCommand = vi.fn(async () => ({
+      stdout: Buffer.alloc(0),
+      stderr: Buffer.alloc(0),
+      code: 0,
+    }));
+    const sandbox = createSandboxContext({ runShellCommand });
+    const client = createClient();
+    await ensureCodexSandboxExecServerEnvironment({
+      client: client as never,
+      sandbox,
+    });
+    const socket = await openSocket(execServerUrlFromClient(client));
+    await rpc(socket, "initialize", { clientName: "test" });
+    socket.send(JSON.stringify({ method: "initialized" }));
+
+    await expect(
+      rpc(socket, "http/request", {
+        requestId: "http-empty",
+        method: "GET",
+        url: "https://example.test/empty",
+      }),
+    ).rejects.toThrow("sandbox http/request returned an empty response envelope");
+    socket.close();
+  });
+
+  it("reports invalid sandbox HTTP JSON response envelopes", async () => {
+    const runShellCommand = vi.fn(async () => ({
+      stdout: Buffer.from("not-json"),
+      stderr: Buffer.alloc(0),
+      code: 0,
+    }));
+    const sandbox = createSandboxContext({ runShellCommand });
+    const client = createClient();
+    await ensureCodexSandboxExecServerEnvironment({
+      client: client as never,
+      sandbox,
+    });
+    const socket = await openSocket(execServerUrlFromClient(client));
+    await rpc(socket, "initialize", { clientName: "test" });
+    socket.send(JSON.stringify({ method: "initialized" }));
+
+    await expect(
+      rpc(socket, "http/request", {
+        requestId: "http-invalid-json",
+        method: "GET",
+        url: "https://example.test/invalid-json",
+      }),
+    ).rejects.toThrow("sandbox http/request returned an invalid JSON response envelope");
+    socket.close();
+  });
+
   it("streams HTTP response body deltas from the sandbox backend", async () => {
     const headerLine = JSON.stringify({
       type: "headers",
