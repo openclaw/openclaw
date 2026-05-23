@@ -433,6 +433,7 @@ describe("doctor health contributions", () => {
         contributions.filter((c) => c.mode === "deepOnly").map((c) => c.id),
       );
 
+      expect(deepOnlyIds.size).toBe(10);
       expect(deepOnlyIds.has("doctor:sandbox")).toBe(true);
       expect(deepOnlyIds.has("doctor:skills")).toBe(true);
       expect(deepOnlyIds.has("doctor:bootstrap-size")).toBe(true);

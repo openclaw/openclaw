@@ -113,7 +113,7 @@ async function collectLegacyPluginDependencyTargets(
     ]),
   ];
   // Parallel per-root scans: each root has 2 sub-paths (extensions + dist/extensions).
-  // Running all 3 roots × 2 paths = 6 calls concurrently instead of serially.
+  // Up to 3 roots × 2 paths = up to 6 concurrent calls instead of serial (roots may deduplicate).
   const debrisResults = await Promise.all(
     roots.flatMap((root) => [
       collectLegacyExtensionDebris(path.join(root, "extensions")),

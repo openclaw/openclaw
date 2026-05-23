@@ -955,9 +955,16 @@ export function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
 
 export async function runDoctorHealthContributions(ctx: DoctorHealthFlowContext): Promise<void> {
   const isDeep = ctx.options.deep === true;
+  if (!isDeep) {
+    const deepOnlyCount = resolveDoctorHealthContributions().filter(
+      (c) => c.mode === "deepOnly",
+    ).length;
+    ctx.runtime?.log(
+      `Skipping ${deepOnlyCount} non-critical health checks (use --deep to include).`,
+    );
+  }
   for (const contribution of resolveDoctorHealthContributions()) {
     if (contribution.mode === "deepOnly" && !isDeep) {
-      ctx.runtime?.log(`Skipping ${contribution.id} (not in --deep mode).`);
       continue;
     }
     await contribution.run(ctx);
