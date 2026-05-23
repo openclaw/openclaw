@@ -146,7 +146,7 @@ describe("plugin activation boundary", () => {
     });
     expect(normalizeModelRef("xai", "grok-4-fast-reasoning", staticNormalize)).toEqual({
       provider: "xai",
-      model: "grok-4-fast-reasoning",
+      model: "grok-4-fast",
     });
     expect(loadBundledPluginPublicSurfaceModuleSync).not.toHaveBeenCalled();
 
