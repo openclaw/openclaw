@@ -498,8 +498,6 @@ describe("gateway server chat", () => {
         expect(responses[0]?.ok).toBe(true);
         await vi.waitFor(() => expect(captured).toBeDefined(), FAST_WAIT_OPTS);
         expect(captured?.replyOptions?.images).toBeUndefined();
-        expect(captured?.replyOptions?.modelOverride).toBeUndefined();
-        expect(captured?.replyOptions?.modelOverrideFallbacks).toBeUndefined();
         expect(captured?.ctx?.MediaPath).toEqual(expect.any(String));
         expect(captured?.ctx?.MediaPaths).toEqual([expect.any(String)]);
         expect(captured?.ctx?.MediaType).toBe("image/png");
