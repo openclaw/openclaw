@@ -2802,20 +2802,20 @@ describe("agent event handler", () => {
   });
 
   describe("spawnedByCache memory leak", () => {
-    // Прямой тест утечки: измеряем size самого spawnedByCache после N прогонов
-    // с уникальными sessionKey.
+    // Direct leak test: measure the size of spawnedByCache itself after N runs
+    // with unique sessionKeys.
     //
-    // spawnedByCache живёт в замыкании createAgentEventHandler — снаружи
-    // обратиться к нему нельзя. Поэтому на время вызова createHarness() подменяем
-    // глобальный Map на класс-обёртку, который пушит каждый созданный экземпляр
-    // в массив. Сразу после создания handler'а восстанавливаем оригинальный Map.
+    // spawnedByCache lives in the closure of createAgentEventHandler — it cannot
+    // be accessed from outside. Therefore, when calling createHarness(), we replace
+    // the global Map with a wrapper class that pushes every created instance
+    // into an array. Immediately after creating the handler, we restore the original Map.
     //
-    // Среди пойманных Map'ов spawnedByCache идентифицируется однозначно:
-    // это единственный Map, у которого ключ — sessionKey формата
-    // "agent:*:subagent:*", а значение — строка spawnedBy.
+    // Among the captured Maps, spawnedByCache is uniquely identified:
+    // it is the only Map whose keys are of the format "agent:*:subagent:*"
+    // and whose values are strings (spawnedBy).
     //
-    // Без фикса: после N прогонов size === N (каждая запись осела).
-    // С фиксом: size === 0 (каждая запись удалена на lifecycle:end).
+    // Without the fix: after N runs, size === N (every entry persists).
+    // With the fix: size === 0 (every entry is removed on lifecycle:end).
     it("spawnedByCache size stays at 0 after N runs with unique sessionKeys", () => {
       const trackedMaps: Map<unknown, unknown>[] = [];
       const OriginalMap = global.Map;
@@ -2825,7 +2825,7 @@ describe("agent event handler", () => {
           trackedMaps.push(this as unknown as Map<unknown, unknown>);
         }
       }
-      // @ts-expect-error — временная подмена глобального конструктора
+      // @ts-expect-error — temporary replacement of the global constructor
       global.Map = TrackedMap;
       let handler: ReturnType<typeof createHarness>["handler"];
       let chatRunState: ReturnType<typeof createHarness>["chatRunState"];
@@ -2852,8 +2852,8 @@ describe("agent event handler", () => {
         handler({ runId, seq: 3, stream: "lifecycle", ts: Date.now(), data: { phase: "end" }, sessionKey });
       }
 
-      // Ищем spawnedByCache среди пойманных Map'ов: ключи — subagent sessionKey,
-      // значения — строка spawnedBy либо null.
+      // Look for spawnedByCache among the captured Maps: keys are subagent sessionKey,
+      // values are strings (spawnedBy) or null.
       const looksLikeSpawnedByCache = (m: Map<unknown, unknown>): boolean => {
         if (m.size === 0) return false;
         for (const [k, v] of m.entries()) {
@@ -2866,9 +2866,9 @@ describe("agent event handler", () => {
       const leakingCaches = trackedMaps.filter(looksLikeSpawnedByCache);
       const maxLeakedSize = leakingCaches.reduce((m, c) => Math.max(m, c.size), 0);
 
-      // Если фикс работает — spawnedByCache пуст (все записи удалены),
-      // поэтому фильтр его не находит, maxLeakedSize = 0.
-      // Если фикс не работает — найдётся Map с N записями.
+      // If the fix works — spawnedByCache is empty (all entries deleted),
+      // so the filter does not find it, maxLeakedSize = 0.
+      // If the fix does not work — a Map with N entries will be found.
       expect(maxLeakedSize).toBe(0);
     });
   });
