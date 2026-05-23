@@ -13,7 +13,7 @@
  *
  * The cache is global, not per-config, so any caller running fallbacks for the
  * same `sessionId` shares the same skip set. Tests can reset state via
- * `__resetFallbackSkipCacheForTest()`.
+ * `resetFallbackSkipCacheForTest()`.
  */
 
 import { modelKey } from "./model-selection-normalize.js";
@@ -67,20 +67,20 @@ const GLOBAL_PRUNE_INTERVAL_MS = 5_000;
 
 function getState(): SkipCacheState {
   const globalStore = globalThis as typeof globalThis & {
-    __openclawFallbackSkipCache?: SkipBySession;
-    __openclawFallbackSkipCacheState?: SkipCacheState;
+    openclawFallbackSkipCache?: SkipBySession;
+    openclawFallbackSkipCacheState?: SkipCacheState;
   };
-  if (!globalStore.__openclawFallbackSkipCacheState) {
+  if (!globalStore.openclawFallbackSkipCacheState) {
     // Reuse the existing buckets map if a prior version of this module already
     // populated the legacy global; otherwise start fresh.
-    const buckets = globalStore.__openclawFallbackSkipCache ?? new Map();
-    globalStore.__openclawFallbackSkipCacheState = {
+    const buckets = globalStore.openclawFallbackSkipCache ?? new Map();
+    globalStore.openclawFallbackSkipCacheState = {
       buckets,
       lastGlobalPruneAtMs: 0,
     };
-    globalStore.__openclawFallbackSkipCache = buckets;
+    globalStore.openclawFallbackSkipCache = buckets;
   }
-  return globalStore.__openclawFallbackSkipCacheState;
+  return globalStore.openclawFallbackSkipCacheState;
 }
 
 function getBuckets(): SkipBySession {
@@ -226,7 +226,7 @@ export function clearFallbackSkipCacheForSession(sessionId: string | undefined):
  * Test-only escape hatch. Production code must not call this; the global
  * cache is meant to outlive individual fallback runs.
  */
-export function __resetFallbackSkipCacheForTest(): void {
+export function resetFallbackSkipCacheForTest(): void {
   const state = getState();
   state.buckets.clear();
   state.lastGlobalPruneAtMs = 0;
@@ -237,6 +237,6 @@ export function __resetFallbackSkipCacheForTest(): void {
  * code must not read this; the buckets are an implementation detail of the
  * cache and may change shape.
  */
-export function _peekFallbackSkipBucketsForTest(): SkipBySession {
+export function peekFallbackSkipBucketsForTest(): SkipBySession {
   return getBuckets();
 }

@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   DEFAULT_FALLBACK_SKIP_TTL_MS,
-  __resetFallbackSkipCacheForTest,
+  resetFallbackSkipCacheForTest,
   clearFallbackSkipCacheForSession,
   getFallbackCandidateSkipReason,
   isFallbackCandidateSkipped,
@@ -10,11 +10,11 @@ import {
 
 describe("fallback-skip-cache", () => {
   beforeEach(() => {
-    __resetFallbackSkipCacheForTest();
+    resetFallbackSkipCacheForTest();
   });
 
   afterEach(() => {
-    __resetFallbackSkipCacheForTest();
+    resetFallbackSkipCacheForTest();
   });
 
   it("returns false for an unknown (session, provider, model) triple", () => {
@@ -237,7 +237,7 @@ describe("fallback-skip-cache", () => {
   });
 
   it("prunes expired buckets from sessions that are never queried again", async () => {
-    const { _peekFallbackSkipBucketsForTest } = await import("./fallback-skip-cache.js");
+    const { peekFallbackSkipBucketsForTest } = await import("./fallback-skip-cache.js");
 
     // Two short-lived sessions write markers, then never come back.
     markFallbackCandidateSkipped({
@@ -257,7 +257,7 @@ describe("fallback-skip-cache", () => {
       ttlMs: 10_000,
     });
 
-    expect(_peekFallbackSkipBucketsForTest().size).toBe(2);
+    expect(peekFallbackSkipBucketsForTest().size).toBe(2);
 
     // A third session writes well after the first two have expired. The
     // opportunistic global prune must drop the stale buckets even though
@@ -271,7 +271,7 @@ describe("fallback-skip-cache", () => {
       ttlMs: 10_000,
     });
 
-    const buckets = _peekFallbackSkipBucketsForTest();
+    const buckets = peekFallbackSkipBucketsForTest();
     expect(buckets.has("one-off-1")).toBe(false);
     expect(buckets.has("one-off-2")).toBe(false);
     expect(buckets.has("later")).toBe(true);
