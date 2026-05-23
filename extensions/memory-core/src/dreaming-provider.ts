@@ -38,7 +38,6 @@ export function createMemoryCoreDreamingProvider(): MemoryPluginDreamingProvider
       await runDreamingSweepPhases({
         workspaceDir: params.workspaceDir,
         cfg: params.cfg as Record<string, unknown>,
-        logger: params.logger as any,
         nowMs: params.nowMs,
         detachNarratives: true,
       });
