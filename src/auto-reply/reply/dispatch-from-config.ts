@@ -1852,12 +1852,14 @@ export async function dispatchReplyFromConfig(
       ctx.InboundEventKind !== "room_event" &&
       !shouldSuppressProgressDelivery();
     const hasLiveVerboseProgressGate = suppressDefaultToolProgressMessages && canTrackSession;
+    let observedVisibleToolErrorProgress =
+      hasVisibleRegularVerboseToolProgress() && !hasLiveVerboseProgressGate;
     const shouldSuppressToolErrorWarnings = () =>
       params.replyOptions?.suppressToolErrorWarnings ??
-      (hasVisibleRegularVerboseToolProgress() ? true : undefined);
+      (observedVisibleToolErrorProgress ? true : undefined);
     const suppressToolErrorWarnings =
       params.replyOptions?.suppressToolErrorWarnings ??
-      (hasVisibleRegularVerboseToolProgress() && !hasLiveVerboseProgressGate ? true : undefined);
+      (observedVisibleToolErrorProgress ? true : undefined);
     const onToolResultFromReplyOptions = params.replyOptions?.onToolResult;
     const onPlanUpdateFromReplyOptions = params.replyOptions?.onPlanUpdate;
     const onApprovalEventFromReplyOptions = params.replyOptions?.onApprovalEvent;
@@ -1946,6 +1948,9 @@ export async function dispatchReplyFromConfig(
             }),
             onToolResult: (payload: ReplyPayload) => {
               markProgress();
+              if (payload.isError === true && hasVisibleRegularVerboseToolProgress()) {
+                observedVisibleToolErrorProgress = true;
+              }
               const run = async () => {
                 if (isDispatchOperationAborted()) {
                   return;
