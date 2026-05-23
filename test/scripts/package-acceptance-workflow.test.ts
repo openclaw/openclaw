@@ -143,7 +143,11 @@ describe("package acceptance workflow", () => {
     expect(workflow).toContain("- npm");
     expect(workflow).toContain("- ref");
     expect(workflow).toContain("- url");
+    expect(workflow).toContain("- trusted-url");
     expect(workflow).toContain("- artifact");
+    expect(workflow).toContain("trusted_source_id:");
+    expect(workflow).toContain("TRUSTED_SOURCE_ID: ${{ inputs.trusted_source_id }}");
+    expect(workflow).toContain('--trusted-source-id "$TRUSTED_SOURCE_ID"');
     expect(workflow).toContain("scripts/resolve-openclaw-package-candidate.mjs");
     expect(workflow).toContain('--package-ref "$PACKAGE_REF"');
     expect(workflow).toContain('gh run download "$ARTIFACT_RUN_ID"');
