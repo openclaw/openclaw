@@ -1866,7 +1866,7 @@ export async function runReplyAgent(params: {
         config: cfg,
         allowPluginNormalization: false,
       });
-      const showCost = costConfig !== undefined;
+      const showCost = responseUsageMode === "full" && costConfig !== undefined;
       let formatted = formatResponseUsageLine({
         usage,
         showCost,

@@ -2588,24 +2588,45 @@ describe("runReplyAgent response usage footer", () => {
     expect(text).toContain(`· session \`${sessionKey}\``);
   });
 
-  it("does not append session key when responseUsage=tokens", async () => {
+  it("does not append session key or cost when responseUsage=tokens", async () => {
     runEmbeddedPiAgentMock.mockResolvedValueOnce({
       payloads: [{ text: "ok" }],
       meta: {
         agentMeta: {
-          provider: "anthropic",
-          model: "claude",
+          provider: "amazon-bedrock",
+          model: "us.anthropic.claude-sonnet-4-6",
           usage: { input: 12, output: 3, cacheRead: 4, cacheWrite: 2 },
         },
       },
     });
 
     const sessionKey = "agent:main:whatsapp:dm:+1000";
-    const res = await createRun({ responseUsage: "tokens", sessionKey });
+    const res = await createRun({
+      responseUsage: "tokens",
+      sessionKey,
+      provider: "amazon-bedrock",
+      model: "us.anthropic.claude-sonnet-4-6",
+      config: {
+        models: {
+          providers: {
+            "amazon-bedrock": {
+              auth: "aws-sdk",
+              models: [
+                {
+                  id: "us.anthropic.claude-sonnet-4-6",
+                  cost: { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75 },
+                },
+              ],
+            },
+          },
+        },
+      },
+    });
     const payload = Array.isArray(res) ? res[0] : res;
     const text = payload?.text ?? "";
     expect(text).toContain("Usage:");
     expect(text).toContain("cache 4 cached / 2 new");
+    expect(text).not.toContain("est $");
     expect(text).not.toContain("· session ");
   });
 
@@ -2656,7 +2677,6 @@ describe("runReplyAgent response usage footer", () => {
     expect(text).toContain("est $0.04");
     expect(text).toContain(`· session \`${sessionKey}\``);
   });
-
 });
 
 describe("runReplyAgent transient HTTP retry", () => {
