@@ -108,11 +108,24 @@ function hasReplayableThinkingSignature(block: AssistantContentBlock): boolean {
  * validity, so this intentionally avoids local length or shape heuristics.
  */
 export function stripInvalidThinkingSignatures(messages: AgentMessage[]): AgentMessage[] {
+  let latestAssistantIndex = -1;
+  for (let i = messages.length - 1; i >= 0; i -= 1) {
+    if (isAssistantMessageWithContent(messages[i])) {
+      latestAssistantIndex = i;
+      break;
+    }
+  }
+
   let touched = false;
   const out: AgentMessage[] = [];
 
-  for (const message of messages) {
+  for (let i = 0; i < messages.length; i++) {
+    const message = messages[i];
     if (!isAssistantMessageWithContent(message)) {
+      out.push(message);
+      continue;
+    }
+    if (i === latestAssistantIndex) {
       out.push(message);
       continue;
     }
