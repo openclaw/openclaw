@@ -74,14 +74,6 @@ export function resolveAssistantAttachmentAuthToken(
   return resolveControlUiAuthToken(state);
 }
 
-// Resolves the auth token for embedding in avatar URLs as a query parameter.
-// Used when the browser cannot forward Authorization headers cross-origin.
-export function resolveAvatarAuthToken(
-  state: Pick<AppViewState, "hello" | "settings" | "password">,
-): string | null {
-  return resolveControlUiAuthToken(state);
-}
-
 export function resolveDashboardHeaderContext(
   state: Pick<AppViewState, "agentsList" | "sessionKey">,
 ): { agentLabel: string } {
