@@ -172,21 +172,87 @@ present in `policy.jsonc`. The observed state is existing OpenClaw config or
 workspace metadata; policy reports drift but does not rewrite runtime behavior
 unless a repair path is explicitly available and enabled.
 
-Agent-specific policy overlays keep broad `tools.*` and `agents.workspace`
-posture global, then let named scope blocks add stricter normal policy sections
-for explicit `agentIds` under `scopes.<scopeName>`. The initial scoped
-sections are `tools` and `agents.workspace`; sandbox and ingress can use the
-same container once their evidence is attributable to an agent. Scoped fields
-carry strictness metadata such as allowlist subset, denylist superset, required
-boolean, and exact-list semantics so future policy-file conformance can reuse
-the same rule inventory instead of guessing. The overlay is additive: global
-claims still run, and a scoped claim can emit its own finding against the same
-observed config. See [Agent-scoped policy overlays](/plan/policy-agent-scoped-overlays).
-Every scope present in `policy.jsonc` must be valid and enforceable. Scopes
-currently require `agentIds`, and that selector supports only `tools.*` and
-`agents.workspace.*`. If an `agentIds` entry is not present in `agents.list[]`,
-the scoped rule is evaluated against the inherited global/default posture for
-that runtime agent id instead of being skipped.
+Policy overlays keep broad top-level rules global, then let named scope blocks
+add stricter normal policy sections for explicit selectors. A scope name is a
+descriptive bucket only; matching uses the selector values inside the scope.
+The overlay is additive: global claims still run, and a scoped claim can emit
+its own finding against the same observed config.
+
+#### Scoped overlays
+
+Use `scopes.<scopeName>` when one set of agents needs stricter policy than the
+top-level baseline. Scopes require the `agentIds` selector, which supports
+`tools.*`, `agents.workspace.*`, and `sandbox.*`. Unsupported sections are
+rejected instead of being ignored. If an `agentIds` entry is not present in
+`agents.list[]`, OpenClaw evaluates the scoped rule against inherited
+global/default posture for that runtime agent id.
+
+```jsonc
+{
+  "tools": {
+    "exec": {
+      "allowHosts": ["sandbox", "node"],
+    },
+  },
+  "sandbox": {
+    "requireMode": ["all", "non-main"],
+  },
+  "scopes": {
+    "release-workspace": {
+      "agentIds": ["release-agent", "review-agent"],
+      "agents": {
+        "workspace": {
+          "allowedAccess": ["none", "ro"],
+        },
+      },
+    },
+    "release-lockdown": {
+      "agentIds": ["release-agent"],
+      "tools": {
+        "exec": {
+          "allowHosts": ["sandbox"],
+          "allowSecurity": ["deny", "allowlist"],
+          "requireAsk": ["always"],
+        },
+        "denyTools": ["exec", "process", "write", "edit", "apply_patch"],
+      },
+      "sandbox": {
+        "requireMode": ["all"],
+        "allowBackends": ["docker"],
+      },
+    },
+    "shell-sandbox": {
+      "agentIds": ["shell-agent"],
+      "sandbox": {
+        "allowBackends": ["openshell"],
+        "containers": {
+          "requireReadOnlyMounts": false,
+        },
+      },
+    },
+  },
+}
+```
+
+The same agent can appear in multiple scopes when each scope governs different
+fields, as shown above. A repeated scoped field for the same agent must be
+equally or more restrictive according to policy metadata; weaker duplicate
+claims are rejected. Strictness metadata treats allow-lists as subsets,
+deny-lists as supersets, and required booleans as fixed requirements.
+
+Container posture policy is evaluated only against evidence OpenClaw can
+observe for the matched agent. If an enabled `sandbox.containers.*` rule applies
+to an agent whose sandbox backend cannot expose that field, policy reports
+`policy/sandbox-container-posture-unobservable` instead of treating the claim as
+passing. Use separate `agentIds` scopes for agent groups that use different
+sandbox backends, and leave unsupported container rules unset or false for the
+groups where those fields cannot be observed.
+
+| Selector   | Supported sections                         | Use when                                        |
+| ---------- | ------------------------------------------ | ----------------------------------------------- |
+| `agentIds` | `tools`, `agents.workspace`, and `sandbox` | One or more runtime agents need stricter rules. |
+
+Every scope present in `policy.jsonc` must be valid and enforceable.
 
 #### Channels
 
@@ -234,6 +300,19 @@ that runtime agent id instead of being skipped.
 | -------------------------------- | ------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------- |
 | `agents.workspace.allowedAccess` | `agents.defaults.sandbox.workspaceAccess` and `agents.list[].sandbox.workspaceAccess` | Allow only sandbox workspace access values such as `none` or `ro`.                                                  |
 | `agents.workspace.denyTools`     | Global and per-agent tool deny config                                                 | Require workspace/runtime mutation tools such as `exec`, `process`, `write`, `edit`, or `apply_patch` to be denied. |
+
+#### Sandbox posture
+
+| Policy field                                          | Observed state                                          | Use when                                                       |
+| ----------------------------------------------------- | ------------------------------------------------------- | -------------------------------------------------------------- |
+| `sandbox.requireMode`                                 | `agents.defaults.sandbox.mode` and per-agent mode       | Allow only reviewed sandbox modes such as `all` or `non-main`. |
+| `sandbox.allowBackends`                               | `agents.defaults.sandbox.backend` and per-agent backend | Allow only reviewed sandbox backends such as `docker`.         |
+| `sandbox.containers.denyHostNetwork`                  | Container-backed sandbox/browser network mode           | Deny host network mode.                                        |
+| `sandbox.containers.denyContainerNamespaceJoin`       | Container-backed sandbox/browser network mode           | Deny joining another container network namespace.              |
+| `sandbox.containers.requireReadOnlyMounts`            | Container-backed sandbox/browser mount mode             | Require mounts to be read-only.                                |
+| `sandbox.containers.denyContainerRuntimeSocketMounts` | Container-backed sandbox/browser mount targets          | Deny container runtime socket mounts.                          |
+| `sandbox.containers.denyUnconfinedProfiles`           | Container security profile posture                      | Deny unconfined container security profiles.                   |
+| `sandbox.browser.requireCdpSourceRange`               | Sandbox browser CDP source range                        | Require browser CDP exposure to declare a source range.        |
 
 #### Secrets
 
@@ -522,47 +601,56 @@ choose a different interval.
 
 Policy currently verifies:
 
-| Check id                                     | Finding                                                                          |
-| -------------------------------------------- | -------------------------------------------------------------------------------- |
-| `policy/policy-jsonc-missing`                | Policy is enabled but `policy.jsonc` is missing.                                 |
-| `policy/policy-jsonc-invalid`                | Policy cannot be parsed or contains malformed rule entries.                      |
-| `policy/policy-hash-mismatch`                | Policy does not match configured `expectedHash`.                                 |
-| `policy/attestation-hash-mismatch`           | Current policy evidence no longer matches the accepted attestation.              |
-| `policy/channels-denied-provider`            | An enabled channel matches a channel deny rule.                                  |
-| `policy/mcp-denied-server`                   | A configured MCP server is denied by policy.                                     |
-| `policy/mcp-unapproved-server`               | A configured MCP server is outside the allowlist.                                |
-| `policy/models-denied-provider`              | A configured model provider or model ref uses a denied provider.                 |
-| `policy/models-unapproved-provider`          | A configured model provider or model ref is outside the allowlist.               |
-| `policy/network-private-access-enabled`      | A private-network SSRF escape hatch is enabled when policy denies it.            |
-| `policy/gateway-non-loopback-bind`           | Gateway bind posture permits non-loopback exposure when policy denies it.        |
-| `policy/gateway-auth-disabled`               | Gateway authentication is disabled when policy requires auth.                    |
-| `policy/gateway-rate-limit-missing`          | Gateway auth rate-limit posture is not explicit when policy requires it.         |
-| `policy/gateway-control-ui-insecure`         | Gateway Control UI insecure exposure toggles are enabled.                        |
-| `policy/gateway-tailscale-funnel`            | Gateway Tailscale Funnel exposure is enabled when policy denies it.              |
-| `policy/gateway-remote-enabled`              | Gateway remote mode is active when policy denies it.                             |
-| `policy/gateway-http-endpoint-enabled`       | A Gateway HTTP API endpoint is enabled while denied by policy.                   |
-| `policy/gateway-http-url-fetch-unrestricted` | Gateway HTTP URL-fetch input lacks a required URL allowlist.                     |
-| `policy/agents-workspace-access-denied`      | Agent sandbox mode or workspace access is outside the policy allowlist.          |
-| `policy/agents-tool-not-denied`              | An agent or default config does not deny a tool required by policy.              |
-| `policy/tools-profile-unapproved`            | A configured global or per-agent tool profile is outside the allowlist.          |
-| `policy/tools-fs-workspace-only-required`    | Filesystem tools are not configured with workspace-only path posture.            |
-| `policy/tools-exec-security-unapproved`      | Exec security mode is outside the policy allowlist.                              |
-| `policy/tools-exec-ask-unapproved`           | Exec ask mode is outside the policy allowlist.                                   |
-| `policy/tools-exec-host-unapproved`          | Exec host routing is outside the policy allowlist.                               |
-| `policy/tools-elevated-enabled`              | Elevated tool mode is enabled when policy denies it.                             |
-| `policy/tools-also-allow-missing`            | A configured `alsoAllow` list is missing an entry required by policy.            |
-| `policy/tools-also-allow-unexpected`         | A configured `alsoAllow` list includes an entry not expected by policy.          |
-| `policy/tools-required-deny-missing`         | A global or per-agent tool deny list does not include a required denied tool.    |
-| `policy/secrets-unmanaged-provider`          | A config SecretRef references a provider not declared under `secrets.providers`. |
-| `policy/secrets-denied-provider-source`      | A config secret provider or SecretRef uses a source denied by policy.            |
-| `policy/secrets-insecure-provider`           | A secret provider opts into insecure posture when policy denies it.              |
-| `policy/auth-profile-invalid-metadata`       | A config auth profile is missing valid provider or mode metadata.                |
-| `policy/auth-profile-unapproved-mode`        | A config auth profile mode is outside the policy allowlist.                      |
-| `policy/tools-missing-risk-level`            | A governed tool declaration is missing risk metadata.                            |
-| `policy/tools-unknown-risk-level`            | A governed tool declaration uses an unknown risk value.                          |
-| `policy/tools-missing-sensitivity-token`     | A governed tool declaration is missing sensitivity metadata.                     |
-| `policy/tools-missing-owner`                 | A governed tool declaration is missing owner metadata.                           |
-| `policy/tools-unknown-sensitivity-token`     | A governed tool declaration uses an unknown sensitivity value.                   |
+| Check id                                          | Finding                                                                           |
+| ------------------------------------------------- | --------------------------------------------------------------------------------- |
+| `policy/policy-jsonc-missing`                     | Policy is enabled but `policy.jsonc` is missing.                                  |
+| `policy/policy-jsonc-invalid`                     | Policy cannot be parsed or contains malformed rule entries.                       |
+| `policy/policy-hash-mismatch`                     | Policy does not match configured `expectedHash`.                                  |
+| `policy/attestation-hash-mismatch`                | Current policy evidence no longer matches the accepted attestation.               |
+| `policy/channels-denied-provider`                 | An enabled channel matches a channel deny rule.                                   |
+| `policy/mcp-denied-server`                        | A configured MCP server is denied by policy.                                      |
+| `policy/mcp-unapproved-server`                    | A configured MCP server is outside the allowlist.                                 |
+| `policy/models-denied-provider`                   | A configured model provider or model ref uses a denied provider.                  |
+| `policy/models-unapproved-provider`               | A configured model provider or model ref is outside the allowlist.                |
+| `policy/network-private-access-enabled`           | A private-network SSRF escape hatch is enabled when policy denies it.             |
+| `policy/gateway-non-loopback-bind`                | Gateway bind posture permits non-loopback exposure when policy denies it.         |
+| `policy/gateway-auth-disabled`                    | Gateway authentication is disabled when policy requires auth.                     |
+| `policy/gateway-rate-limit-missing`               | Gateway auth rate-limit posture is not explicit when policy requires it.          |
+| `policy/gateway-control-ui-insecure`              | Gateway Control UI insecure exposure toggles are enabled.                         |
+| `policy/gateway-tailscale-funnel`                 | Gateway Tailscale Funnel exposure is enabled when policy denies it.               |
+| `policy/gateway-remote-enabled`                   | Gateway remote mode is active when policy denies it.                              |
+| `policy/gateway-http-endpoint-enabled`            | A Gateway HTTP API endpoint is enabled while denied by policy.                    |
+| `policy/gateway-http-url-fetch-unrestricted`      | Gateway HTTP URL-fetch input lacks a required URL allowlist.                      |
+| `policy/agents-workspace-access-denied`           | Agent sandbox mode or workspace access is outside the policy allowlist.           |
+| `policy/agents-tool-not-denied`                   | An agent or default config does not deny a tool required by policy.               |
+| `policy/tools-profile-unapproved`                 | A configured global or per-agent tool profile is outside the allowlist.           |
+| `policy/tools-fs-workspace-only-required`         | Filesystem tools are not configured with workspace-only path posture.             |
+| `policy/tools-exec-security-unapproved`           | Exec security mode is outside the policy allowlist.                               |
+| `policy/tools-exec-ask-unapproved`                | Exec ask mode is outside the policy allowlist.                                    |
+| `policy/tools-exec-host-unapproved`               | Exec host routing is outside the policy allowlist.                                |
+| `policy/tools-elevated-enabled`                   | Elevated tool mode is enabled when policy denies it.                              |
+| `policy/tools-also-allow-missing`                 | A configured `alsoAllow` list is missing an entry required by policy.             |
+| `policy/tools-also-allow-unexpected`              | A configured `alsoAllow` list includes an entry not expected by policy.           |
+| `policy/tools-required-deny-missing`              | A global or per-agent tool deny list does not include a required denied tool.     |
+| `policy/sandbox-mode-unapproved`                  | Sandbox mode is outside the policy allowlist.                                     |
+| `policy/sandbox-backend-unapproved`               | Sandbox backend is outside the policy allowlist.                                  |
+| `policy/sandbox-container-posture-unobservable`   | A container posture rule is enabled for a backend that cannot observe it.         |
+| `policy/sandbox-container-host-network-denied`    | A container-backed sandbox or browser uses host network mode.                     |
+| `policy/sandbox-container-namespace-join-denied`  | A container-backed sandbox or browser joins another container namespace.          |
+| `policy/sandbox-container-mount-mode-required`    | A container-backed sandbox or browser mount is not read-only.                     |
+| `policy/sandbox-container-runtime-socket-mount`   | A container-backed sandbox or browser mount exposes the container runtime socket. |
+| `policy/sandbox-container-unconfined-profile`     | Container sandbox profile is unconfined when policy denies it.                    |
+| `policy/sandbox-browser-cdp-source-range-missing` | Sandbox browser CDP source range is missing when policy requires one.             |
+| `policy/secrets-unmanaged-provider`               | A config SecretRef references a provider not declared under `secrets.providers`.  |
+| `policy/secrets-denied-provider-source`           | A config secret provider or SecretRef uses a source denied by policy.             |
+| `policy/secrets-insecure-provider`                | A secret provider opts into insecure posture when policy denies it.               |
+| `policy/auth-profile-invalid-metadata`            | A config auth profile is missing valid provider or mode metadata.                 |
+| `policy/auth-profile-unapproved-mode`             | A config auth profile mode is outside the policy allowlist.                       |
+| `policy/tools-missing-risk-level`                 | A governed tool declaration is missing risk metadata.                             |
+| `policy/tools-unknown-risk-level`                 | A governed tool declaration uses an unknown risk value.                           |
+| `policy/tools-missing-sensitivity-token`          | A governed tool declaration is missing sensitivity metadata.                      |
+| `policy/tools-missing-owner`                      | A governed tool declaration is missing owner metadata.                            |
+| `policy/tools-unknown-sensitivity-token`          | A governed tool declaration uses an unknown sensitivity value.                    |
 
 Policy findings can include both `target` and `requirement`. `target` is the
 observed workspace thing that does not conform. `requirement` is the authored

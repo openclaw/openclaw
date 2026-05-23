@@ -114,11 +114,20 @@ describe("registerPolicyDoctorChecks", () => {
   it("describes strictness for agent-scoped policy fields", () => {
     expect(
       POLICY_RULE_METADATA.filter((rule) => rule.scopeSelectors?.includes("agentIds")).map(
-        (rule: PolicyRuleMetadata) => ({
-          path: rule.policyPath.join("."),
-          strictness: rule.strictness,
-          emptyList: rule.emptyList,
-        }),
+        (rule: PolicyRuleMetadata) => {
+          const description: {
+            path: string;
+            strictness: PolicyRuleMetadata["strictness"];
+            emptyList?: PolicyRuleMetadata["emptyList"];
+          } = {
+            path: rule.policyPath.join("."),
+            strictness: rule.strictness,
+          };
+          if (rule.emptyList !== undefined) {
+            description.emptyList = rule.emptyList;
+          }
+          return description;
+        },
       ),
     ).toEqual([
       {
@@ -135,6 +144,14 @@ describe("registerPolicyDoctorChecks", () => {
       { path: "tools.elevated.allow", strictness: "requires-false" },
       { path: "tools.alsoAllow.expected", strictness: "exact-list", emptyList: "meaningful" },
       { path: "tools.denyTools", strictness: "denylist-superset" },
+      { path: "sandbox.requireMode", strictness: "allowlist-subset", emptyList: "disabled" },
+      { path: "sandbox.allowBackends", strictness: "allowlist-subset", emptyList: "disabled" },
+      { path: "sandbox.containers.denyHostNetwork", strictness: "requires-true" },
+      { path: "sandbox.containers.denyContainerNamespaceJoin", strictness: "requires-true" },
+      { path: "sandbox.containers.requireReadOnlyMounts", strictness: "requires-true" },
+      { path: "sandbox.containers.denyContainerRuntimeSocketMounts", strictness: "requires-true" },
+      { path: "sandbox.containers.denyUnconfinedProfiles", strictness: "requires-true" },
+      { path: "sandbox.browser.requireCdpSourceRange", strictness: "requires-true" },
     ]);
   });
 
@@ -148,6 +165,9 @@ describe("registerPolicyDoctorChecks", () => {
     const fsWorkspaceOnly = POLICY_RULE_METADATA.find(
       (rule) => rule.policyPath.join(".") === "tools.fs.requireWorkspaceOnly",
     );
+    const denyHostNetwork = POLICY_RULE_METADATA.find(
+      (rule) => rule.policyPath.join(".") === "sandbox.containers.denyHostNetwork",
+    );
     const alsoAllow = POLICY_RULE_METADATA.find(
       (rule) => rule.policyPath.join(".") === "tools.alsoAllow.expected",
     );
@@ -155,6 +175,7 @@ describe("registerPolicyDoctorChecks", () => {
     expect(allowHosts).toBeDefined();
     expect(denyTools).toBeDefined();
     expect(fsWorkspaceOnly).toBeDefined();
+    expect(denyHostNetwork).toBeDefined();
     expect(alsoAllow).toBeDefined();
     expect(isPolicyValueAtLeastAsStrict(allowHosts!, ["sandbox"], ["sandbox", "node"])).toBe(true);
     expect(isPolicyValueAtLeastAsStrict(allowHosts!, ["sandbox", "node"], ["sandbox"])).toBe(false);
@@ -164,6 +185,8 @@ describe("registerPolicyDoctorChecks", () => {
     expect(isPolicyValueAtLeastAsStrict(denyTools!, ["write"], ["exec"])).toBe(false);
     expect(isPolicyValueAtLeastAsStrict(denyTools!, ["group:runtime"], ["exec"])).toBe(true);
     expect(isPolicyValueAtLeastAsStrict(denyTools!, ["exec"], ["group:runtime"])).toBe(false);
+    expect(isPolicyValueAtLeastAsStrict(denyHostNetwork!, true, true)).toBe(true);
+    expect(isPolicyValueAtLeastAsStrict(denyHostNetwork!, false, true)).toBe(false);
     expect(isPolicyValueAtLeastAsStrict(fsWorkspaceOnly!, true, true)).toBe(true);
     expect(isPolicyValueAtLeastAsStrict(fsWorkspaceOnly!, false, true)).toBe(false);
     expect(isPolicyValueAtLeastAsStrict(alsoAllow!, ["read"], ["read"])).toBe(true);
@@ -239,6 +262,59 @@ describe("registerPolicyDoctorChecks", () => {
 
     expect(result.findings).not.toEqual(
       expect.arrayContaining([expect.objectContaining({ checkId: "policy/policy-jsonc-invalid" })]),
+    );
+  });
+
+  it("allows scoped sandbox container requirements that match top-level policy", async () => {
+    const configPath = join(workspaceDir, "openclaw.jsonc");
+    await fs.writeFile(configPath, "{}", "utf-8");
+    await fs.writeFile(
+      join(workspaceDir, "policy.jsonc"),
+      JSON.stringify({
+        sandbox: { containers: { denyHostNetwork: true } },
+        scopes: {
+          sebby: {
+            agentIds: ["sebby"],
+            sandbox: { containers: { denyHostNetwork: true } },
+          },
+        },
+      }),
+      "utf-8",
+    );
+
+    const result = await runPolicyChecks(ctx(configPath, cfgWithPolicy()));
+
+    expect(result.findings).not.toEqual(
+      expect.arrayContaining([expect.objectContaining({ checkId: "policy/policy-jsonc-invalid" })]),
+    );
+  });
+
+  it("rejects scoped sandbox container policies weaker than top-level requirements", async () => {
+    const configPath = join(workspaceDir, "openclaw.jsonc");
+    await fs.writeFile(configPath, "{}", "utf-8");
+    await fs.writeFile(
+      join(workspaceDir, "policy.jsonc"),
+      JSON.stringify({
+        sandbox: { containers: { denyHostNetwork: true } },
+        scopes: {
+          sebby: {
+            agentIds: ["sebby"],
+            sandbox: { containers: { denyHostNetwork: false } },
+          },
+        },
+      }),
+      "utf-8",
+    );
+
+    const result = await runPolicyChecks(ctx(configPath, cfgWithPolicy()));
+
+    expect(result.findings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          checkId: "policy/policy-jsonc-invalid",
+          target: "oc://policy.jsonc/scopes/sebby/sandbox/containers/denyHostNetwork",
+        }),
+      ]),
     );
   });
 
@@ -369,6 +445,15 @@ describe("registerPolicyDoctorChecks", () => {
       "policy/tools-also-allow-missing",
       "policy/tools-also-allow-unexpected",
       "policy/tools-required-deny-missing",
+      "policy/sandbox-mode-unapproved",
+      "policy/sandbox-backend-unapproved",
+      "policy/sandbox-container-posture-unobservable",
+      "policy/sandbox-container-host-network-denied",
+      "policy/sandbox-container-namespace-join-denied",
+      "policy/sandbox-container-mount-mode-required",
+      "policy/sandbox-container-runtime-socket-mount",
+      "policy/sandbox-container-unconfined-profile",
+      "policy/sandbox-browser-cdp-source-range-missing",
       "policy/secrets-unmanaged-provider",
       "policy/secrets-denied-provider-source",
       "policy/secrets-insecure-provider",
@@ -609,13 +694,25 @@ describe("registerPolicyDoctorChecks", () => {
       'oc://policy.jsonc/scopes/"team/sebby"/tools/exec/allowHosts/#0',
     ],
     [
+      "scopes agent sandbox unsupported container key",
+      {
+        scopes: {
+          sebby: {
+            agentIds: ["sebby"],
+            sandbox: { containers: { denyNetwork: true } },
+          },
+        },
+      },
+      "oc://policy.jsonc/scopes/sebby/sandbox/containers/denyNetwork",
+    ],
+    [
       "scopes agent unsupported section",
       {
         scopes: {
-          sebby: { agentIds: ["sebby"], sandbox: { allow: true } },
+          sebby: { agentIds: ["sebby"], ingress: { allow: true } },
         },
       },
-      "oc://policy.jsonc/scopes/sebby/sandbox",
+      "oc://policy.jsonc/scopes/sebby/ingress",
     ],
     ["channels array", { channels: [] }, "oc://policy.jsonc/channels"],
     ["mcp array", { mcp: [] }, "oc://policy.jsonc/mcp"],
@@ -706,6 +803,21 @@ describe("registerPolicyDoctorChecks", () => {
       "agents workspace denyTools unsupported",
       { agents: { workspace: { denyTools: ["exec", "browser"] } } },
       "oc://policy.jsonc/agents/workspace/denyTools/#1",
+    ],
+    [
+      "sandbox unsupported key",
+      { sandbox: { requireModes: ["all"] } },
+      "oc://policy.jsonc/sandbox/requireModes",
+    ],
+    [
+      "sandbox containers unsupported key",
+      { sandbox: { containers: { denyNetwork: true } } },
+      "oc://policy.jsonc/sandbox/containers/denyNetwork",
+    ],
+    [
+      "sandbox browser unsupported key",
+      { sandbox: { browser: { cdpSourceRange: true } } },
+      "oc://policy.jsonc/sandbox/browser/cdpSourceRange",
     ],
     ["secrets array", { secrets: [] }, "oc://policy.jsonc/secrets"],
     ["auth array", { auth: [] }, "oc://policy.jsonc/auth"],
@@ -868,6 +980,7 @@ describe("registerPolicyDoctorChecks", () => {
           includeGatewayExposure: false,
           includeAgentWorkspace: false,
           includeToolPosture: false,
+          includeSandboxPosture: false,
           includeSecrets: false,
           includeAuthProfiles: false,
         },
@@ -899,6 +1012,7 @@ describe("registerPolicyDoctorChecks", () => {
           includeGatewayExposure: false,
           includeAgentWorkspace: false,
           includeToolPosture: false,
+          includeSandboxPosture: false,
           includeSecrets: false,
           includeAuthProfiles: false,
         },
@@ -942,6 +1056,7 @@ describe("registerPolicyDoctorChecks", () => {
           includeGatewayExposure: false,
           includeAgentWorkspace: false,
           includeToolPosture: false,
+          includeSandboxPosture: false,
           includeSecrets: false,
           includeAuthProfiles: false,
         },
@@ -971,11 +1086,13 @@ describe("registerPolicyDoctorChecks", () => {
       includeGatewayExposure: false,
       includeAgentWorkspace: false,
       includeToolPosture: false,
+      includeSandboxPosture: false,
       includeSecrets: false,
       includeAuthProfiles: false,
     });
     expect(evidence).not.toHaveProperty("gatewayExposure");
     expect(evidence).not.toHaveProperty("agentWorkspace");
+    expect(evidence).not.toHaveProperty("sandboxPosture");
     expect(evidence).not.toHaveProperty("secrets");
     expect(evidence).not.toHaveProperty("authProfiles");
   });
@@ -3251,6 +3368,908 @@ describe("registerPolicyDoctorChecks", () => {
       expect.arrayContaining([
         expect.objectContaining({
           ocPath: "oc://openclaw.config/agents/list/#0/sandbox/workspaceAccess",
+        }),
+      ]),
+    );
+  });
+
+  it("reports sandbox posture denied by policy", async () => {
+    const configPath = join(workspaceDir, "openclaw.jsonc");
+    const cfg = {
+      ...cfgWithPolicy(),
+      agents: {
+        defaults: {
+          sandbox: {
+            mode: "off",
+            backend: "docker",
+            docker: {
+              network: "host",
+              binds: ["/var/run/docker.sock:/var/run/docker.sock:rw", "/data:/data:rw"],
+              seccompProfile: "unconfined",
+            },
+            browser: { enabled: true },
+          },
+        },
+      },
+    } as OpenClawConfig;
+    await fs.writeFile(configPath, "{}", "utf-8");
+    await fs.writeFile(
+      join(workspaceDir, "policy.jsonc"),
+      JSON.stringify({
+        sandbox: {
+          requireMode: ["all", "non-main"],
+          allowBackends: ["ssh"],
+          containers: {
+            denyHostNetwork: true,
+            denyContainerNamespaceJoin: true,
+            requireReadOnlyMounts: true,
+            denyContainerRuntimeSocketMounts: true,
+            denyUnconfinedProfiles: true,
+          },
+          browser: { requireCdpSourceRange: true },
+        },
+      }),
+      "utf-8",
+    );
+
+    const result = await runPolicyChecks(ctx(configPath, cfg));
+
+    expect(result.findings.map((finding) => finding.checkId)).toEqual([
+      "policy/sandbox-mode-unapproved",
+      "policy/sandbox-backend-unapproved",
+      "policy/sandbox-container-host-network-denied",
+      "policy/sandbox-container-mount-mode-required",
+      "policy/sandbox-container-mount-mode-required",
+      "policy/sandbox-container-runtime-socket-mount",
+      "policy/sandbox-container-unconfined-profile",
+      "policy/sandbox-browser-cdp-source-range-missing",
+    ]);
+    expect(result.findings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          checkId: "policy/sandbox-mode-unapproved",
+          ocPath: "oc://openclaw.config/agents/defaults/sandbox/mode",
+          requirement: "oc://policy.jsonc/sandbox/requireMode",
+        }),
+        expect.objectContaining({
+          checkId: "policy/sandbox-container-runtime-socket-mount",
+          ocPath: "oc://openclaw.config/agents/defaults/sandbox/docker/binds/#0",
+          requirement: "oc://policy.jsonc/sandbox/containers/denyContainerRuntimeSocketMounts",
+        }),
+      ]),
+    );
+  });
+
+  it("applies sandbox bind policy to browser-specific binds", async () => {
+    const configPath = join(workspaceDir, "openclaw.jsonc");
+    const cfg = {
+      ...cfgWithPolicy(),
+      agents: {
+        defaults: {
+          sandbox: {
+            mode: "all",
+            backend: "docker",
+            docker: {
+              network: "none",
+              binds: ["/safe:/safe:ro"],
+            },
+            browser: {
+              enabled: true,
+              cdpSourceRange: "172.21.0.1/32",
+              network: "host",
+              binds: ["/var/run/docker.sock:/var/run/docker.sock:rw"],
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+    await fs.writeFile(configPath, "{}", "utf-8");
+    await fs.writeFile(
+      join(workspaceDir, "policy.jsonc"),
+      JSON.stringify({
+        sandbox: {
+          requireMode: ["all"],
+          allowBackends: ["docker"],
+          containers: {
+            denyHostNetwork: true,
+            requireReadOnlyMounts: true,
+            denyContainerRuntimeSocketMounts: true,
+          },
+          browser: { requireCdpSourceRange: true },
+        },
+      }),
+      "utf-8",
+    );
+
+    const result = await runPolicyChecks(ctx(configPath, cfg));
+    const evidence = collectPolicyEvidence(cfg as unknown as Record<string, unknown>);
+
+    expect(evidence.sandboxPosture).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          kind: "containerMount",
+          bindSurface: "browser",
+          source: "oc://openclaw.config/agents/defaults/sandbox/browser/binds/#0",
+        }),
+        expect.objectContaining({
+          kind: "containerNetwork",
+          value: "host",
+          source: "oc://openclaw.config/agents/defaults/sandbox/browser/network",
+        }),
+      ]),
+    );
+    expect(result.findings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          checkId: "policy/sandbox-container-host-network-denied",
+          ocPath: "oc://openclaw.config/agents/defaults/sandbox/browser/network",
+        }),
+        expect.objectContaining({
+          checkId: "policy/sandbox-container-mount-mode-required",
+          ocPath: "oc://openclaw.config/agents/defaults/sandbox/browser/binds/#0",
+        }),
+        expect.objectContaining({
+          checkId: "policy/sandbox-container-runtime-socket-mount",
+          ocPath: "oc://openclaw.config/agents/defaults/sandbox/browser/binds/#0",
+        }),
+      ]),
+    );
+  });
+
+  it("does not require read-only mounts when the policy disables the rule", async () => {
+    const configPath = join(workspaceDir, "openclaw.jsonc");
+    const cfg = {
+      ...cfgWithPolicy(),
+      agents: {
+        defaults: {
+          sandbox: {
+            mode: "all",
+            backend: "docker",
+            docker: {
+              binds: ["/safe:/safe:ro"],
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+    await fs.writeFile(configPath, "{}", "utf-8");
+    await fs.writeFile(
+      join(workspaceDir, "policy.jsonc"),
+      JSON.stringify({
+        sandbox: {
+          containers: {
+            requireReadOnlyMounts: false,
+          },
+        },
+      }),
+      "utf-8",
+    );
+
+    const result = await runPolicyChecks(ctx(configPath, cfg));
+
+    expect(result.findings).not.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ checkId: "policy/sandbox-container-mount-mode-required" }),
+      ]),
+    );
+  });
+
+  it("ignores agent-local Docker and browser posture under shared sandbox scope", async () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          sandbox: {
+            mode: "all",
+            backend: "docker",
+            scope: "shared",
+            docker: {
+              network: "none",
+              binds: ["/shared:/shared:ro"],
+            },
+            browser: {
+              enabled: true,
+              cdpSourceRange: "172.21.0.1/32",
+              binds: ["/browser-shared:/browser-shared:ro"],
+            },
+          },
+        },
+        list: [
+          {
+            id: "runner",
+            sandbox: {
+              docker: {
+                network: "host",
+                binds: ["/var/run/docker.sock:/var/run/docker.sock:rw"],
+              },
+              browser: {
+                cdpSourceRange: "",
+                binds: ["/unsafe-browser:/unsafe-browser:rw"],
+              },
+            },
+          },
+        ],
+      },
+    };
+
+    const evidence = collectPolicyEvidence(cfg as unknown as Record<string, unknown>);
+    const runnerEvidence = (evidence.sandboxPosture ?? []).filter(
+      (entry) => entry.agentId === "runner",
+    );
+
+    expect(runnerEvidence).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          kind: "containerNetwork",
+          value: "none",
+          source: "oc://openclaw.config/agents/defaults/sandbox/docker/network",
+        }),
+        expect.objectContaining({
+          kind: "browserCdpSourceRange",
+          value: "172.21.0.1/32",
+          source: "oc://openclaw.config/agents/defaults/sandbox/browser/cdpSourceRange",
+        }),
+        expect.objectContaining({
+          kind: "containerMount",
+          bind: "/shared:/shared:ro",
+          source: "oc://openclaw.config/agents/defaults/sandbox/docker/binds/#0",
+        }),
+        expect.objectContaining({
+          kind: "containerMount",
+          bind: "/browser-shared:/browser-shared:ro",
+          source: "oc://openclaw.config/agents/defaults/sandbox/browser/binds/#0",
+        }),
+      ]),
+    );
+    expect(runnerEvidence).not.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ bind: "/var/run/docker.sock:/var/run/docker.sock:rw" }),
+        expect.objectContaining({ bind: "/unsafe-browser:/unsafe-browser:rw" }),
+        expect.objectContaining({
+          kind: "containerNetwork",
+          value: "host",
+        }),
+      ]),
+    );
+  });
+
+  it("treats blank agent browser CDP source range as an explicit clear", async () => {
+    const configPath = join(workspaceDir, "openclaw.jsonc");
+    const cfg = {
+      ...cfgWithPolicy(),
+      agents: {
+        defaults: {
+          sandbox: {
+            mode: "all",
+            backend: "docker",
+            browser: { enabled: true, cdpSourceRange: "172.21.0.1/32" },
+          },
+        },
+        list: [
+          {
+            id: "runner",
+            sandbox: {
+              browser: { cdpSourceRange: "" },
+            },
+          },
+        ],
+      },
+    } as OpenClawConfig;
+    await fs.writeFile(configPath, "{}", "utf-8");
+    await fs.writeFile(
+      join(workspaceDir, "policy.jsonc"),
+      JSON.stringify({
+        sandbox: {
+          browser: { requireCdpSourceRange: true },
+        },
+      }),
+      "utf-8",
+    );
+
+    const result = await runPolicyChecks(ctx(configPath, cfg));
+
+    expect(result.findings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          checkId: "policy/sandbox-browser-cdp-source-range-missing",
+          ocPath: "oc://openclaw.config/agents/list/#0/sandbox/browser/cdpSourceRange",
+        }),
+      ]),
+    );
+  });
+
+  it("reports enabled container posture rules that the backend cannot observe", async () => {
+    const configPath = join(workspaceDir, "openclaw.jsonc");
+    const cfg = {
+      ...cfgWithPolicy(),
+      agents: {
+        defaults: {
+          sandbox: {
+            mode: "all",
+            backend: "openshell",
+            docker: {
+              network: "host",
+              binds: ["/var/run/docker.sock:/var/run/docker.sock:rw"],
+              seccompProfile: "unconfined",
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+    await fs.writeFile(configPath, "{}", "utf-8");
+    await fs.writeFile(
+      join(workspaceDir, "policy.jsonc"),
+      JSON.stringify({
+        sandbox: {
+          allowBackends: ["openshell"],
+          containers: {
+            denyHostNetwork: true,
+            denyContainerRuntimeSocketMounts: true,
+            denyUnconfinedProfiles: true,
+          },
+        },
+      }),
+      "utf-8",
+    );
+
+    const result = await runPolicyChecks(ctx(configPath, cfg));
+    const evidence = collectPolicyEvidence(cfg as unknown as Record<string, unknown>);
+
+    expect(evidence.sandboxPosture).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          kind: "backend",
+          value: "openshell",
+        }),
+      ]),
+    );
+    expect(evidence.sandboxPosture).not.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ kind: "containerNetwork" }),
+        expect.objectContaining({ kind: "containerMount" }),
+        expect.objectContaining({ kind: "containerSecurityProfile" }),
+      ]),
+    );
+    expect(result.findings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          checkId: "policy/sandbox-container-posture-unobservable",
+          ocPath: "oc://openclaw.config/agents/defaults/sandbox/backend",
+          requirement: "oc://policy.jsonc/sandbox/containers/denyHostNetwork",
+        }),
+        expect.objectContaining({
+          checkId: "policy/sandbox-container-posture-unobservable",
+          ocPath: "oc://openclaw.config/agents/defaults/sandbox/backend",
+          requirement: "oc://policy.jsonc/sandbox/containers/denyContainerRuntimeSocketMounts",
+        }),
+        expect.objectContaining({
+          checkId: "policy/sandbox-container-posture-unobservable",
+          ocPath: "oc://openclaw.config/agents/defaults/sandbox/backend",
+          requirement: "oc://policy.jsonc/sandbox/containers/denyUnconfinedProfiles",
+        }),
+      ]),
+    );
+    expect(result.findings).not.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ checkId: "policy/sandbox-container-host-network-denied" }),
+        expect.objectContaining({ checkId: "policy/sandbox-container-runtime-socket-mount" }),
+        expect.objectContaining({ checkId: "policy/sandbox-container-unconfined-profile" }),
+      ]),
+    );
+  });
+
+  it("evaluates inherited container mounts for browser containers on non-Docker backends", async () => {
+    const configPath = join(workspaceDir, "openclaw.jsonc");
+    const cfg = {
+      ...cfgWithPolicy(),
+      agents: {
+        defaults: {
+          sandbox: {
+            mode: "all",
+            backend: "openshell",
+            docker: {
+              binds: ["/var/run/docker.sock:/var/run/docker.sock:rw"],
+            },
+            browser: {
+              enabled: true,
+              cdpSourceRange: "172.21.0.1/32",
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+    await fs.writeFile(configPath, "{}", "utf-8");
+    await fs.writeFile(
+      join(workspaceDir, "policy.jsonc"),
+      JSON.stringify({
+        sandbox: {
+          allowBackends: ["openshell"],
+          containers: {
+            requireReadOnlyMounts: true,
+            denyContainerRuntimeSocketMounts: true,
+          },
+        },
+      }),
+      "utf-8",
+    );
+
+    const result = await runPolicyChecks(ctx(configPath, cfg));
+    const evidence = collectPolicyEvidence(cfg as unknown as Record<string, unknown>);
+
+    expect(evidence.sandboxPosture).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          kind: "containerMount",
+          bindSurface: "browser",
+          bind: "/var/run/docker.sock:/var/run/docker.sock:rw",
+          source: "oc://openclaw.config/agents/defaults/sandbox/docker/binds/#0",
+        }),
+      ]),
+    );
+    expect(result.findings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          checkId: "policy/sandbox-container-mount-mode-required",
+          ocPath: "oc://openclaw.config/agents/defaults/sandbox/docker/binds/#0",
+        }),
+        expect.objectContaining({
+          checkId: "policy/sandbox-container-runtime-socket-mount",
+          ocPath: "oc://openclaw.config/agents/defaults/sandbox/docker/binds/#0",
+        }),
+      ]),
+    );
+  });
+
+  it("normalizes mixed-case Docker backend before collecting container posture", async () => {
+    const configPath = join(workspaceDir, "openclaw.jsonc");
+    const cfg = {
+      ...cfgWithPolicy(),
+      agents: {
+        defaults: {
+          sandbox: {
+            mode: "all",
+            backend: "Docker",
+            docker: {
+              network: "host",
+              binds: ["/var/run/docker.sock:/var/run/docker.sock:rw"],
+              seccompProfile: "unconfined",
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+    await fs.writeFile(configPath, "{}", "utf-8");
+    await fs.writeFile(
+      join(workspaceDir, "policy.jsonc"),
+      JSON.stringify({
+        sandbox: {
+          allowBackends: ["docker"],
+          containers: {
+            denyHostNetwork: true,
+            denyContainerRuntimeSocketMounts: true,
+            denyUnconfinedProfiles: true,
+          },
+        },
+      }),
+      "utf-8",
+    );
+
+    const result = await runPolicyChecks(ctx(configPath, cfg));
+    const evidence = collectPolicyEvidence(cfg as unknown as Record<string, unknown>);
+
+    expect(evidence.sandboxPosture).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ kind: "backend", value: "docker" }),
+        expect.objectContaining({ kind: "containerNetwork", value: "host" }),
+        expect.objectContaining({ kind: "containerMount" }),
+        expect.objectContaining({
+          kind: "containerSecurityProfile",
+          profile: "seccomp",
+          value: "unconfined",
+        }),
+      ]),
+    );
+    expect(result.findings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ checkId: "policy/sandbox-container-host-network-denied" }),
+        expect.objectContaining({ checkId: "policy/sandbox-container-runtime-socket-mount" }),
+        expect.objectContaining({ checkId: "policy/sandbox-container-unconfined-profile" }),
+      ]),
+    );
+  });
+
+  it("uses explicit agent sandbox scope before inherited legacy perSession", async () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          sandbox: {
+            mode: "all",
+            backend: "docker",
+            perSession: false,
+            docker: {
+              network: "none",
+            },
+          },
+        },
+        list: [
+          {
+            id: "runner",
+            sandbox: {
+              scope: "agent",
+              docker: {
+                network: "host",
+                binds: ["/var/run/docker.sock:/var/run/docker.sock:rw"],
+              },
+              browser: {
+                enabled: true,
+                cdpSourceRange: "172.21.0.1/32",
+                binds: ["/browser:/browser:rw"],
+              },
+            },
+          },
+        ],
+      },
+    };
+
+    const evidence = collectPolicyEvidence(cfg as unknown as Record<string, unknown>);
+    const runnerEvidence = (evidence.sandboxPosture ?? []).filter(
+      (entry) => entry.agentId === "runner",
+    );
+
+    expect(runnerEvidence).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          kind: "containerNetwork",
+          value: "host",
+          source: "oc://openclaw.config/agents/list/#0/sandbox/docker/network",
+        }),
+        expect.objectContaining({
+          kind: "containerMount",
+          bind: "/var/run/docker.sock:/var/run/docker.sock:rw",
+          source: "oc://openclaw.config/agents/list/#0/sandbox/docker/binds/#0",
+        }),
+        expect.objectContaining({
+          kind: "containerMount",
+          bind: "/browser:/browser:rw",
+          source: "oc://openclaw.config/agents/list/#0/sandbox/browser/binds/#0",
+        }),
+      ]),
+    );
+  });
+
+  it("accepts configured sandbox posture that matches policy", async () => {
+    const configPath = join(workspaceDir, "openclaw.jsonc");
+    const cfg = {
+      ...cfgWithPolicy(),
+      agents: {
+        defaults: {
+          sandbox: {
+            mode: "all",
+            backend: "docker",
+            docker: {
+              network: "none",
+              binds: ["/data:/data:ro"],
+              seccompProfile: "runtime/default",
+            },
+            browser: { enabled: true, cdpSourceRange: "172.21.0.1/32" },
+          },
+        },
+      },
+    } as OpenClawConfig;
+    await fs.writeFile(configPath, "{}", "utf-8");
+    await fs.writeFile(
+      join(workspaceDir, "policy.jsonc"),
+      JSON.stringify({
+        sandbox: {
+          requireMode: ["all", "non-main"],
+          allowBackends: ["docker"],
+          containers: {
+            denyHostNetwork: true,
+            denyContainerNamespaceJoin: true,
+            requireReadOnlyMounts: true,
+            denyContainerRuntimeSocketMounts: true,
+            denyUnconfinedProfiles: true,
+          },
+          browser: { requireCdpSourceRange: true },
+        },
+      }),
+      "utf-8",
+    );
+
+    const result = await runPolicyChecks(ctx(configPath, cfg));
+
+    expect(result.findings).toEqual([]);
+  });
+
+  it("applies agent-scoped sandbox claims only to matching agents", async () => {
+    const configPath = join(workspaceDir, "openclaw.jsonc");
+    const cfg = {
+      ...cfgWithPolicy(),
+      agents: {
+        list: [
+          { id: "Sebby", sandbox: { mode: "off", backend: "ssh" } },
+          { id: "buddy", sandbox: { mode: "all", backend: "docker" } },
+        ],
+      },
+    } as OpenClawConfig;
+    await fs.writeFile(configPath, "{}", "utf-8");
+    await fs.writeFile(
+      join(workspaceDir, "policy.jsonc"),
+      JSON.stringify({
+        sandbox: {
+          requireMode: ["all"],
+        },
+        scopes: {
+          sebby: {
+            agentIds: ["sebby"],
+            sandbox: {
+              allowBackends: ["docker"],
+            },
+          },
+        },
+      }),
+      "utf-8",
+    );
+
+    const result = await runPolicyChecks(ctx(configPath, cfg));
+
+    expect(result.findings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          checkId: "policy/sandbox-mode-unapproved",
+          ocPath: "oc://openclaw.config/agents/list/#0/sandbox/mode",
+          requirement: "oc://policy.jsonc/sandbox/requireMode",
+        }),
+        expect.objectContaining({
+          checkId: "policy/sandbox-backend-unapproved",
+          ocPath: "oc://openclaw.config/agents/list/#0/sandbox/backend",
+          requirement: "oc://policy.jsonc/scopes/sebby/sandbox/allowBackends",
+        }),
+      ]),
+    );
+    expect(result.findings).not.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          ocPath: "oc://openclaw.config/agents/list/#1/sandbox/backend",
+          requirement: "oc://policy.jsonc/scopes/sebby/sandbox/allowBackends",
+        }),
+      ]),
+    );
+  });
+
+  it("does not apply sandbox overlays from invalid scoped policy", async () => {
+    const configPath = join(workspaceDir, "openclaw.jsonc");
+    const cfg = {
+      ...cfgWithPolicy(),
+      agents: {
+        list: [{ id: "sebby", sandbox: { mode: "off" } }],
+      },
+    } as OpenClawConfig;
+    await fs.writeFile(configPath, "{}", "utf-8");
+    await fs.writeFile(
+      join(workspaceDir, "policy.jsonc"),
+      JSON.stringify({
+        scopes: {
+          sebby: {
+            agentIds: ["sebby"],
+            channels: { allow: ["discord"] },
+            sandbox: {
+              requireMode: ["all"],
+            },
+          },
+        },
+      }),
+      "utf-8",
+    );
+
+    const result = await runPolicyChecks(ctx(configPath, cfg));
+
+    expect(result.findings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          checkId: "policy/policy-jsonc-invalid",
+          target: "oc://policy.jsonc/scopes/sebby/channels",
+        }),
+      ]),
+    );
+    expect(result.findings).not.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          checkId: "policy/sandbox-mode-unapproved",
+          requirement: "oc://policy.jsonc/scopes/sebby/sandbox/requireMode",
+        }),
+      ]),
+    );
+  });
+
+  it("reports scoped container posture rules that a non-Docker agent group cannot observe", async () => {
+    const configPath = join(workspaceDir, "openclaw.jsonc");
+    const cfg = {
+      ...cfgWithPolicy(),
+      agents: {
+        defaults: {
+          sandbox: {
+            mode: "all",
+            backend: "docker",
+            docker: {
+              network: "none",
+              binds: ["/workspace:/workspace:rw"],
+            },
+          },
+        },
+        list: [
+          {
+            id: "release-agent",
+            sandbox: { mode: "all", backend: "openshell" },
+          },
+        ],
+      },
+    } as OpenClawConfig;
+    await fs.writeFile(configPath, "{}", "utf-8");
+    await fs.writeFile(
+      join(workspaceDir, "policy.jsonc"),
+      JSON.stringify({
+        scopes: {
+          release: {
+            agentIds: ["release-agent"],
+            sandbox: {
+              containers: { requireReadOnlyMounts: true },
+            },
+          },
+        },
+      }),
+      "utf-8",
+    );
+
+    const result = await runPolicyChecks(ctx(configPath, cfg));
+
+    expect(result.findings).toEqual([
+      expect.objectContaining({
+        checkId: "policy/sandbox-container-posture-unobservable",
+        ocPath: "oc://openclaw.config/agents/list/#0/sandbox/backend",
+        requirement: "oc://policy.jsonc/scopes/release/sandbox/containers/requireReadOnlyMounts",
+      }),
+    ]);
+  });
+
+  it("allows scoped non-Docker agent groups when container posture rules are off", async () => {
+    const configPath = join(workspaceDir, "openclaw.jsonc");
+    const cfg = {
+      ...cfgWithPolicy(),
+      agents: {
+        defaults: {
+          sandbox: {
+            mode: "all",
+            backend: "docker",
+            docker: {
+              network: "none",
+              binds: ["/workspace:/workspace:rw"],
+            },
+          },
+        },
+        list: [
+          {
+            id: "release-agent",
+            sandbox: { mode: "all", backend: "openshell" },
+          },
+        ],
+      },
+    } as OpenClawConfig;
+    await fs.writeFile(configPath, "{}", "utf-8");
+    await fs.writeFile(
+      join(workspaceDir, "policy.jsonc"),
+      JSON.stringify({
+        scopes: {
+          release: {
+            agentIds: ["release-agent"],
+            sandbox: {
+              containers: { requireReadOnlyMounts: false },
+            },
+          },
+        },
+      }),
+      "utf-8",
+    );
+
+    const result = await runPolicyChecks(ctx(configPath, cfg));
+
+    expect(result.findings).toEqual([]);
+  });
+
+  it("does not fall back to default browser posture for scoped browser-disabled agents", async () => {
+    const configPath = join(workspaceDir, "openclaw.jsonc");
+    const cfg = {
+      ...cfgWithPolicy(),
+      agents: {
+        defaults: {
+          sandbox: {
+            mode: "all",
+            backend: "docker",
+            browser: { enabled: true, network: "host" },
+          },
+        },
+        list: [
+          {
+            id: "release-agent",
+            sandbox: { browser: { enabled: false } },
+          },
+        ],
+      },
+    } as OpenClawConfig;
+    await fs.writeFile(configPath, "{}", "utf-8");
+    await fs.writeFile(
+      join(workspaceDir, "policy.jsonc"),
+      JSON.stringify({
+        scopes: {
+          release: {
+            agentIds: ["release-agent"],
+            sandbox: {
+              containers: { denyHostNetwork: true },
+              browser: { requireCdpSourceRange: true },
+            },
+          },
+        },
+      }),
+      "utf-8",
+    );
+
+    const result = await runPolicyChecks(ctx(configPath, cfg));
+    const evidence = collectPolicyEvidence(cfg as unknown as Record<string, unknown>);
+
+    expect(evidence.sandboxPosture).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          agentId: "release-agent",
+          kind: "browserCdpSourceRange",
+          value: false,
+        }),
+        expect.objectContaining({
+          kind: "containerNetwork",
+          networkSurface: "browser",
+          value: "host",
+        }),
+      ]),
+    );
+    expect(result.findings).toEqual([]);
+  });
+
+  it("applies main-scoped sandbox claims to defaults when unrelated agents exist", async () => {
+    const configPath = join(workspaceDir, "openclaw.jsonc");
+    const cfg = {
+      ...cfgWithPolicy(),
+      agents: {
+        defaults: {
+          sandbox: { mode: "off" },
+        },
+        list: [
+          {
+            id: "worker",
+            sandbox: { mode: "all" },
+          },
+        ],
+      },
+    } as OpenClawConfig;
+    await fs.writeFile(configPath, "{}", "utf-8");
+    await fs.writeFile(
+      join(workspaceDir, "policy.jsonc"),
+      JSON.stringify({
+        scopes: {
+          mainSandbox: {
+            agentIds: ["main"],
+            sandbox: { requireMode: ["all"] },
+          },
+        },
+      }),
+      "utf-8",
+    );
+
+    const result = await runPolicyChecks(ctx(configPath, cfg));
+
+    expect(result.findings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          checkId: "policy/sandbox-mode-unapproved",
+          ocPath: "oc://openclaw.config/agents/defaults/sandbox/mode",
+          requirement: "oc://policy.jsonc/scopes/mainSandbox/sandbox/requireMode",
         }),
       ]),
     );
