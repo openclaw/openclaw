@@ -161,6 +161,70 @@
   margin-top: 10px;
 }
 
+/* Error state: tool returned an error payload or "Tool not found" */
+.chat-tool-card__status--error,
+.chat-tool-card__action--error,
+.chat-tool-card__status-text--error {
+  color: var(--destructive, var(--danger, #c0392b));
+}
+
+.chat-tool-card__status-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 1px 6px;
+  margin-left: 6px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--destructive, var(--danger, #c0392b)) 15%, transparent);
+  color: var(--destructive, var(--danger, #c0392b));
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  line-height: 1.4;
+}
+
+.chat-tool-card__status-badge svg {
+  width: 10px;
+  height: 10px;
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 2px;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.chat-tool-card--error {
+  border-color: color-mix(in srgb, var(--destructive, var(--danger, #c0392b)) 35%, var(--border));
+}
+
+.chat-tool-msg-summary__error-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 1px 6px;
+  margin-left: auto;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--destructive, var(--danger, #c0392b)) 15%, transparent);
+  color: var(--destructive, var(--danger, #c0392b));
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  line-height: 1.4;
+  flex-shrink: 0;
+}
+
+.chat-tool-msg-summary__error-badge svg {
+  width: 10px;
+  height: 10px;
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 2px;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
 .chat-tool-card__detail {
   font-size: var(--control-ui-text-sm);
   color: var(--muted);
@@ -583,6 +647,10 @@
   background:
     linear-gradient(90deg, color-mix(in srgb, var(--accent) 9%, transparent), transparent 34%),
     color-mix(in srgb, var(--card) 86%, var(--secondary) 14%);
+}
+
+.chat-tool-msg-summary.chat-tool-msg-summary--error {
+  border-color: color-mix(in srgb, var(--destructive, var(--danger, #c0392b)) 30%, var(--border));
 }
 
 .chat-tool-msg-summary::-webkit-details-marker {

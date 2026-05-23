@@ -1068,7 +1068,7 @@ describe("grouped chat rendering", () => {
     const blocks = Array.from(container.querySelectorAll(".chat-tool-card__block"));
     expect(
       blocks.map((block) => block.querySelector(".chat-tool-card__block-label")?.textContent),
-    ).toEqual(["Tool input", "Tool output"]);
+    ).toEqual(["Tool input", "Tool error"]);
     expect(blocks[0]?.querySelector("code")?.textContent).toBe(
       '{\n  "mode": "session",\n  "thread": true\n}',
     );
@@ -1077,6 +1077,75 @@ describe("grouped chat rendering", () => {
       error: "Session mode is unavailable for this target.",
       childSessionKey: "agent:test:subagent:abc123",
     });
+  });
+
+  it("marks collapsed standalone tool-result summaries as errors", () => {
+    const container = document.createElement("div");
+    renderMessageGroups(
+      container,
+      [
+        createMessageGroup(
+          {
+            id: "tool-error-collapsed",
+            role: "toolResult",
+            toolCallId: "call-error-collapsed",
+            toolName: "web_search",
+            isError: false,
+            content: JSON.stringify({
+              error: "missing_brave_api_key",
+              message: "BRAVE_API_KEY is not configured",
+            }),
+            timestamp: Date.now(),
+          },
+          "tool",
+        ),
+      ],
+      {
+        isToolMessageExpanded: () => false,
+      },
+    );
+
+    const summary = expectElement(container, ".chat-tool-msg-summary", HTMLButtonElement);
+    expect(summary.classList.contains("chat-tool-msg-summary--error")).toBe(true);
+    expect(summary.querySelector(".chat-tool-msg-summary__label")?.textContent).toBe("Tool error");
+    expect(summary.querySelector(".chat-tool-msg-summary__names")?.textContent).toBe("web_search");
+    expect(summary.querySelector(".chat-tool-msg-summary__error-badge")).not.toBeNull();
+    expect(container.querySelector(".chat-tool-msg-body")).toBeNull();
+  });
+
+  it("marks MCP-style standalone tool-result summaries as errors", () => {
+    const container = document.createElement("div");
+    renderMessageGroups(
+      container,
+      [
+        createMessageGroup(
+          {
+            id: "tool-error-collapsed-mcp",
+            role: "toolResult",
+            toolCallId: "call-error-collapsed-mcp",
+            toolName: "memory_forget",
+            isError: false,
+            content: JSON.stringify({
+              isError: true,
+              content: [{ type: "text", text: "Tool error: boom" }],
+            }),
+            timestamp: Date.now(),
+          },
+          "tool",
+        ),
+      ],
+      {
+        isToolMessageExpanded: () => false,
+      },
+    );
+
+    const summary = expectElement(container, ".chat-tool-msg-summary", HTMLButtonElement);
+    expect(summary.classList.contains("chat-tool-msg-summary--error")).toBe(true);
+    expect(summary.querySelector(".chat-tool-msg-summary__label")?.textContent).toBe("Tool error");
+    expect(summary.querySelector(".chat-tool-msg-summary__names")?.textContent).toBe(
+      "memory_forget",
+    );
+    expect(summary.querySelector(".chat-tool-msg-summary__error-badge")).not.toBeNull();
   });
 
   it("collapses an inline tool call while keeping matching tool output visible", () => {

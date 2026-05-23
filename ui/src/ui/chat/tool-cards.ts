@@ -63,6 +63,67 @@ function extractToolText(item: Record<string, unknown>): string | undefined {
   return undefined;
 }
 
+function readToolErrorFlag(value: Record<string, unknown>): boolean | undefined {
+  const raw = value.isError ?? value.is_error;
+  return typeof raw === "boolean" ? raw : undefined;
+}
+
+const TOOL_NOT_FOUND_PATTERN = /^tool not found\.?$/i;
+const MAX_ERROR_DETECT_CHARS = 20_000;
+
+export function isToolErrorOutput(outputText: string | undefined): boolean {
+  if (!outputText) {
+    return false;
+  }
+  const trimmed = outputText.trim();
+  if (!trimmed) {
+    return false;
+  }
+  if (TOOL_NOT_FOUND_PATTERN.test(trimmed)) {
+    return true;
+  }
+  if (trimmed.length > MAX_ERROR_DETECT_CHARS) {
+    return false;
+  }
+  if (!trimmed.startsWith("{") || !trimmed.endsWith("}")) {
+    return false;
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(trimmed);
+  } catch {
+    return false;
+  }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    return false;
+  }
+  const obj = parsed as Record<string, unknown>;
+  if (readToolErrorFlag(obj) === true) {
+    return true;
+  }
+  if ("error" in obj) {
+    const value = obj.error;
+    if (typeof value === "string") {
+      return value.trim().length > 0;
+    }
+    if (typeof value === "boolean") {
+      return value;
+    }
+    if (value && typeof value === "object") {
+      return true;
+    }
+    return false;
+  }
+  return false;
+}
+
+export function isToolCardError(card: ToolCard): boolean {
+  if (card.isError !== undefined) {
+    return card.isError;
+  }
+  return isToolErrorOutput(card.outputText);
+}
+
 export function extractToolPreview(
   outputText: string | undefined,
   toolName: string | undefined,
@@ -169,6 +230,7 @@ function findLatestCard(cards: ToolCard[], id: string, name: string): ToolCard |
 export function extractToolCards(message: unknown, prefix = "tool"): ToolCard[] {
   const m = message as Record<string, unknown>;
   const content = normalizeContent(m.content);
+  const messageIsError = readToolErrorFlag(m);
   const cards: ToolCard[] = [];
 
   for (let index = 0; index < content.length; index++) {
@@ -195,15 +257,20 @@ export function extractToolCards(message: unknown, prefix = "tool"): ToolCard[] 
       const existing = findLatestCard(cards, cardId, name);
       const text = extractToolText(item);
       const preview = extractToolPreview(text, name);
+      const isError = readToolErrorFlag(item) ?? messageIsError;
       if (existing) {
         existing.outputText = text;
         existing.preview = preview;
+        if (isError !== undefined) {
+          existing.isError = isError;
+        }
         continue;
       }
       cards.push({
         id: cardId,
         name,
         outputText: text,
+        ...(isError !== undefined ? { isError } : {}),
         preview,
       });
     }
@@ -227,6 +294,7 @@ export function extractToolCards(message: unknown, prefix = "tool"): ToolCard[] 
       id: resolveToolCardId({}, m, 0, prefix),
       name,
       outputText: text,
+      ...(messageIsError !== undefined ? { isError: messageIsError } : {}),
       preview: extractToolPreview(text, name),
     });
   }
@@ -237,6 +305,7 @@ export function extractToolCards(message: unknown, prefix = "tool"): ToolCard[] 
 export function buildToolCardSidebarContent(card: ToolCard): string {
   const display = resolveToolDisplay({ name: card.name, args: card.args });
   const detail = formatToolDetail(display);
+  const isError = isToolCardError(card);
   const sections = [`## ${display.label}`, `**Tool:** \`${display.name}\``];
 
   if (detail) {
@@ -251,9 +320,15 @@ export function buildToolCardSidebarContent(card: ToolCard): string {
   }
 
   if (card.outputText?.trim()) {
-    sections.push(`### Tool output\n${formatToolOutputForSidebar(card.outputText)}`);
+    sections.push(
+      `### ${isError ? "Tool error" : "Tool output"}\n${formatToolOutputForSidebar(card.outputText)}`,
+    );
   } else {
-    sections.push(`### Tool output\n*No output — tool completed successfully.*`);
+    sections.push(
+      isError
+        ? "### Tool error\n*No output — tool failed.*"
+        : "### Tool output\n*No output — tool completed successfully.*",
+    );
   }
 
   return sections.join("\n\n");
@@ -412,14 +487,15 @@ function renderCollapsedToolSummary(params: {
   icon: ReturnType<typeof html> | undefined;
   name?: string;
   expanded: boolean;
+  isError?: boolean;
   onToggleExpanded: () => void;
 }) {
-  const { label, icon, name, expanded, onToggleExpanded } = params;
+  const { label, icon, name, expanded, isError, onToggleExpanded } = params;
   const displayLabel = formatCollapsedToolSummaryText(label) ?? label;
   const displayName = formatCollapsedToolSummaryText(name);
   return html`
     <button
-      class="chat-tool-msg-summary"
+      class="chat-tool-msg-summary ${isError ? "chat-tool-msg-summary--error" : ""}"
       type="button"
       aria-expanded=${String(expanded)}
       @click=${() => onToggleExpanded()}
@@ -428,6 +504,11 @@ function renderCollapsedToolSummary(params: {
       <span class="chat-tool-msg-summary__label">${displayLabel}</span>
       ${displayName
         ? html`<span class="chat-tool-msg-summary__names">${displayName}</span>`
+        : nothing}
+      ${isError
+        ? html`<span class="chat-tool-msg-summary__error-badge" aria-label="Tool returned an error"
+            >${icons.x}<span>Error</span></span
+          >`
         : nothing}
     </button>
   `;
@@ -458,9 +539,10 @@ export function renderToolCard(
 ) {
   const hasOutput = Boolean(card.outputText?.trim());
   const display = resolveToolDisplay({ name: card.name, args: card.args, detailMode: "explain" });
-  const collapsedDetail = resolveCollapsedToolDetail(card, display.detail);
-  const previewLabel = collapsedDetail ?? display.label;
-  const previewName = collapsedDetail && hasOutput ? "output" : undefined;
+  const isError = isToolCardError(card);
+  const collapsedDetail = isError ? undefined : resolveCollapsedToolDetail(card, display.detail);
+  const previewLabel = isError ? "Tool error" : (collapsedDetail ?? display.label);
+  const previewName = isError ? display.label : collapsedDetail && hasOutput ? "output" : undefined;
 
   return html`
     <div
@@ -473,6 +555,7 @@ export function renderToolCard(
         icon: icons[display.icon],
         name: previewName,
         expanded: opts.expanded,
+        isError,
         onToggleExpanded: () => opts.onToggleExpanded(card.id),
       })}
       ${opts.expanded
@@ -503,6 +586,7 @@ export function renderExpandedToolCardContent(
   const detail = formatToolDetail(display);
   const hasOutput = Boolean(card.outputText?.trim());
   const hasInput = Boolean(card.inputText?.trim());
+  const isError = isToolCardError(card);
   const canOpenSidebar = Boolean(onOpenSidebar);
   const previewSidebarContent =
     card.preview?.kind === "canvas"
@@ -521,11 +605,16 @@ export function renderExpandedToolCardContent(
     : nothing;
 
   return html`
-    <div class="chat-tool-card chat-tool-card--expanded">
+    <div class="chat-tool-card chat-tool-card--expanded ${isError ? "chat-tool-card--error" : ""}">
       <div class="chat-tool-card__header">
         <div class="chat-tool-card__title">
           <span class="chat-tool-card__icon">${icons[display.icon]}</span>
           <span>${display.label}</span>
+          ${isError
+            ? html`<span class="chat-tool-card__status-badge" role="status"
+                >${icons.x}<span>Error</span></span
+              >`
+            : nothing}
         </div>
         ${canOpenSidebar
           ? html`
@@ -555,7 +644,7 @@ export function renderExpandedToolCardContent(
         ? card.preview
           ? html`${visiblePreview} ${renderRawOutputToggle(card.outputText!)}`
           : renderToolDataBlock({
-              label: "Tool output",
+              label: isError ? "Tool error" : "Tool output",
               text: card.outputText!,
               expanded: true,
             })
@@ -575,6 +664,7 @@ export function renderToolCardSidebar(
   const preview = card.preview;
   const hasText = Boolean(card.outputText?.trim());
   const hasPreview = Boolean(preview);
+  const isError = isToolCardError(card);
   const sidebarContent =
     preview?.kind === "canvas"
       ? buildPreviewSidebarContent(preview, card.outputText)
@@ -586,10 +676,13 @@ export function renderToolCardSidebar(
   const showCollapsed = hasText && !hasPreview && !isShort;
   const showInline = hasText && !hasPreview && isShort;
   const isEmpty = !hasText && !hasPreview;
+  const statusIcon = isError ? icons.x : icons.check;
 
   return html`
     <div
-      class="chat-tool-card ${canClick ? "chat-tool-card--clickable" : ""}"
+      class="chat-tool-card ${canClick ? "chat-tool-card--clickable" : ""} ${isError
+        ? "chat-tool-card--error"
+        : ""}"
       @click=${handleClick}
       role=${canClick ? "button" : nothing}
       tabindex=${canClick ? "0" : nothing}
@@ -609,16 +702,28 @@ export function renderToolCardSidebar(
           <span>${display.label}</span>
         </div>
         ${canClick
-          ? html`<span class="chat-tool-card__action"
-              >${hasText || hasPreview ? "View" : ""} ${icons.check}</span
+          ? html`<span
+              class="chat-tool-card__action ${isError ? "chat-tool-card__action--error" : ""}"
+              >${isError ? "View error" : hasText || hasPreview ? "View" : ""} ${statusIcon}</span
             >`
           : nothing}
         ${isEmpty && !canClick
-          ? html`<span class="chat-tool-card__status">${icons.check}</span>`
+          ? html`<span
+              class="chat-tool-card__status ${isError ? "chat-tool-card__status--error" : ""}"
+              >${statusIcon}</span
+            >`
           : nothing}
       </div>
       ${detail ? html`<div class="chat-tool-card__detail">${detail}</div>` : nothing}
-      ${isEmpty ? html`<div class="chat-tool-card__status-text muted">Completed</div>` : nothing}
+      ${isEmpty
+        ? html`<div
+            class="chat-tool-card__status-text ${isError
+              ? "chat-tool-card__status-text--error"
+              : "muted"}"
+          >
+            ${isError ? "Failed" : "Completed"}
+          </div>`
+        : nothing}
       ${preview
         ? html`${renderToolPreview(preview, "chat_tool", {
             onOpenSidebar,
