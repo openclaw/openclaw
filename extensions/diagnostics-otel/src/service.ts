@@ -72,6 +72,7 @@ type OtelContentCapturePolicy = {
   toolInputs: boolean;
   toolOutputs: boolean;
   systemPrompt: boolean;
+  logBodies: boolean;
 };
 
 type MessageDeliveryDiagnosticEvent = Extract<
@@ -105,6 +106,7 @@ const NO_CONTENT_CAPTURE: OtelContentCapturePolicy = {
   toolInputs: false,
   toolOutputs: false,
   systemPrompt: false,
+  logBodies: false,
 };
 
 function normalizeEndpoint(endpoint?: string): string | undefined {
@@ -258,7 +260,29 @@ function lowCardinalityAttr(value: string | undefined, fallback = "unknown"): st
     return fallback;
   }
   const redacted = redactSensitiveText(value.trim());
+  const redactedLower = redacted.toLowerCase();
+  if (redactedLower.startsWith("agent:") || redactedLower.includes(":agent:")) {
+    return fallback;
+  }
   return LOW_CARDINALITY_VALUE_RE.test(redacted) ? redacted : fallback;
+}
+
+function lowCardinalityQueueLaneAttr(value: string | undefined, fallback = "unknown"): string {
+  if (!value) {
+    return fallback;
+  }
+  const redacted = redactSensitiveText(value.trim());
+  const redactedLower = redacted.toLowerCase();
+  if (redactedLower.startsWith("agent:")) {
+    return fallback;
+  }
+  const scopedLaneIndex = redacted.indexOf(":");
+  const lane = scopedLaneIndex >= 0 ? redacted.slice(0, scopedLaneIndex) : redacted;
+  return LOW_CARDINALITY_VALUE_RE.test(lane) ? lane : fallback;
+}
+
+function shouldCaptureOtelLogBody(policy: OtelContentCapturePolicy): boolean {
+  return policy.logBodies;
 }
 
 function hasOtelSemconvOptIn(value: string | undefined, optIn: string): boolean {
@@ -379,6 +403,7 @@ function resolveContentCapturePolicy(value: unknown): OtelContentCapturePolicy {
       toolInputs: true,
       toolOutputs: true,
       systemPrompt: false,
+      logBodies: true,
     };
   }
   if (!value || typeof value !== "object" || Array.isArray(value)) {
@@ -395,6 +420,7 @@ function resolveContentCapturePolicy(value: unknown): OtelContentCapturePolicy {
     toolInputs: config.toolInputs === true,
     toolOutputs: config.toolOutputs === true,
     systemPrompt: config.systemPrompt === true,
+    logBodies: false,
   };
 }
 
@@ -1106,6 +1132,9 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
           try {
             const logLevelName = evt.level || "INFO";
             const severityNumber = logSeverityMap[logLevelName] ?? (9 as SeverityNumber);
+            const body = shouldCaptureOtelLogBody(contentCapturePolicy)
+              ? normalizeOtelLogString(evt.message || "log", MAX_OTEL_LOG_BODY_CHARS)
+              : "log";
             const attributes = Object.create(null) as Record<string, string | number | boolean>;
             assignOtelLogAttribute(attributes, "openclaw.log.level", logLevelName);
             if (evt.loggerName) {
@@ -1130,7 +1159,7 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
             }
 
             const logRecord: LogRecord = {
-              body: normalizeOtelLogString(evt.message || "log", MAX_OTEL_LOG_BODY_CHARS),
+              body,
               severityText: logLevelName,
               severityNumber,
               attributes: redactOtelAttributes(attributes),
@@ -1606,7 +1635,7 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
       const recordLaneEnqueue = (
         evt: Extract<DiagnosticEventPayload, { type: "queue.lane.enqueue" }>,
       ) => {
-        const attrs = { "openclaw.lane": evt.lane };
+        const attrs = { "openclaw.lane": lowCardinalityQueueLaneAttr(evt.lane) };
         laneEnqueueCounter.add(1, attrs);
         queueDepthHistogram.record(evt.queueSize, attrs);
       };
@@ -1614,7 +1643,7 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
       const recordLaneDequeue = (
         evt: Extract<DiagnosticEventPayload, { type: "queue.lane.dequeue" }>,
       ) => {
-        const attrs = { "openclaw.lane": evt.lane };
+        const attrs = { "openclaw.lane": lowCardinalityQueueLaneAttr(evt.lane) };
         laneDequeueCounter.add(1, attrs);
         queueDepthHistogram.record(evt.queueSize, attrs);
         if (typeof evt.waitMs === "number") {
@@ -2045,7 +2074,7 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
           spanAttrs["openclaw.failover.to_model"] = evt.toModel;
         }
         if (evt.lane) {
-          spanAttrs["openclaw.lane"] = lowCardinalityAttr(evt.lane, "unknown");
+          spanAttrs["openclaw.lane"] = lowCardinalityQueueLaneAttr(evt.lane, "unknown");
         }
         if (evt.suspended !== undefined) {
           spanAttrs["openclaw.failover.suspended"] = evt.suspended;
