@@ -120,6 +120,21 @@ posture, and tool metadata looks like this:
   },
   "tools": {
     "requireMetadata": ["risk", "sensitivity", "owner"],
+    "profiles": {
+      "allow": ["messaging", "minimal"],
+    },
+    "fs": {
+      "requireWorkspaceOnly": true,
+    },
+    "exec": {
+      "allowSecurity": ["deny", "allowlist"],
+      "requireAsk": ["always"],
+      "allowHosts": ["sandbox"],
+    },
+    "elevated": {
+      "allow": false,
+    },
+    "denyTools": ["group:runtime", "group:fs"],
   },
 }
 ```
@@ -129,16 +144,23 @@ when a concrete rule is present. OpenClaw reads current `channels.*` settings
 `mcp.servers.*`, `models.providers.*`, selected agent model refs, network SSRF
 settings, Gateway bind/auth/Control UI/Tailscale/remote/HTTP posture, OpenClaw
 config agent sandbox workspace access and tool deny posture, config secret
-provider and SecretRef provenance, config auth profile metadata, and `TOOLS.md`
-declarations as evidence, then reports observed state that does not conform. If
-a policy denies non-loopback Gateway binds, omit `gateway.bind` only when you
+provider and SecretRef provenance, config auth profile metadata, configured
+global/per-agent tool posture, and `TOOLS.md` declarations as evidence, then
+reports observed state that does not conform. If a policy denies non-loopback
+Gateway binds, omit `gateway.bind` only when you
 are willing to review the runtime default; set `gateway.bind=loopback` for
 strict config conformance. For read-only agent posture, configure sandbox mode
 on the applicable defaults or agent and set `workspaceAccess` to `none` or
 `ro`; omitted or `off` sandbox mode does not satisfy a read-only/no-write
 policy. `agents.workspace.denyTools` supports `exec`, `process`, `write`,
 `edit`, and `apply_patch`; OpenClaw config `group:fs` covers file mutation tools
-and `group:runtime` covers shell/process tools. Secret evidence records
+and `group:runtime` covers shell/process tools. Tool posture policy observes
+`tools.profile`, `tools.allow`, `tools.alsoAllow`, `tools.deny`,
+`tools.fs.workspaceOnly`, `tools.exec.security`, `tools.exec.ask`,
+`tools.exec.host`, `tools.elevated.enabled`, and the same per-agent
+`agents.list[].tools.*` overrides. It does not read runtime/operator approval
+state such as exec-approvals.json, and it does not enforce tool calls at
+runtime. Secret evidence records
 provider/source posture and SecretRef metadata, never raw secret values. Policy
 does not read or attest per-agent credential stores such as `auth-profiles.json`;
 those stores remain owned by the existing auth and credential flows.
@@ -378,6 +400,8 @@ only `expectedAttestationHash` usually changes.
 Enabling or upgrading `agents.workspace` rules adds `agentWorkspace` evidence to
 the workspace hash and attestation hash. Operators should review the new
 evidence and refresh accepted attestation hashes after enabling these rules.
+Enabling or upgrading tool posture rules adds `toolPosture` evidence in the
+same way.
 
 `openclaw policy watch` runs the same check repeatedly and reports when the
 current evidence no longer matches `expectedAttestationHash`:
@@ -416,6 +440,13 @@ Policy currently verifies:
 | `policy/gateway-http-url-fetch-unrestricted` | Gateway HTTP URL-fetch input lacks a required URL allowlist.                     |
 | `policy/agents-workspace-access-denied`      | Agent sandbox mode or workspace access is outside the policy allowlist.          |
 | `policy/agents-tool-not-denied`              | An agent or default config does not deny a tool required by policy.              |
+| `policy/tools-profile-unapproved`            | A configured global or per-agent tool profile is outside the allowlist.          |
+| `policy/tools-fs-workspace-only-required`    | Filesystem tools are not configured with workspace-only path posture.            |
+| `policy/tools-exec-security-unapproved`      | Exec security mode is outside the policy allowlist.                              |
+| `policy/tools-exec-ask-unapproved`           | Exec ask mode is outside the policy allowlist.                                   |
+| `policy/tools-exec-host-unapproved`          | Exec host routing is outside the policy allowlist.                               |
+| `policy/tools-elevated-enabled`              | Elevated tool mode is enabled when policy denies it.                             |
+| `policy/tools-required-deny-missing`         | A global or per-agent tool deny list does not include a required denied tool.    |
 | `policy/secrets-unmanaged-provider`          | A config SecretRef references a provider not declared under `secrets.providers`. |
 | `policy/secrets-denied-provider-source`      | A config secret provider or SecretRef uses a source denied by policy.            |
 | `policy/secrets-insecure-provider`           | A secret provider opts into insecure posture when policy denies it.              |
