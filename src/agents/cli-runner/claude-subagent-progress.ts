@@ -33,9 +33,9 @@ const defaultDeps: SubagentActivityMonitorDeps = {
     emitTrustedDiagnosticEvent({
       type: "run.progress",
       reason: "cli:live:subagent",
-      ...(event.sessionId ? { sessionId: event.sessionId } : {}),
-      ...(event.sessionKey ? { sessionKey: event.sessionKey } : {}),
-      ...(event.runId ? { runId: event.runId } : {}),
+      sessionId: event.sessionId,
+      sessionKey: event.sessionKey,
+      runId: event.runId,
     }),
   now: () => Date.now(),
 };
@@ -86,7 +86,7 @@ export function startClaudeSubagentActivityMonitor(params: {
   freshnessMs?: number;
   deps?: Partial<SubagentActivityMonitorDeps>;
 }): { stop: () => void } {
-  const deps: SubagentActivityMonitorDeps = { ...defaultDeps, ...(params.deps ?? {}) };
+  const deps: SubagentActivityMonitorDeps = { ...defaultDeps, ...params.deps };
   const intervalMs = params.intervalMs ?? DEFAULT_INTERVAL_MS;
   const freshnessMs = params.freshnessMs ?? DEFAULT_FRESHNESS_MS;
   const subagentsDir = resolveClaudeSubagentsDir({

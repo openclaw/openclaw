@@ -54,8 +54,12 @@ describe("startClaudeSubagentActivityMonitor", () => {
     const deps = makeDeps({
       readDir: async () => ["agent-abc.jsonl", "agent-old.jsonl", "ignore.txt"],
       statFile: async (file) => {
-        if (file.endsWith("agent-abc.jsonl")) return { mtimeMs: now - 5_000 };
-        if (file.endsWith("agent-old.jsonl")) return { mtimeMs: now - 60_000 };
+        if (file.endsWith("agent-abc.jsonl")) {
+          return { mtimeMs: now - 5_000 };
+        }
+        if (file.endsWith("agent-old.jsonl")) {
+          return { mtimeMs: now - 60_000 };
+        }
         return null;
       },
       now: () => now,
