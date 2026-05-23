@@ -107,7 +107,14 @@ import {
   updateExecApprovalsFormValue,
 } from "./controllers/exec-approvals.ts";
 import { loadLogs } from "./controllers/logs.ts";
-import { loadMemoryAuditSuggestions, runMemoryAuditAction } from "./controllers/memory-audit.ts";
+import {
+  loadMemoryAuditSettings,
+  loadMemoryAuditSuggestions,
+  runMemoryAuditAction,
+  saveMemoryAuditSettings,
+  updateMemoryAuditSettingsDraft,
+  resetMemoryAuditSettingsDraft,
+} from "./controllers/memory-audit.ts";
 import { loadNodes } from "./controllers/nodes.ts";
 import { loadPresence } from "./controllers/presence.ts";
 import {
@@ -1152,6 +1159,49 @@ export function renderApp(state: AppViewState) {
     state.cronForm.deliveryMode === "webhook"
       ? rawDeliveryToSuggestions.filter((value) => isHttpUrl(value))
       : rawDeliveryToSuggestions;
+  const auditDraft = state.memoryAuditSettingsDraft;
+  const auditChannels = state.channelsSnapshot?.channelMeta?.length
+    ? state.channelsSnapshot.channelMeta.map((entry) => entry.id)
+    : (state.channelsSnapshot?.channelOrder ?? []);
+  const selectedAuditDeliveryChannel = auditDraft.deliveryChannel.trim();
+  const auditAccountRows = selectedAuditDeliveryChannel
+    ? (state.channelsSnapshot?.channelAccounts?.[selectedAuditDeliveryChannel] ?? [])
+    : Object.values(state.channelsSnapshot?.channelAccounts ?? {}).flat();
+  const auditAccountSuggestions = uniquePreserveOrder([
+    ...auditAccountRows.flatMap((account) => [
+      normalizeSuggestionValue(account.accountId),
+      normalizeSuggestionValue(account.name),
+    ]),
+    auditDraft.deliveryAccountId,
+  ]);
+  const auditDeliveryTargetSuggestions = uniquePreserveOrder([
+    ...auditAccountSuggestions,
+    ...state.cronJobs.map((job) => normalizeSuggestionValue(job.delivery?.to)),
+    auditDraft.deliveryTo,
+  ]).filter((value) => auditDraft.deliveryMode !== "webhook" || isHttpUrl(value));
+  const auditSettingsSuggestions = {
+    agents: uniquePreserveOrder([
+      ...(state.agentsList?.agents?.map((entry) => entry.id) ?? []),
+      auditDraft.agentId,
+    ]),
+    sessions: uniquePreserveOrder([
+      "session:memory-audit",
+      "main",
+      "isolated",
+      ...(state.sessionsResult?.sessions?.map((row) => `session:${row.key}`) ?? []),
+      auditDraft.sessionTarget,
+    ]),
+    models: uniquePreserveOrder([
+      ...state.cronModelSuggestions,
+      ...resolveConfiguredCronModelSuggestions(configValue),
+      auditDraft.model,
+    ]),
+    timezones: uniquePreserveOrder([auditDraft.timezone, ...CRON_TIMEZONE_SUGGESTIONS]),
+    channels: uniquePreserveOrder([...auditChannels, auditDraft.deliveryChannel]),
+    channelLabels: state.channelsSnapshot?.channelLabels ?? {},
+    deliveryTargets: auditDeliveryTargetSuggestions,
+    accounts: auditAccountSuggestions,
+  };
   const commonConfigProps = {
     raw: state.configRaw,
     originalRaw: state.configRawOriginal,
@@ -3026,11 +3076,32 @@ export function renderApp(state: AppViewState) {
           : nothing}
         ${state.tab === "audit"
           ? renderMemoryAudit({
+              activeTab: state.memoryAuditTab,
               loading: state.memoryAuditLoading,
               error: state.memoryAuditError,
               actionId: state.memoryAuditActionId,
               actionMessage: state.memoryAuditActionMessage,
               suggestions: state.memoryAuditSuggestions,
+              settingsLoading: state.memoryAuditSettingsLoading,
+              settingsSaving: state.memoryAuditSettingsSaving,
+              settingsError: state.memoryAuditSettingsError,
+              settingsMessage: state.memoryAuditSettingsMessage,
+              settingsDraft: state.memoryAuditSettingsDraft,
+              settingsOriginal: state.memoryAuditSettingsOriginal,
+              settingsSuggestions: auditSettingsSuggestions,
+              onTabChange: (tab) => {
+                state.memoryAuditTab = tab;
+                if (tab === "settings") {
+                  void loadMemoryAuditSettings(state);
+                } else {
+                  void loadMemoryAuditSuggestions(state);
+                }
+              },
+              onSettingsChange: (patch) => updateMemoryAuditSettingsDraft(state, patch),
+              onSettingsSave: () => {
+                void saveMemoryAuditSettings(state);
+              },
+              onSettingsReset: () => resetMemoryAuditSettingsDraft(state),
               onRefresh: () => loadMemoryAuditSuggestions(state),
               onApply: (suggestion) => runMemoryAuditAction(state, suggestion, "apply"),
               onReject: (suggestion) => runMemoryAuditAction(state, suggestion, "reject"),

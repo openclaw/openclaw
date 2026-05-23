@@ -1,4 +1,5 @@
 import type { GatewayBrowserClient, GatewayHelloOk } from "../gateway.ts";
+import type { ConfigSnapshot } from "../types.ts";
 
 export type MemoryAuditAction = "add" | "edit" | "delete" | "move";
 export type MemoryAuditSurfaceKind =
@@ -48,6 +49,30 @@ export type MemoryAuditSuggestions = {
   suggestions: MemoryAuditSuggestion[];
 };
 
+export type MemoryAuditDeliveryMode = "none" | "announce" | "webhook";
+export type MemoryAuditTab = "settings" | "review";
+
+export type MemoryAuditSettingsDraft = {
+  enabled: boolean;
+  agentId: string;
+  sessionTarget: string;
+  model: string;
+  timezone: string;
+  dailyEnabled: boolean;
+  dailyCron: string;
+  weeklyEnabled: boolean;
+  weeklyCron: string;
+  deliveryMode: MemoryAuditDeliveryMode;
+  deliveryChannel: string;
+  deliveryTo: string;
+  deliveryThreadId: string;
+  deliveryAccountId: string;
+};
+
+export type MemoryAuditSettingsErrors = Partial<
+  Record<"sessionTarget" | "dailyCron" | "weeklyCron" | "deliveryTo", string>
+>;
+
 type MemoryAuditActionPayload = {
   action?: unknown;
   applied?: unknown;
@@ -64,14 +89,210 @@ export type MemoryAuditState = {
   memoryAuditSuggestions: MemoryAuditSuggestions | null;
   memoryAuditActionId: string | null;
   memoryAuditActionMessage: { kind: "success" | "error"; text: string } | null;
+  memoryAuditTab: MemoryAuditTab;
+  memoryAuditSettingsLoading: boolean;
+  memoryAuditSettingsSaving: boolean;
+  memoryAuditSettingsError: string | null;
+  memoryAuditSettingsMessage: { kind: "success" | "error"; text: string } | null;
+  memoryAuditSettingsDraft: MemoryAuditSettingsDraft;
+  memoryAuditSettingsOriginal: MemoryAuditSettingsDraft;
+  memoryAuditSettingsPluginId: string;
+  configSnapshot: ConfigSnapshot | null;
+  applySessionKey: string;
   lastError: string | null;
 };
+
+export const DEFAULT_MEMORY_AUDIT_SETTINGS: MemoryAuditSettingsDraft = {
+  enabled: false,
+  agentId: "",
+  sessionTarget: "session:memory-audit",
+  model: "",
+  timezone: "",
+  dailyEnabled: true,
+  dailyCron: "10 6 * * *",
+  weeklyEnabled: true,
+  weeklyCron: "0 21 * * 0",
+  deliveryMode: "none",
+  deliveryChannel: "",
+  deliveryTo: "",
+  deliveryThreadId: "",
+  deliveryAccountId: "",
+};
+
+const DEFAULT_MEMORY_AUDIT_PLUGIN_ID = "memory-core";
 
 function asRecord(value: unknown): Record<string, unknown> | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return null;
   }
   return value as Record<string, unknown>;
+}
+
+function normalizeBoolean(value: unknown, fallback: boolean): boolean {
+  return typeof value === "boolean" ? value : fallback;
+}
+
+function normalizeDeliveryMode(value: unknown): MemoryAuditDeliveryMode {
+  return value === "announce" || value === "webhook" ? value : "none";
+}
+
+function readNestedRecord(
+  record: Record<string, unknown> | null,
+  key: string,
+): Record<string, unknown> | null {
+  return asRecord(record?.[key]);
+}
+
+export function resolveMemoryAuditPluginId(config: unknown): string {
+  const root = asRecord(config);
+  const slot = normalizeTrimmedString(readNestedRecord(root, "plugins")?.slots);
+  const slots = readNestedRecord(root, "plugins")?.slots;
+  const memorySlot =
+    slots && typeof slots === "object"
+      ? normalizeTrimmedString((slots as Record<string, unknown>).memory)
+      : undefined;
+  if (memorySlot && memorySlot.toLowerCase() !== "none") {
+    return memorySlot;
+  }
+  void slot;
+  return DEFAULT_MEMORY_AUDIT_PLUGIN_ID;
+}
+
+function readMemoryAuditConfig(config: unknown, pluginId: string): Record<string, unknown> | null {
+  const root = asRecord(config);
+  const plugins = readNestedRecord(root, "plugins");
+  const entries = readNestedRecord(plugins, "entries");
+  const entry = readNestedRecord(entries, pluginId);
+  const pluginConfig = readNestedRecord(entry, "config");
+  return readNestedRecord(pluginConfig, "memoryAudit");
+}
+
+export function readMemoryAuditSettings(config: unknown): {
+  pluginId: string;
+  draft: MemoryAuditSettingsDraft;
+} {
+  const pluginId = resolveMemoryAuditPluginId(config);
+  const audit = readMemoryAuditConfig(config, pluginId);
+  const delivery = readNestedRecord(audit, "delivery");
+  const daily = readNestedRecord(audit, "daily");
+  const weekly = readNestedRecord(audit, "weekly");
+  const draft: MemoryAuditSettingsDraft = {
+    enabled: normalizeBoolean(audit?.enabled, DEFAULT_MEMORY_AUDIT_SETTINGS.enabled),
+    agentId: normalizeTrimmedString(audit?.agentId) ?? DEFAULT_MEMORY_AUDIT_SETTINGS.agentId,
+    sessionTarget:
+      normalizeTrimmedString(audit?.sessionTarget) ?? DEFAULT_MEMORY_AUDIT_SETTINGS.sessionTarget,
+    model: normalizeTrimmedString(audit?.model) ?? DEFAULT_MEMORY_AUDIT_SETTINGS.model,
+    timezone: normalizeTrimmedString(audit?.timezone) ?? DEFAULT_MEMORY_AUDIT_SETTINGS.timezone,
+    dailyEnabled: normalizeBoolean(daily?.enabled, DEFAULT_MEMORY_AUDIT_SETTINGS.dailyEnabled),
+    dailyCron: normalizeTrimmedString(daily?.cron) ?? DEFAULT_MEMORY_AUDIT_SETTINGS.dailyCron,
+    weeklyEnabled: normalizeBoolean(weekly?.enabled, DEFAULT_MEMORY_AUDIT_SETTINGS.weeklyEnabled),
+    weeklyCron: normalizeTrimmedString(weekly?.cron) ?? DEFAULT_MEMORY_AUDIT_SETTINGS.weeklyCron,
+    deliveryMode: normalizeDeliveryMode(delivery?.mode),
+    deliveryChannel:
+      normalizeTrimmedString(delivery?.channel) ?? DEFAULT_MEMORY_AUDIT_SETTINGS.deliveryChannel,
+    deliveryTo: normalizeTrimmedString(delivery?.to) ?? DEFAULT_MEMORY_AUDIT_SETTINGS.deliveryTo,
+    deliveryThreadId:
+      normalizeTrimmedString(delivery?.threadId) ?? DEFAULT_MEMORY_AUDIT_SETTINGS.deliveryThreadId,
+    deliveryAccountId:
+      normalizeTrimmedString(delivery?.accountId) ??
+      DEFAULT_MEMORY_AUDIT_SETTINGS.deliveryAccountId,
+  };
+  return { pluginId, draft };
+}
+
+export function buildMemoryAuditConfigPatch(
+  pluginId: string,
+  draft: MemoryAuditSettingsDraft,
+): Record<string, unknown> {
+  const deliveryActive = draft.deliveryMode !== "none";
+  const delivery: Record<string, unknown> = {
+    mode: draft.deliveryMode,
+    channel: deliveryActive && draft.deliveryChannel.trim() ? draft.deliveryChannel.trim() : null,
+    to: deliveryActive && draft.deliveryTo.trim() ? draft.deliveryTo.trim() : null,
+    threadId:
+      deliveryActive && draft.deliveryThreadId.trim() ? draft.deliveryThreadId.trim() : null,
+    accountId:
+      deliveryActive && draft.deliveryAccountId.trim() ? draft.deliveryAccountId.trim() : null,
+  };
+  return {
+    plugins: {
+      entries: {
+        [pluginId]: {
+          config: {
+            memoryAudit: {
+              enabled: draft.enabled,
+              agentId: draft.agentId.trim() || null,
+              sessionTarget:
+                draft.sessionTarget.trim() || DEFAULT_MEMORY_AUDIT_SETTINGS.sessionTarget,
+              model: draft.model.trim() || null,
+              timezone: draft.timezone.trim() || null,
+              daily: {
+                enabled: draft.dailyEnabled,
+                cron: draft.dailyCron.trim() || DEFAULT_MEMORY_AUDIT_SETTINGS.dailyCron,
+              },
+              weekly: {
+                enabled: draft.weeklyEnabled,
+                cron: draft.weeklyCron.trim() || DEFAULT_MEMORY_AUDIT_SETTINGS.weeklyCron,
+              },
+              delivery,
+            },
+          },
+        },
+      },
+    },
+  };
+}
+
+export function validateMemoryAuditSettings(
+  draft: MemoryAuditSettingsDraft,
+): MemoryAuditSettingsErrors {
+  const errors: MemoryAuditSettingsErrors = {};
+  const sessionTarget = draft.sessionTarget.trim();
+  if (
+    !sessionTarget ||
+    (sessionTarget !== "main" &&
+      sessionTarget !== "isolated" &&
+      !sessionTarget.startsWith("session:"))
+  ) {
+    errors.sessionTarget = "memoryAudit.errors.sessionTarget";
+  }
+  if (draft.dailyEnabled && !draft.dailyCron.trim()) {
+    errors.dailyCron = "memoryAudit.errors.dailyCron";
+  }
+  if (draft.weeklyEnabled && !draft.weeklyCron.trim()) {
+    errors.weeklyCron = "memoryAudit.errors.weeklyCron";
+  }
+  if (draft.deliveryMode === "webhook") {
+    const target = draft.deliveryTo.trim();
+    if (!target) {
+      errors.deliveryTo = "memoryAudit.errors.webhookRequired";
+    } else if (!/^https?:\/\//i.test(target)) {
+      errors.deliveryTo = "memoryAudit.errors.webhookInvalid";
+    }
+  }
+  return errors;
+}
+
+export function memoryAuditSettingsDirty(
+  state: Pick<MemoryAuditState, "memoryAuditSettingsDraft" | "memoryAuditSettingsOriginal">,
+): boolean {
+  return (
+    JSON.stringify(state.memoryAuditSettingsDraft) !==
+    JSON.stringify(state.memoryAuditSettingsOriginal)
+  );
+}
+
+export function updateMemoryAuditSettingsDraft(
+  state: MemoryAuditState,
+  patch: Partial<MemoryAuditSettingsDraft>,
+): void {
+  state.memoryAuditSettingsDraft = { ...state.memoryAuditSettingsDraft, ...patch };
+  state.memoryAuditSettingsMessage = null;
+}
+
+export function resetMemoryAuditSettingsDraft(state: MemoryAuditState): void {
+  state.memoryAuditSettingsDraft = { ...state.memoryAuditSettingsOriginal };
+  state.memoryAuditSettingsMessage = null;
 }
 
 function normalizeTrimmedString(value: unknown): string | undefined {
@@ -279,6 +500,78 @@ export async function loadMemoryAuditSuggestions(state: MemoryAuditState): Promi
     state.memoryAuditError = String(err);
   } finally {
     state.memoryAuditLoading = false;
+  }
+}
+
+export function applyMemoryAuditSettingsFromSnapshot(state: MemoryAuditState): void {
+  const { pluginId, draft } = readMemoryAuditSettings(state.configSnapshot?.config ?? {});
+  state.memoryAuditSettingsPluginId = pluginId;
+  state.memoryAuditSettingsDraft = { ...draft };
+  state.memoryAuditSettingsOriginal = { ...draft };
+}
+
+export async function loadMemoryAuditSettings(state: MemoryAuditState): Promise<void> {
+  if (!state.client || !state.connected) {
+    return;
+  }
+  state.memoryAuditSettingsLoading = true;
+  state.memoryAuditSettingsError = null;
+  try {
+    const snapshot = await state.client.request<ConfigSnapshot>("config.get", {});
+    state.configSnapshot = snapshot;
+    applyMemoryAuditSettingsFromSnapshot(state);
+  } catch (err) {
+    const message = String(err);
+    state.memoryAuditSettingsError = message;
+    state.lastError = message;
+  } finally {
+    state.memoryAuditSettingsLoading = false;
+  }
+}
+
+export async function saveMemoryAuditSettings(state: MemoryAuditState): Promise<boolean> {
+  if (!state.client || !state.connected || state.memoryAuditSettingsSaving) {
+    return false;
+  }
+  const errors = validateMemoryAuditSettings(state.memoryAuditSettingsDraft);
+  if (Object.keys(errors).length > 0) {
+    state.memoryAuditSettingsMessage = {
+      kind: "error",
+      text: "Fix Memory Audit settings before saving.",
+    };
+    return false;
+  }
+  const baseHash = state.configSnapshot?.hash;
+  if (!baseHash) {
+    state.memoryAuditSettingsError = "Config hash missing; refresh and retry.";
+    return false;
+  }
+  const pluginId = state.memoryAuditSettingsPluginId || DEFAULT_MEMORY_AUDIT_PLUGIN_ID;
+  state.memoryAuditSettingsSaving = true;
+  state.memoryAuditSettingsError = null;
+  state.memoryAuditSettingsMessage = null;
+  try {
+    await state.client.request("config.patch", {
+      baseHash,
+      raw: JSON.stringify(buildMemoryAuditConfigPatch(pluginId, state.memoryAuditSettingsDraft)),
+      sessionKey: state.applySessionKey,
+      note: "Memory Audit settings updated from the Audit tab.",
+    });
+    state.memoryAuditSettingsOriginal = { ...state.memoryAuditSettingsDraft };
+    state.memoryAuditSettingsMessage = {
+      kind: "success",
+      text: "Memory Audit settings saved. The Gateway will restart to reconcile audit schedules.",
+    };
+    await loadMemoryAuditSettings(state);
+    return true;
+  } catch (err) {
+    const message = String(err);
+    state.memoryAuditSettingsMessage = { kind: "error", text: message };
+    state.memoryAuditSettingsError = message;
+    state.lastError = message;
+    return false;
+  } finally {
+    state.memoryAuditSettingsSaving = false;
   }
 }
 

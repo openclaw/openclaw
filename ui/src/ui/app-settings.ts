@@ -29,6 +29,7 @@ import { loadAgents, type AgentsState } from "./controllers/agents.ts";
 import { loadChannels, type ChannelsState } from "./controllers/channels.ts";
 import { loadConfig, loadConfigSchema, type ConfigState } from "./controllers/config.ts";
 import {
+  loadCronModelSuggestions,
   loadCronJobsPage,
   loadCronRuns,
   loadCronStatus,
@@ -45,7 +46,11 @@ import {
 } from "./controllers/dreaming.ts";
 import { loadExecApprovals, type ExecApprovalsState } from "./controllers/exec-approvals.ts";
 import { loadLogs, type LogsState } from "./controllers/logs.ts";
-import { loadMemoryAuditSuggestions, type MemoryAuditState } from "./controllers/memory-audit.ts";
+import {
+  loadMemoryAuditSettings,
+  loadMemoryAuditSuggestions,
+  type MemoryAuditState,
+} from "./controllers/memory-audit.ts";
 import {
   loadModelAuthStatusState,
   type ModelAuthStatusState,
@@ -155,6 +160,7 @@ type SettingsAppHost = SettingsHost &
     overviewLogCursor: number | null;
     overviewLogLines: string[];
     attentionItems: AttentionItem[];
+    cronModelSuggestions: string[];
     hello: { auth?: { role?: string; scopes?: string[] } } | null;
   };
 
@@ -468,7 +474,14 @@ export async function refreshActiveTab(host: SettingsHost) {
         ]);
         break;
       case "audit":
-        await loadMemoryAuditSuggestions(app);
+        await Promise.all([
+          loadMemoryAuditSettings(app),
+          loadMemoryAuditSuggestions(app),
+          loadAgents(app),
+          loadSessions(app),
+          loadChannels(app, false),
+          loadCronModelSuggestions(app),
+        ]);
         break;
       case "chat": {
         const modelAuthRefresh = loadModelAuthStatusState(app).catch(() => undefined);

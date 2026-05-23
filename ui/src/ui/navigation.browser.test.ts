@@ -173,6 +173,7 @@ describe("control UI routing", () => {
 
   it("renders the memory audit view on the /memory-audit route", async () => {
     const app = mountApp("/memory-audit");
+    app.memoryAuditTab = "review";
     app.memoryAuditSuggestions = {
       agentId: "hex",
       workspaces: ["/tmp/openclaw/agents/hex"],

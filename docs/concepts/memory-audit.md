@@ -39,7 +39,16 @@ the suggestion marks it as `conflict` instead of writing over the newer file.
 
 ## Scheduling
 
-Enable Memory Audit in the `memory-core` plugin config:
+Enable Memory Audit from the dashboard under **Audit > Settings**. The settings
+tab controls:
+
+- whether audit is enabled
+- the audit agent, session target, model, and timezone
+- daily and weekly schedule times plus raw cron expressions
+- whether reports are delivered to a channel, account, thread, or webhook
+
+The same settings can also be written directly in the `memory-core` plugin
+config:
 
 ```json
 {
@@ -75,6 +84,11 @@ The managed cron jobs ask the configured audit agent to run
 `memory_audit_collect`, inspect durable surfaces, and call `memory_audit_stage`
 for high-value recommendations. The prompt explicitly tells the agent not to edit
 memory files directly.
+
+The session target controls where the audit run happens. Report delivery is
+separate: `delivery.mode` can be `none`, `announce`, or `webhook`. Dashboard
+dropdowns suggest real agents, sessions, configured models, channels, and
+accounts from the connected Gateway.
 
 ## Relationship To Dreaming
 

@@ -23,7 +23,7 @@ type ManagedCronJobCreate = {
   agentId?: string;
   sessionTarget: string;
   wakeMode: "now";
-  payload: { kind: "agentTurn"; message: string; lightContext?: boolean };
+  payload: { kind: "agentTurn"; message: string; lightContext?: boolean; model?: string };
   delivery?: MemoryAuditDeliveryConfig;
 };
 type ManagedCronJobPatch = Partial<ManagedCronJobCreate>;
@@ -36,7 +36,7 @@ type ManagedCronJobLike = {
   agentId?: string;
   sessionTarget?: string;
   wakeMode?: string;
-  payload?: { kind?: string; message?: string; lightContext?: boolean };
+  payload?: { kind?: string; message?: string; lightContext?: boolean; model?: string };
   delivery?: MemoryAuditDeliveryConfig;
   createdAtMs?: number;
 };
@@ -97,6 +97,7 @@ function buildManagedAuditCronJob(
       kind: "agentTurn",
       message: buildAuditInstruction(cadence),
       lightContext: true,
+      ...(config.model ? { model: config.model } : {}),
     },
     delivery: config.delivery,
   };
@@ -154,7 +155,8 @@ function buildPatch(
   if (
     normalizeLowercaseStringOrEmpty(existing.payload?.kind) !== "agentturn" ||
     normalizeTrimmedString(existing.payload?.message) !== desired.payload.message ||
-    existing.payload?.lightContext !== desired.payload.lightContext
+    existing.payload?.lightContext !== desired.payload.lightContext ||
+    normalizeTrimmedString(existing.payload?.model) !== desired.payload.model
   ) {
     patch.payload = desired.payload;
   }
@@ -162,6 +164,13 @@ function buildPatch(
     patch.delivery = desired.delivery;
   }
   return Object.keys(patch).length > 0 ? patch : null;
+}
+
+function requiresReplaceForPayloadModelClear(
+  existing: ManagedCronJobLike,
+  desired: ManagedCronJobCreate,
+): boolean {
+  return Boolean(normalizeTrimmedString(existing.payload?.model)) && !desired.payload.model;
 }
 
 function sortJobs(jobs: ManagedCronJobLike[]): ManagedCronJobLike[] {
@@ -218,6 +227,14 @@ export async function reconcileMemoryAuditCronJobs(params: {
       const result = await params.cron.remove(duplicate.id);
       if (result.removed === true) {
         changed += 1;
+      }
+    }
+    if (requiresReplaceForPayloadModelClear(primary, desiredJob)) {
+      const result = await params.cron.remove(primary.id);
+      if (result.removed === true) {
+        await params.cron.add(desiredJob);
+        changed += 1;
+        continue;
       }
     }
     const patch = buildPatch(primary, desiredJob);

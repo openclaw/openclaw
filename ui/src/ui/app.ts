@@ -102,7 +102,12 @@ import {
   type ExecApprovalRequest,
 } from "./controllers/exec-approval.ts";
 import type { ExecApprovalsFile, ExecApprovalsSnapshot } from "./controllers/exec-approvals.ts";
-import type { MemoryAuditSuggestions } from "./controllers/memory-audit.ts";
+import {
+  DEFAULT_MEMORY_AUDIT_SETTINGS,
+  type MemoryAuditSettingsDraft,
+  type MemoryAuditSuggestions,
+  type MemoryAuditTab,
+} from "./controllers/memory-audit.ts";
 import type {
   ClawHubSearchResult,
   ClawHubSkillSecurityVerdict,
@@ -370,6 +375,18 @@ export class OpenClawApp extends LitElement {
   @state() memoryAuditSuggestions: MemoryAuditSuggestions | null = null;
   @state() memoryAuditActionId: string | null = null;
   @state() memoryAuditActionMessage: { kind: "success" | "error"; text: string } | null = null;
+  @state() memoryAuditTab: MemoryAuditTab = "settings";
+  @state() memoryAuditSettingsLoading = false;
+  @state() memoryAuditSettingsSaving = false;
+  @state() memoryAuditSettingsError: string | null = null;
+  @state() memoryAuditSettingsMessage: { kind: "success" | "error"; text: string } | null = null;
+  @state() memoryAuditSettingsDraft: MemoryAuditSettingsDraft = {
+    ...DEFAULT_MEMORY_AUDIT_SETTINGS,
+  };
+  @state() memoryAuditSettingsOriginal: MemoryAuditSettingsDraft = {
+    ...DEFAULT_MEMORY_AUDIT_SETTINGS,
+  };
+  @state() memoryAuditSettingsPluginId = "memory-core";
   @state() configFormDirty = false;
   @state() configSettingsMode: "quick" | "advanced" = "quick";
   @state() configFormMode: "form" | "raw" = "form";

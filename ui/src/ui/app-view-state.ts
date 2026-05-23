@@ -227,6 +227,14 @@ export type AppViewState = {
   memoryAuditSuggestions: import("./controllers/memory-audit.js").MemoryAuditSuggestions | null;
   memoryAuditActionId: string | null;
   memoryAuditActionMessage: { kind: "success" | "error"; text: string } | null;
+  memoryAuditTab: import("./controllers/memory-audit.js").MemoryAuditTab;
+  memoryAuditSettingsLoading: boolean;
+  memoryAuditSettingsSaving: boolean;
+  memoryAuditSettingsError: string | null;
+  memoryAuditSettingsMessage: { kind: "success" | "error"; text: string } | null;
+  memoryAuditSettingsDraft: import("./controllers/memory-audit.js").MemoryAuditSettingsDraft;
+  memoryAuditSettingsOriginal: import("./controllers/memory-audit.js").MemoryAuditSettingsDraft;
+  memoryAuditSettingsPluginId: string;
   configFormMode: "form" | "raw";
   configSettingsMode: "quick" | "advanced";
   configSearchQuery: string;

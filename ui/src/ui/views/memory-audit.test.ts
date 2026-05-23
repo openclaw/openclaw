@@ -2,7 +2,10 @@
 
 import { render } from "lit";
 import { describe, expect, it, vi } from "vitest";
-import type { MemoryAuditSuggestion } from "../controllers/memory-audit.ts";
+import {
+  DEFAULT_MEMORY_AUDIT_SETTINGS,
+  type MemoryAuditSuggestion,
+} from "../controllers/memory-audit.ts";
 import { renderMemoryAudit, type MemoryAuditProps } from "./memory-audit.ts";
 
 function buildSuggestion(overrides: Partial<MemoryAuditSuggestion> = {}): MemoryAuditSuggestion {
@@ -38,6 +41,7 @@ function buildSuggestion(overrides: Partial<MemoryAuditSuggestion> = {}): Memory
 
 function buildProps(overrides: Partial<MemoryAuditProps> = {}): MemoryAuditProps {
   return {
+    activeTab: "review",
     loading: false,
     error: null,
     actionId: null,
@@ -52,6 +56,26 @@ function buildProps(overrides: Partial<MemoryAuditProps> = {}): MemoryAuditProps
       conflict: 0,
       suggestions: [buildSuggestion()],
     },
+    settingsLoading: false,
+    settingsSaving: false,
+    settingsError: null,
+    settingsMessage: null,
+    settingsDraft: { ...DEFAULT_MEMORY_AUDIT_SETTINGS },
+    settingsOriginal: { ...DEFAULT_MEMORY_AUDIT_SETTINGS },
+    settingsSuggestions: {
+      agents: ["hex"],
+      sessions: ["session:memory-audit", "session:hex"],
+      models: ["gpt-5.5"],
+      timezones: ["UTC", "Asia/Tokyo"],
+      channels: ["discord"],
+      channelLabels: { discord: "Discord" },
+      deliveryTargets: ["hex"],
+      accounts: ["bot"],
+    },
+    onTabChange: () => {},
+    onSettingsChange: () => {},
+    onSettingsSave: () => {},
+    onSettingsReset: () => {},
     onRefresh: () => {},
     onApply: () => {},
     onReject: () => {},
@@ -70,6 +94,67 @@ function text(container: Element): string {
 }
 
 describe("memory audit view", () => {
+  it("renders the settings tab with audit controls and suggestions", () => {
+    const onSettingsChange = vi.fn();
+    const container = renderInto(
+      buildProps({
+        activeTab: "settings",
+        settingsDraft: {
+          ...DEFAULT_MEMORY_AUDIT_SETTINGS,
+          enabled: true,
+          agentId: "hex",
+          model: "gpt-5.5",
+          deliveryMode: "announce",
+          deliveryChannel: "discord",
+        },
+        onSettingsChange,
+      }),
+    );
+
+    expect(text(container)).toContain("Settings");
+    expect(text(container)).toContain("Memory audit enabled");
+    expect(
+      container.querySelector('datalist#memory-audit-agent-suggestions option[value="hex"]'),
+    ).not.toBeNull();
+    expect(
+      container.querySelector(
+        'datalist#memory-audit-session-suggestions option[value="session:hex"]',
+      ),
+    ).not.toBeNull();
+    expect(
+      container.querySelector('datalist#memory-audit-model-suggestions option[value="gpt-5.5"]'),
+    ).not.toBeNull();
+
+    const dailyTime = container.querySelector<HTMLInputElement>('input[type="time"]');
+    if (!dailyTime) {
+      throw new Error("expected daily time input");
+    }
+    dailyTime.value = "07:30";
+    dailyTime.dispatchEvent(new Event("change", { bubbles: true }));
+
+    expect(onSettingsChange).toHaveBeenCalledWith({ dailyCron: "30 7 * * *" });
+  });
+
+  it("calls save and reset handlers from the settings tab", () => {
+    const onSettingsSave = vi.fn();
+    const onSettingsReset = vi.fn();
+    const container = renderInto(
+      buildProps({
+        activeTab: "settings",
+        settingsDraft: { ...DEFAULT_MEMORY_AUDIT_SETTINGS, enabled: true },
+        onSettingsSave,
+        onSettingsReset,
+      }),
+    );
+    const buttons = Array.from(container.querySelectorAll<HTMLButtonElement>("button"));
+
+    buttons.find((button) => button.textContent?.includes("Save"))?.click();
+    buttons.find((button) => button.textContent?.includes("Reset"))?.click();
+
+    expect(onSettingsSave).toHaveBeenCalled();
+    expect(onSettingsReset).toHaveBeenCalled();
+  });
+
   it("renders summary counts and pending suggestion details", () => {
     const container = renderInto(buildProps());
 
