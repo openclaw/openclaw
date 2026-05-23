@@ -500,6 +500,11 @@ function extractMessagingToolSourceReplyPayload(
   if (channelData) {
     payload.channelData = channelData;
   }
+  const idempotencyKey =
+    readStringField(sourceReply, "idempotencyKey") ?? readStringField(details, "idempotencyKey");
+  if (idempotencyKey) {
+    payload.idempotencyKey = idempotencyKey;
+  }
   return Object.keys(payload).length > 0 ? payload : undefined;
 }
 

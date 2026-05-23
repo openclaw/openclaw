@@ -1429,6 +1429,7 @@ describe("messaging tool media URL tracking", () => {
           status: "ok",
           deliveryStatus: "sent",
           sourceReplySink: "internal-ui",
+          idempotencyKey: "stable-source-reply",
           sourceReply: {
             text: "visible in tui",
             mediaUrls: ["file:///tmp/reply.png"],
@@ -1444,6 +1445,7 @@ describe("messaging tool media URL tracking", () => {
         text: "visible in tui",
         mediaUrls: ["file:///tmp/reply.png"],
         channelData: { source: "tui" },
+        idempotencyKey: "stable-source-reply",
       },
     ]);
   });
