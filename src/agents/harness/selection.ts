@@ -466,6 +466,7 @@ export async function maybeCompactAgentHarnessSession(
         ok: false,
         compacted: false,
         reason: `Agent harness "${harness.id}" does not support compaction.`,
+        failure: { reason: "unsupported_harness_compaction" },
       };
     }
     return undefined;

@@ -113,9 +113,11 @@ describe("scripts/lib/docker-e2e-plan", () => {
     expect(plan.credentials).toEqual(["anthropic", "openai"]);
     expect(plan.lanes.map((lane) => lane.name)).toContain("install-e2e-openai");
     expect(plan.lanes.map((lane) => lane.name)).toContain("openai-chat-tools");
+    expect(plan.lanes.map((lane) => lane.name)).toContain("live-codex-npm-plugin");
     expect(plan.lanes.map((lane) => lane.name)).toContain("codex-on-demand");
     expect(plan.lanes.map((lane) => lane.name)).toContain("install-e2e-anthropic");
     expect(plan.lanes.map((lane) => lane.name)).toContain("mcp-channels");
+    expect(plan.lanes.map((lane) => lane.name)).toContain("plugin-binding-command-escape");
     expect(plan.lanes.map((lane) => lane.name)).toContain("live-plugin-tool");
     expect(plan.lanes.map((lane) => lane.name)).toContain("commitments-safety");
     expect(plan.lanes.map((lane) => lane.name)).toContain("bundled-plugin-install-uninstall-0");
@@ -157,6 +159,7 @@ describe("scripts/lib/docker-e2e-plan", () => {
     expect(plan.releaseProfile).toBe("beta");
     expect(laneNames).toContain("install-e2e-openai");
     expect(laneNames).toContain("openai-chat-tools");
+    expect(laneNames).toContain("live-codex-npm-plugin");
     expect(laneNames).toContain("install-e2e-anthropic");
     expect(laneNames).toContain("update-channel-switch");
     expect(laneNames).not.toContain("plugins");
@@ -177,6 +180,11 @@ describe("scripts/lib/docker-e2e-plan", () => {
   });
 
   it("splits release-path package and plugin chunks across shorter CI jobs", () => {
+    const core = planFor({
+      includeOpenWebUI: true,
+      profile: RELEASE_PATH_PROFILE,
+      releaseChunk: "core",
+    });
     const packageInstallOpenAi = planFor({
       includeOpenWebUI: true,
       profile: RELEASE_PATH_PROFILE,
@@ -243,9 +251,11 @@ describe("scripts/lib/docker-e2e-plan", () => {
       releaseChunk: "plugins-runtime-install-h",
     });
 
+    expect(core.lanes.map((lane) => lane.name)).toContain("plugin-binding-command-escape");
     expect(packageInstallOpenAi.lanes.map((lane) => lane.name)).toEqual([
       "install-e2e-openai",
       "openai-chat-tools",
+      "live-codex-npm-plugin",
       "codex-on-demand",
     ]);
     expect(packageInstallAnthropic.lanes.map((lane) => lane.name)).toEqual([
@@ -360,6 +370,16 @@ describe("scripts/lib/docker-e2e-plan", () => {
         name: "cron-mcp-cleanup",
         resources: ["docker", "service", "npm"],
         stateScenario: "empty",
+        weight: 3,
+      },
+      {
+        command: "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:kitchen-sink-rpc",
+        imageKind: "functional",
+        live: false,
+        name: "kitchen-sink-rpc",
+        resources: ["docker", "service", "npm"],
+        stateScenario: "empty",
+        timeoutMs: 900_000,
         weight: 3,
       },
       {
@@ -483,6 +503,7 @@ describe("scripts/lib/docker-e2e-plan", () => {
     expect(packageUpdate.lanes.map((lane) => lane.name)).toEqual([
       "install-e2e-openai",
       "openai-chat-tools",
+      "live-codex-npm-plugin",
       "codex-on-demand",
       "install-e2e-anthropic",
       "npm-onboard-channel-agent",
@@ -500,6 +521,7 @@ describe("scripts/lib/docker-e2e-plan", () => {
       "plugins",
       ...bundledPluginSweepLanes,
       "cron-mcp-cleanup",
+      "kitchen-sink-rpc",
       "openai-web-search-minimal",
       "live-plugin-tool",
       "openwebui",
@@ -508,6 +530,7 @@ describe("scripts/lib/docker-e2e-plan", () => {
       "plugins",
       ...bundledPluginSweepLanes,
       "cron-mcp-cleanup",
+      "kitchen-sink-rpc",
       "openai-web-search-minimal",
       "live-plugin-tool",
       "plugin-update",
@@ -653,7 +676,8 @@ describe("scripts/lib/docker-e2e-plan", () => {
     expect(plan.credentials).toEqual(["openai"]);
     expect(plan.lanes.map(summarizeLane)).toEqual([
       {
-        command: "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:live-codex-npm-plugin",
+        command:
+          'OPENCLAW_SKIP_DOCKER_BUILD=1 bash -c \'harness="${OPENCLAW_DOCKER_E2E_TRUSTED_HARNESS_DIR:-}"; if [ -z "$harness" ]; then if [ -d .release-harness/scripts ]; then harness=.release-harness; else harness=.; fi; fi; OPENCLAW_LIVE_DOCKER_REPO_ROOT="${OPENCLAW_DOCKER_E2E_REPO_ROOT:-$PWD}" bash "$harness/scripts/e2e/codex-npm-plugin-live-docker.sh"\'',
         imageKind: "bare",
         live: true,
         name: "live-codex-npm-plugin",
@@ -686,6 +710,23 @@ describe("scripts/lib/docker-e2e-plan", () => {
     expect(lane.timeoutMs).toBe(1_800_000);
     expect(plan.needs.bareImage).toBe(true);
     expect(plan.needs.package).toBe(true);
+  });
+
+  it("plans the plugin binding command escape lane as source Docker proof", () => {
+    const plan = planFor({ selectedLaneNames: ["plugin-binding-command-escape"] });
+
+    expect(plan.lanes).toHaveLength(1);
+    const lane = requireFirstLane(plan);
+    expect(lane.command).toBe(
+      "OPENCLAW_SKIP_DOCKER_BUILD=0 pnpm test:docker:plugin-binding-command-escape",
+    );
+    expect(lane.imageKind).toBeUndefined();
+    expect(lane.live).toBe(false);
+    expect(lane.name).toBe("plugin-binding-command-escape");
+    expect(lane.resources).toEqual(["docker", "npm"]);
+    expect(lane.stateScenario).toBe("empty");
+    expect(plan.needs.e2eImage).toBe(false);
+    expect(plan.needs.package).toBe(false);
   });
 
   it("plans the live plugin tool lane as package-backed OpenAI proof", () => {
@@ -761,6 +802,7 @@ describe("scripts/lib/docker-e2e-plan", () => {
         "plugin-update",
         "plugins",
         "kitchen-sink-plugin",
+        "kitchen-sink-rpc",
         "bundled-plugin-install-uninstall-0",
         "commitments-safety",
         "update-channel-switch",
@@ -787,6 +829,7 @@ describe("scripts/lib/docker-e2e-plan", () => {
       { name: "plugin-update", stateScenario: "empty" },
       { name: "plugins", stateScenario: "empty" },
       { name: "kitchen-sink-plugin", stateScenario: "empty" },
+      { name: "kitchen-sink-rpc", stateScenario: "empty" },
       { name: "bundled-plugin-install-uninstall-0", stateScenario: "empty" },
       { name: "commitments-safety", stateScenario: "empty" },
       { name: "update-channel-switch", stateScenario: "update-stable" },

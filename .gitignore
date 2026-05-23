@@ -108,7 +108,9 @@ USER.md
 .vscode/
 
 # local tooling
+.antigravitycli/
 .serena/
+.crabbox/
 
 # local QA evidence mirrors; CI publishes canonical Mantis files as Actions artifacts
 mantis/
@@ -122,6 +124,8 @@ mantis/
 !.agents/skills/crabbox/**
 !.agents/skills/clawdtributor/
 !.agents/skills/clawdtributor/**
+!.agents/skills/control-ui-e2e/
+!.agents/skills/control-ui-e2e/**
 !.agents/skills/gitcrawl/
 !.agents/skills/gitcrawl/**
 !.agents/skills/openclaw-docs/**
@@ -131,6 +135,8 @@ mantis/
 !.agents/skills/openclaw-debugging/**
 !.agents/skills/openclaw-ghsa-maintainer/
 !.agents/skills/openclaw-ghsa-maintainer/**
+!.agents/skills/openclaw-landable-bug-sweep/
+!.agents/skills/openclaw-landable-bug-sweep/**
 !.agents/skills/openclaw-parallels-smoke/
 !.agents/skills/openclaw-parallels-smoke/**
 !.agents/skills/openclaw-pr-maintainer/
@@ -159,6 +165,8 @@ mantis/
 !.agents/skills/security-triage/**
 !.agents/skills/tag-duplicate-prs-issues/
 !.agents/skills/tag-duplicate-prs-issues/**
+!.agents/skills/autoreview/
+!.agents/skills/autoreview/**
 
 # Agent credentials and memory (NEVER COMMIT)
 /memory/

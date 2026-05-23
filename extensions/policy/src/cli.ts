@@ -1,3 +1,4 @@
+import { setTimeout as sleep } from "node:timers/promises";
 import type { Command } from "commander";
 import {
   exitCodeFromFindings,
@@ -15,12 +16,18 @@ import { createPolicyAttestation } from "./policy-state.js";
 export type PolicyCommandRuntime = {
   writeStdout(value: string): void;
   error(value: string): void;
+  sleep?(ms: number): Promise<void>;
 };
 
 export interface PolicyCheckOptions {
   readonly json?: boolean;
   readonly severityMin?: string;
   readonly cwd?: string;
+}
+
+export interface PolicyWatchOptions extends PolicyCheckOptions {
+  readonly intervalMs?: string | number;
+  readonly once?: boolean;
 }
 
 type PolicyCheckReport = {
@@ -41,6 +48,9 @@ const defaultRuntime: PolicyCommandRuntime = {
   error(value) {
     process.stderr.write(`${value}\n`);
   },
+  sleep(ms) {
+    return sleep(ms);
+  },
 };
 
 export function registerPolicyCli(program: Command): void {
@@ -54,6 +64,17 @@ export function registerPolicyCli(program: Command): void {
     .action(async (options: PolicyCheckOptions) => {
       process.exitCode = await policyCheckCommand(options);
     });
+
+  policy
+    .command("watch")
+    .description("Watch policy evidence and report accepted-attestation drift")
+    .option("--json", "Emit JSON output")
+    .option("--severity-min <severity>", "Minimum severity: info, warning, or error")
+    .option("--interval-ms <ms>", "Polling interval in milliseconds")
+    .option("--once", "Run one watch evaluation and exit")
+    .action(async (options: PolicyWatchOptions) => {
+      process.exitCode = await policyWatchCommand(options);
+    });
 }
 
 export async function policyCheckCommand(
@@ -64,6 +85,36 @@ export async function policyCheckCommand(
     const report = await buildPolicyCheckReport(options, runtime);
     writePolicyCheckReport(report, options, runtime);
     return report.exitCode;
+  } catch (err) {
+    runtime.error(err instanceof Error ? err.message : String(err));
+    return 2;
+  }
+}
+
+export async function policyWatchCommand(
+  options: PolicyWatchOptions,
+  runtime: PolicyCommandRuntime = defaultRuntime,
+): Promise<number> {
+  try {
+    const intervalMs = normalizeWatchIntervalMs(options.intervalMs);
+    let previousKey: string | undefined;
+    for (;;) {
+      const report = await buildPolicyCheckReport(options, runtime);
+      const status = policyWatchStatus(report);
+      const key = `${status}:${report.attestation?.attestationHash ?? ""}:${report.exitCode}`;
+      if (previousKey === undefined || previousKey !== key || options.once === true) {
+        writePolicyWatchReport(report, status, options, runtime);
+        previousKey = key;
+      }
+      if (options.once === true) {
+        return status === "stale" ? 1 : report.exitCode;
+      }
+      if (runtime.sleep !== undefined) {
+        await runtime.sleep(intervalMs);
+      } else {
+        await sleep(intervalMs);
+      }
+    }
   } catch (err) {
     runtime.error(err instanceof Error ? err.message : String(err));
     return 2;
@@ -202,6 +253,64 @@ function writePolicyCheckReport(
       runtime.writeStdout(`  [${severity}] ${checkId}${where}${line} - ${message}\n`);
     }
   }
+}
+
+function writePolicyWatchReport(
+  report: PolicyCheckReport,
+  status: "clean" | "findings" | "stale",
+  options: PolicyWatchOptions,
+  runtime: PolicyCommandRuntime,
+): void {
+  if (options.json === true || !process.stdout.isTTY) {
+    runtime.writeStdout(
+      JSON.stringify({
+        status,
+        ok: report.ok,
+        expectedAttestationHash: report.expectedAttestationHash,
+        attestation: report.attestation,
+        findings: report.findings,
+      }) + "\n",
+    );
+    return;
+  }
+  if (status === "stale") {
+    runtime.writeStdout(
+      `policy watch: accepted attestation is stale (current ${report.attestation?.attestationHash}, expected ${report.expectedAttestationHash}). Review policy check output, then update the supervisor/gateway accepted attestation.\n`,
+    );
+    return;
+  }
+  if (status === "findings") {
+    runtime.writeStdout(
+      `policy watch: ${report.findings.length} finding(s); accepted attestation cannot be updated until policy check is clean.\n`,
+    );
+    return;
+  }
+  runtime.writeStdout(
+    `policy watch: clean (attestation ${report.attestation?.attestationHash}, evidence ${report.attestation?.workspace.hash})\n`,
+  );
+}
+
+function policyWatchStatus(report: PolicyCheckReport): "clean" | "findings" | "stale" {
+  if (
+    !report.ok &&
+    report.findings.some((finding) => finding.checkId !== "policy/attestation-hash-mismatch")
+  ) {
+    return "findings";
+  }
+  const expected = report.expectedAttestationHash?.trim();
+  if (
+    expected &&
+    report.attestation !== undefined &&
+    report.attestation.attestationHash !== expected
+  ) {
+    return "stale";
+  }
+  return report.ok ? "clean" : "findings";
+}
+
+function normalizeWatchIntervalMs(value: string | number | undefined): number {
+  const raw = typeof value === "number" ? value : Number.parseInt(value ?? "", 10);
+  return Number.isFinite(raw) && raw >= 250 ? raw : 2000;
 }
 
 function toJsonFinding(finding: HealthFinding): Record<string, unknown> {
