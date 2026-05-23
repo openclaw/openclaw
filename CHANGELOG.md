@@ -74,6 +74,8 @@ Docs: https://docs.openclaw.ai
 - OpenAI/images: route Codex API-key image generation through the native OpenAI Images API instead of the Codex OAuth streaming backend, avoiding 401s from valid API keys.
 - Agents/OpenAI completions: omit empty tool payload fields for proxy-like OpenAI-compatible endpoints so strict vLLM-style servers accept tool-free turns. (#85835) Thanks @rendrag-git.
 - Sandbox: keep workspace skill mounts read-only for remote container-cwd file operations and reject symlinked skill roots before creating protected overlays. (#85591) Thanks @jason-allen-oneal.
+- Scripts/Windows: route remaining QA, release, profile, and live-media `pnpm` launches through the managed runner so native Windows avoids brittle `.cmd` execution and shell-argv warnings.
+- Release: align generated config/API baselines and the meeting-notes plugin version so release preflight stays green on native Windows.
 - Checks/Windows: route full `pnpm check` stage commands through the managed child runner so Windows avoids Node shell-argv deprecation warnings there too.
 - Checks/Windows: run managed child commands through explicit `cmd.exe` wrapping instead of Node shell mode with argv, avoiding Node 24 subprocess deprecation warnings during changed checks.
 - Gateway: omit internal stream-error placeholder entries from agent prompt history so failed assistant turns are not replayed as model-authored text. (#85652) Thanks @anyech.
