@@ -4,10 +4,14 @@ import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
 import { describe, expect, it } from "vitest";
-import { signalExitCode } from "../../scripts/lib/managed-child-process.mjs";
+import {
+  createManagedCommandSpawnSpec,
+  signalExitCode,
+} from "../../scripts/lib/managed-child-process.mjs";
 import { createScriptTestHarness } from "./test-helpers.js";
 
 const { createTempDir } = createScriptTestHarness();
+const posixIt = process.platform === "win32" ? it.skip : it;
 
 function expectProcessPid(pid: number | undefined): number {
   if (pid == null) {
@@ -23,7 +27,64 @@ describe("managed-child-process", () => {
     expect(signalExitCode("SIGTERM")).toBe(143);
   });
 
-  it("kills the managed child process group when the runner is terminated", async () => {
+  it("wraps Windows shell argv through cmd.exe without Node shell mode", () => {
+    expect(
+      createManagedCommandSpawnSpec({
+        args: ["lint:scripts", "--", "scripts"],
+        bin: "pnpm.cmd",
+        comSpec: "C:\\Windows\\System32\\cmd.exe",
+        env: {},
+        platform: "win32",
+        shell: true,
+      }),
+    ).toEqual({
+      args: ["/d", "/s", "/c", "pnpm.cmd lint:scripts -- scripts"],
+      command: "C:\\Windows\\System32\\cmd.exe",
+      options: {
+        cwd: undefined,
+        detached: false,
+        env: {},
+        shell: false,
+        stdio: "inherit",
+        windowsVerbatimArguments: true,
+      },
+    });
+  });
+
+  it("preserves explicit non-shell Windows subprocesses", () => {
+    expect(
+      createManagedCommandSpawnSpec({
+        args: ["--version"],
+        bin: "node.exe",
+        platform: "win32",
+        shell: false,
+      }),
+    ).toEqual({
+      args: ["--version"],
+      command: "node.exe",
+      options: {
+        cwd: undefined,
+        detached: false,
+        env: undefined,
+        shell: false,
+        stdio: "inherit",
+        windowsVerbatimArguments: undefined,
+      },
+    });
+  });
+
+  it("rejects unsafe Windows shell argv instead of passing them to Node shell mode", () => {
+    expect(() =>
+      createManagedCommandSpawnSpec({
+        args: ["build && pnpm test"],
+        bin: "pnpm.cmd",
+        platform: "win32",
+        shell: true,
+      }),
+    ).toThrow("unsafe Windows cmd.exe argument detected");
+  });
+
+  posixIt("kills the managed child process group when the runner is terminated", async () => {
     const dir = createTempDir("openclaw-managed-child-");
     const childPath = path.join(dir, "child.mjs");
     const runnerPath = path.join(dir, "runner.mjs");
