@@ -30,27 +30,6 @@
             "reasoning": true,
             "input": ["text", "image"],
             "contextWindow": 200000
-          },
-          {
-            "id": "claude-opus-4-5",
-            "name": "Claude Opus 4.5 (Claude CLI)",
-            "reasoning": true,
-            "input": ["text", "image"],
-            "contextWindow": 200000
-          },
-          {
-            "id": "claude-sonnet-4-5",
-            "name": "Claude Sonnet 4.5 (Claude CLI)",
-            "reasoning": true,
-            "input": ["text", "image"],
-            "contextWindow": 200000
-          },
-          {
-            "id": "claude-haiku-4-5",
-            "name": "Claude Haiku 4.5 (Claude CLI)",
-            "reasoning": true,
-            "input": ["text", "image"],
-            "contextWindow": 200000
           }
         ]
       }
@@ -67,9 +46,7 @@
       "anthropic": {
         "aliases": {
           "opus-4.6": "claude-opus-4-6",
-          "opus-4.5": "claude-opus-4-5",
-          "sonnet-4.6": "claude-sonnet-4-6",
-          "sonnet-4.5": "claude-sonnet-4-5"
+          "sonnet-4.6": "claude-sonnet-4-6"
         }
       }
     }

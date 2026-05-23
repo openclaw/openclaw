@@ -74,8 +74,12 @@ describe("github-copilot model defaults", () => {
       expect(getDefaultCopilotModelIds()).toContain("claude-sonnet-4.6");
     });
 
-    it("includes claude-sonnet-4.5", () => {
-      expect(getDefaultCopilotModelIds()).toContain("claude-sonnet-4.5");
+    it("excludes retired and old Claude fallback rows", () => {
+      expect(getDefaultCopilotModelIds()).not.toContain("claude-sonnet-4");
+      expect(getDefaultCopilotModelIds()).not.toContain("claude-sonnet-4.5");
+      expect(getDefaultCopilotModelIds()).not.toContain("claude-opus-4.5");
+      expect(getDefaultCopilotModelIds()).not.toContain("claude-haiku-4.5");
+      expect(getDefaultCopilotModelIds()).not.toContain("grok-code-fast-1");
     });
 
     it("returns a mutable copy", () => {

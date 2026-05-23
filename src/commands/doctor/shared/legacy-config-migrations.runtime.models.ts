@@ -1,3 +1,4 @@
+import { splitTrailingAuthProfile } from "../../../agents/model-ref-profile.js";
 import {
   defineLegacyConfigMigration,
   getRecord,
@@ -37,7 +38,371 @@ const INVALID_THINKING_FORMAT_RULE: LegacyConfigRule = {
   match: (value) => hasInvalidThinkingFormat(value),
 };
 
+function normalizeString(value: unknown): string {
+  return typeof value === "string" ? value.trim().toLowerCase() : "";
+}
+
+function preferredClaudeSeparator(provider: string | undefined): "." | "-" {
+  return provider === "github-copilot" || provider === "copilot-proxy" ? "." : "-";
+}
+
+function claudeTargetModelId(
+  family: "opus" | "sonnet",
+  separator: "." | "-",
+  provider?: string,
+): string {
+  const version =
+    family === "opus" && provider !== "venice" && provider !== "vercel-ai-gateway" ? "4.7" : "4.6";
+  return `claude-${family}-${separator === "." ? version : version.replace(".", "-")}`;
+}
+
+function shouldUpgradeClaudeProvider(provider: string | undefined): boolean {
+  return (
+    !provider ||
+    provider === "anthropic" ||
+    provider === "github-copilot" ||
+    provider === "copilot-proxy" ||
+    provider === "venice" ||
+    provider === "vercel-ai-gateway"
+  );
+}
+
+function hasRetiredVersionPrefix(normalized: string, prefix: string): boolean {
+  if (normalized === prefix) {
+    return true;
+  }
+  if (!normalized.startsWith(prefix)) {
+    return false;
+  }
+  const next = normalized[prefix.length];
+  return next === "-" || next === "." || next === ":" || next === "@";
+}
+
+function hasAnyRetiredVersionPrefix(normalized: string, prefixes: readonly string[]): boolean {
+  return prefixes.some((prefix) => hasRetiredVersionPrefix(normalized, prefix));
+}
+
+function upgradeOldClaudeToken(
+  token: string,
+  separator: "." | "-",
+  provider?: string,
+): string | null {
+  const normalized = normalizeString(token);
+  if (!normalized) {
+    return null;
+  }
+  const opusTarget = claudeTargetModelId("opus", separator, provider);
+  const sonnetTarget = claudeTargetModelId("sonnet", separator, provider);
+  if (
+    normalized.startsWith("claude-opus-4-7") ||
+    normalized.startsWith("claude-opus-4.7") ||
+    normalized.startsWith("claude-opus-4-6") ||
+    normalized.startsWith("claude-opus-4.6") ||
+    normalized.startsWith("claude-sonnet-4-6") ||
+    normalized.startsWith("claude-sonnet-4.6")
+  ) {
+    return null;
+  }
+  if (
+    normalized === "claude-opus-4" ||
+    hasAnyRetiredVersionPrefix(normalized, [
+      "claude-opus-4-5",
+      "claude-opus-4.5",
+      "claude-opus-4-1",
+      "claude-opus-4.1",
+      "claude-opus-4-0",
+      "claude-opus-4.0",
+    ]) ||
+    /^claude-opus-4-20\d{6}/.test(normalized)
+  ) {
+    return opusTarget;
+  }
+  if (
+    normalized === "claude-sonnet-4" ||
+    hasAnyRetiredVersionPrefix(normalized, [
+      "claude-sonnet-4-5",
+      "claude-sonnet-4.5",
+      "claude-sonnet-4-1",
+      "claude-sonnet-4.1",
+      "claude-sonnet-4-0",
+      "claude-sonnet-4.0",
+      "claude-haiku-4-5",
+      "claude-haiku-4.5",
+    ]) ||
+    /^claude-sonnet-4-20\d{6}/.test(normalized)
+  ) {
+    return sonnetTarget;
+  }
+  if (normalized.startsWith("claude-3") && normalized.includes("opus")) {
+    return opusTarget;
+  }
+  if (
+    normalized.startsWith("claude-3") &&
+    (normalized.includes("sonnet") || normalized.includes("haiku"))
+  ) {
+    return sonnetTarget;
+  }
+  if (normalized.startsWith("anthropic.claude-opus-")) {
+    if (provider === "amazon-bedrock" || provider === "amazon-bedrock-mantle") {
+      return null;
+    }
+    if (
+      normalized.startsWith("anthropic.claude-opus-4-7") ||
+      normalized.startsWith("anthropic.claude-opus-4-6")
+    ) {
+      return null;
+    }
+    return `anthropic.${claudeTargetModelId("opus", "-", provider)}`;
+  }
+  if (
+    normalized.startsWith("anthropic.claude-sonnet-") ||
+    normalized.startsWith("anthropic.claude-haiku-")
+  ) {
+    if (provider === "amazon-bedrock" || provider === "amazon-bedrock-mantle") {
+      return null;
+    }
+    if (normalized.startsWith("anthropic.claude-sonnet-4-6")) {
+      return null;
+    }
+    return `anthropic.${claudeTargetModelId("sonnet", "-", provider)}`;
+  }
+  if (
+    normalized === "opus-4.5" ||
+    normalized === "opus-4.1" ||
+    normalized === "opus-4" ||
+    normalized === "opus-3"
+  ) {
+    return opusTarget;
+  }
+  if (
+    normalized === "sonnet-4.5" ||
+    normalized === "sonnet-4.1" ||
+    normalized === "sonnet-4.0" ||
+    normalized === "sonnet-4" ||
+    normalized === "sonnet-3.7" ||
+    normalized === "sonnet-3.5" ||
+    normalized === "sonnet-3" ||
+    normalized === "haiku-4.5" ||
+    normalized === "haiku-3.5" ||
+    normalized === "haiku-3"
+  ) {
+    return sonnetTarget;
+  }
+  return null;
+}
+
+function upgradeOldClaudeModelPart(model: string, provider: string | undefined): string | null {
+  const separator = preferredClaudeSeparator(provider);
+  const slashParts = model.split("/");
+  const lastPart = slashParts.at(-1);
+  if (lastPart) {
+    const upgraded = upgradeOldClaudeToken(lastPart, separator, provider);
+    if (upgraded) {
+      return [...slashParts.slice(0, -1), upgraded].join("/");
+    }
+  }
+  return upgradeOldClaudeToken(model, separator, provider);
+}
+
+function upgradeRetiredModelRef(value: string): string | null {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return null;
+  }
+  const split = splitTrailingAuthProfile(trimmed);
+  const modelRef = split.model;
+  const slash = modelRef.indexOf("/");
+  const provider = slash > 0 ? modelRef.slice(0, slash).trim() : undefined;
+  const model = slash > 0 ? modelRef.slice(slash + 1).trim() : modelRef;
+  const normalizedProvider = normalizeString(provider);
+  const normalizedModel = normalizeString(model);
+
+  if (
+    (normalizedProvider === "github-copilot" || normalizedProvider === "copilot-proxy") &&
+    normalizedModel === "grok-code-fast-1"
+  ) {
+    return `${provider}/gpt-5-mini${split.profile ? `@${split.profile}` : ""}`;
+  }
+  if (!shouldUpgradeClaudeProvider(normalizedProvider || undefined)) {
+    return null;
+  }
+
+  const upgradedModel = upgradeOldClaudeModelPart(model, normalizedProvider || undefined);
+  if (!upgradedModel || upgradedModel === model) {
+    return null;
+  }
+  const upgraded = provider ? `${provider}/${upgradedModel}` : upgradedModel;
+  return `${upgraded}${split.profile ? `@${split.profile}` : ""}`;
+}
+
+const MODEL_REF_STRING_KEYS = new Set([
+  "model",
+  "primary",
+  "summaryModel",
+  "imageModel",
+  "imageGenerationModel",
+  "musicGenerationModel",
+  "pdfModel",
+  "videoGenerationModel",
+]);
+const MODEL_REF_ARRAY_KEYS = new Set([
+  "fallback",
+  "fallbacks",
+  "allowedModels",
+  "modelFallbacks",
+  "imageModelFallbacks",
+]);
+const MODEL_REF_MAP_KEYS = new Set(["models"]);
+
+function pathKey(path: string): string {
+  return path.slice(path.lastIndexOf(".") + 1);
+}
+
+function isChannelModelOverridePath(path: string): boolean {
+  return path.includes(".modelByChannel.");
+}
+
+function scanKnownModelRefs(value: unknown, key?: string, path = ""): boolean {
+  if (typeof value === "string") {
+    return Boolean(
+      key &&
+      (MODEL_REF_STRING_KEYS.has(key) || isChannelModelOverridePath(path)) &&
+      upgradeRetiredModelRef(value),
+    );
+  }
+  if (Array.isArray(value)) {
+    return value.some((entry, index) =>
+      typeof entry === "string" && key && MODEL_REF_ARRAY_KEYS.has(key)
+        ? Boolean(upgradeRetiredModelRef(entry))
+        : scanKnownModelRefs(entry, undefined, `${path}.${index}`),
+    );
+  }
+  const record = getRecord(value);
+  if (!record) {
+    return false;
+  }
+  if (key && MODEL_REF_MAP_KEYS.has(key)) {
+    return Object.keys(record).some((entryKey) => Boolean(upgradeRetiredModelRef(entryKey)));
+  }
+  return Object.entries(record).some(([childKey, child]) =>
+    scanKnownModelRefs(child, childKey, `${path}.${childKey}`),
+  );
+}
+
+function rewriteModelRefString(value: string, path: string, changes: string[]): string {
+  const upgraded = upgradeRetiredModelRef(value);
+  if (!upgraded) {
+    return value;
+  }
+  changes.push(`Upgraded ${path} from ${JSON.stringify(value)} to ${JSON.stringify(upgraded)}.`);
+  return upgraded;
+}
+
+function rewriteModelRefMapKeys(
+  record: Record<string, unknown>,
+  path: string,
+  changes: string[],
+): { value: Record<string, unknown>; changed: boolean } {
+  let changed = false;
+  const next: Record<string, unknown> = {};
+  for (const [key, child] of Object.entries(record)) {
+    const upgradedKey = upgradeRetiredModelRef(key);
+    const nextKey = upgradedKey ?? key;
+    if (upgradedKey) {
+      changes.push(
+        `Upgraded ${path} key from ${JSON.stringify(key)} to ${JSON.stringify(upgradedKey)}.`,
+      );
+      changed = true;
+    }
+    if (nextKey in next && upgradedKey) {
+      continue;
+    }
+    next[nextKey] = child;
+  }
+  return { value: changed ? next : record, changed };
+}
+
+function rewriteKnownModelRefs(
+  value: unknown,
+  path: string,
+  changes: string[],
+): { value: unknown; changed: boolean } {
+  const key = pathKey(path);
+  if (typeof value === "string") {
+    if (!MODEL_REF_STRING_KEYS.has(key) && !isChannelModelOverridePath(path)) {
+      return { value, changed: false };
+    }
+    const next = rewriteModelRefString(value, path, changes);
+    return { value: next, changed: next !== value };
+  }
+  if (Array.isArray(value)) {
+    let changed = false;
+    const next = value.map((entry, index) => {
+      if (typeof entry === "string" && MODEL_REF_ARRAY_KEYS.has(key)) {
+        const rewritten = rewriteModelRefString(entry, `${path}.${index}`, changes);
+        changed ||= rewritten !== entry;
+        return rewritten;
+      }
+      const rewritten = rewriteKnownModelRefs(entry, `${path}.${index}`, changes);
+      changed ||= rewritten.changed;
+      return rewritten.value;
+    });
+    return { value: changed ? next : value, changed };
+  }
+  const record = getRecord(value);
+  if (!record) {
+    return { value, changed: false };
+  }
+
+  let working = record;
+  let changed = false;
+  if (MODEL_REF_MAP_KEYS.has(key)) {
+    const rewrittenKeys = rewriteModelRefMapKeys(record, path, changes);
+    working = rewrittenKeys.value;
+    changed ||= rewrittenKeys.changed;
+  }
+
+  const next: Record<string, unknown> = {};
+  for (const [childKey, child] of Object.entries(working)) {
+    const rewritten = rewriteKnownModelRefs(child, `${path}.${childKey}`, changes);
+    changed ||= rewritten.changed;
+    next[childKey] = rewritten.value;
+  }
+  return { value: changed ? next : value, changed };
+}
+
+const RETIRED_MODEL_REF_MESSAGE =
+  'Configured Claude models older than 4.6 or retired Copilot model refs are no longer in the bundled catalogs; run "openclaw doctor --fix" to upgrade them.';
+const RETIRED_MODEL_REF_RULES: LegacyConfigRule[] = [
+  "agents",
+  "plugins",
+  "messages",
+  "tools",
+  "hooks",
+  "channels",
+  "models",
+].map((section) => ({
+  path: [section],
+  message: RETIRED_MODEL_REF_MESSAGE,
+  match: (value) => scanKnownModelRefs(value),
+}));
+
 export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_MODELS: LegacyConfigMigrationSpec[] = [
+  defineLegacyConfigMigration({
+    id: "models.retired-claude-and-copilot-refs",
+    describe: "Upgrade retired Claude/Copilot model refs to current catalog entries",
+    legacyRules: RETIRED_MODEL_REF_RULES,
+    apply: (raw, changes) => {
+      const rewritten = rewriteKnownModelRefs(raw, "config", changes);
+      if (!rewritten.changed || !getRecord(rewritten.value)) {
+        return;
+      }
+      for (const key of Object.keys(raw)) {
+        delete raw[key];
+      }
+      Object.assign(raw, rewritten.value);
+    },
+  }),
   defineLegacyConfigMigration({
     id: "models.providers.*.models.*.compat.thinkingFormat-invalid",
     describe: "Remove unrecognized compat.thinkingFormat values from provider model entries",

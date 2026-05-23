@@ -7,10 +7,7 @@ const CLAUDE_CLI_DEFAULT_CONTEXT_WINDOW = 200_000;
 const CLAUDE_CLI_MODEL_LABELS: Record<string, string> = {
   "claude-opus-4-7": "Claude Opus 4.7 (Claude CLI)",
   "claude-opus-4-6": "Claude Opus 4.6 (Claude CLI)",
-  "claude-opus-4-5": "Claude Opus 4.5 (Claude CLI)",
   "claude-sonnet-4-6": "Claude Sonnet 4.6 (Claude CLI)",
-  "claude-sonnet-4-5": "Claude Sonnet 4.5 (Claude CLI)",
-  "claude-haiku-4-5": "Claude Haiku 4.5 (Claude CLI)",
 };
 
 function extractClaudeCliModelIds(): string[] {

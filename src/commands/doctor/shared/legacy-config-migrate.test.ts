@@ -855,9 +855,12 @@ describe("legacy migrate heartbeat config", () => {
       },
     });
 
-    expect(res.changes).toStrictEqual(["Moved heartbeat → agents.defaults.heartbeat."]);
+    expect(res.changes).toStrictEqual([
+      "Moved heartbeat → agents.defaults.heartbeat.",
+      'Upgraded config.agents.defaults.heartbeat.model from "anthropic/claude-3-5-haiku-20241022" to "anthropic/claude-sonnet-4-6".',
+    ]);
     expect(res.config?.agents?.defaults?.heartbeat).toEqual({
-      model: "anthropic/claude-3-5-haiku-20241022",
+      model: "anthropic/claude-sonnet-4-6",
       every: "30m",
     });
     expect((res.config as { heartbeat?: unknown } | null)?.heartbeat).toBeUndefined();
@@ -901,11 +904,12 @@ describe("legacy migrate heartbeat config", () => {
 
     expect(res.changes).toStrictEqual([
       "Merged heartbeat → agents.defaults.heartbeat (filled missing fields from legacy; kept explicit agents.defaults values).",
+      'Upgraded config.agents.defaults.heartbeat.model from "anthropic/claude-3-5-haiku-20241022" to "anthropic/claude-sonnet-4-6".',
     ]);
     expect(res.config?.agents?.defaults?.heartbeat).toEqual({
       every: "1h",
       target: "telegram",
-      model: "anthropic/claude-3-5-haiku-20241022",
+      model: "anthropic/claude-sonnet-4-6",
     });
     expect((res.config as { heartbeat?: unknown } | null)?.heartbeat).toBeUndefined();
   });
@@ -957,7 +961,7 @@ describe("legacy migrate heartbeat config", () => {
     expect(res.config?.agents?.defaults?.heartbeat).toEqual({
       every: "1h",
       target: "telegram",
-      model: "anthropic/claude-3-5-haiku-20241022",
+      model: "anthropic/claude-sonnet-4-6",
     });
     expect((res.config as { heartbeat?: unknown } | null)?.heartbeat).toBeUndefined();
   });
@@ -1138,6 +1142,130 @@ describe("legacy migrate controlUi.allowedOrigins seed (issue #29385)", () => {
 });
 
 describe("legacy model compat migrate", () => {
+  it("upgrades retired Claude and Copilot model refs", () => {
+    const res = migrateLegacyConfigForTest({
+      agents: {
+        defaults: {
+          workspace: "/tmp/claude-3-sonnet",
+          imageModel: "anthropic/claude-haiku-4-5",
+          imageGenerationModel: {
+            primary: "github-copilot/claude-sonnet-4",
+            fallbacks: ["github-copilot/grok-code-fast-1"],
+          },
+          musicGenerationModel: "vercel-ai-gateway/anthropic/claude-opus-4-5",
+          pdfModel: "anthropic/claude-3-5-sonnet",
+          videoGenerationModel: "anthropic/claude-opus-4-10",
+          model: {
+            primary: "anthropic/claude-opus-4-5@anthropic:work",
+            fallbacks: [
+              "anthropic/claude-sonnet-4-20250514",
+              "github-copilot/claude-sonnet-4",
+              "github-copilot/grok-code-fast-1@github:work",
+              "venice/claude-opus-4-5",
+              "vercel-ai-gateway/anthropic/claude-opus-4-5",
+              "anthropic/claude-opus-5-0",
+              "anthropic/claude-sonnet-4-7",
+              "anthropic/claude-opus-4-10",
+              "kilocode/anthropic/claude-sonnet-4",
+              "amazon-bedrock/anthropic.claude-3-5-sonnet-20241022-v2:0",
+              "openai/gpt-5.5",
+            ],
+          },
+          models: {
+            "anthropic/claude-haiku-4-5": { alias: "haiku" },
+            "anthropic/claude-sonnet-4-6": { alias: "current-sonnet" },
+            "github-copilot/claude-opus-4.5": { alias: "copilot-opus" },
+            "github-copilot/gpt-5-mini": { alias: "mini" },
+          },
+        },
+      },
+      plugins: {
+        entries: {
+          "lossless-claw": {
+            config: {
+              summaryModel: "anthropic/claude-3-5-sonnet",
+              dataPath: "/tmp/claude-opus-4-5",
+            },
+            subagent: {
+              allowedModels: ["anthropic/claude-haiku-4-5", "*"],
+            },
+          },
+        },
+      },
+      channels: {
+        modelByChannel: {
+          telegram: {
+            "*": "anthropic/claude-opus-4-5",
+          },
+        },
+      },
+    });
+
+    expect(res.config?.agents?.defaults?.imageModel).toBe("anthropic/claude-sonnet-4-6");
+    expect(res.config?.agents?.defaults?.imageGenerationModel).toEqual({
+      primary: "github-copilot/claude-sonnet-4.6",
+      fallbacks: ["github-copilot/gpt-5-mini"],
+    });
+    expect(res.config?.agents?.defaults?.musicGenerationModel).toBe(
+      "vercel-ai-gateway/anthropic/claude-opus-4-6",
+    );
+    expect(res.config?.agents?.defaults?.pdfModel).toBe("anthropic/claude-sonnet-4-6");
+    expect(res.config?.agents?.defaults?.videoGenerationModel).toBe("anthropic/claude-opus-4-10");
+    expect(res.config?.agents?.defaults?.model).toEqual({
+      primary: "anthropic/claude-opus-4-7@anthropic:work",
+      fallbacks: [
+        "anthropic/claude-sonnet-4-6",
+        "github-copilot/claude-sonnet-4.6",
+        "github-copilot/gpt-5-mini@github:work",
+        "venice/claude-opus-4-6",
+        "vercel-ai-gateway/anthropic/claude-opus-4-6",
+        "anthropic/claude-opus-5-0",
+        "anthropic/claude-sonnet-4-7",
+        "anthropic/claude-opus-4-10",
+        "kilocode/anthropic/claude-sonnet-4",
+        "amazon-bedrock/anthropic.claude-3-5-sonnet-20241022-v2:0",
+        "openai/gpt-5.5",
+      ],
+    });
+    expect(res.config?.agents?.defaults?.workspace).toBe("/tmp/claude-3-sonnet");
+    expect(res.config?.agents?.defaults?.models).toEqual({
+      "anthropic/claude-sonnet-4-6": { alias: "current-sonnet" },
+      "github-copilot/claude-opus-4.7": { alias: "copilot-opus" },
+      "github-copilot/gpt-5-mini": { alias: "mini" },
+    });
+    expect(
+      (res.config?.plugins?.entries?.["lossless-claw"] as { config?: { summaryModel?: string } })
+        ?.config?.summaryModel,
+    ).toBe("anthropic/claude-sonnet-4-6");
+    expect(
+      (res.config?.plugins?.entries?.["lossless-claw"] as { config?: { dataPath?: string } })
+        ?.config?.dataPath,
+    ).toBe("/tmp/claude-opus-4-5");
+    expect(
+      (
+        res.config?.plugins?.entries?.["lossless-claw"] as {
+          subagent?: { allowedModels?: string[] };
+        }
+      )?.subagent?.allowedModels,
+    ).toEqual(["anthropic/claude-sonnet-4-6", "*"]);
+    expect(res.config?.channels?.modelByChannel?.telegram?.["*"]).toBe("anthropic/claude-opus-4-7");
+    expectMigrationChangesToIncludeFragments(res.changes, [
+      'config.agents.defaults.imageModel from "anthropic/claude-haiku-4-5" to "anthropic/claude-sonnet-4-6"',
+      'config.agents.defaults.imageGenerationModel.primary from "github-copilot/claude-sonnet-4" to "github-copilot/claude-sonnet-4.6"',
+      'config.agents.defaults.imageGenerationModel.fallbacks.0 from "github-copilot/grok-code-fast-1" to "github-copilot/gpt-5-mini"',
+      'config.agents.defaults.musicGenerationModel from "vercel-ai-gateway/anthropic/claude-opus-4-5" to "vercel-ai-gateway/anthropic/claude-opus-4-6"',
+      'config.agents.defaults.pdfModel from "anthropic/claude-3-5-sonnet" to "anthropic/claude-sonnet-4-6"',
+      'config.agents.defaults.model.primary from "anthropic/claude-opus-4-5@anthropic:work" to "anthropic/claude-opus-4-7@anthropic:work"',
+      'config.agents.defaults.model.fallbacks.2 from "github-copilot/grok-code-fast-1@github:work" to "github-copilot/gpt-5-mini@github:work"',
+      'config.agents.defaults.model.fallbacks.3 from "venice/claude-opus-4-5" to "venice/claude-opus-4-6"',
+      'config.agents.defaults.model.fallbacks.4 from "vercel-ai-gateway/anthropic/claude-opus-4-5" to "vercel-ai-gateway/anthropic/claude-opus-4-6"',
+      'config.agents.defaults.models key from "github-copilot/claude-opus-4.5" to "github-copilot/claude-opus-4.7"',
+      'config.plugins.entries.lossless-claw.config.summaryModel from "anthropic/claude-3-5-sonnet" to "anthropic/claude-sonnet-4-6"',
+      'config.plugins.entries.lossless-claw.subagent.allowedModels.0 from "anthropic/claude-haiku-4-5" to "anthropic/claude-sonnet-4-6"',
+      'config.channels.modelByChannel.telegram.* from "anthropic/claude-opus-4-5" to "anthropic/claude-opus-4-7"',
+    ]);
+  });
+
   it("removes unrecognized model compat thinkingFormat values", () => {
     const res = migrateLegacyConfigForTest({
       models: {

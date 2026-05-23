@@ -154,23 +154,6 @@ describe("anthropic stream wrappers", () => {
     expect(captured.headers?.["anthropic-beta"]).not.toContain(CONTEXT_1M_BETA);
   });
 
-  it("does not add beta headers for context1m-only legacy Sonnet 4.5 configs", () => {
-    const captured: { headers?: Record<string, string> } = {};
-    const wrapped = wrapAnthropicProviderStream({
-      streamFn: createPayloadCapturingBaseStream(captured),
-      modelId: "claude-sonnet-4-5",
-      extraParams: { context1m: true },
-    } as never);
-
-    void wrapped?.(
-      { provider: "anthropic", api: "anthropic-messages", id: "claude-sonnet-4-5" } as never,
-      {} as never,
-      { apiKey: "sk-ant-api-123" } as never,
-    );
-
-    expect(captured.headers?.["anthropic-beta"]).toBeUndefined();
-  });
-
   it("preserves OAuth-required betas when legacy context-1m is the only configured beta", () => {
     const captured: { headers?: Record<string, string> } = {};
     const wrapped = wrapAnthropicProviderStream({
