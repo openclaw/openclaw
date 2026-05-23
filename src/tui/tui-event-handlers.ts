@@ -331,6 +331,23 @@ export function createEventHandlers(context: EventHandlerContext) {
     return sessionRuns.has(activeRunId);
   };
 
+  const readLifecycleErrorMessage = (evt: AgentEvent): string => {
+    const data = evt.data ?? {};
+    return asString(data.error, "") || asString(data.errorMessage, "") || "unknown";
+  };
+
+  const isTerminalLifecycleError = (evt: AgentEvent): boolean => {
+    if (evt.stream !== "lifecycle" || asString(evt.data?.phase, "") !== "error") {
+      return false;
+    }
+    return typeof evt.data?.endedAt === "number";
+  };
+
+  const renderRunError = (errorMessage: string) => {
+    const renderedError = formatRawAssistantErrorForUi(errorMessage);
+    return resolveAuthErrorHint(errorMessage) ?? `run error: ${renderedError}`;
+  };
+
   const maybeRefreshHistoryForRun = (
     runId: string,
     opts?: { allowLocalWithoutDisplayableFinal?: boolean },
@@ -493,8 +510,7 @@ export function createEventHandlers(context: EventHandlerContext) {
       forgetLocalBtwRunId?.(evt.runId);
       const wasActiveRun = state.activeChatRunId === evt.runId;
       const errorMessage = evt.errorMessage ?? "unknown";
-      const renderedError = formatRawAssistantErrorForUi(errorMessage);
-      chatLog.addSystem(resolveAuthErrorHint(errorMessage) ?? `run error: ${renderedError}`);
+      chatLog.addSystem(renderRunError(errorMessage));
       terminateRun({ runId: evt.runId, wasActiveRun, status: "error" });
       maybeRefreshHistoryForRun(evt.runId);
     }
@@ -608,6 +624,15 @@ export function createEventHandlers(context: EventHandlerContext) {
       }
       if (phase === "error") {
         postFinalizingRuns.delete(evt.runId);
+        if (isTerminalLifecycleError(evt) && (isActiveRun || isPendingRun)) {
+          const wasActiveRun = state.activeChatRunId === evt.runId;
+          const errorMessage = readLifecycleErrorMessage(evt);
+          chatLog.dismissPendingSystem(evt.runId);
+          chatLog.addSystem(renderRunError(errorMessage));
+          terminateRun({ runId: evt.runId, wasActiveRun, status: "error" });
+          tui.requestRender();
+          return;
+        }
         if (!canUpdateActivityStatus) {
           return;
         }
