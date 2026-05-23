@@ -373,6 +373,7 @@ Docs: https://docs.openclaw.ai
 - Gateway/agents: return phase-aware `agent.wait` timeout attribution and only cool auth profiles on provider-started timeouts. Refs #65504. Thanks @100yenadmin.
 - Gateway/systemd: launch managed update handoff helpers in a transient user scope so systemd-supervised Update Now flows survive the gateway unit restart. Fixes #84068.
 - QA-Lab: use the lightweight Gateway health RPC for child readiness so live transport canaries do not load the full config schema during startup checks.
+- QA-Lab: release logged-out WhatsApp Convex credentials before retrying so a bad lease does not exhaust the live credential pool.
 - WhatsApp: register the channel runtime through a narrow setter entrypoint so gateway startup no longer imports the broad WhatsApp runtime barrel before live message handling.
 - Gateway: defer provider auth-state prewarm until after startup readiness so early gateway tool/session requests are not blocked by provider auth discovery. (#85272) Thanks @dutifulbob.
 - Gateway/models: coalesce provider auth-state rewarms after auth-profile failures and log event-loop delay for warm/rewarm work, so provider auth bursts no longer stack full auth sweeps behind channel replies.

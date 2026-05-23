@@ -197,6 +197,34 @@ type WhatsAppCredentialLease = Awaited<
 type WhatsAppCredentialHeartbeat = ReturnType<typeof startQaCredentialLeaseHeartbeat>;
 type WhatsAppQaGatewayHandle = Awaited<ReturnType<typeof startQaGatewayChild>>;
 
+async function discardRejectedWhatsAppCredentialLease(params: {
+  cleanupIssues: string[];
+  heartbeat: WhatsAppCredentialHeartbeat;
+  heartbeats: WhatsAppCredentialHeartbeat[];
+  lease: WhatsAppCredentialLease;
+  leases: WhatsAppCredentialLease[];
+}) {
+  const heartbeatIndex = params.heartbeats.indexOf(params.heartbeat);
+  if (heartbeatIndex >= 0) {
+    params.heartbeats.splice(heartbeatIndex, 1);
+  }
+  try {
+    await params.heartbeat.stop();
+  } catch (error) {
+    appendLiveLaneIssue(params.cleanupIssues, "credential heartbeat stop failed", error);
+  }
+
+  const leaseIndex = params.leases.indexOf(params.lease);
+  if (leaseIndex >= 0) {
+    params.leases.splice(leaseIndex, 1);
+  }
+  try {
+    await params.lease.release();
+  } catch (error) {
+    appendLiveLaneIssue(params.cleanupIssues, "credential release failed", error);
+  }
+}
+
 const WHATSAPP_QA_CAPTURE_CONTENT_ENV = "OPENCLAW_QA_WHATSAPP_CAPTURE_CONTENT";
 const WHATSAPP_QA_GATEWAY_HEAP_CHECKPOINTS_ENV = "OPENCLAW_QA_GATEWAY_HEAP_CHECKPOINTS";
 const QA_REDACT_PUBLIC_METADATA_ENV = "OPENCLAW_QA_REDACT_PUBLIC_METADATA";
@@ -1301,6 +1329,14 @@ export async function runWhatsAppQaLive(params: {
         cleanupIssues.push(
           `WhatsApp credential ${toCredentialFingerprint(credentialLease.credentialId) ?? "<unknown>"} was logged out; trying another Convex lease.`,
         );
+        await discardRejectedWhatsAppCredentialLease({
+          cleanupIssues,
+          heartbeat,
+          heartbeats: leaseHeartbeats,
+          lease: credentialLease,
+          leases: credentialLeases,
+        });
+        credentialLease = undefined;
       }
     }
 
@@ -1557,6 +1593,7 @@ export const testing = {
   buildWhatsAppGatewayRuntimeEnvPatch,
   buildWhatsAppQaConfig,
   createMissingGroupJidScenarioResult,
+  discardRejectedWhatsAppCredentialLease,
   findScenarios,
   formatWhatsAppScenarioTimings,
   heapSnapshotLooksComplete,

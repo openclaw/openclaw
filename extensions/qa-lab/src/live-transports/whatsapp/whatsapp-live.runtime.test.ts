@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { testing } from "./whatsapp-live.runtime.js";
 
 const execFileAsync = promisify(execFile);
@@ -413,5 +413,29 @@ describe("WhatsApp QA live runtime", () => {
       ),
     ).toBe(true);
     expect(testing.isLoggedOutWhatsAppQaDriverError(new Error("Connection Closed"))).toBe(false);
+  });
+
+  it("releases rejected Convex WhatsApp credentials before retrying", async () => {
+    const cleanupIssues: string[] = [];
+    const release = vi.fn(async () => {});
+    const stop = vi.fn(async () => {});
+    const lease = { release } as never;
+    const heartbeat = { stop } as never;
+    const leases = [lease];
+    const heartbeats = [heartbeat];
+
+    await testing.discardRejectedWhatsAppCredentialLease({
+      cleanupIssues,
+      heartbeat,
+      heartbeats,
+      lease,
+      leases,
+    });
+
+    expect(stop).toHaveBeenCalledTimes(1);
+    expect(release).toHaveBeenCalledTimes(1);
+    expect(heartbeats).toEqual([]);
+    expect(leases).toEqual([]);
+    expect(cleanupIssues).toEqual([]);
   });
 });
