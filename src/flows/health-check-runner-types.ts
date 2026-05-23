@@ -12,6 +12,8 @@ export interface HealthCheckRunContext extends HealthCheckContext {
   readonly repair: boolean;
   readonly diff?: boolean;
   readonly previewRepair?: boolean;
+  /** Number of retry attempts for transient failures (default: 0) */
+  readonly retries?: number;
 }
 
 export interface HealthCheckRunResult extends Omit<HealthRepairResult, "changes" | "status"> {
