@@ -6,6 +6,7 @@ import { getSessionBindingService } from "openclaw/plugin-sdk/conversation-runti
 import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
 import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { telegramPlugin } from "./channel.js";
 
 const writeJsonFileAtomicallyMock = vi.hoisted(() => vi.fn());
 const readAcpSessionEntryMock = vi.hoisted(() => vi.fn());
@@ -64,6 +65,15 @@ async function flushMicrotasks(): Promise<void> {
   await Promise.resolve();
   await new Promise<void>((resolve) => queueMicrotask(resolve));
 }
+
+describe("telegram thread binding placement", () => {
+  it("keeps loaded plugin placement aligned with the bundled public artifact", async () => {
+    const api = await import("../thread-binding-api.js");
+
+    expect(telegramPlugin.conversationBindings?.defaultTopLevelPlacement).toBe("child");
+    expect(api.defaultTopLevelPlacement).toBe("child");
+  });
+});
 
 describe("telegram thread bindings", () => {
   const originalStateDir = process.env.OPENCLAW_STATE_DIR;

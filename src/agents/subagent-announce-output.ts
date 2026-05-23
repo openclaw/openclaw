@@ -291,6 +291,65 @@ function formatSubagentPartialProgress(
   return parts.join("\n\n") || undefined;
 }
 
+function isUnsafeSubagentOutputText(text: string | undefined): boolean {
+  const trimmed = text?.trim() ?? "";
+  if (!trimmed) {
+    return false;
+  }
+  if (
+    trimmed.includes("<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>") ||
+    trimmed.includes("<<<END_OPENCLAW_INTERNAL_CONTEXT>>>") ||
+    trimmed.includes("<<<BEGIN_UNTRUSTED_CHILD_RESULT>>>") ||
+    trimmed.includes("<<<END_UNTRUSTED_CHILD_RESULT>>>") ||
+    trimmed.includes("<<<EXTERNAL_UNTRUSTED_CONTENT") ||
+    trimmed.includes("<<<END_EXTERNAL_UNTRUSTED_CONTENT")
+  ) {
+    return true;
+  }
+  if (
+    /SECURITY NOTICE:\s*The following content is from an EXTERNAL, UNTRUSTED source/i.test(trimmed)
+  ) {
+    return true;
+  }
+  if (/"externalContent"\s*:\s*\{/.test(trimmed) && /"untrusted"\s*:\s*true/.test(trimmed)) {
+    return true;
+  }
+  if (/"sourceTool"\s*:\s*"subagent_announce"/.test(trimmed)) {
+    return true;
+  }
+  if (
+    /^\s*\{[\s\S]*"url"\s*:[\s\S]*"status"\s*:[\s\S]*"contentType"\s*:[\s\S]*"text"\s*:/.test(
+      trimmed,
+    )
+  ) {
+    return true;
+  }
+  try {
+    const parsed = JSON.parse(trimmed) as unknown;
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      return false;
+    }
+    const record = parsed as Record<string, unknown>;
+    const externalContent = record.externalContent;
+    if (
+      externalContent &&
+      typeof externalContent === "object" &&
+      !Array.isArray(externalContent) &&
+      (externalContent as Record<string, unknown>).untrusted === true
+    ) {
+      return true;
+    }
+    return (
+      typeof record.url === "string" &&
+      (typeof record.status === "number" || typeof record.status === "string") &&
+      typeof record.contentType === "string" &&
+      typeof record.text === "string"
+    );
+  } catch {
+    return false;
+  }
+}
+
 function selectSubagentOutputText(
   snapshot: SubagentOutputSnapshot,
   outcome?: SubagentRunOutcome,
@@ -301,14 +360,17 @@ function selectSubagentOutputText(
   if (snapshot.latestSilentText) {
     return snapshot.latestSilentText;
   }
-  if (snapshot.latestAssistantText) {
+  if (snapshot.latestAssistantText && !isUnsafeSubagentOutputText(snapshot.latestAssistantText)) {
     return snapshot.latestAssistantText;
   }
   const partialProgress = formatSubagentPartialProgress(snapshot, outcome);
-  if (partialProgress) {
+  if (partialProgress && !isUnsafeSubagentOutputText(partialProgress)) {
     return partialProgress;
   }
-  return snapshot.latestRawText;
+  if (snapshot.latestRawText && !isUnsafeSubagentOutputText(snapshot.latestRawText)) {
+    return snapshot.latestRawText;
+  }
+  return undefined;
 }
 
 export async function readSubagentOutput(
@@ -332,7 +394,9 @@ export async function readSubagentOutput(
     sessionKey,
     limit: 100,
   });
-  return latestAssistant?.trim() ? latestAssistant : undefined;
+  return latestAssistant?.trim() && !isUnsafeSubagentOutputText(latestAssistant)
+    ? latestAssistant
+    : undefined;
 }
 
 export async function readLatestSubagentOutputWithRetry(params: {

@@ -73,6 +73,8 @@ import {
   resolveSandboxRuntimeStatus,
   updateSessionStore,
   isAdminOnlyMethod,
+  getSessionBindingService,
+  resolveConversationDeliveryTarget,
 } from "./subagent-spawn.runtime.js";
 import {
   type SpawnSubagentContextMode,
@@ -694,6 +696,35 @@ function hasRoutableDeliveryOrigin(
   return Boolean(origin?.channel && origin.to);
 }
 
+function resolveBoundThreadDeliveryOrigin(params: {
+  childSessionKey: string;
+}): DeliveryContext | undefined {
+  const bindings = getSessionBindingService()
+    .listBySession(params.childSessionKey)
+    .filter((binding) => binding.status === "active");
+  for (const binding of bindings) {
+    const conversation = binding.conversation;
+    if (!conversation.parentConversationId) {
+      continue;
+    }
+    const target = resolveConversationDeliveryTarget({
+      channel: conversation.channel,
+      conversationId: conversation.conversationId,
+      parentConversationId: conversation.parentConversationId,
+    });
+    const origin = normalizeDeliveryContext({
+      channel: conversation.channel,
+      accountId: conversation.accountId,
+      to: target.to,
+      ...(target.threadId != null && target.threadId !== "" ? { threadId: target.threadId } : {}),
+    });
+    if (hasRoutableDeliveryOrigin(origin)) {
+      return origin;
+    }
+  }
+  return undefined;
+}
+
 export async function spawnSubagentDirect(
   params: SpawnSubagentParams,
   ctx: SpawnSubagentContext,
@@ -1011,9 +1042,12 @@ export async function spawnSubagentDirect(
       };
     }
     threadBindingReady = true;
-    hasBoundThreadDeliveryOrigin = hasRoutableDeliveryOrigin(bindResult.deliveryOrigin);
+    const boundThreadDeliveryOrigin = hasRoutableDeliveryOrigin(bindResult.deliveryOrigin)
+      ? bindResult.deliveryOrigin
+      : resolveBoundThreadDeliveryOrigin({ childSessionKey });
+    hasBoundThreadDeliveryOrigin = hasRoutableDeliveryOrigin(boundThreadDeliveryOrigin);
     childSessionOrigin =
-      mergeDeliveryContext(bindResult.deliveryOrigin, childSessionOrigin) ?? childSessionOrigin;
+      mergeDeliveryContext(boundThreadDeliveryOrigin, childSessionOrigin) ?? childSessionOrigin;
   }
   const mountPathHint = sanitizeMountPathHint(params.attachMountPath);
 

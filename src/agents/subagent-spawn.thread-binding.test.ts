@@ -193,6 +193,63 @@ describe("spawnSubagentDirect thread binding delivery", () => {
     expect(registeredRun?.spawnMode).toBe("session");
   });
 
+  it("delivers a persistent thread-bound run through an indirect session binding", async () => {
+    hoisted.hookRunner.hasHooks.mockImplementation(
+      (hookName?: string) => hookName === "subagent_spawning",
+    );
+    hoisted.hookRunner.runSubagentSpawning.mockResolvedValue({
+      status: "ok",
+      threadBindingReady: true,
+    });
+    currentSessionBindingService = {
+      listBySession: (targetSessionKey: string) =>
+        targetSessionKey.startsWith("agent:main:subagent:")
+          ? [
+              {
+                status: "active",
+                conversation: {
+                  channel: "telegram",
+                  accountId: "default",
+                  conversationId: "-100123",
+                  parentConversationId: "-100123:parent",
+                },
+              },
+            ]
+          : [],
+    };
+    currentDeliveryTargetResolver = (params) => ({
+      to: `chat:${String(params.conversationId)}`,
+      threadId: "topic-7",
+    });
+
+    const result = await spawnSubagentDirect(
+      {
+        task: "reply with a marker",
+        thread: true,
+        mode: "session",
+        context: "isolated",
+      },
+      {
+        agentSessionKey: "agent:main:telegram:default:topic:parent",
+        agentChannel: "telegram",
+        agentAccountId: "default",
+        agentTo: "chat:-100123",
+      },
+    );
+
+    expect(result.status).toBe("accepted");
+    const agentCall = hoisted.callGatewayMock.mock.calls.find(
+      ([call]) => (call as { method?: string }).method === "agent",
+    )?.[0] as { params?: Record<string, unknown> } | undefined;
+    expect(agentCall?.params?.channel).toBe("telegram");
+    expect(agentCall?.params?.accountId).toBe("default");
+    expect(agentCall?.params?.to).toBe("chat:-100123");
+    expect(agentCall?.params?.threadId).toBe("topic-7");
+    expect(agentCall?.params?.deliver).toBe(true);
+    const registeredRun = firstRegisteredSubagentRun();
+    expect(registeredRun?.expectsCompletionMessage).toBe(false);
+  });
+
   it("uses controller ownership for thread binding while completion routes to owner", async () => {
     let hookRequesterSessionKey: string | undefined;
     hoisted.hookRunner.hasHooks.mockImplementation(
