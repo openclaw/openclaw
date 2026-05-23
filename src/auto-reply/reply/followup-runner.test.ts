@@ -1339,6 +1339,8 @@ describe("createFollowupRunner progress forwarding", () => {
     const onToolStart = vi.fn(async () => {});
     const onItemEvent = vi.fn(async () => {});
     const onCommandOutput = vi.fn(async () => {});
+    const onCompactionStart = vi.fn(async () => {});
+    const onCompactionEnd = vi.fn(async () => {});
     registerFollowupTestSessionStore(storePath, sessionStore);
 
     runEmbeddedPiAgentMock.mockImplementationOnce(
@@ -1370,7 +1372,7 @@ describe("createFollowupRunner progress forwarding", () => {
     );
 
     const runner = createFollowupRunner({
-      opts: { onToolStart, onItemEvent, onCommandOutput },
+      opts: { onToolStart, onItemEvent, onCommandOutput, onCompactionStart, onCompactionEnd },
       typing: createMockTypingController(),
       typingMode: "instant",
       sessionEntry,
@@ -1393,6 +1395,8 @@ describe("createFollowupRunner progress forwarding", () => {
     expect(onToolStart).not.toHaveBeenCalled();
     expect(onItemEvent).not.toHaveBeenCalled();
     expect(onCommandOutput).not.toHaveBeenCalled();
+    expect(onCompactionStart).not.toHaveBeenCalled();
+    expect(onCompactionEnd).not.toHaveBeenCalled();
     expect(sessionStore.main.compactionCount).toBe(1);
   });
 

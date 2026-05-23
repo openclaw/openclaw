@@ -209,12 +209,14 @@ async function forwardFollowupProgressEvent(params: {
 
   if (evt.stream === "compaction") {
     const phase = readStringValue(evt.data.phase) ?? "";
-    if (phase === "start") {
+    if (phase === "start" && emitChannelProgress) {
       await opts?.onCompactionStart?.();
     }
     if (phase === "end" && evt.data?.completed === true) {
       params.onCompactionComplete?.();
-      await opts?.onCompactionEnd?.();
+      if (emitChannelProgress) {
+        await opts?.onCompactionEnd?.();
+      }
     }
   }
 }
