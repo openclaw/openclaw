@@ -77,6 +77,28 @@ describe("announce loop guard (#18264)", () => {
     return entry;
   }
 
+  async function flushAsync() {
+    await Promise.resolve();
+    await Promise.resolve();
+  }
+
+  async function waitForRun(
+    runId: string,
+    predicate: (run: SubagentRunRecord) => boolean,
+  ): Promise<SubagentRunRecord> {
+    for (let attempt = 0; attempt < 40; attempt += 1) {
+      const run = registry
+        .listSubagentRunsForRequester("agent:main:main")
+        .find((candidate) => candidate.runId === runId);
+      if (run && predicate(run)) {
+        return run;
+      }
+      await vi.advanceTimersByTimeAsync(1);
+      await flushAsync();
+    }
+    throw new Error(`subagent run ${runId} did not reach expected state`);
+  }
+
   beforeAll(async () => {
     vi.resetModules();
     registry = await import("./subagent-registry.js");
@@ -184,8 +206,7 @@ describe("announce loop guard (#18264)", () => {
     // Initialization attempts resume once, then gives up for exhausted entries.
     const beforeInit = Date.now();
     registry.initSubagentRegistry();
-    await Promise.resolve();
-    await Promise.resolve();
+    await flushAsync();
 
     expect(mocks.runSubagentAnnounceFlow).not.toHaveBeenCalled();
     expect(entry.cleanupCompletedAt).toBeGreaterThanOrEqual(beforeInit);
@@ -220,8 +241,7 @@ describe("announce loop guard (#18264)", () => {
     );
 
     registry.initSubagentRegistry();
-    await Promise.resolve();
-    await Promise.resolve();
+    await flushAsync();
 
     expect(mocks.runSubagentAnnounceFlow).toHaveBeenCalledTimes(1);
   });
@@ -254,14 +274,13 @@ describe("announce loop guard (#18264)", () => {
     );
 
     registry.initSubagentRegistry();
-    await Promise.resolve();
-    await Promise.resolve();
+    await flushAsync();
 
-    const runs = registry.listSubagentRunsForRequester("agent:main:main");
-    const stored = runs.find((run) => run.runId === runId);
-    expect(stored?.cleanupHandled).toBe(false);
-    expect(stored?.cleanupCompletedAt).toBeUndefined();
-    expect(stored?.announceRetryCount).toBe(1);
-    expect(stored?.lastAnnounceRetryAt).toBeTypeOf("number");
+    const stored = await waitForRun(
+      runId,
+      (run) => run.cleanupHandled === false && run.announceRetryCount === 1,
+    );
+    expect(stored.cleanupCompletedAt).toBeUndefined();
+    expect(stored.lastAnnounceRetryAt).toBeTypeOf("number");
   });
 });
