@@ -69,6 +69,14 @@ describe("Codex app-server native code mode config", () => {
     );
   });
 
+  it("tells Codex to read listed skill files directly", () => {
+    const instructions = buildDeveloperInstructions(createAttemptParams({ provider: "openai" }));
+
+    expect(instructions).toContain("When loading a listed `SKILL.md`");
+    expect(instructions).toContain("read the exact file path directly");
+    expect(instructions).toContain("Do not search the parent directory");
+  });
+
   it("summarizes deferred dynamic tool names in developer instructions", () => {
     const instructions = buildDeveloperInstructions(createAttemptParams({ provider: "openai" }), {
       dynamicTools: [

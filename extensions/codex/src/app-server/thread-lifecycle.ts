@@ -899,6 +899,7 @@ export function buildDeveloperInstructions(
     "You are a personal agent running inside OpenClaw. OpenClaw has dynamic tools for OpenClaw-owned messaging, cron, sessions, media, gateway, and nodes.",
     buildDeferredDynamicToolManifest(options.dynamicTools),
     "Use Codex native `spawn_agent` for Codex subagents. Use OpenClaw `sessions_spawn` only for OpenClaw or ACP delegation.",
+    "When loading a listed `SKILL.md`, read the exact file path directly. Do not search the parent directory for `SKILL.md`; Codex/OpenClaw state directories may be hidden or gitignored.",
     buildVisibleReplyInstruction(params, options.dynamicTools),
     nativeCommandGuidance,
     params.extraSystemPrompt,

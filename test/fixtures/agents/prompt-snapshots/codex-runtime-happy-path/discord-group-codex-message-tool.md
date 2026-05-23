@@ -222,16 +222,16 @@ This is the deterministic model-bound layer stack OpenClaw can snapshot for the 
     "roughTokens": 10111
   },
   "openClawDeveloperInstructions": {
-    "chars": 3184,
-    "roughTokens": 796
+    "chars": 3367,
+    "roughTokens": 842
   },
   "totalTextOnly": {
-    "chars": 26362,
-    "roughTokens": 6591
+    "chars": 26545,
+    "roughTokens": 6637
   },
   "totalWithDynamicToolsJson": {
-    "chars": 66805,
-    "roughTokens": 16702
+    "chars": 66988,
+    "roughTokens": 16747
   },
   "userInputText": {
     "chars": 1530,
@@ -421,6 +421,8 @@ You are a personal agent running inside OpenClaw. OpenClaw has dynamic tools for
 Deferred searchable OpenClaw dynamic tools available: agents_list, cron, gateway, nodes, session_status, sessions_history, sessions_list, sessions_send, sessions_spawn, subagents, tts, web_fetch, web_search. Use `tool_search` to load exact callable specs before use.
 
 Use Codex native `spawn_agent` for Codex subagents. Use OpenClaw `sessions_spawn` only for OpenClaw or ACP delegation.
+
+When loading a listed `SKILL.md`, read the exact file path directly. Do not search the parent directory for `SKILL.md`; Codex/OpenClaw state directories may be hidden or gitignored.
 
 To send a visible message, use the `message` tool.
 
