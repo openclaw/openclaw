@@ -15,6 +15,7 @@ Docs: https://docs.openclaw.ai
 - Docs: clarify media provider credentials, Codex/OpenClaw code-mode boundaries, Slack and Telegram ack reactions, Feishu dynamic agents, secrets plaintext boundaries, memory guidance, and Chinese glossary terms. Thanks @nielskaspers, @cosmopolitan033, @drclaw-iq, @alexgduarte, @zccyman, @chengoak, and @cassthebandit.
 - Packaging: exclude documentation images and assets from the npm tarball, reducing published package size without affecting runtime docs search or CLI behavior. Thanks @SebTardif.
 - Media understanding: stop auto-probing Gemini CLI and use Antigravity CLI only as a lower-priority image/video fallback after configured provider APIs.
+- Diagnostics: emit sanitized `secrets.prepare` timeline spans for Gateway secret preparation so operators can distinguish secret startup latency without exposing provider names, secret ids, or secret values. (#83019) Thanks @samzong.
 - Agents/subagents: limit default sub-agent bootstrap context to `AGENTS.md` and `TOOLS.md`, keeping persona, identity, user, memory, heartbeat, and setup files out of delegated workers by default. (#85283) Thanks @100yenadmin.
 - Maintainer skills: exclude plugin SDK/API boundary work from `openclaw-landable-bug-sweep` so bugbash sweeps stay focused on small paper-cut fixes.
 - QA-Lab/diagnostics: extend the OpenTelemetry smoke harness to prove trace, metric, and log export, and add first-class Prometheus and observability smoke aliases.
