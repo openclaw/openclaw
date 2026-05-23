@@ -15,6 +15,7 @@ import {
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { resolvePackProfile } from "./lib/claworks-pack-profiles.mjs";
 
 const root = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
 const stateDir = process.env.OPENCLAW_STATE_DIR?.trim() || path.join(os.homedir(), ".claworks");
@@ -52,12 +53,8 @@ function loadProductPluginAllow() {
 }
 
 function defaultInstalledPacks() {
-  const base = ["base", "enterprise-foundation", "process-industry"];
   const profile = process.env.CLAWORKS_INIT_PROFILE?.trim() || "enterprise";
-  if (profile === "core") {
-    return base;
-  }
-  return [...base, "enterprise-general", "enterprise-commercial"];
+  return resolvePackProfile(packsDir, profile);
 }
 
 function seedPackSymlinks(sourceDir, stateDir, packIds) {

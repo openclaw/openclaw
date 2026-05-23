@@ -10,8 +10,8 @@ import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { VERSION } from "../version.js";
 import {
   GATEWAY_SERVICE_KIND,
-  GATEWAY_SERVICE_MARKER,
   resolveGatewayLaunchAgentLabel,
+  resolveGatewayServiceMarker,
   resolveGatewaySystemdServiceName,
   resolveGatewayWindowsTaskName,
   NODE_SERVICE_KIND,
@@ -420,7 +420,7 @@ export function buildServiceEnvironment(params: {
     OPENCLAW_LAUNCHD_LABEL: resolvedLaunchdLabel,
     OPENCLAW_SYSTEMD_UNIT: systemdUnit,
     OPENCLAW_WINDOWS_TASK_NAME: resolveGatewayWindowsTaskName(profile),
-    OPENCLAW_SERVICE_MARKER: GATEWAY_SERVICE_MARKER,
+    OPENCLAW_SERVICE_MARKER: resolveGatewayServiceMarker(env as NodeJS.ProcessEnv),
     OPENCLAW_SERVICE_KIND: GATEWAY_SERVICE_KIND,
     OPENCLAW_SERVICE_VERSION: VERSION,
   };

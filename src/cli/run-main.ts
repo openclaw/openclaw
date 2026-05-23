@@ -12,6 +12,7 @@ import { assertSupportedRuntime } from "../infra/runtime-guard.js";
 import type { PluginManifestCommandAliasRegistry } from "../plugins/manifest-command-aliases.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { resolveCliArgvInvocation } from "./argv-invocation.js";
+import { resolveCliName, resolveCliProductTitle } from "./cli-name.js";
 import {
   isReservedNonPluginCommandRoot,
   shouldRegisterPrimaryCommandOnly,
@@ -179,7 +180,7 @@ async function tryRunGatewayRunFastPath(
     emitCliBanner(VERSION, { argv });
   }
   const program = new Command();
-  program.name("openclaw");
+  program.name(resolveCliName(argv));
   program.enablePositionalOptions();
   program.option("--no-color", "Disable ANSI colors", false);
   program.exitOverride((err) => {
@@ -430,6 +431,26 @@ async function bootstrapCliProxyCaptureAndDispatcher(
 export async function runCli(argv: string[] = process.argv) {
   const originalArgv = normalizeWindowsArgv(argv);
   const startupTrace = createGatewayCliMainStartupTrace(originalArgv);
+
+  const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
+  const { isClaworksRepoCheckout, shouldBlockOpenClawGatewayLifecycleArgv } =
+    await import("../config/claworks-product-guard.js");
+  if (
+    shouldBlockOpenClawGatewayLifecycleArgv(originalArgv, {
+      isClaworksRepo: isClaworksRepoCheckout(repoRoot),
+      claworksProduct: process.env.CLAWORKS_PRODUCT === "1",
+    })
+  ) {
+    process.stderr.write(
+      [
+        "claworks: blocked `openclaw` gateway lifecycle in the ClaWorks distribution.",
+        "Use: claworks gateway <install|run|…>   (port 18800, ~/.claworks, ai.claworks.gateway)",
+        "Official OpenClaw is a separate global install and must keep using `openclaw`.",
+      ].join("\n") + "\n",
+    );
+    process.exit(1);
+  }
+
   const parsedContainer = parseCliContainerArgs(originalArgv);
   if (!parsedContainer.ok) {
     throw new Error(parsedContainer.error);
@@ -638,7 +659,7 @@ export async function runCli(argv: string[] = process.argv) {
 
     const { createCliProgress } = await import("./progress.js");
     const startupProgress = createCliProgress({
-      label: "Loading OpenClaw CLI…",
+      label: `Loading ${resolveCliProductTitle(resolveCliName())} CLI…`,
       indeterminate: true,
       delayMs: 0,
     });

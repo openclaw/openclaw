@@ -3,7 +3,7 @@ import { mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "n
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { dirname, extname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { runClaworksDoctor } from "../../claworks/doctor.js";
+import { runClaworksDoctor, runClaworksDoctorFix } from "../../claworks/doctor.js";
 import { buildHealthPayload } from "../../claworks/health.js";
 import { applyIngressPublish } from "../../claworks/ingress-publish.js";
 import {
@@ -198,7 +198,28 @@ export function createClaworksRestHandler(
       }
 
       if (method === "POST" && parts[1] === "doctor") {
-        sendJson(res, 200, { checks: runClaworksDoctor(runtime) });
+        const url = new URL(req.url ?? "/", "http://localhost");
+        let body: { fix?: boolean } = {};
+        try {
+          body = (await readJsonBody(req)) as { fix?: boolean };
+        } catch {
+          body = {};
+        }
+        const fix = url.searchParams.get("fix") === "true" || body.fix === true;
+        const checks = runClaworksDoctor(runtime);
+        if (!fix) {
+          sendJson(res, 200, { checks });
+          return true;
+        }
+        const fixResult = await runClaworksDoctorFix(runtime);
+        sendJson(res, 200, {
+          checks: runClaworksDoctor(runtime),
+          fix: {
+            applied: fixResult.applied,
+            warnings: fixResult.warnings,
+            repair: fixResult.repair,
+          },
+        });
         return true;
       }
 

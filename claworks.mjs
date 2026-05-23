@@ -26,6 +26,7 @@ const configPath =
 const env = {
   ...process.env,
   CLAWORKS_PRODUCT: "1",
+  _CLAWORKS_ARGV1: "claworks.mjs",
   // Keep both names consistent so the underlying engine (which reads OPENCLAW_*)
   // and future ClaWorks-native readers (which read CLAWORKS_*) agree.
   CLAWORKS_STATE_DIR: stateDir,

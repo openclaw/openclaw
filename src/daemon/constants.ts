@@ -1,3 +1,4 @@
+import { isClaworksProduct } from "../config/paths.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 
 // Default service labels (canonical + legacy compatibility)
@@ -5,8 +6,11 @@ export const GATEWAY_LAUNCH_AGENT_LABEL = "ai.openclaw.gateway";
 /** ClaWorks product launchd label (macOS) */
 export const CLAWORKS_GATEWAY_LAUNCH_AGENT_LABEL = "ai.claworks.gateway";
 export const GATEWAY_SYSTEMD_SERVICE_NAME = "openclaw-gateway";
+export const CLAWORKS_GATEWAY_SYSTEMD_SERVICE_NAME = "claworks-gateway";
 export const GATEWAY_WINDOWS_TASK_NAME = "OpenClaw Gateway";
+export const CLAWORKS_GATEWAY_WINDOWS_TASK_NAME = "ClaWorks Gateway";
 export const GATEWAY_SERVICE_MARKER = "openclaw";
+export const CLAWORKS_GATEWAY_SERVICE_MARKER = "claworks";
 export const GATEWAY_SERVICE_KIND = "gateway";
 const NODE_LAUNCH_AGENT_LABEL = "ai.openclaw.node";
 const NODE_SYSTEMD_SERVICE_NAME = "openclaw-node";
@@ -29,8 +33,21 @@ export function resolveGatewayProfileSuffix(profile?: string): string {
   return normalized ? `-${normalized}` : "";
 }
 
-export function resolveGatewayLaunchAgentLabel(profile?: string): string {
+export function resolveGatewayServiceMarker(env: NodeJS.ProcessEnv = process.env): string {
+  return isClaworksProduct(env) ? CLAWORKS_GATEWAY_SERVICE_MARKER : GATEWAY_SERVICE_MARKER;
+}
+
+export function resolveGatewayLaunchAgentLabel(
+  profile?: string,
+  env: NodeJS.ProcessEnv = process.env,
+): string {
   const normalized = normalizeGatewayProfile(profile);
+  if (isClaworksProduct(env)) {
+    if (!normalized) {
+      return CLAWORKS_GATEWAY_LAUNCH_AGENT_LABEL;
+    }
+    return `ai.claworks.${normalized}`;
+  }
   if (!normalized) {
     return GATEWAY_LAUNCH_AGENT_LABEL;
   }
@@ -42,26 +59,41 @@ export function resolveLegacyGatewayLaunchAgentLabels(profile?: string): string[
   return [];
 }
 
-export function resolveGatewaySystemdServiceName(profile?: string): string {
+export function resolveGatewaySystemdServiceName(
+  profile?: string,
+  env: NodeJS.ProcessEnv = process.env,
+): string {
   const suffix = resolveGatewayProfileSuffix(profile);
+  const base = isClaworksProduct(env)
+    ? CLAWORKS_GATEWAY_SYSTEMD_SERVICE_NAME
+    : GATEWAY_SYSTEMD_SERVICE_NAME;
   if (!suffix) {
-    return GATEWAY_SYSTEMD_SERVICE_NAME;
+    return base;
   }
-  return `openclaw-gateway${suffix}`;
+  return `${base}${suffix}`;
 }
 
-export function resolveGatewayWindowsTaskName(profile?: string): string {
+export function resolveGatewayWindowsTaskName(
+  profile?: string,
+  env: NodeJS.ProcessEnv = process.env,
+): string {
   const normalized = normalizeGatewayProfile(profile);
+  const base = isClaworksProduct(env)
+    ? CLAWORKS_GATEWAY_WINDOWS_TASK_NAME
+    : GATEWAY_WINDOWS_TASK_NAME;
   if (!normalized) {
-    return GATEWAY_WINDOWS_TASK_NAME;
+    return base;
   }
-  return `OpenClaw Gateway (${normalized})`;
+  return `${base} (${normalized})`;
 }
 
 export function formatGatewayServiceDescription(params?: {
   profile?: string;
   version?: string;
+  env?: NodeJS.ProcessEnv;
 }): string {
+  const env = params?.env ?? process.env;
+  const brand = isClaworksProduct(env) ? "ClaWorks" : "OpenClaw";
   const profile = normalizeGatewayProfile(params?.profile);
   const version = params?.version?.trim();
   const parts: string[] = [];
@@ -72,9 +104,9 @@ export function formatGatewayServiceDescription(params?: {
     parts.push(`v${version}`);
   }
   if (parts.length === 0) {
-    return "OpenClaw Gateway";
+    return `${brand} Gateway`;
   }
-  return `OpenClaw Gateway (${parts.join(", ")})`;
+  return `${brand} Gateway (${parts.join(", ")})`;
 }
 
 export function resolveGatewayServiceDescription(params: {
@@ -87,6 +119,7 @@ export function resolveGatewayServiceDescription(params: {
     formatGatewayServiceDescription({
       profile: params.env.OPENCLAW_PROFILE,
       version: params.environment?.OPENCLAW_SERVICE_VERSION ?? params.env.OPENCLAW_SERVICE_VERSION,
+      env: params.env as NodeJS.ProcessEnv,
     })
   );
 }

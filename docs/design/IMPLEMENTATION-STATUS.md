@@ -5,6 +5,8 @@
 **发布策略**：当前仅 **本地开发 / 仓内验证**，不执行 npm 公开发布。  
 **测试**：`pnpm claworks:smoke` 或 `pnpm claworks:runtime:test` — **56 文件 / 141 用例** + e2e/http/dist-smoke。
 
+**Pack 默认链**：新部署使用 **base 链**（`base → enterprise-foundation → …`）；旧 **core 链** 仅 legacy profile。`claworks:init` 默认 `CLAWORKS_INIT_PROFILE=enterprise`；`claworks:doctor` 含 `pack_layer_system` 检查。详见 `claworks-packs/PACK-LAYER-SYSTEMS.md`。
+
 ---
 
 ## 设计 ↔ 实现对照（摘要）

@@ -35,9 +35,19 @@ describe("resolveGatewayLaunchAgentLabel", () => {
     expect(result).toBe("ai.openclaw.gateway");
   });
 
+  it("returns ClaWorks label in product mode", () => {
+    const result = resolveGatewayLaunchAgentLabel(undefined, { CLAWORKS_PRODUCT: "1" });
+    expect(result).toBe("ai.claworks.gateway");
+  });
+
   it("returns profile-specific label when profile is set", () => {
     const result = resolveGatewayLaunchAgentLabel("dev");
     expect(result).toBe("ai.openclaw.dev");
+  });
+
+  it("returns ClaWorks profile label in product mode", () => {
+    const result = resolveGatewayLaunchAgentLabel("dev", { CLAWORKS_PRODUCT: "1" });
+    expect(result).toBe("ai.claworks.dev");
   });
 });
 
@@ -46,6 +56,12 @@ describe("resolveGatewaySystemdServiceName", () => {
     const result = resolveGatewaySystemdServiceName();
     expect(result).toBe(GATEWAY_SYSTEMD_SERVICE_NAME);
     expect(result).toBe("openclaw-gateway");
+  });
+
+  it("returns ClaWorks service name in product mode", () => {
+    expect(resolveGatewaySystemdServiceName(undefined, { CLAWORKS_PRODUCT: "1" })).toBe(
+      "claworks-gateway",
+    );
   });
 
   it("returns profile-specific service name when profile is set", () => {

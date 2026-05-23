@@ -20,18 +20,18 @@
 
 ## 2. OpenClaw 使用体验对齐（用户侧）
 
-| 用户能力   | OpenClaw 用法             | ClaWorks 等价                                   | 对齐度  | Gap                             |
-| ---------- | ------------------------- | ----------------------------------------------- | ------- | ------------------------------- |
-| CLI 启动   | `openclaw gateway`        | `claworks gateway` / `pnpm claworks:gateway`    | **95%** | 根包名仍 openclaw               |
-| 配置向导   | `openclaw configure`      | ✅ 继承 + claworks 默认                         | **90%** | 机器人 Pack 需 IM/文档引导      |
-| IM 对话    | 渠道插件 → agent 自动回复 | ✅ 双路径：OpenClaw agent **或** IM→EventKernel | **85%** | auto-bridge 需 init/repair 开启 |
-| Skills     | ClawHub + workspace       | ✅ 4 个 robot skills + OpenClaw skills          | **90%** | Builder 依赖 cw\_\* 工具        |
-| Agent 工具 | 插件 registerTool         | ✅ 48× `cw_*`                                   | **95%** | 远程 extension 22 工具          |
-| HITL/审批  | managedFlows + 渠道       | ✅ Playbook HITL + managedFlows 桥              | **85%** | 无 Studio 审批 UI               |
-| Webhook    | webhooks 插件             | ✅ `/v1/bridge/webhook` + classify              | **90%** | Ingress 策略需配置              |
-| 流式回复   | block/preview streaming   | ✅ 继承 Feishu 等渠道                           | **90%** | Playbook notify 非流式          |
-| Doctor     | 健康检查 + fix            | ✅ + ClaWorks 专项 checks                       | **90%** | —                               |
-| 插件安装   | `plugins install`         | ✅ 白名单 bundled + 外仓 extension              | **85%** | 磁盘未物理裁剪                  |
+| 用户能力   | OpenClaw 用法             | ClaWorks 等价                                   | 对齐度  | Gap                                |
+| ---------- | ------------------------- | ----------------------------------------------- | ------- | ---------------------------------- |
+| CLI 启动   | `openclaw gateway`        | `claworks gateway` / `pnpm claworks:gateway`    | **98%** | 根包 `claworks`，无 `openclaw` bin |
+| 配置向导   | `openclaw configure`      | ✅ 继承 + claworks 默认                         | **90%** | 机器人 Pack 需 IM/文档引导         |
+| IM 对话    | 渠道插件 → agent 自动回复 | ✅ 双路径：OpenClaw agent **或** IM→EventKernel | **85%** | auto-bridge 需 init/repair 开启    |
+| Skills     | ClawHub + workspace       | ✅ 4 个 robot skills + OpenClaw skills          | **90%** | Builder 依赖 cw\_\* 工具           |
+| Agent 工具 | 插件 registerTool         | ✅ 48× `cw_*`                                   | **95%** | 远程 extension 22 工具             |
+| HITL/审批  | managedFlows + 渠道       | ✅ Playbook HITL + managedFlows 桥              | **85%** | 无 Studio 审批 UI                  |
+| Webhook    | webhooks 插件             | ✅ `/v1/bridge/webhook` + classify              | **90%** | Ingress 策略需配置                 |
+| 流式回复   | block/preview streaming   | ✅ 继承 Feishu 等渠道                           | **90%** | Playbook notify 非流式             |
+| Doctor     | 健康检查 + fix            | ✅ + ClaWorks 专项 checks                       | **90%** | —                                  |
+| 插件安装   | `plugins install`         | ✅ 白名单 bundled + 外仓 extension              | **85%** | 磁盘未物理裁剪                     |
 
 ---
 
@@ -111,27 +111,84 @@ Doctor 新增检查项：`openclaw_bridge_llm` / `openclaw_bridge_notify` / `ope
 
 ## 7. 剩余 P0/P1（不含 Studio）
 
-| 优先级 | 项                                                   |
-| ------ | ---------------------------------------------------- | ---------------- |
-| P0     | OT Connector 现场化（mqtt/opcua/modbus 非 simulate） |
-| P1     | `pnpm claworks:smoke` + gateway:e2e 进 CI            |
-| P1     | 向量 KB 生产默认路径（memory-core + repair）         |
-| P1     | Extension 物理裁剪 apply                             |
-| P1     | notify.targets 向导/ repair 自动从 feishu 账户推导   | ✅ repair 已实现 |
-| P1     | `GET /v1/kb/status` + `POST /v1/kb/flush` REST       | ✅ 本轮补齐      |
-| P2     | npm 发布、根包品牌化、OTEL                           |
+| 优先级 | 项                                                    | 状态                                      |
+| ------ | ----------------------------------------------------- | ----------------------------------------- |
+| P0     | OT Connector 现场化（mqtt/opcua/modbus 非 simulate）  | 待办                                      |
+| P0     | product health checks 接入 doctor --fix / lint        | ✅ 2026-05-23                             |
+| P0     | npm scripts 与文档对齐（setup/start/doctor/kb-smoke） | ✅ 2026-05-23                             |
+| P0     | Doctor/configure intro 产品化文案                     | ✅ 2026-05-23                             |
+| P0     | `POST /v1/doctor?fix=true` runtime fix                | ✅ 2026-05-23                             |
+| P1     | `pnpm claworks:smoke` + gateway:e2e 进 CI             | ✅ 本地全绿                               |
+| P1     | 向量 KB 生产默认路径（memory-core + repair）          | ✅ CLAWORKS_PRODUCT=1 repair 自动 wiring  |
+| P1     | Extension 物理裁剪 apply                              | ✅ `pnpm claworks:prune-extensions:apply` |
+| P1     | notify.targets 向导/ repair 自动从 feishu 账户推导    | ✅ repair 已实现                          |
+| P1     | `GET /v1/kb/status` + `POST /v1/kb/flush` REST        | ✅ 本轮补齐                               |
+| P2     | npm 发布、OTEL                                        | 待办（根包已品牌化 `claworks`）           |
 
 ---
 
-## 8. 验收命令
+## 8. 运维与开箱即用（OpenClaw 对齐专节）
+
+### 8.1 命令对照（权威）
+
+| 场景       | OpenClaw                     | ClaWorks                                                           | 对齐     |
+| ---------- | ---------------------------- | ------------------------------------------------------------------ | -------- |
+| 首次初始化 | `openclaw setup` / `onboard` | `pnpm claworks:init` + `pnpm claworks:setup`                       | ✅       |
+| 配置修复   | `openclaw doctor --fix`      | `pnpm claworks:doctor:fix` / `pnpm claworks:repair`                | ✅       |
+| 健康检查   | `openclaw doctor`            | `pnpm claworks:doctor`                                             | ✅       |
+| 启动网关   | `openclaw gateway run`       | `pnpm claworks:start` / `pnpm claworks:gateway`                    | ✅       |
+| 配置向导   | `openclaw configure`         | `claworks configure`（继承，intro 已产品化）                       | ✅       |
+| 网关服务   | `openclaw gateway install`   | `claworks gateway install`（LaunchAgent `ai.claworks.gateway`）    | ✅       |
+| 数据库迁移 | —                            | `pnpm claworks:migrate`（PostgreSQL DDL，**非** OpenClaw migrate） | 产品专属 |
+| 验收       | —                            | `pnpm claworks:smoke` / `pnpm claworks:gateway:e2e`                | 产品专属 |
+
+**Repair 真源**：`packages/claworks-runtime/src/claworks/product-config-repair.ts`（CLI doctor、claworks:repair、init、e2e 共用）。
+
+**Bootstrap 差异**：一键 repair/init 默认走 `claworks start`（`ensureClaworksProductReady`）；裸 `gateway run` 不自动 repair——运维文档应优先推荐 `pnpm claworks:start`。
+
+### 8.2 Doctor 双层模型
+
+| 层             | 入口                                              | 职责                                                         |
+| -------------- | ------------------------------------------------- | ------------------------------------------------------------ |
+| OpenClaw 核心  | `claworks doctor` → `doctor-health-contributions` | 网关/auth/插件/渠道/结构化 health checks                     |
+| ClaWorks 产品  | 同上 + `runClaworksProductDoctorHealth`           | robot 插件、packs、端口 18800、LaunchAgent 隔离              |
+| Runtime 进程内 | `POST /v1/doctor` / `cw_doctor_run`               | playbooks/ontology/KB/connectors；`?fix=true` 热修复 runtime |
+
+### 8.3 推荐开箱路径（生产前）
+
+```bash
+CLAWORKS_INIT_SECURE=1 pnpm claworks:init
+pnpm claworks:setup                    # doctor --fix + onboard
+CLAWORKS_VECTOR_KB=1 pnpm claworks:repair
+pnpm claworks:start                    # 非 claworks:gateway（含 bootstrap）
+pnpm claworks:smoke
+pnpm claworks:gateway:e2e
+```
+
+个人工作 profile：`pnpm claworks:repair:personal` → `pnpm claworks:personal:verify` → `pnpm claworks:kb-smoke`。
+
+### 8.4 开箱即用评分（2026-05-23）
+
+| 维度             | 评分    | 说明                                         |
+| ---------------- | ------- | -------------------------------------------- |
+| CLI 命令面       | **95%** | 继承 OpenClaw + 产品 npm aliases             |
+| Doctor/fix       | **92%** | 双层 + 端口/LaunchAgent 隔离 repair          |
+| 零配置启动       | **75%** | 仍需 claworks-packs 外仓 + 模型/飞书凭据     |
+| 运维可观测       | **85%** | `/v1/health`、metrics、decision-log；无 OTEL |
+| 与 OpenClaw 共存 | **95%** | 18800 / ~/.claworks / ai.claworks.gateway    |
+
+---
+
+## 9. 验收命令
 
 ```bash
 pnpm claworks:runtime:test
 pnpm claworks:smoke
 node --import tsx scripts/claworks-enterprise-biz-test.mjs
 CLAWORKS_INIT_SECURE=1 pnpm claworks:init
-pnpm claworks:gateway
+pnpm claworks:start
 curl -H "Authorization: Bearer $KEY" http://127.0.0.1:18800/v1/doctor
+curl -X POST -H "Authorization: Bearer $KEY" "http://127.0.0.1:18800/v1/doctor?fix=true"
 ```
 
 权威顺序：`OPENCLAW-ALIGNMENT-AUDIT.md`（本文）→ `PRODUCTION-READINESS.md` → `IMPLEMENTATION-STATUS.md`。

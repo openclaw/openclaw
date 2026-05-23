@@ -1,5 +1,6 @@
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { readConfigFileSnapshot } from "../config/config.js";
+import { isClaworksProduct } from "../config/paths.js";
 import {
   configValidationIssuesToHealthFindings,
   registerCoreHealthChecks,
@@ -36,6 +37,11 @@ export async function runDoctorLintCli(
   opts: DoctorLintCliOptions,
 ): Promise<number> {
   registerCoreHealthChecks();
+  if (isClaworksProduct(process.env)) {
+    const { registerClaworksProductHealthChecks } =
+      await import("../flows/claworks-product-health-checks.js");
+    registerClaworksProductHealthChecks();
+  }
 
   const sevMin =
     opts.severityMin === undefined ? "info" : parseHealthFindingSeverity(opts.severityMin);

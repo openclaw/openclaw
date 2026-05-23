@@ -1,12 +1,18 @@
 import fs from "node:fs";
 import { discoverPackSourceDir, repairClaworksJsonConfig } from "@claworks/runtime";
 import type { DoctorOptions } from "../../commands/doctor.types.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { RuntimeEnv } from "../../runtime.js";
 
 export async function runClaworksProductDoctorHealth(ctx: {
   configPath: string;
   options: DoctorOptions;
+  cfg: OpenClawConfig;
+  runtime: RuntimeEnv;
 }): Promise<void> {
   const { note } = await import("../../terminal/note.js");
+  const { detectClaworksProductHealthFindings } =
+    await import("../../flows/claworks-product-health-checks.js");
   const lines: string[] = [];
 
   if (!fs.existsSync(ctx.configPath)) {
@@ -26,6 +32,20 @@ export async function runClaworksProductDoctorHealth(ctx: {
   } catch (err) {
     note(`Invalid ClaWorks JSON: ${err instanceof Error ? err.message : String(err)}`, "ClaWorks");
     return;
+  }
+
+  const isolationFindings = await detectClaworksProductHealthFindings({
+    mode: "doctor",
+    runtime: ctx.runtime,
+    cfg: ctx.cfg,
+    configPath: ctx.configPath,
+  });
+  for (const finding of isolationFindings) {
+    const prefix = finding.severity === "error" ? "✗" : finding.severity === "warning" ? "⚠" : "•";
+    lines.push(`${prefix} ${finding.message}`);
+    if (finding.fixHint) {
+      lines.push(`  Fix: ${finding.fixHint}`);
+    }
   }
 
   const entry = (config.plugins as { entries?: Record<string, { enabled?: boolean }> } | undefined)

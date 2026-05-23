@@ -10,7 +10,7 @@
  *   CLAWORKS_PACKS_DIR — pack search path
  */
 import { spawn } from "node:child_process";
-import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
+import { mkdtempSync, writeFileSync, rmSync, readFileSync } from "node:fs";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -46,7 +46,7 @@ function sleep(ms) {
 
 function installedPacks() {
   const profile = process.env.CLAWORKS_INIT_PROFILE?.trim() || "enterprise";
-  const base = ["base", "process-industry"];
+  const base = ["base", "enterprise-foundation", "process-industry"];
   if (profile === "core") return base;
   return [...base, "enterprise-general", "enterprise-commercial"];
 }
@@ -132,6 +132,17 @@ async function main() {
   };
 
   writeFileSync(configPath, `${JSON.stringify(config, null, 2)}\n`, "utf8");
+  try {
+    const { repairClaworksJsonConfig } =
+      await import("../packages/claworks-runtime/src/claworks/product-config-repair.ts");
+    const onDisk = JSON.parse(readFileSync(configPath, "utf8"));
+    repairClaworksJsonConfig(onDisk, { seedRobotMd: false, enableEchoConnector: false });
+    writeFileSync(configPath, `${JSON.stringify(onDisk, null, 2)}\n`, "utf8");
+    log("config repaired via product-config-repair");
+  } catch (err) {
+    log(`config repair skipped: ${err instanceof Error ? err.message : String(err)}`);
+  }
+
   log(`state=${stateDir} port=${port}`);
 
   const child = spawn(

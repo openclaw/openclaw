@@ -250,6 +250,11 @@ async function runStructuredHealthRepairs(ctx: DoctorHealthFlowContext): Promise
   const { note } = await import("../terminal/note.js");
 
   registerCoreHealthChecks();
+  if (isClaworksProduct()) {
+    const { registerClaworksProductHealthChecks } =
+      await import("./claworks-product-health-checks.js");
+    registerClaworksProductHealthChecks();
+  }
   const workspaceDir = resolveAgentWorkspaceDir(ctx.cfg, resolveDefaultAgentId(ctx.cfg));
   const result = await runDoctorHealthRepairs({
     mode: "fix",

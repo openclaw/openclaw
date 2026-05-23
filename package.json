@@ -1,5 +1,5 @@
 {
-  "name": "openclaw",
+  "name": "claworks",
   "version": "2026.5.19",
   "description": "Enterprise robot runtime — EventKernel · ObjectStore · PlaybookEngine · A2A",
   "keywords": [
@@ -21,7 +21,6 @@
     "url": "git+https://github.com/claworks/claworks.git"
   },
   "bin": {
-    "openclaw": "openclaw.mjs",
     "claworks": "claworks.mjs"
   },
   "directories": {
@@ -1354,7 +1353,7 @@
       "default": "./dist/plugin-sdk/zod.js"
     },
     "./extension-api": "./dist/extensionAPI.js",
-    "./cli-entry": "./openclaw.mjs"
+    "./cli-entry": "./claworks.mjs"
   },
   "scripts": {
     "android:assemble": "cd apps/android && ./gradlew :app:assemblePlayDebug",
@@ -1522,6 +1521,7 @@
     "mac:package": "bash scripts/package-mac-app.sh",
     "mac:restart": "bash scripts/restart-mac.sh",
     "moltbot:rpc": "node scripts/run-node.mjs agent --mode rpc --json",
+    "claworks": "node scripts/run-node.mjs",
     "openclaw": "node scripts/run-node.mjs",
     "openclaw:rpc": "node scripts/run-node.mjs agent --mode rpc --json",
     "perf:issue-78851": "node --import tsx scripts/perf/issue-78851-model-resolution.ts",
@@ -1586,7 +1586,7 @@
     "rtt": "node --import tsx scripts/rtt.ts",
     "runtime-sidecars:check": "node --import tsx scripts/generate-runtime-sidecar-paths-baseline.ts --check",
     "runtime-sidecars:gen": "node --import tsx scripts/generate-runtime-sidecar-paths-baseline.ts --write",
-    "start": "node openclaw.mjs",
+    "start": "node claworks.mjs",
     "test": "node scripts/test-projects.mjs",
     "test:all": "pnpm lint && pnpm build && pnpm test && pnpm test:e2e && pnpm test:live && pnpm test:docker:all",
     "test:auth:compat": "node scripts/run-vitest.mjs run --config test/vitest/vitest.gateway.config.ts src/gateway/server.auth.compat-baseline.test.ts src/gateway/client.test.ts src/gateway/reconnect-gating.test.ts src/gateway/protocol/connect-error-details.test.ts",
@@ -1770,11 +1770,22 @@
     "ui:i18n:sync": "node --import tsx scripts/control-ui-i18n.ts sync --write",
     "ui:install": "node scripts/ui.js install",
     "claworks:init": "node scripts/claworks-init.mjs",
+    "claworks:setup": "node scripts/claworks-setup.mjs",
+    "claworks:start": "node claworks.mjs start",
+    "claworks:doctor": "node claworks.mjs doctor",
+    "claworks:doctor:fix": "node claworks.mjs doctor --fix --non-interactive",
     "claworks:gateway": "bash scripts/claworks-gateway-dev.sh",
     "claworks:nexus": "node --import tsx scripts/claworks-nexus.mjs",
     "claworks:e2e": "node --import tsx scripts/claworks-e2e-smoke.mjs",
     "claworks:http-smoke": "node --import tsx scripts/claworks-http-smoke.mjs",
     "claworks:smoke": "node scripts/build-claworks-runtime.mjs && node scripts/claworks-runtime-dist-smoke.mjs && node --import tsx scripts/claworks-e2e-smoke.mjs && node --import tsx scripts/claworks-http-smoke.mjs && node --import tsx scripts/claworks-enterprise-biz-test.mjs && node --import tsx scripts/claworks-commercial-biz-test.mjs",
+    "claworks:gateway:e2e": "node --import tsx scripts/claworks-gateway-e2e.mjs",
+    "claworks:repair": "node --import tsx scripts/claworks-repair.ts",
+    "claworks:repair:personal": "node scripts/claworks-repair-personal.mjs",
+    "claworks:personal:verify": "node scripts/claworks-personal-verify.mjs",
+    "claworks:kb-smoke": "node scripts/claworks-kb-smoke.mjs",
+    "claworks:prune-extensions": "node scripts/claworks-prune-extensions.mjs --dry-run",
+    "claworks:prune-extensions:apply": "node scripts/claworks-prune-extensions.mjs --apply",
     "claworks:runtime:build": "node scripts/build-claworks-runtime.mjs",
     "claworks:runtime:dist-smoke": "node --import tsx scripts/claworks-runtime-dist-smoke.mjs",
     "claworks:runtime:test": "vitest run packages/claworks-runtime",

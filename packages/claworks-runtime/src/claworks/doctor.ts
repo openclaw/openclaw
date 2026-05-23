@@ -7,6 +7,7 @@ import {
   hasPackSourcesAvailable,
   repairClaworksRobotPluginConfig,
   seedPacksToStateDir,
+  detectPackLayerSystemConflict,
   type ProductConfigRepairResult,
 } from "./product-config-repair.js";
 import { isClaworksProductionMode } from "./product-env.js";
@@ -52,6 +53,19 @@ export function runClaworksDoctor(runtime: ClaworksRuntime): DoctorCheck[] {
       runtime.loadedPacks.length > 0
         ? `Loaded: ${runtime.loadedPacks.map((p) => `${p.manifest.id}@${p.manifest.version}`).join(", ")}`
         : "No packs loaded",
+  });
+
+  const installedIds = [
+    ...new Set([
+      ...runtime.loadedPacks.map((p) => p.manifest.id),
+      ...(runtime.config.packs?.installed ?? []),
+    ]),
+  ];
+  const layerConflict = detectPackLayerSystemConflict(installedIds);
+  checks.push({
+    id: "pack_layer_system",
+    status: layerConflict.conflict ? "error" : layerConflict.message ? "warn" : "ok",
+    message: layerConflict.message,
   });
 
   try {
@@ -213,6 +227,21 @@ export function runClaworksDoctor(runtime: ClaworksRuntime): DoctorCheck[] {
       ? "production_mode=true — stub steps fail-closed, full security enforcement"
       : "production_mode=false (dev mode) — stub steps return gracefully",
   });
+
+  const connectors = runtime.config.connectors ?? {};
+  const simulating = Object.entries(connectors).filter(
+    ([, cfg]) =>
+      cfg && typeof cfg === "object" && (cfg as { simulate?: boolean }).simulate === true,
+  );
+  if (simulating.length > 0) {
+    checks.push({
+      id: "connectors_simulate",
+      status: isProduction ? "error" : "warn",
+      message: isProduction
+        ? `OT connectors in simulate mode: ${simulating.map(([id]) => id).join(", ")} — disable for production`
+        : `Dev simulate connectors: ${simulating.map(([id]) => id).join(", ")}`,
+    });
+  }
 
   return checks;
 }

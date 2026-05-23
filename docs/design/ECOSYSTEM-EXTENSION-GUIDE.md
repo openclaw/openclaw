@@ -72,7 +72,8 @@ open http://127.0.0.1:18800/studio   # 静态运维面板
 | 团队日报     | + `daily-report`（配 Python 引擎）                      |
 | 个人 KB 同步 | `base` + `personal-enterprise`                          |
 
-> **注意**：旧体系 `core/comms/knowledge/...` 与新体系 `base/enterprise-foundation/...` 同为 L0 时勿重复启用。新建机器人优先 **base 体系**。
+> **注意**：旧体系 `core/comms/knowledge/workflow` 与新体系 `base/enterprise-foundation/...` **勿同时启用**（Playbook ID 会冲突）。新建机器人只用 **base 链**。  
+> 完整说明见 [`claworks-packs/PACK-LAYER-SYSTEMS.md`](../../../claworks-packs/PACK-LAYER-SYSTEMS.md)。
 
 ---
 

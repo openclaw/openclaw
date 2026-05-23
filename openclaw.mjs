@@ -41,6 +41,39 @@ const ensureSupportedNodeVersion = () => {
 
 ensureSupportedNodeVersion();
 
+const isClaworksDistribution = () => {
+  if (process.env.CLAWORKS_PRODUCT === "1") {
+    return false;
+  }
+  try {
+    if (!existsSync(new URL("./claworks.mjs", import.meta.url))) {
+      return false;
+    }
+    const parsed = JSON.parse(readFileSync(new URL("./package.json", import.meta.url), "utf8"));
+    return parsed?.name === "claworks";
+  } catch {
+    return false;
+  }
+};
+
+const assertClaworksCliEntry = () => {
+  if (!isClaworksDistribution()) {
+    return;
+  }
+  const invoked = path.basename(process.argv[1] ?? "");
+  if (invoked !== "openclaw" && invoked !== "openclaw.mjs" && invoked !== "openclaw.js") {
+    return;
+  }
+  process.stderr.write(
+    "claworks: This package publishes the `claworks` CLI only (not `openclaw`).\n" +
+      "Use: claworks <command>   or   node claworks.mjs <command>\n" +
+      "Official OpenClaw remains a separate install (`npm i -g openclaw`).\n",
+  );
+  process.exit(1);
+};
+
+assertClaworksCliEntry();
+
 const isSourceCheckoutLauncher = () =>
   existsSync(new URL("./.git", import.meta.url)) ||
   existsSync(new URL("./src/entry.ts", import.meta.url));

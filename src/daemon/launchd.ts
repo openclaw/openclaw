@@ -9,9 +9,9 @@ import { sanitizeForLog } from "../terminal/ansi.js";
 import {
   GATEWAY_LAUNCH_AGENT_LABEL,
   GATEWAY_SERVICE_KIND,
-  GATEWAY_SERVICE_MARKER,
   resolveGatewayServiceDescription,
   resolveGatewayLaunchAgentLabel,
+  resolveGatewayServiceMarker,
   resolveLegacyGatewayLaunchAgentLabels,
 } from "./constants.js";
 import { execFileUtf8 } from "./exec-file.js";
@@ -67,7 +67,7 @@ function isCurrentGatewayLaunchdLabel(label: string, env: NodeJS.ProcessEnv): bo
     return true;
   }
   if (
-    env.OPENCLAW_SERVICE_MARKER?.trim() !== GATEWAY_SERVICE_MARKER ||
+    env.OPENCLAW_SERVICE_MARKER?.trim() !== resolveGatewayServiceMarker(env) ||
     env.OPENCLAW_SERVICE_KIND?.trim() !== GATEWAY_SERVICE_KIND
   ) {
     return false;

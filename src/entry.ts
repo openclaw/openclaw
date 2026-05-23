@@ -3,6 +3,7 @@ import process from "node:process";
 import { fileURLToPath } from "node:url";
 import { detectAndApplyClaworksCli } from "../packages/claworks-runtime/src/claworks/product-env.js";
 import { isRootHelpInvocation } from "./cli/argv.js";
+import { resolveCliName } from "./cli/cli-name.js";
 import { parseCliContainerArgs, resolveCliContainerTarget } from "./cli/container-target.js";
 import { applyCliProfileEnv, parseCliProfileArgs } from "./cli/profile.js";
 import type { RootHelpRenderOptions } from "./cli/program/root-help.js";
@@ -22,6 +23,8 @@ import { installProcessWarningFilter } from "./infra/warning-filter.js";
 detectAndApplyClaworksCli();
 
 const ENTRY_WRAPPER_PAIRS = [
+  { wrapperBasename: "claworks.mjs", entryBasename: "entry.js" },
+  { wrapperBasename: "claworks.js", entryBasename: "entry.js" },
   { wrapperBasename: "openclaw.mjs", entryBasename: "entry.js" },
   { wrapperBasename: "openclaw.js", entryBasename: "entry.js" },
 ] as const;
@@ -91,7 +94,7 @@ if (
     installRoot,
   });
   if (!waitingForCompileCacheRespawn) {
-    process.title = "openclaw";
+    process.title = resolveCliName();
     ensureOpenClawExecMarkerOnProcess();
     installProcessWarningFilter();
     normalizeEnv();

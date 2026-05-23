@@ -1,6 +1,6 @@
 # 包名迁移：openclaw → claworks
 
-**状态**：规划（未改根 `package.json`，避免与上游同步冲突）  
+**状态**：阶段 A 已落地（根 `package.json` → `claworks`，全局 bin 仅 `claworks`）  
 **目标**：npm 包名 `claworks`，CLI 主名 `claworks`，`@claworks/runtime` 可公开发布。
 
 ---
@@ -8,9 +8,11 @@
 ## 阶段 A — 文档与 CLI（低风险）
 
 - [x] 产品文档使用 ClaWorks 品牌
-- [ ] 根 `package.json`: `"name": "claworks"`
-- [ ] `description` / `repository` 指向 claworks 组织
-- [ ] 保留 `"bin": { "claworks": "claworks.mjs", "openclaw": "openclaw.mjs" }` 别名 1–2 个版本周期
+- [x] 根 `package.json`: `"name": "claworks"`
+- [x] `description` / `repository` 指向 claworks 组织
+- [x] `"bin": { "claworks": "claworks.mjs" }`（**不再**发布 `openclaw` bin，避免与官方全局命令冲突）
+- [x] `openclaw.mjs` 在 ClaWorks 发行版中拒绝裸 `openclaw` 入口
+- [x] LaunchAgent / systemd 在 `CLAWORKS_PRODUCT=1` 时使用 `ai.claworks.*` / `claworks-gateway`
 
 ## 阶段 B — 发布面
 
@@ -26,11 +28,11 @@
 
 ## 破坏性变更沟通
 
-| 项           | 迁移                                   |
-| ------------ | -------------------------------------- |
-| 配置目录     | 已用 `~/.claworks/claworks.json`       |
-| Gateway 端口 | 18800（OpenClaw 个人 18789）           |
-| 全局命令     | `claworks` 主命令，`openclaw` 过渡别名 |
+| 项           | 迁移                                                                 |
+| ------------ | -------------------------------------------------------------------- |
+| 配置目录     | 已用 `~/.claworks/claworks.json`                                     |
+| Gateway 端口 | 18800（OpenClaw 个人 18789）                                         |
+| 全局命令     | **`claworks` 唯一**；`openclaw.mjs` 仅内部/upstream 兼容，不发布 bin |
 
 ## 建议执行顺序
 

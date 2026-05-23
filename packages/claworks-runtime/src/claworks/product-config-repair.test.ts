@@ -5,9 +5,11 @@ import { describe, expect, it } from "vitest";
 import {
   CLAWORKS_STANDARD_GATEWAY_PORT,
   OPENCLAW_RESERVED_GATEWAY_PORT,
+  detectPackLayerSystemConflict,
   hasPackSourcesAvailable,
   repairClaworksJsonConfig,
   repairClaworksRobotPluginConfig,
+  repairProductPluginsAllow,
   repairVectorKnowledgeBase,
   seedPacksToStateDir,
   seedRobotMdFromExample,
@@ -110,6 +112,42 @@ describe("product-config-repair", () => {
     expect(installed).toContain("base");
     expect(installed).toContain("enterprise-foundation");
     expect(installed).toContain("process-industry");
+  });
+
+  it("repairProductPluginsAllow merges extended allow list", () => {
+    const config: Record<string, unknown> = { plugins: { allow: ["claworks-robot"], entries: {} } };
+    const result = repairProductPluginsAllow(config, { profile: "extended" });
+    expect(result.changed).toBe(true);
+    const allow = (config.plugins as { allow: string[] }).allow;
+    expect(allow).toContain("feishu");
+    expect(allow).toContain("memory-lancedb");
+  });
+
+  it("detectPackLayerSystemConflict flags core+base", () => {
+    const r = detectPackLayerSystemConflict(["core", "base", "comms"]);
+    expect(r.conflict).toBe(true);
+    expect(r.message).toContain("core");
+  });
+
+  it("detectPackLayerSystemConflict ok for new chain only", () => {
+    const r = detectPackLayerSystemConflict(["base", "enterprise-foundation"]);
+    expect(r.conflict).toBe(false);
+    expect(r.message).toBeNull();
+  });
+
+  it("repairClaworksRobotPluginConfig warns on mixed layer systems", () => {
+    const config: Record<string, unknown> = {
+      plugins: {
+        entries: {
+          "claworks-robot": {
+            enabled: true,
+            config: { packs: { installed: ["core", "base"] } },
+          },
+        },
+      },
+    };
+    const result = repairClaworksRobotPluginConfig(config, { enableEchoConnector: false });
+    expect(result.warnings.some((w) => w.includes("core") && w.includes("base"))).toBe(true);
   });
 
   it("repairNotifyTargets derives from feishu allowFrom", () => {

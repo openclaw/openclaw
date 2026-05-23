@@ -90,6 +90,35 @@
                     },
                     "memory_agent_id": {
                         "type": "string"
+                    },
+                    "kb_embed_model": {
+                        "type": "string"
+                    }
+                }
+            },
+            "model_router": {
+                "type": "object",
+                "additionalProperties": true,
+                "properties": {
+                    "default": { "type": "string" },
+                    "fast": { "type": "string" },
+                    "embed": { "type": "string" },
+                    "chat": { "type": "string" },
+                    "complete": { "type": "string" }
+                }
+            },
+            "a2a": {
+                "type": "object",
+                "additionalProperties": true,
+                "properties": {
+                    "enabled": { "type": "boolean" },
+                    "endpoint": { "type": "string" },
+                    "peers": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
                     }
                 }
             },
@@ -143,7 +172,7 @@
                 "type": "object",
                 "additionalProperties": {
                     "type": "object",
-                    "additionalProperties": false,
+                    "additionalProperties": true,
                     "properties": {
                         "preset": {
                             "type": "string",
@@ -179,11 +208,21 @@
                             "additionalProperties": {
                                 "type": "string"
                             }
+                        },
+                        "auto_start": {
+                            "oneOf": [
+                                { "type": "boolean" },
+                                {
+                                    "type": "object",
+                                    "additionalProperties": true,
+                                    "properties": {
+                                        "method": { "type": "string" },
+                                        "params": { "type": "object" }
+                                    }
+                                }
+                            ]
                         }
-                    },
-                    "required": [
-                        "command"
-                    ]
+                    }
                 }
             }
         }

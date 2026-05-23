@@ -1,7 +1,7 @@
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
-import { requireNodeSqlite } from "../../../../../src/infra/node-sqlite.js";
 import { migrateClaworksSchema } from "./db-migrate.js";
+import { requireNodeSqlite } from "./node-sqlite.js";
 import { execSchemaBootstrap } from "./schema-bootstrap.sql.js";
 
 export type { CwDatabase } from "./db-types.js";

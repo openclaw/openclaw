@@ -1,4 +1,11 @@
-import { copyFileSync, existsSync, mkdirSync, readdirSync, symlinkSync } from "node:fs";
+import {
+  copyFileSync,
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  symlinkSync,
+} from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -26,6 +33,44 @@ export type ProductConfigRepairResult = {
   actions: string[];
   warnings: string[];
 };
+
+const LEGACY_L0_PACK = "core";
+const NEW_L0_PACK = "base";
+const LEGACY_CHAIN_PACKS = new Set(["core", "comms", "knowledge", "workflow"]);
+const NEW_CHAIN_MARKERS = new Set(["base", "enterprise-foundation", "process-industry"]);
+
+/** Detect core (legacy) + base (new) L0 both installed — causes playbook ID collisions. */
+export function detectPackLayerSystemConflict(installed: string[]): {
+  conflict: boolean;
+  message: string | null;
+} {
+  const ids = new Set(installed);
+  const hasCore = ids.has(LEGACY_L0_PACK);
+  const hasBase = ids.has(NEW_L0_PACK);
+  if (hasCore && hasBase) {
+    return {
+      conflict: true,
+      message:
+        "Both legacy L0 (core) and new L0 (base) installed — use one system (see claworks-packs/PACK-LAYER-SYSTEMS.md)",
+    };
+  }
+  const legacyOther = [...LEGACY_CHAIN_PACKS].some((p) => ids.has(p) && p !== LEGACY_L0_PACK);
+  const newOther = [...NEW_CHAIN_MARKERS].some((p) => ids.has(p));
+  if (hasCore && newOther) {
+    return {
+      conflict: true,
+      message:
+        "Mixed legacy core-chain and new base-chain packs — pick one profile from claworks.packs.json",
+    };
+  }
+  if (hasBase && legacyOther && !hasCore) {
+    return {
+      conflict: false,
+      message: "base + legacy comms/knowledge/workflow — prefer new profiles only",
+    };
+  }
+  return { conflict: false, message: null };
+}
 
 export function discoverPackSourceDir(cwd = process.cwd()): string | null {
   const env = process.env.CLAWORKS_PACKS_DIR?.trim();
@@ -63,6 +108,102 @@ export function hasPackSourcesAvailable(opts?: { cwd?: string; stateDir?: string
     }
   }
   return false;
+}
+
+export function discoverProductPluginAllowPath(cwd = process.cwd()): string | null {
+  const candidates = [
+    join(cwd, "contrib/claworks-product.plugins.allow.json"),
+    join(cwd, "..", "claworks", "contrib/claworks-product.plugins.allow.json"),
+    join(
+      fileURLToPath(new URL("../../../..", import.meta.url)),
+      "contrib/claworks-product.plugins.allow.json",
+    ),
+  ];
+  for (const p of candidates) {
+    if (existsSync(p)) {
+      return resolve(p);
+    }
+  }
+  return null;
+}
+
+export function loadProductPluginAllow(profile = "extended"): string[] {
+  const allowPath = discoverProductPluginAllowPath();
+  if (!allowPath) {
+    return ["claworks-robot", "feishu", "webhooks", "memory-core", "memory-lancedb"];
+  }
+  try {
+    const raw = JSON.parse(readFileSync(allowPath, "utf8")) as {
+      core?: string[];
+      personal_work?: string[];
+      optional_domestic_llm?: string[];
+      optional_enterprise?: string[];
+    };
+    const core = raw.core ?? ["claworks-robot"];
+    if (profile === "personal_work") {
+      return raw.personal_work ?? core;
+    }
+    if (profile === "full") {
+      return [
+        ...new Set([
+          ...core,
+          ...(raw.optional_domestic_llm ?? []),
+          ...(raw.optional_enterprise ?? []),
+        ]),
+      ];
+    }
+    if (profile === "core") {
+      return core;
+    }
+    return [...new Set([...core, ...(raw.optional_domestic_llm ?? [])])];
+  } catch {
+    return ["claworks-robot", "feishu", "webhooks", "memory-core", "memory-lancedb"];
+  }
+}
+
+export function repairProductPluginsAllow(
+  config: Record<string, unknown>,
+  opts?: { profile?: string },
+): ProductConfigRepairResult {
+  const actions: string[] = [];
+  const warnings: string[] = [];
+  let changed = false;
+
+  const profile =
+    opts?.profile?.trim() ||
+    process.env.CLAWORKS_PRODUCT_PROFILE?.trim() ||
+    (process.env.CLAWORKS_INIT_PROFILE?.trim() === "core" ? "core" : "extended");
+
+  const desired = loadProductPluginAllow(profile);
+  const plugins = (config.plugins ?? {}) as Record<string, unknown>;
+  config.plugins = plugins;
+  const allow = new Set(Array.isArray(plugins.allow) ? (plugins.allow as string[]) : []);
+  for (const id of desired) {
+    if (!allow.has(id)) {
+      allow.add(id);
+      actions.push(`plugins.allow: added ${id}`);
+      changed = true;
+    }
+  }
+  if (changed) {
+    plugins.allow = [...allow];
+  }
+
+  const entries = (plugins.entries ?? {}) as Record<string, Record<string, unknown>>;
+  plugins.entries = entries;
+  entries["claworks-robot"] ??= { enabled: true };
+  if (entries["claworks-robot"].enabled !== true) {
+    entries["claworks-robot"].enabled = true;
+    actions.push("plugins.entries.claworks-robot.enabled = true");
+    changed = true;
+  }
+  if (allow.has("feishu") && entries.feishu?.enabled !== true) {
+    entries.feishu = { ...entries.feishu, enabled: true };
+    actions.push("plugins.entries.feishu.enabled = true");
+    changed = true;
+  }
+
+  return { changed, actions, warnings };
 }
 
 function resolvePackSourcePath(packId: string, primaryDir: string | null): string | null {
@@ -294,6 +435,13 @@ export function repairClaworksRobotPluginConfig(
     changed = true;
   }
 
+  const layerConflict = detectPackLayerSystemConflict(packs.installed ?? []);
+  if (layerConflict.conflict && layerConflict.message) {
+    warnings.push(layerConflict.message);
+  } else if (layerConflict.message) {
+    warnings.push(layerConflict.message);
+  }
+
   const connectors = (pluginConfig.connectors ?? {}) as Record<string, unknown>;
   if (opts?.enableEchoConnector !== false && !connectors.echo) {
     pluginConfig.connectors = {
@@ -437,6 +585,13 @@ export function repairClaworksJsonConfig(
     changed = true;
   }
 
+  const pluginAllowRepair = repairProductPluginsAllow(config);
+  actions.push(...pluginAllowRepair.actions);
+  warnings.push(...pluginAllowRepair.warnings);
+  if (pluginAllowRepair.changed) {
+    changed = true;
+  }
+
   const pluginRepair = repairClaworksRobotPluginConfig(config, {
     packSourceDir: opts?.packSourceDir,
     enableEchoConnector: opts?.enableEchoConnector,
@@ -471,6 +626,8 @@ export function repairClaworksJsonConfig(
   const enableVectorKb =
     process.env.CLAWORKS_VECTOR_KB === "1" ||
     process.env.CLAWORKS_PRODUCT_PROFILE?.trim() === "personal_work" ||
+    process.env.CLAWORKS_INIT_PROFILE?.trim() === "enterprise" ||
+    process.env.CLAWORKS_PRODUCT === "1" ||
     (plugins?.allow ?? []).includes("memory-core") ||
     (plugins?.allow ?? []).includes("memory-lancedb");
   if (enableVectorKb) {

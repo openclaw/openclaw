@@ -11,7 +11,12 @@ import {
 import { isClaworksProduct } from "../config/paths.js";
 import { repairClaworksLaunchAgentIsolation } from "../daemon/claworks-launch-agent-repair.js";
 import { registerHealthCheck } from "./health-check-registry.js";
-import type { HealthCheck, HealthFinding, HealthRepairContext } from "./health-checks.js";
+import type {
+  HealthCheck,
+  HealthCheckContext,
+  HealthFinding,
+  HealthRepairContext,
+} from "./health-checks.js";
 
 const MISENTRY_CHECK_ID = "claworks/product/misentry";
 
@@ -135,8 +140,37 @@ const claworksLaunchAgentCheck: HealthCheck = {
   },
 };
 
+const CLAWORKS_PRODUCT_CHECK_IDS = [MISENTRY_CHECK_ID, LAUNCH_AGENT_CHECK_ID, CHECK_ID] as const;
+
+let registered = false;
+
 export function registerClaworksProductHealthChecks(): void {
+  if (registered) {
+    return;
+  }
   registerHealthCheck(claworksMisentryCheck);
   registerHealthCheck(claworksLaunchAgentCheck);
   registerHealthCheck(claworksGatewayPortCheck);
+  registered = true;
+}
+
+export function resetClaworksProductHealthChecksForTest(): void {
+  registered = false;
+}
+
+export async function detectClaworksProductHealthFindings(
+  ctx: HealthCheckContext,
+): Promise<HealthFinding[]> {
+  registerClaworksProductHealthChecks();
+  const findings: HealthFinding[] = [];
+  for (const id of CLAWORKS_PRODUCT_CHECK_IDS) {
+    const check =
+      id === MISENTRY_CHECK_ID
+        ? claworksMisentryCheck
+        : id === LAUNCH_AGENT_CHECK_ID
+          ? claworksLaunchAgentCheck
+          : claworksGatewayPortCheck;
+    findings.push(...(await check.detect(ctx)));
+  }
+  return findings;
 }

@@ -1,0 +1,45 @@
+name: ClaWorks Smoke
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - "packages/claworks-runtime/**"
+      - "extensions/claworks-robot/**"
+      - "scripts/claworks-*.mjs"
+      - "scripts/claworks-*.ts"
+      - "claworks.mjs"
+      - "package.json"
+      - "pnpm-lock.yaml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: claworks-smoke-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: ClaWorks runtime tests
+        run: pnpm claworks:runtime:test
+
+      - name: ClaWorks smoke (no live gateway)
+        run: pnpm claworks:smoke
