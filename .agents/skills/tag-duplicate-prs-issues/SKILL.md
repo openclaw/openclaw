@@ -22,7 +22,7 @@ Use the `prtags` skill from the `prtags` repo at `skills/prtags/SKILL.md` when i
 
 ### Install the CLIs
 
-Install `prtags` from its latest GitHub release.
+Install `prtags` from a pinned GitHub release with checksum verification.
 Do not rely on an old local build unless the maintainer explicitly wants to test unreleased behavior.
 
 `prtags` CLI install path:
