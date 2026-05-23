@@ -859,4 +859,93 @@ describe("handleMessageEnd", () => {
     expect(event?.data?.delta).toBe("");
     expect(event?.data?.replace).toBe(true);
   });
+
+  it("warns when assistant emits raw NO_REPLY after a tool error even with prior messaging-tool text", () => {
+    const warn = vi.fn();
+    const ctx = createMessageEndContext({
+      warn,
+      state: {
+        lastToolError: { toolName: "Bash", errorCode: "sandbox_denied" },
+        messagingToolSentTexts: ["earlier tool-sent message"],
+        messagingToolSentTextsNormalized: ["earlier tool-sent message"],
+        deltaBuffer: "NO_REPLY",
+        blockBuffer: "NO_REPLY",
+      },
+    });
+
+    void handleMessageEnd(ctx, {
+      type: "message_end",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "NO_REPLY" }],
+        stopReason: "stop",
+      },
+    } as never);
+
+    const ackWarning = (warn.mock.calls as unknown[][]).find(
+      (call) =>
+        typeof call[0] === "string" &&
+        (call[0] as string).startsWith("agent silently acked after tool error:"),
+    );
+    expect(ackWarning).toBeDefined();
+    expect(ackWarning?.[0]).toBe("agent silently acked after tool error: tool=Bash ack=NO_REPLY");
+  });
+
+  it("does not warn when assistant emits substantive text after a tool error", () => {
+    const warn = vi.fn();
+    const ctx = createMessageEndContext({
+      warn,
+      state: {
+        lastToolError: { toolName: "Bash", errorCode: "sandbox_denied" },
+        deltaBuffer: "Retrying with a different path.",
+        blockBuffer: "Retrying with a different path.",
+      },
+    });
+
+    void handleMessageEnd(ctx, {
+      type: "message_end",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "Retrying with a different path." }],
+        stopReason: "stop",
+      },
+    } as never);
+
+    const ackWarning = (warn.mock.calls as unknown[][]).find(
+      (call) =>
+        typeof call[0] === "string" &&
+        (call[0] as string).startsWith("agent silently acked after tool error:"),
+    );
+    expect(ackWarning).toBeUndefined();
+  });
+
+  it("does not warn when assistant emits NO_REPLY but there was no tool error", () => {
+    const warn = vi.fn();
+    const ctx = createMessageEndContext({
+      warn,
+      state: {
+        lastToolError: undefined,
+        messagingToolSentTexts: ["earlier tool-sent message"],
+        messagingToolSentTextsNormalized: ["earlier tool-sent message"],
+        deltaBuffer: "NO_REPLY",
+        blockBuffer: "NO_REPLY",
+      },
+    });
+
+    void handleMessageEnd(ctx, {
+      type: "message_end",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "NO_REPLY" }],
+        stopReason: "stop",
+      },
+    } as never);
+
+    const ackWarning = (warn.mock.calls as unknown[][]).find(
+      (call) =>
+        typeof call[0] === "string" &&
+        (call[0] as string).startsWith("agent silently acked after tool error:"),
+    );
+    expect(ackWarning).toBeUndefined();
+  });
 });
