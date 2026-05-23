@@ -213,6 +213,7 @@ const CODEX_APP_SERVER_UNSUBSCRIBE_TIMEOUT_MS = 5_000;
 const CODEX_USAGE_LIMIT_RATE_LIMIT_REFRESH_TIMEOUT_MS = 5_000;
 const CODEX_TURN_COMPLETION_IDLE_TIMEOUT_MS = 60_000;
 const CODEX_TURN_ASSISTANT_COMPLETION_IDLE_TIMEOUT_MS = 10_000;
+const CODEX_POST_REASONING_SOURCE_REPLY_IDLE_TIMEOUT_MS = 5 * 60_000;
 const CODEX_TURN_TERMINAL_IDLE_TIMEOUT_MS = 30 * 60_000;
 const CODEX_NATIVE_HOOK_RELAY_MIN_TTL_MS = 30 * 60_000;
 const CODEX_NATIVE_HOOK_RELAY_TTL_GRACE_MS = 5 * 60_000;
@@ -2405,13 +2406,18 @@ export async function runCodexAppServerAttempt(
       turnCrossedToolHandoff &&
       isRawAssistantCompletionNotification(notification) &&
       activeTurnItemIds.size === 0;
+    const shouldArmPostReasoningSourceReplyWatch =
+      isCurrentTurnNotification &&
+      isReasoningItemCompletionNotification(notification) &&
+      activeTurnItemIds.size === 0 &&
+      params.sourceReplyDeliveryMode === "message_tool_only";
     const shouldRearmCompletionIdleWatchAfterLastCurrentTurnItem =
       isCurrentTurnNotification &&
       notification.method === "item/completed" &&
       activeTurnItemIds.size === 0 &&
       !trackedDynamicToolCompletion &&
       !assistantCompletionCanRelease &&
-      !isReasoningItemCompletionNotification(notification);
+      !shouldArmPostReasoningSourceReplyWatch;
     if (isCurrentTurnNotification && notification.method === "error") {
       if (isRetryableErrorNotification(notification.params)) {
         disarmTurnCompletionIdleWatch();
@@ -2425,6 +2431,8 @@ export async function runCodexAppServerAttempt(
       armTurnAssistantCompletionIdleWatch(describeNotificationActivity(notification));
     } else if (postToolRawAssistantCompletionNeedsTerminalGuard) {
       armTurnCompletionIdleWatch({ timeoutMs: postToolRawAssistantCompletionIdleTimeoutMs });
+    } else if (shouldArmPostReasoningSourceReplyWatch) {
+      armTurnCompletionIdleWatch({ timeoutMs: CODEX_POST_REASONING_SOURCE_REPLY_IDLE_TIMEOUT_MS });
     } else if (unblockedAssistantCompletionRelease) {
       armTurnAssistantCompletionIdleWatch(describeNotificationActivity(notification));
     } else if (shouldRearmCompletionIdleWatchAfterLastCurrentTurnItem) {
@@ -2450,6 +2458,7 @@ export async function runCodexAppServerAttempt(
       !trackedDynamicToolCompletion &&
       !rawToolOutputCompletion &&
       !postToolRawAssistantCompletionNeedsTerminalGuard &&
+      !shouldArmPostReasoningSourceReplyWatch &&
       !shouldRearmCompletionIdleWatchAfterLastCurrentTurnItem
     ) {
       // The short completion-idle watchdog guards blind gaps after Codex
