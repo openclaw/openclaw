@@ -328,6 +328,25 @@ describe("scripts/changed-lanes", () => {
     expect(command.args).toEqual(["check:no-conflict-markers"]);
   });
 
+  it("runs Blacksmith runner changed-check children through Corepack pnpm", () => {
+    const command = createPnpmManagedCommand(
+      { name: "conflict markers", args: ["check:no-conflict-markers"] },
+      {
+        ACTIONS_RUNNER_ACTION_ARCHIVE_CACHE: "/opt/actionarchivecache",
+        PATH: "/usr/bin",
+        npm_execpath: "/usr/local/global/stale/node_modules/pnpm/bin/pnpm.mjs",
+      },
+    );
+
+    expect(command.bin).toBe("pnpm");
+    expect(command.args).toEqual(["check:no-conflict-markers"]);
+    expect(command.env?.COREPACK_ENABLE_DOWNLOAD_PROMPT).toBe("0");
+    expect(command.env?.COREPACK_HOME).toContain("openclaw-corepack-home-");
+    expect(command.env?.npm_execpath).toBeUndefined();
+    expect(command.env?.PATH).not.toBe("/usr/bin");
+    expect(command.env?.PATH).toContain("/usr/bin");
+  });
+
   it("keeps local changed-check children on the repo pnpm shim", () => {
     const command = createPnpmManagedCommand(
       { name: "conflict markers", args: ["check:no-conflict-markers"] },

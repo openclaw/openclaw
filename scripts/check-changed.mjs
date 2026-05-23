@@ -379,11 +379,7 @@ async function runPlanCommand(command, timings) {
 
 export function createPnpmManagedCommand(command, env = process.env) {
   const commandEnv = command.env ?? resolveLocalHeavyCheckEnv(env);
-  if (
-    isTruthyEnvFlag(commandEnv.OPENCLAW_TESTBOX_REMOTE_RUN) ||
-    isTruthyEnvFlag(commandEnv.CI) ||
-    isTruthyEnvFlag(commandEnv.GITHUB_ACTIONS)
-  ) {
+  if (shouldUseCorepackPnpmShim(commandEnv)) {
     const shimmedEnv = prependCorepackPnpmShim(commandEnv);
     return {
       ...command,
@@ -392,6 +388,15 @@ export function createPnpmManagedCommand(command, env = process.env) {
     };
   }
   return { ...command, bin: "pnpm", env: commandEnv };
+}
+
+function shouldUseCorepackPnpmShim(env) {
+  return (
+    isTruthyEnvFlag(env.OPENCLAW_TESTBOX_REMOTE_RUN) ||
+    isTruthyEnvFlag(env.CI) ||
+    isTruthyEnvFlag(env.GITHUB_ACTIONS) ||
+    isTruthyEnvFlag(env.ACTIONS_RUNNER_ACTION_ARCHIVE_CACHE)
+  );
 }
 
 function prependCorepackPnpmShim(env) {
