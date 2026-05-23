@@ -7,7 +7,7 @@ import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import type { MsgContext } from "../templating.js";
 import { resolveAgentTurnAttachments } from "./agent-turn-attachments.js";
 
-function countCurrentImageAttachmentCandidates(ctx: MsgContext): number {
+function collectCurrentImageAttachmentIndexes(ctx: MsgContext): number[] {
   const pathsFromArray = Array.isArray(ctx.MediaPaths) ? ctx.MediaPaths : undefined;
   const paths =
     pathsFromArray && pathsFromArray.length > 0
@@ -16,21 +16,33 @@ function countCurrentImageAttachmentCandidates(ctx: MsgContext): number {
         ? [ctx.MediaPath]
         : [];
   if (paths.length === 0) {
-    return 0;
+    return [];
   }
   const types =
     Array.isArray(ctx.MediaTypes) && ctx.MediaTypes.length === paths.length
       ? ctx.MediaTypes
       : undefined;
-  let count = 0;
+  const indexes: number[] = [];
   for (const [index, pathValue] of paths.entries()) {
     const mediaPath = normalizeOptionalString(pathValue);
     const mediaType = normalizeOptionalString(types?.[index] ?? ctx.MediaType);
     if (mediaPath && mediaType?.startsWith("image/")) {
-      count++;
+      indexes.push(index);
     }
   }
-  return count;
+  return indexes;
+}
+
+function hasCurrentImageUnderstanding(ctx: MsgContext, imageAttachmentIndexes: number[]): boolean {
+  if (imageAttachmentIndexes.length === 0) {
+    return false;
+  }
+  const describedImageIndexes = new Set(
+    ctx.MediaUnderstanding?.filter((output) => output.kind === "image.description").map(
+      (output) => output.attachmentIndex,
+    ) ?? [],
+  );
+  return imageAttachmentIndexes.every((index) => describedImageIndexes.has(index));
 }
 
 export async function resolveCurrentTurnImages(params: {
@@ -46,8 +58,11 @@ export async function resolveCurrentTurnImages(params: {
     return { images: params.images, imageOrder: params.imageOrder };
   }
 
-  const currentImageCandidateCount = countCurrentImageAttachmentCandidates(params.ctx);
-  if (currentImageCandidateCount === 0) {
+  const currentImageAttachmentIndexes = collectCurrentImageAttachmentIndexes(params.ctx);
+  if (currentImageAttachmentIndexes.length === 0) {
+    return { images: params.images, imageOrder: params.imageOrder };
+  }
+  if (hasCurrentImageUnderstanding(params.ctx, currentImageAttachmentIndexes)) {
     return { images: params.images, imageOrder: params.imageOrder };
   }
 
@@ -64,9 +79,9 @@ export async function resolveCurrentTurnImages(params: {
         mimeType: attachment.mediaType,
       }),
     );
-    if (images.length < currentImageCandidateCount) {
+    if (images.length < currentImageAttachmentIndexes.length) {
       logVerbose(
-        `agent-runner: native PI media resolution produced ${images.length}/${currentImageCandidateCount} current image attachment(s); falling back to prompt image refs`,
+        `agent-runner: native PI media resolution produced ${images.length}/${currentImageAttachmentIndexes.length} current image attachment(s); falling back to prompt image refs`,
       );
       return { images: params.images, imageOrder: params.imageOrder };
     }
