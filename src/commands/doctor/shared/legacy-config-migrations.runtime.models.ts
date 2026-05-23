@@ -38,6 +38,35 @@ const INVALID_THINKING_FORMAT_RULE: LegacyConfigRule = {
   match: (value) => hasInvalidThinkingFormat(value),
 };
 
+const DEEPSEEK_V4_CONTEXT_WINDOW = 1_000_000;
+const DEEPSEEK_V4_STALE_CONTEXT_WINDOW = 200_000;
+const DEEPSEEK_V4_MODEL_IDS = new Set(["deepseek-v4-flash", "deepseek-v4-pro"]);
+
+function isStaleDeepSeekV4ContextWindowModel(model: unknown): boolean {
+  const record = getRecord(model);
+  if (!record || typeof record.id !== "string") {
+    return false;
+  }
+  return (
+    DEEPSEEK_V4_MODEL_IDS.has(record.id.trim().toLowerCase()) &&
+    record.contextWindow === DEEPSEEK_V4_STALE_CONTEXT_WINDOW
+  );
+}
+
+function hasStaleDeepSeekV4ContextWindow(providers: unknown): boolean {
+  const providersRecord = getRecord(providers);
+  const deepseek = getRecord(providersRecord?.deepseek);
+  const models = deepseek?.models;
+  return Array.isArray(models) && models.some(isStaleDeepSeekV4ContextWindowModel);
+}
+
+const STALE_DEEPSEEK_V4_CONTEXT_WINDOW_RULE: LegacyConfigRule = {
+  path: ["models", "providers", "deepseek", "models"],
+  message:
+    'models.providers.deepseek.models contains stale DeepSeek V4 200000-token context metadata; run "openclaw doctor --fix" to restore the bundled 1000000-token window.',
+  match: (value) => hasStaleDeepSeekV4ContextWindow({ deepseek: { models: value } }),
+};
+
 function normalizeString(value: unknown): string {
   return typeof value === "string" ? value.trim().toLowerCase() : "";
 }
@@ -503,6 +532,30 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_MODELS: LegacyConfigMigrationSpec[
         delete raw[key];
       }
       Object.assign(raw, rewritten.value);
+    },
+  }),
+  defineLegacyConfigMigration({
+    id: "models.providers.deepseek.models.deepseek-v4-contextWindow-stale",
+    describe: "Restore stale DeepSeek V4 context windows to current catalog metadata",
+    legacyRules: [STALE_DEEPSEEK_V4_CONTEXT_WINDOW_RULE],
+    apply: (raw, changes) => {
+      const providers = getRecord(getRecord(raw.models)?.providers);
+      const deepseek = getRecord(providers?.deepseek);
+      const models = deepseek?.models;
+      if (!Array.isArray(models)) {
+        return;
+      }
+
+      for (const [index, model] of models.entries()) {
+        const record = getRecord(model);
+        if (!isStaleDeepSeekV4ContextWindowModel(record)) {
+          continue;
+        }
+        record.contextWindow = DEEPSEEK_V4_CONTEXT_WINDOW;
+        changes.push(
+          `Restored models.providers.deepseek.models.${index}.contextWindow for ${JSON.stringify(record.id)} from ${DEEPSEEK_V4_STALE_CONTEXT_WINDOW} to ${DEEPSEEK_V4_CONTEXT_WINDOW}.`,
+        );
+      }
     },
   }),
   defineLegacyConfigMigration({

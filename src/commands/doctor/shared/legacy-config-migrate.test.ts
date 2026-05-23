@@ -1316,6 +1316,70 @@ describe("legacy model compat migrate", () => {
     ]);
   });
 
+  it("restores stale DeepSeek V4 200K context windows", () => {
+    const res = migrateLegacyConfigForTest({
+      models: {
+        providers: {
+          deepseek: {
+            models: [
+              {
+                id: "deepseek-v4-flash",
+                name: "DeepSeek V4 Flash",
+                contextWindow: 200_000,
+                maxTokens: 384_000,
+              },
+              {
+                id: "deepseek-v4-pro",
+                name: "DeepSeek V4 Pro",
+                contextWindow: 200_000,
+                maxTokens: 384_000,
+              },
+              {
+                id: "deepseek-chat",
+                name: "DeepSeek Chat",
+                contextWindow: 200_000,
+              },
+            ],
+          },
+        },
+      },
+    });
+
+    expect(res.config?.models?.providers?.deepseek?.models?.[0]?.contextWindow).toBe(1_000_000);
+    expect(res.config?.models?.providers?.deepseek?.models?.[1]?.contextWindow).toBe(1_000_000);
+    expect(res.config?.models?.providers?.deepseek?.models?.[2]?.contextWindow).toBe(200_000);
+    expect(res.changes).toStrictEqual([
+      'Restored models.providers.deepseek.models.0.contextWindow for "deepseek-v4-flash" from 200000 to 1000000.',
+      'Restored models.providers.deepseek.models.1.contextWindow for "deepseek-v4-pro" from 200000 to 1000000.',
+    ]);
+  });
+
+  it("preserves intentional DeepSeek V4 context window overrides", () => {
+    const res = migrateLegacyConfigForTest({
+      models: {
+        providers: {
+          deepseek: {
+            models: [
+              {
+                id: "deepseek-v4-flash",
+                name: "DeepSeek V4 Flash",
+                contextWindow: 500_000,
+              },
+              {
+                id: "deepseek-v4-pro",
+                name: "DeepSeek V4 Pro",
+                contextWindow: 1_000_000,
+              },
+            ],
+          },
+        },
+      },
+    });
+
+    expect(res.config).toBeNull();
+    expect(res.changes).toStrictEqual([]);
+  });
+
   it("removes unrecognized model compat thinkingFormat values", () => {
     const res = migrateLegacyConfigForTest({
       models: {
