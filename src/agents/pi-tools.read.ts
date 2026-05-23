@@ -860,6 +860,49 @@ async function writeHostFile(absolutePath: string, content: string) {
   await fs.writeFile(resolved, content, "utf-8");
 }
 
+async function resolveWorkspaceOnlyWriteRelative(
+  root: string,
+  absolutePath: string,
+): Promise<string> {
+  const relative = toRelativeWorkspacePath(root, absolutePath);
+  const resolved = path.resolve(root, relative);
+  await assertSandboxPath({ filePath: resolved, cwd: root, root });
+  const rootReal = await fs.realpath(root);
+  const suffix = [path.basename(resolved)];
+  let parent = path.dirname(resolved);
+
+  while (true) {
+    try {
+      const parentReal = await fs.realpath(parent);
+      const canonicalRelative = path.relative(rootReal, path.join(parentReal, ...suffix));
+      if (
+        !canonicalRelative ||
+        canonicalRelative === ".." ||
+        canonicalRelative.startsWith(`..${path.sep}`) ||
+        path.isAbsolute(canonicalRelative)
+      ) {
+        throw new Error(`Path escapes sandbox root (${rootReal}): ${absolutePath}`);
+      }
+      return canonicalRelative.split(path.sep).join(path.posix.sep);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+        throw error;
+      }
+      const nextParent = path.dirname(parent);
+      if (nextParent === parent) {
+        throw error;
+      }
+      suffix.unshift(path.basename(parent));
+      parent = nextParent;
+    }
+  }
+}
+
+async function writeWorkspaceOnlyHostFile(root: string, absolutePath: string, content: string) {
+  const safeRelative = await resolveWorkspaceOnlyWriteRelative(root, absolutePath);
+  await (await fsRoot(root)).write(safeRelative, content, { mkdir: true });
+}
+
 function createHostWriteOperations(root: string, options?: { workspaceOnly?: boolean }) {
   const workspaceOnly = options?.workspaceOnly ?? false;
 
@@ -875,7 +918,6 @@ function createHostWriteOperations(root: string, options?: { workspaceOnly?: boo
   }
 
   // When workspaceOnly is true, enforce workspace boundary
-  const rootPromise = fsRoot(root);
   return {
     mkdir: async (dir: string) => {
       const relative = toRelativeWorkspacePath(root, dir, { allowRoot: true });
@@ -884,8 +926,7 @@ function createHostWriteOperations(root: string, options?: { workspaceOnly?: boo
       await fs.mkdir(resolved, { recursive: true });
     },
     writeFile: async (absolutePath: string, content: string) => {
-      const relative = toRelativeWorkspacePath(root, absolutePath);
-      await (await rootPromise).write(relative, content, { mkdir: true });
+      await writeWorkspaceOnlyHostFile(root, absolutePath, content);
     },
   } as const;
 }
@@ -917,8 +958,7 @@ function createHostEditOperations(root: string, options?: { workspaceOnly?: bool
       return safeRead.buffer;
     },
     writeFile: async (absolutePath: string, content: string) => {
-      const relative = toRelativeWorkspacePath(root, absolutePath);
-      await (await rootPromise).write(relative, content, { mkdir: true });
+      await writeWorkspaceOnlyHostFile(root, absolutePath, content);
     },
     access: async (absolutePath: string) => {
       let relative: string;
