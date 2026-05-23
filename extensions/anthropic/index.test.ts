@@ -546,12 +546,14 @@ describe("anthropic provider replay hooks", () => {
     expect(normalized?.input).toEqual(["text", "image"]);
   });
 
-  it("normalizes exact claude opus 4.7 variants to 1M context", async () => {
+  it("normalizes GA 1M Claude variants to 1M context", async () => {
     const provider = await registerSingleProviderPlugin(anthropicPlugin);
 
     for (const [runtimeProvider, modelId] of [
       ["anthropic", "claude-opus-4-7"],
       ["claude-cli", "claude-opus-4.7-20260219"],
+      ["anthropic", "claude-opus-4-6"],
+      ["anthropic", "claude-sonnet-4-6"],
     ] as const) {
       expectFields(
         provider.normalizeResolvedModel?.({
@@ -576,6 +578,29 @@ describe("anthropic provider replay hooks", () => {
         },
       );
     }
+  });
+
+  it("does not normalize legacy Claude 4.5 models to 1M context", async () => {
+    const provider = await registerSingleProviderPlugin(anthropicPlugin);
+
+    const normalized = provider.normalizeResolvedModel?.({
+      provider: "anthropic",
+      modelId: "claude-sonnet-4-5",
+      model: {
+        id: "claude-sonnet-4-5",
+        name: "Claude Sonnet 4.5",
+        provider: "anthropic",
+        api: "anthropic-messages",
+        reasoning: true,
+        input: ["text", "image"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 200_000,
+        contextTokens: 200_000,
+        maxTokens: 32_000,
+      },
+    } as never);
+
+    expect(normalized).toBeUndefined();
   });
 
   it("resolves claude-cli synthetic oauth auth", async () => {

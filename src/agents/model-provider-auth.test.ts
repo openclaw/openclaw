@@ -63,8 +63,12 @@ vi.mock("./agent-scope-config.js", () => ({
   resolveDefaultAgentId: () => "default",
 }));
 
-const { clearCurrentProviderAuthState, hasAuthForModelProvider, warmCurrentProviderAuthState } =
-  await import("./model-provider-auth.js");
+const {
+  clearCurrentProviderAuthState,
+  createProviderAuthChecker,
+  hasAuthForModelProvider,
+  warmCurrentProviderAuthState,
+} = await import("./model-provider-auth.js");
 
 describe("prepared provider auth state", () => {
   afterEach(() => {
@@ -145,6 +149,31 @@ describe("prepared provider auth state", () => {
     // Broad-scope caller (default flags) still hits the prepared map.
     await expect(hasAuthForModelProvider({ provider: "openai", cfg })).resolves.toBe(true);
     expect(modelAuthMocks.hasRuntimeAvailableProviderAuth).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not prepare synthetic auth refs when plugin synthetic auth is disabled", async () => {
+    const cfg = {} as OpenClawConfig;
+    modelAuthMocks.hasRuntimeAvailableProviderAuth.mockReturnValue(false);
+
+    const hasAuth = createProviderAuthChecker({
+      cfg,
+      allowPluginSyntheticAuth: false,
+      discoverExternalCliAuth: false,
+    });
+
+    await expect(hasAuth("openai")).resolves.toBe(false);
+
+    expect(modelAuthMocks.createRuntimeProviderAuthLookup).toHaveBeenCalledWith({
+      cfg,
+      workspaceDir: undefined,
+      env: undefined,
+      includePluginSyntheticAuth: false,
+    });
+    const runtimeLookup =
+      modelAuthMocks.hasRuntimeAvailableProviderAuth.mock.calls[0]?.[0].runtimeLookup;
+    expect(runtimeLookup).toBe(
+      modelAuthMocks.createRuntimeProviderAuthLookup.mock.results[0]?.value,
+    );
   });
 
   it("hasAuthForModelProvider uses the prepared answer for equivalent runtime config clones", async () => {

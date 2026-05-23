@@ -188,6 +188,7 @@ export function createProviderAuthChecker(params: {
           cfg: params.cfg,
           workspaceDir: params.workspaceDir,
           env: params.env,
+          includePluginSyntheticAuth: params.allowPluginSyntheticAuth !== false,
         })),
     });
     authCache.set(key, value);

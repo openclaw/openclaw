@@ -23,8 +23,8 @@ type LifecycleEvent = {
 };
 
 type SessionStoreEntry = {
-  sessionId?: string;
-  updatedAt?: number;
+  sessionId: string;
+  updatedAt: number;
   channel?: string;
   lastChannel?: string;
   to?: string;
@@ -193,6 +193,20 @@ describe("subagent registry lifecycle error grace", () => {
     subagentAnnounceOutputTesting.setDepsForTest({
       callGateway: callGatewayMock as typeof import("../gateway/call.js").callGateway,
       getRuntimeConfig: loadConfigMock as typeof import("../config/config.js").getRuntimeConfig,
+      readLatestAssistantReply: async (params) => {
+        const sessionKey = params?.sessionKey ?? "";
+        const messages = chatHistoryBySessionKey.get(sessionKey) ?? [];
+        for (const message of messages.toReversed()) {
+          if (message.role !== "assistant") {
+            continue;
+          }
+          return typeof message.content === "string" ? message.content : undefined;
+        }
+        return undefined;
+      },
+      readSessionEntry: (_storePath, sessionKey) => sessionStore[sessionKey],
+      resolveAgentIdFromSessionKey: (key) => key?.match(/^agent:([^:]+)/)?.[1] ?? "main",
+      resolveStorePath: () => "/tmp/test-store",
     });
   });
 
