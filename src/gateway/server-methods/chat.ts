@@ -10,6 +10,7 @@ import {
   resolveSendableOutboundReplyParts,
 } from "openclaw/plugin-sdk/reply-payload";
 import { resolveAgentWorkspaceDir, resolveSessionAgentId } from "../../agents/agent-scope.js";
+import { runAgentHarnessBeforeMessageWriteHook } from "../../agents/harness/hook-helpers.js";
 import { resolveDefaultModelForAgent } from "../../agents/model-selection.js";
 import { rewriteTranscriptEntriesInSessionFile } from "../../agents/pi-embedded-runner/transcript-rewrite.js";
 import { resolveProviderIdForAuth } from "../../agents/provider-auth-aliases.js";
@@ -2678,25 +2679,34 @@ export const chatHandlers: GatewayRequestHandlers = {
                 savedImages: persistedImages,
                 timestamp: now,
               });
-              // Call sites that invoke emitUserTranscriptUpdate are gated on
-              // !hasBeforeAgentRunGate, so this append never collides with
-              // attempt.ts's redacted-user-message write on the hook-block path.
-              // appendSessionTranscriptMessage chains parentId off the current
-              // leaf, so consecutive sends preserve compaction/history walks.
-              await appendSessionTranscriptMessage({
+              // Fire before_message_write so plugin policy (redaction,
+              // provenance, block-list) applies to webchat user writes the
+              // same way it does for the codex transcript mirror path at
+              // extensions/codex/src/app-server/transcript-mirror.ts:147 .
+              // appendSessionTranscriptMessage chains parentId off the
+              // current leaf, so consecutive sends preserve compaction and
+              // history walks.
+              const hookedMessage = runAgentHarnessBeforeMessageWriteHook({
+                message: userMessage as AgentMessage,
+                ...(agentId ? { agentId } : {}),
+                sessionKey,
+              });
+              if (!hookedMessage) {
+                context.logGateway.info(
+                  `webchat user transcript append blocked by before_message_write hook sessionKey=${sessionKey}`,
+                );
+                return;
+              }
+              const { message: appendedMessage } = await appendSessionTranscriptMessage({
                 transcriptPath,
-                message: userMessage,
+                message: hookedMessage,
                 sessionId: resolvedSessionId,
                 config: cfg,
-              }).catch((err) => {
-                context.logGateway.warn(
-                  `webchat user transcript append failed: ${formatForLog(err)}`,
-                );
               });
               emitSessionTranscriptUpdate({
                 sessionFile: transcriptPath,
                 sessionKey,
-                message: userMessage,
+                message: appendedMessage,
               });
             },
             {
