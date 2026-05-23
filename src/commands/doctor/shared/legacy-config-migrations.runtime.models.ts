@@ -67,6 +67,94 @@ function shouldUpgradeClaudeProvider(provider: string | undefined): boolean {
   );
 }
 
+function upgradeRetiredGroqModelId(model: string): string | null {
+  const normalized = normalizeString(model);
+  switch (normalized) {
+    case "deepseek-r1-distill-llama-70b":
+      return "llama-3.3-70b-versatile";
+    case "gemma2-9b-it":
+    case "llama3-8b-8192":
+      return "llama-3.1-8b-instant";
+    case "llama3-70b-8192":
+      return "llama-3.3-70b-versatile";
+    case "meta-llama/llama-4-maverick-17b-128e-instruct":
+    case "moonshotai/kimi-k2-instruct":
+    case "moonshotai/kimi-k2-instruct-0905":
+      return "openai/gpt-oss-120b";
+    case "mistral-saba-24b":
+    case "qwen-qwq-32b":
+      return "qwen/qwen3-32b";
+    default:
+      return null;
+  }
+}
+
+function upgradeRetiredXaiModelId(model: string): string | null {
+  const normalized = normalizeString(model);
+  switch (normalized) {
+    case "grok-code-fast":
+    case "grok-code-fast-1":
+    case "grok-code-fast-1-0825":
+      return "grok-build-0.1";
+    case "grok-4-fast-reasoning":
+    case "grok-4-1-fast-reasoning":
+      return "grok-4.3";
+    default:
+      return null;
+  }
+}
+
+function upgradeRetiredOpenAiModelId(model: string, provider?: string): string | null {
+  const normalized = normalizeString(model);
+  const codexProvider = provider === "openai-codex";
+  if (codexProvider && normalized === "gpt-5.2") {
+    return "gpt-5.5";
+  }
+  if (
+    normalized === "gpt-5.2-codex" ||
+    normalized === "gpt-5.1-codex" ||
+    normalized === "gpt-5-codex"
+  ) {
+    return codexProvider ? "gpt-5.5" : "gpt-5.3-codex";
+  }
+  if (normalized === "gpt-5-pro" || normalized === "gpt-5.2-pro") {
+    return "gpt-5.5-pro";
+  }
+  if (normalized === "gpt-4.1-nano" || normalized === "gpt-5-nano") {
+    if (codexProvider) {
+      return "gpt-5.4-mini";
+    }
+    return "gpt-5.4-nano";
+  }
+  if (
+    normalized === "gpt-4.1-mini" ||
+    normalized === "gpt-4o-mini" ||
+    normalized === "gpt-5.1-codex-mini" ||
+    normalized === "gpt-5-mini"
+  ) {
+    return "gpt-5.4-mini";
+  }
+  if (
+    normalized === "gpt-4" ||
+    normalized === "gpt-4-turbo" ||
+    normalized === "gpt-4.1" ||
+    normalized === "gpt-4o" ||
+    normalized === "gpt-4o-2024-05-13" ||
+    normalized === "gpt-4o-2024-08-06" ||
+    normalized === "gpt-4o-2024-11-20" ||
+    normalized === "gpt-5" ||
+    normalized === "gpt-5-chat-latest" ||
+    normalized === "gpt-5.1" ||
+    normalized === "gpt-5.1-chat-latest" ||
+    normalized === "gpt-5.1-codex-max" ||
+    normalized === "gpt-5.2" ||
+    normalized === "gpt-5.2-chat-latest"
+  ) {
+    return "gpt-5.5";
+  }
+  return null;
+}
+
 function hasRetiredVersionPrefix(normalized: string, prefix: string): boolean {
   if (normalized === prefix) {
     return true;
@@ -217,11 +305,25 @@ function upgradeRetiredModelRef(value: string): string | null {
   const normalizedProvider = normalizeString(provider);
   const normalizedModel = normalizeString(model);
 
+  const retiredOwnerModel =
+    normalizedProvider === "groq"
+      ? upgradeRetiredGroqModelId(model)
+      : normalizedProvider === "xai"
+        ? upgradeRetiredXaiModelId(model)
+        : normalizedProvider === "openai" ||
+            normalizedProvider === "openai-codex" ||
+            normalizedProvider === "github-copilot"
+          ? upgradeRetiredOpenAiModelId(model, normalizedProvider)
+          : undefined;
+  if (retiredOwnerModel) {
+    return `${provider}/${retiredOwnerModel}${split.profile ? `@${split.profile}` : ""}`;
+  }
+
   if (
     (normalizedProvider === "github-copilot" || normalizedProvider === "copilot-proxy") &&
     normalizedModel === "grok-code-fast-1"
   ) {
-    return `${provider}/gpt-5-mini${split.profile ? `@${split.profile}` : ""}`;
+    return `${provider}/gpt-5.4-mini${split.profile ? `@${split.profile}` : ""}`;
   }
   if (!shouldUpgradeClaudeProvider(normalizedProvider || undefined)) {
     return null;
@@ -372,7 +474,7 @@ function rewriteKnownModelRefs(
 }
 
 const RETIRED_MODEL_REF_MESSAGE =
-  'Configured Claude models older than 4.6 or retired Copilot model refs are no longer in the bundled catalogs; run "openclaw doctor --fix" to upgrade them.';
+  'Configured retired model refs are no longer in the bundled catalogs; run "openclaw doctor --fix" to upgrade them.';
 const RETIRED_MODEL_REF_RULES: LegacyConfigRule[] = [
   "agents",
   "plugins",
@@ -389,8 +491,8 @@ const RETIRED_MODEL_REF_RULES: LegacyConfigRule[] = [
 
 export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_MODELS: LegacyConfigMigrationSpec[] = [
   defineLegacyConfigMigration({
-    id: "models.retired-claude-and-copilot-refs",
-    describe: "Upgrade retired Claude/Copilot model refs to current catalog entries",
+    id: "models.retired-model-refs",
+    describe: "Upgrade retired model refs to current catalog entries",
     legacyRules: RETIRED_MODEL_REF_RULES,
     apply: (raw, changes) => {
       const rewritten = rewriteKnownModelRefs(raw, "config", changes);

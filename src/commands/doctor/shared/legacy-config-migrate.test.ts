@@ -1142,7 +1142,7 @@ describe("legacy migrate controlUi.allowedOrigins seed (issue #29385)", () => {
 });
 
 describe("legacy model compat migrate", () => {
-  it("upgrades retired Claude and Copilot model refs", () => {
+  it("upgrades retired model refs", () => {
     const res = migrateLegacyConfigForTest({
       agents: {
         defaults: {
@@ -1169,13 +1169,30 @@ describe("legacy model compat migrate", () => {
               "kilocode/anthropic/claude-sonnet-4",
               "amazon-bedrock/anthropic.claude-3-5-sonnet-20241022-v2:0",
               "openai/gpt-5.5",
+              "openai/gpt-4o",
+              "openai/gpt-4.1-mini",
+              "openai/gpt-5.1-codex-mini",
+              "openai/gpt-5.2-codex",
+              "openai-codex/gpt-5.2",
+              "openai-codex/gpt-5.1-codex-mini",
+              "github-copilot/gpt-4.1",
+              "github-copilot/gpt-5.2",
+              "github-copilot/gpt-5.2-codex",
+              "groq/llama3-70b-8192",
+              "groq/gemma2-9b-it",
+              "groq/moonshotai/kimi-k2-instruct-0905",
+              "xai/grok-code-fast-1",
+              "xai/grok-4-fast-reasoning",
+              "openai/gpt-4o-transcribe",
+              "openai/gpt-4o-mini-tts",
             ],
           },
           models: {
             "anthropic/claude-haiku-4-5": { alias: "haiku" },
             "anthropic/claude-sonnet-4-6": { alias: "current-sonnet" },
             "github-copilot/claude-opus-4.5": { alias: "copilot-opus" },
-            "github-copilot/gpt-5-mini": { alias: "mini" },
+            "openai/gpt-5.2-pro": { alias: "old-pro" },
+            "github-copilot/gpt-5-mini": { alias: "old-mini" },
           },
         },
       },
@@ -1204,7 +1221,7 @@ describe("legacy model compat migrate", () => {
     expect(res.config?.agents?.defaults?.imageModel).toBe("anthropic/claude-sonnet-4-6");
     expect(res.config?.agents?.defaults?.imageGenerationModel).toEqual({
       primary: "github-copilot/claude-sonnet-4.6",
-      fallbacks: ["github-copilot/gpt-5-mini"],
+      fallbacks: ["github-copilot/gpt-5.4-mini"],
     });
     expect(res.config?.agents?.defaults?.musicGenerationModel).toBe(
       "vercel-ai-gateway/anthropic/claude-opus-4-6",
@@ -1216,7 +1233,7 @@ describe("legacy model compat migrate", () => {
       fallbacks: [
         "anthropic/claude-sonnet-4-6",
         "github-copilot/claude-sonnet-4.6",
-        "github-copilot/gpt-5-mini@github:work",
+        "github-copilot/gpt-5.4-mini@github:work",
         "venice/claude-opus-4-6",
         "vercel-ai-gateway/anthropic/claude-opus-4-6",
         "anthropic/claude-opus-5-0",
@@ -1225,13 +1242,30 @@ describe("legacy model compat migrate", () => {
         "kilocode/anthropic/claude-sonnet-4",
         "amazon-bedrock/anthropic.claude-3-5-sonnet-20241022-v2:0",
         "openai/gpt-5.5",
+        "openai/gpt-5.5",
+        "openai/gpt-5.4-mini",
+        "openai/gpt-5.4-mini",
+        "openai/gpt-5.3-codex",
+        "openai-codex/gpt-5.5",
+        "openai-codex/gpt-5.4-mini",
+        "github-copilot/gpt-5.5",
+        "github-copilot/gpt-5.5",
+        "github-copilot/gpt-5.3-codex",
+        "groq/llama-3.3-70b-versatile",
+        "groq/llama-3.1-8b-instant",
+        "groq/openai/gpt-oss-120b",
+        "xai/grok-build-0.1",
+        "xai/grok-4.3",
+        "openai/gpt-4o-transcribe",
+        "openai/gpt-4o-mini-tts",
       ],
     });
     expect(res.config?.agents?.defaults?.workspace).toBe("/tmp/claude-3-sonnet");
     expect(res.config?.agents?.defaults?.models).toEqual({
       "anthropic/claude-sonnet-4-6": { alias: "current-sonnet" },
       "github-copilot/claude-opus-4.7": { alias: "copilot-opus" },
-      "github-copilot/gpt-5-mini": { alias: "mini" },
+      "openai/gpt-5.5-pro": { alias: "old-pro" },
+      "github-copilot/gpt-5.4-mini": { alias: "old-mini" },
     });
     expect(
       (res.config?.plugins?.entries?.["lossless-claw"] as { config?: { summaryModel?: string } })
@@ -1252,14 +1286,30 @@ describe("legacy model compat migrate", () => {
     expectMigrationChangesToIncludeFragments(res.changes, [
       'config.agents.defaults.imageModel from "anthropic/claude-haiku-4-5" to "anthropic/claude-sonnet-4-6"',
       'config.agents.defaults.imageGenerationModel.primary from "github-copilot/claude-sonnet-4" to "github-copilot/claude-sonnet-4.6"',
-      'config.agents.defaults.imageGenerationModel.fallbacks.0 from "github-copilot/grok-code-fast-1" to "github-copilot/gpt-5-mini"',
+      'config.agents.defaults.imageGenerationModel.fallbacks.0 from "github-copilot/grok-code-fast-1" to "github-copilot/gpt-5.4-mini"',
       'config.agents.defaults.musicGenerationModel from "vercel-ai-gateway/anthropic/claude-opus-4-5" to "vercel-ai-gateway/anthropic/claude-opus-4-6"',
       'config.agents.defaults.pdfModel from "anthropic/claude-3-5-sonnet" to "anthropic/claude-sonnet-4-6"',
       'config.agents.defaults.model.primary from "anthropic/claude-opus-4-5@anthropic:work" to "anthropic/claude-opus-4-7@anthropic:work"',
-      'config.agents.defaults.model.fallbacks.2 from "github-copilot/grok-code-fast-1@github:work" to "github-copilot/gpt-5-mini@github:work"',
+      'config.agents.defaults.model.fallbacks.2 from "github-copilot/grok-code-fast-1@github:work" to "github-copilot/gpt-5.4-mini@github:work"',
       'config.agents.defaults.model.fallbacks.3 from "venice/claude-opus-4-5" to "venice/claude-opus-4-6"',
       'config.agents.defaults.model.fallbacks.4 from "vercel-ai-gateway/anthropic/claude-opus-4-5" to "vercel-ai-gateway/anthropic/claude-opus-4-6"',
+      'config.agents.defaults.model.fallbacks.11 from "openai/gpt-4o" to "openai/gpt-5.5"',
+      'config.agents.defaults.model.fallbacks.12 from "openai/gpt-4.1-mini" to "openai/gpt-5.4-mini"',
+      'config.agents.defaults.model.fallbacks.13 from "openai/gpt-5.1-codex-mini" to "openai/gpt-5.4-mini"',
+      'config.agents.defaults.model.fallbacks.14 from "openai/gpt-5.2-codex" to "openai/gpt-5.3-codex"',
+      'config.agents.defaults.model.fallbacks.15 from "openai-codex/gpt-5.2" to "openai-codex/gpt-5.5"',
+      'config.agents.defaults.model.fallbacks.16 from "openai-codex/gpt-5.1-codex-mini" to "openai-codex/gpt-5.4-mini"',
+      'config.agents.defaults.model.fallbacks.17 from "github-copilot/gpt-4.1" to "github-copilot/gpt-5.5"',
+      'config.agents.defaults.model.fallbacks.18 from "github-copilot/gpt-5.2" to "github-copilot/gpt-5.5"',
+      'config.agents.defaults.model.fallbacks.19 from "github-copilot/gpt-5.2-codex" to "github-copilot/gpt-5.3-codex"',
+      'config.agents.defaults.model.fallbacks.20 from "groq/llama3-70b-8192" to "groq/llama-3.3-70b-versatile"',
+      'config.agents.defaults.model.fallbacks.21 from "groq/gemma2-9b-it" to "groq/llama-3.1-8b-instant"',
+      'config.agents.defaults.model.fallbacks.22 from "groq/moonshotai/kimi-k2-instruct-0905" to "groq/openai/gpt-oss-120b"',
+      'config.agents.defaults.model.fallbacks.23 from "xai/grok-code-fast-1" to "xai/grok-build-0.1"',
+      'config.agents.defaults.model.fallbacks.24 from "xai/grok-4-fast-reasoning" to "xai/grok-4.3"',
       'config.agents.defaults.models key from "github-copilot/claude-opus-4.5" to "github-copilot/claude-opus-4.7"',
+      'config.agents.defaults.models key from "openai/gpt-5.2-pro" to "openai/gpt-5.5-pro"',
+      'config.agents.defaults.models key from "github-copilot/gpt-5-mini" to "github-copilot/gpt-5.4-mini"',
       'config.plugins.entries.lossless-claw.config.summaryModel from "anthropic/claude-3-5-sonnet" to "anthropic/claude-sonnet-4-6"',
       'config.plugins.entries.lossless-claw.subagent.allowedModels.0 from "anthropic/claude-haiku-4-5" to "anthropic/claude-sonnet-4-6"',
       'config.channels.modelByChannel.telegram.* from "anthropic/claude-opus-4-5" to "anthropic/claude-opus-4-7"',
