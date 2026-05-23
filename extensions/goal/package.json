@@ -1,0 +1,18 @@
+{
+  "name": "@openclaw/goal",
+  "version": "2026.5.22",
+  "private": true,
+  "description": "Session-scoped goal continuation plugin",
+  "type": "module",
+  "dependencies": {
+    "typebox": "1.1.38"
+  },
+  "devDependencies": {
+    "@openclaw/plugin-sdk": "workspace:*"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}
