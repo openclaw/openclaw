@@ -71,19 +71,22 @@ describe("formatAssistantErrorText streaming JSON parse classification", () => {
     };
     const msg = makeAssistantError("unknown tool: browser");
 
-    expect(formatAssistantErrorText(msg, { cfg, sessionKey: "agent:main:mobilechat:g1" }))
-      .toContain('Tool "browser" blocked by sandbox tool policy');
-    expect(formatAssistantErrorText(msg, { cfg, sessionKey: "agent:main:mobilechat:g1" }))
-      .toContain('Tool "browser" blocked by sandbox tool policy');
+    expect(
+      formatAssistantErrorText(msg, { cfg, sessionKey: "agent:main:mobilechat:g1" }),
+    ).toContain('Tool "browser" blocked by sandbox tool policy');
+    expect(
+      formatAssistantErrorText(msg, { cfg, sessionKey: "agent:main:mobilechat:g1" }),
+    ).toContain('Tool "browser" blocked by sandbox tool policy');
 
     expect(toolPolicyAuditInfo).toHaveBeenCalledTimes(1);
     expect(toolPolicyAuditInfo).toHaveBeenCalledWith(
-      "sandbox tool policy blocked browser via tools.sandbox.tools.deny",
+      "sandbox tool policy blocked browser via tools.sandbox.tools.deny; matched browser",
       {
         tool: "browser",
         ruleKind: "deny",
         ruleSource: "global",
         configKey: "tools.sandbox.tools.deny",
+        matchedRule: "browser",
         sandboxMode: "non-main",
       },
     );

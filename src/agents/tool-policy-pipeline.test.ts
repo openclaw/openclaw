@@ -336,10 +336,11 @@ describe("tool-policy-pipeline", () => {
     });
 
     expect(toolPolicyAuditInfo).toHaveBeenCalledWith(
-      "tool policy removed 1 tool(s) via tools.deny: browser",
+      "tool policy removed 1 tool(s) via tools.deny: browser; matched browser",
       {
         rule: "tools.deny",
         ruleKind: "deny",
+        matchedRules: ["browser"],
         removedToolCount: 1,
         removedTools: ["browser"],
         removedToolsTruncated: false,
@@ -367,10 +368,11 @@ describe("tool-policy-pipeline", () => {
     });
 
     expect(toolPolicyAuditInfo).toHaveBeenCalledWith(
-      "tool policy removed 1 tool(s) via agents.worker.tools.deny: browser",
+      "tool policy removed 1 tool(s) via agents.worker.tools.deny: browser; matched browser",
       {
         rule: "agents.worker.tools.deny",
         ruleKind: "deny",
+        matchedRules: ["browser"],
         removedToolCount: 1,
         removedTools: ["browser"],
         removedToolsTruncated: false,

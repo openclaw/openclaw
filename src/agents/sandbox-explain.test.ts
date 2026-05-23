@@ -128,12 +128,13 @@ describe("sandbox explain helpers", () => {
     expect(msg).toContain("agents.defaults.sandbox.mode=off");
     expect(msg).toContain("Use the agent main session instead of a non-main session.");
     expect(toolPolicyAuditInfo).toHaveBeenCalledWith(
-      "sandbox tool policy blocked browser via tools.sandbox.tools.deny",
+      "sandbox tool policy blocked browser via tools.sandbox.tools.deny; matched browser",
       {
         tool: "browser",
         ruleKind: "deny",
         ruleSource: "global",
         configKey: "tools.sandbox.tools.deny",
+        matchedRule: "browser",
         sandboxMode: "non-main",
       },
     );

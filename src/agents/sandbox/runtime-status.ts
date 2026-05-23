@@ -162,6 +162,7 @@ export function formatSandboxToolPolicyBlockedMessage(params: {
       ruleType: blockedByDeny ? "deny" : "allow",
       ruleSource: blockingSource.source,
       configKey: blockingSource.key,
+      policy: runtime.toolPolicy,
       mode: runtime.mode,
     });
   }
