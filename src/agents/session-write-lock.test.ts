@@ -311,6 +311,22 @@ describe("acquireSessionWriteLock", () => {
     });
   });
 
+  it("marks live lock payloads stale once they exceed max hold", () => {
+    const nowMs = Date.now();
+    const inspected = testing.inspectLockPayloadForTest(
+      {
+        pid: process.pid,
+        createdAt: new Date(nowMs - 30_000).toISOString(),
+      },
+      60_000,
+      nowMs,
+      10_000,
+    );
+
+    expect(inspected.stale).toBe(true);
+    expect(inspected.staleReasons).toEqual(["hold-exceeded"]);
+  });
+
   it("watchdog releases stale in-process locks", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-lock-"));
     const stderrSpy = vi.spyOn(process.stderr, "write").mockImplementation(() => true);

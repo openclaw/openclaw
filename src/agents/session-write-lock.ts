@@ -622,7 +622,12 @@ function inspectLockPayloadForSession(params: {
   readOwnerProcessArgs: SessionLockOwnerProcessArgsReader;
   maxHoldMs?: number;
 }): LockInspectionDetails {
-  const inspected = inspectLockPayload(params.payload, params.staleMs, params.nowMs, params.maxHoldMs);
+  const inspected = inspectLockPayload(
+    params.payload,
+    params.staleMs,
+    params.nowMs,
+    params.maxHoldMs,
+  );
   if (
     shouldTreatAsOrphanSelfLock({
       payload: params.payload,
@@ -824,6 +829,7 @@ export async function acquireSessionWriteLock(params: {
 export const testing = {
   cleanupSignals: [...CLEANUP_SIGNALS],
   handleTerminationSignal,
+  inspectLockPayloadForTest: inspectLockPayload,
   releaseAllLocksSync,
   runLockWatchdogCheck,
   setProcessStartTimeResolverForTest(resolver: ((pid: number) => number | null) | null): void {
