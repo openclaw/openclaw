@@ -1587,6 +1587,53 @@ describe("createFollowupRunner progress forwarding", () => {
       }),
     );
   });
+
+  it("uses current session verbose state for queued follow-up progress", async () => {
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+      verboseLevel: "off",
+    };
+    const sessionStore: Record<string, SessionEntry> = { main: sessionEntry };
+    const onToolStart = vi.fn(async () => {});
+
+    runEmbeddedPiAgentMock.mockImplementationOnce(
+      async (args: {
+        onAgentEvent?: (evt: { stream: string; data: Record<string, unknown> }) => Promise<void>;
+        shouldEmitToolResult?: () => boolean;
+      }) => {
+        expect(args.shouldEmitToolResult?.()).toBe(false);
+        await args.onAgentEvent?.({
+          stream: "tool",
+          data: { phase: "start", name: "exec", args: { command: "echo hidden" } },
+        });
+        return { payloads: [], meta: { agentMeta: {} } };
+      },
+    );
+
+    const runner = createFollowupRunner({
+      opts: { onToolStart },
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      sessionEntry,
+      sessionStore,
+      sessionKey: "main",
+      defaultModel: "claude",
+    });
+
+    await runner(
+      createQueuedRun({
+        run: {
+          messageProvider: "discord",
+          sessionKey: "main",
+          sourceReplyDeliveryMode: "message_tool_only",
+          verboseLevel: "on",
+        },
+      }),
+    );
+
+    expect(onToolStart).not.toHaveBeenCalled();
+  });
 });
 
 describe("createFollowupRunner compaction", () => {

@@ -85,6 +85,30 @@ describe("shouldBypassAcpDispatchForCommand", () => {
     expect(shouldBypassAcpDispatchForCommand(ctx, {} as OpenClawConfig)).toBe(true);
   });
 
+  it("returns true for local verbose commands", () => {
+    const ctx = buildTestCtx({
+      Provider: "discord",
+      Surface: "discord",
+      CommandBody: "/verbose on",
+      BodyForCommands: "/verbose on",
+      BodyForAgent: "/verbose on",
+    });
+
+    expect(shouldBypassAcpDispatchForCommand(ctx, {} as OpenClawConfig)).toBe(true);
+  });
+
+  it("returns true for local verbose alias commands", () => {
+    const ctx = buildTestCtx({
+      Provider: "discord",
+      Surface: "discord",
+      CommandBody: "/v off",
+      BodyForCommands: "/v off",
+      BodyForAgent: "/v off",
+    });
+
+    expect(shouldBypassAcpDispatchForCommand(ctx, {} as OpenClawConfig)).toBe(true);
+  });
+
   it("returns true for ACP reset-tail slash commands", () => {
     const ctx = buildTestCtx({
       Provider: "discord",

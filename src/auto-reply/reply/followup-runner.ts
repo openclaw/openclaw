@@ -19,6 +19,7 @@ import {
   buildAgentRuntimeOutcomePlan,
 } from "../../agents/runtime-plan/build.js";
 import { updateSessionStore, type SessionEntry } from "../../config/sessions.js";
+import { readSessionEntry } from "../../config/sessions/store-load.js";
 import type { TypingMode } from "../../config/types.js";
 import { logVerbose } from "../../globals.js";
 import { emitAgentEvent, registerAgentRunContext } from "../../infra/agent-events.js";
@@ -421,16 +422,34 @@ export function createFollowupRunner(params: {
       if (run !== effectiveQueued.run) {
         effectiveQueued = { ...effectiveQueued, run };
       }
-      const shouldEmitVerboseProgress = () =>
-        run.verboseLevel === "on" || run.verboseLevel === "full";
+      const resolveCurrentVerboseLevel = () => {
+        if (replySessionKey && storePath) {
+          try {
+            const level = readSessionEntry(storePath, replySessionKey)?.verboseLevel;
+            if (typeof level === "string" && level.trim()) {
+              return level;
+            }
+          } catch {
+            // Keep queued delivery resilient to transient session-store reads.
+          }
+        }
+        const liveEntryLevel = replySessionKey
+          ? sessionStore?.[replySessionKey]?.verboseLevel
+          : undefined;
+        return liveEntryLevel ?? activeSessionEntry?.verboseLevel ?? run.verboseLevel;
+      };
+      const shouldEmitVerboseProgress = () => {
+        const verboseLevel = resolveCurrentVerboseLevel();
+        return verboseLevel === "on" || verboseLevel === "full";
+      };
       const shouldSuppressDefaultToolProgressMessages = () => !shouldEmitVerboseProgress();
       const shouldEmitToolResultProgress = () =>
         shouldEmitVerboseProgress() && !shouldSuppressDefaultToolProgressMessages();
       const shouldEmitToolOutputProgress = () =>
-        run.verboseLevel === "full" && !shouldSuppressDefaultToolProgressMessages();
+        resolveCurrentVerboseLevel() === "full" && !shouldSuppressDefaultToolProgressMessages();
       let observedVisibleToolErrorProgress = false;
       const markVisibleToolErrorProgress = () => {
-        if (run.verboseLevel === "on" && shouldEmitToolResultProgress()) {
+        if (resolveCurrentVerboseLevel() === "on" && shouldEmitToolResultProgress()) {
           observedVisibleToolErrorProgress = true;
         }
       };
