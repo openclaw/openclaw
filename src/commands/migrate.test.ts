@@ -617,6 +617,32 @@ describe("migrateApplyCommand", () => {
     expect(mocks.provider.apply).toHaveBeenCalledTimes(1);
   });
 
+  it("lets --no-auth-credentials override explicit secret import", async () => {
+    const planned = authPlan("skipped");
+    const applied: MigrationApplyResult = {
+      ...planned,
+      items: planned.items,
+    };
+    mocks.provider.plan.mockImplementation(async (ctx) => {
+      expect(ctx.includeSecrets).toBe(false);
+      return planned;
+    });
+    mocks.provider.apply.mockImplementation(async (ctx) => {
+      expect(ctx.includeSecrets).toBe(false);
+      return applied;
+    });
+
+    await migrateApplyCommand(runtime, {
+      provider: "hermes",
+      yes: true,
+      includeSecrets: true,
+      authCredentials: false,
+    });
+
+    expect(mocks.provider.plan).toHaveBeenCalledTimes(1);
+    expect(mocks.provider.apply).toHaveBeenCalledTimes(1);
+  });
+
   it("prompts for Codex skills before interactive default apply", async () => {
     Object.defineProperty(process.stdin, "isTTY", {
       configurable: true,
