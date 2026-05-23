@@ -555,12 +555,18 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(draftStream.clear).toHaveBeenCalledTimes(1);
   });
 
-  it("recovers forum thread delivery from a topic-scoped session key", async () => {
+  it("recovers forum thread context from a topic-scoped session key", async () => {
+    deliverInboundReplyWithMessageSendContext.mockResolvedValue({
+      status: "handled_visible",
+      delivery: {
+        messageIds: ["3731"],
+        visibleReplySent: true,
+      },
+    });
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
       await dispatcherOptions.deliver({ text: "topic final" }, { kind: "final" });
       return { queuedFinal: true };
     });
-    deliverReplies.mockResolvedValue({ delivered: true });
 
     await dispatchWithContext({
       context: createContext({
@@ -588,7 +594,15 @@ describe("dispatchTelegramMessage draft streaming", () => {
       streamMode: "off",
     });
 
-    expectDeliverRepliesParams({ thread: { id: 3731, scope: "forum" } });
+    const outbound = expectRecordFields(mockCallArg(deliverInboundReplyWithMessageSendContext), {
+      threadId: 3731,
+    });
+    expectRecordFields(outbound.ctxPayload, {
+      MessageThreadId: 3731,
+      TransportThreadId: 3731,
+      SessionKey: "agent:main:telegram:group:-1003774691294:topic:3731",
+    });
+    expect(deliverReplies).not.toHaveBeenCalled();
   });
 
   it("keeps retained overflow draft previews", async () => {

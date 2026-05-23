@@ -1139,6 +1139,49 @@ describe("dispatchReplyFromConfig", () => {
     activeOperation.complete();
   });
 
+  it("skips a Telegram topic heartbeat turn while a reply operation is active", async () => {
+    setNoAbort();
+    const sessionKey = "agent:main:telegram:group:-1003774691294:topic:3731";
+    const activeOperation = createReplyOperation({
+      sessionKey,
+      sessionId: "user-session",
+      resetTriggered: false,
+    });
+    activeOperation.setPhase("running");
+    const dispatcher = createDispatcher();
+    const replyResolver = vi.fn(
+      async () => ({ text: "heartbeat should not run" }) satisfies ReplyPayload,
+    );
+
+    const result = await dispatchReplyFromConfig({
+      ctx: buildTestCtx({
+        Provider: "telegram",
+        Surface: "telegram",
+        OriginatingChannel: "telegram",
+        SessionKey: sessionKey,
+        ChatType: "group",
+        IsForum: true,
+        MessageSid: "heartbeat",
+        MessageThreadId: 3731,
+        TransportThreadId: 3731,
+        To: "telegram:-1003774691294:topic:3731",
+        BodyForAgent: "[OpenClaw heartbeat poll]",
+      }),
+      cfg: automaticGroupReplyConfig,
+      dispatcher,
+      replyOptions: { isHeartbeat: true },
+      replyResolver,
+    });
+
+    expect(result).toMatchObject({
+      queuedFinal: false,
+      counts: { tool: 0, block: 0, final: 0 },
+    });
+    expect(replyResolver).not.toHaveBeenCalled();
+    expect(replyRunRegistry.get(sessionKey)).toBe(activeOperation);
+    activeOperation.complete();
+  });
+
   it("does not route when Provider matches OriginatingChannel (even if Surface is missing)", async () => {
     setNoAbort();
     mocks.routeReply.mockClear();

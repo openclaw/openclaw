@@ -426,13 +426,36 @@ function resolveDispatchTelegramThreadSpec(params: {
     normalizeTelegramThreadId(params.ctxPayload.MessageThreadId) ??
     normalizeTelegramThreadId(params.ctxPayload.TransportThreadId);
   // Missing forum IDs are normalized to General; topic-scoped turn facts are more specific.
-  const recoveredThreadId =
-    params.threadSpec.id === TELEGRAM_GENERAL_TOPIC_ID
-      ? (scopedThreadId ?? payloadThreadId)
-      : (payloadThreadId ?? scopedThreadId);
+  const recoveredThreadId = scopedThreadId ?? payloadThreadId;
   return recoveredThreadId == null
     ? params.threadSpec
     : { ...params.threadSpec, id: recoveredThreadId };
+}
+
+function resolveDispatchTelegramContext(params: {
+  context: TelegramMessageContext;
+}): TelegramMessageContext {
+  const threadSpec = resolveDispatchTelegramThreadSpec({
+    ctxPayload: params.context.ctxPayload,
+    threadSpec: params.context.threadSpec,
+  });
+  if (threadSpec === params.context.threadSpec || threadSpec.scope !== "forum") {
+    return params.context;
+  }
+  return {
+    ...params.context,
+    threadSpec,
+    resolvedThreadId: threadSpec.id,
+    replyThreadId: threadSpec.id,
+    ctxPayload:
+      threadSpec.id == null
+        ? params.context.ctxPayload
+        : {
+            ...params.context.ctxPayload,
+            MessageThreadId: threadSpec.id,
+            TransportThreadId: threadSpec.id,
+          },
+  };
 }
 
 export const dispatchTelegramMessage = async ({
@@ -448,6 +471,7 @@ export const dispatchTelegramMessage = async ({
   opts,
 }: DispatchTelegramMessageParams) => {
   const dispatchStartedAt = Date.now();
+  const dispatchContext = resolveDispatchTelegramContext({ context });
   const telegramDeps =
     injectedTelegramDeps ?? (await import("./bot-deps.js")).defaultTelegramBotDeps;
   const loadFreshSessionStore = createFreshTelegramSessionStoreLoader({ cfg, telegramDeps });
@@ -458,7 +482,7 @@ export const dispatchTelegramMessage = async ({
     isGroup,
     groupConfig,
     topicConfig,
-    threadSpec: rawThreadSpec,
+    threadSpec,
     historyKey,
     historyLimit,
     groupHistories,
@@ -470,11 +494,7 @@ export const dispatchTelegramMessage = async ({
     reactionApi,
     removeAckAfterReply,
     statusReactionController: rawStatusReactionController,
-  } = context;
-  const threadSpec = resolveDispatchTelegramThreadSpec({
-    ctxPayload,
-    threadSpec: rawThreadSpec,
-  });
+  } = dispatchContext;
   const isRoomEvent = ctxPayload.InboundEventKind === "room_event";
   const statusReactionController = isRoomEvent ? null : rawStatusReactionController;
   const statusReactionTiming = {

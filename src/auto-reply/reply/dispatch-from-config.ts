@@ -918,6 +918,7 @@ export async function dispatchReplyFromConfig(
   const workspaceDir = resolveAgentWorkspaceDir(cfg, sessionAgentId);
   let dispatchReplyOperation: ReplyOperation | undefined;
   let dispatchAbortOperation: ReplyOperation | undefined;
+  type DispatchReplyOperationAcquisition = { status: "ready" } | { status: "busy" };
   const tryBeginDispatchReplyOperation = (): ReplyOperation | undefined => {
     if (dispatchReplyOperation && !dispatchReplyOperation.result) {
       return dispatchReplyOperation;
@@ -953,24 +954,24 @@ export async function dispatchReplyFromConfig(
     }
     return dispatchReplyOperation;
   };
-  const ensureDispatchReplyOperation = async (): Promise<boolean> => {
+  const ensureDispatchReplyOperation = async (): Promise<DispatchReplyOperationAcquisition> => {
     while (true) {
       const operation = tryBeginDispatchReplyOperation();
       if (operation || !dispatchOperationSessionKey) {
-        return true;
+        return { status: "ready" };
       }
       if (!dispatchAbortOperation) {
-        return false;
+        return { status: "busy" };
       }
       if (params.replyOptions?.isHeartbeat === true) {
-        return false;
+        return { status: "busy" };
       }
       if (
         !(await replyRunRegistry.waitForIdle(dispatchOperationSessionKey, Infinity, {
           signal: params.replyOptions?.abortSignal,
         }))
       ) {
-        return false;
+        return { status: "busy" };
       }
     }
   };
@@ -1342,6 +1343,20 @@ export async function dispatchReplyFromConfig(
       commitInboundDedupe(inboundDedupeClaim.key);
     }
   };
+  const finishReplyOperationBusyDispatch = (opts?: {
+    recordAgentDispatchCompleted?: boolean;
+  }): DispatchFromConfigResult => {
+    if (opts?.recordAgentDispatchCompleted) {
+      recordAgentDispatchCompleted("completed", { reason: "reply-operation-active" });
+    }
+    recordProcessed("skipped", { reason: "reply-operation-active" });
+    markIdle("message_completed");
+    commitInboundDedupeIfClaimed();
+    return attachSourceReplyDeliveryMode({
+      queuedFinal: false,
+      counts: dispatcher.getQueuedCounts(),
+    });
+  };
 
   let pluginFallbackReason:
     | "plugin-bound-fallback-missing-plugin"
@@ -1516,14 +1531,8 @@ export async function dispatchReplyFromConfig(
     }
     // Register the dispatch-owned operation before any plugin hook or model work
     // so /stop can abort pre-run and in-run stalls through the same session lane.
-    if (!(await ensureDispatchReplyOperation())) {
-      recordProcessed("skipped", { reason: "reply-operation-active" });
-      markIdle("message_completed");
-      commitInboundDedupeIfClaimed();
-      return attachSourceReplyDeliveryMode({
-        queuedFinal: false,
-        counts: dispatcher.getQueuedCounts(),
-      });
+    if ((await ensureDispatchReplyOperation()).status === "busy") {
+      return finishReplyOperationBusyDispatch();
     }
 
     const shouldSuppressDefaultToolProgressMessages = () => !shouldEmitVerboseProgress();
@@ -2242,15 +2251,8 @@ export async function dispatchReplyFromConfig(
         ),
       ),
     );
-    if (!(await ensureDispatchReplyOperation())) {
-      recordAgentDispatchCompleted("completed", { reason: "reply-operation-active" });
-      recordProcessed("skipped", { reason: "reply-operation-active" });
-      markIdle("message_completed");
-      commitInboundDedupeIfClaimed();
-      return attachSourceReplyDeliveryMode({
-        queuedFinal: false,
-        counts: dispatcher.getQueuedCounts(),
-      });
+    if ((await ensureDispatchReplyOperation()).status === "busy") {
+      return finishReplyOperationBusyDispatch({ recordAgentDispatchCompleted: true });
     }
 
     if (ctx.AcpDispatchTailAfterReset === true) {
