@@ -15,7 +15,6 @@ import {
   renderChatSessionSelect,
   renderTab,
   resolveAssistantAttachmentAuthToken,
-  resolveAvatarAuthToken,
   resolveDashboardHeaderContext,
   renderSidebarConnectionStatus,
   renderTopbarThemeModeToggle,
@@ -666,13 +665,10 @@ function resolveAssistantAvatarOverride(config: unknown): string | null {
 function buildAssistantAvatarRoute(
   basePathValue: string | null | undefined,
   agentId: string,
-  authToken: string | null | undefined,
 ) {
   const basePath = normalizeBasePath(basePathValue ?? "");
   const encoded = encodeURIComponent(agentId);
-  const path = basePath ? `${basePath}/avatar/${encoded}` : `/avatar/${encoded}`;
-  const normalizedToken = authToken?.trim();
-  return normalizedToken ? `${path}?token=${encodeURIComponent(normalizedToken)}` : path;
+  return basePath ? `${basePath}/avatar/${encoded}` : `/avatar/${encoded}`;
 }
 
 // ── Quick Settings data extraction helpers ──
@@ -960,7 +956,6 @@ export function renderApp(state: AppViewState) {
       ? buildAssistantAvatarRoute(
           state.basePath,
           state.assistantAgentId,
-          resolveAvatarAuthToken(state),
         )
       : (state.chatAvatarUrl ??
         (configAssistantAvatarMissing ? null : (assistantAvatarUrl ?? null))));
