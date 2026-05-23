@@ -4,6 +4,7 @@ import { isToolAllowedByPolicyName } from "./tool-policy-match.js";
 import { normalizeToolName, type ToolPolicyLike } from "./tool-policy.js";
 
 const MAX_AUDIT_TOOL_NAMES = 50;
+const MAX_AUDIT_FIELD_LENGTH = 160;
 const toolPolicyAuditLogger = createSubsystemLogger("agents/tool-policy");
 
 type ToolPolicyRuleKind = "allow" | "deny" | "allow+deny" | "unknown";
@@ -83,13 +84,40 @@ function boundedToolNames(names: readonly string[]): {
   toolNames: string[];
   truncated: boolean;
 } {
+  const sanitizedNames = names.map(sanitizeAuditField);
   if (names.length <= MAX_AUDIT_TOOL_NAMES) {
-    return { toolNames: [...names], truncated: false };
+    return { toolNames: sanitizedNames, truncated: false };
   }
   return {
-    toolNames: names.slice(0, MAX_AUDIT_TOOL_NAMES),
+    toolNames: sanitizedNames.slice(0, MAX_AUDIT_TOOL_NAMES),
     truncated: true,
   };
+}
+
+function sanitizeAuditField(value: string): string {
+  const sanitized = Array.from(value.trim(), (char) => {
+    if (char === "\n") {
+      return "\\n";
+    }
+    if (char === "\r") {
+      return "\\r";
+    }
+    if (char === "\t") {
+      return "\\t";
+    }
+    const codePoint = char.codePointAt(0) ?? 0;
+    if (codePoint < 0x20 || codePoint === 0x7f) {
+      return `\\x${codePoint.toString(16).padStart(2, "0")}`;
+    }
+    return char;
+  }).join("");
+  if (!sanitized) {
+    return "(unknown)";
+  }
+  if (sanitized.length <= MAX_AUDIT_FIELD_LENGTH) {
+    return sanitized;
+  }
+  return `${sanitized.slice(0, MAX_AUDIT_FIELD_LENGTH)}...`;
 }
 
 export function auditToolPolicyFilter(params: {
@@ -107,7 +135,7 @@ export function auditToolPolicyFilter(params: {
     if (removed.length === 0) {
       continue;
     }
-    const rule = labelForRuleKind(params.stepLabel, ruleKind);
+    const rule = sanitizeAuditField(labelForRuleKind(params.stepLabel, ruleKind));
     const { toolNames, truncated } = boundedToolNames(removed);
     toolPolicyAuditLogger.info(
       `tool policy removed ${removed.length} tool(s) via ${rule}: ${toolNames.join(", ")}`,
@@ -129,18 +157,17 @@ export function auditSandboxToolPolicyBlock(params: {
   configKey: string;
   mode: SandboxConfig["mode"];
 }): void {
-  const toolName = normalizeToolName(params.toolName);
-  if (!toolName) {
+  const normalizedToolName = normalizeToolName(params.toolName);
+  if (!normalizedToolName) {
     return;
   }
-  toolPolicyAuditLogger.info(
-    `sandbox tool policy blocked ${toolName} via ${params.configKey}`,
-    {
-      tool: toolName,
-      ruleKind: params.ruleType,
-      ruleSource: params.ruleSource,
-      configKey: params.configKey,
-      sandboxMode: params.mode,
-    },
-  );
+  const toolName = sanitizeAuditField(normalizedToolName);
+  const configKey = sanitizeAuditField(params.configKey);
+  toolPolicyAuditLogger.info(`sandbox tool policy blocked ${toolName} via ${configKey}`, {
+    tool: toolName,
+    ruleKind: params.ruleType,
+    ruleSource: params.ruleSource,
+    configKey,
+    sandboxMode: params.mode,
+  });
 }

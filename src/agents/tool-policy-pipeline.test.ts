@@ -405,4 +405,31 @@ describe("tool-policy-pipeline", () => {
 
     expect(toolPolicyAuditInfo).not.toHaveBeenCalled();
   });
+
+  test("sanitizes audit labels and tool names before logging", () => {
+    const tools = [{ name: "exec\nbad" }] as unknown as DummyTool[];
+
+    applyToolPolicyPipeline({
+      tools: tools as any,
+      toolMeta: () => undefined,
+      warn: () => {},
+      steps: [
+        {
+          policy: { allow: ["read"] },
+          label: "agents.worker\nbad.tools.allow",
+        },
+      ],
+    });
+
+    expect(toolPolicyAuditInfo).toHaveBeenCalledWith(
+      "tool policy removed 1 tool(s) via agents.worker\\nbad.tools.allow: exec\\nbad",
+      {
+        rule: "agents.worker\\nbad.tools.allow",
+        ruleKind: "allow",
+        removedToolCount: 1,
+        removedTools: ["exec\\nbad"],
+        removedToolsTruncated: false,
+      },
+    );
+  });
 });
