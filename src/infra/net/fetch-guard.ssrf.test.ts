@@ -1737,9 +1737,16 @@ describe("fetchWithSsrFGuard hardening", () => {
         lookupFn: createLoopbackLookup(),
         policy: { allowedOrigins: ["http://localhost:11434"] },
         configuredLocalOriginBaseUrl: "http://localhost:11434",
+        auditContext: "ollama-embedding",
       }),
     ).rejects.toThrow("blocked by proxy.loopbackMode");
     expect(fetchImpl).not.toHaveBeenCalled();
+    expect(logWarnMock).toHaveBeenCalledTimes(1);
+    const [warning] = firstMockCall(logWarnMock) as [string];
+    expect(warning).toContain(
+      "security: blocked URL fetch (ollama-embedding) targetOrigin=http://localhost:11434",
+    );
+    expect(warning).toContain("blocked by proxy.loopbackMode");
   });
 
   it("honors proxy.loopbackMode=block for bracketed IPv6 loopback provider origins", async () => {
@@ -1762,9 +1769,16 @@ describe("fetchWithSsrFGuard hardening", () => {
         lookupFn: createIpv6LoopbackLookup(),
         policy: { allowedOrigins: ["http://[::1]:11434"] },
         configuredLocalOriginBaseUrl: "http://[::1]:11434",
+        auditContext: "ollama-embedding",
       }),
     ).rejects.toThrow("blocked by proxy.loopbackMode");
     expect(fetchImpl).not.toHaveBeenCalled();
+    expect(logWarnMock).toHaveBeenCalledTimes(1);
+    const [warning] = firstMockCall(logWarnMock) as [string];
+    expect(warning).toContain(
+      "security: blocked URL fetch (ollama-embedding) targetOrigin=http://[::1]:11434",
+    );
+    expect(warning).toContain("blocked by proxy.loopbackMode");
   });
 
   it("routes through env proxy when trusted proxy mode is explicitly enabled", async () => {

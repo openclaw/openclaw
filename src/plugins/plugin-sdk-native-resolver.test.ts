@@ -163,15 +163,23 @@ describe("installOpenClawPluginSdkNativeResolver", () => {
     const internalPath = path.join(root, "dist", "plugin-sdk", "ssrf-runtime-internal.js");
     fs.writeFileSync(internalPath, "export const ssrfInternal = true;\n", "utf8");
     const ollamaEntry = path.join(root, "dist", "extensions", "ollama", "index.js");
+    const runtimeOllamaEntry = path.join(root, "dist-runtime", "extensions", "ollama", "index.js");
     const otherEntry = path.join(root, "dist", "extensions", "demo", "index.js");
     fs.mkdirSync(path.dirname(ollamaEntry), { recursive: true });
+    fs.mkdirSync(path.dirname(runtimeOllamaEntry), { recursive: true });
     fs.mkdirSync(path.dirname(otherEntry), { recursive: true });
     fs.writeFileSync(ollamaEntry, "export default {};\n", "utf8");
+    fs.writeFileSync(runtimeOllamaEntry, "export default {};\n", "utf8");
     fs.writeFileSync(otherEntry, "export default {};\n", "utf8");
 
     const installedAliases = installOpenClawPluginSdkNativeResolver({
       modulePath: loaderModulePath,
       pluginModulePath: ollamaEntry,
+      pluginSdkResolution: "dist",
+    });
+    installOpenClawPluginSdkNativeResolver({
+      modulePath: loaderModulePath,
+      pluginModulePath: runtimeOllamaEntry,
       pluginSdkResolution: "dist",
     });
     installOpenClawPluginSdkNativeResolver({
@@ -184,6 +192,13 @@ describe("installOpenClawPluginSdkNativeResolver", () => {
     const requireFromOllama = createRequire(ollamaEntry);
     expect(
       fs.realpathSync(requireFromOllama.resolve("openclaw/plugin-sdk/ssrf-runtime-internal")),
+    ).toBe(fs.realpathSync(internalPath));
+
+    const requireFromRuntimeOllama = createRequire(runtimeOllamaEntry);
+    expect(
+      fs.realpathSync(
+        requireFromRuntimeOllama.resolve("openclaw/plugin-sdk/ssrf-runtime-internal"),
+      ),
     ).toBe(fs.realpathSync(internalPath));
 
     const requireFromOther = createRequire(otherEntry);

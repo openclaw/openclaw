@@ -101,7 +101,7 @@ async function withRemoteHttpResponse<T>(params: {
     signal: params.signal,
     policy: params.ssrfPolicy,
     configuredLocalOriginBaseUrl: params.configuredLocalOriginBaseUrl,
-    auditContext: "memory-remote",
+    auditContext: "ollama-memory-embedding",
   });
   try {
     return await params.onResponse(response);
