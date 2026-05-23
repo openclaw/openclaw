@@ -39,8 +39,7 @@ const { MockGatewayTransportError } = vi.hoisted(() => ({
 const callGatewayFromCli = vi.fn();
 const readConfiguredLogTail = vi.fn();
 const readSystemdServiceRuntime = vi.fn();
-const readSystemdServiceExecStart = vi.fn();
-const execFileUtf8 = vi.fn();
+const execFileUtf8Tail = vi.fn();
 const buildGatewayConnectionDetails = vi.fn(
   (_options?: {
     configPath?: string;
@@ -75,11 +74,12 @@ vi.mock("./logs-cli.runtime.js", () => ({
   readSystemdServiceRuntime: (
     ...args: Parameters<typeof import("../daemon/systemd.js").readSystemdServiceRuntime>
   ) => readSystemdServiceRuntime(...args),
-  readSystemdServiceExecStart: (
-    ...args: Parameters<typeof import("../daemon/systemd.js").readSystemdServiceExecStart>
-  ) => readSystemdServiceExecStart(...args),
-  execFileUtf8: (...args: Parameters<typeof import("../daemon/exec-file.js").execFileUtf8>) =>
-    execFileUtf8(...args),
+  execFileUtf8Tail: (
+    ...args: Parameters<typeof import("./logs-cli.runtime.js").execFileUtf8Tail>
+  ) => execFileUtf8Tail(...args),
+  resolveGatewaySystemdServiceName: (
+    ...args: Parameters<typeof import("../daemon/constants.js").resolveGatewaySystemdServiceName>
+  ) => "openclaw-gateway",
 }));
 
 vi.mock("../infra/backoff.js", () => ({
@@ -123,8 +123,7 @@ function captureStderrWrites() {
 describe("logs cli", () => {
   beforeEach(() => {
     readSystemdServiceRuntime.mockResolvedValue({ status: "stopped" });
-    readSystemdServiceExecStart.mockResolvedValue(null);
-    execFileUtf8.mockResolvedValue({ stdout: "", stderr: "", code: 1 });
+    execFileUtf8Tail.mockResolvedValue({ stdout: "", stderr: "", code: 1, truncated: false });
   });
 
   afterEach(() => {
@@ -132,8 +131,7 @@ describe("logs cli", () => {
     readConfiguredLogTail.mockClear();
     buildGatewayConnectionDetails.mockClear();
     readSystemdServiceRuntime.mockClear();
-    readSystemdServiceExecStart.mockClear();
-    execFileUtf8.mockClear();
+    execFileUtf8Tail.mockClear();
     vi.restoreAllMocks();
   });
 
@@ -346,34 +344,36 @@ describe("logs cli", () => {
 
   describe("--follow retry behavior", () => {
     it("uses the active systemd journal for implicit local follow failures", async () => {
-      callGatewayFromCli.mockRejectedValueOnce(
-        new GatewayTransportError({
-          kind: "closed",
-          code: 1006,
-          reason: "abnormal closure",
-          connectionDetails: {
-            url: "ws://127.0.0.1:18789",
-            urlSource: "local loopback",
-            message: "",
-          },
-          message: "gateway closed (1006 abnormal closure): abnormal closure",
-        }),
-      );
-      readSystemdServiceRuntime.mockResolvedValueOnce({ status: "running", pid: 2557 });
-      readSystemdServiceExecStart.mockResolvedValueOnce({
-        programArguments: [
-          "/usr/bin/node",
-          "/home/openclaw/openclaw-sidecar/dist/index.js",
-          "gateway",
-          "--token",
-          "secret-token",
-        ],
+      vi.spyOn(process, "platform", "get").mockReturnValue("linux");
+      const closeError = new GatewayTransportError({
+        kind: "closed",
+        code: 1006,
+        reason: "abnormal closure",
+        connectionDetails: {
+          url: "ws://127.0.0.1:18789",
+          urlSource: "local loopback",
+          message: "",
+        },
+        message: "gateway closed (1006 abnormal closure): abnormal closure",
       });
-      execFileUtf8.mockResolvedValueOnce({
-        stdout: ["journal line", "-- cursor: s=abc"].join("\n"),
-        stderr: "",
-        code: 0,
-      });
+      callGatewayFromCli.mockRejectedValueOnce(closeError).mockRejectedValueOnce(closeError);
+      readSystemdServiceRuntime.mockResolvedValue({ status: "running", pid: 2557 });
+      execFileUtf8Tail
+        .mockResolvedValueOnce({
+          stdout: [
+            "Authorization: Bearer sk-abcdefghijklmnopqrstuvwxyz",
+            "-- cursor: s=abc",
+          ].join("\n"),
+          stderr: "",
+          code: 0,
+          truncated: false,
+        })
+        .mockResolvedValueOnce({
+          stdout: ["second journal line", "-- cursor: s=def"].join("\n"),
+          stderr: "",
+          code: 0,
+          truncated: false,
+        });
 
       const stderrWrites = captureStderrWrites();
       const stdoutWrites = captureStdoutWrites();
@@ -382,19 +382,33 @@ describe("logs cli", () => {
       await runLogsCli(["logs", "--follow", "--interval", "1"]);
 
       expect(readConfiguredLogTail).not.toHaveBeenCalled();
-      expect(execFileUtf8).toHaveBeenCalledWith(
+      expect(execFileUtf8Tail).toHaveBeenCalledWith(
         "journalctl",
-        expect.arrayContaining(["--user", "_PID=2557", "--output=cat", "--show-cursor"]),
+        expect.arrayContaining([
+          "--user",
+          "--boot",
+          "--user-unit=openclaw-gateway.service",
+          "_PID=2557",
+          "--output=cat",
+          "--show-cursor",
+        ]),
+        expect.any(Object),
+      );
+      expect(execFileUtf8Tail).toHaveBeenNthCalledWith(
+        2,
+        "journalctl",
+        expect.arrayContaining(["--after-cursor=s=abc"]),
         expect.any(Object),
       );
       expect(stderrWrites.join("")).toContain("reading active systemd gateway journal");
-      expect(stderrWrites.join("")).not.toContain("gateway disconnected");
-      expect(stdoutWrites.join("")).toContain("Log source: journalctl --user _PID=2557");
-      expect(stdoutWrites.join("")).toContain("Service PID: 2557");
       expect(stdoutWrites.join("")).toContain(
-        "Service ExecStart: /usr/bin/node /home/openclaw/openclaw-sidecar/dist/index.js gateway --token [redacted]",
+        "Log source: journalctl --user --boot --user-unit=openclaw-gateway.service _PID=2557",
       );
-      expect(stdoutWrites.join("")).toContain("journal line");
+      expect(stdoutWrites.join("")).toContain("Service PID: 2557");
+      expect(stdoutWrites.join("")).toContain("Service Unit: openclaw-gateway.service");
+      expect(stdoutWrites.join("")).not.toContain("sk-abcdefghijklmnopqrstuvwxyz");
+      expect(stdoutWrites.join("")).toContain("Authorization: Bearer");
+      expect(stdoutWrites.join("")).toContain("second journal line");
       expect(exitSpy).toHaveBeenCalledWith(1);
     });
 

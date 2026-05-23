@@ -12,6 +12,7 @@ import { computeBackoff } from "../infra/backoff.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { readConfiguredLogTail } from "../logging/log-tail.js";
 import { parseLogLine } from "../logging/parse-log-line.js";
+import { redactSensitiveLines, resolveRedactOptions } from "../logging/redact.js";
 import { formatTimestamp, isValidTimeZone } from "../logging/timestamps.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
@@ -38,9 +39,9 @@ type LogsTailPayload = {
   sourceKind?: "file" | "journal";
   service?: {
     pid?: number;
-    execStart?: string;
+    unit?: string;
   };
-  cursor?: LogCursor;
+  cursor?: number | string;
   size?: number;
   lines?: string[];
   truncated?: boolean;
@@ -48,7 +49,19 @@ type LogsTailPayload = {
   localFallback?: boolean;
 };
 
-type LogCursor = number | string;
+type LogCursorState = {
+  gateway?: number;
+  journal?: string;
+  journalSince?: string;
+  forceJournal?: boolean;
+};
+
+class JournalFallbackUnavailableError extends Error {
+  constructor() {
+    super("Active systemd journal unavailable for logs follow fallback");
+    this.name = "JournalFallbackUnavailableError";
+  }
+}
 
 type LogsCliOptions = {
   limit?: string;
@@ -69,16 +82,8 @@ const LOCAL_FALLBACK_NOTICE = "Local Gateway RPC unavailable; reading configured
 const JOURNAL_FALLBACK_NOTICE =
   "Local Gateway RPC unavailable; reading active systemd gateway journal instead.";
 const JOURNAL_CURSOR_PREFIX = "-- cursor: ";
-const SENSITIVE_EXEC_ARG_NAMES = new Set([
-  "--api-key",
-  "--apikey",
-  "--auth",
-  "--client-secret",
-  "--key",
-  "--password",
-  "--secret",
-  "--token",
-]);
+const JOURNAL_MAX_LIMIT = 5000;
+const JOURNAL_MAX_BYTES = 1_000_000;
 
 function parsePositiveInt(value: string | undefined, fallback: number): number {
   if (!value) {
@@ -90,17 +95,28 @@ function parsePositiveInt(value: string | undefined, fallback: number): number {
 
 async function fetchLogs(
   opts: LogsCliOptions,
-  cursor: LogCursor | undefined,
+  cursors: LogCursorState,
   showProgress: boolean,
 ): Promise<LogsTailPayload> {
   const limit = parsePositiveInt(opts.limit, 200);
   const maxBytes = parsePositiveInt(opts.maxBytes, 250_000);
-  const gatewayCursor = typeof cursor === "number" ? cursor : undefined;
+  if (cursors.forceJournal) {
+    const journalPayload = await readSystemdJournalFallback({
+      cursor: cursors.journal,
+      since: cursors.journalSince,
+      limit,
+      maxBytes,
+    });
+    if (journalPayload) {
+      return journalPayload;
+    }
+    throw new JournalFallbackUnavailableError();
+  }
   try {
     const payload = await callGatewayFromCli(
       "logs.tail",
       opts,
-      { cursor: gatewayCursor, limit, maxBytes },
+      { cursor: cursors.gateway, limit, maxBytes },
       buildLogsTailGatewayExtra(opts, showProgress),
     );
     if (!payload || typeof payload !== "object") {
@@ -112,7 +128,12 @@ async function fetchLogs(
       throw error;
     }
     if (opts.follow) {
-      const journalPayload = await readSystemdJournalFallback({ cursor, limit, maxBytes });
+      const journalPayload = await readSystemdJournalFallback({
+        cursor: cursors.journal,
+        since: cursors.journalSince,
+        limit,
+        maxBytes,
+      });
       if (journalPayload) {
         return journalPayload;
       }
@@ -120,7 +141,7 @@ async function fetchLogs(
     }
     // Match the Gateway logs.tail source when implicit local RPC is unavailable.
     return {
-      ...(await readConfiguredLogTail({ cursor: gatewayCursor, limit, maxBytes })),
+      ...(await readConfiguredLogTail({ cursor: cursors.gateway, limit, maxBytes })),
       sourceKind: "file",
       localFallback: true,
     };
@@ -199,7 +220,8 @@ function isPlainGatewayRequestTimeoutError(message: string): boolean {
 }
 
 async function readSystemdJournalFallback(params: {
-  cursor: LogCursor | undefined;
+  cursor: string | undefined;
+  since: string | undefined;
   limit: number;
   maxBytes: number;
 }): Promise<LogsTailPayload | null> {
@@ -211,10 +233,14 @@ async function readSystemdJournalFallback(params: {
   if (service.status !== "running" || typeof service.pid !== "number") {
     return null;
   }
-  const serviceCommand = await runtime.readSystemdServiceExecStart(process.env).catch(() => null);
-  const source = `journalctl --user _PID=${service.pid}`;
+  const limit = clampPositiveInt(params.limit, 1, JOURNAL_MAX_LIMIT);
+  const maxBytes = clampPositiveInt(params.maxBytes, 1, JOURNAL_MAX_BYTES);
+  const unitName = resolveLogsSystemdUnitName(runtime, process.env);
+  const source = `journalctl --user --boot --user-unit=${unitName} _PID=${service.pid}`;
   const args = [
     "--user",
+    "--boot",
+    `--user-unit=${unitName}`,
     `_PID=${service.pid}`,
     "--no-pager",
     "--output=cat",
@@ -222,30 +248,52 @@ async function readSystemdJournalFallback(params: {
   ];
   if (typeof params.cursor === "string" && params.cursor.trim().length > 0) {
     args.push(`--after-cursor=${params.cursor}`);
+  } else if (params.since) {
+    args.push(`--since=${params.since}`);
   } else {
-    args.push("-n", String(params.limit));
+    args.push("-n", String(limit));
   }
-  const result = await runtime.execFileUtf8("journalctl", args, {
+  const result = await runtime.execFileUtf8Tail("journalctl", args, {
     env: process.env,
-    maxBuffer: Math.max(params.maxBytes * 2, 1024 * 1024),
+    maxBytes,
   });
   if (result.code !== 0) {
     return null;
   }
-  const parsed = parseJournalctlOutput(result.stdout);
+  const boundedOutput = normalizeTailText(result.stdout, result.truncated);
+  const parsed = parseJournalctlOutput(boundedOutput.text);
+  const lines = parsed.lines.length > limit ? parsed.lines.slice(-limit) : parsed.lines;
+  const redaction = resolveRedactOptions();
   return {
     source,
     sourceKind: "journal",
     service: {
       pid: service.pid,
-      ...(serviceCommand
-        ? { execStart: formatServiceExecStart(serviceCommand.programArguments) }
-        : {}),
+      unit: unitName,
     },
     cursor: parsed.cursor ?? params.cursor,
-    lines: parsed.lines,
+    lines: redactSensitiveLines(lines, redaction),
+    truncated: boundedOutput.truncated || parsed.lines.length > limit,
     localFallback: true,
   };
+}
+
+function clampPositiveInt(value: number, min: number, max: number): number {
+  if (!Number.isFinite(value)) {
+    return min;
+  }
+  return Math.max(min, Math.min(max, Math.floor(value)));
+}
+
+function normalizeTailText(text: string, truncated: boolean): { text: string; truncated: boolean } {
+  if (!truncated) {
+    return { text, truncated };
+  }
+  const firstNewline = text.indexOf("\n");
+  if (firstNewline < 0) {
+    return { text: "", truncated };
+  }
+  return { text: text.slice(firstNewline + 1), truncated };
 }
 
 function parseJournalctlOutput(output: string): { lines: string[]; cursor?: string } {
@@ -264,58 +312,15 @@ function parseJournalctlOutput(output: string): { lines: string[]; cursor?: stri
   return { lines, cursor };
 }
 
-function formatServiceExecStart(args: readonly string[]): string {
-  const rendered: string[] = [];
-  let redactNext = false;
-  for (const arg of args) {
-    if (redactNext) {
-      rendered.push("[redacted]");
-      redactNext = false;
-      continue;
-    }
-    const [name, value] = splitInlineArg(arg);
-    if (isSensitiveExecArgName(name)) {
-      if (value === undefined) {
-        rendered.push(name);
-        redactNext = true;
-      } else {
-        rendered.push(`${name}=[redacted]`);
-      }
-      continue;
-    }
-    rendered.push(renderShellArg(arg));
+function resolveLogsSystemdUnitName(
+  runtime: LogsCliRuntimeModule,
+  env: NodeJS.ProcessEnv,
+): string {
+  const override = env.OPENCLAW_SYSTEMD_UNIT?.trim();
+  if (override) {
+    return override.endsWith(".service") ? override : `${override}.service`;
   }
-  return rendered.join(" ");
-}
-
-function isSensitiveExecArgName(name: string): boolean {
-  if (SENSITIVE_EXEC_ARG_NAMES.has(name)) {
-    return true;
-  }
-  const normalized = normalizeLowercaseStringOrEmpty(name);
-  return (
-    normalized.includes("api-key") ||
-    normalized.includes("apikey") ||
-    normalized.includes("auth") ||
-    normalized.includes("password") ||
-    normalized.includes("secret") ||
-    normalized.includes("token")
-  );
-}
-
-function splitInlineArg(arg: string): [string, string | undefined] {
-  const index = arg.indexOf("=");
-  if (index <= 0) {
-    return [arg, undefined];
-  }
-  return [arg.slice(0, index), arg.slice(index + 1)];
-}
-
-function renderShellArg(arg: string): string {
-  if (/^[A-Za-z0-9_./:=@%+-]+$/u.test(arg)) {
-    return arg;
-  }
-  return JSON.stringify(arg);
+  return `${runtime.resolveGatewaySystemdServiceName(env.OPENCLAW_PROFILE)}.service`;
 }
 
 const MAX_FOLLOW_RETRIES = 8;
@@ -326,6 +331,9 @@ const FOLLOW_BACKOFF_POLICY = { initialMs: 1_000, maxMs: 30_000, factor: 2, jitt
 // Auth errors (4xxx), policy violations (1008), and pairing-required messages are
 // non-recoverable without user action and must not loop.
 function isTransientFollowError(error: unknown): boolean {
+  if (error instanceof JournalFallbackUnavailableError) {
+    return true;
+  }
   if (isGatewayTransportError(error)) {
     if (error.kind === "timeout") {
       return true;
@@ -493,7 +501,10 @@ export function registerLogsCli(program: Command) {
   logs.action(async (opts: LogsCliOptions) => {
     const { logLine, errorLine, emitJsonLine } = createLogWriters();
     const interval = parsePositiveInt(opts.interval, 1000);
-    let cursor: LogCursor | undefined;
+    let gatewayCursor: number | undefined;
+    let journalCursor: string | undefined;
+    let journalSince: string | undefined;
+    let forceJournal = false;
     let first = true;
     const jsonMode = Boolean(opts.json);
     const pretty = !jsonMode && process.stdout.isTTY && !opts.plain;
@@ -506,9 +517,17 @@ export function registerLogsCli(program: Command) {
       let payload: LogsTailPayload;
       // Show progress spinner only on first fetch, not during follow polling
       const showProgress = first && !opts.follow;
+      const gatewayPollStartedAt = new Date().toISOString();
       try {
-        payload = await fetchLogs(opts, cursor, showProgress);
+        payload = await fetchLogs(
+          opts,
+          { gateway: gatewayCursor, journal: journalCursor, journalSince, forceJournal },
+          showProgress,
+        );
       } catch (err) {
+        if (err instanceof JournalFallbackUnavailableError) {
+          forceJournal = false;
+        }
         if (opts.follow && followRetryAttempt < MAX_FOLLOW_RETRIES && isTransientFollowError(err)) {
           followRetryAttempt += 1;
           const backoffMs = computeBackoff(FOLLOW_BACKOFF_POLICY, followRetryAttempt);
@@ -614,10 +633,7 @@ export function registerLogsCli(program: Command) {
             ) {
               return;
             }
-            if (
-              payload.service?.execStart &&
-              !logLine(`Service ExecStart: ${payload.service.execStart}`)
-            ) {
+            if (payload.service?.unit && !logLine(`Service Unit: ${payload.service.unit}`)) {
               return;
             }
           } else if (payload.file) {
@@ -651,10 +667,19 @@ export function registerLogsCli(program: Command) {
           }
         }
       }
-      cursor =
-        typeof payload.cursor === "number" && Number.isFinite(payload.cursor)
-          ? payload.cursor
-          : cursor;
+      if (payload.sourceKind === "journal") {
+        forceJournal = true;
+        if (typeof payload.cursor === "string" && payload.cursor.trim().length > 0) {
+          journalCursor = payload.cursor;
+        }
+      } else if (typeof payload.cursor === "number" && Number.isFinite(payload.cursor)) {
+        gatewayCursor = payload.cursor;
+        if (opts.follow) {
+          journalSince = gatewayPollStartedAt;
+        }
+      } else if (typeof payload.cursor === "string" && payload.cursor.trim().length > 0) {
+        journalCursor = payload.cursor;
+      }
       first = false;
 
       if (!opts.follow) {
