@@ -542,7 +542,14 @@ Supported candidate sources:
   version
 - `source=ref`: pack a trusted `package_ref` branch, tag, or full commit SHA
   with the selected `workflow_ref` harness
-- `source=url`: download an HTTPS `.tgz` with required `package_sha256`
+- `source=url`: download a public HTTPS `.tgz` with required `package_sha256`;
+  URL credentials, non-default HTTPS ports, private/internal/special-use
+  hostnames or resolved addresses, and unsafe redirects are rejected
+- `source=trusted-url`: download an HTTPS `.tgz` with required
+  `package_sha256` and `trusted_source_id` from a named policy in
+  `.github/package-trusted-sources.json`; use this for maintainer-owned
+  enterprise mirrors or private package repositories instead of adding an
+  input-level private-network bypass to `source=url`
 - `source=artifact`: reuse a `.tgz` uploaded by another GitHub Actions run
 
 `OpenClaw Release Checks` runs Package Acceptance with `source=artifact`, the

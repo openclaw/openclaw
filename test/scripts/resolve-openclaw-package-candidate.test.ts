@@ -5,6 +5,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   downloadUrl,
+  loadTrustedPackageSource,
   parseArgs,
   readArtifactPackageCandidateMetadata,
   readPackageBuildSourceSha,
@@ -94,7 +95,43 @@ describe("resolve-openclaw-package-candidate", () => {
       packageSpec: "openclaw@beta",
       packageUrl: "",
       source: "npm",
+      trustedSourceId: "",
+      trustedSourcePolicy: ".github/package-trusted-sources.json",
     });
+  });
+
+  it("loads named trusted package URL source policies", async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), "openclaw-trusted-package-source-"));
+    tempDirs.push(dir);
+    const policy = path.join(dir, "trusted-sources.json");
+    await writeFile(
+      policy,
+      JSON.stringify({
+        schemaVersion: 1,
+        sources: {
+          "enterprise-artifactory": {
+            allowPrivateNetwork: true,
+            hosts: ["packages.internal"],
+            pathPrefixes: ["/artifactory/openclaw/"],
+            ports: [443, 8443],
+            redirectHosts: ["packages.internal", "mirror.internal"],
+          },
+        },
+      }),
+    );
+
+    await expect(loadTrustedPackageSource("enterprise-artifactory", policy)).resolves.toEqual({
+      allowPrivateNetwork: true,
+      auth: undefined,
+      hosts: ["packages.internal"],
+      id: "enterprise-artifactory",
+      pathPrefixes: ["/artifactory/openclaw/"],
+      ports: [443, 8443],
+      redirectHosts: ["packages.internal", "mirror.internal"],
+    });
+    await expect(loadTrustedPackageSource("missing", policy)).rejects.toThrow(
+      "Unknown trusted package source: missing",
+    );
   });
 
   it("rejects unsafe package_url downloads before fetching private targets", async () => {
@@ -126,6 +163,86 @@ describe("resolve-openclaw-package-candidate", () => {
         lookupHost: lookupAddresses([{ address: "10.0.0.8", family: 4 }]),
       }),
     ).rejects.toThrow(/resolves to private\/internal\/special-use/iu);
+    await expect(
+      downloadUrl("https://packages.example/openclaw.tgz", target, {
+        fetchImpl: unexpectedFetch,
+        lookupHost: lookupAddresses([{ address: "64:ff9b::a9fe:a9fe", family: 6 }]),
+      }),
+    ).rejects.toThrow(/resolves to private\/internal\/special-use/iu);
+  });
+
+  it("allows private package_url downloads only through an explicit trusted source policy", async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), "openclaw-package-download-"));
+    tempDirs.push(dir);
+    const target = path.join(dir, "openclaw.tgz");
+    const trustedSource = {
+      allowPrivateNetwork: true,
+      hosts: ["packages.internal"],
+      id: "enterprise-artifactory",
+      pathPrefixes: ["/artifactory/openclaw/"],
+      ports: [8443],
+      redirectHosts: ["packages.internal"],
+    };
+    const requestedUrls: string[] = [];
+
+    await downloadUrl("https://packages.internal:8443/artifactory/openclaw/openclaw.tgz", target, {
+      fetchImpl: async (url: URL) => {
+        requestedUrls.push(url.toString());
+        return new Response(new Uint8Array([4, 5, 6]), {
+          headers: { "content-length": "3" },
+          status: 200,
+        });
+      },
+      lookupHost: lookupAddresses([{ address: "10.0.0.8", family: 4 }]),
+      maxBytes: 3,
+      trustedSource,
+    });
+
+    expect(requestedUrls).toEqual([
+      "https://packages.internal:8443/artifactory/openclaw/openclaw.tgz",
+    ]);
+    await expect(readFile(target)).resolves.toEqual(Buffer.from([4, 5, 6]));
+
+    await expect(
+      downloadUrl("https://evil.internal:8443/artifactory/openclaw/openclaw.tgz", target, {
+        fetchImpl: unexpectedFetch,
+        lookupHost: lookupAddresses([{ address: "10.0.0.9", family: 4 }]),
+        trustedSource,
+      }),
+    ).rejects.toThrow("is not allowed by trusted package source enterprise-artifactory");
+    await expect(
+      downloadUrl("https://packages.internal:8443/other/openclaw.tgz", target, {
+        fetchImpl: unexpectedFetch,
+        lookupHost: lookupAddresses([{ address: "10.0.0.8", family: 4 }]),
+        trustedSource,
+      }),
+    ).rejects.toThrow("path is not allowed by trusted package source enterprise-artifactory");
+  });
+
+  it("keeps trusted package_url redirects inside the named source policy", async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), "openclaw-package-download-"));
+    tempDirs.push(dir);
+    const target = path.join(dir, "openclaw.tgz");
+    const trustedSource = {
+      allowPrivateNetwork: true,
+      hosts: ["packages.internal"],
+      id: "enterprise-artifactory",
+      pathPrefixes: ["/artifactory/openclaw/"],
+      ports: [8443],
+      redirectHosts: ["packages.internal"],
+    };
+
+    await expect(
+      downloadUrl("https://packages.internal:8443/artifactory/openclaw/openclaw.tgz", target, {
+        fetchImpl: async () =>
+          new Response(null, {
+            headers: { location: "https://metadata.internal:8443/artifactory/openclaw/pwn.tgz" },
+            status: 302,
+          }),
+        lookupHost: lookupAddresses([{ address: "10.0.0.8", family: 4 }]),
+        trustedSource,
+      }),
+    ).rejects.toThrow("is not allowed by trusted package source enterprise-artifactory");
   });
 
   it("validates redirects for package_url downloads", async () => {

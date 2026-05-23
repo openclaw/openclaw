@@ -18,6 +18,8 @@ const DEFAULT_OUTPUT_NAME = "openclaw-current.tgz";
 const PACKAGE_URL_DOWNLOAD_TIMEOUT_MS = 60_000;
 const PACKAGE_URL_MAX_BYTES = 250 * 1024 * 1024;
 const PACKAGE_URL_MAX_REDIRECTS = 5;
+const TRUSTED_PACKAGE_SOURCE_POLICY = ".github/package-trusted-sources.json";
+const TRUSTED_PACKAGE_SOURCE_TOKEN_ENV = "OPENCLAW_TRUSTED_PACKAGE_TOKEN";
 const BLOCKED_PACKAGE_HOSTNAMES = new Set([
   "localhost",
   "localhost.localdomain",
@@ -27,13 +29,16 @@ export const OPENCLAW_PACKAGE_SPEC_RE =
   /^openclaw@(alpha|beta|latest|[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*(-[1-9][0-9]*|-(alpha|beta)\.[1-9][0-9]*)?)$/u;
 
 function usage() {
-  return `Usage: node scripts/resolve-openclaw-package-candidate.mjs --source <ref|npm|url|artifact> --output-dir <dir> [options]
+  return `Usage: node scripts/resolve-openclaw-package-candidate.mjs --source <ref|npm|url|trusted-url|artifact> --output-dir <dir> [options]
 
 Options:
   --package-spec <spec>       Published npm spec for source=npm.
   --package-ref <ref>         Trusted repo ref for source=ref.
-  --package-url <url>         HTTPS tarball URL for source=url.
-  --package-sha256 <sha256>   Expected tarball SHA-256 for source=url or source=artifact.
+  --package-url <url>         HTTPS tarball URL for source=url or source=trusted-url.
+  --package-sha256 <sha256>   Expected tarball SHA-256 for source=url, source=trusted-url, or source=artifact.
+  --trusted-source-id <id>    Named trusted URL policy for source=trusted-url.
+  --trusted-source-policy <file>
+                              Repo-controlled trusted URL source policy. Default: ${TRUSTED_PACKAGE_SOURCE_POLICY}
   --artifact-dir <dir>        Directory containing exactly one .tgz for source=artifact.
   --output-name <name>        Output tarball filename. Default: ${DEFAULT_OUTPUT_NAME}
   --metadata <file>           Write package metadata JSON.
@@ -52,6 +57,8 @@ export function parseArgs(argv) {
     packageSpec: "",
     packageUrl: "",
     source: "",
+    trustedSourceId: "",
+    trustedSourcePolicy: TRUSTED_PACKAGE_SOURCE_POLICY,
   };
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
@@ -82,6 +89,10 @@ export function parseArgs(argv) {
       options.packageUrl = readValue(arg);
     } else if (arg === "--source") {
       options.source = readValue(arg);
+    } else if (arg === "--trusted-source-id") {
+      options.trustedSourceId = readValue(arg);
+    } else if (arg === "--trusted-source-policy") {
+      options.trustedSourcePolicy = readValue(arg);
     } else if (arg === "--help" || arg === "-h") {
       options.help = true;
     } else {
@@ -413,7 +424,7 @@ function isUnsafeIpv6(address) {
     normalized.startsWith("fd") ||
     /^fe[89ab]/u.test(normalized) ||
     normalized.startsWith("ff") ||
-    normalized.startsWith("64:ff9b:1:") ||
+    normalized.startsWith("64:ff9b:") ||
     normalized.startsWith("100:") ||
     normalized.startsWith("2001:2:") ||
     normalized.startsWith("2001:db8:")
@@ -441,6 +452,145 @@ function isBlockedPackageHostname(hostname) {
     normalized.endsWith(".internal") ||
     (isIP(normalized) !== 0 && isUnsafeIpAddress(normalized))
   );
+}
+
+function packageUrlPort(parsed) {
+  return parsed.port ? Number(parsed.port) : 443;
+}
+
+function toUniqueNormalizedHostList(value, field, sourceId) {
+  if (!Array.isArray(value) || value.length === 0) {
+    throw new Error(`trusted package source ${sourceId} must define non-empty ${field}`);
+  }
+  return [...new Set(value.map((entry) => normalizeUrlHostname(String(entry))).filter(Boolean))];
+}
+
+function toTrustedPorts(value, sourceId) {
+  const ports = value === undefined ? [443] : value;
+  if (!Array.isArray(ports) || ports.length === 0) {
+    throw new Error(`trusted package source ${sourceId} must define non-empty ports`);
+  }
+  const normalized = ports.map((port) => Number(port));
+  if (normalized.some((port) => !Number.isInteger(port) || port < 1 || port > 65535)) {
+    throw new Error(`trusted package source ${sourceId} has invalid ports`);
+  }
+  return [...new Set(normalized)].toSorted((a, b) => a - b);
+}
+
+function toPathPrefixes(value, sourceId) {
+  const prefixes = value === undefined ? ["/"] : value;
+  if (!Array.isArray(prefixes) || prefixes.length === 0) {
+    throw new Error(`trusted package source ${sourceId} must define non-empty pathPrefixes`);
+  }
+  return prefixes.map((prefix) => {
+    const text = String(prefix);
+    if (!text.startsWith("/")) {
+      throw new Error(`trusted package source ${sourceId} pathPrefixes must start with /`);
+    }
+    return text;
+  });
+}
+
+function normalizeTrustedPackageSource(id, raw) {
+  if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/u.test(id)) {
+    throw new Error(`Invalid trusted package source id: ${id}`);
+  }
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+    throw new Error(`trusted package source ${id} must be an object`);
+  }
+  const hosts = toUniqueNormalizedHostList(raw.hosts, "hosts", id);
+  const redirectHosts = raw.redirectHosts
+    ? toUniqueNormalizedHostList(raw.redirectHosts, "redirectHosts", id)
+    : hosts;
+  const auth = raw.auth === undefined ? undefined : raw.auth;
+  if (auth !== undefined) {
+    if (!auth || typeof auth !== "object" || Array.isArray(auth) || auth.type !== "bearer") {
+      throw new Error(`trusted package source ${id} auth must be {"type":"bearer"}`);
+    }
+    const authKeys = Object.keys(auth);
+    if (authKeys.some((key) => key !== "type")) {
+      throw new Error(`trusted package source ${id} auth only supports type`);
+    }
+  }
+  return {
+    allowPrivateNetwork: raw.allowPrivateNetwork === true,
+    auth,
+    hosts,
+    id,
+    pathPrefixes: toPathPrefixes(raw.pathPrefixes, id),
+    ports: toTrustedPorts(raw.ports, id),
+    redirectHosts,
+  };
+}
+
+export async function loadTrustedPackageSource(id, policyPath = TRUSTED_PACKAGE_SOURCE_POLICY) {
+  if (!id) {
+    throw new Error("source=trusted-url requires --trusted-source-id");
+  }
+  const absolutePolicyPath = path.resolve(ROOT_DIR, policyPath);
+  let policy;
+  try {
+    policy = JSON.parse(await fs.readFile(absolutePolicyPath, "utf8"));
+  } catch (error) {
+    throw new Error(`Unable to read trusted package source policy: ${policyPath}`, {
+      cause: error,
+    });
+  }
+  if (!policy || typeof policy !== "object" || policy.schemaVersion !== 1) {
+    throw new Error(`Trusted package source policy must use schemaVersion 1: ${policyPath}`);
+  }
+  const sources = policy.sources;
+  if (!sources || typeof sources !== "object" || Array.isArray(sources)) {
+    throw new Error(`Trusted package source policy must define sources: ${policyPath}`);
+  }
+  if (!Object.hasOwn(sources, id)) {
+    throw new Error(`Unknown trusted package source: ${id}`);
+  }
+  return normalizeTrustedPackageSource(id, sources[id]);
+}
+
+function validateTrustedPackageDownloadUrl(parsed, trustedSource, options = {}) {
+  if (parsed.protocol !== "https:") {
+    throw new Error(`package_url must use https: ${parsed.toString()}`);
+  }
+  if (parsed.username || parsed.password) {
+    throw new Error(`package_url must not include credentials: ${parsed.origin}`);
+  }
+  const hostname = normalizeUrlHostname(parsed.hostname);
+  const allowedHosts = options.isRedirect ? trustedSource.redirectHosts : trustedSource.hosts;
+  if (!allowedHosts.includes(hostname)) {
+    throw new Error(
+      `package_url host ${parsed.hostname} is not allowed by trusted package source ${trustedSource.id}`,
+    );
+  }
+  if (!trustedSource.ports.includes(packageUrlPort(parsed))) {
+    throw new Error(
+      `package_url port ${packageUrlPort(parsed)} is not allowed by trusted package source ${trustedSource.id}`,
+    );
+  }
+  if (!trustedSource.pathPrefixes.some((prefix) => parsed.pathname.startsWith(prefix))) {
+    throw new Error(
+      `package_url path is not allowed by trusted package source ${trustedSource.id}`,
+    );
+  }
+  if (!trustedSource.allowPrivateNetwork && isBlockedPackageHostname(parsed.hostname)) {
+    throw new Error(
+      `Blocked hostname or private/internal/special-use IP address: ${parsed.hostname}`,
+    );
+  }
+}
+
+function createTrustedPackageAuthHeaders(trustedSource) {
+  if (!trustedSource?.auth) {
+    return undefined;
+  }
+  const token = process.env[TRUSTED_PACKAGE_SOURCE_TOKEN_ENV];
+  if (!token) {
+    throw new Error(
+      `trusted package source ${trustedSource.id} requires ${TRUSTED_PACKAGE_SOURCE_TOKEN_ENV}`,
+    );
+  }
+  return { authorization: `Bearer ${token}` };
 }
 
 function validatePackageDownloadUrl(parsed) {
@@ -504,20 +654,27 @@ function createPinnedLookup(hostname, addresses) {
   };
 }
 
-async function resolvePackageDownloadAddresses(parsed, lookupHost) {
+async function resolvePackageDownloadAddresses(parsed, lookupHost, trustedSource) {
   const hostname = normalizeUrlHostname(parsed.hostname);
   if (isIP(hostname)) {
+    if (!trustedSource?.allowPrivateNetwork && isUnsafeIpAddress(hostname)) {
+      throw new Error(
+        `Blocked: package_url resolves to private/internal/special-use IP address: ${hostname}`,
+      );
+    }
     return [hostname];
   }
   const results = normalizeLookupResults(await lookupHost(hostname));
   if (results.length === 0) {
     throw new Error(`Unable to resolve package_url hostname: ${parsed.hostname}`);
   }
-  const blocked = results.find((entry) => isUnsafeIpAddress(entry.address));
-  if (blocked) {
-    throw new Error(
-      `Blocked: package_url resolves to private/internal/special-use IP address: ${blocked.address}`,
-    );
+  if (!trustedSource?.allowPrivateNetwork) {
+    const blocked = results.find((entry) => isUnsafeIpAddress(entry.address));
+    if (blocked) {
+      throw new Error(
+        `Blocked: package_url resolves to private/internal/special-use IP address: ${blocked.address}`,
+      );
+    }
   }
   return [...new Set(results.map((entry) => entry.address))];
 }
@@ -527,10 +684,16 @@ async function openPackageDownloadResponse(url, options) {
   const lookupHost = options.lookupHost ?? defaultLookupHost;
   const timeoutMs = options.timeoutMs ?? PACKAGE_URL_DOWNLOAD_TIMEOUT_MS;
   const maxRedirects = options.maxRedirects ?? PACKAGE_URL_MAX_REDIRECTS;
+  const trustedSource = options.trustedSource;
+  const headers = createTrustedPackageAuthHeaders(trustedSource);
   let parsed = new URL(url);
   for (let redirectCount = 0; redirectCount <= maxRedirects; redirectCount += 1) {
-    validatePackageDownloadUrl(parsed);
-    const addresses = await resolvePackageDownloadAddresses(parsed, lookupHost);
+    if (trustedSource) {
+      validateTrustedPackageDownloadUrl(parsed, trustedSource, { isRedirect: redirectCount > 0 });
+    } else {
+      validatePackageDownloadUrl(parsed);
+    }
+    const addresses = await resolvePackageDownloadAddresses(parsed, lookupHost, trustedSource);
     const dispatcher = new Agent({
       connect: { lookup: createPinnedLookup(parsed.hostname, addresses) },
     });
@@ -539,6 +702,7 @@ async function openPackageDownloadResponse(url, options) {
     timeout.unref?.();
     const response = await fetchImpl(parsed, {
       dispatcher,
+      headers,
       redirect: "manual",
       signal: controller.signal,
     }).catch(async (error) => {
@@ -658,6 +822,7 @@ async function resolveCandidate(options) {
   let packageRef = "";
   let packageSourceSha = "";
   let packageTrustedReason = "";
+  let packageTrustedSourceId = "";
   let packageWorktreeDir = "";
   let artifactMetadata = {};
 
@@ -697,14 +862,27 @@ async function resolveCandidate(options) {
         packOutput,
         options.outputName || DEFAULT_OUTPUT_NAME,
       );
-    } else if (options.source === "url") {
+    } else if (options.source === "url" || options.source === "trusted-url") {
       if (!options.packageUrl) {
-        throw new Error("source=url requires --package-url");
+        throw new Error(`${options.source} requires --package-url`);
       }
       if (!options.packageSha256) {
-        throw new Error("source=url requires --package-sha256");
+        throw new Error(`${options.source} requires --package-sha256`);
       }
-      await downloadUrl(options.packageUrl, target);
+      if (options.source === "trusted-url") {
+        const trustedSource = await loadTrustedPackageSource(
+          options.trustedSourceId,
+          options.trustedSourcePolicy,
+        );
+        await downloadUrl(options.packageUrl, target, { trustedSource });
+        packageTrustedReason = `trusted-url-policy:${trustedSource.id}`;
+        packageTrustedSourceId = trustedSource.id;
+      } else {
+        if (options.trustedSourceId) {
+          throw new Error("--trusted-source-id is only allowed with source=trusted-url");
+        }
+        await downloadUrl(options.packageUrl, target);
+      }
     } else if (options.source === "artifact") {
       if (!options.artifactDir) {
         throw new Error("source=artifact requires --artifact-dir");
@@ -723,7 +901,9 @@ async function resolveCandidate(options) {
       const input = await findSingleTarball(options.artifactDir);
       await fs.copyFile(input, target);
     } else {
-      throw new Error(`source must be one of: ref, npm, url, artifact. Got: ${options.source}`);
+      throw new Error(
+        `source must be one of: ref, npm, url, trusted-url, artifact. Got: ${options.source}`,
+      );
     }
   } finally {
     if (packageWorktreeDir) {
@@ -754,6 +934,7 @@ async function resolveCandidate(options) {
     packageSpec: options.packageSpec || "",
     packageSourceSha,
     packageTrustedReason,
+    trustedSourceId: packageTrustedSourceId,
     sha256: digest,
     source: options.source,
     tarball: path.relative(ROOT_DIR, target),
