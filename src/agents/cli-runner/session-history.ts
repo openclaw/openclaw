@@ -200,11 +200,18 @@ export function buildCliSessionHistoryPrompt(params: {
       const remainingBudget = maxHistoryChars - summaryBlock.length;
       if (remainingBudget <= 0) {
         // `tailRaw.slice(-0)` would return the entire tail (JS quirk:
-        // `-0 === 0`), so guard explicitly: the summary plus its
-        // separator already consumes the full budget. Drop the tail
-        // entirely and lead with the marker so the prompt still announces
-        // what was discarded.
-        renderedHistory = `${summaryBlock}${truncationMarker}`;
+        // `-0 === 0`), so guard explicitly. The summary plus its
+        // separator already meets or exceeds the cap, so the tail must
+        // drop. The summary itself must also be truncated so that
+        // `summary + separator + marker` stays within budget — appending
+        // the marker after a full-budget summary block would otherwise
+        // blow past `maxHistoryChars` (a 199-char summary under a
+        // 200-char cap would render a 257-char history block).
+        const summaryBudget = Math.max(0, maxHistoryChars - truncationMarker.length - 2);
+        const summaryTruncated = summaryRendered.slice(0, summaryBudget).trimEnd();
+        renderedHistory = summaryTruncated
+          ? `${summaryTruncated}\n\n${truncationMarker}`
+          : truncationMarker;
       } else if (tailRaw.length > remainingBudget) {
         renderedHistory = `${summaryBlock}${truncationMarker}\n${tailRaw.slice(-remainingBudget).trimStart()}`;
       } else {

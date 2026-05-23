@@ -696,4 +696,41 @@ describe("buildCliSessionHistoryPrompt", () => {
     expect(prompt).toContain("POST_SUMMARY_ASSISTANT_DROPPED");
     expect(prompt).toContain("<next_user_message>\nnext ask\n</next_user_message>");
   });
+
+  it("honors the cap when the summary block plus marker crosses it", () => {
+    // Edge case: `summaryRendered.length < maxHistoryChars` (the gate that
+    // routes to the oversize-summary branch is not taken) BUT
+    // `summaryBlock.length >= maxHistoryChars` once the `\n\n` separator
+    // is appended, making `remainingBudget <= 0`. Without summary
+    // truncation in that branch, the rendered history block is
+    // `summary + separator + marker` — well over `maxHistoryChars`. A
+    // 199-char rendered summary under a 200-char cap would otherwise
+    // produce a 257-char history block.
+    const maxHistoryChars = 200;
+    // `renderHistoryMessage` prefixes "Compaction summary: " (20 chars)
+    // before the summary text, so a 179-char summary renders to 199 chars
+    // — strictly less than the cap, but `summaryBlock = rendered + "\n\n"`
+    // is 201 chars and `remainingBudget` is negative.
+    const summaryPrefix = "Compaction summary: ";
+    const summaryText = "S".repeat(maxHistoryChars - 1 - summaryPrefix.length);
+    const prompt = buildCliSessionHistoryPrompt({
+      messages: [
+        { role: "compactionSummary", summary: summaryText },
+        { role: "user", content: "POST_SUMMARY_TAIL_USER" },
+        { role: "assistant", content: "POST_SUMMARY_TAIL_ASSISTANT" },
+      ],
+      prompt: "next ask",
+      maxHistoryChars,
+    });
+
+    expect(prompt).toBeDefined();
+    const historyMatch = prompt?.match(
+      /<conversation_history>\n([\s\S]*?)\n<\/conversation_history>/,
+    );
+    expect(historyMatch).not.toBeNull();
+    const renderedHistory = historyMatch?.[1] ?? "";
+    expect(renderedHistory.length).toBeLessThanOrEqual(maxHistoryChars);
+    // Marker is still present so the prompt announces what was discarded.
+    expect(prompt).toContain("[OpenClaw reseed history truncated; older turns dropped]");
+  });
 });
