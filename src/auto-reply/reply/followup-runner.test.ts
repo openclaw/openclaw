@@ -1423,7 +1423,7 @@ describe("createFollowupRunner progress forwarding", () => {
     );
 
     const runner = createFollowupRunner({
-      opts: { onToolStart, onCommandOutput },
+      opts: { suppressDefaultToolProgressMessages: false, onToolStart, onCommandOutput },
       typing: createMockTypingController(),
       typingMode: "instant",
       defaultModel: "claude",

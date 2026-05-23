@@ -1518,7 +1518,7 @@ describe("dispatchReplyFromConfig", () => {
       cfg,
       dispatcher,
       replyResolver,
-      replyOptions: { suppressDefaultToolProgressMessages: true },
+      replyOptions: { suppressDefaultToolProgressMessages: false },
     });
 
     expect(dispatcher.sendToolResult).toHaveBeenCalledTimes(1);

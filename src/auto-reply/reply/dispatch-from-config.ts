@@ -1493,10 +1493,7 @@ export async function dispatchReplyFromConfig(
     // so /stop can abort pre-run and in-run stalls through the same session lane.
     ensureDispatchReplyOperation();
 
-    const suppressDefaultToolProgressMessages =
-      params.replyOptions?.suppressDefaultToolProgressMessages !== false;
-    const shouldSuppressDefaultToolProgressMessages = () =>
-      suppressDefaultToolProgressMessages && !shouldEmitVerboseProgress();
+    const shouldSuppressDefaultToolProgressMessages = () => !shouldEmitVerboseProgress();
     const shouldSendVerboseProgressMessages = () => !shouldSuppressDefaultToolProgressMessages();
     const shouldSendToolSummaries = () => shouldSendVerboseProgressMessages();
     const shouldSendToolStartStatuses = false;
@@ -1851,7 +1848,7 @@ export async function dispatchReplyFromConfig(
       shouldSendVerboseProgressMessages() &&
       ctx.InboundEventKind !== "room_event" &&
       !shouldSuppressProgressDelivery();
-    const hasLiveVerboseProgressGate = suppressDefaultToolProgressMessages && canTrackSession;
+    const hasLiveVerboseProgressGate = canTrackSession;
     let observedVisibleToolErrorProgress =
       hasVisibleRegularVerboseToolProgress() && !hasLiveVerboseProgressGate;
     const markVisibleToolErrorProgress = () => {
