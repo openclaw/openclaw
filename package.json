@@ -1130,6 +1130,10 @@
       "types": "./dist/plugin-sdk/memory-host-status.d.ts",
       "default": "./dist/plugin-sdk/memory-host-status.js"
     },
+    "./plugin-sdk/memory-state": {
+      "types": "./dist/plugins/memory-state.d.ts",
+      "default": "./dist/plugins/memory-state.js"
+    },
     "./plugin-sdk/models-provider-runtime": {
       "types": "./dist/plugin-sdk/models-provider-runtime.d.ts",
       "default": "./dist/plugin-sdk/models-provider-runtime.js"
