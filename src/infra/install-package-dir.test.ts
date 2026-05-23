@@ -349,6 +349,69 @@ describe("installPackageDir", () => {
     },
   );
 
+  it.runIf(process.platform !== "win32")(
+    "keeps hardlinked existing installs rejected for dependency-free updates",
+    async () => {
+      await fixtureRootTracker.setup();
+      const fixtureRoot = await fixtureRootTracker.make("case");
+      const { sourceDir, targetDir } = await createExistingInstallFixture(fixtureRoot);
+      await addHardlinkedFile(
+        path.join(targetDir, "marker.txt"),
+        path.join(fixtureRoot, "cache", "existing-marker.txt"),
+      );
+
+      const result = await installPackageDir({
+        sourceDir,
+        targetDir,
+        mode: "update",
+        timeoutMs: 1_000,
+        copyErrorPrefix: "failed to copy plugin",
+        hasDeps: false,
+        depsLogMessage: "Installing deps…",
+      });
+
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.error).toContain("Hardlinked source file is not allowed");
+      }
+      await expect(fs.readFile(path.join(targetDir, "marker.txt"), "utf8")).resolves.toBe("old");
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "keeps hardlinked staged installs rejected for dependency-free publishes",
+    async () => {
+      await fixtureRootTracker.setup();
+      const fixtureRoot = await fixtureRootTracker.make("case");
+      const sourceDir = path.join(fixtureRoot, "source");
+      const targetDir = path.join(fixtureRoot, "plugins", "demo");
+      await fs.mkdir(sourceDir, { recursive: true });
+      await fs.writeFile(path.join(sourceDir, "marker.txt"), "new");
+
+      const result = await installPackageDir({
+        sourceDir,
+        targetDir,
+        mode: "install",
+        timeoutMs: 1_000,
+        copyErrorPrefix: "failed to copy plugin",
+        hasDeps: false,
+        depsLogMessage: "Installing deps…",
+        afterCopy: async (installedDir) => {
+          await addHardlinkedFile(
+            path.join(installedDir, "marker.txt"),
+            path.join(fixtureRoot, "cache", "staged-marker.txt"),
+          );
+        },
+      });
+
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.error).toContain("Hardlinked source file is not allowed");
+      }
+      await expectMissingPath(path.join(targetDir, "marker.txt"));
+    },
+  );
+
   it("aborts without outside writes when the install base is rebound before publish", async () => {
     await fixtureRootTracker.setup();
     const fixtureRoot = await fixtureRootTracker.make("case");

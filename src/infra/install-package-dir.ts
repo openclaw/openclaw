@@ -8,6 +8,7 @@ import { movePathWithCopyFallback } from "./replace-file.js";
 import { createSafeNpmInstallArgs, createSafeNpmInstallEnv } from "./safe-package-install.js";
 
 const PACKAGE_MANAGER_INSTALL_SOURCE_HARDLINKS = "allow" as const;
+const DEFAULT_INSTALL_SOURCE_HARDLINKS = "reject" as const;
 const INSTALL_BASE_CHANGED_ERROR_MESSAGE = "install base directory changed during install";
 const INSTALL_BASE_CHANGED_ABORT_WARNING =
   "Install base directory changed during install; aborting staged publish.";
@@ -107,6 +108,12 @@ function isInstallBaseChangedError(error: unknown): boolean {
   return error instanceof Error && error.message === INSTALL_BASE_CHANGED_ERROR_MESSAGE;
 }
 
+function resolveInstallSourceHardlinks(params: { hasDeps: boolean }): "allow" | "reject" {
+  return params.hasDeps
+    ? PACKAGE_MANAGER_INSTALL_SOURCE_HARDLINKS
+    : DEFAULT_INSTALL_SOURCE_HARDLINKS;
+}
+
 async function assertInstallBaseStable(params: {
   installBaseDir: string;
   expectedRealPath: string;
@@ -191,6 +198,7 @@ export async function installPackageDir(params: {
 
   let stageDir: string | null = null;
   let backupDir: string | null = null;
+  const sourceHardlinks = resolveInstallSourceHardlinks({ hasDeps: params.hasDeps });
   const fail = async (error: string, cause?: unknown) => {
     const installBaseChanged = isInstallBaseChangedError(cause);
     if (installBaseChanged) {
@@ -214,7 +222,7 @@ export async function installPackageDir(params: {
     }
     await movePathWithCopyFallback({
       from: backupDir,
-      sourceHardlinks: PACKAGE_MANAGER_INSTALL_SOURCE_HARDLINKS,
+      sourceHardlinks,
       to: canonicalTargetDir,
     }).catch(() => undefined);
     backupDir = null;
@@ -301,7 +309,7 @@ export async function installPackageDir(params: {
       });
       await movePathWithCopyFallback({
         from: canonicalTargetDir,
-        sourceHardlinks: PACKAGE_MANAGER_INSTALL_SOURCE_HARDLINKS,
+        sourceHardlinks,
         to: backupDir,
       });
     } catch (err) {
@@ -316,7 +324,7 @@ export async function installPackageDir(params: {
     });
     await movePathWithCopyFallback({
       from: stageDir,
-      sourceHardlinks: PACKAGE_MANAGER_INSTALL_SOURCE_HARDLINKS,
+      sourceHardlinks,
       to: canonicalTargetDir,
     });
     stageDir = null;
