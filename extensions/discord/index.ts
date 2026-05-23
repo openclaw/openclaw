@@ -1,5 +1,5 @@
 import { defineBundledChannelEntry } from "openclaw/plugin-sdk/channel-entry-contract";
-import { discordVoiceMeetingNotesSourceProvider } from "./src/voice/meeting-notes-source.js";
+import { discordVoiceMeetingNotesSourceProvider } from "./meeting-notes-source-api.js";
 import { registerDiscordSubagentHooks } from "./subagent-hooks-api.js";
 
 export default defineBundledChannelEntry({
