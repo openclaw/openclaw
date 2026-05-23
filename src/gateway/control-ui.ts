@@ -627,6 +627,7 @@ export async function handleControlUiAvatarRequest(
     trustedProxies?: string[];
     allowRealIpFallback?: boolean;
     rateLimiter?: AuthRateLimiter;
+    allowQueryToken?: boolean;
   },
 ): Promise<boolean> {
   const urlRaw = req.url;
@@ -661,6 +662,7 @@ export async function handleControlUiAvatarRequest(
       trustedProxies: opts.trustedProxies,
       allowRealIpFallback: opts.allowRealIpFallback,
       rateLimiter: opts.rateLimiter,
+      allowQueryToken: opts.allowQueryToken,
     }))
   ) {
     return true;

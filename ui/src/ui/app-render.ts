@@ -15,6 +15,7 @@ import {
   renderChatSessionSelect,
   renderTab,
   resolveAssistantAttachmentAuthToken,
+  resolveAvatarAuthToken,
   resolveDashboardHeaderContext,
   renderSidebarConnectionStatus,
   renderTopbarThemeModeToggle,
@@ -662,10 +663,16 @@ function resolveAssistantAvatarOverride(config: unknown): string | null {
   return normalizeOptionalString((assistant as { avatar?: unknown }).avatar) ?? null;
 }
 
-function buildAssistantAvatarRoute(basePathValue: string | null | undefined, agentId: string) {
+function buildAssistantAvatarRoute(
+  basePathValue: string | null | undefined,
+  agentId: string,
+  authToken: string | null | undefined,
+) {
   const basePath = normalizeBasePath(basePathValue ?? "");
   const encoded = encodeURIComponent(agentId);
-  return basePath ? `${basePath}/avatar/${encoded}` : `/avatar/${encoded}`;
+  const path = basePath ? `${basePath}/avatar/${encoded}` : `/avatar/${encoded}`;
+  const normalizedToken = authToken?.trim();
+  return normalizedToken ? `${path}?token=${encodeURIComponent(normalizedToken)}` : path;
 }
 
 // ── Quick Settings data extraction helpers ──
@@ -950,7 +957,11 @@ export function renderApp(state: AppViewState) {
   const configAssistantAvatarUrl =
     localAssistantAvatarOverride ??
     (configAssistantAvatarStatus === "local" && state.assistantAgentId
-      ? buildAssistantAvatarRoute(state.basePath, state.assistantAgentId)
+      ? buildAssistantAvatarRoute(
+          state.basePath,
+          state.assistantAgentId,
+          resolveAvatarAuthToken(state),
+        )
       : (state.chatAvatarUrl ??
         (configAssistantAvatarMissing ? null : (assistantAvatarUrl ?? null))));
   const configValue =
