@@ -1,12 +1,12 @@
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { __testing } from "./daemon.js";
+import { testApi } from "./daemon.js";
 
 describe("signal daemon args", () => {
   it("expands home-relative configPath before passing it to signal-cli", () => {
     expect(
-      __testing.buildDaemonArgs({
+      testApi.buildDaemonArgs({
         cliPath: "signal-cli",
         configPath: "~/.openclaw/signal-cli",
         httpHost: "127.0.0.1",
