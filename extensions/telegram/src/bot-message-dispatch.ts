@@ -1463,18 +1463,23 @@ export const dispatchTelegramMessage = async ({
                         reasoningStepState.noteReasoningHint();
                       }
                       if (segment.lane === "answer" && info.kind === "tool") {
-                        if (
-                          nativeToolProgressDraft &&
-                          canUseNativeToolProgressDraft({
-                            payload: effectivePayload,
-                            reply,
-                            buttons: telegramButtons,
-                          })
-                        ) {
+                        const canRepresentAsTransientProgress = canUseNativeToolProgressDraft({
+                          payload: effectivePayload,
+                          reply,
+                          buttons: telegramButtons,
+                        });
+                        if (nativeToolProgressDraft && canRepresentAsTransientProgress) {
                           if (await pushStreamToolProgress(segment.update.text)) {
                             blockDelivered = true;
                             continue;
                           }
+                        }
+                        if (
+                          canRepresentAsTransientProgress &&
+                          streamMode === "progress" &&
+                          answerLane.stream
+                        ) {
+                          continue;
                         }
                         await prepareAnswerLaneForToolProgress();
                       }
