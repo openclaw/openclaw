@@ -11,6 +11,11 @@ import {
   removeAckReactionAfterReply,
 } from "openclaw/plugin-sdk/channel-feedback";
 import {
+  formatInboundEnvelope,
+  resolveEnvelopeFormatOptions,
+} from "openclaw/plugin-sdk/channel-inbound";
+import { CURRENT_MESSAGE_MARKER } from "openclaw/plugin-sdk/channel-mention-gating";
+import {
   createChannelMessageReplyPipeline,
   deriveDurableFinalDeliveryRequirements,
 } from "openclaw/plugin-sdk/channel-message";
@@ -83,6 +88,7 @@ import {
   buildTelegramGroupPeerId,
   buildTelegramGroupFrom,
   buildTelegramInboundOriginTarget,
+  buildGroupLabel,
   getTelegramTextParts,
   resolveTelegramReplyId,
   type TelegramThreadSpec,
@@ -436,7 +442,54 @@ function resolveDispatchTelegramThreadSpec(params: {
     : { ...params.threadSpec, id: recoveredThreadId };
 }
 
+function extractCurrentTelegramBody(body: string | undefined): string {
+  if (!body) {
+    return "";
+  }
+  const markerIndex = body.indexOf(CURRENT_MESSAGE_MARKER);
+  if (markerIndex === -1) {
+    return body;
+  }
+  return body.slice(markerIndex + CURRENT_MESSAGE_MARKER.length).trimStart();
+}
+
+function buildRecoveredTelegramBody(params: {
+  cfg: OpenClawConfig;
+  context: TelegramMessageContext;
+  historyKey?: string;
+  threadSpec: TelegramThreadSpec;
+}): string {
+  const currentMessage = extractCurrentTelegramBody(params.context.ctxPayload.Body);
+  if (!params.context.isGroup || !params.historyKey || params.context.historyLimit <= 0) {
+    return currentMessage;
+  }
+  const groupLabel = buildGroupLabel(
+    params.context.msg,
+    params.context.chatId,
+    params.threadSpec.id,
+  );
+  const envelopeOptions = resolveEnvelopeFormatOptions(params.cfg);
+  return createChannelHistoryWindow({
+    historyMap: params.context.groupHistories,
+  }).buildPendingContext({
+    historyKey: params.historyKey,
+    limit: params.context.historyLimit,
+    currentMessage,
+    formatEntry: (entry) =>
+      formatInboundEnvelope({
+        channel: "Telegram",
+        from: groupLabel,
+        timestamp: entry.timestamp,
+        body: `${entry.body} [id:${entry.messageId ?? "unknown"} chat:${params.context.chatId}]`,
+        chatType: "group",
+        senderLabel: entry.sender,
+        envelope: envelopeOptions,
+      }),
+  });
+}
+
 function resolveDispatchTelegramContext(params: {
+  cfg: OpenClawConfig;
   context: TelegramMessageContext;
 }): TelegramMessageContext {
   const threadSpec = resolveDispatchTelegramThreadSpec({
@@ -473,6 +526,12 @@ function resolveDispatchTelegramContext(params: {
           limit: params.context.historyLimit,
         })
       : params.context.ctxPayload.InboundHistory;
+  const recoveredBody = buildRecoveredTelegramBody({
+    cfg: params.cfg,
+    context: params.context,
+    historyKey: recoveredHistoryKey,
+    threadSpec,
+  });
   return {
     ...params.context,
     historyKey: recoveredHistoryKey,
@@ -491,6 +550,7 @@ function resolveDispatchTelegramContext(params: {
         ? params.context.ctxPayload
         : {
             ...params.context.ctxPayload,
+            Body: recoveredBody,
             From: recoveredFrom,
             InboundHistory: recoveredInboundHistory,
             MessageThreadId: threadSpec.id,
@@ -514,7 +574,7 @@ export const dispatchTelegramMessage = async ({
   opts,
 }: DispatchTelegramMessageParams) => {
   const dispatchStartedAt = Date.now();
-  const dispatchContext = resolveDispatchTelegramContext({ context });
+  const dispatchContext = resolveDispatchTelegramContext({ cfg, context });
   const telegramDeps =
     injectedTelegramDeps ?? (await import("./bot-deps.js")).defaultTelegramBotDeps;
   const loadFreshSessionStore = createFreshTelegramSessionStoreLoader({ cfg, telegramDeps });

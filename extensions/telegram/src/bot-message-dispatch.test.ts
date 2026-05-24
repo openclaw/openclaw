@@ -578,6 +578,12 @@ describe("dispatchTelegramMessage draft streaming", () => {
     await dispatchWithContext({
       context: createContext({
         ctxPayload: {
+          Body:
+            "[Chat messages since your last reply - for context]\n" +
+            "general topic context\n\n" +
+            "[Current message - respond to this]\n" +
+            "current topic question",
+          BodyForAgent: "current topic question",
           ChatType: "group",
           From: "telegram:group:-1003774691294:topic:1",
           MessageThreadId: 1,
@@ -639,6 +645,9 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(outboundCtxPayload.InboundHistory).not.toEqual([
       expect.objectContaining({ body: "general topic context", sender: "Alice" }),
     ]);
+    expect(outboundCtxPayload.Body).toContain("recovered topic context");
+    expect(outboundCtxPayload.Body).toContain("current topic question");
+    expect(outboundCtxPayload.Body).not.toContain("general topic context");
     expect(recordInboundSession).toHaveBeenCalledWith(
       expect.objectContaining({
         updateLastRoute: expect.objectContaining({
