@@ -3916,6 +3916,119 @@ describe("AcpSessionManager", () => {
     expect(currentMeta.identity?.agentSessionId).toBe("agent-session-1");
   });
 
+  it("skips oneshot pending ACP identities during startup scan", async () => {
+    const runtimeState = createRuntime();
+    runtimeState.getStatus.mockResolvedValue({
+      summary: "status=alive",
+      acpxRecordId: "acpx-record-persistent",
+      backendSessionId: "acpx-session-persistent",
+      agentSessionId: "agent-session-persistent",
+      details: { status: "alive" },
+    });
+    hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
+      id: "acpx",
+      runtime: runtimeState.runtime,
+    });
+
+    const oneshotSessionKey = "agent:codex:acp:session-oneshot";
+    const persistentSessionKey = "agent:codex:acp:session-persistent";
+    const now = Date.now();
+    const oneshotMeta: SessionAcpMeta = {
+      ...readySessionMeta({ mode: "oneshot" }),
+      identity: {
+        state: "pending",
+        source: "ensure",
+        acpxSessionId: "acpx-oneshot-stale",
+        lastUpdatedAt: now,
+      },
+    };
+    const persistentMeta: SessionAcpMeta = {
+      ...readySessionMeta(),
+      identity: {
+        state: "pending",
+        source: "ensure",
+        acpxSessionId: "acpx-persistent-stale",
+        lastUpdatedAt: now,
+      },
+    };
+    const currentMetas = new Map<string, SessionAcpMeta>([
+      [oneshotSessionKey, oneshotMeta],
+      [persistentSessionKey, persistentMeta],
+    ]);
+    hoisted.listAcpSessionEntriesMock.mockResolvedValue(
+      [oneshotSessionKey, persistentSessionKey].map((sessionKey) => {
+        const acp = currentMetas.get(sessionKey)!;
+        return {
+          cfg: baseCfg,
+          storePath: "/tmp/sessions-acp.json",
+          sessionKey,
+          storeSessionKey: sessionKey,
+          entry: {
+            sessionId: sessionKey,
+            updatedAt: now,
+            acp,
+          },
+          acp,
+        };
+      }),
+    );
+    hoisted.readAcpSessionEntryMock.mockImplementation((paramsUnknown: unknown) => {
+      const key = (paramsUnknown as { sessionKey?: string }).sessionKey;
+      const acp = key ? currentMetas.get(key) : undefined;
+      if (!key || !acp) {
+        return null;
+      }
+      return {
+        sessionKey: key,
+        storeSessionKey: key,
+        acp,
+      };
+    });
+    hoisted.upsertAcpSessionMetaMock.mockImplementation(async (paramsUnknown: unknown) => {
+      const params = paramsUnknown as {
+        sessionKey: string;
+        mutate: (
+          current: SessionAcpMeta | undefined,
+          entry: { acp?: SessionAcpMeta } | undefined,
+        ) => SessionAcpMeta | null | undefined;
+      };
+      const current = currentMetas.get(params.sessionKey);
+      const next = params.mutate(current, current ? { acp: current } : undefined);
+      if (!next) {
+        return null;
+      }
+      currentMetas.set(params.sessionKey, next);
+      return {
+        sessionId: params.sessionKey,
+        updatedAt: Date.now(),
+        acp: next,
+      };
+    });
+
+    const manager = new AcpSessionManager();
+    const result = await manager.reconcilePendingSessionIdentities({ cfg: baseCfg });
+
+    expect(result).toEqual({ checked: 1, resolved: 1, failed: 0 });
+    expect(currentMetas.get(oneshotSessionKey)?.identity).toEqual(oneshotMeta.identity);
+    expect(currentMetas.get(persistentSessionKey)?.identity?.state).toBe("resolved");
+    expect(currentMetas.get(persistentSessionKey)?.identity?.acpxRecordId).toBe(
+      "acpx-record-persistent",
+    );
+    expect(currentMetas.get(persistentSessionKey)?.identity?.acpxSessionId).toBe(
+      "acpx-session-persistent",
+    );
+    expect(currentMetas.get(persistentSessionKey)?.identity?.agentSessionId).toBe(
+      "agent-session-persistent",
+    );
+    expect(runtimeState.ensureSession).toHaveBeenCalledTimes(1);
+    expectRecordFields(mockCallArg(runtimeState.ensureSession), {
+      sessionKey: persistentSessionKey,
+      mode: "persistent",
+      resumeSessionId: "acpx-persistent-stale",
+    });
+    expect(runtimeState.getStatus).toHaveBeenCalledTimes(1);
+  });
+
   it("skips startup reconcile for pending identities without stable runtime ids", async () => {
     const runtimeState = createRuntime();
     hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
