@@ -19,7 +19,8 @@ export function evaluatePlaybookCondition(
     if (interpolated === "" || interpolated === "false" || interpolated === "0") return false;
     // 若插值后是非空非 false 的普通值（如频道 ID "feishu"），说明字段存在 → true
     // 若原 condition 本身是纯值表达式（没有 {{ 模板），继续走条件解析
-    if (condition.trim().startsWith("{{")) return true;
+    // 注意：插值结果若含比较运算符（如 "5 > 3"），不能直接 return true，要继续解析
+    if (condition.trim().startsWith("{{") && !/[><=!]/.test(interpolated)) return true;
   }
   const expr = interpolated.trim();
   const payload = (variables.payload ?? variables) as Record<string, unknown>;
