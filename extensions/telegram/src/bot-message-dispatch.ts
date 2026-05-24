@@ -415,15 +415,22 @@ function normalizeTelegramThreadId(value: unknown): number | undefined {
   return normalized > 0 ? normalized : undefined;
 }
 
-function resolveTelegramForumThreadIdFromSessionKey(sessionKey: unknown): number | undefined {
+function resolveTelegramForumThreadScopeFromSessionKey(
+  sessionKey: unknown,
+): { chatId: string; threadId: number } | undefined {
   if (typeof sessionKey !== "string") {
     return undefined;
   }
-  const match = /:telegram:group:-?\d+:topic:(\d+)(?::|$)/.exec(sessionKey);
-  return normalizeTelegramThreadId(match?.[1]);
+  const match = /:telegram:group:(-?\d+):topic:(\d+)(?::|$)/.exec(sessionKey);
+  const threadId = normalizeTelegramThreadId(match?.[2]);
+  if (!match?.[1] || threadId == null) {
+    return undefined;
+  }
+  return { chatId: match[1], threadId };
 }
 
 function resolveDispatchTelegramThreadSpec(params: {
+  chatId: TelegramMessageContext["chatId"];
   ctxPayload: TelegramMessageContext["ctxPayload"];
   threadSpec: TelegramThreadSpec;
 }): TelegramThreadSpec {
@@ -433,13 +440,15 @@ function resolveDispatchTelegramThreadSpec(params: {
   ) {
     return params.threadSpec;
   }
-  const scopedThreadId = resolveTelegramForumThreadIdFromSessionKey(params.ctxPayload.SessionKey);
+  const scopedThread = resolveTelegramForumThreadScopeFromSessionKey(params.ctxPayload.SessionKey);
+  const scopedThreadId =
+    scopedThread?.chatId === String(params.chatId) ? scopedThread.threadId : undefined;
   const payloadThreadId =
     normalizeTelegramThreadId(params.ctxPayload.MessageThreadId) ??
     normalizeTelegramThreadId(params.ctxPayload.TransportThreadId);
   // Missing forum IDs are normalized to General; topic-scoped turn facts are more specific.
   const recoveredThreadId = scopedThreadId ?? payloadThreadId;
-  return recoveredThreadId == null
+  return recoveredThreadId == null || recoveredThreadId === params.threadSpec.id
     ? params.threadSpec
     : { ...params.threadSpec, id: recoveredThreadId };
 }
@@ -566,6 +575,7 @@ function resolveDispatchTelegramContext(params: {
   context: TelegramMessageContext;
 }): TelegramMessageContext {
   const threadSpec = resolveDispatchTelegramThreadSpec({
+    chatId: params.context.chatId,
     ctxPayload: params.context.ctxPayload,
     threadSpec: params.context.threadSpec,
   });

@@ -676,6 +676,78 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(deliverReplies).not.toHaveBeenCalled();
   });
 
+  it("does not recover forum thread context from a different group session key", async () => {
+    const currentHistoryKey = "-100555:topic:1";
+    const otherGroupHistoryKey = "-1003774691294:topic:3731";
+    const groupHistories = new Map([
+      [currentHistoryKey, [{ sender: "Alice", body: "current general context", timestamp: 1 }]],
+      [otherGroupHistoryKey, [{ sender: "Bob", body: "other group topic context", timestamp: 2 }]],
+    ]);
+    deliverInboundReplyWithMessageSendContext.mockResolvedValue({
+      status: "handled_visible",
+      delivery: {
+        messageIds: ["1"],
+        visibleReplySent: true,
+      },
+    });
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+      await dispatcherOptions.deliver({ text: "current group final" }, { kind: "final" });
+      return { queuedFinal: true };
+    });
+
+    await dispatchWithContext({
+      context: createContext({
+        ctxPayload: {
+          Body: "current group question",
+          ChatType: "group",
+          From: "telegram:group:-100555:topic:1",
+          MessageThreadId: 1,
+          OriginatingTo: "telegram:-100555",
+          SessionKey: "agent:main:telegram:group:-1003774691294:topic:3731",
+          To: "telegram:-100555",
+          TransportThreadId: 1,
+        } as unknown as TelegramMessageContext["ctxPayload"],
+        msg: {
+          chat: { id: -100555, type: "supergroup" },
+          message_id: 27788,
+          message_thread_id: undefined,
+        } as unknown as TelegramMessageContext["msg"],
+        primaryCtx: {
+          message: { chat: { id: -100555, type: "supergroup" } },
+        } as unknown as TelegramMessageContext["primaryCtx"],
+        chatId: -100555,
+        isGroup: true,
+        replyThreadId: undefined,
+        resolvedThreadId: undefined,
+        threadSpec: { id: 1, scope: "forum" },
+        historyKey: currentHistoryKey,
+        historyLimit: 10,
+        groupHistories,
+      }),
+      replyToMode: "off",
+      streamMode: "off",
+    });
+
+    const outbound = expectRecordFields(mockCallArg(deliverInboundReplyWithMessageSendContext), {
+      threadId: 1,
+      to: "-100555",
+    });
+    expectRecordFields(outbound.ctxPayload, {
+      From: "telegram:group:-100555:topic:1",
+      MessageThreadId: 1,
+      OriginatingTo: "telegram:-100555",
+      TransportThreadId: 1,
+      To: "telegram:-100555",
+      SessionKey: "agent:main:telegram:group:-1003774691294:topic:3731",
+    });
+    const outboundCtxPayload = expectRecordFields(outbound.ctxPayload, {});
+    expect(outboundCtxPayload.Body).not.toContain("other group topic context");
+    expect(groupHistories.get(otherGroupHistoryKey)).toEqual([
+      expect.objectContaining({ body: "other group topic context" }),
+    ]);
+    expect(deliverReplies).not.toHaveBeenCalled();
+  });
+
   it("moves recovered room-event history out of the original topic", async () => {
     const oldHistoryKey = "-1003774691294:topic:1";
     const recoveredHistoryKey = "-1003774691294:topic:3731";

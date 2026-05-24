@@ -8,7 +8,6 @@ import type {
   AcpRuntimeTurnInput,
 } from "../../plugin-sdk/acp-runtime.js";
 import { createInternalHookEventPayload } from "../../test-utils/internal-hook-event-payload.js";
-import type { ReplyPayload } from "../types.js";
 import {
   acpManagerRuntimeMocks,
   acpMocks,
@@ -23,7 +22,6 @@ import {
   sessionBindingMocks,
   sessionStoreMocks,
   setDiscordTestRegistry,
-  ttsMocks,
 } from "./dispatch-from-config.shared.test-harness.js";
 import { buildTestCtx } from "./test-ctx.js";
 
@@ -767,28 +765,18 @@ describe("dispatchReplyFromConfig ACP abort", () => {
     hookMocks.runner.hasHooks.mockImplementation(
       (hookName?: string) => hookName === "before_dispatch",
     );
-    hookMocks.runner.runBeforeDispatch.mockResolvedValue({
-      handled: true,
-      text: "handled by hook",
-    });
-    let ttsStarted!: () => void;
-    let releaseTts!: () => void;
-    const ttsStartedPromise = new Promise<void>((resolve) => {
-      ttsStarted = resolve;
-    });
-    const releaseTtsPromise = new Promise<void>((resolve) => {
-      releaseTts = resolve;
-    });
-    ttsMocks.maybeApplyTtsToPayload.mockImplementation(async (paramsUnknown: unknown) => {
-      ttsStarted();
-      await releaseTtsPromise;
-      return (paramsUnknown as { payload: ReplyPayload }).payload;
-    });
     mocks.routeReply.mockClear();
     const existingOperation = createReplyOperation({
       sessionKey: "agent:already-active-handled",
       sessionId: "already-active-session",
       resetTriggered: false,
+    });
+    hookMocks.runner.runBeforeDispatch.mockImplementation(async () => {
+      expect(replyRunRegistry.abort("agent:already-active-handled")).toBe(true);
+      return {
+        handled: true,
+        text: "handled by hook",
+      };
     });
     const dispatcher = createDispatcher();
     const ctx = buildTestCtx({
@@ -810,15 +798,12 @@ describe("dispatchReplyFromConfig ACP abort", () => {
       replyResolver: vi.fn(),
     });
 
-    await ttsStartedPromise;
-    expect(replyRunRegistry.abort("agent:already-active-handled")).toBe(true);
-    releaseTts();
-
     await expect(dispatchPromise).resolves.toMatchObject({
       queuedFinal: false,
       counts: { tool: 0, block: 0, final: 0 },
     });
     expect(mocks.routeReply).not.toHaveBeenCalled();
+    expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
     expect(existingOperation.result).toEqual({ kind: "aborted", code: "aborted_by_user" });
     expect(getActiveReplyRunCount()).toBe(0);
   });
