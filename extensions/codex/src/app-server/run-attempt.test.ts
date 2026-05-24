@@ -6971,6 +6971,7 @@ describe("runCodexAppServerAttempt", () => {
       },
       threadId: "thread-1",
       turnId: "turn-1",
+      autoApprove: true,
     });
     expect(approvalArgs?.nativeHookRelay).toMatchObject({
       relayId,

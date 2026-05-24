@@ -83,6 +83,7 @@ import {
   resolveCodexComputerUseConfig,
   resolveCodexPluginsPolicy,
   resolveCodexAppServerRuntimeOptions,
+  shouldAutoApproveCodexAppServerApprovals,
   withMcpElicitationsApprovalPolicy,
   type CodexAppServerRuntimeOptions,
   type CodexPluginConfig,
@@ -2477,6 +2478,7 @@ export async function runCodexAppServerAttempt(
             threadId: thread.threadId,
             turnId,
             nativeHookRelay,
+            autoApprove: shouldAutoApproveCodexAppServerApprovals(appServer),
             signal: runAbortController.signal,
           });
         }
@@ -5636,6 +5638,7 @@ function handleApprovalRequest(params: {
   threadId: string;
   turnId: string;
   nativeHookRelay?: NativeHookRelayRegistrationHandle;
+  autoApprove?: boolean;
   signal?: AbortSignal;
 }): Promise<JsonValue | undefined> {
   return handleCodexAppServerApprovalRequest({
@@ -5645,6 +5648,7 @@ function handleApprovalRequest(params: {
     threadId: params.threadId,
     turnId: params.turnId,
     nativeHookRelay: params.nativeHookRelay,
+    autoApprove: params.autoApprove,
     signal: params.signal,
   });
 }
