@@ -642,8 +642,14 @@ export async function runCodexAppServerAttempt(
     }),
     workspaceBootstrapContext.developerInstructions,
   );
+  // Only the trusted-developer skills fragment (built from `openclaw-bundled`
+  // entries) is allowed to ride the developer-instruction lane. The full
+  // `skillsSnapshot.prompt` mixes in workspace, project (`.agents`), personal,
+  // `openclaw-managed`, `openclaw-extra`, and plugin-generated skill metadata
+  // whose SKILL.md frontmatter is user/install-controlled and must not gain
+  // developer-instruction authority.
   const codexSkillsPrompt = shouldInjectCodexOpenClawPromptContext(params)
-    ? params.skillsSnapshot?.prompt
+    ? params.skillsSnapshot?.trustedDeveloperPrompt
     : undefined;
   const openClawPromptContext = buildCodexOpenClawPromptContext({
     params,

@@ -22,6 +22,7 @@ import { loadSkillsFromDirSafe, readSkillFrontmatterSafe } from "./local-loader.
 import { resolvePluginSkillDirs } from "./plugin-skills.js";
 import { serializeByKey } from "./serialize.js";
 import { formatSkillsForPrompt, type Skill } from "./skill-contract.js";
+import { resolveSkillSource } from "./source.js";
 import type {
   OpenClawSkillMetadata,
   ParsedSkillFrontmatter,
@@ -1113,10 +1114,12 @@ export function buildWorkspaceSkillSnapshot(
   workspaceDir: string,
   opts?: WorkspaceSkillBuildOptions & { snapshotVersion?: number },
 ): SkillSnapshot {
-  const { eligible, prompt, resolvedSkills } = resolveWorkspaceSkillPromptState(workspaceDir, opts);
+  const { eligible, prompt, trustedDeveloperPrompt, resolvedSkills } =
+    resolveWorkspaceSkillPromptState(workspaceDir, opts);
   const skillFilter = resolveEffectiveWorkspaceSkillFilter(opts);
   return {
     prompt,
+    ...(trustedDeveloperPrompt ? { trustedDeveloperPrompt } : {}),
     skills: eligible.map((entry) => ({
       name: entry.skill.name,
       primaryEnv: entry.metadata?.primaryEnv,
@@ -1168,6 +1171,7 @@ function resolveWorkspaceSkillPromptState(
 ): {
   eligible: SkillEntry[];
   prompt: string;
+  trustedDeveloperPrompt?: string;
   resolvedSkills: Skill[];
 } {
   const effectiveSkillFilter = resolveEffectiveWorkspaceSkillFilter(opts);
@@ -1208,7 +1212,66 @@ function resolveWorkspaceSkillPromptState(
   ]
     .filter(Boolean)
     .join("\n");
-  return { eligible, prompt, resolvedSkills };
+  const trustedDeveloperPrompt = buildTrustedDeveloperSkillsPrompt({
+    promptEntries,
+    config: opts?.config,
+    agentId: opts?.agentId,
+  });
+  return { eligible, prompt, trustedDeveloperPrompt, resolvedSkills };
+}
+
+/**
+ * Build the skills prompt fragment that is safe to elevate into
+ * developer-instruction authority (e.g. Codex
+ * `collaborationMode.settings.developer_instructions`).
+ *
+ * Trust policy: only `openclaw-bundled` skills are eligible. SKILL.md content
+ * from workspace, project (`.agents/skills`), personal (`~/.agents/skills`),
+ * `openclaw-managed`, `openclaw-extra`, or plugin-generated sources is
+ * user/install-controlled and must not be elevated. The trust check is
+ * deliberately conservative: when the source is unknown, the entry is dropped.
+ *
+ * The render path mirrors the full prompt builder so the developer lane sees
+ * the same XML shape as the full availability prompt — just with the
+ * untrusted entries removed.
+ */
+function buildTrustedDeveloperSkillsPrompt(params: {
+  promptEntries: SkillEntry[];
+  config?: OpenClawConfig;
+  agentId?: string;
+}): string | undefined {
+  const trustedEntries = params.promptEntries.filter((entry) =>
+    isTrustedDeveloperSkillEntry(entry),
+  );
+  if (trustedEntries.length === 0) {
+    return undefined;
+  }
+  const trustedSkills = compactSkillPaths(trustedEntries.map((entry) => entry.skill))
+    .slice()
+    .sort((a, b) => a.name.localeCompare(b.name, "en"));
+  const { skillsForPrompt, truncated, compact } = applySkillsPromptLimits({
+    skills: trustedSkills,
+    config: params.config,
+    agentId: params.agentId,
+  });
+  if (skillsForPrompt.length === 0) {
+    return undefined;
+  }
+  const truncationNote = truncated
+    ? `⚠️ Trusted skills truncated: included ${skillsForPrompt.length} of ${trustedSkills.length}${compact ? " (compact format, descriptions omitted)" : ""}. Run \`openclaw skills check\` to audit.`
+    : compact
+      ? `⚠️ Trusted skills catalog using compact format (descriptions omitted). Run \`openclaw skills check\` to audit.`
+      : "";
+  return [
+    truncationNote,
+    compact ? formatSkillsCompact(skillsForPrompt) : formatSkillsForPrompt(skillsForPrompt),
+  ]
+    .filter(Boolean)
+    .join("\n");
+}
+
+function isTrustedDeveloperSkillEntry(entry: SkillEntry): boolean {
+  return resolveSkillSource(entry.skill) === "openclaw-bundled";
 }
 
 export function resolveSkillsPromptForRun(params: {

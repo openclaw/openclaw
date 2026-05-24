@@ -100,6 +100,16 @@ export type SkillEligibilityContext = {
 
 export type SkillSnapshot = {
   prompt: string;
+  /**
+   * Trusted skills prompt fragment safe to elevate into developer-instruction
+   * authority (e.g. Codex `collaborationMode.settings.developer_instructions`).
+   * Built from only `openclaw-bundled` skills; workspace, project (.agents),
+   * personal (~/.agents/skills), `openclaw-managed`, `openclaw-extra`, and
+   * plugin-generated skill metadata is excluded because their SKILL.md
+   * frontmatter is user/install-controlled and must not gain developer
+   * authority. Undefined when no trusted skills are eligible.
+   */
+  trustedDeveloperPrompt?: string;
   skills: Array<{ name: string; primaryEnv?: string; requiredEnv?: string[] }>;
   /** Normalized agent-level filter used to build this snapshot; undefined means unrestricted. */
   skillFilter?: string[];
