@@ -1621,6 +1621,85 @@ describe("loadOpenClawPlugins", () => {
       },
     },
     {
+      label: "adapts returned plugin gateway method values into responses",
+      run: async () => {
+        useNoBundledPlugins();
+        const plugin = writePlugin({
+          id: "returned-gateway-method",
+          filename: "returned-gateway-method.cjs",
+          body: `module.exports = {
+  id: "returned-gateway-method",
+  register(api) {
+    api.registerGatewayMethod("returned-gateway-method.status", async () => ({ ok: true, status: "ready" }));
+  },
+};`,
+        });
+
+        const registry = loadOpenClawPlugins({
+          cache: false,
+          workspaceDir: plugin.dir,
+          config: {
+            plugins: {
+              load: { paths: [plugin.file] },
+              allow: ["returned-gateway-method"],
+            },
+          },
+        });
+
+        const responses: unknown[] = [];
+        await registry.gatewayHandlers["returned-gateway-method.status"]?.({
+          params: {},
+          respond: (ok: boolean, payload: unknown, error?: unknown) =>
+            responses.push({ ok, payload, error }),
+        } as never);
+
+        expect(responses).toEqual([
+          { ok: true, payload: { ok: true, status: "ready" }, error: undefined },
+        ]);
+      },
+    },
+    {
+      label: "keeps explicit plugin gateway responses authoritative",
+      run: async () => {
+        useNoBundledPlugins();
+        const plugin = writePlugin({
+          id: "explicit-gateway-method",
+          filename: "explicit-gateway-method.cjs",
+          body: `module.exports = {
+  id: "explicit-gateway-method",
+  register(api) {
+    api.registerGatewayMethod("explicit-gateway-method.status", ({ respond }) => {
+      respond(true, { status: "responded" });
+      return { status: "returned" };
+    });
+  },
+};`,
+        });
+
+        const registry = loadOpenClawPlugins({
+          cache: false,
+          workspaceDir: plugin.dir,
+          config: {
+            plugins: {
+              load: { paths: [plugin.file] },
+              allow: ["explicit-gateway-method"],
+            },
+          },
+        });
+
+        const responses: unknown[] = [];
+        await registry.gatewayHandlers["explicit-gateway-method.status"]?.({
+          params: {},
+          respond: (ok: boolean, payload: unknown, error?: unknown) =>
+            responses.push({ ok, payload, error }),
+        } as never);
+
+        expect(responses).toEqual([
+          { ok: true, payload: { status: "responded" }, error: undefined },
+        ]);
+      },
+    },
+    {
       label: "coerces reserved gateway method namespaces to operator.admin",
       run: () => {
         useNoBundledPlugins();
@@ -2213,8 +2292,8 @@ module.exports = { id: "throws-after-import", register() {} };`,
         expect(getGlobalHookRunner()).toBeNull();
       },
     },
-  ] as const)("handles config-path and scoped plugin loads: $label", ({ run }) => {
-    run();
+  ] as const)("handles config-path and scoped plugin loads: $label", async ({ run }) => {
+    await run();
   });
 
   it("treats an explicit empty plugin scope as scoped-empty instead of unscoped", () => {
