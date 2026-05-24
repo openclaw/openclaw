@@ -31,7 +31,7 @@ const log = createSubsystemLogger("openrouter-model-capabilities");
 const OPENROUTER_MODELS_URL = "https://openrouter.ai/api/v1/models";
 const FETCH_TIMEOUT_MS = 10_000;
 const DISK_CACHE_FILENAME = "openrouter-models.json";
-const DISK_CACHE_VERSION = 2;
+const DISK_CACHE_VERSION = 3;
 
 // ---------------------------------------------------------------------------
 // Types
