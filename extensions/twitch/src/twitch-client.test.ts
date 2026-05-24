@@ -201,6 +201,32 @@ describe("TwitchClientManager", () => {
       expect(client1).toBe(client2);
     });
 
+    it("waits for disconnect after authentication failure retry events", async () => {
+      mockConnect.mockImplementationOnce(() => {});
+
+      const connection = manager.getClient(testAccount);
+      await Promise.resolve();
+      authFailureHandlers[0]?.("bad token", 1);
+
+      let settled = false;
+      void connection.then(
+        () => {
+          settled = true;
+        },
+        () => {
+          settled = true;
+        },
+      );
+      await Promise.resolve();
+      expect(settled).toBe(false);
+      expect(mockLogger.warn).toHaveBeenCalledWith(
+        "Twitch authentication failed for testbot; waiting for retry, disconnect, or timeout: bad token",
+      );
+
+      disconnectHandlers[0]?.(false, new Error("disconnected"));
+      await expect(connection).rejects.toThrow("disconnected");
+    });
+
     it("should create separate clients for different accounts", async () => {
       await manager.getClient(testAccount);
       await manager.getClient(testAccount2);
