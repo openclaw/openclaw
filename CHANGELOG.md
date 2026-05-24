@@ -10,6 +10,7 @@ Docs: https://docs.openclaw.ai
 
 - Installer: include the optional verify phase in the progress counter so `--verify` shows `[4/4] Verifying installation` instead of `[4/3]`.
 - Tests: run upgrade-survivor config recipe commands through the Windows npm shim so native Windows package walks keep baseline config coverage.
+- Image tool: use bundled Anthropic media limits when resolving image compression policy without provider-runtime hooks.
 - Tests: fail the kitchen-sink RPC Docker walk when gateway RSS sampling is unavailable instead of silently disabling the per-process memory guard.
 - Tests: suppress the current Rolldown plugin timing warning format in the Vitest wrapper so tiny focused runs do not drown useful stderr in repeated build-timing noise.
 - Models/OpenRouter: use endpoint-specific OpenRouter context limits from `top_provider` metadata so provider-routed models no longer overstate available context. (#85949) Thanks @TurboTheTurtle.
