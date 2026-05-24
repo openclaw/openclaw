@@ -290,20 +290,28 @@ function effectivePriority(entry: QueueEntry): number {
 /**
  * Find the queue index of the entry with the highest effective priority,
  * accounting for starvation promotion. Breaks ties by enqueue time (oldest
- * first) so starved entries drain in FIFO order regardless of their original
- * static priority.
+ * first), then by sequence number for entries enqueued in the same
+ * millisecond, so starved entries drain in strict FIFO order regardless of
+ * their original static priority.
  */
 function pickNextIndex(queue: QueueEntry[]): number {
   let bestIdx = 0;
   let bestPri = effectivePriority(queue[0]);
   let bestEnqueuedAt = queue[0].enqueuedAt;
+  let bestSeq = queue[0].sequence;
   for (let i = 1; i < queue.length; i++) {
     const pri = effectivePriority(queue[i]);
     const enqueuedAt = queue[i].enqueuedAt;
-    if (pri > bestPri || (pri === bestPri && enqueuedAt < bestEnqueuedAt)) {
+    if (
+      pri > bestPri ||
+      (pri === bestPri &&
+        (enqueuedAt < bestEnqueuedAt ||
+          (enqueuedAt === bestEnqueuedAt && queue[i].sequence < bestSeq)))
+    ) {
       bestIdx = i;
       bestPri = pri;
       bestEnqueuedAt = enqueuedAt;
+      bestSeq = queue[i].sequence;
     }
   }
   return bestIdx;
