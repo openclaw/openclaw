@@ -252,6 +252,53 @@ describe("session cost usage", () => {
     });
   });
 
+  it("treats a pre-upgrade (older-version) durable cache as stale so unpriced usage is rebuilt", async () => {
+    const root = await makeSessionCostRoot("cost-cache-upgrade");
+    const sessionsDir = path.join(root, "agents", "main", "sessions");
+    await fs.mkdir(sessionsDir, { recursive: true });
+    const sessionFile = path.join(sessionsDir, "sess-upgrade.jsonl");
+    const entry = {
+      type: "message",
+      timestamp: "2026-02-05T12:00:00.000Z",
+      message: {
+        role: "assistant",
+        provider: "openai",
+        model: "gpt-5.5",
+        usage: {
+          input: 881,
+          output: 6,
+          cacheRead: 22400,
+          cacheWrite: 0,
+          totalTokens: 23287,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+        },
+      },
+    };
+    await fs.writeFile(sessionFile, transcriptText("sess-upgrade", entry), "utf-8");
+
+    clearGatewayModelPricingCacheState();
+    await withStateDir(root, async () => {
+      // Simulate a durable cache written by a build from before this change: refresh
+      // under the current code, then stamp the cache with an older semantics version.
+      await refreshCostUsageCache({ sessionFiles: [sessionFile] });
+      const cachePath = path.join(sessionsDir, ".usage-cost-cache.json");
+      const cache = JSON.parse(await fs.readFile(cachePath, "utf-8")) as { version: number };
+      cache.version = 3;
+      await fs.writeFile(cachePath, `${JSON.stringify(cache)}\n`, "utf-8");
+
+      // The pre-upgrade cache must be treated as stale (not served), forcing a rebuild
+      // under the new missing-cost semantics instead of reusing old complete-$0 totals.
+      const cached = await loadSessionCostSummaryFromCache({
+        sessionId: "sess-upgrade",
+        sessionFile,
+        startMs: Date.UTC(2026, 1, 5),
+        endMs: Date.UTC(2026, 1, 5) + 24 * 60 * 60 * 1000 - 1,
+        requestRefresh: false,
+      });
+      expect(cached.cacheStatus.status).toBe("stale");
+    });
+  });
+
   it("ignores compaction checkpoint transcript snapshots in daily totals and discovery", async () => {
     const root = await makeSessionCostRoot("cost-checkpoint");
     const sessionsDir = path.join(root, "agents", "main", "sessions");
