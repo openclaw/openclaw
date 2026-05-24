@@ -1,6 +1,7 @@
 import type { DatabaseSync } from "node:sqlite";
 import { type FSWatcher } from "chokidar";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { isLocalEmbeddingWorkerFailure } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
 import {
   createSubsystemLogger,
   resolveAgentDir,
@@ -37,13 +38,13 @@ import {
   resolveSingletonManagedCache,
 } from "./manager-cache.js";
 import { closeMemoryDatabase } from "./manager-db.js";
+import { MemoryManagerEmbeddingOps } from "./manager-embedding-ops.js";
 import {
-  isLocalEmbeddingWorkerFailure,
-  MemoryManagerEmbeddingOps,
-} from "./manager-embedding-ops.js";
-import {
+  createDegradedMemoryProviderLifecycle,
+  createPendingMemoryProviderLifecycle,
   resolveMemoryPrimaryProviderRequest,
   resolveMemoryProviderState,
+  type MemoryProviderLifecycleState,
 } from "./manager-provider-state.js";
 import { resolveMemorySearchPreflight } from "./manager-search-preflight.js";
 import { searchKeyword, searchVector } from "./manager-search.js";
@@ -128,6 +129,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
   protected override fallbackFrom?: EmbeddingProviderId;
   protected override fallbackReason?: string;
   protected providerUnavailableReason?: string;
+  protected override providerLifecycle: MemoryProviderLifecycleState;
   protected override providerRuntime?: EmbeddingProviderRuntime;
   protected batch: {
     enabled: boolean;
@@ -242,6 +244,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     this.settings = params.settings;
     this.provider = null;
     this.requestedProvider = params.settings.provider;
+    this.providerLifecycle = createPendingMemoryProviderLifecycle(this.requestedProvider);
     if (params.providerResult) {
       this.applyProviderResult(params.providerResult);
     }
@@ -286,6 +289,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     this.fallbackFrom = providerState.fallbackFrom;
     this.fallbackReason = providerState.fallbackReason;
     this.providerUnavailableReason = providerState.providerUnavailableReason;
+    this.providerLifecycle = providerState.lifecycle;
     this.providerRuntime = providerState.providerRuntime;
     this.providerInitialized = true;
   }
@@ -315,17 +319,23 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     }
   }
 
-  protected markLocalEmbeddingProviderDegraded(message: string): void {
+  protected markLocalEmbeddingProviderDegraded(err: unknown): void {
     if (this.provider?.id !== "local") {
       return;
     }
-    if (!isLocalEmbeddingWorkerFailure(message)) {
+    if (!isLocalEmbeddingWorkerFailure(err)) {
       return;
     }
+    const message = formatErrorMessage(err);
     const degradedProvider = this.provider;
     this.provider = null;
     this.providerRuntime = undefined;
     this.providerUnavailableReason = `Local embeddings degraded: ${message}`;
+    this.providerLifecycle = createDegradedMemoryProviderLifecycle({
+      providerId: degradedProvider.id,
+      reason: message,
+      code: err.code,
+    });
     EMBEDDING_PROBE_CACHE.delete(this.cacheKey);
     this.providerKey = this.computeProviderKey();
     this.batch = this.resolveBatchConfig();
@@ -505,7 +515,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       queryVec = await this.embedQueryWithTimeout(cleaned);
     } catch (err) {
       const message = formatErrorMessage(err);
-      const activatedFallback = this.shouldFallbackOnError(message)
+      const activatedFallback = this.shouldFallbackOnError(err)
         ? await this.activateFallbackProvider(message).catch((fallbackErr: unknown) => {
             log.warn(
               `memory search: failed to activate fallback provider: ${formatErrorMessage(fallbackErr)}`,
@@ -894,6 +904,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       },
       custom: {
         searchMode: providerInfo.searchMode,
+        providerState: this.providerLifecycle,
         providerUnavailableReason: this.providerUnavailableReason,
         readonlyRecovery: {
           attempts: this.readonlyRecoveryAttempts,

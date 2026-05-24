@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import {
   clearMemoryEmbeddingProviders as clearRegistry,
+  LOCAL_EMBEDDING_WORKER_ERROR_CODES,
   listRegisteredMemoryEmbeddingProviderAdapters as listRegisteredAdapters,
   registerMemoryEmbeddingProvider as registerAdapter,
 } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
@@ -34,6 +35,14 @@ let providerCloseGate: Promise<void> | null = null;
 let providerCalls: Array<{ provider?: string; model?: string; outputDimensionality?: number }> = [];
 let forceNoProvider = false;
 
+function createLocalWorkerExitError(): Error {
+  return Object.assign(new Error("Local embedding worker exited unexpectedly (exit code 134)"), {
+    code: LOCAL_EMBEDDING_WORKER_ERROR_CODES.exited,
+    reason: "exit",
+    exitCode: 134,
+  });
+}
+
 vi.mock("./embeddings.js", () => {
   const embedText = (text: string) => {
     const lower = text.toLowerCase();
@@ -45,7 +54,9 @@ vi.mock("./embeddings.js", () => {
   };
   return {
     resolveEmbeddingProviderFallbackModel: (providerId: string, fallbackSourceModel: string) =>
-      providerId === "gemini" ? "gemini-embed" : fallbackSourceModel,
+      providerId === "gemini" || providerId === "fallback-provider"
+        ? `${providerId}-embed`
+        : fallbackSourceModel,
     createEmbeddingProvider: async (options: {
       provider?: string;
       model?: string;
@@ -63,7 +74,10 @@ vi.mock("./embeddings.js", () => {
           providerUnavailableReason: "No API key found for provider",
         };
       }
-      const providerId = options.provider === "gemini" ? "gemini" : "mock";
+      const providerId =
+        options.provider === "gemini" || options.provider === "fallback-provider"
+          ? options.provider
+          : "mock";
       const model = options.model ?? "mock-embed";
       return {
         requestedProvider: options.provider ?? "openai",
@@ -83,7 +97,7 @@ vi.mock("./embeddings.js", () => {
             embedBatchCalls += 1;
             return texts.map(embedText);
           },
-          ...(providerId === "gemini"
+          ...(providerId === "gemini" || providerId === "fallback-provider"
             ? {
                 embedBatchInputs: async (
                   inputs: Array<{
@@ -114,12 +128,12 @@ vi.mock("./embeddings.js", () => {
               }
             : {}),
         },
-        ...(providerId === "gemini"
+        ...(providerId === "gemini" || providerId === "fallback-provider"
           ? {
               runtime: {
-                id: "gemini",
+                id: providerId,
                 cacheKeyData: {
-                  provider: "gemini",
+                  provider: providerId,
                   baseUrl: "https://generativelanguage.googleapis.com/v1beta",
                   model,
                   outputDimensionality: options.outputDimensionality,
@@ -244,8 +258,8 @@ describe("memory index", () => {
     extraPaths?: string[];
     sources?: Array<"memory" | "sessions">;
     sessionMemory?: boolean;
-    provider?: "openai" | "gemini";
-    fallback?: "none" | "gemini";
+    provider?: "openai" | "gemini" | "fallback-provider";
+    fallback?: "none" | "gemini" | "fallback-provider";
     model?: string;
     outputDimensionality?: number;
     multimodal?: {
@@ -607,11 +621,9 @@ describe("memory index", () => {
 
     (
       manager as unknown as {
-        markLocalEmbeddingProviderDegraded: (message: string) => void;
+        markLocalEmbeddingProviderDegraded: (err: unknown) => void;
       }
-    ).markLocalEmbeddingProviderDegraded(
-      "Local embedding worker exited unexpectedly (exit code 134)",
-    );
+    ).markLocalEmbeddingProviderDegraded(createLocalWorkerExitError());
 
     expect(manager.getCachedEmbeddingAvailability()).toBeNull();
     await expect(manager.probeEmbeddingAvailability()).resolves.toMatchObject({
@@ -623,7 +635,7 @@ describe("memory index", () => {
   it("activates configured fallback when local embeddings degrade during search", async () => {
     const cfg = createCfg({
       storePath: path.join(workspaceDir, "index-search-degraded-fallback.sqlite"),
-      fallback: "gemini",
+      fallback: "fallback-provider",
       hybrid: { enabled: true, vectorWeight: 0.5, textWeight: 0.5 },
     });
     const manager = await getPersistentManager(cfg);
@@ -644,7 +656,7 @@ describe("memory index", () => {
       id: "local",
       model: "local-model",
       embedQuery: async () => {
-        throw new Error("Local embedding worker exited unexpectedly (exit code 134)");
+        throw createLocalWorkerExitError();
       },
       embedBatch: async (texts: string[]) => texts.map(() => [1, 0, 0, 0]),
       close: async () => {},
@@ -653,14 +665,16 @@ describe("memory index", () => {
     const results = await manager.search("alpha");
 
     expect(results.length).toBeGreaterThan(0);
-    expect(providerCalls.slice(callsBeforeSearch).map((call) => call.provider)).toContain("gemini");
+    expect(providerCalls.slice(callsBeforeSearch).map((call) => call.provider)).toContain(
+      "fallback-provider",
+    );
     expect(
       (
         manager as unknown as {
           provider: { id: string } | null;
         }
       ).provider?.id,
-    ).toBe("gemini");
+    ).toBe("fallback-provider");
   });
 
   it("streams embedding cache rows during safe reindex", async () => {

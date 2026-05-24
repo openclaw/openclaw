@@ -2,6 +2,10 @@ import { fork, type ChildProcess } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { DEFAULT_LOCAL_MODEL } from "./embedding-defaults.js";
+import {
+  createLocalEmbeddingWorkerFailureError,
+  LOCAL_EMBEDDING_WORKER_ERROR_CODES,
+} from "./embedding-worker-errors.js";
 import type { LocalEmbeddingProviderRuntimeOptions } from "./embeddings.js";
 import type {
   EmbeddingProvider,
@@ -81,7 +85,13 @@ function serializeLocalEmbeddingOptions(
 
 function createWorkerExitError(code: number | null, signal: NodeJS.Signals | null): Error {
   const detail = signal ? `signal ${signal}` : `exit code ${code ?? "unknown"}`;
-  return new Error(`Local embedding worker exited unexpectedly (${detail})`);
+  return createLocalEmbeddingWorkerFailureError({
+    message: `Local embedding worker exited unexpectedly (${detail})`,
+    code: LOCAL_EMBEDDING_WORKER_ERROR_CODES.exited,
+    reason: signal ? "signal" : "exit",
+    exitCode: code,
+    signal,
+  });
 }
 
 function createWorkerResponseError(error: LocalEmbeddingWorkerResponse & { ok: false }): Error {
@@ -92,6 +102,26 @@ function createWorkerResponseError(error: LocalEmbeddingWorkerResponse & { ok: f
     });
   }
   return new Error(String(error.error || "Local embedding worker failed"));
+}
+
+function resolveWorkerExecArgv(): string[] {
+  const args: string[] = [];
+  let skipNext = false;
+  for (const arg of process.execArgv) {
+    if (skipNext) {
+      skipNext = false;
+      continue;
+    }
+    if (arg === "--input-type") {
+      skipNext = true;
+      continue;
+    }
+    if (arg.startsWith("--input-type=")) {
+      continue;
+    }
+    args.push(arg);
+  }
+  return args;
 }
 
 class LocalEmbeddingWorkerClient {
@@ -141,7 +171,7 @@ class LocalEmbeddingWorkerClient {
     }
 
     const child = fork(this.scriptPath, [], {
-      execArgv: process.execArgv,
+      execArgv: resolveWorkerExecArgv(),
       serialization: "json",
       stdio: ["ignore", "ignore", "ignore", "ipc"],
     });
@@ -156,7 +186,14 @@ class LocalEmbeddingWorkerClient {
       if (this.child === child) {
         this.child = null;
       }
-      this.rejectPending(err);
+      this.rejectPending(
+        createLocalEmbeddingWorkerFailureError({
+          message: `Local embedding worker process failed: ${err.message}`,
+          code: LOCAL_EMBEDDING_WORKER_ERROR_CODES.processError,
+          reason: "process-error",
+          cause: err,
+        }),
+      );
     });
     this.child = child;
     return child;
@@ -186,7 +223,14 @@ class LocalEmbeddingWorkerClient {
         if (err) {
           this.pending.delete(id);
           pending.abort?.();
-          reject(err);
+          reject(
+            createLocalEmbeddingWorkerFailureError({
+              message: `Local embedding worker IPC failed: ${err.message}`,
+              code: LOCAL_EMBEDDING_WORKER_ERROR_CODES.ipcError,
+              reason: "ipc",
+              cause: err,
+            }),
+          );
         }
       });
     });

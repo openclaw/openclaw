@@ -1,8 +1,11 @@
+import {
+  isLocalEmbeddingWorkerFailure,
+  LOCAL_EMBEDDING_WORKER_ERROR_CODES,
+} from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
 import { describe, expect, it } from "vitest";
 import {
   resolveEmbeddingTimeoutMs,
   resolveMemoryIndexConcurrency,
-  isLocalEmbeddingWorkerFailure,
   runEmbeddingOperationWithTimeout,
 } from "./manager-embedding-ops.js";
 
@@ -40,12 +43,30 @@ describe("memory embedding timeout resolution", () => {
 });
 
 describe("local embedding worker failure detection", () => {
-  it("matches local worker crash messages", () => {
+  it("matches structured local worker failure codes", () => {
     expect(
-      isLocalEmbeddingWorkerFailure("Local embedding worker exited unexpectedly (exit code 134)"),
+      isLocalEmbeddingWorkerFailure(
+        Object.assign(new Error("Local embedding worker exited unexpectedly (exit code 134)"), {
+          code: LOCAL_EMBEDDING_WORKER_ERROR_CODES.exited,
+          reason: "exit",
+        }),
+      ),
     ).toBe(true);
-    expect(isLocalEmbeddingWorkerFailure("embedding worker failed during cleanup")).toBe(true);
-    expect(isLocalEmbeddingWorkerFailure("remote embedding provider returned 429")).toBe(false);
+    expect(
+      isLocalEmbeddingWorkerFailure(
+        Object.assign(new Error("Local embedding worker process failed"), {
+          code: LOCAL_EMBEDDING_WORKER_ERROR_CODES.processError,
+          reason: "process-error",
+        }),
+      ),
+    ).toBe(true);
+    expect(
+      isLocalEmbeddingWorkerFailure(
+        Object.assign(new Error("Local embedding request aborted"), {
+          code: "ABORT_ERR",
+        }),
+      ),
+    ).toBe(false);
   });
 });
 

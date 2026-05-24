@@ -25,6 +25,7 @@ import {
   loadMemoryEmbeddingCache,
   upsertMemoryEmbeddingCache,
 } from "./manager-embedding-cache.js";
+import { createMemoryEmbeddingOperationError } from "./manager-embedding-errors.js";
 import {
   buildMemoryEmbeddingBatches,
   buildTextEmbeddingInputs,
@@ -111,10 +112,6 @@ export function resolveMemoryIndexConcurrency(params: {
   return params.providerId === "ollama" ? 1 : EMBEDDING_INDEX_CONCURRENCY;
 }
 
-export function isLocalEmbeddingWorkerFailure(message: string): boolean {
-  return /local embedding worker|embedding worker exited|embedding worker failed/i.test(message);
-}
-
 export async function runEmbeddingOperationWithTimeout<T>(params: {
   timeoutMs: number;
   message: string;
@@ -148,7 +145,7 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
   protected abstract batchFailureLastError?: string;
   protected abstract batchFailureLastProvider?: string;
   protected abstract batchFailureLock: Promise<void>;
-  protected abstract markLocalEmbeddingProviderDegraded(message: string): void;
+  protected abstract markLocalEmbeddingProviderDegraded(err: unknown): void;
 
   protected pruneEmbeddingCacheIfNeeded(): void {
     if (!this.cache.enabled) {
@@ -200,9 +197,13 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
       const inputs = buildTextEmbeddingInputs(batch);
       const hasStructuredInputs = inputs.some((input) => hasNonTextEmbeddingParts(input));
       if (hasStructuredInputs && !provider.embedBatchInputs) {
-        throw new Error(
-          `Embedding provider "${provider.id}" does not support multimodal memory inputs.`,
-        );
+        throw createMemoryEmbeddingOperationError({
+          operation: "structured-batch",
+          providerId: provider.id,
+          cause: new Error(
+            `Embedding provider "${provider.id}" does not support multimodal memory inputs.`,
+          ),
+        });
       }
       const batchEmbeddings = hasStructuredInputs
         ? await this.embedBatchInputsWithRetry(inputs)
@@ -352,8 +353,12 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
         baseDelayMs: EMBEDDING_RETRY_BASE_DELAY_MS,
       });
     } catch (err) {
-      this.markLocalEmbeddingProviderDegraded(formatErrorMessage(err));
-      throw err;
+      this.markLocalEmbeddingProviderDegraded(err);
+      throw createMemoryEmbeddingOperationError({
+        operation: "batch",
+        providerId: provider.id,
+        cause: err,
+      });
     }
   }
 
@@ -389,8 +394,12 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
         baseDelayMs: EMBEDDING_RETRY_BASE_DELAY_MS,
       });
     } catch (err) {
-      this.markLocalEmbeddingProviderDegraded(formatErrorMessage(err));
-      throw err;
+      this.markLocalEmbeddingProviderDegraded(err);
+      throw createMemoryEmbeddingOperationError({
+        operation: "structured-batch",
+        providerId: provider.id,
+        cause: err,
+      });
     }
   }
 
@@ -427,8 +436,12 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
         run: async (signal) => await provider.embedQuery(text, { signal }),
       });
     } catch (err) {
-      this.markLocalEmbeddingProviderDegraded(formatErrorMessage(err));
-      throw err;
+      this.markLocalEmbeddingProviderDegraded(err);
+      throw createMemoryEmbeddingOperationError({
+        operation: "query",
+        providerId: provider.id,
+        cause: err,
+      });
     }
   }
 

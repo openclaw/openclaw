@@ -80,6 +80,7 @@ describe("memory manager mistral provider wiring", () => {
 
     const state = resolveMemoryProviderState({
       provider: mistralProvider,
+      requestedProvider: "mistral",
       runtime: mistralRuntime,
       fallbackFrom: undefined,
       fallbackReason: undefined,
@@ -102,6 +103,7 @@ describe("memory manager mistral provider wiring", () => {
     const mistralProvider = createProvider("mistral");
     const current = resolveMemoryProviderState({
       provider: createProvider("openai"),
+      requestedProvider: "openai",
       runtime: openAiRuntime,
       fallbackFrom: undefined,
       fallbackReason: undefined,
@@ -128,6 +130,7 @@ describe("memory manager mistral provider wiring", () => {
     const fallbackState = applyMemoryFallbackProviderState({
       current: resolveMemoryProviderState({
         provider: null,
+        requestedProvider: "local",
         fallbackFrom: undefined,
         fallbackReason: undefined,
         providerUnavailableReason: "Local embeddings degraded: worker crashed",

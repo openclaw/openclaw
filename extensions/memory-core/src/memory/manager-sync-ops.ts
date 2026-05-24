@@ -42,9 +42,12 @@ import {
 } from "./embeddings.js";
 import { runMemoryAtomicReindex } from "./manager-atomic-reindex.js";
 import { closeMemoryDatabase, openMemoryDatabaseAtPath } from "./manager-db.js";
+import { isMemoryEmbeddingOperationError } from "./manager-embedding-errors.js";
 import {
   applyMemoryFallbackProviderState,
   resolveMemoryFallbackProviderRequest,
+  resolveFallbackCurrentProviderId,
+  type MemoryProviderLifecycleState,
 } from "./manager-provider-state.js";
 import {
   resolveConfiguredScopeHash,
@@ -171,6 +174,7 @@ export abstract class MemoryManagerSyncOps {
   protected provider: EmbeddingProvider | null = null;
   protected fallbackFrom?: EmbeddingProviderId;
   protected abstract providerUnavailableReason?: string;
+  protected abstract providerLifecycle: MemoryProviderLifecycleState;
   protected providerRuntime?: EmbeddingProviderRuntime;
   protected abstract batch: {
     enabled: boolean;
@@ -1132,7 +1136,7 @@ export abstract class MemoryManagerSyncOps {
       syncSessionFiles: async (targetedParams) => {
         await this.syncSessionFiles(targetedParams);
       },
-      shouldFallbackOnError: (message) => this.shouldFallbackOnError(message),
+      shouldFallbackOnError: (err) => this.shouldFallbackOnError(err),
       activateFallbackProvider: async (reason) => await this.activateFallbackProvider(reason),
       runSafeReindex: async (reindexParams) => {
         await this.runSafeReindex(reindexParams);
@@ -1206,7 +1210,7 @@ export abstract class MemoryManagerSyncOps {
     } catch (err) {
       const reason = formatErrorMessage(err);
       const activated =
-        this.shouldFallbackOnError(reason) && (await this.activateFallbackProvider(reason));
+        this.shouldFallbackOnError(err) && (await this.activateFallbackProvider(reason));
       if (activated) {
         await this.runSafeReindex({
           reason: params?.reason ?? "fallback",
@@ -1215,7 +1219,7 @@ export abstract class MemoryManagerSyncOps {
         });
         return;
       }
-      if (!this.provider && this.fts.enabled && this.shouldFallbackOnError(reason)) {
+      if (!this.provider && this.fts.enabled && this.shouldFallbackOnError(err)) {
         log.warn(`memory embeddings unavailable; rebuilding lexical memory index only: ${reason}`);
         await this.runSafeReindex({
           reason: params?.reason ?? "embedding-degraded",
@@ -1228,8 +1232,8 @@ export abstract class MemoryManagerSyncOps {
     }
   }
 
-  protected shouldFallbackOnError(message: string): boolean {
-    return /embedding|embeddings|batch/i.test(message);
+  protected shouldFallbackOnError(err: unknown): boolean {
+    return isMemoryEmbeddingOperationError(err);
   }
 
   protected resolveBatchConfig(): {
@@ -1251,9 +1255,10 @@ export abstract class MemoryManagerSyncOps {
   }
 
   protected async activateFallbackProvider(reason: string): Promise<boolean> {
-    const currentProviderId =
-      this.provider?.id ??
-      (this.providerUnavailableReason?.startsWith("Local embeddings degraded") ? "local" : null);
+    const currentProviderId = resolveFallbackCurrentProviderId({
+      provider: this.provider,
+      lifecycle: this.providerLifecycle,
+    });
     const fallbackRequest = resolveMemoryFallbackProviderRequest({
       cfg: this.cfg,
       settings: this.settings,
@@ -1279,6 +1284,7 @@ export abstract class MemoryManagerSyncOps {
         fallbackReason: this.fallbackReason,
         providerUnavailableReason: undefined,
         providerRuntime: this.providerRuntime,
+        lifecycle: this.providerLifecycle,
       },
       fallbackFrom: currentProviderId,
       reason,
@@ -1289,6 +1295,7 @@ export abstract class MemoryManagerSyncOps {
     this.provider = fallbackState.provider;
     this.providerRuntime = fallbackState.providerRuntime;
     this.providerUnavailableReason = fallbackState.providerUnavailableReason;
+    this.providerLifecycle = fallbackState.lifecycle;
     this.providerKey = this.computeProviderKey();
     this.batch = this.resolveBatchConfig();
     log.warn(`memory embeddings: switched to fallback provider (${fallbackRequest.provider})`, {

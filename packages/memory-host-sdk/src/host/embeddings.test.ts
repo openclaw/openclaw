@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { LOCAL_EMBEDDING_WORKER_ERROR_CODES } from "./embedding-worker-errors.js";
 import {
   createLocalEmbeddingProvider,
   createLocalEmbeddingProviderInProcess,
@@ -376,6 +377,42 @@ process.on("message", (message) => {
     await expect(provider.close?.()).resolves.toBeUndefined();
   });
 
+  it("does not pass stdin-only exec args to the file-backed worker", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-local-embedding-worker-"));
+    const workerScript = path.join(tempDir, "worker.cjs");
+    await fs.writeFile(
+      workerScript,
+      `
+process.on("message", (message) => {
+  if (message.type === "initialize" || message.type === "close") {
+    process.send({ id: message.id, ok: true });
+    return;
+  }
+  process.send({ id: message.id, ok: true, value: [1, 0] });
+});
+`,
+      "utf8",
+    );
+    const originalExecArgv = [...process.execArgv];
+    let provider: Awaited<ReturnType<typeof createLocalEmbeddingProvider>> | undefined;
+    try {
+      process.execArgv.splice(0, process.execArgv.length, "--input-type=module");
+      provider = await createLocalEmbeddingProvider(
+        {
+          config: {} as never,
+          provider: "local",
+          model: "",
+          fallback: "none",
+        },
+        { workerScriptPath: workerScript },
+      );
+      await expect(provider.embedQuery("hello")).resolves.toEqual([1, 0]);
+    } finally {
+      process.execArgv.splice(0, process.execArgv.length, ...originalExecArgv);
+      await provider?.close?.();
+    }
+  });
+
   it("reports worker initialization failures during provider creation", async () => {
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-local-embedding-worker-"));
     const workerScript = path.join(tempDir, "worker.cjs");
@@ -409,5 +446,38 @@ process.on("message", (message) => {
       expect((err as Error).message).toBe("Cannot find package 'node-llama-cpp'");
       expect((err as Error & { code?: string }).code).toBe("ERR_MODULE_NOT_FOUND");
     }
+  });
+
+  it("reports worker exits with structured failure codes", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-local-embedding-worker-"));
+    const workerScript = path.join(tempDir, "worker.cjs");
+    await fs.writeFile(
+      workerScript,
+      `
+process.on("message", (message) => {
+  if (message.type === "initialize") {
+    process.send({ id: message.id, ok: true });
+    return;
+  }
+  process.exit(134);
+});
+`,
+      "utf8",
+    );
+    const provider = await createLocalEmbeddingProvider(
+      {
+        config: {} as never,
+        provider: "local",
+        model: "",
+        fallback: "none",
+      },
+      { workerScriptPath: workerScript },
+    );
+
+    await expect(provider.embedQuery("hello")).rejects.toMatchObject({
+      code: LOCAL_EMBEDDING_WORKER_ERROR_CODES.exited,
+      reason: "exit",
+      exitCode: 134,
+    });
   });
 });
