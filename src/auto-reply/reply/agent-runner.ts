@@ -1394,7 +1394,15 @@ export async function runReplyAgent(params: {
       }),
     );
     if (sessionKey) {
-      registerPendingMemoryFlush(sessionKey, flushPromise);
+      // Pass an abort callback so the next turn's preflight barrier can
+      // make a wait-cap timeout terminal: on timeout the barrier aborts
+      // the maintenance ReplyOperation (which cancels the attached
+      // backend handle and aborts the embedded run's abortSignal) and
+      // then awaits the flush promise's settlement before proceeding to
+      // any new compaction state mutation.
+      registerPendingMemoryFlush(sessionKey, flushPromise, () => {
+        maintenanceReplyOperation.abortForRestart();
+      });
     }
     void flushPromise
       .catch((err) => {

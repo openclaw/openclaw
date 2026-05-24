@@ -133,18 +133,40 @@ const memoryDeps = {
 // Pending memory-flush registry, keyed by sessionKey. Used so that a
 // near-threshold flush dispatched after the reply path can be awaited by
 // the next turn's preflight compaction before it mutates session state.
-const pendingMemoryFlushes = new Map<string, Promise<void>>();
+//
+// The entry stores both the flush promise and an `abort` callback so the
+// barrier can make a timeout terminal: when the barrier's wait-cap fires,
+// it triggers the abort callback (which cancels the flush's
+// AbortController + maintenance ReplyOperation) and then awaits the
+// flush promise's settlement. This preserves session serialization: the
+// barrier never returns while the previous turn's flush might still go
+// on to mutate session state after the next compaction has already
+// proceeded.
+type PendingMemoryFlush = {
+  promise: Promise<void>;
+  abort: () => void;
+};
+
+const pendingMemoryFlushes = new Map<string, PendingMemoryFlush>();
 
 const DEFAULT_PENDING_MEMORY_FLUSH_BARRIER_TIMEOUT_MS = 30_000;
 
-export function registerPendingMemoryFlush(sessionKey: string, promise: Promise<unknown>): void {
+export function registerPendingMemoryFlush(
+  sessionKey: string,
+  promise: Promise<unknown>,
+  abort?: () => void,
+): void {
   const wrapped: Promise<void> = promise.then(
     () => undefined,
     () => undefined,
   );
-  pendingMemoryFlushes.set(sessionKey, wrapped);
+  const entry: PendingMemoryFlush = {
+    promise: wrapped,
+    abort: abort ?? (() => undefined),
+  };
+  pendingMemoryFlushes.set(sessionKey, entry);
   void wrapped.finally(() => {
-    if (pendingMemoryFlushes.get(sessionKey) === wrapped) {
+    if (pendingMemoryFlushes.get(sessionKey) === entry) {
       pendingMemoryFlushes.delete(sessionKey);
     }
   });
@@ -167,11 +189,26 @@ export async function awaitPendingMemoryFlush(
     timer = setTimeout(() => resolve("timeout"), timeoutMs);
   });
   try {
-    const outcome = await Promise.race([pending.then(() => "done" as const), timeoutPromise]);
+    const outcome = await Promise.race([
+      pending.promise.then(() => "done" as const),
+      timeoutPromise,
+    ]);
     if (outcome === "timeout") {
       logVerbose(
-        `pending memory flush barrier timed out after ${timeoutMs}ms for sessionKey=${sessionKey}`,
+        `pending memory flush barrier timed out after ${timeoutMs}ms for sessionKey=${sessionKey}; aborting pending flush so session state is not mutated concurrently with the next compaction`,
       );
+      try {
+        pending.abort();
+      } catch (err) {
+        logVerbose(`pending memory flush abort callback threw: ${String(err)}`);
+      }
+      // Wait for the now-aborting flush to fully settle so the barrier
+      // cannot return while the flush is still racing the next
+      // compaction's session-state mutations. The flush's
+      // runWithModelFallback / runEmbeddedPiAgent see the maintenance
+      // op's aborted abortSignal and short-circuit quickly; the wrapped
+      // promise always resolves (never throws) by construction.
+      await pending.promise;
     }
   } finally {
     if (timer !== undefined) {

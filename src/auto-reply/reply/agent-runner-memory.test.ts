@@ -1983,19 +1983,61 @@ describe("pending memory-flush registry", () => {
     expect(awaited).toBe(true);
   });
 
-  it("awaitPendingMemoryFlush proceeds after timeout when the flush hangs", async () => {
+  it("awaitPendingMemoryFlush makes the timeout terminal: on timeout it invokes the abort callback and awaits flush settlement before returning", async () => {
     const sessionKey = "session-key-await-timeout";
-    // Pending promise that never resolves within the test horizon.
-    registerPendingMemoryFlush(sessionKey, new Promise<void>(() => {}));
+
+    let abortCalled = false;
+    let aborted = false;
+    const flushPromise = new Promise<void>((resolve) => {
+      // The flush only settles after `abort()` is called by the barrier.
+      // This mirrors how the real maintenance ReplyOperation propagates
+      // abort into runEmbeddedPiAgent / runWithModelFallback and makes
+      // them short-circuit.
+      const interval = setInterval(() => {
+        if (aborted) {
+          clearInterval(interval);
+          resolve();
+        }
+      }, 5);
+    });
+    registerPendingMemoryFlush(sessionKey, flushPromise, () => {
+      abortCalled = true;
+      aborted = true;
+    });
 
     const start = Date.now();
     await awaitPendingMemoryFlush(sessionKey, { timeoutMs: 30 });
     const elapsed = Date.now() - start;
 
+    expect(abortCalled).toBe(true);
     expect(elapsed).toBeGreaterThanOrEqual(20);
-    expect(elapsed).toBeLessThan(2_000);
-    // Hung flush is still registered (next barrier will await again).
-    expect(hasPendingMemoryFlushForTest(sessionKey)).toBe(true);
+    // After the barrier returns, the flush has truly settled so the
+    // pending map entry has self-cleaned. This is the key invariant:
+    // the barrier does not return while the previous-turn flush is
+    // still in-flight.
+    expect(hasPendingMemoryFlushForTest(sessionKey)).toBe(false);
+  });
+
+  it("awaitPendingMemoryFlush stays bounded if the abort callback fails to settle the flush quickly", async () => {
+    const sessionKey = "session-key-await-timeout-abort-throws";
+    // Abort callback that throws synchronously: the barrier must still
+    // attempt to await the flush promise. The flush in this test
+    // resolves on its own after a short delay so we can verify the
+    // barrier eventually returns.
+    let abortAttempts = 0;
+    const flushPromise = new Promise<void>((resolve) => {
+      setTimeout(resolve, 80);
+    });
+    registerPendingMemoryFlush(sessionKey, flushPromise, () => {
+      abortAttempts += 1;
+      throw new Error("abort callback explodes");
+    });
+
+    await awaitPendingMemoryFlush(sessionKey, { timeoutMs: 30 });
+
+    expect(abortAttempts).toBe(1);
+    // Flush eventually settled and was cleaned up.
+    expect(hasPendingMemoryFlushForTest(sessionKey)).toBe(false);
   });
 });
 

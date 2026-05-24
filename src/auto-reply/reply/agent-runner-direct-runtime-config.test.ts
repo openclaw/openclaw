@@ -385,6 +385,48 @@ describe("runReplyAgent runtime config", () => {
     expect(cancelMockOnCompleted).toHaveBeenCalledWith("superseded");
   });
 
+  it("registers the post-reply flush with an abort callback that aborts the maintenance ReplyOperation", async () => {
+    const { followupRun, replyParams } = createDirectRuntimeReplyParams({
+      shouldFollowup: false,
+      isActive: false,
+    });
+    followupRun.run.sessionKey = "agent:main:main";
+    replyParams.sessionKey = "agent:main:main";
+
+    runPreflightCompactionIfNeededMock.mockResolvedValue(undefined);
+    runAgentTurnWithFallbackMock.mockResolvedValue({
+      kind: "final",
+      payload: { text: "ok" },
+    });
+
+    await runReplyAgent(replyParams);
+
+    expect(registerPendingMemoryFlushMock).toHaveBeenCalledTimes(1);
+    const registerCall = registerPendingMemoryFlushMock.mock.calls[0] as [
+      string,
+      Promise<unknown>,
+      () => void,
+    ];
+    expect(registerCall[0]).toBe("agent:main:main");
+    expect(typeof registerCall[2]).toBe("function");
+
+    // The abort callback must put the maintenance ReplyOperation into a
+    // terminal aborted state so subsequent runEmbeddedPiAgent /
+    // runWithModelFallback calls see an aborted abortSignal and
+    // short-circuit. Pull the maintenance op out of the
+    // runMemoryFlushIfNeeded call args and verify.
+    const memoryCall = runMemoryFlushIfNeededMock.mock.calls[0]?.[0] as {
+      replyOperation: {
+        abortSignal: AbortSignal;
+        result: { kind: string } | null;
+      };
+    };
+    expect(memoryCall.replyOperation.abortSignal.aborted).toBe(false);
+    registerCall[2]();
+    expect(memoryCall.replyOperation.abortSignal.aborted).toBe(true);
+    expect(memoryCall.replyOperation.result?.kind).toBe("aborted");
+  });
+
   it("aborts the maintenance ReplyOperation when the original reply operation aborts upstream", async () => {
     const { followupRun, replyParams } = createDirectRuntimeReplyParams({
       shouldFollowup: false,
