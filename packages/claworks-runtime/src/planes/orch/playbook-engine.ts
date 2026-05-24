@@ -186,6 +186,27 @@ export function createPlaybookEngine(deps: PlaybookEngineDeps): PlaybookEngine {
     suspended.delete(runId);
   }
 
+  function finalizeCompletedRun(
+    run: PlaybookRun,
+    input: Record<string, unknown>,
+    variables: Record<string, unknown>,
+  ): void {
+    const durationMs = Date.now() - run.startedAt.getTime();
+    run.output = summarizeRunOutput(variables);
+    globalMetrics.increment(CW_EVENTS.PLAYBOOK_COMPLETED, { playbook_id: run.playbookId });
+    globalMetrics.recordDuration("playbook.duration_ms", durationMs, {
+      playbook_id: run.playbookId,
+      status: "completed",
+    });
+    publishEvent?.(CW_EVENTS.PLAYBOOK_RUN_COMPLETED, "playbook-engine", {
+      playbook_id: run.playbookId,
+      run_id: run.id,
+      steps: run.steps.length,
+      duration_ms: durationMs,
+    }).catch(() => {});
+    recordAssistantTurnOnCompletion(input, variables, run.playbookId, run.id, deps.contextEngine);
+  }
+
   async function triggerInternal(
     playbookId: string,
     input: Record<string, unknown>,
@@ -353,21 +374,7 @@ export function createPlaybookEngine(deps: PlaybookEngineDeps): PlaybookEngine {
     }
 
     if (run.status === "completed") {
-      run.output = summarizeRunOutput(ctx.variables);
-      globalMetrics.increment(CW_EVENTS.PLAYBOOK_COMPLETED, { playbook_id: playbookId });
-      globalMetrics.recordDuration("playbook.duration_ms", Date.now() - _pbStartMs, {
-        playbook_id: playbookId,
-        status: "completed",
-      });
-      // EvolveEngine 和 verify() 需要此事件；同时将机器人回复写入对话历史
-      publishEvent?.(CW_EVENTS.PLAYBOOK_RUN_COMPLETED, "playbook-engine", {
-        playbook_id: playbookId,
-        run_id: runId,
-        steps: run.steps.length,
-        duration_ms: Date.now() - _pbStartMs,
-      }).catch(() => {});
-      // 将 Playbook 产生的回复文本记录为 assistant 轮次，保持对话历史完整
-      recordAssistantTurnOnCompletion(input, ctx.variables, playbookId, runId, deps.contextEngine);
+      finalizeCompletedRun(run, input, ctx.variables);
     }
 
     runs.set(runId, run);
@@ -699,13 +706,7 @@ export function createPlaybookEngine(deps: PlaybookEngineDeps): PlaybookEngine {
       }
 
       if (run.status === "completed") {
-        recordAssistantTurnOnCompletion(
-          pending.input,
-          ctx.variables,
-          pending.playbookId,
-          runId,
-          deps.contextEngine,
-        );
+        finalizeCompletedRun(run, pending.input, ctx.variables);
       }
 
       runs.set(runId, run);

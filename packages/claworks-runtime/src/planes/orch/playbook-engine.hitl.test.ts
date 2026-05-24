@@ -2,6 +2,7 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
+import { CW_EVENTS } from "../../kernel/event-names.js";
 import { openDatabase } from "../data/db.js";
 import { createKnowledgeBase } from "../data/knowledge-base.js";
 import { createObjectStore } from "../data/object-store.js";
@@ -146,6 +147,81 @@ describe("playbook-engine HITL resume", () => {
       playbook_id: "hitl_reply",
       run_id: run1.id,
     });
+
+    close();
+  });
+
+  it("publishes PLAYBOOK_RUN_COMPLETED after HITL resume completion", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "cw-hitl-pub-"));
+    const { db, close } = openDatabase(`sqlite://${join(dir, "t.db")}`);
+    const publishEvent = vi.fn().mockResolvedValue(undefined);
+
+    const engine = createPlaybookEngine({
+      db,
+      objectStore: createObjectStore(db),
+      kb: createKnowledgeBase(),
+      robot: {
+        name: "t",
+        role: "monolith",
+        version: "0",
+        endpoint: "http://127.0.0.1:18800",
+      },
+      hitl: createHitlGate(),
+      publishEvent,
+    });
+
+    const def: PlaybookDefinition = {
+      id: "hitl_publish",
+      name: "HITL publish",
+      pack: "test",
+      trigger: { kind: "manual" },
+      priority: 0,
+      steps: [
+        {
+          kind: "hitl",
+          id: "approve",
+          message: "Approve?",
+          options: ["approve"],
+          output: "decision",
+        },
+        {
+          kind: "notification",
+          id: "done",
+          message: "Done",
+        },
+      ],
+    };
+
+    await engine.loadFromPacks([
+      {
+        manifest: {
+          id: "test",
+          name: "t",
+          version: "1",
+          license: "MIT",
+          provides: { objectTypes: [], playbooks: ["hitl_publish"], actionTypes: [] },
+        },
+        path: dir,
+        objectTypes: [],
+        playbooks: [def],
+      },
+    ]);
+
+    const run1 = await engine.trigger("hitl_publish", {});
+    expect(run1.status).toBe("waiting_hitl");
+    publishEvent.mockClear();
+
+    const run2 = await engine.submitHitlDecision(run1.id, "approve", "approve");
+    expect(run2.status).toBe("completed");
+    expect(publishEvent).toHaveBeenCalledWith(
+      CW_EVENTS.PLAYBOOK_RUN_COMPLETED,
+      "playbook-engine",
+      expect.objectContaining({
+        playbook_id: "hitl_publish",
+        run_id: run1.id,
+        steps: 2,
+      }),
+    );
 
     close();
   });
