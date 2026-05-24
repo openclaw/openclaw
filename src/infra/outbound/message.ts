@@ -408,6 +408,7 @@ export async function sendMessage(params: MessageSendParams): Promise<MessageSen
       threadId: params.threadId,
       gifPlayback: params.gifPlayback,
       forceDocument: params.forceDocument,
+      sendPolicyMode: "explicit",
       deps: params.deps,
       bestEffort: params.bestEffort,
       durability:

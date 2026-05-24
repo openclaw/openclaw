@@ -499,6 +499,19 @@ describe("gateway send mirroring", () => {
     expect(response?.[3]?.channel).toBe("slack");
   });
 
+  it("marks gateway sends as explicit for session send policy", async () => {
+    mockDeliverySuccess("m-policy-explicit");
+
+    await runSend({
+      to: "channel:C1",
+      message: "operator send",
+      channel: "slack",
+      idempotencyKey: "idem-policy-explicit",
+    });
+
+    expect(deliveryCall()?.sendPolicyMode).toBe("explicit");
+  });
+
   it("passes outbound session context for gateway media sends", async () => {
     mockDeliverySuccess("m-whatsapp-media");
 

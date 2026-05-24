@@ -28,6 +28,7 @@ type DeliveryRequest = DeliveryIntentCallbackParams & {
   payloads?: unknown;
   queuePolicy?: string;
   replyToId?: string;
+  sendPolicyMode?: string;
   threadId?: string | number;
 };
 
@@ -684,5 +685,20 @@ describe("withDurableMessageSendContext", () => {
         },
       },
     });
+  });
+
+  it("forwards explicit send-policy mode to durable delivery", async () => {
+    deliverOutboundPayloads.mockResolvedValueOnce([{ channel: "telegram", messageId: "msg-1" }]);
+
+    const result = await sendDurableMessageBatch({
+      cfg,
+      channel: "telegram",
+      to: "chat-1",
+      payloads: [{ text: "hello" }],
+      sendPolicyMode: "explicit",
+    });
+
+    expectBatchStatus(result, "sent");
+    expect(latestDeliveryRequest().sendPolicyMode).toBe("explicit");
   });
 });

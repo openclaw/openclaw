@@ -50,6 +50,7 @@ import {
   type OutboundDeliveryResult,
   type OutboundPayloadDeliveryOutcome,
   type OutboundPayloadDeliverySuppressionReason,
+  type SendPolicyMode,
 } from "./deliver-types.js";
 import {
   attachOutboundDeliveryCommitHook,
@@ -671,6 +672,7 @@ export type DeliverOutboundPayloadsParams = DeliverOutboundPayloadsCoreParams & 
   deferCommitHooks?: boolean;
   queuePolicy?: OutboundDeliveryQueuePolicy;
   renderedBatchPlan?: QueuedRenderedMessageBatchPlan;
+  sendPolicyMode?: SendPolicyMode;
   onDeliveryIntent?: (intent: OutboundDeliveryIntent) => void;
 };
 
@@ -1197,34 +1199,37 @@ export async function deliverOutboundPayloadsInternal(
     ? createRenderedMessageBatchPlan(queuePayloads)
     : renderedBatchPlan;
 
-  const sendPolicyDecision = resolveSendPolicyDetailed({
-    cfg: params.cfg,
-    sessionKey: params.session?.policyKey ?? params.session?.key,
-    channel,
-    chatType:
-      params.session?.conversationType === "group" || params.session?.conversationType === "direct"
-        ? params.session.conversationType
-        : undefined,
-    outboundPeer: to,
-    inboundPeer: params.session?.inboundPeer,
-  });
-  if (sendPolicyDecision.decision === "deny") {
-    const hookEffect = sendPolicyDecision.cancelReason
-      ? {
-          cancelReason: sendPolicyDecision.cancelReason.code,
-          metadata: sendPolicyDecision.cancelReason,
-        }
-      : { cancelReason: "denied_by_send_policy" };
-    payloads.forEach((_payload, index) => {
-      params.onPayloadDeliveryOutcome?.(
-        suppressedPayloadOutcome({
-          index,
-          reason: "denied_by_send_policy",
-          hookEffect,
-        }),
-      );
+  if (params.sendPolicyMode !== "explicit") {
+    const sendPolicyDecision = resolveSendPolicyDetailed({
+      cfg: params.cfg,
+      sessionKey: params.session?.policyKey ?? params.session?.key,
+      channel,
+      chatType:
+        params.session?.conversationType === "group" ||
+        params.session?.conversationType === "direct"
+          ? params.session.conversationType
+          : undefined,
+      outboundPeer: to,
+      inboundPeer: params.session?.inboundPeer,
     });
-    return [];
+    if (sendPolicyDecision.decision === "deny") {
+      const hookEffect = sendPolicyDecision.cancelReason
+        ? {
+            cancelReason: sendPolicyDecision.cancelReason.code,
+            metadata: sendPolicyDecision.cancelReason,
+          }
+        : { cancelReason: "denied_by_send_policy" };
+      payloads.forEach((_payload, index) => {
+        params.onPayloadDeliveryOutcome?.(
+          suppressedPayloadOutcome({
+            index,
+            reason: "denied_by_send_policy",
+            hookEffect,
+          }),
+        );
+      });
+      return [];
+    }
   }
 
   // Write-ahead delivery queue: persist before sending, remove after success.
@@ -1248,6 +1253,7 @@ export async function deliverOutboundPayloadsInternal(
         mirror: params.mirror,
         session: params.session,
         gatewayClientScopes: params.gatewayClientScopes,
+        sendPolicyMode: params.sendPolicyMode,
       }).catch((err: unknown) => {
         if (queuePolicy === "required") {
           throw err;

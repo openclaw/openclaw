@@ -1537,7 +1537,7 @@ Defaults for Talk mode (macOS/iOS/Android).
 
 ### `session.sendPolicy` peer routing guard
 
-`session.sendPolicy.rules[].match.peerEquals: "inboundPeer"` compares the outbound destination with the peer that originated the current turn. Use `invert: true` with a `deny` rule to suppress replies or explicit message-tool sends when the agent is about to answer a different direct peer than the one that triggered the turn.
+`session.sendPolicy.rules[].match.peerEquals: "inboundPeer"` compares the outbound destination with the peer that originated the current turn. Use `invert: true` with a `deny` rule to suppress automatic replies and recovered automatic deliveries when the agent is about to answer a different direct peer than the one that triggered the turn. Explicit gateway/message-tool sends remain outside `session.sendPolicy`; use tool, channel, or gateway permissions to restrict those.
 
 ```json5
 {

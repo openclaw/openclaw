@@ -2675,6 +2675,59 @@ describe("deliverOutboundPayloads", () => {
     expect(noReplyMediaItem?.mediaUrls).toStrictEqual(["https://x.test/b.png"]);
   });
 
+  it("applies session send policy to automatic deliveries before queueing", async () => {
+    const sendMatrix = vi
+      .fn()
+      .mockResolvedValue({ messageId: "m-policy", roomId: "!room:example" });
+    const outcomes: unknown[] = [];
+
+    const results = await deliverOutboundPayloads({
+      cfg: { session: { sendPolicy: { default: "deny" } } } as OpenClawConfig,
+      channel: "matrix",
+      to: "!room:example",
+      payloads: [{ text: "blocked" }],
+      deps: { matrix: sendMatrix },
+      onPayloadDeliveryOutcome: (outcome) => outcomes.push(outcome),
+    });
+
+    expect(results).toEqual([]);
+    expect(sendMatrix).not.toHaveBeenCalled();
+    expect(queueMocks.enqueueDelivery).not.toHaveBeenCalled();
+    expect(outcomes).toEqual([
+      {
+        index: 0,
+        status: "suppressed",
+        reason: "denied_by_send_policy",
+        hookEffect: { cancelReason: "denied_by_send_policy" },
+      },
+    ]);
+  });
+
+  it("bypasses session send policy for explicit deliveries and persists the replay mode", async () => {
+    const sendMatrix = vi
+      .fn()
+      .mockResolvedValue({ messageId: "m-explicit", roomId: "!room:example" });
+
+    const results = await deliverOutboundPayloads({
+      cfg: { session: { sendPolicy: { default: "deny" } } } as OpenClawConfig,
+      channel: "matrix",
+      to: "!room:example",
+      payloads: [{ text: "explicit" }],
+      deps: { matrix: sendMatrix },
+      sendPolicyMode: "explicit",
+    });
+
+    expect(results).toEqual([
+      { channel: "matrix", messageId: "m-explicit", roomId: "!room:example" },
+    ]);
+    expect(sendMatrix).toHaveBeenCalledTimes(1);
+    expect(queueMocks.enqueueDelivery).toHaveBeenCalledTimes(1);
+    const queuedDelivery = (
+      queueMocks.enqueueDelivery.mock.calls as unknown as Array<[{ sendPolicyMode?: unknown }]>
+    )[0]?.[0];
+    expect(queuedDelivery?.sendPolicyMode).toBe("explicit");
+  });
+
   it("strips internal runtime scaffolding before queue persistence", async () => {
     const sendMatrix = vi
       .fn()

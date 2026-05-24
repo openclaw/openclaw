@@ -25,6 +25,8 @@ export type OutboundPayloadDeliverySuppressionReason =
 
 export type OutboundDeliveryFailureStage = "platform_send" | "queue" | "unknown";
 
+export type SendPolicyMode = "automatic" | "explicit";
+
 export type OutboundPayloadDeliveryOutcome =
   | {
       index: number;

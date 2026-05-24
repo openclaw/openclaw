@@ -14,6 +14,7 @@ import type { RenderedMessageBatchPlanItem } from "../../channels/message/types.
 import { resolveStateDir } from "../../config/paths.js";
 import type { ReplyToMode } from "../../config/types.js";
 import { generateSecureUuid } from "../secure-random.js";
+import type { SendPolicyMode } from "./deliver-types.js";
 import type { OutboundDeliveryFormattingOptions } from "./formatting.js";
 import type { OutboundIdentity } from "./identity.js";
 import type { OutboundMirror } from "./mirror.js";
@@ -61,6 +62,8 @@ export type QueuedDeliveryPayload = {
   session?: OutboundSessionContext;
   /** Gateway caller scopes at enqueue time, preserved for recovery replay. */
   gatewayClientScopes?: readonly string[];
+  /** Whether session sendPolicy should apply when this queued entry is replayed. */
+  sendPolicyMode?: SendPolicyMode;
 };
 
 export interface QueuedDelivery extends QueuedDeliveryPayload {
@@ -168,6 +171,7 @@ export async function enqueueDelivery(
     mirror: params.mirror,
     session: params.session,
     gatewayClientScopes: params.gatewayClientScopes,
+    sendPolicyMode: params.sendPolicyMode,
     retryCount: 0,
   });
   return id;
