@@ -7,6 +7,7 @@
 import { createServer } from "node:http";
 import type { Server } from "node:http";
 import type { ClaworksRuntime } from "../../claworks/runtime-types.js";
+import { createA2aHttpHandler } from "../a2a/task-handler.js";
 import { createClaworksRestHandler } from "./router.js";
 
 export async function createRestServer(
@@ -14,9 +15,18 @@ export async function createRestServer(
   port: number,
 ): Promise<{ server: Server; port: number }> {
   const handler = createClaworksRestHandler(runtime);
+  const a2aHandler = createA2aHttpHandler({ runtime });
 
   const server = createServer(async (req, res) => {
     try {
+      // A2A 协议路由（/a2a/** 和 /.well-known/agent.json 优先由 A2A handler 处理）
+      const path = req.url ?? "/";
+      const isA2a = path.startsWith("/a2a/") || path === "/a2a";
+      if (isA2a) {
+        const handled = await a2aHandler(req, res);
+        if (handled) return;
+      }
+
       const handled = await handler(req, res);
       if (!handled) {
         res.statusCode = 404;
