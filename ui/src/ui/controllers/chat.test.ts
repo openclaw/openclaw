@@ -564,6 +564,103 @@ describe("handleChatEvent", () => {
     expect(state.chatStreamStartedAt).toBe(null);
   });
 
+  it("does not append duplicate final message already loaded from history", () => {
+    const persistedFinal = {
+      role: "assistant",
+      content: [{ type: "text", text: "Reply" }],
+      timestamp: 100,
+      __openclaw: { index: 2 },
+    };
+    const state = createState({
+      sessionKey: "main",
+      chatRunId: "run-1",
+      chatStream: "Reply",
+      chatStreamStartedAt: 100,
+      chatMessages: [
+        { role: "user", content: [{ type: "text", text: "Hi" }], timestamp: 99 },
+        persistedFinal,
+      ],
+    });
+    const payload: ChatEventPayload = {
+      runId: "run-1",
+      sessionKey: "main",
+      state: "final",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "Reply" }],
+        timestamp: 101,
+      },
+    };
+
+    expect(handleChatEvent(state, payload)).toBe("final");
+    expect(state.chatMessages).toEqual([
+      { role: "user", content: [{ type: "text", text: "Hi" }], timestamp: 99 },
+      persistedFinal,
+    ]);
+    expect(state.chatRunId).toBe(null);
+    expect(state.chatStream).toBe(null);
+    expect(state.chatStreamStartedAt).toBe(null);
+  });
+
+  it("does not append duplicate streamed final already loaded from history", () => {
+    const persistedFinal = {
+      role: "assistant",
+      content: [{ type: "text", text: "Streamed reply" }],
+      timestamp: 100,
+      __openclaw: { index: 2 },
+    };
+    const state = createState({
+      sessionKey: "main",
+      chatRunId: "run-1",
+      chatStream: "Streamed reply",
+      chatStreamStartedAt: 100,
+      chatMessages: [persistedFinal],
+    });
+    const payload: ChatEventPayload = {
+      runId: "run-1",
+      sessionKey: "main",
+      state: "final",
+    };
+
+    expect(handleChatEvent(state, payload)).toBe("final");
+    expect(state.chatMessages).toEqual([persistedFinal]);
+    expect(state.chatRunId).toBe(null);
+    expect(state.chatStream).toBe(null);
+  });
+
+  it("keeps distinct repeated assistant final after another role", () => {
+    const previousAssistant = {
+      role: "assistant",
+      content: [{ type: "text", text: "Same answer" }],
+      timestamp: 100,
+    };
+    const userMessage = {
+      role: "user",
+      content: [{ type: "text", text: "Ask again" }],
+      timestamp: 101,
+    };
+    const state = createState({
+      sessionKey: "main",
+      chatRunId: "run-1",
+      chatStream: "Same answer",
+      chatStreamStartedAt: 102,
+      chatMessages: [previousAssistant, userMessage],
+    });
+    const payload: ChatEventPayload = {
+      runId: "run-1",
+      sessionKey: "main",
+      state: "final",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "Same answer" }],
+        timestamp: 103,
+      },
+    };
+
+    expect(handleChatEvent(state, payload)).toBe("final");
+    expect(state.chatMessages).toEqual([previousAssistant, userMessage, payload.message]);
+  });
+
   it("processes aborted from own run and keeps partial assistant message", () => {
     const existingMessage = {
       role: "user",

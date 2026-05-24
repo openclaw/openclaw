@@ -185,6 +185,15 @@ function messageDisplaySignature(message: unknown): string | null {
   }
 }
 
+function appendChatMessageUnlessDuplicateTail(messages: unknown[], message: unknown): unknown[] {
+  const nextSignature = messageDisplaySignature(message);
+  const previousSignature = messageDisplaySignature(messages.at(-1));
+  if (nextSignature && nextSignature === previousSignature) {
+    return messages;
+  }
+  return [...messages, message];
+}
+
 export function preserveOptimisticTailMessages(
   historyMessages: unknown[],
   previousMessages: unknown[],
@@ -678,7 +687,7 @@ export function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
     if (payload.state === "final") {
       const finalMessage = normalizeFinalAssistantMessage(payload.message);
       if (finalMessage && !shouldHideAssistantChatMessage(finalMessage)) {
-        state.chatMessages = [...state.chatMessages, finalMessage];
+        state.chatMessages = appendChatMessageUnlessDuplicateTail(state.chatMessages, finalMessage);
         return null;
       }
       return "final";
@@ -713,20 +722,17 @@ export function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
   } else if (payload.state === "final") {
     const finalMessage = normalizeFinalAssistantMessage(payload.message);
     if (finalMessage && !shouldHideAssistantChatMessage(finalMessage)) {
-      state.chatMessages = [...state.chatMessages, finalMessage];
+      state.chatMessages = appendChatMessageUnlessDuplicateTail(state.chatMessages, finalMessage);
     } else if (
       state.chatStream?.trim() &&
       !isSilentReplyStream(state.chatStream) &&
       !isHeartbeatAckStream(state.chatStream)
     ) {
-      state.chatMessages = [
-        ...state.chatMessages,
-        {
-          role: "assistant",
-          content: [{ type: "text", text: state.chatStream }],
-          timestamp: Date.now(),
-        },
-      ];
+      state.chatMessages = appendChatMessageUnlessDuplicateTail(state.chatMessages, {
+        role: "assistant",
+        content: [{ type: "text", text: state.chatStream }],
+        timestamp: Date.now(),
+      });
     }
     reconcileTerminalRun("done", "done");
   } else if (payload.state === "aborted") {
