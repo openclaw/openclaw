@@ -9,7 +9,7 @@
  * both run-complete and dispatch-idle state. Without markRunComplete(), Slack
  * waited for the fallback TTL (~2 minutes) instead of doneHoldMs.
  */
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi, type MockedFunction } from "vitest";
 
 // ---------------------------------------------------------------------------
 // Shared mutable state for mock control
@@ -33,8 +33,8 @@ const runPreparedInboundReplyTurnMock = vi.fn();
 // ---------------------------------------------------------------------------
 
 const callOrder: string[] = [];
-let markRunCompleteMock: vi.MockedFunction<() => void>;
-let markDispatchIdleMock: vi.MockedFunction<() => void>;
+let markRunCompleteMock: MockedFunction<() => void>;
+let markDispatchIdleMock: MockedFunction<() => void>;
 
 // ---------------------------------------------------------------------------
 // vi.mock calls (hoisted — must be at top level)
