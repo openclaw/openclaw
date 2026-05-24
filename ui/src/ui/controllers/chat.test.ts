@@ -157,6 +157,29 @@ describe("handleChatEvent", () => {
     expect(state.chatStreamStartedAt).toEqual(expect.any(Number));
   });
 
+  it("adopts the run id when the selected main alias receives canonical live deltas", () => {
+    const state = createState({
+      sessionKey: "main",
+      chatRunId: null,
+      chatStream: null,
+      chatStreamStartedAt: null,
+    });
+    const payload: ChatEventPayload = {
+      runId: "run-canonical-main",
+      sessionKey: "agent:main:main",
+      state: "delta",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "Canonical reply" }],
+      },
+    };
+
+    expect(handleChatEvent(state, payload)).toBe("delta");
+    expect(state.chatRunId).toBe("run-canonical-main");
+    expect(state.chatStream).toBe("Canonical reply");
+    expect(state.chatStreamStartedAt).toEqual(expect.any(Number));
+  });
+
   it("accepts final events for the active run when gateway emits a canonical session key", () => {
     const state = createState({
       sessionKey: "main",

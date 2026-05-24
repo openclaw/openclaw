@@ -130,6 +130,7 @@ export async function mirrorCodexAppServerTranscript(params: {
     sessionFile: params.sessionFile,
     ...resolveSessionWriteLockOptions(params.config),
   });
+  const appendedUpdates: Array<{ messageId: string; message: AgentMessage }> = [];
   try {
     const existingIdempotencyKeys = await readTranscriptIdempotencyKeys(params.sessionFile);
     for (const message of messages) {
@@ -160,11 +161,12 @@ export async function mirrorCodexAppServerTranscript(params: {
             }
           : nextMessage
       ) as AgentMessage;
-      await appendSessionTranscriptMessage({
+      const { messageId, message: appendedMessage } = await appendSessionTranscriptMessage({
         transcriptPath: params.sessionFile,
         message: messageToAppend,
         config: params.config,
       });
+      appendedUpdates.push({ messageId, message: appendedMessage });
       if (idempotencyKey) {
         existingIdempotencyKeys.add(idempotencyKey);
       }
@@ -173,10 +175,13 @@ export async function mirrorCodexAppServerTranscript(params: {
     await lock.release();
   }
 
-  if (params.sessionKey) {
-    emitSessionTranscriptUpdate({ sessionFile: params.sessionFile, sessionKey: params.sessionKey });
-  } else {
-    emitSessionTranscriptUpdate(params.sessionFile);
+  for (const update of appendedUpdates) {
+    emitSessionTranscriptUpdate({
+      sessionFile: params.sessionFile,
+      ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
+      message: update.message,
+      messageId: update.messageId,
+    });
   }
 }
 

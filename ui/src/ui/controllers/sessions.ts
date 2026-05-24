@@ -42,6 +42,7 @@ export type SessionsState = SessionsChatRunState & {
   sessionsCheckpointBusyKey: string | null;
   sessionsCheckpointErrorByKey: Record<string, string>;
   chatSessionMessageSubscriptionKey?: string | null;
+  chatSessionMessageSubscriptionRequestedKey?: string | null;
 };
 
 export type LoadSessionsOverrides = {
@@ -77,11 +78,55 @@ type SessionsLoadControl = {
 };
 
 const sessionsLoadControls = new WeakMap<object, SessionsLoadControl>();
+const selectedSessionMessageSubscriptionGenerations = new WeakMap<object, number>();
 
 function hasCurrentChatSession(
   state: SessionsState,
 ): state is SessionsState & { sessionKey: string } {
   return typeof state.sessionKey === "string" && state.sessionKey.trim() !== "";
+}
+
+function normalizeSubscriptionKey(value: string | null | undefined): string | null {
+  const normalized = typeof value === "string" ? value.trim() : "";
+  return normalized ? normalized : null;
+}
+
+function beginSelectedSessionMessageSubscriptionSync(state: SessionsState): number {
+  const key = state as object;
+  const next = (selectedSessionMessageSubscriptionGenerations.get(key) ?? 0) + 1;
+  selectedSessionMessageSubscriptionGenerations.set(key, next);
+  return next;
+}
+
+function isCurrentSelectedSessionMessageSubscriptionSync(
+  state: SessionsState & { sessionKey: string },
+  params: { generation: number; client: GatewayBrowserClient; requestedKey: string },
+): boolean {
+  return (
+    selectedSessionMessageSubscriptionGenerations.get(state as object) === params.generation &&
+    state.client === params.client &&
+    state.connected &&
+    state.sessionKey.trim() === params.requestedKey
+  );
+}
+
+function readSubscribedSessionMessageKey(result: unknown, fallbackKey: string): string {
+  const key =
+    result && typeof result === "object" && typeof (result as { key?: unknown }).key === "string"
+      ? (result as { key: string }).key.trim()
+      : "";
+  return key || fallbackKey;
+}
+
+async function unsubscribeSelectedSessionMessageBestEffort(
+  client: GatewayBrowserClient,
+  key: string,
+): Promise<void> {
+  try {
+    await client.request("sessions.messages.unsubscribe", { key });
+  } catch {
+    // Best-effort cleanup for stale async subscription completions.
+  }
 }
 
 function sessionPatchTargetsCurrentChatRun(
@@ -495,25 +540,58 @@ export async function syncSelectedSessionMessageSubscription(
   if (!state.client || !state.connected) {
     return;
   }
+  const client = state.client;
   const nextKey = state.sessionKey.trim();
-  const previousKey = state.chatSessionMessageSubscriptionKey?.trim() || null;
   if (!nextKey) {
     return;
   }
+  const generation = beginSelectedSessionMessageSubscriptionSync(state);
+  const previousRequestedKey = normalizeSubscriptionKey(
+    state.chatSessionMessageSubscriptionRequestedKey,
+  );
+  const previousCanonicalKey = normalizeSubscriptionKey(state.chatSessionMessageSubscriptionKey);
+  const previousSelectedKey = previousRequestedKey ?? previousCanonicalKey;
+  const selectedKeyChanged = previousSelectedKey !== null && previousSelectedKey !== nextKey;
+  const shouldUnsubscribePrevious = previousCanonicalKey !== null && selectedKeyChanged;
+  const shouldSubscribe =
+    opts?.force === true ||
+    selectedKeyChanged ||
+    previousCanonicalKey === null ||
+    previousRequestedKey === null;
+  if (!shouldUnsubscribePrevious && !shouldSubscribe) {
+    return;
+  }
+  const isCurrent = () =>
+    isCurrentSelectedSessionMessageSubscriptionSync(state, {
+      generation,
+      client,
+      requestedKey: nextKey,
+    });
   try {
-    if (previousKey && previousKey !== nextKey) {
-      await state.client.request("sessions.messages.unsubscribe", { key: previousKey });
-      state.chatSessionMessageSubscriptionKey = null;
+    if (shouldUnsubscribePrevious && previousCanonicalKey) {
+      await client.request("sessions.messages.unsubscribe", { key: previousCanonicalKey });
+      if (isCurrent()) {
+        state.chatSessionMessageSubscriptionKey = null;
+        state.chatSessionMessageSubscriptionRequestedKey = null;
+      }
     }
-    if (opts?.force || state.chatSessionMessageSubscriptionKey !== nextKey) {
-      const result = (await state.client.request("sessions.messages.subscribe", {
-        key: nextKey,
-      })) as { key?: unknown } | undefined;
-      state.chatSessionMessageSubscriptionKey =
-        typeof result?.key === "string" && result.key.trim() ? result.key : nextKey;
+    if (!shouldSubscribe || !isCurrent()) {
+      return;
     }
+    const result = await client.request("sessions.messages.subscribe", { key: nextKey });
+    const subscribedKey = readSubscribedSessionMessageKey(result, nextKey);
+    if (!isCurrent()) {
+      if (normalizeSubscriptionKey(state.chatSessionMessageSubscriptionKey) !== subscribedKey) {
+        await unsubscribeSelectedSessionMessageBestEffort(client, subscribedKey);
+      }
+      return;
+    }
+    state.chatSessionMessageSubscriptionRequestedKey = nextKey;
+    state.chatSessionMessageSubscriptionKey = subscribedKey;
   } catch (err) {
-    state.sessionsError = String(err);
+    if (isCurrent()) {
+      state.sessionsError = String(err);
+    }
   }
 }
 

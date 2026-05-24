@@ -89,6 +89,7 @@ export type AppViewState = {
   chatMessageMaxWidth?: string | null;
   sessionKey: string;
   chatSessionMessageSubscriptionKey?: string | null;
+  chatSessionMessageSubscriptionRequestedKey?: string | null;
   chatLoading: boolean;
   chatSending: boolean;
   chatMessage: string;
