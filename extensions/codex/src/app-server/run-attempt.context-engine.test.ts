@@ -198,11 +198,11 @@ function createStartedThreadHarness(
     async notify(notification: CodexServerNotification) {
       await notify(notification);
     },
-    async completeTurn(status: "completed" | "failed" = "completed") {
+    async completeTurn(status: "completed" | "failed" = "completed", threadId = "thread-1") {
       await notify({
         method: "turn/completed",
         params: {
-          threadId: "thread-1",
+          threadId,
           turnId: "turn-1",
           turn: {
             id: "turn-1",
@@ -644,7 +644,7 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
       expect(inputText).not.toContain("already bootstrapped context");
       expect(inputText).toBe("hello");
 
-      await harness.completeTurn();
+      await harness.completeTurn("completed", "thread-bootstrapped");
       await run;
     },
   );
