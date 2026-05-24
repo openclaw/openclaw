@@ -2,10 +2,18 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { RuntimeEnv } from "../runtime.js";
 import { runExperimental } from "./experimental.js";
 
+type TransformConfigFileWithRetryParams = {
+  transform: (currentConfig: Record<string, unknown>) => {
+    nextConfig: unknown;
+    result?: unknown;
+  };
+};
+
 const mocks = vi.hoisted(() => ({
   createClackPrompter: vi.fn(),
   readConfigFileSnapshot: vi.fn(),
-  replaceConfigFile: vi.fn(),
+  transformConfigFileWithRetry: vi.fn(),
+  validateConfigObjectWithPlugins: vi.fn(),
   prompter: {
     intro: vi.fn(),
     multiselect: vi.fn(),
@@ -16,7 +24,9 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("../config/config.js", () => ({
   readConfigFileSnapshot: (...args: unknown[]) => mocks.readConfigFileSnapshot(...args),
-  replaceConfigFile: (...args: unknown[]) => mocks.replaceConfigFile(...args),
+  transformConfigFileWithRetry: (...args: unknown[]) => mocks.transformConfigFileWithRetry(...args),
+  validateConfigObjectWithPlugins: (...args: unknown[]) =>
+    mocks.validateConfigObjectWithPlugins(...args),
 }));
 
 vi.mock("../wizard/clack-prompter.js", () => ({
@@ -35,12 +45,25 @@ describe("runExperimental", () => {
   beforeEach(() => {
     mocks.createClackPrompter.mockReset();
     mocks.readConfigFileSnapshot.mockReset();
-    mocks.replaceConfigFile.mockReset();
+    mocks.transformConfigFileWithRetry.mockReset();
+    mocks.validateConfigObjectWithPlugins.mockReset();
     mocks.prompter.intro.mockReset();
     mocks.prompter.multiselect.mockReset();
     mocks.prompter.note.mockReset();
     mocks.prompter.outro.mockReset();
     mocks.createClackPrompter.mockReturnValue(mocks.prompter);
+    mocks.validateConfigObjectWithPlugins.mockImplementation((config: unknown) => ({
+      ok: true,
+      config,
+      issues: [],
+    }));
+    mocks.transformConfigFileWithRetry.mockImplementation(
+      async (params: TransformConfigFileWithRetryParams) => {
+        const snapshot = await mocks.readConfigFileSnapshot();
+        const transformed = params.transform(snapshot.config ?? {});
+        return { result: transformed.result, nextConfig: transformed.nextConfig };
+      },
+    );
   });
 
   it("shows the schema-derived experimental subset and persists absent unchecked flags", async () => {
@@ -68,8 +91,8 @@ describe("runExperimental", () => {
     expect(prompt.options.map((option: { label: string }) => option.label)).toContain(
       "Enable Structured Plan Tool",
     );
-    expect(mocks.replaceConfigFile).toHaveBeenCalledOnce();
-    expect(mocks.replaceConfigFile.mock.calls[0]?.[0].nextConfig).toEqual({
+    expect(mocks.transformConfigFileWithRetry).toHaveBeenCalledOnce();
+    expect(mocks.validateConfigObjectWithPlugins.mock.calls[0]?.[0]).toEqual({
       agents: {
         defaults: {
           experimental: { localModelLean: false },
@@ -100,10 +123,11 @@ describe("runExperimental", () => {
 
     await runExperimental(makeRuntime());
 
-    expect(mocks.replaceConfigFile).toHaveBeenCalledOnce();
-    const replaceParams = mocks.replaceConfigFile.mock.calls[0]?.[0];
-    expect(replaceParams.baseHash).toBe("config-1");
-    expect(replaceParams.nextConfig).toEqual({
+    expect(mocks.transformConfigFileWithRetry).toHaveBeenCalledOnce();
+    const transformParams = mocks.transformConfigFileWithRetry.mock.calls[0]?.[0];
+    expect(transformParams.base).toBe("source");
+    expect(mocks.validateConfigObjectWithPlugins.mock.calls[0]?.[0]).toEqual({
+      runtimeDefaultOnly: true,
       agents: {
         defaults: {
           experimental: { localModelLean: true },

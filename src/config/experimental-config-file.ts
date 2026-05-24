@@ -5,8 +5,10 @@ import {
 } from "./config.js";
 import {
   applyExperimentalConfigFlagValue,
+  applyExperimentalConfigSelection,
   readExperimentalConfigFlagStates,
   resolveExperimentalConfigFlag,
+  type ExperimentalConfigFlagDelta,
   type ExperimentalConfigFlagState,
 } from "./experimental-flags.js";
 import type { ConfigWriteAfterWrite } from "./runtime-snapshot.js";
@@ -15,6 +17,11 @@ export type ExperimentalConfigFlagWriteResult = {
   path: string;
   value: boolean;
   changed: boolean;
+};
+
+export type ExperimentalConfigSelectionWriteResult = {
+  changed: boolean;
+  deltas: ExperimentalConfigFlagDelta[];
 };
 
 class ExperimentalConfigNoopMutation extends Error {}
@@ -81,6 +88,44 @@ export async function writeExperimentalConfigFlagToFile(params: {
   } catch (err) {
     if (err instanceof ExperimentalConfigNoopMutation) {
       return { path: flag.path, value: params.value, changed: false };
+    }
+    throw err;
+  }
+}
+
+export async function writeExperimentalConfigSelectionToFile(params: {
+  selectedPaths: ReadonlySet<string>;
+  afterWrite?: ConfigWriteAfterWrite;
+}): Promise<ExperimentalConfigSelectionWriteResult> {
+  try {
+    const committed = await transformConfigFileWithRetry<ExperimentalConfigSelectionWriteResult>({
+      base: "source",
+      ...(params.afterWrite ? { afterWrite: params.afterWrite } : {}),
+      transform: (currentConfig) => {
+        const { nextConfig, deltas } = applyExperimentalConfigSelection(
+          structuredClone(currentConfig) as Record<string, unknown>,
+          params.selectedPaths,
+        );
+        if (deltas.length === 0) {
+          throw new ExperimentalConfigNoopMutation();
+        }
+        const validated = validateConfigObjectWithPlugins(nextConfig);
+        if (!validated.ok) {
+          const issue = validated.issues[0];
+          throw new Error(
+            `config invalid after experimental update (${issue.path}: ${issue.message})`,
+          );
+        }
+        return {
+          nextConfig: validated.config,
+          result: { changed: true, deltas },
+        };
+      },
+    });
+    return committed.result ?? { changed: true, deltas: [] };
+  } catch (err) {
+    if (err instanceof ExperimentalConfigNoopMutation) {
+      return { changed: false, deltas: [] };
     }
     throw err;
   }

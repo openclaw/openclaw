@@ -35,6 +35,13 @@ describe("getSlashCommands", () => {
         description: "Enable Lean Local Model Mode (Experimental)",
       },
     ]);
+    expect(experimental?.getArgumentCompletions?.("agents.defaults.experimental.localM")).toEqual([
+      {
+        value: "agents.defaults.experimental.localModelLean",
+        label: "agents.defaults.experimental.localModelLean",
+        description: "Enable Lean Local Model Mode (Experimental)",
+      },
+    ]);
   });
 
   it("keeps session status on the shared command path and exposes gateway status separately", () => {

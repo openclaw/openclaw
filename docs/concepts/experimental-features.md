@@ -25,9 +25,10 @@ Treat them differently from normal config:
 openclaw experimental
 ```
 
-This opens an interactive picker that shows every registered experimental flag
-with its current state. Space to select, Enter to confirm — the command writes
-your choices back to `openclaw.json`. Restart the gateway afterward.
+This opens an interactive picker for the config-schema-derived experimental
+boolean flags with their current state. Space to select, Enter to confirm — the
+command writes your choices back to `openclaw.json`. Restart the gateway
+afterward.
 
 From chat, TUI, or a native channel slash command, use `/experimental` when
 `commands.experimental: true` is enabled:

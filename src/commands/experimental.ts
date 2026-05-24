@@ -1,10 +1,7 @@
-import { readConfigFileSnapshot, replaceConfigFile } from "../config/config.js";
-import {
-  applyExperimentalConfigSelection,
-  readExperimentalConfigFlagStates,
-} from "../config/experimental-flags.js";
+import { readConfigFileSnapshot } from "../config/config.js";
+import { writeExperimentalConfigSelectionToFile } from "../config/experimental-config-file.js";
+import { readExperimentalConfigFlagStates } from "../config/experimental-flags.js";
 import { formatConfigIssueLines } from "../config/issue-format.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { danger, info, success } from "../globals.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { theme } from "../terminal/theme.js";
@@ -54,18 +51,11 @@ export async function runExperimental(runtime: RuntimeEnv): Promise<void> {
   }
 
   const picked = new Set(selected);
-  const { nextConfig: next, deltas } = applyExperimentalConfigSelection(
-    root as Record<string, unknown>,
-    picked,
-  );
+  const { deltas } = await writeExperimentalConfigSelectionToFile({ selectedPaths: picked });
   if (deltas.length === 0) {
     await prompter.outro(theme.muted("No changes."));
     return;
   }
-  await replaceConfigFile({
-    nextConfig: next as unknown as OpenClawConfig,
-    ...(snapshot.hash !== undefined ? { baseHash: snapshot.hash } : {}),
-  });
 
   const summary = deltas
     .map((d) => `  ${d.next ? success("enabled") : info("disabled")}  ${theme.muted(d.path)}`)

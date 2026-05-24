@@ -97,7 +97,7 @@ export function getSlashCommands(options: SlashCommandOptions = {}): SlashComman
         label: flag.path,
         description: flag.label,
       })),
-    ].filter((item) => item.value.startsWith(normalized));
+    ].filter((item) => item.value.toLowerCase().startsWith(normalized));
   };
   const commands: SlashCommand[] = [
     { name: "help", description: "Show slash command help" },
