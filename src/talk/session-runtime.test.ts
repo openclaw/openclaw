@@ -289,4 +289,103 @@ describe("realtime voice bridge session runtime", () => {
     expect(onReady).toHaveBeenCalledWith(session);
     expect(onToolCall).toHaveBeenCalledWith(event, session);
   });
+
+  it("suppresses initial OpenAI auto-response when triggering an explicit greeting", () => {
+    let request: Parameters<RealtimeVoiceProviderPlugin["createBridge"]>[0] | undefined;
+    const provider: RealtimeVoiceProviderPlugin = {
+      id: "openai",
+      label: "OpenAI",
+      isConfigured: () => true,
+      createBridge: (nextRequest) => {
+        request = nextRequest;
+        return makeBridge();
+      },
+    };
+
+    createRealtimeVoiceBridgeSession({
+      provider,
+      providerConfig: {},
+      audioSink: { sendAudio: vi.fn() },
+      initialGreetingInstructions: "Say hello",
+      triggerGreetingOnReady: true,
+    });
+
+    const bridgeRequest = expectBridgeRequest(request);
+    expect(bridgeRequest.autoRespondToAudio).toBe(false);
+    expect(bridgeRequest.restoreAutoRespondToAudioAfterInitialGreeting).toBe(true);
+  });
+
+  it("respects an explicit autoRespondToAudio:false even when triggering an OpenAI greeting", () => {
+    let request: Parameters<RealtimeVoiceProviderPlugin["createBridge"]>[0] | undefined;
+    const provider: RealtimeVoiceProviderPlugin = {
+      id: "openai",
+      label: "OpenAI",
+      isConfigured: () => true,
+      createBridge: (nextRequest) => {
+        request = nextRequest;
+        return makeBridge();
+      },
+    };
+
+    createRealtimeVoiceBridgeSession({
+      provider,
+      providerConfig: {},
+      audioSink: { sendAudio: vi.fn() },
+      autoRespondToAudio: false,
+      initialGreetingInstructions: "Say hello",
+      triggerGreetingOnReady: true,
+    });
+
+    const bridgeRequest = expectBridgeRequest(request);
+    expect(bridgeRequest.autoRespondToAudio).toBe(false);
+    expect(bridgeRequest.restoreAutoRespondToAudioAfterInitialGreeting).toBeUndefined();
+  });
+
+  it("does not enable suppression for non-OpenAI providers triggering greetings", () => {
+    let request: Parameters<RealtimeVoiceProviderPlugin["createBridge"]>[0] | undefined;
+    const provider: RealtimeVoiceProviderPlugin = {
+      id: "google",
+      label: "Google",
+      isConfigured: () => true,
+      createBridge: (nextRequest) => {
+        request = nextRequest;
+        return makeBridge();
+      },
+    };
+
+    createRealtimeVoiceBridgeSession({
+      provider,
+      providerConfig: {},
+      audioSink: { sendAudio: vi.fn() },
+      initialGreetingInstructions: "Say hello",
+      triggerGreetingOnReady: true,
+    });
+
+    const bridgeRequest = expectBridgeRequest(request);
+    expect(bridgeRequest.autoRespondToAudio).toBeUndefined();
+    expect(bridgeRequest.restoreAutoRespondToAudioAfterInitialGreeting).toBeUndefined();
+  });
+
+  it("does not enable suppression when no initial greeting is triggered on OpenAI", () => {
+    let request: Parameters<RealtimeVoiceProviderPlugin["createBridge"]>[0] | undefined;
+    const provider: RealtimeVoiceProviderPlugin = {
+      id: "openai",
+      label: "OpenAI",
+      isConfigured: () => true,
+      createBridge: (nextRequest) => {
+        request = nextRequest;
+        return makeBridge();
+      },
+    };
+
+    createRealtimeVoiceBridgeSession({
+      provider,
+      providerConfig: {},
+      audioSink: { sendAudio: vi.fn() },
+    });
+
+    const bridgeRequest = expectBridgeRequest(request);
+    expect(bridgeRequest.autoRespondToAudio).toBeUndefined();
+    expect(bridgeRequest.restoreAutoRespondToAudioAfterInitialGreeting).toBeUndefined();
+  });
 });

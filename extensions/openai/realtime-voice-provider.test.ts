@@ -864,6 +864,176 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
     );
   });
 
+  it("preserves autoRespondToAudio from raw provider config", () => {
+    const provider = buildOpenAIRealtimeVoiceProvider();
+    const resolved = provider.resolveConfig?.({
+      cfg: {} as never,
+      rawConfig: {
+        providers: {
+          openai: {
+            autoRespondToAudio: false,
+          },
+        },
+      },
+    });
+
+    expect(resolved).toEqual({ autoRespondToAudio: false });
+  });
+
+  it("suppresses server-VAD auto-response during the initial greeting and restores it on response.done", async () => {
+    const provider = buildOpenAIRealtimeVoiceProvider();
+    const bridge = provider.createBridge({
+      providerConfig: { apiKey: "sk-test" }, // pragma: allowlist secret
+      autoRespondToAudio: false,
+      restoreAutoRespondToAudioAfterInitialGreeting: true,
+      instructions: "Greet the caller.",
+      onAudio: vi.fn(),
+      onClearAudio: vi.fn(),
+    });
+    const connecting = bridge.connect();
+    const socket = FakeWebSocket.instances[0];
+    if (!socket) {
+      throw new Error("expected bridge to create a websocket");
+    }
+
+    socket.readyState = FakeWebSocket.OPEN;
+    socket.emit("open");
+    socket.emit("message", Buffer.from(JSON.stringify({ type: "session.updated" })));
+    await connecting;
+
+    expectRecordFields(
+      requireNestedRecord(requireSession(socket, 0), ["audio", "input", "turn_detection"]),
+      "initial turn detection",
+      {
+        create_response: false,
+        interrupt_response: false,
+      },
+    );
+
+    bridge.triggerGreeting?.("Say hi for issue 85846.");
+
+    const sentTypesAfterGreeting = parseSent(socket).map((event) => event.type);
+    expect(sentTypesAfterGreeting).toEqual([
+      "session.update",
+      "conversation.item.create",
+      "response.create",
+    ]);
+
+    socket.emit(
+      "message",
+      Buffer.from(JSON.stringify({ type: "response.created", response: { id: "resp_1" } })),
+    );
+    socket.emit(
+      "message",
+      Buffer.from(JSON.stringify({ type: "response.done", response: { id: "resp_1" } })),
+    );
+
+    const finalTypes = parseSent(socket).map((event) => event.type);
+    expect(finalTypes).toEqual([
+      "session.update",
+      "conversation.item.create",
+      "response.create",
+      "session.update",
+    ]);
+    expectRecordFields(
+      requireNestedRecord(requireSession(socket, 3), ["audio", "input", "turn_detection"]),
+      "restored turn detection",
+      {
+        create_response: true,
+        interrupt_response: true,
+      },
+    );
+
+    socket.emit(
+      "message",
+      Buffer.from(JSON.stringify({ type: "response.created", response: { id: "resp_2" } })),
+    );
+    socket.emit(
+      "message",
+      Buffer.from(JSON.stringify({ type: "response.done", response: { id: "resp_2" } })),
+    );
+
+    expect(parseSent(socket).filter((event) => event.type === "session.update")).toHaveLength(2);
+  });
+
+  it("restores server-VAD auto-response after an initial greeting is cancelled", async () => {
+    const provider = buildOpenAIRealtimeVoiceProvider();
+    const bridge = provider.createBridge({
+      providerConfig: { apiKey: "sk-test" }, // pragma: allowlist secret
+      autoRespondToAudio: false,
+      restoreAutoRespondToAudioAfterInitialGreeting: true,
+      onAudio: vi.fn(),
+      onClearAudio: vi.fn(),
+    });
+    const connecting = bridge.connect();
+    const socket = FakeWebSocket.instances[0];
+    if (!socket) {
+      throw new Error("expected bridge to create a websocket");
+    }
+
+    socket.readyState = FakeWebSocket.OPEN;
+    socket.emit("open");
+    socket.emit("message", Buffer.from(JSON.stringify({ type: "session.updated" })));
+    await connecting;
+
+    bridge.triggerGreeting?.("Say hi.");
+    socket.emit(
+      "message",
+      Buffer.from(JSON.stringify({ type: "response.created", response: { id: "resp_1" } })),
+    );
+    socket.emit(
+      "message",
+      Buffer.from(JSON.stringify({ type: "response.cancelled", response: { id: "resp_1" } })),
+    );
+
+    const finalTypes = parseSent(socket).map((event) => event.type);
+    expect(finalTypes.filter((type) => type === "session.update")).toHaveLength(2);
+    expectRecordFields(
+      requireNestedRecord(requireSession(socket, finalTypes.lastIndexOf("session.update")), [
+        "audio",
+        "input",
+        "turn_detection",
+      ]),
+      "restored turn detection",
+      {
+        create_response: true,
+        interrupt_response: true,
+      },
+    );
+  });
+
+  it("does not send a restore session.update when restoreAutoRespondToAudioAfterInitialGreeting is not set", async () => {
+    const provider = buildOpenAIRealtimeVoiceProvider();
+    const bridge = provider.createBridge({
+      providerConfig: { apiKey: "sk-test" }, // pragma: allowlist secret
+      autoRespondToAudio: false,
+      onAudio: vi.fn(),
+      onClearAudio: vi.fn(),
+    });
+    const connecting = bridge.connect();
+    const socket = FakeWebSocket.instances[0];
+    if (!socket) {
+      throw new Error("expected bridge to create a websocket");
+    }
+
+    socket.readyState = FakeWebSocket.OPEN;
+    socket.emit("open");
+    socket.emit("message", Buffer.from(JSON.stringify({ type: "session.updated" })));
+    await connecting;
+
+    bridge.triggerGreeting?.("Say hi.");
+    socket.emit(
+      "message",
+      Buffer.from(JSON.stringify({ type: "response.created", response: { id: "resp_1" } })),
+    );
+    socket.emit(
+      "message",
+      Buffer.from(JSON.stringify({ type: "response.done", response: { id: "resp_1" } })),
+    );
+
+    expect(parseSent(socket).filter((event) => event.type === "session.update")).toHaveLength(1);
+  });
+
   it("can disable realtime response interruption while keeping audio responses enabled", async () => {
     const provider = buildOpenAIRealtimeVoiceProvider();
     const bridge = provider.createBridge({

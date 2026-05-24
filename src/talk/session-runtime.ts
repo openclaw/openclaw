@@ -82,13 +82,23 @@ export function createRealtimeVoiceBridgeSession(
     triggerGreeting: (instructions) => requireBridge().triggerGreeting?.(instructions),
   };
   const canSendAudio = () => params.audioSink.isOpen?.() ?? true;
+  const suppressOpenAiInitialAutoResponse =
+    params.provider.id === "openai" &&
+    params.triggerGreetingOnReady === true &&
+    params.autoRespondToAudio !== false;
+  const bridgeAutoRespondToAudio = suppressOpenAiInitialAutoResponse
+    ? false
+    : params.autoRespondToAudio;
   bridge = params.provider.createBridge({
     cfg: params.cfg,
     providerConfig: params.providerConfig,
     audioFormat: params.audioFormat,
     instructions: params.instructions,
-    autoRespondToAudio: params.autoRespondToAudio,
+    autoRespondToAudio: bridgeAutoRespondToAudio,
     interruptResponseOnInputAudio: params.interruptResponseOnInputAudio,
+    ...(suppressOpenAiInitialAutoResponse
+      ? { restoreAutoRespondToAudioAfterInitialGreeting: true }
+      : {}),
     tools: params.tools,
     onAudio: (audio) => {
       if (canSendAudio()) {
