@@ -638,6 +638,14 @@ export type SessionSkillSnapshot = {
    */
   untrustedReferencePrompt?: string;
   /**
+   * Remote-host execution guidance for the active runtime (e.g.
+   * `exec host=node`). Persisted alongside the prompt fragments so the
+   * Codex call site can render it into the non-authoritative reference
+   * lane on subsequent turns. See `SkillSnapshot` in
+   * `src/agents/skills/types.ts`.
+   */
+  remoteNote?: string;
+  /**
    * Persisted schema marker for the `SessionSkillSnapshot` shape. Sessions
    * stored by older builds will have `schemaVersion === undefined`; the
    * agent-command reuse path treats that as a force-refresh signal so the

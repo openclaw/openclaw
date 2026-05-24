@@ -1414,6 +1414,49 @@ describe("runCodexAppServerAttempt", () => {
     expect(inputText).toContain(untrustedMarker);
   });
 
+  it("routes skillsSnapshot.remoteNote through the per-turn reference lane, not developer_instructions", async () => {
+    // ClawSweeper P2 regression: after the lane split removed the legacy
+    // `skillsSnapshot.prompt` consumer from the Codex turn, remote-host
+    // execution guidance must still reach native Codex via a non-authoritative
+    // reference surface. The remote note rides the per-turn user-input
+    // wrapper under `## OpenClaw Remote Skill Execution` and never appears
+    // in `developer_instructions`.
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    const harness = createStartedThreadHarness();
+    const params = createParams(sessionFile, workspaceDir);
+    const REMOTE_NOTE = "REMOTE-EXEC-MARKER: invoke skills via `exec host=node`.";
+    params.skillsSnapshot = {
+      prompt: REMOTE_NOTE,
+      remoteNote: REMOTE_NOTE,
+      schemaVersion: 3,
+      skills: [],
+    };
+
+    const run = runCodexAppServerAttempt(params);
+    await harness.waitForMethod("turn/start");
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+    await run;
+
+    const turnStart = harness.requests.find((request) => request.method === "turn/start");
+    const turnStartParams = turnStart?.params as {
+      input?: Array<{ text?: string }>;
+      collaborationMode?: { settings?: { developer_instructions?: string | null } };
+    };
+    const turnDeveloperInstructions =
+      turnStartParams.collaborationMode?.settings?.developer_instructions ?? "";
+    const inputText = turnStartParams.input?.[0]?.text ?? "";
+
+    expect(inputText).toContain("OpenClaw workspace context for this turn:");
+    expect(inputText).toContain("## OpenClaw Remote Skill Execution");
+    expect(inputText).toContain(REMOTE_NOTE);
+    // The remote-execution guidance is user/runtime-supplied reference
+    // metadata; it must never reach the developer-instructions lane.
+    expect(turnDeveloperInstructions).not.toContain("## OpenClaw Remote Skill Execution");
+    expect(turnDeveloperInstructions).not.toContain(REMOTE_NOTE);
+  });
+
   it("falls back to the user-input prompt only when no skills lanes are populated", async () => {
     // Sanity check that the reference wrapper does not appear when neither
     // workspace context nor untrusted skills are present. This is the no-op

@@ -1115,13 +1115,20 @@ export function buildWorkspaceSkillSnapshot(
   workspaceDir: string,
   opts?: WorkspaceSkillBuildOptions & { snapshotVersion?: number },
 ): SkillSnapshot {
-  const { eligible, prompt, trustedDeveloperPrompt, untrustedReferencePrompt, resolvedSkills } =
-    resolveWorkspaceSkillPromptState(workspaceDir, opts);
+  const {
+    eligible,
+    prompt,
+    trustedDeveloperPrompt,
+    untrustedReferencePrompt,
+    remoteNote,
+    resolvedSkills,
+  } = resolveWorkspaceSkillPromptState(workspaceDir, opts);
   const skillFilter = resolveEffectiveWorkspaceSkillFilter(opts);
   return {
     prompt,
     ...(trustedDeveloperPrompt ? { trustedDeveloperPrompt } : {}),
     ...(untrustedReferencePrompt ? { untrustedReferencePrompt } : {}),
+    ...(remoteNote ? { remoteNote } : {}),
     schemaVersion: SKILL_SNAPSHOT_SCHEMA_VERSION,
     skills: eligible.map((entry) => ({
       name: entry.skill.name,
@@ -1176,6 +1183,7 @@ function resolveWorkspaceSkillPromptState(
   prompt: string;
   trustedDeveloperPrompt?: string;
   untrustedReferencePrompt?: string;
+  remoteNote?: string;
   resolvedSkills: Skill[];
 } {
   const effectiveSkillFilter = resolveEffectiveWorkspaceSkillFilter(opts);
@@ -1226,7 +1234,14 @@ function resolveWorkspaceSkillPromptState(
     config: opts?.config,
     agentId: opts?.agentId,
   });
-  return { eligible, prompt, trustedDeveloperPrompt, untrustedReferencePrompt, resolvedSkills };
+  return {
+    eligible,
+    prompt,
+    trustedDeveloperPrompt,
+    untrustedReferencePrompt,
+    ...(remoteNote ? { remoteNote } : {}),
+    resolvedSkills,
+  };
 }
 
 /**

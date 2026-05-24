@@ -506,6 +506,51 @@ describe("buildWorkspaceSkillSnapshot", () => {
     expect(snapshot.untrustedReferencePrompt).toBeUndefined();
   });
 
+  it("persists eligibility.remote.note as snapshot.remoteNote for the Codex reference lane", async () => {
+    // ClawSweeper P2 regression: after the lane split, the Codex call site
+    // no longer consumes `skillsSnapshot.prompt`, so remote-host execution
+    // guidance (`exec host=node` etc.) needs a dedicated persisted field.
+    // `buildWorkspaceSkillSnapshot` must thread `opts.eligibility.remote.note`
+    // through to `SkillSnapshot.remoteNote` so the Codex side can render it
+    // into the non-authoritative reference wrapper.
+    const workspaceDir = await fixtureSuite.createCaseDir("workspace");
+    await writeSkill({
+      dir: path.join(workspaceDir, ".bundled", "bundled-trusted"),
+      name: "bundled-trusted",
+      description: "Trusted bundled OpenClaw skill description.",
+    });
+    const REMOTE_NOTE = "Remote macOS node: invoke skills via `exec host=node`.";
+
+    const snapshot = buildSnapshot(workspaceDir, {
+      eligibility: {
+        remote: {
+          platforms: ["darwin"],
+          hasBin: () => true,
+          hasAnyBin: () => true,
+          note: REMOTE_NOTE,
+        },
+      },
+    });
+
+    expect(snapshot.remoteNote).toBe(REMOTE_NOTE);
+    // Legacy `prompt` keeps the note as before for non-Codex consumers so
+    // existing surfaces stay byte-stable.
+    expect(snapshot.prompt).toContain(REMOTE_NOTE);
+  });
+
+  it("omits remoteNote when no remote eligibility is configured", async () => {
+    const workspaceDir = await fixtureSuite.createCaseDir("workspace");
+    await writeSkill({
+      dir: path.join(workspaceDir, ".bundled", "bundled-trusted"),
+      name: "bundled-trusted",
+      description: "Trusted bundled OpenClaw skill description.",
+    });
+
+    const snapshot = buildSnapshot(workspaceDir);
+
+    expect(snapshot.remoteNote).toBeUndefined();
+  });
+
   it("stamps schemaVersion so legacy snapshots are force-refreshed", async () => {
     // Persisted snapshots without `schemaVersion` predate the lane-split
     // fields. The agent-command reuse path uses this marker to decide
