@@ -979,6 +979,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     });
     expect(mockCallArg(dispatchGatewayMethodInProcess, 0, 2)).toMatchObject({
       expectFinal: true,
+      forceSyntheticClient: true,
       timeoutMs: 120_000,
     });
   });
