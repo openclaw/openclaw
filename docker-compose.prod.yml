@@ -1,0 +1,81 @@
+# ClaWorks production stack — monolithic gateway (see DEPLOYMENT.md)
+#
+# Canonical runtime: claworks.mjs + ~/.claworks/claworks.json + port 18800.
+# Legacy ClawTwin/ClawOps three-service layout: docs/legacy/docker-compose-clawtwin-clawops.yml (deprecated)
+services:
+  claworks-gateway:
+    image: ${CLAWORKS_IMAGE:-claworks:local}
+    build: .
+    restart: unless-stopped
+    command: ["node", "claworks.mjs", "gateway", "run", "--bind", "0.0.0.0", "--port", "18800"]
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      HOME: /home/node
+      CLAWORKS_PRODUCT: "1"
+      CLAWORKS_STATE_DIR: /home/node/.claworks
+      CLAWORKS_CONFIG: /home/node/.claworks/claworks.json
+      CLAWORKS_GATEWAY_PORT: "18800"
+      OPENCLAW_STATE_DIR: /home/node/.claworks
+      OPENCLAW_CONFIG_PATH: /home/node/.claworks/claworks.json
+      OPENCLAW_GATEWAY_PORT: "18800"
+      OPENCLAW_GATEWAY_TOKEN: ${OPENCLAW_GATEWAY_TOKEN:-}
+      OPENCLAW_TZ: ${OPENCLAW_TZ:-Asia/Shanghai}
+      DATABASE_URL: file:/data/claworks/claworks.db
+      CLAWORKS_LANCEDB_DATA_DIR: /data/claworks/vectors
+      CLAWORKS_NEXUS_CATALOG: /opt/claworks-packs
+    volumes:
+      - claworks-state:/home/node/.claworks
+      - claworks-data:/data/claworks
+      - claworks-packs:/opt/claworks-packs:ro
+    ports:
+      - "${CLAWORKS_GATEWAY_PORT:-18800}:18800"
+    cap_drop:
+      - NET_RAW
+      - NET_ADMIN
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:18800/v1/health').then((r)=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
+        ]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  nexus:
+    image: ${CLAWORKS_IMAGE:-claworks:local}
+    build: .
+    restart: unless-stopped
+    command: ["node", "scripts/claworks-nexus.mjs"]
+    environment:
+      CLAWORKS_NEXUS_PORT: 8080
+      CLAWORKS_NEXUS_HOST: 0.0.0.0
+      CLAWORKS_NEXUS_CATALOG: /opt/claworks-packs
+    volumes:
+      - claworks-packs:/opt/claworks-packs:ro
+    ports:
+      - "${CLAWORKS_NEXUS_PORT:-8080}:8080"
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:8080/api/packages?family=claworks-pack').then((r)=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
+        ]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+volumes:
+  claworks-state:
+  claworks-data:
+  claworks-packs:

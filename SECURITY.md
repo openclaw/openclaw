@@ -1,5 +1,17 @@
 # Security Policy
 
+## ClaWorks (enterprise robot runtime)
+
+ClaWorks is built on the OpenClaw foundation. For **ClaWorks-specific** deployments (fork, commercial packs, on-prem robot runtime):
+
+- **Product security questions**: open an issue in the ClaWorks deployment repository your vendor provided, or contact your **ClaWorks support / SLA channel** (commercial customers).
+- **Upstream OpenClaw core vulnerabilities** (gateway, CLI, bundled plugins): report to [openclaw/openclaw](https://github.com/openclaw/openclaw/security/advisories/new) or **security@openclaw.ai** — see the OpenClaw section below.
+- **Industry Pack content** (YAML/ontology delivered via Nexus): treat as configuration supply-chain; verify pack signatures and license terms before install.
+
+Production hardening checklist: `docs/design/PRODUCTION-READINESS.md` and `docs/RELEASE-CHECKLIST.md`.
+
+---
+
 If you believe you've found a security issue in OpenClaw, report it privately first.
 
 This policy does two things: it gives researchers a clear disclosure path, and it spells out the trust model maintainers use when triaging reports. OpenClaw is local-first agent infrastructure for trusted operators; it is not designed as a shared multi-tenant boundary between adversarial users on one gateway.

@@ -14,6 +14,19 @@
 - [x] `openclaw.mjs` 在 ClaWorks 发行版中拒绝裸 `openclaw` 入口
 - [x] LaunchAgent / systemd 在 `CLAWORKS_PRODUCT=1` 时使用 `ai.claworks.*` / `claworks-gateway`
 
+### Onboarding / configure / doctor（2026-05-24 审计）
+
+| 路径                             | 状态 | 说明                                                                                           |
+| -------------------------------- | ---- | ---------------------------------------------------------------------------------------------- |
+| `claworks.mjs`                   | ✅   | `CLAWORKS_PRODUCT=1`，`~/.claworks`，port 18800                                                |
+| `wizardT` + `product-copy`       | ✅   | intro/outro/端口/CLI 名经 `applyClaworksWizardCopy` 重写                                       |
+| `formatCliCommand("openclaw …")` | ✅   | 运行时替换为 `claworks`（含 setup.finalize next steps）                                        |
+| `configure` intro                | ✅   | `resolveProductConfigureIntro`                                                                 |
+| `doctor` intro                   | ✅   | `resolveProductDoctorIntro` + ClaWorks 专项 health checks                                      |
+| `onboard-remote` 默认 WS         | ✅   | `resolveProductLocalGatewayWsUrl`（18800）                                                     |
+| `pnpm claworks:setup`            | ✅   | doctor --fix → init → onboard，收尾提示 `claworks:start`                                       |
+| 遗留（有意保留）                 | ⚠️   | 内部类型名 `OpenClawConfig`、`openclaw/plugin-sdk` import；harness-sync 检测并存 OpenClaw 安装 |
+
 ## 阶段 B — 发布面
 
 - [ ] `@claworks/runtime` 取消 `publishConfig` 暂缓，发布 beta

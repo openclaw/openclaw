@@ -1,6 +1,6 @@
 # ClaWorks ↔ OpenClaw 全维度对齐审计
 
-**更新**：2026-05-23  
+**更新**：2026-05-24  
 **范围**：ClaWorks fork（`claworks`）相对 upstream OpenClaw 的使用体验、架构边界、Foundry+AIP 能力、基础业务闭环。
 
 ---
@@ -48,7 +48,9 @@
 | HTTP           | `registerHttpRoute`              | `/v1`, `/a2a`, `/mcp`, `/studio`     | ✅                           |
 | Security audit | `registerSecurityAuditCollector` | `security-audit.ts`                  | ✅ 本轮注册                  |
 
-Doctor 新增检查项：`openclaw_bridge_llm` / `openclaw_bridge_notify` / `openclaw_bridge_im`。
+Doctor 新增检查项：`openclaw_bridge_llm` / `openclaw_bridge_notify` / `openclaw_bridge_im`（用户可见文案为 Gateway LLM bridge，非 OpenClaw 品牌）。
+
+**Onboarding 白标（2026-05-24）**：`wizardT`/`formatCliCommand`/`product-surface` 覆盖 setup/configure/doctor 首屏与 next steps；`onboard-remote` 默认 WS 18800；`claworks:setup` 一键 doctor→init→onboard。详见 `REBRAND-TO-CLAWORKS.md` onboarding 小节。
 
 ---
 
@@ -58,7 +60,7 @@ Doctor 新增检查项：`openclaw_bridge_llm` / `openclaw_bridge_notify` / `ope
 | ---------------- | ------------------------------- | ------- | --------------------------------- |
 | 语义本体         | OntologyEngine + Pack YAML      | **88%** | 统一 base vs core 文档            |
 | 对象存储         | ObjectStore 版本化              | **88%** | PG 生产压测                       |
-| 数据集成         | Connectors + Ingress            | **60%** | OT 去 simulate                    |
+| 数据集成         | Connectors + Ingress            | **75%** | repair/doctor 强制去 simulate     |
 | 工作流/管道      | PlaybookEngine                  | **94%** | Pack action 注册 + 依赖解析已修复 |
 | LLM on ontology  | llm + output_schema + voting    | **85%** | 更多 Pack 采用 schema             |
 | Agent 网格       | A2A + a2a_delegate              | **80%** | mesh 运维与 HTTPS 强制            |
@@ -113,7 +115,7 @@ Doctor 新增检查项：`openclaw_bridge_llm` / `openclaw_bridge_notify` / `ope
 
 | 优先级 | 项                                                    | 状态                                      |
 | ------ | ----------------------------------------------------- | ----------------------------------------- |
-| P0     | OT Connector 现场化（mqtt/opcua/modbus 非 simulate）  | 待办                                      |
+| P0     | OT Connector 现场化（mqtt/opcua/modbus 非 simulate）  | ✅ 2026-05-24 repair + doctor + docs      |
 | P0     | product health checks 接入 doctor --fix / lint        | ✅ 2026-05-23                             |
 | P0     | npm scripts 与文档对齐（setup/start/doctor/kb-smoke） | ✅ 2026-05-23                             |
 | P0     | Doctor/configure intro 产品化文案                     | ✅ 2026-05-23                             |
@@ -167,15 +169,46 @@ pnpm claworks:gateway:e2e
 
 个人工作 profile：`pnpm claworks:repair:personal` → `pnpm claworks:personal:verify` → `pnpm claworks:kb-smoke`。
 
-### 8.4 开箱即用评分（2026-05-23）
+### 8.4 开箱即用评分（2026-05-24）
 
-| 维度             | 评分    | 说明                                         |
-| ---------------- | ------- | -------------------------------------------- |
-| CLI 命令面       | **95%** | 继承 OpenClaw + 产品 npm aliases             |
-| Doctor/fix       | **92%** | 双层 + 端口/LaunchAgent 隔离 repair          |
-| 零配置启动       | **75%** | 仍需 claworks-packs 外仓 + 模型/飞书凭据     |
-| 运维可观测       | **85%** | `/v1/health`、metrics、decision-log；无 OTEL |
-| 与 OpenClaw 共存 | **95%** | 18800 / ~/.claworks / ai.claworks.gateway    |
+| 维度             | 评分    | 说明                                                                                                                          |
+| ---------------- | ------- | ----------------------------------------------------------------------------------------------------------------------------- |
+| CLI 命令面       | **99%** | 继承 OpenClaw + 产品 npm aliases；help/channels/qr/wizard i18n/ doctor lint/config issue/update/onboard/插件诊断 提示已产品化 |
+| Doctor/fix       | **92%** | 双层 + 端口/LaunchAgent 隔离 repair                                                                                           |
+| 零配置启动       | **75%** | 仍需 claworks-packs 外仓 + 模型/飞书凭据                                                                                      |
+| 运维可观测       | **85%** | `/v1/health`、metrics、decision-log；无 OTEL                                                                                  |
+| 与 OpenClaw 共存 | **95%** | 18800 / ~/.claworks / ai.claworks.gateway                                                                                     |
+
+### 8.5 用户可见文案产品化（2026-05-24）
+
+| 区域                                                                                                       | 状态 | 说明                                                              |
+| ---------------------------------------------------------------------------------------------------------- | ---- | ----------------------------------------------------------------- |
+| `formatHelpExamples` / help-format                                                                         | ✅   | `replaceCliName` 覆盖 help 示例命令                               |
+| `qr-cli` / `channels add` / `channels list`                                                                | ✅   | 命令字符串经 `formatCliCommand` / `replaceCliName` 产品化         |
+| Wizard i18n（en / zh-CN / zh-TW）                                                                          | ✅   | `wizardT` → `applyClaworksWizardCopy` → `replaceEmbeddedCliNames` |
+| `runtime-guard` Node 版本错误                                                                              | ✅   | `resolveProductCliName()` 动态 CLI 名                             |
+| IM abort 触发词                                                                                            | ✅   | 新增 `stop clawworks` / `claworks stop`（保留 openclaw 变体）     |
+| config issue / doctor --lint 输出                                                                          | ✅   | `issue-format` + `doctor-lint` 经 `productizeUserCopy`            |
+| `config/validation.ts` 校验消息                                                                            | ✅   | web_search / channel / plugins install 提示经 `formatCliCommand`  |
+| gateway 连接错误 / daemon 版本 mismatch                                                                    | ✅   | `formatCliCommand` / `productizeUserCopy`                         |
+| update 后 repair 指引 / onboard 提示                                                                       | ✅   | `formatCliCommand` 覆盖 doctor/update/configure                   |
+| 插件 discovery / binding / registry 诊断                                                                   | ✅   | `formatCliCommand` / `productizeUserCopy`                         |
+| channel 选择错误 / LaunchAgent actionHint                                                                  | ✅   | `formatCliCommand`                                                |
+| Extension doctor-contract（telegram/discord/matrix）                                                       | ✅   | `formatCliCommand` 覆盖 legacy 规则与 Matrix 诊断                 |
+| Extension doctor-contract（slack/zalouser/googlechat/voice-call/memory-wiki/elevenlabs/google-meet/codex） | ✅   | 第二批 bundled 插件 legacy 规则与 voice-call 运行时警告           |
+| `schema.help.ts` / configure UI hints 显示层                                                               | ✅   | `buildBaseHints()` 经 `productizeUserCopy` 产品化 help 文案       |
+| claworks-robot `cw_update_config` 描述                                                                     | ✅   | `claworks.json` 替代 openclaw.json                                |
+| update-runner progress / tui 内部日志                                                                      | ⏭️   | 纯内部，跳过                                                      |
+
+**遗留（下轮分批）**
+
+| 区域                                                        | 状态 | 说明                                                                     |
+| ----------------------------------------------------------- | ---- | ------------------------------------------------------------------------ |
+| Extension doctor-contract（ollama/vllm/plugin-sdk ssrf 等） | 🔲   | 少量 provider/index 与 SDK legacy 规则仍裸 `openclaw configure` / doctor |
+| `schema.help.ts` 静态源字符串                               | —    | 显示层已产品化；源文件仍保留 openclaw 真源供 upstream 合并               |
+| `doctor-core-checks` / gateway client 等 core 诊断          | 🔲   | 部分 fixHint 仍硬编码，非 extension 热路径                               |
+| `update-cli` progress 内部日志                              | ⏭️   | 审计已标跳过                                                             |
+| feishu / webhooks extension                                 | —    | 无 doctor-contract 或 onboarding 裸 `openclaw` 提示                      |
 
 ---
 

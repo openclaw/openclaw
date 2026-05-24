@@ -2,6 +2,8 @@
 
 **AI 业务编排机器人**，基于 OpenClaw fork 构建，为弱模型环境设计的工业级智能体系统。
 
+生产部署与运维步骤见 **[DEPLOYMENT.md](DEPLOYMENT.md)**。
+
 ## 核心架构
 
 ```
@@ -28,7 +30,7 @@ IM / Webhook / Schedule / API
 
 私域数据采集 → 导出 → 商业模型分析 → 生成进化包 → 导入热更新 → PlaybookSimulator 验证
 
-- **模拟蒸馏**：发布 `evolution.simulation_requested`（或 `POST /v1/playbooks/evolution_simulation_pipeline/trigger`）触发端到端弱模型回归 + 导出；摘要写入 KB `simulation_runs`。
+- **模拟蒸馏**：`POST /v1/evolution/simulate`（或发布 `evolution.simulation_requested`）触发端到端弱模型回归 + 导出；摘要写入 KB `simulation_runs`。
 - **每周导出**：`evolution_weekly_export` 定时（周日 02:00）调用 `evolution.export_data`，运维在联网环境用商业模型处理后再 `claworks evolution import`。
 - **导入→回归闭环**：`evolution_pack_import_and_verify` 在 pack 热重载后发布 `evolution.regression_requested`，由 `weak_model_regression_suite` 自动跑弱模型意图回归。
 

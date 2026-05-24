@@ -310,15 +310,15 @@ curl -X POST http://127.0.0.1:18800/v1/bridge/im \
 
 ## 九、生态扩展路线图（建议优先级）
 
-| 优先级 | 扩展类型             | 产出                                              |
-| ------ | -------------------- | ------------------------------------------------- |
-| P1     | 行业 Pack            | `claworks-packs/<industry>/`                      |
-| P1     | 租户 profile         | `claworks.packs.json` profiles                    |
-| P2     | 新 Connector         | `connectors/<preset>/`                            |
-| P2     | 垂直 SaaS            | sibling 仓 + pack                                 |
-| P3     | Pack Nexus /registry | 见 `NEXUS.md`                                     |
-| P3     | 向量 KB              | `VECTOR-KB.md` + `src/storage/lancedb-adapter.ts` |
-| 最后   | npm 品牌发布         | `REBRAND-TO-CLAWORKS.md`                          |
+| 优先级 | 扩展类型             | 产出                                                |
+| ------ | -------------------- | --------------------------------------------------- |
+| P1     | 行业 Pack            | `claworks-packs/<industry>/`                        |
+| P1     | 租户 profile         | `claworks.packs.json` profiles                      |
+| P2     | 新 Connector         | `connectors/<preset>/`                              |
+| P2     | 垂直 SaaS            | sibling 仓 + pack                                   |
+| P3     | Pack Nexus /registry | 见 `NEXUS.md`                                       |
+| P3     | 向量 KB              | `VECTOR-KB.md` + memory-core / `CLAWORKS_VECTOR_KB` |
+| 最后   | npm 品牌发布         | `REBRAND-TO-CLAWORKS.md`                            |
 
 ---
 
