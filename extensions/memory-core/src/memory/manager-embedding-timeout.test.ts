@@ -1,13 +1,13 @@
-import {
-  isLocalEmbeddingWorkerFailure,
-  LOCAL_EMBEDDING_WORKER_ERROR_CODES,
-} from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
 import { describe, expect, it } from "vitest";
 import {
   resolveEmbeddingTimeoutMs,
   resolveMemoryIndexConcurrency,
   runEmbeddingOperationWithTimeout,
 } from "./manager-embedding-ops.js";
+import {
+  isLocalEmbeddingWorkerFailure,
+  LOCAL_EMBEDDING_WORKER_ERROR_CODES,
+} from "./manager-local-worker-errors.js";
 
 describe("memory embedding timeout resolution", () => {
   it("uses hosted defaults for inline embedding calls", () => {

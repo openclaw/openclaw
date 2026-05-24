@@ -26,7 +26,6 @@ export type {
 export { DEFAULT_LOCAL_MODEL } from "./embedding-defaults.js";
 
 export type LocalEmbeddingProviderRuntimeOptions = {
-  isolation?: "worker" | "in-process";
   workerScriptPath?: string;
 };
 
@@ -48,12 +47,8 @@ async function disposeResources(
 
 export async function createLocalEmbeddingProvider(
   options: EmbeddingProviderOptions,
-  runtimeOptions?: LocalEmbeddingProviderRuntimeOptions,
 ): Promise<EmbeddingProvider> {
-  if (runtimeOptions?.isolation === "in-process") {
-    return await createLocalEmbeddingProviderInProcess(options);
-  }
-  return await createLocalEmbeddingWorkerProvider(options, runtimeOptions);
+  return await createLocalEmbeddingWorkerProvider(options);
 }
 
 export async function createLocalEmbeddingProviderInProcess(

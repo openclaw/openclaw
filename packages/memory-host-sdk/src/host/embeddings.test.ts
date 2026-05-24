@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { LOCAL_EMBEDDING_WORKER_ERROR_CODES } from "./embedding-worker-errors.js";
+import { createLocalEmbeddingWorkerProvider } from "./embeddings-worker.js";
 import {
   createLocalEmbeddingProvider,
   createLocalEmbeddingProviderInProcess,
@@ -359,7 +360,7 @@ process.on("message", (message) => {
 `,
       "utf8",
     );
-    const provider = await createLocalEmbeddingProvider(
+    const provider = await createLocalEmbeddingWorkerProvider(
       {
         config: {} as never,
         provider: "local",
@@ -394,10 +395,10 @@ process.on("message", (message) => {
       "utf8",
     );
     const originalExecArgv = [...process.execArgv];
-    let provider: Awaited<ReturnType<typeof createLocalEmbeddingProvider>> | undefined;
+    let provider: Awaited<ReturnType<typeof createLocalEmbeddingWorkerProvider>> | undefined;
     try {
       process.execArgv.splice(0, process.execArgv.length, "--input-type=module");
-      provider = await createLocalEmbeddingProvider(
+      provider = await createLocalEmbeddingWorkerProvider(
         {
           config: {} as never,
           provider: "local",
@@ -431,7 +432,7 @@ process.on("message", (message) => {
     );
 
     try {
-      await createLocalEmbeddingProvider(
+      await createLocalEmbeddingWorkerProvider(
         {
           config: {} as never,
           provider: "local",
@@ -464,7 +465,7 @@ process.on("message", (message) => {
 `,
       "utf8",
     );
-    const provider = await createLocalEmbeddingProvider(
+    const provider = await createLocalEmbeddingWorkerProvider(
       {
         config: {} as never,
         provider: "local",

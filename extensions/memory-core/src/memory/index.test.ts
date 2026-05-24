@@ -4,7 +4,6 @@ import os from "node:os";
 import path from "node:path";
 import {
   clearMemoryEmbeddingProviders as clearRegistry,
-  LOCAL_EMBEDDING_WORKER_ERROR_CODES,
   listRegisteredMemoryEmbeddingProviderAdapters as listRegisteredAdapters,
   registerMemoryEmbeddingProvider as registerAdapter,
 } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
@@ -13,6 +12,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import "./test-runtime-mocks.js";
 import type { MemoryIndexManager } from "./index.js";
 import { closeAllMemorySearchManagers, getMemorySearchManager } from "./index.js";
+import { LOCAL_EMBEDDING_WORKER_ERROR_CODES } from "./manager-local-worker-errors.js";
 import { closeMemoryIndexManagersForAgent, EMBEDDING_PROBE_CACHE_TTL_MS } from "./manager.js";
 import {
   DEFAULT_LOCAL_MODEL,

@@ -1,7 +1,6 @@
 import type { DatabaseSync } from "node:sqlite";
 import { type FSWatcher } from "chokidar";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import { isLocalEmbeddingWorkerFailure } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
 import {
   createSubsystemLogger,
   resolveAgentDir,
@@ -39,6 +38,7 @@ import {
 } from "./manager-cache.js";
 import { closeMemoryDatabase } from "./manager-db.js";
 import { MemoryManagerEmbeddingOps } from "./manager-embedding-ops.js";
+import { isLocalEmbeddingWorkerFailure } from "./manager-local-worker-errors.js";
 import {
   createDegradedMemoryProviderLifecycle,
   createPendingMemoryProviderLifecycle,
