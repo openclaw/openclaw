@@ -1,4 +1,16 @@
-import { defineBundledChannelEntry } from "openclaw/plugin-sdk/channel-entry-contract";
+import {
+  defineBundledChannelEntry,
+  loadBundledEntryExportSync,
+} from "openclaw/plugin-sdk/channel-entry-contract";
+import type { OpenClawPluginApi } from "openclaw/plugin-sdk/channel-entry-contract";
+
+function registerChannelBrokerFull(api: OpenClawPluginApi): void {
+  const register = loadBundledEntryExportSync<(api: OpenClawPluginApi) => void>(import.meta.url, {
+    specifier: "./http-routes-api.js",
+    exportName: "registerChannelBrokerHttpRoutes",
+  });
+  register(api);
+}
 
 export default defineBundledChannelEntry({
   id: "channel-broker",
@@ -17,4 +29,5 @@ export default defineBundledChannelEntry({
     specifier: "./runtime-api.js",
     exportName: "setChannelBrokerRuntime",
   },
+  registerFull: registerChannelBrokerFull,
 });

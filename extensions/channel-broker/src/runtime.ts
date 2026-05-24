@@ -1,9 +1,29 @@
-import type { BrokerOutboundRequestV1, BrokerReceiptV1 } from "openclaw/plugin-sdk/channel-broker";
+import type {
+  BrokerInboundEventV1,
+  BrokerOutboundRequestV1,
+  BrokerReceiptV1,
+} from "openclaw/plugin-sdk/channel-broker";
 import type { ResolvedChannelBrokerAccount } from "./types.js";
+
+export type ChannelBrokerInboundAckPolicy =
+  | "after_receive_record"
+  | "after_agent_dispatch"
+  | "after_durable_send";
+
+export type ChannelBrokerInboundReceiveResult = {
+  status: "accepted" | "duplicate" | "rejected";
+  message?: string;
+};
 
 export type ChannelBrokerRuntime = {
   createRequestId?: () => string;
   fetch?: typeof fetch;
+  receiveInboundEvent?: (params: {
+    account: ResolvedChannelBrokerAccount;
+    event: BrokerInboundEventV1;
+    dedupeKey: string;
+    ackPolicy: ChannelBrokerInboundAckPolicy;
+  }) => Promise<ChannelBrokerInboundReceiveResult>;
   sendOutboundRequest?: (params: {
     account: ResolvedChannelBrokerAccount;
     request: BrokerOutboundRequestV1;
@@ -86,4 +106,16 @@ export async function sendBrokerOutboundRequest(params: {
     return await runtime.sendOutboundRequest(params);
   }
   return await sendBrokerOutboundHttp(params);
+}
+
+export async function receiveBrokerInboundEvent(params: {
+  account: ResolvedChannelBrokerAccount;
+  event: BrokerInboundEventV1;
+  dedupeKey: string;
+  ackPolicy: ChannelBrokerInboundAckPolicy;
+}): Promise<ChannelBrokerInboundReceiveResult> {
+  if (!runtime.receiveInboundEvent) {
+    throw new Error("Channel broker inbound runtime is not configured.");
+  }
+  return await runtime.receiveInboundEvent(params);
 }
