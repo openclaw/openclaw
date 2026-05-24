@@ -31,6 +31,11 @@ function createPerplexityParameters(transport?: string): Record<string, unknown>
       minimum: 1,
       maximum: 10,
     },
+    model: {
+      type: "string",
+      description:
+        "Optional Sonar/OpenRouter model override. Use 'default' to reset; allowlisted overrides only.",
+    },
     freshness: {
       type: "string",
       description: "Filter by time: 'day' (24h), 'week', 'month', or 'year'.",

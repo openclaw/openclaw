@@ -11,6 +11,7 @@ export {
   jsonResult,
   readNumberParam,
   readStringArrayParam,
+  normalizeToolModelOverride,
   readStringParam,
 } from "../agents/tools/common.js";
 export { resolveCitationRedirectUrl } from "../agents/tools/web-search-citation-redirect.js";

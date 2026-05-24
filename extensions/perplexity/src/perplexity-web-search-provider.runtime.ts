@@ -1,6 +1,7 @@
 import {
   readNumberParam,
   readStringArrayParam,
+  normalizeToolModelOverride,
   readStringParam,
 } from "openclaw/plugin-sdk/provider-web-search";
 import {
@@ -38,6 +39,7 @@ type PerplexityConfig = {
   apiKey?: string;
   baseUrl?: string;
   model?: string;
+  allowedModels?: string[];
 };
 
 type PerplexitySearchResponse = {
@@ -70,6 +72,16 @@ function resolvePerplexityConfig(searchConfig?: SearchConfigRecord): PerplexityC
   return perplexity && typeof perplexity === "object" && !Array.isArray(perplexity)
     ? (perplexity as PerplexityConfig)
     : {};
+}
+
+function normalizePerplexityAllowedModels(perplexity?: PerplexityConfig): string[] {
+  const allowedModels = perplexity?.allowedModels;
+  if (!Array.isArray(allowedModels)) {
+    return [];
+  }
+  return allowedModels
+    .map((model) => normalizeOptionalString(model))
+    .filter((model): model is string => Boolean(model));
 }
 
 function resolvePerplexityApiKey(perplexity?: PerplexityConfig): {
@@ -117,9 +129,48 @@ function resolvePerplexityBaseUrl(
   return DEFAULT_PERPLEXITY_BASE_URL;
 }
 
-function resolvePerplexityModel(perplexity?: PerplexityConfig): string {
+function resolveConfiguredPerplexityModel(perplexity?: PerplexityConfig): string {
   const model = normalizeOptionalString(perplexity?.model) ?? "";
-  return model || DEFAULT_PERPLEXITY_MODEL;
+  return model;
+}
+
+function resolvePerplexityModel(perplexity?: PerplexityConfig): string {
+  return resolveConfiguredPerplexityModel(perplexity) || DEFAULT_PERPLEXITY_MODEL;
+}
+
+function resolvePerplexityModelSelection(
+  perplexity?: PerplexityConfig,
+  modelOverride?: string,
+):
+  | { model: string; overrideApplied: false }
+  | { model: string; overrideApplied: true }
+  | {
+      error: "unsupported_model_override";
+      message: string;
+      docs: string;
+    } {
+  const override = normalizeToolModelOverride(modelOverride);
+  const configuredModel = resolveConfiguredPerplexityModel(perplexity);
+  const effectiveModel = resolvePerplexityModel(perplexity);
+  if (!override) {
+    return { model: effectiveModel, overrideApplied: false };
+  }
+
+  const allowedModels = normalizePerplexityAllowedModels(perplexity);
+  if (
+    (configuredModel && override === configuredModel) ||
+    allowedModels.includes("*") ||
+    allowedModels.includes(override)
+  ) {
+    return { model: override, overrideApplied: true };
+  }
+
+  return {
+    error: "unsupported_model_override",
+    message:
+      "model overrides are only supported for allowlisted Perplexity models. Add the requested model to plugins.entries.perplexity.config.webSearch.allowedModels or use the configured default model.",
+    docs: "https://docs.openclaw.ai/tools/web",
+  };
 }
 
 function resolvePerplexityRequestModel(baseUrl: string, model: string): string {
@@ -147,7 +198,10 @@ async function readPerplexityJsonResponse<T>(response: Response, label: string):
   }
 }
 
-function resolvePerplexityTransport(perplexity?: PerplexityConfig): {
+function resolvePerplexityTransport(
+  perplexity?: PerplexityConfig,
+  params?: { model?: string; overrideApplied?: boolean },
+): {
   apiKey?: string;
   source: "config" | "perplexity_env" | "openrouter_env" | "none";
   baseUrl: string;
@@ -156,9 +210,11 @@ function resolvePerplexityTransport(perplexity?: PerplexityConfig): {
 } {
   const auth = resolvePerplexityApiKey(perplexity);
   const baseUrl = resolvePerplexityBaseUrl(perplexity, auth.source, auth.apiKey);
-  const model = resolvePerplexityModel(perplexity);
+  const model = params?.model ?? resolvePerplexityModel(perplexity);
   const hasLegacyOverride = Boolean(
-    normalizeOptionalString(perplexity?.baseUrl) || normalizeOptionalString(perplexity?.model),
+    normalizeOptionalString(perplexity?.baseUrl) ||
+    normalizeOptionalString(perplexity?.model) ||
+    params?.overrideApplied,
   );
   return {
     ...auth,
@@ -314,7 +370,14 @@ export async function executePerplexitySearch(
   searchConfig?: SearchConfigRecord,
 ): Promise<Record<string, unknown>> {
   const perplexityConfig = resolvePerplexityConfig(searchConfig);
-  const runtime = resolvePerplexityTransport(perplexityConfig);
+  const modelSelection = resolvePerplexityModelSelection(
+    perplexityConfig,
+    readStringParam(args, "model"),
+  );
+  if ("error" in modelSelection) {
+    return modelSelection;
+  }
+  const runtime = resolvePerplexityTransport(perplexityConfig, modelSelection);
   if (!runtime.apiKey) {
     return {
       error: "missing_perplexity_api_key",
@@ -544,6 +607,7 @@ export const testing = {
   isDirectPerplexityBaseUrl,
   resolvePerplexityRequestModel,
   resolvePerplexityApiKey,
+  resolvePerplexityModelSelection,
   readPerplexityJsonResponse,
   normalizeToIsoDate,
   isoToPerplexityDate,
