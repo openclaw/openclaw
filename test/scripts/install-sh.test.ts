@@ -34,6 +34,11 @@ describe("install.sh", () => {
     expect(rawAptInstalls).toStrictEqual([]);
   });
 
+  it("accepts GNU and musl Linux shells in OS detection", () => {
+    expect(script).toContain('[[ "$OSTYPE" == "linux"* ]]');
+    expect(script).not.toContain('[[ "$OSTYPE" == "linux-gnu"* ]]');
+  });
+
   it("clears npm freshness filters for package installs", () => {
     expect(script).toContain("env -u NPM_CONFIG_BEFORE -u npm_config_before");
     expect(script).toContain('freshness_flag="--min-release-age=0"');
