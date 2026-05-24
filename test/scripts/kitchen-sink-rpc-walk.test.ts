@@ -1,5 +1,9 @@
-import { describe, expect, it } from "vitest";
-import { assertResourceCeiling, sampleProcess } from "../../scripts/e2e/kitchen-sink-rpc-walk.mjs";
+import { describe, expect, it, vi } from "vitest";
+import {
+  assertResourceCeiling,
+  fetchJson,
+  sampleProcess,
+} from "../../scripts/e2e/kitchen-sink-rpc-walk.mjs";
 
 describe("kitchen-sink RPC process sampling", () => {
   it("samples RSS on Windows instead of silently disabling the resource guard", async () => {
@@ -45,6 +49,25 @@ describe("kitchen-sink RPC process sampling", () => {
     });
 
     expect(sample).toEqual({ cpuPercent: 12.5, rssMiB: 256 });
+  });
+
+  it("retries transient loopback fetch resets from Windows HTTP probes", async () => {
+    const reset = new TypeError("fetch failed", {
+      cause: Object.assign(new Error("read ECONNRESET"), { code: "ECONNRESET" }),
+    });
+    const fetchImpl = vi
+      .fn()
+      .mockRejectedValueOnce(reset)
+      .mockResolvedValueOnce(new Response('{"status":"live"}', { status: 200 }));
+
+    await expect(
+      fetchJson("http://127.0.0.1:19680/healthz", {
+        attempts: 2,
+        fetchImpl,
+        retryDelayMs: 0,
+      }),
+    ).resolves.toEqual({ ok: true, status: 200, body: { status: "live" } });
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
   });
 
   it("fails when the sampled RSS exceeds the configured ceiling", () => {

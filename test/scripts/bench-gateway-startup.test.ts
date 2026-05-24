@@ -113,6 +113,47 @@ describe("gateway startup benchmark script", () => {
     expect("readyLogMs" in result.summary).toBe(false);
   });
 
+  it("flags samples that never produced readiness or process metrics", () => {
+    const result = testing.summarizeCase({ config: {}, id: "demo", name: "demo" }, [
+      {
+        cpuCoreRatio: null,
+        cpuMs: null,
+        exitCode: 1,
+        firstOutputMs: 5,
+        gatewayReadyLogLine: null,
+        gatewayReadyLogMs: null,
+        healthz: {
+          firstErrorKind: "econnrefused",
+          firstRecoveryMs: null,
+          ms: null,
+          status: null,
+          transitions: [],
+        },
+        httpListenLogLine: null,
+        httpListenLogMs: null,
+        maxRssMb: null,
+        outputTail: "Error: Cannot find module 'dist/entry.js'",
+        readyz: {
+          firstErrorKind: "econnrefused",
+          firstRecoveryMs: null,
+          ms: null,
+          status: null,
+          transitions: [],
+        },
+        signal: null,
+        startupTrace: {},
+      },
+    ]);
+
+    expect(testing.collectResultFailures([result], { processMetricsRequired: true })).toEqual([
+      {
+        id: "demo",
+        reason: "missing /healthz, /readyz, cpu, rss",
+        sampleIndex: 1,
+      },
+    ]);
+  });
+
   it("collects Count-suffixed startup trace metrics", () => {
     const startupTrace: Record<string, number> = {};
 
