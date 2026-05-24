@@ -585,7 +585,14 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
               `restart deferral check failed (${String(err)}); restarting gateway now`,
             );
           },
+          onDrainPhase: (phase, { elapsedMs, pending }) => {
+            const remaining = formatActiveDetails(getActiveCounts());
+            params.logReload.warn(
+              `restart force-drain phase "${phase}" after ${elapsedMs}ms with ${remaining.join(", ")} still active`,
+            );
+          },
         },
+        forceDrain: nextConfig.gateway?.reload?.forceDrain,
       });
       return true;
     }

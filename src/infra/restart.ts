@@ -13,6 +13,22 @@ import { replaceFileAtomicSync } from "./replace-file.js";
 import { cleanStaleGatewayProcessesSync, findGatewayPidsOnPortSync } from "./restart-stale-pids.js";
 import type { RestartAttempt } from "./restart.types.js";
 import { relaunchGatewayScheduledTask } from "./windows-task-restart.js";
+import {
+  createShutdownController,
+  DEFAULT_SHUTDOWN_CONTROLLER_CONFIG,
+  type ShutdownControllerConfig,
+} from "../gateway/shutdown-controller.js";
+
+function normalizeShutdownControllerConfig(
+  raw: Partial<ShutdownControllerConfig> | undefined,
+): ShutdownControllerConfig {
+  return {
+    gracefulMs: raw?.gracefulMs ?? DEFAULT_SHUTDOWN_CONTROLLER_CONFIG.gracefulMs,
+    softAbortMs: raw?.softAbortMs ?? DEFAULT_SHUTDOWN_CONTROLLER_CONFIG.softAbortMs,
+    forceCloseMs: raw?.forceCloseMs ?? DEFAULT_SHUTDOWN_CONTROLLER_CONFIG.forceCloseMs,
+    hardKillMs: raw?.hardKillMs ?? DEFAULT_SHUTDOWN_CONTROLLER_CONFIG.hardKillMs,
+  };
+}
 
 export type { RestartAttempt } from "./restart.types.js";
 
@@ -401,6 +417,8 @@ export type RestartDeferralHooks = {
   onReady?: () => void;
   onTimeout?: (pending: number, elapsedMs: number) => void;
   onCheckError?: (err: unknown) => void;
+  /** Called when the graduated force-drain cascade enters a new phase. */
+  onDrainPhase?: (phase: string, details: { elapsedMs: number; pending: number }) => void;
 };
 
 export type RestartEmitHooks = {
@@ -471,6 +489,8 @@ export function deferGatewayRestartUntilIdle(opts: {
   pollMs?: number;
   maxWaitMs?: number;
   reason?: string;
+  /** Optional graduated force-drain config. Enables multi-phase shutdown cascade. */
+  forceDrain?: Partial<ShutdownControllerConfig>;
 }): void {
   const pollMsRaw = opts.pollMs ?? DEFAULT_DEFERRAL_POLL_MS;
   const pollMs = Math.max(10, Math.floor(pollMsRaw));
@@ -496,6 +516,24 @@ export function deferGatewayRestartUntilIdle(opts: {
   opts.hooks?.onDeferring?.(pending);
   const startedAt = Date.now();
   let nextStillPendingAt = startedAt + DEFAULT_DEFERRAL_STILL_PENDING_WARN_MS;
+
+  // Initialize graduated force-drain controller if configured
+  const drainConfig = normalizeShutdownControllerConfig(opts.forceDrain);
+  const shutdownCtl = createShutdownController(drainConfig, {
+    onPhaseChange: (phase, state) => {
+      opts.hooks?.onDrainPhase?.(phase, {
+        elapsedMs: Date.now() - startedAt,
+        pending: opts.getPendingCount(),
+      });
+    },
+    onHardKill: () => {
+      restartLog.warn(
+        `shutdown hard-kill triggered after ${Date.now() - startedAt}ms; forcing process exit`,
+      );
+      process.exit(0);
+    },
+  });
+
   const poll = setInterval(() => {
     let current: number;
     try {
@@ -519,6 +557,11 @@ export function deferGatewayRestartUntilIdle(opts: {
       opts.hooks?.onStillPending?.(current, elapsedMs);
       nextStillPendingAt = Date.now() + DEFAULT_DEFERRAL_STILL_PENDING_WARN_MS;
     }
+
+    // Tick the graduated force-drain controller. If it triggers hard-kill,
+    // the process will exit inside the controller's hardKill hook.
+    shutdownCtl.tick();
+
     if (maxWaitMs !== undefined && elapsedMs >= maxWaitMs) {
       clearInterval(poll);
       activeDeferralPolls.delete(poll);

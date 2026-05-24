@@ -572,6 +572,14 @@ export const FIELD_HELP: Record<string, string> = {
   "gateway.reload.debounceMs": "Debounce window (ms) before applying config changes.",
   "gateway.reload.deferralTimeoutMs":
     "Optional maximum time (ms) to wait for in-flight operations before forcing a restart. Omit to use the default bounded wait; set 0 to wait indefinitely with periodic still-pending warnings. Lower positive values risk aborting active subagent LLM calls.",
+  "gateway.reload.forceDrain.gracefulMs":
+    "Phase 1 of the graduated force-drain cascade (ms from restart trigger). Gateway waits for in-flight agent turns to complete normally.",
+  "gateway.reload.forceDrain.softAbortMs":
+    "Phase 2 of the graduated force-drain cascade (ms from restart trigger). Calls AbortController.abort() on all active model fetch calls.",
+  "gateway.reload.forceDrain.forceCloseMs":
+    "Phase 3 of the graduated force-drain cascade (ms from restart trigger). Destroys WebSocket connections and rejects pending promises.",
+  "gateway.reload.forceDrain.hardKillMs":
+    "Phase 4 of the graduated force-drain cascade (ms from restart trigger). Calls process.exit(0) if the process is still hanging.",
   "gateway.nodes.browser.mode":
     'Node browser routing ("auto" = pick single connected browser node, "manual" = require node param, "off" = disable).',
   "gateway.nodes.browser.node": "Pin browser routing to a specific node id or name (optional).",

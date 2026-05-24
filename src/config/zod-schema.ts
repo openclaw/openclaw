@@ -992,6 +992,15 @@ export const OpenClawSchema = z
               .optional(),
             debounceMs: z.number().int().min(0).optional(),
             deferralTimeoutMs: z.number().int().min(0).optional(),
+            forceDrain: z
+              .object({
+                gracefulMs: z.number().int().positive().max(300_000).optional(),
+                softAbortMs: z.number().int().positive().max(300_000).optional(),
+                forceCloseMs: z.number().int().positive().max(300_000).optional(),
+                hardKillMs: z.number().int().positive().max(300_000).optional(),
+              })
+              .strict()
+              .optional(),
           })
           .strict()
           .optional(),
