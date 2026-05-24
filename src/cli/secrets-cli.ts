@@ -213,7 +213,7 @@ export function registerSecretsCli(program: Command): void {
           }
         }
 
-        let shouldApply = Boolean(opts.apply);
+        let shouldApply = Boolean(opts.apply || opts.yes);
         if (!shouldApply && !opts.json) {
           const { confirm } = await import("@clack/prompts");
           const approved = await confirm({
