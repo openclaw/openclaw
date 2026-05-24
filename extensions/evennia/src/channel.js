@@ -128,12 +128,9 @@ async function dispatchEvenniaEvent(ctx, account, event) {
     ctx.log?.warn?.("evennia channelRuntime unavailable; inbound ignored");
     return;
   }
-  if (!account.respondToAmbientMentions) return;
-
-  const lower = event.text.toLowerCase();
   const direct = event.kind === "tell" || event.kind === "whisper";
-  const mentioned = lower.includes(account.triggerName.toLowerCase());
-  if (!direct && !mentioned) return;
+  if (!direct && !account.respondToAmbientMentions) return;
+  if (direct && account.respondToAmbientMentions === false) return;
 
   const messageId = event.id || `evennia-${Date.now()}`;
   const routeSessionKey = rt.routing.buildAgentSessionKey({
