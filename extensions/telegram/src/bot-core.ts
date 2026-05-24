@@ -219,6 +219,40 @@ export function createTelegramBotCore(
     }
   });
 
+  const resolveFinalButtonAckText = (data?: string | null) => {
+    const value = data?.trim();
+    if (value === "Proceed" || value === "action:proceed") return "Proceeding...";
+    if (value === "Status, including recommended next steps?" || value === "action:status") {
+      return "Checking status...";
+    }
+    if (
+      value === "Provide recommendation" ||
+      value === "action:recommend" ||
+      value === "action:recommendation"
+    ) {
+      return "Preparing recommendation...";
+    }
+    return null;
+  };
+
+  bot.use(async (ctx, next) => {
+    const callback = ctx.update?.callback_query;
+    const message = callback?.message;
+    const ackText = resolveFinalButtonAckText(callback?.data);
+    if (callback?.id && message && ackText) {
+      (ctx as { __openclawFinalButtonAckSent?: boolean }).__openclawFinalButtonAckSent = true;
+      await Promise.allSettled([
+        bot.api.answerCallbackQuery(callback.id, { text: ackText }),
+        bot.api.sendMessage(message.chat.id, ackText, {
+          ...(message.message_thread_id != null
+            ? { message_thread_id: message.message_thread_id }
+            : {}),
+        }),
+      ]);
+    }
+    await next();
+  });
+
   bot.use(botRuntime.sequentialize(getTelegramSequentialKey));
 
   const rawUpdateLogger = createSubsystemLogger("gateway/channels/telegram/raw-update");
