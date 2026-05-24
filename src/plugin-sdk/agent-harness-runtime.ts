@@ -177,6 +177,7 @@ export async function loadCodexBundleMcpThreadConfig(
   return load(params);
 }
 export { resolveSandboxContext } from "../agents/sandbox.js";
+export type { SandboxContext, SandboxWorkspaceAccess } from "../agents/sandbox.js";
 export {
   hasSandboxBindContainerPathAliases,
   hasSandboxBindReadonlyHostShadows,
