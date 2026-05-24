@@ -478,6 +478,7 @@ describe("scripts/docker/setup.sh", () => {
     expect(chownIdx).toBeGreaterThanOrEqual(0);
     expect(onboardIdx).toBeGreaterThan(chownIdx);
     expect(log).toContain("run --rm --no-deps --user root --entrypoint sh openclaw-gateway -c");
+    expect(log).toContain("find /home/node/.config -xdev -exec chown node:node {} +");
   });
 
   it("precreates auth profile secret key dir outside the mounted state dir", async () => {
