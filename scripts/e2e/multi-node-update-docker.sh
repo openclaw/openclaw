@@ -159,13 +159,16 @@ case "\$command" in
       echo "systemctl shim: unit not found: \$unit" >&2
       exit 1
     fi
-    exec_start="\$(grep "^ExecStart=" "\$unit" | head -1 | sed "s/^ExecStart=//")"
+    exec_start_line="\$(grep "^ExecStart=" "\$unit" | head -1 || true)"
+    exec_start="\${exec_start_line#ExecStart=}"
     if [ -z "\$exec_start" ]; then
       echo "systemctl shim: no ExecStart in \$unit" >&2
       exit 1
     fi
     # Source EnvironmentFile if present
-    env_file="\$(grep "^EnvironmentFile=" "\$unit" | head -1 | sed "s/^EnvironmentFile=//" | sed "s/^-//")"
+    env_file_line="\$(grep "^EnvironmentFile=" "\$unit" | head -1 || true)"
+    env_file="\${env_file_line#EnvironmentFile=}"
+    env_file="\${env_file#-}"
     if [ -n "\$env_file" ] && [ -f "\$env_file" ]; then
       set -a; source "\$env_file"; set +a
     fi
@@ -197,7 +200,20 @@ case "\$command" in
     fi
     ;;
   show)
-    echo "ActiveState=inactive"
+    if [ -s "$GATEWAY_PID_FILE" ] && kill -0 "\$(cat "$GATEWAY_PID_FILE" 2>/dev/null)" 2>/dev/null; then
+      pid="\$(cat "$GATEWAY_PID_FILE")"
+      echo "ActiveState=active"
+      echo "SubState=running"
+      echo "MainPID=\$pid"
+      echo "ExecMainStatus=0"
+      echo "ExecMainCode=0"
+    else
+      echo "ActiveState=inactive"
+      echo "SubState=dead"
+      echo "MainPID=0"
+      echo "ExecMainStatus=0"
+      echo "ExecMainCode=0"
+    fi
     ;;
   *)
     echo "systemctl shim: ignoring: \$*"
@@ -240,6 +256,8 @@ echo "── Step 5: Switch PATH so node-B comes first ──"
 # Crucially, node-B has its own working npm with its own global prefix,
 # but openclaw is NOT installed there.
 export PATH="$NPM_PREFIX_B/bin:$NODE_B_ROOT/bin:$NPM_PREFIX_A/bin:$NODE_A_DIR:$PATH"
+export npm_config_prefix="$NPM_PREFIX_B"
+export NPM_CONFIG_PREFIX="$NPM_PREFIX_B"
 
 # Verify node-B npm works independently.
 echo "node-B npm prefix: $($NODE_B_ROOT/bin/node $NODE_B_ROOT/bin/npm prefix -g 2>/dev/null || echo unknown)"
@@ -343,6 +361,7 @@ fi
 echo ""
 echo "── Step 9: Try starting the gateway with the post-update unit ──"
 
+GATEWAY_START_FAILED=0
 if [ -f "$GATEWAY_UNIT_PATH" ]; then
   systemctl restart 2>&1 || true
   sleep 3
@@ -359,6 +378,7 @@ if [ -f "$GATEWAY_UNIT_PATH" ]; then
   else
     echo "BUG: Gateway failed to start with the post-update unit"
     cat "$GATEWAY_DAEMON_LOG" 2>/dev/null | tail -20 || true
+    GATEWAY_START_FAILED=1
   fi
 fi
 
@@ -382,6 +402,9 @@ if [ -f "$GATEWAY_UNIT_PATH" ]; then
   if [ -n "$ENTRYPOINT_PATH_CHECK" ] && [ ! -f "$ENTRYPOINT_PATH_CHECK" ]; then
     EXIT_CODE=1
   fi
+fi
+if [ "$GATEWAY_START_FAILED" -ne 0 ]; then
+  EXIT_CODE=1
 fi
 exit $EXIT_CODE
 ' || CONTAINER_EXIT=$?

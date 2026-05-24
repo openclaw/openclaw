@@ -1667,6 +1667,7 @@
     "test:docker:live:all": "node scripts/run-with-env.mjs OPENCLAW_DOCKER_ALL_LIVE_MODE=only -- node scripts/test-docker-all.mjs",
     "test:docker:local:all": "node scripts/run-with-env.mjs OPENCLAW_DOCKER_ALL_LIVE_MODE=skip -- node scripts/test-docker-all.mjs",
     "test:docker:mcp-channels": "bash scripts/e2e/mcp-channels-docker.sh",
+    "test:docker:multi-node-update": "bash scripts/e2e/multi-node-update-docker.sh",
     "test:docker:codex-on-demand": "bash scripts/e2e/codex-on-demand-docker.sh",
     "test:docker:npm-onboard-channel-agent": "bash scripts/e2e/npm-onboard-channel-agent-docker.sh",
     "test:docker:npm-onboard-discord-channel-agent": "OPENCLAW_NPM_ONBOARD_CHANNEL=discord bash scripts/e2e/npm-onboard-channel-agent-docker.sh",
