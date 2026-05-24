@@ -419,6 +419,7 @@ describe("removePluginFromConfig", () => {
           "memory.recall": "memory-plugin",
           "memory.compaction": "memory-plugin",
           "memory.capture": "memory-plugin",
+          "memory.dreaming": "memory-plugin",
           "memory.userModel": "memory-plugin",
         },
       }),
@@ -427,6 +428,7 @@ describe("removePluginFromConfig", () => {
       expectedRecall: "memory-core",
       expectedCompaction: "none",
       expectedCapture: "none",
+      expectedDreaming: "none",
       expectedUserModel: "none",
       expectedChanged: true,
     },
@@ -443,6 +445,7 @@ describe("removePluginFromConfig", () => {
       expectedRecall: undefined,
       expectedCompaction: undefined,
       expectedCapture: undefined,
+      expectedDreaming: undefined,
       expectedUserModel: undefined,
       expectedChanged: false,
     },
@@ -455,6 +458,7 @@ describe("removePluginFromConfig", () => {
       expectedRecall,
       expectedCompaction,
       expectedCapture,
+      expectedDreaming,
       expectedUserModel,
       expectedChanged,
     }) => {
@@ -464,6 +468,7 @@ describe("removePluginFromConfig", () => {
       expect(result.plugins?.slots?.["memory.recall"]).toBe(expectedRecall);
       expect(result.plugins?.slots?.["memory.compaction"]).toBe(expectedCompaction);
       expect(result.plugins?.slots?.["memory.capture"]).toBe(expectedCapture);
+      expect(result.plugins?.slots?.["memory.dreaming"]).toBe(expectedDreaming);
       expect(result.plugins?.slots?.["memory.userModel"]).toBe(expectedUserModel);
       expect(actions.memorySlot).toBe(expectedChanged);
     },

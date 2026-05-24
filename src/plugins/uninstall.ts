@@ -24,6 +24,7 @@ const MEMORY_SLOT_KEYS = [
   "memory.recall",
   "memory.compaction",
   "memory.capture",
+  "memory.dreaming",
   "memory.userModel",
 ] as const satisfies readonly (keyof PluginSlotsConfig)[];
 

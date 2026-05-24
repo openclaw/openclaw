@@ -124,6 +124,7 @@ describe("resolveEffectivePluginIds", () => {
             "memory.recall": "none",
             "memory.compaction": "none",
             "memory.capture": "none",
+            "memory.dreaming": "none",
             "memory.userModel": "none",
           },
         },

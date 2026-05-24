@@ -230,27 +230,43 @@ describe("memory dreaming host helpers", () => {
     ).toBe(true);
   });
 
-  it("resolves the configured memory-slot plugin id", () => {
+  it("resolves the configured memory.dreaming slot plugin id", () => {
     expect(
       resolveMemoryDreamingPluginId({
         plugins: {
           slots: {
-            memory: "memos-local-openclaw-plugin",
+            "memory.dreaming": "memory-dreamer",
+            "memory.recall": "memory-recall",
+            memory: "legacy-memory",
           },
         },
       } as OpenClawConfig),
-    ).toBe("memos-local-openclaw-plugin");
+    ).toBe("memory-dreamer");
   });
 
-  it("reads dreaming config from the configured memory-slot owner", () => {
+  it("falls back to memory.recall before the legacy memory slot for dreaming", () => {
+    expect(
+      resolveMemoryDreamingPluginId({
+        plugins: {
+          slots: {
+            "memory.recall": "memory-recall",
+            memory: "legacy-memory",
+          },
+        },
+      } as OpenClawConfig),
+    ).toBe("memory-recall");
+  });
+
+  it("reads dreaming config from the configured memory.dreaming owner", () => {
     expect(
       resolveMemoryDreamingPluginConfig({
         plugins: {
           slots: {
-            memory: "memos-local-openclaw-plugin",
+            "memory.dreaming": "memory-dreamer",
+            "memory.recall": "memory-recall",
           },
           entries: {
-            "memos-local-openclaw-plugin": {
+            "memory-dreamer": {
               config: {
                 dreaming: {
                   enabled: true,
@@ -267,12 +283,12 @@ describe("memory dreaming host helpers", () => {
     });
   });
 
-  it("reads dreaming config from memory-lancedb when it owns the memory slot", () => {
+  it("reads dreaming config from memory.recall when no memory.dreaming slot is configured", () => {
     expect(
       resolveMemoryDreamingPluginConfig({
         plugins: {
           slots: {
-            memory: "memory-lancedb",
+            "memory.recall": "memory-lancedb",
           },
           entries: {
             "memory-lancedb": {

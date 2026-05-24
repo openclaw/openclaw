@@ -17,6 +17,7 @@ export type NormalizedPluginsConfig = {
     "memory.recall"?: string | null;
     "memory.compaction"?: string | null;
     "memory.capture"?: string | null;
+    "memory.dreaming"?: string | null;
     "memory.userModel"?: string | null;
     contextEngine?: string | null;
   };
@@ -245,6 +246,7 @@ export function normalizePluginsConfigWithResolver(
           : memoryRecallSlot,
       "memory.compaction": normalizeSlotValue(config?.slots?.["memory.compaction"]),
       "memory.capture": normalizeSlotValue(config?.slots?.["memory.capture"]),
+      "memory.dreaming": normalizeSlotValue(config?.slots?.["memory.dreaming"]),
       "memory.userModel": normalizeSlotValue(config?.slots?.["memory.userModel"]),
       contextEngine: normalizeSlotValue(config?.slots?.contextEngine),
     },

@@ -270,6 +270,7 @@ const PluginSlotsSchema = z
     "memory.recall": z.string().optional(),
     "memory.compaction": z.string().optional(),
     "memory.capture": z.string().optional(),
+    "memory.dreaming": z.string().optional(),
     "memory.userModel": z.string().optional(),
     contextEngine: z.string().optional(),
   })

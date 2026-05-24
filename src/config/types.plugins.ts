@@ -50,6 +50,8 @@ export type PluginSlotsConfig = {
   "memory.compaction"?: string;
   /** Select which plugin owns automatic memory capture/extraction. */
   "memory.capture"?: string;
+  /** Select which plugin owns background memory consolidation/dreaming. */
+  "memory.dreaming"?: string;
   /** Select which plugin owns inferred user/profile modeling. */
   "memory.userModel"?: string;
   /** Select which plugin owns the context-engine slot. */

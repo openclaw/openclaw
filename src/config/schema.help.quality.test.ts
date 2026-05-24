@@ -372,6 +372,7 @@ const TARGET_KEYS = [
   "plugins.slots.memory.recall",
   "plugins.slots.memory.compaction",
   "plugins.slots.memory.capture",
+  "plugins.slots.memory.dreaming",
   "plugins.slots.memory.userModel",
   "plugins.slots.contextEngine",
   "plugins.entries",

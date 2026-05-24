@@ -1373,6 +1373,8 @@ export const FIELD_HELP: Record<string, string> = {
     'Selects the plugin that owns memory-aware context compaction, or "none" when no memory compaction provider is active.',
   "plugins.slots.memory.capture":
     'Selects the plugin that owns automatic memory capture and extraction, or "none" when no capture provider is active.',
+  "plugins.slots.memory.dreaming":
+    'Selects the plugin that owns background memory consolidation, promotion, and dream diary behavior, or "none" to use the recall/default dreaming fallback.',
   "plugins.slots.memory.userModel":
     'Selects the plugin that owns inferred user/profile modeling, or "none" when no user-model provider is active.',
   "plugins.slots.contextEngine":

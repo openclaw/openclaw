@@ -124,6 +124,7 @@ function resolveMemorySlotStartupPluginIds(params: {
   addSlot(slots["memory.recall"] ?? slots.memory);
   addSlot(slots["memory.compaction"]);
   addSlot(slots["memory.capture"]);
+  addSlot(slots["memory.dreaming"]);
   addSlot(slots["memory.userModel"]);
 
   if (!slots["memory.recall"] && !slots.memory) {

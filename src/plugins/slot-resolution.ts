@@ -3,12 +3,13 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginSlotsConfig } from "../config/types.plugins.js";
 import { normalizePluginsConfig } from "./config-state.js";
 
-export type MemoryPluginRole = "recall" | "compaction" | "capture" | "userModel";
+export type MemoryPluginRole = "recall" | "compaction" | "capture" | "dreaming" | "userModel";
 
 export const MEMORY_PLUGIN_ROLES = [
   "recall",
   "compaction",
   "capture",
+  "dreaming",
   "userModel",
 ] as const satisfies readonly MemoryPluginRole[];
 
@@ -75,6 +76,7 @@ export function resolveMemoryRoleSlots(params: {
     recall: resolveMemoryRoleSlot({ ...params, role: "recall" }),
     compaction: resolveMemoryRoleSlot({ ...params, role: "compaction" }),
     capture: resolveMemoryRoleSlot({ ...params, role: "capture" }),
+    dreaming: resolveMemoryRoleSlot({ ...params, role: "dreaming" }),
     userModel: resolveMemoryRoleSlot({ ...params, role: "userModel" }),
   };
 }

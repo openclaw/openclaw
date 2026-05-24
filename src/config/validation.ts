@@ -56,6 +56,7 @@ const MEMORY_SLOT_KEYS = [
   "memory.recall",
   "memory.compaction",
   "memory.capture",
+  "memory.dreaming",
   "memory.userModel",
 ] as const satisfies readonly (keyof PluginSlotsConfig)[];
 const GRANULAR_MEMORY_SLOT_KEYS = MEMORY_SLOT_KEYS.filter((key) => key !== "memory");

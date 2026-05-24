@@ -392,6 +392,7 @@ describe("config plugin validation", () => {
           "memory.recall": "missing-recall",
           "memory.compaction": "missing-compactor",
           "memory.capture": "missing-capture",
+          "memory.dreaming": "missing-dreaming",
           "memory.userModel": "missing-user-model",
         },
       },
@@ -413,6 +414,11 @@ describe("config plugin validation", () => {
         res.issues,
         "plugins.slots.memory.capture",
         "plugin not found: missing-capture",
+      );
+      expectPathMessage(
+        res.issues,
+        "plugins.slots.memory.dreaming",
+        "plugin not found: missing-dreaming",
       );
       expectPathMessage(
         res.issues,

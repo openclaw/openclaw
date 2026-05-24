@@ -20,6 +20,7 @@ const DEFAULT_SLOT_BY_KEY: Record<PluginSlotKey, string> = {
   "memory.recall": "memory-core",
   "memory.compaction": "none",
   "memory.capture": "none",
+  "memory.dreaming": "none",
   "memory.userModel": "none",
   contextEngine: "legacy",
 };

@@ -183,13 +183,14 @@ Key policy rules:
   would otherwise be opt-in. `plugins.deny` and
   `plugins.entries.<id>.enabled: false` still block it.
 - Memory also supports purpose-specific role slots:
-  `memory.recall`, `memory.compaction`, `memory.capture`, and
-  `memory.userModel`. The legacy `memory` slot remains accepted as shorthand
-  for `memory.recall`; use role slots when composing complementary memory
-  providers. Per-agent overrides can set the same role slots under
-  `agents.list[].plugins.slots`.
-- Multi-slot memory is tracked in #60572. Related design and compatibility
-  threads include #2306 and #38874 for stackable/supplementary memory plugins,
+  `memory.recall`, `memory.compaction`, `memory.capture`, `memory.dreaming`,
+  and `memory.userModel`. The legacy `memory` slot remains accepted as
+  deprecated shorthand for `memory.recall`; run `openclaw doctor --fix` to
+  migrate non-conflicting legacy selectors. Use role slots when composing
+  complementary memory providers. Per-agent overrides can set the same role
+  slots under `agents.list[].plugins.slots`.
+- Multi-slot memory directly addresses #60572, #38874, #2306, and #2080.
+  Related design and compatibility threads include
   #25359 and #54501 for per-agent slot overrides and multi-instance memory
   configuration, #57507 for dual-kind plugin slot ownership, #70823 for
   machine-readable slot ownership, #61936/#63067/#63590/#63831/#70489/#85473

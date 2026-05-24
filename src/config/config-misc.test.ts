@@ -360,6 +360,7 @@ describe("plugins.slots memory roles", () => {
           "memory.recall": "memory-core",
           "memory.compaction": "lossless-claw",
           "memory.capture": "hindsight",
+          "memory.dreaming": "memory-core",
           "memory.userModel": "openclaw-honcho",
         },
       },
@@ -376,6 +377,7 @@ describe("plugins.slots memory roles", () => {
             plugins: {
               slots: {
                 "memory.userModel": "openclaw-honcho",
+                "memory.dreaming": "memory-core",
               },
             },
           },

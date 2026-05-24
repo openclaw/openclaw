@@ -47,6 +47,7 @@ type PluginActivationConfigLike = {
     "memory.recall"?: string | null;
     "memory.compaction"?: string | null;
     "memory.capture"?: string | null;
+    "memory.dreaming"?: string | null;
     "memory.userModel"?: string | null;
     contextEngine?: string | null;
   };
@@ -121,6 +122,7 @@ function resolveExplicitPluginSelectionShared<TRootConfig>(params: {
     params.config.slots["memory.recall"] === params.id ||
     params.config.slots["memory.compaction"] === params.id ||
     params.config.slots["memory.capture"] === params.id ||
+    params.config.slots["memory.dreaming"] === params.id ||
     params.config.slots["memory.userModel"] === params.id
   ) {
     return { explicitlyEnabled: true, cause: "selected-memory-slot" };
@@ -208,6 +210,7 @@ export function resolvePluginActivationDecisionShared<TRootConfig>(params: {
     params.config.slots["memory.recall"] === params.id ||
     params.config.slots["memory.compaction"] === params.id ||
     params.config.slots["memory.capture"] === params.id ||
+    params.config.slots["memory.dreaming"] === params.id ||
     params.config.slots["memory.userModel"] === params.id
   ) {
     return {

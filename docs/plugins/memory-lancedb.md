@@ -18,20 +18,22 @@ the default built-in memory store.
 
 ## Installation
 
-Install `memory-lancedb` before setting `plugins.slots.memory = "memory-lancedb"`:
+Install `memory-lancedb` before setting
+`plugins.slots["memory.recall"] = "memory-lancedb"`:
 
 ```bash
 openclaw plugins install @openclaw/memory-lancedb
 ```
 
 The plugin is published to npm and is not bundled into the OpenClaw runtime image.
-The installer writes the plugin entry and switches the memory slot when no other
-plugin owns it.
+The installer writes the plugin entry and switches the recall slot when no
+other memory plugin owns it.
 
 <Note>
 `memory-lancedb` is an active memory plugin. Enable it by selecting the memory
-slot with `plugins.slots.memory = "memory-lancedb"`. Companion plugins such as
-`memory-wiki` can run beside it, but only one plugin owns the active memory slot.
+recall slot with `plugins.slots["memory.recall"] = "memory-lancedb"`.
+Companion plugins such as `memory-wiki` can run beside it through other memory
+role slots.
 </Note>
 
 ## Quick start
@@ -40,7 +42,7 @@ slot with `plugins.slots.memory = "memory-lancedb"`. Companion plugins such as
 {
   plugins: {
     slots: {
-      memory: "memory-lancedb",
+      "memory.recall": "memory-lancedb",
     },
     entries: {
       "memory-lancedb": {
@@ -82,7 +84,7 @@ provider's configured auth profile, environment variable, or
 {
   plugins: {
     slots: {
-      memory: "memory-lancedb",
+      "memory.recall": "memory-lancedb",
     },
     entries: {
       "memory-lancedb": {
@@ -108,7 +110,7 @@ embeddings:
 {
   plugins: {
     slots: {
-      memory: "memory-lancedb",
+      "memory.recall": "memory-lancedb",
     },
     entries: {
       "memory-lancedb": {
@@ -140,7 +142,7 @@ the Ollama provider documented in [Ollama](/providers/ollama).
 {
   plugins: {
     slots: {
-      memory: "memory-lancedb",
+      "memory.recall": "memory-lancedb",
     },
     entries: {
       "memory-lancedb": {
@@ -365,7 +367,7 @@ size reported by that model.
 
 ### Plugin loads but no memories appear
 
-Check that `plugins.slots.memory` points at `memory-lancedb`, then run:
+Check that `plugins.slots["memory.recall"]` points at `memory-lancedb`, then run:
 
 ```bash
 openclaw ltm stats

@@ -671,11 +671,12 @@ describe("doctor.memory.status", () => {
     }
   });
 
-  it("reads dreaming config from the selected memory slot plugin", async () => {
+  it("reads dreaming config from the selected memory.dreaming slot plugin", async () => {
     getRuntimeConfig.mockReturnValue({
       plugins: {
         slots: {
-          memory: "memos-local-openclaw-plugin",
+          "memory.dreaming": "memos-local-openclaw-plugin",
+          "memory.recall": "memory-core",
         },
         entries: {
           "memos-local-openclaw-plugin": {

@@ -54,6 +54,7 @@ export function resolvePluginSkillDirs(params: {
     normalizedPlugins.slots["memory.recall"],
     normalizedPlugins.slots["memory.compaction"],
     normalizedPlugins.slots["memory.capture"],
+    normalizedPlugins.slots["memory.dreaming"],
     normalizedPlugins.slots["memory.userModel"],
   ];
   let selectedMemoryPluginId: string | null = null;
