@@ -3096,6 +3096,50 @@ describe("editMessageTelegram", () => {
     expect(botApi.editMessageText).toHaveBeenCalledTimes(2);
   });
 
+  it("edits media captions with reply markup", async () => {
+    botApi.editMessageCaption.mockResolvedValue({ message_id: 1, chat: { id: "123" } });
+
+    await editMessageTelegram("123", 1, "caption", {
+      token: "tok",
+      cfg: {},
+      media: true,
+      buttons: [[{ text: "Open", url: "https://example.com" }]],
+    });
+
+    expect(botApi.editMessageText).not.toHaveBeenCalled();
+    expect(botApi.editMessageCaption).toHaveBeenCalledTimes(1);
+    const call = firstMockCall(botApi.editMessageCaption, "editMessageCaption call");
+    expect(call[0]).toBe("123");
+    expect(call[1]).toBe(1);
+    const params = requireRecord(call[2], "caption edit params");
+    expect(params.caption).toBe("caption");
+    expect(params.parse_mode).toBe("HTML");
+    expect(params.reply_markup).toEqual({
+      inline_keyboard: [[{ text: "Open", url: "https://example.com" }]],
+    });
+  });
+
+  it("falls back to plain media captions when Telegram rejects edited caption HTML", async () => {
+    botApi.editMessageCaption
+      .mockRejectedValueOnce(new Error("400: Bad Request: can't parse entities"))
+      .mockResolvedValueOnce({ message_id: 1, chat: { id: "123" } });
+
+    await editMessageTelegram("123", 1, '<a href="https://example.com">Task</a>', {
+      token: "tok",
+      cfg: {},
+      textMode: "html",
+      media: true,
+    });
+
+    expect(botApi.editMessageCaption).toHaveBeenCalledTimes(2);
+    const fallbackParams = requireRecord(
+      mockCall(botApi.editMessageCaption, 1, "plain caption fallback")[2],
+      "plain caption params",
+    );
+    expect(fallbackParams.caption).toBe("Task (https://example.com)");
+    expect(fallbackParams).not.toHaveProperty("parse_mode");
+  });
+
   it("disables link previews when linkPreview is false", async () => {
     botApi.editMessageText.mockResolvedValue({ message_id: 1, chat: { id: "123" } });
 

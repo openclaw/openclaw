@@ -25,6 +25,11 @@ const editMessageTelegram = vi.fn(async () => ({
   messageId: "456",
   chatId: "123",
 }));
+const editMessageReplyMarkupTelegram = vi.fn(async () => ({
+  ok: true,
+  messageId: "456",
+  chatId: "123",
+}));
 const editForumTopicTelegram = vi.fn(async () => ({
   ok: true,
   chatId: "123",
@@ -138,6 +143,7 @@ describe("handleTelegramAction", () => {
       sendStickerTelegram,
       deleteMessageTelegram,
       editMessageTelegram,
+      editMessageReplyMarkupTelegram,
       editForumTopicTelegram,
       pinMessageTelegram,
       createForumTopicTelegram,
@@ -148,6 +154,7 @@ describe("handleTelegramAction", () => {
     sendStickerTelegram.mockClear();
     deleteMessageTelegram.mockClear();
     editMessageTelegram.mockClear();
+    editMessageReplyMarkupTelegram.mockClear();
     editForumTopicTelegram.mockClear();
     pinMessageTelegram.mockClear();
     createForumTopicTelegram.mockClear();
@@ -864,6 +871,48 @@ describe("handleTelegramAction", () => {
       expect(opts.gatewayClientScopes).toEqual(["operator.write"]);
     },
   );
+
+  it("marks caption edits as media message edits", async () => {
+    await handleTelegramAction(
+      { action: "editMessage", chatId: "123", messageId: 1, caption: "updated caption" },
+      telegramConfig(),
+    );
+
+    expect(editMessageTelegram).toHaveBeenCalledWith(
+      "123",
+      1,
+      "updated caption",
+      expect.objectContaining({ media: true, token: "tok" }),
+    );
+    expect(editMessageReplyMarkupTelegram).not.toHaveBeenCalled();
+  });
+
+  it("edits reply markup without requiring text content", async () => {
+    await handleTelegramAction(
+      {
+        action: "editMessage",
+        chatId: "123",
+        messageId: 1,
+        presentation: {
+          blocks: [
+            {
+              type: "buttons",
+              buttons: [{ label: "Open", value: "https://example.com", style: "link" }],
+            },
+          ],
+        },
+      },
+      telegramConfig({ capabilities: { inlineButtons: "all" } }),
+    );
+
+    expect(editMessageTelegram).not.toHaveBeenCalled();
+    expect(editMessageReplyMarkupTelegram).toHaveBeenCalledWith(
+      "123",
+      1,
+      [[{ text: "Open", url: "https://example.com" }]],
+      expect.objectContaining({ token: "tok" }),
+    );
+  });
 
   it.each([
     {

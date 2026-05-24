@@ -66,6 +66,7 @@ export type TelegramApiOverride = Partial<TelegramApi>;
 type TelegramSendMessageParams = Parameters<TelegramApi["sendMessage"]>[2];
 type TelegramSendPollParams = Parameters<TelegramApi["sendPoll"]>[3];
 type TelegramEditMessageTextParams = Parameters<TelegramApi["editMessageText"]>[3];
+type TelegramEditMessageCaptionParams = Parameters<TelegramApi["editMessageCaption"]>[2];
 type TelegramCreateForumTopicParams = NonNullable<Parameters<TelegramApi["createForumTopic"]>[2]>;
 type TelegramThreadScopedParams = {
   message_thread_id?: number;
@@ -1315,6 +1316,8 @@ type TelegramEditOpts = {
   linkPreview?: boolean;
   /** Inline keyboard buttons (reply markup). Pass empty array to remove buttons. */
   buttons?: TelegramInlineButtons;
+  /** Edit a media message caption instead of a text message body. */
+  media?: boolean;
   /** Resolved runtime config from the command or gateway boundary. */
   cfg: OpenClawConfig;
 };
@@ -1443,6 +1446,49 @@ export async function editMessageTelegram(
   }
   if (replyMarkup !== undefined) {
     plainParams.reply_markup = replyMarkup;
+  }
+
+  if (opts.media === true) {
+    const captionParams: TelegramEditMessageCaptionParams = {
+      caption: htmlText,
+      parse_mode: "HTML",
+    };
+    if (replyMarkup !== undefined) {
+      captionParams.reply_markup = replyMarkup;
+    }
+    const plainCaptionParams: TelegramEditMessageCaptionParams = {
+      caption: plainText,
+    };
+    if (replyMarkup !== undefined) {
+      plainCaptionParams.reply_markup = replyMarkup;
+    }
+    try {
+      await withTelegramHtmlParseFallback({
+        label: "editMessageCaption",
+        verbose: opts.verbose,
+        requestHtml: (retryLabel) =>
+          requestWithEditShouldLog(
+            () => api.editMessageCaption(chatId, messageId, captionParams),
+            retryLabel,
+            (err) => !isTelegramMessageNotModifiedError(err),
+          ),
+        requestPlain: (retryLabel) =>
+          requestWithEditShouldLog(
+            () => api.editMessageCaption(chatId, messageId, plainCaptionParams),
+            retryLabel,
+            (plainErr) => !isTelegramMessageNotModifiedError(plainErr),
+          ),
+      });
+    } catch (err) {
+      if (isTelegramMessageNotModifiedError(err)) {
+        // no-op: Telegram reports message content unchanged, treat as success
+      } else {
+        throw err;
+      }
+    }
+
+    logVerbose(`[telegram] Edited media caption ${messageId} in chat ${chatId}`);
+    return { ok: true, messageId: String(messageId), chatId };
   }
 
   try {

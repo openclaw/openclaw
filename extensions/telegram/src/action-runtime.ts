@@ -30,6 +30,7 @@ import {
   createForumTopicTelegram,
   deleteMessageTelegram,
   editForumTopicTelegram,
+  editMessageReplyMarkupTelegram,
   editMessageTelegram,
   pinMessageTelegram,
   reactMessageTelegram,
@@ -45,6 +46,7 @@ export const telegramActionRuntime = {
   createForumTopicTelegram,
   deleteMessageTelegram,
   editForumTopicTelegram,
+  editMessageReplyMarkupTelegram,
   editMessageTelegram,
   getCacheStats,
   pinMessageTelegram,
@@ -603,8 +605,12 @@ export async function handleTelegramAction(
     });
     const content =
       readStringParam(params, "content", { allowEmpty: false }) ??
-      readStringParam(params, "message", { required: true, allowEmpty: false });
+      readStringParam(params, "message", { allowEmpty: false }) ??
+      readStringParam(params, "caption", { allowEmpty: false });
     const buttons = resolveTelegramButtonsFromParams(params);
+    if (content == null && buttons === undefined) {
+      throw new Error("content, message, caption, or inline buttons required.");
+    }
     if (buttons) {
       const inlineButtonsScope = resolveTelegramInlineButtonsScope({
         cfg,
@@ -622,18 +628,28 @@ export async function handleTelegramAction(
         "Telegram bot token missing. Set TELEGRAM_BOT_TOKEN or channels.telegram.botToken.",
       );
     }
-    const result = await telegramActionRuntime.editMessageTelegram(
-      chatId ?? "",
-      messageId ?? 0,
-      content,
-      {
-        cfg,
-        token,
-        accountId: accountId ?? undefined,
-        buttons,
-        gatewayClientScopes: options?.gatewayClientScopes,
-      },
-    );
+    const editOptions = {
+      cfg,
+      token,
+      accountId: accountId ?? undefined,
+      buttons,
+      gatewayClientScopes: options?.gatewayClientScopes,
+    };
+    const result =
+      content == null
+        ? await telegramActionRuntime.editMessageReplyMarkupTelegram(
+            chatId ?? "",
+            messageId ?? 0,
+            buttons ?? [],
+            editOptions,
+          )
+        : await telegramActionRuntime.editMessageTelegram(chatId ?? "", messageId ?? 0, content, {
+            ...editOptions,
+            media:
+              readBooleanParam(params, "media") ??
+              readBooleanParam(params, "mediaMessage") ??
+              params.caption != null,
+          });
     return jsonResult({
       ok: true,
       messageId: result.messageId,
