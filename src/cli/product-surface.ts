@@ -43,10 +43,19 @@ export function resolveProductDefaultGatewayPort(env: NodeJS.ProcessEnv = proces
   return isClaworksCliProduct(env) ? CLAWORKS_DEFAULT_GATEWAY_PORT : OPENCLAW_DEFAULT_GATEWAY_PORT;
 }
 
+const OPENCLAW_DOCS_BASE = "https://docs.openclaw.ai";
+const CLAWORKS_DOCS_BASE = "https://docs.claworks.ai";
+
+export function resolveProductDocsBase(env: NodeJS.ProcessEnv = process.env): string {
+  return isClaworksCliProduct(env) ? CLAWORKS_DOCS_BASE : OPENCLAW_DOCS_BASE;
+}
+
+export function resolveProductDocUrl(path: string, env: NodeJS.ProcessEnv = process.env): string {
+  return `${resolveProductDocsBase(env)}${path}`;
+}
+
 export function resolveProductSecurityDocUrl(env: NodeJS.ProcessEnv = process.env): string {
-  return isClaworksCliProduct(env)
-    ? "https://docs.openclaw.ai/gateway/security"
-    : "https://docs.openclaw.ai/gateway/security";
+  return resolveProductDocUrl("/gateway/security", env);
 }
 
 export function resolveProductSetupIntro(env: NodeJS.ProcessEnv = process.env): string {

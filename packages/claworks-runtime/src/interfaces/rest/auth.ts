@@ -26,6 +26,27 @@ function readChannelUserHeader(req: IncomingMessage): string {
 }
 
 /**
+ * 对 API 密钥进行 SHA-256 哈希，用于存储哈希值的配置场景。
+ * 返回 64 位小写十六进制字符串。
+ */
+export function hashApiKey(key: string): string {
+  return createHash("sha256").update(key).digest("hex");
+}
+
+/**
+ * 判断请求 token 是否匹配配置中存储的密钥值。
+ * 向后兼容：
+ *   - 存储值长度 < 32：视为明文，直接比对
+ *   - 存储值长度 >= 32：视为 SHA-256 哈希，对 token 哈希后比对
+ */
+function matchesKey(token: string, stored: string): boolean {
+  if (stored.length < 32) {
+    return token === stored;
+  }
+  return hashApiKey(token) === stored;
+}
+
+/**
  * 收集所有有效 API 密钥（primary + rotation list），去除空值。
  * 支持多密钥并行（密钥轮换不中断服务）。
  */
@@ -58,7 +79,7 @@ export function resolveAuthContext(req: IncomingMessage, runtime: ClaworksRuntim
     return { authenticated: true, subjectType: "system", subjectId: "local" };
   }
 
-  if (token && validKeys.includes(token)) {
+  if (token && validKeys.some((k) => matchesKey(token, k))) {
     if (channelUser) {
       return { authenticated: true, subjectType: "channel_user", subjectId: channelUser };
     }

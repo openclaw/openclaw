@@ -9,6 +9,7 @@ import {
   productizeUserCopy,
   resolveProductConfigPathHint,
   resolveProductConfigureIntro,
+  resolveProductDocUrl,
   resolveProductLocalGatewayWsUrl,
 } from "../cli/product-surface.js";
 import { readConfigFileSnapshot, resolveGatewayPort } from "../config/config.js";
@@ -157,13 +158,11 @@ async function runGatewayHealthCheck(params: {
   } catch (err) {
     params.runtime.error(formatHealthCheckFailure(err));
     note(
-      productizeUserCopy(
-        [
-          "Docs:",
-          "https://docs.openclaw.ai/gateway/health",
-          "https://docs.openclaw.ai/gateway/troubleshooting",
-        ].join("\n"),
-      ),
+      [
+        "Docs:",
+        resolveProductDocUrl("/gateway/health"),
+        resolveProductDocUrl("/gateway/troubleshooting"),
+      ].join("\n"),
       "Health check help",
     );
   }
@@ -233,7 +232,7 @@ async function promptWebToolsConfig(
     [
       "Web search lets your agent look things up online using the `web_search` tool.",
       "Choose a managed provider now, and Codex-capable models can also use native Codex web search.",
-      "Docs: https://docs.openclaw.ai/tools/web",
+      `Docs: ${resolveProductDocUrl("/tools/web")}`,
     ].join("\n"),
     "Web search",
   );
@@ -331,7 +330,7 @@ async function promptWebToolsConfig(
           [
             "No web search providers are currently available under this plugin policy.",
             "Enable plugins or remove deny rules, then rerun configure.",
-            "Docs: https://docs.openclaw.ai/tools/web",
+            `Docs: ${resolveProductDocUrl("/tools/web")}`,
           ].join("\n"),
           "Web search",
         );
@@ -404,7 +403,7 @@ export async function runConfigureWizard(
             [
               ...snapshot.issues.map((iss) => `- ${iss.path}: ${iss.message}`),
               "",
-              "Docs: https://docs.openclaw.ai/gateway/configuration",
+              `Docs: ${resolveProductDocUrl("/gateway/configuration")}`,
             ].join("\n"),
           ),
           "Config issues",
@@ -798,7 +797,7 @@ export async function runConfigureWizard(
       const remoteUrl = normalizeOptionalString(nextConfig.gateway?.remote?.url);
       if (remoteUrl) {
         note(
-          ["Remote Gateway:", remoteUrl, "Docs: https://docs.openclaw.ai/gateway/remote"].join(
+          ["Remote Gateway:", remoteUrl, `Docs: ${resolveProductDocUrl("/gateway/remote")}`].join(
             "\n",
           ),
           "Gateway",
@@ -864,7 +863,7 @@ export async function runConfigureWizard(
         `Web UI: ${links.httpUrl}`,
         `Gateway WS: ${links.wsUrl}`,
         gatewayStatusLine,
-        "Docs: https://docs.openclaw.ai/web/control-ui",
+        `Docs: ${resolveProductDocUrl("/web/control-ui")}`,
       ].join("\n"),
       "Control UI",
     );
