@@ -507,24 +507,55 @@ export async function executePlaybookStep(
       const input = step.input
         ? (resolveParamsDeep(step.input, ctx.variables) as Record<string, unknown>)
         : {};
-      if (deps.skillRun) {
-        log.output = await deps.skillRun({ skillId: step.skillId, input });
-      } else if (deps.productionMode) {
-        throw new StepFailedError(
-          `skill bridge 未配置（production_mode=true 时 stub 不可用），skillId=${step.skillId}`,
-          step.id,
-          "abort",
-        );
-      } else {
-        log.output = { stub: true, skillId: step.skillId, input };
-        deps.logger?.(`[claworks:skill] stub（无 skillRun）skill=${step.skillId}`);
-        void deps.publishAnomaly?.({
-          kind: "stub_step",
-          stepKind: "skill",
-          stepId: step.id,
-          skillId: step.skillId,
-        });
+      const skillId = step.skillId;
+      let skillOutput: Record<string, unknown> | undefined;
+
+      // local-first：与 skill.run 能力一致，先查 scriptLibrary，未找到再走 OpenClaw harness
+      if (deps.scriptRun) {
+        try {
+          const localResult = await deps.scriptRun({ scriptId: skillId, input });
+          skillOutput = {
+            ...(localResult ?? {}),
+            source: "local",
+            skill_id: skillId,
+          };
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          const isNotFound =
+            msg.includes("Script not found") || msg.includes(`Script not found: ${skillId}`);
+          if (!isNotFound) {
+            throw err;
+          }
+        }
       }
+
+      if (!skillOutput) {
+        if (deps.skillRun) {
+          const harnessResult = await deps.skillRun({ skillId, input });
+          skillOutput = {
+            ...(harnessResult ?? {}),
+            source: "harness",
+            skill_id: skillId,
+          };
+        } else if (deps.productionMode) {
+          throw new StepFailedError(
+            `skill bridge 未配置（production_mode=true 时 stub 不可用），skillId=${skillId}`,
+            step.id,
+            "abort",
+          );
+        } else {
+          skillOutput = { stub: true, skillId, input };
+          deps.logger?.(`[claworks:skill] stub（无 skillRun）skill=${skillId}`);
+          void deps.publishAnomaly?.({
+            kind: "stub_step",
+            stepKind: "skill",
+            stepId: step.id,
+            skillId,
+          });
+        }
+      }
+
+      log.output = skillOutput;
       if (step.output) {
         ctx.variables[step.output] = log.output;
       }

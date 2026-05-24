@@ -76,6 +76,45 @@ describe("step-executor production fail-closed", () => {
     expect(ctx.variables.out).toBe("hello");
   });
 
+  it("skill step uses local scriptRun before skillRun harness", async () => {
+    const ctx = makeCtx();
+    const run = makeRun();
+    const skillRun = vi.fn();
+    const scriptRun = vi.fn().mockResolvedValue({ ok: true, value: 42 });
+    await executePlaybookStep(
+      { kind: "skill", id: "s-local", skillId: "calc.expression", output: "r" },
+      ctx,
+      run,
+      baseDeps({ scriptRun, skillRun }),
+    );
+    expect(scriptRun).toHaveBeenCalledWith({
+      scriptId: "calc.expression",
+      input: {},
+    });
+    expect(skillRun).not.toHaveBeenCalled();
+    expect(ctx.variables.r).toMatchObject({
+      ok: true,
+      source: "local",
+      skill_id: "calc.expression",
+    });
+  });
+
+  it("skill step falls through to skillRun when local script missing", async () => {
+    const ctx = makeCtx();
+    const run = makeRun();
+    const skillRun = vi.fn().mockResolvedValue({ text: "harness ok" });
+    const scriptRun = vi.fn().mockRejectedValue(new Error("Script not found: remote-skill"));
+    await executePlaybookStep(
+      { kind: "skill", id: "s-harness", skillId: "remote-skill", output: "r" },
+      ctx,
+      run,
+      baseDeps({ scriptRun, skillRun }),
+    );
+    expect(scriptRun).toHaveBeenCalled();
+    expect(skillRun).toHaveBeenCalledWith({ skillId: "remote-skill", input: {} });
+    expect(ctx.variables.r).toMatchObject({ text: "harness ok", source: "harness" });
+  });
+
   it("skill step throws when skillRun missing in production", async () => {
     const ctx = makeCtx();
     const run = makeRun();
