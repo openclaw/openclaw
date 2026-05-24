@@ -2114,6 +2114,21 @@ describe("scripts/test-projects full-suite sharding", () => {
     );
   });
 
+  it("rejects watch mode with multiple explicit leaf project config targets", () => {
+    expect(() =>
+      buildVitestRunPlans(
+        [
+          "--watch",
+          "test/vitest/vitest.agents-core.config.ts",
+          "test/vitest/vitest.agents-tools.config.ts",
+        ],
+        process.cwd(),
+      ),
+    ).toThrow(
+      "watch mode with mixed test suites is not supported; target one suite at a time or use a dedicated suite command",
+    );
+  });
+
   it("skips extension project configs when leaf sharding and the aggregate extension shard is disabled", () => {
     const previousLeafShards = process.env.OPENCLAW_TEST_PROJECTS_LEAF_SHARDS;
     const previousSkipExtensions = process.env.OPENCLAW_TEST_SKIP_FULL_EXTENSIONS_SHARD;
