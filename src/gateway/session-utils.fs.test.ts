@@ -1982,6 +1982,39 @@ describe("oversized transcript line guards", () => {
     expectUsageFields(usage, { modelProvider: "test-provider" });
   });
 
+  test("oversized line metadata extraction preserves id and parentId", async () => {
+    const sessionId = "test-oversized-metadata-extract";
+    const transcriptPath = path.join(tmpDir, `${sessionId}.jsonl`);
+    const oversizedContent = "w".repeat(300 * 1024);
+    const lines = [
+      JSON.stringify({ type: "session", version: 3, id: sessionId }),
+      JSON.stringify({
+        type: "message",
+        id: "root-msg",
+        parentId: null,
+        message: { role: "user", content: "root" },
+      }),
+      JSON.stringify({
+        type: "message",
+        id: "oversized-child",
+        parentId: "root-msg",
+        message: { role: "assistant", content: oversizedContent },
+      }),
+    ];
+    fs.writeFileSync(transcriptPath, `${lines.join("\n")}\n`, "utf-8");
+
+    const out = await readRecentSessionMessagesAsync(sessionId, storePath, undefined, {
+      maxMessages: 10,
+    });
+
+    const serialized = JSON.stringify(out);
+    // The oversized line's id and parentId must be extracted correctly
+    // from the prefix via regex-based field extraction.
+    expect(serialized).toContain("oversized-child");
+    expect(serialized).toContain("root-msg");
+    expect(serialized).not.toContain(oversizedContent);
+  });
+
   test("readSessionTitleFieldsFromTranscriptAsync delegates to bounded sync reader", async () => {
     const sessionId = "test-async-title-bounded";
     writeTranscript(
