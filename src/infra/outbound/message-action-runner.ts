@@ -33,7 +33,6 @@ import { resolveAgentScopedOutboundMediaAccess } from "../../media/read-capabili
 import { hasPollCreationParams } from "../../poll-params.js";
 import { resolvePollMaxSelections } from "../../polls.js";
 import { resolveFirstBoundAccountId } from "../../routing/bound-account-read.js";
-import { resolveSendPolicyDetailed } from "../../sessions/send-policy.js";
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
@@ -1000,35 +999,6 @@ async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActi
     applySendPayloadPartsToActionParams(params, sendPayload);
   }
   throwIfAborted(abortSignal);
-
-  if (
-    gateway &&
-    !dryRun &&
-    resolveSendPolicyDetailed({
-      cfg,
-      sessionKey: input.sessionKey ?? outboundRoute?.sessionKey,
-      channel,
-      inboundPeer: input.inboundPeer ?? undefined,
-      outboundPeer: to,
-    }).decision === "deny"
-  ) {
-    const suppressed = {
-      channel,
-      to,
-      via: "gateway" as const,
-      mediaUrl: sendPayload.mediaUrl ?? null,
-      mediaUrls: sendPayload.mediaUrls,
-    };
-    return {
-      kind: "send",
-      channel,
-      action,
-      to,
-      handledBy: "core",
-      payload: suppressed,
-      dryRun,
-    };
-  }
 
   const gatewayPluginAction = await runGatewayPluginMessageActionOrNull({
     cfg,
