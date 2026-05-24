@@ -27,19 +27,28 @@ function issuePaths(result: ChannelBrokerConfigParseResult): string[] {
 }
 
 describe("channel-broker config schema", () => {
-  it("accepts nested broker capability metadata and normalizes platform overrides", () => {
+  it("accepts nested broker capability metadata and normalizes known platform aliases", () => {
     const result = safeParseChannelBrokerConfig({
       accounts: {
         acme: {
           enabled: true,
           baseUrl: "https://broker.example.test",
-          platforms: ["slack"],
+          platforms: ["teams", "googlechat", "qq"],
           capabilities: {
-            slack: {
-              platform: "Slack",
+            teams: {
               delivery: { text: true, thread: true, replyTo: true },
               live: { draftPreview: true, previewFinalization: true },
               receive: { webhook: true, ackAfterDurableSend: true },
+              native: { appApi: true, workspaceHosted: true },
+            },
+            googlechat: {
+              platform: "google-chat",
+              delivery: { text: true, thread: true },
+              receive: { webhook: true },
+              native: { appApi: true },
+            },
+            qq: {
+              delivery: { text: true },
               native: { botApi: true },
             },
           },
@@ -53,13 +62,19 @@ describe("channel-broker config schema", () => {
       accountId: "acme",
     });
 
-    expect(account.capabilities.slack).toEqual({
-      platform: "slack",
+    expect(account.platforms).toEqual(["microsoft-teams", "google-chat", "qqbot"]);
+    expect(account.capabilities["microsoft-teams"]).toEqual({
+      platform: "microsoft-teams",
       delivery: { text: true, thread: true, replyTo: true },
       live: { draftPreview: true, previewFinalization: true },
       receive: { webhook: true, ackAfterDurableSend: true },
-      native: { botApi: true },
+      native: { appApi: true, workspaceHosted: true },
     });
+    expect(account.capabilities["google-chat"]?.delivery).toEqual({
+      text: true,
+      thread: true,
+    });
+    expect(account.capabilities.qqbot?.native).toEqual({ botApi: true });
   });
 
   it("rejects legacy flat capability fields so provider metadata matches the SDK shape", () => {
