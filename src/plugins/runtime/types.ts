@@ -72,6 +72,7 @@ export type RuntimeNodeInvokeParams = {
   params?: unknown;
   timeoutMs?: number;
   idempotencyKey?: string;
+  scopes?: string[];
 };
 
 /** Trusted in-process runtime surface injected into native plugins. */
