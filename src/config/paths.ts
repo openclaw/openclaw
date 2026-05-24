@@ -2,6 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { resolveHomeRelativePath, resolveRequiredHomeDir } from "../infra/home-dir.js";
+import { CLAWORKS_STANDARD_GATEWAY_PORT } from "./claworks-gateway.js";
 import type { OpenClawConfig } from "./types.js";
 
 /**
@@ -373,6 +374,9 @@ export function resolveGatewayPort(
     if (configPort > 0) {
       return configPort;
     }
+  }
+  if (isClaworksProduct(env)) {
+    return CLAWORKS_STANDARD_GATEWAY_PORT;
   }
   return DEFAULT_GATEWAY_PORT;
 }

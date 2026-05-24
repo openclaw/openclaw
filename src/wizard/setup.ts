@@ -569,6 +569,7 @@ export async function runSetupWizard(
       nextConfig = applySkipBootstrapConfig(nextConfig);
     }
     nextConfig = onboardHelpers.applyWizardMetadata(nextConfig, { command: "onboard", mode });
+    nextConfig = mergeClaworksProductDefaults(nextConfig);
     nextConfig = await writeWizardConfigFile(nextConfig);
     logConfigUpdated(runtime);
     await prompter.outro(t("wizard.setup.remoteConfigured"));
@@ -804,6 +805,7 @@ export async function runSetupWizard(
   }
 
   nextConfig = onboardHelpers.applyWizardMetadata(nextConfig, { command: "onboard", mode });
+  nextConfig = mergeClaworksProductDefaults(nextConfig);
   nextConfig = await writeWizardConfigFile(nextConfig);
 
   const { finalizeSetupWizard } = await import("./setup.finalize.js");
