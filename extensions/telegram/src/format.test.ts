@@ -55,11 +55,12 @@ describe("markdownToTelegramHtml", () => {
     ).toBe(input);
   });
 
-  it("preserves Telegram expandable blockquote HTML", () => {
+  it("keeps raw Telegram expandable blockquote HTML escaped", () => {
     const input = "<blockquote expandable>tail</blockquote>";
+    const escaped = "&lt;blockquote expandable&gt;tail&lt;/blockquote&gt;";
 
-    expect(markdownToTelegramHtml(input)).toBe(input);
-    expect(renderTelegramHtmlText(input, { textMode: "html" })).toBe(input);
+    expect(markdownToTelegramHtml(input)).toBe(escaped);
+    expect(renderTelegramHtmlText(input, { textMode: "html" })).toBe(escaped);
   });
 
   it("does not promote Telegram HTML tags inside code", () => {
@@ -111,13 +112,6 @@ describe("markdownToTelegramHtml", () => {
     expect(res).toContain("<blockquote>first");
     expect(res).toContain("<blockquote>second</blockquote>");
     expect(res.match(/<blockquote>/g)).toHaveLength(2);
-  });
-
-  it("preserves Telegram expandable blockquote HTML", () => {
-    const input = "<blockquote expandable>tail</blockquote>";
-
-    expect(markdownToTelegramHtml(input)).toBe(input);
-    expect(renderTelegramHtmlText(input, { textMode: "html" })).toBe(input);
   });
 
   it("can promote the final blockquote to an expandable Telegram blockquote", () => {

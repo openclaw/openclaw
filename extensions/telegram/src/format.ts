@@ -149,10 +149,8 @@ function expandFinalRenderedTelegramBlockquote(html: string, shouldExpand: boole
 }
 
 function renderTelegramHtmlWithOptions(ir: MarkdownIR, options: TelegramMarkdownOptions): string {
-  return expandFinalRenderedTelegramBlockquote(
-    renderTelegramHtml(ir),
-    hasFinalTelegramBlockquote(ir, options),
-  );
+  const html = preserveSupportedTelegramHtmlTags(renderTelegramHtml(ir));
+  return expandFinalRenderedTelegramBlockquote(html, hasFinalTelegramBlockquote(ir, options));
 }
 
 function shouldPreserveTelegramListBoundarySpacing(previous: string, next: string): boolean {
@@ -195,8 +193,7 @@ export function markdownToTelegramHtml(markdown: string, options: TelegramMarkdo
     blockquotePrefix: "",
     tableMode: options.tableMode,
   });
-  const html = renderTelegramHtmlWithOptions(ir, options);
-  const telegramHtml = preserveSupportedTelegramHtmlTags(html);
+  const telegramHtml = renderTelegramHtmlWithOptions(ir, options);
   // Apply file reference wrapping if requested (for chunked rendering)
   if (options.wrapFileRefs !== false) {
     return wrapFileReferencesInHtml(telegramHtml);
@@ -241,7 +238,7 @@ const TELEGRAM_SIMPLE_HTML_TAGS = new Set([
 ]);
 const TELEGRAM_ATTR_HTML_TAG_PATTERNS = new Map([
   ["a", /^\s+href="[^"]+"\s*$/],
-  ["blockquote", /^(?:\s+expandable)?\s*$/],
+  ["blockquote", /^\s*$/],
   ["span", /^\s+class="tg-spoiler"\s*$/],
   ["tg-emoji", /^\s+emoji-id="[^"]+"\s*$/],
   ["tg-time", /^\s+datetime="[^"]+"\s*$/],
@@ -807,9 +804,7 @@ export function splitTelegramHtmlChunks(html: string, limit: number): string[] {
 }
 
 function renderTelegramChunkHtml(ir: MarkdownIR, options: TelegramMarkdownOptions): string {
-  return wrapFileReferencesInHtml(
-    preserveSupportedTelegramHtmlTags(renderTelegramHtmlWithOptions(ir, options)),
-  );
+  return wrapFileReferencesInHtml(renderTelegramHtmlWithOptions(ir, options));
 }
 
 function renderTelegramChunksWithinHtmlLimit(
