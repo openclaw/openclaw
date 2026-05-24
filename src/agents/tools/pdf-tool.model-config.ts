@@ -3,9 +3,10 @@ import {
   providerSupportsNativePdfDocument,
   resolveAutoMediaKeyProviders,
   resolveDefaultMediaModel,
+  resolveDocumentMediaModel,
 } from "../../media-understanding/defaults.js";
 import type { AuthProfileStore } from "../auth-profiles/types.js";
-import { isMinimaxVlmModel, isMinimaxVlmProvider } from "../minimax-vlm.js";
+import { findNormalizedProviderValue } from "../model-selection.js";
 import {
   coerceImageModelConfig,
   type ImageModelConfig,
@@ -14,6 +15,40 @@ import {
 } from "./image-tool.helpers.js";
 import { hasProviderAuthForTool, resolveDefaultModelRef } from "./model-config.helpers.js";
 import { coercePdfModelConfig } from "./pdf-tool.helpers.js";
+
+function formatProviderModelRef(providerId: string, modelId: string): string {
+  const slash = modelId.indexOf("/");
+  if (slash > 0 && modelId.slice(0, slash).trim() === providerId) {
+    return modelId;
+  }
+  return `${providerId}/${modelId}`;
+}
+
+function localModelIdForProvider(providerId: string, modelId: string): string {
+  const slash = modelId.indexOf("/");
+  if (slash > 0 && modelId.slice(0, slash).trim() === providerId) {
+    return modelId.slice(slash + 1).trim();
+  }
+  return modelId.trim();
+}
+
+function resolveConfiguredTextModelFromConfig(params: {
+  cfg?: OpenClawConfig;
+  providerId: string;
+}): string | undefined {
+  const providers = params.cfg?.models?.providers;
+  if (!providers || typeof providers !== "object") {
+    return undefined;
+  }
+  const providerCfg = findNormalizedProviderValue(providers, params.providerId);
+  const modelId = providerCfg?.models
+    ?.find(
+      (model) =>
+        Boolean(model?.id?.trim()) && Array.isArray(model?.input) && model.input.includes("text"),
+    )
+    ?.id?.trim();
+  return modelId || undefined;
+}
 
 function resolveImageCandidateRefs(params: {
   cfg?: OpenClawConfig;
@@ -38,7 +73,18 @@ function resolveImageCandidateRefs(params: {
       }),
     )
     .map((providerId) => {
+      const documentImageModel = resolveDocumentMediaModel({
+        cfg: params.cfg,
+        workspaceDir: params.workspaceDir,
+        providerId,
+        document: "pdf",
+        mode: "image",
+      });
+      if (documentImageModel === false) {
+        return null;
+      }
       const modelId =
+        documentImageModel ??
         resolveProviderVisionModelFromConfig({
           cfg: params.cfg,
           provider: providerId,
@@ -48,41 +94,24 @@ function resolveImageCandidateRefs(params: {
           workspaceDir: params.workspaceDir,
           providerId,
           capability: "image",
-          includeConfiguredImageModels: !isMinimaxVlmProvider(providerId),
         });
-      return modelId ? `${providerId}/${modelId}` : null;
+      return modelId ? formatProviderModelRef(providerId, modelId) : null;
     })
     .filter((value): value is string => Boolean(value));
 }
 
-function formatProviderModelRef(providerId: string, modelId: string): string {
-  const slash = modelId.indexOf("/");
-  if (slash > 0 && modelId.slice(0, slash).trim() === providerId) {
-    return modelId;
-  }
-  return `${providerId}/${modelId}`;
-}
-
-function isMinimaxVlmModelRef(ref: string): boolean {
-  const slash = ref.indexOf("/");
-  if (slash <= 0) {
-    return false;
-  }
-  return isMinimaxVlmModel(ref.slice(0, slash), ref.slice(slash + 1));
-}
-
-function resolveMinimaxTextExtractionCandidateRefs(params: {
+function resolveTextExtractionCandidateRefs(params: {
   cfg?: OpenClawConfig;
   primary: { provider: string; model: string };
-  primaryProviderOk: boolean;
   agentDir: string;
+  workspaceDir?: string;
   authStore?: AuthProfileStore;
 }): string[] {
   const candidates: string[] = [];
   const addCandidate = (providerId: string, modelId: string) => {
     const provider = providerId.trim();
     const model = modelId.trim();
-    if (!provider || !model || isMinimaxVlmModel(provider, model)) {
+    if (!provider || !model) {
       return;
     }
     const ref = formatProviderModelRef(provider, model);
@@ -91,37 +120,66 @@ function resolveMinimaxTextExtractionCandidateRefs(params: {
     }
   };
 
-  if (params.primaryProviderOk && isMinimaxVlmProvider(params.primary.provider)) {
-    addCandidate(params.primary.provider, params.primary.model);
-  }
-
-  const providers = params.cfg?.models?.providers;
-  if (!providers || typeof providers !== "object") {
-    return candidates;
-  }
-
-  for (const [providerKey, providerCfg] of Object.entries(providers)) {
-    const providerId = providerKey.trim();
+  const providerIds = [
+    params.primary.provider,
+    ...resolveAutoMediaKeyProviders({
+      capability: "image",
+      cfg: params.cfg,
+      workspaceDir: params.workspaceDir,
+    }),
+  ];
+  for (const providerId of providerIds) {
     if (
       !providerId ||
-      !isMinimaxVlmProvider(providerId) ||
-      !hasAuthForProvider({
+      !hasProviderAuthForTool({
         provider: providerId,
+        cfg: params.cfg,
+        workspaceDir: params.workspaceDir,
         agentDir: params.agentDir,
         authStore: params.authStore,
       })
     ) {
       continue;
     }
-    const modelId = (providerCfg?.models ?? [])
-      .find((model) => {
-        const id = model?.id?.trim();
-        return Boolean(id) && Array.isArray(model?.input) && model.input.includes("text");
-      })
-      ?.id?.trim();
-    if (modelId) {
-      addCandidate(providerId, modelId);
+    const documentTextModel = resolveDocumentMediaModel({
+      cfg: params.cfg,
+      workspaceDir: params.workspaceDir,
+      providerId,
+      document: "pdf",
+      mode: "textExtraction",
+    });
+    if (!documentTextModel) {
+      continue;
     }
+    const documentImageModel = resolveDocumentMediaModel({
+      cfg: params.cfg,
+      workspaceDir: params.workspaceDir,
+      providerId,
+      document: "pdf",
+      mode: "image",
+    });
+    const preferredTextModel =
+      providerId === params.primary.provider
+        ? params.primary.model
+        : resolveConfiguredTextModelFromConfig({ cfg: params.cfg, providerId });
+    const providerDefaultImageModel = resolveDefaultMediaModel({
+      cfg: params.cfg,
+      workspaceDir: params.workspaceDir,
+      providerId,
+      capability: "image",
+      includeConfiguredImageModels: false,
+    });
+    const preferredLocalModel = preferredTextModel
+      ? localModelIdForProvider(providerId, preferredTextModel)
+      : "";
+    const preferredIsImageModel =
+      Boolean(preferredLocalModel) &&
+      ((typeof documentImageModel === "string" &&
+        localModelIdForProvider(providerId, documentImageModel) === preferredLocalModel) ||
+        providerDefaultImageModel === preferredLocalModel);
+    const model =
+      preferredTextModel && !preferredIsImageModel ? preferredTextModel : documentTextModel;
+    addCandidate(providerId, model);
   }
 
   return candidates;
@@ -186,7 +244,6 @@ export function resolvePdfModelConfigForTool(params: {
       workspaceDir: params.workspaceDir,
       providerId: primary.provider,
       capability: "image",
-      includeConfiguredImageModels: !isMinimaxVlmProvider(primary.provider),
     });
   const primarySupportsNativePdf = providerSupportsNativePdfDocument({
     cfg: params.cfg,
@@ -210,25 +267,32 @@ export function resolvePdfModelConfigForTool(params: {
     agentDir: params.agentDir,
     workspaceDir: params.workspaceDir,
     authStore: params.authStore,
-  }).filter((ref) => !isMinimaxVlmModelRef(ref));
-  const minimaxTextExtractionCandidates = resolveMinimaxTextExtractionCandidateRefs({
+  });
+  const textExtractionCandidates = resolveTextExtractionCandidateRefs({
     cfg: params.cfg,
     primary,
-    primaryProviderOk: providerOk,
     agentDir: params.agentDir,
+    workspaceDir: params.workspaceDir,
     authStore: params.authStore,
   });
-  const preferMinimaxTextExtraction =
-    providerOk &&
-    isMinimaxVlmProvider(primary.provider) &&
-    minimaxTextExtractionCandidates.length > 0;
+  const preferPrimaryTextExtraction =
+    providerOk && textExtractionCandidates.some((ref) => ref.startsWith(`${primary.provider}/`));
 
   if (params.cfg?.models?.providers && typeof params.cfg.models.providers === "object") {
     for (const [providerKey, providerCfg] of Object.entries(params.cfg.models.providers)) {
       const providerId = providerKey.trim();
+      const documentImageModel = providerId
+        ? resolveDocumentMediaModel({
+            cfg: params.cfg,
+            workspaceDir: params.workspaceDir,
+            providerId,
+            document: "pdf",
+            mode: "image",
+          })
+        : undefined;
       if (
         !providerId ||
-        isMinimaxVlmProvider(providerId) ||
+        documentImageModel === false ||
         !hasProviderAuthForTool({
           provider: providerId,
           cfg: params.cfg,
@@ -258,9 +322,9 @@ export function resolvePdfModelConfigForTool(params: {
     }
   }
 
-  const fallbackCandidates = preferMinimaxTextExtraction
-    ? [...nativePdfCandidates, ...minimaxTextExtractionCandidates, ...genericImageCandidates]
-    : [...nativePdfCandidates, ...genericImageCandidates, ...minimaxTextExtractionCandidates];
+  const fallbackCandidates = preferPrimaryTextExtraction
+    ? [...nativePdfCandidates, ...textExtractionCandidates, ...genericImageCandidates]
+    : [...nativePdfCandidates, ...genericImageCandidates, ...textExtractionCandidates];
 
   if (primary.provider === "google" && googleOk && providerVision && primarySupportsNativePdf) {
     preferred = providerVision;
