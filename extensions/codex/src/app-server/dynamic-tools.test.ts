@@ -802,6 +802,28 @@ describe("createCodexDynamicToolBridge", () => {
     expectContextFields(callArg(handler, 0, 1, "middleware context"), { runtime: "codex" });
   });
 
+  it("preserves terminal async tool results without marking them as errors", async () => {
+    const bridge = createBridgeWithToolResult("image_generate", {
+      content: [{ type: "text", text: "Background task started." }],
+      details: { async: true, status: "started", taskId: "task-1" },
+      terminate: true,
+    });
+
+    const result = await bridge.handleToolCall({
+      threadId: "thread-1",
+      turnId: "turn-1",
+      callId: "call-1",
+      namespace: null,
+      tool: "image_generate",
+      arguments: { prompt: "lighthouse" },
+    });
+
+    expect(result).toEqual(expectInputText("Background task started."));
+    expect(result.sideEffectEvidence).toBe(true);
+    expect(result.terminate).toBe(true);
+    expect(Object.keys(result)).not.toContain("terminate");
+  });
+
   it("marks executed dynamic tool results as side-effect evidence", async () => {
     const bridge = createBridgeWithToolResult("exec", textToolResult("done"));
 

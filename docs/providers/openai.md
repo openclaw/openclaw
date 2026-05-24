@@ -170,7 +170,7 @@ Choose your preferred auth method and follow the setup steps.
 
     ```json5
     {
-      env: { OPENAI_API_KEY: "sk-..." },
+      env: { OPENAI_API_KEY: "example-openai-key-not-real" },
       agents: { defaults: { model: { primary: "openai/gpt-5.5" } } },
     }
     ```
@@ -180,7 +180,7 @@ Choose your preferred auth method and follow the setup steps.
 
     ```json5
     {
-      env: { OPENAI_API_KEY: "sk-..." },
+      env: { OPENAI_API_KEY: "example-openai-key-not-real" },
       agents: { defaults: { model: { primary: "openai/chat-latest" } } },
     }
     ```
@@ -335,6 +335,14 @@ Choose your preferred auth method and follow the setup steps.
     ```bash
     openclaw models auth login --provider openai-codex
     openclaw models status --probe --probe-provider openai-codex
+    ```
+
+    Use `--profile-id` when you want multiple Codex OAuth logins in the same
+    agent and later want to control them via auth ordering or `/model ...@<profileId>`:
+
+    ```bash
+    openclaw models auth login --provider openai-codex --profile-id openai-codex:ritsuko
+    openclaw models auth login --provider openai-codex --profile-id openai-codex:lain
     ```
 
     `openai/*` is the model route for OpenAI agent turns through Codex. The
@@ -516,8 +524,12 @@ The bundled `openai` plugin registers video generation through the `video_genera
 | Default model    | `openai/sora-2`                                                                   |
 | Modes            | Text-to-video, image-to-video, single-video edit                                  |
 | Reference inputs | 1 image or 1 video                                                                |
-| Size overrides   | Supported                                                                         |
+| Size overrides   | Supported for text-to-video and image-to-video                                    |
 | Other overrides  | `aspectRatio`, `resolution`, `audio`, `watermark` are ignored with a tool warning |
+
+OpenAI image-to-video requests use `POST /v1/videos` with an image
+`input_reference`. Single-video edits use `POST /v1/videos/edits` with the
+uploaded video in the `video` field.
 
 ```json5
 {

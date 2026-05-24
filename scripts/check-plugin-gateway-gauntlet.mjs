@@ -10,9 +10,11 @@ import {
   collectGatewayCpuObservations,
   collectMetricObservations,
   collectQaBaselineRegressionObservations,
+  detectCommandDiagnosticFailure,
   discoverBundledPluginManifests,
   selectPluginEntries,
 } from "./lib/plugin-gateway-gauntlet.mjs";
+import { createPnpmRunnerSpawnSpec } from "./pnpm-runner.mjs";
 
 const DEFAULT_QA_SCENARIOS = [
   "channel-chat-baseline",
@@ -230,8 +232,13 @@ function parsePositiveNumber(raw, label) {
   return value;
 }
 
-function pnpmCommand() {
-  return process.platform === "win32" ? "pnpm.cmd" : "pnpm";
+function pnpmCommand(args, { cwd, env }) {
+  return createPnpmRunnerSpawnSpec({
+    cwd,
+    env,
+    pnpmArgs: args,
+    stdio: "pipe",
+  });
 }
 
 function openclawCommand(repoRoot, args) {
@@ -360,11 +367,13 @@ function runMeasuredCommand(params) {
     encoding: "utf8",
     timeout: params.timeoutMs,
     maxBuffer: 16 * 1024 * 1024,
+    ...(mode === "none" ? (params.spawnOptions ?? {}) : {}),
   });
   const wallMs = performance.now() - started;
   const status = result.status ?? (result.signal ? 1 : 0);
   const stdout = result.stdout ?? "";
   const stderr = result.stderr ?? "";
+  const diagnosticFailure = detectCommandDiagnosticFailure(stdout, stderr);
   const logPath = writeCommandLog({
     logDir: params.logDir,
     label: params.label,
@@ -377,6 +386,7 @@ function runMeasuredCommand(params) {
     phase: params.phase,
     pluginId: params.pluginId ?? null,
     status,
+    diagnosticFailure,
     signal: result.signal ?? null,
     timedOut: result.error?.code === "ETIMEDOUT",
     logPath,
@@ -506,13 +516,16 @@ async function main() {
   const rows = [];
   if (!options.skipPrebuild && (selectedPlugins.length > 0 || !options.skipQa)) {
     process.stderr.write("[plugin-gauntlet] prebuild\n");
+    const prebuildEnv = buildGauntletPrebuildEnv(env, { includePrivateQa: !options.skipQa });
+    const prebuildCommand = pnpmCommand(["build"], { cwd: repoRoot, env: prebuildEnv });
     rows.push(
       runMeasuredCommand({
         cwd: repoRoot,
-        env: buildGauntletPrebuildEnv(env, { includePrivateQa: !options.skipQa }),
+        env: prebuildEnv,
         logDir: path.join(options.outputDir, "logs", "prebuild"),
-        command: pnpmCommand(),
-        args: ["build"],
+        command: prebuildCommand.command,
+        args: prebuildCommand.args,
+        spawnOptions: prebuildCommand.options,
         label: "prebuild",
         phase: "prebuild",
         timeoutMs: options.buildTimeoutMs,
@@ -575,7 +588,7 @@ async function main() {
       hotWallWarnMs: options.hotWallWarnMs,
     }),
   );
-  const failures = rows.filter((row) => row.status !== 0 || row.timedOut);
+  const failures = rows.filter((row) => row.status !== 0 || row.timedOut || row.diagnosticFailure);
   const summary = {
     generatedAt: new Date().toISOString(),
     repoRoot,
@@ -619,7 +632,7 @@ async function main() {
   );
   for (const failure of failures) {
     process.stdout.write(
-      `[plugin-gauntlet] failure phase=${failure.phase} plugin=${failure.pluginId ?? "<none>"} status=${failure.status} timedOut=${failure.timedOut} wallMs=${Math.round(failure.wallMs)} log=${failure.logPath}\n`,
+      `[plugin-gauntlet] failure phase=${failure.phase} plugin=${failure.pluginId ?? "<none>"} status=${failure.status} timedOut=${failure.timedOut} diagnostic=${failure.diagnosticFailure ?? ""} wallMs=${Math.round(failure.wallMs)} log=${failure.logPath}\n`,
     );
   }
   for (const observation of summary.observations.slice(0, 20)) {

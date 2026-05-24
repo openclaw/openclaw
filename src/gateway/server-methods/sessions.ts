@@ -2374,6 +2374,7 @@ export const sessionsHandlers: GatewayRequestHandlers = {
           }
           delete entryToUpdate.inputTokens;
           delete entryToUpdate.outputTokens;
+          delete entryToUpdate.contextBudgetStatus;
           if (
             typeof result.result?.tokensAfter === "number" &&
             Number.isFinite(result.result.tokensAfter)
@@ -2444,6 +2445,7 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       delete entryToUpdate.outputTokens;
       delete entryToUpdate.totalTokens;
       delete entryToUpdate.totalTokensFresh;
+      delete entryToUpdate.contextBudgetStatus;
       entryToUpdate.updatedAt = Date.now();
     });
 
