@@ -56,7 +56,10 @@ function sign(body: string, secret: string): string {
   return `sha256=${createHmac("sha256", secret).update(body).digest("hex")}`;
 }
 
-function brokerConfig(secret = "broker-secret"): CoreConfig {
+function brokerConfig(
+  secret = "broker-secret",
+  overrides: Record<string, unknown> = {},
+): CoreConfig {
   return {
     channels: {
       "channel-broker": {
@@ -66,6 +69,7 @@ function brokerConfig(secret = "broker-secret"): CoreConfig {
             baseUrl: "https://broker.example.test",
             signingSecret: secret,
             allowFrom: ["user-1"],
+            ...overrides,
           },
         },
       },
@@ -73,7 +77,7 @@ function brokerConfig(secret = "broker-secret"): CoreConfig {
   };
 }
 
-function inboundBody(senderId = "user-1"): string {
+function inboundBody(senderId = "user-1", overrides: Record<string, unknown> = {}): string {
   return JSON.stringify({
     version: BROKER_PROTOCOL_VERSION,
     eventId: "evt-1",
@@ -83,6 +87,7 @@ function inboundBody(senderId = "user-1"): string {
     conversation: { id: "-100123", type: "thread", threadId: "77" },
     sender: { id: senderId, handle: "lume" },
     message: { id: "101", text: "/verbose status" },
+    ...overrides,
   });
 }
 
@@ -170,6 +175,85 @@ describe("channel-broker HTTP routes", () => {
 
     expect(res.statusCode).toBe(403);
     expect(JSON.parse(res.body)).toMatchObject({ ok: false, error: "sender_not_allowed" });
+    expect(receiveInboundEvent).not.toHaveBeenCalled();
+  });
+
+  it("fails closed when no inbound sender allowlist is configured", async () => {
+    const body = inboundBody();
+    const receiveInboundEvent = vi.fn();
+    setChannelBrokerRuntime({ receiveInboundEvent });
+    const res = createResponse();
+
+    await handleChannelBrokerInboundHttpRequest({
+      cfg: brokerConfig("broker-secret", { allowFrom: undefined }),
+      req: createRequest({ body, signature: sign(body, "broker-secret") }),
+      res,
+    });
+
+    expect(res.statusCode).toBe(403);
+    expect(JSON.parse(res.body)).toMatchObject({ ok: false, error: "sender_not_allowed" });
+    expect(receiveInboundEvent).not.toHaveBeenCalled();
+  });
+
+  it("rejects signed inbound events for platforms outside the provider account", async () => {
+    const body = inboundBody("user-1", { platform: "Slack" });
+    const receiveInboundEvent = vi.fn();
+    setChannelBrokerRuntime({ receiveInboundEvent });
+    const res = createResponse();
+
+    await handleChannelBrokerInboundHttpRequest({
+      cfg: brokerConfig("broker-secret", { platforms: ["telegram"] }),
+      req: createRequest({ body, signature: sign(body, "broker-secret") }),
+      res,
+    });
+
+    expect(res.statusCode).toBe(403);
+    expect(JSON.parse(res.body)).toMatchObject({ ok: false, error: "unsupported_platform" });
+    expect(receiveInboundEvent).not.toHaveBeenCalled();
+  });
+
+  it("applies platform aliases before inbound platform allowlists and dedupe", async () => {
+    const body = inboundBody("user-1", { platform: "tg" });
+    const receiveInboundEvent = vi.fn(async () => ({ status: "accepted" as const }));
+    setChannelBrokerRuntime({ receiveInboundEvent });
+    const res = createResponse();
+
+    await handleChannelBrokerInboundHttpRequest({
+      cfg: brokerConfig("broker-secret", {
+        platforms: ["telegram"],
+        platformAliases: { tg: "telegram" },
+      }),
+      req: createRequest({ body, signature: sign(body, "broker-secret") }),
+      res,
+    });
+
+    expect(res.statusCode).toBe(202);
+    expect(JSON.parse(res.body)).toMatchObject({
+      ok: true,
+      dedupeKey: "acme:bot-main:telegram:evt-1",
+    });
+    expect(receiveInboundEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event: expect.objectContaining({ platform: "telegram" }),
+        dedupeKey: "acme:bot-main:telegram:evt-1",
+      }),
+    );
+  });
+
+  it("rejects signed inbound events for a mismatched configured native account id", async () => {
+    const body = inboundBody("user-1", { accountId: "bot-other" });
+    const receiveInboundEvent = vi.fn();
+    setChannelBrokerRuntime({ receiveInboundEvent });
+    const res = createResponse();
+
+    await handleChannelBrokerInboundHttpRequest({
+      cfg: brokerConfig("broker-secret", { accountId: "bot-main" }),
+      req: createRequest({ body, signature: sign(body, "broker-secret") }),
+      res,
+    });
+
+    expect(res.statusCode).toBe(403);
+    expect(JSON.parse(res.body)).toMatchObject({ ok: false, error: "account_id_mismatch" });
     expect(receiveInboundEvent).not.toHaveBeenCalled();
   });
 });

@@ -52,8 +52,11 @@ function isSenderAllowed(params: {
   event: BrokerInboundEventV1;
 }): boolean {
   const allowed = params.account.allowFrom.map((value) => String(value).trim()).filter(Boolean);
-  if (allowed.length === 0 || allowed.includes("*")) {
+  if (allowed.includes("*")) {
     return true;
+  }
+  if (allowed.length === 0) {
+    return false;
   }
   const candidates = new Set([
     params.event.sender.id,
@@ -62,6 +65,35 @@ function isSenderAllowed(params: {
     params.event.message.nativeIds?.from ?? "",
   ]);
   return allowed.some((entry) => candidates.has(entry));
+}
+
+function normalizeOptionalString(value: string | undefined): string | undefined {
+  const trimmed = value?.trim();
+  return trimmed || undefined;
+}
+
+function normalizeInboundEventForAccount(params: {
+  account: ResolvedChannelBrokerAccount;
+  event: BrokerInboundEventV1;
+}): { ok: true; event: BrokerInboundEventV1 } | { ok: false; error: string; statusCode: number } {
+  const platform = params.account.platformAliases[params.event.platform] ?? params.event.platform;
+  if (params.account.platforms.length > 0 && !params.account.platforms.includes(platform)) {
+    return { ok: false, statusCode: 403, error: "unsupported_platform" };
+  }
+  const configuredAccountId = normalizeOptionalString(params.account.config.accountId);
+  if (configuredAccountId && params.event.accountId !== configuredAccountId) {
+    return { ok: false, statusCode: 403, error: "account_id_mismatch" };
+  }
+  if (platform === params.event.platform) {
+    return { ok: true, event: params.event };
+  }
+  return {
+    ok: true,
+    event: {
+      ...params.event,
+      platform,
+    },
+  };
 }
 
 function parseInboundEvent(value: unknown): BrokerInboundEventV1 {
@@ -114,6 +146,14 @@ export async function handleChannelBrokerInboundHttpRequest(params: {
   ) {
     return sendJson(params.res, 401, { ok: false, error: "invalid_signature" });
   }
+  const accountScopedEvent = normalizeInboundEventForAccount({ account, event });
+  if (!accountScopedEvent.ok) {
+    return sendJson(params.res, accountScopedEvent.statusCode, {
+      ok: false,
+      error: accountScopedEvent.error,
+    });
+  }
+  event = accountScopedEvent.event;
   if (!isSenderAllowed({ account, event })) {
     return sendJson(params.res, 403, { ok: false, error: "sender_not_allowed" });
   }
