@@ -92,21 +92,34 @@ export async function restoreCredsFromBackupIfNeeded(authDir: string): Promise<b
       return false;
     }
 
-    const backupRaw = readCredsJsonRaw(backupPath);
-    if (!backupRaw || !isValidJson(backupRaw)) {
+    if (!(await restoreWebCredsFromBackupRaw({ credsPath, backupPath }))) {
       return false;
     }
-    await writeWebCredsRawAtomically({
-      filePath: credsPath,
-      content: backupRaw,
-      tempPrefix: ".creds.restore",
-    });
     logger.warn({ credsPath }, "restored corrupted WhatsApp creds.json from backup");
     return true;
   } catch {
     // ignore
   }
   return false;
+}
+
+async function restoreWebCredsFromBackupRaw(params: {
+  backupPath: string;
+  credsPath: string;
+}): Promise<boolean> {
+  const backupRaw = readCredsJsonRaw(params.backupPath);
+  if (!backupRaw) {
+    return false;
+  }
+
+  // Ensure backup is parseable before restoring.
+  JSON.parse(backupRaw);
+  await writeWebCredsRawAtomically({
+    filePath: params.credsPath,
+    content: backupRaw,
+    tempPrefix: ".creds.restore",
+  });
+  return true;
 }
 
 async function clearOwnedWebAuthDir(params: {
@@ -176,6 +189,20 @@ export async function clearStalePhoneCodePairingAuthIfNeeded(params: {
   }
   if (!isPartialPhoneCodePairingCredsPayload(parsed)) {
     return false;
+  }
+
+  if (
+    await restoreWebCredsFromBackupRaw({
+      credsPath: resolveWebCredsPath(resolvedAuthDir),
+      backupPath: resolveWebCredsBackupPath(resolvedAuthDir),
+    }).catch(() => false)
+  ) {
+    runtime.log(
+      info(
+        "Restored WhatsApp Web credentials from backup instead of clearing partial phone-code auth.",
+      ),
+    );
+    return true;
   }
 
   const cleared = await clearOwnedWebAuthDir({
