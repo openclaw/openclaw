@@ -15,6 +15,7 @@ import { normalizeProviderModelIdWithManifest } from "./manifest-model-id-normal
 import { loadPluginMetadataSnapshot } from "./plugin-metadata-snapshot.js";
 import { resolvePluginDiscoveryProvidersRuntime } from "./provider-discovery.runtime.js";
 import {
+  clearProviderRuntimePluginCacheForTest,
   prepareProviderExtraParams,
   resolveProviderAuthProfileId,
   resolveProviderExtraParamsForTransport,
@@ -100,7 +101,11 @@ function matchesProviderPluginRef(provider: ProviderPlugin, providerId: string):
   );
 }
 
-function resolveProviderHookRefs(provider: string, providerConfig?: ModelProviderConfig, modelApi?: string): string[] {
+function resolveProviderHookRefs(
+  provider: string,
+  providerConfig?: ModelProviderConfig,
+  modelApi?: string,
+): string[] {
   const refs = [provider];
   const apiRef = normalizeOptionalString(modelApi ?? providerConfig?.api);
   if (apiRef && normalizeProviderId(apiRef) !== normalizeProviderId(provider)) {
@@ -151,6 +156,7 @@ export {
 };
 
 export const testing = {
+  clearProviderRuntimePluginCacheForTest,
   resetExternalAuthFallbackWarningCacheForTest,
 } as const;
 
@@ -854,7 +860,11 @@ export function resolveProviderSyntheticAuthWithPlugin(params: {
   context: ProviderResolveSyntheticAuthContext;
   modelApi?: string;
 }) {
-  const providerRefs = resolveProviderHookRefs(params.provider, params.context.providerConfig, params.modelApi);
+  const providerRefs = resolveProviderHookRefs(
+    params.provider,
+    params.context.providerConfig,
+    params.modelApi,
+  );
   const discoveryPluginIds = [
     ...new Set(
       providerRefs.flatMap(
@@ -996,7 +1006,11 @@ export function shouldDeferProviderSyntheticProfileAuthWithPlugin(params: {
   context: ProviderDeferSyntheticProfileAuthContext;
   modelApi?: string;
 }) {
-  const providerRefs = resolveProviderHookRefs(params.provider, params.context.providerConfig, params.modelApi);
+  const providerRefs = resolveProviderHookRefs(
+    params.provider,
+    params.context.providerConfig,
+    params.modelApi,
+  );
   for (const providerRef of providerRefs) {
     const resolved = resolveProviderRuntimePlugin({
       ...params,
