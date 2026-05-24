@@ -1959,7 +1959,9 @@ export const registerTelegramHandlers = ({
     }
     const resolveFinalButtonAckText = (data?: string | null) => {
       const value = data?.trim();
-      if (value === "Proceed" || value === "action:proceed") return "Proceeding...";
+      if (value === "Proceed" || value === "action:proceed") {
+        return "Proceeding...";
+      }
       if (value === "Status, including recommended next steps?" || value === "action:status") {
         return "Checking status...";
       }
@@ -2068,7 +2070,7 @@ export const registerTelegramHandlers = ({
       const finalButtonAckText = resolveFinalButtonAckText(data);
       if (
         finalButtonAckText !== "Received" &&
-        !(ctx as { __openclawFinalButtonAckSent?: boolean }).__openclawFinalButtonAckSent
+        !(ctx as { openclawFinalButtonAckSent?: boolean }).openclawFinalButtonAckSent
       ) {
         try {
           await replyToCallbackChat(

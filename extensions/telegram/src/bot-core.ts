@@ -221,7 +221,9 @@ export function createTelegramBotCore(
 
   const resolveFinalButtonAckText = (data?: string | null) => {
     const value = data?.trim();
-    if (value === "Proceed" || value === "action:proceed") return "Proceeding...";
+    if (value === "Proceed" || value === "action:proceed") {
+      return "Proceeding...";
+    }
     if (value === "Status, including recommended next steps?" || value === "action:status") {
       return "Checking status...";
     }
@@ -240,14 +242,14 @@ export function createTelegramBotCore(
     const message = callback?.message;
     const ackText = resolveFinalButtonAckText(callback?.data);
     if (callback?.id && message && ackText) {
-      (ctx as { __openclawFinalButtonAckSent?: boolean }).__openclawFinalButtonAckSent = true;
+      (ctx as { openclawFinalButtonAckSent?: boolean }).openclawFinalButtonAckSent = true;
+      const replyOptions =
+        message.message_thread_id != null
+          ? { message_thread_id: message.message_thread_id }
+          : undefined;
       await Promise.allSettled([
         bot.api.answerCallbackQuery(callback.id, { text: ackText }),
-        bot.api.sendMessage(message.chat.id, ackText, {
-          ...(message.message_thread_id != null
-            ? { message_thread_id: message.message_thread_id }
-            : {}),
-        }),
+        bot.api.sendMessage(message.chat.id, ackText, replyOptions),
       ]);
     }
     await next();
