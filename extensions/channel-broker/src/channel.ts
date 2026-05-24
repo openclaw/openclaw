@@ -1,4 +1,8 @@
-import { parseBrokerConversationTarget } from "openclaw/plugin-sdk/channel-broker";
+import {
+  buildBrokerConversationTarget,
+  parseBrokerConversationTarget,
+  type BrokerConversationTarget,
+} from "openclaw/plugin-sdk/channel-broker";
 import {
   buildChannelOutboundSessionRoute,
   buildThreadAwareOutboundSessionRoute,
@@ -79,6 +83,14 @@ function resolveBrokerSessionConversation(rawId: string) {
   } catch {
     return null;
   }
+}
+
+function buildCanonicalBrokerTarget(target: BrokerConversationTarget): string {
+  return buildBrokerConversationTarget({
+    platform: target.platform,
+    conversationId: target.conversationId,
+    ...(target.threadId ? { threadId: target.threadId } : {}),
+  });
 }
 
 const channelBrokerMessageAdapter = defineChannelMessageAdapter({
@@ -189,7 +201,7 @@ export const channelBrokerPlugin = createChatChannelPlugin({
         const parsed = parseChannelBrokerTarget({ rawTarget: target, account, threadId });
         const brokerConversationType = parsed.conversationType ?? "channel";
         const chatType = brokerConversationType === "thread" ? "channel" : brokerConversationType;
-        const to = normalizeBrokerTarget(target) ?? target;
+        const to = buildCanonicalBrokerTarget(parsed);
         const route = buildChannelOutboundSessionRoute({
           cfg,
           agentId,

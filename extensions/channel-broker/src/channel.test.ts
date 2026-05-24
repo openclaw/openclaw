@@ -126,6 +126,85 @@ describe("channel-broker plugin", () => {
     });
   });
 
+  it("maps broker-prefixed Telegram topics into provider thread requests", async () => {
+    const sendOutboundRequest = vi.fn(async () =>
+      createBrokerReceipt({
+        requestId: "broker-telegram-topic-1",
+        providerId: "acme",
+        platform: "Telegram",
+        status: "sent",
+        messageIds: ["telegram-message-1"],
+      }),
+    );
+    setChannelBrokerRuntime({
+      sendOutboundRequest,
+      createRequestId: () => "broker-telegram-topic-1",
+    });
+
+    await channelBrokerPlugin.message?.send?.text?.({
+      cfg: {
+        channels: {
+          "channel-broker": {
+            defaultProviderId: "acme",
+            accounts: {
+              acme: {
+                enabled: true,
+                baseUrl: "https://broker.example.test",
+                platforms: ["telegram"],
+              },
+            },
+          },
+        },
+      },
+      to: "broker:telegram:-1001234567890:topic:42",
+      text: "topic proof",
+      accountId: "acme",
+    } as never);
+
+    expect(sendOutboundRequest).toHaveBeenCalledWith({
+      account: expect.objectContaining({ providerId: "acme" }),
+      request: expect.objectContaining({
+        requestId: "broker-telegram-topic-1",
+        providerId: "acme",
+        platform: "telegram",
+        conversation: {
+          id: "-1001234567890",
+          type: "channel",
+          threadId: "42",
+        },
+        requirements: { text: true, thread: true },
+      }),
+    });
+  });
+
+  it("canonicalizes Telegram topic routes without changing native default ownership", () => {
+    const route = channelBrokerPlugin.messaging?.resolveOutboundSessionRoute?.({
+      cfg: {
+        channels: {
+          "channel-broker": {
+            accounts: {
+              acme: {
+                enabled: true,
+                baseUrl: "https://broker.example.test",
+                platforms: ["telegram"],
+              },
+            },
+          },
+        },
+      },
+      agentId: "agent",
+      accountId: "acme",
+      target: "broker:telegram:-1001234567890:topic:42",
+    } as never);
+
+    expect(route).toMatchObject({
+      chatType: "channel",
+      peer: { kind: "channel", id: "telegram:-1001234567890" },
+      to: "telegram:-1001234567890?threadId=42",
+      threadId: "42",
+    });
+  });
+
   it("passes cancellation through the default HTTP transport", async () => {
     const controller = new AbortController();
     const fetchMock = vi.fn(async () => ({
