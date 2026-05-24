@@ -35,6 +35,11 @@ import {
   normalizePluginsConfigWithRegistry,
 } from "./plugin-registry-contributions.js";
 import type { PluginRegistrySnapshot } from "./plugin-registry-snapshot.js";
+import {
+  MEMORY_PLUGIN_ROLES,
+  memoryRoleToSlotKey,
+  resolveMemoryRoleSlot,
+} from "./slot-resolution.js";
 
 export type GatewayStartupPluginPlan = {
   channelPluginIds: readonly string[];
@@ -103,7 +108,6 @@ function resolveMemorySlotStartupPluginIds(params: {
 }): Set<string> {
   const { activationSourceConfig, activationSourcePlugins, normalizePluginId } = params;
   const ids = new Set<string>();
-  const slots = activationSourceConfig.plugins?.slots ?? {};
   const addSlot = (slot: string | null | undefined) => {
     if (typeof slot !== "string") {
       return;
@@ -121,11 +125,30 @@ function resolveMemorySlotStartupPluginIds(params: {
     ids.add(normalized);
   };
 
+  const addConfiguredAgentRoleSlots = (agentId: string, slots: Record<string, unknown>) => {
+    for (const role of MEMORY_PLUGIN_ROLES) {
+      const slotKey = memoryRoleToSlotKey(role);
+      if (
+        Object.prototype.hasOwnProperty.call(slots, slotKey) ||
+        (role === "recall" && Object.prototype.hasOwnProperty.call(slots, "memory"))
+      ) {
+        addSlot(resolveMemoryRoleSlot({ cfg: activationSourceConfig, role, agentId }));
+      }
+    }
+  };
+
+  const slots = activationSourceConfig.plugins?.slots ?? {};
   addSlot(slots["memory.recall"] ?? slots.memory);
   addSlot(slots["memory.compaction"]);
   addSlot(slots["memory.capture"]);
   addSlot(slots["memory.dreaming"]);
   addSlot(slots["memory.userModel"]);
+  for (const agent of activationSourceConfig.agents?.list ?? []) {
+    const agentId = typeof agent?.id === "string" ? agent.id.trim() : "";
+    if (agentId && agent.plugins?.slots) {
+      addConfiguredAgentRoleSlots(agentId, agent.plugins.slots);
+    }
+  }
 
   if (!slots["memory.recall"] && !slots.memory) {
     const defaultSlot = activationSourcePlugins.slots["memory.recall"];
@@ -941,6 +964,33 @@ function canStartConfiguredChannelPlugin(params: {
   return activationState.enabled && activationState.explicitlyEnabled;
 }
 
+function canStartMemorySlotPlugin(params: {
+  plugin: InstalledPluginIndexRecord;
+  pluginsConfig: NormalizedPluginsConfig;
+  activationSourcePlugins: NormalizedPluginsConfig;
+  memorySlotStartupPluginIds: ReadonlySet<string>;
+}): boolean {
+  if (!params.memorySlotStartupPluginIds.has(params.plugin.pluginId)) {
+    return false;
+  }
+  if (!params.pluginsConfig.enabled || !params.activationSourcePlugins.enabled) {
+    return false;
+  }
+  if (
+    params.pluginsConfig.deny.includes(params.plugin.pluginId) ||
+    params.activationSourcePlugins.deny.includes(params.plugin.pluginId)
+  ) {
+    return false;
+  }
+  if (
+    params.pluginsConfig.entries[params.plugin.pluginId]?.enabled === false ||
+    params.activationSourcePlugins.entries[params.plugin.pluginId]?.enabled === false
+  ) {
+    return false;
+  }
+  return true;
+}
+
 export function resolveChannelPluginIds(params: {
   config: OpenClawConfig;
   workspaceDir?: string;
@@ -1228,6 +1278,16 @@ export function resolveGatewayStartupPluginPlanFromRegistry(params: {
         })
       ) {
         return false;
+      }
+      if (
+        canStartMemorySlotPlugin({
+          plugin,
+          pluginsConfig,
+          activationSourcePlugins,
+          memorySlotStartupPluginIds,
+        })
+      ) {
+        return true;
       }
       const activationState = resolveEffectivePluginActivationState({
         id: plugin.pluginId,

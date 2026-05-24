@@ -1108,6 +1108,28 @@ describe("resolveGatewayStartupPluginIds", () => {
     });
   });
 
+  it("starts memory plugins selected only by per-agent role slot overrides", () => {
+    expectStartupPluginIdsCase({
+      config: {
+        channels: {},
+        plugins: {
+          slots: { "memory.recall": "none" },
+        },
+        agents: {
+          list: [
+            {
+              id: "research",
+              plugins: {
+                slots: { "memory.capture": "memory-lancedb" },
+              },
+            },
+          ],
+        },
+      } as OpenClawConfig,
+      expected: ["browser", "memory-lancedb"],
+    });
+  });
+
   it("skips startup when activation.onStartup is false", () => {
     expectStartupPluginIdsCase({
       config: createStartupConfig({
