@@ -500,6 +500,34 @@ describe("gateway sessions patch", () => {
     expect(entry.liveModelSwitchPending).toBeUndefined();
   });
 
+  test("treats an explicit configured-default sessions.patch model as a clear alias", async () => {
+    const store: Record<string, SessionEntry> = {
+      [MAIN_SESSION_KEY]: {
+        sessionId: "sess-default-alias-clear",
+        updatedAt: 1,
+        providerOverride: "anthropic",
+        modelOverride: "claude-sonnet-4-6",
+        modelOverrideSource: "user",
+      } as SessionEntry,
+    };
+    const entry = expectPatchOk(
+      await runPatch({
+        store,
+        cfg: createAllowlistedAnthropicModelCfg(),
+        patch: { key: MAIN_SESSION_KEY, model: "openai/gpt-5.4" },
+        loadGatewayModelCatalog: async () => [
+          { provider: "openai", id: "gpt-5.4", name: "gpt-5.4" },
+          { provider: "anthropic", id: "claude-sonnet-4-6", name: "claude-sonnet-4-6" },
+        ],
+      }),
+    );
+
+    expect(entry.providerOverride).toBeUndefined();
+    expect(entry.modelOverride).toBeUndefined();
+    expect(entry.modelOverrideSource).toBeUndefined();
+    expect(entry.liveModelSwitchPending).toBe(true);
+  });
+
   test.each([
     {
       name: "accepts explicit allowlisted provider/model refs from sessions.patch",
