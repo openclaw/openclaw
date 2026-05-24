@@ -637,6 +637,79 @@ describe("DiscordVoiceManager", () => {
     });
   });
 
+  it("keeps realtime playback alive when meeting notes attaches to an existing voice session", async () => {
+    const manager = createManager({
+      groupPolicy: "open",
+      voice: {
+        enabled: true,
+        mode: "agent-proxy",
+        realtime: { provider: "openai", consultPolicy: "auto" },
+      },
+    });
+
+    await manager.join({ guildId: "g1", channelId: "1001" });
+    const player = getLastAudioPlayer();
+    const entry = getSessionEntry(manager) as {
+      meetingNotes?: { sessionId: string; onUtterance: (event: unknown) => Promise<void> };
+      realtime?: {
+        beginSpeakerTurn: (
+          context: { extraSystemPrompt?: string; senderIsOwner: boolean; speakerLabel: string },
+          userId: string,
+        ) => { close: () => void; sendInputAudio: (audio: Buffer) => void };
+      };
+    };
+    const bridgeParams = lastRealtimeBridgeParams() as
+      | {
+          audioSink?: { sendAudio: (audio: Buffer) => void };
+          onTranscript?: (role: "user" | "assistant", text: string, isFinal: boolean) => void;
+        }
+      | undefined;
+
+    bridgeParams?.audioSink?.sendAudio(Buffer.alloc(24_000));
+    const stopCallsBeforeMeetingNotes = player.stop.mock.calls.length;
+    const onUtterance = vi.fn(async () => undefined);
+
+    const result = await manager.join(
+      { guildId: "g1", channelId: "1001" },
+      {
+        meetingNotes: {
+          sessionId: "notes-1",
+          onUtterance,
+        },
+      },
+    );
+
+    expect(result.ok).toBe(true);
+    expect(entry.meetingNotes?.sessionId).toBe("notes-1");
+    expect(realtimeSessionMock.close).not.toHaveBeenCalled();
+    expect(player.stop).toHaveBeenCalledTimes(stopCallsBeforeMeetingNotes);
+
+    const turn = entry.realtime?.beginSpeakerTurn(
+      { extraSystemPrompt: undefined, senderIsOwner: true, speakerLabel: "Owner" },
+      "u-owner",
+    );
+    turn?.sendInputAudio(Buffer.alloc(3840));
+    bridgeParams?.onTranscript?.("user", "meeting note transcript", true);
+
+    await vi.waitFor(() =>
+      expect(onUtterance).toHaveBeenCalledWith(
+        expect.objectContaining({
+          final: true,
+          sessionId: "notes-1",
+          speaker: { id: "u-owner", label: "Owner" },
+          text: "meeting note transcript",
+          metadata: expect.objectContaining({
+            channel: "discord",
+            channelId: "1001",
+            guildId: "g1",
+            voiceSessionKey: "discord:g1:c1",
+          }),
+        }),
+      ),
+    );
+    turn?.close();
+  });
+
   it("destroys stale tracked voice connections before joining", async () => {
     const staleConnection = createConnectionMock();
     const connection = createConnectionMock();
@@ -1770,8 +1843,7 @@ describe("DiscordVoiceManager", () => {
       },
       realtimeSessionMock,
     );
-    expect(player.stop).toHaveBeenCalledTimes(stopCallsBeforeConsult + 1);
-    expect(player.stop).toHaveBeenLastCalledWith(true);
+    expect(player.stop).toHaveBeenCalledTimes(stopCallsBeforeConsult);
     await vi.waitFor(() =>
       expect(realtimeSessionMock.submitToolResult).toHaveBeenCalledWith("call-1", {
         text: "agent proxy answer",

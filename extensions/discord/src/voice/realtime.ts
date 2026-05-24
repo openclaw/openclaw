@@ -979,7 +979,6 @@ export class DiscordRealtimeVoiceSession implements VoiceRealtimeSession {
       session.submitToolResult(callId, { text: exactSpeechText });
       return;
     }
-    this.clearConsultPreambleAudio(callId);
     const consultMessage = buildRealtimeVoiceAgentConsultChatMessage(event.args);
     logger.info(
       `discord voice: realtime consult requested call=${callId || "unknown"} voiceSession=${this.params.entry.voiceSessionKey} supervisorSession=${this.params.entry.route.sessionKey} agent=${this.params.entry.route.agentId} question=${formatRealtimeLogPreview(consultMessage)}`,
@@ -1042,16 +1041,6 @@ export class DiscordRealtimeVoiceSession implements VoiceRealtimeSession {
       });
   }
 
-  private clearConsultPreambleAudio(callId: string): void {
-    if (!this.hasInterruptibleOutputAudio()) {
-      return;
-    }
-    logger.info(
-      `discord voice: realtime consult preamble audio cleared call=${callId} guild=${this.params.entry.guildId} channel=${this.params.entry.channelId}`,
-    );
-    this.clearOutputAudio("agent-consult-start");
-  }
-
   private async handleAgentControlToolCall(
     event: RealtimeVoiceToolCallEvent,
     session: RealtimeVoiceBridgeSession,
@@ -1095,6 +1084,8 @@ export class DiscordRealtimeVoiceSession implements VoiceRealtimeSession {
     if (!trimmed) {
       return;
     }
+    const meetingNotesTurn = this.peekPendingSpeakerTurn();
+    this.recordMeetingNotesUtterance(trimmed, meetingNotesTurn);
     const usesAgentProxy = isDiscordAgentProxyVoiceMode(this.params.mode);
     const pendingForcedConsult =
       usesAgentProxy && params.usesRealtimeAgentHandoff
@@ -1131,6 +1122,37 @@ export class DiscordRealtimeVoiceSession implements VoiceRealtimeSession {
       return;
     }
     this.talkback.enqueue(trimmed, this.consumePendingSpeakerContext());
+  }
+
+  private recordMeetingNotesUtterance(text: string, turn: PendingSpeakerTurn | undefined): void {
+    const meetingNotes = this.params.entry.meetingNotes;
+    if (!meetingNotes || !turn) {
+      return;
+    }
+    const context = turn.context;
+    const utterance = {
+      sessionId: meetingNotes.sessionId,
+      startedAt: new Date(turn.startedAt).toISOString(),
+      final: true,
+      speaker: {
+        id: context.userId,
+        label: context.speakerLabel,
+      },
+      text,
+      metadata: {
+        channel: "discord",
+        guildId: this.params.entry.guildId,
+        channelId: this.params.entry.channelId,
+        voiceSessionKey: this.params.entry.voiceSessionKey,
+      },
+    };
+    void Promise.resolve()
+      .then(() => meetingNotes.onUtterance(utterance))
+      .catch((error: unknown) => {
+        logger.warn(
+          `discord voice: realtime meeting notes utterance failed: ${formatErrorMessage(error)}`,
+        );
+      });
   }
 
   private logAgentControlResult(result: RealtimeVoiceAgentControlResult): void {
@@ -1288,6 +1310,12 @@ export class DiscordRealtimeVoiceSession implements VoiceRealtimeSession {
     const [turn] = this.pendingSpeakerTurns.splice(index, 1);
     this.prunePendingSpeakerTurns();
     return turn?.context;
+  }
+
+  private peekPendingSpeakerTurn(): PendingSpeakerTurn | undefined {
+    this.prunePendingSpeakerTurns();
+    this.expireClosedSpeakerTurnsBeforeLaterAudio();
+    return this.pendingSpeakerTurns.find((turn) => turn.hasAudio);
   }
 
   private hasPendingSpeakerAudioContext(): boolean {

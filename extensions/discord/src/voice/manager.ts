@@ -448,8 +448,6 @@ export class DiscordVoiceManager {
     const existing = this.sessions.get(guildId);
     if (existing && existing.channelId === channelId) {
       if (options?.meetingNotes) {
-        existing.realtime?.close();
-        existing.realtime = undefined;
         existing.meetingNotes = options.meetingNotes;
       }
       logVoiceVerbose(`join: already connected to guild ${guildId} channel ${channelId}`);
