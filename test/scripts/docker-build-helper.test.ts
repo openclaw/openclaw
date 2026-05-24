@@ -6,6 +6,7 @@ import { describe, expect, it } from "vitest";
 
 const HELPER_PATH = "scripts/lib/docker-build.sh";
 const DOCKER_ALL_SCHEDULER_PATH = "scripts/test-docker-all.mjs";
+const DOCKER_E2E_PACKAGE_HELPER_PATH = "scripts/lib/docker-e2e-package.sh";
 const DOCKER_E2E_IMAGE_HELPER_PATH = "scripts/lib/docker-e2e-image.sh";
 const DOCKER_E2E_SCENARIOS_PATH = "scripts/lib/docker-e2e-scenarios.mjs";
 const INSTALL_E2E_RUNNER_PATH = "scripts/docker/install-sh-e2e/run.sh";
@@ -17,6 +18,10 @@ const OPENAI_WEB_SEARCH_MINIMAL_SCENARIO_PATH =
 const OPENAI_WEB_SEARCH_MINIMAL_CLIENT_PATH =
   "scripts/e2e/lib/openai-web-search-minimal/client.mjs";
 const OPENWEBUI_DOCKER_E2E_PATH = "scripts/e2e/openwebui-docker.sh";
+const PLUGIN_BINDING_COMMAND_ESCAPE_DOCKER_E2E_PATH =
+  "scripts/e2e/plugin-binding-command-escape-docker.sh";
+const PLUGIN_BINDING_COMMAND_ESCAPE_DOCKERFILE_PATH =
+  "scripts/e2e/plugin-binding-command-escape.Dockerfile";
 const BUNDLED_PLUGIN_INSTALL_UNINSTALL_E2E_PATH =
   "scripts/e2e/bundled-plugin-install-uninstall-docker.sh";
 const BUNDLED_PLUGIN_INSTALL_UNINSTALL_SWEEP_PATH =
@@ -122,6 +127,14 @@ describe("docker build helper", () => {
       expect(copyIndex, script).toBeGreaterThanOrEqual(0);
       expect(copyIndex, script).toBeLessThan(installIndex);
     }
+  });
+
+  it("mounts root helper modules imported by bare Docker E2E scripts", () => {
+    const helper = readFileSync(DOCKER_E2E_PACKAGE_HELPER_PATH, "utf8");
+
+    expect(helper).toContain(
+      '-v "$ROOT_DIR/scripts/windows-cmd-helpers.mjs:/app/scripts/windows-cmd-helpers.mjs:ro"',
+    );
   });
 
   it("preserves pnpm lookup paths for scheduled Docker child lanes", () => {
@@ -372,6 +385,17 @@ describe("docker build helper", () => {
     expect(clawhub).toContain('[[ -n "${OPENCLAW_CLAWHUB_URL:-}" || -n "${CLAWHUB_URL:-}" ]]');
     expect(clawhub).toContain("Ignoring ambient ClawHub URL for fixture-mode plugin E2E");
     expect(clawhub).toContain("unset OPENCLAW_CLAWHUB_URL CLAWHUB_URL");
+  });
+
+  it("keeps the plugin binding command escape Docker smoke focused", () => {
+    const runner = readFileSync(PLUGIN_BINDING_COMMAND_ESCAPE_DOCKER_E2E_PATH, "utf8");
+    const dockerfile = readFileSync(PLUGIN_BINDING_COMMAND_ESCAPE_DOCKERFILE_PATH, "utf8");
+
+    expect(runner).toContain("--reporter=verbose -t");
+    expect(runner).not.toContain("-- --reporter=verbose");
+    expect(runner).toContain("expected focused Vitest summary for exactly 3 passed tests");
+    expect(dockerfile).toContain("OPENCLAW_DISABLE_BUNDLED_PLUGIN_POSTINSTALL=1");
+    expect(dockerfile).toContain("pnpm install --frozen-lockfile --ignore-scripts --filter openclaw");
   });
 
   it("covers plugin install/update sources in the Docker plugin sweep", () => {

@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import { resolveHumanDelayConfig } from "openclaw/plugin-sdk/agent-runtime";
+import { CHANNEL_APPROVAL_NATIVE_RUNTIME_CONTEXT_CAPABILITY } from "openclaw/plugin-sdk/approval-handler-runtime";
 import { logTypingFailure } from "openclaw/plugin-sdk/channel-feedback";
 import {
   createChannelInboundDebouncer,
@@ -10,6 +11,7 @@ import {
   createChannelMessageReplyPipeline,
 } from "openclaw/plugin-sdk/channel-message";
 import { createChannelPairingChallengeIssuer } from "openclaw/plugin-sdk/channel-pairing";
+import { registerChannelRuntimeContext } from "openclaw/plugin-sdk/channel-runtime-context";
 import {
   readChannelAllowFromStore,
   upsertChannelPairingRequest,
@@ -36,6 +38,7 @@ import { readSessionUpdatedAt, resolveStorePath } from "openclaw/plugin-sdk/sess
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { waitForTransportReady } from "openclaw/plugin-sdk/transport-ready-runtime";
 import { resolveIMessageAccount } from "../accounts.js";
+import { maybeResolveIMessageApprovalReaction } from "../approval-reactions.js";
 import { markIMessageChatRead, sendIMessageTyping } from "../chat.js";
 import { createIMessageRpcClient, type IMessageRpcClient } from "../client.js";
 import { DEFAULT_IMESSAGE_PROBE_TIMEOUT_MS } from "../constants.js";
@@ -459,6 +462,24 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
         ? "<media:attachment>"
         : "";
     const bodyText = messageText || placeholder;
+
+    // Approval reaction shortcut: if the inbound tapback resolves a pending
+    // approval prompt, route it through the gateway and skip the normal
+    // dispatch pipeline. This bypasses reactionNotifications gating so
+    // approvals still work when general reaction surfacing is off, and it
+    // bypasses allowFrom/dmPolicy because the approval-reactions module
+    // enforces its own actor authorization via channels.imessage.allowFrom.
+    if (
+      await maybeResolveIMessageApprovalReaction({
+        cfg,
+        accountId: accountInfo.accountId,
+        message,
+        bodyText,
+        logVerboseMessage: logVerbose,
+      })
+    ) {
+      return;
+    }
 
     const storeAllowFrom = await readChannelAllowFromStore(
       "imessage",
@@ -974,6 +995,23 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
     return;
   }
 
+  // Register the iMessage approval native runtime context with the gateway so
+  // proactive exec/plugin approval prompts can be delivered through the
+  // imessageApprovalCapability's lazy nativeRuntime adapter. Without this
+  // registration the adapter's `Boolean(context)` gates always fail and the
+  // gateway can never push native approval prompts to iMessage targets — only
+  // the reaction shortcut and `/approve` text fallback would work.
+  const approvalContextLease = opts.channelRuntime
+    ? registerChannelRuntimeContext({
+        channelRuntime: opts.channelRuntime,
+        channelId: "imessage",
+        accountId: accountInfo.accountId,
+        capability: CHANNEL_APPROVAL_NATIVE_RUNTIME_CONTEXT_CAPABILITY,
+        context: { accountId: accountInfo.accountId },
+        abortSignal: abort,
+      })
+    : undefined;
+
   // Catchup runs once between watch.subscribe and the live dispatch loop.
   // Anything that arrives during the catchup pass itself flows through
   // `handleMessage` -> `handleMessageNow`; the inbound-dedupe cache absorbs
@@ -1021,6 +1059,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
     runtime.error?.(danger(`imessage: monitor failed: ${String(err)}`));
     throw err;
   } finally {
+    approvalContextLease?.dispose();
     detachAbortHandler();
     await activeClient.stop();
   }

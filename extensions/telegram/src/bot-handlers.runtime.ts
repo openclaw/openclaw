@@ -89,6 +89,8 @@ import {
   resolveTelegramForumFlag,
   resolveTelegramForumThreadId,
   resolveTelegramGroupAllowFromContext,
+  loadTelegramPairingStoreIfNeeded,
+  TelegramPairingStoreReadError,
   shouldUseTelegramDmThreadSession,
   withResolvedTelegramForumFlag,
 } from "./bot/helpers.js";
@@ -935,7 +937,7 @@ export const registerTelegramHandlers = ({
         date: last.msg.date ?? first.msg.date,
       });
 
-      const storeAllowFrom = await loadStoreAllowFrom();
+      const storeAllowFrom = await loadStoreAllowFrom(first.msg);
       const baseCtx = first.ctx;
 
       const syntheticCtx = buildSyntheticContext(baseCtx, syntheticMessage);
@@ -976,8 +978,29 @@ export const registerTelegramHandlers = ({
     }, TELEGRAM_TEXT_FRAGMENT_MAX_GAP_MS);
   };
 
-  const loadStoreAllowFrom = async () =>
-    telegramDeps.readChannelAllowFromStore("telegram", process.env, accountId).catch(() => []);
+  const loadStoreAllowFrom = async (msg: Message) => {
+    const isGroup = msg.chat.type === "group" || msg.chat.type === "supergroup";
+    const { groupConfig, topicConfig } = resolveTelegramGroupConfig(
+      msg.chat.id,
+      msg.message_thread_id,
+    );
+    const groupAllowOverride = firstDefined(topicConfig?.allowFrom, groupConfig?.allowFrom);
+    const effectiveDmPolicy = resolveTelegramEffectiveDmPolicy({
+      isGroup,
+      groupConfig,
+      dmPolicy: telegramCfg.dmPolicy,
+    });
+    return loadTelegramPairingStoreIfNeeded({
+      cfg,
+      allowFrom,
+      groupAllowOverride,
+      accountId,
+      senderId: msg.from?.id != null ? String(msg.from.id) : undefined,
+      isGroup,
+      effectiveDmPolicy,
+      readChannelAllowFromStore: telegramDeps.readChannelAllowFromStore,
+    });
+  };
 
   const recordMessageForReplyChain = (msg: Message, threadId?: number) =>
     messageCache.record({
@@ -1318,6 +1341,8 @@ export const registerTelegramHandlers = ({
         cfg,
         chatId: params.chatId,
         accountId,
+        dmPolicy: telegramCfg.dmPolicy,
+        allowFrom,
         senderId: params.senderId,
         isGroup: params.isGroup,
         isForum: params.isForum,
@@ -2875,6 +2900,23 @@ export const registerTelegramHandlers = ({
     } catch (err) {
       releaseDispatchDedupeKeys(dispatchDedupeKeys, err);
       runtime.error?.(danger(`${event.errorMessage}: ${String(err)}`));
+      if (err instanceof TelegramPairingStoreReadError) {
+        await withTelegramApiErrorLogging({
+          operation: "sendMessage",
+          runtime,
+          fn: () =>
+            bot.api.sendMessage(
+              event.chatId,
+              "⚠️ Couldn't process this message, please try again in a moment.",
+              {
+                reply_parameters: {
+                  message_id: event.msg.message_id,
+                  allow_sending_without_reply: true,
+                },
+              },
+            ),
+        }).catch(() => {});
+      }
     }
   };
 

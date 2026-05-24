@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { spawn, spawnSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
+import { accessSync, constants, mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, dirname, extname, isAbsolute, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -8,7 +8,9 @@ import { resolvePathEnvKey } from "./windows-cmd-helpers.mjs";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const repoLocal = resolveCrabboxBinary(process.env, process.platform);
-const binary = repoLocal ?? resolvePathBinary("crabbox", process.env, process.platform);
+const pathLocal = resolvePathBinary("crabbox", process.env, process.platform);
+const binary =
+  repoLocal ?? pathLocal ?? resolveGitCommonCrabboxBinary(process.env, process.platform) ?? "crabbox";
 const args = process.argv.slice(2);
 
 if (args[0] === "--") {
@@ -32,7 +34,7 @@ function commandCandidates(command, platform) {
 function resolveCrabboxBinary(env, platform) {
   const base = resolve(repoRoot, "../crabbox/bin/crabbox");
   for (const candidate of commandCandidates(base, platform)) {
-    if (isFile(candidate)) {
+    if (isExecutableFile(candidate, platform)) {
       return candidate;
     }
   }
@@ -40,29 +42,55 @@ function resolveCrabboxBinary(env, platform) {
 }
 
 function resolvePathBinary(command, env, platform) {
-  if (platform !== "win32") {
-    return command;
-  }
-  for (const candidate of commandCandidates(command, platform)) {
-    if (isFile(candidate)) {
-      return candidate;
-    }
-  }
   const pathValue = env[resolvePathEnvKey(env)] ?? "";
   for (const dir of pathValue.split(delimiter).filter(Boolean)) {
     for (const candidate of commandCandidates(command, platform)) {
       const fullPath = resolve(dir, candidate);
-      if (isFile(fullPath)) {
+      if (isExecutableFile(fullPath, platform)) {
         return fullPath;
       }
     }
   }
-  return command;
+  return null;
 }
 
-function isFile(path) {
+function resolveGitCommonCrabboxBinary(env, platform) {
+  const gitBinary = resolvePathBinary("git", env, platform) ?? "git";
+  const invocation = spawnInvocation(gitBinary, ["rev-parse", "--git-common-dir"], env, platform);
+  const result = spawnSync(invocation.command, invocation.args, {
+    cwd: repoRoot,
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "ignore"],
+    windowsVerbatimArguments: invocation.windowsVerbatimArguments,
+  });
+  if ((result.status ?? 1) !== 0) {
+    return null;
+  }
+  const gitCommonDir = result.stdout.trim();
+  if (!gitCommonDir) {
+    return null;
+  }
+  const absoluteGitCommonDir = isAbsolute(gitCommonDir)
+    ? gitCommonDir
+    : resolve(repoRoot, gitCommonDir);
+  const base = resolve(absoluteGitCommonDir, "../..", "crabbox/bin/crabbox");
+  for (const candidate of commandCandidates(base, platform)) {
+    if (isExecutableFile(candidate, platform)) {
+      return candidate;
+    }
+  }
+  return null;
+}
+
+function isExecutableFile(path, platform) {
   try {
-    return statSync(path).isFile();
+    if (!statSync(path).isFile()) {
+      return false;
+    }
+    if (platform !== "win32") {
+      accessSync(path, constants.X_OK);
+    }
+    return true;
   } catch {
     return false;
   }
@@ -116,7 +144,7 @@ function checkedOutput(command, commandArgs) {
 }
 
 function gitOutput(commandArgs) {
-  const gitBinary = resolvePathBinary("git", process.env, process.platform);
+  const gitBinary = resolvePathBinary("git", process.env, process.platform) ?? "git";
   const invocation = spawnInvocation(gitBinary, commandArgs, process.env, process.platform);
   const result = spawnSync(invocation.command, invocation.args, {
     cwd: repoRoot,
@@ -357,6 +385,31 @@ function hasOption(commandArgs, name) {
     }
   }
   return false;
+}
+
+function commandOptionEnd(commandArgs) {
+  if (commandArgs[0] === "run") {
+    return runCommandBounds(commandArgs).optionEnd;
+  }
+  const delimiter = commandArgs.indexOf("--");
+  return delimiter >= 0 ? delimiter : commandArgs.length;
+}
+
+function ensureAwsMacOnDemandMarket(commandArgs, providerName) {
+  if (
+    !["run", "warmup"].includes(commandArgs[0]) ||
+    providerName !== "aws" ||
+    optionValue(commandArgs, "--target") !== "macos" ||
+    hasOption(commandArgs, "--market") ||
+    hasOption(commandArgs, "--id")
+  ) {
+    return commandArgs;
+  }
+
+  const optionEnd = commandOptionEnd(commandArgs);
+  const normalizedArgs = [...commandArgs];
+  normalizedArgs.splice(optionEnd, 0, "--market", "on-demand");
+  return normalizedArgs;
 }
 
 const localPathRunOptions = new Set([
@@ -641,6 +694,7 @@ const providers = parseProvidersFromHelp(help.text);
 const displayBinary = binary === "crabbox" ? "crabbox" : relative(repoRoot, binary);
 const provider = selectedProvider(args);
 const commandProviderValue = commandProvider(args);
+const normalizedArgs = ensureAwsMacOnDemandMarket(args, provider);
 
 console.error(
   `[crabbox] bin=${displayBinary} version=${version.text || "unknown"} provider=${provider || "unknown"} providers=${providers.join(",") || "unknown"}`,
@@ -684,8 +738,8 @@ if (provider === "blacksmith-testbox") {
 let childCwd = repoRoot;
 let cleanupChildCwd = () => {};
 let cleanupDone = false;
-if (shouldUseFullCheckoutForCleanSparseRemoteSync(args, provider)) {
-  const runWords = runCommandArgs(args);
+if (shouldUseFullCheckoutForCleanSparseRemoteSync(normalizedArgs, provider)) {
+  const runWords = runCommandArgs(normalizedArgs);
   const changedGateBase =
     isChangedGateCommand(runWords) && !headInRemoteRefs() ? mergeBaseForChangedGate() : "";
   const checkout = prepareFullCheckoutForSync({ changedGateBase });
@@ -709,9 +763,9 @@ function cleanupOnce() {
   cleanupChildCwd();
 }
 
-const runtimeEntrypoint = commandRuntimeEntrypoint(runCommandArgs(args));
-if (args[0] === "run" && provider === "aws" && runtimeEntrypoint) {
-  const id = optionValue(args, "--id");
+const runtimeEntrypoint = commandRuntimeEntrypoint(runCommandArgs(normalizedArgs));
+if (normalizedArgs[0] === "run" && provider === "aws" && runtimeEntrypoint) {
+  const id = optionValue(normalizedArgs, "--id");
   const hydrate = id
     ? `pnpm crabbox:hydrate -- --id ${id}`
     : "pnpm crabbox:warmup, then pnpm crabbox:hydrate -- --id <id>";
@@ -724,7 +778,7 @@ const childEnv = { ...process.env };
 if (
   isLocalContainerProvider(provider) &&
   !childEnv.CRABBOX_LOCAL_CONTAINER_DOCKER_SOCKET &&
-  !hasOption(args, "--local-container-docker-socket")
+  !hasOption(normalizedArgs, "--local-container-docker-socket")
 ) {
   childEnv.CRABBOX_LOCAL_CONTAINER_DOCKER_SOCKET = "1";
   console.error(
@@ -735,7 +789,7 @@ if (
   isLocalContainerProvider(provider) &&
   process.platform !== "win32" &&
   !childEnv.CRABBOX_LOCAL_CONTAINER_WORK_ROOT &&
-  !hasOption(args, "--local-container-work-root")
+  !hasOption(normalizedArgs, "--local-container-work-root")
 ) {
   childEnv.CRABBOX_LOCAL_CONTAINER_WORK_ROOT = "/tmp/openclaw-crabbox-docker-work";
   console.error(
@@ -743,7 +797,7 @@ if (
   );
 }
 
-const childArgs = childCwd === repoRoot ? args : absolutizeLocalRunPaths(args);
+const childArgs = childCwd === repoRoot ? normalizedArgs : absolutizeLocalRunPaths(normalizedArgs);
 const childInvocation = spawnInvocation(binary, childArgs, childEnv, process.platform);
 const child = spawn(childInvocation.command, childInvocation.args, {
   cwd: childCwd,
