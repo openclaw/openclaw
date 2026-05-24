@@ -689,7 +689,7 @@ describe("tui-event-handlers: handleAgentEvent", () => {
     );
   });
 
-  it("refreshes history after a non-local chat final", () => {
+  it("does not refresh history after a displayable non-local chat final", () => {
     const { state, loadHistory, handleChatEvent } = createHandlersHarness({
       state: { activeChatRunId: null },
     });
@@ -701,7 +701,7 @@ describe("tui-event-handlers: handleAgentEvent", () => {
       message: { content: [{ type: "text", text: "done" }] },
     });
 
-    expect(loadHistory).toHaveBeenCalledTimes(1);
+    expect(loadHistory).not.toHaveBeenCalled();
   });
 
   it("forces render when a command final only adds system text", () => {
@@ -724,7 +724,7 @@ describe("tui-event-handlers: handleAgentEvent", () => {
     expect(tui.requestRender).toHaveBeenCalledWith(true);
   });
 
-  it("binds optimistic pending messages to the first gateway run id and skips history reload", () => {
+  it("binds optimistic pending messages to the first gateway run id, clears it after final, and skips history reload", () => {
     const { state, loadHistory, isLocalRunId, handleChatEvent } = createHandlersHarness({
       state: { activeChatRunId: null, pendingOptimisticUserMessage: true },
     });
