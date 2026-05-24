@@ -11,11 +11,6 @@ export type ModelRuntimePolicySource = "model" | "provider";
 export type ResolvedModelRuntimePolicy = {
   policy?: AgentRuntimePolicyConfig;
   source?: ModelRuntimePolicySource;
-  /**
-   * Provider id from the matched entry key (e.g. "anthropic" for an
-   * `anthropic/foo` agent model entry). Lets downstream resolvers validate
-   * provider/runtime pairings when the caller passed an empty provider.
-   */
   matchedProvider?: string;
 };
 
@@ -87,6 +82,24 @@ function parseProviderModelKey(key: string): { provider: string; modelId: string
 
 function providerMatchesCaller(provider: string, callerProvider: string): boolean {
   return !callerProvider || provider === callerProvider;
+}
+
+function resolvePolicyMatch(
+  matches: AgentModelRuntimePolicyMatch[],
+  callerProvider: string,
+): AgentModelRuntimePolicyResolution {
+  const [first] = matches;
+  if (!first) {
+    return {};
+  }
+  if (!callerProvider && matches.some((match) => match.provider !== first.provider)) {
+    return { ambiguous: true };
+  }
+  return {
+    policy: first.policy,
+    source: "model",
+    matchedProvider: first.provider || callerProvider,
+  };
 }
 
 function modelEntryMatches(params: {
@@ -184,25 +197,10 @@ function resolveAgentModelEntryRuntimePolicy(params: {
       }
       scopeMatches.push({ provider: parseProviderModelKey(key)?.provider ?? "", policy });
     }
-    if (scopeMatches.length === 0) {
-      continue;
+    const resolved = resolvePolicyMatch(scopeMatches, callerProvider);
+    if (resolved.policy || resolved.ambiguous) {
+      return resolved;
     }
-    if (callerProvider) {
-      return {
-        policy: scopeMatches[0].policy,
-        source: "model",
-        matchedProvider: scopeMatches[0].provider || callerProvider,
-      };
-    }
-    const distinctProviders = new Set(scopeMatches.map((m) => m.provider));
-    if (distinctProviders.size > 1) {
-      return { ambiguous: true };
-    }
-    return {
-      policy: scopeMatches[0].policy,
-      source: "model",
-      matchedProvider: scopeMatches[0].provider,
-    };
   }
   return {};
 }

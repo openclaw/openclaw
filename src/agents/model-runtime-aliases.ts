@@ -288,11 +288,6 @@ export function resolveCliRuntimeExecutionProvider(params: {
   if (!runtime || runtime === "auto") {
     return resolveCliRuntimeFromAuthProfile({ ...params, provider });
   }
-  // When the caller provider is empty (legacy session entries that stored a
-  // bare model id without a provider prefix), validate the CLI runtime against
-  // the provider carried forward from the matched policy entry. This rejects
-  // misconfigured pairings like `agents.defaults.models["openrouter/X"]:
-  // claude-cli` (claude-cli is only a legal runtime for anthropic).
   const effectiveProvider = provider || normalizeProviderId(matchedProvider ?? "");
   if (!effectiveProvider) {
     return undefined;

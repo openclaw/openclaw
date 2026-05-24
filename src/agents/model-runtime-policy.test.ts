@@ -338,13 +338,13 @@ describe("resolveModelRuntimePolicy", () => {
     });
   });
 
-  it("does not fall back to a provider wildcard when exact bare-model matches are ambiguous", () => {
+  it("fails closed for duplicate provider-prefixed bare-model policies", () => {
     const config = {
       agents: {
         defaults: {
           models: {
             "openai/foo-1": { agentRuntime: { id: "codex" } },
-            "azure/foo-1": { agentRuntime: { id: "codex" } },
+            "anthropic/foo-1": { agentRuntime: { id: "claude-cli" } },
             "anthropic/*": { agentRuntime: { id: "claude-cli" } },
           },
         },
