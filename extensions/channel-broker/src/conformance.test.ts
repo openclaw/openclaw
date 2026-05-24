@@ -507,7 +507,7 @@ describe("channel-broker conformance baseline", () => {
   });
 
   it("models constrained providers with explicit broker constraints and badges", () => {
-    const capabilities = {
+    const capabilities: BrokerProviderCapabilities = {
       providerId: "acme-constrained",
       delivery: { text: true },
       receive: { webhook: true, ackAfterDurableSend: true },

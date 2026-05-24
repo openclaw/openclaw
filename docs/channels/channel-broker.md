@@ -153,34 +153,36 @@ of looking like hosted bot APIs. Use `constraints` for machine-readable facts
 and `badges` for short UI/status labels:
 
 ```json5
-capabilities: {
-  whatsapp: {
-    delivery: { text: true, media: true, replyTo: true },
-    constraints: { businessApi: true, cloudApi: true, providerHosted: true },
-    badges: ["business-api", "provider-hosted"],
-    native: { cloudApi: true },
-  },
-  signal: {
-    delivery: { text: true },
-    constraints: {
-      selfHosted: true,
-      deviceBound: true,
-      phoneNumberRequired: true,
-      signalCli: true,
+{
+  capabilities: {
+    whatsapp: {
+      delivery: { text: true, media: true, replyTo: true },
+      constraints: { businessApi: true, cloudApi: true, providerHosted: true },
+      badges: ["business-api", "provider-hosted"],
+      native: { cloudApi: true },
     },
-    badges: ["self-hosted", "device-bound"],
-    native: { signalCli: true },
-  },
-  imessage: {
-    delivery: { text: true, media: true, replyTo: true },
-    constraints: {
-      deviceBound: true,
-      macHostRequired: true,
-      messagesSignedIn: true,
-      privateApiOptional: true,
+    signal: {
+      delivery: { text: true },
+      constraints: {
+        selfHosted: true,
+        deviceBound: true,
+        phoneNumberRequired: true,
+        signalCli: true,
+      },
+      badges: ["self-hosted", "device-bound"],
+      native: { signalCli: true },
     },
-    badges: ["mac-host", "device-bound"],
-    native: { imsg: true },
+    imessage: {
+      delivery: { text: true, media: true, replyTo: true },
+      constraints: {
+        deviceBound: true,
+        macHostRequired: true,
+        messagesSignedIn: true,
+        privateApiOptional: true,
+      },
+      badges: ["mac-host", "device-bound"],
+      native: { imsg: true },
+    },
   },
 }
 ```

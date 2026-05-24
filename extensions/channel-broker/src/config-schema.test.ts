@@ -188,8 +188,6 @@ describe("channel-broker config schema", () => {
     });
 
     expect(result.success).toBe(false);
-    expect(result.success ? [] : result.issues.map((issue) => issue.path.join("."))).toContain(
-      "accounts.acme.capabilities.signal.constraints",
-    );
+    expect(issuePaths(result)).toContain("accounts.acme.capabilities.signal.constraints");
   });
 });
