@@ -28,7 +28,7 @@ import {
   CommandsSchema,
   MessagesSchema,
   SessionSchema,
-  SessionSendPolicySchema,
+  SessionScopePolicySchema,
 } from "./zod-schema.session.js";
 
 const BrowserSnapshotDefaultsSchema = z
@@ -193,7 +193,7 @@ const MemoryQmdSchema = z
     sessions: MemoryQmdSessionSchema.optional(),
     update: MemoryQmdUpdateSchema.optional(),
     limits: MemoryQmdLimitsSchema.optional(),
-    scope: SessionSendPolicySchema.optional(),
+    scope: SessionScopePolicySchema.optional(),
   })
   .strict();
 

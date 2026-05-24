@@ -26,8 +26,8 @@ const SessionResetConfigSchema = z
   })
   .strict();
 
-export const SessionSendPolicySchema = createAllowDenyChannelRulesSchema();
-const RelationalSessionSendPolicySchema = createSessionSendPolicySchema();
+export const SessionScopePolicySchema = createAllowDenyChannelRulesSchema();
+export const SessionSendPolicySchema = createSessionSendPolicySchema();
 
 export const SessionSchema = z
   .object({
@@ -59,7 +59,7 @@ export const SessionSchema = z
     typingIntervalSeconds: z.number().int().positive().optional(),
     typingMode: TypingModeSchema.optional(),
     mainKey: z.string().optional(),
-    sendPolicy: RelationalSessionSendPolicySchema.optional(),
+    sendPolicy: SessionSendPolicySchema.optional(),
     writeLock: z
       .object({
         acquireTimeoutMs: z.number().int().positive().optional(),
