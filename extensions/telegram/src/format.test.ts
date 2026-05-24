@@ -134,7 +134,7 @@ describe("markdownToTelegramHtml", () => {
 
   it("renders fenced code blocks", () => {
     const res = markdownToTelegramHtml("```js\nconst x = 1;\n```");
-    expect(res).toBe("<pre><code>const x = 1;\n</code></pre>");
+    expect(res).toBe('<pre><code class="language-js">const x = 1;\n</code></pre>');
   });
 
   it("renders fenced code block languages for Telegram native copy buttons", () => {
