@@ -1008,6 +1008,7 @@ describe("subagent registry seam flow", () => {
         phase: "end",
         startedAt: 10,
         endedAt: 20,
+        aborted: true,
         stopReason: "aborted",
       },
     });
@@ -1037,6 +1038,9 @@ describe("subagent registry seam flow", () => {
       .find((entry) => entry.runId === "run-aborted-end");
     expect(run?.endedReason).toBe("subagent-killed");
     expect(run?.outcome?.status).toBe("error");
+
+    await vi.advanceTimersByTimeAsync(20_000);
+    expect(mocks.runSubagentAnnounceFlow).toHaveBeenCalledTimes(1);
   });
 
   it("preserves run-mode keep entries past SESSION_RUN_TTL_MS sweep", async () => {
