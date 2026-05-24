@@ -439,7 +439,14 @@ export function createPlaybookEngine(deps: PlaybookEngineDeps): PlaybookEngine {
       rbacCheck: deps.rbacCheck,
       triggerPlaybook: (playbookId, input) => triggerInternal(playbookId, input),
       callPlaybook: async (playbookId, params, parentRunId) => {
+        const parentRun = runs.get(parentRunId);
+        const parentSessionId = String(
+          parentRun?.input.session_id ?? parentRun?.input.sessionId ?? "",
+        ).trim();
         const child = await triggerInternal(playbookId, {
+          ...(parentSessionId && !params.session_id && !params.sessionId
+            ? { session_id: parentSessionId }
+            : {}),
           ...params,
           parent_run_id: parentRunId,
         });
@@ -703,11 +710,12 @@ export function createPlaybookEngine(deps: PlaybookEngineDeps): PlaybookEngine {
           run.completedAt = new Date();
           clearSuspended(runId);
         }
+        runs.set(runId, run);
+        persistRun(upsertRun, run, suspended.get(runId));
+        return run;
       }
 
-      if (run.status === "completed") {
-        finalizeCompletedRun(run, pending.input, ctx.variables);
-      }
+      finalizeCompletedRun(run, pending.input, ctx.variables);
 
       runs.set(runId, run);
       persistRun(upsertRun, run, suspended.get(runId));
