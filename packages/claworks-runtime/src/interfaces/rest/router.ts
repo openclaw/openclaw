@@ -29,43 +29,11 @@ import { describeKnowledgeBase } from "../../planes/data/kb-status.js";
 import { buildA2aAgentCard } from "../a2a/agent-card.js";
 import { resolveAuthContext, checkRbac } from "./auth.js";
 import { badRequest, notFound, parsePath, readJsonBody, sendJson } from "./http-utils.js";
-
-function extractReplyText(output: Record<string, unknown> | undefined | null): string | null {
-  if (!output) return null;
-  if (typeof output.text === "string") return output.text;
-  if (typeof output.reply === "string") return output.reply;
-  if (typeof output.message === "string") return output.message;
-  return null;
-}
-
-function extractEventSessionAndText(
-  body: Record<string, unknown>,
-  payload: Record<string, unknown>,
-): { sessionId: string | null; text: string | null } {
-  const sessionRaw = payload.session_id ?? payload.sessionId ?? body.session_id ?? body.sessionId;
-  const textRaw =
-    payload.text ?? payload.message ?? payload.content ?? body.text ?? body.message ?? body.content;
-  const sessionId = typeof sessionRaw === "string" && sessionRaw.trim() ? sessionRaw.trim() : null;
-  const text = typeof textRaw === "string" && textRaw.trim() ? textRaw.trim() : null;
-  return { sessionId, text };
-}
-
-async function recordAssistantTurnIfCompleted(
-  runtime: ClaworksRuntime,
-  sessionId: string,
-  runId: string,
-  playbookId?: string,
-): Promise<void> {
-  const run = await runtime.playbookEngine.getRun(runId);
-  if (!run || run.status !== "completed" || !run.output) return;
-  const replyText = extractReplyText(run.output);
-  if (!replyText) return;
-  runtime.contextEngine?.append(sessionId, "assistant", replyText, {
-    playbookId,
-    runId,
-    channel: "rest",
-  });
-}
+import {
+  extractReplyText,
+  extractEventSessionAndText,
+  recordAssistantTurnIfCompleted,
+} from "./router-context.js";
 
 // Per-handler 速率限制器（每 REST handler 实例独立，防进程内 DoS）
 const _apiRateLimiter = createRateLimiter(API_RATE_LIMITER_CONFIG);
@@ -153,6 +121,33 @@ export function createClaworksRestHandler(
               subject_type: auth.subjectType,
               subject_id: auth.subjectId,
               action: "rest.write",
+              resource,
+              reason: rbacResult.reason,
+            },
+            { subjectType: "system", subjectId: "rbac" },
+          )
+          .catch(() => undefined);
+        sendJson(res, 403, {
+          error: "Forbidden",
+          code: "RBAC_DENIED",
+          reason: rbacResult.reason,
+        });
+        return false;
+      }
+      return true;
+    };
+
+    const requireRead = async (resource = "rest:*"): Promise<boolean> => {
+      const rbacResult = checkRbac(runtime, auth, "rest.read", resource);
+      if (!rbacResult.allowed) {
+        void runtime.kernel
+          .publish(
+            "rbac.denied",
+            "rest",
+            {
+              subject_type: auth.subjectType,
+              subject_id: auth.subjectId,
+              action: "rest.read",
               resource,
               reason: rbacResult.reason,
             },
