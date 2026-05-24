@@ -187,13 +187,17 @@ function resolveConfiguredRuntime(params: {
   provider: string;
   agentId?: string;
   modelId?: string;
-}): string | undefined {
-  return resolveModelRuntimePolicy({
+}): { runtime?: string; matchedProvider?: string } {
+  const policy = resolveModelRuntimePolicy({
     config: params.cfg,
     provider: params.provider,
     modelId: params.modelId,
     agentId: params.agentId,
-  }).policy?.id?.trim();
+  });
+  return {
+    runtime: policy.policy?.id?.trim() || undefined,
+    matchedProvider: policy.matchedProvider,
+  };
 }
 
 function resolveProfileRuntimeAlias(params: {
@@ -277,12 +281,21 @@ export function resolveCliRuntimeExecutionProvider(params: {
   authProfileId?: string;
 }): string | undefined {
   const provider = normalizeProviderId(params.provider);
-  const runtime = resolveConfiguredRuntime({ ...params, provider });
+  const { runtime, matchedProvider } = resolveConfiguredRuntime({ ...params, provider });
   if (runtime === "pi") {
     return undefined;
   }
   if (!runtime || runtime === "auto") {
     return resolveCliRuntimeFromAuthProfile({ ...params, provider });
   }
-  return CLI_RUNTIME_BY_PROVIDER.get(`${provider}:${runtime}`)?.runtime;
+  // When the caller provider is empty (legacy session entries that stored a
+  // bare model id without a provider prefix), validate the CLI runtime against
+  // the provider carried forward from the matched policy entry. This rejects
+  // misconfigured pairings like `agents.defaults.models["openrouter/X"]:
+  // claude-cli` (claude-cli is only a legal runtime for anthropic).
+  const effectiveProvider = provider || normalizeProviderId(matchedProvider ?? "");
+  if (!effectiveProvider) {
+    return undefined;
+  }
+  return CLI_RUNTIME_BY_PROVIDER.get(`${effectiveProvider}:${runtime}`)?.runtime;
 }

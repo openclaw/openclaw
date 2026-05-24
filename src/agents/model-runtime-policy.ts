@@ -11,6 +11,12 @@ export type ModelRuntimePolicySource = "model" | "provider";
 export type ResolvedModelRuntimePolicy = {
   policy?: AgentRuntimePolicyConfig;
   source?: ModelRuntimePolicySource;
+  /**
+   * Provider id from the matched entry key (e.g. "anthropic" for an
+   * `anthropic/foo` agent model entry). Lets downstream resolvers validate
+   * provider/runtime pairings when the caller passed an empty provider.
+   */
+  matchedProvider?: string;
 };
 
 type ModelEntryMatchKind = "none" | "exact" | "provider-wildcard";
@@ -81,7 +87,12 @@ function modelEntryMatchKind(params: {
   if (slash <= 0) {
     return "none";
   }
-  if (normalizeProviderId(entryId.slice(0, slash)) !== normalizeProviderId(params.provider ?? "")) {
+  // Empty/undefined caller provider means "no provider constraint"; the entry's
+  // slash-prefix is itself authoritative. Distinguishes the bare-model session
+  // case (saved before provider-prefix normalization) from a real mismatch.
+  const callerProvider = normalizeProviderId(params.provider ?? "");
+  const entryProvider = normalizeProviderId(entryId.slice(0, slash));
+  if (callerProvider && callerProvider !== entryProvider) {
     return "none";
   }
   const entryModelId = entryId.slice(slash + 1).trim();
@@ -114,9 +125,9 @@ function modelKeyIsProviderWildcard(params: {
   if (slash <= 0) {
     return false;
   }
-  if (
-    normalizeProviderId(params.key.slice(0, slash)) !== normalizeProviderId(params.provider ?? "")
-  ) {
+  const callerProvider = normalizeProviderId(params.provider ?? "");
+  const entryProvider = normalizeProviderId(params.key.slice(0, slash));
+  if (callerProvider && callerProvider !== entryProvider) {
     return false;
   }
   return params.key.slice(slash + 1).trim() === "*";
@@ -146,15 +157,46 @@ function resolveAgentModelEntryRuntimePolicy(params: {
     agentEntry?.models,
     params.config.agents?.defaults?.models,
   ];
+  const callerProvider = normalizeProviderId(params.provider ?? "");
+  // Walk model maps in precedence order (agent-specific before defaults) and
+  // resolve within the first scope that has any matches. When the caller
+  // provider is empty, multiple provider-prefixed entries in the SAME scope
+  // (e.g. defaults has both "openai/gpt-5" and "azure/gpt-5") are ambiguous and
+  // return {}; a lower-precedence scope must not introduce ambiguity that
+  // overrides a clean higher-precedence match.
   for (const models of modelMaps) {
+    const scopeMatches: Array<{ provider: string; policy: AgentRuntimePolicyConfig }> = [];
     for (const [key, entry] of Object.entries(models ?? {})) {
       const matches = modelId
         ? modelKeyMatchKind({ key, provider: params.provider, modelId }) === params.matchKind
         : modelKeyIsProviderWildcard({ key, provider: params.provider });
-      if (matches && hasRuntimePolicy(entry?.agentRuntime)) {
-        return { policy: entry.agentRuntime, source: "model" };
+      const policy = entry?.agentRuntime;
+      if (!matches || !policy || !hasRuntimePolicy(policy)) {
+        continue;
       }
+      const slash = key.indexOf("/");
+      const entryProvider = slash > 0 ? normalizeProviderId(key.slice(0, slash)) : "";
+      scopeMatches.push({ provider: entryProvider, policy });
     }
+    if (scopeMatches.length === 0) {
+      continue;
+    }
+    if (callerProvider) {
+      return {
+        policy: scopeMatches[0].policy,
+        source: "model",
+        matchedProvider: scopeMatches[0].provider || callerProvider,
+      };
+    }
+    const distinctProviders = new Set(scopeMatches.map((m) => m.provider));
+    if (distinctProviders.size > 1) {
+      return {};
+    }
+    return {
+      policy: scopeMatches[0].policy,
+      source: "model",
+      matchedProvider: scopeMatches[0].provider,
+    };
   }
   return {};
 }

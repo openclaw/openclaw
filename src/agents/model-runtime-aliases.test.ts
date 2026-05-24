@@ -81,4 +81,37 @@ describe("resolveCliRuntimeExecutionProvider", () => {
       }),
     ).toBeUndefined();
   });
+
+  it("matches a configured claude-cli policy when the caller provider is empty", () => {
+    expect(
+      resolveCliRuntimeExecutionProvider({
+        cfg: createAnthropicAuthConfig({
+          models: {
+            "anthropic/opus-4.7": { agentRuntime: { id: "claude-cli" } },
+          },
+        }),
+        provider: "",
+        modelId: "opus-4.7",
+      }),
+    ).toBe("claude-cli");
+  });
+
+  // Regression: when the caller provider is empty, a configured CLI runtime
+  // alias must still be validated against the provider on the matched entry
+  // key. claude-cli is only legal for anthropic — a misconfigured
+  // `openrouter/X: claude-cli` policy must NOT route to claude-cli execution.
+  // See PR #85970 finding [P2].
+  it("does not return a CLI runtime when the matched entry's provider is incompatible with the runtime alias", () => {
+    expect(
+      resolveCliRuntimeExecutionProvider({
+        cfg: createAnthropicAuthConfig({
+          models: {
+            "openrouter/opus-4.7": { agentRuntime: { id: "claude-cli" } },
+          },
+        }),
+        provider: "",
+        modelId: "opus-4.7",
+      }),
+    ).toBeUndefined();
+  });
 });
