@@ -51,7 +51,7 @@ vi.mock("./plugin-metadata-snapshot.js", () => ({
   loadPluginMetadataSnapshot: mocks.loadPluginMetadataSnapshot,
   resolvePluginMetadataSnapshot: vi.fn(
     (params?: { pluginMetadataSnapshot?: unknown }) =>
-      params?.pluginMetadataSnapshot ?? mocks.loadPluginMetadataSnapshot(params),
+      params?.pluginMetadataSnapshot ?? mocks.loadPluginMetadataSnapshot(),
   ),
 }));
 
