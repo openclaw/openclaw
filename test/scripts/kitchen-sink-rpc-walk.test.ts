@@ -52,4 +52,8 @@ describe("kitchen-sink RPC process sampling", () => {
       "gateway RSS exceeded 2048 MiB: 2049 MiB",
     );
   });
+
+  it("fails when process sampling does not capture RSS", () => {
+    expect(() => assertResourceCeiling(null)).toThrow("gateway RSS sample was not captured");
+  });
 });

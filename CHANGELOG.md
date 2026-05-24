@@ -7,6 +7,7 @@ Docs: https://docs.openclaw.ai
 ### Changes
 
 ### Fixes
+- Tests: fail the kitchen-sink RPC Docker walk when gateway RSS sampling is unavailable instead of silently disabling the per-process memory guard.
 - Tests: suppress the current Rolldown plugin timing warning format in the Vitest wrapper so tiny focused runs do not drown useful stderr in repeated build-timing noise.
 - Crabbox: sync clean sparse-checkout remote changed gates from a temporary full checkout with local-only commits overlaid as worktree changes so git-backed script checks can seed the runner repository.
 - Tests: make startup memory and startup bench smoke scripts build CLI startup artifacts when run from a fresh source checkout.
