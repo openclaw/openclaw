@@ -418,6 +418,12 @@ export async function createClaworksRuntime(
 
   // 初始化进化引擎（分析失败案例 → 提出 Playbook/能力改进建议 → 写入 Scaffold）
   runtime.evolveEngine = createEvolveEngine(runtime);
+  // 开启自动学习：失败的 Playbook run 自动写入 CbrStore，供未来 propose() 参考
+  // stopFn 注册到 SYSTEM_RUNTIME_STOPPED 事件，随 runtime 一起清理
+  const _stopAutoLearning = runtime.evolveEngine.startAutoLearning();
+  runtime.kernel.bus.subscribe(CW_EVENTS.SYSTEM_RUNTIME_STOPPED, async () => {
+    _stopAutoLearning();
+  });
 
   // 初始化对话上下文引擎（多轮会话记忆，跨消息追踪对话历史）
   runtime.contextEngine = createContextEngine({

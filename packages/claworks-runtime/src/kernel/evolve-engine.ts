@@ -150,6 +150,12 @@ export interface EvolveEngine {
   listEvolved(): Promise<Array<{ id: string; title: string; deployedAt: Date }>>;
   /** 移除一个进化的 Playbook */
   remove(playbookId: string): Promise<void>;
+  /**
+   * 开启自动学习监听：订阅 PLAYBOOK_RUN_FAILED 事件，
+   * 将失败案例自动写入 CbrStore，供下次 propose/分析时引用。
+   * 返回 unsubscribe 函数，Runtime 停止时调用。
+   */
+  startAutoLearning(): () => void;
 }
 
 // ── LLM prompt 常量 ───────────────────────────────────────────────────────
@@ -521,6 +527,40 @@ export function createEvolveEngine(runtime: ClaworksRuntime): EvolveEngine {
 
       // 从 playbookEngine 卸载
       runtime.playbookEngine.unload?.(playbookId);
+    },
+
+    // ── startAutoLearning ──────────────────────────────────────────────────
+    startAutoLearning(): () => void {
+      if (!runtime.cbrStore) {
+        // 无 CbrStore 时返回空 cleanup，不报错
+        return () => {};
+      }
+      const unsub = runtime.kernel.subscribe(
+        "playbook.run.failed",
+        (payload: Record<string, unknown>) => {
+          if (!runtime.cbrStore) return;
+          const playbookId = String(payload["playbook_id"] ?? "unknown");
+          const error = String(payload["error"] ?? "");
+          const durationMs = Number(payload["duration_ms"] ?? 0);
+          try {
+            runtime.cbrStore.add(
+              {
+                problem: `Playbook '${playbookId}' 执行失败: ${error.slice(0, 300)}`,
+                category: "playbook_failure",
+                playbook_id: playbookId,
+                duration_ms: durationMs,
+                failed_at: new Date().toISOString(),
+              },
+              `失败案例已记录，供下次 propose/分析时参考。`,
+              { auto_learned: true },
+            );
+          } catch {
+            // 记录失败不影响主流程
+          }
+        },
+      );
+      runtime.logger?.("[EvolveEngine] 自动学习监听已启动（订阅 playbook.run.failed）");
+      return unsub;
     },
   };
 }
