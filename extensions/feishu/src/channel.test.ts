@@ -611,6 +611,20 @@ describe("feishuPlugin actions", () => {
     expect(details.messageId).toBe("om_recall_1");
   });
 
+  it("throws on non-zero Feishu unsend response code", async () => {
+    const deleteMock = vi.fn().mockResolvedValueOnce({ code: 230001, msg: "message not found" });
+    createFeishuClientMock.mockResolvedValueOnce({ im: { message: { delete: deleteMock } } });
+
+    await expect(
+      feishuPlugin.actions?.handleAction?.({
+        action: "unsend",
+        params: { messageId: "om_bad_1" },
+        cfg,
+        accountId: undefined,
+      } as never),
+    ).rejects.toThrow("Feishu unsend failed: message not found");
+  });
+
   it("sends explicit thread replies with reply_in_thread semantics", async () => {
     sendMessageFeishuMock.mockResolvedValueOnce({ messageId: "om_reply", chatId: "oc_group_1" });
 

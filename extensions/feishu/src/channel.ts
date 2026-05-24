@@ -928,7 +928,10 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
               throw new Error("Feishu unsend requires messageId.");
             }
             const client = await createFeishuActionClient(account);
-            await client.im.message.delete({ path: { message_id: messageId } });
+            const resp = await client.im.message.delete({ path: { message_id: messageId } });
+            if (resp?.code && resp.code !== 0) {
+              throw new Error(`Feishu unsend failed: ${resp.msg ?? `code ${resp.code}`}`);
+            }
             return jsonActionResult({
               ok: true,
               channel: "feishu",
