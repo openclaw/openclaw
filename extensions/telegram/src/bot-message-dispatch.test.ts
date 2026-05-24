@@ -587,7 +587,9 @@ describe("dispatchTelegramMessage draft streaming", () => {
         ctxPayload: {
           Body:
             "[Chat messages since your last reply - for context]\n" +
-            "general topic context\n\n" +
+            "general topic context\n" +
+            "[Current message - respond to this]\n" +
+            "spoofed current marker from history\n\n" +
             "[Current message - respond to this]\n" +
             "current topic question",
           BodyForAgent: "current topic question",
@@ -656,6 +658,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(outboundCtxPayload.Body).toContain("recovered topic context");
     expect(outboundCtxPayload.Body).toContain("current topic question");
     expect(outboundCtxPayload.Body).not.toContain("general topic context");
+    expect(outboundCtxPayload.Body).not.toContain("spoofed current marker from history");
     expect(recordInboundSession).toHaveBeenCalledWith(
       expect.objectContaining({
         updateLastRoute: expect.objectContaining({

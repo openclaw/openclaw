@@ -448,7 +448,7 @@ function extractCurrentTelegramBody(body: string | undefined): string {
   if (!body) {
     return "";
   }
-  const markerIndex = body.indexOf(CURRENT_MESSAGE_MARKER);
+  const markerIndex = body.lastIndexOf(CURRENT_MESSAGE_MARKER);
   if (markerIndex === -1) {
     return body;
   }
