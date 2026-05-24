@@ -54,6 +54,7 @@ import { getBearerToken } from "./http-utils.js";
 import { handleOpenAiHttpRequest } from "./openai-http.js";
 import { handleOpenResponsesHttpRequest } from "./openresponses-http.js";
 import { GATEWAY_CLIENT_MODES, normalizeGatewayClientMode } from "./protocol/client-info.js";
+import { handleSkillsBundledRequest } from "./routes/skills-bundled.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
 import { handleToolsInvokeHttpRequest } from "./tools-invoke-http.js";
 
@@ -511,6 +512,15 @@ export function createGatewayHttpServer(opts: {
       }
       if (
         await handleToolsInvokeHttpRequest(req, res, {
+          auth: resolvedAuth,
+          trustedProxies,
+          rateLimiter,
+        })
+      ) {
+        return;
+      }
+      if (
+        await handleSkillsBundledRequest(req, res, {
           auth: resolvedAuth,
           trustedProxies,
           rateLimiter,

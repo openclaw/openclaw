@@ -44,6 +44,17 @@ RUN pnpm build
 ENV OPENCLAW_PREFER_PNPM=1
 RUN pnpm ui:build
 
+# Build-time args for canonical skill registry provenance.
+# Pass these via --build-arg when building the image:
+#   docker build --build-arg OPENCLAW_IMAGE_TAG=v2026.05.24.1 \
+#                --build-arg OPENCLAW_IMAGE_SHA=sha256:... .
+ARG OPENCLAW_IMAGE_TAG=""
+ARG OPENCLAW_IMAGE_SHA=""
+ARG OPENCLAW_SOURCE_SHA=""
+ENV OPENCLAW_IMAGE_TAG=${OPENCLAW_IMAGE_TAG}
+ENV OPENCLAW_IMAGE_SHA=${OPENCLAW_IMAGE_SHA}
+ENV OPENCLAW_SOURCE_SHA=${OPENCLAW_SOURCE_SHA}
+
 ENV NODE_ENV=production
 
 # Allow non-root user to write temp files during runtime/tests.

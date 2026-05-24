@@ -46,4 +46,39 @@ if [ "${#format_files[@]}" -gt 0 ]; then
   "$RUN_NODE_TOOL" oxfmt --write -- "${format_files[@]}"
 fi
 
+# Regenerate skills/manifest.json if any skill files changed.
+skills_changed=false
+for f in "${files[@]}"; do
+  case "$f" in
+    skills/*/SKILL.md)
+      skills_changed=true
+      break
+      ;;
+  esac
+done
+
+if [ "$skills_changed" = "true" ]; then
+  echo "skills/SKILL.md files changed — regenerating skills/manifest.json..."
+  node --import tsx "$ROOT_DIR/scripts/generate-skills-manifest.ts"
+  # Stage the (possibly) updated manifest and normalized SKILL.md files.
+  git add "$ROOT_DIR/skills/manifest.json"
+  # Re-stage any SKILL.md files that were normalized.
+  for f in "${files[@]}"; do
+    case "$f" in
+      skills/*/SKILL.md)
+        git add "$ROOT_DIR/$f"
+        ;;
+    esac
+  done
+fi
+
+# Validate manifest is in sync (catches cases where manifest.json was edited directly).
+if node --import tsx "$ROOT_DIR/scripts/generate-skills-manifest.ts" --check 2>/dev/null; then
+  :
+else
+  echo "ERROR: skills/manifest.json is out of sync with SKILL.md files." >&2
+  echo "Run: pnpm skills:manifest" >&2
+  exit 1
+fi
+
 git add -- "${files[@]}"

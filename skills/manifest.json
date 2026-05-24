@@ -1,0 +1,527 @@
+[
+  {
+    "contentHash": "sha256:9e9dace009cf3fa8dc8b3fc9af867ba44999289a3fdbd21ac9d9bddf585e29cc",
+    "description": "Set up and use 1Password CLI (op). Use when installing the CLI, enabling desktop app integration, signing in (single or multi-account), or reading/injecting/running secrets via op.",
+    "emoji": "🔐",
+    "name": "1password",
+    "path": "skills/1password/SKILL.md",
+    "requires": {
+      "bins": ["op"]
+    }
+  },
+  {
+    "contentHash": "sha256:c07631bb6ec0dd136eaa86af86830954c296aa66ea7109c00731c098cd8d5b00",
+    "description": "Manage Apple Notes via the `memo` CLI on macOS (create, view, edit, delete, search, move, and export notes). Use when a user asks OpenClaw to add a note, list notes, search notes, or manage note folders.",
+    "emoji": "📝",
+    "name": "apple-notes",
+    "path": "skills/apple-notes/SKILL.md",
+    "requires": {
+      "bins": ["memo"]
+    }
+  },
+  {
+    "contentHash": "sha256:75f6b4bbe4eb91ab563f597a5b83442fec1969d6fb4ddae069b5bac74fe2b0b8",
+    "description": "Manage Apple Reminders via remindctl CLI (list, add, edit, complete, delete). Supports lists, date filters, and JSON/plain output.",
+    "emoji": "⏰",
+    "name": "apple-reminders",
+    "path": "skills/apple-reminders/SKILL.md",
+    "requires": {
+      "bins": ["remindctl"]
+    }
+  },
+  {
+    "contentHash": "sha256:956251b2fca2f0a082c19a380382ce186fb49f0165752eab85f3bc2948671939",
+    "description": "Create, search, and manage Bear notes via grizzly CLI.",
+    "emoji": "🐻",
+    "name": "bear-notes",
+    "path": "skills/bear-notes/SKILL.md",
+    "requires": {
+      "bins": ["grizzly"]
+    }
+  },
+  {
+    "contentHash": "sha256:33011ee6e0c3202183772ee496d3d16b7388568c2d693395a072b081b9b9ff0e",
+    "description": "Monitor blogs and RSS/Atom feeds for updates using the blogwatcher CLI.",
+    "emoji": "📰",
+    "name": "blogwatcher",
+    "path": "skills/blogwatcher/SKILL.md",
+    "requires": {
+      "bins": ["blogwatcher"]
+    }
+  },
+  {
+    "contentHash": "sha256:38b96f404b6bb2c4a12717a60aa0ffd88b848faca81697938466b9de2a646056",
+    "description": "BluOS CLI (blu) for discovery, playback, grouping, and volume.",
+    "emoji": "🫐",
+    "name": "blucli",
+    "path": "skills/blucli/SKILL.md",
+    "requires": {
+      "bins": ["blu"]
+    }
+  },
+  {
+    "contentHash": "sha256:41a9218692a5158ffb5a415c6bcffeca7f863ce4db4127f6c0137ba958eb848a",
+    "description": "Use when you need to send or manage iMessages via BlueBubbles (recommended iMessage integration). Calls go through the generic message tool with channel=\"bluebubbles\".",
+    "emoji": "🫧",
+    "name": "bluebubbles",
+    "path": "skills/bluebubbles/SKILL.md",
+    "requires": {}
+  },
+  {
+    "contentHash": "sha256:95039a10f6626adcec7b09ac235c5c36f2c16cb90dbbb2346e8309f4fa57d72d",
+    "description": "Capture frames or clips from RTSP/ONVIF cameras.",
+    "emoji": "📸",
+    "name": "camsnap",
+    "path": "skills/camsnap/SKILL.md",
+    "requires": {
+      "bins": ["camsnap"]
+    }
+  },
+  {
+    "contentHash": "sha256:2bae787841a3b74b8f8fbe50d14e91c4b037f27006624b95307d45dd20b7dde2",
+    "description": "Use the ClawHub CLI to search, install, update, and publish agent skills from clawhub.com. Use when you need to fetch new skills on the fly, sync installed skills to latest or a specific version, or publish new/updated skill folders with the npm-installed clawhub CLI.",
+    "emoji": "",
+    "name": "clawhub",
+    "path": "skills/clawhub/SKILL.md",
+    "requires": {
+      "bins": ["clawhub"]
+    }
+  },
+  {
+    "contentHash": "sha256:4becb265e9a8d28718a5abbf642cbbdf7882d3d2717c6b24d7f8032eed918dbd",
+    "description": "Delegate coding tasks to Codex, Claude Code, or Pi agents via background process. Use when: (1) building/creating new features or apps, (2) reviewing PRs (spawn in temp dir), (3) refactoring large codebases, (4) iterative coding that needs file exploration. NOT for: simple one-liner fixes (just edit), reading code (use read tool), or any work in ~/clawd workspace (never spawn agents here). Requires a bash tool that supports pty:true.",
+    "emoji": "🧩",
+    "name": "coding-agent",
+    "path": "skills/coding-agent/SKILL.md",
+    "requires": {}
+  },
+  {
+    "contentHash": "sha256:06554ae01f77c153db0a1feeb96f39b976289cb40e8843022406f8e59771f3aa",
+    "description": "Discord ops via the message tool (channel=discord).",
+    "emoji": "🎮",
+    "name": "discord",
+    "path": "skills/discord/SKILL.md",
+    "requires": {}
+  },
+  {
+    "contentHash": "sha256:a67bcb20983ae1658db7112c7a2e6573f68571ad8987cfb6b96be3fe7dbe451a",
+    "description": "Control Eight Sleep pods (status, temperature, alarms, schedules).",
+    "emoji": "🎛️",
+    "name": "eightctl",
+    "path": "skills/eightctl/SKILL.md",
+    "requires": {
+      "bins": ["eightctl"]
+    }
+  },
+  {
+    "contentHash": "sha256:6c642623999ce0ae96eadc5d9bf3fc704827aa0414537b9f9d91bb8c9fb949fb",
+    "description": "Reorder Foodora orders + track ETA/status with ordercli. Never confirm without explicit user approval. Triggers: order food, reorder, track ETA.",
+    "emoji": "🥡",
+    "name": "food-order",
+    "path": "skills/food-order/SKILL.md",
+    "requires": {
+      "bins": ["ordercli"]
+    }
+  },
+  {
+    "contentHash": "sha256:29205943f8adeb77ab24d4f473250c8970ee4d77f139166f119b6071c008318b",
+    "description": "Gemini CLI for one-shot Q&A, summaries, and generation.",
+    "emoji": "♊️",
+    "name": "gemini",
+    "path": "skills/gemini/SKILL.md",
+    "requires": {
+      "bins": ["gemini"]
+    }
+  },
+  {
+    "contentHash": "sha256:9cfc6732901455deeec8138df6b78bf5facd758b57e575f34bdc784bfac10c58",
+    "description": "Fetch GitHub issues, spawn sub-agents to implement fixes and open PRs, then monitor and address PR review comments. Usage: /gh-issues [owner/repo] [--label bug] [--limit 5] [--milestone v1.0] [--assignee @me] [--fork user/repo] [--watch] [--interval 5] [--reviews-only] [--cron] [--dry-run] [--model glm-5] [--notify-channel -1002381931352]",
+    "emoji": "",
+    "name": "gh-issues",
+    "path": "skills/gh-issues/SKILL.md",
+    "requires": {
+      "bins": ["curl", "git", "gh"]
+    }
+  },
+  {
+    "contentHash": "sha256:3445f7eeed1bd08f396f08af458055d451b9cac99104e1b208ffe50e71997914",
+    "description": "Search GIF providers with CLI/TUI, download results, and extract stills/sheets.",
+    "emoji": "🧲",
+    "name": "gifgrep",
+    "path": "skills/gifgrep/SKILL.md",
+    "requires": {
+      "bins": ["gifgrep"]
+    }
+  },
+  {
+    "contentHash": "sha256:40c016d16a14b3b6b7ce2f96def3251c18e47683b484d551868aa3591705faae",
+    "description": "GitHub operations via `gh` CLI: issues, PRs, CI runs, code review, API queries. Use when: (1) checking PR status or CI, (2) creating/commenting on issues, (3) listing/filtering PRs or issues, (4) viewing run logs. NOT for: complex web UI interactions requiring manual browser flows (use browser tooling when available), bulk operations across many repos (script with gh api), or when gh auth is not configured.",
+    "emoji": "🐙",
+    "name": "github",
+    "path": "skills/github/SKILL.md",
+    "requires": {
+      "bins": ["gh"]
+    }
+  },
+  {
+    "contentHash": "sha256:ceb5ee5bb4f0b9016694ed709180399fc75214b7b91a958e1aae1e1a351cb0b6",
+    "description": "Google Workspace CLI for Gmail, Calendar, Drive, Contacts, Sheets, and Docs.",
+    "emoji": "🎮",
+    "name": "gog",
+    "path": "skills/gog/SKILL.md",
+    "requires": {
+      "bins": ["gog"]
+    }
+  },
+  {
+    "contentHash": "sha256:36b7cca469b176b9f141cb32ea3f8100f16c12954ba16a91ab66c4208b927bba",
+    "description": "Query Google Places API (New) via the goplaces CLI for text search, place details, resolve, and reviews. Use for human-friendly place lookup or JSON output for scripts.",
+    "emoji": "📍",
+    "name": "goplaces",
+    "path": "skills/goplaces/SKILL.md",
+    "requires": {
+      "bins": ["goplaces"],
+      "env": ["GOOGLE_PLACES_API_KEY"]
+    }
+  },
+  {
+    "contentHash": "sha256:afef5fe4e3984f08375f7d48a347960d6fff8845c41aa41a15407f8a3852bf5a",
+    "description": "CLI to manage emails via IMAP/SMTP. Use `himalaya` to list, read, write, reply, forward, search, and organize emails from the terminal. Supports multiple accounts and message composition with MML (MIME Meta Language).",
+    "emoji": "📧",
+    "name": "himalaya",
+    "path": "skills/himalaya/SKILL.md",
+    "requires": {
+      "bins": ["himalaya"]
+    }
+  },
+  {
+    "contentHash": "sha256:55dd0913fbc148c4159e1fb1e38e006ac3b51f3cc8900fd62994afb2be53dc88",
+    "description": "iMessage/SMS CLI for listing chats, history, and sending messages via Messages.app.",
+    "emoji": "📨",
+    "name": "imsg",
+    "path": "skills/imsg/SKILL.md",
+    "requires": {
+      "bins": ["imsg"]
+    }
+  },
+  {
+    "contentHash": "sha256:a9a860f7453f33ca3474b5fadff48969271e82733db6479cdfc96d9ce6752214",
+    "description": "Use the mcporter CLI to list, configure, auth, and call MCP servers/tools directly (HTTP or stdio), including ad-hoc servers, config edits, and CLI/type generation.",
+    "emoji": "📦",
+    "name": "mcporter",
+    "path": "skills/mcporter/SKILL.md",
+    "requires": {
+      "bins": ["mcporter"]
+    }
+  },
+  {
+    "contentHash": "sha256:b88045ef1c5c6fa7baeeaf48cc15eb2d38fc856f0b0bbfa12bb497372d6e26aa",
+    "description": "Use CodexBar CLI local cost usage to summarize per-model usage for Codex or Claude, including the current (most recent) model or a full model breakdown. Trigger when asked for model-level usage/cost data from codexbar, or when you need a scriptable per-model summary from codexbar cost JSON.",
+    "emoji": "📊",
+    "name": "model-usage",
+    "path": "skills/model-usage/SKILL.md",
+    "requires": {
+      "bins": ["codexbar"]
+    }
+  },
+  {
+    "contentHash": "sha256:9ab0838e959fee7de750d28eca79bb708f6e927fea71876f3c75614dea60386e",
+    "description": "Generate or edit images via Gemini 3 Pro Image (Nano Banana Pro).",
+    "emoji": "🍌",
+    "name": "nano-banana-pro",
+    "path": "skills/nano-banana-pro/SKILL.md",
+    "requires": {
+      "bins": ["uv"],
+      "env": ["GEMINI_API_KEY"]
+    }
+  },
+  {
+    "contentHash": "sha256:28c360b5b915dba7ea377c6a88b103f547fc0ecf38bf66ca6e6b42cce0b76c1f",
+    "description": "Edit PDFs with natural-language instructions using the nano-pdf CLI.",
+    "emoji": "📄",
+    "name": "nano-pdf",
+    "path": "skills/nano-pdf/SKILL.md",
+    "requires": {
+      "bins": ["nano-pdf"]
+    }
+  },
+  {
+    "contentHash": "sha256:b1ec55de3a74e1c0322c0731083f5c0b82356dc35e97cd7866ad17553ab43cff",
+    "description": "Notion API for creating and managing pages, databases, and blocks.",
+    "emoji": "📝",
+    "name": "notion",
+    "path": "skills/notion/SKILL.md",
+    "requires": {
+      "env": ["NOTION_API_KEY"]
+    }
+  },
+  {
+    "contentHash": "sha256:b184f7079cf2338ce47a7ac0cc346904fcd1d80a030ae12000c7bac8fa3bb410",
+    "description": "Work with Obsidian vaults (plain Markdown notes) and automate via obsidian-cli.",
+    "emoji": "💎",
+    "name": "obsidian",
+    "path": "skills/obsidian/SKILL.md",
+    "requires": {
+      "bins": ["obsidian-cli"]
+    }
+  },
+  {
+    "contentHash": "sha256:af85649d885792e8763649914b827451e7e4b3a10f4fa8d038c2fb23cd046c31",
+    "description": "Batch-generate images via OpenAI Images API. Random prompt sampler + `index.html` gallery.",
+    "emoji": "🖼️",
+    "name": "openai-image-gen",
+    "path": "skills/openai-image-gen/SKILL.md",
+    "requires": {
+      "bins": ["python3"],
+      "env": ["OPENAI_API_KEY"]
+    }
+  },
+  {
+    "contentHash": "sha256:6211652a4ffe7f58cb2a27017419a80d5b8977b7f6ec6958c9c1e2a75dbc4b00",
+    "description": "Local speech-to-text with the Whisper CLI (no API key).",
+    "emoji": "🎙️",
+    "name": "openai-whisper",
+    "path": "skills/openai-whisper/SKILL.md",
+    "requires": {
+      "bins": ["whisper"]
+    }
+  },
+  {
+    "contentHash": "sha256:c0ad50049a94a4d75ac182f473f73723ec3a22fc7a53a083c9ef30d5f7eb5123",
+    "description": "Transcribe audio via OpenAI Audio Transcriptions API (Whisper).",
+    "emoji": "☁️",
+    "name": "openai-whisper-api",
+    "path": "skills/openai-whisper-api/SKILL.md",
+    "requires": {
+      "bins": ["curl"],
+      "env": ["OPENAI_API_KEY"]
+    }
+  },
+  {
+    "contentHash": "sha256:dae9ba55a65609067a631b673ddac6a9c1dee0139a0fe03917bef9eaec20870e",
+    "description": "Control Philips Hue lights and scenes via the OpenHue CLI.",
+    "emoji": "💡",
+    "name": "openhue",
+    "path": "skills/openhue/SKILL.md",
+    "requires": {
+      "bins": ["openhue"]
+    }
+  },
+  {
+    "contentHash": "sha256:903a053178a3d2e7786f2036c8e151c40052184b6355614bc0aefdcc965d245e",
+    "description": "Best practices for using the oracle CLI (prompt + file bundling, engines, sessions, and file attachment patterns).",
+    "emoji": "🧿",
+    "name": "oracle",
+    "path": "skills/oracle/SKILL.md",
+    "requires": {
+      "bins": ["oracle"]
+    }
+  },
+  {
+    "contentHash": "sha256:14aef89ed6dad8e3f5712f172d7580623d5bf64f70914788a8fad96e9ec45f66",
+    "description": "Foodora-only CLI for checking past orders and active order status (Deliveroo WIP).",
+    "emoji": "🛵",
+    "name": "ordercli",
+    "path": "skills/ordercli/SKILL.md",
+    "requires": {
+      "bins": ["ordercli"]
+    }
+  },
+  {
+    "contentHash": "sha256:6a4f70e65354985fb047d802ab180755127f7769df311f5ccb51546ca91cafb5",
+    "description": "Use the Ostium tool for Arbitrum market reads and live trade writes (open/close/update).",
+    "emoji": "",
+    "name": "ostium",
+    "path": "skills/ostium/SKILL.md",
+    "requires": {
+      "bins": ["python3"],
+      "env": ["RPC_URL"]
+    }
+  },
+  {
+    "contentHash": "sha256:bb06f126ec6c0d2dd6b1a8eb0affe60d6389b95af2ffc91fd9cc937d5c9b9c44",
+    "description": "Capture and automate macOS UI with the Peekaboo CLI.",
+    "emoji": "👀",
+    "name": "peekaboo",
+    "path": "skills/peekaboo/SKILL.md",
+    "requires": {
+      "bins": ["peekaboo"]
+    }
+  },
+  {
+    "contentHash": "sha256:97ec174efed5b1cd0b1d93e05e5603ac94e12107e53e8ea726016a4391b247bd",
+    "description": "Prompt-level guidance for the Rain prediction-market integration on Arbitrum. Covers market discovery, trading (buy/sell/claim), liquidity provision, portfolio + analytics reads, trade history, and runtime diagnostics. The actual capability surface is the `rain` MCP server (typed tools); this skill adds safety rules, preview discipline, market-state awareness, and address-vs-id conventions. Market creation lives in the separate opt-in `rain-create` skill.",
+    "emoji": "🌧️",
+    "name": "rain",
+    "path": "skills/rain/SKILL.md",
+    "requires": {
+      "env": ["AGENTGLOB_RUNTIME_URL", "AGENTGLOB_RUNTIME_TOKEN"]
+    }
+  },
+  {
+    "contentHash": "sha256:9f5e350afa4ff384992060d32fcc15ae98844eee9f3777bdcbc35f6b58e0a152",
+    "description": "Prompt-level guidance for creating new Rain prediction markets on Arbitrum. Opt-in skill — high-stakes, irreversible, gas-spending. Pair with the `rain` skill (required for reading market state and base-token details).",
+    "emoji": "🆕",
+    "name": "rain-create",
+    "path": "skills/rain-create/SKILL.md",
+    "requires": {
+      "env": ["AGENTGLOB_RUNTIME_URL", "AGENTGLOB_RUNTIME_TOKEN"]
+    }
+  },
+  {
+    "contentHash": "sha256:d86b98ff6586e4928bc5aa7ecfaddf25551880b20382e0ce13bbdabf324e82fa",
+    "description": "ElevenLabs text-to-speech with mac-style say UX.",
+    "emoji": "🗣️",
+    "name": "sag",
+    "path": "skills/sag/SKILL.md",
+    "requires": {
+      "bins": ["sag"],
+      "env": ["ELEVENLABS_API_KEY"]
+    }
+  },
+  {
+    "contentHash": "sha256:7c6a007031f8c13621ee2ad2188798e7745afac24932fb7be0b57ad1a36464cc",
+    "description": "Search and analyze your own session logs (older/parent conversations) using jq.",
+    "emoji": "📜",
+    "name": "session-logs",
+    "path": "skills/session-logs/SKILL.md",
+    "requires": {
+      "bins": ["jq", "rg"]
+    }
+  },
+  {
+    "contentHash": "sha256:4ed0e7d7b7711ccfece96fd8a13faade7ba97339c56df963490b7afe2418eb1b",
+    "description": "Local text-to-speech via sherpa-onnx (offline, no cloud)",
+    "emoji": "🗣️",
+    "name": "sherpa-onnx-tts",
+    "path": "skills/sherpa-onnx-tts/SKILL.md",
+    "requires": {
+      "env": ["SHERPA_ONNX_RUNTIME_DIR", "SHERPA_ONNX_MODEL_DIR"]
+    }
+  },
+  {
+    "contentHash": "sha256:e3bf25727b1f952a4a0c0fa22f9fca8171e68e2b5419b5fcdf86610504118294",
+    "description": "Use when you need to control Slack from OpenClaw via the slack tool, including reacting to messages or pinning/unpinning items in Slack channels or DMs.",
+    "emoji": "💬",
+    "name": "slack",
+    "path": "skills/slack/SKILL.md",
+    "requires": {}
+  },
+  {
+    "contentHash": "sha256:ed648a76a89a05912e161a9e1e6a327d78211b111db92723fe9530f503830777",
+    "description": "Generate spectrograms and feature-panel visualizations from audio with the songsee CLI.",
+    "emoji": "🌊",
+    "name": "songsee",
+    "path": "skills/songsee/SKILL.md",
+    "requires": {
+      "bins": ["songsee"]
+    }
+  },
+  {
+    "contentHash": "sha256:ce5c4e2a3316aedbda94c4552728a0aa51ef28281e403e817cb6792524cd589c",
+    "description": "Control Sonos speakers (discover/status/play/volume/group).",
+    "emoji": "🔊",
+    "name": "sonoscli",
+    "path": "skills/sonoscli/SKILL.md",
+    "requires": {
+      "bins": ["sonos"]
+    }
+  },
+  {
+    "contentHash": "sha256:35f3d420538ce7e79ce5226a849f3089045a62537058875da0a7c302f603c8b4",
+    "description": "Terminal Spotify playback/search via spogo (preferred) or spotify_player.",
+    "emoji": "🎵",
+    "name": "spotify-player",
+    "path": "skills/spotify-player/SKILL.md",
+    "requires": {}
+  },
+  {
+    "contentHash": "sha256:3ec4a66d4f2756c15cf653a9f7b67d05631ac712078b5768945511db8ad7c7a6",
+    "description": "Summarize or extract text/transcripts from URLs, podcasts, and local files (great fallback for “transcribe this YouTube/video”).",
+    "emoji": "🧾",
+    "name": "summarize",
+    "path": "skills/summarize/SKILL.md",
+    "requires": {
+      "bins": ["summarize"]
+    }
+  },
+  {
+    "contentHash": "sha256:5a04111134fd1d49dd350e5ba4fcb50e3d7911ef68d79eea2c797add357cf260",
+    "description": "Manage Things 3 via the `things` CLI on macOS (add/update projects+todos via URL scheme; read/search/list from the local Things database). Use when a user asks OpenClaw to add a task to Things, list inbox/today/upcoming, search tasks, or inspect projects/areas/tags.",
+    "emoji": "✅",
+    "name": "things-mac",
+    "path": "skills/things-mac/SKILL.md",
+    "requires": {
+      "bins": ["things"]
+    }
+  },
+  {
+    "contentHash": "sha256:25f7d9ee550752298014a83f2aa402f8015f9c4c781d70ac75bf6b043c0113f8",
+    "description": "Remote-control tmux sessions for interactive CLIs by sending keystrokes and scraping pane output.",
+    "emoji": "🧵",
+    "name": "tmux",
+    "path": "skills/tmux/SKILL.md",
+    "requires": {
+      "bins": ["tmux"]
+    }
+  },
+  {
+    "contentHash": "sha256:61c8c5d474c579fe1a2d465086134d26c5657179088bee39f4f06b39daff4c50",
+    "description": "Manage Trello boards, lists, and cards via the Trello REST API.",
+    "emoji": "📋",
+    "name": "trello",
+    "path": "skills/trello/SKILL.md",
+    "requires": {
+      "bins": ["jq"],
+      "env": ["TRELLO_API_KEY", "TRELLO_TOKEN"]
+    }
+  },
+  {
+    "contentHash": "sha256:f5cb2b9e7755b990bd4c8b75799a0d915d9c20a02ae592877586ccbdbffdc364",
+    "description": "Extract frames or short clips from videos using ffmpeg.",
+    "emoji": "🎞️",
+    "name": "video-frames",
+    "path": "skills/video-frames/SKILL.md",
+    "requires": {
+      "bins": ["ffmpeg"]
+    }
+  },
+  {
+    "contentHash": "sha256:d3e2c6d3d4ab409b186684d250d77f47117a466d33e9d83e23f60831e768b3f4",
+    "description": "Start voice calls via the OpenClaw voice-call plugin.",
+    "emoji": "📞",
+    "name": "voice-call",
+    "path": "skills/voice-call/SKILL.md",
+    "requires": {}
+  },
+  {
+    "contentHash": "sha256:e96ce8a145db72ceb49012d20570a0cff921173f9518676d7fe1472804ffeb9c",
+    "description": "Send WhatsApp messages to other people or search/sync WhatsApp history via the wacli CLI (not for normal user chats).",
+    "emoji": "📱",
+    "name": "wacli",
+    "path": "skills/wacli/SKILL.md",
+    "requires": {
+      "bins": ["wacli"]
+    }
+  },
+  {
+    "contentHash": "sha256:7afed39684bcedb45468480e487c14062465796ffdf978b68da9bf599f53b03c",
+    "description": "Send EVM transactions from this agent's hot wallet through the AgentGlob runtime API. Read balances, send native ETH/MATIC, send ERC-20 tokens, and broadcast arbitrary signed transactions on Ethereum, Arbitrum, Polygon, and Base.",
+    "emoji": "💸",
+    "name": "wallet",
+    "path": "skills/wallet/SKILL.md",
+    "requires": {
+      "env": ["AGENTGLOB_RUNTIME_URL", "AGENTGLOB_RUNTIME_TOKEN"]
+    }
+  },
+  {
+    "contentHash": "sha256:76e14c3aa59fde84f7f5c244d97787848db91145c1acf3f52744065d25f5c41e",
+    "description": "Get current weather and forecasts via wttr.in or Open-Meteo. Use when: user asks about weather, temperature, or forecasts for any location. NOT for: historical weather data, severe weather alerts, or detailed meteorological analysis. No API key needed.",
+    "emoji": "🌤️",
+    "name": "weather",
+    "path": "skills/weather/SKILL.md",
+    "requires": {
+      "bins": ["curl"]
+    }
+  }
+]
