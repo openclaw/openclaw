@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, test, vi } from "vitest";
+import type { Mock } from "vitest";
 import type { GetReplyOptions } from "../auto-reply/get-reply-options.types.js";
 import { clearConfigCache } from "../config/config.js";
 import type { AgentModelConfig } from "../config/types.agents-shared.js";
@@ -226,7 +227,7 @@ describe("gateway server chat", () => {
     }
   });
 
-  test("chat.send returns in_flight when duplicate attachment send wins parsing race", async () => {
+  test("chat.send registers the run before attachment prep so duplicates see in_flight", async () => {
     const sessionDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gw-"));
     const dispatchRelease = createDeferred<void>();
     try {
@@ -312,12 +313,15 @@ describe("gateway server chat", () => {
         expect(context.loadGatewayModelCatalog).toHaveBeenCalledTimes(1);
       }, FAST_WAIT_OPTS);
 
+      // The first send registered its abort controller before awaiting
+      // attachment prep, so the duplicate immediately sees an in-flight run
+      // instead of racing to win the started ack.
       await callSend("duplicate");
       expect(responses).toEqual([
         {
           id: "duplicate",
           ok: true,
-          payload: { runId: "idem-attachment-race", status: "started" },
+          payload: { runId: "idem-attachment-race", status: "in_flight" },
           error: undefined,
         },
       ]);
@@ -336,13 +340,13 @@ describe("gateway server chat", () => {
         {
           id: "duplicate",
           ok: true,
-          payload: { runId: "idem-attachment-race", status: "started" },
+          payload: { runId: "idem-attachment-race", status: "in_flight" },
           error: undefined,
         },
         {
           id: "first",
           ok: true,
-          payload: { runId: "idem-attachment-race", status: "in_flight" },
+          payload: { runId: "idem-attachment-race", status: "started" },
           error: undefined,
         },
       ]);
@@ -352,6 +356,145 @@ describe("gateway server chat", () => {
       await vi.waitFor(() => {
         expect(context.removeChatRun).toHaveBeenCalledTimes(1);
       }, FAST_WAIT_OPTS);
+    } finally {
+      dispatchRelease.resolve();
+      dispatchInboundMessageMock.mockReset();
+      testState.sessionStorePath = undefined;
+      clearConfigCache();
+      await fs.rm(sessionDir, { recursive: true, force: true });
+    }
+  });
+
+  test("chat.abort during attachment prep finds the active run (regression for #84176)", async () => {
+    const sessionDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gw-"));
+    const dispatchRelease = createDeferred<void>();
+    try {
+      testState.sessionStorePath = path.join(sessionDir, "sessions.json");
+      await writeSessionStore({
+        entries: {
+          main: {
+            sessionId: "sess-main",
+            modelProvider: "test-provider",
+            model: "vision-model",
+            updatedAt: Date.now(),
+          },
+        },
+      });
+
+      const catalogDeferred =
+        createDeferred<Awaited<ReturnType<GatewayRequestContext["loadGatewayModelCatalog"]>>>();
+      const sendRespond = vi.fn() as Mock<RespondFn>;
+      const abortRespond = vi.fn() as Mock<RespondFn>;
+      const context = {
+        loadGatewayModelCatalog: vi
+          .fn<GatewayRequestContext["loadGatewayModelCatalog"]>()
+          .mockImplementationOnce(() => catalogDeferred.promise),
+        logGateway: {
+          info: vi.fn(),
+          warn: vi.fn(),
+          error: vi.fn(),
+          debug: vi.fn(),
+        },
+        agentRunSeq: new Map<string, number>(),
+        chatAbortControllers: new Map(),
+        chatAbortedRuns: new Map(),
+        chatRunBuffers: new Map(),
+        chatDeltaSentAt: new Map(),
+        chatDeltaLastBroadcastLen: new Map(),
+        chatDeltaLastBroadcastText: new Map(),
+        agentDeltaSentAt: new Map(),
+        bufferedAgentEvents: new Map(),
+        addChatRun: vi.fn(),
+        removeChatRun: vi.fn(),
+        broadcast: vi.fn(),
+        nodeSendToSession: vi.fn(),
+        registerToolEventRecipient: vi.fn(),
+        dedupe: new Map(),
+      } as unknown as GatewayRequestContext;
+      dispatchInboundMessageMock.mockImplementation(async () => dispatchRelease.promise);
+
+      const pngB64 =
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/woAAn8B9FD5fHAAAAAASUVORK5CYII=";
+      const runId = "idem-abort-during-prep";
+      const sendParams = {
+        sessionKey: "main",
+        message: "see image",
+        idempotencyKey: runId,
+        attachments: [
+          {
+            type: "image",
+            mimeType: "image/png",
+            fileName: "dot.png",
+            content: pngB64,
+          },
+        ],
+      };
+      const { chatHandlers } = await import("./server-methods/chat.js");
+
+      const sendPromise = Promise.resolve(
+        chatHandlers["chat.send"]({
+          req: { type: "req", id: "send-1", method: "chat.send", params: sendParams },
+          params: sendParams,
+          client: null,
+          isWebchatConnect: () => false,
+          respond: sendRespond as never,
+          context,
+        }),
+      );
+
+      await vi.waitFor(() => {
+        expect(context.loadGatewayModelCatalog).toHaveBeenCalledTimes(1);
+      }, FAST_WAIT_OPTS);
+
+      // Fix verification: the run must be registered before attachment prep so
+      // chat.abort can observe it. Before #84176's fix this assertion failed.
+      expect(context.chatAbortControllers.has(runId)).toBe(true);
+
+      const abortParams = { sessionKey: "main", runId };
+      await chatHandlers["chat.abort"]({
+        req: { type: "req", id: "abort-1", method: "chat.abort", params: abortParams },
+        params: abortParams,
+        client: null,
+        isWebchatConnect: () => false,
+        respond: abortRespond as never,
+        context,
+      });
+
+      expect(abortRespond).toHaveBeenCalledTimes(1);
+      expect(abortRespond).toHaveBeenCalledWith(true, {
+        ok: true,
+        aborted: true,
+        runIds: [runId],
+      });
+      expect(context.chatAbortControllers.has(runId)).toBe(false);
+
+      catalogDeferred.resolve([
+        {
+          id: "vision-model",
+          name: "Vision Model",
+          provider: "test-provider",
+          input: ["text", "image"],
+        },
+      ]);
+      await sendPromise;
+
+      expect(sendRespond).toHaveBeenCalledTimes(1);
+      expect(sendRespond).toHaveBeenCalledWith(
+        true,
+        { runId, status: "aborted", stopReason: "rpc" },
+        undefined,
+        { runId },
+      );
+      expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
+      expect(context.addChatRun).not.toHaveBeenCalled();
+      // The aborted outcome is cached under chat:<runId> so a retry with the
+      // same idempotencyKey returns the cached aborted ack rather than
+      // spawning a new run (mirrors started/ok/error dedupe writes).
+      const cachedAbort = context.dedupe.get(`chat:${runId}`);
+      expect(cachedAbort).toMatchObject({
+        ok: true,
+        payload: { runId, status: "aborted", stopReason: "rpc" },
+      });
     } finally {
       dispatchRelease.resolve();
       dispatchInboundMessageMock.mockReset();

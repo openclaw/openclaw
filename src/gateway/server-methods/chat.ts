@@ -2391,6 +2391,30 @@ export const chatHandlers: GatewayRequestHandlers = {
     const explicitOriginTargetsPlugin = explicitOriginTargetsPluginBinding(
       explicitOriginResult.value,
     );
+    // Register the abort controller before any awaited attachment preparation
+    // so a chat.abort sent immediately after chat.send (issue #84176) finds the
+    // active run instead of returning aborted:false. Mirrors the agent RPC
+    // early-registration pattern (see agent.ts).
+    const activeRunAbort = registerChatAbortController({
+      chatAbortControllers: context.chatAbortControllers,
+      runId: clientRunId,
+      sessionId: backingSessionId ?? clientRunId,
+      sessionKey: rawSessionKey,
+      timeoutMs,
+      now,
+      ownerConnId: normalizeOptionalText(client?.connId),
+      ownerDeviceId: normalizeOptionalText(client?.connect?.device?.id),
+      providerId: resolvedSessionModel.provider,
+      authProviderId: resolvedSessionAuthProvider,
+      kind: "chat-send",
+    });
+    if (!activeRunAbort.registered) {
+      respond(true, { runId: clientRunId, status: "in_flight" as const }, undefined, {
+        cached: true,
+        runId: clientRunId,
+      });
+      return;
+    }
     if (normalizedAttachments.length > 0) {
       try {
         await measureDiagnosticsTimelineSpan(
@@ -2454,6 +2478,7 @@ export const chatHandlers: GatewayRequestHandlers = {
           },
         );
       } catch (err) {
+        activeRunAbort.cleanup();
         logAttachmentFailure(context.logGateway, "chat.send attachment parse/stage failed", err);
         respond(
           false,
@@ -2467,27 +2492,33 @@ export const chatHandlers: GatewayRequestHandlers = {
       }
     }
 
-    try {
-      const activeRunAbort = registerChatAbortController({
-        chatAbortControllers: context.chatAbortControllers,
+    // chat.abort may have arrived during attachment prep. abortChatRunById has
+    // already deleted the controller entry and broadcast the aborted event;
+    // skip dispatch and acknowledge the early abort instead of falsely sending
+    // a started ack. Record the aborted outcome under the chat:<runId> dedupe
+    // key so retries with the same idempotencyKey see the cached aborted result
+    // rather than starting a new run (mirrors the started/ok/error paths).
+    if (activeRunAbort.controller.signal.aborted) {
+      const stopReason = activeRunAbort.entry?.abortStopReason ?? "rpc";
+      const abortedPayload = {
         runId: clientRunId,
-        sessionId: backingSessionId ?? clientRunId,
-        sessionKey: rawSessionKey,
-        timeoutMs,
-        now,
-        ownerConnId: normalizeOptionalText(client?.connId),
-        ownerDeviceId: normalizeOptionalText(client?.connect?.device?.id),
-        providerId: resolvedSessionModel.provider,
-        authProviderId: resolvedSessionAuthProvider,
-        kind: "chat-send",
+        status: "aborted" as const,
+        stopReason,
+      };
+      setGatewayDedupeEntry({
+        dedupe: context.dedupe,
+        key: `chat:${clientRunId}`,
+        entry: {
+          ts: Date.now(),
+          ok: true,
+          payload: abortedPayload,
+        },
       });
-      if (!activeRunAbort.registered) {
-        respond(true, { runId: clientRunId, status: "in_flight" as const }, undefined, {
-          cached: true,
-          runId: clientRunId,
-        });
-        return;
-      }
+      respond(true, abortedPayload, undefined, { runId: clientRunId });
+      return;
+    }
+
+    try {
       if (activeChatSendDedupeKey) {
         context.dedupe.set(activeChatSendDedupeKey, {
           ts: now,
