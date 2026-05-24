@@ -28,7 +28,7 @@ export function normalizeBrokerTarget(raw: string): string | undefined {
     const parsed = parseBrokerConversationTarget(trimmed);
     return buildBrokerConversationTarget(parsed);
   } catch {
-    return trimmed;
+    return undefined;
   }
 }
 

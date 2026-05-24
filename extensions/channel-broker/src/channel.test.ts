@@ -126,6 +126,72 @@ describe("channel-broker plugin", () => {
     });
   });
 
+  it("rejects non-sent provider receipts before reporting send success", async () => {
+    setChannelBrokerRuntime({
+      createRequestId: () => "broker-send-retryable",
+      sendOutboundRequest: vi.fn(async () =>
+        createBrokerReceipt({
+          requestId: "broker-send-retryable",
+          providerId: "acme",
+          platform: "Telegram",
+          status: "retryable",
+          messageIds: ["native-should-not-commit"],
+          retryAfterMs: 2500,
+          error: { code: "rate_limited", message: "rate limited", retryable: true },
+        }),
+      ),
+    });
+
+    await expect(
+      channelBrokerPlugin.message?.send?.text?.({
+        cfg: {
+          channels: {
+            "channel-broker": {
+              accounts: {
+                acme: {
+                  enabled: true,
+                  baseUrl: "https://broker.example.test",
+                },
+              },
+            },
+          },
+        },
+        to: "telegram:chat-1",
+        text: "hello",
+        accountId: "acme",
+      } as never),
+    ).rejects.toMatchObject({
+      name: "ChannelBrokerProviderReceiptError",
+      receipt: { status: "retryable", retryAfterMs: 2500 },
+    });
+  });
+
+  it("rejects invalid broker targets during outbound resolution", () => {
+    const result = channelBrokerPlugin.outbound?.resolveTarget?.({
+      cfg: {
+        channels: {
+          "channel-broker": {
+            accounts: {
+              acme: {
+                enabled: true,
+                baseUrl: "https://broker.example.test",
+              },
+            },
+          },
+        },
+      },
+      accountId: "acme",
+      to: "not-a-broker-target",
+    } as never);
+
+    expect(result).toMatchObject({
+      ok: false,
+      error: expect.objectContaining({
+        message: "Invalid channel broker target: not-a-broker-target",
+      }),
+    });
+  });
+
   it("passes cancellation through the default HTTP transport", async () => {
     const controller = new AbortController();
     const fetchMock = vi.fn(async () => ({

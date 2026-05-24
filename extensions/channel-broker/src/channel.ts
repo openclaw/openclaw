@@ -232,9 +232,18 @@ export const channelBrokerPlugin = createChatChannelPlugin({
       resolveTarget: ({ to, cfg, accountId }) => {
         const account = resolveChannelBrokerAccount({ cfg: cfg as CoreConfig, accountId });
         const resolved = to?.trim() || account.defaultTo;
-        return resolved
-          ? { ok: true, to: normalizeBrokerTarget(resolved) ?? resolved }
-          : { ok: false, error: new Error("Channel broker target is required.") };
+        if (!resolved) {
+          return { ok: false, error: new Error("Channel broker target is required.") };
+        }
+        try {
+          parseChannelBrokerTarget({ rawTarget: resolved, account });
+        } catch (cause) {
+          return {
+            ok: false,
+            error: new Error(`Invalid channel broker target: ${resolved}`, { cause }),
+          };
+        }
+        return { ok: true, to: normalizeBrokerTarget(resolved) ?? resolved };
       },
     },
     attachedResults: {
