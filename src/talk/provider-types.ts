@@ -106,6 +106,13 @@ export type RealtimeVoiceBridgeCreateRequest = RealtimeVoiceBridgeCallbacks & {
   instructions?: string;
   autoRespondToAudio?: boolean;
   interruptResponseOnInputAudio?: boolean;
+  /**
+   * The runtime is starting the session with `autoRespondToAudio: false` only so its own
+   * initial greeting is the single first-turn source. Providers that arm a server-side
+   * auto-response (e.g. OpenAI server VAD) should re-enable it once the first manual
+   * greeting reaches a terminal response event so later turns auto-respond normally.
+   */
+  restoreAutoRespondToAudioAfterInitialGreeting?: boolean;
   tools?: RealtimeVoiceTool[];
 };
 

@@ -60,6 +60,7 @@ type OpenAIRealtimeVoiceProviderConfig = {
   vadThreshold?: number;
   silenceDurationMs?: number;
   prefixPaddingMs?: number;
+  autoRespondToAudio?: boolean;
   interruptResponseOnInputAudio?: boolean;
   minBargeInAudioEndMs?: number;
   reasoningEffort?: string;
@@ -213,6 +214,8 @@ function normalizeProviderConfig(
     vadThreshold: asFiniteNumber(raw?.vadThreshold),
     silenceDurationMs: asFiniteNumber(raw?.silenceDurationMs),
     prefixPaddingMs: asFiniteNumber(raw?.prefixPaddingMs),
+    autoRespondToAudio:
+      typeof raw?.autoRespondToAudio === "boolean" ? raw.autoRespondToAudio : undefined,
     interruptResponseOnInputAudio:
       typeof raw?.interruptResponseOnInputAudio === "boolean"
         ? raw.interruptResponseOnInputAudio
@@ -370,6 +373,9 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
   private deliveredToolCallKeys = new Set<string>();
   private readonly flowId = randomUUID();
   private sessionReadyFired = false;
+  private initialGreetingRestoreStarted = false;
+  private waitingForInitialGreetingDone = false;
+  private autoResponseRestored = false;
   private readonly audioFormat: RealtimeVoiceAudioFormat;
 
   constructor(private readonly config: OpenAIRealtimeVoiceBridgeConfig) {
@@ -414,6 +420,13 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
   triggerGreeting(instructions?: string): void {
     if (!this.isConnected() || !this.ws) {
       return;
+    }
+    if (
+      this.config.restoreAutoRespondToAudioAfterInitialGreeting === true &&
+      !this.initialGreetingRestoreStarted
+    ) {
+      this.initialGreetingRestoreStarted = true;
+      this.waitingForInitialGreetingDone = true;
     }
     this.sendUserMessage(instructions ?? this.config.instructions ?? "Greet the meeting.");
   }
@@ -933,6 +946,7 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
         this.responseActive = false;
         this.responseCreateInFlight = false;
         this.responseCancelInFlight = false;
+        this.maybeRestoreAutoResponseAfterInitialGreeting();
         this.flushPendingResponseCreate();
         return;
 
@@ -1104,6 +1118,26 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
     }
     this.responseCreatePending = false;
     this.requestResponseCreate();
+  }
+
+  private maybeRestoreAutoResponseAfterInitialGreeting(): void {
+    if (!this.waitingForInitialGreetingDone || this.autoResponseRestored) {
+      return;
+    }
+    this.waitingForInitialGreetingDone = false;
+    this.autoResponseRestored = true;
+    const turnDetection: RealtimeTurnDetectionConfig = {
+      type: "server_vad",
+      threshold: this.config.vadThreshold ?? 0.5,
+      prefix_padding_ms: this.config.prefixPaddingMs ?? 300,
+      silence_duration_ms: this.config.silenceDurationMs ?? 500,
+      create_response: true,
+      interrupt_response: true,
+    };
+    const session = this.usesAzureDeploymentRealtimeApi()
+      ? { turn_detection: turnDetection }
+      : { audio: { input: { turn_detection: turnDetection } } };
+    this.sendEvent({ type: "session.update", session }, "reason=initial-greeting-complete");
   }
 
   private resetRealtimeSessionState(): void {
@@ -1301,6 +1335,7 @@ export function buildOpenAIRealtimeVoiceProvider(): RealtimeVoiceProviderPlugin 
         vadThreshold: config.vadThreshold,
         silenceDurationMs: config.silenceDurationMs,
         prefixPaddingMs: config.prefixPaddingMs,
+        autoRespondToAudio: req.autoRespondToAudio ?? config.autoRespondToAudio,
         interruptResponseOnInputAudio:
           req.interruptResponseOnInputAudio ?? config.interruptResponseOnInputAudio,
         minBargeInAudioEndMs: config.minBargeInAudioEndMs,
