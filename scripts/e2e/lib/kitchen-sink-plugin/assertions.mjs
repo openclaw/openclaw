@@ -136,6 +136,13 @@ const expectMissing = (listValue, expected, field) => {
 };
 
 const INVALID_PROBE_DIAGNOSTIC_SURFACE_MODES = new Set(["full", "conformance", "adversarial"]);
+const requiredFullDiagnosticCanaries = new Set([
+  "only bundled plugins can register trusted tool policies",
+  "plugin must declare contracts.tools for: kitchen-sink-tool",
+  'channel "kitchen-sink-channel-probe" registration missing required config helpers',
+  'agent harness "kitchen-sink-agent-harness" registration missing required runtime methods',
+  "session scheduler job registration requires unique id, sessionKey, and kind",
+]);
 
 function assertExpectedDiagnostics(surfaceMode, errorMessages) {
   const expectedErrorMessages = new Set([
@@ -174,8 +181,14 @@ function assertExpectedDiagnostics(surfaceMode, errorMessages) {
       throw new Error(`unexpected kitchen-sink diagnostic error: ${message}`);
     }
   }
-  if (surfaceMode === "full" && process.env.KITCHEN_SINK_REQUIRE_ALL_DIAGNOSTICS === "1") {
-    for (const message of expectedErrorMessages) {
+  if (surfaceMode === "full") {
+    // Default Docker scenarios install the published package, which can lag this repo.
+    // Exhaustive matching is reserved for synchronized/current package fixtures.
+    const requiredMessages =
+      process.env.KITCHEN_SINK_REQUIRE_ALL_DIAGNOSTICS === "1"
+        ? expectedErrorMessages
+        : requiredFullDiagnosticCanaries;
+    for (const message of requiredMessages) {
       if (!errorMessages.has(message)) {
         throw new Error(`missing expected kitchen-sink diagnostic error: ${message}`);
       }
