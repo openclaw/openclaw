@@ -459,13 +459,21 @@ export async function handleDiscordModelPickerInteraction(params: {
       modelIndex: parsed.modelIndex,
     });
     const pendingModel = selectedModel ? `${provider}/${selectedModel}` : undefined;
-    // Runtime select customId also omits the bucket fields; derive from
-    // the pending model + provider.
+    // Runtime select customId carries modelBucket only when no pending
+    // model is set; otherwise derive from the pending model. As a final
+    // fallback, derive from the user's current durable model so the
+    // browse-bucket position survives a runtime change without anything
+    // pending.
     const derivedProviderBucket =
       parsed.providerBucket ?? findProviderBucketId(pickerData, provider);
+    const currentModelOnly = splitDiscordModelRef(currentModelRef ?? "");
     const derivedModelBucket =
       parsed.modelBucket ??
-      (selectedModel ? findModelBucketId(pickerData, provider, selectedModel) : undefined);
+      (selectedModel
+        ? findModelBucketId(pickerData, provider, selectedModel)
+        : currentModelOnly && currentModelOnly.provider === provider
+          ? findModelBucketId(pickerData, provider, currentModelOnly.model)
+          : undefined);
     const rendered = renderDiscordModelPickerModelsView({
       command: parsed.command,
       userId: parsed.userId,

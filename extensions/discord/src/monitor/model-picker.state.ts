@@ -379,7 +379,7 @@ export function computeAlphaBuckets(sortedItems: string[]): DiscordModelPickerBu
 
   const firstLetter = (value: string): string => value.charAt(0).toLowerCase();
   const allSamePrefix = sortedItems.every(
-    (item) => firstLetter(item) === firstLetter(sortedItems[0]!),
+    (item) => firstLetter(item) === firstLetter(sortedItems[0]),
   );
   if (allSamePrefix) {
     return chunkBucketsByCount(sortedItems);
@@ -398,13 +398,13 @@ export function computeAlphaBuckets(sortedItems: string[]): DiscordModelPickerBu
     let end = Math.min(sortedItems.length, start + target);
     // Extend `end` so we don't split a letter group across two buckets.
     if (end < sortedItems.length) {
-      const last = firstLetter(sortedItems[end - 1]!);
-      while (end < sortedItems.length && firstLetter(sortedItems[end]!) === last) {
+      const last = firstLetter(sortedItems[end - 1]);
+      while (end < sortedItems.length && firstLetter(sortedItems[end]) === last) {
         end += 1;
       }
     }
-    const startLetter = firstLetter(sortedItems[start]!);
-    const endLetter = firstLetter(sortedItems[end - 1]!);
+    const startLetter = firstLetter(sortedItems[start]);
+    const endLetter = firstLetter(sortedItems[end - 1]);
     const id = startLetter === endLetter ? startLetter : `${startLetter}-${endLetter}`;
     const label =
       startLetter === endLetter
@@ -457,9 +457,9 @@ export function resolveBucket(
     return null;
   }
   if (!id) {
-    return buckets[0]!;
+    return buckets[0];
   }
-  return buckets.find((bucket) => bucket.id === id) ?? buckets[0]!;
+  return buckets.find((bucket) => bucket.id === id) ?? buckets[0];
 }
 
 /**

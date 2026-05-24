@@ -458,25 +458,38 @@ function buildModelRows(params: {
   }));
   const activeProviderBucket =
     providerPage.bucket && providerPage.bucket.id !== "all" ? providerPage.bucket.id : undefined;
-
-  rows.push(
-    new Row([
-      createModelSelect({
-        customId: buildDiscordModelPickerCustomId({
-          command: params.command,
-          action: "provider",
-          view: "models",
-          provider: params.modelPage.provider,
-          page: providerPage.page,
-          providerPage: providerPage.page,
-          providerBucket: activeProviderBucket,
-          userId: params.userId,
+  const activeModelBucket =
+    params.modelPage.bucket && params.modelPage.bucket.id !== "all"
+      ? params.modelPage.bucket.id
+      : undefined;
+  // Codex P1: Discord caps a message at 5 action rows. The model view
+  // already spends rows on the provider select, runtime select (when >1
+  // choice), model select, pagination, and the trailing button row — so
+  // when the model list is bucketed (adding a bucket select row), the
+  // in-view provider select pushes the layout to 6 rows. Drop the
+  // provider select in that case; the back button on the submit row is
+  // the supported way to return to the providers view.
+  const modelBucketingActive = (params.modelPage.buckets?.length ?? 0) > 1;
+  if (!modelBucketingActive) {
+    rows.push(
+      new Row([
+        createModelSelect({
+          customId: buildDiscordModelPickerCustomId({
+            command: params.command,
+            action: "provider",
+            view: "models",
+            provider: params.modelPage.provider,
+            page: providerPage.page,
+            providerPage: providerPage.page,
+            providerBucket: activeProviderBucket,
+            userId: params.userId,
+          }),
+          options: providerOptions,
+          placeholder: "Select provider",
         }),
-        options: providerOptions,
-        placeholder: "Select provider",
-      }),
-    ]),
-  );
+      ]),
+    );
+  }
 
   const runtimeChoices = getRuntimeChoices({
     data: params.data,
@@ -495,10 +508,11 @@ function buildModelRows(params: {
   });
 
   if (runtimeChoices.length > 1) {
-    const runtimeModelBucket =
-      params.modelPage.bucket && params.modelPage.bucket.id !== "all"
-        ? params.modelPage.bucket.id
-        : undefined;
+    // Codex P2: encode modelBucket on the runtime customId only when no
+    // pending model is set. When a pending model is set the handler can
+    // derive the bucket from the model id; when nothing is pending the
+    // user is browsing inside a non-first bucket, so encoding the bucket
+    // is the only way to bring them back to it after the runtime change.
     rows.push(
       new Row([
         createModelSelect({
@@ -511,6 +525,9 @@ function buildModelRows(params: {
             page: params.modelPage.page,
             providerPage: providerPage.page,
             modelIndex: params.pendingModelIndex,
+            ...(params.pendingModelIndex === undefined && activeModelBucket
+              ? { modelBucket: activeModelBucket }
+              : {}),
             userId: params.userId,
           }),
           options: runtimeChoices.map((choice) => {
@@ -538,11 +555,6 @@ function buildModelRows(params: {
       ? selectedModelRef.provider === params.modelPage.provider && selectedModelRef.model === model
       : false,
   }));
-
-  const activeModelBucket =
-    params.modelPage.bucket && params.modelPage.bucket.id !== "all"
-      ? params.modelPage.bucket.id
-      : undefined;
 
   // Model select customId omits providerBucket and modelBucket: both are
   // pure functions of the durable state (provider + picked model) and
@@ -718,7 +730,7 @@ export function renderDiscordModelPickerProvidersView(
     totalPages: page.totalPages,
     hasPrev: page.hasPrev,
     hasNext: page.hasNext,
-    providerBucket: params.providerBucket,
+    providerBucket: activeProviderBucket,
   });
   if (navRow) {
     rows.push(navRow);
