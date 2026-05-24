@@ -126,6 +126,41 @@ describe("edit tool recovery hardening", () => {
     ).rejects.toThrow(/Current file contents:\nactual current content/);
   });
 
+  it("shows the best matching region when oldText partially matches a file region", async () => {
+    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-edit-recovery-"));
+    const filePath = path.join(tmpDir, "multi.txt");
+    const content = [
+      "line 1: header",
+      "line 2: setup",
+      "line 3: the target",
+      "line 4: more code",
+      "line 5: footer",
+    ].join("\n");
+    await fs.writeFile(filePath, content, "utf-8");
+
+    const tool = createRecoveredEditTool({
+      root: tmpDir,
+      readFile: (absolutePath) => fs.readFile(absolutePath, "utf-8"),
+      execute: async () => {
+        throw new Error(
+          "Could not find the exact text in multi.txt. The old text must match exactly including all whitespace and newlines.",
+        );
+      },
+    });
+
+    // oldText shares first line with the actual region at line 3
+    await expect(
+      tool.execute(
+        "call-best",
+        {
+          path: filePath,
+          edits: [{ oldText: "line 3: the target\nline 4: WRONG", newText: "replaced" }],
+        },
+        undefined,
+      ),
+    ).rejects.toThrow(/Best matching region/);
+  });
+
   it("recovers success after a post-write throw when CRLF output contains newText and oldText is only a substring", async () => {
     tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-edit-recovery-"));
     const filePath = path.join(tmpDir, "demo.txt");

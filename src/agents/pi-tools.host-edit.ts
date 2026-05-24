@@ -132,12 +132,103 @@ function shouldAddMismatchHint(error: unknown) {
   return error instanceof Error && error.message.includes(EDIT_MISMATCH_MESSAGE);
 }
 
-function appendMismatchHint(error: Error, currentContent: string): Error {
-  const snippet =
-    currentContent.length <= EDIT_MISMATCH_HINT_LIMIT
-      ? currentContent
-      : `${currentContent.slice(0, EDIT_MISMATCH_HINT_LIMIT)}\n... (truncated)`;
-  const enhanced = new Error(`${error.message}\nCurrent file contents:\n${snippet}`);
+/**
+ * Count shared leading lines between two strings (case-sensitive, whitespace-exact).
+ */
+function countSharedLines(a: string, b: string): number {
+  const aLines = a.split("\n");
+  const bLines = b.split("\n");
+  let shared = 0;
+  const limit = Math.min(aLines.length, bLines.length);
+  for (let i = 0; i < limit; i++) {
+    if (aLines[i] === bLines[i]) {
+      shared++;
+    } else {
+      break;
+    }
+  }
+  return shared;
+}
+
+/**
+ * Find the file region most similar to `needle` using a line-based sliding
+ * window.  Returns the best-matching region with line numbers so the model
+ * can see *where* its oldText diverged.
+ */
+function findBestMatchRegion(
+  content: string,
+  needle: string,
+  maxLen: number,
+): { snippet: string; startLine: number } | undefined {
+  if (content.length === 0 || needle.length === 0) {
+    return undefined;
+  }
+  const contentLines = content.split("\n");
+  const needleLines = needle.split("\n");
+  const windowSize = needleLines.length;
+
+  let bestScore = 0;
+  let bestStart = 0;
+
+  for (let i = 0; i <= contentLines.length - windowSize; i++) {
+    const candidate = contentLines.slice(i, i + windowSize).join("\n");
+    const score = countSharedLines(candidate, needle);
+    if (score > bestScore) {
+      bestScore = score;
+      bestStart = i;
+    }
+  }
+
+  // No meaningful match — fall back to undefined so caller uses full file head
+  if (bestScore === 0) {
+    return undefined;
+  }
+
+  // Add a small context margin (2 lines above/below)
+  const ctxBefore = Math.max(0, bestStart - 2);
+  const ctxAfter = Math.min(contentLines.length, bestStart + windowSize + 2);
+  let snippet = contentLines
+    .slice(ctxBefore, ctxAfter)
+    .map((line, idx) => `${ctxBefore + idx + 1} | ${line}`)
+    .join("\n");
+  if (snippet.length > maxLen) {
+    snippet = `${snippet.slice(0, maxLen)}\n... (truncated)`;
+  }
+  return { snippet, startLine: ctxBefore + 1 };
+}
+
+function appendMismatchHint(
+  error: Error,
+  currentContent: string,
+  edits: EditReplacement[],
+): Error {
+  const failedEdit = edits.find(
+    (e) => !normalizeToLF(currentContent).includes(normalizeToLF(e.oldText)),
+  );
+
+  // Try to locate the closest region to the failed oldText
+  const bestRegion =
+    failedEdit &&
+    findBestMatchRegion(
+      normalizeToLF(currentContent),
+      normalizeToLF(failedEdit.oldText),
+      EDIT_MISMATCH_HINT_LIMIT,
+    );
+
+  let hint: string;
+  if (bestRegion) {
+    hint =
+      `Best matching region (lines ${bestRegion.startLine}+):\n` +
+      bestRegion.snippet;
+  } else {
+    const snippet =
+      currentContent.length <= EDIT_MISMATCH_HINT_LIMIT
+        ? currentContent
+        : `${currentContent.slice(0, EDIT_MISMATCH_HINT_LIMIT)}\n... (truncated)`;
+    hint = `Current file contents:\n${snippet}`;
+  }
+
+  const enhanced = new Error(`${error.message}\n${hint}`);
   enhanced.stack = error.stack;
   return enhanced;
 }
@@ -203,7 +294,7 @@ export function wrapEditToolWithRecovery(
           err instanceof Error &&
           shouldAddMismatchHint(err)
         ) {
-          throw appendMismatchHint(err, currentContent);
+          throw appendMismatchHint(err, currentContent, edits);
         }
 
         throw err;
