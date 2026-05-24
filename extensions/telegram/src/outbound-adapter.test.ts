@@ -4,9 +4,11 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const sendMessageTelegramMock = vi.fn();
 const pinMessageTelegramMock = vi.fn();
+const sendPollTelegramMock = vi.fn();
 
 vi.mock("./send.js", () => ({
   pinMessageTelegram: (...args: unknown[]) => pinMessageTelegramMock(...args),
+  sendPollTelegram: (...args: unknown[]) => sendPollTelegramMock(...args),
   sendMessageTelegram: (...args: unknown[]) => sendMessageTelegramMock(...args),
 }));
 
@@ -57,6 +59,7 @@ function callOptionsFromEnd(
 describe("telegramOutbound", () => {
   beforeEach(() => {
     pinMessageTelegramMock.mockReset();
+    sendPollTelegramMock.mockReset();
     sendMessageTelegramMock.mockReset();
   });
 
@@ -444,6 +447,33 @@ describe("telegramOutbound", () => {
     });
 
     lastCallOptions(sendMessageTelegramMock, "group:not-a-number", "bad retry target");
+  });
+
+  it("normalizes legacy durable group retry topic targets before Telegram polls", async () => {
+    sendPollTelegramMock.mockResolvedValueOnce({
+      messageId: "tg-poll-retry",
+      chatId: "-1001234567890",
+    });
+
+    await telegramOutbound.sendPoll?.({
+      cfg: {} as never,
+      to: "group:-1001234567890:topic:77",
+      poll: { question: "Retry?", options: ["Yes", "No"] },
+      accountId: "ops",
+    });
+
+    expect(sendPollTelegramMock).toHaveBeenCalledWith(
+      "-1001234567890:topic:77",
+      { question: "Retry?", options: ["Yes", "No"] },
+      {
+        cfg: {},
+        accountId: "ops",
+        messageThreadId: undefined,
+        silent: undefined,
+        isAnonymous: undefined,
+        gatewayClientScopes: undefined,
+      },
+    );
   });
 
   it("forwards audioAsVoice payload media to Telegram voice sends", async () => {
