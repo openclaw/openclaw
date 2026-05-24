@@ -227,6 +227,23 @@ describe("resolveDefaultTelegramAccountId", () => {
     expectNoMissingDefaultWarning();
   });
 
+  it("does not warn when defaultAccount selects one of multiple non-default accounts (#83948)", () => {
+    const cfg: OpenClawConfig = {
+      channels: {
+        telegram: {
+          defaultAccount: "charles",
+          accounts: {
+            hermes: { botToken: "tok-hermes" },
+            charles: { botToken: "tok-charles" },
+          },
+        },
+      },
+    };
+
+    expect(resolveDefaultTelegramAccountId(cfg)).toBe("charles");
+    expectNoMissingDefaultWarning();
+  });
+
   it("does not warn when only one non-default account is configured", () => {
     const cfg: OpenClawConfig = {
       channels: {
