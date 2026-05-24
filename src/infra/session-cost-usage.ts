@@ -1117,13 +1117,15 @@ async function scanTranscriptFile(params: {
         entry.costBreakdown = undefined;
       } else if (
         !isModelPricingKnown(cost) &&
+        (entry.costTotal === undefined || entry.costTotal === 0) &&
         computeUsageTokenTotals(entry.usage).totalTokens > 0
       ) {
-        // Pricing for this model is unknown (no positive per-token rate). Any cost the
-        // transport recorded is a fabricated $0 derived from an all-zero catalog entry,
-        // not a real price. Drop it and surface the turn as a missing-cost entry so the
-        // tokens it burned are not reported as confident $0 spend — otherwise every
-        // budget/spike safeguard that reads totalCost stays blind to it.
+        // Pricing for this model is unknown (no positive per-token rate) and there is no
+        // trustworthy recorded cost — the transport either recorded nothing or a
+        // fabricated $0 derived from an all-zero catalog entry. Surface this token-burning
+        // turn as a missing-cost entry instead of recording a confident $0, so budget and
+        // spike safeguards that read totalCost are not left blind to it. A turn that
+        // carries a real positive recorded cost is preserved by the guard above.
         entry.costTotal = undefined;
         entry.costBreakdown = undefined;
       } else if (entry.costTotal === undefined) {
