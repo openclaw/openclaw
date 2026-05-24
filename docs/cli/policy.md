@@ -174,11 +174,17 @@ unless a repair path is explicitly available and enabled.
 
 Agent-specific policy overlays keep broad `tools.*` and `agents.workspace`
 posture global, then let named scope blocks add stricter normal policy sections
-for explicit `agentIds` under `scopes.agents.<scopeName>`. The initial scoped
+for explicit `agentIds` under `scopes.<scopeName>`. The initial scoped
 sections are `tools` and `agents.workspace`; sandbox and ingress can use the
-same container once their evidence is attributable to an agent. The overlay is
-additive: global claims still run, and a scoped claim can emit its own finding
-against the same observed config. See [Agent-scoped policy overlays](/plan/policy-agent-scoped-overlays).
+same container once their evidence is attributable to an agent. Scoped fields
+carry strictness metadata such as allowlist subset, denylist superset, required
+boolean, and exact-list semantics so future policy-file conformance can reuse
+the same rule inventory instead of guessing. The overlay is additive: global
+claims still run, and a scoped claim can emit its own finding against the same
+observed config. See [Agent-scoped policy overlays](/plan/policy-agent-scoped-overlays).
+Every scope present in `policy.jsonc` must be valid and enforceable. Scopes
+currently require `agentIds`, and that selector supports only `tools.*` and
+`agents.workspace.*`.
 
 #### Channels
 

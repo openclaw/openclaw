@@ -29,13 +29,14 @@ This page describes the agent-scoped overlay model. The field reference remains
 
 ## Shape
 
-Use `scopes.agents.<scopeName>` for purpose-named agent policy scopes. Each
+Use `scopes.<scopeName>` for purpose-named agent policy scopes. Each
 scope lists the runtime `agentIds` it applies to, then reuses the normal
 top-level policy section grammar where the section evidence can be attributed to
 those agents. The initial shipped scoped sections are `tools` and
 `agents.workspace`; sandbox and ingress stay out of this PR and can join the
 same container once those policy PRs land and their evidence carries agent
-identity.
+identity. The scoped field inventory is backed by policy rule metadata that
+records each field's strictness semantics for later policy-file conformance.
 
 ```jsonc
 {
@@ -48,26 +49,24 @@ identity.
     },
   },
   "scopes": {
-    "agents": {
-      "release-agent-lockdown": {
-        "agentIds": ["release-agent"],
-        "agents": {
-          "workspace": {
-            "allowedAccess": ["none", "ro"],
-          },
+    "release-agent-lockdown": {
+      "agentIds": ["release-agent"],
+      "agents": {
+        "workspace": {
+          "allowedAccess": ["none", "ro"],
         },
-        "tools": {
-          "profiles": { "allow": ["minimal", "messaging"] },
-          "fs": { "requireWorkspaceOnly": true },
-          "exec": {
-            "allowSecurity": ["deny", "allowlist"],
-            "requireAsk": ["always"],
-            "allowHosts": ["sandbox"],
-          },
-          "elevated": { "allow": false },
-          "alsoAllow": { "expected": ["message", "read"] },
-          "denyTools": ["exec", "process", "write", "edit", "apply_patch"],
+      },
+      "tools": {
+        "profiles": { "allow": ["minimal", "messaging"] },
+        "fs": { "requireWorkspaceOnly": true },
+        "exec": {
+          "allowSecurity": ["deny", "allowlist"],
+          "requireAsk": ["always"],
+          "allowHosts": ["sandbox"],
         },
+        "elevated": { "allow": false },
+        "alsoAllow": { "expected": ["message", "read"] },
+        "denyTools": ["exec", "process", "write", "edit", "apply_patch"],
       },
     },
   },
@@ -75,10 +74,13 @@ identity.
 ```
 
 `agents.workspace` remains the existing all-agent workspace baseline.
-`scopes.agents.<scopeName>` is a scoped overlay, not a replacement for global
+`scopes.<scopeName>` is a scoped overlay, not a replacement for global
 policy. The scope name is descriptive only; matching uses `agentIds`, not
 display names. It deliberately contains normal section names instead of a
 bespoke per-agent mini-grammar.
+Every scope present in `policy.jsonc` must be valid and enforceable. In this
+PR, the only supported selector is `agentIds`, and it supports only `tools.*`
+and `agents.workspace.*`.
 
 ## Layering semantics
 
@@ -86,13 +88,12 @@ Policy evaluation is additive:
 
 1. Top-level policy applies to all matching evidence.
 2. Existing `agents.workspace` applies to defaults and every listed agent.
-3. `scopes.agents.<scopeName>` applies to evidence for each normalized runtime
+3. `scopes.<scopeName>` applies to evidence for each normalized runtime
    id in `agentIds`.
-4. Multiple scope blocks may target the same agent when they govern different
-   fields.
-5. The same effective agent cannot receive the same scoped policy field from
-   more than one scope block.
-6. A named-agent overlay can tighten policy, but it cannot make a global
+4. Multiple scope blocks may target the same agent when they govern
+   different fields, or when a later value for the same field is equally or
+   more restrictive according to policy metadata.
+5. A named-agent overlay can tighten policy, but it cannot make a global
    violation acceptable.
 
 If both global and agent-scoped rules fail, findings should point at the rule
@@ -100,8 +101,8 @@ that was violated:
 
 ```text
 oc://policy.jsonc/tools/denyTools
-oc://policy.jsonc/scopes/agents/release-agent-lockdown/tools/denyTools
-oc://policy.jsonc/scopes/agents/release-agent-lockdown/agents/workspace/allowedAccess
+oc://policy.jsonc/scopes/release-agent-lockdown/tools/denyTools
+oc://policy.jsonc/scopes/release-agent-lockdown/agents/workspace/allowedAccess
 ```
 
 That keeps broad tool posture, named-agent tool posture, and workspace posture
@@ -118,13 +119,13 @@ one extra entry can widen an agent beyond its reviewed role.
 The overlay model separates where policy is authored from where OpenClaw config
 is observed:
 
-| Policy scope                                   | Observed config                                      | Applies to                        | Example result                                                                |
-| ---------------------------------------------- | ---------------------------------------------------- | --------------------------------- | ----------------------------------------------------------------------------- |
-| Top-level `tools.*`                            | Global `tools.*` and inherited agent tool posture    | All agents using matching posture | Deny `gateway` exec host for every agent unless the global policy allows it.  |
-| Top-level `tools.*`                            | `agents.list[].tools.*` overrides                    | Any agent with an override        | Flag one agent that overrides `tools.exec.host` to an unapproved value.       |
-| `scopes.agents.<scopeName>.tools.*`            | Matching `agents.list[]` entry and inherited posture | Only that named agent             | Let most agents use `node` exec host while one agent must use only `sandbox`. |
-| `agents.workspace`                             | Defaults and every listed agent workspace posture    | Defaults and all listed agents    | Require every agent workspace access to be `none` or `ro`.                    |
-| `scopes.agents.<scopeName>.agents.workspace.*` | Matching `agents.list[]` workspace posture           | Only that named agent             | Require one agent to be read-only without requiring the same for `main`.      |
+| Policy scope                            | Observed config                                      | Applies to                        | Example result                                                                |
+| --------------------------------------- | ---------------------------------------------------- | --------------------------------- | ----------------------------------------------------------------------------- |
+| Top-level `tools.*`                     | Global `tools.*` and inherited agent tool posture    | All agents using matching posture | Deny `gateway` exec host for every agent unless the global policy allows it.  |
+| Top-level `tools.*`                     | `agents.list[].tools.*` overrides                    | Any agent with an override        | Flag one agent that overrides `tools.exec.host` to an unapproved value.       |
+| `scopes.<scopeName>.tools.*`            | Matching `agents.list[]` entry and inherited posture | Only that named agent             | Let most agents use `node` exec host while one agent must use only `sandbox`. |
+| `agents.workspace`                      | Defaults and every listed agent workspace posture    | Defaults and all listed agents    | Require every agent workspace access to be `none` or `ro`.                    |
+| `scopes.<scopeName>.agents.workspace.*` | Matching `agents.list[]` workspace posture           | Only that named agent             | Require one agent to be read-only without requiring the same for `main`.      |
 
 Per-agent overlays are additive. A named-agent rule can be stricter than the
 top-level rule, but it cannot make a global violation acceptable. For allow-list
@@ -132,9 +133,10 @@ rules, the effective allowed set is the intersection of the global rule and the
 named-agent overlay when both are present.
 
 For example, if top-level `tools.exec.allowHosts` permits `["sandbox", "node"]`
-and `scopes.agents.release-agent-lockdown.tools.exec.allowHosts` permits only
+and `scopes.release-agent-lockdown.tools.exec.allowHosts` permits only
 `["sandbox"]`, `release-agent` fails when its effective exec host is `node`;
-another agent can still pass with `node`.
+another agent can still pass
+with `node`.
 
 ## Tool posture versus workspace posture
 
@@ -146,22 +148,20 @@ Workspace posture belongs under `workspace` because it describes sandbox mode
 and workspace access. The workspace section should not grow into a general tool
 policy namespace. If one agent needs stricter tool restrictions to make its
 workspace posture meaningful, put those restrictions in the same agent overlay
-under `scopes.agents.<scopeName>.tools`.
+under `scopes.<scopeName>.tools`.
 
 For a restricted release agent, the intended split is:
 
 ```jsonc
 {
   "scopes": {
-    "agents": {
-      "release-agent-lockdown": {
-        "agentIds": ["release-agent"],
-        "agents": {
-          "workspace": { "allowedAccess": ["none", "ro"] },
-        },
-        "tools": {
-          "denyTools": ["exec", "process", "write", "edit", "apply_patch"],
-        },
+    "release-agent-lockdown": {
+      "agentIds": ["release-agent"],
+      "agents": {
+        "workspace": { "allowedAccess": ["none", "ro"] },
+      },
+      "tools": {
+        "denyTools": ["exec", "process", "write", "edit", "apply_patch"],
       },
     },
   },
@@ -193,7 +193,7 @@ The implementation is additive:
 
 - keep all existing top-level policy fields valid;
 - keep `agents.workspace` semantics unchanged;
-- validate `scopes.agents` before evaluating scoped rules;
+- validate `scopes` before evaluating scoped rules;
 - reject unsupported scoped sections clearly until their evidence and policy
   contracts are implemented;
 - do not reinterpret top-level `tools.requireMetadata` as agent-scoped, because

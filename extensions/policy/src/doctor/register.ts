@@ -104,6 +104,106 @@ export const POLICY_CHECK_IDS = [
   CHECK_IDS.policyUnknownToolSensitivity,
 ] as const;
 
+export type PolicyStrictnessKind =
+  | "allowlist-subset"
+  | "denylist-superset"
+  | "requires-true"
+  | "requires-false"
+  | "exact-list";
+
+export type PolicyEmptyListSemantics = "disabled" | "meaningful";
+
+export type PolicyScopeSelectorKind = "agentIds";
+
+export type PolicyRuleMetadata = {
+  readonly policyPath: readonly string[];
+  readonly strictness: PolicyStrictnessKind;
+  readonly valueType: "boolean" | "string-list";
+  readonly checkIds: readonly (typeof POLICY_CHECK_IDS)[number][];
+  readonly emptyList?: PolicyEmptyListSemantics;
+  readonly caseSensitive?: boolean;
+  readonly scopeSelectors?: readonly PolicyScopeSelectorKind[];
+};
+
+export const POLICY_RULE_METADATA = [
+  {
+    policyPath: ["agents", "workspace", "allowedAccess"],
+    strictness: "allowlist-subset",
+    valueType: "string-list",
+    checkIds: [CHECK_IDS.policyAgentsWorkspaceAccessDenied],
+    emptyList: "disabled",
+    scopeSelectors: ["agentIds"],
+  },
+  {
+    policyPath: ["agents", "workspace", "denyTools"],
+    strictness: "denylist-superset",
+    valueType: "string-list",
+    checkIds: [CHECK_IDS.policyAgentsToolNotDenied],
+    scopeSelectors: ["agentIds"],
+  },
+  {
+    policyPath: ["tools", "profiles", "allow"],
+    strictness: "allowlist-subset",
+    valueType: "string-list",
+    checkIds: [CHECK_IDS.policyToolsProfileUnapproved],
+    emptyList: "disabled",
+    scopeSelectors: ["agentIds"],
+  },
+  {
+    policyPath: ["tools", "fs", "requireWorkspaceOnly"],
+    strictness: "requires-true",
+    valueType: "boolean",
+    checkIds: [CHECK_IDS.policyToolsFsWorkspaceOnlyRequired],
+    scopeSelectors: ["agentIds"],
+  },
+  {
+    policyPath: ["tools", "exec", "allowSecurity"],
+    strictness: "allowlist-subset",
+    valueType: "string-list",
+    checkIds: [CHECK_IDS.policyToolsExecSecurityUnapproved],
+    emptyList: "disabled",
+    scopeSelectors: ["agentIds"],
+  },
+  {
+    policyPath: ["tools", "exec", "requireAsk"],
+    strictness: "allowlist-subset",
+    valueType: "string-list",
+    checkIds: [CHECK_IDS.policyToolsExecAskUnapproved],
+    emptyList: "disabled",
+    scopeSelectors: ["agentIds"],
+  },
+  {
+    policyPath: ["tools", "exec", "allowHosts"],
+    strictness: "allowlist-subset",
+    valueType: "string-list",
+    checkIds: [CHECK_IDS.policyToolsExecHostUnapproved],
+    emptyList: "disabled",
+    scopeSelectors: ["agentIds"],
+  },
+  {
+    policyPath: ["tools", "elevated", "allow"],
+    strictness: "requires-false",
+    valueType: "boolean",
+    checkIds: [CHECK_IDS.policyToolsElevatedEnabled],
+    scopeSelectors: ["agentIds"],
+  },
+  {
+    policyPath: ["tools", "alsoAllow", "expected"],
+    strictness: "exact-list",
+    valueType: "string-list",
+    checkIds: [CHECK_IDS.policyToolsAlsoAllowMissing, CHECK_IDS.policyToolsAlsoAllowUnexpected],
+    emptyList: "meaningful",
+    scopeSelectors: ["agentIds"],
+  },
+  {
+    policyPath: ["tools", "denyTools"],
+    strictness: "denylist-superset",
+    valueType: "string-list",
+    checkIds: [CHECK_IDS.policyToolsRequiredDenyMissing],
+    scopeSelectors: ["agentIds"],
+  },
+] as const satisfies readonly PolicyRuleMetadata[];
+
 const KNOWN_RISK_LEVELS = ["low", "medium", "high", "critical"] as const;
 const KNOWN_SENSITIVITY_LEVELS = ["public", "internal", "confidential", "restricted"] as const;
 const SUPPORTED_TOOL_METADATA = ["risk", "sensitivity", "owner"] as const;
@@ -1147,6 +1247,7 @@ function policyContainerShapeFindings(
   const scopesFinding = scopedPolicyShapeFinding(policy.scopes, {
     policyDocName,
     policyPath,
+    policy,
   });
   if (scopesFinding !== undefined) {
     return [scopesFinding];
@@ -1189,6 +1290,7 @@ function scopedPolicyShapeFinding(
   params: {
     readonly policyDocName: string;
     readonly policyPath: string;
+    readonly policy: Record<string, unknown>;
   },
 ): HealthFinding | undefined {
   if (value === undefined) {
@@ -1199,51 +1301,31 @@ function scopedPolicyShapeFinding(
       params.policyPath,
       `oc://${params.policyDocName}/scopes`,
       `${params.policyPath} scopes must be an object.`,
-      `Fix ${params.policyPath} so scopes is an object.`,
+      `Fix ${params.policyPath} so scopes maps scope names to policy overlays with selectors such as agentIds.`,
     );
   }
-  const unsupportedScopeKey = Object.keys(value).find((key) => key !== "agents");
-  if (unsupportedScopeKey !== undefined) {
-    return policyShapeFinding(
-      params.policyPath,
-      `oc://${params.policyDocName}/scopes/${ocPathSegment(unsupportedScopeKey)}`,
-      `${params.policyPath} scopes.${unsupportedScopeKey} is not a supported scoped policy selector.`,
-      `Use scopes.agents for named agent policy scopes.`,
-    );
-  }
-  if (value.agents !== undefined && !isRecord(value.agents)) {
-    return policyShapeFinding(
-      params.policyPath,
-      `oc://${params.policyDocName}/scopes/agents`,
-      `${params.policyPath} scopes.agents must be an object.`,
-      `Fix ${params.policyPath} so scopes.agents maps scope names to policy overlays with agentIds.`,
-    );
-  }
-  if (!isRecord(value.agents)) {
-    return undefined;
-  }
-  for (const [scopeName, overlay] of Object.entries(value.agents)) {
-    const targetPrefix = `scopes/agents/${ocPathSegment(scopeName)}`;
+  for (const [scopeName, overlay] of Object.entries(value)) {
+    const targetPrefix = `scopes/${ocPathSegment(scopeName)}`;
     if (!isRecord(overlay)) {
       return policyShapeFinding(
         params.policyPath,
         `oc://${params.policyDocName}/${targetPrefix}`,
-        `${params.policyPath} scopes.agents.${scopeName} must be an object.`,
-        `Fix ${params.policyPath} so the named agent policy scope is an object.`,
+        `${params.policyPath} scopes.${scopeName} must be an object.`,
+        `Fix ${params.policyPath} so the named policy scope is an object.`,
       );
     }
     if (overlay.agentIds === undefined) {
       return policyShapeFinding(
         params.policyPath,
         `oc://${params.policyDocName}/${targetPrefix}/agentIds`,
-        `${params.policyPath} scopes.agents.${scopeName}.agentIds is required.`,
+        `${params.policyPath} scopes.${scopeName}.agentIds is required for scoped tools or agent workspace policy.`,
         `List the runtime agent ids that this named policy scope applies to.`,
       );
     }
     const agentIdsFinding = policyStringArrayPropertyShapeFinding(overlay.agentIds, {
       policyDocName: params.policyDocName,
       policyPath: params.policyPath,
-      property: `scopes.agents.${scopeName}.agentIds`,
+      property: `scopes.${scopeName}.agentIds`,
       target: `${targetPrefix}/agentIds`,
       valueName: "agent id",
     });
@@ -1254,8 +1336,8 @@ function scopedPolicyShapeFinding(
       return policyShapeFinding(
         params.policyPath,
         `oc://${params.policyDocName}/${targetPrefix}/agentIds`,
-        `${params.policyPath} scopes.agents.${scopeName}.agentIds must include at least one agent id.`,
-        `Add one or more runtime agent ids to ${params.policyPath} scopes.agents.${scopeName}.agentIds.`,
+        `${params.policyPath} scopes.${scopeName}.agentIds must include at least one agent id.`,
+        `Add one or more runtime agent ids to ${params.policyPath} scopes.${scopeName}.agentIds.`,
       );
     }
     if (Array.isArray(overlay.agentIds)) {
@@ -1270,7 +1352,7 @@ function scopedPolicyShapeFinding(
           return policyShapeFinding(
             params.policyPath,
             `oc://${params.policyDocName}/${targetPrefix}/agentIds/#${index}`,
-            `${params.policyPath} scopes.agents.${scopeName}.agentIds[${index}] duplicates agentIds[${previous}] after normalization.`,
+            `${params.policyPath} scopes.${scopeName}.agentIds[${index}] duplicates agentIds[${previous}] after normalization.`,
             `List each runtime agent id only once per named policy scope.`,
           );
         }
@@ -1284,15 +1366,15 @@ function scopedPolicyShapeFinding(
       return policyShapeFinding(
         params.policyPath,
         `oc://${params.policyDocName}/${targetPrefix}/${ocPathSegment(unsupportedKey)}`,
-        `${params.policyPath} scopes.agents.${scopeName}.${unsupportedKey} is not a supported scoped policy section.`,
-        `Move the rule under a supported scoped section: agentIds, agents.workspace, or tools.`,
+        `${params.policyPath} scopes.${scopeName}.${unsupportedKey} is not supported by the agentIds selector.`,
+        `Use only agentIds with agents.workspace or tools in this policy scope.`,
       );
     }
     if (overlay.agents !== undefined && !isRecord(overlay.agents)) {
       return policyShapeFinding(
         params.policyPath,
         `oc://${params.policyDocName}/${targetPrefix}/agents`,
-        `${params.policyPath} scopes.agents.${scopeName}.agents must be an object.`,
+        `${params.policyPath} scopes.${scopeName}.agents must be an object.`,
         `Fix ${params.policyPath} so the scoped agents policy section is an object.`,
       );
     }
@@ -1302,7 +1384,7 @@ function scopedPolicyShapeFinding(
       return policyShapeFinding(
         params.policyPath,
         `oc://${params.policyDocName}/${targetPrefix}/agents/${ocPathSegment(unsupportedAgentKey)}`,
-        `${params.policyPath} scopes.agents.${scopeName}.agents.${unsupportedAgentKey} is not a supported scoped agents policy section.`,
+        `${params.policyPath} scopes.${scopeName}.agents.${unsupportedAgentKey} is not supported by the agentIds selector.`,
         `Move the rule under agents.workspace or a supported scoped top-level section.`,
       );
     }
@@ -1310,7 +1392,7 @@ function scopedPolicyShapeFinding(
       policyDocName: params.policyDocName,
       policyPath: params.policyPath,
       targetPrefix: `${targetPrefix}/agents/workspace`,
-      propertyPrefix: `scopes.agents.${scopeName}.agents.workspace`,
+      propertyPrefix: `scopes.${scopeName}.agents.workspace`,
     });
     if (workspaceFinding !== undefined) {
       return workspaceFinding;
@@ -1319,8 +1401,8 @@ function scopedPolicyShapeFinding(
       return policyShapeFinding(
         params.policyPath,
         `oc://${params.policyDocName}/${targetPrefix}/tools`,
-        `${params.policyPath} scopes.agents.${scopeName}.tools must be an object.`,
-        `Fix ${params.policyPath} so the agent tools policy overlay is an object.`,
+        `${params.policyPath} scopes.${scopeName}.tools must be an object.`,
+        `Fix ${params.policyPath} so the scoped tools policy overlay is an object.`,
       );
     }
     if (isRecord(overlay.tools)) {
@@ -1328,16 +1410,17 @@ function scopedPolicyShapeFinding(
         policyDocName: params.policyDocName,
         policyPath: params.policyPath,
         targetPrefix: `${targetPrefix}/tools`,
-        propertyPrefix: `scopes.agents.${scopeName}.tools`,
+        propertyPrefix: `scopes.${scopeName}.tools`,
       });
       if (toolsFinding !== undefined) {
         return toolsFinding;
       }
     }
   }
-  return duplicateScopedAgentFieldFinding(value.agents, {
+  return duplicateScopedAgentFieldFinding(value, {
     policyDocName: params.policyDocName,
     policyPath: params.policyPath,
+    policy: params.policy,
   });
 }
 
@@ -2369,7 +2452,7 @@ function agentScopedWorkspaceFindings(
   for (const target of agentScopedPolicyTargets(policy)) {
     const scopedAgents = isRecord(target.overlay.agents) ? target.overlay.agents : {};
     const workspace = isRecord(scopedAgents.workspace) ? scopedAgents.workspace : {};
-    const requirementBase = `scopes/agents/${ocPathSegment(target.scopeName)}/agents/workspace`;
+    const requirementBase = `scopes/${ocPathSegment(target.scopeName)}/agents/workspace`;
     const evidenceFilter = (entry: PolicyAgentWorkspaceEvidence) =>
       scopedWorkspaceAgentMatches(entry, target.agentId, evidence.agentWorkspace ?? []);
     findings.push(
@@ -2414,13 +2497,13 @@ function toolPostureFindings(
     if (!isRecord(target.overlay.tools)) {
       continue;
     }
-    const requirementBase = `scopes/agents/${ocPathSegment(target.scopeName)}/tools`;
+    const requirementBase = `scopes/${ocPathSegment(target.scopeName)}/tools`;
     if (
       toolPosturePolicyShapeFinding(target.overlay.tools, {
         policyDocName,
         policyPath,
         targetPrefix: requirementBase,
-        propertyPrefix: `scopes.agents.${target.scopeName}.tools`,
+        propertyPrefix: `scopes.${target.scopeName}.tools`,
       }) !== undefined
     ) {
       continue;
@@ -2449,7 +2532,12 @@ function scopedWorkspaceAgentMatches(
   return (
     normalizeAgentId(policyAgentId) === DEFAULT_SCOPED_AGENT_ID &&
     entry.scope === "defaults" &&
-    !entries.some((candidate) => candidate.scope === "agent")
+    !entries.some(
+      (candidate) =>
+        candidate.scope === "agent" &&
+        candidate.kind === entry.kind &&
+        scopedAgentIdMatches(candidate.agentId, policyAgentId),
+    )
   );
 }
 
@@ -2464,7 +2552,12 @@ function scopedToolAgentMatches(
   return (
     normalizeAgentId(policyAgentId) === DEFAULT_SCOPED_AGENT_ID &&
     entry.scope === "global" &&
-    !entries.some((candidate) => candidate.scope === "agent")
+    !entries.some(
+      (candidate) =>
+        candidate.scope === "agent" &&
+        candidate.kind === entry.kind &&
+        scopedAgentIdMatches(candidate.agentId, policyAgentId),
+    )
   );
 }
 
@@ -2892,11 +2985,11 @@ type AgentScopedPolicyTarget = {
 function agentScopedPolicyOverlays(
   policy: unknown,
 ): readonly (readonly [string, Record<string, unknown>])[] {
-  if (!isRecord(policy) || !isRecord(policy.scopes) || !isRecord(policy.scopes.agents)) {
+  if (!isRecord(policy) || !isRecord(policy.scopes)) {
     return [];
   }
-  return Object.entries(policy.scopes.agents).filter(
-    (entry): entry is [string, Record<string, unknown>] => isRecord(entry[1]),
+  return Object.entries(policy.scopes).filter((entry): entry is [string, Record<string, unknown>] =>
+    isRecord(entry[1]),
   );
 }
 
@@ -2920,6 +3013,8 @@ type ScopedAgentPolicyField = {
   readonly fieldPath: string;
   readonly propertyPath: string;
   readonly targetPath: string;
+  readonly metadata: PolicyRuleMetadata;
+  readonly value: unknown;
 };
 
 function duplicateScopedAgentFieldFinding(
@@ -2927,9 +3022,17 @@ function duplicateScopedAgentFieldFinding(
   params: {
     readonly policyDocName: string;
     readonly policyPath: string;
+    readonly policy: Record<string, unknown>;
   },
 ): HealthFinding | undefined {
-  const seen = new Map<string, { readonly scopeName: string; readonly propertyPath: string }>();
+  const seen = new Map<
+    string,
+    {
+      readonly scopeName: string;
+      readonly propertyPath: string;
+      readonly field: ScopedAgentPolicyField;
+    }
+  >();
   for (const [scopeName, overlay] of Object.entries(scopedAgents)) {
     if (!isRecord(overlay) || !Array.isArray(overlay.agentIds)) {
       continue;
@@ -2941,19 +3044,40 @@ function duplicateScopedAgentFieldFinding(
       }
       const agentId = normalizeAgentId(rawAgentId);
       for (const field of fields) {
-        const key = `${agentId}\0${field.fieldPath}`;
-        const previous = seen.get(key);
-        if (previous !== undefined) {
+        const topLevelValue = getPolicyPath(params.policy, field.metadata.policyPath);
+        if (
+          topLevelValue !== undefined &&
+          !isPolicyValueAtLeastAsStrict(field.metadata, field.value, topLevelValue)
+        ) {
           return policyShapeFinding(
             params.policyPath,
             `oc://${params.policyDocName}/${field.targetPath}`,
-            `${params.policyPath} scopes.agents.${scopeName}.${field.propertyPath} duplicates ${previous.propertyPath} for agent '${agentId}'.`,
-            `Keep each scoped policy field for an agent in only one scopes.agents block.`,
+            `${params.policyPath} scopes.${scopeName}.${field.propertyPath} is weaker than the top-level ${field.propertyPath} policy.`,
+            `Use an equally or more restrictive scoped value, or remove the scoped override.`,
+          );
+        }
+        const key = `${agentId}\0${field.fieldPath}`;
+        const previous = seen.get(key);
+        if (previous !== undefined) {
+          if (isPolicyValueAtLeastAsStrict(field.metadata, field.value, previous.field.value)) {
+            seen.set(key, {
+              scopeName,
+              propertyPath: `scopes.${scopeName}.${field.propertyPath}`,
+              field,
+            });
+            continue;
+          }
+          return policyShapeFinding(
+            params.policyPath,
+            `oc://${params.policyDocName}/${field.targetPath}`,
+            `${params.policyPath} scopes.${scopeName}.${field.propertyPath} is not an equally or more restrictive override of ${previous.propertyPath} for agent '${agentId}'.`,
+            `Use one effective scoped value per agent, or make later scoped values stricter according to policy metadata.`,
           );
         }
         seen.set(key, {
           scopeName,
-          propertyPath: `scopes.agents.${scopeName}.${field.propertyPath}`,
+          propertyPath: `scopes.${scopeName}.${field.propertyPath}`,
+          field,
         });
       }
     }
@@ -2965,73 +3089,125 @@ function scopedAgentPolicyFields(
   scopeName: string,
   overlay: Record<string, unknown>,
 ): readonly ScopedAgentPolicyField[] {
-  const prefix = `scopes/agents/${ocPathSegment(scopeName)}`;
-  const fields: ScopedAgentPolicyField[] = [];
-  const scopedAgents = isRecord(overlay.agents) ? overlay.agents : {};
-  const workspace = isRecord(scopedAgents.workspace) ? scopedAgents.workspace : {};
-  if (workspace.allowedAccess !== undefined) {
-    fields.push({
-      fieldPath: "agents.workspace.allowedAccess",
-      propertyPath: "agents.workspace.allowedAccess",
-      targetPath: `${prefix}/agents/workspace/allowedAccess`,
-    });
+  const prefix = `scopes/${ocPathSegment(scopeName)}`;
+  return POLICY_RULE_METADATA.filter((rule) => rule.scopeSelectors?.includes("agentIds") === true)
+    .map((rule) => ({ rule, value: scopedPolicyValue(overlay, rule.policyPath) }))
+    .filter((entry) => entry.value !== undefined)
+    .map(({ rule, value }) => ({
+      fieldPath: rule.policyPath.join("."),
+      propertyPath: rule.policyPath.join("."),
+      targetPath: `${prefix}/${rule.policyPath.map(ocPathSegment).join("/")}`,
+      metadata: rule,
+      value,
+    }));
+}
+
+export function isPolicyValueAtLeastAsStrict(
+  metadata: PolicyRuleMetadata,
+  candidate: unknown,
+  baseline: unknown,
+): boolean {
+  switch (metadata.strictness) {
+    case "allowlist-subset":
+      return isPolicyAllowlistSubset(metadata, candidate, baseline);
+    case "denylist-superset":
+      return isPolicyDenylistSuperset(metadata, candidate, baseline);
+    case "requires-true":
+      return baseline !== true || candidate === true;
+    case "requires-false":
+      return baseline !== false || candidate === false;
+    case "exact-list":
+      return samePolicyStringList(candidate, baseline, metadata);
   }
-  if (workspace.denyTools !== undefined) {
-    fields.push({
-      fieldPath: "agents.workspace.denyTools",
-      propertyPath: "agents.workspace.denyTools",
-      targetPath: `${prefix}/agents/workspace/denyTools`,
-    });
+}
+
+function isPolicyAllowlistSubset(
+  metadata: PolicyRuleMetadata,
+  candidate: unknown,
+  baseline: unknown,
+): boolean {
+  const candidateList = policyStringList(candidate, metadata);
+  const baselineList = policyStringList(baseline, metadata);
+  if (candidateList === undefined || baselineList === undefined) {
+    return false;
   }
-  const tools = isRecord(overlay.tools) ? overlay.tools : {};
-  for (const field of [
-    [
-      "profiles.allow",
-      isRecord(tools.profiles) ? tools.profiles.allow : undefined,
-      "tools/profiles/allow",
-    ],
-    [
-      "fs.requireWorkspaceOnly",
-      isRecord(tools.fs) ? tools.fs.requireWorkspaceOnly : undefined,
-      "tools/fs/requireWorkspaceOnly",
-    ],
-    [
-      "exec.allowSecurity",
-      isRecord(tools.exec) ? tools.exec.allowSecurity : undefined,
-      "tools/exec/allowSecurity",
-    ],
-    [
-      "exec.requireAsk",
-      isRecord(tools.exec) ? tools.exec.requireAsk : undefined,
-      "tools/exec/requireAsk",
-    ],
-    [
-      "exec.allowHosts",
-      isRecord(tools.exec) ? tools.exec.allowHosts : undefined,
-      "tools/exec/allowHosts",
-    ],
-    [
-      "elevated.allow",
-      isRecord(tools.elevated) ? tools.elevated.allow : undefined,
-      "tools/elevated/allow",
-    ],
-    [
-      "alsoAllow.expected",
-      isRecord(tools.alsoAllow) ? tools.alsoAllow.expected : undefined,
-      "tools/alsoAllow/expected",
-    ],
-    ["denyTools", tools.denyTools, "tools/denyTools"],
-  ] as const) {
-    const [fieldPath, value, targetSuffix] = field;
-    if (value !== undefined) {
-      fields.push({
-        fieldPath: `tools.${fieldPath}`,
-        propertyPath: `tools.${fieldPath}`,
-        targetPath: `${prefix}/${targetSuffix}`,
-      });
+  if (metadata.emptyList === "disabled" && baselineList.length === 0) {
+    return true;
+  }
+  if (metadata.emptyList === "disabled" && baselineList.length > 0 && candidateList.length === 0) {
+    return false;
+  }
+  const allowed = new Set(baselineList);
+  return candidateList.every((entry) => allowed.has(entry));
+}
+
+function isPolicyDenylistSuperset(
+  metadata: PolicyRuleMetadata,
+  candidate: unknown,
+  baseline: unknown,
+): boolean {
+  const candidateList = policyStringList(candidate, metadata);
+  const baselineList = policyStringList(baseline, metadata);
+  if (candidateList === undefined || baselineList === undefined) {
+    return false;
+  }
+  if (metadata.policyPath.join(".") === "tools.denyTools") {
+    return baselineList
+      .flatMap(expandPolicyToolRequirement)
+      .every((tool) => toolListCoversTool(candidateList, tool));
+  }
+  const denied = new Set(candidateList);
+  return baselineList.every((entry) => denied.has(entry));
+}
+
+function samePolicyStringList(
+  candidate: unknown,
+  baseline: unknown,
+  metadata: PolicyRuleMetadata,
+): boolean {
+  const candidateList = policyStringList(candidate, metadata);
+  const baselineList = policyStringList(baseline, metadata);
+  if (candidateList === undefined || baselineList === undefined) {
+    return false;
+  }
+  const candidateSorted = candidateList.toSorted();
+  const baselineSorted = baselineList.toSorted();
+  return (
+    candidateSorted.length === baselineSorted.length &&
+    candidateSorted.every((entry, index) => entry === baselineSorted[index])
+  );
+}
+
+function policyStringList(
+  value: unknown,
+  metadata: PolicyRuleMetadata,
+): readonly string[] | undefined {
+  if (!Array.isArray(value) || !value.every((entry) => typeof entry === "string")) {
+    return undefined;
+  }
+  return value
+    .map((entry) => entry.trim())
+    .filter(Boolean)
+    .map((entry) => (metadata.caseSensitive === true ? entry : entry.toLowerCase()));
+}
+
+function scopedPolicyValue(overlay: Record<string, unknown>, path: readonly string[]): unknown {
+  const scopedRoot = path[0] === "agents" ? overlay.agents : overlay[path[0]];
+  if (path[0] === "agents") {
+    return getPolicyPath(scopedRoot, path.slice(1));
+  }
+  return getPolicyPath(scopedRoot, path.slice(1));
+}
+
+function getPolicyPath(value: unknown, path: readonly string[]): unknown {
+  let current = value;
+  for (const part of path) {
+    if (!isRecord(current)) {
+      return undefined;
     }
+    current = current[part];
   }
-  return fields;
+  return current;
 }
 
 function secretPolicyShapeFindings(

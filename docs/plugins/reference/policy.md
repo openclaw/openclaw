@@ -40,13 +40,14 @@ additive `alsoAllow` entries because they can widen effective tool posture.
 These checks observe config conformance only; they do not read runtime approval
 state or add runtime enforcement.
 
-Named agent policy scopes under `scopes.agents.<scopeName>` can add stricter
+Named agent policy scopes under `scopes.<scopeName>` can add stricter
 normal policy sections for the runtime agent ids listed in `agentIds`. The
 initial scoped sections are `tools` and `agents.workspace`; future sections such
 as sandbox or ingress can join the same container after their evidence carries
-agent identity. Overlay rules are additional claims, so they do not weaken
-top-level policy and can produce their own findings when the same observed
-config violates both scopes.
+agent identity. Every scope present in `policy.jsonc` must be valid and
+enforceable for its selector. Overlay rules are additional claims, so they do
+not weaken top-level policy and can produce their own findings when the same
+observed config violates both scopes.
 
 ## Related docs
 
