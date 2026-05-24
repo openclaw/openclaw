@@ -83,6 +83,12 @@ const OPENAI_CODEX_RESPONSES_EMPTY_INPUT_TEXT = " ";
 const OPENAI_CODEX_RESPONSES_DEFAULT_INSTRUCTIONS = "Follow the user request.";
 const GEMINI_THOUGHT_SIGNATURE_VALIDATOR_SKIP = "skip_thought_signature_validator";
 const AZURE_RESPONSES_FIRST_EVENT_TIMEOUT_MS = 30_000;
+const DEEPSEEK_DSML_TOOL_CALLS_END = /<[/]?[｜|]DSML[｜|]tool_calls>/giu;
+const DEEPSEEK_DSML_INVOKE_RE =
+  /<[｜|]DSML[｜|]invoke\s+name="([^"]+)"\s*>\s*([\s\S]*?)\s*<\/[｜|]DSML[｜|]invoke>/giu;
+const DEEPSEEK_DSML_PARAMETER_RE =
+  /<[｜|]DSML[｜|]parameter\s+name="([^"]+)"(?:\s+[^>]*)?>([\s\S]*?)<\/[｜|]DSML[｜|]parameter>/giu;
+const DEEPSEEK_DSML_JSON_FENCE_RE = /^```(?:json)?\s*([\s\S]*?)\s*```$/iu;
 const MODEL_STREAM_COOPERATIVE_YIELD_INTERVAL_MS = 12;
 const MODEL_STREAM_COOPERATIVE_YIELD_MAX_EVENTS = 64;
 const RESPONSE_FAILED_NO_DETAILS_MESSAGE = "Unknown error (no error details in response)";
@@ -2483,6 +2489,8 @@ async function processOpenAICompletionsStream(
   const deepSeekTextFilter = shouldFilterDeepSeekDsmlText(compat)
     ? createDeepSeekTextFilter()
     : null;
+  let pendingDeepSeekDsmlText = "";
+  let deepSeekDsmlSyntheticCallCount = 0;
   type ToolCallBlock = {
     type: "toolCall";
     id: string;
@@ -2612,19 +2620,99 @@ async function processOpenAICompletionsStream(
     }
   };
   const appendFilteredVisibleTextDelta = (text: string) => {
-    const parts = deepSeekTextFilter?.push(text) ?? [text];
-    for (const part of parts) {
-      appendVisibleTextDelta(part);
+    if (deepSeekTextFilter) {
+      pendingDeepSeekDsmlText += text;
+      const parts = deepSeekTextFilter.push(text);
+      const recovered = tryFlushDeepSeekDsmlToolText(false);
+      if (!recovered) {
+        for (const part of parts) {
+          appendVisibleTextDelta(part);
+        }
+      }
+      return;
     }
+    appendVisibleTextDelta(text);
+  };
+  const emitDeepSeekDsmlToolCall = (name: string, argsText: string) => {
+    const partialArgs = argsText.trim();
+    if (!partialArgs) {
+      return false;
+    }
+    const parsedArgs = parseStreamingJson(partialArgs);
+    if (!parsedArgs || typeof parsedArgs !== "object" || Array.isArray(parsedArgs)) {
+      return false;
+    }
+    finishCurrentBlock();
+    currentBlock = {
+      type: "toolCall",
+      id: `deepseek_dsml_${++deepSeekDsmlSyntheticCallCount}`,
+      name,
+      arguments: parsedArgs as Record<string, unknown>,
+      partialArgs,
+    };
+    output.content.push(currentBlock);
+    stream.push({ type: "toolcall_start", contentIndex: blockIndex(), partial: output });
+    stream.push({
+      type: "toolcall_delta",
+      contentIndex: blockIndex(),
+      delta: partialArgs,
+      partial: output,
+    });
+    return true;
+  };
+  const tryFlushDeepSeekDsmlToolText = (final: boolean) => {
+    if (!pendingDeepSeekDsmlText) {
+      return false;
+    }
+    const closeMatches = [...pendingDeepSeekDsmlText.matchAll(DEEPSEEK_DSML_TOOL_CALLS_END)];
+    const hasClosingTag = closeMatches.some((match) => match[0].startsWith("</"));
+    if (!final && !hasClosingTag) {
+      return false;
+    }
+    const source = pendingDeepSeekDsmlText;
+    pendingDeepSeekDsmlText = "";
+    let matched = false;
+    for (const invokeMatch of source.matchAll(DEEPSEEK_DSML_INVOKE_RE)) {
+      const name = invokeMatch[1]?.trim();
+      const body = invokeMatch[2] ?? "";
+      if (!name) {
+        continue;
+      }
+      let argsText = "";
+      const params = [...body.matchAll(DEEPSEEK_DSML_PARAMETER_RE)];
+      if (params.length > 0) {
+        const args: Record<string, unknown> = {};
+        for (const paramMatch of params) {
+          const paramName = paramMatch[1]?.trim();
+          const rawValue = (paramMatch[2] ?? "").trim();
+          if (!paramName) {
+            continue;
+          }
+          args[paramName] = rawValue;
+        }
+        argsText = JSON.stringify(args);
+      } else {
+        const trimmedBody = body.trim();
+        const fenceMatch = trimmedBody.match(DEEPSEEK_DSML_JSON_FENCE_RE);
+        argsText = (fenceMatch?.[1] ?? trimmedBody).trim();
+      }
+      matched ||= emitDeepSeekDsmlToolCall(name, argsText);
+    }
+    if (matched) {
+      output.stopReason = "toolUse";
+    } else if (final) {
+      appendVisibleTextDelta(source);
+    }
+    return matched;
   };
   const flushDeepSeekTextFilterAtEnd = () => {
     const parts = deepSeekTextFilter?.flush();
-    if (!parts) {
-      return;
+    if (parts) {
+      for (const part of parts) {
+        appendVisibleTextDelta(part);
+      }
     }
-    for (const part of parts) {
-      appendVisibleTextDelta(part);
-    }
+    tryFlushDeepSeekDsmlToolText(true);
   };
   const cooperativeScheduler = createModelStreamCooperativeScheduler(options?.signal);
   for await (const rawChunk of responseStream as AsyncIterable<unknown>) {
