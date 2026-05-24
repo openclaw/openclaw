@@ -5061,7 +5061,8 @@ export function makeEvolveCapabilities(runtime: ClaworksRuntime): CapabilityDesc
       handler: async (_ctx, params) => {
         const type = String(params.type ?? "");
         const id = String(params.id ?? "");
-        const fields = (params.fields as Record<string, unknown>) ?? {};
+        // 兼容 fields/data 两种参数命名
+        const fields = ((params.fields ?? params.data) as Record<string, unknown>) ?? {};
         await runtime.objectStore.upsert(type, id, fields);
         await runtime.kernel.publish("object.upserted", "object.upsert", { type, id });
         return { status: "ok", type, id };
@@ -5074,26 +5075,30 @@ export function makeEvolveCapabilities(runtime: ClaworksRuntime): CapabilityDesc
       owner: { kind: "core" },
       paramsSchema: {
         type: "object",
-        required: ["type", "records"],
+        required: ["type"],
         properties: {
           type: { type: "string", description: "对象类型" },
           records: {
             type: "array",
+            description: "记录列表（records 或 items 均可）",
             items: {
               type: "object",
               properties: { id: { type: "string" }, fields: { type: "object" } },
             },
           },
+          items: { type: "array", description: "records 的别名（兼容 rest-poll 连接器）" },
         },
       },
       handler: async (_ctx, params) => {
         const type = String(params.type ?? "");
-        const records =
-          (params.records as Array<{ id: string; fields: Record<string, unknown> }>) ?? [];
+        // 兼容 records/items 两种参数命名
+        const records = (params.records ?? params.items ?? []) as Array<Record<string, unknown>>;
         let upserted = 0;
         for (const rec of records) {
-          if (rec.id) {
-            await runtime.objectStore.upsert(type, rec.id, rec.fields ?? {});
+          const id = String(rec.id ?? rec._id ?? "");
+          if (id) {
+            const fields = (rec.fields ?? rec.data ?? rec) as Record<string, unknown>;
+            await runtime.objectStore.upsert(type, id, fields);
             upserted++;
           }
         }
