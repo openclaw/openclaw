@@ -1015,6 +1015,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
       updatedAt: Date.now(),
       modelProvider: "openai-codex",
       model: "gpt-5.5",
+      responseUsage: "tokens",
     };
     const sessionStore = { main: sessionEntry };
     const storeRoot = await mkdtemp(join(tmpdir(), "openclaw-internal-fallback-"));
@@ -1023,7 +1024,14 @@ describe("runReplyAgent typing (heartbeat)", () => {
     try {
       state.runEmbeddedPiAgentMock.mockResolvedValueOnce({
         payloads: [{ text: "subagent timed out" }],
-        meta: {},
+        meta: {
+          agentMeta: {
+            usage: {
+              input: 100,
+              output: 50,
+            },
+          },
+        },
       });
       vi.spyOn(modelFallbackModule, "runWithModelFallback").mockImplementationOnce(async (args) => {
         const { run, onFallbackStep } = args;
@@ -1083,6 +1091,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
       expect(persistedStore.main.fallbackNoticeActiveModel).toBeUndefined();
       const payloads = Array.isArray(res) ? res : res ? [res] : [];
       expect(payloads.some((payload) => payload.text?.includes("Model Fallback:"))).toBe(false);
+      expect(payloads.some((payload) => payload.text?.includes("Usage:"))).toBe(false);
     } finally {
       await rm(storeRoot, { recursive: true, force: true });
     }
