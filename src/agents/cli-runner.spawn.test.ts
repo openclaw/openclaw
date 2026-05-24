@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
-  __testing as replyRunTesting,
+  testing as replyRunTesting,
   createReplyOperation,
   replyRunRegistry,
 } from "../auto-reply/reply/reply-run-registry.js";
@@ -571,22 +571,6 @@ describe("runCliAgent spawn path", () => {
     expect(JSON.stringify(params)).not.toContain("c9d7b831-1c31-4d22-80b9-1e50ca207d4b");
   });
 
-  it("forwards senderIsOwner through the compat wrapper", () => {
-    const params = buildRunClaudeCliAgentParams({
-      sessionId: "openclaw-session",
-      sessionKey: "agent:main:matrix:room:123",
-      sessionFile: "/tmp/session.jsonl",
-      workspaceDir: "/tmp",
-      prompt: "hi",
-      model: "opus",
-      timeoutMs: 1_000,
-      runId: "run-claude-owner-wrapper",
-      senderIsOwner: false,
-    });
-
-    expect(params.senderIsOwner).toBe(false);
-  });
-
   it("forwards channel context through the compat wrapper", () => {
     const params = buildRunClaudeCliAgentParams({
       sessionId: "openclaw-session",
@@ -952,7 +936,7 @@ describe("runCliAgent spawn path", () => {
   it("defers prepared backend cleanup to the Claude live session lifecycle", async () => {
     let stdoutListener: ((chunk: string) => void) | undefined;
     const stdin = {
-      write: vi.fn((_data: string, cb?: (err?: Error | null) => void) => {
+      write: vi.fn((dataValue: string, cb?: (err?: Error | null) => void) => {
         stdoutListener?.(
           [
             JSON.stringify({ type: "system", subtype: "init", session_id: "live-session-cleanup" }),
@@ -1007,7 +991,7 @@ describe("runCliAgent spawn path", () => {
     const largeText = "x".repeat(270 * 1024);
     let stdoutListener: ((chunk: string) => void) | undefined;
     const stdin = {
-      write: vi.fn((_data: string, cb?: (err?: Error | null) => void) => {
+      write: vi.fn((dataValue: string, cb?: (err?: Error | null) => void) => {
         stdoutListener?.(
           JSON.stringify({
             type: "result",
@@ -1051,7 +1035,7 @@ describe("runCliAgent spawn path", () => {
     const largeText = "x".repeat(1500);
     let stdoutListener: ((chunk: string) => void) | undefined;
     const stdin = {
-      write: vi.fn((_data: string, cb?: (err?: Error | null) => void) => {
+      write: vi.fn((dataValue: string, cb?: (err?: Error | null) => void) => {
         stdoutListener?.(
           JSON.stringify({
             type: "result",
@@ -1103,7 +1087,7 @@ describe("runCliAgent spawn path", () => {
     const largeText = "x".repeat(1500);
     let stdoutListener: ((chunk: string) => void) | undefined;
     const stdin = {
-      write: vi.fn((_data: string, cb?: (err?: Error | null) => void) => {
+      write: vi.fn((dataValue: string, cb?: (err?: Error | null) => void) => {
         stdoutListener?.(
           JSON.stringify({
             type: "result",
@@ -1155,7 +1139,7 @@ describe("runCliAgent spawn path", () => {
       markWriteReady = resolve;
     });
     const stdin = {
-      write: vi.fn((_data: string, cb?: (err?: Error | null) => void) => {
+      write: vi.fn((dataValue: string, cb?: (err?: Error | null) => void) => {
         markWriteReady?.();
         cb?.();
       }),
@@ -1223,7 +1207,7 @@ describe("runCliAgent spawn path", () => {
     let stdoutListener: ((chunk: string) => void) | undefined;
     let turn = 0;
     const stdin = {
-      write: vi.fn((_data: string, cb?: (err?: Error | null) => void) => {
+      write: vi.fn((dataValue: string, cb?: (err?: Error | null) => void) => {
         turn += 1;
         stdoutListener?.(
           [
@@ -1289,7 +1273,7 @@ describe("runCliAgent spawn path", () => {
       releaseSpawn = resolve;
     });
     const stdin = {
-      write: vi.fn((_data: string, cb?: (err?: Error | null) => void) => {
+      write: vi.fn((dataValue: string, cb?: (err?: Error | null) => void) => {
         turn += 1;
         stdoutListener?.(
           [
@@ -1359,7 +1343,7 @@ describe("runCliAgent spawn path", () => {
       const spawnIndex = supervisorSpawnMock.mock.calls.length;
       await spawnReady;
       const stdin = {
-        write: vi.fn((_data: string, cb?: (err?: Error | null) => void) => {
+        write: vi.fn((dataValue: string, cb?: (err?: Error | null) => void) => {
           input.onStdout?.(
             [
               JSON.stringify({
@@ -1508,7 +1492,7 @@ describe("runCliAgent spawn path", () => {
         pid: 2345 + spawnIndex,
         startedAtMs: Date.now(),
         stdin: {
-          write: vi.fn((_data: string, cb?: (err?: Error | null) => void) => {
+          write: vi.fn((dataValue: string, cb?: (err?: Error | null) => void) => {
             const result = turnResults[turnIndex] ?? "ok";
             turnIndex += 1;
             input.onStdout?.(
@@ -1591,7 +1575,7 @@ describe("runCliAgent spawn path", () => {
   it("ignores non-JSON stdout lines from Claude live sessions", async () => {
     let stdoutListener: ((chunk: string) => void) | undefined;
     const stdin = {
-      write: vi.fn((_data: string, cb?: (err?: Error | null) => void) => {
+      write: vi.fn((dataValue: string, cb?: (err?: Error | null) => void) => {
         stdoutListener?.(
           [
             "Claude CLI warning",
@@ -1637,7 +1621,7 @@ describe("runCliAgent spawn path", () => {
   it("fails Claude live turns on is_error results", async () => {
     let stdoutListener: ((chunk: string) => void) | undefined;
     const stdin = {
-      write: vi.fn((_data: string, cb?: (err?: Error | null) => void) => {
+      write: vi.fn((dataValue: string, cb?: (err?: Error | null) => void) => {
         stdoutListener?.(
           [
             JSON.stringify({ type: "system", subtype: "init", session_id: "live-error" }),
@@ -1731,7 +1715,7 @@ describe("runCliAgent spawn path", () => {
       const cancel = vi.fn();
       cancels.push(cancel);
       const stdin = {
-        write: vi.fn((_data: string, cb?: (err?: Error | null) => void) => {
+        write: vi.fn((dataValue: string, cb?: (err?: Error | null) => void) => {
           if (spawnIndex === 2) {
             stdoutListener?.(
               [
@@ -1836,7 +1820,7 @@ describe("runCliAgent spawn path", () => {
       const cancel = vi.fn();
       cancels.push(cancel);
       const stdin = {
-        write: vi.fn((_data: string, cb?: (err?: Error | null) => void) => {
+        write: vi.fn((dataValue: string, cb?: (err?: Error | null) => void) => {
           const text = spawnIndex === 1 ? "weather-ok" : "git-ok";
           input.onStdout?.(
             [
@@ -2033,7 +2017,7 @@ describe("runCliAgent spawn path", () => {
     });
     let writeCount = 0;
     const stdin = {
-      write: vi.fn((_data: string, cb?: (err?: Error | null) => void) => {
+      write: vi.fn((dataValue: string, cb?: (err?: Error | null) => void) => {
         writeCount += 1;
         if (writeCount === 1) {
           stderrListener?.("stale stderr from first turn");

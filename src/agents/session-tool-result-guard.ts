@@ -553,8 +553,13 @@ export function installSessionToolResultGuard(
     maxToolResultChars?: number;
     suppressNextUserMessagePersistence?: boolean;
     suppressTranscriptOnlyAssistantPersistence?: boolean;
+    suppressAssistantErrorPersistence?: boolean;
     onUserMessagePersisted?: (
       message: Extract<AgentMessage, { role: "user" }>,
+    ) => void | Promise<void>;
+    onMessagePersisted?: (message: AgentMessage) => void | Promise<void>;
+    onAssistantErrorMessagePersisted?: (
+      message: Extract<AgentMessage, { role: "assistant" }>,
     ) => void | Promise<void>;
   },
 ): {
@@ -594,6 +599,7 @@ export function installSessionToolResultGuard(
   ): { entryId: string; messageSeq?: number; sessionFile?: string | null } => {
     const parentEntryId = sessionManager.getLeafId();
     const entryId = originalAppend(message as never);
+    void opts?.onMessagePersisted?.(message);
     const sessionFile = getSessionFile();
     if (!sessionFile) {
       return { entryId, sessionFile };
@@ -751,6 +757,13 @@ export function installSessionToolResultGuard(
     ) {
       return undefined;
     }
+    if (
+      finalRole === "assistant" &&
+      opts?.suppressAssistantErrorPersistence === true &&
+      (finalMessage as { stopReason?: string }).stopReason === "error"
+    ) {
+      return undefined;
+    }
     if (isUserAgentMessage(finalMessage) && suppressNextUserMessagePersistence) {
       suppressNextUserMessagePersistence = false;
       return undefined;
@@ -775,6 +788,14 @@ export function installSessionToolResultGuard(
     }
     if (isUserAgentMessage(finalMessage)) {
       void opts?.onUserMessagePersisted?.(finalMessage);
+    }
+    if (
+      finalRole === "assistant" &&
+      (finalMessage as { stopReason?: string }).stopReason === "error"
+    ) {
+      void opts?.onAssistantErrorMessagePersisted?.(
+        finalMessage as Extract<AgentMessage, { role: "assistant" }>,
+      );
     }
 
     return result;

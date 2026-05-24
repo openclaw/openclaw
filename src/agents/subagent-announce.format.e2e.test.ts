@@ -9,7 +9,7 @@ import * as configSessions from "../config/sessions.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import * as gatewayCall from "../gateway/call.js";
 import {
-  __testing as sessionBindingServiceTesting,
+  testing as sessionBindingServiceTesting,
   registerSessionBindingAdapter,
 } from "../infra/outbound/session-binding-service.js";
 import * as hookRunnerGlobal from "../plugins/hook-runner-global.js";
@@ -21,9 +21,9 @@ import {
   buildAnnounceIdempotencyKey,
 } from "./announce-idempotency.js";
 import * as piEmbedded from "./pi-embedded-runner/runs.js";
-import { __testing as subagentAnnounceDeliveryTesting } from "./subagent-announce-delivery.js";
+import { testing as subagentAnnounceDeliveryTesting } from "./subagent-announce-delivery.js";
 import { runSubagentAnnounceDispatch } from "./subagent-announce-dispatch.js";
-import * as agentStep from "./tools/agent-step.js";
+import { testing as subagentAnnounceOutputTesting } from "./subagent-announce-output.js";
 
 type AgentCallRequest = {
   method?: string;
@@ -69,6 +69,8 @@ function visibleAgentResponse(runId = "run-main") {
     status: "ok",
     result: {
       payloads: [{ text: "announced" }],
+      didSendViaMessagingTool: true,
+      messagingToolSentTexts: ["announced"],
     },
   };
 }
@@ -124,7 +126,6 @@ const resolveStorePathSpy = vi.spyOn(configSessions, "resolveStorePath");
 const resolveMainSessionKeySpy = vi.spyOn(configSessions, "resolveMainSessionKey");
 const callGatewaySpy = vi.spyOn(gatewayCall, "callGateway");
 const getGlobalHookRunnerSpy = vi.spyOn(hookRunnerGlobal, "getGlobalHookRunner");
-const readLatestAssistantReplySpy = vi.spyOn(agentStep, "readLatestAssistantReply");
 const isEmbeddedPiRunActiveSpy = vi.spyOn(piEmbedded, "isEmbeddedPiRunActive");
 const isEmbeddedPiRunStreamingSpy = vi.spyOn(piEmbedded, "isEmbeddedPiRunStreaming");
 const queueEmbeddedPiMessageWithOutcomeSpy = vi.spyOn(
@@ -178,7 +179,7 @@ const { subagentRegistryMock } = vi.hoisted(() => ({
   },
 }));
 const subagentDeliveryTargetHookMock = vi.fn(
-  async (_event?: unknown, _ctx?: unknown): Promise<SubagentDeliveryTargetResult | undefined> =>
+  async (eventValue?: unknown, _ctx?: unknown): Promise<SubagentDeliveryTargetResult | undefined> =>
     undefined,
 );
 let hasSubagentDeliveryTargetHook = false;
@@ -266,6 +267,13 @@ function setConfigOverride(next: OpenClawConfig): void {
   setRuntimeConfigSnapshot(configOverride);
 }
 
+function setMessageToolGroupReplyConfig(): void {
+  setConfigOverride({
+    session: { mainKey: "main", scope: "per-sender" },
+    messages: { groupChat: { visibleReplies: "message_tool" } },
+  });
+}
+
 function toSessionEntry(
   sessionKey: string,
   entry?: Partial<SessionEntry>,
@@ -304,7 +312,7 @@ vi.mock("./subagent-registry-runtime.js", () => subagentRegistryMock);
 describe("subagent announce formatting", () => {
   let previousFastTestEnv: string | undefined;
   let runSubagentAnnounceFlow: (typeof import("./subagent-announce.js"))["runSubagentAnnounceFlow"];
-  let subagentAnnounceTesting: (typeof import("./subagent-announce.js"))["__testing"];
+  let subagentAnnounceTesting: (typeof import("./subagent-announce.js"))["testing"];
 
   beforeAll(async () => {
     // Set FAST_TEST_MODE before importing the module to ensure the module-level
@@ -313,12 +321,13 @@ describe("subagent announce formatting", () => {
     // See: https://github.com/openclaw/openclaw/issues/31298
     previousFastTestEnv = process.env.OPENCLAW_TEST_FAST;
     process.env.OPENCLAW_TEST_FAST = "1";
-    ({ runSubagentAnnounceFlow, __testing: subagentAnnounceTesting } =
+    ({ runSubagentAnnounceFlow, testing: subagentAnnounceTesting } =
       await import("./subagent-announce.js"));
   });
 
   afterAll(() => {
     subagentAnnounceTesting.setDepsForTest();
+    subagentAnnounceOutputTesting.setDepsForTest();
     subagentAnnounceDeliveryTesting.setDepsForTest();
     clearRuntimeConfigSnapshot();
     if (previousFastTestEnv === undefined) {
@@ -388,6 +397,15 @@ describe("subagent announce formatting", () => {
       ) => (await callGatewaySpy(req)) as T,
       getRuntimeConfig: () => configOverride,
     });
+    subagentAnnounceOutputTesting.setDepsForTest({
+      callGateway: async <T = Record<string, unknown>>(
+        req: Parameters<typeof gatewayCall.callGateway>[0],
+      ) => (await callGatewaySpy(req)) as T,
+      getRuntimeConfig: () => configOverride,
+      readSessionEntry: (_storePath, sessionKey) => loadSessionStoreFixture()[sessionKey],
+      resolveAgentIdFromSessionKey: () => "main",
+      resolveStorePath: () => "/tmp/sessions.json",
+    });
     loadSessionStoreSpy.mockReset().mockImplementation(() => loadSessionStoreFixture());
     resolveAgentIdFromSessionKeySpy.mockReset().mockImplementation(() => "main");
     resolveStorePathSpy.mockReset().mockImplementation(() => "/tmp/sessions.json");
@@ -397,9 +415,6 @@ describe("subagent announce formatting", () => {
       .mockImplementation(
         () => hookRunnerMock as unknown as ReturnType<typeof hookRunnerGlobal.getGlobalHookRunner>,
       );
-    readLatestAssistantReplySpy
-      .mockReset()
-      .mockImplementation(async (params) => await readLatestAssistantReplyMock(params?.sessionKey));
     isEmbeddedPiRunActiveSpy
       .mockReset()
       .mockImplementation((sessionId) => embeddedRunMock.isEmbeddedPiRunActive(sessionId));
@@ -518,9 +533,6 @@ describe("subagent announce formatting", () => {
     expect(msg).toContain(
       "If additional action is required, continue the task or record a follow-up; otherwise send a truthful user-facing update.",
     );
-    expect(msg).toContain(
-      "If the runtime marks this route as message-tool-only, send visible output with the message tool first",
-    );
     expect(msg).toContain("Keep this internal context private");
     expect(call?.params?.internalEvents?.[0]?.type).toBe("task_completion");
     expect(call?.params?.internalEvents?.[0]?.taskLabel).toBe("do thing");
@@ -619,7 +631,7 @@ describe("subagent announce formatting", () => {
     { role: "toolResult", toolOutput: "tool output line 1", childRunId: "run-tool-fallback-1" },
     { role: "tool", toolOutput: "tool output line 2", childRunId: "run-tool-fallback-2" },
   ] as const)(
-    "falls back to latest $role output when assistant reply is empty",
+    "does not fall back to latest $role output when assistant reply is empty",
     async (testCase) => {
       chatHistoryMock.mockResolvedValueOnce({
         messages: [
@@ -646,7 +658,8 @@ describe("subagent announce formatting", () => {
 
       const call = getAgentCall() as { params?: { message?: string } };
       const msg = call?.params?.message as string;
-      expect(msg).toContain(testCase.toolOutput);
+      expect(msg).toContain("(no output)");
+      expect(msg).not.toContain(testCase.toolOutput);
     },
   );
 
@@ -781,6 +794,7 @@ describe("subagent announce formatting", () => {
   });
 
   it("keeps direct completion announce delivery immediate even when sibling counters are non-zero", async () => {
+    setMessageToolGroupReplyConfig();
     sessionStore = {
       "agent:main:subagent:test": {
         sessionId: "child-session-self-pending",
@@ -814,9 +828,10 @@ describe("subagent announce formatting", () => {
     expect(sendSpy).not.toHaveBeenCalled();
     expect(agentSpy).toHaveBeenCalledTimes(1);
     const call = getAgentCall() as { params?: Record<string, unknown> };
-    expect(call?.params?.deliver).toBe(true);
+    expect(call?.params?.deliver).toBe(false);
     expect(call?.params?.channel).toBe("discord");
     expect(call?.params?.to).toBe("channel:12345");
+    expect(call?.params?.sourceReplyDeliveryMode).toBe("message_tool_only");
   });
 
   it("suppresses completion delivery when subagent reply is ANNOUNCE_SKIP", async () => {
@@ -977,6 +992,7 @@ describe("subagent announce formatting", () => {
   });
 
   it("delivers completion-mode announces immediately even when sibling runs are still active", async () => {
+    setMessageToolGroupReplyConfig();
     sessionStore = {
       "agent:main:subagent:test": {
         sessionId: "child-session-coordinated",
@@ -1008,9 +1024,10 @@ describe("subagent announce formatting", () => {
     const call = getAgentCall() as { params?: Record<string, unknown> };
     const rawMessage = call?.params?.message;
     const msg = typeof rawMessage === "string" ? rawMessage : "";
-    expect(call?.params?.deliver).toBe(true);
+    expect(call?.params?.deliver).toBe(false);
     expect(call?.params?.channel).toBe("discord");
     expect(call?.params?.to).toBe("channel:12345");
+    expect(call?.params?.sourceReplyDeliveryMode).toBe("message_tool_only");
     expect(msg).not.toContain("There are still");
     expect(msg).not.toContain("wait for the remaining results");
   });
@@ -1784,10 +1801,7 @@ describe("subagent announce formatting", () => {
   });
 
   it("keeps direct announce idempotency unique for same-ms distinct child runs", async () => {
-    const activeResponses = [true, false, true, false];
-    embeddedRunMock.isEmbeddedPiRunActive.mockImplementation(
-      () => activeResponses.shift() ?? false,
-    );
+    embeddedRunMock.isEmbeddedPiRunActive.mockReturnValue(false);
     embeddedRunMock.isEmbeddedPiRunStreaming.mockReturnValue(false);
     sessionStore = {
       "agent:main:main": {
@@ -1907,6 +1921,7 @@ describe("subagent announce formatting", () => {
   });
 
   it("uses direct completion delivery when explicit channel+to route is available", async () => {
+    setMessageToolGroupReplyConfig();
     sessionStore = {
       "agent:main:main": {
         sessionId: "requester-session-direct-route",
@@ -1930,8 +1945,9 @@ describe("subagent announce formatting", () => {
       sessionKey: "agent:main:main",
       channel: "discord",
       to: "channel:12345",
-      deliver: true,
+      deliver: false,
     });
+    expect(getAgentCall().params?.sourceReplyDeliveryMode).toBe("message_tool_only");
   });
 
   it("returns failure for completion-mode when direct delivery fails and steering fallback is unavailable", async () => {
@@ -1994,7 +2010,7 @@ describe("subagent announce formatting", () => {
     expect(msg).not.toContain("old tool output");
   });
 
-  it("falls back to latest tool output for completion-mode when assistant output is empty", async () => {
+  it("does not fall back to latest tool output for completion-mode when assistant output is empty", async () => {
     chatHistoryMock.mockResolvedValueOnce({
       messages: [
         {
@@ -2024,7 +2040,8 @@ describe("subagent announce formatting", () => {
     expect(agentSpy).toHaveBeenCalledTimes(1);
     const call = getAgentCall() as { params?: { message?: string } };
     const msg = call?.params?.message as string;
-    expect(msg).toContain("tool output only");
+    expect(msg).toContain("(no output)");
+    expect(msg).not.toContain("tool output only");
   });
 
   it("ignores user text when deriving fallback completion output", async () => {
@@ -2115,10 +2132,7 @@ describe("subagent announce formatting", () => {
   });
 
   it("preserves account routing for separate collect-mode announcements", async () => {
-    const activeResponses = [true, false, true, false];
-    embeddedRunMock.isEmbeddedPiRunActive.mockImplementation(
-      () => activeResponses.shift() ?? false,
-    );
+    embeddedRunMock.isEmbeddedPiRunActive.mockReturnValue(false);
     embeddedRunMock.isEmbeddedPiRunStreaming.mockReturnValue(false);
     sessionStore = {
       "agent:main:main": {

@@ -31,6 +31,8 @@ let sessionRunAccounting: typeof import("./session-run-accounting.js");
 let setRuntimeConfigSnapshot: typeof import("../../config/config.js").setRuntimeConfigSnapshot;
 let createMockFollowupRun: typeof import("./test-helpers.js").createMockFollowupRun;
 let createMockTypingController: typeof import("./test-helpers.js").createMockTypingController;
+let createReplyOperationForTest: typeof import("./reply-run-registry.js").createReplyOperation;
+let replyRunTestingForTest: typeof import("./reply-run-registry.js").testing;
 const FOLLOWUP_DEBUG = process.env.OPENCLAW_DEBUG_FOLLOWUP_RUNNER_TEST === "1";
 const FOLLOWUP_TEST_QUEUES = new Map<
   string,
@@ -285,28 +287,39 @@ async function persistRunSessionUsageForFollowupTest(
   if (!entry) {
     return;
   }
+  const preserveSessionModelState =
+    params.isHeartbeat === true || params.preserveUserFacingSessionModelState === true;
+  const preserveUserFacingRunState = params.preserveUserFacingSessionModelState === true;
   const nextEntry: SessionEntry = {
     ...entry,
     updatedAt: Date.now(),
-    modelProvider: params.providerUsed ?? entry.modelProvider,
-    model: params.modelUsed ?? entry.model,
-    contextTokens: params.contextTokensUsed ?? entry.contextTokens,
-    systemPromptReport: params.systemPromptReport ?? entry.systemPromptReport,
+    modelProvider: preserveSessionModelState
+      ? entry.modelProvider
+      : (params.providerUsed ?? entry.modelProvider),
+    model: preserveSessionModelState ? entry.model : (params.modelUsed ?? entry.model),
+    contextTokens: preserveUserFacingRunState
+      ? entry.contextTokens
+      : (params.contextTokensUsed ?? entry.contextTokens),
+    systemPromptReport: preserveUserFacingRunState
+      ? entry.systemPromptReport
+      : (params.systemPromptReport ?? entry.systemPromptReport),
   };
-  if (params.usage) {
+  if (params.usage && !preserveUserFacingRunState) {
     nextEntry.inputTokens = params.usage.input ?? 0;
     nextEntry.outputTokens = params.usage.output ?? 0;
     const cacheUsage = params.lastCallUsage ?? params.usage;
     nextEntry.cacheRead = cacheUsage?.cacheRead ?? 0;
     nextEntry.cacheWrite = cacheUsage?.cacheWrite ?? 0;
   }
-  const promptTokens =
-    params.promptTokens ??
-    (params.lastCallUsage?.input ?? params.usage?.input ?? 0) +
-      (params.lastCallUsage?.cacheRead ?? params.usage?.cacheRead ?? 0) +
-      (params.lastCallUsage?.cacheWrite ?? params.usage?.cacheWrite ?? 0);
-  nextEntry.totalTokens = promptTokens > 0 ? promptTokens : undefined;
-  nextEntry.totalTokensFresh = promptTokens > 0;
+  if (!preserveUserFacingRunState) {
+    const promptTokens =
+      params.promptTokens ??
+      (params.lastCallUsage?.input ?? params.usage?.input ?? 0) +
+        (params.lastCallUsage?.cacheRead ?? params.usage?.cacheRead ?? 0) +
+        (params.lastCallUsage?.cacheWrite ?? params.usage?.cacheWrite ?? 0);
+    nextEntry.totalTokens = promptTokens > 0 ? promptTokens : undefined;
+    nextEntry.totalTokensFresh = promptTokens > 0;
+  }
   store[sessionKey] = nextEntry;
   if (registeredStore) {
     return;
@@ -425,6 +438,8 @@ async function loadFreshFollowupRunnerModuleForTest() {
   ({ clearFollowupQueue, enqueueFollowupRun } = await import("./queue.js"));
   sessionRunAccounting = await import("./session-run-accounting.js");
   ({ createMockFollowupRun, createMockTypingController } = await import("./test-helpers.js"));
+  ({ createReplyOperation: createReplyOperationForTest, testing: replyRunTestingForTest } =
+    await import("./reply-run-registry.js"));
 }
 
 const ROUTABLE_TEST_CHANNELS = new Set([
@@ -442,6 +457,7 @@ beforeAll(async () => {
 });
 
 beforeEach(() => {
+  replyRunTestingForTest?.resetReplyRunRegistry();
   clearRuntimeConfigSnapshot?.();
   runEmbeddedPiAgentMock.mockReset();
   runCliAgentMock.mockReset();
@@ -496,6 +512,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  replyRunTestingForTest?.resetReplyRunRegistry();
   clearRuntimeConfigSnapshot?.();
   clearFollowupQueue("main");
   FOLLOWUP_TEST_QUEUES.clear();
@@ -506,13 +523,17 @@ afterEach(() => {
   if (!FOLLOWUP_DEBUG) {
     return;
   }
-  const handles = (process as NodeJS.Process & { _getActiveHandles?: () => unknown[] })
-    ._getActiveHandles?.()
-    .map((handle) => handle?.constructor?.name ?? typeof handle);
+  const processWithDebugHandles = process as NodeJS.Process & {
+    _getActiveHandles?: () => unknown[];
+    _getActiveRequests?: () => unknown[];
+  };
+  const handles = processWithDebugHandles["_getActiveHandles"]?.().map(
+    (handle) => handle?.constructor?.name ?? typeof handle,
+  );
   debugFollowupTest(`active handles: ${JSON.stringify(handles ?? [])}`);
-  const requests = (process as NodeJS.Process & { _getActiveRequests?: () => unknown[] })
-    ._getActiveRequests?.()
-    .map((request) => request?.constructor?.name ?? typeof request);
+  const requests = processWithDebugHandles["_getActiveRequests"]?.().map(
+    (request) => request?.constructor?.name ?? typeof request,
+  );
   debugFollowupTest(`active requests: ${JSON.stringify(requests ?? [])}`);
 });
 
@@ -524,6 +545,60 @@ function createQueuedRun(
 ): FollowupRun {
   return createMockFollowupRun(overrides);
 }
+
+describe("createFollowupRunner reply-lane admission", () => {
+  it("runs queued followups with the session id returned by admission", async () => {
+    const active = createReplyOperationForTest({
+      sessionKey: "main",
+      sessionId: "pre-compact-session",
+      resetTriggered: false,
+    });
+    active.setPhase("preflight_compacting");
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [],
+      meta: { agentMeta: { provider: "anthropic", model: "claude" } },
+    });
+    const sessionStore = {
+      main: {
+        sessionId: "pre-compact-session",
+        sessionFile: "/tmp/pre-compact.jsonl",
+        updatedAt: Date.now(),
+      },
+    };
+    const runner = createFollowupRunner({
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      sessionEntry: sessionStore.main,
+      sessionStore,
+      sessionKey: "main",
+      defaultModel: "anthropic/claude",
+    });
+
+    const pending = runner(
+      createQueuedRun({
+        run: {
+          sessionId: "queued-stale-session",
+          sessionKey: "main",
+          provider: "anthropic",
+          model: "claude",
+        },
+      }),
+    );
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    active.updateSessionId("post-compact-session");
+    sessionStore.main = {
+      sessionId: "post-compact-session",
+      sessionFile: "/tmp/post-compact.jsonl",
+      updatedAt: Date.now(),
+    };
+    active.complete();
+    await pending;
+
+    const call = requireLastMockCallArg(runEmbeddedPiAgentMock, "run embedded pi agent");
+    expect(call.sessionId).toBe("post-compact-session");
+    expect(call.sessionFile).toBe("/tmp/post-compact.jsonl");
+  });
+});
 
 async function normalizeComparablePath(filePath: string): Promise<string> {
   const parent = await fs.realpath(path.dirname(filePath)).catch(() => path.dirname(filePath));
@@ -822,6 +897,8 @@ describe("createFollowupRunner runtime config", () => {
 
     expect(runCliAgentMock).toHaveBeenCalledTimes(1);
     expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
+    const embeddedCall = requireLastMockCallArg(runEmbeddedPiAgentMock, "run embedded pi agent");
+    expect(embeddedCall.suppressAssistantErrorPersistence).toBe(false);
     expect(lifecyclePhases).toEqual(["start", "start", "end"]);
   });
 
@@ -934,6 +1011,35 @@ describe("createFollowupRunner runtime config", () => {
 
     const call = requireLastMockCallArg(runEmbeddedPiAgentMock, "run embedded pi agent");
     expect(call.abortSignal).toBe(abortController.signal);
+  });
+
+  it("does not inherit source abort signals for queued user followups", async () => {
+    const sourceAbortController = new AbortController();
+    sourceAbortController.abort();
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [],
+      meta: {},
+    });
+    const runner = createFollowupRunner({
+      opts: { abortSignal: sourceAbortController.signal },
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      defaultModel: "openai/gpt-5.4",
+    });
+
+    await runner(
+      createQueuedRun({
+        currentInboundEventKind: "user_request",
+        run: {
+          provider: "openai",
+          model: "gpt-5.4",
+          sourceReplyDeliveryMode: "message_tool_only",
+        },
+      }),
+    );
+
+    const call = requireLastMockCallArg(runEmbeddedPiAgentMock, "run embedded pi agent");
+    expect(call.abortSignal).toBeUndefined();
   });
 
   it("keeps queued delivery correlations active during followup agent runs", async () => {
@@ -1093,6 +1199,518 @@ describe("createFollowupRunner runtime config", () => {
   });
 });
 
+describe("createFollowupRunner progress forwarding", () => {
+  it("forwards queued follow-up tool progress and verbose tool result payloads", async () => {
+    const onToolStart = vi.fn(async () => {});
+    const queued = createQueuedRun({
+      originatingChannel: "discord",
+      originatingTo: "channel:C1",
+      originatingAccountId: "acct-1",
+      originatingThreadId: "thread-1",
+      run: {
+        messageProvider: "discord",
+        sourceReplyDeliveryMode: "message_tool_only",
+        verboseLevel: "on",
+      },
+    });
+
+    runEmbeddedPiAgentMock.mockImplementationOnce(
+      async (args: {
+        onAgentEvent?: (evt: { stream: string; data: Record<string, unknown> }) => Promise<void>;
+        onToolResult?: (payload: { text: string }) => Promise<void>;
+        shouldEmitToolResult?: () => boolean;
+        shouldEmitToolOutput?: () => boolean;
+        toolProgressDetail?: "explain" | "raw";
+      }) => {
+        expect(args.shouldEmitToolResult?.()).toBe(true);
+        expect(args.shouldEmitToolOutput?.()).toBe(false);
+        expect(args.toolProgressDetail).toBe("raw");
+        await args.onAgentEvent?.({
+          stream: "tool",
+          data: {
+            phase: "start",
+            name: "exec",
+            args: { command: "echo queued-progress" },
+          },
+        });
+        await args.onToolResult?.({ text: "🛠️ Exec: echo queued-progress" });
+        return { payloads: [], meta: { agentMeta: {} } };
+      },
+    );
+
+    const runner = createFollowupRunner({
+      opts: { onToolStart },
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      defaultModel: "claude",
+      toolProgressDetail: "raw",
+    });
+
+    await runner(queued);
+
+    expect(onToolStart).toHaveBeenCalledWith({
+      name: "exec",
+      phase: "start",
+      args: { command: "echo queued-progress" },
+      detailMode: "raw",
+    });
+    expect(routeReplyMock).toHaveBeenCalledTimes(1);
+    expect(routeReplyMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "discord",
+        to: "channel:C1",
+        accountId: "acct-1",
+        threadId: "thread-1",
+        mirror: false,
+        payload: expect.objectContaining({ text: "🛠️ Exec: echo queued-progress" }),
+      }),
+    );
+  });
+
+  it("drains fire-and-forget queued tool progress before final delivery", async () => {
+    const queued = createQueuedRun({
+      originatingChannel: "discord",
+      originatingTo: "channel:C1",
+      originatingAccountId: "acct-1",
+      originatingThreadId: "thread-1",
+      run: {
+        messageProvider: "discord",
+        verboseLevel: "on",
+      },
+    });
+    let releaseProgressRoute: (() => void) | undefined;
+    const progressRouteStarted = new Promise<void>((resolve) => {
+      routeReplyMock.mockImplementationOnce(
+        async () =>
+          await new Promise<{ ok: true }>((release) => {
+            releaseProgressRoute = () => {
+              release({ ok: true });
+            };
+            resolve();
+          }),
+      );
+    });
+
+    runEmbeddedPiAgentMock.mockImplementationOnce(
+      async (args: { onToolResult?: (payload: { text: string }) => Promise<void> }) => {
+        void args.onToolResult?.({ text: "🛠️ Exec: echo queued-progress" });
+        return { payloads: [{ text: "final reply" }], meta: { agentMeta: {} } };
+      },
+    );
+
+    const runner = createFollowupRunner({
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      defaultModel: "claude",
+    });
+
+    const runPromise = runner(queued);
+    await progressRouteStarted;
+    await Promise.resolve();
+
+    expect(routeReplyMock).toHaveBeenCalledTimes(1);
+    expect(requireMockCallArg(routeReplyMock, 0).payload).toEqual(
+      expect.objectContaining({ text: "🛠️ Exec: echo queued-progress" }),
+    );
+    expect(requireMockCallArg(routeReplyMock, 0).mirror).toBe(false);
+
+    releaseProgressRoute?.();
+    await runPromise;
+
+    expect(routeReplyMock).toHaveBeenCalledTimes(2);
+    expect(requireMockCallArg(routeReplyMock, 1).payload).toEqual(
+      expect.objectContaining({ text: "final reply" }),
+    );
+    expect(requireMockCallArg(routeReplyMock, 1).mirror).toBeUndefined();
+  });
+
+  it("preserves queued verbose progress when default tool progress is suppressed", async () => {
+    const onToolStart = vi.fn(async () => {});
+    const onCommandOutput = vi.fn(async () => {});
+    const queued = createQueuedRun({
+      originatingChannel: "discord",
+      originatingTo: "channel:C1",
+      originatingAccountId: "acct-1",
+      originatingThreadId: "thread-1",
+      run: {
+        messageProvider: "discord",
+        sourceReplyDeliveryMode: "message_tool_only",
+        verboseLevel: "on",
+      },
+    });
+
+    runEmbeddedPiAgentMock.mockImplementationOnce(
+      async (args: {
+        onAgentEvent?: (evt: { stream: string; data: Record<string, unknown> }) => Promise<void>;
+        onToolResult?: (payload: { text: string }) => Promise<void>;
+        shouldEmitToolResult?: () => boolean;
+        shouldEmitToolOutput?: () => boolean;
+      }) => {
+        expect(args.shouldEmitToolResult?.()).toBe(true);
+        expect(args.shouldEmitToolOutput?.()).toBe(false);
+        await args.onAgentEvent?.({
+          stream: "tool",
+          data: {
+            phase: "start",
+            name: "exec",
+            args: { command: "echo queued-suppressed-preview" },
+          },
+        });
+        await args.onAgentEvent?.({
+          stream: "command_output",
+          data: { phase: "chunk", output: "queued output" },
+        });
+        await args.onToolResult?.({ text: "🛠️ Exec: echo queued-suppressed-preview" });
+        return { payloads: [], meta: { agentMeta: {} } };
+      },
+    );
+
+    const runner = createFollowupRunner({
+      opts: { suppressDefaultToolProgressMessages: true, onToolStart, onCommandOutput },
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      defaultModel: "claude",
+      toolProgressDetail: "raw",
+    });
+
+    await runner(queued);
+
+    expect(onToolStart).toHaveBeenCalledWith({
+      name: "exec",
+      phase: "start",
+      args: { command: "echo queued-suppressed-preview" },
+      detailMode: "raw",
+    });
+    expect(onCommandOutput).toHaveBeenCalledWith(
+      expect.objectContaining({ phase: "chunk", output: "queued output" }),
+    );
+    expect(routeReplyMock).toHaveBeenCalledTimes(1);
+    expect(routeReplyMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "discord",
+        to: "channel:C1",
+        accountId: "acct-1",
+        threadId: "thread-1",
+        mirror: false,
+        payload: expect.objectContaining({ text: "🛠️ Exec: echo queued-suppressed-preview" }),
+      }),
+    );
+  });
+
+  it("suppresses queued follow-up progress when verbose progress is disabled", async () => {
+    const storePath = path.join(
+      await fs.mkdtemp(path.join(tmpdir(), "openclaw-followup-progress-off-")),
+      "sessions.json",
+    );
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+    };
+    const sessionStore: Record<string, SessionEntry> = { main: sessionEntry };
+    const onToolStart = vi.fn(async () => {});
+    const onItemEvent = vi.fn(async () => {});
+    const onCommandOutput = vi.fn(async () => {});
+    const onCompactionStart = vi.fn(async () => {});
+    const onCompactionEnd = vi.fn(async () => {});
+    registerFollowupTestSessionStore(storePath, sessionStore);
+
+    runEmbeddedPiAgentMock.mockImplementationOnce(
+      async (args: {
+        onAgentEvent?: (evt: { stream: string; data: Record<string, unknown> }) => Promise<void>;
+        shouldEmitToolResult?: () => boolean;
+        shouldEmitToolOutput?: () => boolean;
+      }) => {
+        expect(args.shouldEmitToolResult?.()).toBe(false);
+        expect(args.shouldEmitToolOutput?.()).toBe(false);
+        await args.onAgentEvent?.({
+          stream: "tool",
+          data: { phase: "start", name: "exec", args: { command: "echo hidden" } },
+        });
+        await args.onAgentEvent?.({
+          stream: "item",
+          data: { phase: "start", itemId: "item-1", title: "hidden item" },
+        });
+        await args.onAgentEvent?.({
+          stream: "command_output",
+          data: { phase: "chunk", output: "hidden output" },
+        });
+        await args.onAgentEvent?.({
+          stream: "compaction",
+          data: { phase: "end", completed: true },
+        });
+        return { payloads: [{ text: "final" }], meta: { agentMeta: {} } };
+      },
+    );
+
+    const runner = createFollowupRunner({
+      opts: { onToolStart, onItemEvent, onCommandOutput, onCompactionStart, onCompactionEnd },
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      sessionEntry,
+      sessionStore,
+      sessionKey: "main",
+      storePath,
+      defaultModel: "claude",
+    });
+
+    await runner(
+      createQueuedRun({
+        run: {
+          messageProvider: "discord",
+          sourceReplyDeliveryMode: "message_tool_only",
+          verboseLevel: "off",
+        },
+      }),
+    );
+
+    expect(onToolStart).not.toHaveBeenCalled();
+    expect(onItemEvent).not.toHaveBeenCalled();
+    expect(onCommandOutput).not.toHaveBeenCalled();
+    expect(onCompactionStart).not.toHaveBeenCalled();
+    expect(onCompactionEnd).not.toHaveBeenCalled();
+    expect(sessionStore.main.compactionCount).toBe(1);
+  });
+
+  it("keeps queued follow-up progress quiet when verbose state is missing", async () => {
+    const onToolStart = vi.fn(async () => {});
+    const onCommandOutput = vi.fn(async () => {});
+
+    runEmbeddedPiAgentMock.mockImplementationOnce(
+      async (args: {
+        onAgentEvent?: (evt: { stream: string; data: Record<string, unknown> }) => Promise<void>;
+        onToolResult?: (payload: { text: string }) => Promise<void>;
+        shouldEmitToolResult?: () => boolean;
+        shouldEmitToolOutput?: () => boolean;
+      }) => {
+        expect(args.shouldEmitToolResult?.()).toBe(false);
+        expect(args.shouldEmitToolOutput?.()).toBe(false);
+        await args.onAgentEvent?.({
+          stream: "tool",
+          data: { phase: "start", name: "exec", args: { command: "echo hidden" } },
+        });
+        await args.onAgentEvent?.({
+          stream: "command_output",
+          data: { phase: "chunk", output: "hidden output" },
+        });
+        await args.onToolResult?.({ text: "🛠️ Exec: echo hidden" });
+        return { payloads: [{ text: "final" }], meta: { agentMeta: {} } };
+      },
+    );
+
+    const runner = createFollowupRunner({
+      opts: { suppressDefaultToolProgressMessages: false, onToolStart, onCommandOutput },
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      defaultModel: "claude",
+    });
+
+    await runner(
+      createQueuedRun({
+        run: {
+          messageProvider: "discord",
+          sourceReplyDeliveryMode: "message_tool_only",
+          verboseLevel: undefined,
+        },
+      }),
+    );
+
+    expect(onToolStart).not.toHaveBeenCalled();
+    expect(onCommandOutput).not.toHaveBeenCalled();
+    expect(routeReplyMock).not.toHaveBeenCalled();
+  });
+
+  it("does not reuse dispatch-scoped tool-error suppression across queued follow-ups", async () => {
+    const onCommandOutput = vi.fn(async () => {});
+
+    runEmbeddedPiAgentMock
+      .mockImplementationOnce(
+        async (args: {
+          onAgentEvent?: (evt: { stream: string; data: Record<string, unknown> }) => Promise<void>;
+          suppressToolErrorWarnings?: boolean | (() => boolean | undefined);
+        }) => {
+          const shouldSuppress = args.suppressToolErrorWarnings as () => boolean | undefined;
+          expect(shouldSuppress()).toBeUndefined();
+          await args.onAgentEvent?.({
+            stream: "command_output",
+            data: {
+              phase: "end",
+              name: "exec",
+              status: "failed",
+              exitCode: 1,
+            },
+          });
+          expect(shouldSuppress()).toBe(true);
+          return { payloads: [], meta: { agentMeta: {} } };
+        },
+      )
+      .mockImplementationOnce(
+        async (args: { suppressToolErrorWarnings?: boolean | (() => boolean | undefined) }) => {
+          const shouldSuppress = args.suppressToolErrorWarnings as () => boolean | undefined;
+          expect(shouldSuppress()).toBe(false);
+          return { payloads: [], meta: { agentMeta: {} } };
+        },
+      );
+
+    const runner = createFollowupRunner({
+      opts: { onCommandOutput, shouldSuppressToolErrorWarnings: () => true },
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      defaultModel: "claude",
+    });
+
+    await runner(
+      createQueuedRun({
+        run: {
+          messageProvider: "discord",
+          sourceReplyDeliveryMode: "message_tool_only",
+          verboseLevel: "on",
+        },
+      }),
+    );
+    await runner(
+      createQueuedRun({
+        run: {
+          messageProvider: "discord",
+          sourceReplyDeliveryMode: "message_tool_only",
+          verboseLevel: "off",
+        },
+      }),
+    );
+
+    expect(onCommandOutput).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps queued full-verbose tool-error fallbacks available after failed progress", async () => {
+    const onCommandOutput = vi.fn(async () => {});
+
+    runEmbeddedPiAgentMock.mockImplementationOnce(
+      async (args: {
+        onAgentEvent?: (evt: { stream: string; data: Record<string, unknown> }) => Promise<void>;
+        suppressToolErrorWarnings?: boolean | (() => boolean | undefined);
+      }) => {
+        const shouldSuppress = args.suppressToolErrorWarnings as () => boolean | undefined;
+        expect(shouldSuppress()).toBeUndefined();
+        await args.onAgentEvent?.({
+          stream: "command_output",
+          data: {
+            phase: "end",
+            name: "exec",
+            status: "failed",
+            exitCode: 1,
+          },
+        });
+        expect(shouldSuppress()).toBeUndefined();
+        return { payloads: [], meta: { agentMeta: {} } };
+      },
+    );
+
+    const runner = createFollowupRunner({
+      opts: { onCommandOutput },
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      defaultModel: "claude",
+    });
+
+    await runner(
+      createQueuedRun({
+        run: {
+          messageProvider: "discord",
+          sourceReplyDeliveryMode: "message_tool_only",
+          verboseLevel: "full",
+        },
+      }),
+    );
+
+    expect(onCommandOutput).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps queued tool-error fallbacks when failed progress has no callback", async () => {
+    runEmbeddedPiAgentMock.mockImplementationOnce(
+      async (args: {
+        onAgentEvent?: (evt: { stream: string; data: Record<string, unknown> }) => Promise<void>;
+        suppressToolErrorWarnings?: boolean | (() => boolean | undefined);
+      }) => {
+        const shouldSuppress = args.suppressToolErrorWarnings as () => boolean | undefined;
+        expect(shouldSuppress()).toBeUndefined();
+        await args.onAgentEvent?.({
+          stream: "command_output",
+          data: {
+            phase: "end",
+            name: "exec",
+            status: "failed",
+            exitCode: 1,
+          },
+        });
+        expect(shouldSuppress()).toBeUndefined();
+        return { payloads: [], meta: { agentMeta: {} } };
+      },
+    );
+
+    const runner = createFollowupRunner({
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      defaultModel: "claude",
+    });
+
+    await runner(
+      createQueuedRun({
+        run: {
+          messageProvider: "discord",
+          sourceReplyDeliveryMode: "message_tool_only",
+          verboseLevel: "on",
+        },
+      }),
+    );
+  });
+
+  it("uses current session verbose state for queued follow-up progress", async () => {
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+      verboseLevel: "off",
+    };
+    const sessionStore: Record<string, SessionEntry> = { main: sessionEntry };
+    const onToolStart = vi.fn(async () => {});
+
+    runEmbeddedPiAgentMock.mockImplementationOnce(
+      async (args: {
+        onAgentEvent?: (evt: { stream: string; data: Record<string, unknown> }) => Promise<void>;
+        shouldEmitToolResult?: () => boolean;
+      }) => {
+        expect(args.shouldEmitToolResult?.()).toBe(false);
+        await args.onAgentEvent?.({
+          stream: "tool",
+          data: { phase: "start", name: "exec", args: { command: "echo hidden" } },
+        });
+        return { payloads: [], meta: { agentMeta: {} } };
+      },
+    );
+
+    const runner = createFollowupRunner({
+      opts: { onToolStart },
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      sessionEntry,
+      sessionStore,
+      sessionKey: "main",
+      defaultModel: "claude",
+    });
+
+    await runner(
+      createQueuedRun({
+        run: {
+          messageProvider: "discord",
+          sessionKey: "main",
+          sourceReplyDeliveryMode: "message_tool_only",
+          verboseLevel: "on",
+        },
+      }),
+    );
+
+    expect(onToolStart).not.toHaveBeenCalled();
+  });
+});
+
 describe("createFollowupRunner compaction", () => {
   it("adds verbose auto-compaction notice and tracks count", async () => {
     const storePath = path.join(
@@ -1136,6 +1754,51 @@ describe("createFollowupRunner compaction", () => {
     expect(onBlockReply).toHaveBeenCalledTimes(2);
     const firstCall = (onBlockReply.mock.calls as unknown as Array<Array<{ text?: string }>>)[0];
     expect(firstCall?.[0]?.text).toContain("Auto-compaction complete");
+    expect(sessionStore.main.compactionCount).toBe(1);
+  });
+
+  it("suppresses queued auto-compaction notice when verbose is turned off", async () => {
+    const storePath = path.join(
+      await fs.mkdtemp(path.join(tmpdir(), "openclaw-compaction-quiet-")),
+      "sessions.json",
+    );
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+      verboseLevel: "off",
+    };
+    const sessionStore: Record<string, SessionEntry> = {
+      main: sessionEntry,
+    };
+    const onBlockReply = vi.fn(async () => {});
+    registerFollowupTestSessionStore(storePath, sessionStore);
+
+    mockCompactionRun({
+      willRetry: true,
+      result: { payloads: [{ text: "final" }], meta: {} },
+    });
+
+    const runner = createFollowupRunner({
+      opts: { onBlockReply },
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      sessionEntry,
+      sessionStore,
+      sessionKey: "main",
+      storePath,
+      defaultModel: "anthropic/claude-opus-4-6",
+    });
+
+    const queued = createQueuedRun({
+      run: {
+        verboseLevel: "on",
+      },
+    });
+
+    await runner(queued);
+
+    expect(onBlockReply).toHaveBeenCalledTimes(1);
+    expectNoBlockReplyTextIncludes(onBlockReply, "Auto-compaction complete");
     expect(sessionStore.main.compactionCount).toBe(1);
   });
 
@@ -1720,6 +2383,77 @@ describe("createFollowupRunner messaging delivery and dedupe", () => {
     persistSpy.mockRestore();
   });
 
+  it("preserves user-facing session model state for queued internal announce fallback", async () => {
+    const storePath = "/tmp/openclaw-followup-internal-announce-usage.json";
+    const sessionKey = "main";
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+      modelProvider: "openai-codex",
+      model: "gpt-5.5",
+      contextTokens: 200_000,
+      inputTokens: 1_234,
+      outputTokens: 56,
+      cacheRead: 7,
+      cacheWrite: 8,
+      totalTokens: 1_305,
+      totalTokensFresh: true,
+    };
+    const sessionStore: Record<string, SessionEntry> = { [sessionKey]: sessionEntry };
+    FOLLOWUP_TEST_SESSION_STORES.set(storePath, sessionStore);
+    const persistSpy = vi.spyOn(sessionRunAccounting, "persistRunSessionUsage");
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "internal announce complete" }],
+      meta: {
+        agentMeta: {
+          usage: { input: 39_908, output: 122 },
+          lastCallUsage: { input: 39_908, output: 122 },
+          model: "gemini-2.5-flash",
+          provider: "google",
+        },
+      },
+    });
+
+    const runner = createFollowupRunner({
+      opts: { onBlockReply: createAsyncReplySpy() },
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      defaultModel: "openai-codex/gpt-5.5",
+      sessionEntry,
+      sessionStore,
+      sessionKey,
+      storePath,
+    });
+
+    await expect(
+      runner(
+        createQueuedRun({
+          run: {
+            inputProvenance: {
+              kind: "inter_session",
+              sourceSessionKey: "agent:codex:subagent:c34fca91",
+              sourceChannel: "__internal__",
+              sourceTool: "subagent_announce",
+            },
+          },
+        }),
+      ),
+    ).resolves.toBeUndefined();
+
+    const persistCall = requireMockCallArg(persistSpy, 0);
+    expect(persistCall.preserveUserFacingSessionModelState).toBe(true);
+    expect(sessionStore[sessionKey]?.modelProvider).toBe("openai-codex");
+    expect(sessionStore[sessionKey]?.model).toBe("gpt-5.5");
+    expect(sessionStore[sessionKey]?.contextTokens).toBe(200_000);
+    expect(sessionStore[sessionKey]?.inputTokens).toBe(1_234);
+    expect(sessionStore[sessionKey]?.outputTokens).toBe(56);
+    expect(sessionStore[sessionKey]?.cacheRead).toBe(7);
+    expect(sessionStore[sessionKey]?.cacheWrite).toBe(8);
+    expect(sessionStore[sessionKey]?.totalTokens).toBe(1_305);
+    expect(sessionStore[sessionKey]?.totalTokensFresh).toBe(true);
+    persistSpy.mockRestore();
+  });
+
   it("does not send cross-channel payload content to dispatcher when origin routing fails", async () => {
     routeReplyMock.mockResolvedValue({
       ok: false,
@@ -2067,5 +2801,165 @@ describe("createFollowupRunner agentDir forwarding", () => {
     expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
     const call = requireLastMockCallArg(runEmbeddedPiAgentMock, "run embedded pi agent");
     expect(call.agentDir).toBe(agentDir);
+  });
+});
+
+describe("createFollowupRunner queued user message idempotency across fallback", () => {
+  it("suppresses queued user message persistence after first fallback candidate persists it", async () => {
+    runEmbeddedPiAgentMock.mockClear();
+    runWithModelFallbackMock.mockReset();
+    runWithModelFallbackMock.mockImplementationOnce(
+      async (params: { run: (provider: string, model: string) => Promise<unknown> }) => {
+        await expect(params.run("anthropic", "claude-opus-4-7")).rejects.toThrow("upstream 500");
+        return {
+          result: await params.run("openai", "gpt-5.4"),
+          provider: "openai",
+          model: "gpt-5.4",
+        };
+      },
+    );
+    runEmbeddedPiAgentMock.mockImplementationOnce(
+      async (args: {
+        onUserMessagePersisted?: (message: {
+          role: "user";
+          content: Array<{ type: "text"; text: string }>;
+        }) => void;
+      }) => {
+        args.onUserMessagePersisted?.({
+          role: "user",
+          content: [{ type: "text", text: "queued message" }],
+        });
+        throw new Error("upstream 500");
+      },
+    );
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "ok" }],
+      meta: {},
+    });
+
+    const runner = createFollowupRunner({
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      defaultModel: "anthropic/claude-opus-4-7",
+    });
+
+    await runner(
+      createQueuedRun({
+        run: {
+          provider: "anthropic",
+          model: "claude-opus-4-7",
+          suppressNextUserMessagePersistence: false,
+        },
+      }),
+    );
+
+    expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(2);
+    const firstAttempt = requireMockCallArg(runEmbeddedPiAgentMock, 0);
+    const secondAttempt = requireMockCallArg(runEmbeddedPiAgentMock, 1);
+    expect(firstAttempt.suppressNextUserMessagePersistence).toBe(false);
+    expect(secondAttempt.suppressNextUserMessagePersistence).toBe(true);
+  });
+
+  it("only persists assistant error stub on the first fallback candidate", async () => {
+    runEmbeddedPiAgentMock.mockClear();
+    runWithModelFallbackMock.mockReset();
+    runWithModelFallbackMock.mockImplementationOnce(
+      async (params: { run: (provider: string, model: string) => Promise<unknown> }) => {
+        await expect(params.run("anthropic", "claude-opus-4-7")).rejects.toThrow("upstream 500");
+        await expect(params.run("anthropic", "claude-opus-4-6")).rejects.toThrow("upstream 500");
+        return {
+          result: await params.run("openai", "gpt-5.4"),
+          provider: "openai",
+          model: "gpt-5.4",
+        };
+      },
+    );
+    runEmbeddedPiAgentMock.mockImplementationOnce(
+      async (args: {
+        onAssistantErrorMessagePersisted?: (message: {
+          role: "assistant";
+          content: string;
+          stopReason: "error";
+        }) => void;
+      }) => {
+        args.onAssistantErrorMessagePersisted?.({
+          role: "assistant",
+          content: "[assistant turn failed before producing content]",
+          stopReason: "error",
+        });
+        throw new Error("upstream 500");
+      },
+    );
+    runEmbeddedPiAgentMock.mockRejectedValueOnce(new Error("upstream 500"));
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "ok" }],
+      meta: {},
+    });
+
+    const runner = createFollowupRunner({
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      defaultModel: "anthropic/claude-opus-4-7",
+    });
+
+    await runner(
+      createQueuedRun({
+        run: {
+          provider: "anthropic",
+          model: "claude-opus-4-7",
+        },
+      }),
+    );
+
+    expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(3);
+    const firstAttempt = requireMockCallArg(runEmbeddedPiAgentMock, 0);
+    const secondAttempt = requireMockCallArg(runEmbeddedPiAgentMock, 1);
+    const thirdAttempt = requireMockCallArg(runEmbeddedPiAgentMock, 2);
+    expect(firstAttempt.suppressAssistantErrorPersistence).toBe(false);
+    expect(secondAttempt.suppressAssistantErrorPersistence).toBe(true);
+    expect(thirdAttempt.suppressAssistantErrorPersistence).toBe(true);
+  });
+
+  it("does not suppress when no fallback candidate persisted the queued message", async () => {
+    runEmbeddedPiAgentMock.mockClear();
+    runWithModelFallbackMock.mockReset();
+    runWithModelFallbackMock.mockImplementationOnce(
+      async (params: { run: (provider: string, model: string) => Promise<unknown> }) => {
+        await expect(params.run("anthropic", "claude-opus-4-7")).rejects.toThrow("upstream early");
+        return {
+          result: await params.run("openai", "gpt-5.4"),
+          provider: "openai",
+          model: "gpt-5.4",
+        };
+      },
+    );
+    runEmbeddedPiAgentMock.mockRejectedValueOnce(new Error("upstream early"));
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "ok" }],
+      meta: {},
+    });
+
+    const runner = createFollowupRunner({
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      defaultModel: "anthropic/claude-opus-4-7",
+    });
+
+    await runner(
+      createQueuedRun({
+        run: {
+          provider: "anthropic",
+          model: "claude-opus-4-7",
+          suppressNextUserMessagePersistence: false,
+        },
+      }),
+    );
+
+    expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(2);
+    const firstAttempt = requireMockCallArg(runEmbeddedPiAgentMock, 0);
+    const secondAttempt = requireMockCallArg(runEmbeddedPiAgentMock, 1);
+    expect(firstAttempt.suppressNextUserMessagePersistence).toBe(false);
+    expect(secondAttempt.suppressNextUserMessagePersistence).toBe(false);
+    expect(secondAttempt.suppressAssistantErrorPersistence).toBe(false);
   });
 });

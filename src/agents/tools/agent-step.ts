@@ -74,7 +74,6 @@ export async function runAgentStep(params: {
       runId: stepIdem,
       extraSystemPrompt: params.extraSystemPrompt,
       inputProvenance,
-      senderIsOwner: false,
       allowModelOverride: false,
     });
     await retireSessionMcpRuntimeForSessionKey({
@@ -117,7 +116,7 @@ export async function runAgentStep(params: {
   return result.replyText;
 }
 
-export const __testing = {
+export const testing = {
   setDepsForTest(
     overrides?: Partial<{
       agentCommandFromIngress: AgentCommandRunner;
@@ -132,3 +131,4 @@ export const __testing = {
       : defaultAgentStepDeps;
   },
 };
+export { testing as __testing };

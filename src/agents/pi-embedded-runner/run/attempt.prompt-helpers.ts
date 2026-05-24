@@ -340,7 +340,7 @@ function sanitizeStructuredJsonValue(
     copied += 1;
   }
   if (skipped > 0) {
-    output.__truncated = `${skipped} more keys`;
+    output["__truncated"] = `${skipped} more keys`;
   }
   seen.delete(value);
   return output;
@@ -503,7 +503,6 @@ type AfterTurnRuntimeContextAttempt = Pick<
   | "currentMessageId"
   | "config"
   | "skillsSnapshot"
-  | "senderIsOwner"
   | "senderId"
   | "provider"
   | "modelId"
@@ -542,7 +541,6 @@ export function buildAfterTurnRuntimeContext(params: {
       agentDir: params.agentDir,
       config: params.attempt.config,
       skillsSnapshot: params.attempt.skillsSnapshot,
-      senderIsOwner: params.attempt.senderIsOwner,
       senderId: params.attempt.senderId,
       provider: params.attempt.provider,
       modelId: params.attempt.modelId,

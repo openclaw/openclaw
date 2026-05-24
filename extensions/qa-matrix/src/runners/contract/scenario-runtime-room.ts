@@ -303,18 +303,21 @@ export async function runThreadIsolationScenario(context: MatrixQaScenarioContex
 export async function runSubagentThreadSpawnScenario(context: MatrixQaScenarioContext) {
   const { client, startSince } = await primeMatrixQaDriverScenarioClient(context);
   const childToken = buildMatrixQaToken("MATRIX_QA_SUBAGENT_CHILD");
+  const spawnArgs = {
+    task: `Finish with exactly ${childToken}.`,
+    label: "matrix-thread-subagent",
+    thread: true,
+    mode: "session",
+    runTimeoutSeconds: 120,
+  };
   const triggerBody = [
-    `${context.sutUserId} Call sessions_spawn now for this QA check.`,
-    `Use task="Finish with exactly ${childToken}."`,
-    "Use label=matrix-thread-subagent thread=true mode=session runTimeoutSeconds=120.",
-    "Do not send the child token from this parent session.",
+    `${context.sutUserId} Run this exact OpenClaw Matrix thread-spawn QA check. Use tool calls, not prose.`,
+    `Step 1: call sessions_spawn with exactly this JSON input: ${JSON.stringify(spawnArgs)}.`,
+    'Step 2: after spawn returns status="accepted", wait for the child session reply in the spawned Matrix thread.',
+    "Do not omit thread=true; the child must bind to this Matrix thread.",
+    `Do not write ${childToken} in the parent response.`,
   ].join(" ");
-  const driverEventId = await client.sendTextMessage({
-    body: triggerBody,
-    mentionUserIds: [context.sutUserId],
-    roomId: context.roomId,
-  });
-  const intro = await client.waitForRoomEvent({
+  const introPromise = client.waitForRoomEvent({
     observedEvents: context.observedEvents,
     predicate: (event) => {
       failIfMatrixSubagentThreadHookError(event);
@@ -331,6 +334,12 @@ export async function runSubagentThreadSpawnScenario(context: MatrixQaScenarioCo
     since: startSince,
     timeoutMs: context.timeoutMs,
   });
+  const driverEventId = await client.sendTextMessage({
+    body: triggerBody,
+    mentionUserIds: [context.sutUserId],
+    roomId: context.roomId,
+  });
+  const intro = await introPromise;
   const completion = await client.waitForRoomEvent({
     observedEvents: context.observedEvents,
     predicate: (event) => {

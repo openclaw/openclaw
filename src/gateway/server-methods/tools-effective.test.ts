@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ErrorCodes } from "../protocol/index.js";
-import { __testing, toolsEffectiveHandlers } from "./tools-effective.js";
+import { testing, toolsEffectiveHandlers } from "./tools-effective.js";
 
 const runtimeMocks = vi.hoisted(() => ({
   deliveryContextFromSession: vi.fn(() => ({
@@ -100,8 +100,8 @@ function firstRespondCall(respond: ReturnType<typeof vi.fn>): RespondCall | unde
 describe("tools.effective handler", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    __testing.resetToolsEffectiveCacheForTest();
-    __testing.resetToolsEffectiveNowForTest();
+    testing.resetToolsEffectiveCacheForTest();
+    testing.resetToolsEffectiveNowForTest();
     runtimeMocks.getActivePluginChannelRegistryVersion.mockReturnValue(1);
     runtimeMocks.getActivePluginRegistryVersion.mockReturnValue(1);
   });
@@ -174,7 +174,6 @@ describe("tools.effective handler", () => {
     expect(payload?.groups?.[0]?.tools?.[0]?.id).toBe("exec");
     expect(payload?.groups?.[0]?.tools?.[0]?.source).toBe("core");
     const inventoryParams = resolveEffectiveToolInventoryArg();
-    expect(inventoryParams?.senderIsOwner).toBe(false);
     expect(inventoryParams?.currentChannelId).toBe("channel-1");
     expect(inventoryParams?.currentThreadTs).toBe("thread-2");
     expect(inventoryParams?.accountId).toBe("acct-1");
@@ -223,7 +222,7 @@ describe("tools.effective handler", () => {
 
   it("returns stale cached inventory immediately while refreshing in the background", async () => {
     let now = 1_000;
-    __testing.setToolsEffectiveNowForTest(() => now);
+    testing.setToolsEffectiveNowForTest(() => now);
     const stalePayload = {
       agentId: "main",
       profile: "coding",
@@ -321,21 +320,6 @@ describe("tools.effective handler", () => {
 
     expect(resolveEffectiveToolInventoryArg()?.currentThreadTs).toBe("42");
     expect(firstRespondCall(respond)?.[0]).toBe(true);
-  });
-
-  it("passes senderIsOwner=true for admin-scoped callers", async () => {
-    const respond = vi.fn();
-    await toolsEffectiveHandlers["tools.effective"]({
-      params: { sessionKey: "main:abc" },
-      respond: respond as never,
-      context: { getRuntimeConfig: () => ({}) } as never,
-      client: {
-        connect: { scopes: ["operator.admin"] },
-      } as never,
-      req: { type: "req", id: "req-1", method: "tools.effective" },
-      isWebchatConnect: () => false,
-    });
-    expect(resolveEffectiveToolInventoryArg()?.senderIsOwner).toBe(true);
   });
 
   it("rejects agent ids that do not match the session agent", async () => {

@@ -1,20 +1,30 @@
 import fs from "node:fs";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import type { ChannelRouteRef } from "../../plugin-sdk/channel-route.js";
 import { isPluginJsonValue, type PluginJsonValue } from "../../plugins/host-hook-json.js";
 import { normalizeSessionEntrySlotKey } from "../../plugins/session-entry-slot-keys.js";
 import {
+  normalizeDeliveryChannelRoute,
   normalizeDeliveryContext,
   normalizeSessionDeliveryFields,
 } from "../../utils/delivery-context.shared.js";
 import { getFileStatSnapshot } from "../cache-utils.js";
 import {
   cloneSessionStoreRecord,
+  cloneSessionStoreSnapshot,
+  internSessionEntryLargeStrings,
   isSessionStoreCacheEnabled,
   readSessionStoreCache,
+  readSessionStoreSnapshotCache,
   setSerializedSessionStore,
   writeSessionStoreCache,
+  writeSessionStoreSnapshotCache,
+  type SessionStoreSnapshot,
+  type SessionStoreSnapshotEntries,
+  type SessionStoreSnapshotEntry,
 } from "./store-cache.js";
 import { normalizePersistedSessionEntryShape } from "./store-entry-shape.js";
+import { resolveSessionStoreEntry } from "./store-entry.js";
 import { collectSessionMaintenancePreserveKeys } from "./store-maintenance-preserve.js";
 import { resolveMaintenanceConfig } from "./store-maintenance-runtime.js";
 import {
@@ -247,8 +257,26 @@ function normalizePluginExtensionSlotKeys(entry: SessionEntry): SessionEntry {
   return next;
 }
 
+function sameDeliveryChannelRoute(
+  left: ChannelRouteRef | undefined,
+  right: ChannelRouteRef | undefined,
+): boolean {
+  return (
+    (left?.channel ?? undefined) === (right?.channel ?? undefined) &&
+    (left?.accountId ?? undefined) === (right?.accountId ?? undefined) &&
+    (left?.target?.to ?? undefined) === (right?.target?.to ?? undefined) &&
+    (left?.target?.rawTo ?? undefined) === (right?.target?.rawTo ?? undefined) &&
+    (left?.target?.chatType ?? undefined) === (right?.target?.chatType ?? undefined) &&
+    (left?.thread?.id ?? undefined) === (right?.thread?.id ?? undefined) &&
+    (left?.thread?.kind ?? undefined) === (right?.thread?.kind ?? undefined) &&
+    (left?.thread?.source ?? undefined) === (right?.thread?.source ?? undefined)
+  );
+}
+
 function normalizeSessionEntryDelivery(entry: SessionEntry): SessionEntry {
+  const entryRoute = normalizeDeliveryChannelRoute(entry.route);
   const normalized = normalizeSessionDeliveryFields({
+    route: entryRoute,
     channel: entry.channel,
     lastChannel: entry.lastChannel,
     lastTo: entry.lastTo,
@@ -263,6 +291,7 @@ function normalizeSessionEntryDelivery(entry: SessionEntry): SessionEntry {
     (entry.deliveryContext?.accountId ?? undefined) === nextDelivery?.accountId &&
     (entry.deliveryContext?.threadId ?? undefined) === nextDelivery?.threadId;
   const sameLast =
+    sameDeliveryChannelRoute(entryRoute, normalized.route) &&
     entry.lastChannel === normalized.lastChannel &&
     entry.lastTo === normalized.lastTo &&
     entry.lastAccountId === normalized.lastAccountId &&
@@ -272,6 +301,7 @@ function normalizeSessionEntryDelivery(entry: SessionEntry): SessionEntry {
   }
   return {
     ...entry,
+    route: normalized.route,
     deliveryContext: nextDelivery,
     lastChannel: normalized.lastChannel,
     lastTo: normalized.lastTo,
@@ -313,6 +343,7 @@ export function normalizeSessionStore(store: Record<string, SessionEntry>): bool
         ),
       ),
     );
+    internSessionEntryLargeStrings(normalized);
     if (normalized !== entry) {
       store[key] = normalized;
       changed = true;
@@ -358,8 +389,9 @@ export function loadSessionStore(
         store = parsed;
         serializedFromDisk = raw;
       }
-      fileStat = getFileStatSnapshot(storePath) ?? fileStat;
-      mtimeMs = fileStat?.mtimeMs;
+      // Cache with the stat observed before this read. If another process
+      // writes the file after readFileSync returns, a post-read stat could tag
+      // stale content as current and make future cache hits return old data.
       break;
     } catch {
       if (attempt < maxReadAttempts - 1) {
@@ -423,4 +455,45 @@ export function loadSessionStore(
   }
 
   return opts.clone === false ? store : cloneSessionStoreRecord(store, serializedFromDisk);
+}
+
+export function readSessionStoreSnapshot(storePath: string): SessionStoreSnapshot {
+  const currentFileStat = getFileStatSnapshot(storePath);
+  if (isSessionStoreCacheEnabled()) {
+    const cached = readSessionStoreSnapshotCache({
+      storePath,
+      mtimeMs: currentFileStat?.mtimeMs,
+      sizeBytes: currentFileStat?.sizeBytes,
+    });
+    if (cached) {
+      return cached;
+    }
+  }
+
+  const store = loadSessionStore(storePath);
+  if (!isSessionStoreCacheEnabled()) {
+    return cloneSessionStoreSnapshot(store);
+  }
+  return writeSessionStoreSnapshotCache({
+    storePath,
+    store,
+    mtimeMs: currentFileStat?.mtimeMs,
+    sizeBytes: currentFileStat?.sizeBytes,
+  });
+}
+
+export function readSessionEntry(
+  storePath: string,
+  sessionKey: string,
+): SessionStoreSnapshotEntry | undefined {
+  const snapshot = readSessionStoreSnapshot(storePath);
+  const resolved = resolveSessionStoreEntry({
+    store: snapshot as Record<string, SessionEntry>,
+    sessionKey,
+  });
+  return resolved.existing as SessionStoreSnapshotEntry | undefined;
+}
+
+export function readSessionEntries(storePath: string): SessionStoreSnapshotEntries {
+  return Object.entries(readSessionStoreSnapshot(storePath)) as SessionStoreSnapshotEntries;
 }

@@ -39,10 +39,10 @@ export function isUpdatePackageSwapInProgress(env: NodeJS.ProcessEnv): boolean {
 
 /**
  * True iff configured plugin install repair should be deferred because the
- * updater guarantees a later post-core convergence pass. Older updaters only
- * set `OPENCLAW_UPDATE_IN_PROGRESS`; when they run a newer doctor from the
- * swapped package, repair must proceed there or externalized plugins stay
- * missing until the operator manually runs doctor.
+ * updater guarantees a later post-core convergence pass. Older shipped
+ * parents may set only the writable-config marker. Those parents still have a
+ * post-core handoff, but their in-memory install records are stale after the
+ * candidate doctor exits, so defer payload repair to the updated child process.
  */
 export function shouldDeferConfiguredPluginInstallRepair(env: NodeJS.ProcessEnv): boolean {
   return (
@@ -53,9 +53,24 @@ export function shouldDeferConfiguredPluginInstallRepair(env: NodeJS.ProcessEnv)
 }
 
 /**
- * True iff this newer doctor is running under an older updater. Legacy
- * updaters set only `OPENCLAW_UPDATE_IN_PROGRESS`; they do not opt into the
- * post-core convergence pass, so configured plugin repair must happen now.
+ * True iff a new doctor is running inside a shipped parent that can persist
+ * doctor config repairs. Config writes must stay old-parent-readable because
+ * that parent resumes after the candidate doctor exits. Modern parents also
+ * set the explicit deferral marker, so they should keep current metadata
+ * writes while still deferring payload repair.
+ */
+export function isLegacyParentWritableUpdateDoctorPass(env: NodeJS.ProcessEnv): boolean {
+  return (
+    isUpdatePackageSwapInProgress(env) &&
+    isTruthyEnvValue(env[UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE_ENV]) &&
+    !isTruthyEnvValue(env[UPDATE_DEFER_CONFIGURED_PLUGIN_INSTALL_REPAIR_ENV])
+  );
+}
+
+/**
+ * True iff this newer doctor is running under an older updater that does not
+ * advertise any post-core handoff marker. Those parents set only
+ * `OPENCLAW_UPDATE_IN_PROGRESS`, so configured plugin repair must happen now.
  */
 export function isLegacyPackageUpdateDoctorPass(env: NodeJS.ProcessEnv): boolean {
   return isUpdatePackageSwapInProgress(env) && !shouldDeferConfiguredPluginInstallRepair(env);

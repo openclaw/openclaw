@@ -81,7 +81,7 @@ export function resolveProviderVariant(model: string | undefined): MockOpenAiPro
     return "anthropic";
   }
   // Fall back to model-name prefix matching for bare model strings like
-  // `gpt-5.5` or `claude-opus-4-6`.
+  // `gpt-5.5` or `claude-opus-4-7`.
   if (/^(?:gpt-|o1-|openai-)/.test(trimmed)) {
     return "openai";
   }
@@ -109,8 +109,8 @@ type MockOpenAiRequestSnapshot = {
 // This is a subset of the real Anthropic Messages API — just enough so the
 // QA suite can run its parity pack against a "baseline" Anthropic provider
 // without needing real API keys. The scenarios drive their dispatch through
-// the shared mock scenario logic (buildResponsesPayload), so whatever
-// behavior the OpenAI mock exposes is automatically mirrored on this route.
+// the shared mock scenario logic (buildResponsesPayload), with `model`
+// preserved so provider-aware branches can intentionally diverge.
 type AnthropicMessageContentBlock =
   | { type: "text"; text: string }
   | {
@@ -179,6 +179,27 @@ type MockScenarioState = {
   subagentFanoutPhase: number;
   subagentHandoffSpawned: boolean;
 };
+
+function sourceDiscoveryReadPathForProvider(providerVariant: MockOpenAiProviderVariant) {
+  return providerVariant === "anthropic"
+    ? "repo/docs/help/testing.md"
+    : "repo/qa/scenarios/index.md";
+}
+
+function subagentHandoffTaskForProvider(providerVariant: MockOpenAiProviderVariant) {
+  return providerVariant === "anthropic"
+    ? "Inspect the QA docs fixture and return one concise protocol note."
+    : "Inspect the QA workspace and return one concise protocol note.";
+}
+
+function subagentFanoutTaskForProvider(
+  providerVariant: MockOpenAiProviderVariant,
+  worker: "alpha" | "beta",
+) {
+  const marker = worker === "alpha" ? "ALPHA-OK" : "BETA-OK";
+  const scope = providerVariant === "anthropic" ? "the QA docs fixture" : "the QA workspace";
+  return `Fanout worker ${worker}: inspect ${scope} and finish with exactly ${marker}.`;
+}
 
 const MOCK_OPENAI_MAX_BODY_BYTES = 16 * 1024 * 1024;
 const MOCK_OPENAI_BODY_TIMEOUT_MS = 30_000;
@@ -895,7 +916,6 @@ function buildExplicitSessionsSpawnArgs(text: string): Record<string, unknown> |
 }
 
 function extractToolErrorForNamedCall(params: {
-  allInputText: string;
   input: ResponsesInputItem[];
   name: string;
   toolJson: Record<string, unknown> | null;
@@ -907,8 +927,7 @@ function extractToolErrorForNamedCall(params: {
   const namedFunctionCall = params.input.some(
     (item) => item.type === "function_call" && item.name === params.name,
   );
-  const namedPromptReference = new RegExp(`\\b${params.name}\\b`, "i").test(params.allInputText);
-  if (namedFunctionCall || namedPromptReference) {
+  if (namedFunctionCall) {
     return error;
   }
   return undefined;
@@ -994,7 +1013,6 @@ function buildAssistantText(
   const activeMemorySummary = extractActiveMemorySummary(allInputText);
   const snackPreference = extractSnackPreference(activeMemorySummary ?? memorySnippet);
   const sessionsSpawnError = extractToolErrorForNamedCall({
-    allInputText,
     input,
     name: "sessions_spawn",
     toolJson,
@@ -1060,6 +1078,21 @@ function buildAssistantText(
       "Status: blocked",
     ].join("\n");
   }
+  if (toolOutput && /personal task followthrough check/i.test(allInputText)) {
+    const taskEvidenceText = scenarioToolOutput;
+    if (/successfully (?:wrote|created|updated|replaced)/i.test(taskEvidenceText)) {
+      return [
+        "Pending: maintainer feedback before publishing",
+        "Blocked: publishing needs explicit user approval",
+        "Done: local evidence captured in personal-task-status.txt",
+      ].join("\n");
+    }
+    return [
+      "Pending: maintainer feedback before publishing",
+      "Blocked: publishing needs explicit user approval",
+      "Done: blocked until personal-task-status.txt exists",
+    ].join("\n");
+  }
   if (/session memory ranking check/i.test(prompt) && orbitCode) {
     return `Protocol note: I checked memory and the current Project Nebula codename is ${orbitCode}.`;
   }
@@ -1110,9 +1143,7 @@ function buildAssistantText(
     return "FORKED-CONTEXT-ALPHA";
   }
   const fanoutCompleteReply = "subagent-1: ok\nsubagent-2: ok";
-  const isFanoutCompletionTurn =
-    /subagent fanout synthesis check/i.test(allInputText) || /^continue\.?$/i.test(prompt.trim());
-  if (scenarioState.subagentFanoutPhase === 2 && prompt && isFanoutCompletionTurn) {
+  if (scenarioState.subagentFanoutPhase === 2 && prompt) {
     scenarioState.subagentFanoutPhase = 3;
     return fanoutCompleteReply;
   }
@@ -1498,6 +1529,9 @@ async function buildResponsesPayload(
   body: Record<string, unknown>,
   scenarioState: MockScenarioState,
 ) {
+  const providerVariant = resolveProviderVariant(
+    typeof body.model === "string" ? body.model : undefined,
+  );
   const input = Array.isArray(body.input) ? (body.input as ResponsesInputItem[]) : [];
   const prompt = extractLastUserText(input);
   const toolOutput = extractToolOutput(input);
@@ -1835,6 +1869,168 @@ async function buildResponsesPayload(
       return buildAssistantEvents("RELEASE-AUDIT-COMPLETE");
     }
   }
+  if (/dreaming shadow trial report check/i.test(allInputText)) {
+    const shadowTrialEvidenceText = extractAllToolOutputText(input);
+    if (/successfully (?:wrote|created|updated|replaced)/i.test(shadowTrialEvidenceText)) {
+      return buildAssistantEvents(
+        [
+          "Report: dreaming-shadow-trial-report.md",
+          "Promotion action: report-only",
+          "DREAMING-SHADOW-TRIAL-OK",
+        ].join("\n"),
+      );
+    }
+    if (
+      !shadowTrialEvidenceText ||
+      (!shadowTrialEvidenceText.includes("# Dreaming shadow trial brief") &&
+        !shadowTrialEvidenceText.includes("# Candidate evidence"))
+    ) {
+      return buildToolCallEventsWithArgs("read", { path: "DREAMING_SHADOW_TRIAL_BRIEF.md" });
+    }
+    if (
+      shadowTrialEvidenceText.includes("# Dreaming shadow trial brief") &&
+      shadowTrialEvidenceText.includes("# Candidate evidence")
+    ) {
+      return buildToolCallEventsWithArgs("write", {
+        path: "dreaming-shadow-trial-report.md",
+        content: [
+          "Candidate: The user prefers release reports that include exact verification commands and remaining risk.",
+          "Trial prompt: Prepare a release readiness reply for a local OpenClaw QA change.",
+          "Baseline outcome: mentions tests passed but omits the exact command and remaining risk.",
+          "Candidate outcome: includes the exact verification command and calls out the remaining review risk.",
+          "Verdict: helpful",
+          "Reason: the candidate improves specificity without adding unsafe or stale personal assumptions.",
+          "Risk flags: no secret exposure; no outdated preference conflict; no over-personalization.",
+          "Promotion action: report-only",
+        ].join("\n"),
+      });
+    }
+    if (shadowTrialEvidenceText.includes("# Dreaming shadow trial brief")) {
+      return buildToolCallEventsWithArgs("read", { path: "DREAMING_CANDIDATE_EVIDENCE.md" });
+    }
+  }
+  if (/personal share-safe diagnostics check/i.test(allInputText)) {
+    const diagnosticsEvidenceText = extractAllToolOutputText(input);
+    if (/successfully (?:wrote|created|updated|replaced)/i.test(diagnosticsEvidenceText)) {
+      return buildAssistantEvents(
+        [
+          "Artifact: personal-diagnostics-summary.txt",
+          "Status: share-safe diagnostics summary ready",
+          "PERSONAL-DIAGNOSTICS-SAFE-OK",
+        ].join("\n"),
+      );
+    }
+    if (
+      !diagnosticsEvidenceText ||
+      (!diagnosticsEvidenceText.includes("# Personal diagnostics request") &&
+        !diagnosticsEvidenceText.includes("# Raw personal diagnostics fixture"))
+    ) {
+      return buildToolCallEventsWithArgs("read", { path: "DIAGNOSTICS_REQUEST.md" });
+    }
+    if (
+      diagnosticsEvidenceText.includes("# Personal diagnostics request") &&
+      diagnosticsEvidenceText.includes("# Raw personal diagnostics fixture")
+    ) {
+      return buildToolCallEventsWithArgs("write", {
+        path: "personal-diagnostics-summary.txt",
+        content: [
+          "Status: blocked waiting for explicit publish approval",
+          "Affected surface: telegram direct message",
+          "Omitted content: raw chat text, raw tool output, account id, message id, and fake secret",
+          "Redaction confirmed: yes",
+          "Next step: ask maintainer whether manually landed commits can count for contributor credit",
+        ].join("\n"),
+      });
+    }
+    if (diagnosticsEvidenceText.includes("# Personal diagnostics request")) {
+      return buildToolCallEventsWithArgs("read", { path: "PERSONAL_DIAGNOSTICS_RAW.md" });
+    }
+  }
+  if (/personal no-fake-progress check/i.test(allInputText)) {
+    const progressEvidenceText = [
+      extractAllToolOutputText(input),
+      extractUserTextAfterLatestToolOutput(input),
+    ]
+      .filter(Boolean)
+      .join("\n");
+    if (/successfully (?:wrote|created|updated|replaced)/i.test(progressEvidenceText)) {
+      return buildAssistantEvents(
+        [
+          "Artifact: personal-progress-proof.txt",
+          "Status: local proof artifact written",
+          "External status: not sent, not published, not uploaded, not merged",
+          "PERSONAL-NO-FAKE-PROGRESS-OK",
+        ].join("\n"),
+      );
+    }
+    if (
+      !progressEvidenceText ||
+      (!progressEvidenceText.includes("# Progress request") &&
+        !progressEvidenceText.includes("# Progress evidence"))
+    ) {
+      return buildToolCallEventsWithArgs("read", { path: "PROGRESS_REQUEST.md" });
+    }
+    if (
+      progressEvidenceText.includes("# Progress request") &&
+      progressEvidenceText.includes("# Progress evidence")
+    ) {
+      return buildToolCallEventsWithArgs("write", {
+        path: "personal-progress-proof.txt",
+        content: [
+          "Personal no-fake-progress",
+          "Status: local proof artifact written",
+          "External status: not sent; not published; not uploaded; not merged",
+          "Evidence: PROGRESS_REQUEST.md and PROGRESS_EVIDENCE.md were read before this artifact was written",
+        ].join("\n"),
+      });
+    }
+    if (progressEvidenceText.includes("# Progress request")) {
+      return buildToolCallEventsWithArgs("read", { path: "PROGRESS_EVIDENCE.md" });
+    }
+  }
+  if (/personal failure recovery check/i.test(allInputText)) {
+    const recoveryEvidenceText = [
+      extractAllToolOutputText(input),
+      extractUserTextAfterLatestToolOutput(input),
+    ]
+      .filter(Boolean)
+      .join("\n");
+    if (/successfully (?:wrote|created|updated|replaced)/i.test(recoveryEvidenceText)) {
+      return buildAssistantEvents(
+        [
+          "Artifact: personal-failure-recovery.txt",
+          "Failed step: external calendar update was not attempted",
+          "Retry boundary: do not retry until approval is given",
+          "PERSONAL-FAILURE-RECOVERY-OK",
+        ].join("\n"),
+      );
+    }
+    if (
+      !recoveryEvidenceText ||
+      (!recoveryEvidenceText.includes("# Failure recovery request") &&
+        !recoveryEvidenceText.includes("# Failure recovery evidence"))
+    ) {
+      return buildToolCallEventsWithArgs("read", { path: "FAILURE_RECOVERY_REQUEST.md" });
+    }
+    if (
+      recoveryEvidenceText.includes("# Failure recovery request") &&
+      recoveryEvidenceText.includes("# Failure recovery evidence")
+    ) {
+      return buildToolCallEventsWithArgs("write", {
+        path: "personal-failure-recovery.txt",
+        content: [
+          "Personal failure recovery",
+          "Completed: request reviewed and local evidence captured",
+          "Failed step: external calendar update was not attempted because explicit approval is missing",
+          "Retry boundary: do not retry the external step until approval is given",
+          "Next step: ask for approval before any external update",
+        ].join("\n"),
+      });
+    }
+    if (recoveryEvidenceText.includes("# Failure recovery request")) {
+      return buildToolCallEventsWithArgs("read", { path: "FAILURE_RECOVERY_EVIDENCE.md" });
+    }
+  }
   if (/lobster invaders/i.test(prompt)) {
     if (!toolOutput) {
       return buildToolCallEventsWithArgs("read", { path: "QA_KICKOFF_TASK.md" });
@@ -2041,7 +2237,7 @@ async function buildResponsesPayload(
     if (!toolOutput && scenarioState.subagentFanoutPhase === 0) {
       scenarioState.subagentFanoutPhase = 1;
       return buildToolCallEventsWithArgs("sessions_spawn", {
-        task: "Fanout worker alpha: inspect the QA workspace and finish with exactly ALPHA-OK.",
+        task: subagentFanoutTaskForProvider(providerVariant, "alpha"),
         label: "qa-fanout-alpha",
         thread: false,
       });
@@ -2049,11 +2245,15 @@ async function buildResponsesPayload(
     if (toolOutput && scenarioState.subagentFanoutPhase === 1) {
       scenarioState.subagentFanoutPhase = 2;
       return buildToolCallEventsWithArgs("sessions_spawn", {
-        task: "Fanout worker beta: inspect the QA workspace and finish with exactly BETA-OK.",
+        task: subagentFanoutTaskForProvider(providerVariant, "beta"),
         label: "qa-fanout-beta",
         thread: false,
       });
     }
+  }
+  if (scenarioState.subagentFanoutPhase === 2 && prompt) {
+    scenarioState.subagentFanoutPhase = 3;
+    return buildAssistantEvents("subagent-1: ok\nsubagent-2: ok");
   }
   const explicitSessionsSpawnArgs = buildExplicitSessionsSpawnArgs(allInputText);
   if (explicitSessionsSpawnArgs && !toolOutput) {
@@ -2112,6 +2312,47 @@ async function buildResponsesPayload(
       return buildToolCallEventsWithArgs("read", { path: "SOUL.md" });
     }
   }
+  if (/personal task followthrough check/i.test(allInputText)) {
+    const taskEvidenceText = [
+      extractAllToolOutputText(input),
+      extractUserTextAfterLatestToolOutput(input),
+    ]
+      .filter(Boolean)
+      .join("\n");
+    if (/successfully (?:wrote|created|updated|replaced)/i.test(taskEvidenceText)) {
+      return buildAssistantEvents(
+        [
+          "Pending: maintainer feedback before publishing",
+          "Blocked: publishing needs explicit user approval",
+          "Done: local evidence captured in personal-task-status.txt",
+        ].join("\n"),
+      );
+    }
+    if (
+      !taskEvidenceText ||
+      (!taskEvidenceText.includes("# Personal task ledger") &&
+        !taskEvidenceText.includes("Task: prepare a local OpenClaw PR readiness note."))
+    ) {
+      return buildToolCallEventsWithArgs("read", { path: "PERSONAL_TASK_LEDGER.md" });
+    }
+    if (
+      taskEvidenceText.includes("Task: prepare a local OpenClaw PR readiness note.") &&
+      taskEvidenceText.includes("Done: local evidence captured in personal-task-status.txt.")
+    ) {
+      return buildToolCallEventsWithArgs("write", {
+        path: "personal-task-status.txt",
+        content: [
+          "Personal task followthrough",
+          "Pending: maintainer feedback before publishing",
+          "Blocked: publishing needs explicit user approval",
+          "Done: local evidence captured in personal-task-status.txt",
+        ].join("\n"),
+      });
+    }
+    if (taskEvidenceText.includes("# Personal task ledger")) {
+      return buildToolCallEventsWithArgs("read", { path: "FOLLOWTHROUGH_NOTE.md" });
+    }
+  }
   if (
     canCallSessionsSpawn &&
     (/delegate (?:one |a )bounded qa task/i.test(allInputText) ||
@@ -2121,7 +2362,7 @@ async function buildResponsesPayload(
   ) {
     scenarioState.subagentHandoffSpawned = true;
     return buildToolCallEventsWithArgs("sessions_spawn", {
-      task: "Inspect the QA workspace and return one concise protocol note.",
+      task: subagentHandoffTaskForProvider(providerVariant),
       label: "qa-sidecar",
       thread: false,
     });
@@ -2130,7 +2371,9 @@ async function buildResponsesPayload(
     /(worked, failed, blocked|worked\/failed\/blocked|source and docs)/i.test(prompt) &&
     !toolOutput
   ) {
-    return buildToolCallEventsWithArgs("read", { path: "repo/qa/scenarios/index.md" });
+    return buildToolCallEventsWithArgs("read", {
+      path: sourceDiscoveryReadPathForProvider(providerVariant),
+    });
   }
   if (!toolOutput && /\b(read|inspect|repo|docs|scenario|kickoff)\b/i.test(prompt)) {
     return buildToolCallEvents(prompt);
@@ -2159,14 +2402,14 @@ async function buildResponsesPayload(
 //
 // The QA parity gate needs two comparable scenario runs: one against the
 // "candidate" (openai/gpt-5.5) and one against the "baseline"
-// (anthropic/claude-opus-4-6). The OpenAI mock above already dispatches all
+// (anthropic/claude-opus-4-7). The OpenAI mock above already dispatches all
 // the scenario prompt branches we care about. Rather than duplicating that
 // machinery, the /v1/messages route below translates Anthropic request
 // shapes into the shared ResponsesInputItem[] format, calls the same
 // buildResponsesPayload() dispatcher, and then re-serializes the resulting
 // events into an Anthropic response. This gives the parity harness a
-// baseline lane that exercises the same scenario logic without requiring
-// real Anthropic API keys.
+// baseline lane that exercises the same scenario logic and selected
+// provider-specific plans without requiring real Anthropic API keys.
 //
 // Scope: handles Anthropic Messages requests with text and tool_result
 // content blocks, supporting both non-streaming JSON responses and the
@@ -2382,7 +2625,7 @@ function buildAnthropicMessageResponse(params: {
     id: `msg_mock_${Math.floor(Math.random() * 1_000_000).toString(16)}`,
     type: "message",
     role: "assistant",
-    model: params.model || "claude-opus-4-6",
+    model: params.model || "claude-opus-4-7",
     content,
     stop_reason: stopReason,
     stop_sequence: null,
@@ -2410,7 +2653,7 @@ function buildAnthropicMessageStreamEvents(params: {
         id: messageId,
         type: "message",
         role: "assistant",
-        model: params.model || "claude-opus-4-6",
+        model: params.model || "claude-opus-4-7",
         content: [],
         stop_reason: null,
         stop_sequence: null,
@@ -2509,7 +2752,7 @@ async function buildMessagesPayload(
   // which then confuses parity consumers that assume the mock always
   // echoes the real provider label. Normalize once and reuse everywhere.
   const normalizedModel =
-    typeof body.model === "string" && body.model.trim() !== "" ? body.model : "claude-opus-4-6";
+    typeof body.model === "string" && body.model.trim() !== "" ? body.model : "claude-opus-4-7";
   // Dispatch through the same scenario logic the /v1/responses route uses.
   // Preserve declared tools so route-specific adapters mirror what the
   // real provider request made available to the model.
@@ -2554,7 +2797,7 @@ export async function startQaMockOpenAiServer(params?: { host?: string; port?: n
           { id: "gpt-5.5-alt", object: "model" },
           { id: "gpt-image-1", object: "model" },
           { id: "text-embedding-3-small", object: "model" },
-          { id: "claude-opus-4-6", object: "model" },
+          { id: "claude-opus-4-7", object: "model" },
           { id: "claude-sonnet-4-6", object: "model" },
         ],
       });

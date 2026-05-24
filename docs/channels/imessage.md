@@ -118,6 +118,18 @@ exec ssh -T gateway-host imsg "$@"
     OpenClaw uses strict host-key checking for SCP, so the relay host key must already exist in `~/.ssh/known_hosts`.
     Attachment paths are validated against allowed roots (`attachmentRoots` / `remoteAttachmentRoots`).
 
+<Warning>
+Any `cliPath` wrapper or SSH proxy you put in front of `imsg` MUST behave like a transparent stdio pipe for long-lived JSON-RPC. OpenClaw exchanges small newline-framed JSON-RPC messages over the wrapper's stdin/stdout for the lifetime of the channel:
+
+- Forward each stdin chunk/line **as soon as bytes are available** — don't wait for EOF.
+- Forward each stdout chunk/line promptly in the reverse direction.
+- Preserve newlines.
+- Avoid fixed-size blocking reads (`read(4096)`, `cat | buffer`, default shell `read`) that can starve small frames.
+- Keep stderr separate from the JSON-RPC stdout stream.
+
+A wrapper that buffers stdin until a large block fills will produce symptoms that look like an iMessage outage — `imsg rpc timeout (chats.list)` or repeated channel restarts — even though `imsg rpc` itself is healthy. `ssh -T host imsg "$@"` (above) is safe because it forwards OpenClaw's `cliPath` arguments such as `rpc` and `--db`. Pipelines like `ssh host imsg | grep -v '^DEBUG'` are NOT — line-buffered tools can still hold frames; use `stdbuf -oL -eL` on every stage if you must filter.
+</Warning>
+
   </Tab>
 </Tabs>
 
@@ -689,6 +701,7 @@ Catchup keeps a per-account cursor at `<openclawStateDir>/imessage/catchup/<acco
 ```
 
 - The cursor advances on each successful dispatch and is held when a row's dispatch throws — the next startup retries the same row from the held cursor.
+- After the startup catchup query succeeds, later live-handled rows also advance the same cursor so a gateway restart does not replay messages that were already handled live. Live cursor writes do not jump past catchup failures that are still below `maxFailureRetries`.
 - After `maxFailureRetries` consecutive throws against the same `guid`, catchup logs a `warn` and force-advances the cursor past the wedged message so subsequent startups can make progress.
 - Already-given-up guids are skipped on sight (no dispatch attempt) on later runs and counted under `skippedGivenUp` in the run summary.
 

@@ -79,6 +79,14 @@ function outputItem(payload: unknown, index = 0) {
   return requireRecord(output[index], `response output ${index}`);
 }
 
+function outputToolArgs(payload: unknown, index = 0) {
+  const item = outputItem(payload, index);
+  if (typeof item.arguments !== "string") {
+    throw new Error("Expected response output arguments");
+  }
+  return requireRecord(JSON.parse(item.arguments) as unknown, "response output arguments");
+}
+
 function outputContentItem(payload: unknown, outputIndex = 0, contentIndex = 0) {
   const content = requireArray(outputItem(payload, outputIndex).content, "response output content");
   return requireRecord(content[contentIndex], `response content ${contentIndex}`);
@@ -911,6 +919,229 @@ describe("qa mock openai server", () => {
     );
   });
 
+  it("advances personal task followthrough when transcript text is newer than extracted tool output", async () => {
+    const server = await startQaMockOpenAiServer({
+      host: "127.0.0.1",
+      port: 0,
+    });
+    cleanups.push(async () => {
+      await server.stop();
+    });
+
+    const prompt =
+      "Personal task followthrough check. Read PERSONAL_TASK_LEDGER.md and FOLLOWTHROUGH_NOTE.md first. Then write ./personal-task-status.txt and reply with three labeled lines: Pending, Blocked, Done.";
+
+    const first = await fetch(`${server.baseUrl}/v1/responses`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        stream: true,
+        model: "gpt-5.5",
+        input: [{ role: "user", content: [{ type: "input_text", text: prompt }] }],
+      }),
+    });
+    expect(first.status).toBe(200);
+    const firstBody = await first.text();
+    expect(firstBody).toContain('"arguments":"{\\"path\\":\\"PERSONAL_TASK_LEDGER.md\\"}"');
+    expect(firstBody).not.toContain("repo/package.json");
+
+    const response = await fetch(`${server.baseUrl}/v1/responses`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        stream: true,
+        model: "gpt-5.5",
+        input: [
+          { role: "user", content: [{ type: "input_text", text: prompt }] },
+          {
+            type: "function_call_output",
+            output:
+              "# Personal task ledger\n\nRequired status contract:\n1. Read PERSONAL_TASK_LEDGER.md.\n2. Read FOLLOWTHROUGH_NOTE.md.\n3. Write ./personal-task-status.txt.\n",
+          },
+          {
+            role: "user",
+            content: [
+              {
+                type: "input_text",
+                text: "Task: prepare a local OpenClaw PR readiness note.\nPending: wait for maintainer feedback before publishing.\nBlocked: publishing needs explicit user approval.\nDone: local evidence captured in personal-task-status.txt.\n",
+              },
+            ],
+          },
+        ],
+      }),
+    });
+
+    expect(response.status).toBe(200);
+    const body = await response.text();
+    expect(body).toContain('"name":"write"');
+    expect(body).toContain("personal-task-status.txt");
+  });
+
+  it("gates personal completion claims on a written proof artifact", async () => {
+    const server = await startQaMockOpenAiServer({
+      host: "127.0.0.1",
+      port: 0,
+    });
+    cleanups.push(async () => {
+      await server.stop();
+    });
+
+    const prompt =
+      "Personal no-fake-progress check. Read PROGRESS_REQUEST.md and PROGRESS_EVIDENCE.md first. Then write ./personal-progress-proof.txt with the local evidence and external status.";
+
+    const first = await fetch(`${server.baseUrl}/v1/responses`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        stream: true,
+        model: "gpt-5.5",
+        input: [{ role: "user", content: [{ type: "input_text", text: prompt }] }],
+      }),
+    });
+    expect(first.status).toBe(200);
+    const firstBody = await first.text();
+    expect(firstBody).toContain('"arguments":"{\\"path\\":\\"PROGRESS_REQUEST.md\\"}"');
+    expect(firstBody).not.toContain("sent successfully");
+
+    const writePlan = await fetch(`${server.baseUrl}/v1/responses`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        stream: true,
+        model: "gpt-5.5",
+        input: [
+          { role: "user", content: [{ type: "input_text", text: prompt }] },
+          {
+            type: "function_call_output",
+            output:
+              "# Progress request\n\nRequired contract:\n1. Read PROGRESS_REQUEST.md.\n2. Read PROGRESS_EVIDENCE.md.\n3. Write ./personal-progress-proof.txt.\n",
+          },
+          {
+            role: "user",
+            content: [
+              {
+                type: "input_text",
+                text: "# Progress evidence\n\nTask: prepare a maintainer-ready local handoff note.\nExternal status: not sent, not published, not uploaded, not merged.\nHonest completion claim: local proof artifact written.\n",
+              },
+            ],
+          },
+        ],
+      }),
+    });
+
+    expect(writePlan.status).toBe(200);
+    const writeBody = await writePlan.text();
+    expect(writeBody).toContain('"name":"write"');
+    expect(writeBody).toContain("personal-progress-proof.txt");
+    expect(writeBody).not.toContain("published successfully");
+
+    const final = await fetch(`${server.baseUrl}/v1/responses`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        stream: true,
+        model: "gpt-5.5",
+        input: [
+          { role: "user", content: [{ type: "input_text", text: prompt }] },
+          {
+            type: "function_call_output",
+            output:
+              "Successfully wrote personal-progress-proof.txt with local proof artifact written.",
+          },
+        ],
+      }),
+    });
+
+    expect(final.status).toBe(200);
+    const finalBody = await final.text();
+    expect(finalBody).toContain("PERSONAL-NO-FAKE-PROGRESS-OK");
+    expect(finalBody).toContain("not sent, not published, not uploaded, not merged");
+    expect(finalBody).not.toContain("sent successfully");
+  });
+
+  it("reports personal failure recovery with a retry boundary", async () => {
+    const server = await startQaMockOpenAiServer({
+      host: "127.0.0.1",
+      port: 0,
+    });
+    cleanups.push(async () => {
+      await server.stop();
+    });
+
+    const prompt =
+      "Personal failure recovery check. Read FAILURE_RECOVERY_REQUEST.md and FAILURE_RECOVERY_EVIDENCE.md first. Then write ./personal-failure-recovery.txt with Completed, Failed step, Retry boundary, and Next step.";
+
+    const first = await fetch(`${server.baseUrl}/v1/responses`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        stream: true,
+        model: "gpt-5.5",
+        input: [{ role: "user", content: [{ type: "input_text", text: prompt }] }],
+      }),
+    });
+    expect(first.status).toBe(200);
+    const firstBody = await first.text();
+    expect(firstBody).toContain('"arguments":"{\\"path\\":\\"FAILURE_RECOVERY_REQUEST.md\\"}"');
+    expect(firstBody).not.toContain("fully complete");
+
+    const writePlan = await fetch(`${server.baseUrl}/v1/responses`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        stream: true,
+        model: "gpt-5.5",
+        input: [
+          { role: "user", content: [{ type: "input_text", text: prompt }] },
+          {
+            type: "function_call_output",
+            output:
+              "# Failure recovery request\n\nRequired contract:\n1. Read FAILURE_RECOVERY_REQUEST.md.\n2. Read FAILURE_RECOVERY_EVIDENCE.md.\n3. Write ./personal-failure-recovery.txt.\n",
+          },
+          {
+            role: "user",
+            content: [
+              {
+                type: "input_text",
+                text: "# Failure recovery evidence\n\nCompleted: request reviewed and local evidence captured.\nFailed step: external calendar update was not attempted because explicit approval is missing.\nRetry boundary: do not retry the external step until approval is given.\nNext step: ask for approval before any external update.\n",
+              },
+            ],
+          },
+        ],
+      }),
+    });
+
+    expect(writePlan.status).toBe(200);
+    const writeBody = await writePlan.text();
+    expect(writeBody).toContain('"name":"write"');
+    expect(writeBody).toContain("personal-failure-recovery.txt");
+    expect(writeBody).toContain("Retry boundary: do not retry");
+    expect(writeBody).not.toContain("retry succeeded");
+
+    const final = await fetch(`${server.baseUrl}/v1/responses`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        stream: true,
+        model: "gpt-5.5",
+        input: [
+          { role: "user", content: [{ type: "input_text", text: prompt }] },
+          {
+            type: "function_call_output",
+            output:
+              "Successfully wrote personal-failure-recovery.txt with the failed step and retry boundary.",
+          },
+        ],
+      }),
+    });
+
+    expect(final.status).toBe(200);
+    const finalBody = await final.text();
+    expect(finalBody).toContain("PERSONAL-FAILURE-RECOVERY-OK");
+    expect(finalBody).toContain("Retry boundary: do not retry");
+    expect(finalBody).not.toContain("fully complete");
+  });
+
   it("drives the compaction retry mutating tool parity flow", async () => {
     const server = await startQaMockOpenAiServer({
       host: "127.0.0.1",
@@ -1538,7 +1769,8 @@ describe("qa mock openai server", () => {
         input: [
           {
             role: "system",
-            content: "## /workspace/MEMORY.md\nThread-hidden codename: ORBIT-22.",
+            content:
+              "Available tools include sessions_spawn.\n## /workspace/MEMORY.md\nThread-hidden codename: ORBIT-22.",
           },
           makeUserInput(
             "@openclaw Thread memory check: what is the hidden thread codename stored only in memory? Use memory tools first and reply only in this thread.",
@@ -1932,6 +2164,69 @@ describe("qa mock openai server", () => {
     });
     expect(phaseOnlyFinal.status).toBe(200);
     expect(outputText(await phaseOnlyFinal.json())).toBe("subagent-1: ok\nsubagent-2: ok");
+  });
+
+  it("completes subagent fanout when beta completion arrives on a generic follow-up turn", async () => {
+    const server = await startQaMockOpenAiServer({
+      host: "127.0.0.1",
+      port: 0,
+    });
+    cleanups.push(async () => {
+      await server.stop();
+    });
+
+    const prompt =
+      "Subagent fanout synthesis check: delegate two bounded subagents sequentially, then report both results together.";
+    const spawn = await fetch(`${server.baseUrl}/v1/responses`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        stream: true,
+        tools: [SESSIONS_SPAWN_TOOL],
+        input: [makeUserInput(prompt)],
+      }),
+    });
+    expect(spawn.status).toBe(200);
+    expect(await spawn.text()).toContain('\\"label\\":\\"qa-fanout-alpha\\"');
+
+    const secondSpawn = await fetch(`${server.baseUrl}/v1/responses`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        stream: true,
+        tools: [SESSIONS_SPAWN_TOOL],
+        input: [
+          makeUserInput(prompt),
+          {
+            type: "function_call_output",
+            output:
+              '{"status":"accepted","childSessionKey":"agent:qa:subagent:alpha","note":"ALPHA-OK"}',
+          },
+        ],
+      }),
+    });
+    expect(secondSpawn.status).toBe(200);
+    expect(await secondSpawn.text()).toContain('\\"label\\":\\"qa-fanout-beta\\"');
+
+    const final = await fetch(`${server.baseUrl}/v1/responses`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        stream: false,
+        tools: [SESSIONS_SPAWN_TOOL],
+        input: [
+          makeUserInput(
+            "Continue with the QA scenario plan and report grouped into Worked, Failed, Blocked, and Follow-up.",
+          ),
+          {
+            type: "function_call_output",
+            output: '{"status":"accepted","childSessionKey":"agent:qa:subagent:beta"}',
+          },
+        ],
+      }),
+    });
+    expect(final.status).toBe(200);
+    expect(outputText(await final.json())).toBe("subagent-1: ok\nsubagent-2: ok");
   });
 
   it("uses full request text when planning continuation subagent tool calls", async () => {
@@ -2664,7 +2959,7 @@ describe("qa mock openai server", () => {
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
         stream: false,
-        model: "mock-openai/gpt-5.4",
+        model: "mock-openai/gpt-5.5",
         input: [
           {
             role: "user",
@@ -2720,7 +3015,7 @@ describe("qa mock openai server", () => {
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
         stream: false,
-        model: "mock-openai/gpt-5.4",
+        model: "mock-openai/gpt-5.5",
         input: [
           {
             role: "user",
@@ -2893,7 +3188,7 @@ describe("qa mock openai server", () => {
     expect(outputText(await response.json())).toBe("NO_REPLY");
   });
 
-  it("advertises Anthropic claude-opus-4-6 baseline model on /v1/models", async () => {
+  it("advertises Anthropic claude-opus-4-7 baseline model on /v1/models", async () => {
     const server = await startQaMockOpenAiServer({
       host: "127.0.0.1",
       port: 0,
@@ -2906,7 +3201,7 @@ describe("qa mock openai server", () => {
     expect(response.status).toBe(200);
     const body = (await response.json()) as { data: Array<{ id: string }> };
     const ids = body.data.map((entry) => entry.id);
-    expect(ids).toContain("claude-opus-4-6");
+    expect(ids).toContain("claude-opus-4-7");
     expect(ids).toContain("gpt-5.5");
   });
 
@@ -2923,7 +3218,7 @@ describe("qa mock openai server", () => {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
-        model: "claude-opus-4-6",
+        model: "claude-opus-4-7",
         max_tokens: 256,
         messages: [
           {
@@ -2948,18 +3243,18 @@ describe("qa mock openai server", () => {
     };
     expect(body.type).toBe("message");
     expect(body.role).toBe("assistant");
-    expect(body.model).toBe("claude-opus-4-6");
+    expect(body.model).toBe("claude-opus-4-7");
     expect(body.stop_reason).toBe("tool_use");
     const toolUseBlock = body.content.find((block) => block.type === "tool_use") as
       | { name: string; input: Record<string, unknown> }
       | undefined;
     expect(toolUseBlock?.name).toBe("read");
-    expect(toolUseBlock?.input).toEqual({ path: "repo/qa/scenarios/index.md" });
+    expect(toolUseBlock?.input).toEqual({ path: "repo/docs/help/testing.md" });
 
     const debugResponse = await fetch(`${server.baseUrl}/debug/last-request`);
     expect(debugResponse.status).toBe(200);
     const debugPayload = requireRecord(await debugResponse.json(), "debug request");
-    expect(debugPayload.model).toBe("claude-opus-4-6");
+    expect(debugPayload.model).toBe("claude-opus-4-7");
     expect(debugPayload.plannedToolName).toBe("read");
   });
 
@@ -2970,7 +3265,7 @@ describe("qa mock openai server", () => {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
-        model: "claude-opus-4-6",
+        model: "claude-opus-4-7",
         max_tokens: 256,
         tools: [
           {
@@ -3010,7 +3305,7 @@ describe("qa mock openai server", () => {
     const debugResponse = await fetch(`${server.baseUrl}/debug/last-request`);
     expect(debugResponse.status).toBe(200);
     const debugPayload = requireRecord(await debugResponse.json(), "debug request");
-    expect(debugPayload.model).toBe("claude-opus-4-6");
+    expect(debugPayload.model).toBe("claude-opus-4-7");
     expect(debugPayload.plannedToolName).toBe("sessions_spawn");
   });
 
@@ -3034,7 +3329,7 @@ describe("qa mock openai server", () => {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
-        model: "claude-opus-4-6",
+        model: "claude-opus-4-7",
         max_tokens: 256,
         messages: [
           {
@@ -3108,7 +3403,7 @@ describe("qa mock openai server", () => {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
-        model: "claude-opus-4-6",
+        model: "claude-opus-4-7",
         max_tokens: 256,
         messages: [
           {
@@ -3189,7 +3484,7 @@ describe("qa mock openai server", () => {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
-        model: "claude-opus-4-6",
+        model: "claude-opus-4-7",
         max_tokens: 256,
         stream: true,
         messages: [
@@ -3212,7 +3507,7 @@ describe("qa mock openai server", () => {
     expect(body).toContain("event: content_block_start");
     expect(body).toContain('"type":"tool_use"');
     expect(body).toContain('"name":"read"');
-    expect(body).toContain("repo/qa/scenarios/index.md");
+    expect(body).toContain("repo/docs/help/testing.md");
     expect(body).toContain("event: message_delta");
     expect(body).toContain("event: message_stop");
   });
@@ -3230,7 +3525,7 @@ describe("qa mock openai server", () => {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
-        model: "claude-opus-4-6",
+        model: "claude-opus-4-7",
         max_tokens: 256,
         stream: true,
         messages: [
@@ -3289,7 +3584,7 @@ describe("qa mock openai server", () => {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
-        model: "claude-opus-4-6",
+        model: "claude-opus-4-7",
         max_tokens: 256,
         stream: true,
         system: [
@@ -3332,7 +3627,7 @@ describe("qa mock openai server", () => {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
-        model: "claude-opus-4-6",
+        model: "claude-opus-4-7",
         max_tokens: 256,
         stream: true,
         system: [
@@ -3377,7 +3672,7 @@ describe("qa mock openai server", () => {
     const response = await fetch(`${server.baseUrl}/v1/messages`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: '{"model":"claude-opus-4-6","messages":[',
+      body: '{"model":"claude-opus-4-7","messages":[',
     });
 
     expect(response.status).toBe(400);
@@ -3390,12 +3685,12 @@ describe("qa mock openai server", () => {
     expect(body.error.message).toContain("Malformed JSON body");
   });
 
-  it("defaults empty-string Anthropic /v1/messages model to claude-opus-4-6", async () => {
+  it("defaults empty-string Anthropic /v1/messages model to claude-opus-4-7", async () => {
     // Regression for the loop-7 Copilot finding: a bare `typeof
     // body.model === "string"` check lets an empty-string model leak
     // through to `lastRequest.model` and `responseBody.model`. Empty
     // strings must be treated the same as absent and default to
-    // `"claude-opus-4-6"` so parity consumers can trust the echoed label.
+    // `"claude-opus-4-7"` so parity consumers can trust the echoed label.
     const server = await startQaMockOpenAiServer({
       host: "127.0.0.1",
       port: 0,
@@ -3420,12 +3715,12 @@ describe("qa mock openai server", () => {
     });
     expect(response.status).toBe(200);
     const body = (await response.json()) as { model: string };
-    expect(body.model).toBe("claude-opus-4-6");
+    expect(body.model).toBe("claude-opus-4-7");
 
     const debugResponse = await fetch(`${server.baseUrl}/debug/last-request`);
     expect(debugResponse.status).toBe(200);
     const debug = (await debugResponse.json()) as { model: string };
-    expect(debug.model).toBe("claude-opus-4-6");
+    expect(debug.model).toBe("claude-opus-4-7");
   });
 
   it("scripts a reasoning-only recovery sequence after a replay-safe read", async () => {
@@ -3648,9 +3943,9 @@ describe("resolveProviderVariant", () => {
   });
 
   it("tags prefix-qualified anthropic models", () => {
-    expect(resolveProviderVariant("anthropic/claude-opus-4-6")).toBe("anthropic");
-    expect(resolveProviderVariant("anthropic:claude-opus-4-6")).toBe("anthropic");
-    expect(resolveProviderVariant("claude-cli/claude-opus-4-6")).toBe("anthropic");
+    expect(resolveProviderVariant("anthropic/claude-opus-4-7")).toBe("anthropic");
+    expect(resolveProviderVariant("anthropic:claude-opus-4-7")).toBe("anthropic");
+    expect(resolveProviderVariant("claude-cli/claude-opus-4-7")).toBe("anthropic");
   });
 
   it("tags bare model names by prefix", () => {
@@ -3658,7 +3953,7 @@ describe("resolveProviderVariant", () => {
     expect(resolveProviderVariant("gpt-5.5-alt")).toBe("openai");
     expect(resolveProviderVariant("gpt-4.5")).toBe("openai");
     expect(resolveProviderVariant("o1-preview")).toBe("openai");
-    expect(resolveProviderVariant("claude-opus-4-6")).toBe("anthropic");
+    expect(resolveProviderVariant("claude-opus-4-7")).toBe("anthropic");
     expect(resolveProviderVariant("claude-sonnet-4-6")).toBe("anthropic");
   });
 
@@ -3676,6 +3971,77 @@ describe("resolveProviderVariant", () => {
 });
 
 describe("qa mock openai server provider variant tagging", () => {
+  it("pins provider-specific plans for parity scenarios", async () => {
+    const sourcePrompt =
+      "Read the seeded docs and source plan, then report grouped into Worked, Failed, Blocked, and Follow-up.";
+    const handoffPrompt =
+      "Delegate one bounded QA task to a subagent. Wait for the subagent to finish.";
+    const fanoutPrompt =
+      "Subagent fanout synthesis check: delegate two bounded subagents sequentially, then report both results together.";
+
+    const openaiSourceServer = await startMockServer();
+    const openaiSource = await expectResponsesJson(openaiSourceServer, {
+      model: "openai/gpt-5.5",
+      stream: false,
+      input: [makeUserInput(sourcePrompt)],
+    });
+    expect(outputToolArgs(openaiSource)).toEqual({ path: "repo/qa/scenarios/index.md" });
+
+    const anthropicSourceServer = await startMockServer();
+    const anthropicSource = await expectResponsesJson(anthropicSourceServer, {
+      model: "anthropic/claude-opus-4-7",
+      stream: false,
+      input: [makeUserInput(sourcePrompt)],
+    });
+    expect(outputToolArgs(anthropicSource)).toEqual({ path: "repo/docs/help/testing.md" });
+
+    const openaiHandoffServer = await startMockServer();
+    const openaiHandoff = await expectResponsesJson(openaiHandoffServer, {
+      model: "gpt-5.5",
+      stream: false,
+      input: [makeUserInput(handoffPrompt)],
+    });
+    expect(outputToolArgs(openaiHandoff)).toMatchObject({
+      label: "qa-sidecar",
+      task: "Inspect the QA workspace and return one concise protocol note.",
+    });
+
+    const anthropicHandoffServer = await startMockServer();
+    const anthropicHandoff = await expectResponsesJson(anthropicHandoffServer, {
+      model: "claude-opus-4-7",
+      stream: false,
+      input: [makeUserInput(handoffPrompt)],
+    });
+    expect(outputToolArgs(anthropicHandoff)).toMatchObject({
+      label: "qa-sidecar",
+      task: "Inspect the QA docs fixture and return one concise protocol note.",
+    });
+
+    const openaiFanoutServer = await startMockServer();
+    const openaiFanout = await expectResponsesJson(openaiFanoutServer, {
+      model: "openai/gpt-5.5",
+      stream: false,
+      tools: [SESSIONS_SPAWN_TOOL],
+      input: [makeUserInput(fanoutPrompt)],
+    });
+    expect(outputToolArgs(openaiFanout)).toMatchObject({
+      label: "qa-fanout-alpha",
+      task: "Fanout worker alpha: inspect the QA workspace and finish with exactly ALPHA-OK.",
+    });
+
+    const anthropicFanoutServer = await startMockServer();
+    const anthropicFanout = await expectResponsesJson(anthropicFanoutServer, {
+      model: "anthropic/claude-opus-4-7",
+      stream: false,
+      tools: [SESSIONS_SPAWN_TOOL],
+      input: [makeUserInput(fanoutPrompt)],
+    });
+    expect(outputToolArgs(anthropicFanout)).toMatchObject({
+      label: "qa-fanout-alpha",
+      task: "Fanout worker alpha: inspect the QA docs fixture and finish with exactly ALPHA-OK.",
+    });
+  });
+
   it("records providerVariant on /debug/last-request for openai requests", async () => {
     const server = await startQaMockOpenAiServer({
       host: "127.0.0.1",
@@ -3716,7 +4082,7 @@ describe("qa mock openai server provider variant tagging", () => {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
-        model: "claude-opus-4-6",
+        model: "claude-opus-4-7",
         max_tokens: 256,
         messages: [{ role: "user", content: "Heartbeat check" }],
       }),
@@ -3726,7 +4092,7 @@ describe("qa mock openai server provider variant tagging", () => {
       model: string;
       providerVariant: string;
     };
-    expect(debug.model).toBe("claude-opus-4-6");
+    expect(debug.model).toBe("claude-opus-4-7");
     expect(debug.providerVariant).toBe("anthropic");
   });
 

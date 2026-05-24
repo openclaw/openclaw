@@ -33,6 +33,10 @@ import {
   normalizeOptionalString,
 } from "../shared/string-coerce.js";
 import {
+  CODEX_NATIVE_SUBAGENT_STALE_ERROR,
+  isChildlessCodexNativeSubagentTask,
+} from "./codex-native-subagent-task.js";
+import {
   getDetachedTaskLifecycleRuntime,
   tryRecoverTaskBeforeMarkLost,
 } from "./detached-task-runtime.js";
@@ -59,6 +63,8 @@ import type { TaskRecord, TaskRegistrySummary, TaskStatus } from "./task-registr
 
 const log = createSubsystemLogger("tasks/task-registry-maintenance");
 const TASK_RECONCILE_GRACE_MS = 5 * 60_000;
+const CHILDLESS_CODEX_NATIVE_RECONCILE_GRACE_MS = 30 * 60_000;
+const TASK_STALE_RUNNING_MS = 30 * 60_000;
 const TASK_RETENTION_MS = 7 * 24 * 60 * 60_000;
 const TASK_SWEEP_INTERVAL_MS = 60_000;
 
@@ -155,6 +161,28 @@ export type TaskRegistryMaintenanceSummary = {
   recovered: number;
   cleanupStamped: number;
   pruned: number;
+};
+
+export type TaskRegistryMaintenanceTaskDiagnostic = {
+  taskId: string;
+  runtime: TaskRecord["runtime"];
+  status: TaskRecord["status"];
+  decision: "retained" | "would_reconcile";
+  reason:
+    | "active_cli_run"
+    | "backing_session_missing"
+    | "backing_session_present"
+    | "cron_runtime_not_authoritative"
+    | "lost_grace_pending"
+    | "subagent_recovery_wedged";
+  detail?: string;
+  ageMs: number;
+  childSessionKey?: string;
+  runId?: string;
+};
+
+export type TaskRegistryMaintenanceDiagnostics = {
+  staleRunningTasks: TaskRegistryMaintenanceTaskDiagnostic[];
 };
 
 type CronExecutionId = {
@@ -290,7 +318,10 @@ function isTerminalTask(task: TaskRecord): boolean {
 
 function hasLostGraceExpired(task: TaskRecord, now: number): boolean {
   const referenceAt = task.lastEventAt ?? task.startedAt ?? task.createdAt;
-  return now - referenceAt >= TASK_RECONCILE_GRACE_MS;
+  const graceMs = isChildlessCodexNativeSubagentTask(task)
+    ? CHILDLESS_CODEX_NATIVE_RECONCILE_GRACE_MS
+    : TASK_RECONCILE_GRACE_MS;
+  return now - referenceAt >= graceMs;
 }
 
 function parseCronExecutionId(task: TaskRecord): CronExecutionId | undefined {
@@ -462,7 +493,7 @@ function hasBackingSession(task: TaskRecord, context?: BackingSessionLookupConte
 
   const childSessionKey = task.childSessionKey?.trim();
   if (!childSessionKey) {
-    return true;
+    return !isChildlessCodexNativeSubagentTask(task);
   }
   if (task.runtime === "acp") {
     const acpEntry = taskRegistryMaintenanceRuntime.readAcpSessionEntry({
@@ -491,6 +522,9 @@ function hasBackingSession(task: TaskRecord, context?: BackingSessionLookupConte
 }
 
 function resolveTaskLostError(task: TaskRecord, context?: BackingSessionLookupContext): string {
+  if (isChildlessCodexNativeSubagentTask(task)) {
+    return CODEX_NATIVE_SUBAGENT_STALE_ERROR;
+  }
   if (task.runtime === "subagent") {
     const entry = findTaskSessionEntry(task, context);
     if (entry && isSubagentRecoveryWedgedEntry(entry)) {
@@ -549,6 +583,10 @@ function shouldStampCleanupAfter(task: TaskRecord): boolean {
 function resolveCleanupAfter(task: TaskRecord): number {
   const terminalAt = task.endedAt ?? task.lastEventAt ?? task.createdAt;
   return terminalAt + TASK_RETENTION_MS;
+}
+
+function taskReferenceAt(task: TaskRecord): number {
+  return task.lastEventAt ?? task.startedAt ?? task.createdAt;
 }
 
 function getNormalizedTaskChildSessionKey(task: TaskRecord): string | undefined {
@@ -939,6 +977,72 @@ export function previewTaskRegistryMaintenance(): TaskRegistryMaintenanceSummary
     }
   }
   return { reconciled, recovered, cleanupStamped, pruned };
+}
+
+function explainActiveTaskRetention(params: {
+  task: TaskRecord;
+  now: number;
+  context: BackingSessionLookupContext;
+}): Pick<TaskRegistryMaintenanceTaskDiagnostic, "decision" | "reason" | "detail"> {
+  if (!hasLostGraceExpired(params.task, params.now)) {
+    return { decision: "retained", reason: "lost_grace_pending" };
+  }
+  if (params.task.runtime === "subagent") {
+    const entry = findTaskSessionEntry(params.task, params.context);
+    if (entry && isSubagentRecoveryWedgedEntry(entry)) {
+      return {
+        decision: "would_reconcile",
+        reason: "subagent_recovery_wedged",
+        detail: formatSubagentRecoveryWedgedReason(entry),
+      };
+    }
+  }
+  if (!hasBackingSession(params.task, params.context)) {
+    return { decision: "would_reconcile", reason: "backing_session_missing" };
+  }
+  if (
+    params.task.runtime === "cron" &&
+    !taskRegistryMaintenanceRuntime.isCronRuntimeAuthoritative()
+  ) {
+    return { decision: "retained", reason: "cron_runtime_not_authoritative" };
+  }
+  if (params.task.runtime === "cli" && hasActiveCliRun(params.task)) {
+    return { decision: "retained", reason: "active_cli_run" };
+  }
+  return { decision: "retained", reason: "backing_session_present" };
+}
+
+export function getTaskRegistryMaintenanceDiagnostics(): TaskRegistryMaintenanceDiagnostics {
+  taskRegistryMaintenanceRuntime.ensureTaskRegistryReady();
+  const now = Date.now();
+  const cronRecoveryContext = createCronRecoveryContext();
+  const backingSessionContext = createBackingSessionLookupContext();
+  const staleRunningTasks: TaskRegistryMaintenanceTaskDiagnostic[] = [];
+  for (const task of taskRegistryMaintenanceRuntime.listTaskRecords()) {
+    if (task.status !== "running") {
+      continue;
+    }
+    const ageMs = Math.max(0, now - taskReferenceAt(task));
+    if (ageMs < TASK_STALE_RUNNING_MS) {
+      continue;
+    }
+    if (resolveDurableCronTaskRecovery(task, cronRecoveryContext)) {
+      continue;
+    }
+    const decision = explainActiveTaskRetention({ task, now, context: backingSessionContext });
+    staleRunningTasks.push({
+      taskId: task.taskId,
+      runtime: task.runtime,
+      status: task.status,
+      decision: decision.decision,
+      reason: decision.reason,
+      ageMs,
+      ...(decision.detail ? { detail: decision.detail } : {}),
+      ...(task.childSessionKey ? { childSessionKey: task.childSessionKey } : {}),
+      ...(task.runId ? { runId: task.runId } : {}),
+    });
+  }
+  return { staleRunningTasks };
 }
 
 /**

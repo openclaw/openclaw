@@ -25,9 +25,7 @@ export type ChannelExposure = {
 export type ChannelOutboundTargetMode = "explicit" | "implicit" | "heartbeat";
 
 /** Agent tool registered by a channel plugin. */
-export type ChannelAgentTool = AgentTool<TSchema, unknown> & {
-  ownerOnly?: boolean;
-};
+export type ChannelAgentTool = AgentTool<TSchema, unknown>;
 
 /** Lazy agent-tool factory used when tool availability depends on config. */
 export type ChannelAgentToolFactory = (params: { cfg?: OpenClawConfig }) => ChannelAgentTool[];
@@ -153,12 +151,29 @@ export type ChannelHeartbeatDeps = {
   hasActiveWebListener?: (accountId?: string) => boolean;
 };
 
-export type ChannelLegacyStateMigrationPlan = {
-  kind: "copy" | "move";
-  label: string;
-  sourcePath: string;
-  targetPath: string;
-};
+export type ChannelLegacyStateMigrationPlan =
+  | {
+      kind: "copy" | "move";
+      label: string;
+      sourcePath: string;
+      targetPath: string;
+    }
+  | {
+      kind: "plugin-state-import";
+      label: string;
+      sourcePath: string;
+      targetPath: string;
+      pluginId: string;
+      namespace: string;
+      maxEntries: number;
+      scopeKey: string;
+      stateDir?: string;
+      cleanupSource?: "rename";
+      preview?: string;
+      readEntries: () =>
+        | Array<{ key: string; value: unknown }>
+        | Promise<Array<{ key: string; value: unknown }>>;
+    };
 
 /** User-facing metadata used in docs, pickers, and setup surfaces. */
 export type ChannelMeta = {
@@ -467,6 +482,8 @@ export type ChannelThreadingToolContext = {
   currentMessageId?: string | number;
   replyToMode?: "off" | "first" | "all" | "batched";
   hasRepliedRef?: { value: boolean };
+  /** True when posting at the parent conversation root would leak a thread-originated reply. */
+  sameChannelThreadRequired?: boolean;
   /**
    * When true, skip cross-context decoration (e.g., "[from X]" prefix).
    * Use this for direct tool invocations where the agent is composing a new message,
@@ -561,6 +578,11 @@ export type ChannelMessagingAdapter = {
     id: string;
     threadId?: string | null;
   }) => string | undefined;
+  /**
+   * @deprecated Use `targetResolver` for target id normalization and
+   * `resolveOutboundSessionRoute` for session/thread identity. This remains for
+   * compatibility with older route parsing helpers.
+   */
   parseExplicitTarget?: (params: { raw: string }) => {
     to: string;
     threadId?: string | number;
@@ -680,6 +702,7 @@ export type ChannelMessageActionContext = {
    * never be sourced from tool/model-controlled params.
    */
   requesterSenderId?: string | null;
+  /** Trusted owner identity bit from command/channel-action auth. */
   senderIsOwner?: boolean;
   sessionKey?: string | null;
   sessionId?: string | null;

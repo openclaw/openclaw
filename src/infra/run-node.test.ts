@@ -464,6 +464,50 @@ describe("run-node script", () => {
     });
   });
 
+  it("skips DTS generation only for launcher-triggered local builds", async () => {
+    await withTempDir({ prefix: "openclaw-run-node-" }, async (tmp) => {
+      await writeRuntimePostBuildScaffold(tmp);
+      const spawnCalls: Array<{
+        args: string[];
+        env: Record<string, string | undefined>;
+      }> = [];
+      const spawn = (_cmd: string, args: string[], options?: unknown) => {
+        const opts = options as { env?: NodeJS.ProcessEnv } | undefined;
+        spawnCalls.push({
+          args,
+          env: { ...opts?.env },
+        });
+        return createExitedProcess(0);
+      };
+
+      const exitCode = await runNodeMain({
+        cwd: tmp,
+        args: ["status"],
+        env: {
+          ...process.env,
+          OPENCLAW_FORCE_BUILD: "1",
+          OPENCLAW_RUNNER_LOG: "0",
+        },
+        spawn,
+        execPath: process.execPath,
+        platform: process.platform,
+      });
+
+      expect(exitCode).toBe(0);
+      expect(spawnCalls).toHaveLength(3);
+      expect(spawnCalls[0]?.args).toEqual([
+        "scripts/bundled-plugin-assets.mjs",
+        "--phase",
+        "build",
+      ]);
+      expect(spawnCalls[1]?.args).toEqual(["scripts/tsdown-build.mjs", "--no-clean"]);
+      expect(spawnCalls[2]?.args).toEqual(["openclaw.mjs", "status"]);
+      expect(spawnCalls[0]?.env.OPENCLAW_RUN_NODE_SKIP_DTS_BUILD).toBeUndefined();
+      expect(spawnCalls[1]?.env.OPENCLAW_RUN_NODE_SKIP_DTS_BUILD).toBe("1");
+      expect(spawnCalls[2]?.env.OPENCLAW_RUN_NODE_SKIP_DTS_BUILD).toBeUndefined();
+    });
+  });
+
   it("tees launcher output into the requested generic output log", async () => {
     await withTempDir({ prefix: "openclaw-run-node-" }, async (tmp) => {
       await setupTrackedProject(tmp);
@@ -626,6 +670,60 @@ describe("run-node script", () => {
       expect(childArgs.slice(3)).toEqual(["openclaw.mjs", "status"]);
       expect(spawnCalls.at(-1)?.env.OPENCLAW_RUN_NODE_CPU_PROF_DIR).toBe(profileDir);
       expect(fsSync.existsSync(profileDir)).toBe(true);
+    });
+  });
+
+  it("rotates old Node CPU profiles when a retention cap is set", async () => {
+    await withTempDir({ prefix: "openclaw-run-node-" }, async (tmp) => {
+      await setupTrackedProject(tmp, {
+        files: {
+          [ROOT_SRC]: "export const value = 1;\n",
+        },
+        oldPaths: [ROOT_SRC, ROOT_TSCONFIG, ROOT_PACKAGE],
+        buildPaths: [DIST_ENTRY, BUILD_STAMP],
+      });
+      const profileDir = path.join(tmp, ".artifacts", "profiles");
+      fsSync.mkdirSync(profileDir, { recursive: true });
+      const oldProfiles = [
+        "openclaw-status-oldest.cpuprofile",
+        "openclaw-status-middle.cpuprofile",
+        "openclaw-status-newest.cpuprofile",
+      ];
+      for (const [index, name] of oldProfiles.entries()) {
+        const filePath = path.join(profileDir, name);
+        fsSync.writeFileSync(filePath, "{}");
+        const mtime = new Date(1_700_000_000_000 + index * 1000);
+        fsSync.utimesSync(filePath, mtime, mtime);
+      }
+      fsSync.writeFileSync(path.join(profileDir, "openclaw-models-old.cpuprofile"), "{}");
+
+      const spawn = () => createExitedProcess(0);
+      const { spawnSync } = createSpawnRecorder({
+        gitHead: "abc123\n",
+        gitStatus: "",
+      });
+
+      const exitCode = await runNodeMain({
+        cwd: tmp,
+        args: ["status"],
+        env: {
+          ...process.env,
+          OPENCLAW_RUNNER_LOG: "0",
+          OPENCLAW_RUN_NODE_CPU_PROF_DIR: ".artifacts/profiles",
+          OPENCLAW_RUN_NODE_CPU_PROF_MAX_FILES: "2",
+        },
+        spawn,
+        spawnSync,
+        execPath: process.execPath,
+        platform: process.platform,
+        process: createFakeProcess(),
+      });
+
+      expect(exitCode).toBe(0);
+      expect(fsSync.existsSync(path.join(profileDir, oldProfiles[0]))).toBe(false);
+      expect(fsSync.existsSync(path.join(profileDir, oldProfiles[1]))).toBe(false);
+      expect(fsSync.existsSync(path.join(profileDir, oldProfiles[2]))).toBe(true);
+      expect(fsSync.existsSync(path.join(profileDir, "openclaw-models-old.cpuprofile"))).toBe(true);
     });
   });
 
@@ -1047,9 +1145,9 @@ describe("run-node script", () => {
           "qa",
           "parity-report",
           "--candidate-summary",
-          ".artifacts/qa-e2e/gpt54/qa-suite-summary.json",
+          ".artifacts/qa-e2e/openai-candidate/qa-suite-summary.json",
           "--baseline-summary",
-          ".artifacts/qa-e2e/opus46/qa-suite-summary.json",
+          ".artifacts/qa-e2e/anthropic-baseline/qa-suite-summary.json",
         ],
         env: {
           ...process.env,
@@ -1068,9 +1166,9 @@ describe("run-node script", () => {
           "tsx",
           path.join(tmp, "scripts", "qa-parity-report.ts"),
           "--candidate-summary",
-          ".artifacts/qa-e2e/gpt54/qa-suite-summary.json",
+          ".artifacts/qa-e2e/openai-candidate/qa-suite-summary.json",
           "--baseline-summary",
-          ".artifacts/qa-e2e/opus46/qa-suite-summary.json",
+          ".artifacts/qa-e2e/anthropic-baseline/qa-suite-summary.json",
         ],
       ]);
     });
@@ -1093,7 +1191,14 @@ describe("run-node script", () => {
 
       const exitCode = await runNodeMain({
         cwd: tmp,
-        args: ["qa", "coverage", "--json"],
+        args: [
+          "qa",
+          "coverage",
+          "--json",
+          "--tools",
+          "--summary",
+          ".artifacts/qa-e2e/runtime-parity-standard/qa-suite-summary.json",
+        ],
         env: {
           ...process.env,
           OPENCLAW_RUNNER_LOG: "0",
@@ -1111,6 +1216,9 @@ describe("run-node script", () => {
           "tsx",
           path.join(tmp, "scripts", "qa-coverage-report.ts"),
           "--json",
+          "--tools",
+          "--summary",
+          ".artifacts/qa-e2e/runtime-parity-standard/qa-suite-summary.json",
         ],
       ]);
     });

@@ -7,7 +7,7 @@ import { backupVerifyCommand } from "../commands/backup-verify.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
-  __test as backupCreateInternals,
+  testApi as backupCreateInternals,
   buildExtensionsNodeModulesFilter,
   createBackupArchive,
   formatBackupCreateSummary,
@@ -37,6 +37,25 @@ async function listArchiveEntries(archivePath: string): Promise<string[]> {
     gzip: true,
     onentry: (entry) => {
       entries.push(entry.path);
+      entry.resume();
+    },
+  });
+  return entries;
+}
+
+async function listArchiveEntryDetails(
+  archivePath: string,
+): Promise<Array<{ path: string; linkpath?: string; type?: string }>> {
+  const entries: Array<{ path: string; linkpath?: string; type?: string }> = [];
+  await tar.t({
+    file: archivePath,
+    gzip: true,
+    onentry: (entry) => {
+      entries.push({
+        path: entry.path,
+        ...(entry.linkpath ? { linkpath: entry.linkpath } : {}),
+        ...(entry.type ? { type: entry.type } : {}),
+      });
       entry.resume();
     },
   });
@@ -398,6 +417,45 @@ describe("createBackupArchive", () => {
           entry.includes("/state/extensions/demo/node_modules/"),
         );
         expect(pluginNodeModuleEntries).toStrictEqual([]);
+
+        const runtime: RuntimeEnv = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+        const verification = await backupVerifyCommand(runtime, { archive: result.archivePath });
+        expect(verification.ok).toBe(true);
+      },
+    );
+  });
+
+  it("dereferences hardlinks instead of emitting restore-hostile Link entries", async () => {
+    await withOpenClawTestState(
+      {
+        layout: "state-only",
+        prefix: "openclaw-backup-hardlink-",
+        scenario: "minimal",
+      },
+      async (state) => {
+        const stateDir = state.stateDir;
+        const outputDir = state.path("backups");
+        const sourcePath = path.join(stateDir, "workspace-adx", "openclaw-src", "node_modules");
+        const targetPath = path.join(sourcePath, "esbuild", "bin", "esbuild");
+        const hardlinkPath = path.join(sourcePath, "@esbuild", "darwin-arm64", "bin", "esbuild");
+        await fs.mkdir(path.dirname(targetPath), { recursive: true });
+        await fs.mkdir(path.dirname(hardlinkPath), { recursive: true });
+        await fs.writeFile(targetPath, "binary fixture\n", "utf8");
+        await fs.link(targetPath, hardlinkPath);
+        await fs.mkdir(outputDir, { recursive: true });
+
+        const result = await createBackupArchive({
+          output: outputDir,
+          includeWorkspace: false,
+          nowMs: Date.UTC(2026, 3, 29, 12, 0, 0),
+        });
+        const entries = await listArchiveEntryDetails(result.archivePath);
+
+        expect(entries.filter((entry) => entry.type === "Link")).toStrictEqual([]);
+        expect(entries.some((entry) => entry.path.endsWith("/esbuild/bin/esbuild"))).toBe(true);
+        expect(
+          entries.some((entry) => entry.path.endsWith("/@esbuild/darwin-arm64/bin/esbuild")),
+        ).toBe(true);
 
         const runtime: RuntimeEnv = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
         const verification = await backupVerifyCommand(runtime, { archive: result.archivePath });

@@ -10,6 +10,60 @@ import {
 
 const { createSessionStoreDir } = setupGatewaySessionsTestHarness();
 
+type ResetSessionEntry = {
+  sessionFile?: string;
+  chatType?: string;
+  channel?: string;
+  groupId?: string;
+  subject?: string;
+  groupChannel?: string;
+  space?: string;
+  spawnedBy?: string;
+  spawnedWorkspaceDir?: string;
+  parentSessionKey?: string;
+  forkedFromParent?: boolean;
+  spawnDepth?: number;
+  subagentRole?: string;
+  subagentControlScope?: string;
+  elevatedLevel?: string;
+  ttsAuto?: string;
+  providerOverride?: string;
+  modelOverride?: string;
+  authProfileOverride?: string;
+  authProfileOverrideSource?: string;
+  authProfileOverrideCompactionCount?: number;
+  sendPolicy?: string;
+  queueMode?: string;
+  queueDebounceMs?: number;
+  queueCap?: number;
+  queueDrop?: string;
+  groupActivation?: string;
+  groupActivationNeedsSystemIntro?: boolean;
+  execHost?: string;
+  execSecurity?: string;
+  execAsk?: string;
+  execNode?: string;
+  displayName?: string;
+  cliSessionBindings?: Record<
+    string,
+    {
+      sessionId?: string;
+      authProfileId?: string;
+      extraSystemPromptHash?: string;
+      mcpConfigHash?: string;
+    }
+  >;
+  cliSessionIds?: Record<string, string>;
+  claudeCliSessionId?: string;
+  deliveryContext?: {
+    channel?: string;
+    to?: string;
+    accountId?: string;
+    threadId?: string;
+  };
+  label?: string;
+};
+
 test("sessions.reset recomputes model from defaults instead of stale runtime model", async () => {
   await createSessionStoreDir();
   testState.agentConfig = {
@@ -51,6 +105,66 @@ test("sessions.reset recomputes model from defaults instead of stale runtime mod
   expect(reset.payload?.entry.model).toBe("gpt-test-a");
   expect(reset.payload?.entry.contextTokens).toBeUndefined();
   expect((await fs.stat(sessionFile)).isFile()).toBe(true);
+});
+
+test("sessions.reset clears stale estimated context budget status", async () => {
+  const { storePath } = await createSessionStoreDir();
+  testState.agentConfig = {
+    model: {
+      primary: "openai/gpt-test-a",
+    },
+  };
+
+  await writeSessionStore({
+    entries: {
+      main: sessionStoreEntry("sess-stale-budget", {
+        totalTokens: 0,
+        totalTokensFresh: false,
+        contextTokens: 123456,
+        contextBudgetStatus: {
+          schemaVersion: 1,
+          source: "pre-prompt-estimate",
+          updatedAt: 1,
+          provider: "qwencode",
+          model: "qwen3.5-plus-2026-02-15",
+          route: "compact_then_truncate",
+          shouldCompact: true,
+          estimatedPromptTokens: 120_000,
+          contextTokenBudget: 80_000,
+          promptBudgetBeforeReserve: 70_000,
+          reserveTokens: 10_000,
+          effectiveReserveTokens: 10_000,
+          remainingPromptBudgetTokens: 0,
+          overflowTokens: 50_000,
+          toolResultReducibleChars: 0,
+          messageCount: 10,
+          unwindowedMessageCount: 10,
+          sessionId: "sess-stale-budget",
+        },
+      }),
+    },
+  });
+
+  const reset = await directSessionReq<{
+    ok: true;
+    entry: {
+      sessionId: string;
+      contextBudgetStatus?: unknown;
+      contextTokens?: number;
+    };
+  }>("sessions.reset", { key: "main" });
+
+  expect(reset.ok).toBe(true);
+  expect(reset.payload?.entry.sessionId).not.toBe("sess-stale-budget");
+  expect(reset.payload?.entry.contextBudgetStatus).toBeUndefined();
+  expect(reset.payload?.entry.contextTokens).toBeUndefined();
+
+  const store = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
+    string,
+    { contextBudgetStatus?: unknown; contextTokens?: number }
+  >;
+  expect(store["agent:main:main"]?.contextBudgetStatus).toBeUndefined();
+  expect(store["agent:main:main"]?.contextTokens).toBeUndefined();
 });
 
 test("sessions.reset drops cached skills snapshot so /new rebuilds visible skills", async () => {
@@ -368,59 +482,7 @@ test("sessions.reset preserves spawned session ownership metadata", async () => 
   const reset = await directSessionReq<{
     ok: true;
     key: string;
-    entry: {
-      sessionFile?: string;
-      chatType?: string;
-      channel?: string;
-      groupId?: string;
-      subject?: string;
-      groupChannel?: string;
-      space?: string;
-      spawnedBy?: string;
-      spawnedWorkspaceDir?: string;
-      parentSessionKey?: string;
-      forkedFromParent?: boolean;
-      spawnDepth?: number;
-      subagentRole?: string;
-      subagentControlScope?: string;
-      elevatedLevel?: string;
-      ttsAuto?: string;
-      providerOverride?: string;
-      modelOverride?: string;
-      authProfileOverride?: string;
-      authProfileOverrideSource?: string;
-      authProfileOverrideCompactionCount?: number;
-      sendPolicy?: string;
-      queueMode?: string;
-      queueDebounceMs?: number;
-      queueCap?: number;
-      queueDrop?: string;
-      groupActivation?: string;
-      groupActivationNeedsSystemIntro?: boolean;
-      execHost?: string;
-      execSecurity?: string;
-      execAsk?: string;
-      execNode?: string;
-      displayName?: string;
-      cliSessionBindings?: Record<
-        string,
-        {
-          sessionId?: string;
-          authProfileId?: string;
-          extraSystemPromptHash?: string;
-          mcpConfigHash?: string;
-        }
-      >;
-      cliSessionIds?: Record<string, string>;
-      claudeCliSessionId?: string;
-      deliveryContext?: {
-        channel?: string;
-        to?: string;
-        accountId?: string;
-        threadId?: string;
-      };
-      label?: string;
-    };
+    entry: ResetSessionEntry;
   }>("sessions.reset", { key: "subagent:child" });
 
   expect(reset.ok).toBe(true);
@@ -478,59 +540,7 @@ test("sessions.reset preserves spawned session ownership metadata", async () => 
 
   const store = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
     string,
-    {
-      sessionFile?: string;
-      chatType?: string;
-      channel?: string;
-      groupId?: string;
-      subject?: string;
-      groupChannel?: string;
-      space?: string;
-      spawnedBy?: string;
-      spawnedWorkspaceDir?: string;
-      parentSessionKey?: string;
-      forkedFromParent?: boolean;
-      spawnDepth?: number;
-      subagentRole?: string;
-      subagentControlScope?: string;
-      elevatedLevel?: string;
-      ttsAuto?: string;
-      providerOverride?: string;
-      modelOverride?: string;
-      authProfileOverride?: string;
-      authProfileOverrideSource?: string;
-      authProfileOverrideCompactionCount?: number;
-      sendPolicy?: string;
-      queueMode?: string;
-      queueDebounceMs?: number;
-      queueCap?: number;
-      queueDrop?: string;
-      groupActivation?: string;
-      groupActivationNeedsSystemIntro?: boolean;
-      execHost?: string;
-      execSecurity?: string;
-      execAsk?: string;
-      execNode?: string;
-      displayName?: string;
-      cliSessionBindings?: Record<
-        string,
-        {
-          sessionId?: string;
-          authProfileId?: string;
-          extraSystemPromptHash?: string;
-          mcpConfigHash?: string;
-        }
-      >;
-      cliSessionIds?: Record<string, string>;
-      claudeCliSessionId?: string;
-      deliveryContext?: {
-        channel?: string;
-        to?: string;
-        accountId?: string;
-        threadId?: string;
-      };
-      label?: string;
-    }
+    ResetSessionEntry
   >;
   expect(store["agent:main:subagent:child"]?.sessionFile).toBe(customSessionFile);
   expect(store["agent:main:subagent:child"]?.chatType).toBe("group");

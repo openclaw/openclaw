@@ -17,7 +17,7 @@ import {
 } from "../context-engine/registry.js";
 import { createPluginGatewayMethodDescriptor } from "../gateway/methods/registry.js";
 import { isOperatorScope, type OperatorScope } from "../gateway/operator-scopes.js";
-import type { GatewayRequestHandler } from "../gateway/server-methods/types.js";
+import type { GatewayRequestHandler, RespondFn } from "../gateway/server-methods/types.js";
 import { registerInternalHook, unregisterInternalHook } from "../hooks/internal-hooks.js";
 import type { HookEntry } from "../hooks/types.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -63,6 +63,11 @@ import {
   registerCompactionProvider,
 } from "./compaction-provider.js";
 import { getPluginCompatRecord } from "./compat/registry.js";
+import {
+  getRegisteredEmbeddingProvider,
+  registerEmbeddingProvider,
+  type EmbeddingProviderAdapter,
+} from "./embedding-providers.js";
 import { sendPluginSessionAttachment } from "./host-hook-attachments.js";
 import {
   clearPluginRunContext,
@@ -165,6 +170,7 @@ import type {
   OpenClawPluginReloadRegistration,
   OpenClawPluginSecurityAuditCollector,
   MediaUnderstandingProviderPlugin,
+  MeetingNotesSourceProviderPlugin,
   MigrationProviderPlugin,
   OpenClawPluginService,
   OpenClawPluginToolContext,
@@ -344,6 +350,20 @@ function resolvePluginRegistrationCapabilities(
   return {
     capabilityHandlers,
     runtimeChannel: mode !== "setup-only" && mode !== "tool-discovery",
+  };
+}
+
+function adaptPluginGatewayMethodHandler(handler: GatewayRequestHandler): GatewayRequestHandler {
+  return async (opts) => {
+    let responded = false;
+    const respond: RespondFn = (ok, payload, error, meta) => {
+      responded = true;
+      opts.respond(ok, payload, error, meta);
+    };
+    const result = (await handler({ ...opts, respond })) as unknown;
+    if (!responded && result !== undefined) {
+      respond(true, result);
+    }
   };
 }
 
@@ -717,7 +737,8 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       });
       return;
     }
-    registry.gatewayHandlers[trimmed] = handler;
+    const wrappedHandler = adaptPluginGatewayMethodHandler(handler);
+    registry.gatewayHandlers[trimmed] = wrappedHandler;
     const normalizedScope = normalizePluginGatewayMethodScope(trimmed, opts?.scope);
     if (normalizedScope.coercedToReservedAdmin) {
       pushDiagnostic({
@@ -731,7 +752,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       createPluginGatewayMethodDescriptor({
         pluginId: record.id,
         name: trimmed,
-        handler,
+        handler: wrappedHandler,
         scope: normalizedScope.scope,
       }),
     );
@@ -1110,6 +1131,66 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     });
   };
 
+  const registerEmbeddingProviderForPlugin = (
+    record: PluginRecord,
+    adapter: EmbeddingProviderAdapter,
+  ) => {
+    const id = adapter.id.trim();
+    if (!id) {
+      pushDiagnostic({
+        level: "error",
+        pluginId: record.id,
+        source: record.source,
+        message: "embedding provider registration missing id",
+      });
+      return;
+    }
+    if (!(record.contracts?.embeddingProviders ?? []).includes(id)) {
+      pushDiagnostic({
+        level: "error",
+        pluginId: record.id,
+        source: record.source,
+        message: `plugin must declare contracts.embeddingProviders for adapter: ${id}`,
+      });
+      return;
+    }
+    const existing =
+      registryParams.activateGlobalSideEffects === false
+        ? registry.embeddingProviders.find((entry) => entry.provider.id === id)
+        : getRegisteredEmbeddingProvider(id);
+    if (existing) {
+      const ownerPluginId =
+        "ownerPluginId" in existing
+          ? existing.ownerPluginId
+          : "pluginId" in existing
+            ? existing.pluginId
+            : undefined;
+      const ownerDetail = ownerPluginId ? ` (owner: ${ownerPluginId})` : "";
+      pushDiagnostic({
+        level: "error",
+        pluginId: record.id,
+        source: record.source,
+        message: `embedding provider already registered: ${id}${ownerDetail}`,
+      });
+      return;
+    }
+    if (registryParams.activateGlobalSideEffects !== false) {
+      registerEmbeddingProvider(adapter, {
+        ownerPluginId: record.id,
+      });
+    }
+    registry.embeddingProviders.push({
+      pluginId: record.id,
+      pluginName: record.name,
+      provider: adapter,
+      source: record.source,
+      rootDir: record.rootDir,
+    });
+    if (!record.embeddingProviderIds.includes(id)) {
+      record.embeddingProviderIds.push(id);
+    }
+  };
+
   const registerUniqueProviderLike = <T extends { id: string }>(params: {
     record: PluginRecord;
     provider: T;
@@ -1199,6 +1280,19 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       kindLabel: "media provider",
       registrations: registry.mediaUnderstandingProviders,
       ownedIds: record.mediaUnderstandingProviderIds,
+    });
+  };
+
+  const registerMeetingNotesSourceProvider = (
+    record: PluginRecord,
+    provider: MeetingNotesSourceProviderPlugin,
+  ) => {
+    registerUniqueProviderLike({
+      record,
+      provider,
+      kindLabel: "meeting notes source provider",
+      registrations: registry.meetingNotesSourceProviders,
+      ownedIds: record.meetingNotesSourceProviderIds,
     });
   };
 
@@ -2421,9 +2515,9 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
               const record =
                 pluginRuntimeRecordById.get(pluginId) ??
                 registry.plugins.find((entry) => entry.id === pluginId);
-              if (record?.origin !== "bundled") {
+              if (record?.origin !== "bundled" && record?.trustedOfficialInstall !== true) {
                 throw new Error(
-                  "openKeyedStore is only available for bundled plugins in this release.",
+                  "openKeyedStore is only available for trusted plugins in this release.",
                 );
               }
               return createPluginStateKeyedStore<T>(pluginId, options);
@@ -2520,6 +2614,8 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
               registerProvider: (provider) => registerProvider(record, provider),
               registerModelCatalogProvider: (provider) =>
                 registerModelCatalogProvider(record, provider),
+              registerEmbeddingProvider: (provider) =>
+                registerEmbeddingProviderForPlugin(record, provider),
               registerAgentHarness: (harness) => registerAgentHarness(record, harness),
               registerDetachedTaskRuntime: (runtime) => {
                 const existing = getDetachedTaskLifecycleRuntimeRegistration();
@@ -2541,6 +2637,8 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
                 registerRealtimeVoiceProvider(record, provider),
               registerMediaUnderstandingProvider: (provider) =>
                 registerMediaUnderstandingProvider(record, provider),
+              registerMeetingNotesSourceProvider: (provider) =>
+                registerMeetingNotesSourceProvider(record, provider),
               registerImageGenerationProvider: (provider) =>
                 registerImageGenerationProvider(record, provider),
               registerVideoGenerationProvider: (provider) =>
@@ -2999,10 +3097,12 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     registerAgentHarness,
     registerCliBackend,
     registerTextTransforms,
+    registerEmbeddingProvider: registerEmbeddingProviderForPlugin,
     registerSpeechProvider,
     registerRealtimeTranscriptionProvider,
     registerRealtimeVoiceProvider,
     registerMediaUnderstandingProvider,
+    registerMeetingNotesSourceProvider,
     registerImageGenerationProvider,
     registerVideoGenerationProvider,
     registerMusicGenerationProvider,

@@ -160,6 +160,9 @@ export type HookRunnerLogger = {
 };
 
 export type HookFailurePolicy = "fail-open" | "fail-closed";
+export type VoidHookRunOptions = {
+  unrefTimeout?: boolean;
+};
 
 type BeforeAgentFinalizeRetry = NonNullable<PluginHookBeforeAgentFinalizeResult["retry"]>;
 type BeforeAgentFinalizeResultWithRetryCandidates = PluginHookBeforeAgentFinalizeResult & {
@@ -189,9 +192,28 @@ export type HookRunnerOptions = {
 
 const DEFAULT_VOID_HOOK_TIMEOUT_MS_BY_HOOK: Partial<Record<PluginHookName, number>> = {
   agent_end: 30_000,
+  // Defensive default for the compaction lifecycle hooks. Without a budget an
+  // unresponsive handler runs fully unbounded, and in the codex agent harness
+  // these hooks fire on the serialized notification queue
+  // (event-projector handleItemStarted awaits before_compaction / after_compaction
+  // for a contextCompaction item), so a hung handler freezes every later codex
+  // notification — including turn/completed — and the whole turn hangs. These
+  // hooks can legitimately do real work (e.g. a memory flush), so the budget
+  // matches agent_end's 30s rather than the tighter modifying-hook defaults.
+  // The runner is fail-open for void hooks, so a timed-out handler is logged
+  // and compaction proceeds.
+  before_compaction: 30_000,
+  after_compaction: 30_000,
 };
 const DEFAULT_MODIFYING_HOOK_TIMEOUT_MS_BY_HOOK: Partial<Record<PluginHookName, number>> = {
   before_agent_run: 15_000,
+  // Defensive default for the legacy compatibility hook (#48534). With
+  // before_agent_start unbudgeted, an unresponsive handler (e.g. a memory
+  // plugin waiting on a hung subprocess) blocked the entire agent pipeline
+  // because both the embedded setup and prompt-build paths await this hook.
+  // The runner is fail-open for this hook name, so a timed-out handler is
+  // logged and the run proceeds without its modifications.
+  before_agent_start: 15_000,
   before_prompt_build: 15_000,
 };
 
@@ -536,6 +558,7 @@ export function createHookRunner(
     hookName: K,
     event: Parameters<NonNullable<PluginHookRegistration<K>["handler"]>>[0],
     ctx: Parameters<NonNullable<PluginHookRegistration<K>["handler"]>>[1],
+    options: VoidHookRunOptions = {},
   ): Promise<void> {
     const hooks = getHooksForName(registry, hookName);
     if (hooks.length === 0) {
@@ -551,7 +574,7 @@ export function createHookRunner(
         );
         const timeoutMs = getVoidHookTimeoutMs(hookName, hook);
         if (timeoutMs) {
-          await withHookTimeout(promise, timeoutMs, { unref: true });
+          await withHookTimeout(promise, timeoutMs, { unref: options.unrefTimeout ?? true });
         } else {
           await promise;
         }
@@ -860,13 +883,14 @@ export function createHookRunner(
   /**
    * Run agent_end hook.
    * Allows plugins to analyze completed conversations.
-   * Runs in parallel (fire-and-forget).
+   * Runs handlers in parallel.
    */
   async function runAgentEnd(
     event: PluginHookAgentEndEvent,
     ctx: PluginHookAgentContext,
+    options?: VoidHookRunOptions,
   ): Promise<void> {
-    return runVoidHook("agent_end", withAgentRunId(event, ctx), ctx);
+    return runVoidHook("agent_end", withAgentRunId(event, ctx), ctx, options);
   }
 
   /**

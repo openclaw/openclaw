@@ -511,6 +511,12 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
         runtime,
         botUserId,
       });
+      const { setDiscordMeetingNotesVoiceManager } =
+        await import("../voice/meeting-notes-source.js");
+      setDiscordMeetingNotesVoiceManager({
+        accountId: account.accountId,
+        manager: voiceManager,
+      });
       voiceManagerRef.current = voiceManager;
       registerDiscordListener(client.listeners, new DiscordVoiceReadyListener(voiceManager));
       registerDiscordListener(client.listeners, new DiscordVoiceResumedListener(voiceManager));
@@ -620,7 +626,7 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
   }
 }
 
-export const __testing = {
+export const testing = {
   createDiscordGatewayPlugin,
   resolveDiscordRuntimeGroupPolicy: resolveOpenProviderRuntimeGroupPolicy,
   resolveDefaultGroupPolicy,
@@ -685,3 +691,4 @@ export const __testing = {
 };
 
 export const resolveDiscordRuntimeGroupPolicy = resolveOpenProviderRuntimeGroupPolicy;
+export { testing as __testing };

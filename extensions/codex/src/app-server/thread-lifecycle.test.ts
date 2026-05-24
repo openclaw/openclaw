@@ -1,9 +1,11 @@
 import type { EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { describe, expect, it } from "vitest";
 import {
+  buildDeveloperInstructions,
   buildTurnStartParams,
   buildThreadResumeParams,
   buildThreadStartParams,
+  codexDynamicToolsFingerprint,
   resolveReasoningEffort,
 } from "./thread-lifecycle.js";
 
@@ -58,7 +60,103 @@ function createAppServerOptions() {
 }
 
 describe("Codex app-server native code mode config", () => {
-  it("enables Codex code-mode-only on thread/start without clobbering other config", () => {
+  it("keeps Codex-native subagents primary while limiting OpenClaw spawn to OpenClaw delegation", () => {
+    const instructions = buildDeveloperInstructions(createAttemptParams({ provider: "openai" }));
+
+    expect(instructions).toContain("Use Codex native `spawn_agent` for Codex subagents");
+    expect(instructions).toContain(
+      "Use OpenClaw `sessions_spawn` only for OpenClaw or ACP delegation.",
+    );
+  });
+
+  it("summarizes deferred dynamic tool names in developer instructions", () => {
+    const instructions = buildDeveloperInstructions(createAttemptParams({ provider: "openai" }), {
+      dynamicTools: [
+        {
+          name: "message",
+          description: "Send a message",
+          inputSchema: { type: "object" },
+        },
+        {
+          name: "music_generate",
+          description: "Create music",
+          inputSchema: { type: "object" },
+          namespace: "openclaw",
+          deferLoading: true,
+        },
+        {
+          name: "image_generate",
+          description: "Create images",
+          inputSchema: { type: "object" },
+          namespace: "openclaw",
+          deferLoading: true,
+        },
+      ],
+    });
+
+    expect(instructions).toContain(
+      "Deferred searchable OpenClaw dynamic tools available: image_generate, music_generate.",
+    );
+    expect(instructions).toContain("Use `tool_search` to load exact callable specs before use.");
+    expect(instructions).not.toContain("message,");
+  });
+
+  it("keeps developer instructions compact when no dynamic tools are deferred", () => {
+    const instructions = buildDeveloperInstructions(createAttemptParams({ provider: "openai" }), {
+      dynamicTools: [
+        {
+          name: "message",
+          description: "Send a message",
+          inputSchema: { type: "object" },
+        },
+      ],
+    });
+
+    expect(instructions).not.toContain("Deferred searchable OpenClaw dynamic tools available");
+  });
+
+  it("keeps durable dynamic tool fingerprints independent from presentation mode", () => {
+    const inputSchema = {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        text: { type: "string" },
+      },
+      required: ["text"],
+    };
+    const directFingerprint = codexDynamicToolsFingerprint([
+      {
+        name: "message",
+        description: "Send a visible message",
+        inputSchema,
+      },
+    ]);
+    const searchableFingerprint = codexDynamicToolsFingerprint([
+      {
+        name: "message",
+        description: "Load and send a visible message",
+        inputSchema,
+        namespace: "openclaw",
+        deferLoading: true,
+      },
+    ]);
+
+    expect(searchableFingerprint).toBe(directFingerprint);
+  });
+
+  it("keeps OpenClaw skill catalogs out of developer instructions", () => {
+    const params = createAttemptParams({ provider: "openai" });
+    params.skillsSnapshot = {
+      prompt: "<available_skills><skill><name>demo</name></skill></available_skills>",
+      skills: [],
+    };
+
+    const instructions = buildDeveloperInstructions(params);
+
+    expect(instructions).not.toContain("<available_skills>");
+  });
+
+  it("enables Codex code mode on thread/start without clobbering other config", () => {
     const request = buildThreadStartParams(createAttemptParams({ provider: "openai" }), {
       cwd: "/repo",
       dynamicTools: [],
@@ -74,11 +172,46 @@ describe("Codex app-server native code mode config", () => {
       "features.hooks": true,
       apps: { _default: { enabled: false } },
       "features.code_mode": true,
+      "features.code_mode_only": false,
+    });
+  });
+
+  it("allows thread config to opt into Codex code-mode-only", () => {
+    const request = buildThreadStartParams(createAttemptParams({ provider: "openai" }), {
+      cwd: "/repo",
+      dynamicTools: [],
+      appServer: createAppServerOptions() as never,
+      developerInstructions: "test instructions",
+      config: {
+        "features.code_mode_only": true,
+      },
+    });
+
+    expect(request.config).toEqual({
+      "features.code_mode": true,
       "features.code_mode_only": true,
     });
   });
 
-  it("enables Codex code-mode-only on thread/resume", () => {
+  it("forces Codex code-mode-only when app-server policy opts in", () => {
+    const request = buildThreadStartParams(createAttemptParams({ provider: "openai" }), {
+      cwd: "/repo",
+      dynamicTools: [],
+      appServer: createAppServerOptions() as never,
+      developerInstructions: "test instructions",
+      nativeCodeModeOnlyEnabled: true,
+      config: {
+        "features.code_mode_only": false,
+      },
+    });
+
+    expect(request.config).toEqual({
+      "features.code_mode": true,
+      "features.code_mode_only": true,
+    });
+  });
+
+  it("enables Codex code mode on thread/resume", () => {
     const request = buildThreadResumeParams(createAttemptParams({ provider: "openai" }), {
       threadId: "thread-1",
       appServer: createAppServerOptions() as never,
@@ -87,7 +220,41 @@ describe("Codex app-server native code mode config", () => {
 
     expect(request.config).toEqual({
       "features.code_mode": true,
-      "features.code_mode_only": true,
+      "features.code_mode_only": false,
+    });
+  });
+
+  it("disables Codex native code mode on thread/start when runtime policy denies it", () => {
+    const request = buildThreadStartParams(createAttemptParams({ provider: "openai" }), {
+      cwd: "/repo",
+      dynamicTools: [],
+      appServer: createAppServerOptions() as never,
+      developerInstructions: "test instructions",
+      nativeCodeModeEnabled: false,
+      nativeCodeModeOnlyEnabled: true,
+      config: {
+        "features.code_mode": true,
+        "features.code_mode_only": true,
+      },
+    });
+
+    expect(request.config).toEqual({
+      "features.code_mode": false,
+      "features.code_mode_only": false,
+    });
+  });
+
+  it("disables Codex native code mode on thread/resume when runtime policy denies it", () => {
+    const request = buildThreadResumeParams(createAttemptParams({ provider: "openai" }), {
+      threadId: "thread-1",
+      appServer: createAppServerOptions() as never,
+      developerInstructions: "test instructions",
+      nativeCodeModeEnabled: false,
+    });
+
+    expect(request.config).toEqual({
+      "features.code_mode": false,
+      "features.code_mode_only": false,
     });
   });
 
@@ -114,7 +281,7 @@ describe("Codex app-server native code mode config", () => {
       project_doc_max_bytes: 0,
       "features.hooks": true,
       "features.code_mode": true,
-      "features.code_mode_only": true,
+      "features.code_mode_only": false,
     });
   });
 
@@ -134,12 +301,51 @@ describe("Codex app-server native code mode config", () => {
     expect(request.config).toEqual({
       project_doc_max_bytes: 64_000,
       "features.code_mode": true,
-      "features.code_mode_only": true,
+      "features.code_mode_only": false,
     });
   });
 });
 
 describe("Codex app-server turn input image sanitizing", () => {
+  it("uses an explicit turn sandbox policy override when provided", () => {
+    const request = buildTurnStartParams(createAttemptParams({ provider: "openai" }), {
+      threadId: "thread-1",
+      cwd: "/repo",
+      appServer: createAppServerOptions() as never,
+      sandboxPolicy: {
+        type: "workspaceWrite",
+        writableRoots: ["/repo"],
+        networkAccess: true,
+        excludeTmpdirEnvVar: false,
+        excludeSlashTmp: false,
+      },
+    });
+
+    expect(request.sandboxPolicy).toEqual({
+      type: "workspaceWrite",
+      writableRoots: ["/repo"],
+      networkAccess: true,
+      excludeTmpdirEnvVar: false,
+      excludeSlashTmp: false,
+    });
+  });
+
+  it("attaches turn-scoped developer instructions without changing thread config", () => {
+    const request = buildTurnStartParams(createAttemptParams({ provider: "openai" }), {
+      threadId: "thread-1",
+      cwd: "/repo",
+      appServer: createAppServerOptions() as never,
+      turnScopedDeveloperInstructions: "SOUL.md turn-only context",
+    });
+
+    expect(request.collaborationMode?.settings.developer_instructions).toContain(
+      "# Collaboration Mode: Default",
+    );
+    expect(request.collaborationMode?.settings.developer_instructions).toContain(
+      "SOUL.md turn-only context",
+    );
+  });
+
   it("replaces malformed inline images before turn/start", () => {
     const request = buildTurnStartParams(
       createAttemptParams({
@@ -231,14 +437,14 @@ describe("Codex app-server model provider selection", () => {
 
 describe("resolveReasoningEffort (#71946)", () => {
   describe("modern Codex models (none/low/medium/high/xhigh enum)", () => {
-    it.each(["gpt-5.5", "gpt-5.4", "gpt-5.4-mini", "gpt-5.2"] as const)(
+    it.each(["gpt-5.5", "gpt-5.4", "gpt-5.4-mini"] as const)(
       "translates 'minimal' -> 'low' for %s so the first request is accepted",
       (modelId) => {
         expect(resolveReasoningEffort("minimal", modelId)).toBe("low");
       },
     );
 
-    it.each(["gpt-5.5", "gpt-5.4", "gpt-5.4-mini", "gpt-5.2"] as const)(
+    it.each(["gpt-5.5", "gpt-5.4", "gpt-5.4-mini"] as const)(
       "passes 'low' / 'medium' / 'high' / 'xhigh' through unchanged for %s",
       (modelId) => {
         expect(resolveReasoningEffort("low", modelId)).toBe("low");

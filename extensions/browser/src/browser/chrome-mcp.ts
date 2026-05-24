@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
@@ -71,10 +72,12 @@ type ChromeMcpSessionFactory = (
 const DEFAULT_CHROME_MCP_COMMAND = "npx";
 const DEFAULT_CHROME_MCP_PACKAGE_ARGS = ["-y", "chrome-devtools-mcp@latest"];
 const DEFAULT_CHROME_MCP_FEATURE_ARGS = [
+  "--no-usage-statistics",
   // Direct chrome-devtools-mcp launches do not enable structuredContent by default.
   "--experimentalStructuredContent",
   "--experimental-page-id-routing",
 ];
+const CHROME_MCP_USAGE_STATISTICS_FLAG_RE = /^--(?:no-)?usage-?statistics(?:=.*)?$/i;
 const CHROME_MCP_CONNECTION_FLAGS = new Set([
   "--autoConnect",
   "--auto-connect",
@@ -341,10 +344,15 @@ async function closeChromeMcpSessionsForProfile(
 function buildChromeMcpArgsFromOptions(options: NormalizedChromeMcpProfileOptions): string[] {
   const commandPrefix =
     options.command === DEFAULT_CHROME_MCP_COMMAND ? DEFAULT_CHROME_MCP_PACKAGE_ARGS : [];
+  const defaultFeatureArgs = options.extraArgs.some((arg) =>
+    CHROME_MCP_USAGE_STATISTICS_FLAG_RE.test(arg),
+  )
+    ? DEFAULT_CHROME_MCP_FEATURE_ARGS.filter((arg) => arg !== "--no-usage-statistics")
+    : DEFAULT_CHROME_MCP_FEATURE_ARGS;
   return [
     ...commandPrefix,
     ...buildChromeMcpConnectionArgs(options),
-    ...DEFAULT_CHROME_MCP_FEATURE_ARGS,
+    ...defaultFeatureArgs,
     ...buildChromeMcpUserDataDirArgs(options),
     ...options.extraArgs,
   ];
@@ -386,6 +394,35 @@ function redactChromeMcpDiagnosticText(text: string): string {
       redactToolPayloadText(redactCdpUrl(match) ?? match),
     ),
   );
+}
+
+function redactChromeMcpDiagnosticTextWithLocalPaths(text: string): string {
+  const homeDir = normalizeOptionalString(os.homedir());
+  const homePath = homeDir ? path.resolve(homeDir) : undefined;
+  const withHomeRedacted = homePath ? text.split(homePath).join("~") : text;
+  return redactChromeMcpDiagnosticText(withHomeRedacted);
+}
+
+function redactChromeMcpLocalPathForDiagnostic(filePath: string): string {
+  const homeDir = normalizeOptionalString(os.homedir());
+  if (!homeDir || !path.isAbsolute(filePath)) {
+    return redactChromeMcpDiagnosticText(filePath);
+  }
+
+  const relative = path.relative(path.resolve(homeDir), path.resolve(filePath));
+  if (relative === "") {
+    return "~";
+  }
+  if (!relative.startsWith("..") && !path.isAbsolute(relative)) {
+    return redactChromeMcpDiagnosticText(`~/${relative.split(path.sep).join("/")}`);
+  }
+  return redactChromeMcpDiagnosticText(filePath);
+}
+
+function redactChromeMcpProfileLabelForDiagnostic(profileName: string): string {
+  return path.isAbsolute(profileName)
+    ? redactChromeMcpLocalPathForDiagnostic(profileName)
+    : redactChromeMcpDiagnosticText(profileName);
 }
 
 async function withChromeMcpHandshakeTimeout<T>(task: Promise<T>): Promise<T> {
@@ -443,19 +480,19 @@ async function createRealSession(
       const stderr = getStderr();
       if (stderr) {
         log.warn(
-          `Chrome MCP attach failed for profile "${profileName}". Subprocess stderr:\n${redactChromeMcpDiagnosticText(stderr)}`,
+          `Chrome MCP attach failed for profile "${redactChromeMcpProfileLabelForDiagnostic(profileName)}". Subprocess stderr:\n${redactChromeMcpDiagnosticTextWithLocalPaths(stderr)}`,
         );
       }
       const targetLabel = options.browserUrl
         ? `the configured Chrome endpoint (${redactToolPayloadText(redactCdpUrl(options.browserUrl) ?? options.browserUrl)})`
         : options.userDataDir
-          ? `the configured Chromium user data dir (${options.userDataDir})`
+          ? `the configured Chromium user data dir (${redactChromeMcpLocalPathForDiagnostic(options.userDataDir)})`
           : "Google Chrome's default profile";
-      const detail = redactChromeMcpDiagnosticText(
+      const detail = redactChromeMcpDiagnosticTextWithLocalPaths(
         err instanceof Error ? err.message : String(err),
       );
       throw new BrowserProfileUnavailableError(
-        `Chrome MCP existing-session attach failed for profile "${profileName}". ` +
+        `Chrome MCP existing-session attach failed for profile "${redactChromeMcpProfileLabelForDiagnostic(profileName)}". ` +
           `Make sure ${targetLabel} is running locally with remote debugging enabled. ` +
           `Details: ${detail}`,
       );
@@ -494,7 +531,7 @@ async function waitForChromeMcpReady(
           timer = setTimeout(() => {
             reject(
               new BrowserProfileUnavailableError(
-                `Chrome MCP existing-session attach for profile "${profileName}" timed out after ${timeoutMs}ms.`,
+                `Chrome MCP existing-session attach for profile "${redactChromeMcpProfileLabelForDiagnostic(profileName)}" timed out after ${timeoutMs}ms.`,
               ),
             );
           }, timeoutMs);
@@ -982,6 +1019,7 @@ export async function takeChromeMcpSnapshot(params: {
   profile?: ChromeMcpProfileOptions;
   userDataDir?: string;
   targetId: string;
+  timeoutMs?: number;
 }): Promise<ChromeMcpSnapshotNode> {
   const result = await callTool(
     params.profileName,
@@ -990,6 +1028,7 @@ export async function takeChromeMcpSnapshot(params: {
     {
       pageId: parsePageId(params.targetId),
     },
+    { timeoutMs: params.timeoutMs },
   );
   return extractSnapshot(result);
 }

@@ -203,6 +203,15 @@ export type PluginRuntimeCore = {
     ensureAgentWorkspace: typeof import("../../agents/workspace.js").ensureAgentWorkspace;
     session: {
       resolveStorePath: typeof import("../../config/sessions/paths.js").resolveStorePath;
+      getSessionEntry: typeof import("../../config/sessions/store.js").getSessionEntry;
+      listSessionEntries: typeof import("../../config/sessions/store.js").listSessionEntries;
+      patchSessionEntry: typeof import("../../config/sessions/store.js").patchSessionEntry;
+      upsertSessionEntry: typeof import("../../config/sessions/store.js").upsertSessionEntry;
+      /**
+       * @deprecated Use getSessionEntry/listSessionEntries for reads and
+       * patchSessionEntry/upsertSessionEntry for writes. This keeps the legacy
+       * mutable whole-store compatibility shape.
+       */
       loadSessionStore: typeof import("../../config/sessions/store-load.js").loadSessionStore;
       saveSessionStore: import("../../config/sessions/runtime-types.js").SaveSessionStore;
       updateSessionStore: typeof import("../../config/sessions/store.js").updateSessionStore;
@@ -233,8 +242,8 @@ export type PluginRuntimeCore = {
     detectMime: typeof import("../../media/mime.js").detectMime;
     mediaKindFromMime: typeof import("../../media/constants.js").mediaKindFromMime;
     isVoiceCompatibleAudio: typeof import("../../media/audio.js").isVoiceCompatibleAudio;
-    getImageMetadata: typeof import("../../media/image-ops.js").getImageMetadata;
-    resizeToJpeg: typeof import("../../media/image-ops.js").resizeToJpeg;
+    getImageMetadata: typeof import("../../media/media-services.js").getImageMetadata;
+    resizeToJpeg: typeof import("../../media/media-services.js").resizeToJpeg;
   };
   tts: {
     textToSpeech: TextToSpeech;

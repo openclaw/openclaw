@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 
 const SCRIPT_PATH = "scripts/test-install-sh-docker.sh";
 const DOCKER_SETUP_PATH = "scripts/docker/setup.sh";
+const PODMAN_SETUP_PATH = "scripts/podman/setup.sh";
 const SMOKE_RUNNER_PATH = "scripts/docker/install-sh-smoke/run.sh";
 const BUN_GLOBAL_SMOKE_PATH = "scripts/e2e/bun-global-install-smoke.sh";
 const BUN_GLOBAL_ASSERTIONS_PATH = "scripts/e2e/lib/bun-global-install/assertions.mjs";
@@ -95,13 +96,42 @@ describe("test-install-sh-docker", () => {
     expect(script).toContain('--build-arg "OPENCLAW_INSTALL_BROWSER=${OPENCLAW_INSTALL_BROWSER}"');
   });
 
+  it("passes image-scoped pip packages through Docker and Podman setup", () => {
+    const dockerSetup = readFileSync(DOCKER_SETUP_PATH, "utf8");
+    const podmanSetup = readFileSync(PODMAN_SETUP_PATH, "utf8");
+    const dockerfile = readFileSync("Dockerfile", "utf8");
+
+    expect(dockerfile).toContain("ARG OPENCLAW_IMAGE_PIP_PACKAGES");
+    expect(dockerfile).toContain(
+      "python3 -m pip install --no-cache-dir --break-system-packages $OPENCLAW_IMAGE_PIP_PACKAGES",
+    );
+    expect(dockerSetup).toContain(
+      'export OPENCLAW_IMAGE_PIP_PACKAGES="${OPENCLAW_IMAGE_PIP_PACKAGES:-}"',
+    );
+    expect(dockerSetup).toContain("OPENCLAW_IMAGE_PIP_PACKAGES \\");
+    expect(dockerSetup).toContain(
+      '--build-arg "OPENCLAW_IMAGE_PIP_PACKAGES=${OPENCLAW_IMAGE_PIP_PACKAGES}"',
+    );
+    expect(dockerSetup).not.toContain("OPENCLAW_DOCKER_PIP_PACKAGES");
+    expect(podmanSetup).toContain('OPENCLAW_IMAGE_PIP_PACKAGES="${OPENCLAW_IMAGE_PIP_PACKAGES:-}"');
+    expect(podmanSetup).toContain(
+      'BUILD_ARGS+=(--build-arg "OPENCLAW_IMAGE_PIP_PACKAGES=${OPENCLAW_IMAGE_PIP_PACKAGES}")',
+    );
+    expect(podmanSetup).not.toContain("OPENCLAW_DOCKER_PIP_PACKAGES");
+  });
+
   it("allows repository branch history and release tags for secret-backed Docker release checks", () => {
     const workflow = readFileSync(LIVE_E2E_WORKFLOW_PATH, "utf8");
 
-    expect(workflow).toContain("git fetch --no-tags origin '+refs/heads/*:refs/remotes/origin/*'");
     expect(workflow).toContain('git rev-parse --verify "${INPUT_REF}^{commit}"');
+    expect(workflow).toContain(
+      'git merge-base --is-ancestor "$selected_sha" refs/remotes/origin/main',
+    );
     expect(workflow).toContain("repository-branch-history");
     expect(workflow).toContain("git tag --points-at \"$selected_sha\" | grep -Eq '^v'");
+    expect(workflow).toContain(
+      "git for-each-ref --format='%(refname:short)' --contains \"$selected_sha\" refs/remotes/origin",
+    );
     expect(workflow).toContain("reachable from an OpenClaw branch or release tag");
   });
 
@@ -130,6 +160,17 @@ describe("test-install-sh-docker", () => {
     expect(script).toContain('node scripts/check-package-dist-imports.mjs "$ROOT_DIR"');
     expect(script).toContain("quiet_npm pack --ignore-scripts");
     expect(script).toContain("node scripts/check-openclaw-package-tarball.mjs");
+  });
+
+  it("runs candidate tarballs through the installer script instead of direct npm", () => {
+    const wrapper = readFileSync(SCRIPT_PATH, "utf8");
+    const runner = readFileSync(SMOKE_RUNNER_PATH, "utf8");
+
+    expect(wrapper).toContain('-v "$ROOT_DIR/scripts/install.sh:/tmp/openclaw-install.sh:ro"');
+    expect(runner).toContain("Run official installer one-liner for latest release tarball");
+    expect(runner).toContain("run_installer_for_package_spec");
+    expect(runner).toContain('bash -c "curl -fsSL \\"\\$1\\" | bash -s --');
+    expect(runner).not.toContain('npm_install_global "install latest release tarball"');
   });
 });
 
@@ -240,6 +281,11 @@ describe("bun global install smoke", () => {
     expect(workflow).not.toContain('timeout 300s docker pull "$IMAGE_REF"');
     expect(workflow).toContain("--progress=plain");
     expect(workflow).toContain("--load");
+    expect(workflow).toContain("OPENCLAW_INSTALL_URL: file:///tmp/openclaw-install.sh");
+    expect(workflow).toContain("OPENCLAW_INSTALL_CLI_URL: file:///tmp/openclaw-install-cli.sh");
+    expect(workflow).toContain('OPENCLAW_INSTALL_SMOKE_SKIP_CLI: "0"');
+    expect(workflow).toContain("Run Rocky Linux installer smoke");
+    expect(workflow).toContain("rockylinux:9@sha256:");
     expect(workflow).toContain("pnpm-workspace.yaml");
     expect(workflow).toContain("workspace.patchedDependencies");
     expect(workflow).not.toContain("pkg.pnpm?.patchedDependencies");

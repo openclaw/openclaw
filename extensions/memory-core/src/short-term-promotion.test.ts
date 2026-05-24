@@ -21,7 +21,7 @@ import {
   resolveShortTermRecallLockPath,
   resolveShortTermPhaseSignalStorePath,
   resolveShortTermRecallStorePath,
-  __testing,
+  testing,
 } from "./short-term-promotion.js";
 
 describe("short-term promotion", () => {
@@ -1089,7 +1089,7 @@ describe("short-term promotion", () => {
 
   it("treats diff-prefixed dreaming snippets as contaminated", () => {
     expect(
-      __testing.isContaminatedDreamingSnippet(
+      testing.isContaminatedDreamingSnippet(
         "@@ -1,1 - Candidate: Default to action. confidence: 0.76 evidence: memory/.dreams/session-corpus/2026-04-08.txt:1-1 recalls: 3 status: staged",
       ),
     ).toBe(true);
@@ -1097,7 +1097,7 @@ describe("short-term promotion", () => {
 
   it("treats bracket-prefixed dreaming snippets as contaminated", () => {
     expect(
-      __testing.isContaminatedDreamingSnippet(
+      testing.isContaminatedDreamingSnippet(
         "([ Candidate: Default to action. confidence: 0.76 evidence: memory/.dreams/session-corpus/2026-04-08.txt:1-1 recalls: 3 status: staged",
       ),
     ).toBe(true);
@@ -1105,7 +1105,7 @@ describe("short-term promotion", () => {
 
   it("does not treat ordinary candidate notes with daily-memory evidence as contaminated", () => {
     expect(
-      __testing.isContaminatedDreamingSnippet(
+      testing.isContaminatedDreamingSnippet(
         "Candidate: move backups weekly. confidence: 0.76 evidence: memory/2026-04-08.md:1-1",
       ),
     ).toBe(false);
@@ -1113,7 +1113,7 @@ describe("short-term promotion", () => {
 
   it("treats transcript-style dreaming prompt echoes as contaminated", () => {
     expect(
-      __testing.isContaminatedDreamingSnippet(
+      testing.isContaminatedDreamingSnippet(
         "[main/dreaming-narrative-light.jsonl#L1] User: Write a dream diary entry from these memory fragments:",
       ),
     ).toBe(true);
@@ -1121,7 +1121,7 @@ describe("short-term promotion", () => {
 
   it("treats snippets with metadata prefix before the Candidate marker as contaminated", () => {
     expect(
-      __testing.isContaminatedDreamingSnippet(
+      testing.isContaminatedDreamingSnippet(
         "- - status: staged - Candidate: User: [cron:26fb656d] run thing - confidence: 0.00 - evidence: memory/.dreams/session-corpus/2026-04-12.txt:25-25 - recalls: 0 - status: staged",
       ),
     ).toBe(true);
@@ -1129,7 +1129,7 @@ describe("short-term promotion", () => {
 
   it("treats snippets with confidence prefix before the Candidate marker as contaminated", () => {
     expect(
-      __testing.isContaminatedDreamingSnippet(
+      testing.isContaminatedDreamingSnippet(
         "confidence: 0.58 - Candidate: Assistant: Mason shipped the enforcement pass. - evidence: memory/.dreams/session-corpus/2026-04-11.txt:167-167 - recalls: 0 - status: staged",
       ),
     ).toBe(true);
@@ -1137,7 +1137,7 @@ describe("short-term promotion", () => {
 
   it("does not treat prose that mentions the word Candidate as contaminated", () => {
     expect(
-      __testing.isContaminatedDreamingSnippet(
+      testing.isContaminatedDreamingSnippet(
         "The Candidate profile for Josh Rhoden shows he runs SEU's network admin team; stack is Cisco plus Meraki.",
       ),
     ).toBe(false);
@@ -1157,7 +1157,7 @@ describe("short-term promotion", () => {
         "More real content.",
       ];
       // Line 6 (1-indexed) sits between the fence markers.
-      expect(__testing.lineRangeOverlapsDreamingFence(lines, 6, 6)).toBe(true);
+      expect(testing.lineRangeOverlapsDreamingFence(lines, 6, 6)).toBe(true);
     });
 
     it("returns false when the range sits entirely outside any dreaming fence", () => {
@@ -1169,8 +1169,8 @@ describe("short-term promotion", () => {
         "<!-- openclaw:dreaming:rem:end -->",
         "More real content.",
       ];
-      expect(__testing.lineRangeOverlapsDreamingFence(lines, 2, 2)).toBe(false);
-      expect(__testing.lineRangeOverlapsDreamingFence(lines, 6, 6)).toBe(false);
+      expect(testing.lineRangeOverlapsDreamingFence(lines, 2, 2)).toBe(false);
+      expect(testing.lineRangeOverlapsDreamingFence(lines, 6, 6)).toBe(false);
     });
 
     it("returns true when the range straddles a fence boundary", () => {
@@ -1181,7 +1181,7 @@ describe("short-term promotion", () => {
         "<!-- openclaw:dreaming:diary:end -->",
         "real line 5",
       ];
-      expect(__testing.lineRangeOverlapsDreamingFence(lines, 2, 4)).toBe(true);
+      expect(testing.lineRangeOverlapsDreamingFence(lines, 2, 4)).toBe(true);
     });
 
     it("recovers after a fence end so later real content is not flagged", () => {
@@ -1195,9 +1195,9 @@ describe("short-term promotion", () => {
         "<!-- openclaw:dreaming:rem:end -->",
         "real line 8",
       ];
-      expect(__testing.lineRangeOverlapsDreamingFence(lines, 4, 4)).toBe(false);
-      expect(__testing.lineRangeOverlapsDreamingFence(lines, 8, 8)).toBe(false);
-      expect(__testing.lineRangeOverlapsDreamingFence(lines, 6, 6)).toBe(true);
+      expect(testing.lineRangeOverlapsDreamingFence(lines, 4, 4)).toBe(false);
+      expect(testing.lineRangeOverlapsDreamingFence(lines, 8, 8)).toBe(false);
+      expect(testing.lineRangeOverlapsDreamingFence(lines, 6, 6)).toBe(true);
     });
   });
 
@@ -1415,6 +1415,48 @@ describe("short-term promotion", () => {
       expect(requirePromotedAt(rankedIncludingPromoted[0], "promoted candidate")).toMatch(
         /^\d{4}-\d{2}-\d{2}T/,
       );
+    });
+  });
+
+  it("does not double-prefix promoted snippets that are already markdown bullets", async () => {
+    await withTempWorkspace(async (workspaceDir) => {
+      await writeDailyMemoryNote(workspaceDir, "2026-04-01", [
+        "alpha",
+        "- Gateway binds loopback and port 18789",
+      ]);
+      await recordShortTermRecalls({
+        workspaceDir,
+        query: "gateway host",
+        results: [
+          {
+            path: "memory/2026-04-01.md",
+            startLine: 2,
+            endLine: 2,
+            score: 0.92,
+            snippet: "- Gateway binds loopback and port 18789",
+            source: "memory",
+          },
+        ],
+      });
+
+      const ranked = await rankShortTermPromotionCandidates({
+        workspaceDir,
+        minScore: 0,
+        minRecallCount: 0,
+        minUniqueQueries: 0,
+      });
+      const applied = await applyShortTermPromotions({
+        workspaceDir,
+        candidates: ranked,
+        minScore: 0,
+        minRecallCount: 0,
+        minUniqueQueries: 0,
+      });
+
+      expect(applied.applied).toBe(1);
+      const memoryText = await fs.readFile(path.join(workspaceDir, "MEMORY.md"), "utf-8");
+      expect(memoryText).toContain("- Gateway binds loopback and port 18789");
+      expect(memoryText).not.toContain("- - Gateway binds loopback and port 18789");
     });
   });
 
@@ -1807,7 +1849,7 @@ describe("short-term promotion", () => {
               lastRecalledAt: "2026-04-04T00:00:00.000Z",
               queryHashes: ["a", "b"],
               recallDays: ["2026-04-04"],
-              conceptTags: __testing.deriveConceptTags({
+              conceptTags: testing.deriveConceptTags({
                 path: "memory/2026-04-01.md",
                 snippet,
               }),
@@ -1946,7 +1988,7 @@ describe("short-term promotion", () => {
 
   it("extracts stable concept tags from snippets and paths", () => {
     expect(
-      __testing.deriveConceptTags({
+      testing.deriveConceptTags({
         path: "memory/2026-04-03.md",
         snippet: "Move backups to S3 Glacier and sync QMD router notes.",
       }),
@@ -1955,13 +1997,13 @@ describe("short-term promotion", () => {
 
   it("extracts multilingual concept tags across latin and cjk snippets", () => {
     expect(
-      __testing.deriveConceptTags({
+      testing.deriveConceptTags({
         path: "memory/2026-04-03.md",
         snippet: "Configuración du routeur et sauvegarde Glacier.",
       }),
     ).toStrictEqual(["glacier", "sauvegarde", "routeur", "configuración"]);
     expect(
-      __testing.deriveConceptTags({
+      testing.deriveConceptTags({
         path: "memory/2026-04-03.md",
         snippet: "障害対応ルーター設定とバックアップ確認。路由器备份与网关同步。",
       }),

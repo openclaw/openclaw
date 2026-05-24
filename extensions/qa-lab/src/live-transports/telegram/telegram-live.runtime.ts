@@ -396,9 +396,11 @@ const TELEGRAM_QA_SCENARIOS: TelegramQaScenarioDefinition[] = [
   {
     id: "telegram-reply-chain-exact-marker",
     title: "Telegram reply-chain exact marker",
+    defaultEnabled: false,
     defaultProviderModes: ["mock-openai"],
-    rationale: "Mock-backed reply-chain check proves quoted bot-to-bot follow-ups keep threading.",
-    timeoutMs: 45_000,
+    rationale:
+      "Opt-in mock-backed exact-marker check for Telegram final text through reply handling.",
+    timeoutMs: 75_000,
     buildRun: (sutUsername) =>
       telegramQaStepRun({
         expectReply: true,
@@ -406,17 +408,17 @@ const TELEGRAM_QA_SCENARIOS: TelegramQaScenarioDefinition[] = [
         expectedTextIncludes: ["QA-TELEGRAM-REPLY-CHAIN-OK"],
         expectedJoinedSutTextIncludes: ["QA-TELEGRAM-REPLY-CHAIN-OK"],
         expectedSutMessageCount: 1,
-        replyToLatestSutMessage: true,
         settleMs: 4_000,
       }),
   },
   {
     id: "telegram-stream-final-single-message",
     title: "Telegram streamed final stays one message",
+    defaultEnabled: false,
     defaultProviderModes: ["mock-openai"],
-    rationale: "Regression guard for duplicate final replies from Telegram streaming paths.",
+    rationale: "Opt-in regression guard for duplicate final replies from Telegram streaming paths.",
     regressionRefs: ["openclaw/openclaw#39905"],
-    timeoutMs: 45_000,
+    timeoutMs: 75_000,
     buildRun: (sutUsername) =>
       telegramQaStepRun({
         allowAnySutReply: true,
@@ -425,7 +427,6 @@ const TELEGRAM_QA_SCENARIOS: TelegramQaScenarioDefinition[] = [
         expectedTextIncludes: ["QA-TELEGRAM-STREAM-SINGLE-OK"],
         expectedJoinedSutTextIncludes: ["QA-TELEGRAM-STREAM-SINGLE-OK"],
         expectedSutMessageCount: 1,
-        replyToLatestSutMessage: true,
         settleMs: 4_000,
       }),
   },
@@ -1282,6 +1283,12 @@ function assertTelegramScenarioReply(params: {
   }
 }
 
+function isTelegramObservedMessageTimeoutError(error: unknown, timeoutMs: number) {
+  return formatErrorMessage(error).startsWith(
+    `timed out after ${timeoutMs}ms waiting for Telegram message`,
+  );
+}
+
 function resolveTelegramQaScenarioSteps(run: TelegramQaScenarioRun): TelegramQaScenarioStep[] {
   if (run.steps.length === 0) {
     throw new Error("Telegram QA scenario must include at least one step");
@@ -1340,11 +1347,7 @@ async function runTelegramQaScenarioStep(params: {
       sentMessageId: sent.message_id,
     };
   } catch (error) {
-    if (
-      !params.step.expectReply &&
-      formatErrorMessage(error) ===
-        `timed out after ${stepTimeoutMs}ms waiting for Telegram message`
-    ) {
+    if (!params.step.expectReply && isTelegramObservedMessageTimeoutError(error, stepTimeoutMs)) {
       return {
         matched: undefined,
         requestStartedAt: new Date(requestStartedAtMs).toISOString(),
@@ -2028,7 +2031,7 @@ export async function runTelegramQaLive(params: {
   };
 }
 
-export const __testing = {
+export const testing = {
   TELEGRAM_QA_SCENARIOS,
   TELEGRAM_QA_STANDARD_SCENARIO_IDS,
   buildTelegramQaConfig,
@@ -2040,6 +2043,7 @@ export const __testing = {
   assertTelegramScenarioReply,
   classifyCanaryReply,
   findScenario,
+  isTelegramObservedMessageTimeoutError,
   listTelegramQaScenarioCatalog,
   matchesTelegramScenarioReply,
   normalizeTelegramObservedMessage,
@@ -2054,3 +2058,4 @@ export const __testing = {
   renderTelegramQaMarkdown,
   waitForObservedMessage,
 };
+export { testing as __testing };

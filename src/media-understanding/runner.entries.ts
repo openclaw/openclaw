@@ -20,7 +20,7 @@ import { logVerbose, shouldLogVerbose } from "../globals.js";
 import { writeExternalFileWithinRoot } from "../infra/fs-safe.js";
 import { resolveProxyFetchFromEnv } from "../infra/net/proxy-fetch.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
-import { runFfmpeg } from "../media/ffmpeg-exec.js";
+import { runFfmpeg } from "../media/media-services.js";
 import { runExec } from "../process/exec.js";
 import { providerOperationRetryConfig } from "../provider-runtime/operation-retry.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
@@ -96,15 +96,16 @@ function trimOutput(text: string, maxChars?: number): string {
   return trimmed.slice(0, maxChars).trim();
 }
 
-function extractSherpaOnnxText(raw: string): string | null {
-  const tryParse = (value: string): string | null => {
+function extractSherpaOnnxText(raw: string): { matched: boolean; text: string } {
+  const noMatch = { matched: false, text: "" };
+  const tryParse = (value: string): { matched: boolean; text: string } => {
     const trimmed = value.trim();
     if (!trimmed) {
-      return null;
+      return noMatch;
     }
     const head = trimmed[0];
     if (head !== "{" && head !== '"') {
-      return null;
+      return noMatch;
     }
     try {
       const parsed = JSON.parse(trimmed) as unknown;
@@ -113,16 +114,16 @@ function extractSherpaOnnxText(raw: string): string | null {
       }
       if (parsed && typeof parsed === "object") {
         const text = (parsed as { text?: unknown }).text;
-        if (typeof text === "string" && text.trim()) {
-          return text.trim();
+        if (typeof text === "string") {
+          return { matched: true, text: text.trim() };
         }
       }
     } catch {}
-    return null;
+    return noMatch;
   };
 
   const direct = tryParse(raw);
-  if (direct) {
+  if (direct.matched) {
     return direct;
   }
 
@@ -132,15 +133,20 @@ function extractSherpaOnnxText(raw: string): string | null {
     .filter(Boolean);
   for (let i = lines.length - 1; i >= 0; i -= 1) {
     const parsed = tryParse(lines[i] ?? "");
-    if (parsed) {
+    if (parsed.matched) {
       return parsed;
     }
   }
-  return null;
+  return noMatch;
 }
 
 function commandBase(command: string): string {
   return path.parse(command).name;
+}
+
+function isAntigravityCliCommand(command: string): boolean {
+  const commandId = commandBase(command);
+  return commandId === "agy" || commandId === "antigravity";
 }
 
 function findArgValue(args: string[], keys: string[]): string | undefined {
@@ -230,8 +236,8 @@ async function resolveCliOutput(params: {
 
   if (commandId === "sherpa-onnx-offline") {
     const response = extractSherpaOnnxText(params.stdout);
-    if (response) {
-      return response;
+    if (response.matched) {
+      return response.text;
     }
   }
 
@@ -413,8 +419,8 @@ function resolveMediaRequestOverrides(config: MediaUnderstandingConfig | undefin
     _requestLanguageOverride?: string;
   };
   return {
-    prompt: overrides._requestPromptOverride,
-    language: overrides._requestLanguageOverride,
+    prompt: overrides["_requestPromptOverride"],
+    language: overrides["_requestLanguageOverride"],
   };
 }
 
@@ -807,6 +813,7 @@ export async function runCliEntry(params: {
     const { stdout } = await runExec(argv[0], argv.slice(1), {
       timeoutMs,
       maxBuffer: CLI_OUTPUT_MAX_BUFFER,
+      cwd: isAntigravityCliCommand(command) ? path.dirname(mediaPath) : undefined,
     });
     const resolved = await resolveCliOutput({
       command,

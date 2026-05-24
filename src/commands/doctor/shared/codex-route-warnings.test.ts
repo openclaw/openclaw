@@ -134,6 +134,34 @@ describe("collectCodexRouteWarnings", () => {
     expect(warnings).toStrictEqual([]);
   });
 
+  it("warns when Codex app-server command includes inline arguments", () => {
+    const warnings = collectCodexRouteWarnings({
+      cfg: {
+        plugins: {
+          entries: {
+            codex: {
+              enabled: true,
+              config: {
+                appServer: {
+                  command:
+                    "node C:\\Users\\me\\.openclaw\\npm\\node_modules\\@openai\\codex\\bin\\codex.js",
+                },
+              },
+            },
+          },
+        },
+      } as unknown as OpenClawConfig,
+    });
+
+    expect(warnings).toStrictEqual([
+      [
+        "- Codex app-server command override includes inline arguments.",
+        '- plugins.entries.codex.config.appServer.command: "node C:\\Users\\me\\.openclaw\\npm\\node_modules\\@openai\\codex\\bin\\codex.js" starts with "node" and embeds "C:\\Users\\me\\.openclaw\\npm\\node_modules\\@openai\\codex\\bin\\codex.js". The command field must be only the executable path.',
+        "- Remove the override to use managed Codex startup, or move script/options to plugins.entries.codex.config.appServer.args.",
+      ].join("\n"),
+    ]);
+  });
+
   it("warns when Codex runtime routes are configured while the Codex plugin is disabled", () => {
     const warnings = collectCodexRouteWarnings({
       cfg: {
@@ -1863,14 +1891,6 @@ describe("collectCodexRouteWarnings", () => {
             model: "openai-codex/gpt-5.4",
           },
         },
-        tools: {
-          subagents: {
-            model: {
-              primary: "openai-codex/gpt-5.4",
-              fallbacks: ["openai-codex/gpt-5.4-mini"],
-            },
-          },
-        },
         messages: {
           tts: {
             summaryModel: "openai-codex/gpt-5.4-mini",
@@ -1896,8 +1916,6 @@ describe("collectCodexRouteWarnings", () => {
         "- channels.modelByChannel.telegram.default: openai-codex/gpt-5.4 -> openai/gpt-5.4.",
         "- hooks.mappings.0.model: openai-codex/gpt-5.4-mini -> openai/gpt-5.4-mini.",
         "- hooks.gmail.model: openai-codex/gpt-5.4 -> openai/gpt-5.4.",
-        "- tools.subagents.model.primary: openai-codex/gpt-5.4 -> openai/gpt-5.4.",
-        "- tools.subagents.model.fallbacks.0: openai-codex/gpt-5.4-mini -> openai/gpt-5.4-mini.",
         "- messages.tts.summaryModel: openai-codex/gpt-5.4-mini -> openai/gpt-5.4-mini.",
       ].join("\n"),
       'Set agents.defaults.models.openai/gpt-5.5.agentRuntime.id to "codex" so repaired OpenAI refs keep Codex auth routing.',
@@ -1932,10 +1950,6 @@ describe("collectCodexRouteWarnings", () => {
     expect(result.cfg.channels?.modelByChannel?.telegram?.default).toBe("openai/gpt-5.4");
     expect(result.cfg.hooks?.mappings?.[0]?.model).toBe("openai/gpt-5.4-mini");
     expect(result.cfg.hooks?.gmail?.model).toBe("openai/gpt-5.4");
-    expect(result.cfg.tools?.subagents?.model).toEqual({
-      primary: "openai/gpt-5.4",
-      fallbacks: ["openai/gpt-5.4-mini"],
-    });
     expect(result.cfg.messages?.tts?.summaryModel).toBe("openai/gpt-5.4-mini");
   });
 
@@ -3120,14 +3134,6 @@ describe("collectCodexRouteWarnings", () => {
         hooks: {
           mappings: [{ model: "openai-codex/gpt-5.4" }],
         },
-        tools: {
-          subagents: {
-            model: {
-              primary: "openai-codex/gpt-5.5",
-              fallbacks: ["openai-codex/gpt-5.4-mini"],
-            },
-          },
-        },
         messages: {
           tts: {
             summaryModel: "openai-codex/gpt-5.4",
@@ -3141,10 +3147,6 @@ describe("collectCodexRouteWarnings", () => {
     expect(result.cfg.channels?.modelByChannel?.telegram?.default).toBe("openai/gpt-5.5");
     expect(result.cfg.channels?.discord?.voice?.model).toBe("openai/gpt-5.4-mini");
     expect(result.cfg.hooks?.mappings?.[0]?.model).toBe("openai/gpt-5.4");
-    expect(result.cfg.tools?.subagents?.model).toEqual({
-      primary: "openai/gpt-5.5",
-      fallbacks: ["openai/gpt-5.4-mini"],
-    });
     expect(result.cfg.messages?.tts?.summaryModel).toBe("openai/gpt-5.4");
     expect(result.cfg.agents?.defaults?.models).toBeUndefined();
   });

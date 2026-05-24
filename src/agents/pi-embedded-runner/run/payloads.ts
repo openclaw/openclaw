@@ -101,7 +101,7 @@ function hasExplicitMutatingToolFailureAcknowledgement(text: string): boolean {
 }
 
 function isVerboseToolDetailEnabled(level?: VerboseLevel): boolean {
-  return level === "on" || level === "full";
+  return level === "full";
 }
 
 function resolveRawAssistantAnswerText(lastAssistant: AssistantMessage | undefined): string {
@@ -136,26 +136,45 @@ function shouldIncludeToolErrorDetails(params: {
   );
 }
 
+function shouldMarkNonTerminalToolErrorWarning(lastToolError: ToolErrorSummary): boolean {
+  return lastToolError.middlewareError === true;
+}
+
 function resolveToolErrorWarningPolicy(params: {
   lastToolError: ToolErrorSummary;
   hasUserFacingReply: boolean;
   hasUserFacingErrorReply: boolean;
   hasUserFacingFailureAcknowledgement: boolean;
   suppressToolErrors: boolean;
-  suppressToolErrorWarnings?: boolean;
+  suppressToolErrorWarnings?: boolean | (() => boolean | undefined);
   isCronTrigger?: boolean;
   sessionKey: string;
   verboseLevel?: VerboseLevel;
 }): ToolErrorWarningPolicy {
   const normalizedToolName = normalizeOptionalLowercaseString(params.lastToolError.toolName) ?? "";
-  const includeDetails = shouldIncludeToolErrorDetails(params);
-  if (params.suppressToolErrorWarnings) {
+  let toolErrorWarningOverride: boolean | undefined;
+  let dynamicToolErrorWarningsDisabled = false;
+  if (typeof params.suppressToolErrorWarnings === "function") {
+    toolErrorWarningOverride = params.suppressToolErrorWarnings();
+    dynamicToolErrorWarningsDisabled = toolErrorWarningOverride === false;
+  } else {
+    toolErrorWarningOverride = params.suppressToolErrorWarnings;
+  }
+  const includeDetails = shouldIncludeToolErrorDetails({
+    ...params,
+    verboseLevel: dynamicToolErrorWarningsDisabled ? "off" : params.verboseLevel,
+  });
+  const suppressToolErrorWarnings = toolErrorWarningOverride === true;
+  if (suppressToolErrorWarnings) {
     return { showWarning: false, includeDetails };
   }
   // sessions_send timeouts and errors are transient inter-session communication
   // issues — the message may still have been delivered. Suppress warnings to
   // prevent raw error text from leaking into the chat surface (#23989).
   if (normalizedToolName === "sessions_send") {
+    return { showWarning: false, includeDetails };
+  }
+  if (params.suppressToolErrors) {
     return { showWarning: false, includeDetails };
   }
   const isMutatingToolError =
@@ -167,9 +186,6 @@ function resolveToolErrorWarningPolicy(params: {
     };
   }
   if (isExecLikeToolName(params.lastToolError.toolName) && !includeDetails) {
-    return { showWarning: false, includeDetails };
-  }
-  if (params.suppressToolErrors) {
     return { showWarning: false, includeDetails };
   }
   return {
@@ -193,7 +209,7 @@ export function buildEmbeddedRunPayloads(params: {
   reasoningLevel?: ReasoningLevel;
   thinkingLevel?: ThinkLevel;
   toolResultFormat?: ToolResultFormat;
-  suppressToolErrorWarnings?: boolean;
+  suppressToolErrorWarnings?: boolean | (() => boolean | undefined);
   inlineToolResultsAllowed: boolean;
   didSendViaMessagingTool?: boolean;
   messagingToolSourceReplyPayloads?: MessagingToolSourceReplyPayload[];
@@ -221,6 +237,7 @@ export function buildEmbeddedRunPayloads(params: {
     presentation?: ReplyPayload["presentation"];
     interactive?: ReplyPayload["interactive"];
     channelData?: Record<string, unknown>;
+    nonTerminalToolErrorWarning?: boolean;
     sourceReplyMirror?: {
       idempotencyKey?: string;
     };
@@ -509,6 +526,9 @@ export function buildEmbeddedRunPayloads(params: {
         replyItems.push({
           text: warningText,
           isError: true,
+          nonTerminalToolErrorWarning:
+            hasUserFacingAssistantReply &&
+            shouldMarkNonTerminalToolErrorWarning(params.lastToolError),
         });
       }
     }
@@ -529,6 +549,11 @@ export function buildEmbeddedRunPayloads(params: {
       }
       if (item.isError !== undefined) {
         payload.isError = item.isError;
+      }
+      if (item.nonTerminalToolErrorWarning) {
+        setReplyPayloadMetadata(payload, {
+          nonTerminalToolErrorWarning: true,
+        });
       }
       if (item.replyToId) {
         payload.replyToId = item.replyToId;

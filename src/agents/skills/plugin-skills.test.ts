@@ -3,13 +3,13 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
-  __testing as acpRuntimeTesting,
+  testing as acpRuntimeTesting,
   registerAcpRuntimeBackend,
 } from "../../acp/runtime/registry.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { PluginManifestRegistry } from "../../plugins/manifest-registry.js";
 import { createTrackedTempDirs } from "../../test-utils/tracked-temp-dirs.js";
-import { __testing } from "./plugin-skills.js";
+import { testing } from "./plugin-skills.js";
 
 const hoisted = vi.hoisted(() => {
   const loadManifestRegistry = vi.fn();
@@ -43,6 +43,7 @@ vi.mock("../../plugins/plugin-registry.js", () => ({
 
 vi.mock("../../plugins/plugin-metadata-snapshot.js", () => ({
   loadPluginMetadataSnapshot: hoisted.loadPluginMetadataSnapshot,
+  resolvePluginMetadataSnapshot: hoisted.loadPluginMetadataSnapshot,
 }));
 
 let resolvePluginSkillDirs: typeof import("./plugin-skills.js").resolvePluginSkillDirs;
@@ -391,8 +392,7 @@ describe("resolvePluginSkillDirs", () => {
 });
 
 describe("publishPluginSkills", () => {
-  const { isGeneratedPluginSkillEntry, publishPluginSkills, resolvePluginSkillLinkType } =
-    __testing;
+  const { isGeneratedPluginSkillEntry, publishPluginSkills, resolvePluginSkillLinkType } = testing;
 
   function withPlatform<T>(platform: NodeJS.Platform, fn: () => T): T {
     const originalPlatform = process.platform;

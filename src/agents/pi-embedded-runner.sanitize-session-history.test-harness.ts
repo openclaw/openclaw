@@ -13,6 +13,7 @@ export type SanitizeSessionHistoryFn = (params: {
   sessionId: string;
   modelId?: string;
   policy?: TranscriptPolicy;
+  preserveLatestAssistantThinking?: boolean;
 }) => Promise<AgentMessage[]>;
 type SanitizeSessionHistoryMockedHelpers = typeof import("./pi-embedded-helpers.js");
 export type SanitizeSessionHistoryHarness = {
@@ -92,7 +93,7 @@ export function createSanitizeSessionHistoryProviderHookRuntimeMock(
     resolveProviderPluginsForHooks: vi.fn(() => []),
     prepareProviderExtraParams: vi.fn(() => undefined),
     wrapProviderStreamFn: vi.fn(() => undefined),
-    __testing: {},
+    testing: {},
     ...extra,
   };
 }

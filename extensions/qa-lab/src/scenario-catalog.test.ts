@@ -120,6 +120,7 @@ describe("qa scenario catalog", () => {
     const applyPatch = readQaScenarioById("runtime-tool-apply-patch");
     const messageTool = readQaScenarioById("runtime-tool-message-tool");
     const tavilySearch = readQaScenarioById("runtime-tool-tavily-search");
+    const webSearch = readQaScenarioById("runtime-tool-web-search");
 
     expect(applyPatch.runtimeParityTier).toBe("standard");
     expect(messageTool.runtimeParityTier).toBe("optional");
@@ -140,6 +141,16 @@ describe("qa scenario catalog", () => {
         required: false,
       },
     });
+    expect(readQaScenarioExecutionConfig(webSearch.id)).toMatchObject({
+      toolName: "web_search",
+      toolCoverage: {
+        bucket: "openclaw-dynamic-integration",
+        expectedLayer: "openclaw-dynamic",
+        capabilityLayer: "openclaw-dynamic-direct",
+        required: true,
+      },
+    });
+    expect(readQaScenarioExecutionConfig(webSearch.id)).not.toHaveProperty("knownHarnessGap");
   });
 
   it("loads the Codex Pi-shaped Read vocabulary live parity canary", () => {
@@ -166,6 +177,9 @@ describe("qa scenario catalog", () => {
       "plugin-hook-health-sentinel",
       "plugin-manifest-contract-health",
       "webchat-direct-reply-routing",
+      "long-context-progress-watchdog",
+      "gateway-restart-inflight-run",
+      "streaming-final-integrity",
     ];
 
     for (const scenarioId of scenarioIds) {
@@ -177,6 +191,90 @@ describe("qa scenario catalog", () => {
     expect(readQaScenarioById("webchat-direct-reply-routing").sourcePath).toBe(
       "qa/scenarios/channels/webchat-direct-reply-routing.md",
     );
+    expect(readQaScenarioById("long-context-progress-watchdog").sourcePath).toBe(
+      "qa/scenarios/runtime/long-context-progress-watchdog.md",
+    );
+    expect(readQaScenarioExecutionConfig("long-context-progress-watchdog")).toMatchObject({
+      requiredProviderMode: "live-frontier",
+      harnessRuntime: "codex",
+    });
+    expect(readQaScenarioById("long-context-progress-watchdog").plugins).toBeUndefined();
+    expect(readQaScenarioById("long-context-progress-watchdog").gatewayConfigPatch).toBeUndefined();
+  });
+
+  it("loads the QA bus tool trace visibility harness scenario", () => {
+    const scenario = readQaScenarioById("qa-bus-tool-trace-visibility");
+    const config = readQaScenarioExecutionConfig(scenario.id) as
+      | {
+          expectedToolName?: string;
+          expectedRedaction?: string;
+          searchQuery?: string;
+        }
+      | undefined;
+
+    expect(scenario.sourcePath).toBe("qa/scenarios/runtime/qa-bus-tool-trace-visibility.md");
+    expect(scenario.coverage?.primary).toContain("harness.tool-trace-visibility");
+    expect(scenario.coverage?.secondary).toContain("runtime.qa-bus");
+    expect(config?.expectedToolName).toBe("exec");
+    expect(config?.expectedRedaction).toBe("[redacted]");
+    expect(config?.searchQuery).toBe("exec");
+    expect(scenario.execution.flow?.steps.map((step) => step.name)).toEqual([
+      "preserves searchable sanitized tool-call traces",
+    ]);
+  });
+
+  it("loads the opt-in update.run package self-upgrade sentinel", () => {
+    const scenario = readQaScenarioById("update-run-package-self-upgrade");
+    const config = readQaScenarioExecutionConfig(scenario.id) as
+      | {
+          requiredProviderMode?: string;
+          allowEnv?: string;
+          sourceVersion?: string;
+          targetTag?: string;
+        }
+      | undefined;
+
+    expect(scenario.sourcePath).toBe("qa/scenarios/runtime/update-run-package-self-upgrade.md");
+    expect(scenario.coverage?.primary).toContain("runtime.update-run");
+    expect(scenario.coverage?.secondary).toContain("runtime.package-update");
+    expect(config?.requiredProviderMode).toBe("live-frontier");
+    expect(config?.allowEnv).toBe("OPENCLAW_QA_ALLOW_UPDATE_RUN_SELF");
+    expect(config?.sourceVersion).toBe("2026.4.26");
+    expect(config?.targetTag).toBe("latest");
+    expect(scenario.execution.flow?.steps.map((step) => step.name)).toEqual([
+      "asks the agent to self-update through update.run",
+    ]);
+  });
+
+  it("loads the Codex plugin lifecycle fixture scenarios into the standard runtime tier", () => {
+    const scenarioIds = [
+      "codex-plugin-cold-install",
+      "codex-plugin-install-race",
+      "codex-plugin-pinned-old",
+      "codex-plugin-pinned-new",
+      "auth-profile-codex-mixed-profiles",
+      "auth-profile-doctor-migration-safety",
+    ];
+
+    for (const scenarioId of scenarioIds) {
+      const scenario = readQaScenarioById(scenarioId);
+      expect(scenario.runtimeParityTier).toBe("standard");
+      expect(scenario.coverage?.primary.length).toBeGreaterThan(0);
+      expect(scenario.execution.flow?.steps.length).toBe(1);
+    }
+    expect(readQaScenarioExecutionConfig("codex-plugin-pinned-old")).toMatchObject({
+      pluginVersion: "2026.5.19",
+      hostVersion: "2026.5.21",
+      pluginRelation: "older",
+    });
+    expect(readQaScenarioExecutionConfig("auth-profile-doctor-migration-safety")).toMatchObject({
+      matrixCells: [
+        "oauth-only",
+        "mixed-no-pin",
+        "mixed-defaults-pi-pin",
+        "mixed-main-agent-pi-pin",
+      ],
+    });
   });
 
   it("keeps the character eval scenario natural and task-shaped", () => {
@@ -405,6 +503,34 @@ describe("qa scenario catalog", () => {
     expect(config?.expectedArtifactAll).toEqual(["repo contract"]);
     expect(config?.expectedArtifactAny).toContain("evidence path");
     expect(scenario.title).toBe("Instruction followthrough repo contract");
+  });
+
+  it("adds a dreaming shadow trial report scenario", () => {
+    const scenario = readQaScenarioById("dreaming-shadow-trial-report");
+    const config = readQaScenarioExecutionConfig("dreaming-shadow-trial-report") as
+      | {
+          prompt?: string;
+          reportName?: string;
+          expectedReportAll?: string[];
+          forbiddenReplyNeedles?: string[];
+          seededMemory?: string;
+        }
+      | undefined;
+    const flow = JSON.stringify(scenario.execution.flow);
+
+    expect(scenario.sourcePath).toBe("qa/scenarios/memory/dreaming-shadow-trial-report.md");
+    expect(scenario.coverage?.primary).toContain("memory.dreaming");
+    expect(config?.prompt).toContain("Dreaming shadow trial report check");
+    expect(config?.reportName).toBe("dreaming-shadow-trial-report.md");
+    expect(config?.seededMemory).toBe("# Memory\n\n");
+    expect(config?.expectedReportAll).toContain("verdict: helpful");
+    expect(config?.expectedReportAll).toContain("exact verification commands and remaining risk");
+    expect(config?.expectedReportAll).toContain("omits the exact command and remaining risk");
+    expect(config?.expectedReportAll).toContain("calls out the remaining review risk");
+    expect(config?.forbiddenReplyNeedles).toContain("candidate was promoted to MEMORY.md");
+    expect(flow).toContain("plannedToolName === 'write'");
+    expect(flow).toContain("readIndices[1] < firstWrite");
+    expect(flow).toContain("String(memoryAfter) === config.seededMemory");
   });
 
   it("rejects malformed string matcher lists before running a flow", () => {

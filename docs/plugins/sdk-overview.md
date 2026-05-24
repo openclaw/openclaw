@@ -95,6 +95,7 @@ methods:
 | `api.registerAgentHarness(...)`                  | Experimental low-level agent executor |
 | `api.registerCliBackend(...)`                    | Local CLI inference backend           |
 | `api.registerChannel(...)`                       | Messaging channel                     |
+| `api.registerEmbeddingProvider(...)`             | Reusable vector embedding provider    |
 | `api.registerSpeechProvider(...)`                | Text-to-speech / STT synthesis        |
 | `api.registerRealtimeTranscriptionProvider(...)` | Streaming realtime transcription      |
 | `api.registerRealtimeVoiceProvider(...)`         | Duplex realtime voice sessions        |
@@ -104,6 +105,12 @@ methods:
 | `api.registerVideoGenerationProvider(...)`       | Video generation                      |
 | `api.registerWebFetchProvider(...)`              | Web fetch / scrape provider           |
 | `api.registerWebSearchProvider(...)`             | Web search                            |
+
+Embedding providers registered with `api.registerEmbeddingProvider(...)` must
+also be listed in `contracts.embeddingProviders` in the plugin manifest. This
+is the generic embedding surface for reusable vector generation. Memory-only
+adapters still use `api.registerMemoryEmbeddingProvider(...)` and
+`contracts.memoryEmbeddingProviders`.
 
 ### Tools and commands
 
@@ -119,6 +126,26 @@ or fully dynamic tool registration.
 Plugin commands can set `agentPromptGuidance` when the agent needs a short,
 command-owned routing hint. Keep that text about the command itself; do not add
 provider- or plugin-specific policy to core prompt builders.
+
+Guidance entries may be legacy strings, which apply to every prompt surface, or
+structured entries:
+
+```ts
+agentPromptGuidance: [
+  "Global command hint.",
+  { text: "Only show this in the main PI prompt.", surfaces: ["pi_main"] },
+];
+```
+
+Structured `surfaces` may include `pi_main`, `codex_app_server`, `cli_backend`,
+`acp_backend`, or `subagent`. Omit `surfaces` for intentional all-surface
+guidance. Do not pass an empty `surfaces` array; it is rejected so accidental
+scope loss does not become global prompt text.
+
+Native Codex app-server developer instructions are stricter than other prompt
+surfaces: only guidance explicitly scoped to `codex_app_server` is promoted into
+that higher-priority lane. Legacy string guidance and unscoped structured
+guidance remain available to non-Codex prompt surfaces for compatibility.
 
 ### Infrastructure
 

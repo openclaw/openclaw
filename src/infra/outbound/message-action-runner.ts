@@ -1,4 +1,5 @@
 import type { AgentToolResult } from "@earendil-works/pi-agent-core";
+import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import {
   readNumberParam,
@@ -36,6 +37,8 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "../../shared/string-coerce.js";
+import { stripUnsupportedCitationControlMarkers } from "../../shared/text/citation-control-markers.js";
+import { stripFormattedReasoningMessage } from "../../shared/text/formatted-reasoning-message.js";
 import {
   GATEWAY_CLIENT_MODES,
   GATEWAY_CLIENT_NAMES,
@@ -68,6 +71,7 @@ import {
   resolveAndApplyOutboundReplyToId,
   resolveAndApplyOutboundThreadId,
 } from "./message-action-threading.js";
+import { maybeApplyTtsToMessageActionSendPayload } from "./message-action-tts.js";
 import type { MessagePollResult, MessageSendResult } from "./message.js";
 import {
   applyCrossContextDecoration,
@@ -470,6 +474,34 @@ type SendPayloadParts = {
   silent?: boolean;
 };
 
+function updateSendPayloadPartsFromReplyPayload(
+  parts: SendPayloadParts,
+  payload: ReplyPayload,
+): SendPayloadParts {
+  const sendable = resolveSendableOutboundReplyParts(payload);
+  const mediaUrls = sendable.mediaUrls.length > 0 ? sendable.mediaUrls : undefined;
+  return {
+    ...parts,
+    message: payload.text ?? "",
+    payload,
+    mediaUrl: mediaUrls?.[0],
+    mediaUrls,
+    asVoice: payload.audioAsVoice === true,
+  };
+}
+
+function applySendPayloadPartsToActionParams(
+  actionParams: Record<string, unknown>,
+  parts: SendPayloadParts,
+) {
+  actionParams.message = parts.message;
+  actionParams.media = parts.mediaUrl;
+  actionParams.mediaUrl = parts.mediaUrl;
+  actionParams.mediaUrls = parts.mediaUrls;
+  actionParams.asVoice = parts.asVoice || undefined;
+  actionParams.audioAsVoice = parts.asVoice || undefined;
+}
+
 function collectMessageAttachmentMediaHints(value: unknown): string[] {
   if (!Array.isArray(value)) {
     return [];
@@ -701,7 +733,48 @@ async function handleInternalSourceReplySendAction(
     to: "current-run",
     handledBy: "internal-source",
     payload,
+    toolResult: buildInternalSourceReplyToolResult(payload),
     dryRun,
+  };
+}
+
+function buildInternalSourceReplyToolResult(payload: {
+  status: string;
+  deliveryStatus: string;
+  channel: ChannelId;
+  target: string;
+  sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
+  sourceReplySink?: "internal-ui";
+  dryRun: boolean;
+}): AgentToolResult<{
+  status: string;
+  deliveryStatus: string;
+  channel: ChannelId;
+  target: string;
+  sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
+  sourceReplySink?: "internal-ui";
+  dryRun: boolean;
+}> {
+  const action = payload.dryRun ? "Prepared" : "Sent";
+  const sink = payload.sourceReplySink ? ` via ${payload.sourceReplySink}` : "";
+  return {
+    content: [
+      {
+        type: "text",
+        text: `${action} visible reply to the current webchat conversation${sink}.`,
+      },
+    ],
+    details: {
+      status: payload.status,
+      deliveryStatus: payload.deliveryStatus,
+      channel: payload.channel,
+      target: payload.target,
+      ...(payload.sourceReplyDeliveryMode
+        ? { sourceReplyDeliveryMode: payload.sourceReplyDeliveryMode }
+        : {}),
+      ...(payload.sourceReplySink ? { sourceReplySink: payload.sourceReplySink } : {}),
+      dryRun: payload.dryRun,
+    },
   };
 }
 
@@ -717,6 +790,17 @@ async function buildSendPayloadParts(params: {
   const { actionParams, input } = params;
   if (actionParams.pin === true && actionParams.delivery == null) {
     actionParams.delivery = { pin: { enabled: true } };
+  }
+  // Models may emit message body under non-canonical aliases.
+  if (typeof actionParams.message !== "string" || !actionParams.message.trim()) {
+    for (const alias of ["SendMessage", "content", "text"] as const) {
+      const value = actionParams[alias];
+      if (typeof value === "string" && value.trim()) {
+        actionParams.message = stripFormattedReasoningMessage(value);
+        console.warn(`[message-tool] normalized alias "${alias}" to "message" for send action`);
+        break;
+      }
+    }
   }
   const mediaHint =
     readStringParam(actionParams, "media", { trim: false }) ??
@@ -768,7 +852,7 @@ async function buildSendPayloadParts(params: {
   mergedMediaUrls.length = 0;
   mergedMediaUrls.push(...normalizedMediaUrls);
 
-  message = parsed.text;
+  message = stripUnsupportedCitationControlMarkers(parsed.text);
   actionParams.message = message;
   if (!actionParams.replyTo && parsed.replyToId) {
     actionParams.replyTo = parsed.replyToId;
@@ -869,7 +953,7 @@ async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActi
   throwIfAborted(abortSignal);
   const action: ChannelMessageActionName = "send";
   const to = readStringParam(params, "to", { required: true });
-  const sendPayload = await buildSendPayloadParts({
+  let sendPayload = await buildSendPayloadParts({
     cfg,
     actionParams: params,
     input,
@@ -898,6 +982,21 @@ async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActi
     resolveOutboundSessionRoute,
     ensureOutboundSessionEntry,
   });
+  throwIfAborted(abortSignal);
+
+  const ttsPayload = await maybeApplyTtsToMessageActionSendPayload({
+    payload: sendPayload.payload,
+    cfg,
+    channel,
+    accountId,
+    agentId,
+    sessionKey: input.sessionKey,
+    dryRun,
+  });
+  if (ttsPayload !== sendPayload.payload) {
+    sendPayload = updateSendPayloadPartsFromReplyPayload(sendPayload, ttsPayload);
+    applySendPayloadPartsToActionParams(params, sendPayload);
+  }
   throwIfAborted(abortSignal);
 
   const gatewayPluginAction = await runGatewayPluginMessageActionOrNull({
@@ -936,9 +1035,9 @@ async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActi
       requesterSenderName: input.requesterSenderName ?? undefined,
       requesterSenderUsername: input.requesterSenderUsername ?? undefined,
       requesterSenderE164: input.requesterSenderE164 ?? undefined,
+      senderIsOwner: input.senderIsOwner,
       mediaAccess: ctx.mediaAccess,
       accountId: accountId ?? undefined,
-      senderIsOwner: input.senderIsOwner,
       sessionId: input.sessionId,
       inboundEventKind: input.inboundEventKind,
       gateway,
@@ -952,6 +1051,7 @@ async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActi
               agentId,
               text: sendPayload.message,
               mediaUrls: sendPayload.mediaUrls,
+              idempotencyKey: normalizeOptionalString(params.idempotencyKey) ?? undefined,
             }
           : undefined,
       abortSignal,
@@ -1044,7 +1144,6 @@ async function handlePollAction(ctx: ResolvedActionContext): Promise<MessageActi
       accountId: accountId ?? undefined,
       agentId,
       requesterSenderId: input.requesterSenderId ?? undefined,
-      senderIsOwner: input.senderIsOwner,
       sessionKey: input.sessionKey,
       sessionId: input.sessionId,
       inboundEventKind: input.inboundEventKind,

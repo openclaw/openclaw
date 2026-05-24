@@ -76,6 +76,7 @@ describe("waitForAgentJob", () => {
     startedAt: number;
     endedAt: number;
     aborted?: boolean;
+    stopReason?: string;
   }) {
     const runId = `${params.runIdPrefix}-${Date.now()}-${Math.random().toString(36).slice(2)}`;
     const waitPromise = waitForAgentJob({ runId, timeoutMs: 1_000 });
@@ -88,7 +89,12 @@ describe("waitForAgentJob", () => {
     emitAgentEvent({
       runId,
       stream: "lifecycle",
-      data: { phase: "end", endedAt: params.endedAt, aborted: params.aborted },
+      data: {
+        phase: "end",
+        endedAt: params.endedAt,
+        aborted: params.aborted,
+        ...(params.stopReason ? { stopReason: params.stopReason } : {}),
+      },
     });
 
     return waitPromise;
@@ -108,7 +114,13 @@ describe("waitForAgentJob", () => {
       emitAgentEvent({
         runId,
         stream: "lifecycle",
-        data: { phase: "end", endedAt: 200, aborted: true },
+        data: {
+          phase: "end",
+          endedAt: 200,
+          aborted: true,
+          timeoutPhase: "provider",
+          providerStarted: true,
+        },
       });
 
       await vi.advanceTimersByTimeAsync(15_000);
@@ -117,6 +129,8 @@ describe("waitForAgentJob", () => {
         status: "timeout",
         startedAt: 100,
         endedAt: 200,
+        timeoutPhase: "provider",
+        providerStarted: true,
       });
     } finally {
       vi.useRealTimers();
@@ -133,6 +147,53 @@ describe("waitForAgentJob", () => {
       status: "ok",
       startedAt: 300,
       endedAt: 400,
+    });
+  });
+
+  it("maps aborted stop reasons to error snapshots instead of ok", async () => {
+    const snapshot = await runLifecycleScenario({
+      runIdPrefix: "run-aborted-stop-reason",
+      startedAt: 410,
+      endedAt: 420,
+      stopReason: "aborted",
+    });
+    expectRecordFields(snapshot, {
+      status: "error",
+      startedAt: 410,
+      endedAt: 420,
+      stopReason: "aborted",
+      error: "agent run aborted",
+    });
+  });
+
+  it("maps blocked lifecycle end events to error snapshots", async () => {
+    const runId = `run-blocked-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    const waitPromise = waitForAgentJob({ runId, timeoutMs: 1_000 });
+
+    emitAgentEvent({
+      runId,
+      stream: "lifecycle",
+      data: { phase: "start", startedAt: 450 },
+    });
+    emitAgentEvent({
+      runId,
+      stream: "lifecycle",
+      data: {
+        phase: "end",
+        startedAt: 450,
+        endedAt: 500,
+        livenessState: "blocked",
+        error: "Context overflow: prompt too large for the model.",
+      },
+    });
+
+    const snapshot = await waitPromise;
+    expectRecordFields(snapshot, {
+      status: "error",
+      startedAt: 450,
+      endedAt: 500,
+      error: "Context overflow: prompt too large for the model.",
+      livenessState: "blocked",
     });
   });
 
@@ -461,6 +522,73 @@ describe("sanitizeChatHistoryMessages", () => {
     ]);
   });
 
+  it("strips internal reasoning replay metadata from chat history", () => {
+    const result = sanitizeChatHistoryMessages([
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "thinking",
+            thinking: "Need a tool.",
+            thinkingSignature: "large-provider-payload",
+            openclawReasoningReplay: {
+              v: 1,
+              source: "openai-responses",
+              provider: "openai-codex",
+              api: "openai-codex-responses",
+              model: "gpt-5.5",
+            },
+          },
+          { type: "text", text: "Checking." },
+        ],
+        timestamp: 1,
+      },
+    ]);
+
+    expect(result).toEqual([
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "thinking",
+            thinking: "Need a tool.",
+          },
+          { type: "text", text: "Checking." },
+        ],
+        timestamp: 1,
+      },
+    ]);
+  });
+
+  it("preserves OpenAI-compatible assistant usage aliases for display context", () => {
+    const result = sanitizeChatHistoryMessages([
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "done" }],
+        usage: {
+          prompt_tokens: 11,
+          completion_tokens: 1,
+          total_tokens: 12,
+          provider_payload: "discard",
+        },
+        timestamp: 1,
+      },
+    ]);
+
+    expect(result).toEqual([
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "done" }],
+        usage: {
+          prompt_tokens: 11,
+          completion_tokens: 1,
+          total_tokens: 12,
+        },
+        timestamp: 1,
+      },
+    ]);
+  });
+
   it("drops commentary-only assistant entries when phase exists only in textSignature", () => {
     const result = sanitizeChatHistoryMessages([
       {
@@ -582,6 +710,82 @@ describe("projectRecentChatDisplayMessages", () => {
     ]);
   });
 
+  it("drops duplicate ACP gateway-injected assistant replies from chat history", () => {
+    const result = projectRecentChatDisplayMessages([
+      {
+        role: "user",
+        content: [{ type: "text", text: "good morning" }],
+        timestamp: 1,
+      },
+      {
+        role: "assistant",
+        provider: "openclaw",
+        model: "acp-runtime",
+        content: [{ type: "text", text: "Good morning." }],
+        timestamp: 2,
+      },
+      {
+        role: "assistant",
+        provider: "openclaw",
+        model: "gateway-injected",
+        content: [{ type: "text", text: "Good morning." }],
+        idempotencyKey: "run-1",
+        timestamp: 3,
+      },
+    ]);
+
+    expect(result).toEqual([
+      {
+        role: "user",
+        content: [{ type: "text", text: "good morning" }],
+        timestamp: 1,
+      },
+      {
+        role: "assistant",
+        provider: "openclaw",
+        model: "acp-runtime",
+        content: [{ type: "text", text: "Good morning." }],
+        timestamp: 2,
+      },
+    ]);
+  });
+
+  it("keeps gateway-injected assistant replies when they are not duplicate ACP text", () => {
+    const result = projectRecentChatDisplayMessages([
+      {
+        role: "assistant",
+        provider: "openclaw",
+        model: "acp-runtime",
+        content: [{ type: "text", text: "First answer." }],
+        timestamp: 1,
+      },
+      {
+        role: "assistant",
+        provider: "openclaw",
+        model: "gateway-injected",
+        content: [{ type: "text", text: "Second answer." }],
+        timestamp: 2,
+      },
+    ]);
+
+    expect(result).toEqual([
+      {
+        role: "assistant",
+        provider: "openclaw",
+        model: "acp-runtime",
+        content: [{ type: "text", text: "First answer." }],
+        timestamp: 1,
+      },
+      {
+        role: "assistant",
+        provider: "openclaw",
+        model: "gateway-injected",
+        content: [{ type: "text", text: "Second answer." }],
+        timestamp: 2,
+      },
+    ]);
+  });
+
   it("applies history limits after dropping display-hidden messages", () => {
     const result = projectRecentChatDisplayMessages(
       [
@@ -589,6 +793,13 @@ describe("projectRecentChatDisplayMessages", () => {
         { role: "assistant", content: "older answer", timestamp: 2 },
         { role: "assistant", content: "NO_REPLY", timestamp: 3 },
         { role: "assistant", content: "ANNOUNCE_SKIP", timestamp: 4 },
+        {
+          role: "custom",
+          customType: "openclaw.runtime-context",
+          content: "hidden runtime context",
+          display: false,
+          timestamp: 5,
+        },
       ],
       { maxMessages: 1 },
     );
@@ -1181,7 +1392,7 @@ describe("exec approval handlers", () => {
     });
     const respond = vi.fn();
     const context = {
-      broadcast: (_event: string, _payload: unknown) => {},
+      broadcast: (eventValue: string, _payload: unknown) => {},
       hasExecApprovalClients: () => false,
     };
     return {
@@ -1415,7 +1626,7 @@ describe("exec approval handlers", () => {
     const manager = new ExecApprovalManager();
     const handlers = createExecApprovalHandlers(manager);
     const context = {
-      broadcast: (_event: string, _payload: unknown) => {},
+      broadcast: (eventValue: string, _payload: unknown) => {},
     };
     const ownerClient = {
       connId: "conn-owner",
@@ -2034,7 +2245,7 @@ describe("exec approval handlers", () => {
     const handlers = createExecApprovalHandlers(manager);
     const respond = vi.fn();
     const context = {
-      broadcast: (_event: string, _payload: unknown) => {},
+      broadcast: (eventValue: string, _payload: unknown) => {},
     };
 
     const record = manager.create({ command: "echo ok" }, 60_000, "approval-12345678-aaaa");
@@ -2056,7 +2267,7 @@ describe("exec approval handlers", () => {
     const handlers = createExecApprovalHandlers(manager);
     const respond = vi.fn();
     const context = {
-      broadcast: (_event: string, _payload: unknown) => {},
+      broadcast: (eventValue: string, _payload: unknown) => {},
     };
 
     void manager.register(
@@ -2106,7 +2317,7 @@ describe("exec approval handlers", () => {
     const manager = new ExecApprovalManager();
     const handlers = createExecApprovalHandlers(manager);
     const context = {
-      broadcast: (_event: string, _payload: unknown) => {},
+      broadcast: (eventValue: string, _payload: unknown) => {},
       hasExecApprovalClients: () => true,
     };
     const respondOne = vi.fn();

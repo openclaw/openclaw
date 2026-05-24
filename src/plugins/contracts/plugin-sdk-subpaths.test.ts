@@ -860,7 +860,6 @@ describe("plugin-sdk subpath exports", () => {
       pattern:
         /\b(?:ComparableChannelTarget|resolveComparableTargetFor(?:Channel|LoadedChannel)|comparableChannelTargets(?:Match|ShareRoute))\b/u,
       exclude: [
-        "src/channels/plugins/target-parsing.ts",
         "src/channels/plugins/target-parsing-loaded.ts",
         "src/channels/plugins/target-parsing.test.ts",
         "src/plugins/compat/registry.ts",
@@ -1421,8 +1420,8 @@ describe("plugin-sdk subpath exports", () => {
   });
 
   it("keeps the Zalouser command-auth compatibility facade importable", async () => {
-    const zalouserSdk = await importResolvedPluginSdkSubpath("openclaw/plugin-sdk/zalouser");
     const commandAuthSdk = await importResolvedPluginSdkSubpath("openclaw/plugin-sdk/command-auth");
+    const zalouserSdk = await importResolvedPluginSdkSubpath("openclaw/plugin-sdk/zalouser");
 
     expect(zalouserSdk.resolveSenderCommandAuthorization).toBe(
       commandAuthSdk.resolveSenderCommandAuthorization,

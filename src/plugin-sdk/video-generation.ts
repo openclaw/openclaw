@@ -158,6 +158,8 @@ export type VideoGenerationProvider = {
   aliases?: string[];
   label?: string;
   defaultModel?: string;
+  /** Default provider operation timeout in milliseconds when caller/config omit timeoutMs. */
+  defaultTimeoutMs?: number;
   models?: string[];
   capabilities: VideoGenerationProviderCapabilities;
   isConfigured?: (ctx: VideoGenerationProviderConfiguredContext) => boolean;
@@ -171,7 +173,7 @@ export type VideoGenerationProvider = {
 };
 
 type AssertAssignable<_Left extends _Right, _Right> = true;
-const _videoGenerationSdkCompat: [
+const videoGenerationSdkCompat: [
   AssertAssignable<GeneratedVideoAsset, CoreGeneratedVideoAsset>,
   AssertAssignable<CoreGeneratedVideoAsset, GeneratedVideoAsset>,
   AssertAssignable<VideoGenerationAssetRole, CoreVideoGenerationAssetRole>,
@@ -213,7 +215,7 @@ const _videoGenerationSdkCompat: [
   AssertAssignable<VideoGenerationTransformCapabilities, CoreVideoGenerationTransformCapabilities>,
   AssertAssignable<CoreVideoGenerationTransformCapabilities, VideoGenerationTransformCapabilities>,
 ] = [] as never;
-void _videoGenerationSdkCompat;
+void videoGenerationSdkCompat;
 
 export {
   DASHSCOPE_WAN_VIDEO_CAPABILITIES,

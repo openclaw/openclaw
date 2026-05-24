@@ -31,6 +31,7 @@ export type QaToolCoverageBucket = QaRuntimeToolBucket;
 
 export type QaToolCoverageRow = {
   tool: string;
+  runtimeToolName?: string;
   bucket: QaToolCoverageBucket;
   expectedLayer: QaRuntimeToolExpectedLayer;
   capabilityLayer: QaRuntimeCapabilityLayer;
@@ -41,6 +42,8 @@ export type QaToolCoverageRow = {
   pi: QaToolCoverageStatus;
   codex: QaToolCoverageStatus;
   drift: QaToolCoverageDrift;
+  piToolCalls: number;
+  codexToolCalls: number;
   tracking?: string;
   codexDefaultImpact?: string;
   qaImpact?: string;
@@ -58,6 +61,7 @@ export type QaToolCoverageReport = {
   trackedTools: number;
   nativeWorkspaceTools: number;
   dynamicIntegrationTools: number;
+  searchableDynamicTools: number;
   optionalTools: number;
   passingTools: number;
   failingTools: number;
@@ -71,7 +75,7 @@ type ToolFixtureGroup = {
   scenarios: QaSeedScenarioWithSource[];
 };
 
-const PASSING_DRIFTS: ReadonlySet<QaToolCoverageDrift> = new Set(["none", "text-only", "not-run"]);
+const PASSING_DRIFTS: ReadonlySet<QaToolCoverageDrift> = new Set(["none", "text-only"]);
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
@@ -146,6 +150,12 @@ function readScenarioTracking(scenario: QaSeedScenarioWithSource): string | unde
   return issue;
 }
 
+function readScenarioRuntimeToolName(scenario: QaSeedScenarioWithSource): string | undefined {
+  const config = scenario.execution.config;
+  const toolCoverage = isRecord(config?.toolCoverage) ? config.toolCoverage : undefined;
+  return readString(toolCoverage?.actualTool) ?? readString(config?.toolName);
+}
+
 function summaryByScenarioId(
   summary: QaToolCoverageSuiteSummary | undefined,
 ): Map<string, RuntimeParityResult> {
@@ -173,6 +183,21 @@ function mergeScenarioResults(
   return failingResult;
 }
 
+function isPassingToolCoverageDrift(drift: QaToolCoverageDrift, evaluated: boolean) {
+  return PASSING_DRIFTS.has(drift) || (!evaluated && drift === "not-run");
+}
+
+function countRuntimeToolCalls(
+  result: RuntimeParityResult | undefined,
+  runtime: RuntimeId,
+  toolName: string | undefined,
+) {
+  if (!result || !toolName) {
+    return 0;
+  }
+  return result.cells[runtime].toolCalls.filter((call) => call.tool === toolName).length;
+}
+
 function buildRow(params: {
   group: ToolFixtureGroup;
   results: ReadonlyMap<string, RuntimeParityResult>;
@@ -184,8 +209,12 @@ function buildRow(params: {
     .find((entry) => entry.required);
   const fallbackMetadata = readScenarioRuntimeToolCoverageMetadata(params.group.scenarios[0]);
   const rowMetadata = metadata ?? fallbackMetadata;
+  const runtimeToolName = params.group.scenarios
+    .map(readScenarioRuntimeToolName)
+    .find(Boolean);
   return {
     tool: params.group.tool,
+    ...(runtimeToolName ? { runtimeToolName } : {}),
     bucket: rowMetadata.bucket,
     expectedLayer: rowMetadata.expectedLayer,
     capabilityLayer: rowMetadata.capabilityLayer,
@@ -196,6 +225,8 @@ function buildRow(params: {
     pi: result ? cellStatus(result.cells.pi) : "not-run",
     codex: result ? cellStatus(result.cells.codex) : "not-run",
     drift: result?.drift ?? "not-run",
+    piToolCalls: countRuntimeToolCalls(result, "pi", runtimeToolName),
+    codexToolCalls: countRuntimeToolCalls(result, "codex", runtimeToolName),
     ...(tracking ? { tracking } : {}),
     ...(rowMetadata.codexDefaultImpact
       ? { codexDefaultImpact: rowMetadata.codexDefaultImpact }
@@ -204,6 +235,28 @@ function buildRow(params: {
     ...(rowMetadata.action ? { action: rowMetadata.action } : {}),
     ...(result?.driftDetails ? { details: result.driftDetails } : {}),
   };
+}
+
+function coverageFailureForRow(row: QaToolCoverageRow): string | undefined {
+  if (!row.required || row.tracking) {
+    return undefined;
+  }
+  if (row.drift === "not-run") {
+    return `${row.tool} drift=not-run`;
+  }
+  if (row.pi !== "pass" || row.codex !== "pass") {
+    return `${row.tool} status pi=${row.pi} codex=${row.codex}`;
+  }
+  if (row.drift === "failure-mode") {
+    return `${row.tool} drift=failure-mode${row.details ? ` (${row.details})` : ""}`;
+  }
+  if (row.runtimeToolName && row.piToolCalls === 0) {
+    return `${row.tool} missing pi tool call ${row.runtimeToolName}`;
+  }
+  if (row.runtimeToolName && row.codexToolCalls === 0) {
+    return `${row.tool} missing codex tool call ${row.runtimeToolName}`;
+  }
+  return undefined;
 }
 
 export function buildQaToolCoverageReport(params: {
@@ -221,9 +274,7 @@ export function buildQaToolCoverageReport(params: {
   );
   const evaluated = Boolean(params.summary);
   const failures = evaluated
-    ? rows
-        .filter((row) => row.required && !row.tracking && !PASSING_DRIFTS.has(row.drift))
-        .map((row) => `${row.tool} drift=${row.drift}${row.details ? ` (${row.details})` : ""}`)
+    ? rows.map(coverageFailureForRow).filter((failure): failure is string => Boolean(failure))
     : [];
   return {
     runtimePair: normalizeRuntimePair(params.runtimePair ?? params.summary?.run?.runtimePair),
@@ -236,8 +287,20 @@ export function buildQaToolCoverageReport(params: {
     nativeWorkspaceTools: rows.filter((row) => row.bucket === "codex-native-workspace").length,
     dynamicIntegrationTools: rows.filter((row) => row.bucket === "openclaw-dynamic-integration")
       .length,
+    searchableDynamicTools: rows.filter(
+      (row) => row.capabilityLayer === "openclaw-dynamic-searchable",
+    ).length,
     optionalTools: rows.filter((row) => row.bucket === "optional-profile-or-plugin").length,
-    passingTools: evaluated ? rows.filter((row) => PASSING_DRIFTS.has(row.drift)).length : 0,
+    passingTools: evaluated
+      ? rows.filter(
+          (row) =>
+            row.required &&
+            !row.tracking &&
+            row.pi === "pass" &&
+            row.codex === "pass" &&
+            (isPassingToolCoverageDrift(row.drift, true) || !coverageFailureForRow(row)),
+        ).length
+      : 0,
     failingTools: failures.length,
     rows,
     pass: failures.length === 0,
@@ -257,6 +320,7 @@ export function renderQaToolCoverageMarkdownReport(report: QaToolCoverageReport)
     `- Tracked issue rows: ${report.trackedTools}`,
     `- Codex-native workspace tools: ${report.nativeWorkspaceTools}`,
     `- OpenClaw dynamic integration tools: ${report.dynamicIntegrationTools}`,
+    `- Searchable/deferred dynamic tools: ${report.searchableDynamicTools}`,
     `- Optional/profile/plugin-dependent tools: ${report.optionalTools}`,
     `- Passing tools: ${report.passingTools}`,
     `- Failing tools: ${report.failingTools}`,

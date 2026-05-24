@@ -13,7 +13,7 @@ export type GroupChatConfig = {
    * Controls how group/channel inbound events produce visible room replies. The
    * message-tool mode requires explicit message sends for visible room output;
    * final text stays private when the model misses the tool.
-   * Default: "message_tool".
+   * Default: "automatic".
    */
   visibleReplies?: "automatic" | "message_tool";
 };
@@ -79,9 +79,9 @@ export type StatusReactionsEmojiConfig = {
 export type StatusReactionsTimingConfig = {
   /** Debounce interval for intermediate states (ms). Default: 700. */
   debounceMs?: number;
-  /** Soft stall warning timeout (ms). Default: 25000. */
+  /** Soft stall warning timeout (ms). Default: 10000. */
   stallSoftMs?: number;
-  /** Hard stall warning timeout (ms). Default: 60000. */
+  /** Hard stall warning timeout (ms). Default: 30000. */
   stallHardMs?: number;
   /** How long to hold done emoji before cleanup (ms). Default: 1500. */
   doneHoldMs?: number;
@@ -106,9 +106,8 @@ export type MessagesConfig = {
    * group, and channel conversations. Group/channel events still default to
    * `groupChat.visibleReplies` when it is set.
    *
-   * Default: "automatic" for direct chats, "message_tool" for groups/channels.
-   * In group/channel rooms, "message_tool" keeps final text private unless the
-   * model sends visibly through the message tool.
+   * Default: "automatic". In group/channel rooms, "message_tool" keeps final
+   * text private unless the model sends visibly through the message tool.
    */
   visibleReplies?: "automatic" | "message_tool";
   /**
@@ -183,7 +182,7 @@ export type CommandsConfig = {
   restart?: boolean;
   /** Enforce access-group allowlists/policies for commands (default: true). */
   useAccessGroups?: boolean;
-  /** Explicit owner allowlist for owner-only tools/commands (channel-native IDs). */
+  /** Explicit owner allowlist for owner-scoped commands (channel-native IDs). */
   ownerAllowFrom?: Array<string | number>;
   /** How owner IDs are rendered in system prompts. */
   ownerDisplay?: CommandOwnerDisplay;

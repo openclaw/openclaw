@@ -32,6 +32,7 @@ import {
 } from "./providers/env.js";
 import { DEFAULT_QA_PROVIDER_MODE, getQaProvider } from "./providers/index.js";
 import {
+  assertQaLiveCodexAuthAvailable,
   QA_LIVE_ANTHROPIC_SETUP_TOKEN_ENV,
   QA_LIVE_SETUP_TOKEN_VALUE_ENV,
   stageQaLiveApiKeyProfiles,
@@ -44,6 +45,7 @@ import type { QaTransportAdapter } from "./qa-transport.js";
 
 export type { QaCliBackendAuthMode } from "./providers/env.js";
 const QA_GATEWAY_CHILD_STARTUP_MAX_ATTEMPTS = 5;
+const QA_GATEWAY_CHILD_RPC_STARTUP_TIMEOUT_MS = 30_000;
 const QA_GATEWAY_CHILD_RPC_RETRY_HEALTH_TIMEOUT_MS = 60_000;
 const QA_GATEWAY_CHILD_RESTART_BOUNDARY_TIMEOUT_MS = 90_000;
 const QA_GATEWAY_CHILD_BLOCKED_SECRET_ENV_VARS = Object.freeze([
@@ -217,7 +219,6 @@ export function buildQaRuntimeEnv(params: {
     OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1",
     OPENCLAW_SKIP_GMAIL_WATCHER: "1",
     OPENCLAW_SKIP_CANVAS_HOST: "1",
-    OPENCLAW_SKIP_STARTUP_MODEL_PREWARM: "1",
     OPENCLAW_NO_RESPAWN: "1",
     OPENCLAW_TEST_FAST: "1",
     OPENCLAW_QA_PARENT_PID: String(process.pid),
@@ -310,7 +311,7 @@ async function waitForQaGatewayRestartBoundary(params: {
   throw new Error(`qa gateway child did not reach restart boundary within ${timeoutMs}ms`);
 }
 
-export const __testing = {
+export const testing = {
   assertQaArtifactDirWithinRepo,
   buildQaRuntimeEnv,
   cleanupQaGatewayTempRoots,
@@ -322,6 +323,7 @@ export const __testing = {
   redactQaGatewayDebugText,
   readQaLiveProviderConfigOverrides,
   resolveQaGatewayChildProviderMode,
+  assertQaLiveCodexAuthAvailable,
   stageQaLiveApiKeyProfiles,
   stageQaLiveAnthropicSetupToken,
   stageQaMockAuthProfiles,
@@ -391,6 +393,57 @@ function isQaModelProviderConfig(value: unknown): value is ModelProviderConfig {
   return isRecord(value) && typeof value.baseUrl === "string" && Array.isArray(value.models);
 }
 
+function normalizeQaLiveProviderConfig(value: unknown): ModelProviderConfig | null {
+  if (isQaModelProviderConfig(value)) {
+    return value;
+  }
+  if (!isRecord(value) || !Object.hasOwn(value, "apiKey")) {
+    return null;
+  }
+  return {
+    ...value,
+    baseUrl: typeof value.baseUrl === "string" ? value.baseUrl : "",
+    models: Array.isArray(value.models) ? value.models : [],
+  } as ModelProviderConfig;
+}
+
+function isQaLiveOfficialOpenAiProviderConfig(value: unknown): boolean {
+  if (!isRecord(value)) {
+    return true;
+  }
+  const baseUrl = value.baseUrl;
+  if (typeof baseUrl !== "string" || !baseUrl.trim()) {
+    return true;
+  }
+  try {
+    const url = new URL(baseUrl.trim());
+    return (
+      url.protocol === "https:" &&
+      url.hostname.toLowerCase() === "api.openai.com" &&
+      (url.pathname === "" ||
+        url.pathname === "/" ||
+        url.pathname === "/v1" ||
+        url.pathname === "/v1/")
+    );
+  } catch {
+    return false;
+  }
+}
+
+function expandQaLiveProviderConfigIds(
+  providerIds: readonly string[],
+  providers: Record<string, unknown>,
+) {
+  const expanded = new Set(providerIds);
+  if (expanded.has("openai-codex")) {
+    expanded.add("openai");
+    expanded.add("openai-codex");
+  } else if (expanded.has("openai") && isQaLiveOfficialOpenAiProviderConfig(providers.openai)) {
+    expanded.add("openai-codex");
+  }
+  return [...expanded];
+}
+
 async function readQaLiveProviderConfigOverrides(params: {
   providerIds: readonly string[];
   env?: NodeJS.ProcessEnv;
@@ -416,9 +469,9 @@ async function readQaLiveProviderConfigOverrides(params: {
         : {}
       : {};
     const selected: Record<string, ModelProviderConfig> = {};
-    for (const providerId of providerIds) {
-      const providerConfig = providers[providerId];
-      if (isQaModelProviderConfig(providerConfig)) {
+    for (const providerId of expandQaLiveProviderConfigIds(providerIds, providers)) {
+      const providerConfig = normalizeQaLiveProviderConfig(providers[providerId]);
+      if (providerConfig) {
         selected[providerId] = providerConfig;
       }
     }
@@ -690,13 +743,18 @@ export async function startQaGatewayChild(params: {
           };
         }
       }
+      if (!env) {
+        throw new Error("qa gateway runtime env not initialized");
+      }
+      assertQaLiveCodexAuthAvailable({
+        cfg,
+        providerIds: liveProviderIds,
+        env,
+      });
       await fs.writeFile(configPath, `${JSON.stringify(cfg, null, 2)}\n`, {
         encoding: "utf8",
         mode: 0o600,
       });
-      if (!env) {
-        throw new Error("qa gateway runtime env not initialized");
-      }
 
       const attemptChild = spawn(nodeExecPath, buildGatewayArgs(), {
         cwd: gatewayCwd,
@@ -735,7 +793,13 @@ export async function startQaGatewayChild(params: {
           let lastRpcStartupError: unknown = null;
           for (let rpcAttempt = 1; rpcAttempt <= 4; rpcAttempt += 1) {
             try {
-              await attemptRpcClient.request("config.get", {}, { timeoutMs: 10_000 });
+              await attemptRpcClient.request(
+                "config.get",
+                {},
+                {
+                  timeoutMs: QA_GATEWAY_CHILD_RPC_STARTUP_TIMEOUT_MS,
+                },
+              );
               rpcReady = true;
               break;
             } catch (error) {
@@ -829,7 +893,13 @@ export async function startQaGatewayChild(params: {
           let lastRpcStartupError: unknown = null;
           for (let rpcAttempt = 1; rpcAttempt <= 4; rpcAttempt += 1) {
             try {
-              await nextRpcClient.request("config.get", {}, { timeoutMs: 10_000 });
+              await nextRpcClient.request(
+                "config.get",
+                {},
+                {
+                  timeoutMs: QA_GATEWAY_CHILD_RPC_STARTUP_TIMEOUT_MS,
+                },
+              );
               rpcReady = true;
               break;
             } catch (error) {
@@ -879,6 +949,12 @@ export async function startQaGatewayChild(params: {
       configPath,
       runtimeEnv: runningEnv,
       logs,
+      signalProcess(signal: NodeJS.Signals) {
+        if (!activeChild.pid) {
+          throw new Error("qa gateway child has no pid");
+        }
+        process.kill(activeChild.pid, signal);
+      },
       async restart(signal: NodeJS.Signals = "SIGUSR1") {
         if (!activeChild.pid) {
           throw new Error("qa gateway child has no pid");
@@ -992,3 +1068,4 @@ export async function startQaGatewayChild(params: {
     );
   }
 }
+export { testing as __testing };

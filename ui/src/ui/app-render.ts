@@ -3,8 +3,7 @@ import { styleMap } from "lit/directives/style-map.js";
 import { t } from "../i18n/index.ts";
 import { getSafeLocalStorage } from "../local-storage.ts";
 import {
-  CHAT_SESSIONS_ACTIVE_MINUTES,
-  CHAT_SESSIONS_REFRESH_LIMIT,
+  createChatSessionsLoadOverrides,
   hasAbortableSessionRun,
   refreshChat,
 } from "./app-chat.ts";
@@ -136,7 +135,6 @@ import { icons } from "./icons.ts";
 import { createLazyView, renderLazyView } from "./lazy-view.ts";
 import {
   iconForTab,
-  isTabInGroup,
   isSettingsTab,
   normalizeBasePath,
   pathForTab,
@@ -184,9 +182,9 @@ import { renderGatewayUrlConfirmation } from "./views/gateway-url-confirmation.t
 import { renderLoginGate } from "./views/login-gate.ts";
 import { renderOverview } from "./views/overview.ts";
 
-let _pendingUpdate: (() => void) | undefined;
+let pendingUpdate: (() => void) | undefined;
 
-const notifyLazyViewChanged = () => _pendingUpdate?.();
+const notifyLazyViewChanged = () => pendingUpdate?.();
 
 function renderSettingsSectionNav(state: AppViewState) {
   if (!isSettingsTab(state.tab)) {
@@ -898,7 +896,7 @@ export function renderApp(state: AppViewState) {
     typeof updatableState.requestUpdate === "function"
       ? () => updatableState.requestUpdate?.()
       : undefined;
-  _pendingUpdate = requestHostUpdate;
+  pendingUpdate = requestHostUpdate;
 
   // Gate: require successful gateway connection before showing the dashboard.
   // The gateway URL confirmation overlay is always rendered so URL-param flows still work.
@@ -912,6 +910,7 @@ export function renderApp(state: AppViewState) {
   const chatDisabledReason = state.connected ? null : t("chat.disconnected");
   const isChat = state.tab === "chat";
   const chatFocus = isChat && (state.settings.chatFocusMode || state.onboarding);
+  const chatHeaderHidden = isChat && (chatFocus || state.chatHeaderControlsHidden);
   const navDrawerOpen = state.navDrawerOpen && !chatFocus && !state.onboarding;
   const navCollapsed = state.settings.navCollapsed && !navDrawerOpen;
   const dashboardHeaderContext = resolveDashboardHeaderContext(state);
@@ -1680,7 +1679,7 @@ export function renderApp(state: AppViewState) {
           state.navDrawerOpen = false;
         }}
       ></button>
-      <header class="topbar">
+      <header class="topbar" ?inert=${chatFocus} aria-hidden=${chatFocus ? "true" : nothing}>
         <div class="topnav-shell">
           <button
             type="button"
@@ -1763,8 +1762,7 @@ export function renderApp(state: AppViewState) {
               <nav class="sidebar-nav">
                 ${TAB_GROUPS.map((group) => {
                   const isGroupCollapsed = state.settings.navGroupsCollapsed[group.label] ?? false;
-                  const hasActiveTab = isTabInGroup(group, state.tab);
-                  const showItems = navCollapsed || hasActiveTab || !isGroupCollapsed;
+                  const showItems = navCollapsed || !isGroupCollapsed;
 
                   return html`
                     <section class="nav-section ${!showItems ? "nav-section--collapsed" : ""}">
@@ -1874,11 +1872,11 @@ export function renderApp(state: AppViewState) {
         ${state.tab === "config"
           ? nothing
           : html`<section
-              class=${isChat && state.chatHeaderControlsHidden
+              class=${chatHeaderHidden
                 ? "content-header content-header--chat-hidden"
                 : "content-header"}
-              ?inert=${isChat && state.chatHeaderControlsHidden}
-              aria-hidden=${isChat && state.chatHeaderControlsHidden ? "true" : nothing}
+              ?inert=${chatHeaderHidden}
+              aria-hidden=${chatHeaderHidden ? "true" : nothing}
             >
               <div>
                 ${isChat
@@ -2713,6 +2711,7 @@ export function renderApp(state: AppViewState) {
                   realtimeTalkStatus: state.realtimeTalkStatus,
                   realtimeTalkDetail: state.realtimeTalkDetail,
                   realtimeTalkTranscript: state.realtimeTalkTranscript,
+                  realtimeTalkConversation: state.realtimeTalkConversation,
                   realtimeTalkOptionsOpen: state.realtimeTalkOptionsOpen,
                   realtimeTalkOptions: state.realtimeTalkOptions,
                   connected: state.connected,
@@ -2751,10 +2750,7 @@ export function renderApp(state: AppViewState) {
                     state.sessionsExpandedCheckpointKey = state.sessionKey;
                     state.setTab("sessions" as import("./navigation.ts").Tab);
                     void loadSessions(state, {
-                      activeMinutes: CHAT_SESSIONS_ACTIVE_MINUTES,
-                      limit: CHAT_SESSIONS_REFRESH_LIMIT,
-                      includeGlobal: true,
-                      includeUnknown: true,
+                      ...createChatSessionsLoadOverrides(state),
                     });
                   },
                   onToggleRealtimeTalk: () => state.toggleRealtimeTalk(),

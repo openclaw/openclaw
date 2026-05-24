@@ -50,7 +50,7 @@ import {
 import type { MatrixQaObservedEvent } from "../../substrate/events.js";
 import { MATRIX_QA_MEDIA_TYPE_COVERAGE_CASES } from "./scenario-media-fixtures.js";
 import {
-  __testing as scenarioTesting,
+  testing as scenarioTesting,
   MATRIX_QA_SCENARIOS,
   runMatrixQaScenario,
   type MatrixQaScenarioContext,
@@ -294,7 +294,6 @@ describe("matrix live qa scenarios", () => {
       "matrix-thread-root-preservation",
       "matrix-thread-nested-reply-shape",
       "matrix-thread-isolation",
-      "matrix-subagent-thread-spawn",
       "matrix-top-level-reply-shape",
       "matrix-room-thread-reply-override",
       "matrix-room-partial-streaming-preview",
@@ -720,7 +719,7 @@ describe("matrix live qa scenarios", () => {
       const channelApproval = buildApprovalEvent("$approval-both-channel", "!main:matrix-qa.test");
       const dmApproval = buildApprovalEvent(
         "$approval-both-dm",
-        "!driver-shared-dm:matrix-qa.test",
+        "!driver-runtime-dm:matrix-qa.test",
       );
       context.observedEvents.push(channelApproval, dmApproval, {
         eventId: "$approval-both-option",
@@ -757,7 +756,7 @@ describe("matrix live qa scenarios", () => {
     expect(artifacts.approvals?.[0]?.eventId).toBe("$approval-both-channel");
     expect(artifacts.approvals?.[0]?.roomId).toBe("!main:matrix-qa.test");
     expect(artifacts.approvals?.[1]?.eventId).toBe("$approval-both-dm");
-    expect(artifacts.approvals?.[1]?.roomId).toBe("!driver-shared-dm:matrix-qa.test");
+    expect(artifacts.approvals?.[1]?.roomId).toBe("!driver-runtime-dm:matrix-qa.test");
 
     expect(waitForRoomEvent).toHaveBeenCalledTimes(1);
     const finalGatewayCall = mockCall(gatewayCall, "gatewayCall", -1);
@@ -2694,7 +2693,7 @@ describe("matrix live qa scenarios", () => {
       }))
       .mockImplementationOnce(async () => {
         const childToken =
-          /task="Finish with exactly ([^".]+)\./.exec(
+          /"task":"Finish with exactly ([^".]+)\./.exec(
             mockMessageBody(sendTextMessage, "sendTextMessage"),
           )?.[1] ?? "MATRIX_QA_SUBAGENT_CHILD_FIXED";
         return {
@@ -2766,7 +2765,11 @@ describe("matrix live qa scenarios", () => {
     expect(artifacts.threadRootEventId).toBe("$subagent-thread-root");
 
     expectSentTextMessage(sendTextMessage, {
-      bodyIncludes: ["Call sessions_spawn now for this QA check", "runTimeoutSeconds=120"],
+      bodyIncludes: [
+        "call sessions_spawn with exactly this JSON input",
+        '"thread":true',
+        '"runTimeoutSeconds":120',
+      ],
       mentionUserIds: ["@sut:matrix-qa.test"],
       roomId: "!main:matrix-qa.test",
     });

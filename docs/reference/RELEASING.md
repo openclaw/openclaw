@@ -164,9 +164,11 @@ vYYYY.M.D-beta.N` from the matching `release/YYYY.M.D` branch. The helper runs
   for a package candidate while release work continues. Use `source=npm` for
   `openclaw@beta`, `openclaw@latest`, or an exact release version; `source=ref`
   to pack a trusted `package_ref` branch/tag/SHA with the current
-  `workflow_ref` harness; `source=url` for an HTTPS tarball with a required
-  SHA-256; or `source=artifact` for a tarball uploaded by another GitHub
-  Actions run. The workflow resolves the candidate to
+  `workflow_ref` harness; `source=url` for a public HTTPS tarball with a
+  required SHA-256 and strict public URL policy; `source=trusted-url` for a
+  named trusted-source policy using required `trusted_source_id` and SHA-256; or
+  `source=artifact` for a tarball uploaded by another GitHub Actions run. The
+  workflow resolves the candidate to
   `package-under-test`, reuses the Docker E2E release scheduler against that
   tarball, and can run Telegram QA against the same tarball with
   `telegram_mode=mock-openai` or `telegram_mode=live-frontier`. When the
@@ -185,15 +187,21 @@ vYYYY.M.D-beta.N` from the matching `release/YYYY.M.D` branch. The helper runs
   - `custom`: exact `docker_lanes` selection for a focused rerun
 - Run the manual `CI` workflow directly when you only need full normal CI
   coverage for the release candidate. Manual CI dispatches bypass changed
-  scoping and force the Linux Node shards, bundled-plugin shards, channel
-  contracts, Node 22 compatibility, `check`, `check-additional`, build smoke,
-  docs checks, Python skills, Windows, macOS, Android, and Control UI i18n
-  lanes.
+  scoping and force the Linux Node shards, bundled-plugin shards, plugin and
+  channel contract shards, Node 22 compatibility, `check-*`, `check-additional-*`,
+  built-artifact smoke checks, docs checks, Python skills, Windows, macOS,
+  Android, and Control UI i18n lanes.
   Example: `gh workflow run ci.yml --ref release/YYYY.M.D`
 - Run `pnpm qa:otel:smoke` when validating release telemetry. It exercises
-  QA-lab through a local OTLP/HTTP receiver and verifies the exported trace
-  span names, bounded attributes, and content/identifier redaction without
+  QA-lab through a local OTLP/HTTP receiver and verifies trace, metric, and log
+  export plus bounded trace attributes and content/identifier redaction without
   requiring Opik, Langfuse, or another external collector.
+- Run `pnpm qa:prometheus:smoke` when validating protected Prometheus scraping.
+  It exercises QA-lab, rejects unauthenticated scrapes, and verifies
+  release-critical metric families stay free of prompt content, raw identifiers,
+  auth tokens, and local paths.
+- Run `pnpm qa:observability:smoke` when you want the source-checkout
+  OpenTelemetry and Prometheus smoke lanes back to back.
 - Run `pnpm release:check` before every tagged release
 - `OpenClaw NPM Release` preflight generates dependency release evidence before
   it packs the npm tarball. The npm advisory vulnerability gate is
@@ -442,16 +450,19 @@ Focused `npm-telegram` reruns require `release_package_spec` or
 `npm_telegram_package_spec`; full/all runs with `release_profile=full` use the
 release-checks package artifact. Focused
 cross-OS reruns can add `cross_os_suite_filter=windows/packaged-upgrade` or
-another OS/suite filter. QA release-check failures are advisory; a QA-only
-failure does not block release validation.
+another OS/suite filter. QA release-check failures are advisory except the
+standard runtime tool coverage gate, which blocks release validation when
+required OpenClaw dynamic tools drift or disappear from the standard tier
+summary.
 
 ### Vitest
 
 The Vitest box is the manual `CI` child workflow. Manual CI intentionally
 bypasses changed scoping and forces the normal test graph for the release
-candidate: Linux Node shards, bundled-plugin shards, channel contracts, Node 22
-compatibility, `check`, `check-additional`, build smoke, docs checks, Python
-skills, Windows, macOS, Android, and Control UI i18n.
+candidate: Linux Node shards, bundled-plugin shards, plugin and channel contract
+shards, Node 22 compatibility, `check-*`, `check-additional-*`,
+built-artifact smoke checks, docs checks, Python skills, Windows, macOS,
+Android, and Control UI i18n.
 
 Use this box to answer "did the source tree pass the full normal test suite?"
 It is not the same as release-path product validation. Evidence to keep:
@@ -517,7 +528,9 @@ Release QA Lab coverage includes:
   baseline using the agentic parity pack
 - fast live Matrix QA profile using the `qa-live-shared` environment
 - live Telegram QA lane using Convex CI credential leases
-- `pnpm qa:otel:smoke` when release telemetry needs explicit local proof
+- `pnpm qa:otel:smoke`, `pnpm qa:prometheus:smoke`, or
+  `pnpm qa:observability:smoke` when release telemetry needs explicit local
+  proof
 
 Use this box to answer "does the release behave correctly in QA scenarios and
 live channel flows?" Keep the artifact URLs for parity, Matrix, and Telegram
@@ -539,7 +552,14 @@ Supported candidate sources:
   version
 - `source=ref`: pack a trusted `package_ref` branch, tag, or full commit SHA
   with the selected `workflow_ref` harness
-- `source=url`: download an HTTPS `.tgz` with required `package_sha256`
+- `source=url`: download a public HTTPS `.tgz` with required `package_sha256`;
+  URL credentials, non-default HTTPS ports, private/internal/special-use
+  hostnames or resolved addresses, and unsafe redirects are rejected
+- `source=trusted-url`: download an HTTPS `.tgz` with required
+  `package_sha256` and `trusted_source_id` from a named policy in
+  `.github/package-trusted-sources.json`; use this for maintainer-owned
+  enterprise mirrors or private package repositories instead of adding an
+  input-level private-network bypass to `source=url`
 - `source=artifact`: reuse a `.tgz` uploaded by another GitHub Actions run
 
 `OpenClaw Release Checks` runs Package Acceptance with `source=artifact`, the
@@ -552,9 +572,11 @@ tarball. Blocking release checks use the default latest published package
 baseline; `run_release_soak=true` or
 `release_profile=full` expands to every stable npm-published baseline from
 `2026.4.23` through `latest` plus reported-issue fixtures. Use
-Package Acceptance with `source=npm` for an already shipped candidate, or
-`source=ref`/`source=artifact` for a SHA-backed local npm tarball before
-publish. It is the GitHub-native
+Package Acceptance with `source=npm` for an already shipped candidate,
+`source=ref` for a SHA-backed local npm tarball before publish,
+`source=trusted-url` for a maintainer-owned enterprise/private mirror, or
+`source=artifact` for a prepared tarball uploaded by another GitHub Actions run.
+It is the GitHub-native
 replacement for most of the package/update coverage that previously required
 Parallels. Cross-OS release checks still matter for OS-specific onboarding,
 installer, and platform behavior, but package/update product validation should

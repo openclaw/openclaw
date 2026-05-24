@@ -103,24 +103,29 @@ export function registerBrowserFilesAndDownloadsCommands(
       (v: string) => Number(v),
     )
     .action(async (paths: string[], opts, cmd) => {
-      const { parent, profile } = resolveBrowserActionContext(cmd, parentOpts);
-      const normalizedPaths = await normalizeUploadPaths(paths);
-      const { timeoutMs, targetId } = resolveTimeoutAndTarget(opts);
-      await runBrowserPostAction({
-        parent,
-        profile,
-        path: "/hooks/file-chooser",
-        body: {
-          paths: normalizedPaths,
-          ref: normalizeOptionalString(opts.ref),
-          inputRef: normalizeOptionalString(opts.inputRef),
-          element: normalizeOptionalString(opts.element),
-          targetId,
-          timeoutMs,
-        },
-        timeoutMs: timeoutMs ?? DEFAULT_BROWSER_HOOK_TIMEOUT_MS,
-        describeSuccess: () => `upload armed for ${paths.length} file(s)`,
-      });
+      try {
+        const { parent, profile } = resolveBrowserActionContext(cmd, parentOpts);
+        const normalizedPaths = await normalizeUploadPaths(paths);
+        const { timeoutMs, targetId } = resolveTimeoutAndTarget(opts);
+        await runBrowserPostAction({
+          parent,
+          profile,
+          path: "/hooks/file-chooser",
+          body: {
+            paths: normalizedPaths,
+            ref: normalizeOptionalString(opts.ref),
+            inputRef: normalizeOptionalString(opts.inputRef),
+            element: normalizeOptionalString(opts.element),
+            targetId,
+            timeoutMs,
+          },
+          timeoutMs: timeoutMs ?? DEFAULT_BROWSER_HOOK_TIMEOUT_MS,
+          describeSuccess: () => `upload armed for ${paths.length} file(s)`,
+        });
+      } catch (err) {
+        defaultRuntime.error(danger(String(err)));
+        defaultRuntime.exit(1);
+      }
     });
 
   browser
@@ -175,6 +180,7 @@ export function registerBrowserFilesAndDownloadsCommands(
     .option("--accept", "Accept the dialog", false)
     .option("--dismiss", "Dismiss the dialog", false)
     .option("--prompt <text>", "Prompt response text")
+    .option("--dialog-id <id>", "Pending dialog id from snapshot/browser state")
     .option("--target-id <id>", "CDP target id (or unique prefix)")
     .option(
       "--timeout-ms <ms>",
@@ -202,6 +208,7 @@ export function registerBrowserFilesAndDownloadsCommands(
         body: {
           accept,
           promptText: normalizeOptionalString(opts.prompt),
+          dialogId: normalizeOptionalString(opts.dialogId),
           targetId,
           timeoutMs,
         },

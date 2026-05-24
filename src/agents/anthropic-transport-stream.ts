@@ -16,6 +16,7 @@ import {
   resolveAnthropicPayloadPolicy,
 } from "./anthropic-payload-policy.js";
 import { buildCopilotDynamicHeaders, hasCopilotVisionInput } from "./copilot-dynamic-headers.js";
+import { parseJsonObjectPreservingUnsafeIntegers } from "./json-unsafe-integers.js";
 import { resolveProviderEndpoint } from "./provider-attribution.js";
 import { buildGuardedModelFetch } from "./provider-transport-fetch.js";
 import { transformTransportMessages } from "./transport-message-transform.js";
@@ -411,7 +412,11 @@ function convertAnthropicMessages(
         if (reasoningContent.length > 0) {
           assistantMsg.reasoning_content = reasoningContent.join("\n");
         } else if (allowReasoningContentReplay) {
-          assistantMsg.reasoning_content = "";
+          blocks.unshift({
+            type: "thinking",
+            thinking: "",
+            signature: "reasoning_content",
+          });
         }
         params.push(assistantMsg);
       }
@@ -491,6 +496,10 @@ function convertAnthropicTools(tools: Context["tools"], isOAuthToken: boolean) {
     });
   }
   return converted;
+}
+
+function parseAnthropicToolCallArguments(inputJson: string): unknown {
+  return parseJsonObjectPreservingUnsafeIntegers(inputJson) ?? parseStreamingJson(inputJson);
 }
 
 function mapStopReason(reason: string | undefined): string {
@@ -788,8 +797,7 @@ function buildAnthropicParams(
     model: model.id,
     messages: ensureNonEmptyAnthropicMessages(
       convertAnthropicMessages(context.messages, model, isOAuthToken, {
-        allowReasoningContentReplay:
-          supportsReasoningContentReplay(model) && options?.thinkingEnabled === true,
+        allowReasoningContentReplay: supportsReasoningContentReplay(model),
       }),
     ),
     max_tokens: maxTokens,
@@ -946,8 +954,7 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
         );
         stream.push({ type: "start", partial: output as never });
         const blocks = output.content;
-        const allowReasoningContentReplay =
-          supportsReasoningContentReplay(model) && transportOptions.thinkingEnabled === true;
+        const allowReasoningContentReplay = supportsReasoningContentReplay(model);
         const reasoningContentThinkingBlocks = new Map<number, number>();
         const reasoningContentTextBlocks = new Map<number, number>();
         const eventIndexKey = (eventIndex: unknown) =>
@@ -1265,8 +1272,9 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
               delta?.type === "input_json_delta" &&
               typeof delta.partial_json === "string"
             ) {
-              block.partialJson += delta.partial_json;
-              block.arguments = parseStreamingJson(block.partialJson);
+              const partialJson = `${block.partialJson ?? ""}${delta.partial_json}`;
+              block.partialJson = partialJson;
+              block.arguments = parseAnthropicToolCallArguments(partialJson);
               stream.push({
                 type: "toolcall_delta",
                 contentIndex: index,
@@ -1314,7 +1322,7 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
             }
             if (block.type === "toolCall") {
               if (typeof block.partialJson === "string" && block.partialJson.length > 0) {
-                block.arguments = parseStreamingJson(block.partialJson);
+                block.arguments = parseAnthropicToolCallArguments(block.partialJson);
               }
               delete block.partialJson;
               stream.push({

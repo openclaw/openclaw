@@ -5,6 +5,7 @@ import {
   type AuthStorage,
   type ModelRegistry,
 } from "@earendil-works/pi-coding-agent";
+import type { ModelMediaInputConfig } from "../../config/types.models.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
 import {
@@ -363,6 +364,29 @@ function resolveProviderRequestTimeoutMs(timeoutSeconds: unknown): number | unde
   return Math.floor(timeoutSeconds) * 1000;
 }
 
+function mergeModelMediaInput(
+  base: ModelMediaInputConfig | undefined,
+  override: ModelMediaInputConfig | undefined,
+): ModelMediaInputConfig | undefined {
+  if (!base) {
+    return override;
+  }
+  if (!override) {
+    return base;
+  }
+  return {
+    ...base,
+    ...override,
+    image:
+      base.image || override.image
+        ? {
+            ...base.image,
+            ...override.image,
+          }
+        : undefined,
+  };
+}
+
 function matchesProviderScopedModelId(params: {
   candidateId?: string;
   provider: string;
@@ -445,6 +469,21 @@ function findConfiguredProviderModel(
       modelId,
     }),
   );
+}
+
+function hasConfiguredFallbackSurface(params: {
+  providerConfig: InlineProviderConfig | undefined;
+  configuredModel: ReturnType<typeof findConfiguredProviderModel>;
+  modelId: string;
+}): boolean {
+  if (params.modelId.startsWith("mock-")) {
+    return true;
+  }
+  if (params.configuredModel) {
+    return true;
+  }
+  const baseUrl = params.providerConfig?.baseUrl?.trim();
+  return Boolean(baseUrl);
 }
 
 function readModelParams(value: unknown): Record<string, unknown> | undefined {
@@ -545,11 +584,22 @@ function applyConfiguredProviderOverrides(params: {
       readModelParams(discoveredModel.params),
       defaultModelParams,
     );
+    const discoveredHeaders = sanitizeModelHeaders(discoveredModel.headers, {
+      stripSecretRefMarkers: true,
+    });
+    const requestConfig = resolveProviderRequestConfig({
+      provider: params.provider,
+      api: discoveredModel.api,
+      baseUrl: discoveredModel.baseUrl,
+      discoveredHeaders,
+      capability: "llm",
+      transport: "stream",
+    });
     return {
       ...discoveredModel,
       ...(resolvedParams ? { params: resolvedParams } : {}),
       // Discovered models originate from models.json and may contain persistence markers.
-      headers: sanitizeModelHeaders(discoveredModel.headers, { stripSecretRefMarkers: true }),
+      headers: requestConfig.headers,
     };
   }
   const configuredModel =
@@ -572,6 +622,18 @@ function applyConfiguredProviderOverrides(params: {
     stripSecretRefMarkers: true,
   });
   const providerParams = readModelParams(providerConfig.params);
+  const passthroughRequestConfig = resolveProviderRequestConfig({
+    provider: params.provider,
+    api: discoveredModel.api,
+    baseUrl: discoveredModel.baseUrl,
+    discoveredHeaders,
+    providerHeaders,
+    modelHeaders: configuredHeaders,
+    authHeader: providerConfig.authHeader,
+    request: providerRequest,
+    capability: "llm",
+    transport: "stream",
+  });
   if (
     !configuredModel &&
     !providerConfig.baseUrl &&
@@ -593,7 +655,7 @@ function applyConfiguredProviderOverrides(params: {
       ...discoveredModel,
       ...(resolvedParams ? { params: resolvedParams } : {}),
       ...(requestTimeoutMs !== undefined ? { requestTimeoutMs } : {}),
-      headers: discoveredHeaders,
+      headers: passthroughRequestConfig.headers,
     };
   }
   const resolvedParams = mergeModelParams(
@@ -617,7 +679,7 @@ function applyConfiguredProviderOverrides(params: {
       providerConfig.api ??
       discoveredModel.api ??
       resolveConfiguredProviderDefaultApi(providerConfig),
-    baseUrl: providerConfig.baseUrl ?? discoveredModel.baseUrl,
+    baseUrl: metadataOverrideModel?.baseUrl ?? providerConfig.baseUrl ?? discoveredModel.baseUrl,
     cfg: params.cfg,
     workspaceDir: params.workspaceDir,
     runtimeHooks: params.runtimeHooks,
@@ -664,6 +726,10 @@ function applyConfiguredProviderOverrides(params: {
         ...(requestTimeoutMs !== undefined ? { requestTimeoutMs } : {}),
         headers: requestConfig.headers,
         compat: metadataOverrideModel?.compat ?? discoveredModel.compat,
+        mediaInput: mergeModelMediaInput(
+          discoveredModel.mediaInput,
+          metadataOverrideModel?.mediaInput,
+        ),
       },
       providerRequest,
     ),
@@ -870,13 +936,16 @@ function resolveConfiguredFallbackModel(params: {
     providerParams: providerConfig?.params,
     configuredParams: configuredModel?.params,
   });
-  if (!providerConfig && !modelId.startsWith("mock-")) {
+  if (!hasConfiguredFallbackSurface({ providerConfig, configuredModel, modelId })) {
     return undefined;
   }
   const fallbackTransport = resolveProviderTransport({
     provider,
-    api: resolveConfiguredProviderDefaultApi(providerConfig) ?? "openai-responses",
-    baseUrl: providerConfig?.baseUrl,
+    api:
+      normalizeResolvedTransportApi(configuredModel?.api) ??
+      resolveConfiguredProviderDefaultApi(providerConfig) ??
+      "openai-responses",
+    baseUrl: configuredModel?.baseUrl ?? providerConfig?.baseUrl,
     cfg,
     workspaceDir,
     runtimeHooks,
@@ -930,6 +999,7 @@ function resolveConfiguredFallbackModel(params: {
           ...(resolvedParams ? { params: resolvedParams } : {}),
           ...(requestTimeoutMs !== undefined ? { requestTimeoutMs } : {}),
           headers: requestConfig.headers,
+          mediaInput: configuredModel?.mediaInput,
         } as Model<Api>,
         providerRequest,
       ),
@@ -1230,6 +1300,20 @@ export async function resolveModelAsync(
         model: overriddenStaticCatalogModel,
         runtimeHooks,
       });
+    }
+  }
+  if (model && options?.allowBundledStaticCatalogFallback) {
+    const staticCatalogModel = resolveBundledStaticCatalogModel({
+      provider: normalizedRef.provider,
+      modelId: normalizedRef.model,
+      cfg,
+      workspaceDir,
+    });
+    const staticMediaInput = (staticCatalogModel as ProviderRuntimeModel | undefined)?.mediaInput;
+    const resolvedMediaInput = (model as ProviderRuntimeModel).mediaInput;
+    const mediaInput = mergeModelMediaInput(staticMediaInput, resolvedMediaInput);
+    if (mediaInput) {
+      model = { ...(model as ProviderRuntimeModel), mediaInput } as typeof model;
     }
   }
   if (model) {

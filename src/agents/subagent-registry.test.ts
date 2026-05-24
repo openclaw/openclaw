@@ -84,6 +84,7 @@ const mocks = vi.hoisted(() => ({
   updateSessionStore: vi.fn(),
   emitSessionLifecycleEvent: vi.fn(),
   persistSubagentRunsToDisk: vi.fn(),
+  persistSubagentRunsToDiskOrThrow: vi.fn(),
   restoreSubagentRunsFromDisk: vi.fn(() => 0),
   getSubagentRunsSnapshotForRead: vi.fn(
     (runs: Map<string, import("./subagent-registry.types.js").SubagentRunRecord>) => new Map(runs),
@@ -130,6 +131,7 @@ vi.mock("../sessions/session-lifecycle-events.js", () => ({
 vi.mock("./subagent-registry-state.js", () => ({
   getSubagentRunsSnapshotForRead: mocks.getSubagentRunsSnapshotForRead,
   persistSubagentRunsToDisk: mocks.persistSubagentRunsToDisk,
+  persistSubagentRunsToDiskOrThrow: mocks.persistSubagentRunsToDiskOrThrow,
   restoreSubagentRunsFromDisk: mocks.restoreSubagentRunsFromDisk,
 }));
 
@@ -205,12 +207,13 @@ describe("subagent registry seam flow", () => {
       }
       return {};
     });
-    mod.__testing.setDepsForTest({
+    mod.testing.setDepsForTest({
       callGateway: mocks.callGateway,
       captureSubagentCompletionReply: mocks.captureSubagentCompletionReply,
       cleanupBrowserSessionsForLifecycleEnd: mocks.cleanupBrowserSessionsForLifecycleEnd,
       onAgentEvent: mocks.onAgentEvent,
       persistSubagentRunsToDisk: mocks.persistSubagentRunsToDisk,
+      persistSubagentRunsToDiskOrThrow: mocks.persistSubagentRunsToDiskOrThrow,
       resolveAgentTimeoutMs: mocks.resolveAgentTimeoutMs,
       restoreSubagentRunsFromDisk: mocks.restoreSubagentRunsFromDisk,
       runSubagentAnnounceFlow: mocks.runSubagentAnnounceFlow,
@@ -222,7 +225,7 @@ describe("subagent registry seam flow", () => {
   });
 
   afterEach(() => {
-    mod.__testing.setDepsForTest();
+    mod.testing.setDepsForTest();
     mod.resetSubagentRegistryForTests({ persist: false });
     vi.useRealTimers();
   });
@@ -249,8 +252,8 @@ describe("subagent registry seam flow", () => {
       expectsCompletionMessage: true,
       createdAt: now - 2,
       endedAt: now - 1,
-      pendingFinalDelivery: true,
-      frozenResultText: "child output",
+      completion: { required: true, resultText: "child output" },
+      delivery: { status: "pending" },
     });
     mod.addSubagentRunForTests({
       runId: "run-complete",
@@ -262,7 +265,7 @@ describe("subagent registry seam flow", () => {
       expectsCompletionMessage: true,
       createdAt: now - 4,
       endedAt: now - 3,
-      completionAnnouncedAt: now - 2,
+      delivery: { status: "delivered", announcedAt: now - 2, deliveredAt: now - 2 },
       cleanupCompletedAt: now - 1,
     });
 
@@ -548,6 +551,107 @@ describe("subagent registry seam flow", () => {
     expect(replacement?.endedAt).toBeUndefined();
   });
 
+  it("announces blocked agent.wait snapshots as errors instead of success", async () => {
+    mocks.callGateway.mockImplementation(async (request: { method?: string }) => {
+      if (request.method === "agent.wait") {
+        return {
+          status: "ok",
+          startedAt: 100,
+          endedAt: 250,
+          livenessState: "blocked",
+          error: "Context overflow: prompt too large for the model.",
+        };
+      }
+      return {};
+    });
+
+    mod.registerSubagentRun({
+      runId: "run-blocked-wait",
+      childSessionKey: "agent:main:subagent:child",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "overflow wait",
+      cleanup: "keep",
+      expectsCompletionMessage: true,
+    });
+
+    await waitForFast(() => {
+      expect(mocks.runSubagentAnnounceFlow).toHaveBeenCalledTimes(1);
+    });
+    const announceParams = expectRecordFields(
+      getMockCallArg(mocks.runSubagentAnnounceFlow, 0, 0, "blocked wait announce"),
+      { childRunId: "run-blocked-wait" },
+      "blocked wait announce params",
+    );
+    expectRecordFields(
+      announceParams.outcome,
+      {
+        status: "error",
+        error: "Context overflow: prompt too large for the model.",
+        startedAt: 100,
+        endedAt: 250,
+        elapsedMs: 150,
+      },
+      "blocked wait announce outcome",
+    );
+
+    const run = mod
+      .listSubagentRunsForRequester("agent:main:main")
+      .find((entry) => entry.runId === "run-blocked-wait");
+    expect(run?.endedReason).toBe("subagent-error");
+    expect(run?.outcome?.status).toBe("error");
+  });
+
+  it("announces aborted agent.wait snapshots as killed subagent failures", async () => {
+    mocks.callGateway.mockImplementation(async (request: { method?: string }) => {
+      if (request.method === "agent.wait") {
+        return {
+          status: "ok",
+          startedAt: 100,
+          endedAt: 250,
+          stopReason: "aborted",
+        };
+      }
+      return {};
+    });
+
+    mod.registerSubagentRun({
+      runId: "run-aborted-wait",
+      childSessionKey: "agent:main:subagent:child",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "aborted wait",
+      cleanup: "keep",
+      expectsCompletionMessage: true,
+    });
+
+    await waitForFast(() => {
+      expect(mocks.runSubagentAnnounceFlow).toHaveBeenCalledTimes(1);
+    });
+    const announceParams = expectRecordFields(
+      getMockCallArg(mocks.runSubagentAnnounceFlow, 0, 0, "aborted wait announce"),
+      { childRunId: "run-aborted-wait" },
+      "aborted wait announce params",
+    );
+    expectRecordFields(
+      announceParams.outcome,
+      {
+        status: "error",
+        error: "subagent run terminated",
+        startedAt: 100,
+        endedAt: 250,
+        elapsedMs: 150,
+      },
+      "aborted wait announce outcome",
+    );
+
+    const run = mod
+      .listSubagentRunsForRequester("agent:main:main")
+      .find((entry) => entry.runId === "run-aborted-wait");
+    expect(run?.endedReason).toBe("subagent-killed");
+    expect(run?.outcome?.status).toBe("error");
+  });
+
   it("reconciles stale active runs from persisted terminal session state during sweep", async () => {
     mocks.callGateway.mockImplementation(async (request: { method?: string }) => {
       if (request.method === "agent.wait") {
@@ -579,7 +683,7 @@ describe("subagent registry seam flow", () => {
     });
 
     vi.setSystemTime(new Date("2026-03-24T12:02:00Z"));
-    await mod.__testing.sweepOnceForTests();
+    await mod.testing.sweepOnceForTests();
 
     await waitForFast(() => {
       const announceParams = findRecordCallArg(
@@ -641,7 +745,7 @@ describe("subagent registry seam flow", () => {
     });
 
     vi.setSystemTime(new Date("2026-03-24T12:02:00Z"));
-    await mod.__testing.sweepOnceForTests();
+    await mod.testing.sweepOnceForTests();
 
     await waitForFast(() => {
       expectRecordFields(
@@ -732,6 +836,29 @@ describe("subagent registry seam flow", () => {
     expect(mocks.persistSubagentRunsToDisk).toHaveBeenCalledTimes(6);
   });
 
+  it("throws and removes the entry when the initial durable registry write fails", () => {
+    mocks.persistSubagentRunsToDiskOrThrow.mockImplementationOnce(() => {
+      throw new Error("disk full");
+    });
+
+    expect(() =>
+      mod.registerSubagentRun({
+        runId: "run-durability-required",
+        childSessionKey: "agent:main:subagent:child",
+        requesterSessionKey: "agent:main:main",
+        requesterDisplayKey: "main",
+        task: "must fail closed",
+        cleanup: "keep",
+      }),
+    ).toThrowError("disk full");
+
+    expect(
+      mod
+        .listSubagentRunsForRequester("agent:main:main")
+        .find((entry) => entry.runId === "run-durability-required"),
+    ).toBeUndefined();
+  });
+
   it("continues completion announce cleanup when lifecycle cleanup fails", async () => {
     mocks.cleanupBrowserSessionsForLifecycleEnd.mockRejectedValueOnce(
       new Error("browser cleanup unavailable"),
@@ -765,6 +892,183 @@ describe("subagent registry seam flow", () => {
       .listSubagentRunsForRequester("agent:main:main")
       .find((entry) => entry.runId === "run-cleanup-warning");
     expect(run?.cleanupCompletedAt).toBeTypeOf("number");
+  });
+
+  it("announces blocked lifecycle end events as errors instead of success", async () => {
+    mocks.callGateway.mockImplementation(async (request: { method?: string }) => {
+      if (request.method === "agent.wait") {
+        return { status: "pending" };
+      }
+      return {};
+    });
+
+    mod.registerSubagentRun({
+      runId: "run-blocked-end",
+      childSessionKey: "agent:main:subagent:child",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "overflow task",
+      cleanup: "keep",
+      expectsCompletionMessage: true,
+    });
+
+    const lastOnAgentEventCall = mocks.onAgentEvent.mock.calls[
+      mocks.onAgentEvent.mock.calls.length - 1
+    ] as unknown as
+      | [(evt: { runId: string; stream: string; data: Record<string, unknown> }) => void]
+      | undefined;
+    const lifecycleHandler = lastOnAgentEventCall?.[0];
+    expect(lifecycleHandler).toBeTypeOf("function");
+
+    lifecycleHandler?.({
+      runId: "run-blocked-end",
+      stream: "lifecycle",
+      data: {
+        phase: "start",
+        startedAt: 10,
+      },
+    });
+    lifecycleHandler?.({
+      runId: "run-blocked-end",
+      stream: "lifecycle",
+      data: {
+        phase: "end",
+        startedAt: 10,
+        endedAt: 20,
+        livenessState: "blocked",
+        error: "Context overflow: prompt too large for the model.",
+      },
+    });
+
+    await waitForFast(() => {
+      expect(mocks.runSubagentAnnounceFlow).toHaveBeenCalledTimes(1);
+    });
+    const announceParams = expectRecordFields(
+      getMockCallArg(mocks.runSubagentAnnounceFlow, 0, 0, "blocked announce"),
+      { childRunId: "run-blocked-end" },
+      "blocked announce params",
+    );
+    expectRecordFields(
+      announceParams.outcome,
+      {
+        status: "error",
+        error: "Context overflow: prompt too large for the model.",
+        startedAt: 10,
+        endedAt: 20,
+        elapsedMs: 10,
+      },
+      "blocked announce outcome",
+    );
+
+    const run = mod
+      .listSubagentRunsForRequester("agent:main:main")
+      .find((entry) => entry.runId === "run-blocked-end");
+    expect(run?.endedReason).toBe("subagent-error");
+    expect(run?.outcome?.status).toBe("error");
+  });
+
+  it("announces aborted lifecycle end events as killed subagent failures", async () => {
+    mocks.callGateway.mockImplementation(async (request: { method?: string }) => {
+      if (request.method === "agent.wait") {
+        return { status: "pending" };
+      }
+      return {};
+    });
+
+    mod.registerSubagentRun({
+      runId: "run-aborted-end",
+      childSessionKey: "agent:main:subagent:child",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "aborted task",
+      cleanup: "keep",
+      expectsCompletionMessage: true,
+    });
+
+    const lastOnAgentEventCall = mocks.onAgentEvent.mock.calls[
+      mocks.onAgentEvent.mock.calls.length - 1
+    ] as unknown as
+      | [(evt: { runId: string; stream: string; data: Record<string, unknown> }) => void]
+      | undefined;
+    const lifecycleHandler = lastOnAgentEventCall?.[0];
+    expect(lifecycleHandler).toBeTypeOf("function");
+
+    lifecycleHandler?.({
+      runId: "run-aborted-end",
+      stream: "lifecycle",
+      data: {
+        phase: "start",
+        startedAt: 10,
+      },
+    });
+    lifecycleHandler?.({
+      runId: "run-aborted-end",
+      stream: "lifecycle",
+      data: {
+        phase: "end",
+        startedAt: 10,
+        endedAt: 20,
+        aborted: true,
+        livenessState: "blocked",
+        stopReason: "aborted",
+      },
+    });
+
+    await waitForFast(() => {
+      expect(mocks.runSubagentAnnounceFlow).toHaveBeenCalledTimes(1);
+    });
+    const announceParams = expectRecordFields(
+      getMockCallArg(mocks.runSubagentAnnounceFlow, 0, 0, "aborted announce"),
+      { childRunId: "run-aborted-end" },
+      "aborted announce params",
+    );
+    expectRecordFields(
+      announceParams.outcome,
+      {
+        status: "error",
+        error: "subagent run terminated",
+        startedAt: 10,
+        endedAt: 20,
+        elapsedMs: 10,
+      },
+      "aborted announce outcome",
+    );
+
+    const run = mod
+      .listSubagentRunsForRequester("agent:main:main")
+      .find((entry) => entry.runId === "run-aborted-end");
+    expect(run?.endedReason).toBe("subagent-killed");
+    expect(run?.outcome?.status).toBe("error");
+
+    await vi.advanceTimersByTimeAsync(20_000);
+    expect(mocks.runSubagentAnnounceFlow).toHaveBeenCalledTimes(1);
+  });
+
+  it("preserves run-mode keep entries past SESSION_RUN_TTL_MS sweep", async () => {
+    mod.registerSubagentRun({
+      runId: "run-keep-survives-ttl",
+      childSessionKey: "agent:main:subagent:child",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "keep me past the session ttl",
+      cleanup: "keep",
+      spawnMode: "run",
+    });
+
+    await waitForFast(() => {
+      const run = mod
+        .listSubagentRunsForRequester("agent:main:main")
+        .find((entry) => entry.runId === "run-keep-survives-ttl");
+      expect(run?.cleanupCompletedAt).toBeTypeOf("number");
+    });
+
+    vi.setSystemTime(new Date(Date.parse("2026-03-24T12:00:00Z") + 10 * 60_000));
+    await mod.testing.sweepOnceForTests();
+
+    const run = mod
+      .listSubagentRunsForRequester("agent:main:main")
+      .find((entry) => entry.runId === "run-keep-survives-ttl");
+    expect(run?.runId).toBe("run-keep-survives-ttl");
   });
 
   it("retries completion hooks before resuming ended cleanup", async () => {
@@ -921,8 +1225,11 @@ describe("subagent registry seam flow", () => {
         startedAt: Date.parse("2026-03-24T11:59:00Z"),
         endedAt: Date.parse("2026-03-24T11:59:30Z"),
         expectsCompletionMessage: true,
-        announceRetryCount: 3,
-        lastAnnounceRetryAt: Date.parse("2026-03-24T11:59:40Z"),
+        delivery: {
+          status: "pending",
+          attemptCount: 3,
+          lastAttemptAt: Date.parse("2026-03-24T11:59:40Z"),
+        },
       });
       return 1;
     }) as never);
@@ -967,21 +1274,23 @@ describe("subagent registry seam flow", () => {
         endedReason: "subagent-complete",
         expectsCompletionMessage: true,
         outcome: { status: "ok" },
-        announceRetryCount: 3,
-        lastAnnounceRetryAt: Date.parse("2026-03-24T11:59:40Z"),
-        lastAnnounceDeliveryError: "gateway request timeout for agent",
-        frozenResultText: "child completed successfully",
-        pendingFinalDelivery: true,
-        pendingFinalDeliveryPayload: {
-          requesterSessionKey: "agent:main:main",
-          requesterDisplayKey: "main",
-          childSessionKey: "agent:main:subagent:child",
-          childRunId: "run-resume-keep",
-          task: "resume keep retry budget",
-          endedAt: Date.parse("2026-03-24T11:59:30Z"),
-          outcome: { status: "ok" },
-          expectsCompletionMessage: true,
-          frozenResultText: "child completed successfully",
+        completion: { required: true, resultText: "child completed successfully" },
+        delivery: {
+          status: "pending",
+          attemptCount: 3,
+          lastAttemptAt: Date.parse("2026-03-24T11:59:40Z"),
+          lastError: "gateway request timeout for agent",
+          payload: {
+            requesterSessionKey: "agent:main:main",
+            requesterDisplayKey: "main",
+            childSessionKey: "agent:main:subagent:child",
+            childRunId: "run-resume-keep",
+            task: "resume keep retry budget",
+            endedAt: Date.parse("2026-03-24T11:59:30Z"),
+            outcome: { status: "ok" },
+            expectsCompletionMessage: true,
+            frozenResultText: "child completed successfully",
+          },
         },
       });
       return 1;
@@ -996,12 +1305,14 @@ describe("subagent registry seam flow", () => {
       .listSubagentRunsForRequester("agent:main:main")
       .find((entry) => entry.runId === "run-resume-keep");
     expect(run).toMatchObject({
-      pendingFinalDelivery: true,
-      deliverySuspendedReason: "retry-limit",
+      delivery: {
+        status: "suspended",
+        suspendedReason: "retry-limit",
+      },
       cleanupHandled: false,
     });
     expect(run?.cleanupCompletedAt).toBeUndefined();
-    expect(run?.pendingFinalDeliveryPayload).toMatchObject({
+    expect(run?.delivery?.payload).toMatchObject({
       childRunId: "run-resume-keep",
       frozenResultText: "child completed successfully",
     });
@@ -1022,27 +1333,26 @@ describe("subagent registry seam flow", () => {
       endedAt,
       endedReason: "subagent-complete",
       outcome: { status: "ok" },
-      announceRetryCount: 3,
-      lastAnnounceRetryAt: endedAt + 1_000,
-      lastAnnounceDeliveryError: "gateway request timeout for agent",
-      pendingFinalDelivery: true,
-      pendingFinalDeliveryCreatedAt: endedAt + 1_000,
-      pendingFinalDeliveryLastAttemptAt: endedAt + 2_000,
-      pendingFinalDeliveryAttemptCount: 3,
-      pendingFinalDeliveryLastError: "gateway request timeout for agent",
-      pendingFinalDeliveryPayload: {
-        requesterSessionKey: "agent:main:main",
-        requesterDisplayKey: "main",
-        childSessionKey: "agent:main:subagent:reactivated",
-        childRunId: "run-suspended-old",
-        task: "reactivate suspended delivery",
-        endedAt,
-        outcome: { status: "ok" },
-        expectsCompletionMessage: true,
-        frozenResultText: "child completed successfully",
+      delivery: {
+        status: "suspended",
+        createdAt: endedAt + 1_000,
+        lastAttemptAt: endedAt + 2_000,
+        attemptCount: 3,
+        lastError: "gateway request timeout for agent",
+        payload: {
+          requesterSessionKey: "agent:main:main",
+          requesterDisplayKey: "main",
+          childSessionKey: "agent:main:subagent:reactivated",
+          childRunId: "run-suspended-old",
+          task: "reactivate suspended delivery",
+          endedAt,
+          outcome: { status: "ok" },
+          expectsCompletionMessage: true,
+          frozenResultText: "child completed successfully",
+        },
+        suspendedAt: endedAt + 3_000,
+        suspendedReason: "retry-limit",
       },
-      deliverySuspendedAt: endedAt + 3_000,
-      deliverySuspendedReason: "retry-limit",
     });
 
     expect(
@@ -1061,11 +1371,10 @@ describe("subagent registry seam flow", () => {
       cleanupHandled: false,
     });
     expect(replacement?.endedAt).toBeUndefined();
-    expect(replacement?.lastAnnounceDeliveryError).toBeUndefined();
-    expect(replacement?.pendingFinalDelivery).toBeUndefined();
-    expect(replacement?.pendingFinalDeliveryPayload).toBeUndefined();
-    expect(replacement?.deliverySuspendedAt).toBeUndefined();
-    expect(replacement?.deliverySuspendedReason).toBeUndefined();
+    expect(replacement?.delivery?.lastError).toBeUndefined();
+    expect(replacement?.delivery?.payload).toBeUndefined();
+    expect(replacement?.delivery?.suspendedAt).toBeUndefined();
+    expect(replacement?.delivery?.suspendedReason).toBeUndefined();
   });
 
   it("finalizes expired delete-mode parents when descendant cleanup retriggers deferred announce handling", async () => {
@@ -1463,7 +1772,7 @@ describe("subagent registry seam flow", () => {
       cleanupHandled: true,
     });
 
-    await mod.__testing.sweepOnceForTests();
+    await mod.testing.sweepOnceForTests();
 
     await waitForFast(() => {
       findRecordCallArg(
@@ -1522,42 +1831,45 @@ describe("subagent registry seam flow", () => {
       startedAt: now - 3 * 60 * 60_000,
       endedAt: now - 3 * 60 * 60_000,
       outcome: { status: "ok" },
-      pendingFinalDelivery: true,
-      pendingFinalDeliveryCreatedAt: now - 3 * 60 * 60_000,
-      pendingFinalDeliveryLastAttemptAt: now - 2 * 60 * 60_000 - 1,
-      pendingFinalDeliveryAttemptCount: 3,
-      pendingFinalDeliveryLastError: "gateway request timeout for agent",
-      pendingFinalDeliveryPayload: {
-        requesterSessionKey: "agent:main:cron:cron-1:run:parent",
-        requesterDisplayKey: "cron",
-        childSessionKey: "agent:main:subagent:suspended-cron",
-        childRunId: runId,
-        task: "cron suspended delivery",
-        endedAt: now - 3 * 60 * 60_000,
-        outcome: { status: "ok" },
-        expectsCompletionMessage: true,
-        frozenResultText: "large final payload",
+      delivery: {
+        status: "suspended",
+        createdAt: now - 3 * 60 * 60_000,
+        lastAttemptAt: now - 2 * 60 * 60_000 - 1,
+        attemptCount: 3,
+        lastError: "gateway request timeout for agent",
+        payload: {
+          requesterSessionKey: "agent:main:cron:cron-1:run:parent",
+          requesterDisplayKey: "cron",
+          childSessionKey: "agent:main:subagent:suspended-cron",
+          childRunId: runId,
+          task: "cron suspended delivery",
+          endedAt: now - 3 * 60 * 60_000,
+          outcome: { status: "ok" },
+          expectsCompletionMessage: true,
+          frozenResultText: "large final payload",
+        },
+        suspendedAt: now - 2 * 60 * 60_000 - 1,
+        suspendedReason: "retry-limit",
       },
-      deliverySuspendedAt: now - 2 * 60 * 60_000 - 1,
-      deliverySuspendedReason: "retry-limit",
-      lastAnnounceDeliveryError: "gateway request timeout for agent",
     });
 
-    await mod.__testing.sweepOnceForTests();
+    await mod.testing.sweepOnceForTests();
 
     const run = mod.getSubagentRunByChildSessionKey("agent:main:subagent:suspended-cron");
     expect(run).toMatchObject({
       runId,
-      pendingFinalDelivery: undefined,
-      pendingFinalDeliveryPayload: undefined,
-      deliverySuspendedAt: undefined,
-      deliverySuspendedReason: undefined,
-      deliveryDiscardedAt: now,
-      deliveryDiscardReason: "expired",
+      delivery: {
+        status: "discarded",
+        payload: undefined,
+        suspendedAt: undefined,
+        suspendedReason: undefined,
+        discardedAt: now,
+        discardReason: "expired",
+      },
       cleanupHandled: true,
       cleanupCompletedAt: now,
     });
-    expect(run?.deliveryDiscardedPayloadSummary).toEqual({
+    expect(run?.delivery?.discardedPayloadSummary).toEqual({
       requesterSessionKey: "agent:main:cron:cron-1:run:parent",
       childSessionKey: "agent:main:subagent:suspended-cron",
       childRunId: runId,
@@ -1593,41 +1905,44 @@ describe("subagent registry seam flow", () => {
         startedAt: now - 60_000,
         endedAt: now - 60_000,
         outcome: { status: "ok" },
-        pendingFinalDelivery: true,
-        pendingFinalDeliveryCreatedAt: now - 60_000,
-        pendingFinalDeliveryLastAttemptAt: now - 60_000 + i,
-        pendingFinalDeliveryAttemptCount: 3,
-        pendingFinalDeliveryLastError: "gateway request timeout for agent",
-        pendingFinalDeliveryPayload: {
-          requesterSessionKey: "agent:main:telegram:direct:418181497",
-          requesterDisplayKey: "telegram",
-          childSessionKey: `agent:main:subagent:suspended-pressure-${i}`,
-          childRunId: runId,
-          task: "interactive suspended delivery",
-          endedAt: now - 60_000,
-          outcome: { status: "ok" },
-          expectsCompletionMessage: true,
-          frozenResultText: "final payload",
+        delivery: {
+          status: "suspended",
+          createdAt: now - 60_000,
+          lastAttemptAt: now - 60_000 + i,
+          attemptCount: 3,
+          lastError: "gateway request timeout for agent",
+          payload: {
+            requesterSessionKey: "agent:main:telegram:direct:418181497",
+            requesterDisplayKey: "telegram",
+            childSessionKey: `agent:main:subagent:suspended-pressure-${i}`,
+            childRunId: runId,
+            task: "interactive suspended delivery",
+            endedAt: now - 60_000,
+            outcome: { status: "ok" },
+            expectsCompletionMessage: true,
+            frozenResultText: "final payload",
+          },
+          suspendedAt: now - 60_000 + i,
+          suspendedReason: "retry-limit",
         },
-        deliverySuspendedAt: now - 60_000 + i,
-        deliverySuspendedReason: "retry-limit",
       });
     }
 
-    await mod.__testing.sweepOnceForTests();
+    await mod.testing.sweepOnceForTests();
 
     const runs = Array.from({ length: 51 }, (_, i) =>
       mod.getSubagentRunByChildSessionKey(`agent:main:subagent:suspended-pressure-${i}`),
     );
-    const discarded = runs.filter((run) => run?.deliveryDiscardReason === "pressure-pruned");
+    const discarded = runs.filter((run) => run?.delivery?.discardReason === "pressure-pruned");
     const stillSuspended = runs.filter(
-      (run) => run?.pendingFinalDelivery === true && typeof run.deliverySuspendedAt === "number",
+      (run) =>
+        run?.delivery?.status === "suspended" && typeof run.delivery.suspendedAt === "number",
     );
     expect(discarded).toHaveLength(41);
     expect(stillSuspended).toHaveLength(10);
     expect(discarded[0]?.runId).toBe("run-suspended-pressure-0");
-    expect(runs[40]?.deliveryDiscardReason).toBe("pressure-pruned");
-    expect(runs[41]?.pendingFinalDelivery).toBe(true);
+    expect(runs[40]?.delivery?.discardReason).toBe("pressure-pruned");
+    expect(runs[41]?.delivery?.status).toBe("suspended");
     expect(mocks.persistSubagentRunsToDisk).toHaveBeenCalled();
   });
 });

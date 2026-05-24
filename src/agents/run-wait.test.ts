@@ -6,7 +6,7 @@ vi.mock("../gateway/call.js", () => ({
 }));
 
 import {
-  __testing,
+  testing,
   isRecoverableAgentWaitError,
   readLatestAssistantReply,
   readLatestAssistantReplySnapshot,
@@ -66,7 +66,7 @@ function expectAgentWaitRequest(
 describe("readLatestAssistantReply", () => {
   beforeEach(() => {
     callGatewayMock.mockClear();
-    __testing.setDepsForTest({
+    testing.setDepsForTest({
       callGateway: async (opts) => await callGatewayMock(opts),
     });
   });
@@ -184,7 +184,7 @@ describe("readLatestAssistantReply", () => {
 describe("waitForAgentRun", () => {
   beforeEach(() => {
     callGatewayMock.mockClear();
-    __testing.setDepsForTest({
+    testing.setDepsForTest({
       callGateway: async (opts) => await callGatewayMock(opts),
     });
   });
@@ -241,6 +241,8 @@ describe("waitForAgentRun", () => {
       status: "ok",
       startedAt: 100,
       endedAt: 200,
+      timeoutPhase: "provider",
+      providerStarted: true,
     });
 
     const result = await waitForAgentRun({ runId: "run-2", timeoutMs: 500 });
@@ -249,6 +251,47 @@ describe("waitForAgentRun", () => {
       status: "ok",
       startedAt: 100,
       endedAt: 200,
+      timeoutPhase: "provider",
+      providerStarted: true,
+    });
+  });
+
+  it("normalizes blocked ok waits to errors", async () => {
+    callGatewayMock.mockResolvedValue({
+      status: "ok",
+      startedAt: 100,
+      endedAt: 200,
+      livenessState: "blocked",
+      error: "Context overflow: prompt too large for the model.",
+    });
+
+    const result = await waitForAgentRun({ runId: "run-blocked", timeoutMs: 500 });
+
+    expect(result).toEqual({
+      status: "error",
+      error: "Context overflow: prompt too large for the model.",
+      startedAt: 100,
+      endedAt: 200,
+      livenessState: "blocked",
+    });
+  });
+
+  it("normalizes aborted stop reasons to errors even when gateway reports ok", async () => {
+    callGatewayMock.mockResolvedValue({
+      status: "ok",
+      startedAt: 100,
+      endedAt: 200,
+      stopReason: "aborted",
+    });
+
+    const result = await waitForAgentRun({ runId: "run-aborted", timeoutMs: 500 });
+
+    expect(result).toEqual({
+      status: "error",
+      error: "agent run aborted",
+      startedAt: 100,
+      endedAt: 200,
+      stopReason: "aborted",
     });
   });
 });
@@ -256,7 +299,7 @@ describe("waitForAgentRun", () => {
 describe("waitForAgentRunAndReadUpdatedAssistantReply", () => {
   beforeEach(() => {
     callGatewayMock.mockClear();
-    __testing.setDepsForTest({
+    testing.setDepsForTest({
       callGateway: async (opts) => await callGatewayMock(opts),
     });
   });
@@ -326,7 +369,7 @@ describe("waitForAgentRunAndReadUpdatedAssistantReply", () => {
 describe("waitForAgentRunsToDrain", () => {
   beforeEach(() => {
     callGatewayMock.mockClear();
-    __testing.setDepsForTest({
+    testing.setDepsForTest({
       callGateway: async (opts) => await callGatewayMock(opts),
     });
   });

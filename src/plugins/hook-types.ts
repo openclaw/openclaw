@@ -428,6 +428,9 @@ export type PluginHookReplyDispatchResult = {
   counts: Record<ReplyDispatchKind, number>;
 };
 
+export type PluginHookToolKind = "code_mode_exec";
+export type PluginHookToolInputKind = "javascript" | "typescript";
+
 export type PluginHookToolContext = {
   agentId?: string;
   sessionKey?: string;
@@ -435,6 +438,10 @@ export type PluginHookToolContext = {
   runId?: string;
   trace?: DiagnosticTraceContext;
   toolName: string;
+  /** Host-authoritative discriminator for tools that intentionally share names. */
+  toolKind?: PluginHookToolKind;
+  /** Host-authoritative input/runtime family for tools whose payloads need policy distinction. */
+  toolInputKind?: PluginHookToolInputKind;
   toolCallId?: string;
   getSessionExtension?: (namespace: string) => PluginJsonValue | undefined;
   channelId?: string;
@@ -443,6 +450,10 @@ export type PluginHookToolContext = {
 export type PluginHookBeforeToolCallEvent = {
   toolName: string;
   params: Record<string, unknown>;
+  /** Host-authoritative discriminator for tools that intentionally share names. */
+  toolKind?: PluginHookToolKind;
+  /** Host-authoritative input/runtime family for tools whose payloads need policy distinction. */
+  toolInputKind?: PluginHookToolInputKind;
   runId?: string;
   toolCallId?: string;
   /**
@@ -587,7 +598,17 @@ export type PluginHookSubagentSpawningEvent = PluginHookSubagentSpawnBase;
 export type PluginHookSubagentSpawningResult =
   | {
       status: "ok";
+      /**
+       * @deprecated Core now resolves thread-bound spawn routing from session
+       * bindings and channel route projection. Keep returning this only for
+       * compatibility with older OpenClaw runtimes.
+       */
       threadBindingReady?: boolean;
+      /**
+       * @deprecated Use channel `resolveDeliveryTarget` plus core
+       * `SessionBindingRecord` projection instead of returning an ad hoc
+       * delivery route from this hook.
+       */
       deliveryOrigin?: {
         channel?: string;
         accountId?: string;
@@ -614,6 +635,11 @@ export type PluginHookSubagentDeliveryTargetEvent = {
   expectsCompletionMessage: boolean;
 };
 
+/**
+ * @deprecated Core route projection resolves subagent delivery targets from
+ * `SessionBindingRecord` and channel `resolveDeliveryTarget`. This hook result
+ * remains for plugin compatibility during the transition.
+ */
 export type PluginHookSubagentDeliveryTargetResult = {
   origin?: {
     channel?: string;
@@ -871,7 +897,7 @@ export type PluginHookBeforeAgentRunEvent = {
   channelId?: string;
   /** Sender identity when available. */
   senderId?: string;
-  /** Whether the sender is an owner. */
+  /** Trusted sender identity bit when available. */
   senderIsOwner?: boolean;
 };
 

@@ -131,6 +131,8 @@ gh run view <run-id> --job <job-id> --log
 - Check exact SHA. Ignore newer unrelated `main` unless asked.
 - For cancelled same-branch runs, confirm whether a newer run superseded it.
 - Fetch full logs only for failed or relevant jobs.
+- Prefer `gh run view <run-id> --json jobs` over PR rollup while debugging; rollup can be stale/noisy.
+- For `prompt:snapshots:check` failures, treat Linux Node 24 as CI truth. If macOS passes but CI drifts, reproduce in a Linux Node 24 container or Testbox, commit that generated output, then rerun.
 
 ## GitHub Release Workflows
 

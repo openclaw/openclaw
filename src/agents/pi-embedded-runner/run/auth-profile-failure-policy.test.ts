@@ -32,7 +32,7 @@ describe("resolveAuthProfileFailureReason", () => {
     ).toBeNull();
   });
 
-  it("does not persist transport or server failures as auth-profile health", () => {
+  it("only persists timeouts when the provider request started", () => {
     expect(
       resolveAuthProfileFailureReason({
         failoverReason: "timeout",
@@ -40,7 +40,36 @@ describe("resolveAuthProfileFailureReason", () => {
     ).toBeNull();
     expect(
       resolveAuthProfileFailureReason({
+        failoverReason: "timeout",
+        providerStarted: false,
+      }),
+    ).toBeNull();
+    expect(
+      resolveAuthProfileFailureReason({
+        failoverReason: "timeout",
+        providerStarted: true,
+      }),
+    ).toBe("timeout");
+  });
+
+  it("does not persist transport or server failures as auth-profile health", () => {
+    expect(
+      resolveAuthProfileFailureReason({
         failoverReason: "server_error",
+      }),
+    ).toBeNull();
+  });
+
+  it("does not persist empty responses as auth-profile health", () => {
+    expect(
+      resolveAuthProfileFailureReason({
+        failoverReason: "empty_response",
+      }),
+    ).toBeNull();
+    expect(
+      resolveAuthProfileFailureReason({
+        failoverReason: "empty_response",
+        policy: "shared",
       }),
     ).toBeNull();
   });

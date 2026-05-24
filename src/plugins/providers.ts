@@ -76,6 +76,13 @@ function resolveProviderSurfacePluginIdSet(
   );
 }
 
+function resolvesRuntimeModelCatalogAugment(plugin: PluginManifestRecord): boolean {
+  return (
+    plugin.modelCatalog?.runtimeAugment === true ||
+    (plugin.origin !== "bundled" && plugin.providers.length > 0)
+  );
+}
+
 function resolveProviderOwnerPluginIds(
   params: ProviderRegistryLoadParams & {
     pluginIds: readonly string[];
@@ -263,7 +270,7 @@ export function resolveDiscoveredProviderPluginIds(params: {
 }): string[] {
   const { registry, onlyPluginIdSet } = loadScopedProviderRegistry(params);
   const providerSurfacePluginIds = resolveProviderSurfacePluginIdSet({ ...params, registry });
-  const shouldFilterUntrustedWorkspacePlugins = params.includeUntrustedWorkspacePlugins === false;
+  const shouldFilterUntrustedWorkspacePlugins = params.includeUntrustedWorkspacePlugins !== true;
   const shouldFilterBundledByAllowlist = params.config?.plugins?.bundledDiscovery !== "compat";
   const normalizedConfig = normalizePluginsConfigWithRegistry(params.config?.plugins, registry, {
     manifestRegistry: params.manifestRegistry,
@@ -328,7 +335,7 @@ export function resolveDiscoverableProviderOwnerPluginIds(params: {
   manifestRegistry?: PluginManifestRegistry;
   includeUntrustedWorkspacePlugins?: boolean;
 }): string[] {
-  const shouldFilterUntrustedWorkspacePlugins = params.includeUntrustedWorkspacePlugins === false;
+  const shouldFilterUntrustedWorkspacePlugins = params.includeUntrustedWorkspacePlugins !== true;
   const shouldFilterBundledByAllowlist = params.config?.plugins?.bundledDiscovery !== "compat";
   return resolveProviderOwnerPluginIds({
     ...params,
@@ -386,7 +393,7 @@ export function resolveActivatableProviderOwnerPluginIds(params: {
   });
 }
 
-export const __testing = {
+export const testing = {
   resolveActivatableProviderOwnerPluginIds,
   resolveEnabledProviderPluginIds,
   resolveExternalAuthProfileCompatFallbackPluginIds,
@@ -639,20 +646,37 @@ export function resolveCatalogHookProviderPluginIds(params: {
   env?: PluginLoadOptions["env"];
 }): string[] {
   const registry = loadProviderRegistrySnapshot(params);
-  const providerSurfacePluginIds = resolveProviderSurfacePluginIdSet({ ...params, registry });
+  const manifestRegistry = resolveManifestRegistry({
+    ...params,
+    registry,
+    includeDisabled: true,
+  });
+  const providerSurfacePluginIds = new Set(
+    manifestRegistry.plugins.flatMap((plugin) => (plugin.providers.length > 0 ? [plugin.id] : [])),
+  );
+  const runtimeAugmentPluginIds = new Set(
+    manifestRegistry.plugins.flatMap((plugin) =>
+      resolvesRuntimeModelCatalogAugment(plugin) ? [plugin.id] : [],
+    ),
+  );
   const normalizedConfig = normalizePluginsConfigWithRegistry(params.config?.plugins, registry);
   const enabledProviderPluginIds = listRegistryPluginIds(
     registry,
     (plugin) =>
       providerSurfacePluginIds.has(plugin.pluginId) &&
+      runtimeAugmentPluginIds.has(plugin.pluginId) &&
       resolveEffectiveRegistryPluginActivation({
         plugin,
         normalizedConfig,
         rootConfig: params.config,
       }).activated,
   );
-  const bundledCompatPluginIds = resolveBundledProviderCompatPluginIds(params);
+  const bundledCompatPluginIds = resolveBundledProviderCompatPluginIds({
+    ...params,
+    manifestRegistry,
+  }).filter((pluginId) => runtimeAugmentPluginIds.has(pluginId));
   return [...new Set([...enabledProviderPluginIds, ...bundledCompatPluginIds])].toSorted(
     (left, right) => left.localeCompare(right),
   );
 }
+export { testing as __testing };

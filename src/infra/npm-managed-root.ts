@@ -388,6 +388,10 @@ function readLockPackageName(location: string, value: unknown): string | undefin
   return undefined;
 }
 
+function isTopLevelLockPackageLocation(location: string): boolean {
+  return location.split("/").filter((part) => part === "node_modules").length === 1;
+}
+
 function findLockPackageVersion(params: {
   lockfile: ManagedNpmRootLockfile;
   packageName: string;
@@ -441,6 +445,9 @@ function collectNpmLockPeerDependencyPins(params: {
       }
       const version = findLockPackageVersion({ lockfile: params.lockfile, packageName: peerName });
       if (!version && isOptionalPeerDependency(value, peerName)) {
+        continue;
+      }
+      if (!version && !isTopLevelLockPackageLocation(location)) {
         continue;
       }
       pins.set(peerName, version ?? peerRange);
@@ -599,6 +606,7 @@ async function collectNpmResolvedManagedNpmRootPeerDependencyPins(params: {
       timeoutMs: Math.max(params.timeoutMs ?? 300_000, 300_000),
       env: createSafeNpmInstallEnv(process.env, {
         legacyPeerDeps: false,
+        npmConfigCwd: tempRoot,
         packageLock: true,
         quiet: true,
       }),
@@ -614,6 +622,7 @@ async function collectNpmResolvedManagedNpmRootPeerDependencyPins(params: {
           ...npmPlanOptions,
           env: createSafeNpmInstallEnv(process.env, {
             legacyPeerDeps: true,
+            npmConfigCwd: tempRoot,
             packageLock: true,
             quiet: true,
           }),
@@ -815,6 +824,7 @@ export async function repairManagedNpmRootOpenClawPeer(params: {
       timeoutMs: Math.max(params.timeoutMs ?? 300_000, 300_000),
       env: createSafeNpmInstallEnv(process.env, {
         legacyPeerDeps: true,
+        npmConfigCwd: params.npmRoot,
         packageLock: true,
         quiet: true,
       }),

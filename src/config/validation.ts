@@ -18,7 +18,7 @@ import {
   resolveOfficialExternalPluginInstall,
 } from "../plugins/official-external-plugin-catalog.js";
 import {
-  loadPluginMetadataSnapshot,
+  resolvePluginMetadataSnapshot,
   type PluginMetadataSnapshot,
 } from "../plugins/plugin-metadata-snapshot.js";
 import { validateJsonSchemaValue } from "../plugins/schema-validator.js";
@@ -43,6 +43,7 @@ import { materializeRuntimeConfig } from "./materialize.js";
 import { collectConfiguredModelRefs } from "./model-refs.js";
 import type { OpenClawConfig, ConfigValidationIssue } from "./types.js";
 import { coerceSecretRef } from "./types.secrets.js";
+import { isBuiltInModelProviderOverlayId } from "./zod-schema.core.js";
 import { OpenClawSchema } from "./zod-schema.js";
 
 const LEGACY_REMOVED_PLUGIN_IDS = new Set(["google-antigravity-auth", "google-gemini-cli-auth"]);
@@ -50,6 +51,12 @@ const BLOCKED_PLUGIN_CANDIDATE_PREFIX = "blocked plugin candidate:";
 
 type UnknownIssueRecord = Record<string, unknown>;
 type ConfigPathSegment = string | number;
+type ExplicitPluginReferences = {
+  entries: Set<string>;
+  allow: Set<string>;
+  deny: Set<string>;
+  slots: Map<string, string>;
+};
 type AllowedValuesCollection = {
   values: unknown[];
   incomplete: boolean;
@@ -66,6 +73,38 @@ function stripDeprecatedValidationKeys(raw: unknown): unknown {
   return {
     ...raw,
     commands,
+  };
+}
+
+function materializeBundledModelProviderOverlays(config: OpenClawConfig): OpenClawConfig {
+  const providers = config.models?.providers;
+  if (!providers) {
+    return config;
+  }
+  let nextProviders: typeof providers | undefined;
+  for (const [providerId, providerConfig] of Object.entries(providers)) {
+    if (
+      !isBuiltInModelProviderOverlayId(providerId) ||
+      (providerConfig.baseUrl && Array.isArray(providerConfig.models))
+    ) {
+      continue;
+    }
+    nextProviders ??= { ...providers };
+    nextProviders[providerId] = {
+      ...providerConfig,
+      baseUrl: providerConfig.baseUrl ?? "",
+      models: providerConfig.models ?? [],
+    };
+  }
+  if (!nextProviders) {
+    return config;
+  }
+  return {
+    ...config,
+    models: {
+      ...config.models,
+      providers: nextProviders,
+    },
   };
 }
 
@@ -225,6 +264,9 @@ function collectAllowedValuesFromBundledChannelSchemaPath(
   return collectAllowedValuesFromJsonSchemaNode(targetNode);
 }
 
+function formatRawChannelConfigIssueMessage(message: string): string {
+  return `invalid config: ${message}`;
+}
 function collectRawBundledChannelConfigIssues(config: OpenClawConfig): ConfigValidationIssue[] {
   if (!config.channels || !isRecord(config.channels)) {
     return [];
@@ -247,10 +289,11 @@ function collectRawBundledChannelConfigIssues(config: OpenClawConfig): ConfigVal
       const message = error.additionalProperty
         ? `${error.message}: "${error.additionalProperty}"`
         : error.message;
+      const path =
+        error.path === "<root>" ? `channels.${channelId}` : `channels.${channelId}.${error.path}`;
       issues.push({
-        path:
-          error.path === "<root>" ? `channels.${channelId}` : `channels.${channelId}.${error.path}`,
-        message: `invalid config: ${message}`,
+        path,
+        message: formatRawChannelConfigIssueMessage(message),
         allowedValues: error.allowedValues,
         allowedValuesHiddenCount: error.allowedValuesHiddenCount,
       });
@@ -272,6 +315,31 @@ function collectAllowedValuesFromCustomIssue(record: UnknownIssueRecord): Allowe
   // config metadata here so we can recover enum hints without touching runtime
   // plugin registries during validation formatting.
   return collectAllowedValuesFromBundledChannelSchemaPath(toConfigPathSegments(record.path));
+}
+
+function appendNumericBoundHint(message: string, record: UnknownIssueRecord): string {
+  const origin = typeof record.origin === "string" ? record.origin : "";
+  if (origin !== "number") {
+    return message;
+  }
+  const inclusive = record.inclusive === true;
+  if (record.code === "too_big") {
+    const maximum = typeof record.maximum === "number" ? record.maximum : undefined;
+    if (maximum !== undefined) {
+      return inclusive
+        ? `${message} (maximum: ${maximum})`
+        : `${message} (must be less than ${maximum})`;
+    }
+  }
+  if (record.code === "too_small") {
+    const minimum = typeof record.minimum === "number" ? record.minimum : undefined;
+    if (minimum !== undefined) {
+      return inclusive
+        ? `${message} (minimum: ${minimum})`
+        : `${message} (must be greater than ${minimum})`;
+    }
+  }
+  return message;
 }
 
 function collectAllowedValuesFromIssue(issue: unknown): AllowedValuesCollection {
@@ -538,6 +606,11 @@ function mapZodIssueToConfigIssue(issue: unknown): ConfigValidationIssue {
   const path = formatConfigPath(toConfigPathSegments(record?.path));
   const message = typeof record?.message === "string" ? record.message : "Invalid input";
 
+  // Numeric ceiling/floor hints (too_big / too_small with numeric origin).
+  // Append a parenthesized bound alongside Zod's native message,
+  // matching the clarity that enum/union rejections get via (allowed: …).
+  const enrichedMessage = record ? appendNumericBoundHint(message, record) : message;
+
   const allowedValuesSummary = summarizeAllowedValues(collectAllowedValuesFromUnknownIssue(issue));
 
   // Bindings use a plain union because legacy route bindings may omit `type`.
@@ -556,18 +629,93 @@ function mapZodIssueToConfigIssue(issue: unknown): ConfigValidationIssue {
   }
 
   if (!allowedValuesSummary) {
-    return { path, message };
+    return { path, message: enrichedMessage };
   }
 
   return {
     path,
-    message: appendAllowedValuesHint(message, allowedValuesSummary),
+    message: appendAllowedValuesHint(enrichedMessage, allowedValuesSummary),
     allowedValues: allowedValuesSummary.values,
     allowedValuesHiddenCount: allowedValuesSummary.hiddenCount,
   };
 }
 
-export const __testing = {
+function collectExplicitPluginReferences(raw: unknown): ExplicitPluginReferences {
+  const references: ExplicitPluginReferences = {
+    entries: new Set(),
+    allow: new Set(),
+    deny: new Set(),
+    slots: new Map(),
+  };
+  if (!isRecord(raw) || !isRecord(raw.plugins)) {
+    return references;
+  }
+  const { plugins } = raw;
+  if (isRecord(plugins.entries)) {
+    for (const pluginId of Object.keys(plugins.entries)) {
+      const normalized = normalizePluginId(pluginId);
+      if (normalized) {
+        references.entries.add(normalized);
+      }
+    }
+  }
+  for (const [key, target] of [
+    ["allow", references.allow],
+    ["deny", references.deny],
+  ] as const) {
+    const value = plugins[key];
+    if (!Array.isArray(value)) {
+      continue;
+    }
+    for (const entry of value) {
+      if (typeof entry !== "string") {
+        continue;
+      }
+      const normalized = normalizePluginId(entry);
+      if (normalized) {
+        target.add(normalized);
+      }
+    }
+  }
+  if (isRecord(plugins.slots)) {
+    for (const [slotId, pluginId] of Object.entries(plugins.slots)) {
+      if (typeof pluginId !== "string") {
+        continue;
+      }
+      const normalized = normalizePluginId(pluginId);
+      if (normalized && normalized !== "none") {
+        references.slots.set(normalized, slotId);
+      }
+    }
+  }
+  return references;
+}
+
+function resolveExplicitPluginReferencePath(
+  references: ExplicitPluginReferences,
+  pluginId: string,
+): string | undefined {
+  const normalized = normalizePluginId(pluginId);
+  if (!normalized) {
+    return undefined;
+  }
+  if (references.entries.has(normalized)) {
+    return `plugins.entries.${normalized}`;
+  }
+  if (references.allow.has(normalized)) {
+    return "plugins.allow";
+  }
+  if (references.deny.has(normalized)) {
+    return "plugins.deny";
+  }
+  const slotId = references.slots.get(normalized);
+  if (slotId) {
+    return `plugins.slots.${slotId}`;
+  }
+  return undefined;
+}
+
+export const testing = {
   mapZodIssueToConfigIssue,
 };
 
@@ -680,7 +828,7 @@ export function validateConfigObjectRaw(
       issues: mergeUnsupportedMutableSecretRefIssues(policyIssues, schemaIssues),
     };
   }
-  const validatedConfig = validated.data as OpenClawConfig;
+  const validatedConfig = materializeBundledModelProviderOverlays(validated.data as OpenClawConfig);
   const channelIssues =
     policyIssues.length > 0 || opts?.validateBundledChannels
       ? collectRawBundledChannelConfigIssues(validatedConfig)
@@ -830,6 +978,7 @@ function validateConfigObjectWithPluginsBase(
   const warnings: ConfigValidationIssue[] = [];
   const hasExplicitPluginsConfig =
     isRecord(raw) && Object.prototype.hasOwnProperty.call(raw, "plugins");
+  const explicitPluginReferences = collectExplicitPluginReferences(raw);
 
   const resolvePluginConfigIssuePath = (pluginId: string, errorPath: string): string => {
     const base = `plugins.entries.${pluginId}.config`;
@@ -863,13 +1012,16 @@ function validateConfigObjectWithPluginsBase(
     }
     registryDiagnosticsPushed = true;
     for (const diag of registry.diagnostics) {
-      let path = diag.pluginId ? `plugins.entries.${diag.pluginId}` : "plugins";
+      const explicitPath = diag.pluginId
+        ? resolveExplicitPluginReferencePath(explicitPluginReferences, diag.pluginId)
+        : undefined;
+      let path = explicitPath ?? (diag.pluginId ? "plugins" : "plugins");
       if (!diag.pluginId && diag.message.includes("plugin path not found")) {
         path = "plugins.load.paths";
       }
       const pluginLabel = diag.pluginId ? `plugin ${diag.pluginId}` : "plugin";
       const message = `${pluginLabel}: ${diag.message}`;
-      if (diag.level === "error") {
+      if (diag.level === "error" && (explicitPath || !diag.pluginId)) {
         issues.push({ path, message });
       } else {
         warnings.push({ path, message });
@@ -884,10 +1036,11 @@ function validateConfigObjectWithPluginsBase(
       return registryInfo;
     }
     const workspaceDir = resolveAgentWorkspaceDir(config, resolveDefaultAgentId(config));
-    const registry = loadPluginMetadataSnapshot({
+    const registry = resolvePluginMetadataSnapshot({
       config,
       workspaceDir: workspaceDir ?? undefined,
       env: opts.env ?? process.env,
+      allowWorkspaceScopedCurrent: true,
     }).manifestRegistry;
     registryInfo = { registry };
     return registryInfo;
@@ -1316,10 +1469,11 @@ function validateConfigObjectWithPluginsBase(
       });
       if (!result.ok) {
         for (const error of result.errors) {
+          const path =
+            error.path === "<root>" ? `channels.${trimmed}` : `channels.${trimmed}.${error.path}`;
           issues.push({
-            path:
-              error.path === "<root>" ? `channels.${trimmed}` : `channels.${trimmed}.${error.path}`,
-            message: `invalid config: ${error.message}`,
+            path,
+            message: formatRawChannelConfigIssueMessage(error.message),
             allowedValues: error.allowedValues,
             allowedValuesHiddenCount: error.allowedValuesHiddenCount,
           });
@@ -1482,6 +1636,7 @@ function validateConfigObjectWithPluginsBase(
       blockedDiagnosticSourceMatchesPluginId(diagnostic, pluginId),
     );
   };
+  const missingOfficialPluginWarningIds = new Set<string>();
   const pushMissingPluginIssue = (
     path: string,
     pluginId: string,
@@ -1509,6 +1664,13 @@ function validateConfigObjectWithPluginsBase(
       const externalInstallWarning =
         opts.missingMessage ?? formatMissingOfficialExternalPluginWarning(pluginId);
       if (externalInstallWarning) {
+        const normalizedPluginId = normalizePluginId(pluginId);
+        if (!opts.missingMessage && normalizedPluginId) {
+          if (missingOfficialPluginWarningIds.has(normalizedPluginId)) {
+            return;
+          }
+          missingOfficialPluginWarningIds.add(normalizedPluginId);
+        }
         warnings.push({
           path,
           message: externalInstallWarning,
@@ -1689,3 +1851,4 @@ function validateConfigObjectWithPluginsBase(
 
   return { ok: true, config: mutatedConfig, warnings };
 }
+export { testing as __testing };

@@ -1584,7 +1584,7 @@ function buildPromotionSection(
     const snippet = candidate.snippet || "(no snippet captured)";
     lines.push(`<!-- ${PROMOTION_MARKER_PREFIX}${candidate.key} -->`);
     lines.push(
-      `- ${snippet} [score=${candidate.score.toFixed(3)} recalls=${candidate.recallCount} avg=${candidate.avgScore.toFixed(3)} source=${source}]`,
+      `- ${snippet.replace(/^- +/, "")} [score=${candidate.score.toFixed(3)} recalls=${candidate.recallCount} avg=${candidate.avgScore.toFixed(3)} source=${source}]`,
     );
   }
 
@@ -2057,7 +2057,7 @@ export async function removeGroundedShortTermCandidates(params: {
   return { removed, storePath };
 }
 
-export const __testing = {
+export const testing = {
   parseLockOwnerPid,
   canStealStaleLock,
   isProcessLikelyAlive,
@@ -2069,3 +2069,4 @@ export const __testing = {
   isContaminatedDreamingSnippet,
   lineRangeOverlapsDreamingFence,
 };
+export { testing as __testing };

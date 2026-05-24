@@ -12,6 +12,7 @@ import {
   resetGlobalHookRunner,
 } from "../plugins/hook-runner-global.js";
 import { createMockPluginRegistry } from "../plugins/hooks.test-helpers.js";
+import type { AuthProfileStore } from "./auth-profiles/types.js";
 import "./test-helpers/fast-bash-tools.js";
 import "./test-helpers/fast-coding-tools.js";
 import "./test-helpers/fast-openclaw-tools.js";
@@ -156,7 +157,7 @@ describe("createOpenClawCodingTools", () => {
   });
 
   it("exposes gateway config and restart actions to owner sessions", () => {
-    const tools = createOpenClawCodingTools({ config: testConfig, senderIsOwner: true });
+    const tools = createOpenClawCodingTools({ config: testConfig });
     const gateway = requireTool(tools, "gateway");
 
     const parameters = gateway.parameters as {
@@ -312,51 +313,30 @@ describe("createOpenClawCodingTools", () => {
     expect(names.has("exec")).toBe(false);
   });
 
-  it("exposes only an explicitly authorized owner-only tool to non-owner sessions", () => {
+  it("exposes control-plane tools to configured sessions", () => {
     const tools = createOpenClawCodingTools({
       config: testConfig,
-      senderIsOwner: false,
-      ownerOnlyToolAllowlist: ["cron"],
     });
     const names = new Set(tools.map((tool) => tool.name));
 
     expect(names.has("cron")).toBe(true);
-    expect(names.has("gateway")).toBe(false);
-    expect(names.has("nodes")).toBe(false);
+    expect(names.has("gateway")).toBe(true);
+    expect(names.has("nodes")).toBe(true);
   });
 
-  it("resolves isolated cron runtime toolsAllow after the cron owner-only grant", () => {
-    const withoutGrant = applyRuntimeToolsAllow(
+  it("resolves isolated cron runtime toolsAllow", () => {
+    const allowed = applyRuntimeToolsAllow(
       createOpenClawCodingTools({
         config: testConfig,
-        senderIsOwner: false,
-      }),
-      ["cron"],
-    );
-    const errorWithoutGrant = buildEmptyExplicitToolAllowlistError({
-      sources: [{ label: "runtime toolsAllow", entries: ["cron"] }],
-      callableToolNames: withoutGrant.map((tool) => tool.name),
-      toolsEnabled: true,
-    });
-
-    expect(errorWithoutGrant?.message).toContain(
-      "No callable tools remain after resolving explicit tool allowlist (runtime toolsAllow: cron); no registered tools matched.",
-    );
-
-    const withGrant = applyRuntimeToolsAllow(
-      createOpenClawCodingTools({
-        config: testConfig,
-        senderIsOwner: false,
-        ownerOnlyToolAllowlist: ["cron"],
       }),
       ["cron"],
     );
 
-    expect(withGrant.map((tool) => tool.name)).toEqual(["cron"]);
+    expect(allowed.map((tool) => tool.name)).toEqual(["cron"]);
     expect(
       buildEmptyExplicitToolAllowlistError({
         sources: [{ label: "runtime toolsAllow", entries: ["cron"] }],
-        callableToolNames: withGrant.map((tool) => tool.name),
+        callableToolNames: allowed.map((tool) => tool.name),
         toolsEnabled: true,
       }),
     ).toBeNull();
@@ -522,6 +502,56 @@ describe("createOpenClawCodingTools", () => {
     }
   });
 
+  it("forwards auth profiles to plugin-only tool construction", () => {
+    const createOpenClawToolsMock = vi.mocked(createOpenClawTools);
+    createOpenClawToolsMock.mockClear();
+    const resolvePluginToolsSpy = vi
+      .spyOn(openClawPluginTools, "resolveOpenClawPluginToolsForOptions")
+      .mockReturnValue([]);
+    const authProfileStore = {
+      version: 1,
+      order: { xai: ["xai-oauth"] },
+      profiles: {
+        "xai-oauth": {
+          type: "oauth",
+          provider: "xai",
+          access: "xai-oauth-access-token", // pragma: allowlist secret
+          refresh: "xai-oauth-refresh-token", // pragma: allowlist secret
+          expires: Date.now() + 60_000,
+        },
+      },
+    } satisfies AuthProfileStore;
+
+    try {
+      createOpenClawCodingTools({
+        config: {
+          auth: {
+            order: {
+              xai: ["xai-oauth"],
+            },
+          },
+        },
+        authProfileStore,
+        includeCoreTools: false,
+        runtimeToolAllowlist: ["x_search"],
+        toolConstructionPlan: {
+          includeBaseCodingTools: false,
+          includeShellTools: false,
+          includeChannelTools: false,
+          includeOpenClawTools: false,
+          includePluginTools: true,
+        },
+      });
+
+      expect(createOpenClawToolsMock).not.toHaveBeenCalled();
+      expect(resolvePluginToolsSpy).toHaveBeenCalledTimes(1);
+      const pluginToolOptions = resolvePluginToolsSpy.mock.calls[0]?.[0].options;
+      expect(pluginToolOptions?.authProfileStore).toBe(authProfileStore);
+    } finally {
+      resolvePluginToolsSpy.mockRestore();
+    }
+  });
+
   it("uses tools.alsoAllow for optional plugin discovery without widening to all plugins", () => {
     const createOpenClawToolsMock = vi.mocked(createOpenClawTools);
     createOpenClawToolsMock.mockClear();
@@ -605,7 +635,6 @@ describe("createOpenClawCodingTools", () => {
     createOpenClawCodingTools({
       config: testConfig,
       recordToolPrepStage: (name) => stages.push(name),
-      senderIsOwner: true,
     });
 
     expectListIncludes(stages, [
@@ -632,7 +661,7 @@ describe("createOpenClawCodingTools", () => {
   });
 
   it("preserves action enums in normalized schemas", () => {
-    const defaultTools = createOpenClawCodingTools({ config: testConfig, senderIsOwner: true });
+    const defaultTools = createOpenClawCodingTools({ config: testConfig });
     const toolNames = ["canvas", "nodes", "cron", "gateway", "message"];
     const missingNames = toolNames.filter(
       (name) => !defaultTools.some((candidate) => candidate.name === name),
@@ -656,7 +685,7 @@ describe("createOpenClawCodingTools", () => {
   });
 
   it("enforces apply_patch availability and canonical names across model/provider constraints", () => {
-    const defaultTools = createOpenClawCodingTools({ config: testConfig, senderIsOwner: true });
+    const defaultTools = createOpenClawCodingTools({ config: testConfig });
     expect(toolNameList(defaultTools)).toContain("exec");
     expect(toolNameList(defaultTools)).toContain("process");
     expect(toolNameList(defaultTools)).not.toContain("apply_patch");
@@ -905,7 +934,6 @@ describe("createOpenClawCodingTools", () => {
         browser: { enabled: true },
         plugins: { entries: { browser: { enabled: true } } },
       } as OpenClawConfig,
-      senderIsOwner: true,
     });
     const names = new Set(tools.map((tool) => tool.name));
     // full profile must not filter any tools — browser, canvas, etc. must be present.
@@ -915,23 +943,20 @@ describe("createOpenClawCodingTools", () => {
     expect(names.has("message")).toBe(true);
   });
 
-  it("includes browser tool with full profile for non-owner senders (#76507)", () => {
+  it("includes browser tool with full profile (#76507)", () => {
     const tools = createOpenClawCodingTools({
       config: {
         tools: { profile: "full" },
         browser: { enabled: true },
         plugins: { entries: { browser: { enabled: true } } },
       } as OpenClawConfig,
-      senderIsOwner: false,
     });
     const names = new Set(tools.map((tool) => tool.name));
-    // browser is NOT owner-only; it must be available to non-owner senders.
     expect(names.has("browser")).toBe(true);
     expect(names.has("canvas")).toBe(true);
-    // owner-only tools should be filtered for non-owners
-    expect(names.has("gateway")).toBe(false);
-    expect(names.has("cron")).toBe(false);
-    expect(names.has("nodes")).toBe(false);
+    expect(names.has("gateway")).toBe(true);
+    expect(names.has("cron")).toBe(true);
+    expect(names.has("nodes")).toBe(true);
   });
 
   it("includes browser tool without explicit profile (defaults to no filtering) (#76507)", () => {
@@ -1105,7 +1130,6 @@ describe("createOpenClawCodingTools", () => {
   it("removes unsupported JSON Schema keywords for Cloud Code Assist API compatibility", () => {
     const googleTools = createOpenClawCodingTools({
       modelProvider: "google",
-      senderIsOwner: true,
     });
     for (const tool of googleTools) {
       const violations = findUnsupportedSchemaKeywords(
@@ -1126,7 +1150,6 @@ describe("createOpenClawCodingTools", () => {
         nativeWebSearchTool: true,
         toolCallArgumentsEncoding: "html-entities",
       },
-      senderIsOwner: true,
     });
 
     expect(toolNameList(xaiTools)).not.toContain("web_search");

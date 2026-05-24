@@ -1,4 +1,8 @@
 import { resetModelCatalogCache } from "../agents/model-catalog.js";
+import {
+  clearCurrentProviderAuthState,
+  warmCurrentProviderAuthState,
+} from "../agents/model-provider-auth.js";
 import { disposeAllSessionMcpRuntimes } from "../agents/pi-bundle-mcp-tools.js";
 import {
   getActiveEmbeddedRunCount,
@@ -86,6 +90,12 @@ const MCP_RUNTIME_RELOAD_DISPOSE_TIMEOUT_MS = 5_000;
 const CHANNEL_RELOAD_DEFERRAL_POLL_MS = 500;
 const CHANNEL_RELOAD_STILL_PENDING_WARN_MS = 30_000;
 
+function resetPreparedModelRuntimeStateForHotReload(): void {
+  resetModelCatalogCache();
+  clearCurrentProviderAuthState();
+  markGatewayModelCatalogStaleForReload();
+}
+
 async function disposeMcpRuntimesWithTimeout(params: {
   dispose: () => Promise<void>;
   timeoutMs: number;
@@ -131,8 +141,8 @@ type GatewayReloadHandlerParams = {
   broadcast: (event: string, payload: unknown, opts?: { dropIfSlow?: boolean }) => void;
   getState: () => GatewayHotReloadState;
   setState: (state: GatewayHotReloadState) => void;
-  startChannel: (name: ChannelKind) => Promise<void>;
-  stopChannel: (name: ChannelKind) => Promise<void>;
+  startChannel: GatewayChannelManager["startChannel"];
+  stopChannel: GatewayChannelManager["stopChannel"];
   stopPostReadySidecars?: () => void;
   reloadPlugins: (params: {
     nextConfig: OpenClawConfig;
@@ -302,20 +312,7 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
     const state = params.getState();
     const nextState = { ...state };
 
-    if (
-      plan.changedPaths.some(
-        (path) =>
-          path === "models" ||
-          path.startsWith("models.") ||
-          path === "agents.defaults.model" ||
-          path.startsWith("agents.defaults.model.") ||
-          path === "agents.defaults.models" ||
-          path.startsWith("agents.defaults.models."),
-      )
-    ) {
-      resetModelCatalogCache();
-      markGatewayModelCatalogStaleForReload();
-    }
+    resetPreparedModelRuntimeStateForHotReload();
 
     if (plan.reloadHooks) {
       try {
@@ -356,7 +353,7 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
             }
             params.logChannels.info(`stopping ${channel} channel before plugin reload`);
             stoppedChannels.push(channel);
-            await params.stopChannel(channel);
+            await params.stopChannel(channel, undefined, { manual: false });
             channelsStoppedBeforePluginReload.add(channel);
           },
           onFailure: (channel, err) => {
@@ -401,6 +398,7 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
         channelsToRestart.add(channel);
       }
       activePluginChannelsAfterReload = pluginReloadResult.activeChannels;
+      resetPreparedModelRuntimeStateForHotReload();
     }
 
     if (plan.restartCron) {
@@ -479,7 +477,7 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
           }
           params.logChannels.info(`restarting ${name} channel`);
           if (!channelsStoppedBeforePluginReload.has(name)) {
-            await params.stopChannel(name);
+            await params.stopChannel(name, undefined, { manual: false });
           }
           await params.startChannel(name);
         };
@@ -501,6 +499,10 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
     }
 
     applyGatewayLaneConcurrency(nextConfig);
+
+    void warmCurrentProviderAuthState(nextConfig).catch((err) => {
+      params.logReload.warn(`provider auth state rewarm failed: ${String(err)}`);
+    });
 
     if (plan.hotReasons.length > 0) {
       params.logReload.info(`config hot reload applied (${plan.hotReasons.join(", ")})`);
@@ -549,6 +551,7 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
         maxWaitMs: resolveGatewayRestartDeferralTimeoutMs(
           nextConfig.gateway?.reload?.deferralTimeoutMs,
         ),
+        timeoutIntent: { force: true, reason: "config reload forced restart" },
         emitHooks: {
           beforeEmit: () =>
             markActiveMainSessionsForRestart(nextConfig, "config reload forced restart"),

@@ -11,6 +11,7 @@ import { parseAgentSessionKey } from "../routing/session-key.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { normalizeDeliveryContext } from "../utils/delivery-context.shared.js";
 import { isDeliverableMessageChannel } from "../utils/message-channel.js";
+import { isChildlessCodexNativeSubagentTask } from "./codex-native-subagent-task.js";
 import {
   formatTaskBlockedFollowupMessage,
   formatTaskStateChangeMessage,
@@ -28,6 +29,7 @@ import {
   updateFlowRecordByIdExpectedRevision,
 } from "./task-flow-runtime-internal.js";
 import type { TaskRegistryControlRuntime } from "./task-registry-control.types.js";
+import { getTaskRegistryProcessState } from "./task-registry.process-state.js";
 import {
   getTaskRegistryObservers,
   getTaskRegistryStore,
@@ -53,13 +55,14 @@ import type {
 const log = createSubsystemLogger("tasks/registry");
 const DEFAULT_TASK_RETENTION_MS = 7 * 24 * 60 * 60_000;
 
-const tasks = new Map<string, TaskRecord>();
-const taskDeliveryStates = new Map<string, TaskDeliveryState>();
-const taskIdsByRunId = new Map<string, Set<string>>();
-const taskIdsByOwnerKey = new Map<string, Set<string>>();
-const taskIdsByParentFlowId = new Map<string, Set<string>>();
-const taskIdsByRelatedSessionKey = new Map<string, Set<string>>();
-const tasksWithPendingDelivery = new Set<string>();
+const taskRegistryProcessState = getTaskRegistryProcessState();
+const tasks = taskRegistryProcessState.tasks;
+const taskDeliveryStates = taskRegistryProcessState.taskDeliveryStates;
+const taskIdsByRunId = taskRegistryProcessState.taskIdsByRunId;
+const taskIdsByOwnerKey = taskRegistryProcessState.taskIdsByOwnerKey;
+const taskIdsByParentFlowId = taskRegistryProcessState.taskIdsByParentFlowId;
+const taskIdsByRelatedSessionKey = taskRegistryProcessState.taskIdsByRelatedSessionKey;
+const tasksWithPendingDelivery = taskRegistryProcessState.tasksWithPendingDelivery;
 let listenerStarted = false;
 let listenerStop: (() => void) | null = null;
 let restoreAttempted = false;
@@ -1081,8 +1084,6 @@ function queueTaskSystemEvent(task: TaskRecord, text: string) {
     sessionKey: ownerKey,
     contextKey: `task:${task.taskId}`,
     deliveryContext: owner.requesterOrigin,
-    forceSenderIsOwnerFalse: true,
-    trusted: false,
   });
   requestHeartbeat({
     source: "background-task",
@@ -1107,8 +1108,6 @@ function queueBlockedTaskFollowup(task: TaskRecord) {
     sessionKey: ownerKey,
     contextKey: `task:${task.taskId}:blocked-followup`,
     deliveryContext: owner.requesterOrigin,
-    forceSenderIsOwnerFalse: true,
-    trusted: false,
   });
   requestHeartbeat({
     source: "background-task-blocked",
@@ -1898,14 +1897,20 @@ export async function cancelTaskById(params: {
   try {
     if (task.runtime !== "cli") {
       if (!childSessionKey) {
-        return {
-          found: true,
-          cancelled: false,
-          reason: "Task has no cancellable child session.",
-          task: cloneTaskRecord(task),
-        };
+        if (!isChildlessCodexNativeSubagentTask(task)) {
+          return {
+            found: true,
+            cancelled: false,
+            reason: "Task has no cancellable child session.",
+            task: cloneTaskRecord(task),
+          };
+        }
       }
-      if (task.runtime === "acp") {
+      if (!childSessionKey) {
+        // Codex native subagents are mirrored from the Codex app server and do
+        // not have OpenClaw child sessions to terminate. Cancellation clears
+        // the stale task-registry record only.
+      } else if (task.runtime === "acp") {
         const { getAcpSessionManager } = await loadTaskRegistryControlRuntime();
         await getAcpSessionManager().cancelSession({
           cfg: params.cfg,
@@ -2082,6 +2087,34 @@ export function listTasksForOwnerKey(ownerKey: string): TaskRecord[] {
   if (!key) {
     return [];
   }
+  return listTasksFromIndex(taskIdsByOwnerKey, key);
+}
+
+export function listFreshTasksForOwnerKey(ownerKey: string): TaskRecord[] {
+  ensureTaskRegistryReady();
+  const key = normalizeOptionalString(ownerKey);
+  if (!key) {
+    return [];
+  }
+  const store = getTaskRegistryStore();
+  if (store.listTasksForOwnerKey) {
+    try {
+      const merged = new Map<string, TaskRecord>();
+      for (const task of store.listTasksForOwnerKey(key)) {
+        merged.set(task.taskId, cloneTaskRecord(normalizeTaskTimestamps(task)));
+      }
+      return [...merged.values()]
+        .map((task, insertionIndex) => Object.assign({}, task, { insertionIndex }))
+        .toSorted(compareTasksNewestFirst)
+        .map(({ insertionIndex: _, ...task }) => task);
+    } catch (error) {
+      log.warn("Failed to read fresh owner task registry records", {
+        ownerKey: key,
+        error,
+      });
+    }
+  }
+
   return listTasksFromIndex(taskIdsByOwnerKey, key);
 }
 

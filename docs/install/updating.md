@@ -21,7 +21,6 @@ To switch channels or target a specific version:
 ```bash
 openclaw update --channel beta
 openclaw update --channel dev
-openclaw update --tag main
 openclaw update --dry-run   # preview without applying
 ```
 
@@ -34,6 +33,11 @@ installer has its own `--verbose` flag, but that flag is not part of
 `--channel beta` prefers beta, but the runtime falls back to stable/latest when
 the beta tag is missing or older than the latest stable release. Use `--tag beta`
 if you want the raw npm beta dist-tag for a one-off package update.
+
+Use `--channel dev` for a persistent moving GitHub `main` checkout. For package
+updates, `--tag main` maps to `github:openclaw/openclaw#main` for one run, and
+GitHub/git source specs are packed into a temporary tarball before the staged
+npm install.
 
 For managed plugins, beta-channel fallback is a warning: the core update can
 still succeed while a plugin uses its recorded default/latest release because no
@@ -67,6 +71,13 @@ from that checkout. The `stable` and `beta` channels use package installs. If th
 gateway is already installed, `openclaw update` refreshes the service metadata
 and restarts it unless you pass `--no-restart`.
 
+For package installs with a managed Gateway service, `openclaw update` targets
+the package root used by that service. If the shell `openclaw` command comes
+from a different install, the updater prints both roots and the managed service
+Node path. The package update uses the package manager that owns the service
+root and checks the managed service Node against the target release engine
+before replacing the package.
+
 ## Alternative: re-run the installer
 
 ```bash
@@ -98,10 +109,35 @@ npm i -g openclaw@latest
 ```
 
 Prefer `openclaw update` for supervised installs because it can coordinate the
-package swap with the running Gateway service. If you update manually while a
-managed Gateway is running, restart the Gateway immediately after the package
-manager finishes so the old process does not keep serving from replaced package
-files.
+package swap with the running Gateway service. If you update manually on a
+supervised install, stop the managed Gateway before the package manager starts.
+Package managers replace files in place, and a running Gateway can otherwise try
+to load core or plugin files while the package tree is temporarily half-swapped.
+Restart the Gateway after the package manager finishes so the service picks up
+the new install.
+
+For a root-owned Linux system-global install, if `openclaw update` fails with
+`EACCES` and you recover with system npm, keep the Gateway stopped through the
+manual package replacement. Use the same `openclaw` profile flags or environment
+you normally use for that Gateway. Replace `/usr/bin/npm` with the system npm
+that owns the root-owned global prefix on your host:
+
+```bash
+openclaw gateway stop
+sudo /usr/bin/npm i -g openclaw@latest
+openclaw gateway install --force
+openclaw gateway restart
+```
+
+Then verify the service:
+
+```bash
+openclaw --version
+curl -fsS http://127.0.0.1:18789/readyz
+openclaw plugins list --json
+openclaw gateway status --deep --json
+openclaw doctor --lint --json
+```
 
 When `openclaw update` manages a global npm install, it installs the target into
 a temporary npm prefix first, verifies the packaged `dist` inventory, then swaps

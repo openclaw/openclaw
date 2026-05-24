@@ -4,7 +4,7 @@ import {
   resolveMessageActionDiscoveryForPlugin,
   resolveMessageActionDiscoveryChannelId,
   resolveCurrentChannelMessageToolDiscoveryAdapter,
-  __testing as messageActionTesting,
+  testing as messageActionTesting,
 } from "../channels/plugins/message-action-discovery.js";
 import {
   channelPluginHasNativeApprovalPromptUi,
@@ -31,7 +31,6 @@ type ChannelMessageActionDiscoveryParams = {
   sessionId?: string | null;
   agentId?: string | null;
   requesterSenderId?: string | null;
-  senderIsOwner?: boolean;
 };
 
 const channelAgentToolMeta = new WeakMap<ChannelAgentTool, ChannelAgentToolMeta>();
@@ -182,8 +181,9 @@ export function resolveChannelReactionGuidance(params: {
   };
 }
 
-export const __testing = {
+export const testing = {
   resetLoggedListActionErrors() {
     messageActionTesting.resetLoggedMessageActionErrors();
   },
 };
+export { testing as __testing };

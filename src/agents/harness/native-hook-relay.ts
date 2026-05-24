@@ -334,7 +334,7 @@ export function registerNativeHookRelay(
       }),
     renew: (ttlMs) => {
       const current = relays.get(relayId);
-      if (!current) {
+      if (current !== registration) {
         return;
       }
       const expiresAtMs = Date.now() + normalizePositiveInteger(ttlMs, DEFAULT_RELAY_TTL_MS);
@@ -345,12 +345,18 @@ export function registerNativeHookRelay(
         writeNativeHookRelayBridgeRecordForRegistration(current, bridge);
       }
     },
-    unregister: () => unregisterNativeHookRelay(relayId),
+    unregister: () => unregisterNativeHookRelay(relayId, registration),
   };
   return handle;
 }
 
-function unregisterNativeHookRelay(relayId: string): void {
+function unregisterNativeHookRelay(
+  relayId: string,
+  expectedRegistration?: NativeHookRelayRegistration,
+): void {
+  if (expectedRegistration && relays.get(relayId) !== expectedRegistration) {
+    return;
+  }
   unregisterNativeHookRelayBridge(relayId);
   relays.delete(relayId);
   removeNativeHookRelayInvocations(relayId);
@@ -422,8 +428,7 @@ export async function invokeNativeHookRelay(
     throw new Error("native hook relay not found");
   }
   if (Date.now() > registration.expiresAtMs) {
-    relays.delete(relayId);
-    removeNativeHookRelayInvocations(relayId);
+    unregisterNativeHookRelay(relayId, registration);
     throw new Error("native hook relay expired");
   }
   if (registration.provider !== provider) {
@@ -551,9 +556,7 @@ function removeNativeHookRelayInvocations(relayId: string): void {
 function pruneExpiredNativeHookRelays(now = Date.now()): void {
   for (const [relayId, registration] of relays) {
     if (now > registration.expiresAtMs) {
-      relays.delete(relayId);
-      unregisterNativeHookRelayBridge(relayId);
-      removeNativeHookRelayInvocations(relayId);
+      unregisterNativeHookRelay(relayId, registration);
     }
   }
 }
@@ -953,8 +956,8 @@ async function runNativeHookRelayPreToolUse(params: {
     return params.adapter.renderPreToolUseBlockResponse(outcome.reason);
   }
   if (nativeHookRelayParamsWereRewritten(originalToolInputFingerprint, outcome.params)) {
-    // @openai/codex@0.130.0 treats PreToolUse updatedInput as unsupported and
-    // continues with the original params, so rewrites must fail closed here.
+    // Codex app-server may continue with the original params when updatedInput
+    // is unsupported, so rewrites must fail closed here.
     return params.adapter.renderPreToolUseBlockResponse(
       "OpenClaw tool policy rewrote Codex app-server approval params; refusing original request.",
     );
@@ -1821,7 +1824,7 @@ function isJsonObject(value: unknown): value is Record<string, unknown> {
   }
 }
 
-export const __testing = {
+export const testing = {
   clearNativeHookRelaysForTests(): void {
     for (const relayId of relayBridges.keys()) {
       unregisterNativeHookRelayBridge(relayId);
@@ -1868,3 +1871,4 @@ export const __testing = {
     nativeHookRelayPermissionApprovalRequester = requester;
   },
 } as const;
+export { testing as __testing };

@@ -7,9 +7,14 @@ import { resolveSessionTranscriptPathInDir } from "./paths.js";
 import { useTempSessionsFixture } from "./test-helpers.js";
 import { appendSessionTranscriptMessage } from "./transcript-append.js";
 import {
+  bindOwnedSessionTranscriptWrites,
+  withOwnedSessionTranscriptWrites,
+} from "./transcript-write-context.js";
+import {
   appendAssistantMessageToSessionTranscript,
   appendExactAssistantMessageToSessionTranscript,
   readLatestAssistantTextFromSessionTranscript,
+  readTailAssistantTextFromSessionTranscript,
 } from "./transcript.js";
 
 describe("appendAssistantMessageToSessionTranscript", () => {
@@ -107,6 +112,62 @@ describe("appendAssistantMessageToSessionTranscript", () => {
       expect(messageLine.message.content[0].type).toBe("text");
       expect(messageLine.message.content[0].text).toBe("Hello from delivery mirror!");
     }
+  });
+
+  it("runs matching owned transcript appends through the active session write lock", async () => {
+    writeTranscriptStore();
+    const sessionFile = resolveSessionTranscriptPathInDir(sessionId, fixture.sessionsDir());
+    const events: string[] = [];
+
+    const result = await withOwnedSessionTranscriptWrites(
+      {
+        sessionFile,
+        sessionKey,
+        withSessionWriteLock: async (run) => {
+          events.push("lock");
+          return await run();
+        },
+      },
+      async () =>
+        await appendAssistantMessageToSessionTranscript({
+          sessionKey,
+          text: "Hello under lock",
+          storePath: fixture.storePath(),
+        }),
+    );
+
+    expect(result.ok).toBe(true);
+    expect(events).toEqual(["lock", "lock", "lock"]);
+  });
+
+  it("keeps matching owned transcript appends locked from bound callbacks", async () => {
+    const sessionFile = resolveSessionTranscriptPathInDir(sessionId, fixture.sessionsDir());
+    const events: string[] = [];
+    const callback = bindOwnedSessionTranscriptWrites(
+      {
+        sessionFile,
+        sessionKey,
+        withSessionWriteLock: async (run) => {
+          events.push("lock");
+          return await run();
+        },
+      },
+      async () =>
+        await appendSessionTranscriptMessage({
+          transcriptPath: sessionFile,
+          message: {
+            role: "assistant",
+            content: "Hello from bound delivery",
+            timestamp: Date.now(),
+            stopReason: "stop",
+          },
+        }),
+    );
+
+    const result = await callback();
+
+    expect(result.messageId).toBeTruthy();
+    expect(events).toEqual(["lock"]);
   });
 
   it("appends to legacy lowercase Signal group session entries", async () => {
@@ -304,6 +365,120 @@ describe("appendAssistantMessageToSessionTranscript", () => {
         .map((line) => JSON.parse(line) as { type?: string; message?: { role?: string } });
       expect(records.filter((record) => record.type === "message")).toHaveLength(2);
     }
+  });
+
+  it("skips transcript-only OpenClaw assistant entries when reading latest assistant text", async () => {
+    writeTranscriptStore();
+
+    const finalResult = await appendExactAssistantMessageToSessionTranscript({
+      sessionKey,
+      storePath: fixture.storePath(),
+      message: createExactAssistantMessage({ text: "Complete final answer" }),
+    });
+    expect(finalResult.ok).toBe(true);
+    if (!finalResult.ok) {
+      return;
+    }
+
+    await appendAssistantMessageToSessionTranscript({
+      sessionKey,
+      text: "Earlier retained preview",
+      storePath: fixture.storePath(),
+    });
+    await appendExactAssistantMessageToSessionTranscript({
+      sessionKey,
+      storePath: fixture.storePath(),
+      message: createExactAssistantMessage({
+        text: "Injected transcript text",
+        provider: "openclaw",
+        model: "gateway-injected",
+      }),
+    });
+
+    const latestAssistantText = await readLatestAssistantTextFromSessionTranscript(
+      finalResult.sessionFile,
+    );
+    expect(latestAssistantText?.id).toBe(finalResult.messageId);
+    expect(latestAssistantText?.text).toBe("Complete final answer");
+  });
+
+  it("does not report transcript-only OpenClaw assistant entries as latest assistant text", async () => {
+    writeTranscriptStore();
+
+    const mirrorResult = await appendAssistantMessageToSessionTranscript({
+      sessionKey,
+      text: "Only delivery mirror",
+      storePath: fixture.storePath(),
+    });
+    expect(mirrorResult.ok).toBe(true);
+    if (!mirrorResult.ok) {
+      return;
+    }
+
+    const latestAssistantText = await readLatestAssistantTextFromSessionTranscript(
+      mirrorResult.sessionFile,
+    );
+    expect(latestAssistantText).toBeUndefined();
+  });
+
+  it("keeps transcript-only OpenClaw assistant entries available to the tail reader", async () => {
+    writeTranscriptStore();
+
+    const mirrorResult = await appendAssistantMessageToSessionTranscript({
+      sessionKey,
+      text: "Tail delivery mirror",
+      storePath: fixture.storePath(),
+    });
+    expect(mirrorResult.ok).toBe(true);
+    if (!mirrorResult.ok) {
+      return;
+    }
+
+    const tailAssistantText = await readTailAssistantTextFromSessionTranscript(
+      mirrorResult.sessionFile,
+    );
+    expect(tailAssistantText?.id).toBe(mirrorResult.messageId);
+    expect(tailAssistantText?.text).toBe("Tail delivery mirror");
+  });
+
+  it("scans past trailing non-assistant entries (e.g. openclaw.cache-ttl) to find the latest assistant text", async () => {
+    // Regression for openclaw/openclaw#83427: the cache-ttl custom entry was
+    // emitted after the canonical assistant turn, and the tail reader returned
+    // undefined on the first non-assistant line, so the gap-fill check in
+    // persistTextTurnTranscript wrote a duplicate `api: "cli"` assistant
+    // message — poisoning the model's own context with verbatim duplicates.
+    writeTranscriptStore();
+
+    const assistantResult = await appendExactAssistantMessageToSessionTranscript({
+      sessionKey,
+      storePath: fixture.storePath(),
+      message: createExactAssistantMessage({
+        text: "Canonical answer",
+        provider: "anthropic",
+        model: "claude-haiku-4-5-20251001",
+      }),
+    });
+    expect(assistantResult.ok).toBe(true);
+    if (!assistantResult.ok) {
+      return;
+    }
+
+    const cacheTtlEntry = `${JSON.stringify({
+      type: "custom",
+      customType: "openclaw.cache-ttl",
+      timestamp: new Date().toISOString(),
+      data: {
+        provider: "anthropic",
+        modelId: "claude-haiku-4-5-20251001",
+      },
+    })}\n`;
+    fs.appendFileSync(assistantResult.sessionFile, cacheTtlEntry, "utf-8");
+
+    const tailAssistantText = await readTailAssistantTextFromSessionTranscript(
+      assistantResult.sessionFile,
+    );
+    expect(tailAssistantText?.id).toBe(assistantResult.messageId);
+    expect(tailAssistantText?.text).toBe("Canonical answer");
   });
 
   it("does not reuse an older matching assistant message across turns", async () => {

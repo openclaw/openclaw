@@ -19,7 +19,7 @@ import type {
   PluginManifestModelPricingProvider,
   PluginManifestModelPricingSource,
 } from "../plugins/manifest.js";
-import { loadPluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
+import { resolvePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import type { PluginMetadataRegistryView } from "../plugins/plugin-metadata-snapshot.types.js";
 import type { PluginRegistrySnapshot } from "../plugins/plugin-registry.js";
 import { normalizeOptionalString, resolvePrimaryStringValue } from "../shared/string-coerce.js";
@@ -459,10 +459,12 @@ function resolveModelPricingManifestMetadata(params: {
       activeRegistry: emptyRegistry,
     };
   }
-  const snapshot = loadPluginMetadataSnapshot({
+  const env = params.env ?? process.env;
+  const snapshot = resolvePluginMetadataSnapshot({
     config: params.config,
-    env: params.env ?? process.env,
+    env,
     ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
+    allowWorkspaceScopedCurrent: params.workspaceDir === undefined,
   });
   return {
     allRegistry: snapshot.manifestRegistry,
@@ -897,6 +899,12 @@ export function collectConfiguredModelPricingRefs(
     ...normalizationParams,
   });
   addModelListLike({
+    value: config.agents?.defaults?.subagents?.model,
+    aliasIndex,
+    refs,
+    ...normalizationParams,
+  });
+  addModelListLike({
     value: config.agents?.defaults?.imageModel,
     aliasIndex,
     refs,
@@ -916,12 +924,6 @@ export function collectConfiguredModelPricingRefs(
   });
   addResolvedModelRef({
     raw: config.agents?.defaults?.heartbeat?.model,
-    aliasIndex,
-    refs,
-    ...normalizationParams,
-  });
-  addModelListLike({
-    value: config.tools?.subagents?.model,
     aliasIndex,
     refs,
     ...normalizationParams,
@@ -1392,7 +1394,7 @@ export function startGatewayModelPricingRefresh(
   };
 }
 
-export function __resetGatewayModelPricingCacheForTest(): void {
+export function resetGatewayModelPricingCacheForTest(): void {
   clearGatewayModelPricingCacheState();
   clearRefreshTimer();
   inFlightRefresh = null;

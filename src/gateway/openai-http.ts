@@ -3,6 +3,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import type { ClientToolDefinition } from "../agents/command/shared-types.js";
 import type { ImageContent } from "../agents/command/types.js";
 import { isClientToolNameConflictError } from "../agents/pi-tool-definition-adapter.js";
+import { STREAM_ERROR_FALLBACK_TEXT } from "../agents/stream-message-shared.js";
 import {
   hasNonzeroUsage,
   normalizeUsage,
@@ -43,7 +44,6 @@ import {
   resolveGatewayRequestContext,
   resolveOpenAiCompatModelOverride,
   resolveOpenAiCompatibleHttpOperatorScopes,
-  resolveOpenAiCompatibleHttpSenderIsOwner,
 } from "./http-utils.js";
 import { normalizeInputHostnameAllowlist } from "./input-allowlist.js";
 import { resolveOpenAiCompatError, validateOpenAiSamplingParams } from "./openai-compat-errors.js";
@@ -63,6 +63,7 @@ type OpenAiChatMessage = {
   name?: unknown;
   tool_call_id?: unknown;
   tool_calls?: unknown;
+  stopReason?: unknown;
 };
 
 type OpenAiChatCompletionRequest = {
@@ -136,7 +137,6 @@ function buildAgentCommandInput(params: {
   sessionKey: string;
   runId: string;
   messageChannel: string;
-  senderIsOwner: boolean;
   abortSignal?: AbortSignal;
   streamParams?: {
     maxTokens?: number;
@@ -156,7 +156,6 @@ function buildAgentCommandInput(params: {
     deliver: false as const,
     messageChannel: params.messageChannel,
     bestEffortDeliver: false as const,
-    senderIsOwner: params.senderIsOwner,
     allowModelOverride: true as const,
     abortSignal: params.abortSignal,
     streamParams: params.streamParams,
@@ -583,11 +582,12 @@ async function resolveImagesForRequest(
   return images;
 }
 
-export const __testOnlyOpenAiHttp = {
+export const testOnlyOpenAiHttp = {
   resolveImagesForRequest,
   resolveOpenAiChatCompletionsLimits,
   resolveChatCompletionUsage,
 };
+export { testOnlyOpenAiHttp as __testOnlyOpenAiHttp };
 
 function buildAgentPrompt(
   messagesUnknown: unknown,
@@ -656,6 +656,10 @@ function buildAgentPrompt(
     conversationEntries.push({
       role: normalizedRole,
       entry: { sender, body: messageContent },
+      internalStreamError:
+        normalizedRole === "assistant" &&
+        normalizeOptionalString(msg.stopReason) === "error" &&
+        messageContent.trim() === STREAM_ERROR_FALLBACK_TEXT,
     });
   }
 
@@ -832,10 +836,6 @@ export async function handleOpenAiHttpRequest(
   if (!handled) {
     return true;
   }
-  // On the compat surface, shared-secret bearer auth is also treated as an
-  // owner sender so owner-only tool policy matches the documented contract.
-  const senderIsOwner = resolveOpenAiCompatibleHttpSenderIsOwner(req, handled.requestAuth);
-
   const payload = coerceRequest(handled.body);
   const stream = Boolean(payload.stream);
   const streamIncludeUsage = stream && resolveIncludeUsageForStreaming(payload);
@@ -966,7 +966,6 @@ export async function handleOpenAiHttpRequest(
     runId,
     messageChannel,
     abortSignal: abortController.signal,
-    senderIsOwner,
     streamParams,
   });
 

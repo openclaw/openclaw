@@ -231,6 +231,12 @@ function makeBaseParams(overrides: {
     resolvedDelivery,
     deliveryRequested: overrides.deliveryRequested ?? true,
     skipHeartbeatDelivery: false,
+    sourceDeliveryOutcome: {
+      visibleDeliveries: [],
+      verifiedMessageToolDelivery: false,
+      satisfiesSourceDelivery: false,
+      unverifiedMessageToolDelivery: false,
+    },
     deliveryBestEffort: overrides.deliveryBestEffort ?? false,
     deliveryPayloadHasStructuredContent: false,
     deliveryPayloads: overrides.synthesizedText ? [{ text: overrides.synthesizedText }] : [],
@@ -637,8 +643,6 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     expect(enqueueSystemEvent).toHaveBeenCalledWith("Redacted cron update.", {
       sessionKey: "agent:main:main",
       contextKey: "cron-direct-delivery:v1:cron:test-job:1000:telegram::123456:",
-      forceSenderIsOwnerFalse: true,
-      trusted: false,
     });
   });
 
@@ -674,8 +678,6 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     expect(enqueueSystemEvent).toHaveBeenCalledWith("Morning briefing complete.", {
       sessionKey: "agent:main:main",
       contextKey: "cron-direct-delivery:v1:cron:test-job:1000:telegram::123456:",
-      forceSenderIsOwnerFalse: true,
-      trusted: false,
     });
   });
 
@@ -704,8 +706,6 @@ describe("dispatchCronDelivery — double-announce guard", () => {
       {
         sessionKey: "agent:main:main",
         contextKey: "cron-direct-delivery:v1:cron:test-job:1000:telegram::123456:",
-        forceSenderIsOwnerFalse: true,
-        trusted: false,
       },
     );
   });
@@ -739,8 +739,6 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     expect(enqueueSystemEvent).toHaveBeenCalledWith("main-chart.png", {
       sessionKey: "agent:main:main",
       contextKey: "cron-direct-delivery:v1:cron:test-job:1000:telegram::123456:",
-      forceSenderIsOwnerFalse: true,
-      trusted: false,
     });
   });
 
@@ -831,8 +829,6 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     expect(enqueueSystemEvent).toHaveBeenCalledWith("Custom main session briefing complete.", {
       sessionKey: "agent:main:work",
       contextKey: "cron-direct-delivery:v1:cron:test-job:1000:telegram::123456:",
-      forceSenderIsOwnerFalse: true,
-      trusted: false,
     });
   });
 
@@ -880,8 +876,6 @@ describe("dispatchCronDelivery — double-announce guard", () => {
       {
         sessionKey: "agent:main:work",
         contextKey: "cron-direct-delivery:v1:cron:test-job:1000:telegram::123456:",
-        forceSenderIsOwnerFalse: true,
-        trusted: false,
       },
     );
   });
@@ -1392,7 +1386,18 @@ describe("dispatchCronDelivery — double-announce guard", () => {
       mode: "implicit",
       error: new Error("sessionKey is required to resolve delivery.channel=last"),
     };
-    params.unverifiedMessagingToolDelivery = true;
+    params.sourceDeliveryOutcome = {
+      visibleDeliveries: [
+        {
+          via: "message_tool",
+          target: { tool: "message", provider: "messagechat", to: "123" },
+          verifiedTarget: false,
+        },
+      ],
+      verifiedMessageToolDelivery: false,
+      satisfiesSourceDelivery: false,
+      unverifiedMessageToolDelivery: true,
+    };
 
     const state = await dispatchCronDelivery(params);
 
