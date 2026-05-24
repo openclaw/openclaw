@@ -557,8 +557,10 @@ or shortens that specific tool budget. The `image_generate` tool uses
 `agents.defaults.imageGenerationModel.timeoutMs` when the tool call does not
 provide its own timeout, or a 120 second image-generation default otherwise.
 The media-understanding `image` tool uses
-`tools.media.image.timeoutSeconds` or its 60 second media default. Dynamic tool
-budgets are capped at 600000 ms. On timeout, OpenClaw aborts the tool signal
+`tools.media.image.timeoutSeconds` or its 60 second media default. For image
+understanding, that timeout applies to the request itself and is not
+reduced by earlier preparation work. Dynamic tool budgets are
+capped at 600000 ms. On timeout, OpenClaw aborts the tool signal
 where supported and returns a failed dynamic-tool response to Codex so the turn
 can continue instead of leaving the session in `processing`.
 
