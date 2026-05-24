@@ -480,6 +480,8 @@ function normalizeOtelContentValue(value: unknown): string | undefined {
   return undefined;
 }
 
+const TRUNCATED_JSON_SUFFIX = ',..."__truncated":true]';
+
 function safeJsonString(value: unknown, maxChars: number): string | undefined {
   try {
     const json = JSON.stringify(value);
@@ -487,7 +489,24 @@ function safeJsonString(value: unknown, maxChars: number): string | undefined {
       return undefined;
     }
     const redacted = redactSensitiveText(json);
-    return redacted.length > maxChars ? undefined : redacted;
+    if (redacted.length <= maxChars) {
+      return redacted;
+    }
+    // For arrays, try progressively fewer items to fit within the limit.
+    if (Array.isArray(value) && value.length > 1) {
+      for (let count = value.length - 1; count >= 1; count = Math.floor(count / 2)) {
+        const truncated = safeJsonString(value.slice(0, count), maxChars);
+        if (truncated) {
+          return truncated;
+        }
+      }
+    }
+    // Fall back to a hard truncation with a marker suffix.
+    const budget = maxChars - TRUNCATED_JSON_SUFFIX.length;
+    if (budget > 0) {
+      return redacted.slice(0, budget) + TRUNCATED_JSON_SUFFIX;
+    }
+    return undefined;
   } catch {
     return undefined;
   }
@@ -548,7 +567,12 @@ function contentParts(value: unknown): Record<string, unknown>[] {
         ...(part.arguments !== undefined ? { arguments: part.arguments } : {}),
       });
     } else if (part.type === "tool_call" && typeof part.name === "string") {
-      parts.push(part);
+      parts.push({
+        type: "tool_call",
+        name: part.name,
+        ...(typeof part.id === "string" ? { id: part.id } : {}),
+        ...(part.arguments !== undefined ? { arguments: part.arguments } : {}),
+      });
     } else if (part.type === "tool_call_response") {
       parts.push(toolCallResponsePart(part));
     } else if (part.type === "image") {

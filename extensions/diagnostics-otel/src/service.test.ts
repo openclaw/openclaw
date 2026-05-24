@@ -3228,6 +3228,102 @@ describe("diagnostics-otel service", () => {
     await service.stop?.(ctx);
   });
 
+  test("normalizes snake_case tool_call parts the same as camelCase toolCall parts", async () => {
+    const service = createDiagnosticsOtelService();
+    const ctx = createOtelContext(OTEL_TEST_ENDPOINT, {
+      traces: true,
+      captureContent: {
+        enabled: true,
+        inputMessages: true,
+        outputMessages: false,
+      },
+    });
+    await service.start(ctx);
+
+    emitDiagnosticEvent({
+      type: "model.call.completed",
+      runId: "run-1",
+      callId: "call-1",
+      provider: "openai",
+      model: "gpt-5.4",
+      durationMs: 80,
+      inputMessages: [
+        {
+          role: "assistant",
+          content: [
+            {
+              type: "tool_call",
+              id: "tc-1",
+              name: "search",
+              arguments: { q: "x" },
+              extraField: "leaked",
+            },
+          ],
+        },
+      ],
+    } as Parameters<typeof emitDiagnosticEvent>[0]);
+    await flushDiagnosticEvents();
+
+    const modelCall = telemetryState.tracer.startSpan.mock.calls.find(
+      (call) => call[0] === "openclaw.model.call",
+    );
+    const attrs = (modelCall?.[1] as { attributes?: Record<string, unknown> } | undefined)
+      ?.attributes;
+    const parsed = JSON.parse(String(attrs?.["gen_ai.input.messages"]));
+    expect(parsed[0].parts[0]).toEqual({
+      type: "tool_call",
+      id: "tc-1",
+      name: "search",
+      arguments: { q: "x" },
+    });
+    expect(JSON.stringify(parsed)).not.toContain("leaked");
+    await service.stop?.(ctx);
+  });
+
+  test("truncates oversized GenAI input messages instead of silently dropping them", async () => {
+    const service = createDiagnosticsOtelService();
+    const ctx = createOtelContext(OTEL_TEST_ENDPOINT, {
+      traces: true,
+      captureContent: {
+        enabled: true,
+        inputMessages: true,
+        outputMessages: false,
+      },
+    });
+    await service.start(ctx);
+
+    // Build messages that exceed MAX_OTEL_CONTENT_ATTRIBUTE_CHARS (128KB) in total.
+    const largeMessages = Array.from({ length: 200 }, (_, i) => ({
+      role: "user",
+      content: `message-${i}-${"x".repeat(1024)}`,
+    }));
+
+    emitDiagnosticEvent({
+      type: "model.call.completed",
+      runId: "run-1",
+      callId: "call-1",
+      provider: "openai",
+      model: "gpt-5.4",
+      durationMs: 80,
+      inputMessages: largeMessages,
+    } as Parameters<typeof emitDiagnosticEvent>[0]);
+    await flushDiagnosticEvents();
+
+    const modelCall = telemetryState.tracer.startSpan.mock.calls.find(
+      (call) => call[0] === "openclaw.model.call",
+    );
+    const attrs = (modelCall?.[1] as { attributes?: Record<string, unknown> } | undefined)
+      ?.attributes;
+    const genAiInput = String(attrs?.["gen_ai.input.messages"] ?? "");
+    // Must not be empty — a truncated subset should appear.
+    expect(genAiInput.length).toBeGreaterThan(0);
+    // Must fit within the attribute size limit.
+    expect(genAiInput.length).toBeLessThanOrEqual(MAX_TEST_OTEL_CONTENT_ATTRIBUTE_CHARS + 50);
+    // The first message should still be present.
+    expect(genAiInput).toContain("message-0-");
+    await service.stop?.(ctx);
+  });
+
   test("exports tool definitions without requiring input message capture", async () => {
     const service = createDiagnosticsOtelService();
     const ctx = createOtelContext(OTEL_TEST_ENDPOINT, {
