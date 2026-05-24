@@ -328,13 +328,14 @@ async function compactNativeHarnessCliTranscript(params: {
   skillsSnapshot?: SkillSnapshot;
   messageChannel?: string;
   agentAccountId?: string;
+  sessionAgentId: string;
   senderIsOwner?: boolean;
   thinkLevel?: Parameters<typeof buildEmbeddedCompactionRuntimeContext>[0]["thinkLevel"];
   extraSystemPrompt?: string;
 }): Promise<NativeHarnessCliCompactionOutcome> {
   let result: EmbeddedAgentCompactResult | undefined;
   try {
-    const sessionAgentId = readAgentIdFromSessionKey(params.sessionKey);
+    const sessionAgentId = readAgentIdFromSessionKey(params.sessionKey) ?? params.sessionAgentId;
     const nativeHarnessId = params.sessionEntry.agentHarnessId?.trim();
     await cliCompactionDeps.ensureSelectedAgentHarnessPlugin({
       provider: params.provider,
@@ -521,6 +522,7 @@ export async function runCliTurnCompactionLifecycle(params: {
       skillsSnapshot: params.skillsSnapshot,
       messageChannel: params.messageChannel,
       agentAccountId: params.agentAccountId,
+      sessionAgentId: params.sessionAgentId,
       senderIsOwner: params.senderIsOwner,
       thinkLevel: params.thinkLevel,
       extraSystemPrompt: params.extraSystemPrompt,
