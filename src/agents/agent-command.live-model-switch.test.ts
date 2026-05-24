@@ -2,6 +2,7 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vite
 import type { SessionEntry } from "../config/sessions.js";
 import { INTERNAL_RUNTIME_CONTEXT_BEGIN, INTERNAL_RUNTIME_CONTEXT_END } from "./internal-events.js";
 import { LiveSessionModelSwitchError } from "./live-model-switch-error.js";
+import { SKILL_SNAPSHOT_SCHEMA_VERSION } from "./skills/types.js";
 
 const state = vi.hoisted(() => ({
   defaultRuntimeConfig: {
@@ -1448,8 +1449,14 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
   });
 
   it("hydrates stripped persisted skill snapshots before running the CLI path", async () => {
+    // Carries the current `schemaVersion` marker so the reuse path treats
+    // the persisted snapshot as fresh and only re-hydrates `resolvedSkills`,
+    // instead of force-rebuilding. The legacy (missing-schemaVersion) path
+    // is exercised by the `force-rebuilds legacy skill snapshots` case
+    // below.
     const persistedSnapshot = {
       prompt: "persisted prompt",
+      schemaVersion: SKILL_SNAPSHOT_SCHEMA_VERSION,
       skills: [{ name: "cli-skill" }],
       skillFilter: ["cli-skill"],
       version: 0,
@@ -1470,6 +1477,7 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     };
     state.buildWorkspaceSkillSnapshotMock.mockReturnValue({
       prompt: "rebuilt prompt",
+      schemaVersion: SKILL_SNAPSHOT_SCHEMA_VERSION,
       skills: [{ name: "different-skill" }],
       resolvedSkills: rebuiltSkills,
       version: 99,
@@ -1534,6 +1542,88 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
       version: 0,
     });
     expect(state.buildWorkspaceSkillSnapshotMock).not.toHaveBeenCalled();
+  });
+
+  it("force-rebuilds legacy persisted skill snapshots that pre-date the lane-split fields", async () => {
+    // ClawSweeper P1b regression at the agent-command boundary: pre-PR
+    // sessions persisted only `prompt` / `skills` / `resolvedSkills`. Without
+    // the schema-version refresh guard, the reuse path hydrates those legacy
+    // snapshots as-is and the Codex call site reads `undefined` for both
+    // lane fields. Force-refresh re-runs `buildWorkspaceSkillSnapshot` so
+    // the new `trustedDeveloperPrompt` / `untrustedReferencePrompt` fields
+    // are populated before the snapshot is read.
+    // `resolvedSkills` is pre-seeded so the hydration path does NOT have to
+    // call `buildWorkspaceSkillSnapshot` to fill in runtime fields. Without
+    // pre-seeding, the existing hydrate path would call
+    // `buildWorkspaceSkillSnapshot` just to fill in `resolvedSkills` even
+    // without the new schema-version guard — making the assertion a false
+    // positive for the schema-refresh behavior. With `resolvedSkills`
+    // present, only the schema-version guard can trigger the rebuild.
+    const legacyResolvedSkills = [
+      {
+        name: "cli-skill",
+        description: "Legacy CLI skill",
+        filePath: "/tmp/workspace/skills/cli-skill/SKILL.md",
+        baseDir: "/tmp/workspace/skills/cli-skill",
+        source: "# Legacy CLI skill",
+      },
+    ];
+    const legacyPersistedSnapshot = {
+      prompt: "legacy persisted prompt",
+      // Intentionally no `schemaVersion`, no `trustedDeveloperPrompt`, and
+      // no `untrustedReferencePrompt` — this is what a pre-PR session
+      // looks like on disk.
+      skills: [{ name: "cli-skill" }],
+      skillFilter: ["cli-skill"],
+      version: 0,
+      resolvedSkills: legacyResolvedSkills,
+    };
+    const rebuiltSkills = [
+      {
+        name: "cli-skill",
+        description: "Rebuilt CLI skill",
+        filePath: "/tmp/workspace/skills/cli-skill/SKILL.md",
+        baseDir: "/tmp/workspace/skills/cli-skill",
+        source: "# Rebuilt CLI skill",
+      },
+    ];
+    state.sessionEntryMock = {
+      sessionId: "session-1",
+      updatedAt: Date.now(),
+      skillsSnapshot: legacyPersistedSnapshot,
+    };
+    state.buildWorkspaceSkillSnapshotMock.mockReturnValue({
+      prompt: "rebuilt prompt",
+      schemaVersion: SKILL_SNAPSHOT_SCHEMA_VERSION,
+      trustedDeveloperPrompt: "rebuilt trusted",
+      untrustedReferencePrompt: "rebuilt reference",
+      skills: [{ name: "cli-skill" }],
+      resolvedSkills: rebuiltSkills,
+      version: 99,
+    });
+    state.runWithModelFallbackMock.mockImplementation(async (params: FallbackRunnerParams) => {
+      const result = await params.run(params.provider, params.model);
+      return {
+        result,
+        provider: params.provider,
+        model: params.model,
+        attempts: [],
+      };
+    });
+    state.runAgentAttemptMock.mockResolvedValue(makeSuccessResult("anthropic", "claude"));
+
+    await runBasicAgentCommand();
+
+    const attemptParams = mockCallArg(state.runAgentAttemptMock) as {
+      skillsSnapshot?: Record<string, unknown>;
+    };
+    expectRecordFields(attemptParams?.skillsSnapshot, {
+      prompt: "rebuilt prompt",
+      schemaVersion: SKILL_SNAPSHOT_SCHEMA_VERSION,
+      trustedDeveloperPrompt: "rebuilt trusted",
+      untrustedReferencePrompt: "rebuilt reference",
+    });
+    expect(state.buildWorkspaceSkillSnapshotMock).toHaveBeenCalledTimes(1);
   });
 
   it("classifies empty embedded run results before model fallback accepts them", async () => {
