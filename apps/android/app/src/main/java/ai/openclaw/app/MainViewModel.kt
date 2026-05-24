@@ -32,6 +32,8 @@ class MainViewModel(
   private var foreground = true
   private val _requestedHomeDestination = MutableStateFlow<HomeDestination?>(null)
   val requestedHomeDestination: StateFlow<HomeDestination?> = _requestedHomeDestination
+  private val _startOnboardingAtGatewaySetup = MutableStateFlow(false)
+  val startOnboardingAtGatewaySetup: StateFlow<Boolean> = _startOnboardingAtGatewaySetup
   private val _chatDraft = MutableStateFlow<String?>(null)
   val chatDraft: StateFlow<String?> = _chatDraft
   private val _pendingAssistantAutoSend = MutableStateFlow<String?>(null)
@@ -260,6 +262,17 @@ class MainViewModel(
       ensureRuntime()
     }
     prefs.setOnboardingCompleted(value)
+  }
+
+  fun pairNewGateway() {
+    runtimeRef.value?.disconnect()
+    resetGatewaySetupAuth()
+    _startOnboardingAtGatewaySetup.value = true
+    prefs.setOnboardingCompleted(false)
+  }
+
+  fun clearGatewaySetupStartRequest() {
+    _startOnboardingAtGatewaySetup.value = false
   }
 
   fun setCanvasDebugStatusEnabled(value: Boolean) {
