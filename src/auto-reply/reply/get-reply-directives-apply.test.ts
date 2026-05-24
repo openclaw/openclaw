@@ -1,6 +1,9 @@
 // Tests applying parsed directives to get-reply execution options.
 import { describe, expect, it } from "vitest";
-import { formatModelOverrideResetEvent } from "./get-reply-directives-apply.js";
+import {
+  formatModelDirectiveSelectionEvent,
+  formatModelOverrideResetEvent,
+} from "./get-reply-directives-apply.js";
 
 describe("formatModelOverrideResetEvent", () => {
   it("names the rejected model override and allowlist recovery path", () => {
@@ -20,5 +23,34 @@ describe("formatModelOverrideResetEvent", () => {
         initialModelLabel: "github-copilot/gpt-4o",
       }),
     ).toBe("Model override not allowed for this agent; reverted to github-copilot/gpt-4o.");
+  });
+});
+
+describe("formatModelDirectiveSelectionEvent", () => {
+  it("treats an explicit configured-default selection as a session pin", () => {
+    expect(
+      formatModelDirectiveSelectionEvent({
+        modelSelection: {
+          provider: "anthropic",
+          model: "claude-opus-4-6",
+          isDefault: true,
+        },
+        labelWithAlias: "Opus (anthropic/claude-opus-4-6)",
+      }),
+    ).toBe("Model set to Opus (anthropic/claude-opus-4-6) for this session.");
+  });
+
+  it("keeps reset wording for /model default", () => {
+    expect(
+      formatModelDirectiveSelectionEvent({
+        modelSelection: {
+          provider: "anthropic",
+          model: "claude-opus-4-6",
+          isDefault: true,
+          preserveDefaultSelectionSource: false,
+        },
+        labelWithAlias: "anthropic/claude-opus-4-6",
+      }),
+    ).toBe("Model reset to default (anthropic/claude-opus-4-6).");
   });
 });
