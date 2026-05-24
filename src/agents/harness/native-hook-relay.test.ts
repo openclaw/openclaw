@@ -783,17 +783,16 @@ describe("native hook relay registry", () => {
   });
 
   it("rejects expired relay ids", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-04-24T12:00:00Z"));
     const relay = registerNativeHookRelay({
       provider: "codex",
       sessionId: "session-1",
       runId: "run-1",
       ttlMs: 1,
     });
-    expect(testing.getNativeHookRelayBridgeRecordForTests(relay.relayId)).toBeDefined();
+    await waitForNativeHookRelayBridgeRecord(relay.relayId);
 
-    vi.setSystemTime(new Date("2026-04-24T12:00:01Z"));
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(relay.expiresAtMs + 1));
 
     await expect(
       invokeNativeHookRelay({
