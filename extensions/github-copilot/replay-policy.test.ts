@@ -41,10 +41,23 @@ describe("buildGithubCopilotReplayPolicy", () => {
     });
 
     it("drops reasoning from history for o-series and synthetic gpt model ids", () => {
-      // Catch-all for unknown models the user adds to agents.defaults.models.
-      // resolveCopilotForwardCompatModel() picks openai-responses for any
-      // non-claude id, so any non-claude model id should get the same policy.
-      for (const modelId of ["o3-mini", "o1", "raptor-mini", "goldeneye", "gemini-3.1-pro"]) {
+      // Catch-all for unknown non-Claude models the user adds to
+      // agents.defaults.models. resolveCopilotTransportApi picks
+      // openai-responses for any non-claude, non-gemini id, so any such model
+      // id should get the same policy. (Gemini routes to openai-completions
+      // where the policy is a no-op on the wire — covered separately below.)
+      for (const modelId of ["o3-mini", "o1", "raptor-mini", "goldeneye", "synthetic-future-gpt"]) {
+        const policy = buildGithubCopilotReplayPolicy(modelId);
+        expect(policy, `model ${modelId}`).toMatchObject({ dropReasoningFromHistory: true });
+      }
+    });
+
+    it("applies dropReasoningFromHistory for gemini ids even though they route to openai-completions", () => {
+      // resolveCopilotTransportApi routes gemini-* through openai-completions,
+      // which does not surface encrypted_content. We still emit the same
+      // policy for consistency with the catch-all and to keep behavior stable
+      // if Copilot ever moves Gemini onto Responses.
+      for (const modelId of ["gemini-3.1-pro", "gemini-2.5-flash"]) {
         const policy = buildGithubCopilotReplayPolicy(modelId);
         expect(policy, `model ${modelId}`).toMatchObject({ dropReasoningFromHistory: true });
       }
