@@ -1350,7 +1350,7 @@ describe("createTelegramBot", () => {
     }
   });
 
-  it("does not issue a pairing challenge when the pairing allowlist store cannot be read", async () => {
+  it("sends a friendly retry hint when the pairing allowlist store cannot be read", async () => {
     loadConfig.mockReturnValue({
       channels: { telegram: { dmPolicy: "pairing" } },
     });
@@ -1366,6 +1366,7 @@ describe("createTelegramBot", () => {
       message: {
         chat: { id: 1234, type: "private" },
         text: "hello",
+        message_id: 9,
         date: 1736380800,
         from: { id: 123456789, username: "testuser" },
       },
@@ -1374,8 +1375,15 @@ describe("createTelegramBot", () => {
     });
 
     expect(upsertChannelPairingRequest).not.toHaveBeenCalled();
-    expect(sendMessageSpy).not.toHaveBeenCalled();
     expect(replySpy).not.toHaveBeenCalled();
+    expect(sendMessageSpy).toHaveBeenCalledTimes(1);
+    expect(sendMessageSpy).toHaveBeenCalledWith(
+      1234,
+      "⚠️ Couldn't process this message, please try again in a moment.",
+      expect.objectContaining({
+        reply_parameters: expect.objectContaining({ message_id: 9 }),
+      }),
+    );
   });
 
   it("keeps the same private chat usable after a transient pairing store read failure", async () => {
@@ -1417,7 +1425,9 @@ describe("createTelegramBot", () => {
 
     expect(readChannelAllowFromStore).toHaveBeenCalledTimes(2);
     expect(upsertChannelPairingRequest).not.toHaveBeenCalled();
-    expect(sendMessageSpy).not.toHaveBeenCalled();
+    // First message: failure → retry hint via sendMessageSpy. Second message: success → agent reply via replySpy.
+    expect(sendMessageSpy).toHaveBeenCalledTimes(1);
+    expect(sendMessageSpy.mock.calls[0]?.[1]).toMatch(/please try again/i);
     expect(replySpy).toHaveBeenCalledTimes(1);
   });
 

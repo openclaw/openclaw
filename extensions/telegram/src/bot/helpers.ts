@@ -310,11 +310,16 @@ async function isTelegramDmAllowedByConfiguredAllowFrom(params: {
   );
 }
 
-// Only read the pairing-store file when it can affect the decision: DM, pairing
-// mode, and the sender is not already authorized by configured allowFrom.
-// readChannelAllowFromStore translates a missing pairing file to [] internally,
-// so the only errors that escape are unexpected I/O failures — letting them
-// throw lets callers drop the message instead of issuing a bogus pairing prompt.
+export class TelegramPairingStoreReadError extends Error {
+  override readonly cause: unknown;
+  constructor(cause: unknown) {
+    super(`Telegram pairing store read failed: ${String(cause)}`);
+    this.name = "TelegramPairingStoreReadError";
+    this.cause = cause;
+  }
+}
+
+// Could add bounded retries to absorb short FD-pressure spikes; deferred. See #85555.
 export async function loadTelegramPairingStoreIfNeeded(params: {
   cfg?: OpenClawConfig;
   allowFrom?: Array<string | number>;
@@ -339,11 +344,15 @@ export async function loadTelegramPairingStoreIfNeeded(params: {
   if (configuredDmAllowed) {
     return [];
   }
-  return await (params.readChannelAllowFromStore ?? readChannelAllowFromStore)(
-    "telegram",
-    process.env,
-    params.accountId,
-  );
+  try {
+    return await (params.readChannelAllowFromStore ?? readChannelAllowFromStore)(
+      "telegram",
+      process.env,
+      params.accountId,
+    );
+  } catch (cause) {
+    throw new TelegramPairingStoreReadError(cause);
+  }
 }
 
 /**

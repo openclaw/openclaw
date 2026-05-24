@@ -90,6 +90,7 @@ import {
   resolveTelegramForumThreadId,
   resolveTelegramGroupAllowFromContext,
   loadTelegramPairingStoreIfNeeded,
+  TelegramPairingStoreReadError,
   shouldUseTelegramDmThreadSession,
   withResolvedTelegramForumFlag,
 } from "./bot/helpers.js";
@@ -2899,6 +2900,23 @@ export const registerTelegramHandlers = ({
     } catch (err) {
       releaseDispatchDedupeKeys(dispatchDedupeKeys, err);
       runtime.error?.(danger(`${event.errorMessage}: ${String(err)}`));
+      if (err instanceof TelegramPairingStoreReadError) {
+        await withTelegramApiErrorLogging({
+          operation: "sendMessage",
+          runtime,
+          fn: () =>
+            bot.api.sendMessage(
+              event.chatId,
+              "⚠️ Couldn't process this message, please try again in a moment.",
+              {
+                reply_parameters: {
+                  message_id: event.msg.message_id,
+                  allow_sending_without_reply: true,
+                },
+              },
+            ),
+        }).catch(() => {});
+      }
     }
   };
 
