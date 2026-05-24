@@ -5,6 +5,17 @@
  * 上层调用统一用 info/warn/error/debug 级别区分。
  */
 
+/**
+ * 对日志消息中的敏感字段进行脱敏替换，防止凭证泄漏到日志系统。
+ * 只处理消息文本，不影响实际数据流。
+ */
+export function redactSensitive(msg: string): string {
+  return msg
+    .replace(/(password|secret|api_key|token|credential)[=:\s]+\S+/gi, "$1=***")
+    .replace(/Bearer\s+\S+/gi, "Bearer ***")
+    .replace(/sk-[a-zA-Z0-9]{20,}/g, "sk-***");
+}
+
 export type RuntimeLogger = {
   info(msg: string): void;
   warn(msg: string): void;
@@ -36,20 +47,20 @@ export function createRuntimeLogger(base?: (msg: string) => void, ns = "claworks
       write(msg);
     },
     info(msg) {
-      write(format("INFO ", msg));
+      write(format("INFO ", redactSensitive(msg)));
     },
     warn(msg) {
-      write(format("WARN ", msg));
+      write(format("WARN ", redactSensitive(msg)));
     },
     error(msg, err?: unknown) {
-      write(format("ERROR", msg));
+      write(format("ERROR", redactSensitive(msg)));
       if (err != null) {
         const stack = err instanceof Error ? (err.stack ?? err.message) : String(err);
-        write(format("ERROR", `  ↳ ${stack}`));
+        write(format("ERROR", `  ↳ ${redactSensitive(stack)}`));
       }
     },
     debug(msg) {
-      write(format("DEBUG", msg));
+      write(format("DEBUG", redactSensitive(msg)));
     },
   };
 }
