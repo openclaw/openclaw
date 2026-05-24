@@ -10,6 +10,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { createActionRegistry } from "../../kernel/action-registry.js";
+import { CW_EVENTS } from "../../kernel/event-names.js";
 import { openDatabase } from "../data/db.js";
 import { createKnowledgeBase } from "../data/knowledge-base.js";
 import { createObjectStore } from "../data/object-store.js";
@@ -65,6 +66,11 @@ function loadSingle(engine: ReturnType<typeof makeEngine>["engine"], def: Playbo
   ]);
 }
 
+/** Playbook 运行结束时会额外发布 playbook.run.completed；测试只关心步骤级 publish_event。 */
+function stepPublishedEvents<T extends { type: string }>(published: T[]): T[] {
+  return published.filter((e) => e.type !== CW_EVENTS.PLAYBOOK_RUN_COMPLETED);
+}
+
 // ─── 场景 A：publish_event 步骤 → 事件发布验证 ─────────────────────────────
 
 describe("场景 A: publish_event 步骤正确触发下游事件", () => {
@@ -97,9 +103,9 @@ describe("场景 A: publish_event 步骤正确触发下游事件", () => {
     const run = await engine.trigger("pub_flow", { user: "alice" });
 
     expect(run.status).toBe("completed");
-    expect(published).toHaveLength(1);
-    expect(published[0]!.type).toBe("downstream.triggered");
-    expect(published[0]!.payload.source_msg).toBe("hello");
+    expect(stepPublishedEvents(published)).toHaveLength(1);
+    expect(stepPublishedEvents(published)[0]!.type).toBe("downstream.triggered");
+    expect(stepPublishedEvents(published)[0]!.payload.source_msg).toBe("hello");
 
     close();
   });
@@ -195,8 +201,8 @@ describe("场景 B: action 输出通过 steps[id][result] 被后续步骤引用"
     const run = await engine.trigger("ref_flow", {});
 
     expect(run.status).toBe("completed");
-    expect(published).toHaveLength(1);
-    expect(published[0]!.payload.resolved_value).toBe("result_from_A");
+    expect(stepPublishedEvents(published)).toHaveLength(1);
+    expect(stepPublishedEvents(published)[0]!.payload.resolved_value).toBe("result_from_A");
 
     close();
   });

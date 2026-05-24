@@ -22,6 +22,8 @@
 
 import { createHash } from "node:crypto";
 import type { ClaworksRuntime } from "../claworks/runtime-types.js";
+import { parsePlaybookYaml } from "../pack-loader/yaml-parsers.js";
+import type { CbrCase } from "../planes/data/cbr-store.js";
 
 // ── 导出数据结构 ───────────────────────────────────────────────────────────
 
@@ -184,9 +186,16 @@ export class EvolutionSyncManager {
         if (evolveEngine?.deploy) {
           await evolveEngine.deploy({ id: playbook.id, playbook_yaml: yamlContent, confidence: 1 });
         } else {
-          // 直接通过 playbookEngine 加载
           const pb = this.runtime.playbookEngine;
-          await pb.loadFromYaml?.(yamlContent, `evolution-pack:${pack.source_robot_id}`);
+          const source = `evolution-pack:${pack.source_robot_id}`;
+          if (typeof pb.load === "function") {
+            const playbookDef = parsePlaybookYaml(yamlContent, source);
+            pb.load(playbookDef);
+          } else if (typeof pb.loadFromYaml === "function") {
+            await pb.loadFromYaml(yamlContent, source);
+          } else {
+            throw new Error("playbookEngine.load / loadFromYaml 不可用");
+          }
         }
         applied.push(`Playbook 已更新: ${playbook.id}`);
       } catch (err) {
@@ -200,11 +209,14 @@ export class EvolutionSyncManager {
     for (const table of pack.updated_rule_tables ?? []) {
       try {
         const ruleEngine = this.runtime.ruleEngine;
-        if (ruleEngine && typeof (ruleEngine as Record<string, unknown>).loadTable === "function") {
-          (ruleEngine as { loadTable: (t: unknown) => void }).loadTable(table);
+        if (ruleEngine?.registerTable) {
+          ruleEngine.registerTable(table as import("./rule-engine.js").DecisionTable);
+          applied.push(`规则表已更新: ${table.name}`);
+        } else if (typeof ruleEngine?.loadTable === "function") {
+          ruleEngine.loadTable(table);
           applied.push(`规则表已更新: ${table.name}`);
         } else {
-          errors.push(`规则表 ${table.name} 跳过: ruleEngine.loadTable 不可用`);
+          errors.push(`规则表 ${table.name} 跳过: ruleEngine 无 registerTable/loadTable`);
         }
       } catch (err) {
         errors.push(
@@ -375,37 +387,31 @@ export class EvolutionSyncManager {
   }
 
   private loadFeedbackRecords(): EvolutionExportData["feedback_records"] {
-    const cases = this.runtime.cbrStore?.list({ limit: 200 }) ?? [];
+    const cases = (this.runtime.cbrStore?.list({ limit: 200 }) ?? []) as unknown as CbrCase[];
     return cases
       .filter((c) => c.outcome !== undefined)
       .map((c) => ({
-        interaction_type: String(c.tags?.[0] ?? c.problem?.slice?.(0, 20) ?? "unknown"),
+        interaction_type: String(c.tags?.[0] ?? c.problem.slice(0, 20) ?? "unknown"),
         feedback_score: c.outcome === "success" ? 1 : c.outcome === "partial" ? 0.5 : 0,
         feedback_hint: undefined,
-        timestamp: c.createdAt?.toISOString?.() ?? new Date().toISOString(),
+        timestamp: (c.createdAt ?? new Date(0)).toISOString(),
       }));
   }
 
   private loadLowConfidenceIntents(): EvolutionExportData["low_confidence_intents"] {
     // 从 cbrStore 中提取低置信度案例（置信度通过 similarity_keys 推断）
-    const cases = this.runtime.cbrStore?.list({ limit: 200 }) ?? [];
+    const cases = (this.runtime.cbrStore?.list({ limit: 200 }) ?? []) as unknown as CbrCase[];
     return cases
-      .filter((c) => ((c.useCount as number | undefined) ?? 0) <= 1)
+      .filter((c) => c.useCount <= 1)
       .slice(0, 50)
-      .map((c) => {
-        const problem = c.problem as string | undefined;
-        const problemStr = typeof problem === "string" ? problem : "";
-        const tags = c.tags as string[] | undefined;
-        const createdAt = c.createdAt as { toISOString?: () => string } | undefined;
-        return {
-          text_hash: this.hashText(problemStr),
-          text_preview: problemStr.slice(0, 20),
-          classified_intent: typeof tags?.[0] === "string" ? tags[0] : "unknown",
-          confidence: 0.4,
-          actual_outcome: c.outcome as string | undefined,
-          timestamp: createdAt?.toISOString?.() ?? new Date().toISOString(),
-        };
-      });
+      .map((c) => ({
+        text_hash: this.hashText(c.problem),
+        text_preview: c.problem.slice(0, 20),
+        classified_intent: typeof c.tags?.[0] === "string" ? c.tags[0] : "unknown",
+        confidence: 0.4,
+        actual_outcome: c.outcome,
+        timestamp: (c.createdAt ?? new Date(0)).toISOString(),
+      }));
   }
 
   private collectRuleTableNames(): string[] {
@@ -414,9 +420,18 @@ export class EvolutionSyncManager {
       return [];
     }
     try {
-      return (
-        engine.listRules?.()?.map?.((r: { id: string }) => r.id.split(".")[0] ?? "unknown") ?? []
-      );
+      if (typeof engine.listTables === "function") {
+        return [
+          ...new Set(engine.listTables().map((table) => table.id.split(".")[0] ?? "unknown")),
+        ];
+      }
+      const listRules = (engine as { listRules?: () => Array<{ id: string }> }).listRules;
+      if (typeof listRules === "function") {
+        return [
+          ...new Set(listRules.call(engine).map((rule) => rule.id.split(".")[0] ?? "unknown")),
+        ];
+      }
+      return [];
     } catch {
       return [];
     }
