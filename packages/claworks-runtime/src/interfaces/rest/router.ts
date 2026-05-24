@@ -29,11 +29,7 @@ import { describeKnowledgeBase } from "../../planes/data/kb-status.js";
 import { buildA2aAgentCard } from "../a2a/agent-card.js";
 import { resolveAuthContext, checkRbac } from "./auth.js";
 import { badRequest, notFound, parsePath, readJsonBody, sendJson } from "./http-utils.js";
-import {
-  extractReplyText,
-  extractEventSessionAndText,
-  recordAssistantTurnIfCompleted,
-} from "./router-context.js";
+import { extractEventSessionAndText } from "./router-context.js";
 
 // Per-handler 速率限制器（每 REST handler 实例独立，防进程内 DoS）
 const _apiRateLimiter = createRateLimiter(API_RATE_LIMITER_CONFIG);
@@ -424,18 +420,6 @@ export function createClaworksRestHandler(
       if (method === "POST" && parts[1] === "playbooks" && parts[3] === "runs" && parts[2]) {
         const body = (await readJsonBody(req)) as { input?: Record<string, unknown> };
         const run = await runtime.playbookEngine.trigger(parts[2], body.input ?? {});
-        // 如果请求携带 session_id，且 Playbook 同步完成并有回复文本，写入对话上下文引擎
-        const sessionId = typeof body.input?.session_id === "string" ? body.input.session_id : null;
-        if (sessionId && run.status === "completed" && run.output) {
-          const replyText = extractReplyText(run.output);
-          if (replyText) {
-            runtime.contextEngine?.append(sessionId, "assistant", replyText, {
-              playbookId: parts[2],
-              runId: run.id,
-              channel: "rest",
-            });
-          }
-        }
         sendJson(res, 202, run);
         return true;
       }
@@ -545,29 +529,34 @@ export function createClaworksRestHandler(
             // 使用沙盒 runtime 直接触发 playbook
             const playbookEngine = runtime.playbookEngine;
             if (!playbookEngine) throw new Error("PlaybookEngine 未初始化");
-            const runId = await playbookEngine.trigger(pid, trigEvent, {
-              userId: "simulator",
-              channelId: "simulate",
-              additionalVars: { ...initVars, _simulate: true, _mock_store: mockStore },
-              subjectType: "system",
-              subjectId: "simulator",
-            });
-            const run = runId ? await playbookEngine.getRun(runId) : null;
+            const run = await playbookEngine.trigger(
+              pid,
+              typeof trigEvent === "object" && trigEvent !== null && !Array.isArray(trigEvent)
+                ? (trigEvent as Record<string, unknown>)
+                : {},
+              {
+                variables: { ...initVars, _simulate: true, _mock_store: mockStore },
+              },
+            );
             if (run?.steps) {
               for (let i = 0; i < run.steps.length; i++) {
-                const s = run.steps[i];
+                const s = run.steps[i]!;
+                const durationMs =
+                  s.completedAt && s.startedAt
+                    ? s.completedAt.getTime() - s.startedAt.getTime()
+                    : 0;
                 steps.push({
                   step: i,
-                  type: String(s?.type ?? "unknown"),
-                  name: String(s?.name ?? ""),
-                  status: s?.status === "error" ? "error" : "ok",
-                  durationMs: typeof s?.durationMs === "number" ? s.durationMs : 0,
-                  output: s?.output,
-                  error: s?.error,
+                  type: s.stepId,
+                  name: s.stepId,
+                  status: s.status === "failed" ? "error" : "ok",
+                  durationMs,
+                  output: s.output,
+                  error: s.error,
                 });
               }
             }
-            return { steps, error: run?.error };
+            return { steps, error: run.error };
           } catch (e) {
             return { steps, error: String(e) };
           }
@@ -688,14 +677,6 @@ export function createClaworksRestHandler(
           return true;
         }
         if (publishResult.action === "intent_routed") {
-          if (eventSessionId) {
-            await recordAssistantTurnIfCompleted(
-              runtime,
-              eventSessionId,
-              publishResult.runId,
-              publishResult.playbookId,
-            );
-          }
           sendJson(res, 202, {
             action: "intent_routed",
             playbook_id: publishResult.playbookId,
@@ -1002,7 +983,8 @@ export function createClaworksRestHandler(
       // GET /v1/evolution/export?days=30 — 导出近期运行数据供离线强模型生成进化包
       if (method === "GET" && parts[1] === "evolution" && parts[2] === "export") {
         if (!(await requireRead())) return true;
-        const days = parseInt(String(url.searchParams?.get?.("days") ?? "30"), 10) || 30;
+        const exportUrl = new URL(req.url ?? "/", "http://localhost");
+        const days = parseInt(String(exportUrl.searchParams.get("days") ?? "30"), 10) || 30;
         const data = await runtime.evolutionSync?.exportEvolutionData(days);
         sendJson(res, 200, data ?? { events: [], cases: [], feedback: [] });
         return true;

@@ -69,6 +69,7 @@ describe("playbook-engine contextEngine integration", () => {
 
     const run = await engine.trigger("classify_im", { session_id: "feishu:user:u1" });
     expect(run.status).toBe("completed");
+    expect(append).toHaveBeenCalledTimes(1);
     expect(append).toHaveBeenCalledWith(
       "feishu:user:u1",
       "assistant",
