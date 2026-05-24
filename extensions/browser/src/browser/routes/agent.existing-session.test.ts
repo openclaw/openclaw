@@ -1,4 +1,8 @@
 // Browser tests cover agent.existing session plugin behavior.
+
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { EXISTING_SESSION_LIMITS } from "./existing-session-limits.js";
 import {
@@ -494,7 +498,7 @@ describe("existing-session browser routes", () => {
     expect(chromeMcpMocks.takeChromeMcpScreenshot).not.toHaveBeenCalled();
   });
 
-  it("fails closed for existing-session networkidle waits", async () => {
+  it("supports existing-session networkidle waits with an evaluated readiness predicate", async () => {
     const handler = getActPostHandler();
     const response = createBrowserRouteResponse();
     await handler?.(
@@ -506,10 +510,15 @@ describe("existing-session browser routes", () => {
       response.res,
     );
 
-    expect(response.statusCode).toBe(501);
+    expect(response.statusCode).toBe(200);
     const body = requireRecord(response.body, "response body");
-    expect(String(body.error)).toContain("loadState=networkidle");
-    expect(chromeMcpMocks.evaluateChromeMcpScript).not.toHaveBeenCalled();
+    expect(body.ok).toBe(true);
+    expect(chromeMcpMocks.evaluateChromeMcpScript).toHaveBeenCalledWith(
+      expect.objectContaining({
+        targetId: "7",
+        fn: expect.stringContaining("performance.getEntriesByType"),
+      }),
+    );
   });
 
   it("fails closed for existing-session type timeout overrides", async () => {
@@ -897,6 +906,24 @@ describe("existing-session browser routes", () => {
     });
   });
 
+  it("uses safe defaults for existing-session trace insight analysis", async () => {
+    const handler = getDebugPostHandler("/trace/insight");
+    const response = createBrowserRouteResponse();
+
+    await handler?.({ params: {}, query: {}, body: {} }, response.res);
+
+    expect(response.statusCode).toBe(200);
+    const body = requireRecord(response.body, "response body");
+    expect(body.insightSetId).toBe("navigation-1");
+    expect(body.insightName).toBe("DocumentLatency");
+    expect(chromeMcpMocks.analyzeChromeMcpPerformanceInsight).toHaveBeenCalledWith(
+      expect.objectContaining({
+        insightSetId: "navigation-1",
+        insightName: "DocumentLatency",
+      }),
+    );
+  });
+
   it("routes existing-session trace start through Chrome MCP performance trace", async () => {
     const handler = getDebugPostHandler("/trace/start");
     const response = createBrowserRouteResponse();
@@ -1023,21 +1050,32 @@ describe("existing-session browser routes", () => {
       timeoutMs: undefined,
     });
 
-    await getDebugPostHandler("/screencast/start")?.(
-      { params: {}, query: {}, body: { path: "/tmp/cast.webm" } },
-      createBrowserRouteResponse().res,
-    );
-    expect(chromeMcpMocks.startChromeMcpScreencast).toHaveBeenCalledWith(
-      expect.objectContaining({ targetId: "7", filePath: "/tmp/cast.webm" }),
-    );
+    const screencastPath = path.join(os.tmpdir(), `openclaw-test-cast-${Date.now()}.webm`);
+    try {
+      await getDebugPostHandler("/screencast/start")?.(
+        { params: {}, query: {}, body: { path: screencastPath } },
+        createBrowserRouteResponse().res,
+      );
+      expect(chromeMcpMocks.startChromeMcpScreencast).toHaveBeenCalledWith(
+        expect.objectContaining({ targetId: "7", filePath: screencastPath }),
+      );
 
-    await getDebugPostHandler("/screencast/stop")?.(
-      { params: {}, query: {}, body: {} },
-      createBrowserRouteResponse().res,
-    );
-    expect(chromeMcpMocks.stopChromeMcpScreencast).toHaveBeenCalledWith(
-      expect.objectContaining({ targetId: "7" }),
-    );
+      await fs.writeFile(screencastPath, "webm-data");
+      const stopResponse = createBrowserRouteResponse();
+      await getDebugPostHandler("/screencast/stop")?.(
+        { params: {}, query: {}, body: {} },
+        stopResponse.res,
+      );
+      expect(chromeMcpMocks.stopChromeMcpScreencast).toHaveBeenCalledWith(
+        expect.objectContaining({ targetId: "7" }),
+      );
+      const stopBody = requireRecord(stopResponse.body, "screencast stop response");
+      expect(stopBody.filePath).toBe(screencastPath);
+      expect(stopBody.artifactReady).toBe(true);
+      expect(stopBody.artifactBytes).toBeGreaterThan(0);
+    } finally {
+      await fs.rm(screencastPath, { force: true });
+    }
   });
 
   it("routes existing-session extension debug routes through Chrome MCP", async () => {
@@ -1050,6 +1088,20 @@ describe("existing-session browser routes", () => {
       profile: expect.objectContaining({ name: "chrome-live", driver: "existing-session" }),
       timeoutMs: undefined,
     });
+
+    chromeMcpMocks.listChromeMcpExtensions.mockRejectedValueOnce(
+      new Error("Protocol error (Extensions.getExtensions): Method not available."),
+    );
+    const unavailableResponse = createBrowserRouteResponse();
+    await getDebugGetHandler("/extensions")?.(
+      { params: {}, query: {}, body: {} },
+      unavailableResponse.res,
+    );
+    expect(unavailableResponse.statusCode).toBe(200);
+    const unavailableBody = requireRecord(unavailableResponse.body, "extensions unavailable body");
+    expect(unavailableBody.ok).toBe(true);
+    expect(unavailableBody.unavailable).toBe(true);
+    expect(unavailableBody.extensions).toEqual([]);
 
     await getDebugPostHandler("/extensions/install")?.(
       { params: {}, query: {}, body: { path: "/tmp/ext" } },

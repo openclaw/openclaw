@@ -111,6 +111,7 @@ export type ResolvedBrowserProfile = {
   executablePath?: string;
   headless: boolean;
   headlessSource?: "profile" | "config" | "default";
+  noSandbox: boolean;
   attachOnly: boolean;
 };
 
@@ -506,6 +507,7 @@ export function resolveProfile(
       executablePath,
       headless,
       headlessSource,
+      noSandbox: resolved.noSandbox,
       attachOnly: true,
     };
   }
@@ -554,6 +556,7 @@ export function resolveProfile(
     executablePath,
     headless,
     headlessSource,
+    noSandbox: resolved.noSandbox,
     attachOnly: profile.attachOnly ?? resolved.attachOnly,
   };
 }

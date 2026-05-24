@@ -24,6 +24,7 @@ import {
   uniqueStrings,
   uniqueValues,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { formatErrorMessage } from "../infra/errors.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { redactToolPayloadText } from "../logging/redact.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -120,6 +121,9 @@ type ChromeMcpCallOptions = {
 export type ChromeMcpProfileOptions = {
   userDataDir?: string;
   cdpUrl?: string;
+  executablePath?: string;
+  headless?: boolean;
+  noSandbox?: boolean;
   mcpCommand?: string;
   mcpArgs?: string[];
 };
@@ -127,6 +131,9 @@ export type ChromeMcpProfileOptions = {
 type NormalizedChromeMcpProfileOptions = {
   userDataDir?: string;
   browserUrl?: string;
+  executablePath?: string;
+  headless?: boolean;
+  noSandbox?: boolean;
   command: string;
   extraArgs: string[];
 };
@@ -207,6 +214,9 @@ const CHROME_MCP_CONNECTION_FLAGS = new Set([
   "-w",
 ]);
 const CHROME_MCP_USER_DATA_DIR_FLAGS = new Set(["--userDataDir", "--user-data-dir"]);
+const CHROME_MCP_EXECUTABLE_PATH_FLAGS = new Set(["--executablePath", "--executable-path", "-e"]);
+const CHROME_MCP_HEADLESS_FLAGS = new Set(["--headless", "--no-headless"]);
+const CHROME_MCP_CHROME_ARG_FLAGS = new Set(["--chromeArg", "--chrome-arg"]);
 const CHROME_MCP_NEW_PAGE_TIMEOUT_MS = 5_000;
 const CHROME_MCP_NAVIGATE_TIMEOUT_MS = 20_000;
 const CHROME_MCP_HANDSHAKE_TIMEOUT_MS = 30_000;
@@ -290,14 +300,36 @@ function toGenericToolResult(result: ChromeMcpToolResult): ChromeMcpGenericToolR
   };
 }
 
+function extractTextExtensions(result: ChromeMcpToolResult): ChromeMcpExtension[] {
+  const extensions: ChromeMcpExtension[] = [];
+  for (const block of extractTextContent(result)) {
+    for (const line of block.split(/\r?\n/)) {
+      const match = line.match(/\bid=([^\s]+)\s+"([^"]+)"\s+v([^\s]+)(?:\s+(Enabled|Disabled))?/i);
+      if (!match) {
+        continue;
+      }
+      extensions.push({
+        id: match[1],
+        name: match[2],
+        version: match[3],
+        ...(match[4] ? { enabled: /^enabled$/i.test(match[4]) } : {}),
+      });
+    }
+  }
+  return extensions;
+}
+
 function extractExtensions(result: ChromeMcpToolResult): ChromeMcpExtension[] {
+  const textExtensions = extractTextExtensions(result);
   const extensions = extractStructuredContent(result).extensions;
   if (!Array.isArray(extensions)) {
-    return [];
+    return textExtensions;
   }
-  return extensions
+  const structuredExtensions = extensions
     .map((entry) => asRecord(entry))
-    .filter((entry): entry is ChromeMcpExtension => Boolean(entry));
+    .filter((entry): entry is ChromeMcpExtension => Boolean(entry))
+    .filter((entry) => Object.keys(entry).length > 0);
+  return structuredExtensions.length > 0 ? structuredExtensions : textExtensions;
 }
 
 function extractTextContent(result: ChromeMcpToolResult): string[] {
@@ -334,7 +366,14 @@ function extractStructuredPages(result: ChromeMcpToolResult): ChromeMcpStructure
 }
 
 function readNumberValue(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+  if (typeof value === "number") {
+    return Number.isFinite(value) ? value : undefined;
+  }
+  if (typeof value === "string" && value.trim()) {
+    const parsed = Number(value.trim());
+    return Number.isFinite(parsed) ? parsed : undefined;
+  }
+  return undefined;
 }
 
 function readBooleanValue(value: unknown): boolean | undefined {
@@ -392,8 +431,9 @@ function readConsoleMessage(value: unknown): ChromeMcpConsoleMessage | null {
   if (!record) {
     return null;
   }
+  const id = readNumberValue(record.id) ?? readNumberValue(record.msgid);
   return {
-    ...(readNumberValue(record.id) !== undefined ? { id: readNumberValue(record.id) } : {}),
+    ...(id !== undefined ? { id } : {}),
     ...(readStringValue(record.type) !== undefined ? { type: readStringValue(record.type) } : {}),
     ...(readStringValue(record.text) !== undefined ? { text: readStringValue(record.text) } : {}),
     ...(readNumberValue(record.argsCount) !== undefined
@@ -596,6 +636,9 @@ function normalizeChromeMcpOptions(
     command,
     userDataDir: normalizeChromeMcpUserDataDir(options.userDataDir),
     browserUrl: normalizeOptionalString(options.cdpUrl),
+    executablePath: normalizeOptionalString(options.executablePath),
+    headless: typeof options.headless === "boolean" ? options.headless : undefined,
+    noSandbox: options.noSandbox === true,
     extraArgs: normalizeChromeMcpStringList(options.mcpArgs),
   };
 }
@@ -611,6 +654,24 @@ function isChromeMcpWebSocketEndpoint(url: string): boolean {
   return /^wss?:\/\//i.test(url);
 }
 
+function isChromeMcpSelectedPageLookupUnavailable(error: unknown): boolean {
+  return formatErrorMessage(error).includes("Request not found for selected page");
+}
+
+function shouldLaunchChromeMcpBrowser(options: NormalizedChromeMcpProfileOptions): boolean {
+  if (options.browserUrl || hasFlag(options.extraArgs, CHROME_MCP_CONNECTION_FLAGS)) {
+    return false;
+  }
+  return Boolean(
+    options.executablePath ||
+    typeof options.headless === "boolean" ||
+    options.noSandbox ||
+    hasFlag(options.extraArgs, CHROME_MCP_EXECUTABLE_PATH_FLAGS) ||
+    hasFlag(options.extraArgs, CHROME_MCP_HEADLESS_FLAGS) ||
+    hasFlag(options.extraArgs, CHROME_MCP_CHROME_ARG_FLAGS),
+  );
+}
+
 function buildChromeMcpConnectionArgs(options: NormalizedChromeMcpProfileOptions): string[] {
   if (hasFlag(options.extraArgs, CHROME_MCP_CONNECTION_FLAGS)) {
     return [];
@@ -620,7 +681,47 @@ function buildChromeMcpConnectionArgs(options: NormalizedChromeMcpProfileOptions
       ? ["--wsEndpoint", options.browserUrl]
       : ["--browserUrl", options.browserUrl];
   }
-  return ["--autoConnect"];
+  return shouldLaunchChromeMcpBrowser(options) ? [] : ["--autoConnect"];
+}
+
+function hasChromeArgValue(args: string[], value: string): boolean {
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
+    if (arg === value) {
+      return true;
+    }
+    if (arg === "--chromeArg" || arg === "--chrome-arg") {
+      if (args[i + 1] === value) {
+        return true;
+      }
+      i++;
+      continue;
+    }
+    if (arg === `--chromeArg=${value}` || arg === `--chrome-arg=${value}`) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function buildChromeMcpLaunchArgs(options: NormalizedChromeMcpProfileOptions): string[] {
+  if (options.browserUrl || hasFlag(options.extraArgs, CHROME_MCP_CONNECTION_FLAGS)) {
+    return [];
+  }
+  const args: string[] = [];
+  if (options.executablePath && !hasFlag(options.extraArgs, CHROME_MCP_EXECUTABLE_PATH_FLAGS)) {
+    args.push("--executablePath", options.executablePath);
+  }
+  if (
+    typeof options.headless === "boolean" &&
+    !hasFlag(options.extraArgs, CHROME_MCP_HEADLESS_FLAGS)
+  ) {
+    args.push(options.headless ? "--headless" : "--no-headless");
+  }
+  if (options.noSandbox && !hasChromeArgValue(options.extraArgs, "--no-sandbox")) {
+    args.push("--chrome-arg=--no-sandbox");
+  }
+  return args;
 }
 
 function buildChromeMcpUserDataDirArgs(options: NormalizedChromeMcpProfileOptions): string[] {
@@ -644,6 +745,9 @@ function buildChromeMcpSessionCacheKey(
     options.userDataDir ?? "",
     options.browserUrl ?? "",
     options.command,
+    options.executablePath ?? "",
+    typeof options.headless === "boolean" ? String(options.headless) : "",
+    options.noSandbox ? "true" : "",
     options.extraArgs,
   ]);
 }
@@ -658,6 +762,9 @@ function buildChromeMcpPageStateKey(
     options.userDataDir ?? "",
     options.browserUrl ?? "",
     options.command,
+    options.executablePath ?? "",
+    typeof options.headless === "boolean" ? String(options.headless) : "",
+    options.noSandbox ? "true" : "",
     options.extraArgs,
     targetId,
   ]);
@@ -692,7 +799,8 @@ function pageStateKeyMatchesProfileName(
     if (!keepSessionKey) {
       return true;
     }
-    return JSON.stringify(parsed.slice(0, 5)) !== keepSessionKey;
+    const keep = JSON.parse(keepSessionKey);
+    return !Array.isArray(keep) || JSON.stringify(parsed.slice(0, keep.length)) !== keepSessionKey;
   } catch {
     return false;
   }
@@ -741,6 +849,7 @@ function buildChromeMcpArgsFromOptions(options: NormalizedChromeMcpProfileOption
     ...commandPrefix,
     ...buildChromeMcpConnectionArgs(options),
     ...defaultFeatureArgs,
+    ...buildChromeMcpLaunchArgs(options),
     ...buildChromeMcpUserDataDirArgs(options),
     ...options.extraArgs,
   ];
@@ -2045,7 +2154,7 @@ export async function emulateChromeMcpPage(params: {
     normalizeChromeMcpOptions(profileOptions),
     params.targetId,
   );
-  const nextState: ChromeMcpTrackedEmulationState = { ...(emulationStates.get(stateKey) ?? {}) };
+  const nextState: ChromeMcpTrackedEmulationState = { ...emulationStates.get(stateKey) };
 
   if (params.offline !== undefined) {
     if (params.offline) {
@@ -2637,16 +2746,30 @@ export async function getChromeMcpConsoleMessage(params: {
   targetId: string;
   msgid: number;
 }): Promise<ChromeMcpConsoleMessage | null> {
-  const result = await callTool(
-    params.profileName,
-    chromeMcpProfileOptionsFromParams(params),
-    "get_console_message",
-    {
-      pageId: parsePageId(params.targetId),
-      msgid: params.msgid,
-    },
-  );
-  return extractConsoleMessage(result);
+  try {
+    const result = await callTool(
+      params.profileName,
+      chromeMcpProfileOptionsFromParams(params),
+      "get_console_message",
+      {
+        pageId: parsePageId(params.targetId),
+        msgid: params.msgid,
+      },
+    );
+    return extractConsoleMessage(result);
+  } catch (error) {
+    if (!isChromeMcpSelectedPageLookupUnavailable(error)) {
+      throw error;
+    }
+    const fallback = await listChromeMcpConsoleMessages({
+      profileName: params.profileName,
+      profile: params.profile,
+      userDataDir: params.userDataDir,
+      targetId: params.targetId,
+      includePreservedMessages: true,
+    });
+    return fallback.messages.find((message) => message.id === params.msgid) ?? null;
+  }
 }
 
 export async function listChromeMcpNetworkRequests(params: {
@@ -2683,18 +2806,36 @@ export async function getChromeMcpNetworkRequest(params: {
   requestFilePath?: string;
   responseFilePath?: string;
 }): Promise<ChromeMcpNetworkRequest | null> {
-  const result = await callTool(
-    params.profileName,
-    chromeMcpProfileOptionsFromParams(params),
-    "get_network_request",
-    {
-      pageId: parsePageId(params.targetId),
-      ...(typeof params.reqid === "number" ? { reqid: params.reqid } : {}),
-      ...(params.requestFilePath ? { requestFilePath: params.requestFilePath } : {}),
-      ...(params.responseFilePath ? { responseFilePath: params.responseFilePath } : {}),
-    },
-  );
-  return extractNetworkRequest(result);
+  try {
+    const result = await callTool(
+      params.profileName,
+      chromeMcpProfileOptionsFromParams(params),
+      "get_network_request",
+      {
+        pageId: parsePageId(params.targetId),
+        ...(typeof params.reqid === "number" ? { reqid: params.reqid } : {}),
+        ...(params.requestFilePath ? { requestFilePath: params.requestFilePath } : {}),
+        ...(params.responseFilePath ? { responseFilePath: params.responseFilePath } : {}),
+      },
+    );
+    return extractNetworkRequest(result);
+  } catch (error) {
+    if (!isChromeMcpSelectedPageLookupUnavailable(error) || typeof params.reqid !== "number") {
+      throw error;
+    }
+    const fallback = await listChromeMcpNetworkRequests({
+      profileName: params.profileName,
+      profile: params.profile,
+      userDataDir: params.userDataDir,
+      targetId: params.targetId,
+      includePreservedRequests: true,
+    });
+    return (
+      fallback.requests.find(
+        (request) => request.requestId === params.reqid || Number(request.id) === params.reqid,
+      ) ?? null
+    );
+  }
 }
 
 /** Replace Chrome MCP session creation for focused tests. */

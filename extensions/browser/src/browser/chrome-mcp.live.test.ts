@@ -12,6 +12,7 @@ import {
   closeChromeMcpTab,
   emulateChromeMcpPage,
   evaluateChromeMcpScript,
+  focusChromeMcpTab,
   getChromeMcpConsoleMessage,
   getChromeMcpNetworkRequest,
   getChromeMcpTabId,
@@ -322,7 +323,7 @@ async function optionalChromeMcpTool<T>(fn: () => Promise<T>): Promise<T | undef
     return await fn();
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    if (/Tool .+ not found/.test(message) || /Method not available/.test(message)) {
+    if (/Tool .+ not found/.test(message) || message.includes("Method not available")) {
       return undefined;
     }
     throw err;
@@ -351,7 +352,7 @@ function createLiveBrowserConfig(
     color: "#00AA00",
     headless: true,
     headlessSource: "default",
-    noSandbox: false,
+    noSandbox: true,
     attachOnly: true,
     defaultProfile: profileName,
     profiles: {
@@ -364,7 +365,9 @@ function createLiveBrowserConfig(
         ? {
             [opts.extensionPipeProfileName]: {
               driver: "existing-session" as const,
-              mcpArgs: ["--isolated", "--headless", "--no-usage-statistics"],
+              executablePath: CHROME_BIN,
+              headless: true,
+              mcpArgs: ["--isolated", "--no-usage-statistics"],
               color: "#AA00AA",
             },
           }
@@ -435,7 +438,7 @@ function findSnapshotUid(
     while (stack.length) {
       const current = stack.shift()!;
       const roleMatches = allowRoleFallback || !params.role || current.role === params.role;
-      const nameMatches = String(current.name ?? "").includes(params.nameIncludes);
+      const nameMatches = (current.name ?? "").includes(params.nameIncludes);
       const ref = current.uid ?? current.id;
       if (roleMatches && nameMatches && ref) {
         return ref;
@@ -512,7 +515,7 @@ describeLive("browser (live): Chrome MCP isolated local fixture", () => {
           pageSize: 20,
         });
         const consoleHit = consoleMessages.messages.find((message) =>
-          String(message.text ?? "").includes("openclaw-live-fixture"),
+          (message.text ?? "").includes("openclaw-live-fixture"),
         );
         expect(consoleHit).toBeDefined();
         if (consoleHit?.id !== undefined) {
@@ -531,7 +534,7 @@ describeLive("browser (live): Chrome MCP isolated local fixture", () => {
           pageSize: 50,
         });
         const networkHit = networkRequests.requests.find((request) =>
-          String(request.url ?? "").includes("/api/data.json"),
+          (request.url ?? "").includes("/api/data.json"),
         );
         expect(networkHit).toEqual(expect.objectContaining({ status: "200" }));
         const requestId =
@@ -673,7 +676,7 @@ describeLive("browser (live): Chrome MCP isolated local fixture", () => {
           pageSize: 20,
         });
         const consoleHit = consoleMessages.messages.find((message) =>
-          String(message.text ?? "").includes("openclaw-live-fixture"),
+          (message.text ?? "").includes("openclaw-live-fixture"),
         );
         expect(consoleHit?.id).toEqual(expect.any(Number));
 
@@ -700,7 +703,7 @@ describeLive("browser (live): Chrome MCP isolated local fixture", () => {
           pageSize: 50,
         });
         const networkHit = networkRequests.requests.find((request) =>
-          String(request.url ?? "").includes("/api/data.json"),
+          (request.url ?? "").includes("/api/data.json"),
         );
         const requestId =
           typeof networkHit?.requestId === "number" ? networkHit.requestId : Number(networkHit?.id);
@@ -1053,32 +1056,71 @@ describeLive("browser (live): Chrome MCP isolated local fixture", () => {
           timeoutMs: 10_000,
         });
 
-        const consoleList = await action({ action: "console", level: "log" });
-        expect(consoleList).toEqual(
-          expect.objectContaining({ ok: true, messageCount: expect.any(Number) }),
+        await resetChromeMcpSessionsForTest();
+        const consoleTab = await openChromeMcpTab(
+          profileName,
+          `data:text/html,${encodeURIComponent(
+            "<!doctype html><title>Console fixture</title><script>console.log('openclaw-live-fixture-tool-surface-console');</script><body>Console fixture</body>",
+          )}`,
+          profile,
         );
-        mark("console");
-        const directConsoleMessages = await listChromeMcpConsoleMessages({
+        try {
+          await waitForChromeMcpText({
+            profileName,
+            profile,
+            targetId: consoleTab.targetId,
+            text: ["Console fixture"],
+            timeoutMs: 10_000,
+          });
+          const directConsoleMessages = await listChromeMcpConsoleMessages({
+            profileName,
+            profile,
+            targetId: consoleTab.targetId,
+            includePreservedMessages: true,
+            pageSize: 20,
+          });
+          const consoleHit = directConsoleMessages.messages.find((message) =>
+            (message.text ?? "").includes("openclaw-live-fixture-tool-surface-console"),
+          );
+          expect(consoleHit?.id).toEqual(expect.any(Number));
+          const consoleList = await action({
+            action: "console",
+            targetId: consoleTab.targetId,
+            level: "log",
+          });
+          expect(consoleList).toEqual(
+            expect.objectContaining({ ok: true, messageCount: expect.any(Number) }),
+          );
+          mark("console");
+          await focusChromeMcpTab(profileName, consoleTab.targetId, profile);
+          await expect(
+            action({
+              action: "console-message",
+              targetId: consoleTab.targetId,
+              msgid: consoleHit?.id,
+            }),
+          ).resolves.toEqual(expect.objectContaining({ ok: true }));
+          mark("console-message");
+        } finally {
+          await closeChromeMcpTab(profileName, consoleTab.targetId, profile).catch(() => {});
+        }
+
+        await expect(
+          action({ action: "navigate", targetUrl: `http://127.0.0.1:${fixture.httpPort}/` }),
+        ).resolves.toEqual(expect.objectContaining({ ok: true, targetId }));
+        await waitForChromeMcpText({
           profileName,
           profile,
           targetId,
-          includePreservedMessages: true,
-          pageSize: 20,
+          text: ["OpenClaw Chrome MCP live fixture"],
+          timeoutMs: 10_000,
         });
-        const consoleHit = directConsoleMessages.messages.find((message) =>
-          String(message.text ?? "").includes("openclaw-live-fixture"),
-        );
-        expect(consoleHit?.id).toEqual(expect.any(Number));
-        await expect(action({ action: "console-message", msgid: consoleHit?.id })).resolves.toEqual(
-          expect.objectContaining({ ok: true }),
-        );
-        mark("console-message");
-
-        const requests = await action({ action: "requests", filter: "/api/data.json" });
-        expect(requests).toEqual(
-          expect.objectContaining({ ok: true, requestCount: expect.any(Number) }),
-        );
-        mark("requests");
+        await evaluateChromeMcpScript({
+          profileName,
+          profile,
+          targetId,
+          fn: "() => fetch('/api/data.json?tool-surface=' + Date.now()).then((response) => response.json()).then((data) => data.ok)",
+        });
         const directNetworkRequests = await listChromeMcpNetworkRequests({
           profileName,
           profile,
@@ -1086,11 +1128,16 @@ describeLive("browser (live): Chrome MCP isolated local fixture", () => {
           includePreservedRequests: true,
           pageSize: 50,
         });
+        const requests = await action({ action: "requests", filter: "/api/data.json" });
+        expect(requests).toEqual(
+          expect.objectContaining({ ok: true, requestCount: expect.any(Number) }),
+        );
+        mark("requests");
         const requestHit = directNetworkRequests.requests.find((request) =>
-          String(request.url ?? "").includes("/api/data.json"),
+          (request.url ?? "").includes("/api/data.json"),
         );
         const reqid =
-          typeof requestHit?.requestId === "number" ? requestHit.requestId : requestHit?.id;
+          typeof requestHit?.requestId === "number" ? requestHit.requestId : Number(requestHit?.id);
         expect(reqid).toEqual(expect.any(Number));
         await expect(action({ action: "request-detail", reqid })).resolves.toEqual(
           expect.objectContaining({ ok: true }),

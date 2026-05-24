@@ -255,7 +255,9 @@ export function registerBrowserDebugCommands(
             insightName: normalizeOptionalString(opts.insightName),
           },
         });
-        if (printJsonResult(parent, result)) return;
+        if (printJsonResult(parent, result)) {
+          return;
+        }
         defaultRuntime.writeJson(result);
       });
     });
@@ -278,7 +280,9 @@ export function registerBrowserDebugCommands(
             path: normalizeOptionalString(opts.out),
           },
         });
-        if (printJsonResult(parent, result)) return;
+        if (printJsonResult(parent, result)) {
+          return;
+        }
         defaultRuntime.log("heap snapshot written");
       });
     });
@@ -311,7 +315,9 @@ export function registerBrowserDebugCommands(
               pageSize: opts.pageSize === undefined ? undefined : Number(opts.pageSize),
             },
           });
-          if (printJsonResult(parent, result)) return;
+          if (printJsonResult(parent, result)) {
+            return;
+          }
           defaultRuntime.writeJson(result);
         });
       });
@@ -337,7 +343,9 @@ export function registerBrowserDebugCommands(
             outputDirPath: normalizeOptionalString(opts.outDir),
           },
         });
-        if (printJsonResult(parent, result)) return;
+        if (printJsonResult(parent, result)) {
+          return;
+        }
         defaultRuntime.writeJson(result);
       });
     });
@@ -358,7 +366,9 @@ export function registerBrowserDebugCommands(
             path: normalizeOptionalString(opts.out),
           },
         });
-        if (printJsonResult(parent, result)) return;
+        if (printJsonResult(parent, result)) {
+          return;
+        }
         defaultRuntime.log("screencast started");
       });
     });
@@ -373,7 +383,9 @@ export function registerBrowserDebugCommands(
           query: resolveProfileQuery(profile),
           body: { targetId: normalizeOptionalString(opts.targetId) },
         });
-        if (printJsonResult(parent, result)) return;
+        if (printJsonResult(parent, result)) {
+          return;
+        }
         defaultRuntime.log("screencast stopped");
       });
     });
@@ -386,7 +398,9 @@ export function registerBrowserDebugCommands(
         path: "/extensions",
         query: resolveProfileQuery(profile),
       });
-      if (printJsonResult(parent, result)) return;
+      if (printJsonResult(parent, result)) {
+        return;
+      }
       defaultRuntime.writeJson(result);
     });
   });
@@ -397,8 +411,12 @@ export function registerBrowserDebugCommands(
     ["action", "/extensions/action", "id"],
   ] as const) {
     const command = extensions.command(name);
-    if (required === "path") command.requiredOption("--path <path>", "Extension path");
-    if (required === "id") command.requiredOption("--id <id>", "Extension id");
+    if (required === "path") {
+      command.requiredOption("--path <path>", "Extension path");
+    }
+    if (required === "id") {
+      command.requiredOption("--id <id>", "Extension id");
+    }
     command.action(async (opts, cmd) => {
       await withDebugContext(cmd, parentOpts, async ({ parent, profile }) => {
         const result = await callDebugRequest(parent, {
@@ -407,7 +425,9 @@ export function registerBrowserDebugCommands(
           query: resolveProfileQuery(profile),
           body: { path: normalizeOptionalString(opts.path), id: normalizeOptionalString(opts.id) },
         });
-        if (printJsonResult(parent, result)) return;
+        if (printJsonResult(parent, result)) {
+          return;
+        }
         defaultRuntime.writeJson(result);
       });
     });
@@ -425,7 +445,9 @@ export function registerBrowserDebugCommands(
             targetId: normalizeOptionalString(opts.targetId),
           },
         });
-        if (printJsonResult(parent, result)) return;
+        if (printJsonResult(parent, result)) {
+          return;
+        }
         defaultRuntime.writeJson(result);
       });
     });
@@ -448,7 +470,9 @@ export function registerBrowserDebugCommands(
               targetId: normalizeOptionalString(opts.targetId),
             },
           });
-          if (printJsonResult(parent, result)) return;
+          if (printJsonResult(parent, result)) {
+            return;
+          }
           defaultRuntime.writeJson(result);
         });
       });
@@ -469,7 +493,9 @@ export function registerBrowserDebugCommands(
               [jsonOption]: normalizeOptionalString(opts.json),
             },
           });
-          if (printJsonResult(parent, result)) return;
+          if (printJsonResult(parent, result)) {
+            return;
+          }
           defaultRuntime.writeJson(result);
         });
       });
@@ -491,7 +517,9 @@ export function registerBrowserDebugCommands(
             targetId: normalizeOptionalString(opts.targetId),
           },
         });
-        if (printJsonResult(parent, result)) return;
+        if (printJsonResult(parent, result)) {
+          return;
+        }
         defaultRuntime.writeJson(result);
       });
     });
@@ -516,7 +544,9 @@ export function registerBrowserDebugCommands(
             responseFilePath: normalizeOptionalString(opts.responseFile),
           },
         });
-        if (printJsonResult(parent, result)) return;
+        if (printJsonResult(parent, result)) {
+          return;
+        }
         defaultRuntime.writeJson(result);
       });
     });

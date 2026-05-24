@@ -82,6 +82,10 @@ function createFakeSession(): ChromeMcpSession {
   let createdPageOpen = false;
   const readUrlArg = (value: unknown, fallback: string) =>
     typeof value === "string" && value.trim() ? value : fallback;
+  const readTextArg = (value: unknown) =>
+    typeof value === "string" || typeof value === "number" || typeof value === "boolean"
+      ? String(value)
+      : "";
   const callTool = vi.fn(async ({ name, arguments: args }: ToolCall) => {
     if (name === "list_pages") {
       const pageLines = [
@@ -123,10 +127,10 @@ function createFakeSession(): ChromeMcpSession {
       return { content: [{ type: "text", text: "navigated" }] };
     }
     if (name === "select_page") {
-      return { content: [{ type: "text", text: `Selected page ${args?.pageId}` }] };
+      return { content: [{ type: "text", text: `Selected page ${readTextArg(args?.pageId)}` }] };
     }
     if (name === "close_page") {
-      return { content: [{ type: "text", text: `Closed page ${args?.pageId}` }] };
+      return { content: [{ type: "text", text: `Closed page ${readTextArg(args?.pageId)}` }] };
     }
     if (name === "take_snapshot") {
       return {
@@ -137,28 +141,42 @@ function createFakeSession(): ChromeMcpSession {
       };
     }
     if (name === "fill") {
-      return { content: [{ type: "text", text: `Filled ${args?.uid}` }] };
+      return { content: [{ type: "text", text: `Filled ${readTextArg(args?.uid)}` }] };
     }
     if (name === "fill_form") {
       return { content: [{ type: "text", text: "Form filled" }] };
     }
     if (name === "hover") {
-      return { content: [{ type: "text", text: `Hovered ${args?.uid}` }] };
+      return { content: [{ type: "text", text: `Hovered ${readTextArg(args?.uid)}` }] };
     }
     if (name === "drag") {
-      return { content: [{ type: "text", text: `Dragged ${args?.from_uid} to ${args?.to_uid}` }] };
+      return {
+        content: [
+          {
+            type: "text",
+            text: `Dragged ${readTextArg(args?.from_uid)} to ${readTextArg(args?.to_uid)}`,
+          },
+        ],
+      };
     }
     if (name === "upload_file") {
-      return { content: [{ type: "text", text: `Uploaded ${args?.filePath}` }] };
+      return { content: [{ type: "text", text: `Uploaded ${readTextArg(args?.filePath)}` }] };
     }
     if (name === "press_key") {
-      return { content: [{ type: "text", text: `Pressed ${args?.key}` }] };
+      return { content: [{ type: "text", text: `Pressed ${readTextArg(args?.key)}` }] };
     }
     if (name === "resize_page") {
-      return { content: [{ type: "text", text: `Resized ${args?.width}x${args?.height}` }] };
+      return {
+        content: [
+          {
+            type: "text",
+            text: `Resized ${readTextArg(args?.width)}x${readTextArg(args?.height)}`,
+          },
+        ],
+      };
     }
     if (name === "handle_dialog") {
-      return { content: [{ type: "text", text: `Dialog ${args?.action}` }] };
+      return { content: [{ type: "text", text: `Dialog ${readTextArg(args?.action)}` }] };
     }
     if (name === "evaluate_script") {
       return {
@@ -186,10 +204,14 @@ function createFakeSession(): ChromeMcpSession {
       return { content: [{ type: "text", text: "The performance trace has been stopped." }] };
     }
     if (name === "performance_analyze_insight") {
-      return { content: [{ type: "text", text: `Insight ${args?.insightName} details.` }] };
+      return {
+        content: [{ type: "text", text: `Insight ${readTextArg(args?.insightName)} details.` }],
+      };
     }
     if (name === "take_memory_snapshot") {
-      return { content: [{ type: "text", text: `Heap snapshot saved to ${args?.filePath}` }] };
+      return {
+        content: [{ type: "text", text: `Heap snapshot saved to ${readTextArg(args?.filePath)}` }],
+      };
     }
     if (name === "load_memory_snapshot") {
       return {
@@ -214,7 +236,12 @@ function createFakeSession(): ChromeMcpSession {
     }
     if (name === "screencast_start") {
       return {
-        content: [{ type: "text", text: `Screencast recording started: ${args?.filePath}` }],
+        content: [
+          {
+            type: "text",
+            text: `Screencast recording started: ${readTextArg(args?.filePath)}`,
+          },
+        ],
       };
     }
     if (name === "screencast_stop") {
@@ -229,16 +256,24 @@ function createFakeSession(): ChromeMcpSession {
       };
     }
     if (name === "install_extension") {
-      return { content: [{ type: "text", text: `Extension installed. Id: ${args?.path}` }] };
+      return {
+        content: [{ type: "text", text: `Extension installed. Id: ${readTextArg(args?.path)}` }],
+      };
     }
     if (name === "uninstall_extension") {
-      return { content: [{ type: "text", text: `Extension uninstalled. Id: ${args?.id}` }] };
+      return {
+        content: [{ type: "text", text: `Extension uninstalled. Id: ${readTextArg(args?.id)}` }],
+      };
     }
     if (name === "reload_extension") {
       return { content: [{ type: "text", text: "Extension reloaded." }] };
     }
     if (name === "trigger_extension_action") {
-      return { content: [{ type: "text", text: `Extension action triggered for ID ${args?.id}` }] };
+      return {
+        content: [
+          { type: "text", text: `Extension action triggered for ID ${readTextArg(args?.id)}` },
+        ],
+      };
     }
     if (name === "get_tab_id") {
       return {
@@ -469,6 +504,39 @@ describe("chrome MCP page parsing", () => {
       requestHeaders: { authorization: "Bearer fake" },
       responseHeaders: { "content-type": "application/json" },
       responseBody: '{"ok":true}',
+    });
+  });
+
+  it("falls back to listed network requests when Chrome MCP detail lookup hits the selected-page bug", async () => {
+    const session = createFakeSession();
+    session.client.callTool = vi.fn(async ({ name }: ToolCall) => {
+      if (name === "list_pages") {
+        return { content: [{ type: "text", text: "1: about:blank [selected]" }] };
+      }
+      if (name === "get_network_request") {
+        throw new Error("Request not found for selected page");
+      }
+      return {
+        content: [
+          {
+            type: "text",
+            text: "## Network requests\nreqid=7 GET https://example.com/api/data.json [200]",
+          },
+        ],
+        structuredContent: {},
+      };
+    }) as typeof session.client.callTool;
+    const factory: ChromeMcpSessionFactory = async () => session;
+    setChromeMcpSessionFactoryForTest(factory);
+
+    await expect(
+      getChromeMcpNetworkRequest({ profileName: "chrome-live", targetId: "1", reqid: 7 }),
+    ).resolves.toEqual({
+      requestId: 7,
+      id: "7",
+      method: "GET",
+      url: "https://example.com/api/data.json",
+      status: "200",
     });
   });
 
@@ -893,6 +961,103 @@ describe("chrome MCP page parsing", () => {
     ]);
   });
 
+  it("parses Chrome MCP extension inventory text when structured entries are empty", async () => {
+    const session = createFakeSession();
+    session.client.callTool = vi.fn(async ({ name }: ToolCall) => {
+      if (name === "list_pages") {
+        return { content: [{ type: "text", text: "1: about:blank [selected]" }] };
+      }
+      return {
+        content: [
+          {
+            type: "text",
+            text: '## Extensions\nid=abc "Fixture Extension" v1.0.0 Enabled',
+          },
+        ],
+        structuredContent: { extensions: [{}] },
+      };
+    }) as typeof session.client.callTool;
+    const factory: ChromeMcpSessionFactory = async () => session;
+    setChromeMcpSessionFactoryForTest(factory);
+
+    await expect(listChromeMcpExtensions({ profileName: "chrome-live" })).resolves.toEqual([
+      { id: "abc", name: "Fixture Extension", version: "1.0.0", enabled: true },
+    ]);
+  });
+
+  it("accepts string and msgid console identifiers from Chrome MCP structured output", async () => {
+    const session = createFakeSession();
+    session.client.callTool = vi.fn(async ({ name, arguments: args }: ToolCall) => {
+      if (name === "list_pages") {
+        return { content: [{ type: "text", text: "1: about:blank [selected]" }] };
+      }
+      if (name === "get_console_message") {
+        return {
+          content: [{ type: "text", text: "" }],
+          structuredContent: {
+            consoleMessage: {
+              msgid: String(args?.msgid),
+              type: "log",
+              text: "openclaw-live-fixture-console-ready",
+            },
+          },
+        };
+      }
+      return {
+        content: [{ type: "text", text: "" }],
+        structuredContent: {
+          consoleMessages: [
+            { msgid: "7", type: "log", text: "openclaw-live-fixture-console-ready" },
+          ],
+        },
+      };
+    }) as typeof session.client.callTool;
+    const factory: ChromeMcpSessionFactory = async () => session;
+    setChromeMcpSessionFactoryForTest(factory);
+
+    await expect(
+      listChromeMcpConsoleMessages({ profileName: "chrome-live", targetId: "1" }),
+    ).resolves.toEqual({
+      messages: [{ id: 7, type: "log", text: "openclaw-live-fixture-console-ready" }],
+      pagination: undefined,
+    });
+    await expect(
+      getChromeMcpConsoleMessage({ profileName: "chrome-live", targetId: "1", msgid: 7 }),
+    ).resolves.toEqual({ id: 7, type: "log", text: "openclaw-live-fixture-console-ready" });
+  });
+
+  it("falls back to listed console messages when Chrome MCP detail lookup hits the request-detail bug", async () => {
+    const session = createFakeSession();
+    session.client.callTool = vi.fn(async ({ name }: ToolCall) => {
+      if (name === "list_pages") {
+        return { content: [{ type: "text", text: "1: about:blank [selected]" }] };
+      }
+      if (name === "get_console_message") {
+        throw new Error("Request not found for selected page");
+      }
+      return {
+        content: [
+          {
+            type: "text",
+            text: "## Console messages\nmsgid=7 [log] openclaw-live-fixture-console-ready (1 args)",
+          },
+        ],
+        structuredContent: {},
+      };
+    }) as typeof session.client.callTool;
+    const factory: ChromeMcpSessionFactory = async () => session;
+    setChromeMcpSessionFactoryForTest(factory);
+
+    await expect(
+      getChromeMcpConsoleMessage({ profileName: "chrome-live", targetId: "1", msgid: 7 }),
+    ).resolves.toEqual({
+      id: 7,
+      type: "log",
+      text: "openclaw-live-fixture-console-ready",
+      argsCount: 1,
+    });
+  });
+
   it("forwards Chrome MCP interop, third-party developer, and WebMCP tools", async () => {
     const session = createFakeSession();
     const factory: ChromeMcpSessionFactory = async () => session;
@@ -1126,6 +1291,34 @@ describe("chrome MCP page parsing", () => {
       "--categoryExperimentalThirdParty",
       "--categoryExperimentalWebmcp",
       "--categoryExtensions",
+      "--no-usage-statistics",
+    ]);
+  });
+
+  it("builds Chrome MCP pipe-launch args from browser profile launch options", () => {
+    expect(
+      buildChromeMcpArgs({
+        executablePath: "/usr/bin/google-chrome",
+        headless: true,
+        noSandbox: true,
+        mcpArgs: ["--no-usage-statistics"],
+      }),
+    ).toEqual([
+      "-y",
+      "chrome-devtools-mcp@latest",
+      "--experimentalStructuredContent",
+      "--experimental-page-id-routing",
+      "--experimentalVision",
+      "--experimentalMemory",
+      "--experimentalScreencast",
+      "--experimentalInteropTools",
+      "--categoryExperimentalThirdParty",
+      "--categoryExperimentalWebmcp",
+      "--categoryExtensions",
+      "--executablePath",
+      "/usr/bin/google-chrome",
+      "--headless",
+      "--chrome-arg=--no-sandbox",
       "--no-usage-statistics",
     ]);
   });

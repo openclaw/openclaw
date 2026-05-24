@@ -5,8 +5,10 @@
  * Playwright tracing scoped to the selected browser tab.
  */
 import crypto from "node:crypto";
+import fs from "node:fs/promises";
 import path from "node:path";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { formatErrorMessage } from "../../infra/errors.js";
 import {
   analyzeChromeMcpPerformanceInsight,
   executeChromeMcpThirdPartyDeveloperTool,
@@ -117,6 +119,68 @@ function requireChromeMcpProfile(
     return false;
   }
   return true;
+}
+
+const activeScreencasts = new Map<string, string>();
+
+function screencastKey(profileName: string, targetId: string): string {
+  return `${profileName}:${targetId}`;
+}
+
+function defaultScreencastPath(): string {
+  return path.join(DEFAULT_TRACE_DIR, `browser-screencast-${crypto.randomUUID()}.webm`);
+}
+
+async function sleep(ms: number): Promise<void> {
+  await new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function inspectScreencastArtifact(filePath: string | undefined): Promise<{
+  filePath?: string;
+  artifactExists?: boolean;
+  artifactBytes?: number;
+  artifactReady?: boolean;
+  artifactWarning?: string;
+}> {
+  if (!filePath) {
+    return {};
+  }
+  let observed = false;
+  let lastBytes = 0;
+  for (let attempt = 0; attempt < 10; attempt += 1) {
+    try {
+      const stat = await fs.stat(filePath);
+      observed = true;
+      lastBytes = stat.size;
+      if (stat.size > 0) {
+        return { filePath, artifactExists: true, artifactBytes: stat.size, artifactReady: true };
+      }
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+        return {
+          filePath,
+          artifactExists: false,
+          artifactReady: false,
+          artifactWarning: String((error as Error).message || error),
+        };
+      }
+    }
+    await sleep(200);
+  }
+  return {
+    filePath,
+    artifactExists: observed,
+    artifactBytes: observed ? lastBytes : undefined,
+    artifactReady: false,
+    artifactWarning: observed
+      ? "screencast artifact exists but is empty after waiting for encoder flush"
+      : "screencast artifact was not observed after waiting for encoder flush",
+  };
+}
+
+function isChromeExtensionsUnavailableError(error: unknown): boolean {
+  const message = formatErrorMessage(error);
+  return message.includes("Extensions.getExtensions") && message.includes("Method not available");
 }
 
 function parseMode(value: unknown): "navigation" | "snapshot" | undefined {
@@ -408,14 +472,8 @@ export function registerBrowserAgentDebugRoutes(
     asyncBrowserRoute(async (req, res) => {
       const body = readBody(req);
       const targetId = resolveTargetIdFromBody(body);
-      const insightSetId = toStringOrEmpty(body.insightSetId);
-      const insightName = toStringOrEmpty(body.insightName);
-      if (!insightSetId) {
-        return jsonError(res, 400, "insightSetId is required");
-      }
-      if (!insightName) {
-        return jsonError(res, 400, "insightName is required");
-      }
+      const insightSetId = toStringOrEmpty(body.insightSetId) || "navigation-1";
+      const insightName = toStringOrEmpty(body.insightName) || "DocumentLatency";
 
       await withRouteTabContext({
         req,
@@ -682,15 +740,18 @@ export function registerBrowserAgentDebugRoutes(
           if (!requireChromeMcpProfile(res, profileCtx)) {
             return;
           }
+          const requestedPath = toStringOrEmpty(body.path) || toStringOrEmpty(body.filePath);
+          const filePath = requestedPath || defaultScreencastPath();
           const output = await startChromeMcpScreencast({
             profileName: profileCtx.profile.name,
             profile: profileCtx.profile,
             targetId: tab.targetId,
-            filePath: toStringOrEmpty(body.path) || toStringOrEmpty(body.filePath) || undefined,
+            filePath,
             timeoutMs: toNumber(body.timeoutMs),
           });
+          activeScreencasts.set(screencastKey(profileCtx.profile.name, tab.targetId), filePath);
           const url = await resolveTabUrl(tab.url);
-          res.json({ ok: true, targetId: tab.targetId, ...(url ? { url } : {}), output });
+          res.json({ ok: true, targetId: tab.targetId, ...(url ? { url } : {}), filePath, output });
         },
       });
     }),
@@ -716,8 +777,21 @@ export function registerBrowserAgentDebugRoutes(
             targetId: tab.targetId,
             timeoutMs: toNumber(body.timeoutMs),
           });
+          const key = screencastKey(profileCtx.profile.name, tab.targetId);
+          const filePath =
+            toStringOrEmpty(body.path) ||
+            toStringOrEmpty(body.filePath) ||
+            activeScreencasts.get(key);
+          activeScreencasts.delete(key);
+          const artifact = await inspectScreencastArtifact(filePath);
           const url = await resolveTabUrl(tab.url);
-          res.json({ ok: true, targetId: tab.targetId, ...(url ? { url } : {}), output });
+          res.json({
+            ok: true,
+            targetId: tab.targetId,
+            ...(url ? { url } : {}),
+            ...artifact,
+            output,
+          });
         },
       });
     }),
@@ -735,12 +809,25 @@ export function registerBrowserAgentDebugRoutes(
           if (!requireChromeMcpProfile(res, profileCtx)) {
             return;
           }
-          const extensions = await listChromeMcpExtensions({
-            profileName: profileCtx.profile.name,
-            profile: profileCtx.profile,
-            timeoutMs: toNumber(req.query.timeoutMs),
-          });
-          res.json({ ok: true, extensions });
+          try {
+            const extensions = await listChromeMcpExtensions({
+              profileName: profileCtx.profile.name,
+              profile: profileCtx.profile,
+              timeoutMs: toNumber(req.query.timeoutMs),
+            });
+            res.json({ ok: true, extensions });
+          } catch (error) {
+            if (!isChromeExtensionsUnavailableError(error)) {
+              throw error;
+            }
+            res.json({
+              ok: true,
+              extensions: [],
+              unavailable: true,
+              reason: "Chrome Extensions protocol domain is not available in this browser session",
+              error: String((error as Error).message || error),
+            });
+          }
         },
       });
     }),

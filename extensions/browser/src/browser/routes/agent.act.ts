@@ -212,6 +212,11 @@ function buildExistingSessionWaitPredicate(params: {
     checks.push(`document.readyState === "interactive" || document.readyState === "complete"`);
   } else if (params.loadState === "load") {
     checks.push(`document.readyState === "complete"`);
+  } else if (params.loadState === "networkidle") {
+    checks.push(`document.readyState === "complete"`);
+    checks.push(
+      `(() => { const entries = performance.getEntriesByType("resource"); const latest = entries.reduce((max, entry) => Math.max(max, Number(entry.responseEnd) || Number(entry.startTime) || 0), 0); return latest === 0 || performance.now() - latest >= 500; })()`,
+    );
   }
   if (params.fn) {
     checks.push(`Boolean(await (${params.fn})())`);
@@ -361,9 +366,7 @@ function getExistingSessionUnsupportedMessage(action: BrowserActRequest): string
     case "fill":
       return action.timeoutMs ? EXISTING_SESSION_LIMITS.act.fillTimeout : null;
     case "wait":
-      return action.loadState === "networkidle"
-        ? EXISTING_SESSION_LIMITS.act.waitNetworkIdle
-        : null;
+      return null;
     case "evaluate":
       return action.timeoutMs !== undefined ? EXISTING_SESSION_LIMITS.act.evaluateTimeout : null;
     case "batch":

@@ -4,6 +4,8 @@
  * Handles profile-aware snapshot generation across Playwright and Chrome MCP,
  * navigation policy checks, media storage, and screenshot normalization.
  */
+import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { ensureMediaDir, saveMediaBuffer } from "../../media/store.js";
 import { captureScreenshot, printPdfViaCdp, snapshotAria, snapshotRoleViaCdp } from "../cdp.js";
@@ -29,7 +31,7 @@ import {
   DEFAULT_BROWSER_SCREENSHOT_MAX_SIDE,
   normalizeBrowserScreenshot,
 } from "../screenshot.js";
-import type { BrowserRouteContext } from "../server-context.js";
+import type { BrowserRouteContext, ProfileContext } from "../server-context.js";
 import { appendSnapshotUrls, type SnapshotUrlEntry } from "../snapshot-urls.js";
 import { normalizeBrowserTimerDelayMs } from "../timer-delay.js";
 import {
@@ -54,6 +56,57 @@ import type { BrowserResponse, BrowserRouteRegistrar } from "./types.js";
 import { asyncBrowserRoute, jsonError, toBoolean, toStringOrEmpty } from "./utils.js";
 
 const CHROME_MCP_OVERLAY_ATTR = "data-openclaw-mcp-overlay";
+
+function defaultExistingSessionDevToolsDirs(): string[] {
+  const dirs = [path.join(os.homedir(), ".config", "google-chrome")];
+  if (process.platform === "linux") {
+    dirs.push(path.join(os.homedir(), ".config", "chromium"));
+  } else if (process.platform === "darwin") {
+    dirs.push(path.join(os.homedir(), "Library", "Application Support", "Google", "Chrome"));
+    dirs.push(path.join(os.homedir(), "Library", "Application Support", "Chromium"));
+  } else if (process.platform === "win32") {
+    const localAppData = process.env.LOCALAPPDATA?.trim();
+    if (localAppData) {
+      dirs.push(path.join(localAppData, "Google", "Chrome", "User Data"));
+      dirs.push(path.join(localAppData, "Chromium", "User Data"));
+    }
+  }
+  return dirs;
+}
+
+function readDevToolsActivePortCdpUrl(dir: string | undefined): string | undefined {
+  if (!dir) {
+    return undefined;
+  }
+  try {
+    const raw = fs.readFileSync(path.join(dir, "DevToolsActivePort"), "utf8");
+    const [portRaw] = raw.split(/\r?\n/);
+    const port = Number.parseInt(portRaw?.trim() ?? "", 10);
+    return Number.isInteger(port) && port > 0 && port <= 65535
+      ? `http://127.0.0.1:${port}`
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function resolveExistingSessionPdfCdpUrl(profileCtx: ProfileContext, cdpUrl: string): string {
+  const explicit = cdpUrl.trim();
+  if (explicit) {
+    return explicit;
+  }
+
+  for (const dir of [profileCtx.profile.userDataDir, ...defaultExistingSessionDevToolsDirs()]) {
+    const resolved = readDevToolsActivePortCdpUrl(dir);
+    if (resolved) {
+      return resolved;
+    }
+  }
+
+  throw new Error(
+    `existing-session PDF requires browser.profiles.${profileCtx.profile.name}.cdpUrl or a readable DevToolsActivePort file`,
+  );
+}
 
 async function collectChromeMcpSnapshotUrls(params: {
   profileName: string;
@@ -330,7 +383,7 @@ export function registerBrowserAgentSnapshotRoutes(
           enforceCurrentUrlAllowed: true,
           run: async ({ cdpUrl, tab }) => {
             const pdf = await printPdfViaCdp({
-              cdpUrl,
+              cdpUrl: resolveExistingSessionPdfCdpUrl(profileCtx, cdpUrl),
               targetId: tab.targetId,
               targetUrl: tab.url,
             });
