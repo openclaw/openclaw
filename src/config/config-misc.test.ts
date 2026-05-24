@@ -386,6 +386,24 @@ describe("plugins.slots memory roles", () => {
     });
     expect(result.success).toBe(true);
   });
+
+  it("rejects unsupported per-agent contextEngine slot overrides", () => {
+    const result = OpenClawSchema.safeParse({
+      agents: {
+        list: [
+          {
+            id: "nancy",
+            plugins: {
+              slots: {
+                contextEngine: "legacy",
+              },
+            },
+          },
+        ],
+      },
+    });
+    expect(result.success).toBe(false);
+  });
 });
 
 describe("models.pricing", () => {

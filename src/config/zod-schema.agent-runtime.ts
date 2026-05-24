@@ -1045,7 +1045,6 @@ const AgentPluginSlotsSchema = z
     "memory.capture": z.string().optional(),
     "memory.dreaming": z.string().optional(),
     "memory.userModel": z.string().optional(),
-    contextEngine: z.string().optional(),
   })
   .strict();
 

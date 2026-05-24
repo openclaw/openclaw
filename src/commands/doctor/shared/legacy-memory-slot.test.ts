@@ -29,10 +29,13 @@ describe("legacy memory slot doctor migration", () => {
     const result = maybeRepairLegacyMemorySlotConfig(cfg);
 
     expect(result.changes).toEqual([
-      "- plugins.slots.memory: migrated legacy memory slot to memory.recall (memory-lancedb).",
+      "- plugins.slots.memory: copied legacy memory slot to memory.recall (memory-lancedb) and kept the legacy key for plugin compatibility.",
     ]);
-    expect(result.warnings).toBeUndefined();
+    expect(result.warnings).toEqual([
+      "- plugins.slots.memory: legacy memory slot remains for plugin compatibility; use memory.recall as the canonical selector.",
+    ]);
     expect(result.config.plugins?.slots).toEqual({
+      memory: "memory-lancedb",
       "memory.recall": "memory-lancedb",
       contextEngine: "legacy",
     });
@@ -57,14 +60,18 @@ describe("legacy memory slot doctor migration", () => {
     const result = maybeRepairLegacyMemorySlotConfig(cfg);
 
     expect(result.changes).toEqual([
-      "- agents.list.0.plugins.slots.memory: migrated legacy memory slot to memory.recall (openclaw-honcho).",
+      "- agents.list.0.plugins.slots.memory: copied legacy memory slot to memory.recall (openclaw-honcho) and kept the legacy key for plugin compatibility.",
+    ]);
+    expect(result.warnings).toEqual([
+      "- agents.list.0.plugins.slots.memory: legacy memory slot remains for plugin compatibility; use memory.recall as the canonical selector.",
     ]);
     expect(result.config.agents?.list?.[0]?.plugins?.slots).toEqual({
+      memory: "openclaw-honcho",
       "memory.recall": "openclaw-honcho",
     });
   });
 
-  it("removes redundant legacy memory when memory.recall already matches", () => {
+  it("keeps redundant legacy memory when memory.recall already matches", () => {
     const cfg = {
       plugins: {
         slots: {
@@ -76,12 +83,11 @@ describe("legacy memory slot doctor migration", () => {
 
     const result = maybeRepairLegacyMemorySlotConfig(cfg);
 
-    expect(result.changes).toEqual([
-      "- plugins.slots.memory: migrated legacy memory slot to memory.recall (memory-lancedb).",
+    expect(result.changes).toEqual([]);
+    expect(result.warnings).toEqual([
+      "- plugins.slots.memory: legacy memory slot already matches memory.recall and remains for plugin compatibility.",
     ]);
-    expect(result.config.plugins?.slots).toEqual({
-      "memory.recall": "memory-lancedb",
-    });
+    expect(result.config).toBe(cfg);
   });
 
   it("warns but does not mutate conflicting legacy and recall slots", () => {
@@ -124,6 +130,7 @@ describe("legacy memory slot doctor migration", () => {
     expect(warnings).toEqual([
       "- Found 2 legacy memory slot selectors (for example plugins.slots.memory).",
       '- `plugins.slots.memory` is deprecated; use `plugins.slots["memory.recall"]` for factual recall provider selection.',
+      "- Doctor keeps non-conflicting legacy memory selectors in place for plugin compatibility during the extended migration window.",
       '- Run "openclaw doctor --fix" to migrate 1 non-conflicting legacy memory slot.',
       "- 1 legacy memory slot also defines a different memory.recall value; resolve it manually so doctor does not guess.",
     ]);

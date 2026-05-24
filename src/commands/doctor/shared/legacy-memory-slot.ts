@@ -93,6 +93,7 @@ export function collectLegacyMemorySlotWarnings(params: {
   const warnings = [
     `- Found ${params.hits.length} legacy memory slot selector${params.hits.length === 1 ? "" : "s"} (for example ${sample}).`,
     '- `plugins.slots.memory` is deprecated; use `plugins.slots["memory.recall"]` for factual recall provider selection.',
+    "- Doctor keeps non-conflicting legacy memory selectors in place for plugin compatibility during the extended migration window.",
   ];
   if (fixableCount > 0) {
     warnings.push(
@@ -110,7 +111,7 @@ export function collectLegacyMemorySlotWarnings(params: {
 function migrateSlots(params: {
   slots: Record<string, unknown>;
   hit: LegacyMemorySlotHit;
-}): "migrated" | "removed-empty" | "skipped-conflict" | "unchanged" {
+}): "migrated" | "preserved" | "removed-empty" | "skipped-conflict" | "unchanged" {
   if (!ownSlot(params.slots, "memory")) {
     return "unchanged";
   }
@@ -118,8 +119,10 @@ function migrateSlots(params: {
     return "skipped-conflict";
   }
   if (params.hit.legacyValue) {
+    if (params.hit.recallValue === params.hit.legacyValue) {
+      return "preserved";
+    }
     params.slots["memory.recall"] = params.hit.legacyValue;
-    delete params.slots.memory;
     return "migrated";
   }
   delete params.slots.memory;
@@ -150,7 +153,14 @@ export function maybeRepairLegacyMemorySlotConfig(cfg: OpenClawConfig): {
     const result = migrateSlots({ slots, hit });
     if (result === "migrated") {
       changes.push(
-        `- ${hit.pathLabel}: migrated legacy memory slot to memory.recall (${hit.legacyValue}).`,
+        `- ${hit.pathLabel}: copied legacy memory slot to memory.recall (${hit.legacyValue}) and kept the legacy key for plugin compatibility.`,
+      );
+      warnings.push(
+        `- ${hit.pathLabel}: legacy memory slot remains for plugin compatibility; use memory.recall as the canonical selector.`,
+      );
+    } else if (result === "preserved") {
+      warnings.push(
+        `- ${hit.pathLabel}: legacy memory slot already matches memory.recall and remains for plugin compatibility.`,
       );
     } else if (result === "removed-empty") {
       changes.push(`- ${hit.pathLabel}: removed empty legacy memory slot selector.`);
