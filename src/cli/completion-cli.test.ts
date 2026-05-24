@@ -14,6 +14,7 @@ function createCompletionProgram(): Command {
 
   const gateway = program.command("gateway").description("Gateway commands");
   gateway.option("--force", "Force the action");
+  gateway.option("-t, --token <token>", "Gateway token");
 
   gateway.command("status").description("Show gateway status").option("--json", "JSON output");
   gateway.command("restart").description("Restart gateway");
@@ -90,7 +91,8 @@ describe("completion-cli", () => {
     expect(script).toContain("if ($commandPath -eq 'gateway') {");
     expect(script).toContain("if ($commandPath -eq 'gateway status') {");
     expect(script).not.toContain("if ($commandPath -eq 'openclaw gateway') {");
-    expect(script).toContain("$completions = @('status','restart','--force')");
+    expect(script).toContain("$completions = @('status','restart','--force','--token')");
+    expect(script).not.toContain("'-t,'");
   });
 
   it("generates fish completions for root and nested command contexts", () => {
@@ -100,10 +102,21 @@ describe("completion-cli", () => {
       'complete -c openclaw -n "__fish_use_subcommand" -a "gateway" -d \'Gateway commands\'',
     );
     expect(script).toContain(
-      'complete -c openclaw -n "__fish_seen_subcommand_from gateway" -a "status" -d \'Show gateway status\'',
+      'complete -c openclaw -n "__openclaw_command_path_matches gateway" -a "status" -d \'Show gateway status\'',
     );
     expect(script).toContain(
-      "complete -c openclaw -n \"__fish_seen_subcommand_from gateway\" -l force -d 'Force the action'",
+      "complete -c openclaw -n \"__openclaw_command_path_matches gateway\" -l force -d 'Force the action'",
     );
+    expect(script).toContain(
+      "complete -c openclaw -n \"__openclaw_command_path_matches gateway status\" -l json -d 'JSON output'",
+    );
+    expect(script).toContain("set -l root_boolean_options -v --verbose");
+  });
+
+  it("generates Bash completions without comma-suffixed short flags", () => {
+    const script = getCompletionScript("bash", createCompletionProgram());
+
+    expect(script).toContain("--token");
+    expect(script).not.toContain("-t,");
   });
 });
