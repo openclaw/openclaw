@@ -1236,23 +1236,32 @@ describe("runCodexAppServerAttempt", () => {
   });
 
   it("routes native Codex execution through an OpenClaw sandbox exec-server when opted in", async () => {
-    const runtimeId = `codex-test-runtime-${path.basename(tempDir)}`;
-    const restoreSandboxBackend = registerSandboxBackend("codex-test-sandbox", async () => ({
-      id: "codex-test-sandbox",
-      runtimeId,
+    const appServer = createThreadLifecycleAppServerOptions();
+    const sandbox = {
+      ...createSandboxContext({
+        runShellCommand: async () => ({
+          stdout: Buffer.alloc(0),
+          stderr: Buffer.alloc(0),
+          code: 0,
+        }),
+      }),
+      backendId: "codex-test-sandbox",
+      runtimeId: `codex-test-runtime-${path.basename(tempDir)}`,
       runtimeLabel: "Codex Test Sandbox",
-      workdir: "/workspace",
-      buildExecSpec: async () => ({
-        argv: ["true"],
-        env: {},
-        stdinMode: "pipe-closed" as const,
-      }),
-      runShellCommand: async () => ({
-        stdout: Buffer.alloc(0),
-        stderr: Buffer.alloc(0),
-        code: 0,
-      }),
-    }));
+    };
+    const request = vi.fn(async (method: string, _requestParams?: unknown) => {
+      if (method === "environment/add") {
+        return {};
+      }
+      if (method === "thread/start") {
+        return threadStartResult();
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+    const client = {
+      getServerVersion: () => "0.132.0",
+      request,
+    };
     try {
       testing.setOpenClawCodingToolsFactoryForTests(() => [
         createRuntimeDynamicTool("exec"),
@@ -1277,26 +1286,64 @@ describe("runCodexAppServerAttempt", () => {
           },
         },
       } as never;
-      const { requests, waitForMethod, completeTurn } = createStartedThreadHarness();
-
-      const run = runCodexAppServerAttempt(params, {
+      const nativeToolSurfaceEnabled = testing.shouldEnableCodexAppServerNativeToolSurface(
+        params,
+        sandbox as never,
+        { sandboxExecServerEnabled: true },
+      );
+      const dynamicTools = await testing.buildDynamicTools({
+        params,
+        resolvedWorkspace: workspaceDir,
+        effectiveWorkspace: "/workspace",
+        sandboxSessionKey: params.sessionKey!,
+        sandbox: sandbox as never,
+        nativeToolSurfaceEnabled,
+        runAbortController: new AbortController(),
+        sessionAgentId: "main",
         pluginConfig: {
           appServer: {
             mode: "yolo",
             experimental: { sandboxExecServer: true },
           },
         },
+        onYieldDetected: () => undefined,
       });
-      await waitForMethod("turn/start");
-      await completeTurn({ threadId: "thread-1", turnId: "turn-1" });
-      await run;
+      const environment = await ensureCodexSandboxExecServerEnvironment({
+        client: client as never,
+        sandbox: sandbox as never,
+        appServerStartOptions: appServer.start,
+      });
+      if (!environment) {
+        throw new Error("expected sandbox exec-server environment");
+      }
+      const environmentSelection = [environment];
 
-      const environmentAdd = requests.find((request) => request.method === "environment/add");
-      const environmentAddParams = environmentAdd?.params as
+      await startOrResumeThread({
+        client: client as never,
+        params,
+        cwd: environment.cwd,
+        dynamicTools: dynamicTools as never,
+        appServer,
+        nativeCodeModeEnabled: nativeToolSurfaceEnabled,
+        nativeCodeModeOnlyEnabled: false,
+        userMcpServersEnabled: nativeToolSurfaceEnabled,
+        environmentSelection,
+      });
+
+      const turnParams = buildTurnStartParams(params, {
+        threadId: "thread-1",
+        cwd: environment.cwd,
+        appServer,
+        sandboxPolicy: { type: "externalSandbox", networkAccess: "enabled" },
+        environmentSelection,
+      });
+
+      const environmentAdd = request.mock.calls.find(([method]) => method === "environment/add");
+      const environmentAddParams = environmentAdd?.[1] as
         | { environmentId?: string; execServerUrl?: string }
         | undefined;
-      const startRequest = requests.find((request) => request.method === "thread/start");
-      const startParams = startRequest?.params as
+      const startRequest = request.mock.calls.find(([method]) => method === "thread/start");
+      const startParams = startRequest?.[1] as
         | {
             cwd?: string;
             dynamicTools?: Array<{ name: string }>;
@@ -1308,15 +1355,8 @@ describe("runCodexAppServerAttempt", () => {
             };
           }
         | undefined;
-      const turnRequest = requests.find((request) => request.method === "turn/start");
-      const turnParams = turnRequest?.params as
-        | {
-            cwd?: string;
-            environments?: Array<{ environmentId?: string; cwd?: string }>;
-            sandboxPolicy?: { type?: string; networkAccess?: string };
-          }
-        | undefined;
 
+      expect(nativeToolSurfaceEnabled).toBe(true);
       expect(environmentAddParams?.environmentId).toMatch(/^openclaw-sandbox-/);
       expect(environmentAddParams?.execServerUrl).toMatch(/^ws:\/\/127\.0\.0\.1:/);
       expect(startParams?.cwd).toBe("/workspace");
@@ -1327,14 +1367,14 @@ describe("runCodexAppServerAttempt", () => {
         { environmentId: environmentAddParams?.environmentId, cwd: "/workspace" },
       ]);
       expect(startParams?.sandbox).toBe("danger-full-access");
-      expect(turnParams?.sandboxPolicy).toEqual({
+      expect(turnParams.sandboxPolicy).toEqual({
         type: "externalSandbox",
         networkAccess: "enabled",
       });
-      expect(turnParams?.cwd).toBe("/workspace");
-      expect(turnParams?.environments).toEqual(startParams?.environments);
+      expect(turnParams.cwd).toBe("/workspace");
+      expect(turnParams.environments).toEqual(startParams?.environments);
     } finally {
-      restoreSandboxBackend();
+      await releaseCodexSandboxExecServerEnvironment(sandbox as never);
     }
   });
 

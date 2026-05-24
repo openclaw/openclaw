@@ -118,7 +118,9 @@ describe("package acceptance workflow", () => {
     expect(hydrate.if).toBe("${{ inputs.crabbox_job != 'hydrate-github' }}");
     expect(workflowStep(hydrate, "Setup Node.js").uses).toBe("actions/setup-node@v6");
     expect(workflowStep(hydrate, "Setup Node.js").with?.["node-version"]).toBe("24");
-    expect(workflowStep(hydrate, "Setup pnpm and dependencies").run).toContain("corepack enable");
+    expect(workflowStep(hydrate, "Setup pnpm and dependencies").run).toContain(
+      'corepack enable --install-directory "$PNPM_HOME"',
+    );
     expect(workflowStep(hydrate, "Setup pnpm and dependencies").run).toContain("COREPACK_HOME");
     expect(workflowStep(hydrate, "Mark Crabbox ready").run).toContain("COREPACK_HOME");
     expect(workflowStep(hydrate, "Hydrate provider env helper").env).toBeUndefined();
