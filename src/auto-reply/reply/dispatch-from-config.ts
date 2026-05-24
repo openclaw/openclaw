@@ -987,6 +987,13 @@ export async function dispatchReplyFromConfig(
     return { status: "ready" };
   };
   const getPreDispatchAbortOperation = () => dispatchAbortOperation ?? preDispatchAbortOperation;
+  let cachedPreDispatchAbortSignal:
+    | {
+        operationSignal: AbortSignal | undefined;
+        upstreamSignal: AbortSignal | undefined;
+        signal: AbortSignal | undefined;
+      }
+    | undefined;
   let cachedDispatchAbortSignal:
     | {
         operationSignal: AbortSignal | undefined;
@@ -994,8 +1001,22 @@ export async function dispatchReplyFromConfig(
         signal: AbortSignal | undefined;
       }
     | undefined;
-  const getDispatchAbortSignal = () => {
+  const getPreDispatchAbortSignal = () => {
     const operationSignal = getPreDispatchAbortOperation()?.abortSignal;
+    const upstreamSignal = params.replyOptions?.abortSignal;
+    if (
+      cachedPreDispatchAbortSignal &&
+      cachedPreDispatchAbortSignal.operationSignal === operationSignal &&
+      cachedPreDispatchAbortSignal.upstreamSignal === upstreamSignal
+    ) {
+      return cachedPreDispatchAbortSignal.signal;
+    }
+    const signal = composeAbortSignals(operationSignal, upstreamSignal);
+    cachedPreDispatchAbortSignal = { operationSignal, upstreamSignal, signal };
+    return signal;
+  };
+  const getDispatchAbortSignal = () => {
+    const operationSignal = dispatchReplyOperation?.abortSignal;
     const upstreamSignal = params.replyOptions?.abortSignal;
     if (
       cachedDispatchAbortSignal &&
@@ -1033,6 +1054,7 @@ export async function dispatchReplyFromConfig(
     }
   };
   const isDispatchOperationAborted = () => getDispatchAbortSignal()?.aborted === true;
+  const isPreDispatchOperationAborted = () => getPreDispatchAbortSignal()?.aborted === true;
   const throwIfDispatchOperationAborted = () => {
     if (isDispatchOperationAborted()) {
       throw new DispatchReplyOperationAbortedError();
@@ -1040,7 +1062,7 @@ export async function dispatchReplyFromConfig(
   };
   const dispatchHookDispatcher = createAbortAwareDispatcher({
     dispatcher,
-    isAborted: isDispatchOperationAborted,
+    isAborted: isPreDispatchOperationAborted,
   });
   const { ensureRuntimePluginsLoaded } = await traceReplyPhase("reply.load_runtime_plugins", () =>
     loadRuntimePlugins(),
@@ -1675,7 +1697,7 @@ export async function dispatchReplyFromConfig(
     // Run before_dispatch hook — let plugins inspect or handle before model dispatch.
     if (hookRunner?.hasHooks("before_dispatch")) {
       const beforeDispatchResult = await traceReplyPhase("reply.before_dispatch_hooks", () =>
-        runWithDispatchAbortSignal(getDispatchAbortSignal(), () =>
+        runWithDispatchAbortSignal(getPreDispatchAbortSignal(), () =>
           hookRunner.runBeforeDispatch(
             {
               content: hookContext.content,
@@ -1717,7 +1739,7 @@ export async function dispatchReplyFromConfig(
 
     if (hookRunner?.hasHooks("reply_dispatch")) {
       const replyDispatchResult = await traceReplyPhase("reply.reply_dispatch_hooks", () =>
-        runWithDispatchAbortSignal(getDispatchAbortSignal(), () =>
+        runWithDispatchAbortSignal(getPreDispatchAbortSignal(), () =>
           hookRunner.runReplyDispatch(
             createReplyDispatchEvent({
               ctx,
@@ -1739,7 +1761,7 @@ export async function dispatchReplyFromConfig(
             {
               cfg,
               dispatcher: dispatchHookDispatcher,
-              abortSignal: getDispatchAbortSignal() ?? params.replyOptions?.abortSignal,
+              abortSignal: getPreDispatchAbortSignal() ?? params.replyOptions?.abortSignal,
               onReplyStart: params.replyOptions?.onReplyStart,
               recordProcessed,
               markIdle,
@@ -2322,7 +2344,7 @@ export async function dispatchReplyFromConfig(
             {
               cfg,
               dispatcher: dispatchHookDispatcher,
-              abortSignal: getDispatchAbortSignal() ?? params.replyOptions?.abortSignal,
+              abortSignal: getPreDispatchAbortSignal() ?? params.replyOptions?.abortSignal,
               onReplyStart: params.replyOptions?.onReplyStart,
               recordProcessed,
               markIdle,

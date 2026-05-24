@@ -855,7 +855,7 @@ describe("dispatchReplyFromConfig ACP abort", () => {
     expect(getActiveReplyRunCount()).toBe(0);
   });
 
-  it("wires active source operation abort into reply resolver runs", async () => {
+  it("keeps borrowed active operation abort out of reply resolver runs", async () => {
     const existingOperation = createReplyOperation({
       sessionKey: "agent:already-active-resolver",
       sessionId: "active-session",
@@ -864,6 +864,10 @@ describe("dispatchReplyFromConfig ACP abort", () => {
     let resolverStarted!: () => void;
     const resolverStartedPromise = new Promise<void>((resolve) => {
       resolverStarted = resolve;
+    });
+    let releaseResolver!: () => void;
+    const releaseResolverPromise = new Promise<void>((resolve) => {
+      releaseResolver = resolve;
     });
     let resolverAbortSignal: AbortSignal | undefined;
 
@@ -884,22 +888,17 @@ describe("dispatchReplyFromConfig ACP abort", () => {
       } as OpenClawConfig,
       dispatcher,
       replyResolver: async (_resolverCtx, options) => {
-        const signal = options?.abortSignal;
-        resolverAbortSignal = signal;
+        resolverAbortSignal = options?.abortSignal;
         resolverStarted();
-        if (!signal) {
-          throw new Error("expected active operation abort signal");
-        }
-        await new Promise<void>((resolve) => {
-          signal.addEventListener("abort", () => resolve(), { once: true });
-        });
-        return { text: "late final should not send" };
+        await releaseResolverPromise;
+        return undefined;
       },
     });
 
     await resolverStartedPromise;
-    expect(resolverAbortSignal).toBe(existingOperation.abortSignal);
+    expect(resolverAbortSignal).toBeUndefined();
     expect(replyRunRegistry.abort("agent:already-active-resolver")).toBe(true);
+    releaseResolver();
 
     await expect(dispatchPromise).resolves.toMatchObject({
       queuedFinal: false,
