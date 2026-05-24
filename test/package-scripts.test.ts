@@ -107,4 +107,10 @@ describe("package scripts", () => {
       "test/scripts/format-generated-module.test.ts",
     );
   });
+
+  it("runs native opus installer coverage in Windows CI", () => {
+    expect(readPackageJson().scripts["test:windows:ci"]).toContain(
+      "test/scripts/install-discord-native-opus.test.ts",
+    );
+  });
 });
