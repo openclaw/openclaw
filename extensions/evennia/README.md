@@ -9,6 +9,8 @@ Current smoke-tested paths:
 
 This is intentionally still prototype code. The long-term direction is to add structured Evennia-side bridge events rather than relying on webclient text scraping.
 
+Development happens from Patrick's host checkout only. Do not give Scoob/Dumbledong Patrick's GitHub credentials or writable remotes for this plugin; see `DEVELOPMENT.md` for the safe deploy workflow.
+
 ## Command tool
 
 The plugin registers `evennia_command`, a generic tool that sends one raw command to Evennia as a configured character. Evennia remains the authority for permissions, custom commands, admin powers, and game effects; the plugin does not maintain a separate command allowlist or admin switch.
