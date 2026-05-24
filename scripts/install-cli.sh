@@ -37,10 +37,10 @@ resolve_openclaw_effective_home() {
   fi
 
   case "$openclaw_home" in
-    "~")
+    \~)
       echo "$HOME"
       ;;
-    "~/"*)
+    \~/*)
       echo "${HOME}/${openclaw_home#~/}"
       ;;
     *)

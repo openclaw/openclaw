@@ -49,7 +49,7 @@ resolve_openclaw_effective_home() {
         echo "$HOME"
         return
     fi
-    if [[ "$openclaw_home" == "~/"* ]]; then
+    if [[ "$openclaw_home" == \~/* ]]; then
         echo "${HOME}${openclaw_home:1}"
         return
     fi
