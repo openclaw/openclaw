@@ -238,6 +238,29 @@ describe("startHeartbeatRunner", () => {
     runner.stop();
   });
 
+  it("dispatches scheduled heartbeats when delivery target is explicitly none", async () => {
+    useFakeHeartbeatTime();
+
+    const runSpy = vi.fn().mockResolvedValue({ status: "ran", durationMs: 1 });
+    const runner = startHeartbeatRunner({
+      cfg: heartbeatConfig([{ id: "main", heartbeat: { every: "30m", target: "none" } }]),
+      runOnce: runSpy,
+      stableSchedulerSeed: TEST_SCHEDULER_SEED,
+    });
+    const mainDueMs = resolveDueFromNow(0, 30 * 60_000, "main");
+
+    await vi.advanceTimersByTimeAsync(mainDueMs + 1);
+
+    expect(runSpy).toHaveBeenCalledTimes(1);
+    expectRunCallFields(runSpy, 0, {
+      agentId: "main",
+      reason: "interval",
+      heartbeat: { every: "30m", target: "none" },
+    });
+
+    runner.stop();
+  });
+
   it("continues scheduling after runOnce throws an unhandled error", async () => {
     useFakeHeartbeatTime();
 
