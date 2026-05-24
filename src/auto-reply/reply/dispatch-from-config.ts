@@ -947,12 +947,23 @@ export async function dispatchReplyFromConfig(
   let dispatchAbortOperation: ReplyOperation | undefined;
   let preDispatchAbortOperation: ReplyOperation | undefined;
   type DispatchReplyOperationAcquisition = { status: "ready" } | { status: "busy" };
-  const ensureDispatchReplyOperation = async (): Promise<DispatchReplyOperationAcquisition> => {
+  const ensureDispatchReplyOperation = async (
+    phase: "pre_dispatch" | "dispatch",
+  ): Promise<DispatchReplyOperationAcquisition> => {
     if (dispatchReplyOperation && !dispatchReplyOperation.result) {
       return { status: "ready" };
     }
     if (dispatchAbortOperation && !dispatchAbortOperation.result) {
       return dispatchReplyOperation ? { status: "ready" } : { status: "busy" };
+    }
+    if (
+      phase === "dispatch" &&
+      preDispatchAbortOperation?.result &&
+      preDispatchAbortOperation.result.kind !== "completed" &&
+      !dispatchReplyOperation
+    ) {
+      dispatchAbortOperation = preDispatchAbortOperation;
+      return { status: "busy" };
     }
     if (!dispatchOperationSessionKey) {
       return { status: "ready" };
@@ -963,16 +974,17 @@ export async function dispatchReplyFromConfig(
       sessionStoreEntry.entry?.sessionId ??
       crypto.randomUUID();
     const replyTurnKind = resolveReplyTurnKind(params.replyOptions);
+    const allowActivePreDispatch = phase === "pre_dispatch" && replyTurnKind === "visible";
     const admission = await admitReplyTurn({
       sessionKey: dispatchOperationSessionKey,
       sessionId: operationSessionId,
       kind: replyTurnKind,
       resetTriggered: false,
       upstreamAbortSignal: params.replyOptions?.abortSignal,
-      waitForActive: false,
+      waitForActive: !allowActivePreDispatch,
     });
     if (admission.status === "skipped") {
-      if (replyTurnKind === "visible" && admission.reason === "active-run") {
+      if (allowActivePreDispatch && admission.reason === "active-run") {
         preDispatchAbortOperation = admission.activeOperation;
         return { status: "ready" };
       }
@@ -1592,7 +1604,7 @@ export async function dispatchReplyFromConfig(
     }
     // Register the dispatch-owned operation before any plugin hook or model work
     // so /stop can abort pre-run and in-run stalls through the same session lane.
-    if ((await ensureDispatchReplyOperation()).status === "busy") {
+    if ((await ensureDispatchReplyOperation("pre_dispatch")).status === "busy") {
       return finishReplyOperationBusyDispatch();
     }
 
@@ -1787,6 +1799,10 @@ export async function dispatchReplyFromConfig(
           counts: replyDispatchResult.counts,
         });
       }
+    }
+
+    if ((await ensureDispatchReplyOperation("dispatch")).status === "busy") {
+      return finishReplyOperationBusyDispatch();
     }
 
     // When automatic source delivery is suppressed, still let the agent process
@@ -2322,7 +2338,7 @@ export async function dispatchReplyFromConfig(
         ),
       ),
     );
-    if ((await ensureDispatchReplyOperation()).status === "busy") {
+    if ((await ensureDispatchReplyOperation("dispatch")).status === "busy") {
       return finishReplyOperationBusyDispatch({ recordAgentDispatchCompleted: true });
     }
 

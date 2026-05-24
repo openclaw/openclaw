@@ -901,22 +901,14 @@ describe("dispatchReplyFromConfig ACP abort", () => {
     expect(getActiveReplyRunCount()).toBe(0);
   });
 
-  it("keeps borrowed active operation abort out of reply resolver runs", async () => {
+  it("suppresses reply resolver runs after active source abort", async () => {
     const existingOperation = createReplyOperation({
       sessionKey: "agent:already-active-resolver",
       sessionId: "active-session",
       resetTriggered: false,
     });
-    let resolverStarted!: () => void;
-    const resolverStartedPromise = new Promise<void>((resolve) => {
-      resolverStarted = resolve;
-    });
-    let releaseResolver!: () => void;
-    const releaseResolverPromise = new Promise<void>((resolve) => {
-      releaseResolver = resolve;
-    });
-    let resolverAbortSignal: AbortSignal | undefined;
-
+    existingOperation.setPhase("running");
+    const replyResolver = vi.fn(async () => undefined);
     const dispatcher = createDispatcher();
     const ctx = buildTestCtx({
       Provider: "discord",
@@ -933,41 +925,30 @@ describe("dispatchReplyFromConfig ACP abort", () => {
         },
       } as OpenClawConfig,
       dispatcher,
-      replyResolver: async (_resolverCtx, options) => {
-        resolverAbortSignal = options?.abortSignal;
-        resolverStarted();
-        await releaseResolverPromise;
-        return undefined;
-      },
+      replyResolver,
     });
 
-    await resolverStartedPromise;
-    expect(resolverAbortSignal).toBeUndefined();
     expect(replyRunRegistry.abort("agent:already-active-resolver")).toBe(true);
-    releaseResolver();
 
     await expect(dispatchPromise).resolves.toMatchObject({
       queuedFinal: false,
       counts: { tool: 0, block: 0, final: 0 },
     });
     expect(existingOperation.result).toEqual({ kind: "aborted", code: "aborted_by_user" });
+    expect(replyResolver).not.toHaveBeenCalled();
     expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
+    existingOperation.complete();
     expect(getActiveReplyRunCount()).toBe(0);
   });
 
-  it("keeps caller abort active when reply resolver borrows an active source operation", async () => {
+  it("keeps caller abort active while waiting for an active source operation", async () => {
     const existingOperation = createReplyOperation({
       sessionKey: "agent:already-active-caller-abort",
       sessionId: "active-session",
       resetTriggered: false,
     });
     const callerAbort = new AbortController();
-    let resolverStarted!: () => void;
-    const resolverStartedPromise = new Promise<void>((resolve) => {
-      resolverStarted = resolve;
-    });
-    let resolverAbortSignal: AbortSignal | undefined;
-
+    const replyResolver = vi.fn(async () => ({ text: "late final should not send" }));
     const dispatcher = createDispatcher();
     const ctx = buildTestCtx({
       Provider: "discord",
@@ -985,23 +966,9 @@ describe("dispatchReplyFromConfig ACP abort", () => {
       } as OpenClawConfig,
       dispatcher,
       replyOptions: { abortSignal: callerAbort.signal },
-      replyResolver: async (_resolverCtx, options) => {
-        const signal = options?.abortSignal;
-        resolverAbortSignal = signal;
-        resolverStarted();
-        if (!signal) {
-          throw new Error("expected composed abort signal");
-        }
-        await new Promise<void>((resolve) => {
-          signal.addEventListener("abort", () => resolve(), { once: true });
-        });
-        return { text: "late final should not send" };
-      },
+      replyResolver,
     });
 
-    await resolverStartedPromise;
-    expect(resolverAbortSignal).toBeInstanceOf(AbortSignal);
-    expect(resolverAbortSignal).not.toBe(existingOperation.abortSignal);
     callerAbort.abort();
 
     await expect(dispatchPromise).resolves.toMatchObject({
@@ -1009,6 +976,7 @@ describe("dispatchReplyFromConfig ACP abort", () => {
       counts: { tool: 0, block: 0, final: 0 },
     });
     expect(existingOperation.result).toBeNull();
+    expect(replyResolver).not.toHaveBeenCalled();
     expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
     existingOperation.abortByUser();
     expect(getActiveReplyRunCount()).toBe(0);
