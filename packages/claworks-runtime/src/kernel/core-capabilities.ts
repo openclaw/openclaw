@@ -2122,7 +2122,12 @@ function makeRobotAddRelationDescriptor(runtime: ClaworksRuntime): CapabilityDes
     },
     handler: async (_ctx, params) => {
       const idMgr = (
-        runtime as unknown as { robotIdentityManager?: { addRelation: (r: unknown) => unknown } }
+        runtime as unknown as {
+          robotIdentityManager?: {
+            addRelation: (r: unknown) => unknown;
+            persist: (db: unknown) => Promise<void>;
+          };
+        }
       ).robotIdentityManager;
       if (idMgr) {
         const rel = idMgr.addRelation({
@@ -2140,6 +2145,10 @@ function makeRobotAddRelationDescriptor(runtime: ClaworksRuntime): CapabilityDes
             : [],
           note: typeof params.note === "string" ? params.note : undefined,
         });
+        // 持久化到 DB，防止重启后关系丢失
+        if (runtime.db) {
+          await idMgr.persist(runtime.db).catch(() => undefined);
+        }
         return { status: "ok", relation: rel };
       }
       return { status: "not_supported", message: "身份管理器未初始化" };

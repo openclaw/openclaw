@@ -53,7 +53,9 @@ export async function runReact(
   };
 
   const registered = kernel.listCapabilities?.().map((c) => c.id) ?? [];
-  const safeTools = tools.filter((t) => registered.includes(t) && isSafeCapability(t));
+  // 未指定工具白名单时，使用所有已注册的安全能力（过滤危险前缀）
+  const effectiveTools = tools.length > 0 ? tools : registered;
+  const safeTools = effectiveTools.filter((t) => registered.includes(t) && isSafeCapability(t));
 
   const iterations: ReactIteration[] = [];
   let done = false;

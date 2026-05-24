@@ -909,7 +909,9 @@ async function executeAtomic(
     });
     return { task_id: task.id, status: task.status, result: task.result };
   }
-  return { fn, params };
+  // 未知 fn：记录警告并以 stub 形式透传，避免 Playbook 静默失败无任何提示
+  deps.logger?.(`[claworks:atomic] unknown fn="${fn}" — step returned stub output`);
+  return { fn, params, _stub: true, _warning: `atomic fn "${fn}" is not implemented` };
 }
 
 function stepResultField(

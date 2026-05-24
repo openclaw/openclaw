@@ -391,6 +391,20 @@ export async function createClaworksRuntime(
   registerExtensionCapabilities(runtime, constitution);
   capabilities.setConstitution(constitution);
 
+  // 从 ObjectStore 恢复 Tier 2 用户规则（重启持久性）
+  try {
+    const { items } = await runtime.objectStore.query("_ConstitutionUserRule", { limit: 500 });
+    for (const item of items) {
+      const entry = item as import("../kernel/robot-constitution-v2.js").UserConstitutionEntry &
+        Record<string, unknown>;
+      if (typeof entry.userId === "string" && entry.userId) {
+        constitution.setUserRule(entry);
+      }
+    }
+  } catch {
+    // 表未初始化（首次启动）或 DB 不可用时静默忽略
+  }
+
   // 初始化脚手架引擎（强模型离线预生成，弱模型在线填空执行）
   // 初始化规则引擎（SOP→规则表、业务决策条件表）
   const ruleEngine = createRuleEngine({ logger: opts?.logger });
