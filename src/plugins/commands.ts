@@ -187,6 +187,7 @@ function buildPluginCommandRuntimeContext(params: {
     return undefined;
   }
   return {
+    ...(params.authProfileId ? { authProfileId: params.authProfileId } : {}),
     llm: createRuntimeLlm({
       getConfig: () => params.config,
       authority: {

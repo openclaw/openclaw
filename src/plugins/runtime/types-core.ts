@@ -120,6 +120,8 @@ export type LlmCompleteParams = {
   purpose?: string;
   /** Agent whose model/credentials to use. Session-bound capabilities may disallow overrides. */
   agentId?: string;
+  /** Host-derived auth profile preference for command/runtime-scoped calls. */
+  authProfileId?: string;
 };
 
 export type LlmCompleteResult = {

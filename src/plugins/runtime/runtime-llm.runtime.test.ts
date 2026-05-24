@@ -162,7 +162,9 @@ describe("runtime.llm.complete", () => {
     expectSingleCallFirstArg(hoisted.prepareSimpleCompletionModelForAgent, {
       cfg,
       agentId: "ada",
+      allowBundledStaticCatalogFallback: true,
       allowMissingApiKeyModes: ["aws-sdk"],
+      skipPiDiscovery: true,
     });
     expect(result.agentId).toBe("ada");
     expectFields(requireRecord(result.audit, "audit"), {
@@ -188,7 +190,9 @@ describe("runtime.llm.complete", () => {
       cfg,
       agentId: "ada",
       preferredProfile: "openai-codex:claude@martian.engineering",
+      allowBundledStaticCatalogFallback: true,
       allowMissingApiKeyModes: ["aws-sdk"],
+      skipPiDiscovery: true,
     });
   });
 
@@ -494,6 +498,24 @@ describe("runtime.llm.complete", () => {
     expectSingleCallFirstArg(hoisted.prepareSimpleCompletionModelForAgent, {
       cfg,
       agentId: "worker",
+    });
+  });
+
+  it("uses a request auth profile preference when no authority profile is bound", async () => {
+    const llm = createRuntimeLlm({
+      getConfig: () => cfg,
+      authority: {
+        allowComplete: true,
+      },
+    });
+
+    await llm.complete({
+      authProfileId: "openai-codex:work",
+      messages: [{ role: "user", content: "draft" }],
+    });
+
+    expectSingleCallFirstArg(hoisted.prepareSimpleCompletionModelForAgent, {
+      preferredProfile: "openai-codex:work",
     });
   });
 
