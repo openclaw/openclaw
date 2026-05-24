@@ -957,14 +957,17 @@ export async function dispatchReplyFromConfig(
   };
   const getPreDispatchAbortOperation = () => dispatchAbortOperation ?? preDispatchAbortOperation;
   const getDispatchAbortSignal = () => getPreDispatchAbortOperation()?.abortSignal;
-  const getReplyOptions = () =>
-    dispatchReplyOperation
-      ? {
-          ...params.replyOptions,
-          abortSignal: dispatchReplyOperation.abortSignal,
-          replyOperation: dispatchReplyOperation,
-        }
-      : params.replyOptions;
+  const getReplyOptions = () => {
+    const abortOperation = getPreDispatchAbortOperation();
+    if (!abortOperation) {
+      return params.replyOptions;
+    }
+    return {
+      ...params.replyOptions,
+      abortSignal: abortOperation.abortSignal,
+      ...(dispatchReplyOperation ? { replyOperation: dispatchReplyOperation } : {}),
+    };
+  };
   const completeDispatchReplyOperation = () => {
     if (dispatchReplyOperation) {
       dispatchReplyOperation.complete();
@@ -1949,7 +1952,7 @@ export async function dispatchReplyFromConfig(
       params.configOverride ? (applyMergePatch(cfg, params.configOverride) as OpenClawConfig) : cfg,
     );
     recordAgentDispatchStarted();
-    const replyResult = await runWithReplyOperationAbort(dispatchAbortOperation, () =>
+    const replyResult = await runWithReplyOperationAbort(getPreDispatchAbortOperation(), () =>
       traceReplyPhase("reply.run_reply_resolver", () =>
         replyResolver(
           ctx,

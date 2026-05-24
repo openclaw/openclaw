@@ -855,6 +855,61 @@ describe("dispatchReplyFromConfig ACP abort", () => {
     expect(getActiveReplyRunCount()).toBe(0);
   });
 
+  it("wires active source operation abort into reply resolver runs", async () => {
+    const existingOperation = createReplyOperation({
+      sessionKey: "agent:already-active-resolver",
+      sessionId: "active-session",
+      resetTriggered: false,
+    });
+    let resolverStarted!: () => void;
+    const resolverStartedPromise = new Promise<void>((resolve) => {
+      resolverStarted = resolve;
+    });
+    let resolverAbortSignal: AbortSignal | undefined;
+
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "discord",
+      Surface: "discord",
+      SessionKey: "agent:already-active-resolver",
+      BodyForAgent: "resolver waits behind active operation",
+    });
+    const dispatchPromise = dispatchReplyFromConfig({
+      ctx,
+      cfg: {
+        diagnostics: { enabled: true },
+        session: {
+          sendPolicy: { default: "allow" },
+        },
+      } as OpenClawConfig,
+      dispatcher,
+      replyResolver: async (_resolverCtx, options) => {
+        const signal = options?.abortSignal;
+        resolverAbortSignal = signal;
+        resolverStarted();
+        if (!signal) {
+          throw new Error("expected active operation abort signal");
+        }
+        await new Promise<void>((resolve) => {
+          signal.addEventListener("abort", () => resolve(), { once: true });
+        });
+        return { text: "late final should not send" };
+      },
+    });
+
+    await resolverStartedPromise;
+    expect(resolverAbortSignal).toBe(existingOperation.abortSignal);
+    expect(replyRunRegistry.abort("agent:already-active-resolver")).toBe(true);
+
+    await expect(dispatchPromise).resolves.toMatchObject({
+      queuedFinal: false,
+      counts: { tool: 0, block: 0, final: 0 },
+    });
+    expect(existingOperation.result).toEqual({ kind: "aborted", code: "aborted_by_user" });
+    expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
+    expect(getActiveReplyRunCount()).toBe(0);
+  });
+
   it("suppresses late callback and final replies when the resolver ignores a dispatch abort", async () => {
     let resolverStarted!: () => void;
     let releaseResolver!: () => void;
