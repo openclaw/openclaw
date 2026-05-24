@@ -8,6 +8,10 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+## 2026.5.25
+
+### Fixes
+
 - Installer: let the local-prefix CLI installer use Alpine's `apk` Node.js, npm, and Git packages on musl Linux instead of downloading glibc Node tarballs that fail `node:sqlite`.
 - Scripts: use `git grep` to prefilter tracked conflict-marker scans so changed checks avoid reading every repository file on clean runs.
 - Installer: install Node.js through `apk` on Alpine Linux instead of falling through to the NodeSource package-manager path.
