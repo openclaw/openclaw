@@ -848,6 +848,7 @@ async function rotateOversizedCodexAppServerStartupBinding(params: {
   agentDir: string;
   codexHome?: string;
   config: EmbeddedRunAttemptParams["config"] | undefined;
+  contextEngineActive?: boolean;
 }): Promise<CodexAppServerThreadBinding | undefined> {
   const binding = params.binding;
   if (!binding?.threadId) {
@@ -856,7 +857,7 @@ async function rotateOversizedCodexAppServerStartupBinding(params: {
   if (params.config?.agents?.defaults?.compaction?.truncateAfterCompaction !== true) {
     return binding;
   }
-  if (hasContextEngineThreadBootstrapProjection(binding)) {
+  if (params.contextEngineActive === true && hasContextEngineThreadBootstrapProjection(binding)) {
     embeddedAgentLog.debug(
       "codex app-server deferring native transcript size guard for context-engine thread bootstrap",
       {
@@ -1017,6 +1018,7 @@ export async function runCodexAppServerAttempt(
     agentDir,
     codexHome: appServer.start.env?.CODEX_HOME,
     config: params.config,
+    contextEngineActive: isActiveHarnessContextEngine(params.contextEngine),
   });
   const startupAuthProfileCandidate =
     params.runtimePlan?.auth.forwardedAuthProfileId ??
