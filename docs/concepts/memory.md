@@ -45,7 +45,7 @@ manually edit `MEMORY.md` for every remembered detail.
 
 If `MEMORY.md` grows past the bootstrap file budget, OpenClaw keeps the file on
 disk intact but truncates the copy injected into the model context. Treat that as
-a signal to move detailed material back into `memory/*.md`, keep only the
+a signal to move detailed material back into `memory/**/*.md`, keep only the
 durable summary in `MEMORY.md`, or raise the bootstrap limits if you explicitly
 want to spend more prompt budget. Use `/context list`, `/context detail`, or
 `openclaw doctor` to see raw vs injected sizes and truncation status.

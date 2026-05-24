@@ -75,7 +75,7 @@ order shown. Set `memorySearch.provider` to override.
 
 ## How indexing works
 
-OpenClaw indexes `MEMORY.md` and `memory/*.md` into chunks (~400 tokens with
+OpenClaw indexes `MEMORY.md` and `memory/**/*.md` (recursively, including nested dated paths like `memory/YYYY-MM/YYYY-MM-DD.md`) into chunks (~400 tokens with
 80-token overlap) and stores them in a per-agent SQLite database.
 
 - **Index location:** `~/.openclaw/memory/<agentId>.sqlite`

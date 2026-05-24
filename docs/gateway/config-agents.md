@@ -183,7 +183,7 @@ knob.
   normal workspace bootstrap injection.
 - `agents.defaults.startupContext.*`:
   one-shot reset/startup model-run prelude, including recent daily
-  `memory/*.md` files. Bare chat `/new` and `/reset` commands are
+  root-level `memory/*.md` files. Bare chat `/new` and `/reset` commands are
   acknowledged without invoking the model.
 - `skills.limits.*`:
   the compact skills list injected into the system prompt.
