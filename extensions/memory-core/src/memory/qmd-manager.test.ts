@@ -107,9 +107,25 @@ function firstWatchOptions(): WatchOptions {
 }
 
 function firstEmbedLockCall(): EmbedLockCall {
-  const call = withFileLockMock.mock.calls[0] as EmbedLockCall | undefined;
+  const call = withFileLockMock.mock.calls.find((entry) =>
+    entry[0].endsWith(path.join("qmd", "embed.lock")),
+  ) as EmbedLockCall | undefined;
   if (!call) {
     throw new Error("Expected qmd embed lock call");
+  }
+  return call;
+}
+
+function writeLockCalls(): EmbedLockCall[] {
+  return withFileLockMock.mock.calls.filter((entry) =>
+    entry[0].endsWith("qmd-write.lock"),
+  ) as EmbedLockCall[];
+}
+
+function firstWriteLockCall(): EmbedLockCall {
+  const call = writeLockCalls()[0];
+  if (!call) {
+    throw new Error("Expected qmd store write lock call");
   }
   return call;
 }
@@ -4087,6 +4103,52 @@ describe("QmdMemoryManager", () => {
     await expect(secondSync).resolves.toBeUndefined();
     await first.manager.close();
     await second.manager.close();
+  });
+
+  it("serializes both the qmd update and embed writes on one per-store lock (issue #66339)", async () => {
+    // Regression for #66339: the update AND embed phases both write the same
+    // qmd index.sqlite. A foreground `memory search` dirty-sync and a background
+    // gateway update/embed run in separate processes, which the in-process queues
+    // cannot serialize, so the writers collided with SQLITE_BUSY. Both writes now
+    // take one per-store cross-process write lock; embed additionally keeps the
+    // global embed lock for ML-resource serialization.
+    cfg = {
+      ...cfg,
+      memory: {
+        backend: "qmd",
+        qmd: {
+          includeDefaultMemory: false,
+          searchMode: "query",
+          update: { interval: "0s", debounceMs: 0, onBoot: false },
+          paths: [{ path: workspaceDir, pattern: "**/*.md", name: "workspace" }],
+        },
+      },
+    } as OpenClawConfig;
+    spawnMock.mockImplementation(() => createMockChild());
+
+    const { manager } = await createManager({ mode: "status" });
+    await expect(manager.sync({ reason: "manual", force: true })).resolves.toBeUndefined();
+
+    const [lockPath, lockOptions, lockTask] = firstWriteLockCall();
+    // Per-store lock beside the agent qmd dir, distinct from the global embed lock.
+    expect(lockPath.endsWith("qmd-write.lock")).toBe(true);
+    expect(lockPath.endsWith(path.join("qmd", "embed.lock"))).toBe(false);
+    expect(lockOptions.retries.factor).toBe(1.2);
+    expect(lockOptions.retries.maxTimeout).toBe(10_000);
+    expect(lockOptions.retries.randomize).toBe(true);
+    expect(lockOptions.retries.retries).toBeGreaterThanOrEqual(60);
+    expect(lockOptions.stale).toBeGreaterThanOrEqual(5 * 60 * 1000);
+    expect(typeof lockTask).toBe("function");
+
+    // A forced sync runs both the update and the embed write, so both acquire the
+    // shared per-store write lock; the embed also still takes the global embed lock.
+    expect(writeLockCalls().length).toBeGreaterThanOrEqual(2);
+    const embedLockTaken = withFileLockMock.mock.calls.some((entry) =>
+      entry[0].endsWith(path.join("qmd", "embed.lock")),
+    );
+    expect(embedLockTaken).toBe(true);
+
+    await manager.close();
   });
 
   it("serializes session exports across managers for the same agent", async () => {
