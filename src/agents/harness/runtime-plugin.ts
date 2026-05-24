@@ -7,6 +7,60 @@ import {
 } from "../../plugins/providers.js";
 import { resolveAgentHarnessPolicy } from "./policy.js";
 
+const SELECTED_AGENT_HARNESS_PLUGIN_CACHE = Symbol.for("openclaw.selectedAgentHarnessPluginCache");
+
+type SelectedAgentHarnessPluginCache = {
+  loadedKeys: Set<string>;
+};
+
+function getSelectedAgentHarnessPluginCache(): SelectedAgentHarnessPluginCache {
+  const globalState = globalThis as typeof globalThis & {
+    [SELECTED_AGENT_HARNESS_PLUGIN_CACHE]?: SelectedAgentHarnessPluginCache;
+  };
+  const existing = globalState[SELECTED_AGENT_HARNESS_PLUGIN_CACHE];
+  if (existing?.loadedKeys instanceof Set) {
+    return existing;
+  }
+  const next: SelectedAgentHarnessPluginCache = { loadedKeys: new Set() };
+  globalState[SELECTED_AGENT_HARNESS_PLUGIN_CACHE] = next;
+  return next;
+}
+
+function buildHarnessPluginCacheKey(params: {
+  provider: string;
+  modelId: string;
+  config?: OpenClawConfig;
+  agentId?: string;
+  sessionKey?: string;
+  agentHarnessRuntimeOverride?: string;
+  workspaceDir: string;
+  runtime: string;
+  pluginIds: readonly string[];
+}): string {
+  return JSON.stringify({
+    provider: params.provider,
+    modelId: params.modelId,
+    agentId: params.agentId,
+    sessionKey: params.sessionKey,
+    runtime: params.runtime,
+    runtimeOverride: params.agentHarnessRuntimeOverride,
+    workspaceDir: params.workspaceDir,
+    pluginIds: params.pluginIds,
+    plugins: {
+      allow: params.config?.plugins?.allow,
+      bundledDiscovery: params.config?.plugins?.bundledDiscovery,
+      deny: params.config?.plugins?.deny,
+      load: params.config?.plugins?.load,
+      entries: Object.fromEntries(
+        Object.entries(params.config?.plugins?.entries ?? {}).map(([id, entry]) => [
+          id,
+          { enabled: entry?.enabled },
+        ]),
+      ),
+    },
+  });
+}
+
 function dedupePluginIds(values: readonly string[]): string[] {
   const seen = new Set<string>();
   const result: string[] = [];
@@ -120,6 +174,15 @@ export async function ensureSelectedAgentHarnessPlugin(params: {
     config: params.config,
     workspaceDir: params.workspaceDir,
   });
+  const cacheKey = buildHarnessPluginCacheKey({
+    ...params,
+    runtime,
+    pluginIds,
+  });
+  const cache = getSelectedAgentHarnessPluginCache();
+  if (cache.loadedKeys.has(cacheKey)) {
+    return;
+  }
   const configWithAllowedRuntimePlugins = withRuntimePluginIdsAllowed({
     config: params.config,
     requiredPluginId: "codex",
@@ -141,4 +204,12 @@ export async function ensureSelectedAgentHarnessPlugin(params: {
     workspaceDir: params.workspaceDir,
     onlyPluginIds: pluginIds,
   });
+  cache.loadedKeys.add(cacheKey);
 }
+
+export const testing = {
+  resetSelectedAgentHarnessPluginCache() {
+    getSelectedAgentHarnessPluginCache().loadedKeys.clear();
+  },
+  buildHarnessPluginCacheKey,
+};

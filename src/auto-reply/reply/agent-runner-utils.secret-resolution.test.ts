@@ -17,7 +17,7 @@ vi.mock("../../cli/command-secret-targets.js", () => ({
     hoisted.getScopedChannelsCommandSecretTargetsMock(...args),
 }));
 
-const { resolveQueuedReplyExecutionConfig, resolveQueuedReplyRuntimeConfig } =
+const { resolveQueuedReplyExecutionConfig, resolveQueuedReplyRuntimeConfig, testing } =
   await import("./agent-runner-utils.js");
 const { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } =
   await import("../../config/config.js");
@@ -41,6 +41,7 @@ function resolveCommandSecretRefsCall(callIndex = 0): ResolveCommandSecretRefsCa
 
 describe("resolveQueuedReplyExecutionConfig channel scope", () => {
   beforeEach(() => {
+    testing.resetQueuedReplyExecutionConfigCache();
     clearRuntimeConfigSnapshot();
     hoisted.resolveCommandSecretRefsViaGatewayMock
       .mockReset()
@@ -57,6 +58,7 @@ describe("resolveQueuedReplyExecutionConfig channel scope", () => {
   });
 
   afterEach(() => {
+    testing.resetQueuedReplyExecutionConfigCache();
     clearRuntimeConfigSnapshot();
   });
 
@@ -118,6 +120,24 @@ describe("resolveQueuedReplyExecutionConfig channel scope", () => {
       channel: "discord",
       accountId: "ops",
     });
+  });
+
+  it("reuses resolved execution config for the same source config and reply scope", async () => {
+    const sourceConfig = { source: true } as unknown as OpenClawConfig;
+
+    const first = await resolveQueuedReplyExecutionConfig(sourceConfig, {
+      messageProvider: "discord",
+      agentAccountId: "ops",
+    });
+    const second = await resolveQueuedReplyExecutionConfig(sourceConfig, {
+      messageProvider: "discord",
+      agentAccountId: "ops",
+    });
+
+    expect(first).toBe(sourceConfig);
+    expect(second).toBe(sourceConfig);
+    expect(hoisted.resolveCommandSecretRefsViaGatewayMock).toHaveBeenCalledTimes(2);
+    expect(hoisted.getScopedChannelsCommandSecretTargetsMock).toHaveBeenCalledTimes(1);
   });
 
   it("skips scoped channel resolution when no active channel can be resolved", async () => {
