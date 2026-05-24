@@ -13,12 +13,18 @@ import {
   makeAgentAssistantMessage,
   makeAgentUserMessage,
 } from "openclaw/plugin-sdk/test-fixtures";
-import { afterEach, describe, expect, it } from "vitest";
-import {
-  onSessionTranscriptUpdate,
-  type SessionTranscriptUpdate,
-} from "../../../../src/sessions/transcript-events.js";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { attachCodexMirrorIdentity, mirrorCodexAppServerTranscript } from "./transcript-mirror.js";
+
+const emitSessionTranscriptUpdateMock = vi.hoisted(() => vi.fn());
+
+vi.mock("openclaw/plugin-sdk/agent-harness-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/agent-harness-runtime")>();
+  return {
+    ...actual,
+    emitSessionTranscriptUpdate: emitSessionTranscriptUpdateMock,
+  };
+});
 
 type MirroredAgentMessage = Extract<AgentMessage, { role: "user" | "assistant" | "toolResult" }>;
 
@@ -33,6 +39,7 @@ const tempDirs: string[] = [];
 
 afterEach(async () => {
   resetGlobalHookRunner();
+  emitSessionTranscriptUpdateMock.mockReset();
   for (const dir of tempDirs.splice(0)) {
     await fs.rm(dir, { recursive: true, force: true });
   }
@@ -111,8 +118,6 @@ describe("mirrorCodexAppServerTranscript", () => {
 
   it("emits message-bearing updates for newly appended mirrored messages only", async () => {
     const sessionFile = await createTempSessionFile();
-    const updates: SessionTranscriptUpdate[] = [];
-    const unsubscribe = onSessionTranscriptUpdate((update) => updates.push(update));
     const userMessage = attachCodexMirrorIdentity(
       makeAgentUserMessage({
         content: [{ type: "text", text: "show me live" }],
@@ -121,23 +126,22 @@ describe("mirrorCodexAppServerTranscript", () => {
       "turn-1:prompt",
     );
 
-    try {
-      await mirrorCodexAppServerTranscript({
-        sessionFile,
-        sessionKey: "agent:main:main",
-        messages: [userMessage],
-        idempotencyScope: "codex-app-server:thread-1",
-      });
-      await mirrorCodexAppServerTranscript({
-        sessionFile,
-        sessionKey: "agent:main:main",
-        messages: [userMessage],
-        idempotencyScope: "codex-app-server:thread-1",
-      });
-    } finally {
-      unsubscribe();
-    }
+    await mirrorCodexAppServerTranscript({
+      sessionFile,
+      sessionKey: "agent:main:main",
+      messages: [userMessage],
+      idempotencyScope: "codex-app-server:thread-1",
+    });
+    await mirrorCodexAppServerTranscript({
+      sessionFile,
+      sessionKey: "agent:main:main",
+      messages: [userMessage],
+      idempotencyScope: "codex-app-server:thread-1",
+    });
 
+    const updates = emitSessionTranscriptUpdateMock.mock.calls.map(
+      ([update]) => update as Record<string, unknown>,
+    );
     expect(updates).toHaveLength(1);
     expect(updates[0]?.sessionFile).toBe(sessionFile);
     expect(updates[0]?.sessionKey).toBe("agent:main:main");
