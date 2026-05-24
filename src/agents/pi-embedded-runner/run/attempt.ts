@@ -2855,6 +2855,7 @@ export async function runEmbeddedAttempt(
             preserveNativeAnthropicToolUseIds: transcriptPolicy.preserveNativeAnthropicToolUseIds,
             preserveReplaySafeThinkingToolCallIds: shouldAllowProviderOwnedThinkingReplay({
               modelApi: (model as { api?: unknown })?.api as string | null | undefined,
+              provider: params.provider,
               policy: transcriptPolicy,
             }),
             repairToolUseResultPairing: transcriptPolicy.repairToolUseResultPairing,
@@ -2911,6 +2912,7 @@ export async function runEmbeddedAttempt(
         activeSession.agent.streamFn,
         allowedToolNames,
         transcriptPolicy,
+        params.provider,
       );
       activeSession.agent.streamFn = wrapStreamFnTrimToolCallNames(
         activeSession.agent.streamFn,
