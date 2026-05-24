@@ -298,37 +298,68 @@ export const evenniaPlugin = createChatChannelPlugin({
 evenniaPlugin.gateway = {
   startAccount: async (ctx) => {
     if (!ctx.account.enabled) return;
-    const client = new EvenniaClient(ctx.account, ctx.log);
-    clients.set(ctx.account.accountId, client);
-    ctx.abortSignal.addEventListener("abort", () => client.close(), {
-      once: true,
-    });
-    client.onEvent((event) =>
-      dispatchEvenniaEvent(ctx, ctx.account, event).catch((err) =>
-        ctx.log?.error?.(
-          `evennia inbound failed: ${err?.stack || err?.message || err}`,
+
+    let retryMs = 1000;
+    while (!ctx.abortSignal.aborted) {
+      const client = new EvenniaClient(ctx.account, ctx.log);
+      clients.set(ctx.account.accountId, client);
+
+      const closeOnAbort = () => client.close();
+      ctx.abortSignal.addEventListener("abort", closeOnAbort, { once: true });
+
+      client.onEvent((event) =>
+        dispatchEvenniaEvent(ctx, ctx.account, event).catch((err) =>
+          ctx.log?.error?.(
+            `evennia inbound failed: ${err?.stack || err?.message || err}`,
+          ),
         ),
-      ),
-    );
-    await client.connect();
-    if (ctx.account.character)
-      await client.command(`ic ${ctx.account.character}`).catch(() => {});
-    await new Promise((resolve) => setTimeout(resolve, 750));
-    if (ctx.account.startRoom)
-      await client.command(`teleport ${ctx.account.startRoom}`).catch(() => {});
-    await client.command("look").catch(() => {});
-    ctx.setStatus({
-      accountId: ctx.account.accountId,
-      id: ctx.account.accountId,
-      name: ctx.account.character,
-      enabled: true,
-      configured: true,
-      connected: true,
-      running: true,
-    });
-    await new Promise((resolve) =>
-      ctx.abortSignal.addEventListener("abort", resolve, { once: true }),
-    );
+      );
+
+      try {
+        await client.connect();
+        retryMs = 1000;
+        if (ctx.account.character)
+          await client.command(`ic ${ctx.account.character}`).catch(() => {});
+        await new Promise((resolve) => setTimeout(resolve, 750));
+        if (ctx.account.startRoom)
+          await client.command(`teleport ${ctx.account.startRoom}`).catch(() => {});
+        await client.command("look").catch(() => {});
+        ctx.setStatus({
+          accountId: ctx.account.accountId,
+          id: ctx.account.accountId,
+          name: ctx.account.character,
+          enabled: true,
+          configured: true,
+          connected: true,
+          running: true,
+        });
+
+        await client.waitClosed(ctx.abortSignal);
+      } catch (err) {
+        ctx.log?.warn?.(
+          `evennia connection failed for ${ctx.account.accountId}: ${err?.message || err}`,
+        );
+      } finally {
+        ctx.abortSignal.removeEventListener("abort", closeOnAbort);
+        if (clients.get(ctx.account.accountId) === client) {
+          clients.delete(ctx.account.accountId);
+        }
+        client.close();
+        ctx.setStatus({
+          accountId: ctx.account.accountId,
+          id: ctx.account.accountId,
+          name: ctx.account.character,
+          enabled: true,
+          configured: true,
+          connected: false,
+          running: !ctx.abortSignal.aborted,
+        });
+      }
+
+      if (ctx.abortSignal.aborted) break;
+      await new Promise((resolve) => setTimeout(resolve, retryMs));
+      retryMs = Math.min(retryMs * 2, 30000);
+    }
   },
   stopAccount: async ({ account }) => {
     const client = clients.get(account.accountId);

@@ -67,6 +67,23 @@ export class EvenniaClient {
   }
   close() { try { this.ws?.close(); } catch {} }
   isClosed() { return !this.ws || this.ws.readyState === WebSocket.CLOSING || this.ws.readyState === WebSocket.CLOSED; }
+  async waitClosed(abortSignal) {
+    if (this.isClosed()) return;
+    await new Promise((resolve) => {
+      const done = () => {
+        cleanup();
+        resolve();
+      };
+      const cleanup = () => {
+        this.ws?.removeEventListener("close", done);
+        this.ws?.removeEventListener("error", done);
+        abortSignal?.removeEventListener("abort", done);
+      };
+      this.ws?.addEventListener("close", done, { once: true });
+      this.ws?.addEventListener("error", done, { once: true });
+      abortSignal?.addEventListener("abort", done, { once: true });
+    });
+  }
   async command(text) {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) throw new Error("Evennia websocket is not open");
     this.ws.send(JSON.stringify(["text", [text], {}]));
