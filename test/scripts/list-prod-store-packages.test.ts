@@ -99,4 +99,25 @@ describe("list-prod-store-packages", () => {
     expect(result.status).toBe(0);
     expect(result.stdout).toBe("source-map-support@0.5.21\nsource-map@0.6.1");
   });
+
+  it("adds lockfile packages missing from pnpm list output", () => {
+    const cwd = makeTempRepoRoot(tempDirs, "openclaw-prod-store-packages-");
+    writeFileSync(
+      join(cwd, "pnpm-lock.yaml"),
+      [
+        "lockfileVersion: '10.0'",
+        "",
+        "packages:",
+        "  recma-jsx@1.0.1(acorn@8.16.0):",
+        "    resolution: {integrity: sha512-test}",
+        "",
+        "snapshots: {}",
+        "",
+      ].join("\n"),
+    );
+    const result = runListProdStorePackages({ dependencies: {} }, cwd);
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toBe("recma-jsx@1.0.1");
+  });
 });

@@ -21,6 +21,18 @@ function packageSpec(name, version) {
   return `${name}@${normalizedVersion}`;
 }
 
+function packageSpecFromLockfileKey(key) {
+  if (typeof key !== "string") {
+    return undefined;
+  }
+  const normalizedKey = key.startsWith("/") ? key.slice(1) : key;
+  const separator = normalizedKey.lastIndexOf("@");
+  if (separator <= 0) {
+    return undefined;
+  }
+  return packageSpec(normalizedKey.slice(0, separator), normalizedKey.slice(separator + 1));
+}
+
 function visitListNode(node) {
   for (const dep of Object.values(node.dependencies ?? {})) {
     const name = dep.from || dep.name;
@@ -38,6 +50,15 @@ function readLockfile() {
     return undefined;
   }
   return parse(fs.readFileSync(lockfilePath, "utf8"));
+}
+
+function addLockfilePackages(lockfile) {
+  for (const key of Object.keys(lockfile?.packages ?? {})) {
+    const spec = packageSpecFromLockfileKey(key);
+    if (spec) {
+      specs.add(spec);
+    }
+  }
 }
 
 function addSnapshotClosure(lockfile) {
@@ -72,6 +93,8 @@ function addSnapshotClosure(lockfile) {
 for (const root of roots) {
   visitListNode(root);
 }
-addSnapshotClosure(readLockfile());
+const lockfile = readLockfile();
+addSnapshotClosure(lockfile);
+addLockfilePackages(lockfile);
 
 process.stdout.write([...specs].toSorted((a, b) => a.localeCompare(b)).join("\n"));
