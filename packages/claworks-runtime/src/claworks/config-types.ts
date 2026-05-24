@@ -103,6 +103,12 @@ export type ClaworksRobotConfig = {
     embed?: string;
     /** 对话模型（chat completion） */
     chat?: string;
+    /** @deprecated 使用 chat；保留兼容 */
+    complete?: string;
+    classification_model?: string;
+    reasoning_model?: string;
+    code_model?: string;
+    document_model?: string;
   };
   /**
    * 独立部署直连 LLM 配置（不依赖 OpenClaw/claworks-robot）。

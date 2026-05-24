@@ -8,23 +8,27 @@ import type { ContextEngine } from "../kernel/context-engine.js";
 import type { EventKernel } from "../kernel/event-kernel.js";
 import type { EvolutionSyncManager } from "../kernel/evolution-sync.js";
 import type { EvolveEngine } from "../kernel/evolve-engine.js";
+import type { HookEngine } from "../kernel/hook-engine.js";
 import type { IngressRouter } from "../kernel/ingress.js";
 import type { IntentRegistry } from "../kernel/intent-registry.js";
 import type { NotificationRouter } from "../kernel/notification-router.js";
 import type { ConstitutionV2 } from "../kernel/robot-constitution-v2.js";
 import type { RobotIdentityManager } from "../kernel/robot-identity-manager.js";
+import type { RuleEngine } from "../kernel/rule-engine.js";
 import type { ScaffoldEngine } from "../kernel/scaffold-engine.js";
 import type { PlaybookScheduler } from "../kernel/scheduler.js";
 import type { StructuredOutputEngine } from "../kernel/structured-output.js";
 import type { RobotInfo, KnowledgeBase } from "../kernel/types.js";
 import type { UserProfileStore } from "../kernel/user-profile-store.js";
 import type { PackLoader, LoadedPack } from "../pack-loader/index.js";
+import type { CbrStore } from "../planes/data/cbr-store.js";
 import type { CwDatabase } from "../planes/data/db-types.js";
 import { createObjectStore } from "../planes/data/object-store.js";
 import { createOntologyEngine } from "../planes/data/ontology-engine.js";
 import type { PlaybookEngine } from "../planes/orch/playbook-engine.js";
 import type { LlmCompleteFn } from "../planes/orch/step-executor.js";
 import type { ClaworksRobotConfig } from "./config-types.js";
+import type { ModelRouter } from "./model-router.js";
 import { createRbacGuard, type RobotIdentity } from "./robot-identity.js";
 
 /** 运行时句柄（与 `createClaworksRuntime` 返回值结构一致）。 */
@@ -64,8 +68,11 @@ export type ClaworksRuntime = {
   packLoader: PackLoader;
   connectorManager: ConnectorManager;
   scheduler: PlaybookScheduler;
+  /** LLM 模型路由（按任务类型选择模型） */
+  modelRouter?: ModelRouter;
   logger?: (msg: string) => void;
   databaseDialect?: string;
+  databaseNote?: string;
   _outboxFlushTimer?: ReturnType<typeof setInterval>;
   /** HITL expiry sweep timer (30 s interval). */
   _hitlExpiryTimer?: ReturnType<typeof setInterval>;
@@ -160,30 +167,14 @@ export type ClaworksRuntime = {
    * 用于存储和检索历史处理案例，支持类比推理。
    * 由宿主或专项 Pack 注入。
    */
-  cbrStore?: {
-    search(query: string, limit?: number): Array<Record<string, unknown>>;
-    /** 添加案例：可传递结构化对象，也可分别传 problem/solution/metadata */
-    add(
-      problemOrEntry: string | Record<string, unknown>,
-      solution?: string,
-      metadata?: Record<string, unknown>,
-    ): Record<string, unknown>;
-    recordOutcome(caseId: string, outcome: string, metadata?: Record<string, unknown>): void;
-    list(): Array<Record<string, unknown>>;
-  };
+  cbrStore?: CbrStore;
 
   /**
    * Hook 引擎（生命周期钩子注册）。
    * 支持在 Playbook/事件处理的关键节点注入自定义逻辑。
    * 由宿主注入。
    */
-  hookEngine?: {
-    register(config: Record<string, unknown>): Record<string, unknown>;
-    unregister(hookId: string): boolean;
-    list(): Array<Record<string, unknown>>;
-    enable(hookId: string): void;
-    disable(hookId: string): void;
-  };
+  hookEngine?: HookEngine;
 
   /**
    * Provider 注册表（模型/服务提供者管理）。
@@ -247,17 +238,7 @@ export type ClaworksRuntime = {
    * 规则引擎（基于声明式规则的决策支持）。
    * 由宿主注入；未注入时规则类能力不可用。
    */
-  ruleEngine?: {
-    /** 对规则表（tableId）求值，返回匹配规则汇总 */
-    evaluate(
-      tableId: string,
-      context: Record<string, unknown>,
-    ): Promise<{ matched_rules: unknown[]; actions_taken: string[]; total_evaluated: number }>;
-    registerTable(table: Record<string, unknown>): void;
-    listRules?(): unknown[];
-    addRule?(rule: Record<string, unknown>): void;
-    [key: string]: unknown;
-  };
+  ruleEngine?: RuleEngine;
 
   /**
    * 离线进化同步管理器（导出机器人学习数据 → 在线生成进化包 → 导入改进成果）。

@@ -41,7 +41,7 @@ export async function applyIngressPublish(
   params: IngressPublishParams,
 ): Promise<IngressPublishResult> {
   const publishSource = params.publishSource ?? params.subjectId;
-  const constitution = runtime.identity?.constitution ?? DEFAULT_ROBOT_CONSTITUTION;
+  const constitution = DEFAULT_ROBOT_CONSTITUTION;
   if (!isTrustedEventSource(constitution, publishSource)) {
     runtime.logger?.(
       `[claworks:ingress] untrusted source "${publishSource}" — denied by robot constitution`,

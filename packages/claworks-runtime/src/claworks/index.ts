@@ -18,11 +18,14 @@ export * from "./im-bridge.js";
 export * from "./webhook-bridge.js";
 export * from "./im-channel-hook.js";
 export * from "./pack-runtime.js";
+export * from "./pack-profile.js";
 
 export { createClaworksRuntime, startClaworksRuntime, stopClaworksRuntime } from "./runtime.js";
 
 export { registerClaworksPacksCli } from "./packs-cli.js";
 export { registerClaworksEvolutionCli } from "./evolution-cli.js";
+export { registerClaworksInitCli, runClaworksInit, formatInitSummary } from "./init-cli.js";
+export type { InitProfile, ClaworksInitResult, InitStepSummary } from "./init-cli.js";
 
 export type {
   EvolutionExportData,

@@ -177,4 +177,16 @@ describe("product-config-repair", () => {
     expect(result.connectors.plant.simulate).toBe(false);
     expect(result.connectors.line.simulate).toBe(false);
   });
+
+  it("repairOtConnectorSimulateFlags honors CLAWORKS_PRODUCTION env", () => {
+    const connectors = {
+      plant: { preset: "opcua-simulate", simulate: true, enabled: true },
+    };
+    const result = repairOtConnectorSimulateFlags(connectors, {
+      env: { CLAWORKS_PRODUCTION: "1" },
+    });
+    expect(result.changed).toBe(true);
+    expect(result.connectors.plant.preset).toBe("opcua");
+    expect(result.connectors.plant.simulate).toBe(false);
+  });
 });

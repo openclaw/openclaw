@@ -243,7 +243,7 @@ export function runClaworksDoctor(runtime: ClaworksRuntime): DoctorCheck[] {
       id: "connectors_simulate",
       status: isProduction ? "error" : "warn",
       message: isProduction
-        ? `OT connectors in simulate mode: ${simulating.map(([id]) => id).join(", ")} — disable for production`
+        ? `OT connectors in simulate mode: ${simulating.map(([id]) => id).join(", ")} — run claworks doctor --fix or set simulate: false`
         : `Dev simulate connectors: ${simulating.map(([id]) => id).join(", ")}`,
     });
   }

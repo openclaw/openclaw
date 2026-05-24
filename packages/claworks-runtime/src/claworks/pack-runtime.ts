@@ -97,7 +97,12 @@ export async function applyPackContributions(
         );
       }
       if (contribution.scripts?.length) {
-        runtime.scriptLibrary?.registerFromPack(pack.manifest.id, contribution.scripts);
+        runtime.scriptLibrary?.registerFromPack(
+          pack.manifest.id,
+          contribution.scripts as Parameters<
+            NonNullable<typeof runtime.scriptLibrary>["registerFromPack"]
+          >[1],
+        );
         runtime.logger?.(
           `[claworks:packs] registered ${contribution.scripts.length} scripts from pack '${pack.manifest.id}'`,
         );
@@ -119,7 +124,9 @@ export async function applyPackContributions(
         );
       }
       if (contribution.playbooks?.length) {
-        runtime.playbookEngine?.loadPlaybooks?.(contribution.playbooks);
+        for (const playbook of contribution.playbooks) {
+          runtime.playbookEngine.load(playbook);
+        }
         runtime.kernel.matcher.load(runtime.playbookEngine.list());
         runtime.scheduler.reload(runtime.playbookEngine.list());
         runtime.logger?.(
@@ -128,8 +135,8 @@ export async function applyPackContributions(
       }
       if (contribution.hooks?.length) {
         for (const hook of contribution.hooks) {
-          runtime.kernel?.bus?.subscribe?.(hook.event, (e) => {
-            void hook.handler(e.payload as Record<string, unknown>);
+          runtime.kernel?.bus?.subscribe?.(hook.event, async (e) => {
+            await hook.handler(e.payload as Record<string, unknown>);
           });
         }
         runtime.logger?.(
@@ -138,7 +145,7 @@ export async function applyPackContributions(
       }
       if (contribution.promptTemplates?.length && runtime.scaffoldEngine) {
         for (const tmpl of contribution.promptTemplates) {
-          runtime.scaffoldEngine.loadPromptTemplate?.(tmpl);
+          runtime.scaffoldEngine.loadFromJson(tmpl as unknown as Record<string, unknown>);
         }
         runtime.logger?.(
           `[claworks:packs] registered ${contribution.promptTemplates.length} prompt templates from pack '${pack.manifest.id}'`,
@@ -228,7 +235,12 @@ export async function reloadClaworksPackById(
         );
       }
       if (contribution.scripts?.length) {
-        runtime.scriptLibrary?.registerFromPack(packId, contribution.scripts);
+        runtime.scriptLibrary?.registerFromPack(
+          packId,
+          contribution.scripts as Parameters<
+            NonNullable<typeof runtime.scriptLibrary>["registerFromPack"]
+          >[1],
+        );
         runtime.logger?.(
           `[claworks:packs] registered ${contribution.scripts.length} scripts from pack '${packId}'`,
         );

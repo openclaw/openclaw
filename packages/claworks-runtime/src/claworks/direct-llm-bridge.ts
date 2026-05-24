@@ -35,6 +35,71 @@ export type LlmCompleteFn = (params: {
   system?: string;
 }) => Promise<{ text: string }>;
 
+export type DetectedLlmProvider = {
+  provider: "OpenAI" | "Anthropic" | "Ollama" | "OpenAI-compatible";
+  model: string;
+};
+
+/** 从环境变量探测可用 LLM（init/doctor 摘要用，不发起网络请求）。 */
+export function detectLlmProviderFromEnv(
+  env: NodeJS.ProcessEnv = process.env,
+): DetectedLlmProvider | null {
+  const customBase = env["CLAWORKS_LLM_BASE_URL"]?.trim() || env["OPENAI_BASE_URL"]?.trim();
+  const customModel = env["CLAWORKS_LLM_MODEL"]?.trim() || "gpt-4o-mini";
+  if (customBase) {
+    return { provider: "OpenAI-compatible", model: customModel };
+  }
+  if (env["ANTHROPIC_API_KEY"]?.trim() && !env["OPENAI_API_KEY"]?.trim()) {
+    return { provider: "Anthropic", model: "claude-3-5-haiku-20241022" };
+  }
+  if (env["OLLAMA_BASE_URL"]?.trim()) {
+    return { provider: "Ollama", model: env["CLAWORKS_LLM_MODEL"]?.trim() || "llama3.2" };
+  }
+  if (env["OPENAI_API_KEY"]?.trim()) {
+    return { provider: "OpenAI", model: customModel };
+  }
+  return null;
+}
+
+function modelRefForProvider(detected: DetectedLlmProvider): string {
+  switch (detected.provider) {
+    case "Anthropic":
+      return `anthropic/${detected.model}`;
+    case "Ollama":
+      return `ollama/${detected.model}`;
+    case "OpenAI-compatible":
+      return `openai/${detected.model}`;
+    default:
+      return `openai/${detected.model}`;
+  }
+}
+
+/** 将探测到的 LLM 写入 claworks-robot model_router（init 后补丁）。 */
+export function applyDetectedLlmToConfig(
+  config: Record<string, unknown>,
+  detected: DetectedLlmProvider,
+): boolean {
+  const plugins = config.plugins as
+    | { entries?: Record<string, { config?: Record<string, unknown> }> }
+    | undefined;
+  const robotConfig = plugins?.entries?.["claworks-robot"]?.config;
+  if (!robotConfig) {
+    return false;
+  }
+  const modelRef = modelRefForProvider(detected);
+  const router = (robotConfig.model_router ?? {}) as Record<string, string>;
+  if (router.default === modelRef && router.chat === modelRef) {
+    return false;
+  }
+  robotConfig.model_router = {
+    ...router,
+    default: modelRef,
+    chat: modelRef,
+    complete: modelRef,
+  };
+  return true;
+}
+
 /**
  * 从环境变量和配置自动探测可用 LLM，返回 llmComplete 函数。
  * 返回 null 表示无可用 LLM（系统将以 stub 模式运行）。
