@@ -537,6 +537,20 @@ describe("toSanitizedMarkdownHtml", () => {
       const html = toSanitizedMarkdownHtml("[click](file:///etc/passwd)");
       expect(html).toBe("<p><a>click</a></p>\n");
     });
+
+    it("strips href from host-local absolute file paths", () => {
+      const html = toSanitizedMarkdownHtml(
+        "[example.docx](/Users/alice/.openclaw/data/plugin/output/example.docx)",
+      );
+      expect(html).toBe("<p><a>example.docx</a></p>\n");
+    });
+
+    it("keeps regular root-relative app links clickable", () => {
+      const html = toSanitizedMarkdownHtml("[session](/chat?session=agent%3Amain)");
+      expect(html).toBe(
+        '<p><a href="/chat?session=agent%3Amain" rel="noreferrer noopener" target="_blank">session</a></p>\n',
+      );
+    });
   });
 
   describe("ReDoS protection", () => {
