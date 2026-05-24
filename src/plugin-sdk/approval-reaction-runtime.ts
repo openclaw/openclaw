@@ -206,13 +206,19 @@ function buildManualInstructionSection(params: {
   return lines;
 }
 
+function listDecisionActions(actions: PendingApprovalView["actions"]): ExecApprovalReplyDecision[] {
+  return normalizeDecisionList(
+    actions.flatMap((action) => (action.kind === "decision" ? [action.decision] : [])),
+  );
+}
+
 function buildApprovalReactionPromptText(params: {
   view: PendingApprovalView;
   nowMs: number;
   reactionHint: string | null;
 }): string {
   const { view } = params;
-  const allowedDecisions = normalizeDecisionList(view.actions.map((action) => action.decision));
+  const allowedDecisions = listDecisionActions(view.actions);
   const sections: string[] = [];
   if (view.approvalKind === "exec") {
     const header = ["Exec approval required", `ID: ${view.approvalId}`];
@@ -315,9 +321,7 @@ export function buildApprovalPendingPromptPayload(params: {
   view: PendingApprovalView;
   nowMs: number;
 }): ApprovalReactionPromptPayload {
-  const allowedDecisions = normalizeDecisionList(
-    params.view.actions.map((action) => action.decision),
-  );
+  const allowedDecisions = listDecisionActions(params.view.actions);
   const reactionBindings = listApprovalReactionBindings({ allowedDecisions });
   const text = buildApprovalReactionPromptText({
     view: params.view,
