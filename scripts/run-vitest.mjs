@@ -10,7 +10,9 @@ import {
 } from "./vitest-process-group.mjs";
 
 const TRUTHY_ENV_VALUES = new Set(["1", "true", "yes", "on"]);
-const SUPPRESSED_VITEST_STDERR_PATTERNS = ["[PLUGIN_TIMINGS] Warning:"];
+const ANSI_CSI_PREFIX = `${String.fromCharCode(27)}[`;
+const ANSI_CSI_SUFFIX_RE = /^[0-?]*[ -/]*[@-~]/u;
+const SUPPRESSED_VITEST_STDERR_PATTERNS = ["[PLUGIN_TIMINGS]"];
 const require = createRequire(import.meta.url);
 
 function isTruthyEnvValue(value) {
@@ -79,7 +81,11 @@ function resolveExplicitVitestWorkerBudget(env) {
 }
 
 export function shouldSuppressVitestStderrLine(line) {
-  return SUPPRESSED_VITEST_STDERR_PATTERNS.some((pattern) => line.includes(pattern));
+  const normalizedLine = line
+    .split(ANSI_CSI_PREFIX)
+    .map((segment, index) => (index === 0 ? segment : segment.replace(ANSI_CSI_SUFFIX_RE, "")))
+    .join("");
+  return SUPPRESSED_VITEST_STDERR_PATTERNS.some((pattern) => normalizedLine.includes(pattern));
 }
 
 export function resolveDirectNodeVitestArgs(pnpmArgs) {
