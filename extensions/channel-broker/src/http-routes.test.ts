@@ -45,7 +45,7 @@ function createResponse(): MockResponse {
       return this;
     },
     end(chunk?: unknown) {
-      this.body += chunk == null ? "" : String(chunk);
+      this.body += typeof chunk === "string" ? chunk : chunk == null ? "" : JSON.stringify(chunk);
       return this;
     },
   };
