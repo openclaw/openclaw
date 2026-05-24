@@ -32,13 +32,15 @@ function createRuntime() {
 }
 
 type MockIMessageRpcClient = IMessageRpcClient & {
-  request: ReturnType<typeof vi.fn<(method: string) => Promise<unknown>>>;
+  request: ReturnType<
+    typeof vi.fn<(method: string, params?: Record<string, unknown>) => Promise<unknown>>
+  >;
   waitForClose: ReturnType<typeof vi.fn<() => Promise<void>>>;
   stop: ReturnType<typeof vi.fn<() => Promise<void>>>;
 };
 
 function createRpcClient(overrides?: {
-  request?: (method: string) => Promise<unknown>;
+  request?: (method: string, params?: Record<string, unknown>) => Promise<unknown>;
   waitForClose?: () => Promise<void>;
 }): MockIMessageRpcClient {
   const client = {
@@ -117,6 +119,118 @@ describe("monitorIMessageProvider watch.subscribe startup retry", () => {
         String(message).includes("imessage: monitor failed"),
       ),
     ).toBe(false);
+  });
+
+  it("repairs anchorless live payloads before debounce classification", async () => {
+    const runtime = createRuntime();
+    let notify: ((msg: { method: string; params?: unknown }) => void) | undefined;
+    let close!: () => void;
+    const closed = new Promise<void>((resolve) => {
+      close = resolve;
+    });
+    const calls: Array<{ method: string; params?: Record<string, unknown> }> = [];
+    const client = createRpcClient({
+      waitForClose: async () => await closed,
+      request: async (method, params) => {
+        calls.push({ method, params });
+        if (method === "watch.subscribe") {
+          return { subscription: 1 };
+        }
+        if (method === "chats.list") {
+          return { chats: [{ id: 101 }, { id: 202 }] };
+        }
+        if (method === "messages.history") {
+          if (params?.chat_id === 101) {
+            return {
+              messages: [
+                {
+                  guid: "GUID-GROUP-A",
+                  chat_id: 101,
+                  chat_guid: "iMessage;+;group-a",
+                  chat_identifier: "group-a",
+                  is_group: true,
+                  participants: ["+15550001111", "+15550002222"],
+                },
+              ],
+            };
+          }
+          if (params?.chat_id === 202) {
+            return {
+              messages: [
+                {
+                  guid: "GUID-GROUP-B",
+                  chat_id: 202,
+                  chat_guid: "iMessage;+;group-b",
+                  chat_identifier: "group-b",
+                  is_group: true,
+                  participants: ["+15550001111", "+15550003333"],
+                },
+              ],
+            };
+          }
+          return { messages: [] };
+        }
+        return {};
+      },
+    });
+
+    createIMessageRpcClientMock.mockImplementation(async (opts) => {
+      notify = opts?.onNotification;
+      return client;
+    });
+
+    const monitorPromise = monitorIMessageProvider({
+      config: {
+        channels: {
+          imessage: {
+            coalesceSameSenderDms: true,
+            groupPolicy: "open",
+            groups: { "*": { requireMention: true } },
+          },
+        },
+        messages: { groupChat: { mentionPatterns: ["@openclaw"] } },
+      } as never,
+      runtime: runtime as never,
+    });
+
+    await vi.waitFor(() => expect(notify).toBeDefined());
+
+    const baseMessage = {
+      chat_id: 0,
+      sender: "+15550001111",
+      is_from_me: false,
+      attachments: null,
+      chat_identifier: "",
+      chat_guid: "",
+      chat_name: "",
+      participants: null,
+      is_group: false,
+    };
+    notify?.({
+      method: "message",
+      params: { message: { ...baseMessage, guid: "GUID-GROUP-A", text: "first group" } },
+    });
+    notify?.({
+      method: "message",
+      params: { message: { ...baseMessage, guid: "GUID-GROUP-B", text: "second group" } },
+    });
+
+    await vi.waitFor(() =>
+      expect(
+        calls.filter((call) => call.method === "messages.history" && call.params?.chat_id === 202),
+      ).toHaveLength(1),
+    );
+
+    expect(calls.filter((call) => call.method === "chats.list")).toHaveLength(2);
+    expect(
+      calls.filter((call) => call.method === "messages.history" && call.params?.chat_id === 101),
+    ).toHaveLength(2);
+    expect(
+      calls.filter((call) => call.method === "messages.history" && call.params?.chat_id === 202),
+    ).toHaveLength(1);
+
+    close();
+    await monitorPromise;
   });
 
   it("still fails after bounded startup retries are exhausted", async () => {

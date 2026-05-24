@@ -413,6 +413,14 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
     }
   }
 
+  async function repairMessageConversationAnchor(message: IMessagePayload) {
+    return await repairIMessageConversationAnchor({
+      message,
+      client: getActiveClient(),
+      runtime,
+    });
+  }
+
   async function handleMessageNow(
     message: IMessagePayload,
     options: { advanceCatchupCursor?: boolean } = {},
@@ -465,11 +473,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
     // (e.g. group link-preview with chat_id=0 and empty chat_guid/
     // chat_identifier). Fail-closed: if recovery cannot determine the real
     // conversation, the message is dropped rather than routed to sender DM.
-    const repaired = await repairIMessageConversationAnchor({
-      message,
-      client: getActiveClient(),
-      runtime,
-    });
+    const repaired = await repairMessageConversationAnchor(message);
     if (!repaired) {
       return;
     }
@@ -865,7 +869,11 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
       runtime.error?.(`imessage: dropping malformed RPC message payload (keys=${shape})`);
       return;
     }
-    await inboundDebouncer.enqueue({ message });
+    const repaired = await repairMessageConversationAnchor(message);
+    if (!repaired) {
+      return;
+    }
+    await inboundDebouncer.enqueue({ message: repaired });
   };
 
   await waitForTransportReady({
