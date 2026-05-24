@@ -86,9 +86,13 @@ function resolveBrokerSessionConversation(rawId: string) {
 }
 
 function buildCanonicalBrokerTarget(target: BrokerConversationTarget): string {
+  const conversationId =
+    target.conversationType && target.conversationType !== "channel"
+      ? `${target.conversationType}:${target.conversationId}`
+      : target.conversationId;
   return buildBrokerConversationTarget({
     platform: target.platform,
-    conversationId: target.conversationId,
+    conversationId,
     ...(target.threadId ? { threadId: target.threadId } : {}),
   });
 }

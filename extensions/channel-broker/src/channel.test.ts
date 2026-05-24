@@ -205,6 +205,132 @@ describe("channel-broker plugin", () => {
     });
   });
 
+  it("maps broker-prefixed Discord DMs into direct provider requests", async () => {
+    const sendOutboundRequest = vi.fn(async () =>
+      createBrokerReceipt({
+        requestId: "broker-discord-dm-1",
+        providerId: "acme",
+        platform: "Discord",
+        status: "sent",
+        messageIds: ["discord-message-1"],
+      }),
+    );
+    setChannelBrokerRuntime({
+      sendOutboundRequest,
+      createRequestId: () => "broker-discord-dm-1",
+    });
+
+    await channelBrokerPlugin.message?.send?.text?.({
+      cfg: {
+        channels: {
+          "channel-broker": {
+            accounts: {
+              acme: {
+                enabled: true,
+                baseUrl: "https://broker.example.test",
+                platforms: ["discord"],
+              },
+            },
+          },
+        },
+      },
+      to: "broker:discord:user:123456789012345678",
+      text: "dm proof",
+      accountId: "acme",
+    } as never);
+
+    expect(sendOutboundRequest).toHaveBeenCalledWith({
+      account: expect.objectContaining({ providerId: "acme" }),
+      request: expect.objectContaining({
+        requestId: "broker-discord-dm-1",
+        providerId: "acme",
+        platform: "discord",
+        conversation: {
+          id: "123456789012345678",
+          type: "direct",
+        },
+        requirements: { text: true },
+      }),
+    });
+  });
+
+  it("maps broker-prefixed Discord channel threads into provider thread requests", async () => {
+    const sendOutboundRequest = vi.fn(async () =>
+      createBrokerReceipt({
+        requestId: "broker-discord-thread-1",
+        providerId: "acme",
+        platform: "Discord",
+        status: "sent",
+        messageIds: ["discord-message-2"],
+      }),
+    );
+    setChannelBrokerRuntime({
+      sendOutboundRequest,
+      createRequestId: () => "broker-discord-thread-1",
+    });
+
+    await channelBrokerPlugin.message?.send?.text?.({
+      cfg: {
+        channels: {
+          "channel-broker": {
+            accounts: {
+              acme: {
+                enabled: true,
+                baseUrl: "https://broker.example.test",
+                platforms: ["discord"],
+              },
+            },
+          },
+        },
+      },
+      to: "broker:discord:channel:222222222222222222?threadId=333333333333333333",
+      text: "thread proof",
+      accountId: "acme",
+    } as never);
+
+    expect(sendOutboundRequest).toHaveBeenCalledWith({
+      account: expect.objectContaining({ providerId: "acme" }),
+      request: expect.objectContaining({
+        requestId: "broker-discord-thread-1",
+        providerId: "acme",
+        platform: "discord",
+        conversation: {
+          id: "222222222222222222",
+          type: "channel",
+          threadId: "333333333333333333",
+        },
+        requirements: { text: true, thread: true },
+      }),
+    });
+  });
+
+  it("canonicalizes Discord DM routes with direct conversation type preserved", () => {
+    const route = channelBrokerPlugin.messaging?.resolveOutboundSessionRoute?.({
+      cfg: {
+        channels: {
+          "channel-broker": {
+            accounts: {
+              acme: {
+                enabled: true,
+                baseUrl: "https://broker.example.test",
+                platforms: ["discord"],
+              },
+            },
+          },
+        },
+      },
+      agentId: "agent",
+      accountId: "acme",
+      target: "broker:discord:user:123456789012345678",
+    } as never);
+
+    expect(route).toMatchObject({
+      chatType: "direct",
+      peer: { kind: "direct", id: "discord:123456789012345678" },
+      to: "discord:direct%3A123456789012345678",
+    });
+  });
+
   it("passes cancellation through the default HTTP transport", async () => {
     const controller = new AbortController();
     const fetchMock = vi.fn(async () => ({
