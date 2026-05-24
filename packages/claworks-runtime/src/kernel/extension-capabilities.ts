@@ -1365,20 +1365,55 @@ export function makeScheduleCapabilities(runtime: ClaworksRuntime): CapabilityDe
 
 // ── L17: monitor.* ────────────────────────────────────────────────────────
 
+/** 检查事件类型是否匹配 glob 风格 pattern（支持 "alarm.*"、"*"、精确匹配）。 */
+function matchesWatchPattern(pattern: string, eventType: string): boolean {
+  if (pattern === "*") return true;
+  if (pattern === eventType) return true;
+  if (pattern.endsWith(".*")) {
+    const prefix = pattern.slice(0, -2);
+    return eventType === prefix || eventType.startsWith(`${prefix}.`);
+  }
+  return false;
+}
+
 export function makeMonitorCapabilities(runtime: ClaworksRuntime): CapabilityDescriptor[] {
   const watches = new Map<string, { pattern: string; playbookId: string; registeredAt: Date }>();
+
+  // 惰性订阅：首次注册 watch 时在 kernel 事件总线注册 "*" 订阅，
+  // 后续所有事件经由此处与已注册的 watches 匹配后触发 playbookEngine。
+  let busUnsubscribe: (() => void) | undefined;
+  function ensureKernelSubscription(): void {
+    if (busUnsubscribe) return;
+    busUnsubscribe = runtime.kernel.subscribe("*", async (event) => {
+      for (const [watchId, watch] of watches) {
+        if (matchesWatchPattern(watch.pattern, event.type)) {
+          await runtime.playbookEngine
+            .trigger(watch.playbookId, { ...event.payload, _event: event, _watch_id: watchId })
+            .catch((err: unknown) => {
+              runtime.logger?.(
+                `[monitor.watch] playbook ${watch.playbookId} failed: ${err instanceof Error ? err.message : String(err)}`,
+              );
+            });
+        }
+      }
+    });
+  }
 
   return [
     {
       id: "monitor.watch",
       verb: "observe",
-      description: "注册一个事件模式监控，当匹配时触发指定 Playbook",
+      description:
+        "注册一个事件模式监控，当匹配时触发指定 Playbook（支持 alarm.*、* 等 glob 模式）",
       owner: { kind: "core" },
       paramsSchema: {
         type: "object",
         required: ["event_pattern", "playbook_id"],
         properties: {
-          event_pattern: { type: "string" },
+          event_pattern: {
+            type: "string",
+            description: "事件类型 glob（如 alarm.*、work_order.created）",
+          },
           playbook_id: { type: "string" },
           watch_id: { type: "string" },
         },
@@ -1389,6 +1424,8 @@ export function makeMonitorCapabilities(runtime: ClaworksRuntime): CapabilityDes
         const watchId = String(params.watch_id ?? `watch-${Date.now()}`);
 
         watches.set(watchId, { pattern, playbookId, registeredAt: new Date() });
+        // 确保已订阅 kernel 事件总线（仅在第一次 watch 注册时订阅一次）
+        ensureKernelSubscription();
 
         await runtime.kernel.publish("monitor.watch_registered", "monitor.watch", {
           watch_id: watchId,
@@ -1401,6 +1438,28 @@ export function makeMonitorCapabilities(runtime: ClaworksRuntime): CapabilityDes
     },
 
     {
+      id: "monitor.unwatch",
+      verb: "control",
+      description: "取消一个已注册的事件监控",
+      owner: { kind: "core" },
+      paramsSchema: {
+        type: "object",
+        required: ["watch_id"],
+        properties: { watch_id: { type: "string" } },
+      },
+      handler: async (_ctx, params) => {
+        const watchId = String(params.watch_id ?? "");
+        const existed = watches.has(watchId);
+        watches.delete(watchId);
+        if (watches.size === 0 && busUnsubscribe) {
+          busUnsubscribe();
+          busUnsubscribe = undefined;
+        }
+        return { status: existed ? "removed" : "not_found", watch_id: watchId };
+      },
+    },
+
+    {
       id: "monitor.status",
       verb: "query",
       description: "查看当前所有监控注册情况",
@@ -1408,6 +1467,7 @@ export function makeMonitorCapabilities(runtime: ClaworksRuntime): CapabilityDes
       handler: async () => ({
         watches: [...watches.entries()].map(([id, w]) => Object.assign({ id }, w)),
         total: watches.size,
+        active: !!busUnsubscribe,
       }),
     },
   ];
@@ -2938,7 +2998,17 @@ export function makeNotifyCapabilities(runtime: ClaworksRuntime): CapabilityDesc
           }
         }
 
-        const result = await runtime.notificationRouter?.dispatch({
+        if (!runtime.notificationRouter) {
+          // notificationRouter 未初始化时降级：直接走 notify bridge
+          const notifyBridge = runtime.bridges?.get(BRIDGE_NOTIFY);
+          if (notifyBridge) {
+            await notifyBridge.send({ message });
+          } else {
+            runtime.logger?.(`[notify.dispatch/no-router] ${message}`);
+          }
+          return { sent: 1, recipients: ["default"], channels: ["default"] };
+        }
+        const result = await runtime.notificationRouter.dispatch({
           subjectType: String(params.subject_type ?? "user"),
           subjectId: params.subject_id ? String(params.subject_id) : undefined,
           priority: (params.priority as "low" | "normal" | "high" | "critical") ?? "normal",
