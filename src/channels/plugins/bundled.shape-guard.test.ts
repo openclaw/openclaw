@@ -847,6 +847,60 @@ describe("bundled channel entry shape guards", () => {
       delete testGlobal["__bundledSetupOnlyPluginLoaded"];
     }
   });
+  it("skips disabled bundled setup plugins before loading setup entries", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-disabled-bundled-setup-"));
+    const previousBundledPluginsDir = process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
+    const pluginDir = path.join(root, "dist", "extensions", "alpha");
+    const testGlobal = globalThis as typeof globalThis & {
+      __disabledBundledSetupLoads?: number;
+    };
+    fs.mkdirSync(pluginDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(pluginDir, "setup-entry.js"),
+      [
+        "export default {",
+        "  kind: 'bundled-channel-setup-entry',",
+        "  loadSetupPlugin() {",
+        '    globalThis["__disabledBundledSetupLoads"] = (globalThis["__disabledBundledSetupLoads"] ?? 0) + 1;',
+        "    return { id: 'alpha', meta: { label: 'Alpha' } };",
+        "  },",
+        "};",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+
+    mockAlphaDistExtensionRuntime();
+
+    try {
+      process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = path.join(root, "dist", "extensions");
+
+      const bundled = await importFreshModule<typeof import("./bundled.js")>(
+        import.meta.url,
+        "./bundled.js?scope=disabled-bundled-setup",
+      );
+
+      expect(
+        bundled.listBundledChannelSetupPlugins({
+          config: {
+            channels: { alpha: { enabled: false } },
+            plugins: { entries: { alpha: { enabled: false } } },
+          } as never,
+        }),
+      ).toStrictEqual([]);
+      expect(testGlobal["__disabledBundledSetupLoads"]).toBeUndefined();
+
+      expect(bundled.listBundledChannelSetupPlugins().map((plugin) => plugin.id)).toEqual([
+        "alpha",
+      ]);
+      expect(testGlobal["__disabledBundledSetupLoads"]).toBe(1);
+    } finally {
+      restoreBundledPluginsDir(previousBundledPluginsDir);
+      fs.rmSync(root, { recursive: true, force: true });
+      delete testGlobal["__disabledBundledSetupLoads"];
+    }
+  });
+
   it("swallows and caches bundled plugin and setup load failures", async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-bundled-load-failure-"));
     const previousBundledPluginsDir = process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
