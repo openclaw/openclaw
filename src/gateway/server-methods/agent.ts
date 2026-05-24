@@ -841,6 +841,7 @@ export const agentHandlers: GatewayRequestHandlers = {
     let spawnedByValue: string | undefined;
     const inputProvenance = normalizeInputProvenance(request.inputProvenance);
     const preserveUserFacingSessionModelState =
+      canUseInternalRuntimeHandoff &&
       shouldPreserveUserFacingSessionStateForInputProvenance(inputProvenance);
     const sessionEffects = requestedInternalSessionEffects ? "internal" : request.sessionEffects;
     const suppressVisibleSessionEffects = sessionEffects === "internal";

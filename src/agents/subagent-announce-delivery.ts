@@ -6,7 +6,10 @@ import type { ConversationRef } from "../infra/outbound/session-binding-service.
 import { stringifyRouteThreadId } from "../plugin-sdk/channel-route.js";
 import { normalizeAccountId } from "../routing/session-key.js";
 import { defaultRuntime } from "../runtime.js";
-import { isAgentMediatedCompletionSourceTool } from "../sessions/input-provenance.js";
+import {
+  isAgentMediatedCompletionSourceTool,
+  shouldPreserveUserFacingSessionStateForInputProvenance,
+} from "../sessions/input-provenance.js";
 import { isCronSessionKey } from "../sessions/session-key-utils.js";
 import { isNonTerminalAgentRunStatus } from "../shared/agent-run-status.js";
 import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
@@ -115,6 +118,9 @@ async function runAnnounceAgentCall(params: {
     params.agentParams,
     {
       expectFinal: params.expectFinal,
+      forceSyntheticClient: shouldPreserveUserFacingSessionStateForInputProvenance(
+        params.agentParams.inputProvenance,
+      ),
       timeoutMs: params.timeoutMs,
     },
   );
