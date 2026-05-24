@@ -432,6 +432,11 @@ export async function createClaworksRuntime(
     const fn = runtime.llmComplete;
     runtime.bridges.register("llm", { complete: (p) => fn(p) });
   }
+  // 将 opts.notify 注册到 bridges["notify"]（comms.send 通过此路径发送消息）
+  if (opts?.notify) {
+    const notifyFn = opts.notify;
+    runtime.bridges.register("notify", { send: (p) => notifyFn(p) });
+  }
 
   // 初始化提示词模板注册表（内置 6 个弱模型脚手架模板，支持运行时扩展）
   // render() 适配：将 {system, user} 合并为单一 prompt 字符串
