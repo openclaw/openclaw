@@ -596,7 +596,9 @@ export async function executePlaybookStep(
           ctx.variables[step.storeResultAs] = result.output ?? result;
         }
       } else if (deps.triggerPlaybook) {
-        // fallback: reuse triggerPlaybook and wait for the run result
+        // fallback: reuse triggerPlaybook and wait for the run result.
+        // session_id inheritance is handled by playbook-engine's callPlaybook bridge;
+        // this path is unused in production where callPlaybook is always wired.
         const child = await deps.triggerPlaybook(resolvedId, {
           ...params,
           parent_run_id: ctx.runId,
