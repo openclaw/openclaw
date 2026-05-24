@@ -657,6 +657,9 @@ describe("plugin sdk alias helpers", () => {
     const fixture = createPluginSdkAliasFixture({
       packageExports: {
         "./plugin-sdk/core": { default: "./dist/plugin-sdk/core.js" },
+        "./plugin-sdk/codex-native-task-runtime": {
+          default: "./dist/plugin-sdk/codex-native-task-runtime.js",
+        },
       },
     });
     fs.rmSync(

@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest";
 import {
   deprecatedBarrelPluginSdkEntrypoints,
   deprecatedPublicPluginSdkEntrypoints,
+  packageExportedPluginSdkEntrypoints,
   privateLocalOnlyPluginSdkEntrypoints,
   pluginSdkEntrypoints,
   publicPluginOwnedSdkEntrypoints,
@@ -689,7 +690,9 @@ describe("plugin-sdk package contract guardrails", () => {
   });
 
   it("keeps package.json exports aligned with built plugin-sdk entrypoints", () => {
-    expect(collectPluginSdkPackageExports()).toEqual([...publicPluginSdkEntrypoints].toSorted());
+    expect(collectPluginSdkPackageExports()).toEqual(
+      [...packageExportedPluginSdkEntrypoints].toSorted(),
+    );
   });
 
   it("keeps configured local-origin fetch helpers out of deprecated infra-runtime", () => {

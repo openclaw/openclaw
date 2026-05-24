@@ -25,6 +25,13 @@ export const publicPluginSdkSubpaths = publicPluginSdkEntrypoints.filter(
   (entry) => entry !== "index",
 );
 
+export const packageExportedCompatibilityPluginSdkEntrypoints = ["codex-native-task-runtime"];
+
+export const packageExportedPluginSdkEntrypoints = [
+  ...publicPluginSdkEntrypoints,
+  ...packageExportedCompatibilityPluginSdkEntrypoints,
+];
+
 export const deprecatedPublicPluginSdkEntrypoints = publicPluginSdkSubpaths.filter((entry) =>
   deprecatedPublicPluginSdkSubpathList.includes(entry),
 );
@@ -41,7 +48,7 @@ export function buildPluginSdkEntrySources() {
 
 export function buildPluginSdkPackageExports() {
   return Object.fromEntries(
-    publicPluginSdkEntrypoints.map((entry) => [
+    packageExportedPluginSdkEntrypoints.map((entry) => [
       entry === "index" ? "./plugin-sdk" : `./plugin-sdk/${entry}`,
       {
         types: `./dist/plugin-sdk/${entry}.d.ts`,

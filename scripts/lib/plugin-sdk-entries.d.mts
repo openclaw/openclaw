@@ -3,6 +3,8 @@ export const pluginSdkSubpaths: string[];
 export const privateLocalOnlyPluginSdkEntrypoints: string[];
 export const publicPluginSdkEntrypoints: string[];
 export const publicPluginSdkSubpaths: string[];
+export const packageExportedCompatibilityPluginSdkEntrypoints: string[];
+export const packageExportedPluginSdkEntrypoints: string[];
 export const deprecatedPublicPluginSdkEntrypoints: string[];
 export const deprecatedBarrelPluginSdkEntrypoints: string[];
 
