@@ -108,9 +108,12 @@ export async function closeAllMemoryIndexManagers(): Promise<void> {
 // cache. closeIdleManagedCacheEntries honors that refcount and skips
 // busy entries; busyDeferred is the count of such skipped keys for this
 // scan and is logged when non-zero.
-export async function closeIdleMemoryIndexManagers(opts: {
-  idleMs: number;
-}): Promise<{ evicted: number; skippedBusy: number; remaining: number }> {
+export async function closeIdleMemoryIndexManagers(opts: { idleMs: number }): Promise<{
+  evicted: number;
+  skippedBusy: number;
+  skippedRevalidated: number;
+  remaining: number;
+}> {
   return await closeIdleManagedCacheEntries({
     cache: INDEX_MANAGER_CACHE,
     idleMs: opts.idleMs,

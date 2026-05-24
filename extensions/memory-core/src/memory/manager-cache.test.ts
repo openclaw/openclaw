@@ -455,6 +455,165 @@ describe("manager cache", () => {
     expect(cache.cache.size).toBe(0);
   });
 
+  it("closeIdleManagedCacheEntries revalidates lastAccessAt before closing (race: cache hit during scan-to-close gap)", async () => {
+    // Regression for PR #85972 ClawSweeper review:
+    //   t0: scan collects toEvict[] based on stale lastAccessAt
+    //   t1: a concurrent caller does INDEX_CACHE.get(K), refreshing
+    //       lastAccessAt without acquiring busy refcount
+    //   t2: close loop must NOT close K — the next .search() would hit a
+    //       closed manager.
+    // We use the deterministic testHookBeforeCloseLoop hook to model
+    // the gap between survey and close.
+    const cache = createTestCache();
+    cachesForCleanup.push(cache);
+    const entry = createEntry("refreshed-during-gap");
+    await getOrCreateManagedCacheEntry({
+      cache: cache.cache,
+      pending: cache.pending,
+      lastAccessAt: cache.lastAccessAt,
+      key: "k",
+      create: async () => entry,
+    });
+    const now = Date.now();
+    cache.lastAccessAt.set("k", now - 30_000); // stale by survey time
+    const skippedRevalidatedKeys: string[] = [];
+    const result = await closeIdleManagedCacheEntries({
+      cache,
+      idleMs: 5_000,
+      now: () => now,
+      onSkipRevalidated: (key) => skippedRevalidatedKeys.push(key),
+      testHookBeforeCloseLoop: () => {
+        // Simulate a cache hit during the scan-to-close gap. The hit
+        // path (getOrCreateManagedCacheEntry) bumps lastAccessAt to
+        // `Date.now()` which is necessarily > our captured `now - idleMs`.
+        cache.lastAccessAt.set("k", now);
+      },
+    });
+    expect(result.evicted).toBe(0);
+    expect(result.skippedRevalidated).toBe(1);
+    expect(result.skippedBusy).toBe(0);
+    expect(result.remaining).toBe(1);
+    expect(entry.close).not.toHaveBeenCalled();
+    expect(cache.cache.has("k")).toBe(true);
+    expect(cache.lastAccessAt.get("k")).toBe(now);
+    expect(skippedRevalidatedKeys).toEqual(["k"]);
+  });
+
+  it("closeIdleManagedCacheEntries respects busy state acquired during scan-to-close gap", async () => {
+    // Companion test: same race window, but the gap action is
+    // acquireManagedCacheKey() rather than a cache hit. Counts under
+    // skippedBusy (consistent with the survey-loop busy skip).
+    const cache = createTestCache();
+    cachesForCleanup.push(cache);
+    const entry = createEntry("acquired-during-gap");
+    await getOrCreateManagedCacheEntry({
+      cache: cache.cache,
+      pending: cache.pending,
+      lastAccessAt: cache.lastAccessAt,
+      key: "k",
+      create: async () => entry,
+    });
+    const now = Date.now();
+    cache.lastAccessAt.set("k", now - 30_000);
+    let release: (() => void) | undefined;
+    const skippedBusyKeys: string[] = [];
+    const result = await closeIdleManagedCacheEntries({
+      cache,
+      idleMs: 5_000,
+      now: () => now,
+      onSkipBusy: (key) => skippedBusyKeys.push(key),
+      testHookBeforeCloseLoop: () => {
+        // Acquire AFTER the survey loop already added the key to stale[].
+        // acquireManagedCacheKey also refreshes lastAccessAt, so we reset
+        // it to keep the busy branch (not the freshness branch) firing.
+        release = acquireManagedCacheKey(cache, "k");
+        cache.lastAccessAt.set("k", now - 30_000);
+      },
+    });
+    try {
+      expect(result.evicted).toBe(0);
+      expect(result.skippedBusy).toBe(1);
+      expect(result.skippedRevalidated).toBe(0);
+      expect(result.remaining).toBe(1);
+      expect(entry.close).not.toHaveBeenCalled();
+      expect(cache.cache.has("k")).toBe(true);
+      expect(skippedBusyKeys).toEqual(["k"]);
+    } finally {
+      release?.();
+    }
+  });
+
+  it("closeIdleManagedCacheEntries treats cache identity replacement as revalidation skip", async () => {
+    // If cache.set(key, newEntry) lands in the scan-to-close gap, the
+    // captured entry no longer matches the cache slot. We must NOT
+    // close either entry: the new one has its own fresh state and the
+    // old one was already replaced by the swap caller.
+    const cache = createTestCache();
+    cachesForCleanup.push(cache);
+    const original = createEntry("original");
+    const replacement = createEntry("replacement");
+    await getOrCreateManagedCacheEntry({
+      cache: cache.cache,
+      pending: cache.pending,
+      lastAccessAt: cache.lastAccessAt,
+      key: "k",
+      create: async () => original,
+    });
+    const now = Date.now();
+    cache.lastAccessAt.set("k", now - 30_000);
+    const result = await closeIdleManagedCacheEntries({
+      cache,
+      idleMs: 5_000,
+      now: () => now,
+      testHookBeforeCloseLoop: () => {
+        // Swap in a new instance and keep lastAccessAt stale so the
+        // revalidation branch we hit is specifically the identity
+        // mismatch one (not the freshness or busy ones).
+        cache.cache.set("k", replacement);
+      },
+    });
+    expect(result.evicted).toBe(0);
+    expect(result.skippedRevalidated).toBe(1);
+    expect(result.skippedBusy).toBe(0);
+    expect(original.close).not.toHaveBeenCalled();
+    expect(replacement.close).not.toHaveBeenCalled();
+    expect(cache.cache.get("k")).toBe(replacement);
+  });
+
+  it("closeIdleManagedCacheEntries handles disappearance of cache slot during gap", async () => {
+    // Another caller fully tore down the entry during the scan-to-close
+    // gap (e.g. a competing closeMemoryIndexManagersForAgent path). The
+    // sweep should treat that as a revalidation skip — not crash, not
+    // double-close.
+    const cache = createTestCache();
+    cachesForCleanup.push(cache);
+    const entry = createEntry("torn-down");
+    await getOrCreateManagedCacheEntry({
+      cache: cache.cache,
+      pending: cache.pending,
+      lastAccessAt: cache.lastAccessAt,
+      key: "k",
+      create: async () => entry,
+    });
+    const now = Date.now();
+    cache.lastAccessAt.set("k", now - 30_000);
+    const result = await closeIdleManagedCacheEntries({
+      cache,
+      idleMs: 5_000,
+      now: () => now,
+      testHookBeforeCloseLoop: () => {
+        cache.cache.delete("k");
+        // lastAccessAt intentionally not deleted yet — exercise the
+        // currentEntry === undefined branch which also cleans it up.
+      },
+    });
+    expect(result.evicted).toBe(0);
+    expect(result.skippedRevalidated).toBe(1);
+    expect(entry.close).not.toHaveBeenCalled();
+    expect(cache.cache.has("k")).toBe(false);
+    expect(cache.lastAccessAt.has("k")).toBe(false);
+  });
+
   it("bypasses identity caching for status-only callers", async () => {
     const cache = createTestCache();
     cachesForCleanup.push(cache);

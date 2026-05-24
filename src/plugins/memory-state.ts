@@ -117,9 +117,18 @@ export type MemoryPluginRuntime = {
   // were held in-flight by an ongoing operation (e.g. batch reindex) and
   // therefore deferred to the next scan. Counted for observability only;
   // not an error.
-  closeIdleMemorySearchManagers?(opts: {
-    idleMs: number;
-  }): Promise<{ evicted: number; skippedBusy: number; remaining: number }>;
+  //
+  // `skippedRevalidated` reports the number of entries that aged past
+  // idleMs in the initial survey but were either refreshed by a cache
+  // hit, replaced by a fresh manager, or already torn down by another
+  // path between survey and close. Also deferred to the next scan and
+  // counted for observability only.
+  closeIdleMemorySearchManagers?(opts: { idleMs: number }): Promise<{
+    evicted: number;
+    skippedBusy: number;
+    skippedRevalidated: number;
+    remaining: number;
+  }>;
 };
 
 export type MemoryPluginPublicArtifactContentType = "markdown" | "json" | "text";

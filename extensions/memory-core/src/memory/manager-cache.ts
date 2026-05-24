@@ -179,6 +179,15 @@ export function isManagedCacheKeyBusy<T>(cache: ManagedCache<T>, key: string): b
 // callback for observability, and reported back to callers via the
 // `skippedBusy` count so periodic sidecars can log them.
 //
+// Scan-to-close race protection: between the survey loop and the close
+// loop, a concurrent caller can refresh lastAccessAt (cache hit) or
+// acquire the busy refcount on a key we already added to the eviction
+// list. Before closing each entry we re-validate `lastAccessAt`
+// freshness against the same cutoff, `isBusy`, and cache identity. An
+// entry that no longer satisfies the original idle predicate is
+// reported back via the new `skippedRevalidated` counter and left in
+// the cache for the next scan to reconsider.
+//
 // Entries can themselves remove their own cacheKey from cache.delete() during
 // close() (e.g. MemoryIndexManager does this); this is intentional and
 // idempotent because we capture the eviction list up-front and re-check the
@@ -190,11 +199,22 @@ export async function closeIdleManagedCacheEntries<T extends Closable>(params: {
   onCloseError?: (err: unknown) => void;
   onEvictKey?: (key: string) => void;
   onSkipBusy?: (key: string) => void;
-}): Promise<{ evicted: number; skippedBusy: number; remaining: number }> {
+  onSkipRevalidated?: (key: string) => void;
+  // Test hook: invoked after the survey loop but before the close loop.
+  // Allows regression tests to deterministically inject a cache hit or
+  // busy acquire into the scan-to-close gap.
+  testHookBeforeCloseLoop?: () => Promise<void> | void;
+}): Promise<{
+  evicted: number;
+  skippedBusy: number;
+  skippedRevalidated: number;
+  remaining: number;
+}> {
   const now = (params.now ?? Date.now)();
   const cutoff = now - params.idleMs;
   const stale: Array<{ key: string; entry: T }> = [];
   let skippedBusy = 0;
+  let skippedRevalidated = 0;
   for (const [key, lastAccess] of params.cache.lastAccessAt) {
     if (lastAccess > cutoff) {
       continue;
@@ -215,14 +235,57 @@ export async function closeIdleManagedCacheEntries<T extends Closable>(params: {
     }
     stale.push({ key, entry });
   }
+  // Test hook: lets regression tests simulate the scan-to-close gap by
+  // injecting a cache hit or busy acquire between survey and close.
+  if (params.testHookBeforeCloseLoop) {
+    await params.testHookBeforeCloseLoop();
+  }
   let evicted = 0;
   for (const { key, entry } of stale) {
-    // Double-check the busy flag right before close in case a caller
-    // acquired the key between the survey loop and this point. Skipping
-    // here is cheap and avoids a close()-during-use race.
+    // Re-validate state immediately before close to close the race
+    // identified in PR #85972 review: between the survey loop and this
+    // point a concurrent caller may have either refreshed lastAccessAt
+    // (cache hit), acquired the busy refcount, or replaced the cache
+    // entry with a new instance. Closing in any of those cases would
+    // hand out a stale closed reference.
+    const currentTs = params.cache.lastAccessAt.get(key);
+    if (currentTs === undefined) {
+      // Another path already evicted this key (e.g. close() racing with
+      // a competing teardown). Nothing to do.
+      skippedRevalidated += 1;
+      params.onSkipRevalidated?.(key);
+      continue;
+    }
+    if (currentTs > cutoff) {
+      // Refreshed during the scan-to-close gap. Leave the entry in the
+      // cache and let the next scan reconsider it against a fresher
+      // cutoff. This is the merge-blocker case from the review.
+      skippedRevalidated += 1;
+      params.onSkipRevalidated?.(key);
+      continue;
+    }
     if (isManagedCacheKeyBusy(params.cache, key)) {
+      // Busy was acquired during the gap; treat the same as the survey
+      // loop skip so sidecar metrics stay consistent.
       skippedBusy += 1;
       params.onSkipBusy?.(key);
+      continue;
+    }
+    const currentEntry = params.cache.cache.get(key);
+    if (!currentEntry) {
+      // Cache slot disappeared during the gap. Cleanup any orphan
+      // lastAccessAt entry and move on.
+      params.cache.lastAccessAt.delete(key);
+      skippedRevalidated += 1;
+      params.onSkipRevalidated?.(key);
+      continue;
+    }
+    if (currentEntry !== entry) {
+      // Cache identity changed (cache.set(key, newEntry) happened in the
+      // gap). The new entry has its own fresh lastAccessAt and may be
+      // in-flight; leave it for the next scan instead of closing it.
+      skippedRevalidated += 1;
+      params.onSkipRevalidated?.(key);
       continue;
     }
     // Drop the cache slot first so concurrent readers do not pick up a
@@ -243,5 +306,10 @@ export async function closeIdleManagedCacheEntries<T extends Closable>(params: {
     }
     evicted += 1;
   }
-  return { evicted, skippedBusy, remaining: params.cache.cache.size };
+  return {
+    evicted,
+    skippedBusy,
+    skippedRevalidated,
+    remaining: params.cache.cache.size,
+  };
 }

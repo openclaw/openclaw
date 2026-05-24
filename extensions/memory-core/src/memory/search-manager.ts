@@ -440,11 +440,19 @@ export async function closeMemorySearchManager(params: {
 // have an in-flight operation (e.g. batch reindex) holding them via
 // MemoryIndexManager.withBusy(). Those entries are eligible again on the
 // next scan after release() fires.
-export async function closeIdleMemorySearchManagers(opts: {
-  idleMs: number;
-}): Promise<{ evicted: number; skippedBusy: number; remaining: number }> {
+//
+// Returns `skippedRevalidated` for entries that aged past idleMs in the
+// initial survey but were either refreshed by a cache hit, replaced by
+// a fresh manager, or already removed by another teardown path during
+// the scan-to-close gap. They are also retried on the next scan.
+export async function closeIdleMemorySearchManagers(opts: { idleMs: number }): Promise<{
+  evicted: number;
+  skippedBusy: number;
+  skippedRevalidated: number;
+  remaining: number;
+}> {
   if (managerRuntimePromise === null) {
-    return { evicted: 0, skippedBusy: 0, remaining: 0 };
+    return { evicted: 0, skippedBusy: 0, skippedRevalidated: 0, remaining: 0 };
   }
   const { closeIdleMemoryIndexManagers } = await loadManagerRuntime();
   return await closeIdleMemoryIndexManagers({ idleMs: opts.idleMs });

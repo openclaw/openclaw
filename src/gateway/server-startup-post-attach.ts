@@ -226,10 +226,18 @@ function scheduleMemoryIndexIdleEvict(params: {
       const result = await runtime.closeIdleMemorySearchManagers({
         idleMs: policy.idleMs,
       });
-      if (result.evicted > 0 || result.skippedBusy > 0) {
-        const busySuffix = result.skippedBusy > 0 ? ` (deferred ${result.skippedBusy} busy)` : "";
+      if (result.evicted > 0 || result.skippedBusy > 0 || result.skippedRevalidated > 0) {
+        const deferredParts: string[] = [];
+        if (result.skippedBusy > 0) {
+          deferredParts.push(`${result.skippedBusy} busy`);
+        }
+        if (result.skippedRevalidated > 0) {
+          deferredParts.push(`${result.skippedRevalidated} revalidated`);
+        }
+        const deferredSuffix =
+          deferredParts.length > 0 ? ` (deferred ${deferredParts.join(", ")})` : "";
         params.log.info(
-          `memory index manager idle eviction: evicted ${result.evicted}${busySuffix} (remaining ${result.remaining})`,
+          `memory index manager idle eviction: evicted ${result.evicted}${deferredSuffix} (remaining ${result.remaining})`,
         );
       }
     } catch (err) {
