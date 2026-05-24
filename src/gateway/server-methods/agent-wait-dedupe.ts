@@ -125,7 +125,9 @@ function readTerminalSnapshotFromDedupeEntry(entry: DedupeEntry): AgentWaitTermi
     ? {
         usage: (() => {
           const u = asRecord(rawAgentMeta.usage);
-          if (!u) return undefined;
+          if (!u) {
+            return undefined;
+          }
           const inputTokens = asFiniteNumber(u.inputTokens);
           const outputTokens = asFiniteNumber(u.outputTokens);
           const cachedInputTokens = asFiniteNumber(u.cachedInputTokens);
