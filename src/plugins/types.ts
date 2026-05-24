@@ -1983,8 +1983,6 @@ export type PluginCommandContext = {
   diagnosticsSessions?: PluginCommandDiagnosticsSession[];
   /** Host-bound runtime capabilities scoped to this command invocation. */
   runtimeContext?: {
-    /** Host-derived auth profile preference for this command invocation. */
-    authProfileId?: string;
     llm?: import("./runtime/types-core.js").PluginRuntimeCore["llm"];
   };
   /** Internal diagnostics-only marker that exec approval already authorized upload. */

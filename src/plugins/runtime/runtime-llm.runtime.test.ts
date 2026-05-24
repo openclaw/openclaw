@@ -501,7 +501,7 @@ describe("runtime.llm.complete", () => {
     });
   });
 
-  it("uses a request auth profile preference when no authority profile is bound", async () => {
+  it("ignores request auth profile preferences without a trusted authority binding", async () => {
     const llm = createRuntimeLlm({
       getConfig: () => cfg,
       authority: {
@@ -512,11 +512,13 @@ describe("runtime.llm.complete", () => {
     await llm.complete({
       authProfileId: "openai-codex:work",
       messages: [{ role: "user", content: "draft" }],
-    });
+    } as Parameters<typeof llm.complete>[0] & { authProfileId: string });
 
-    expectSingleCallFirstArg(hoisted.prepareSimpleCompletionModelForAgent, {
-      preferredProfile: "openai-codex:work",
+    const call = expectSingleCallFirstArg(hoisted.prepareSimpleCompletionModelForAgent, {
+      cfg,
+      agentId: "main",
     });
+    expect(call.preferredProfile).toBeUndefined();
   });
 
   it("allows host model overrides only when explicit authority allowlists the model", async () => {
