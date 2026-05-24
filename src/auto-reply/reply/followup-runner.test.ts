@@ -558,11 +558,18 @@ describe("createFollowupRunner reply-lane admission", () => {
       payloads: [],
       meta: { agentMeta: { provider: "anthropic", model: "claude" } },
     });
+    const sessionStore = {
+      main: {
+        sessionId: "pre-compact-session",
+        sessionFile: "/tmp/pre-compact.jsonl",
+        updatedAt: Date.now(),
+      },
+    };
     const runner = createFollowupRunner({
       typing: createMockTypingController(),
       typingMode: "instant",
-      sessionEntry: { sessionId: "stale-session", updatedAt: Date.now() },
-      sessionStore: { main: { sessionId: "stale-session", updatedAt: Date.now() } },
+      sessionEntry: sessionStore.main,
+      sessionStore,
       sessionKey: "main",
       defaultModel: "anthropic/claude",
     });
@@ -579,11 +586,17 @@ describe("createFollowupRunner reply-lane admission", () => {
     );
     await new Promise<void>((resolve) => setTimeout(resolve, 0));
     active.updateSessionId("post-compact-session");
+    sessionStore.main = {
+      sessionId: "post-compact-session",
+      sessionFile: "/tmp/post-compact.jsonl",
+      updatedAt: Date.now(),
+    };
     active.complete();
     await pending;
 
     const call = requireLastMockCallArg(runEmbeddedPiAgentMock, "run embedded pi agent");
     expect(call.sessionId).toBe("post-compact-session");
+    expect(call.sessionFile).toBe("/tmp/post-compact.jsonl");
   });
 });
 

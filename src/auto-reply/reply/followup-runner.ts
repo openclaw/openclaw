@@ -503,6 +503,19 @@ export function createFollowupRunner(params: {
       if (replyOperation.sessionId !== run.sessionId) {
         run = { ...run, sessionId: replyOperation.sessionId };
         effectiveQueued = { ...effectiveQueued, run };
+        const admittedSessionEntry = replySessionKey
+          ? (sessionStore?.[replySessionKey] ??
+            (storePath
+              ? (readSessionEntry(storePath, replySessionKey) as SessionEntry | undefined)
+              : undefined))
+          : undefined;
+        if (admittedSessionEntry?.sessionId === replyOperation.sessionId) {
+          activeSessionEntry = admittedSessionEntry;
+          if (admittedSessionEntry.sessionFile) {
+            run = { ...run, sessionFile: admittedSessionEntry.sessionFile };
+            effectiveQueued = { ...effectiveQueued, run };
+          }
+        }
       }
       const runId = crypto.randomUUID();
       const shouldSurfaceToControlUi = isInternalMessageChannel(
