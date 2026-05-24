@@ -86,7 +86,7 @@ export function isAgentMediatedCompletionSourceTool(value: unknown): boolean {
 const USER_FACING_SESSION_STATE_PRESERVING_SOURCE_TOOLS: ReadonlySet<string> = new Set([
   ...AGENT_MEDIATED_COMPLETION_SOURCE_TOOLS,
   "subagent_announce",
-  "subagent_orphan_recovery",
+  "subagent_interrupted_resume",
 ]);
 
 export function shouldPreserveUserFacingSessionStateForInputProvenance(value: unknown): boolean {

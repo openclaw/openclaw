@@ -3370,6 +3370,14 @@ describe("persistSessionUsageUpdate", () => {
         totalTokens: 1_305,
         totalTokensFresh: true,
         estimatedCostUsd: 0.123,
+        cliSessionIds: { "claude-cli": "visible-cli-session" },
+        cliSessionBindings: {
+          "claude-cli": {
+            sessionId: "visible-cli-session",
+            authProfileId: "anthropic:visible",
+          },
+        },
+        claudeCliSessionId: "visible-cli-session",
       },
     });
 
@@ -3381,7 +3389,21 @@ describe("persistSessionUsageUpdate", () => {
       lastCallUsage: { input: 39_908, output: 122, cacheRead: 0, cacheWrite: 0 },
       providerUsed: "google",
       modelUsed: "gemini-2.5-flash",
+      cliSessionId: "internal-cli-session",
+      cliSessionBinding: {
+        sessionId: "internal-cli-session",
+        authProfileId: "anthropic:internal",
+      },
       contextTokensUsed: 1_000_000,
+    });
+    await persistSessionUsageUpdate({
+      storePath,
+      sessionKey,
+      preserveUserFacingSessionModelState: true,
+      providerUsed: "claude-cli",
+      modelUsed: "claude-sonnet-4-6",
+      cliSessionId: "internal-cli-session-2",
+      contextTokensUsed: 900_000,
     });
 
     const stored = JSON.parse(await fs.readFile(storePath, "utf-8"));
@@ -3395,6 +3417,12 @@ describe("persistSessionUsageUpdate", () => {
     expect(stored[sessionKey].totalTokens).toBe(1_305);
     expect(stored[sessionKey].totalTokensFresh).toBe(true);
     expect(stored[sessionKey].estimatedCostUsd).toBe(0.123);
+    expect(stored[sessionKey].cliSessionIds?.["claude-cli"]).toBe("visible-cli-session");
+    expect(stored[sessionKey].cliSessionBindings?.["claude-cli"]).toEqual({
+      sessionId: "visible-cli-session",
+      authProfileId: "anthropic:visible",
+    });
+    expect(stored[sessionKey].claudeCliSessionId).toBe("visible-cli-session");
   });
 
   it("persists zero estimatedCostUsd for free priced models", async () => {

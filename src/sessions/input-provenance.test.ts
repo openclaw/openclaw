@@ -75,7 +75,7 @@ describe("isAgentMediatedCompletionSourceTool", () => {
     },
   );
 
-  it.each(["subagent_announce", "subagent_orphan_recovery", "sessions_send"])(
+  it.each(["subagent_announce", "subagent_interrupted_resume", "sessions_send"])(
     "does not classify %s as an agent-mediated completion source",
     (sourceTool) => {
       expect(isAgentMediatedCompletionSourceTool(sourceTool)).toBe(false);
@@ -89,7 +89,7 @@ describe("shouldPreserveUserFacingSessionStateForInputProvenance", () => {
     "image_generate",
     "music_generate",
     "subagent_announce",
-    "subagent_orphan_recovery",
+    "subagent_interrupted_resume",
     "video_generate",
   ])("preserves user-facing session state for internal %s handoffs", (sourceTool) => {
     expect(

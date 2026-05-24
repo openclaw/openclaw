@@ -181,7 +181,9 @@ export async function persistSessionUsageUpdate(params: {
           ) {
             patch.totalTokensFresh = false;
           }
-          return applyCliSessionIdToSessionPatch(params, entry, patch);
+          return preserveUserFacingRunState
+            ? patch
+            : applyCliSessionIdToSessionPatch(params, entry, patch);
         },
       });
     } catch (err) {
@@ -213,7 +215,9 @@ export async function persistSessionUsageUpdate(params: {
               : (params.systemPromptReport ?? entry.systemPromptReport),
             updatedAt: Date.now(),
           };
-          return applyCliSessionIdToSessionPatch(params, entry, patch);
+          return preserveUserFacingRunState
+            ? patch
+            : applyCliSessionIdToSessionPatch(params, entry, patch);
         },
       });
     } catch (err) {
