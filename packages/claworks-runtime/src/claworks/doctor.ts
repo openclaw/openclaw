@@ -1,3 +1,7 @@
+import { existsSync, mkdirSync, rmSync } from "node:fs";
+import { homedir } from "node:os";
+import { join } from "node:path";
+import { createDirectLlmBridge } from "./direct-llm-bridge.js";
 import {
   loadPersistedInstalled,
   mergePackConfig,
@@ -296,6 +300,63 @@ export async function runClaworksDoctorFix(
   if (!runtime.config.connectors || Object.keys(runtime.config.connectors).length === 0) {
     runtime.config.connectors = { echo: { preset: "echo", enabled: true } };
     applied.push("connectors.echo: enabled");
+  }
+
+  // ── Fix 1: LLM bridge 未配置时从环境变量自动尝试配置 ──────────────────────
+  if (!runtime.llmComplete) {
+    const bridge = createDirectLlmBridge();
+    if (bridge) {
+      runtime.llmComplete = bridge;
+      const provider =
+        process.env["ANTHROPIC_API_KEY"] && !process.env["OPENAI_API_KEY"]
+          ? "Anthropic"
+          : process.env["OLLAMA_BASE_URL"]
+            ? "Ollama"
+            : "OpenAI";
+      applied.push(`llmComplete: auto-configured direct LLM bridge (${provider})`);
+    } else {
+      warnings.push(
+        "LLM bridge 未配置且无可用环境变量 (OPENAI_API_KEY / ANTHROPIC_API_KEY / OLLAMA_BASE_URL)；LLM 相关步骤将降级",
+      );
+    }
+  }
+
+  // ── Fix 2: Pack 目录不存在时自动创建 ──────────────────────────────────────
+  const packsDir = join(homedir(), ".claworks", "packs");
+  if (!existsSync(packsDir)) {
+    try {
+      mkdirSync(packsDir, { recursive: true });
+      applied.push(`Created pack directory: ${packsDir}`);
+    } catch (err) {
+      warnings.push(`无法创建 pack 目录 ${packsDir}: ${String(err)}`);
+    }
+  }
+
+  // ── Fix 3: 检测并清理 SQLite WAL 锁文件 ───────────────────────────────────
+  const dbUrl =
+    runtime.config.data?.database_url ?? `sqlite://${join(homedir(), ".claworks", "robot.db")}`;
+  if (dbUrl.startsWith("sqlite://")) {
+    const dbPath = dbUrl.slice("sqlite://".length);
+    const shmPath = `${dbPath}-shm`;
+    const walPath = `${dbPath}-wal`;
+    let dbAccessible = true;
+    try {
+      runtime.db.prepare("SELECT 1").get();
+    } catch {
+      dbAccessible = false;
+    }
+    if (!dbAccessible) {
+      for (const lockFile of [shmPath, walPath]) {
+        if (existsSync(lockFile)) {
+          try {
+            rmSync(lockFile, { force: true });
+            applied.push(`Removed stale SQLite lock file: ${lockFile}`);
+          } catch (err) {
+            warnings.push(`无法删除锁文件 ${lockFile}: ${String(err)}`);
+          }
+        }
+      }
+    }
   }
 
   await reloadClaworksPacksFromDisk(runtime);
