@@ -974,22 +974,28 @@ function makePerceiveIntentDescriptor(runtime: ClaworksRuntime): CapabilityDescr
 
       // 查询 CBR 案例库：最相似的 2 条历史案例作为 few-shot 上下文
       // 帮助弱模型从已知成功案例中类比推断当前意图
-      const cbrCases = runtime.cbrStore
-        ? runtime.cbrStore
-            .search(text, 2)
-            .map((c) => {
-              const p = c.problem as Record<string, unknown> | undefined;
-              const prob =
-                typeof p?.problem === "string"
-                  ? p.problem
-                  : typeof c.problem === "string"
-                    ? c.problem
-                    : "";
-              const sol = typeof c.solution === "string" ? c.solution : "";
-              return prob && sol ? `示例：用户说"${prob}"→意图为"${sol}"` : null;
-            })
-            .filter((x): x is string => x !== null)
-        : [];
+      // 用 try/catch 保护：CBR 检索失败（DB 锁、索引错误等）不应阻断意图分类
+      let cbrCases: string[] = [];
+      try {
+        cbrCases = runtime.cbrStore
+          ? runtime.cbrStore
+              .search(text, 2)
+              .map((c) => {
+                const p = c.problem as Record<string, unknown> | undefined;
+                const prob =
+                  typeof p?.problem === "string"
+                    ? p.problem
+                    : typeof c.problem === "string"
+                      ? c.problem
+                      : "";
+                const sol = typeof c.solution === "string" ? c.solution : "";
+                return prob && sol ? `示例：用户说"${prob}"→意图为"${sol}"` : null;
+              })
+              .filter((x): x is string => x !== null)
+          : [];
+      } catch {
+        // CBR 不可用时忽略，降级为无 few-shot
+      }
 
       const contextBlock = new SystemPromptBuilder()
         .withMemory([
