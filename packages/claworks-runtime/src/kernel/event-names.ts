@@ -73,6 +73,10 @@ export const CW_EVENTS = {
 
   // ── Evolution / 进化同步 ──────────────────────────────────────────────
   EVOLUTION_PACK_IMPORTED: "evolution.pack_imported",
+  /** 请求运行模拟蒸馏流水线（弱模型回归 + 导出） */
+  EVOLUTION_SIMULATION_REQUESTED: "evolution.simulation_requested",
+  /** 请求弱模型意图回归测试（import 后自动触发） */
+  EVOLUTION_REGRESSION_REQUESTED: "evolution.regression_requested",
   EVOLVE_PLAYBOOK_DEPLOYED: "evolve.playbook_deployed",
   EVOLVE_PLAYBOOK_DRAFTED: "evolve.playbook_drafted",
   EVOLVE_SUGGESTIONS_READY: "evolve.suggestions_ready",

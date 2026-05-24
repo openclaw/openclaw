@@ -1047,13 +1047,7 @@ function makePerceiveIntentDescriptor(runtime: ClaworksRuntime): CapabilityDescr
           ? runtime.cbrStore
               .search(text, 2)
               .map((c) => {
-                const p = c.problem as Record<string, unknown> | undefined;
-                const prob =
-                  typeof p?.problem === "string"
-                    ? p.problem
-                    : typeof c.problem === "string"
-                      ? c.problem
-                      : "";
+                const prob = typeof c.problem === "string" ? c.problem : String(c.problem);
                 const sol = typeof c.solution === "string" ? c.solution : "";
                 return prob && sol ? `示例：用户说"${prob}"→意图为"${sol}"` : null;
               })
@@ -1063,22 +1057,18 @@ function makePerceiveIntentDescriptor(runtime: ClaworksRuntime): CapabilityDescr
         // CBR 不可用时忽略，降级为无 few-shot
       }
 
-      const contextBlock = new SystemPromptBuilder()
-        .withMemory([
-          ...cbrCases,
-          ...history.map((m) => `${m.role === "user" ? "用户" : "助手"}：${m.content}`),
-        ])
-        .withUserProfile(
-          userProfile
-            ? {
-                name: userProfile.name,
-                style: userProfile.preferredResponseStyle,
-                topics: userProfile.recentTopics,
-              }
-            : undefined,
-        )
-        .withCapabilities(capabilityNames)
-        .build();
+      const contextBlockBuilder = new SystemPromptBuilder().withMemory([
+        ...cbrCases,
+        ...history.map((m) => `${m.role === "user" ? "用户" : "助手"}：${m.content}`),
+      ]);
+      if (userProfile) {
+        contextBlockBuilder.withUserProfile({
+          name: userProfile.name,
+          style: userProfile.preferredResponseStyle,
+          topics: userProfile.recentTopics,
+        });
+      }
+      const contextBlock = contextBlockBuilder.withCapabilities(capabilityNames).build();
 
       // enrichedText: 用户消息 + 上下文（用于模板 message 槽）
       const enrichedText = contextBlock ? `${text}\n\n---\n${contextBlock}` : text;
@@ -1207,8 +1197,8 @@ function makePerceiveNeedsClarificationDescriptor(runtime: ClaworksRuntime): Cap
         `只输出追问内容，不要解释，不要加引号。`;
 
       try {
-        const raw = await llmFn(prompt);
-        const question = (typeof raw === "string" ? raw : String(raw)).trim();
+        const raw = await llmFn({ prompt });
+        const question = (typeof raw === "string" ? raw : String(raw.text ?? raw)).trim();
         if (question) {
           return { needs_clarification: true, clarification_question: question };
         }
@@ -1256,8 +1246,8 @@ function makePerceiveSentimentDescriptor(runtime: ClaworksRuntime): CapabilityDe
         `消息："${text}"`;
 
       try {
-        const raw = await llmFn(prompt);
-        const cleaned = (typeof raw === "string" ? raw : String(raw))
+        const raw = await llmFn({ prompt });
+        const cleaned = (typeof raw === "string" ? raw : String(raw.text ?? raw))
           .trim()
           .replace(/^```json\s*/i, "")
           .replace(/```$/i, "");
@@ -1306,7 +1296,7 @@ function makePerceiveSentimentDescriptor(runtime: ClaworksRuntime): CapabilityDe
 function makePerceiveUserProfileUpdateDescriptor(runtime: ClaworksRuntime): CapabilityDescriptor {
   return {
     id: "perceive.user_profile_update",
-    verb: "update",
+    verb: "modify",
     description: "更新用户画像（姓名、偏好风格、近期话题），供后续个性化回复使用",
     owner: { kind: "core" },
     paramsSchema: {
@@ -1643,7 +1633,7 @@ function makeLearnFromFeedbackDescriptor(runtime: ClaworksRuntime): CapabilityDe
       if (type === "correction" && correction && content && runtime.ruleEngine?.addRule) {
         const ruleId = `learned-${Date.now()}`;
         const trigger = content.slice(0, 50);
-        runtime.ruleEngine.addRule("im.quick_rules", {
+        runtime.ruleEngine.addRule?.("im.quick_rules", {
           id: ruleId,
           name: `用户纠正学习：${trigger.slice(0, 20)}`,
           priority: 900,
@@ -2546,10 +2536,42 @@ function makeConnectApplyDescriptor(runtime: ClaworksRuntime): CapabilityDescrip
           items: { type: "string" },
           description: "要连接的服务列表（feishu/ollama/openai/...）",
         },
+        feishu_app_id: {
+          type: "string",
+          description: "飞书 App ID（可选，优先于环境变量 FEISHU_APP_ID）",
+        },
+        feishu_app_secret: {
+          type: "string",
+          description: "飞书 App Secret（可选，优先于环境变量 FEISHU_APP_SECRET）",
+        },
       },
     },
     handler: async (_ctx, params) => {
       const services = Array.isArray(params.services) ? (params.services as string[]) : [];
+      const feishuAppId = params.feishu_app_id ?? params.app_id;
+      const feishuAppSecret = params.feishu_app_secret ?? params.app_secret;
+      if (
+        services.includes("feishu") &&
+        feishuAppId != null &&
+        String(feishuAppId).trim() !== "" &&
+        feishuAppSecret != null &&
+        String(feishuAppSecret).trim() !== ""
+      ) {
+        const appId = String(feishuAppId);
+        const appSecret = String(feishuAppSecret);
+        process.env.FEISHU_APP_ID = appId;
+        process.env.FEISHU_APP_SECRET = appSecret;
+        const existing = runtime.config.connectors ?? {};
+        runtime.config.connectors = {
+          ...existing,
+          feishu: {
+            ...existing.feishu,
+            app_id: appId,
+            app_secret: appSecret,
+            webhook: process.env.FEISHU_WEBHOOK_URL,
+          },
+        };
+      }
       const results = await mgr.applyConnections(services);
       return { results, applied: results.filter((r) => r.status === "connected").length };
     },
@@ -2835,7 +2857,7 @@ function makeOntologyBootstrapFromOpenApiDescriptor(
             name: fieldName,
             type,
             required: required.includes(fieldName),
-            ...(fieldDef.enum
+            ...(Array.isArray(fieldDef.enum)
               ? { enumValues: fieldDef.enum as string[], type: "enum" as const }
               : {}),
           };
@@ -3035,7 +3057,7 @@ function makeRuleEngineRegisterTableDescriptor(runtime: ClaworksRuntime): Capabi
       if (typeof runtime.ruleEngine.registerTable !== "function") {
         return { status: "error", reason: "RuleEngine 版本不支持 registerTable" };
       }
-      runtime.ruleEngine.registerTable(table as Record<string, unknown>);
+      runtime.ruleEngine.registerTable(table as import("./rule-engine.js").DecisionTable);
       return {
         status: "ok",
         table_id: table.id,

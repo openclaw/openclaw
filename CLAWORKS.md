@@ -28,6 +28,10 @@ IM / Webhook / Schedule / API
 
 私域数据采集 → 导出 → 商业模型分析 → 生成进化包 → 导入热更新 → PlaybookSimulator 验证
 
+- **模拟蒸馏**：发布 `evolution.simulation_requested`（或 `POST /v1/playbooks/evolution_simulation_pipeline/trigger`）触发端到端弱模型回归 + 导出；摘要写入 KB `simulation_runs`。
+- **每周导出**：`evolution_weekly_export` 定时（周日 02:00）调用 `evolution.export_data`，运维在联网环境用商业模型处理后再 `claworks evolution import`。
+- **导入→回归闭环**：`evolution_pack_import_and_verify` 在 pack 热重载后发布 `evolution.regression_requested`，由 `weak_model_regression_suite` 自动跑弱模型意图回归。
+
 ## Pack 生态（158+ 活跃 Playbook）
 
 | Pack                   | Playbook 数 | 定位                                     |
@@ -68,7 +72,7 @@ pnpm test packages/claworks-runtime          # 运行测试
 | 交流       | 4/5  | comms.send / notify.dispatch 多渠道通知，HITL 人机协同步骤完备                      |
 | 记忆       | 4/5  | ObjectStore + KB + CBR + memory_read/write 步骤，用户画像持久化                     |
 | 学习       | 4/5  | 进化流水线（evolve.\*）、CBR 摄取、weak_model_regression 自测闭环                   |
-| 执行       | 5/5  | 215 能力 + 12+ 步骤类型 + Pack ActionRegistry 热扩展，354 测试全绿                  |
+| 执行       | 5/5  | 215+ 能力 + 12+ 步骤类型 + Pack Profile 热切换，358 测试全绿                        |
 | 自主       | 4/5  | AutonomyEngine 心跳/空闲/缺口检测，ScaffoldEngine 弱模型照单执行                    |
 | 安全       | 4/5  | RBAC、HITL 门禁、production_mode fail-closed、审计日志                              |
 | 可观测性   | 4/5  | LOG_LEVEL 分级日志 + claworks_playbook_runs_total 指标，分布式 trace 仍待加强       |
