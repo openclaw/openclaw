@@ -518,7 +518,6 @@ async function describeImagesWithModelInternal(
     promptInUserContent: shouldPlaceImagePromptInUserContent(model),
   });
 
-  // Align with `src/agents/tools/image-tool.ts`: defer to `resolveImageToolMaxTokens`'s 4096 default unless the caller overrides it.
   const maxTokens = resolveImageToolMaxTokens(model.maxTokens, params.maxTokens);
   const completeImage = async (onPayload?: ProviderStreamOptions["onPayload"]) => {
     const payloadHandler = composeImageDescriptionPayloadHandlers(onPayload, options.onPayload);

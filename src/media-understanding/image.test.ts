@@ -1291,14 +1291,7 @@ describe("describeImageWithModel", () => {
     expect(contentTypes).toContain("image");
   });
 
-  it("defaults image-describe maxTokens to 4096 so reasoning-capable VLM responses are not truncated at 512", async () => {
-    // Regression for the silent re-introduction of the 512-token cap when the
-    // unified media-understanding pipeline was created — see PR #11770 which
-    // already raised the legacy `image_describe` tool default from 512 to
-    // 4096. With 512 the reasoning blocks of models like
-    // `agent-plan/doubao-seed-2.0-pro` consume the entire budget and the
-    // response comes back with `stopReason: "length"` and zero text content,
-    // surfacing as `Image model returned no text (<provider>/<model>)`.
+  it("defaults image-describe maxTokens to 4096 for reasoning-capable VLMs", async () => {
     discoverModelsMock.mockReturnValue({
       find: vi.fn(() => ({
         api: "openai-completions",
@@ -1335,12 +1328,6 @@ describe("describeImageWithModel", () => {
   });
 
   it("caps image-describe maxTokens by the resolved model's own maxTokens", async () => {
-    // Pairs with the 4096 default test above: when the registry-resolved model
-    // declares a smaller token budget, `resolveImageToolMaxTokens` must take
-    // the floor via `Math.min`. This locks in the shared cap behaviour with
-    // the legacy `image_describe` tool (`src/agents/tools/image-tool.ts`) so
-    // small-budget VLMs keep their own ceiling even after the default is
-    // raised.
     discoverModelsMock.mockReturnValue({
       find: vi.fn(() => ({
         api: "openai-completions",
