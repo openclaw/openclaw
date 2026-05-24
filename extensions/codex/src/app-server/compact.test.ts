@@ -355,77 +355,38 @@ describe("maybeCompactCodexAppServerSession", () => {
     expect(result.result).toBeUndefined();
   });
 
-  it("restarts the Codex app-server and retries when native compaction times out", async () => {
+  it("fails native app-server compaction without restarting shared app-server on timeout", async () => {
     const previousTimeout = process.env.OPENCLAW_CODEX_COMPACTION_WAIT_TIMEOUT_MS;
     process.env.OPENCLAW_CODEX_COMPACTION_WAIT_TIMEOUT_MS = "100";
     const warn = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => undefined);
     try {
-      const first = createFakeCodexClient();
-      const second = createFakeCodexClient();
-      let factoryCalls = 0;
-      const factory = vi.fn(async () => {
-        factoryCalls += 1;
-        if (factoryCalls === 1) {
-          return first.client;
-        }
-        return second.client;
-      });
+      const fake = createFakeCodexClient();
+      const factory = vi.fn(async () => fake.client);
       setCodexAppServerClientFactoryForTest(factory);
       const sessionFile = await writeTestBinding();
 
       const pendingResult = startCompaction(sessionFile, { currentTokenCount: 456 });
       await vi.waitFor(() => {
-        expect(first.request).toHaveBeenCalledWith("thread/compact/start", {
+        expect(fake.request).toHaveBeenCalledWith("thread/compact/start", {
           threadId: "thread-1",
         });
-      });
-
-      await vi.waitFor(() => {
-        expect(first.close).toHaveBeenCalledTimes(1);
-        expect(second.request).toHaveBeenCalledWith("thread/compact/start", {
-          threadId: "thread-1",
-        });
-      });
-      second.emit({
-        method: "thread/tokenUsage/updated",
-        params: {
-          threadId: "thread-1",
-          tokenUsage: {
-            last_token_usage: {
-              total_tokens: 12_345,
-            },
-          },
-        },
-      });
-      second.emit({
-        method: "item/completed",
-        params: {
-          threadId: "thread-1",
-          turnId: "turn-2",
-          item: { type: "contextCompaction", id: "compact-2" },
-        },
       });
 
       const result = requireCompactResult(await pendingResult);
-      expect(result.ok).toBe(true);
-      expect(result.compacted).toBe(true);
-      expect(result.result?.tokensAfter).toBe(12_345);
-      expect(factory).toHaveBeenCalledTimes(2);
-      expect(second.close).not.toHaveBeenCalled();
+      expect(result.ok).toBe(false);
+      expect(result.compacted).toBe(false);
+      expect(result.reason).toContain("timed out waiting for codex app-server compaction");
+      expect(factory).toHaveBeenCalledTimes(1);
+      expect(fake.close).not.toHaveBeenCalled();
       expect(await readCodexAppServerBinding(sessionFile)).toBeDefined();
-      const details = compactDetails(result);
-      expect(details.signal).toBe("item/completed");
-      expect(details.itemId).toBe("compact-2");
-      expect(details.compactionAttempts).toBe(2);
-      expect(details.recoveredAfterAppServerRestart).toBe(true);
+      expect(result.result).toBeUndefined();
       expect(warn).toHaveBeenCalledWith(
-        "codex app-server compaction timed out; restarting app-server",
+        "codex app-server compaction failed",
         expect.objectContaining({
           sessionId: "session-1",
           sessionKey: "agent:main:session-1",
           threadId: "thread-1",
-          attempt: 1,
-          maxAttempts: 2,
+          reason: expect.stringContaining("timed out waiting for codex app-server compaction"),
         }),
       );
     } finally {
