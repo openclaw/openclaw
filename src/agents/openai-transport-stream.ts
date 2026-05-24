@@ -2950,6 +2950,54 @@ function resolveOpenAICompletionsMaxTokens(
   return (options?.maxTokens || undefined) ?? (paramsMaxTokens || undefined) ?? model.maxTokens;
 }
 
+// Rough char->token estimate used only to bound `max_completion_tokens` below
+// `contextWindow - input` for strict OpenAI-compatible servers (e.g. vLLM,
+// StepFun). 4 chars/token is the OpenAI-published heuristic; the 1.25x margin
+// biases the estimate high so we leave headroom for whichever real tokenizer
+// the upstream server uses. Wrong-high here just trims output a little;
+// wrong-low would let the server reject the request.
+function estimateOpenAICompletionsInputTokens(context: {
+  systemPrompt?: unknown;
+  messages?: unknown;
+  tools?: unknown;
+}): number {
+  let chars = 0;
+  if (typeof context.systemPrompt === "string") {
+    chars += context.systemPrompt.length;
+  }
+  if (Array.isArray(context.messages)) {
+    for (const message of context.messages) {
+      if (!message || typeof message !== "object") continue;
+      const content = (message as { content?: unknown }).content;
+      if (typeof content === "string") {
+        chars += content.length;
+      } else if (Array.isArray(content)) {
+        for (const block of content) {
+          if (!block || typeof block !== "object") continue;
+          const text = (block as { text?: unknown }).text;
+          if (typeof text === "string") {
+            chars += text.length;
+            continue;
+          }
+          try {
+            chars += JSON.stringify(block).length;
+          } catch {
+            chars += 256;
+          }
+        }
+      }
+    }
+  }
+  if (Array.isArray(context.tools) && context.tools.length > 0) {
+    try {
+      chars += JSON.stringify(context.tools).length;
+    } catch {
+      chars += 1024;
+    }
+  }
+  return Math.ceil((chars / 4) * 1.25);
+}
+
 function isQwenOpenAICompletionsThinkingFormat(format: string): boolean {
   return format === "qwen" || format === "qwen-chat-template";
 }
@@ -3375,13 +3423,18 @@ export function buildOpenAICompletionsParams(
       typeof model.contextWindow === "number" && Number.isFinite(model.contextWindow)
         ? model.contextWindow
         : undefined;
-    const clampedMaxTokens =
+    let clampedMaxTokens = effectiveMaxTokens;
+    if (
       compatDetection.capabilities.usesExplicitProxyLikeEndpoint &&
       effectiveMaxTokens !== undefined &&
-      contextWindow !== undefined &&
-      effectiveMaxTokens >= contextWindow
-        ? contextWindow - 1
-        : effectiveMaxTokens;
+      contextWindow !== undefined
+    ) {
+      const estimatedInputTokens = estimateOpenAICompletionsInputTokens(context);
+      const remainingBudget = Math.max(1, contextWindow - estimatedInputTokens - 1);
+      if (effectiveMaxTokens > remainingBudget) {
+        clampedMaxTokens = remainingBudget;
+      }
+    }
     if (clampedMaxTokens) {
       if (compat.maxTokensField === "max_tokens") {
         params.max_tokens = clampedMaxTokens;

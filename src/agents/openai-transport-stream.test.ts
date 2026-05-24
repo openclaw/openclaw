@@ -4766,7 +4766,44 @@ describe("openai transport stream", () => {
     expect(params).not.toHaveProperty("max_completion_tokens");
   });
 
-  it("clamps max_completion_tokens to contextWindow - 1 for proxy-like endpoints when configured maxTokens >= contextWindow", () => {
+  it("clamps max_completion_tokens to the remaining context budget for proxy-like endpoints when prompt + output would exceed contextWindow (covers #83086)", () => {
+    // StepFun-style shape: large context window, max_tokens equal to context,
+    // and a substantial prompt that should leave well under the context budget.
+    // 1_000_000 chars ~= 250_000 estimated tokens (with the 1.25x safety margin
+    // applied inside the estimator). The clamp should leave room for that input.
+    const systemPrompt = "x".repeat(1_000_000);
+    const params = buildOpenAICompletionsParams(
+      {
+        id: "step-router-v1",
+        name: "StepFun step-router-v1",
+        api: "openai-completions",
+        provider: "stepfun-plan",
+        baseUrl: "https://api.stepfun.com/v1",
+        reasoning: false,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 262_144,
+        maxTokens: 262_144,
+      } satisfies Model<"openai-completions">,
+      {
+        systemPrompt,
+        messages: [],
+        tools: [],
+      } as never,
+      undefined,
+    );
+
+    expect(typeof params.max_completion_tokens).toBe("number");
+    const cap = params.max_completion_tokens as number;
+    expect(cap).toBeGreaterThan(0);
+    // Bounded strictly below contextWindow minus input estimate.
+    const estimatedInputTokens = Math.ceil((systemPrompt.length / 4) * 1.25);
+    expect(cap).toBeLessThanOrEqual(262_144 - estimatedInputTokens - 1);
+  });
+
+  it("clamps max_completion_tokens for proxy-like endpoints when configured maxTokens >= contextWindow and prompt is small", () => {
+    // Misconfig case: tiny prompt, but configured maxTokens still exceeds the
+    // model's contextWindow. Clamp should land just under the window.
     const params = buildOpenAICompletionsParams(
       {
         id: "qwen3-5-122b-a10b-nvfp4",
@@ -4788,7 +4825,11 @@ describe("openai transport stream", () => {
       undefined,
     );
 
-    expect(params.max_completion_tokens).toBe(131_071);
+    expect(typeof params.max_completion_tokens).toBe("number");
+    const cap = params.max_completion_tokens as number;
+    expect(cap).toBeLessThan(131_072);
+    // Small prompt → cap is essentially contextWindow - 1 - tiny_input_estimate.
+    expect(cap).toBeGreaterThanOrEqual(131_000);
   });
 
   it("does not clamp max_completion_tokens for proxy-like endpoints when maxTokens fits the context window", () => {
