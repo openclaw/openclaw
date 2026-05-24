@@ -129,11 +129,18 @@ permissions without token fields:
 
 Trusted same-process backend clients (`client.id: "gateway-client"`,
 `client.mode: "backend"`) may omit `device` on direct loopback connections when
-they authenticate with the shared gateway token/password. This path is reserved
-for internal control-plane RPCs and keeps stale CLI/device pairing baselines from
-blocking local backend work such as subagent session updates. Remote clients,
-browser-origin clients, node clients, and explicit device-token/device-identity
-clients still use the normal pairing and scope-upgrade checks.
+they authenticate with the shared gateway token/password **and** either:
+
+- request no operator scopes (unscoped internal control-plane RPCs), or
+- carry the internal approval-runtime token (scoped agentic control-plane paths).
+
+Self-declared operator scopes are cleared for shared-secret backend connects
+without device identity, so scoped local backend calls must use a paired device
+identity or the internal approval-runtime token path. This keeps stale
+CLI/device pairing baselines from blocking unscoped local backend work such as
+subagent session updates. Remote clients, browser-origin clients, node clients,
+and explicit device-token/device-identity clients still use the normal pairing
+and scope-upgrade checks.
 
 When a device token is issued, `hello-ok` also includes:
 
