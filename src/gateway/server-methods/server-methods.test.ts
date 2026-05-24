@@ -710,6 +710,82 @@ describe("projectRecentChatDisplayMessages", () => {
     ]);
   });
 
+  it("drops duplicate ACP gateway-injected assistant replies from chat history", () => {
+    const result = projectRecentChatDisplayMessages([
+      {
+        role: "user",
+        content: [{ type: "text", text: "good morning" }],
+        timestamp: 1,
+      },
+      {
+        role: "assistant",
+        provider: "openclaw",
+        model: "acp-runtime",
+        content: [{ type: "text", text: "Good morning." }],
+        timestamp: 2,
+      },
+      {
+        role: "assistant",
+        provider: "openclaw",
+        model: "gateway-injected",
+        content: [{ type: "text", text: "Good morning." }],
+        idempotencyKey: "run-1",
+        timestamp: 3,
+      },
+    ]);
+
+    expect(result).toEqual([
+      {
+        role: "user",
+        content: [{ type: "text", text: "good morning" }],
+        timestamp: 1,
+      },
+      {
+        role: "assistant",
+        provider: "openclaw",
+        model: "acp-runtime",
+        content: [{ type: "text", text: "Good morning." }],
+        timestamp: 2,
+      },
+    ]);
+  });
+
+  it("keeps gateway-injected assistant replies when they are not duplicate ACP text", () => {
+    const result = projectRecentChatDisplayMessages([
+      {
+        role: "assistant",
+        provider: "openclaw",
+        model: "acp-runtime",
+        content: [{ type: "text", text: "First answer." }],
+        timestamp: 1,
+      },
+      {
+        role: "assistant",
+        provider: "openclaw",
+        model: "gateway-injected",
+        content: [{ type: "text", text: "Second answer." }],
+        timestamp: 2,
+      },
+    ]);
+
+    expect(result).toEqual([
+      {
+        role: "assistant",
+        provider: "openclaw",
+        model: "acp-runtime",
+        content: [{ type: "text", text: "First answer." }],
+        timestamp: 1,
+      },
+      {
+        role: "assistant",
+        provider: "openclaw",
+        model: "gateway-injected",
+        content: [{ type: "text", text: "Second answer." }],
+        timestamp: 2,
+      },
+    ]);
+  });
+
   it("applies history limits after dropping display-hidden messages", () => {
     const result = projectRecentChatDisplayMessages(
       [
