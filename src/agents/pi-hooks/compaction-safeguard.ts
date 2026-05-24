@@ -128,9 +128,9 @@ function coerceTimestamp(value: unknown): number {
   return 0;
 }
 
-function sessionBranchEntryToMessage(entry: SessionBranchEntry): AgentMessage | undefined {
+function sessionBranchEntryToMessage(entry: SessionBranchEntry): unknown {
   if (entry.type === "message" && entry.message && typeof entry.message === "object") {
-    return entry.message as AgentMessage;
+    return entry.message;
   }
   if (entry.type === "custom_message") {
     return {
@@ -140,7 +140,7 @@ function sessionBranchEntryToMessage(entry: SessionBranchEntry): AgentMessage | 
       display: entry.display !== false,
       details: entry.details,
       timestamp: coerceTimestamp(entry.timestamp),
-    } as AgentMessage;
+    };
   }
   if (entry.type === "branch_summary") {
     return {
@@ -148,7 +148,7 @@ function sessionBranchEntryToMessage(entry: SessionBranchEntry): AgentMessage | 
       summary: typeof entry.summary === "string" ? entry.summary : "",
       fromId: typeof entry.fromId === "string" ? entry.fromId : "root",
       timestamp: coerceTimestamp(entry.timestamp),
-    } as AgentMessage;
+    };
   }
   return undefined;
 }
@@ -706,13 +706,10 @@ function splitPreservedRecentTurns(params: {
       continue;
     }
     const message = params.messages[i];
-    const role = (message as { role?: unknown }).role;
-    if (role !== "assistant") {
+    if (message.role !== "assistant") {
       continue;
     }
-    const toolCalls = extractToolCallsFromAssistant(
-      message as Extract<AgentMessage, { role: "assistant" }>,
-    );
+    const toolCalls = extractToolCallsFromAssistant(message);
     for (const toolCall of toolCalls) {
       preservedToolCallIds.add(toolCall.id);
     }
@@ -728,12 +725,10 @@ function splitPreservedRecentTurns(params: {
     if (preservedStartIndex >= 0) {
       for (let i = preservedStartIndex; i < params.messages.length; i += 1) {
         const message = params.messages[i];
-        if ((message as { role?: unknown }).role !== "toolResult") {
+        if (message.role !== "toolResult") {
           continue;
         }
-        const toolResultId = extractToolResultId(
-          message as Extract<AgentMessage, { role: "toolResult" }>,
-        );
+        const toolResultId = extractToolResultId(message);
         if (toolResultId && preservedToolCallIds.has(toolResultId)) {
           preservedIndexSet.add(i);
         }
