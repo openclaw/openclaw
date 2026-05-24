@@ -54,6 +54,7 @@ export function migrateClaworksSchema(db: CwDatabase): void {
     CREATE INDEX IF NOT EXISTS idx_cw_events_type ON cw_events(type);
     CREATE INDEX IF NOT EXISTS idx_cw_events_timestamp ON cw_events(timestamp DESC);
     CREATE INDEX IF NOT EXISTS idx_cw_outbox_due ON cw_outbox(next_attempt_at) WHERE is_dead = 0;
+    CREATE INDEX IF NOT EXISTS idx_cw_objects_type_created ON cw_objects(type_name, created_at DESC);
   `);
 }
 

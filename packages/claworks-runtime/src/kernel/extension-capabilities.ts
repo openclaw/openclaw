@@ -1314,13 +1314,13 @@ export function makeScheduleCapabilities(runtime: ClaworksRuntime): CapabilityDe
         const timezone = params.timezone ? String(params.timezone) : undefined;
 
         if (!playbookId || !cron) {
-          return { status: "error", reason: "playbook_id and cron are required" };
+          return { status: "error", reason: "缺少必需参数：playbook_id 和 cron 表达式" };
         }
 
         // Verify the playbook exists
         const existing = runtime.playbookEngine.list().find((p) => p.id === playbookId);
         if (!existing) {
-          return { status: "error", reason: `playbook '${playbookId}' not found` };
+          return { status: "error", reason: `Playbook「${playbookId}」不存在，请检查 playbook_id` };
         }
 
         // Build a minimal PlaybookDefinition and register in scheduler
@@ -1335,7 +1335,10 @@ export function makeScheduleCapabilities(runtime: ClaworksRuntime): CapabilityDe
         try {
           runtime.scheduler.add(dynDef);
         } catch {
-          return { status: "error", reason: `invalid cron expression: '${cron}'` };
+          return {
+            status: "error",
+            reason: `cron 表达式无效：'${cron}'，请使用标准 5 段格式（如 "0 9 * * 1-5"）`,
+          };
         }
         // Record so schedule.remove can preserve other dynamic crons during reload
         dynamicSchedules.set(playbookId, dynDef);

@@ -6,6 +6,9 @@ Docs: https://docs.openclaw.ai
 
 ### Changes
 
+- ClaWorks: add composite index `idx_cw_objects_type_created` on `cw_objects(type_name, created_at DESC)` in both schema bootstrap and `db-migrate.ts` to speed up time-range queries (e.g. daily report stats, alarm trend aggregation).
+- ClaWorks: improve user-facing error messages in `schedule.add` capability — English error strings replaced with descriptive Chinese messages (`"缺少必需参数：playbook_id 和 cron 表达式"`, `"Playbook「X」不存在"`, `"cron 表达式无效：'X'，请使用标准 5 段格式"`).
+- ClaWorks (9th-round final review): verified card-builder quality (alarm/workOrder/approval/report/healthStatus/dailyReport all produce correct `msg_type: "interactive"` Feishu JSON with severity colors, field groups, and action buttons), capability-gap analysis (204 capabilities registered, all 81 Playbook-used actions are covered — `create_*` catch-all handles commercial Pack actions, KB actions are registered as top-level capabilities in `extension-capabilities.ts`), Pack SDK JSDoc completeness, and DB schema correctness (14 tables, 20+ indexes, idempotent migrations).
 - ClaWorks: add `CW_EVENTS` constant map in `packages/claworks-runtime/src/kernel/event-names.ts` covering all published/subscribed event names, eliminating hardcoded string literals across playbook triggers and kernel publishes.
 - ClaWorks: add `skill.run` kernel capability so Playbook `kind: action` steps can invoke OpenClaw ClawHub Skills (AI reasoning via `runEmbeddedAgent`) in addition to the existing `kind: skill` step type.
 - ClaWorks: add `system.has_skill` and `system.list_skills` kernel capabilities to inspect available OpenClaw Skills and built-in ClaWorks scripts at runtime.

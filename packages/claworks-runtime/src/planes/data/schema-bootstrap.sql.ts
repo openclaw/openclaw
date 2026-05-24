@@ -13,6 +13,7 @@ CREATE TABLE IF NOT EXISTS cw_objects (
   PRIMARY KEY (id, type_name)
 );
 CREATE INDEX IF NOT EXISTS idx_cw_objects_type ON cw_objects(type_name);
+CREATE INDEX IF NOT EXISTS idx_cw_objects_type_created ON cw_objects(type_name, created_at DESC);
 
 CREATE TABLE IF NOT EXISTS cw_playbook_runs (
   id TEXT PRIMARY KEY,
