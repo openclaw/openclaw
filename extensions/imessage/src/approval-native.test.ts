@@ -267,8 +267,8 @@ describe("imessage approval capability", () => {
   it("renders thumbs-only reaction hints in exec approval prompts", () => {
     const payload = imessageApprovalCapability.render?.exec?.buildPendingPayload?.({
       cfg: buildConfig(),
-      accountId: "default",
       request: buildExecRequest("+15551230000"),
+      target: { channel: "imessage", to: "+15551230000", source: "target" },
       nowMs: 0,
     });
 
@@ -279,10 +279,10 @@ describe("imessage approval capability", () => {
   it("renders thumbs-only reaction hints in plugin approval prompts and respects allowed decisions", () => {
     const payload = imessageApprovalCapability.render?.plugin?.buildPendingPayload?.({
       cfg: buildConfig(),
-      accountId: "default",
       request: buildPluginRequest("+15551230000", {
         allowedDecisions: ["allow-once", "deny"],
       }) as never,
+      target: { channel: "imessage", to: "+15551230000", source: "target" },
       nowMs: 0,
     });
 
@@ -309,8 +309,8 @@ describe("imessage approval capability", () => {
 
     const payload = imessageApprovalCapability.render?.exec?.buildPendingPayload?.({
       cfg,
-      accountId: "default",
       request,
+      target: { channel: "imessage", to: "+15551230000", source: "target" },
       nowMs: 0,
     });
     const text = payload?.text ?? "";
@@ -342,8 +342,8 @@ describe("imessage approval capability", () => {
 
     const payload = imessageApprovalCapability.render?.plugin?.buildPendingPayload?.({
       cfg,
-      accountId: "default",
       request: request as never,
+      target: { channel: "imessage", to: "+15551230000", source: "target" },
       nowMs: 0,
     });
 
