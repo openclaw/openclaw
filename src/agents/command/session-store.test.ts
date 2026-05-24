@@ -1284,6 +1284,96 @@ describe("updateSessionStoreAfterAgentRun", () => {
     });
   });
 
+  it("preserves user-facing run accounting while allowing session touch metadata", async () => {
+    await withTempSessionStore(async ({ storePath }) => {
+      const cfg = {
+        agents: {
+          defaults: {
+            cliBackends: {
+              "claude-cli": {},
+            },
+          },
+        },
+      } as OpenClawConfig;
+      const sessionKey = "agent:main:explicit:test-preserve-user-facing-run-state";
+      const sessionId = "test-preserve-user-facing-run-state-session";
+      const sessionStore: Record<string, SessionEntry> = {
+        [sessionKey]: {
+          sessionId,
+          updatedAt: 1,
+          lastInteractionAt: 10,
+          modelProvider: "anthropic",
+          model: "claude-opus-4-6",
+          contextTokens: 1_000_000,
+          inputTokens: 11,
+          outputTokens: 22,
+          totalTokens: 333,
+          totalTokensFresh: true,
+          cacheRead: 4,
+          cacheWrite: 5,
+          estimatedCostUsd: 0.25,
+          abortedLastRun: false,
+          cliSessionBindings: {
+            "claude-cli": { sessionId: "visible-cli-session" },
+          },
+          compactionCount: 7,
+        },
+      };
+      await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2));
+
+      const result: EmbeddedPiRunResult = {
+        meta: {
+          durationMs: 500,
+          aborted: true,
+          agentMeta: {
+            sessionId,
+            provider: "claude-cli",
+            model: "claude-sonnet-4-6",
+            contextTokens: 200_000,
+            usage: {
+              input: 100,
+              output: 50,
+              cacheRead: 10,
+              cacheWrite: 20,
+            },
+            compactionCount: 3,
+            cliSessionBinding: {
+              sessionId: "handoff-cli-session",
+            },
+          },
+        },
+      };
+
+      await updateSessionStoreAfterAgentRun({
+        cfg,
+        sessionId,
+        sessionKey,
+        storePath,
+        sessionStore,
+        defaultProvider: "claude-cli",
+        defaultModel: "claude-sonnet-4-6",
+        result,
+        preserveUserFacingSessionModelState: true,
+      });
+
+      const next = sessionStore[sessionKey];
+      expect(next?.modelProvider).toBe("anthropic");
+      expect(next?.model).toBe("claude-opus-4-6");
+      expect(next?.contextTokens).toBe(1_000_000);
+      expect(next?.inputTokens).toBe(11);
+      expect(next?.outputTokens).toBe(22);
+      expect(next?.totalTokens).toBe(333);
+      expect(next?.totalTokensFresh).toBe(true);
+      expect(next?.cacheRead).toBe(4);
+      expect(next?.cacheWrite).toBe(5);
+      expect(next?.estimatedCostUsd).toBe(0.25);
+      expect(next?.abortedLastRun).toBe(false);
+      expect(next?.cliSessionBindings?.["claude-cli"]?.sessionId).toBe("visible-cli-session");
+      expect(next?.compactionCount).toBe(7);
+      expect(next?.lastInteractionAt).toBeGreaterThan(10);
+    });
+  });
+
   it("leaves contextTokens unset when entry has prior model but no contextTokens (heartbeat bleed guard)", async () => {
     await withTempSessionStore(async ({ storePath }) => {
       const cfg = {} as OpenClawConfig;
