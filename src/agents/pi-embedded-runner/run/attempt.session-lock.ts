@@ -398,10 +398,11 @@ type TrustedSessionFileState = {
   fingerprint: SessionFileFingerprint;
 };
 
-type ActivePromptSessionFileHolder = {
-  owner: symbol;
+type PromptSessionFileTurn = {
+  previous?: Promise<void>;
   released: Promise<void>;
   release: () => void;
+  tail: Promise<void>;
 };
 
 // Controllers in the same OpenClaw process can legitimately take turns writing
@@ -411,42 +412,43 @@ type ActivePromptSessionFileHolder = {
 // external file changes.
 const ownedSessionFileWrites = new Map<string, OwnedSessionFileWrite>();
 const trustedSessionFileStates = new Map<string, TrustedSessionFileState>();
-const activePromptSessionFileHolders = new Map<string, ActivePromptSessionFileHolder>();
+const promptSessionFileTurnTails = new Map<string, Promise<void>>();
+const promptSessionFileTurns = new Set<PromptSessionFileTurn>();
 let ownedSessionFileWriteGeneration = 0;
 
 function resolveSessionFileFenceKey(sessionFile: string): string {
   return path.resolve(sessionFile);
 }
 
-async function waitForPromptSessionFileTurn(sessionFileKey: string, owner: symbol): Promise<void> {
-  while (true) {
-    const holder = activePromptSessionFileHolders.get(sessionFileKey);
-    if (!holder || holder.owner === owner) {
-      return;
-    }
-    await holder.released;
-  }
-}
-
-function registerPromptSessionFileHolder(sessionFileKey: string, owner: symbol): void {
-  const current = activePromptSessionFileHolders.get(sessionFileKey);
-  if (current?.owner === owner) {
-    return;
-  }
+function enqueuePromptSessionFileTurn(sessionFileKey: string): PromptSessionFileTurn {
+  const previous = promptSessionFileTurnTails.get(sessionFileKey);
   let release!: () => void;
-  const released = new Promise<void>((resolve) => {
-    release = resolve;
+  let hasReleased = false;
+  const releasedPromise = new Promise<void>((resolve) => {
+    release = () => {
+      if (hasReleased) {
+        return;
+      }
+      hasReleased = true;
+      resolve();
+    };
   });
-  activePromptSessionFileHolders.set(sessionFileKey, { owner, released, release });
-}
-
-function releasePromptSessionFileHolder(sessionFileKey: string, owner: symbol): void {
-  const holder = activePromptSessionFileHolders.get(sessionFileKey);
-  if (holder?.owner !== owner) {
-    return;
-  }
-  activePromptSessionFileHolders.delete(sessionFileKey);
-  holder.release();
+  const tail = (previous ?? Promise.resolve()).then(() => releasedPromise);
+  const turn: PromptSessionFileTurn = {
+    previous,
+    released: releasedPromise,
+    release: () => {
+      release();
+      promptSessionFileTurns.delete(turn);
+      if (promptSessionFileTurnTails.get(sessionFileKey) === tail) {
+        promptSessionFileTurnTails.delete(sessionFileKey);
+      }
+    },
+    tail,
+  };
+  promptSessionFileTurns.add(turn);
+  promptSessionFileTurnTails.set(sessionFileKey, tail);
+  return turn;
 }
 
 function recordOwnedSessionFileWrite(
@@ -691,7 +693,7 @@ export async function createEmbeddedAttemptSessionLockController(params: {
   let fenceActive = false;
   let takeoverDetected = false;
   const sessionFileFenceKey = resolveSessionFileFenceKey(params.lockOptions.sessionFile);
-  const promptSessionFileOwner = Symbol(sessionFileFenceKey);
+  let activePromptSessionFileTurn: PromptSessionFileTurn | undefined;
 
   async function releaseHeldLockForUnlockedSessionWindow(releaseParams: {
     registerPromptHolder: boolean;
@@ -699,40 +701,46 @@ export async function createEmbeddedAttemptSessionLockController(params: {
     if (!heldLock) {
       return;
     }
-    if (releaseParams.registerPromptHolder) {
-      const existingPromptHolder = activePromptSessionFileHolders.get(sessionFileFenceKey);
-      if (existingPromptHolder && existingPromptHolder.owner !== promptSessionFileOwner) {
+    const promptTurn = releaseParams.registerPromptHolder
+      ? enqueuePromptSessionFileTurn(sessionFileFenceKey)
+      : undefined;
+    let promptWindowReleased = false;
+    try {
+      if (promptTurn?.previous) {
         const waitingLock = heldLock;
-        heldLock = undefined;
         await waitingLock.release();
-        await waitForPromptSessionFileTurn(sessionFileFenceKey, promptSessionFileOwner);
+        if (heldLock === waitingLock) {
+          heldLock = undefined;
+        }
+        await promptTurn.previous;
         const reacquired = await acquireWriteLock();
         heldLock = reacquired.lock;
       }
-    }
-    const lock = heldLock;
-    if (!lock) {
-      return;
-    }
-    heldLock = undefined;
-    const fingerprint = await readSessionFileFingerprint(params.lockOptions.sessionFile);
-    const ownedWrite = ownedSessionFileWrites.get(sessionFileFenceKey);
-    const trustedGeneration = trustSessionFileState(sessionFileFenceKey, fingerprint);
-    fenceFingerprint = fingerprint;
-    fenceSnapshot = await readSessionFileFenceSnapshot(params.lockOptions.sessionFile);
-    fenceGeneration =
-      ownedWrite && sameSessionFileFingerprint(ownedWrite.fingerprint, fingerprint)
-        ? ownedWrite.generation
-        : (trustedGeneration ?? fenceGeneration);
-    fenceActive = true;
-    if (releaseParams.registerPromptHolder) {
-      registerPromptSessionFileHolder(sessionFileFenceKey, promptSessionFileOwner);
-    }
-    try {
+      const lock = heldLock;
+      if (!lock) {
+        promptTurn?.release();
+        return;
+      }
+      const fingerprint = await readSessionFileFingerprint(params.lockOptions.sessionFile);
+      const ownedWrite = ownedSessionFileWrites.get(sessionFileFenceKey);
+      const trustedGeneration = trustSessionFileState(sessionFileFenceKey, fingerprint);
+      fenceFingerprint = fingerprint;
+      fenceSnapshot = await readSessionFileFenceSnapshot(params.lockOptions.sessionFile);
+      fenceGeneration =
+        ownedWrite && sameSessionFileFingerprint(ownedWrite.fingerprint, fingerprint)
+          ? ownedWrite.generation
+          : (trustedGeneration ?? fenceGeneration);
+      fenceActive = true;
+      activePromptSessionFileTurn = promptTurn;
+      heldLock = undefined;
       await lock.release();
+      promptWindowReleased = true;
     } catch (err) {
-      if (releaseParams.registerPromptHolder) {
-        releasePromptSessionFileHolder(sessionFileFenceKey, promptSessionFileOwner);
+      if (!promptWindowReleased) {
+        promptTurn?.release();
+        if (activePromptSessionFileTurn === promptTurn) {
+          activePromptSessionFileTurn = undefined;
+        }
       }
       throw err;
     }
@@ -852,7 +860,8 @@ export async function createEmbeddedAttemptSessionLockController(params: {
     },
     async reacquireAfterPrompt(): Promise<void> {
       if (takeoverDetected || heldLock) {
-        releasePromptSessionFileHolder(sessionFileFenceKey, promptSessionFileOwner);
+        activePromptSessionFileTurn?.release();
+        activePromptSessionFileTurn = undefined;
         return;
       }
       let lock: SessionLock | undefined;
@@ -867,7 +876,8 @@ export async function createEmbeddedAttemptSessionLockController(params: {
         }
         throw err;
       } finally {
-        releasePromptSessionFileHolder(sessionFileFenceKey, promptSessionFileOwner);
+        activePromptSessionFileTurn?.release();
+        activePromptSessionFileTurn = undefined;
       }
     },
     waitForSessionEvents: waitForSessionEventQueue,
@@ -955,10 +965,11 @@ export async function createEmbeddedAttemptSessionLockController(params: {
 }
 
 export function resetEmbeddedAttemptSessionFilePromptGuardsForTest(): void {
-  for (const holder of activePromptSessionFileHolders.values()) {
-    holder.release();
+  for (const turn of promptSessionFileTurns) {
+    turn.release();
   }
-  activePromptSessionFileHolders.clear();
+  promptSessionFileTurns.clear();
+  promptSessionFileTurnTails.clear();
 }
 
 export function installPromptSubmissionLockRelease(params: {

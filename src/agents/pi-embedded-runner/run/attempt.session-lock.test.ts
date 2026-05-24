@@ -560,6 +560,129 @@ describe("embedded attempt session lock lifecycle", () => {
     expect(secondController.hasSessionTakeover()).toBe(false);
   });
 
+  it("keeps later waiters behind a newly registered same-file prompt holder", async () => {
+    const sessionFile = await createTempSessionFile();
+    const events: string[] = [];
+    let acquireCount = 0;
+    const acquireSessionWriteLock = vi.fn(async () => {
+      acquireCount += 1;
+      const lockId = acquireCount;
+      events.push(`acquire-${lockId}`);
+      return {
+        release: vi.fn(async () => {
+          events.push(`release-${lockId}`);
+        }),
+      };
+    });
+    const firstController = await createEmbeddedAttemptSessionLockController({
+      acquireSessionWriteLock,
+      lockOptions: { ...lockOptions, sessionFile },
+    });
+
+    await firstController.releaseForPrompt();
+
+    const secondController = await createEmbeddedAttemptSessionLockController({
+      acquireSessionWriteLock,
+      lockOptions: { ...lockOptions, sessionFile },
+    });
+    const thirdController = await createEmbeddedAttemptSessionLockController({
+      acquireSessionWriteLock,
+      lockOptions: { ...lockOptions, sessionFile },
+    });
+    let secondReleasedForPrompt = false;
+    let thirdReleasedForPrompt = false;
+    const secondRelease = secondController.releaseForPrompt().then(() => {
+      secondReleasedForPrompt = true;
+      events.push("second released for prompt");
+    });
+    await Promise.resolve();
+    const thirdRelease = thirdController.releaseForPrompt().then(() => {
+      thirdReleasedForPrompt = true;
+      events.push("third released for prompt");
+    });
+    await Promise.resolve();
+
+    expect(secondReleasedForPrompt).toBe(false);
+    expect(thirdReleasedForPrompt).toBe(false);
+
+    await firstController.reacquireAfterPrompt();
+    await secondRelease;
+    await Promise.resolve();
+
+    expect(secondReleasedForPrompt).toBe(true);
+    expect(thirdReleasedForPrompt).toBe(false);
+
+    await secondController.reacquireAfterPrompt();
+    await thirdRelease;
+
+    expect(thirdReleasedForPrompt).toBe(true);
+    expect(events.indexOf("second released for prompt")).toBeGreaterThanOrEqual(0);
+    expect(events.indexOf("third released for prompt")).toBeGreaterThan(
+      events.indexOf("second released for prompt"),
+    );
+    expect(firstController.hasSessionTakeover()).toBe(false);
+    expect(secondController.hasSessionTakeover()).toBe(false);
+    expect(thirdController.hasSessionTakeover()).toBe(false);
+  });
+
+  it("releases a queued prompt holder when same-file waiter reacquire times out", async () => {
+    const sessionFile = await createTempSessionFile();
+    const events: string[] = [];
+    let acquireCount = 0;
+    const reacquireError = new SessionWriteLockTimeoutError({
+      timeoutMs: lockOptions.timeoutMs,
+      owner: "pid=789",
+      lockPath: `${sessionFile}.lock`,
+    });
+    const acquireSessionWriteLock = vi.fn(async () => {
+      acquireCount += 1;
+      const lockId = acquireCount;
+      events.push(`acquire-${lockId}`);
+      if (lockId === 5) {
+        events.push("second reacquire timeout");
+        throw reacquireError;
+      }
+      return {
+        release: vi.fn(async () => {
+          events.push(`release-${lockId}`);
+        }),
+      };
+    });
+    const firstController = await createEmbeddedAttemptSessionLockController({
+      acquireSessionWriteLock,
+      lockOptions: { ...lockOptions, sessionFile },
+    });
+
+    await firstController.releaseForPrompt();
+
+    const secondController = await createEmbeddedAttemptSessionLockController({
+      acquireSessionWriteLock,
+      lockOptions: { ...lockOptions, sessionFile },
+    });
+    const thirdController = await createEmbeddedAttemptSessionLockController({
+      acquireSessionWriteLock,
+      lockOptions: { ...lockOptions, sessionFile },
+    });
+    const secondRelease = secondController.releaseForPrompt();
+    await Promise.resolve();
+    const thirdRelease = thirdController.releaseForPrompt().then(() => "released" as const);
+    await Promise.resolve();
+
+    await firstController.reacquireAfterPrompt();
+    await expect(secondRelease).rejects.toBe(reacquireError);
+    await expect(
+      Promise.race([
+        thirdRelease,
+        new Promise<"blocked">((resolve) => {
+          setTimeout(() => resolve("blocked"), 50);
+        }),
+      ]),
+    ).resolves.toBe("released");
+
+    expect(events).toContain("second reacquire timeout");
+    expect(thirdController.hasSessionTakeover()).toBe(false);
+  });
+
   it("does not keep a prompt holder after a compaction wait release reacquires through writes", async () => {
     const sessionFile = await createTempSessionFile();
     const events: string[] = [];
