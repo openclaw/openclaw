@@ -317,6 +317,12 @@ describe("sessions_spawn tool", () => {
     expect(schema.properties?.toolsAllow?.type).toBe("array");
     expect(schema.properties?.toolsAllow?.items?.type).toBe("string");
     expect(schema.properties?.toolsAllow?.description).toContain('runtime="subagent"');
+    expect(schema.properties?.toolsAllow?.description).toContain(
+      "Persistent native thread/session spawns store the allowlist",
+    );
+    expect(schema.properties?.toolsAllow?.description).not.toContain(
+      "Persistent thread/session spawns",
+    );
   });
 
   it("uses subagent runtime by default", async () => {

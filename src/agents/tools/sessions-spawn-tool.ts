@@ -227,7 +227,7 @@ function createSessionsSpawnToolSchema(params: {
         }),
         {
           description:
-            'Allowed tool ids for embedded runtime="subagent" runs. Omit to use the default tool set; pass [] to disable all tools. ACP and CLI-backed native runs reject this field.',
+            'Allowed tool ids for embedded runtime="subagent" runs. Omit to use the default tool set; pass [] to disable all tools. Persistent native thread/session spawns store the allowlist on the child session and reuse it on follow-up turns. ACP and CLI-backed native runs reject this field.',
         },
       ),
     ),
