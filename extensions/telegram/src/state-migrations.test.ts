@@ -148,10 +148,10 @@ describe("telegram state migrations", () => {
     }
   });
 
-  it("detects legacy topic-name cache import for the runtime sidecar path", async () => {
+  it("detects legacy topic-name cache import for an account-scoped runtime sidecar path", async () => {
     const dir = await mkdtemp(path.join(os.tmpdir(), "openclaw-telegram-state-migration-"));
     const env = { ...process.env, OPENCLAW_STATE_DIR: dir };
-    const storePath = resolveStorePath(undefined, { env });
+    const storePath = resolveStorePath(undefined, { env, agentId: "ops" });
     const persistedPath = resolveTopicNameCachePath(storePath);
     const namespace = resolveTopicNameCacheNamespace(resolveTopicNameCacheScope(storePath));
     try {
@@ -168,8 +168,14 @@ describe("telegram state migrations", () => {
       );
 
       const cfg = {
-        agents: {
-          list: [{ id: "ops", default: true }],
+        channels: {
+          telegram: {
+            accounts: {
+              ops: {
+                botToken: "123456:secret",
+              },
+            },
+          },
         },
       } as OpenClawConfig;
       const plans = await detectTelegramLegacyStateMigrations({ cfg, env });
@@ -198,6 +204,73 @@ describe("telegram state migrations", () => {
             name: "Deployments",
             iconColor: 0x6fb9f0,
             updatedAt: 1736380000,
+          },
+        },
+      ]);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("detects legacy topic-name cache import for the global sidecar path", async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), "openclaw-telegram-state-migration-"));
+    const env = { ...process.env, OPENCLAW_STATE_DIR: dir };
+    const legacyStorePath = path.join(dir, "sessions", "sessions.json");
+    const persistedPath = resolveTopicNameCachePath(legacyStorePath);
+    const defaultAccountStorePath = resolveStorePath(undefined, { env, agentId: "ops" });
+    const namespace = resolveTopicNameCacheNamespace(
+      resolveTopicNameCacheScope(defaultAccountStorePath),
+    );
+    try {
+      await mkdir(path.dirname(persistedPath), { recursive: true });
+      await writeFile(
+        persistedPath,
+        JSON.stringify({
+          "7:43": {
+            name: "Legacy Deployments",
+            iconColor: 0x6fb9f1,
+            updatedAt: 1736380001,
+          },
+        }),
+      );
+
+      const cfg = {
+        channels: {
+          telegram: {
+            accounts: {
+              ops: {
+                botToken: "123456:secret",
+              },
+            },
+          },
+        },
+      } as OpenClawConfig;
+      const plans = await detectTelegramLegacyStateMigrations({ cfg, env });
+      const topicNamePlan = plans.find(
+        (plan) =>
+          plan.kind === "plugin-state-import" && plan.label === "Telegram forum topic-name cache",
+      );
+
+      expect(topicNamePlan).toMatchObject({
+        kind: "plugin-state-import",
+        sourcePath: persistedPath,
+        targetPath: `plugin state:${namespace}`,
+        pluginId: "telegram",
+        namespace,
+        scopeKey: "",
+      });
+      if (!topicNamePlan || topicNamePlan.kind !== "plugin-state-import") {
+        throw new Error("expected Telegram topic-name plugin-state import plan");
+      }
+
+      const entries = await topicNamePlan.readEntries();
+      expect(entries).toStrictEqual([
+        {
+          key: "7:43",
+          value: {
+            name: "Legacy Deployments",
+            iconColor: 0x6fb9f1,
+            updatedAt: 1736380001,
           },
         },
       ]);
