@@ -67,6 +67,7 @@ import {
   resolveVoiceWakeRouteByTrigger,
 } from "../../infra/voicewake-routing.js";
 import type { PromptImageOrderEntry } from "../../media/prompt-image-order.js";
+import type { PluginHookSessionEndReason } from "../../plugins/hook-types.js";
 import {
   classifySessionKeyShape,
   isAcpSessionKey,
@@ -130,7 +131,11 @@ import {
   validateAgentParams,
   validateAgentWaitParams,
 } from "../protocol/index.js";
-import { performGatewaySessionReset } from "../session-reset-service.js";
+import {
+  emitGatewaySessionEndPluginHook,
+  emitGatewaySessionStartPluginHook,
+  performGatewaySessionReset,
+} from "../session-reset-service.js";
 import { reactivateCompletedSubagentSession } from "../session-subagent-reactivation.js";
 import {
   canonicalizeSpawnedByForAgent,
@@ -157,6 +162,18 @@ import type {
 } from "./types.js";
 
 const RESET_COMMAND_RE = /^\/(new|reset)(?:\s+([\s\S]*))?$/i;
+
+type AgentSendSessionLifecycleTransition = {
+  cfg: OpenClawConfig;
+  sessionKey: string;
+  sessionId: string;
+  storePath: string;
+  sessionFile?: string;
+  agentId?: string;
+  previousSessionId?: string;
+  previousSessionFile?: string;
+  previousEndReason?: PluginHookSessionEndReason;
+};
 
 function formatAttachmentFailureForLog(err: unknown): string {
   const primary = formatUncaughtError(err);
@@ -201,6 +218,80 @@ function resolveCanUseInternalRuntimeHandoff(
   client: GatewayRequestHandlerOptions["client"],
 ): boolean {
   return client?.connect?.client?.mode === GATEWAY_CLIENT_MODES.BACKEND;
+}
+
+function normalizeLifecycleTimestamp(value: number | undefined, now: number): number | undefined {
+  if (typeof value !== "number" || !Number.isFinite(value) || value < 0 || value > now) {
+    return undefined;
+  }
+  return value;
+}
+
+function resolveAgentSendRotationEndReason(params: {
+  updatedAt: number | undefined;
+  sessionStartedAt?: number;
+  lastInteractionAt?: number;
+  dailyResetAt?: number;
+  idleExpiresAt?: number;
+  now: number;
+  replacedByRequestedSessionId: boolean;
+}): PluginHookSessionEndReason {
+  const updatedAt = normalizeLifecycleTimestamp(params.updatedAt, params.now) ?? 0;
+  const sessionStartedAt =
+    normalizeLifecycleTimestamp(params.sessionStartedAt, params.now) ?? updatedAt;
+  const lastInteractionAt =
+    normalizeLifecycleTimestamp(params.lastInteractionAt, params.now) ?? sessionStartedAt;
+  const dailyExpired =
+    params.dailyResetAt != null && Number.isFinite(params.dailyResetAt)
+      ? sessionStartedAt < params.dailyResetAt
+      : false;
+  const idleExpired =
+    params.idleExpiresAt != null && Number.isFinite(params.idleExpiresAt)
+      ? params.now > params.idleExpiresAt && lastInteractionAt <= params.idleExpiresAt
+      : false;
+  if (dailyExpired && idleExpired) {
+    return (params.dailyResetAt ?? Number.POSITIVE_INFINITY) <=
+      (params.idleExpiresAt ?? Number.POSITIVE_INFINITY)
+      ? "daily"
+      : "idle";
+  }
+  if (dailyExpired) {
+    return "daily";
+  }
+  if (idleExpired) {
+    return "idle";
+  }
+  return params.replacedByRequestedSessionId ? "new" : "unknown";
+}
+
+function emitAgentSendSessionLifecycleTransition(
+  transition: AgentSendSessionLifecycleTransition | undefined,
+): void {
+  if (!transition) {
+    return;
+  }
+  if (transition.previousSessionId) {
+    emitGatewaySessionEndPluginHook({
+      cfg: transition.cfg,
+      sessionKey: transition.sessionKey,
+      sessionId: transition.previousSessionId,
+      storePath: transition.storePath,
+      sessionFile: transition.previousSessionFile,
+      agentId: transition.agentId,
+      reason: transition.previousEndReason ?? "unknown",
+      nextSessionId: transition.sessionId,
+      nextSessionKey: transition.sessionKey,
+    });
+  }
+  emitGatewaySessionStartPluginHook({
+    cfg: transition.cfg,
+    sessionKey: transition.sessionKey,
+    sessionId: transition.sessionId,
+    resumedFrom: transition.previousSessionId,
+    storePath: transition.storePath,
+    sessionFile: transition.sessionFile,
+    agentId: transition.agentId,
+  });
 }
 
 async function runSessionResetFromAgent(params: {
@@ -1159,6 +1250,7 @@ export const agentHandlers: GatewayRequestHandlers = {
       let isNewSession = false;
       let skipTimestampInjection = false;
       let shouldPrependStartupContext = false;
+      let sessionLifecycleTransition: AgentSendSessionLifecycleTransition | undefined;
 
       const resetCommandMatch = message.match(RESET_COMMAND_RE);
       if (resetCommandMatch && requestedSessionKey) {
@@ -1257,14 +1349,17 @@ export const agentHandlers: GatewayRequestHandlers = {
             channel: entry?.lastChannel ?? entry?.channel ?? request.channel,
           }),
         });
+        const lifecycleTimestamps = entry
+          ? resolveSessionLifecycleTimestamps({
+              entry,
+              storePath,
+              agentId: resolveAgentIdFromSessionKey(canonicalKey),
+            })
+          : undefined;
         const freshness = entry
           ? evaluateSessionFreshness({
               updatedAt: entry.updatedAt,
-              ...resolveSessionLifecycleTimestamps({
-                entry,
-                storePath,
-                agentId: resolveAgentIdFromSessionKey(canonicalKey),
-              }),
+              ...lifecycleTimestamps,
               now,
               policy: resetPolicy,
             })
@@ -1310,6 +1405,7 @@ export const agentHandlers: GatewayRequestHandlers = {
           groupId: string | undefined;
           groupChannel: string | undefined;
           groupSpace: string | undefined;
+          freshSessionRotatedSinceLoad: boolean;
         };
         const requestDeliveryHint = normalizeDeliveryContext({
           channel: request.channel?.trim(),
@@ -1447,6 +1543,7 @@ export const agentHandlers: GatewayRequestHandlers = {
             groupId: nextGroup.groupId,
             groupChannel: nextGroup.groupChannel,
             groupSpace: nextGroup.groupSpace,
+            freshSessionRotatedSinceLoad,
           };
         };
         let patchBuild = buildSessionPatch(entry);
@@ -1537,6 +1634,38 @@ export const agentHandlers: GatewayRequestHandlers = {
             );
             return;
           }
+        }
+        if (
+          !suppressVisibleSessionEffects &&
+          isNewSession &&
+          resolvedSessionId &&
+          storePath &&
+          !patchBuild.freshSessionRotatedSinceLoad
+        ) {
+          const previousSessionId = rotatedSessionId ? entry?.sessionId : undefined;
+          sessionLifecycleTransition = {
+            cfg,
+            sessionKey: canonicalSessionKey,
+            sessionId: resolvedSessionId,
+            storePath,
+            sessionFile: sessionEntry?.sessionFile,
+            agentId,
+            previousSessionId,
+            previousSessionFile: previousSessionId ? entry?.sessionFile : undefined,
+            previousEndReason: previousSessionId
+              ? resolveAgentSendRotationEndReason({
+                  updatedAt: entry?.updatedAt,
+                  sessionStartedAt: lifecycleTimestamps?.sessionStartedAt,
+                  lastInteractionAt: lifecycleTimestamps?.lastInteractionAt,
+                  dailyResetAt: freshness?.dailyResetAt,
+                  idleExpiresAt: freshness?.idleExpiresAt,
+                  now,
+                  replacedByRequestedSessionId: Boolean(
+                    usableRequestedSessionId && entry?.sessionId !== usableRequestedSessionId,
+                  ),
+                })
+              : undefined,
+          };
         }
         if (
           !suppressVisibleSessionEffects &&
@@ -1836,6 +1965,7 @@ export const agentHandlers: GatewayRequestHandlers = {
           }
 
           if (requestedSessionKey && resolvedSessionKey && isNewSession) {
+            emitAgentSendSessionLifecycleTransition(sessionLifecycleTransition);
             emitSessionsChanged(context, {
               sessionKey: resolvedSessionKey,
               reason: "create",
