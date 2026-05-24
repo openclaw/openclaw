@@ -112,7 +112,7 @@ export async function handleChannelBrokerInboundHttpRequest(params: {
   const body = await readWebhookBodyOrReject({
     req: params.req,
     res: params.res,
-    profile: "post-auth",
+    profile: "pre-auth",
     invalidBodyMessage: "invalid payload",
   });
   if (!body.ok) {

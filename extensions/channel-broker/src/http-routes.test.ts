@@ -161,6 +161,23 @@ describe("channel-broker HTTP routes", () => {
     expect(receiveInboundEvent).not.toHaveBeenCalled();
   });
 
+  it("applies the pre-auth body limit before signature verification", async () => {
+    const body = inboundBody("user-1", { message: { id: "101", text: "x".repeat(70 * 1024) } });
+    const receiveInboundEvent = vi.fn();
+    setChannelBrokerRuntime({ receiveInboundEvent });
+    const res = createResponse();
+
+    await handleChannelBrokerInboundHttpRequest({
+      cfg: brokerConfig(),
+      req: createRequest({ body, signature: sign(body, "wrong-secret") }),
+      res,
+    });
+
+    expect(res.statusCode).toBe(413);
+    expect(res.body).toBe("Payload too large");
+    expect(receiveInboundEvent).not.toHaveBeenCalled();
+  });
+
   it("enforces configured broker sender allowlists before runtime dispatch", async () => {
     const body = inboundBody("blocked-user");
     const receiveInboundEvent = vi.fn();
