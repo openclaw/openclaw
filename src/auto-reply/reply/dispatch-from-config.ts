@@ -956,6 +956,7 @@ export async function dispatchReplyFromConfig(
     return { status: "ready" };
   };
   const getPreDispatchAbortOperation = () => dispatchAbortOperation ?? preDispatchAbortOperation;
+  const getDispatchAbortSignal = () => getPreDispatchAbortOperation()?.abortSignal;
   const getReplyOptions = () =>
     dispatchReplyOperation
       ? {
@@ -974,7 +975,7 @@ export async function dispatchReplyFromConfig(
       dispatchReplyOperation.fail("run_failed", error);
     }
   };
-  const isDispatchOperationAborted = () => dispatchAbortOperation?.abortSignal.aborted === true;
+  const isDispatchOperationAborted = () => getDispatchAbortSignal()?.aborted === true;
   const throwIfDispatchOperationAborted = () => {
     if (isDispatchOperationAborted()) {
       throw new DispatchReplyOperationAbortedError();
@@ -1125,7 +1126,7 @@ export async function dispatchReplyFromConfig(
     if (!routeReplyRuntime || !routeReplyChannel || !routeReplyTo) {
       return;
     }
-    const effectiveAbortSignal = abortSignal ?? dispatchAbortOperation?.abortSignal;
+    const effectiveAbortSignal = abortSignal ?? getDispatchAbortSignal();
     if (effectiveAbortSignal?.aborted) {
       return;
     }
@@ -1580,7 +1581,7 @@ export async function dispatchReplyFromConfig(
       const normalizedPayload = await normalizeReplyMediaPayload(ttsPayload);
       throwIfDispatchOperationAborted();
       const result = await routeReplyToOriginating(normalizedPayload, {
-        abortSignal: dispatchAbortOperation?.abortSignal,
+        abortSignal: getDispatchAbortSignal(),
       });
       if (result) {
         if (!result.ok) {
@@ -1681,7 +1682,7 @@ export async function dispatchReplyFromConfig(
             {
               cfg,
               dispatcher: dispatchHookDispatcher,
-              abortSignal: dispatchAbortOperation?.abortSignal ?? params.replyOptions?.abortSignal,
+              abortSignal: getDispatchAbortSignal() ?? params.replyOptions?.abortSignal,
               onReplyStart: params.replyOptions?.onReplyStart,
               recordProcessed,
               markIdle,
@@ -2264,7 +2265,7 @@ export async function dispatchReplyFromConfig(
             {
               cfg,
               dispatcher: dispatchHookDispatcher,
-              abortSignal: dispatchAbortOperation?.abortSignal ?? params.replyOptions?.abortSignal,
+              abortSignal: getDispatchAbortSignal() ?? params.replyOptions?.abortSignal,
               onReplyStart: params.replyOptions?.onReplyStart,
               recordProcessed,
               markIdle,
@@ -2382,7 +2383,7 @@ export async function dispatchReplyFromConfig(
             const normalizedTtsOnlyPayload = await normalizeReplyMediaPayload(ttsOnlyPayload);
             throwIfDispatchOperationAborted();
             const result = await routeReplyToOriginating(normalizedTtsOnlyPayload, {
-              abortSignal: dispatchAbortOperation?.abortSignal,
+              abortSignal: getDispatchAbortSignal(),
             });
             if (result) {
               queuedFinal = result.ok || queuedFinal;

@@ -762,6 +762,99 @@ describe("dispatchReplyFromConfig ACP abort", () => {
     expect(getActiveReplyRunCount()).toBe(0);
   });
 
+  it("wires active source operation abort into pre-dispatch reply_dispatch hooks", async () => {
+    hookMocks.runner.hasHooks.mockImplementation(
+      (hookName?: string) => hookName === "reply_dispatch",
+    );
+    let hookStarted!: () => void;
+    let releaseHook!: () => void;
+    let hookCompleted!: () => void;
+    const hookStartedPromise = new Promise<void>((resolve) => {
+      hookStarted = resolve;
+    });
+    const releaseHookPromise = new Promise<void>((resolve) => {
+      releaseHook = resolve;
+    });
+    const hookCompletedPromise = new Promise<void>((resolve) => {
+      hookCompleted = resolve;
+    });
+    const lateSendResults: boolean[] = [];
+    const abortStates: boolean[] = [];
+    let hookAbortSignal: AbortSignal | undefined;
+
+    hookMocks.runner.runReplyDispatch.mockImplementation(
+      async (_eventUnknown: unknown, hookCtxUnknown: unknown) => {
+        const hookCtx = hookCtxUnknown as {
+          abortSignal?: AbortSignal;
+          dispatcher: {
+            sendToolResult: (payload: { text: string }) => boolean;
+            sendBlockReply: (payload: { text: string }) => boolean;
+            sendFinalReply: (payload: { text: string }) => boolean;
+            getQueuedCounts: () => { tool: number; block: number; final: number };
+          };
+        };
+        hookAbortSignal = hookCtx.abortSignal;
+        hookStarted();
+        await releaseHookPromise;
+        abortStates.push(hookCtx.abortSignal?.aborted === true);
+        lateSendResults.push(
+          hookCtx.dispatcher.sendToolResult({ text: "late tool should not send" }),
+          hookCtx.dispatcher.sendBlockReply({ text: "late block should not send" }),
+          hookCtx.dispatcher.sendFinalReply({ text: "late final should not send" }),
+        );
+        hookCompleted();
+        return {
+          handled: true,
+          queuedFinal: false,
+          counts: hookCtx.dispatcher.getQueuedCounts(),
+        };
+      },
+    );
+
+    const existingOperation = createReplyOperation({
+      sessionKey: "agent:already-active-reply-dispatch",
+      sessionId: "already-active-reply-dispatch-session",
+      resetTriggered: false,
+    });
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "discord",
+      Surface: "discord",
+      SessionKey: "agent:already-active-reply-dispatch",
+      BodyForAgent: "reply dispatch while an operation is already active",
+    });
+    const dispatchPromise = dispatchReplyFromConfig({
+      ctx,
+      cfg: {
+        diagnostics: { enabled: true },
+        session: {
+          sendPolicy: { default: "allow" },
+        },
+      } as OpenClawConfig,
+      dispatcher,
+      replyResolver: vi.fn(),
+    });
+
+    await hookStartedPromise;
+    expect(hookAbortSignal).toBe(existingOperation.abortSignal);
+    expect(replyRunRegistry.abort("agent:already-active-reply-dispatch")).toBe(true);
+
+    await expect(dispatchPromise).resolves.toMatchObject({
+      queuedFinal: false,
+      counts: { tool: 0, block: 0, final: 0 },
+    });
+    expect(existingOperation.result).toEqual({ kind: "aborted", code: "aborted_by_user" });
+
+    releaseHook();
+    await hookCompletedPromise;
+    expect(abortStates).toEqual([true]);
+    expect(lateSendResults).toEqual([false, false, false]);
+    expect(dispatcher.sendToolResult).not.toHaveBeenCalled();
+    expect(dispatcher.sendBlockReply).not.toHaveBeenCalled();
+    expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
+    expect(getActiveReplyRunCount()).toBe(0);
+  });
+
   it("suppresses late callback and final replies when the resolver ignores a dispatch abort", async () => {
     let resolverStarted!: () => void;
     let releaseResolver!: () => void;
