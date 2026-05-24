@@ -500,6 +500,10 @@ export function createFollowupRunner(params: {
         return;
       }
       replyOperation = admission.operation;
+      if (replyOperation.sessionId !== run.sessionId) {
+        run = { ...run, sessionId: replyOperation.sessionId };
+        effectiveQueued = { ...effectiveQueued, run };
+      }
       const runId = crypto.randomUUID();
       const shouldSurfaceToControlUi = isInternalMessageChannel(
         resolveOriginMessageProvider({

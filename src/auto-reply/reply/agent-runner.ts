@@ -1294,6 +1294,7 @@ export async function runReplyAgent(params: {
       });
     }
     replyOperation = admission.operation;
+    followupRun.run.sessionId = replyOperation.sessionId;
   }
   let runFollowupTurn = queuedRunFollowupTurn;
   let shouldDrainQueuedFollowupsAfterClear = false;

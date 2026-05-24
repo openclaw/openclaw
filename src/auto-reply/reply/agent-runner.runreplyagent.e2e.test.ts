@@ -17,6 +17,7 @@ import { createReplyOperation, testing as replyRunTesting } from "./reply-run-re
 import { createMockTypingController } from "./test-helpers.js";
 
 type AgentRunParams = {
+  sessionId?: string;
   onPartialReply?: (payload: { text?: string }) => Promise<void> | void;
   onAssistantMessageStart?: () => Promise<void> | void;
   onReasoningStream?: (payload: { text?: string }) => Promise<void> | void;
@@ -248,6 +249,28 @@ describe("runReplyAgent heartbeat followup guard", () => {
     expect(state.runEmbeddedPiAgentMock).not.toHaveBeenCalled();
     expect(typing.cleanup).toHaveBeenCalledTimes(1);
     active.complete();
+  });
+
+  it("runs visible turns with the session id returned by admission", async () => {
+    const active = createReplyOperation({
+      sessionKey: "main",
+      sessionId: "pre-compact-session",
+      resetTriggered: false,
+    });
+    active.setPhase("preflight_compacting");
+    const { run } = createMinimalRun({
+      runOverrides: { sessionId: "stale-session" },
+    });
+
+    const pending = run();
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    active.updateSessionId("post-compact-session");
+    active.complete();
+    await pending;
+
+    expect(state.runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
+    const [call] = mockCallArgs(state.runEmbeddedPiAgentMock, "run embedded pi agent");
+    expect((call as AgentRunParams).sessionId).toBe("post-compact-session");
   });
 
   it("drops runs when reply-lane admission sees an already-aborted caller", async () => {
