@@ -9,11 +9,9 @@ const TELEGRAM_USERNAME_REGEX = /^[A-Za-z0-9_]{5,}$/i;
 
 export function stripTelegramInternalPrefixes(to: string): string {
   let trimmed = to.trim();
-  let strippedTelegramPrefix = false;
   while (true) {
     const next = (() => {
       if (/^(telegram|tg):/i.test(trimmed)) {
-        strippedTelegramPrefix = true;
         return trimmed.replace(/^(telegram|tg):/i, "").trim();
       }
       // Strip kind prefixes (group:, channel:, user:) that can appear in
