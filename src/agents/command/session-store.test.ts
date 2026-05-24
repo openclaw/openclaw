@@ -1290,7 +1290,7 @@ describe("updateSessionStoreAfterAgentRun", () => {
         agents: {
           defaults: {
             cliBackends: {
-              "claude-cli": {},
+              "claude-cli": { command: "claude" },
             },
           },
         },
