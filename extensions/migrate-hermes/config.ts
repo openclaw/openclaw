@@ -226,7 +226,7 @@ export function buildConfigItems(params: {
         message:
           "Hermes used Honcho memory. OpenClaw keeps built-in memory selected until the matching plugin is installed and reviewed.",
         recommendation:
-          "Install or review the Honcho memory plugin before selecting it for plugins.slots.memory.",
+          'Install or review the Honcho memory plugin before selecting it for plugins.slots["memory.recall"].',
       }),
     );
   } else if (memoryProvider && !["builtin", "file", "files"].includes(memoryProvider)) {

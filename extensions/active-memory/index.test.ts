@@ -93,7 +93,7 @@ describe("active-memory plugin", () => {
         ...plugins,
         slots: {
           ...(plugins?.slots as Record<string, unknown> | undefined),
-          memory,
+          "memory.recall": memory,
         },
       },
     };
@@ -1520,7 +1520,7 @@ describe("active-memory plugin", () => {
     );
   });
 
-  it("keeps explicit custom memory tools authoritative when the memory slot selects LanceDB", async () => {
+  it("keeps explicit custom memory tools authoritative when the recall slot selects LanceDB", async () => {
     setMemorySlot("memory-lancedb");
     api.pluginConfig = {
       agents: ["main"],

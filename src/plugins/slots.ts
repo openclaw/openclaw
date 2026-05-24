@@ -3,7 +3,7 @@ import type { PluginSlotsConfig } from "../config/types.plugins.js";
 import type { PluginKind } from "./plugin-kind.types.js";
 
 export type PluginSlotKey = keyof PluginSlotsConfig;
-export type ExclusivePluginSlotKey = "memory" | "contextEngine";
+export type ExclusivePluginSlotKey = "memory.recall" | "contextEngine";
 
 type SlotPluginRecord = {
   id: string;
@@ -11,7 +11,7 @@ type SlotPluginRecord = {
 };
 
 const SLOT_BY_KIND: Record<PluginKind, ExclusivePluginSlotKey> = {
-  memory: "memory",
+  memory: "memory.recall",
   "context-engine": "contextEngine",
 };
 

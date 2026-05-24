@@ -46,7 +46,7 @@ describe("applyExclusiveSlotSelection", () => {
   ) {
     expect(result.changed).toBe(params.changed);
     if (params.selectedId) {
-      expect(result.config.plugins?.slots?.memory).toBe(params.selectedId);
+      expect(result.config.plugins?.slots?.["memory.recall"]).toBe(params.selectedId);
     }
     if (params.disabledCompetingPlugin != null) {
       expect(result.config.plugins?.entries?.["memory-core"]?.enabled).toBe(
@@ -128,8 +128,8 @@ describe("applyExclusiveSlotSelection", () => {
       expectedDisabled: false,
       warningChecks: {
         expected: [
-          'Exclusive slot "memory" switched from "memory-core" to "memory".',
-          'Disabled other "memory" slot plugins: memory-core.',
+          'Exclusive slot "memory.recall" switched from "memory-core" to "memory".',
+          'Disabled other "memory.recall" slot plugins: memory-core.',
         ],
       },
     },
@@ -138,8 +138,8 @@ describe("applyExclusiveSlotSelection", () => {
       config: createMemoryConfig(),
       warningChecks: {
         expected: [
-          'Exclusive slot "memory" switched from "memory-core" to "memory".',
-          'Disabled other "memory" slot plugins: memory-core.',
+          'Exclusive slot "memory.recall" switched from "memory-core" to "memory".',
+          'Disabled other "memory.recall" slot plugins: memory-core.',
         ],
       },
     },
@@ -152,7 +152,7 @@ describe("applyExclusiveSlotSelection", () => {
       }),
       expectedDisabled: false,
       warningChecks: {
-        expected: ['Exclusive slot "memory" switched from "memory-core" to "memory".'],
+        expected: ['Exclusive slot "memory.recall" switched from "memory-core" to "memory".'],
       },
     },
   ] as const)("$name", ({ config, expectedDisabled, warningChecks }) => {
@@ -167,7 +167,7 @@ describe("applyExclusiveSlotSelection", () => {
     {
       name: "does nothing when the slot already matches",
       config: createMemoryConfig({
-        slots: { memory: "memory" },
+        slots: { "memory.recall": "memory" },
       }),
       selectedId: "memory",
       selectedKind: "memory",
@@ -190,7 +190,7 @@ describe("applyExclusiveSlotSelection", () => {
   it("applies slot selection for each kind in a multi-kind array", () => {
     const config: OpenClawConfig = {
       plugins: {
-        slots: { memory: "memory-core", contextEngine: "legacy" },
+        slots: { "memory.recall": "memory-core", contextEngine: "legacy" },
         entries: {
           "memory-core": { enabled: true },
           legacy: { enabled: true },
@@ -208,7 +208,7 @@ describe("applyExclusiveSlotSelection", () => {
       ]),
     });
     expect(result.changed).toBe(true);
-    expect(result.config.plugins?.slots?.memory).toBe("dual-plugin");
+    expect(result.config.plugins?.slots?.["memory.recall"]).toBe("dual-plugin");
     expect(result.config.plugins?.slots?.contextEngine).toBe("dual-plugin");
     expect(result.config.plugins?.entries?.["memory-core"]?.enabled).toBe(false);
     expect(result.config.plugins?.entries?.legacy?.enabled).toBe(false);
@@ -217,7 +217,7 @@ describe("applyExclusiveSlotSelection", () => {
   it("does not disable a dual-kind plugin that still owns another slot", () => {
     const config: OpenClawConfig = {
       plugins: {
-        slots: { memory: "dual-plugin", contextEngine: "dual-plugin" },
+        slots: { "memory.recall": "dual-plugin", contextEngine: "dual-plugin" },
         entries: {
           "dual-plugin": { enabled: true },
         },
@@ -233,7 +233,7 @@ describe("applyExclusiveSlotSelection", () => {
       ]),
     });
     expect(result.changed).toBe(true);
-    expect(result.config.plugins?.slots?.memory).toBe("new-memory");
+    expect(result.config.plugins?.slots?.["memory.recall"]).toBe("new-memory");
     // dual-plugin still owns contextEngine — must NOT be disabled
     expect(result.config.plugins?.entries?.["dual-plugin"]?.enabled).not.toBe(false);
   });
@@ -242,7 +242,7 @@ describe("applyExclusiveSlotSelection", () => {
     // contextEngine is NOT explicitly set — defaults to "legacy"
     const config: OpenClawConfig = {
       plugins: {
-        slots: { memory: "legacy" },
+        slots: { "memory.recall": "legacy" },
         entries: {
           legacy: { enabled: true },
         },
@@ -258,7 +258,7 @@ describe("applyExclusiveSlotSelection", () => {
       ]),
     });
     expect(result.changed).toBe(true);
-    expect(result.config.plugins?.slots?.memory).toBe("new-memory");
+    expect(result.config.plugins?.slots?.["memory.recall"]).toBe("new-memory");
     // legacy still owns contextEngine via default — must NOT be disabled
     expect(result.config.plugins?.entries?.legacy?.enabled).not.toBe(false);
   });
@@ -300,12 +300,12 @@ describe("slotKeysForPluginKind", () => {
   });
 
   it("returns single slot key for single kind", () => {
-    expect(slotKeysForPluginKind("memory")).toEqual(["memory"]);
+    expect(slotKeysForPluginKind("memory")).toEqual(["memory.recall"]);
   });
 
   it("returns multiple slot keys for multi-kind", () => {
     expect(slotKeysForPluginKind(["memory", "context-engine"])).toEqual([
-      "memory",
+      "memory.recall",
       "contextEngine",
     ]);
   });

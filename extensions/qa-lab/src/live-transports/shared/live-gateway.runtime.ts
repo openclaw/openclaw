@@ -53,12 +53,12 @@ function prepareLiveTransportGatewayConfig(cfg: OpenClawConfig): OpenClawConfig 
           entries: omitMemoryCoreEntry(cfg.plugins.entries),
           slots: {
             ...cfg.plugins.slots,
-            memory: "none",
+            "memory.recall": "none",
           },
         }
       : {
           slots: {
-            memory: "none",
+            "memory.recall": "none",
           },
         },
     agents: {

@@ -1030,7 +1030,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "plugins.load": "Plugin Loader",
   "plugins.load.paths": "Plugin Load Paths",
   "plugins.slots": "Plugin Slots",
-  "plugins.slots.memory": "Memory Plugin",
+  "plugins.slots.memory": "Legacy Memory Plugin",
   "plugins.slots.memory.recall": "Memory Recall Plugin",
   "plugins.slots.memory.compaction": "Memory Compaction Plugin",
   "plugins.slots.memory.capture": "Memory Capture Plugin",
