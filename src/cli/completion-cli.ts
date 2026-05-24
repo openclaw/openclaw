@@ -56,15 +56,27 @@ function fishOptionFlags(options: Command["options"], wantsValue: boolean): stri
   });
 }
 
+function collectFishOptionFlags(program: Command, wantsValue: boolean): string[] {
+  const flags = new Set<string>();
+  const visit = (cmd: Command) => {
+    for (const flag of fishOptionFlags(cmd.options, wantsValue)) {
+      flags.add(flag);
+    }
+    for (const child of cmd.commands) {
+      visit(child);
+    }
+  };
+  visit(program);
+  return [...flags];
+}
+
 function generateFishPathHelper(program: Command, rootCmd: string): string {
-  const rootValueOptions = fishOptionFlags(program.options, true);
-  const rootBooleanOptions = fishOptionFlags(program.options, false);
+  const valueOptions = collectFishOptionFlags(program, true);
   return `
 function __${rootCmd}_command_path_matches
   set -l tokens (commandline -opc)
   set -e tokens[1]
-  set -l root_value_options ${fishWords(rootValueOptions)}
-  set -l root_boolean_options ${fishWords(rootBooleanOptions)}
+  set -l value_options ${fishWords(valueOptions)}
   set -l command_tokens
   set -l skip_next 0
   for token in $tokens
@@ -72,17 +84,12 @@ function __${rootCmd}_command_path_matches
       set skip_next 0
       continue
     end
-    if test (count $command_tokens) -eq 0
-      set -l flag (string split -m1 "=" -- $token)[1]
-      if contains -- $flag $root_boolean_options
-        continue
+    set -l flag (string split -m1 "=" -- $token)[1]
+    if contains -- $flag $value_options
+      if not string match -q -- "*=*" $token
+        set skip_next 1
       end
-      if contains -- $flag $root_value_options
-        if not string match -q -- "*=*" $token
-          set skip_next 1
-        end
-        continue
-      end
+      continue
     end
     if string match -q -- "-*" $token
       continue

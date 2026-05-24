@@ -110,7 +110,8 @@ describe("completion-cli", () => {
     expect(script).toContain(
       "complete -c openclaw -n \"__openclaw_command_path_matches gateway status\" -l json -d 'JSON output'",
     );
-    expect(script).toContain("set -l root_boolean_options -v --verbose");
+    expect(script).toContain("set -l value_options -t --token");
+    expect(script).toContain("if contains -- $flag $value_options");
   });
 
   it("generates Bash completions without comma-suffixed short flags", () => {
