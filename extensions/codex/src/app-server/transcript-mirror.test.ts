@@ -151,6 +151,42 @@ describe("mirrorCodexAppServerTranscript", () => {
       content: [{ type: "text", text: "show me live" }],
       idempotencyKey: "codex-app-server:thread-1:turn-1:prompt",
     });
+    expect(updates[0]?.messageSeq).toBe(1);
+  });
+
+  it("emits stable sequence numbers for multi-message mirror batches", async () => {
+    const sessionFile = await createTempSessionFile();
+
+    await mirrorCodexAppServerTranscript({
+      sessionFile,
+      sessionKey: "agent:main:main",
+      messages: [
+        attachCodexMirrorIdentity(
+          makeAgentUserMessage({
+            content: [{ type: "text", text: "first" }],
+            timestamp: Date.now(),
+          }),
+          "turn-1:prompt",
+        ),
+        attachCodexMirrorIdentity(
+          makeAgentAssistantMessage({
+            content: [{ type: "text", text: "second" }],
+            timestamp: Date.now() + 1,
+          }),
+          "turn-1:assistant",
+        ),
+      ],
+      idempotencyScope: "codex-app-server:thread-1",
+    });
+
+    const updates = emitSessionTranscriptUpdateMock.mock.calls.map(
+      ([update]) => update as Record<string, unknown>,
+    );
+    expect(updates.map((update) => update.messageSeq)).toEqual([1, 2]);
+    expect(updates.map((update) => (update.message as { role?: string }).role)).toEqual([
+      "user",
+      "assistant",
+    ]);
   });
 
   it("creates the transcript directory on first mirror", async () => {
