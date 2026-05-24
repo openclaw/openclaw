@@ -4,6 +4,8 @@ import type { ModelRouter } from "../../claworks/model-router.js";
 import type { RbacCheckInput, RbacCheckResult } from "../../claworks/robot-identity.js";
 import { A2aClient } from "../../interfaces/a2a/client.js";
 import type { ActionRegistry } from "../../kernel/action-registry.js";
+import type { ContextPacket } from "../../kernel/event-context.js";
+import { buildLlmContext } from "../../kernel/llm-context-builder.js";
 import type { KnowledgeBase, RobotInfo } from "../../kernel/types.js";
 import { isDocumentKnowledgeBase } from "../data/kb-types.js";
 import type { ObjectStore } from "../data/object-store.js";
@@ -317,9 +319,46 @@ export async function executePlaybookStep(
       log.output = { hitl_token: token, timeout_seconds: step.timeout_seconds };
       throw new HitlSuspendedError(token, step.id);
     } else if (step.kind === "llm") {
-      const prompt = interpolate(step.prompt, ctx.variables);
+      const rawPrompt = interpolate(step.prompt, ctx.variables);
+
+      // 信息流上下文丰富化：从 Playbook 变量 _ctx 读取预计算封包，自动注入 KB 案例
+      const eventCtx = ctx.variables["_ctx"] as ContextPacket | undefined;
+      const ctxResult = await buildLlmContext(
+        {
+          prompt: rawPrompt,
+          task_type: step.task_type,
+          context_level: step.context_level,
+          domain: step.domain,
+          output_fields: step.output_fields,
+          event_context: eventCtx,
+        },
+        {
+          logger: deps.logger,
+          fetchCases: async (query, limit) => {
+            const results = await deps.kb.search(query, { limit });
+            return results.map((r) => (r.title ? `[${r.title}] ${r.text}` : r.text));
+          },
+        },
+      );
+      const prompt = ctxResult.enriched_prompt;
+
+      // 模型路由：显式 step.model > task_type 感知路由 > 默认
+      let model: string | undefined;
+      if (step.model?.trim()) {
+        model = step.model.trim();
+      } else if (deps.modelRouter) {
+        const taskForRouter =
+          step.task_type === "classify"
+            ? "classify"
+            : step.task_type === "analyze" || ctxResult.recommended_model_tier === "strong"
+              ? "reason"
+              : ctxResult.recommended_model_tier === "fast"
+                ? "classify"
+                : "chat";
+        model = deps.modelRouter.resolveForTask(taskForRouter);
+      }
+
       if (deps.llmComplete) {
-        const model = deps.modelRouter?.resolve("llm", step.model) ?? step.model;
         if (step.output_schema) {
           // 结构化输出：使用 StructuredOutputEngine 保证格式
           const { createStructuredOutputEngine } =
@@ -351,9 +390,9 @@ export async function executePlaybookStep(
           "abort",
         );
       } else {
-        log.output = { stub: true, prompt };
-        ctx.variables[step.output] = prompt;
-        deps.logger?.(`[claworks:llm] stub（无 LLM bridge）: ${prompt.slice(0, 80)}...`);
+        log.output = { stub: true, prompt: rawPrompt };
+        ctx.variables[step.output] = rawPrompt;
+        deps.logger?.(`[claworks:llm] stub（无 LLM bridge）: ${rawPrompt.slice(0, 80)}...`);
         void deps.publishAnomaly?.({ kind: "stub_step", stepKind: "llm", stepId: step.id });
       }
       recordStepResult(ctx, step.id, log.output);
@@ -391,13 +430,40 @@ export async function executePlaybookStep(
       }
       recordStepResult(ctx, step.id, log.output);
     } else if (step.kind === "subagent") {
-      const prompt = interpolate(step.prompt, ctx.variables);
-      const model = deps.modelRouter?.resolve("subagent", step.model) ?? step.model;
+      const rawSubPrompt = interpolate(step.prompt, ctx.variables);
+
+      // subagent 同样享受信息流上下文丰富化
+      const subEventCtx = ctx.variables["_ctx"] as ContextPacket | undefined;
+      const subCtxResult = await buildLlmContext(
+        {
+          prompt: rawSubPrompt,
+          task_type: step.task_type,
+          context_level: step.context_level,
+          domain: step.domain,
+          event_context: subEventCtx,
+        },
+        { logger: deps.logger },
+      );
+      const subPrompt = subCtxResult.enriched_prompt;
+
+      let subModel: string | undefined;
+      if (step.model?.trim()) {
+        subModel = step.model.trim();
+      } else if (deps.modelRouter) {
+        const subTaskType =
+          step.task_type === "classify"
+            ? "classify"
+            : subCtxResult.recommended_model_tier === "strong"
+              ? "reason"
+              : "chat";
+        subModel = deps.modelRouter.resolveForTask(subTaskType);
+      }
+
       if (deps.subagentRun) {
-        const result = await deps.subagentRun({ prompt, model });
+        const result = await deps.subagentRun({ prompt: subPrompt, model: subModel });
         log.output = { text: result.text };
       } else if (deps.llmComplete) {
-        const result = await deps.llmComplete({ prompt, model });
+        const result = await deps.llmComplete({ prompt: subPrompt, model: subModel });
         log.output = { text: result.text };
       } else if (deps.productionMode) {
         throw new StepFailedError(
@@ -406,8 +472,8 @@ export async function executePlaybookStep(
           "abort",
         );
       } else {
-        log.output = { stub: true, prompt };
-        deps.logger?.(`[claworks:subagent] stub（无 bridge）: ${prompt.slice(0, 80)}...`);
+        log.output = { stub: true, prompt: rawSubPrompt };
+        deps.logger?.(`[claworks:subagent] stub（无 bridge）: ${rawSubPrompt.slice(0, 80)}...`);
         void deps.publishAnomaly?.({ kind: "stub_step", stepKind: "subagent", stepId: step.id });
       }
       if (step.output) {

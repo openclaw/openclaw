@@ -122,6 +122,12 @@ export interface SubagentStep extends StepMeta {
   prompt: string;
   model?: string;
   output?: string;
+  /** 任务类型，影响上下文丰富化和模型路由（同 LlmStep） */
+  task_type?: "classify" | "extract" | "generate" | "analyze" | "chat";
+  /** 显式上下文丰富化级别 */
+  context_level?: "fast" | "standard" | "rich";
+  /** 业务领域提示 */
+  domain?: string;
 }
 
 /**
@@ -156,6 +162,17 @@ export interface LlmStep extends StepMeta {
   prompt: string;
   model?: string;
   output: string;
+  /**
+   * 任务类型，影响信息流上下文丰富化策略和模型路由。
+   * classify → fast 模型；analyze/generate → 注入领域知识+案例；chat → 默认。
+   */
+  task_type?: "classify" | "extract" | "generate" | "analyze" | "chat";
+  /** 显式指定上下文丰富化级别（不设则由 task_type 自动推断）。fast = 透传不注入。 */
+  context_level?: "fast" | "standard" | "rich";
+  /** 业务领域提示（如 "alarm" / "quality"），触发领域知识注入 */
+  domain?: string;
+  /** 期望输出字段列表，在 prompt 末尾追加格式要求 */
+  output_fields?: string[];
   /**
    * 结构化输出 schema（可选）。
    * 指定后 LLM 步骤会使用 StructuredOutputEngine 保证输出格式，
