@@ -15,6 +15,12 @@ export type TelegramFormattedChunk = {
   text: string;
 };
 
+export type TelegramMarkdownOptions = {
+  tableMode?: MarkdownTableMode;
+  wrapFileRefs?: boolean;
+  expandFinalBlockquote?: boolean;
+};
+
 export function escapeTelegramHtml(text: string): string {
   return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }
@@ -103,6 +109,52 @@ function isMarkdownIndentedCodeLine(line: string): boolean {
   return /^(?: {4}|\t)/.test(line);
 }
 
+function hasFinalTelegramBlockquote(ir: MarkdownIR, options: TelegramMarkdownOptions): boolean {
+  return Boolean(
+    options.expandFinalBlockquote &&
+      ir.text &&
+      ir.styles.some((span) => span.style === "blockquote" && span.end === ir.text.length),
+  );
+}
+
+function getFinalTelegramBlockquoteRange(ir: MarkdownIR, options: TelegramMarkdownOptions) {
+  if (!options.expandFinalBlockquote || !ir.text) {
+    return null;
+  }
+  const span = ir.styles.find((candidate) => {
+    return candidate.style === "blockquote" && candidate.end === ir.text.length;
+  });
+  return span ? { start: span.start, end: span.end } : null;
+}
+
+function isWithinFinalTelegramBlockquote(
+  chunkStart: number,
+  chunkEnd: number,
+  range: { start: number; end: number } | null,
+): boolean {
+  return Boolean(range && chunkEnd > range.start && chunkStart < range.end);
+}
+
+function expandFinalRenderedTelegramBlockquote(html: string, shouldExpand: boolean): string {
+  if (!shouldExpand) {
+    return html;
+  }
+  const finalBlockquoteStart = html.lastIndexOf("<blockquote>");
+  if (finalBlockquoteStart < 0) {
+    return html;
+  }
+  return `${html.slice(0, finalBlockquoteStart)}<blockquote expandable>${html.slice(
+    finalBlockquoteStart + "<blockquote>".length,
+  )}`;
+}
+
+function renderTelegramHtmlWithOptions(ir: MarkdownIR, options: TelegramMarkdownOptions): string {
+  return expandFinalRenderedTelegramBlockquote(
+    renderTelegramHtml(ir),
+    hasFinalTelegramBlockquote(ir, options),
+  );
+}
+
 function shouldPreserveTelegramListBoundarySpacing(previous: string, next: string): boolean {
   return (
     !isMarkdownIndentedCodeLine(previous) &&
@@ -135,10 +187,7 @@ function preserveTelegramListBoundarySpacing(markdown: string): string {
   return out.join("\n");
 }
 
-export function markdownToTelegramHtml(
-  markdown: string,
-  options: { tableMode?: MarkdownTableMode; wrapFileRefs?: boolean } = {},
-): string {
+export function markdownToTelegramHtml(markdown: string, options: TelegramMarkdownOptions = {}): string {
   const ir = markdownToIR(preserveTelegramListBoundarySpacing(markdown ?? ""), {
     linkify: true,
     enableSpoilers: true,
@@ -146,7 +195,7 @@ export function markdownToTelegramHtml(
     blockquotePrefix: "",
     tableMode: options.tableMode,
   });
-  const html = renderTelegramHtml(ir);
+  const html = renderTelegramHtmlWithOptions(ir, options);
   const telegramHtml = preserveSupportedTelegramHtmlTags(html);
   // Apply file reference wrapping if requested (for chunked rendering)
   if (options.wrapFileRefs !== false) {
@@ -154,7 +203,6 @@ export function markdownToTelegramHtml(
   }
   return telegramHtml;
 }
-
 /**
  * Wraps standalone file references (with TLD extensions) in <code> tags.
  * This prevents Telegram from treating them as URLs and generating
@@ -534,14 +582,17 @@ export function wrapFileReferencesInHtml(html: string): string {
 
 export function renderTelegramHtmlText(
   text: string,
-  options: { textMode?: "markdown" | "html"; tableMode?: MarkdownTableMode } = {},
+  options: { textMode?: "markdown" | "html"; tableMode?: MarkdownTableMode; expandFinalBlockquote?: boolean } = {},
 ): string {
   const textMode = options.textMode ?? "markdown";
   if (textMode === "html") {
     return escapeUnsupportedTelegramHtml(text);
   }
   // markdownToTelegramHtml already wraps file references by default
-  return markdownToTelegramHtml(text, { tableMode: options.tableMode });
+  return markdownToTelegramHtml(text, {
+    tableMode: options.tableMode,
+    expandFinalBlockquote: options.expandFinalBlockquote,
+  });
 }
 
 type TelegramHtmlTag = {
@@ -755,29 +806,46 @@ export function splitTelegramHtmlChunks(html: string, limit: number): string[] {
   return chunks.length > 0 ? chunks : [html];
 }
 
-function renderTelegramChunkHtml(ir: MarkdownIR): string {
-  return wrapFileReferencesInHtml(preserveSupportedTelegramHtmlTags(renderTelegramHtml(ir)));
+function renderTelegramChunkHtml(ir: MarkdownIR, options: TelegramMarkdownOptions): string {
+  return wrapFileReferencesInHtml(
+    preserveSupportedTelegramHtmlTags(renderTelegramHtmlWithOptions(ir, options)),
+  );
 }
 
 function renderTelegramChunksWithinHtmlLimit(
   ir: MarkdownIR,
   limit: number,
+  options: TelegramMarkdownOptions,
 ): TelegramFormattedChunk[] {
+  const finalBlockquoteRange = getFinalTelegramBlockquoteRange(ir, options);
+  const expandableAttrOverhead = " expandable".length;
+  const chunkLimit = finalBlockquoteRange ? Math.max(1, limit - expandableAttrOverhead) : limit;
+  let chunkStart = 0;
+
   return renderMarkdownIRChunksWithinLimit({
     ir,
-    limit,
-    renderChunk: renderTelegramChunkHtml,
+    limit: chunkLimit,
+    renderChunk: (chunkIr) =>
+      renderTelegramChunkHtml(chunkIr, { ...options, expandFinalBlockquote: false }),
     measureRendered: (html) => html.length,
-  }).map(({ source, rendered }) => ({
-    html: rendered,
-    text: source.text,
-  }));
+  }).map(({ source, rendered }) => {
+    const start = chunkStart;
+    const end = start + source.text.length;
+    chunkStart = end;
+    return {
+      html: expandFinalRenderedTelegramBlockquote(
+        rendered,
+        isWithinFinalTelegramBlockquote(start, end, finalBlockquoteRange),
+      ),
+      text: source.text,
+    };
+  });
 }
 
 export function markdownToTelegramChunks(
   markdown: string,
   limit: number,
-  options: { tableMode?: MarkdownTableMode } = {},
+  options: TelegramMarkdownOptions = {},
 ): TelegramFormattedChunk[] {
   const ir = markdownToIR(preserveTelegramListBoundarySpacing(markdown ?? ""), {
     linkify: true,
@@ -786,13 +854,13 @@ export function markdownToTelegramChunks(
     blockquotePrefix: "",
     tableMode: options.tableMode,
   });
-  return renderTelegramChunksWithinHtmlLimit(ir, limit);
+  return renderTelegramChunksWithinHtmlLimit(ir, limit, options);
 }
 
 export function markdownToTelegramHtmlChunks(
   markdown: string,
   limit: number,
-  options: { tableMode?: MarkdownTableMode } = {},
+  options: TelegramMarkdownOptions = {},
 ): string[] {
   return markdownToTelegramChunks(markdown, limit, options).map((chunk) => chunk.html);
 }

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   markdownToTelegramChunks,
   markdownToTelegramHtml,
+  markdownToTelegramHtmlChunks,
   renderTelegramHtmlText,
   splitTelegramHtmlChunks,
   telegramHtmlToPlainTextFallback,
@@ -103,6 +104,30 @@ describe("markdownToTelegramHtml", () => {
     expect(res).toContain("<blockquote>first");
     expect(res).toContain("<blockquote>second</blockquote>");
     expect(res.match(/<blockquote>/g)).toHaveLength(2);
+  });
+
+  it("preserves Telegram expandable blockquote HTML", () => {
+    const input = "<blockquote expandable>tail</blockquote>";
+
+    expect(markdownToTelegramHtml(input)).toBe(input);
+    expect(renderTelegramHtmlText(input, { textMode: "html" })).toBe(input);
+  });
+
+  it("can promote the final blockquote to an expandable Telegram blockquote", () => {
+    const res = markdownToTelegramHtml("> first\n> second", { expandFinalBlockquote: true });
+    expect(res).toBe("<blockquote expandable>first\nsecond</blockquote>");
+  });
+
+  it("promotes only the trailing blockquote when expandable rendering is enabled", () => {
+    const res = markdownToTelegramHtml("> intro\n\nBody\n\n> tail", { expandFinalBlockquote: true });
+    expect(res).toContain("<blockquote>intro");
+    expect(res).toContain("<blockquote expandable>tail</blockquote>");
+    expect(res.match(/<blockquote expandable>/g)).toHaveLength(1);
+  });
+
+  it("renders fenced code blocks", () => {
+    const res = markdownToTelegramHtml("```js\nconst x = 1;\n```");
+    expect(res).toBe("<pre><code>const x = 1;\n</code></pre>");
   });
 
   it("renders fenced code block languages for Telegram native copy buttons", () => {
@@ -227,6 +252,26 @@ describe("markdownToTelegramHtml", () => {
     expect(chunks.every((chunk) => chunk.length <= 4000)).toBe(true);
     expect(chunks[0]).toMatch(/^<b>[\s\S]*<\/b>$/);
     expect(chunks[1]).toMatch(/^<b>[\s\S]*<\/b>$/);
+  });
+
+  it("preserves expandable blockquote tags across chunked Telegram output", () => {
+    const markdown = `> ${"A".repeat(5000)}`;
+    const chunks = markdownToTelegramHtmlChunks(markdown, 4000, { expandFinalBlockquote: true });
+    expect(chunks.length).toBeGreaterThan(1);
+    for (const chunk of chunks) {
+      expect(chunk).toMatch(/^<blockquote expandable>[\s\S]*<\/blockquote>$/);
+      expect(chunk.length).toBeLessThanOrEqual(4000);
+    }
+  });
+
+  it("does not expand chunked blockquotes that are not final", () => {
+    const markdown = [`> ${"A".repeat(5000)}`, "", "tail"].join("\n");
+    const chunks = markdownToTelegramHtmlChunks(markdown, 4000, { expandFinalBlockquote: true });
+
+    expect(chunks.length).toBeGreaterThan(1);
+    expect(chunks.join("")).toContain("<blockquote>");
+    expect(chunks.join("")).not.toContain("<blockquote expandable>");
+    expect(chunks.every((chunk) => chunk.length <= 4000)).toBe(true);
   });
 
   it("fails loudly when a leading entity cannot fit inside a chunk", () => {
