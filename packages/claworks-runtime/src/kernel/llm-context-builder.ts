@@ -82,6 +82,19 @@ function buildEntitySummary(packet: ContextPacket): string | null {
   return `关联实体: ${parts.join(", ")}`;
 }
 
+function buildMetaStatusSummary(meta: Record<string, unknown>): string | null {
+  const pendingRuns = meta.pending_runs;
+  const playbookCount = meta.playbook_count;
+  const hasPending = typeof pendingRuns === "number";
+  const hasPlaybooks = typeof playbookCount === "number";
+  if (!hasPending && !hasPlaybooks) return null;
+
+  const parts: string[] = [];
+  if (hasPending) parts.push(`运行中 Playbook ${pendingRuns} 个`);
+  if (hasPlaybooks) parts.push(`共 ${playbookCount} 个 Playbook`);
+  return `系统状态: ${parts.join(", ")}`;
+}
+
 // ──────────────────────────────────────────────────────────────
 // 主函数
 // ──────────────────────────────────────────────────────────────
@@ -115,6 +128,9 @@ export async function buildLlmContext(
   // 1. 事件摘要（预计算）
   if (input.event_context?.pre_summary) {
     injectedParts.push(`事件摘要: ${input.event_context.pre_summary}`);
+  } else if (contextLevel === "rich" && input.event_context?.meta) {
+    const metaSummary = buildMetaStatusSummary(input.event_context.meta);
+    if (metaSummary) injectedParts.push(metaSummary);
   }
 
   // 2. 关联实体
