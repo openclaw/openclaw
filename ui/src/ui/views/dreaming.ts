@@ -1281,8 +1281,13 @@ function renderMemoryPalaceSection(props: DreamingProps) {
             <article
               class="dreams-diary__insight-card dreams-diary__insight-card--clickable"
               data-palace-page=${item.pagePath}
-              @click=${() =>
-                toggleExpandedCard(expandedPalaceCards, item.pagePath, props.onRequestUpdate)}
+              @click=${() => {
+                if (item.kind === "report") {
+                  void openWikiPreview(item.pagePath, props);
+                  return;
+                }
+                toggleExpandedCard(expandedPalaceCards, item.pagePath, props.onRequestUpdate);
+              }}
             >
               <div class="dreams-diary__insight-topline">
                 <div class="dreams-diary__insight-title">${item.title}</div>
