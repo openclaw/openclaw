@@ -7,10 +7,10 @@ import {
   expectWaitStaysPendingUntilSigkillFallback,
 } from "./test-support.js";
 
-const { spawnWithFallbackMock, killProcessTreeMock, createWindowsOutputDecoderMock } = vi.hoisted(
+const { spawnWithFallbackMock, signalProcessTreeMock, createWindowsOutputDecoderMock } = vi.hoisted(
   () => ({
     spawnWithFallbackMock: vi.fn(),
-    killProcessTreeMock: vi.fn(),
+    signalProcessTreeMock: vi.fn(),
     createWindowsOutputDecoderMock: vi.fn(() => ({
       decode: (chunk: Buffer | string) => (Buffer.isBuffer(chunk) ? chunk.toString("utf8") : chunk),
       flush: () => "",
@@ -23,7 +23,7 @@ vi.mock("../../spawn-utils.js", () => ({
 }));
 
 vi.mock("../../kill-tree.js", () => ({
-  killProcessTree: killProcessTreeMock,
+  signalProcessTree: signalProcessTreeMock,
 }));
 
 vi.mock("../../../infra/windows-encoding.js", () => ({
@@ -93,7 +93,7 @@ describe("createChildAdapter", () => {
 
   beforeEach(() => {
     spawnWithFallbackMock.mockClear();
-    killProcessTreeMock.mockClear();
+    signalProcessTreeMock.mockClear();
     createWindowsOutputDecoderMock.mockClear();
     createWindowsOutputDecoderMock.mockImplementation(() => ({
       decode: (chunk: Buffer | string) => (Buffer.isBuffer(chunk) ? chunk.toString("utf8") : chunk),
@@ -137,17 +137,14 @@ describe("createChildAdapter", () => {
 
     adapter.kill();
 
-    // Detachment flag is now passed to killProcessTree so it knows whether
-    // it can safely group-kill via -pid. (#71662)
     const expectedDetached = process.platform !== "win32" && !process.env.OPENCLAW_SERVICE_MARKER;
-    expect(killProcessTreeMock).toHaveBeenCalledWith(4321, { detached: expectedDetached });
+    expect(signalProcessTreeMock).toHaveBeenCalledWith(4321, "SIGKILL", {
+      detached: expectedDetached,
+    });
     expect(killMock).toHaveBeenCalledWith("SIGKILL");
   });
 
-  it("passes detached:false to killProcessTree when spawn fell back to no-detach (#71662 follow-up)", async () => {
-    // Simulate the fallback scenario: spawnWithFallback retried with
-    // detached:false because the initial detached spawn failed. The kill
-    // closure must NOT group-kill since the child shares the gateway's group.
+  it("passes detached:false to signalProcessTree when spawn fell back to no-detach (#71662 follow-up)", async () => {
     const { child, killMock } = createStubChild(8888);
     spawnWithFallbackMock.mockResolvedValue({
       child,
@@ -162,7 +159,7 @@ describe("createChildAdapter", () => {
 
     adapter.kill();
 
-    expect(killProcessTreeMock).toHaveBeenCalledWith(8888, { detached: false });
+    expect(signalProcessTreeMock).toHaveBeenCalledWith(8888, "SIGKILL", { detached: false });
     expect(killMock).toHaveBeenCalledWith("SIGKILL");
   });
 
@@ -171,20 +168,23 @@ describe("createChildAdapter", () => {
     try {
       const { adapter, killMock } = await createAdapterHarness({ pid: 9999 });
       adapter.kill();
-      expect(killProcessTreeMock).toHaveBeenCalledWith(9999, { detached: false });
+      expect(signalProcessTreeMock).toHaveBeenCalledWith(9999, "SIGKILL", { detached: false });
       expect(killMock).toHaveBeenCalledWith("SIGKILL");
     } finally {
       delete process.env.OPENCLAW_SERVICE_MARKER;
     }
   });
 
-  it("uses direct child.kill for non-SIGKILL signals", async () => {
+  it("uses process-tree signal for graceful SIGTERM", async () => {
     const { adapter, killMock } = await createAdapterHarness({ pid: 7654 });
 
     adapter.kill("SIGTERM");
 
-    expect(killProcessTreeMock).not.toHaveBeenCalled();
-    expect(killMock).toHaveBeenCalledWith("SIGTERM");
+    const expectedDetached = process.platform !== "win32" && !process.env.OPENCLAW_SERVICE_MARKER;
+    expect(signalProcessTreeMock).toHaveBeenCalledWith(7654, "SIGTERM", {
+      detached: expectedDetached,
+    });
+    expect(killMock).not.toHaveBeenCalled();
   });
 
   it("wait does not settle immediately on SIGKILL", async () => {

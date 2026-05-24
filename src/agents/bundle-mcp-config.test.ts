@@ -187,7 +187,7 @@ describe("loadMergedBundleMcpConfig", () => {
     });
     // Bundle default still present alongside both configured servers.
     expect(merged.config.mcpServers.bundleProbe).toBeDefined();
-    expect(Object.keys(merged.config.mcpServers).sort()).toEqual([
+    expect(Object.keys(merged.config.mcpServers).toSorted()).toEqual([
       "bundleProbe",
       "other",
       "rockie",

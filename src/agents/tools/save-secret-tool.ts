@@ -63,9 +63,7 @@ export function createSaveSecretTool(): AnyAgentTool {
       if (!SECRET_NAME_RE.test(name)) {
         throw new ToolInputError("name must match ^[A-Z][A-Z0-9_]*$.");
       }
-      const category = readSecretCategory(
-        readStringParam(params, "category", { required: true }) as string,
-      );
+      const category = readSecretCategory(readStringParam(params, "category", { required: true }));
       const description = readStringParam(params, "description");
       return jsonResult({
         status: "awaiting_secret_payload",

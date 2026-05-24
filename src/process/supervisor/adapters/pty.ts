@@ -1,5 +1,5 @@
 import { assertOwnedChildEnv } from "../../../infra/owned-child-env.js";
-import { killProcessTree } from "../../kill-tree.js";
+import { signalProcessTree } from "../../kill-tree.js";
 import { prepareOomScoreAdjustedSpawn } from "../../linux-oom-score.js";
 import type { ManagedRunStdin, SpawnProcessAdapter } from "../types.js";
 import { toStringEnv } from "./env.js";
@@ -167,8 +167,12 @@ export async function createPtyAdapter(params: {
 
   const kill = (signal: NodeJS.Signals = "SIGKILL") => {
     try {
-      if (signal === "SIGKILL" && typeof pty.pid === "number" && pty.pid > 0) {
-        killProcessTree(pty.pid);
+      if (
+        (signal === "SIGKILL" || signal === "SIGTERM") &&
+        typeof pty.pid === "number" &&
+        pty.pid > 0
+      ) {
+        signalProcessTree(pty.pid, signal);
       } else if (process.platform === "win32") {
         pty.kill();
       } else {

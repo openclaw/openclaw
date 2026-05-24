@@ -139,9 +139,9 @@ function walkTypescriptFiles(root: string): string[] {
       continue;
     }
     if (
-      /\.test\.ts$/u.test(entry.name) ||
-      /\.e2e\.test\.ts$/u.test(entry.name) ||
-      /\.live\.test\.ts$/u.test(entry.name)
+      entry.name.endsWith(".test.ts") ||
+      entry.name.endsWith(".e2e.test.ts") ||
+      entry.name.endsWith(".live.test.ts")
     ) {
       continue;
     }
@@ -151,7 +151,7 @@ function walkTypescriptFiles(root: string): string[] {
 }
 
 function collectProductionSourceFiles(): string[] {
-  return walkTypescriptFiles(path.join(repoRoot, SCAN_ROOT)).sort();
+  return walkTypescriptFiles(path.join(repoRoot, SCAN_ROOT)).toSorted();
 }
 
 function readSource(relPath: string): string {
@@ -299,7 +299,7 @@ describe("owned child process env inventory", () => {
       return collectChildProcessCalls(relPath, fs.readFileSync(fullPath, "utf8"));
     });
 
-    const callLocations = calls.map(formatCallLocation).sort();
+    const callLocations = calls.map(formatCallLocation).toSorted();
     expect(callLocations).toEqual([
       "src/acp/client.ts:143:spawn",
       "src/agents/mcp-stdio-transport.ts:60:spawn",
@@ -348,7 +348,7 @@ describe("owned child process env inventory", () => {
       "src/tui/tui-launch.ts:101:spawn",
       "src/tui/tui.ts:886:spawn",
     ]);
-    expect([...REVIEWED_NON_OWNED_EXEMPTIONS.keys()].sort()).toEqual(
+    expect([...REVIEWED_NON_OWNED_EXEMPTIONS.keys()].toSorted()).toEqual(
       callLocations.filter((location) => REVIEWED_NON_OWNED_EXEMPTIONS.has(location)),
     );
     expect(readSource("src/process/spawn-utils.ts")).toContain(

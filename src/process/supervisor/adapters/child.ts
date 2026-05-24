@@ -1,7 +1,7 @@
 import type { ChildProcessWithoutNullStreams, SpawnOptions } from "node:child_process";
 import { assertOwnedChildEnv } from "../../../infra/owned-child-env.js";
 import { createWindowsOutputDecoder } from "../../../infra/windows-encoding.js";
-import { killProcessTree } from "../../kill-tree.js";
+import { signalProcessTree } from "../../kill-tree.js";
 import { prepareOomScoreAdjustedSpawn } from "../../linux-oom-score.js";
 import { spawnWithFallback } from "../../spawn-utils.js";
 import { resolveWindowsCommandShim } from "../../windows-command.js";
@@ -328,19 +328,22 @@ export async function createChildAdapter(params: {
   const childIsDetached = useDetached && !spawned.usedFallback;
   const kill = (signal?: NodeJS.Signals) => {
     const pid = child.pid ?? undefined;
-    if (signal === undefined || signal === "SIGKILL") {
+    if (signal === undefined || signal === "SIGKILL" || signal === "SIGTERM") {
+      const requestedSignal = signal ?? "SIGKILL";
       if (pid) {
         // Pass through whether the child is actually detached. Without this,
-        // `killProcessTree` group-kills via `-pid` and takes out the gateway's
+        // tree signaling via `-pid` can take out the gateway's
         // own process group along with the child. (#71662)
-        killProcessTree(pid, { detached: childIsDetached });
+        signalProcessTree(pid, requestedSignal, { detached: childIsDetached });
       }
-      try {
-        child.kill("SIGKILL");
-      } catch {
-        // ignore kill errors
+      if (requestedSignal === "SIGKILL") {
+        try {
+          child.kill("SIGKILL");
+        } catch {
+          // ignore kill errors
+        }
+        scheduleForceKillWaitFallback("SIGKILL");
       }
-      scheduleForceKillWaitFallback("SIGKILL");
       return;
     }
     try {

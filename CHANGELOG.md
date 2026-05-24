@@ -48,6 +48,7 @@ Docs: https://docs.openclaw.ai
 ### Fixes
 
 - Agents/exec approvals: parse balanced approval metadata, require gateway/node-sourced wrappers, and sanitize denied reasons so nested denial metadata cannot fall through to generic followups or spoof approval results.
+- CLI/update: honor `OPENCLAW_HOME` when deriving the default dev checkout, while keeping explicit `OPENCLAW_GIT_DIR` authoritative.
 - Diagnostics: grant the internal diagnostics event bus to official installed diagnostics exporter plugins, so npm-installed `@openclaw/diagnostics-prometheus` can emit metrics without broadening the capability to arbitrary global plugins. Fixes #76628. Thanks @RayWoo.
 - Doctor/config: restore legacy group chat config migrations for `routing.allowFrom`, `routing.groupChat.*`, and `channels.telegram.requireMention` so upgrades keep WhatsApp, Telegram, and iMessage group mention gates and history settings instead of leaving configs invalid or silently blocked. Thanks @scoootscooob.
 - CLI/update: make package-update follow-up processes write completion results and exit explicitly, so Windows packaged upgrades do not hang after the new package finishes post-core plugin work. Thanks @vincentkoc.

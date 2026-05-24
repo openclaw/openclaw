@@ -64,7 +64,7 @@ function assignAllowed(
     if (BLOCKED_NAME_RE.test(key)) {
       continue;
     }
-    out[key] = String(value);
+    out[key] = value;
   }
 }
 

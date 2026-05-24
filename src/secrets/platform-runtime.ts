@@ -56,7 +56,7 @@ export function extractSecretReferenceCandidates(command: string): string[] {
       seen.add(name);
     }
   }
-  return [...seen].sort();
+  return [...seen].toSorted();
 }
 
 export function resolveRuntimeTenantId(env: NodeJS.ProcessEnv = process.env): string {
@@ -249,7 +249,7 @@ export async function evaluateSecretAwareExecCommand(params: {
     return { action: "reject", reason: "ROCKIELAB_TENANT_ID is required." };
   }
   const names =
-    exact && !candidates.includes(exact.name) ? [...candidates, exact.name].sort() : candidates;
+    exact && !candidates.includes(exact.name) ? [...candidates, exact.name].toSorted() : candidates;
   const client = params.client ?? new FetchPlatformSecretsRuntimeClient(params.env);
   const metadata = await getCachedCandidateMetadata({ names, tenantId, client });
   const secretNames = names.filter((name) => metadata[name]);
