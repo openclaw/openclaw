@@ -25,7 +25,7 @@ function packageSpecFromLockfileKey(key) {
   if (typeof key !== "string") {
     return undefined;
   }
-  const normalizedKey = key.startsWith("/") ? key.slice(1) : key;
+  const normalizedKey = (key.startsWith("/") ? key.slice(1) : key).replace(/\(.+\)$/, "");
   const separator = normalizedKey.lastIndexOf("@");
   if (separator <= 0) {
     return undefined;
