@@ -156,6 +156,38 @@ function isDispatchReplyOperationAbortedError(
   return error instanceof DispatchReplyOperationAbortedError;
 }
 
+function composeAbortSignals(...signals: Array<AbortSignal | undefined>): AbortSignal | undefined {
+  const activeSignals: AbortSignal[] = [];
+  for (const signal of signals) {
+    if (signal && !activeSignals.includes(signal)) {
+      activeSignals.push(signal);
+    }
+  }
+  if (activeSignals.length === 0) {
+    return undefined;
+  }
+  if (activeSignals.length === 1) {
+    return activeSignals[0];
+  }
+  if (typeof AbortSignal.any === "function") {
+    return AbortSignal.any(activeSignals);
+  }
+  const controller = new AbortController();
+  const abort = (signal: AbortSignal) => {
+    if (!controller.signal.aborted) {
+      controller.abort(signal.reason);
+    }
+  };
+  for (const signal of activeSignals) {
+    if (signal.aborted) {
+      abort(signal);
+      return controller.signal;
+    }
+    signal.addEventListener("abort", () => abort(signal), { once: true });
+  }
+  return controller.signal;
+}
+
 const routeReplyRuntimeLoader = createLazyImportLoader(() => import("./route-reply.runtime.js"));
 const getReplyFromConfigRuntimeLoader = createLazyImportLoader(
   () => import("./get-reply-from-config.runtime.js"),
@@ -678,23 +710,22 @@ async function mirrorInternalSourceReplyToTranscript(params: {
   }
 }
 
-function runWithReplyOperationAbort<T>(
-  operation: ReplyOperation | undefined,
+function runWithDispatchAbortSignal<T>(
+  signal: AbortSignal | undefined,
   run: () => Promise<T> | T,
 ): Promise<T> {
-  if (!operation) {
+  if (!signal) {
     return Promise.resolve().then(run);
   }
-  const signal = operation.abortSignal;
-  const shouldStopForOperationAbort = () => signal.aborted;
-  if (signal.aborted && shouldStopForOperationAbort()) {
+  const shouldStopForAbort = () => signal.aborted;
+  if (signal.aborted && shouldStopForAbort()) {
     return Promise.reject(new DispatchReplyOperationAbortedError());
   }
   let settled = false;
   let abortHandler: (() => void) | undefined;
   const aborted = new Promise<never>((_, reject) => {
     abortHandler = () => {
-      if (!settled && shouldStopForOperationAbort()) {
+      if (!settled && shouldStopForAbort()) {
         reject(new DispatchReplyOperationAbortedError());
       }
     };
@@ -709,7 +740,7 @@ function runWithReplyOperationAbort<T>(
       },
       (error: unknown) => {
         settled = true;
-        if (shouldStopForOperationAbort() && isAbortError(error)) {
+        if (shouldStopForAbort() && isAbortError(error)) {
           throw new DispatchReplyOperationAbortedError();
         }
         throw error;
@@ -956,15 +987,38 @@ export async function dispatchReplyFromConfig(
     return { status: "ready" };
   };
   const getPreDispatchAbortOperation = () => dispatchAbortOperation ?? preDispatchAbortOperation;
-  const getDispatchAbortSignal = () => getPreDispatchAbortOperation()?.abortSignal;
+  let cachedDispatchAbortSignal:
+    | {
+        operationSignal: AbortSignal | undefined;
+        upstreamSignal: AbortSignal | undefined;
+        signal: AbortSignal | undefined;
+      }
+    | undefined;
+  const getDispatchAbortSignal = () => {
+    const operationSignal = getPreDispatchAbortOperation()?.abortSignal;
+    const upstreamSignal = params.replyOptions?.abortSignal;
+    if (
+      cachedDispatchAbortSignal &&
+      cachedDispatchAbortSignal.operationSignal === operationSignal &&
+      cachedDispatchAbortSignal.upstreamSignal === upstreamSignal
+    ) {
+      return cachedDispatchAbortSignal.signal;
+    }
+    const signal = composeAbortSignals(operationSignal, upstreamSignal);
+    cachedDispatchAbortSignal = { operationSignal, upstreamSignal, signal };
+    return signal;
+  };
+  const getQueuedFollowupAbortSignal = () =>
+    dispatchReplyOperation?.abortSignal ?? params.replyOptions?.abortSignal;
   const getReplyOptions = () => {
-    const abortOperation = getPreDispatchAbortOperation();
-    if (!abortOperation) {
+    const abortSignal = getDispatchAbortSignal();
+    if (!abortSignal) {
       return params.replyOptions;
     }
     return {
       ...params.replyOptions,
-      abortSignal: abortOperation.abortSignal,
+      abortSignal,
+      queuedFollowupAbortSignal: getQueuedFollowupAbortSignal(),
       ...(dispatchReplyOperation ? { replyOperation: dispatchReplyOperation } : {}),
     };
   };
@@ -1621,7 +1675,7 @@ export async function dispatchReplyFromConfig(
     // Run before_dispatch hook — let plugins inspect or handle before model dispatch.
     if (hookRunner?.hasHooks("before_dispatch")) {
       const beforeDispatchResult = await traceReplyPhase("reply.before_dispatch_hooks", () =>
-        runWithReplyOperationAbort(getPreDispatchAbortOperation(), () =>
+        runWithDispatchAbortSignal(getDispatchAbortSignal(), () =>
           hookRunner.runBeforeDispatch(
             {
               content: hookContext.content,
@@ -1663,7 +1717,7 @@ export async function dispatchReplyFromConfig(
 
     if (hookRunner?.hasHooks("reply_dispatch")) {
       const replyDispatchResult = await traceReplyPhase("reply.reply_dispatch_hooks", () =>
-        runWithReplyOperationAbort(getPreDispatchAbortOperation(), () =>
+        runWithDispatchAbortSignal(getDispatchAbortSignal(), () =>
           hookRunner.runReplyDispatch(
             createReplyDispatchEvent({
               ctx,
@@ -1952,7 +2006,7 @@ export async function dispatchReplyFromConfig(
       params.configOverride ? (applyMergePatch(cfg, params.configOverride) as OpenClawConfig) : cfg,
     );
     recordAgentDispatchStarted();
-    const replyResult = await runWithReplyOperationAbort(getPreDispatchAbortOperation(), () =>
+    const replyResult = await runWithDispatchAbortSignal(getDispatchAbortSignal(), () =>
       traceReplyPhase("reply.run_reply_resolver", () =>
         replyResolver(
           ctx,
@@ -2245,7 +2299,7 @@ export async function dispatchReplyFromConfig(
       // Route that tail through ACP now (same turn) instead of embedded dispatch.
       ctx.AcpDispatchTailAfterReset = false;
       if (hookRunner?.hasHooks("reply_dispatch")) {
-        const tailDispatchResult = await runWithReplyOperationAbort(dispatchAbortOperation, () =>
+        const tailDispatchResult = await runWithDispatchAbortSignal(getDispatchAbortSignal(), () =>
           hookRunner.runReplyDispatch(
             createReplyDispatchEvent({
               ctx,

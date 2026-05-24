@@ -1758,6 +1758,60 @@ describe("runPreparedReply media-only handling", () => {
     expect(call.followupRun.currentInboundContext?.text).toContain("Current event:");
   });
 
+  it("uses queued followup abort ownership instead of borrowed active-lane abort ownership", async () => {
+    const queueSettings = await import("./queue/settings-runtime.js");
+    const piRuntime = await import("../../agents/pi-embedded.runtime.js");
+    const activeLaneAbortController = new AbortController();
+    const sourceAbortController = new AbortController();
+    vi.mocked(queueSettings.resolveQueueSettings).mockReturnValueOnce({
+      mode: "steer",
+      debounceMs: 500,
+      cap: 20,
+      dropPolicy: "summarize",
+    });
+    vi.mocked(piRuntime.resolveActiveEmbeddedRunSessionId)
+      .mockReturnValueOnce("active-session")
+      .mockReturnValueOnce("active-session");
+    vi.mocked(piRuntime.isEmbeddedPiRunActive).mockReturnValueOnce(true);
+    vi.mocked(piRuntime.isEmbeddedPiRunStreaming).mockReturnValueOnce(true);
+    vi.mocked(buildInboundUserContextPrefix).mockReturnValueOnce("room context");
+
+    await runPreparedReply(
+      baseParams({
+        opts: {
+          abortSignal: activeLaneAbortController.signal,
+          queuedFollowupAbortSignal: sourceAbortController.signal,
+        } as NonNullable<Parameters<typeof runPreparedReply>[0]["opts"]> & {
+          queuedFollowupAbortSignal?: AbortSignal;
+        },
+        ctx: {
+          Body: "ambient",
+          RawBody: "ambient",
+          CommandBody: "ambient",
+          Provider: "telegram",
+          Surface: "telegram",
+          ChatType: "group",
+        },
+        sessionCtx: {
+          Body: "ambient",
+          BodyStripped: "ambient",
+          Provider: "telegram",
+          Surface: "telegram",
+          ChatType: "group",
+          InboundEventKind: "room_event",
+          MessageSid: "993",
+          SenderName: "Alice",
+        },
+      }),
+    );
+
+    const call = requireLastRunReplyAgentCall();
+    expect(call.shouldFollowup).toBe(true);
+    expect(call.isActive).toBe(true);
+    expect(call.followupRun.currentInboundEventKind).toBe("room_event");
+    expect(call.followupRun.abortSignal).toBe(sourceAbortController.signal);
+  });
+
   it("detaches queued user requests from superseded source abort signals", async () => {
     const queueSettings = await import("./queue/settings-runtime.js");
     const piRuntime = await import("../../agents/pi-embedded.runtime.js");

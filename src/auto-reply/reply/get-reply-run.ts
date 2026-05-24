@@ -100,6 +100,11 @@ type InternalGetReplyOptions = GetReplyOptions & {
    * diagnostic/abort ownership as the eventual agent run.
    */
   replyOperation?: ReplyOperation;
+  /**
+   * Source-owned abort signal to persist with queued room-event followups. This
+   * can differ from abortSignal when dispatch temporarily borrows an active lane.
+   */
+  queuedFollowupAbortSignal?: AbortSignal;
 };
 
 type AgentDefaults = NonNullable<OpenClawConfig["agents"]>["defaults"];
@@ -1075,7 +1080,9 @@ export async function runPreparedReply(
     }),
   );
   const queuedFollowupAbortSignal =
-    inboundEventKind === "room_event" ? opts?.abortSignal : undefined;
+    inboundEventKind === "room_event"
+      ? (internalOpts?.queuedFollowupAbortSignal ?? opts?.abortSignal)
+      : undefined;
   const followupRun = {
     prompt: queuedBody,
     transcriptPrompt: transcriptCommandBody,

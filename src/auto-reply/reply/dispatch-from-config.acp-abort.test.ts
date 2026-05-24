@@ -910,6 +910,65 @@ describe("dispatchReplyFromConfig ACP abort", () => {
     expect(getActiveReplyRunCount()).toBe(0);
   });
 
+  it("keeps caller abort active when reply resolver borrows an active source operation", async () => {
+    const existingOperation = createReplyOperation({
+      sessionKey: "agent:already-active-caller-abort",
+      sessionId: "active-session",
+      resetTriggered: false,
+    });
+    const callerAbort = new AbortController();
+    let resolverStarted!: () => void;
+    const resolverStartedPromise = new Promise<void>((resolve) => {
+      resolverStarted = resolve;
+    });
+    let resolverAbortSignal: AbortSignal | undefined;
+
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "discord",
+      Surface: "discord",
+      SessionKey: "agent:already-active-caller-abort",
+      BodyForAgent: "resolver should honor caller abort too",
+    });
+    const dispatchPromise = dispatchReplyFromConfig({
+      ctx,
+      cfg: {
+        diagnostics: { enabled: true },
+        session: {
+          sendPolicy: { default: "allow" },
+        },
+      } as OpenClawConfig,
+      dispatcher,
+      replyOptions: { abortSignal: callerAbort.signal },
+      replyResolver: async (_resolverCtx, options) => {
+        const signal = options?.abortSignal;
+        resolverAbortSignal = signal;
+        resolverStarted();
+        if (!signal) {
+          throw new Error("expected composed abort signal");
+        }
+        await new Promise<void>((resolve) => {
+          signal.addEventListener("abort", () => resolve(), { once: true });
+        });
+        return { text: "late final should not send" };
+      },
+    });
+
+    await resolverStartedPromise;
+    expect(resolverAbortSignal).toBeInstanceOf(AbortSignal);
+    expect(resolverAbortSignal).not.toBe(existingOperation.abortSignal);
+    callerAbort.abort();
+
+    await expect(dispatchPromise).resolves.toMatchObject({
+      queuedFinal: false,
+      counts: { tool: 0, block: 0, final: 0 },
+    });
+    expect(existingOperation.result).toBeNull();
+    expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
+    existingOperation.abortByUser();
+    expect(getActiveReplyRunCount()).toBe(0);
+  });
+
   it("suppresses late callback and final replies when the resolver ignores a dispatch abort", async () => {
     let resolverStarted!: () => void;
     let releaseResolver!: () => void;
