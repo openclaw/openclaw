@@ -488,6 +488,41 @@ describe("sessions_spawn tool", () => {
     },
   );
 
+  it("passes toolsAllow through for persistent native subagent sessions", async () => {
+    const tool = createSessionsSpawnTool({
+      agentSessionKey: "agent:main:main",
+    });
+
+    await tool.execute("call-tools-session", {
+      task: "build feature",
+      mode: "session",
+      thread: true,
+      toolsAllow: ["read"],
+    });
+
+    await tool.execute("call-tools-thread", {
+      task: "build feature",
+      thread: true,
+      toolsAllow: ["exec"],
+    });
+
+    expect(hoisted.spawnSubagentDirectMock).toHaveBeenCalledTimes(2);
+    expect(mockCallArg(hoisted.spawnSubagentDirectMock, 0, 0, "spawnSubagentDirect")).toMatchObject(
+      {
+        mode: "session",
+        thread: true,
+        toolsAllow: ["read"],
+      },
+    );
+    expect(mockCallArg(hoisted.spawnSubagentDirectMock, 1, 0, "spawnSubagentDirect")).toMatchObject(
+      {
+        thread: true,
+        toolsAllow: ["exec"],
+      },
+    );
+    expect(hoisted.spawnAcpDirectMock).not.toHaveBeenCalled();
+  });
+
   it("rejects malformed toolsAllow values before spawning", async () => {
     const tool = createSessionsSpawnTool({
       agentSessionKey: "agent:main:main",

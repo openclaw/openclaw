@@ -255,6 +255,8 @@ export type SessionEntry = {
   inheritedToolDeny?: string[];
   /** Session-scoped tool allow entries inherited from the caller that created this session. */
   inheritedToolAllow?: string[];
+  /** Durable embedded-runtime tool allowlist for spawned subagent sessions. */
+  runtimeToolsAllow?: string[];
   /** Plugin id that created this session through api.runtime.subagent. */
   pluginOwnerId?: string;
   systemSent?: boolean;
