@@ -330,6 +330,22 @@ describe("Codex app-server turn input image sanitizing", () => {
     });
   });
 
+  it("attaches turn-scoped developer instructions without changing thread config", () => {
+    const request = buildTurnStartParams(createAttemptParams({ provider: "openai" }), {
+      threadId: "thread-1",
+      cwd: "/repo",
+      appServer: createAppServerOptions() as never,
+      turnScopedDeveloperInstructions: "SOUL.md turn-only context",
+    });
+
+    expect(request.collaborationMode?.settings.developer_instructions).toContain(
+      "# Collaboration Mode: Default",
+    );
+    expect(request.collaborationMode?.settings.developer_instructions).toContain(
+      "SOUL.md turn-only context",
+    );
+  });
+
   it("replaces malformed inline images before turn/start", () => {
     const request = buildTurnStartParams(
       createAttemptParams({

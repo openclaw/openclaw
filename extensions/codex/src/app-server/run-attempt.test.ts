@@ -1169,9 +1169,10 @@ describe("runCodexAppServerAttempt", () => {
   });
 
   it("starts active OpenClaw sandbox turns with Codex native execution disabled", async () => {
+    const runtimeId = `codex-test-runtime-${path.basename(tempDir)}`;
     const restoreSandboxBackend = registerSandboxBackend("codex-test-sandbox", async () => ({
       id: "codex-test-sandbox",
-      runtimeId: "codex-test-runtime",
+      runtimeId,
       runtimeLabel: "Codex Test Sandbox",
       workdir: "/workspace",
       buildExecSpec: async () => ({
@@ -1203,6 +1204,8 @@ describe("runCodexAppServerAttempt", () => {
               mode: "all",
               backend: "codex-test-sandbox",
               scope: "session",
+              workspaceAccess: "rw",
+              prune: { idleHours: 0, maxAgeDays: 0 },
             },
           },
         },
@@ -1234,9 +1237,10 @@ describe("runCodexAppServerAttempt", () => {
   });
 
   it("routes native Codex execution through an OpenClaw sandbox exec-server when opted in", async () => {
+    const runtimeId = `codex-test-runtime-${path.basename(tempDir)}`;
     const restoreSandboxBackend = registerSandboxBackend("codex-test-sandbox", async () => ({
       id: "codex-test-sandbox",
-      runtimeId: "codex-test-runtime",
+      runtimeId,
       runtimeLabel: "Codex Test Sandbox",
       workdir: "/workspace",
       buildExecSpec: async () => ({
@@ -1268,6 +1272,8 @@ describe("runCodexAppServerAttempt", () => {
               mode: "all",
               backend: "codex-test-sandbox",
               scope: "session",
+              workspaceAccess: "rw",
+              prune: { idleHours: 0, maxAgeDays: 0 },
             },
           },
         },
@@ -6073,14 +6079,11 @@ describe("runCodexAppServerAttempt", () => {
     };
     const config = threadStartParams.config;
 
-    expect(threadStartParams.developerInstructions).toContain("OpenClaw Agent Soul");
-    expect(threadStartParams.developerInstructions).toContain(
-      "They define who you are, how you work",
-    );
-    expect(threadStartParams.developerInstructions).toContain(soulGuidance);
-    expect(threadStartParams.developerInstructions).toContain(identityGuidance);
+    expect(threadStartParams.developerInstructions).toContain("OpenClaw Workspace Instructions");
+    expect(threadStartParams.developerInstructions).not.toContain(soulGuidance);
+    expect(threadStartParams.developerInstructions).not.toContain(identityGuidance);
     expect(threadStartParams.developerInstructions).toContain(toolGuidance);
-    expect(threadStartParams.developerInstructions).toContain(userProfile);
+    expect(threadStartParams.developerInstructions).not.toContain(userProfile);
     expect(threadStartParams.developerInstructions).not.toContain(heartbeatChecklist);
     expect(threadStartParams.developerInstructions).not.toContain(memorySummary);
     expect(threadStartParams.developerInstructions).not.toContain("Codex loads AGENTS.md natively");
@@ -6090,7 +6093,23 @@ describe("runCodexAppServerAttempt", () => {
     const turnStart = harness.requests.find((request) => request.method === "turn/start");
     const turnStartParams = turnStart?.params as {
       input?: Array<{ text?: string }>;
+      collaborationMode?: {
+        settings?: {
+          developer_instructions?: string | null;
+        };
+      };
     };
+    const collaborationInstructions =
+      turnStartParams.collaborationMode?.settings?.developer_instructions ?? "";
+    expect(collaborationInstructions).toContain("# Collaboration Mode: Default");
+    expect(collaborationInstructions).toContain("request_user_input availability");
+    expect(collaborationInstructions).toContain("OpenClaw Agent Soul");
+    expect(collaborationInstructions).toContain(soulGuidance);
+    expect(collaborationInstructions).toContain(identityGuidance);
+    expect(collaborationInstructions).not.toContain(toolGuidance);
+    expect(collaborationInstructions).toContain(userProfile);
+    expect(collaborationInstructions).not.toContain(heartbeatChecklist);
+    expect(collaborationInstructions).not.toContain(memorySummary);
     const inputText = turnStartParams.input?.[0]?.text ?? "";
     expect(inputText).toContain("OpenClaw runtime context for this turn:");
     expect(inputText).not.toContain("does not override Codex system/developer instructions");
@@ -6104,6 +6123,10 @@ describe("runCodexAppServerAttempt", () => {
     expect(inputText).toContain("Codex loads AGENTS.md natively");
     expect(inputText).not.toContain(agentsGuidance);
     expect(inputText).toContain("Current user request:\nhello");
+    expect(result.systemPromptReport?.systemPrompt.chars).toBe(
+      [threadStartParams.developerInstructions ?? "", collaborationInstructions].join("\n\n")
+        .length,
+    );
 
     const fileStats = new Map(
       result.systemPromptReport?.injectedWorkspaceFiles.map((file) => [file.name, file]) ?? [],
@@ -11038,17 +11061,25 @@ describe("runCodexAppServerAttempt", () => {
     params.trigger = "user";
     expect(
       buildTurnCollaborationMode(params, {
+        turnScopedDeveloperInstructions: "Turn-only workspace instructions.",
         heartbeatCollaborationInstructions:
           "HEARTBEAT.md exists at /tmp/workspace/HEARTBEAT.md. Read it before proceeding.",
       }).settings.developer_instructions,
-    ).toBeNull();
+    ).toContain("Turn-only workspace instructions.");
+    expect(
+      buildTurnCollaborationMode(params, {
+        turnScopedDeveloperInstructions: "Turn-only workspace instructions.",
+      }).settings.developer_instructions,
+    ).toContain("# Collaboration Mode: Default");
   });
 
   it("uses turn-scoped collaboration instructions for cron Codex turns", () => {
     const params = createParams("/tmp/session.jsonl", "/tmp/workspace");
     params.trigger = "cron";
 
-    const cronCollaborationMode = buildTurnCollaborationMode(params);
+    const cronCollaborationMode = buildTurnCollaborationMode(params, {
+      turnScopedDeveloperInstructions: "Turn-only workspace instructions.",
+    });
     expect(cronCollaborationMode.mode).toBe("default");
     expect(cronCollaborationMode.settings.model).toBe("gpt-5.4-codex");
     expect(cronCollaborationMode.settings.reasoning_effort).toBe("medium");
@@ -11060,6 +11091,9 @@ describe("runCodexAppServerAttempt", () => {
     );
     expect(cronCollaborationMode.settings.developer_instructions).toContain(
       "Use context already provided by the runtime",
+    );
+    expect(cronCollaborationMode.settings.developer_instructions).toContain(
+      "Turn-only workspace instructions.",
     );
   });
 
