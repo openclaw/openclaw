@@ -77,6 +77,11 @@ Disable with:
 - If you run the bot on **your personal Signal account**, it will ignore your own messages (loop protection).
 - For "I text the bot and it replies," use a **separate bot number**.
 
+When Signal routes through [Channel Broker](/channels/channel-broker), broker
+providers should surface these facts as `selfHosted`, `deviceBound`,
+`phoneNumberRequired`, and `signalCli` constraints instead of presenting Signal
+as a hosted bot API.
+
 ## Setup path A: link existing Signal account (QR)
 
 1. Install `signal-cli` (JVM or native build).

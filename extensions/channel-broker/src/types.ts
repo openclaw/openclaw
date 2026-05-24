@@ -1,8 +1,36 @@
 import type { BrokerPlatformCapabilities } from "openclaw/plugin-sdk/channel-broker";
 import type { SecretInput } from "openclaw/plugin-sdk/secret-input";
 
+export type ChannelBrokerPlatformConstraints = Partial<
+  Record<
+    | "businessApi"
+    | "cloudApi"
+    | "providerHosted"
+    | "deviceBound"
+    | "linkedDevice"
+    | "qrPairing"
+    | "sessionFragile"
+    | "selfHosted"
+    | "phoneNumberRequired"
+    | "signalCli"
+    | "macHostRequired"
+    | "messagesSignedIn"
+    | "privateApiOptional"
+    | "privateApiRequired"
+    | "externalBridge",
+    boolean
+  >
+>;
+
+export type ChannelBrokerResolvedPlatformCapabilities = BrokerPlatformCapabilities & {
+  constraints?: ChannelBrokerPlatformConstraints;
+  badges?: string[];
+};
+
 export type ChannelBrokerPlatformCapabilityConfig = Omit<BrokerPlatformCapabilities, "platform"> & {
   platform?: string;
+  constraints?: ChannelBrokerPlatformConstraints;
+  badges?: string[];
 };
 
 export type ChannelBrokerProviderConfig = {
@@ -59,6 +87,6 @@ export type ResolvedChannelBrokerAccount = {
   defaultConversationType: "direct" | "group" | "channel" | "thread";
   defaultTo?: string;
   allowFrom: Array<string | number>;
-  capabilities: Record<string, BrokerPlatformCapabilities>;
+  capabilities: Record<string, ChannelBrokerResolvedPlatformCapabilities>;
   config: ChannelBrokerProviderConfig;
 };

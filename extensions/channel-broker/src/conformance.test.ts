@@ -4,6 +4,7 @@ import {
   createBrokerInboundEvent,
   createBrokerOutboundRequest,
   createBrokerReceipt,
+  resolveBrokerPlatformCapabilities,
 } from "openclaw/plugin-sdk/channel-broker";
 import {
   createDurableInboundReceiveJournal,
@@ -411,6 +412,106 @@ describe("channel-broker conformance baseline", () => {
         requirements: { delivery: { media: true } },
       }),
     ).toBe(false);
+  });
+
+  it("models constrained providers with explicit broker constraints and badges", () => {
+    const capabilities = {
+      providerId: "acme-constrained",
+      delivery: { text: true },
+      receive: { webhook: true, ackAfterDurableSend: true },
+      platforms: [
+        {
+          platform: "whatsapp",
+          delivery: { media: true, replyTo: true },
+          constraints: {
+            businessApi: true,
+            cloudApi: true,
+            providerHosted: true,
+            deviceBound: false,
+          },
+          badges: ["business-api", "provider-hosted"],
+          native: { cloudApi: true },
+        },
+        {
+          platform: "signal",
+          constraints: {
+            selfHosted: true,
+            deviceBound: true,
+            phoneNumberRequired: true,
+            signalCli: true,
+          },
+          badges: ["self-hosted", "device-bound"],
+          native: { signalCli: true },
+        },
+        {
+          platform: "imessage",
+          delivery: { media: true, replyTo: true },
+          constraints: {
+            deviceBound: true,
+            macHostRequired: true,
+            messagesSignedIn: true,
+            privateApiOptional: true,
+          },
+          badges: ["mac-host", "device-bound"],
+          native: { imsg: true },
+        },
+        {
+          platform: "imessage-bluebubbles",
+          delivery: { media: true },
+          constraints: {
+            externalBridge: true,
+            deviceBound: true,
+          },
+          badges: ["external-bridge"],
+          native: { blueBubbles: true },
+        },
+      ],
+    };
+
+    expect(
+      brokerPlatformSupports({
+        capabilities,
+        platform: "whatsapp",
+        requirements: {
+          delivery: { text: true, media: true },
+          constraints: { businessApi: true, providerHosted: true },
+        },
+      }),
+    ).toBe(true);
+    expect(
+      brokerPlatformSupports({
+        capabilities,
+        platform: "whatsapp",
+        requirements: { constraints: { deviceBound: true } },
+      }),
+    ).toBe(false);
+    expect(
+      brokerPlatformSupports({
+        capabilities,
+        platform: "signal",
+        requirements: {
+          delivery: { text: true },
+          constraints: { selfHosted: true, deviceBound: true, phoneNumberRequired: true },
+          native: { signalCli: true },
+        },
+      }),
+    ).toBe(true);
+
+    const iMessage = resolveBrokerPlatformCapabilities({ capabilities, platform: "imessage" });
+    expect(iMessage?.badges).toEqual(["mac-host", "device-bound"]);
+    expect(iMessage?.constraints).toEqual({
+      deviceBound: true,
+      macHostRequired: true,
+      messagesSignedIn: true,
+      privateApiOptional: true,
+    });
+    expect(
+      brokerPlatformSupports({
+        capabilities,
+        platform: "imessage-bluebubbles",
+        requirements: { constraints: { externalBridge: true, deviceBound: true } },
+      }),
+    ).toBe(true);
   });
 
   it("keeps /verbose and tool-message policy in broker channelData instead of platform branches", () => {

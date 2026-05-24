@@ -91,6 +91,32 @@ that do not affect the generic broker lifecycle in `native`, for example
 `appApi`, `bridgeApi`, `regionalApi`, `workspaceHosted`, `selfHostedOptional`,
 `channelOnly`, or `relayBased`.
 
+Use `constraints` and `badges` when a provider is hosted, device-bound,
+self-hosted, or bridge-backed:
+
+```typescript
+const signalCapabilities = {
+  platform: "signal",
+  delivery: { text: true },
+  receive: { webhook: true, ackAfterDurableSend: true },
+  constraints: {
+    selfHosted: true,
+    deviceBound: true,
+    phoneNumberRequired: true,
+    signalCli: true,
+  },
+  badges: ["self-hosted", "device-bound"],
+  native: { signalCli: true },
+};
+```
+
+Modeled constraint keys are intentionally closed so provider metadata does not
+drift into arbitrary platform policy. Current keys include `businessApi`,
+`cloudApi`, `providerHosted`, `deviceBound`, `linkedDevice`, `qrPairing`,
+`sessionFragile`, `selfHosted`, `phoneNumberRequired`, `signalCli`,
+`macHostRequired`, `messagesSignedIn`, `privateApiOptional`,
+`privateApiRequired`, and `externalBridge`.
+
 ## Responsibilities
 
 OpenClaw owns sessions, allowlists, routing, model-run lifecycle, `/verbose`,

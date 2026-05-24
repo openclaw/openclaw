@@ -116,6 +116,54 @@ Canonical ids stay open-ended. Providers can still declare additional platform
 ids, but these aliases give OpenClaw one stable migration vocabulary for the
 maintained channel set.
 
+## Phase 4 constrained providers
+
+Device-bound and account-constrained platforms must declare their limits instead
+of looking like hosted bot APIs. Use `constraints` for machine-readable facts
+and `badges` for short UI/status labels:
+
+```json5
+capabilities: {
+  whatsapp: {
+    delivery: { text: true, media: true, replyTo: true },
+    constraints: { businessApi: true, cloudApi: true, providerHosted: true },
+    badges: ["business-api", "provider-hosted"],
+    native: { cloudApi: true },
+  },
+  signal: {
+    delivery: { text: true },
+    constraints: {
+      selfHosted: true,
+      deviceBound: true,
+      phoneNumberRequired: true,
+      signalCli: true,
+    },
+    badges: ["self-hosted", "device-bound"],
+    native: { signalCli: true },
+  },
+  imessage: {
+    delivery: { text: true, media: true, replyTo: true },
+    constraints: {
+      deviceBound: true,
+      macHostRequired: true,
+      messagesSignedIn: true,
+      privateApiOptional: true,
+    },
+    badges: ["mac-host", "device-bound"],
+    native: { imsg: true },
+  },
+}
+```
+
+Recommended constrained-provider interpretation:
+
+| Platform    | Broker posture                                                                                                                                                                                                                    |
+| ----------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| WhatsApp    | Prefer Business/Cloud-style provider integrations for hosted broker providers. QR/linked-device providers must declare `deviceBound`, `qrPairing`, `linkedDevice`, and `sessionFragile` rather than claiming Business API parity. |
+| Signal      | Treat as self-hosted/device-bound. Providers should declare `selfHosted`, `deviceBound`, `phoneNumberRequired`, and `signalCli` when backed by `signal-cli`.                                                                      |
+| iMessage    | Treat as Mac-hosted/device-bound. Providers should declare `macHostRequired`, `messagesSignedIn`, and private API requirements.                                                                                                   |
+| BlueBubbles | Do not revive a native OpenClaw BlueBubbles channel. A broker provider may expose an iMessage bridge it owns and badge it with `externalBridge`.                                                                                  |
+
 ## Provider contract
 
 Providers import the broker protocol types from

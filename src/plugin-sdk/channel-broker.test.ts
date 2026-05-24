@@ -206,18 +206,26 @@ describe("channel-broker SDK", () => {
       receive: {
         webhook: true,
       },
+      constraints: {
+        providerHosted: true,
+      },
+      badges: ["provider-hosted", " provider-hosted "],
       platforms: [
         {
           platform: "Slack",
           delivery: { replyTo: true },
           live: { progressUpdates: true, previewFinalization: true },
           receive: { ackAfterDurableSend: true },
+          constraints: { businessApi: true },
+          badges: ["workspace"],
           native: { enterpriseGrid: true },
         },
         {
           platform: "Signal",
           delivery: { text: true, thread: false },
-          native: { deviceBound: true },
+          constraints: { deviceBound: true, selfHosted: true },
+          badges: ["device-bound"],
+          native: { signalCli: true },
         },
       ],
     };
@@ -227,6 +235,8 @@ describe("channel-broker SDK", () => {
       delivery: { text: true, thread: true, replyTo: true },
       live: { draftPreview: true, progressUpdates: true, previewFinalization: true },
       receive: { webhook: true, ackAfterDurableSend: true },
+      constraints: { providerHosted: true, businessApi: true },
+      badges: ["provider-hosted", "workspace"],
       native: { enterpriseGrid: true },
     });
     expect(
@@ -237,7 +247,19 @@ describe("channel-broker SDK", () => {
           delivery: { text: true, thread: true, replyTo: true },
           live: { previewFinalization: true },
           receive: { webhook: true },
+          constraints: { businessApi: true, providerHosted: true },
           native: { enterpriseGrid: true },
+        },
+      }),
+    ).toBe(true);
+    expect(
+      brokerPlatformSupports({
+        capabilities,
+        platform: "signal",
+        requirements: {
+          delivery: { text: true },
+          constraints: { deviceBound: true, selfHosted: true },
+          native: { signalCli: true },
         },
       }),
     ).toBe(true);

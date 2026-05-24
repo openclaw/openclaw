@@ -35,12 +35,34 @@ const BrokerReceiveCapabilitiesSchema = z
   })
   .strict();
 
+const BrokerPlatformConstraintsSchema = z
+  .object({
+    businessApi: z.boolean().optional(),
+    cloudApi: z.boolean().optional(),
+    providerHosted: z.boolean().optional(),
+    deviceBound: z.boolean().optional(),
+    linkedDevice: z.boolean().optional(),
+    qrPairing: z.boolean().optional(),
+    sessionFragile: z.boolean().optional(),
+    selfHosted: z.boolean().optional(),
+    phoneNumberRequired: z.boolean().optional(),
+    signalCli: z.boolean().optional(),
+    macHostRequired: z.boolean().optional(),
+    messagesSignedIn: z.boolean().optional(),
+    privateApiOptional: z.boolean().optional(),
+    privateApiRequired: z.boolean().optional(),
+    externalBridge: z.boolean().optional(),
+  })
+  .strict();
+
 const BrokerPlatformCapabilitiesSchema = z
   .object({
     platform: z.string().optional(),
     delivery: BrokerDeliveryRequirementsSchema.optional(),
     live: BrokerLiveCapabilitiesSchema.optional(),
     receive: BrokerReceiveCapabilitiesSchema.optional(),
+    constraints: BrokerPlatformConstraintsSchema.optional(),
+    badges: z.array(z.string()).optional(),
     native: z.record(z.string(), z.boolean()).optional(),
   })
   .strict();

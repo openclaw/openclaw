@@ -627,6 +627,85 @@ describe("channel-broker plugin", () => {
     },
   );
 
+  it.each([
+    {
+      label: "WhatsApp business conversation",
+      target: "broker:whatsapp:direct:15551234567",
+      platform: "whatsapp",
+      id: "15551234567",
+      type: "direct",
+    },
+    {
+      label: "Signal self-hosted recipient",
+      target: "broker:signal:direct:+15551234567",
+      platform: "signal",
+      id: "+15551234567",
+      type: "direct",
+    },
+    {
+      label: "iMessage mac-hosted chat",
+      target: "broker:imessage:group:chat-guid-1?threadId=imessage-thread-1",
+      platform: "imessage",
+      id: "chat-guid-1",
+      type: "group",
+      threadId: "imessage-thread-1",
+    },
+  ] as const)(
+    "maps broker-prefixed Phase 4 constrained target: $label",
+    async ({ target, platform, id, type, threadId }) => {
+      const sendOutboundRequest = vi.fn(async () =>
+        createBrokerReceipt({
+          requestId: `broker-phase4-${platform}`,
+          providerId: "acme",
+          platform,
+          status: "sent",
+          messageIds: [`${platform}-message-1`],
+        }),
+      );
+      setChannelBrokerRuntime({
+        sendOutboundRequest,
+        createRequestId: () => `broker-phase4-${platform}`,
+      });
+
+      await channelBrokerPlugin.message?.send?.text?.({
+        cfg: {
+          channels: {
+            "channel-broker": {
+              accounts: {
+                acme: {
+                  enabled: true,
+                  baseUrl: "https://broker.example.test",
+                  platforms: [platform],
+                },
+              },
+            },
+          },
+        },
+        to: target,
+        text: "phase 4 proof",
+        accountId: "acme",
+      } as never);
+
+      expect(sendOutboundRequest).toHaveBeenCalledWith({
+        account: expect.objectContaining({ providerId: "acme" }),
+        request: expect.objectContaining({
+          requestId: `broker-phase4-${platform}`,
+          providerId: "acme",
+          platform,
+          conversation: {
+            id,
+            type,
+            ...(threadId ? { threadId } : {}),
+          },
+          requirements: {
+            text: true,
+            ...(threadId ? { thread: true } : {}),
+          },
+        }),
+      });
+    },
+  );
+
   it("passes cancellation through the default HTTP transport", async () => {
     const controller = new AbortController();
     const fetchMock = vi.fn(async () => ({

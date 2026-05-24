@@ -160,6 +160,14 @@ handoff path over manual terminal capture.
   </Accordion>
 </AccordionGroup>
 
+## Broker provider metadata
+
+When WhatsApp routes through [Channel Broker](/channels/channel-broker), prefer
+Business/Cloud-style providers for hosted integrations. WhatsApp Web or QR
+linked-device providers should declare broker constraints such as `deviceBound`,
+`qrPairing`, `linkedDevice`, and `sessionFragile` so users can see that they do
+not have Business API parity.
+
 ## Runtime model
 
 - Gateway owns the WhatsApp socket and reconnect loop.

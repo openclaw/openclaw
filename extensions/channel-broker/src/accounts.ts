@@ -76,17 +76,27 @@ function normalizePlatformAliasMap(
   return normalized;
 }
 
+function normalizeBadges(badges: string[] | undefined): string[] | undefined {
+  const normalized = Array.from(
+    new Set((badges ?? []).map((badge) => badge.trim()).filter(Boolean)),
+  );
+  return normalized.length > 0 ? normalized : undefined;
+}
+
 function normalizeCapabilities(
   capabilities: ChannelBrokerProviderConfig["capabilities"],
 ): NonNullable<ResolvedChannelBrokerAccount["capabilities"]> {
   const normalized: NonNullable<ResolvedChannelBrokerAccount["capabilities"]> = {};
   for (const [rawPlatform, value] of Object.entries(capabilities ?? {})) {
     const platform = normalizeKnownChannelBrokerPlatformId(value.platform ?? rawPlatform);
+    const badges = normalizeBadges(value.badges);
     normalized[platform] = {
       platform,
       ...(value.delivery ? { delivery: { ...value.delivery } } : {}),
       ...(value.live ? { live: { ...value.live } } : {}),
       ...(value.receive ? { receive: { ...value.receive } } : {}),
+      ...(value.constraints ? { constraints: { ...value.constraints } } : {}),
+      ...(badges ? { badges } : {}),
       ...(value.native ? { native: { ...value.native } } : {}),
     };
   }
