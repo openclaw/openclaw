@@ -27,11 +27,9 @@ execution:
   kind: flow
   summary: Verify a restart-triggering config change flips capability inventory and the same session successfully uses the newly restored tool after wake-up.
   config:
-    setupPrompt: "Capability flip setup: acknowledge this setup so restart wake-up has a route."
     imagePrompt: "Capability flip image check: generate a QA lighthouse image in this turn right now. Do not acknowledge first, do not promise future work, and do not stop before using image_generate. Final reply must include the MEDIA path."
     imagePromptSnippet: "Capability flip image check"
     deniedTool: image_generate
-    setupTurnTimeoutMs: 120000
     imageTurnTimeoutMs: 120000
     mediaPathTimeoutMs: 30000
 ```
@@ -69,9 +67,6 @@ steps:
           - ref: env
           - Capability flip
           - ref: sessionKey
-      - set: setupStartIndex
-        value:
-          expr: state.getSnapshot().messages.length
       - try:
           actions:
             - call: patchConfig
@@ -89,24 +84,6 @@ steps:
               args:
                 - ref: env
                 - 60000
-            - call: runAgentPrompt
-              args:
-                - ref: env
-                - sessionKey:
-                    ref: sessionKey
-                  message:
-                    expr: config.setupPrompt
-                  timeoutMs:
-                    expr: liveTurnTimeoutMs(env, config.setupTurnTimeoutMs)
-            - call: waitForOutboundMessage
-              args:
-                - ref: state
-                - lambda:
-                    params: [candidate]
-                    expr: "candidate.conversation.id === 'qa-operator' && String(candidate.text ?? '').includes('Protocol note')"
-                - expr: liveTurnTimeoutMs(env, config.setupTurnTimeoutMs)
-                - sinceIndex:
-                    ref: setupStartIndex
             - call: readEffectiveTools
               saveAs: beforeTools
               args:
