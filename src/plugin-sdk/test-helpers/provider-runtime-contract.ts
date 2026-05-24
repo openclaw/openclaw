@@ -295,7 +295,7 @@ export function describeGithubCopilotProviderRuntimeContract(
         expectFields(model, {
           id: "gpt-5.4",
           provider: "github-copilot",
-          api: "openai-codex-responses",
+          api: "openai-responses",
         });
       });
     },
