@@ -546,9 +546,10 @@ export function scheduleFollowupDrain(
       }
     } finally {
       queue.draining = false;
-      if (retryDeferred && queue.items.length > 0) {
+      const hasPendingQueueWork = queue.items.length > 0 || queue.droppedCount > 0;
+      if (retryDeferred && hasPendingQueueWork) {
         scheduleFollowupDrain(key, effectiveRunFollowup);
-      } else if (queue.items.length === 0 && queue.droppedCount === 0) {
+      } else if (!hasPendingQueueWork) {
         // Only remove the map entry if it still points to this queue instance.
         // clearSessionQueues can replace the entry mid-drain; deleting
         // unconditionally would orphan the replacement queue.
