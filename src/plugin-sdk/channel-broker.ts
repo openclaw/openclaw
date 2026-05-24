@@ -141,6 +141,13 @@ export type BrokerProviderCapabilities = {
   receive?: Partial<Record<"webhook" | "polling" | "ackAfterDurableSend" | "manualAck", boolean>>;
 };
 
+export type BrokerCapabilityRequirements = {
+  delivery?: BrokerDeliveryRequirements;
+  live?: Partial<Record<"draftPreview" | "previewFinalization" | "progressUpdates", boolean>>;
+  receive?: Partial<Record<"webhook" | "polling" | "ackAfterDurableSend" | "manualAck", boolean>>;
+  native?: Record<string, boolean>;
+};
+
 export type BrokerProviderHealth = {
   providerId: string;
   state: "ok" | "degraded" | "down" | "unknown";
@@ -208,6 +215,223 @@ export function parseBrokerConversationTarget(value: string): BrokerConversation
     conversationId,
     ...(threadId ? { threadId } : {}),
   };
+}
+
+function requireBrokerString(value: string | undefined, field: string): string {
+  const trimmed = value?.trim();
+  if (!trimmed) {
+    throw new Error(`${field} is required`);
+  }
+  return trimmed;
+}
+
+function normalizeOptionalBrokerString(value: string | undefined): string | undefined {
+  const trimmed = value?.trim();
+  return trimmed || undefined;
+}
+
+function normalizeBrokerConversationType(value: BrokerConversationType): BrokerConversationType {
+  if (value === "direct" || value === "group" || value === "channel" || value === "thread") {
+    return value;
+  }
+  throw new Error(`invalid broker conversation type: ${String(value)}`);
+}
+
+function normalizeBrokerAttachments(
+  attachments: BrokerMessageAttachment[] | undefined,
+): BrokerMessageAttachment[] | undefined {
+  if (!attachments?.length) {
+    return undefined;
+  }
+  return attachments.map((attachment) => ({
+    ...(normalizeOptionalBrokerString(attachment.id) ? { id: attachment.id?.trim() } : {}),
+    ...(normalizeOptionalBrokerString(attachment.mediaType)
+      ? { mediaType: attachment.mediaType?.trim() }
+      : {}),
+    ...(normalizeOptionalBrokerString(attachment.mimeType)
+      ? { mimeType: attachment.mimeType?.trim() }
+      : {}),
+    ...(normalizeOptionalBrokerString(attachment.name) ? { name: attachment.name?.trim() } : {}),
+    ...(normalizeOptionalBrokerString(attachment.url) ? { url: attachment.url?.trim() } : {}),
+    ...(attachment.contentBase64 !== undefined ? { contentBase64: attachment.contentBase64 } : {}),
+    ...(attachment.sizeBytes !== undefined ? { sizeBytes: attachment.sizeBytes } : {}),
+    ...(attachment.raw !== undefined ? { raw: attachment.raw } : {}),
+  }));
+}
+
+function normalizeNativeIds(
+  nativeIds: Record<string, string> | undefined,
+): Record<string, string> | undefined {
+  const normalized: Record<string, string> = {};
+  for (const [key, value] of Object.entries(nativeIds ?? {})) {
+    const normalizedKey = key.trim();
+    const normalizedValue = value.trim();
+    if (normalizedKey && normalizedValue) {
+      normalized[normalizedKey] = normalizedValue;
+    }
+  }
+  return Object.keys(normalized).length > 0 ? normalized : undefined;
+}
+
+function normalizeBrokerPlatformCapabilities(
+  capabilities: BrokerPlatformCapabilities,
+): BrokerPlatformCapabilities {
+  return {
+    platform: normalizeBrokerPlatformId(capabilities.platform),
+    ...(capabilities.delivery ? { delivery: { ...capabilities.delivery } } : {}),
+    ...(capabilities.live ? { live: { ...capabilities.live } } : {}),
+    ...(capabilities.receive ? { receive: { ...capabilities.receive } } : {}),
+    ...(capabilities.native ? { native: { ...capabilities.native } } : {}),
+  };
+}
+
+export function normalizeBrokerProviderCapabilities(
+  capabilities: BrokerProviderCapabilities,
+): BrokerProviderCapabilities {
+  return {
+    ...(normalizeOptionalBrokerString(capabilities.providerId)
+      ? { providerId: capabilities.providerId?.trim() }
+      : {}),
+    platforms: capabilities.platforms.map(normalizeBrokerPlatformCapabilities),
+    ...(capabilities.delivery ? { delivery: { ...capabilities.delivery } } : {}),
+    ...(capabilities.live ? { live: { ...capabilities.live } } : {}),
+    ...(capabilities.receive ? { receive: { ...capabilities.receive } } : {}),
+  };
+}
+
+export function createBrokerInboundEvent(
+  event: Omit<BrokerInboundEventV1, "version" | "platform"> & { platform: string },
+): BrokerInboundEventV1 {
+  return normalizeBrokerInboundEvent({
+    ...event,
+    version: BROKER_PROTOCOL_VERSION,
+  });
+}
+
+export function normalizeBrokerInboundEvent(event: BrokerInboundEventV1): BrokerInboundEventV1 {
+  if (event.version !== BROKER_PROTOCOL_VERSION) {
+    throw new Error(`unsupported broker inbound event version: ${String(event.version)}`);
+  }
+  const attachments = normalizeBrokerAttachments(event.message.attachments);
+  const nativeIds = normalizeNativeIds(event.message.nativeIds);
+  return {
+    version: BROKER_PROTOCOL_VERSION,
+    eventId: requireBrokerString(event.eventId, "broker inbound event id"),
+    providerId: requireBrokerString(event.providerId, "broker provider id"),
+    platform: normalizeBrokerPlatformId(event.platform),
+    ...(normalizeOptionalBrokerString(event.accountId)
+      ? { accountId: event.accountId?.trim() }
+      : {}),
+    conversation: {
+      id: requireBrokerString(event.conversation.id, "broker conversation id"),
+      type: normalizeBrokerConversationType(event.conversation.type),
+      ...(normalizeOptionalBrokerString(event.conversation.parentId)
+        ? { parentId: event.conversation.parentId?.trim() }
+        : {}),
+      ...(normalizeOptionalBrokerString(event.conversation.threadId)
+        ? { threadId: event.conversation.threadId?.trim() }
+        : {}),
+      ...(normalizeOptionalBrokerString(event.conversation.title)
+        ? { title: event.conversation.title?.trim() }
+        : {}),
+    },
+    sender: {
+      id: requireBrokerString(event.sender.id, "broker sender id"),
+      ...(normalizeOptionalBrokerString(event.sender.displayName)
+        ? { displayName: event.sender.displayName?.trim() }
+        : {}),
+      ...(normalizeOptionalBrokerString(event.sender.handle)
+        ? { handle: event.sender.handle?.trim() }
+        : {}),
+      ...(event.sender.isBot !== undefined ? { isBot: event.sender.isBot } : {}),
+      ...(event.sender.raw !== undefined ? { raw: event.sender.raw } : {}),
+    },
+    message: {
+      id: requireBrokerString(event.message.id, "broker message id"),
+      ...(normalizeOptionalBrokerString(event.message.text)
+        ? { text: event.message.text?.trim() }
+        : {}),
+      ...(attachments ? { attachments } : {}),
+      ...(normalizeOptionalBrokerString(event.message.timestamp)
+        ? { timestamp: event.message.timestamp?.trim() }
+        : {}),
+      ...(normalizeOptionalBrokerString(event.message.replyToId)
+        ? { replyToId: event.message.replyToId?.trim() }
+        : {}),
+      ...(nativeIds ? { nativeIds } : {}),
+      ...(normalizeOptionalBrokerString(event.message.rawRef)
+        ? { rawRef: event.message.rawRef?.trim() }
+        : {}),
+      ...(event.message.raw !== undefined ? { raw: event.message.raw } : {}),
+    },
+    ...(event.capabilities
+      ? { capabilities: normalizeBrokerProviderCapabilities(event.capabilities) }
+      : {}),
+    ...(event.raw !== undefined ? { raw: event.raw } : {}),
+  };
+}
+
+export function buildBrokerInboundDedupeKey(event: BrokerInboundEventV1): string {
+  const normalized = normalizeBrokerInboundEvent(event);
+  return [
+    normalized.providerId,
+    normalized.accountId ?? "",
+    normalized.platform,
+    normalized.eventId,
+  ]
+    .map((part) => encodeURIComponent(part))
+    .join(":");
+}
+
+export function resolveBrokerPlatformCapabilities(params: {
+  capabilities: BrokerProviderCapabilities;
+  platform: string;
+}): BrokerPlatformCapabilities | undefined {
+  const normalized = normalizeBrokerProviderCapabilities(params.capabilities);
+  const platform = normalizeBrokerPlatformId(params.platform);
+  const platformCapabilities = normalized.platforms.find((entry) => entry.platform === platform);
+  if (!platformCapabilities) {
+    return undefined;
+  }
+  return {
+    platform,
+    delivery: Object.assign({}, normalized.delivery, platformCapabilities.delivery),
+    live: Object.assign({}, normalized.live, platformCapabilities.live),
+    receive: Object.assign({}, normalized.receive, platformCapabilities.receive),
+    ...(platformCapabilities.native ? { native: { ...platformCapabilities.native } } : {}),
+  };
+}
+
+function supportsRequiredFlags(
+  supported: Record<string, boolean> | undefined,
+  required: Record<string, boolean> | undefined,
+): boolean {
+  for (const [key, value] of Object.entries(required ?? {})) {
+    if (value === true && supported?.[key] !== true) {
+      return false;
+    }
+  }
+  return true;
+}
+
+export function brokerPlatformSupports(params: {
+  capabilities: BrokerProviderCapabilities;
+  platform: string;
+  requirements: BrokerCapabilityRequirements;
+}): boolean {
+  const platformCapabilities = resolveBrokerPlatformCapabilities({
+    capabilities: params.capabilities,
+    platform: params.platform,
+  });
+  if (!platformCapabilities) {
+    return false;
+  }
+  return (
+    supportsRequiredFlags(platformCapabilities.delivery, params.requirements.delivery) &&
+    supportsRequiredFlags(platformCapabilities.live, params.requirements.live) &&
+    supportsRequiredFlags(platformCapabilities.receive, params.requirements.receive) &&
+    supportsRequiredFlags(platformCapabilities.native, params.requirements.native)
+  );
 }
 
 export function createBrokerOutboundRequest(

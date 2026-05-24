@@ -1,12 +1,18 @@
 import { describe, expect, it } from "vitest";
 import {
   BROKER_PROTOCOL_VERSION,
+  brokerPlatformSupports,
+  buildBrokerInboundDedupeKey,
   buildBrokerConversationTarget,
+  createBrokerInboundEvent,
   createBrokerOutboundRequest,
   createBrokerReceipt,
   normalizeBrokerPlatformId,
+  normalizeBrokerInboundEvent,
+  resolveBrokerPlatformCapabilities,
   parseBrokerConversationTarget,
 } from "./channel-broker.js";
+import type { BrokerProviderCapabilities } from "./channel-broker.js";
 
 describe("channel-broker SDK", () => {
   it("normalizes provider platform ids for capability and routing keys", () => {
@@ -65,6 +71,173 @@ describe("channel-broker SDK", () => {
       relation: { replyToId: "native-parent", silent: false },
       requirements: { text: true, thread: true, replyTo: true },
     });
+  });
+
+  it("normalizes inbound events without losing provider-native metadata", () => {
+    const event = createBrokerInboundEvent({
+      eventId: " evt-1 ",
+      providerId: " acme ",
+      platform: "Telegram",
+      accountId: " bot-main ",
+      conversation: {
+        id: " -100123 ",
+        type: "thread",
+        parentId: " -100123 ",
+        threadId: " 77 ",
+        title: " Ops ",
+      },
+      sender: {
+        id: " user-1 ",
+        handle: " lume ",
+        displayName: " Lume ",
+        raw: { native: "sender" },
+      },
+      message: {
+        id: " msg-1 ",
+        text: " hello ",
+        attachments: [
+          {
+            id: " file-1 ",
+            mediaType: " image ",
+            mimeType: " image/png ",
+            url: " https://cdn.example.test/file.png ",
+          },
+        ],
+        nativeIds: { " telegram.message_id ": " 123 ", empty: " " },
+        rawRef: " update-1 ",
+        raw: { update_id: 99 },
+      },
+      capabilities: {
+        providerId: " acme ",
+        delivery: { text: true },
+        platforms: [{ platform: "Telegram", delivery: { thread: true } }],
+      },
+      raw: { update_id: 99 },
+    });
+
+    expect(event).toMatchObject({
+      version: BROKER_PROTOCOL_VERSION,
+      eventId: "evt-1",
+      providerId: "acme",
+      platform: "telegram",
+      accountId: "bot-main",
+      conversation: {
+        id: "-100123",
+        type: "thread",
+        parentId: "-100123",
+        threadId: "77",
+        title: "Ops",
+      },
+      sender: {
+        id: "user-1",
+        handle: "lume",
+        displayName: "Lume",
+        raw: { native: "sender" },
+      },
+      message: {
+        id: "msg-1",
+        text: "hello",
+        attachments: [
+          {
+            id: "file-1",
+            mediaType: "image",
+            mimeType: "image/png",
+            url: "https://cdn.example.test/file.png",
+          },
+        ],
+        nativeIds: { "telegram.message_id": "123" },
+        rawRef: "update-1",
+        raw: { update_id: 99 },
+      },
+      capabilities: {
+        providerId: "acme",
+        delivery: { text: true },
+        platforms: [{ platform: "telegram", delivery: { thread: true } }],
+      },
+      raw: { update_id: 99 },
+    });
+    expect(buildBrokerInboundDedupeKey(event)).toBe("acme:bot-main:telegram:evt-1");
+  });
+
+  it("rejects malformed inbound events before durable receive dispatch", () => {
+    expect(() =>
+      normalizeBrokerInboundEvent({
+        version: 2,
+        eventId: "evt-1",
+        providerId: "acme",
+        platform: "telegram",
+        conversation: { id: "chat-1", type: "channel" },
+        sender: { id: "user-1" },
+        message: { id: "msg-1" },
+      } as never),
+    ).toThrow("unsupported broker inbound event version: 2");
+    expect(() =>
+      createBrokerInboundEvent({
+        eventId: " ",
+        providerId: "acme",
+        platform: "telegram",
+        conversation: { id: "chat-1", type: "channel" },
+        sender: { id: "user-1" },
+        message: { id: "msg-1" },
+      }),
+    ).toThrow("broker inbound event id is required");
+  });
+
+  it("merges provider-wide and platform-specific capability badges", () => {
+    const capabilities: BrokerProviderCapabilities = {
+      providerId: "acme",
+      delivery: {
+        text: true,
+        thread: true,
+      },
+      live: {
+        draftPreview: true,
+      },
+      receive: {
+        webhook: true,
+      },
+      platforms: [
+        {
+          platform: "Slack",
+          delivery: { replyTo: true },
+          live: { progressUpdates: true, previewFinalization: true },
+          receive: { ackAfterDurableSend: true },
+          native: { enterpriseGrid: true },
+        },
+        {
+          platform: "Signal",
+          delivery: { text: true, thread: false },
+          native: { deviceBound: true },
+        },
+      ],
+    };
+
+    expect(resolveBrokerPlatformCapabilities({ capabilities, platform: "slack" })).toEqual({
+      platform: "slack",
+      delivery: { text: true, thread: true, replyTo: true },
+      live: { draftPreview: true, progressUpdates: true, previewFinalization: true },
+      receive: { webhook: true, ackAfterDurableSend: true },
+      native: { enterpriseGrid: true },
+    });
+    expect(
+      brokerPlatformSupports({
+        capabilities,
+        platform: "slack",
+        requirements: {
+          delivery: { text: true, thread: true, replyTo: true },
+          live: { previewFinalization: true },
+          receive: { webhook: true },
+          native: { enterpriseGrid: true },
+        },
+      }),
+    ).toBe(true);
+    expect(
+      brokerPlatformSupports({
+        capabilities,
+        platform: "signal",
+        requirements: { delivery: { thread: true } },
+      }),
+    ).toBe(false);
   });
 
   it("creates versioned receipts with normalized platform ids", () => {

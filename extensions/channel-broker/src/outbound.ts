@@ -15,6 +15,20 @@ import type { CoreConfig } from "./types.js";
 
 const CHANNEL_ID = "channel-broker" as const;
 
+export class ChannelBrokerProviderReceiptError extends Error {
+  readonly receipt: BrokerReceiptV1;
+
+  constructor(receipt: BrokerReceiptV1) {
+    const providerMessage = receipt.error?.message?.trim();
+    const retryAfter = receipt.retryAfterMs ? ` retryAfterMs=${receipt.retryAfterMs}` : "";
+    super(
+      `Channel broker provider ${receipt.providerId} returned ${receipt.status} receipt for request ${receipt.requestId}${providerMessage ? `: ${providerMessage}` : ""}${retryAfter}.`,
+    );
+    this.name = "ChannelBrokerProviderReceiptError";
+    this.receipt = receipt;
+  }
+}
+
 function normalizeMaybeString(value: string | number | null | undefined): string | undefined {
   if (value == null) {
     return undefined;
@@ -23,7 +37,15 @@ function normalizeMaybeString(value: string | number | null | undefined): string
   return trimmed || undefined;
 }
 
+function assertProviderReceiptSent(receipt: BrokerReceiptV1): void {
+  if (receipt.status === "sent") {
+    return;
+  }
+  throw new ChannelBrokerProviderReceiptError(receipt);
+}
+
 function resolvePrimaryMessageId(receipt: BrokerReceiptV1): string {
+  assertProviderReceiptSent(receipt);
   const messageId = receipt.messageIds[0]?.trim();
   if (!messageId) {
     throw new Error(`Channel broker provider ${receipt.providerId} did not return a message id.`);
