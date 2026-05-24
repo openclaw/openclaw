@@ -70,7 +70,7 @@ import Testing
             defaultRealtimeModelIdFallback: "gpt-realtime-2",
             defaultSilenceTimeoutMs: 900)
 
-        #expect(parsed.executionMode == .realtimeClient)
+        #expect(parsed.executionMode == .realtimeRelay)
         #expect(parsed.realtimeProvider == "openai")
         #expect(parsed.realtimeModelId == "gpt-realtime-2")
     }
@@ -172,7 +172,7 @@ import Testing
         #expect(descriptor.subtitle == "Native • en-US")
     }
 
-    @Test func usesRealtimeClientModeForWebRTCTransport() {
+    @Test func mapsWebRTCRealtimeTransportToGatewayRelayOnIOS() {
         let config: [String: Any] = [
             "talk": [
                 "realtime": [
@@ -190,7 +190,28 @@ import Testing
             defaultRealtimeModelIdFallback: "gpt-realtime-2",
             defaultSilenceTimeoutMs: 900)
 
-        #expect(parsed.executionMode == .realtimeClient)
+        #expect(parsed.executionMode == .realtimeRelay)
+    }
+
+    @Test func leavesNativeModeForManagedRoomRealtimeTransport() {
+        let config: [String: Any] = [
+            "talk": [
+                "realtime": [
+                    "provider": "openai",
+                    "mode": "realtime",
+                    "transport": "managed-room",
+                ],
+            ],
+        ]
+
+        let parsed = TalkModeGatewayConfigParser.parse(
+            config: config,
+            defaultProvider: "elevenlabs",
+            defaultModelIdFallback: "eleven_v3",
+            defaultRealtimeModelIdFallback: "gpt-realtime-2",
+            defaultSilenceTimeoutMs: 900)
+
+        #expect(parsed.executionMode == .native)
     }
 
     @Test func detectsPCMFormatRejectionFromElevenLabsError() {
