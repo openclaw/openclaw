@@ -82,7 +82,11 @@ const emptyTotals = (): CostUsageTotals => ({
   missingCostEntries: 0,
 });
 
-const USAGE_COST_CACHE_VERSION = 3;
+// Bump when the *meaning* of cached totals changes (not just their inputs), so durable
+// caches written by older builds are rebuilt instead of served stale. Bumped to 4:
+// unpriced (unknown) zero-cost usage now counts toward missingCostEntries, so a warm
+// cache from a pre-change build would otherwise keep reporting the old complete-$0 totals.
+const USAGE_COST_CACHE_VERSION = 4;
 const USAGE_COST_CACHE_FILE = ".usage-cost-cache.json";
 const USAGE_COST_CACHE_LOCK_WRITE_GRACE_MS = 10_000;
 const logger = createSubsystemLogger("usage-cost-cache");
