@@ -148,6 +148,12 @@ export type CodexPluginConfig = {
   };
 };
 
+export function shouldAutoApproveCodexAppServerApprovals(
+  appServer: Pick<CodexAppServerRuntimeOptions, "approvalPolicy" | "sandbox">,
+): boolean {
+  return appServer.approvalPolicy === "never" && appServer.sandbox === "danger-full-access";
+}
+
 export const CODEX_APP_SERVER_CONFIG_KEYS = [
   "mode",
   "transport",

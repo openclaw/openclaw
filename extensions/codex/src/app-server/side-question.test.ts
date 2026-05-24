@@ -676,6 +676,7 @@ describe("runCodexAppServerSideQuestion", () => {
       },
       threadId: "side-thread",
       turnId: "turn-1",
+      autoApprove: false,
       paramsForRun: {
         messageChannel: "discord",
         messageProvider: "discord-voice",
