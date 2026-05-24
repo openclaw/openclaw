@@ -303,6 +303,20 @@ export function parseLineDirectives(payload: ReplyPayload): ReplyPayload {
 
   text = text.replace(/\n{3,}/g, "\n\n").trim();
 
+  // Validate Flex Message byte size: LINE API silently rejects payloads > 32KB
+  if (lineData.flexMessage) {
+    const payload = JSON.stringify(lineData.flexMessage.contents);
+    const byteSize = new TextEncoder().encode(payload).length;
+    if (byteSize > 32768) {
+      console.warn(
+        `[LINE] FlexMessage byte size ${byteSize} exceeds 32KB limit. Falling back to plain text message.`,
+      );
+      const fallbackText = `[內容過長，已轉為純文字] ${lineData.flexMessage.altText}`;
+      delete lineData.flexMessage;
+      text = text ? `${fallbackText}\n\n${text}` : fallbackText;
+    }
+  }
+
   result.text = text || undefined;
   if (Object.keys(lineData).length > 0) {
     result.channelData = { ...result.channelData, line: lineData };

@@ -74,6 +74,112 @@ Table 2:
     expect(tables).toHaveLength(0);
     expect(textWithoutTables).toBe(text);
   });
+
+  it("handles 4-space indented tables", () => {
+    const text = `    | Name | Value |
+    |------|-------|
+    | foo  | 123   |
+    | bar  | 456   |`;
+
+    const { tables } = extractMarkdownTables(text);
+
+    expect(tables).toHaveLength(1);
+    expect(tables[0].headers).toEqual(["Name", "Value"]);
+    expect(tables[0].rows).toEqual([
+      ["foo", "123"],
+      ["bar", "456"],
+    ]);
+  });
+
+  it("handles 2-space indented tables", () => {
+    const text = `  | A | B |
+  |---|---|
+  | 1 | 2 |`;
+
+    const { tables } = extractMarkdownTables(text);
+
+    expect(tables).toHaveLength(1);
+    expect(tables[0].headers).toEqual(["A", "B"]);
+    expect(tables[0].rows).toEqual([["1", "2"]]);
+  });
+
+  it("extracts tables inside list items", () => {
+    const text = `- item 1
+  | A | B |
+  |---|---|
+  | 1 | 2 |`;
+
+    const { tables } = extractMarkdownTables(text);
+
+    expect(tables).toHaveLength(1);
+    expect(tables[0].headers).toEqual(["A", "B"]);
+    expect(tables[0].rows).toEqual([["1", "2"]]);
+  });
+
+  it("handles CRLF line endings in tables", () => {
+    const text = "| Name | Value |\r\n|------|-------|\r\n| foo  | 123   |\r\n| bar  | 456   |\r\n";
+
+    const { tables } = extractMarkdownTables(text);
+
+    expect(tables).toHaveLength(1);
+    expect(tables[0].headers).toEqual(["Name", "Value"]);
+    expect(tables[0].rows).toEqual([
+      ["foo", "123"],
+      ["bar", "456"],
+    ]);
+  });
+
+  it("handles mixed LF and CRLF line endings in tables", () => {
+    const text = "| Name | Value |\r\n|------|-------|\n| foo  | 123   |\r\n| bar  | 456   |\n";
+
+    const { tables } = extractMarkdownTables(text);
+
+    expect(tables).toHaveLength(1);
+    expect(tables[0].headers).toEqual(["Name", "Value"]);
+    expect(tables[0].rows).toEqual([
+      ["foo", "123"],
+      ["bar", "456"],
+    ]);
+  });
+
+  it("handles multiple empty lines before table", () => {
+    const text = `Some text.
+
+
+
+
+| A | B |
+|---|---|
+| 1 | 2 |
+
+End.`;
+
+    const { tables, textWithoutTables } = extractMarkdownTables(text);
+
+    expect(tables).toHaveLength(1);
+    expect(tables[0].headers).toEqual(["A", "B"]);
+    expect(tables[0].rows).toEqual([["1", "2"]]);
+    expect(textWithoutTables).toContain("Some text.");
+    expect(textWithoutTables).toContain("End.");
+    expect(textWithoutTables).not.toContain("|");
+  });
+
+  it("handles empty lines between header separator and data rows", () => {
+    const text = `| A | B |
+|---|---|
+
+| 1 | 2 |
+| 3 | 4 |`;
+
+    const { tables } = extractMarkdownTables(text);
+
+    expect(tables).toHaveLength(1);
+    expect(tables[0].headers).toEqual(["A", "B"]);
+    expect(tables[0].rows).toEqual([
+      ["1", "2"],
+      ["3", "4"],
+    ]);
+  });
 });
 
 describe("extractCodeBlocks", () => {
@@ -231,6 +337,60 @@ describe("convertTableToFlexBubble", () => {
     expect(dataRow.contents[0].text).toBe("Alpha");
     expect(dataRow.contents[0].weight).toBe("bold");
   });
+
+  it("shows no truncation hint for 10 rows or fewer", () => {
+    const table = {
+      headers: ["A"],
+      rows: Array.from({ length: 10 }, (_, i) => [`row ${i + 1}`]),
+    };
+
+    const bubble = convertTableToFlexBubble(table);
+    const body = bubble.body as {
+      contents: Array<{ contents?: Array<{ text?: string }> }>;
+    };
+
+    // No box should contain a "… N more rows" text
+    const hasHint = body.contents.some((c) =>
+      c.contents?.some((cc) => cc.text?.includes("more rows")),
+    );
+    expect(hasHint).toBe(false);
+  });
+
+  it("shows truncation hint for 11 rows", () => {
+    const table = {
+      headers: ["A"],
+      rows: Array.from({ length: 11 }, (_, i) => [`row ${i + 1}`]),
+    };
+
+    const bubble = convertTableToFlexBubble(table);
+    const body = bubble.body as {
+      contents: Array<{ contents?: Array<{ text?: string }> }>;
+    };
+
+    const hintTexts = body.contents
+      .flatMap((c) => c.contents ?? [])
+      .filter((c) => c.text?.includes("more rows"))
+      .map((c) => c.text);
+    expect(hintTexts).toEqual(["… 1 more rows"]);
+  });
+
+  it("shows truncation hint with correct count for 15 rows", () => {
+    const table = {
+      headers: ["A"],
+      rows: Array.from({ length: 15 }, (_, i) => [`row ${i + 1}`]),
+    };
+
+    const bubble = convertTableToFlexBubble(table);
+    const body = bubble.body as {
+      contents: Array<{ contents?: Array<{ text?: string }> }>;
+    };
+
+    const hintTexts = body.contents
+      .flatMap((c) => c.contents ?? [])
+      .filter((c) => c.text?.includes("more rows"))
+      .map((c) => c.text);
+    expect(hintTexts).toEqual(["… 5 more rows"]);
+  });
 });
 
 describe("convertCodeBlockToFlexBubble", () => {
@@ -258,10 +418,69 @@ describe("convertCodeBlockToFlexBubble", () => {
 
     const bubble = convertCodeBlockToFlexBubble(block);
 
-    const body = bubble.body as { contents: Array<{ contents: Array<{ text: string }> }> };
-    const codeText = body.contents[1].contents[0].text;
+    const body = bubble.body as { contents: Array<{ contents?: Array<{ text: string }> }> };
+    const codeBox = body.contents[2];
+    const codeText = codeBox.contents?.[0]?.text ?? "";
     expect(codeText.length).toBeLessThan(longCode.length);
-    expect(codeText).toContain("...");
+    expect(codeText).toContain("chars truncated");
+  });
+
+  it("does not truncate code exactly at 2000 chars", () => {
+    const code = "x".repeat(2000);
+    const block = { code };
+
+    const bubble = convertCodeBlockToFlexBubble(block);
+    const body = bubble.body as { contents: Array<{ contents?: Array<{ text: string }> }> };
+    const codeBox = body.contents[2];
+    const displayText = codeBox.contents?.[0]?.text ?? "";
+
+    expect(displayText).toBe(code);
+    expect(displayText).not.toContain("chars truncated");
+  });
+
+  it("truncates code at 2001 chars with correct count", () => {
+    const code = "x".repeat(2001);
+    const block = { code };
+
+    const bubble = convertCodeBlockToFlexBubble(block);
+    const body = bubble.body as { contents: Array<{ contents?: Array<{ text: string }> }> };
+    const codeBox = body.contents[2];
+    const displayText = codeBox.contents?.[0]?.text ?? "";
+
+    expect(displayText).toContain("… [1 chars truncated]");
+    // The suffix may include a newline, making displayText longer than original code
+    expect(displayText).not.toBe(code);
+  });
+
+  it("truncates code at 2500 chars with correct count", () => {
+    const code = "x".repeat(2500);
+    const block = { code };
+
+    const bubble = convertCodeBlockToFlexBubble(block);
+    const body = bubble.body as { contents: Array<{ contents?: Array<{ text: string }> }> };
+    const codeBox = body.contents[2];
+    const displayText = codeBox.contents?.[0]?.text ?? "";
+
+    expect(displayText).toContain("… [500 chars truncated]");
+    expect(displayText.length).toBeLessThan(code.length);
+  });
+
+  it("shows language tag when language is provided", () => {
+    const block = { language: "javascript", code: "const x = 1;" };
+
+    const bubble = convertCodeBlockToFlexBubble(block);
+    const body = bubble.body as { contents: Array<{ text?: string }> };
+
+    expect(body.contents[1].text).toBe("javascript");
+  });
+
+  it("shows 'code' as language tag when language is undefined", () => {
+    const block = { code: "plain code" };
+
+    const bubble = convertCodeBlockToFlexBubble(block);
+    const body = bubble.body as { contents: Array<{ text?: string }> };
+
+    expect(body.contents[1].text).toBe("code");
   });
 });
 
