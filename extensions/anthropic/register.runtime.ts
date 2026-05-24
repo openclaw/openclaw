@@ -32,6 +32,7 @@ import { buildClaudeCliCatalogEntries } from "./cli-catalog.js";
 import { buildAnthropicCliMigrationResult } from "./cli-migration.js";
 import {
   CLAUDE_CLI_BACKEND_ID,
+  CLAUDE_CLI_BEDROCK_AUTH_MARKER,
   CLAUDE_CLI_DEFAULT_ALLOWLIST_REFS,
   CLAUDE_CLI_DEFAULT_MODEL_REF,
 } from "./cli-shared.js";
@@ -499,6 +500,22 @@ function resolveClaudeCliSyntheticAuth() {
       };
 }
 
+// When Claude CLI is the agent's runtime AND CLAUDE_CODE_USE_BEDROCK=1, the CLI
+// authenticates through the AWS SDK chain instead of writing an Anthropic OAuth
+// credential to ~/.claude/.credentials.json. Synthesize a non-secret marker so
+// core auth resolution treats the provider as available; runtime calls are
+// owned by the Claude CLI process itself, which carries Bedrock auth forward.
+function resolveClaudeCliBedrockSyntheticAuth() {
+  if (!claudeCliAuth.isClaudeCliBedrockAuthEnabled()) {
+    return undefined;
+  }
+  return {
+    apiKey: CLAUDE_CLI_BEDROCK_AUTH_MARKER,
+    source: "Claude CLI Bedrock auth (CLAUDE_CODE_USE_BEDROCK=1)",
+    mode: "api-key" as const,
+  };
+}
+
 async function runAnthropicCliMigration(ctx: ProviderAuthContext): Promise<ProviderAuthResult> {
   const credential = claudeCliAuth.readClaudeCliCredentialsForSetup();
   if (!credential) {
@@ -665,10 +682,21 @@ export function buildAnthropicProvider(): ProviderPlugin {
       );
     },
     normalizeResolvedModel: (ctx) => normalizeAnthropicResolvedModel(ctx),
-    resolveSyntheticAuth: ({ provider }) =>
-      normalizeLowercaseStringOrEmpty(provider) === CLAUDE_CLI_BACKEND_ID
-        ? resolveClaudeCliSyntheticAuth()
-        : undefined,
+    resolveSyntheticAuth: ({ provider }) => {
+      const normalized = normalizeLowercaseStringOrEmpty(provider);
+      if (normalized === CLAUDE_CLI_BACKEND_ID) {
+        return resolveClaudeCliSyntheticAuth();
+      }
+      // Post-2026.5.21 model refs canonicalize as `anthropic/<model>` even when
+      // the agent's runtime is the Claude CLI, so the synthetic-auth hook fires
+      // for `anthropic` rather than `claude-cli`. Honor the Bedrock-via-CLI
+      // path here so Bedrock-mode Claude CLI runs do not require an Anthropic
+      // OAuth profile that does not exist on Bedrock-only hosts.
+      if (normalized === PROVIDER_ID) {
+        return resolveClaudeCliBedrockSyntheticAuth();
+      }
+      return undefined;
+    },
     // Publish Claude CLI rows through the provider catalog hook.
     augmentModelCatalog: () => buildClaudeCliCatalogEntries(),
     buildReplayPolicy: buildAnthropicReplayPolicy,

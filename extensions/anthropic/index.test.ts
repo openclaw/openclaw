@@ -8,17 +8,21 @@ import {
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 
-const { readClaudeCliCredentialsForSetupMock, readClaudeCliCredentialsForRuntimeMock } = vi.hoisted(
-  () => ({
-    readClaudeCliCredentialsForSetupMock: vi.fn(),
-    readClaudeCliCredentialsForRuntimeMock: vi.fn(),
-  }),
-);
+const {
+  readClaudeCliCredentialsForSetupMock,
+  readClaudeCliCredentialsForRuntimeMock,
+  isClaudeCliBedrockAuthEnabledMock,
+} = vi.hoisted(() => ({
+  readClaudeCliCredentialsForSetupMock: vi.fn(),
+  readClaudeCliCredentialsForRuntimeMock: vi.fn(),
+  isClaudeCliBedrockAuthEnabledMock: vi.fn(() => false),
+}));
 
 vi.mock("./cli-auth-seam.js", () => {
   return {
     readClaudeCliCredentialsForSetup: readClaudeCliCredentialsForSetupMock,
     readClaudeCliCredentialsForRuntime: readClaudeCliCredentialsForRuntimeMock,
+    isClaudeCliBedrockAuthEnabled: isClaudeCliBedrockAuthEnabledMock,
   };
 });
 
@@ -27,6 +31,8 @@ import anthropicPlugin from "./index.js";
 beforeEach(() => {
   readClaudeCliCredentialsForSetupMock.mockReset();
   readClaudeCliCredentialsForRuntimeMock.mockReset();
+  isClaudeCliBedrockAuthEnabledMock.mockReset();
+  isClaudeCliBedrockAuthEnabledMock.mockReturnValue(false);
 });
 
 afterAll(() => {
@@ -674,6 +680,47 @@ describe("anthropic provider replay hooks", () => {
       mode: "token",
       expiresAt: 123,
     });
+  });
+
+  it("resolves anthropic synthetic auth via Claude CLI Bedrock marker when CLAUDE_CODE_USE_BEDROCK=1", async () => {
+    isClaudeCliBedrockAuthEnabledMock.mockReturnValue(true);
+
+    const provider = await registerSingleProviderPlugin(anthropicPlugin);
+
+    expect(
+      provider.resolveSyntheticAuth?.({
+        provider: "anthropic",
+      } as never),
+    ).toEqual({
+      apiKey: "claude-cli-bedrock",
+      source: "Claude CLI Bedrock auth (CLAUDE_CODE_USE_BEDROCK=1)",
+      mode: "api-key",
+    });
+    expect(readClaudeCliCredentialsForRuntimeMock).not.toHaveBeenCalled();
+  });
+
+  it("returns undefined for anthropic synthetic auth when CLAUDE_CODE_USE_BEDROCK is not set", async () => {
+    isClaudeCliBedrockAuthEnabledMock.mockReturnValue(false);
+
+    const provider = await registerSingleProviderPlugin(anthropicPlugin);
+
+    expect(
+      provider.resolveSyntheticAuth?.({
+        provider: "anthropic",
+      } as never),
+    ).toBeUndefined();
+  });
+
+  it("returns undefined for unrelated providers even with CLAUDE_CODE_USE_BEDROCK=1", async () => {
+    isClaudeCliBedrockAuthEnabledMock.mockReturnValue(true);
+
+    const provider = await registerSingleProviderPlugin(anthropicPlugin);
+
+    expect(
+      provider.resolveSyntheticAuth?.({
+        provider: "openai",
+      } as never),
+    ).toBeUndefined();
   });
 
   it("stores a claude-cli auth profile during anthropic cli migration", async () => {

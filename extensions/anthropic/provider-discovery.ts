@@ -1,7 +1,12 @@
 import type { ProviderPlugin } from "openclaw/plugin-sdk/provider-model-shared";
-import { readClaudeCliCredentialsForRuntime } from "./cli-auth-seam.js";
+import {
+  isClaudeCliBedrockAuthEnabled,
+  readClaudeCliCredentialsForRuntime,
+} from "./cli-auth-seam.js";
 
+const ANTHROPIC_PROVIDER_ID = "anthropic";
 const CLAUDE_CLI_BACKEND_ID = "claude-cli";
+const CLAUDE_CLI_BEDROCK_AUTH_MARKER = "claude-cli-bedrock";
 
 function resolveClaudeCliSyntheticAuth() {
   const credential = readClaudeCliCredentialsForRuntime();
@@ -23,13 +28,34 @@ function resolveClaudeCliSyntheticAuth() {
       };
 }
 
+function resolveClaudeCliBedrockSyntheticAuth() {
+  if (!isClaudeCliBedrockAuthEnabled()) {
+    return undefined;
+  }
+  return {
+    apiKey: CLAUDE_CLI_BEDROCK_AUTH_MARKER,
+    source: "Claude CLI Bedrock auth (CLAUDE_CODE_USE_BEDROCK=1)",
+    mode: "api-key" as const,
+  };
+}
+
 const anthropicProviderDiscovery: ProviderPlugin = {
   id: CLAUDE_CLI_BACKEND_ID,
   label: "Claude CLI",
   docsPath: "/providers/models",
   auth: [],
-  resolveSyntheticAuth: ({ provider }) =>
-    provider === CLAUDE_CLI_BACKEND_ID ? resolveClaudeCliSyntheticAuth() : undefined,
+  resolveSyntheticAuth: ({ provider }) => {
+    if (provider === CLAUDE_CLI_BACKEND_ID) {
+      return resolveClaudeCliSyntheticAuth();
+    }
+    // Post-2026.5.21 model refs canonicalize as `anthropic/<model>` even when
+    // the agent's runtime is the Claude CLI; allow the Bedrock-via-CLI signal
+    // to satisfy auth resolution for the `anthropic` provider id too.
+    if (provider === ANTHROPIC_PROVIDER_ID) {
+      return resolveClaudeCliBedrockSyntheticAuth();
+    }
+    return undefined;
+  },
 };
 
 export default anthropicProviderDiscovery;

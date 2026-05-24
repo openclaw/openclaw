@@ -127,7 +127,8 @@
     }
   },
   "cliBackends": ["claude-cli"],
-  "syntheticAuthRefs": ["claude-cli"],
+  "syntheticAuthRefs": ["anthropic", "claude-cli"],
+  "nonSecretAuthMarkers": ["claude-cli-bedrock"],
   "providerAuthEnvVars": {
     "anthropic": ["ANTHROPIC_OAUTH_TOKEN", "ANTHROPIC_API_KEY"]
   },
