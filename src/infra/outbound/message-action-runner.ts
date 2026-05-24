@@ -190,6 +190,21 @@ export function getToolResult(
   return "toolResult" in result ? result.toolResult : undefined;
 }
 
+type InternalSourceReplyToolResultDetails = {
+  status: string;
+  deliveryStatus: string;
+  channel: ChannelId;
+  target: string;
+  sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
+  sourceReplySink?: "internal-ui";
+  sourceReply: ReplyPayload;
+  message?: string;
+  mediaUrl?: string;
+  mediaUrls?: string[];
+  idempotencyKey?: string;
+  dryRun: boolean;
+};
+
 function resolveGatewayActionOptions(gateway?: MessageActionRunnerGateway) {
   const url =
     gateway?.mode === GATEWAY_CLIENT_MODES.BACKEND ||
@@ -718,6 +733,7 @@ async function handleInternalSourceReplySendAction(
         ? resolveSessionAgentId({ sessionKey: input.sessionKey, config: input.cfg })
         : undefined),
   });
+  const idempotencyKey = normalizeOptionalString(params.idempotencyKey);
   const payload = {
     status: "ok",
     deliveryStatus: dryRun ? "dry_run" : "sent",
@@ -729,6 +745,7 @@ async function handleInternalSourceReplySendAction(
     ...(sourceReply.message ? { message: sourceReply.message } : {}),
     ...(sourceReply.mediaUrl ? { mediaUrl: sourceReply.mediaUrl } : {}),
     ...(sourceReply.mediaUrls?.length ? { mediaUrls: sourceReply.mediaUrls } : {}),
+    ...(idempotencyKey ? { idempotencyKey } : {}),
     dryRun,
   };
   return {
@@ -743,31 +760,9 @@ async function handleInternalSourceReplySendAction(
   };
 }
 
-function buildInternalSourceReplyToolResult(payload: {
-  status: string;
-  deliveryStatus: string;
-  channel: ChannelId;
-  target: string;
-  sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
-  sourceReplySink?: "internal-ui";
-  sourceReply: ReplyPayload;
-  message?: string;
-  mediaUrl?: string;
-  mediaUrls?: string[];
-  dryRun: boolean;
-}): AgentToolResult<{
-  status: string;
-  deliveryStatus: string;
-  channel: ChannelId;
-  target: string;
-  sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
-  sourceReplySink?: "internal-ui";
-  sourceReply: ReplyPayload;
-  message?: string;
-  mediaUrl?: string;
-  mediaUrls?: string[];
-  dryRun: boolean;
-}> {
+function buildInternalSourceReplyToolResult(
+  payload: InternalSourceReplyToolResultDetails,
+): AgentToolResult<InternalSourceReplyToolResultDetails> {
   const action = payload.dryRun ? "Prepared" : "Sent";
   const sink = payload.sourceReplySink ? ` via ${payload.sourceReplySink}` : "";
   return {
@@ -790,6 +785,7 @@ function buildInternalSourceReplyToolResult(payload: {
       ...(payload.message ? { message: payload.message } : {}),
       ...(payload.mediaUrl ? { mediaUrl: payload.mediaUrl } : {}),
       ...(payload.mediaUrls?.length ? { mediaUrls: payload.mediaUrls } : {}),
+      ...(payload.idempotencyKey ? { idempotencyKey: payload.idempotencyKey } : {}),
       dryRun: payload.dryRun,
     },
   };
