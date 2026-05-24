@@ -5732,6 +5732,9 @@ async function mirrorPromptAtTurnStartBestEffort(params: {
   threadId: string;
   turnId: string;
 }): Promise<void> {
+  if (params.params.suppressNextUserMessagePersistence) {
+    return;
+  }
   try {
     await mirrorCodexAppServerTranscript({
       sessionFile: params.params.sessionFile,
