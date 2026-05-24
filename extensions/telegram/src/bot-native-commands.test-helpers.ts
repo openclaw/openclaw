@@ -4,6 +4,7 @@ import type { TelegramAccountConfig } from "openclaw/plugin-sdk/config-contracts
 import type { MockFn } from "openclaw/plugin-sdk/plugin-test-runtime";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { vi } from "vitest";
+import type { TelegramNativeCommandDeps } from "./bot-native-command-deps.runtime.js";
 import type { RegisterTelegramNativeCommandsParams } from "./bot-native-commands.js";
 import { registerTelegramNativeCommands } from "./bot-native-commands.js";
 
@@ -134,7 +135,8 @@ export function createNativeCommandsHarness(params?: {
     params?.readChannelAllowFromStore ?? vi.fn(async () => params?.storeAllowFrom ?? []);
   const telegramDeps = {
     getRuntimeConfig: vi.fn(() => params?.cfg ?? ({} as OpenClawConfig)),
-    readChannelAllowFromStore,
+    readChannelAllowFromStore:
+      readChannelAllowFromStore as TelegramNativeCommandDeps["readChannelAllowFromStore"],
     dispatchReplyWithBufferedBlockDispatcher:
       replyPipelineMocks.dispatchReplyWithBufferedBlockDispatcher,
     getPluginCommandSpecs: pluginCommandMocks.getPluginCommandSpecs,
