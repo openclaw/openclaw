@@ -132,6 +132,75 @@ export async function executeFunction(
     };
   }
 
+  // ── object_map — 字段重命名/映射 ──────────────────────────────────────
+  // source: 源对象；mappings: { 旧Key: 新Key } map；result 是映射后的新对象
+  if (name === "object_map") {
+    const source = (params.source ?? {}) as Record<string, unknown>;
+    const mappings = (params.mappings ?? {}) as Record<string, string>;
+    const result: Record<string, unknown> = { ...source };
+    for (const [oldKey, newKey] of Object.entries(mappings)) {
+      if (oldKey in source) {
+        result[newKey] = source[oldKey];
+        if (newKey !== oldKey) delete result[oldKey];
+      }
+    }
+    return { status: "ok", result, mapped: Object.keys(mappings).length };
+  }
+
+  // ── object_merge — 合并多个对象（后覆盖前） ───────────────────────────
+  // base: 基础对象；extra: 覆盖对象；result 是合并结果
+  if (name === "object_merge") {
+    const base = (params.base ?? {}) as Record<string, unknown>;
+    const extra = (params.extra ?? {}) as Record<string, unknown>;
+    const result = { ...base, ...extra };
+    return { status: "ok", result };
+  }
+
+  // ── object_pick — 从对象选取指定字段 ────────────────────────────────
+  if (name === "object_pick") {
+    const source = (params.source ?? {}) as Record<string, unknown>;
+    const keys = Array.isArray(params.keys) ? (params.keys as string[]) : [];
+    const result: Record<string, unknown> = {};
+    for (const k of keys) {
+      if (k in source) result[k] = source[k];
+    }
+    return { status: "ok", result };
+  }
+
+  // ── object_omit — 从对象排除指定字段 ────────────────────────────────
+  if (name === "object_omit") {
+    const source = (params.source ?? {}) as Record<string, unknown>;
+    const keys = new Set(Array.isArray(params.keys) ? (params.keys as string[]) : []);
+    const result: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(source)) {
+      if (!keys.has(k)) result[k] = v;
+    }
+    return { status: "ok", result };
+  }
+
+  // ── string_format — 格式化字符串 ─────────────────────────────────────
+  if (name === "string_format" || name === "format_string") {
+    const template = String(params.template ?? params.format ?? "");
+    const values = (params.values ?? params) as Record<string, unknown>;
+    const result = template.replace(/\{(\w+)\}/g, (_, k) => String(values[k] ?? ""));
+    return { status: "ok", result };
+  }
+
+  // ── conditional — 条件判断（返回 ok/stop/skipped，Playbook 中 on_false: stop 使用）──
+  if (name === "conditional") {
+    const condition = params.condition;
+    const passed =
+      condition === true ||
+      condition === "true" ||
+      (condition !== false &&
+        condition !== "false" &&
+        condition !== "" &&
+        condition !== null &&
+        condition !== undefined &&
+        condition !== 0);
+    return { status: "ok", passed, result: passed };
+  }
+
   // ── 兜底：未知 function ────────────────────────────────────────────────
   // 生产模式：抛错（明确配置问题，避免静默跳过业务逻辑）。
   // 开发模式：记录警告并返回 stub，方便本地调试。

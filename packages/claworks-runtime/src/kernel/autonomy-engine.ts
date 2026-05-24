@@ -32,7 +32,7 @@ function buildEvolutionRecordAdder(
   return (kind, description) => {
     if (!runtime.cbrStore) return;
     try {
-      runtime.cbrStore.add({ kind, description, source: "autonomy-engine" }, undefined, {
+      runtime.cbrStore.add(`evolution:${kind}`, description, {
         type: "evolution_observation",
         kind,
       });

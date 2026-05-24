@@ -389,10 +389,10 @@ export function createEvolveEngine(runtime: ClaworksRuntime): EvolveEngine {
         ...result.proposal.required_capabilities.map((c) => `cap:${c}`),
       ];
 
-      const caseEntry = runtime.cbrStore.add({
+      const problem = result.proposal.description;
+      const solution = result.proposal.playbook_yaml;
+      const caseEntry = runtime.cbrStore.add(problem, solution, {
         id: `evolved-${result.proposal.id}`,
-        problem: result.proposal.description,
-        solution: result.proposal.playbook_yaml,
         outcome: result.test_passed ? "success" : "partial",
         tags,
         playbookId: result.proposal.id,

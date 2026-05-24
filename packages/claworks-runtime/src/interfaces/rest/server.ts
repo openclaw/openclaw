@@ -21,7 +21,8 @@ export async function createRestServer(
     try {
       // A2A 协议路由（/a2a/** 和 /.well-known/agent.json 优先由 A2A handler 处理）
       const path = req.url ?? "/";
-      const isA2a = path.startsWith("/a2a/") || path === "/a2a";
+      const isA2a =
+        path.startsWith("/a2a/") || path === "/a2a" || path === "/.well-known/agent.json";
       if (isA2a) {
         const handled = await a2aHandler(req, res);
         if (handled) return;

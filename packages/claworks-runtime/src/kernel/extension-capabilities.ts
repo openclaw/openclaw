@@ -4586,7 +4586,7 @@ export function makeLearningCapabilities(runtime: ClaworksRuntime): CapabilityDe
         // 写入 CBR 案例库
         if (runtime.cbrStore) {
           try {
-            runtime.cbrStore.add({ problem: input, solution: response, intent }, undefined, {
+            runtime.cbrStore.add(input, response, {
               source: "interaction_learning",
               intent,
               score,
@@ -4599,9 +4599,7 @@ export function makeLearningCapabilities(runtime: ClaworksRuntime): CapabilityDe
 
         // 写入 KB（供 RAG 检索）
         try {
-          await runtime.kb.add?.({
-            id: `learned-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
-            content: `用户问：${input}\n成功回复：${response}`,
+          await runtime.kb.ingest(`用户问：${input}\n成功回复：${response}`, {
             source: "interaction_learning",
           });
           results.push("kb");
@@ -5173,6 +5171,154 @@ export function makeEvolveCapabilities(runtime: ClaworksRuntime): CapabilityDesc
           outcome,
         });
         return { status: "ok", outcome };
+      },
+    },
+
+    // ── kb.search (别名) ──────────────────────────────────────────────────
+    {
+      id: "search_kb",
+      verb: "read",
+      description: "在知识库中语义检索（kb.search 的别名，供 Pack YAML 使用）",
+      owner: { kind: "core" },
+      paramsSchema: {
+        type: "object",
+        properties: {
+          query: { type: "string", description: "检索查询文本" },
+          namespace: { type: "string", description: "知识库命名空间（可选）" },
+          top_k: { type: "number", description: "返回条数（默认 5）" },
+        },
+        required: ["query"],
+      },
+      handler: async (_ctx, params) => {
+        const query = String(params.query ?? "");
+        const namespace = params.namespace ? String(params.namespace) : undefined;
+        const topK = Number(params.top_k ?? 5);
+        const hits = await runtime.kb.search(query, topK, namespace ? { namespace } : undefined);
+        return { status: "ok", hits, count: hits.length };
+      },
+    },
+
+    // ── kb.ingest_text (别名) ─────────────────────────────────────────────
+    {
+      id: "ingest_kb_text",
+      verb: "acquire",
+      description: "向知识库写入文本（kb.ingest 的别名，供 Pack YAML 使用）",
+      owner: { kind: "core" },
+      paramsSchema: {
+        type: "object",
+        properties: {
+          text: { type: "string", description: "要入库的文本内容" },
+          content: { type: "string", description: "text 的别名" },
+          source: { type: "string", description: "来源标识" },
+          namespace: { type: "string", description: "知识库命名空间（可选）" },
+        },
+        required: [],
+      },
+      handler: async (_ctx, params) => {
+        const text = String(params.text ?? params.content ?? "");
+        const source = String(params.source ?? "ingest_kb_text");
+        const namespace = params.namespace ? String(params.namespace) : undefined;
+        await runtime.kb.ingest(text, { source, namespace });
+        return { status: "ok", length: text.length };
+      },
+    },
+
+    // ── object.update (别名) ──────────────────────────────────────────────
+    {
+      id: "update_object",
+      verb: "write",
+      description: "更新 ObjectStore 中的业务对象字段（object.upsert 的别名，供 Pack YAML 使用）",
+      owner: { kind: "core" },
+      paramsSchema: {
+        type: "object",
+        properties: {
+          type: { type: "string", description: "对象类型名" },
+          id: { type: "string", description: "对象 ID" },
+          fields: { type: "object", description: "要更新的字段（键值对）" },
+          data: { type: "object", description: "fields 的别名" },
+        },
+        required: ["type", "id"],
+      },
+      handler: async (_ctx, params) => {
+        const type = String(params.type ?? "");
+        const id = String(params.id ?? "");
+        const fields = ((params.fields ?? params.data) as Record<string, unknown>) ?? {};
+        await runtime.objectStore.upsert(type, id, fields);
+        await runtime.kernel.publish("object.updated", "update_object", { type, id });
+        return { status: "ok", type, id };
+      },
+    },
+
+    // ── kb.ingest_folder ─────────────────────────────────────────────────
+    // 遍历本地目录，将符合类型的文件内容批量写入知识库
+    {
+      id: "ingest_folder",
+      verb: "acquire",
+      description: "将本地文件夹内的文档批量写入知识库",
+      owner: { kind: "core" },
+      paramsSchema: {
+        type: "object",
+        properties: {
+          folder_path: { type: "string", description: "本地文件夹路径" },
+          namespace: { type: "string", description: "知识库命名空间" },
+          source_prefix: { type: "string", description: "来源标识前缀" },
+          recursive: { type: "boolean", description: "是否递归子目录（默认 true）" },
+          file_types: {
+            type: "array",
+            items: { type: "string" },
+            description: "允许的文件后缀列表，默认 ['.txt','.md','.json','.csv','.yaml']",
+          },
+        },
+        required: ["folder_path"],
+      },
+      handler: async (_ctx, params) => {
+        const { readdir, readFile, stat } = await import("node:fs/promises");
+        const path = await import("node:path");
+        const folderPath = String(params.folder_path ?? "");
+        const namespace = params.namespace ? String(params.namespace) : undefined;
+        const sourcePrefix = String(params.source_prefix ?? folderPath);
+        const recursive = params.recursive !== false;
+        const allowedTypes = Array.isArray(params.file_types)
+          ? (params.file_types as string[])
+          : [".txt", ".md", ".json", ".csv", ".yaml", ".yml"];
+
+        let ingested = 0;
+        let errors = 0;
+        let total = 0;
+
+        const walk = async (dir: string): Promise<void> => {
+          let entries: string[];
+          try {
+            entries = await readdir(dir);
+          } catch {
+            return;
+          }
+          for (const entry of entries) {
+            const full = path.join(dir, entry);
+            let s: { isDirectory(): boolean };
+            try {
+              s = await stat(full);
+            } catch {
+              continue;
+            }
+            if (s.isDirectory() && recursive) {
+              await walk(full);
+            } else if (allowedTypes.some((ext) => entry.endsWith(ext))) {
+              total++;
+              try {
+                const content = await readFile(full, "utf-8");
+                const source = `${sourcePrefix}/${path.relative(folderPath, full)}`;
+                await runtime.kb.ingest(content, { source, namespace });
+                ingested++;
+              } catch {
+                errors++;
+              }
+            }
+          }
+        };
+
+        await walk(folderPath);
+        return { status: "ok", total, ingested, errors };
       },
     },
   ];

@@ -1142,5 +1142,11 @@ export function interpolate(template: string, vars: Record<string, unknown>): st
     },
   );
 
+  // ── 内置全局函数调用：time.now()、uuid()、time.now_ms() ──────────────
+  out = out
+    .replace(/\{\{\s*time\.now\(\s*\)\s*\}\}/g, () => new Date().toISOString())
+    .replace(/\{\{\s*time\.now_ms\(\s*\)\s*\}\}/g, () => String(Date.now()))
+    .replace(/\{\{\s*uuid\(\s*\)\s*\}\}/g, () => randomUUID());
+
   return out;
 }
