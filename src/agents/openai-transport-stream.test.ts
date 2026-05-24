@@ -1028,6 +1028,44 @@ describe("openai transport stream", () => {
     }
   });
 
+  it("refuses OpenAI-compatible chat streams with no user or assistant payload turns", async () => {
+    const model = {
+      id: "mlx-community/Qwen3-30B-A3B-6bit",
+      name: "Qwen3 MLX",
+      api: "openai-completions",
+      provider: "mlx",
+      baseUrl: "http://127.0.0.1:9/v1",
+      reasoning: false,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 4096,
+      maxTokens: 256,
+    } satisfies Model<"openai-completions">;
+    const stream = createOpenAICompletionsTransportStreamFn()(
+      model,
+      {
+        systemPrompt: "runtime-only system prompt",
+        messages: [],
+        tools: [],
+      } as never,
+      { apiKey: "test-key" } as never,
+    );
+
+    let errorPayload: Record<string, unknown> | undefined;
+    for await (const event of stream as AsyncIterable<{
+      type: string;
+      error?: Record<string, unknown>;
+    }>) {
+      if (event.type === "error") {
+        errorPayload = event.error;
+      }
+    }
+
+    expect(errorPayload).toMatchObject({ stopReason: "error" });
+    expect(String(errorPayload?.errorMessage)).toContain("contains no user or assistant messages");
+    expect(String(errorPayload?.errorMessage)).toContain("system/tool-only request");
+  });
+
   it("parses JSON chat completions returned to streaming requests", async () => {
     let capturedStreamFlag: unknown;
     const server = createServer((req, res) => {

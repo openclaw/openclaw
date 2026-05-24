@@ -2290,6 +2290,29 @@ function hasToolHistory(messages: Context["messages"]): boolean {
   );
 }
 
+function assertOpenAICompletionsPayloadHasConversationTurn(
+  params: Record<string, unknown>,
+  model: Model<Api>,
+): void {
+  const messages = params.messages;
+  if (!Array.isArray(messages)) {
+    return;
+  }
+  const hasConversationTurn = messages.some((message) => {
+    if (!message || typeof message !== "object") {
+      return false;
+    }
+    const role = (message as { role?: unknown }).role;
+    return role === "user" || role === "assistant";
+  });
+  if (hasConversationTurn) {
+    return;
+  }
+  throw new Error(
+    `OpenAI-compatible chat payload for ${model.provider}/${model.id} contains no user or assistant messages after compaction and transport transforms; refusing to send a system/tool-only request. Start a new user turn or repair the compacted session history.`,
+  );
+}
+
 function createOpenAICompletionsClient(
   model: Model<Api>,
   context: Context,
@@ -2405,6 +2428,7 @@ export function createOpenAICompletionsTransportStreamFn(): StreamFn {
           enforceCodeModeResponsesToolSurface(params);
           assertCodeModeResponsesToolSurface(params);
         }
+        assertOpenAICompletionsPayloadHasConversationTurn(params, model);
         const responseStream = (await client.chat.completions.create(
           params as never,
           buildOpenAISdkRequestOptions(model, options?.signal),
