@@ -24,6 +24,7 @@ import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { countToolResults, extractToolCallNames } from "../utils/transcript-tools.js";
 import {
   estimateUsageCost,
+  resolveConfiguredModelCost,
   resolveModelCostConfig,
   resolveModelCostConfigFingerprint,
 } from "../utils/usage-format.js";
@@ -1117,15 +1118,23 @@ async function scanTranscriptFile(params: {
         entry.costBreakdown = undefined;
       } else if (
         !isModelPricingKnown(cost) &&
+        resolveConfiguredModelCost({
+          provider: entry.provider,
+          model: entry.model,
+          config: params.config,
+        }) === undefined &&
         (entry.costTotal === undefined || entry.costTotal === 0) &&
         computeUsageTokenTotals(entry.usage).totalTokens > 0
       ) {
-        // Pricing for this model is unknown (no positive per-token rate) and there is no
-        // trustworthy recorded cost — the transport either recorded nothing or a
-        // fabricated $0 derived from an all-zero catalog entry. Surface this token-burning
-        // turn as a missing-cost entry instead of recording a confident $0, so budget and
-        // spike safeguards that read totalCost are not left blind to it. A turn that
-        // carries a real positive recorded cost is preserved by the guard above.
+        // Pricing for this model is unknown: it has no positive per-token rate, the
+        // operator did not explicitly configure its price (so an all-zero value is a
+        // catalog default, not an intentional "free" price), and there is no trustworthy
+        // recorded cost — the transport either recorded nothing or a fabricated $0
+        // derived from an all-zero catalog entry. Surface this token-burning turn as a
+        // missing-cost entry instead of recording a confident $0, so budget and spike
+        // safeguards that read totalCost are not left blind to it. A turn with a real
+        // positive recorded cost, or a model the operator deliberately priced at 0, is
+        // preserved by the guards above.
         entry.costTotal = undefined;
         entry.costBreakdown = undefined;
       } else if (entry.costTotal === undefined) {

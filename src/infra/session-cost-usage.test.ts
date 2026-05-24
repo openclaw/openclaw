@@ -149,14 +149,14 @@ describe("session cost usage", () => {
     });
   });
 
-  it("counts token usage for an unpriced (all-zero cost) model as missing, not a confident $0", async () => {
+  it("counts token usage for an unpriced (unconfigured all-zero) model as missing, not a confident $0", async () => {
     const root = await makeSessionCostRoot("cost-unknown-pricing");
     const sessionsDir = path.join(root, "agents", "main", "sessions");
     await fs.mkdir(sessionsDir, { recursive: true });
 
     // A real assistant turn that burned tokens. The transport recorded cost.total: 0,
-    // derived from the model's all-zero catalog pricing — exactly what codex/gpt-5.x
-    // models produce, since the Codex backend exposes no per-token price.
+    // derived from an all-zero catalog price — exactly what codex/gpt-5.x models produce,
+    // since the Codex backend exposes no per-token price and the operator never set one.
     const entry = {
       type: "message",
       timestamp: new Date().toISOString(),
@@ -181,7 +181,52 @@ describe("session cost usage", () => {
       "utf-8",
     );
 
-    // The model resolves to an all-zero cost config, i.e. its pricing is unknown.
+    // No operator-configured pricing for this model, so its all-zero cost is unknown,
+    // not an intentional "free" price.
+    clearGatewayModelPricingCacheState();
+    await withStateDir(root, async () => {
+      const summary = await loadCostUsageSummary({ days: 30 });
+      expect(summary.totals.totalTokens).toBe(23287);
+      expect(summary.totals.totalCost).toBe(0);
+      // Unknown pricing must be surfaced as missing rather than reported as a
+      // confident $0 that would blind budget/spike monitoring to real spend.
+      expect(summary.totals.missingCostEntries).toBe(1);
+    });
+  });
+
+  it("preserves an operator-configured zero-cost model as a complete $0, not missing", async () => {
+    const root = await makeSessionCostRoot("cost-intentional-free");
+    const sessionsDir = path.join(root, "agents", "main", "sessions");
+    await fs.mkdir(sessionsDir, { recursive: true });
+
+    // Same shape of turn, but here the operator deliberately priced the model at 0
+    // (e.g. a local/self-hosted free model). That intentional $0 must be respected.
+    const entry = {
+      type: "message",
+      timestamp: new Date().toISOString(),
+      message: {
+        role: "assistant",
+        provider: "openai",
+        model: "gpt-5.5",
+        usage: {
+          input: 881,
+          output: 6,
+          cacheRead: 22400,
+          cacheWrite: 0,
+          totalTokens: 23287,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+        },
+      },
+    };
+
+    await fs.writeFile(
+      path.join(sessionsDir, "sess-1.jsonl"),
+      transcriptText("sess-1", entry),
+      "utf-8",
+    );
+
+    // The operator explicitly configured this model's price as 0 — an intentional
+    // "free" price that must be preserved as complete $0 cost data.
     const config = {
       models: {
         providers: {
@@ -197,13 +242,13 @@ describe("session cost usage", () => {
       },
     } as unknown as OpenClawConfig;
 
+    clearGatewayModelPricingCacheState();
     await withStateDir(root, async () => {
       const summary = await loadCostUsageSummary({ days: 30, config });
       expect(summary.totals.totalTokens).toBe(23287);
       expect(summary.totals.totalCost).toBe(0);
-      // Unknown pricing must be surfaced as missing rather than reported as a
-      // confident $0 that would blind budget/spike monitoring to real spend.
-      expect(summary.totals.missingCostEntries).toBe(1);
+      // Operator-configured $0 is intentional and complete — not a missing entry.
+      expect(summary.totals.missingCostEntries).toBe(0);
     });
   });
 
