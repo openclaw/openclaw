@@ -1208,8 +1208,17 @@ class TalkModeManager internal constructor(
     args: JsonElement?,
   ) {
     val argsObject = args.asObjectOrNull()
-    val text = argsObject?.get("text").asStringOrNull()?.trim().orEmpty()
-    val mode = argsObject?.get("mode").asStringOrNull()?.trim()
+    val text =
+      argsObject
+        ?.get("text")
+        .asStringOrNull()
+        ?.trim()
+        .orEmpty()
+    val mode =
+      argsObject
+        ?.get("mode")
+        .asStringOrNull()
+        ?.trim()
     val params =
       buildJsonObject {
         put("sessionId", JsonPrimitive(relaySessionId))
