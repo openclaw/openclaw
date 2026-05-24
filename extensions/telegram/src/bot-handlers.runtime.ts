@@ -1941,10 +1941,28 @@ export const registerTelegramHandlers = ({
     if (shouldSkipUpdate(ctx)) {
       return;
     }
+    const resolveFinalButtonAckText = (data?: string | null) => {
+      const value = data?.trim();
+      if (value === "Proceed" || value === "action:proceed") return "Proceeding...";
+      if (value === "Status, including recommended next steps?" || value === "action:status") {
+        return "Checking status...";
+      }
+      if (
+        value === "Provide recommendation" ||
+        value === "action:recommend" ||
+        value === "action:recommendation"
+      ) {
+        return "Preparing recommendation...";
+      }
+      return "Received";
+    };
     const answerCallbackQuery =
       typeof (ctx as { answerCallbackQuery?: unknown }).answerCallbackQuery === "function"
-        ? () => ctx.answerCallbackQuery()
-        : () => bot.api.answerCallbackQuery(callback.id);
+        ? () => ctx.answerCallbackQuery({ text: resolveFinalButtonAckText(callback.data) })
+        : () =>
+            bot.api.answerCallbackQuery(callback.id, {
+              text: resolveFinalButtonAckText(callback.data),
+            });
     // Answer immediately to prevent Telegram from retrying while we process
     await withTelegramApiErrorLogging({
       operation: "answerCallbackQuery",
@@ -2031,6 +2049,24 @@ export const registerTelegramHandlers = ({
         }
         return await bot.api.sendMessage(callbackMessage.chat.id, text, params);
       };
+      const finalButtonAckText = resolveFinalButtonAckText(data);
+      if (
+        finalButtonAckText !== "Received" &&
+        !(ctx as { __openclawFinalButtonAckSent?: boolean }).__openclawFinalButtonAckSent
+      ) {
+        try {
+          await replyToCallbackChat(
+            finalButtonAckText,
+            callbackMessage.message_thread_id != null
+              ? { message_thread_id: callbackMessage.message_thread_id }
+              : undefined,
+          );
+        } catch (ackErr) {
+          logVerbose(
+            "telegram: failed to send visible final-button acknowledgment: " + String(ackErr),
+          );
+        }
+      }
 
       const chatId = callbackMessage.chat.id;
       const isGroup =

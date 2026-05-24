@@ -1045,7 +1045,136 @@ describe("createTelegramBot", () => {
     expect(replySpy).toHaveBeenCalledTimes(1);
     const payload = requireValue(replySpy.mock.calls.at(0), "replySpy call")[0];
     expect(payload.Body).toContain("cmd:option_a");
-    expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cbq-1");
+    expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cbq-1", { text: "Received" });
+  });
+
+  it("acknowledges final-button callbacks before sequentialized processing", async () => {
+    let releaseSequentializer: (() => void) | undefined;
+    const sequentializerBlocked = new Promise<void>((resolve) => {
+      releaseSequentializer = resolve;
+    });
+    sequentializeSpy.mockImplementationOnce(
+      () => async (_ctx: unknown, next?: () => Promise<void>) => {
+        await sequentializerBlocked;
+        if (typeof next === "function") {
+          await next();
+        }
+      },
+    );
+
+    createTelegramBot({ token: "tok" });
+    const runPromise = runTelegramMiddlewareChain({
+      ctx: {
+        update: {
+          update_id: 106,
+          callback_query: {
+            id: "cbq-final-fastlane-1",
+            data: "Proceed",
+            message: {
+              chat: { id: -1007, type: "supergroup", title: "OpenClaw Ops" },
+              date: 1736380800,
+              message_id: 106,
+              message_thread_id: 5531,
+            },
+          },
+        },
+      },
+      finalHandler: async () => undefined,
+    });
+
+    await flushTelegramTestMicrotasks();
+    expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cbq-final-fastlane-1", {
+      text: "Proceeding...",
+    });
+    expect(sendMessageSpy).toHaveBeenCalledWith(-1007, "Proceeding...", {
+      message_thread_id: 5531,
+    });
+
+    requireValue(releaseSequentializer, "sequentializer release")();
+    await runPromise;
+  });
+
+  it("does not duplicate visible final-button acknowledgments after the fast lane sends one", async () => {
+    createTelegramBot({ token: "tok" });
+    const callbackHandler = getOnHandler("callback_query");
+
+    await runTelegramMiddlewareChain({
+      ctx: {
+        update: {
+          update_id: 107,
+          callback_query: {
+            id: "cbq-final-fastlane-2",
+            data: "Status, including recommended next steps?",
+            from: { id: 9, first_name: "Ada", username: "ada_bot" },
+            message: {
+              chat: { id: -1007, type: "supergroup", title: "OpenClaw Ops" },
+              date: 1736380800,
+              message_id: 107,
+              message_thread_id: 5531,
+            },
+          },
+        },
+        callbackQuery: {
+          id: "cbq-final-fastlane-2",
+          data: "Status, including recommended next steps?",
+          from: { id: 9, first_name: "Ada", username: "ada_bot" },
+          message: {
+            chat: { id: -1007, type: "supergroup", title: "OpenClaw Ops" },
+            date: 1736380800,
+            message_id: 107,
+            message_thread_id: 5531,
+          },
+        },
+        me: { username: "openclaw_bot" },
+        getFile: async () => ({ download: async () => new Uint8Array() }),
+      },
+      finalHandler: callbackHandler,
+    });
+
+    const visibleAckCalls = sendMessageSpy.mock.calls.filter(
+      (call) => call[0] === -1007 && call[1] === "Checking status...",
+    );
+    expect(visibleAckCalls).toHaveLength(1);
+  });
+
+  it("falls back to a visible final-button acknowledgment when callback toasts are stale", async () => {
+    createTelegramBot({ token: "tok" });
+    const callbackHandler = getOnHandler("callback_query");
+    answerCallbackQuerySpy.mockRejectedValueOnce(
+      new Error(
+        "400: Bad Request: query is too old and response timeout expired or query ID is invalid",
+      ),
+    );
+
+    await expect(
+      callbackHandler({
+        callbackQuery: {
+          id: "cbq-final-stale-1",
+          data: "action:recommendation",
+          from: { id: 9, first_name: "Ada", username: "ada_bot" },
+          message: {
+            chat: { id: -1007, type: "supergroup", title: "OpenClaw Ops" },
+            date: 1736380800,
+            message_id: 108,
+            message_thread_id: 5531,
+          },
+        },
+        me: { username: "openclaw_bot" },
+        getFile: async () => ({ download: async () => new Uint8Array() }),
+      }),
+    ).resolves.toBeUndefined();
+
+    expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cbq-final-stale-1", {
+      text: "Preparing recommendation...",
+    });
+    expect(
+      sendMessageSpy.mock.calls.some(
+        (call) =>
+          call[0] === -1007 &&
+          call[1] === "Preparing recommendation..." &&
+          JSON.stringify(call[2]) === JSON.stringify({ message_thread_id: 5531 }),
+      ),
+    ).toBe(true);
   });
 
   it("toggles OC_MULTI buttons without routing through the generic callback message path", async () => {
@@ -1081,7 +1210,9 @@ describe("createTelegramBot", () => {
       },
     });
     expect(replySpy).not.toHaveBeenCalled();
-    expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cbq-multi-toggle-1");
+    expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cbq-multi-toggle-1", {
+      text: "Received",
+    });
   });
 
   it("submits OC_MULTI selections as a synthetic inbound message", async () => {
@@ -1191,7 +1322,9 @@ describe("createTelegramBot", () => {
     const payload = requireValue(replySpy.mock.calls.at(0), "replySpy call")[0];
     expect(payload.CommandBody).toBe("/fast status");
     expect(payload.CommandSource).toBe("native");
-    expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cbq-native-1");
+    expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cbq-native-1", {
+      text: "Received",
+    });
   });
   it("reloads callback model routing bindings without recreating the bot", async () => {
     const buildModelsProviderDataMock =
