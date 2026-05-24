@@ -1,10 +1,7 @@
 import {
-  compactContextEngineWithSafetyTimeout,
   embeddedAgentLog,
   formatErrorMessage,
   isActiveHarnessContextEngine,
-  resolveCompactionTimeoutMs,
-  resolveContextEngineOwnerPluginId,
   runHarnessContextEngineMaintenance,
   type CompactEmbeddedPiSessionParams,
   type EmbeddedPiCompactResult,
@@ -47,9 +44,6 @@ export async function maybeCompactCodexAppServerSession(
   const activeContextEngine = isActiveHarnessContextEngine(params.contextEngine)
     ? params.contextEngine
     : undefined;
-  if (activeContextEngine?.info.ownsCompaction) {
-    return await compactOwningContextEngine(params, activeContextEngine);
-  }
   warnIfIgnoringOpenClawCompactionOverrides(params);
   const nativeResult = await compactCodexNativeThread(params, options);
   if (activeContextEngine && nativeResult?.ok && nativeResult.compacted) {
@@ -74,136 +68,8 @@ export async function maybeCompactCodexAppServerSession(
   return nativeResult;
 }
 
-async function compactOwningContextEngine(
-  params: CompactEmbeddedPiSessionParams,
-  contextEngine: NonNullable<CompactEmbeddedPiSessionParams["contextEngine"]>,
-): Promise<EmbeddedPiCompactResult> {
-  const compactionTarget = params.trigger === "manual" ? "threshold" : "budget";
-  const force = params.force === true || params.trigger === "manual";
-  embeddedAgentLog.info("starting context-engine-owned Codex app-server compaction", {
-    sessionId: params.sessionId,
-    sessionKey: params.sessionKey,
-    engineId: contextEngine.info.id,
-    tokenBudget: params.contextTokenBudget,
-    currentTokenCount: params.currentTokenCount,
-    trigger: params.trigger,
-    compactionTarget,
-    force,
-  });
-  let result: Awaited<ReturnType<typeof contextEngine.compact>>;
-  try {
-    // Bound the plugin-owned compaction with the same finite safety timeout
-    // that protects native runtime compaction, and thread the caller's abort
-    // signal through, so a slow/hung plugin compact() cannot hang the Codex
-    // compaction lane indefinitely. A timeout/abort (or any thrown error) is
-    // converted to a clean { ok: false } result by the catch below.
-    result = await compactContextEngineWithSafetyTimeout(
-      contextEngine,
-      {
-        sessionId: params.sessionId,
-        sessionKey: params.sessionKey,
-        sessionFile: params.sessionFile,
-        tokenBudget: params.contextTokenBudget,
-        currentTokenCount: params.currentTokenCount,
-        compactionTarget,
-        customInstructions: params.customInstructions,
-        force,
-        runtimeContext: params.contextEngineRuntimeContext,
-      },
-      resolveCompactionTimeoutMs(params.config),
-      params.abortSignal,
-    );
-  } catch (error) {
-    embeddedAgentLog.warn("context-engine-owned Codex app-server compaction failed", {
-      sessionId: params.sessionId,
-      sessionKey: params.sessionKey,
-      engineId: contextEngine.info.id,
-      error: formatErrorMessage(error),
-    });
-    return {
-      ok: false,
-      compacted: false,
-      reason: `context engine compaction failed: ${formatErrorMessage(error)}`,
-    };
-  }
-
-  if (result.ok && result.compacted) {
-    const compactedSessionId = result.result?.sessionId ?? params.sessionId;
-    const compactedSessionFile = result.result?.sessionFile ?? params.sessionFile;
-    try {
-      await runHarnessContextEngineMaintenance({
-        contextEngine,
-        sessionId: compactedSessionId,
-        sessionKey: params.sessionKey,
-        sessionFile: compactedSessionFile,
-        reason: "compaction",
-        runtimeContext: params.contextEngineRuntimeContext,
-        config: params.config,
-      });
-    } catch (error) {
-      embeddedAgentLog.warn("context engine compaction maintenance failed", {
-        sessionId: compactedSessionId,
-        engineId: contextEngine.info.id,
-        error: formatErrorMessage(error),
-      });
-    }
-    await clearCodexAppServerBinding(params.sessionFile, { config: params.config });
-    if (compactedSessionFile !== params.sessionFile) {
-      await clearCodexAppServerBinding(compactedSessionFile, { config: params.config });
-    }
-  }
-
-  embeddedAgentLog.info("completed context-engine-owned Codex app-server compaction", {
-    sessionId: params.sessionId,
-    sessionKey: params.sessionKey,
-    engineId: contextEngine.info.id,
-    ok: result.ok,
-    compacted: result.compacted,
-    reason: result.reason,
-    codexThreadBindingInvalidated: result.ok && result.compacted,
-  });
-  return {
-    ok: result.ok,
-    compacted: result.compacted,
-    reason: result.reason,
-    result: result.result
-      ? {
-          ...result.result,
-          summary: result.result.summary ?? "",
-          firstKeptEntryId: result.result.firstKeptEntryId ?? "",
-          details: mergeContextEngineCompactionDetails(result.result.details, {
-            codexThreadBindingInvalidated: result.ok && result.compacted,
-          }),
-        }
-      : result.ok && result.compacted
-        ? {
-            summary: "",
-            firstKeptEntryId: "",
-            tokensBefore: params.currentTokenCount ?? 0,
-            details: { codexThreadBindingInvalidated: true },
-          }
-        : undefined,
-  };
-}
-
-function mergeContextEngineCompactionDetails(
-  details: unknown,
-  extra: Record<string, unknown>,
-): unknown {
-  if (details && typeof details === "object" && !Array.isArray(details)) {
-    return {
-      ...(details as Record<string, unknown>),
-      ...extra,
-    };
-  }
-  return extra;
-}
-
 function warnIfIgnoringOpenClawCompactionOverrides(params: CompactEmbeddedPiSessionParams): void {
-  const activeContextEngine = isActiveHarnessContextEngine(params.contextEngine)
-    ? params.contextEngine
-    : undefined;
-  const ignoredConfig = readIgnoredCompactionOverridePaths(params, activeContextEngine);
+  const ignoredConfig = readIgnoredCompactionOverridePaths(params);
   if (ignoredConfig.length === 0) {
     return;
   }
@@ -222,21 +88,8 @@ function warnIfIgnoringOpenClawCompactionOverrides(params: CompactEmbeddedPiSess
   );
 }
 
-function readIgnoredCompactionOverridePaths(
-  params: CompactEmbeddedPiSessionParams,
-  activeContextEngine?: CompactEmbeddedPiSessionParams["contextEngine"],
-): string[] {
+function readIgnoredCompactionOverridePaths(params: CompactEmbeddedPiSessionParams): string[] {
   const ignored = new Set<string>();
-  const configuredContextEngine = readStringPath(params.config, [
-    "plugins",
-    "slots",
-    "contextEngine",
-  ]);
-  const runtimeContextEnginePlugin =
-    typeof params.contextEngineRuntimeContext?.contextEnginePluginId === "string"
-      ? params.contextEngineRuntimeContext.contextEnginePluginId.trim()
-      : "";
-  const activeContextEnginePlugin = resolveContextEngineOwnerPluginId(activeContextEngine);
   for (const entry of readCompactionOverrideEntries(params)) {
     const localProvider =
       typeof entry.record.provider === "string" ? entry.record.provider.trim() : "";
@@ -244,20 +97,11 @@ function readIgnoredCompactionOverridePaths(
       !localProvider && typeof entry.inheritedRecord?.provider === "string"
         ? entry.inheritedRecord.provider.trim()
         : "";
-    const provider = localProvider || inheritedProvider;
     const providerPath = localProvider
       ? `${entry.path}.compaction.provider`
       : inheritedProvider && entry.inheritedPath
         ? `${entry.inheritedPath}.compaction.provider`
         : undefined;
-    const activeLosslessContextEngine =
-      provider.toLowerCase() === "lossless-claw" &&
-      (activeContextEnginePlugin === "lossless-claw" ||
-        runtimeContextEnginePlugin.toLowerCase() === "lossless-claw" ||
-        configuredContextEngine?.toLowerCase() === "lossless-claw");
-    if (activeLosslessContextEngine) {
-      continue;
-    }
     if (typeof entry.record.model === "string" && entry.record.model.trim()) {
       ignored.add(`${entry.path}.compaction.model`);
     }
@@ -319,14 +163,6 @@ function readRecord(value: unknown): Record<string, unknown> | undefined {
   return value && typeof value === "object" && !Array.isArray(value)
     ? (value as Record<string, unknown>)
     : undefined;
-}
-
-function readStringPath(value: unknown, path: readonly string[]): string | undefined {
-  let current = value;
-  for (const segment of path) {
-    current = readRecord(current)?.[segment];
-  }
-  return typeof current === "string" && current.trim() ? current.trim() : undefined;
 }
 
 async function compactCodexNativeThread(
