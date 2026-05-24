@@ -1,8 +1,8 @@
 # ClaWorks 阶段性签收快照
 
 **日期**：2026-05-24  
-**Commit**：`78c1e6ca75`（WIP 清单更新）及后续自学习批次  
-**执行人**：Agent 自动化签收 + 本地验证
+**Commit**：`fb7f19bf76`（自学习闭环 + 签收快照）  
+**Pack commit**：`claworks-packs@fa0f07e`
 
 ---
 
@@ -10,7 +10,7 @@
 
 | #   | 检查项           | 命令                                               | 结果                                           |
 | --- | ---------------- | -------------------------------------------------- | ---------------------------------------------- |
-| 1   | Runtime 单元测试 | `pnpm claworks:runtime:test`                       | ✅ **362/362**                                 |
+| 1   | Runtime 单元测试 | `pnpm claworks:runtime:test`                       | ✅ **368/368**                                 |
 | 2   | 产品烟测         | `pnpm claworks:smoke`                              | ✅ **27/27**                                   |
 | 3   | Robot 插件契约   | `pnpm test extensions/claworks-robot`              | ✅ **17/17**                                   |
 | 4   | Runtime lint     | `pnpm lint:core -- packages/claworks-runtime`      | ⚠️ 全仓 lint 规则过宽；runtime 单测全绿        |
