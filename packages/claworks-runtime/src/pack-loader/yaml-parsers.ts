@@ -87,6 +87,7 @@ export function parsePlaybookYaml(content: string, packId: string): PlaybookDefi
     version: doc.version ? String(doc.version) : undefined,
     trigger,
     priority: typeof doc.priority === "number" ? doc.priority : 0,
+    timeout_seconds: typeof doc.timeout_seconds === "number" ? doc.timeout_seconds : undefined,
     steps,
   };
 }

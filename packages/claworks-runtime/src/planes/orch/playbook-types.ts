@@ -280,6 +280,8 @@ export interface PlaybookDefinition {
   version?: string;
   trigger: EventTrigger;
   priority: number;
+  /** Playbook 全局超时（秒），超时后 run 强制标记 failed，默认 300s（5 分钟） */
+  timeout_seconds?: number;
   steps: PlaybookStep[];
 }
 

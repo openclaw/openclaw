@@ -240,7 +240,22 @@ export function createPlaybookEngine(deps: PlaybookEngineDeps): PlaybookEngine {
     };
 
     try {
-      await runSteps(def, run, ctx, 0);
+      // Playbook 级全局超时保护（默认 5 分钟，可在 Playbook def 中配置 timeout_seconds）
+      const playbookTimeoutMs = (def.timeout_seconds ?? 300) * 1000;
+      const timeoutHandle = setTimeout(() => {
+        if (run.status === "running") {
+          run.status = "failed";
+          run.error = `Playbook exceeded global timeout of ${def.timeout_seconds ?? 300}s`;
+          run.completedAt = new Date();
+          publishEvent?.(CW_EVENTS.PLAYBOOK_FAILED, "playbook-engine", {
+            playbook_id: playbookId,
+            run_id: runId,
+            error: run.error,
+            timeout: true,
+          }).catch(() => {});
+        }
+      }, playbookTimeoutMs);
+      await runSteps(def, run, ctx, 0).finally(() => clearTimeout(timeoutHandle));
     } catch (err) {
       if (err instanceof HitlSuspendedError) {
         const stepIndex = def.steps.findIndex((s) => s.id === err.stepId);
