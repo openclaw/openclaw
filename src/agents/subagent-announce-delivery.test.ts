@@ -976,9 +976,11 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
       to: "channel:C123",
       threadId: "171.222",
       bestEffortDeliver: true,
+      sessionEffects: "internal",
     });
     expect(mockCallArg(dispatchGatewayMethodInProcess, 0, 2)).toMatchObject({
       expectFinal: true,
+      forceSyntheticClient: true,
       timeoutMs: 120_000,
     });
   });

@@ -115,6 +115,7 @@ async function runAnnounceAgentCall(params: {
     params.agentParams,
     {
       expectFinal: params.expectFinal,
+      forceSyntheticClient: params.agentParams.sessionEffects === "internal",
       timeoutMs: params.timeoutMs,
     },
   );
