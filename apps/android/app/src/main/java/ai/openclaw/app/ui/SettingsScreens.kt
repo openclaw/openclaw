@@ -676,7 +676,7 @@ private fun GatewaySettingsScreen(
           SettingsMetric("Node", if (isNodeConnected) "Online" else "Not paired"),
           SettingsMetric("Gateway", serverName?.takeIf { it.isNotBlank() } ?: "Home Gateway"),
           SettingsMetric("Address", remoteAddress?.takeIf { it.isNotBlank() } ?: "Not available"),
-          SettingsMetric("Status", statusText),
+          SettingsMetric("Status", gatewayStatusLabel(statusText = statusText, isConnected = isConnected)),
         ),
     )
     Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -772,6 +772,23 @@ private fun AppearanceSettingsScreen(onBack: () -> Unit) {
     ClawPanel {
       Text(text = "OpenClaw uses a fixed premium dark theme so it stays consistent across devices.", style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
     }
+  }
+}
+
+private fun gatewayStatusLabel(
+  statusText: String,
+  isConnected: Boolean,
+): String {
+  if (isConnected) return "Ready"
+  val status = statusText.trim().lowercase()
+  return when {
+    status.contains("connecting") || status.contains("reconnecting") -> "Connecting..."
+    status.contains("pair") -> "Pairing needed"
+    status.contains("auth") -> "Authentication needed"
+    status.contains("certificate") || status.contains("tls") -> "Certificate review needed"
+    status.contains("failed") || status.contains("error") || status.contains("offline") || status.contains("not connected") -> "Cannot reach gateway"
+    status.isBlank() -> "Not connected"
+    else -> "Not connected"
   }
 }
 
