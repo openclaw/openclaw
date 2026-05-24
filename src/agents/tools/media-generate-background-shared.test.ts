@@ -25,6 +25,7 @@ describe("scheduleMediaGenerationTaskCompletion", () => {
       }),
       completeTaskRun,
       failTaskRun: vi.fn(),
+      markCompletionDeliveryFailed: vi.fn(),
       wakeTaskCompletion: vi.fn(async () => {
         order.push("wake");
         expect(completeTaskRun).not.toHaveBeenCalled();
@@ -73,15 +74,17 @@ describe("scheduleMediaGenerationTaskCompletion", () => {
         paths: ["/tmp/proof.png"],
       }),
     );
+    expect(lifecycle.markCompletionDeliveryFailed).not.toHaveBeenCalled();
   });
 
-  it("fails a generated media task when completion delivery cannot be confirmed", async () => {
+  it("completes a generated media task when completion delivery cannot be confirmed", async () => {
     const scheduled: Array<() => Promise<void>> = [];
     const lifecycle = {
       createTaskRun: vi.fn(),
       recordTaskProgress: vi.fn(),
       completeTaskRun: vi.fn(),
       failTaskRun: vi.fn(),
+      markCompletionDeliveryFailed: vi.fn(),
       wakeTaskCompletion: vi.fn(async () => false),
     };
 
@@ -110,23 +113,33 @@ describe("scheduleMediaGenerationTaskCompletion", () => {
 
     await scheduled[0]?.();
 
-    expect(lifecycle.completeTaskRun).not.toHaveBeenCalled();
-    expect(lifecycle.failTaskRun).toHaveBeenCalledWith(
+    expect(lifecycle.completeTaskRun).toHaveBeenCalledWith(
+      expect.objectContaining({
+        count: 1,
+        deliveryFailure: expect.objectContaining({
+          message: "Image generation completion delivery failed after successful generation",
+        }),
+        paths: ["/tmp/proof.png"],
+      }),
+    );
+    expect(lifecycle.failTaskRun).not.toHaveBeenCalled();
+    expect(lifecycle.markCompletionDeliveryFailed).toHaveBeenCalledWith(
       expect.objectContaining({
         error: expect.objectContaining({
           message: "Image generation completion delivery failed after successful generation",
         }),
       }),
     );
+    expect(lifecycle.wakeTaskCompletion).toHaveBeenCalledTimes(1);
     expect(lifecycle.wakeTaskCompletion).toHaveBeenCalledWith(
       expect.objectContaining({
-        status: "error",
-        result: "Image generation completion delivery failed after successful generation",
+        status: "ok",
+        result: "generated",
       }),
     );
   });
 
-  it("reports a generated media task failure when completion wake throws", async () => {
+  it("completes a generated media task when completion wake throws", async () => {
     const scheduled: Array<() => Promise<void>> = [];
     const wakeError = new Error("requester wake failed");
     const lifecycle = {
@@ -134,6 +147,7 @@ describe("scheduleMediaGenerationTaskCompletion", () => {
       recordTaskProgress: vi.fn(),
       completeTaskRun: vi.fn(),
       failTaskRun: vi.fn(),
+      markCompletionDeliveryFailed: vi.fn(),
       wakeTaskCompletion: vi.fn().mockRejectedValueOnce(wakeError).mockResolvedValueOnce(true),
     };
     const onWakeFailure = vi.fn();
@@ -171,20 +185,20 @@ describe("scheduleMediaGenerationTaskCompletion", () => {
         taskId: "task-image-789",
       }),
     );
-    expect(lifecycle.completeTaskRun).not.toHaveBeenCalled();
-    expect(lifecycle.failTaskRun).toHaveBeenCalledWith(
+    expect(lifecycle.completeTaskRun).toHaveBeenCalledWith(
       expect.objectContaining({
-        error: expect.objectContaining({
-          message: "Image generation completion delivery failed after successful generation",
-        }),
+        count: 1,
+        deliveryFailure: wakeError,
+        paths: ["/tmp/proof.png"],
       }),
     );
-    expect(lifecycle.wakeTaskCompletion).toHaveBeenLastCalledWith(
+    expect(lifecycle.failTaskRun).not.toHaveBeenCalled();
+    expect(lifecycle.markCompletionDeliveryFailed).toHaveBeenCalledWith(
       expect.objectContaining({
-        status: "error",
-        result: "Image generation completion delivery failed after successful generation",
+        error: wakeError,
       }),
     );
+    expect(lifecycle.wakeTaskCompletion).toHaveBeenCalledTimes(1);
   });
 });
 

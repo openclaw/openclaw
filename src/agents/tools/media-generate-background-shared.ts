@@ -10,6 +10,7 @@ import {
   createRunningTaskRun,
   failTaskRunByRunId,
   recordTaskRunProgressByRunId,
+  setDetachedTaskDeliveryStatusByRunId,
 } from "../../tasks/detached-task-runtime.js";
 import { normalizeDeliveryContext, type DeliveryContext } from "../../utils/delivery-context.js";
 import {
@@ -67,9 +68,15 @@ type CompleteMediaGenerationTaskRunParams = {
   model: string;
   count: number;
   paths: string[];
+  deliveryFailure?: unknown;
 };
 
 type FailMediaGenerationTaskRunParams = {
+  handle: MediaGenerationTaskHandle | null;
+  error: unknown;
+};
+
+type MarkMediaGenerationCompletionDeliveryFailedParams = {
   handle: MediaGenerationTaskHandle | null;
   error: unknown;
 };
@@ -90,6 +97,7 @@ type MediaGenerationTaskLifecycle = {
   recordTaskProgress: (params: RecordMediaGenerationTaskProgressParams) => void;
   completeTaskRun: (params: CompleteMediaGenerationTaskRunParams) => void;
   failTaskRun: (params: FailMediaGenerationTaskRunParams) => void;
+  markCompletionDeliveryFailed: (params: MarkMediaGenerationCompletionDeliveryFailedParams) => void;
   wakeTaskCompletion: (params: WakeMediaGenerationTaskCompletionParams) => Promise<boolean>;
 };
 
@@ -204,6 +212,7 @@ function completeMediaGenerationTaskRun(params: {
   count: number;
   paths: string[];
   generatedLabel: string;
+  deliveryFailure?: unknown;
 }) {
   if (!params.handle) {
     return;
@@ -211,18 +220,36 @@ function completeMediaGenerationTaskRun(params: {
   try {
     const endedAt = Date.now();
     const target = params.count === 1 ? params.paths[0] : `${params.count} files`;
+    const generatedSummary = `Generated ${params.count} ${params.generatedLabel}${params.count === 1 ? "" : "s"}`;
+    const terminalGeneratedSummary = `${generatedSummary} with ${params.provider}/${params.model}${target ? ` -> ${target}` : ""}.`;
+    const deliveryFailureSummary =
+      params.deliveryFailure === undefined
+        ? null
+        : formatMediaGenerationDeliveryFailureSummary(params.deliveryFailure);
     completeTaskRunByRunId({
       runId: params.handle.runId,
       runtime: "cli",
       sessionKey: params.handle.requesterSessionKey,
       endedAt,
       lastEventAt: endedAt,
-      progressSummary: `Generated ${params.count} ${params.generatedLabel}${params.count === 1 ? "" : "s"}`,
-      terminalSummary: `Generated ${params.count} ${params.generatedLabel}${params.count === 1 ? "" : "s"} with ${params.provider}/${params.model}${target ? ` -> ${target}` : ""}.`,
+      progressSummary: deliveryFailureSummary
+        ? `${generatedSummary}; completion delivery failed`
+        : generatedSummary,
+      terminalSummary: deliveryFailureSummary
+        ? `${terminalGeneratedSummary} ${deliveryFailureSummary}`
+        : terminalGeneratedSummary,
+      ...(deliveryFailureSummary ? { terminalOutcome: "blocked" as const } : {}),
     });
   } finally {
     clearAgentRunContext(params.handle.runId);
   }
+}
+
+function formatMediaGenerationDeliveryFailureSummary(error: unknown): string {
+  const errorText = formatErrorMessage(error);
+  return errorText
+    ? `Completion delivery failed after generation succeeded: ${errorText}.`
+    : "Completion delivery failed after generation succeeded.";
 }
 
 function failMediaGenerationTaskRun(params: {
@@ -248,6 +275,30 @@ function failMediaGenerationTaskRun(params: {
     });
   } finally {
     clearAgentRunContext(params.handle.runId);
+  }
+}
+
+function markMediaGenerationCompletionDeliveryFailed(params: {
+  handle: MediaGenerationTaskHandle | null;
+  error: unknown;
+}) {
+  if (!params.handle) {
+    return;
+  }
+  try {
+    setDetachedTaskDeliveryStatusByRunId({
+      runId: params.handle.runId,
+      runtime: "cli",
+      sessionKey: params.handle.requesterSessionKey,
+      deliveryStatus: "failed",
+      error: formatErrorMessage(params.error),
+    });
+  } catch (error) {
+    log.warn("Failed to update media generation completion delivery state", {
+      taskId: params.handle.taskId,
+      runId: params.handle.runId,
+      error,
+    });
   }
 }
 
@@ -371,6 +422,7 @@ export function scheduleMediaGenerationTaskCompletion<
         progressSummary: "Generated media; delivering completion",
       });
       let completionDelivered = false;
+      let deliveryFailure: unknown;
       try {
         completionDelivered = await params.lifecycle.wakeTaskCompletion({
           config: params.config,
@@ -390,11 +442,16 @@ export function scheduleMediaGenerationTaskCompletion<
             error,
           },
         );
+        deliveryFailure = error;
       }
       if (!completionDelivered) {
-        throw new Error(
-          `${params.toolName} completion delivery failed after successful generation`,
-        );
+        deliveryFailure =
+          deliveryFailure ??
+          new Error(`${params.toolName} completion delivery failed after successful generation`);
+        params.lifecycle.markCompletionDeliveryFailed({
+          handle: params.handle,
+          error: deliveryFailure,
+        });
       }
       params.lifecycle.completeTaskRun({
         handle: params.handle,
@@ -402,6 +459,7 @@ export function scheduleMediaGenerationTaskCompletion<
         model: executed.model,
         count: executed.count,
         paths: executed.paths,
+        deliveryFailure,
       });
     } catch (error) {
       params.lifecycle.failTaskRun({
@@ -594,6 +652,12 @@ export function createMediaGenerationTaskLifecycle(params: {
         ...failureParams,
         progressSummary: params.failureProgressSummary,
       });
+    },
+
+    markCompletionDeliveryFailed(
+      deliveryFailureParams: MarkMediaGenerationCompletionDeliveryFailedParams,
+    ) {
+      markMediaGenerationCompletionDeliveryFailed(deliveryFailureParams);
     },
 
     async wakeTaskCompletion(completionParams: WakeMediaGenerationTaskCompletionParams) {
