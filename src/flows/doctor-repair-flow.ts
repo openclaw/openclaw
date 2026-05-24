@@ -176,40 +176,63 @@ async function runRunnableHealthCheck(
   let checksRepaired = 0;
   let checksValidated = 0;
 
-  let result: HealthCheckRunResult;
-  try {
-    result = await check.run({
-      ...ctx,
-      repair: opts.dryRun !== true,
-      diff: opts.diff === true,
-      previewRepair: opts.dryRun === true,
-    });
-  } catch (err) {
-    warnings.push(`${check.id} run failed: ${scrubDoctorErrorMessage(err)}`);
+  const maxAttempts = (ctx.retries ?? 0) + 1; // 1 initial + retries
+  let lastError: unknown;
+  let result: HealthCheckRunResult | undefined;
+
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    if (attempt > 0) {
+      // Exponential backoff: 100ms * attempt (1st retry=100ms, 2nd=200ms, etc.)
+      await new Promise((resolve) => setTimeout(resolve, 100 * attempt));
+    }
+    try {
+      result = await check.run({
+        ...ctx,
+        repair: opts.dryRun !== true,
+        diff: opts.diff === true,
+        previewRepair: opts.dryRun === true,
+        retries: opts.retries ?? 0,
+      });
+      lastError = undefined;
+      break; // Success, exit retry loop
+    } catch (err) {
+      lastError = err;
+      const isLastAttempt = attempt === maxAttempts - 1;
+      if (isLastAttempt) {
+        warnings.push(
+          `${check.id} run failed after ${maxAttempts} attempts: ${scrubDoctorErrorMessage(err)}`,
+        );
+      }
+      // Otherwise, retry
+    }
+  }
+
+  if (lastError !== undefined && result === undefined) {
     return repairRunResult(ctx.cfg, findings, remainingFindings, changes, warnings, diffs, effects);
   }
 
-  findings.push(...(result.findings ?? []));
-  warnings.push(...(result.warnings ?? []));
-  diffs.push(...(result.diffs ?? []));
-  effects.push(...(result.effects ?? []));
-  const status = result.status ?? "repaired";
-  const hasRepairOutput = hasHealthRepairOutput(result);
+  // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
+  findings.push(...(result!.findings ?? []));
+  warnings.push(...(result!.warnings ?? []));
+  diffs.push(...(result!.diffs ?? []));
+  effects.push(...(result!.effects ?? []));
+  const status = result!.status ?? "repaired";
+  const hasRepairOutput = hasHealthRepairOutput(result!);
   if (status === "repairable") {
-    changes.push(...(result.changes ?? []));
+    changes.push(...(result!.changes ?? []));
     return repairRunResult(cfg, findings, remainingFindings, changes, warnings, diffs, effects, {
       checksRepaired: hasRepairOutput ? 1 : 0,
       checksValidated,
     });
   }
   if (status !== "repaired") {
-    warnings.push(`${check.id} repair ${status}${result.reason ? `: ${result.reason}` : ""}`);
+    warnings.push(`${check.id} repair ${status}${result!.reason ? `: ${result!.reason}` : ""}`);
     return repairRunResult(ctx.cfg, findings, remainingFindings, changes, warnings, diffs, effects);
   }
-  if (result.config !== undefined && opts.dryRun !== true) {
-    cfg = result.config;
+  if (result!.config !== undefined && opts.dryRun !== true) {
+    cfg = result!.config;
   }
-  changes.push(...(result.changes ?? []));
+  changes.push(...(result!.changes ?? []));
   if (hasRepairOutput) {
     checksRepaired++;
   }

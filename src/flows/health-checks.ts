@@ -55,6 +55,8 @@ export interface HealthRepairContext extends Omit<HealthCheckContext, "mode"> {
   readonly mode: "fix";
   readonly dryRun?: boolean;
   readonly diff?: boolean;
+  /** Number of retry attempts for transient failures (default: 0) */
+  readonly retries?: number;
 }
 
 export interface HealthRepairDiff {
