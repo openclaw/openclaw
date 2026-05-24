@@ -333,6 +333,7 @@ describe("gateway hot reload", () => {
     prevSkipProviders = process.env.OPENCLAW_SKIP_PROVIDERS;
     prevOpenAiApiKey = process.env.OPENAI_API_KEY;
     process.env.OPENCLAW_SKIP_CHANNELS = "0";
+    process.env.OPENAI_API_KEY = "sk-test-reload"; // pragma: allowlist secret
     delete process.env.OPENCLAW_SKIP_GMAIL_WATCHER;
     delete process.env.OPENCLAW_SKIP_PROVIDERS;
     hoisted.cronInstances.length = 0;
@@ -487,7 +488,6 @@ describe("gateway hot reload", () => {
       hoisted.providerManager.startChannel.mockClear();
       hoisted.activeEmbeddedRunCount.value = 1;
       embeddedRunMock.activeIds.add("reload-stuck");
-      vi.useFakeTimers();
       const reloadPromise = onHotReload?.(
         {
           changedPaths: ["channels.discord.token"],
@@ -502,23 +502,19 @@ describe("gateway hot reload", () => {
           noopPaths: [],
         },
         {
-          gateway: { reload: { deferralTimeoutMs: 1_000 } },
+          gateway: { reload: { deferralTimeoutMs: 1 } },
           channels: { discord: { token: "token" } },
         },
       );
       try {
         await Promise.resolve();
-        await vi.advanceTimersByTimeAsync(500);
         expect(hoisted.providerManager.stopChannel).not.toHaveBeenCalled();
         expect(hoisted.providerManager.startChannel).not.toHaveBeenCalled();
 
-        await vi.advanceTimersByTimeAsync(500);
         await reloadPromise;
       } finally {
         hoisted.activeEmbeddedRunCount.value = 0;
         embeddedRunMock.activeIds.clear();
-        await vi.advanceTimersByTimeAsync(500).catch(() => {});
-        vi.useRealTimers();
         await reloadPromise?.catch(() => {});
       }
 

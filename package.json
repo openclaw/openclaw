@@ -1,6 +1,6 @@
 {
   "name": "openclaw",
-  "version": "2026.5.22",
+  "version": "2026.5.24",
   "description": "Multi-channel AI gateway with extensible messaging integrations",
   "keywords": [],
   "homepage": "https://github.com/openclaw/openclaw#readme",
@@ -50,6 +50,7 @@
     "!dist/extensions/line/**",
     "!dist/extensions/lobster/**",
     "!dist/extensions/memory-lancedb/**",
+    "!dist/extensions/meeting-notes/**",
     "!dist/extensions/matrix/**",
     "!dist/extensions/msteams/**",
     "!dist/extensions/nextcloud-talk/**",
@@ -89,6 +90,7 @@
     "patches/",
     "skills/",
     "scripts/npm-runner.mjs",
+    "scripts/prepare-git-hooks.mjs",
     "scripts/preinstall-package-manager-warning.mjs",
     "scripts/lib/official-external-channel-catalog.json",
     "scripts/lib/official-external-plugin-catalog.json",
@@ -1009,6 +1011,10 @@
       "types": "./dist/plugin-sdk/realtime-voice.d.ts",
       "default": "./dist/plugin-sdk/realtime-voice.js"
     },
+    "./plugin-sdk/meeting-notes": {
+      "types": "./dist/plugin-sdk/meeting-notes.d.ts",
+      "default": "./dist/plugin-sdk/meeting-notes.js"
+    },
     "./plugin-sdk/media-understanding": {
       "types": "./dist/plugin-sdk/media-understanding.d.ts",
       "default": "./dist/plugin-sdk/media-understanding.js"
@@ -1558,7 +1564,7 @@
     "postinstall": "node scripts/postinstall-bundled-plugins.mjs",
     "preinstall": "node scripts/preinstall-package-manager-warning.mjs",
     "prepack": "node --import tsx scripts/openclaw-prepack.ts",
-    "prepare": "command -v git >/dev/null 2>&1 && git rev-parse --is-inside-work-tree >/dev/null 2>&1 && git config core.hooksPath git-hooks || exit 0",
+    "prepare": "node scripts/prepare-git-hooks.mjs",
     "prepush:ci": "bash scripts/prepush-ci.sh",
     "probe:anthropic:prompt": "node --import tsx scripts/anthropic-prompt-probe.ts",
     "prompt:snapshots:check": "node --import tsx scripts/generate-prompt-snapshots.ts --check",
