@@ -5,6 +5,7 @@ export type {
   DiagnosticEventMetadata,
   DiagnosticEventPayload,
 } from "../infra/diagnostic-events.js";
+export type { DiagnosticModelContentCapturePolicy } from "../infra/diagnostic-llm-content.js";
 export {
   emitDiagnosticEvent,
   emitTrustedDiagnosticEvent,
@@ -16,10 +17,13 @@ export {
   resetDiagnosticEventsForTest,
   waitForDiagnosticEventsDrained,
 } from "../infra/diagnostic-events.js";
+export { resolveDiagnosticModelContentCapturePolicy } from "../infra/diagnostic-llm-content.js";
 export type { DiagnosticTraceContext } from "../infra/diagnostic-trace-context.js";
 export {
   createChildDiagnosticTraceContext,
   createDiagnosticTraceContext,
+  createDiagnosticTraceContextFromActiveScope,
+  freezeDiagnosticTraceContext,
   formatDiagnosticTraceparent,
   isValidDiagnosticSpanId,
   isValidDiagnosticTraceFlags,

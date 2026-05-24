@@ -10,6 +10,7 @@ import {
   type DiagnosticEventInput,
   type DiagnosticMemoryUsage,
 } from "../../../infra/diagnostic-events.js";
+import type { DiagnosticModelContentCapturePolicy } from "../../../infra/diagnostic-llm-content.js";
 import {
   createChildDiagnosticTraceContext,
   freezeDiagnosticTraceContext,
@@ -38,6 +39,7 @@ type ModelCallDiagnosticContext = {
   contextWindowSource?: PluginHookContextWindowSource;
   contextWindowReferenceTokens?: number;
   trace: DiagnosticTraceContext;
+  contentCapture?: DiagnosticModelContentCapturePolicy;
   nextCallId: () => string;
   onStarted?: () => void;
 };
@@ -69,6 +71,8 @@ type ModelCallObservationState = {
   requestPayloadBytes?: number;
   responseStreamBytes: number;
   timeToFirstByteMs?: number;
+  outputMessages?: unknown[];
+  contentCapture?: DiagnosticModelContentCapturePolicy;
 };
 
 const MODEL_CALL_STREAM_RETURN_TIMEOUT_MS = 1000;
@@ -90,12 +94,60 @@ function assignRequestPayloadBytes(state: ModelCallObservationState, payload: un
   }
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function cloneDiagnosticContentValue(value: unknown): unknown {
+  try {
+    return structuredClone(value);
+  } catch {
+    try {
+      return JSON.parse(JSON.stringify(value)) as unknown;
+    } catch {
+      return String(value);
+    }
+  }
+}
+
+function streamContextModelContentFields(
+  policy: DiagnosticModelContentCapturePolicy | undefined,
+  streamContext: unknown,
+): Partial<ModelCallEventBase> {
+  if (!policy?.anyModelContent || !isRecord(streamContext)) {
+    return {};
+  }
+  return {
+    ...(policy.inputMessages && Array.isArray(streamContext.messages)
+      ? { inputMessages: cloneDiagnosticContentValue(streamContext.messages) }
+      : {}),
+    ...(policy.systemPrompt && typeof streamContext.systemPrompt === "string"
+      ? { systemPrompt: streamContext.systemPrompt }
+      : {}),
+    ...(policy.toolDefinitions && Array.isArray(streamContext.tools)
+      ? { toolDefinitions: cloneDiagnosticContentValue(streamContext.tools) }
+      : {}),
+  };
+}
+
+function observeOutputMessageContent(state: ModelCallObservationState, chunk: unknown): void {
+  if (!state.contentCapture?.outputMessages || !isRecord(chunk)) {
+    return;
+  }
+  const message =
+    chunk.type === "done" ? chunk.message : chunk.type === "error" ? chunk.error : undefined;
+  if (message !== undefined) {
+    state.outputMessages = [cloneDiagnosticContentValue(message)];
+  }
+}
+
 function observeResponseChunk(
   state: ModelCallObservationState,
   startedAt: number,
   chunk: unknown,
 ): void {
   state.timeToFirstByteMs ??= Math.max(0, Date.now() - startedAt);
+  observeOutputMessageContent(state, chunk);
   const bytes = utf8JsonByteLength(chunk);
   if (bytes !== undefined) {
     state.responseStreamBytes += bytes;
@@ -144,6 +196,7 @@ function baseModelCallEvent(
   ctx: ModelCallDiagnosticContext,
   callId: string,
   trace: DiagnosticTraceContext,
+  streamContext: unknown,
 ): ModelCallEventBase {
   return {
     runId: ctx.runId,
@@ -159,6 +212,7 @@ function baseModelCallEvent(
     ...(ctx.contextWindowReferenceTokens
       ? { contextWindowReferenceTokens: ctx.contextWindowReferenceTokens }
       : {}),
+    ...streamContextModelContentFields(ctx.contentCapture, streamContext),
     trace,
   };
 }
@@ -278,6 +332,7 @@ function emitModelCallCompleted(
     ...eventBase,
     durationMs,
     ...sizeTimingFields,
+    ...(state.outputMessages ? { outputMessages: state.outputMessages } : {}),
   });
   dispatchModelCallEndedHook(eventBase, {
     durationMs,
@@ -300,6 +355,7 @@ function emitModelCallError(
     durationMs,
     ...sizeTimingFields,
     ...fields,
+    ...(state.outputMessages ? { outputMessages: state.outputMessages } : {}),
   });
   dispatchModelCallEndedHook(eventBase, {
     durationMs,
@@ -475,11 +531,14 @@ export function wrapStreamFnWithDiagnosticModelCallEvents(
   return ((model, streamContext, options) => {
     const callId = ctx.nextCallId();
     const trace = freezeDiagnosticTraceContext(createChildDiagnosticTraceContext(ctx.trace));
-    const eventBase = baseModelCallEvent(ctx, callId, trace);
+    const eventBase = baseModelCallEvent(ctx, callId, trace, streamContext);
     emitModelCallStarted(eventBase);
     ctx.onStarted?.();
     const startedAt = Date.now();
-    const state: ModelCallObservationState = { responseStreamBytes: 0 };
+    const state: ModelCallObservationState = {
+      responseStreamBytes: 0,
+      contentCapture: ctx.contentCapture,
+    };
     const propagatedOptions = withDiagnosticTraceparentHeader(options, trace, state);
 
     try {

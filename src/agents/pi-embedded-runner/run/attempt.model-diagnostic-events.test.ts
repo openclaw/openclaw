@@ -198,6 +198,65 @@ describe("wrapStreamFnWithDiagnosticModelCallEvents", () => {
     expect(JSON.stringify(events)).not.toContain("sk-original-secret");
   });
 
+  it("captures model input, tools, and output only when content capture is enabled", async () => {
+    const assistant = {
+      role: "assistant",
+      content: [{ type: "text", text: "trace reply" }],
+      api: "openai-responses",
+      provider: "openai",
+      model: "gpt-5.4",
+      usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, totalTokens: 2 },
+      stopReason: "stop",
+      timestamp: 1,
+    };
+    async function* stream() {
+      yield { type: "done", reason: "stop", message: assistant };
+    }
+    const wrapped = wrapStreamFnWithDiagnosticModelCallEvents(
+      (() => stream()) as unknown as StreamFn,
+      {
+        runId: "run-1",
+        provider: "openai",
+        model: "gpt-5.4",
+        trace: createDiagnosticTraceContext(),
+        contentCapture: {
+          inputMessages: true,
+          outputMessages: true,
+          toolInputs: false,
+          toolOutputs: false,
+          systemPrompt: true,
+          toolDefinitions: true,
+          anyModelContent: true,
+        },
+        nextCallId: () => "call-content",
+      },
+    );
+
+    const inputMessages = [{ role: "user", content: "trace prompt", timestamp: 1 }];
+    const tools = [{ name: "lookup", description: "Lookup data", parameters: { type: "object" } }];
+    const events = await collectModelCallEvents(async () => {
+      const streamResult = wrapped(
+        {} as never,
+        {
+          systemPrompt: "trace system",
+          messages: inputMessages,
+          tools,
+        } as never,
+        {},
+      );
+      await drain(streamResult as unknown as AsyncIterable<unknown>);
+    });
+
+    const startedEvent = getEvent(events, 0);
+    expect(startedEvent.type).toBe("model.call.started");
+    expect(startedEvent.inputMessages).toEqual(inputMessages);
+    expect(startedEvent.systemPrompt).toBe("trace system");
+    expect(startedEvent.toolDefinitions).toEqual(tools);
+    const completedEvent = getEvent(events, 1);
+    expect(completedEvent.type).toBe("model.call.completed");
+    expect(completedEvent.outputMessages).toEqual([assistant]);
+  });
+
   it("propagates the trusted model-call traceparent without mutating caller headers", async () => {
     async function* stream() {
       yield { type: "text", text: "ok" };

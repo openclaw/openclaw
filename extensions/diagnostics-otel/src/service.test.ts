@@ -166,7 +166,7 @@ const CHILD_SPAN_ID = "1111111111111111";
 const GRANDCHILD_SPAN_ID = "2222222222222222";
 const TOOL_SPAN_ID = "3333333333333333";
 const PROTO_KEY = "__proto__";
-const MAX_TEST_OTEL_CONTENT_ATTRIBUTE_CHARS = 4096;
+const MAX_TEST_OTEL_CONTENT_ATTRIBUTE_CHARS = 128 * 1024;
 const OTEL_TRUNCATED_SUFFIX_MAX_CHARS = 20;
 const ORIGINAL_OPENCLAW_OTEL_PRELOADED = process.env.OPENCLAW_OTEL_PRELOADED;
 const ORIGINAL_OTEL_EXPORTER_OTLP_TRACES_ENDPOINT = process.env.OTEL_EXPORTER_OTLP_TRACES_ENDPOINT;
@@ -1198,10 +1198,13 @@ describe("diagnostics-otel service", () => {
   });
 
   test("redacts sensitive data from log messages before export when broad content capture is enabled", async () => {
-    const emitCall = await emitAndCaptureLog({
-      level: "INFO",
-      message: "Using API key sk-1234567890abcdef1234567890abcdef",
-    }, { captureContent: true });
+    const emitCall = await emitAndCaptureLog(
+      {
+        level: "INFO",
+        message: "Using API key sk-1234567890abcdef1234567890abcdef",
+      },
+      { captureContent: true },
+    );
 
     expect(emitCall?.body).not.toContain("sk-1234567890abcdef1234567890abcdef");
     expect(emitCall?.body).toContain("sk-123");
@@ -3133,6 +3136,94 @@ describe("diagnostics-otel service", () => {
       MAX_TEST_OTEL_CONTENT_ATTRIBUTE_CHARS + OTEL_TRUNCATED_SUFFIX_MAX_CHARS,
     );
     expect(String(toolAttrs?.["openclaw.content.tool_output"])).not.toContain("a".repeat(11));
+    await service.stop?.(ctx);
+  });
+
+  test("exports Phoenix-readable GenAI prompt, output, and tool definition attributes", async () => {
+    const service = createDiagnosticsOtelService();
+    const ctx = createOtelContext(OTEL_TEST_ENDPOINT, {
+      traces: true,
+      captureContent: {
+        enabled: true,
+        inputMessages: true,
+        outputMessages: true,
+        systemPrompt: true,
+      },
+    });
+    await service.start(ctx);
+
+    emitDiagnosticEvent({
+      type: "model.call.completed",
+      runId: "run-1",
+      callId: "call-1",
+      provider: "openai",
+      model: "gpt-5.4",
+      durationMs: 80,
+      inputMessages: [
+        { role: "user", content: "what changed?", timestamp: 1 },
+        {
+          role: "assistant",
+          content: [{ type: "toolCall", id: "call-1", name: "lookup", arguments: { q: "trace" } }],
+        },
+        { role: "toolResult", toolCallId: "call-1", content: { rows: 1 } },
+      ],
+      outputMessages: [
+        {
+          role: "assistant",
+          content: [{ type: "text", text: "the trace changed" }],
+          stopReason: "stop",
+        },
+      ],
+      systemPrompt: "be exact",
+      toolDefinitions: [
+        { name: "lookup", description: "Lookup data", parameters: { type: "object" } },
+      ],
+    } as Parameters<typeof emitDiagnosticEvent>[0]);
+    await flushDiagnosticEvents();
+
+    const modelCall = telemetryState.tracer.startSpan.mock.calls.find(
+      (call) => call[0] === "openclaw.model.call",
+    );
+    const attrs = (modelCall?.[1] as { attributes?: Record<string, unknown> } | undefined)
+      ?.attributes;
+    expect(attrs?.["gen_ai.system_instructions"]).toBe(
+      JSON.stringify([{ type: "text", content: "be exact" }]),
+    );
+    expect(JSON.parse(String(attrs?.["gen_ai.input.messages"]))).toEqual([
+      { role: "user", parts: [{ type: "text", content: "what changed?" }] },
+      {
+        role: "assistant",
+        parts: [
+          {
+            type: "tool_call",
+            id: "call-1",
+            name: "lookup",
+            arguments: { q: "trace" },
+          },
+        ],
+      },
+      {
+        role: "tool",
+        parts: [{ type: "tool_call_response", id: "call-1", result: { rows: 1 } }],
+      },
+    ]);
+    expect(JSON.parse(String(attrs?.["gen_ai.output.messages"]))).toEqual([
+      {
+        role: "assistant",
+        parts: [{ type: "text", content: "the trace changed" }],
+        finish_reason: "stop",
+      },
+    ]);
+    expect(JSON.parse(String(attrs?.["gen_ai.tool.definitions"]))).toEqual([
+      {
+        type: "function",
+        name: "lookup",
+        description: "Lookup data",
+        parameters: { type: "object" },
+      },
+    ]);
+    expect(attrs?.["input.mime_type"]).toBe("application/json");
+    expect(attrs?.["output.mime_type"]).toBe("application/json");
     await service.stop?.(ctx);
   });
 
