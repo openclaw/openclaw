@@ -170,6 +170,7 @@ export function applyProductSurfaceCopy(
     .replaceAll("openclaw.json", "claworks.json")
     .replaceAll("~/.openclaw", stateDir)
     .replaceAll("https://docs.openclaw.ai", resolveProductDocsBase(env))
+    .replaceAll("https://openclaw.ai/showcase", `${resolveProductDocsBase(env)}/showcase`)
     .replace(/\bOpenClaw\b/g, product);
   return replaceEmbeddedCliNames(result, cliName);
 }

@@ -2,7 +2,9 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { describeCodexNativeWebSearch } from "../agents/codex-native-web-search.shared.js";
 import { DEFAULT_BOOTSTRAP_FILENAME } from "../agents/workspace.js";
+import { isClaworksCliProduct } from "../cli/cli-name.js";
 import { formatCliCommand } from "../cli/command-format.js";
+import { productizeUserCopy } from "../cli/product-surface.js";
 import { resolveProductDocUrl } from "../cli/product-surface.js";
 import {
   buildGatewayInstallPlan,
@@ -700,6 +702,36 @@ export async function finalizeSetupWizard(
       ].join("\n"),
       t("wizard.finalize.codexNativeSearchTitle"),
     );
+  }
+
+  if (isClaworksCliProduct()) {
+    const { collectClaworksInitWarnings } = await import("@claworks/runtime");
+    const claworksConfig = {
+      gateway: nextConfig.gateway,
+      plugins: nextConfig.plugins,
+    } as Record<string, unknown>;
+    const initWarnings = collectClaworksInitWarnings(claworksConfig);
+    const nextSteps = [
+      formatCliCommand("claworks start"),
+      formatCliCommand("claworks doctor"),
+      formatCliCommand("claworks configure"),
+    ];
+    const profile = process.env.CLAWORKS_PRODUCT_PROFILE?.trim();
+    if (profile === "personal_work") {
+      nextSteps.push("pnpm claworks:repair:personal");
+    } else if (!profile || profile === "extended") {
+      nextSteps.push("pnpm claworks:repair");
+    }
+    const lines = [
+      "ClaWorks next steps:",
+      ...nextSteps.map((line) => `  ${line}`),
+      "",
+      "Config: ~/.claworks/claworks.json · Gateway port 18800 · LaunchAgent ai.claworks.gateway",
+    ];
+    if (initWarnings.length > 0) {
+      lines.push("", ...initWarnings.map((warning) => `⚠ ${warning}`));
+    }
+    await prompter.note(productizeUserCopy(lines.join("\n")), "ClaWorks");
   }
 
   await prompter.note(t("wizard.finalize.whatNow"), t("wizard.finalize.whatNowTitle"));

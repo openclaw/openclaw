@@ -24,7 +24,12 @@ export { createClaworksRuntime, startClaworksRuntime, stopClaworksRuntime } from
 
 export { registerClaworksPacksCli } from "./packs-cli.js";
 export { registerClaworksEvolutionCli } from "./evolution-cli.js";
-export { registerClaworksInitCli, runClaworksInit, formatInitSummary } from "./init-cli.js";
+export {
+  registerClaworksInitCli,
+  runClaworksInit,
+  formatInitSummary,
+  collectClaworksInitWarnings,
+} from "./init-cli.js";
 export type { InitProfile, ClaworksInitResult, InitStepSummary } from "./init-cli.js";
 
 export type {

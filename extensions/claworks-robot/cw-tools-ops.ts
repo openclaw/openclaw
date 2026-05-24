@@ -548,7 +548,9 @@ export function registerClaworksOpsTools(
               "claworks-robot"
             ] as Record<string, unknown> | undefined;
             if (!plugin) {
-              throw new ToolInputError("claworks-robot plugin entry not found in config");
+              throw new ToolInputError(
+                "claworks-robot plugin entry missing in ~/.claworks/claworks.json — run claworks doctor --fix or pnpm claworks:init",
+              );
             }
             let cursor = (plugin.config ?? {}) as Record<string, unknown>;
             plugin.config = cursor;
