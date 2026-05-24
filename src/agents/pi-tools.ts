@@ -7,6 +7,7 @@ import { resolveExecCommandHighlighting } from "../config/exec-command-highlight
 import type { ModelCompatConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { DiagnosticTraceContext } from "../infra/diagnostic-trace-context.js";
+import { resolveEventSessionRoutingPolicy } from "../infra/event-session-routing.js";
 import { resolveMergedSafeBinProfileFixtures } from "../infra/exec-safe-bin-runtime-policy.js";
 import { logWarn } from "../logger.js";
 import { getPluginToolMeta } from "../plugins/tools.js";
@@ -98,6 +99,7 @@ import {
   type ToolSearchCatalogRef,
   type ToolSearchCatalogToolExecutor,
 } from "./tool-search.js";
+import type { MediaGenerateAsyncStartCallback } from "./tools/media-generate-background-shared.js";
 import { resolveWorkspaceRoot } from "./workspace-dir.js";
 
 function isOpenAIProvider(provider?: string) {
@@ -463,6 +465,8 @@ export function createOpenClawCodingTools(options?: {
   authProfileStore?: AuthProfileStore;
   /** Callback invoked when sessions_yield tool is called. */
   onYield?: (message: string) => Promise<void> | void;
+  /** Callback invoked when a media tool starts async background work. */
+  onAsyncTaskStarted?: MediaGenerateAsyncStartCallback;
   /** Optional instrumentation callback for tool preparation stage timing. */
   recordToolPrepStage?: (name: string) => void;
   /** Live observer called after wrapped tool outcomes are recorded. */
@@ -743,6 +747,12 @@ export function createOpenClawCodingTools(options?: {
         sessionKey: options?.sessionKey,
         mainKey: options?.config?.session?.mainKey,
         sessionScope: options?.config?.session?.scope,
+        eventRouting: resolveEventSessionRoutingPolicy({
+          cfg: options?.config,
+          sessionKey: options?.sessionKey,
+          channel: options?.messageProvider,
+          accountId: options?.agentAccountId,
+        }),
         messageProvider: options?.messageProvider,
         currentChannelId: options?.currentChannelId,
         currentThreadTs: options?.currentThreadTs,
@@ -960,6 +970,7 @@ export function createOpenClawCodingTools(options?: {
           inheritedToolAllowlist,
           inheritedToolDenylist,
           onYield: options?.onYield,
+          onAsyncTaskStarted: options?.onAsyncTaskStarted,
           allowGatewaySubagentBinding: options?.allowGatewaySubagentBinding,
           recordToolPrepStage: options?.recordToolPrepStage,
         })

@@ -97,6 +97,38 @@ describe("qa suite transport helpers", () => {
     await expect(pending).rejects.toThrow("Tool read not found");
   });
 
+  it("uses sinceIndex as a full message-bus cursor for outbound waits", async () => {
+    const state = createQaBusState();
+    state.addInboundMessage({
+      conversation: { id: "qa-operator", kind: "direct" },
+      senderId: "alice",
+      senderName: "Alice",
+      text: "before",
+    });
+    const sinceIndex = state.getSnapshot().messages.length;
+    const pending = waitForOutboundMessage(
+      state,
+      (candidate) => candidate.text.includes("QA-CURSOR-OK"),
+      5_000,
+      { sinceIndex },
+    );
+
+    state.addInboundMessage({
+      conversation: { id: "qa-operator", kind: "direct" },
+      senderId: "alice",
+      senderName: "Alice",
+      text: "during",
+    });
+    state.addOutboundMessage({
+      to: "dm:qa-operator",
+      text: "QA-CURSOR-OK",
+      senderId: "openclaw",
+      senderName: "OpenClaw QA",
+    });
+
+    await expect(pending).resolves.toMatchObject({ text: "QA-CURSOR-OK" });
+  });
+
   it("fails raw scenario waitForCondition calls when a classified failure reply arrives", async () => {
     const state = createQaBusState();
     const waitForCondition = createScenarioWaitForCondition(state);

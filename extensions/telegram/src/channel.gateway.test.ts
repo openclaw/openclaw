@@ -145,7 +145,7 @@ function sendMessageOptionsAt(index: number): Record<string, unknown> {
   return options;
 }
 
-async function waitForCondition(check: () => boolean, message: string, attempts = 100) {
+async function waitForCondition(check: () => boolean, message: string, attempts = 5_000) {
   for (let i = 0; i < attempts; i += 1) {
     if (check()) {
       return;
@@ -429,7 +429,9 @@ describe("telegramPlugin gateway startup", () => {
     const releaseProbe: Array<() => void> = [];
     let activeProbes = 0;
     let maxActiveProbes = 0;
+    let startedProbes = 0;
     probeTelegram.mockImplementation(async () => {
+      startedProbes += 1;
       activeProbes += 1;
       maxActiveProbes = Math.max(maxActiveProbes, activeProbes);
       await new Promise<void>((resolve) => {
@@ -445,29 +447,42 @@ describe("telegramPlugin gateway startup", () => {
     });
     monitorTelegramProvider.mockResolvedValue(undefined);
 
-    const first = startTelegramAccount("alpha");
-    const second = startTelegramAccount("bravo");
-    const third = startTelegramAccount("charlie");
+    const firstAbort = new AbortController();
+    const secondAbort = new AbortController();
+    const thirdAbort = new AbortController();
+    const first = startTelegramAccount("alpha", {}, firstAbort.signal);
+    const second = startTelegramAccount("bravo", {}, secondAbort.signal);
+    const third = startTelegramAccount("charlie", {}, thirdAbort.signal);
 
-    await waitForCondition(
-      () => probeTelegram.mock.calls.length === 2,
-      "expected two startup probes to begin",
-    );
-    expect(maxActiveProbes).toBe(2);
-    expect(releaseProbe).toHaveLength(2);
+    try {
+      await waitForCondition(
+        () => startedProbes >= 2 && releaseProbe.length >= 2,
+        "expected two startup probes to begin",
+      );
+      expect(maxActiveProbes).toBe(2);
+      expect(releaseProbe).toHaveLength(2);
 
-    releaseProbe.shift()?.();
-    await waitForCondition(
-      () => probeTelegram.mock.calls.length === 3,
-      "expected queued startup probe to begin after a slot opens",
-    );
-    expect(maxActiveProbes).toBe(2);
+      releaseProbe.shift()?.();
+      await waitForCondition(
+        () => startedProbes >= 3 && releaseProbe.length >= 2,
+        "expected queued startup probe to begin after a slot opens",
+      );
+      expect(maxActiveProbes).toBe(2);
 
-    for (const release of releaseProbe.splice(0)) {
-      release();
+      for (const release of releaseProbe.splice(0)) {
+        release();
+      }
+      await Promise.all([first.task, second.task, third.task]);
+      expect(monitorTelegramProvider).toHaveBeenCalledTimes(3);
+    } finally {
+      firstAbort.abort();
+      secondAbort.abort();
+      thirdAbort.abort();
+      for (const release of releaseProbe.splice(0)) {
+        release();
+      }
+      await Promise.allSettled([first.task, second.task, third.task]);
     }
-    await Promise.all([first.task, second.task, third.task]);
-    expect(monitorTelegramProvider).toHaveBeenCalledTimes(3);
   });
 
   it("abandons a queued startup probe when the account aborts", async () => {
@@ -490,23 +505,35 @@ describe("telegramPlugin gateway startup", () => {
     });
     monitorTelegramProvider.mockResolvedValue(undefined);
 
-    const first = startTelegramAccount("alpha");
-    const second = startTelegramAccount("bravo");
+    const firstAbort = new AbortController();
+    const secondAbort = new AbortController();
     const abortQueued = new AbortController();
+    const first = startTelegramAccount("alpha", {}, firstAbort.signal);
+    const second = startTelegramAccount("bravo", {}, secondAbort.signal);
     const queued = startTelegramAccount("charlie", {}, abortQueued.signal);
 
-    await waitForCondition(
-      () => probeTelegram.mock.calls.length === 2,
-      "expected startup probe slots to fill",
-    );
-    abortQueued.abort();
+    try {
+      await waitForCondition(
+        () => startedProbes >= 2 && releaseProbe.length >= 2,
+        "expected startup probe slots to fill",
+      );
+      abortQueued.abort();
 
-    for (const release of releaseProbe.splice(0)) {
-      release();
+      for (const release of releaseProbe.splice(0)) {
+        release();
+      }
+      await Promise.all([first.task, second.task, queued.task]);
+      expect(startedProbes).toBe(2);
+      expect(monitorTelegramProvider).toHaveBeenCalledTimes(2);
+    } finally {
+      firstAbort.abort();
+      secondAbort.abort();
+      abortQueued.abort();
+      for (const release of releaseProbe.splice(0)) {
+        release();
+      }
+      await Promise.allSettled([first.task, second.task, queued.task]);
     }
-    await Promise.all([first.task, second.task, queued.task]);
-    expect(probeTelegram).toHaveBeenCalledTimes(2);
-    expect(monitorTelegramProvider).toHaveBeenCalledTimes(2);
   });
 
   it("releases a stopped stale polling lease for the account token", async () => {

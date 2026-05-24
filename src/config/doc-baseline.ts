@@ -106,6 +106,10 @@ function logConfigDocBaselineDebug(message: string): void {
   }
 }
 
+function compareConfigDocBaselineStrings(left: string, right: string): number {
+  return left < right ? -1 : left > right ? 1 : 0;
+}
+
 function resolveRepoRoot(): string {
   const fromPackage = resolveOpenClawPackageRootSync({
     cwd: path.dirname(fileURLToPath(import.meta.url)),
@@ -152,7 +156,7 @@ function normalizeJsonValue(value: unknown): JsonValue | undefined {
   }
 
   const entries = Object.entries(value as Record<string, unknown>)
-    .toSorted(([left], [right]) => left.localeCompare(right))
+    .toSorted(([left], [right]) => compareConfigDocBaselineStrings(left, right))
     .map(([key, entry]) => {
       const normalized = normalizeJsonValue(entry);
       return normalized === undefined ? null : ([key, normalized] as const);
@@ -266,7 +270,7 @@ function normalizeTypeValue(value: string | string[] | undefined): string | stri
     return undefined;
   }
   if (Array.isArray(value)) {
-    const normalized = [...new Set(value)].toSorted((left, right) => left.localeCompare(right));
+    const normalized = [...new Set(value)].toSorted(compareConfigDocBaselineStrings);
     return normalized.length === 1 ? normalized[0] : normalized;
   }
   return value;
@@ -312,7 +316,7 @@ function mergeJsonValueArrays(
     merged.set(JSON.stringify(value), value);
   }
   return [...merged.entries()]
-    .toSorted(([leftKey], [rightKey]) => leftKey.localeCompare(rightKey))
+    .toSorted(([leftKey], [rightKey]) => compareConfigDocBaselineStrings(leftKey, rightKey))
     .map(([, value]) => value);
 }
 
@@ -335,9 +339,7 @@ function mergeConfigDocBaselineEntry(
     defaultValue,
     deprecated: current.deprecated || next.deprecated,
     sensitive: current.sensitive || next.sensitive,
-    tags: [...new Set([...current.tags, ...next.tags])].toSorted((left, right) =>
-      left.localeCompare(right),
-    ),
+    tags: [...new Set([...current.tags, ...next.tags])].toSorted(compareConfigDocBaselineStrings),
     label,
     help,
     hasChildren: current.hasChildren || next.hasChildren,
@@ -416,7 +418,7 @@ export function collectConfigDocBaselineEntries(
       defaultValue: normalizeJsonValue(schema.default),
       deprecated: schema.deprecated === true,
       sensitive: hint?.sensitive === true,
-      tags: [...(hint?.tags ?? [])].toSorted((left, right) => left.localeCompare(right)),
+      tags: [...(hint?.tags ?? [])].toSorted(compareConfigDocBaselineStrings),
       label: hint?.label,
       help: hint?.help,
       hasChildren: resolveSchemaHasChildren(schema),
@@ -424,8 +426,8 @@ export function collectConfigDocBaselineEntries(
   }
 
   const requiredKeys = new Set(schema.required ?? []);
-  for (const key of Object.keys(schema.properties ?? {}).toSorted((left, right) =>
-    left.localeCompare(right),
+  for (const key of Object.keys(schema.properties ?? {}).toSorted(
+    compareConfigDocBaselineStrings,
   )) {
     const child = asSchemaObject(schema.properties?.[key]);
     if (!child) {
@@ -488,7 +490,9 @@ export function dedupeConfigDocBaselineEntries(
     const current = byPath.get(entry.path);
     byPath.set(entry.path, current ? mergeConfigDocBaselineEntry(current, entry) : entry);
   }
-  return [...byPath.values()].toSorted((left, right) => left.path.localeCompare(right.path));
+  return [...byPath.values()].toSorted((left, right) =>
+    compareConfigDocBaselineStrings(left.path, right.path),
+  );
 }
 
 function splitConfigDocBaselineEntries(entries: ConfigDocBaselineEntry[]): {

@@ -54,6 +54,14 @@ vi.mock("./setup-finalize.js", async () => {
   };
 });
 
+vi.mock("./creds-files.js", async () => {
+  const actual = await vi.importActual<typeof import("./creds-files.js")>("./creds-files.js");
+  return {
+    ...actual,
+    hasWebCredsSync: hoisted.hasWebCredsSync,
+  };
+});
+
 vi.mock("openclaw/plugin-sdk/setup", async () => {
   const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/setup")>(
     "openclaw/plugin-sdk/setup",
@@ -75,13 +83,6 @@ vi.mock("./auth-store.js", async () => {
   const actual = await vi.importActual<typeof import("./auth-store.js")>("./auth-store.js");
   return Object.assign({}, actual, {
     readWebAuthState: hoisted.readWebAuthState,
-  });
-});
-
-vi.mock("./creds-files.js", async () => {
-  const actual = await vi.importActual<typeof import("./creds-files.js")>("./creds-files.js");
-  return Object.assign({}, actual, {
-    hasWebCredsSync: hoisted.hasWebCredsSync,
   });
 });
 
@@ -348,9 +349,7 @@ describe("whatsapp setup wizard", () => {
   });
 
   it("skips relink note when already linked and relink is declined", async () => {
-    hoisted.detectWhatsAppLinked.mockResolvedValue(true);
     hoisted.hasWebCredsSync.mockReturnValue(true);
-    hoisted.pathExists.mockResolvedValue(true);
     const harness = createSeparatePhoneHarness({
       selectValues: ["separate", "disabled"],
     });

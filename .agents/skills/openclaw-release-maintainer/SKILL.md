@@ -22,6 +22,17 @@ Use this skill for release and publish-time workflow. Keep ordinary development 
 - Before release branching, pull latest `main` and confirm current `main` CI is
   green. Then branch from that commit so regular development can continue on
   `main` while release validation runs.
+- After the release branch or release tag exists, treat its base commit as
+  frozen for that release attempt. Do not autonomously pull `main`, rebase the
+  release branch, merge `main`, or move the release baseline just because the
+  operator previously said "rebase" or because `main` advanced. A new rebase
+  needs an explicit, current instruction that names rebasing the active release
+  branch.
+- When a release is blocked by a failing test, first fix the release branch in
+  place. If `main` already has a specific commit that directly fixes that exact
+  blocker, cherry-pick only that targeted fix after confirming the diff is
+  narrow and explaining why it matches the failure. Do not use the blocker as a
+  reason to rebase onto all of `main`.
 - Before release branching, commit any dirty files in coherent groups, push,
   pull/rebase, then run `/changelog` on `main` and commit/push/pull that
   changelog rewrite immediately before creating the release branch.

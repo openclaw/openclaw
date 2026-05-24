@@ -323,6 +323,9 @@ describe("config schema", () => {
     const listHint = res.uiHints["agents.list.*.heartbeat.target"];
     expect(defaultsHint?.help).toContain("imessage");
     expect(defaultsHint?.help).toContain("last");
+    expect(defaultsHint?.help).not.toContain("wecom");
+    expect(defaultsHint?.help).not.toContain("openclaw-weixin");
+    expect(defaultsHint?.help).not.toContain("yuanbao");
     expect(listHint?.help).toContain("imessage");
   });
 

@@ -12,6 +12,7 @@ const handleSessionOperationEventMock = vi.fn();
 vi.mock("./app-chat.ts", () => ({
   CHAT_SESSIONS_ACTIVE_MINUTES: 10,
   CHAT_SESSIONS_REFRESH_LIMIT: 25,
+  createChatSessionsLoadOverrides: () => ({ activeMinutes: 10, limit: 25 }),
   clearPendingQueueItemsForRun: clearPendingQueueItemsForRunMock,
   flushChatQueueForEvent: flushChatQueueForEventMock,
   refreshChatAvatar: vi.fn(),
@@ -141,7 +142,7 @@ describe("handleGatewayEvent sessions.changed", () => {
     vi.useRealTimers();
   });
 
-  it("scopes post-chat final session refreshes to the run's agent", () => {
+  it("refreshes the full chat session list after a completed chat run", () => {
     loadSessionsMock.mockReset();
     handleChatEventMock.mockReset().mockReturnValue("final");
     const host = createHost();
@@ -157,7 +158,6 @@ describe("handleGatewayEvent sessions.changed", () => {
 
     expect(loadSessionsMock).toHaveBeenCalledWith(host, {
       activeMinutes: 10,
-      agentId: "ops",
       limit: 25,
     });
   });
@@ -557,7 +557,6 @@ describe("handleGatewayEvent session.message", () => {
     expect(loadChatHistoryMock).not.toHaveBeenCalled();
     expect(loadSessionsMock).toHaveBeenCalledWith(host, {
       activeMinutes: 10,
-      agentId: "qa",
       limit: 25,
     });
     await Promise.resolve();

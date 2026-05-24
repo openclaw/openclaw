@@ -308,7 +308,6 @@ permissions:
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
   NODE_VERSION: "24.15.0"
-  PNPM_VERSION: "11.0.8"
 
 jobs:
   validate_selected_ref:
@@ -495,7 +494,6 @@ jobs:
         uses: ./.github/actions/setup-node-env
         with:
           node-version: ${{ env.NODE_VERSION }}
-          pnpm-version: ${{ env.PNPM_VERSION }}
           install-bun: "true"
 
       - name: Validate live cache credentials
@@ -543,13 +541,15 @@ jobs:
         uses: ./.github/actions/setup-node-env
         with:
           node-version: ${{ env.NODE_VERSION }}
-          pnpm-version: ${{ env.PNPM_VERSION }}
           install-bun: "true"
 
       - name: Build dist for repo E2E
         env:
           NODE_OPTIONS: --max-old-space-size=8192
         run: pnpm build
+
+      - name: Install Playwright Chromium
+        run: pnpm --dir ui exec playwright install --with-deps chromium
 
       - name: Run repo E2E suite
         run: pnpm test:e2e
@@ -585,7 +585,6 @@ jobs:
         uses: ./.github/actions/setup-node-env
         with:
           node-version: ${{ env.NODE_VERSION }}
-          pnpm-version: ${{ env.PNPM_VERSION }}
           install-bun: "true"
 
       - name: Build dist for special E2E
@@ -761,6 +760,7 @@ jobs:
         if: contains(matrix.profiles, inputs.release_test_profile)
         uses: actions/checkout@v6
         with:
+          persist-credentials: false
           ref: ${{ needs.validate_selected_ref.outputs.selected_sha }}
           fetch-depth: 1
 
@@ -768,24 +768,23 @@ jobs:
         if: contains(matrix.profiles, inputs.release_test_profile)
         uses: actions/checkout@v6
         with:
+          persist-credentials: false
           ref: ${{ github.sha }}
           fetch-depth: 1
           path: .release-harness
 
       - name: Log in to GHCR for shared Docker E2E image
         if: contains(matrix.profiles, inputs.release_test_profile)
-        uses: docker/login-action@4907a6ddec9925e35a0a9e82d7399ccc52663121 # v4
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ github.token }}
+        run: bash .release-harness/scripts/ci-docker-login-ghcr.sh
+        env:
+          GHCR_USERNAME: ${{ github.actor }}
+          GITHUB_TOKEN: ${{ github.token }}
 
       - name: Setup Node environment
         if: contains(matrix.profiles, inputs.release_test_profile)
         uses: ./.github/actions/setup-node-env
         with:
           node-version: ${{ env.NODE_VERSION }}
-          pnpm-version: ${{ env.PNPM_VERSION }}
           install-bun: "true"
 
       - name: Hydrate live auth/profile inputs
@@ -911,6 +910,7 @@ jobs:
       - name: Checkout trusted release harness
         uses: actions/checkout@v6
         with:
+          persist-credentials: false
           ref: ${{ github.sha }}
           fetch-depth: 1
 
@@ -1001,28 +1001,28 @@ jobs:
       - name: Checkout selected ref
         uses: actions/checkout@v6
         with:
+          persist-credentials: false
           ref: ${{ needs.validate_selected_ref.outputs.selected_sha }}
           fetch-depth: 1
 
       - name: Checkout trusted release harness
         uses: actions/checkout@v6
         with:
+          persist-credentials: false
           ref: ${{ github.sha }}
           fetch-depth: 1
           path: .release-harness
 
       - name: Log in to GHCR for shared Docker E2E image
-        uses: docker/login-action@4907a6ddec9925e35a0a9e82d7399ccc52663121 # v4
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ github.token }}
+        run: bash .release-harness/scripts/ci-docker-login-ghcr.sh
+        env:
+          GHCR_USERNAME: ${{ github.actor }}
+          GITHUB_TOKEN: ${{ github.token }}
 
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
         with:
           node-version: ${{ env.NODE_VERSION }}
-          pnpm-version: ${{ env.PNPM_VERSION }}
           install-bun: "true"
 
       - name: Hydrate live auth/profile inputs
@@ -1169,17 +1169,15 @@ jobs:
           path: .release-harness
 
       - name: Log in to GHCR for shared Docker E2E image
-        uses: docker/login-action@4907a6ddec9925e35a0a9e82d7399ccc52663121 # v4
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ github.token }}
+        run: bash .release-harness/scripts/ci-docker-login-ghcr.sh
+        env:
+          GHCR_USERNAME: ${{ github.actor }}
+          GITHUB_TOKEN: ${{ github.token }}
 
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
         with:
           node-version: ${{ env.NODE_VERSION }}
-          pnpm-version: ${{ env.PNPM_VERSION }}
           install-bun: "true"
 
       - name: Validate Open WebUI credentials
@@ -1339,7 +1337,6 @@ jobs:
         uses: ./.github/actions/setup-node-env
         with:
           node-version: ${{ env.NODE_VERSION }}
-          pnpm-version: ${{ env.PNPM_VERSION }}
           install-bun: "true"
 
       - name: Download current-run OpenClaw Docker E2E package
@@ -1430,11 +1427,10 @@ jobs:
 
       - name: Log in to GHCR
         if: steps.plan.outputs.needs_e2e_image == '1'
-        uses: docker/login-action@4907a6ddec9925e35a0a9e82d7399ccc52663121 # v4
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ github.token }}
+        run: bash .release-harness/scripts/ci-docker-login-ghcr.sh
+        env:
+          GHCR_USERNAME: ${{ github.actor }}
+          GITHUB_TOKEN: ${{ github.token }}
 
       - name: Check existing shared Docker E2E images
         id: image_exists
@@ -1545,11 +1541,10 @@ jobs:
           echo "Shared live-test image: \`${live_image}\`" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Log in to GHCR
-        uses: docker/login-action@4907a6ddec9925e35a0a9e82d7399ccc52663121 # v4
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ github.token }}
+        run: bash scripts/ci-docker-login-ghcr.sh
+        env:
+          GHCR_USERNAME: ${{ github.actor }}
+          GITHUB_TOKEN: ${{ github.token }}
 
       - name: Check existing shared live-test image
         id: image_exists
@@ -1683,7 +1678,6 @@ jobs:
         uses: ./.github/actions/setup-node-env
         with:
           node-version: ${{ env.NODE_VERSION }}
-          pnpm-version: ${{ env.PNPM_VERSION }}
           install-bun: "true"
 
       - name: Hydrate live auth/profile inputs
@@ -1692,11 +1686,10 @@ jobs:
 
       - name: Log in to GHCR
         if: contains(matrix.profiles, inputs.release_test_profile)
-        uses: docker/login-action@4907a6ddec9925e35a0a9e82d7399ccc52663121 # v4
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ github.token }}
+        run: bash .release-harness/scripts/ci-docker-login-ghcr.sh
+        env:
+          GHCR_USERNAME: ${{ github.actor }}
+          GITHUB_TOKEN: ${{ github.token }}
 
       - name: Validate provider credential
         if: contains(matrix.profiles, inputs.release_test_profile)
@@ -1802,7 +1795,6 @@ jobs:
         uses: ./.github/actions/setup-node-env
         with:
           node-version: ${{ env.NODE_VERSION }}
-          pnpm-version: ${{ env.PNPM_VERSION }}
           install-bun: "true"
 
       - name: Normalize provider allowlist
@@ -1868,11 +1860,10 @@ jobs:
         run: bash scripts/ci-hydrate-live-auth.sh
 
       - name: Log in to GHCR
-        uses: docker/login-action@4907a6ddec9925e35a0a9e82d7399ccc52663121 # v4
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ github.token }}
+        run: bash .release-harness/scripts/ci-docker-login-ghcr.sh
+        env:
+          GHCR_USERNAME: ${{ github.actor }}
+          GITHUB_TOKEN: ${{ github.token }}
 
       - name: Validate provider credentials
         shell: bash
@@ -2172,7 +2163,6 @@ jobs:
         uses: ./.github/actions/setup-node-env
         with:
           node-version: ${{ env.NODE_VERSION }}
-          pnpm-version: ${{ env.PNPM_VERSION }}
           install-bun: "true"
 
       - name: Hydrate live auth/profile inputs
@@ -2391,7 +2381,6 @@ jobs:
         uses: ./.github/actions/setup-node-env
         with:
           node-version: ${{ env.NODE_VERSION }}
-          pnpm-version: ${{ env.PNPM_VERSION }}
           install-bun: "true"
 
       - name: Hydrate live auth/profile inputs
@@ -2400,11 +2389,10 @@ jobs:
 
       - name: Log in to GHCR
         if: contains(matrix.profiles, inputs.release_test_profile) && (inputs.live_suite_filter == '' || inputs.live_suite_filter == matrix.suite_id || (inputs.live_suite_filter == 'live-gateway-advisory-docker' && startsWith(matrix.suite_id, 'live-gateway-advisory-docker-')))
-        uses: docker/login-action@4907a6ddec9925e35a0a9e82d7399ccc52663121 # v4
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ github.token }}
+        run: bash .release-harness/scripts/ci-docker-login-ghcr.sh
+        env:
+          GHCR_USERNAME: ${{ github.actor }}
+          GITHUB_TOKEN: ${{ github.token }}
 
       - name: Configure suite-specific env
         if: contains(matrix.profiles, inputs.release_test_profile) && (inputs.live_suite_filter == '' || inputs.live_suite_filter == matrix.suite_id || (inputs.live_suite_filter == 'live-gateway-advisory-docker' && startsWith(matrix.suite_id, 'live-gateway-advisory-docker-')))
@@ -2611,7 +2599,6 @@ jobs:
         uses: ./.github/actions/setup-node-env
         with:
           node-version: ${{ env.NODE_VERSION }}
-          pnpm-version: ${{ env.PNPM_VERSION }}
           install-bun: "true"
 
       - name: Hydrate live auth/profile inputs

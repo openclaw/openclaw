@@ -195,6 +195,11 @@ export type RunEmbeddedPiAgentParams = {
     data: Record<string, unknown>;
     sessionKey?: string;
   }) => void | Promise<void>;
+  /**
+   * Emit lifecycle "finishing" when the model turn ends; the caller owns the
+   * final lifecycle "end" after durable post-turn maintenance completes.
+   */
+  deferTerminalLifecycleEnd?: boolean;
   lane?: string;
   enqueue?: CommandQueueEnqueueFn;
   extraSystemPrompt?: string;

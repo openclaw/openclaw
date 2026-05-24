@@ -281,6 +281,12 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
       threadId,
     });
 
+    const allowTextCommands = core.channel.commands.shouldHandleTextCommands({
+      cfg,
+      surface: "msteams",
+    });
+    const isControlCommand =
+      allowTextCommands && core.channel.commands.isControlCommandMessage(text, cfg);
     const {
       dmPolicy,
       senderId,
@@ -295,7 +301,7 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
     } = await resolveMSTeamsSenderAccess({
       cfg,
       activity,
-      hasControlCommand: core.channel.text.hasControlCommand(text, cfg),
+      hasControlCommand: isControlCommand,
     });
     const commandAuthorized = commandAccess.requested ? commandAccess.authorized : undefined;
     const effectiveDmAllowFrom = senderAccess.effectiveAllowFrom;
@@ -522,9 +528,9 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
       policy: {
         isGroup: !isDirectMessage,
         requireMention,
-        allowTextCommands: false,
-        hasControlCommand: false,
-        commandAuthorized: false,
+        allowTextCommands,
+        hasControlCommand: isControlCommand,
+        commandAuthorized: commandAuthorized === true,
       },
     });
 
@@ -938,7 +944,7 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
       if (entry.attachments.length > 0) {
         return false;
       }
-      return !core.channel.text.hasControlCommand(entry.text, cfg);
+      return !core.channel.commands.isControlCommandMessage(entry.text, cfg);
     },
     onFlush: async (entries) => {
       const last = entries.at(-1);
