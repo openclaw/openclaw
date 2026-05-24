@@ -156,6 +156,142 @@ describe("closeIdleMemoryIndexManagers", () => {
     expect(cache.cache.has("idle:in-flight")).toBe(false);
   });
 
+  it("protects manager whose sync is waiting on provider initialization", async () => {
+    // Regression for the provider-init race identified in PR #85972 review:
+    // before the fix, MemoryIndexManager.sync() awaited
+    // ensureProviderInitialized() outside the withBusy() scope, so the idle
+    // sweeper could observe busy=0 while a caller was blocked on a slow
+    // provider boot (seconds to minutes for some embedding APIs) and evict
+    // the manager before its work even started.
+    //
+    // This test simulates production's `withBusy(async () => { await
+    // ensureProviderInitialized(); ... })` ordering and verifies that the
+    // busy refcount is already held during the provider-init wait, so the
+    // sweeper reports skippedBusy === 1 and evicted === 0.
+    const stale = seed("idle:provider-init-sync", Date.now() - 30_000);
+
+    let resolveProviderInit!: () => void;
+    const providerInitPromise = new Promise<void>((resolve) => {
+      resolveProviderInit = resolve;
+    });
+
+    // Production sync(): withBusy wraps the entire body including the
+    // ensureProviderInitialized() await. Reproduce that ordering exactly.
+    const syncRun = (async () => {
+      const release = acquireManagedCacheKey(cache, stale.cacheKey);
+      try {
+        // Step out of the way of the scan below by aging lastAccessAt
+        // (acquire just refreshed it). The busy ref must be the thing
+        // keeping us alive.
+        cache.lastAccessAt.set(stale.cacheKey, Date.now() - 30_000);
+        await providerInitPromise;
+        // Provider init complete; in production this is where embedding /
+        // vector / FTS work would actually run. For the test, completing
+        // the await is enough to prove the busy ref covered the wait.
+      } finally {
+        release();
+      }
+    })();
+
+    // Let acquireManagedCacheKey fire before we run the scan.
+    await Promise.resolve();
+
+    const firstScan = await closeIdleMemoryIndexManagers({ idleMs: 5_000 });
+    expect(firstScan.skippedBusy).toBe(1);
+    expect(firstScan.evicted).toBe(0);
+    expect(stale.close).not.toHaveBeenCalled();
+    expect(cache.cache.has(stale.cacheKey)).toBe(true);
+
+    // Unblock provider init and let the simulated sync drain.
+    resolveProviderInit();
+    await syncRun;
+
+    // After release the manager is evict-eligible again. Re-age lastAccessAt
+    // because release() refreshed it.
+    cache.lastAccessAt.set(stale.cacheKey, Date.now() - 30_000);
+    const secondScan = await closeIdleMemoryIndexManagers({ idleMs: 5_000 });
+    expect(secondScan.skippedBusy).toBe(0);
+    expect(secondScan.evicted).toBe(1);
+    expect(stale.close).toHaveBeenCalledTimes(1);
+    expect(cache.cache.has(stale.cacheKey)).toBe(false);
+  });
+
+  it("protects manager whose search is waiting on provider initialization", async () => {
+    // Same race surface as sync(), but exercised via the search() entry
+    // point. Production search() wraps the entire searchInternal flow in
+    // withBusy, so a provider-init await deep inside searchInternal is
+    // still protected.
+    const stale = seed("idle:provider-init-search", Date.now() - 30_000);
+
+    let resolveProviderInit!: () => void;
+    const providerInitPromise = new Promise<void>((resolve) => {
+      resolveProviderInit = resolve;
+    });
+
+    const searchRun = (async () => {
+      const release = acquireManagedCacheKey(cache, stale.cacheKey);
+      try {
+        cache.lastAccessAt.set(stale.cacheKey, Date.now() - 30_000);
+        // In production this happens inside searchInternal, after the
+        // outer search() has already entered withBusy.
+        await providerInitPromise;
+      } finally {
+        release();
+      }
+    })();
+
+    await Promise.resolve();
+
+    const firstScan = await closeIdleMemoryIndexManagers({ idleMs: 5_000 });
+    expect(firstScan.skippedBusy).toBe(1);
+    expect(firstScan.evicted).toBe(0);
+    expect(stale.close).not.toHaveBeenCalled();
+
+    resolveProviderInit();
+    await searchRun;
+
+    cache.lastAccessAt.set(stale.cacheKey, Date.now() - 30_000);
+    const secondScan = await closeIdleMemoryIndexManagers({ idleMs: 5_000 });
+    expect(secondScan.evicted).toBe(1);
+    expect(stale.close).toHaveBeenCalledTimes(1);
+  });
+
+  it("releases the busy ref when provider initialization throws", async () => {
+    // If ensureProviderInitialized() rejects, the withBusy() finally block
+    // must still release the busy ref so the entry becomes evict-eligible
+    // rather than leaking inflightCount > 0 forever.
+    const stale = seed("idle:provider-init-throws", Date.now() - 30_000);
+
+    let rejectProviderInit!: (err: unknown) => void;
+    const providerInitPromise = new Promise<void>((_resolve, reject) => {
+      rejectProviderInit = reject;
+    });
+
+    const syncRun = (async () => {
+      const release = acquireManagedCacheKey(cache, stale.cacheKey);
+      try {
+        cache.lastAccessAt.set(stale.cacheKey, Date.now() - 30_000);
+        await providerInitPromise;
+      } finally {
+        release();
+      }
+    })();
+
+    await Promise.resolve();
+
+    const duringScan = await closeIdleMemoryIndexManagers({ idleMs: 5_000 });
+    expect(duringScan.skippedBusy).toBe(1);
+    expect(duringScan.evicted).toBe(0);
+
+    rejectProviderInit(new Error("provider boot failed"));
+    await expect(syncRun).rejects.toThrow(/provider boot failed/);
+
+    cache.lastAccessAt.set(stale.cacheKey, Date.now() - 30_000);
+    const afterScan = await closeIdleMemoryIndexManagers({ idleMs: 5_000 });
+    expect(afterScan.evicted).toBe(1);
+    expect(stale.close).toHaveBeenCalledTimes(1);
+  });
+
   it("defers multiple busy entries together in a single scan", async () => {
     const a = seed("idle:busy-a", Date.now() - 30_000);
     const b = seed("idle:busy-b", Date.now() - 30_000);

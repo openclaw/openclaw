@@ -733,23 +733,31 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     if (this.closed) {
       return;
     }
-    await this.ensureProviderInitialized();
-    if (this.syncing) {
-      if (params?.sessionFiles?.some((sessionFile) => sessionFile.trim().length > 0)) {
-        return this.enqueueTargetedSessionSync(params.sessionFiles);
+    // Hold the busy ref across the entire sync lifetime, including the
+    // provider initialization step below. Without this outer wrapper, the
+    // idle sweeper could observe a stale lastAccessAt and busy=0 while we
+    // are blocked inside ensureProviderInitialized() and evict the manager
+    // before the inner reindex even starts.
+    return await this.withBusy(async () => {
+      await this.ensureProviderInitialized();
+      if (this.syncing) {
+        if (params?.sessionFiles?.some((sessionFile) => sessionFile.trim().length > 0)) {
+          return this.enqueueTargetedSessionSync(params.sessionFiles);
+        }
+        return this.syncing;
       }
-      return this.syncing;
-    }
-    // Wrap the underlying recovery loop in withBusy so the idle sweeper
-    // does not close this manager partway through a batch reindex or
-    // long sync pass. Refcount is released in the chained finally below
-    // alongside this.syncing reset, guaranteeing they unwind together.
-    const release = acquireManagedCacheKey(INDEX_MANAGER_CACHE, this.cacheKey);
-    this.syncing = this.runSyncWithReadonlyRecovery(params).finally(() => {
-      this.syncing = null;
-      release();
+      // Wrap the underlying recovery loop in a nested busy ref so the
+      // idle sweeper still skips us after the outer withBusy() unwinds
+      // (e.g. when a search() caller awaits us but a longer reindex keeps
+      // running). Nested refcounts are additive; both releases must fire
+      // for the entry to become evict-eligible.
+      const release = acquireManagedCacheKey(INDEX_MANAGER_CACHE, this.cacheKey);
+      this.syncing = this.runSyncWithReadonlyRecovery(params).finally(() => {
+        this.syncing = null;
+        release();
+      });
+      await (this.syncing ?? Promise.resolve());
     });
-    return this.syncing ?? Promise.resolve();
   }
 
   private enqueueTargetedSessionSync(sessionFiles?: string[]): Promise<void> {
@@ -950,15 +958,19 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       this.vector.semanticAvailable = false;
       return false;
     }
-    await this.ensureProviderInitialized();
-    // FTS-only mode: vector search not available
-    if (!this.provider) {
-      this.vector.semanticAvailable = false;
-      return false;
-    }
-    const ready = await this.probeVectorStoreAvailability();
-    this.vector.semanticAvailable = ready;
-    return ready;
+    // Hold busy across provider init so idle eviction cannot close the
+    // manager mid-probe.
+    return await this.withBusy(async () => {
+      await this.ensureProviderInitialized();
+      // FTS-only mode: vector search not available
+      if (!this.provider) {
+        this.vector.semanticAvailable = false;
+        return false;
+      }
+      const ready = await this.probeVectorStoreAvailability();
+      this.vector.semanticAvailable = ready;
+      return ready;
+    });
   }
 
   async probeVectorStoreAvailability(): Promise<boolean> {
@@ -1003,21 +1015,26 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     if (cached) {
       return cached;
     }
-    await this.ensureProviderInitialized();
-    // FTS-only mode: embeddings not available but search still works
-    if (!this.provider) {
-      return this.cacheProbeResult({
-        ok: false,
-        error: this.providerUnavailableReason ?? "No embedding provider available (FTS-only mode)",
-      });
-    }
-    try {
-      await this.embedBatchWithRetry(["ping"]);
-      return this.cacheProbeResult({ ok: true });
-    } catch (err) {
-      const message = formatErrorMessage(err);
-      return this.cacheProbeResult({ ok: false, error: message });
-    }
+    // Hold busy across provider init so idle eviction cannot close the
+    // manager mid-probe.
+    return await this.withBusy(async () => {
+      await this.ensureProviderInitialized();
+      // FTS-only mode: embeddings not available but search still works
+      if (!this.provider) {
+        return this.cacheProbeResult({
+          ok: false,
+          error:
+            this.providerUnavailableReason ?? "No embedding provider available (FTS-only mode)",
+        });
+      }
+      try {
+        await this.embedBatchWithRetry(["ping"]);
+        return this.cacheProbeResult({ ok: true });
+      } catch (err) {
+        const message = formatErrorMessage(err);
+        return this.cacheProbeResult({ ok: false, error: message });
+      }
+    });
   }
 
   async close(): Promise<void> {
