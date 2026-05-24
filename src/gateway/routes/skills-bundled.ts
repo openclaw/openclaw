@@ -111,13 +111,35 @@ export function resetManifestCache(): void {
 
 // ── runtime envelope ──────────────────────────────────────────────────────────
 
+/**
+ * Read a build-time env var, treating an unset OR empty-string value as
+ * "unknown". The Dockerfile declares these as `ARG ... = ""` (empty default),
+ * which means an unset build-arg passes through as an empty string at runtime
+ * rather than as undefined — so `??` would not fall back. Always use this
+ * helper instead of `process.env.X ?? "unknown"` for image/source metadata.
+ */
+function buildEnvOr(name: string, fallback: string): string {
+  const v = process.env[name];
+  if (v === undefined || v === null || v === "") {
+    return fallback;
+  }
+  return v;
+}
+
 function buildEnvelope(entries: ManifestEntry[]): RuntimeEnvelope {
+  // imageSha is intentionally NOT populated by the gateway build pipeline:
+  // the final Artifact Registry digest is not known inside a single-pass
+  // `docker build` (it's produced by `docker push`). The dashboard will
+  // attach the registry digest via the release-record join in Phase 3
+  // (see docs/plans/canonical-skill-registry.md §8). Until then, this field
+  // reports "unknown" — consumers should treat it as a known-missing value,
+  // not as a verification field.
   return {
     generatedAt: new Date().toISOString(),
-    imageTag: process.env.OPENCLAW_IMAGE_TAG ?? "unknown",
-    imageSha: process.env.OPENCLAW_IMAGE_SHA ?? "unknown",
+    imageTag: buildEnvOr("OPENCLAW_IMAGE_TAG", "unknown"),
+    imageSha: buildEnvOr("OPENCLAW_IMAGE_SHA", "unknown"),
     skills: entries,
-    sourceSha: process.env.OPENCLAW_SOURCE_SHA ?? "unknown",
+    sourceSha: buildEnvOr("OPENCLAW_SOURCE_SHA", "unknown"),
   };
 }
 

@@ -174,6 +174,33 @@ describe("handleSkillsBundledRequest — GET /skills/bundled", () => {
     expect(envelope.skills.length).toBeGreaterThan(0);
   });
 
+  test("(a2) empty-string env vars fall back to 'unknown'", async () => {
+    // The Dockerfile declares ARG OPENCLAW_IMAGE_TAG=""; an unset --build-arg
+    // makes the env value an empty string at runtime, not undefined. The
+    // route's buildEnvOr helper must treat "" the same as missing — otherwise
+    // the envelope would report `"imageTag": ""` (confusing and useless).
+    vi.stubEnv("OPENCLAW_IMAGE_TAG", "");
+    vi.stubEnv("OPENCLAW_IMAGE_SHA", "");
+    vi.stubEnv("OPENCLAW_SOURCE_SHA", "");
+
+    const cap = makeRes();
+    const handled = await handleSkillsBundledRequest(makeReq("GET", "/skills/bundled"), cap.res, {
+      auth: makeAuth(),
+    });
+
+    expect(handled).toBe(true);
+    expect(cap.statusCode).toBe(200);
+
+    const envelope = JSON.parse(cap.body) as {
+      imageTag: string;
+      imageSha: string;
+      sourceSha: string;
+    };
+    expect(envelope.imageTag).toBe("unknown");
+    expect(envelope.imageSha).toBe("unknown");
+    expect(envelope.sourceSha).toBe("unknown");
+  });
+
   test("(b) manifest entries match committed manifest.json", async () => {
     const cap = makeRes();
     await handleSkillsBundledRequest(makeReq("GET", "/skills/bundled"), cap.res, {

@@ -111,6 +111,8 @@
 
 - Codex owns `openclaw` branch `codex/feat-rain-agent-skills` / PR #19 for the Rain skill scaffold. Scope: `skills/rain/SKILL.md`, `STATUS.md`. This intentionally avoids dashboard wallet/RPC files while Claude owns the AgentGlob wallet integration.
 - Claude owns `openclaw` branch `feat/rain-skill-split` for the Rain skill rewrite + create-market split per the plan in `docs/plans/rain-skill-rewrite.md` (merged via PR #44). Scope: `skills/rain/SKILL.md` (expanded — adds portfolio, analytics, trade-history, utility, diagnostics sections; removes create-market flow), `skills/rain-create/SKILL.md` (new), `STATUS.md`. No code or MCP changes.
+- Claude owns `openclaw` branch `fix/skills-bundled-empty-env-fallback` — small follow-up to PR #47 fixing the `buildEnvOr` empty-string handling so `OPENCLAW_IMAGE_*` env vars default to `"unknown"` when the build-arg is unset (Dockerfile defaults to `""`, and `??` doesn't fall back on `""`). Scope: `src/gateway/routes/skills-bundled.ts`, `src/gateway/routes/skills-bundled.test.ts`, `STATUS.md`.
+- Ops change applied on DevAgents (2026-05-24): `/opt/openclaw-ops/scripts/build-and-push.sh` now passes `--build-arg OPENCLAW_IMAGE_TAG="${TAG}"` and `--build-arg OPENCLAW_SOURCE_SHA="${SOURCE_SHA}"`. Backup at `build-and-push.sh.bak.<ts>`. `OPENCLAW_IMAGE_SHA` intentionally not passed — the registry digest isn't known inside a single-pass `docker build` (per Codex's nuance note on PR #47); release-record join in Phase 3 will populate it. Until then the gateway reports `"imageSha": "unknown"`.
 
 ---
 
