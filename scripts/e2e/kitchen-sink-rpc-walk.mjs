@@ -588,7 +588,7 @@ async function sampleWindowsProcess(pid, run) {
 
 export function assertResourceCeiling(sample) {
   if (!sample) {
-    return;
+    throw new Error("gateway RSS sample was not captured");
   }
   if (sample.rssMiB > MAX_RSS_MIB) {
     throw new Error(`gateway RSS exceeded ${MAX_RSS_MIB} MiB: ${sample.rssMiB} MiB`);

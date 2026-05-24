@@ -418,22 +418,21 @@ class TalkModeManagerTest {
 
   @Test
   @OptIn(ExperimentalCoroutinesApi::class)
-  fun chatFinalWaitWithoutSubscribeUsesShortTimeout() =
+  fun chatFinalWaitUsesGatewayEventTimeout() =
     runTest {
-      val manager = createManager(scope = this, supportsChatSubscribe = false)
+      val manager = createManager(scope = this)
 
       setPrivateField(manager, "pendingRunId", "run-missing-final")
       setPrivateField(manager, "pendingFinal", CompletableDeferred<Boolean>())
 
       assertFalse(manager.waitForChatFinal("run-missing-final"))
-      assertEquals(6_000, currentTime)
+      assertEquals(45_000, currentTime)
     }
 
   private fun createManager(
     talkSpeakClient: TalkSpeechSynthesizing = TalkSpeakClient(),
     talkAudioPlayer: TalkAudioPlaying? = null,
     scope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.Default),
-    supportsChatSubscribe: Boolean = false,
     isConnected: () -> Boolean = { true },
     onStoppedByRelay: () -> Unit = {},
   ): TalkModeManager {
@@ -452,7 +451,6 @@ class TalkModeManagerTest {
       context = app,
       scope = scope,
       session = session,
-      supportsChatSubscribe = supportsChatSubscribe,
       isConnected = isConnected,
       onStoppedByRelay = onStoppedByRelay,
       talkSpeakClient = talkSpeakClient,

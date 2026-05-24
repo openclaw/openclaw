@@ -151,6 +151,11 @@ fun ShellScreen(
           VoiceShellScreen(
             viewModel = viewModel,
             onOpenCommand = { commandOpen = true },
+            onOpenGatewaySettings = {
+              settingsRoute = SettingsRoute.Gateway
+              returnToOverviewFromSettings = false
+              activeTab = Tab.Settings
+            },
             onOpenVoiceSettings = {
               settingsRoute = SettingsRoute.Voice
               returnToOverviewFromSettings = false
@@ -637,10 +642,16 @@ private fun ChatShellScreen(
 private fun VoiceShellScreen(
   viewModel: MainViewModel,
   onOpenCommand: () -> Unit,
+  onOpenGatewaySettings: () -> Unit,
   onOpenVoiceSettings: () -> Unit,
 ) {
   ClawScaffold(contentPadding = PaddingValues(start = 0.dp, top = 8.dp, end = 0.dp, bottom = 8.dp)) {
-    VoiceScreen(viewModel = viewModel, onOpenCommand = onOpenCommand, onOpenVoiceSettings = onOpenVoiceSettings)
+    VoiceScreen(
+      viewModel = viewModel,
+      onOpenCommand = onOpenCommand,
+      onOpenGatewaySettings = onOpenGatewaySettings,
+      onOpenVoiceSettings = onOpenVoiceSettings,
+    )
   }
 }
 

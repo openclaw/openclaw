@@ -48,6 +48,10 @@ import { resolveVitestCliEntry, resolveVitestNodeArgs } from "./run-vitest.mjs";
 
 const DEFAULT_VITEST_CONFIG = "test/vitest/vitest.unit.config.ts";
 const AGENTS_VITEST_CONFIG = "test/vitest/vitest.agents.config.ts";
+const AGENTS_CORE_VITEST_CONFIG = "test/vitest/vitest.agents-core.config.ts";
+const AGENTS_PI_EMBEDDED_VITEST_CONFIG = "test/vitest/vitest.agents-pi-embedded.config.ts";
+const AGENTS_SUPPORT_VITEST_CONFIG = "test/vitest/vitest.agents-support.config.ts";
+const AGENTS_TOOLS_VITEST_CONFIG = "test/vitest/vitest.agents-tools.config.ts";
 const ACP_VITEST_CONFIG = "test/vitest/vitest.acp.config.ts";
 const AUTO_REPLY_CORE_VITEST_CONFIG = "test/vitest/vitest.auto-reply-core.config.ts";
 const AUTO_REPLY_VITEST_CONFIG = "test/vitest/vitest.auto-reply.config.ts";
@@ -125,10 +129,10 @@ const FULL_SUITE_CONFIG_WEIGHT = new Map([
   [GATEWAY_CLIENT_VITEST_CONFIG, 178],
   [GATEWAY_METHODS_VITEST_CONFIG, 177],
   [COMMANDS_VITEST_CONFIG, 175],
-  ["test/vitest/vitest.agents-core.config.ts", 170],
-  ["test/vitest/vitest.agents-pi-embedded.config.ts", 169],
-  ["test/vitest/vitest.agents-support.config.ts", 168],
-  ["test/vitest/vitest.agents-tools.config.ts", 167],
+  [AGENTS_CORE_VITEST_CONFIG, 170],
+  [AGENTS_PI_EMBEDDED_VITEST_CONFIG, 169],
+  [AGENTS_SUPPORT_VITEST_CONFIG, 168],
+  [AGENTS_TOOLS_VITEST_CONFIG, 167],
   [EXTENSION_VOICE_CALL_VITEST_CONFIG, 169],
   [EXTENSIONS_VITEST_CONFIG, 168],
   [EXTENSION_PROVIDER_OPENAI_VITEST_CONFIG, 167],
@@ -231,6 +235,10 @@ const CHANGED_ARGS_PATTERN = /^--changed(?:=(.+))?$/u;
 const VITEST_CONFIG_BY_KIND = {
   acp: ACP_VITEST_CONFIG,
   agent: AGENTS_VITEST_CONFIG,
+  agentCore: AGENTS_CORE_VITEST_CONFIG,
+  agentPiEmbedded: AGENTS_PI_EMBEDDED_VITEST_CONFIG,
+  agentSupport: AGENTS_SUPPORT_VITEST_CONFIG,
+  agentTools: AGENTS_TOOLS_VITEST_CONFIG,
   autoReplyCore: AUTO_REPLY_CORE_VITEST_CONFIG,
   autoReplyReply: AUTO_REPLY_REPLY_VITEST_CONFIG,
   autoReplyTopLevel: AUTO_REPLY_TOP_LEVEL_VITEST_CONFIG,

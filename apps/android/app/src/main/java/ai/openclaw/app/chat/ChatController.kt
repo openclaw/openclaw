@@ -22,7 +22,6 @@ class ChatController(
   private val scope: CoroutineScope,
   private val session: GatewaySession,
   private val json: Json,
-  private val supportsChatSubscribe: Boolean,
 ) {
   private var appliedMainSessionKey = "main"
   private val _sessionKey = MutableStateFlow("main")
@@ -302,10 +301,6 @@ class ChatController(
 
     val key = _sessionKey.value
     try {
-      if (supportsChatSubscribe) {
-        session.sendNodeEvent("chat.subscribe", """{"sessionKey":"$key"}""")
-      }
-
       val historyJson = session.request("chat.history", """{"sessionKey":"$key"}""")
       val history = parseHistory(historyJson, sessionKey = key, previousMessages = _messages.value)
       _messages.value = mergeOptimisticMessages(incoming = history.messages, optimistic = optimisticMessagesByRunId.values)
