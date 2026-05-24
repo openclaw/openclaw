@@ -241,7 +241,14 @@ function parseStep(raw: Record<string, unknown>, index: number): PlaybookStep {
     };
   }
   if (stepType === "action") {
-    const outputKey = readField(raw, "output", "output_var", "outputVar");
+    const outputKey = readField(
+      raw,
+      "store_result_as",
+      "storeResultAs",
+      "output",
+      "output_var",
+      "outputVar",
+    );
     return {
       ...meta,
       kind: "action",
@@ -254,7 +261,14 @@ function parseStep(raw: Record<string, unknown>, index: number): PlaybookStep {
     };
   }
   if (stepType === "function") {
-    const outputKey = readField(raw, "output", "output_var", "outputVar");
+    const outputKey = readField(
+      raw,
+      "store_result_as",
+      "storeResultAs",
+      "output",
+      "output_var",
+      "outputVar",
+    );
     return {
       ...meta,
       kind: "function",
