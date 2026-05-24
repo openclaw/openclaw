@@ -1631,9 +1631,6 @@ export async function runReplyAgent(params: {
       didSendDeterministicApprovalPrompt: runResult.didSendDeterministicApprovalPrompt,
     });
     const returnSilentFallbackFailureIfNeeded = async (): Promise<ReplyPayload | undefined> => {
-      if (preserveUserFacingSessionState) {
-        return undefined;
-      }
       const silentFallbackFailurePayload = buildSilentFallbackFailurePayload({
         fallbackTransition,
         fallbackFailureKnown:
