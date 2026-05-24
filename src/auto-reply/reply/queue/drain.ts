@@ -396,12 +396,13 @@ export function scheduleFollowupDrain(
               state: queue,
               noun: "message",
             });
+            const summaryOnlyPrompt = summaryOnly.prompt;
             const run = queue.lastRun;
-            if (summaryOnly.prompt && run) {
+            if (summaryOnlyPrompt && run) {
               await runWithDeferredSummaryRestore(summaryOnly.restore, async () => {
                 await runWithSummarySourceCleanup(queue, async () => {
                   await effectiveRunFollowup({
-                    prompt: summaryOnly.prompt,
+                    prompt: summaryOnlyPrompt,
                     run,
                     enqueuedAt: Date.now(),
                     ...collectSummaryRuntimeMetadata([]),
