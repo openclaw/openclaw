@@ -246,8 +246,8 @@ Rules:
   and no command is treated as HTTP.
 - URL credentials, including userinfo and query params, are redacted from tool
   descriptions and logs.
-- `connectionTimeoutMs` overrides the default 30-second timeout for stdio and
-  HTTP transport connection plus the initial MCP `tools/list` catalog request.
+- `connectionTimeoutMs` overrides the default 30-second connection timeout for
+  stdio and HTTP transports.
 
 For stdio startup safety, unsupported environment-variable entries are ignored
 with diagnostics instead of being passed through blindly.

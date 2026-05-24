@@ -26,7 +26,7 @@ export type McpServerConfig = {
   transport?: "sse" | "streamable-http";
   /** HTTP transport: extra HTTP headers sent with every request. */
   headers?: Record<string, string | number | boolean>;
-  /** Optional connection and initial tools/list catalog timeout in milliseconds. */
+  /** Optional connection timeout in milliseconds. */
   connectionTimeoutMs?: number;
   /** Codex-specific projection controls for Codex app-server/runtime config. */
   codex?: McpServerCodexConfig;

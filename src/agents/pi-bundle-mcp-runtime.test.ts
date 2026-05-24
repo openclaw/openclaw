@@ -306,7 +306,7 @@ describe("session MCP runtime", () => {
     expect(activeLeases).toBe(0);
   });
 
-  it("keeps MCP tools/list responses that finish within the server timeout budget", async () => {
+  it("keeps MCP tools/list responses that exceed the connection timeout but finish within the internal catalog timeout", async () => {
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "bundle-mcp-slow-listtools-"));
     const serverPath = path.join(tempDir, "slow-list-tools.mjs");
     const logPath = path.join(tempDir, "server.log");
@@ -326,7 +326,7 @@ describe("session MCP runtime", () => {
             slowListTools: {
               command: process.execPath,
               args: [serverPath],
-              connectionTimeoutMs: 30_000,
+              connectionTimeoutMs: 500,
             },
           },
         },
@@ -348,7 +348,7 @@ describe("session MCP runtime", () => {
     }
   });
 
-  it("times out hung bundle MCP tools/list using the server timeout budget", async () => {
+  it("times out default-config hung bundle MCP tools/list using the internal catalog timeout", async () => {
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "bundle-mcp-listtools-timeout-"));
     const serverPath = path.join(tempDir, "hanging-list-tools.mjs");
     const logPath = path.join(tempDir, "server.log");
@@ -364,7 +364,6 @@ describe("session MCP runtime", () => {
             hangingListTools: {
               command: process.execPath,
               args: [serverPath],
-              connectionTimeoutMs: 250,
             },
           },
         },
