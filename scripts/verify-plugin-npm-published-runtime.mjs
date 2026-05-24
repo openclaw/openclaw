@@ -191,9 +191,8 @@ export function collectPluginNpmPublishedRuntimeErrors(params) {
 export function resolveNpmPackFilename(output) {
   const filename = output
     .split(/\r?\n/u)
-    .map((line) => line.trim())
-    .filter(Boolean)
-    .at(-1);
+    .findLast((line) => line.trim().length > 0)
+    ?.trim();
   if (typeof filename !== "string" || !filename.endsWith(".tgz")) {
     throw new Error(`npm pack did not report a tarball filename`);
   }

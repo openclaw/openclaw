@@ -8,6 +8,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Config/secrets: allow exec SecretRef ids to include `#` selectors so AWS-style `secret#json_key` ids validate consistently. (#80731) Thanks @TurboTheTurtle.
 - Installer: include the optional verify phase in the progress counter so `--verify` shows `[4/4] Verifying installation` instead of `[4/3]`.
 - Tests: run upgrade-survivor config recipe commands through the Windows npm shim so native Windows package walks keep baseline config coverage.
 - Image tool: use bundled Anthropic media limits when resolving image compression policy without provider-runtime hooks.
