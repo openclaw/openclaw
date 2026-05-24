@@ -1340,6 +1340,19 @@ export function makeScheduleCapabilities(runtime: ClaworksRuntime): CapabilityDe
         // Record so schedule.remove can preserve other dynamic crons during reload
         dynamicSchedules.set(playbookId, dynDef);
 
+        // 持久化到 ObjectStore，重启后可恢复
+        await runtime.objectStore
+          .upsert("ScheduledTask", playbookId, {
+            id: playbookId,
+            cron,
+            timezone: timezone ?? null,
+            playbook_id: playbookId,
+            input: {},
+            created_at: new Date().toISOString(),
+            enabled: true,
+          })
+          .catch(() => undefined);
+
         await runtime.kernel
           .publish("schedule.job_registered", "schedule.add", {
             playbook_id: playbookId,
@@ -1370,6 +1383,8 @@ export function makeScheduleCapabilities(runtime: ClaworksRuntime): CapabilityDe
         const staticRemaining = runtime.playbookEngine.list().filter((p) => p.id !== playbookId);
         const dynamicRemaining = [...dynamicSchedules.values()].filter((p) => p.id !== playbookId);
         runtime.scheduler.reload([...staticRemaining, ...dynamicRemaining]);
+        // 从 ObjectStore 删除持久化记录
+        await runtime.objectStore.delete("ScheduledTask", playbookId).catch(() => undefined);
         return { status: "reloaded_without", playbook_id: playbookId };
       },
     },
@@ -1731,11 +1746,21 @@ export function makeConstitutionCapabilities(
     {
       id: "constitution.set_user_rule",
       verb: "control",
-      description: "为特定用户设置自定义规则（Tier 2）",
+      description: "为特定用户设置自定义规则（Tier 2），持久化到 ObjectStore",
       owner: { kind: "core" },
       rbac: { decision: "hitl_required", reason: "修改用户规则影响权限" },
       handler: async (_ctx, params) => {
-        constitution.setUserRule(params as Parameters<typeof constitution.setUserRule>[0]);
+        const entry = params as Parameters<typeof constitution.setUserRule>[0];
+        constitution.setUserRule(entry);
+        // 持久化到 ObjectStore，重启后可从 _ConstitutionUserRule 表恢复
+        try {
+          await runtime.objectStore.upsert("_ConstitutionUserRule", entry.userId, {
+            ...entry,
+            updatedAt: new Date().toISOString(),
+          });
+        } catch {
+          // DB 写入失败不中断运行，降级为纯内存
+        }
         return { status: "ok" };
       },
     },

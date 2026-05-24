@@ -493,6 +493,38 @@ export async function startClaworksRuntime(runtime: ClaworksRuntime): Promise<vo
     runtime.logger?.(`[claworks] hydrated ${hydrated} waiting_hitl run(s)`);
   }
   runtime.scheduler.reload(runtime.playbookEngine.list());
+
+  // 从 ObjectStore 恢复动态添加的计划任务（schedule.add 持久化，重启后恢复）
+  try {
+    const storedTasks = await runtime.objectStore.query("ScheduledTask", { limit: 500 });
+    for (const obj of storedTasks.items) {
+      const task = obj.data as Record<string, unknown>;
+      if (task.enabled === false) continue;
+      const playbookId = String(task.playbook_id ?? task.id ?? "");
+      const cron = String(task.cron ?? "");
+      if (!playbookId || !cron) continue;
+      const existing = runtime.playbookEngine.list().find((p) => p.id === playbookId);
+      if (!existing) continue;
+      const timezone = task.timezone ? String(task.timezone) : undefined;
+      const dynDef = {
+        id: playbookId,
+        name: existing.name ?? playbookId,
+        pack: existing.pack ?? "dynamic",
+        priority: existing.priority ?? 50,
+        trigger: { kind: "schedule" as const, cron, timezone },
+        steps: existing.steps,
+      };
+      try {
+        runtime.scheduler.add(dynDef);
+        runtime.logger?.(`[claworks:schedule] 已恢复动态任务: ${playbookId} cron=${cron}`);
+      } catch {
+        runtime.logger?.(`[claworks:schedule] 恢复任务失败（cron 无效）: ${playbookId}`);
+      }
+    }
+  } catch {
+    // ObjectStore 不可用时静默跳过，不阻断启动
+  }
+
   // 启动时从 ObjectStore 同步 RBAC/Ingress 策略
   const { syncRbacFromObjectStore, syncIngressFromObjectStore } = await import("./rbac-sync.js");
   await syncRbacFromObjectStore(runtime);
