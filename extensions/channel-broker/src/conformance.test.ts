@@ -32,31 +32,31 @@ type MemoryStoreEntry<T> = {
 function createMemoryStore<T>() {
   const values = new Map<string, MemoryStoreEntry<T>>();
   return {
-    async register(key, value) {
+    async register(key: string, value: T): Promise<void> {
       values.set(key, { key, value, createdAt: 1 });
     },
-    async registerIfAbsent(key, value) {
+    async registerIfAbsent(key: string, value: T): Promise<boolean> {
       if (values.has(key)) {
         return false;
       }
       values.set(key, { key, value, createdAt: 1 });
       return true;
     },
-    async lookup(key) {
+    async lookup(key: string): Promise<T | undefined> {
       return values.get(key)?.value;
     },
-    async consume(key) {
+    async consume(key: string): Promise<T | undefined> {
       const value = values.get(key)?.value;
       values.delete(key);
       return value;
     },
-    async delete(key) {
+    async delete(key: string): Promise<boolean> {
       return values.delete(key);
     },
-    async entries() {
+    async entries(): Promise<Array<MemoryStoreEntry<T>>> {
       return Array.from(values.values());
     },
-    async clear() {
+    async clear(): Promise<void> {
       values.clear();
     },
   };
