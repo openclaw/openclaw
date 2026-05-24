@@ -206,7 +206,12 @@ export const imessageApprovalNativeRuntime = createChannelApprovalNativeRuntimeA
         config: cfg,
         ...(preparedTarget.accountId ? { accountId: preparedTarget.accountId } : {}),
       });
-      if (!result.messageId || result.messageId === "unknown" || result.messageId === "ok") {
+      // Approval reaction bindings must use the GUID-only id (matches the
+      // inbound tapback's `reacted_to_guid`). When the bridge only returned a
+      // numeric ROWID / `ok` / `unknown`, `result.guid` is undefined — refuse
+      // to bind so the reaction shortcut won't silently miss a real tap.
+      const guid = result.guid;
+      if (!guid) {
         return null;
       }
       const conversation = buildConversationKeyForTarget(preparedTarget.to);
@@ -217,7 +222,7 @@ export const imessageApprovalNativeRuntime = createChannelApprovalNativeRuntimeA
         ...(preparedTarget.accountId ? { accountId: preparedTarget.accountId } : {}),
         to: preparedTarget.to,
         conversation,
-        messageId: result.messageId,
+        messageId: guid,
       };
     },
     updateEntry: async ({ cfg, entry, payload }) => {

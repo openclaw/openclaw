@@ -1,5 +1,13 @@
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { imessageApprovalNativeRuntime } from "./approval-handler.runtime.js";
+
+const sendMock = vi.hoisted(() => ({
+  sendMessageIMessage: vi.fn(),
+}));
+
+vi.mock("./send.js", () => ({
+  sendMessageIMessage: sendMock.sendMessageIMessage,
+}));
 
 describe("imessageApprovalNativeRuntime", () => {
   it("renders allowed thumbs-only reactions in pending exec approvals", async () => {
@@ -139,6 +147,87 @@ describe("imessageApprovalNativeRuntime", () => {
         to: "+15551230000",
         accountId: "ops",
       },
+    });
+  });
+
+  describe("deliverPending GUID-only binding", () => {
+    beforeEach(() => {
+      sendMock.sendMessageIMessage.mockReset();
+    });
+
+    const baseDeliverArgs = {
+      cfg: {} as never,
+      accountId: "default",
+      context: { accountId: "default" },
+      preparedTarget: { to: "+15551230000", accountId: "default" },
+      plannedTarget: {
+        surface: "origin" as const,
+        reason: "preferred" as const,
+        target: { to: "+15551230000" },
+      },
+      request: {
+        id: "exec-1",
+        request: { command: "echo hi" },
+        createdAtMs: 0,
+        expiresAtMs: 60_000,
+      },
+      approvalKind: "exec" as const,
+      view: {
+        approvalKind: "exec",
+        approvalId: "exec-1",
+        commandText: "echo hi",
+        actions: [],
+      } as never,
+      pendingPayload: {
+        text: "Reply with: /approve exec-1 allow-once",
+        allowedDecisions: ["allow-once" as const],
+      },
+    };
+
+    it("refuses to bind when the bridge returns only a numeric ROWID", async () => {
+      // Regression for ClawSweeper P1: native deliverPending must require a
+      // GUID for the binding because inbound `reacted_to_guid` is always a
+      // GUID — never the numeric ROWID. A bridge that returns just
+      // { message_id: 12345 } has no usable approval-reaction id.
+      sendMock.sendMessageIMessage.mockResolvedValue({
+        messageId: "12345",
+        sentText: "Reply with: /approve exec-1 allow-once",
+        receipt: { kind: "text" } as never,
+      });
+
+      await expect(
+        imessageApprovalNativeRuntime.transport.deliverPending(baseDeliverArgs),
+      ).resolves.toBeNull();
+    });
+
+    it("binds against the GUID when the bridge returns one", async () => {
+      sendMock.sendMessageIMessage.mockResolvedValue({
+        messageId: "p:0/abc-123",
+        guid: "p:0/abc-123",
+        sentText: "Reply with: /approve exec-1 allow-once",
+        receipt: { kind: "text" } as never,
+      });
+
+      await expect(
+        imessageApprovalNativeRuntime.transport.deliverPending(baseDeliverArgs),
+      ).resolves.toEqual({
+        accountId: "default",
+        to: "+15551230000",
+        conversation: { handle: "+15551230000" },
+        messageId: "p:0/abc-123",
+      });
+    });
+
+    it("refuses to bind when the bridge returns 'unknown' or 'ok' placeholders", async () => {
+      sendMock.sendMessageIMessage.mockResolvedValue({
+        messageId: "ok",
+        sentText: "Reply with: /approve exec-1 allow-once",
+        receipt: { kind: "text" } as never,
+      });
+
+      await expect(
+        imessageApprovalNativeRuntime.transport.deliverPending(baseDeliverArgs),
+      ).resolves.toBeNull();
     });
   });
 

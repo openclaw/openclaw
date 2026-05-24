@@ -54,8 +54,22 @@ type IMessageSendOpts = {
   createClient?: (params: { cliPath: string; dbPath?: string }) => Promise<IMessageRpcClient>;
 };
 
-type IMessageSendResult = {
+export type IMessageSendResult = {
+  /**
+   * Generic identifier returned by the bridge. May be a GUID string, a
+   * numeric ROWID stringified, or the literal "ok"/"unknown" placeholders
+   * when the bridge declines to return one. Most callers (reply cache, echo
+   * cache, receipts) want this field — it is the broadest match for
+   * downstream lookups.
+   */
   messageId: string;
+  /**
+   * GUID-only identifier suitable for matching inbound `reacted_to_guid`
+   * fields. Undefined when the bridge returned only a numeric ROWID or
+   * placeholder. Approval-reaction bindings MUST use this field so the
+   * outbound key matches what the inbound tapback will surface.
+   */
+  guid?: string;
   sentText: string;
   echoText?: string;
   receipt: MessageReceipt;
@@ -301,6 +315,10 @@ export async function sendMessageIMessage(
     });
     const resolvedId = resolveMessageId(result);
     const messageId = resolvedId ?? (result?.ok ? "ok" : "unknown");
+    // GUID-only id for approval-reaction binding (inbound `reacted_to_guid`
+    // never carries a numeric ROWID, so the bind key must match). Undefined
+    // when the bridge only returned a numeric or placeholder id.
+    const approvalBindingMessageId = resolveOutboundMessageGuid(result);
     const echoScope = resolveOutboundEchoScope({ accountId: account.accountId, target });
     if (echoScope) {
       rememberPersistedIMessageEcho({
@@ -329,7 +347,6 @@ export async function sendMessageIMessage(
         isFromMe: true,
       });
       if (message) {
-        const approvalBindingMessageId = resolveOutboundMessageGuid(result);
         if (approvalBindingMessageId) {
           const handleForKey =
             target.kind === "handle" ? normalizeIMessageHandle(target.to) : undefined;
@@ -350,6 +367,7 @@ export async function sendMessageIMessage(
     }
     return {
       messageId,
+      ...(approvalBindingMessageId ? { guid: approvalBindingMessageId } : {}),
       sentText: message,
       ...(echoText ? { echoText } : {}),
       receipt: createIMessageSendReceipt({
