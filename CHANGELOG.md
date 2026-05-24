@@ -8,6 +8,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Agents/MCP: bound bundled MCP `tools/list` catalog discovery so hung MCP servers do not block session tool materialization. (#85063) Thanks @nxmxbbd.
 - Channels/iMessage: advance the startup catchup cursor from live-handled rows after a completed catchup pass, including rows received while catchup is still running, so restarts do not replay them. (#85475) Thanks @TurboTheTurtle.
 - Tests: mount the shared Windows command helper into bare Docker E2E harness containers so published upgrade-survivor config walks can start on Linux.
 - Tests: keep the plugin binding command escape Docker smoke focused on its intended Vitest cases and skip source-only install lifecycle scripts.
