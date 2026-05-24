@@ -263,6 +263,40 @@ describe("followup queue drain restart after idle window", () => {
     expect(calls[1]?.prompt).toBe("wait-for-lane");
   });
 
+  it("preserves overflow summaries across deferred retries", async () => {
+    const key = `test-deferred-summary-retry-${Date.now()}`;
+    const prompts: string[] = [];
+    const settings: QueueSettings = {
+      mode: "followup",
+      debounceMs: 0,
+      cap: 1,
+      dropPolicy: "summarize",
+    };
+    const retried = createDeferred<void>();
+    let attempts = 0;
+
+    const runFollowup = async (run: FollowupRun) => {
+      attempts++;
+      prompts.push(run.prompt);
+      if (attempts === 1) {
+        throw new FollowupRunDeferredError("reply lane busy");
+      }
+      retried.resolve();
+    };
+
+    enqueueFollowupRun(key, createRun({ prompt: "dropped while busy" }), settings);
+    enqueueFollowupRun(key, createRun({ prompt: "kept while busy" }), settings);
+    scheduleFollowupDrain(key, runFollowup);
+
+    await retried.promise;
+
+    expect(attempts).toBe(2);
+    expect(prompts[0]).toContain("Dropped 1 message");
+    expect(prompts[0]).toContain("dropped while busy");
+    expect(prompts[1]).toContain("Dropped 1 message");
+    expect(prompts[1]).toContain("dropped while busy");
+  });
+
   it("does not process messages after clearSessionQueues clears the callback", async () => {
     const key = `test-clear-callback-${Date.now()}`;
     const calls: FollowupRun[] = [];
