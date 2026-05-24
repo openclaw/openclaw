@@ -1016,13 +1016,6 @@ function ensureListener() {
         });
         return;
       }
-      if (evt.data?.aborted) {
-        schedulePendingLifecycleTimeout({
-          runId: evt.runId,
-          endedAt,
-        });
-        return;
-      }
       if (isAbortedAgentStopReason(stopReason)) {
         clearPendingLifecycleError(evt.runId);
         clearPendingLifecycleTimeout(evt.runId);
@@ -1037,6 +1030,13 @@ function ensureListener() {
           sendFarewell: true,
           accountId: entry.requesterOrigin?.accountId,
           triggerCleanup: true,
+        });
+        return;
+      }
+      if (evt.data?.aborted) {
+        schedulePendingLifecycleTimeout({
+          runId: evt.runId,
+          endedAt,
         });
         return;
       }
