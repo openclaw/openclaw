@@ -47,6 +47,7 @@ export class StepFailedError extends Error {
 export type LlmCompleteFn = (params: {
   prompt: string;
   model?: string;
+  temperature?: number;
 }) => Promise<{ text: string }>;
 
 export type NotifyFn = (params: {
@@ -452,6 +453,10 @@ export async function executePlaybookStep(
         },
         {
           logger: deps.logger,
+          fetchCases: async (query, limit) => {
+            const results = await deps.kb.search(query, { limit });
+            return results.map((r) => (r.title ? `[${r.title}] ${r.text}` : r.text));
+          },
           fetchDomainKnowledge: async (domain: string) => {
             const results = await deps.kb.search(domain + " 领域知识", {
               limit: 3,
