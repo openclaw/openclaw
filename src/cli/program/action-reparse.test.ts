@@ -5,9 +5,14 @@ import { reparseProgramFromActionArgs } from "./action-reparse.js";
 const buildParseArgvMock = vi.hoisted(() => vi.fn());
 const resolveActionArgsMock = vi.hoisted(() => vi.fn());
 const resolveCommandOptionArgsMock = vi.hoisted(() => vi.fn());
+const logWarnMock = vi.hoisted(() => vi.fn());
 
 vi.mock("../argv.js", () => ({
   buildParseArgv: buildParseArgvMock,
+}));
+
+vi.mock("../../logger.js", () => ({
+  logWarn: logWarnMock,
 }));
 
 vi.mock("./helpers.js", () => ({
@@ -41,6 +46,7 @@ describe("reparseProgramFromActionArgs", () => {
       rawArgs: ["node", "openclaw", "status", "--json"],
       fallbackArgv: ["status", "--json"],
     });
+    expect(logWarnMock).not.toHaveBeenCalled();
     expect(parseAsync).toHaveBeenCalledWith(["node", "openclaw", "status"]);
   });
 
@@ -60,6 +66,9 @@ describe("reparseProgramFromActionArgs", () => {
       rawArgs: undefined,
       fallbackArgv: ["--json"],
     });
+    expect(logWarnMock).toHaveBeenCalledWith(
+      "cli: Commander rawArgs unavailable while reparsing action; falling back to reconstructed argv.",
+    );
     expect(parseAsync).toHaveBeenCalledWith(["node", "openclaw", "status"]);
   });
 
@@ -96,6 +105,7 @@ describe("reparseProgramFromActionArgs", () => {
       rawArgs: [],
       fallbackArgv: [],
     });
+    expect(logWarnMock).not.toHaveBeenCalled();
     expect(parseAsync).toHaveBeenCalledWith(["node", "openclaw", "status"]);
   });
 });

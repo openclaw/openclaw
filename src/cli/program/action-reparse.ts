@@ -1,4 +1,5 @@
 import type { Command } from "commander";
+import { logWarn } from "../../logger.js";
 import { buildParseArgv } from "../argv.js";
 import { resolveActionArgs, resolveCommandOptionArgs } from "./helpers.js";
 
@@ -19,6 +20,11 @@ export async function reparseProgramFromActionArgs(
   const root = actionCommand?.parent ?? program;
   const rawArgs = (root as Command & { rawArgs?: string[] }).rawArgs;
   const fallbackArgv = buildFallbackArgv(program, actionCommand);
+  if ((!rawArgs || rawArgs.length === 0) && fallbackArgv.length > 0) {
+    logWarn(
+      "cli: Commander rawArgs unavailable while reparsing action; falling back to reconstructed argv.",
+    );
+  }
   const parseArgv = buildParseArgv({
     programName: program.name(),
     rawArgs,
