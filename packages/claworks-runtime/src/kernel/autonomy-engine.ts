@@ -23,6 +23,12 @@ export type AutonomyLearnOpportunity = {
 
 export type EvolutionRecordKind = "gap" | "pattern" | "feedback" | "anomaly";
 
+export type AutonomyLearnHandleResult = {
+  actions_taken: string[];
+  cbr_cases_added: number;
+  rules_added: number;
+};
+
 // ── 内部辅助 ──────────────────────────────────────────────────────────────
 
 /** 向 CbrStore 添加一条进化观察记录（无 cbrStore 时静默跳过）。 */
@@ -88,6 +94,115 @@ export async function recordFeedback(
   }
 }
 
+/**
+ * 响应 autonomy.learn_opportunity：自动写入 KB/CBR、尝试在线规则学习，并在知识缺口时触发进化流水线。
+ * 无需人工介入即可完成「检测 → 记录 → 轻量修正 → 导出请求」闭环的第一步。
+ */
+export async function handleAutonomyLearnOpportunity(
+  runtime: ClaworksRuntime,
+  payload: Record<string, unknown>,
+): Promise<AutonomyLearnHandleResult> {
+  const actions: string[] = [];
+  let cbrCasesAdded = 0;
+  let rulesAdded = 0;
+
+  const signal = String(payload.signal ?? "unknown");
+  const description = String(payload.description ?? "");
+  const metadata = (payload.metadata ?? {}) as Record<string, unknown>;
+  const lastInput = metadata.last_input ? String(metadata.last_input).trim() : "";
+  const intent = metadata.intent ? String(metadata.intent) : "";
+  const gapType = metadata.gap_type ? String(metadata.gap_type) : "";
+
+  const kbLine = `[autonomy:${signal}] ${description}${lastInput ? `\n样本: ${lastInput.slice(0, 200)}` : ""}`;
+  try {
+    await runtime.kb.ingest(kbLine, { source: "autonomy.learn_handler" });
+    actions.push("kb_ingest");
+  } catch {
+    // non-critical
+  }
+
+  if (runtime.cbrStore && description) {
+    try {
+      runtime.cbrStore.add(description, `pending:${signal}`, {
+        type: "autonomy_learn",
+        kind: signal,
+        tags: gapType ? [gapType] : undefined,
+      });
+      cbrCasesAdded += 1;
+      actions.push("cbr_add");
+    } catch {
+      // non-critical
+    }
+  }
+
+  if (lastInput && runtime.cbrStore) {
+    const hits = runtime.cbrStore.search(lastInput, 1);
+    if (hits.length > 0 && hits[0].outcome === "success") {
+      actions.push("cbr_reuse_hint");
+      await runtime.kernel.publish("autonomy.cbr_reuse_suggested", "autonomy-learn-handler", {
+        signal,
+        query: lastInput.slice(0, 200),
+        case_id: hits[0].id,
+        solution: hits[0].solution,
+      });
+    }
+  }
+
+  const triggerText = lastInput || description.slice(0, 50);
+  if (
+    triggerText.length >= 4 &&
+    runtime.ruleEngine?.addRule &&
+    (signal === "negative_feedback" || signal === "stub_response") &&
+    intent
+  ) {
+    const ruleId = `autonomy-learned-${Date.now()}`;
+    try {
+      runtime.ruleEngine.addRule("im.quick_rules", {
+        id: ruleId,
+        name: `自治学习：${triggerText.slice(0, 20)}`,
+        priority: 850,
+        condition: { field: "text", op: "contains", value: triggerText.slice(0, 50) },
+        action: {
+          kind: "publish_event",
+          params: {
+            event_type: `im.intent.${intent.replace(/[^a-z0-9_.]/gi, "_")}`,
+          },
+        },
+        stopOnMatch: true,
+      });
+      rulesAdded += 1;
+      actions.push("rule_added");
+      await runtime.kernel.publish("learn.rule_added", "autonomy-learn-handler", {
+        rule_id: ruleId,
+        trigger: triggerText.slice(0, 50),
+        intent,
+        source: "autonomy_learn",
+      });
+    } catch {
+      // non-critical
+    }
+  }
+
+  if (signal === "knowledge_gap" || gapType === "intent_classification") {
+    await runtime.kernel.publish("evolution.simulation_requested", "autonomy-learn-handler", {
+      reason: signal,
+      gap_type: gapType || signal,
+      description: description.slice(0, 500),
+      auto: true,
+    });
+    actions.push("evolution_simulation_requested");
+  }
+
+  await runtime.kernel.publish("autonomy.learn_handled", "autonomy-learn-handler", {
+    signal,
+    actions_taken: actions,
+    cbr_cases_added: cbrCasesAdded,
+    rules_added: rulesAdded,
+  });
+
+  return { actions_taken: actions, cbr_cases_added: cbrCasesAdded, rules_added: rulesAdded };
+}
+
 // ── 核心检测 ──────────────────────────────────────────────────────────────
 
 /**
@@ -98,18 +213,6 @@ export async function recordFeedback(
 export async function detectLearnOpportunities(runtime: ClaworksRuntime): Promise<void> {
   const kernel = runtime.kernel;
   const addEvolutionRecord = buildEvolutionRecordAdder(runtime);
-
-  // ── 检测 stub 响应（未命中 Playbook 的兜底回复）────────────────────────
-  const stubEvents = kernel.getRecentEvents(50, "autonomy.stub_response");
-  for (const e of stubEvents) {
-    await kernel.publish("autonomy.learn_opportunity", "autonomy-engine", {
-      signal: "stub_response",
-      description: "检测到未命中 Playbook 的兜底回复",
-      detected_at: new Date().toISOString(),
-      metadata: { source: e.source, ts: e.ts.toISOString() },
-    });
-    addEvolutionRecord("gap", `Stub 响应信号：来源 ${e.source}，时间 ${e.ts.toISOString()}`);
-  }
 
   // ── 知识缺口检测：24 小时内未解析意图超过阈值 ─────────────────────────────
   // 检测 autonomy.stub_response 和 learn.feedback_recorded(negative) 事件，
@@ -124,10 +227,16 @@ export async function detectLearnOpportunities(runtime: ClaworksRuntime): Promis
   });
 
   if (recentStubEvents.length >= KNOWLEDGE_GAP_THRESHOLD) {
-    // 收集最频繁的 stub 样本（最多 3 条）
-    const samples = recentStubEvents
+    const samplePayloads = recentStubEvents
       .slice(0, 3)
-      .map((e) => e.type || e.source)
+      .map((e) => {
+        const p = (e.payload ?? {}) as Record<string, unknown>;
+        return typeof p.text === "string"
+          ? p.text
+          : typeof p.input === "string"
+            ? p.input
+            : e.source;
+      })
       .filter(Boolean);
 
     await kernel.publish("autonomy.learn_opportunity", "autonomy-engine", {
@@ -138,7 +247,8 @@ export async function detectLearnOpportunities(runtime: ClaworksRuntime): Promis
         gap_type: "knowledge_gap",
         count: recentStubEvents.length,
         threshold: KNOWLEDGE_GAP_THRESHOLD,
-        sample_inputs: samples,
+        sample_inputs: samplePayloads,
+        last_input: samplePayloads[0] ? String(samplePayloads[0]) : undefined,
       },
     });
     addEvolutionRecord(

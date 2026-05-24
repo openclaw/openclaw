@@ -137,3 +137,27 @@ export async function applyPackProfile(
   profileSwitchChain = run.catch(() => {});
   return run;
 }
+
+/** Subscribe to pack.load_profile_requested and apply profile switches atomically. */
+export function registerPackProfileEventHandler(runtime: ClaworksRuntime): void {
+  runtime.kernel.bus.subscribe(CW_EVENTS.PACK_LOAD_PROFILE_REQUESTED, async (event) => {
+    const payload = (event.payload ?? {}) as Record<string, unknown>;
+    const profile = String(payload.profile ?? "enterprise");
+    try {
+      await applyPackProfile(runtime, {
+        profile,
+        packIds: parseProfilePackIds(payload),
+        source: event.source,
+      });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      runtime.logger?.(`[claworks:packs] profile load failed (${profile}): ${message}`);
+      await runtime.kernel
+        .publish(CW_EVENTS.PACK_PROFILE_LOAD_FAILED, event.source, {
+          profile,
+          error: message,
+        })
+        .catch(() => {});
+    }
+  });
+}

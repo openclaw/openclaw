@@ -80,14 +80,16 @@ export function createClaworksRestHandler(
       return false;
     }
 
-    const auth = resolveAuthContext(req, runtime);
+    const isMonitorEndpoint = method === "GET" && (parts[1] === "health" || parts[1] === "metrics");
+    const auth = isMonitorEndpoint
+      ? ({ authenticated: true, subjectType: "system", subjectId: "monitor" } as const)
+      : resolveAuthContext(req, runtime);
     if (!auth.authenticated) {
       sendJson(res, 401, { error: "Unauthorized", code: "UNAUTHORIZED" });
       return true;
     }
 
     // 速率限制：跳过 GET /v1/health 和 GET /v1/metrics（监控探针）
-    const isMonitorEndpoint = method === "GET" && (parts[1] === "health" || parts[1] === "metrics");
     if (!isMonitorEndpoint) {
       const rlKey = resolveRateLimitKey("rest", auth.subjectId);
       const rlResult = rateLimiter.consume(rlKey);

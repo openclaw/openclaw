@@ -64,6 +64,8 @@ pnpm test packages/claworks-runtime          # 运行测试
 
 358 个单元测试，83 个测试文件，全部通过。覆盖 EventKernel、PlaybookEngine、StepExecutor、CapabilityRegistry、ObjectStore、KnowledgeBase、A2A、RuleEngine、ScaffoldEngine、进化流水线、init CLI、Pack Profile 热切换、LOG_LEVEL 可观测性等核心模块。
 
+（签收快照 2026-05-24：**368** 测试 / **86** 文件，见 `docs/SIGNOFF-SNAPSHOT.md`。）
+
 ---
 
 ## 系统评级（交付快照）

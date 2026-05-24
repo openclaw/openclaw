@@ -52,7 +52,7 @@ import { applyIngressPublish } from "./ingress-publish.js";
 import { createRuntimeLogger } from "./logger.js";
 import { createModelRouter } from "./model-router.js";
 import { appendObservationEvent, markRuntimeStarted } from "./observability.js";
-import { applyPackProfile, parseProfilePackIds } from "./pack-profile.js";
+import { registerPackProfileEventHandler } from "./pack-profile.js";
 import {
   applyPackContributions,
   loadPersistedInstalled,
@@ -424,12 +424,6 @@ export async function createClaworksRuntime(
 
   // 初始化进化引擎（分析失败案例 → 提出 Playbook/能力改进建议 → 写入 Scaffold）
   runtime.evolveEngine = createEvolveEngine(runtime);
-  // 开启自动学习：失败的 Playbook run 自动写入 CbrStore，供未来 propose() 参考
-  // stopFn 注册到 SYSTEM_RUNTIME_STOPPED 事件，随 runtime 一起清理
-  const _stopAutoLearning = runtime.evolveEngine.startAutoLearning();
-  runtime.kernel.bus.subscribe(CW_EVENTS.SYSTEM_RUNTIME_STOPPED, async () => {
-    _stopAutoLearning();
-  });
 
   // 初始化对话上下文引擎（多轮会话记忆，跨消息追踪对话历史）
   runtime.contextEngine = createContextEngine({
@@ -456,6 +450,13 @@ export async function createClaworksRuntime(
 
   // 初始化 CBR 案例记忆（Case-Based Reasoning，存储历史成功案例供类比推理）
   runtime.cbrStore = createCbrStore();
+
+  // 开启自动学习：失败的 Playbook run 自动写入 CbrStore，供未来 propose() 参考
+  // 必须在 cbrStore 初始化之后，否则 startAutoLearning 会空操作
+  const _stopAutoLearning = runtime.evolveEngine.startAutoLearning();
+  runtime.kernel.bus.subscribe(CW_EVENTS.SYSTEM_RUNTIME_STOPPED, async () => {
+    _stopAutoLearning();
+  });
 
   // 初始化离线进化同步管理器（导出进化数据包 / 导入进化包）
   runtime.evolutionSync = new EvolutionSyncManager(runtime);
@@ -625,24 +626,22 @@ export async function startClaworksRuntime(runtime: ClaworksRuntime): Promise<vo
     playbookCount: runtime.playbookEngine.list().length,
   });
 
-  runtime.kernel.bus.subscribe(CW_EVENTS.PACK_LOAD_PROFILE_REQUESTED, async (event) => {
-    const payload = (event.payload ?? {}) as Record<string, unknown>;
-    const profile = String(payload.profile ?? "enterprise");
+  registerPackProfileEventHandler(runtime);
+
+  runtime.kernel.bus.subscribe("autonomy.learn_opportunity", async (event) => {
     try {
-      await applyPackProfile(runtime, {
-        profile,
-        packIds: parseProfilePackIds(payload),
-        source: event.source,
-      });
+      const { handleAutonomyLearnOpportunity } = await import("../kernel/autonomy-engine.js");
+      const result = await handleAutonomyLearnOpportunity(
+        runtime,
+        (event.payload ?? {}) as Record<string, unknown>,
+      );
+      runtime.logger?.(
+        `[claworks:autonomy] learn_opportunity handled signal=${String((event.payload as Record<string, unknown>)?.signal ?? "?")} actions=${result.actions_taken.join(",")}`,
+      );
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      runtime.logger?.(`[claworks:packs] profile load failed (${profile}): ${message}`);
-      await runtime.kernel
-        .publish(CW_EVENTS.PACK_PROFILE_LOAD_FAILED, event.source, {
-          profile,
-          error: message,
-        })
-        .catch(() => {});
+      runtime.logger?.(
+        `[claworks:autonomy] learn_opportunity handler failed: ${err instanceof Error ? err.message : String(err)}`,
+      );
     }
   });
 

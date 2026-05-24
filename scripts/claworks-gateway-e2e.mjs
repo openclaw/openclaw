@@ -52,23 +52,30 @@ function installedPacks() {
 }
 
 async function waitForHealth(base, deadline) {
+  let lastStatus = 0;
+  let lastBody = "";
   while (Date.now() < deadline) {
     try {
       const res = await fetch(`${base}/v1/health`, {
         headers: { Accept: "application/json" },
       });
+      lastStatus = res.status;
+      const text = await res.text();
+      lastBody = text.slice(0, 200);
       if (res.ok) {
-        const body = await res.json();
+        const body = JSON.parse(text);
         if (body.status === "ok" || body.status === "degraded") {
           return body;
         }
       }
-    } catch {
-      // gateway still starting
+    } catch (err) {
+      lastBody = err instanceof Error ? err.message : String(err);
     }
     await sleep(500);
   }
-  throw new Error(`gateway did not become healthy within ${timeoutMs}ms`);
+  throw new Error(
+    `gateway did not become healthy within ${timeoutMs}ms (last HTTP ${lastStatus}: ${lastBody})`,
+  );
 }
 
 async function jfetch(base, pathname, init) {
