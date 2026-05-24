@@ -676,6 +676,61 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(deliverReplies).not.toHaveBeenCalled();
   });
 
+  it("moves recovered room-event history out of the original topic", async () => {
+    const oldHistoryKey = "-1003774691294:topic:1";
+    const recoveredHistoryKey = "-1003774691294:topic:3731";
+    const groupHistories = new Map([
+      [
+        oldHistoryKey,
+        [
+          { sender: "Alice", body: "general topic context", timestamp: 1 },
+          { sender: "Cara", body: "ambient leak", timestamp: 2, messageId: "27787" },
+        ],
+      ],
+      [recoveredHistoryKey, [{ sender: "Bob", body: "recovered topic context", timestamp: 3 }]],
+    ]);
+    dispatchReplyWithBufferedBlockDispatcher.mockResolvedValue({
+      queuedFinal: false,
+      counts: { block: 0, final: 0, tool: 0 },
+      sourceReplyDeliveryMode: "message_tool_only",
+    });
+
+    await dispatchWithContext({
+      context: createContext({
+        ctxPayload: {
+          InboundEventKind: "room_event",
+          ChatType: "group",
+          From: "telegram:group:-1003774691294:topic:1",
+          MessageSid: "27787",
+          MessageThreadId: 1,
+          RawBody: "ambient leak",
+          SessionKey: "agent:main:telegram:group:-1003774691294:topic:3731",
+          TransportThreadId: 1,
+        } as unknown as TelegramMessageContext["ctxPayload"],
+        msg: {
+          chat: { id: -1003774691294, type: "supergroup" },
+          message_id: 27787,
+        } as unknown as TelegramMessageContext["msg"],
+        chatId: -1003774691294,
+        isGroup: true,
+        threadSpec: { id: 1, scope: "forum" },
+        historyKey: oldHistoryKey,
+        historyLimit: 10,
+        groupHistories,
+      }),
+      replyToMode: "off",
+      streamMode: "off",
+    });
+
+    expect(groupHistories.get(oldHistoryKey)).toEqual([
+      expect.objectContaining({ body: "general topic context" }),
+    ]);
+    expect(groupHistories.get(recoveredHistoryKey)).toEqual([
+      expect.objectContaining({ body: "recovered topic context" }),
+      expect.objectContaining({ body: "ambient leak", messageId: "27787" }),
+    ]);
+  });
+
   it("keeps retained overflow draft previews", async () => {
     const draftStream = createDraftStream();
     const bot = createBot();

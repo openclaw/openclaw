@@ -517,6 +517,50 @@ function buildRecoveredTelegramChatActionSender(params: {
   };
 }
 
+function migrateRecoveredTelegramRoomEventHistory(params: {
+  context: TelegramMessageContext;
+  recoveredHistoryKey?: string;
+}) {
+  const originalHistoryKey = params.context.historyKey;
+  const recoveredHistoryKey = params.recoveredHistoryKey;
+  if (
+    !params.context.isGroup ||
+    params.context.ctxPayload.InboundEventKind !== "room_event" ||
+    !originalHistoryKey ||
+    !recoveredHistoryKey ||
+    originalHistoryKey === recoveredHistoryKey ||
+    params.context.historyLimit <= 0
+  ) {
+    return;
+  }
+  const originalEntries = params.context.groupHistories.get(originalHistoryKey);
+  if (!originalEntries?.length) {
+    return;
+  }
+  const messageId = params.context.ctxPayload.MessageSid;
+  const rawBody = params.context.ctxPayload.RawBody;
+  const entryIndex = originalEntries.findLastIndex((entry) => {
+    if (messageId && entry.messageId === messageId) {
+      return true;
+    }
+    return !messageId && typeof rawBody === "string" && entry.body === rawBody;
+  });
+  if (entryIndex === -1) {
+    return;
+  }
+  const [entry] = originalEntries.splice(entryIndex, 1);
+  if (!entry) {
+    return;
+  }
+  createChannelHistoryWindow({
+    historyMap: params.context.groupHistories,
+  }).record({
+    historyKey: recoveredHistoryKey,
+    limit: params.context.historyLimit,
+    entry,
+  });
+}
+
 function resolveDispatchTelegramContext(params: {
   cfg: OpenClawConfig;
   context: TelegramMessageContext;
@@ -546,6 +590,10 @@ function resolveDispatchTelegramContext(params: {
   const recoveredHistoryKey = params.context.isGroup
     ? buildTelegramGroupPeerId(params.context.chatId, threadSpec.id)
     : params.context.historyKey;
+  migrateRecoveredTelegramRoomEventHistory({
+    context: params.context,
+    recoveredHistoryKey,
+  });
   const recoveredInboundHistory =
     params.context.isGroup && recoveredHistoryKey && params.context.historyLimit > 0
       ? createChannelHistoryWindow({
