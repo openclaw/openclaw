@@ -23,6 +23,21 @@ describe("splitEvenniaOutboundText", () => {
       { kind: "say", text: "Okay, I checked." },
     ]);
   });
+
+  it("converts movement commands appended after emoji narration into command parts", () => {
+    expect(
+      splitEvenniaOutboundText("I'm on my way. Tell Scoob the elder arrives. 🧙‍♂️war room"),
+    ).toEqual([
+      { kind: "say", text: "I'm on my way. Tell Scoob the elder arrives." },
+      { kind: "command", text: "war room" },
+    ]);
+  });
+
+  it("does not treat normal emoji reactions as movement commands", () => {
+    expect(splitEvenniaOutboundText("Nice work 👍 good job")).toEqual([
+      { kind: "say", text: "Nice work 👍 good job" },
+    ]);
+  });
 });
 
 describe("Evennia history window", () => {

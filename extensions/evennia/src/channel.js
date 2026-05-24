@@ -28,6 +28,7 @@ const EVENNIA_AGENT_PROMPT = [
   "Examples of commands to send through the tool: look, north, get key, open crate, take emergency chalk from crate, get all from crate, use terminal, use chalk stub, pose studies the room.",
   "For open containers, prefer `take <item> from <container>` or `get all from <container>` rather than `get <container>` unless you mean to loot all visible contents.",
   "Never put pose commands in backticks or inline with speech. Use the tool, then send spoken text separately.",
+  "Never append commands after emojis or narration. If you need to move, send the movement command through the tool.",
   "Never put multiple Evennia commands in one tool call; use one tool call per command.",
 ].join("\n");
 
@@ -405,6 +406,33 @@ function choosePose(candidates, avoid = "") {
   return choicePool[Math.floor(Math.random() * choicePool.length)];
 }
 
+function rewriteTrailingInlineMovementCommand(value, literalCommands) {
+  const match = value.match(
+    /([\p{Extended_Pictographic}\u2600-\u27bf](?:[\ufe0e\ufe0f]|\u200d[\p{Extended_Pictographic}\u2600-\u27bf](?:[\ufe0e\ufe0f])?)*)\s*([a-z][a-z0-9'-]*(?:\s+[a-z][a-z0-9'-]*){1,3})\s*$/iu,
+  );
+  if (!match || match.index === undefined) {
+    return value;
+  }
+
+  const before = value.slice(0, match.index).trimEnd();
+  const command = match[2].replace(/\s+/g, " ").trim().toLowerCase();
+  if (!before || !command) {
+    return value;
+  }
+
+  const hasMovementIntent =
+    /\b(arrive|arrives|arriving|back|come|coming|enter|entering|enters|exit|follow|following|go|goes|going|head|headed|heading|heads|leave|leaves|leaving|meet|meeting|move|moves|moving|return|returning|returns|stride|strides|striding|toward|travel|travels|travelling|walking|walks)\b/iu.test(
+      before,
+    );
+  if (!hasMovementIntent) {
+    return value;
+  }
+
+  const commandIndex = literalCommands.length;
+  literalCommands.push(command);
+  return `${before}\n__OPENCLAW_EVENNIA_COMMAND__${commandIndex}__\n`;
+}
+
 export function splitEvenniaOutboundText(text, account = undefined) {
   const raw = String(text ?? "");
   const parts = [];
@@ -440,6 +468,7 @@ export function splitEvenniaOutboundText(text, account = undefined) {
     toolIndex = match.index + match[0].length;
   }
   rewritten += raw.slice(toolIndex);
+  rewritten = rewriteTrailingInlineMovementCommand(rewritten, literalCommands);
 
   const codePose = /`+\s*pose\s+([^`]+?)\s*`+/giu;
   let index = 0;
