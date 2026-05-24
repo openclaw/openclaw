@@ -23,6 +23,14 @@ export type CanonicalInboundMessageHookContext = {
   channelId: string;
   accountId?: string;
   conversationId?: string;
+  /** Agent ID — added in P2.25c route 2 (2026-05-24). */
+  agentId?: string;
+  /** Composite session key — added in P2.25c route 2 (2026-05-24). */
+  sessionKey?: string;
+  /** Ephemeral session UUID — added in P2.25c route 2 (2026-05-24). May be undefined at message_received time. */
+  sessionId?: string;
+  /** Stable run identifier — added in P2.25c route 2 (2026-05-24). May be undefined at message_received time. */
+  runId?: string;
   messageId?: string;
   senderId?: string;
   senderName?: string;
@@ -59,6 +67,14 @@ export function deriveInboundMessageHookContext(
   overrides?: {
     content?: string;
     messageId?: string;
+    /** Added in P2.25c route 2 (2026-05-24) for plugin cross-hook correlation. */
+    agentId?: string;
+    /** Added in P2.25c route 2 (2026-05-24). */
+    sessionKey?: string;
+    /** Added in P2.25c route 2 (2026-05-24). */
+    sessionId?: string;
+    /** Added in P2.25c route 2 (2026-05-24). */
+    runId?: string;
   },
 ): CanonicalInboundMessageHookContext {
   const content =
@@ -87,6 +103,10 @@ export function deriveInboundMessageHookContext(
     channelId,
     accountId: ctx.AccountId,
     conversationId,
+    agentId: overrides?.agentId,
+    sessionKey: overrides?.sessionKey,
+    sessionId: overrides?.sessionId,
+    runId: overrides?.runId,
     messageId:
       overrides?.messageId ??
       ctx.MessageSidFull ??
@@ -144,6 +164,13 @@ export function toPluginMessageContext(
     channelId: canonical.channelId,
     accountId: canonical.accountId,
     conversationId: canonical.conversationId,
+    // P2.25c route 2 (2026-05-24): forward agent/session identifiers when present
+    // (CanonicalInboundMessageHookContext only; CanonicalSentMessageHookContext
+    // does not carry these fields, so type narrowing via "in" guard).
+    agentId: "agentId" in canonical ? canonical.agentId : undefined,
+    sessionKey: "sessionKey" in canonical ? canonical.sessionKey : undefined,
+    sessionId: "sessionId" in canonical ? canonical.sessionId : undefined,
+    runId: "runId" in canonical ? canonical.runId : undefined,
   };
 }
 

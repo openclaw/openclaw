@@ -117,6 +117,10 @@ export async function dispatchReplyFromConfig(params: {
   const chatId = ctx.To ?? ctx.From;
   const messageId = ctx.MessageSid ?? ctx.MessageSidFirst ?? ctx.MessageSidLast;
   const sessionKey = ctx.SessionKey;
+  // P2.25c route 2 (2026-05-24): resolve agentId once per dispatch for plugin hook context.
+  const resolvedAgentIdForHook = sessionKey
+    ? resolveSessionAgentId({ sessionKey, config: cfg })
+    : undefined;
   const startTime = diagnosticsEnabled ? Date.now() : 0;
   const canTrackSession = diagnosticsEnabled && Boolean(sessionKey);
 
@@ -181,7 +185,13 @@ export async function dispatchReplyFromConfig(params: {
     typeof ctx.Timestamp === "number" && Number.isFinite(ctx.Timestamp) ? ctx.Timestamp : undefined;
   const messageIdForHook =
     ctx.MessageSidFull ?? ctx.MessageSid ?? ctx.MessageSidFirst ?? ctx.MessageSidLast;
-  const hookContext = deriveInboundMessageHookContext(ctx, { messageId: messageIdForHook });
+  const hookContext = deriveInboundMessageHookContext(ctx, {
+    messageId: messageIdForHook,
+    // P2.25c route 2 (2026-05-24): populate agent/session identifiers for plugin cross-hook correlation.
+    // sessionId/runId are not yet known at message_received time (agent not invoked yet) — left undefined.
+    agentId: resolvedAgentIdForHook,
+    sessionKey: sessionKey || undefined,
+  });
   const { isGroup, groupId } = hookContext;
 
   // Trigger plugin hooks (fire-and-forget)

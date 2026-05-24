@@ -663,6 +663,14 @@ export type PluginHookMessageContext = {
   channelId: string;
   accountId?: string;
   conversationId?: string;
+  /** Agent ID (e.g. "gemma", "main"). Added in P2.25c route 2 (2026-05-24) for symmetry with PluginHookToolContext, enabling plugin cross-hook correlation. */
+  agentId?: string;
+  /** Composite session key (e.g. "agent:gemma:telegram:direct:56682682"). Added in P2.25c route 2 (2026-05-24). */
+  sessionKey?: string;
+  /** Ephemeral session UUID — regenerated on /new and /reset. Added in P2.25c route 2 (2026-05-24). May be undefined at message_received time (before agent invocation). */
+  sessionId?: string;
+  /** Stable run identifier for this agent invocation. Added in P2.25c route 2 (2026-05-24). May be undefined at message_received time. */
+  runId?: string;
 };
 
 // message_received hook

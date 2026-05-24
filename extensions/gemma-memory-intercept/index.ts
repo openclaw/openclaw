@@ -261,30 +261,24 @@ export default (api: OpenClawPluginApi) => {
   logger.info(`[gemma-memory-intercept] plugin registered; api keys=${Object.keys(api).join(",")}`);
 
   api.on("message_received", (event, ctx) => {
-    // P2.25c route 1 fix: PluginHookMessageContext is { channelId, accountId?, conversationId? }
-    // — NO agentId field. Old `ctx.agentId !== "gemma"` always returned (undefined).
-    // Now filter by accountId="gemma" (OpenClaw telegram account name for @lisyoen_gemma_bot)
-    // + channelId="telegram".
-    const accountId = (ctx as { accountId?: string }).accountId;
-    const channelId = (ctx as { channelId?: string }).channelId;
-    const conversationIdRaw = (ctx as { conversationId?: string }).conversationId;
-    // P2.25c route 1 fix (2026-05-24 20:30): ctx.conversationId from telegram is
-    // "telegram:56682682" or "telegram:group:-1003821022499" (channel-prefixed).
-    // sessionKeyToConversationId() in before_tool_call strips down to just
-    // "56682682" / "-1003821022499". Normalize both sides by stripping the
-    // leading channel prefix here.
-    const conversationId =
-      typeof conversationIdRaw === "string"
-        ? conversationIdRaw.replace(/^[a-z][a-z0-9_-]*:/i, "").replace(/^group:/, "")
-        : undefined;
-    if (accountId !== "gemma" || channelId !== "telegram") return;
+    // P2.25c route 2 fix (2026-05-24 21:10): PluginHookMessageContext now carries
+    // agentId/sessionKey/sessionId/runId (dispatcher populates them via
+    // toPluginMessageContext + deriveInboundMessageHookContext overrides). The
+    // route-1 accountId-based workaround and channel-prefix strip are removed in
+    // favor of ctx.agentId direct check + sessionKey-derived conversationId
+    // (matches before_tool_call's source for cache key alignment).
+    const agentId = ctx.agentId;
+    const sessionKey = ctx.sessionKey;
+    if (agentId !== "gemma") return;
+    const conversationId = sessionKeyToConversationId(sessionKey);
     counters.messagesSeen++;
 
     const text = extractUserText(event);
     const matched = text ? looksLikeNaturalMemoRequest(text) : false;
     logger.info(
-      `[gemma-memory-intercept] message_received account=${accountId} channel=${channelId} ` +
-        `convId=${conversationId ?? ""} textLen=${text?.length ?? 0} matched=${matched} ` +
+      `[gemma-memory-intercept] message_received agent=${agentId} ` +
+        `sessionKey=${sessionKey ?? ""} convId=${conversationId ?? ""} ` +
+        `textLen=${text?.length ?? 0} matched=${matched} ` +
         `sample="${truncate(text || "", 60).replace(/"/g, '\\"')}"`,
     );
     if (!text) return;
@@ -292,9 +286,7 @@ export default (api: OpenClawPluginApi) => {
 
     counters.naturalMemoMatched++;
 
-    // P2.25c route 1 fix: cache key now (agentId, conversationId).
-    // agentId for telegram:gemma account is always "gemma" (see openclaw.json).
-    const key = cacheKey("gemma", conversationId);
+    const key = cacheKey(agentId, conversationId);
     userTextCache.set(key, { text, firstToolCallSeen: false, ts: Date.now() });
     pruneCache();
 
