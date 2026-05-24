@@ -6,7 +6,7 @@ import {
   createStartAccountContext,
 } from "openclaw/plugin-sdk/channel-test-helpers";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { readCachedTelegramBotInfo, writeCachedTelegramBotInfo } from "./bot-info-cache.js";
 import type { TelegramBotInfo } from "./bot-info.js";
 import { telegramPlugin } from "./channel.js";
@@ -160,13 +160,23 @@ async function waitForCondition(check: () => boolean, message: string, timeoutMs
   throw new Error(message);
 }
 
+async function waitForMicrotaskCondition(check: () => boolean, message: string, attempts = 100) {
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    if (check()) {
+      return;
+    }
+    await Promise.resolve();
+  }
+  throw new Error(message);
+}
+
 async function releaseStartupProbeControls(releaseProbe: Array<() => void>) {
   for (let attempt = 0; attempt < 10; attempt += 1) {
     const releases = releaseProbe.splice(0);
     for (const release of releases) {
       release();
     }
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await Promise.resolve();
     if (releaseProbe.length === 0) {
       return;
     }
@@ -176,7 +186,13 @@ async function releaseStartupProbeControls(releaseProbe: Array<() => void>) {
   }
 }
 
+beforeEach(() => {
+  vi.useRealTimers();
+  resetTelegramStartupProbeLimiterForTests();
+});
+
 afterEach(async () => {
+  vi.useRealTimers();
   clearTelegramRuntime();
   resetTelegramPollingLeasesForTests();
   resetTelegramStartupProbeLimiterForTests();
@@ -464,14 +480,14 @@ describe("telegramPlugin gateway startup", () => {
     const third = runProbe();
     const tasks = [first, second, third];
     try {
-      await waitForCondition(
+      await waitForMicrotaskCondition(
         () => releaseProbe.length === 2,
         "expected two startup probes to begin",
       );
       expect(maxActiveProbes).toBe(2);
 
       releaseProbe.shift()?.();
-      await waitForCondition(
+      await waitForMicrotaskCondition(
         () => releaseProbe.length === 2,
         "expected queued startup probe to begin after a slot opens",
       );
@@ -503,7 +519,7 @@ describe("telegramPlugin gateway startup", () => {
       (error: unknown) => error,
     );
     try {
-      await waitForCondition(
+      await waitForMicrotaskCondition(
         () => releaseProbe.length === 2,
         "expected startup probe slots to fill",
       );
