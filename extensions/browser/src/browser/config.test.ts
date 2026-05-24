@@ -942,6 +942,17 @@ describe("browser config", () => {
       mcpArgs: undefined,
       mcpCommand: undefined,
       noSandbox: false,
+      chromeMcp: {
+        capabilities: {
+          diagnostics: false,
+          extensions: false,
+          extensionMutation: false,
+          thirdPartyTools: false,
+          thirdPartyToolExecution: false,
+          webMcpTools: false,
+          webMcpToolExecution: false,
+        },
+      },
       userDataDir: undefined,
     });
   });
@@ -987,6 +998,61 @@ describe("browser config", () => {
 
     expect(resolveProfile(resolved, "agent-chrome")?.cleanupBrowserProcesses).toBe(true);
     expect(resolveProfile(resolved, "brave")?.cleanupBrowserProcesses).toBeUndefined();
+    expect(resolveProfile(resolved, "agent-chrome")?.chromeMcp?.capabilities.diagnostics).toBe(
+      true,
+    );
+    expect(resolveProfile(resolved, "brave")?.chromeMcp?.capabilities.diagnostics).toBe(false);
+    expect(resolveProfile(resolved, "agent-chrome")?.chromeMcp?.capabilities.extensions).toBe(true);
+    expect(resolveProfile(resolved, "brave")?.chromeMcp?.capabilities.extensions).toBe(false);
+    expect(
+      resolveProfile(resolved, "agent-chrome")?.chromeMcp?.capabilities.extensionMutation,
+    ).toBe(false);
+  });
+
+  it("lets global and per-profile Chrome MCP capability policy opt into risky surfaces", () => {
+    const resolved = resolveBrowserConfig({
+      chromeMcp: {
+        capabilities: {
+          diagnostics: false,
+          extensions: false,
+          extensionMutation: false,
+          thirdPartyTools: false,
+          thirdPartyToolExecution: false,
+          webMcpTools: false,
+          webMcpToolExecution: false,
+        },
+      },
+      profiles: {
+        "agent-chrome": {
+          driver: "existing-session",
+          attachOnly: true,
+          userDataDir: path.join(CONFIG_DIR, "browser", "agent-chrome", "user-data"),
+          color: "#00AA00",
+          chromeMcp: {
+            capabilities: {
+              diagnostics: true,
+              extensions: true,
+              extensionMutation: true,
+              thirdPartyTools: true,
+              thirdPartyToolExecution: true,
+              webMcpTools: true,
+              webMcpToolExecution: true,
+            },
+          },
+        },
+      },
+    });
+
+    expect(resolveProfile(resolved, "openclaw")?.chromeMcp?.capabilities.diagnostics).toBe(false);
+    expect(resolveProfile(resolved, "agent-chrome")?.chromeMcp?.capabilities).toEqual({
+      diagnostics: true,
+      extensions: true,
+      extensionMutation: true,
+      thirdPartyTools: true,
+      thirdPartyToolExecution: true,
+      webMcpTools: true,
+      webMcpToolExecution: true,
+    });
   });
 
   it("resolves Chrome MCP command, args, and endpoint URL for existing-session profiles", () => {

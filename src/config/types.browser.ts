@@ -1,4 +1,29 @@
 // Defines browser profile configuration types.
+
+export type BrowserChromeMcpCapabilitySetting = boolean | "auto";
+
+export type BrowserChromeMcpCapabilitiesConfig = {
+  /** Enable Chrome MCP diagnostic routes such as trace, heap snapshot, Lighthouse, and screencast. Default: auto (OpenClaw-managed existing-session profile data dirs only) */
+  diagnostics?: BrowserChromeMcpCapabilitySetting;
+  /** Enable Chrome MCP extension inventory/tab helpers. Default: auto */
+  extensions?: BrowserChromeMcpCapabilitySetting;
+  /** Allow Chrome MCP extension install, reload, action, and uninstall operations. Default: auto */
+  extensionMutation?: BrowserChromeMcpCapabilitySetting;
+  /** Enable Chrome MCP page-provided third-party developer tool listing. Default: auto */
+  thirdPartyTools?: BrowserChromeMcpCapabilitySetting;
+  /** Allow executing page-provided third-party developer tools. Default: auto */
+  thirdPartyToolExecution?: BrowserChromeMcpCapabilitySetting;
+  /** Enable Chrome MCP WebMCP tool listing. Default: auto */
+  webMcpTools?: BrowserChromeMcpCapabilitySetting;
+  /** Allow executing page-provided WebMCP tools. Default: auto */
+  webMcpToolExecution?: BrowserChromeMcpCapabilitySetting;
+};
+
+export type BrowserChromeMcpConfig = {
+  /** Chrome MCP capability policy for existing-session profiles. */
+  capabilities?: BrowserChromeMcpCapabilitiesConfig;
+};
+
 export type BrowserProfileConfig = {
   /** CDP port for this profile. Allocated once at creation, persisted permanently. */
   cdpPort?: number;
@@ -18,6 +43,8 @@ export type BrowserProfileConfig = {
   executablePath?: string;
   /** If true, never launch a browser for this profile; only attach. Falls back to browser.attachOnly. */
   attachOnly?: boolean;
+  /** Per-profile Chrome MCP capability policy. Overrides browser.chromeMcp. */
+  chromeMcp?: BrowserChromeMcpConfig;
   /** Profile color (hex). Auto-assigned at creation. */
   color: string;
 };
@@ -85,6 +112,8 @@ export type BrowserConfig = {
   snapshotDefaults?: BrowserSnapshotDefaults;
   /** Best-effort cleanup policy for tabs opened by primary-agent browser sessions. */
   tabCleanup?: BrowserTabCleanupConfig;
+  /** Chrome MCP capability policy for existing-session browser profiles. */
+  chromeMcp?: BrowserChromeMcpConfig;
   /** SSRF policy for browser navigation/open-tab operations. */
   ssrfPolicy?: BrowserSsrFPolicyConfig;
   /**

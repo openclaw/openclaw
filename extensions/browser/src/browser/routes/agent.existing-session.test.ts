@@ -257,7 +257,18 @@ describe("existing-session browser routes", () => {
     routeState.profileCtx.profile = {
       driver: "existing-session" as const,
       name: "chrome-live",
-    };
+      chromeMcp: {
+        capabilities: {
+          diagnostics: true,
+          extensions: true,
+          extensionMutation: true,
+          thirdPartyTools: true,
+          thirdPartyToolExecution: true,
+          webMcpTools: true,
+          webMcpToolExecution: true,
+        },
+      },
+    } as never;
     routeState.profileCtx.ensureTabAvailable.mockClear();
     chromeMcpMocks.analyzeChromeMcpPerformanceInsight.mockClear();
     routeState.profileCtx.listTabs.mockClear();
@@ -1298,6 +1309,163 @@ describe("existing-session browser routes", () => {
     expect(chromeMcpMocks.executeChromeMcpWebMcpTool).toHaveBeenCalledWith(
       expect.objectContaining({ targetId: "7", toolName: "tool", input: { ok: true } }),
     );
+  });
+
+  it("blocks Chrome MCP mutation and page-tool execution when profile policy disables them", async () => {
+    routeState.profileCtx.profile = {
+      driver: "existing-session" as const,
+      name: "chrome-live",
+      chromeMcp: {
+        capabilities: {
+          diagnostics: true,
+          extensions: false,
+          extensionMutation: false,
+          thirdPartyTools: false,
+          thirdPartyToolExecution: false,
+          webMcpTools: false,
+          webMcpToolExecution: false,
+        },
+      },
+    } as never;
+
+    const extensionListResponse = createBrowserRouteResponse();
+    await getDebugGetHandler("/extensions")?.(
+      { params: {}, query: {}, body: {} },
+      extensionListResponse.res,
+    );
+    expect(extensionListResponse.statusCode).toBe(403);
+    expect(String(requireRecord(extensionListResponse.body, "extensions error").error)).toContain(
+      "extensions",
+    );
+    expect(chromeMcpMocks.listChromeMcpExtensions).not.toHaveBeenCalled();
+
+    const extensionTabResponse = createBrowserRouteResponse();
+    await getDebugGetHandler("/extensions/tab-id")?.(
+      { params: {}, query: {}, body: {} },
+      extensionTabResponse.res,
+    );
+    expect(extensionTabResponse.statusCode).toBe(403);
+    expect(
+      String(requireRecord(extensionTabResponse.body, "extension tab id error").error),
+    ).toContain("extensions");
+    expect(chromeMcpMocks.getChromeMcpTabId).not.toHaveBeenCalled();
+
+    const installResponse = createBrowserRouteResponse();
+    await getDebugPostHandler("/extensions/install")?.(
+      { params: {}, query: {}, body: { path: "/tmp/ext" } },
+      installResponse.res,
+    );
+    expect(installResponse.statusCode).toBe(403);
+    expect(String(requireRecord(installResponse.body, "install error").error)).toContain(
+      "extensionMutation",
+    );
+    expect(chromeMcpMocks.installChromeMcpExtension).not.toHaveBeenCalled();
+
+    const thirdPartyListResponse = createBrowserRouteResponse();
+    await getDebugGetHandler("/third-party-tools")?.(
+      { params: {}, query: {}, body: {} },
+      thirdPartyListResponse.res,
+    );
+    expect(thirdPartyListResponse.statusCode).toBe(403);
+    expect(
+      String(requireRecord(thirdPartyListResponse.body, "third-party list error").error),
+    ).toContain("thirdPartyTools");
+    expect(chromeMcpMocks.listChromeMcpThirdPartyDeveloperTools).not.toHaveBeenCalled();
+
+    const thirdPartyResponse = createBrowserRouteResponse();
+    await getDebugPostHandler("/third-party-tools/execute")?.(
+      { params: {}, query: {}, body: { toolName: "react" } },
+      thirdPartyResponse.res,
+    );
+    expect(thirdPartyResponse.statusCode).toBe(403);
+    expect(String(requireRecord(thirdPartyResponse.body, "third party error").error)).toContain(
+      "thirdPartyToolExecution",
+    );
+    expect(chromeMcpMocks.executeChromeMcpThirdPartyDeveloperTool).not.toHaveBeenCalled();
+
+    const webMcpListResponse = createBrowserRouteResponse();
+    await getDebugGetHandler("/web-mcp-tools")?.(
+      { params: {}, query: {}, body: {} },
+      webMcpListResponse.res,
+    );
+    expect(webMcpListResponse.statusCode).toBe(403);
+    expect(String(requireRecord(webMcpListResponse.body, "webmcp list error").error)).toContain(
+      "webMcpTools",
+    );
+    expect(chromeMcpMocks.listChromeMcpWebMcpTools).not.toHaveBeenCalled();
+
+    const webMcpResponse = createBrowserRouteResponse();
+    await getDebugPostHandler("/web-mcp-tools/execute")?.(
+      { params: {}, query: {}, body: { toolName: "tool" } },
+      webMcpResponse.res,
+    );
+    expect(webMcpResponse.statusCode).toBe(403);
+    expect(String(requireRecord(webMcpResponse.body, "webmcp error").error)).toContain(
+      "webMcpToolExecution",
+    );
+    expect(chromeMcpMocks.executeChromeMcpWebMcpTool).not.toHaveBeenCalled();
+  });
+
+  it("blocks Chrome MCP diagnostics before detail or artifact path handling when policy disables them", async () => {
+    routeState.profileCtx.profile = {
+      driver: "existing-session" as const,
+      name: "chrome-live",
+      chromeMcp: {
+        capabilities: {
+          diagnostics: false,
+          extensions: true,
+          extensionMutation: true,
+          thirdPartyTools: true,
+          thirdPartyToolExecution: true,
+          webMcpTools: true,
+          webMcpToolExecution: true,
+        },
+      },
+    } as never;
+
+    const consoleResponse = createBrowserRouteResponse();
+    await getDebugGetHandler("/console/message")?.(
+      { params: {}, query: { msgid: "12" }, body: {} },
+      consoleResponse.res,
+    );
+    expect(consoleResponse.statusCode).toBe(403);
+    expect(String(requireRecord(consoleResponse.body, "console error").error)).toContain(
+      "diagnostics",
+    );
+    expect(chromeMcpMocks.getChromeMcpConsoleMessage).not.toHaveBeenCalled();
+
+    const requestDetailResponse = createBrowserRouteResponse();
+    await getDebugGetHandler("/requests/request")?.(
+      {
+        params: {},
+        query: {
+          reqid: "13",
+          requestFilePath: path.resolve(os.tmpdir(), "openclaw-outside-request.txt"),
+        },
+        body: {},
+      },
+      requestDetailResponse.res,
+    );
+    expect(requestDetailResponse.statusCode).toBe(403);
+    expect(
+      String(requireRecord(requestDetailResponse.body, "request detail error").error),
+    ).toContain("diagnostics");
+    expect(chromeMcpMocks.getChromeMcpNetworkRequest).not.toHaveBeenCalled();
+
+    const traceStopResponse = createBrowserRouteResponse();
+    await getDebugPostHandler("/trace/stop")?.(
+      {
+        params: {},
+        query: {},
+        body: { path: path.resolve(os.tmpdir(), "openclaw-outside-trace.json.gz") },
+      },
+      traceStopResponse.res,
+    );
+    expect(traceStopResponse.statusCode).toBe(403);
+    expect(String(requireRecord(traceStopResponse.body, "trace stop error").error)).toContain(
+      "diagnostics",
+    );
+    expect(chromeMcpMocks.stopChromeMcpPerformanceTrace).not.toHaveBeenCalled();
   });
 
   it("routes existing-session console and network detail debug routes through Chrome MCP", async () => {

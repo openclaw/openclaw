@@ -353,7 +353,7 @@ export const FIELD_HELP: Record<string, string> = {
   "browser.profiles.*.mcpCommand":
     "Per-profile Chrome DevTools MCP command for existing-session attachment. Defaults to npx.",
   "browser.profiles.*.mcpArgs":
-    "Extra per-profile Chrome DevTools MCP arguments for existing-session attachment, such as --no-usage-statistics. Endpoint arguments here override the built-in auto-connect or browser URL selection.",
+    "Extra per-profile Chrome DevTools MCP arguments for existing-session attachment, such as --no-usage-statistics. Endpoint arguments here override the built-in auto-connect or browser URL selection. Capability-controlled experimental feature flags are owned by browser.chromeMcp policy and are ignored here.",
   "browser.profiles.*.driver":
     'Per-profile browser driver mode. Use "openclaw" (or legacy "clawd") for CDP-based profiles, or use "existing-session" for Chrome DevTools MCP attachment on the selected host or browser node.',
   "browser.profiles.*.executablePath":
@@ -362,6 +362,24 @@ export const FIELD_HELP: Record<string, string> = {
     "Per-profile headless override for locally launched browser instances. Use this when one profile should stay headless without forcing browser.headless for every other profile.",
   "browser.profiles.*.attachOnly":
     "Per-profile attach-only override that skips local browser launch and only attaches to an existing CDP endpoint. Useful when one profile is externally managed but others are locally launched.",
+  "browser.profiles.*.chromeMcp":
+    "Per-profile Chrome MCP capability policy. Use this to opt a dedicated automation profile into risky Chrome MCP capabilities without broadening every Browser profile.",
+  "browser.profiles.*.chromeMcp.capabilities":
+    'Per-profile fine-grained Chrome MCP capability toggles. Each value accepts true, false, or "auto" and overrides browser.chromeMcp.capabilities for this profile.',
+  "browser.profiles.*.chromeMcp.capabilities.diagnostics":
+    "Per-profile control for Chrome MCP diagnostics such as trace, heap snapshot, Lighthouse, and screencast.",
+  "browser.profiles.*.chromeMcp.capabilities.extensions":
+    "Per-profile control for Chrome MCP extension inventory and tab-id helpers.",
+  "browser.profiles.*.chromeMcp.capabilities.extensionMutation":
+    "Per-profile opt-in for Chrome MCP extension install, uninstall, reload, and action operations.",
+  "browser.profiles.*.chromeMcp.capabilities.thirdPartyTools":
+    "Per-profile control for listing page-provided third-party developer tools through Chrome MCP.",
+  "browser.profiles.*.chromeMcp.capabilities.thirdPartyToolExecution":
+    "Per-profile opt-in for executing page-provided third-party developer tools through Chrome MCP.",
+  "browser.profiles.*.chromeMcp.capabilities.webMcpTools":
+    "Per-profile control for listing page-provided WebMCP tools through Chrome MCP.",
+  "browser.profiles.*.chromeMcp.capabilities.webMcpToolExecution":
+    "Per-profile opt-in for executing page-provided WebMCP tools through Chrome MCP.",
   "browser.profiles.*.color":
     "Per-profile accent color for visual differentiation in dashboards and browser-related UI hints. Use distinct colors for high-signal operator recognition of active profiles.",
   "browser.evaluateEnabled":
@@ -380,6 +398,24 @@ export const FIELD_HELP: Record<string, string> = {
     "Maximum tracked browser tabs kept per primary-agent session. Oldest inactive tabs are closed first. Set 0 to disable the cap.",
   "browser.tabCleanup.sweepMinutes":
     "Minutes between browser tab cleanup sweeps. Keep this modest so idle tabs are reclaimed without adding frequent background work.",
+  "browser.chromeMcp":
+    "Capability policy for Chrome MCP existing-session profiles. Use per-profile overrides under browser.profiles.<name>.chromeMcp when one browser profile should expose more or fewer capabilities than the global default.",
+  "browser.chromeMcp.capabilities":
+    'Fine-grained Chrome MCP capability toggles. Each value accepts true, false, or "auto"; auto allows diagnostics and extension inventory only for OpenClaw-managed existing-session profile data dirs, and keeps mutation/page-tool execution disabled.',
+  "browser.chromeMcp.capabilities.diagnostics":
+    "Allows Chrome MCP diagnostic routes such as console/request detail, trace, heap snapshot, Lighthouse, and screencast. Use false for attached browsers where diagnostics should not inspect or export page runtime artifacts.",
+  "browser.chromeMcp.capabilities.extensions":
+    "Allows Chrome MCP extension inventory and tab-id helpers. Auto enables this only for OpenClaw-managed Chrome MCP profile data dirs.",
+  "browser.chromeMcp.capabilities.extensionMutation":
+    "Allows Chrome MCP extension install, uninstall, reload, and action operations. Keep disabled unless the selected profile is dedicated to automation.",
+  "browser.chromeMcp.capabilities.thirdPartyTools":
+    "Allows listing page-provided third-party developer tools exposed through Chrome MCP. Keep disabled for untrusted or personal browser sessions.",
+  "browser.chromeMcp.capabilities.thirdPartyToolExecution":
+    "Allows executing page-provided third-party developer tools through Chrome MCP. Enable only for trusted pages and automation-dedicated profiles.",
+  "browser.chromeMcp.capabilities.webMcpTools":
+    "Allows listing page-provided WebMCP tools exposed through Chrome MCP. Keep disabled for untrusted or personal browser sessions.",
+  "browser.chromeMcp.capabilities.webMcpToolExecution":
+    "Allows executing page-provided WebMCP tools through Chrome MCP. Enable only for trusted pages and automation-dedicated profiles.",
   "browser.ssrfPolicy":
     "Server-side request forgery guardrail settings for browser/network fetch paths that could reach internal hosts. Keep restrictive defaults in production and open only explicitly approved targets.",
   "browser.ssrfPolicy.dangerouslyAllowPrivateNetwork":

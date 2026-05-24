@@ -157,6 +157,17 @@ Browser settings live in `~/.openclaw/openclaw.json`.
       maxTabsPerSession: 8, // set 0 to disable the per-session cap
       sweepMinutes: 5,
     },
+    chromeMcp: {
+      capabilities: {
+        diagnostics: "auto", // auto enables only for OpenClaw-managed existing-session data dirs
+        extensions: "auto", // auto enables only for OpenClaw-managed existing-session data dirs
+        extensionMutation: false,
+        thirdPartyTools: false,
+        thirdPartyToolExecution: false,
+        webMcpTools: false,
+        webMcpToolExecution: false,
+      },
+    },
     defaultProfile: "openclaw",
     color: "#FF4500",
     headless: false,
@@ -300,6 +311,7 @@ main model can read the screenshot directly.
 - Auto-detect order: system default browser if Chromium-based; otherwise Chrome → Brave → Edge → Chromium → Chrome Canary.
 - `driver: "existing-session"` uses Chrome DevTools MCP instead of raw CDP. Do not set `cdpUrl` for that driver.
 - Set `browser.profiles.<name>.userDataDir` when an existing-session profile should attach to a non-default Chromium user profile (Brave, Edge, etc.). This path also accepts `~` for your OS home directory.
+- `browser.chromeMcp.capabilities` controls higher-risk existing-session Chrome MCP surfaces. The `"auto"` default enables diagnostics and extension inventory only for OpenClaw-managed existing-session profile data dirs; personal signed-in profiles must opt in explicitly.
 
 </Accordion>
 
@@ -703,6 +715,35 @@ Notes:
 
 - This path is higher-risk than the isolated `openclaw` profile because it can
   act inside your signed-in browser session.
+- Chrome MCP diagnostics (`console-message`, `request-detail`, trace, heap
+  snapshot, Lighthouse, and screencast) are disabled by default for personal
+  signed-in profiles. Enable them per profile when the target browser profile is
+  dedicated to automation:
+
+  ```json5
+  {
+    browser: {
+      profiles: {
+        "agent-chrome": {
+          driver: "existing-session",
+          attachOnly: true,
+          userDataDir: "~/.openclaw/browser/agent-chrome/user-data",
+          chromeMcp: {
+            capabilities: {
+              diagnostics: true,
+              extensions: true,
+            },
+          },
+          color: "#00AA00",
+        },
+      },
+    },
+  }
+  ```
+
+- Extension mutation and page-provided tool execution are always explicit
+  opt-ins: set `extensionMutation`, `thirdPartyToolExecution`, or
+  `webMcpToolExecution` only for trusted automation profiles.
 - OpenClaw does not launch the browser for this driver; it only attaches.
 - OpenClaw uses the official Chrome DevTools MCP `--autoConnect` flow here. If
   `userDataDir` is set, it is passed through to target that user data directory.
@@ -716,10 +757,10 @@ Override the spawned Chrome DevTools MCP server per profile when the default
 `npx chrome-devtools-mcp@latest` flow is not what you want (offline hosts,
 pinned versions, vendored binaries):
 
-| Field        | What it does                                                                                                               |
-| ------------ | -------------------------------------------------------------------------------------------------------------------------- |
-| `mcpCommand` | Executable to spawn instead of `npx`. Resolved as-is; absolute paths are honored.                                          |
-| `mcpArgs`    | Argument array passed verbatim to `mcpCommand`. Replaces the default `chrome-devtools-mcp@latest --autoConnect` arguments. |
+| Field        | What it does                                                                                                                                                                                   |
+| ------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `mcpCommand` | Executable to spawn instead of `npx`. Resolved as-is; absolute paths are honored.                                                                                                              |
+| `mcpArgs`    | Extra argument array for `mcpCommand`. Endpoint arguments can override auto-connect, but Chrome MCP experimental feature flags are owned by `browser.chromeMcp.capabilities` and ignored here. |
 
 When `cdpUrl` is set on an existing-session profile, OpenClaw skips
 `--autoConnect` and forwards the endpoint to Chrome MCP automatically:
@@ -738,7 +779,8 @@ Compared to the managed `openclaw` profile, existing-session drivers are more co
 
 - **Screenshots** - page captures and `--ref` element captures work; CSS `--element` selectors do not. `--full-page` cannot combine with `--ref` or `--element`. Playwright is not required for page or ref-based element screenshots.
 - **Actions** - `click`, `type`, `hover`, `scrollIntoView`, `drag`, and `select` require snapshot refs (no CSS selectors). `click-coords` clicks visible viewport coordinates and does not require a snapshot ref. `click` is left-button only. `type` does not support `slowly=true`; use `fill` or `press`. `press` does not support `delayMs`. `type`, `hover`, `scrollIntoView`, `drag`, `select`, `fill`, and `evaluate` do not support per-call timeouts. `select` accepts a single value.
-- **Wait / upload / dialog** - `wait --url` supports exact, substring, and glob patterns; `wait --load networkidle` is not supported. Upload hooks require `ref` or `inputRef`, one file at a time, no CSS `element`. Dialog hooks do not support timeout overrides or `dialogId`.
+- **Wait / upload / dialog** - `wait --url` supports exact, substring, and glob patterns. Upload hooks require `ref` or `inputRef`, one file at a time, no CSS `element`. Dialog hooks do not support timeout overrides or `dialogId`.
+- **Diagnostics** - console/request detail, trace, heap snapshot, Lighthouse, and screencast require `chromeMcp.capabilities.diagnostics: true` for the selected profile.
 - **Dialog visibility** - Managed browser action responses include `blockedByDialog` and `browserState.dialogs.pending` when an action opens a modal dialog; snapshots also include pending dialog state. Respond with `browser dialog --accept/--dismiss --dialog-id <id>` while a dialog is pending. Dialogs handled outside OpenClaw appear under `browserState.dialogs.recent`.
 - **Managed-only features** - batch actions, PDF export, download interception, and `responsebody` still require the managed browser path.
 

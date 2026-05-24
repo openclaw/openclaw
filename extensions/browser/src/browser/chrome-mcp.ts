@@ -32,6 +32,10 @@ import { asRecord } from "../record-shared.js";
 import { redactCdpUrl } from "./cdp.helpers.js";
 import type { ChromeMcpSnapshotNode } from "./chrome-mcp.snapshot.js";
 import type { BrowserTab } from "./client.types.js";
+import type {
+  ResolvedBrowserChromeMcpCapabilities,
+  ResolvedBrowserChromeMcpConfig,
+} from "./config.js";
 import { BrowserProfileUnavailableError, BrowserTabNotFoundError } from "./errors.js";
 
 const log = createSubsystemLogger("browser").child("chrome-mcp");
@@ -126,6 +130,7 @@ export type ChromeMcpProfileOptions = {
   headless?: boolean;
   noSandbox?: boolean;
   cleanupBrowserProcesses?: boolean;
+  chromeMcp?: ResolvedBrowserChromeMcpConfig;
   mcpCommand?: string;
   mcpArgs?: string[];
 };
@@ -137,6 +142,7 @@ type NormalizedChromeMcpProfileOptions = {
   headless?: boolean;
   noSandbox?: boolean;
   cleanupBrowserProcesses?: boolean;
+  chromeMcp?: ResolvedBrowserChromeMcpConfig;
   command: string;
   extraArgs: string[];
 };
@@ -186,26 +192,43 @@ export type ChromeMcpProcessCleanupDeps = {
 
 const DEFAULT_CHROME_MCP_COMMAND = "npx";
 const DEFAULT_CHROME_MCP_PACKAGE_ARGS = ["-y", "chrome-devtools-mcp@latest"];
-const DEFAULT_CHROME_MCP_FEATURE_ARGS = [
+const DEFAULT_CHROME_MCP_BASE_FEATURE_ARGS = [
   "--no-usage-statistics",
   // Direct chrome-devtools-mcp launches do not enable structuredContent by default.
   "--experimentalStructuredContent",
   "--experimental-page-id-routing",
   // Enables Chrome DevTools MCP's coordinate-based click_at tool for OpenClaw clickCoords.
   "--experimentalVision",
+];
+const DEFAULT_CHROME_MCP_DIAGNOSTIC_FEATURE_ARGS = [
   // Enables Chrome DevTools MCP heap snapshot inspection tools.
   "--experimentalMemory",
   // Enables Chrome DevTools MCP screencast_start/stop tools.
   "--experimentalScreencast",
   // Enables Chrome DevTools MCP get_tab_id interoperability tool.
   "--experimentalInteropTools",
-  // Enables Chrome DevTools MCP page-exposed tool listing/execution surfaces.
-  "--categoryExperimentalThirdParty",
-  "--categoryExperimentalWebmcp",
-  // Enables Chrome DevTools MCP extension inventory/actions when the connected Chrome mode supports it.
-  "--categoryExtensions",
 ];
+const DEFAULT_CHROME_MCP_CATEGORY_FEATURE_ARGS = {
+  // Enables Chrome DevTools MCP page-exposed tool listing/execution surfaces.
+  thirdPartyTools: "--categoryExperimentalThirdParty",
+  webMcpTools: "--categoryExperimentalWebmcp",
+  // Enables Chrome DevTools MCP extension inventory/actions when the connected Chrome mode supports it.
+  extensions: "--categoryExtensions",
+} as const;
+const FALLBACK_CHROME_MCP_CAPABILITIES: ResolvedBrowserChromeMcpCapabilities = {
+  diagnostics: false,
+  extensions: false,
+  extensionMutation: false,
+  thirdPartyTools: false,
+  thirdPartyToolExecution: false,
+  webMcpTools: false,
+  webMcpToolExecution: false,
+};
 const CHROME_MCP_USAGE_STATISTICS_FLAG_RE = /^--(?:no-)?usage-?statistics(?:=.*)?$/i;
+const CHROME_MCP_POLICY_CONTROLLED_FEATURE_FLAGS = new Set([
+  ...DEFAULT_CHROME_MCP_DIAGNOSTIC_FEATURE_ARGS,
+  ...Object.values(DEFAULT_CHROME_MCP_CATEGORY_FEATURE_ARGS),
+]);
 const CHROME_MCP_PROCESS_SCAN_TIMEOUT_MS = 1_000;
 const CHROME_MCP_BROWSER_STOP_GRACE_MS = 1_500;
 
@@ -647,6 +670,7 @@ function normalizeChromeMcpOptions(
     headless: typeof options.headless === "boolean" ? options.headless : undefined,
     noSandbox: options.noSandbox === true,
     cleanupBrowserProcesses: options.cleanupBrowserProcesses === true,
+    chromeMcp: options.chromeMcp,
     extraArgs: normalizeChromeMcpStringList(options.mcpArgs),
   };
 }
@@ -757,6 +781,7 @@ function buildChromeMcpSessionCacheKey(
     typeof options.headless === "boolean" ? String(options.headless) : "",
     options.noSandbox ? "true" : "",
     options.cleanupBrowserProcesses ? "true" : "",
+    options.chromeMcp?.capabilities ?? {},
     options.extraArgs,
   ]);
 }
@@ -775,6 +800,7 @@ function buildChromeMcpPageStateKey(
     typeof options.headless === "boolean" ? String(options.headless) : "",
     options.noSandbox ? "true" : "",
     options.cleanupBrowserProcesses ? "true" : "",
+    options.chromeMcp?.capabilities ?? {},
     options.extraArgs,
     targetId,
   ]);
@@ -1012,22 +1038,6 @@ async function findChromeMcpBrowserProcessIdsForUserDataDir(
   }
 }
 
-async function findProcessTreeIds(rootPid: number): Promise<number[]> {
-  if (process.platform === "win32") {
-    return Number.isInteger(rootPid) && rootPid > 0 && rootPid !== process.pid ? [rootPid] : [];
-  }
-  try {
-    const { stdout } = await execFileAsync("ps", ["-eo", "pid=,ppid="], {
-      encoding: "utf8",
-      maxBuffer: 1_000_000,
-      timeout: CHROME_MCP_PROCESS_SCAN_TIMEOUT_MS,
-    });
-    return collectProcessTreeIdsFromPsOutput(stdout, rootPid);
-  } catch {
-    return Number.isInteger(rootPid) && rootPid > 0 && rootPid !== process.pid ? [rootPid] : [];
-  }
-}
-
 function signalProcesses(pids: number[], signal: NodeJS.Signals): number {
   let count = 0;
   for (const pid of pids) {
@@ -1058,21 +1068,51 @@ async function terminateChromeMcpBrowserProcessesForOptions(
   return signaled;
 }
 
+function resolveChromeMcpCapabilities(
+  options: NormalizedChromeMcpProfileOptions,
+): ResolvedBrowserChromeMcpCapabilities {
+  return options.chromeMcp?.capabilities ?? FALLBACK_CHROME_MCP_CAPABILITIES;
+}
+
+function buildChromeMcpFeatureArgs(options: NormalizedChromeMcpProfileOptions): string[] {
+  const capabilities = resolveChromeMcpCapabilities(options);
+  const args = [...DEFAULT_CHROME_MCP_BASE_FEATURE_ARGS];
+  if (capabilities.diagnostics) {
+    args.push(...DEFAULT_CHROME_MCP_DIAGNOSTIC_FEATURE_ARGS);
+  } else if (capabilities.extensions) {
+    args.push("--experimentalInteropTools");
+  }
+  if (capabilities.extensions || capabilities.extensionMutation) {
+    args.push(DEFAULT_CHROME_MCP_CATEGORY_FEATURE_ARGS.extensions);
+  }
+  if (capabilities.thirdPartyTools || capabilities.thirdPartyToolExecution) {
+    args.push(DEFAULT_CHROME_MCP_CATEGORY_FEATURE_ARGS.thirdPartyTools);
+  }
+  if (capabilities.webMcpTools || capabilities.webMcpToolExecution) {
+    args.push(DEFAULT_CHROME_MCP_CATEGORY_FEATURE_ARGS.webMcpTools);
+  }
+  if (options.extraArgs.some((arg) => CHROME_MCP_USAGE_STATISTICS_FLAG_RE.test(arg))) {
+    return args.filter((arg) => arg !== "--no-usage-statistics");
+  }
+  return args;
+}
+
+function isChromeMcpPolicyControlledFeatureArg(arg: string): boolean {
+  const [name] = arg.split("=", 1);
+  return CHROME_MCP_POLICY_CONTROLLED_FEATURE_FLAGS.has(name ?? arg);
+}
+
 function buildChromeMcpArgsFromOptions(options: NormalizedChromeMcpProfileOptions): string[] {
   const commandPrefix =
     options.command === DEFAULT_CHROME_MCP_COMMAND ? DEFAULT_CHROME_MCP_PACKAGE_ARGS : [];
-  const defaultFeatureArgs = options.extraArgs.some((arg) =>
-    CHROME_MCP_USAGE_STATISTICS_FLAG_RE.test(arg),
-  )
-    ? DEFAULT_CHROME_MCP_FEATURE_ARGS.filter((arg) => arg !== "--no-usage-statistics")
-    : DEFAULT_CHROME_MCP_FEATURE_ARGS;
+  const extraArgs = options.extraArgs.filter((arg) => !isChromeMcpPolicyControlledFeatureArg(arg));
   return [
     ...commandPrefix,
     ...buildChromeMcpConnectionArgs(options),
-    ...defaultFeatureArgs,
+    ...buildChromeMcpFeatureArgs(options),
     ...buildChromeMcpLaunchArgs(options),
     ...buildChromeMcpUserDataDirArgs(options),
-    ...options.extraArgs,
+    ...extraArgs,
   ];
 }
 

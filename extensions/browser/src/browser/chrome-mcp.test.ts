@@ -1167,14 +1167,64 @@ describe("chrome MCP page parsing", () => {
       "--experimentalStructuredContent",
       "--experimental-page-id-routing",
       "--experimentalVision",
+      "--userDataDir",
+      "/tmp/brave-profile",
+    ]);
+  });
+
+  it("adds Chrome MCP category flags only when capability policy enables them", () => {
+    expect(
+      buildChromeMcpArgs({
+        chromeMcp: {
+          capabilities: {
+            diagnostics: true,
+            extensions: true,
+            extensionMutation: true,
+            thirdPartyTools: true,
+            thirdPartyToolExecution: true,
+            webMcpTools: true,
+            webMcpToolExecution: true,
+          },
+        },
+      }),
+    ).toEqual([
+      "-y",
+      "chrome-devtools-mcp@latest",
+      "--autoConnect",
+      "--no-usage-statistics",
+      "--experimentalStructuredContent",
+      "--experimental-page-id-routing",
+      "--experimentalVision",
       "--experimentalMemory",
       "--experimentalScreencast",
       "--experimentalInteropTools",
+      "--categoryExtensions",
       "--categoryExperimentalThirdParty",
       "--categoryExperimentalWebmcp",
-      "--categoryExtensions",
-      "--userDataDir",
-      "/tmp/brave-profile",
+    ]);
+  });
+
+  it("ignores raw Chrome MCP feature flags that are controlled by capability policy", () => {
+    const args = buildChromeMcpArgs({
+      mcpArgs: [
+        "--experimentalMemory",
+        "--experimentalScreencast",
+        "--experimentalInteropTools",
+        "--categoryExtensions",
+        "--categoryExperimentalThirdParty",
+        "--categoryExperimentalWebmcp",
+        "--no-usage-statistics",
+      ],
+    });
+
+    expect(args).toEqual([
+      "-y",
+      "chrome-devtools-mcp@latest",
+      "--autoConnect",
+      "--experimentalStructuredContent",
+      "--experimental-page-id-routing",
+      "--experimentalVision",
+      "--no-usage-statistics",
     ]);
   });
 
@@ -1193,12 +1243,6 @@ describe("chrome MCP page parsing", () => {
       "--experimentalStructuredContent",
       "--experimental-page-id-routing",
       "--experimentalVision",
-      "--experimentalMemory",
-      "--experimentalScreencast",
-      "--experimentalInteropTools",
-      "--categoryExperimentalThirdParty",
-      "--categoryExperimentalWebmcp",
-      "--categoryExtensions",
     ]);
   });
 
@@ -1216,12 +1260,6 @@ describe("chrome MCP page parsing", () => {
       "--experimentalStructuredContent",
       "--experimental-page-id-routing",
       "--experimentalVision",
-      "--experimentalMemory",
-      "--experimentalScreencast",
-      "--experimentalInteropTools",
-      "--categoryExperimentalThirdParty",
-      "--categoryExperimentalWebmcp",
-      "--categoryExtensions",
     ]);
   });
 
@@ -1237,12 +1275,6 @@ describe("chrome MCP page parsing", () => {
       "--experimentalStructuredContent",
       "--experimental-page-id-routing",
       "--experimentalVision",
-      "--experimentalMemory",
-      "--experimentalScreencast",
-      "--experimentalInteropTools",
-      "--categoryExperimentalThirdParty",
-      "--categoryExperimentalWebmcp",
-      "--categoryExtensions",
       "--browserUrl",
       "http://127.0.0.1:9222",
       "--no-usage-statistics",
@@ -1261,12 +1293,6 @@ describe("chrome MCP page parsing", () => {
       "--experimentalStructuredContent",
       "--experimental-page-id-routing",
       "--experimentalVision",
-      "--experimentalMemory",
-      "--experimentalScreencast",
-      "--experimentalInteropTools",
-      "--categoryExperimentalThirdParty",
-      "--categoryExperimentalWebmcp",
-      "--categoryExtensions",
       "--usage-statistics",
     ]);
   });
@@ -1282,12 +1308,6 @@ describe("chrome MCP page parsing", () => {
       "--experimentalStructuredContent",
       "--experimental-page-id-routing",
       "--experimentalVision",
-      "--experimentalMemory",
-      "--experimentalScreencast",
-      "--experimentalInteropTools",
-      "--categoryExperimentalThirdParty",
-      "--categoryExperimentalWebmcp",
-      "--categoryExtensions",
       "--isolated",
       "--headless",
       "--no-usage-statistics",
@@ -1306,12 +1326,6 @@ describe("chrome MCP page parsing", () => {
       "--experimentalStructuredContent",
       "--experimental-page-id-routing",
       "--experimentalVision",
-      "--experimentalMemory",
-      "--experimentalScreencast",
-      "--experimentalInteropTools",
-      "--categoryExperimentalThirdParty",
-      "--categoryExperimentalWebmcp",
-      "--categoryExtensions",
       "--no-usage-statistics",
     ]);
   });
@@ -1330,12 +1344,6 @@ describe("chrome MCP page parsing", () => {
       "--experimentalStructuredContent",
       "--experimental-page-id-routing",
       "--experimentalVision",
-      "--experimentalMemory",
-      "--experimentalScreencast",
-      "--experimentalInteropTools",
-      "--categoryExperimentalThirdParty",
-      "--categoryExperimentalWebmcp",
-      "--categoryExtensions",
       "--executablePath",
       "/usr/bin/google-chrome",
       "--headless",
@@ -1357,12 +1365,6 @@ describe("chrome MCP page parsing", () => {
       "--experimentalStructuredContent",
       "--experimental-page-id-routing",
       "--experimentalVision",
-      "--experimentalMemory",
-      "--experimentalScreencast",
-      "--experimentalInteropTools",
-      "--categoryExperimentalThirdParty",
-      "--categoryExperimentalWebmcp",
-      "--categoryExtensions",
     ]);
   });
 

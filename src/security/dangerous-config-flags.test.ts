@@ -98,6 +98,25 @@ describe("collectEnabledInsecureOrDangerousFlags", () => {
           ssrfPolicy: {
             dangerouslyAllowPrivateNetwork: true,
           },
+          chromeMcp: {
+            capabilities: {
+              diagnostics: true,
+              extensionMutation: true,
+              thirdPartyToolExecution: true,
+            },
+          },
+          profiles: {
+            "agent-chrome": {
+              driver: "existing-session",
+              attachOnly: true,
+              color: "#00AA00",
+              chromeMcp: {
+                capabilities: {
+                  webMcpToolExecution: true,
+                },
+              },
+            },
+          },
         },
         tools: {
           fs: {
@@ -110,6 +129,10 @@ describe("collectEnabledInsecureOrDangerousFlags", () => {
     expect(flags).toStrictEqual([
       "hooks.allowRequestSessionKey=true",
       "browser.ssrfPolicy.dangerouslyAllowPrivateNetwork=true",
+      "browser.chromeMcp.capabilities.diagnostics=true",
+      "browser.chromeMcp.capabilities.extensionMutation=true",
+      "browser.chromeMcp.capabilities.thirdPartyToolExecution=true",
+      'browser.profiles["agent-chrome"].chromeMcp.capabilities.webMcpToolExecution=true',
       "tools.fs.workspaceOnly=false",
       "agents.defaults.sandbox.docker.dangerouslyAllowReservedContainerTargets=true",
       "agents.defaults.sandbox.docker.dangerouslyAllowContainerNamespaceJoin=true",

@@ -293,11 +293,12 @@ Current existing-session limits:
 - `hover`, `scrollintoview`, `drag`, `select`, `fill`, and `evaluate` reject
   per-call timeout overrides
 - `select` supports one value only
-- `wait --load networkidle` is not supported
 - file uploads require `--ref` / `--input-ref`, do not support CSS
   `--element`, and currently support one file at a time
 - dialog hooks do not support `--timeout`
 - screenshots support page captures and `--ref`, but not CSS `--element`
+- console/request detail, trace, heap snapshot, Lighthouse, and screencast
+  require `browser.profiles.<name>.chromeMcp.capabilities.diagnostics: true`
 - `responsebody`, download interception, PDF export, and batch actions still
   require a managed browser or raw CDP profile
 

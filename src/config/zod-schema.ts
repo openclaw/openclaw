@@ -40,6 +40,26 @@ const BrowserSnapshotDefaultsSchema = z
   .strict()
   .optional();
 
+const BrowserChromeMcpCapabilitySettingSchema = z.union([z.boolean(), z.literal("auto")]);
+
+const BrowserChromeMcpConfigSchema = z
+  .object({
+    capabilities: z
+      .object({
+        diagnostics: BrowserChromeMcpCapabilitySettingSchema.optional(),
+        extensions: BrowserChromeMcpCapabilitySettingSchema.optional(),
+        extensionMutation: BrowserChromeMcpCapabilitySettingSchema.optional(),
+        thirdPartyTools: BrowserChromeMcpCapabilitySettingSchema.optional(),
+        thirdPartyToolExecution: BrowserChromeMcpCapabilitySettingSchema.optional(),
+        webMcpTools: BrowserChromeMcpCapabilitySettingSchema.optional(),
+        webMcpToolExecution: BrowserChromeMcpCapabilitySettingSchema.optional(),
+      })
+      .strict()
+      .optional(),
+  })
+  .strict()
+  .optional();
+
 const NodeHostSchema = z
   .object({
     browserProxy: z
@@ -643,6 +663,7 @@ export const OpenClawSchema = z
         cdpPortRangeStart: z.number().int().min(1).max(65535).optional(),
         defaultProfile: z.string().optional(),
         snapshotDefaults: BrowserSnapshotDefaultsSchema,
+        chromeMcp: BrowserChromeMcpConfigSchema,
         ssrfPolicy: z
           .object({
             dangerouslyAllowPrivateNetwork: z.boolean().optional(),
@@ -669,6 +690,7 @@ export const OpenClawSchema = z
                 headless: z.boolean().optional(),
                 executablePath: z.string().optional(),
                 attachOnly: z.boolean().optional(),
+                chromeMcp: BrowserChromeMcpConfigSchema,
                 color: HexColorSchema,
               })
               .strict()

@@ -393,6 +393,17 @@ See [Inferred commitments](/concepts/commitments).
       maxTabsPerSession: 8,
       sweepMinutes: 5,
     },
+    chromeMcp: {
+      capabilities: {
+        diagnostics: "auto",
+        extensions: "auto",
+        extensionMutation: false,
+        thirdPartyTools: false,
+        thirdPartyToolExecution: false,
+        webMcpTools: false,
+        webMcpToolExecution: false,
+      },
+    },
     profiles: {
       openclaw: { cdpPort: 18800, color: "#FF4500" },
       work: {
@@ -442,9 +453,13 @@ See [Inferred commitments](/concepts/commitments).
   the selected host or through a connected browser node.
 - `existing-session` profiles can set `userDataDir` to target a specific
   Chromium-based browser profile such as Brave or Edge.
+- `chromeMcp.capabilities` gates higher-risk Chrome MCP routes on
+  `existing-session` profiles. `"auto"` enables diagnostics and extension
+  inventory only for OpenClaw-managed existing-session profile data dirs;
+  personal signed-in profiles require explicit per-profile opt-in.
 - `existing-session` profiles keep the current Chrome MCP route limits:
   snapshot/ref-driven actions instead of CSS-selector targeting, one-file upload
-  hooks, no dialog timeout overrides, no `wait --load networkidle`, and no
+  hooks, no dialog timeout overrides, and no
   `responsebody`, PDF export, download interception, or batch actions.
 - Local managed `openclaw` profiles auto-assign `cdpPort` and `cdpUrl`; only
   set `cdpUrl` explicitly for remote CDP.
