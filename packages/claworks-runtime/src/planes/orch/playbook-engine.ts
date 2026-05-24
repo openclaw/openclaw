@@ -367,16 +367,7 @@ export function createPlaybookEngine(deps: PlaybookEngineDeps): PlaybookEngine {
         duration_ms: Date.now() - _pbStartMs,
       }).catch(() => {});
       // 将 Playbook 产生的回复文本记录为 assistant 轮次，保持对话历史完整
-      const sessionId = String(input.session_id ?? input.sessionId ?? "").trim();
-      if (sessionId && deps.contextEngine) {
-        const replyText = extractResponseText(ctx.variables);
-        if (replyText) {
-          deps.contextEngine.append(sessionId, "assistant", replyText, {
-            playbook_id: playbookId,
-            run_id: runId,
-          });
-        }
-      }
+      recordAssistantTurnOnCompletion(input, ctx.variables, playbookId, runId, deps.contextEngine);
     }
 
     runs.set(runId, run);
@@ -707,6 +698,16 @@ export function createPlaybookEngine(deps: PlaybookEngineDeps): PlaybookEngine {
         }
       }
 
+      if (run.status === "completed") {
+        recordAssistantTurnOnCompletion(
+          pending.input,
+          ctx.variables,
+          pending.playbookId,
+          runId,
+          deps.contextEngine,
+        );
+      }
+
       runs.set(runId, run);
       persistRun(upsertRun, run, suspended.get(runId));
       return run;
@@ -730,6 +731,24 @@ function extractResponseText(variables: Record<string, unknown>): string | null 
     if (typeof val === "string" && val.trim()) return val.trim();
   }
   return null;
+}
+
+function recordAssistantTurnOnCompletion(
+  input: Record<string, unknown>,
+  variables: Record<string, unknown>,
+  playbookId: string,
+  runId: string,
+  contextEngine?: import("../../kernel/context-engine.js").ContextEngine,
+): void {
+  const sessionId = String(input.session_id ?? input.sessionId ?? "").trim();
+  if (!sessionId || !contextEngine) return;
+  const replyText = extractResponseText(variables);
+  if (replyText) {
+    contextEngine.append(sessionId, "assistant", replyText, {
+      playbook_id: playbookId,
+      run_id: runId,
+    });
+  }
 }
 
 function parseStepsPersistence(raw: string): StepsPersistence {
