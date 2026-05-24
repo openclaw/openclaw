@@ -56,4 +56,12 @@ chmod +x ~/Projects/scripts/ecosystem-backup.sh
 | `daily-report-system/`         | `main`          | 日报垂直应用                    |
 | `openclaw/`                    | `local/mai-wip` | upstream + 飞书/Maibot 本地定制 |
 
+## ⚠️ Maibot sibling 警告
+
+本地 `../openclaw/` **不是** claworks 的 upstream。它是 Maibot/飞书定制 fork（`local/mai-wip`），含 `projectId`、`maibotWorkspaceIndexing` 等与官方 OpenClaw 不同的 seam。
+
+- **upstream 唯一真源**：`https://github.com/openclaw/openclaw.git`
+- **禁止**将 sibling openclaw 的提交 merge/rebase 进 `claworks/`
+- 需要对照 Maibot 行为时只读 diff；产品 seam 清单见 [`docs/design/UPSTREAM-SYNC.md`](design/UPSTREAM-SYNC.md)
+
 五仓布局见 [`docs/design/ECOSYSTEM-LAYOUT.md`](design/ECOSYSTEM-LAYOUT.md)。

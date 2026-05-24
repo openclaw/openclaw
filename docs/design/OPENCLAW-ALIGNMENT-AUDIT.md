@@ -50,7 +50,7 @@
 
 Doctor 新增检查项：`openclaw_bridge_llm` / `openclaw_bridge_notify` / `openclaw_bridge_im`（用户可见文案为 Gateway LLM bridge，非 OpenClaw 品牌）。
 
-**Onboarding 白标（2026-05-24）**：`wizardT`/`formatCliCommand`/`product-surface` 覆盖 setup/configure/doctor 首屏与 next steps；`onboard-remote` 默认 WS 18800；`claworks:setup` 一键 doctor→init→onboard。详见 `REBRAND-TO-CLAWORKS.md` onboarding 小节。
+**Onboarding 白标（2026-05-24）**：`wizardT`/`formatCliCommand`/`product-surface` 覆盖 setup/configure/doctor 首屏与 next steps；`onboard-remote` 默认 WS 18800；`claworks:setup` 一键 doctor→init→onboard；`init` 对 OT simulate/echo 与个人 `personal_work` profile 给出明确提示（避免误以为演示连接器可用于生产）。详见 `REBRAND-TO-CLAWORKS.md` onboarding 小节。
 
 ---
 

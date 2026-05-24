@@ -2,6 +2,12 @@
 
 NDJSON stdio child processes managed by `ConnectorManager` (`packages/claworks-runtime/src/interfaces/connectors/`).
 
+## Production vs simulation
+
+- Production (`production_mode: true` or `CLAWORKS_PRODUCTION=1`): keep `simulate: false` and use live presets (`mqtt`, `opcua`, `modbus`) without `-simulate` suffixes.
+- `claworks doctor --fix` / `pnpm claworks:repair` strips `*-simulate` presets and forces `simulate: false` in production.
+- Dev-only: set `simulate: true` on a connector entry or use `CLAWORKS_*_SIMULATE=1` env vars (see `contrib/examples/*.env.example`).
+
 ## Built-in presets
 
 Configure in `claworks.json` under `plugins.entries.claworks-robot.config.connectors`:
@@ -11,7 +17,8 @@ Configure in `claworks.json` under `plugins.entries.claworks-robot.config.connec
   "connectors": {
     "plant-mqtt": {
       "preset": "mqtt",
-      "env": { "CLAWORKS_MQTT_SIMULATE": "1" }
+      "simulate": false,
+      "env": { "CLAWORKS_MQTT_URL": "mqtt://127.0.0.1:1883" }
     },
     "scada-poll": {
       "preset": "rest-poll",

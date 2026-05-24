@@ -32,6 +32,8 @@
 └── openclaw/                      # 上游（可选，Maibot 定制）
 ```
 
+运维三仓 clone 顺序、关键 env 与 Maibot 警告见 **[`docs/OPERATOR-CHECKLIST.md`](../OPERATOR-CHECKLIST.md)**。
+
 ### 1.2 首次部署（10 分钟）
 
 ```bash
@@ -241,7 +243,7 @@ pnpm install
 openclaw plugins install -l ../openclaw-claworks-extension/extensions/claworks
 ```
 
-配置 `~/.openclaw/openclaw.json`：
+在**官方 OpenClaw 实例**（非 ClaWorks 产品部署）上配置 `~/.openclaw/openclaw.json`：
 
 ```json
 {
@@ -262,7 +264,7 @@ openclaw plugins install -l ../openclaw-claworks-extension/extensions/claworks
 Agent 可用 **22 个** `cw_*` 工具（查询对象、触发 Playbook、KB、HITL 等）。  
 完整列表：`CW-TOOLS-MATRIX.md`
 
-多实例（Twin/Ops 分离）见 extension `skills/claworks-multi/SKILL.md`。
+多 Gateway 实例（A2A mesh，非已废弃的 ClawTwin/ClawOps 分离）见 [`contrib/examples/a2a-peer-mesh.zh.md`](../../contrib/examples/a2a-peer-mesh.zh.md) 与 extension `skills/claworks-multi/SKILL.md`。
 
 ---
 

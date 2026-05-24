@@ -25,6 +25,8 @@
 | `doctor` intro                   | ✅   | `resolveProductDoctorIntro` + ClaWorks 专项 health checks                                      |
 | `onboard-remote` 默认 WS         | ✅   | `resolveProductLocalGatewayWsUrl`（18800）                                                     |
 | `pnpm claworks:setup`            | ✅   | doctor --fix → init → onboard，收尾提示 `claworks:start`                                       |
+| init OT simulate 提示            | ✅   | `collectClaworksInitWarnings`：echo/simulate 非生产误导 + personal_work repair 指引            |
+| wizard.finalize whatNow/outro    | ✅   | 产品化 override → docs.claworks.ai/showcase                                                    |
 | 遗留（有意保留）                 | ⚠️   | 内部类型名 `OpenClawConfig`、`openclaw/plugin-sdk` import；harness-sync 检测并存 OpenClaw 安装 |
 
 ## 阶段 B — 发布面

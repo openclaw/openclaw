@@ -65,7 +65,7 @@ M0  M1  M2  M3  M4  M5  M6  M7  M8
 □ 迁入 extensions/claworks/（cw_* 工具）
 □ 迁入 packages/claworks-client/（HTTP transport）
 □ 迁入 packages/claworks-plugin-bridge/（result adapter）
-□ 迁入 extensions/clawtwin/、clawops/、clawnexus/（合并整理）
+☑ ~~迁入 extensions/clawtwin/、clawops/、clawnexus~~ — 已取消；单体 ClaWorks Gateway 取代三服务栈（见 `docs/legacy/docker-compose-clawtwin-clawops.yml`）
 □ 建立独立 package.json，peerDependency: openclaw@>=2026.5.0
 □ 发布为 npm 包（供官方 openclaw 用户安装）
 ```
@@ -273,7 +273,7 @@ claworks packs update
 
 ### 里程碑 M2.4：Studio Web UI（Week 17-18，基础版）
 
-迁移并升级现有 `clawtwin-studio`：
+在 `claworks/studio/` 新建静态运维 UI（**非**已归档的 `clawtwin-studio`）：
 
 ```
 studio/

@@ -1,0 +1,60 @@
+# DEPRECATED — legacy ClawTwin / ClawOps / OpenClaw three-service stack (pre-2026-05 monolith).
+#
+# Do not use for new deployments. Canonical production layout:
+#   docker-compose.prod.yml  →  single claworks-gateway on :18800
+#   DEPLOYMENT.md
+#
+# Kept for reference when migrating old compose-based installs.
+services:
+  openclaw-gateway:
+    image: ${CLAWORKS_IMAGE:-claworks:local}
+    build: .
+    restart: unless-stopped
+    environment:
+      HOME: /home/node
+      OPENCLAW_HOME: /home/node
+      OPENCLAW_STATE_DIR: /home/node/.openclaw
+      OPENCLAW_CONFIG_PATH: /home/node/.openclaw/openclaw.json
+      OPENCLAW_GATEWAY_TOKEN: ${OPENCLAW_GATEWAY_TOKEN:-}
+      CLAWTWIN_BASE_URL: http://clawtwin:18800
+      CLAWOPS_BASE_URL: http://clawops:18801
+      CLAWORKS_REDIS_URL: redis://redis:6379
+    ports:
+      - "${OPENCLAW_GATEWAY_PORT:-3000}:3000"
+    depends_on:
+      - redis
+      - clawtwin
+      - clawops
+
+  clawtwin:
+    image: ${CLAWTWIN_IMAGE:-claworks:local}
+    build: .
+    restart: unless-stopped
+    command: ["node", "claworks.mjs", "gateway", "--bind", "0.0.0.0", "--port", "18800"]
+    environment:
+      CLAWORKS_PRODUCT: "1"
+      DATABASE_URL: file:/data/claworks/claworks.db
+      CLAWTWIN_AUTH_DEV: ${CLAWTWIN_AUTH_DEV:-0}
+      CLAWTWIN_AUTH_TOKEN: ${CLAWTWIN_AUTH_TOKEN:-}
+    ports:
+      - "18800:18800"
+
+  clawops:
+    image: ${CLAWOPS_IMAGE:-claworks:local}
+    build: .
+    restart: unless-stopped
+    command: ["node", "claworks.mjs", "gateway", "--bind", "0.0.0.0", "--port", "18801"]
+    environment:
+      CLAWORKS_PRODUCT: "1"
+      CLAWTWIN_BASE_URL: http://clawtwin:18800
+      DATABASE_URL: file:/data/claworks/claworks.db
+      CLAWOPS_AUTH_TOKEN: ${CLAWOPS_AUTH_TOKEN:-}
+    ports:
+      - "18801:18801"
+    depends_on:
+      - clawtwin
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: redis-server --appendonly yes

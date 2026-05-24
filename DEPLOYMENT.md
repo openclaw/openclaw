@@ -2,6 +2,8 @@
 
 ClaWorks 采用 **单体 Gateway** 模型：一个进程承载 ObjectStore、Playbook、KB、MCP/A2A/REST 与 OpenClaw 渠道桥接。
 
+**运维清单**：[`docs/OPERATOR-CHECKLIST.md`](docs/OPERATOR-CHECKLIST.md)（三仓 clone、env、启动命令）。
+
 **Canonical 运行时**：
 
 | 项           | 值                                                          |

@@ -2,6 +2,7 @@
 
 | 我想…                       | 读这里                                                                                            |
 | --------------------------- | ------------------------------------------------------------------------------------------------- |
+| 三仓运维 / 日常启停         | [OPERATOR-CHECKLIST.md](./OPERATOR-CHECKLIST.md)                                                  |
 | 快速跑起来                  | [QUICKSTART.md](../QUICKSTART.md)                                                                 |
 | 知道产品是否做完            | [design/PRODUCT-COMPLETION.md](./design/PRODUCT-COMPLETION.md)                                    |
 | 扩展 Pack / 集成 / 垂直应用 | [design/ECOSYSTEM-EXTENSION-GUIDE.md](./design/ECOSYSTEM-EXTENSION-GUIDE.md)                      |
