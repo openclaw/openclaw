@@ -425,7 +425,6 @@ export function createOpenClawCodingTools(options?: {
   senderName?: string | null;
   senderUsername?: string | null;
   senderE164?: string | null;
-  inboundPeer?: string | readonly string[] | null;
   /** Reply-to mode for Slack auto-threading. */
   replyToMode?: "off" | "first" | "all" | "batched";
   /** Mutable ref to track if a reply was sent (for "first" mode). */
@@ -867,7 +866,6 @@ export function createOpenClawCodingTools(options?: {
             requireExplicitMessageTarget: options?.requireExplicitMessageTarget,
             disableMessageTool: options?.disableMessageTool,
             requesterAgentIdOverride: agentId,
-            inboundPeer: options?.inboundPeer ?? undefined,
             allowGatewaySubagentBinding: options?.allowGatewaySubagentBinding,
             authProfileStore: options?.authProfileStore,
           },
@@ -963,7 +961,6 @@ export function createOpenClawCodingTools(options?: {
           ...(cronSelfRemoveOnlyJobId ? { cronSelfRemoveOnlyJobId } : {}),
           requesterAgentIdOverride: agentId,
           requesterSenderId: options?.senderId,
-          inboundPeer: options?.inboundPeer ?? undefined,
           senderIsOwner: options?.senderIsOwner,
           authProfileStore: options?.authProfileStore,
           sessionId: options?.sessionId,

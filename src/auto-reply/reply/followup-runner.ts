@@ -812,14 +812,6 @@ export function createFollowupRunner(params: {
                 senderName: run.senderName,
                 senderUsername: run.senderUsername,
                 senderE164: run.senderE164,
-                inboundPeer: [
-                  run.senderId,
-                  run.senderUsername,
-                  run.senderE164,
-                  queued.originatingTo,
-                ].filter(
-                  (peer): peer is string => typeof peer === "string" && peer.trim().length > 0,
-                ),
                 sessionFile: run.sessionFile,
                 agentDir: run.agentDir,
                 workspaceDir: run.workspaceDir,

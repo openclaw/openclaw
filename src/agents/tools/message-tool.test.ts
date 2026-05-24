@@ -110,7 +110,6 @@ type RunMessageActionInput = {
   defaultAccountId?: string;
   params?: Record<string, unknown>;
   requesterSenderId?: string;
-  inboundPeer?: string | readonly string[];
   sandboxRoot?: string;
   sessionKey?: string;
   sourceReplyDeliveryMode?: string;
@@ -1849,19 +1848,5 @@ describe("message tool sandbox passthrough", () => {
     });
 
     expect(call?.requesterSenderId).toBe("1234567890");
-  });
-
-  it("forwards trusted inboundPeer to runMessageAction", async () => {
-    mockSendResult({ to: "discord:123" });
-
-    const call = await executeSend({
-      toolOptions: { inboundPeer: ["discord:123", "discord:alias"] },
-      action: {
-        target: "discord:123",
-        message: "hi",
-      },
-    });
-
-    expect(call?.inboundPeer).toEqual(["discord:123", "discord:alias"]);
   });
 });

@@ -142,7 +142,9 @@ function buildRecoveryDeliverParams(entry: QueuedDelivery, cfg: OpenClawConfig, 
     mirror: entry.mirror,
     session: entry.session,
     gatewayClientScopes: entry.gatewayClientScopes,
-    sendPolicyMode: entry.sendPolicyMode,
+    // Legacy queue entries predate sendPolicyMode and were enqueued by explicit
+    // sends, so replay them with the same compatibility semantics.
+    sendPolicyMode: entry.sendPolicyMode ?? "explicit",
     deliveryQueueId: entry.id,
     deliveryQueueStateDir: stateDir,
     skipQueue: true, // Prevent re-enqueueing during recovery.

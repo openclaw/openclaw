@@ -41,7 +41,6 @@ export type OutboundSendContext = {
   requesterSenderName?: string;
   requesterSenderUsername?: string;
   requesterSenderE164?: string;
-  inboundPeer?: string | readonly string[];
   senderIsOwner?: boolean;
   mediaAccess?: OutboundMediaAccess;
   mediaReadFile?: OutboundMediaReadFile;
@@ -92,7 +91,6 @@ async function sendCoreMessage(params: {
     requesterSenderName: params.ctx.requesterSenderName,
     requesterSenderUsername: params.ctx.requesterSenderUsername,
     requesterSenderE164: params.ctx.requesterSenderE164,
-    inboundPeer: params.ctx.inboundPeer,
     mediaUrl: params.mediaUrl || undefined,
     mediaUrls: params.mediaUrls,
     asVoice: params.asVoice,

@@ -1428,11 +1428,6 @@ export async function runEmbeddedAttempt(
             senderName: params.senderName,
             senderUsername: params.senderUsername,
             senderE164: params.senderE164,
-            inboundPeer:
-              params.inboundPeer ??
-              [params.senderId, params.senderUsername, params.senderE164, params.messageTo].filter(
-                (peer): peer is string => typeof peer === "string" && peer.trim().length > 0,
-              ),
             senderIsOwner: params.senderIsOwner,
             allowGatewaySubagentBinding: params.allowGatewaySubagentBinding,
             sessionKey: sandboxSessionKey,

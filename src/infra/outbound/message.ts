@@ -70,8 +70,6 @@ type MessageSendParams = {
   requesterSenderUsername?: string;
   /** Originating sender E.164 phone number for e164-keyed sender policy matching. */
   requesterSenderE164?: string;
-  /** Trusted inbound peer candidates for same-peer send policy matching. */
-  inboundPeer?: string | readonly string[];
   channel?: string;
   mediaUrl?: string;
   mediaUrls?: string[];
@@ -385,7 +383,6 @@ export async function sendMessage(params: MessageSendParams): Promise<MessageSen
       requesterSenderName: params.requesterSenderName,
       requesterSenderUsername: params.requesterSenderUsername,
       requesterSenderE164: params.requesterSenderE164,
-      inboundPeer: params.inboundPeer,
     });
     if (params.queuePolicy === "required") {
       await assertRequiredMessageSendDurability({

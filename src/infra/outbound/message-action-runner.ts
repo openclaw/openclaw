@@ -116,7 +116,6 @@ export type RunMessageActionParams = {
   requesterSenderName?: string | null;
   requesterSenderUsername?: string | null;
   requesterSenderE164?: string | null;
-  inboundPeer?: string | readonly string[] | null;
   senderIsOwner?: boolean;
   sessionId?: string;
   toolContext?: ChannelThreadingToolContext;
@@ -1036,7 +1035,6 @@ async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActi
       requesterSenderName: input.requesterSenderName ?? undefined,
       requesterSenderUsername: input.requesterSenderUsername ?? undefined,
       requesterSenderE164: input.requesterSenderE164 ?? undefined,
-      inboundPeer: input.inboundPeer ?? undefined,
       senderIsOwner: input.senderIsOwner,
       mediaAccess: ctx.mediaAccess,
       accountId: accountId ?? undefined,

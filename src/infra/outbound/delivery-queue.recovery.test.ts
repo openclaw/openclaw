@@ -669,6 +669,45 @@ describe("delivery-queue recovery", () => {
     });
   });
 
+  it("replays legacy queued entries without sendPolicyMode as explicit under deny-by-default policy", async () => {
+    await enqueueDelivery(
+      {
+        channel: "demo-channel-a",
+        to: "+1",
+        payloads: [{ text: "legacy explicit send" }],
+        session: {
+          key: "agent:main:telegram:direct:sender-1",
+          policyKey: "agent:main:telegram:direct:sender-1",
+          conversationType: "direct",
+        },
+      },
+      tmpDir(),
+    );
+
+    const deliver = vi.fn().mockResolvedValue([]);
+    const result = await recoverPendingDeliveries({
+      deliver: asDeliverFn(deliver),
+      log: createRecoveryLog(),
+      cfg: {
+        session: {
+          sendPolicy: {
+            default: "deny",
+          },
+        },
+      },
+      stateDir: tmpDir(),
+    });
+
+    expect(result.recovered).toBe(1);
+    expect(deliver).toHaveBeenCalledTimes(1);
+    const deliverInput = mockCallArg(deliver) as {
+      sendPolicyMode?: string;
+      skipQueue?: boolean;
+    };
+    expect(deliverInput.sendPolicyMode).toBe("explicit");
+    expect(deliverInput.skipQueue).toBe(true);
+  });
+
   it("respects maxRecoveryMs time budget and bumps deferred retries", async () => {
     await enqueueCrashRecoveryEntries();
     await enqueueDelivery(

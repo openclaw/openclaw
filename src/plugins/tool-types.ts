@@ -45,8 +45,6 @@ export type OpenClawPluginToolContext = {
   deliveryContext?: DeliveryContext;
   /** Trusted sender id from inbound context (runtime-provided, not tool args). */
   requesterSenderId?: string;
-  /** Trusted inbound peer candidates from the originating message context. */
-  inboundPeer?: string | readonly string[];
   sandboxed?: boolean;
 };
 
