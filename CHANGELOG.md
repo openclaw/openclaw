@@ -65,6 +65,7 @@ Docs: https://docs.openclaw.ai
 ### Fixes
 
 - Gateway/restart: honor the configured restart drain budget for embedded runs and avoid spending the deferral timeout twice after forced restart timeouts. (#85708) Thanks @Kaspre.
+- Meeting Notes: include a speaker-labeled transcript section in generated summaries so Discord group voice captures show who said each captured utterance.
 - Discord/voice: recover stale realtime playback state when Discord stream-close/player-idle events do not arrive, and keep generated runtime plugin aliases available after postbuild rewrites.
 - Discord/voice: keep realtime playback running when meeting notes attaches to an existing voice session or a realtime consult starts, and route realtime user transcripts into meeting notes.
 - Config/secrets: preflight active runtime SecretRefs before root and include config writes persist, and roll back unchanged file/env state when post-write refresh fails. Fixes #46531. (#84454) Thanks @samzong.
