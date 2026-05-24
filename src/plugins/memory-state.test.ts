@@ -5,7 +5,9 @@ import {
   clearMemoryPluginState,
   getMemoryCapabilityRegistration,
   getMemoryRuntime,
+  getMemoryRuntimeForPlugin,
   hasMemoryRuntime,
+  listMemoryRuntimeRegistrations,
   listMemoryCorpusSupplements,
   listMemoryPromptSupplements,
   listActiveMemoryPublicArtifacts,
@@ -47,6 +49,7 @@ function expectClearedMemoryState() {
     [],
   );
   expect(listMemoryCorpusSupplements()).toStrictEqual([]);
+  expect(listMemoryRuntimeRegistrations()).toStrictEqual([]);
   expect(getMemoryRuntime()).toBeUndefined();
 }
 
@@ -54,6 +57,7 @@ function createMemoryStateSnapshot() {
   return {
     capability: getMemoryCapabilityRegistration(),
     corpusSupplements: listMemoryCorpusSupplements(),
+    runtimes: listMemoryRuntimeRegistrations(),
     promptSupplements: listMemoryPromptSupplements(),
   };
 }
@@ -108,6 +112,7 @@ describe("memory plugin state", () => {
     expect(buildMemoryPromptSection({ availableTools: new Set() })).toEqual(["legacy prompt"]);
     expect(resolveMemoryFlushPlan({})?.relativePath).toBe("memory/legacy.md");
     expect(getMemoryRuntime()).toBe(runtime);
+    expect(getMemoryRuntimeForPlugin("legacy-memory-v1")).toBe(runtime);
     expect(getMemoryCapabilityRegistration()).toStrictEqual({
       pluginId: "legacy-memory-v1",
       capability: {
@@ -148,6 +153,7 @@ describe("memory plugin state", () => {
       }),
     ).resolves.toEqual({ manager: null, error: "missing" });
     expect(hasMemoryRuntime()).toBe(true);
+    expect(getMemoryRuntimeForPlugin("memory-core")).toBe(runtime);
     expect(getMemoryCapabilityRegistration()).toStrictEqual({
       pluginId: "memory-core",
       capability: {
@@ -231,6 +237,8 @@ describe("memory plugin state", () => {
 
     expect(resolveMemoryFlushPlan({})?.relativePath).toBe("memory/sidecar.md");
     expect(getMemoryRuntime()).toBe(runtime);
+    expect(getMemoryRuntimeForPlugin("memory-core")).toBe(runtime);
+    expect(getMemoryRuntimeForPlugin("memory-lancedb")).toBeUndefined();
     expect(getMemoryCapabilityRegistration()?.pluginId).toBe("memory-lancedb");
     await expect(listActiveMemoryPublicArtifacts({ cfg: {} as never })).resolves.toEqual([
       {
@@ -310,6 +318,7 @@ describe("memory plugin state", () => {
     registerMemoryRuntime(runtime);
 
     expect(getMemoryRuntime()).toBe(runtime);
+    expect(getMemoryRuntimeForPlugin("legacy-memory-v1")).toBe(runtime);
     await expect(
       getMemoryRuntime()?.getMemorySearchManager({
         cfg: {} as never,
@@ -343,6 +352,27 @@ describe("memory plugin state", () => {
     expect(resolveMemoryFlushPlan({})?.relativePath).toBe("memory/first.md");
     expect(listMemoryCorpusSupplements()).toHaveLength(1);
     expect(getMemoryRuntime()).toBe(runtime);
+    expect(getMemoryRuntimeForPlugin("memory-core")).toBe(runtime);
+  });
+
+  it("keeps plugin-id keyed runtimes for multiple recall-capable plugins", async () => {
+    const coreRuntime = createMemoryRuntime();
+    const lancedbRuntime = createMemoryRuntime();
+
+    registerMemoryCapability("memory-core", {
+      runtime: coreRuntime,
+    });
+    registerMemoryCapability("memory-lancedb", {
+      runtime: lancedbRuntime,
+    });
+
+    expect(getMemoryRuntime()).toBe(lancedbRuntime);
+    expect(getMemoryRuntimeForPlugin("memory-core")).toBe(coreRuntime);
+    expect(getMemoryRuntimeForPlugin("memory-lancedb")).toBe(lancedbRuntime);
+    expect(listMemoryRuntimeRegistrations()).toEqual([
+      { pluginId: "memory-core", runtime: coreRuntime },
+      { pluginId: "memory-lancedb", runtime: lancedbRuntime },
+    ]);
   });
 
   it("clearMemoryPluginState resets both registries", () => {

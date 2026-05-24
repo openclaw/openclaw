@@ -140,13 +140,20 @@ export type MemoryPluginCapabilityRegistration = {
 
 const LEGACY_MEMORY_COMPAT_PLUGIN_ID = "legacy-memory-v1";
 
+export type MemoryPluginRuntimeRegistration = {
+  pluginId: string;
+  runtime: MemoryPluginRuntime;
+};
+
 type MemoryPluginState = {
   capability?: MemoryPluginCapabilityRegistration;
+  runtimes: MemoryPluginRuntimeRegistration[];
   corpusSupplements: MemoryCorpusSupplementRegistration[];
   promptSupplements: MemoryPromptSupplementRegistration[];
 };
 
 const memoryPluginState: MemoryPluginState = {
+  runtimes: [],
   corpusSupplements: [],
   promptSupplements: [],
 };
@@ -166,6 +173,9 @@ export function registerMemoryCapability(
   pluginId: string,
   capability: MemoryPluginCapability,
 ): void {
+  if (capability.runtime) {
+    registerMemoryRuntimeRegistration(pluginId, capability.runtime);
+  }
   const existingCapability = memoryPluginState.capability?.capability;
   // A selected memory plugin can add bridge artifacts while memory-core owns sidecar runtime hooks.
   const shouldPreserveExisting =
@@ -291,8 +301,25 @@ export function registerMemoryRuntimeForPlugin(
   patchMemoryCapability(pluginId, { runtime });
 }
 
+function registerMemoryRuntimeRegistration(pluginId: string, runtime: MemoryPluginRuntime): void {
+  const next = memoryPluginState.runtimes.filter(
+    (registration) => registration.pluginId !== pluginId,
+  );
+  next.push({ pluginId, runtime });
+  memoryPluginState.runtimes = next;
+}
+
 export function getMemoryRuntime(): MemoryPluginRuntime | undefined {
   return memoryPluginState.capability?.capability.runtime;
+}
+
+export function getMemoryRuntimeForPlugin(pluginId: string): MemoryPluginRuntime | undefined {
+  return memoryPluginState.runtimes.find((registration) => registration.pluginId === pluginId)
+    ?.runtime;
+}
+
+export function listMemoryRuntimeRegistrations(): MemoryPluginRuntimeRegistration[] {
+  return [...memoryPluginState.runtimes];
 }
 
 export function hasMemoryRuntime(): boolean {
@@ -345,12 +372,14 @@ export function restoreMemoryPluginState(state: MemoryPluginState): void {
         capability: { ...state.capability.capability },
       }
     : undefined;
+  memoryPluginState.runtimes = [...(state.runtimes ?? [])];
   memoryPluginState.corpusSupplements = [...state.corpusSupplements];
   memoryPluginState.promptSupplements = [...state.promptSupplements];
 }
 
 export function clearMemoryPluginState(): void {
   memoryPluginState.capability = undefined;
+  memoryPluginState.runtimes = [];
   memoryPluginState.corpusSupplements = [];
   memoryPluginState.promptSupplements = [];
 }

@@ -78,6 +78,7 @@ import {
   clearMemoryPluginState,
   getMemoryCapabilityRegistration,
   getMemoryRuntime,
+  getMemoryRuntimeForPlugin,
   listActiveMemoryPublicArtifacts,
   listMemoryCorpusSupplements,
   listMemoryPromptSupplements,
@@ -7520,6 +7521,89 @@ module.exports = {
       ["agent-memory-capture", "agent_end"],
     ]);
     expect(getMemoryRuntime()).toBeUndefined();
+  });
+
+  it("keeps recall runtimes addressable by plugin id for global and per-agent owners", async () => {
+    useNoBundledPlugins();
+    const core = writePlugin({
+      id: "memory-core",
+      filename: "memory-core.cjs",
+      body: `module.exports = {
+        id: "memory-core",
+        kind: "memory",
+        register(api) {
+          api.registerMemoryRuntime({
+            async getMemorySearchManager() {
+              return { manager: null, error: "core" };
+            },
+            resolveMemoryBackendConfig() {
+              return { backend: "builtin" };
+            },
+          });
+        },
+      };`,
+    });
+    const honcho = writePlugin({
+      id: "openclaw-honcho",
+      filename: "openclaw-honcho.cjs",
+      body: `module.exports = {
+        id: "openclaw-honcho",
+        kind: "memory",
+        register(api) {
+          api.registerMemoryRuntime({
+            async getMemorySearchManager() {
+              return { manager: null, error: "honcho" };
+            },
+            resolveMemoryBackendConfig() {
+              return { backend: "builtin" };
+            },
+          });
+        },
+      };`,
+    });
+
+    const registry = loadOpenClawPlugins({
+      cache: false,
+      config: {
+        plugins: {
+          load: { paths: [core.file, honcho.file] },
+          slots: { "memory.recall": "memory-core" },
+          entries: {
+            "memory-core": { enabled: true },
+            "openclaw-honcho": { enabled: true },
+          },
+        },
+        agents: {
+          list: [
+            {
+              id: "research",
+              plugins: {
+                slots: { "memory.recall": "openclaw-honcho" },
+              },
+            },
+          ],
+        },
+      },
+    });
+
+    expect(
+      registry.plugins.find((entry) => entry.id === "memory-core")?.memoryRolesSelected,
+    ).toEqual(["recall"]);
+    expect(
+      registry.plugins.find((entry) => entry.id === "openclaw-honcho")?.memoryRolesSelected,
+    ).toEqual(["recall"]);
+    await expect(
+      getMemoryRuntimeForPlugin("memory-core")?.getMemorySearchManager({
+        cfg: {} as never,
+        agentId: "main",
+      }),
+    ).resolves.toEqual({ manager: null, error: "core" });
+    await expect(
+      getMemoryRuntimeForPlugin("openclaw-honcho")?.getMemorySearchManager({
+        cfg: {} as never,
+        agentId: "research",
+      }),
+    ).resolves.toEqual({ manager: null, error: "honcho" });
   });
 
   it("warns about open allowlists only for auto-discovered plugins", () => {

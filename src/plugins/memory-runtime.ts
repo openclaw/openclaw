@@ -3,7 +3,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveUserPath } from "../utils.js";
 import { getLoadedRuntimePluginRegistry } from "./active-runtime-registry.js";
 import { normalizePluginsConfig } from "./config-state.js";
-import { getMemoryRuntime } from "./memory-state.js";
+import { getMemoryRuntime, getMemoryRuntimeForPlugin } from "./memory-state.js";
 import { ensureStandaloneRuntimePluginRegistryLoaded } from "./runtime/standalone-runtime-registry-loader.js";
 import { resolveMemoryRoleSlot } from "./slot-resolution.js";
 
@@ -32,17 +32,22 @@ function resolveMemoryRuntimeWorkspaceDir(
 }
 
 function ensureMemoryRuntime(cfg?: OpenClawConfig, agentId?: string) {
-  const current = getMemoryRuntime();
-  if (current || !cfg) {
-    return current;
+  if (!cfg) {
+    return getMemoryRuntime();
   }
   const onlyPluginIds = resolveMemoryRuntimePluginIds(cfg, agentId);
   if (onlyPluginIds.length === 0) {
-    return getMemoryRuntime();
+    return undefined;
+  }
+  const selectedPluginId = onlyPluginIds[0];
+  const current = getMemoryRuntimeForPlugin(selectedPluginId);
+  if (current) {
+    return current;
   }
   getLoadedRuntimePluginRegistry({ requiredPluginIds: onlyPluginIds });
-  if (getMemoryRuntime()) {
-    return getMemoryRuntime();
+  const runtimeAfterActiveLoad = getMemoryRuntimeForPlugin(selectedPluginId);
+  if (runtimeAfterActiveLoad) {
+    return runtimeAfterActiveLoad;
   }
   const workspaceDir = resolveMemoryRuntimeWorkspaceDir(cfg, agentId);
   ensureStandaloneRuntimePluginRegistryLoaded({
@@ -53,7 +58,7 @@ function ensureMemoryRuntime(cfg?: OpenClawConfig, agentId?: string) {
       workspaceDir,
     },
   });
-  return getMemoryRuntime();
+  return getMemoryRuntimeForPlugin(selectedPluginId);
 }
 
 export async function getActiveMemorySearchManager(params: {
@@ -84,6 +89,7 @@ export async function closeActiveMemorySearchManager(params: {
   cfg: OpenClawConfig;
   agentId: string;
 }): Promise<void> {
-  const runtime = getMemoryRuntime();
+  const [selectedPluginId] = resolveMemoryRuntimePluginIds(params.cfg, params.agentId);
+  const runtime = selectedPluginId ? getMemoryRuntimeForPlugin(selectedPluginId) : undefined;
   await runtime?.closeMemorySearchManager?.(params);
 }
