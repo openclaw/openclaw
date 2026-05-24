@@ -19,6 +19,10 @@ function supportsStore(model: unknown): boolean | undefined {
   return readCompat<{ supportsStore?: boolean }>(model)?.supportsStore;
 }
 
+function supportsPromptCacheKey(model: unknown): boolean | undefined {
+  return readCompat<{ supportsPromptCacheKey?: boolean }>(model)?.supportsPromptCacheKey;
+}
+
 function supportsReasoningEffort(model: unknown): boolean | undefined {
   return readCompat<{ supportsReasoningEffort?: boolean }>(model)?.supportsReasoningEffort;
 }
@@ -47,6 +51,7 @@ describe("resolveMistralCompatPatch", () => {
   it("enables reasoning_effort mapping for mistral-small-latest", () => {
     expect(resolveMistralCompatPatch({ id: MISTRAL_SMALL_LATEST_ID })).toEqual({
       supportsStore: false,
+      supportsPromptCacheKey: true,
       supportsReasoningEffort: true,
       maxTokensField: "max_tokens",
       reasoningEffortMap: MISTRAL_REASONING_EFFORT_MAP,
@@ -56,6 +61,7 @@ describe("resolveMistralCompatPatch", () => {
   it("enables reasoning_effort mapping for mistral-medium-3-5", () => {
     expect(resolveMistralCompatPatch({ id: MISTRAL_MEDIUM_3_5_ID })).toEqual({
       supportsStore: false,
+      supportsPromptCacheKey: true,
       supportsReasoningEffort: true,
       maxTokensField: "max_tokens",
       reasoningEffortMap: MISTRAL_REASONING_EFFORT_MAP,
@@ -74,6 +80,7 @@ describe("applyMistralModelCompat", () => {
   it("applies the Mistral request-shape compat flags", () => {
     const normalized = applyMistralModelCompat({});
     expect(supportsStore(normalized)).toBe(false);
+    expect(supportsPromptCacheKey(normalized)).toBe(true);
     expect(supportsReasoningEffort(normalized)).toBe(false);
     expect(maxTokensField(normalized)).toBe("max_tokens");
     expect(reasoningEffortMap(normalized)).toBeUndefined();
@@ -97,11 +104,13 @@ describe("applyMistralModelCompat", () => {
     const normalized = applyMistralModelCompat({
       compat: {
         supportsStore: true,
+        supportsPromptCacheKey: false,
         supportsReasoningEffort: true,
         maxTokensField: "max_completion_tokens" as const,
       },
     });
     expect(supportsStore(normalized)).toBe(false);
+    expect(supportsPromptCacheKey(normalized)).toBe(true);
     expect(supportsReasoningEffort(normalized)).toBe(false);
     expect(maxTokensField(normalized)).toBe("max_tokens");
   });
@@ -111,11 +120,13 @@ describe("applyMistralModelCompat", () => {
       id: MISTRAL_SMALL_LATEST_ID,
       compat: {
         supportsStore: true,
+        supportsPromptCacheKey: false,
         supportsReasoningEffort: false,
         maxTokensField: "max_completion_tokens" as const,
       },
     });
     expect(supportsStore(normalized)).toBe(false);
+    expect(supportsPromptCacheKey(normalized)).toBe(true);
     expect(supportsReasoningEffort(normalized)).toBe(true);
     expect(maxTokensField(normalized)).toBe("max_tokens");
   });
@@ -124,6 +135,7 @@ describe("applyMistralModelCompat", () => {
     const model = {
       compat: {
         supportsStore: false,
+        supportsPromptCacheKey: true,
         supportsReasoningEffort: false,
         maxTokensField: "max_tokens" as const,
       },
@@ -158,7 +170,7 @@ describe("applyMistralModelCompat", () => {
     ).toEqual({ levels: [{ id: "off" }, { id: "high" }], defaultLevel: "off" });
   });
 
-  it("contributes Mistral transport compat for native, provider-family, and hinted custom routes", () => {
+  it("enables prompt cache key compat only for direct Mistral routes", () => {
     expect(
       contributeMistralResolvedModelCompat({
         modelId: "mistral-large-latest",
@@ -168,7 +180,10 @@ describe("applyMistralModelCompat", () => {
           baseUrl: "https://proxy.example/v1",
         },
       }),
-    ).toEqual(MISTRAL_MODEL_TRANSPORT_PATCH);
+    ).toEqual({
+      ...MISTRAL_MODEL_TRANSPORT_PATCH,
+      supportsPromptCacheKey: false,
+    });
 
     expect(
       contributeMistralResolvedModelCompat({
@@ -190,6 +205,9 @@ describe("applyMistralModelCompat", () => {
           baseUrl: "https://openrouter.ai/api/v1",
         },
       }),
-    ).toEqual(MISTRAL_MODEL_TRANSPORT_PATCH);
+    ).toEqual({
+      ...MISTRAL_MODEL_TRANSPORT_PATCH,
+      supportsPromptCacheKey: false,
+    });
   });
 });
