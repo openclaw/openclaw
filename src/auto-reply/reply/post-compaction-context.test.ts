@@ -1,11 +1,12 @@
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import { readPostCompactionContext } from "./post-compaction-context.js";
 
 describe("readPostCompactionContext", () => {
-  const tmpDir = path.join("/tmp", "test-post-compaction-" + Date.now());
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "test-post-compaction-"));
   const defaultPostCompactionCfg = {
     agents: {
       defaults: {

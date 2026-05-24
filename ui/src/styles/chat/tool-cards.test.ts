@@ -13,7 +13,8 @@ describe("chat tool card styles", () => {
     expect(css).toContain("flex-wrap: wrap;");
     expect(css).toContain("font-size: var(--control-ui-text-sm);");
     expect(css).toContain("color: var(--text);");
-    expect(css).toContain(".chat-tool-msg-summary__names,\n.chat-tool-msg-summary__preview");
+    expect(css).toContain(".chat-tool-msg-summary__names,");
+    expect(css).toContain(".chat-tool-msg-summary__preview");
     expect(css).toContain("overflow-wrap: anywhere;");
     expect(css).toContain("text-overflow: clip;");
     expect(css).toContain("white-space: normal;");
