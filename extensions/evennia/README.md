@@ -32,20 +32,3 @@ The only transport-level checks are:
 - `command` must not contain newlines, so each tool call maps to one Evennia command
 
 Command output is delivered through the normal Evennia channel/event stream rather than synchronously returned by the tool.
-
-## Optional autonomy loop
-
-Accounts may enable a small, transport-local autonomy loop. It only sends configured Evennia commands over the existing Evennia websocket; it does not grant shell, web, messaging, or other OpenClaw tools. Keep command lists narrow and game-safe.
-
-Example account config:
-
-```json
-{
-  "autonomy": {
-    "enabled": true,
-    "intervalMs": 90000,
-    "idleChance": 0.6,
-    "commands": ["look", "pose studies the room"]
-  }
-}
-```

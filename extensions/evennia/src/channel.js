@@ -48,17 +48,6 @@ function resolveAccount(cfg, accountId = null) {
     allowFrom: raw.allowFrom || [],
     allowedRooms: raw.allowedRooms || [],
     respondToAmbientMentions: raw.respondToAmbientMentions !== false,
-    autonomy: {
-      enabled: Boolean(raw.autonomy?.enabled),
-      intervalMs: Math.max(10000, Number(raw.autonomy?.intervalMs || 90000)),
-      idleChance: Math.max(
-        0,
-        Math.min(1, Number(raw.autonomy?.idleChance ?? 0.5)),
-      ),
-      commands: Array.isArray(raw.autonomy?.commands)
-        ? raw.autonomy.commands.map(String).filter(Boolean)
-        : ["look"],
-    },
   };
 }
 
@@ -263,35 +252,6 @@ async function dispatchEvenniaEvent(ctx, account, event) {
   });
 }
 
-function startAutonomyLoop(ctx, account, client) {
-  const autonomy = account.autonomy;
-  if (!autonomy?.enabled || !autonomy.commands.length) return () => {};
-  let busy = false;
-  const tick = async () => {
-    if (busy || client.isClosed()) return;
-    if (Math.random() < autonomy.idleChance) return;
-    const command =
-      autonomy.commands[Math.floor(Math.random() * autonomy.commands.length)];
-    if (!command || command.includes("\n") || command.includes("\r")) return;
-    busy = true;
-    try {
-      await client.command(command);
-    } catch (err) {
-      ctx.log?.warn?.(
-        `evennia autonomy command failed: ${err?.message || err}`,
-      );
-    } finally {
-      busy = false;
-    }
-  };
-  const timer = setInterval(tick, autonomy.intervalMs);
-  timer.unref?.();
-  ctx.abortSignal.addEventListener("abort", () => clearInterval(timer), {
-    once: true,
-  });
-  return () => clearInterval(timer);
-}
-
 export const evenniaPlugin = createChatChannelPlugin({
   base: createChannelPluginBase({
     id: "evennia",
@@ -351,7 +311,6 @@ evenniaPlugin.gateway = {
       ),
     );
     await client.connect();
-    startAutonomyLoop(ctx, ctx.account, client);
     if (ctx.account.character)
       await client.command(`ic ${ctx.account.character}`).catch(() => {});
     await new Promise((resolve) => setTimeout(resolve, 750));
