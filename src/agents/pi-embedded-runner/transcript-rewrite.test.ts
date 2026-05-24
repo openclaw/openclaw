@@ -47,6 +47,10 @@ function createTextContent(text: string) {
   return [{ type: "text", text }];
 }
 
+function getMessageContent(message: AgentMessage): unknown {
+  return "content" in message ? message.content : undefined;
+}
+
 function createReadRewriteSession(options?: { tailAssistantText?: string }) {
   const sessionManager = SessionManager.inMemory();
   const entryIds = appendSessionMessages(sessionManager, [
@@ -351,7 +355,7 @@ describe("rewriteTranscriptEntriesInSessionFile", () => {
       expect(listener).not.toHaveBeenCalled();
 
       const unchangedSession = SessionManager.open(sessionFile);
-      expect(getBranchMessages(unchangedSession).map((message) => message.content)).toEqual([
+      expect(getBranchMessages(unchangedSession).map(getMessageContent)).toEqual([
         "start",
         createTextContent("source reply media"),
         createTextContent("source reply text"),
