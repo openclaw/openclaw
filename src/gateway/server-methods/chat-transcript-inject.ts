@@ -16,6 +16,7 @@ export type GatewayInjectedTranscriptAppendResult = {
   ok: boolean;
   messageId?: string;
   message?: Record<string, unknown>;
+  deduped?: boolean;
   error?: string;
 };
 
@@ -54,6 +55,9 @@ export async function appendInjectedAssistantMessageToTranscript(params: {
   /** When set, used as the assistant `content` array (e.g. text + embedded audio blocks). */
   content?: Array<Record<string, unknown>>;
   idempotencyKey?: string;
+  command?: boolean;
+  interactive?: Record<string, unknown>;
+  channelData?: Record<string, unknown>;
   abortMeta?: GatewayInjectedAbortMeta;
   ttsSupplement?: GatewayInjectedTtsSupplementMarker;
   now?: number;
@@ -97,6 +101,9 @@ export async function appendInjectedAssistantMessageToTranscript(params: {
     model: "gateway-injected",
     ...(params.idempotencyKey ? { idempotencyKey: params.idempotencyKey } : {}),
     ...(params.ttsSupplement ? { openclawTtsSupplement: params.ttsSupplement } : {}),
+    ...(params.command !== undefined ? { command: params.command } : {}),
+    ...(params.interactive ? { interactive: params.interactive } : {}),
+    ...(params.channelData ? { channelData: params.channelData } : {}),
     ...(params.abortMeta
       ? {
           openclawAbort: {
@@ -109,13 +116,26 @@ export async function appendInjectedAssistantMessageToTranscript(params: {
   };
 
   try {
-    const { messageId, message: appendedMessage } = await appendSessionTranscriptMessage({
+    const appendParams = {
       transcriptPath: params.transcriptPath,
       message: messageBody,
       now,
       useRawWhenLinear: true,
       config: params.config,
+    };
+    const appended = await appendSessionTranscriptMessage({
+      ...appendParams,
+      ...(params.idempotencyKey ? { idempotencyLookup: "scan" as const } : {}),
     });
+    if (!appended.appended) {
+      return {
+        ok: true,
+        deduped: true,
+        messageId: appended.messageId,
+        message: appended.message as unknown as Record<string, unknown>,
+      };
+    }
+    const { messageId, message: appendedMessage } = appended;
     emitSessionTranscriptUpdate({
       sessionFile: params.transcriptPath,
       message: appendedMessage,

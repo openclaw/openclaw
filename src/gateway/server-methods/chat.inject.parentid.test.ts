@@ -125,4 +125,49 @@ describe("gateway chat.inject transcript writes", () => {
       fs.rmSync(dir, { recursive: true, force: true });
     }
   });
+
+  it("dedupes concurrent injected assistant writes by idempotency key", async () => {
+    const { dir, transcriptPath } = createTranscriptFixtureSync({
+      prefix: "openclaw-chat-inject-idempotent-",
+      sessionId: "sess-idem",
+    });
+    const updates: Array<{ messageId?: string; message?: unknown }> = [];
+    const unsubscribe = onSessionTranscriptUpdate((update) => updates.push(update));
+
+    try {
+      const results = await Promise.all([
+        appendInjectedAssistantMessageToTranscript({
+          transcriptPath,
+          message: "approval pending",
+          idempotencyKey: "plugin-approval:approval-1:pending",
+        }),
+        appendInjectedAssistantMessageToTranscript({
+          transcriptPath,
+          message: "approval pending",
+          idempotencyKey: "plugin-approval:approval-1:pending",
+        }),
+      ]);
+
+      expect(results).toHaveLength(2);
+      expect(results.filter((result) => result.ok && result.deduped)).toHaveLength(1);
+      const appended = results.find((result) => result.messageId);
+      expect(appended?.ok).toBe(true);
+      expect(appended?.messageId).toBeTypeOf("string");
+
+      const transcriptMessages = readTranscriptLines(transcriptPath)
+        .map(
+          (line) => JSON.parse(line) as { type?: unknown; message?: { idempotencyKey?: unknown } },
+        )
+        .filter((entry) => entry.type === "message");
+      expect(transcriptMessages).toHaveLength(1);
+      expect(transcriptMessages[0]?.message?.idempotencyKey).toBe(
+        "plugin-approval:approval-1:pending",
+      );
+      expect(updates).toHaveLength(1);
+      expect(updates[0]?.messageId).toBe(appended?.messageId);
+    } finally {
+      unsubscribe();
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
 });

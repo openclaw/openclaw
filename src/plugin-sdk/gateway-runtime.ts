@@ -38,6 +38,11 @@ export {
   createOperatorApprovalsGatewayClient,
   withOperatorApprovalsGatewayClient,
 } from "../gateway/operator-approvals-client.js";
+export { injectChatMessageOverGateway } from "../gateway/operator-chat-client.js";
+export type {
+  InjectChatMessageOverGatewayParams,
+  InjectChatMessageOverGatewayResult,
+} from "../gateway/operator-chat-client.js";
 export { ErrorCodes, errorShape } from "../gateway/protocol/index.js";
 export type { EventFrame } from "../gateway/protocol/index.js";
 export type { GatewayRequestHandlerOptions } from "../gateway/server-methods/types.js";

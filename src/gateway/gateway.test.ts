@@ -41,6 +41,12 @@ function nextGatewayId(prefix: string): string {
   return `${prefix}-${process.pid}-${process.env.VITEST_POOL_ID ?? "0"}-${gatewayTestSeq++}`;
 }
 
+function asRecord(value: unknown): Record<string, unknown> | undefined {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : undefined;
+}
+
 async function createEmptyBundledPluginsDir(tempHome: string): Promise<string> {
   const bundledPluginsDir = path.join(tempHome, "openclaw-test-empty-bundled-plugins");
   await fs.mkdir(bundledPluginsDir, { recursive: true });
@@ -229,6 +235,154 @@ describe("gateway e2e", () => {
           retryDelay: 50,
         });
         restore();
+        envSnapshot.restore();
+      }
+    },
+  );
+
+  it(
+    "preserves chat.inject metadata through live ws broadcast and chat.history",
+    { timeout: GATEWAY_E2E_TIMEOUT_MS },
+    async () => {
+      const { envSnapshot, tempHome, workspaceDir } = await setupGatewayTempHome({
+        prefix: "openclaw-gw-chat-inject-home-",
+        minimalGateway: true,
+      });
+
+      const token = nextGatewayId("chat-inject-token");
+      process.env.OPENCLAW_GATEWAY_TOKEN = token;
+
+      const configDir = path.join(tempHome, ".openclaw");
+      await fs.mkdir(configDir, { recursive: true });
+      const configPath = path.join(configDir, "openclaw.json");
+      const cfg = {
+        agents: {
+          defaults: { workspace: workspaceDir },
+          list: [{ id: "dev", default: true }],
+        },
+        gateway: { auth: { token } },
+      };
+
+      const { port, server, client } = await startGatewayWithClient({
+        cfg,
+        configPath,
+        token,
+        clientDisplayName: "vitest-chat-inject-admin",
+      });
+
+      const liveEvents: Array<{ event?: string; payload?: unknown }> = [];
+      let watcher: Awaited<ReturnType<typeof connectGatewayClient>> | undefined;
+      try {
+        watcher = await connectGatewayClient({
+          url: `ws://127.0.0.1:${port}`,
+          token,
+          clientDisplayName: "vitest-chat-inject-watch",
+          onEvent: (evt) => liveEvents.push(evt),
+        });
+
+        const created = (await client.request("sessions.create", {
+          agentId: "dev",
+          label: "AgentKit HITL metadata proof",
+        })) as {
+          ok?: unknown;
+          key?: unknown;
+          sessionId?: unknown;
+        };
+        expect(created.ok).toBe(true);
+        expect(created.sessionId).toBeTypeOf("string");
+        const sessionKey = typeof created.key === "string" ? created.key : undefined;
+        expect(sessionKey).toBeTypeOf("string");
+
+        const interactive = {
+          blocks: [
+            {
+              type: "buttons",
+              buttons: [
+                {
+                  label: "Verify",
+                  value: "/agentkit approve live-proof allow-once",
+                  style: "primary",
+                },
+              ],
+            },
+          ],
+        };
+        const channelData = {
+          agentkit: {
+            approvalId: "live-proof",
+            pluginId: "@guardiola31337/agentkit",
+            state: "pending",
+          },
+        };
+        const idempotencyKey = nextGatewayId("agentkit-approval");
+        const injectParams = {
+          sessionKey,
+          message: "AgentKit verification required.",
+          command: true,
+          interactive,
+          channelData,
+          idempotencyKey,
+        };
+
+        const injected = (await client.request("chat.inject", injectParams)) as {
+          ok?: unknown;
+          messageId?: unknown;
+        };
+        expect(injected.ok).toBe(true);
+        expect(injected.messageId).toBeTypeOf("string");
+
+        const duplicate = (await client.request("chat.inject", injectParams)) as {
+          ok?: unknown;
+          deduped?: unknown;
+        };
+        expect(duplicate).toEqual({ ok: true, deduped: true });
+
+        const matchingChatEvents = () =>
+          liveEvents.filter((evt) => {
+            if (evt.event !== "chat") {
+              return false;
+            }
+            const payload = asRecord(evt.payload);
+            const message = asRecord(payload?.message);
+            return (
+              payload?.sessionKey === sessionKey &&
+              payload?.state === "final" &&
+              message?.idempotencyKey === idempotencyKey
+            );
+          });
+        await expect
+          .poll(() => matchingChatEvents().length, { timeout: 2_000, interval: 50 })
+          .toBe(1);
+        const liveMessage = asRecord(asRecord(matchingChatEvents()[0]?.payload)?.message);
+        expect(liveMessage?.command).toBe(true);
+        expect(liveMessage?.interactive).toEqual(interactive);
+        expect(liveMessage?.channelData).toEqual(channelData);
+        expect(liveMessage?.idempotencyKey).toBe(idempotencyKey);
+
+        const history = (await client.request("chat.history", {
+          sessionKey,
+          limit: 10,
+        })) as { messages?: unknown[] };
+        const historyMessage = history.messages
+          ?.map((message) => asRecord(message))
+          .find((message) => message?.idempotencyKey === idempotencyKey);
+        expect(historyMessage).toBeDefined();
+        expect(historyMessage?.command).toBe(true);
+        expect(historyMessage?.interactive).toEqual(interactive);
+        expect(historyMessage?.channelData).toEqual(channelData);
+        expect(historyMessage?.idempotencyKey).toBe(idempotencyKey);
+      } finally {
+        if (watcher) {
+          await disconnectGatewayClient(watcher);
+        }
+        await disconnectGatewayClient(client);
+        await server.close({ reason: "chat inject metadata proof complete" });
+        await fs.rm(tempHome, {
+          recursive: true,
+          force: true,
+          maxRetries: 10,
+          retryDelay: 50,
+        });
         envSnapshot.restore();
       }
     },

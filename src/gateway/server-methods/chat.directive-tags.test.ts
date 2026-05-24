@@ -2146,6 +2146,166 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     expect(nodeSend?.[2].sessionKey).toBe("agent:main:canon");
   });
 
+  it("chat.inject preserves approval reply metadata in the transcript and live payload", async () => {
+    createTranscriptFixture("openclaw-chat-inject-approval-metadata-");
+    const respond = vi.fn();
+    const context = createChatContext();
+    const interactive = {
+      blocks: [
+        {
+          type: "buttons",
+          buttons: [
+            {
+              label: "Retry",
+              value: "/agentkit approve plugin-approval-1 allow-once",
+              style: "primary",
+            },
+          ],
+        },
+      ],
+    };
+    const channelData = {
+      execApproval: {
+        approvalId: "plugin-approval-1",
+        approvalKind: "plugin",
+        state: "pending",
+      },
+    };
+
+    await chatHandlers["chat.inject"]({
+      params: {
+        sessionKey: "main",
+        message: "Retry World verification.",
+        command: true,
+        interactive,
+        channelData,
+        idempotencyKey: "plugin-approval:plugin-approval-1:retry",
+      },
+      respond,
+      req: {} as never,
+      client: null as never,
+      isWebchatConnect: () => false,
+      context: context as GatewayRequestContext,
+    });
+
+    const response = lastRespondCall(respond);
+    expect(response?.[0]).toBe(true);
+    expect(response?.[1]?.messageId).toBeTypeOf("string");
+    const broadcastMessage = getMessage(lastBroadcastPayload(context));
+    expect(broadcastMessage?.command).toBe(true);
+    expect(broadcastMessage?.interactive).toEqual(interactive);
+    expect(broadcastMessage?.channelData).toEqual(channelData);
+    expect(broadcastMessage?.idempotencyKey).toBe("plugin-approval:plugin-approval-1:retry");
+    const routedMessage = getMessage(lastNodeSendCall(context)?.[2]);
+    expect(routedMessage?.interactive).toEqual(interactive);
+    expect(routedMessage?.channelData).toEqual(channelData);
+    const transcriptMessage = mockState.emittedTranscriptUpdates.at(-1)?.message as
+      | Record<string, any>
+      | undefined;
+    expect(transcriptMessage?.command).toBe(true);
+    expect(transcriptMessage?.interactive).toEqual(interactive);
+    expect(transcriptMessage?.channelData).toEqual(channelData);
+    expect(transcriptMessage?.idempotencyKey).toBe("plugin-approval:plugin-approval-1:retry");
+  });
+
+  it("chat.inject treats repeated idempotency keys as successful duplicate injections", async () => {
+    createTranscriptFixture("openclaw-chat-inject-idempotent-");
+    const respond = vi.fn();
+    const context = createChatContext();
+    const params = {
+      sessionKey: "main",
+      message: "Retry World verification.",
+      command: true,
+      idempotencyKey: "plugin-approval:plugin-approval-1:retry",
+      channelData: {
+        execApproval: {
+          approvalId: "plugin-approval-1",
+          approvalKind: "plugin",
+          state: "pending",
+        },
+      },
+    };
+
+    await chatHandlers["chat.inject"]({
+      params,
+      respond,
+      req: {} as never,
+      client: null as never,
+      isWebchatConnect: () => false,
+      context: context as GatewayRequestContext,
+    });
+    await chatHandlers["chat.inject"]({
+      params,
+      respond,
+      req: {} as never,
+      client: null as never,
+      isWebchatConnect: () => false,
+      context: context as GatewayRequestContext,
+    });
+
+    const firstResponse = mockCallAt(respond, 0) as
+      | [boolean, Record<string, any> | undefined]
+      | undefined;
+    expect(firstResponse?.[0]).toBe(true);
+    expect(firstResponse?.[1]?.messageId).toBeTypeOf("string");
+    const duplicateResponse = lastRespondCall(respond);
+    expect(duplicateResponse?.[0]).toBe(true);
+    expect(duplicateResponse?.[1]).toEqual({ ok: true, deduped: true });
+    expect(context.broadcast).toHaveBeenCalledTimes(1);
+    expect(context.nodeSendToSession).toHaveBeenCalledTimes(1);
+    expect(mockState.emittedTranscriptUpdates).toHaveLength(1);
+  });
+
+  it("chat.inject dedupes concurrent idempotency-key retries before broadcasting", async () => {
+    createTranscriptFixture("openclaw-chat-inject-idempotent-concurrent-");
+    const respondA = vi.fn();
+    const respondB = vi.fn();
+    const context = createChatContext();
+    const params = {
+      sessionKey: "main",
+      message: "Retry World verification.",
+      command: true,
+      idempotencyKey: "plugin-approval:plugin-approval-1:retry-concurrent",
+      channelData: {
+        execApproval: {
+          approvalId: "plugin-approval-1",
+          approvalKind: "plugin",
+          state: "pending",
+        },
+      },
+    };
+
+    await Promise.all([
+      chatHandlers["chat.inject"]({
+        params,
+        respond: respondA,
+        req: {} as never,
+        client: null as never,
+        isWebchatConnect: () => false,
+        context: context as GatewayRequestContext,
+      }),
+      chatHandlers["chat.inject"]({
+        params,
+        respond: respondB,
+        req: {} as never,
+        client: null as never,
+        isWebchatConnect: () => false,
+        context: context as GatewayRequestContext,
+      }),
+    ]);
+
+    const responses = [lastRespondCall(respondA), lastRespondCall(respondB)];
+    expect(responses.filter((response) => response?.[1]?.messageId)).toHaveLength(1);
+    expect(responses.filter((response) => response?.[1]?.deduped === true)).toHaveLength(1);
+    expect(context.broadcast).toHaveBeenCalledTimes(1);
+    expect(context.nodeSendToSession).toHaveBeenCalledTimes(1);
+    expect(mockState.emittedTranscriptUpdates).toHaveLength(1);
+    const broadcastMessage = getMessage(lastBroadcastPayload(context));
+    expect(broadcastMessage?.idempotencyKey).toBe(
+      "plugin-approval:plugin-approval-1:retry-concurrent",
+    );
+  });
+
   it("chat.send non-streaming final strips external untrusted wrapper metadata from final payload text", async () => {
     createTranscriptFixture("openclaw-chat-send-untrusted-meta-");
     mockState.finalText = `hello\n\n${UNTRUSTED_CONTEXT_SUFFIX}`;

@@ -6470,21 +6470,37 @@ public struct ChatInjectParams: Codable, Sendable {
     public let sessionkey: String
     public let message: String
     public let label: String?
+    public let idempotencykey: String?
+    public let command: Bool?
+    public let interactive: [String: AnyCodable]?
+    public let channeldata: [String: AnyCodable]?
 
     public init(
         sessionkey: String,
         message: String,
-        label: String?)
+        label: String?,
+        idempotencykey: String?,
+        command: Bool?,
+        interactive: [String: AnyCodable]?,
+        channeldata: [String: AnyCodable]?)
     {
         self.sessionkey = sessionkey
         self.message = message
         self.label = label
+        self.idempotencykey = idempotencykey
+        self.command = command
+        self.interactive = interactive
+        self.channeldata = channeldata
     }
 
     private enum CodingKeys: String, CodingKey {
         case sessionkey = "sessionKey"
         case message
         case label
+        case idempotencykey = "idempotencyKey"
+        case command
+        case interactive
+        case channeldata = "channelData"
     }
 }
 
