@@ -74,6 +74,32 @@ type LockableFunction = ((...args: unknown[]) => unknown) & {
   __openclawSessionWriteLockInstalled?: boolean;
 };
 
+type SessionEventHookContext = {
+  session: unknown;
+  active: boolean;
+};
+
+const sessionEventHookContext = new AsyncLocalStorage<SessionEventHookContext>();
+
+function isProcessingAgentEventInCurrentChain(session: unknown): boolean {
+  const context = sessionEventHookContext.getStore();
+  return context?.active === true && context.session === session;
+}
+
+async function withProcessingAgentEvent<T>(
+  session: unknown,
+  run: () => Promise<T> | T,
+): Promise<T> {
+  const context: SessionEventHookContext = { session, active: true };
+  return await sessionEventHookContext.run(context, async () => {
+    try {
+      return await run();
+    } finally {
+      context.active = false;
+    }
+  });
+}
+
 function sessionHasExtensionHandlers(session: SessionEventProcessor, eventType: string): boolean {
   const extensionRunner = session["_extensionRunner"];
   const hasHandlers = extensionRunner?.hasHandlers;
@@ -662,6 +688,15 @@ async function waitForSessionEventQueue(session: unknown): Promise<void> {
   }
 }
 
+async function waitForSessionEventQueueBeforeHook(session: unknown): Promise<void> {
+  // Hook calls made by _handleAgentEvent are already inside the current queue
+  // entry. Draining there waits on itself; detached/external hook work still drains.
+  if (isProcessingAgentEventInCurrentChain(session)) {
+    return;
+  }
+  await waitForSessionEventQueue(session);
+}
+
 function installAwaitableSessionEventQueue(session: unknown): void {
   const owner = session as SessionEventQueueBridge;
   const original = owner["_handleAgentEvent"];
@@ -731,10 +766,14 @@ export function installSessionEventWriteLock(params: {
     event: unknown,
     signal?: unknown,
   ) {
-    if (!eventMayReachTranscriptWriters(session, event)) {
-      return await original.call(this, event, signal);
-    }
-    return await params.withSessionWriteLock(async () => await original.call(this, event, signal));
+    return await withProcessingAgentEvent(session, async () => {
+      if (!eventMayReachTranscriptWriters(session, event)) {
+        return await original.call(this, event, signal);
+      }
+      return await params.withSessionWriteLock(
+        async () => await original.call(this, event, signal),
+      );
+    });
   };
   wrapped["__openclawSessionEventQueueAwaitInstalled"] =
     original["__openclawSessionEventQueueAwaitInstalled"];
@@ -756,28 +795,28 @@ export function installSessionExternalHookWriteLock(params: {
       owner: agent as Record<string, unknown>,
       key: "beforeToolCall",
       shouldLock: () => true,
-      waitBeforeLock: () => waitForSessionEventQueue(session),
+      waitBeforeLock: () => waitForSessionEventQueueBeforeHook(session),
       withSessionWriteLock: params.withSessionWriteLock,
     });
     installLockableFunction({
       owner: agent as Record<string, unknown>,
       key: "afterToolCall",
       shouldLock: () => sessionHasExtensionHandlers(session, "tool_result"),
-      waitBeforeLock: () => waitForSessionEventQueue(session),
+      waitBeforeLock: () => waitForSessionEventQueueBeforeHook(session),
       withSessionWriteLock: params.withSessionWriteLock,
     });
     installLockableFunction({
       owner: agent as Record<string, unknown>,
       key: "onPayload",
       shouldLock: () => sessionHasExtensionHandlers(session, "before_provider_request"),
-      waitBeforeLock: () => waitForSessionEventQueue(session),
+      waitBeforeLock: () => waitForSessionEventQueueBeforeHook(session),
       withSessionWriteLock: params.withSessionWriteLock,
     });
     installLockableFunction({
       owner: agent as Record<string, unknown>,
       key: "onResponse",
       shouldLock: () => sessionHasExtensionHandlers(session, "after_provider_response"),
-      waitBeforeLock: () => waitForSessionEventQueue(session),
+      waitBeforeLock: () => waitForSessionEventQueueBeforeHook(session),
       withSessionWriteLock: params.withSessionWriteLock,
     });
   }

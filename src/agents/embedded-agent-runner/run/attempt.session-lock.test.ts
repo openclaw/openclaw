@@ -1189,6 +1189,147 @@ describe("embedded attempt session lock lifecycle", () => {
     ]);
   });
 
+  it("does not wait on the session event queue from a hook running during active event processing", async () => {
+    const events: string[] = [];
+    const session = {
+      _agentEventQueue: Promise.resolve(),
+      _extensionRunner: {
+        hasHandlers: vi.fn((eventType: string) => eventType === "tool_call"),
+      },
+      _processAgentEvent: vi.fn(async (event: { type?: string }) => {
+        events.push(`process:${event.type}`);
+        await session.agent.beforeToolCall();
+        events.push("process:end");
+      }),
+      _handleAgentEvent(event: { type?: string }) {
+        events.push(`handle:${event.type}`);
+        session["_agentEventQueue"] = session["_agentEventQueue"].then(() =>
+          session["_processAgentEvent"](event),
+        );
+        session["_agentEventQueue"].catch(() => {});
+      },
+      agent: {
+        beforeToolCall: vi.fn(async () => {
+          events.push("hook");
+        }),
+      },
+    };
+
+    installSessionEventWriteLock({
+      session,
+      withSessionWriteLock: async (run) => {
+        events.push("event-lock");
+        return await run();
+      },
+    });
+    installSessionExternalHookWriteLock({
+      session,
+      withSessionWriteLock: async (run) => {
+        events.push("hook-lock");
+        return await run();
+      },
+    });
+
+    const result = session["_handleAgentEvent"]({
+      type: "tool_call",
+    }) as unknown as Promise<unknown>;
+    const completion = await Promise.race([
+      result.then(() => "done"),
+      new Promise<string>((resolve) => {
+        setTimeout(() => resolve("timeout"), 25);
+      }),
+    ]);
+
+    expect(completion).toBe("done");
+    expect(events).toEqual([
+      "event-lock",
+      "handle:tool_call",
+      "process:tool_call",
+      "hook-lock",
+      "hook",
+      "process:end",
+    ]);
+  });
+
+  it("drains queued session events for async hook work spawned after event processing returns", async () => {
+    const events: string[] = [];
+    let releaseQueue!: () => void;
+    let spawnedHook!: Promise<void>;
+    const session = {
+      _agentEventQueue: Promise.resolve(),
+      _extensionRunner: {
+        hasHandlers: vi.fn((eventType: string) => eventType === "tool_call"),
+      },
+      _processAgentEvent: vi.fn(async (event: { type?: string }) => {
+        events.push(`process:${event.type}`);
+        spawnedHook = new Promise<void>((resolve, reject) => {
+          setTimeout(() => {
+            session.agent.beforeToolCall().then(resolve, reject);
+          }, 0);
+        });
+        session["_agentEventQueue"] = new Promise<void>((resolve) => {
+          releaseQueue = resolve;
+        }).then(() => {
+          events.push("queue-drained");
+        });
+        events.push("process:end");
+      }),
+      _handleAgentEvent(event: { type?: string }) {
+        events.push(`handle:${event.type}`);
+        session["_agentEventQueue"] = session["_agentEventQueue"].then(() =>
+          session["_processAgentEvent"](event),
+        );
+        session["_agentEventQueue"].catch(() => {});
+      },
+      agent: {
+        beforeToolCall: vi.fn(async () => {
+          events.push("hook");
+        }),
+      },
+    };
+
+    installSessionEventWriteLock({
+      session,
+      withSessionWriteLock: async (run) => {
+        events.push("event-lock");
+        return await run();
+      },
+    });
+    installSessionExternalHookWriteLock({
+      session,
+      withSessionWriteLock: async (run) => {
+        events.push("hook-lock");
+        return await run();
+      },
+    });
+
+    session["_handleAgentEvent"]({ type: "tool_call" });
+    await new Promise<void>((resolve) => setTimeout(resolve, 5));
+
+    const beforeQueueRelease = await Promise.race([
+      spawnedHook.then(() => "done"),
+      new Promise<string>((resolve) => {
+        setTimeout(() => resolve("waiting"), 25);
+      }),
+    ]);
+
+    expect(beforeQueueRelease).toBe("waiting");
+    expect(events).toEqual(["event-lock", "handle:tool_call", "process:tool_call", "process:end"]);
+
+    releaseQueue();
+    await spawnedHook;
+
+    expect(events).toEqual([
+      "event-lock",
+      "handle:tool_call",
+      "process:tool_call",
+      "process:end",
+      "queue-drained",
+      "hook-lock",
+      "hook",
+    ]);
+  });
+
   it("locks OpenClaw extension hooks that can mutate the session outside agent events", async () => {
     const locked: string[] = [];
     const called: string[] = [];
