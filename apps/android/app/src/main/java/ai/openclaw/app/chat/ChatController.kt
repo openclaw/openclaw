@@ -522,7 +522,7 @@ class ChatController(
       array.mapNotNull { item ->
         val obj = item.asObjectOrNull() ?: return@mapNotNull null
         val role = obj["role"].asStringOrNull() ?: return@mapNotNull null
-        val content = obj["content"].asArrayOrNull()?.mapNotNull(::parseMessageContent) ?: emptyList()
+        val content = obj["content"].asArrayOrNull()?.mapNotNull(::parseChatMessageContent) ?: emptyList()
         val ts = obj["timestamp"].asLongOrNull()
         ChatMessage(
           id = UUID.randomUUID().toString(),
@@ -538,21 +538,6 @@ class ChatController(
       thinkingLevel = thinkingLevel,
       messages = reconcileMessageIds(previous = previousMessages, incoming = messages),
     )
-  }
-
-  private fun parseMessageContent(el: JsonElement): ChatMessageContent? {
-    val obj = el.asObjectOrNull() ?: return null
-    val type = obj["type"].asStringOrNull() ?: "text"
-    return if (type == "text") {
-      ChatMessageContent(type = "text", text = obj["text"].asStringOrNull())
-    } else {
-      ChatMessageContent(
-        type = type,
-        mimeType = obj["mimeType"].asStringOrNull(),
-        fileName = obj["fileName"].asStringOrNull(),
-        base64 = obj["content"].asStringOrNull(),
-      )
-    }
   }
 
   private fun parseSessions(jsonString: String): List<ChatSessionEntry> {
@@ -586,6 +571,27 @@ class ChatController(
       "high" -> "high"
       else -> "off"
     }
+}
+
+internal fun parseChatMessageContent(el: JsonElement): ChatMessageContent? {
+  val obj = el.asObjectOrNull() ?: return null
+  return when (obj["type"].asStringOrNull() ?: "text") {
+    "text", "input_text", "output_text" ->
+      ChatMessageContent(
+        type = "text",
+        text = obj["text"].asStringOrNull() ?: obj["content"].asStringOrNull(),
+      )
+
+    "image" ->
+      ChatMessageContent(
+        type = "image",
+        mimeType = obj["mimeType"].asStringOrNull(),
+        fileName = obj["fileName"].asStringOrNull(),
+        base64 = obj["content"].asStringOrNull()?.takeIf { it.isNotBlank() },
+      )
+
+    else -> null
+  }
 }
 
 internal data class MainSessionState(
