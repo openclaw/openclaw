@@ -112,36 +112,64 @@ function detectTelegramBotInfoCacheLegacyStateMigration(params: {
   });
 }
 
+function topicNameCacheImportSource(params: {
+  sourceStorePath: string;
+  targetStorePath?: string;
+}): { sourcePath: string; namespace: string } {
+  const targetStorePath = params.targetStorePath ?? params.sourceStorePath;
+  const scope = resolveTopicNameCacheScope(targetStorePath);
+  return {
+    sourcePath: resolveTopicNameCachePath(params.sourceStorePath),
+    namespace: resolveTopicNameCacheNamespace(scope),
+  };
+}
+
 function detectTelegramTopicNameCacheLegacyStateMigration(params: {
   cfg: OpenClawConfig;
   env: NodeJS.ProcessEnv;
   stateDir?: string;
 }): ChannelLegacyStateMigrationPlan[] {
-  const storePath = resolveStorePath(params.cfg.session?.store, { env: params.env });
-  const runtimePersistedPath = resolveTopicNameCachePath(storePath);
+  const accountSources = listTelegramAccountIds(params.cfg).map((accountId) => {
+    const storePath = resolveStorePath(params.cfg.session?.store, {
+      env: params.env,
+      agentId: accountId,
+    });
+    return topicNameCacheImportSource({ sourceStorePath: storePath });
+  });
+  const defaultStorePath = resolveStorePath(params.cfg.session?.store, { env: params.env });
+  const defaultAccountStorePath = resolveStorePath(params.cfg.session?.store, {
+    env: params.env,
+    agentId: resolveDefaultTelegramAccountId(params.cfg),
+  });
   const legacyStorePath = resolveLegacySessionStorePath(params);
-  const legacyPersistedPath = resolveTopicNameCachePath(legacyStorePath);
-  const scope = resolveTopicNameCacheScope(storePath);
-  const namespace = resolveTopicNameCacheNamespace(scope);
-  const sourcePaths = Array.from(new Set([runtimePersistedPath, legacyPersistedPath]));
-  return sourcePaths.flatMap((persistedPath) => {
-    if (!fileExists(persistedPath)) {
+  const sourcesByKey = new Map(
+    [
+      ...accountSources,
+      topicNameCacheImportSource({ sourceStorePath: defaultStorePath }),
+      topicNameCacheImportSource({
+        sourceStorePath: legacyStorePath,
+        targetStorePath: defaultAccountStorePath,
+      }),
+    ].map((source) => [`${source.sourcePath}\0${source.namespace}`, source] as const),
+  );
+  return [...sourcesByKey.values()].flatMap((source) => {
+    if (!fileExists(source.sourcePath)) {
       return [];
     }
     return {
       kind: "plugin-state-import",
       label: "Telegram forum topic-name cache",
-      sourcePath: persistedPath,
-      targetPath: `plugin state:${namespace}`,
+      sourcePath: source.sourcePath,
+      targetPath: `plugin state:${source.namespace}`,
       pluginId: "telegram",
-      namespace,
+      namespace: source.namespace,
       maxEntries: TELEGRAM_TOPIC_NAME_CACHE_MAX_ENTRIES,
       scopeKey: "",
       cleanupSource: "rename",
-      preview: `- Telegram forum topic-name cache: ${persistedPath} → plugin state (${namespace})`,
+      preview: `- Telegram forum topic-name cache: ${source.sourcePath} → plugin state (${source.namespace})`,
       readEntries: () => {
         return listTelegramLegacyTopicNameCacheEntries({
-          persistedPath,
+          persistedPath: source.sourcePath,
           maxEntries: TELEGRAM_TOPIC_NAME_CACHE_MAX_ENTRIES,
         });
       },
