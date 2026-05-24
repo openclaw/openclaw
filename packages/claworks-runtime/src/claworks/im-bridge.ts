@@ -100,6 +100,10 @@ export async function bridgeImMessage(
     return { action: "denied", reason };
   }
 
+  const sessionId = normalized.groupId
+    ? `${normalized.channel}:group:${normalized.groupId}`
+    : `${normalized.channel}:user:${normalized.userId}`;
+
   const payload: Record<string, unknown> = {
     _im_channel: normalized.channel,
     _im_message_id: normalized.messageId,
@@ -113,14 +117,12 @@ export async function bridgeImMessage(
     channel: normalized.channel,
     message_id: normalized.messageId,
     group_id: normalized.groupId ?? null,
+    session_id: sessionId,
     timestamp: new Date().toISOString(),
     ...normalized.extra,
   };
 
   // 将用户消息追加到对话上下文，供 Playbook 中 _session 变量使用
-  const sessionId = normalized.groupId
-    ? `${normalized.channel}:group:${normalized.groupId}`
-    : `${normalized.channel}:user:${normalized.userId}`;
   runtime.contextEngine?.append(sessionId, "user", normalized.text, {
     channel: normalized.channel,
     userId: normalized.userId,

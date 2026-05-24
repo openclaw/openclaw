@@ -102,9 +102,23 @@ describe("bridgeImMessage", () => {
     expect(payload.user_id).toBe("u4");
     expect(payload.channel).toBe("feishu");
     expect(payload.group_id).toBe("g1");
+    expect(payload.session_id).toBe("feishu:group:g1");
     expect(typeof payload.timestamp).toBe("string");
     // raw fields still present
     expect(payload._im_message).toBe("查一下知识库");
     expect(payload._im_user_id).toBe("u4");
+  });
+
+  it("passes session_id to intent_route playbook trigger payload", async () => {
+    const runtime = mockRuntime({ rbacAllowed: true, ingressAction: "intent_route" });
+    await bridgeImMessage(runtime, {
+      channel: "feishu",
+      messageId: "m5",
+      userId: "u5",
+      text: "help me",
+    });
+    const [, triggerPayload] = (runtime.playbookEngine.trigger as ReturnType<typeof vi.fn>).mock
+      .calls[0] as [string, Record<string, unknown>];
+    expect(triggerPayload.session_id).toBe("feishu:user:u5");
   });
 });
