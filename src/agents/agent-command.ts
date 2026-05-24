@@ -915,12 +915,6 @@ async function agentCommandInternal(
       defaultModel,
       ...modelManifestContext,
     });
-    const modelAliasIndex = buildModelAliasIndex({
-      cfg,
-      defaultProvider,
-      ...modelManifestContext,
-    });
-
     if (needsModelCatalog) {
       modelCatalog = loadManifestModelCatalog({ config: cfg, workspaceDir });
       visibilityPolicy = createModelVisibilityPolicy({
@@ -953,6 +947,11 @@ async function agentCommandInternal(
         })
       : null;
     if (channelModelOverride) {
+      const modelAliasIndex = buildModelAliasIndex({
+        cfg,
+        defaultProvider,
+        ...modelManifestContext,
+      });
       const channelRef = resolveModelRefFromString({
         cfg,
         raw: channelModelOverride.model,
