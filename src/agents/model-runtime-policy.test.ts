@@ -305,10 +305,6 @@ describe("resolveModelRuntimePolicy", () => {
     });
   });
 
-  // Regression: agents.list[].models entries must win over agents.defaults.models
-  // for empty-provider matches. Without per-scope ambiguity handling, a
-  // conflicting default would silently veto a clean agent-specific match.
-  // See docs/gateway/config-agents.md precedence and PR #85970 finding [P1].
   it("prefers an agent-specific model entry over a conflicting defaults entry when the caller provider is empty", () => {
     const config = {
       agents: {
@@ -342,13 +338,14 @@ describe("resolveModelRuntimePolicy", () => {
     });
   });
 
-  it("returns ambiguous {} when the same scope has matches under multiple providers and the caller provider is empty", () => {
+  it("does not fall back to a provider wildcard when exact bare-model matches are ambiguous", () => {
     const config = {
       agents: {
         defaults: {
           models: {
             "openai/foo-1": { agentRuntime: { id: "codex" } },
             "azure/foo-1": { agentRuntime: { id: "codex" } },
+            "anthropic/*": { agentRuntime: { id: "claude-cli" } },
           },
         },
       },

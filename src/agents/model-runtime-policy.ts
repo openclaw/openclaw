@@ -21,6 +21,15 @@ export type ResolvedModelRuntimePolicy = {
 
 type ModelEntryMatchKind = "none" | "exact" | "provider-wildcard";
 
+type AgentModelRuntimePolicyMatch = {
+  provider: string;
+  policy: AgentRuntimePolicyConfig;
+};
+
+type AgentModelRuntimePolicyResolution = ResolvedModelRuntimePolicy & {
+  ambiguous?: true;
+};
+
 function hasRuntimePolicy(value: AgentRuntimePolicyConfig | undefined): boolean {
   return Boolean(value?.id?.trim());
 }
@@ -66,6 +75,20 @@ function normalizeModelIdForProvider(
   return trimmed.slice(slash + 1).trim() || undefined;
 }
 
+function parseProviderModelKey(key: string): { provider: string; modelId: string } | undefined {
+  const slash = key.indexOf("/");
+  if (slash <= 0) {
+    return undefined;
+  }
+  const provider = normalizeProviderId(key.slice(0, slash));
+  const modelId = key.slice(slash + 1).trim();
+  return provider && modelId ? { provider, modelId } : undefined;
+}
+
+function providerMatchesCaller(provider: string, callerProvider: string): boolean {
+  return !callerProvider || provider === callerProvider;
+}
+
 function modelEntryMatches(params: {
   entry: Pick<ModelDefinitionConfig, "id">;
   provider: string | undefined;
@@ -83,23 +106,18 @@ function modelEntryMatchKind(params: {
   if (entryId === params.modelId) {
     return "exact";
   }
-  const slash = entryId.indexOf("/");
-  if (slash <= 0) {
+  const parsed = parseProviderModelKey(entryId);
+  if (!parsed) {
     return "none";
   }
-  // Empty/undefined caller provider means "no provider constraint"; the entry's
-  // slash-prefix is itself authoritative. Distinguishes the bare-model session
-  // case (saved before provider-prefix normalization) from a real mismatch.
   const callerProvider = normalizeProviderId(params.provider ?? "");
-  const entryProvider = normalizeProviderId(entryId.slice(0, slash));
-  if (callerProvider && callerProvider !== entryProvider) {
+  if (!providerMatchesCaller(parsed.provider, callerProvider)) {
     return "none";
   }
-  const entryModelId = entryId.slice(slash + 1).trim();
-  if (entryModelId === params.modelId) {
+  if (parsed.modelId === params.modelId) {
     return "exact";
   }
-  if (entryModelId === "*") {
+  if (parsed.modelId === "*") {
     return "provider-wildcard";
   }
   return "none";
@@ -121,16 +139,12 @@ function modelKeyIsProviderWildcard(params: {
   key: string;
   provider: string | undefined;
 }): boolean {
-  const slash = params.key.indexOf("/");
-  if (slash <= 0) {
+  const parsed = parseProviderModelKey(params.key);
+  if (!parsed) {
     return false;
   }
   const callerProvider = normalizeProviderId(params.provider ?? "");
-  const entryProvider = normalizeProviderId(params.key.slice(0, slash));
-  if (callerProvider && callerProvider !== entryProvider) {
-    return false;
-  }
-  return params.key.slice(slash + 1).trim() === "*";
+  return parsed.modelId === "*" && providerMatchesCaller(parsed.provider, callerProvider);
 }
 
 function resolveAgentModelEntryRuntimePolicy(params: {
@@ -140,7 +154,7 @@ function resolveAgentModelEntryRuntimePolicy(params: {
   agentId?: string;
   sessionKey?: string;
   matchKind: Exclude<ModelEntryMatchKind, "none">;
-}): ResolvedModelRuntimePolicy {
+}): AgentModelRuntimePolicyResolution {
   const modelId = normalizeModelIdForProvider(params.provider, params.modelId);
   if (!params.config || (!modelId && params.matchKind !== "provider-wildcard")) {
     return {};
@@ -158,14 +172,8 @@ function resolveAgentModelEntryRuntimePolicy(params: {
     params.config.agents?.defaults?.models,
   ];
   const callerProvider = normalizeProviderId(params.provider ?? "");
-  // Walk model maps in precedence order (agent-specific before defaults) and
-  // resolve within the first scope that has any matches. When the caller
-  // provider is empty, multiple provider-prefixed entries in the SAME scope
-  // (e.g. defaults has both "openai/gpt-5" and "azure/gpt-5") are ambiguous and
-  // return {}; a lower-precedence scope must not introduce ambiguity that
-  // overrides a clean higher-precedence match.
   for (const models of modelMaps) {
-    const scopeMatches: Array<{ provider: string; policy: AgentRuntimePolicyConfig }> = [];
+    const scopeMatches: AgentModelRuntimePolicyMatch[] = [];
     for (const [key, entry] of Object.entries(models ?? {})) {
       const matches = modelId
         ? modelKeyMatchKind({ key, provider: params.provider, modelId }) === params.matchKind
@@ -174,9 +182,7 @@ function resolveAgentModelEntryRuntimePolicy(params: {
       if (!matches || !policy || !hasRuntimePolicy(policy)) {
         continue;
       }
-      const slash = key.indexOf("/");
-      const entryProvider = slash > 0 ? normalizeProviderId(key.slice(0, slash)) : "";
-      scopeMatches.push({ provider: entryProvider, policy });
+      scopeMatches.push({ provider: parseProviderModelKey(key)?.provider ?? "", policy });
     }
     if (scopeMatches.length === 0) {
       continue;
@@ -190,7 +196,7 @@ function resolveAgentModelEntryRuntimePolicy(params: {
     }
     const distinctProviders = new Set(scopeMatches.map((m) => m.provider));
     if (distinctProviders.size > 1) {
-      return {};
+      return { ambiguous: true };
     }
     return {
       policy: scopeMatches[0].policy,
@@ -230,6 +236,9 @@ export function resolveModelRuntimePolicy(params: {
   }
 
   const agentModelPolicy = resolveAgentModelEntryRuntimePolicy({ ...params, matchKind: "exact" });
+  if (agentModelPolicy.ambiguous) {
+    return {};
+  }
   if (agentModelPolicy.policy) {
     return agentModelPolicy;
   }
