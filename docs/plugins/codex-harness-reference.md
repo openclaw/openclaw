@@ -313,7 +313,9 @@ available timeout in this order:
 - For `image_generate` without a configured timeout, the 120 second
   image-generation default.
 - For the media-understanding `image` tool, `tools.media.image.timeoutSeconds`
-  converted to milliseconds, or the 60 second media default.
+  converted to milliseconds, or the 60 second media default. For image
+  understanding, this applies to the request itself and is not reduced by
+  earlier preparation work.
 - The 90 second dynamic-tool default.
 
 Dynamic tool budgets are capped at 600000 ms. On timeout, OpenClaw aborts the
