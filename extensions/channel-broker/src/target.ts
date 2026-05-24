@@ -175,6 +175,7 @@ export function inferChannelBrokerTargetChatType(
 function parseTelegramTopicConversation(rawConversationId: string): {
   conversationId: string;
   threadId?: string;
+  conversationType?: BrokerConversationType;
 } {
   const topicMatch = /^(.*):topic:([^:]+)$/i.exec(rawConversationId);
   if (topicMatch?.[1] && topicMatch[2]) {
@@ -193,12 +194,41 @@ function parseTelegramTopicConversation(rawConversationId: string): {
   return { conversationId: rawConversationId };
 }
 
+function parseDiscordConversation(rawConversationId: string): {
+  conversationId: string;
+  threadId?: string;
+  conversationType?: BrokerConversationType;
+} {
+  const kindMatch = /^(user|dm|direct|channel|thread):(.+)$/i.exec(rawConversationId);
+  const rawKind = kindMatch?.[1]?.toLowerCase();
+  const id = kindMatch?.[2]?.trim();
+  if (!rawKind || !id) {
+    return { conversationId: rawConversationId };
+  }
+  const conversationType: BrokerConversationType =
+    rawKind === "user" || rawKind === "dm"
+      ? "direct"
+      : rawKind === "thread"
+        ? "thread"
+        : rawKind === "direct"
+          ? "direct"
+          : "channel";
+  return {
+    conversationId: id,
+    conversationType,
+  };
+}
+
 function parsePlatformConversation(params: { platform: string; rawConversationId: string }): {
   conversationId: string;
   threadId?: string;
+  conversationType?: BrokerConversationType;
 } {
   if (params.platform === "telegram") {
     return parseTelegramTopicConversation(params.rawConversationId);
+  }
+  if (params.platform === "discord") {
+    return parseDiscordConversation(params.rawConversationId);
   }
   return { conversationId: params.rawConversationId };
 }
@@ -268,6 +298,7 @@ export function parseChannelBrokerTarget(params: {
     conversationType:
       explicitType ??
       parsed.conversationType ??
+      platformConversation.conversationType ??
       configuredDefaultType ??
       inferredType ??
       params.account.defaultConversationType,
