@@ -1169,9 +1169,10 @@ describe("runCodexAppServerAttempt", () => {
   });
 
   it("starts active OpenClaw sandbox turns with Codex native execution disabled", async () => {
+    const runtimeId = `codex-test-runtime-${path.basename(tempDir)}`;
     const restoreSandboxBackend = registerSandboxBackend("codex-test-sandbox", async () => ({
       id: "codex-test-sandbox",
-      runtimeId: "codex-test-runtime",
+      runtimeId,
       runtimeLabel: "Codex Test Sandbox",
       workdir: "/workspace",
       buildExecSpec: async () => ({
@@ -1203,6 +1204,8 @@ describe("runCodexAppServerAttempt", () => {
               mode: "all",
               backend: "codex-test-sandbox",
               scope: "session",
+              workspaceAccess: "rw",
+              prune: { idleHours: 0, maxAgeDays: 0 },
             },
           },
         },
@@ -1234,9 +1237,10 @@ describe("runCodexAppServerAttempt", () => {
   });
 
   it("routes native Codex execution through an OpenClaw sandbox exec-server when opted in", async () => {
+    const runtimeId = `codex-test-runtime-${path.basename(tempDir)}`;
     const restoreSandboxBackend = registerSandboxBackend("codex-test-sandbox", async () => ({
       id: "codex-test-sandbox",
-      runtimeId: "codex-test-runtime",
+      runtimeId,
       runtimeLabel: "Codex Test Sandbox",
       workdir: "/workspace",
       buildExecSpec: async () => ({
@@ -1268,6 +1272,8 @@ describe("runCodexAppServerAttempt", () => {
               mode: "all",
               backend: "codex-test-sandbox",
               scope: "session",
+              workspaceAccess: "rw",
+              prune: { idleHours: 0, maxAgeDays: 0 },
             },
           },
         },
@@ -6097,7 +6103,7 @@ describe("runCodexAppServerAttempt", () => {
       turnStartParams.collaborationMode?.settings?.developer_instructions ?? "";
     expect(collaborationInstructions).toContain("# Collaboration Mode: Default");
     expect(collaborationInstructions).toContain("request_user_input availability");
-    expect(collaborationInstructions).toContain("OpenClaw Workspace Instructions");
+    expect(collaborationInstructions).toContain("OpenClaw Agent Soul");
     expect(collaborationInstructions).toContain(soulGuidance);
     expect(collaborationInstructions).toContain(identityGuidance);
     expect(collaborationInstructions).not.toContain(toolGuidance);
