@@ -353,22 +353,34 @@ function installPackageLocalBundledDependencies(params) {
 
   console.error(`[plugin-npm-publish] installing bundled dependencies for ${params.pluginDir}`);
   const packageJsonPath = resolvePackageJsonPath(params.packageDir);
-  const publishPackageJsonText = fs.readFileSync(packageJsonPath, "utf8");
+  const packedPackageJsonText = fs.readFileSync(packageJsonPath, "utf8");
+  const installPackageJsonBase = {
+    ...params.packageJson,
+  };
+  delete installPackageJsonBase.peerDependencies;
+  delete installPackageJsonBase.peerDependenciesMeta;
+  const installPackageJson = packageJsonForShrinkwrap(
+    installPackageJsonBase,
+    readShrinkwrapOverrides(),
+  );
+  const installPackageJsonText = `${JSON.stringify(installPackageJson, null, 2)}\n`;
+  if (installPackageJsonText !== packedPackageJsonText) {
+    // npm validates peer edges against the shrinkwrap during ci even when peers are omitted.
+    // The peer metadata belongs in the packed plugin, not in this temporary dependency install.
+    fs.writeFileSync(packageJsonPath, installPackageJsonText, "utf8");
+  }
   try {
-    const installPackageJson = packageJsonForShrinkwrap(packageJson, readShrinkwrapOverrides());
-    const installPackageJsonText = `${JSON.stringify(installPackageJson, null, 2)}\n`;
-    if (installPackageJsonText !== publishPackageJsonText) {
-      fs.writeFileSync(packageJsonPath, installPackageJsonText, "utf8");
-    }
     const result = spawnNpmSync(
       [
         "ci",
+        "--install-strategy=shallow",
         "--omit=dev",
         "--omit=peer",
         "--legacy-peer-deps",
         "--ignore-scripts",
         "--no-audit",
         "--no-fund",
+        "--workspaces=false",
         "--loglevel=error",
       ],
       {
@@ -387,7 +399,7 @@ function installPackageLocalBundledDependencies(params) {
     }
     installMissingOptionalBundledDependencies(params);
   } finally {
-    fs.writeFileSync(packageJsonPath, publishPackageJsonText, "utf8");
+    fs.writeFileSync(packageJsonPath, packedPackageJsonText, "utf8");
   }
   return () => {
     fs.rmSync(nodeModulesPath, { recursive: true, force: true });
