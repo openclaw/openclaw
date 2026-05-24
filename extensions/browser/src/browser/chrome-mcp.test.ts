@@ -169,7 +169,6 @@ describe("chrome MCP page parsing", () => {
       "--no-usage-statistics",
       "--experimentalStructuredContent",
       "--experimental-page-id-routing",
-      "--no-usage-statistics",
       "--userDataDir",
       "/tmp/brave-profile",
     ]);
@@ -189,7 +188,6 @@ describe("chrome MCP page parsing", () => {
       "--no-usage-statistics",
       "--experimentalStructuredContent",
       "--experimental-page-id-routing",
-      "--no-usage-statistics",
     ]);
   });
 
@@ -206,7 +204,6 @@ describe("chrome MCP page parsing", () => {
       "--no-usage-statistics",
       "--experimentalStructuredContent",
       "--experimental-page-id-routing",
-      "--no-usage-statistics",
     ]);
   });
 
@@ -269,7 +266,6 @@ describe("chrome MCP page parsing", () => {
       "--no-usage-statistics",
       "--experimentalStructuredContent",
       "--experimental-page-id-routing",
-      "--no-usage-statistics",
     ]);
   });
 
@@ -307,7 +303,7 @@ describe("chrome MCP page parsing", () => {
     ]);
   });
 
-  it("runs Windows Chrome MCP tree cleanup before closing the stdio client", async () => {
+  it("uses Windows taskkill tree cleanup without waiting for SDK stdio close timeout", async () => {
     const session = createFakeSession();
     Object.assign(session, { ownsProcessTree: true });
     const closeOrder: string[] = [];
@@ -324,7 +320,23 @@ describe("chrome MCP page parsing", () => {
 
     await ensureChromeMcpAvailable("chrome-live", undefined, { ephemeral: true });
 
-    expect(closeOrder).toEqual(["taskkill:123", "client.close"]);
+    expect(closeOrder).toEqual(["taskkill:123"]);
+  });
+
+  it("falls back to SDK stdio close when Windows taskkill cleanup fails", async () => {
+    const session = createFakeSession();
+    Object.assign(session, { ownsProcessTree: true });
+    const closeMock = vi.fn().mockResolvedValue(undefined);
+    session.client.close = closeMock as typeof session.client.close;
+    setChromeMcpProcessCleanupDepsForTest({
+      platform: "win32",
+      taskkillProcessTree: vi.fn().mockRejectedValue(new Error("taskkill failed")),
+    });
+    setChromeMcpSessionFactoryForTest(async () => session);
+
+    await ensureChromeMcpAvailable("chrome-live", undefined, { ephemeral: true });
+
+    expect(closeMock).toHaveBeenCalledTimes(1);
   });
 
   it("redacts remote CDP URL secrets from attach failures", async () => {

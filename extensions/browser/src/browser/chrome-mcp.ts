@@ -552,7 +552,7 @@ async function terminateChromeMcpProcessTree(
 
   const deps = chromeMcpProcessCleanupDepsForTest;
   if ((deps?.platform ?? process.platform) === "win32") {
-    await taskkillChromeMcpProcessTree(rootPid, deps).catch(() => {});
+    await taskkillChromeMcpProcessTree(rootPid, deps);
     return;
   }
 
@@ -599,16 +599,17 @@ async function closeChromeMcpClientAndProcess(params: {
     rootPid && (deps?.platform ?? process.platform) === "win32",
   );
   if (terminateBeforeClientClose) {
-    await terminateChromeMcpProcessTree(rootPid, descendantPids).catch((err) => {
+    try {
+      await terminateChromeMcpProcessTree(rootPid, descendantPids);
+    } catch (err) {
       log.trace(
         `Unable to pre-terminate Chrome MCP subprocess tree for pid ${rootPid}: ${err instanceof Error ? err.message : String(err)}`,
       );
-    });
-  }
-  await params.client.close().catch(() => {});
-  if (terminateBeforeClientClose) {
+      await params.client.close().catch(() => {});
+    }
     return;
   }
+  await params.client.close().catch(() => {});
   await terminateChromeMcpProcessTree(rootPid, descendantPids).catch((err) => {
     log.trace(
       `Unable to fully terminate Chrome MCP subprocess tree for pid ${rootPid}: ${err instanceof Error ? err.message : String(err)}`,
