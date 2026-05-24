@@ -1151,7 +1151,7 @@ describe("provider-runtime", () => {
         label: "Google",
         hookAliases: ["google-vertex"],
         auth: [],
-        normalizeModelId: ({ modelId }) => modelId.replace("flash-lite", "flash-lite-preview"),
+        normalizeModelId: ({ modelId }) => modelId.replace("flash-lite-preview", "flash-lite"),
       },
     ]);
 
@@ -1160,10 +1160,10 @@ describe("provider-runtime", () => {
         provider: "google-vertex",
         context: {
           provider: "google-vertex",
-          modelId: "gemini-3.1-flash-lite",
+          modelId: "gemini-3.1-flash-lite-preview",
         },
       }),
-    ).toBe("gemini-3.1-flash-lite-preview");
+    ).toBe("gemini-3.1-flash-lite");
     expect(resolvePluginProvidersMock).toHaveBeenCalledTimes(1);
   });
 

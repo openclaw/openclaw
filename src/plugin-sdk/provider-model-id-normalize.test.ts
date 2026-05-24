@@ -17,5 +17,15 @@ describe("provider model id normalization", () => {
   it("does not rewrite already-current Gemini replacement ids", () => {
     expect(normalizeGooglePreviewModelId("gemini-3.1-pro-preview")).toBe("gemini-3.1-pro-preview");
     expect(normalizeGooglePreviewModelId("gemini-2.5-flash")).toBe("gemini-2.5-flash");
+    expect(normalizeGooglePreviewModelId("gemini-3.1-flash-lite")).toBe("gemini-3.1-flash-lite");
+  });
+
+  it("migrates the retired Gemini 3.1 flash-lite preview id to the GA model", () => {
+    expect(normalizeGooglePreviewModelId("gemini-3.1-flash-lite-preview")).toBe(
+      "gemini-3.1-flash-lite",
+    );
+    expect(normalizeGooglePreviewModelId("google/gemini-3.1-flash-lite-preview")).toBe(
+      "google/gemini-3.1-flash-lite",
+    );
   });
 });
