@@ -1686,7 +1686,7 @@ export async function dispatchReplyFromConfig(
           routedFinalCount: result.ok ? 1 : 0,
         };
       }
-      throwIfDispatchOperationAborted();
+      throwIfFinalDeliveryAborted();
       markInboundDedupeReplayUnsafe();
       const queuedFinal = dispatcher.sendFinalReply(normalizedPayload);
       if (queuedFinal) {
