@@ -21,6 +21,7 @@ import {
 
 const DEFAULT_TIMEOUT_MS = 10_000;
 const MODE_CACHE_TTL_MS = 30_000;
+const NATIVE_PREFERENCE_GRACE_MS = 50;
 
 export type SignalSseEvent = {
   event?: string;
@@ -53,6 +54,19 @@ function resolveAutoProbeTimeoutMs(timeoutMs: number | undefined): number {
   return typeof timeoutMs === "number" && Number.isFinite(timeoutMs) && timeoutMs > 0
     ? timeoutMs
     : DEFAULT_TIMEOUT_MS;
+}
+
+function waitForNativePreferenceGrace(
+  nativeResultPromise: Promise<{ ok: boolean }>,
+): Promise<{ ok: boolean }> {
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => resolve({ ok: false }), NATIVE_PREFERENCE_GRACE_MS);
+    timer.unref?.();
+    nativeResultPromise.then((result) => {
+      clearTimeout(timer);
+      resolve(result);
+    });
+  });
 }
 
 async function resolveAutoApiMode(
@@ -111,21 +125,36 @@ export async function detectSignalApiMode(
   options: { account?: string; requireContainerReceive?: boolean } = {},
 ): Promise<"native" | "container"> {
   const containerAccount = options.requireContainerReceive ? options.account?.trim() : undefined;
-  const nativePromise = nativeCheck(baseUrl, timeoutMs).catch(() => ({ ok: false }));
-  const containerPromise = containerAccount
+  const nativeResultPromise = nativeCheck(baseUrl, timeoutMs).catch(() => ({ ok: false }));
+  const containerResultPromise = containerAccount
     ? containerCheck(baseUrl, timeoutMs, containerAccount).catch(() => ({ ok: false }))
     : options.requireContainerReceive
       ? Promise.resolve({ ok: false })
       : containerCheck(baseUrl, timeoutMs).catch(() => ({ ok: false }));
 
-  const [nativeResult, containerResult] = await Promise.all([nativePromise, containerPromise]);
-  if (nativeResult.ok) {
-    return "native";
+  const nativeHealthyPromise = nativeResultPromise.then((result) => {
+    if (result.ok) {
+      return "native" as const;
+    }
+    throw new Error("native not ok");
+  });
+  const containerHealthyPromise = containerResultPromise.then((result) => {
+    if (result.ok) {
+      return "container" as const;
+    }
+    throw new Error("container not ok");
+  });
+
+  try {
+    const firstHealthy = await Promise.any([nativeHealthyPromise, containerHealthyPromise]);
+    if (firstHealthy === "native") {
+      return "native";
+    }
+    const nativeResult = await waitForNativePreferenceGrace(nativeResultPromise);
+    return nativeResult.ok ? "native" : "container";
+  } catch {
+    throw new Error(`Signal API not reachable at ${baseUrl}`);
   }
-  if (containerResult.ok) {
-    return "container";
-  }
-  throw new Error(`Signal API not reachable at ${baseUrl}`);
 }
 
 /**

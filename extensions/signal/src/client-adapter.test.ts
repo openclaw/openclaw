@@ -169,6 +169,21 @@ describe("detectSignalApiMode", () => {
     expect(result).toBe("native");
   });
 
+  it("returns container after the native preference grace when native does not respond", async () => {
+    vi.useFakeTimers();
+    try {
+      mockNativeCheck.mockImplementation(() => new Promise(() => {}));
+      mockContainerCheck.mockResolvedValue({ ok: true, status: 200 });
+
+      const result = detectSignalApiMode("http://localhost:8080");
+      await Promise.resolve();
+      await vi.advanceTimersByTimeAsync(50);
+      await expect(result).resolves.toBe("container");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("throws error when neither endpoint responds", async () => {
     mockNativeCheck.mockResolvedValue({ ok: false, status: null, error: "Connection refused" });
     mockContainerCheck.mockResolvedValue({ ok: false, status: null, error: "Connection refused" });
