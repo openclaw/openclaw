@@ -2,6 +2,11 @@ import { bundledPluginRoot } from "../../scripts/lib/bundled-plugin-paths.mjs";
 
 export const splitChannelExtensionShardSpecs = [
   {
+    id: "channel-broker",
+    kind: "extensionChannelBroker",
+    config: "test/vitest/vitest.extension-channel-broker.config.ts",
+  },
+  {
     id: "discord",
     kind: "extensionDiscord",
     config: "test/vitest/vitest.extension-discord.config.ts",

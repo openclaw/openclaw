@@ -1,0 +1,12 @@
+{
+  "id": "channel-broker",
+  "activation": {
+    "onStartup": false
+  },
+  "channels": ["channel-broker"],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

@@ -1,0 +1,48 @@
+{
+  "name": "@openclaw/channel-broker",
+  "version": "2026.5.24",
+  "private": true,
+  "description": "OpenClaw channel broker plugin",
+  "type": "module",
+  "exports": {
+    ".": "./index.ts",
+    "./api.js": "./api.ts",
+    "./runtime-api.js": "./runtime-api.ts"
+  },
+  "dependencies": {
+    "zod": "4.4.3"
+  },
+  "devDependencies": {
+    "@openclaw/plugin-sdk": "workspace:*",
+    "openclaw": "workspace:*"
+  },
+  "peerDependencies": {
+    "openclaw": ">=2026.5.24"
+  },
+  "peerDependenciesMeta": {
+    "openclaw": {
+      "optional": true
+    }
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ],
+    "channel": {
+      "id": "channel-broker",
+      "label": "Channel Broker",
+      "selectionLabel": "Channel Broker",
+      "detailLabel": "Channel Broker",
+      "docsPath": "/channels/channel-broker",
+      "docsLabel": "channel-broker",
+      "blurb": "Provider-owned broker for Slack, Discord, Telegram, WhatsApp, Signal, iMessage, Matrix, and other messaging platforms.",
+      "systemImage": "network",
+      "order": 60,
+      "exposure": {
+        "configured": true,
+        "setup": true,
+        "docs": true
+      }
+    }
+  }
+}

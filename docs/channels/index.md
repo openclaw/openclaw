@@ -27,6 +27,7 @@ Text is supported everywhere; media and reactions vary by channel.
 
 ## Supported channels
 
+- [Channel Broker](/channels/channel-broker) - Provider-owned broker for consolidating Slack, Discord, Telegram, WhatsApp, Signal, iMessage, Matrix, and long-tail messaging providers behind one OpenClaw message lifecycle.
 - [Discord](/channels/discord) - Discord Bot API + Gateway; supports servers, channels, and DMs.
 - [Feishu](/channels/feishu) - Feishu/Lark bot via WebSocket (bundled plugin).
 - [Google Chat](/channels/googlechat) - Google Chat API app via HTTP webhook (downloadable plugin).

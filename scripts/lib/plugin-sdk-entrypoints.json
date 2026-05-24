@@ -18,6 +18,7 @@
   "setup-adapter-runtime",
   "setup-runtime",
   "channel-setup",
+  "channel-broker",
   "channel-streaming",
   "setup-tools",
   "approval-auth-runtime",
