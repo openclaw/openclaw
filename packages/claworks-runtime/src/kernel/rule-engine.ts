@@ -505,6 +505,102 @@ export const BUILTIN_IM_QUICK_RULES_TABLE: DecisionTable = {
       },
       stopOnMatch: false, // 不阻断后续规则，允许意图分类继续
     },
+    {
+      id: "alarm_report",
+      name: "告警上报",
+      priority: 84,
+      condition: {
+        or: [
+          { field: "text", op: "contains", value: "超标" },
+          { field: "text", op: "contains", value: "停机" },
+          { field: "text", op: "contains", value: "报修" },
+          { field: "text", op: "contains", value: "故障上报" },
+          { field: "text", op: "contains", value: "上报故障" },
+          { field: "text", op: "contains", value: "有故障" },
+        ],
+      },
+      action: {
+        kind: "publish_event",
+        params: { event_type: "alarm.report_requested", route_intent: "alarm_report" },
+      },
+      stopOnMatch: true,
+    },
+    {
+      id: "workorder_create",
+      name: "创建工单",
+      priority: 78,
+      condition: {
+        or: [
+          { field: "text", op: "contains", value: "创建工单" },
+          { field: "text", op: "contains", value: "新建工单" },
+          { field: "text", op: "contains", value: "派工" },
+          { field: "text", op: "contains", value: "生成工单" },
+          { field: "text", op: "contains", value: "建一个工单" },
+        ],
+      },
+      action: {
+        kind: "publish_event",
+        params: { event_type: "work_order.create_requested", route_intent: "workorder_create" },
+      },
+      stopOnMatch: true,
+    },
+    {
+      id: "equipment_status",
+      name: "设备状态查询",
+      priority: 76,
+      condition: {
+        or: [
+          { field: "text", op: "contains", value: "设备状态" },
+          { field: "text", op: "contains", value: "运行参数" },
+          { field: "text", op: "contains", value: "查设备" },
+          { field: "text", op: "contains", value: "当前读数" },
+          { field: "text", op: "contains", value: "设备正常吗" },
+        ],
+      },
+      action: {
+        kind: "publish_event",
+        params: { event_type: "equipment.status_requested", route_intent: "equipment_status" },
+      },
+      stopOnMatch: true,
+    },
+    {
+      id: "knowledge_query",
+      name: "知识库查询",
+      priority: 74,
+      condition: {
+        or: [
+          { field: "text", op: "contains", value: "日报" },
+          { field: "text", op: "contains", value: "手册" },
+          { field: "text", op: "contains", value: "知识库" },
+          { field: "text", op: "contains", value: "操作规程" },
+          { field: "text", op: "contains", value: "操作手册" },
+          { field: "text", op: "contains", value: "标准规范" },
+        ],
+      },
+      action: {
+        kind: "publish_event",
+        params: { event_type: "knowledge.query_requested", route_intent: "knowledge_query" },
+      },
+      stopOnMatch: true,
+    },
+    {
+      id: "task_query",
+      name: "任务查询",
+      priority: 70,
+      condition: {
+        or: [
+          { field: "text", op: "contains", value: "查任务" },
+          { field: "text", op: "contains", value: "任务进度" },
+          { field: "text", op: "contains", value: "我的任务" },
+          { field: "text", op: "contains", value: "任务状态" },
+        ],
+      },
+      action: {
+        kind: "publish_event",
+        params: { event_type: "task.query_requested", route_intent: "task_query" },
+      },
+      stopOnMatch: true,
+    },
   ],
 };
 
