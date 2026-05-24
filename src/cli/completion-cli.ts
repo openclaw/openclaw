@@ -49,7 +49,7 @@ function fishWords(values: readonly string[]): string {
 
 function fishOptionFlags(options: Command["options"], wantsValue: boolean): string[] {
   return options.flatMap((option) => {
-    if (Boolean(option.required || option.optional) !== wantsValue) {
+    if ((option.required || option.optional) !== wantsValue) {
       return [];
     }
     return splitOptionFlags(option.flags).filter((flag) => flag.startsWith("-"));

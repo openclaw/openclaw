@@ -62,7 +62,7 @@ function waitForNativePreferenceGrace(
   return new Promise((resolve) => {
     const timer = setTimeout(() => resolve({ ok: false }), NATIVE_PREFERENCE_GRACE_MS);
     timer.unref?.();
-    nativeResultPromise.then((result) => {
+    void nativeResultPromise.then((result) => {
       clearTimeout(timer);
       resolve(result);
     });

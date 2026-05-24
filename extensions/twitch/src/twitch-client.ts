@@ -49,7 +49,12 @@ export class TwitchClientManager {
         );
         this.logger.info(`Added user ${userId} to RefreshingAuthProvider for ${account.username}`);
       } catch (err) {
-        throw new Error(`Failed to add user to RefreshingAuthProvider: ${formatErrorMessage(err)}`);
+        throw new Error(
+          `Failed to add user to RefreshingAuthProvider: ${formatErrorMessage(err)}`,
+          {
+            cause: err,
+          },
+        );
       }
 
       authProvider.onRefresh((userId, token) => {

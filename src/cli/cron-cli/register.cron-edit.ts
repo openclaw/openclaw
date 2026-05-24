@@ -254,7 +254,7 @@ export function registerCronEditCommand(cron: Command) {
             typeof opts.channel === "string" || typeof opts.to === "string" || hasDeliveryThreadId;
           const hasDeliveryAccount = typeof opts.account === "string";
           const hasBestEffort = typeof opts.bestEffortDeliver === "boolean";
-          const hasAgentTurnPatch =
+          const hasAgentTurnPayloadField =
             typeof opts.message === "string" ||
             Boolean(model) ||
             Boolean(thinking) ||
@@ -262,7 +262,9 @@ export function registerCronEditCommand(cron: Command) {
             typeof opts.lightContext === "boolean" ||
             typeof opts.tools === "string" ||
             Array.isArray(opts.tools) ||
-            opts.clearTools ||
+            opts.clearTools;
+          const hasAgentTurnPatch =
+            hasAgentTurnPayloadField ||
             hasDeliveryModeFlag ||
             hasDeliveryTarget ||
             hasDeliveryAccount ||
@@ -299,8 +301,11 @@ export function registerCronEditCommand(cron: Command) {
             const delivery: Record<string, unknown> = {};
             if (hasDeliveryModeFlag) {
               delivery.mode = opts.announce || opts.deliver === true ? "announce" : "none";
-            } else if (opts.bestEffortDeliver === true) {
-              // Back-compat: toggling best-effort alone has historically implied announce mode.
+            } else if (
+              opts.bestEffortDeliver === true ||
+              (hasAgentTurnPayloadField && hasBestEffort)
+            ) {
+              // Back-compat: best-effort true and payload edits historically implied announce mode.
               delivery.mode = "announce";
             }
             if (typeof opts.channel === "string") {
