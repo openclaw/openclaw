@@ -8,6 +8,7 @@ import {
 } from "../infra/diagnostics-timeline.js";
 import { resolveUserPath } from "../utils.js";
 import { resolveCompatibilityHostVersion } from "../version.js";
+import { getCurrentPluginMetadataSnapshot } from "./current-plugin-metadata-snapshot.js";
 import { resolveDefaultPluginNpmDir } from "./install-paths.js";
 import { hashJson } from "./installed-plugin-index-hash.js";
 import { resolveInstalledPluginIndexPolicyHash } from "./installed-plugin-index-policy.js";
@@ -24,6 +25,7 @@ import type {
   LoadPluginMetadataSnapshotParams,
   PluginMetadataSnapshot,
   PluginMetadataSnapshotOwnerMaps,
+  ResolvePluginMetadataSnapshotParams,
 } from "./plugin-metadata-snapshot.types.js";
 import { createPluginRegistryIdNormalizer } from "./plugin-registry-id-normalizer.js";
 import {
@@ -74,6 +76,7 @@ export type {
   PluginMetadataSnapshotMetrics,
   PluginMetadataSnapshotOwnerMaps,
   PluginMetadataSnapshotRegistryDiagnostic,
+  ResolvePluginMetadataSnapshotParams,
 } from "./plugin-metadata-snapshot.types.js";
 
 function fileFingerprint(filePath: string): unknown {
@@ -694,6 +697,45 @@ export function listPluginOriginsFromMetadataSnapshot(
   snapshot: Pick<PluginMetadataSnapshot, "plugins">,
 ): ReadonlyMap<string, PluginManifestRecord["origin"]> {
   return new Map(snapshot.plugins.map((record) => [record.id, record.origin]));
+}
+
+export function resolvePluginMetadataSnapshot(
+  params: ResolvePluginMetadataSnapshotParams,
+): PluginMetadataSnapshot {
+  const canUseCurrentSnapshot =
+    params.allowCurrent !== false &&
+    params.stateDir === undefined &&
+    params.preferPersisted !== false;
+  if (canUseCurrentSnapshot) {
+    const current = getCurrentPluginMetadataSnapshot({
+      config: params.config,
+      env: params.env,
+      ...(params.workspaceDir !== undefined ? { workspaceDir: params.workspaceDir } : {}),
+      ...(params.allowWorkspaceScopedCurrent === true
+        ? { allowWorkspaceScopedSnapshot: true }
+        : {}),
+    });
+    if (!current) {
+      return loadPluginMetadataSnapshot(params);
+    }
+    if (!params.index) {
+      return current;
+    }
+    if (
+      isPluginMetadataSnapshotCompatible({
+        snapshot: current,
+        config: params.config,
+        env: params.env,
+        workspaceDir:
+          params.workspaceDir ??
+          (params.allowWorkspaceScopedCurrent === true ? current.workspaceDir : undefined),
+        index: params.index,
+      })
+    ) {
+      return current;
+    }
+  }
+  return loadPluginMetadataSnapshot(params);
 }
 
 // Process-local memoization keeps the hot snapshot work cached while checking

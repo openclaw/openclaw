@@ -13,11 +13,11 @@ import {
   isValidEnvSecretRefId,
 } from "../config/types.secrets.js";
 import { privateFileStore } from "../infra/private-file-store.js";
-import { getCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
 import { resolveInstalledManifestRegistryIndexFingerprint } from "../plugins/manifest-registry-installed.js";
-import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
-import { isRecord } from "../utils.js";
-import { normalizeOptionalSecretInput } from "../utils/normalize-secret-input.js";
+import {
+  resolvePluginMetadataSnapshot,
+  type PluginMetadataSnapshot,
+} from "../plugins/plugin-metadata-snapshot.js";
 import {
   resolveAgentWorkspaceDir,
   resolveDefaultAgentDir,
@@ -109,6 +109,26 @@ async function readExistingModelsFile(pathname: string): Promise<{
   }
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function normalizeOptionalSecretValue(value: unknown): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const collapsed = value.replace(/[\r\n\u2028\u2029]+/g, "");
+  let latin1Only = "";
+  for (const char of collapsed) {
+    const codePoint = char.codePointAt(0);
+    if (typeof codePoint === "number" && codePoint <= 0xff) {
+      latin1Only += char;
+    }
+  }
+  const normalized = latin1Only.trim();
+  return normalized ? normalized : undefined;
+}
+
 function resolveProviderCatalog(value: unknown): Record<string, unknown> {
   if (!isRecord(value) || !isRecord(value.providers)) {
     return {};
@@ -139,7 +159,7 @@ function hasConfiguredProviderApiKey(cfg: OpenClawConfig, providerKey: string): 
     return false;
   }
   return (
-    normalizeOptionalSecretInput(provider.apiKey) !== undefined ||
+    normalizeOptionalSecretValue(provider.apiKey) !== undefined ||
     coerceSecretRef(provider.apiKey) !== null
   );
 }
@@ -165,7 +185,7 @@ function resolveMigratedModelsJsonApiKeyCredential(
   if (
     isKnownEnvApiKeyMarker(existingApiKey) ||
     (isValidEnvSecretRefId(existingApiKey) &&
-      normalizeOptionalSecretInput(env[existingApiKey]) !== undefined)
+      normalizeOptionalSecretValue(env[existingApiKey]) !== undefined)
   ) {
     return {
       ...base,
@@ -331,9 +351,11 @@ export async function ensureOpenClawModelsJson(
       : resolveAgentWorkspaceDir(cfg, resolveDefaultAgentId(cfg)));
   const pluginMetadataSnapshot =
     options.pluginMetadataSnapshot ??
-    getCurrentPluginMetadataSnapshot({
+    resolvePluginMetadataSnapshot({
       config: cfg,
+      env: createConfigRuntimeEnv(cfg),
       ...(workspaceDir ? { workspaceDir } : {}),
+      allowWorkspaceScopedCurrent: workspaceDir === undefined,
     });
   const agentDir = agentDirOverride?.trim() ? agentDirOverride.trim() : resolveDefaultAgentDir(cfg);
   const targetPath = path.join(agentDir, "models.json");
