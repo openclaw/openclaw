@@ -227,6 +227,19 @@ describe("TwitchClientManager", () => {
       await expect(connection).rejects.toThrow("disconnected");
     });
 
+    it("does not cache pending connections after disconnectAll", async () => {
+      mockConnect.mockImplementationOnce(() => {});
+
+      const connection = manager.getClient(testAccount);
+      await Promise.resolve();
+
+      await manager.disconnectAll();
+      authSuccessHandlers[0]?.();
+
+      await expect(connection).rejects.toThrow("Twitch connection cancelled");
+      expect(mockQuit).toHaveBeenCalledTimes(2);
+    });
+
     it("should create separate clients for different accounts", async () => {
       await manager.getClient(testAccount);
       await manager.getClient(testAccount2);
