@@ -53,6 +53,12 @@ OPENCLAW_EFFECTIVE_HOME="$(resolve_openclaw_effective_home)"
 PREFIX="${OPENCLAW_PREFIX:-${HOME}/.openclaw}"
 OPENCLAW_VERSION="${OPENCLAW_VERSION:-latest}"
 NODE_VERSION="${OPENCLAW_NODE_VERSION:-22.22.0}"
+NODE_VERSION_REQUESTED=0
+if [[ -n "${OPENCLAW_NODE_VERSION:-}" ]]; then
+  NODE_VERSION_REQUESTED=1
+fi
+MIN_NODE_VERSION="22.19.0"
+APK_NODE_BIN_DIR="/usr/bin"
 SHARP_IGNORE_GLOBAL_LIBVIPS="${SHARP_IGNORE_GLOBAL_LIBVIPS:-1}"
 NPM_LOGLEVEL="${OPENCLAW_NPM_LOGLEVEL:-error}"
 INSTALL_METHOD="${OPENCLAW_INSTALL_METHOD:-npm}"
@@ -215,6 +221,14 @@ ensure_git() {
         else
           fail "Git missing and sudo unavailable. Install git and retry."
         fi
+      elif command -v apk >/dev/null 2>&1; then
+        if is_root; then
+          apk add --no-cache git
+        elif has_sudo; then
+          sudo apk add --no-cache git
+        else
+          fail "Git missing and sudo unavailable. Install git and retry."
+        fi
       else
         fail "Git missing and package manager not found. Install git and retry."
       fi
@@ -252,6 +266,7 @@ parse_args() {
         ;;
       --node-version)
         NODE_VERSION="$2"
+        NODE_VERSION_REQUESTED=1
         shift 2
         ;;
       --install-method|--method)
@@ -327,6 +342,177 @@ node_bin() {
 
 npm_bin() {
   echo "$(node_dir)/bin/npm"
+}
+
+command_path_without_node_prefix() {
+  local name="$1"
+  local path_entry
+  local prefix_bin
+  local filtered_path=""
+  local separator=""
+  local -a path_entries=()
+
+  prefix_bin="$(node_dir)/bin"
+  IFS=: read -r -a path_entries <<<"$PATH"
+  for path_entry in "${path_entries[@]}"; do
+    if [[ "$path_entry" == "$prefix_bin" ]]; then
+      continue
+    fi
+    filtered_path="${filtered_path}${separator}${path_entry}"
+    separator=":"
+  done
+
+  PATH="$filtered_path" command -v "$name" 2>/dev/null
+}
+
+is_musl_linux() {
+  if [[ "$(os_detect)" != "linux" ]]; then
+    return 1
+  fi
+  if [[ -f /etc/alpine-release ]]; then
+    return 0
+  fi
+  ldd --version 2>&1 | grep -qi musl
+}
+
+link_node_runtime_paths() {
+  local node_path="$1"
+  local npm_path="$2"
+  local dir
+  local runtime_bin
+  local resolved
+  dir="$(node_dir)"
+  runtime_bin="${node_path%/*}"
+
+  mkdir -p "${dir}/bin" "${PREFIX}/tools"
+  ln -sfn "$node_path" "${dir}/bin/node"
+  ln -sfn "$npm_path" "${dir}/bin/npm"
+  for name in npx corepack; do
+    if [[ -x "${runtime_bin}/${name}" ]]; then
+      ln -sfn "${runtime_bin}/${name}" "${dir}/bin/${name}"
+      continue
+    fi
+    resolved="$(command_path_without_node_prefix "$name" || true)"
+    if [[ -n "$resolved" && "$resolved" != "${dir}/bin/${name}" ]]; then
+      ln -sfn "$resolved" "${dir}/bin/${name}"
+    fi
+  done
+  ln -sfn "$dir" "${PREFIX}/tools/node"
+}
+
+linked_node_is_usable() {
+  local current_version
+  local required_version
+
+  if [[ ! -x "$(node_bin)" || ! -x "$(npm_bin)" ]]; then
+    return 1
+  fi
+
+  current_version="$("$(node_bin)" -v 2>/dev/null || echo "")"
+  required_version="$(required_node_version)"
+  if ! semver_at_least "$current_version" "$required_version"; then
+    return 1
+  fi
+
+  "$(node_bin)" -e "require('node:sqlite')" >/dev/null 2>&1
+}
+
+semver_at_least() {
+  local version="${1#v}"
+  local required="${2#v}"
+  local version_major version_minor version_patch
+  local required_major required_minor required_patch
+
+  IFS=. read -r version_major version_minor version_patch <<<"$version"
+  IFS=. read -r required_major required_minor required_patch <<<"$required"
+  version_minor="${version_minor:-0}"
+  version_patch="${version_patch:-0}"
+  required_minor="${required_minor:-0}"
+  required_patch="${required_patch:-0}"
+
+  for part in "$version_major" "$version_minor" "$version_patch" "$required_major" "$required_minor" "$required_patch"; do
+    if [[ ! "$part" =~ ^[0-9]+$ ]]; then
+      return 1
+    fi
+  done
+
+  if ((version_major != required_major)); then
+    ((version_major > required_major))
+    return
+  fi
+  if ((version_minor != required_minor)); then
+    ((version_minor > required_minor))
+    return
+  fi
+  ((version_patch >= required_patch))
+}
+
+required_node_version() {
+  if [[ "$NODE_VERSION_REQUESTED" == "1" ]] && semver_at_least "$NODE_VERSION" "$MIN_NODE_VERSION"; then
+    printf '%s\n' "$NODE_VERSION"
+    return
+  fi
+  printf '%s\n' "$MIN_NODE_VERSION"
+}
+
+try_link_usable_node_runtime_from_path() {
+  local path_entry
+  local prefix_bin
+  local -a path_entries=()
+
+  prefix_bin="$(node_dir)/bin"
+  IFS=: read -r -a path_entries <<<"$PATH"
+  for path_entry in "${path_entries[@]}"; do
+    if [[ -z "$path_entry" ]]; then
+      path_entry="."
+    fi
+    if [[ "$path_entry" == "$prefix_bin" ]]; then
+      continue
+    fi
+    if [[ -x "${path_entry}/node" && -x "${path_entry}/npm" ]]; then
+      link_node_runtime_paths "${path_entry}/node" "${path_entry}/npm"
+      if linked_node_is_usable; then
+        return 0
+      fi
+    fi
+  done
+  return 1
+}
+
+install_alpine_node() {
+  local installed_version
+  local required_version
+
+  emit_json "{\"event\":\"step\",\"name\":\"node\",\"status\":\"start\",\"method\":\"apk\"}"
+  if try_link_usable_node_runtime_from_path; then
+    installed_version="$("$(node_bin)" -v 2>/dev/null || echo unknown)"
+    emit_json "{\"event\":\"step\",\"name\":\"node\",\"status\":\"ok\",\"method\":\"system\",\"version\":\"${installed_version}\"}"
+    return
+  fi
+
+  log "Installing Node via apk (Alpine Linux detected)..."
+  if is_root; then
+    apk add --no-cache nodejs npm
+  elif has_sudo; then
+    sudo apk add --no-cache nodejs npm
+  else
+    fail "Alpine Linux detected, but Node musl tarballs are unavailable and sudo is unavailable. Install nodejs and npm with apk, then retry."
+  fi
+
+  if [[ -x "${APK_NODE_BIN_DIR}/node" && -x "${APK_NODE_BIN_DIR}/npm" ]]; then
+    link_node_runtime_paths "${APK_NODE_BIN_DIR}/node" "${APK_NODE_BIN_DIR}/npm"
+  elif ! try_link_usable_node_runtime_from_path; then
+    fail "apk Node install failed. Install nodejs and npm manually, then retry."
+  fi
+
+  if ! linked_node_is_usable; then
+    installed_version="$("$(node_bin)" -v 2>/dev/null || echo unknown)"
+    required_version="$(required_node_version)"
+    fail "Alpine Node package must provide Node >= ${required_version} with node:sqlite; found ${installed_version}."
+  fi
+
+  installed_version="$("$(node_bin)" -v 2>/dev/null || echo unknown)"
+  emit_json "{\"event\":\"step\",\"name\":\"node\",\"status\":\"ok\",\"method\":\"apk\",\"version\":\"${installed_version}\"}"
 }
 
 set_pnpm_cmd() {
@@ -559,6 +745,11 @@ install_node() {
   os="$(os_detect)"
   arch="$(arch_detect)"
   dir="$(node_dir)"
+
+  if [[ "$os" == "linux" ]] && command -v apk >/dev/null 2>&1 && is_musl_linux; then
+    install_alpine_node
+    return
+  fi
 
   if [[ -x "$(node_bin)" ]]; then
     current_major="$("$(node_bin)" -v 2>/dev/null | tr -d 'v' | cut -d'.' -f1 || echo "")"
