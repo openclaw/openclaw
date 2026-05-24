@@ -7,7 +7,8 @@
   "exports": {
     ".": "./index.ts",
     "./api.js": "./api.ts",
-    "./runtime-api.js": "./runtime-api.ts"
+    "./runtime-api.js": "./runtime-api.ts",
+    "./secret-contract-api.js": "./secret-contract-api.ts"
   },
   "dependencies": {
     "zod": "4.4.3"

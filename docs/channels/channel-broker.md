@@ -20,20 +20,20 @@ polling transports are reserved for later protocol versions.
 
 ## Target syntax
 
-Use the platform as the target prefix:
+Use the broker-owned prefix when native channel plugins are still installed:
 
 ```text
-telegram:chat%20123?threadId=topic%2F77
-discord:123456789012345678
-slack:C12345678?threadId=1700000000.000100
-matrix:!roomid:example.org
+broker:telegram:chat%20123?threadId=topic%2F77
+channel-broker:discord:123456789012345678
+broker:slack:C12345678?threadId=1700000000.000100
+channel-broker:matrix:!roomid:example.org
 ```
 
-The broker plugin declares prefixes for the major channel platforms, so a
-configured broker can accept targets such as `telegram:...`, `discord:...`, and
-`slack:...` without forcing users to write `broker:` everywhere. Native channel
-plugins still keep their own channel ids; use `channel-broker` when routing
-through a broker provider.
+The broker also declares platform prefixes for migration environments, but
+native channel plugins keep ownership of their own prefixes while they are
+registered. For example, `telegram:...` still routes to the native Telegram
+plugin when both Telegram and the broker are installed; if Telegram is not
+registered, a configured broker can own `telegram:...`.
 
 ## Config
 
@@ -46,8 +46,8 @@ through a broker provider.
         acme: {
           enabled: true,
           baseUrl: "https://broker.example.com",
-          outboundToken: "op://openclaw/acme-broker/token",
-          signingSecret: "op://openclaw/acme-broker/webhook-secret",
+          outboundToken: { source: "env", provider: "default", id: "BROKER_TOKEN" },
+          signingSecret: { source: "env", provider: "default", id: "BROKER_SIGNING_SECRET" },
           platforms: ["slack", "discord", "telegram"],
           defaultConversationType: "channel",
           allowFrom: ["*"],
@@ -62,8 +62,10 @@ Provider keys:
 
 - `baseUrl` - provider HTTP endpoint. OpenClaw posts outbound requests to
   `/v1/outbound`.
-- `outboundToken` - optional bearer token for outbound provider calls.
+- `outboundToken` - optional bearer token for outbound provider calls. Plaintext
+  strings and SecretRef objects are supported.
 - `signingSecret` - provider webhook signature secret for inbound events.
+  Plaintext strings and SecretRef objects are supported.
 - `platforms` - normalized platform ids the provider can handle.
 - `platformAliases` - optional alias map for provider-local platform names.
 - `defaultConversationType` - fallback conversation type when a target does not

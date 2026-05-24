@@ -1,4 +1,5 @@
 import { buildChannelConfigSchema } from "openclaw/plugin-sdk/channel-config-schema";
+import { buildSecretInputSchema } from "openclaw/plugin-sdk/secret-input";
 import { z } from "zod";
 
 const BrokerPlatformCapabilitiesSchema = z
@@ -26,8 +27,8 @@ const ProviderSchema = z
     name: z.string().optional(),
     enabled: z.boolean().optional(),
     baseUrl: z.string().url().optional(),
-    outboundToken: z.string().optional(),
-    signingSecret: z.string().optional(),
+    outboundToken: buildSecretInputSchema().optional(),
+    signingSecret: buildSecretInputSchema().optional(),
     accountId: z.string().optional(),
     platforms: z.array(z.string()).optional(),
     platformAliases: z.record(z.string(), z.string()).optional(),

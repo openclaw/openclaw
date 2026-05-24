@@ -7,6 +7,7 @@ export type ChannelBrokerRuntime = {
   sendOutboundRequest?: (params: {
     account: ResolvedChannelBrokerAccount;
     request: BrokerOutboundRequestV1;
+    signal?: AbortSignal;
   }) => Promise<BrokerReceiptV1>;
 };
 
@@ -52,6 +53,7 @@ function parseBrokerReceipt(value: unknown): BrokerReceiptV1 {
 async function sendBrokerOutboundHttp(params: {
   account: ResolvedChannelBrokerAccount;
   request: BrokerOutboundRequestV1;
+  signal?: AbortSignal;
 }): Promise<BrokerReceiptV1> {
   const fetchImpl = runtime.fetch ?? globalThis.fetch;
   if (typeof fetchImpl !== "function") {
@@ -67,6 +69,7 @@ async function sendBrokerOutboundHttp(params: {
         : {}),
     },
     body: JSON.stringify(params.request),
+    ...(params.signal ? { signal: params.signal } : {}),
   });
   if (!response.ok) {
     throw new Error(`Channel broker provider returned HTTP ${response.status}.`);
@@ -77,6 +80,7 @@ async function sendBrokerOutboundHttp(params: {
 export async function sendBrokerOutboundRequest(params: {
   account: ResolvedChannelBrokerAccount;
   request: BrokerOutboundRequestV1;
+  signal?: AbortSignal;
 }): Promise<BrokerReceiptV1> {
   if (runtime.sendOutboundRequest) {
     return await runtime.sendOutboundRequest(params);

@@ -96,7 +96,11 @@ export async function sendChannelBrokerText(params: {
       ...(threadId ? { thread: true } : {}),
     },
   });
-  const receipt = await sendBrokerOutboundRequest({ account, request });
+  const receipt = await sendBrokerOutboundRequest({
+    account,
+    request,
+    ...(params.signal ? { signal: params.signal } : {}),
+  });
   const messageId = resolvePrimaryMessageId(receipt);
   return {
     messageId,
@@ -121,6 +125,7 @@ export async function sendChannelBrokerOutboundText(
   ctx: ChannelOutboundContext,
 ): Promise<{ ok: boolean; messageId: string; error?: Error }> {
   try {
+    const signal = (ctx as ChannelOutboundContext & { signal?: AbortSignal }).signal;
     const result = await sendChannelBrokerText({
       cfg: ctx.cfg as CoreConfig,
       accountId: ctx.accountId,
@@ -129,6 +134,7 @@ export async function sendChannelBrokerOutboundText(
       threadId: ctx.threadId,
       replyToId: ctx.replyToId,
       silent: ctx.silent,
+      ...(signal ? { signal } : {}),
     });
     return { ok: true, messageId: result.messageId ?? "" };
   } catch (error) {
