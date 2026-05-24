@@ -5,11 +5,20 @@
  * These commands are processed before built-in commands and before agent invocation.
  */
 
+import { resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { resolveConversationBindingContext } from "../channels/conversation-binding-context.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { ADMIN_SCOPE, isOperatorScope } from "../gateway/operator-scopes.js";
 import { logVerbose } from "../globals.js";
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
+import {
+  normalizeAgentId,
+  normalizeMainKey,
+  parseAgentSessionKey,
+} from "../routing/session-key.js";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "../shared/string-coerce.js";
 import {
   clearPluginCommands,
   clearPluginCommandsForPlugin,
@@ -170,9 +179,24 @@ function resolveBindingConversationFromCommand(params: {
   });
 }
 
-function parsePluginCommandAgentId(sessionKey: string): string | undefined {
-  const parts = sessionKey.split(":");
-  return parts[0] === "agent" && parts[1]?.trim() ? parts[1].trim() : undefined;
+function resolvePluginCommandAgentId(params: {
+  config: OpenClawConfig;
+  sessionKey?: string;
+}): string | undefined {
+  const normalizedSessionKey = normalizeOptionalString(params.sessionKey);
+  if (!normalizedSessionKey) {
+    return undefined;
+  }
+  const parsed = parseAgentSessionKey(normalizedSessionKey);
+  if (parsed?.agentId) {
+    return normalizeAgentId(parsed.agentId);
+  }
+  const loweredSessionKey = normalizeLowercaseStringOrEmpty(normalizedSessionKey);
+  const mainKey = normalizeMainKey(params.config.session?.mainKey);
+  if (loweredSessionKey === "main" || loweredSessionKey === mainKey) {
+    return resolveDefaultAgentId(params.config);
+  }
+  return undefined;
 }
 
 function buildPluginCommandRuntimeContext(params: {
@@ -182,7 +206,10 @@ function buildPluginCommandRuntimeContext(params: {
   authProfileId?: string;
 }): PluginCommandContext["runtimeContext"] {
   const sessionKey = params.sessionKey?.trim();
-  const agentId = sessionKey ? parsePluginCommandAgentId(sessionKey) : undefined;
+  const agentId = resolvePluginCommandAgentId({
+    config: params.config,
+    sessionKey,
+  });
   if (!sessionKey && !agentId) {
     return undefined;
   }
