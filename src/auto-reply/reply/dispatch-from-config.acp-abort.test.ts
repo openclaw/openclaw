@@ -1,4 +1,4 @@
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, type MockInstance, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import type {
   AcpRuntime,
@@ -33,6 +33,9 @@ let replyRunRegistry: typeof import("./reply-run-registry.js").replyRunRegistry;
 let getActiveReplyRunCount: typeof import("./reply-run-registry.js").getActiveReplyRunCount;
 let createReplyOperation: typeof import("./reply-run-registry.js").createReplyOperation;
 let replyRunTesting: typeof import("./reply-run-registry.js").__testing;
+let createReplyMediaPathNormalizerSpy: MockInstance<
+  typeof import("./reply-media-paths.runtime.js").createReplyMediaPathNormalizer
+>;
 
 function shouldUseAcpReplyDispatchHook(eventUnknown: unknown): boolean {
   const event = eventUnknown as {
@@ -162,6 +165,11 @@ describe("dispatchReplyFromConfig ACP abort", () => {
       createReplyOperation,
       __testing: replyRunTesting,
     } = await import("./reply-run-registry.js"));
+    const replyMediaPathsRuntime = await import("./reply-media-paths.runtime.js");
+    createReplyMediaPathNormalizerSpy = vi.spyOn(
+      replyMediaPathsRuntime,
+      "createReplyMediaPathNormalizer",
+    );
   });
 
   beforeEach(() => {
@@ -209,6 +217,8 @@ describe("dispatchReplyFromConfig ACP abort", () => {
     sessionBindingMocks.resolveByConversation.mockReset().mockReturnValue(null);
     sessionBindingMocks.touch.mockReset();
     resetPluginTtsAndThreadMocks();
+    createReplyMediaPathNormalizerSpy.mockReset();
+    createReplyMediaPathNormalizerSpy.mockReturnValue(async (payload) => payload);
     diagnosticMocks.logMessageQueued.mockReset();
     diagnosticMocks.logMessageProcessed.mockReset();
     diagnosticMocks.logSessionStateChange.mockReset();
@@ -908,21 +918,20 @@ describe("dispatchReplyFromConfig ACP abort", () => {
   });
 
   it("suppresses final reply delivery when dispatch aborts during final normalization", async () => {
-    let ttsStarted!: () => void;
-    let releaseTts!: () => void;
-    const ttsStartedPromise = new Promise<void>((resolve) => {
-      ttsStarted = resolve;
+    let normalizeStarted!: () => void;
+    let releaseNormalize!: () => void;
+    const normalizeStartedPromise = new Promise<void>((resolve) => {
+      normalizeStarted = resolve;
     });
-    const releaseTtsPromise = new Promise<void>((resolve) => {
-      releaseTts = resolve;
+    const releaseNormalizePromise = new Promise<void>((resolve) => {
+      releaseNormalize = resolve;
     });
-    ttsMocks.maybeApplyTtsToPayload.mockImplementation(async (paramsUnknown: unknown) => {
-      const params = paramsUnknown as { payload: { text?: string } };
-      if (params.payload.text === "late final should not send") {
-        ttsStarted();
-        await releaseTtsPromise;
+    createReplyMediaPathNormalizerSpy.mockReturnValue(async (payload: { text?: string }) => {
+      if (payload.text === "late final should not send") {
+        normalizeStarted();
+        await releaseNormalizePromise;
       }
-      return params.payload;
+      return payload;
     });
 
     const dispatcher = createDispatcher();
@@ -941,12 +950,15 @@ describe("dispatchReplyFromConfig ACP abort", () => {
         },
       } as OpenClawConfig,
       dispatcher,
-      replyResolver: async () => ({ text: "late final should not send" }),
+      replyResolver: async () => ({
+        text: "late final should not send",
+        mediaUrl: "https://example.test/image.png",
+      }),
     });
 
-    await ttsStartedPromise;
+    await normalizeStartedPromise;
     expect(replyRunRegistry.abort("agent:final-normalization-abort")).toBe(true);
-    releaseTts();
+    releaseNormalize();
 
     await expect(dispatchPromise).resolves.toMatchObject({
       queuedFinal: false,
