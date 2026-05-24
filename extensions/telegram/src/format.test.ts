@@ -55,6 +55,13 @@ describe("markdownToTelegramHtml", () => {
     ).toBe(input);
   });
 
+  it("preserves Telegram expandable blockquote HTML", () => {
+    const input = "<blockquote expandable>tail</blockquote>";
+
+    expect(markdownToTelegramHtml(input)).toBe(input);
+    expect(renderTelegramHtmlText(input, { textMode: "html" })).toBe(input);
+  });
+
   it("does not promote Telegram HTML tags inside code", () => {
     expect(markdownToTelegramHtml("`<b>literal</b>`")).toBe(
       "<code>&lt;b&gt;literal&lt;/b&gt;</code>",
