@@ -338,6 +338,14 @@ export async function executePlaybookStep(
             const results = await deps.kb.search(query, { limit });
             return results.map((r) => (r.title ? `[${r.title}] ${r.text}` : r.text));
           },
+          fetchDomainKnowledge: async (domain: string) => {
+            const results = await deps.kb.search(domain + " 领域知识", {
+              limit: 3,
+              namespace: "domain",
+            });
+            if (!results.length) return null;
+            return results.map((r) => r.text).join("\n---\n");
+          },
         },
       );
       const prompt = ctxResult.enriched_prompt;
@@ -442,7 +450,17 @@ export async function executePlaybookStep(
           domain: step.domain,
           event_context: subEventCtx,
         },
-        { logger: deps.logger },
+        {
+          logger: deps.logger,
+          fetchDomainKnowledge: async (domain: string) => {
+            const results = await deps.kb.search(domain + " 领域知识", {
+              limit: 3,
+              namespace: "domain",
+            });
+            if (!results.length) return null;
+            return results.map((r) => r.text).join("\n---\n");
+          },
+        },
       );
       const subPrompt = subCtxResult.enriched_prompt;
 
