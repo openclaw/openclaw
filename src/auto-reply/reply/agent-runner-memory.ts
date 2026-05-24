@@ -7,7 +7,10 @@ import { estimateMessagesTokens } from "../../agents/compaction.js";
 import { resolveAgentHarnessPolicy } from "../../agents/harness/policy.js";
 import { ensureSelectedAgentHarnessPlugin } from "../../agents/harness/runtime-plugin.js";
 import { runWithModelFallback } from "../../agents/model-fallback.js";
-import { listLegacyRuntimeModelProviderAliases } from "../../agents/model-runtime-aliases.js";
+import {
+  isCliRuntimeAliasForProvider,
+  listLegacyRuntimeModelProviderAliases,
+} from "../../agents/model-runtime-aliases.js";
 import { isCliProvider } from "../../agents/model-selection.js";
 import { resolveContextConfigProviderForRuntime } from "../../agents/openai-codex-routing.js";
 import { resolveSandboxConfigForAgent, resolveSandboxRuntimeStatus } from "../../agents/sandbox.js";
@@ -609,7 +612,24 @@ export async function runPreflightCompactionIfNeeded(params: {
     return entry ?? params.sessionEntry;
   }
 
-  const isCli = isCliProvider(params.followupRun.run.provider, params.cfg);
+  // Same per-model runtime-policy honoring as `runMemoryFlushIfNeeded` below —
+  // `isCliProvider` alone cannot see `agents.defaults.models[].agentRuntime.id`.
+  const preflightHarnessRuntime = resolveAgentHarnessPolicy({
+    provider: params.followupRun.run.provider,
+    modelId: params.followupRun.run.model ?? params.defaultModel,
+    config: params.cfg,
+    agentId: params.followupRun.run.agentId,
+    sessionKey:
+      params.runtimePolicySessionKey ??
+      params.followupRun.run.runtimePolicySessionKey ??
+      params.sessionKey,
+  }).runtime;
+  const isCli =
+    isCliProvider(params.followupRun.run.provider, params.cfg) ||
+    isCliRuntimeAliasForProvider({
+      runtime: preflightHarnessRuntime,
+      provider: params.followupRun.run.provider,
+    });
   if (params.isHeartbeat || isCli) {
     return entry ?? params.sessionEntry;
   }
@@ -844,7 +864,30 @@ export async function runMemoryFlushIfNeeded(params: {
     return sandboxCfg.workspaceAccess === "rw";
   })();
 
-  const isCli = isCliProvider(params.followupRun.run.provider, params.cfg);
+  // The memory-flush dispatch path below invokes `runEmbeddedPiAgent` directly,
+  // bypassing the per-model runtime policy in `agents.defaults.models[].agentRuntime`.
+  // `isCliProvider` only inspects `cliBackends` keys — so when a session uses
+  // `provider="anthropic"` with a model whose `agentRuntime.id` is "claude-cli",
+  // the gate would falsely report "not CLI" and the flush would send the
+  // claude-cli OAuth subscription token (`sk-ant-oat01-...`) to `/v1/messages`,
+  // which Anthropic rejects with 404 model_not_found and cascades all auth
+  // profiles into cooldown. Honor the per-model runtime policy too.
+  const harnessRuntime = resolveAgentHarnessPolicy({
+    provider: params.followupRun.run.provider,
+    modelId: params.followupRun.run.model ?? params.defaultModel,
+    config: params.cfg,
+    agentId: params.followupRun.run.agentId,
+    sessionKey:
+      params.runtimePolicySessionKey ??
+      params.followupRun.run.runtimePolicySessionKey ??
+      params.sessionKey,
+  }).runtime;
+  const isCli =
+    isCliProvider(params.followupRun.run.provider, params.cfg) ||
+    isCliRuntimeAliasForProvider({
+      runtime: harnessRuntime,
+      provider: params.followupRun.run.provider,
+    });
   const canAttemptFlush = memoryFlushWritable && !params.isHeartbeat && !isCli;
   let entry =
     params.sessionEntry ??

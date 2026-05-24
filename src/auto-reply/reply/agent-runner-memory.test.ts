@@ -609,6 +609,50 @@ describe("runMemoryFlushIfNeeded", () => {
     expect(runEmbeddedPiAgentMock).not.toHaveBeenCalled();
   });
 
+  // Regression: legacy gate only consulted `cliBackends` keys via `isCliProvider`,
+  // so a session with `provider="anthropic"` whose per-model runtime policy resolved
+  // to `claude-cli` slipped past and dispatched `runEmbeddedPiAgent` with the
+  // claude-cli OAuth subscription token. Anthropic /v1/messages returns 404
+  // model_not_found for those tokens, which then cooled down every auth profile
+  // for the provider. Honor `agents.defaults.models[<key>].agentRuntime.id` too.
+  it("skips memory flush when per-model runtime policy pins the runtime to claude-cli", async () => {
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+      totalTokens: 80_000,
+      compactionCount: 1,
+    };
+
+    const entry = await runMemoryFlushIfNeeded({
+      cfg: {
+        agents: {
+          defaults: {
+            cliBackends: { "claude-cli": { command: "/usr/local/bin/claude" } },
+            models: {
+              "anthropic/claude-opus-4-7": { agentRuntime: { id: "claude-cli" } },
+            },
+          },
+        },
+      },
+      followupRun: createTestFollowupRun({
+        provider: "anthropic",
+        model: "claude-opus-4-7",
+      }),
+      sessionCtx: { Provider: "slack" } as unknown as TemplateContext,
+      defaultModel: "anthropic/claude-opus-4-7",
+      agentCfgContextTokens: 100_000,
+      resolvedVerboseLevel: "off",
+      sessionEntry,
+      sessionStore: { main: sessionEntry },
+      sessionKey: "main",
+      isHeartbeat: false,
+      replyOperation: createReplyOperation(),
+    });
+
+    expect(entry).toBe(sessionEntry);
+    expect(runEmbeddedPiAgentMock).not.toHaveBeenCalled();
+  });
+
   it("uses runtime policy session key when checking memory-flush sandbox writability", async () => {
     const sessionEntry: SessionEntry = {
       sessionId: "session",
@@ -650,6 +694,65 @@ describe("runMemoryFlushIfNeeded", () => {
 
     expect(entry).toBe(sessionEntry);
     expect(runEmbeddedPiAgentMock).not.toHaveBeenCalled();
+  });
+
+  // Regression: matches the runMemoryFlushIfNeeded fix for the same gate defect
+  // — `isCliProvider("anthropic", cfg)` returns false because anthropic isn't
+  // a `cliBackends` key. The preflight compaction path must also honor
+  // `agents.defaults.models[<key>].agentRuntime.id`.
+  it("skips preflight compaction when per-model runtime policy pins the runtime to claude-cli", async () => {
+    const sessionFile = path.join(rootDir, "session.jsonl");
+    await fs.writeFile(
+      sessionFile,
+      `${JSON.stringify({ message: { role: "user", content: "x".repeat(5_000) } })}\n`,
+      "utf8",
+    );
+    registerMemoryFlushPlanResolverForTest(() => ({
+      softThresholdTokens: 1,
+      forceFlushTranscriptBytes: 1_000_000_000,
+      reserveTokensFloor: 0,
+      prompt: "Pre-compaction memory flush.\nNO_REPLY",
+      systemPrompt: "Write memory to memory/YYYY-MM-DD.md.",
+      relativePath: "memory/2023-11-14.md",
+    }));
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      sessionFile,
+      updatedAt: Date.now(),
+      totalTokensFresh: false,
+    };
+
+    const entry = await runPreflightCompactionIfNeeded({
+      cfg: {
+        agents: {
+          defaults: {
+            cliBackends: { "claude-cli": { command: "/usr/local/bin/claude" } },
+            models: {
+              "anthropic/claude-opus-4-7": { agentRuntime: { id: "claude-cli" } },
+            },
+            compaction: { memoryFlush: {} },
+          },
+        },
+      },
+      followupRun: createTestFollowupRun({
+        provider: "anthropic",
+        model: "claude-opus-4-7",
+        sessionId: "session",
+        sessionFile,
+        sessionKey: "agent:main:main",
+      }),
+      defaultModel: "anthropic/claude-opus-4-7",
+      agentCfgContextTokens: 100,
+      sessionEntry,
+      sessionStore: { "agent:main:main": sessionEntry },
+      sessionKey: "agent:main:main",
+      storePath: path.join(rootDir, "sessions.json"),
+      isHeartbeat: false,
+      replyOperation: createReplyOperation(),
+    });
+
+    expect(entry).toBe(sessionEntry);
+    expect(compactEmbeddedPiSessionMock).not.toHaveBeenCalled();
   });
 
   it("passes runtime policy session key to preflight compaction sandbox resolution", async () => {
