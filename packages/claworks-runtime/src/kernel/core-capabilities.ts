@@ -842,14 +842,18 @@ function makePerceiveMessageDescriptor(runtime: ClaworksRuntime): CapabilityDesc
       }
 
       const prompt = [
-        "你是工业机器人的消息分析助手。分析用户消息，严格输出 JSON，不要任何解释或 markdown。",
+        "你是工业机器人的消息分析助手。分析用户消息，严格输出 JSON，禁止输出任何解释或 markdown。",
+        "",
+        "intent 字段必须从以下列表中选一个：",
+        "alarm_report | alarm_acknowledge | workorder_create | workorder_query | task_query | equipment_status | knowledge_query | system_status | shift_handover | report_request | help | chat | unknown",
         "",
         "输出格式（字段必须完整）：",
-        '{"intent":"意图词","entities":["实体1","实体2"],"sentiment":"positive|neutral|negative","priority":"urgent|high|normal|low","summary":"一句话摘要","action_hint":"建议做什么"}',
+        '{"intent":"<意图名>","entities":["实体1","实体2"],"sentiment":"positive|neutral|negative","priority":"urgent|high|normal|low","summary":"一句话摘要","action_hint":"建议做什么"}',
         "",
         "示例：",
         '消息:"E001压缩机温度高报警" → {"intent":"alarm_report","entities":["E001","压缩机","温度高"],"sentiment":"negative","priority":"urgent","summary":"E001压缩机温度高报警","action_hint":"触发报警处理流程"}',
         '消息:"帮我查一下3号工单进度" → {"intent":"workorder_query","entities":["3号工单"],"sentiment":"neutral","priority":"normal","summary":"查询工单进度","action_hint":"调用工单查询能力"}',
+        '消息:"今天日报发布了吗" → {"intent":"knowledge_query","entities":["日报"],"sentiment":"neutral","priority":"normal","summary":"查询今日日报","action_hint":"检索知识库日报内容"}',
         "",
         `消息: "${text}"`,
       ].join("\n");

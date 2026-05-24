@@ -57,34 +57,46 @@ const BUILTIN_TEMPLATES: PromptTemplate[] = [
     name: "意图分类",
     description: "将用户消息分类到预定义意图，适合弱模型（含 few-shot 示例）",
     outputFormat: "json",
-    system: `你是工业机器人的意图识别器。根据用户消息，从以下类别选择最匹配的一个，只输出 JSON，不要解释。
+    system: `你是一个工业机器人助手的意图分类器。
 
-类别说明：
-alarm_report    — 报告/查询报警信息
-workorder_create — 创建工单
-workorder_query — 查询工单状态
-equipment_status — 查询设备状态
-kb_query        — 知识库查询/技术问题
-approval_create — 创建审批申请
-task_create     — 创建任务/待办
-shift_handover  — 交接班相关
-report_request  — 请求生成报告
-maintenance_query — 维护保养查询
-safety_alert    — 安全隐患报告
-chat            — 普通闲聊/问候
-help            — 求助/功能咨询
-system_query    — 查询系统状态
-unknown         — 无法识别
+你的任务：将用户输入分类为以下意图之一，并返回严格的 JSON。禁止输出 JSON 以外的任何内容。
 
-输出格式（严格 JSON）：
-{"intent": "类别名", "confidence": 0.0-1.0, "extracted": {"key": "value"}}
+可用意图列表（必须从中选一个，不能自造新值）：
+- alarm_report      上报告警、报警、故障、异常、超标、停机
+- alarm_acknowledge 确认告警、已处理、收到、知道了
+- workorder_create  创建工单、新建工单、派工、生成工单
+- workorder_query   查工单、工单状态、工单进度
+- task_query        查任务、任务状态、任务进度
+- equipment_status  查设备状态、运行参数、设备读数
+- knowledge_query   查知识库、文档、手册、操作规程、日报、日志
+- approval_create   创建审批、发起申请
+- shift_handover    交班、接班、班次交接
+- report_request    生成报告、统计汇总
+- maintenance_query 维护保养、保养计划、巡检
+- safety_alert      安全隐患、危险、违规
+- system_status     查系统状态、系统健康、在线情况
+- help              帮助、怎么用、功能介绍
+- chat              闲聊、问候、其他对话
+- unknown           无法判断意图
+
+输出格式（严格遵守，不加注释，不加 markdown）：
+{"intent": "<意图名>", "confidence": <0到1的数字>, "extracted": {}}
 
 示例：
-用户：E001设备报警了 → {"intent": "alarm_report", "confidence": 0.95, "extracted": {"equipment_id": "E001"}}
-用户：帮我查一下3号工单 → {"intent": "workorder_query", "confidence": 0.9, "extracted": {"work_order_id": "3"}}
-用户：创建一个巡检工单 → {"intent": "workorder_create", "confidence": 0.88, "extracted": {"type": "巡检"}}
-用户：压缩机温度多少 → {"intent": "equipment_status", "confidence": 0.85, "extracted": {"equipment_type": "压缩机"}}
-用户：你好 → {"intent": "chat", "confidence": 0.99, "extracted": {}}`,
+输入：「泵1号振动超标，需要处理」
+输出：{"intent": "alarm_report", "confidence": 0.95, "extracted": {"equipment": "泵1号", "issue": "振动超标"}}
+
+输入：「今天的日报在哪里？」
+输出：{"intent": "knowledge_query", "confidence": 0.88, "extracted": {"topic": "日报"}}
+
+输入：「帮我创建一个巡检工单」
+输出：{"intent": "workorder_create", "confidence": 0.92, "extracted": {"type": "巡检"}}
+
+输入：「E001压缩机温度多少」
+输出：{"intent": "equipment_status", "confidence": 0.9, "extracted": {"equipment_id": "E001", "equipment_type": "压缩机"}}
+
+输入：「你好」
+输出：{"intent": "chat", "confidence": 0.99, "extracted": {}}`,
     user: "{{message}}",
     examples: [
       {
@@ -94,6 +106,10 @@ unknown         — 无法识别
       {
         input: { message: "帮我创建一个紧急维修工单" },
         output: `{"intent": "workorder_create", "confidence": 0.92, "extracted": {"priority": "urgent", "type": "维修"}}`,
+      },
+      {
+        input: { message: "查一下3号工单进度" },
+        output: `{"intent": "workorder_query", "confidence": 0.9, "extracted": {"work_order_id": "3"}}`,
       },
     ],
   },
