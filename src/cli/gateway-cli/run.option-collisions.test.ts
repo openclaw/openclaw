@@ -1,6 +1,7 @@
 import path from "node:path";
 import { Command } from "commander";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { GATEWAY_SERVICE_RUNTIME_PID_ENV } from "../../daemon/constants.js";
 import { SUPERVISOR_HINT_ENV_VARS } from "../../infra/supervisor-markers.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { withTempSecretFiles } from "../../test-utils/secret-file-fixture.js";
@@ -17,11 +18,14 @@ const forceFreePortAndWait = vi.fn(async (_port: number, _opts: unknown) => ({
   waitedMs: 0,
   escalatedToSigkill: false,
 }));
+const cleanStaleGatewayProcessesSync = vi.fn((_port?: number) => []);
 const waitForPortBindable = vi.fn(async (_port: number, _opts?: unknown) => 0);
 const ensureDevGatewayConfig = vi.fn(async (_opts?: unknown) => {});
 const runGatewayLoop = vi.fn(async ({ start }: { start: () => Promise<unknown> }) => {
   await start();
 });
+const normalizeStateDirEnv = vi.fn((_env?: NodeJS.ProcessEnv) => undefined);
+const callOrder = vi.hoisted(() => [] as string[]);
 const gatewayLogMessages = vi.hoisted(() => [] as string[]);
 const configState = vi.hoisted(() => ({
   cfg: {} as Record<string, unknown>,
@@ -54,6 +58,7 @@ vi.mock("../../config/config.js", () => ({
 
 vi.mock("../../config/paths.js", () => ({
   CONFIG_PATH: "/tmp/openclaw-test-missing-config.json",
+  normalizeStateDirEnv: (env?: NodeJS.ProcessEnv) => normalizeStateDirEnv(env),
   resolveStateDir: () => "/tmp",
   resolveGatewayPort: (cfg?: { gateway?: { port?: number } }) => cfg?.gateway?.port ?? 18789,
 }));
@@ -152,6 +157,10 @@ vi.mock("../ports.js", () => ({
   waitForPortBindable: (port: number, opts?: unknown) => waitForPortBindable(port, opts),
 }));
 
+vi.mock("../../infra/restart-stale-pids.js", () => ({
+  cleanStaleGatewayProcessesSync: (port?: number) => cleanStaleGatewayProcessesSync(port),
+}));
+
 vi.mock("./dev.js", () => ({
   ensureDevGatewayConfig: (opts?: unknown) => ensureDevGatewayConfig(opts),
 }));
@@ -186,9 +195,12 @@ describe("gateway run option collisions", () => {
     setVerbose.mockClear();
     setConsoleSubsystemFilter.mockClear();
     forceFreePortAndWait.mockClear();
+    cleanStaleGatewayProcessesSync.mockClear();
     waitForPortBindable.mockClear();
     ensureDevGatewayConfig.mockClear();
     runGatewayLoop.mockClear();
+    normalizeStateDirEnv.mockReset();
+    callOrder.length = 0;
   });
 
   async function runGatewayCli(argv: string[]) {
@@ -207,6 +219,14 @@ describe("gateway run option collisions", () => {
   }
 
   it("forwards parent-captured options to `gateway run` subcommand", async () => {
+    normalizeStateDirEnv.mockImplementation((_env?: NodeJS.ProcessEnv) => {
+      callOrder.push("normalize");
+    });
+    startGatewayServer.mockImplementationOnce(async (_port: number, _opts?: unknown) => {
+      callOrder.push("start");
+      return { close: vi.fn(async () => {}) };
+    });
+
     await runGatewayCli([
       "gateway",
       "run",
@@ -224,6 +244,8 @@ describe("gateway run option collisions", () => {
       expect.objectContaining({ intervalMs: 150, timeoutMs: 3000 }),
     );
     expect(setGatewayWsLogStyle).toHaveBeenCalledWith("full");
+    expect(normalizeStateDirEnv).toHaveBeenCalledWith(process.env);
+    expect(callOrder).toEqual(["normalize", "start"]);
     expect(startGatewayServer).toHaveBeenCalledWith(
       18789,
       expect.objectContaining({
@@ -232,6 +254,21 @@ describe("gateway run option collisions", () => {
         }),
       }),
     );
+  });
+
+  it("marks service-mode gateway descendants with the live gateway pid", async () => {
+    await withEnvAsync(
+      {
+        OPENCLAW_SERVICE_MARKER: "openclaw",
+        [GATEWAY_SERVICE_RUNTIME_PID_ENV]: undefined,
+      },
+      async () => {
+        await runGatewayCli(["gateway", "run", "--allow-unconfigured"]);
+
+        expect(process.env[GATEWAY_SERVICE_RUNTIME_PID_ENV]).toBe(String(process.pid));
+      },
+    );
+    expect(normalizeStateDirEnv).toHaveBeenCalledWith(process.env);
   });
 
   it("forwards --host literal as advanced bind override", async () => {
@@ -282,13 +319,7 @@ describe("gateway run option collisions", () => {
 
   it("omits openAiChatCompletionsEnabled when --openai-chat-completions is absent", async () => {
     // Default-off preserves upstream behavior for non-Rockie callers.
-    await runGatewayCli([
-      "gateway",
-      "run",
-      "--token",
-      "tok_default",
-      "--allow-unconfigured",
-    ]);
+    await runGatewayCli(["gateway", "run", "--token", "tok_default", "--allow-unconfigured"]);
 
     const calls = startGatewayServer.mock.calls;
     expect(calls.length).toBeGreaterThan(0);

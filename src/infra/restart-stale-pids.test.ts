@@ -151,7 +151,10 @@ function installInitialBusyPoll(
   resolvePoll: (call: number) => MockLsofResult,
 ): () => number {
   let call = 0;
-  mockSpawnSync.mockImplementation(() => {
+  mockSpawnSync.mockImplementation((command: unknown) => {
+    if (command !== "lsof") {
+      return createLsofResult();
+    }
     call += 1;
     if (call === 1) {
       return createOpenClawBusyResult(stalePid);
@@ -418,6 +421,77 @@ describe.skipIf(isWindows)("restart-stale-pids", () => {
         expect(pids).toContain(gatewayGrandparentPid);
       },
     );
+
+    it("excludes the full ancestor chain on macOS via ps", () => {
+      const origDescriptor = Object.getOwnPropertyDescriptor(process, "platform");
+      const toolHostPid = process.pid + 3101;
+      const gatewayGrandparentPid = process.pid + 3102;
+      const benignStalePid = process.pid + 3103;
+      Object.defineProperty(process, "platform", { value: "darwin", configurable: true });
+      try {
+        mockSpawnSync.mockImplementation((command: unknown, args: unknown) => {
+          if (command === "ps" && Array.isArray(args) && args[0] === "-o") {
+            const targetPid = args[3];
+            if (targetPid === String(toolHostPid)) {
+              return { error: null, status: 0, stdout: `${gatewayGrandparentPid}\n`, stderr: "" };
+            }
+            if (targetPid === String(gatewayGrandparentPid)) {
+              return { error: null, status: 0, stdout: "1\n", stderr: "" };
+            }
+            return { error: null, status: 0, stdout: "0\n", stderr: "" };
+          }
+          return {
+            error: null,
+            status: 0,
+            stdout: lsofOutput([
+              { pid: toolHostPid, cmd: "openclaw-gateway" },
+              { pid: gatewayGrandparentPid, cmd: "openclaw-gateway" },
+              { pid: benignStalePid, cmd: "openclaw-gateway" },
+            ]),
+            stderr: "",
+          };
+        });
+
+        const pids = withStubbedPpid(toolHostPid, () => findGatewayPidsOnPortSync(18789));
+        expect(pids).not.toContain(toolHostPid);
+        expect(pids).not.toContain(gatewayGrandparentPid);
+        expect(pids).toContain(benignStalePid);
+      } finally {
+        if (origDescriptor) {
+          Object.defineProperty(process, "platform", origDescriptor);
+        }
+      }
+    });
+
+    it("uses the caller timeout for macOS ancestor ps probes", () => {
+      const origDescriptor = Object.getOwnPropertyDescriptor(process, "platform");
+      const gatewayParentPid = process.pid + 3151;
+      Object.defineProperty(process, "platform", { value: "darwin", configurable: true });
+      try {
+        mockSpawnSync.mockImplementation((command: unknown, args: unknown) => {
+          if (command === "ps" && Array.isArray(args) && args[0] === "-o") {
+            return { error: null, status: 0, stdout: "1\n", stderr: "" };
+          }
+          return {
+            error: null,
+            status: 0,
+            stdout: lsofOutput([{ pid: process.pid + 3152, cmd: "openclaw-gateway" }]),
+            stderr: "",
+          };
+        });
+
+        withStubbedPpid(gatewayParentPid, () => findGatewayPidsOnPortSync(18789, 400));
+        const ancestorPsCall = mockSpawnSync.mock.calls.find(
+          (call) =>
+            call[0] === "ps" && Array.isArray(call[1]) && (call[1] as unknown[])[0] === "-o",
+        );
+        expect(ancestorPsCall?.[2]).toEqual({ timeout: 400, encoding: "utf8" });
+      } finally {
+        if (origDescriptor) {
+          Object.defineProperty(process, "platform", origDescriptor);
+        }
+      }
+    });
 
     it("excludes pids whose command does not include 'openclaw'", () => {
       const otherPid = process.pid + 2;
@@ -1201,9 +1275,9 @@ describe.skipIf(isWindows)("restart-stale-pids", () => {
       vi.spyOn(process, "kill").mockReturnValue(true);
       // Should complete cleanly — no openclaw pids in status-1 output → free
       expect(() => cleanStaleGatewayProcessesSync()).not.toThrow();
-      // Completed with one argv verification after the status-1 poll output:
-      // initial lsof + poll lsof + ps argv check.
-      expect(getCallCount()).toBe(3);
+      // Completed with one initial lsof and one status-1 poll lsof. The
+      // separate argv verification is intentionally not counted here.
+      expect(getCallCount()).toBe(2);
     });
   });
 

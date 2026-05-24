@@ -9,9 +9,15 @@ import type {
   GatewayTailscaleMode,
   ReadConfigFileSnapshotWithPluginMetadataResult,
 } from "../../config/config.js";
-import { CONFIG_PATH, resolveGatewayPort, resolveStateDir } from "../../config/paths.js";
+import {
+  CONFIG_PATH,
+  normalizeStateDirEnv,
+  resolveGatewayPort,
+  resolveStateDir,
+} from "../../config/paths.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { hasConfiguredSecretInput } from "../../config/types.secrets.js";
+import { GATEWAY_SERVICE_RUNTIME_PID_ENV } from "../../daemon/constants.js";
 import {
   defaultGatewayBindMode,
   isContainerEnvironment,
@@ -468,7 +474,11 @@ async function maybeWriteGatewayStartupFailureBundle(err: unknown): Promise<void
 }
 
 async function runGatewayCommand(opts: GatewayRunOpts) {
+  normalizeStateDirEnv(process.env);
   installQaParentWatchdog();
+  if (process.env.OPENCLAW_SERVICE_MARKER?.trim()) {
+    process.env[GATEWAY_SERVICE_RUNTIME_PID_ENV] = String(process.pid);
+  }
   const isDevProfile = normalizeOptionalLowercaseString(process.env.OPENCLAW_PROFILE) === "dev";
   const devMode = Boolean(opts.dev) || isDevProfile;
   if (opts.reset && !devMode) {
@@ -798,7 +808,8 @@ async function runGatewayCommand(opts: GatewayRunOpts) {
   // `--host <ip>` is an advanced override. When passed we use it as the
   // health-probe host too, otherwise we resolve via the chosen bind mode.
   const hostOverride = toOptionString(opts.host);
-  const healthHost = hostOverride ?? (await resolveGatewayBindHost(bind, cfg.gateway?.customBindHost));
+  const healthHost =
+    hostOverride ?? (await resolveGatewayBindHost(bind, cfg.gateway?.customBindHost));
   const openaiChatCompletionsOverride = opts.openaiChatCompletions ? true : undefined;
   const startLoop = async () =>
     await runGatewayLoop({

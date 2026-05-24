@@ -1,6 +1,9 @@
 import { EventEmitter } from "node:events";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { Readable } from "node:stream";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { computeSandboxConfigHash } from "./config-hash.js";
 import { collectDockerFlagValues } from "./test-args.js";
 import type { SandboxConfig } from "./types.js";
@@ -28,6 +31,14 @@ const registryMocks = vi.hoisted(() => ({
   readRegistryEntry: vi.fn(),
   updateRegistry: vi.fn(),
 }));
+
+const tmpDirs: string[] = [];
+
+function makeTempDir(): string {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-docker-mounts-"));
+  tmpDirs.push(dir);
+  return dir;
+}
 
 vi.mock("./registry.js", () => ({
   readRegistryEntry: registryMocks.readRegistryEntry,
@@ -181,6 +192,12 @@ async function ensureSandboxCreateCallForTest(params: {
 }
 
 describe("ensureSandboxContainer config-hash recreation", () => {
+  afterEach(() => {
+    for (const dir of tmpDirs.splice(0)) {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   beforeEach(async () => {
     spawnState.calls.length = 0;
     spawnState.inspectRunning = true;
@@ -202,6 +219,7 @@ describe("ensureSandboxContainer config-hash recreation", () => {
       workspaceDir,
       agentWorkspaceDir: workspaceDir,
       mountFormatVersion: SANDBOX_MOUNT_FORMAT_VERSION,
+      readOnlyWorkspaceSkillMounts: [],
     });
     const newHash = computeSandboxConfigHash({
       docker: newCfg.docker,
@@ -209,6 +227,7 @@ describe("ensureSandboxContainer config-hash recreation", () => {
       workspaceDir,
       agentWorkspaceDir: workspaceDir,
       mountFormatVersion: SANDBOX_MOUNT_FORMAT_VERSION,
+      readOnlyWorkspaceSkillMounts: [],
     });
     expect(newHash).not.toBe(oldHash);
 
@@ -261,6 +280,7 @@ describe("ensureSandboxContainer config-hash recreation", () => {
       workspaceDir,
       agentWorkspaceDir: workspaceDir,
       mountFormatVersion: SANDBOX_MOUNT_FORMAT_VERSION,
+      readOnlyWorkspaceSkillMounts: [],
     });
 
     spawnState.inspectRunning = false;
@@ -282,6 +302,38 @@ describe("ensureSandboxContainer config-hash recreation", () => {
     const customMountIdx = bindArgs.indexOf("/tmp/workspace-shared/USER.md:/workspace/USER.md:ro");
     expect(workspaceMountIdx).toBeGreaterThanOrEqual(0);
     expect(customMountIdx).toBeGreaterThan(workspaceMountIdx);
+  });
+
+  it("applies read-only skill overlays after custom binds", async () => {
+    const workspaceDir = makeTempDir();
+    const customRoot = makeTempDir();
+    fs.mkdirSync(path.join(workspaceDir, "skills", "demo"), { recursive: true });
+    fs.mkdirSync(customRoot, { recursive: true });
+    const cfg = createSandboxConfig([], [`${customRoot}:/workspace/skills:rw`]);
+    cfg.docker.dangerouslyAllowExternalBindSources = true;
+
+    spawnState.inspectRunning = false;
+    spawnState.labelHash = "stale-hash";
+    registryMocks.readRegistryEntry.mockResolvedValue({
+      containerName: "oc-test-shared",
+      sessionKey: "shared",
+      createdAtMs: 1,
+      lastUsedAtMs: 0,
+      image: cfg.docker.image,
+      configHash: "stale-hash",
+    });
+
+    const createCall = await ensureSandboxCreateCallForTest({ cfg, workspaceDir });
+    const bindArgs = collectDockerFlagValues(createCall.args, "-v");
+    const workspaceMountIdx = bindArgs.indexOf(`${workspaceDir}:/workspace:z`);
+    const customMountIdx = bindArgs.indexOf(`${customRoot}:/workspace/skills:rw`);
+    const protectedMountIdx = bindArgs.indexOf(
+      `${path.join(workspaceDir, "skills")}:/workspace/skills:ro,z`,
+    );
+
+    expect(workspaceMountIdx).toBeGreaterThanOrEqual(0);
+    expect(customMountIdx).toBeGreaterThan(workspaceMountIdx);
+    expect(protectedMountIdx).toBeGreaterThan(customMountIdx);
   });
 
   it.each([

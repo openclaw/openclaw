@@ -88,6 +88,14 @@ export function resolveStateDir(
   return newDir;
 }
 
+export function normalizeStateDirEnv(env: NodeJS.ProcessEnv = process.env): void {
+  const effectiveHomedir = () => resolveRequiredHomeDir(env, envHomedir(env));
+  const override = env.OPENCLAW_STATE_DIR?.trim();
+  if (override) {
+    env.OPENCLAW_STATE_DIR = resolveUserPath(override, env, effectiveHomedir);
+  }
+}
+
 function resolveUserPath(
   input: string,
   env: NodeJS.ProcessEnv = process.env,
