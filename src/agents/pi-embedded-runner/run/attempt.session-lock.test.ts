@@ -19,6 +19,7 @@ import {
   installPromptSubmissionLockRelease,
   installSessionEventWriteLock,
   installSessionExternalHookWriteLock,
+  resetEmbeddedAttemptSessionFilePromptGuardsForTest,
 } from "./attempt.session-lock.js";
 
 const lockOptions = {
@@ -32,6 +33,7 @@ const tempDirs: string[] = [];
 
 afterEach(async () => {
   resetSessionWriteLockStateForTest();
+  resetEmbeddedAttemptSessionFilePromptGuardsForTest();
   for (const dir of tempDirs.splice(0)) {
     await fs.rm(dir, { recursive: true, force: true });
   }
@@ -492,6 +494,7 @@ describe("embedded attempt session lock lifecycle", () => {
           },
         ),
     );
+    resetEmbeddedAttemptSessionFilePromptGuardsForTest();
     await secondController.releaseForPrompt();
 
     await expect(
@@ -504,6 +507,106 @@ describe("embedded attempt session lock lifecycle", () => {
     expect(firstController.hasSessionTakeover()).toBe(false);
     expect(acquireSessionWriteLock).toHaveBeenCalledTimes(3);
     expect(releases).toEqual(["release", "release", "release"]);
+  });
+
+  it("waits for an existing prompt holder before releasing another prompt on the same session file", async () => {
+    const sessionFile = await createTempSessionFile();
+    const events: string[] = [];
+    let acquireCount = 0;
+    const acquireSessionWriteLock = vi.fn(async () => {
+      acquireCount += 1;
+      const lockId = acquireCount;
+      events.push(`acquire-${lockId}`);
+      return {
+        release: vi.fn(async () => {
+          events.push(`release-${lockId}`);
+        }),
+      };
+    });
+    const firstController = await createEmbeddedAttemptSessionLockController({
+      acquireSessionWriteLock,
+      lockOptions: { ...lockOptions, sessionFile },
+    });
+
+    await firstController.releaseForPrompt();
+
+    const secondController = await createEmbeddedAttemptSessionLockController({
+      acquireSessionWriteLock,
+      lockOptions: { ...lockOptions, sessionFile },
+    });
+    let secondReleasedForPrompt = false;
+    const secondRelease = secondController.releaseForPrompt().then(() => {
+      secondReleasedForPrompt = true;
+    });
+    await Promise.resolve();
+
+    expect(secondReleasedForPrompt).toBe(false);
+    expect(events).toEqual(["acquire-1", "release-1", "acquire-2", "release-2"]);
+
+    await firstController.reacquireAfterPrompt();
+    await secondRelease;
+
+    expect(secondReleasedForPrompt).toBe(true);
+    expect(events).toEqual([
+      "acquire-1",
+      "release-1",
+      "acquire-2",
+      "release-2",
+      "acquire-3",
+      "acquire-4",
+      "release-4",
+    ]);
+    expect(firstController.hasSessionTakeover()).toBe(false);
+    expect(secondController.hasSessionTakeover()).toBe(false);
+  });
+
+  it("does not keep a prompt holder after a compaction wait release reacquires through writes", async () => {
+    const sessionFile = await createTempSessionFile();
+    const events: string[] = [];
+    let acquireCount = 0;
+    const acquireSessionWriteLock = vi.fn(async () => {
+      acquireCount += 1;
+      const lockId = acquireCount;
+      events.push(`acquire-${lockId}`);
+      return {
+        release: vi.fn(async () => {
+          events.push(`release-${lockId}`);
+        }),
+      };
+    });
+    const firstController = await createEmbeddedAttemptSessionLockController({
+      acquireSessionWriteLock,
+      lockOptions: { ...lockOptions, sessionFile },
+    });
+
+    await firstController.releaseForSessionIdleWait();
+    await firstController.withSessionWriteLock(async () => {
+      events.push("first post-wait write");
+    });
+
+    const secondController = await createEmbeddedAttemptSessionLockController({
+      acquireSessionWriteLock,
+      lockOptions: { ...lockOptions, sessionFile },
+    });
+    let secondReleasedForPrompt = false;
+    await secondController.releaseForPrompt().then(() => {
+      secondReleasedForPrompt = true;
+      events.push("second released for prompt");
+    });
+
+    expect(secondReleasedForPrompt).toBe(true);
+    expect(events).toEqual([
+      "acquire-1",
+      "release-1",
+      "acquire-2",
+      "first post-wait write",
+      "release-2",
+      "acquire-3",
+      "release-3",
+      "second released for prompt",
+    ]);
+    expect(firstController.hasSessionTakeover()).toBe(false);
+    expect(secondController.hasSessionTakeover()).toBe(false);
   });
 
   it("rejects external edits interleaved while another controller holds cleanup lock", async () => {
@@ -525,6 +628,7 @@ describe("embedded attempt session lock lifecycle", () => {
       acquireSessionWriteLock,
       lockOptions: { ...lockOptions, sessionFile },
     });
+    resetEmbeddedAttemptSessionFilePromptGuardsForTest();
     await secondController.releaseForPrompt();
     const cleanupLock = await secondController.acquireForCleanup();
 
@@ -590,6 +694,7 @@ describe("embedded attempt session lock lifecycle", () => {
           },
         ),
     );
+    resetEmbeddedAttemptSessionFilePromptGuardsForTest();
     await secondController.releaseForPrompt();
 
     await expect(
@@ -626,6 +731,7 @@ describe("embedded attempt session lock lifecycle", () => {
       await fs.appendFile(sessionFile, '{"type":"message","id":"same-process"}\n', "utf8");
       await fs.appendFile(sessionFile, '{"type":"message","id":"external-interleaved"}\n', "utf8");
     });
+    resetEmbeddedAttemptSessionFilePromptGuardsForTest();
     await secondController.releaseForPrompt();
 
     await expect(
@@ -659,6 +765,7 @@ describe("embedded attempt session lock lifecycle", () => {
       acquireSessionWriteLock,
       lockOptions: { ...lockOptions, sessionFile },
     });
+    resetEmbeddedAttemptSessionFilePromptGuardsForTest();
     await secondController.releaseForPrompt();
 
     await expect(
@@ -695,6 +802,7 @@ describe("embedded attempt session lock lifecycle", () => {
     await secondController.withSessionWriteLock(async () => {
       await fs.appendFile(sessionFile, '{"type":"message","id":"same-process"}\n', "utf8");
     });
+    resetEmbeddedAttemptSessionFilePromptGuardsForTest();
     await secondController.releaseForPrompt();
 
     await expect(
