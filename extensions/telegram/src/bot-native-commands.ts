@@ -1389,6 +1389,10 @@ export const registerTelegramNativeCommands = ({
           botHasTopicsEnabled: resolveTelegramBotHasTopicsEnabled(ctx.me),
           resolveThreadSessionKeys: nativeCommandRuntime.resolveThreadSessionKeys,
         });
+        const targetSessionEntry = nativeCommandRuntime.getSessionEntry({
+          agentId: route.agentId,
+          sessionKey: targetSessionKey,
+        });
         const deliveryBaseOptions = buildCommandDeliveryBaseOptions({
           cfg: runtimeCfg,
           chatId,
@@ -1449,6 +1453,7 @@ export const registerTelegramNativeCommands = ({
             sessionKey: targetSessionKey,
             sessionId: sessionFileContext.sessionId,
             sessionFile: sessionFileContext.sessionFile,
+            authProfileId: targetSessionEntry?.authProfileOverride,
             commandBody,
             config: runtimeCfg,
             from,
