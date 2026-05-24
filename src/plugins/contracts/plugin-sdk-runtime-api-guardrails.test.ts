@@ -132,6 +132,17 @@ const RUNTIME_API_EXPORT_GUARDS: Record<string, readonly string[]> = {
     'export { DEFAULT_WEBHOOK_MAX_BODY_BYTES } from "openclaw/plugin-sdk/webhook-ingress";',
     'export { setMSTeamsRuntime } from "./src/runtime.js";',
   ],
+  [bundledPluginFile({
+    rootDir: ROOT_DIR,
+    pluginId: "channel-broker",
+    relativePath: "runtime-api.ts",
+  })]: [
+    'export { buildChannelConfigSchema, buildChannelOutboundSessionRoute, type ChannelPlugin, createChatChannelPlugin, type OpenClawConfig, type PluginRuntime } from "openclaw/plugin-sdk/channel-core";',
+    'export { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/account-id";',
+    'export { getChatChannelMeta } from "openclaw/plugin-sdk/channel-plugin-common";',
+    'export { createMessageReceiptFromOutboundResults, defineChannelMessageAdapter } from "openclaw/plugin-sdk/channel-message";',
+    'export { createComputedAccountStatusAdapter, createDefaultChannelRuntimeState } from "openclaw/plugin-sdk/status-helpers";',
+  ],
   [bundledPluginFile({ rootDir: ROOT_DIR, pluginId: "irc", relativePath: "runtime-api.ts" })]: [
     'export { setIrcRuntime } from "./src/runtime.js";',
   ],

@@ -50,7 +50,7 @@ describe("channel-broker plugin", () => {
       },
     };
 
-    const result = await channelBrokerPlugin.message?.send.text?.({
+    const result = await channelBrokerPlugin.message?.send?.text?.({
       cfg,
       to: "telegram:chat%20123?threadId=topic%2Fa",
       text: "hello",
@@ -141,7 +141,7 @@ describe("channel-broker plugin", () => {
     }));
     setChannelBrokerRuntime({ fetch: fetchMock as never, createRequestId: () => "broker-send-2" });
 
-    const result = await channelBrokerPlugin.message?.send.text?.({
+    const result = await channelBrokerPlugin.message?.send?.text?.({
       cfg: {
         channels: {
           "channel-broker": {

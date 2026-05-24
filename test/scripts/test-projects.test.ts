@@ -1423,6 +1423,7 @@ describe("scripts/test-projects full-suite sharding", () => {
       "test/vitest/vitest.auto-reply-reply.config.ts",
       "test/vitest/vitest.extension-active-memory.config.ts",
       "test/vitest/vitest.extension-acpx.config.ts",
+      "test/vitest/vitest.extension-channel-broker.config.ts",
       "test/vitest/vitest.extension-codex.config.ts",
       "test/vitest/vitest.extension-diffs.config.ts",
       "test/vitest/vitest.extension-discord.config.ts",
