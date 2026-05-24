@@ -8,6 +8,44 @@
  *   deploy()   → 写文件到 Pack 目录 + packLoader.load() 热重载
  *   verify()   → 发布测试事件，订阅结果，等待触发
  *   learn()    → 写入 CbrStore 供后续检索
+ *
+ * ─────────────────────────────────────────────────────────────────────────────
+ * ClaWorks 自改进流水线（Self-Improvement Pipeline）
+ *
+ * 解决弱模型（Qwen3-35B 等私域部署模型）能力不足的核心方案：
+ * 用商业顶级模型（Claude/GPT）离线生成知识，弱模型在线执行。
+ *
+ * 流水线步骤：
+ * 1. 数据采集（私域实时，弱模型运行时）
+ *    - im.intent_unresolved 事件 → AutonomyEngine 检测
+ *    - 用户负反馈 → learn.from_feedback → CBR 标记失败案例
+ *    - PlaybookRun failed → cw_playbook_runs 记录
+ *
+ * 2. 导出 → evolution.export_data
+ *    - 失败执行记录 + 用户纠正样本 + 未解析意图文本
+ *    - 输出：EvolutionExportPackage JSON 文件
+ *
+ * 3. 商业模型分析（离线，在联网环境运行）
+ *    - Claude/GPT 分析失败案例，生成改进方案
+ *    - 产出：改进的 Playbook YAML + 新决策规则 + 优化的 prompt 模板
+ *    - 相当于"顶级教授指导后"的知识体系
+ *
+ * 4. 导入 → evolution.import_pack（POST /v1/evolution/import）
+ *    - 热更新 Playbook（pack.reload）
+ *    - 更新 RuleEngine 决策表
+ *    - 更新 PromptTemplateRegistry 模板
+ *
+ * 5. 验证 → PlaybookSimulator
+ *    - 用历史失败案例跑回归测试
+ *    - 对比进化前后的成功率
+ *    - 通过后才部署（POST /v1/playbooks/:id/simulate）
+ *
+ * 示例：模拟场景驱动的能力建设
+ *   - 用 opus/sonnet 生成 100 个模拟业务场景
+ *   - 为每个场景生成标准的 Playbook + 规则 + prompt
+ *   - 打包为进化包 → 导入私域 → 弱模型直接执行预制脚本
+ *   - 效果等同于"学生跟顶级教授学习后独立工作"
+ * ─────────────────────────────────────────────────────────────────────────────
  *   remove()   → 从文件系统删除并从引擎卸载
  *
  * ──────────────────────────────────────────────────────────────────────────

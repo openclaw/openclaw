@@ -358,6 +358,8 @@ export async function createClaworksRuntime(
   // OpenClaw ClawHub Skill bridge（AI 能力，由 claworks-robot 注入）
   if (opts?.skillRun) {
     runtime.skillRun = opts.skillRun;
+    // 同时注册到 BRIDGE_SKILL，统一通过 bridges.get(BRIDGE_SKILL) 访问
+    runtime.bridges?.register("skill", { run: (p) => opts.skillRun!(p) });
   }
   // 将 llmComplete 挂载到 runtime（供 structuredOutput 等延迟引用访问）
   if (opts?.llmComplete) {

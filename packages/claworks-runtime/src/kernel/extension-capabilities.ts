@@ -4075,6 +4075,7 @@ export function registerExtensionCapabilities(
     ...makeResearchCapabilities(runtime), // L40
     ...makeAgentOrchCapabilities(runtime), // L41
     ...makeEvolutionSyncCapabilities(runtime), // L42: 离线进化同步管道
+    ...makeVisionCapabilities(runtime), // L43: vision.*
   ];
 
   runtime.capabilities.registerAll(all);

@@ -42,6 +42,8 @@ export type SkillBridge = {
     skillId: string;
     input?: Record<string, unknown>;
   }): Promise<Record<string, unknown>>;
+  /** 可选：列出 harness 侧所有可用 skill（OpenClaw ClawHub）*/
+  list?(): Promise<Array<{ id: string; name?: string; description?: string }>>;
 };
 
 export type BridgeTypeMap = {
