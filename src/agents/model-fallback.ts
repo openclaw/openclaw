@@ -548,7 +548,7 @@ function resolveFallbackSoonestCooldownExpiry(params: {
   return soonest;
 }
 
-function resolveImageFallbackCandidates(
+export function resolveImageFallbackCandidates(
   params: {
     cfg: OpenClawConfig | undefined;
     defaultProvider: string;
@@ -605,7 +605,7 @@ function resolveImageFallbackCandidates(
   return candidates;
 }
 
-function resolveImageFallbackDefaultProvider(cfg: OpenClawConfig | undefined): string {
+export function resolveImageFallbackDefaultProvider(cfg: OpenClawConfig | undefined): string {
   const configuredPrimary = resolveAgentModelPrimaryValue(cfg?.agents?.defaults?.imageModel);
   if (configuredPrimary?.trim()) {
     const aliasIndex = buildModelAliasIndex({

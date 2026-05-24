@@ -428,6 +428,15 @@ export type PluginManifestMediaUnderstandingProviderMetadata = {
   defaultModels?: Partial<Record<PluginManifestMediaUnderstandingCapability, string>>;
   autoPriority?: Partial<Record<PluginManifestMediaUnderstandingCapability, number>>;
   nativeDocumentInputs?: Array<"pdf">;
+  documentModels?: Partial<
+    Record<
+      "pdf",
+      {
+        textExtraction?: string;
+        image?: string | false;
+      }
+    >
+  >;
 };
 
 export type PluginManifestProviderBaseUrlGuard = {
@@ -604,6 +613,26 @@ function normalizeMediaUnderstandingNativeDocumentInputs(value: unknown): Array<
   return values.length > 0 ? values : undefined;
 }
 
+function normalizeMediaUnderstandingDocumentModels(
+  value: unknown,
+): PluginManifestMediaUnderstandingProviderMetadata["documentModels"] | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+  const pdfRaw = value.pdf;
+  if (!isRecord(pdfRaw)) {
+    return undefined;
+  }
+  const textExtraction = normalizeOptionalString(pdfRaw.textExtraction);
+  const image: string | false | undefined =
+    pdfRaw.image === false ? false : normalizeOptionalString(pdfRaw.image);
+  const pdf = {
+    ...(textExtraction ? { textExtraction } : {}),
+    ...(image !== undefined ? { image } : {}),
+  };
+  return Object.keys(pdf).length > 0 ? { pdf } : undefined;
+}
+
 function normalizeMediaUnderstandingProviderMetadata(
   value: unknown,
 ): Record<string, PluginManifestMediaUnderstandingProviderMetadata> | undefined {
@@ -623,11 +652,13 @@ function normalizeMediaUnderstandingProviderMetadata(
     const nativeDocumentInputs = normalizeMediaUnderstandingNativeDocumentInputs(
       rawMetadata.nativeDocumentInputs,
     );
+    const documentModels = normalizeMediaUnderstandingDocumentModels(rawMetadata.documentModels);
     const metadata = {
       ...(capabilities ? { capabilities } : {}),
       ...(defaultModels ? { defaultModels } : {}),
       ...(autoPriority ? { autoPriority } : {}),
       ...(nativeDocumentInputs ? { nativeDocumentInputs } : {}),
+      ...(documentModels ? { documentModels } : {}),
     } satisfies PluginManifestMediaUnderstandingProviderMetadata;
     if (Object.keys(metadata).length > 0) {
       normalized[providerId] = metadata;

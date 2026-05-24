@@ -639,6 +639,34 @@ describe("selectAgentHarness", () => {
     ).toBe("codex");
   });
 
+  it("skips harness compaction preflight for claude-cli runtime sessions", async () => {
+    await expect(
+      maybeCompactAgentHarnessSession({
+        sessionId: "session-1",
+        sessionKey: "agent:main:main",
+        sessionFile: "/tmp/session.jsonl",
+        workspaceDir: "/tmp/workspace",
+        provider: "anthropic",
+        model: "claude-opus-4-7",
+        config: agentModelRuntimeConfig("anthropic/claude-opus-4-7", "claude-cli"),
+      }),
+    ).resolves.toBeUndefined();
+  });
+
+  it("skips harness compaction preflight for claude-cli provider sessions", async () => {
+    await expect(
+      maybeCompactAgentHarnessSession({
+        sessionId: "session-1",
+        sessionKey: "agent:main:main",
+        sessionFile: "/tmp/session.jsonl",
+        workspaceDir: "/tmp/workspace",
+        provider: "claude-cli",
+        model: "claude-opus-4-7",
+        config: providerRuntimeConfig("claude-cli", "claude-cli"),
+      }),
+    ).resolves.toBeUndefined();
+  });
+
   it("ignores stale plugin pins during compaction when the provider no longer matches", async () => {
     registerFailingCodexHarness();
 

@@ -431,7 +431,7 @@ async function waitForGatewayReady(child, port, logPath) {
       lastError = error instanceof Error ? error.message : String(error);
     }
     if (fs.existsSync(logPath) && fs.readFileSync(logPath, "utf8").includes("[gateway] ready")) {
-      return;
+      lastError = `${lastError}; gateway log reported ready before HTTP readiness`;
     }
     await delay(250);
   }
@@ -588,7 +588,7 @@ async function sampleWindowsProcess(pid, run) {
 
 export function assertResourceCeiling(sample) {
   if (!sample) {
-    return;
+    throw new Error("gateway RSS sample was not captured");
   }
   if (sample.rssMiB > MAX_RSS_MIB) {
     throw new Error(`gateway RSS exceeded ${MAX_RSS_MIB} MiB: ${sample.rssMiB} MiB`);

@@ -292,6 +292,11 @@ const PRIVATE_PLUGIN_SDK_SUBPATH_OWNERS: readonly PrivatePluginSdkSubpathOwner[]
     allowPrivateQaCli: false,
     subpaths: [OLLAMA_CONFIGURED_LOCAL_ORIGIN_RUNTIME_PLUGIN_SDK_SUBPATH],
   },
+  {
+    bundledPluginId: "browser",
+    allowPrivateQaCli: false,
+    subpaths: [OLLAMA_CONFIGURED_LOCAL_ORIGIN_RUNTIME_PLUGIN_SDK_SUBPATH],
+  },
 ];
 const PLUGIN_SDK_SOURCE_CANDIDATE_EXTENSIONS = [
   ".ts",
@@ -570,10 +575,10 @@ function isTrustedPrivatePluginSdkOwnerPath(params: {
     : false;
 }
 
-function findPrivatePluginSdkSubpathOwner(
+function findPrivatePluginSdkSubpathOwners(
   subpath: string,
-): PrivatePluginSdkSubpathOwner | undefined {
-  return PRIVATE_PLUGIN_SDK_SUBPATH_OWNERS.find((owner) => owner.subpaths.includes(subpath));
+): readonly PrivatePluginSdkSubpathOwner[] {
+  return PRIVATE_PLUGIN_SDK_SUBPATH_OWNERS.filter((owner) => owner.subpaths.includes(subpath));
 }
 
 function listTrustedPrivatePluginSdkOwnerKeys(params: {
@@ -590,13 +595,14 @@ function shouldIncludePrivateLocalOnlyPluginSdkSubpath(params: {
   modulePath: string;
   subpath: string;
 }) {
-  const owner = findPrivatePluginSdkSubpathOwner(params.subpath);
-  if (!owner) {
+  const owners = findPrivatePluginSdkSubpathOwners(params.subpath);
+  if (owners.length === 0) {
     return shouldIncludePrivateLocalOnlyPluginSdkSubpaths();
   }
-  return (
-    isTrustedPrivatePluginSdkOwnerPath({ ...params, owner }) ||
-    (owner.allowPrivateQaCli && shouldIncludePrivateLocalOnlyPluginSdkSubpaths())
+  return owners.some(
+    (owner) =>
+      isTrustedPrivatePluginSdkOwnerPath({ ...params, owner }) ||
+      (owner.allowPrivateQaCli && shouldIncludePrivateLocalOnlyPluginSdkSubpaths()),
   );
 }
 

@@ -415,7 +415,9 @@ export async function startGatewaySidecars(params: {
   defaultWorkspaceDir: string;
   deps: CliDeps;
   startChannels: () => Promise<void>;
+  onChannelsStarted?: () => Awaitable<void>;
   onPluginServices?: (pluginServices: PluginServicesHandle | null) => void;
+  shouldStartPluginServices?: () => boolean;
   log: { warn: (msg: string) => void };
   logHooks: {
     info: (msg: string) => void;
@@ -448,31 +450,6 @@ export async function startGatewaySidecars(params: {
     }
   });
 
-  const pluginServicesPromise = measureStartup(
-    params.startupTrace,
-    "sidecars.plugin-services",
-    async () => {
-      try {
-        const { startPluginServices } = await import("../plugins/services.js");
-        return await startPluginServices({
-          registry: params.pluginRegistry,
-          config: params.cfg,
-          workspaceDir: params.defaultWorkspaceDir,
-          startupTrace: params.startupTrace,
-        });
-      } catch (err) {
-        params.log.warn(`plugin services failed to start: ${String(err)}`);
-        return null;
-      }
-    },
-  );
-  const pluginServicesReportPromise = params.onPluginServices
-    ? pluginServicesPromise.then((pluginServices) => {
-        params.onPluginServices?.(pluginServices);
-        return pluginServices;
-      })
-    : pluginServicesPromise;
-
   const skipChannels =
     isTruthyEnvValue(process.env.OPENCLAW_SKIP_CHANNELS) ||
     isTruthyEnvValue(process.env.OPENCLAW_SKIP_PROVIDERS);
@@ -493,6 +470,32 @@ export async function startGatewaySidecars(params: {
       );
     }
   });
+  await params.onChannelsStarted?.();
+
+  let pluginServices =
+    params.shouldStartPluginServices?.() === false
+      ? null
+      : await measureStartup(params.startupTrace, "sidecars.plugin-services", async () => {
+          try {
+            const { startPluginServices } = await import("../plugins/services.js");
+            return await startPluginServices({
+              registry: params.pluginRegistry,
+              config: params.cfg,
+              workspaceDir: params.defaultWorkspaceDir,
+              startupTrace: params.startupTrace,
+            });
+          } catch (err) {
+            params.log.warn(`plugin services failed to start: ${String(err)}`);
+            return null;
+          }
+        });
+  if (pluginServices && params.shouldStartPluginServices?.() === false) {
+    await pluginServices.stop().catch((err) => {
+      params.log.warn(`plugin services stop after close failed: ${String(err)}`);
+    });
+    pluginServices = null;
+  }
+  params.onPluginServices?.(pluginServices);
 
   const shouldDispatchGatewayStartupInternalHook =
     internalHooksConfigured || (await hasGatewayStartupInternalHookListeners());
@@ -510,8 +513,6 @@ export async function startGatewaySidecars(params: {
       );
     }, 250);
   }
-
-  const pluginServices = await pluginServicesReportPromise;
 
   if (params.cfg.acp?.enabled) {
     void (async () => {
@@ -845,10 +846,12 @@ export async function startGatewayPostAttachRuntime(
       gatewayMethods: string[];
     }) => Awaitable<void>;
     getCronService?: () => PluginHookGatewayCronService | null | undefined;
+    onChannelsStarted?: () => Awaitable<void>;
     onPluginServices?: (pluginServices: PluginServicesHandle | null) => void;
     onPostReadySidecars?: (postReadySidecars: GatewayPostReadySidecarHandle[]) => void;
     onGatewayLifetimeSidecars?: (sidecars: GatewayPostReadySidecarHandle[]) => void;
     onSidecarsReady?: () => void;
+    isClosing?: () => boolean;
     startupTrace?: GatewayStartupTrace;
     deferSidecars?: boolean;
     providerAuthPrewarm?: {
@@ -942,7 +945,9 @@ export async function startGatewayPostAttachRuntime(
             logHooks: params.logHooks,
             logChannels: params.logChannels,
             startupTrace: params.startupTrace,
+            onChannelsStarted: params.onChannelsStarted,
             onPluginServices: reportPluginServices,
+            shouldStartPluginServices: () => params.isClosing?.() !== true,
           }),
         );
         const loaderStatsAfter = getPluginModuleLoaderStats();

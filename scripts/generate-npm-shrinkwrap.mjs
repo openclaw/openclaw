@@ -242,6 +242,7 @@ function disableShrinkwrappedOverrideConflictSources(lockfile, overrideRules) {
   if (!packages || typeof packages !== "object") {
     return [];
   }
+  /** @type {Set<string>} */
   const disabled = new Set();
   for (const violation of collectOverrideViolations(lockfile, overrideRules)) {
     const ancestors = violation.packagePath.slice(0, -1).toReversed();
@@ -608,9 +609,9 @@ export {
   exactOverrideRulesFromOverrides,
   exactVersionFromOverrideSpec,
   normalizeNpmVersionDrift,
+  packageJsonForShrinkwrap,
   parsePnpmPackageKey,
   parseLockPackagePath,
-  packageJsonForShrinkwrap,
   readShrinkwrapOverrides,
   shrinkwrapPackageDirsForChangedPaths,
 };

@@ -12,6 +12,7 @@ import { createInboundDebouncer } from "openclaw/plugin-sdk/channel-inbound-debo
 import { getChildLogger } from "openclaw/plugin-sdk/logging-core";
 import { defaultRuntime } from "openclaw/plugin-sdk/runtime-env";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
+import { maybeResolveWhatsAppApprovalReaction } from "../approval-reactions.js";
 import { readWebSelfIdentityForDecision, WhatsAppAuthUnstableError } from "../auth-store.js";
 import { getPrimaryIdentityId, resolveComparableIdentity } from "../identity.js";
 import { cacheInboundMessageMeta } from "../quoted-message.js";
@@ -1054,6 +1055,20 @@ export async function attachWebInboxToSocket(
       return;
     }
     for (const msg of upsert.messages ?? []) {
+      if (
+        await maybeResolveWhatsAppApprovalReaction({
+          cfg: options.loadConfig?.() ?? options.cfg,
+          accountId: options.accountId,
+          msg,
+          selfJid: self.jid,
+          selfLid: self.lid,
+          resolveInboundJid,
+          logVerboseMessage: (message) => logWhatsAppVerbose(options.verbose, message),
+        })
+      ) {
+        continue;
+      }
+
       await processDurableInboundMessage(msg, upsert.type);
     }
   };

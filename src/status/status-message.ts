@@ -213,6 +213,36 @@ const formatTokens = (total: number | null | undefined, contextTokens: number | 
   return `${totalLabel}/${ctxLabel}${pct !== null ? ` (${pct}%)` : ""}`;
 };
 
+const formatEstimatedContextBudgetTokens = (
+  status: SessionEntry["contextBudgetStatus"] | undefined,
+  contextTokens: number | null | undefined,
+) => {
+  if (!status || status.source !== "pre-prompt-estimate") {
+    return null;
+  }
+  const estimatedPromptTokens =
+    typeof status.estimatedPromptTokens === "number" &&
+    Number.isFinite(status.estimatedPromptTokens) &&
+    status.estimatedPromptTokens >= 0
+      ? Math.floor(status.estimatedPromptTokens)
+      : undefined;
+  if (estimatedPromptTokens === undefined) {
+    return null;
+  }
+  const ctx =
+    typeof contextTokens === "number" && Number.isFinite(contextTokens) && contextTokens > 0
+      ? contextTokens
+      : typeof status.contextTokenBudget === "number" &&
+          Number.isFinite(status.contextTokenBudget) &&
+          status.contextTokenBudget > 0
+        ? status.contextTokenBudget
+        : undefined;
+  const pct = ctx ? Math.min(999, Math.round((estimatedPromptTokens / ctx) * 100)) : null;
+  const totalLabel = formatTokenCount(estimatedPromptTokens);
+  const ctxLabel = ctx ? formatTokenCount(ctx) : "?";
+  return `~${totalLabel}/${ctxLabel}${pct !== null ? ` (${pct}% est)` : " (est)"}`;
+};
+
 export const formatContextUsageShort = (
   total: number | null | undefined,
   contextTokens: number | null | undefined,
@@ -822,8 +852,13 @@ export function buildStatusMessage(args: StatusArgs): string {
     ? (args.groupActivation ?? entry?.groupActivation ?? "mention")
     : undefined;
 
+  const contextUsageLabel =
+    totalTokens == null || totalTokens === 0
+      ? (formatEstimatedContextBudgetTokens(entry?.contextBudgetStatus, contextTokens) ??
+        formatTokens(totalTokens, contextTokens ?? null))
+      : formatTokens(totalTokens, contextTokens ?? null);
   const contextLine = [
-    `Context: ${formatTokens(totalTokens, contextTokens ?? null)}`,
+    `Context: ${contextUsageLabel}`,
     `🧹 Compactions: ${entry?.compactionCount ?? 0}`,
   ]
     .filter(Boolean)

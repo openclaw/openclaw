@@ -381,6 +381,25 @@ function supportsAnthropicImageInput(modelId: string, modelName?: string): boole
     .some((candidate) => matchesAnthropicModernModel(candidate));
 }
 
+function resolveAnthropicImageMediaInput(modelId: string, modelName?: string) {
+  if (!supportsAnthropicImageInput(modelId, modelName)) {
+    return undefined;
+  }
+  const refs = [modelId, modelName].filter((value): value is string => typeof value === "string");
+  const opus47 = refs.some((ref) =>
+    [ANTHROPIC_OPUS_47_MODEL_ID, ANTHROPIC_OPUS_47_DOT_MODEL_ID].some((prefix) =>
+      normalizeLowercaseStringOrEmpty(ref).startsWith(prefix),
+    ),
+  );
+  return {
+    image: {
+      maxSidePx: opus47 ? 2576 : 1568,
+      preferredSidePx: opus47 ? 2576 : 1568,
+      tokenMode: "provider" as const,
+    },
+  };
+}
+
 function applyAnthropicImageInputCapability(params: {
   modelId: string;
   model: ProviderRuntimeModel;
@@ -401,13 +420,27 @@ function normalizeAnthropicResolvedModel(
   ctx: ProviderNormalizeResolvedModelContext,
 ): ProviderRuntimeModel | undefined {
   const imageCapableModel = applyAnthropicImageInputCapability(ctx) ?? ctx.model;
+  const mediaInput = resolveAnthropicImageMediaInput(ctx.modelId, imageCapableModel.name);
+  const mediaInputModel = mediaInput
+    ? {
+        ...imageCapableModel,
+        mediaInput: {
+          ...mediaInput,
+          ...imageCapableModel.mediaInput,
+          image: {
+            ...mediaInput.image,
+            ...imageCapableModel.mediaInput?.image,
+          },
+        },
+      }
+    : imageCapableModel;
   const contextWindowModel =
     applyAnthropicGa1MContextWindow({
       config: ctx.config,
       provider: ctx.provider,
       modelId: ctx.modelId,
-      model: imageCapableModel,
-    }) ?? imageCapableModel;
+      model: mediaInputModel,
+    }) ?? mediaInputModel;
   return contextWindowModel === ctx.model ? undefined : contextWindowModel;
 }
 
