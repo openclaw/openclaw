@@ -361,6 +361,11 @@ type ChannelStatusSummary = {
   linked?: boolean;
 };
 
+type ChannelAccountStatusSummary = ChannelStatusSummary & {
+  running?: boolean;
+  accountId?: string;
+};
+
 function listChannelStatusSummaries(
   channels: Record<string, ChannelStatusSummary> | ChannelStatusSummary[] | undefined,
 ): ChannelStatusSummary[] {
@@ -373,8 +378,24 @@ function listChannelStatusSummaries(
   return [];
 }
 
+function listChannelAccountStatusSummaries(
+  accounts: Record<string, ChannelAccountStatusSummary> | ChannelAccountStatusSummary[] | undefined,
+): ChannelAccountStatusSummary[] {
+  if (Array.isArray(accounts)) {
+    return accounts;
+  }
+  if (accounts && typeof accounts === "object") {
+    return Object.values(accounts);
+  }
+  return [];
+}
+
 function isChannelConnected(channel: ChannelStatusSummary): boolean {
   return channel.connected === true || channel.linked === true;
+}
+
+function isChannelAccountConnected(account: ChannelAccountStatusSummary): boolean {
+  return account.connected === true || (account.running === true && account.connected !== false);
 }
 
 async function checkChannelsStatus(
@@ -389,6 +410,10 @@ async function checkChannelsStatus(
 
     const result = await callGateway<{
       channels?: Record<string, ChannelStatusSummary> | ChannelStatusSummary[];
+      channelAccounts?: Record<
+        string,
+        Record<string, ChannelAccountStatusSummary> | ChannelAccountStatusSummary[]
+      >;
     }>({
       method: "channels.status",
       params: {},
@@ -396,7 +421,15 @@ async function checkChannelsStatus(
     });
 
     const channels = listChannelStatusSummaries(result?.channels);
-    const connected = channels.filter(isChannelConnected).length;
+    const connectedFromAccounts = channelIds.filter((channelId) =>
+      listChannelAccountStatusSummaries(result?.channelAccounts?.[channelId]).some(
+        isChannelAccountConnected,
+      ),
+    ).length;
+    const connected =
+      result?.channelAccounts && Object.keys(result.channelAccounts).length > 0
+        ? connectedFromAccounts
+        : channels.filter(isChannelConnected).length;
     const total = channelIds.length;
 
     if (connected === total) {

@@ -34,8 +34,12 @@ describe("captureBaseline", () => {
         if (method === "channels.status") {
           return {
             channels: {
-              telegram: { linked: true },
+              telegram: { configured: true },
               signal: { configured: false },
+            },
+            channelAccounts: {
+              telegram: [{ accountId: "default", running: true }],
+              signal: [{ accountId: "default", running: false, connected: false }],
             },
           };
         }
