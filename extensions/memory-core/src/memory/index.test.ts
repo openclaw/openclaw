@@ -33,6 +33,7 @@ let providerCloseFailuresRemaining = 0;
 let providerCloseGate: Promise<void> | null = null;
 let providerCalls: Array<{ provider?: string; model?: string; outputDimensionality?: number }> = [];
 let forceNoProvider = false;
+let failNextProviderInit = false;
 
 vi.mock("./embeddings.js", () => {
   const embedText = (text: string) => {
@@ -54,6 +55,10 @@ vi.mock("./embeddings.js", () => {
         model: options.model,
         outputDimensionality: options.outputDimensionality,
       });
+      if (failNextProviderInit) {
+        failNextProviderInit = false;
+        throw new Error("provider init temporarily failed");
+      }
       if (forceNoProvider) {
         return {
           provider: null,
@@ -204,6 +209,7 @@ describe("memory index", () => {
     providerCloseGate = null;
     providerCalls = [];
     forceNoProvider = false;
+    failNextProviderInit = false;
 
     rmSync(workspaceDir, { recursive: true, force: true });
     mkdirSync(memoryDir, { recursive: true });
@@ -575,6 +581,20 @@ describe("memory index", () => {
     expect((cached?.cacheExpiresAtMs ?? 0) - (cached?.checkedAtMs ?? 0)).toBe(
       EMBEDDING_PROBE_CACHE_TTL_MS,
     );
+  });
+
+  it("retries provider initialization after a failed embedding probe", async () => {
+    const cfg = createCfg({ storePath: path.join(workspaceDir, "index-provider-retry.sqlite") });
+    const manager = await getPersistentManager(cfg);
+
+    failNextProviderInit = true;
+    await expect(manager.probeEmbeddingAvailability()).rejects.toThrow(
+      "provider init temporarily failed",
+    );
+    await expect(manager.probeEmbeddingAvailability()).resolves.toEqual({ ok: true });
+
+    expect(providerCalls).toHaveLength(2);
+    expect(embedBatchCalls).toBe(1);
   });
 
   it("streams embedding cache rows during safe reindex", async () => {

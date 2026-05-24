@@ -22,6 +22,13 @@ function createQmdConfig(
   } as OpenClawConfig;
 }
 
+function createBuiltinConfig(agents: OpenClawConfig["agents"]): OpenClawConfig {
+  return {
+    agents,
+    memory: { backend: "builtin" },
+  } as OpenClawConfig;
+}
+
 function createGatewayLogMock() {
   return { info: vi.fn(), warn: vi.fn() };
 }
@@ -34,22 +41,93 @@ function createQmdManagerMock() {
   };
 }
 
+function createBuiltinManagerMock(
+  probeResult: { ok: true } | { ok: false; error?: string } = { ok: true },
+) {
+  return {
+    search: vi.fn(),
+    readFile: vi.fn(),
+    status: vi.fn(),
+    probeEmbeddingAvailability: vi.fn(async () => probeResult),
+    probeVectorAvailability: vi.fn(async () => true),
+    close: vi.fn(async () => undefined),
+  };
+}
+
 describe("startGatewayMemoryBackend", () => {
   beforeEach(() => {
     getMemorySearchManagerMock.mockClear();
   });
 
-  it("skips initialization when memory backend is not qmd", async () => {
-    const cfg = {
-      agents: { list: [{ id: "main", default: true }] },
-      memory: { backend: "builtin" },
-    } as OpenClawConfig;
+  it("skips builtin startup work when the provider is not explicitly local", async () => {
+    const cfg = createBuiltinConfig({ list: [{ id: "main", default: true }] });
     const log = { info: vi.fn(), warn: vi.fn() };
 
     await startGatewayMemoryBackend({ cfg, log });
 
     expect(getMemorySearchManagerMock).not.toHaveBeenCalled();
     expect(log.info).not.toHaveBeenCalled();
+    expect(log.warn).not.toHaveBeenCalled();
+  });
+
+  it("prewarms builtin local embeddings for explicitly local memory search", async () => {
+    const cfg = createBuiltinConfig({
+      defaults: { memorySearch: { enabled: true, provider: "local" } },
+      list: [{ id: "main", default: true }],
+    });
+    const log = createGatewayLogMock();
+    const manager = createBuiltinManagerMock();
+    getMemorySearchManagerMock.mockResolvedValue({
+      manager,
+    });
+
+    await startGatewayMemoryBackend({ cfg, log });
+
+    expect(getMemorySearchManagerMock).toHaveBeenCalledTimes(1);
+    expect(getMemorySearchManagerMock).toHaveBeenCalledWith({ cfg, agentId: "main" });
+    expect(manager.probeEmbeddingAvailability).toHaveBeenCalledTimes(1);
+    expect(log.info).toHaveBeenCalledWith(
+      'builtin local memory startup prewarm completed for agent "main"',
+    );
+    expect(log.warn).not.toHaveBeenCalled();
+  });
+
+  it("logs a warning when builtin local embedding prewarm reports unavailable", async () => {
+    const cfg = createBuiltinConfig({
+      defaults: { memorySearch: { enabled: true, provider: "local" } },
+      list: [{ id: "main", default: true }],
+    });
+    const log = createGatewayLogMock();
+    getMemorySearchManagerMock.mockResolvedValue({
+      manager: createBuiltinManagerMock({ ok: false, error: "model missing" }),
+    });
+
+    await startGatewayMemoryBackend({ cfg, log });
+
+    expect(log.warn).toHaveBeenCalledWith(
+      'builtin local memory startup prewarm failed for agent "main": model missing',
+    );
+    expect(log.info).not.toHaveBeenCalled();
+  });
+
+  it("defers inherited builtin local prewarm when defaults do not opt into eager work", async () => {
+    const cfg = createBuiltinConfig({
+      defaults: { memorySearch: { provider: "local" } },
+      list: [{ id: "ops", default: true }, { id: "main" }],
+    });
+    const log = createGatewayLogMock();
+    getMemorySearchManagerMock.mockResolvedValue({ manager: createBuiltinManagerMock() });
+
+    await startGatewayMemoryBackend({ cfg, log });
+
+    expect(getMemorySearchManagerMock).toHaveBeenCalledTimes(1);
+    expect(getMemorySearchManagerMock).toHaveBeenCalledWith({ cfg, agentId: "ops" });
+    expect(log.info).toHaveBeenCalledWith(
+      'builtin local memory startup prewarm completed for agent "ops"',
+    );
+    expect(log.info).toHaveBeenCalledWith(
+      'builtin local memory startup prewarm deferred for 1 agent: "main"',
+    );
     expect(log.warn).not.toHaveBeenCalled();
   });
 

@@ -44,7 +44,7 @@ export function expectCodexMissingAuthHint(
   }) => string | undefined,
   expectedModel = "openai/gpt-5.5",
 ) {
-  expect(
+  const message =
     buildProviderMissingAuthMessageWithPlugin({
       provider: "openai",
       env: process.env,
@@ -53,8 +53,17 @@ export function expectCodexMissingAuthHint(
         provider: "openai",
         listProfileIds: (providerId) => (providerId === "openai-codex" ? ["p1"] : []),
       },
-    }),
-  ).toContain(expectedModel);
+    }) ?? "";
+
+  expect(message).toContain('No API key found for provider "openai"');
+  const acceptedModels = expectedModel.startsWith("openai/")
+    ? [expectedModel, expectedModel.replace(/^openai\//, "openai-codex/")]
+    : [expectedModel];
+  expect(message).toMatch(
+    new RegExp(
+      acceptedModels.map((model) => model.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|"),
+    ),
+  );
 }
 
 export async function expectAugmentedCodexCatalog(

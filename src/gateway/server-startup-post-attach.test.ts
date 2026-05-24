@@ -696,6 +696,42 @@ describe("startGatewayPostAttachRuntime", () => {
     ).toEqual({ mode: "off" });
   });
 
+  it("starts explicit builtin local memory prewarm after post-attach", async () => {
+    await startGatewayPostAttachRuntime({
+      ...createPostAttachParams(),
+      gatewayPluginConfigAtStart: {
+        hooks: { internal: { enabled: false } },
+        memory: { backend: "builtin" },
+        agents: {
+          defaults: { memorySearch: { provider: "local" } },
+          list: [{ id: "main", default: true }],
+        },
+      } as never,
+    });
+
+    await vi.waitFor(() => {
+      expect(hoisted.startGatewayMemoryBackend).toHaveBeenCalledTimes(1);
+    });
+    expect(
+      __testing.resolveGatewayMemoryStartupPolicy({
+        memory: { backend: "builtin" },
+        agents: {
+          defaults: { memorySearch: { provider: "local" } },
+          list: [{ id: "main", default: true }],
+        },
+      } as never),
+    ).toEqual({ mode: "immediate" });
+    expect(
+      __testing.resolveGatewayMemoryStartupPolicy({
+        memory: { backend: "builtin" },
+        agents: {
+          defaults: { memorySearch: { provider: "auto" } },
+          list: [{ id: "main", default: true }],
+        },
+      } as never),
+    ).toEqual({ mode: "off" });
+  });
+
   it("starts the qmd memory backend when startup refresh is immediate", async () => {
     await startGatewayPostAttachRuntime({
       ...createPostAttachParams(),

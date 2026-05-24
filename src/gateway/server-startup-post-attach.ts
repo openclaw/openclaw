@@ -97,7 +97,25 @@ function shouldCheckRestartSentinel(env: NodeJS.ProcessEnv = process.env): boole
   return !env.VITEST && env.NODE_ENV !== "test";
 }
 
+function hasBuiltinLocalMemorySearch(cfg: OpenClawConfig): boolean {
+  const defaultMemorySearch = cfg.agents?.defaults?.memorySearch;
+  const defaultEnabled = defaultMemorySearch?.enabled ?? true;
+  const defaultProvider = defaultMemorySearch?.provider;
+  const agentEntries = cfg.agents?.list;
+  if (!agentEntries?.length) {
+    return defaultEnabled && defaultProvider === "local";
+  }
+  return agentEntries.some((entry) => {
+    const enabled = entry.memorySearch?.enabled ?? defaultEnabled;
+    const provider = entry.memorySearch?.provider ?? defaultProvider;
+    return enabled && provider === "local";
+  });
+}
+
 function resolveGatewayMemoryStartupPolicy(cfg: OpenClawConfig): GatewayMemoryStartupPolicy {
+  if (cfg.memory?.backend === "builtin" || cfg.memory?.backend == null) {
+    return hasBuiltinLocalMemorySearch(cfg) ? { mode: "immediate" } : { mode: "off" };
+  }
   if (cfg.memory?.backend !== "qmd") {
     return { mode: "off" };
   }

@@ -303,10 +303,11 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
         this.batch = this.resolveBatchConfig();
       })();
     }
+    const pendingProviderInit = this.providerInitPromise;
     try {
-      await this.providerInitPromise;
+      await pendingProviderInit;
     } finally {
-      if (this.providerInitialized) {
+      if (this.providerInitPromise === pendingProviderInit) {
         this.providerInitPromise = null;
       }
     }
