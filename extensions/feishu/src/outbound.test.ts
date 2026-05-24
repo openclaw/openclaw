@@ -468,6 +468,43 @@ describe("feishuOutbound.sendPayload native cards", () => {
     expectFeishuResult(result, "native_card_msg");
   });
 
+  it("does not duplicate title-only presentation cards in outbound fallbacks", async () => {
+    const presentation: MessagePresentation = {
+      title: "Status",
+      blocks: [],
+    };
+    const payload = { presentation };
+    const rendered = await feishuOutbound.renderPresentation?.({
+      payload,
+      presentation,
+      ctx: {
+        cfg: emptyConfig,
+        to: "chat_1",
+        text: "",
+        accountId: "main",
+        payload,
+      },
+    });
+
+    if (!rendered) {
+      throw new Error("expected Feishu presentation renderer to return a payload");
+    }
+    const renderedChannelData = rendered.channelData as
+      | { feishu?: { card?: Record<string, any> } }
+      | undefined;
+    const renderedCard = renderedChannelData?.feishu?.card;
+    expect(renderedCard?.header).toEqual({
+      title: { tag: "plain_text", content: "Status" },
+      template: "blue",
+    });
+    expect(renderedCard?.body?.elements).toEqual([
+      {
+        tag: "markdown",
+        content: "",
+      },
+    ]);
+  });
+
   it("sends interactive button payloads as native Feishu cards", async () => {
     const result = await feishuOutbound.sendPayload?.({
       cfg: emptyConfig,
@@ -583,6 +620,12 @@ describe("feishuOutbound.sendPayload native cards", () => {
                     actions: [
                       {
                         tag: "button",
+                        text: { tag: "plain_text", content: "Promote" },
+                        type: "success",
+                        url: "https://example.com/promote",
+                      },
+                      {
+                        tag: "button",
                         text: { tag: "plain_text", content: "Bad link" },
                         url: "file:///etc/passwd",
                       },
@@ -608,6 +651,12 @@ describe("feishuOutbound.sendPayload native cards", () => {
       {
         tag: "action",
         actions: [
+          {
+            tag: "button",
+            text: { tag: "plain_text", content: "Promote" },
+            type: "primary",
+            url: "https://example.com/promote",
+          },
           {
             tag: "button",
             text: { tag: "plain_text", content: "Good link" },
