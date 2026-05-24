@@ -496,6 +496,12 @@ See [Inferred commitments](/concepts/commitments).
     trustedProxies: ["10.0.0.1"],
     // Optional. Default false.
     allowRealIpFallback: false,
+    providerAuthPrewarm: {
+      // Optional. Default true.
+      enabled: true,
+      // Optional. Default 1000 ms.
+      delayMs: 1000,
+    },
     nodes: {
       pairing: {
         // Optional. Default unset/disabled.
@@ -563,6 +569,9 @@ See [Inferred commitments](/concepts/commitments).
 - `gateway.channelMaxRestartsPerHour`: maximum health-monitor restarts per channel/account in a rolling hour. Default: `10`.
 - `channels.<provider>.healthMonitor.enabled`: per-channel opt-out for health-monitor restarts while keeping the global monitor enabled.
 - `channels.<provider>.accounts.<accountId>.healthMonitor.enabled`: per-account override for multi-account channels. When set, it takes precedence over the channel-level override.
+- `gateway.providerAuthPrewarm.enabled`: enables provider auth-state prewarm after gateway startup and provider auth rewarm after hot reload or model-auth logout. Default: `true`. Set `false` on resource-constrained hosts when channel readiness is more important than warming model-auth status caches. Disabling prewarm can make the first model-auth status check colder.
+- `gateway.providerAuthPrewarm.delayMs`: delay before startup provider auth-state prewarm begins after gateway sidecars are ready. Default: `1000`. Increase this to let channel gateways settle before provider auth discovery starts.
+- `OPENCLAW_SKIP_PROVIDER_AUTH_PREWARM=1`: environment override that disables provider auth prewarm and rewarm regardless of `gateway.providerAuthPrewarm.enabled`.
 - Local gateway call paths can use `gateway.remote.*` as fallback only when `gateway.auth.*` is unset.
 - If `gateway.auth.token` / `gateway.auth.password` is explicitly configured via SecretRef and unresolved, resolution fails closed (no remote fallback masking).
 - `trustedProxies`: reverse proxy IPs that terminate TLS or inject forwarded-client headers. Only list proxies you control. Loopback entries are still valid for same-host proxy/local-detection setups (for example Tailscale Serve or a local reverse proxy), but they do **not** make loopback requests eligible for `gateway.auth.mode: "trusted-proxy"`.
