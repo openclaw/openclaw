@@ -910,6 +910,53 @@ describe("runMemoryFlushIfNeeded", () => {
     expect(compactEmbeddedPiSessionMock).not.toHaveBeenCalled();
   });
 
+  it("leaves policy-resolved OpenAI Codex sessions to native Codex auto-compaction", async () => {
+    registerMemoryFlushPlanResolverForTest(() => ({
+      softThresholdTokens: 4_000,
+      forceFlushTranscriptBytes: 1_000_000_000,
+      reserveTokensFloor: 0,
+      prompt: "Pre-compaction memory flush.\nNO_REPLY",
+      systemPrompt: "Write memory to memory/YYYY-MM-DD.md.",
+      relativePath: "memory/2023-11-14.md",
+    }));
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+      totalTokens: 347_000,
+      totalTokensFresh: false,
+    };
+
+    const entry = await runPreflightCompactionIfNeeded({
+      cfg: {
+        models: {
+          providers: {
+            openai: { models: [{ id: "gpt-5.5", contextWindow: 1_000_000 }] },
+            "openai-codex": { models: [{ id: "gpt-5.5", contextWindow: 350_000 }] },
+          },
+        },
+        agents: { defaults: { compaction: { memoryFlush: {} } } },
+      } as never,
+      followupRun: createTestFollowupRun({
+        provider: "openai",
+        model: "gpt-5.5",
+        sessionId: "session",
+        sessionKey: "agent:main:telegram:default:direct:12345",
+        runtimePolicySessionKey: "agent:main:telegram:default:direct:12345",
+      }),
+      defaultModel: "gpt-5.5",
+      sessionEntry,
+      sessionStore: { "agent:main:telegram:default:direct:12345": sessionEntry },
+      sessionKey: "agent:main:telegram:default:direct:12345",
+      runtimePolicySessionKey: "agent:main:telegram:default:direct:12345",
+      storePath: path.join(rootDir, "sessions.json"),
+      isHeartbeat: false,
+      replyOperation: createReplyOperation(),
+    });
+
+    expect(entry).toBe(sessionEntry);
+    expect(compactEmbeddedPiSessionMock).not.toHaveBeenCalled();
+  });
+
   it("keeps the OpenAI API context window for persisted PI runtime overrides", async () => {
     registerMemoryFlushPlanResolverForTest(() => ({
       softThresholdTokens: 4_000,

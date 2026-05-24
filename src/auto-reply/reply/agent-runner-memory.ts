@@ -639,6 +639,9 @@ export async function runPreflightCompactionIfNeeded(params: {
       runtimePolicySessionKey: params.runtimePolicySessionKey,
     })
   ) {
+    // Codex runtime sessions should reach Codex with their real thread state.
+    // Its harness owns automatic compaction; OpenClaw preflight compaction is
+    // only for non-Codex embedded runtimes.
     logVerbose(
       `preflightCompaction skipped: sessionKey=${params.sessionKey} runtime=codex reason=codex_native_auto_compaction`,
     );

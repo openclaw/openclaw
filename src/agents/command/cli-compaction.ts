@@ -492,6 +492,9 @@ export async function runCliTurnCompactionLifecycle(params: {
       model: params.model,
     })
   ) {
+    // Codex CLI/app-server runtimes own their automatic transcript compaction.
+    // Avoid resurrecting OpenClaw's paternalistic budget fallback here; explicit
+    // /compact or plugin compaction still forwards through the harness path.
     log.debug("skipping OpenClaw CLI compaction for Codex runtime session", {
       sessionId: params.sessionId,
       sessionKey: params.sessionKey,

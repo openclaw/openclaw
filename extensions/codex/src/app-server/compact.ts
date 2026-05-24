@@ -45,6 +45,9 @@ export async function maybeCompactCodexAppServerSession(
     ? params.contextEngine
     : undefined;
   warnIfIgnoringOpenClawCompactionOverrides(params);
+  // Codex owns automatic context-pressure compaction for Codex runtime sessions.
+  // This entry point is only for explicit/manual compaction requests that OpenClaw
+  // forwards to the bound Codex thread.
   const nativeResult = await compactCodexNativeThread(params, options);
   if (activeContextEngine && nativeResult?.ok && nativeResult.compacted) {
     try {

@@ -258,6 +258,58 @@ describe("runCliTurnCompactionLifecycle", () => {
     expect(updatedEntry).toBe(sessionEntry);
   });
 
+  it("skips OpenClaw automatic CLI compaction when OpenAI resolves to Codex by policy", async () => {
+    const sessionKey = "agent:main:codex-policy";
+    const sessionId = "session-codex-policy";
+    const sessionFile = path.join(tmpDir, "session-codex-policy.jsonl");
+    const storePath = path.join(tmpDir, "sessions-codex-policy.json");
+    await writeSessionFile({ sessionFile, sessionId });
+
+    const sessionEntry: SessionEntry = {
+      sessionId,
+      updatedAt: Date.now(),
+      sessionFile,
+      contextTokens: 1_000,
+      totalTokens: 950,
+      totalTokensFresh: true,
+    };
+    const sessionStore: Record<string, SessionEntry> = { [sessionKey]: sessionEntry };
+    await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2), "utf-8");
+
+    const openSessionManager = vi.fn(() => {
+      throw new Error("OpenClaw must not inspect Codex transcripts for automatic compaction");
+    });
+    const resolveContextEngine = vi.fn();
+    const ensureSelectedAgentHarnessPlugin = vi.fn();
+    const compactAgentHarnessSession = vi.fn();
+    setCliCompactionTestDeps({
+      openSessionManager: openSessionManager as never,
+      resolveContextEngine: resolveContextEngine as never,
+      ensureSelectedAgentHarnessPlugin: ensureSelectedAgentHarnessPlugin as never,
+      maybeCompactAgentHarnessSession: compactAgentHarnessSession as never,
+    });
+
+    const updatedEntry = await runCliTurnCompactionLifecycle({
+      cfg: {} as OpenClawConfig,
+      sessionId,
+      sessionKey,
+      sessionEntry,
+      sessionStore,
+      storePath,
+      sessionAgentId: "main",
+      workspaceDir: tmpDir,
+      agentDir: tmpDir,
+      provider: "openai",
+      model: "gpt-5.5",
+    });
+
+    expect(openSessionManager).not.toHaveBeenCalled();
+    expect(resolveContextEngine).not.toHaveBeenCalled();
+    expect(ensureSelectedAgentHarnessPlugin).not.toHaveBeenCalled();
+    expect(compactAgentHarnessSession).not.toHaveBeenCalled();
+    expect(updatedEntry).toBe(sessionEntry);
+  });
+
   it("ignores stale native harness ids when the active provider no longer matches", async () => {
     const sessionKey = "agent:main:pi-after-codex";
     const sessionId = "session-pi-after-codex";
