@@ -31,6 +31,9 @@ import type {
   ImagesDescriptionResult,
 } from "./types.js";
 
+// Keep runtime preparation bounded without shrinking the user-configured provider request budget.
+const IMAGE_DESCRIPTION_SETUP_TIMEOUT_MS = 15_000;
+
 function resolveImageToolMaxTokens(modelMaxTokens: number | undefined, requestedMaxTokens = 4096) {
   if (
     typeof modelMaxTokens !== "number" ||
@@ -438,29 +441,19 @@ function resolveImageDescriptionTimeoutMs(timeoutMs: number | undefined) {
 function buildImageDescriptionTimeoutError(params: {
   phase: "setup" | "request";
   timeoutMs: number;
-  setupDurationMs?: number;
 }): Error {
-  if (params.phase === "setup") {
-    return new Error(
-      `image description setup timed out after ${params.timeoutMs}ms before provider request started`,
-    );
-  }
-  const setupDurationMs =
-    typeof params.setupDurationMs === "number" && Number.isFinite(params.setupDurationMs)
-      ? Math.max(0, Math.floor(params.setupDurationMs))
-      : 0;
-  return new Error(
-    setupDurationMs > 0
-      ? `image description request timed out after ${params.timeoutMs}ms (setup took ${setupDurationMs}ms before provider request started)`
-      : `image description request timed out after ${params.timeoutMs}ms`,
-  );
+  return params.phase === "setup"
+    ? new Error(
+        `image description setup timed out after ${params.timeoutMs}ms before the request started`,
+      )
+    : new Error(`image description request timed out after ${params.timeoutMs}ms`);
 }
 
 async function withImageDescriptionTimeout<T>(params: {
   task: Promise<T>;
   timeoutMs: number | undefined;
   controller: AbortController;
-  createTimeoutError: (timeoutMs: number) => Error;
+  phase: "setup" | "request";
 }): Promise<T> {
   if (params.timeoutMs === undefined) {
     return await params.task;
@@ -472,7 +465,12 @@ async function withImageDescriptionTimeout<T>(params: {
       new Promise<never>((_, reject) => {
         timeout = setTimeout(() => {
           params.controller.abort();
-          reject(params.createTimeoutError(params.timeoutMs!));
+          reject(
+            buildImageDescriptionTimeoutError({
+              phase: params.phase,
+              timeoutMs: params.timeoutMs!,
+            }),
+          );
         }, params.timeoutMs);
       }),
     ]);
@@ -488,18 +486,17 @@ async function describeImagesWithModelInternal(
   options: { onPayload?: ProviderStreamOptions["onPayload"] } = {},
 ): Promise<ImagesDescriptionResult> {
   const prompt = params.prompt ?? "Describe the image.";
-  const startedAtMs = Date.now();
   const controller = new AbortController();
   const configuredTimeoutMs = resolveImageDescriptionTimeoutMs(params.timeoutMs);
+  const setupTimeoutMs = IMAGE_DESCRIPTION_SETUP_TIMEOUT_MS;
   let apiKey: string;
   let model: Model | undefined;
 
   try {
     const resolved = await withImageDescriptionTimeout({
       controller,
-      timeoutMs: configuredTimeoutMs,
-      createTimeoutError: (timeoutMs) =>
-        buildImageDescriptionTimeoutError({ phase: "setup", timeoutMs }),
+      timeoutMs: setupTimeoutMs,
+      phase: "setup",
       task: resolveImageRuntime(params),
     });
     apiKey = resolved.apiKey;
@@ -510,9 +507,8 @@ async function describeImagesWithModelInternal(
     }
     const fallback = await withImageDescriptionTimeout({
       controller,
-      timeoutMs: configuredTimeoutMs,
-      createTimeoutError: (timeoutMs) =>
-        buildImageDescriptionTimeoutError({ phase: "setup", timeoutMs }),
+      timeoutMs: setupTimeoutMs,
+      phase: "setup",
       task: resolveMinimaxVlmFallbackRuntime(params),
     });
     return await describeImagesWithMinimax({
@@ -525,8 +521,6 @@ async function describeImagesWithModelInternal(
       images: params.images,
     });
   }
-
-  const setupDurationMs = Date.now() - startedAtMs;
 
   if (isMinimaxVlmModel(model.provider, model.id)) {
     return await describeImagesWithMinimax({
@@ -570,12 +564,7 @@ async function describeImagesWithModelInternal(
     return await withImageDescriptionTimeout({
       controller,
       timeoutMs,
-      createTimeoutError: (requestTimeoutMs) =>
-        buildImageDescriptionTimeoutError({
-          phase: "request",
-          timeoutMs: requestTimeoutMs,
-          setupDurationMs,
-        }),
+      phase: "request",
       task,
     });
   };
