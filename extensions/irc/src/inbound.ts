@@ -372,7 +372,7 @@ export async function handleIrcInbound(params: {
     Body: body,
     RawBody: rawBody,
     CommandBody: rawBody,
-    From: message.isGroup ? `irc:channel:${message.target}` : `irc:${senderDisplay}`,
+    From: message.isGroup ? `channel:#${message.target}` : `irc:${senderDisplay}`,
     To: `irc:${peerId}`,
     SessionKey: route.sessionKey,
     AccountId: route.accountId,
@@ -388,7 +388,7 @@ export async function handleIrcInbound(params: {
     MessageSid: message.messageId,
     Timestamp: message.timestamp,
     OriginatingChannel: CHANNEL_ID,
-    OriginatingTo: `irc:${peerId}`,
+    OriginatingTo: message.isGroup ? `channel:#${peerId}` : `irc:${peerId}`,
     CommandAuthorized: commandAuthorized,
   });
 
