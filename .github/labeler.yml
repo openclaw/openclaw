@@ -15,6 +15,12 @@
       - any-glob-to-any-file:
           - "extensions/discord/**"
           - "docs/channels/discord.md"
+"channel: channel-broker":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/channel-broker/**"
+          - "docs/channels/channel-broker.md"
+          - "docs/plugins/sdk-channel-broker.md"
 "channel: irc":
   - changed-files:
       - any-glob-to-any-file:

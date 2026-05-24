@@ -1059,7 +1059,11 @@
             "groups": [
               {
                 "group": "Overview",
-                "pages": ["channels/index", "announcements/bluebubbles-imessage"]
+                "pages": [
+                  "channels/index",
+                  "channels/channel-broker",
+                  "announcements/bluebubbles-imessage"
+                ]
               },
               {
                 "group": "Mainstream messaging",
@@ -1743,6 +1747,7 @@
                   "plugins/architecture-internals",
                   "plugins/sdk-migration",
                   "plugins/compatibility",
+                  "plugins/sdk-channel-broker",
                   "plugins/sdk-channel-message",
                   "plugins/sdk-channel-turn",
                   "plugins/sdk-channel-ingress",

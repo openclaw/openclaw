@@ -68,6 +68,14 @@
     "target": "频道消息 API"
   },
   {
+    "source": "Channel Broker",
+    "target": "Channel Broker"
+  },
+  {
+    "source": "Channel broker SDK",
+    "target": "Channel broker SDK"
+  },
+  {
     "source": "Channel ingress API",
     "target": "频道入口 API"
   },

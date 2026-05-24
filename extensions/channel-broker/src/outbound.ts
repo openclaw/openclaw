@@ -1,0 +1,141 @@
+import {
+  createBrokerOutboundRequest,
+  type BrokerReceiptV1,
+} from "openclaw/plugin-sdk/channel-broker";
+import type { ChannelOutboundContext } from "openclaw/plugin-sdk/channel-contract";
+import {
+  createMessageReceiptFromOutboundResults,
+  type ChannelMessageSendResult,
+  type MessageReceiptSourceResult,
+} from "openclaw/plugin-sdk/channel-message";
+import { resolveChannelBrokerAccount } from "./accounts.js";
+import { createBrokerRequestId, sendBrokerOutboundRequest } from "./runtime.js";
+import { parseChannelBrokerTarget } from "./target.js";
+import type { CoreConfig } from "./types.js";
+
+const CHANNEL_ID = "channel-broker" as const;
+
+function normalizeMaybeString(value: string | number | null | undefined): string | undefined {
+  if (value == null) {
+    return undefined;
+  }
+  const trimmed = String(value).trim();
+  return trimmed || undefined;
+}
+
+function resolvePrimaryMessageId(receipt: BrokerReceiptV1): string {
+  const messageId = receipt.messageIds[0]?.trim();
+  if (!messageId) {
+    throw new Error(`Channel broker provider ${receipt.providerId} did not return a message id.`);
+  }
+  return messageId;
+}
+
+function buildReceiptSourceResults(params: {
+  receipt: BrokerReceiptV1;
+  conversationId: string;
+}): MessageReceiptSourceResult[] {
+  const { receipt } = params;
+  const timestamp = receipt.timestamp ?? Date.now();
+  return receipt.messageIds.map((messageId) => ({
+    channel: CHANNEL_ID,
+    messageId,
+    conversationId: params.conversationId,
+    timestamp,
+    meta: {
+      providerId: receipt.providerId,
+      platform: receipt.platform,
+      status: receipt.status,
+      requestId: receipt.requestId,
+      ...(receipt.native ? { native: receipt.native } : {}),
+    },
+  }));
+}
+
+export async function sendChannelBrokerText(params: {
+  cfg: CoreConfig;
+  accountId?: string | null;
+  to: string;
+  text: string;
+  threadId?: string | number | null;
+  replyToId?: string | number | null;
+  silent?: boolean;
+  signal?: AbortSignal;
+}): Promise<ChannelMessageSendResult> {
+  const account = resolveChannelBrokerAccount({ cfg: params.cfg, accountId: params.accountId });
+  const target = parseChannelBrokerTarget({
+    rawTarget: params.to,
+    account,
+    threadId: params.threadId,
+  });
+  const threadId = normalizeMaybeString(target.threadId);
+  const replyToId = normalizeMaybeString(params.replyToId);
+  const request = createBrokerOutboundRequest({
+    requestId: createBrokerRequestId(),
+    providerId: account.providerId,
+    platform: target.platform,
+    accountId: account.accountId,
+    conversation: {
+      id: target.conversationId,
+      type: target.conversationType ?? account.defaultConversationType,
+      ...(threadId ? { threadId } : {}),
+    },
+    mode: "final",
+    payloads: [{ text: params.text }],
+    ...(replyToId || params.silent
+      ? {
+          relation: {
+            ...(replyToId ? { replyToId } : {}),
+            ...(params.silent ? { silent: true } : {}),
+          },
+        }
+      : {}),
+    requirements: {
+      text: true,
+      ...(replyToId ? { replyTo: true } : {}),
+      ...(threadId ? { thread: true } : {}),
+    },
+  });
+  const receipt = await sendBrokerOutboundRequest({ account, request });
+  const messageId = resolvePrimaryMessageId(receipt);
+  return {
+    messageId,
+    receipt: {
+      ...createMessageReceiptFromOutboundResults({
+        results: buildReceiptSourceResults({
+          receipt,
+          conversationId: target.conversationId,
+        }),
+        threadId,
+        replyToId,
+        kind: "text",
+        sentAt: receipt.timestamp,
+      }),
+      ...(receipt.editToken ? { editToken: receipt.editToken } : {}),
+      ...(receipt.deleteToken ? { deleteToken: receipt.deleteToken } : {}),
+    },
+  };
+}
+
+export async function sendChannelBrokerOutboundText(
+  ctx: ChannelOutboundContext,
+): Promise<{ ok: boolean; messageId: string; error?: Error }> {
+  try {
+    const result = await sendChannelBrokerText({
+      cfg: ctx.cfg as CoreConfig,
+      accountId: ctx.accountId,
+      to: ctx.to,
+      text: ctx.text,
+      threadId: ctx.threadId,
+      replyToId: ctx.replyToId,
+      silent: ctx.silent,
+    });
+    return { ok: true, messageId: result.messageId ?? "" };
+  } catch (error) {
+    return {
+      ok: false,
+      messageId: "",
+      error: error instanceof Error ? error : new Error(String(error)),
+    };
+  }
+}
