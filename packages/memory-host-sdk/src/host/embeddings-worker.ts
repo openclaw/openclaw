@@ -97,11 +97,13 @@ function createWorkerExitError(code: number | null, signal: NodeJS.Signals | nul
 function createWorkerResponseError(error: LocalEmbeddingWorkerResponse & { ok: false }): Error {
   if (typeof error.error === "object" && error.error) {
     const message = error.error.message || "Local embedding worker failed";
-    return Object.assign(new Error(message), {
-      ...(error.error.code ? { code: error.error.code } : {}),
-    });
+    const workerError = new Error(message) as Error & { code?: string };
+    if (error.error.code) {
+      workerError.code = error.error.code;
+    }
+    return workerError;
   }
-  return new Error(String(error.error || "Local embedding worker failed"));
+  return new Error(error.error || "Local embedding worker failed");
 }
 
 function resolveWorkerExecArgv(): string[] {
