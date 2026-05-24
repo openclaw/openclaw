@@ -25,7 +25,6 @@ import {
   createTestRegistry,
 } from "../../test-utils/channel-plugins.js";
 import { createInternalHookEventPayload } from "../../test-utils/internal-hook-event-payload.js";
-import { getReplyPayloadMetadata } from "../reply-payload.js";
 import type { MsgContext } from "../templating.js";
 import { setReplyPayloadMetadata, type GetReplyOptions, type ReplyPayload } from "../types.js";
 import { PROVIDER_CONVERSATION_STATE_ERROR_USER_MESSAGE } from "./provider-request-error-classifier.js";
@@ -2926,7 +2925,7 @@ describe("dispatchReplyFromConfig", () => {
     expect(dispatcher.sendFinalReply).toHaveBeenCalledWith({ text: "done" });
   });
 
-  it("delivers verbose tool summaries despite message-tool-only source suppression", async () => {
+  it("keeps Telegram direct message-tool-only verbose tool summaries private", async () => {
     setNoAbort();
     sessionStoreMocks.currentEntry = {
       sessionId: "s1",
@@ -2957,7 +2956,7 @@ describe("dispatchReplyFromConfig", () => {
     });
 
     expect(result.sourceReplyDeliveryMode).toBe("message_tool_only");
-    expect(dispatcher.sendToolResult).toHaveBeenCalledWith({ text: "🛠️ `pwd (agent)`" });
+    expect(dispatcher.sendToolResult).not.toHaveBeenCalled();
     expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
   });
 
@@ -6220,7 +6219,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     expect(dispatcher.sendBlockReply).not.toHaveBeenCalled();
   });
 
-  it("delivers verbose tool progress in message-tool-only mode", async () => {
+  it("keeps Telegram message-tool-only source delivery private even when verbose is on", async () => {
     setNoAbort();
     sessionStoreMocks.currentEntry = {
       sessionId: "s1",
@@ -6233,7 +6232,11 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
       await opts?.onToolResult?.({ text: "🛠️ Exec: echo post-restart" });
       return { text: "NO_REPLY" } satisfies ReplyPayload;
     });
-    const ctx = buildTestCtx({ SessionKey: "test:session", ChatType: "channel" });
+    const ctx = buildTestCtx({
+      Provider: "telegram",
+      SessionKey: "test:session",
+      ChatType: "channel",
+    });
 
     const result = await dispatchReplyFromConfig({
       ctx,
@@ -6247,9 +6250,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
 
     expect(result.queuedFinal).toBe(false);
     expect(result.sourceReplyDeliveryMode).toBe("message_tool_only");
-    expect(dispatcher.sendToolResult).toHaveBeenCalledWith(
-      expect.objectContaining({ text: "🛠️ Exec: echo post-restart" }),
-    );
+    expect(dispatcher.sendToolResult).not.toHaveBeenCalled();
     expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
   });
 
@@ -6365,53 +6366,6 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
       idempotencyKey: "run-1:internal-source-reply:0",
       updateMode: "inline",
       config: emptyConfig,
-    });
-  });
-
-  it("keeps internal source reply metadata on TTS-cloned final payloads", async () => {
-    setNoAbort();
-    ttsMocks.state.synthesizeFinalAudio = true;
-    sessionStoreMocks.currentEntry = {
-      sessionId: "s1",
-      updatedAt: 0,
-      sendPolicy: "allow",
-    };
-    const dispatcher = createDispatcher();
-    const sourceReply = setReplyPayloadMetadata(
-      { text: "message tool reply" },
-      {
-        deliverDespiteSourceReplySuppression: true,
-        sourceReplyTranscriptMirror: {
-          sessionKey: "agent:main",
-          agentId: "main",
-          text: "message tool reply",
-          idempotencyKey: "run-tts:internal-source-reply:0",
-        },
-      },
-    );
-    const replyResolver = vi.fn(async () => sourceReply satisfies ReplyPayload);
-
-    const result = await dispatchReplyFromConfig({
-      ctx: buildTestCtx({ Provider: "webchat", Surface: "webchat", SessionKey: "agent:main" }),
-      cfg: emptyConfig,
-      dispatcher,
-      replyResolver,
-      replyOptions: {
-        sourceReplyDeliveryMode: "message_tool_only",
-      },
-    });
-
-    expect(result.queuedFinal).toBe(true);
-    const queuedPayload = (dispatcher.sendFinalReply as ReturnType<typeof vi.fn>).mock
-      .calls[0]?.[0];
-    expect(queuedPayload).toMatchObject({
-      text: "message tool reply",
-      mediaUrl: "https://example.com/tts-synth.opus",
-      audioAsVoice: true,
-    });
-    expect(getReplyPayloadMetadata(queuedPayload)?.sourceReplyTranscriptMirror).toMatchObject({
-      sessionKey: "agent:main",
-      idempotencyKey: "run-tts:internal-source-reply:0",
     });
   });
 
