@@ -306,7 +306,7 @@ describe("session MCP runtime", () => {
     expect(activeLeases).toBe(0);
   });
 
-  it("keeps MCP tools/list responses that finish within the internal list timeout", async () => {
+  it("keeps MCP tools/list responses that finish within the server timeout budget", async () => {
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "bundle-mcp-slow-listtools-"));
     const serverPath = path.join(tempDir, "slow-list-tools.mjs");
     const logPath = path.join(tempDir, "server.log");
@@ -317,8 +317,8 @@ describe("session MCP runtime", () => {
     });
 
     const runtime = await getOrCreateSessionMcpRuntime({
-      sessionId: "session-slow-listtools-internal-timeout",
-      sessionKey: "agent:test:session-slow-listtools-internal-timeout",
+      sessionId: "session-slow-listtools-server-timeout",
+      sessionKey: "agent:test:session-slow-listtools-server-timeout",
       workspaceDir: "/workspace",
       cfg: {
         mcp: {
@@ -348,15 +348,15 @@ describe("session MCP runtime", () => {
     }
   });
 
-  it("times out hung bundle MCP tools/list after a successful connection", async () => {
+  it("times out hung bundle MCP tools/list using the server timeout budget", async () => {
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "bundle-mcp-listtools-timeout-"));
     const serverPath = path.join(tempDir, "hanging-list-tools.mjs");
     const logPath = path.join(tempDir, "server.log");
     await writeListToolsMcpServer({ filePath: serverPath, logPath, hang: true });
 
     const runtime = await getOrCreateSessionMcpRuntime({
-      sessionId: "session-listtools-internal-timeout",
-      sessionKey: "agent:test:session-listtools-internal-timeout",
+      sessionId: "session-listtools-server-timeout",
+      sessionKey: "agent:test:session-listtools-server-timeout",
       workspaceDir: "/workspace",
       cfg: {
         mcp: {
@@ -364,7 +364,7 @@ describe("session MCP runtime", () => {
             hangingListTools: {
               command: process.execPath,
               args: [serverPath],
-              connectionTimeoutMs: 30_000,
+              connectionTimeoutMs: 250,
             },
           },
         },

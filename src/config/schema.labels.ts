@@ -748,6 +748,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "commands.allowFrom": "Command Elevated Access Rules",
   mcp: "MCP",
   "mcp.servers": "MCP Servers",
+  "mcp.servers.*.connectionTimeoutMs": "MCP Server Timeout",
   "mcp.servers.*.codex": "Codex MCP Projection",
   "mcp.servers.*.codex.agents": "Codex MCP Agents",
   "mcp.servers.*.codex.defaultToolsApprovalMode": "Codex MCP Tool Approval",
