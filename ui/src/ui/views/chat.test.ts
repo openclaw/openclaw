@@ -1356,6 +1356,7 @@ describe("chat session controls", () => {
       "agent:main:telegram-two",
     ]);
     expect(request).toHaveBeenCalledWith("sessions.list", {
+      agentId: "main",
       configuredAgentsOnly: true,
       includeGlobal: true,
       includeUnknown: true,
@@ -1420,6 +1421,7 @@ describe("chat session controls", () => {
 
     await vi.waitFor(() => expect(state.chatSessionPickerAppliedQuery).toBe("tele"));
     expect(request).toHaveBeenCalledWith("sessions.list", {
+      agentId: "main",
       configuredAgentsOnly: true,
       includeGlobal: true,
       includeUnknown: true,
@@ -1494,6 +1496,7 @@ describe("chat session controls", () => {
     input!.dispatchEvent(new Event("input", { bubbles: true }));
     input!.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
     expect(request).toHaveBeenCalledWith("sessions.list", {
+      agentId: "main",
       configuredAgentsOnly: true,
       includeGlobal: true,
       includeUnknown: true,
@@ -1505,6 +1508,7 @@ describe("chat session controls", () => {
     input!.dispatchEvent(new Event("input", { bubbles: true }));
     input!.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
     expect(request).toHaveBeenCalledWith("sessions.list", {
+      agentId: "main",
       configuredAgentsOnly: true,
       includeGlobal: true,
       includeUnknown: true,
@@ -1591,6 +1595,7 @@ describe("chat session controls", () => {
       "agent:main:telegram-page-52",
     ]);
     expect(request).toHaveBeenCalledWith("sessions.list", {
+      agentId: "main",
       configuredAgentsOnly: true,
       includeGlobal: true,
       includeUnknown: true,
@@ -1641,6 +1646,35 @@ describe("chat session controls", () => {
     expect(container.querySelector('button[data-chat-session-load-more="true"]')).toBeInstanceOf(
       HTMLButtonElement,
     );
+  });
+
+  it("renders only active-agent chat sessions in the picker popover", () => {
+    const { state } = createChatHeaderState();
+    state.sessionKey = "agent:main:main";
+    state.settings.sessionKey = state.sessionKey;
+    state.chatSessionPickerOpen = true;
+    state.chatSessionPickerSurface = "desktop";
+    state.chatSessionPickerResult = createSessionsResultFromRows([
+      { key: "agent:main:main", kind: "direct", label: "Main chat", updatedAt: 6 },
+      { key: "agent:main:work", kind: "direct", label: "Main work", updatedAt: 5 },
+      { key: "agent:other:main", kind: "direct", label: "Other agent", updatedAt: 4 },
+      { key: "agent:main:cron:daily", kind: "direct", label: "Cron daily", updatedAt: 3 },
+      {
+        key: "agent:main:subagent:child",
+        kind: "direct",
+        label: "Child worker",
+        updatedAt: 2,
+        spawnedBy: "agent:main:main",
+      },
+    ]);
+    const container = document.createElement("div");
+    render(renderChatSessionSelect(state), container);
+
+    const labels = Array.from(
+      container.querySelectorAll<HTMLElement>(".chat-session-picker__option-label"),
+    ).map((node) => node.textContent?.trim());
+
+    expect(labels).toEqual(["Main chat", "Main work"]);
   });
 
   it("shows provider quota in the chat header when usage data is loaded", () => {

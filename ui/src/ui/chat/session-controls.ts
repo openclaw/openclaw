@@ -237,6 +237,7 @@ function createChatSessionPickerRequestParams(
     includeUnknown: overrides.includeUnknown,
     configuredAgentsOnly: overrides.configuredAgentsOnly,
     limit: overrides.limit,
+    agentId: resolveChatAgentFilterId(state, state.sessionKey),
   };
   const offset =
     typeof overrides.offset === "number" && Number.isFinite(overrides.offset)
@@ -423,6 +424,23 @@ function resolveChatSessionPickerResult(state: AppViewState): SessionsListResult
   return state.sessionsResult;
 }
 
+function resolveChatSessionPickerRows(
+  state: AppViewState,
+  result: SessionsListResult | null,
+): { row: SessionsListResult["sessions"][number]; label: string }[] {
+  const rowsByKey = new Map((result?.sessions ?? []).map((row) => [row.key, row] as const));
+  return resolveSessionOptionGroups(state, state.sessionKey, result)
+    .flatMap((group) => group.options)
+    .map((option) => ({
+      row: rowsByKey.get(option.key) ?? {
+        key: option.key,
+        kind: "direct",
+        updatedAt: null,
+      },
+      label: option.label,
+    }));
+}
+
 function resolveSelectedChatSessionLabel(
   state: AppViewState,
   sessionGroups: SessionOptionGroup[],
@@ -497,7 +515,7 @@ function renderChatSessionPickerPopover(
   pickerId: string,
 ) {
   const result = resolveChatSessionPickerResult(state);
-  const rows = result?.sessions ?? [];
+  const pickerRows = resolveChatSessionPickerRows(state, result);
   const controlsDisabled = !state.connected || !state.client;
   const normalizedQuery = normalizeOptionalString(state.chatSessionPickerQuery) ?? "";
   const searchPending = normalizedQuery !== state.chatSessionPickerAppliedQuery;
@@ -505,7 +523,7 @@ function renderChatSessionPickerPopover(
   const hasQuery =
     state.chatSessionPickerQuery.trim() !== "" || state.chatSessionPickerAppliedQuery.trim() !== "";
   const loadMoreOffset = resolveNextChatSessionOffset(result);
-  const shownCount = rows.length;
+  const shownCount = pickerRows.length;
   const totalCount = result?.totalCount;
   const countLabel =
     typeof totalCount === "number" && Number.isFinite(totalCount)
@@ -578,17 +596,17 @@ function renderChatSessionPickerPopover(
           </div>`
         : ""}
       <div class="chat-session-picker__list" role="listbox">
-        ${state.chatSessionPickerLoading && rows.length === 0
+        ${state.chatSessionPickerLoading && pickerRows.length === 0
           ? html`<div class="chat-session-picker__status">${t("common.loading")}</div>`
           : ""}
-        ${!state.chatSessionPickerLoading && rows.length === 0
+        ${!state.chatSessionPickerLoading && pickerRows.length === 0
           ? html`<div class="chat-session-picker__status">${t("sessionsView.noSessions")}</div>`
           : ""}
         ${repeat(
-          rows,
-          (row) => row.key,
-          (row) => {
-            const label = resolveSessionDisplayName(row.key, row);
+          pickerRows,
+          (entry) => entry.row.key,
+          (entry) => {
+            const { row, label } = entry;
             const meta = formatChatSessionPickerMeta(row);
             const selected = row.key === state.sessionKey;
             return html`
