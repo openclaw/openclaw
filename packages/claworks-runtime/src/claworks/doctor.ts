@@ -8,6 +8,7 @@ import {
   repairClaworksRobotPluginConfig,
   seedPacksToStateDir,
   detectPackLayerSystemConflict,
+  discoverPackSourceDir,
   type ProductConfigRepairResult,
 } from "./product-config-repair.js";
 import { isClaworksProductionMode } from "./product-env.js";
