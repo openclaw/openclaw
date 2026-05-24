@@ -1013,6 +1013,22 @@ const applyCostTotal = (totals: CostUsageTotals, costTotal: number | undefined) 
   totals.totalCost += costTotal;
 };
 
+// A resolved cost config only counts as "known" pricing when it carries at least one
+// positive per-token rate (or tiered pricing). An all-zero config is indistinguishable
+// from "pricing unknown": e.g. codex models ship cost {input:0,output:0,...} in the
+// generated models.json because the Codex backend exposes no per-token price. Treating
+// such a config as a real $0 makes usage-cost report confident zero spend, which
+// silently blinds every budget/spike safeguard that keys off totalCost.
+const isModelPricingKnown = (cost: ReturnType<typeof resolveModelCostConfig>): boolean => {
+  if (!cost) {
+    return false;
+  }
+  if (cost.tieredPricing && cost.tieredPricing.length > 0) {
+    return true;
+  }
+  return cost.input > 0 || cost.output > 0 || cost.cacheRead > 0 || cost.cacheWrite > 0;
+};
+
 async function canReadJsonlFromOffset(filePath: string, startOffset: number): Promise<boolean> {
   if (startOffset <= 0) {
     return true;
@@ -1098,6 +1114,17 @@ async function scanTranscriptFile(params: {
         // Clear costBreakdown so downstream aggregation uses the recomputed total
         // instead of the stale flat-rate breakdown from the transport layer.
         entry.costTotal = estimateUsageCost({ usage: entry.usage, cost });
+        entry.costBreakdown = undefined;
+      } else if (
+        !isModelPricingKnown(cost) &&
+        computeUsageTokenTotals(entry.usage).totalTokens > 0
+      ) {
+        // Pricing for this model is unknown (no positive per-token rate). Any cost the
+        // transport recorded is a fabricated $0 derived from an all-zero catalog entry,
+        // not a real price. Drop it and surface the turn as a missing-cost entry so the
+        // tokens it burned are not reported as confident $0 spend — otherwise every
+        // budget/spike safeguard that reads totalCost stays blind to it.
+        entry.costTotal = undefined;
         entry.costBreakdown = undefined;
       } else if (entry.costTotal === undefined) {
         // Fill in missing cost estimates.

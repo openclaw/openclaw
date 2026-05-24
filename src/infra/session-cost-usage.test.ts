@@ -149,6 +149,64 @@ describe("session cost usage", () => {
     });
   });
 
+  it("counts token usage for an unpriced (all-zero cost) model as missing, not a confident $0", async () => {
+    const root = await makeSessionCostRoot("cost-unknown-pricing");
+    const sessionsDir = path.join(root, "agents", "main", "sessions");
+    await fs.mkdir(sessionsDir, { recursive: true });
+
+    // A real assistant turn that burned tokens. The transport recorded cost.total: 0,
+    // derived from the model's all-zero catalog pricing — exactly what codex/gpt-5.x
+    // models produce, since the Codex backend exposes no per-token price.
+    const entry = {
+      type: "message",
+      timestamp: new Date().toISOString(),
+      message: {
+        role: "assistant",
+        provider: "openai",
+        model: "gpt-5.5",
+        usage: {
+          input: 881,
+          output: 6,
+          cacheRead: 22400,
+          cacheWrite: 0,
+          totalTokens: 23287,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+        },
+      },
+    };
+
+    await fs.writeFile(
+      path.join(sessionsDir, "sess-1.jsonl"),
+      transcriptText("sess-1", entry),
+      "utf-8",
+    );
+
+    // The model resolves to an all-zero cost config, i.e. its pricing is unknown.
+    const config = {
+      models: {
+        providers: {
+          openai: {
+            models: [
+              {
+                id: "gpt-5.5",
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+              },
+            ],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    await withStateDir(root, async () => {
+      const summary = await loadCostUsageSummary({ days: 30, config });
+      expect(summary.totals.totalTokens).toBe(23287);
+      expect(summary.totals.totalCost).toBe(0);
+      // Unknown pricing must be surfaced as missing rather than reported as a
+      // confident $0 that would blind budget/spike monitoring to real spend.
+      expect(summary.totals.missingCostEntries).toBe(1);
+    });
+  });
+
   it("ignores compaction checkpoint transcript snapshots in daily totals and discovery", async () => {
     const root = await makeSessionCostRoot("cost-checkpoint");
     const sessionsDir = path.join(root, "agents", "main", "sessions");
