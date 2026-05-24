@@ -110,6 +110,9 @@ describe("doctor stale plugin config helpers", () => {
       plugins: {
         slots: {
           memory: "acpx",
+          "memory.recall": "missing-recall",
+          "memory.capture": "missing-capture",
+          "memory.dreaming": "none",
           contextEngine: "missing-engine",
         },
       },
@@ -124,6 +127,18 @@ describe("doctor stale plugin config helpers", () => {
         slotKey: "memory",
       },
       {
+        pluginId: "missing-recall",
+        pathLabel: "plugins.slots.memory.recall",
+        surface: "slot",
+        slotKey: "memory.recall",
+      },
+      {
+        pluginId: "missing-capture",
+        pathLabel: "plugins.slots.memory.capture",
+        surface: "slot",
+        slotKey: "memory.capture",
+      },
+      {
         pluginId: "missing-engine",
         pathLabel: "plugins.slots.contextEngine",
         surface: "slot",
@@ -134,10 +149,13 @@ describe("doctor stale plugin config helpers", () => {
     const result = maybeRepairStalePluginConfig(cfg);
 
     expect(result.changes).toEqual([
-      "- plugins.slots: reset 2 stale plugin slots (memory: acpx -> memory-core, contextEngine: missing-engine -> legacy)",
+      "- plugins.slots: reset 4 stale plugin slots (memory: acpx -> memory-core, memory.recall: missing-recall -> memory-core, memory.capture: missing-capture -> none, contextEngine: missing-engine -> legacy)",
     ]);
     expect(result.config.plugins?.slots).toEqual({
       memory: "memory-core",
+      "memory.recall": "memory-core",
+      "memory.capture": "none",
+      "memory.dreaming": "none",
       contextEngine: "legacy",
     });
   });
@@ -148,6 +166,8 @@ describe("doctor stale plugin config helpers", () => {
         plugins: {
           slots: {
             memory: "none",
+            "memory.recall": "memory-core",
+            "memory.capture": "none",
             contextEngine: "legacy",
           },
         },

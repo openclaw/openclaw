@@ -1719,6 +1719,38 @@ describe("loadOpenClawPlugins", () => {
     expect(memory?.name).toBe("Memory (Core)");
     expect(memory?.version).toBe("1.2.3");
   });
+
+  it("does not treat the default memory role slot as explicit under restrictive allowlists", () => {
+    const bundledDir = makeTempDir();
+    writePlugin({
+      id: "memory-core",
+      body: `module.exports = {
+        id: "memory-core",
+        kind: "memory",
+        register() {
+          throw new Error("memory-core should stay blocked by the allowlist");
+        },
+      };`,
+      dir: bundledDir,
+      filename: "memory-core.cjs",
+    });
+    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = bundledDir;
+
+    const registry = loadOpenClawPlugins({
+      cache: false,
+      workspaceDir: bundledDir,
+      config: {
+        plugins: {
+          allow: ["some-other-plugin"],
+        },
+      },
+    });
+
+    const memory = registry.plugins.find((entry) => entry.id === "memory-core");
+    expect(memory?.status).toBe("disabled");
+    expect(memory?.activationReason).toBe("not in allowlist");
+  });
+
   it.each([
     {
       label: "loads plugins from config paths",

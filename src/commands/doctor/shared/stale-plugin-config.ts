@@ -9,6 +9,15 @@ import { sanitizeForLog } from "../../../terminal/ansi.js";
 import { asObjectRecord } from "./object.js";
 
 const CHANNEL_CONFIG_META_KEYS = new Set(["defaults", "modelByChannel"]);
+const STALE_PLUGIN_SLOT_KEYS = [
+  "memory",
+  "memory.recall",
+  "memory.compaction",
+  "memory.capture",
+  "memory.dreaming",
+  "memory.userModel",
+  "contextEngine",
+] as const satisfies readonly PluginSlotKey[];
 
 type StalePluginSurface =
   | "allow"
@@ -159,7 +168,7 @@ function scanStalePluginConfigWithState(
 
   const slots = asObjectRecord(plugins?.slots);
   if (slots) {
-    for (const slotKey of ["memory", "contextEngine"] as const satisfies readonly PluginSlotKey[]) {
+    for (const slotKey of STALE_PLUGIN_SLOT_KEYS) {
       const rawPluginId = slots[slotKey];
       if (typeof rawPluginId !== "string") {
         continue;

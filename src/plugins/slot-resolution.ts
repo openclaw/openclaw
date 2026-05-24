@@ -115,7 +115,14 @@ export function listConfiguredMemoryRoleSlotSelections(params: {
   cfg: OpenClawConfig;
 }): MemoryRoleSlotSelection[] {
   const selections: MemoryRoleSlotSelection[] = [];
+  const rootSlots = params.cfg.plugins?.slots;
   for (const role of MEMORY_PLUGIN_ROLES) {
+    const slotKey = memoryRoleToSlotKey(role);
+    const hasRoleSlot = hasOwnSlot(rootSlots, slotKey);
+    const hasLegacyRecallSlot = role === "recall" && hasOwnSlot(rootSlots, "memory");
+    if (!hasRoleSlot && !hasLegacyRecallSlot) {
+      continue;
+    }
     addMemoryRoleSlotSelection(selections, {
       role,
       pluginId: resolveMemoryRoleSlot({ cfg: params.cfg, role }),
