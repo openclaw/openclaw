@@ -242,6 +242,37 @@ describe("reply run registry", () => {
       expect(op.abortSignal.aborted).toBe(true);
     });
 
+    it("complete() detaches the upstream abort listener so it does not survive past terminal state", () => {
+      const upstream = new AbortController();
+      const addSpy = vi.spyOn(upstream.signal, "addEventListener");
+      const removeSpy = vi.spyOn(upstream.signal, "removeEventListener");
+      const op = createMaintenanceReplyOperation({
+        sessionKey: "agent:main:maint-listener",
+        sessionId: "session-maint-listener",
+        upstreamAbortSignal: upstream.signal,
+      });
+      expect(addSpy).toHaveBeenCalledWith("abort", expect.any(Function), { once: true });
+      const addedListener = addSpy.mock.calls[0]?.[1] as EventListener;
+      op.complete();
+      expect(removeSpy).toHaveBeenCalledWith("abort", addedListener);
+      // Aborting upstream after the maintenance op has completed must
+      // not flip the maintenance op's signal: it is already complete.
+      upstream.abort(new Error("late upstream abort"));
+      expect(op.abortSignal.aborted).toBe(false);
+    });
+
+    it("fail() also detaches the upstream abort listener", () => {
+      const upstream = new AbortController();
+      const removeSpy = vi.spyOn(upstream.signal, "removeEventListener");
+      const op = createMaintenanceReplyOperation({
+        sessionKey: "agent:main:maint-listener-fail",
+        sessionId: "session-maint-listener-fail",
+        upstreamAbortSignal: upstream.signal,
+      });
+      op.fail("run_failed", new Error("boom"));
+      expect(removeSpy).toHaveBeenCalledWith("abort", expect.any(Function));
+    });
+
     it("complete() does not call clearReplyRunState (so it cannot disturb a live reply operation for the same sessionKey)", () => {
       const liveOperation = createReplyOperation({
         sessionKey: "agent:main:maint-complete-isolation",

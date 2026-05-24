@@ -452,17 +452,24 @@ export function createMaintenanceReplyOperation(params: {
     }
   };
 
-  if (params.upstreamAbortSignal) {
-    if (params.upstreamAbortSignal.aborted) {
-      abortInternally(params.upstreamAbortSignal.reason);
+  const upstreamSignal = params.upstreamAbortSignal;
+  let upstreamAbortListener: (() => void) | undefined;
+  const detachUpstreamListener = (): void => {
+    if (upstreamSignal && upstreamAbortListener) {
+      upstreamSignal.removeEventListener("abort", upstreamAbortListener);
+      upstreamAbortListener = undefined;
+    }
+  };
+
+  if (upstreamSignal) {
+    if (upstreamSignal.aborted) {
+      abortInternally(upstreamSignal.reason);
     } else {
-      params.upstreamAbortSignal.addEventListener(
-        "abort",
-        () => {
-          abortInternally(params.upstreamAbortSignal?.reason);
-        },
-        { once: true },
-      );
+      upstreamAbortListener = () => {
+        abortInternally(upstreamSignal.reason);
+        upstreamAbortListener = undefined;
+      };
+      upstreamSignal.addEventListener("abort", upstreamAbortListener, { once: true });
     }
   }
 
@@ -527,6 +534,7 @@ export function createMaintenanceReplyOperation(params: {
         result = { kind: "completed" };
         phase = "completed";
       }
+      detachUpstreamListener();
     },
     completeThen(afterClear) {
       operation.complete();
@@ -537,6 +545,7 @@ export function createMaintenanceReplyOperation(params: {
         result = { kind: "failed", code, cause };
         phase = "failed";
       }
+      detachUpstreamListener();
     },
     abortByUser() {
       if (!result) {
@@ -545,6 +554,7 @@ export function createMaintenanceReplyOperation(params: {
       }
       abortInternally(createUserAbortError());
       attachedHandle?.cancel("user_abort");
+      detachUpstreamListener();
     },
     abortForRestart() {
       if (!result) {
@@ -553,6 +563,7 @@ export function createMaintenanceReplyOperation(params: {
       }
       abortInternally(new Error("Maintenance reply operation aborted for restart"));
       attachedHandle?.cancel("restart");
+      detachUpstreamListener();
     },
   };
 
