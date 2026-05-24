@@ -125,6 +125,7 @@ const config = {
     "**/*.test-utils.ts",
     "test/helpers/live-image-probe.ts",
     "src/secrets/credential-matrix.ts",
+    "src/secrets/credential-matrix-docs.ts",
     "src/agents/claude-cli-runner.ts",
     "src/agents/agent-auth-json.ts",
     "src/agents/tool-policy.conformance.ts",
