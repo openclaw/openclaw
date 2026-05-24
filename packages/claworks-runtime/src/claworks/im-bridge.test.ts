@@ -5,10 +5,12 @@ import type { ClaworksRuntime } from "./runtime-types.js";
 function mockRuntime(overrides?: {
   ingressAction?: string;
   rbacAllowed?: boolean;
+  withContextEngine?: boolean;
 }): ClaworksRuntime {
   const publish = vi.fn().mockResolvedValue([]);
   const trigger = vi.fn().mockResolvedValue({ id: "run-1", status: "completed" });
-  return {
+  const contextAppend = vi.fn();
+  const runtime = {
     ingress: {
       decide: () => ({
         action: overrides?.ingressAction ?? "intent_route",
@@ -26,7 +28,13 @@ function mockRuntime(overrides?: {
       trigger,
     },
     kernel: { publish },
+    ...(overrides?.withContextEngine
+      ? { contextEngine: { append: contextAppend, getRecent: vi.fn().mockReturnValue([]) } }
+      : {}),
   } as unknown as ClaworksRuntime;
+  return Object.assign(runtime, { _contextAppend: contextAppend }) as ClaworksRuntime & {
+    _contextAppend?: ReturnType<typeof vi.fn>;
+  };
 }
 
 describe("bridgeImMessage", () => {
@@ -120,5 +128,30 @@ describe("bridgeImMessage", () => {
     const [, triggerPayload] = (runtime.playbookEngine.trigger as ReturnType<typeof vi.fn>).mock
       .calls[0] as [string, Record<string, unknown>];
     expect(triggerPayload.session_id).toBe("feishu:user:u5");
+  });
+
+  it("appends user turn to contextEngine before intent_route trigger", async () => {
+    const runtime = mockRuntime({
+      rbacAllowed: true,
+      ingressAction: "intent_route",
+      withContextEngine: true,
+    });
+    const append = (runtime as ClaworksRuntime & { _contextAppend: ReturnType<typeof vi.fn> })
+      ._contextAppend;
+
+    await bridgeImMessage(runtime, {
+      channel: "feishu",
+      messageId: "m6",
+      userId: "u6",
+      text: "check alarm",
+      groupId: "g2",
+    });
+
+    expect(append).toHaveBeenCalledWith("feishu:group:g2", "user", "check alarm", {
+      channel: "feishu",
+      userId: "u6",
+      messageId: "m6",
+    });
+    expect(runtime.playbookEngine.trigger).toHaveBeenCalled();
   });
 });
