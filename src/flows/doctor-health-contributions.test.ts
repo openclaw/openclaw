@@ -9,6 +9,10 @@ import {
 const mocks = vi.hoisted(() => ({
   maybeRunConfiguredPluginInstallReleaseStep: vi.fn(),
   note: vi.fn(),
+  loadModelCatalog: vi.fn(async () => []),
+  getModelRefStatus: vi.fn(() => ({ allowed: true, inCatalog: true, key: "openai/gpt-5.5" })),
+  resolveConfiguredModelRef: vi.fn(() => ({ provider: "openai", model: "gpt-5.5" })),
+  resolveHooksGmailModel: vi.fn(() => ({ provider: "openai", model: "gpt-5.5" })),
   replaceConfigFile: vi.fn().mockResolvedValue(undefined),
   readConfigFileSnapshot: vi.fn().mockResolvedValue({
     exists: true,
@@ -28,6 +32,16 @@ vi.mock("../commands/doctor/shared/release-configured-plugin-installs.js", () =>
 
 vi.mock("../terminal/note.js", () => ({
   note: mocks.note,
+}));
+
+vi.mock("../agents/model-catalog.js", () => ({
+  loadModelCatalog: mocks.loadModelCatalog,
+}));
+
+vi.mock("../agents/model-selection.js", () => ({
+  getModelRefStatus: mocks.getModelRefStatus,
+  resolveConfiguredModelRef: mocks.resolveConfiguredModelRef,
+  resolveHooksGmailModel: mocks.resolveHooksGmailModel,
 }));
 
 vi.mock("../version.js", () => ({
@@ -87,6 +101,18 @@ describe("doctor health contributions", () => {
   beforeEach(() => {
     mocks.maybeRunConfiguredPluginInstallReleaseStep.mockReset();
     mocks.note.mockReset();
+    mocks.loadModelCatalog.mockReset();
+    mocks.loadModelCatalog.mockResolvedValue([]);
+    mocks.getModelRefStatus.mockReset();
+    mocks.getModelRefStatus.mockReturnValue({
+      allowed: true,
+      inCatalog: true,
+      key: "openai/gpt-5.5",
+    });
+    mocks.resolveConfiguredModelRef.mockReset();
+    mocks.resolveConfiguredModelRef.mockReturnValue({ provider: "openai", model: "gpt-5.5" });
+    mocks.resolveHooksGmailModel.mockReset();
+    mocks.resolveHooksGmailModel.mockReturnValue({ provider: "openai", model: "gpt-5.5" });
     mocks.readConfigFileSnapshot.mockReset();
     mocks.readConfigFileSnapshot.mockResolvedValue({
       exists: true,
@@ -196,6 +222,25 @@ describe("doctor health contributions", () => {
 
     expect(ids.indexOf("doctor:skills")).toBeGreaterThan(-1);
     expect(ids.indexOf("doctor:skills")).toBeLessThan(ids.indexOf("doctor:write-config"));
+  });
+
+  it("uses the read-only model catalog for hooks.gmail.model warnings", async () => {
+    const contribution = requireDoctorContribution("doctor:hooks-model");
+    const cfg = {
+      hooks: {
+        gmail: {
+          model: "openai/gpt-5.5",
+        },
+      },
+    };
+    const ctx = {
+      cfg,
+      options: {},
+    } as Parameters<(typeof contribution)["run"]>[0];
+
+    await contribution.run(ctx);
+
+    expect(mocks.loadModelCatalog).toHaveBeenCalledWith({ config: cfg, readOnly: true });
   });
 
   it("runs structured repairs before legacy skill repairs and config writes", () => {
