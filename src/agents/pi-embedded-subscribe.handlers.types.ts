@@ -224,6 +224,7 @@ type ToolHandlerState = Pick<
   | "pendingToolAudioAsVoice"
   | "pendingToolTrustedLocalMedia"
   | "deterministicApprovalPromptPending"
+  | "hadDeterministicSideEffect"
   | "replayState"
   | "messagingToolSentTexts"
   | "messagingToolSentTextsNormalized"

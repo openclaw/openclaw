@@ -1078,7 +1078,10 @@ export async function handleToolExecutionEnd(
       ctx.state.lastToolError = undefined;
     }
   }
-  if (completedMutatingAction || acceptedSessionSpawn) {
+  if (asyncStarted) {
+    ctx.state.hadDeterministicSideEffect = true;
+  }
+  if (completedMutatingAction || acceptedSessionSpawn || asyncStarted) {
     ctx.state.replayState = mergeEmbeddedRunReplayState(ctx.state.replayState, {
       replayInvalid: true,
       hadPotentialSideEffects: true,

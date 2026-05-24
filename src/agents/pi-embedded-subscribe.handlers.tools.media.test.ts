@@ -39,6 +39,8 @@ function createMockContext(overrides?: {
       messagingToolSentTargets: [],
       deterministicApprovalPromptPending: false,
       deterministicApprovalPromptSent: false,
+      hadDeterministicSideEffect: false,
+      replayState: { replayInvalid: false, hadPotentialSideEffects: false },
     },
     log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn() },
     builtinToolNames: overrides?.builtinToolNames,
@@ -535,6 +537,11 @@ describe("handleToolExecutionEnd media emission", () => {
         asyncStarted: true,
       }),
     ]);
+    expect(ctx.state.hadDeterministicSideEffect).toBe(true);
+    expect(ctx.state.replayState).toEqual({
+      replayInvalid: true,
+      hadPotentialSideEffects: true,
+    });
   });
 
   it("does NOT emit media for error results", async () => {

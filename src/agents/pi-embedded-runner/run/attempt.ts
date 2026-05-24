@@ -4612,11 +4612,16 @@ export async function runEmbeddedAttempt(
           (entry): entry is { toolName: string; meta?: string; asyncStarted?: boolean } =>
             typeof entry.toolName === "string" && entry.toolName.trim().length > 0,
         )
-        .map((entry) => ({
-          toolName: entry.toolName,
-          meta: entry.meta,
-          ...(entry.asyncStarted === true ? { asyncStarted: true } : {}),
-        }));
+        .map((entry) => {
+          const normalized: { toolName: string; meta?: string; asyncStarted?: boolean } = {
+            toolName: entry.toolName,
+            meta: entry.meta,
+          };
+          if (entry.asyncStarted === true) {
+            normalized.asyncStarted = true;
+          }
+          return normalized;
+        });
       if (cacheObservabilityEnabled) {
         const cacheBreakForLog = cacheBreak as PromptCacheBreak | null;
         if (cacheBreakForLog) {
