@@ -46,6 +46,7 @@ export class EvenniaClient {
     this.handlers = [];
     this.textHandlers = [];
     this.helpText = "";
+    this.recentText = [];
     this.ws = null;
   }
   onEvent(fn) {
@@ -205,8 +206,12 @@ export class EvenniaClient {
     if (!text) {
       return;
     }
+    const clean = stripHtml(stripAnsi(text)).replace(/\r/g, "").trim();
+    this.recentText.push({ timestamp: Date.now(), text: clean });
+    const cutoff = Date.now() - 120000;
+    this.recentText = this.recentText.filter((entry) => entry.timestamp >= cutoff).slice(-100);
     for (const h of this.textHandlers) {
-      h(stripHtml(stripAnsi(text)).replace(/\r/g, "").trim());
+      h(clean);
     }
     const parsed = parseEvenniaText(text);
     if (!parsed) {

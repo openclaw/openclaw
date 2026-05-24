@@ -5,7 +5,7 @@ Experimental OpenClaw channel plugin for bridging an OpenClaw agent account to a
 Current smoke-tested paths:
 
 - Evennia room mention or private message → OpenClaw channel turn → in-world reply.
-- OpenClaw tool call → one raw Evennia command sent as the configured character.
+- OpenClaw tool call → one raw Evennia command sent as the configured character, with the immediate in-world text response returned in the tool result.
 
 This is intentionally still prototype code. The long-term direction is to add structured Evennia-side bridge events rather than relying on webclient text scraping.
 
@@ -33,4 +33,4 @@ The only transport-level checks are:
 - `command` must be non-empty
 - `command` must not contain newlines, so each tool call maps to one Evennia command
 
-Command output is delivered through the normal Evennia channel/event stream rather than synchronously returned by the tool.
+Command output is collected briefly from the Evennia webclient WebSocket and returned as `output` in the tool result, so the agent can inspect rooms, containers, and NPC replies before deciding the next action. If Evennia produces no immediate text, the tool still succeeds and returns an empty `output` plus a note.

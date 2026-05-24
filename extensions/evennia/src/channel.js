@@ -8,6 +8,10 @@ const clients = new Map();
 
 const ROOM_CONTEXT_MAX_CHARS = 5000;
 const HELP_CONTEXT_MAX_CHARS = 2500;
+const COMMAND_OUTPUT_MAX_CHARS = 6000;
+const COMMAND_OUTPUT_WAIT_MS = 3000;
+const COMMAND_ROOM_SNAPSHOT_MAX_CHARS = 3500;
+const DEFAULT_CHANNEL_ID = "evennia";
 
 const EVENNIA_AGENT_PROMPT = [
   "You are acting as an Evennia MUD character through the Evennia channel.",
@@ -22,24 +26,44 @@ const EVENNIA_AGENT_PROMPT = [
   "Never put multiple Evennia commands in one tool call; use one tool call per command.",
 ].join("\n");
 
-function channelSection(cfg) {
-  return (cfg.channels && cfg.channels.evennia) || {};
+function channelSection(cfg, channelId = DEFAULT_CHANNEL_ID) {
+  return (cfg.channels && cfg.channels[channelId]) || {};
 }
 
-function listAccountIds(cfg) {
-  return Object.keys(channelSection(cfg).accounts || {});
+function listAccountIds(cfg, channelId = DEFAULT_CHANNEL_ID) {
+  return Object.keys(channelSection(cfg, channelId).accounts || {});
 }
 
-function resolveAccount(cfg, accountId = null) {
-  const section = channelSection(cfg);
+function clientKey(channelId, accountId) {
+  return `${channelId || DEFAULT_CHANNEL_ID}:${accountId || "default"}`;
+}
+
+function getClient(channelId, accountId) {
+  return clients.get(clientKey(channelId, accountId));
+}
+
+function setClient(account, client) {
+  clients.set(clientKey(account.channelId, account.accountId), client);
+}
+
+function deleteClient(account, client = undefined) {
+  const key = clientKey(account.channelId, account.accountId);
+  if (client === undefined || clients.get(key) === client) {
+    clients.delete(key);
+  }
+}
+
+function resolveAccount(cfg, accountId = null, channelId = DEFAULT_CHANNEL_ID) {
+  const section = channelSection(cfg, channelId);
   const accounts = section.accounts || {};
   const id = accountId || Object.keys(accounts)[0] || "default";
   const raw = accounts[id] || {};
   return {
+    channelId,
     accountId: id,
     enabled: section.enabled !== false && raw.enabled !== false,
-    baseUrl: section.baseUrl || "http://127.0.0.1:14001",
-    websocketUrl: section.websocketUrl || "ws://127.0.0.1:14002",
+    baseUrl: raw.baseUrl || section.baseUrl || "http://127.0.0.1:14001",
+    websocketUrl: raw.websocketUrl || section.websocketUrl || "ws://127.0.0.1:14002",
     agentId: raw.agentId || id,
     username: raw.username,
     passwordFile: raw.passwordFile,
@@ -52,13 +76,14 @@ function resolveAccount(cfg, accountId = null) {
   };
 }
 
-function inspectAccount(cfg, accountId = null) {
+function inspectAccount(cfg, accountId = null, channelId = DEFAULT_CHANNEL_ID) {
   try {
-    const account = resolveAccount(cfg, accountId);
+    const account = resolveAccount(cfg, accountId, channelId);
     return {
       enabled: account.enabled,
       configured: Boolean(account.username && account.passwordFile),
       tokenStatus: account.passwordFile ? "file" : "missing",
+      channelId: account.channelId,
       accountId: account.accountId,
       character: account.character,
     };
@@ -379,17 +404,43 @@ export function splitEvenniaOutboundText(text, account = undefined) {
       parts.push({ kind: "pose", text: clean });
     }
   };
+  const pushCommand = (value) => {
+    const clean = stripUnsafePoseText(value);
+    if (clean) {
+      parts.push({ kind: "command", text: clean });
+    }
+  };
+
+  const literalToolCall =
+    /`*\s*evennia_command\s*\(\s*command\s*=\s*(?:"([^"]+)"|'([^']+)'|`([^`]+)`)\s*(?:,[^)]*)?\)\s*`*/giu;
+  let toolIndex = 0;
+  let rewritten = "";
+  const literalCommands = [];
+  for (const match of raw.matchAll(literalToolCall)) {
+    const commandIndex = literalCommands.length;
+    literalCommands.push(match[1] ?? match[2] ?? match[3]);
+    rewritten += raw.slice(toolIndex, match.index);
+    rewritten += `\n__OPENCLAW_EVENNIA_COMMAND__${commandIndex}__\n`;
+    toolIndex = match.index + match[0].length;
+  }
+  rewritten += raw.slice(toolIndex);
 
   const codePose = /`+\s*pose\s+([^`]+?)\s*`+/giu;
   let index = 0;
-  for (const match of raw.matchAll(codePose)) {
-    pushSay(raw.slice(index, match.index));
+  for (const match of rewritten.matchAll(codePose)) {
+    pushSay(rewritten.slice(index, match.index));
     pushPose(match[1]);
     index = match.index + match[0].length;
   }
-  const tail = raw.slice(index);
+  const tail = rewritten.slice(index);
   for (const line of tail.split(/\n+/)) {
-    const command = line.trim().match(/^pose\s+(.+)$/iu);
+    const trimmed = line.trim();
+    const toolCommand = trimmed.match(/^__OPENCLAW_EVENNIA_COMMAND__(\d+)__$/u);
+    if (toolCommand) {
+      pushCommand(literalCommands[Number(toolCommand[1])]);
+      continue;
+    }
+    const command = trimmed.match(/^pose\s+(.+)$/iu);
     if (command) {
       pushPose(command[1]);
     } else {
@@ -404,6 +455,8 @@ async function deliverEvenniaText(client, account, text, { replyMode = "say", ta
   for (const part of parts) {
     if (part.kind === "pose") {
       await client.command(`pose ${part.text}`);
+    } else if (part.kind === "command") {
+      await client.command(normalizePoseCommand(part.text, account));
     } else if (replyMode === "tell" && target) {
       await client.tell(target, part.text);
     } else if (replyMode === "whisper" && target) {
@@ -513,20 +566,26 @@ function isMentioned(event, account) {
   return event.text?.toLowerCase().includes(trigger) === true;
 }
 
-function resolveActionClient(accountId, params = {}) {
+function resolveActionClient(channelId = DEFAULT_CHANNEL_ID, accountId, params = {}) {
+  const requestedChannelId =
+    (typeof params.channelId === "string" && params.channelId.trim()) || channelId;
   const requested =
     (typeof accountId === "string" && accountId.trim()) ||
     (typeof params.accountId === "string" && params.accountId.trim()) ||
     (typeof params.to === "string" && params.to.trim()) ||
-    clients.keys().next().value;
+    [...clients.keys()]
+      .find((key) => key.startsWith(`${requestedChannelId}:`))
+      ?.slice(requestedChannelId.length + 1);
   if (!requested) {
-    throw new Error("no connected Evennia accounts are available");
+    throw new Error(
+      `no connected Evennia accounts are available for channel ${requestedChannelId}`,
+    );
   }
-  const client = clients.get(requested);
+  const client = getClient(requestedChannelId, requested);
   if (!client) {
-    throw new Error(`evennia account ${requested} is not connected`);
+    throw new Error(`evennia account ${requestedChannelId}:${requested} is not connected`);
   }
-  return { accountId: requested, client };
+  return { channelId: requestedChannelId, accountId: requested, client };
 }
 
 export function createEvenniaCommandTool() {
@@ -546,6 +605,12 @@ export function createEvenniaCommandTool() {
             "Configured Evennia account id/character route to use. Defaults to the first connected account.",
         }),
       ),
+      channelId: Type.Optional(
+        Type.String({
+          description:
+            "Configured Evennia channel id to use, for example evennia or evennia-staging. Defaults to evennia.",
+        }),
+      ),
     }),
     async execute(_toolCallId, rawParams) {
       const command = readToolString(rawParams, "command", {
@@ -558,18 +623,33 @@ export function createEvenniaCommandTool() {
         throw new Error("command must be a single Evennia command without newlines");
       }
 
+      const channelId = readToolString(rawParams, "channelId")?.trim() || DEFAULT_CHANNEL_ID;
       const requestedAccountId = readToolString(rawParams, "accountId")?.trim();
-      const accountId = requestedAccountId || clients.keys().next().value;
-      if (!accountId) {
-        throw new Error("no connected Evennia accounts are available");
-      }
-      const client = clients.get(accountId);
-      if (!client) {
-        throw new Error(`evennia account ${accountId} is not connected`);
-      }
+      const { accountId, client } = resolveActionClient(channelId, requestedAccountId, rawParams);
       const normalizedCommand = normalizePoseCommand(command, client.account);
-      await client.command(normalizedCommand);
-      return jsonResult({ ok: true, accountId, command: normalizedCommand });
+      const output = await client.commandAndCollect(normalizedCommand, {
+        waitMs: COMMAND_OUTPUT_WAIT_MS,
+        maxChars: COMMAND_OUTPUT_MAX_CHARS,
+      });
+      const roomSnapshot =
+        normalizedCommand.toLowerCase() === "look"
+          ? ""
+          : await collectRoomContext(client, {
+              warn: () => {},
+            });
+      return jsonResult({
+        ok: true,
+        channelId,
+        accountId,
+        command: normalizedCommand,
+        output,
+        roomSnapshot: roomSnapshot
+          ? roomSnapshot.slice(0, COMMAND_ROOM_SNAPSHOT_MAX_CHARS)
+          : undefined,
+        note: output
+          ? undefined
+          : "No immediate Evennia output was observed for this command. Inspect roomSnapshot if present before assuming nothing changed.",
+      });
     },
   };
 }
@@ -592,7 +672,7 @@ async function dispatchEvenniaEvent(ctx, account, event) {
     return;
   }
 
-  const client = clients.get(account.accountId);
+  const client = getClient(account.channelId, account.accountId);
   const roomContext = client ? await collectRoomContext(client, ctx.log) : "";
   const helpContext = client ? await collectHelpContext(client, ctx.log) : "";
   const stateContext = `${formatContextBlock("Current room from automatic look", roomContext)}${formatContextBlock("Available Evennia help", helpContext)}`;
@@ -600,7 +680,7 @@ async function dispatchEvenniaEvent(ctx, account, event) {
   const messageId = event.id || `evennia-${Date.now()}`;
   const routeSessionKey = rt.routing.buildAgentSessionKey({
     agentId: account.agentId,
-    channel: "evennia",
+    channel: account.channelId,
     chatType: direct ? "direct" : "group",
     target: direct ? event.sender : event.room || "room",
   });
@@ -608,7 +688,7 @@ async function dispatchEvenniaEvent(ctx, account, event) {
     agentId: account.agentId,
   });
   const ctxPayload = rt.turn.buildContext({
-    channel: "evennia",
+    channel: account.channelId,
     accountId: account.accountId,
     provider: "evennia",
     surface: "evennia",
@@ -680,7 +760,7 @@ async function dispatchEvenniaEvent(ctx, account, event) {
     },
   });
 
-  const statusClient = clients.get(account.accountId);
+  const statusClient = getClient(account.channelId, account.accountId);
   const statusPoses = statusClient
     ? createEvenniaStatusPoseController(statusClient, ctx.log)
     : null;
@@ -689,7 +769,7 @@ async function dispatchEvenniaEvent(ctx, account, event) {
   try {
     await rt.turn.dispatchAssembled({
       cfg: ctx.cfg,
-      channel: "evennia",
+      channel: account.channelId,
       accountId: account.accountId,
       agentId: account.agentId,
       routeSessionKey,
@@ -711,7 +791,7 @@ async function dispatchEvenniaEvent(ctx, account, event) {
         deliver: async (payload) => {
           const text = payload?.text || payload?.content || "";
           if (text.trim()) {
-            const client = clients.get(account.accountId);
+            const client = getClient(account.channelId, account.accountId);
             if (client) {
               await deliverEvenniaText(client, account, text.trim(), {
                 replyMode: event.replyMode,
@@ -733,161 +813,179 @@ async function dispatchEvenniaEvent(ctx, account, event) {
   }
 }
 
-export const evenniaPlugin = createChatChannelPlugin({
-  base: createChannelPluginBase({
-    id: "evennia",
-    config: {
-      listAccountIds,
-      resolveAccount,
-      inspectAccount,
-      defaultAccountId: (cfg) => listAccountIds(cfg)[0] || "default",
-      isEnabled: (account) => account.enabled,
-      isConfigured: (account) => Boolean(account.username && account.passwordFile),
-      describeAccount: (account) => ({
-        id: account.accountId,
-        name: account.character || account.username,
-        enabled: account.enabled,
-        configured: Boolean(account.username && account.passwordFile),
-        connected: clients.has(account.accountId),
-      }),
-    },
-    setup: {
-      applyAccountConfig: ({ cfg }) => cfg,
-    },
-  }),
-  outbound: {
-    base: {
-      deliveryMode: "gateway",
-      resolveTarget: ({ to }) => ({ ok: true, to: to || "default" }),
-    },
-    attachedResults: {
-      channel: "evennia",
-      sendText: async ({ cfg, to, text, accountId }) => {
-        const id = accountId || to;
-        const client = clients.get(id);
-        if (!client) {
-          throw new Error(`evennia account ${id} is not connected`);
-        }
-        const account = inspectAccount(cfg, id);
-        await deliverEvenniaText(client, account, text);
-        return { messageId: `evennia-out-${Date.now()}` };
+export function createEvenniaPlugin(channelId = DEFAULT_CHANNEL_ID, meta = {}) {
+  const plugin = createChatChannelPlugin({
+    base: createChannelPluginBase({
+      id: channelId,
+      meta,
+      config: {
+        listAccountIds: (cfg) => listAccountIds(cfg, channelId),
+        resolveAccount: (cfg, accountId) => resolveAccount(cfg, accountId, channelId),
+        inspectAccount: (cfg, accountId) => inspectAccount(cfg, accountId, channelId),
+        defaultAccountId: (cfg) => listAccountIds(cfg, channelId)[0] || "default",
+        isEnabled: (account) => account.enabled,
+        isConfigured: (account) => Boolean(account.username && account.passwordFile),
+        describeAccount: (account) => ({
+          id: account.accountId,
+          name: account.character || account.username,
+          enabled: account.enabled,
+          configured: Boolean(account.username && account.passwordFile),
+          connected: Boolean(getClient(account.channelId, account.accountId)),
+        }),
+      },
+      setup: {
+        applyAccountConfig: ({ cfg }) => cfg,
+      },
+    }),
+    outbound: {
+      base: {
+        deliveryMode: "gateway",
+        resolveTarget: ({ to }) => ({ ok: true, to: to || "default" }),
+      },
+      attachedResults: {
+        channel: channelId,
+        sendText: async ({ cfg, to, text, accountId }) => {
+          const id = accountId || to;
+          const client = getClient(channelId, id);
+          if (!client) {
+            throw new Error(`evennia account ${channelId}:${id} is not connected`);
+          }
+          const account = inspectAccount(cfg, id, channelId);
+          await deliverEvenniaText(client, account, text);
+          return { messageId: `${channelId}-out-${Date.now()}` };
+        },
       },
     },
-  },
+  });
+
+  plugin.actions = {
+    describeMessageTool: ({ cfg, accountId }) => {
+      const accounts = accountId
+        ? [inspectAccount(cfg, accountId, channelId)]
+        : listAccountIds(cfg, channelId).map((id) => inspectAccount(cfg, id, channelId));
+      if (accounts.every((account) => !account.enabled)) {
+        return null;
+      }
+      return { actions: ["send", "react"] };
+    },
+    supportsAction: ({ action }) => action === "send" || action === "react",
+    handleAction: async ({ action, params, accountId }) => {
+      if (action !== "react") {
+        throw new Error(`Unsupported Evennia message action: ${action}`);
+      }
+      const { emoji, remove, isEmpty } = readReactionParams(params, {
+        removeErrorMessage: "Emoji is required to remove an Evennia pose reaction.",
+      });
+      if (remove) {
+        return jsonResult({ ok: true, removed: 0, note: "Evennia poses cannot be removed." });
+      }
+
+      const {
+        channelId: resolvedChannelId,
+        accountId: resolvedAccountId,
+        client,
+      } = resolveActionClient(channelId, accountId, params);
+      const pose = poseForEvenniaReaction(emoji);
+      const command = `pose ${pose}`;
+      await client.command(command);
+      return jsonResult({
+        ok: true,
+        channelId: resolvedChannelId,
+        accountId: resolvedAccountId,
+        command,
+        emoji: isEmpty ? undefined : emoji,
+      });
+    },
+  };
+
+  // createChatChannelPlugin intentionally focuses the common chat surfaces; attach
+  // the long-running gateway adapter explicitly for this external transport.
+  plugin.gateway = {
+    startAccount: async (ctx) => {
+      if (!ctx.account.enabled) {
+        return;
+      }
+
+      let retryMs = 1000;
+      while (!ctx.abortSignal.aborted) {
+        const client = new EvenniaClient(ctx.account, ctx.log);
+        setClient(ctx.account, client);
+
+        const closeOnAbort = () => client.close();
+        ctx.abortSignal.addEventListener("abort", closeOnAbort, { once: true });
+
+        if (ctx.account.respondToAmbientMentions) {
+          client.onEvent((event) =>
+            dispatchEvenniaEvent(ctx, ctx.account, event).catch((err) =>
+              ctx.log?.error?.(`evennia inbound failed: ${err?.stack || err?.message || err}`),
+            ),
+          );
+        }
+
+        try {
+          await client.connect();
+          retryMs = 1000;
+          if (ctx.account.character) {
+            await client.command(`ic ${ctx.account.character}`).catch(() => {});
+          }
+          await new Promise((resolve) => setTimeout(resolve, 750));
+          if (ctx.account.startRoom) {
+            await client.command(`teleport ${ctx.account.startRoom}`).catch(() => {});
+          }
+          await client.command("look").catch(() => {});
+          ctx.setStatus({
+            accountId: ctx.account.accountId,
+            id: ctx.account.accountId,
+            name: ctx.account.character,
+            enabled: true,
+            configured: true,
+            connected: true,
+            running: true,
+          });
+
+          await client.waitClosed(ctx.abortSignal);
+        } catch (err) {
+          ctx.log?.warn?.(
+            `evennia connection failed for ${ctx.account.channelId}:${ctx.account.accountId}: ${err?.message || err}`,
+          );
+        } finally {
+          ctx.abortSignal.removeEventListener("abort", closeOnAbort);
+          deleteClient(ctx.account, client);
+          client.close();
+          ctx.setStatus({
+            accountId: ctx.account.accountId,
+            id: ctx.account.accountId,
+            name: ctx.account.character,
+            enabled: true,
+            configured: true,
+            connected: false,
+            running: !ctx.abortSignal.aborted,
+          });
+        }
+
+        if (ctx.abortSignal.aborted) {
+          break;
+        }
+        await new Promise((resolve) => setTimeout(resolve, retryMs));
+        retryMs = Math.min(retryMs * 2, 30000);
+      }
+    },
+    stopAccount: async ({ account }) => {
+      const client = getClient(account.channelId, account.accountId);
+      deleteClient(account);
+      client?.close();
+    },
+  };
+
+  return plugin;
+}
+
+export const evenniaPlugin = createEvenniaPlugin(DEFAULT_CHANNEL_ID);
+export const evenniaStagingPlugin = createEvenniaPlugin("evennia-staging", {
+  label: "Evennia Staging",
+  selectionLabel: "Evennia Staging (MUD bridge)",
+  detailLabel: "Evennia Staging WebSocket",
+  docsPath: "/channels/evennia-staging",
+  docsLabel: "evennia-staging",
+  blurb: "staging MUD bridge for isolated agent character testing.",
 });
-
-evenniaPlugin.actions = {
-  describeMessageTool: ({ cfg, accountId }) => {
-    const accounts = accountId
-      ? [inspectAccount(cfg, accountId)]
-      : listAccountIds(cfg).map((id) => inspectAccount(cfg, id));
-    if (accounts.every((account) => !account.enabled)) {
-      return null;
-    }
-    return { actions: ["send", "react"] };
-  },
-  supportsAction: ({ action }) => action === "send" || action === "react",
-  handleAction: async ({ action, params, accountId }) => {
-    if (action !== "react") {
-      throw new Error(`Unsupported Evennia message action: ${action}`);
-    }
-    const { emoji, remove, isEmpty } = readReactionParams(params, {
-      removeErrorMessage: "Emoji is required to remove an Evennia pose reaction.",
-    });
-    if (remove) {
-      return jsonResult({ ok: true, removed: 0, note: "Evennia poses cannot be removed." });
-    }
-
-    const { accountId: resolvedAccountId, client } = resolveActionClient(accountId, params);
-    const pose = poseForEvenniaReaction(emoji);
-    const command = `pose ${pose}`;
-    await client.command(command);
-    return jsonResult({
-      ok: true,
-      accountId: resolvedAccountId,
-      command,
-      emoji: isEmpty ? undefined : emoji,
-    });
-  },
-};
-
-// createChatChannelPlugin intentionally focuses the common chat surfaces; attach
-// the long-running gateway adapter explicitly for this external transport.
-evenniaPlugin.gateway = {
-  startAccount: async (ctx) => {
-    if (!ctx.account.enabled) {
-      return;
-    }
-
-    let retryMs = 1000;
-    while (!ctx.abortSignal.aborted) {
-      const client = new EvenniaClient(ctx.account, ctx.log);
-      clients.set(ctx.account.accountId, client);
-
-      const closeOnAbort = () => client.close();
-      ctx.abortSignal.addEventListener("abort", closeOnAbort, { once: true });
-
-      if (ctx.account.respondToAmbientMentions) {
-        client.onEvent((event) =>
-          dispatchEvenniaEvent(ctx, ctx.account, event).catch((err) =>
-            ctx.log?.error?.(`evennia inbound failed: ${err?.stack || err?.message || err}`),
-          ),
-        );
-      }
-
-      try {
-        await client.connect();
-        retryMs = 1000;
-        if (ctx.account.character) {
-          await client.command(`ic ${ctx.account.character}`).catch(() => {});
-        }
-        await new Promise((resolve) => setTimeout(resolve, 750));
-        if (ctx.account.startRoom) {
-          await client.command(`teleport ${ctx.account.startRoom}`).catch(() => {});
-        }
-        await client.command("look").catch(() => {});
-        ctx.setStatus({
-          accountId: ctx.account.accountId,
-          id: ctx.account.accountId,
-          name: ctx.account.character,
-          enabled: true,
-          configured: true,
-          connected: true,
-          running: true,
-        });
-
-        await client.waitClosed(ctx.abortSignal);
-      } catch (err) {
-        ctx.log?.warn?.(
-          `evennia connection failed for ${ctx.account.accountId}: ${err?.message || err}`,
-        );
-      } finally {
-        ctx.abortSignal.removeEventListener("abort", closeOnAbort);
-        if (clients.get(ctx.account.accountId) === client) {
-          clients.delete(ctx.account.accountId);
-        }
-        client.close();
-        ctx.setStatus({
-          accountId: ctx.account.accountId,
-          id: ctx.account.accountId,
-          name: ctx.account.character,
-          enabled: true,
-          configured: true,
-          connected: false,
-          running: !ctx.abortSignal.aborted,
-        });
-      }
-
-      if (ctx.abortSignal.aborted) {
-        break;
-      }
-      await new Promise((resolve) => setTimeout(resolve, retryMs));
-      retryMs = Math.min(retryMs * 2, 30000);
-    }
-  },
-  stopAccount: async ({ account }) => {
-    const client = clients.get(account.accountId);
-    clients.delete(account.accountId);
-    client?.close();
-  },
-};

@@ -1,7 +1,7 @@
 {
   "id": "evennia",
   "kind": "channel",
-  "channels": ["evennia"],
+  "channels": ["evennia", "evennia-staging"],
   "name": "Evennia",
   "description": "OpenClaw channel bridge for Evennia MUD characters.",
   "entry": "./index.js",
@@ -34,6 +34,50 @@
               "properties": {
                 "enabled": { "type": "boolean" },
                 "agentId": { "type": "string" },
+                "baseUrl": { "type": "string" },
+                "websocketUrl": { "type": "string" },
+                "username": { "type": "string" },
+                "passwordFile": { "type": "string" },
+                "character": { "type": "string" },
+                "triggerName": { "type": "string" },
+                "startRoom": { "type": "string" },
+                "allowFrom": { "type": "array", "items": { "type": "string" } },
+                "allowedRooms": {
+                  "type": "array",
+                  "items": { "type": "string" }
+                },
+                "respondToAmbientMentions": { "type": "boolean" }
+              },
+              "required": ["username", "passwordFile"]
+            }
+          }
+        }
+      },
+      "uiHints": {
+        "accounts.*.passwordFile": {
+          "label": "Password file",
+          "sensitive": true
+        }
+      }
+    },
+    "evennia-staging": {
+      "schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "enabled": { "type": "boolean" },
+          "baseUrl": { "type": "string" },
+          "websocketUrl": { "type": "string" },
+          "accounts": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "enabled": { "type": "boolean" },
+                "agentId": { "type": "string" },
+                "baseUrl": { "type": "string" },
+                "websocketUrl": { "type": "string" },
                 "username": { "type": "string" },
                 "passwordFile": { "type": "string" },
                 "character": { "type": "string" },
